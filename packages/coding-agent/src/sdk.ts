@@ -3244,7 +3244,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			{
 				isSubagent: sessionIsSubagent,
 				taskDepth,
-				agentId: resolvedAgentId,
+				agentId: sessionIsSubagent ? resolvedAgentId : undefined,
 				parentTaskPrefix: options.parentTaskPrefix,
 			},
 		);

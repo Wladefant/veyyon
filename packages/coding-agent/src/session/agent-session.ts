@@ -11103,7 +11103,7 @@ export class AgentSession {
 			ui: noOpUIContext,
 			isSubagent: this.#isSubagent,
 			taskDepth: this.#taskDepth,
-			agentId: this.#agentId,
+			agentId: this.#isSubagent ? this.#agentId : undefined,
 			parentTaskPrefix: this.#parentTaskPrefix,
 			hasUI: false,
 			cwd: this.sessionManager.getCwd(),

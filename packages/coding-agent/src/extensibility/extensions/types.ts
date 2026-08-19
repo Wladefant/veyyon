@@ -420,13 +420,13 @@ export interface ExtensionContext {
 	/** UI methods for user interaction */
 	ui: ExtensionUIContext;
 	/** Whether this session is running as a subagent (e.g. a delegated task). False for root sessions. */
-	isSubagent: boolean;
+	readonly isSubagent?: boolean;
 	/** Recursion depth of the task hierarchy (0 for root session, >= 1 for subagents). */
-	taskDepth: number;
-	/** Identifier of the running agent if available (e.g. 'Main' or subagent ID). */
-	agentId?: string;
-	/** Parent task ID prefix for nested artifact naming if this is a subagent. */
-	parentTaskPrefix?: string;
+	readonly taskDepth?: number;
+	/** Identifier of the running agent if available (only exposed for subagents, undefined for root). */
+	readonly agentId?: string;
+	/** Child artifact/task prefix for nested naming if this is a subagent. */
+	readonly parentTaskPrefix?: string;
 	/** Get current context usage for the active model. */
 	getContextUsage(): ContextUsage | undefined;
 	/** Compact the session context (interactive mode shows UI). */

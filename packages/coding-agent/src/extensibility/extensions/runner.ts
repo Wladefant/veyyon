@@ -289,10 +289,10 @@ export class ExtensionRunner {
 		this.#uiContext = noOpUIContext;
 		this.#getMemoryFn = getMemory;
 		if (identity) {
-			this.#isSubagent = identity.isSubagent ?? (identity.taskDepth !== undefined && identity.taskDepth > 0) ?? false;
 			this.#taskDepth = identity.taskDepth ?? 0;
-			this.#agentId = identity.agentId;
 			this.#parentTaskPrefix = identity.parentTaskPrefix;
+			this.#isSubagent = Boolean(identity.isSubagent || this.#taskDepth > 0 || this.#parentTaskPrefix);
+			this.#agentId = this.#isSubagent ? identity.agentId : undefined;
 		}
 	}
 	/** See {@link ExtensionRunner.agentId}. Called by the spawner before `initialize`. */
@@ -302,7 +302,7 @@ export class ExtensionRunner {
 
 	/** Registry id of the spawned agent this runner drives; undefined at a root session. */
 	get agentId(): string | undefined {
-		return this.#agentId;
+		return this.#isSubagent ? this.#agentId : undefined;
 	}
 
 	get isSubagent(): boolean {
@@ -595,7 +595,7 @@ export class ExtensionRunner {
 			ui: this.#uiContext,
 			isSubagent: this.#isSubagent,
 			taskDepth: this.#taskDepth,
-			agentId: this.#agentId,
+			agentId: this.#isSubagent ? this.#agentId : undefined,
 			parentTaskPrefix: this.#parentTaskPrefix,
 			getContextUsage: () => this.#getContextUsageFn(),
 			compact: instructionsOrOptions => this.#compactFn(instructionsOrOptions),
