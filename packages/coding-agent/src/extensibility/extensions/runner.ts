@@ -220,6 +220,13 @@ const noOpUIContext: ExtensionUIContext = {
 	setToolsExpanded: () => {},
 };
 
+export interface ExtensionRunnerIdentityOptions {
+	isSubagent?: boolean;
+	taskDepth?: number;
+	agentId?: string;
+	parentTaskPrefix?: string;
+}
+
 export class ExtensionRunner {
 	#uiContext: ExtensionUIContext;
 	/**
@@ -236,6 +243,9 @@ export class ExtensionRunner {
 	 * would all have to pass undefined.
 	 */
 	#agentId: string | undefined;
+	#isSubagent = false;
+	#taskDepth = 0;
+	#parentTaskPrefix: string | undefined;
 
 	#errorListeners: Set<ExtensionErrorListener> = new Set();
 	#getModel: () => Model | undefined = () => undefined;
@@ -274,11 +284,17 @@ export class ExtensionRunner {
 		getMemory?: () => MemoryRuntimeContext | undefined,
 		private readonly settings?: Settings,
 		private readonly localProtocolOptions?: LocalProtocolOptions,
+		identity?: ExtensionRunnerIdentityOptions,
 	) {
 		this.#uiContext = noOpUIContext;
 		this.#getMemoryFn = getMemory;
+		if (identity) {
+			this.#isSubagent = identity.isSubagent ?? (identity.taskDepth !== undefined && identity.taskDepth > 0) ?? false;
+			this.#taskDepth = identity.taskDepth ?? 0;
+			this.#agentId = identity.agentId;
+			this.#parentTaskPrefix = identity.parentTaskPrefix;
+		}
 	}
-
 	/** See {@link ExtensionRunner.agentId}. Called by the spawner before `initialize`. */
 	setAgentId(agentId: string): void {
 		this.#agentId = agentId;
@@ -287,6 +303,18 @@ export class ExtensionRunner {
 	/** Registry id of the spawned agent this runner drives; undefined at a root session. */
 	get agentId(): string | undefined {
 		return this.#agentId;
+	}
+
+	get isSubagent(): boolean {
+		return this.#isSubagent;
+	}
+
+	get taskDepth(): number {
+		return this.#taskDepth;
+	}
+
+	get parentTaskPrefix(): string | undefined {
+		return this.#parentTaskPrefix;
 	}
 
 	initialize(
@@ -565,6 +593,10 @@ export class ExtensionRunner {
 		const getModel = this.#getModel;
 		return {
 			ui: this.#uiContext,
+			isSubagent: this.#isSubagent,
+			taskDepth: this.#taskDepth,
+			agentId: this.#agentId,
+			parentTaskPrefix: this.#parentTaskPrefix,
 			getContextUsage: () => this.#getContextUsageFn(),
 			compact: instructionsOrOptions => this.#compactFn(instructionsOrOptions),
 			hasUI: this.hasUI(),

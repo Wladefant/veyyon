@@ -149,6 +149,10 @@ Also exposed:
 Handlers and tool `execute` receive `ctx` with:
 
 - `ui`
+- `isSubagent` (boolean: false for root interactive/headless sessions, true for task subagents)
+- `taskDepth` (number: 0 for root session, >= 1 for subagents)
+- `agentId` (optional string: agent identifier such as "Main" or child task id)
+- `parentTaskPrefix` (optional string: parent task ID prefix for child subagents)
 - `hasUI`
 - `cwd`
 - `sessionManager` (read-only)

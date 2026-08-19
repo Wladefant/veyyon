@@ -3241,6 +3241,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			() => (hasSession ? createSessionMemoryRuntimeContext(session, agentDir, cwd) : undefined),
 			settings,
 			localProtocolOptions,
+			{
+				isSubagent: sessionIsSubagent,
+				taskDepth,
+				agentId: resolvedAgentId,
+				parentTaskPrefix: options.parentTaskPrefix,
+			},
 		);
 
 		credentialDisabledTarget = extensionRunner;
@@ -4286,6 +4292,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// re-root may not move the process working directory or any other
 			// process-global project state. See `AgentSession.rescopeToCwd`.
 			isSubagent: sessionIsSubagent,
+			taskDepth,
+			parentTaskPrefix: options.parentTaskPrefix,
 			builtInToolNames: builtInRegistryToolNames,
 			transformContext,
 			transformProviderContext,

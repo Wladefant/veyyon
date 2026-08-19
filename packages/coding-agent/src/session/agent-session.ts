@@ -1160,6 +1160,10 @@ export interface AgentSessionConfig {
 	 * nobody above it owns the process.
 	 */
 	isSubagent?: boolean;
+	/** Task recursion depth (for subagent sessions). Default: 0 */
+	taskDepth?: number;
+	/** Parent task ID prefix for nested artifact naming (e.g., "Extensions") */
+	parentTaskPrefix?: string;
 	/**
 	 * AsyncJobManager reachable by this session for scoped job actions.
 	 *
@@ -2241,6 +2245,8 @@ export class AgentSession {
 	readonly #ownedAsyncJobManager: AsyncJobManager | undefined;
 	/** Whether another session in this process spawned this one. */
 	readonly #isSubagent: boolean;
+	readonly #taskDepth: number;
+	readonly #parentTaskPrefix: string | undefined;
 	/**
 	 * AsyncJobManager scoped to this session for introspection/cancellation.
 	 *
@@ -3012,6 +3018,8 @@ export class AgentSession {
 		this.#parentEvalSessionId = config.parentEvalSessionId;
 		this.#ownedAsyncJobManager = config.ownedAsyncJobManager;
 		this.#isSubagent = config.isSubagent === true;
+		this.#taskDepth = config.taskDepth ?? 0;
+		this.#parentTaskPrefix = config.parentTaskPrefix;
 		this.#asyncJobManager = config.asyncJobManager ?? config.ownedAsyncJobManager;
 		this.#scopedModels = config.scopedModels ?? [];
 		this.#sessionThinkingOverride = config.thinkingSource === "session" ? config.thinkingLevel : undefined;
@@ -11093,6 +11101,10 @@ export class AgentSession {
 
 		return {
 			ui: noOpUIContext,
+			isSubagent: this.#isSubagent,
+			taskDepth: this.#taskDepth,
+			agentId: this.#agentId,
+			parentTaskPrefix: this.#parentTaskPrefix,
 			hasUI: false,
 			cwd: this.sessionManager.getCwd(),
 			sessionManager: this.sessionManager,
