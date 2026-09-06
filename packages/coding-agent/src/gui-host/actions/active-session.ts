@@ -82,14 +82,16 @@ export async function emitSessionList(ctx: ActionContext) {
 }
 
 export function wireSessionManager(ctx: ActionContext, sm: SessionManager): void {
+	ctx.clientState.unsubscribeSession?.();
 	ctx.clientState.sessionManager = sm;
-	sm.onEntryAppended = entry => {
+	const unsubscribe = sm.onEntryAppended(entry => {
 		ctx.clientState.revision += 1;
 		const transcriptEntry = sessionEntryToTranscriptEntry(entry, ctx.clientState.revision);
 		writeFrame(ctx.socket, {
 			TranscriptAppended: { revision: ctx.clientState.revision, entries: [transcriptEntry] },
 		});
-	};
+	});
+	ctx.clientState.unsubscribeSession = unsubscribe;
 }
 
 /**

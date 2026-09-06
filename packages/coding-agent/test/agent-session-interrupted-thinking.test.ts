@@ -80,13 +80,11 @@ async function emitAssistantEnd(
 	const existing = sessionManager.getBranch().find(waitFor);
 	if (existing) return;
 	const appended = Promise.withResolvers<void>();
-	const previous = sessionManager.onEntryAppended;
-	sessionManager.onEntryAppended = entry => {
-		previous?.(entry);
+	const unsubscribe = sessionManager.onEntryAppended(entry => {
 		if (!waitFor(entry)) return;
-		sessionManager.onEntryAppended = previous;
+		unsubscribe();
 		appended.resolve();
-	};
+	});
 	session.agent.emitExternalEvent({ type: "message_start", message });
 	session.agent.emitExternalEvent({ type: "message_end", message });
 	await appended.promise;
@@ -256,13 +254,11 @@ describe("AgentSession interrupted thinking persistence", () => {
 		);
 		const harness = createSession(extensionRunner);
 		const persisted = Promise.withResolvers<void>();
-		const previous = harness.sessionManager.onEntryAppended;
-		harness.sessionManager.onEntryAppended = entry => {
-			previous?.(entry);
+		const unsubscribe = harness.sessionManager.onEntryAppended(entry => {
 			if (entry.type !== "custom_message" || entry.customType !== INTERRUPTED_THINKING_MESSAGE_TYPE) return;
-			harness.sessionManager.onEntryAppended = previous;
+			unsubscribe();
 			persisted.resolve();
-		};
+		});
 		const message = thinkingAssistant(harness.model, USER_INTERRUPT_LABEL);
 
 		harness.session.agent.emitExternalEvent({ type: "message_start", message });

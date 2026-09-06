@@ -490,6 +490,7 @@ export class SessionManager {
 	 * conversation the operator is now in has no limiter at all.
 	 */
 	readonly #sessionIdListeners = new Set<(sessionId: string) => void>();
+	readonly #entryAppendedListeners = new Set<(entry: SessionEntry) => void>();
 	#sessionName: string | undefined;
 	#titleSource: SessionTitleSource | undefined;
 	#sessionFile: string | undefined;
@@ -516,11 +517,6 @@ export class SessionManager {
 	 */
 	#draftOnlySessionCleanupArmed = false;
 
-	/**
-	 * Collab replication tap: invoked for every appended entry with the
-	 * in-memory (pre-blob-externalization) entry, so inline images survive.
-	 */
-	onEntryAppended?: (entry: SessionEntry) => void;
 
 	#turnBudgetTotal: number | null = null;
 	#turnBudgetHard = false;
@@ -1273,10 +1269,9 @@ export class SessionManager {
 	}
 
 	#notifyEntryAppended(entry: SessionEntry): void {
-		const callback = this.onEntryAppended;
-		if (callback) {
+		for (const listener of [...this.#entryAppendedListeners]) {
 			try {
-				callback(entry);
+				listener(entry);
 			} catch (err) {
 				logger.warn("collab entry hook failed", { error: String(err) });
 			}
@@ -2163,6 +2158,18 @@ export class SessionManager {
 		this.#sessionIdListeners.add(listener);
 		return () => {
 			this.#sessionIdListeners.delete(listener);
+		};
+	}
+
+	/**
+	 * Collab/UI replication tap: invoked for every appended entry with the
+	 * in-memory (pre-blob-externalization) entry, so inline images survive.
+	 * Returns the unsubscribe callback.
+	 */
+	onEntryAppended(listener: (entry: SessionEntry) => void): () => void {
+		this.#entryAppendedListeners.add(listener);
+		return () => {
+			this.#entryAppendedListeners.delete(listener);
 		};
 	}
 
