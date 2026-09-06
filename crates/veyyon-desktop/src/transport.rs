@@ -9,8 +9,8 @@ use veyyon_desktop_model::{
 
 use crate::{
 	bridge::{EgressBridge, create_egress_channel, create_ingress_channel},
-	endpoint::Endpoint,
-	framing::{FrameDecoder, encode_request},
+	endpoint::{Endpoint, GuiAuthToken},
+	framing::{FrameDecoder, encode_authentication, encode_request},
 	reconnect::{FATAL_MESSAGE, ReconnectPolicy},
 };
 
@@ -223,6 +223,7 @@ pub fn apply_event_to_store(store: &mut Store, event: HostEvent) -> DamageSet {
 #[must_use]
 pub fn spawn_transport(
 	endpoint: Endpoint,
+	auth_token: Option<GuiAuthToken>,
 ) -> (EgressBridge, tokio::sync::mpsc::Receiver<HostEvent>, tokio::task::JoinHandle<()>) {
 	let (ingress_tx, ingress_rx) = create_ingress_channel();
 	let (egress_tx, mut egress_rx) = create_egress_channel();
@@ -308,6 +309,19 @@ pub fn spawn_transport(
 			let mut socket_active = true;
 
 			let (mut reader, mut writer) = tokio::io::split(stream);
+			if let Some(auth_token) = &auth_token {
+				let Ok(authentication) = encode_authentication(auth_token) else {
+					let _ = ingress_tx
+						.send(HostEvent::ConnectionChanged(ConnectionState::Fatal {
+							message: "GUI transport authentication frame could not be encoded".to_string(),
+						}))
+						.await;
+					break;
+				};
+				if writer.write_all(&authentication).await.is_err() {
+					continue;
+				}
+			}
 
 			while socket_active {
 				tokio::select! {

@@ -35,9 +35,15 @@ fn tcp_endpoint_parses_standard_and_empty_host_notations() {
 	assert_eq!(ep2, Endpoint::Tcp { host: "127.0.0.1".to_string(), port: 8080 });
 	assert_eq!(ep2.formatted(), "tcp:127.0.0.1:8080");
 
-	let ep3 = Endpoint::parse("tcp:host.internal:9000", None).expect("named host");
-	assert_eq!(ep3, Endpoint::Tcp { host: "host.internal".to_string(), port: 9000 });
-	assert_eq!(ep3.formatted(), "tcp:host.internal:9000");
+	let ep3 = Endpoint::parse("tcp:127.0.0.1:9000", None).expect("loopback host");
+	assert_eq!(ep3, Endpoint::Tcp { host: "127.0.0.1".to_string(), port: 9000 });
+	assert_eq!(ep3.formatted(), "tcp:127.0.0.1:9000");
+}
+
+#[test]
+fn tcp_endpoint_rejects_non_loopback_hosts() {
+	let error = Endpoint::parse("tcp:0.0.0.0:7654", None).unwrap_err();
+	assert_eq!(error, EndpointError::NonLoopbackTcpHost("0.0.0.0".to_string()));
 }
 
 #[test]
@@ -73,9 +79,9 @@ fn resolution_precedence_respects_explicit_over_env_over_default() {
 	let agent_dir = Path::new("/tmp/profiles/work");
 
 	// 1. Explicit override
-	let explicit_ep =
-		Endpoint::resolve(Some("tcp:10.0.0.1:5555"), agent_dir).expect("explicit endpoint overrides");
-	assert_eq!(explicit_ep, Endpoint::Tcp { host: "10.0.0.1".to_string(), port: 5555 });
+	let explicit_ep = Endpoint::resolve(Some("tcp:127.0.0.1:5555"), agent_dir)
+		.expect("explicit endpoint overrides");
+	assert_eq!(explicit_ep, Endpoint::Tcp { host: "127.0.0.1".to_string(), port: 5555 });
 
 	// 2. Default fallback when no explicit or env
 	let previous_env = std::env::var(VEYYON_GUI_ENDPOINT_ENV).ok();

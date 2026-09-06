@@ -1,5 +1,19 @@
-use veyyon_desktop::{FrameDecoder, FramingError, MAX_FRAME_BYTES};
+use veyyon_desktop::{
+	FrameDecoder, FramingError, GuiAuthToken, MAX_FRAME_BYTES, encode_authentication,
+};
 use veyyon_desktop_model::{ConnectionState, HostEvent, RequestId};
+
+#[test]
+fn authentication_frame_is_first_frame_shape_and_token_debug_is_redacted() {
+	let token = GuiAuthToken::generate().expect("operating-system random source");
+	let encoded = encode_authentication(&token).expect("authentication frame");
+	let decoded: serde_json::Value =
+		serde_json::from_slice(&encoded).expect("single JSON authentication frame");
+
+	assert_eq!(decoded["Authenticate"]["token"], token.expose());
+	assert_eq!(format!("{token:?}"), "GuiAuthToken([REDACTED])");
+	assert!(!format!("{token:?}").contains(token.expose()));
+}
 
 #[test]
 fn frame_split_across_three_chunks_decodes_once() {

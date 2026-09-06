@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as path from "node:path";
@@ -18,6 +19,22 @@ import {
 	type SnapshotSection,
 } from "./wire";
 
+export const VEYYON_GUI_AUTH_TOKEN_ENV = "VEYYON_GUI_AUTH_TOKEN";
+export const GUI_AUTH_TIMEOUT_MS = 2_000;
+
+function isLoopbackHost(host: string): boolean {
+	return host.trim() === "127.0.0.1";
+}
+
+function tokenMatches(expected: string, candidate: unknown): boolean {
+	if (typeof candidate !== "string") {
+		return false;
+	}
+	const expectedBytes = Buffer.from(expected, "utf8");
+	const candidateBytes = Buffer.from(candidate, "utf8");
+	return expectedBytes.length === candidateBytes.length && crypto.timingSafeEqual(expectedBytes, candidateBytes);
+}
+
 export class SocketInUseError extends Error {
 	readonly code = "EADDRINUSE";
 	constructor(socketPath: string) {
@@ -37,6 +54,11 @@ export interface GuiHostServerOptions {
 	 * never lands there.
 	 */
 	authStorage?: AuthStorage;
+	/**
+	 * Per-host bearer credential. TCP callers must pass it out-of-band (the
+	 * desktop launcher uses an inherited environment value, never argv).
+	 */
+	authToken?: string;
 }
 
 interface ParsedEndpoint {
@@ -75,6 +97,9 @@ export function parseEndpoint(written: string, defaultAgentDir?: string): Parsed
 		if (Number.isNaN(port) || port < 0 || port > 65535) {
 			throw new Error(`Invalid TCP port number: '${portStr}'`);
 		}
+		if (!isLoopbackHost(host)) {
+			throw new Error(`TCP GUI host must bind to loopback, not '${host}'`);
+		}
 		return {
 			type: "tcp",
 			host,
@@ -105,6 +130,7 @@ export class GuiHostServer {
 	#agentDir: string;
 	#authStorage: Promise<AuthStorage> | null;
 	#isClosing = false;
+	#authToken: string | null;
 
 	constructor(options: GuiHostServerOptions = {}) {
 		this.#cwd = options.cwd ?? process.cwd();
@@ -114,6 +140,16 @@ export class GuiHostServer {
 			options.endpoint ?? `unix:${path.join(this.#agentDir, "gui-host.sock")}`,
 			this.#agentDir,
 		);
+		const authToken = options.authToken ?? process.env[VEYYON_GUI_AUTH_TOKEN_ENV];
+		if (options.authToken === undefined) {
+			delete process.env[VEYYON_GUI_AUTH_TOKEN_ENV];
+		}
+		if (this.#parsedEndpoint.type === "tcp" && (authToken === undefined || authToken.length < 32)) {
+			throw new Error(
+				`TCP GUI host authentication requires ${VEYYON_GUI_AUTH_TOKEN_ENV} or an authToken of at least 32 characters`,
+			);
+		}
+		this.#authToken = authToken ?? null;
 	}
 
 	/**
@@ -215,10 +251,64 @@ export class GuiHostServer {
 
 	#handleConnection(socket: net.Socket): void {
 		this.#clients.add(socket);
+		let authenticated = this.#authToken === null;
+		let clientState = authenticated ? this.#activateClient(socket) : null;
+		const authTimer = authenticated
+			? null
+			: setTimeout(() => {
+					socket.destroy();
+				}, GUI_AUTH_TIMEOUT_MS);
+		authTimer?.unref();
+
+		const decoder = new FrameDecoder(
+			socket,
+			frame => {
+				if (!authenticated) {
+					const token =
+						frame &&
+						typeof frame === "object" &&
+						"Authenticate" in frame &&
+						typeof frame.Authenticate === "object" &&
+						frame.Authenticate !== null &&
+						"token" in frame.Authenticate
+							? frame.Authenticate.token
+							: undefined;
+					if (this.#authToken === null || !tokenMatches(this.#authToken, token)) {
+						socket.destroy();
+						return;
+					}
+
+					authenticated = true;
+					clearTimeout(authTimer ?? undefined);
+					clientState = this.#activateClient(socket);
+					return;
+				}
+
+				if (clientState) {
+					void this.#handleFrame(socket, clientState, frame);
+				}
+			},
+			error => {
+				logger.debug("GUI host client connection closed on error", { error: error.message });
+			},
+		);
+
+		socket.on("close", () => {
+			clearTimeout(authTimer ?? undefined);
+			decoder.detach();
+			this.#cleanupClient(socket);
+		});
+
+		socket.on("error", () => {
+			clearTimeout(authTimer ?? undefined);
+			decoder.detach();
+			this.#cleanupClient(socket);
+		});
+	}
+
+	#activateClient(socket: net.Socket): ClientSessionState {
 		const clientState: ClientSessionState = { revision: 0 };
 		this.#clientStates.set(socket, clientState);
-
-		// 1. Write greeting frame first
 		writeFrame(socket, {
 			ConnectionChanged: {
 				Connected: {
@@ -227,34 +317,12 @@ export class GuiHostServer {
 				},
 			},
 		});
-
-		// 2. Write capabilities snapshot
 		writeFrame(socket, {
 			Snapshot: {
 				Capabilities: buildCapabilitiesSnapshot(),
 			},
 		});
-
-		// 3. Attach frame decoder
-		const decoder = new FrameDecoder(
-			socket,
-			frame => {
-				void this.#handleFrame(socket, clientState, frame);
-			},
-			error => {
-				logger.debug("GUI host client connection closed on error", { error: error.message });
-			},
-		);
-
-		socket.on("close", () => {
-			decoder.detach();
-			this.#cleanupClient(socket);
-		});
-
-		socket.on("error", () => {
-			decoder.detach();
-			this.#cleanupClient(socket);
-		});
+		return clientState;
 	}
 
 	#cleanupClient(socket: net.Socket): void {

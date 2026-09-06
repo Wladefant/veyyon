@@ -10,10 +10,13 @@ use std::{
 };
 
 use thiserror::Error;
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 
 /// Environment variable used to discover the GUI host endpoint when not passed
 /// explicitly.
 pub const VEYYON_GUI_ENDPOINT_ENV: &str = "VEYYON_GUI_ENDPOINT";
+/// Environment variable carrying the per-host GUI transport credential.
+pub const VEYYON_GUI_AUTH_TOKEN_ENV: &str = "VEYYON_GUI_AUTH_TOKEN";
 
 /// Default socket filename within an agent profile directory.
 pub const DEFAULT_SOCKET_FILENAME: &str = "gui-host.sock";
@@ -27,6 +30,10 @@ pub enum EndpointError {
 	MissingTcpPort(String),
 	#[error("Invalid TCP port number: '{0}'")]
 	InvalidTcpPort(String),
+	#[error("TCP GUI endpoints must use a loopback host, not '{0}'")]
+	NonLoopbackTcpHost(String),
+	#[error("GUI transport credential is missing; set {VEYYON_GUI_AUTH_TOKEN_ENV}")]
+	MissingAuthToken,
 }
 
 /// How long a spawned host is given to print its endpoint and accept a
@@ -66,6 +73,40 @@ pub enum HostSpawnError {
 pub enum Endpoint {
 	Unix { path: PathBuf },
 	Tcp { host: String, port: u16 },
+}
+
+/// Per-host credential kept in process memory and redacted from diagnostics.
+#[derive(Clone, PartialEq, Eq)]
+pub struct GuiAuthToken(String);
+
+impl GuiAuthToken {
+	/// Generates a fresh 256-bit credential from the operating system CSPRNG.
+	pub fn generate() -> Result<Self, getrandom::Error> {
+		let mut bytes = [0_u8; 32];
+		getrandom::fill(&mut bytes)?;
+		Ok(Self(URL_SAFE_NO_PAD.encode(bytes)))
+	}
+
+	/// Loads the credential inherited from the process environment.
+	pub fn from_env() -> Result<Self, EndpointError> {
+		let token = env::var(VEYYON_GUI_AUTH_TOKEN_ENV).unwrap_or_default();
+		if token.len() < 32 {
+			return Err(EndpointError::MissingAuthToken);
+		}
+		Ok(Self(token))
+	}
+
+	/// Returns the wire value without exposing it through `Debug`.
+	#[must_use]
+	pub fn expose(&self) -> &str {
+		&self.0
+	}
+}
+
+impl fmt::Debug for GuiAuthToken {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.write_str("GuiAuthToken([REDACTED])")
+	}
 }
 
 impl Endpoint {
@@ -108,6 +149,9 @@ impl Endpoint {
 				},
 				_ => return Err(EndpointError::InvalidTcpPort(port_str.to_string())),
 			};
+			if host.trim() != "127.0.0.1" {
+				return Err(EndpointError::NonLoopbackTcpHost(host));
+			}
 
 			return Ok(Self::Tcp { host, port });
 		}
@@ -165,9 +209,10 @@ impl fmt::Display for Endpoint {
 pub struct ChildHostHandle {
 	/// Where the host listens, as it reported.
 	pub endpoint: Endpoint,
-	/// The host's process id. The host outlives the window that started it,
-	/// so the next window attaches instead of starting another.
-	pub pid:      u32,
+	/// Credential inherited by the child and required for its first frame.
+	pub auth_token: GuiAuthToken,
+	/// The host's process id.
+	pub pid: u32,
 }
 
 /// The active profile's agent directory, where the default socket is.
@@ -232,10 +277,14 @@ pub fn accepts_connection(endpoint: &Endpoint) -> bool {
 /// lifetime so a later write never blocks it.
 pub fn spawn_child_host(cwd: &Path) -> Result<ChildHostHandle, HostSpawnError> {
 	let bin = host_binary().ok_or(HostSpawnError::NoBinary)?;
+	let auth_token = GuiAuthToken::generate().map_err(|err| {
+		HostSpawnError::SpawnFailed(PathBuf::from("operating-system CSPRNG"), err.to_string())
+	})?;
 	let mut command = Command::new(&bin);
 	command
 		.arg("gui")
 		.current_dir(cwd)
+		.env(VEYYON_GUI_AUTH_TOKEN_ENV, auth_token.expose())
 		.stdin(Stdio::null())
 		.stdout(Stdio::piped())
 		.stderr(Stdio::piped());
@@ -324,7 +373,7 @@ pub fn spawn_child_host(cwd: &Path) -> Result<ChildHostHandle, HostSpawnError> {
 		thread::sleep(Duration::from_millis(50));
 	}
 
-	Ok(ChildHostHandle { endpoint, pid })
+	Ok(ChildHostHandle { endpoint, pid, auth_token })
 }
 
 /// Errors from resolving where the window attaches.
@@ -334,6 +383,8 @@ pub enum AttachError {
 	Endpoint(#[from] EndpointError),
 	#[error(transparent)]
 	Spawn(#[from] HostSpawnError),
+	#[error(transparent)]
+	Auth(EndpointError),
 	#[error(
 		"no home directory, so no default socket; pass --endpoint or set {VEYYON_GUI_ENDPOINT_ENV}"
 	)]
@@ -343,8 +394,9 @@ pub enum AttachError {
 /// Where the window attaches, and the host it started to get there.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Attachment {
-	pub endpoint: Endpoint,
-	pub spawned:  Option<ChildHostHandle>,
+	pub endpoint:   Endpoint,
+	pub spawned:    Option<ChildHostHandle>,
+	pub auth_token: Option<GuiAuthToken>,
 }
 
 /// Resolves the connect-or-spawn topology (§8.11).
@@ -359,14 +411,22 @@ pub fn connect_or_spawn(explicit: Option<&str>, cwd: &Path) -> Result<Attachment
 	if explicit_given {
 		let endpoint =
 			Endpoint::resolve(explicit, agent_dir.as_deref().unwrap_or_else(|| Path::new(".")))?;
-		return Ok(Attachment { endpoint, spawned: None });
+		let auth_token = match endpoint {
+			Endpoint::Tcp { .. } => Some(GuiAuthToken::from_env().map_err(AttachError::Auth)?),
+			Endpoint::Unix { .. } => None,
+		};
+		return Ok(Attachment { endpoint, spawned: None, auth_token });
 	}
 
 	let agent_dir = agent_dir.ok_or(AttachError::NoAgentDir)?;
 	let endpoint = Endpoint::default_unix(&agent_dir);
 	if accepts_connection(&endpoint) {
-		return Ok(Attachment { endpoint, spawned: None });
+		return Ok(Attachment { endpoint, spawned: None, auth_token: None });
 	}
 	let spawned = spawn_child_host(cwd)?;
-	Ok(Attachment { endpoint: spawned.endpoint.clone(), spawned: Some(spawned) })
+	Ok(Attachment {
+		endpoint:   spawned.endpoint.clone(),
+		auth_token: Some(spawned.auth_token.clone()),
+		spawned:    Some(spawned),
+	})
 }

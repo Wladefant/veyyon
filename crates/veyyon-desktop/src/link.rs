@@ -17,7 +17,7 @@ use veyyon_desktop_model::{
 
 use crate::{
 	bridge::{EgressBridge, EgressError, INGRESS_CAPACITY, current_timestamp_ms},
-	endpoint::Endpoint,
+	endpoint::{Endpoint, GuiAuthToken},
 	transport::spawn_transport,
 };
 
@@ -42,7 +42,10 @@ impl HostLink {
 	/// on: what the host sent, and a `RequestFailed` for any request the
 	/// bridge could not carry, so a dropped request is reported where the
 	/// host's own refusals are.
-	pub fn start(endpoint: Endpoint) -> Result<(Self, Receiver<HostEvent>), io::Error> {
+	pub fn start(
+		endpoint: Endpoint,
+		auth_token: Option<GuiAuthToken>,
+	) -> Result<(Self, Receiver<HostEvent>), io::Error> {
 		let runtime = Builder::new_multi_thread()
 			.worker_threads(1)
 			.thread_name(TRANSPORT_THREAD_NAME)
@@ -53,7 +56,7 @@ impl HostLink {
 
 		let egress = {
 			let _guard = runtime.enter();
-			let (egress, mut ingress_rx, _supervisor) = spawn_transport(endpoint);
+			let (egress, mut ingress_rx, _supervisor) = spawn_transport(endpoint, auth_token);
 			let forward = events.clone();
 			handle.spawn(async move {
 				while let Some(event) = ingress_rx.recv().await {
