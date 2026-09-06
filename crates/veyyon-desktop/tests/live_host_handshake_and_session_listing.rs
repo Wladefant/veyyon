@@ -18,7 +18,9 @@
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use veyyon_desktop::{Endpoint, FrameDecoder, HandshakeDriver, encode_request};
+use veyyon_desktop::{
+	Endpoint, FrameDecoder, GuiAuthToken, HandshakeDriver, encode_authentication, encode_request,
+};
 use veyyon_desktop_model::{HostEvent, SnapshotSection};
 
 #[tokio::test]
@@ -35,6 +37,11 @@ async fn live_host_completes_handshake_and_answers_list_sessions() {
 	let mut stream = tokio::net::TcpStream::connect(format!("{host}:{port}"))
 		.await
 		.expect("failed to connect to live host on 127.0.0.1:7654");
+	let token = GuiAuthToken::from_env().expect("VEYYON_GUI_AUTH_TOKEN must match the live host");
+	stream
+		.write_all(&encode_authentication(&token).expect("encode authentication"))
+		.await
+		.expect("write authentication");
 
 	let mut decoder = FrameDecoder::new();
 	let mut handshake = HandshakeDriver::new(endpoint.formatted());

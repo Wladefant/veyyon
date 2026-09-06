@@ -21,10 +21,11 @@ pub use bridge::{
 pub use damage::{Repaint, request_frame};
 pub use endpoint::{
 	AttachError, Attachment, ChildHostHandle, DEFAULT_SOCKET_FILENAME, Endpoint, EndpointError,
-	HostSpawnError, SPAWN_WAIT_MS, VEYYON_BIN_ENV, VEYYON_GUI_ENDPOINT_ENV, VEYYON_PROFILE_ENV,
-	accepts_connection, connect_or_spawn, default_agent_dir, spawn_child_host,
+	GuiAuthToken, HostSpawnError, SPAWN_WAIT_MS, VEYYON_BIN_ENV, VEYYON_GUI_AUTH_TOKEN_ENV,
+	VEYYON_GUI_ENDPOINT_ENV, VEYYON_PROFILE_ENV, accepts_connection, connect_or_spawn,
+	default_agent_dir, spawn_child_host,
 };
-pub use framing::{FrameDecoder, FramingError, MAX_FRAME_BYTES, encode_request};
+pub use framing::{FrameDecoder, FramingError, MAX_FRAME_BYTES, encode_authentication, encode_request};
 pub use link::{HostLink, TRANSPORT_THREAD_NAME};
 pub use project::{
 	NO_SESSION_OPEN, PANE_LINE_CEILING, SessionIndex, actions_for, drawer_lines, elapsed_label,

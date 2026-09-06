@@ -2,6 +2,8 @@ use bytes::BytesMut;
 use thiserror::Error;
 use veyyon_desktop_model::{HostEvent, HostRequest};
 
+use crate::endpoint::GuiAuthToken;
+
 /// Maximum allowed frame size: 32 MiB (33,554,432 bytes), matching
 /// `packages/coding-agent/src/gui-host/frames.ts:5`.
 ///
@@ -123,6 +125,16 @@ impl FrameDecoder {
 
 		Ok(events)
 	}
+}
+
+/// Serializes the mandatory first-frame GUI host authentication message.
+pub fn encode_authentication(token: &GuiAuthToken) -> Result<Vec<u8>, FramingError> {
+	let mut payload = serde_json::to_vec(&serde_json::json!({
+		"Authenticate": { "token": token.expose() }
+	}))
+	.map_err(FramingError::Serialize)?;
+	payload.push(b'\n');
+	Ok(payload)
 }
 
 /// Serializes a [`HostRequest`] into a single-line JSON payload terminated by

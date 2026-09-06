@@ -200,7 +200,8 @@ fn main() {
 				return;
 			},
 		};
-		let (link, mut events) = match HostLink::start(attachment.endpoint.clone()) {
+		let (link, mut events) =
+			match HostLink::start(attachment.endpoint.clone(), attachment.auth_token.clone()) {
 			Ok(started) => started,
 			Err(error) => {
 				let _ = window.update(cx, |view, _window, cx| {

@@ -72,7 +72,6 @@ export class FrameDecoder {
 			} catch (error) {
 				logger.error("GUI host received malformed JSON frame", {
 					error: error instanceof Error ? error.message : String(error),
-					preview: line.slice(0, 120),
 				});
 				this.#fail(new Error(`Malformed JSON frame: ${error instanceof Error ? error.message : String(error)}`));
 				break;

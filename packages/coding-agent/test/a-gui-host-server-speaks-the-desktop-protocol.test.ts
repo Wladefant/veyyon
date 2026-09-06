@@ -36,8 +36,12 @@ import {
 	MAX_FRAME_BYTES,
 	PROTOCOL_VERSION,
 	SUPPORTED_CAPABILITIES,
+	VEYYON_GUI_AUTH_TOKEN_ENV,
+	parseEndpoint,
 	startGuiHostServer,
 } from "../src/gui-host";
+
+const TEST_AUTH_TOKEN = "gui-host-test-token-with-at-least-32-bytes";
 
 class TestSocketClient {
 	#socket: net.Socket;
@@ -106,7 +110,11 @@ class TestSocketClient {
 		});
 	}
 
-	static async connect(endpoint: string, timeoutMs = 2000): Promise<TestSocketClient> {
+	static async connect(
+		endpoint: string,
+		authToken: string | null = TEST_AUTH_TOKEN,
+		timeoutMs = 2000,
+	): Promise<TestSocketClient> {
 		const { promise, resolve, reject } = Promise.withResolvers<TestSocketClient>();
 		const timer = setTimeout(() => {
 			reject(new Error(`Timed out connecting to endpoint ${endpoint}`));
@@ -128,7 +136,11 @@ class TestSocketClient {
 
 		socket.on("connect", () => {
 			clearTimeout(timer);
-			resolve(new TestSocketClient(socket));
+			const client = new TestSocketClient(socket);
+			if (authToken !== null) {
+				client.send({ Authenticate: { token: authToken } });
+			}
+			resolve(client);
 		});
 
 		socket.on("error", err => {
@@ -216,8 +228,53 @@ describe("GUI host server protocol", () => {
 		}
 	});
 
+	test("TCP clients receive nothing before authentication and invalid credentials are torn down", async () => {
+		expect(() => parseEndpoint("tcp:0.0.0.0:7654")).toThrow("must bind to loopback");
+
+		const previousAuthToken = process.env[VEYYON_GUI_AUTH_TOKEN_ENV];
+		process.env[VEYYON_GUI_AUTH_TOKEN_ENV] = TEST_AUTH_TOKEN;
+		let tcpServer: GuiHostServer;
+		try {
+			tcpServer = await startGuiHostServer({
+				endpoint: "tcp:127.0.0.1:0",
+				cwd: tempDir,
+			});
+			server = tcpServer;
+			expect(process.env[VEYYON_GUI_AUTH_TOKEN_ENV]).toBeUndefined();
+		} finally {
+			if (previousAuthToken === undefined) {
+				delete process.env[VEYYON_GUI_AUTH_TOKEN_ENV];
+			} else {
+				process.env[VEYYON_GUI_AUTH_TOKEN_ENV] = previousAuthToken;
+			}
+		}
+
+		const unauthenticated = await TestSocketClient.connect(tcpServer.endpoint, null);
+		unauthenticated.send({ id: 1, action: "ListSessions" });
+		await unauthenticated.waitForClose();
+
+		const invalid = await TestSocketClient.connect(tcpServer.endpoint, `${TEST_AUTH_TOKEN}-wrong`);
+		await invalid.waitForClose();
+
+		const authorized = await TestSocketClient.connect(tcpServer.endpoint);
+		expect(await authorized.nextFrame()).toEqual({
+			ConnectionChanged: {
+				Connected: {
+					endpoint: tcpServer.endpoint,
+					protocol: PROTOCOL_VERSION,
+				},
+			},
+		});
+		await authorized.nextFrame();
+		authorized.send({ id: 2, action: "ListSessions" });
+		const sessions = (await authorized.nextFrame()) as Record<string, unknown>;
+		expect(sessions.Snapshot).toBeDefined();
+		expect(await authorized.nextFrame()).toEqual({ RequestSucceeded: { request: 2 } });
+		authorized.destroy();
+	});
+
 	test("the first frame is the greeting with protocol 1, before anything else", async () => {
-		server = await startGuiHostServer({ endpoint, cwd: tempDir });
+		server = await startGuiHostServer({ endpoint, cwd: tempDir, authToken: TEST_AUTH_TOKEN });
 		const client = await TestSocketClient.connect(server.endpoint);
 
 		const firstFrame = (await client.nextFrame(2000)) as Record<string, unknown>;
@@ -234,7 +291,7 @@ describe("GUI host server protocol", () => {
 	});
 
 	test("a capability snapshot arrives naming EVERY member of Capability::ALL, with exact opted-out set", async () => {
-		server = await startGuiHostServer({ endpoint, cwd: tempDir });
+		server = await startGuiHostServer({ endpoint, cwd: tempDir, authToken: TEST_AUTH_TOKEN });
 		const client = await TestSocketClient.connect(server.endpoint);
 
 		// Frame 1: Greeting
@@ -281,7 +338,7 @@ describe("GUI host server protocol", () => {
 	});
 
 	test("ListSessions produces a Snapshot whose shape SnapshotSection::Sessions accepts", async () => {
-		server = await startGuiHostServer({ endpoint, cwd: tempDir });
+		server = await startGuiHostServer({ endpoint, cwd: tempDir, authToken: TEST_AUTH_TOKEN });
 		const client = await TestSocketClient.connect(server.endpoint);
 
 		// Drain greeting and capabilities
@@ -312,7 +369,7 @@ describe("GUI host server protocol", () => {
 	});
 
 	test("an unimplemented action is answered RequestFailed naming it, and never left unanswered", async () => {
-		server = await startGuiHostServer({ endpoint, cwd: tempDir });
+		server = await startGuiHostServer({ endpoint, cwd: tempDir, authToken: TEST_AUTH_TOKEN });
 		const client = await TestSocketClient.connect(server.endpoint);
 
 		// Drain greeting and capabilities
@@ -351,7 +408,7 @@ describe("GUI host server protocol", () => {
 	});
 
 	test("a frame over the bound and a frame of malformed JSON each end the connection", async () => {
-		server = await startGuiHostServer({ endpoint, cwd: tempDir });
+		server = await startGuiHostServer({ endpoint, cwd: tempDir, authToken: TEST_AUTH_TOKEN });
 
 		// 1. Oversized frame test
 		const client1 = await TestSocketClient.connect(server.endpoint);
@@ -374,7 +431,7 @@ describe("GUI host server protocol", () => {
 	});
 
 	test("a client that disconnects mid-request leaks nothing: server keeps serving another client", async () => {
-		server = await startGuiHostServer({ endpoint, cwd: tempDir });
+		server = await startGuiHostServer({ endpoint, cwd: tempDir, authToken: TEST_AUTH_TOKEN });
 
 		const client1 = await TestSocketClient.connect(server.endpoint);
 		const client2 = await TestSocketClient.connect(server.endpoint);
@@ -405,7 +462,7 @@ describe("GUI host server protocol", () => {
 	});
 
 	test("every capability reported Available has working actions and unimplemented actions report Unavailable", async () => {
-		server = await startGuiHostServer({ endpoint, cwd: tempDir });
+		server = await startGuiHostServer({ endpoint, cwd: tempDir, authToken: TEST_AUTH_TOKEN });
 		const client = await TestSocketClient.connect(server.endpoint);
 
 		// Drain greeting and capabilities
