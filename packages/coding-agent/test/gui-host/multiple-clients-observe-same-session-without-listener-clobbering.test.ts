@@ -29,6 +29,7 @@ import * as path from "node:path";
 import { SessionManager } from "../../src/session/session-manager";
 import { FileSessionStorage } from "../../src/session/session-storage";
 import type { AgentSession, AgentSessionEvent } from "../../src/session/agent-session";
+import { type GuiHostServer, startGuiHostServer } from "../../src/gui-host";
 import { wireSessionManager } from "../../src/gui-host/actions/active-session";
 import type { ActionContext } from "../../src/gui-host/actions/types";
 import {
@@ -37,10 +38,12 @@ import {
 	type ClientSessionState,
 } from "../../src/gui-host/turns";
 import type { SessionEntry } from "../../src/session/session-entries";
+import { TestSocketClient } from "./test-client";
 
 describe("multiple clients observe same session without listener clobbering", () => {
 	let tempDir: string;
 	let storage: FileSessionStorage;
+	let server: GuiHostServer | null = null;
 
 	beforeEach(async () => {
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "gui-multi-subscriber-test-"));
@@ -48,6 +51,10 @@ describe("multiple clients observe same session without listener clobbering", ()
 	});
 
 	afterEach(async () => {
+		if (server) {
+			await server.close();
+			server = null;
+		}
 		try {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		} catch {
@@ -205,5 +212,51 @@ describe("multiple clients observe same session without listener clobbering", ()
 		sm.appendMessage({ role: "user", content: "shared turn update 3", timestamp: Date.now() });
 		expect(client1Frames).toHaveLength(1);
 		expect(client2Frames).toHaveLength(2);
+	});
+
+	test("real server path: two live TCP clients open same session, append via action, and disconnect leaves updates intact", async () => {
+		const sessionDir = path.join(tempDir, "sessions");
+		await fs.mkdir(sessionDir, { recursive: true });
+		const sm = SessionManager.create(tempDir, sessionDir, storage);
+		await sm.ensureOnDisk();
+		const sessionPath = sm.getSessionFile()!;
+
+		server = await startGuiHostServer({ endpoint: "tcp:127.0.0.1:0", cwd: tempDir, agentDir: tempDir });
+		const client1 = await TestSocketClient.connect(server.endpoint);
+		const client2 = await TestSocketClient.connect(server.endpoint);
+
+		// Drain greetings and initial snapshots
+		await client1.nextFrame();
+		await client1.nextFrame();
+		await client2.nextFrame();
+		await client2.nextFrame();
+
+		// Both clients open the same session
+		const res1 = await client1.request(1, { OpenSession: { session: sessionPath } });
+		expect(res1.outcome.RequestSucceeded).toBeDefined();
+
+		const res2 = await client2.request(2, { OpenSession: { session: sessionPath } });
+		expect(res2.outcome.RequestSucceeded).toBeDefined();
+
+		// Client 1 renames session (real server action that appends a title_change entry)
+		const renameRes1 = await client1.request(3, { RenameSession: { session: sessionPath, title: "Renamed Title 1" } });
+		expect(renameRes1.outcome.RequestSucceeded).toBeDefined();
+		expect(renameRes1.frames.some(f => "TranscriptAppended" in f)).toBe(true);
+
+		// Client 2 receives TranscriptAppended frame for Client 1's action
+		const f2 = (await client2.nextFrame()) as Record<string, unknown>;
+		expect(f2.TranscriptAppended).toBeDefined();
+
+		// Client 1 disconnects
+		client1.destroy();
+		await client1.waitForClose();
+
+		// Client 2 renames session (second real server action)
+		const renameRes2 = await client2.request(4, { RenameSession: { session: sessionPath, title: "Renamed Title 2" } });
+		expect(renameRes2.outcome.RequestSucceeded).toBeDefined();
+		expect(renameRes2.frames.some(f => "TranscriptAppended" in f)).toBe(true);
+
+		client2.destroy();
+		await client2.waitForClose();
 	});
 });
