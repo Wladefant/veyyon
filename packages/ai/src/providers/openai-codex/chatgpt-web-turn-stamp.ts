@@ -26,7 +26,13 @@ import type { InputItem, RequestBody } from "./request-transformer";
 
 /**
  * Stamp the current turn's user item so the local `codex-chatgpt-web` bridge
- * accepts the request, and report whether an item was found.
+ * accepts the request, and report WHERE it landed.
+ *
+ * The index matters to the caller, not just the fact of a hit: the daemon's
+ * trusted-environment envelope has to be the input item immediately before
+ * this one (`chatgpt-web-trusted-context.ts`), so the position is part of the
+ * contract rather than a diagnostic. `-1` means no candidate existed, and the
+ * daemon will refuse the turn for the reason it always did.
  *
  * WHICH ITEM. The last `role: "user"` item in `input`. On a new user turn that
  * is the fresh instruction; on a tool-return continuation the input ends with
@@ -36,14 +42,26 @@ import type { InputItem, RequestBody } from "./request-transformer";
  * the session's stored `providerPayload`, and writing a turn id into that would
  * outlive this request and follow the conversation onto other providers.
  *
- * WHAT IS NOT FILTERED. The daemon additionally skips a user item whose text is
- * one of its three contextual envelopes (`<environment_context>`,
- * `<subagent_notification>`, a compaction summary note) before accepting it as
- * a revision. Veyyon emits none of those — nothing in this repo writes those
- * tags — so the last user item and the daemon's current-turn revision are the
- * same item. If Veyyon ever starts sending one, the daemon will skip it, land on
- * an unstamped earlier item and refuse the turn again; this function is where
- * that filter has to be added, not somewhere downstream.
+ * WHAT IS NOT FILTERED, AND WHY IT STAYS THAT WAY. The daemon additionally
+ * skips a user item whose text is one of its contextual envelopes
+ * (`<environment_context>`, `<subagent_notification>`, or one of its two
+ * compaction-summary texts) before accepting it as a revision. The two
+ * compaction texts are daemon-internal strings nothing in this repo produces —
+ * Veyyon's own summary framing is a different sentence
+ * (`packages/agent/src/prompts/compaction/compaction-summary-context.md`). The
+ * two XML shapes are reachable, though, because a user can type one.
+ *
+ * The filter is deliberately NOT applied here, and adding it would open a real
+ * hole. Exactly one item carries the current turn id, and it is the item the
+ * daemon reads as `user` in `environmentBeforeUser` — never the `candidate`
+ * whose content that function scans for `<environment_context>`. Skipping a
+ * contextual item would stamp an EARLIER user item instead, putting a stamped,
+ * user-authored item into the candidate slot, and a user-supplied
+ * `<environment_context>` part inside it would then be read as trusted
+ * filesystem authority. So a user message shaped exactly like one of those
+ * envelopes is refused by the daemon (it skips it, lands on an unstamped item
+ * and reports "requires a current-turn user message"), which is the safe
+ * failure and is chosen over accepting user text as host authority.
  *
  * SCOPE. The caller decides this request is bridge-routed. Nothing here is
  * conditional on the model or the host, so the official Codex transport is
@@ -58,10 +76,10 @@ import type { InputItem, RequestBody } from "./request-transformer";
  * mid-turn compaction reuses the in-flight turn id anyway, so the id stamped
  * here is the one that locates the browser response the compaction replaces.
  */
-export function stampChatGptWebCurrentTurnUserItem(body: RequestBody, turnId: string): boolean {
-	if (turnId.length === 0) return false;
+export function stampChatGptWebCurrentTurnUserItem(body: RequestBody, turnId: string): number {
+	if (turnId.length === 0) return -1;
 	const input = body.input;
-	if (!Array.isArray(input)) return false;
+	if (!Array.isArray(input)) return -1;
 	for (let index = input.length - 1; index >= 0; index -= 1) {
 		const item: InputItem | undefined = input[index];
 		if (!item || item.role !== "user") continue;
@@ -74,7 +92,7 @@ export function stampChatGptWebCurrentTurnUserItem(body: RequestBody, turnId: st
 			type: "message",
 			internal_chat_message_metadata_passthrough: { ...passthrough, turn_id: turnId },
 		};
-		return true;
+		return index;
 	}
-	return false;
+	return -1;
 }
