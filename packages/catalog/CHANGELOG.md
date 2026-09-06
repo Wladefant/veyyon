@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- A `chatgpt-web` provider for the local `codex-chatgpt-web` Responses bridge, whose catalog is read live from the daemon's own `GET {base}/models` (`discovery/chatgpt-web.ts`, `provider-models/chatgpt-web.ts`). Nothing about it is declared locally: the bundle carries no `chatgpt-web` rows, the model set comes from the daemon's own account gating (a Luna-only account gets one row; a non-Pro account gets no `extra-high`/`pro`), each row's effort ladder is the single `supported_reasoning_levels` entry the daemon publishes for it rather than a ladder derived from the model id, the context window is copied verbatim, `maxTokens` stays `null` because no output cap is published, and pricing records `unknown` rather than free. `supportsTools` is `false` unless `GET /healthz` proves the daemon is in `full` mode, so a browser-only install never offers a tool surface the turn cannot deliver. `preferWebsockets` is pinned off: the routed rows are clones of a native Codex template and inherit `prefer_websockets`, while the bridge answers `GET /v1/responses` with HTTP 426. A non-loopback base URL is refused before any request is made, because discovery forwards the ChatGPT/Codex bearer the daemon needs to proxy `/models` upstream, and a dead daemon resolves to no rows rather than to slugs that would fail at request time.
+
 ### Fixed
 
 - The generator now reads OAuth credentials from the machine-wide shared-auth store when the broker-profile path finds none, so a catalog regeneration on a logged-in machine sees the same credentials the app wrote instead of reporting no credentials and silently falling back to the previous snapshot.

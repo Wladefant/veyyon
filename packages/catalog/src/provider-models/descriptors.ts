@@ -5,6 +5,7 @@
  * half (env keys, OAuth login/refresh) stays in the pi-ai registry, which
  * type-checks itself against `KnownProvider` from this table.
  */
+import { chatGptWebModelManagerOptions } from "./chatgpt-web";
 import type { ModelManagerConfig, ProviderCatalogEntry, ProviderDescriptor } from "./descriptor-types";
 import { googleModelManagerOptions, googleVertexModelManagerOptions } from "./google";
 import { ollamaCloudModelManagerOptions } from "./ollama";
@@ -105,6 +106,25 @@ export const CATALOG_PROVIDERS = [
 		envVars: ["CEREBRAS_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => cerebrasModelManagerOptions(config),
 		catalogDiscovery: { label: "Cerebras" },
+	},
+	{
+		id: "chatgpt-web",
+		// The daemon's own default when a Sol account sends no effort
+		// (`resolveChatGptWebModelMode`: `reasoning ?? "high"`).
+		defaultModel: "chatgpt-web/high",
+		// The same ChatGPT/Codex OAuth token the official `openai-codex` provider
+		// uses, read from the environment rather than shared out of that
+		// provider's credential store: the bridge proxies `/models` to OpenAI with
+		// the incoming bearer, so discovery has no other way to answer. The
+		// bridge-specific name is consulted first so an operator can point the
+		// bridge at a different account without touching the official provider.
+		envVars: ["CODEX_CHATGPT_WEB_OAUTH_TOKEN", "OPENAI_CODEX_OAUTH_TOKEN"],
+		createModelManagerOptions: (config: ModelManagerConfig) => chatGptWebModelManagerOptions(config),
+		// Every row is live: nothing is bundled and a cached row must not outlive
+		// the account capability that produced it.
+		dynamicModelsAuthoritative: true,
+		// No `catalogDiscovery`: generation runs on machines with no daemon on
+		// 17841, exactly as for `lm-studio` and `ollama`.
 	},
 	{
 		id: "cloudflare-ai-gateway",
