@@ -1,5 +1,9 @@
 import * as os from "node:os";
 import { scheduler } from "node:timers/promises";
+import {
+	CHATGPT_WEB_PROVIDER_ID,
+	isChatGptWebLoopbackUrl,
+} from "@veyyon/catalog/discovery/chatgpt-web";
 import { calculateCost, discardAttemptUsage, emptyUsage, scaleUsageCost } from "@veyyon/catalog/models";
 import {
 	CODEX_BASE_URL,
@@ -78,6 +82,7 @@ import { createRequestDebugSession, isRequestDebugEnabled, type RequestDebugResp
 import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
 import { notifyRawSseEvent } from "../utils/sse-debug";
 import { compactGrammarDefinition } from "./grammar";
+import { stampChatGptWebCurrentTurnUserItem } from "./openai-codex/chatgpt-web-turn-stamp";
 import {
 	type CodexReasoningContext,
 	type CodexRequestOptions,
@@ -1360,6 +1365,23 @@ async function buildCodexRequestContext(
 		compaction,
 	});
 	transformedBody.client_metadata = requestMetadata.clientMetadata;
+	// The last place both halves of the bridge's turn contract are final and
+	// still on one object: the turn id was minted two statements ago, the input
+	// array has been through `transformRequestBody`, and every transport below
+	// (SSE, the websocket `response.create` frame, and both reopen paths) reads
+	// this same `transformedBody`. Stamping earlier would miss the turn id;
+	// stamping per transport would need it in four places.
+	//
+	// Both clauses are load-bearing. `chatgpt-web` is the only provider whose
+	// catalog comes from the daemon, so it can never be the official Codex
+	// provider; and a `chatgpt-web` row pointed anywhere but loopback is not the
+	// daemon (it binds 127.0.0.1 only, and discovery refuses to hand it the
+	// ChatGPT bearer off loopback), so it must not receive daemon-specific
+	// fields either. Every other Codex-family request — OpenAI's host, and any
+	// other Codex-compatible server on loopback — goes out byte-identical.
+	if (model.provider === CHATGPT_WEB_PROVIDER_ID && isChatGptWebLoopbackUrl(baseUrl)) {
+		stampChatGptWebCurrentTurnUserItem(transformedBody, requestMetadata.turnId);
+	}
 	return {
 		apiKey,
 		accountId,

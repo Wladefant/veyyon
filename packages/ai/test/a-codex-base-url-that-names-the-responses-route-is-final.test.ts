@@ -27,19 +27,38 @@
  * exactly this body field, and a change that dropped or shared it would leave
  * two Veyyon sessions driving one ChatGPT tab.
  *
+ * WHY THE FIXTURE REFUSES. The turn metadata blob is only half of what the
+ * daemon validates. `chatGptTurnExecutionKey` — derived for every turn before
+ * any browser work — also demands the CURRENT-TURN USER ITEM carry
+ * `type: "message"` plus `internal_chat_message_metadata_passthrough.turn_id`
+ * matching that blob, because the other alternative it accepts (a server-owned
+ * item `id`) is stripped from every input item by the Codex request
+ * transformer. This suite's first version answered 200 to any POST and asserted
+ * the blob alone, so the transport shipped `{ role, content }` items that the
+ * daemon refuses outright and the whole file stayed green. The server now gates
+ * every request on {@link bridgeTurnRefusal} and answers 400 with the daemon's
+ * own message, which makes acceptance evidence instead of a default.
+ *
  * WHAT IT DOES NOT CATCH. The server here speaks the Responses SSE protocol; it
  * is not the bridge, and nothing here proves a browser turn produces an answer.
  * That needs an authenticated ChatGPT profile on the machine, which is a
- * separate, missing prerequisite. The catalog half of the boundary is covered in
+ * separate, missing prerequisite — as is the daemon's trusted-sandbox envelope,
+ * which its FULL-mode tool path requires and this transport does not send, so a
+ * full-mode tool round trip stays refused for a reason nothing here forges. The
+ * catalog half of the boundary is covered in
  * `packages/catalog/test/the-chatgpt-web-bridge-publishes-only-what-its-daemon-reports.test.ts`.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as http from "node:http";
-import { streamOpenAICodexResponses } from "@veyyon/ai/providers/openai-codex-responses";
-import type { Context, FetchImpl, Model, ProviderSessionState } from "@veyyon/ai/types";
+import {
+	convertCodexResponsesMessages,
+	streamOpenAICodexResponses,
+} from "@veyyon/ai/providers/openai-codex-responses";
+import type { AssistantMessage, Context, FetchImpl, Model, ProviderSessionState } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import * as piUtils from "@veyyon/utils";
+import { asRecord } from "@veyyon/utils/type-guards";
 
 const { getAgentDir, setAgentDir, TempDir } = piUtils;
 
@@ -74,6 +93,11 @@ interface ObservedRequest {
 	body: Record<string, unknown>;
 	/** Set when the client hung up before the response finished. */
 	clientHungUp: boolean;
+	/**
+	 * The bridge contract's refusal for this body, or `undefined` when the body
+	 * satisfied it. The server answers 400 rather than SSE whenever this is set.
+	 */
+	refusal?: string;
 }
 
 interface TestServer {
@@ -84,6 +108,104 @@ interface TestServer {
 	hangUp: Promise<void>;
 	/** Resolves once the server has read a complete request body. */
 	received: Promise<void>;
+}
+
+/**
+ * The bridge's turn contract, specified here and enforced fail-closed.
+ *
+ * This is a deliberate reimplementation of what `codex-chatgpt-web` does in
+ * `adapters/chatgpt-web/environment.ts` (`extractChatGptTurnIdentity` plus
+ * `latestChatGptTurnUserRevision`, reached from `chatGptTurnExecutionKey`,
+ * which `runTurn` derives for EVERY turn before any browser work). Its
+ * messages are the daemon's own, byte for byte, because those strings are what
+ * an operator sees in `response.failed` when this contract is not met.
+ *
+ * It is a SPECIFICATION, not a stub: every path that cannot positively prove
+ * the body satisfies the contract returns a refusal, and the server below
+ * answers 400 instead of SSE whenever it does. The previous fixture accepted
+ * any POST and asserted only the `client_metadata` blob, so a body the daemon
+ * refuses outright passed the whole suite — which is exactly how the missing
+ * per-item turn provenance shipped.
+ *
+ * WHAT IT DOES NOT MODEL. The daemon also skips a user item holding one of its
+ * own compaction-summary texts (`isReadableCompactionSummaryText`,
+ * `OPAQUE_COMPACTION_NOTE`) before accepting it as the revision. Those strings
+ * are daemon-internal and nothing in this repo produces them, so they are left
+ * out rather than approximated. It also does not model the compaction route
+ * (`_compactionRequest`), which keys off the whole input array instead.
+ */
+function bridgeTurnRefusal(body: Record<string, unknown>): string | undefined {
+	const clientMetadata = asRecord(body.client_metadata);
+	const encoded = clientMetadata?.["x-codex-turn-metadata"];
+	if (typeof encoded !== "string") return "ChatGPT web requires native Codex turn_id metadata for browser-session replay";
+	let blob: Record<string, unknown> | null = null;
+	try {
+		blob = asRecord(JSON.parse(encoded));
+	} catch {
+		blob = null;
+	}
+	const turnId = blob?.turn_id;
+	if (typeof turnId !== "string" || turnId.length === 0) {
+		return "ChatGPT web requires native Codex turn_id metadata for browser-session replay";
+	}
+	const input = Array.isArray(body.input) ? body.input : [];
+	for (let index = input.length - 1; index >= 0; index -= 1) {
+		const item = asRecord(input[index]);
+		if (item?.type !== "message" || item.role !== "user") continue;
+		if (isContextualUserItem(item)) continue;
+		const itemTurnId = asRecord(item.internal_chat_message_metadata_passthrough)?.turn_id;
+		const serverOwnedId = typeof item.id === "string" && item.id.length > 0;
+		if (typeof itemTurnId !== "string" && !serverOwnedId) continue;
+		if (typeof itemTurnId === "string" && itemTurnId !== turnId) {
+			return "ChatGPT web current user message conflicts with native Codex turn_id metadata";
+		}
+		return undefined;
+	}
+	return "ChatGPT web requires a current-turn user message for browser-session replay";
+}
+
+/** The daemon's two XML envelopes, which are context rather than an instruction. */
+function isContextualUserItem(item: Record<string, unknown>): boolean {
+	const content = item.content;
+	const text = (
+		typeof content === "string"
+			? content
+			: Array.isArray(content)
+				? content
+						.map(part => asRecord(part)?.text)
+						.filter((value): value is string => typeof value === "string")
+						.join("\n")
+				: ""
+	).trim();
+	return (
+		/^<environment_context>[\s\S]*<\/environment_context>$/.test(text) ||
+		/^<subagent_notification>[\s\S]*<\/subagent_notification>$/.test(text)
+	);
+}
+
+/** The user items of a request body, in wire order. */
+function userItems(body: Record<string, unknown>): Record<string, unknown>[] {
+	const input = Array.isArray(body.input) ? body.input : [];
+	return input.map(item => asRecord(item)).filter((item): item is Record<string, unknown> => item?.role === "user");
+}
+
+/**
+ * The same body with the bridge stamp removed from every user item — i.e. the
+ * payload this transport sent BEFORE the stamp existed. Pinned against the
+ * untouched message converter in the suite below, so it is the original wire
+ * shape rather than a hand-written stand-in for it.
+ */
+function withoutBridgeStamp(body: Record<string, unknown>): Record<string, unknown> {
+	const input = Array.isArray(body.input) ? body.input : [];
+	return {
+		...body,
+		input: input.map(entry => {
+			const item = asRecord(entry);
+			if (item?.role !== "user") return entry;
+			const { type: _type, internal_chat_message_metadata_passthrough: _passthrough, ...rest } = item;
+			return rest;
+		}),
+	};
 }
 
 /**
@@ -117,7 +239,13 @@ const COMPLETED_SSE = `${[
 ].join("\n\n")}\n\n`;
 
 /**
- * A real loopback HTTP server speaking the Responses SSE protocol.
+ * A real loopback HTTP server speaking the Responses SSE protocol, gated on
+ * {@link bridgeTurnRefusal}.
+ *
+ * A body the bridge contract refuses gets HTTP 400 carrying the daemon's own
+ * message — the same shape `server.ts` turns that throw into — so a regression
+ * in the outgoing wire shape fails every assertion in this file instead of
+ * passing against a server that answers 200 to anything.
  *
  * `mode: "stall"` answers with headers and then nothing, which is what lets the
  * abort assertion observe a hang-up on the SERVER side rather than trusting the
@@ -140,14 +268,21 @@ async function startServer(mode: "complete" | "stall" = "complete"): Promise<Tes
 			} catch {
 				body = {};
 			}
+			const refusal = bridgeTurnRefusal(body);
 			const observed: ObservedRequest = {
 				method: req.method ?? "",
 				url: req.url ?? "",
 				body,
 				clientHungUp: false,
+				...(refusal === undefined ? {} : { refusal }),
 			};
 			requests.push(observed);
 			received.resolve();
+			if (refusal !== undefined) {
+				res.writeHead(400, { "content-type": "application/json" });
+				res.end(JSON.stringify({ error: { message: refusal, type: "invalid_request_error" } }));
+				return;
+			}
 			res.writeHead(200, {
 				"content-type": "text/event-stream",
 				"cache-control": "no-cache",
@@ -221,6 +356,47 @@ function askContext(): Context {
 	};
 }
 
+/**
+ * A tool-return continuation: the request the transport issues after the model
+ * called a tool and the tool answered. Its input ends in
+ * `function_call_output`, so the current-turn user instruction is no longer the
+ * last item — the case the bridge stamp has to reach as well as a fresh turn.
+ */
+function toolReturnContext(): Context {
+	const assistant: AssistantMessage = {
+		role: "assistant",
+		content: [{ type: "toolCall", id: "call_1", name: "bash", arguments: { command: "true" } }],
+		api: "openai-codex-responses",
+		provider: "chatgpt-web",
+		model: "chatgpt-web/high",
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "toolUse",
+		timestamp: Date.now(),
+	};
+	return {
+		systemPrompt: ["You are a helpful assistant."],
+		messages: [
+			{ role: "user", content: "Say ok", timestamp: Date.now() },
+			assistant,
+			{
+				role: "toolResult",
+				toolCallId: "call_1",
+				toolName: "bash",
+				content: [{ type: "text", text: "ok" }],
+				isError: false,
+				timestamp: Date.now(),
+			},
+		],
+	};
+}
+
 function turnMetadata(body: Record<string, unknown>): Record<string, unknown> {
 	const clientMetadata = body.client_metadata;
 	if (!clientMetadata || typeof clientMetadata !== "object" || Array.isArray(clientMetadata)) {
@@ -263,8 +439,10 @@ describe("a Codex base URL that already names the responses route is used verbat
 		// base shapes must resolve exactly as they did, or the bridge's needs were
 		// met by moving OpenAI's traffic.
 		const requestedUrls: string[] = [];
-		const fetchMock = vi.fn(async (input: string | URL) => {
+		const sentBodies: Record<string, unknown>[] = [];
+		const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
 			requestedUrls.push(typeof input === "string" ? input : input.toString());
+			sentBodies.push(asRecord(JSON.parse(String(init?.body))) ?? {});
 			return new Response(COMPLETED_SSE, { status: 200, headers: { "content-type": "text/event-stream" } });
 		});
 		try {
@@ -288,6 +466,25 @@ describe("a Codex base URL that already names the responses route is used verbat
 				"https://chatgpt.com/backend-api/codex/responses",
 				"https://chatgpt.com/backend-api/codex/responses",
 			]);
+			// And the bridge's per-item turn provenance is NOT sent to OpenAI's
+			// host. `internal_chat_message_metadata_passthrough` is a field the
+			// official backend never receives from this transport, and a `type` the
+			// converter did not emit is the observable half of the same mistake.
+			expect(sentBodies).toHaveLength(4);
+			for (const body of sentBodies) {
+				const items = userItems(body);
+				expect(items).toHaveLength(1);
+				expect(items[0]?.internal_chat_message_metadata_passthrough).toBeUndefined();
+				expect(items[0]?.type).toBeUndefined();
+			}
+			// The whole input array, byte for byte, is still what the untouched
+			// message converter produces for this turn.
+			expect(sentBodies[0]?.input).toEqual(
+				convertCodexResponsesMessages(
+					{ ...bridgeModel("https://chatgpt.com/backend-api"), provider: "openai-codex" },
+					askContext(),
+				),
+			);
 		} finally {
 			tempDir.removeSync();
 		}
@@ -407,4 +604,187 @@ describe("cancelling a turn hangs up on the server", () => {
 		// The per-test budget: this one drives a real socket and a real abort, so
 		// it needs more than the 5s default the deadline above sits inside.
 	}, 20_000);
+});
+
+describe("a bridge-routed turn carries the per-item turn provenance the daemon validates", () => {
+	it("stamps the current-turn user item, and the same body without the stamp is refused", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-bridge-");
+		setAgentDir(tempDir.path());
+		const server = await startServer();
+		try {
+			const model = bridgeModel(`${server.origin}/v1/responses`);
+			const result = await streamOpenAICodexResponses(model, askContext(), { apiKey: TOKEN }).result();
+
+			// Accepted: the fixture answers SSE only when the contract holds.
+			expect(result.stopReason).toBe("stop");
+			expect(server.requests).toHaveLength(1);
+			const sent = server.requests[0]?.body ?? {};
+			expect(server.requests[0]?.refusal).toBeUndefined();
+			expect(bridgeTurnRefusal(sent)).toBeUndefined();
+
+			// The stamp is the turn's own id, not a constant: a passthrough that
+			// disagrees with the blob is a refusal, not an acceptance.
+			const items = userItems(sent);
+			expect(items).toHaveLength(1);
+			expect(items[0]?.type).toBe("message");
+			expect(items[0]?.internal_chat_message_metadata_passthrough).toEqual({
+				turn_id: turnMetadata(sent).turn_id,
+			});
+
+			// Exactly one item carries turn provenance, because the field ASSERTS
+			// that the item belongs to that turn and only the current instruction
+			// does. The daemon's rolling-checkpoint boundary is the FIRST item
+			// bearing the current turn id, so stamping a second one moves that
+			// boundary to the start of the conversation and silently disables it.
+			const input = Array.isArray(sent.input) ? sent.input : [];
+			expect(
+				input.filter(entry => asRecord(entry)?.internal_chat_message_metadata_passthrough !== undefined),
+			).toHaveLength(1);
+
+			// THE DIFFERENTIAL. Take the stamp off the body that was just accepted
+			// and the same contract refuses it, with the daemon's own words.
+			const original = withoutBridgeStamp(sent);
+			expect(bridgeTurnRefusal(original)).toBe(
+				"ChatGPT web requires a current-turn user message for browser-session replay",
+			);
+			// And that stripped body is not a stand-in: its input array is exactly
+			// what the message converter — untouched by this fix — produces, so it
+			// IS the payload this transport used to send.
+			expect(original.input).toEqual(convertCodexResponsesMessages(model, askContext()));
+		} finally {
+			await server.close();
+			tempDir.removeSync();
+		}
+	});
+
+	it("reaches the user item on a tool-return continuation, where it is not the last item", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-bridge-");
+		setAgentDir(tempDir.path());
+		const server = await startServer();
+		try {
+			const model = bridgeModel(`${server.origin}/v1/responses`);
+			const result = await streamOpenAICodexResponses(model, toolReturnContext(), { apiKey: TOKEN }).result();
+
+			expect(result.stopReason).toBe("stop");
+			const sent = server.requests[0]?.body ?? {};
+			// The premise of the test: the input really does end in a tool result,
+			// so a stamp applied to "the last item" would have missed.
+			const input = Array.isArray(sent.input) ? sent.input : [];
+			expect(asRecord(input.at(-1))?.type).toBe("function_call_output");
+			expect(server.requests[0]?.refusal).toBeUndefined();
+			expect(userItems(sent)[0]?.internal_chat_message_metadata_passthrough).toEqual({
+				turn_id: turnMetadata(sent).turn_id,
+			});
+			expect(bridgeTurnRefusal(withoutBridgeStamp(sent))).toBe(
+				"ChatGPT web requires a current-turn user message for browser-session replay",
+			);
+		} finally {
+			await server.close();
+			tempDir.removeSync();
+		}
+	});
+
+	it("refuses a turn whose metadata blob names a different turn than the stamped item", async () => {
+		// The fixture is not satisfied by the mere presence of a passthrough key,
+		// which is the way a future "just add the field somewhere" fix would pass
+		// a permissive stub while the daemon still refuses the turn.
+		const conflicting = {
+			client_metadata: { "x-codex-turn-metadata": JSON.stringify({ turn_id: "turn-a", thread_id: "thread-a" }) },
+			input: [
+				{
+					type: "message",
+					role: "user",
+					content: [{ type: "input_text", text: "Say ok" }],
+					internal_chat_message_metadata_passthrough: { turn_id: "turn-b" },
+				},
+			],
+		};
+		expect(bridgeTurnRefusal(conflicting)).toBe(
+			"ChatGPT web current user message conflicts with native Codex turn_id metadata",
+		);
+
+		// And it is fail-closed on the two inputs it cannot vouch for at all.
+		expect(bridgeTurnRefusal({ input: [] })).toBe(
+			"ChatGPT web requires native Codex turn_id metadata for browser-session replay",
+		);
+		expect(
+			bridgeTurnRefusal({
+				client_metadata: { "x-codex-turn-metadata": "{not json" },
+				input: [{ type: "message", role: "user", content: "Say ok" }],
+			}),
+		).toBe("ChatGPT web requires native Codex turn_id metadata for browser-session replay");
+	});
+
+	it("does not stamp a chatgpt-web row that is not pointed at loopback", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-bridge-");
+		setAgentDir(tempDir.path());
+		// The other half of the gate. The daemon binds 127.0.0.1 only and
+		// discovery refuses to hand it the ChatGPT bearer anywhere else, so a
+		// `chatgpt-web` row on a remote base is NOT the daemon and must not be
+		// sent daemon-specific fields — a provider-id-only gate would send them.
+		const sentBodies: Record<string, unknown>[] = [];
+		const fetchMock = vi.fn(async (_input: string | URL, init?: RequestInit) => {
+			sentBodies.push(asRecord(JSON.parse(String(init?.body))) ?? {});
+			return new Response(COMPLETED_SSE, { status: 200, headers: { "content-type": "text/event-stream" } });
+		});
+		try {
+			const model = bridgeModel("https://bridge.example.com/v1/responses");
+			const result = await streamOpenAICodexResponses(model, askContext(), {
+				apiKey: TOKEN,
+				fetch: fetchMock as FetchImpl,
+			}).result();
+
+			expect(result.stopReason).toBe("stop");
+			expect(model.provider).toBe("chatgpt-web");
+			const items = userItems(sentBodies[0] ?? {});
+			expect(items).toHaveLength(1);
+			expect(items[0]?.internal_chat_message_metadata_passthrough).toBeUndefined();
+			expect(items[0]?.type).toBeUndefined();
+		} finally {
+			tempDir.removeSync();
+		}
+	});
+
+	it("leaves the session's stored history items untouched while stamping the outgoing copy", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-bridge-");
+		setAgentDir(tempDir.path());
+		const server = await startServer();
+		// A replayed input item reaches the request body BY REFERENCE: the
+		// converter pushes `providerPayload.items` straight through, and the
+		// transformer only copies an item when it has an `id` to strip. Writing
+		// the stamp into that object would outlive this request, put a stale turn
+		// id in the stored conversation, and follow it onto another provider.
+		const storedItem: Record<string, unknown> = {
+			role: "user",
+			content: [{ type: "input_text", text: "Say ok" }],
+		};
+		const context: Context = {
+			systemPrompt: ["You are a helpful assistant."],
+			messages: [
+				{
+					role: "user",
+					content: "Say ok",
+					timestamp: Date.now(),
+					providerPayload: { type: "openaiResponsesHistory", provider: "chatgpt-web", items: [storedItem] },
+				},
+			],
+		};
+		try {
+			const model = bridgeModel(`${server.origin}/v1/responses`);
+			const result = await streamOpenAICodexResponses(model, context, { apiKey: TOKEN }).result();
+
+			// The outgoing copy is stamped and accepted...
+			expect(result.stopReason).toBe("stop");
+			const sent = server.requests[0]?.body ?? {};
+			expect(server.requests[0]?.refusal).toBeUndefined();
+			expect(userItems(sent)[0]?.internal_chat_message_metadata_passthrough).toEqual({
+				turn_id: turnMetadata(sent).turn_id,
+			});
+			// ...and the object the session still owns is byte-identical to before.
+			expect(storedItem).toEqual({ role: "user", content: [{ type: "input_text", text: "Say ok" }] });
+		} finally {
+			await server.close();
+			tempDir.removeSync();
+		}
+	});
 });

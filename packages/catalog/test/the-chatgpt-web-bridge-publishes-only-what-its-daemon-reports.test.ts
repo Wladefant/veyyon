@@ -28,6 +28,12 @@
  * by a completely different transport, and the Pro row's published effort is
  * the wire name `ultra`, which is not a Veyyon effort at all.
  *
+ * AND THE GUARD SURVIVES A REDIRECT. A base-URL check answers a question about
+ * the URL the reader dials, and a followed 302 replaces it with one nothing
+ * checked; both requests therefore refuse redirects, which is asserted against
+ * two real loopback servers rather than a spy, because the runtime's fetch is
+ * what enforces it.
+ *
  * WHAT IT DOES NOT CATCH. Nothing here proves a browser turn works: that needs
  * an authenticated ChatGPT profile on this machine (the daemon's `setup`
  * command), which is a separate, missing prerequisite. This suite covers the
@@ -37,6 +43,7 @@
  */
 import { describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
+import * as http from "node:http";
 import * as path from "node:path";
 import type { DiscoveryFailure } from "@veyyon/catalog/discovery/failure";
 import {
@@ -449,5 +456,114 @@ describe("the model manager cannot fall back to a locally declared catalog", () 
 		const models = await options.fetchDynamicModels?.();
 
 		expect(models?.map(model => model.id).sort()).toEqual([...ROUTED_SLUGS].sort());
+	});
+});
+
+/**
+ * Two real loopback servers: the one discovery is pointed at, which answers a
+ * 302 for the requested path, and the one that 302 names, which would serve a
+ * perfectly good daemon answer if anything ever reached it.
+ *
+ * The second server is the negative control and the reason this is not a spy
+ * assertion. `redirect: "error"` is enforced by the runtime's fetch, not by the
+ * reader, so the only way to prove it holds is to make following the hop
+ * observable: if the option were dropped, the target would record a request and
+ * discovery would answer with its rows.
+ */
+async function startRedirectPair(
+	redirected: "models" | "health",
+): Promise<{ base: string; followedPaths: string[]; close: () => Promise<void> }> {
+	const followedPaths: string[] = [];
+	const target = http.createServer((req, res) => {
+		followedPaths.push(req.url ?? "");
+		if ((req.url ?? "").startsWith("/healthz")) {
+			res.writeHead(200, { "content-type": "application/json" });
+			res.end(JSON.stringify({ status: "ok", service: "codex-chatgpt-web", version: "4.0.5", mode: "full" }));
+			return;
+		}
+		res.writeHead(200, { "content-type": "application/json" });
+		res.end(JSON.stringify(DAEMON_PAYLOAD));
+	});
+	await new Promise<void>(resolve => target.listen(0, "127.0.0.1", resolve));
+	const targetAddress = target.address();
+	if (targetAddress === null || typeof targetAddress === "string") throw new Error("target did not bind a port");
+	const targetOrigin = `http://127.0.0.1:${targetAddress.port}`;
+
+	const entry = http.createServer((req, res) => {
+		const url = req.url ?? "";
+		const isHealth = url.startsWith("/healthz");
+		if ((redirected === "health") === isHealth) {
+			res.writeHead(302, { location: `${targetOrigin}${url}` });
+			res.end();
+			return;
+		}
+		if (isHealth) {
+			res.writeHead(200, { "content-type": "application/json" });
+			res.end(JSON.stringify({ status: "ok", service: "codex-chatgpt-web", version: "4.0.5", mode: "full" }));
+			return;
+		}
+		res.writeHead(200, { "content-type": "application/json" });
+		res.end(JSON.stringify(DAEMON_PAYLOAD));
+	});
+	await new Promise<void>(resolve => entry.listen(0, "127.0.0.1", resolve));
+	const entryAddress = entry.address();
+	if (entryAddress === null || typeof entryAddress === "string") throw new Error("entry did not bind a port");
+
+	const shut = (server: http.Server): Promise<void> =>
+		new Promise<void>((resolve, reject) => {
+			server.closeAllConnections();
+			if (!server.listening) {
+				resolve();
+				return;
+			}
+			server.close(error => (error ? reject(error) : resolve()));
+		});
+	return {
+		base: `http://127.0.0.1:${entryAddress.port}/v1`,
+		followedPaths,
+		close: async () => {
+			await shut(entry);
+			await shut(target);
+		},
+	};
+}
+
+describe("the loopback guard is not undone by a redirect", () => {
+	it("refuses the catalog request rather than following a 302 off the checked URL", async () => {
+		const pair = await startRedirectPair("models");
+		try {
+			const { failures, onFailure } = collect();
+			const result = await fetchChatGptWebModels({ accessToken: TOKEN, baseUrl: pair.base, onFailure });
+
+			// The redirect target never heard from us — it holds a valid answer, so
+			// a followed hop would have produced rows instead of this failure.
+			expect(pair.followedPaths).toEqual([]);
+			expect(result).toBeNull();
+			expect(failures.map(failure => failure.stage)).toEqual(["request"]);
+			expect(failures[0]?.url).toBe(`${pair.base}/models`);
+		} finally {
+			await pair.close();
+		}
+	});
+
+	it("treats a redirecting health probe as Full mode unproven, not as Full mode", async () => {
+		const pair = await startRedirectPair("health");
+		try {
+			const { failures, onFailure } = collect();
+			const result = await fetchChatGptWebModels({ accessToken: TOKEN, baseUrl: pair.base, onFailure });
+
+			expect(pair.followedPaths).toEqual([]);
+			// The catalog itself still comes through: a silent probe is not a
+			// discovery failure, which is the existing contract.
+			expect(result?.models.length).toBe(ROUTED_SLUGS.length);
+			expect(failures).toEqual([]);
+			// But the capability the probe would have authorized is withheld. The
+			// target reports `mode: "full"`, so following the hop would publish
+			// tool support on the word of something that is not the daemon.
+			expect(result?.mode).toBeUndefined();
+			for (const model of result?.models ?? []) expect(model.supportsTools).toBe(false);
+		} finally {
+			await pair.close();
+		}
 	});
 });

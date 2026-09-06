@@ -50,6 +50,13 @@
  * `hasLocalLoopbackBaseUrl` is deliberately NOT reused: it answers "is this
  * host on my network", which is true of every RFC1918 address and of
  * `0.0.0.0`, and the daemon itself refuses to bind anything but `127.0.0.1`.
+ *
+ * AND THE GUARD HOLDS PAST THE FIRST HOP. A base-URL check answers a question
+ * about the URL this reader dials; a followed redirect replaces it with one
+ * nothing checked. Both requests therefore set `redirect: "error"`, so a
+ * redirecting endpoint is a failure with a reported reason rather than a
+ * silent second request to wherever it pointed. The daemon redirects nothing,
+ * which is exactly why a redirect here means the base URL is not the daemon.
  */
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { normalizeBaseUrl } from "@veyyon/utils/url";
@@ -240,7 +247,21 @@ export async function fetchChatGptWebModels(
 	const modelsUrl = `${baseUrl}${MODELS_PATH}`;
 	let response: Response;
 	try {
-		response = await fetchFn(modelsUrl, { method: "GET", headers, signal: options.signal });
+		response = await fetchFn(modelsUrl, {
+			method: "GET",
+			headers,
+			signal: options.signal,
+			// The loopback check above is what keeps the ChatGPT bearer on this
+			// machine, and a followed redirect would walk straight out of it: the
+			// URL is re-resolved after the guard ran, so a 302 to an external host
+			// is a request this reader never validated. Containment would then rest
+			// entirely on the runtime stripping `Authorization` cross-origin, which
+			// is a WHATWG rule about a case that must not arise here at all — the
+			// daemon serves `/models` directly and redirects nothing. `"error"`
+			// makes that explicit and fails closed: the fetch rejects, the reason is
+			// reported, and discovery returns `null` instead of following the hop.
+			redirect: "error",
+		});
 	} catch (error) {
 		report("request", modelsUrl, errorMessage(error));
 		return null;
@@ -302,7 +323,17 @@ async function probeDaemonMode(
 	}
 	let response: Response;
 	try {
-		response = await fetchFn(healthUrl, { method: "GET", headers: { accept: "application/json" }, signal });
+		// No bearer rides on this probe, but a redirect is still refused rather
+		// than followed: `mode: "full"` is what authorizes publishing a row with
+		// tool support, and a hop off loopback would let something that is not the
+		// daemon answer that question. Failing closed means the probe returns
+		// `undefined`, which every caller already treats as "Full mode not proven".
+		response = await fetchFn(healthUrl, {
+			method: "GET",
+			headers: { accept: "application/json" },
+			signal,
+			redirect: "error",
+		});
 	} catch {
 		return undefined;
 	}
