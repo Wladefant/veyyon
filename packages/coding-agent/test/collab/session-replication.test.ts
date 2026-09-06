@@ -31,7 +31,7 @@ describe("SessionManager collab replication", () => {
 	it("onEntryAppended receives the in-memory entry with inline image data while the persisted line externalizes it", async () => {
 		const { manager } = makeManager();
 		const captured: SessionEntry[] = [];
-		manager.onEntryAppended = entry => captured.push(entry);
+		manager.onEntryAppended(entry => captured.push(entry));
 
 		manager.appendMessage({
 			role: "user",
@@ -62,11 +62,38 @@ describe("SessionManager collab replication", () => {
 
 	it("swallows hook failures so persistence is never broken by a broadcast error", () => {
 		const { manager } = makeManager();
-		manager.onEntryAppended = () => {
+		manager.onEntryAppended(() => {
 			throw new Error("socket exploded");
-		};
+		});
 		const id = manager.appendMessage({ role: "user", content: "still works", timestamp: Date.now() });
 		expect(manager.getEntry(id)?.id).toBe(id);
+	});
+
+	it("supports multiple subscribers and unsubscription without clobbering", () => {
+		const { manager } = makeManager();
+		const sub1Entries: SessionEntry[] = [];
+		const sub2Entries: SessionEntry[] = [];
+
+		const unsub1 = manager.onEntryAppended(entry => sub1Entries.push(entry));
+		const unsub2 = manager.onEntryAppended(entry => sub2Entries.push(entry));
+
+		manager.appendMessage({ role: "user", content: "first", timestamp: Date.now() });
+		expect(sub1Entries).toHaveLength(1);
+		expect(sub2Entries).toHaveLength(1);
+
+		// Unsubscribe subscriber 1 only
+		unsub1();
+
+		manager.appendMessage({ role: "user", content: "second", timestamp: Date.now() });
+		expect(sub1Entries).toHaveLength(1);
+		expect(sub2Entries).toHaveLength(2);
+
+		// Unsubscribe subscriber 2
+		unsub2();
+
+		manager.appendMessage({ role: "user", content: "third", timestamp: Date.now() });
+		expect(sub1Entries).toHaveLength(1);
+		expect(sub2Entries).toHaveLength(2);
 	});
 
 	it("ingestReplicatedEntry preserves foreign ids and advances the leaf", async () => {

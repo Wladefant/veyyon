@@ -105,11 +105,12 @@ describe("AgentSession queued steer delivery", () => {
 	/** Resolves with the entry text when a collab-prompt entry is persisted. */
 	function nextCollabEntry(sessionManager: SessionManager): Promise<string> {
 		const { promise, resolve } = Promise.withResolvers<string>();
-		sessionManager.onEntryAppended = entry => {
+		const unsubscribe = sessionManager.onEntryAppended(entry => {
 			if (entry.type === "custom_message" && entry.customType === COLLAB_PROMPT_TYPE) {
+				unsubscribe();
 				resolve(typeof entry.content === "string" ? entry.content : JSON.stringify(entry.content));
 			}
-		};
+		});
 		return promise;
 	}
 

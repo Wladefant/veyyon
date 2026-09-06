@@ -140,7 +140,7 @@ export function attachTurnListeners(session: AgentSession, socket: net.Socket, s
 	const sm = session.sessionManager;
 	state.sessionManager = sm;
 
-	sm.onEntryAppended = (entry: SessionEntry) => {
+	const unsubscribeEntry = sm.onEntryAppended((entry: SessionEntry) => {
 		state.revision += 1;
 		const transcriptEntry = sessionEntryToTranscriptEntry(entry, state.revision);
 		writeFrame(socket, {
@@ -149,7 +149,7 @@ export function attachTurnListeners(session: AgentSession, socket: net.Socket, s
 				entries: [transcriptEntry],
 			},
 		});
-	};
+	});
 
 	const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
 		handleSessionEvent(event, socket, state);
@@ -157,9 +157,7 @@ export function attachTurnListeners(session: AgentSession, socket: net.Socket, s
 
 	state.unsubscribeSession = () => {
 		unsubscribe();
-		if (sm.onEntryAppended) {
-			sm.onEntryAppended = undefined;
-		}
+		unsubscribeEntry();
 	};
 }
 
@@ -342,9 +340,7 @@ export async function disposeTurnSession(state: ClientSessionState): Promise<voi
 	state.unsubscribeSession = undefined;
 	state.unsubscribeAgents?.();
 	state.unsubscribeAgents = undefined;
-	if (state.sessionManager) {
-		state.sessionManager.onEntryAppended = undefined;
-	}
+	state.sessionManager = undefined;
 	// Decisions are cancelled before the session is disposed: a tool blocked
 	// on one sees its default answer and unwinds while the session can still
 	// record the result, rather than hanging on a client that is gone.

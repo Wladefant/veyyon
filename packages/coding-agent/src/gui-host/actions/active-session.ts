@@ -6,7 +6,7 @@ import { computeDefaultSessionDir } from "../../session/session-paths";
 import { FileSessionStorage } from "../../session/session-storage";
 import { writeFrame } from "../frames";
 import { sessionEntryToTranscriptEntry, sessionHeaderToView, sessionInfoToSummary } from "../session-bridge";
-import { disposeTurnSession } from "../turns";
+import { disposeTurnSession, type ClientSessionState } from "../turns";
 import type { ErrorScope, TranscriptEntry } from "../wire";
 import type { ActionContext } from "./types";
 
@@ -14,6 +14,36 @@ export const sessionStorage = new FileSessionStorage();
 
 export function sessionDirFor(cwd: string, agentDir: string): string {
 	return computeDefaultSessionDir(cwd, sessionStorage, path.join(agentDir, "sessions"));
+}
+
+interface SharedSession {
+	manager: SessionManager;
+	clients: Set<ClientSessionState>;
+}
+
+const sharedSessions = new Map<string, SharedSession>();
+
+
+export function registerSharedSession(sessionPath: string, sm: SessionManager, client?: ClientSessionState): void {
+	const norm = path.resolve(sessionPath);
+	let shared = sharedSessions.get(norm);
+	if (!shared) {
+		shared = { manager: sm, clients: new Set() };
+		sharedSessions.set(norm, shared);
+	}
+	if (client) {
+		shared.clients.add(client);
+	}
+}
+
+export function unregisterSharedSession(sessionPath: string, client: ClientSessionState): void {
+	const norm = path.resolve(sessionPath);
+	const shared = sharedSessions.get(norm);
+	if (!shared) return;
+	shared.clients.delete(client);
+	if (shared.clients.size === 0) {
+		sharedSessions.delete(norm);
+	}
 }
 
 /** Resolve a session id or file path to the file on disk, or `undefined`. */
@@ -82,13 +112,21 @@ export async function emitSessionList(ctx: ActionContext) {
 }
 
 export function wireSessionManager(ctx: ActionContext, sm: SessionManager): void {
+	ctx.clientState.unsubscribeSession?.();
 	ctx.clientState.sessionManager = sm;
-	sm.onEntryAppended = entry => {
+	const unsubscribe = sm.onEntryAppended(entry => {
 		ctx.clientState.revision += 1;
 		const transcriptEntry = sessionEntryToTranscriptEntry(entry, ctx.clientState.revision);
 		writeFrame(ctx.socket, {
 			TranscriptAppended: { revision: ctx.clientState.revision, entries: [transcriptEntry] },
 		});
+	});
+	ctx.clientState.unsubscribeSession = () => {
+		unsubscribe();
+		const sessionFile = sm.getSessionFile();
+		if (sessionFile) {
+			unregisterSharedSession(sessionFile, ctx.clientState);
+		}
 	};
 }
 
@@ -125,7 +163,17 @@ export async function activateSession(ctx: ActionContext, session: string): Prom
 	}
 
 	await disposeTurnSession(ctx.clientState);
-	const sm = await SessionManager.open(sessionPath, undefined, undefined, { suppressBreadcrumb: true });
+	const normalized = path.resolve(sessionPath);
+	let shared = sharedSessions.get(normalized);
+	let sm: SessionManager;
+	if (shared) {
+		sm = shared.manager;
+	} else {
+		sm = await SessionManager.open(sessionPath, undefined, undefined, { suppressBreadcrumb: true });
+		shared = { manager: sm, clients: new Set() };
+		sharedSessions.set(normalized, shared);
+	}
+	shared.clients.add(ctx.clientState);
 	wireSessionManager(ctx, sm);
 	return sm;
 }

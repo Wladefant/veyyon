@@ -41,13 +41,20 @@ const snapshot = {
 };
 
 function makeHostContext(redactSecrets: boolean): InteractiveModeContext {
+	let entryListener: ((entry: SessionEntry) => void) | undefined;
+	emitEntryAppended = entry => entryListener?.(entry);
 	return {
 		settings: { get: (key: string) => (key === "share.redactSecrets" ? redactSecrets : "") },
 		sessionManager: {
 			getSessionId: () => snapshot.header.id,
 			getCwd: () => snapshot.header.cwd,
 			snapshotForReplication: () => snapshot,
-			onEntryAppended: undefined,
+			onEntryAppended: (listener: (entry: SessionEntry) => void) => {
+				entryListener = listener;
+				return () => {
+					if (entryListener === listener) entryListener = undefined;
+				};
+			},
 		},
 		session: {
 			isStreaming: false,
@@ -75,6 +82,7 @@ function makeHostContext(redactSecrets: boolean): InteractiveModeContext {
 
 let host: CollabHost;
 let ctx: InteractiveModeContext;
+let emitEntryAppended: ((entry: SessionEntry) => void) | undefined;
 const cleanups: (() => void)[] = [];
 
 async function joinGuest(): Promise<{ frames: CollabFrame[]; joined: Promise<void>; socket: CollabSocket }> {
@@ -137,7 +145,7 @@ describe("collab host secret redaction", () => {
 			guest.frames.push(frame);
 			if (frame.t === "entry") live.resolve(frame);
 		};
-		ctx.sessionManager.onEntryAppended?.({
+		emitEntryAppended?.({
 			type: "message",
 			id: "e1",
 			parentId: "e0",

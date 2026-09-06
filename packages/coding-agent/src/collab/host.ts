@@ -134,6 +134,7 @@ export class CollabHost {
 	#agentsDebounce: Timer | null = null;
 	#busUnsubscribers: (() => void)[] = [];
 	#registryUnsubscribe?: () => void;
+	#entryUnsubscribe?: () => void;
 	#stopped = false;
 
 	constructor(ctx: CollabHostContext) {
@@ -298,13 +299,13 @@ export class CollabHost {
 			}
 		}
 		this.#registryUnsubscribe = AgentRegistry.global().onChange(() => this.#scheduleAgentsBroadcast());
-		this.#ctx.sessionManager.onEntryAppended = entry => {
+		this.#entryUnsubscribe = this.#ctx.sessionManager.onEntryAppended?.(entry => {
 			const wire = toWireSessionEntry(entry);
 			if (wire) this.#broadcast({ t: "entry", entry: shrinkForReplication(wire) });
 			// Model/thinking/title changes land as entries while idle; refresh
 			// guest state promptly (debounce + JSON diff dedupe).
 			this.#scheduleStateBroadcast();
-		};
+		});
 		this.#updateStatusSegment();
 	}
 
@@ -318,7 +319,8 @@ export class CollabHost {
 	async #teardown(): Promise<void> {
 		if (this.#stopped) return;
 		this.#stopped = true;
-		this.#ctx.sessionManager.onEntryAppended = undefined;
+		this.#entryUnsubscribe?.();
+		this.#entryUnsubscribe = undefined;
 		this.#unsubscribe?.();
 		this.#unsubscribe = undefined;
 		for (const unsubscribe of this.#busUnsubscribers) unsubscribe();
