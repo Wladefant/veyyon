@@ -6,15 +6,12 @@ import type { InputItem, RequestBody } from "./request-transformer";
  * The trusted Codex environment envelope the local `codex-chatgpt-web` daemon
  * requires, built from facts this host owns.
  *
- * WHY IT IS NOT OPTIONAL. The daemon resolves the mode for every routed model
- * from its own configuration (`resolveChatGptWebModelMode`, whose `localTools`
- * is the daemon's `mode === "full"`), and `runTurn` then calls
- * `environmentStore.resolve(parsed)` for EVERY turn it takes — text-only turns
- * and compaction requests included, before the execution key or any browser
- * work. A Full-mode daemon with no envelope answers every Veyyon turn with
- * `MissingTrustedCodexEnvironmentError: ChatGPT web turn is missing cwd in
- * trusted Codex environment context`. This is therefore not a "tool path"
- * detail: without it a Full-mode daemon completes no turn at all.
+ * WHY IT IS SENT. Ordinary Full-mode turns resolve trusted environment context
+ * before browser work, including text-only turns. Without an envelope or other
+ * trusted/cached context, they fail with `MissingTrustedCodexEnvironmentError`.
+ * Supplying the host envelope avoids relying on the daemon's instruction or
+ * thread-cache fallbacks. Compaction explicitly disables local tools before
+ * mode resolution and does not require this envelope.
  *
  * WHAT THE DAEMON ACCEPTS, and the one shape Veyyon can satisfy. Of the paths
  * in `rawEnvironmentText` (`adapters/chatgpt-web/environment.ts`), the others
@@ -142,12 +139,11 @@ export function renderChatGptWebEnvironmentContext(environment: ChatGptWebTruste
  * IT RUNS ON EVERY REQUEST, INCLUDING CONTINUATIONS AND COMPACTION. The daemon
  * caches the last trusted authority per thread, but that cache expires, is
  * capped, and is lost when the daemon restarts; re-sending is a few hundred
- * bytes and makes a mid-session directory move take effect on the next turn.
- * It is also required for compaction, which reaches `environmentStore.resolve`
- * on the same line as an ordinary turn. Neither key that has to stay stable
- * moves because of it: a turn's execution key is derived from the revision's
- * CONTENT, and a compaction's source key from that same content, so the added
- * item cannot make a compaction miss the browser response it supersedes.
+ * bytes and makes a directory move between turns take effect on the next turn.
+ * A change within an active daemon tool loop is refused by the daemon.
+ * Compaction does not require the envelope, but sending it is harmless: its
+ * source key stays unchanged, so it still identifies the browser response it
+ * supersedes. Its execution key can change deterministically with the envelope.
  */
 export function applyChatGptWebTurnContract(
 	body: RequestBody,
