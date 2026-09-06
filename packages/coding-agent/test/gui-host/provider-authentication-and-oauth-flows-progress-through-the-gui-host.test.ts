@@ -26,10 +26,10 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AuthStorage } from "@veyyon/ai";
-import { type GuiHostServer, startGuiHostServer } from "../../src/gui-host";
+import type { GuiHostServer } from "../../src/gui-host";
 import type { AuthFlowView, ProviderView } from "../../src/gui-host/wire";
 import { isolatedAuthStorage } from "../helpers/isolated-auth-storage";
-import { TestSocketClient } from "./test-client";
+import { TestSocketClient, startTestGuiHostServer } from "./test-client";
 
 describe("provider authentication and oauth flows gui-host behaviour", () => {
 	let tempDir: string;
@@ -54,7 +54,7 @@ describe("provider authentication and oauth flows gui-host behaviour", () => {
 	});
 
 	test("RefreshProviders lists providers and SubmitAuthSecret authenticates provider without leaking secret", async () => {
-		server = await startGuiHostServer({ endpoint: "tcp:127.0.0.1:0", cwd: tempDir, agentDir: tempDir, authStorage });
+		server = await startTestGuiHostServer({ endpoint: "tcp:127.0.0.1:0", cwd: tempDir, agentDir: tempDir, authStorage });
 		const client = await TestSocketClient.connect(server.endpoint);
 
 		// 1. Initial RefreshProviders -> baseten should not be authenticated
@@ -103,7 +103,7 @@ describe("provider authentication and oauth flows gui-host behaviour", () => {
 	});
 
 	test("StartProviderAuth for API-key provider enters AwaitingSecret and CancelAuthFlow cancels it", async () => {
-		server = await startGuiHostServer({ endpoint: "tcp:127.0.0.1:0", cwd: tempDir, agentDir: tempDir, authStorage });
+		server = await startTestGuiHostServer({ endpoint: "tcp:127.0.0.1:0", cwd: tempDir, agentDir: tempDir, authStorage });
 		const client = await TestSocketClient.connect(server.endpoint);
 
 		// 1. StartProviderAuth for azure (API key only)
@@ -138,7 +138,7 @@ describe("provider authentication and oauth flows gui-host behaviour", () => {
 	});
 
 	test("Missing parameters fail with INVALID_ARGUMENTS in scope Authentication", async () => {
-		server = await startGuiHostServer({ endpoint: "tcp:127.0.0.1:0", cwd: tempDir, agentDir: tempDir, authStorage });
+		server = await startTestGuiHostServer({ endpoint: "tcp:127.0.0.1:0", cwd: tempDir, agentDir: tempDir, authStorage });
 		const client = await TestSocketClient.connect(server.endpoint);
 
 		const { outcome: fail1 } = await client.request(5, {

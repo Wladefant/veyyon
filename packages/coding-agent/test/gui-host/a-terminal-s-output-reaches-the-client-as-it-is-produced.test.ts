@@ -19,9 +19,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type GuiHostServer, startGuiHostServer } from "../../src/gui-host";
+import type { GuiHostServer } from "../../src/gui-host";
 import { SCROLLBACK_CAP_BYTES } from "../../src/gui-host/actions/terminals";
-import { type RequestFrame, TestSocketClient } from "./test-client";
+import { type RequestFrame, TestSocketClient, startTestGuiHostServer } from "./test-client";
 
 describe("a terminal's output reaches the client as it is produced", () => {
 	let tempDir: string;
@@ -44,7 +44,7 @@ describe("a terminal's output reaches the client as it is produced", () => {
 	});
 
 	test("CreateTerminal streams PTY output, emits exit code, allows scrollback replay on attach, and refuses write when exited", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 		});
@@ -162,7 +162,7 @@ describe("a terminal's output reaches the client as it is produced", () => {
 	});
 
 	test("Scrollback buffer is capped at SCROLLBACK_CAP_BYTES on high-volume output", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 		});
@@ -210,7 +210,7 @@ describe("a terminal's output reaches the client as it is produced", () => {
 	});
 
 	test("Interactive terminal supports Write, Resize, Clear, Restart, and Close", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 		});
@@ -311,7 +311,7 @@ describe("a terminal's output reaches the client as it is produced", () => {
 	});
 
 	test("Missing terminal id fails with TERMINAL_NOT_FOUND in scope Terminal", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 		});
@@ -347,7 +347,7 @@ describe("a terminal's output reaches the client as it is produced", () => {
 	});
 
 	test("CreateTerminal with invalid working directory fails with TERMINAL_SPAWN_FAILED and records Failed status", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 		});

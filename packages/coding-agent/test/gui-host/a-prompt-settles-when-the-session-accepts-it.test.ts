@@ -16,9 +16,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type GuiHostServer, startGuiHostServer } from "../../src/gui-host";
+import type { GuiHostServer } from "../../src/gui-host";
 import { isolatedAuthStorage } from "../helpers/isolated-auth-storage";
-import { type RequestFrame, TestSocketClient } from "./test-client";
+import { type RequestFrame, TestSocketClient, startTestGuiHostServer } from "./test-client";
 
 describe("a prompt settles when the session accepts it", () => {
 	let tempDir: string;
@@ -28,7 +28,7 @@ describe("a prompt settles when the session accepts it", () => {
 
 	beforeEach(async () => {
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "gui-host-turn-test-"));
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 			agentDir: tempDir,

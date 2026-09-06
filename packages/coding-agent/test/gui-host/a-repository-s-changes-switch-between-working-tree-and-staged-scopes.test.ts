@@ -21,9 +21,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type GuiHostServer, startGuiHostServer } from "../../src/gui-host";
+import type { GuiHostServer } from "../../src/gui-host";
 import type { ChangesView } from "../../src/gui-host/wire";
-import { TestSocketClient } from "./test-client";
+import { TestSocketClient, startTestGuiHostServer } from "./test-client";
 
 describe("a repository's changes switch between working tree and staged scopes", () => {
 	let tempDir: string;
@@ -100,7 +100,7 @@ describe("a repository's changes switch between working tree and staged scopes",
 	});
 
 	test("RefreshChanges and SelectChangeScope report exact files, additions/deletions, and isolated diffs", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 		});
@@ -202,7 +202,7 @@ describe("a repository's changes switch between working tree and staged scopes",
 		const nonGitDir = await fs.mkdtemp(path.join(os.tmpdir(), "gui-host-non-git-"));
 		await fs.writeFile(path.join(nonGitDir, "hello.txt"), "hello\n", "utf8");
 
-		const nonGitServer = await startGuiHostServer({
+		const nonGitServer = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: nonGitDir,
 		});

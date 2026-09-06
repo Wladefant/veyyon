@@ -18,9 +18,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type GuiHostServer, startGuiHostServer } from "../../src/gui-host";
+import type { GuiHostServer } from "../../src/gui-host";
 import { closeDaemonClients } from "../../src/launch/client";
-import { TestSocketClient } from "./test-client";
+import { TestSocketClient, startTestGuiHostServer } from "./test-client";
 
 describe("supervised processes are driven through the daemon", () => {
 	let tempDir: string;
@@ -44,7 +44,7 @@ describe("supervised processes are driven through the daemon", () => {
 	});
 
 	test("ProcessStart, RefreshProcesses, ProcessDescribe, ProcessLogs, ProcessSend, ProcessStop, ProcessRestart, and ProcessWait drive daemon supervisor", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 		});
@@ -196,7 +196,7 @@ describe("supervised processes are driven through the daemon", () => {
 	});
 
 	test("Missing required arguments fail with INVALID_ARGUMENTS in scope Terminal", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 		});

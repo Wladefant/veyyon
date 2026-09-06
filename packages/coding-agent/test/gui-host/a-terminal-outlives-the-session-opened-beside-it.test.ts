@@ -16,9 +16,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type GuiHostServer, startGuiHostServer } from "../../src/gui-host";
+import type { GuiHostServer } from "../../src/gui-host";
 import { isolatedAuthStorage } from "../helpers/isolated-auth-storage";
-import { type RequestFrame, TestSocketClient } from "./test-client";
+import { type RequestFrame, TestSocketClient, startTestGuiHostServer } from "./test-client";
 
 /** The id of the terminal a `CreateTerminal` request's Terminals snapshot carries. */
 function createdTerminalId(frames: RequestFrame[]): string {
@@ -33,7 +33,7 @@ describe("a terminal outlives the session opened beside it", () => {
 
 	beforeEach(async () => {
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "gui-host-term-session-"));
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 			agentDir: tempDir,

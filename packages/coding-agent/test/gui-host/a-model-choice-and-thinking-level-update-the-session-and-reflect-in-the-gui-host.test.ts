@@ -25,10 +25,10 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AuthStorage } from "@veyyon/ai";
-import { type GuiHostServer, startGuiHostServer } from "../../src/gui-host";
+import type { GuiHostServer } from "../../src/gui-host";
 import type { ModelsView } from "../../src/gui-host/wire";
 import { isolatedAuthStorage } from "../helpers/isolated-auth-storage";
-import { TestSocketClient } from "./test-client";
+import { TestSocketClient, startTestGuiHostServer } from "./test-client";
 
 describe("model selection and thinking level gui-host behaviour", () => {
 	let tempDir: string;
@@ -53,7 +53,7 @@ describe("model selection and thinking level gui-host behaviour", () => {
 	});
 
 	test("RefreshModels lists catalog models with exact context window and reflects default/session model", async () => {
-		server = await startGuiHostServer({ endpoint: "tcp:127.0.0.1:0", cwd: tempDir, agentDir: tempDir, authStorage });
+		server = await startTestGuiHostServer({ endpoint: "tcp:127.0.0.1:0", cwd: tempDir, agentDir: tempDir, authStorage });
 		const client = await TestSocketClient.connect(server.endpoint);
 
 		const { frames, outcome } = await client.request(1, "RefreshModels");
@@ -79,7 +79,7 @@ describe("model selection and thinking level gui-host behaviour", () => {
 	test("SelectModel applies model to session and updates Models.current", async () => {
 		await authStorage.set("anthropic", { type: "api_key", key: "sk-ant-test-key-for-select" });
 
-		server = await startGuiHostServer({ endpoint: "tcp:127.0.0.1:0", cwd: tempDir, agentDir: tempDir, authStorage });
+		server = await startTestGuiHostServer({ endpoint: "tcp:127.0.0.1:0", cwd: tempDir, agentDir: tempDir, authStorage });
 		const client = await TestSocketClient.connect(server.endpoint);
 
 		// Select a real model from the catalog
@@ -103,7 +103,7 @@ describe("model selection and thinking level gui-host behaviour", () => {
 	});
 
 	test("SelectModel with unknown model fails with MODEL_NOT_FOUND in scope Provider", async () => {
-		server = await startGuiHostServer({ endpoint: "tcp:127.0.0.1:0", cwd: tempDir, agentDir: tempDir, authStorage });
+		server = await startTestGuiHostServer({ endpoint: "tcp:127.0.0.1:0", cwd: tempDir, agentDir: tempDir, authStorage });
 		const client = await TestSocketClient.connect(server.endpoint);
 
 		const { outcome } = await client.request(3, {
@@ -122,7 +122,7 @@ describe("model selection and thinking level gui-host behaviour", () => {
 	});
 
 	test("SelectModel without required parameters fails with INVALID_ARGUMENTS", async () => {
-		server = await startGuiHostServer({ endpoint: "tcp:127.0.0.1:0", cwd: tempDir, agentDir: tempDir, authStorage });
+		server = await startTestGuiHostServer({ endpoint: "tcp:127.0.0.1:0", cwd: tempDir, agentDir: tempDir, authStorage });
 		const client = await TestSocketClient.connect(server.endpoint);
 
 		const { outcome } = await client.request(4, {
@@ -138,7 +138,7 @@ describe("model selection and thinking level gui-host behaviour", () => {
 	});
 
 	test("SetThinkingLevel rejects invalid level naming valid levels and accepts valid level", async () => {
-		server = await startGuiHostServer({ endpoint: "tcp:127.0.0.1:0", cwd: tempDir, agentDir: tempDir, authStorage });
+		server = await startTestGuiHostServer({ endpoint: "tcp:127.0.0.1:0", cwd: tempDir, agentDir: tempDir, authStorage });
 		const client = await TestSocketClient.connect(server.endpoint);
 
 		// 1. Invalid thinking level: "turbo"

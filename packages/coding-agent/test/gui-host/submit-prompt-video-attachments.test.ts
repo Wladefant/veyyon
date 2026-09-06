@@ -19,10 +19,10 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AuthStorage } from "@veyyon/ai";
-import { type GuiHostServer, startGuiHostServer } from "../../src/gui-host";
+import type { GuiHostServer } from "../../src/gui-host";
 import type { ModelsView } from "../../src/gui-host/wire";
 import { isolatedAuthStorage } from "../helpers/isolated-auth-storage";
-import { TestSocketClient } from "./test-client";
+import { TestSocketClient, startTestGuiHostServer } from "./test-client";
 
 describe("GUI host video attachment validation and model input support", () => {
 	let tempDir: string;
@@ -64,7 +64,7 @@ describe("GUI host video attachment validation and model input support", () => {
 		};
 		await fs.writeFile(path.join(tempDir, "models.json"), JSON.stringify(modelsConfig, null, 2));
 
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 			agentDir: tempDir,

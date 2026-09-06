@@ -25,10 +25,10 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type GuiHostServer, startGuiHostServer } from "../../src/gui-host";
+import type { GuiHostServer } from "../../src/gui-host";
 import type { McpServerView, McpToolResultView } from "../../src/gui-host/wire";
 import { MCPManager } from "../../src/mcp/manager";
-import { TestSocketClient } from "./test-client";
+import { TestSocketClient, startTestGuiHostServer } from "./test-client";
 
 describe("mcp server lifecycle and tool execution gui-host behaviour", () => {
 	let tempDir: string;
@@ -137,7 +137,7 @@ rl.on("close", () => process.exit(0));
 		};
 		await fs.writeFile(mcpConfigPath, JSON.stringify(mcpConfig, null, 2), "utf8");
 
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 			agentDir: tempDir,

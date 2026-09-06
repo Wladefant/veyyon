@@ -1,4 +1,15 @@
 import * as net from "node:net";
+import {
+	type GuiHostServer,
+	type GuiHostServerOptions,
+	startGuiHostServer,
+} from "../../src/gui-host";
+
+export const TEST_GUI_AUTH_TOKEN = "gui-host-test-token-with-at-least-32-bytes";
+
+export async function startTestGuiHostServer(options: GuiHostServerOptions): Promise<GuiHostServer> {
+	return await startGuiHostServer({ ...options, authToken: TEST_GUI_AUTH_TOKEN });
+}
 
 export interface RequestFrame {
 	RequestSucceeded?: { request: number };
@@ -61,7 +72,7 @@ export class TestSocketClient {
 		});
 	}
 
-	static async connect(endpoint: string): Promise<TestSocketClient> {
+	static async connect(endpoint: string, authToken = TEST_GUI_AUTH_TOKEN): Promise<TestSocketClient> {
 		const { promise, resolve, reject } = Promise.withResolvers<TestSocketClient>();
 		let socket: net.Socket;
 		if (endpoint.startsWith("unix:")) {
@@ -76,7 +87,13 @@ export class TestSocketClient {
 			throw new Error(`Unsupported endpoint format: ${endpoint}`);
 		}
 
-		socket.on("connect", () => resolve(new TestSocketClient(socket)));
+		socket.on("connect", () => {
+			const client = new TestSocketClient(socket);
+			if (endpoint.startsWith("tcp:")) {
+				client.send({ Authenticate: { token: authToken } });
+			}
+			resolve(client);
+		});
 		socket.on("error", err => reject(err));
 		return await promise;
 	}

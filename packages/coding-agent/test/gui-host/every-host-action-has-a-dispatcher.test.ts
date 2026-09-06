@@ -17,9 +17,8 @@ import {
 	type Capability,
 	type GuiHostServer,
 	PROTOCOL_VERSION,
-	startGuiHostServer,
 } from "../../src/gui-host";
-import { TestSocketClient } from "./test-client";
+import { TestSocketClient, startTestGuiHostServer } from "./test-client";
 
 describe("every host action has a dispatcher", () => {
 	let tempDir: string;
@@ -42,7 +41,7 @@ describe("every host action has a dispatcher", () => {
 	});
 
 	test("capability snapshot matches the pinned unavailable set exactly", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 		});
@@ -83,7 +82,7 @@ describe("every host action has a dispatcher", () => {
 	});
 
 	test("enumerates all action tags from wire.ts and asserts none answers UNIMPLEMENTED_ACTION", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 		});

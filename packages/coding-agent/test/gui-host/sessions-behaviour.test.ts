@@ -17,8 +17,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type GuiHostServer, startGuiHostServer } from "../../src/gui-host";
-import { type RequestFrame, TestSocketClient } from "./test-client";
+import type { GuiHostServer } from "../../src/gui-host";
+import { type RequestFrame, TestSocketClient, startTestGuiHostServer } from "./test-client";
 
 interface SessionRow {
 	id: string;
@@ -46,7 +46,7 @@ describe("sessions action group behaviour", () => {
 
 	beforeEach(async () => {
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "gui-host-sessions-test-"));
-		server = await startGuiHostServer({ endpoint: "tcp:127.0.0.1:0", cwd: tempDir });
+		server = await startTestGuiHostServer({ endpoint: "tcp:127.0.0.1:0", cwd: tempDir });
 		client = await TestSocketClient.connect(server.endpoint);
 		// Greeting and capabilities.
 		await client.nextFrame();

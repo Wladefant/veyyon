@@ -20,10 +20,10 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type GuiHostServer, startGuiHostServer } from "../../src/gui-host";
+import type { GuiHostServer } from "../../src/gui-host";
 import { READ_FILE_MAX_BYTES } from "../../src/gui-host/actions/files";
 import type { FileContentView, FileTreeView, SearchResultsView } from "../../src/gui-host/wire";
-import { TestSocketClient } from "./test-client";
+import { TestSocketClient, startTestGuiHostServer } from "./test-client";
 
 describe("a file tree and content inspection behave correctly", () => {
 	let tempDir: string;
@@ -75,7 +75,7 @@ describe("a file tree and content inspection behave correctly", () => {
 	});
 
 	test("LoadFileTree returns depth-first entries with gitignore filtering and confinement", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 		});
@@ -157,7 +157,7 @@ describe("a file tree and content inspection behave correctly", () => {
 	});
 
 	test("ReadFile correctly loads text, detects binary content, truncates large files, and enforces workspace boundaries", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 		});
@@ -239,7 +239,7 @@ describe("a file tree and content inspection behave correctly", () => {
 	});
 
 	test("SearchFiles matches fuzzy and glob queries, ignores gitignore, and OpenExternal enforces confinement", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 		});

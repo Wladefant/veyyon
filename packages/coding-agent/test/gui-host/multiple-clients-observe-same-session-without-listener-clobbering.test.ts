@@ -29,7 +29,7 @@ import * as path from "node:path";
 import { SessionManager } from "../../src/session/session-manager";
 import { FileSessionStorage } from "../../src/session/session-storage";
 import type { AgentSession, AgentSessionEvent } from "../../src/session/agent-session";
-import { type GuiHostServer, startGuiHostServer } from "../../src/gui-host";
+import type { GuiHostServer } from "../../src/gui-host";
 import { wireSessionManager } from "../../src/gui-host/actions/active-session";
 import type { ActionContext } from "../../src/gui-host/actions/types";
 import {
@@ -38,7 +38,7 @@ import {
 	type ClientSessionState,
 } from "../../src/gui-host/turns";
 import type { SessionEntry } from "../../src/session/session-entries";
-import { TestSocketClient } from "./test-client";
+import { TestSocketClient, startTestGuiHostServer } from "./test-client";
 
 describe("multiple clients observe same session without listener clobbering", () => {
 	let tempDir: string;
@@ -221,7 +221,7 @@ describe("multiple clients observe same session without listener clobbering", ()
 		await sm.ensureOnDisk();
 		const sessionPath = sm.getSessionFile()!;
 
-		server = await startGuiHostServer({ endpoint: "tcp:127.0.0.1:0", cwd: tempDir, agentDir: tempDir });
+		server = await startTestGuiHostServer({ endpoint: "tcp:127.0.0.1:0", cwd: tempDir, agentDir: tempDir });
 		const client1 = await TestSocketClient.connect(server.endpoint);
 		const client2 = await TestSocketClient.connect(server.endpoint);
 

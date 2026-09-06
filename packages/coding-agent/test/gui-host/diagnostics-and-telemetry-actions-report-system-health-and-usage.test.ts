@@ -23,9 +23,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { type GuiHostServer, startGuiHostServer } from "../../src/gui-host";
+import type { GuiHostServer } from "../../src/gui-host";
 import { useTrackedTempDirs } from "../helpers/tracked-temp-dir";
-import { TestSocketClient } from "./test-client";
+import { TestSocketClient, startTestGuiHostServer } from "./test-client";
 
 const makeTempDir = useTrackedTempDirs("gui-host-diagnostics-test-");
 
@@ -111,7 +111,7 @@ describe("diagnostics and telemetry action group behaviour", () => {
 	});
 
 	test("RefreshDiagnostics emits real diagnostic sources and host telemetry", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 			agentDir,
@@ -140,7 +140,7 @@ describe("diagnostics and telemetry action group behaviour", () => {
 	});
 
 	test("RetryDiagnosticSource without source fails with INVALID_ARGUMENTS in scope Diagnostic", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 			agentDir,
@@ -158,7 +158,7 @@ describe("diagnostics and telemetry action group behaviour", () => {
 	});
 
 	test("RetryDiagnosticSource with non-retryable source fails with DIAGNOSTIC_SOURCE_NOT_RETRYABLE", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 			agentDir,
@@ -183,7 +183,7 @@ describe("diagnostics and telemetry action group behaviour", () => {
 	});
 
 	test("ClearOutput resets session transcript and emits ActiveSession and Transcript", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 			agentDir,
@@ -209,7 +209,7 @@ describe("diagnostics and telemetry action group behaviour", () => {
 	});
 
 	test("GetUsage on a fresh session returns zero totals with the session id", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 			agentDir,
@@ -235,7 +235,7 @@ describe("diagnostics and telemetry action group behaviour", () => {
 	});
 
 	test("GetContextBreakdown returns total_tokens equal to the sum of its categories", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 			agentDir,

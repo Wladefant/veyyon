@@ -21,10 +21,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { type GuiHostServer, startGuiHostServer } from "../../src/gui-host";
+import type { GuiHostServer } from "../../src/gui-host";
 import { AgentRegistry } from "../../src/registry/agent-registry";
 import { useTrackedTempDirs } from "../helpers/tracked-temp-dir";
-import { TestSocketClient } from "./test-client";
+import { TestSocketClient, startTestGuiHostServer } from "./test-client";
 
 const makeTempDir = useTrackedTempDirs("gui-host-agents-test-");
 
@@ -47,7 +47,7 @@ describe("subagents and tasks action group behaviour", () => {
 	});
 
 	test("SpawnTask without task parameter fails with INVALID_ARGUMENTS in scope Task", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 			agentDir,
@@ -65,7 +65,7 @@ describe("subagents and tasks action group behaviour", () => {
 	});
 
 	test("SpawnTask with unknown agent fails with TASK_SPAWN_FAILED and leaves no phantom row in Agents", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 			agentDir,
@@ -93,7 +93,7 @@ describe("subagents and tasks action group behaviour", () => {
 	});
 
 	test("SpawnTask with valid parameters succeeds, emits Agents snapshot, and registers the task in registry", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 			agentDir,
@@ -119,7 +119,7 @@ describe("subagents and tasks action group behaviour", () => {
 	});
 
 	test("CancelTask without task_id fails with INVALID_ARGUMENTS in scope Task", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 			agentDir,
@@ -137,7 +137,7 @@ describe("subagents and tasks action group behaviour", () => {
 	});
 
 	test("CancelTask on non-existent task fails with TASK_NOT_FOUND in scope Task", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 			agentDir,
@@ -160,7 +160,7 @@ describe("subagents and tasks action group behaviour", () => {
 	});
 
 	test("ReviveAgent without agent_id fails with INVALID_ARGUMENTS in scope Agent", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 			agentDir,
@@ -178,7 +178,7 @@ describe("subagents and tasks action group behaviour", () => {
 	});
 
 	test("ReviveAgent on non-existent agent fails with AGENT_NOT_FOUND in scope Agent", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 			agentDir,
@@ -201,7 +201,7 @@ describe("subagents and tasks action group behaviour", () => {
 	});
 
 	test("CancelTask on an existing registered agent terminates it and emits Agents snapshot", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 			agentDir,

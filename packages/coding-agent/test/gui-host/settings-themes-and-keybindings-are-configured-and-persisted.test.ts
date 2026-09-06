@@ -26,9 +26,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { YAML } from "bun";
-import { type GuiHostServer, startGuiHostServer } from "../../src/gui-host";
+import type { GuiHostServer } from "../../src/gui-host";
 import { useTrackedTempDirs } from "../helpers/tracked-temp-dir";
-import { TestSocketClient } from "./test-client";
+import { TestSocketClient, startTestGuiHostServer } from "./test-client";
 
 const makeTempDir = useTrackedTempDirs("gui-host-settings-test-");
 
@@ -78,7 +78,7 @@ describe("settings, themes, and keybindings action group behaviour", () => {
 	});
 
 	test("LoadSettings returns effective settings with value, default, and source", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 			agentDir,
@@ -110,7 +110,7 @@ describe("settings, themes, and keybindings action group behaviour", () => {
 		// live with `auth.broker.token` on a host with no broker token. The
 		// choke point is the whole record: any key, present or future, that
 		// emits an incomplete entry turns this test red.
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 			agentDir,
@@ -135,7 +135,7 @@ describe("settings, themes, and keybindings action group behaviour", () => {
 	});
 
 	test("SetSetting of a boolean key with a string value fails with INVALID_VALUE", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 			agentDir,
@@ -158,7 +158,7 @@ describe("settings, themes, and keybindings action group behaviour", () => {
 	});
 
 	test("SetSetting with unknown key fails with INVALID_SETTING", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 			agentDir,
@@ -181,7 +181,7 @@ describe("settings, themes, and keybindings action group behaviour", () => {
 	});
 
 	test("SetSetting with valid value persists to settings file and reflects in Settings snapshot", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 			agentDir,
@@ -220,7 +220,7 @@ describe("settings, themes, and keybindings action group behaviour", () => {
 	});
 
 	test("ResetSetting unsets override and restores default value", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 			agentDir,
@@ -255,7 +255,7 @@ describe("settings, themes, and keybindings action group behaviour", () => {
 	});
 
 	test("LoadThemes lists both bundled themes with dark classification correct", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 			agentDir,
@@ -282,7 +282,7 @@ describe("settings, themes, and keybindings action group behaviour", () => {
 	});
 
 	test("LoadKeybindings and SetKeybinding configure and persist keybindings", async () => {
-		server = await startGuiHostServer({
+		server = await startTestGuiHostServer({
 			endpoint: "tcp:127.0.0.1:0",
 			cwd: tempDir,
 			agentDir,
