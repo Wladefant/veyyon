@@ -4061,10 +4061,24 @@ function redactHeaders(headers: Headers): Record<string, string> {
 	return redacted;
 }
 
+/**
+ * Resolve the Responses route from a Codex base URL.
+ *
+ * OpenAI serves it at `{base}/codex/responses`, so a base that names neither
+ * segment gets both appended. Two other shapes exist and must be left alone:
+ * a base that already ends in the full route, and one that ends at `/codex`.
+ *
+ * The `/responses` case is the general form of the first: a local Codex-
+ * compatible bridge serves `POST {base}/responses` with no `/codex` segment
+ * (the `codex-chatgpt-web` daemon installs itself into a Codex config as
+ * `openai_base_url = "http://127.0.0.1:17841/v1"` and answers `/v1/responses`),
+ * so a base URL that already names the route is final wherever it came from.
+ * Appending `/codex/responses` to it would 404 the whole session.
+ */
 function resolveCodexResponsesUrl(baseUrl: string | undefined): string {
 	const raw = baseUrl && baseUrl.trim().length > 0 ? baseUrl : CODEX_BASE_URL;
 	const normalized = trimTrailingSlashes(raw);
-	if (normalized.endsWith("/codex/responses")) return normalized;
+	if (normalized.endsWith("/responses")) return normalized;
 	if (normalized.endsWith("/codex")) return `${normalized}/responses`;
 	return `${normalized}/codex/responses`;
 }

@@ -2,8 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- A `chatgpt-web` provider definition for the local `codex-chatgpt-web` Responses bridge. It carries no `login` and no `refreshToken`: the bridge authenticates its own browser side through a Chrome profile the operator signs in to once with the daemon's `setup` command, and its catalog bearer comes from the environment (`CODEX_CHATGPT_WEB_OAUTH_TOKEN`, then `OPENAI_CODEX_OAUTH_TOKEN`). The official `openai-codex` provider keeps its own flow, credentials and host unchanged.
+
 ### Fixed
 
+- A Codex base URL that already names the Responses route is now used verbatim instead of having `/codex/responses` appended to it. OpenAI serves the route at `{base}/codex/responses`, but a Codex-compatible server need not: the local `codex-chatgpt-web` bridge installs itself into a Codex config as `openai_base_url = "http://127.0.0.1:17841/v1"` and serves `POST /v1/responses`, so every turn against it built `…/v1/responses/codex/responses` and 404'd — indistinguishable at the call site from a daemon that is not running. The existing `/backend-api`, `/backend-api/codex` and `/backend-api/codex/responses` shapes resolve exactly as before.
 - Google and Vertex requests no longer fail outright for anyone with secrets configured. `streamGoogleGenAI` handed its `onPayload` hook the SDK-shaped params object, whose `config.abortSignal` is a live `AbortSignal`, and the secret redactor behind that hook walks the payload and refuses any value JSON cannot express. Every request died with "the provider request contains a non-JSON object; confidentiality transform failed." The signal never crossed the wire (`paramsToWireBody` drops it) and nothing downstream reads it, so it is stripped before the hook runs.
 - Gateway-routed requests (pi-native transport) no longer fail outright for anyone with secrets configured when the turn offers tools. The client handed the hook the raw `context`, whose `tools[].parameters` are live arktype schemas — function objects the walking redactor refuses. The hook now receives the exact wire shape (the body is JSON by construction), so the redactor sees the serialized tool schemas like every other consumer.
 - The OAuth success page no longer stacks a paragraph and a Close window button under the verdict. The tab closes itself after sign-in, so the success state is the sun, the authenticated badge, "Signed in", and the brand; the failure state keeps its reason and the button, since it does not auto-close.
