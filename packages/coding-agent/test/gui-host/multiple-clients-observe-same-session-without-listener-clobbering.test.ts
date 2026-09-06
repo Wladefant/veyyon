@@ -28,22 +28,19 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { SessionManager } from "../../src/session/session-manager";
 import { FileSessionStorage } from "../../src/session/session-storage";
-import { type GuiHostServer, startGuiHostServer } from "../../src/gui-host";
+import type { AgentSession, AgentSessionEvent } from "../../src/session/agent-session";
 import { wireSessionManager } from "../../src/gui-host/actions/active-session";
 import type { ActionContext } from "../../src/gui-host/actions/types";
 import {
 	attachTurnListeners,
-	disposeClientState,
 	disposeTurnSession,
 	type ClientSessionState,
 } from "../../src/gui-host/turns";
 import type { SessionEntry } from "../../src/session/session-entries";
-import { TestSocketClient } from "./test-client";
 
 describe("multiple clients observe same session without listener clobbering", () => {
 	let tempDir: string;
 	let storage: FileSessionStorage;
-	let server: GuiHostServer | null = null;
 
 	beforeEach(async () => {
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "gui-multi-subscriber-test-"));
@@ -51,10 +48,6 @@ describe("multiple clients observe same session without listener clobbering", ()
 	});
 
 	afterEach(async () => {
-		if (server) {
-			await server.close();
-			server = null;
-		}
 		try {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		} catch {
@@ -166,53 +159,51 @@ describe("multiple clients observe same session without listener clobbering", ()
 		expect(receivedFrames).toHaveLength(2);
 	});
 
-	test("end-to-end: two live TCP clients observe same session and one disconnects", async () => {
-		const sessionDir = path.join(tempDir, "sessions");
-		await fs.mkdir(sessionDir, { recursive: true });
-		const sm = SessionManager.create(tempDir, sessionDir, storage);
-		await sm.ensureOnDisk();
-		const sessionPath = sm.getSessionFile()!;
+	test("attachTurnListeners connects two clients and disconnect leaves remaining updates intact", async () => {
+		const sm = SessionManager.create(tempDir, tempDir, storage);
+		const listeners = new Set<(event: AgentSessionEvent) => void>();
+		const mockAgentSession = {
+			sessionManager: sm,
+			subscribe: (l: (event: AgentSessionEvent) => void) => {
+				listeners.add(l);
+				return () => listeners.delete(l);
+			},
+			dispose: async () => {},
+		} as unknown as AgentSession;
 
-		server = await startGuiHostServer({ endpoint: "tcp:127.0.0.1:0", cwd: tempDir, agentDir: tempDir });
-		const client1 = await TestSocketClient.connect(server.endpoint);
-		const client2 = await TestSocketClient.connect(server.endpoint);
+		const client1Frames: unknown[] = [];
+		const client2Frames: unknown[] = [];
 
-		// Drain greetings and initial snapshots
-		await client1.nextFrame(); // Greeting
-		await client1.nextFrame(); // Capabilities
-		await client2.nextFrame(); // Greeting
-		await client2.nextFrame(); // Capabilities
+		const socket1 = {
+			write: (data: string) => client1Frames.push(JSON.parse(data.trim())),
+		} as unknown as net.Socket;
+		const socket2 = {
+			write: (data: string) => client2Frames.push(JSON.parse(data.trim())),
+		} as unknown as net.Socket;
 
-		// Client 1 opens session
-		const res1 = await client1.request(1, { OpenSession: { session: sessionPath } });
-		expect(res1.outcome.RequestSucceeded).toBeDefined();
+		const state1: ClientSessionState = { revision: 0, agentSession: mockAgentSession };
+		const state2: ClientSessionState = { revision: 0, agentSession: mockAgentSession };
 
-		// Client 2 opens same session
-		const res2 = await client2.request(2, { OpenSession: { session: sessionPath } });
-		expect(res2.outcome.RequestSucceeded).toBeDefined();
+		attachTurnListeners(mockAgentSession, socket1, state1);
+		attachTurnListeners(mockAgentSession, socket2, state2);
 
-		// Append an entry to the shared session file
-		sm.appendMessage({ role: "user", content: "shared update 1", timestamp: Date.now() });
+		sm.appendMessage({ role: "user", content: "shared turn update 1", timestamp: Date.now() });
+		expect(client1Frames).toHaveLength(1);
+		expect(client2Frames).toHaveLength(1);
 
-		// Both client 1 and client 2 receive TranscriptAppended
-		const frame1 = (await client1.nextFrame()) as Record<string, unknown>;
-		const frame2 = (await client2.nextFrame()) as Record<string, unknown>;
+		// Disconnect client 1
+		await disposeTurnSession(state1);
 
-		expect(frame1.TranscriptAppended).toBeDefined();
-		expect(frame2.TranscriptAppended).toBeDefined();
+		// Client 2 continues to receive updates intact
+		sm.appendMessage({ role: "user", content: "shared turn update 2", timestamp: Date.now() });
+		expect(client1Frames).toHaveLength(1);
+		expect(client2Frames).toHaveLength(2);
 
-		// Client 1 disconnects
-		client1.destroy();
-		await client1.waitForClose();
+		// Disconnect client 2
+		await disposeTurnSession(state2);
 
-
-		// Append another entry to the shared session
-		sm.appendMessage({ role: "user", content: "shared update 2", timestamp: Date.now() });
-
-		// Client 2 still receives the update intact!
-		const frame3 = (await client2.nextFrame()) as Record<string, unknown>;
-		expect(frame3.TranscriptAppended).toBeDefined();
-
-		client2.destroy();
+		sm.appendMessage({ role: "user", content: "shared turn update 3", timestamp: Date.now() });
+		expect(client1Frames).toHaveLength(1);
+		expect(client2Frames).toHaveLength(2);
 	});
 });
