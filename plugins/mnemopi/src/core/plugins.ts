@@ -273,14 +273,18 @@ export class CompressionPlugin extends MnemopiPlugin {
 
 export type PluginConstructor<T extends MnemopiPlugin = MnemopiPlugin> = new (config?: PluginConfig) => T;
 
+const BUILTIN_PLUGINS: readonly [string, PluginConstructor][] = [
+	["logging", LoggingPlugin],
+	["metrics", MetricsPlugin],
+	["filter", FilterPlugin],
+	["compression", CompressionPlugin],
+];
+
 export class PluginManager {
 	readonly #registry = new Map<string, PluginConstructor>();
 	readonly #instances = new Map<string, MnemopiPlugin>();
 	constructor(private readonly pluginDir: string = pluginRoot()) {
-		this.registerPlugin("logging", LoggingPlugin);
-		this.registerPlugin("metrics", MetricsPlugin);
-		this.registerPlugin("filter", FilterPlugin);
-		this.registerPlugin("compression", CompressionPlugin);
+		for (const [name, pluginClass] of BUILTIN_PLUGINS) this.registerPlugin(name, pluginClass);
 	}
 	registerPlugin(name: string, pluginClass: PluginConstructor): void {
 		if (typeof pluginClass !== "function" || !(pluginClass.prototype instanceof MnemopiPlugin)) {

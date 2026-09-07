@@ -20,6 +20,8 @@
 
 ### Changed
 
+- Literal prompt templates skip variable analysis and compilation while preserving formatted output.
+- Web and terminal Markdown rendering use shared HTML entity decoding with unchanged output.
 - JSON snapshot parsing uses the shared JSON parser; snapshot validation is unchanged.
 - `HostNotification` and `HostNotifier` are defined in `@veyyon/host`; `@veyyon/utils/host-notification` re-exports both, so no caller changes.
 - Source-path comments in `dirs.ts` name the website changelog generator at `apps/site/tools/gen-changelog.mjs`; behavior is unchanged.

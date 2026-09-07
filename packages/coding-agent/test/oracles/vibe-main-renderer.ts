@@ -4,6 +4,6 @@
  */
 import { type LegacyRenderer, loadHistoricalOracle } from "./historical-loader";
 
-const oracle = loadHistoricalOracle("vibe-main-renderer");
+const oracle = await loadHistoricalOracle("vibe-main-renderer");
 
 export const createVibeToolRenderer = oracle.createVibeToolRenderer as (op?: string) => LegacyRenderer;

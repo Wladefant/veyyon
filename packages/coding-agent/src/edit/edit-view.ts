@@ -27,11 +27,14 @@ import type {
 } from "@veyyon/view";
 import { diagnosticsSection } from "../tools/core/diagnostics";
 import {
+	diffStatsMetaLines,
 	getDiffStats,
+	heldBack,
 	LINE_NOUN,
 	PREVIEW_LIMITS,
 	shortenEmbeddedPaths,
 	shortenPath,
+	type ToolViewResult,
 	truncateDiffByHunk,
 } from "../tools/core/render-utils";
 import type { EditMode } from "../utils/edit-mode";
@@ -101,11 +104,7 @@ export interface EditViewArgs {
 }
 
 /** The result the card reads, which is the tool's own result shape narrowed to what a card shows. */
-export interface EditViewResult {
-	content: Array<{ type: string; text?: string }>;
-	details?: EditToolDetails;
-	isError?: boolean;
-}
+export interface EditViewResult extends ToolViewResult<EditToolDetails> {}
 
 /** A path off an edit entry, which is a path only when the model sent a string. */
 function entryPath(value: unknown): string | undefined {
@@ -318,10 +317,9 @@ function textPreviewSection(text: string, expanded: boolean): ViewSection | unde
 	const lines = sanitizeText(text).split("\n");
 	if (lines.length === 0) return undefined;
 	const kept = expanded ? lines : lines.slice(0, CALL_TEXT_PREVIEW_LINES);
-	const held = lines.length - kept.length;
 	return {
 		lines: kept.map(line => [{ text: replaceTabs(line), tone: "output" as const }]),
-		...(held > 0 ? { hidden: { count: held, noun: LINE_NOUN, revealable: true } } : {}),
+		hidden: heldBack(lines.length - kept.length, LINE_NOUN),
 	};
 }
 
@@ -345,10 +343,9 @@ function errorSection(
 	sanitized = shortenEmbeddedPaths(sanitized);
 	const lines = sanitized.split("\n");
 	const kept = expanded ? lines : lines.slice(0, PREVIEW_LIMITS.DIFF_COLLAPSED_LINES);
-	const held = lines.length - kept.length;
 	return {
 		lines: kept.map(line => [{ text: replaceTabs(line), tone: "error" as const }]),
-		...(held > 0 ? { hidden: { count: held, noun: LINE_NOUN, revealable: true } } : {}),
+		hidden: heldBack(lines.length - kept.length, LINE_NOUN),
 	};
 }
 
@@ -356,10 +353,7 @@ function errorSection(
 function statsMeta(diff: string | undefined): ViewLine[] {
 	if (!diff) return [];
 	const { added, removed } = getDiffStats(diff);
-	const meta: ViewLine[] = [];
-	if (added > 0) meta.push([{ text: `+${added}`, tone: "diffAdded" }]);
-	if (removed > 0) meta.push([{ text: `-${removed}`, tone: "diffRemoved" }]);
-	return meta;
+	return diffStatsMetaLines(added, removed);
 }
 
 /**
@@ -706,9 +700,10 @@ export const editToolView: Required<ToolViewRenderer<EditViewArgs, EditViewResul
 			});
 		}
 
-		const meta: ViewLine[] = [[{ text: `${perFileResults.length} file${perFileResults.length === 1 ? "" : "s"}` }]];
-		if (added > 0) meta.push([{ text: `+${added}`, tone: "diffAdded" }]);
-		if (removed > 0) meta.push([{ text: `-${removed}`, tone: "diffRemoved" }]);
+		const meta: ViewLine[] = [
+			[{ text: `${perFileResults.length} file${perFileResults.length === 1 ? "" : "s"}` }],
+			...diffStatsMetaLines(added, removed),
+		];
 		return {
 			kind: "framedBlock",
 			gutter: true,

@@ -43,7 +43,7 @@ import {
 	ASK_NEXT_OPTION_LABEL,
 	ASK_OTHER_OPTION_LABEL,
 } from "../../../tools/agent/ask-option-labels";
-import { setSessionTerminalTitle, setTerminalTitle } from "../../../utils/title-generator";
+import { setTerminalTitle } from "../../../utils/title-generator";
 import { AskDialogComponent, boundPromptTitle } from "../components/dialogs/ask-dialog";
 import { LAUNCHER_OVERLAY, LauncherComponent } from "../components/dialogs/autoresearch-launcher";
 import { AutoresearchScreenComponent } from "../components/dialogs/autoresearch-screen";
@@ -198,153 +198,11 @@ export class ExtensionUiController {
 			TERMINAL.sendNotification(notification);
 		});
 
+		this.initializeHookRunner(uiContext, true);
 		const extensionRunner = this.ctx.session.extensionRunner;
 		if (!extensionRunner) {
-			return; // No hooks loaded
+			return;
 		}
-
-		const actions: ExtensionActions = {
-			sendMessage: (message, options) => {
-				const wasStreaming = this.ctx.session.isStreaming;
-				const normalized = normalizeCustomMessagePayload(message);
-				this.ctx.session
-					.sendCustomMessage(normalized, options)
-					.then(() => this.#applyCustomMessageDisplay(wasStreaming, normalized.display))
-					.catch((err: unknown) => {
-						this.ctx.showError(`Extension sendMessage failed: ${errorMessage(err)}`);
-					});
-			},
-			sendUserMessage: this.#sendExtensionUserMessage,
-			appendEntry: (customType, data) => {
-				this.ctx.sessionManager.appendCustomEntry(customType, data);
-			},
-			setLabel: (targetId, label) => {
-				this.ctx.sessionManager.appendLabelChange(targetId, label);
-			},
-			getActiveTools: () => this.ctx.session.getActiveToolNames(),
-			getAllTools: () => this.ctx.session.getAllToolNames(),
-			setActiveTools: toolNames => this.ctx.session.setActiveToolsByName(toolNames),
-			setModel: (model, options) => runExtensionSetModel(this.ctx.session, model, options),
-			getThinkingLevel: () => this.ctx.session.thinkingLevel,
-			setThinkingLevel: (level, persist) => this.ctx.session.setThinkingLevel(level, persist),
-			getCommands: () => getSessionSlashCommands(this.ctx.session),
-			getSessionName: () => this.ctx.sessionManager.getSessionName(),
-			setSessionName: name => this.#updateSessionName(name),
-		};
-		const contextActions: ExtensionContextActions = {
-			getModel: () => this.ctx.session.model,
-			isIdle: () => !this.ctx.session.isStreaming,
-			// `ExtensionContextActions.abort` is `() => void`, so returning
-			// `session.abort(...)` here hands a promise into a void slot: the
-			// runner discards it at `#abortFn()` and a rejected abort floats to
-			// postmortem, which exits the process. `abortDetached` is the helper
-			// that exists for exactly this and is already used at the hook-runner
-			// wiring below; these two were simply missed.
-			abort: () => {
-				abortDetached(
-					this.ctx.session,
-					"extension-ui-controller.initHooksAndCustomTools.abort",
-					USER_INTERRUPT_LABEL,
-				);
-			},
-			hasPendingMessages: () => this.ctx.session.queuedMessageCount > 0,
-			shutdown: () => {
-				// Defer the actual teardown to the main loop, which calls
-				// `checkShutdownRequested()` at idle boundaries so any queued
-				// steering / follow-up messages drain first (see issue #1020).
-				this.ctx.shutdownRequested = true;
-			},
-			getContextUsage: () => this.ctx.session.getContextUsage(),
-			compact: instructionsOrOptions => this.#compactSession(instructionsOrOptions),
-			getSystemPrompt: () => this.ctx.session.systemPrompt,
-		};
-		const commandActions: ExtensionCommandContextActions = {
-			getContextUsage: () => this.ctx.session.getContextUsage(),
-			waitForIdle: () => this.ctx.session.agent.waitForIdle(),
-			reload: async () => {
-				await this.ctx.session.reload();
-				this.ctx.renderInitialMessages({ clearTerminalHistory: true });
-				await this.ctx.reloadTodos();
-				this.ctx.showStatus("Reloaded session");
-			},
-			newSession: async options => {
-				this.ctx.clearTransientSessionUi();
-
-				// Create new session
-				this.clearExtensionTerminalInputListeners();
-				this.clearHookWidgets();
-				const success = await this.ctx.session.newSession({ parentSession: options?.parentSession });
-				if (!success) {
-					return { cancelled: true };
-				}
-				setSessionTerminalTitle(this.ctx.sessionManager.getSessionName(), this.ctx.sessionManager.getCwd());
-
-				// Call setup callback if provided
-				if (options?.setup) {
-					await options.setup(this.ctx.sessionManager);
-				}
-
-				// Reset and update status line
-				this.ctx.statusLine.invalidate();
-				this.ctx.statusLine.resetActiveTime();
-				this.ctx.clearTransientSessionUi();
-				this.ctx.resetTranscript();
-
-				this.ctx.present([
-					new Spacer(1),
-					new Text(`${theme.fg("accent", `${theme.status.success} New session started`)}`, 1, 1),
-				]);
-				await this.ctx.reloadTodos();
-				this.ctx.ui.requestRender(true, { clearScrollback: true });
-
-				return { cancelled: false };
-			},
-			branch: async entryId => {
-				const result = await this.ctx.session.branch(entryId);
-				if (result.cancelled) {
-					return { cancelled: true };
-				}
-
-				// Update UI
-				this.ctx.renderInitialMessages({ clearTerminalHistory: true });
-				await this.ctx.reloadTodos();
-				this.ctx.editor.setText(result.selectedText);
-				this.ctx.showStatus("Branched to new session");
-
-				return { cancelled: false };
-			},
-			navigateTree: async (targetId, options) => {
-				const result = await this.ctx.session.navigateTree(targetId, { summarize: options?.summarize });
-				if (result.cancelled) {
-					return { cancelled: true };
-				}
-
-				// Update UI
-				this.ctx.renderInitialMessages({ clearTerminalHistory: true });
-				await this.ctx.reloadTodos();
-				if (result.editorText && !this.ctx.editor.getText().trim()) {
-					this.ctx.editor.setText(result.editorText);
-				}
-				this.ctx.showStatus("Navigated to selected point");
-
-				return { cancelled: false };
-			},
-			compact: async instructionsOrOptions => this.#handleInteractiveCompact(instructionsOrOptions),
-			switchSession: async sessionPath => {
-				this.clearHookWidgets();
-				const result = await this.ctx.session.switchSession(sessionPath);
-				if (!result) {
-					return { cancelled: true };
-				}
-				setSessionTerminalTitle(this.ctx.sessionManager.getSessionName(), this.ctx.sessionManager.getCwd());
-				this.ctx.renderInitialMessages({ clearTerminalHistory: true });
-				await this.ctx.reloadTodos();
-				return { cancelled: false };
-			},
-		};
-
-		extensionRunner.initialize(actions, contextActions, commandActions, uiContext);
-
 		// Subscribe to extension errors
 		extensionRunner.onError((error: ExtensionError) => {
 			this.showExtensionError(error.extensionPath, error.error);

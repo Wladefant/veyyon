@@ -14,29 +14,26 @@
  */
 import type { SettingTab } from "@veyyon/settings";
 import { SettingsSelectorComponent } from "../../packages/coding-agent/src/modes/terminal/components/selectors/settings-selector";
-import { flag, initRender, renderWidth } from "./render-args";
+import { renderDemo } from "./render-args";
 
-const themeName = flag("theme", "titanium");
-const width = renderWidth();
-const height = Number(flag("height", "26"));
-const tab = flag("tab", "subagents") as SettingTab;
-const downCount = Number(flag("down", "0"));
-
-Object.defineProperty(process.stdout, "rows", { configurable: true, value: height });
-await initRender(themeName, { settings: true });
-
-const selector = new SettingsSelectorComponent(
-	{
-		availableThinkingLevels: [],
-		thinkingLevel: undefined,
-		availableThemes: [themeName, "light"],
-		availablePersonalities: ["default"],
-		providers: ["anthropic"],
-		cwd: process.cwd(),
+await renderDemo(
+	({ width, flag, theme }) => {
+		const tab = flag("tab", "subagents") as SettingTab;
+		const downCount = Number(flag("down", "0"));
+		const selector = new SettingsSelectorComponent(
+			{
+				availableThinkingLevels: [],
+				thinkingLevel: undefined,
+				availableThemes: [theme, "light"],
+				availablePersonalities: ["default"],
+				providers: ["anthropic"],
+				cwd: process.cwd(),
+			},
+			{ onChange: () => {}, onCancel: () => {} },
+		);
+		selector.openTab(tab);
+		for (let step = 0; step < downCount; step++) selector.handleInput("\x1b[B");
+		return selector.render(width);
 	},
-	{ onChange: () => {}, onCancel: () => {} },
+	{ settings: true, defaultHeight: 26 },
 );
-
-selector.openTab(tab);
-for (let step = 0; step < downCount; step++) selector.handleInput("\x1b[B");
-process.stdout.write(`${selector.render(width).join("\n")}\n`);

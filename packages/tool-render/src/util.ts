@@ -26,6 +26,29 @@ export function num(value: unknown): number | null {
 	return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+export function strList(value: unknown): string[] {
+	if (!Array.isArray(value)) return [];
+	const out: string[] = [];
+	for (const item of value) {
+		if (typeof item === "string" && item) out.push(item);
+	}
+	return out;
+}
+
+export function recordList(value: unknown): Record<string, unknown>[] {
+	if (!Array.isArray(value)) return [];
+	const out: Record<string, unknown>[] = [];
+	for (const item of value) {
+		if (isRecord(item)) out.push(item);
+	}
+	return out;
+}
+
+export function truncateWs(value: unknown, maxLen = 80): string {
+	const text = str(value);
+	return text ? truncate(normalizeWs(text), maxLen) : "";
+}
+
 /** Coerce unknown to a display string ("" for null/undefined). */
 export function display(value: unknown): string {
 	if (value == null) return "";
@@ -178,23 +201,29 @@ export function languageFromPath(filePath: string): string | null {
 
 /** Joined text blocks of a tool result ("" when absent). */
 export function resultTextOf(result: ToolResultLike | undefined): string {
-	if (!result) return "";
+	if (!result || !Array.isArray(result.content)) return "";
 	const parts: string[] = [];
 	for (const block of result.content) {
-		if (block.type === "text" && typeof (block as { text?: unknown }).text === "string") {
-			parts.push((block as { text: string }).text);
+		if (isRecord(block) && block.type === "text" && "text" in block && typeof block.text === "string") {
+			parts.push(block.text);
 		}
 	}
 	return parts.join("\n");
 }
 
 export function resultImagesOf(result: ToolResultLike | undefined): ToolResultImage[] {
-	if (!result) return [];
+	if (!result || !Array.isArray(result.content)) return [];
 	const images: ToolResultImage[] = [];
 	for (const block of result.content) {
-		const img = block as Partial<ToolResultImage>;
-		if (block.type === "image" && typeof img.data === "string" && typeof img.mimeType === "string") {
-			images.push(img as ToolResultImage);
+		if (
+			isRecord(block) &&
+			block.type === "image" &&
+			"data" in block &&
+			typeof block.data === "string" &&
+			"mimeType" in block &&
+			typeof block.mimeType === "string"
+		) {
+			images.push({ type: "image", data: block.data, mimeType: block.mimeType });
 		}
 	}
 	return images;

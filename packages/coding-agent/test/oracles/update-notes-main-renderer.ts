@@ -7,7 +7,7 @@ import type { Theme } from "@veyyon/coding-agent/theme/theme-class";
 import type { Component } from "@veyyon/tui";
 import { loadHistoricalOracle } from "./historical-loader";
 
-const oracle = loadHistoricalOracle("update-notes-main-renderer");
+const oracle = await loadHistoricalOracle("update-notes-main-renderer");
 
 export interface UpdateNotesRenderArgs {
 	body: string;

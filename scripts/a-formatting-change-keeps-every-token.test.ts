@@ -27,6 +27,7 @@ import { PINNED_BASELINE_COMMIT } from "./git-baseline";
 import {
 	hashNormalizedImportTokens,
 	hashTokenStream,
+	measureTokenEquivalence,
 	REPO_ROOT,
 	TOKEN_EQUIVALENCE_SCHEMA_VERSION,
 	type TokenEquivalenceLedger,
@@ -60,7 +61,7 @@ describe("token equivalence differential suite", () => {
 			const code = readFileSync(fullPath, "utf-8");
 			const { tokens: headTokens } = tokenize(code);
 			const actualHash = hashTokenStream(headTokens);
-			expect(actualHash).toBe(expectedHash);
+			expect(actualHash, relPath).toBe(expectedHash);
 		}
 	});
 
@@ -70,7 +71,7 @@ describe("token equivalence differential suite", () => {
 			const code = readFileSync(fullPath, "utf-8");
 			const { ast: headAst, tokens: headTokens } = tokenize(code);
 			const actualHash = hashNormalizedImportTokens(headAst, headTokens);
-			expect(actualHash).toBe(expectedHash);
+			expect(actualHash, relPath).toBe(expectedHash);
 		}
 	});
 
@@ -101,7 +102,7 @@ describe("token equivalence differential suite", () => {
 	it("states which commit it was measured against, and how many rows it carries (cell e)", () => {
 		expect(ledger.schemaVersion).toBe(TOKEN_EQUIVALENCE_SCHEMA_VERSION);
 		expect(ledger.generatedFrom).toBe(BASELINE_COMMIT);
-		expect(formattingEntries).toHaveLength(72);
+		expect(formattingEntries).toHaveLength(69);
 		expect(importReorderEntries).toHaveLength(0);
 	});
 	it("passes anti-vacuity: a token mutation in a verified file changes its hash (cell f)", () => {
@@ -178,5 +179,16 @@ describe("token equivalence differential suite", () => {
 				generatedFrom: BASELINE_COMMIT,
 			}),
 		).toThrow(/missing formattingOnly/);
+	});
+
+	it("measures token equivalence dynamically using batched Git baseline blobs", async () => {
+		const measured = await measureTokenEquivalence({
+			baseRef: PINNED_BASELINE_COMMIT,
+			headRef: PINNED_BASELINE_COMMIT,
+		});
+		expect(measured.schemaVersion).toBe(TOKEN_EQUIVALENCE_SCHEMA_VERSION);
+		expect(measured.generatedFrom).toBe(PINNED_BASELINE_COMMIT);
+		expect(measured.formattingOnly).toEqual({});
+		expect(measured.importReorder).toEqual({});
 	});
 });

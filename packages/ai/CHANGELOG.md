@@ -2,8 +2,17 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Provider-specific test override setters are replaced by `setProviderModuleOverrideForTest(api, module)`.
+
 ### Changed
 
+- API-key validators share error-body handling without changing request formats, error messages or deadlines.
+- Lazy provider streams share import-promise caching while preserving provider loading and timeout behavior.
+- API-key logins share credential prompting and validation with unchanged provider messages and cancellation behavior.
+- Provider module declarations share one typed stream signature with unchanged runtime output.
+- Hermes and Qwen tool calls use one JSON decoder with unchanged repair and partial-stream recovery.
 - `Tool` extends `ToolSpec` from `@veyyon/tool`, which owns the schema-independent declaration and the `ToolExample` kinds; `@veyyon/ai` exports every name it exported before, so no caller changes.
 - The message envelope, content blocks, `AssistantMessageEvent`, `StopDetails`, the turn and tool-call study records and the streaming partial-JSON symbol are defined in `@veyyon/model`; `@veyyon/ai` re-exports every name it exported before, so no caller changes.
 - A source comment in the OAuth callback page names the shared sun source at `apps/site/sun-field.js`; behavior is unchanged.

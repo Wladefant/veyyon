@@ -10,7 +10,7 @@
 import { truncateToWidth } from "@veyyon/utils/width";
 import { replaceTabs } from "@veyyon/utils/wrap";
 import type { HeadedBlockView, StatusRowView, TextBlockView, ToolViewRenderer, ViewLine } from "@veyyon/view";
-import { PREVIEW_LIMITS, sanitizeErrorText, shortenEmbeddedPaths } from "../core/render-utils";
+import { errorTextBlock, heldBack, LINE_NOUN, PREVIEW_LIMITS, shortenEmbeddedPaths } from "../core/render-utils";
 
 /** The bullet a stored memory is marked with, resolved by the host from its own glyph table. */
 const BULLET = "format.bullet";
@@ -85,11 +85,12 @@ export function retainBlock(contents: readonly string[], header: StatusRowView, 
 		{ text: content, tone: "output" as const },
 	]);
 	const remaining = contents.length - shown.length;
+	const hidden = heldBack(remaining, undefined, !expanded);
 	return {
 		kind: "headedBlock",
 		header,
 		lines,
-		...(remaining > 0 ? { hidden: { count: remaining, revealable: !expanded } } : {}),
+		...(hidden === undefined ? {} : { hidden }),
 	};
 }
 
@@ -117,13 +118,12 @@ export function reflectBlock(header: StatusRowView, answer: string, expanded: bo
 	const limit = expanded ? PREVIEW_LIMITS.OUTPUT_EXPANDED : PREVIEW_LIMITS.OUTPUT_COLLAPSED;
 	const shown = answerLines.slice(0, limit);
 	const remaining = answerLines.length - shown.length;
+	const hidden = heldBack(remaining, LINE_NOUN, !expanded);
 	return {
 		kind: "headedBlock",
 		header,
 		lines: shown.map(line => [{ text: replaceTabs(line), tone: "output" as const }]),
-		...(remaining > 0
-			? { hidden: { count: remaining, noun: { one: "line", many: "lines" }, revealable: !expanded } }
-			: {}),
+		...(hidden === undefined ? {} : { hidden }),
 	};
 }
 
@@ -138,14 +138,7 @@ export function memoryFailure(
 	result: { content?: Array<{ type: string; text?: string }> },
 	fallback: string,
 ): TextBlockView {
-	return {
-		kind: "textBlock",
-		spans: [
-			{ symbol: "status.error", text: "", tone: "error" },
-			{ text: " " },
-			{ text: `Error: ${sanitizeErrorText(memoryResultText(result) || fallback)}`, tone: "error" },
-		],
-	};
+	return errorTextBlock(memoryResultText(result) || fallback);
 }
 
 /** What a memory card reads off a call, which is partial while the arguments are still streaming. */

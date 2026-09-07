@@ -4,6 +4,6 @@
  */
 import { type LegacyRenderer, loadHistoricalOracle } from "./historical-loader";
 
-const oracle = loadHistoricalOracle("ssh-main-renderer");
+const oracle = await loadHistoricalOracle("ssh-main-renderer");
 
 export const sshMainRenderer = oracle.sshMainRenderer as LegacyRenderer;

@@ -4,6 +4,6 @@
  */
 import { type LegacyRenderer, loadHistoricalOracle } from "./historical-loader";
 
-const oracle = loadHistoricalOracle("gh-main-renderer");
+const oracle = await loadHistoricalOracle("gh-main-renderer");
 
 export const githubToolRenderer = oracle.githubToolRenderer as LegacyRenderer;

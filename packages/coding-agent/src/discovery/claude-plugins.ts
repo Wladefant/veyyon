@@ -7,7 +7,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { errorMessage, getAgentDir, isEnoent, isRecord, logger } from "@veyyon/utils";
-import { registerProvider } from "./capability";
 import { readFile } from "./capability/fs";
 import { type Hook, hookCapability } from "./capability/hook";
 import { type MCPServer, mcpCapability } from "./capability/mcp";
@@ -20,9 +19,12 @@ import {
 	type ClaudePluginRoot,
 	createSourceMeta,
 	listClaudePluginRoots,
-	loadFilesFromDir,
 	pluginsRootFor,
+	registerProviderCapabilities,
+	scanCustomToolsFromDir,
+	scanMarkdownCommands,
 	scanSkillsFromDir,
+	scanSubdirectoryHooks,
 } from "./helpers";
 
 import { resolvePluginStdioPaths, substitutePluginRoot } from "./substitute-plugin-root";
@@ -297,19 +299,7 @@ async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashComm
 							};
 						}
 					}
-					return loadFilesFromDir<SlashCommand>(dir, PROVIDER_ID, root.scope, {
-						extensions: ["md"],
-						transform: (name, content, filePath, source) => {
-							const cmdName = name.replace(/\.md$/, "");
-							return {
-								name: root.plugin ? `${root.plugin}:${cmdName}` : cmdName,
-								path: filePath,
-								content,
-								level: root.scope,
-								_source: source,
-							};
-						},
-					});
+					return scanMarkdownCommands(dir, PROVIDER_ID, root.scope, { prefix: root.plugin });
 				}),
 			);
 			return { commandResults, resolveWarnings };
@@ -343,32 +333,8 @@ async function loadHooks(ctx: LoadContext): Promise<LoadResult<Hook>> {
 	);
 	warnings.push(...rootWarnings);
 
-	const hookTypes = ["pre", "post"] as const;
-
-	const loadTasks: { root: ClaudePluginRoot; hookType: "pre" | "post" }[] = [];
-	for (const root of roots) {
-		for (const hookType of hookTypes) {
-			loadTasks.push({ root, hookType });
-		}
-	}
-
 	const results = await Promise.all(
-		loadTasks.map(async ({ root, hookType }) => {
-			const hooksDir = path.join(root.path, "hooks", hookType);
-			return loadFilesFromDir<Hook>(hooksDir, PROVIDER_ID, root.scope, {
-				transform: (name, _content, filePath, source) => {
-					const toolName = name.replace(/\.(sh|bash|zsh|fish)$/, "");
-					return {
-						name,
-						path: filePath,
-						type: hookType,
-						tool: toolName,
-						level: root.scope,
-						_source: source,
-					};
-				},
-			});
-		}),
+		roots.map(root => scanSubdirectoryHooks(path.join(root.path, "hooks"), PROVIDER_ID, root.scope)),
 	);
 
 	for (const result of results) {
@@ -396,21 +362,7 @@ async function loadTools(ctx: LoadContext): Promise<LoadResult<DiscoveredCustomT
 	warnings.push(...rootWarnings);
 
 	const results = await Promise.all(
-		roots.map(async root => {
-			const toolsDir = path.join(root.path, "tools");
-			return loadFilesFromDir<DiscoveredCustomTool>(toolsDir, PROVIDER_ID, root.scope, {
-				transform: (name, _content, filePath, source) => {
-					const toolName = name.replace(/\.(ts|js|sh|bash|py)$/, "");
-					return {
-						name: toolName,
-						path: filePath,
-						description: `${toolName} custom tool`,
-						level: root.scope,
-						_source: source,
-					};
-				},
-			});
-		}),
+		roots.map(root => scanCustomToolsFromDir(path.join(root.path, "tools"), PROVIDER_ID, root.scope)),
 	);
 
 	for (const result of results) {
@@ -535,42 +487,30 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 // Provider Registration
 // =============================================================================
 
-registerProvider<DiscoveredSkill>(skillCapability.id, {
-	id: PROVIDER_ID,
-	displayName: DISPLAY_NAME,
-	description: "Load skills from Claude Code marketplace plugins (~/.claude/plugins/cache/)",
-	priority: PRIORITY,
-	load: loadSkills,
-});
-
-registerProvider<SlashCommand>(slashCommandCapability.id, {
-	id: PROVIDER_ID,
-	displayName: DISPLAY_NAME,
-	description: "Load slash commands from Claude Code marketplace plugins",
-	priority: PRIORITY,
-	load: loadSlashCommands,
-});
-
-registerProvider<Hook>(hookCapability.id, {
-	id: PROVIDER_ID,
-	displayName: DISPLAY_NAME,
-	description: "Load hooks from Claude Code marketplace plugins",
-	priority: PRIORITY,
-	load: loadHooks,
-});
-
-registerProvider<DiscoveredCustomTool>(toolCapability.id, {
-	id: PROVIDER_ID,
-	displayName: DISPLAY_NAME,
-	description: "Load custom tools from Claude Code marketplace plugins",
-	priority: PRIORITY,
-	load: loadTools,
-});
-
-registerProvider<MCPServer>(mcpCapability.id, {
-	id: PROVIDER_ID,
-	displayName: DISPLAY_NAME,
-	description: "Load MCP servers from marketplace plugin .mcp.json files",
-	priority: PRIORITY,
-	load: loadMCPServers,
-});
+registerProviderCapabilities({ id: PROVIDER_ID, displayName: DISPLAY_NAME, priority: PRIORITY }, [
+	{
+		capabilityId: skillCapability.id,
+		description: "Load skills from Claude Code marketplace plugins (~/.claude/plugins/cache/)",
+		load: loadSkills,
+	},
+	{
+		capabilityId: slashCommandCapability.id,
+		description: "Load slash commands from Claude Code marketplace plugins",
+		load: loadSlashCommands,
+	},
+	{
+		capabilityId: hookCapability.id,
+		description: "Load hooks from Claude Code marketplace plugins",
+		load: loadHooks,
+	},
+	{
+		capabilityId: toolCapability.id,
+		description: "Load custom tools from Claude Code marketplace plugins",
+		load: loadTools,
+	},
+	{
+		capabilityId: mcpCapability.id,
+		description: "Load MCP servers from marketplace plugin .mcp.json files",
+		load: loadMCPServers,
+	},
+]);

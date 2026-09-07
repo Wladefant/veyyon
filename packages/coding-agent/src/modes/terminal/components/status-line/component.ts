@@ -35,6 +35,7 @@ import {
 	hasPrSegment,
 	type QuietRowInput,
 	type QuietSegmentBounds,
+	statusLineSettingsFromConfig,
 	subagentBadgeText,
 } from "./quiet-row";
 import { focusExitBadge, type SegmentContext } from "./segments";
@@ -381,17 +382,7 @@ export class StatusLineComponent implements Component {
 			// which is where the row already is.
 			this.#expansion.set(0);
 		}
-		this.#settings = {
-			preset: settings.get("statusLine.preset"),
-			leftSegments: settings.get("statusLine.leftSegments"),
-			rightSegments: settings.get("statusLine.rightSegments"),
-			separator: settings.get("statusLine.separator"),
-			showHookStatus: settings.get("statusLine.showHookStatus"),
-			segmentOptions: settings.getGroup("statusLine").segmentOptions,
-			sessionAccent: settings.get("statusLine.sessionAccent"),
-			transparent: settings.get("statusLine.transparent"),
-			compactThinkingLevel: settings.get("statusLine.compactThinkingLevel"),
-		};
+		this.#settings = statusLineSettingsFromConfig();
 	}
 	#gitEnabled(): boolean {
 		return settings.get("git.enabled");
@@ -1357,7 +1348,7 @@ export class StatusLineComponent implements Component {
 		const projectDir = this.session.sessionManager?.getCwd?.() ?? getProjectDir();
 		const activeRepoCache = shouldResolveActiveRepo
 			? this.#resolveActiveRepoCache()
-			: { projectDir, activeRepo: null, effectiveGitCwd: projectDir, worktree: null };
+			: { projectDir, activeRepo: null, effectiveGitCwd: projectDir, worktree: null, repository: null };
 		const gitBranch = includeGit || includePr ? this.#getCurrentBranch(activeRepoCache.effectiveGitCwd) : null;
 		const gitStatus = includeGit ? this.#getGitStatus(activeRepoCache.effectiveGitCwd) : null;
 		const gitPr = includePr ? this.#lookupPr(activeRepoCache.effectiveGitCwd) : null;

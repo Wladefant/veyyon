@@ -1,31 +1,7 @@
-/**
- * Print the composer footline's capability group under a rising number of
- * simultaneous states, one row per load.
- *
- * WHY THIS DEMO EXISTS. Every part of the footline is separated by `  ·  `
- * except the states packed INSIDE the mode segment, which used to be joined
- * with a single space. With one state active that reads fine; with three
- * (`YOLO`, a mode label, a goal readout) the row degenerates into a run of
- * words with no visible boundary, and the boundary that does exist — the dot
- * between segments — sits at the wrong strength. The bug is therefore not
- * visible in any single screenshot: it only appears as the state COUNT rises,
- * so the proof has to be a ladder rather than a snapshot.
- *
- * Run:
- *     bun scripts/demos/render-mode-states.ts --width 100
- *     bun scripts/demos/render-mode-states.ts --width 100 |
- *       bun scripts/demos/render-proof.ts --out /tmp/mode-states --width 100
- *
- * Every value is fixed, so two runs of the same build produce the same bytes.
- */
 import { StatusLineComponent } from "../../packages/coding-agent/src/modes/terminal/components/status-line/component";
 import type { AgentSession } from "../../packages/coding-agent/src/session/agent-session";
 import { theme } from "../../packages/coding-agent/src/theme/theme";
-import { flag, initRender, renderWidth } from "./render-args";
-
-const themeName = flag("theme", "titanium");
-const width = renderWidth();
-await initRender(themeName, { settings: true });
+import { renderDemo } from "./render-args";
 
 interface StateLoad {
 	readonly label: string;
@@ -119,18 +95,22 @@ const LOADS: StateLoad[] = [
 	},
 ];
 
-const lines: string[] = [];
-for (const load of LOADS) {
-	const statusLine = new StatusLineComponent(stubSession(load));
-	statusLine.updateSettings({ preset: "default" });
-	if (load.plan) statusLine.setPlanModeStatus(load.plan);
-	if (load.goal) statusLine.setGoalModeStatus(load.goal);
-	if (load.vibe) statusLine.setVibeModeStatus({ enabled: true });
-	if (load.loop) statusLine.setLoopModeStatus({ enabled: true });
-	statusLine.setSubagentCount(load.subagents ?? 0);
-	lines.push(theme.fg("dim", `${load.label}:`));
-	lines.push(statusLine.renderQuietLine(width) ?? theme.fg("error", "(no footline rendered)"));
-	lines.push("");
-}
-
-process.stdout.write(`${lines.join("\n")}\n`);
+await renderDemo(
+	({ width }) => {
+		const lines: string[] = [];
+		for (const load of LOADS) {
+			const statusLine = new StatusLineComponent(stubSession(load));
+			statusLine.updateSettings({ preset: "default" });
+			if (load.plan) statusLine.setPlanModeStatus(load.plan);
+			if (load.goal) statusLine.setGoalModeStatus(load.goal);
+			if (load.vibe) statusLine.setVibeModeStatus({ enabled: true });
+			if (load.loop) statusLine.setLoopModeStatus({ enabled: true });
+			statusLine.setSubagentCount(load.subagents ?? 0);
+			lines.push(theme.fg("dim", `${load.label}:`));
+			lines.push(statusLine.renderQuietLine(width) ?? theme.fg("error", "(no footline rendered)"));
+			lines.push("");
+		}
+		return lines;
+	},
+	{ settings: true },
+);

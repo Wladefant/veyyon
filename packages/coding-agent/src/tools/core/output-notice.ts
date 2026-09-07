@@ -102,6 +102,27 @@ export function formatFullOutputReference(artifactId: string): string {
 	return `Read artifact://${artifactId} for full output`;
 }
 
+/**
+ * Extract and join all text blocks from a tool result's content array.
+ *
+ * Preserves text block order, empty lines, and returns empty string if content
+ * is undefined or contains no text blocks. Avoids intermediate array allocations.
+ */
+export function extractResultText(content: ReadonlyArray<{ type: string; text?: string }> | undefined): string {
+	if (!content || content.length === 0) return "";
+	let result = "";
+	let separator = "";
+	for (let i = 0; i < content.length; i++) {
+		if (!(i in content)) continue;
+		const part = content[i];
+		if (part.type === "text") {
+			result += separator + `${part.text ?? ""}`;
+			separator = "\n";
+		}
+	}
+	return result;
+}
+
 const RAW_OUTPUT_ARTIFACT_PREFIX = "[raw output: artifact://";
 const RAW_OUTPUT_ARTIFACT_SUFFIX = "]";
 

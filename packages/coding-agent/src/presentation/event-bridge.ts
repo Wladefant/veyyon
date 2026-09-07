@@ -16,7 +16,14 @@ import type { AgentMessage } from "@veyyon/agent-core";
 import { isRecord } from "@veyyon/utils/type-guards";
 import type { PresentationContext, ToolStatus, TranscriptBlock } from "@veyyon/wire/presentation";
 import type { AgentSessionEvent } from "../session/agent-session-types";
-import { blockIdFor, isDisplayed, toTranscriptBlock, toTranscriptBlocks } from "./transcript-builder";
+import {
+	blockIdFor,
+	contentToText,
+	defaultToolText,
+	isDisplayed,
+	toTranscriptBlock,
+	toTranscriptBlocks,
+} from "./transcript-builder";
 
 /** The slice of a session the bridge needs. Anything wider is not its business. */
 export interface PresentationEventSource {
@@ -26,30 +33,6 @@ export interface PresentationEventSource {
 
 /** Renders a tool's arguments and results for display, with secrets redacted. */
 export type ToolTextRenderer = (value: unknown) => string;
-
-function defaultToolText(value: unknown): string {
-	if (typeof value === "string") return value;
-	if (value === undefined) return "";
-	try {
-		return JSON.stringify(value, null, 2) ?? "";
-	} catch {
-		return "[unserializable]";
-	}
-}
-
-/** Flatten an `AgentToolResult` content array to display text. */
-function resultText(result: unknown): string {
-	if (!isRecord(result)) return "";
-	const content = result.content;
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return "";
-	let text = "";
-	for (const block of content) {
-		if (!isRecord(block) || block.type !== "text" || typeof block.text !== "string") continue;
-		text += text.length > 0 ? `\n${block.text}` : block.text;
-	}
-	return text;
-}
 
 export class PresentationEventBridge {
 	#source: PresentationEventSource;
@@ -158,7 +141,7 @@ export class PresentationEventBridge {
 			}
 			case "tool_execution_update": {
 				this.#presentation.updateTranscriptBlock(`tool:${event.toolCallId}`, {
-					output: resultText(event.partialResult),
+					output: isRecord(event.partialResult) ? contentToText(event.partialResult.content) : "",
 				});
 				return;
 			}
@@ -166,7 +149,7 @@ export class PresentationEventBridge {
 				this.#runningToolCalls.delete(event.toolCallId);
 				const failed = event.isError === true || (isRecord(event.result) && event.result.isError === true);
 				const status: ToolStatus = failed ? "failed" : "succeeded";
-				const text = resultText(event.result);
+				const text = isRecord(event.result) ? contentToText(event.result.content) : "";
 				this.#presentation.updateTranscriptBlock(
 					`tool:${event.toolCallId}`,
 					failed ? { status, error: text } : { status, output: text },

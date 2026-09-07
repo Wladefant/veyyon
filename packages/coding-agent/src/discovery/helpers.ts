@@ -24,10 +24,14 @@ import {
 } from "../config/project-trust";
 import { type ConfiguredThinkingLevel, parseConfiguredThinkingLevel } from "../thinking";
 import { normalizeToolNames, TOOL } from "../tools/core/builtin-names";
+import { registerProvider } from "./capability";
 import type { ExtensionModule } from "./capability/extension-module";
 import { invalidate as invalidateFsCache, readDirEntries, readFile } from "./capability/fs";
+import type { Hook } from "./capability/hook";
 import { parseRuleConditionAndScope, type Rule, type RuleFrontmatter } from "./capability/rule";
 import type { DiscoveredSkill, SkillFrontmatter } from "./capability/skill";
+import type { SlashCommand } from "./capability/slash-command";
+import type { DiscoveredCustomTool } from "./capability/tool";
 import type { LoadContext, LoadResult, SourceMeta } from "./capability/types";
 import { buildPluginDirRoot } from "./plugin-dir-roots";
 
@@ -614,6 +618,133 @@ export async function loadFilesFromDir<T>(
 		}
 	}
 	return { items, warnings };
+}
+
+/**
+ * Scan all custom tool files and derive script names and descriptions.
+ */
+export async function scanCustomToolsFromDir(
+	dir: string,
+	provider: string,
+	level: "user" | "project",
+): Promise<LoadResult<DiscoveredCustomTool>> {
+	return await loadFilesFromDir<DiscoveredCustomTool>(dir, provider, level, {
+		transform: (name, _content, filePath, source) => {
+			const toolName = name.replace(/\.(ts|js|sh|bash|py)$/, "");
+			return {
+				name: toolName,
+				path: filePath,
+				description: `${toolName} custom tool`,
+				level,
+				_source: source,
+			};
+		},
+	});
+}
+
+/**
+ * Scan `pre/` and `post/` subdirectories under `hooksDir` for tool hook scripts.
+ */
+export async function scanSubdirectoryHooks(
+	hooksDir: string,
+	provider: string,
+	level: "user" | "project",
+): Promise<LoadResult<Hook>> {
+	const items: Hook[] = [];
+	const warnings: string[] = [];
+	const hookTypes = ["pre", "post"] as const;
+
+	const results = await Promise.all(
+		hookTypes.map(hookType =>
+			loadFilesFromDir<Hook>(path.join(hooksDir, hookType), provider, level, {
+				transform: (name, _content, filePath, source) => {
+					const toolName = name.replace(/\.(sh|bash|zsh|fish)$/, "");
+					return {
+						name,
+						path: filePath,
+						type: hookType,
+						tool: toolName,
+						level,
+						_source: source,
+					};
+				},
+			}),
+		),
+	);
+
+	for (const result of results) {
+		items.push(...result.items);
+		if (result.warnings) warnings.push(...result.warnings);
+	}
+	return { items, warnings };
+}
+
+export interface ScanMarkdownCommandsOptions {
+	/** Whether to parse YAML frontmatter for custom command name */
+	parseFrontmatter?: boolean;
+	/** Optional namespace prefix to prepend to command names (e.g., plugin name) */
+	prefix?: string;
+	/** Whether to recurse into subdirectories */
+	recursive?: boolean;
+}
+
+/**
+ * Scan a directory for markdown slash commands (`*.md`).
+ */
+export async function scanMarkdownCommands(
+	dir: string,
+	provider: string,
+	level: "user" | "project",
+	options?: ScanMarkdownCommandsOptions,
+): Promise<LoadResult<SlashCommand>> {
+	return await loadFilesFromDir<SlashCommand>(dir, provider, level, {
+		extensions: ["md"],
+		recursive: options?.recursive ?? false,
+		transform: (name, content, filePath, source) => {
+			let cmdName: string;
+			let body: string;
+			if (options?.parseFrontmatter) {
+				const parsed = parseFrontmatter(content, { source: filePath });
+				cmdName = String(parsed.frontmatter.name || name.replace(/\.md$/, ""));
+				body = parsed.body;
+			} else {
+				cmdName = name.replace(/\.md$/, "");
+				body = content;
+			}
+			const commandName = options?.prefix ? `${options.prefix}:${cmdName}` : cmdName;
+			return {
+				name: commandName,
+				path: filePath,
+				content: body,
+				level,
+				_source: source,
+			};
+		},
+	});
+}
+
+export interface ProviderCapabilityRegistration<T = unknown> {
+	capabilityId: string;
+	description: string;
+	load: (ctx: LoadContext) => Promise<LoadResult<T>>;
+}
+
+/**
+ * Register multiple capabilities for a single provider in one declaration block.
+ */
+export function registerProviderCapabilities(
+	meta: { id: string; displayName: string; priority: number },
+	registrations: ReadonlyArray<ProviderCapabilityRegistration<unknown>>,
+): void {
+	for (const { capabilityId, description, load } of registrations) {
+		registerProvider(capabilityId, {
+			id: meta.id,
+			displayName: meta.displayName,
+			description,
+			priority: meta.priority,
+			load,
+		});
+	}
 }
 
 /**

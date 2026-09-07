@@ -19,13 +19,19 @@ import type {
 	ToolView,
 	ToolViewContext,
 	ToolViewRenderer,
-	ViewHiddenCount,
 	ViewLine,
 	ViewSection,
 } from "@veyyon/view";
 import { getLanguageFromPath } from "../../utils/lang-from-path";
-import { formatFullOutputReference } from "../core/output-meta";
-import { emptyStatusLine as emptyLine, FILE_NOUN, sanitizeErrorText } from "../core/render-utils";
+import { extractResultText, formatFullOutputReference } from "../core/output-notice";
+import {
+	emptyStatusLine as emptyLine,
+	emptyTextBlock,
+	errorTextBlock,
+	FILE_NOUN,
+	heldBack,
+	type ToolViewResult,
+} from "../core/render-utils";
 import { COLLAPSED_LIST_LIMIT, type FileSearchDetails, type FileSearchRenderArgs } from "./file-search";
 
 /** What every card of this tool is titled. */
@@ -35,11 +41,7 @@ const FILE_SEARCH_TITLE = "Search files";
 const FILE_SEARCH_EMBLEM = "icon.search";
 
 /** The result the card reads, which is the tool's own result shape narrowed to what a card shows. */
-export interface FileSearchViewResult {
-	content?: Array<{ type: string; text?: string }>;
-	details?: FileSearchDetails;
-	isError?: boolean;
-}
+export interface FileSearchViewResult extends Partial<ToolViewResult<FileSearchDetails>> {}
 
 /** The head row of every result card: the pattern the model asked for is the description. */
 function header(
@@ -80,12 +82,6 @@ function fileRow(entry: string, cwd: string | undefined): ViewLine {
 			...(absolute === undefined ? {} : { file: absolute }),
 		},
 	];
-}
-
-/** What the card kept back, or nothing when the reader already has every row. */
-function heldBack(total: number, shown: number): ViewHiddenCount | undefined {
-	const count = total - shown;
-	return count > 0 ? { count, noun: FILE_NOUN, revealable: true } : undefined;
 }
 
 /**
@@ -144,15 +140,7 @@ export const fileSearchToolView: Required<ToolViewRenderer<FileSearchRenderArgs,
 		const details = result.details;
 
 		if (result.isError === true || details?.error !== undefined) {
-			const text = details?.error ?? result.content?.find(part => part.type === "text")?.text;
-			return {
-				kind: "textBlock",
-				spans: [
-					{ text: "", symbol: "status.error", tone: "error" },
-					{ text: " " },
-					{ text: `Error: ${sanitizeErrorText(text)}`, tone: "error" },
-				],
-			};
+			return errorTextBlock(details?.error ?? extractResultText(result.content));
 		}
 
 		// A result the tool described in detail carries a count; one that did not is a block of text
@@ -186,7 +174,7 @@ export const fileSearchToolView: Required<ToolViewRenderer<FileSearchRenderArgs,
 
 		const files = details.files ?? [];
 		const shown = context.expanded ? files.length : Math.min(files.length, COLLAPSED_LIST_LIMIT);
-		const hidden = context.expanded ? undefined : heldBack(files.length, shown);
+		const hidden = context.expanded ? undefined : heldBack(files.length - shown, FILE_NOUN);
 		const rows: ViewSection = {
 			lines: files.slice(0, shown).map(entry => fileRow(entry, details.cwd)),
 			clip: true,
@@ -225,19 +213,19 @@ function textOnlyResult(
 	context: ToolViewContext,
 	args: FileSearchRenderArgs | undefined,
 ): ToolView {
-	const text = result.content?.find(part => part.type === "text")?.text;
+	const text = extractResultText(result.content);
 	if (
 		text === undefined ||
 		text.includes("No files matching") ||
 		text.includes("No files found") ||
 		text.trim() === ""
 	) {
-		return { kind: "textBlock", spans: emptyLine("No files found") };
+		return emptyTextBlock("No files found");
 	}
 
 	const lines = text.split("\n").filter(line => line.trim() !== "");
 	const shown = context.expanded ? lines.length : Math.min(lines.length, COLLAPSED_LIST_LIMIT);
-	const hidden = context.expanded ? undefined : heldBack(lines.length, shown);
+	const hidden = context.expanded ? undefined : heldBack(lines.length - shown, FILE_NOUN);
 	return {
 		kind: "framedBlock",
 		header: header(args, { emblem: FILE_SEARCH_EMBLEM, meta: [[{ text: formatCount("file", lines.length) }]] }),

@@ -33,8 +33,6 @@ import {
 import { CountdownTimer } from "../chrome/countdown-timer";
 import {
 	computeModalDims,
-	consumeModalChipHover,
-	hitTestModalChrome,
 	MODAL_SIZING_MEDIUM,
 	type ModalShellGeometry,
 	type ModalShortcut,
@@ -46,6 +44,7 @@ import {
 } from "../chrome/modal-shell";
 import { renderSliderLines } from "../chrome/segment-track";
 import { stripInlineMarkdown } from "../dialogs/plan-toc";
+import { routeModalCardMouse } from "./select-list-mouse-routing";
 import { hoverBandAt } from "./selector-helpers";
 
 /** One segment of a {@link HookSelectorSlider} — a label and an optional
@@ -746,59 +745,38 @@ export class HookSelectorComponent extends Container {
 	}
 
 	#routeMouse(event: SgrMouseEvent): boolean {
-		const chrome = hitTestModalChrome(this.#shellGeometry, event.row, event.col, {
-			motion: event.motion,
-			leftClick: event.leftClick,
-		});
-		if (
-			consumeModalChipHover(chrome, this.#hoveredShortcutId, id => {
+		return routeModalCardMouse({
+			shellGeometry: this.#shellGeometry,
+			event,
+			hoveredShortcutId: this.#hoveredShortcutId,
+			onHoverShortcut: id => {
 				this.#hoveredShortcutId = id;
 				this.#onRequestRender?.();
-			})
-		) {
-			return true;
-		}
-		if (
-			chrome.kind === "close" ||
-			chrome.kind === "outside" ||
-			(chrome.kind === "shortcut" && chrome.id === "close")
-		) {
-			this.#onCancelCallback();
-			return true;
-		}
-		if (chrome.kind === "shortcut" && chrome.id === "confirm") {
-			this.#selectCurrentOption();
-			return true;
-		}
-		if (event.wheel !== null) {
-			this.#moveSelection(event.wheel < 0 ? -1 : 1);
-			this.#onRequestRender?.();
-			return true;
-		}
-		const line = event.row - this.#bodyRowStart;
-		if (event.motion) {
-			const index = this.#hitRows[line] ?? null;
-			if (index !== this.#hoveredIndex) {
-				this.#hoveredIndex = index;
-				this.#hoverFade?.set(index);
+			},
+			onCancel: this.#onCancelCallback,
+			onConfirm: () => this.#selectCurrentOption(),
+			onWheel: delta => {
+				this.#moveSelection(delta < 0 ? -1 : 1);
 				this.#onRequestRender?.();
-			}
-			return true;
-		}
-		if (event.leftClick) {
-			const index = this.#hitRows[line];
-			const filtered = index === undefined ? undefined : this.#filteredOptions[index];
-			// A click mirrors Enter: move onto the option, then take it. A
-			// disabled row is inert under the pointer exactly as it is under the
-			// cursor keys, rather than moving the selection onto it.
-			if (index !== undefined && filtered && !this.#isDisabled(filtered.index)) {
-				this.#selectedIndex = index;
-				this.#updateList();
-				this.#selectCurrentOption();
-			}
-			return true;
-		}
-		return true;
+			},
+			listRowStart: this.#bodyRowStart,
+			hitRows: this.#hitRows,
+			onHoverRow: index => {
+				if (index !== this.#hoveredIndex) {
+					this.#hoveredIndex = index;
+					this.#hoverFade?.set(index);
+					this.#onRequestRender?.();
+				}
+			},
+			onClickRow: index => {
+				const filtered = this.#filteredOptions[index];
+				if (filtered && !this.#isDisabled(filtered.index)) {
+					this.#selectedIndex = index;
+					this.#updateList();
+					this.#selectCurrentOption();
+				}
+			},
+		});
 	}
 
 	/**

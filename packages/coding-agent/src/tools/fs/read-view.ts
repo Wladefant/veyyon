@@ -29,22 +29,33 @@ import type {
 } from "@veyyon/view";
 import { tryResolveInternalUrlSync } from "../../internal-urls/resolve-sync";
 import { getLanguageFromPath } from "../../utils/lang-from-path";
-import { stripOutputNotice } from "../core/output-meta";
-// The notice module that owns the sentences, not `output-meta`, which forwards them through the
-// tool wrapper: this file needs the words a truncation and an artifact are named by.
-import { formatFullOutputReference, formatTruncationMetaNotice } from "../core/output-notice";
-import { isReadableUrlPath, splitInternalUrlSel, splitPathAndSel } from "../core/path-utils";
+import {
+	extractResultText,
+	formatFullOutputReference,
+	formatTruncationMetaNotice,
+	stripOutputNotice,
+} from "../core/output-notice";
+import {
+	isRawSelector,
+	isReadableUrlPath,
+	parseSel,
+	pathOf,
+	splitInternalUrlSel,
+	splitPathAndSel,
+} from "../core/path-utils";
 import {
 	formatBytes,
+	heldBack,
 	LINE_NOUN,
 	replaceTabs,
 	screenRows,
 	shortenEmbeddedPaths,
 	shortenPath,
+	type ToolViewResult,
 } from "../core/render-utils";
 import type { ReadUrlToolDetails } from "../web/fetch";
 import { readUrlToolView } from "../web/fetch-view";
-import { isRawSelector, parseSel, type ReadRenderArgs, type ReadToolDetails, readSourceFsPath } from "./read";
+import type { ReadRenderArgs, ReadToolDetails } from "./read";
 
 /** What every card of this tool is titled. */
 const READ_TITLE = "Read";
@@ -56,17 +67,12 @@ const CONTENT_LINES = { collapsed: 12, expanded: 200 } as const;
 const NOTICE_LINES = { collapsed: 6, expanded: 200 } as const;
 
 /** The result a card reads, which is the tool's own result shape narrowed to what a card shows. */
-export interface ReadViewResult {
-	content?: Array<{ type: string; text?: string }>;
-	details?: ReadToolDetails;
-	isError?: boolean;
-}
+export interface ReadViewResult extends Partial<ToolViewResult<ReadToolDetails>> {}
 
-/** The path the call names, under either of the two argument names the model may send. */
-function pathOf(args: ReadRenderArgs | undefined): string {
-	if (typeof args?.file_path === "string") return args.file_path;
-	if (typeof args?.path === "string") return args.path;
-	return "";
+/** Absolute filesystem source path used when resolvedPath is absent. */
+export function readSourceFsPath(details: ReadToolDetails | undefined): string | undefined {
+	const source = details?.meta?.source;
+	return source?.type === "path" ? source.value : undefined;
 }
 
 /** The path and the selector after it, which are one argument the model sends as one string. */
@@ -224,8 +230,8 @@ function contentSection(
 	const rows = screenRows(content);
 	const { kept, held } = window(rows, options.expanded, CONTENT_LINES);
 	const lines = kept.map(row => [{ text: row }] as ViewLine);
-	const hidden = held > 0 ? { hidden: { count: held, noun: LINE_NOUN, revealable: !options.expanded } } : {};
-	if (options.markdown) return { lines, markdown: true, ...hidden };
+	const hidden = heldBack(held, LINE_NOUN, !options.expanded);
+	if (options.markdown) return { lines, markdown: true, ...(hidden === undefined ? {} : { hidden }) };
 	const display = options.details?.displayContent;
 	const numbers = display?.lineNumbers?.slice(0, kept.length);
 	return {
@@ -238,7 +244,7 @@ function contentSection(
 					: { firstLineNumber: display.startLine }
 				: { lineNumbers: numbers }),
 		},
-		...hidden,
+		...(hidden === undefined ? {} : { hidden }),
 	};
 }
 
@@ -273,20 +279,12 @@ function noticeSection(details: ReadToolDetails | undefined, expanded: boolean):
 	if (lines.length === 0) return undefined;
 	const max = expanded ? NOTICE_LINES.expanded : NOTICE_LINES.collapsed;
 	const held = Math.max(0, lines.length - max);
+	const hidden = heldBack(held, LINE_NOUN, !expanded);
 	return {
 		label: "Output",
 		lines: lines.slice(0, Math.min(lines.length, max)),
-		...(held > 0 ? { hidden: { count: held, noun: LINE_NOUN, revealable: !expanded } } : {}),
+		...(hidden === undefined ? {} : { hidden }),
 	};
-}
-
-/** The text parts of a result, which is everything a card shows of what the tool returned. */
-function textOf(content: Array<{ type: string; text?: string }> | undefined): string {
-	if (!content) return "";
-	return content
-		.filter(part => part.type === "text")
-		.map(part => part.text ?? "")
-		.join("\n");
 }
 
 /** Whether the result carries a picture, which is a card that states the read and draws no source. */
@@ -336,7 +334,7 @@ export const readToolView: Required<ToolViewRenderer<ReadRenderArgs, ReadViewRes
 		const details = result.details;
 
 		if (result.isError === true) {
-			const text = (textOf(result.content) || "Unknown error").replace(/^Error:\s*/, "");
+			const text = (extractResultText(result.content) || "Unknown error").replace(/^Error:\s*/, "");
 			return {
 				kind: "framedBlock",
 				header: header(rawPath, args, {
@@ -360,7 +358,8 @@ export const readToolView: Required<ToolViewRenderer<ReadRenderArgs, ReadViewRes
 		// The structured display text when the read reported one, so the card shows the file's own
 		// lines rather than the hashline anchors the model reads; the notice appended for the model is
 		// stated by the card as its own group, so a reader is not told the same thing twice.
-		const content = details?.displayContent?.text ?? stripOutputNotice(textOf(result.content), details?.meta);
+		const content =
+			details?.displayContent?.text ?? stripOutputNotice(extractResultText(result.content), details?.meta);
 		const suffix = details?.suffixResolution;
 		const sourcePath = readSourceFsPath(details);
 		const sections: ViewSection[] = [];

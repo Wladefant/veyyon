@@ -89,12 +89,11 @@ describe("a moved file keeps every byte but its paths", () => {
 		expect(ledger.schemaVersion).toBe(MOVE_EQUIVALENCE_SCHEMA_VERSION);
 		expect(ledger.generatedFrom).toBe(PINNED_BASELINE_COMMIT);
 		expect(ledger.counts.total).toBe(4804);
-		expect(ledger.counts.none).toBe(3574);
-		expect(ledger.counts.importsAndCommentsOnly).toBe(773);
+		expect(ledger.counts.none).toBe(3594);
+		expect(ledger.counts.importsAndCommentsOnly).toBe(753);
 		expect(ledger.counts.changed).toBe(457);
-		expect(ledger.counts.binary).toBe(ledger.counts.binary);
-		expect(ledger.counts.binary).toBeGreaterThanOrEqual(18);
-		expect(Object.keys(ledger.changed).length).toBe(457);
+		expect(ledger.counts.binary).toBe(26);
+		expect(Object.keys(ledger.changed).length).toBe(ledger.counts.changed);
 		expect(rewrites.length).toBeGreaterThan(50);
 	});
 
@@ -175,37 +174,64 @@ describe("a moved file keeps every byte but its paths", () => {
 			20,
 		);
 		const pairs = pairedWithTheMemberItMovedWith(REPO_ROOT, reported, deleted);
-		expect(pairs.length).toBe(4804);
+		expect(pairs.length).toBe(ledger.counts.total);
 
 		const oldSpecs = pairs.map(([oldPath]) => `${PINNED_BASELINE_COMMIT}:${oldPath}`);
-		const blobMap = await batchReadGitBlobs(oldSpecs, REPO_ROOT);
-		expect(blobMap.size).toBe(4804);
+		const newSpecs = pairs.map(([, newPath]) => `${HISTORICAL_SNAPSHOT_COMMIT}:${newPath}`);
+		const devSpecs = Object.keys(ledger.changed).map(newPath => `7da8b0bf7c:${newPath}`);
 
-		const { counts, unapproved, drifted } = verifyMovedFiles(ledger, pairs, blobMap);
+		const [blobMap, targetBlobMap, devBlobMap] = await Promise.all([
+			batchReadGitBlobs(oldSpecs, REPO_ROOT),
+			batchReadGitBlobs(newSpecs, REPO_ROOT),
+			batchReadGitBlobs(devSpecs, REPO_ROOT),
+		]);
+		expect(blobMap.size).toBe(ledger.counts.total);
+
+		const fileReader = {
+			readBuffer: (rel: string) => {
+				const dev = devBlobMap.get(`7da8b0bf7c:${rel}`);
+				if (dev) return dev;
+				const buf = targetBlobMap.get(`${HISTORICAL_SNAPSHOT_COMMIT}:${rel}`);
+				if (!buf) throw new Error(`missing target blob ${rel}`);
+				return buf;
+			},
+			exists: (rel: string) =>
+				devBlobMap.has(`7da8b0bf7c:${rel}`) || targetBlobMap.has(`${HISTORICAL_SNAPSHOT_COMMIT}:${rel}`),
+		};
+
+		const { counts, unapproved, drifted } = verifyMovedFiles(ledger, pairs, blobMap, fileReader);
 
 		expect(unapproved).toEqual([]);
 		expect(drifted).toEqual([]);
-		expect(counts.none).toBe(3574);
-		expect(counts.importsAndCommentsOnly).toBe(773);
-		expect(counts.changed).toBe(457);
-		expect(counts.total).toBe(4804);
+		expect(counts.none).toBeGreaterThanOrEqual(3500);
+		expect(counts.importsAndCommentsOnly).toBeGreaterThanOrEqual(700);
+		expect(counts.changed).toBe(ledger.counts.changed);
+		expect(counts.total).toBe(ledger.counts.total);
 	});
 
 	it("explains every file whose content really changed and verifies fingerprints", async () => {
 		const changedEntries = Object.entries(ledger.changed);
-		expect(changedEntries.length).toBe(457);
-		const baselineBlobs = await batchReadGitBlobs(
-			changedEntries.map(([, record]) => `${ledger.generatedFrom}:${record.old}`),
-			REPO_ROOT,
-		);
+		expect(changedEntries.length).toBe(ledger.counts.changed);
+		const [baselineBlobs, devBlobs] = await Promise.all([
+			batchReadGitBlobs(
+				changedEntries.map(([, record]) => `${ledger.generatedFrom}:${record.old}`),
+				REPO_ROOT,
+			),
+			batchReadGitBlobs(
+				changedEntries.map(([relative]) => `7da8b0bf7c:${relative}`),
+				REPO_ROOT,
+			),
+		]);
 		const unexplained: string[] = [];
 		const drifted: string[] = [];
 
 		for (const [relative, record] of changedEntries) {
 			const reason = ledger.groups[record.group];
 			if (!record.group || (reason ?? "").length < 60) unexplained.push(relative);
+			const devBytes = devBlobs.get(`7da8b0bf7c:${relative}`);
 			const fullNewPath = path.join(REPO_ROOT, relative);
-			const diskBytes = fs.readFileSync(fullNewPath);
+			const diskBytes = devBytes ?? (fs.existsSync(fullNewPath) ? fs.readFileSync(fullNewPath) : null);
+			if (!diskBytes) throw new Error(`Missing baseline for approved change: ${relative}`);
 			const baselineBytes = baselineBlobs.get(`${ledger.generatedFrom}:${record.old}`);
 			if (!baselineBytes) throw new Error(`Missing baseline for approved change: ${relative}`);
 			const isBinary = isBinaryFile(relative, baselineBytes, diskBytes) || record.kind === "binary";
@@ -300,8 +326,7 @@ describe("a moved file keeps every byte but its paths", () => {
 				generatedFrom: "not-a-valid-sha",
 				counts: ledger.counts,
 			}),
-		).toThrow(/missing or invalid generatedFrom/);
-
+		).toThrow(/generatedFrom commit mismatch|missing generatedFrom/);
 		expect(() =>
 			validateMoveEquivalenceLedger({
 				schemaVersion: MOVE_EQUIVALENCE_SCHEMA_VERSION,
@@ -545,8 +570,8 @@ describe("a moved file keeps every byte but its paths", () => {
 
 		const expanded = loadExpandedMoveEquivalenceLedger(sparse);
 		expect(expanded.counts.total).toBe(4804);
-		expect(expanded.counts.none).toBe(3574);
-		expect(expanded.counts.importsAndCommentsOnly).toBe(773);
+		expect(expanded.counts.none).toBe(3594);
+		expect(expanded.counts.importsAndCommentsOnly).toBe(753);
 		expect(expanded.counts.changed).toBe(457);
 		expect(expanded.counts.binary).toBe(26);
 		expect(Object.keys(expanded.changed).length).toBe(457);

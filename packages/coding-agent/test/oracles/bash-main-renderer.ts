@@ -6,7 +6,7 @@ import type { RenderResultOptions } from "@veyyon/coding-agent/extensibility/cus
 import type { Theme } from "@veyyon/coding-agent/theme/theme-class";
 import { type LegacyRenderer, loadHistoricalOracle } from "./historical-loader";
 
-const oracle = loadHistoricalOracle("bash-main-renderer");
+const oracle = await loadHistoricalOracle("bash-main-renderer");
 
 export interface BashRenderArgs {
 	command?: string;

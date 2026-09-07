@@ -7,7 +7,7 @@ import type { Theme } from "@veyyon/coding-agent/theme/theme-class";
 import type { Component } from "@veyyon/tui";
 import { loadHistoricalOracle } from "./historical-loader";
 
-const oracle = loadHistoricalOracle("resolve-main-renderer");
+const oracle = await loadHistoricalOracle("resolve-main-renderer");
 
 export const renderCall = oracle.renderCall as (
 	args: unknown,

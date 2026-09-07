@@ -1,7 +1,7 @@
-import { parseJsonWithRepair, parseStreamingJson } from "@veyyon/utils/json-parse";
+import { parseStreamingJson } from "@veyyon/utils/json-parse";
 import { AI_PROMPTS } from "../prompts/registry";
 import type { ToolCall } from "../types";
-import { mintToolCallId, partialSuffixOverlapAny, recordOrEmpty } from "./coercion";
+import { mintToolCallId, parseNamedToolCall, partialSuffixOverlapAny, recordOrEmpty } from "./coercion";
 import { chatMlTranscriptRenderer, renderThinkTags, renderToolResponseResults, stringifyJson } from "./rendering";
 import type {
 	DialectDefinition,
@@ -113,7 +113,7 @@ class HermesInbandScanner implements InbandScanner {
 				break;
 			}
 
-			const parsed = this.#parseCall(body);
+			const parsed = parseNamedToolCall(body);
 			const rawBlock = `${TOOL_CALL_OPEN}${body}${TOOL_CALL_CLOSE}`;
 			if (parsed) {
 				if (!this.#started) {
@@ -143,28 +143,6 @@ class HermesInbandScanner implements InbandScanner {
 			events.push({ type: "toolStart", id: this.#id, name: this.#name });
 		} catch {
 			// Partial JSON is allowed until the closing tag arrives.
-		}
-	}
-
-	#parseCall(body: string): { name: string; arguments: Record<string, unknown> } | undefined {
-		try {
-			const parsed = parseJsonWithRepair<{ name?: unknown; arguments?: unknown }>(body.trim());
-			if (typeof parsed.name !== "string" || parsed.name.length === 0) return undefined;
-			let args = parsed.arguments;
-			if (typeof args === "string") {
-				// Double-encoded arguments (the model JSON-stringified the object). Parse
-				// it; if it is unrepairable let it throw to the outer catch so the whole
-				// call is handled by the single best-effort-end path — never silently
-				// replaced with {} here (a Law-10 silent fallback that hid data loss).
-				args = parseJsonWithRepair<unknown>(args);
-			}
-			return { name: parsed.name, arguments: recordOrEmpty(args) };
-		} catch {
-			// A body that closed but will not parse is not a call, and saying so is not a swallow: the
-			// caller checks for `undefined` and emits a best-effort `toolEnd` so an already-announced
-			// `toolStart` is never left half-open with empty arguments. Reporting the parse error instead
-			// would abort a stream over one malformed block the model may still recover from.
-			return undefined;
 		}
 	}
 

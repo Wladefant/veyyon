@@ -12,6 +12,7 @@
 import { replaceTabs } from "@veyyon/utils/wrap";
 import type { ViewLine, ViewSection, ViewSpan } from "@veyyon/view";
 import { getLanguageFromPath } from "../../utils/lang-from-path";
+import { heldBack } from "./render-utils";
 
 /** One diagnostic, as the compiler line it was parsed out of states it. */
 export interface ParsedDiagnostic {
@@ -192,5 +193,6 @@ export function diagnosticsSection(
 	}
 
 	const held = total - shown;
-	return { lines, ...(held > 0 ? { hidden: { count: held, revealable: true } } : {}) };
+	const hidden = heldBack(held);
+	return { lines, ...(hidden === undefined ? {} : { hidden }) };
 }

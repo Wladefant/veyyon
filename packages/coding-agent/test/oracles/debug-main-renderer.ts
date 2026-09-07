@@ -4,6 +4,6 @@
  */
 import { type LegacyRenderer, loadHistoricalOracle } from "./historical-loader";
 
-const oracle = loadHistoricalOracle("debug-main-renderer");
+const oracle = await loadHistoricalOracle("debug-main-renderer");
 
 export const debugToolRenderer = oracle.debugToolRenderer as LegacyRenderer;

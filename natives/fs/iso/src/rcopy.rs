@@ -15,7 +15,10 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 
-use crate::{BackendKind, IsoError, IsoResult, IsolationBackend, ProbeResult, command_failed};
+use crate::{
+	BackendKind, IsoError, IsoResult, IsolationBackend, ProbeResult, canonical_existing_dir,
+	command_failed,
+};
 
 pub struct RcopyBackend;
 
@@ -34,7 +37,7 @@ impl IsolationBackend for RcopyBackend {
 	}
 
 	fn start(&self, lower: &Path, merged: &Path) -> IsoResult<()> {
-		let lower = canonical_existing_dir(lower)?;
+		let lower = canonical_existing_dir(lower, "rcopy")?;
 		let merged = absolutize(merged);
 		prepare_destination(&merged)?;
 		if is_git_worktree(&lower) {
@@ -64,24 +67,6 @@ impl IsolationBackend for RcopyBackend {
 			Err(err) => Err(IsoError::other(format!("unable to remove {}: {err}", merged.display()))),
 		}
 	}
-}
-
-fn canonical_existing_dir(path: &Path) -> IsoResult<PathBuf> {
-	let resolved = if path.is_absolute() {
-		path.to_path_buf()
-	} else {
-		std::env::current_dir().map_or_else(|_| path.to_path_buf(), |cwd| cwd.join(path))
-	};
-	let meta = std::fs::metadata(&resolved).map_err(|err| {
-		IsoError::other(format!("invalid rcopy source {}: {err}", resolved.display()))
-	})?;
-	if !meta.is_dir() {
-		return Err(IsoError::other(format!(
-			"rcopy source {} is not a directory",
-			resolved.display()
-		)));
-	}
-	Ok(std::fs::canonicalize(&resolved).unwrap_or(resolved))
 }
 
 fn absolutize(path: &Path) -> PathBuf {

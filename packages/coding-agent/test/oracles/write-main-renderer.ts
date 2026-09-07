@@ -4,7 +4,7 @@
  */
 import { type LegacyRenderer, loadHistoricalOracle } from "./historical-loader";
 
-const oracle = loadHistoricalOracle("write-main-renderer");
+const oracle = await loadHistoricalOracle("write-main-renderer");
 
 export const mainWriteToolRenderer = oracle.mainWriteToolRenderer as LegacyRenderer;
 export const mainFormatStreamingContent = oracle.mainFormatStreamingContent as (

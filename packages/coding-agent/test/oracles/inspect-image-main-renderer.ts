@@ -4,6 +4,6 @@
  */
 import { type LegacyRenderer, loadHistoricalOracle } from "./historical-loader";
 
-const oracle = loadHistoricalOracle("inspect-image-main-renderer");
+const oracle = await loadHistoricalOracle("inspect-image-main-renderer");
 
 export const inspectImageToolRenderer = oracle.inspectImageToolRenderer as LegacyRenderer;

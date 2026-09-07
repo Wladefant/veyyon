@@ -72,6 +72,7 @@ export type { HookAPI, HookContext } from "./extensibility/hooks/types";
 // Skills
 export * from "./extensibility/skills";
 export * from "./goals";
+export * from "./goals/goal-view";
 export type * from "./lsp";
 export * from "./lsp";
 // Main entry point
@@ -132,10 +133,13 @@ export * from "./tools/agent/review";
 export * from "./tools/agent/todo";
 export * from "./tools/agent/vibe";
 export * from "./tools/agent/yield";
+export * from "./tools/core/path-utils";
 export * from "./tools/fs/checkpoint";
 export * from "./tools/fs/inspect-image";
 export * from "./tools/fs/read";
+export * from "./tools/fs/read-view";
 export * from "./tools/fs/write";
+export * from "./tools/fs/write-view";
 export * from "./tools/search/ast-edit";
 export * from "./tools/search/search";
 export * from "./tools/search/search-tool-bm25";

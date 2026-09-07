@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { YieldItem } from "@veyyon/coding-agent/task/types";
-import { assembleYieldResult } from "@veyyon/coding-agent/task/yield-assembly";
+import { assembleYieldResult, getYieldLabels } from "@veyyon/coding-agent/task/yield-assembly";
 
 /**
  * assembleYieldResult folds a subagent's sequence of `yield` calls into the single payload that
@@ -146,5 +146,27 @@ describe("assembleYieldResult provenance flags", () => {
 	it("propagates schemaOverridden from an incremental item", () => {
 		const result = assembleYieldResult([item({ type: ["findings"], data: "a", schemaOverridden: true })]);
 		expect(result?.schemaOverridden).toBe(true);
+	});
+});
+
+describe("getYieldLabels", () => {
+	it("extracts trimmed label from string type", () => {
+		expect(getYieldLabels("result")).toEqual(["result"]);
+		expect(getYieldLabels("  findings  ")).toEqual(["findings"]);
+		expect(getYieldLabels("")).toEqual([]);
+		expect(getYieldLabels("   ")).toEqual([]);
+	});
+
+	it("extracts trimmed labels from string array type", () => {
+		expect(getYieldLabels(["findings", "summary"])).toEqual(["findings", "summary"]);
+		expect(getYieldLabels(["  findings ", "  "])).toEqual(["findings"]);
+		expect(getYieldLabels([])).toEqual([]);
+	});
+
+	it("handles non-string and non-array types safely", () => {
+		expect(getYieldLabels(undefined)).toEqual([]);
+		expect(getYieldLabels(null as never)).toEqual([]);
+		expect(getYieldLabels(123 as never)).toEqual([]);
+		expect(getYieldLabels(["a", 123 as never, "b"])).toEqual(["a", "b"]);
 	});
 });

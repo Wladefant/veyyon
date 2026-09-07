@@ -8,7 +8,7 @@ import type { Theme } from "@veyyon/coding-agent/theme/theme-class";
 import type { Component } from "@veyyon/tui";
 import { loadHistoricalOracle } from "./historical-loader";
 
-const oracle = loadHistoricalOracle("mcp-main-renderer");
+const oracle = await loadHistoricalOracle("mcp-main-renderer");
 
 export const renderMCPCall = oracle.renderMCPCall as (
 	args: Record<string, unknown>,

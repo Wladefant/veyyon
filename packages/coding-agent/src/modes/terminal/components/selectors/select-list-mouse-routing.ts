@@ -1,6 +1,18 @@
-import type { Component, SelectList, SettingsList } from "@veyyon/tui";
-import { Container } from "@veyyon/tui";
+import { type Component, Container, type Input, type SelectList, type SettingsList, Spacer, Text } from "@veyyon/tui";
+import { matchesKey } from "@veyyon/utils/keys";
 import { routeSelectListMouse, type SgrMouseEvent } from "@veyyon/utils/mouse";
+import { truncateToWidth } from "@veyyon/utils/width";
+import { replaceTabs } from "@veyyon/utils/wrap";
+import { theme } from "../../../../theme/theme";
+import {
+	matchesSelectCancel,
+	matchesSelectDown,
+	matchesSelectPageDown,
+	matchesSelectPageUp,
+	matchesSelectUp,
+} from "../../utils/keybinding-matchers";
+import { consumeModalChipHover, hitTestModalChrome, type ModalShellGeometry } from "../chrome/modal-shell";
+import type { ModalSelectListComponent } from "./modal-select-list";
 
 interface RoutableSelectList {
 	routeMouse?: (event: SgrMouseEvent, line: number, col: number) => void;
@@ -17,10 +29,6 @@ interface RoutableSelectList {
  * the route is wrong without the offset, so the two are one pattern with one
  * owner — a submenu that re-implements either half by hand is how mouse
  * support silently breaks on one screen while working everywhere else.
- *
- * The memoized Container.render cannot report the offset, so this pays one
- * child-render walk per frame; submenu bodies are a dozen rows, never the
- * transcript, and the trade is deliberate.
  */
 export function renderTrackingChild(
 	container: Container,
@@ -55,8 +63,6 @@ export function routeTrackedMouse(
 ): void {
 	if (!target) return;
 	const localLine = line - trackedLineOffset;
-	// A SettingsList answers the value column and item submenus, which a
-	// SelectList has no notion of, so the two lists take different routes.
 	if ("isValueColumnHit" in target) {
 		routeSettingsListPointer(target as SettingsList, event, localLine, col);
 		return;
@@ -72,6 +78,7 @@ export function routeTrackedMouse(
 export type TrackedMouseTarget =
 	| SelectList
 	| SettingsList
+	| Input
 	| (Component & { routeMouse?: (event: SgrMouseEvent, line: number, col: number) => void });
 
 /**
@@ -93,12 +100,6 @@ export abstract class MouseRoutedSubmenu extends Container {
 		return lines;
 	}
 
-	/**
-	 * A submenu swaps screens by rebuilding its children from scratch, never by detaching one for
-	 * later reuse, so the children a `clear()` drops are gone. Hand each of them back first: a
-	 * child holding a pointer band keeps asking the shared clock for frames otherwise, and the
-	 * card is off screen by then.
-	 */
 	override clear(): void {
 		this.dispose();
 		super.clear();
@@ -107,6 +108,132 @@ export abstract class MouseRoutedSubmenu extends Container {
 	/** Mouse routed from the host: wheel steps, hover lights, click confirms. */
 	routeMouse(event: SgrMouseEvent, line: number, col: number): void {
 		routeTrackedMouse(this.mouseTarget(), event, line, this.#mouseTargetLineOffset, col);
+	}
+	renderSubmenuFrame(options: {
+		title: string;
+		description?: string;
+		headerExtra?: Component;
+		body: Component;
+		footerHint?: string;
+		footerExtra?: Component;
+	}): void {
+		this.clear();
+		this.addChild(new Text(theme.bold(theme.fg("accent", options.title)), 0, 0));
+		if (options.description) {
+			this.addChild(new Spacer(1));
+			this.addChild(new Text(theme.fg("muted", options.description), 0, 0));
+		}
+		if (options.headerExtra) {
+			this.addChild(new Spacer(1));
+			this.addChild(options.headerExtra);
+		}
+		this.addChild(new Spacer(1));
+		this.addChild(options.body);
+		if (options.footerExtra) {
+			this.addChild(new Spacer(1));
+			this.addChild(options.footerExtra);
+		}
+		if (options.footerHint) {
+			this.addChild(new Spacer(1));
+			this.addChild(new Text(theme.fg("dim", options.footerHint), 0, 0));
+		}
+	}
+
+	handleInput(data: string): void {
+		const target = this.mouseTarget();
+		if (target && "handleInput" in target && typeof target.handleInput === "function") {
+			target.handleInput(data);
+			return;
+		}
+		this.children[0]?.handleInput?.(data);
+	}
+}
+
+export interface SubmenuChromeOptions {
+	title: string;
+	description?: string;
+	headerExtra?: Component;
+	body: Component;
+	mouseTarget?: TrackedMouseTarget;
+	errorWidth?: number;
+	footerHint?: string;
+	footerExtra?: Component;
+	handleInput?: (data: string) => boolean | void;
+}
+
+/**
+ * Parameterized owner for submenu chrome.
+ * Builds header, description, spacers, body, error line and footer from data.
+ */
+export class DeclarativeSubmenu extends MouseRoutedSubmenu {
+	#body: Component;
+	#customMouseTarget?: TrackedMouseTarget;
+	#customHandleInput?: (data: string) => boolean | void;
+	#errorText: Text | null = null;
+	#errorWidth: number;
+
+	constructor(options: SubmenuChromeOptions) {
+		super();
+		this.#body = options.body;
+		this.#customMouseTarget = options.mouseTarget;
+		this.#customHandleInput = options.handleInput;
+		this.#errorWidth = options.errorWidth ?? 100;
+
+		this.addChild(new Text(theme.bold(theme.fg("accent", options.title)), 0, 0));
+		if (options.description) {
+			this.addChild(new Spacer(1));
+			this.addChild(new Text(theme.fg("muted", options.description), 0, 0));
+		}
+		if (options.headerExtra) {
+			this.addChild(new Spacer(1));
+			this.addChild(options.headerExtra);
+		}
+		this.addChild(new Spacer(1));
+		this.addChild(options.body);
+
+		if (options.errorWidth !== undefined) {
+			this.addChild(new Spacer(1));
+			this.#errorText = new Text("", 0, 0);
+			this.addChild(this.#errorText);
+		}
+
+		if (options.footerHint) {
+			if (options.errorWidth === undefined) {
+				this.addChild(new Spacer(1));
+			}
+			this.addChild(new Text(theme.fg("dim", options.footerHint), 0, 0));
+		}
+		if (options.footerExtra) {
+			this.addChild(new Spacer(1));
+			this.addChild(options.footerExtra);
+		}
+	}
+
+	setError(message: string): void {
+		if (this.#errorText) {
+			const sanitized = truncateToWidth(replaceTabs(message).replace(/[\r\n]+/g, " "), this.#errorWidth);
+			this.#errorText.setText(theme.fg("error", sanitized));
+		}
+	}
+
+	clearError(): void {
+		this.#errorText?.setText("");
+	}
+
+	mouseTarget(): TrackedMouseTarget | undefined {
+		if (this.#customMouseTarget !== undefined) return this.#customMouseTarget;
+		if ("routeMouse" in this.#body || "handleWheel" in this.#body) {
+			return this.#body as TrackedMouseTarget;
+		}
+		return undefined;
+	}
+
+	override handleInput(data: string): void {
+		if (this.#customHandleInput) {
+			const handled = this.#customHandleInput(data);
+			if (handled) return;
+		}
+		super.handleInput(data);
 	}
 }
 
@@ -136,19 +263,6 @@ export function routeSelectListMouseWithTopBorder(
 	}
 }
 
-/**
- * Pointer over a {@link SettingsList} pane, in the list's own coordinates:
- * wheel steps the selection, motion lights the row under the cursor, a click
- * selects it and activates when the click lands on the value column or
- * re-clicks the selected row. An open item submenu owns the pointer outright.
- *
- * Returns true when a click landed on a row, which is the caller's cue that
- * the pane — not the sidebar beside it — now holds focus.
- *
- * The settings overlay and the plugins tab both drive SettingsList panes, and
- * this is the one spelling of what a pointer does to one, so a pane cannot
- * grow a second set of click semantics on one screen.
- */
 export function routeSettingsListPointer(list: SettingsList, event: SgrMouseEvent, line: number, col: number): boolean {
 	if (list.hasOpenSubmenu()) {
 		list.routeSubmenuMouse(event, line, col);
@@ -170,4 +284,182 @@ export function routeSettingsListPointer(list: SettingsList, event: SgrMouseEven
 	list.selectItem(id);
 	if (wasSelected || onValueColumn) list.handleInput("\n");
 	return true;
+}
+
+export interface RouteModalCardMouseOptions {
+	shellGeometry: ModalShellGeometry | null;
+	event: SgrMouseEvent;
+	hoveredShortcutId: string | null;
+	onHoverShortcut?: (id: string | null) => void;
+	onCancel: () => void;
+	onConfirm?: () => void;
+	onWheel?: (delta: -1 | 1) => void;
+	listRowStart?: number;
+	hitRows?: readonly (number | undefined)[];
+	onHoverRow?: (index: number | null) => void;
+	onClickRow?: (index: number) => void;
+}
+
+export function routeModalCardMouse(options: RouteModalCardMouseOptions): boolean {
+	const {
+		shellGeometry,
+		event,
+		hoveredShortcutId,
+		onHoverShortcut,
+		onCancel,
+		onConfirm,
+		onWheel,
+		listRowStart,
+		hitRows,
+		onHoverRow,
+		onClickRow,
+	} = options;
+	const chrome = hitTestModalChrome(shellGeometry, event.row, event.col, {
+		motion: event.motion,
+		leftClick: event.leftClick,
+	});
+
+	if (
+		consumeModalChipHover(chrome, hoveredShortcutId, id => {
+			onHoverShortcut?.(id);
+		})
+	) {
+		return true;
+	}
+
+	if (chrome.kind === "close" || chrome.kind === "outside" || (chrome.kind === "shortcut" && chrome.id === "close")) {
+		onCancel();
+		return true;
+	}
+
+	if (chrome.kind === "shortcut" && chrome.id === "confirm") {
+		onConfirm?.();
+		return true;
+	}
+
+	if (event.wheel !== null && onWheel) {
+		onWheel(event.wheel);
+		return true;
+	}
+
+	if (listRowStart !== undefined) {
+		const line = event.row - listRowStart;
+		if (event.motion && onHoverRow) {
+			const index = hitRows ? (hitRows[line] ?? null) : line >= 0 ? line : null;
+			onHoverRow(index);
+			return true;
+		}
+		if (event.leftClick && onClickRow) {
+			const index = hitRows ? hitRows[line] : line >= 0 ? line : undefined;
+			if (index !== undefined) {
+				onClickRow(index);
+			}
+			return true;
+		}
+	}
+
+	return true;
+}
+
+export interface ListNavigationOptions {
+	selectedIndex: number;
+	totalItems: number;
+	pageSize?: number;
+	wrap?: boolean;
+	onMove: (index: number) => void;
+	onSelect?: (index: number) => void;
+	onCancel?: () => void;
+}
+
+export function handleListNavigationKey(data: string, options: ListNavigationOptions): boolean {
+	const { selectedIndex, totalItems, pageSize = 10, wrap = true, onMove, onSelect, onCancel } = options;
+	if (totalItems <= 0) {
+		if (matchesSelectCancel(data)) {
+			onCancel?.();
+			return true;
+		}
+		return false;
+	}
+
+	if (matchesSelectCancel(data)) {
+		onCancel?.();
+		return true;
+	}
+
+	if (matchesSelectUp(data)) {
+		const next = selectedIndex === 0 ? (wrap ? totalItems - 1 : 0) : selectedIndex - 1;
+		onMove(next);
+		return true;
+	}
+
+	if (matchesSelectDown(data)) {
+		const next = selectedIndex === totalItems - 1 ? (wrap ? 0 : totalItems - 1) : selectedIndex + 1;
+		onMove(next);
+		return true;
+	}
+
+	if (matchesSelectPageUp(data) || matchesKey(data, "pageUp")) {
+		const next = Math.max(0, selectedIndex - pageSize);
+		onMove(next);
+		return true;
+	}
+
+	if (matchesSelectPageDown(data) || matchesKey(data, "pageDown")) {
+		const next = Math.min(totalItems - 1, selectedIndex + pageSize);
+		onMove(next);
+		return true;
+	}
+
+	if (matchesKey(data, "home")) {
+		onMove(0);
+		return true;
+	}
+
+	if (matchesKey(data, "end")) {
+		onMove(totalItems - 1);
+		return true;
+	}
+
+	if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") {
+		onSelect?.(selectedIndex);
+		return true;
+	}
+
+	return false;
+}
+
+export abstract class ModalSelectWrapper implements Component {
+	inner: ModalSelectListComponent;
+
+	constructor(inner: ModalSelectListComponent) {
+		this.inner = inner;
+	}
+
+	setOnRequestRender(cb: () => void): void {
+		this.inner.setOnRequestRender(cb);
+	}
+
+	getSelectList(): SelectList {
+		return this.inner.getSelectList();
+	}
+
+	routeMouse(event: SgrMouseEvent, line: number, col: number): void {
+		this.inner.getSelectList().routeMouse(event, line - 1, col);
+	}
+
+	handleInput(data: string): void {
+		this.inner.handleInput(data);
+	}
+
+	render(width: number): string[] {
+		return this.inner.render(width);
+	}
+
+	invalidate(): void {
+		this.inner.invalidate();
+	}
+
+	dispose(): void {
+		this.inner.dispose?.();
+	}
 }

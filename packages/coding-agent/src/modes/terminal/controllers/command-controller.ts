@@ -67,7 +67,7 @@ import type { InteractiveModeContext } from "../types";
 import { renderContextUsage } from "../utils/context-usage";
 import { buildHotkeysMarkdown } from "../utils/hotkeys-markdown";
 import { buildToolsMarkdown } from "../utils/tools-markdown";
-
+import { showMarkdownPanel } from "./command-controller-shared";
 /**
  * The slice of the interactive context this controller uses: 33 members of the
  * 215 `InteractiveModeContext` requires. See `CollabHostContext` for why the
@@ -113,15 +113,6 @@ export type CommandControllerContext = Pick<
 	| "ui"
 	| "updateEditorBorderColor"
 >;
-
-function showMarkdownPanel(ctx: CommandControllerContext, title: string, markdown: string): void {
-	const block = new TranscriptBlock();
-	mountTranscriptBlock(block, {
-		header: theme.bold(theme.fg("accent", title)),
-		body: new Markdown(markdown.trim(), COMPOSER_INSET_COLS, 0, getMarkdownTheme()),
-	});
-	ctx.present(block);
-}
 
 export class CommandController {
 	constructor(private readonly ctx: CommandControllerContext) {}

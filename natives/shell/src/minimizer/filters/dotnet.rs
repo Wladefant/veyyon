@@ -268,15 +268,21 @@ fn compact_general(input: &str) -> String {
 	primitives::strip_dedup_head_tail(input, &[is_dotnet_boilerplate], 120, 80)
 }
 
+const DOTNET_BOILERPLATE_PREFIXES: &[&str] = &[
+	"determining projects to restore",
+	"all projects are up-to-date for restore",
+	"build started",
+	"test run for ",
+	"starting test execution",
+];
+
 fn is_dotnet_boilerplate(line: &str) -> bool {
 	let lower = line.to_ascii_lowercase();
-	lower.starts_with("determining projects to restore")
-		|| lower.starts_with("all projects are up-to-date for restore")
-		|| lower.starts_with("restored ") && !primitives::contains_diagnostic_signal(&lower)
-		|| lower.starts_with("build started")
-		|| lower.starts_with("test run for ")
-		|| lower.starts_with("starting test execution")
-		|| lower.starts_with("a total of ") && lower.contains("test files matched")
+	DOTNET_BOILERPLATE_PREFIXES
+		.iter()
+		.any(|p| lower.starts_with(p))
+		|| (lower.starts_with("restored ") && !primitives::contains_diagnostic_signal(&lower))
+		|| (lower.starts_with("a total of ") && lower.contains("test files matched"))
 }
 
 fn is_dotnet_format_noise(line: &str) -> bool {
@@ -284,70 +290,50 @@ fn is_dotnet_format_noise(line: &str) -> bool {
 	is_dotnet_boilerplate(line)
 		|| lower.starts_with("formatting code files")
 		|| lower.starts_with("running formatters")
-		|| lower.starts_with("  formatted ") && !primitives::contains_diagnostic_signal(&lower)
+		|| (lower.starts_with("  formatted ") && !primitives::contains_diagnostic_signal(&lower))
 }
+
+const MSBUILD_LOC_MARKERS: &[&str] =
+	&[":line ", ".cs(", ".fs(", ".vb(", ".csproj", ".fsproj", ".vbproj", ".sln"];
 
 fn is_msbuild_diagnostic(line: &str) -> bool {
 	let lower = line.to_ascii_lowercase();
-	looks_like_msbuild_location(line) && (lower.contains("error") || lower.contains("warning"))
+	MSBUILD_LOC_MARKERS.iter().any(|m| line.contains(m))
+		&& (lower.contains("error") || lower.contains("warning"))
 }
 
-fn looks_like_msbuild_location(line: &str) -> bool {
-	line.contains(":line ")
-		|| line.contains(".cs(")
-		|| line.contains(".fs(")
-		|| line.contains(".vb(")
-		|| line.contains(".csproj")
-		|| line.contains(".fsproj")
-		|| line.contains(".vbproj")
-		|| line.contains(".sln")
-}
+const DOTNET_SOURCE_EXTS: &[&str] = &["/", "\\", ".cs", ".fs", ".vb"];
 
-/// Whether a line names a .NET source file, either by directory separator or by
-/// language extension.
-///
-/// Deliberately not the same question as `lint.rs` asks about its file column,
-/// which is why neither is called `looks_like_path` any more: that name was on
-/// both, and a reader who found one had no way to know the other existed and
-/// answered differently.
 fn mentions_dotnet_source_path(line: &str) -> bool {
-	line.contains('/')
-		|| line.contains('\\')
-		|| line.contains(".cs")
-		|| line.contains(".fs")
-		|| line.contains(".vb")
+	DOTNET_SOURCE_EXTS.iter().any(|ext| line.contains(ext))
 }
+
+const FAILURE_PREFIXES: &[&str] = &["failed! ", "failed ", "error ", "warning "];
 
 fn is_failure_line(line: &str) -> bool {
 	let lower = line.to_ascii_lowercase();
 	primitives::contains_diagnostic_signal(&lower)
-		|| lower.starts_with("failed! ")
-		|| lower.starts_with("failed ")
-		|| lower.starts_with("error ")
-		|| lower.starts_with("warning ")
+		|| FAILURE_PREFIXES.iter().any(|p| lower.starts_with(p))
 }
+
+const DOTNET_SUMMARY_PREFIXES: &[&str] =
+	&["build failed", "restore failed", "build succeeded", "restore succeeded", "time elapsed"];
 
 fn is_dotnet_summary(line: &str) -> bool {
 	let lower = line.to_ascii_lowercase();
-	lower.starts_with("build failed")
-		|| lower.starts_with("restore failed")
-		|| lower.starts_with("build succeeded")
-		|| lower.starts_with("restore succeeded")
-		|| lower.starts_with("time elapsed")
+	DOTNET_SUMMARY_PREFIXES.iter().any(|p| lower.starts_with(p))
 		|| lower.contains(" error(s)")
 		|| lower.contains(" warning(s)")
 		|| lower.contains(" -> ")
 }
 
+const TEST_SUMMARY_PREFIXES: &[&str] =
+	&["total tests:", "passed:", "failed:", "skipped:", "test run failed", "test run successful"];
+
 fn is_test_summary(line: &str) -> bool {
 	let lower = line.to_ascii_lowercase();
-	lower.starts_with("total tests:")
-		|| lower.starts_with("passed:")
-		|| lower.starts_with("failed:")
-		|| lower.starts_with("skipped:")
-		|| lower.starts_with("test run failed")
-		|| lower.starts_with("test run successful")
-		|| lower.contains("failed:") && lower.contains("passed:")
+	TEST_SUMMARY_PREFIXES.iter().any(|p| lower.starts_with(p))
+		|| (lower.contains("failed:") && lower.contains("passed:"))
 }
 
 fn is_failed_test_start(line: &str) -> bool {
@@ -361,11 +347,9 @@ fn is_test_section_boundary(line: &str) -> bool {
 
 fn contains_format_signal(line: &str) -> bool {
 	let lower = line.to_ascii_lowercase();
-	lower.contains("format")
-		|| lower.contains("whitespace")
-		|| lower.contains("diagnostic")
-		|| lower.contains("files formatted")
-		|| lower.contains("files need formatting")
+	["format", "whitespace", "diagnostic", "files formatted", "files need formatting"]
+		.iter()
+		.any(|sig| lower.contains(sig))
 }
 
 #[cfg(test)]

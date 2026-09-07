@@ -620,8 +620,18 @@ async function rewriteLegacyExtensionSource(
 					`${prefix}${toImportSpecifier(TYPEBOX_SHIM_PATH)}${suffix}`,
 			)
 		: withPi;
-	const withPkg = await rewriteExtensionPackageImports(withTypeBox, importerPath, mtimeTag);
-	const withBare = await rewriteExtensionBareImports(withPkg, importerPath, mtimeTag);
+	const withPkg = await rewriteExtensionImports(
+		withTypeBox,
+		PACKAGE_IMPORT_SPECIFIER_REGEX,
+		specifier => resolvePackageImportSpecifier(specifier, importerPath),
+		mtimeTag,
+	);
+	const withBare = await rewriteExtensionImports(
+		withPkg,
+		BARE_EXTENSION_IMPORT_SPECIFIER_REGEX,
+		specifier => resolveExtensionBareDependency(specifier, importerPath),
+		mtimeTag,
+	);
 	const withNativeAddons = await rewriteExtensionNativeAddonRequires(withBare, importerPath);
 	if (!mtimeTag) {
 		return withNativeAddons;
@@ -857,21 +867,22 @@ async function resolvePackageImportSpecifier(specifier: string, importerPath: st
 
 const PACKAGE_IMPORT_SPECIFIER_REGEX = /((?:from\s+|import\s+|import\s*\(\s*)["'])(#[^"'()\s]+)(["'])/g;
 
-async function rewriteExtensionPackageImports(
+async function rewriteExtensionImports(
 	source: string,
-	importerPath: string,
+	regex: RegExp,
+	resolve: (specifier: string) => Promise<string | null>,
 	mtimeTag: string | null = null,
 ): Promise<string> {
 	let rewritten = "";
 	let lastIndex = 0;
-	for (const match of source.matchAll(PACKAGE_IMPORT_SPECIFIER_REGEX)) {
+	for (const match of source.matchAll(regex)) {
 		const matchIndex = match.index;
 		if (matchIndex === undefined) continue;
 
 		const [fullMatch, prefix, specifier, suffix] = match;
 		if (!prefix || !specifier || !suffix) continue;
 
-		const resolved = await resolvePackageImportSpecifier(specifier, importerPath);
+		const resolved = await resolve(specifier);
 		if (!resolved) continue;
 
 		rewritten += source.slice(lastIndex, matchIndex);
@@ -1207,34 +1218,6 @@ async function moduleRequiresNativeAddonUncached(modulePath: string): Promise<bo
 		}
 	}
 	return false;
-}
-
-async function rewriteExtensionBareImports(
-	source: string,
-	importerPath: string,
-	mtimeTag: string | null = null,
-): Promise<string> {
-	let rewritten = "";
-	let lastIndex = 0;
-	for (const match of source.matchAll(BARE_EXTENSION_IMPORT_SPECIFIER_REGEX)) {
-		const matchIndex = match.index;
-		if (matchIndex === undefined) continue;
-
-		const [fullMatch, prefix, specifier, suffix] = match;
-		if (!prefix || !specifier || !suffix) continue;
-
-		const resolved = await resolveExtensionBareDependency(specifier, importerPath);
-		if (!resolved) continue;
-
-		rewritten += source.slice(lastIndex, matchIndex);
-		rewritten += `${prefix}${toGraphImportSpecifier(resolved, mtimeTag)}${suffix}`;
-		lastIndex = matchIndex + fullMatch.length;
-	}
-
-	if (lastIndex === 0) {
-		return source;
-	}
-	return `${rewritten}${source.slice(lastIndex)}`;
 }
 
 // Match source modules in an extension graph: relative imports, package

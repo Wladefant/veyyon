@@ -27,7 +27,6 @@ import { LoopWatchdog } from "@veyyon/utils/loop-watchdog";
 import { clampLow } from "@veyyon/utils/math";
 import { parseSgrMouse } from "@veyyon/utils/mouse";
 import { errorMessage } from "@veyyon/utils/type-guards";
-import { visibleWidth } from "@veyyon/utils/width";
 import { isConPTYHosted, setAltScreenActive, type Terminal } from "../terminal";
 import {
 	encodeKittyDeleteImage,
@@ -70,12 +69,14 @@ import {
 import {
 	auditCommittedPrefix,
 	extractCursorMarkers,
+	extractLineCursorMarker,
+	findVisibleCursorMarker,
+	firstRowDivergence,
 	LINE_TERMINATOR,
 	lineRewriteSequence,
 	PreparedFrameCache,
 	prepareLine,
 	prepareLinesArray,
-	rowsEquivalent,
 	subtreeContains,
 	terminalLine,
 	truncateLargeConptyFrame,
@@ -144,6 +145,12 @@ const DEFAULT_RENDER_SCHEDULER: RenderScheduler = {
 		};
 	},
 };
+
+function relativeMoveY(rowDelta: number): string {
+	if (rowDelta > 0) return `\x1b[${rowDelta}B`;
+	if (rowDelta < 0) return `\x1b[${-rowDelta}A`;
+	return "";
+}
 
 /**
 
@@ -746,21 +753,7 @@ export class TUI extends Container {
 	 * prefix, or the resync audit) and recording the first marker's position.
 	 */
 	#ingestFrameRow(line: string): void {
-		let markerIndex = line.indexOf(CURSOR_MARKER);
-		if (markerIndex === -1) {
-			this.#composedFrame.push(line);
-			return;
-		}
-		this.#frameCursorMarkers.push({
-			row: this.#composedFrame.length,
-			col: visibleWidth(line.slice(0, markerIndex)),
-		});
-		let stripped = line;
-		while (markerIndex !== -1) {
-			stripped = stripped.slice(0, markerIndex) + stripped.slice(markerIndex + CURSOR_MARKER.length);
-			markerIndex = stripped.indexOf(CURSOR_MARKER, markerIndex);
-		}
-		this.#composedFrame.push(stripped);
+		this.#composedFrame.push(extractLineCursorMarker(line, this.#composedFrame.length, this.#frameCursorMarkers));
 	}
 
 	#syncTerminalCursorMode(component: Component | null): void {
@@ -1511,7 +1504,7 @@ export class TUI extends Container {
 		}
 		if (this.#altActive) {
 			const enhancementExit = this.#keyboardEnhancementExit();
-			this.terminal.write(`${MOUSE_TRACKING_OFF}${enhancementExit}\x1b[?1049l`);
+			this.terminal.write(`${MOUSE_TRACKING_OFF}${enhancementExit}${ALT_SCREEN_EXIT}`);
 			setAltScreenActive(false);
 			this.#altActive = false;
 			this.#altPreviousLines = [];
@@ -1575,10 +1568,8 @@ export class TUI extends Container {
 			const clampedCursorRow = clampLow(this.#cursor.row, this.#windowTopRow, viewportBottom);
 			const moveTargetRow = Math.min(targetRow, viewportBottom);
 			const lineDiff = moveTargetRow - clampedCursorRow;
-			if (lineDiff > 0) {
-				this.terminal.write(`\x1b[${lineDiff}B`);
-			} else if (lineDiff < 0) {
-				this.terminal.write(`\x1b[${-lineDiff}A`);
+			if (lineDiff !== 0) {
+				this.terminal.write(relativeMoveY(lineDiff));
 			}
 			this.terminal.write(targetRow <= viewportBottom ? "\r" : "\r\n");
 		}
@@ -1669,11 +1660,10 @@ export class TUI extends Container {
 				this.#armMultiplexerResizeTimer(options?.clearScrollback === true);
 				return;
 			}
-			// A forced render preempts the post-full-paint ConPTY settle: it owns
-			// the next paint and is going to redraw the buffer anyway, so the
-			// trailing coalesced render queued by the settle would only race it.
+			// An immediate render preempts the post-full-paint ConPTY settle.
+			// The trailing coalesced render would race this input frame.
 			this.#clearPostFullPaintSettle();
-			this.#prepareForcedRender(options?.clearScrollback === true);
+			this.#prepareForcedRender(options?.clearScrollback === true, options?.preserveViewport === true);
 			this.#renderRequested = true;
 			this.#renderScheduler.scheduleImmediate(() => {
 				if (this.#stopped || !this.#renderRequested) {
@@ -1736,35 +1726,12 @@ export class TUI extends Container {
 
 		const width = this.terminal.columns;
 		const height = this.terminal.rows;
-		if (!this.#hasEverRendered || this.#resizeEventPending) {
-			this.requestComponentRender(component);
-			return;
-		}
-		if (width !== this.#previousWidth || height !== this.#previousHeight || width !== this.#composeWidth) {
-			this.requestComponentRender(component);
-			return;
-		}
-		if (this.#clearScrollbackOnNextRender || this.#forceViewportRepaintOnNextRender) {
-			this.requestComponentRender(component);
-			return;
-		}
-		if (this.#overlays.size > 0 || this.#altActive || !this.#imageBudget.quiescent) {
+		if (this.#altActive || !this.#canReuseComposedLayout(width, height)) {
 			this.requestComponentRender(component);
 			return;
 		}
 
-		const children = this.children;
 		const segments = this.#frameSegments;
-		if (segments.length !== children.length) {
-			this.requestComponentRender(component);
-			return;
-		}
-		for (let i = 0; i < children.length; i++) {
-			if (segments[i]!.component !== children[i]) {
-				this.requestComponentRender(component);
-				return;
-			}
-		}
 
 		const root = this.#resolveComponentRoot(component);
 		if (root === null) {
@@ -1827,14 +1794,7 @@ export class TUI extends Container {
 		this.#prepared.raiseValidRows(segment.start + nextLines.length);
 		this.#renderStablePrefixRows = Math.min(this.#renderStablePrefixRows, segment.start);
 
-		let cursorPos: { row: number; col: number } | null = null;
-		for (let i = this.#frameCursorMarkers.length - 1; i >= 0; i--) {
-			const marker = this.#frameCursorMarkers[i]!;
-			if (marker.row >= windowTop) {
-				cursorPos = marker;
-				break;
-			}
-		}
+		const cursorPos = findVisibleCursorMarker(this.#frameCursorMarkers, windowTop);
 
 		if (firstChanged === -1) {
 			this.#cursor.writePosition(this.terminal, cursorPos, this.#composedFrame.length);
@@ -1846,9 +1806,7 @@ export class TUI extends Container {
 		const currentScreenRow = clampLow(this.#cursor.row - windowTop, 0, height - 1);
 		const targetScreenRow = screenStart + firstChanged;
 		const rowDelta = targetScreenRow - currentScreenRow;
-		let buffer = this.#paintBeginSequence;
-		if (rowDelta > 0) buffer += `\x1b[${rowDelta}B`;
-		else if (rowDelta < 0) buffer += `\x1b[${-rowDelta}A`;
+		let buffer = this.#paintBeginSequence + relativeMoveY(rowDelta);
 		buffer += "\r";
 		for (let i = firstChanged; i <= lastChanged; i++) {
 			if (i > firstChanged) buffer += "\r\n";
@@ -1900,6 +1858,32 @@ export class TUI extends Container {
 	}
 
 	/**
+	 * Decide whether previously composed frame segments and geometry can be reused.
+	 * Returns false when geometry changed, a resize/repaint/clear is pending,
+	 * overlays are active, image budget is non-quiescent, or root children no longer
+	 * match the current frame segments.
+	 */
+	#canReuseComposedLayout(width: number, height: number): boolean {
+		if (!this.#hasEverRendered || this.#resizeEventPending) return false;
+		if (width !== this.#previousWidth || height !== this.#previousHeight || width !== this.#composeWidth)
+			return false;
+		if (this.#clearScrollbackOnNextRender || this.#forceViewportRepaintOnNextRender) return false;
+		if (this.#overlays.size > 0) return false;
+		// The image budget audits display order across the whole frame; a
+		// partial walk would under-count it. Engage only on image-free frames.
+		if (!this.#imageBudget.quiescent) return false;
+		// The root child list must match the segment ledger exactly — a
+		// structural change shifts offsets under every reused segment.
+		const children = this.children;
+		const segments = this.#frameSegments;
+		if (segments.length !== children.length) return false;
+		for (let i = 0; i < children.length; i++) {
+			if (segments[i]!.component !== children[i]) return false;
+		}
+		return true;
+	}
+
+	/**
 	 * Decide whether this frame may compose component-scoped, and resolve the
 	 * requested components to the root children that must re-render. Returns
 	 * null — full compose — whenever a global condition could invalidate rows
@@ -1908,21 +1892,7 @@ export class TUI extends Container {
 	 */
 	#resolvePartialComposeRoots(width: number, height: number): Set<Component> | null {
 		if (this.#componentRenderTargets.size === 0) return null;
-		if (!this.#hasEverRendered || this.#resizeEventPending) return null;
-		if (width !== this.#previousWidth || height !== this.#previousHeight || width !== this.#composeWidth) return null;
-		if (this.#clearScrollbackOnNextRender || this.#forceViewportRepaintOnNextRender) return null;
-		if (this.#overlays.size > 0) return null;
-		// The image budget audits display order across the whole frame; a
-		// partial walk would under-count it. Engage only on image-free frames.
-		if (!this.#imageBudget.quiescent) return null;
-		// The root child list must match the segment ledger exactly — a
-		// structural change shifts offsets under every reused segment.
-		const children = this.children;
-		const segments = this.#frameSegments;
-		if (segments.length !== children.length) return null;
-		for (let i = 0; i < children.length; i++) {
-			if (segments[i]!.component !== children[i]) return null;
-		}
+		if (!this.#canReuseComposedLayout(width, height)) return null;
 		const roots = this.#partialComposeRootsScratch;
 		roots.clear();
 		for (const target of this.#componentRenderTargets) {
@@ -2063,9 +2033,9 @@ export class TUI extends Container {
 		}, delayMs);
 		return true;
 	}
-	#prepareForcedRender(clearScrollback: boolean): void {
+	#prepareForcedRender(clearScrollback: boolean, preserveViewport = false): void {
 		this.#clearScrollbackOnNextRender ||= clearScrollback;
-		this.#forceViewportRepaintOnNextRender = true;
+		this.#forceViewportRepaintOnNextRender ||= !preserveViewport;
 		if (this.#renderTimer) {
 			this.#renderTimer.cancel();
 			this.#renderTimer = undefined;
@@ -2446,7 +2416,7 @@ export class TUI extends Container {
 			this.#altPreviousCursor = undefined;
 		} else if (!wantAlt && this.#altActive) {
 			const enhancementExit = this.#keyboardEnhancementExit();
-			this.terminal.write(`${MOUSE_TRACKING_OFF}${enhancementExit}\x1b[?1049l`);
+			this.terminal.write(`${MOUSE_TRACKING_OFF}${enhancementExit}${ALT_SCREEN_EXIT}`);
 			setAltScreenActive(false);
 			this.#cursor.forget();
 			this.#altActive = false;
@@ -2668,13 +2638,8 @@ export class TUI extends Container {
 		// content repaints below it.
 		if (!geometryChanged && !this.#clearScrollbackOnNextRender && frameLength < this.#committedRows) {
 			const limit = Math.min(this.#committedRows, frameLength);
-			let diverged = limit;
-			for (let i = 0; i < limit; i++) {
-				if (!rowsEquivalent(rawFrame[i]!, this.#committedPrefix[i]!)) {
-					diverged = i;
-					break;
-				}
-			}
+			const firstDiff = firstRowDivergence(rawFrame, this.#committedPrefix, limit);
+			const diverged = firstDiff >= 0 ? firstDiff : limit;
 			// A frame the viewport SQUEEZED is not a frame that diverged. When the
 			// pinned chrome (HUD rows plus footer) grows past the viewport the
 			// transcript is left no room, the frame collapses to a strict PREFIX of
@@ -2687,7 +2652,7 @@ export class TUI extends Container {
 			// committed), but report a resync ONLY when the surviving rows really
 			// disagree with the record, which is the duplicate-block case this
 			// repair exists for.
-			const contentDiverged = diverged < limit;
+			const contentDiverged = firstDiff >= 0;
 			frameSqueezed = !contentDiverged;
 			if (diverged < this.#committedRows) {
 				this.#committedRows = diverged;
@@ -2869,14 +2834,7 @@ export class TUI extends Container {
 
 		// 5. Pick the visible cursor marker (bottom-most at or below the window
 		// top), prepare lines, and build the visible window slice.
-		let cursorPos: { row: number; col: number } | null = null;
-		for (let i = cursorMarkers.length - 1; i >= 0; i--) {
-			const marker = cursorMarkers[i]!;
-			if (marker.row >= windowTop) {
-				cursorPos = marker;
-				break;
-			}
-		}
+		let cursorPos = findVisibleCursorMarker(cursorMarkers, windowTop);
 		const frame = this.#prepared.prepare(rawFrame, width);
 		let window: string[] = new Array(height);
 		// Screen position of the caret for a resident alt-buffer paint, computed
@@ -3245,6 +3203,10 @@ export class TUI extends Container {
 			visibleTexts = plan.texts;
 			fillSequence = plan.sequence;
 		}
+		const formatLine = (line: string, screenRow?: number) =>
+			options.clearScrollback
+				? lineRewriteSequence(line, width, screenRow, this.#imageBudget)
+				: terminalLine(line, screenRow, this.#imageBudget);
 		if (paintLines === null) {
 			// Common path: emit straight from the source arrays (the
 			// pre-merge two-loop form); byte-identical to replaying the
@@ -3252,25 +3214,18 @@ export class TUI extends Container {
 			// each row must self-clear stale cells left by the previous viewport.
 			for (let i = 0; i < chunkTo; i++) {
 				if (i > 0) buffer += "\r\n";
-				buffer += options.clearScrollback
-					? lineRewriteSequence(frame[i] ?? "", width, undefined, this.#imageBudget)
-					: terminalLine(frame[i] ?? "", undefined, this.#imageBudget);
+				buffer += formatLine(frame[i] ?? "");
 			}
 			for (let screenRow = 0; screenRow < height; screenRow++) {
 				if (chunkTo + screenRow > 0) buffer += "\r\n";
 				const line = visibleTexts ? (visibleTexts[screenRow] ?? "") : (window[screenRow] ?? "");
-				buffer += options.clearScrollback
-					? lineRewriteSequence(line, width, screenRow, this.#imageBudget)
-					: terminalLine(line, screenRow, this.#imageBudget);
+				buffer += formatLine(line, screenRow);
 			}
 		} else {
 			for (let i = 0; i < paintLines.length; i++) {
 				if (i > 0) buffer += "\r\n";
 				const line = visibleTexts && i >= visibleStart ? visibleTexts[i - visibleStart] : (paintLines[i] ?? "");
-				const screenRow = i >= visibleStart ? i - visibleStart : undefined;
-				buffer += options.clearScrollback
-					? lineRewriteSequence(line, width, screenRow, this.#imageBudget)
-					: terminalLine(line, screenRow, this.#imageBudget);
+				buffer += formatLine(line, i >= visibleStart ? i - visibleStart : undefined);
 			}
 		}
 		buffer += fillSequence;
@@ -3623,6 +3578,13 @@ export class TUI extends Container {
 		// our tracking to match so relative moves land correctly.
 		const clampedCursor = Math.min(prevHardwareCursorRow, prevWindowTop + height - 1);
 		const currentScreenRow = clampLow(clampedCursor - prevWindowTop, 0, height - 1);
+		const finalizeEmit = (buffer: string, cursorFrom: number, committedRows?: number) => {
+			const cursorControl = this.#cursor.controlSequence(cursorPos, cursorTrackingLineCount, cursorFrom);
+			this.terminal.write(buffer + cursorControl.seq + this.#paintEndSequence);
+			if (committedRows !== undefined) this.#committedRows = committedRows;
+			this.#windowTopRow = windowTop;
+			this.#commit(frame, window, width, height, cursorControl);
+		};
 
 		// Scroll-append: committing exactly the rows that scroll off the top,
 		// with content untouched since they were painted.
@@ -3663,13 +3625,7 @@ export class TUI extends Container {
 					}
 					cursorFromRow = windowTop + lastChanged;
 				}
-				const cursorControl = this.#cursor.controlSequence(cursorPos, cursorTrackingLineCount, cursorFromRow);
-				buffer += cursorControl.seq;
-				buffer += this.#paintEndSequence;
-				this.terminal.write(buffer);
-				this.#committedRows = chunkTo;
-				this.#windowTopRow = windowTop;
-				this.#commit(frame, window, width, height, cursorControl);
+				finalizeEmit(buffer, cursorFromRow, chunkTo);
 				return;
 			}
 		}
@@ -3710,9 +3666,7 @@ export class TUI extends Container {
 				// full-window rewrite cannot overflow the bottom.
 				if (height > 1) buffer += `\x1b[${height - 1}A`;
 			} else {
-				const rowDelta = firstChanged - currentScreenRow;
-				if (rowDelta > 0) buffer += `\x1b[${rowDelta}B`;
-				else if (rowDelta < 0) buffer += `\x1b[${-rowDelta}A`;
+				buffer += relativeMoveY(firstChanged - currentScreenRow);
 			}
 			buffer += "\r";
 			// DECCARA-optimize the contiguous rewritten range (visible rows
@@ -3744,12 +3698,7 @@ export class TUI extends Container {
 				buffer += `\x1b[${lastChanged - contentBottomScreenRow}A`;
 				cursorFromRow = contentBottomRow;
 			}
-			const cursorControl = this.#cursor.controlSequence(cursorPos, cursorTrackingLineCount, cursorFromRow);
-			buffer += cursorControl.seq;
-			buffer += this.#paintEndSequence;
-			this.terminal.write(buffer);
-			this.#windowTopRow = windowTop;
-			this.#commit(frame, window, width, height, cursorControl);
+			finalizeEmit(buffer, cursorFromRow);
 			return;
 		}
 
@@ -3774,13 +3723,7 @@ export class TUI extends Container {
 		}
 		const parkUp = height - 1 - (contentBottomRow - windowTop);
 		if (parkUp > 0) buffer += `\x1b[${parkUp}A`;
-		const cursorControl = this.#cursor.controlSequence(cursorPos, cursorTrackingLineCount, contentBottomRow);
-		buffer += cursorControl.seq;
-		buffer += this.#paintEndSequence;
-		this.terminal.write(buffer);
-		this.#committedRows = chunkTo;
-		this.#windowTopRow = windowTop;
-		this.#commit(frame, window, width, height, cursorControl);
+		finalizeEmit(buffer, contentBottomRow, chunkTo);
 	}
 
 	/** Optional intent log under VEYYON_DEBUG_REDRAW. */

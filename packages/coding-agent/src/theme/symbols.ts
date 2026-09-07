@@ -13,235 +13,13 @@ import { SUB_CELL_BAR_RAMP, type SubCellBarRamp } from "@veyyon/utils/bar";
 export type SymbolPreset = "unicode" | "nerd" | "ascii";
 
 /**
- * All available symbol keys organized by category.
+ * Available symbol keys, derived from the canonical Unicode glyph table.
  */
-export type SymbolKey =
-	// Status Indicators
-	| "status.success"
-	| "status.error"
-	| "status.warning"
-	| "status.info"
-	| "status.pending"
-	| "status.disabled"
-	| "status.enabled"
-	| "status.running"
-	| "status.connecting"
-	| "status.active"
-	| "status.shadowed"
-	| "status.aborted"
-	| "status.done"
-	// Navigation
-	| "nav.cursor"
-	| "nav.selected"
-	| "nav.expand"
-	| "nav.collapse"
-	| "nav.back"
-	| "nav.prev"
-	| "nav.next"
-	// Tree Connectors
-	| "tree.branch"
-	| "tree.last"
-	| "tree.vertical"
-	| "tree.horizontal"
-	| "tree.hook"
-	// Box Drawing - Rounded
-	| "boxRound.topLeft"
-	| "boxRound.topRight"
-	| "boxRound.bottomLeft"
-	| "boxRound.bottomRight"
-	| "boxRound.horizontal"
-	| "boxRound.vertical"
-	// Box Drawing - Sharp
-	| "boxSharp.topLeft"
-	| "boxSharp.topRight"
-	| "boxSharp.bottomLeft"
-	| "boxSharp.bottomRight"
-	| "boxSharp.horizontal"
-	| "boxSharp.vertical"
-	| "boxSharp.cross"
-	| "boxSharp.teeDown"
-	| "boxSharp.teeUp"
-	| "boxSharp.teeRight"
-	| "boxSharp.teeLeft"
-	// Separators
-	| "sep.powerline"
-	| "sep.powerlineThin"
-	| "sep.powerlineLeft"
-	| "sep.powerlineRight"
-	| "sep.powerlineThinLeft"
-	| "sep.powerlineThinRight"
-	| "sep.block"
-	| "sep.space"
-	| "sep.asciiLeft"
-	| "sep.asciiRight"
-	| "sep.dot"
-	| "sep.slash"
-	| "sep.pipe"
-	// Icons
-	| "icon.model"
-	| "icon.plan"
-	| "icon.prewalk"
-	| "icon.goal"
-	| "icon.pause"
-	| "icon.loop"
-	| "icon.folder"
-	| "icon.worktree"
-	| "icon.search"
-	| "icon.scratchFolder"
-	| "icon.file"
-	| "icon.git"
-	| "icon.branch"
-	| "icon.pr"
-	| "icon.tokens"
-	| "icon.context"
-	| "icon.cost"
-	| "icon.time"
-	| "icon.pi"
-	| "icon.ghost"
-	| "icon.agents"
-	| "icon.unread"
-	| "icon.job"
-	| "icon.cache"
-	| "icon.cacheMiss"
-	| "icon.input"
-	| "icon.output"
-	| "icon.throughput"
-	| "icon.host"
-	| "icon.profile"
-	| "icon.session"
-	| "icon.package"
-	| "icon.warning"
-	| "icon.rewind"
-	| "icon.auto"
-	| "icon.fast"
-	| "icon.extensionSkill"
-	| "icon.extensionTool"
-	| "icon.extensionSlashCommand"
-	| "icon.extensionMcp"
-	| "icon.extensionRule"
-	| "icon.extensionHook"
-	| "icon.extensionPrompt"
-	| "icon.extensionContextFile"
-	| "icon.extensionInstruction"
-	// STT
-	| "icon.mic"
-	// Compaction divider
-	| "icon.camera"
-	// Thinking Levels
-	| "thinking.minimal"
-	| "thinking.low"
-	| "thinking.medium"
-	| "thinking.high"
-	| "thinking.xhigh"
-	| "thinking.max"
-	| "thinking.autoPending"
-	// Checkboxes. `progress` is a third state, not a colour variant: an
-	// in-progress task has to stay distinguishable from a pending one in a
-	// monochrome capture and for a reader who cannot separate the two hues.
-	| "checkbox.checked"
-	| "checkbox.unchecked"
-	| "checkbox.progress"
-	// Radio (single-choice)
-	| "radio.selected"
-	| "radio.unselected"
-	// Text Formatting
-	| "format.bullet"
-	| "format.dash"
-	| "format.bracketLeft"
-	| "format.bracketRight"
-	// Markdown-specific
-	| "md.quoteBorder"
-	| "md.hrChar"
-	| "md.bullet"
-	| "md.colorSwatch"
-	// Advisor note rail
-	| "advisor.rail"
-	// The rail a tool block hangs its output on, in place of a box
-	| "block.rail"
-	// Language/file type icons
-	| "lang.default"
-	| "lang.typescript"
-	| "lang.javascript"
-	| "lang.python"
-	| "lang.rust"
-	| "lang.go"
-	| "lang.java"
-	| "lang.c"
-	| "lang.cpp"
-	| "lang.csharp"
-	| "lang.ruby"
-	| "lang.julia"
-	| "lang.php"
-	| "lang.swift"
-	| "lang.kotlin"
-	| "lang.shell"
-	| "lang.html"
-	| "lang.css"
-	| "lang.json"
-	| "lang.yaml"
-	| "lang.markdown"
-	| "lang.sql"
-	| "lang.docker"
-	| "lang.lua"
-	| "lang.text"
-	| "lang.env"
-	| "lang.toml"
-	| "lang.xml"
-	| "lang.ini"
-	| "lang.conf"
-	| "lang.log"
-	| "lang.csv"
-	| "lang.tsv"
-	| "lang.image"
-	| "lang.pdf"
-	| "lang.archive"
-	| "lang.binary"
-	// Settings tab icons
-	| "tab.appearance"
-	| "tab.model"
-	| "tab.interaction"
-	| "tab.resources"
-	| "tab.context"
-	| "tab.rules"
-	| "tab.files"
-	| "tab.shell"
-	| "tab.tools"
-	| "tab.memory"
-	| "tab.tasks"
-	| "tab.subagents"
-	| "tab.providers"
-	| "tab.global"
-	| "tab.experimental"
-	// Tool identity icons
-	| "tool.write"
-	| "tool.edit"
-	| "tool.bash"
-	| "tool.ssh"
-	| "tool.lsp"
-	| "tool.gh"
-	| "tool.webSearch"
-	| "tool.exa"
-	| "tool.browser"
-	| "tool.eval"
-	| "tool.debug"
-	| "tool.mcp"
-	| "tool.job"
-	| "tool.launch"
-	| "tool.task"
-	| "tool.todo"
-	| "tool.memory"
-	| "tool.ask"
-	| "tool.resolve"
-	| "tool.review"
-	| "tool.inspectImage"
-	| "tool.goal"
-	| "tool.irc"
-	| "tool.delete"
-	| "tool.move";
+export type SymbolKey = keyof typeof UNICODE_SYMBOLS;
 
 export type SymbolMap = Record<SymbolKey, string>;
 
-export const UNICODE_SYMBOLS: SymbolMap = {
+export const UNICODE_SYMBOLS = {
 	// Status
 	"status.success": "✓",
 	"status.error": "✗",
@@ -420,6 +198,8 @@ export const UNICODE_SYMBOLS: SymbolMap = {
 	// East Asian width class as the other two, so a terminal that widens `■`
 	// widens all three and the column stays aligned. Half-filled reads as
 	// half-done without depending on colour.
+	// An in-progress task must remain distinguishable from a pending one in a
+	// monochrome capture and without relying on differences in hue.
 	"checkbox.checked": "■",
 	"checkbox.unchecked": "□",
 	"checkbox.progress": "◧",
@@ -541,9 +321,10 @@ export const UNICODE_SYMBOLS: SymbolMap = {
 	"tool.irc": "",
 	"tool.delete": "",
 	"tool.move": "",
-};
+} satisfies Record<string, string>;
 
 export const NERD_SYMBOLS: SymbolMap = {
+	...UNICODE_SYMBOLS,
 	// Status Indicators
 	// pick:  | alt:   
 	"status.success": "\uf00c",
@@ -582,53 +363,6 @@ export const NERD_SYMBOLS: SymbolMap = {
 	"nav.next": "\uf0da",
 	// pick:  | alt:  
 	"nav.back": "\uf060",
-	// Tree Connectors (same as unicode)
-	// pick: ├─ | alt: ├╴ ├╌ ╠═ ┣━
-	"tree.branch": "├─",
-	// pick: └─ | alt: └╴ └╌ ╚═ ┗━
-	"tree.last": "└─",
-	// pick: │ | alt: ┃ ║ ▏ ▕
-	"tree.vertical": "│",
-	// pick: ─ | alt: ━ ═ ╌ ┄
-	"tree.horizontal": "─",
-	// pick: └ | alt: ╰ ⎿ ↳
-	"tree.hook": "└",
-	// Box Drawing - Rounded (same as unicode)
-	// pick: ╭ | alt: ┌ ┏ ╔
-	"boxRound.topLeft": "╭",
-	// pick: ╮ | alt: ┐ ┓ ╗
-	"boxRound.topRight": "╮",
-	// pick: ╰ | alt: └ ┗ ╚
-	"boxRound.bottomLeft": "╰",
-	// pick: ╯ | alt: ┘ ┛ ╝
-	"boxRound.bottomRight": "╯",
-	// pick: ─ | alt: ━ ═ ╌
-	"boxRound.horizontal": "─",
-	// pick: │ | alt: ┃ ║ ▏
-	"boxRound.vertical": "│",
-	// Box Drawing - Sharp (same as unicode)
-	// pick: ┌ | alt: ┏ ╭ ╔
-	"boxSharp.topLeft": "┌",
-	// pick: ┐ | alt: ┓ ╮ ╗
-	"boxSharp.topRight": "┐",
-	// pick: └ | alt: ┗ ╰ ╚
-	"boxSharp.bottomLeft": "└",
-	// pick: ┘ | alt: ┛ ╯ ╝
-	"boxSharp.bottomRight": "┘",
-	// pick: ─ | alt: ━ ═ ╌
-	"boxSharp.horizontal": "─",
-	// pick: │ | alt: ┃ ║ ▏
-	"boxSharp.vertical": "│",
-	// pick: ┼ | alt: ╋ ╬ ┿
-	"boxSharp.cross": "┼",
-	// pick: ┬ | alt: ╦ ┯ ┳
-	"boxSharp.teeDown": "┬",
-	// pick: ┴ | alt: ╩ ┷ ┻
-	"boxSharp.teeUp": "┴",
-	// pick: ├ | alt: ╠ ┝ ┣
-	"boxSharp.teeRight": "├",
-	// pick: ┤ | alt: ╣ ┥ ┫
-	"boxSharp.teeLeft": "┤",
 	// Separators - Nerd Font specific
 	// pick:  | alt:   
 	"sep.powerline": "\ue0b0",
@@ -644,14 +378,6 @@ export const NERD_SYMBOLS: SymbolMap = {
 	"sep.powerlineThinRight": "\ue0b3",
 	// pick: █ | alt: ▓ ▒ ░ ▉ ▌
 	"sep.block": "█",
-	// pick: space | alt: ␠ ·
-	"sep.space": " ",
-	// pick: > | alt: › » ▸
-	"sep.asciiLeft": ">",
-	// pick: < | alt: ‹ « ◂
-	"sep.asciiRight": "<",
-	// pick: · | alt: • ⋅
-	"sep.dot": " · ",
 	// pick:  | alt: / ∕ ⁄
 	"sep.slash": "\ue0bb",
 	// pick:  | alt: │ ┃ |
@@ -778,18 +504,8 @@ export const NERD_SYMBOLS: SymbolMap = {
 	// Markdown-specific
 	// pick: │ | alt: ┃ ║
 	"md.quoteBorder": "│",
-	// pick: ─ | alt: ━ ═
-	"md.hrChar": "─",
 	// pick:  | alt:  •
 	"md.bullet": "\uf111",
-	// pick: ■ | alt:  (U+F096)
-	"md.colorSwatch": "■",
-	// pick: ▎ | alt: ┃ │
-	"advisor.rail": "▎",
-	// pick: ▏ | alt: │ ▎
-	"block.rail": "▏",
-	// Language icons (nerd font devicons)
-	"lang.default": "",
 	"lang.typescript": "\u{E628}",
 	"lang.javascript": "\u{E60C}",
 	"lang.python": "\u{E606}",

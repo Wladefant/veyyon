@@ -32,6 +32,7 @@ function makeHarness(options: {
 	hasHero?: boolean;
 }) {
 	const state = {
+		columns: 80,
 		composedFrameRows: options.composedFrameRows ?? 0,
 		transcriptChildren: options.transcriptChildren ?? 0,
 		hasHero: options.hasHero ?? false,
@@ -40,7 +41,12 @@ function makeHarness(options: {
 	};
 	const children: Array<{ render: (width: number) => readonly string[] }> = [block(options.contentRows)];
 	const ui = {
-		terminal: { columns: 80, rows: options.rows },
+		terminal: {
+			get columns() {
+				return state.columns;
+			},
+			rows: options.rows,
+		},
 		get composedFrameRows() {
 			return state.composedFrameRows;
 		},
@@ -150,6 +156,28 @@ describe("HomeAnchorLayout.sync — home-screen slack", () => {
 			tail: [30],
 			bottom: 10,
 		});
+	});
+
+	test.each([0, 4, 40])("uses height-only measurement without advancing rendering: %i rows", height => {
+		const measured = {
+			measureHeight: (width: number) => Math.ceil((height * 80) / width),
+			render: (): readonly string[] => {
+				throw new Error("Layout must not start painting");
+			},
+			renderViewportTail: (): readonly string[] => {
+				throw new Error("Height measurement must precede tail rendering");
+			},
+		};
+		const { layout, children, state } = makeHarness({ rows: 30, contentRows: 8 });
+		children.splice(1, 0, measured);
+		layout.sync();
+		expect(rowsOf(layout.topFill)).toBe(0);
+		expect(rowsOf(layout.bottomFill)).toBe(Math.max(0, 22 - height));
+
+		state.columns = 40;
+		layout.sync();
+		expect(rowsOf(layout.topFill)).toBe(0);
+		expect(rowsOf(layout.bottomFill)).toBe(Math.max(0, 22 - height * 2));
 	});
 
 	test("the measurement saturates at the viewport, so a long transcript routes no slack", () => {

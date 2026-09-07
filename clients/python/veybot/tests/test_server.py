@@ -2135,7 +2135,11 @@ async def test_handle_comment_directive_bootstraps_untriaged_issue(
     async def _resolve(_gh, _payload):
         return repo, issue
 
+    async def _fake_attach(_gh, d, _r, _n, *, is_pr=False):
+        return d
+
     monkeypatch.setattr(tasks, "_resolve_repo_and_issue", _resolve)
+    monkeypatch.setattr(tasks, "_attach_thread", _fake_attach)
 
     payload = {
         "action": "created",
@@ -2197,7 +2201,11 @@ async def test_handle_comment_directive_reopens_finalized_issue(
     async def _resolve(_gh, _payload):
         return repo, issue
 
+    async def _fake_attach(_gh, d, _r, _n, *, is_pr=False):
+        return d
+
     monkeypatch.setattr(tasks, "_resolve_repo_and_issue", _resolve)
+    monkeypatch.setattr(tasks, "_attach_thread", _fake_attach)
 
     post_comment_calls: list = []
 

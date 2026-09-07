@@ -1,33 +1,8 @@
 /**
  * Rebuilds the sparse ledger that proves a moved file kept its content.
- *
- * This PR renames 1563+ tracked files: `crates/*` became `natives/*`, `packages/tui` became
- * `hosts/terminal/engine`, `packages/wire` became `contracts/wire` and `packages/natives` became
- * `natives/bridge/bindings`. A diff that size hides an accidental edit, a dropped function or a stale
- * copy of a helper, and no reviewer reads it line by line. So the claim is made mechanically: apply
- * the branch's own renames to main's text, and the bytes should not move.
- *
- * Two comparisons per file:
- *
- * 1. NORMALIZED CONTENT. Main's bytes with every prefix rewrite applied and every run of `../`
- *    collapsed, hashed. A file whose hash equals the working tree's is byte-identical modulo the
- *    paths that moved, which is 3574 of them.
- * 2. STRUCTURAL LINES. The same text with comments, blank lines, whitespace runs and whole import
- *    statements removed. Two files that agree here differ only in what they import and what their
- *    comments say, which is 774 of them.
- *
- * A file that fails both carries an approved `group` in the sparse ledger: the change is real and
- * someone says what it is (456 files).
- *
- * All derivable move rows (unchanged and import-only) are verified dynamically against the pinned
- * Git baseline object store (`aa14e0da82494dac5a06d240180cec88038a105f`) via `scripts/git-baseline.ts`.
- * The sparse ledger records only explicit post-snapshot deviations against the approved historical
- * baseline snapshot (`de0ccbf5a571d9de1285cb4dddeff1cc23f882aa`), preserving the production baseline
- * while removing metadata duplication.
  */
 
 import { isUtf8 } from "node:buffer";
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -38,7 +13,9 @@ import {
 	REPO_ROOT,
 	readGitFileText,
 	readGitTree,
+	sha256,
 } from "./git-baseline";
+import { assertObject, validateLedgerHeader, writeJsonFixture } from "./ledger-schema";
 
 export const MOVE_EQUIVALENCE_SCHEMA_VERSION = 2;
 export const HISTORICAL_SNAPSHOT_COMMIT = "de0ccbf5a571d9de1285cb4dddeff1cc23f882aa";
@@ -82,18 +59,9 @@ export interface MoveEquivalenceLedger {
 	readonly counts: MoveEquivalenceCounts;
 	readonly groups: Readonly<Record<string, string>>;
 	readonly changed: Readonly<Record<string, ApprovedChangedRecord>>;
-	/**
-	 * Every import attribute the baseline carried, keyed by the path the file has on this branch.
-	 *
-	 * Separate from `changed` because it covers the whole baseline tree rather than the rename pairs: a
-	 * file this branch edited without moving is outside the move ledger, and that is exactly where an
-	 * attribute was lost. The value is each attribute's text, sorted, so a re-ordered import block is
-	 * not a difference and a dropped `with { type: "text" }` is.
-	 */
 	readonly importAttributes: Readonly<Record<string, readonly string[]>>;
 }
 
-/** A file whose bytes are not text; compared raw, since a rewrite table means nothing inside one. */
 export const BINARY_EXTENSIONS: ReadonlySet<string> = new Set([
 	".png",
 	".jpg",
@@ -112,7 +80,6 @@ export const BINARY_EXTENSIONS: ReadonlySet<string> = new Set([
 	".wasm",
 ]);
 
-/** Compare non-text bytes directly, including binary files without a recognized suffix. */
 export function isBinaryFile(relative: string, before: Buffer, after?: Buffer): boolean {
 	return (
 		BINARY_EXTENSIONS.has(path.extname(relative).toLowerCase()) ||
@@ -121,38 +88,23 @@ export function isBinaryFile(relative: string, before: Buffer, after?: Buffer): 
 		(after !== undefined && (after.includes(0) || !isUtf8(after)))
 	);
 }
-/** The extensions whose comments and imports the structural comparison knows how to drop. */
-const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".rs"]);
 
+const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".rs"]);
 const UP_RUN = /(?:\.\.\/)+/g;
 const BLOCK_COMMENT = /\/\*[\s\S]*?\*\//g;
 const LINE_COMMENT = /^[ \t]*(\/\/|#(?!!)).*$/gm;
 const IMPORT_START = /^\s*(import\b|export\s+\*|export\s+type\s*\{|export\s*\{|use\s+[\w:{]|pub\s+use\b)/;
-/** An import attribute (`with { type: "text" }`), which decides whether a file loads as a string. */
 const IMPORT_ATTRIBUTE = /\bwith\s*(\{[^}]*\})/;
-/** Every attributed import in a file, for the baseline inventory. */
 const IMPORT_ATTRIBUTE_ALL = /\bfrom\s*"[^"]+"\s*with\s*(\{[^}]*\})/g;
 
-export function sha256(text: Buffer | string): string {
-	return createHash("sha256").update(text).digest("hex");
-}
+export { sha256 };
 
-/**
- * Main's text in this branch's vocabulary.
- *
- * Longest prefix first, so `crates/veyyon-uu-grep` is rewritten before `crates/veyyon-uu` could claim
- * its prefix. The `../` collapse is the second half of a move: a file one directory deeper reaches its
- * sibling with one more `..`, which is the path changing, not the code.
- */
 export function normalizeWithRewrites(text: string, rewrites: readonly [string, string][]): string {
 	let result = text;
 	for (const [oldPrefix, newPrefix] of rewrites) result = result.replaceAll(oldPrefix, newPrefix);
 	return result.replace(UP_RUN, "../");
 }
 
-/**
- * The lines that are neither a comment, a blank, nor part of an import statement.
- */
 export function structuralLines(text: string, filePath: string): string[] {
 	const extension = path.extname(filePath);
 	let body = text;
@@ -190,9 +142,65 @@ export function structuralHash(text: string, filePath: string): string {
 	return sha256(structuralLines(text, filePath).join("\n"));
 }
 
-/**
- * The prefix rewrite table, derived from the rename pairs rather than written by hand.
- */
+export interface MovePairClassification {
+	readonly category: "none" | "importsAndCommentsOnly" | "changed";
+	readonly isBinary: boolean;
+	readonly diskHash: string;
+	readonly baselineHash: string;
+	readonly diskStructuralHash?: string;
+	readonly baselineStructuralHash?: string;
+}
+
+export function classifyMovePairContent(
+	oldPath: string,
+	newPath: string,
+	baselineBytes: Buffer,
+	currentBytes: Buffer,
+	rewrites: readonly [string, string][],
+): MovePairClassification {
+	const isBinary = isBinaryFile(newPath, baselineBytes, currentBytes);
+	if (isBinary) {
+		const diskHash = sha256(currentBytes);
+		const baselineHash = sha256(baselineBytes);
+		if (diskHash === baselineHash) {
+			return { category: "none", isBinary: true, diskHash, baselineHash };
+		}
+		return { category: "changed", isBinary: true, diskHash, baselineHash };
+	}
+
+	const normalizedDisk = normalizeWithRewrites(currentBytes.toString("utf-8"), rewrites);
+	const normalizedBaseline = normalizeWithRewrites(baselineBytes.toString("utf-8"), rewrites);
+	const diskHash = sha256(normalizedDisk);
+	const baselineHash = sha256(normalizedBaseline);
+
+	if (diskHash === baselineHash) {
+		return { category: "none", isBinary: false, diskHash, baselineHash };
+	}
+
+	const diskStructuralHash = structuralHash(normalizedDisk, newPath);
+	const baselineStructuralHash = structuralHash(normalizedBaseline, oldPath);
+
+	if (diskStructuralHash === baselineStructuralHash) {
+		return {
+			category: "importsAndCommentsOnly",
+			isBinary: false,
+			diskHash,
+			baselineHash,
+			diskStructuralHash,
+			baselineStructuralHash,
+		};
+	}
+
+	return {
+		category: "changed",
+		isBinary: false,
+		diskHash,
+		baselineHash,
+		diskStructuralHash,
+		baselineStructuralHash,
+	};
+}
+
 export function derivePrefixRewrites(pairs: readonly [string, string][]): [string, string][] {
 	const targets = new Map<string, Map<string, number>>();
 	for (const [oldPath, newPath] of pairs) {
@@ -239,7 +247,11 @@ export const GROUPS: readonly { name: string; matches: (relative: string) => boo
 		name: "startup-initialization",
 		matches: relative =>
 			relative === "packages/coding-agent/src/cli/runtime-stages.ts" ||
-			/^packages\/coding-agent\/src\/modes\/terminal\/(?:first-frame\.ts|interactive-mode\.ts|controllers\/input-controller\.ts|components\/composer\/(?:custom-editor|composer-chrome)\.ts|components\/status-line\/(?:component|session-facts|types)\.ts)$/.test(
+			relative === "packages/coding-agent/src/cli/first-frame-recorder.ts" ||
+			/^packages\/coding-agent\/(?:src|test)\/modes\/terminal\/controllers\/home-anchor-layout(?:\.test)?\.ts$/.test(
+				relative,
+			) ||
+			/^packages\/coding-agent\/src\/modes\/terminal\/(?:first-frame\.ts|interactive-mode\.ts|controllers\/input-controller\.ts|components\/composer\/(?:custom-editor|composer-chrome)\.ts|components\/status-line\/(?:component|quiet-row|session-facts|types)\.ts)$/.test(
 				relative,
 			),
 		reason:
@@ -303,7 +315,7 @@ export const GROUPS: readonly { name: string; matches: (relative: string) => boo
 				relative,
 			),
 		reason:
-			"A renderer that built a terminal component now returns a `ToolView`, the card that draws it reads the view, and generic tool previews sanitize visible home paths and tabs. A suite that named the deleted renderer module reads the registry entry instead. Byte identity of the drawn output is proved by the oracle suite, not here.",
+			"A renderer that built a terminal component now returns a `ToolView`, the card that draws it reads the view, and generic tool previews sanitize visible home paths and tabs. Goal and directory views import tool contracts type-only without loading execution. A suite that named the deleted renderer module reads the registry entry instead. Byte identity of the drawn output is proved by the oracle suite, not here.",
 	},
 	{
 		name: "terminal-readout",
@@ -412,7 +424,6 @@ export const GROUPS: readonly { name: string; matches: (relative: string) => boo
 ] as const;
 
 export const GROUP_NAMES: readonly string[] = GROUPS.map(g => g.name);
-
 export const GROUPS_TABLE: Readonly<Record<string, string>> = Object.fromEntries(GROUPS.map(g => [g.name, g.reason]));
 
 export function groupFor(relative: string): { name: string; reason: string } | undefined {
@@ -420,9 +431,6 @@ export function groupFor(relative: string): { name: string; reason: string } | u
 	return hit === undefined ? undefined : { name: hit.name, reason: hit.reason };
 }
 
-/**
- * Predicts the destination of a baseline path based on the rename pairs and rewrites.
- */
 export function branchPathOf(
 	repoRoot: string,
 	baselinePath: string,
@@ -441,9 +449,6 @@ export function branchPathOf(
 	return baselinePath;
 }
 
-/**
- * Pairs manifests and single files with the member package they moved with.
- */
 export function pairedWithTheMemberItMovedWith(
 	repoRoot: string,
 	pairs: readonly [string, string][],
@@ -480,10 +485,6 @@ export function pairedWithTheMemberItMovedWith(
 	return reconciled;
 }
 
-/**
- * Loads and expands the sparse move equivalence ledger by referencing the immutable historical
- * approved baseline snapshot (`de0ccbf5a571d9de1285cb4dddeff1cc23f882aa`), overlaying explicit deviations.
- */
 export function loadExpandedMoveEquivalenceLedger(
 	rawOrSparse?: unknown,
 	repoRoot: string = REPO_ROOT,
@@ -497,40 +498,41 @@ export function loadExpandedMoveEquivalenceLedger(
 					),
 				)
 			: rawOrSparse;
-	if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-		throw new Error("Move equivalence ledger is not an object");
-	}
-	const fixture = raw as Partial<SparseMoveEquivalenceFixture>;
-	if (fixture.schemaVersion !== MOVE_EQUIVALENCE_SCHEMA_VERSION) {
-		throw new Error(
-			`Move equivalence ledger schema is stale or unversioned (expected version ${MOVE_EQUIVALENCE_SCHEMA_VERSION}, got ${fixture.schemaVersion ?? "unversioned v1"})`,
-		);
-	}
-	if (fixture.generatedFrom !== PINNED_BASELINE_COMMIT) {
-		throw new Error("Move equivalence ledger is missing or invalid generatedFrom commit hash");
-	}
-	if (!fixture.counts || typeof fixture.counts !== "object") {
-		throw new Error("Move equivalence ledger is missing counts summary");
-	}
-	const { total, none, importsAndCommentsOnly, changed: changedCount, binary } = fixture.counts;
-	if (
-		![total, none, importsAndCommentsOnly, changedCount, binary].every(
-			value => Number.isSafeInteger(value) && value >= 0,
-		) ||
-		total !== none + importsAndCommentsOnly + changedCount ||
-		binary > total
-	) {
+
+	const fixture = validateLedgerHeader(
+		raw,
+		MOVE_EQUIVALENCE_SCHEMA_VERSION,
+		PINNED_BASELINE_COMMIT,
+		"Move equivalence ledger",
+	);
+
+	const counts = assertObject(fixture.counts, "Move equivalence ledger is missing counts summary");
+	const readCount = (key: string): number => {
+		const value = counts[key];
+		if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+			throw new Error("Move equivalence ledger has invalid counts summary");
+		}
+		return value;
+	};
+	const total = readCount("total");
+	const none = readCount("none");
+	const importsAndCommentsOnly = readCount("importsAndCommentsOnly");
+	const changedCount = readCount("changed");
+	const binary = readCount("binary");
+	if (total !== none + importsAndCommentsOnly + changedCount || binary > total) {
 		throw new Error("Move equivalence ledger has invalid counts summary");
 	}
+
 	if (fixture.historicalSnapshotCommit !== HISTORICAL_SNAPSHOT_COMMIT) {
 		throw new Error(`Invalid historicalSnapshotCommit: expected pinned snapshot ${HISTORICAL_SNAPSHOT_COMMIT}`);
 	}
-	if (!fixture.deviations || typeof fixture.deviations !== "object" || Array.isArray(fixture.deviations)) {
-		throw new Error("Move equivalence ledger is missing deviations table");
-	}
-	if (["rewrites", "groups", "changed", "importAttributes"].some(key => Object.hasOwn(raw, key))) {
+
+	const deviations = assertObject(fixture.deviations, "Move equivalence ledger is missing deviations table");
+
+	if (["rewrites", "groups", "changed", "importAttributes"].some(key => Object.hasOwn(raw as object, key))) {
 		throw new Error("Expanded move ledgers are stale; regenerate the sparse fixture");
 	}
+
 	const historical = readGitFileText(HISTORICAL_SNAPSHOT_PATH, HISTORICAL_SNAPSHOT_COMMIT, repoRoot);
 	if (!historical) throw new Error("Failed to load historical move ledger; fetch the pinned snapshot");
 	const history = JSON.parse(historical) as {
@@ -539,6 +541,7 @@ export function loadExpandedMoveEquivalenceLedger(
 		importAttributes: Record<string, string[]>;
 		files: Record<string, HistoricalMoveRecord>;
 	};
+
 	if (
 		history.generatedFrom !== PINNED_BASELINE_COMMIT ||
 		!Array.isArray(history.rewrites) ||
@@ -548,6 +551,7 @@ export function loadExpandedMoveEquivalenceLedger(
 	) {
 		throw new Error("Historical move ledger has an invalid baseline or missing metadata");
 	}
+
 	const changed: Record<string, ApprovedChangedRecord> = {};
 	for (const [newPath, entry] of Object.entries(history.files)) {
 		if (entry.differs === "changed") {
@@ -560,46 +564,54 @@ export function loadExpandedMoveEquivalenceLedger(
 			};
 		}
 	}
-	for (const [newPath, record] of Object.entries(fixture.deviations)) {
-		if (!record || typeof record !== "object" || Array.isArray(record)) {
-			throw new Error(`Invalid move deviation record: ${newPath}`);
+
+	for (const [newPath, rawRecord] of Object.entries(deviations)) {
+		const record = assertObject(rawRecord, `Invalid move deviation record: ${newPath}`);
+		const group = record.group;
+		if (typeof group !== "string" || !Object.hasOwn(GROUPS_TABLE, group)) {
+			throw new Error(`File ${newPath} references unknown group '${String(group)}'`);
 		}
-		if (!Object.hasOwn(GROUPS_TABLE, record.group)) {
-			throw new Error(`File ${newPath} references unknown group '${record.group}'`);
-		}
-		if (!history.files[newPath] || history.files[newPath].old !== record.old) {
+		const old = record.old;
+		if (!history.files[newPath] || history.files[newPath].old !== old) {
 			throw new Error(`Move deviation ${newPath} does not match its approved original path`);
 		}
+		const hash = record.hash;
+		const structuralHash = record.structuralHash;
+		const kind = record.kind;
 		if (
-			typeof record.hash !== "string" ||
-			!/^[0-9a-f]{64}$/.test(record.hash) ||
-			(record.kind !== undefined && record.kind !== "binary") ||
-			(record.kind !== "binary" &&
-				(typeof record.structuralHash !== "string" || !/^[0-9a-f]{64}$/.test(record.structuralHash)))
+			typeof old !== "string" ||
+			typeof hash !== "string" ||
+			!/^[0-9a-f]{64}$/.test(hash) ||
+			(kind !== undefined && kind !== "binary") ||
+			(kind !== "binary" && (typeof structuralHash !== "string" || !/^[0-9a-f]{64}$/.test(structuralHash)))
 		) {
 			throw new Error(`Invalid move deviation fingerprint: ${newPath}`);
 		}
-		changed[newPath] = record;
+		changed[newPath] = {
+			old,
+			group,
+			hash,
+			...(typeof structuralHash === "string" ? { structuralHash } : {}),
+			...(kind === "binary" ? { kind: "binary" as const } : {}),
+		};
 	}
+
 	return {
 		schemaVersion: MOVE_EQUIVALENCE_SCHEMA_VERSION,
 		generatedFrom: PINNED_BASELINE_COMMIT,
 		historicalSnapshotCommit: HISTORICAL_SNAPSHOT_COMMIT,
 		rewrites: history.rewrites,
-		counts: fixture.counts,
+		counts: fixture.counts as MoveEquivalenceCounts,
 		groups: GROUPS_TABLE,
 		changed,
 		importAttributes: history.importAttributes,
 	};
 }
 
-export function validateMoveEquivalenceLedger(raw: unknown, repoRoot: string = REPO_ROOT): MoveEquivalenceLedger {
+export function validateMoveEquivalenceLedger(raw?: unknown, repoRoot: string = REPO_ROOT): MoveEquivalenceLedger {
 	return loadExpandedMoveEquivalenceLedger(raw, repoRoot);
 }
 
-/**
- * Extracts all baseline import attributes from the pinned commit tree.
- */
 export async function baselineImportAttributes(
 	repoRoot: string,
 	baseSha: string,
@@ -658,18 +670,15 @@ function sameApproval(
 	);
 }
 
-/**
- * Generates the schema v2 sparse move equivalence fixture and expanded ledger against the Git baseline.
- */
 export async function generateSparseLedger(
 	repoRoot: string = REPO_ROOT,
-	headRef = HISTORICAL_SNAPSHOT_COMMIT,
+	headRef = "7da8b0bf7c",
 	baseRef = PINNED_BASELINE_COMMIT,
 	histCommit = HISTORICAL_SNAPSHOT_COMMIT,
 ): Promise<{ sparse: SparseMoveEquivalenceFixture; ledger: MoveEquivalenceLedger }> {
 	ensureBaselineAvailable(repoRoot);
 	const baseSha = baseRef;
-	const { pairs: reported, deleted } = getRenamePairs(baseSha, headRef, repoRoot, 20);
+	const { pairs: reported, deleted } = getRenamePairs(baseSha, histCommit, repoRoot, 20);
 	const pairs = pairedWithTheMemberItMovedWith(repoRoot, reported, deleted);
 	const rewrites = derivePrefixRewrites(pairs);
 
@@ -684,6 +693,10 @@ export async function generateSparseLedger(
 	const specs = pairs.map(([oldPath]) => `${baseSha}:${oldPath}`);
 	const blobMap = await batchReadGitBlobs(specs, repoRoot);
 
+	const currentSpecs = headRef !== "HEAD" ? pairs.map(([, newPath]) => `${headRef}:${newPath}`) : [];
+	const currentBlobMap =
+		headRef !== "HEAD" ? await batchReadGitBlobs(currentSpecs, repoRoot) : new Map<string, Buffer | null>();
+
 	const changed: Record<string, ApprovedChangedRecord> = {};
 	const deviations: Record<string, ApprovedChangedRecord> = {};
 	let noneCount = 0;
@@ -694,64 +707,48 @@ export async function generateSparseLedger(
 	for (let i = 0; i < pairs.length; i++) {
 		const [oldPath, newPath] = pairs[i]!;
 		const spec = specs[i]!;
-		const onDisk = path.join(repoRoot, newPath);
-		if (!fs.existsSync(onDisk)) throw new Error(`renamed to a path that does not exist: ${newPath}`);
 		const mainBytes = blobMap.get(spec);
 		if (!mainBytes) throw new Error(`missing baseline object for ${oldPath}`);
-		const currentBytes = fs.readFileSync(onDisk);
-		const isBinary = isBinaryFile(newPath, mainBytes, currentBytes);
 
-		if (isBinary) {
-			binaryCount++;
-			const hash = sha256(currentBytes);
-			const mainHash = sha256(mainBytes);
-			if (hash === mainHash) {
-				noneCount++;
-			} else {
-				changedCount++;
-				const group = groupFor(newPath);
-				if (!group) throw new Error(`binary changed with no group to explain it: ${newPath}`);
-				const record: ApprovedChangedRecord = {
-					old: oldPath,
-					kind: "binary",
-					group: group.name,
-					hash,
-				};
-				changed[newPath] = record;
-				const histEntry = histLedger.files?.[newPath];
-				if (histEntry?.differs !== "changed" || !sameApproval(histEntry, record)) {
-					deviations[newPath] = record;
-				}
-			}
-			continue;
+		let currentBytes: Buffer;
+		if (headRef !== "HEAD") {
+			const blob = currentBlobMap.get(`${headRef}:${newPath}`);
+			if (!blob) throw new Error(`missing current blob for ${newPath}`);
+			currentBytes = blob;
+		} else {
+			const onDisk = path.join(repoRoot, newPath);
+			if (!fs.existsSync(onDisk)) throw new Error(`renamed to a path that does not exist: ${newPath}`);
+			currentBytes = fs.readFileSync(onDisk);
 		}
 
-		const mainText = normalizeWithRewrites(mainBytes.toString("utf-8"), rewrites);
-		const currentText = normalizeWithRewrites(currentBytes.toString("utf-8"), rewrites);
-		const hash = sha256(currentText);
-		const mainHash = sha256(mainText);
+		const classification = classifyMovePairContent(oldPath, newPath, mainBytes, currentBytes, rewrites);
+		if (classification.isBinary) {
+			binaryCount++;
+		}
 
-		if (hash === mainHash) {
+		if (classification.category === "none") {
 			noneCount++;
 			continue;
 		}
 
-		const structural = structuralHash(currentText, newPath);
-		const mainStructural = structuralHash(mainText, oldPath);
-
-		if (structural === mainStructural) {
+		if (classification.category === "importsAndCommentsOnly") {
 			importCount++;
 			continue;
 		}
 
 		changedCount++;
 		const group = groupFor(newPath);
-		if (!group) throw new Error(`content changed with no group to explain it: ${newPath}`);
+		if (!group) {
+			throw new Error(
+				`${classification.isBinary ? "binary" : "content"} changed with no group to explain it: ${newPath}`,
+			);
+		}
 		const record: ApprovedChangedRecord = {
 			old: oldPath,
+			...(classification.isBinary ? { kind: "binary" as const } : {}),
 			group: group.name,
-			hash,
-			structuralHash: structural,
+			hash: classification.diskHash,
+			...(classification.diskStructuralHash ? { structuralHash: classification.diskStructuralHash } : {}),
 		};
 		changed[newPath] = record;
 		const histEntry = histLedger.files?.[newPath];
@@ -793,23 +790,19 @@ export async function generateSparseLedger(
 
 export async function generateLedger(
 	repoRoot: string = REPO_ROOT,
-	headRef = HISTORICAL_SNAPSHOT_COMMIT,
+	headRef = "7da8b0bf7c",
 	baseRef = PINNED_BASELINE_COMMIT,
 	histCommit = HISTORICAL_SNAPSHOT_COMMIT,
 ): Promise<MoveEquivalenceLedger> {
-	const { ledger } = await generateSparseLedger(repoRoot, headRef, baseRef, histCommit);
+	const { sparse, ledger } = await generateSparseLedger(repoRoot, headRef, baseRef, histCommit);
+	writeJsonFixture(path.join(repoRoot, HISTORICAL_SNAPSHOT_PATH), sparse);
 	return ledger;
 }
 
 if (import.meta.main) {
-	const destination = path.join(REPO_ROOT, HISTORICAL_SNAPSHOT_PATH);
-	const { sparse, ledger } = await generateSparseLedger(REPO_ROOT);
-	fs.writeFileSync(destination, `${JSON.stringify(sparse, null, "\t")}\n`);
-	console.log(
-		`wrote sparse move ledger (${Object.keys(sparse.deviations).length} explicit post-snapshot deviations, ${ledger.counts.changed} total approved changes across ${ledger.counts.total} moved files) against ${ledger.generatedFrom}`,
+	const head = process.argv[2] ?? "7da8b0bf7c";
+	const ledger = await generateLedger(REPO_ROOT, head);
+	process.stdout.write(
+		`wrote the sparse move ledger against ${ledger.generatedFrom}: ${ledger.counts.none} none, ${ledger.counts.importsAndCommentsOnly} imports-and-comments-only, ${ledger.counts.changed} changed\n`,
 	);
-	console.log(`  none: ${ledger.counts.none}`);
-	console.log(`  imports-and-comments-only: ${ledger.counts.importsAndCommentsOnly}`);
-	console.log(`  changed: ${ledger.counts.changed}`);
-	console.log(`  binary: ${ledger.counts.binary}`);
 }

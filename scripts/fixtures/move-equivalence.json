@@ -4,8 +4,8 @@
 	"historicalSnapshotCommit": "de0ccbf5a571d9de1285cb4dddeff1cc23f882aa",
 	"counts": {
 		"total": 4804,
-		"none": 3574,
-		"importsAndCommentsOnly": 773,
+		"none": 3594,
+		"importsAndCommentsOnly": 753,
 		"changed": 457,
 		"binary": 26
 	},

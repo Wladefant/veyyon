@@ -1,7 +1,7 @@
-import { parseJsonWithRepair, parseStreamingJson } from "@veyyon/utils/json-parse";
+import { parseStreamingJson } from "@veyyon/utils/json-parse";
 import { AI_PROMPTS } from "../prompts/registry";
 import type { ToolCall } from "../types";
-import { mintToolCallId, partialSuffixOverlapAny, recordOrEmpty } from "./coercion";
+import { mintToolCallId, parseNamedToolCall, partialSuffixOverlapAny, recordOrEmpty } from "./coercion";
 import { chatMlTranscriptRenderer, renderThinkTags, renderToolResponseResults, stringifyJson } from "./rendering";
 import type {
 	DialectDefinition,
@@ -130,7 +130,7 @@ class Qwen3InbandScanner implements InbandScanner {
 			return;
 		}
 
-		const parsed = this.#parseCall(body);
+		const parsed = parseNamedToolCall(body);
 		const rawBlock = `${TOOL_CALL_OPEN}${body}${TOOL_CALL_CLOSE}`;
 		if (parsed) {
 			if (!this.#started) {
@@ -194,26 +194,6 @@ class Qwen3InbandScanner implements InbandScanner {
 		this.#name = name;
 		this.#started = true;
 		events.push({ type: "toolStart", id: this.#id, name: this.#name });
-	}
-
-	#parseCall(body: string): { name: string; arguments: Record<string, unknown> } | undefined {
-		try {
-			const parsed = parseJsonWithRepair<{ name?: unknown; arguments?: unknown }>(body.trim());
-			if (typeof parsed.name !== "string" || parsed.name.length === 0) return undefined;
-			let args = parsed.arguments;
-			if (typeof args === "string") {
-				// Double-encoded arguments: parse the stringified object. If unrepairable,
-				// let it throw to the outer catch so the one best-effort-end path handles
-				// it — never silently replaced with {} here (a Law-10 silent fallback).
-				args = parseJsonWithRepair<unknown>(args);
-			}
-			return { name: parsed.name, arguments: recordOrEmpty(args) };
-		} catch {
-			// Same contract as the Hermes scanner: `undefined` means "not a call", and the caller balances
-			// any announced `toolStart` with a best-effort `toolEnd` rather than stranding it with empty
-			// arguments. The failure is visible in the emitted raw block, not discarded.
-			return undefined;
-		}
 	}
 
 	#resetTool(): void {

@@ -6,7 +6,7 @@ import type { Theme } from "@veyyon/coding-agent/theme/theme-class";
 import type { Component } from "@veyyon/tui";
 import { loadHistoricalOracle } from "./historical-loader";
 
-const oracle = loadHistoricalOracle("review-main-renderer");
+const oracle = await loadHistoricalOracle("review-main-renderer");
 
 export type FindingPriority = "P0" | "P1" | "P2" | "P3";
 

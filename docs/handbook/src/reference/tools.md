@@ -26,6 +26,20 @@ Hashline flow: `read`/`search` mint `[path#TAG]` anchors → model copies tags i
 `@veyyon/hashline` applies ops. See [Edit engine](../edit/engine.md) and
 [`docs/tools/edit.md`](../../../tools/edit.md).
 
+### Late diagnostics
+
+Late diagnostics are grouped by file, with errors before warnings and informational
+messages. Paths under the home directory use `~`. Collapsed messages show a held-back
+count; the tool-output expansion key (`Ctrl+O` by default) displays the remaining messages.
+
+Record the collapsed and expanded states with:
+
+```sh
+proof/record.sh --width 960 proof/scenes/late-diagnostics.sh
+proof/record.sh --width 1200 proof/scenes/late-diagnostics.sh
+proof/record.sh --width 1440 proof/scenes/late-diagnostics.sh
+```
+
 ## Read and search
 
 | Tool | Purpose |

@@ -7,7 +7,7 @@ import type { Theme } from "@veyyon/coding-agent/theme/theme-class";
 import type { Component } from "@veyyon/tui";
 import { type LegacyRenderer, loadHistoricalOracle } from "./historical-loader";
 
-const oracle = loadHistoricalOracle("irc-main-renderer");
+const oracle = await loadHistoricalOracle("irc-main-renderer");
 
 export const createIrcMessageCard = oracle.createIrcMessageCard as (
 	card: IrcMessageCard,

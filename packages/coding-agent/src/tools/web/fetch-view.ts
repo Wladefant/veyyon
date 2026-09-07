@@ -15,11 +15,10 @@ import type { FramedBlockView, StatusRowView, ToolView, ToolViewRenderer, ViewLi
 import { applyListLimit } from "../core/list-limit";
 // The notice module that owns the reference, not `output-meta`, which forwards it through the
 // settings schema and the tool wrapper: this file only needs the sentence an artifact is named by.
-import { formatFullOutputReference } from "../core/output-notice";
-import { getDomain } from "../core/render-utils";
+import { extractResultText, formatFullOutputReference } from "../core/output-notice";
+import { getDomain, heldBack, LINE_NOUN, metadataLine, type ToolViewResult } from "../core/render-utils";
 import type { ReadUrlToolDetails } from "./fetch";
 import { parseReadUrlTarget } from "./read-url-target";
-import { metadataLine } from "./search/view";
 
 /** The arguments the card reads off a read_url call, which is the path and how it was asked for. */
 export interface ReadUrlViewArgs {
@@ -29,11 +28,7 @@ export interface ReadUrlViewArgs {
 }
 
 /** The result the card reads, which is the tool's own result shape narrowed to what a card shows. */
-export interface ReadUrlViewResult {
-	content: Array<{ type: string; text?: string }>;
-	details?: ReadUrlToolDetails;
-	isError?: boolean;
-}
+export interface ReadUrlViewResult extends ToolViewResult<ReadUrlToolDetails> {}
 
 /** Lines shown before the preview says how many it held back, at each disclosure state. */
 const PREVIEW_LIMITS = { collapsed: 3, expanded: 12 } as const;
@@ -73,7 +68,7 @@ function describeUrl(input: string | undefined): Pick<StatusRowView, "descriptio
 }
 
 function errorView(result: ReadUrlViewResult): FramedBlockView {
-	const rawErrorText = result.content?.find(c => c.type === "text")?.text ?? "";
+	const rawErrorText = extractResultText(result.content);
 	const errorText = (rawErrorText || "No response data").replace(/^Error:\s*/, "");
 	const details = result.details;
 	return {
@@ -134,8 +129,7 @@ function previewSection(body: string, expanded: boolean): ViewSection {
 		lines,
 		// Only when something is missing: a preview that shows the whole page holds nothing back, and a
 		// host offered a gesture for nothing would be pointing at rows that are already there.
-		hidden:
-			remaining > 0 ? { count: remaining, noun: { one: "line", many: "lines" }, revealable: !expanded } : undefined,
+		hidden: heldBack(remaining, LINE_NOUN, !expanded),
 	};
 }
 
@@ -160,7 +154,7 @@ export const readUrlToolView: Required<ToolViewRenderer<ReadUrlViewArgs, ReadUrl
 		const details = result.details;
 		if (result.isError || !details) return errorView(result);
 
-		const contentText = result.content[0]?.text ?? "";
+		const contentText = extractResultText(result.content);
 		const body = contentText.includes("---\n\n")
 			? contentText.split("---\n\n").slice(1).join("---\n\n")
 			: contentText;

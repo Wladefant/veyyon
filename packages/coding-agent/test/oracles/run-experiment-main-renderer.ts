@@ -7,7 +7,7 @@ import type { Theme } from "@veyyon/coding-agent/theme/theme-class";
 import type { Component } from "@veyyon/tui";
 import { loadHistoricalOracle } from "./historical-loader";
 
-const oracle = loadHistoricalOracle("run-experiment-main-renderer");
+const oracle = await loadHistoricalOracle("run-experiment-main-renderer");
 
 export interface RunExperimentRenderArgs {}
 

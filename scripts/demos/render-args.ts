@@ -80,3 +80,35 @@ export async function initRender(themeName: string, options: { settings?: boolea
 		setDetectedTerminalGround(ground);
 	}
 }
+
+export interface RenderContext {
+	theme: string;
+	width: number;
+	height: number;
+	flag: (name: string, fallback?: string) => string;
+	hasFlag: (name: string) => boolean;
+}
+
+/**
+ * Standard driver for proof renderers: brings up theme/settings and writes stdout.
+ */
+export async function renderDemo(
+	draw: (ctx: RenderContext) => Promise<readonly string[] | string> | readonly string[] | string,
+	options: { settings?: boolean; defaultTheme?: string; defaultHeight?: number } = {},
+): Promise<void> {
+	const themeName = flag("theme", options.defaultTheme ?? "titanium");
+	const width = renderWidth();
+	const height = Number(flag("height", String(options.defaultHeight ?? Number(flag("rows", "24")))));
+	Object.defineProperty(process.stdout, "rows", { configurable: true, value: height, get: () => height });
+	Object.defineProperty(process.stdout, "columns", { configurable: true, value: width, get: () => width });
+	await initRender(themeName, { settings: options.settings });
+	const result = await draw({
+		theme: themeName,
+		width,
+		height,
+		flag: (name: string, fallback = "") => flag(name, fallback),
+		hasFlag: (name: string) => hasFlag(name),
+	});
+	const lines = typeof result === "string" ? [result] : result;
+	process.stdout.write(`${lines.join("\n")}\n`);
+}

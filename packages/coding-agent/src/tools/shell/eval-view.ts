@@ -21,7 +21,6 @@ import type {
 	ToolView,
 	ToolViewContext,
 	ToolViewRenderer,
-	ViewHiddenCount,
 	ViewLine,
 	ViewSection,
 	ViewSpan,
@@ -40,17 +39,18 @@ import {
 	JSON_TREE_SCALAR_LEN_EXPANDED,
 	jsonTreeViewLines,
 } from "../core/json-tree-view";
-import { stripOutputNotice } from "../core/output-meta";
-// The words a truncation is named by, from the leaf that owns them rather than from the styled
-// helper beside it: a view states the sentence and never the colour it is drawn in.
-import { formatTruncationMetaNotice } from "../core/output-notice";
+import { formatTruncationMetaNotice, stripOutputNotice } from "../core/output-notice";
 import {
+	collapsedProgressViewLines,
 	collapseProgressRuns,
 	Ellipsis,
 	formatDuration,
+	heldBack,
+	LINE_NOUN,
 	replaceTabs,
 	shortenEmbeddedPaths,
 	shortenPath,
+	type ToolViewResult,
 	truncateToWidth,
 } from "../core/render-utils";
 /** The rows a collapsed cell's output may spend, which a host may narrow to its own window. */
@@ -96,11 +96,7 @@ export interface EvalRenderArgs {
 }
 
 /** The result an eval card reads: the text the tool returned, and the cells it carries. */
-export interface EvalViewResult {
-	content?: Array<{ type: string; text?: string }>;
-	details?: EvalToolDetails;
-	isError?: boolean;
-}
+export interface EvalViewResult extends Partial<ToolViewResult<EvalToolDetails>> {}
 
 /** The cell of a call, normalized. */
 interface EvalViewCell {
@@ -151,12 +147,6 @@ function textRows(text: string): string[] {
 		const at = line.lastIndexOf("\r");
 		return replaceTabs(shortenEmbeddedPaths(at < 0 ? line : line.slice(at + 1)));
 	});
-}
-
-/** What a card kept back, or nothing when it kept back nothing. */
-function heldBack(count: number, one: string, many: string): ViewHiddenCount | undefined {
-	if (count <= 0) return undefined;
-	return { count, noun: { one, many }, revealable: true };
 }
 
 /**
@@ -226,7 +216,7 @@ function codeSection(cell: EvalViewCell | EvalCellResult, label: string | undefi
 		};
 	}
 	const shown = rows.slice(0, EXPANDED_MAX_LINES);
-	const hidden = heldBack(rows.length - shown.length, "line", "lines");
+	const hidden = heldBack(rows.length - shown.length, LINE_NOUN);
 	return {
 		...(label === undefined ? {} : { label }),
 		lines: shown.map(row => [{ text: row }]),
@@ -260,21 +250,14 @@ function outputSection(cell: EvalCellResult, expanded: boolean): ViewSection | u
 	if (expanded) {
 		const rows = textRows(cell.output);
 		const shown = rows.slice(0, EXPANDED_MAX_LINES);
-		const hidden = heldBack(rows.length - shown.length, "line", "lines");
+		const hidden = heldBack(rows.length - shown.length, LINE_NOUN);
 		return {
 			label,
 			lines: shown.map(row => [{ text: row, tone }]),
 			...(hidden === undefined ? {} : { hidden }),
 		};
 	}
-	const lines = collapseProgressRuns(textRows(cell.output)).map(row =>
-		row.hidden === 0
-			? [{ text: row.text, tone }]
-			: [
-					{ text: row.text, tone },
-					{ text: ` … +${row.hidden} earlier`, tone: "dim" as ViewTone },
-				],
-	);
+	const lines = collapsedProgressViewLines(collapseProgressRuns(textRows(cell.output)), tone);
 	return { label, lines, tail: { max: EVAL_DEFAULT_PREVIEW_LINES } };
 }
 
@@ -478,7 +461,7 @@ function statusSection(events: readonly EvalStatusEvent[], expanded: boolean): V
 		return { label: "Status", lines: events.flatMap(event => [eventLine(event), ...eventDetailLines(event)]) };
 	}
 	const shown = events.slice(Math.max(0, events.length - STATUS_EVENTS_COLLAPSED));
-	const hidden = heldBack(events.length - shown.length, "call", "calls");
+	const hidden = heldBack(events.length - shown.length, { one: "call", many: "calls" });
 	return {
 		label: "Status",
 		lines: shown.map(event => eventLine(event)),
@@ -693,14 +676,7 @@ export const evalToolView: Required<ToolViewRenderer<EvalRenderArgs, EvalViewRes
 			// the reason a cell's output is: a wall of `Compiling …` must not spend the whole window.
 			const rows = expanded
 				? textRows(text).map(row => [{ text: row, tone: "output" as ViewTone }])
-				: collapseProgressRuns(textRows(text)).map(row =>
-						row.hidden === 0
-							? [{ text: row.text, tone: "output" as ViewTone }]
-							: [
-									{ text: row.text, tone: "output" as ViewTone },
-									{ text: ` … +${row.hidden} earlier`, tone: "dim" as ViewTone },
-								],
-					);
+				: collapsedProgressViewLines(collapseProgressRuns(textRows(text)), "output");
 			lines.push(...rows);
 		}
 		const events = details?.statusEvents ?? [];

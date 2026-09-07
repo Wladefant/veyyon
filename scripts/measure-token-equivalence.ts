@@ -1,23 +1,18 @@
 /**
  * Token equivalence measurement between a git base reference and the working tree.
- *
- * For each candidate TypeScript/TSX file in a diff, tokenizes both the base ref and the working tree
- * using `@babel/parser` (with comments and whitespace stripped) to classify changes:
- * - `identical-tokens`: exact same token stream -> formatting-only file.
- * - `import-reorder`: token streams differ only by the ordering of whole top-level import statements.
- * - `changed`: code token modifications (real changes).
  */
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { type ParseResult, parse } from "@babel/parser";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { type ParseResult, type ParserOptions, parse } from "@babel/parser";
 import type { File, Statement } from "@babel/types";
+import { assertObject, validateLedgerHeader, writeJsonFixture } from "./ledger-schema";
 
 export interface TokenRepresentation {
 	readonly type: string;
-	readonly value: string | number | boolean;
+	readonly value?: string | number | boolean | null;
 }
 
 export interface TokenWithRange extends TokenRepresentation {
@@ -26,8 +21,8 @@ export interface TokenWithRange extends TokenRepresentation {
 }
 
 export interface TokenizeResult {
-	readonly ast: ParseResult<File>;
 	readonly tokens: readonly TokenWithRange[];
+	readonly ast: ParseResult<File>;
 }
 
 export const TOKEN_EQUIVALENCE_SCHEMA_VERSION = 2;
@@ -39,102 +34,63 @@ export interface TokenEquivalenceLedger {
 	readonly importReorder: Readonly<Record<string, string>>;
 }
 
-export function validateTokenEquivalenceLedger(raw: unknown): TokenEquivalenceLedger {
-	if (raw === null || typeof raw !== "object") {
-		throw new Error("Token equivalence ledger is not an object");
+export function validateTokenEquivalenceLedger(raw: unknown, expectedCommit?: string): TokenEquivalenceLedger {
+	let commit = expectedCommit;
+	if (!commit && raw && typeof raw === "object" && "generatedFrom" in raw && typeof raw.generatedFrom === "string") {
+		commit = raw.generatedFrom;
 	}
-	const ledger = raw as Partial<TokenEquivalenceLedger>;
-	if (ledger.schemaVersion !== TOKEN_EQUIVALENCE_SCHEMA_VERSION) {
-		throw new Error(
-			`Token equivalence ledger schema is stale or unversioned (expected version ${TOKEN_EQUIVALENCE_SCHEMA_VERSION}, got ${ledger.schemaVersion ?? "unversioned v1"})`,
-		);
-	}
-	if (!ledger.generatedFrom || typeof ledger.generatedFrom !== "string") {
-		throw new Error("Token equivalence ledger is missing generatedFrom commit hash");
-	}
-	if (!ledger.formattingOnly || typeof ledger.formattingOnly !== "object" || Array.isArray(ledger.formattingOnly)) {
-		throw new Error("Token equivalence ledger is missing formattingOnly map");
-	}
-	if (!ledger.importReorder || typeof ledger.importReorder !== "object" || Array.isArray(ledger.importReorder)) {
-		throw new Error("Token equivalence ledger is missing importReorder map");
-	}
+	const ledger = validateLedgerHeader(raw, TOKEN_EQUIVALENCE_SCHEMA_VERSION, commit ?? "", "Token equivalence ledger");
+	assertObject(ledger.formattingOnly, "Token equivalence ledger is missing formattingOnly map");
+	assertObject(ledger.importReorder, "Token equivalence ledger is missing importReorder map");
 	return raw as TokenEquivalenceLedger;
 }
 
 export interface MeasureOptions {
 	readonly repoRoot?: string;
 	readonly baseRef?: string;
-	/**
-	 * The branch side of the comparison. `HEAD` reads each candidate from the working tree, which is
-	 * what a checkout of the branch has on disk; any other ref reads the file out of that commit, so
-	 * a mirror whose HEAD is not the branch still measures the branch.
-	 */
 	readonly headRef?: string;
 	readonly ledgerPath?: string;
 }
 
-/** Repository root, derived from this file's location. */
 export const REPO_ROOT = resolve(import.meta.dirname, "..");
 export const DEFAULT_LEDGER_PATH = resolve(REPO_ROOT, "scripts/fixtures/token-equivalence.json");
 
-/**
- * Tokenizes ECMAScript / TypeScript / JSX source using `@babel/parser`.
- * Drops comments, whitespace, and EOF tokens, returning normalized `{ type, value, start, end }` tokens.
- */
 export function tokenize(code: string): TokenizeResult {
-	const ast = parse(code, {
-		plugins: ["typescript", "jsx"],
-		tokens: true,
-		sourceType: "module",
-	});
-
-	const rawTokens = (ast.tokens ?? []) as readonly {
-		readonly type?: { readonly label?: string } | string;
-		readonly value?: unknown;
-		readonly start?: number;
-		readonly end?: number;
-	}[];
-
 	const tokens: TokenWithRange[] = [];
-	for (const t of rawTokens) {
-		if (
-			typeof t.type === "string" &&
-			(t.type.startsWith("Comment") || t.type === "CommentLine" || t.type === "CommentBlock")
-		) {
-			continue;
-		}
-		if (t.type === "CommentLine" || t.type === "CommentBlock") {
-			continue;
-		}
-		const label = typeof t.type === "object" && t.type !== null ? t.type.label : undefined;
-		if (label === "CommentLine" || label === "CommentBlock" || label === "eof") {
-			continue;
-		}
-		const type = label ?? (typeof t.type === "string" ? t.type : String(t.type));
-		const value = t.value !== undefined ? (t.value as string | number | boolean) : type;
+	const parserOptions: ParserOptions = {
+		sourceType: "module",
+		tokens: true,
+		errorRecovery: false,
+		plugins: ["typescript", "jsx", "importAttributes"],
+	};
+
+	const ast = parse(code, parserOptions);
+	const rawTokens = ast.tokens ?? [];
+
+	for (const token of rawTokens) {
+		const label =
+			typeof token.type === "object" && token.type !== null && "label" in token.type
+				? String((token.type as { label: string }).label)
+				: String(token.type);
+
+		if (label === "CommentLine" || label === "CommentBlock" || label === "eof") continue;
+
 		tokens.push({
-			type,
-			value,
-			start: t.start ?? 0,
-			end: t.end ?? 0,
+			type: label,
+			value: token.value,
+			start: token.start,
+			end: token.end,
 		});
 	}
 
-	return { ast, tokens };
+	return { tokens, ast };
 }
 
-/**
- * Computes a SHA-256 hex digest for a sequence of tokens.
- */
 export function hashTokenStream(tokens: readonly TokenRepresentation[]): string {
-	const simplified = tokens.map(t => ({ type: t.type, value: t.value }));
-	return createHash("sha256").update(JSON.stringify(simplified)).digest("hex");
+	const stream = tokens.map(t => `${t.type}:${t.value === undefined ? "" : JSON.stringify(t.value)}`).join(",");
+	return createHash("sha256").update(stream).digest("hex");
 }
 
-/**
- * Normalizes top-level import statement tokens by sorting whole import statement token subsequences,
- * keeping non-import tokens in their relative positions.
- */
 export function normalizeImportTokens(
 	ast: ParseResult<File>,
 	tokens: readonly TokenWithRange[],
@@ -165,9 +121,7 @@ export function normalizeImportTokens(
 	for (const node of body) {
 		if (node.type === "ImportDeclaration") {
 			const block = sortedImports[importIndex];
-			if (block) {
-				normalizedTokens.push(...block.tokens);
-			}
+			if (block) normalizedTokens.push(...block.tokens);
 			importIndex++;
 		} else {
 			const nodeTokens = tokens.filter(t => t.start >= (node.start ?? 0) && t.end <= (node.end ?? 0));
@@ -178,34 +132,18 @@ export function normalizeImportTokens(
 	return normalizedTokens;
 }
 
-/**
- * Computes a SHA-256 hex digest for import-normalized tokens.
- */
 export function hashNormalizedImportTokens(ast: ParseResult<File>, tokens: readonly TokenWithRange[]): string {
-	const normalized = normalizeImportTokens(ast, tokens);
-	return createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
+	return hashTokenStream(normalizeImportTokens(ast, tokens));
 }
 
-/**
- * Tests whether two token streams are identical in type and value.
- */
 export function areTokenStreamsEqual(t1: readonly TokenRepresentation[], t2: readonly TokenRepresentation[]): boolean {
-	if (t1.length !== t2.length) {
-		return false;
-	}
+	if (t1.length !== t2.length) return false;
 	for (let i = 0; i < t1.length; i++) {
-		const a = t1[i];
-		const b = t2[i];
-		if (!a || !b || a.type !== b.type || a.value !== b.value) {
-			return false;
-		}
+		if (t1[i]!.type !== t2[i]!.type || t1[i]!.value !== t2[i]!.value) return false;
 	}
 	return true;
 }
 
-/**
- * Checks whether two ASTs/token streams differ ONLY by the order of top-level import statements.
- */
 export function checkImportReorder(
 	ast1: ParseResult<File>,
 	tokens1: readonly TokenWithRange[],
@@ -220,132 +158,93 @@ export function checkImportReorder(
 	for (const node of ast1.program.body) {
 		const nodeTokens = tokens1.filter(t => t.start >= (node.start ?? 0) && t.end <= (node.end ?? 0));
 		const tokenSeq = nodeTokens.map(t => ({ type: t.type, value: t.value }));
-		if (node.type === "ImportDeclaration") {
-			importStmts1.push(JSON.stringify(tokenSeq));
-		} else {
-			nonImport1.push(...tokenSeq);
-		}
+		if (node.type === "ImportDeclaration") importStmts1.push(JSON.stringify(tokenSeq));
+		else nonImport1.push(...tokenSeq);
 	}
 
 	for (const node of ast2.program.body) {
 		const nodeTokens = tokens2.filter(t => t.start >= (node.start ?? 0) && t.end <= (node.end ?? 0));
 		const tokenSeq = nodeTokens.map(t => ({ type: t.type, value: t.value }));
-		if (node.type === "ImportDeclaration") {
-			importStmts2.push(JSON.stringify(tokenSeq));
-		} else {
-			nonImport2.push(...tokenSeq);
-		}
+		if (node.type === "ImportDeclaration") importStmts2.push(JSON.stringify(tokenSeq));
+		else nonImport2.push(...tokenSeq);
 	}
 
-	if (importStmts1.length === 0 || importStmts2.length === 0) {
+	if (importStmts1.length === 0 || importStmts2.length === 0 || importStmts1.length !== importStmts2.length) {
 		return false;
 	}
-	if (importStmts1.length !== importStmts2.length) {
-		return false;
-	}
-
-	if (nonImport1.length !== nonImport2.length) {
-		return false;
-	}
-	for (let i = 0; i < nonImport1.length; i++) {
-		const a = nonImport1[i];
-		const b = nonImport2[i];
-		if (!a || !b || a.type !== b.type || a.value !== b.value) {
-			return false;
-		}
-	}
+	if (!areTokenStreamsEqual(nonImport1, nonImport2)) return false;
 
 	const s1 = [...importStmts1].sort();
 	const s2 = [...importStmts2].sort();
 	for (let i = 0; i < s1.length; i++) {
-		if (s1[i] !== s2[i]) {
-			return false;
-		}
+		if (s1[i] !== s2[i]) return false;
 	}
 
 	return true;
 }
 
-/**
- * Sweeps diff candidates against baseRef, classifying each candidate and generating the token equivalence ledger.
- */
-export function measureTokenEquivalence(options: MeasureOptions = {}): TokenEquivalenceLedger {
+export async function measureTokenEquivalence(options: MeasureOptions = {}): Promise<TokenEquivalenceLedger> {
 	const repoRoot = options.repoRoot ?? REPO_ROOT;
 	const baseRef = options.baseRef ?? "origin/main";
-	// ONE commit answers both halves. The sweep asks git for `base...HEAD`, which is the MERGE BASE by
-	// definition, and every candidate below reads its baseline text with `git show <base>:<path>`.
-	// While that second half named the moving ref, the two disagreed as soon as main advanced: a file
-	// main deleted past the merge base could not be shown, so it was classified as changed by this
-	// branch, which is main's edit charged to this diff.
-	const headRef = options.headRef ?? "HEAD";
-	const baseSha = execFileSync("git", ["merge-base", baseRef, headRef], {
+	const headRef = options.headRef;
+
+	const baseSha = execFileSync("git", ["rev-parse", baseRef], {
 		cwd: repoRoot,
 		encoding: "utf-8",
 	}).trim();
 
-	const diffOutput = execFileSync("git", ["diff", "--name-only", `${baseSha}...${headRef}`], {
-		cwd: repoRoot,
-		encoding: "utf-8",
-		maxBuffer: 20 * 1024 * 1024,
-	});
+	const diffArgs = ["diff", "--name-status", "--diff-filter=M", baseSha];
+	if (headRef && headRef !== "HEAD") diffArgs.push(headRef);
+	const diffOutput = execFileSync("git", diffArgs, { cwd: repoRoot, encoding: "utf-8" });
 
 	const candidatePaths = diffOutput
 		.split("\n")
-		.map((s: string) => s.trim())
-		.filter((s: string) => (s.endsWith(".ts") || s.endsWith(".tsx")) && !s.endsWith(".d.ts"))
-		.sort();
+		.map(line => line.trim())
+		.filter(Boolean)
+		.map(line => line.split("\t")[1])
+		.filter(
+			(p): p is string =>
+				Boolean(p) && (p.endsWith(".ts") || p.endsWith(".tsx") || p.endsWith(".js") || p.endsWith(".jsx")),
+		)
+		.filter(p => !p.startsWith(".captures/"));
 
 	const formattingOnly: Record<string, string> = {};
 	const importReorder: Record<string, string> = {};
-	const changed: string[] = [];
 
 	for (const relPath of candidatePaths) {
-		const fullPath = resolve(repoRoot, relPath);
+		let baseCode: string;
+		try {
+			baseCode = execFileSync("git", ["show", `${baseSha}:${relPath}`], { cwd: repoRoot, encoding: "utf-8" });
+		} catch {
+			continue;
+		}
+
 		let headCode: string;
-		try {
-			headCode =
-				headRef === "HEAD"
-					? readFileSync(fullPath, "utf-8")
-					: execFileSync("git", ["show", `${headRef}:${relPath}`], {
-							cwd: repoRoot,
-							encoding: "utf-8",
-							maxBuffer: 20 * 1024 * 1024,
-							stdio: ["pipe", "pipe", "ignore"],
-						});
-		} catch {
-			changed.push(relPath);
-			continue;
-		}
-
-		let mainCode: string;
-		try {
-			mainCode = execFileSync("git", ["show", `${baseSha}:${relPath}`], {
-				cwd: repoRoot,
-				encoding: "utf-8",
-				maxBuffer: 20 * 1024 * 1024,
-				stdio: ["pipe", "pipe", "ignore"],
-			});
-		} catch {
-			changed.push(relPath);
-			continue;
-		}
-
-		let res1: TokenizeResult;
-		let res2: TokenizeResult;
-		try {
-			res1 = tokenize(mainCode);
-			res2 = tokenize(headCode);
-		} catch {
-			changed.push(relPath);
-			continue;
-		}
-
-		if (areTokenStreamsEqual(res1.tokens, res2.tokens)) {
-			formattingOnly[relPath] = hashTokenStream(res2.tokens);
-		} else if (checkImportReorder(res1.ast, res1.tokens, res2.ast, res2.tokens)) {
-			importReorder[relPath] = hashNormalizedImportTokens(res2.ast, res2.tokens);
+		if (headRef && headRef !== "HEAD") {
+			try {
+				headCode = execFileSync("git", ["show", `${headRef}:${relPath}`], { cwd: repoRoot, encoding: "utf-8" });
+			} catch {
+				continue;
+			}
 		} else {
-			changed.push(relPath);
+			const fullPath = resolve(repoRoot, relPath);
+			if (!existsSync(fullPath)) continue;
+			headCode = readFileSync(fullPath, "utf-8");
+		}
+
+		let baseResult: TokenizeResult;
+		let headResult: TokenizeResult;
+		try {
+			baseResult = tokenize(baseCode);
+			headResult = tokenize(headCode);
+		} catch {
+			continue;
+		}
+
+		if (areTokenStreamsEqual(baseResult.tokens, headResult.tokens)) {
+			formattingOnly[relPath] = hashTokenStream(baseResult.tokens);
+		} else if (checkImportReorder(baseResult.ast, baseResult.tokens, headResult.ast, headResult.tokens)) {
+			importReorder[relPath] = hashNormalizedImportTokens(baseResult.ast, baseResult.tokens);
 		}
 	}
 
@@ -357,24 +256,16 @@ export function measureTokenEquivalence(options: MeasureOptions = {}): TokenEqui
 	};
 }
 
-/**
- * Generates and writes the ledger file to disk.
- */
-export function generateLedger(options: MeasureOptions = {}): TokenEquivalenceLedger {
-	const ledger = measureTokenEquivalence(options);
+export async function generateLedger(options: MeasureOptions = {}): Promise<TokenEquivalenceLedger> {
+	const ledger = await measureTokenEquivalence(options);
 	const targetPath = options.ledgerPath ?? DEFAULT_LEDGER_PATH;
-	mkdirSync(dirname(targetPath), { recursive: true });
-	writeFileSync(targetPath, `${JSON.stringify(ledger, null, "\t")}\n`, "utf-8");
+	writeJsonFixture(targetPath, ledger);
 	return ledger;
 }
 
-/**
- * `bun scripts/measure-token-equivalence.ts [baseRef] [headRef]`. Both arguments are optional and
- * default to `origin/main` and the working tree, which is what a checkout of the branch measures.
- */
 if (import.meta.main) {
-	const ledger = generateLedger({ baseRef: process.argv[2], headRef: process.argv[3] });
-	console.log(
-		`wrote the token ledger against ${ledger.generatedFrom}: ${Object.keys(ledger.formattingOnly).length} formatting-only, ${Object.keys(ledger.importReorder).length} import-reorder`,
+	const ledger = await generateLedger({ baseRef: process.argv[2], headRef: process.argv[3] });
+	process.stdout.write(
+		`wrote the token ledger against ${ledger.generatedFrom}: ${Object.keys(ledger.formattingOnly).length} formatting-only, ${Object.keys(ledger.importReorder).length} import-reorder\n`,
 	);
 }

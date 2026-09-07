@@ -503,6 +503,22 @@ export function resolvePluginExtensionPaths(plugin: InstalledPlugin): string[] {
 // Aggregated Discovery
 // =============================================================================
 
+async function getAllPluginPaths(
+	cwd: string,
+	resolvePaths: (plugin: ScopedInstalledPlugin) => string[],
+	opts?: GetEnabledPluginsOptions,
+): Promise<string[]> {
+	const plugins = await getEnabledPlugins(cwd, opts);
+	const paths: string[] = [];
+
+	for (const plugin of plugins) {
+		const pluginPaths = resolvePaths(plugin);
+		for (let pi = 0; pi < pluginPaths.length; pi++) paths.push(pluginPaths[pi]!);
+	}
+
+	return paths;
+}
+
 /**
  * Get all tool paths from all enabled plugins.
  *
@@ -513,60 +529,28 @@ export function resolvePluginExtensionPaths(plugin: InstalledPlugin): string[] {
  * forward that result unconditionally.
  */
 export async function getAllPluginToolPaths(cwd: string, pluginsRoot?: string): Promise<string[]> {
-	const plugins = await getEnabledPlugins(cwd, { pluginsRoot });
-	const paths: string[] = [];
-
-	for (const plugin of plugins) {
-		const pluginPaths = resolvePluginToolPaths(plugin);
-		for (let pi = 0; pi < pluginPaths.length; pi++) paths.push(pluginPaths[pi]!);
-	}
-
-	return paths;
+	return getAllPluginPaths(cwd, resolvePluginToolPaths, { pluginsRoot });
 }
 
 /**
  * Get all hook paths from all enabled plugins.
  */
 export async function getAllPluginHookPaths(cwd: string): Promise<string[]> {
-	const plugins = await getEnabledPlugins(cwd);
-	const paths: string[] = [];
-
-	for (const plugin of plugins) {
-		const pluginPaths = resolvePluginHookPaths(plugin);
-		for (let pi = 0; pi < pluginPaths.length; pi++) paths.push(pluginPaths[pi]!);
-	}
-
-	return paths;
+	return getAllPluginPaths(cwd, resolvePluginHookPaths);
 }
 
 /**
  * Get all command paths from all enabled plugins.
  */
 export async function getAllPluginCommandPaths(cwd: string): Promise<string[]> {
-	const plugins = await getEnabledPlugins(cwd);
-	const paths: string[] = [];
-
-	for (const plugin of plugins) {
-		const pluginPaths = resolvePluginCommandPaths(plugin);
-		for (let pi = 0; pi < pluginPaths.length; pi++) paths.push(pluginPaths[pi]!);
-	}
-
-	return paths;
+	return getAllPluginPaths(cwd, resolvePluginCommandPaths);
 }
 
 /**
  * Get all extension module paths from all enabled plugins.
  */
 export async function getAllPluginExtensionPaths(cwd: string): Promise<string[]> {
-	const plugins = await getEnabledPlugins(cwd);
-	const paths: string[] = [];
-
-	for (const plugin of plugins) {
-		const pluginPaths = resolvePluginExtensionPaths(plugin);
-		for (let pi = 0; pi < pluginPaths.length; pi++) paths.push(pluginPaths[pi]!);
-	}
-
-	return paths;
+	return getAllPluginPaths(cwd, resolvePluginExtensionPaths);
 }
 
 /**

@@ -26,15 +26,14 @@ import { getProjectDir, sanitizeText, signalName } from "@veyyon/utils";
 import type { FramedBlockView, ToolViewRenderer, ViewLine, ViewSection, ViewSpan, ViewStatus } from "@veyyon/view";
 import { formatExitCodeNotice } from "../../exec/exit-notice";
 import { getSixelLineMask, sanitizeWithOptionalSixelPassthrough } from "../../utils/sixel";
-import { stripOutputNotice, stripRawOutputArtifactNotice } from "../core/output-meta";
-// The words a truncation is named by, from the leaf that owns them rather than from the styled
-// helper beside it: a view states the sentence and never the colour it is drawn in.
-import { formatTruncationMetaNotice } from "../core/output-notice";
+import { formatTruncationMetaNotice, stripOutputNotice, stripRawOutputArtifactNotice } from "../core/output-notice";
 import {
+	collapsedProgressViewLines,
 	collapseProgressRuns,
 	formatToolWorkingDirectory,
 	replaceTabs,
 	shortenEmbeddedPaths,
+	type ToolViewResult,
 } from "../core/render-utils";
 import { clampTimeout } from "../core/tool-timeouts";
 import { BASH_DEFAULT_PREVIEW_LINES, type BashToolDetails, formatBackgroundNotice } from "./bash";
@@ -50,11 +49,7 @@ export interface BashViewArgs {
 }
 
 /** The result the card reads, which is the tool's own result shape narrowed to what a card shows. */
-export interface BashViewResult {
-	content: Array<{ type: string; text?: string }>;
-	details?: BashToolDetails;
-	isError?: boolean;
-}
+export interface BashViewResult extends ToolViewResult<BashToolDetails> {}
 
 /** The prompt the first line of a command is read under. */
 const PROMPT = "$";
@@ -344,9 +339,10 @@ function outputSections(
 	} else if (expanded) {
 		for (const row of rows) lines.push([{ text: replaceTabs(shortenEmbeddedPaths(row)), tone: "output" }]);
 	} else {
-		for (const run of collapseProgressRuns(rows)) {
-			const body: ViewSpan = { text: replaceTabs(shortenEmbeddedPaths(run.text)), tone: "output" };
-			lines.push(run.hidden === 0 ? [body] : [body, { text: ` … +${run.hidden} earlier`, tone: "dim" }]);
+		for (const line of collapsedProgressViewLines(collapseProgressRuns(rows), "output", text =>
+			replaceTabs(shortenEmbeddedPaths(text)),
+		)) {
+			lines.push(line);
 		}
 	}
 	// While the output is still arriving the newest row is the live edge, which the host may animate.

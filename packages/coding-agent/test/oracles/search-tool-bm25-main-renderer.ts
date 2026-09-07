@@ -4,6 +4,6 @@
  */
 import { type LegacyRenderer, loadHistoricalOracle } from "./historical-loader";
 
-const oracle = loadHistoricalOracle("search-tool-bm25-main-renderer");
+const oracle = await loadHistoricalOracle("search-tool-bm25-main-renderer");
 
 export const searchToolBm25Renderer = oracle.searchToolBm25Renderer as LegacyRenderer;

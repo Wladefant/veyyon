@@ -26,10 +26,8 @@ import {
 	JSON_TREE_SCALAR_LEN_EXPANDED,
 	jsonTreeViewLines,
 } from "../tools/core/json-tree-view";
-import { stripOutputNotice } from "../tools/core/output-meta";
-// The words a truncation is named by, from the leaf that owns them rather than from the styled
-// helper beside it: a view states the sentence and never the colour it is drawn in.
-import { formatTruncationMetaNotice } from "../tools/core/output-notice";
+import { formatTruncationMetaNotice, stripOutputNotice } from "../tools/core/output-notice";
+import type { ToolViewResult } from "../tools/core/render-utils";
 import type { MCPToolDetails } from "./tool-bridge";
 
 /**
@@ -46,11 +44,7 @@ const RAW_OUTPUT_ROWS_COLLAPSED = 4;
 const RAW_OUTPUT_ROWS_EXPANDED = 12;
 
 /** The result an MCP card reads: the text the server returned, and what the bridge recorded of it. */
-export interface MCPViewResult {
-	content?: Array<{ type: string; text?: string }>;
-	details?: MCPToolDetails;
-	isError?: boolean;
-}
+export interface MCPViewResult extends Partial<ToolViewResult<MCPToolDetails>> {}
 
 function argsRecord(value: unknown): Record<string, unknown> {
 	return isRecord(value) ? value : {};

@@ -20,9 +20,7 @@
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { typeScriptMembers, typeScriptMemberTopLevels } from "./workspace-layout";
-
-const REPO_ROOT = path.resolve(import.meta.dir, "..");
+import { REPO_ROOT, typeScriptMembers, typeScriptMemberTopLevels, walkDirectory } from "./workspace-layout";
 
 /**
  * Suites whose subject IS a list of module paths, which therefore name every
@@ -46,35 +44,6 @@ const PATH_LEDGERS = new Set([
 ]);
 
 /**
- * Directory names the walk never enters: foreign trees, build output and the
- * untracked run artifacts a benchmark writes. Every name here is either not
- * checked in or holds no TypeScript, so a skip can never hide a test file.
- * `tests/evals/suites/deep-swe` and `tests/evals/test/suites/deep-swe` are
- * checked-in source and are walked.
- */
-const SKIP_DIRS = new Set(["node_modules", "dist", "target", "repo-cache", "runs", "assets"]);
-
-function walk(dir: string, keep: (file: string) => boolean): string[] {
-	const found: string[] = [];
-	let entries: fs.Dirent[];
-	try {
-		entries = fs.readdirSync(dir, { withFileTypes: true });
-	} catch {
-		return found;
-	}
-	for (const entry of entries) {
-		const full = path.join(dir, entry.name);
-		if (entry.isDirectory()) {
-			if (SKIP_DIRS.has(entry.name)) continue;
-			found.push(...walk(full, keep));
-		} else if (keep(full)) {
-			found.push(full);
-		}
-	}
-	return found;
-}
-
-/**
  * Every workspace member directory, across the roots the root manifest declares.
  *
  * This read `packages/` alone, so a shipped module under any other root — `contracts/view/src` is
@@ -91,9 +60,10 @@ function collectShippedModules(): string[] {
 	const files: string[] = [];
 	for (const pkg of packageDirs()) {
 		files.push(
-			...walk(
+			...walkDirectory(
 				path.join(pkg, "src"),
 				file => file.endsWith(".ts") && !file.endsWith(".d.ts") && !file.includes(".test."),
+				["node_modules", "dist", "target", "repo-cache", "runs", "assets", "build"],
 			),
 		);
 	}
@@ -113,10 +83,10 @@ function collectShippedModules(): string[] {
 function collectTestFiles(): string[] {
 	const files: string[] = [];
 	for (const pkg of packageDirs()) {
-		files.push(...walk(pkg, file => file.endsWith(".test.ts") || file.endsWith(".test.tsx")));
-		files.push(...walk(path.join(pkg, "test"), file => file.endsWith(".ts")));
+		files.push(...walkDirectory(pkg, file => file.endsWith(".test.ts") || file.endsWith(".test.tsx")));
+		files.push(...walkDirectory(path.join(pkg, "test"), file => file.endsWith(".ts")));
 	}
-	files.push(...walk(path.join(REPO_ROOT, "scripts"), file => file.endsWith(".test.ts")));
+	files.push(...walkDirectory(path.join(REPO_ROOT, "scripts"), file => file.endsWith(".test.ts")));
 	return [...new Set(files.map(file => path.relative(REPO_ROOT, file)))].filter(file => !PATH_LEDGERS.has(file));
 }
 

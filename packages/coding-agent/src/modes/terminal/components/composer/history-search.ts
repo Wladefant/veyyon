@@ -1,9 +1,10 @@
 import type { HistoryEntry, HistoryStorage } from "@veyyon/kernel/session/history-storage";
 import { Ellipsis } from "@veyyon/natives";
 import { type Component, Input } from "@veyyon/tui";
+import { HoverController } from "@veyyon/tui/utils/hover-controller";
 import { collapseWhitespace, NON_ALNUM_RUN_RE } from "@veyyon/utils";
 import { matchesKey } from "@veyyon/utils/keys";
-import { HoverFade, type HoverFadeOptions } from "@veyyon/utils/motion";
+import type { HoverFadeOptions } from "@veyyon/utils/motion";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import { padding } from "@veyyon/utils/padding";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
@@ -89,13 +90,11 @@ class HistoryResultsList implements Component {
 	#tokens: string[] = [];
 	#selectedIndex = 0;
 	#maxVisible = MAX_VISIBLE;
-	/** Pointer-highlighted row (never the selected one; selection owns its row). */
-	#hoveredIndex: number | null = null;
 	/**
-	 * The cross-fade, once the card has lent this list a repaint
+	 * Pointer hover controller and cross-fade, once the card has lent this list a repaint
 	 * ({@link setHoverMotion}). Absent, the band is switched.
 	 */
-	#hoverFade?: HoverFade;
+	#hover = new HoverController<number>();
 	/** Per-render map of 0-based rendered line → result index. */
 	#hitRows: (number | undefined)[] = [];
 
@@ -116,9 +115,8 @@ class HistoryResultsList implements Component {
 
 	/** Highlight the row under the pointer (null clears). Returns true on change. */
 	setHoverIndex(index: number | null): boolean {
-		if (this.#hoveredIndex === index) return false;
-		this.#hoveredIndex = index;
-		this.#hoverFade?.set(index);
+		if (this.#hover.key === index) return false;
+		this.#hover.set(index);
 		return true;
 	}
 
@@ -128,23 +126,18 @@ class HistoryResultsList implements Component {
 	 * `enabled: false` is the switched band.
 	 */
 	setHoverMotion(options: HoverFadeOptions): void {
-		this.#hoverFade?.dispose();
-		this.#hoverFade = new HoverFade(options);
-		if (this.#hoveredIndex !== null) this.#hoverFade.set(this.#hoveredIndex);
+		this.#hover.setMotion(options);
 	}
 
 	/** Drop the fade and forget the pointer, so no timer outlives the card. */
 	disposeHoverMotion(): void {
-		this.#hoverFade?.dispose();
-		this.#hoverFade = undefined;
-		this.#hoveredIndex = null;
+		this.#hover.dispose();
 	}
 
 	/** Band strength for a result row: 0 for the selected one, which owns its own styling. */
 	#hoverStrength(index: number, isSelected: boolean): number {
 		if (isSelected) return 0;
-		if (this.#hoverFade !== undefined) return this.#hoverFade.strengthAt(index);
-		return index === this.#hoveredIndex ? 1 : 0;
+		return this.#hover.strength(index);
 	}
 
 	invalidate(): void {

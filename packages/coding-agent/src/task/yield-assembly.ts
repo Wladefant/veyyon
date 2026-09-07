@@ -25,7 +25,7 @@ function isIncrementalYieldType(type: YieldItem["type"]): type is string[] {
 	return Array.isArray(type) && type.length > 0;
 }
 
-function getYieldLabels(type: YieldItem["type"]): string[] {
+export function getYieldLabels(type: YieldItem["type"]): string[] {
 	if (typeof type === "string") {
 		const label = type.trim();
 		return label ? [label] : [];

@@ -1,6 +1,7 @@
 import { parseJsonWithRepair } from "@veyyon/utils/json-parse";
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage, getOwnProperty, isRecord, setSafeProperty } from "@veyyon/utils/type-guards";
+import type { ToolCall } from "../types";
 import { toolWireSchema } from "../utils/schema";
 import type { InbandTool } from "./types";
 
@@ -142,6 +143,22 @@ export function normalizeKimiFunctionName(rawId: string): string {
  */
 export function recordOrEmpty(value: unknown): Record<string, unknown> {
 	return isRecord(value) ? value : {};
+}
+
+/** Decode a named call, including stringified arguments; malformed bodies use the scanner's partial-call recovery. */
+export function parseNamedToolCall(body: string): Pick<ToolCall, "name" | "arguments"> | undefined {
+	try {
+		const parsed = parseJsonWithRepair<{ name?: unknown; arguments?: unknown }>(body.trim());
+		if (typeof parsed.name !== "string" || parsed.name.length === 0) return undefined;
+		let args = parsed.arguments;
+		if (typeof args === "string") {
+			args = parseJsonWithRepair<unknown>(args);
+		}
+		return { name: parsed.name, arguments: recordOrEmpty(args) };
+	} catch {
+		// The caller balances an announced toolStart with a best-effort toolEnd and retains the raw block.
+		return undefined;
+	}
 }
 
 /** Enough of a tool payload to recognize its shape in a log, without putting the whole thing there. */

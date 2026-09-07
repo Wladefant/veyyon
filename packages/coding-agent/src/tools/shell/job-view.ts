@@ -33,6 +33,7 @@ import {
 	replaceTabs,
 	sanitizeErrorText,
 	shortenEmbeddedPaths,
+	type ToolViewResult,
 	truncateToWidth,
 } from "../core/render-utils";
 import { type AgentActivitySnapshot, COLLAPSED_LIST_LIMIT, type JobSnapshot, type JobToolDetails } from "./job";
@@ -60,11 +61,7 @@ export interface JobRenderArgs {
 }
 
 /** The result a job card reads: the text the tool returned, and the snapshot it carries. */
-export interface JobViewResult {
-	content?: Array<{ type: string; text?: string }>;
-	details?: JobToolDetails;
-	isError?: boolean;
-}
+export interface JobViewResult extends Partial<ToolViewResult<JobToolDetails>> {}
 
 /** The state a job reports, as the mark a host draws for it. */
 function statusMark(status: JobSnapshot["status"]): ViewStatus {

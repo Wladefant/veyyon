@@ -20,10 +20,18 @@
 
 - Plugin runtime configuration uses the shared record validator; behavior is unchanged.
 - Edit-specific event normalization remains in `@veyyon/coding-agent/extensibility/tool-event-input`; event payloads are unchanged.
-- Settings lookups reuse immutable registry key snapshots and refresh derived indexes after registrations or resets.
+- Settings lookups reuse immutable registry key snapshots and build derived indexes in one pass after registrations or resets.
+- Settings stores share layer copying and override application while retaining profile values, per-directory resolution and isolated save-failure reports.
+- `@veyyon/kernel/settings/store` exports `groupSettingPaths`, memoizing prefix-grouped schema paths on the schema index with automatic invalidation on schema resets.
 - Array copies that allocated with a spread now use `.slice()`, `.concat()` or `Array.from()`. No user-visible behavior changes.
 - `@veyyon/kernel/session/session-entries` reads the shared entry vocabulary from `@veyyon/session` and registers its own entry kinds there; every name it exported is still exported and no file format changes.
 - The plugin manifest vocabulary (`PluginManifest`, `PluginFeature`, `PluginSettingSchema` and its setting kinds, `PluginSettingType`) moved from `@veyyon/kernel/loader/plugins/types` to `@veyyon/plugin`; `InstalledPlugin`, the lock-file state, the project overrides and the doctor and install option types stay.
+- SQL session storage consolidates parameterized queries across PostgreSQL, MySQL, and SQLite dialects.
+
+### Fixed
+
+- Settings queries ignore inherited object properties.
+- `Type.Pick` emits the keys it was asked for in the order they were asked for, and keeps a picked key that is own-but-non-enumerable on the validated value.
 
 ### Removed
 

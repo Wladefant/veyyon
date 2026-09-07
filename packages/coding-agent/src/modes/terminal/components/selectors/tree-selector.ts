@@ -1,9 +1,10 @@
 import { ThinkingLevel } from "@veyyon/agent-core";
 import type { SessionTreeNode } from "@veyyon/kernel/session/session-entries";
 import { type Component, Input } from "@veyyon/tui";
+import { HoverController } from "@veyyon/tui/utils/hover-controller";
 import { fuzzyMatch } from "@veyyon/utils/fuzzy";
 import { extractPrintableText, matchesKey } from "@veyyon/utils/keys";
-import { HoverFade, type HoverFadeOptions } from "@veyyon/utils/motion";
+import type { HoverFadeOptions } from "@veyyon/utils/motion";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import { padding } from "@veyyon/utils/padding";
 import { truncateToWidth } from "@veyyon/utils/width";
@@ -73,12 +74,7 @@ class TreeList implements Component {
 	/** Rows the card can spare for tree entries; the shell decides it per frame. */
 	#maxVisibleLines: number;
 	/** Pointer-highlighted entry (never the selected one; selection owns its row). */
-	#hoveredIndex: number | null = null;
-	/**
-	 * The cross-fade, once the card has lent this list a repaint
-	 * ({@link setHoverMotion}). Absent, the band is switched.
-	 */
-	#hoverFade?: HoverFade;
+	#hover = new HoverController<number>();
 	/** Per-render map of 0-based rendered line → filtered-node index. */
 	#hitRows: (number | undefined)[] = [];
 
@@ -446,9 +442,8 @@ class TreeList implements Component {
 	 * suppressing it there left a row nothing could point at.
 	 */
 	setHoverIndex(index: number | null): boolean {
-		if (this.#hoveredIndex === index) return false;
-		this.#hoveredIndex = index;
-		this.#hoverFade?.set(index);
+		if (this.#hover.key === index) return false;
+		this.#hover.set(index);
 		return true;
 	}
 
@@ -458,23 +453,12 @@ class TreeList implements Component {
 	 * `enabled: false` is the switched band.
 	 */
 	setHoverMotion(options: HoverFadeOptions): void {
-		this.#hoverFade?.dispose();
-		this.#hoverFade = new HoverFade(options);
-		if (this.#hoveredIndex !== null) this.#hoverFade.set(this.#hoveredIndex);
+		this.#hover.setMotion(options);
 	}
 
 	/** Drop the fade and forget the pointer, so no timer outlives the card. */
 	disposeHoverMotion(): void {
-		this.#hoverFade?.dispose();
-		this.#hoverFade = undefined;
-		this.#hoveredIndex = null;
-	}
-
-	/** Band strength for a row: 0 for the selected one, which owns its own styling. */
-	#hoverStrength(index: number, isSelected: boolean): number {
-		if (isSelected) return 0;
-		if (this.#hoverFade !== undefined) return this.#hoverFade.strengthAt(index);
-		return index === this.#hoveredIndex ? 1 : 0;
+		this.#hover.dispose();
 	}
 
 	/** Move the selection one step for a wheel notch (wraps like the arrow keys). */
@@ -695,7 +679,7 @@ class TreeList implements Component {
 			// before tinting so the highlight has the same shape on every entry. The
 			// pointer borrows the same band; the cursor keeps its accent arrow, so
 			// the two never read as one selection.
-			const hoverStrength = this.#hoverStrength(i, isSelected);
+			const hoverStrength = isSelected ? 0 : this.#hover.strength(i);
 			this.#hitRows[i - startIndex] = i;
 			if (isSelected) rows.push(selectionBand(line, rowWidth));
 			else if (hoverStrength > 0) rows.push(hoverBandAt(line, rowWidth, hoverStrength));

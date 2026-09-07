@@ -101,6 +101,7 @@
 : "${SCENE_HOLD:=120}"
 : "${SCENE_TYPING_REPEAT:=off}"
 : "${SCENE_MARK_LEAD_MIN_MS:=1200}"
+: "${SCENE_SCRATCH_DIR:=.scratch}"
 
 # Wayland-only. The X twin has no equivalent: there is one Xvfb screen and one
 # core pointer, and neither is named.
@@ -119,7 +120,7 @@
 # an empty string, it is `!name: unbound variable` and no recording at all -- and
 # the one scene that exports the knob itself keeps working, which is what hid it.
 : "${SCENE_SEED_ADVISORS:=0}"
-
+: "${SCENE_SEED_AUTORESEARCH:=0}"
 # ─── Motion gate ────────────────────────────────────────────────────────────
 : "${SCENE_MOTION_GATE:=1}"
 : "${SCENE_MOTION_FLOOR:=12}"
@@ -141,9 +142,8 @@ SCENE_BACKDROP_BLUR SCENE_CWD SCENE_SETTLE_SCALE SCENE_GIF SCENE_GIF_FPS
 SCENE_GIF_WIDTH SCENE_SETTINGS
 SCENE_SIGNING_NUMBER SCENE_HIDE_THINKING SCENE_COMMAND SCENE_MOTION_GATE
 SCENE_MOTION_FLOOR SCENE_MOTION_GATE_BIN SCENE_OUTPUT SCENE_SEAT SCENE_HOLD SCENE_TYPING_REPEAT SCENE_MARK_LEAD_MIN_MS SCENE_ARM
-SCENE_SEED_ADVISORS
+SCENE_SEED_ADVISORS SCENE_SEED_AUTORESEARCH SCENE_SCRATCH_DIR
 "
-
 # EVERY NAME IN THE LIST MUST HAVE A DEFAULT ABOVE, and the check runs here rather
 # than in the two forwarding loops, which reach `${!name}` one recorder invocation
 # later and report the failure as `!name: unbound variable` at a line that names no

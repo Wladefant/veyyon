@@ -581,10 +581,9 @@ fn is_rake_keep_line(trimmed: &str) -> bool {
 		return true;
 	}
 	let lower = trimmed.to_ascii_lowercase();
-	let words: Vec<&str> = lower.split_whitespace().collect();
-	words.iter().any(|w| {
+	lower.split_whitespace().any(|w| {
 		matches!(
-			*w,
+			w,
 			"passed"
 				| "failed"
 				| "error"
@@ -595,7 +594,6 @@ fn is_rake_keep_line(trimmed: &str) -> bool {
 		)
 	})
 }
-
 fn ruby_test_success(input: &str) -> String {
 	let mut out = String::new();
 	let mut summary = String::new();

@@ -13,9 +13,8 @@
  */
 
 import type { FramedBlockView, StatusRowView, ToolViewRenderer, ViewLine, ViewSection } from "@veyyon/view";
-import { stripOutputNotice } from "../core/output-meta";
-import { formatTruncationMetaNotice } from "../core/output-notice";
-import { PREVIEW_LIMITS, replaceTabs, shortenEmbeddedPaths } from "../core/render-utils";
+import { formatTruncationMetaNotice, stripOutputNotice } from "../core/output-notice";
+import { PREVIEW_LIMITS, replaceTabs, shortenEmbeddedPaths, type ToolViewResult } from "../core/render-utils";
 import type { SSHToolDetails } from "./ssh";
 
 /** The arguments the card reads off an ssh call, which is any subset the model has sent so far. */
@@ -26,11 +25,7 @@ export interface SshViewArgs {
 }
 
 /** The result the card reads, which is the tool's own result shape narrowed to what a card shows. */
-export interface SshViewResult {
-	content: Array<{ type: string; text?: string }>;
-	details?: SSHToolDetails;
-	isError?: boolean;
-}
+export interface SshViewResult extends ToolViewResult<SSHToolDetails> {}
 
 /** The emblem a settled ssh card is titled by, instead of a success tick. */
 const SSH_EMBLEM = "tool.ssh";

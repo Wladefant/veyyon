@@ -610,6 +610,7 @@ import { TodoRuntime } from "./runtime/todo-runtime";
 import { TtsrRuntime } from "./runtime/ttsr-runtime";
 import { formatSessionDumpText } from "./session-dump-format";
 import { formatSessionHistoryMarkdown } from "./session-history-format";
+import { incompleteTodoItems } from "./todo-reminder";
 import { parseTurnBudgetDirective } from "./turn-budget";
 import { planTurnPersistence, sameMessageContent, sessionMessagePersistenceKey } from "./turn-persistence";
 import { classifyUnexpectedStop, isUnexpectedStopCandidate } from "./unexpected-stop-classifier";
@@ -8660,14 +8661,9 @@ export class AgentSession {
 		const phases = this.getTodoPhases().filter(phase => phase.tasks.length > 0);
 		if (phases.length === 0) return undefined;
 
-		const tasks = phases.flatMap(phase => phase.tasks.map(task => ({ ...task, phase: phase.name })));
+		const tasks = phases.flatMap(phase => phase.tasks);
 		const closed = tasks.filter(task => task.status === "completed" || task.status === "abandoned").length;
-		const openItems = prioritizeTodoItems(
-			tasks.filter(
-				(task): task is typeof task & { status: "pending" | "in_progress" } =>
-					task.status === "pending" || task.status === "in_progress",
-			),
-		);
+		const openItems = prioritizeTodoItems(incompleteTodoItems(phases));
 		const next = openItems[0];
 		const nextItem = next
 			? {

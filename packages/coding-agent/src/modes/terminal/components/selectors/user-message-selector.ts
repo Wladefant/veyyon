@@ -1,16 +1,15 @@
 import { type Component, ScrollView } from "@veyyon/tui";
+import { HoverController } from "@veyyon/tui/utils/hover-controller";
 import { fuzzyFilter } from "@veyyon/utils/fuzzy";
 import { extractPrintableText, matchesKey } from "@veyyon/utils/keys";
-import { HoverFade, type HoverFadeOptions } from "@veyyon/utils/motion";
+import type { HoverFadeOptions } from "@veyyon/utils/motion";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import { padding } from "@veyyon/utils/padding";
 import { truncateToWidth } from "@veyyon/utils/width";
 import { theme } from "../../../../theme/theme";
-import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
+import { matchesSelectCancel } from "../../utils/keybinding-matchers";
 import {
 	computeModalDims,
-	consumeModalChipHover,
-	hitTestModalChrome,
 	MODAL_SIZING_MEDIUM,
 	type ModalShellGeometry,
 	type ModalShortcut,
@@ -18,6 +17,7 @@ import {
 	renderModalShell,
 	sizingForArea,
 } from "../chrome/modal-shell";
+import { handleListNavigationKey, routeModalCardMouse } from "./select-list-mouse-routing";
 import { hoverBandAt } from "./selector-helpers";
 
 interface UserMessageItem {
@@ -43,13 +43,7 @@ class UserMessageList implements Component {
 	onCancel?: () => void;
 	#maxVisible: number = 10; // Max messages visible
 	/** Pointer-highlighted message (never the selected one; selection owns its rows). */
-	#hoveredIndex: number | null = null;
-	/**
-	 * The cross-fade, once the card has lent this list a repaint
-	 * ({@link setHoverMotion}). Absent, the band is switched.
-	 */
-	#hoverFade?: HoverFade;
-	/** Per-render map of 0-based rendered line → filtered-message index. */
+	#hover = new HoverController<number>();
 	#hitRows: (number | undefined)[] = [];
 
 	constructor(private readonly messages: UserMessageItem[]) {
@@ -97,9 +91,8 @@ class UserMessageList implements Component {
 	 * suppressing it there left a row nothing could point at.
 	 */
 	setHoverIndex(index: number | null): boolean {
-		if (this.#hoveredIndex === index) return false;
-		this.#hoveredIndex = index;
-		this.#hoverFade?.set(index);
+		if (this.#hover.key === index) return false;
+		this.#hover.set(index);
 		return true;
 	}
 
@@ -109,25 +102,12 @@ class UserMessageList implements Component {
 	 * `enabled: false` is the switched band.
 	 */
 	setHoverMotion(options: HoverFadeOptions): void {
-		this.#hoverFade?.dispose();
-		this.#hoverFade = new HoverFade(options);
-		if (this.#hoveredIndex !== null) this.#hoverFade.set(this.#hoveredIndex);
+		this.#hover.setMotion(options);
 	}
 
 	/** Drop the fade and forget the pointer, so no timer outlives the card. */
 	disposeHoverMotion(): void {
-		this.#hoverFade?.dispose();
-		this.#hoverFade = undefined;
-		this.#hoveredIndex = null;
-	}
-
-	/**
-	 * Band strength for a message. Every row can carry a band, the cursor row included: suppressing
-	 * it there left the row the keyboard already sat on unable to answer the pointer at all.
-	 */
-	#hoverStrength(index: number): number {
-		if (this.#hoverFade !== undefined) return this.#hoverFade.strengthAt(index);
-		return index === this.#hoveredIndex ? 1 : 0;
+		this.#hover.dispose();
 	}
 
 	/** Move the selection one step for a wheel notch (wraps like the arrow keys). */
@@ -197,7 +177,7 @@ class UserMessageList implements Component {
 			const message = this.#filteredMessages[i];
 			if (!message) continue;
 			const isSelected = i === this.#selectedIndex;
-			const hoverStrength = this.#hoverStrength(i);
+			const hoverStrength = this.#hover.strength(i);
 
 			// Normalize message to single line
 			const normalizedMessage = message.text.replace(/\n/g, " ").trim();
@@ -256,27 +236,19 @@ class UserMessageList implements Component {
 			return;
 		}
 
-		// Up arrow - go to previous (older) message, wrap to bottom when at top
-		if (matchesSelectUp(keyData)) {
-			if (this.#filteredMessages.length > 0) {
-				this.#selectedIndex =
-					this.#selectedIndex === 0 ? this.#filteredMessages.length - 1 : this.#selectedIndex - 1;
-			}
-		}
-		// Down arrow - go to next (newer) message, wrap to top when at bottom
-		else if (matchesSelectDown(keyData)) {
-			if (this.#filteredMessages.length > 0) {
-				this.#selectedIndex =
-					this.#selectedIndex === this.#filteredMessages.length - 1 ? 0 : this.#selectedIndex + 1;
-			}
-		}
-		// Enter - select message and branch
-		else if (matchesKey(keyData, "enter") || matchesKey(keyData, "return") || keyData === "\n") {
-			const selected = this.#filteredMessages[this.#selectedIndex];
-			if (selected && this.onSelect) {
-				this.onSelect(selected.id);
-			}
-		}
+		handleListNavigationKey(keyData, {
+			selectedIndex: this.#selectedIndex,
+			totalItems: this.#filteredMessages.length,
+			onMove: next => {
+				this.#selectedIndex = next;
+			},
+			onSelect: () => {
+				const selected = this.#filteredMessages[this.#selectedIndex];
+				if (selected && this.onSelect) {
+					this.onSelect(selected.id);
+				}
+			},
+		});
 	}
 }
 
@@ -335,49 +307,33 @@ export class UserMessageSelectorComponent implements Component {
 	}
 
 	#routeMouse(event: SgrMouseEvent): boolean {
-		const chrome = hitTestModalChrome(this.#shellGeometry, event.row, event.col, {
-			motion: event.motion,
-			leftClick: event.leftClick,
-		});
-		if (
-			consumeModalChipHover(chrome, this.#hoveredShortcutId, id => {
+		return routeModalCardMouse({
+			shellGeometry: this.#shellGeometry,
+			event,
+			hoveredShortcutId: this.#hoveredShortcutId,
+			onHoverShortcut: id => {
 				this.#hoveredShortcutId = id;
 				this.#onRequestRender?.();
-			})
-		) {
-			return true;
-		}
-		if (
-			chrome.kind === "close" ||
-			chrome.kind === "outside" ||
-			(chrome.kind === "shortcut" && chrome.id === "close")
-		) {
-			this.#onCancelCallback();
-			return true;
-		}
-		if (chrome.kind === "shortcut" && chrome.id === "confirm") {
-			this.handleInput("\n");
-			return true;
-		}
-		if (event.wheel !== null) {
-			this.#messageList.handleWheel(event.wheel);
-			this.#onRequestRender?.();
-			return true;
-		}
-		// The body leads with a hint line and a blank before the list's own rows.
-		const line = event.row - this.#listRowStart;
-		if (event.motion) {
-			if (this.#messageList.setHoverIndex(this.#messageList.hitTest(line) ?? null)) {
+			},
+			onCancel: () => this.#onCancelCallback(),
+			onConfirm: () => this.handleInput("\n"),
+			onWheel: delta => {
+				this.#messageList.handleWheel(delta);
 				this.#onRequestRender?.();
-			}
-			return true;
-		}
-		if (event.leftClick) {
-			const index = this.#messageList.hitTest(line);
-			if (index !== undefined) this.#messageList.clickItem(index);
-			return true;
-		}
-		return true;
+			},
+			listRowStart: this.#listRowStart,
+			onHoverRow: () => {
+				const line = event.row - this.#listRowStart;
+				if (this.#messageList.setHoverIndex(this.#messageList.hitTest(line) ?? null)) {
+					this.#onRequestRender?.();
+				}
+			},
+			onClickRow: () => {
+				const line = event.row - this.#listRowStart;
+				const index = this.#messageList.hitTest(line);
+				if (index !== undefined) this.#messageList.clickItem(index);
+			},
+		});
 	}
 
 	render(width: number): readonly string[] {

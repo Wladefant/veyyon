@@ -5970,11 +5970,22 @@ dependencies = [
 name = "veyyon-grep-kernel"
 version = "1.4.0"
 dependencies = [
+ "clap",
+ "clap_complete",
+ "clap_mangen",
+ "globset",
+ "grep-cli",
  "grep-matcher",
  "grep-pcre2",
+ "grep-printer",
  "grep-regex",
  "grep-searcher",
+ "ignore",
  "regex-syntax",
+ "serde_json",
+ "smallvec",
+ "veyyon-uutils-ctx",
+ "veyyon-walker",
 ]
 
 [[package]]

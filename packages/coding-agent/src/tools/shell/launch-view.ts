@@ -23,16 +23,20 @@ import type {
 	ViewTone,
 } from "@veyyon/view";
 import type { DaemonSnapshot, DaemonState } from "../../launch/protocol";
+import { extractResultText } from "../core/output-notice";
 import {
 	DEFAULT_TERMINAL_PREVIEW_LINES,
 	formatDuration,
+	heldBack,
 	LINE_NOUN,
+	metaLines,
 	PREVIEW_LIMITS,
 	pluralize,
 	previewLine,
 	replaceTabs,
 	shortenEmbeddedPaths,
 	shortenPath,
+	type ToolViewResult,
 	TRUNCATE_LENGTHS,
 } from "../core/render-utils";
 import { callMeta, type LaunchRenderArgs, type LaunchToolDetails, readyPendingSummary } from "./launch";
@@ -47,11 +51,7 @@ const LAUNCH_EMBLEM = "tool.launch";
 const PROCESS_NOUN = { one: "process", many: "processes" } as const;
 
 /** The result the card reads, which is the tool's own result shape narrowed to what a card shows. */
-export interface LaunchViewResult {
-	content?: Array<{ type: string; text?: string }>;
-	details?: LaunchToolDetails;
-	isError?: boolean;
-}
+export interface LaunchViewResult extends Partial<ToolViewResult<LaunchToolDetails>> {}
 
 /** The role a daemon's state plays, which a host maps to its own appearance. */
 function stateTone(state: DaemonState): ViewTone {
@@ -116,7 +116,7 @@ function daemonFacts(daemon: DaemonSnapshot): ViewLine {
 
 /** The call's own context: the log filters, the wait condition or the payload a send carries. */
 function callEntries(args: LaunchRenderArgs): ViewLine[] {
-	return callMeta(args).map(entry => [{ text: entry }] as ViewLine);
+	return metaLines(callMeta(args));
 }
 
 /**
@@ -155,26 +155,16 @@ function textLines(text: string): ViewLine[] {
 		.map(line => [{ text: line, tone: "output" as const }] as ViewLine);
 }
 
-/** The text every op falls back to: the parts of the result the model was sent. */
-function resultText(result: LaunchViewResult): string {
-	return (
-		result.content
-			?.filter(item => item.type === "text")
-			.map(item => item.text ?? "")
-			.join("\n") ?? ""
-	);
-}
-
 /** The rows a card shows and the count it kept back, for a body the tool caps itself. */
 function capped(lines: readonly ViewLine[], limit: number | undefined, noun: ViewHiddenCount["noun"]): ViewSection {
 	if (limit === undefined || lines.length <= limit) return { lines, clip: true };
+	const hidden = heldBack(lines.length - limit, noun);
 	return {
 		lines: lines.slice(0, limit),
-		hidden: { count: lines.length - limit, noun, revealable: true },
+		...(hidden === undefined ? {} : { hidden }),
 		clip: true,
 	};
 }
-
 /** What the `start` op reports beyond the process's own facts: what matched, and what did not. */
 function startBody(details: LaunchToolDetails | undefined, args: LaunchRenderArgs): ViewLine[] {
 	const daemon = details?.daemon;
@@ -297,7 +287,7 @@ export const launchToolView: Required<ToolViewRenderer<LaunchRenderArgs, LaunchV
 		const daemon = details?.daemon;
 		const failed = isError || daemon?.state === "failed";
 		const partial = context.partial === true;
-		const text = resultText(result);
+		const text = extractResultText(result.content);
 
 		const meta: ViewLine[] = [];
 		let body: ViewLine[] = [];

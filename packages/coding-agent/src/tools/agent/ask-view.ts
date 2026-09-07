@@ -9,7 +9,13 @@
  */
 
 import type { StatusRowView, ToolView, ToolViewContext, ViewLine, ViewSection } from "@veyyon/view";
-import { replaceTabs, sanitizeErrorText, shortenEmbeddedPaths } from "../core/render-utils";
+import {
+	metaLines,
+	replaceTabs,
+	sanitizeErrorText,
+	shortenEmbeddedPaths,
+	type ToolViewResult,
+} from "../core/render-utils";
 import type { AskToolDetails, QuestionResult } from "./ask";
 
 /** One choice offered by a call, as the streamed arguments carry it. */
@@ -30,11 +36,7 @@ export interface AskRenderArgs {
 	}>;
 }
 
-export interface AskViewResult {
-	content?: Array<{ type: string; text?: string }>;
-	details?: AskToolDetails;
-	isError?: boolean;
-}
+export interface AskViewResult extends Partial<ToolViewResult<AskToolDetails>> {}
 
 /** The glyph a card's own emblem names, for a settled answer. */
 const ASK_EMBLEM = "tool.ask";
@@ -285,7 +287,7 @@ function callView(args: AskRenderArgs): ToolView {
 			kind: "statusRow",
 			title: "Ask",
 			titleTone: "title",
-			...(meta.length === 0 ? {} : { meta: meta.map(entry => [{ text: entry }]) }),
+			...(meta.length === 0 ? {} : { meta: metaLines(meta) }),
 		},
 		state: "pending",
 		sections: offeredSections({ question: args.question, options, multi: args.multi }),

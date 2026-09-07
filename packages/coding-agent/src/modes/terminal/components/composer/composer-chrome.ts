@@ -22,7 +22,7 @@ import { groundHairlineHex, groundTintFgAnsi } from "../../../../theme/ground-ti
 import { theme } from "../../../../theme/theme-binding";
 import { branchLabelFromFiles } from "../../../../utils/git-head";
 import { EMBER } from "../chrome/sun";
-import { type LocationContext, resolveLocationContext } from "../status-line/location-context";
+import { resolveLocationContext } from "../status-line/location-context";
 import {
 	composeQuietRow,
 	effectiveStatusLineSettings,
@@ -461,15 +461,18 @@ export class LaunchComposerHead implements Component {
  */
 export class LaunchComposerFoot implements Component {
 	readonly #getDraft: () => string;
-	#location: LocationContext | undefined;
 
 	constructor(getDraft: () => string) {
 		this.#getDraft = getDraft;
 	}
 
+	measureHeight(_width: number): number {
+		return 4;
+	}
+
 	render(width: number): string[] {
 		const w = Math.max(1, width);
-		const inset = " ".repeat(COMPOSER_INSET_COLS);
+		const inset = " ".repeat(Math.min(COMPOSER_INSET_COLS, w));
 		return ["", truncateToWidth(`${inset}${this.#footline(w - COMPOSER_INSET_COLS)}`, w), "", ""];
 	}
 
@@ -498,8 +501,10 @@ export class LaunchComposerFoot implements Component {
 		// The endless-session `∞` is a CONFIGURED fact, not a measured one, so the
 		// row states it now rather than letting it appear beside the gauge a
 		// second later. Same predicate the session mirrors into the live row.
-		const compaction = settings.getGroup("compaction");
-		const autoCompactEnabled = !isThresholdCompactionDisabled(compaction.enabled, compaction.strategy);
+		const autoCompactEnabled = !isThresholdCompactionDisabled(
+			settings.get("compaction.enabled"),
+			settings.get("compaction.strategy"),
+		);
 		const groups = gatherQuietSegments({
 			width: avail,
 			effectiveSettings,
@@ -507,14 +512,13 @@ export class LaunchComposerFoot implements Component {
 			expansion: 0,
 			buildContext: request => {
 				const projectDir = getProjectDir();
-				let location: LocationContext | null = null;
-				if (gitEnabled && (request.includePath || request.includeGit || request.includePr)) {
-					if (this.#location?.projectDir !== projectDir) this.#location = resolveLocationContext(projectDir);
-					location = this.#location;
-				}
+				const location =
+					gitEnabled && (request.includePath || request.includeGit || request.includePr)
+						? resolveLocationContext(projectDir)
+						: null;
 				const branch =
-					request.includeGit || request.includePr
-						? branchLabelFromFiles(location?.effectiveGitCwd ?? projectDir)
+					(request.includeGit || request.includePr) && location?.repository
+						? branchLabelFromFiles(location.repository)
 						: null;
 				return launchSegmentContext({
 					width: request.width,

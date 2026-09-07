@@ -64,3 +64,8 @@ export interface ToolRenderer {
 	/** Expanded body. Omit when the summary already says everything. */
 	Body?: ComponentType<ToolRenderProps>;
 }
+
+export interface ToolDescriptor extends ToolRenderer {
+	name: string;
+	aliases?: readonly string[];
+}

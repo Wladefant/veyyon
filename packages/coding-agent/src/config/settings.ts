@@ -26,6 +26,7 @@ import {
 	deleteByPath,
 	type GlobalSettingBinding,
 	getByPath,
+	groupSettingPaths,
 	type RawSettings,
 	type SettingSource,
 	type SettingsOptions,
@@ -71,14 +72,7 @@ import {
 	settingsInstancePromise,
 	settingsOrThrow,
 } from "./settings-instance";
-import {
-	type BashInterceptorRule,
-	type GroupPrefix,
-	type GroupTypeMap,
-	SETTINGS_SCHEMA,
-	type SettingPath,
-	type SettingValue,
-} from "./settings-schema";
+import type { BashInterceptorRule, GroupPrefix, GroupTypeMap, SettingPath, SettingValue } from "./settings-schema";
 import {
 	appendOnlyModeSignal,
 	autoThemeMappingSignal,
@@ -94,7 +88,6 @@ export { settingSignalListenerCounts } from "@veyyon/kernel/settings/signal";
 // and its helpers — under the name every caller already imports.
 export * from "@veyyon/kernel/settings/store";
 // Re-export types that callers need
-export type * from "./settings-schema";
 export * from "./settings-schema";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -174,6 +167,19 @@ function modelRoleValueFromUnknown(value: unknown): string | undefined {
 
 	const entries = stringArrayFromUnknown(value);
 	return entries.length === value.length ? entries.join(",") : undefined;
+}
+
+function normalizeModelRoles(value: unknown): Record<string, string> {
+	if (!isRecord(value)) return {};
+	const roles: Record<string, string> = {};
+	for (const role in value) {
+		if (!Object.hasOwn(value, role)) continue;
+		const modelId = modelRoleValueFromUnknown(value[role]);
+		if (modelId !== undefined) {
+			roles[role] = modelId;
+		}
+	}
+	return roles;
 }
 
 type EditVariantEntry = {
@@ -1216,11 +1222,8 @@ export class Settings extends SettingsStore {
 	 */
 	getGroup<G extends GroupPrefix>(prefix: G): GroupTypeMap[G] {
 		const result: Record<string, unknown> = {};
-		for (const key of Object.keys(SETTINGS_SCHEMA) as SettingPath[]) {
-			if (key.startsWith(`${prefix}.`)) {
-				const suffix = key.slice(prefix.length + 1);
-				result[suffix] = this.get(key);
-			}
+		for (const key of groupSettingPaths(prefix)) {
+			result[key.slice(prefix.length + 1)] = this.get(key);
 		}
 		return result as unknown as GroupTypeMap[G];
 	}
@@ -1283,18 +1286,7 @@ export class Settings extends SettingsStore {
 	}
 
 	#modelRolesFromLayer(layer: "profile" | "config-file" | "runtime"): Record<string, string> {
-		const value = this.layerValue(layer, ["modelRoles"]);
-		if (!isRecord(value)) return {};
-
-		const roles: Record<string, string> = {};
-		for (const role in value) {
-			if (!Object.hasOwn(value, role)) continue;
-			const modelId = modelRoleValueFromUnknown(value[role]);
-			if (modelId !== undefined) {
-				roles[role] = modelId;
-			}
-		}
-		return roles;
+		return normalizeModelRoles(this.layerValue(layer, ["modelRoles"]));
 	}
 
 	/** Return one role from the profile layer, excluding project and runtime overrides. */
@@ -1367,18 +1359,7 @@ export class Settings extends SettingsStore {
 	 * Get all model roles (helper for modelRoles record).
 	 */
 	getModelRoles(): ReadOnlyDict<string> {
-		const roles: unknown = this.get("modelRoles");
-		if (!isRecord(roles)) return {};
-
-		const normalized: Record<string, string> = {};
-		for (const role in roles) {
-			if (!Object.hasOwn(roles, role)) continue;
-			const modelId = modelRoleValueFromUnknown(roles[role]);
-			if (modelId !== undefined) {
-				normalized[role] = modelId;
-			}
-		}
-		return normalized;
+		return normalizeModelRoles(this.get("modelRoles"));
 	}
 
 	/*

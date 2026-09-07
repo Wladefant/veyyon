@@ -10,6 +10,11 @@
 # above this line should know which one is running. Everything else here --
 # typing, the composer, the waits, screen reads -- is already server-independent:
 # it goes through kitty's socket into the pty.
+if [ -z "${TMPDIR:-}" ]; then
+	echo "lib.sh: TMPDIR is not set; expected shared scratch directory exported by session launcher" >&2
+	exit 1
+fi
+
 SCENE_SERVER="${SCENE_SERVER:-x11}"
 # shellcheck disable=SC1090
 source "$(dirname "${BASH_SOURCE[0]}")/backend-${SCENE_SERVER}.sh"
@@ -17,7 +22,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/backend-${SCENE_SERVER}.sh"
 # The grid comes from the shell (`stty size`), and the pixel size of a cell from
 # the window divided by that grid. Asking the terminal directly (CSI 16t) only
 # works where window operations are enabled, which xterm disables by default.
-read -r TERM_ROWS TERM_COLS <<<"$(sed -n 's/^stty=//p' /tmp/geom)"
+read -r TERM_ROWS TERM_COLS <<<"$(sed -n 's/^stty=//p' "${TMPDIR}/geom")"
 PAD="${SCENE_PADDING:-8}"
 : "${TERM_ROWS:=40}" "${TERM_COLS:=150}"
 read -r WIN_W WIN_H <<<"$(_be_window_px)"
@@ -111,7 +116,7 @@ key_repeat() { # key_repeat <key> <count> [delay]
 #
 # The xdotool path remains as a fallback for a terminal without the socket -- an xterm
 # scene, or an image built before this -- and it keeps the delay that behaved best.
-KITTY_SOCKET="${KITTY_SOCKET:-unix:/tmp/kitty.sock}"
+KITTY_SOCKET="${KITTY_SOCKET:-unix:${TMPDIR}/kitty.sock}"
 
 # XTEST fallback used when kitty remote control does not answer. Named so a
 # missing binary fails as `_xdo: command not found` only if this function is
@@ -390,14 +395,6 @@ scene_terminal_alive() {
 # on an edit block, ran past an hour, and published two byte-identical frames under two
 # names. Abandoning at the first miss costs one ceiling, and the reason file is what the
 # host reads to decide whether the scene or the model is at fault.
-# True while the window the session handed the scene still exists. The X session
-# exports SCENE_WINDOW; the Wayland one has no window id and no xdotool, so an
-# unanswerable question is answered "alive" and changes no message.
-scene_terminal_alive() {
-	[ -n "${SCENE_WINDOW:-}" ] || return 0
-	command -v xdotool >/dev/null 2>&1 || return 0
-	xdotool getwindowgeometry "${SCENE_WINDOW}" >/dev/null 2>&1
-}
 
 abandon_take() {
 	local guard="$1" reason="$2"
@@ -409,8 +406,8 @@ abandon_take() {
 	# first, so the product's own stderr is what gets reported.
 	if ! scene_terminal_alive; then
 		echo "scene: the terminal exited mid-take -- every frame after that is an empty screen" >&2
-		tail -20 /tmp/boot.err >&2 2>/dev/null || true
-		tail -10 /tmp/term.log >&2 2>/dev/null || true
+		tail -20 "${TMPDIR}/boot.err" >&2 2>/dev/null || true
+		tail -10 "${TMPDIR}/term.log" >&2 2>/dev/null || true
 		reason="the terminal exited mid-take, so: ${reason}"
 	fi
 	echo "scene: abandoning the take -- ${guard}: ${reason}" >&2
@@ -590,7 +587,7 @@ settle_idle() {
 	sleep "${floor}"
 	local prev="" now="" same=0 changed=0 waited="${floor}"
 	while [ "${waited}" -lt "${ceiling}" ]; do
-		now="$(kitty @ --to "${KITTY_SOCKET}" get-text 2>"${SCENE_OUT:-/tmp}/get-text.err" | tr -d '0-9' || true)"
+		now="$(kitty @ --to "${KITTY_SOCKET}" get-text 2>"${SCENE_OUT:-${TMPDIR}}/get-text.err" | tr -d '0-9' || true)"
 		if [ -z "${now}" ]; then
 			# A WAIT THAT CANNOT SEE IS THE ONE FAILURE THAT MUST NOT BE QUIET. This
 			# branch used to spend the ceiling as a sleep and return without a word, so a
@@ -599,9 +596,9 @@ settle_idle() {
 			# and the reason was invisible in the log. One retry, because a single dump
 			# can lose a race with a redraw, and then the reason in the log.
 			sleep 2
-			now="$(kitty @ --to "${KITTY_SOCKET}" get-text 2>>"${SCENE_OUT:-/tmp}/get-text.err" | tr -d '0-9' || true)"
+			now="$(kitty @ --to "${KITTY_SOCKET}" get-text 2>>"${SCENE_OUT:-${TMPDIR}}/get-text.err" | tr -d '0-9' || true)"
 			if [ -z "${now}" ]; then
-				echo "scene: get-text read nothing from ${KITTY_SOCKET}, falling back to a plain sleep: $(tail -1 "${SCENE_OUT:-/tmp}/get-text.err" 2>/dev/null)" >&2
+				echo "scene: get-text read nothing from ${KITTY_SOCKET}, falling back to a plain sleep: $(tail -1 "${SCENE_OUT:-${TMPDIR}}/get-text.err" 2>/dev/null)" >&2
 				sleep "$((ceiling - waited))"
 				return 0
 			fi

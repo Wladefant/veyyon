@@ -119,7 +119,7 @@ export interface FirstFrame {
 	 * Called once the paint has reached the terminal, because that is when the bytes are complete
 	 * and the composed rows are final.
 	 */
-	settleReplayRecording(): void;
+	settleReplayRecording(): Promise<void>;
 	/** Drop the launch rows, leaving an empty root for the mode's own tree. Idempotent. */
 	release(): void;
 	/**
@@ -191,7 +191,8 @@ export function paintFirstFrame(version: string, keybindings?: KeybindingsManage
 	const keybindingsManager = keybindings ?? KeybindingsManager.create();
 	const editor = new CustomEditor(getEditorTheme());
 	// Typeahead must paint before the next runtime import can occupy the event loop.
-	const renderInput = (): void => ui.requestRender(true);
+	const inputRenderOptions = { preserveViewport: true };
+	const renderInput = (): void => ui.requestRender(true, inputRenderOptions);
 	editor.onChange = renderInput;
 	editor.applyKeybindings(keybindingsManager);
 	applyComposerChrome(editor, resolveComposerAccents(PRISTINE_COMPOSER_ACCENT_STATE));
@@ -290,16 +291,27 @@ export function paintFirstFrame(version: string, keybindings?: KeybindingsManage
 	// Everything the render writes from here, which is the recording the next launch replays. The
 	// wrapper goes on AFTER `start`, so the terminal setup it emits -- the capability queries above
 	// all -- stays out: replaying a query means a second answer arriving with nobody expecting it.
+	let capturing = true;
 	let captured = "";
+	let recordingSettled = false;
+	let pendingSettlement: Promise<void> | undefined;
 	const terminal = ui.terminal;
-	const passThrough = terminal.write.bind(terminal);
-	terminal.write = (data: string): void => {
-		captured += data;
-		passThrough(data);
-	};
+	const originalWrite = terminal.write;
 	const stopCapture = (): void => {
-		terminal.write = passThrough;
+		if (!capturing) return;
+		capturing = false;
+		if (terminal.write === wrappedWrite) {
+			terminal.write = originalWrite;
+		}
+		captured = "";
 	};
+	const wrappedWrite = (data: string): void => {
+		if (capturing) {
+			captured += data;
+		}
+		originalWrite.call(terminal, data);
+	};
+	terminal.write = wrappedWrite;
 
 	// The session records the at-rest facts the moment they exist; the card
 	// reads them on every render, so the only thing a record needs is a render.
@@ -321,6 +333,8 @@ export function paintFirstFrame(version: string, keybindings?: KeybindingsManage
 		editorContainer,
 		keybindings: keybindingsManager,
 		release(): void {
+			recordingSettled = true;
+			stopCapture();
 			if (editor.onChange === renderInput) editor.onChange = undefined;
 			unsubscribeFacts();
 			discardUntilMount?.();
@@ -329,24 +343,36 @@ export function paintFirstFrame(version: string, keybindings?: KeybindingsManage
 			mounted = false;
 			for (const child of children) ui.removeChild(child);
 		},
-		settleReplayRecording(): void {
+		settleReplayRecording(): Promise<void> {
+			if (pendingSettlement !== undefined) {
+				return pendingSettlement;
+			}
+			if (recordingSettled || !mounted) {
+				stopCapture();
+				return Promise.resolve();
+			}
+			recordingSettled = true;
+			const recordingBytes = captured;
 			stopCapture();
 			const screen = ui.paintedScreen();
 			if (adopted === undefined) {
-				recordFirstFrame({
-					bytes: captured,
+				pendingSettlement = recordFirstFrame({
+					bytes: recordingBytes,
 					cols: ui.terminal.columns,
 					rows: ui.terminal.rows,
 					screen,
 					tip: hero.tip ?? "",
 				});
-				return;
+				return pendingSettlement;
 			}
 			const window = screen.window;
 			const previous = adopted.screen.window;
 			// The screen was replayed and the real card agrees with it row for row, so the recording
 			// still describes what a launch paints and stays.
-			if (window.length === previous.length && window.every((row, at) => row === previous[at])) return;
+			if (window.length === previous.length && window.every((row, at) => row === previous[at])) {
+				pendingSettlement = Promise.resolve();
+				return pendingSettlement;
+			}
 			// It disagreed, so the operator just watched those rows correct themselves. The bytes that
 			// would record the NEW card were never emitted -- only the diff was -- so the recording is
 			// dropped and the next launch composes one and records it. One corrected launch, not a run
@@ -359,7 +385,8 @@ export function paintFirstFrame(version: string, keybindings?: KeybindingsManage
 				replayedRows: previous.length,
 				composedRows: window.length,
 			});
-			clearFirstFrameRecording();
+			pendingSettlement = clearFirstFrameRecording();
+			return pendingSettlement;
 		},
 		async settleQueuedInput(): Promise<boolean> {
 			// A check-phase turn, so the loop reaches poll and the reader hands
@@ -372,10 +399,14 @@ export function paintFirstFrame(version: string, keybindings?: KeybindingsManage
 			// but must not auto-submit on handover.
 			editor.beginEarlySubmissions();
 			if (editor.getText().length === 0) return false;
+			// Input typed before or during the card means this launch cannot be replayed as a
+			// pristine card. Stop capturing immediately before rendering the typed draft to the terminal.
+			recordingSettled = true;
+			stopCapture();
 			// Forced rather than trusted: the editor's own render request is
 			// subject to the throttle, and this call is the one that has to be
 			// on screen before the caller blocks the loop again.
-			ui.requestRender(true);
+			renderInput();
 			const written = Promise.withResolvers<void>();
 			setImmediate(written.resolve);
 			await written.promise;

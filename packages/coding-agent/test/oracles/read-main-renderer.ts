@@ -4,6 +4,6 @@
  */
 import { type LegacyRenderer, loadHistoricalOracle } from "./historical-loader";
 
-const oracle = loadHistoricalOracle("read-main-renderer");
+const oracle = await loadHistoricalOracle("read-main-renderer");
 
 export const readToolRenderer = oracle.readToolRenderer as LegacyRenderer;

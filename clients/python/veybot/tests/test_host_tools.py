@@ -3740,3 +3740,29 @@ def test_repair_commit_escapes_rewrites_fork_point_across_merge(db: Database, tm
     assert "\\n" not in bodies, bodies
     # And the intended real newline must be present in the repaired subject/body.
     assert "P_subject\nP_body" in bodies, bodies
+
+def test_tool_table_exhaustive_runtime_derivation(db: Database, tmp_path: Path) -> None:
+    """Assert every advertised host tool in host_tools.toml is registered in TOOL_TABLE
+    with a valid handler, and build() instantiates all specs in TOOL_TABLE."""
+    import tomllib
+    from pathlib import Path
+    from veybot import persona
+    prompts_toml = Path(persona.__file__).parent / "prompts" / "host_tools.toml"
+    with prompts_toml.open("rb") as f:
+        toml_tools = tomllib.load(f)
+
+    toml_names = set(toml_tools.keys())
+    table_names = set(host_tools.TOOL_TABLE.keys())
+    assert toml_names == table_names
+
+    for name, spec in host_tools.TOOL_TABLE.items():
+        assert callable(spec.handler), f"Tool {name} must have a callable handler"
+        assert spec.name == name
+
+    bindings, loop, thread = _bindings(db, tmp_path, httpx.MockTransport(lambda _r: httpx.Response(500)))
+    try:
+        tools = host_tools.build(bindings)
+        built_names = {t.name for t in tools}
+        assert built_names == table_names
+    finally:
+        _stop_loop(loop, thread)

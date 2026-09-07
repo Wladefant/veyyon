@@ -4,6 +4,6 @@
  */
 import { type LegacyRenderer, loadHistoricalOracle } from "./historical-loader";
 
-const oracle = loadHistoricalOracle("ast-edit-main-renderer");
+const oracle = await loadHistoricalOracle("ast-edit-main-renderer");
 
 export const astEditToolRenderer = oracle.astEditToolRenderer as LegacyRenderer;

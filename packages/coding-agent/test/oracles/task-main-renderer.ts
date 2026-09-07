@@ -6,7 +6,7 @@ import type { Theme } from "@veyyon/coding-agent/theme/theme-class";
 import type { Component } from "@veyyon/tui";
 import { loadHistoricalOracle } from "./historical-loader";
 
-const oracle = loadHistoricalOracle("task-main-renderer");
+const oracle = await loadHistoricalOracle("task-main-renderer");
 
 export const formatTaskId = oracle.formatTaskId as (id: string) => string;
 export const renderCall = oracle.renderCall as (args: unknown, options: unknown, theme: Theme) => Component;

@@ -14,6 +14,8 @@
 
 ### Added
 
+- Components can provide `measureHeight(width)` for layout measurement without constructing rendered rows.
+- Forced render requests accept `preserveViewport` to paint changed rows immediately while retaining pending full-repaint and scrollback requests.
 - `TUI.frameScrollable` states whether the last composed frame had content above the viewport, so a host can render a scroll affordance without re-deriving it from row counts it cannot see.
 - The package is `hosts/terminal/engine` in the repository, beside the other halves of the terminal host. The published package name, exports and entry points are unchanged.
 - `Form`: a component of labelled fields — `text` with an in-field caret, `stepper` with `◂`/`▸` arrows and typed digits, `toggle`, `segmented`, `button` and `note` — that lays every value out at one column after the widest label, moves a ring with `↑↓`/`tab`, routes a click to the caret, arrow, option, switch or button under the pointer, windows a `segmented` strip wider than its row around the chosen option, and moves the ring on from a text field whose Enter nothing takes.
@@ -22,6 +24,10 @@
 
 ### Changed
 
+- Collapsed and deduplicated scroll math, search input filtering, border framing, cursor deletion and autocomplete helpers across engine components without changing rendering or behavior.
+- Direct writes and component-scoped rendering share layout-reuse checks, and frame rendering shares cursor-marker extraction, selection and row-divergence scans without changing terminal output.
+- Markdown rendering uses the shared HTML entity decoder without changing displayed text.
+- Text layout and pointer-hover state use shared implementations without changing rendering or input handling.
 - Array copies that allocated with a spread now use `.slice()`, `.concat()` or `Array.from()`. No user-visible behavior changes.
 - `TerminalNotification` extends `HostNotification` from `@veyyon/utils/host-notification`, so a terminal is one host that can deliver a tool's notification and the two shapes cannot drift apart.
 - `visualColAtOffset` and `offsetAtVisualCol` are exported from `@veyyon/tui` utils, shared by `Editor` and `Input`.

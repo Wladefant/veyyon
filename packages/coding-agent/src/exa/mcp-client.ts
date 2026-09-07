@@ -33,7 +33,7 @@ export function findApiKey(): string | null {
  * - structured payload under result.structuredContent / result.data / result.result
  * - JSON payload embedded as text in result.content[]
  */
-function normalizeMcpToolPayload(payload: unknown): unknown {
+export function normalizeMcpToolPayload(payload: unknown): unknown {
 	const candidates: unknown[] = [];
 	const root = asRecord(payload);
 

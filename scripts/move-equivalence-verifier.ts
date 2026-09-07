@@ -19,14 +19,15 @@
  * corrupted bytes are compared strictly by raw bytes (`Buffer.equals()`).
  */
 
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { REPO_ROOT } from "./git-baseline";
 import {
+	classifyMovePairContent,
 	isBinaryFile,
 	type MoveEquivalenceLedger,
 	normalizeWithRewrites,
+	sha256,
 	structuralHash,
 } from "./measure-move-equivalence";
 
@@ -108,13 +109,13 @@ export function verifyMovedFiles(
 			const isBinary = approved.kind === "binary" || isBinaryFile(newPath, baselineBuf, diskBuf);
 
 			if (isBinary) {
-				const diskHash = createHash("sha256").update(diskBuf).digest("hex");
+				const diskHash = sha256(diskBuf);
 				if (diskHash !== approved.hash) {
 					drifted.push(`${newPath}: approved binary hash drifted (expected ${approved.hash}, got ${diskHash})`);
 				}
 			} else {
 				const diskNormalized = normalizeWithRewrites(diskBuf.toString("utf-8"), rewrites);
-				const diskHash = createHash("sha256").update(diskNormalized).digest("hex");
+				const diskHash = sha256(diskNormalized);
 				const diskStruct = structuralHash(diskNormalized, newPath);
 				if (diskHash !== approved.hash || diskStruct !== approved.structuralHash) {
 					drifted.push(`${newPath}: approved changed fingerprint drifted`);
@@ -123,30 +124,16 @@ export function verifyMovedFiles(
 			continue;
 		}
 
-		const isBinary = isBinaryFile(newPath, baselineBuf, diskBuf);
+		const classification = classifyMovePairContent(oldPath, newPath, baselineBuf, diskBuf, rewrites);
 
-		if (isBinary) {
-			if (diskBuf.equals(baselineBuf)) {
-				noneCount++;
-			} else {
-				unapproved.push(`${newPath}: binary mismatch against baseline ${oldPath}`);
-			}
-			continue;
-		}
-
-		const normalizedDisk = normalizeWithRewrites(diskBuf.toString("utf-8"), rewrites);
-		const normalizedBaseline = normalizeWithRewrites(baselineBuf.toString("utf-8"), rewrites);
-
-		if (normalizedDisk === normalizedBaseline) {
+		if (classification.category === "none") {
 			noneCount++;
+		} else if (classification.category === "importsAndCommentsOnly") {
+			importCount++;
+		} else if (classification.isBinary) {
+			unapproved.push(`${newPath}: binary mismatch against baseline ${oldPath}`);
 		} else {
-			const structDisk = structuralHash(normalizedDisk, newPath);
-			const structBaseline = structuralHash(normalizedBaseline, oldPath);
-			if (structDisk === structBaseline) {
-				importCount++;
-			} else {
-				unapproved.push(`${newPath}: unexpected deviation from baseline ${oldPath}`);
-			}
+			unapproved.push(`${newPath}: unexpected deviation from baseline ${oldPath}`);
 		}
 	}
 

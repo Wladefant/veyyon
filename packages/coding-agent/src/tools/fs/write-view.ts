@@ -22,8 +22,18 @@ import type {
 } from "@veyyon/view";
 import { getLanguageFromPath } from "../../utils/lang-from-path";
 import { diagnosticsSection } from "../core/diagnostics";
-import { LINE_NOUN, sanitizeErrorText, shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "../core/render-utils";
-import { normalizeDisplayText, WRITE_STREAMING_PREVIEW_LINES, type WriteToolDetails } from "./write";
+import { extractResultText } from "../core/output-notice";
+import { pathOf } from "../core/path-utils";
+import {
+	errorSection,
+	heldBack,
+	LINE_NOUN,
+	shortenPath,
+	type ToolViewResult,
+	TRUNCATE_LENGTHS,
+	truncateToWidth,
+} from "../core/render-utils";
+import type { WriteToolDetails } from "./write";
 
 /** What every card of this tool is titled. */
 const WRITE_TITLE = "Write";
@@ -34,6 +44,36 @@ const WRITE_EMBLEM = "tool.write";
 /** Lines of the file a collapsed settled card shows before it says how many it kept back. */
 const WRITE_PREVIEW_LINES = 6;
 
+export const WRITE_STREAMING_PREVIEW_LINES = 12;
+
+export function normalizeDisplayText(text: unknown): string {
+	let displayText = "";
+	if (typeof text === "string") {
+		displayText = text;
+	} else if (text !== undefined && text !== null) {
+		displayText = String(text);
+	}
+	return displayText.replace(/\r/g, "");
+}
+
+/**
+ * Whether the text a call carries outgrows the window a streaming preview shows.
+ *
+ * A bounded newline scan rather than a split, because this runs on every live compose while the
+ * model writes: the answer is whether the count passes the window, so the scan stops the moment it
+ * does and never materializes the lines.
+ */
+export function writeContentExceedsStreamingWindow(args: unknown): boolean {
+	if (args == null || typeof args !== "object" || !("content" in args)) return false;
+	const content = args.content;
+	if (typeof content !== "string" || !content) return false;
+	let lines = 1;
+	for (let index = content.indexOf("\n"); index !== -1; index = content.indexOf("\n", index + 1)) {
+		if (++lines > WRITE_STREAMING_PREVIEW_LINES) return true;
+	}
+	return false;
+}
+
 /** The arguments the card reads off the call, which are the path under either name and the text. */
 export interface WriteViewArgs {
 	path?: unknown;
@@ -42,17 +82,7 @@ export interface WriteViewArgs {
 }
 
 /** The result the card reads, which is the tool's own result shape narrowed to what a card shows. */
-export interface WriteViewResult {
-	content: Array<{ type: string; text?: string }>;
-	details?: WriteToolDetails;
-	isError?: boolean;
-}
-
-/** The path the call names, under either of the two argument names the model may send. */
-function pathOf(args: WriteViewArgs | undefined): string {
-	if (typeof args?.file_path === "string") return args.file_path;
-	return typeof args?.path === "string" ? args.path : "";
-}
+export interface WriteViewResult extends ToolViewResult<WriteToolDetails> {}
 
 /**
  * The head row of every write card: the tool's subject is the file, so the file is the description.
@@ -94,10 +124,11 @@ function codeSection(
 	const lines = normalizeDisplayText(content).split("\n");
 	const kept = options.visible === undefined ? lines : lines.slice(0, Math.min(lines.length, options.visible));
 	const held = lines.length - kept.length;
+	const hidden = heldBack(held, LINE_NOUN);
 	return {
 		lines: kept.map(line => [{ text: line }] as ViewLine),
 		code: { language: options.language, firstLineNumber: 1, totalLines: lines.length },
-		...(held > 0 ? { hidden: { count: held, noun: LINE_NOUN, revealable: true } } : {}),
+		...(hidden === undefined ? {} : { hidden }),
 		...(options.tailRows === undefined ? {} : { tail: { max: options.tailRows } }),
 	};
 }
@@ -152,21 +183,12 @@ export const writeToolView: Required<ToolViewRenderer<WriteViewArgs, WriteViewRe
 		const language = rawPath ? getLanguageFromPath(rawPath) : undefined;
 
 		if (result.isError) {
-			const text = result.content?.find(part => part.type === "text")?.text ?? "";
+			const text = extractResultText(result.content);
 			return {
 				kind: "framedBlock",
 				header: header(rawPath, { status: "error", linkTarget }),
 				state: "error",
-				// The two leading spaces are the indent `formatErrorDetail` wrote, and each line carries
-				// its own tone, where the string form coloured the block once and left every line after
-				// the first uncoloured and in column zero.
-				sections: [
-					{
-						lines: sanitizeErrorText(text)
-							.split("\n")
-							.map(line => [{ text: "  " }, { text: line, tone: "error" as const }] as ViewLine),
-					},
-				],
+				sections: [errorSection(text)],
 			};
 		}
 
@@ -181,7 +203,7 @@ export const writeToolView: Required<ToolViewRenderer<WriteViewArgs, WriteViewRe
 
 		// While the result is still an update, the tool's own progress text leads the card: it says
 		// which pass of a long write is running, and the file under it is what the pass has produced.
-		const progress = partial ? (result.content?.find(part => part.type === "text")?.text ?? "") : "";
+		const progress = partial ? extractResultText(result.content) : "";
 		if (progress) {
 			sections.push({
 				lines: [

@@ -6,9 +6,9 @@
 
 ### Changed
 
+- Deduplicated SQLite table migrations, schema declarations, and entity import pipelines across beam and triplestore modules.
 - Typed tuple copies use spreads rather than `.concat()`, which those types do not define. No user-visible behavior changes.
 - The package directory is `plugins/mnemopi` instead of `packages/mnemopi`; the published package name, entry points and behavior are unchanged.
-
 
 ## [16.3.9] - 2026-07-06
 

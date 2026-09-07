@@ -14,6 +14,7 @@
  */
 
 import { execFileSync, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 
 /**
@@ -382,4 +383,38 @@ export function getRenamePairs(
 	}
 
 	return { pairs, deleted };
+}
+
+/**
+ * Computes the SHA256 hex digest of the input buffer or string.
+ */
+export function sha256(content: Buffer | string): string {
+	return createHash("sha256").update(content).digest("hex");
+}
+
+/**
+ * Lists tracked files in the repository using null-safe git ls-files.
+ */
+export function listTrackedFiles(
+	repoRoot: string = REPO_ROOT,
+	paths?: string | readonly string[],
+	flags: readonly string[] = ["--cached", "--others", "--exclude-standard"],
+): string[] {
+	const args = ["ls-files", "-z", ...flags];
+	if (typeof paths === "string") {
+		args.push("--", paths);
+	} else if (Array.isArray(paths) && paths.length > 0) {
+		args.push("--", ...paths);
+	}
+	try {
+		const output = execFileSync("git", args, {
+			cwd: repoRoot,
+			maxBuffer: 64 * 1024 * 1024,
+		});
+		return output.toString("utf-8").split("\0").filter(Boolean);
+	} catch (error) {
+		throw new Error(
+			`Failed to enumerate files under "${typeof paths === "string" ? paths : Array.isArray(paths) ? paths.join(", ") : "."}" via git ls-files at ${repoRoot}: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
 }

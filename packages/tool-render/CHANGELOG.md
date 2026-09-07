@@ -10,8 +10,12 @@
 
 ### Changed
 
+- Consolidated React tool-call renderers into cohesive domain descriptors (fs, system, agent, memory, search) and centralized shared UI primitives.
 - Array copies that allocated with a spread now use `.slice()`, `.concat()` or `Array.from()`. No user-visible behavior changes.
 
+### Fixed
+
+- Restored field and badge parity across consolidated React tool descriptors for launch, job, bash, read, write, edit, set_cwd, generate_image, inspect_image, search, and memory tools.
 
 ## [1.3.0] - 2026-08-28
 

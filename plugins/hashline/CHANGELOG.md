@@ -10,9 +10,9 @@
 
 ### Changed
 
+- Unified patch operation definitions into a shared declarative operation table across tokenization and execution.
 - Array copies that allocated with a spread now use `.slice()`, `.concat()` or `Array.from()`. No user-visible behavior changes.
 - The package directory is `plugins/hashline` instead of `packages/hashline`; the published package name, entry points and behavior are unchanged.
-
 
 ## [16.5.0] - 2026-07-13
 

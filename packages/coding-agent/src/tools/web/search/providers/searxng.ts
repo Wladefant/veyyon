@@ -36,7 +36,7 @@ import { SearchProviderError } from "../types";
 import { clampNumResults, dateToAgeSeconds, SEARCH_DEFAULT_NUM_RESULTS } from "../utils";
 import type { SearchParams } from "./base";
 import { SearchProvider } from "./base";
-import { classifyProviderHttpError } from "./utils";
+import { handleProviderHttpError } from "./utils";
 
 const MAX_NUM_RESULTS = 20;
 
@@ -48,7 +48,6 @@ const RECENCY_MAP: Record<"day" | "week" | "month" | "year", string> = {
 	month: "month",
 	year: "year",
 };
-
 /** SearXNG JSON API response types */
 interface SearXNGResult {
 	title?: string;
@@ -219,10 +218,7 @@ async function callSearXNGSearch(
 		});
 
 		if (!response.ok) {
-			const errorText = await response.text();
-			const classified = classifyProviderHttpError("searxng", response.status, errorText);
-			if (classified) throw classified;
-			throw new SearchProviderError("searxng", `SearXNG API error (${response.status}).`, response.status);
+			await handleProviderHttpError("searxng", response, `SearXNG API error (${response.status}).`);
 		}
 
 		return (await response.json()) as SearXNGResponse;
@@ -271,7 +267,6 @@ export async function searchSearXNG(params: {
 	);
 
 	const sources: SearchSource[] = [];
-
 	for (const result of response.results ?? []) {
 		if (!result.url) continue;
 		const publishedDate = result.publishedDate ?? result.published_date;

@@ -22,10 +22,10 @@
  */
 import { getOAuthProviders } from "@veyyon/ai/oauth";
 import { type Component, Input } from "@veyyon/tui";
+import { HoverController } from "@veyyon/tui/utils/hover-controller";
 import { clampLow } from "@veyyon/utils";
 import { fuzzyFilter } from "@veyyon/utils/fuzzy";
 import { extractPrintableText, matchesKey } from "@veyyon/utils/keys";
-import { HoverFade } from "@veyyon/utils/motion";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import { padding } from "@veyyon/utils/padding";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
@@ -196,12 +196,11 @@ export class AccountManagerComponent implements Component {
 	#sidebarScroll = 0;
 	/** Set by an activation (keys, click, open) so the next paint reveals the active provider. */
 	#sidebarFollowActive = true;
-	#sidebarHover: number | null = null;
 	/**
-	 * The cross-fade for the sidebar band, once the host has lent the card a repaint. A card
+	 * The hover controller for the sidebar band, once the host has lent the card a repaint. A card
 	 * constructed without one keeps the switched band, which is what a non-interactive test sees.
 	 */
-	#sidebarFade: HoverFade | undefined;
+	#sidebarHover = new HoverController<number>();
 	#bodyScroll = 0;
 
 	/** Inline rename editor, open over the selected row. */
@@ -246,7 +245,7 @@ export class AccountManagerComponent implements Component {
 		// reports have no input to hang off. Same ambient gate as the open unfold.
 		const requestRender = options.requestRender;
 		if (requestRender) {
-			this.#sidebarFade = new HoverFade({ requestRender, enabled: pointerMotionEnabled() });
+			this.#sidebarHover.setMotion({ requestRender, enabled: pointerMotionEnabled() });
 		}
 	}
 
@@ -270,15 +269,7 @@ export class AccountManagerComponent implements Component {
 	}
 
 	dispose(): void {
-		this.#sidebarFade?.dispose();
-		this.#sidebarFade = undefined;
-		this.#sidebarHover = null;
-	}
-
-	/** Sidebar band strength; without a fade the hovered row is at 1 and the rest at 0. */
-	#sidebarStrength(index: number): number {
-		if (this.#sidebarFade !== undefined) return this.#sidebarFade.strengthAt(index);
-		return index === this.#sidebarHover ? 1 : 0;
+		this.#sidebarHover.dispose();
 	}
 
 	#rebuildEntries(): void {
@@ -668,8 +659,7 @@ export class AccountManagerComponent implements Component {
 		const overBody = overSplit && innerCol >= this.#sidebarWidthLast + 3;
 
 		if (event.motion) {
-			this.#sidebarHover = overSidebar ? this.#sidebarScroll + contentLine - searchOffset : null;
-			this.#sidebarFade?.set(this.#sidebarHover);
+			this.#sidebarHover.set(overSidebar ? this.#sidebarScroll + contentLine - searchOffset : null);
 			return true;
 		}
 		if (event.wheel !== null) {
@@ -817,7 +807,7 @@ export class AccountManagerComponent implements Component {
 				const left = `${cursor} ${label}`;
 				const gap = Math.max(1, width - visibleWidth(left) - visibleWidth(annotation));
 				let line = `${left}${" ".repeat(gap)}${annotation}`;
-				const hoverStrength = this.#sidebarStrength(i);
+				const hoverStrength = this.#sidebarHover.strength(i);
 				if (hoverStrength > 0) line = hoverBandAt(line, width, hoverStrength);
 				lines.push(line);
 			}

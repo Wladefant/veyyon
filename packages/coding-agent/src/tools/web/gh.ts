@@ -1948,15 +1948,15 @@ export class GithubTool implements AgentTool<typeof githubSchema, GhToolDetails>
 				case "pr_push":
 					return executePrPush(this.session, params, signal);
 				case "search_issues":
-					return executeSearchIssues(this.session, params, signal);
+					return executeGithubSearch(this.session, params, SEARCH_ENDPOINT_SPECS.issues, signal);
 				case "search_prs":
-					return executeSearchPrs(this.session, params, signal);
+					return executeGithubSearch(this.session, params, SEARCH_ENDPOINT_SPECS.prs, signal);
 				case "search_code":
-					return executeSearchCode(this.session, params, signal);
+					return executeGithubSearch(this.session, params, SEARCH_ENDPOINT_SPECS.code, signal);
 				case "search_commits":
-					return executeSearchCommits(this.session, params, signal);
+					return executeGithubSearch(this.session, params, SEARCH_ENDPOINT_SPECS.commits, signal);
 				case "search_repos":
-					return executeSearchRepos(this.session, params, signal);
+					return executeGithubSearch(this.session, params, SEARCH_ENDPOINT_SPECS.repos, signal);
 				case "run_watch":
 					return executeRunWatch(this.session, this.name, params, signal, onUpdate);
 			}
@@ -2452,103 +2452,85 @@ function formatPrCreateResult(options: {
 	return lines.join("\n").trim();
 }
 
-async function executeSearchIssues(
+interface SearchEndpointSpec<TItem, TResult> {
+	endpoint: "issues" | "code" | "commits" | "repositories";
+	dateFieldTarget?: "issues" | "prs" | "commits" | "repos";
+	fixedQualifier?: string;
+	supportsScope?: boolean;
+	headers?: string[];
+	validate?: (params: GithubInput) => void;
+	mapItem: (item: TItem) => TResult;
+	format: (query: string, repo: string | undefined, items: TResult[]) => string;
+}
+
+const SEARCH_ENDPOINT_SPECS = {
+	issues: {
+		endpoint: "issues",
+		dateFieldTarget: "issues",
+		fixedQualifier: "is:issue",
+		supportsScope: true,
+		mapItem: apiIssueToSearchResult,
+		format: (query, repo, items) => formatSearchResults("issues", query, repo, items),
+	} satisfies SearchEndpointSpec<GhApiSearchIssueItem, GhSearchResult>,
+	prs: {
+		endpoint: "issues",
+		dateFieldTarget: "prs",
+		fixedQualifier: "is:pr",
+		supportsScope: true,
+		mapItem: apiIssueToSearchResult,
+		format: (query, repo, items) => formatSearchResults("pull requests", query, repo, items),
+	} satisfies SearchEndpointSpec<GhApiSearchIssueItem, GhSearchResult>,
+	code: {
+		endpoint: "code",
+		supportsScope: true,
+		headers: ["Accept: application/vnd.github.text-match+json"],
+		validate: (params: GithubInput) => {
+			requireNonEmpty(params.query, "query");
+			const since = normalizeOptionalString(params.since);
+			const until = normalizeOptionalString(params.until);
+			if (since !== undefined || until !== undefined) {
+				throw new ToolError("search_code does not support since/until; GitHub code search has no date qualifier.");
+			}
+		},
+		mapItem: apiCodeToSearchResult,
+		format: (query, repo, items) => formatSearchCodeResults(query, repo, items),
+	} satisfies SearchEndpointSpec<GhApiSearchCodeItem, GhSearchCodeResult>,
+	commits: {
+		endpoint: "commits",
+		dateFieldTarget: "commits",
+		supportsScope: true,
+		mapItem: apiCommitToSearchResult,
+		format: (query, repo, items) => formatSearchCommitsResults(query, repo, items),
+	} satisfies SearchEndpointSpec<GhApiSearchCommitItem, GhSearchCommitResult>,
+	repos: {
+		endpoint: "repositories",
+		dateFieldTarget: "repos",
+		supportsScope: false,
+		mapItem: apiRepoToSearchResult,
+		format: (query, _repo, items) => formatSearchReposResults(query, items),
+	} satisfies SearchEndpointSpec<GhApiSearchRepoItem, GhSearchRepoResult>,
+};
+
+async function executeGithubSearch<TItem, TResult>(
 	session: ToolSession,
 	params: GithubInput,
+	spec: SearchEndpointSpec<TItem, TResult>,
 	signal: AbortSignal | undefined,
 ): Promise<AgentToolResult<GhToolDetails>> {
+	spec.validate?.(params);
 	const limit = resolveSearchLimit(params.limit);
-	const dateField = resolveSearchDateField("issues", params.dateField);
-	const dateQualifier = buildSearchDateQualifier(dateField, params.since, params.until);
+	const dateField = spec.dateFieldTarget ? resolveSearchDateField(spec.dateFieldTarget, params.dateField) : undefined;
+	const dateQualifier = dateField ? buildSearchDateQualifier(dateField, params.since, params.until) : undefined;
 	const displayQuery = composeSearchQuery([params.query, dateQualifier]);
-	const repo = await resolveSearchRepoScope(session.cwd, normalizeOptionalString(params.repo), displayQuery, signal);
-	const apiQuery = composeSearchQuery([displayQuery, repo ? `repo:${repo}` : undefined, "is:issue"]);
-	const args = buildGhApiSearchArgs("issues", apiQuery, limit);
+	const repo = spec.supportsScope
+		? await resolveSearchRepoScope(session.cwd, normalizeOptionalString(params.repo), displayQuery, signal)
+		: undefined;
+	const apiQuery = composeSearchQuery([displayQuery, repo ? `repo:${repo}` : undefined, spec.fixedQualifier]);
+	const args = buildGhApiSearchArgs(spec.endpoint, apiQuery, limit, spec.headers);
 
-	const response = await git.github.json<GhApiSearchResponse<GhApiSearchIssueItem>>(session.cwd, args, signal);
-	const items = (response.items ?? []).map(apiIssueToSearchResult);
-	return buildTextResult(formatSearchResults("issues", displayQuery, repo, items), undefined, undefined, {
-		useless: items.length === 0,
-	});
-}
-
-async function executeSearchPrs(
-	session: ToolSession,
-	params: GithubInput,
-	signal: AbortSignal | undefined,
-): Promise<AgentToolResult<GhToolDetails>> {
-	const limit = resolveSearchLimit(params.limit);
-	const dateField = resolveSearchDateField("prs", params.dateField);
-	const dateQualifier = buildSearchDateQualifier(dateField, params.since, params.until);
-	const displayQuery = composeSearchQuery([params.query, dateQualifier]);
-	const repo = await resolveSearchRepoScope(session.cwd, normalizeOptionalString(params.repo), displayQuery, signal);
-	const apiQuery = composeSearchQuery([displayQuery, repo ? `repo:${repo}` : undefined, "is:pr"]);
-	const args = buildGhApiSearchArgs("issues", apiQuery, limit);
-
-	const response = await git.github.json<GhApiSearchResponse<GhApiSearchIssueItem>>(session.cwd, args, signal);
-	const items = (response.items ?? []).map(apiIssueToSearchResult);
-	return buildTextResult(formatSearchResults("pull requests", displayQuery, repo, items), undefined, undefined, {
-		useless: items.length === 0,
-	});
-}
-
-async function executeSearchCode(
-	session: ToolSession,
-	params: GithubInput,
-	signal: AbortSignal | undefined,
-): Promise<AgentToolResult<GhToolDetails>> {
-	const query = requireNonEmpty(params.query, "query");
-	const since = normalizeOptionalString(params.since);
-	const until = normalizeOptionalString(params.until);
-	if (since !== undefined || until !== undefined) {
-		throw new ToolError("search_code does not support since/until; GitHub code search has no date qualifier.");
-	}
-	const limit = resolveSearchLimit(params.limit);
-	const repo = await resolveSearchRepoScope(session.cwd, normalizeOptionalString(params.repo), query, signal);
-	const apiQuery = composeSearchQuery([query, repo ? `repo:${repo}` : undefined]);
-	const args = buildGhApiSearchArgs("code", apiQuery, limit, ["Accept: application/vnd.github.text-match+json"]);
-
-	const response = await git.github.json<GhApiSearchResponse<GhApiSearchCodeItem>>(session.cwd, args, signal);
-	const items = (response.items ?? []).map(apiCodeToSearchResult);
-	return buildTextResult(formatSearchCodeResults(query, repo, items), undefined, undefined, {
-		useless: items.length === 0,
-	});
-}
-
-async function executeSearchCommits(
-	session: ToolSession,
-	params: GithubInput,
-	signal: AbortSignal | undefined,
-): Promise<AgentToolResult<GhToolDetails>> {
-	const limit = resolveSearchLimit(params.limit);
-	const dateField = resolveSearchDateField("commits", params.dateField);
-	const dateQualifier = buildSearchDateQualifier(dateField, params.since, params.until);
-	const displayQuery = composeSearchQuery([params.query, dateQualifier]);
-	const repo = await resolveSearchRepoScope(session.cwd, normalizeOptionalString(params.repo), displayQuery, signal);
-	const apiQuery = composeSearchQuery([displayQuery, repo ? `repo:${repo}` : undefined]);
-	const args = buildGhApiSearchArgs("commits", apiQuery, limit);
-
-	const response = await git.github.json<GhApiSearchResponse<GhApiSearchCommitItem>>(session.cwd, args, signal);
-	const items = (response.items ?? []).map(apiCommitToSearchResult);
-	return buildTextResult(formatSearchCommitsResults(displayQuery, repo, items), undefined, undefined, {
-		useless: items.length === 0,
-	});
-}
-
-async function executeSearchRepos(
-	session: ToolSession,
-	params: GithubInput,
-	signal: AbortSignal | undefined,
-): Promise<AgentToolResult<GhToolDetails>> {
-	const limit = resolveSearchLimit(params.limit);
-	const dateField = resolveSearchDateField("repos", params.dateField);
-	const dateQualifier = buildSearchDateQualifier(dateField, params.since, params.until);
-	const query = composeSearchQuery([params.query, dateQualifier]);
-	const args = buildGhApiSearchArgs("repositories", query, limit);
-
-	const response = await git.github.json<GhApiSearchResponse<GhApiSearchRepoItem>>(session.cwd, args, signal);
-	const items = (response.items ?? []).map(apiRepoToSearchResult);
-	return buildTextResult(formatSearchReposResults(query, items), undefined, undefined, {
+	const response = await git.github.json<GhApiSearchResponse<TItem>>(session.cwd, args, signal);
+	const items = (response.items ?? []).map(spec.mapItem);
+	return buildTextResult(spec.format(displayQuery, repo, items), undefined, undefined, {
 		useless: items.length === 0,
 	});
 }

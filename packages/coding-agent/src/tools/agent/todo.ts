@@ -334,7 +334,7 @@ function cloneTask(task: TodoItem): TodoItem {
 	return { content: task.content, status: task.status };
 }
 
-function clonePhases(phases: TodoPhase[]): TodoPhase[] {
+export function clonePhases(phases: TodoPhase[]): TodoPhase[] {
 	return phases.map(phase => ({ name: phase.name, tasks: phase.tasks.map(cloneTask) }));
 }
 

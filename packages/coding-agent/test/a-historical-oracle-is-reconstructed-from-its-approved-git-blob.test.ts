@@ -10,6 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { REPO_ROOT, readGitTree } from "../../../scripts/git-baseline";
 import {
+	ADAPTER_FILENAME,
 	loadHistoricalOracle,
 	ORACLE_EXPORTS,
 	ORACLE_SNAPSHOT_COMMIT,
@@ -39,10 +40,13 @@ describe("historical oracle reconstruction", () => {
 	});
 
 	for (const name of names) {
-		it(`${name} loads approved bytes from an empty cache and rejects stale bytes`, () => {
+		it(`${name} loads approved bytes from an empty cache and rejects stale bytes`, async () => {
 			const cacheFile = path.join(cache, `${name}.ts`);
+			const derivedFile = path.join(cache, `${name}.derived.ts`);
+			const adapterFile = path.join(cache, ADAPTER_FILENAME);
 			expect(fs.existsSync(cacheFile)).toBe(false);
-			const module = loadHistoricalOracle(name, cache);
+			expect(fs.existsSync(derivedFile)).toBe(false);
+			const module = await loadHistoricalOracle(name, cache);
 			const approved = execFileSync(
 				"git",
 				["show", `${ORACLE_SNAPSHOT_COMMIT}:${ORACLE_SOURCE_DIRECTORY}/${name}.ts`],
@@ -52,20 +56,49 @@ describe("historical oracle reconstruction", () => {
 				},
 			);
 			expect(fs.readFileSync(cacheFile).equals(approved)).toBe(true);
+			expect(fs.existsSync(derivedFile)).toBe(true);
+			expect(fs.existsSync(adapterFile)).toBe(true);
 			for (const exported of ORACLE_EXPORTS[name]) {
 				expect(Object.hasOwn(module, exported)).toBe(true);
 				expect(module[exported]).not.toBeUndefined();
 			}
 			fs.appendFileSync(cacheFile, "\n// stale cached source\n");
 			try {
-				expect(() => loadHistoricalOracle(name, cache)).toThrow(/cache differs from the pinned Git blob/);
+				await expect(loadHistoricalOracle(name, cache)).rejects.toThrow(/cache differs from the pinned Git blob/);
 			} finally {
 				fs.writeFileSync(cacheFile, approved);
+			}
+			const approvedDerived = fs.readFileSync(derivedFile);
+			fs.appendFileSync(derivedFile, "\n// stale derived executable source\n");
+			try {
+				await expect(loadHistoricalOracle(name, cache)).rejects.toThrow(
+					/derived executable cache differs from generated source/,
+				);
+			} finally {
+				fs.writeFileSync(derivedFile, approvedDerived);
+			}
+			const approvedAdapter = fs.readFileSync(adapterFile);
+			fs.appendFileSync(adapterFile, "\n// stale adapter source\n");
+			try {
+				await expect(loadHistoricalOracle(name, cache)).rejects.toThrow(
+					/adapter cache differs from verified generated source/,
+				);
+			} finally {
+				fs.writeFileSync(adapterFile, approvedAdapter);
 			}
 		});
 	}
 
-	it.each(["unknown-main-renderer", "../task-main-renderer", "toString"])("rejects unapproved name %s", name => {
-		expect(() => loadHistoricalOracle(name, cache)).toThrow(/Unknown historical oracle/);
+	it.each(["unknown-main-renderer", "../task-main-renderer", "toString"])("rejects unapproved name %s", async name => {
+		await expect(loadHistoricalOracle(name, cache)).rejects.toThrow(/Unknown historical oracle/);
+	});
+
+	it("does not contaminate theme JSON module loading after loading all historical oracles in a subprocess", () => {
+		const helperPath = path.join(import.meta.dirname, "oracles", "historical-theme-probe-helper.ts");
+		execFileSync(process.execPath, [helperPath], {
+			cwd: REPO_ROOT,
+			stdio: "pipe",
+			timeout: 30000,
+		});
 	});
 });

@@ -1,21 +1,12 @@
 /**
  * Public export floor ledger parser, validator, factorer, and expander.
- *
- * Reads approved exported names from an immutable Git reference (PINNED_BASELINE_COMMIT /
- * APPROVED_EXPORT_BASELINE_COMMIT = "de0ccbf5a571d9de1285cb4dddeff1cc23f882aa") and applies sparse
- * explicit additions, eliminating thousands of lines of repeated exported identifier lists while
- * guaranteeing exact byte/semantic identity of the approved export floor.
  */
 
 import { REPO_ROOT, readGitFileText } from "./git-baseline";
+import { assertObject, isStringArray } from "./ledger-schema";
 
-/**
- * Pinned approved baseline commit that contains the pre-deduplication export baseline ledger.
- */
 export const APPROVED_EXPORT_BASELINE_COMMIT = "de0ccbf5a571d9de1285cb4dddeff1cc23f882aa";
-
 export const EXPORT_FLOOR_SCHEMA_VERSION = 2;
-
 export const BASELINE_FILE_PATH = "scripts/package-exports-baseline.json";
 
 export interface ReferencedExportFloor {
@@ -41,20 +32,15 @@ export interface FactoredExportFloorLedger {
 }
 
 export interface GenerateExportFloorOptions {
-	immutableBase: Readonly<Record<string, readonly string[]>>;
-	approvedFloor?: Readonly<Record<string, readonly string[]>>;
-	currentSurface: Readonly<Record<string, readonly string[]>>;
-}
-
-function isStringArray(value: unknown): value is string[] {
-	return Array.isArray(value) && value.every(item => typeof item === "string") && new Set(value).size === value.length;
+	immutableBase: Record<string, string[]>;
+	approvedFloor?: Record<string, string[]>;
+	currentSurface: Record<string, string[]>;
 }
 
 function isReferencedExportFloor(value: unknown): value is ReferencedExportFloor {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-	const keys = Object.keys(value);
-	if (keys.length !== 2 || !("includes" in value) || !("names" in value)) return false;
-	return isStringArray(value.includes) && isStringArray(value.names);
+	const v = value as Record<string, unknown>;
+	return Object.keys(v).length === 2 && isStringArray(v.includes) && isStringArray(v.names);
 }
 
 export function validateExportFloorEntry(specifier: string, entry: unknown): asserts entry is ExportFloorEntry {
@@ -66,36 +52,30 @@ export function validateExportFloorLedger(raw: unknown): ExportFloorLedger {
 	if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
 		throw new Error("Export floor schema is stale or invalid; regenerate the approved export baseline");
 	}
-	if (!("schemaVersion" in raw) || raw.schemaVersion !== EXPORT_FLOOR_SCHEMA_VERSION) {
-		const version = "schemaVersion" in raw ? raw.schemaVersion : undefined;
+	const ledger = raw as Record<string, unknown>;
+	if (ledger.schemaVersion !== EXPORT_FLOOR_SCHEMA_VERSION) {
 		throw new Error(
-			`Export floor schema is stale or invalid (expected version ${EXPORT_FLOOR_SCHEMA_VERSION}, got ${typeof version === "number" || typeof version === "string" ? String(version) : "unversioned"}); regenerate the approved export baseline`,
+			`Export floor schema is stale or invalid (expected version ${EXPORT_FLOOR_SCHEMA_VERSION}, got ${ledger.schemaVersion ?? "unversioned"}); regenerate the approved export baseline`,
 		);
 	}
-	if (!("generatedFrom" in raw) || typeof raw.generatedFrom !== "string" || raw.generatedFrom.trim() === "") {
+	if (!ledger.generatedFrom || typeof ledger.generatedFrom !== "string") {
 		throw new Error("Export floor ledger is missing generatedFrom commit hash");
 	}
-	if (raw.generatedFrom !== APPROVED_EXPORT_BASELINE_COMMIT) {
+	if (ledger.generatedFrom !== APPROVED_EXPORT_BASELINE_COMMIT) {
 		throw new Error(
-			`Export floor ledger generatedFrom commit mismatch: expected approved baseline ${APPROVED_EXPORT_BASELINE_COMMIT}, got ${raw.generatedFrom}`,
+			`Export floor ledger generatedFrom commit mismatch: expected approved baseline ${APPROVED_EXPORT_BASELINE_COMMIT}, got ${ledger.generatedFrom}`,
 		);
 	}
-	if ("additions" in raw && raw.additions !== undefined) {
-		const additions = raw.additions;
-		if (additions === null || typeof additions !== "object" || Array.isArray(additions)) {
-			throw new Error("Export floor ledger additions must be an object");
-		}
-		if ("exports" in additions && additions.exports !== undefined) {
-			const exportsMap = additions.exports;
-			if (exportsMap === null || typeof exportsMap !== "object" || Array.isArray(exportsMap)) {
-				throw new Error("Export floor additions.exports must be an object");
-			}
+	if (ledger.additions !== undefined) {
+		const additions = assertObject(ledger.additions, "Export floor ledger additions must be an object");
+		if (additions.exports !== undefined) {
+			const exportsMap = assertObject(additions.exports, "Export floor additions.exports must be an object");
 			for (const [specifier, entry] of Object.entries(exportsMap)) {
 				validateExportFloorEntry(specifier, entry);
 			}
 		}
 	}
-	return raw as ExportFloorLedger;
+	return ledger as unknown as ExportFloorLedger;
 }
 
 export function readApprovedExportBaseline(
@@ -103,30 +83,20 @@ export function readApprovedExportBaseline(
 	repoRoot: string = REPO_ROOT,
 ): Record<string, string[]> {
 	const text = readGitFileText(BASELINE_FILE_PATH, commit, repoRoot);
-	if (!text) {
-		throw new Error(`Failed to read approved export baseline from commit ${commit}:${BASELINE_FILE_PATH}`);
-	}
-	const parsed: unknown = JSON.parse(text);
-	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-		throw new Error(`Approved export baseline at ${commit} is not a valid JSON object`);
-	}
+	if (!text) throw new Error(`Failed to read approved export baseline from commit ${commit}:${BASELINE_FILE_PATH}`);
+	const parsed = assertObject(JSON.parse(text), `Approved export baseline at ${commit} is not a valid JSON object`);
 	const result: Record<string, string[]> = {};
 	for (const [specifier, names] of Object.entries(parsed)) {
-		if (!isStringArray(names)) {
+		if (!isStringArray(names))
 			throw new Error(`Approved export baseline at ${commit} contains invalid entry for ${specifier}`);
-		}
 		result[specifier] = [...names].sort();
 	}
 	return result;
 }
 
 function mergeEntry(baseEntry: string[] | undefined, additionEntry: ExportFloorEntry): ExportFloorEntry {
-	if (!baseEntry) {
-		return additionEntry;
-	}
-	if (isStringArray(additionEntry)) {
-		return [...new Set([...baseEntry, ...additionEntry])].sort();
-	}
+	if (!baseEntry) return additionEntry;
+	if (isStringArray(additionEntry)) return [...new Set([...baseEntry, ...additionEntry])].sort();
 	return {
 		includes: [...new Set(additionEntry.includes)].sort(),
 		names: [...new Set([...baseEntry, ...additionEntry.names])].sort(),
@@ -145,12 +115,7 @@ function expandResolvedRows(rows: Record<string, unknown>): Record<string, strin
 		active.add(specifier);
 		const row = rows[specifier];
 		validateExportFloorEntry(specifier, row);
-		let names: string[];
-		if (isStringArray(row)) {
-			names = row;
-		} else {
-			names = [...row.names, ...row.includes.flatMap(expand)];
-		}
+		const names = isStringArray(row) ? row : [...row.names, ...row.includes.flatMap(expand)];
 		const result = [...new Set(names)].sort();
 		resolved.set(specifier, result);
 		active.delete(specifier);
@@ -160,7 +125,6 @@ function expandResolvedRows(rows: Record<string, unknown>): Record<string, strin
 	return Object.fromEntries(Object.keys(rows).map(specifier => [specifier, expand(specifier)]));
 }
 
-/** Expand references between approved export sets. */
 export function expandExportFloor(
 	raw: unknown,
 	repoRoot: string = REPO_ROOT,
@@ -169,9 +133,9 @@ export function expandExportFloor(
 	if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
 		throw new Error("Export floor schema is stale or invalid; regenerate the approved export baseline");
 	}
-
-	if ("generatedFrom" in raw) {
-		const ledger = validateExportFloorLedger(raw);
+	const r = raw as Record<string, unknown>;
+	if ("generatedFrom" in r) {
+		const ledger = validateExportFloorLedger(r);
 		const baseExports = baseFloorOverride ?? readApprovedExportBaseline(ledger.generatedFrom, repoRoot);
 		const additions = ledger.additions?.exports;
 		if (!additions || Object.keys(additions).length === 0) {
@@ -183,24 +147,16 @@ export function expandExportFloor(
 		}
 		return expandResolvedRows(merged);
 	}
-
-	if ("exports" in raw) {
-		if (!("schemaVersion" in raw) || raw.schemaVersion !== EXPORT_FLOOR_SCHEMA_VERSION) {
+	if ("exports" in r) {
+		if (r.schemaVersion !== EXPORT_FLOOR_SCHEMA_VERSION)
 			throw new Error("Export floor schema is stale or invalid; regenerate the approved export baseline");
-		}
-		const entries = raw.exports;
-		if (entries === null || typeof entries !== "object" || Array.isArray(entries)) {
-			throw new Error("Export floors must be an object");
-		}
-		for (const [specifier, entry] of Object.entries(entries)) {
-			validateExportFloorEntry(specifier, entry);
-		}
-		return expandResolvedRows(entries as Record<string, unknown>);
+		const entries = assertObject(r.exports, "Export floors must be an object");
+		for (const [specifier, entry] of Object.entries(entries)) validateExportFloorEntry(specifier, entry);
+		return expandResolvedRows(entries);
 	}
 	throw new Error("Export floor schema is stale or invalid; regenerate the approved export baseline");
 }
 
-/** Reuse complete approved subpath floors only when they are subsets of the package floor. */
 export function factorExportFloor(
 	baseline: Readonly<Record<string, readonly string[]>>,
 	immutableBase?: Readonly<Record<string, readonly string[]>>,
@@ -224,7 +180,6 @@ export function factorExportFloor(
 			included.push(candidate);
 			for (const name of contribution) remaining.delete(name);
 		}
-		// A reference object adds six structural rows beyond the plain array representation.
 		entries[specifier] =
 			sortedNames.length > remaining.size + included.length + 6
 				? { includes: included.sort(), names: [...remaining].sort() }
@@ -233,10 +188,6 @@ export function factorExportFloor(
 	return { schemaVersion: EXPORT_FLOOR_SCHEMA_VERSION, exports: entries };
 }
 
-/**
- * Pure generator logic: validates that current surface does not shrink approved export floor
- * and computes sparse additions against immutable baseline.
- */
 export function computeExportFloorLedger({
 	immutableBase,
 	approvedFloor,
@@ -254,9 +205,7 @@ export function computeExportFloorLedger({
 		}
 		const currentSet = new Set(currentNames);
 		for (const name of names) {
-			if (!currentSet.has(name)) {
-				missingNames.push(`${specifier}: missing approved export "${name}"`);
-			}
+			if (!currentSet.has(name)) missingNames.push(`${specifier}: missing approved export "${name}"`);
 		}
 	}
 
@@ -281,15 +230,11 @@ export function computeExportFloorLedger({
 		} else {
 			const baseSet = new Set(baseNames);
 			const newNames = currentSorted.filter(name => !baseSet.has(name));
-			if (newNames.length > 0) {
-				addedExports[specifier] = newNames;
-			}
+			if (newNames.length > 0) addedExports[specifier] = newNames;
 		}
 	}
 
-	// References expand the entire included floor, not only its sparse additions.
 	const additionsExports = factorExportFloor(addedExports, immutableBase).exports;
-
 	return {
 		schemaVersion: EXPORT_FLOOR_SCHEMA_VERSION,
 		generatedFrom: APPROVED_EXPORT_BASELINE_COMMIT,

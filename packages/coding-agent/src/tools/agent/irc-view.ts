@@ -14,7 +14,6 @@ import type {
 	StatusRowView,
 	ToolViewContext,
 	ToolViewRenderer,
-	ViewHiddenCount,
 	ViewLine,
 	ViewSection,
 	ViewSpan,
@@ -24,11 +23,13 @@ import type {
 import type { IrcDeliveryReceipt } from "../../task/irc-bus";
 import {
 	Ellipsis,
+	errorViewLines,
 	getPreviewLines,
+	heldBack,
 	LINE_NOUN,
 	PREVIEW_LIMITS,
 	replaceTabs,
-	sanitizeErrorText,
+	type ToolViewResult,
 } from "../core/render-utils";
 import type { IrcDetails, IrcParams } from "./irc";
 
@@ -36,11 +37,7 @@ import type { IrcDetails, IrcParams } from "./irc";
 export type IrcViewArgs = Partial<IrcParams>;
 
 /** The result the card reads, which is the tool's own result narrowed to what a card shows. */
-export interface IrcViewResult {
-	content: Array<{ type: string; text?: string }>;
-	details?: IrcDetails;
-	isError?: boolean;
-}
+export interface IrcViewResult extends ToolViewResult<IrcDetails> {}
 
 /** Rows of a message body a collapsed card spends before it says how many it kept back. */
 const BODY_LINES_COLLAPSED = 2;
@@ -95,13 +92,6 @@ function textContent(result: Pick<IrcViewResult, "content">): string {
 	return result.content.find(part => part.type === "text")?.text?.trim() ?? "";
 }
 
-/** A failure message as its own rows, each carrying the indent and the tone rather than sharing one. */
-function errorLines(text: string): ViewLine[] {
-	return sanitizeErrorText(text)
-		.split("\n")
-		.map(line => [{ text: "  " }, { text: line, tone: "error" as const }]);
-}
-
 /**
  * A message body as the section a card shows it in, cut to the rows the disclosure state allows.
  *
@@ -123,13 +113,7 @@ function bodySection(
 	});
 	if (lines.length === 0) return undefined;
 	const held = total - Math.min(total, max);
-	return { lines, hidden: held > 0 ? { count: held, noun: LINE_NOUN, revealable: !expanded } : undefined };
-}
-
-/** What a list of items held back, or nothing when the card shows every one of them. */
-function heldBack(total: number, shown: number, noun: { one: string; many: string }): ViewHiddenCount | undefined {
-	const count = total - shown;
-	return count > 0 ? { count, noun, revealable: true } : undefined;
+	return { lines, hidden: heldBack(held, LINE_NOUN, !expanded) };
 }
 
 /** The items a collapsed card shows, which is every one of them once it is expanded. */
@@ -185,7 +169,7 @@ function messageCard(header: StatusRowView, state: ViewStatus, sections: (ViewSe
 function errorCard(result: IrcViewResult, args: IrcViewArgs | undefined): FramedBlockView {
 	const text = textContent(result) || "IRC call failed.";
 	return messageCard({ kind: "statusRow", status: "error", title: callTitle(args), meta: callMeta(args) }, "error", [
-		{ lines: errorLines(text) },
+		{ lines: errorViewLines(text) },
 	]);
 }
 
@@ -205,7 +189,7 @@ function sendCard(
 		return messageCard(
 			{ kind: "statusRow", status: result.isError ? "error" : "warning", title },
 			result.isError ? "error" : "warning",
-			[{ lines: result.isError ? errorLines(text) : [[{ text: replaceTabs(text), tone: "muted" }]] }],
+			[{ lines: result.isError ? errorViewLines(text) : [[{ text: replaceTabs(text), tone: "muted" }]] }],
 		);
 	}
 
@@ -250,7 +234,7 @@ function sendCard(
 			}
 			lines.push(line);
 		}
-		sections.push({ lines, hidden: heldBack(receipts.length, shown, RECIPIENT_NOUN) });
+		sections.push({ lines, hidden: heldBack(receipts.length - shown, RECIPIENT_NOUN) });
 	}
 
 	if (waited) {
@@ -324,7 +308,7 @@ function inboxCard(details: Partial<IrcDetails>, args: IrcViewArgs | undefined, 
 		sections.push({ lines: [head] });
 		sections.push(bodySection(message.body, expanded, { indent: "  ", collapsedLines: 1 }));
 	}
-	const hidden = heldBack(messages.length, shown, MESSAGE_NOUN);
+	const hidden = heldBack(messages.length - shown, MESSAGE_NOUN);
 	if (hidden) sections.push({ lines: [], hidden });
 	return messageCard({ kind: "statusRow", emblem: "tool.irc", title: "IRC inbox", meta }, "success", sections);
 }
@@ -368,7 +352,7 @@ function peersCard(details: Partial<IrcDetails>, expanded: boolean): FramedBlock
 		lines.push(line);
 	}
 	return messageCard({ kind: "statusRow", emblem: "tool.irc", title: "IRC peers", meta }, "success", [
-		{ lines, hidden: heldBack(peers.length, shown, PEER_NOUN) },
+		{ lines, hidden: heldBack(peers.length - shown, PEER_NOUN) },
 	]);
 }
 
@@ -388,7 +372,7 @@ function resultCard(result: IrcViewResult, args: IrcViewArgs | undefined, expand
 			return messageCard(
 				{ kind: "statusRow", status: result.isError ? "error" : "success", title: callTitle(args) },
 				result.isError ? "error" : "success",
-				[{ lines: result.isError ? errorLines(text) : [[{ text: replaceTabs(text), tone: "muted" }]] }],
+				[{ lines: result.isError ? errorViewLines(text) : [[{ text: replaceTabs(text), tone: "muted" }]] }],
 			);
 		}
 	}

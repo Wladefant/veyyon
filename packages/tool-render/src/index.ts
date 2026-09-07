@@ -4,8 +4,10 @@
  */
 
 export { genericRenderer } from "./generic";
+export * from "./JsonBlock";
 export * from "./parts";
 export * from "./registry";
+export * from "./StatusPill";
 export * from "./ThemeToggle";
 export * from "./ToolView";
 export * from "./types";

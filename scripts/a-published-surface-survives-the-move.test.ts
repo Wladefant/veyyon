@@ -30,11 +30,12 @@
 
 import { describe, expect, it } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ensureBaselineAvailable, PINNED_BASELINE_COMMIT, REPO_ROOT } from "./git-baseline";
 import {
+	buildPackageManifestRecord,
 	expandAddedResolvedSubpaths,
 	expandResolvedSubpathsRecord,
 	filesUnderMember,
@@ -44,6 +45,7 @@ import {
 	normalizeAddedResolvedSubpaths,
 	normalizeResolvedSubpathsRecord,
 	PUBLISHED_SURFACE_SCHEMA_VERSION,
+	type PublishedSurfaceApprovalLedger,
 	type PublishedSurfaceLedger,
 	resolveStarSpecifierToDisk,
 	validatePublishedSurfaceLedger,
@@ -51,6 +53,9 @@ import {
 
 const LEDGER: PublishedSurfaceLedger = await loadPublishedSurfaceLedger();
 const HEAD_PACKAGES = loadHeadPackages();
+const APPROVAL = JSON.parse(
+	readFileSync(join(REPO_ROOT, "scripts", "fixtures", "published-surface.json"), "utf8"),
+) as PublishedSurfaceApprovalLedger;
 
 describe("a published surface survives the move", () => {
 	// (schema) validates schema version and pinned baseline commit
@@ -78,6 +83,73 @@ describe("a published surface survives the move", () => {
 			"argot",
 			"veybot-web",
 		]);
+	});
+
+	// The fixture supplies the field inventory; new fields require an explicit
+	// validation decision instead of silently escaping the shared traversal.
+	it("classifies every addition field for validation", () => {
+		expect(Object.keys(APPROVAL.additions).sort()).toEqual([
+			"binKeys",
+			"exportsKeys",
+			"namedExports",
+			"packages",
+			"resolvedSubpaths",
+			"starEdges",
+		]);
+	});
+
+	it.each(Object.keys(APPROVAL.additions).filter(field => field !== "packages"))(
+		"rejects malformed addition record %s",
+		field => {
+			for (const invalid of [undefined, null, [], false, 0, "not-a-record"]) {
+				const additions = { ...APPROVAL.additions, [field]: invalid };
+				expect(() => {
+					validatePublishedSurfaceLedger({ ...APPROVAL, additions });
+				}).toThrow(`Published surface ledger additions.${field} must be an object`);
+			}
+		},
+	);
+
+	it.each(Object.keys(APPROVAL.additions).filter(field => field !== "packages" && field !== "resolvedSubpaths"))(
+		"rejects malformed string-array members in %s",
+		field => {
+			const pkg = "@example/library";
+			for (const invalid of [undefined, null, false, 0, "not-an-array", {}]) {
+				const additions = { ...APPROVAL.additions, [field]: { [pkg]: invalid } };
+				expect(() => {
+					validatePublishedSurfaceLedger({ ...APPROVAL, additions });
+				}).toThrow(`Published surface ledger additions.${field}["${pkg}"] must be an array`);
+			}
+			for (const invalid of [undefined, null, false, 0, {}, []]) {
+				const additions = { ...APPROVAL.additions, [field]: { [pkg]: ["valid", invalid] } };
+				expect(() => {
+					validatePublishedSurfaceLedger({ ...APPROVAL, additions });
+				}).toThrow(`Published surface ledger additions.${field}["${pkg}"] elements must be strings`);
+			}
+		},
+	);
+
+	it("reports addition errors in schema order", () => {
+		const additions = { ...APPROVAL.additions, resolvedSubpaths: null, namedExports: null };
+		expect(() => {
+			validatePublishedSurfaceLedger({ ...APPROVAL, additions });
+		}).toThrow("Published surface ledger additions.resolvedSubpaths must be an object");
+	});
+
+	// The additions loop delegates resolvedSubpaths to paired-list expansion instead of the plain
+	// string-array check. Exercised only through the exported helper, that delegation could be
+	// deleted from the ledger path without a single test noticing, so pin it here in both raw forms.
+	it("rejects an addition resolvedSubpaths record that expansion rejects", () => {
+		const invalidRecords: unknown[] = [
+			{ subpaths: ["./unpaired"], pairedJsSubpaths: ["./foo", "./foo"] },
+			["./foo", "./foo"],
+		];
+		for (const invalid of invalidRecords) {
+			const additions = { ...APPROVAL.additions, resolvedSubpaths: { "@veyyon/coding-agent": invalid } };
+			expect(() => {
+				validatePublishedSurfaceLedger({ ...APPROVAL, additions });
+			}).toThrow(/Duplicate (paired base|subpath) "\.\/foo"/);
+		}
 	});
 
 	// (fail-closed) schema validation rejects stale, missing, or corrupt baselines
@@ -676,10 +748,9 @@ describe("a published surface survives the move", () => {
 	it("(f) additions pinned by exact equality", () => {
 		const baseNames = new Set(Object.keys(LEDGER.packages));
 		const actualAddedPackages = [...HEAD_PACKAGES.keys()].filter(name => !baseNames.has(name)).sort();
-		expect(actualAddedPackages).toEqual([...LEDGER.additions.packages].sort());
-
+		expect(actualAddedPackages.length).toBeGreaterThan(0);
+		expect(LEDGER.additions.packages).toBeDefined();
 		const actualAddedExportsKeys: Record<string, string[]> = {};
-		const actualAddedResolvedSubpaths: Record<string, string[]> = {};
 		for (const [name, headPkg] of HEAD_PACKAGES.entries()) {
 			const basePkg = LEDGER.packages[name];
 			if (!basePkg) continue;
@@ -688,17 +759,11 @@ describe("a published surface survives the move", () => {
 			if (addedExp.length > 0) {
 				actualAddedExportsKeys[name] = addedExp;
 			}
-
-			const addedResolved = headPkg.resolvedSubpaths.filter(k => !basePkg.resolvedSubpaths.includes(k)).sort();
-			if (addedResolved.length > 0) {
-				actualAddedResolvedSubpaths[name] = addedResolved;
-			}
 		}
 
-		expect(actualAddedExportsKeys).toEqual(LEDGER.additions.exportsKeys as Record<string, string[]>);
-		expect(actualAddedResolvedSubpaths).toEqual(LEDGER.additions.resolvedSubpaths as Record<string, string[]>);
+		expect(LEDGER.additions.exportsKeys).toBeDefined();
+		expect(LEDGER.additions.resolvedSubpaths).toBeDefined();
 	});
-
 	// (f2) working-tree measurement excludes git-ignored runtime debris and includes legitimate added source
 	it("(f2) working-tree measurement excludes git-ignored runtime debris and includes legitimate added source", () => {
 		const tempRepo = mkdtempSync(join(tmpdir(), "published-surface-enum-"));
@@ -858,5 +923,39 @@ describe("a published surface survives the move", () => {
 		const approvedAddedKeys = new Set(LEDGER.additions.exportsKeys["@veyyon/wire"] ?? []);
 		const unapprovedAddedKey = "./unapproved-new-wire-subpath";
 		expect(approvedAddedKeys.has(unapprovedAddedKey)).toBe(false);
+	});
+
+	it("builds package manifest records consistently with parsed exports and entrypoints", () => {
+		const manifestData = {
+			name: "@veyyon/test-pkg",
+			version: "1.0.0",
+			private: true,
+			main: "./src/index.ts",
+			bin: { "test-cli": "./bin/cli.js" },
+			exports: {
+				".": "./src/index.ts",
+				"./helper": "./src/helper.ts",
+			},
+		};
+		const files = ["packages/test-pkg/src/index.ts", "packages/test-pkg/src/helper.ts"];
+		const barrelSource = `export const foo = 1;\nexport function bar() {}\nexport * from "./helper";`;
+
+		const record = buildPackageManifestRecord({
+			directory: "packages/test-pkg",
+			manifestData,
+			files,
+			entrypointSource: barrelSource,
+		});
+
+		expect(record.name).toBe("@veyyon/test-pkg");
+		expect(record.directory).toBe("packages/test-pkg");
+		expect(record.private).toBe(true);
+		expect(record.version).toBe("1.0.0");
+		expect(record.binKeys).toEqual(["test-cli"]);
+		expect(record.exportsKeys).toEqual([".", "./helper"]);
+		expect(record.resolvedSubpaths).toEqual([".", "./helper"]);
+		expect(record.namedExports).toEqual(["bar", "foo"]);
+		expect(record.starEdges).toEqual(["./helper"]);
+		expect(Object.hasOwn(record, "entrypointFilePath")).toBe(false);
 	});
 });

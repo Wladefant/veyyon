@@ -6,6 +6,25 @@ use regex::Regex;
 
 use crate::minimizer::{MinimizerCtx, MinimizerOutput, primitives};
 
+const RUNNER_BOILERPLATE: &[&str] = &[
+	"Running with gitlab-runner",
+	"Using Docker executor",
+	"Running on runner-",
+	"Preparing the",
+	"Preparing environment",
+	"Getting source from",
+	"Resolving secrets",
+	"Cleaning up",
+	"Uploading artifacts",
+	"Downloading artifacts",
+	"Runtime platform",
+	"Fetching changes with git",
+	"Initialized empty Git",
+	"Created fresh repository",
+	"Checking out ",
+	"Skipping Git submodules",
+];
+
 /// Match GitLab CI section markers: `section_start/end:timestamp:name` followed
 /// by bracket code.
 static SECTION_MARKER_RE: LazyLock<Regex> =
@@ -109,24 +128,10 @@ fn filter_ci_trace(input: &str) -> String {
 		}
 		previous_blank = false;
 
-		// Skip runner boilerplate
-		if trimmed.starts_with("Running with gitlab-runner")
-			|| (trimmed.starts_with("on ") && trimmed.contains("system ID:"))
-			|| trimmed.starts_with("Using Docker executor")
-			|| trimmed.starts_with("Running on runner-")
-			|| trimmed.starts_with("Preparing the")
-			|| trimmed.starts_with("Preparing environment")
-			|| trimmed.starts_with("Getting source from")
-			|| trimmed.starts_with("Resolving secrets")
-			|| trimmed.starts_with("Cleaning up")
-			|| trimmed.starts_with("Uploading artifacts")
-			|| trimmed.starts_with("Downloading artifacts")
-			|| trimmed.starts_with("Runtime platform")
-			|| trimmed.starts_with("Fetching changes with git")
-			|| trimmed.starts_with("Initialized empty Git")
-			|| trimmed.starts_with("Created fresh repository")
-			|| trimmed.starts_with("Checking out ")
-			|| trimmed.starts_with("Skipping Git submodules")
+		if (trimmed.starts_with("on ") && trimmed.contains("system ID:"))
+			|| RUNNER_BOILERPLATE
+				.iter()
+				.any(|prefix| trimmed.starts_with(prefix))
 		{
 			continue;
 		}

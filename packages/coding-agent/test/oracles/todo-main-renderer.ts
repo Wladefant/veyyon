@@ -4,7 +4,7 @@
  */
 import { type LegacyRenderer, loadHistoricalOracle } from "./historical-loader";
 
-const oracle = loadHistoricalOracle("todo-main-renderer");
+const oracle = await loadHistoricalOracle("todo-main-renderer");
 
 export const TODO_STRIKE_HOLD_FRAMES = oracle.TODO_STRIKE_HOLD_FRAMES as number;
 export const TODO_STRIKE_REVEAL_FRAMES = oracle.TODO_STRIKE_REVEAL_FRAMES as number;

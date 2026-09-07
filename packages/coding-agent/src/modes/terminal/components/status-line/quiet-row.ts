@@ -608,7 +608,7 @@ export function statusLineSettingsFromConfig(): StatusLineSettings {
 		rightSegments: settings.get("statusLine.rightSegments"),
 		separator: settings.get("statusLine.separator"),
 		showHookStatus: settings.get("statusLine.showHookStatus"),
-		segmentOptions: settings.getGroup("statusLine").segmentOptions,
+		segmentOptions: settings.get("statusLine.segmentOptions"),
 		sessionAccent: settings.get("statusLine.sessionAccent"),
 		transparent: settings.get("statusLine.transparent"),
 		compactThinkingLevel: settings.get("statusLine.compactThinkingLevel"),

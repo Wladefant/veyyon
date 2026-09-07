@@ -131,9 +131,9 @@ export class HomeAnchorLayout {
 	 * saturating at the terminal height: slack is `rows - content`, so a content
 	 * height past `rows` carries no more information than "the screen is full".
 	 *
-	 * Exact wherever a fill exists, which is the only place it is read: it is the
-	 * same `render(width)` call, at the same width, over the same children the
-	 * compositor concatenates, so it counts wrapping the same way.
+	 * Exact wherever a fill exists, which is the only place it is read: a
+	 * height-only measurement where available, otherwise the same `render(width)`
+	 * call over the same children the compositor concatenates.
 	 *
 	 * A child that offers a bounded tail measurement is measured through that
 	 * instead, because its `render()` is not a pure read: `TranscriptContainer`
@@ -158,9 +158,10 @@ export class HomeAnchorLayout {
 			try {
 				const bounded = (child as Partial<BoundedMeasure>).renderViewportTail;
 				total +=
-					typeof bounded === "function"
+					child.measureHeight?.(width) ??
+					(typeof bounded === "function"
 						? bounded.call(child, width, Math.max(0, rows - total)).length
-						: child.render(width).length;
+						: child.render(width).length);
 			} catch {
 				total += 1;
 			}

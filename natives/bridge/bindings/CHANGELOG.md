@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Deduplicated tree-sitter language dispatch, filesystem isolation backend declarations, and syntect scope color matching across native crates.
+- Linux native CPU detection reads current kernel flags without consulting persisted CPU verdict files.
 - Typed tuple copies use spreads rather than `.concat()`, which those types do not define. No user-visible behavior changes.
 - The loader's diagnostic comment names the addon crate at `natives/bridge/addon/src/lib.rs`, the path it moved to. No user-visible behavior changes.
 - The rebuild instruction in the stale-addon refusal reads `bun --cwd=natives/bridge/bindings run build`, the package's path after it moved out of `packages/`. The package name `@veyyon/natives` and every import specifier are unchanged.

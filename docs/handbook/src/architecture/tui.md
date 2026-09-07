@@ -39,6 +39,7 @@ const picked = await terminal.custom<string | undefined>((tui, theme, keybinding
 ```ts
 export interface Component {
   render(width: number): readonly string[];
+  measureHeight?(width: number): number;
   handleInput?(data: string): void;
   wantsKeyRelease?: boolean;
   invalidate?(): void;
@@ -47,6 +48,8 @@ export interface Component {
 ```
 
 Render results are component-owned and immutable to callers; a component that did not change should return the **same array reference** it returned last time (reference equality is what enables the renderer's memoization and row virtualization), and must return a new array whenever its content changed.
+
+`measureHeight(width)` returns the same nonnegative integer as `render(width).length` without constructing output or advancing render state. Home-screen layout uses this measurement before bounded-tail or full rendering. Components without the method retain their existing measurement path.
 
 `Focusable` is separate:
 

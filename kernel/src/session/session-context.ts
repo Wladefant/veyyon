@@ -147,12 +147,38 @@ function legacyArchiveBlocksForContext(
 	return [{ type: "text", text: `Recovered archived history from a prior compaction:\n\n${text}` }];
 }
 
+function emptySessionContext(): SessionContext {
+	return {
+		messages: [],
+		thinkingLevel: "off",
+		serviceTier: undefined,
+		models: {},
+		injectedTtsrRules: [],
+		selectedMCPToolNames: [],
+		hasPersistedMCPToolSelection: false,
+		mode: "none",
+	};
+}
+
+export function walkBranchPath(byId: Map<string, SessionEntry>, leaf?: SessionEntry): SessionEntry[] {
+	const path: SessionEntry[] = [];
+	let current = leaf;
+	while (current) {
+		path.push(current);
+		current = current.parentId ? byId.get(current.parentId) : undefined;
+	}
+	path.reverse();
+	return path;
+}
+
 export function buildSessionContext(
 	entries: SessionEntry[],
 	leafId?: string | null,
 	byId?: Map<string, SessionEntry>,
 	options?: BuildSessionContextOptions,
 ): SessionContext {
+	if (leafId === null) return emptySessionContext();
+
 	// Build uuid index if not available
 	if (!byId) {
 		byId = new Map<string, SessionEntry>();
@@ -161,51 +187,11 @@ export function buildSessionContext(
 		}
 	}
 
-	// Find leaf
-	let leaf: SessionEntry | undefined;
-	if (leafId === null) {
-		// Explicitly null - return no messages (navigated to before first entry)
-		return {
-			messages: [],
-			thinkingLevel: "off",
-			serviceTier: undefined,
-			models: {},
-			injectedTtsrRules: [],
-			selectedMCPToolNames: [],
-			hasPersistedMCPToolSelection: false,
-			mode: "none",
-		};
-	}
-	if (leafId) {
-		leaf = byId.get(leafId);
-	}
-	if (!leaf) {
-		// Fallback to last entry (when leafId is undefined)
-		leaf = entries[entries.length - 1];
-	}
-
-	if (!leaf) {
-		return {
-			messages: [],
-			thinkingLevel: "off",
-			serviceTier: undefined,
-			models: {},
-			injectedTtsrRules: [],
-			selectedMCPToolNames: [],
-			hasPersistedMCPToolSelection: false,
-			mode: "none",
-		};
-	}
+	const leaf = leafId ? byId.get(leafId) : entries[entries.length - 1];
+	if (!leaf) return emptySessionContext();
 
 	// Walk from leaf to root, collecting path
-	const path: SessionEntry[] = [];
-	let current: SessionEntry | undefined = leaf;
-	while (current) {
-		path.push(current);
-		current = current.parentId ? byId.get(current.parentId) : undefined;
-	}
-	path.reverse();
-
+	const path = walkBranchPath(byId, leaf);
 	// Extract settings and find compaction
 	let thinkingLevel: string | undefined = "off";
 	let configuredThinkingLevel: string | undefined;

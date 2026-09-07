@@ -4,6 +4,6 @@
  */
 import { type LegacyRenderer, loadHistoricalOracle } from "./historical-loader";
 
-const oracle = loadHistoricalOracle("search-main-renderer");
+const oracle = await loadHistoricalOracle("search-main-renderer");
 
 export const searchToolRenderer = oracle.searchToolRenderer as LegacyRenderer;

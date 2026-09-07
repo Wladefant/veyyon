@@ -9,9 +9,8 @@ import { viewToolRenderer } from "../../modes/terminal/draw/draw-tool-view";
 import type { ToolRenderer } from "../renderers";
 import { inspectImageToolView } from "./inspect-image-view";
 import { readToolView } from "./read-view";
-import { setCwdToolView } from "./set-cwd";
-import { writeContentExceedsStreamingWindow } from "./write";
-import { writeToolView } from "./write-view";
+import { setCwdToolView } from "./set-cwd-view";
+import { writeContentExceedsStreamingWindow, writeToolView } from "./write-view";
 
 export const fsRenderers: Record<string, ToolRenderer> = {
 	read: viewToolRenderer(readToolView, { mergeCallAndResult: true }) as ToolRenderer,

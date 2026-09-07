@@ -27,8 +27,16 @@ import type {
 	ViewLine,
 	ViewSection,
 } from "@veyyon/view";
-import { formatTruncationMetaNotice, stripOutputNotice } from "../../core/output-notice";
-import { LINE_NOUN, replaceTabs, screenRows, shortenEmbeddedPaths, shortenPath } from "../../core/render-utils";
+import { extractResultText, formatTruncationMetaNotice, stripOutputNotice } from "../../core/output-notice";
+import {
+	heldBack,
+	LINE_NOUN,
+	replaceTabs,
+	screenRows,
+	shortenEmbeddedPaths,
+	shortenPath,
+	type ToolViewResult,
+} from "../../core/render-utils";
 import type { BrowserToolDetails } from "../browser";
 
 /** The tool's own mark, which a settled row is titled by instead of an outcome icon. */
@@ -63,11 +71,7 @@ export interface BrowserViewArgs {
 }
 
 /** The result a card reads, which is the tool's own result shape narrowed to what a card shows. */
-export interface BrowserViewResult {
-	content: Array<{ type: string; text?: string }>;
-	details?: BrowserToolDetails;
-	isError?: boolean;
-}
+export interface BrowserViewResult extends ToolViewResult<BrowserToolDetails> {}
 
 /**
  * Which browser the tab is on, said in the words the call or the result gives.
@@ -126,10 +130,11 @@ function codeSection(code: string, expanded: boolean): ViewSection | undefined {
 	const rows = screenRows(code);
 	const kept = rows.slice(0, Math.min(rows.length, ceiling(expanded)));
 	const held = rows.length - kept.length;
+	const hidden = heldBack(held, LINE_NOUN, !expanded);
 	return {
 		lines: kept.map(row => [{ text: row }] as ViewLine),
 		code: { language: RUN_LANGUAGE },
-		...(held > 0 ? { hidden: { count: held, noun: LINE_NOUN, revealable: !expanded } } : {}),
+		...(hidden === undefined ? {} : { hidden }),
 	};
 }
 
@@ -150,10 +155,11 @@ function outputSection(
 	const rows = screenRows(output);
 	const kept = rows.slice(0, Math.min(rows.length, ceiling(expanded)));
 	const held = rows.length - kept.length;
+	const hidden = heldBack(held, LINE_NOUN, !expanded);
 	return {
 		...(label === undefined ? {} : { label }),
 		lines: kept.map(row => outputRow(row, isError)),
-		...(held > 0 ? { hidden: { count: held, noun: LINE_NOUN, revealable: !expanded } } : {}),
+		...(hidden === undefined ? {} : { hidden }),
 	};
 }
 
@@ -276,17 +282,6 @@ function tabCard(
 	};
 }
 
-/** The text parts of a result, which is everything a card shows of what the tool returned. */
-function textOf(content: Array<{ type: string; text?: string }> | undefined): string {
-	if (!content) return "";
-	return withoutTrailingBlanks(
-		content
-			.filter(part => part.type === "text")
-			.map(part => part.text ?? "")
-			.join("\n"),
-	);
-}
-
 export const browserToolView: Required<ToolViewRenderer<BrowserViewArgs, BrowserViewResult>> = {
 	/**
 	 * The card while the call is still arriving.
@@ -305,7 +300,7 @@ export const browserToolView: Required<ToolViewRenderer<BrowserViewArgs, Browser
 		const isError = result.isError === true;
 		// The notice the tool appended for the model is stated by the card as its own group, so the
 		// reader is not shown the same sentence twice in two voices.
-		const output = stripOutputNotice(textOf(result.content), details?.meta);
+		const output = stripOutputNotice(withoutTrailingBlanks(extractResultText(result.content)), details?.meta);
 		if ((details?.action ?? called.action) === "run") return runCard(called, details, context, output, isError);
 		return tabCard(called, details, context, output, isError);
 	},

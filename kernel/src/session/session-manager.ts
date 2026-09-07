@@ -26,39 +26,31 @@ import {
 } from "./custom-message-payload";
 import { SESSION_EXIT_CUSTOM_TYPE } from "./exit-diagnostics";
 import type { OperatorNotices } from "./operator-notices";
-import { type BuildSessionContextOptions, buildSessionContext, type SessionContext } from "./session-context";
+import {
+	type BuildSessionContextOptions,
+	buildSessionContext,
+	type SessionContext,
+	walkBranchPath,
+} from "./session-context";
 import {
 	type BranchSummaryEntry,
-	type CompactionEntry,
 	CURRENT_SESSION_VERSION,
-	type CustomEntry,
-	type CustomMessageEntry,
 	type FileEntry,
 	type LabelEntry,
-	type MCPToolSelectionEntry,
-	type ModeChangeEntry,
-	type ModelChangeEntry,
 	type NewSessionOptions,
 	SESSION_TITLE_SLOT_ENTRY_TYPE,
-	type ServiceTierChangeEntry,
 	type SessionCheckpoint,
 	type SessionCheckpointEntry,
 	type SessionEntry,
 	type SessionHeader,
-	type SessionInitEntry,
 	type SessionLifecycleEntry,
 	type SessionLifecycleReason,
 	type SessionLifecycleState,
-	type SessionMessageEntry,
 	type SessionTitleSource,
 	type SessionTreeNode,
-	type SettingsSnapshotEntry,
-	type SubagentSpawnEntry,
 	type SubagentSpawnRecord,
-	type ThinkingLevelChangeEntry,
 	TITLE_CHANGE_ENTRY_TYPE,
 	type TitleChangeEntry,
-	type TtsrInjectionEntry,
 	type UsageStatistics,
 } from "./session-entries";
 import { findMostRecentSession, listAllSessions, listSessions, type SessionInfo } from "./session-listing";
@@ -326,17 +318,8 @@ class SessionEntryIndex {
 	}
 
 	pathTo(id: string | null | undefined = this.#leaf): SessionEntry[] {
-		const branch: SessionEntry[] = [];
-		const seen = new Set<string>();
-		let cursor = id ? this.#entriesById.get(id) : undefined;
-
-		while (cursor && !seen.has(cursor.id)) {
-			seen.add(cursor.id);
-			branch.push(cursor);
-			cursor = cursor.parentId ? this.#entriesById.get(cursor.parentId) : undefined;
-		}
-		branch.reverse();
-		return branch;
+		const leaf = id ? this.#entriesById.get(id) : undefined;
+		return walkBranchPath(this.#entriesById, leaf);
 	}
 
 	tree(entries: readonly SessionEntry[]): SessionTreeNode[] {
@@ -2329,34 +2312,31 @@ export class SessionManager {
 	 * CompactionSummaryMessage / BranchSummaryMessage are rejected here — they are
 	 * top-level entries via appendCompaction()/branchWithSummary().
 	 */
-	appendMessage(message: Exclude<AgentMessage, BranchSummaryMessage | CompactionSummaryMessage>): string {
-		const entry: SessionMessageEntry = { type: "message", ...this.#freshEntryFields(), message };
+	#appendFresh<T extends object>(payload: T): string {
+		const entry = { ...this.#freshEntryFields(), ...payload } as unknown as SessionEntry;
 		this.#recordEntry(entry);
 		return entry.id;
+	}
+
+	appendMessage(message: Exclude<AgentMessage, BranchSummaryMessage | CompactionSummaryMessage>): string {
+		return this.#appendFresh({ type: "message", message });
 	}
 
 	/** Append a thinking level change as child of current leaf, then advance leaf. Returns entry id. */
 	appendThinkingLevelChange(thinkingLevel?: string, configured?: string): string {
-		const entry: ThinkingLevelChangeEntry = {
+		return this.#appendFresh({
 			type: "thinking_level_change",
-			...this.#freshEntryFields(),
 			thinkingLevel: thinkingLevel ?? null,
 			configured: configured ?? null,
-		};
-		this.#recordEntry(entry);
-		return entry.id;
+		});
 	}
 
 	appendServiceTierChange(serviceTier: ServiceTierByFamily | null): string {
-		const entry: ServiceTierChangeEntry = { type: "service_tier_change", ...this.#freshEntryFields(), serviceTier };
-		this.#recordEntry(entry);
-		return entry.id;
+		return this.#appendFresh({ type: "service_tier_change", serviceTier });
 	}
 
 	appendModeChange(mode: string, data?: Record<string, unknown>): string {
-		const entry: ModeChangeEntry = { type: "mode_change", ...this.#freshEntryFields(), mode, data };
-		this.#recordEntry(entry);
-		return entry.id;
+		return this.#appendFresh({ type: "mode_change", mode, data });
 	}
 
 	/**
@@ -2365,9 +2345,7 @@ export class SessionManager {
 	 * @param role Optional role (default: "default")
 	 */
 	appendModelChange(model: string, role?: string): string {
-		const entry: ModelChangeEntry = { type: "model_change", ...this.#freshEntryFields(), model, role };
-		this.#recordEntry(entry);
-		return entry.id;
+		return this.#appendFresh({ type: "model_change", model, role });
 	}
 
 	appendSessionInit(init: {
@@ -2379,9 +2357,7 @@ export class SessionManager {
 		readSummarize?: boolean;
 		maxNestedSpawnDepth?: number;
 	}): string {
-		const entry: SessionInitEntry = { type: "session_init", ...this.#freshEntryFields(), ...init };
-		this.#recordEntry(entry);
-		return entry.id;
+		return this.#appendFresh({ type: "session_init", ...init });
 	}
 
 	/**
@@ -2391,9 +2367,7 @@ export class SessionManager {
 	 * tool can enumerate a session's subagents without scraping tool-result prose.
 	 */
 	appendSubagentSpawn(record: SubagentSpawnRecord): string {
-		const entry: SubagentSpawnEntry = { type: "subagent_spawn", ...this.#freshEntryFields(), ...record };
-		this.#recordEntry(entry);
-		return entry.id;
+		return this.#appendFresh({ type: "subagent_spawn", ...record });
 	}
 
 	/**
@@ -2402,9 +2376,7 @@ export class SessionManager {
 	 * start; `kind: "diff"` carries only keys that changed since the prior snapshot.
 	 */
 	appendSettingsSnapshot(values: Record<string, unknown>, kind: "full" | "diff" = "full"): string {
-		const entry: SettingsSnapshotEntry = { type: "settings_snapshot", ...this.#freshEntryFields(), kind, values };
-		this.#recordEntry(entry);
-		return entry.id;
+		return this.#appendFresh({ type: "settings_snapshot", kind, values });
 	}
 
 	appendCompaction<T = unknown>(
@@ -2420,9 +2392,8 @@ export class SessionManager {
 		// summaries stay out of the LLM context (buildSessionContext emits only the latest
 		// compaction), but they are preserved on disk so a session can be studied in full
 		// after any number of compactions.
-		const entry: CompactionEntry<T> = {
+		return this.#appendFresh({
 			type: "compaction",
-			...this.#freshEntryFields(),
 			summary,
 			shortSummary,
 			firstKeptEntryId,
@@ -2430,15 +2401,11 @@ export class SessionManager {
 			details,
 			fromExtension,
 			preserveData,
-		};
-		this.#recordEntry(entry);
-		return entry.id;
+		});
 	}
 
 	appendCustomEntry(customType: string, data?: unknown): string {
-		const entry: CustomEntry = { type: "custom", customType, data, ...this.#freshEntryFields() };
-		this.#recordEntry(entry);
-		return entry.id;
+		return this.#appendFresh({ type: "custom", customType, data });
 	}
 
 	/**
@@ -2466,7 +2433,7 @@ export class SessionManager {
 		attribution: MessageAttribution | undefined = "agent",
 	): string {
 		const normalized = normalizeCustomMessagePayload<T>({ customType, content, display, details, attribution });
-		const entry: CustomMessageEntry<T> = {
+		return this.#appendFresh({
 			type: "custom_message",
 			customType: normalized.customType,
 			content: normalized.content,
@@ -2474,36 +2441,26 @@ export class SessionManager {
 			// Drop AgentSession-internal transient fields before disk persistence.
 			details: stripInternalDetailsFields(normalized.details),
 			attribution: normalized.attribution,
-			...this.#freshEntryFields(),
-		};
-		this.#recordEntry(entry);
-		return entry.id;
+		});
 	}
 
 	/**
 	 * Append an MCP tool selection entry recording the discovery-selected MCP tools.
 	 */
 	appendMCPToolSelection(selectedToolNames: string[]): string {
-		const entry: MCPToolSelectionEntry = {
+		return this.#appendFresh({
 			type: "mcp_tool_selection",
-			...this.#freshEntryFields(),
 			selectedToolNames: selectedToolNames.slice(),
-		};
-		this.#recordEntry(entry);
-		return entry.id;
+		});
 	}
 
 	/** Append a TTSR injection entry recording which rules were injected. */
 	appendTtsrInjection(ruleNames: string[]): string {
-		const entry: TtsrInjectionEntry = {
+		return this.#appendFresh({
 			type: "ttsr_injection",
-			...this.#freshEntryFields(),
 			injectedRules: ruleNames.slice(),
-		};
-		this.#recordEntry(entry);
-		return entry.id;
+		});
 	}
-
 	/** All unique TTSR rule names injected on the current branch (root → leaf). */
 	getInjectedTtsrRules(): string[] {
 		const names = new Set<string>();

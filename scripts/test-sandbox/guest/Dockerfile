@@ -91,7 +91,8 @@ RUN set -eux; \
     apt-get update; \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         git ca-certificates util-linux kmod procps xz-utils cpio iproute2 \
-        ripgrep openssh-client openssh-server python3 curl ffmpeg imagemagick; \
+        ripgrep openssh-client openssh-server python3 curl ffmpeg imagemagick \
+        clang mold build-essential; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*; \
     git --version; \

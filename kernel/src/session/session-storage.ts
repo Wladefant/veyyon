@@ -689,12 +689,33 @@ export class FileSessionStorage implements SessionStorage {
 	}
 }
 
-function matchesPattern(name: string, pattern: string): boolean {
+export function matchStorageGlob(name: string, pattern: string): boolean {
 	if (pattern === "*") return true;
-	if (pattern.startsWith("*.")) {
-		return name.endsWith(pattern.slice(1));
-	}
+	if (pattern.startsWith("*.")) return name.endsWith(pattern.slice(1));
 	return name === pattern;
+}
+
+export function filterStorageMapKeys(
+	keys: Iterable<string>,
+	dir: string,
+	pattern: string,
+	recursive: boolean,
+): string[] {
+	const prefix = dir.endsWith("/") ? dir : `${dir}/`;
+	const matches: string[] = [];
+	for (const filePath of keys) {
+		if (!filePath.startsWith(prefix)) continue;
+		if (recursive) {
+			const relative = filePath.slice(prefix.length);
+			const name = relative.slice(Math.max(relative.lastIndexOf("/"), relative.lastIndexOf("\\")) + 1);
+			if (matchStorageGlob(name, pattern)) matches.push(filePath);
+		} else {
+			const name = filePath.slice(prefix.length);
+			if (name.includes("/") || name.includes("\\")) continue;
+			if (matchStorageGlob(name, pattern)) matches.push(filePath);
+		}
+	}
+	return matches;
 }
 
 class MemorySessionStorageWriter implements SessionStorageWriter {
@@ -957,27 +978,11 @@ export class MemorySessionStorage implements SessionStorage {
 	}
 
 	listFilesSync(dir: string, pattern: string): string[] {
-		const prefix = dir.endsWith("/") ? dir : `${dir}/`;
-		const files: string[] = [];
-		for (const path of this.#files.keys()) {
-			if (!path.startsWith(prefix)) continue;
-			const name = path.slice(prefix.length);
-			if (name.includes("/") || name.includes("\\")) continue;
-			if (!matchesPattern(name, pattern)) continue;
-			files.push(path);
-		}
-		return files;
+		return filterStorageMapKeys(this.#files.keys(), dir, pattern, false);
 	}
 
 	listFilesRecursiveSync(dir: string, pattern: string): string[] {
-		const prefix = dir.endsWith("/") ? dir : `${dir}/`;
-		const files: string[] = [];
-		for (const filePath of this.#files.keys()) {
-			if (!filePath.startsWith(prefix)) continue;
-			if (!matchesPattern(path.basename(filePath), pattern)) continue;
-			files.push(filePath);
-		}
-		return files;
+		return filterStorageMapKeys(this.#files.keys(), dir, pattern, true);
 	}
 
 	exists(path: string): Promise<boolean> {

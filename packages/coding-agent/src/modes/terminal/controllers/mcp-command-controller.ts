@@ -62,7 +62,7 @@ import { TranscriptBlock } from "../components/transcript/transcript-container";
 import { urlHyperlinkAlways } from "../draw/hyperlink";
 import { parseCommandArgs } from "../shared";
 import type { InteractiveModeContext } from "../types";
-import { groupBySource, showCommandMessage } from "./command-controller-shared";
+import { dispatchSubcommand, groupBySource, showCommandMessage } from "./command-controller-shared";
 
 /**
  * The slice of the interactive context this controller uses: 12 members of the
@@ -307,67 +307,32 @@ export class MCPCommandController {
 	 * Handle /mcp command and route to subcommands
 	 */
 	async handle(text: string): Promise<void> {
-		const parts = text.trim().split(/\s+/);
-		const subcommand = parts[1]?.toLowerCase();
-
-		if (!subcommand || subcommand === "help") {
-			this.#showHelp();
-			return;
-		}
-
-		switch (subcommand) {
-			case "add":
-				await this.#handleAdd(text);
-				break;
-			case "list":
-				await this.#handleList();
-				break;
-			case "remove":
-			case "rm":
-				await this.#handleRemove(text);
-				break;
-			case "test":
-				await this.#handleTest(parts[2]);
-				break;
-			case "reauth":
-				await this.#handleReauth(parts[2]);
-				break;
-			case "unauth":
-				await this.#handleUnauth(parts[2]);
-				break;
-			case "enable":
-				await this.#handleSetEnabled(parts[2], true);
-				break;
-			case "disable":
-				await this.#handleSetEnabled(parts[2], false);
-				break;
-			case "resources":
-				await this.#handleResources();
-				break;
-			case "prompts":
-				await this.#handlePrompts();
-				break;
-			case "notifications":
-				await this.#handleNotifications();
-				break;
-			case "smithery-search":
-				await this.#handleSearch(text);
-				break;
-			case "smithery-login":
-				await this.#handleSmitheryLogin();
-				break;
-			case "smithery-logout":
-				await this.#handleSmitheryLogout();
-				break;
-			case "reconnect":
-				await this.#handleReconnect(parts[2]);
-				break;
-			case "reload":
-				await this.#handleReload();
-				break;
-			default:
-				this.ctx.showError(`Unknown subcommand: ${subcommand}. Type /mcp help for usage.`);
-		}
+		await dispatchSubcommand(
+			text,
+			"mcp",
+			[
+				{ name: "add", handler: () => this.#handleAdd(text) },
+				{ name: "list", handler: () => this.#handleList() },
+				{ name: "remove", aliases: ["rm"], handler: () => this.#handleRemove(text) },
+				{ name: "test", handler: (_args, _full, parts) => this.#handleTest(parts[2]) },
+				{ name: "reauth", handler: (_args, _full, parts) => this.#handleReauth(parts[2]) },
+				{ name: "unauth", handler: (_args, _full, parts) => this.#handleUnauth(parts[2]) },
+				{ name: "enable", handler: (_args, _full, parts) => this.#handleSetEnabled(parts[2], true) },
+				{ name: "disable", handler: (_args, _full, parts) => this.#handleSetEnabled(parts[2], false) },
+				{ name: "resources", handler: () => this.#handleResources() },
+				{ name: "prompts", handler: () => this.#handlePrompts() },
+				{ name: "notifications", handler: () => this.#handleNotifications() },
+				{ name: "smithery-search", handler: () => this.#handleSearch(text) },
+				{ name: "smithery-login", handler: () => this.#handleSmitheryLogin() },
+				{ name: "smithery-logout", handler: () => this.#handleSmitheryLogout() },
+				{ name: "reconnect", handler: (_args, _full, parts) => this.#handleReconnect(parts[2]) },
+				{ name: "reload", handler: () => this.#handleReload() },
+			],
+			{
+				onHelp: () => this.#showHelp(),
+				showError: msg => this.ctx.showError(msg),
+			},
+		);
 	}
 
 	/**

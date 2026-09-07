@@ -7,7 +7,7 @@ import type { Theme } from "@veyyon/coding-agent/theme/theme-class";
 import type { Component } from "@veyyon/tui";
 import { type LegacyRenderer, loadHistoricalOracle } from "./historical-loader";
 
-const oracle = loadHistoricalOracle("web-search-main-renderer");
+const oracle = await loadHistoricalOracle("web-search-main-renderer");
 
 export interface SearchRenderDetails {
 	response?: unknown;

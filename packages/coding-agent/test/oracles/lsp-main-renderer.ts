@@ -7,7 +7,7 @@ import type { Theme } from "@veyyon/coding-agent/theme/theme-class";
 import type { Component, Text } from "@veyyon/tui";
 import { type LegacyRenderer, loadHistoricalOracle } from "./historical-loader";
 
-const oracle = loadHistoricalOracle("lsp-main-renderer");
+const oracle = await loadHistoricalOracle("lsp-main-renderer");
 
 export const renderCall = oracle.renderCall as (
 	args: unknown,

@@ -41,7 +41,7 @@ export interface TranscriptBuildOptions {
 }
 
 /** How a tool call's arguments are rendered when the caller supplies nothing better. */
-function defaultToolText(value: unknown): string {
+export function defaultToolText(value: unknown): string {
 	if (typeof value === "string") return value;
 	if (value === undefined) return "";
 	try {
@@ -94,7 +94,7 @@ function timestampOf(message: AgentMessage): number {
 }
 
 /** Flatten the `string | (TextContent | ImageContent)[]` content shape to display text. */
-function contentToText(content: unknown): string {
+export function contentToText(content: unknown): string {
 	if (typeof content === "string") return content;
 	if (!Array.isArray(content)) return "";
 	let text = "";

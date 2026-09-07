@@ -186,6 +186,10 @@ To turn a server off entirely, add its name to `disabledServers` in `mcp.json`.
 | `/mcp test <name>` | Test connectivity |
 | `/mcp reauth <name>` | Refresh OAuth |
 
+`/mcp add` stores manually entered credentials in `env` for stdio servers and in `headers` for
+HTTP and SSE servers. After OAuth failure or cancellation, click **Retry** to restart authorization
+or **Edit OAuth settings** to change the authorization URL, token URL, client ID, client secret or scopes.
+
 Run `/mcp list` to see exactly which tools, resources, and templates Veyyon registered.
 
 ## Resolve common errors

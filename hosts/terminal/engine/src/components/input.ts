@@ -9,6 +9,7 @@ import { getSegmenter, offsetAtVisualCol, sliceWithWidth, visibleWidth } from "@
 import { getWordNavKind, moveWordLeft, moveWordRight } from "@veyyon/utils/word-nav";
 import { replaceTabs } from "@veyyon/utils/wrap";
 import { type Component, CURSOR_MARKER, type Focusable } from "../tui";
+import { firstGrapheme, lastGrapheme } from "../utils/text-layout";
 
 const segmenter = getSegmenter();
 
@@ -212,9 +213,7 @@ export class Input implements Component, Focusable, MouseRoutable {
 			this.#lastAction = null;
 			if (this.#cursor > 0) {
 				const beforeCursor = this.#value.slice(0, this.#cursor);
-				let lastGrapheme = "";
-				for (const seg of segmenter.segment(beforeCursor)) lastGrapheme = seg.segment;
-				this.#cursor -= lastGrapheme.length || 1;
+				this.#cursor -= lastGrapheme(beforeCursor).length || 1;
 			}
 			return;
 		}
@@ -223,14 +222,8 @@ export class Input implements Component, Focusable, MouseRoutable {
 			this.#lastAction = null;
 			if (this.#cursor < this.#value.length) {
 				const afterCursor = this.#value.slice(this.#cursor);
-				let firstGrapheme = "";
-				for (const seg of segmenter.segment(afterCursor)) {
-					firstGrapheme = seg.segment;
-					break;
-				}
-				this.#cursor += firstGrapheme.length || 1;
+				this.#cursor += firstGrapheme(afterCursor).length || 1;
 			}
-			return;
 		}
 
 		if (kb.matches(data, "tui.editor.cursorLineStart")) {
@@ -295,9 +288,7 @@ export class Input implements Component, Focusable, MouseRoutable {
 		this.#pushUndo();
 
 		const beforeCursor = this.#value.slice(0, this.#cursor);
-		let lastGrapheme = "";
-		for (const seg of segmenter.segment(beforeCursor)) lastGrapheme = seg.segment;
-		const graphemeLength = lastGrapheme.length || 1;
+		const graphemeLength = lastGrapheme(beforeCursor).length || 1;
 
 		this.#value = this.#value.slice(0, this.#cursor - graphemeLength) + this.#value.slice(this.#cursor);
 		this.#cursor -= graphemeLength;
@@ -312,86 +303,48 @@ export class Input implements Component, Focusable, MouseRoutable {
 		this.#pushUndo();
 
 		const afterCursor = this.#value.slice(this.#cursor);
-		let firstGrapheme = "";
-		for (const seg of segmenter.segment(afterCursor)) {
-			firstGrapheme = seg.segment;
-			break;
-		}
-		const graphemeLength = firstGrapheme.length || 1;
+		const graphemeLength = firstGrapheme(afterCursor).length || 1;
 
 		this.#value = this.#value.slice(0, this.#cursor) + this.#value.slice(this.#cursor + graphemeLength);
 	}
 
-	#deleteToLineStart(): void {
-		if (this.#cursor === 0) {
-			return;
-		}
-
+	#deleteRange(from: number, to: number, prepend: boolean): void {
+		if (from === to) return;
+		const wasKill = this.#lastAction === "kill";
 		this.#pushUndo();
-		const deletedText = this.#value.slice(0, this.#cursor);
-		this.#killRing.push(deletedText, { prepend: true, accumulate: this.#lastAction === "kill" });
+		const deletedText = this.#value.slice(from, to);
+		this.#killRing.push(deletedText, { prepend, accumulate: wasKill });
 		this.#lastAction = "kill";
+		this.#value = this.#value.slice(0, from) + this.#value.slice(to);
+		this.#cursor = from;
+	}
 
-		this.#value = this.#value.slice(this.#cursor);
-		this.#cursor = 0;
+	#deleteToLineStart(): void {
+		this.#deleteRange(0, this.#cursor, true);
 	}
 
 	#deleteToLineEnd(): void {
-		if (this.#cursor >= this.#value.length) {
-			return;
-		}
-
-		this.#pushUndo();
-		const deletedText = this.#value.slice(this.#cursor);
-		this.#killRing.push(deletedText, { prepend: false, accumulate: this.#lastAction === "kill" });
-		this.#lastAction = "kill";
-
-		this.#value = this.#value.slice(0, this.#cursor);
+		const oldCursor = this.#cursor;
+		this.#deleteRange(oldCursor, this.#value.length, false);
+		this.#cursor = oldCursor;
 	}
 
 	#deleteWordBackwards(): void {
-		if (this.#cursor === 0) {
-			return;
-		}
-
-		// Save state before cursor movement (moveWordBackwards resets lastAction).
-		const wasKill = this.#lastAction === "kill";
-		this.#pushUndo();
-
+		if (this.#cursor === 0) return;
 		const oldCursor = this.#cursor;
 		this.#moveWordBackwards();
 		const deleteFrom = this.#cursor;
-		this.#cursor = oldCursor;
-
-		const deletedText = this.#value.slice(deleteFrom, this.#cursor);
-		this.#killRing.push(deletedText, { prepend: true, accumulate: wasKill });
-		this.#lastAction = "kill";
-
-		this.#value = this.#value.slice(0, deleteFrom) + this.#value.slice(this.#cursor);
-		this.#cursor = deleteFrom;
+		this.#deleteRange(deleteFrom, oldCursor, true);
 	}
 
 	#deleteWordForward(): void {
-		if (this.#cursor >= this.#value.length) {
-			return;
-		}
-
-		// Save state before cursor movement (moveWordForwards resets lastAction).
-		const wasKill = this.#lastAction === "kill";
-		this.#pushUndo();
-
+		if (this.#cursor >= this.#value.length) return;
 		const oldCursor = this.#cursor;
 		this.#moveWordForwards();
 		const deleteTo = this.#cursor;
+		this.#deleteRange(oldCursor, deleteTo, false);
 		this.#cursor = oldCursor;
-
-		const deletedText = this.#value.slice(this.#cursor, deleteTo);
-		this.#killRing.push(deletedText, { prepend: false, accumulate: wasKill });
-		this.#lastAction = "kill";
-
-		this.#value = this.#value.slice(0, this.#cursor) + this.#value.slice(deleteTo);
 	}
-
 	#yank(): void {
 		const text = this.#killRing.peek();
 		if (!text) {
@@ -563,11 +516,7 @@ export class Input implements Component, Focusable, MouseRoutable {
 		cursorDisplay = clampLow(cursorDisplay, 0, visibleText.length);
 
 		// Build the visible line and insert the cursor marker at the buffer cursor.
-		let cursorGrapheme = "";
-		for (const seg of segmenter.segment(visibleText.slice(cursorDisplay))) {
-			cursorGrapheme = seg.segment;
-			break;
-		}
+		const cursorGrapheme = firstGrapheme(visibleText.slice(cursorDisplay));
 
 		const beforeCursor = visibleText.slice(0, cursorDisplay);
 		const atCursor = cursorGrapheme;

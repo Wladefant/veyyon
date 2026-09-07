@@ -9,7 +9,7 @@ import type { Component } from "@veyyon/tui";
 import type { ToolViewRenderer } from "@veyyon/view";
 import { editToolView } from "../edit/edit-view";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
-import { goalToolView } from "../goals/goal-tool";
+import { goalToolView } from "../goals/goal-view";
 import { lspToolView } from "../lsp/view";
 import { viewToolRenderer } from "../modes/terminal/draw/draw-tool-view";
 import { taskToolView } from "../task/task-view";

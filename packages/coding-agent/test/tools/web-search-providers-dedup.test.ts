@@ -31,6 +31,30 @@ function makeParams(query: string, fetch: FetchImpl, numResults = 2): SearchPara
 }
 
 describe("web search providers URL deduplication", () => {
+	it.each([
+		{ name: "plain", deduplicate: false },
+		{ name: "deduplicated", deduplicate: true },
+	])("projects only normalized source fields in $name results", ({ deduplicate }) => {
+		const raw = [
+			{
+				title: "Result",
+				url: "https://example.com/result",
+				snippet: "Summary",
+				author: "Provider-only metadata",
+				internalContext: "Not a search result field",
+			},
+		];
+		expect(toSearchSources(raw, 1, { deduplicate })).toStrictEqual([
+			{
+				title: "Result",
+				url: "https://example.com/result",
+				snippet: "Summary",
+				publishedDate: undefined,
+				ageSeconds: undefined,
+			},
+		]);
+	});
+
 	it("toSearchSources preserves exact slice semantics without deduplication", () => {
 		const raw = [
 			{ title: "First A", url: "https://example.com/a" },

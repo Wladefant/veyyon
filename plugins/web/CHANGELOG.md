@@ -10,3 +10,4 @@
 ### Changed
 
 - Array copies that allocated with a spread now use `.slice()`, `.concat()` or `Array.from()`. No user-visible behavior changes.
+- Consolidated specialized web scraper site handlers into parameterized domain engines and declarative site definitions.

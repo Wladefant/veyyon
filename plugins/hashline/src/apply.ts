@@ -354,8 +354,7 @@ function balanceSum(a: DelimiterBalance, b: DelimiterBalance): DelimiterBalance 
 }
 
 function balanceComponentCovers(candidate: number, target: number): boolean {
-	if (target === 0) return true;
-	return candidate > 0 === target > 0 && Math.abs(candidate) >= Math.abs(target);
+	return target === 0 || (candidate > 0 === target > 0 && Math.abs(candidate) >= Math.abs(target));
 }
 
 function balanceCovers(candidate: DelimiterBalance, target: DelimiterBalance): boolean {

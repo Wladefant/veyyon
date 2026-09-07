@@ -435,7 +435,7 @@ export function applyFilter(extensions: ExtensionRow[], query: string): Extensio
 /**
  * Get display name for extension kind.
  */
-function getKindDisplayName(kind: ExtensionKind): string {
+export function getKindDisplayName(kind: ExtensionKind): string {
 	switch (kind) {
 		case "extension-module":
 			return "Extension Modules";

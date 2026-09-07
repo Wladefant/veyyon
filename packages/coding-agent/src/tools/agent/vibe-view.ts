@@ -27,7 +27,7 @@ import type {
 } from "@veyyon/view";
 import type { VibeCli, VibeScreenSnapshot, VibeSessionState } from "../../session/vibe-runtime";
 import { oneLineLabel } from "../../task/types";
-import { shortenEmbeddedPaths } from "../core/render-utils";
+import { shortenEmbeddedPaths, type ToolViewResult } from "../core/render-utils";
 import type { VibeOp, VibeToolDetails } from "./vibe";
 
 const COMPOSER_LINE_MAX = 96;
@@ -56,11 +56,7 @@ export interface VibeRenderArgs {
 }
 
 /** The result a vibe card reads: the text every tool returns, and the shared details payload. */
-export interface VibeToolResult {
-	content: Array<{ type: string; text?: string }>;
-	details?: VibeToolDetails;
-	isError?: boolean;
-}
+export interface VibeToolResult extends ToolViewResult<VibeToolDetails> {}
 
 /** The state a worker reports, as the mark a host draws for it. */
 function stateStatus(state: VibeSessionState): ViewStatus {

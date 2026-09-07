@@ -9,7 +9,7 @@ import type { PerFileDiffPreview } from "@veyyon/coding-agent/edit/streaming";
 import type { EditMode } from "@veyyon/coding-agent/utils/edit-mode";
 import { type LegacyRenderer, loadHistoricalOracle } from "./historical-loader";
 
-const oracle = loadHistoricalOracle("edit-main-renderer");
+const oracle = await loadHistoricalOracle("edit-main-renderer");
 
 export type EditRenderEntry = {
 	path?: unknown;

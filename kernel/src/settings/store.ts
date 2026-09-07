@@ -170,6 +170,9 @@ export function getByPath(obj: RawSettings, segments: readonly string[]): unknow
 		if (current === null || current === undefined || typeof current !== "object") {
 			return undefined;
 		}
+		if (!Object.hasOwn(current, segment)) {
+			return undefined;
+		}
 		current = (current as Record<string, unknown>)[segment];
 	}
 	return current;
@@ -179,7 +182,7 @@ export function getByPath(obj: RawSettings, segments: readonly string[]): unknow
  * Set a nested value in an object by path segments.
  * Creates intermediate objects as needed.
  */
-export function setByPath(obj: RawSettings, segments: string[], value: unknown): void {
+export function setByPath(obj: RawSettings, segments: readonly string[], value: unknown): void {
 	let current = obj;
 	for (let i = 0; i < segments.length - 1; i++) {
 		const segment = segments[i];
@@ -199,9 +202,21 @@ export function setByPath(obj: RawSettings, segments: string[], value: unknown):
  * owner per value and the migration is a fixed point on its own output.
  */
 export function deleteByPath(obj: RawSettings, segments: readonly string[]): void {
-	const parent = segments.length > 1 ? getByPath(obj, segments.slice(0, -1)) : obj;
-	if (!isRecord(parent)) return;
-	delete (parent as Record<string, unknown>)[segments[segments.length - 1]];
+	let current: unknown = obj;
+	for (let i = 0; i < segments.length - 1; i++) {
+		const segment = segments[i];
+		if (
+			current === null ||
+			current === undefined ||
+			typeof current !== "object" ||
+			!Object.hasOwn(current, segment)
+		) {
+			return;
+		}
+		current = (current as Record<string, unknown>)[segment];
+	}
+	if (!isRecord(current)) return;
+	delete (current as Record<string, unknown>)[segments[segments.length - 1]];
 }
 
 /**
@@ -216,14 +231,7 @@ export function deepMergeSettings(base: RawSettings, overrides: RawSettings): Ra
 
 		if (override === undefined) continue;
 
-		if (
-			typeof override === "object" &&
-			override !== null &&
-			!Array.isArray(override) &&
-			typeof baseVal === "object" &&
-			baseVal !== null &&
-			!Array.isArray(baseVal)
-		) {
+		if (isRecord(override) && isRecord(baseVal)) {
 			result[key] = deepMergeSettings(baseVal as RawSettings, override as RawSettings);
 		} else {
 			result[key] = override;
@@ -252,6 +260,7 @@ interface SchemaIndex {
 	 * exactly the duplication that made the sentinel hard to remove in the first place.
 	 */
 	readonly legacyUnsetSentinelPaths: readonly (readonly string[])[];
+	readonly groupPaths: Map<string, readonly SettingPath[]>;
 }
 
 let schemaIndex: SchemaIndex | undefined;
@@ -259,22 +268,37 @@ let schemaIndex: SchemaIndex | undefined;
 function indexedSchema(): SchemaIndex {
 	const paths = settingsSchemaPaths();
 	if (schemaIndex?.paths === paths) return schemaIndex;
-	const segments: Record<string, readonly string[]> = Object.fromEntries(
-		paths.map(settingPath => [settingPath, settingPath.split(".")]),
-	);
-	schemaIndex = {
-		paths,
-		segments,
-		legacyUnsetSentinelPaths: paths
-			.filter(settingPath => isUnsetNumberPath(settingPath))
-			.map(settingPath => segments[settingPath]!),
-	};
+	const segments: Record<string, readonly string[]> = Object.create(null);
+	const legacyUnsetSentinelPaths: string[][] = [];
+	for (const settingPath of paths) {
+		const parts = settingPath.split(".");
+		segments[settingPath] = parts;
+		if (isUnsetNumberPath(settingPath)) legacyUnsetSentinelPaths.push(parts);
+	}
+	schemaIndex = { paths, segments, legacyUnsetSentinelPaths, groupPaths: new Map() };
 	return schemaIndex;
+}
+
+/** The registered paths under a dotted prefix, memoized until the schema index is rebuilt. */
+export function groupSettingPaths(prefix: string): readonly SettingPath[] {
+	const index = indexedSchema();
+	let paths = index.groupPaths.get(prefix);
+	if (paths === undefined) {
+		const dottedPrefix = `${prefix}.`;
+		paths = index.paths.filter(key => key.startsWith(dottedPrefix));
+		if (paths.length > 0) index.groupPaths.set(prefix, paths);
+	}
+	return paths;
 }
 
 /** The segments of a registered path, memoized, or `undefined` for a path no table declares. */
 function registeredSegments(settingPath: string): readonly string[] | undefined {
 	return indexedSchema().segments[settingPath];
+}
+
+/** Segments for a setting path, using memoized schema segments when registered or splitting by dot. */
+function toSegments(settingPath: string): readonly string[] {
+	return registeredSegments(settingPath) ?? settingPath.split(".");
 }
 
 /**
@@ -436,11 +460,7 @@ export class SettingsStore {
 		this.#persist = !options.inMemory && options.readOnly !== true;
 
 		if (options.overrides) {
-			for (const [key, value] of Object.entries(options.overrides)) {
-				setByPath(this.#overrides, key.split("."), value);
-			}
-
-			this.#overrides = this.#migrateRawSettings(this.#overrides);
+			this.#applyOverrides(options.overrides);
 		}
 	}
 
@@ -468,7 +488,7 @@ export class SettingsStore {
 		// instances so they never touch the real global config).
 		const globalBinding = this.#hooks.globalBinding(path);
 		if (globalBinding) {
-			const override = getByPath(this.#overrides, path.split("."));
+			const override = getByPath(this.#overrides, toSegments(path));
 			if (override !== undefined) return override as SettingValue<P>;
 			try {
 				return globalBinding.read() as SettingValue<P>;
@@ -598,7 +618,7 @@ export class SettingsStore {
 		if (this.#hooks.globalBinding(path)) {
 			return !Object.is(this.get(path), getDefault(path));
 		}
-		return getByPath(this.#merged, registeredSegments(path) ?? path.split(".")) !== undefined;
+		return getByPath(this.#merged, toSegments(path)) !== undefined;
 	}
 
 	/**
@@ -608,7 +628,7 @@ export class SettingsStore {
 	 * presenting a shadowed profile row as though an accepted edit took effect.
 	 */
 	getSource(path: string): SettingSource {
-		const segments = registeredSegments(path) ?? path.split(".");
+		const segments = toSegments(path);
 		if (getByPath(this.#overrides, segments) !== undefined) return "runtime";
 		if (this.#hooks.globalBinding(path)) {
 			return this.isConfigured(path as SettingPath) ? "global" : "default";
@@ -653,7 +673,7 @@ export class SettingsStore {
 				}
 				this.#clearGlobalWriteFailure();
 			} else {
-				setByPath(this.#overrides, path.split("."), value);
+				setByPath(this.#overrides, toSegments(path), value);
 				this.rebuildMerged();
 			}
 			const next = this.get(path);
@@ -668,7 +688,7 @@ export class SettingsStore {
 		// from deleting it. Stamping first also means the strip cannot reach the new
 		// value.
 		this.#stampOwnedMigrationsFor(path);
-		const segments = path.split(".");
+		const segments = toSegments(path);
 		setByPath(this.#global, segments, value);
 		this.#modified.add(path);
 		this.rebuildMerged();
@@ -708,7 +728,7 @@ export class SettingsStore {
 				}
 				this.#clearGlobalWriteFailure();
 			} else {
-				deleteByPath(this.#overrides, path.split("."));
+				deleteByPath(this.#overrides, toSegments(path));
 				this.rebuildMerged();
 			}
 			const next = this.get(path);
@@ -718,7 +738,7 @@ export class SettingsStore {
 		}
 
 		this.#stampOwnedMigrationsFor(path);
-		const segments = registeredSegments(path) ?? path.split(".");
+		const segments = toSegments(path);
 		deleteByPath(this.#global, segments);
 		// Also drop a runtime override for the same path. Both are values this
 		// process owns, and leaving the override in place would make "Default"
@@ -755,7 +775,7 @@ export class SettingsStore {
 	 */
 	override<P extends SettingPath>(path: P, value: SettingValue<P>): void {
 		const prev = this.get(path);
-		const segments = path.split(".");
+		const segments = toSegments(path);
 		setByPath(this.#overrides, segments, value);
 		this.rebuildMerged();
 		this.#fireEffectiveSettingChanged(path, this.get(path), prev);
@@ -766,14 +786,7 @@ export class SettingsStore {
 	 */
 	clearOverride(path: SettingPath): void {
 		const prev = this.get(path);
-		const segments = path.split(".");
-		let current = this.#overrides;
-		for (let i = 0; i < segments.length - 1; i++) {
-			const segment = segments[i];
-			if (!(segment in current)) return;
-			current = current[segment] as RawSettings;
-		}
-		delete current[segments[segments.length - 1]];
+		deleteByPath(this.#overrides, toSegments(path));
 		this.rebuildMerged();
 		this.#fireEffectiveSettingChanged(path, this.get(path), prev);
 	}
@@ -815,14 +828,8 @@ export class SettingsStore {
 			inMemory: true,
 		});
 		forked.#activateProcessHooks = false;
-		forked.#configFiles = this.#configFiles.slice();
-		forked.#global = structuredClone(this.#global);
-		forked.#configOverlay = structuredClone(this.#configOverlay);
-		forked.#overrides = structuredClone(this.#overrides);
-		for (const [settingPath, value] of Object.entries(overrides)) {
-			setByPath(forked.#overrides, settingPath.split("."), value);
-		}
-		forked.#overrides = forked.#migrateRawSettings(forked.#overrides);
+		this.#copyLayersTo(forked);
+		forked.#applyOverrides(overrides);
 		forked.rebuildMerged();
 		return forked;
 	}
@@ -835,13 +842,24 @@ export class SettingsStore {
 		});
 		cloned.#configPath = this.#configPath;
 		cloned.#activateProcessHooks = this.#activateProcessHooks;
-		cloned.#global = structuredClone(this.#global);
-		cloned.#configFiles = this.#configFiles.slice();
-		cloned.#configOverlay = structuredClone(this.#configOverlay);
-		cloned.#overrides = structuredClone(this.#overrides);
+		this.#copyLayersTo(cloned);
 		cloned.rebuildMerged();
 		cloned.#fireAllHooks();
 		return cloned;
+	}
+
+	#copyLayersTo(target: SettingsStore): void {
+		target.#configFiles = this.#configFiles.slice();
+		target.#global = structuredClone(this.#global);
+		target.#configOverlay = structuredClone(this.#configOverlay);
+		target.#overrides = structuredClone(this.#overrides);
+	}
+
+	#applyOverrides(overrides: Partial<Record<SettingPath, unknown>>): void {
+		for (const [key, value] of Object.entries(overrides)) {
+			setByPath(this.#overrides, toSegments(key), value);
+		}
+		this.#overrides = this.#migrateRawSettings(this.#overrides);
 	}
 
 	/**
@@ -982,7 +1000,7 @@ export class SettingsStore {
 	#collectInvalidValues(tree: RawSettings, file: string): void {
 		if (!file) return;
 		for (const path of indexedSchema().paths) {
-			const value = getByPath(tree, registeredSegments(path) ?? path.split("."));
+			const value = getByPath(tree, toSegments(path));
 			if (value === undefined) continue;
 			const reason = describeSettingTypeMismatch(path, value);
 			if (reason === undefined) continue;
@@ -1222,7 +1240,7 @@ export class SettingsStore {
 				);
 				continue;
 			}
-			setByPath(raw, segments.slice(), flat);
+			setByPath(raw, segments, flat);
 		}
 	}
 
@@ -1303,14 +1321,16 @@ export class SettingsStore {
 	 * normal and the retry fixes it. A run of them is a broken filesystem or a config path
 	 * that is not writable, and that has to reach the user rather than a debug log.
 	 */
-	#recordSaveFailure(configPath: string, error: unknown): void {
+	#trackSaveFailure(filePath: string, error: unknown, reportAtAttempt: number): void {
 		const reason = errorMessage(error);
-		const attempts = (this.#saveFailure?.path === configPath ? this.#saveFailure.attempts : 0) + 1;
-		this.#saveFailure = { path: configPath, reason, attempts };
-		if (attempts !== SAVE_FAILURE_REPORT_AFTER) return;
-		// Exactly at the threshold, so a filesystem that stays broken reports once rather
-		// than on every retry for the rest of the session.
-		this.#announceSaveFailure({ path: configPath, reason, attempts });
+		const attempts = (this.#saveFailure?.path === filePath ? this.#saveFailure.attempts : 0) + 1;
+		this.#saveFailure = { path: filePath, reason, attempts };
+		if (attempts !== reportAtAttempt) return;
+		this.#announceSaveFailure({ path: filePath, reason, attempts });
+	}
+
+	#recordSaveFailure(configPath: string, error: unknown): void {
+		this.#trackSaveFailure(configPath, error, SAVE_FAILURE_REPORT_AFTER);
 	}
 
 	/**
@@ -1329,12 +1349,7 @@ export class SettingsStore {
 	 * one message, not one per attempt.
 	 */
 	#recordGlobalWriteFailure(error: unknown): void {
-		const filePath = getGlobalConfigFilePath();
-		const reason = errorMessage(error);
-		const attempts = (this.#saveFailure?.path === filePath ? this.#saveFailure.attempts : 0) + 1;
-		this.#saveFailure = { path: filePath, reason, attempts };
-		if (attempts !== 1) return;
-		this.#announceSaveFailure({ path: filePath, reason, attempts });
+		this.#trackSaveFailure(getGlobalConfigFilePath(), error, 1);
 	}
 
 	/** The global config took a write, so a failure recorded against it is over. */
@@ -1398,7 +1413,7 @@ export class SettingsStore {
 
 				// Apply only our modified paths
 				for (const modPath of modifiedPaths) {
-					const segments = modPath.split(".");
+					const segments = toSegments(modPath);
 					const value = getByPath(this.#global, segments);
 					setByPath(current, segments, value);
 				}

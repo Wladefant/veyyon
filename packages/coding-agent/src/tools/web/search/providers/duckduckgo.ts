@@ -1,4 +1,3 @@
-import type { AuthStorage } from "@veyyon/ai";
 import { withHardTimeout } from "@veyyon/web/hard-timeout";
 import { decodeHtmlEntities } from "@veyyon/web/scrapers/types";
 import { resolveProviderTextTransform, transformProviderPayload } from "../../../../provider-boundary";
@@ -6,9 +5,9 @@ import type { SearchResponse } from "../types";
 import { SearchProviderError } from "../types";
 import { clampNumResults, SEARCH_DEFAULT_NUM_RESULTS } from "../utils";
 import type { SearchParams } from "./base";
-import { SearchProvider } from "./base";
+import { OpenSearchProvider } from "./base";
 import { browserFetch } from "./browser-page";
-import { classifyProviderHttpError, toSearchSources } from "./utils";
+import { RECENCY_SINGLE_LETTER, throwProviderHttpError, toSearchSources } from "./utils";
 
 /**
  * DuckDuckGo's no-JS HTML search frontend. POST `q=…` to receive a static
@@ -19,17 +18,6 @@ import { classifyProviderHttpError, toSearchSources } from "./utils";
  */
 const DUCKDUCKGO_HTML_URL = "https://html.duckduckgo.com/html/";
 const MAX_NUM_RESULTS = 20;
-
-/**
- * Recency → DDG `df` form param. DDG accepts single letters for the time
- * filter; queries without a `df` value return the unfiltered default.
- */
-const RECENCY_TO_DDG_DF: Record<NonNullable<SearchParams["recency"]>, string> = {
-	day: "d",
-	week: "w",
-	month: "m",
-	year: "y",
-};
 
 interface ParsedResult {
 	title: string;
@@ -118,7 +106,7 @@ function isAnomalyResponse(html: string): boolean {
 }
 
 async function callDuckDuckGoHtml(params: SearchParams): Promise<string> {
-	const df = params.recency ? RECENCY_TO_DDG_DF[params.recency] : undefined;
+	const df = params.recency ? RECENCY_SINGLE_LETTER[params.recency] : undefined;
 
 	return withHardTimeout(params.signal, async hardSignal => {
 		const page = await browserFetch(
@@ -159,9 +147,7 @@ async function callDuckDuckGoHtml(params: SearchParams): Promise<string> {
 
 		const body = page.html;
 		if (page.status < 200 || page.status >= 300) {
-			const classified = classifyProviderHttpError("duckduckgo", page.status, body);
-			if (classified) throw classified;
-			throw new SearchProviderError("duckduckgo", `DuckDuckGo HTML error (${page.status})`, page.status);
+			throwProviderHttpError("duckduckgo", page.status, body, `DuckDuckGo HTML error (${page.status})`);
 		}
 
 		if (isAnomalyResponse(body)) {
@@ -190,17 +176,9 @@ export async function searchDuckDuckGo(params: SearchParams): Promise<SearchResp
 }
 
 /** Search provider for DuckDuckGo (no API key required). */
-export class DuckDuckGoProvider extends SearchProvider {
+export class DuckDuckGoProvider extends OpenSearchProvider {
 	readonly id = "duckduckgo";
 	readonly label = "DuckDuckGo";
-
-	isAvailable(_authStorage: AuthStorage): boolean {
-		return true;
-	}
-
-	isExplicitlyAvailable(_authStorage: AuthStorage): boolean {
-		return true;
-	}
 
 	search(params: SearchParams): Promise<SearchResponse> {
 		return searchDuckDuckGo(params);

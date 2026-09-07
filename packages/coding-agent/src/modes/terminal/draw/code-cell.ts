@@ -14,6 +14,7 @@ import {
 	formatMoreItems,
 	formatStatusIcon,
 	replaceTabs,
+	screenRows,
 } from "../../../tools/core/render-utils";
 import { renderOutputBlock } from "./output-block";
 import type { State } from "./types";
@@ -132,19 +133,10 @@ function formatHeader(options: CodeCellOptions | MarkdownCellOptions, theme: The
 	if (metaParts.length === 0) return { title: headerTitle };
 	return { title: headerTitle, meta: metaParts.join(theme.fg("dim", theme.sep.dot)) };
 }
-
-/**
- * Normalize terminal control characters that would otherwise corrupt TUI rendering:
- * - Collapse `\r\n` to `\n`.
- * - Within a line, treat `\r` as a cursor-return overwrite by keeping only the
- *   final segment (mirrors how rsync/curl/pip progress bars render to a terminal).
- * Splits on `\n` and returns the cleaned lines.
- */
-function sanitizeTerminalLines(text: string): string[] {
-	return text.split(/\r?\n/).map(line => {
-		const idx = line.lastIndexOf("\r");
-		return idx < 0 ? line : line.slice(idx + 1);
-	});
+/** Build a trailing "… N more lines" summary with theme-appropriate expand hint. */
+function formatMoreWithHint(theme: Theme, remaining: number, expanded: boolean): string {
+	const hint = formatExpandHint(theme, expanded, true);
+	return `${formatMoreItems(remaining, "line")}${hint ? ` ${hint}` : ""}`;
 }
 
 function formatOutputLines(
@@ -154,16 +146,14 @@ function formatOutputLines(
 	theme: Theme,
 ): string[] {
 	if (!output?.trim()) return [];
-	const rawLines = sanitizeTerminalLines(output);
+	const rawLines = screenRows(output);
 	const maxLines = Math.min(rawLines.length, expanded ? EXPANDED_MAX_LINES : outputMaxLines);
 	const displayLines = rawLines
 		.slice(0, maxLines)
 		.map(line => (line.includes("\x1b[") ? replaceTabs(line) : theme.fg("toolOutput", replaceTabs(line))));
 	const remaining = rawLines.length - maxLines;
 	if (remaining > 0) {
-		const hint = formatExpandHint(theme, expanded, true);
-		const moreLine = `${formatMoreItems(remaining, "line")}${hint ? ` ${hint}` : ""}`;
-		displayLines.push(theme.fg("dim", moreLine));
+		displayLines.push(theme.fg("dim", formatMoreWithHint(theme, remaining, expanded)));
 	}
 	return displayLines;
 }
@@ -190,7 +180,7 @@ export function renderCodeCell(options: CodeCellOptions, theme: Theme): string[]
 	const { code, language, expanded = false, codeMaxLines = 12, codeStartLine, codeLineNumbers } = options;
 
 	const normalizedCode = replaceTabs(code ?? "");
-	const rawCodeLines = sanitizeTerminalLines(normalizedCode);
+	const rawCodeLines = screenRows(normalizedCode);
 	const maxCodeLines = Math.min(rawCodeLines.length, expanded ? EXPANDED_MAX_LINES : codeMaxLines);
 	const hiddenCodeLines = rawCodeLines.length - maxCodeLines;
 	const tail = options.codeTail === true && !expanded && hiddenCodeLines > 0;
@@ -226,16 +216,13 @@ export function renderCodeCell(options: CodeCellOptions, theme: Theme): string[]
 	}
 
 	if (hiddenCodeLines > 0) {
-		const hint = formatExpandHint(theme, expanded, hiddenCodeLines > 0);
 		const gutterPad = lineNumberWidth > 0 ? " ".repeat(lineNumberWidth + 1) : "";
 		if (tail) {
-			// Earlier rows scrolled above the live tail window — mark them on top so
-			// the newest streamed line stays pinned to the bottom of the box.
+			const hint = formatExpandHint(theme, expanded, true);
 			const earlier = `… ${formatCount("earlier line", hiddenCodeLines)}${hint ? ` ${hint}` : ""}`;
 			codeLines.unshift(theme.fg("dim", gutterPad + earlier));
 		} else {
-			const moreLine = `${formatMoreItems(hiddenCodeLines, "line")}${hint ? ` ${hint}` : ""}`;
-			codeLines.push(theme.fg("dim", gutterPad + moreLine));
+			codeLines.push(theme.fg("dim", `${gutterPad}${formatMoreWithHint(theme, hiddenCodeLines, expanded)}`));
 		}
 	}
 
@@ -253,9 +240,7 @@ export function renderMarkdownCell(options: MarkdownCellOptions, theme: Theme): 
 	const contentLines = allLines.slice(0, maxContentLines);
 	const hiddenContentLines = allLines.length - maxContentLines;
 	if (hiddenContentLines > 0) {
-		const hint = formatExpandHint(theme, expanded, hiddenContentLines > 0);
-		const moreLine = `${formatMoreItems(hiddenContentLines, "line")}${hint ? ` ${hint}` : ""}`;
-		contentLines.push(theme.fg("dim", moreLine));
+		contentLines.push(theme.fg("dim", formatMoreWithHint(theme, hiddenContentLines, expanded)));
 	}
 
 	return renderCellBlock(options, contentLines, theme);

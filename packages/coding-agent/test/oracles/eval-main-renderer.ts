@@ -4,7 +4,7 @@
  */
 import { type LegacyRenderer, loadHistoricalOracle } from "./historical-loader";
 
-const oracle = loadHistoricalOracle("eval-main-renderer");
+const oracle = await loadHistoricalOracle("eval-main-renderer");
 
 export const EVAL_DEFAULT_PREVIEW_LINES = oracle.EVAL_DEFAULT_PREVIEW_LINES as number;
 export const evalToolRenderer = oracle.evalToolRenderer as LegacyRenderer;
