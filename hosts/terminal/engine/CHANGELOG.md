@@ -7,7 +7,7 @@
 - `@veyyon/tui` exports rendering only. The string, escape, keyboard, mouse, motion and layout-math primitives it also carried are now `@veyyon/utils` modules, imported by subpath: `@veyyon/utils/{ansi,autocomplete,bar,bracketed-paste,deccara,fuzzy,keybindings,keys,kill-ring,kitty-graphics,latex-block,latex-unicode,loop-watchdog,motion,mouse,padding,paint-columns,paint-ground,paint-surface,sgr,symbols,text-sizing,tight-mode,tmux,width,word-nav,wrap}`. The barrel re-exports none of them.
 - `MOTION` and the grow, hover, paint and settle curve tables are one module, `@veyyon/utils/motion`.
 - `EditorComponent` is `@veyyon/tui/components/editor-component`.
-- The render engine is `@veyyon/tui/core/*`: `component-types`, `container`, `cursor`, `image-budget`, `mouse-routing`, `overlay`, `renderer`, `scroll`, `terminal-session` and `tui`. `@veyyon/tui/tui` re-exports all of it, so an existing import path keeps resolving.
+- Render engine modules are available through `@veyyon/tui/core/*`: `component-types`, `container`, `cursor`, `image-budget`, `mouse-routing`, `overlay`, `renderer`, `scroll`, `terminal-session` and `tui`; existing TUI contract imports remain available through `@veyyon/tui/tui`.
 - `TUI.overlayStack` is private. The overlay stack's behavior is `OverlayStack` in `@veyyon/tui/core/overlay`.
 - `getTerminalId` is `@veyyon/utils/ttyid`, and `ImageFallbackReason` is `@veyyon/utils/image-fallback`. Neither is rendering, and a caller that needs a session id or the name of a cause no longer depends on the terminal renderer to get it.
 - `detectTerminalId` and `TerminalId` are exported from `@veyyon/utils/terminal-emulator` instead of `@veyyon/tui/terminal-capabilities`.
@@ -24,13 +24,14 @@
 
 ### Changed
 
+- Cursor movement sequences and overlay percentage parsing use shared implementations without changing terminal output.
 - Collapsed and deduplicated scroll math, search input filtering, border framing, cursor deletion and autocomplete helpers across engine components without changing rendering or behavior.
 - Direct writes and component-scoped rendering share layout-reuse checks, and frame rendering shares cursor-marker extraction, selection and row-divergence scans without changing terminal output.
 - Markdown rendering uses the shared HTML entity decoder without changing displayed text.
 - Text layout and pointer-hover state use shared implementations without changing rendering or input handling.
 - Array copies that allocated with a spread now use `.slice()`, `.concat()` or `Array.from()`. No user-visible behavior changes.
 - `TerminalNotification` extends `HostNotification` from `@veyyon/utils/host-notification`, so a terminal is one host that can deliver a tool's notification and the two shapes cannot drift apart.
-- `visualColAtOffset` and `offsetAtVisualCol` are exported from `@veyyon/tui` utils, shared by `Editor` and `Input`.
+- `visualColAtOffset` and `offsetAtVisualCol` are exported from `@veyyon/utils/width` and shared by `Editor` and `Input`.
 
 ### Fixed
 

@@ -56,7 +56,7 @@ import {
 	type ViewportTailProvider,
 } from "./component-types";
 import { Container } from "./container";
-import { HardwareCursorTracker, type HardwareCursorUpdate } from "./cursor";
+import { HardwareCursorTracker, type HardwareCursorUpdate, relativeMoveY } from "./cursor";
 import { DEFAULT_MAX_INLINE_IMAGES, ImageBudget } from "./image-budget";
 import { footerWantsPointer, pinnedFooterScreenBounds, routeFooterMouse } from "./mouse-routing";
 import {
@@ -145,12 +145,6 @@ const DEFAULT_RENDER_SCHEDULER: RenderScheduler = {
 		};
 	},
 };
-
-function relativeMoveY(rowDelta: number): string {
-	if (rowDelta > 0) return `\x1b[${rowDelta}B`;
-	if (rowDelta < 0) return `\x1b[${-rowDelta}A`;
-	return "";
-}
 
 /**
 
@@ -2396,7 +2390,7 @@ export class TUI extends Container {
 			// screen, or Esc/modified keys revert to legacy encoding inside
 			// fullscreen overlays (Ghostty/kitty/iTerm2).
 			const tracking = overlayWantsAlt ? MOUSE_TRACKING_ON : "";
-			this.terminal.write(`\x1b[?1049h${this.#keyboardEnhancementEnter()}${tracking}`);
+			this.terminal.write(`${ALT_SCREEN_ENTER}${this.#keyboardEnhancementEnter()}${tracking}`);
 			setAltScreenActive(true);
 			this.terminal.hideCursor();
 			this.#cursor.forget();

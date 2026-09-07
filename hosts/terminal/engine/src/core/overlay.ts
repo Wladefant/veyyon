@@ -243,10 +243,8 @@ function resolvePos(
 ): number {
 	if (typeof value === "number") return value;
 	const maxOffset = Math.max(0, avail - size);
-	if (typeof value === "string") {
-		const match = value.match(/^(\d+(?:\.\d+)?)%$/);
-		if (match) return margin + Math.floor((maxOffset * parseFloat(match[1])) / 100);
-	}
+	const parsed = typeof value === "string" ? parseSizeValue(value, maxOffset) : undefined;
+	if (parsed !== undefined) return margin + parsed;
 	const factor = isRow
 		? anchor.startsWith("top")
 			? 0
