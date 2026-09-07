@@ -17,7 +17,6 @@ import type {
 	ObjectPattern,
 	RestElement,
 } from "@babel/types";
-import { existingOnly } from "./check-doc-links";
 import {
 	batchReadGitBlobs,
 	ensureBaselineAvailable,
@@ -37,7 +36,7 @@ import {
 	validateLedgerHeader,
 	writeJsonFixture,
 } from "./ledger-schema";
-import { typeScriptMembersOf } from "./workspace-layout";
+import { existingOnly, typeScriptMembersOf } from "./workspace-layout";
 
 export const PUBLISHED_SURFACE_SCHEMA_VERSION = 2;
 export const FIXTURE_PATH = join(REPO_ROOT, "scripts", "fixtures", "published-surface.json");
@@ -585,63 +584,30 @@ export function loadHeadPackages(repoRoot: string = REPO_ROOT): Map<string, Work
 		const manifestPath = join(repoRoot, member, "package.json");
 		if (!existsSync(manifestPath)) continue;
 
-		const raw = readFileSync(manifestPath, "utf-8");
-		const data = JSON.parse(raw) as Record<string, unknown>;
-		const name = typeof data.name === "string" ? data.name : member;
-		const priv = Boolean(data.private);
-		const version = typeof data.version === "string" ? data.version : null;
-		const main = typeof data.main === "string" ? data.main : null;
-		const module = typeof data.module === "string" ? data.module : null;
-		const types = typeof data.types === "string" ? data.types : null;
-
-		const binKeys =
-			typeof data.bin === "object" && data.bin !== null && !Array.isArray(data.bin)
-				? Object.keys(data.bin as Record<string, unknown>).sort()
-				: typeof data.bin === "string"
-					? [name.split("/").pop() ?? name]
-					: [];
-
-		const exportsKeys =
-			typeof data.exports === "object" && data.exports !== null && !Array.isArray(data.exports)
-				? Object.keys(data.exports as Record<string, unknown>).sort()
-				: typeof data.exports === "string"
-					? ["."]
-					: [];
-
-		const resolvedSubpaths = expandExportsToSubpaths(data.exports, member, filesUnderMember(member, repoRoot));
-
+		const data = JSON.parse(readFileSync(manifestPath, "utf-8")) as Record<string, unknown>;
 		const entrypoint = resolveEntrypoint(data);
-		let namedExports: string[] = [];
-		let starEdges: string[] = [];
 		let entrypointFilePath: string | null = null;
+		let entrypointSource: string | null = null;
 
 		if (entrypoint) {
 			const entryRelative = entrypoint.replace(/^\.\//, "");
 			const resolvedPath = resolve(repoRoot, member, entryRelative);
 			if (existsSync(resolvedPath)) {
 				entrypointFilePath = resolvedPath;
-				const source = readFileSync(resolvedPath, "utf-8");
-				const parsed = parseBarrelSource(source);
-				namedExports = parsed.namedExports;
-				starEdges = parsed.starEdges;
+				entrypointSource = readFileSync(resolvedPath, "utf-8");
 			}
 		}
 
-		packages.set(name, {
-			name,
+		const record = buildPackageManifestRecord({
 			directory: member,
-			private: priv,
-			version,
-			main,
-			module,
-			types,
-			binKeys,
-			exportsKeys,
-			resolvedSubpaths,
-			entrypoint,
+			manifestData: data,
+			files: filesUnderMember(member, repoRoot),
+			entrypointSource,
+		});
+
+		packages.set(record.name, {
+			...record,
 			entrypointFilePath,
-			namedExports,
-			starEdges,
 		});
 	}
 

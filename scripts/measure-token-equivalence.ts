@@ -3,11 +3,11 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { type ParseResult, type ParserOptions, parse } from "@babel/parser";
 import type { File, Statement } from "@babel/types";
+import { sha256 } from "./git-baseline";
 import { assertObject, validateLedgerHeader, writeJsonFixture } from "./ledger-schema";
 
 export interface TokenRepresentation {
@@ -88,7 +88,7 @@ export function tokenize(code: string): TokenizeResult {
 
 export function hashTokenStream(tokens: readonly TokenRepresentation[]): string {
 	const stream = tokens.map(t => `${t.type}:${t.value === undefined ? "" : JSON.stringify(t.value)}`).join(",");
-	return createHash("sha256").update(stream).digest("hex");
+	return sha256(stream);
 }
 
 export function normalizeImportTokens(

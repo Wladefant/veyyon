@@ -22,10 +22,16 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { batchReadGitBlobs, getRenamePairs, PINNED_BASELINE_COMMIT, REPO_ROOT, readGitFileText } from "./git-baseline";
+import {
+	batchReadGitBlobs,
+	getRenamePairs,
+	PINNED_BASELINE_COMMIT,
+	REPO_ROOT,
+	readGitFileText,
+	sha256,
+} from "./git-baseline";
 import {
 	BINARY_EXTENSIONS,
 	branchPathOf,
@@ -237,13 +243,13 @@ describe("a moved file keeps every byte but its paths", () => {
 			const isBinary = isBinaryFile(relative, baselineBytes, diskBytes) || record.kind === "binary";
 
 			if (isBinary) {
-				const diskHash = createHash("sha256").update(diskBytes).digest("hex");
+				const diskHash = sha256(diskBytes);
 				if (diskHash !== record.hash) drifted.push(relative);
 				continue;
 			}
 
 			const normalized = normalizeWithRewrites(diskBytes.toString("utf-8"), rewrites);
-			const hash = createHash("sha256").update(normalized).digest("hex");
+			const hash = sha256(normalized);
 			const structural = structuralHash(normalized, relative);
 			if (hash !== record.hash || structural !== record.structuralHash) drifted.push(relative);
 

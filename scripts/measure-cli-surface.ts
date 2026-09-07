@@ -5,6 +5,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parse } from "@babel/parser";
+import type { VariableDeclarator } from "@babel/types";
 import { ensureBaselineAvailable, PINNED_BASELINE_COMMIT, REPO_ROOT, readGitFileText } from "./git-baseline";
 import {
 	assertObject,
@@ -68,40 +69,91 @@ export interface CliSurfaceSources {
 	protocolSource: string;
 }
 
+function parseTypeScriptAst(source: string) {
+	try {
+		return parse(source, { sourceType: "module", plugins: ["typescript"] });
+	} catch {
+		return null;
+	}
+}
+
+function forEachExportedVariable(source: string, callback: (declaration: VariableDeclarator) => void): void {
+	const ast = parseTypeScriptAst(source);
+	if (!ast) return;
+	for (const stmt of ast.program.body) {
+		if (stmt.type === "ExportNamedDeclaration" && stmt.declaration?.type === "VariableDeclaration") {
+			for (const d of stmt.declaration.declarations) {
+				callback(d);
+			}
+		}
+	}
+}
+
+function walkAst(node: unknown, visitor: (node: Record<string, unknown>) => void): void {
+	if (!node || typeof node !== "object") return;
+	const n = node as Record<string, unknown>;
+	if (typeof n.type === "string") visitor(n);
+	for (const key of Object.keys(n)) {
+		const child = n[key];
+		if (Array.isArray(child)) {
+			for (const item of child) walkAst(item, visitor);
+		} else if (child && typeof child === "object" && typeof (child as Record<string, unknown>).type === "string") {
+			walkAst(child, visitor);
+		}
+	}
+}
+
+function extractBinaryComparisonFlags(
+	source: string,
+	isMatchTarget: (node: Record<string, unknown> | undefined) => boolean,
+): Set<string> {
+	const flags = new Set<string>();
+	const ast = parseTypeScriptAst(source);
+	if (!ast) return flags;
+	walkAst(ast.program, n => {
+		if (n.type === "BinaryExpression" && (n.operator === "===" || n.operator === "==")) {
+			const left = n.left as Record<string, unknown> | undefined;
+			const right = n.right as Record<string, unknown> | undefined;
+			if (
+				isMatchTarget(left) &&
+				right?.type === "StringLiteral" &&
+				typeof right.value === "string" &&
+				right.value.startsWith("-")
+			) {
+				flags.add(right.value);
+			} else if (
+				isMatchTarget(right) &&
+				left?.type === "StringLiteral" &&
+				typeof left.value === "string" &&
+				left.value.startsWith("-")
+			) {
+				flags.add(left.value);
+			}
+		}
+	});
+	return flags;
+}
+
 export function extractCommandsFromSource(source: string): string[] {
 	const commands = new Set<string>();
-	try {
-		const ast = parse(source, { sourceType: "module", plugins: ["typescript"] });
-		for (const stmt of ast.program.body) {
-			const decl =
-				stmt.type === "ExportNamedDeclaration" && stmt.declaration?.type === "VariableDeclaration"
-					? stmt.declaration
-					: null;
-			if (decl) {
-				for (const d of decl.declarations) {
-					if (d.id.type === "Identifier" && d.id.name === "commands" && d.init?.type === "ArrayExpression") {
-						for (const el of d.init.elements) {
-							if (el?.type === "ObjectExpression") {
-								for (const p of el.properties) {
-									if (
-										p.type === "ObjectProperty" &&
-										(p.key.type === "Identifier"
-											? p.key.name
-											: p.key.type === "StringLiteral"
-												? p.key.value
-												: "") === "name" &&
-										p.value.type === "StringLiteral"
-									) {
-										commands.add(p.value.value);
-									}
-								}
-							}
+	forEachExportedVariable(source, d => {
+		if (d.id.type === "Identifier" && d.id.name === "commands" && d.init?.type === "ArrayExpression") {
+			for (const el of d.init.elements) {
+				if (el?.type === "ObjectExpression") {
+					for (const p of el.properties) {
+						if (
+							p.type === "ObjectProperty" &&
+							(p.key.type === "Identifier" ? p.key.name : p.key.type === "StringLiteral" ? p.key.value : "") ===
+								"name" &&
+							p.value.type === "StringLiteral"
+						) {
+							commands.add(p.value.value);
 						}
 					}
 				}
 			}
 		}
-	} catch {}
+	});
 	return [...commands].sort();
 }
 
@@ -113,48 +165,32 @@ export function extractFlagTablesFromSource(source: string): {
 	const stringFlags = new Set<string>();
 	const optionalFlags = new Set<string>();
 	const valuelessFlags = new Set<string>();
-	try {
-		const ast = parse(source, { sourceType: "module", plugins: ["typescript"] });
-		for (const stmt of ast.program.body) {
-			const decl =
-				stmt.type === "ExportNamedDeclaration" && stmt.declaration?.type === "VariableDeclaration"
-					? stmt.declaration
-					: null;
-			if (decl) {
-				for (const d of decl.declarations) {
-					if (d.id.type === "Identifier") {
-						const name = d.id.name;
-						if ((name === "STRING_SETTERS" || name === "OPTIONAL_FLAGS") && d.init?.type === "ObjectExpression") {
-							const target = name === "STRING_SETTERS" ? stringFlags : optionalFlags;
-							for (const p of d.init.properties) {
-								if (p.type === "ObjectProperty") {
-									const key =
-										p.key.type === "StringLiteral"
-											? p.key.value
-											: p.key.type === "Identifier"
-												? p.key.name
-												: null;
-									if (key) target.add(key);
-								}
-							}
-						} else if (name === "VALUELESS_FLAGS") {
-							const arr =
-								d.init?.type === "NewExpression" && d.init.arguments[0]?.type === "ArrayExpression"
-									? d.init.arguments[0]
-									: d.init?.type === "ArrayExpression"
-										? d.init
-										: null;
-							if (arr) {
-								for (const el of arr.elements) {
-									if (el?.type === "StringLiteral") valuelessFlags.add(el.value);
-								}
-							}
-						}
-					}
+	forEachExportedVariable(source, d => {
+		if (d.id.type !== "Identifier") return;
+		const name = d.id.name;
+		if ((name === "STRING_SETTERS" || name === "OPTIONAL_FLAGS") && d.init?.type === "ObjectExpression") {
+			const target = name === "STRING_SETTERS" ? stringFlags : optionalFlags;
+			for (const p of d.init.properties) {
+				if (p.type === "ObjectProperty") {
+					const key =
+						p.key.type === "StringLiteral" ? p.key.value : p.key.type === "Identifier" ? p.key.name : null;
+					if (key) target.add(key);
+				}
+			}
+		} else if (name === "VALUELESS_FLAGS") {
+			const arr =
+				d.init?.type === "NewExpression" && d.init.arguments[0]?.type === "ArrayExpression"
+					? d.init.arguments[0]
+					: d.init?.type === "ArrayExpression"
+						? d.init
+						: null;
+			if (arr) {
+				for (const el of arr.elements) {
+					if (el?.type === "StringLiteral") valuelessFlags.add(el.value);
 				}
 			}
 		}
-	} catch {}
+	});
 	return {
 		stringFlags: [...stringFlags].sort(),
 		optionalFlags: [...optionalFlags].sort(),
@@ -163,137 +199,35 @@ export function extractFlagTablesFromSource(source: string): {
 }
 
 export function extractProfileFlagsFromSource(source: string): string[] {
-	const flags = new Set<string>();
-	try {
-		const ast = parse(source, { sourceType: "module", plugins: ["typescript"] });
-		const walk = (node: unknown): void => {
-			if (!node || typeof node !== "object") return;
-			const n = node as Record<string, unknown>;
-			if (n.type === "BinaryExpression" && (n.operator === "===" || n.operator === "==")) {
-				const left = n.left as Record<string, unknown> | undefined;
-				const right = n.right as Record<string, unknown> | undefined;
-				if (
-					left?.type === "Identifier" &&
-					left.name === "arg" &&
-					right?.type === "StringLiteral" &&
-					typeof right.value === "string" &&
-					right.value.startsWith("-")
-				) {
-					flags.add(right.value);
-				} else if (
-					right?.type === "Identifier" &&
-					right.name === "arg" &&
-					left?.type === "StringLiteral" &&
-					typeof left.value === "string" &&
-					left.value.startsWith("-")
-				) {
-					flags.add(left.value);
-				}
-			}
-			for (const key of Object.keys(n)) {
-				const child = n[key];
-				if (Array.isArray(child)) {
-					for (const item of child) walk(item);
-				} else if (
-					child &&
-					typeof child === "object" &&
-					typeof (child as Record<string, unknown>).type === "string"
-				) {
-					walk(child);
-				}
-			}
-		};
-		walk(ast.program);
-	} catch {}
+	const flags = extractBinaryComparisonFlags(source, node => node?.type === "Identifier" && node.name === "arg");
 	flags.add("--profile");
 	flags.add("--alias");
 	return [...flags].sort();
 }
 
 export function extractCliFlagsFromSource(source: string): string[] {
-	const flags = new Set<string>();
-	try {
-		const ast = parse(source, { sourceType: "module", plugins: ["typescript"] });
-		const walk = (node: unknown): void => {
-			if (!node || typeof node !== "object") return;
-			const n = node as Record<string, unknown>;
-			if (n.type === "BinaryExpression" && (n.operator === "===" || n.operator === "==")) {
-				const left = n.left as Record<string, unknown> | undefined;
-				const right = n.right as Record<string, unknown> | undefined;
-				if (
-					(left?.type === "MemberExpression" || left?.type === "OptionalMemberExpression") &&
-					right?.type === "StringLiteral" &&
-					typeof right.value === "string" &&
-					right.value.startsWith("-")
-				) {
-					flags.add(right.value);
-				} else if (
-					(right?.type === "MemberExpression" || right?.type === "OptionalMemberExpression") &&
-					left?.type === "StringLiteral" &&
-					typeof left.value === "string" &&
-					left.value.startsWith("-")
-				) {
-					flags.add(left.value);
-				}
-			}
-			for (const key of Object.keys(n)) {
-				const child = n[key];
-				if (Array.isArray(child)) {
-					for (const item of child) walk(item);
-				} else if (
-					child &&
-					typeof child === "object" &&
-					typeof (child as Record<string, unknown>).type === "string"
-				) {
-					walk(child);
-				}
-			}
-		};
-		walk(ast.program);
-	} catch {}
+	const flags = extractBinaryComparisonFlags(
+		source,
+		node => node?.type === "MemberExpression" || node?.type === "OptionalMemberExpression",
+	);
 	return [...flags].sort();
 }
 
 export function extractWorkerArgsFromSource(source: string): string[] {
 	const selectors = new Set<string>();
-	try {
-		const ast = parse(source, { sourceType: "module", plugins: ["typescript"] });
-		for (const stmt of ast.program.body) {
-			const decl =
-				stmt.type === "ExportNamedDeclaration" && stmt.declaration?.type === "VariableDeclaration"
-					? stmt.declaration
-					: null;
-			if (decl) {
-				for (const d of decl.declarations) {
-					if (d.init?.type === "StringLiteral" && d.init.value.startsWith("__")) selectors.add(d.init.value);
-				}
-			}
-		}
-	} catch {}
+	forEachExportedVariable(source, d => {
+		if (d.init?.type === "StringLiteral" && d.init.value.startsWith("__")) selectors.add(d.init.value);
+	});
 	return [...selectors].sort();
 }
 
 export function extractProtocolWorkerArgsFromSource(source: string): string[] {
 	const selectors = new Set<string>();
-	try {
-		const ast = parse(source, { sourceType: "module", plugins: ["typescript"] });
-		for (const stmt of ast.program.body) {
-			const decl =
-				stmt.type === "ExportNamedDeclaration" && stmt.declaration?.type === "VariableDeclaration"
-					? stmt.declaration
-					: null;
-			if (decl) {
-				for (const d of decl.declarations) {
-					if (
-						d.id.type === "Identifier" &&
-						d.id.name === "DAEMON_BROKER_WORKER_ARG" &&
-						d.init?.type === "StringLiteral"
-					)
-						selectors.add(d.init.value);
-				}
-			}
+	forEachExportedVariable(source, d => {
+		if (d.id.type === "Identifier" && d.id.name === "DAEMON_BROKER_WORKER_ARG" && d.init?.type === "StringLiteral") {
+			selectors.add(d.init.value);
 		}
-	} catch {}
+	});
 	return [...selectors].sort();
 }
 
