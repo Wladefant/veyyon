@@ -2050,7 +2050,18 @@ export interface SettingKindHandler<T extends SettingDef = SettingDef> {
 	buildItem?(self: SettingsSelectorComponent, def: T, currentValue: unknown, changed: boolean): SettingItem;
 }
 
-export const SETTING_KIND_HANDLERS: Record<SettingDef["type"], SettingKindHandler<any>> = {
+/**
+ * One handler per setting kind, each receiving the def variant its own key selects.
+ *
+ * A plain Record over the union hands every handler the whole SettingDef, and the enum, submenu,
+ * compactionThreshold and text handlers each reach for fields only their variant carries, so that
+ * shape only compiles once the element type is widened to any.
+ */
+type SettingKindHandlers = {
+	[K in SettingDef["type"]]: SettingKindHandler<Extract<SettingDef, { type: K }>>;
+};
+
+export const SETTING_KIND_HANDLERS: SettingKindHandlers = {
 	boolean: {
 		buildItem: (_self, def, currentValue, changed) => ({
 			id: def.path,
@@ -2144,6 +2155,15 @@ export const SETTING_KIND_HANDLERS: Record<SettingDef["type"], SettingKindHandle
 		createSubmenu: (self, _def, _currentValue, done) => self.createAdvisorModelInput(done),
 	},
 };
+
+/**
+ * The map is keyed by the same discriminant that narrows the def, so whatever sits at `def.type`
+ * accepts this def. TypeScript cannot correlate an indexed access with the value that produced the
+ * key, so the correspondence is stated here once instead of widening every handler to the union.
+ */
+function handlerFor<D extends SettingDef>(def: D): SettingKindHandler<D> | undefined {
+	return SETTING_KIND_HANDLERS[def.type] as SettingKindHandler<D> | undefined;
+}
 
 export function assertAllSettingKindsHandled(): void {
 	const expected: SettingDef["type"][] = [
@@ -2761,7 +2781,7 @@ export class SettingsSelectorComponent implements Component {
 		}
 
 		const currentValue = this.#getCurrentValue(def);
-		const handler = SETTING_KIND_HANDLERS[def.type];
+		const handler = handlerFor(def);
 		if (!handler) {
 			throw new Error(`Unhandled setting kind: ${def.type}`);
 		}
