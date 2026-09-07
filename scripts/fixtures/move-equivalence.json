@@ -13,8 +13,8 @@
 		"apps/site/deploy.test.ts": {
 			"old": "website/deploy.test.ts",
 			"group": "relocated-member-path",
-			"hash": "db2ed285506d195c6364f62fa9fdfe43434a89a823eb2a57194b61410f258005",
-			"structuralHash": "93b8359b11b14e820ea58bc8e482c7b6506ade01e04319bb83728cb316fa8c43"
+			"hash": "cb06b0aa5307facf437432835e75983743424927c866e944fa05779e29805b7d",
+			"structuralHash": "6c59cdcfe2c5534e589385764b44a40d8ac46dc402805f5c5eaa06dffc8cefb0"
 		},
 		"apps/site/features.html": {
 			"old": "website/features.html",
