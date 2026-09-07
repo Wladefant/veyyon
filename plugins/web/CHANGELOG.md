@@ -12,3 +12,4 @@
 
 - Consolidated specialized web scraper site handlers into parameterized domain engines and declarative site definitions.
 - The Discourse handler trims its base path with `trimTrailingSlashes` from `@veyyon/utils/url` rather than its own inline strip. No user-visible behavior changes.
+- Business, media, documentation, discussion and security-advisory handlers share dispatch without changing host matching or scrape results.
