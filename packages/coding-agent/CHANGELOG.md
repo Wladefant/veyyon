@@ -20,6 +20,7 @@
 - Read selector helpers `parseSel` and `isRawSelector` are exported from `tools/core/path-utils` instead of `tools/fs/read`.
 - `readSourceFsPath` is exported from `tools/fs/read-view` instead of `tools/fs/read` and remains available from the package root.
 - `metadataLine` is exported from `tools/core/render-utils` instead of `tools/web/search/view`.
+- Removed the unused `inheritedAgentDir` keybinding option and `ohMyPiXAIUserAgent` alias; xAI requests continue to use `veyyonXAIUserAgent`.
 
 ### Added
 
@@ -51,6 +52,7 @@
 - GitHub search operations in the web domain and vibe mode tools use shared parameterized dispatch tables; behavior is unchanged.
 
 - Terminal selector cards and command controllers share modal select delegation, mouse routing, subcommand dispatch, and markdown panel presentation without changing TUI behavior.
+- Settings selectors share model-chain summaries, heading rows, picker targeting and candidate deletion without changing display or persistence behavior.
 - Parity ledger schema validation, module specifier resolution, and workspace traversal logic are consolidated into shared script helpers without changing validation verdicts.
 - Custom and legacy hook messages use the agent-core type definitions without changing message conversion or public type signatures.
 - Filesystem reads and writes share range calculations, candidate probing and result assembly while preserving SQLite row-operation exports.

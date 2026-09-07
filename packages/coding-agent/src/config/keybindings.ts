@@ -177,10 +177,8 @@ interface KeybindingsConfigPaths {
 	exists: boolean;
 }
 
-/** Controls inherited keybinding lookup when creating a manager for a named profile. */
+/** Controls default-profile keybinding seeding when creating a manager. */
 export interface KeybindingsCreateOptions {
-	/** @deprecated Live merge removed; seed keybindings at profile creation instead. */
-	inheritedAgentDir?: string;
 	/** When false, skip the one-time default-profile keybindings seed (tests). */
 	seedFromDefault?: boolean;
 }

@@ -61,6 +61,10 @@ const CARDS_WITHOUT_A_TITLE_ROW: Record<string, { shape: "section" | "plate"; wh
 		shape: "section",
 		why: "the `$ command` row says what a title would repeat, so the shell card draws no title",
 	},
+	resolve: {
+		shape: "plate",
+		why: "the settled resolution fills a notice whose blank top inset precedes the decision headline",
+	},
 };
 
 /**

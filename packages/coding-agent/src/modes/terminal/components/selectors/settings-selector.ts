@@ -18,7 +18,7 @@ import {
 	TabBar,
 	Text,
 } from "@veyyon/tui";
-import { clamp, collapseWhitespace, errorMessage, isRecord, VERSION } from "@veyyon/utils";
+import { clamp, collapseWhitespace, errorMessage, formatCount, isRecord, VERSION } from "@veyyon/utils";
 import { getKeybindings } from "@veyyon/utils/keybindings";
 import { extractPrintableText, matchesKey } from "@veyyon/utils/keys";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
@@ -136,6 +136,31 @@ export function parseNumberSetting(path: SettingPath, text: string): number | ty
 	if (ui?.min !== undefined && parsed < ui.min) throw new Error(`Must be at least ${ui.min}.`);
 	if (ui?.max !== undefined && parsed > ui.max) throw new Error(`Must be at most ${ui.max}.`);
 	return parsed;
+}
+
+const SUBAGENT_LIST_DESCRIPTION =
+	"Which subagent types this session offers, and what each one runs. Model and effort are chosen inside an agent's own page and apply to that agent alone; an agent that names neither runs the profile's default model at medium effort.";
+
+const MODEL_CATALOG_UNAVAILABLE = "Model catalog unavailable in this context";
+
+function formatModelSummaryWithFallbacks(primarySelector: string, fallbackCount: number, dim = false): string {
+	const summary = formatSelectorSummary(primarySelector);
+	if (fallbackCount <= 0) return summary;
+	const text = `+${formatCount("fallback", fallbackCount)}`;
+	return `${summary} ${dim ? theme.fg("dim", text) : text}`;
+}
+
+function selectListOrModelPickerTarget(
+	selectList: SelectList | undefined,
+	container: Container,
+): SelectList | ModelSelectorPanel | undefined {
+	return (
+		selectList ?? container.children.find((child): child is ModelSelectorPanel => child instanceof ModelSelectorPanel)
+	);
+}
+
+function headingItem(id: string, label: string): SettingItem {
+	return { id, label, currentValue: "", heading: true };
 }
 
 class TextInputSubmenu extends MouseRoutedSubmenu {
@@ -741,16 +766,7 @@ class ModelRolesSubmenu extends MouseRoutedSubmenu {
 					this.#showEffortPicker(role, selector, model);
 					this.requestRender?.();
 				},
-				onClear: () => {
-					if (isDefault) {
-						settings.setPersistedModelRole(DEFAULT_MODEL_SLOT, undefined);
-					} else {
-						settings.setModelRole(role, undefined);
-					}
-					this.onChange();
-					this.#goBack();
-					this.requestRender?.();
-				},
+				onClear: () => this.#persistRole(role, undefined),
 				onCancel: () => {
 					this.#goBack();
 					this.requestRender?.();
@@ -774,7 +790,7 @@ class ModelRolesSubmenu extends MouseRoutedSubmenu {
 		);
 	}
 
-	#persistRole(role: string, value: string): void {
+	#persistRole(role: string, value: string | undefined): void {
 		if (isDefaultModelSlot(role)) {
 			settings.setPersistedModelRole(DEFAULT_MODEL_SLOT, value);
 		} else {
@@ -786,11 +802,7 @@ class ModelRolesSubmenu extends MouseRoutedSubmenu {
 	}
 
 	mouseTarget(): SelectList | ModelSelectorPanel | undefined {
-		return this.#selectList ?? this.#pickerPanel();
-	}
-
-	#pickerPanel(): ModelSelectorPanel | undefined {
-		return this.children.find((child): child is ModelSelectorPanel => child instanceof ModelSelectorPanel);
+		return selectListOrModelPickerTarget(this.#selectList, this);
 	}
 }
 
@@ -910,7 +922,7 @@ class RulesSubmenu extends MouseRoutedSubmenu {
 	}
 
 	#sectionSummary(rules: readonly Rule[], off: number): string {
-		const total = `${rules.length} rule${rules.length === 1 ? "" : "s"}`;
+		const total = formatCount("rule", rules.length);
 		if (off === 0) return `${total} · ${theme.fg("success", "all on")}`;
 		if (off === rules.length) return `${total} · ${theme.fg("dim", "all off")}`;
 		return `${total} · ${theme.fg("dim", `${off} off`)}`;
@@ -1227,10 +1239,7 @@ class SubagentAgentsSubmenu extends MouseRoutedSubmenu {
 		const pattern = resolved.patterns[0];
 		if (!pattern) return theme.fg("dim", "no model resolved");
 		const fallbacks = resolved.patterns.length - 1;
-		const summary =
-			fallbacks > 0
-				? `${formatSelectorSummary(pattern)} ${theme.fg("dim", `+${fallbacks} fallback${fallbacks === 1 ? "" : "s"}`)}`
-				: formatSelectorSummary(pattern);
+		const summary = formatModelSummaryWithFallbacks(pattern, fallbacks, true);
 		return resolved.source === "default"
 			? theme.fg("dim", `default · ${summary}`)
 			: `${summary} ${theme.fg("dim", `· ${subagentModelSourceLabel(resolved.source, agent.name, resolved.depth)}`)}`;
@@ -1244,9 +1253,7 @@ class SubagentAgentsSubmenu extends MouseRoutedSubmenu {
 		const entries = Array.isArray(chain) ? chain : [chain];
 		const head = entries[0] ?? "";
 		const fallbacks = entries.length - 1;
-		return fallbacks > 0
-			? `${formatSelectorSummary(head)} ${theme.fg("dim", `+${fallbacks} fallback${fallbacks === 1 ? "" : "s"}`)}`
-			: formatSelectorSummary(head);
+		return formatModelSummaryWithFallbacks(head, fallbacks, true);
 	}
 
 	#laneEffortSummary(lane: SubagentLaneSettings, depth: number): string {
@@ -1286,8 +1293,7 @@ class SubagentAgentsSubmenu extends MouseRoutedSubmenu {
 			);
 			this.renderSubmenuFrame({
 				title: "Subagents",
-				description:
-					"Which subagent types this session offers, and what each one runs. Model and effort are chosen inside an agent's own page and apply to that agent alone; an agent that names neither runs the profile's default model at medium effort.",
+				description: SUBAGENT_LIST_DESCRIPTION,
 				body: container,
 				footerHint: "  Esc to go back",
 			});
@@ -1298,8 +1304,7 @@ class SubagentAgentsSubmenu extends MouseRoutedSubmenu {
 			container.addChild(new Text(theme.fg("dim", "  Reading subagents…"), 0, 0));
 			this.renderSubmenuFrame({
 				title: "Subagents",
-				description:
-					"Which subagent types this session offers, and what each one runs. Model and effort are chosen inside an agent's own page and apply to that agent alone; an agent that names neither runs the profile's default model at medium effort.",
+				description: SUBAGENT_LIST_DESCRIPTION,
 				body: container,
 			});
 			return;
@@ -1331,8 +1336,7 @@ class SubagentAgentsSubmenu extends MouseRoutedSubmenu {
 			container.addChild(new Text(theme.fg("muted", `  ${CUSTOM_AGENT_HINT}`), 0, 0));
 			this.renderSubmenuFrame({
 				title: "Subagents",
-				description:
-					"Which subagent types this session offers, and what each one runs. Model and effort are chosen inside an agent's own page and apply to that agent alone; an agent that names neither runs the profile's default model at medium effort.",
+				description: SUBAGENT_LIST_DESCRIPTION,
 				headerExtra,
 				body: container,
 				footerHint: "  Esc to go back",
@@ -1360,8 +1364,7 @@ class SubagentAgentsSubmenu extends MouseRoutedSubmenu {
 
 		this.renderSubmenuFrame({
 			title: "Subagents",
-			description:
-				"Which subagent types this session offers, and what each one runs. Model and effort are chosen inside an agent's own page and apply to that agent alone; an agent that names neither runs the profile's default model at medium effort.",
+			description: SUBAGENT_LIST_DESCRIPTION,
 			headerExtra,
 			body: selectList,
 			footerExtra,
@@ -1492,7 +1495,7 @@ class SubagentAgentsSubmenu extends MouseRoutedSubmenu {
 		this.#escapeTo = back;
 		if (!this.picker) {
 			const container = new Container();
-			container.addChild(new Text(theme.fg("warning", "Model catalog unavailable in this context"), 0, 0));
+			container.addChild(new Text(theme.fg("warning", MODEL_CATALOG_UNAVAILABLE), 0, 0));
 			this.renderSubmenuFrame({
 				title: depth === 0 ? `Model · ${name}` : `Model · what ${name} spawns${" (nested)".repeat(depth - 1)}`,
 				body: container,
@@ -1729,10 +1732,7 @@ class DefaultEffortSubmenu extends MouseRoutedSubmenu {
 	}
 
 	mouseTarget(): SelectList | ModelSelectorPanel | undefined {
-		return (
-			this.#selectList ??
-			this.children.find((child): child is ModelSelectorPanel => child instanceof ModelSelectorPanel)
-		);
+		return selectListOrModelPickerTarget(this.#selectList, this);
 	}
 
 	override handleInput(data: string): void {
@@ -1804,10 +1804,16 @@ export class ModelChainSubmenu extends MouseRoutedSubmenu {
 	#removeSelectedRow(): void {
 		const value = this.#selectList?.getSelectedItem?.()?.value;
 		if (!value?.startsWith(CHAIN_ENTRY_PREFIX)) return;
-		const index = Number(value.slice(CHAIN_ENTRY_PREFIX.length));
-		if (!Number.isInteger(index) || index < 0 || index >= this.#chain.length) return;
-		this.#chain.splice(index, 1);
-		this.#persistChain();
+		this.#removeIndex(Number(value.slice(CHAIN_ENTRY_PREFIX.length)));
+	}
+
+	#removeIndex(index: number | null): boolean {
+		if (index !== null && Number.isInteger(index) && index >= 0 && index < this.#chain.length) {
+			this.#chain.splice(index, 1);
+			this.#persistChain();
+			return true;
+		}
+		return false;
 	}
 
 	#showModelPicker(index: number | null): void {
@@ -1879,10 +1885,8 @@ export class ModelChainSubmenu extends MouseRoutedSubmenu {
 	}
 
 	#clearPicker(index: number | null): void {
-		if (index !== null && Number.isInteger(index) && index >= 0 && index < this.#chain.length) {
-			this.#chain.splice(index, 1);
-			this.#persistChain();
-		} else if (this.#chain.length === 0) {
+		if (this.#removeIndex(index)) return;
+		if (this.#chain.length === 0) {
 			this.#clear();
 		} else {
 			this.#showChain();
@@ -1915,10 +1919,7 @@ export class ModelChainSubmenu extends MouseRoutedSubmenu {
 	}
 
 	mouseTarget(): SelectList | ModelSelectorPanel | undefined {
-		return (
-			this.#selectList ??
-			this.children.find((child): child is ModelSelectorPanel => child instanceof ModelSelectorPanel)
-		);
+		return selectListOrModelPickerTarget(this.#selectList, this);
 	}
 
 	override handleInput(data: string): void {
@@ -2662,12 +2663,12 @@ export class SettingsSelectorComponent implements Component {
 		tabResults.sort((a, b) => a.bestScore - b.bestScore || a.order - b.order);
 		for (const result of tabResults) {
 			const meta = TAB_METADATA[result.tab];
-			items.push({
-				id: `__tab:${result.tab}`,
-				label: `${theme.symbol(meta.icon as Parameters<typeof theme.symbol>[0])} ${meta.label}`,
-				currentValue: "",
-				heading: true,
-			});
+			items.push(
+				headingItem(
+					`__tab:${result.tab}`,
+					`${theme.symbol(meta.icon as Parameters<typeof theme.symbol>[0])} ${meta.label}`,
+				),
+			);
 			this.#searchFirstMatch.set(result.tab, result.matched[0]?.id ?? "");
 			for (const item of result.matched) items.push(item);
 		}
@@ -2968,10 +2969,7 @@ export class SettingsSelectorComponent implements Component {
 			typeof value === "string" || Array.isArray(value) ? normalizeModelPatternList(value as string | string[]) : [];
 		const primary = selectors[0];
 		if (!primary) return "inherit";
-		const fallbacks = selectors.length - 1;
-		return fallbacks > 0
-			? `${formatSelectorSummary(primary)} +${fallbacks} fallback${fallbacks === 1 ? "" : "s"}`
-			: formatSelectorSummary(primary);
+		return formatModelSummaryWithFallbacks(primary, selectors.length - 1);
 	}
 
 	formatCompactModelSelectorValue(value: unknown): string {
@@ -3160,7 +3158,7 @@ export class SettingsSelectorComponent implements Component {
 			}
 		}
 		const fallback = new FallbackContainer();
-		fallback.addChild(new Text(theme.fg("warning", "Model catalog unavailable in this context"), 0, 0));
+		fallback.addChild(new Text(theme.fg("warning", MODEL_CATALOG_UNAVAILABLE), 0, 0));
 		fallback.addChild(new Spacer(1));
 		fallback.addChild(new Text(theme.fg("dim", "  Esc to go back"), 0, 0));
 		return fallback;
@@ -3356,7 +3354,7 @@ export class SettingsSelectorComponent implements Component {
 				continue;
 			}
 			if (def.group && def.group !== lastGroup) {
-				items.push({ id: `__heading:${def.group}`, label: def.group, currentValue: "", heading: true });
+				items.push(headingItem(`__heading:${def.group}`, def.group));
 				lastGroup = def.group;
 			}
 			items.push(item);
@@ -3377,12 +3375,7 @@ export class SettingsSelectorComponent implements Component {
 			for (const { group, item } of advancedItems) {
 				if (!expanded && !item.changed) continue;
 				if (group && group !== lastAdvancedGroup) {
-					items.push({
-						id: `__heading:advanced:${group}`,
-						label: `Advanced · ${group}`,
-						currentValue: "",
-						heading: true,
-					});
+					items.push(headingItem(`__heading:advanced:${group}`, `Advanced · ${group}`));
 					lastAdvancedGroup = group;
 				}
 				items.push(item);
