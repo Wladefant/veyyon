@@ -100,3 +100,53 @@ fn project_palette_domains(store: &Store, state: &mut PaletteState) {
 		PaletteMode::Commands | PaletteMode::Sessions | PaletteMode::Models => {},
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use std::collections::BTreeMap;
+
+	use veyyon_desktop_model::{SettingEntry, SettingKind};
+
+	use super::*;
+
+	#[test]
+	fn an_overlay_opened_after_initial_sync_receives_existing_settings() {
+		let mut store = Store::new();
+		store.domains.settings = Some(BTreeMap::from([(
+			"editor.copy_on_select".to_string(),
+			SettingEntry {
+				value:       serde_json::Value::Bool(true),
+				default:     serde_json::Value::Bool(true),
+				source:      "profile".to_string(),
+				kind:        SettingKind::Boolean,
+				label:       Some("Copy on select".to_string()),
+				description: None,
+				tab:         Some("general".to_string()),
+				group:       None,
+				values:      Vec::new(),
+				options:     Vec::new(),
+				min:         None,
+				max:         None,
+				global:      false,
+				advanced:    false,
+				hidden:      false,
+			},
+		)]));
+		let mut state = ShellState {
+			overlay: Some(Overlay::Settings(Box::new(SettingsState::default()))),
+			..ShellState::default()
+		};
+
+		project_overlay(&store, &mut state);
+
+		let settings = state
+			.overlay
+			.as_ref()
+			.and_then(Overlay::as_settings)
+			.expect("settings overlay remains open");
+		assert!(
+			settings.entry("editor.copy_on_select").is_some(),
+			"settings already in the store must reach an overlay opened later"
+		);
+	}
+}
