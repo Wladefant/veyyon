@@ -64,14 +64,7 @@ function normalizeByteLimit(maxBytes: number): number {
 }
 
 function uniquePaths(paths: readonly string[]): string[] {
-	const out: string[] = [];
-	const seen = new Set<string>();
-	for (const path of paths) {
-		if (seen.has(path)) continue;
-		seen.add(path);
-		out.push(path);
-	}
-	return out;
+	return Array.from(new Set(paths));
 }
 function titleUpdateForIndex(entry: IndexEntry): SessionTitleUpdate | undefined {
 	if (!entry.titleUpdatedAt) return undefined;

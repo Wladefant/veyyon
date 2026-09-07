@@ -1,3 +1,4 @@
+import { isNonEmptyString } from "@veyyon/utils/type-guards";
 import {
 	type BlobStore,
 	externalizeImageDataSync,
@@ -51,11 +52,6 @@ function shouldExternalizeImagePayload(
 	if (!isImageDataPayload(value)) return false;
 	if (isBlobRef(value.data) || value.data.length < BLOB_EXTERNALIZE_THRESHOLD) return false;
 	return (key === TEXT_CONTENT_KEY && isImageBlock(value)) || key === "images";
-}
-
-/** True for a non-empty string — marks signature/encrypted fields whose block must persist verbatim. */
-function isNonEmptyString(value: unknown): value is string {
-	return typeof value === "string" && value.length > 0;
 }
 
 /**

@@ -22,6 +22,8 @@
 - Edit-specific event normalization remains in `@veyyon/coding-agent/extensibility/tool-event-input`; event payloads are unchanged.
 - Settings lookups reuse immutable registry key snapshots and build derived indexes in one pass after registrations or resets.
 - Settings stores share layer copying and override application while retaining profile values, per-directory resolution and isolated save-failure reports.
+- Session title overlays avoid encoding and copying the full transcript when the first line occupies the fixed 256-byte slot.
+- Session entry validation shares non-empty string checks, and branch labels avoid temporary identifier arrays.
 - `@veyyon/kernel/settings/store` exports `groupSettingPaths`, memoizing prefix-grouped schema paths on the schema index with automatic invalidation on schema resets.
 - Array copies that allocated with a spread now use `.slice()`, `.concat()` or `Array.from()`. No user-visible behavior changes.
 - `@veyyon/kernel/session/session-entries` reads the shared entry vocabulary from `@veyyon/session` and registers its own entry kinds there; every name it exported is still exported and no file format changes.

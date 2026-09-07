@@ -1,6 +1,7 @@
 import { SGR_BG_RESET, SGR_FG_RESET } from "./ansi";
 import { type AnsiColorFormat, getAnsiColorFormat } from "./color-format";
 import { clamp01 } from "./math";
+import { codePointLength } from "./string-length";
 
 // LaTeX → Unicode/ANSI converter.
 //
@@ -852,13 +853,6 @@ function mapAll(text: string, table: Record<string, string>): string | null {
 		out += mapped;
 	}
 	return out;
-}
-
-/** Number of Unicode code points (not UTF-16 units) in `s`. */
-function codePointLength(s: string): number {
-	let n = 0;
-	for (const _ of s) n++;
-	return n;
 }
 
 /** Style a single ASCII letter/digit via the math alphanumeric block. */

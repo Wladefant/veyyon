@@ -2686,7 +2686,7 @@ export class SessionManager {
 		for (const carried of labelsToCarry) {
 			const labelEntry: LabelEntry = {
 				type: "label",
-				id: generateId(new Set(Array.from(keptIds).concat(labels.map(entry => entry.id)))),
+				id: generateId({ has: id => keptIds.has(id) || labels.some(entry => entry.id === id) }),
 				parentId,
 				timestamp: nowIso(),
 				targetId: carried.targetId,
