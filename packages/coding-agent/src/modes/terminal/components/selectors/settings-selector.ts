@@ -1585,7 +1585,7 @@ class SubagentAgentsSubmenu extends MouseRoutedSubmenu {
 			this.#selectList.handleInput(data);
 			return;
 		}
-		if (this.#escapeTo && (matchesKey(data, "escape") || data === "")) {
+		if (this.#escapeTo && (matchesKey(data, "escape") || data === "\x1b")) {
 			const back = this.#escapeTo;
 			this.#escapeTo = undefined;
 			back();

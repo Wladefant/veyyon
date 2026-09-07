@@ -133,16 +133,36 @@ describe("nobody takes one cheap name from the whole package", () => {
 	 * import clause, and a formatting change is exactly what defeats that class of pattern. If it stopped
 	 * matching, the rule would pass on a repository full of violations.
 	 *
-	 * The engine names are the proof, because they are the ones the rule deliberately allows: they must be
-	 * FOUND and then excused, not missed.
+	 * Proven in two halves, because one filename cannot carry both. Inline clauses pin the spellings the
+	 * regex has to survive, and they cannot go stale: repointing a file at its owner is the outcome this
+	 * suite exists to produce, so a control anchored to a named file expires the moment the suite works.
+	 * That is what happened to the previous anchor, `coding-agent/src/tools/fs/inspect-image.ts`, which now
+	 * takes its names as `import type` and is no longer a runtime importer at all.
+	 *
+	 * The repository half then proves the regex still matches THIS tree, and the engine names are the proof
+	 * because they are the ones the rule deliberately allows: they must be FOUND and then excused, not
+	 * missed. Both halves derive their subject at run time, so the next repointing shrinks the set without
+	 * turning the control vacuous.
 	 */
 	it("the detector really finds single-name barrel imports", () => {
-		const singles = SOURCES.filter(([, source]) => barrelRuntimeNames(source).length === 1).map(
-			([relative]) => relative,
+		expect(barrelRuntimeNames('import { completeSimple } from "@veyyon/ai";')).toEqual(["completeSimple"]);
+		expect(barrelRuntimeNames('import {\n\tcompleteSimple,\n} from "@veyyon/ai";')).toEqual(["completeSimple"]);
+		expect(barrelRuntimeNames("import { streamSimple } from '@veyyon/ai';")).toEqual(["streamSimple"]);
+		expect(barrelRuntimeNames('import { type Model, isUsageLimitOutcome } from "@veyyon/ai";')).toEqual([
+			"isUsageLimitOutcome",
+		]);
+		expect(barrelRuntimeNames('import type { Model } from "@veyyon/ai";')).toEqual([]);
+		expect(barrelRuntimeNames('import { completeSimple } from "@veyyon/ai/stream";')).toEqual([]);
+
+		const singles = SOURCES.map(([relative, source]) => [relative, barrelRuntimeNames(source)] as const).filter(
+			([, names]) => names.length === 1,
 		);
 
 		expect(singles.length).toBeGreaterThan(0);
-		expect(singles).toContain("coding-agent/src/tools/fs/inspect-image.ts");
+		expect(
+			singles.filter(([, names]) => !ENGINE_NAMES.has(names[0] as string)).map(([relative]) => relative),
+			"a single non-engine name must be reported by the rule above, not swallowed here",
+		).toEqual([]);
 	});
 });
 

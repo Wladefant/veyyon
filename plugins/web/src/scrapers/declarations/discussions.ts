@@ -1,3 +1,4 @@
+import { trimTrailingSlashes } from "@veyyon/utils/url";
 import { markdownLink } from "../../markdown-link";
 import type { DiscussionContext, DiscussionDeclaration } from "../engine/discussion";
 import { buildResult, decodeHtmlEntities, formatIsoDate, formatNumber, htmlToBasicMarkdown } from "../types";
@@ -802,7 +803,7 @@ export const discourseDeclaration: DiscussionDeclaration = {
 	notes: ["Fetched via Discourse API"],
 	fetch: async (match, ctx) => {
 		const parsed = match.parsedUrl;
-		const basePath = (match.subpath ?? "").replace(/\/+$/, "");
+		const basePath = trimTrailingSlashes(match.subpath ?? "");
 		const baseUrl = `${parsed.origin}${basePath}`;
 
 		let requestedPost: DiscoursePost | null = null;
