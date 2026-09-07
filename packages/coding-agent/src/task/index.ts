@@ -910,7 +910,12 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			try {
 				const spawnParams = spawnParamsFor(params, spawn.item, defaultAgent);
 				if (spawnParams.runId) {
-					await recordNativeDispatch(spawnParams.runId, `agent://${spawn.agentId}`, spawnParams.ledgerPath ?? "");
+					await recordNativeDispatch(
+						spawnParams.runId,
+						`agent://${spawn.agentId}`,
+						spawnParams.ledgerPath ?? "",
+						spawnParams.ticketId,
+					);
 					spawnParams.nativeDispatchBound = true;
 				}
 				const jobId = this.#registerSpawnJob({
@@ -1616,7 +1621,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				};
 			}
 			if (params.runId && !params.nativeDispatchBound) {
-				await recordNativeDispatch(params.runId, `agent://${agentId}`, params.ledgerPath ?? "");
+				await recordNativeDispatch(params.runId, `agent://${agentId}`, params.ledgerPath ?? "", params.ticketId);
 			}
 
 			// Resolved here, not before `spawnCwd`: whether the child inherits the
@@ -1846,7 +1851,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				structuredResult,
 			};
 			this.session.recordSubagentSpawn?.(spawnRecord);
-			this.session.onSubagentComplete?.(spawnRecord);
+			await this.session.onSubagentComplete?.(spawnRecord);
 
 			return this.#buildResultPayload(result, projectAgentsDir, Date.now() - startTime, mergeSummary);
 		} catch (err) {

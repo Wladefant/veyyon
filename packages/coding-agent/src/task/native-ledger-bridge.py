@@ -450,6 +450,9 @@ def cmd_claim(args: argparse.Namespace) -> int:
         else:
             run_id = f"native_{chosen_id}_{int(time.time()*1000)}"
 
+        chosen_req["native_run_id"] = run_id
+        chosen_req["native_task_handle"] = ""
+
         # Write file atomically inside FileLock
         temp_path = f"{ledger_path}.tmp.{os.getpid()}.{int(time.time()*1000)}"
         with open(temp_path, "w", encoding="utf-8") as f:
@@ -493,12 +496,40 @@ def cmd_record_dispatch(args: argparse.Namespace) -> int:
         try:
             backend = WorkerBackend(state_dir=os.path.abspath(args.state_dir))
             ticket = backend.record_native_dispatch(run_id, task_handle)
-            print(json.dumps({"recorded": True, "run_id": run_id, "task_handle": task_handle, "state": ticket.state}))
-            return 0
         except Exception as e:
             print(json.dumps({"recorded": False, "error": str(e)}))
             return 1
-    print(json.dumps({"recorded": True, "run_id": run_id, "task_handle": task_handle}))
+    else:
+        ticket = None
+
+    if args.ledger and args.ticket_id:
+        ledger_path = os.path.abspath(args.ledger)
+        lock_path = ledger_path + ".lock"
+        with FileLock(lock_path, timeout=float(args.timeout)):
+            with open(ledger_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            req = data.get("requests", {}).get(args.ticket_id)
+            if not req:
+                print(json.dumps({"recorded": False, "error": f"Ticket {args.ticket_id} not found"}))
+                return 1
+            if req.get("native_run_id") != run_id or not str(req.get("owner") or "").strip():
+                print(json.dumps({"recorded": False, "error": "Ledger claim no longer owns this native run"}))
+                return 1
+            req["native_task_handle"] = task_handle
+            req["owner"] = task_handle.removeprefix("agent://")
+            req["updated_at"] = get_iso_now()
+            data["updated_at"] = req["updated_at"]
+            temp_path = f"{ledger_path}.tmp.{os.getpid()}.{int(time.time()*1000)}"
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            os.replace(temp_path, ledger_path)
+
+    print(json.dumps({
+        "recorded": True,
+        "run_id": run_id,
+        "task_handle": task_handle,
+        "state": ticket.state if ticket is not None else "dispatched",
+    }))
     return 0
 
 
@@ -521,6 +552,9 @@ def cmd_rollback(args: argparse.Namespace) -> int:
         if not req:
             print(json.dumps({"rolled_back": False, "error": f"Ticket {ticket_id} not found"}))
             return 0
+        if args.run_id and req.get("native_run_id") != args.run_id:
+            print(json.dumps({"rolled_back": False, "error": "Ledger claim no longer owns this native run"}))
+            return 0
 
         now_iso = get_iso_now()
         from_state = req.get("state") or "implementation"
@@ -528,6 +562,8 @@ def cmd_rollback(args: argparse.Namespace) -> int:
         req["owner"] = ""
         req["blocker"] = None
         req["updated_at"] = now_iso
+        req["native_run_id"] = ""
+        req["native_task_handle"] = ""
 
         history = req.setdefault("history", [])
         history.append({
@@ -546,6 +582,64 @@ def cmd_rollback(args: argparse.Namespace) -> int:
 
         print(json.dumps({"rolled_back": True, "ticket_id": ticket_id}))
         return 0
+
+
+def cmd_recover(args: argparse.Namespace) -> int:
+    ledger_path = os.path.abspath(args.ledger)
+    lock_path = ledger_path + ".lock"
+    running_worker_ids = set(filter(None, args.running_worker_ids.split(",")))
+    recovered = []
+
+    with FileLock(lock_path, timeout=float(args.timeout)):
+        if not os.path.exists(ledger_path):
+            print(json.dumps({"recovered": recovered}))
+            return 0
+        with open(ledger_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        now_iso = get_iso_now()
+        for ticket_id, req in data.get("requests", {}).items():
+            state = str(req.get("state") or "pending").lower()
+            owner = str(req.get("owner") or "").strip()
+            if state not in {"implementation", "qa", "review"} or not owner or owner in running_worker_ids:
+                continue
+            req["owner"] = ""
+            req["native_run_id"] = ""
+            req["native_task_handle"] = ""
+            req["updated_at"] = now_iso
+            req.setdefault("history", []).append({
+                "actor": "TopicReplenishmentEngine",
+                "timestamp": now_iso,
+                "from_state": req.get("state") or state,
+                "to_state": req.get("state") or state,
+                "reason": f"Recovered orphaned claim from absent worker {owner}",
+            })
+            recovered.append(ticket_id)
+
+        if recovered:
+            data["updated_at"] = now_iso
+            temp_path = f"{ledger_path}.tmp.{os.getpid()}.{int(time.time()*1000)}"
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            os.replace(temp_path, ledger_path)
+
+    print(json.dumps({"recovered": recovered}))
+    return 0
+
+
+def completion_identity_error(req: Dict[str, Any], run_id: str, task_handle: str) -> Optional[str]:
+    expected_run_id = str(req.get("native_run_id") or "")
+    expected_task_handle = str(req.get("native_task_handle") or "")
+    expected_owner = expected_task_handle.removeprefix("agent://")
+    if not expected_run_id or not expected_task_handle or not expected_owner:
+        return "Ticket has no active native dispatch identity"
+    if run_id != expected_run_id:
+        return f"Stale native run {run_id}; active run is {expected_run_id}"
+    if task_handle != expected_task_handle:
+        return f"Stale task handle {task_handle}; active handle is {expected_task_handle}"
+    if str(req.get("owner") or "") != expected_owner:
+        return f"Ticket owner no longer matches {expected_owner}"
+    return None
 
 
 def cmd_complete(args: argparse.Namespace) -> int:
@@ -568,6 +662,21 @@ def cmd_complete(args: argparse.Namespace) -> int:
                 structured_result = json.load(rf)
         except Exception as e:
             structured_result = {"error": f"Invalid file: {e}"}
+
+    with FileLock(lock_path, timeout=timeout):
+        if not os.path.exists(ledger_path):
+            print(json.dumps({"completed": False, "error": "Ledger not found"}))
+            return 0
+        with open(ledger_path, "r", encoding="utf-8") as f:
+            preflight_data = json.load(f)
+        preflight_req = preflight_data.get("requests", {}).get(ticket_id)
+        if not preflight_req:
+            print(json.dumps({"completed": False, "error": f"Ticket {ticket_id} not found"}))
+            return 0
+        identity_error = completion_identity_error(preflight_req, run_id, task_handle)
+        if identity_error:
+            print(json.dumps({"completed": False, "ok": False, "error": identity_error}))
+            return 0
 
     # 1. Validate through WorkerBackend.complete_native whenever it is installed.
     outcome_dict = None
@@ -662,6 +771,10 @@ def cmd_complete(args: argparse.Namespace) -> int:
             print(json.dumps({"completed": False, "error": f"Ticket {ticket_id} not found"}))
             return 0
 
+        identity_error = completion_identity_error(req, run_id, task_handle)
+        if identity_error:
+            print(json.dumps({"completed": False, "ok": False, "error": identity_error}))
+            return 0
         now_iso = get_iso_now()
         from_state = req.get("state") or "implementation"
         history = req.setdefault("history", [])
@@ -682,6 +795,8 @@ def cmd_complete(args: argparse.Namespace) -> int:
             req["blocker"] = None
             req["updated_at"] = now_iso
             req["owner"] = ""
+            req["native_run_id"] = ""
+            req["native_task_handle"] = ""
 
             evidence_list = req.setdefault("evidence", [])
             if outcome_dict.get("evidence"):
@@ -700,6 +815,8 @@ def cmd_complete(args: argparse.Namespace) -> int:
             req["blocker"] = reason
             req["updated_at"] = now_iso
             req["owner"] = ""
+            req["native_run_id"] = ""
+            req["native_task_handle"] = ""
             history.append({
                 "actor": "WorkerBackend",
                 "timestamp": now_iso,
@@ -751,12 +868,21 @@ def main():
     p_record.add_argument("--state-dir", required=True, help="WorkerBackend state directory")
     p_record.add_argument("--run-id", required=True, help="Native run ID")
     p_record.add_argument("--task-handle", required=True, help="Native task handle (agent://...)")
+    p_record.add_argument("--ledger", default="", help="Request ledger containing the claimed ticket")
+    p_record.add_argument("--ticket-id", default="", help="Claimed request ticket ID")
+    p_record.add_argument("--timeout", default="15.0", help="Ledger lock timeout in seconds")
 
     p_rollback = subparsers.add_parser("rollback", help="Roll back claimed ticket on dispatch failure under FileLock")
     p_rollback.add_argument("--ledger", required=True, help="Path to ledger.json")
     p_rollback.add_argument("--ticket-id", required=True, help="Ticket ID")
     p_rollback.add_argument("--reason", default="Dispatch failed", help="Failure reason")
+    p_rollback.add_argument("--run-id", default="", help="Native run ID that still owns the claim")
     p_rollback.add_argument("--timeout", default="15.0", help="Lock timeout in seconds")
+
+    p_recover = subparsers.add_parser("recover", help="Release claims owned by workers absent from the running roster")
+    p_recover.add_argument("--ledger", required=True, help="Path to ledger.json")
+    p_recover.add_argument("--running-worker-ids", default="", help="Comma-separated running worker IDs")
+    p_recover.add_argument("--timeout", default="15.0", help="Lock timeout in seconds")
 
     p_complete = subparsers.add_parser("complete", help="Complete ticket on worker finish through canonical validation")
     p_complete.add_argument("--ledger", required=True, help="Path to ledger.json")
@@ -783,6 +909,8 @@ def main():
         sys.exit(cmd_record_dispatch(args))
     elif args.subcommand == "rollback":
         sys.exit(cmd_rollback(args))
+    elif args.subcommand == "recover":
+        sys.exit(cmd_recover(args))
     elif args.subcommand == "complete":
         sys.exit(cmd_complete(args))
     elif args.subcommand == "hold-lock":

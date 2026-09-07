@@ -25,7 +25,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { atomicWriteFileSync } from "@veyyon/utils/atomic-write";
-import { getAgentDir } from "@veyyon/utils";
+import { errorMessage, getAgentDir, logger } from "@veyyon/utils";
 import nativeLedgerBridgeAssetPath from "./native-ledger-bridge.py" with { type: "file" };
 // --- Functional Topics & Keyword Mapping ---
 
@@ -746,20 +746,26 @@ export async function rollbackClaimedTicket(
 	ledgerPath: string,
 	ticketId: string,
 	reason: string,
-	options?: { lockTimeoutMs?: number },
-): Promise<void> {
+	options?: { lockTimeoutMs?: number; runId?: string },
+): Promise<{ rolled_back: boolean; error?: string }> {
 	const args = ["rollback", "--ledger", ledgerPath, "--ticket-id", ticketId, "--reason", reason];
+	if (options?.runId) args.push("--run-id", options.runId);
 	if (options?.lockTimeoutMs) {
 		args.push("--timeout", (options.lockTimeoutMs / 1000).toFixed(1));
 	}
-	await runLedgerBridge(args);
+	return await runLedgerBridge(args);
 }
 
 /**
  * Record native dispatch handle binding in WorkerBackend.
  */
-export async function recordNativeDispatch(runId: string, taskHandle: string, ledgerPath: string): Promise<void> {
-	await runLedgerBridge([
+export async function recordNativeDispatch(
+	runId: string,
+	taskHandle: string,
+	ledgerPath: string,
+	ticketId?: string,
+): Promise<void> {
+	const args = [
 		"record-dispatch",
 		"--state-dir",
 		path.dirname(ledgerPath),
@@ -767,7 +773,10 @@ export async function recordNativeDispatch(runId: string, taskHandle: string, le
 		runId,
 		"--task-handle",
 		taskHandle,
-	]);
+	];
+	if (ledgerPath) args.push("--ledger", ledgerPath);
+	if (ticketId) args.push("--ticket-id", ticketId);
+	await runLedgerBridge(args);
 }
 
 /**
@@ -809,6 +818,15 @@ export async function completeClaimedTicket(
 		else if (error) args.push("--error", error);
 		if (options?.lockTimeoutMs) args.push("--timeout", (options.lockTimeoutMs / 1000).toFixed(1));
 	}
+	return await runLedgerBridge(args);
+}
+
+export async function recoverOrphanedClaims(
+	ledgerPath: string,
+	runningWorkerIds: readonly string[],
+): Promise<{ recovered: string[] }> {
+	const args = ["recover", "--ledger", ledgerPath];
+	if (runningWorkerIds.length > 0) args.push("--running-worker-ids", runningWorkerIds.join(","));
 	return await runLedgerBridge(args);
 }
 
@@ -861,8 +879,8 @@ export class TopicReplenishmentEngine {
 	 * Rollback claimed ticket on worker dispatch failure (Finding 6).
 	 * Clears owner, sets blocker, and records rollback in history audit trail under OS FileLock.
 	 */
-	async rollbackClaimedTicket(ticketId: string, reason: string): Promise<void> {
-		await rollbackClaimedTicket(this.ledgerPath, ticketId, reason);
+	async rollbackClaimedTicket(ticketId: string, reason: string, runId?: string): Promise<{ rolled_back: boolean }> {
+		return await rollbackClaimedTicket(this.ledgerPath, ticketId, reason, { runId });
 	}
 
 	/**
@@ -997,7 +1015,7 @@ export class TopicReplenishmentEngine {
 				await activeExecutor(ticket);
 				reservations.add(ticket.id);
 			} catch (err) {
-				await this.rollbackClaimedTicket(ticket.id, String(err));
+				const rollback = await this.rollbackClaimedTicket(ticket.id, String(err), ticket.runId);
 				return {
 					reconciliation,
 					memoryAdmission,
@@ -1005,7 +1023,9 @@ export class TopicReplenishmentEngine {
 					dispatchedCount: dispatchedTickets.length - 1,
 					blockedTopics: allBlockedTopics,
 					status: "error",
-					reason: `Failed to dispatch ticket ${ticket.id}: ${err} (claimed ticket rolled back to pending)`,
+					reason: rollback.rolled_back
+						? `Failed to dispatch ticket ${ticket.id}: ${err} (claimed ticket rolled back to pending)`
+						: `Failed to dispatch ticket ${ticket.id}: ${err} (claim was already reassigned and remains intact)`,
 				};
 			}
 		}
@@ -1039,7 +1059,7 @@ export class TopicReplenishmentEngine {
 		replenishmentReservations.delete(this.ledgerPath);
 		if (event.ticketId && fs.existsSync(this.ledgerPath)) {
 			try {
-				await completeClaimedTicket(this.ledgerPath, event.ticketId, {
+				const completion = await completeClaimedTicket(this.ledgerPath, event.ticketId, {
 					runId: event.runId,
 					taskHandle: `agent://${event.agentId}`,
 					agentId: event.agentId,
@@ -1047,8 +1067,19 @@ export class TopicReplenishmentEngine {
 					exitCode: event.exitCode ?? (event.status === "completed" ? 0 : 1),
 					error: event.error,
 				});
-			} catch {
-				// Non-fatal bridge error logged
+				if (!completion.completed) {
+					throw new Error(
+						`Native completion rejected for ${event.ticketId}: ${completion.blocked_reason ?? "dispatch identity mismatch"}`,
+					);
+				}
+			} catch (error) {
+				logger.error("TopicReplenishmentEngine: worker completion persistence failed", {
+					ticketId: event.ticketId,
+					runId: event.runId,
+					agentId: event.agentId,
+					error: errorMessage(error),
+				});
+				throw error;
 			}
 		}
 
@@ -1073,16 +1104,18 @@ export class TopicReplenishmentEngine {
 			dispatchWorker?: (ticket: ClaimedTicket) => Promise<unknown>;
 		},
 	): Promise<ReplenishmentOutcome> {
+		const runningWorkerIds = currentRoster.flatMap(worker =>
+			typeof worker === "object" &&
+			worker !== null &&
+			"id" in worker &&
+			typeof worker.id === "string" &&
+			"status" in worker &&
+			worker.status === "running"
+				? [worker.id]
+				: [],
+		);
+		await recoverOrphanedClaims(this.ledgerPath, runningWorkerIds);
 		return this.replenish(currentRoster, options);
 	}
 }
 
-let globalReplenishmentEngine: TopicReplenishmentEngine | null = null;
-
-export function getGlobalReplenishmentEngine(): TopicReplenishmentEngine | null {
-	return globalReplenishmentEngine;
-}
-
-export function setGlobalReplenishmentEngine(engine: TopicReplenishmentEngine | null): void {
-	globalReplenishmentEngine = engine;
-}

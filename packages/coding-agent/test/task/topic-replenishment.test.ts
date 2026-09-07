@@ -18,14 +18,13 @@ import {
 	claimNextAuthorizedTicket,
 	completeClaimedTicket,
 	FileLock,
-	getGlobalReplenishmentEngine,
 	isValidAuthorization,
 	recordNativeDispatch,
+	recoverOrphanedClaims,
 	rollbackClaimedTicket,
 	reconcileRunningTopics,
 	resolveTopicName,
 	RUNNABLE_TOPIC_NAMES,
-	setGlobalReplenishmentEngine,
 	TopicReplenishmentEngine,
 	type LedgerFileShape,
 	type NativeActorSnapshot,
@@ -480,7 +479,7 @@ async function runTests(): Promise<void> {
 			dispatchWorker: async ticket => {
 				const agentId = `worker-${ticket.id.slice(-1)}`;
 				assert.ok(ticket.runId, "Canonical WorkerBackend preparation must return a run ID");
-				await recordNativeDispatch(ticket.runId, `agent://${agentId}`, ledgerPath);
+				await recordNativeDispatch(ticket.runId, `agent://${agentId}`, ledgerPath, ticket.id);
 				claimedTickets.set(ticket.id, { runId: ticket.runId, agentId });
 				dispatched.push(ticket.id);
 			},
@@ -542,7 +541,7 @@ async function runTests(): Promise<void> {
 		const completeOutcome = await engine.onWorkerComplete(completeEvent, currentRoster, {
 			dispatchWorker: async ticket => {
 				assert.ok(ticket.runId, "Replenished ticket must retain its native run identity");
-				await recordNativeDispatch(ticket.runId, "agent://worker-4", ledgerPath);
+				await recordNativeDispatch(ticket.runId, "agent://worker-4", ledgerPath, ticket.id);
 				newlyDispatched.push(ticket.id);
 			},
 		});
@@ -712,7 +711,18 @@ async function runTests(): Promise<void> {
 		prepareScratchLedger(lifecycleLedger);
 		await fs.promises.writeFile(ledgerPath, JSON.stringify(lifecycleLedger, null, 2), "utf-8");
 
+		const bindCompletion = async (runId: string, taskHandle = "agent://worker-native-1"): Promise<void> => {
+			const current = JSON.parse(await fs.promises.readFile(ledgerPath, "utf-8")) as LedgerFileShape;
+			const request = current.requests["req-native-1"];
+			request.owner = taskHandle.replace("agent://", "");
+			request.native_run_id = runId;
+			request.native_task_handle = taskHandle;
+			request.blocker = undefined;
+			await fs.promises.writeFile(ledgerPath, JSON.stringify(current, null, 2), "utf-8");
+		};
+
 		// Focus Test A: exit0 + error stays unadvanced
+		await bindCompletion("run-test-a");
 		const resError = await completeClaimedTicket(ledgerPath, "req-native-1", {
 			runId: "run-test-a",
 			taskHandle: "agent://worker-native-1",
@@ -732,6 +742,7 @@ async function runTests(): Promise<void> {
 		assert.ok(postError.requests["req-native-1"].blocker?.includes("Unexpected runtime failure"));
 
 		// Focus Test B: verdict fail stays unadvanced
+		await bindCompletion("run-test-b");
 		const resVerdictFail = await completeClaimedTicket(ledgerPath, "req-native-1", {
 			runId: "run-test-b",
 			taskHandle: "agent://worker-native-1",
@@ -749,6 +760,7 @@ async function runTests(): Promise<void> {
 		assert.equal(postFail.requests["req-native-1"].state, "implementation", "State must remain implementation on failed verdict");
 
 		// Focus Test C: empty checks stays unadvanced
+		await bindCompletion("run-test-c");
 		const resEmptyChecks = await completeClaimedTicket(ledgerPath, "req-native-1", {
 			runId: "run-test-c",
 			taskHandle: "agent://worker-native-1",
@@ -766,6 +778,7 @@ async function runTests(): Promise<void> {
 		assert.equal(postEmpty.requests["req-native-1"].state, "implementation", "State must remain implementation on empty checks");
 
 		// Focus Test D: valid native structured result advances via canonical validator
+		await bindCompletion("run-test-d");
 		const resValid = await completeClaimedTicket(ledgerPath, "req-native-1", {
 			runId: "run-test-d",
 			taskHandle: "agent://worker-native-1",
@@ -795,9 +808,8 @@ async function runTests(): Promise<void> {
 				newlyClaimed.push(ticket.id);
 			},
 		});
-		setGlobalReplenishmentEngine(engine);
-		assert.equal(getGlobalReplenishmentEngine(), engine, "Global engine must be registered");
 
+		await bindCompletion("run-test-e");
 		const completeEvent: SubagentCompleteEvent = {
 			agentId: "worker-native-1",
 			agentName: "fast",
@@ -805,6 +817,7 @@ async function runTests(): Promise<void> {
 			status: "completed",
 			exitCode: 0,
 			ticketId: "req-native-1",
+			runId: "run-test-e",
 			structuredResult: {
 				stage: "review",
 				request_id: "req-native-1",
@@ -887,8 +900,182 @@ async function runTests(): Promise<void> {
 		console.log("  [PASS] concurrent cycles share reservations and respect maxCeiling\n");
 	}
 
+
+	// Test 10: session recovery releases only owners absent from the live roster.
+	{
+		console.log("Test 10: recovery reclaims a crashed worker's durable claim");
+		const testDir = path.join(os.tmpdir(), `test-orphan-recovery-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const ledgerPath = path.join(testDir, "ledger.json");
+		await fs.promises.mkdir(testDir, { recursive: true });
+		const ledger: LedgerFileShape = {
+			version: 2,
+			requests: {
+				"orphan-ticket": {
+					prompt: "Resume interrupted workflow implementation",
+					state: "implementation",
+					owner: "worker-that-crashed",
+					native_run_id: "old-run",
+					native_task_handle: "agent://worker-that-crashed",
+					authorization: validAuthorization,
+				},
+			},
+		};
+		prepareScratchLedger(ledger);
+		await fs.promises.writeFile(ledgerPath, JSON.stringify(ledger, null, 2), "utf8");
+		const previousWorkflowsDir = process.env.VEYYON_WORKFLOWS_DIR;
+		process.env.VEYYON_WORKFLOWS_DIR = path.join(testDir, "no-worker-backend");
+		const dispatched: string[] = [];
+		const engine = new TopicReplenishmentEngine({
+			ledgerPath,
+			minFloor: 1,
+			targetCount: 1,
+			maxCeiling: 1,
+			maxRamPct: 100,
+		});
+		await engine.onSessionRecovery([], { dispatchWorker: async ticket => void dispatched.push(ticket.id) });
+		assert.deepEqual(dispatched, ["orphan-ticket"], "The crashed worker's request must be immediately reclaimable");
+		const recovered = JSON.parse(await fs.promises.readFile(ledgerPath, "utf8")) as LedgerFileShape;
+		assert.ok(
+			recovered.requests["orphan-ticket"].history?.some(item => item.reason.includes("Recovered orphaned claim")),
+			"Recovery must preserve an audit event for the released owner",
+		);
+		if (previousWorkflowsDir === undefined) delete process.env.VEYYON_WORKFLOWS_DIR;
+		else process.env.VEYYON_WORKFLOWS_DIR = previousWorkflowsDir;
+		await fs.promises.rm(testDir, { recursive: true, force: true });
+		console.log("  [PASS] crashed owners are reconciled against the live roster\n");
+	}
+
+	// Test 11: a late completion cannot advance a ticket after rollback and reclaim.
+	{
+		console.log("Test 11: stale worker completion cannot advance a reclaimed ticket");
+		const testDir = path.join(os.tmpdir(), `test-stale-completion-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const ledgerPath = path.join(testDir, "ledger.json");
+		await fs.promises.mkdir(testDir, { recursive: true });
+		const ledger: LedgerFileShape = {
+			version: 2,
+			requests: {
+				"reclaimed-ticket": {
+					prompt: "Concurrency-sensitive transport repair",
+					state: "pending",
+					authorization: validAuthorization,
+				},
+			},
+		};
+		prepareScratchLedger(ledger);
+		await fs.promises.writeFile(ledgerPath, JSON.stringify(ledger, null, 2), "utf8");
+		const previousWorkflowsDir = process.env.VEYYON_WORKFLOWS_DIR;
+		process.env.VEYYON_WORKFLOWS_DIR = path.join(testDir, "no-worker-backend");
+		const oldClaim = await claimNextAuthorizedTicket(ledgerPath, { workerId: "old-dispatch" });
+		assert.ok(oldClaim.ticket?.runId);
+		await recordNativeDispatch(oldClaim.ticket.runId, "agent://old-worker", ledgerPath, "reclaimed-ticket");
+		await rollbackClaimedTicket(ledgerPath, "reclaimed-ticket", "old dispatch failed");
+		const newClaim = await claimNextAuthorizedTicket(ledgerPath, { workerId: "new-dispatch" });
+		assert.ok(newClaim.ticket?.runId);
+		await recordNativeDispatch(newClaim.ticket.runId, "agent://new-worker", ledgerPath, "reclaimed-ticket");
+		const staleRollback = await rollbackClaimedTicket(
+			ledgerPath,
+			"reclaimed-ticket",
+			"late failure from old dispatch",
+			{ runId: oldClaim.ticket.runId },
+		);
+		assert.equal(staleRollback.rolled_back, false, "A stale rollback must not release the current claim");
+		const structuredResult = {
+			stage: "build",
+			request_id: "reclaimed-ticket",
+			head_sha: scratchHead,
+			verdict: "pass",
+			checks: [{ name: "verify", command: ["git", "status"], exit_code: 0, observed: "clean", purpose: "verification" }],
+		};
+		const stale = await completeClaimedTicket(ledgerPath, "reclaimed-ticket", {
+			runId: oldClaim.ticket.runId,
+			taskHandle: "agent://old-worker",
+			agentId: "old-worker",
+			structuredResult,
+		});
+		assert.equal(stale.completed, false, "A stale completion must be rejected");
+		const afterStale = JSON.parse(await fs.promises.readFile(ledgerPath, "utf8")) as LedgerFileShape;
+		assert.equal(afterStale.requests["reclaimed-ticket"].owner, "new-worker");
+		assert.equal(afterStale.requests["reclaimed-ticket"].native_run_id, newClaim.ticket.runId);
+		const current = await completeClaimedTicket(ledgerPath, "reclaimed-ticket", {
+			runId: newClaim.ticket.runId,
+			taskHandle: "agent://new-worker",
+			agentId: "new-worker",
+			structuredResult,
+		});
+		assert.equal(current.ok, true, "The current dispatch must still be able to complete");
+		if (previousWorkflowsDir === undefined) delete process.env.VEYYON_WORKFLOWS_DIR;
+		else process.env.VEYYON_WORKFLOWS_DIR = previousWorkflowsDir;
+		await fs.promises.rm(testDir, { recursive: true, force: true });
+		console.log("  [PASS] completion identity is bound to ticket, run, handle, and owner\n");
+	}
+
+	// Test 12: completion persistence failure is surfaced and blocks replenishment.
+	{
+		console.log("Test 12: completion persistence failure does not silently replenish");
+		const testDir = path.join(os.tmpdir(), `test-completion-outage-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const ledgerPath = path.join(testDir, "ledger.json");
+		await fs.promises.mkdir(testDir, { recursive: true });
+		const ledger: LedgerFileShape = {
+			version: 2,
+			requests: {
+				"owned-ticket": {
+					prompt: "Persist worker completion",
+					state: "implementation",
+					owner: "current-worker",
+					native_run_id: "current-run",
+					native_task_handle: "agent://current-worker",
+					authorization: validAuthorization,
+				},
+				"replacement-ticket": {
+					prompt: "Must not dispatch during completion outage",
+					state: "pending",
+					authorization: validAuthorization,
+				},
+			},
+		};
+		prepareScratchLedger(ledger);
+		await fs.promises.writeFile(ledgerPath, JSON.stringify(ledger, null, 2), "utf8");
+		const previousWorkflowsDir = process.env.VEYYON_WORKFLOWS_DIR;
+		process.env.VEYYON_WORKFLOWS_DIR = path.join(testDir, "no-worker-backend");
+		let dispatched = 0;
+		const engine = new TopicReplenishmentEngine({
+			ledgerPath,
+			minFloor: 1,
+			targetCount: 1,
+			maxCeiling: 1,
+			maxRamPct: 100,
+			executor: async () => {
+				dispatched++;
+			},
+		});
+		await assert.rejects(
+			engine.onWorkerComplete(
+				{
+					agentId: "stale-worker",
+					agentName: "task",
+					task: "Persist worker completion",
+					status: "completed",
+					ticketId: "owned-ticket",
+					runId: "stale-run",
+				},
+				[],
+			),
+			/Native completion rejected/,
+		);
+		assert.equal(dispatched, 0, "No replacement worker may start after completion persistence fails");
+		const preserved = JSON.parse(await fs.promises.readFile(ledgerPath, "utf8")) as LedgerFileShape;
+		assert.equal(preserved.requests["owned-ticket"].owner, "current-worker");
+		assert.equal(preserved.requests["replacement-ticket"].state, "pending");
+		if (previousWorkflowsDir === undefined) delete process.env.VEYYON_WORKFLOWS_DIR;
+		else process.env.VEYYON_WORKFLOWS_DIR = previousWorkflowsDir;
+		await fs.promises.rm(testDir, { recursive: true, force: true });
+		console.log("  [PASS] completion outages fail closed before replenishment\n");
+	}
+
+	assert.ok(recoverOrphanedClaims, "Recovery bridge must be exported");
+
 	console.log("=================================================");
-	console.log("ALL 9 TOPIC REPLENISHMENT TESTS PASSED!");
+	console.log("ALL 12 TOPIC REPLENISHMENT TESTS PASSED!");
 	console.log("=================================================");
 }
 

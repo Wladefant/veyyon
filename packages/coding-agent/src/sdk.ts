@@ -198,12 +198,7 @@ import { ARGOT_HANDLES_BANNER } from "./system-prompt-builder/section-registry";
 import { AgentOutputManager } from "./task/output-manager";
 import { wrapStreamFnWithProviderConcurrency } from "./task/provider-concurrency";
 import { delegationStrength } from "./task/subagent-settings";
-import {
-	type ClaimedTicket,
-	getGlobalReplenishmentEngine,
-	setGlobalReplenishmentEngine,
-	TopicReplenishmentEngine,
-} from "./task/topic-replenishment";
+import { type ClaimedTicket, TopicReplenishmentEngine } from "./task/topic-replenishment";
 import {
 	AUTO_THINKING,
 	type ConfiguredThinkingLevel,
@@ -2533,6 +2528,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 			return cwd;
 		};
+		let replenishmentEngine: TopicReplenishmentEngine | null = null;
 		const toolSession: ToolSession = {
 			get cwd() {
 				return sessionManager.getCwd();
@@ -2651,7 +2647,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			getArtifactManager: () => sessionManager.getArtifactManager(),
 			recordSubagentSpawn: record => sessionManager.appendSubagentSpawn(record),
 			onSubagentComplete: async record => {
-				const engine = getGlobalReplenishmentEngine();
+				const engine = replenishmentEngine;
 				if (engine) {
 					const activeRoster = AgentRegistry.global().list().map(ref => ({
 						id: ref.id,
@@ -4518,6 +4514,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 									ledgerPath: ticket.ledgerPath,
 								},
 								undefined,
+								undefined,
+								toolContextStore.getContext(),
 							);
 							const spawned =
 								(result.details?.progress?.length ?? 0) > 0 || (result.details?.results?.length ?? 0) > 0;
@@ -4537,7 +4535,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				new TopicReplenishmentEngine({
 					executor: productionExecutor,
 				});
-			setGlobalReplenishmentEngine(engine);
+			replenishmentEngine = engine;
 
 			const activeRoster = AgentRegistry.global().list().map(ref => ({
 				id: ref.id,
