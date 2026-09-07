@@ -16,7 +16,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
-import { existingOnly } from "./check-doc-links";
+import { existingOnly } from "./workspace-layout";
 
 /**
  * Pinned merge-base commit against which all parity ledgers and differential suites are measured.

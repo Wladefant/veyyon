@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { existingOnly } from "./check-doc-links";
+import { existingOnly } from "./workspace-layout";
 
 /**
  * WHY THIS SUITE EXISTS:
