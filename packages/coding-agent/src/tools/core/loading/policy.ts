@@ -294,7 +294,7 @@ export interface BuiltinToolPermissionInputs {
 	autolearnEnabled: boolean;
 	/** `(taskDepth ?? 0) === 0`. */
 	isTopLevelSession: boolean;
-	/** `delegationEnabled(settings)`. */
+	/** `agentsEnabled(settings)`. */
 	delegationEnabled: boolean;
 	/** `canSpawnAtDepth(resolveSessionMaxNestedSpawnDepth(...), taskDepth ?? 0)`. */
 	canSpawnAtDepth: boolean;

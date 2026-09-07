@@ -25,6 +25,7 @@ import {
 	DEFAULT_AGENT_WAITING_PRUNE_MS,
 	DEFAULT_ENABLED_BUNDLED_AGENT,
 } from "../config/settings-domains/agents";
+import { retiredBy, settingsSchemaPaths } from "../config/settings-schema";
 import type { ConfiguredThinkingLevel } from "../thinking";
 import { currentAgentName, type ResolvedSpawnPolicy, resolveSpawnPolicy } from "./spawn-policy";
 import type { AgentDefinition } from "./types";
@@ -52,6 +53,11 @@ export function delegationStrength(settings: Settings): DelegationStrength {
  * The one kill switch. False removes the task tool and every delegation section from
  * the prompt; the delegation strength and the agents table are kept and take effect
  * again when it is turned back on.
+ *
+ * It answers TOOL PRESENCE, not "delegation can happen" — that one also needs an
+ * enabled agent type and is {@link resolveDelegation}`(...).possible`. The task
+ * tool stays built with every agent row disabled, so a `/` command can grant one
+ * for a turn.
  */
 export function agentsEnabled(settings: Settings): boolean {
 	return settings.get("agent.enabled") ?? true;
@@ -108,22 +114,6 @@ export function resolveAgentPruneBudget(settings: Settings): AgentPruneBudget {
 	// closing for the waiting case alone.
 	if (afterMs === 0) return { afterMs: 0, waitingAfterMs: 0 };
 	return { afterMs, waitingAfterMs: Math.max(afterMs, waitingAfterMs) };
-}
-
-/**
- * True when the task tool is offered at all: deliberately the MASTER SWITCH
- * ({@link agentsEnabled}) and nothing more.
- *
- * The name reads like "delegation can happen", which is a DIFFERENT question:
- * that one also needs an enabled agent type, and its answer is
- * {@link resolveDelegation}`(...).possible`. This one exists for tool PRESENCE,
- * where the wider question would be wrong: the task tool stays built with every
- * agent row disabled so a `/` command can grant one for a turn. Ask
- * {@link resolveDelegation} for anything model-facing, and this only when the
- * subject is whether the tool is offered.
- */
-export function delegationEnabled(settings: Settings): boolean {
-	return agentsEnabled(settings);
 }
 
 /**
@@ -234,7 +224,7 @@ function parseMaxNestedSpawnDepth(setting: string, value: unknown): number {
  * decision: a fresh roster row has no `agents` child at all, so the blanket
  * ceiling still answers for every level below it.
  */
-export function agentLaneChain(row: AgentLaneSettings): AgentLaneSettings[] {
+function agentLaneChain(row: AgentLaneSettings): AgentLaneSettings[] {
 	const chain: AgentLaneSettings[] = [];
 	// Bounded rather than `while (lane)`, because this walks a structure read
 	// from a settings FILE. A hand-written or merged config can carry a node
@@ -585,7 +575,7 @@ export interface ResolvedAgentModel {
  * The slot moves only when someone picks a model to keep, and an agent that
  * should not move with it names its own model on its roster page.
  */
-export const AGENT_DEFAULT_MODEL_ROLE = DEFAULT_MODEL_SLOT;
+const AGENT_DEFAULT_MODEL_ROLE = DEFAULT_MODEL_SLOT;
 
 /**
  * The effort an agent runs at when neither its lane nor its definition names
@@ -708,12 +698,9 @@ export function resetSupersededAgentRowReports(): void {
 }
 
 /**
- * Keys that stay declared and decide nothing, each with the control that
- * answers instead.
- *
- * They stay in the schema, marked `retiredBy`, so an existing `config.yml`
- * still loads. They are REJECTED rather than served: no resolver reads them,
- * and each one left in a file is reported once with the page that replaced it.
+ * Where to set the value instead, per retired key in this area. The keys come
+ * from the schema's `retiredBy` marks, so a key is retired in one place; a key
+ * with no row here is reported against that mark.
  */
 export const RETIRED_AGENT_MODEL_SETTINGS: Readonly<Record<string, string>> = {
 	"agent.modelByDepth": "Agents → Roster → that agent → Agents → Model",
@@ -730,10 +717,13 @@ const reportedRetiredModelSettings = new Set<string>();
  * somebody made through a control that no longer exists, and the caller's job is
  * to say so rather than let it look live.
  */
-export function rejectedAgentModelSettings(settings: Settings): string[] {
-	const rejected: string[] = [];
-	for (const path of Object.keys(RETIRED_AGENT_MODEL_SETTINGS)) {
-		const value: unknown = settings.get(path as SettingPath);
+export function rejectedAgentModelSettings(settings: Settings): SettingPath[] {
+	const rejected: SettingPath[] = [];
+	// Read at call time: the schema is assembled from its domain slices during
+	// startup, so a list built at module load would be empty.
+	for (const path of settingsSchemaPaths()) {
+		if (!path.startsWith("agent.") || retiredBy(path) === undefined) continue;
+		const value: unknown = settings.get(path);
 		if (value === undefined || value === null || value === false) continue;
 		if (typeof value === "string" && value.trim().length === 0) continue;
 		if (Array.isArray(value) && value.length === 0) continue;
@@ -755,9 +745,10 @@ function reportRejectedAgentModelSettings(settings: Settings): void {
 	for (const path of rejectedAgentModelSettings(settings)) {
 		if (reportedRetiredModelSettings.has(path)) continue;
 		reportedRetiredModelSettings.add(path);
+		const where = RETIRED_AGENT_MODEL_SETTINGS[path] ?? `the setting that replaced it, ${retiredBy(path)}`;
 		logger.warn(
 			`Settings: ${path} is set and is no longer read — a model and an effort are chosen for one agent, ` +
-				`or for every agent through Same Model for All Agents. Open ${RETIRED_AGENT_MODEL_SETTINGS[path]} and choose it there.`,
+				`or for every agent through Same Model for All Agents. Open ${where} and choose it there.`,
 			{ setting: path },
 		);
 	}

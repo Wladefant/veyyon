@@ -34,6 +34,7 @@ export {
 	retiredBy,
 	type SettingPath,
 	type SettingValue,
+	settingsSchemaPaths,
 } from "@veyyon/kernel/settings/schema";
 export { type BashInterceptorRule, DEFAULT_BASH_INTERCEPTOR_RULES } from "./bash-interceptor-rules";
 

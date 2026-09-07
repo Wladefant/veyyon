@@ -44,8 +44,8 @@ import {
 	agentEnableState,
 	agentModelSourceLabel,
 	agentSettingsFor,
+	agentsEnabled,
 	delegationBlockedNotice,
-	delegationEnabled,
 	delegationStrength,
 	filterEnabledAgents,
 	isAgentEnableDefaulted,
@@ -494,7 +494,9 @@ describe("agent model: the two scopes, and the key that is retired in both", () 
 			"agent.modelByDepth": { "1": "openai/gpt-5" },
 		} as Parameters<typeof Settings.isolated>[0]);
 
-		expect(rejectedAgentModelSettings(stale).sort()).toEqual(Object.keys(RETIRED_AGENT_MODEL_SETTINGS).sort());
+		expect(rejectedAgentModelSettings(stale).map(String).sort()).toEqual(
+			Object.keys(RETIRED_AGENT_MODEL_SETTINGS).sort(),
+		);
 		expect(rejectedAgentModelSettings(Settings.isolated())).toEqual([]);
 	});
 
@@ -1114,7 +1116,7 @@ describe("delegation strength answers with the agent table, not on its own", () 
 		const state = resolveDelegation(settings, WORKER);
 
 		expect(delegationStrength(settings)).toBe("preferred");
-		expect(delegationEnabled(settings)).toBe(true);
+		expect(agentsEnabled(settings)).toBe(true);
 		expect(state.possible).toBe(true);
 		expect(state.preferred).toBe(true);
 		expect(state.required).toBe(false);
@@ -1130,7 +1132,7 @@ describe("delegation strength answers with the agent table, not on its own", () 
 		const settings = Settings.isolated({ "agent.enabled": false });
 		const state = resolveDelegation(settings, WORKER);
 
-		expect(delegationEnabled(settings)).toBe(false);
+		expect(agentsEnabled(settings)).toBe(false);
 		expect(state.possible).toBe(false);
 		expect(state.blockedBy).toBe("agents-off");
 		expect(state.preferred).toBe(false);
@@ -1150,7 +1152,7 @@ describe("delegation strength answers with the agent table, not on its own", () 
 		const settings = Settings.isolated({ "agent.delegation": "allowed" });
 		const state = resolveDelegation(settings, WORKER);
 
-		expect(delegationEnabled(settings)).toBe(true);
+		expect(agentsEnabled(settings)).toBe(true);
 		expect(state.possible).toBe(true);
 		expect(state.blockedBy).toBeUndefined();
 		expect(delegationBlockedNotice(state)).toBeUndefined();
@@ -1179,7 +1181,7 @@ describe("delegation strength answers with the agent table, not on its own", () 
 		const settings = Settings.isolated({});
 		const state = resolveDelegation(settings, WORKER);
 
-		expect(delegationEnabled(settings)).toBe(true);
+		expect(agentsEnabled(settings)).toBe(true);
 		expect(state.strength).toBe("preferred");
 		expect(state.possible).toBe(true);
 		expect(state.preferred).toBe(true);

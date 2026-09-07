@@ -4,7 +4,7 @@ import type { Skill } from "./extensibility/skills";
 import { buildSystemPrompt } from "./system-prompt";
 import { RUNTIME_SECTIONS } from "./system-prompt-builder/section-registry";
 import { PROMPT_STATEMENTS, type StatementCondition } from "./system-prompt-builder/statement-registry";
-import { delegationEnabled } from "./task/agent-settings";
+import { agentsEnabled } from "./task/agent-settings";
 import { TOOL } from "./tools/core/builtin-names";
 import { type BuiltinToolPermissionInputs, isBuiltinToolAllowed } from "./tools/core/loading/policy";
 import type { ToolSession } from "./tools/index";
@@ -144,10 +144,10 @@ function searchToolDescriptions(agentsEnabled: boolean, delegation: string): str
  * exercised, so the remaining inputs are irrelevant and the object is cast
  * rather than filled in.
  */
-function taskToolOffered(agentsEnabled: boolean, delegation: string): boolean {
-	const settings = Settings.isolated({ "agent.enabled": agentsEnabled, "agent.delegation": delegation });
+function taskToolOffered(enabled: boolean, delegation: string): boolean {
+	const settings = Settings.isolated({ "agent.enabled": enabled, "agent.delegation": delegation });
 	return isBuiltinToolAllowed(TOOL.task, {
-		delegationEnabled: delegationEnabled(settings),
+		delegationEnabled: agentsEnabled(settings),
 		canSpawnAtDepth: true,
 	} as BuiltinToolPermissionInputs);
 }

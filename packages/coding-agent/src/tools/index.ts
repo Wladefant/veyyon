@@ -38,7 +38,7 @@ import type { MnemopiSessionState } from "../memory/mnemopi/state";
 import type { PlanModeState } from "../plan-mode/state";
 import type { AgentRegistry } from "../registry/agent-registry";
 import type { CustomMessage } from "../session/messages";
-import { delegationEnabled, resolveSessionMaxNestedSpawnDepth } from "../task/agent-settings";
+import { agentsEnabled, resolveSessionMaxNestedSpawnDepth } from "../task/agent-settings";
 import type { AgentOutputManager } from "../task/output-manager";
 import { canSpawnAtDepth } from "../task/types";
 import type { ConfiguredThinkingLevel } from "../thinking";
@@ -685,7 +685,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		memoryBackend,
 		autolearnEnabled: session.settings.get("autolearn.enabled"),
 		isTopLevelSession: taskDepth === 0,
-		delegationEnabled: delegationEnabled(session.settings),
+		delegationEnabled: agentsEnabled(session.settings),
 		canSpawnAtDepth: canSpawnAtDepth(
 			resolveSessionMaxNestedSpawnDepth(session.settings, session.maxNestedSpawnDepth),
 			taskDepth,

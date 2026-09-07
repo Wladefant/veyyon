@@ -267,7 +267,7 @@ describe("the retired depth-keyed key is named and inert", () => {
 
 	/** Listed, so a file that names a model is not read as live configuration. */
 	it("lists a stale file's keys, and nothing in a clean one", () => {
-		expect(rejectedAgentModelSettings(Settings.isolated(STALE)).sort()).toEqual(
+		expect(rejectedAgentModelSettings(Settings.isolated(STALE)).map(String).sort()).toEqual(
 			Object.keys(RETIRED_AGENT_MODEL_SETTINGS).sort(),
 		);
 		expect(rejectedAgentModelSettings(Settings.isolated())).toEqual([]);

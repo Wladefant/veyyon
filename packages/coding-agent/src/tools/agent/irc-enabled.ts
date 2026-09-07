@@ -1,5 +1,5 @@
 import type { Settings } from "../../config/settings";
-import { delegationEnabled, resolveSessionMaxNestedSpawnDepth } from "../../task/agent-settings";
+import { agentsEnabled, resolveSessionMaxNestedSpawnDepth } from "../../task/agent-settings";
 import { canSpawnAtDepth } from "../../task/types";
 
 /**
@@ -13,7 +13,7 @@ import { canSpawnAtDepth } from "../../task/types";
  */
 export function isIrcEnabled(settings: Settings, taskDepth: number, maxNestedSpawnDepth?: number): boolean {
 	if (taskDepth > 0) return true;
-	if (!delegationEnabled(settings)) return false;
+	if (!agentsEnabled(settings)) return false;
 	// Top-level session: peers exist only if it can still spawn agents. This
 	// reuses the task tool's capacity gate so zero still permits direct children.
 	return canSpawnAtDepth(resolveSessionMaxNestedSpawnDepth(settings, maxNestedSpawnDepth), taskDepth);
