@@ -1,3 +1,8 @@
+/**
+ * WHY: shared section rendering can retain fields while changing blank lines,
+ * counts, or truncation. Handler fixtures and list boundaries preserve these
+ * contracts. This suite does not verify live upstream API availability.
+ */
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { PACKAGE_REGISTRY_DECLARATIONS } from "../../src/scrapers/declarations/package-registries";
 import { createPackageRegistryHandler } from "../../src/scrapers/engine/package-registry";
@@ -44,10 +49,7 @@ describe("package registry field fidelity across all declared package registries
 			"terraform",
 			"vscode-marketplace",
 		];
-		for (const site of expected) {
-			expect(declaredSites).toContain(site);
-		}
-		expect(declaredSites.length).toBeGreaterThanOrEqual(27);
+		expect(declaredSites.sort()).toEqual(expected.sort());
 	});
 
 	// 1. Artifact Hub
@@ -1886,6 +1888,319 @@ stability: experimental
 			expect(result.content).toContain("**Categories:** Programming Languages, Linters");
 			expect(result.content).toContain("**Tags:** python, django");
 			expect(result.content).toContain("**Repository:** https://github.com/microsoft/vscode-python");
+		});
+	});
+
+	describe("package registry edge cases for missing, zero, and markdown-sensitive values", () => {
+		it("handles artifacthub with missing maintainers, empty badges, zero stars, and no readme", async () => {
+			const decl = PACKAGE_REGISTRY_DECLARATIONS.find(d => d.site === "artifacthub")!;
+			const handler = createPackageRegistryHandler(decl, "handleArtifactHubEdge");
+			const fixture = {
+				package_id: "pkg-empty",
+				name: "minimal-pkg",
+				normalized_name: "minimal-pkg",
+				version: "1.0.0",
+				repository: {
+					name: "repo-name",
+					url: "https://example.com/repo",
+				},
+				ts: 1690000000,
+				created_at: 1600000000,
+				stars: 0,
+				official: false,
+				signed: false,
+			};
+
+			loadPageSpy = spyOn(scraperTypes, "loadPage").mockImplementation(async (url: string) => ({
+				content: JSON.stringify(fixture),
+				contentType: "application/json",
+				finalUrl: url,
+				ok: true,
+				status: 200,
+			}));
+
+			const result = (await handler(
+				"https://artifacthub.io/packages/helm/repo-name/minimal-pkg",
+				10,
+			)) as scraperTypes.RenderResult;
+			expect(result).not.toBeNull();
+			expect(result.content).toContain("# minimal-pkg\n\n**Type:** Helm Chart · **Version:** 1.0.0\n\n");
+			expect(result.content).not.toContain("stars");
+			expect(result.content).not.toContain("## README");
+			expect(result.content).not.toContain("## Installation");
+		});
+
+		it("handles AUR with orphaned package, out-of-date flag, and empty dependencies", async () => {
+			const decl = PACKAGE_REGISTRY_DECLARATIONS.find(d => d.site === "aur")!;
+			const handler = createPackageRegistryHandler(decl, "handleAurEdge");
+			const fixture = {
+				version: 5,
+				type: "info",
+				resultcount: 1,
+				results: [
+					{
+						Name: "orphan-pkg",
+						PackageBase: "orphan-pkg",
+						Version: "0.1.0",
+						NumVotes: 0,
+						Popularity: 0.0,
+						LastModified: 1600000000,
+						FirstSubmitted: 1500000000,
+						OutOfDate: 1650000000,
+					},
+				],
+			};
+
+			loadPageSpy = spyOn(scraperTypes, "loadPage").mockImplementation(async (url: string) => ({
+				content: JSON.stringify(fixture),
+				contentType: "application/json",
+				finalUrl: url,
+				ok: true,
+				status: 200,
+			}));
+
+			const result = (await handler(
+				"https://aur.archlinux.org/packages/orphan-pkg",
+				10,
+			)) as scraperTypes.RenderResult;
+			expect(result).not.toBeNull();
+			expect(result.content).toContain("# orphan-pkg\n\n");
+			expect(result.content).toContain("**Version:** 0.1.0 (flagged out-of-date: ");
+			expect(result.content).toContain("**Maintainer:** Orphaned\n");
+			expect(result.content).toContain("**Votes:** 0 · **Popularity:** 0.00\n");
+			expect(result.content).not.toContain("## Dependencies");
+		});
+
+		it("handles crates.io with 0 downloads, missing docs.rs readme, and markdown-sensitive package name", async () => {
+			const decl = PACKAGE_REGISTRY_DECLARATIONS.find(d => d.site === "crates-io")!;
+			const handler = createPackageRegistryHandler(decl, "handleCratesIoEdge");
+			const fixture = {
+				crate: {
+					name: "foo_bar_baz",
+					description: "A crate with _special_ *characters* & symbols",
+					downloads: 0,
+					recent_downloads: 0,
+					max_version: "0.0.1",
+					repository: null,
+					homepage: null,
+					documentation: null,
+					categories: [],
+					keywords: [],
+					created_at: "2024-01-01T00:00:00Z",
+					updated_at: "2024-01-01T00:00:00Z",
+				},
+				versions: [
+					{
+						num: "0.0.1",
+						downloads: 0,
+						created_at: "2024-01-01T00:00:00Z",
+						license: "MIT",
+						rust_version: null,
+					},
+				],
+			};
+
+			loadPageSpy = spyOn(scraperTypes, "loadPage").mockImplementation(async (url: string) => {
+				if (url.includes("docs.rs")) {
+					return { content: "", contentType: "text/plain", finalUrl: url, ok: false, status: 404 };
+				}
+				return {
+					content: JSON.stringify(fixture),
+					contentType: "application/json",
+					finalUrl: url,
+					ok: true,
+					status: 200,
+				};
+			});
+
+			const result = (await handler("https://crates.io/crates/foo_bar_baz", 10)) as scraperTypes.RenderResult;
+			expect(result).not.toBeNull();
+			expect(result.content).toContain("# foo_bar_baz\n\nA crate with _special_ *characters* & symbols\n\n");
+			expect(result.content).toContain("**Latest:** 0.0.1 · **License:** MIT\n");
+			expect(result.content).toContain("**Downloads:** 0 total · 0 recent\n\n");
+			expect(result.content).not.toContain("## README");
+		});
+
+		it("handles Repology with elided repositories above limit and escaping in table cells", async () => {
+			const decl = PACKAGE_REGISTRY_DECLARATIONS.find(d => d.site === "repology")!;
+			const handler = createPackageRegistryHandler(decl, "handleRepologyEdge");
+			const packages = Array.from({ length: 20 }, (_, i) => ({
+				repo: `repo_${i}|special`,
+				version: `1.0.${i}|build`,
+				status: i === 0 ? "newest" : "outdated",
+				summary: "Package with | pipes in metadata",
+			}));
+
+			loadPageSpy = spyOn(scraperTypes, "loadPage").mockImplementation(async (url: string) => ({
+				content: JSON.stringify(packages),
+				contentType: "application/json",
+				finalUrl: url,
+				ok: true,
+				status: 200,
+			}));
+
+			const result = (await handler("https://repology.org/project/test-pkg", 10)) as scraperTypes.RenderResult;
+			expect(result).not.toBeNull();
+			expect(result.content).toContain("[…5 repositories elided…]");
+			expect(result.content).toContain("\\|build`");
+		});
+
+		it("handles Terraform module with inputs and outputs exceeding limit boundaries", async () => {
+			const decl = PACKAGE_REGISTRY_DECLARATIONS.find(d => d.site === "terraform")!;
+			const handler = createPackageRegistryHandler(decl, "handleTerraformEdge");
+			const fixture = {
+				id: "mod-1",
+				namespace: "ns",
+				name: "vpc",
+				provider: "aws",
+				version: "1.0.0",
+				downloads: 500,
+				root: {
+					inputs: Array.from({ length: 35 }, (_, i) => ({
+						name: `input_${i}`,
+						type: "string",
+						description: `Input description ${i}`,
+						required: i % 2 === 0,
+					})),
+					outputs: Array.from({ length: 25 }, (_, i) => ({
+						name: `output_${i}`,
+						description: `Output description ${i}`,
+					})),
+					dependencies: Array.from({ length: 20 }, (_, i) => ({
+						name: `dep_${i}`,
+						source: `terraform-aws-modules/dep_${i}`,
+						version: "~> 1.0",
+					})),
+				},
+			};
+
+			loadPageSpy = spyOn(scraperTypes, "loadPage").mockImplementation(async (url: string) => ({
+				content: JSON.stringify(fixture),
+				contentType: "application/json",
+				finalUrl: url,
+				ok: true,
+				status: 200,
+			}));
+
+			const result = (await handler(
+				"https://registry.terraform.io/modules/ns/vpc/aws/latest",
+				10,
+			)) as scraperTypes.RenderResult;
+			expect(result).not.toBeNull();
+			expect(result.content).toContain("## Inputs (35)");
+			expect(result.content).toContain("[…5 inputs elided…]");
+			expect(result.content).toContain("## Outputs (25)");
+			expect(result.content).toContain("[…5 outputs elided…]");
+			expect(result.content).toContain("## Dependencies (20)");
+			expect(result.content).toContain("[…5 dependencies elided…]");
+		});
+
+		it.each([
+			{ items: undefined },
+			{ items: null },
+			{ items: [] },
+			{ items: ["alpha|beta"] },
+			{ items: ["alpha|beta", "_gamma_"] },
+		])("preserves absent, empty, counted and uncounted AUR lists: %j", async ({ items }) => {
+			const declaration = PACKAGE_REGISTRY_DECLARATIONS.find(site => site.site === "aur")!;
+			const fields = [
+				["Depends", "Dependencies", true],
+				["MakeDepends", "Make Dependencies", true],
+				["OptDepends", "Optional Dependencies", false],
+				["CheckDepends", "Check Dependencies", false],
+				["Provides", "Provides", false],
+				["Conflicts", "Conflicts", false],
+				["Replaces", "Replaces", false],
+			] as const;
+			const fixture = {
+				resultcount: 1,
+				results: [
+					{
+						Name: "example-package",
+						Description: "  _example_  \n",
+						PackageBase: "example-package",
+						Version: "1",
+						NumVotes: 0,
+						Popularity: 0,
+						LastModified: 1600000000,
+						FirstSubmitted: 1500000000,
+						...Object.fromEntries(fields.map(([field]) => [field, items])),
+					},
+				],
+			};
+			loadPageSpy = spyOn(scraperTypes, "loadPage").mockImplementation(async url => ({
+				content: JSON.stringify(fixture),
+				contentType: "application/json",
+				finalUrl: url,
+				ok: true,
+				status: 200,
+			}));
+			const result = await createPackageRegistryHandler(declaration)(
+				"https://aur.archlinux.org/packages/example-package",
+				10,
+			);
+			if (!result || !("content" in result)) throw new Error("Expected a rendered AUR package");
+			expect(result.content).toContain("# example-package\n\n  _example_  \n\n");
+			for (const [, title, counted] of fields) {
+				if (!items?.length) {
+					expect(result.content).not.toContain(`## ${title}`);
+				} else {
+					const count = counted ? ` (${items.length})` : "";
+					expect(result.content).toContain(
+						`\n## ${title}${count}\n\n${items.map(item => `- ${item}\n`).join("")}`,
+					);
+				}
+			}
+		});
+
+		it("omits empty Homebrew descriptions, caveats and dependency sections", async () => {
+			const declaration = PACKAGE_REGISTRY_DECLARATIONS.find(site => site.site === "brew")!;
+			const fixture = { name: "example-package", versions: { stable: "1" }, desc: "", dependencies: [] };
+			loadPageSpy = spyOn(scraperTypes, "loadPage").mockImplementation(async url => ({
+				content: JSON.stringify(fixture),
+				contentType: "application/json",
+				finalUrl: url,
+				ok: true,
+				status: 200,
+			}));
+			const result = await createPackageRegistryHandler(declaration)(
+				"https://formulae.brew.sh/formula/example-package",
+				10,
+			);
+			if (!result || !("content" in result)) throw new Error("Expected a rendered Homebrew package");
+			expect(result.content).toContain("# example-package\n\n**Version:** 1\n");
+			expect(result.content).not.toContain("## Caveats");
+			expect(result.content).not.toContain("## Dependencies");
+			expect(result.content).not.toContain("undefined");
+		});
+
+		it.each([0, 1, 5, 6])("silently limits ArtifactHub versions at the five-row boundary: %i", async count => {
+			const declaration = PACKAGE_REGISTRY_DECLARATIONS.find(site => site.site === "artifacthub")!;
+			const fixture = {
+				name: "example-package",
+				version: "1",
+				repository: { name: "example-repository", url: "" },
+				available_versions: Array.from({ length: count }, (_, index) => ({ version: `v${index}`, ts: 1600000000 })),
+			};
+			loadPageSpy = spyOn(scraperTypes, "loadPage").mockImplementation(async url => ({
+				content: JSON.stringify(fixture),
+				contentType: "application/json",
+				finalUrl: url,
+				ok: true,
+				status: 200,
+			}));
+			const result = await createPackageRegistryHandler(declaration)(
+				"https://artifacthub.io/packages/helm/example-repository/example-package",
+				10,
+			);
+			if (!result || !("content" in result)) throw new Error("Expected a rendered ArtifactHub package");
+			if (count === 0) expect(result.content).not.toContain("## Recent Versions");
+			else expect(result.content).toContain("\n## Recent Versions\n\n");
+			for (let index = 0; index < count; index++) {
+				if (index < 5) expect(result.content).toContain(`- **v${index}**`);
+				else expect(result.content).not.toContain(`**v${index}**`);
+			}
+			expect(result.content).not.toContain("elided");
 		});
 	});
 });

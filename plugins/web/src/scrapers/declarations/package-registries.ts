@@ -2,6 +2,13 @@ import { compareDottedNumeric, errorMessage, formatBytes, formatNumber, isCancel
 import { escapeMarkdownTableCell } from "@veyyon/utils/markdown-table";
 import { parseHTML } from "linkedom";
 import { markdownLink } from "../../markdown-link";
+import {
+	renderDescriptionSection,
+	renderHeader,
+	renderReadme,
+	renderSimpleList,
+	renderStringList,
+} from "../engine/markdown-assembly";
 import type { PackageRegistryDeclaration } from "../engine/package-registry";
 import type { LocalizedText } from "../types";
 import { buildResult, formatIsoDate, getLocalizedText, htmlToBasicMarkdown, looksLikeHtml } from "../types";
@@ -118,11 +125,9 @@ export const artifacthubDeclaration: PackageRegistryDeclaration = {
 		const displayName = pkg.display_name || pkg.name;
 		const kindLabel = formatKindLabel(kind);
 
-		let md = `# ${displayName}\n\n`;
-		if (pkg.description) md += `${pkg.description}\n\n`;
+		let md = renderHeader(displayName, pkg.description);
 
-		md += `**Type:** ${kindLabel}`;
-		md += ` · **Version:** ${pkg.version}`;
+		md += `**Type:** ${kindLabel} · **Version:** ${pkg.version}`;
 		if (pkg.app_version) md += ` · **App Version:** ${pkg.app_version}`;
 		if (pkg.license) md += ` · **License:** ${pkg.license}`;
 		md += "\n";
@@ -131,21 +136,23 @@ export const artifacthubDeclaration: PackageRegistryDeclaration = {
 		if (pkg.official) badges.push("Official");
 		if (pkg.signed) badges.push("Signed");
 		if (pkg.stars) badges.push(`${formatNumber(pkg.stars)} stars`);
-		if (badges.length > 0) md += `**${badges.join(" · ")}**\n`;
+		if (badges.length > 0) {
+			md += `**${badges.join(" · ")}**\n`;
+		}
 		md += "\n";
 
 		const repoDisplay =
 			pkg.repository.organization_display_name || pkg.repository.display_name || pkg.repository.name;
 		md += `**Repository:** ${repoDisplay}`;
-		if (pkg.repository.url) md += ` (${markdownLink(pkg.repository.url, pkg.repository.url)})`;
+		if (pkg.repository.url) {
+			md += ` (${markdownLink(pkg.repository.url, pkg.repository.url)})`;
+		}
 		md += "\n";
 
 		if (pkg.home_url) md += `**Homepage:** ${pkg.home_url}\n`;
 		if (pkg.keywords?.length) md += `**Keywords:** ${pkg.keywords.join(", ")}\n`;
-
 		if (pkg.maintainers?.length) {
-			const maintainerNames = pkg.maintainers.map(m => m.name).join(", ");
-			md += `**Maintainers:** ${maintainerNames}\n`;
+			md += `**Maintainers:** ${pkg.maintainers.map(m => m.name).join(", ")}\n`;
 		}
 
 		if (pkg.security_report_summary) {
@@ -161,27 +168,25 @@ export const artifacthubDeclaration: PackageRegistryDeclaration = {
 		}
 
 		if (pkg.links?.length) {
-			md += `\n## Links\n\n`;
+			md += "\n## Links\n\n";
 			for (const link of pkg.links) {
 				md += `- ${markdownLink(link.name, link.url)}\n`;
 			}
 		}
 
 		if (pkg.install) {
-			md += `\n## Installation\n\n\`\`\`bash\n${pkg.install.trim()}\n\`\`\`\n`;
+			md += "\n## Installation\n\n```bash\n";
+			md += `${pkg.install.trim()}\n`;
+			md += "```\n";
 		}
 
-		if (pkg.available_versions?.length) {
-			md += `\n## Recent Versions\n\n`;
-			for (const ver of pkg.available_versions.slice(0, 5)) {
-				const date = formatIsoDate(ver.ts * 1000);
-				md += `- **${ver.version}** (${date})\n`;
-			}
-		}
-
-		if (pkg.readme) {
-			md += `\n---\n\n## README\n\n${pkg.readme}\n`;
-		}
+		md += renderSimpleList(
+			"Recent Versions",
+			pkg.available_versions,
+			ver => `**${ver.version}** (${formatIsoDate(ver.ts * 1000)})`,
+			5,
+		);
+		md += renderReadme(pkg.readme);
 
 		return buildResult(md, {
 			url: ctx.url,
@@ -242,20 +247,17 @@ export const aurDeclaration: PackageRegistryDeclaration = {
 
 		const data = ctx.tryParseJson<AurResponse>(result.content);
 		if (!data) return ctx.scraperDegrade("aur", "unexpected response shape");
-
 		if (data.resultcount === 0 || !data.results[0]) return null;
 
 		const pkg = data.results[0];
 
-		let md = `# ${pkg.Name}\n\n`;
-		if (pkg.Description) md += `${pkg.Description}\n\n`;
+		let md = renderHeader(pkg.Name, pkg.Description);
 
-		md += `**Version:** ${pkg.Version}`;
+		let verStr = pkg.Version;
 		if (pkg.OutOfDate) {
-			const outOfDateDate = formatIsoDate(pkg.OutOfDate * 1000);
-			md += ` (flagged out-of-date: ${outOfDateDate})`;
+			verStr += ` (flagged out-of-date: ${formatIsoDate(pkg.OutOfDate * 1000)})`;
 		}
-		md += "\n";
+		md += `**Version:** ${verStr}\n`;
 
 		if (pkg.Maintainer) {
 			md += `**Maintainer:** ${markdownLink(pkg.Maintainer, `https://aur.archlinux.org/account/${pkg.Maintainer}`)}\n`;
@@ -264,73 +266,21 @@ export const aurDeclaration: PackageRegistryDeclaration = {
 		}
 
 		md += `**Votes:** ${formatNumber(pkg.NumVotes)} · **Popularity:** ${pkg.Popularity.toFixed(2)}\n`;
-
-		const lastModified = formatIsoDate(pkg.LastModified * 1000);
-		const firstSubmitted = formatIsoDate(pkg.FirstSubmitted * 1000);
-		md += `**Last Updated:** ${lastModified} · **First Submitted:** ${firstSubmitted}\n`;
+		md += `**Last Updated:** ${formatIsoDate(pkg.LastModified * 1000)} · **First Submitted:** ${formatIsoDate(pkg.FirstSubmitted * 1000)}\n`;
 
 		if (pkg.License?.length) md += `**License:** ${pkg.License.join(", ")}\n`;
 		if (pkg.URL) md += `**Upstream:** ${pkg.URL}\n`;
 		if (pkg.Keywords?.length) md += `**Keywords:** ${pkg.Keywords.join(", ")}\n`;
 
-		if (pkg.Depends?.length) {
-			md += `\n## Dependencies (${pkg.Depends.length})\n\n`;
-			for (const dep of pkg.Depends) {
-				md += `- ${dep}\n`;
-			}
-		}
+		md += renderStringList("Dependencies", pkg.Depends, true);
+		md += renderStringList("Make Dependencies", pkg.MakeDepends, true);
+		md += renderStringList("Optional Dependencies", pkg.OptDepends);
+		md += renderStringList("Check Dependencies", pkg.CheckDepends);
+		md += renderStringList("Provides", pkg.Provides);
+		md += renderStringList("Conflicts", pkg.Conflicts);
+		md += renderStringList("Replaces", pkg.Replaces);
 
-		if (pkg.MakeDepends?.length) {
-			md += `\n## Make Dependencies (${pkg.MakeDepends.length})\n\n`;
-			for (const dep of pkg.MakeDepends) {
-				md += `- ${dep}\n`;
-			}
-		}
-
-		if (pkg.OptDepends?.length) {
-			md += `\n## Optional Dependencies\n\n`;
-			for (const dep of pkg.OptDepends) {
-				md += `- ${dep}\n`;
-			}
-		}
-
-		if (pkg.CheckDepends?.length) {
-			md += `\n## Check Dependencies\n\n`;
-			for (const dep of pkg.CheckDepends) {
-				md += `- ${dep}\n`;
-			}
-		}
-
-		if (pkg.Provides?.length) {
-			md += `\n## Provides\n\n`;
-			for (const p of pkg.Provides) {
-				md += `- ${p}\n`;
-			}
-		}
-
-		if (pkg.Conflicts?.length) {
-			md += `\n## Conflicts\n\n`;
-			for (const c of pkg.Conflicts) {
-				md += `- ${c}\n`;
-			}
-		}
-
-		if (pkg.Replaces?.length) {
-			md += `\n## Replaces\n\n`;
-			for (const r of pkg.Replaces) {
-				md += `- ${r}\n`;
-			}
-		}
-
-		md += `\n---\n\n## Installation\n\n`;
-		md += "```bash\n";
-		md += `# Using an AUR helper (e.g., yay, paru)\n`;
-		md += `yay -S ${pkg.Name}\n\n`;
-		md += `# Manual installation\n`;
-		md += `git clone https://aur.archlinux.org/${pkg.PackageBase}.git\n`;
-		md += `cd ${pkg.PackageBase}\n`;
-		md += `makepkg -si\n`;
-		md += "```\n";
+		md += `\n---\n\n## Installation\n\n\`\`\`bash\n# Using an AUR helper (e.g., yay, paru)\nyay -S ${pkg.Name}\n\n# Manual installation\ngit clone https://aur.archlinux.org/${pkg.PackageBase}.git\ncd ${pkg.PackageBase}\nmakepkg -si\n\`\`\`\n`;
 
 		return buildResult(md, {
 			url: ctx.url,
@@ -428,9 +378,7 @@ export const brewDeclaration: PackageRegistryDeclaration = {
 			const formula = ctx.tryParseJson<BrewFormula>(result.content);
 			if (!formula) return ctx.scraperDegrade("brew", "unexpected response shape");
 
-			md = `# ${formula.full_name || formula.name}\n\n`;
-			if (formula.desc) md += `${formula.desc}\n\n`;
-
+			md = renderHeader(formula.full_name || formula.name, formula.desc);
 			md += `**Version:** ${formula.versions?.stable || "unknown"}`;
 			if (formula.license) md += ` · **License:** ${formula.license}`;
 			md += "\n";
@@ -444,39 +392,15 @@ export const brewDeclaration: PackageRegistryDeclaration = {
 			md += `\`\`\`bash\nbrew install ${formula.name}\n\`\`\`\n\n`;
 
 			if (formula.homepage) md += `**Homepage:** ${formula.homepage}\n`;
-
-			if (formula.dependencies?.length) {
-				md += `\n## Dependencies\n\n`;
-				for (const dep of formula.dependencies) {
-					md += `- ${dep}\n`;
-				}
-			}
-
-			if (formula.build_dependencies?.length) {
-				md += `\n## Build Dependencies\n\n`;
-				for (const dep of formula.build_dependencies) {
-					md += `- ${dep}\n`;
-				}
-			}
-
-			if (formula.conflicts_with?.length) {
-				md += `\n## Conflicts With\n\n`;
-				for (const conflict of formula.conflicts_with) {
-					md += `- ${conflict}\n`;
-				}
-			}
-
-			if (formula.caveats) {
-				md += `\n## Caveats\n\n${formula.caveats}\n`;
-			}
+			md += renderStringList("Dependencies", formula.dependencies);
+			md += renderStringList("Build Dependencies", formula.build_dependencies);
+			md += renderStringList("Conflicts With", formula.conflicts_with);
+			md += renderDescriptionSection(formula.caveats, "Caveats");
 		} else {
 			const cask = ctx.tryParseJson<BrewCask>(result.content);
 			if (!cask) return ctx.scraperDegrade("brew", "unexpected response shape");
 
-			const displayName = cask.name?.[0] || cask.token;
-			md = `# ${displayName}\n\n`;
-			if (cask.desc) md += `${cask.desc}\n\n`;
-
+			md = renderHeader(cask.name?.[0] || cask.token, cask.desc);
 			md += `**Version:** ${cask.version || "unknown"}\n`;
 
 			const installs = getBrewInstallCount(cask.analytics);
@@ -488,17 +412,8 @@ export const brewDeclaration: PackageRegistryDeclaration = {
 			md += `\`\`\`bash\nbrew install --cask ${cask.token}\n\`\`\`\n\n`;
 
 			if (cask.homepage) md += `**Homepage:** ${cask.homepage}\n`;
-
-			if (cask.conflicts_with?.cask?.length) {
-				md += `\n## Conflicts With\n\n`;
-				for (const conflict of cask.conflicts_with.cask) {
-					md += `- ${conflict}\n`;
-				}
-			}
-
-			if (cask.caveats) {
-				md += `\n## Caveats\n\n${cask.caveats}\n`;
-			}
+			md += renderStringList("Conflicts With", cask.conflicts_with?.cask);
+			md += renderDescriptionSection(cask.caveats, "Caveats");
 		}
 
 		return buildResult(md, {
@@ -571,9 +486,7 @@ export const chocolateyDeclaration: PackageRegistryDeclaration = {
 		const result = await ctx.loadPage(apiUrl, {
 			timeout: ctx.timeout,
 			signal: ctx.signal,
-			headers: {
-				Accept: "application/atom+xml, application/xml",
-			},
+			headers: { Accept: "application/atom+xml, application/xml" },
 		});
 
 		if (!result.ok) return ctx.scraperDegrade("chocolatey", ctx.loadFailure(result));
@@ -612,15 +525,12 @@ export const chocolateyDeclaration: PackageRegistryDeclaration = {
 			};
 		}
 
-		let md = `# ${pkg.Title || pkg.Id}\n\n`;
-
+		let md = renderHeader(pkg.Title || pkg.Id);
 		if (pkg.Summary) {
 			md += `${pkg.Summary}\n\n`;
 		} else if (pkg.Description) {
-			const firstPara = pkg.Description.split(/\n\n/)[0];
-			md += `${firstPara}\n\n`;
+			md += `${pkg.Description.split(/\n\n/)[0]}\n\n`;
 		}
-
 		md += `**Version:** ${pkg.Version}`;
 		if (pkg.Authors) md += ` · **Authors:** ${pkg.Authors}`;
 		md += "\n";
@@ -637,7 +547,6 @@ export const chocolateyDeclaration: PackageRegistryDeclaration = {
 			const published = formatIsoDate(pkg.Published);
 			if (published) md += `**Published:** ${published}\n`;
 		}
-
 		md += "\n";
 
 		if (pkg.ProjectUrl) md += `**Project URL:** ${pkg.ProjectUrl}\n`;
@@ -645,7 +554,7 @@ export const chocolateyDeclaration: PackageRegistryDeclaration = {
 		if (pkg.LicenseUrl) md += `**License:** ${pkg.LicenseUrl}\n`;
 
 		if (pkg.Tags) {
-			const tags = pkg.Tags.split(/\s+/).filter(t => t.length > 0);
+			const tags = pkg.Tags.split(/\s+/).filter(Boolean);
 			if (tags.length > 0) {
 				md += `**Tags:** ${tags.join(", ")}\n`;
 			}
@@ -654,15 +563,12 @@ export const chocolateyDeclaration: PackageRegistryDeclaration = {
 		if (pkg.Description && pkg.Description !== pkg.Summary) {
 			md += `\n## Description\n\n${pkg.Description}\n`;
 		}
-
-		if (pkg.ReleaseNotes) {
-			md += `\n## Release Notes\n\n${pkg.ReleaseNotes}\n`;
-		}
+		md += renderDescriptionSection(pkg.ReleaseNotes, "Release Notes");
 
 		if (pkg.Dependencies) {
 			const deps = pkg.Dependencies.split("|").filter(d => d.trim().length > 0);
 			if (deps.length > 0) {
-				md += `\n## Dependencies\n\n`;
+				md += "\n## Dependencies\n\n";
 				for (const dep of deps) {
 					const [depId, depVersion] = dep.split(":");
 					if (depId) {
@@ -812,22 +718,14 @@ export const clojarsDeclaration: PackageRegistryDeclaration = {
 				? `${groupName}/${artifactName}`
 				: (artifactName ?? groupName ?? "Clojars artifact");
 
-		let md = `# ${displayName}\n\n`;
-		if (description) md += `${description}\n\n`;
-
+		let md = renderHeader(displayName, description);
 		if (groupName) md += `**Group:** ${groupName}\n`;
 		if (artifactName) md += `**Artifact:** ${artifactName}\n`;
 		if (version) md += `**Latest:** ${version}\n`;
 		if (downloads !== null) md += `**Downloads:** ${formatNumber(downloads)}\n`;
 		if (homepage) md += `**Homepage:** ${homepage}\n`;
 		if (licenses.length > 0) md += `**Licenses:** ${licenses.join(", ")}\n`;
-
-		if (dependencies.length > 0) {
-			md += "\n## Dependencies\n\n";
-			for (const dep of dependencies) {
-				md += `- ${dep}\n`;
-			}
-		}
+		md += renderStringList("Dependencies", dependencies);
 
 		return buildResult(md, {
 			url: ctx.url,
@@ -889,13 +787,12 @@ export const cratesIoDeclaration: PackageRegistryDeclaration = {
 		const crate = data.crate;
 		const latestVersion = data.versions?.[0];
 
-		let md = `# ${crate.name}\n\n`;
-		if (crate.description) md += `${crate.description}\n\n`;
-
+		let md = renderHeader(crate.name, crate.description);
 		md += `**Latest:** ${crate.max_version}`;
 		if (latestVersion?.license) md += ` · **License:** ${latestVersion.license}`;
 		if (latestVersion?.rust_version) md += ` · **MSRV:** ${latestVersion.rust_version}`;
 		md += "\n";
+
 		md += `**Downloads:** ${formatNumber(crate.downloads)} total · ${formatNumber(crate.recent_downloads)} recent\n\n`;
 
 		if (crate.repository) md += `**Repository:** ${crate.repository}\n`;
@@ -904,18 +801,17 @@ export const cratesIoDeclaration: PackageRegistryDeclaration = {
 		if (crate.keywords?.length) md += `**Keywords:** ${crate.keywords.join(", ")}\n`;
 		if (crate.categories?.length) md += `**Categories:** ${crate.categories.join(", ")}\n`;
 
-		if (data.versions?.length > 0) {
-			md += `\n## Recent Versions\n\n`;
-			for (const ver of data.versions.slice(0, 5)) {
-				const date = ver.created_at.split("T")[0];
-				md += `- **${ver.num}** (${date}) - ${formatNumber(ver.downloads)} downloads\n`;
-			}
-		}
+		md += renderSimpleList(
+			"Recent Versions",
+			data.versions,
+			ver => `**${ver.num}** (${ver.created_at.split("T")[0]}) - ${formatNumber(ver.downloads)} downloads`,
+			5,
+		);
 
 		const docsRsUrl = `https://docs.rs/crate/${crateName}/${crate.max_version}/source/README.md`;
 		const readmeResult = await ctx.loadPage(docsRsUrl, { timeout: Math.min(ctx.timeout, 5), signal: ctx.signal });
 		if (readmeResult.ok && readmeResult.content.length > 100 && !looksLikeHtml(readmeResult.content)) {
-			md += `\n---\n\n## README\n\n${readmeResult.content}\n`;
+			md += renderReadme(readmeResult.content);
 		}
 
 		return buildResult(md, {
@@ -1000,11 +896,7 @@ export const dockerhubDeclaration: PackageRegistryDeclaration = {
 		}
 
 		const fullName = namespace === "library" ? repo.name : `${namespace}/${repo.name}`;
-		let md = `# ${fullName}\n\n`;
-
-		if (repo.description) {
-			md += `${repo.description}\n\n`;
-		}
+		let md = renderHeader(fullName, repo.description);
 
 		const stats: string[] = [];
 		if (repo.pull_count !== undefined) stats.push(`**Pulls:** ${formatNumber(repo.pull_count)}`);
@@ -1018,13 +910,9 @@ export const dockerhubDeclaration: PackageRegistryDeclaration = {
 		if (repo.last_updated) {
 			md += `**Last Updated:** ${formatIsoDate(repo.last_updated)}\n`;
 		}
-
 		md += "\n";
 
-		md += "## Quick Start\n\n";
-		md += "```bash\n";
-		md += `docker pull ${fullName}\n`;
-		md += "```\n\n";
+		md += `## Quick Start\n\n\`\`\`bash\ndocker pull ${fullName}\n\`\`\`\n\n`;
 
 		if (tags.length > 0) {
 			md += "## Recent Tags\n\n";
@@ -1142,36 +1030,27 @@ export const fdroidDeclaration: PackageRegistryDeclaration = {
 		const antiFeatures = collectFdroidAntiFeatures(data);
 		const latestVersion = resolveFdroidSuggestedVersion(data);
 
-		let md = `# ${displayName}\n\n`;
-		if (summary) md += `${summary}\n\n`;
-
+		let md = renderHeader(displayName, summary);
 		md += `**Package:** ${packageName}`;
 		if (latestVersion) md += ` · **Latest:** ${latestVersion}`;
 		if (data.license) md += ` · **License:** ${data.license}`;
 		md += "\n";
 
 		if (author) {
-			md += `**Author:** ${author}`;
-			if (authorEmail && authorEmail !== author) md += ` <${authorEmail}>`;
-			md += "\n";
+			md += `**Author:** ${author}${authorEmail && authorEmail !== author ? ` <${authorEmail}>` : ""}\n`;
 		}
 
 		if (data.sourceCode) md += `**Source Code:** ${data.sourceCode}\n`;
 		if (data.categories?.length) md += `**Categories:** ${data.categories.join(", ")}\n`;
-		if (antiFeatures.length) md += `**Anti-Features:** ${antiFeatures.join(", ")}\n`;
+		if (antiFeatures.length > 0) md += `**Anti-Features:** ${antiFeatures.join(", ")}\n`;
+		md += renderDescriptionSection(description);
 
-		if (description) {
-			md += `\n## Description\n\n${description}\n`;
-		}
-
-		if (data.packages?.length) {
-			md += "\n## Version History\n\n";
-			for (const version of data.packages.slice(0, 10)) {
-				const label = version.versionName ?? "unknown";
-				const code = version.versionCode ? ` (${version.versionCode})` : "";
-				md += `- ${label}${code}\n`;
-			}
-		}
+		md += renderSimpleList(
+			"Version History",
+			data.packages,
+			v => `${v.versionName ?? "unknown"}${v.versionCode ? ` (${v.versionCode})` : ""}`,
+			10,
+		);
 
 		return buildResult(md, {
 			url: ctx.url,
@@ -1320,16 +1199,18 @@ export const firefoxAddonsDeclaration: PackageRegistryDeclaration = {
 
 		const permissions = collectFirefoxPermissions(data.current_version?.file);
 
-		let md = `# ${name}\n\n`;
-		if (summary) md += `${summary}\n\n`;
+		let md = renderHeader(name, summary);
 
 		if (authors.length > 0) {
-			md += `**Author${authors.length > 1 ? "s" : ""}:** ${authors.join(", ")}\n`;
+			const label = authors.length > 1 ? "Authors" : "Author";
+			md += `**${label}:** ${authors.join(", ")}\n`;
 		}
 
 		if (ratingAverage !== undefined) {
 			md += `**Rating:** ${ratingAverage.toFixed(2)}`;
-			if (ratingCount !== undefined) md += ` (${formatNumber(ratingCount)} reviews)`;
+			if (ratingCount !== undefined) {
+				md += ` (${formatNumber(ratingCount)} reviews)`;
+			}
 			md += "\n";
 		}
 
@@ -1346,19 +1227,15 @@ export const firefoxAddonsDeclaration: PackageRegistryDeclaration = {
 		}
 
 		if (homepage) md += `**Homepage:** ${homepage}\n`;
-
-		if (description) {
-			md += `\n## Description\n\n${description}\n`;
-		}
-
+		md += renderDescriptionSection(description);
 		if (permissions.length > 0) {
-			const preview = permissions.slice(0, 40);
+			const count = Math.min(permissions.length, 40);
 			md += `\n## Permissions (${permissions.length})\n\n`;
-			for (const permission of preview) {
-				md += `- ${permission}\n`;
+			for (let index = 0; index < count; index++) {
+				md += `- ${permissions[index]}\n`;
 			}
-			if (permissions.length > preview.length) {
-				md += `\n[…${permissions.length - preview.length} permissions elided…]\n`;
+			if (permissions.length > count) {
+				md += `\n[…${permissions.length - count} permissions elided…]\n`;
 			}
 		}
 
@@ -1522,9 +1399,7 @@ export const flathubDeclaration: PackageRegistryDeclaration = {
 
 		const name = app.name ?? app.id ?? appId;
 
-		let md = `# ${name}\n\n`;
-		if (app.summary) md += `${app.summary}\n\n`;
-
+		let md = renderHeader(name, app.summary);
 		md += "## Metadata\n\n";
 		md += `**App ID:** ${app.id ?? appId}\n`;
 		if (app.developer_name) md += `**Developer:** ${app.developer_name}\n`;
@@ -1532,25 +1407,15 @@ export const flathubDeclaration: PackageRegistryDeclaration = {
 		const installs = extractFlathubInstalls(app);
 		if (installs !== null) md += `**Installs:** ${formatNumber(installs)}\n`;
 
-		if (app.categories?.length) {
-			md += "\n## Categories\n\n";
-			for (const category of app.categories) {
-				md += `- ${category}\n`;
-			}
-		}
+		md += renderStringList("Categories", app.categories);
 
 		if (app.description) {
 			const description = await htmlToBasicMarkdown(app.description);
-			if (description) md += `\n## Description\n\n${description}\n`;
+			md += renderDescriptionSection(description);
 		}
 
 		const permissions = extractFlathubPermissions(app);
-		if (permissions.length) {
-			md += "\n## Permissions\n\n";
-			for (const permission of permissions) {
-				md += `- ${permission}\n`;
-			}
-		}
+		md += renderStringList("Permissions", permissions);
 
 		if (app.screenshots?.length) {
 			md += "\n## Screenshots\n\n";
@@ -1912,9 +1777,7 @@ export const hackageDeclaration: PackageRegistryDeclaration = {
 
 		const pkg = parseCabal(cabalResult.content);
 
-		let md = `# ${pkg.name || packageId}\n\n`;
-		if (pkg.synopsis) md += `${pkg.synopsis}\n\n`;
-
+		let md = renderHeader(pkg.name || packageId, pkg.synopsis);
 		md += `**Version:** ${pkg.version || latestVersion}`;
 		if (pkg.license) md += ` · **License:** ${pkg.license}`;
 		md += "\n";
@@ -1925,10 +1788,7 @@ export const hackageDeclaration: PackageRegistryDeclaration = {
 		if (pkg.stability) md += `**Stability:** ${pkg.stability}\n`;
 		if (pkg.homepage) md += `**Homepage:** ${pkg.homepage}\n`;
 		if (pkg.bugReports) md += `**Bug Reports:** ${pkg.bugReports}\n`;
-
-		if (pkg.description) {
-			md += `\n## Description\n\n${pkg.description}\n`;
-		}
+		md += renderDescriptionSection(pkg.description);
 
 		return buildResult(md, {
 			url: ctx.url,
@@ -2147,29 +2007,24 @@ export const jetbrainsMarketplaceDeclaration: PackageRegistryDeclaration = {
 		const rating = extractJetBrainsRating(plugin);
 		const buildCompatibility = update ? formatJetBrainsBuildCompatibility(update) : null;
 
-		let md = `# ${plugin.name}\n\n`;
-		if (description) md += `${description}\n\n`;
-
+		let md = renderHeader(plugin.name, description);
 		md += `**Plugin ID:** ${pluginId}\n`;
 		if (vendorName) md += `**Vendor:** ${vendorName}\n`;
-		if (plugin.downloads !== undefined) {
-			md += `**Downloads:** ${formatNumber(plugin.downloads)}\n`;
-		}
+		if (plugin.downloads !== undefined) md += `**Downloads:** ${formatNumber(plugin.downloads)}\n`;
+
 		if (rating.value !== null) {
 			md += `**Rating:** ${rating.value.toFixed(2)}`;
 			if (rating.votes !== null) md += ` (${formatNumber(rating.votes)} votes)`;
 			md += "\n";
 		}
-		if (tags.length) md += `**Tags:** ${tags.join(", ")}\n`;
+		if (tags.length > 0) md += `**Tags:** ${tags.join(", ")}\n`;
 
 		if (update) {
 			md += "\n## Latest Release\n\n";
 			if (update.version) md += `**Version:** ${update.version}\n`;
 			if (update.channel) md += `**Channel:** ${update.channel}\n`;
 			if (buildCompatibility) md += `**Build Compatibility:** ${buildCompatibility}\n`;
-			if (update.downloads !== undefined) {
-				md += `**Release Downloads:** ${formatNumber(update.downloads)}\n`;
-			}
+			if (update.downloads !== undefined) md += `**Release Downloads:** ${formatNumber(update.downloads)}\n`;
 		}
 
 		const compatibility = update?.compatibleVersions ?? {};
@@ -2245,7 +2100,6 @@ export const mavenDeclaration: PackageRegistryDeclaration = {
 
 		const data = ctx.tryParseJson<MavenResponse>(result.content);
 		if (!data) return ctx.scraperDegrade("maven", "unexpected response shape");
-
 		if (data.response.numFound === 0) return null;
 
 		const doc = data.response.docs[0];
@@ -2262,38 +2116,16 @@ export const mavenDeclaration: PackageRegistryDeclaration = {
 
 		if (doc.p) md += `**Packaging:** ${doc.p}\n`;
 		if (doc.versionCount) md += `**Versions:** ${formatNumber(doc.versionCount)}\n`;
-		if (doc.timestamp) {
-			md += `**Last Updated:** ${formatIsoDate(doc.timestamp)}\n`;
-		}
+		if (doc.timestamp) md += `**Last Updated:** ${formatIsoDate(doc.timestamp)}\n`;
 
-		md += `\n## Maven Dependency\n\n`;
-		md += "```xml\n";
-		md += `<dependency>\n`;
-		md += `    <groupId>${doc.g}</groupId>\n`;
-		md += `    <artifactId>${doc.a}</artifactId>\n`;
-		md += `    <version>${displayVersion}</version>\n`;
-		md += `</dependency>\n`;
-		md += "```\n";
+		md += `\n## Maven Dependency\n\n\`\`\`xml\n<dependency>\n    <groupId>${doc.g}</groupId>\n    <artifactId>${doc.a}</artifactId>\n    <version>${displayVersion}</version>\n</dependency>\n\`\`\`\n`;
+		md += `\n## Gradle Dependency\n\n\`\`\`groovy\nimplementation '${doc.g}:${doc.a}:${displayVersion}'\n\`\`\`\n`;
+		md += `\n## Gradle (Kotlin DSL)\n\n\`\`\`kotlin\nimplementation("${doc.g}:${doc.a}:${displayVersion}")\n\`\`\`\n`;
 
-		md += `\n## Gradle Dependency\n\n`;
-		md += "```groovy\n";
-		md += `implementation '${doc.g}:${doc.a}:${displayVersion}'\n`;
-		md += "```\n";
+		const extensions = doc.ec?.filter(e => e && e !== "-");
+		md += renderStringList("Available Extensions", extensions);
 
-		md += `\n## Gradle (Kotlin DSL)\n\n`;
-		md += "```kotlin\n";
-		md += `implementation("${doc.g}:${doc.a}:${displayVersion}")\n`;
-		md += "```\n";
-
-		if (doc.ec && doc.ec.length > 0) {
-			const extensions = doc.ec.filter(e => e && e !== "-");
-			if (extensions.length > 0) {
-				md += `\n## Available Extensions\n\n`;
-				md += `${extensions.map(e => `- ${e}`).join("\n")}\n`;
-			}
-		}
-
-		md += `\n## Links\n\n`;
+		md += "\n## Links\n\n";
 		md += `- [Maven Central](https://search.maven.org/artifact/${doc.g}/${doc.a}/${displayVersion}/jar)\n`;
 		md += `- [MVN Repository](https://mvnrepository.com/artifact/${doc.g}/${doc.a}/${displayVersion})\n`;
 
@@ -2845,14 +2677,10 @@ export const openVsxDeclaration: PackageRegistryDeclaration = {
 		const reviews = typeof data.reviewCount === "number" ? data.reviewCount : null;
 		const repository = typeof data.repository === "string" ? data.repository : data.repository?.url || null;
 
-		let md = `# ${displayName}\n\n`;
-		if (data.description) md += `${data.description}\n\n`;
-
+		let md = renderHeader(displayName, data.description);
 		md += `**Namespace:** ${displayNamespace}\n`;
 		md += `**Extension:** ${data.name || extension}\n`;
-		md += `**Version:** ${displayVersion}`;
-		if (data.license) md += ` | **License:** ${data.license}`;
-		md += "\n";
+		md += `**Version:** ${displayVersion}${data.license ? ` | **License:** ${data.license}` : ""}\n`;
 
 		if (downloads !== null) {
 			md += `**Downloads:** ${formatNumber(downloads)}\n`;
@@ -2863,18 +2691,10 @@ export const openVsxDeclaration: PackageRegistryDeclaration = {
 			md += `**Rating:** ${rating}${reviewSuffix}\n`;
 		}
 
-		if (repository) {
-			const cleanedRepo = repository.replace(/^git\+/, "").replace(/\.git$/, "");
-			md += `**Repository:** ${cleanedRepo}\n`;
-		}
-
+		if (repository) md += `**Repository:** ${repository.replace(/^git\+/, "").replace(/\.git$/, "")}\n`;
 		if (data.homepage) md += `**Homepage:** ${data.homepage}\n`;
 		if (data.categories?.length) md += `**Categories:** ${data.categories.join(", ")}\n`;
-
-		if (readme) {
-			md += "\n---\n\n## README\n\n";
-			md += `${readme}\n`;
-		}
+		md += renderReadme(readme);
 
 		return buildResult(md, {
 			url: ctx.url,
@@ -3218,9 +3038,7 @@ export const pypiDeclaration: PackageRegistryDeclaration = {
 		if (!pkg) return ctx.scraperDegrade("pypi", "unexpected response shape");
 
 		const info = pkg.info;
-		let md = `# ${info.name}\n\n`;
-		if (info.summary) md += `${info.summary}\n\n`;
-
+		let md = renderHeader(info.name, info.summary);
 		md += `**Latest:** ${info.version}`;
 		if (info.license) md += ` · **License:** ${info.license}`;
 		md += "\n";
@@ -3228,13 +3046,10 @@ export const pypiDeclaration: PackageRegistryDeclaration = {
 		if (weeklyDownloads !== null) {
 			md += `**Weekly Downloads:** ${formatNumber(weeklyDownloads)}\n`;
 		}
-
 		md += "\n";
 
 		if (info.author) {
-			md += `**Author:** ${info.author}`;
-			if (info.author_email) md += ` <${info.author_email}>`;
-			md += "\n";
+			md += `**Author:** ${info.author}${info.author_email ? ` <${info.author_email}>` : ""}\n`;
 		}
 
 		if (info.requires_python) md += `**Python:** ${info.requires_python}\n`;
@@ -3249,16 +3064,8 @@ export const pypiDeclaration: PackageRegistryDeclaration = {
 
 		if (info.keywords) md += `\n**Keywords:** ${info.keywords}\n`;
 
-		if (pkg.requires_dist && pkg.requires_dist.length > 0) {
-			md += `\n## Dependencies\n\n`;
-			for (const dep of pkg.requires_dist) {
-				md += `- ${dep}\n`;
-			}
-		}
-
-		if (info.description) {
-			md += `\n---\n\n## Description\n\n${info.description}\n`;
-		}
+		md += renderStringList("Dependencies", pkg.requires_dist);
+		md += renderReadme(info.description, "Description");
 
 		return buildResult(md, {
 			url: ctx.url,
@@ -3387,7 +3194,6 @@ export const repologyDeclaration: PackageRegistryDeclaration = {
 
 		const packages = ctx.tryParseJson<RepologyPackage[]>(result.content);
 		if (!packages) return ctx.scraperDegrade("repology", "unexpected response shape");
-
 		if (!Array.isArray(packages) || packages.length === 0) return null;
 
 		const newestVersions = new Set<string>();
@@ -3416,13 +3222,11 @@ export const repologyDeclaration: PackageRegistryDeclaration = {
 			statusCounts[pkg.status] = (statusCounts[pkg.status] || 0) + 1;
 		}
 
-		let md = `# ${packageName}\n\n`;
-		if (summary) md += `${summary}\n\n`;
-
+		let md = renderHeader(packageName, summary);
 		md += `**Newest Version:** ${Array.from(newestVersions).join(", ") || "unknown"}\n`;
 		md += `**Repositories:** ${packages.length}\n`;
-		if (licenses.length) md += `**License:** ${licenses.join(", ")}\n`;
-		if (categories.size) md += `**Categories:** ${Array.from(categories).join(", ")}\n`;
+		if (licenses.length > 0) md += `**License:** ${licenses.join(", ")}\n`;
+		if (categories.size > 0) md += `**Categories:** ${Array.from(categories).join(", ")}\n`;
 		md += "\n";
 
 		md += "## Version Status Summary\n\n";
@@ -3548,15 +3352,15 @@ export const rubygemsDeclaration: PackageRegistryDeclaration = {
 		const gem = ctx.tryParseJson<RubyGemsResponse>(result.content);
 		if (!gem) return ctx.scraperDegrade("rubygems", "unexpected response shape");
 
-		let md = `# ${gem.name}\n\n`;
-		if (gem.info) md += `${gem.info}\n\n`;
-
+		let md = renderHeader(gem.name, gem.info);
 		md += `**Version:** ${gem.version}`;
 		if (gem.licenses?.length) md += ` · **License:** ${gem.licenses.join(", ")}`;
 		md += "\n";
 
 		md += `**Total Downloads:** ${formatNumber(gem.downloads)}`;
-		if (gem.version_downloads) md += ` · **Version Downloads:** ${formatNumber(gem.version_downloads)}`;
+		if (gem.version_downloads) {
+			md += ` · **Version Downloads:** ${formatNumber(gem.version_downloads)}`;
+		}
 		md += "\n\n";
 
 		if (gem.homepage_uri) md += `**Homepage:** ${gem.homepage_uri}\n`;
@@ -3564,21 +3368,16 @@ export const rubygemsDeclaration: PackageRegistryDeclaration = {
 		if (gem.documentation_uri) md += `**Documentation:** ${gem.documentation_uri}\n`;
 		if (gem.authors) md += `**Authors:** ${gem.authors}\n`;
 
-		const runtimeDeps = gem.dependencies?.runtime;
-		if (runtimeDeps && runtimeDeps.length > 0) {
-			md += `\n## Runtime Dependencies\n\n`;
-			for (const dep of runtimeDeps) {
-				md += `- ${dep.name} ${dep.requirements}\n`;
-			}
-		}
-
-		const devDeps = gem.dependencies?.development;
-		if (devDeps && devDeps.length > 0) {
-			md += `\n## Development Dependencies\n\n`;
-			for (const dep of devDeps) {
-				md += `- ${dep.name} ${dep.requirements}\n`;
-			}
-		}
+		md += renderSimpleList(
+			"Runtime Dependencies",
+			gem.dependencies?.runtime,
+			dep => `${dep.name} ${dep.requirements}`,
+		);
+		md += renderSimpleList(
+			"Development Dependencies",
+			gem.dependencies?.development,
+			dep => `${dep.name} ${dep.requirements}`,
+		);
 
 		return buildResult(md, {
 			url: ctx.url,
@@ -3739,13 +3538,12 @@ export const snapcraftDeclaration: PackageRegistryDeclaration = {
 			channels.set(channelName, existing);
 		}
 
-		let md = `# ${name}\n\n`;
-		if (summary) md += `${summary}\n\n`;
-
+		let md = renderHeader(name, summary);
 		md += `**Version:** ${version ?? "unknown"}`;
 		if (confinement) md += ` · **Confinement:** ${confinement}`;
 		if (base) md += ` · **Base:** ${base}`;
 		md += "\n";
+
 		if (publisher) md += `**Publisher:** ${publisher}\n`;
 		if (downloads !== null) md += `**Downloads:** ${formatNumber(downloads)}\n`;
 		md += "\n";
@@ -4032,7 +3830,7 @@ export const terraformDeclaration: PackageRegistryDeclaration = {
 };
 
 // ============================================================================
-// 27. VS Code Marketplace (Non-goal: already restored)
+// 27. VS Code Marketplace
 // ============================================================================
 
 interface MarketplaceProperty {
@@ -4151,8 +3949,7 @@ export const vscodeMarketplaceDeclaration: PackageRegistryDeclaration = {
 		const repoLink = extractRepoLink(extension.versions?.[0]?.properties) ?? extractRepoLink(extension.properties);
 		const identifier = publisherName && extensionName ? `${publisherName}.${extensionName}` : itemName;
 
-		let md = `# ${displayName}\n\n`;
-		if (description) md += `${description}\n\n`;
+		let md = renderHeader(displayName, description);
 		md += `**Identifier:** ${identifier}\n`;
 		if (publisherLabel) md += `**Publisher:** ${publisherLabel}\n`;
 		if (version) md += `**Version:** ${version}\n`;
