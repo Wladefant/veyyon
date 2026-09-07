@@ -187,7 +187,12 @@ export function buildSessionContext(
 		}
 	}
 
-	const leaf = leafId ? byId.get(leafId) : entries[entries.length - 1];
+	// A named leaf that resolves to nothing falls back to the tail, the same as an
+	// absent one: an id can outlive the entry it named once a prune or a compaction
+	// rewrites the file, and a resumed session must reopen on its last entry rather
+	// than on an empty conversation. `leafId === null` is the explicit "before the
+	// first entry" position and returned above, so it never reaches this fallback.
+	const leaf = (leafId ? byId.get(leafId) : undefined) ?? entries[entries.length - 1];
 	if (!leaf) return emptySessionContext();
 
 	// Walk from leaf to root, collecting path

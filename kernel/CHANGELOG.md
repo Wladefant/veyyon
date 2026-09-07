@@ -32,6 +32,7 @@
 
 - Settings queries ignore inherited object properties.
 - `Type.Pick` emits the keys it was asked for in the order they were asked for, and keeps a picked key that is own-but-non-enumerable on the validated value.
+- A session whose recorded leaf id no longer names an entry reopens on its last entry instead of on an empty conversation.
 
 ### Removed
 
