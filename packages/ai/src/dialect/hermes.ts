@@ -1,7 +1,7 @@
 import { parseStreamingJson } from "@veyyon/utils/json-parse";
 import { AI_PROMPTS } from "../prompts/registry";
 import type { ToolCall } from "../types";
-import { mintToolCallId, parseNamedToolCall, partialSuffixOverlapAny, recordOrEmpty } from "./coercion";
+import { emitBestEffortToolEnd, mintToolCallId, parseNamedToolCall, partialSuffixOverlapAny } from "./coercion";
 import { chatMlTranscriptRenderer, renderThinkTags, renderToolResponseResults, stringifyJson } from "./rendering";
 import type {
 	DialectDefinition,
@@ -146,27 +146,8 @@ class HermesInbandScanner implements InbandScanner {
 		}
 	}
 
-	/**
-	 * Balance an already-announced toolStart with a toolEnd when the body could
-	 * not be parsed (truncated stream or malformed JSON). Salvages whatever named
-	 * arguments partial parsing can recover, else empty. Emitting the end closes
-	 * the tool block cleanly instead of leaving it half-open; the tool's own
-	 * argument validation then surfaces a malformed payload loudly.
-	 */
 	#emitBestEffortEnd(body: string, rawBlock: string, events: InbandScanEvent[]): void {
-		if (!this.#started) return;
-		// #name was captured early from a PARTIAL body (it may be a prefix like "r"
-		// of "read"); re-derive the fuller name from the current body when possible.
-		let name = this.#name;
-		let args: unknown;
-		try {
-			const partial = parseStreamingJson<{ name?: unknown; arguments?: unknown }>(body);
-			if (typeof partial.name === "string" && partial.name.length > name.length) name = partial.name;
-			args = partial.arguments;
-		} catch {
-			args = undefined;
-		}
-		events.push({ type: "toolEnd", id: this.#id, name, arguments: recordOrEmpty(args), rawBlock });
+		emitBestEffortToolEnd(this.#started, this.#id, this.#name, body, rawBlock, events);
 	}
 
 	#reset(): void {

@@ -21,6 +21,7 @@
 - A source-path comment in `message-text.ts` names the coding-agent module its caller moved to; behavior is unchanged.
 - `CONTEXTUAL_USER_PREFIXES` is exported from the codex compaction module so the retained-window rule is asserted against the real list rather than a copy of it.
 - A source-path comment and the barrel-shortcut suite name the Perplexity search provider at `tools/web/search/providers/perplexity.ts`. No behavior change.
+- Hermes and Qwen3 share truncated-call recovery with unchanged tool names, arguments and completion events.
 
 ### Fixed
 

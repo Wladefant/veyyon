@@ -1,9 +1,9 @@
-import { parseJsonWithRepair } from "@veyyon/utils/json-parse";
+import { parseJsonWithRepair, parseStreamingJson } from "@veyyon/utils/json-parse";
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage, getOwnProperty, isRecord, setSafeProperty } from "@veyyon/utils/type-guards";
 import type { ToolCall } from "../types";
 import { toolWireSchema } from "../utils/schema";
-import type { InbandTool } from "./types";
+import type { InbandScanEvent, InbandTool } from "./types";
 
 export interface ToolArgShape {
 	stringArgs: Set<string>;
@@ -230,4 +230,27 @@ export function setToolArg(args: Record<string, unknown>, key: string, value: un
  */
 export function getOwnArg(args: Record<string, unknown>, key: string): unknown {
 	return getOwnProperty(args, key);
+}
+
+/** Complete an announced call with arguments recovered from a truncated or malformed body. */
+export function emitBestEffortToolEnd(
+	started: boolean,
+	id: string,
+	name: string,
+	body: string,
+	rawBlock: string,
+	events: InbandScanEvent[],
+): void {
+	if (!started) return;
+	// `name` was captured early from a PARTIAL body (it may be a prefix like "r" of "read");
+	// re-derive the fuller name from the current body when possible.
+	let args: unknown;
+	try {
+		const partial = parseStreamingJson<{ name?: unknown; arguments?: unknown }>(body);
+		if (typeof partial.name === "string" && partial.name.length > name.length) name = partial.name;
+		args = partial.arguments;
+	} catch {
+		args = undefined;
+	}
+	events.push({ type: "toolEnd", id, name, arguments: recordOrEmpty(args), rawBlock });
 }
