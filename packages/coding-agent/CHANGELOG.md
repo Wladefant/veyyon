@@ -46,6 +46,7 @@
 
 ### Changed
 
+- `settings-selector.ts` writes its escape comparison as `\x1b` instead of a raw control byte. No user-visible behavior changes.
 - Output minimizer tool filters collapse repetitive line filtering, table formatting and subcommand routing into declarative specs with unchanged output behavior.
 - GitHub search operations in the web domain and vibe mode tools use shared parameterized dispatch tables; behavior is unchanged.
 
