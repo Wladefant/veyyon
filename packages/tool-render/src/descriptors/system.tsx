@@ -400,25 +400,15 @@ interface CancelOutcomeLike {
 	status: string;
 }
 
-function idList(value: unknown): string[] {
-	if (!Array.isArray(value)) return [];
-	const out: string[] = [];
-	for (const item of value) {
-		const id = str(item);
-		if (id) out.push(id);
-	}
-	return out;
-}
-
 function pollIds(args: Record<string, unknown>): string[] {
-	const poll = idList(args.poll);
+	const poll = strList(args.poll);
 	if (poll.length > 0) return poll;
-	const jobs = idList(args.jobs);
-	return jobs.length > 0 ? jobs : idList(args.jobIds);
+	const jobs = strList(args.jobs);
+	return jobs.length > 0 ? jobs : strList(args.jobIds);
 }
 
 function cancelIds(args: Record<string, unknown>): string[] {
-	const cancel = idList(args.cancel);
+	const cancel = strList(args.cancel);
 	if (cancel.length > 0) return cancel;
 	const single = str(args.jobId);
 	return single ? [single] : [];
@@ -1206,34 +1196,24 @@ function EvalBody({ name, args, result }: ToolRenderProps): ReactNode {
 // runtime
 // ============================================================================
 
-function RuntimeSummary(props: ToolRenderProps): ReactNode {
-	const op = str(props.args.op);
-	if (
+function isRuntimeEval(args: Record<string, unknown>): boolean {
+	const op = str(args.op);
+	return (
 		op === "eval" ||
 		op === "exec" ||
 		op === "session_start" ||
 		op === "session_stop" ||
-		typeof props.args.code === "string" ||
-		typeof props.args.language === "string"
-	) {
-		return <EvalSummary {...props} />;
-	}
-	return <LaunchSummary {...props} />;
+		typeof args.code === "string" ||
+		typeof args.language === "string"
+	);
+}
+
+function RuntimeSummary(props: ToolRenderProps): ReactNode {
+	return isRuntimeEval(props.args) ? <EvalSummary {...props} /> : <LaunchSummary {...props} />;
 }
 
 function RuntimeBody(props: ToolRenderProps): ReactNode {
-	const op = str(props.args.op);
-	if (
-		op === "eval" ||
-		op === "exec" ||
-		op === "session_start" ||
-		op === "session_stop" ||
-		typeof props.args.code === "string" ||
-		typeof props.args.language === "string"
-	) {
-		return <EvalBody {...props} />;
-	}
-	return <LaunchBody {...props} />;
+	return isRuntimeEval(props.args) ? <EvalBody {...props} /> : <LaunchBody {...props} />;
 }
 
 // ============================================================================

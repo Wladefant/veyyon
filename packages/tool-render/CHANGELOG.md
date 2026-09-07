@@ -12,6 +12,7 @@
 
 - Consolidated React tool-call renderers into cohesive domain descriptors (fs, system, agent, memory, search) and centralized shared UI primitives.
 - Array copies that allocated with a spread now use `.slice()`, `.concat()` or `Array.from()`. No user-visible behavior changes.
+- Argot cards share body layout, search cards share result adaptation, and runtime cards share operation dispatch without changing rendered output.
 
 ### Fixed
 

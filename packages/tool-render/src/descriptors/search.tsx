@@ -244,12 +244,21 @@ function StructureSearchBody({ args, result }: ToolRenderProps): ReactNode {
 // search dispatcher
 // ============================================================================
 
-function SearchSummary(props: ToolRenderProps): ReactNode {
+interface AdaptedSearchProps extends ToolRenderProps {
+	searchType: string | null;
+}
+
+function adaptSearchProps(props: ToolRenderProps): AdaptedSearchProps {
 	const details = detailsRecord(props.result);
 	const searchType = str(props.args.type) ?? str(details?.type);
 	const nestedDetails = details && isRecord(details.result) ? details.result : undefined;
 	const result = props.result && nestedDetails ? { ...props.result, details: nestedDetails } : props.result;
-	const adapted = { ...props, result };
+	return { ...props, result, searchType };
+}
+
+function SearchSummary(props: ToolRenderProps): ReactNode {
+	const adapted = adaptSearchProps(props);
+	const { searchType } = adapted;
 	if (searchType === "files") return <FileSearchSummary {...adapted} />;
 	if (searchType === "text") return <TextSearchSummary {...adapted} />;
 	if (searchType === "structure") return <StructureSearchSummary {...adapted} />;
@@ -257,11 +266,8 @@ function SearchSummary(props: ToolRenderProps): ReactNode {
 }
 
 function SearchBody(props: ToolRenderProps): ReactNode {
-	const details = detailsRecord(props.result);
-	const searchType = str(props.args.type) ?? str(details?.type);
-	const nestedDetails = details && isRecord(details.result) ? details.result : undefined;
-	const result = props.result && nestedDetails ? { ...props.result, details: nestedDetails } : props.result;
-	const adapted = { ...props, result };
+	const adapted = adaptSearchProps(props);
+	const { searchType } = adapted;
 	if (searchType === "files") return <FileSearchBody {...adapted} />;
 	if (searchType === "text") return <TextSearchBody {...adapted} />;
 	if (searchType === "structure") return <StructureSearchBody {...adapted} />;

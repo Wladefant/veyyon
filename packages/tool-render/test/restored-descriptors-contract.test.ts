@@ -641,6 +641,34 @@ describe("Restored descriptors contract", () => {
 			expect(body).toContain("120ms");
 		});
 
+		// Each routing signal is isolated: a code field must not make an op-only
+		// case pass when that operation is no longer recognized.
+		it.each([
+			{ signal: { op: "eval" }, target: "eval" },
+			{ signal: { op: "exec" }, target: "eval" },
+			{ signal: { op: "session_start" }, target: "eval" },
+			{ signal: { op: "session_stop" }, target: "eval" },
+			{ signal: { code: "print(1)" }, target: "eval" },
+			{ signal: { language: "py" }, target: "eval" },
+			{ signal: { op: "start" }, target: "launch" },
+			{ signal: { op: "stop" }, target: "launch" },
+			{ signal: { op: "unknown", code: 1, language: false }, target: "launch" },
+		])("renders both runtime surfaces through $target for $signal", ({ signal, target }) => {
+			const args = { name: "worker", application: "runner", ...signal };
+			const result: ToolResultLike = {
+				content: [{ type: "text", text: "finished" }],
+				details: {
+					cells: [{ index: 0, language: "py", code: "print(1)", output: "1", status: "ok" }],
+				},
+			};
+			for (const render of [renderSummary, renderBody]) {
+				const expected = render(target, args, result);
+				const other = render(target === "eval" ? "launch" : "eval", args, result);
+				expect(expected).not.toEqual(other);
+				expect(render("runtime", args, result)).toEqual(expected);
+			}
+		});
+
 		it("renders lsp requests with method, file and location details", () => {
 			const summary = renderSummary("lsp", {
 				action: "definition",

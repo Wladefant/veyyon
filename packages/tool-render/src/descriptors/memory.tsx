@@ -466,21 +466,13 @@ function ArgotLoadSummary(props: ToolRenderProps): ReactNode {
 	);
 }
 
-function ArgotLoadBody(props: ToolRenderProps): ReactNode {
+function renderArgotBody(props: ToolRenderProps, badges: ReactNode[]): ReactNode {
 	const details = detailsRecord(props.result);
 	const root = argotRootOf(props);
 	const requested = details ? str(details.requested) : str(props.args.folder_path);
-	const handles = details ? num(details.handles) : null;
 	return (
 		<>
-			<Badges
-				items={[
-					<Badge key="op" tone={props.result?.isError ? "err" : "ok"}>
-						loaded
-					</Badge>,
-					handles !== null && <span key="handles">{handles === 1 ? "1 handle" : `${handles} handles`}</span>,
-				]}
-			/>
+			<Badges items={badges} />
 			<KvGrid>
 				{root && (
 					<Kv k="project">
@@ -496,6 +488,17 @@ function ArgotLoadBody(props: ToolRenderProps): ReactNode {
 			<ResultText result={props.result} maxLines={6} />
 		</>
 	);
+}
+
+function ArgotLoadBody(props: ToolRenderProps): ReactNode {
+	const details = detailsRecord(props.result);
+	const handles = details ? num(details.handles) : null;
+	return renderArgotBody(props, [
+		<Badge key="op" tone={props.result?.isError ? "err" : "ok"}>
+			loaded
+		</Badge>,
+		handles !== null && <span key="handles">{handles === 1 ? "1 handle" : `${handles} handles`}</span>,
+	]);
 }
 
 function ArgotUnloadSummary(props: ToolRenderProps): ReactNode {
@@ -514,33 +517,12 @@ function ArgotUnloadSummary(props: ToolRenderProps): ReactNode {
 
 function ArgotUnloadBody(props: ToolRenderProps): ReactNode {
 	const details = detailsRecord(props.result);
-	const root = argotRootOf(props);
-	const requested = details ? str(details.requested) : str(props.args.folder_path);
 	const changed = details?.changed === true;
-	return (
-		<>
-			<Badges
-				items={[
-					<Badge key="op" tone={props.result?.isError ? "err" : changed ? "ok" : "warn"}>
-						{changed ? "unloaded" : "was not loaded"}
-					</Badge>,
-				]}
-			/>
-			<KvGrid>
-				{root && (
-					<Kv k="project">
-						<PathText path={root} />
-					</Kv>
-				)}
-				{resolvedElsewhere(root, requested) && requested && (
-					<Kv k="requested">
-						<PathText path={requested} />
-					</Kv>
-				)}
-			</KvGrid>
-			<ResultText result={props.result} maxLines={6} />
-		</>
-	);
+	return renderArgotBody(props, [
+		<Badge key="op" tone={props.result?.isError ? "err" : changed ? "ok" : "warn"}>
+			{changed ? "unloaded" : "was not loaded"}
+		</Badge>,
+	]);
 }
 
 // ============================================================================
