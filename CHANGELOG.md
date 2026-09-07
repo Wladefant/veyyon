@@ -255,6 +255,7 @@
 - `ctx.ui.custom(..., { overlay })` accepts `OverlayOptions` beside `true`, so an extension can place and size its own card over the transcript.
 - The status row reads its truncation limits from `tools/core/render-limits`, a leaf that imports nothing, rather than `tools/core/render-utils`, which drops the tool renderers, path helpers and image resizing from the launch card's import graph; first-frame time is unchanged, because those modules only declare functions.
 - An MCP tool describes its call and result cards as a `ToolView` instead of building terminal components in `mcp/render.ts`, which is deleted; the terminal states the same arguments, structure walk, raw rows, held-back count and spill warning, indented two columns under the row that heads them and without the branch glyph the call row opened with.
+- `SETTING_KIND_HANDLERS` is typed per setting kind, so each handler receives the definition variant its key selects instead of the whole union widened to `any`. No user-visible behavior changes.
 - Legacy hook messages reuse custom-message fields without changing their public type signatures.
 - `AgentToolResult`, `AgentToolUpdateCallback`, `ToolTier`, `ToolApprovalDecision` and `ToolApproval` are defined in `@veyyon/tool` as `ToolResult`, `ToolUpdateCallback` and the same approval names; `@veyyon/agent` exports every name it exported before, so no caller changes.
 - The session-entry vocabulary (`SessionEntry` and every member), `AgentMessage` and the `CustomAgentMessages` and `CustomCompactionSessionEntries` hooks are defined in `@veyyon/session`; `@veyyon/agent-core` and `@veyyon/agent-core/compaction/entries` export every name they exported before, and an augmentation now names `@veyyon/session`.
@@ -338,6 +339,7 @@
 ### Fixed
 
 - The library entry point retains read-selector functions, write-preview helpers, filesystem-source extraction and the goal view after renderer separation.
+- An auto-compaction pass that finds nothing to summarize warns about a compaction dead end only while the context is still over the recovery band, so a pass that runs after maintenance already freed the context no longer advises starting a fresh session.
 - The MCP add wizard retains manually entered credentials for stdio, HTTP and SSE servers and opens OAuth settings after authentication errors.
 - Retry and Edit OAuth settings accept pointer input immediately after OAuth failure or cancellation in the MCP add wizard.
 - Kernel codec and shutdown defaults remain active when optional configuration fields are undefined.
@@ -410,6 +412,10 @@
 - `codingAgentDir()` resolves `packages/coding-agent` from the repository root, so the binary staleness preflight scans the coding agent's sources again after the package moved to `tests/evals`; it had resolved a sibling directory that does not exist and reported every binary current.
 - Settings queries ignore inherited object properties.
 - `Type.Pick` emits the keys it was asked for in the order they were asked for, and keeps a picked key that is own-but-non-enumerable on the validated value.
+- A session whose recorded leaf id no longer names an entry reopens on its last entry instead of on an empty conversation.
+- `MemorySessionStorage.deleteSessionWithArtifacts` deletes the session entry and its artifact files from memory instead of returning early as a no-op.
+- `walkBranchPath` terminates when traversing cyclic parent entry chains.
+- `StringEnum` options in the legacy plugin shim avoid `any`.
 - Restored field and badge parity across consolidated React tool descriptors for launch, job, bash, read, write, edit, set_cwd, generate_image, inspect_image, search, and memory tools.
 - Independent offscreen edits no longer accumulate into a false history rebuild, and changes to plain components preserve committed history until an explicit replay.
 - A sixel-capable terminal now renders inline images on Linux and macOS: the terminal is asked at startup instead of being matched against a list that named no sixel terminal at all, so images no longer silently fail to appear outside kitty, ghostty, wezterm, iTerm2 and Warp.
