@@ -10,6 +10,10 @@ import {
 	TelegramNativeControlBridge,
 	type NativeControlAuth,
 } from "../../src/native-control/telegram-control-bridge";
+import {
+	getTelegramNativeControlHost,
+	installTelegramNativeControlHost,
+} from "../../src/native-control/telegram-control-host";
 
 const TOKEN = "native-control-test-token-0000000000000000";
 const AUTH: NativeControlAuth = {
@@ -127,5 +131,41 @@ describe("TelegramNativeControlBridge safe session creation", () => {
 			bridge.createSession({ ...AUTH, requestId: "callback-002", workspace: outside }),
 		).rejects.toMatchObject({ code: "WORKSPACE_DENIED" });
 		expect(await fs.readdir(sessionDir).catch(() => [])).toHaveLength(0);
+	});
+});
+
+describe("Telegram native control host wiring", () => {
+	test("publishes a bindable in-process host and invalidates it on session switch", async () => {
+		let activeSessionId = AUTH.sessionId;
+		const installed = installTelegramNativeControlHost(() => activeSessionId, {
+			registry,
+			storage: new FileSessionStorage(),
+			sessionDirFor: () => sessionDir,
+		});
+		expect(getTelegramNativeControlHost()).toBe(installed);
+
+		const client = installed.bind({
+			...AUTH,
+			workspaceRoots: [path.join(scratch, "allowed")],
+		});
+		expect(client.getSessionIdentity(AUTH)).toEqual({
+			id: AUTH.sessionId,
+			actorId: AUTH.actorId,
+			chatId: AUTH.chatId,
+		});
+		expect(await client.listAgents({ ...AUTH, limit: 5 })).toEqual({ items: [] });
+
+		activeSessionId = "session-b";
+		await expect(client.listAgents({ ...AUTH, limit: 5 })).rejects.toMatchObject({
+			code: "SESSION_NOT_ACTIVE",
+		});
+		expect(() =>
+			installed.bind({
+				...AUTH,
+				workspaceRoots: [path.join(scratch, "allowed")],
+			}),
+		).toThrow(
+			expect.objectContaining({ code: "SESSION_NOT_ACTIVE" }),
+		);
 	});
 });

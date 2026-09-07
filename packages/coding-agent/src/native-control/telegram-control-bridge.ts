@@ -81,6 +81,7 @@ export class NativeControlDeniedError extends Error {
 			| "ACTOR_MISMATCH"
 			| "CHAT_MISMATCH"
 			| "SESSION_MISMATCH"
+			| "SESSION_NOT_ACTIVE"
 			| "AGENT_NOT_FOUND"
 			| "INVALID_CURSOR"
 			| "WORKSPACE_DENIED"
