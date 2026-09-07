@@ -15,9 +15,8 @@
  * and a reason an operator can act on. It never falls back to a locally
  * declared model list.
  */
-import { fetchChatGptWebModels } from "../discovery/chatgpt-web";
+import { fetchChatGptWebModels, normalizeChatGptWebBaseUrl } from "../discovery/chatgpt-web";
 import type { ModelManagerOptions } from "../model-manager";
-import { CHATGPT_WEB_LOCAL_ENDPOINT } from "../provider-endpoints";
 import type { FetchImpl } from "../types";
 
 export interface ChatGptWebModelManagerConfig {
@@ -34,7 +33,7 @@ export interface ChatGptWebModelManagerConfig {
 export function chatGptWebModelManagerOptions(
 	config?: ChatGptWebModelManagerConfig,
 ): ModelManagerOptions<"openai-codex-responses"> {
-	const baseUrl = config?.baseUrl ?? CHATGPT_WEB_LOCAL_ENDPOINT;
+	const baseUrl = normalizeChatGptWebBaseUrl(config?.baseUrl);
 	return {
 		providerId: "chatgpt-web",
 		// No bundled rows exist for this provider, so an empty static catalog is

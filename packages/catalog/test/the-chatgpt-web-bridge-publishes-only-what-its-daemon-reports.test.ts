@@ -51,7 +51,7 @@ import {
 	CHATGPT_WEB_PROVIDER_ID,
 	fetchChatGptWebModels,
 	isChatGptWebLoopbackUrl,
-} from "@veyyon/catalog/discovery/chatgpt-web";
+	normalizeChatGptWebBaseUrl,
 import { Effort } from "@veyyon/catalog/effort";
 import { CHATGPT_WEB_LOCAL_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 import { chatGptWebModelManagerOptions } from "@veyyon/catalog/provider-models/chatgpt-web";
@@ -365,6 +365,24 @@ describe("the ChatGPT credential never leaves this machine", () => {
 		expect(isChatGptWebLoopbackUrl("file:///etc/passwd")).toBe(false);
 		expect(isChatGptWebLoopbackUrl("localhost:17841")).toBe(false);
 		expect(isChatGptWebLoopbackUrl(undefined)).toBe(false);
+	});
+
+	it("normalizes base URLs that omit /v1 or already include /responses", async () => {
+		expect(normalizeChatGptWebBaseUrl("http://127.0.0.1:17841")).toBe("http://127.0.0.1:17841/v1");
+		expect(normalizeChatGptWebBaseUrl("http://127.0.0.1:17841/")).toBe("http://127.0.0.1:17841/v1");
+		expect(normalizeChatGptWebBaseUrl("http://127.0.0.1:17841/v1")).toBe("http://127.0.0.1:17841/v1");
+		expect(normalizeChatGptWebBaseUrl("http://127.0.0.1:17841/v1/responses")).toBe("http://127.0.0.1:17841/v1");
+		expect(normalizeChatGptWebBaseUrl("http://localhost:17841")).toBe("http://localhost:17841/v1");
+		expect(normalizeChatGptWebBaseUrl(undefined)).toBe(CHATGPT_WEB_LOCAL_ENDPOINT);
+
+		// Verified on fetch: port-only baseUrl reaches daemon /v1/models and points model to /v1/responses
+		const { fetchFn, requestedUrls } = daemon();
+		const result = await fetchChatGptWebModels({ accessToken: TOKEN, baseUrl: "http://127.0.0.1:17841", fetchFn });
+		expect(result).not.toBeNull();
+		expect(requestedUrls).toEqual([HEALTH_URL, MODELS_URL]);
+		for (const model of result?.models ?? []) {
+			expect(model.baseUrl).toBe("http://127.0.0.1:17841/v1/responses");
+		}
 	});
 
 	it("sends the bearer on the catalog request once the host is loopback", async () => {

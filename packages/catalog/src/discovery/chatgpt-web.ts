@@ -147,6 +147,30 @@ export interface ChatGptWebModelDiscoveryResult {
  * whether prefix KV-cache reuse can engage. Here the answer gates whether a
  * ChatGPT credential leaves the machine, so a LAN address must fail.
  */
+/**
+ * Normalizes a base URL for the local `codex-chatgpt-web` Responses bridge.
+ *
+ * Ensures the returned URL names the `/v1` prefix under which the daemon serves
+ * `/v1/models` and `/v1/responses`. If the input points at the daemon root
+ * (e.g. `http://127.0.0.1:17841`), `/v1` is appended. If it already points at
+ * `/v1/responses`, the trailing route segment is stripped.
+ */
+export function normalizeChatGptWebBaseUrl(raw: string | undefined): string {
+	const normalized = normalizeBaseUrl(raw, CHATGPT_WEB_LOCAL_ENDPOINT);
+	if (normalized.endsWith("/responses")) {
+		return normalized.slice(0, -"/responses".length);
+	}
+	try {
+		const parsed = new URL(normalized);
+		if (parsed.pathname === "" || parsed.pathname === "/") {
+			return `${normalized}/v1`;
+		}
+	} catch {
+		// unparseable URL falls through as-is
+	}
+	return normalized;
+}
+
 export function isChatGptWebLoopbackUrl(baseUrl: string | undefined): boolean {
 	if (!baseUrl) return false;
 	let url: URL;
@@ -210,7 +234,7 @@ function toEffort(wireEffort: string): Effort | undefined {
 export async function fetchChatGptWebModels(
 	options: ChatGptWebModelDiscoveryOptions,
 ): Promise<ChatGptWebModelDiscoveryResult | null> {
-	const baseUrl = normalizeBaseUrl(options.baseUrl, CHATGPT_WEB_LOCAL_ENDPOINT);
+	const baseUrl = normalizeChatGptWebBaseUrl(options.baseUrl);
 	const report = (stage: DiscoveryFailure["stage"], url: string, detail: string): void =>
 		options.onFailure?.({ stage, url, detail });
 
