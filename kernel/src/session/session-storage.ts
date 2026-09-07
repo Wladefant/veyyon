@@ -1046,7 +1046,14 @@ export class MemorySessionStorage implements SessionStorage {
 		this.#files.delete(path);
 		return Promise.resolve();
 	}
-	deleteSessionWithArtifacts(_sessionPath: string): Promise<void> {
+
+	deleteSessionWithArtifacts(sessionPath: string): Promise<void> {
+		this.#files.delete(sessionPath);
+		const artifactsDir = sessionFileStem(sessionPath);
+		const prefix = `${artifactsDir}/`;
+		for (const key of Array.from(this.#files.keys())) {
+			if (key.startsWith(prefix)) this.#files.delete(key);
+		}
 		return Promise.resolve();
 	}
 

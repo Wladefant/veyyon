@@ -162,8 +162,10 @@ function emptySessionContext(): SessionContext {
 
 export function walkBranchPath(byId: Map<string, SessionEntry>, leaf?: SessionEntry): SessionEntry[] {
 	const path: SessionEntry[] = [];
+	const seen = new Set<string>();
 	let current = leaf;
-	while (current) {
+	while (current && !seen.has(current.id)) {
+		seen.add(current.id);
 		path.push(current);
 		current = current.parentId ? byId.get(current.parentId) : undefined;
 	}
