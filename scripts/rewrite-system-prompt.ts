@@ -1,3 +1,14 @@
+/**
+ * Rewrite markdown prompt files against an editorial style guide using an LLM.
+ *
+ * Identifies mutable prose lines in prompt files while preserving code blocks, Handlebars
+ * expressions, HTML tags, and markdown markers. Sends prose chunks to an OpenRouter model
+ * endpoint with style instructions and writes the updated markdown files to disk.
+ *
+ * Usage:
+ *   bun scripts/rewrite-system-prompt.ts [-i <file>] [-o <file>] [--all] [--model <model>] [--dry-run]
+ */
+
 import * as path from "node:path";
 import { parseArgs } from "node:util";
 import STYLE_GUIDE from "./rewrite-system-prompt.style.md" with { type: "text" };

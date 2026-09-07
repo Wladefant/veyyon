@@ -1,3 +1,14 @@
+/**
+ * Render the model picker component with mock models and reload states.
+ *
+ * Populates a model registry with synthetic models across multiple providers. Constructs
+ * the model picker component, optionally triggers a reload input sequence via Ctrl+R,
+ * and prints the rendered picker interface as ANSI text.
+ *
+ * Usage:
+ *   bun scripts/demos/render-model-picker.ts [--reloading] [--width 100] [--theme titanium]
+ */
+
 import type { TUI } from "../../hosts/terminal/engine/src/index";
 import type { Model } from "../../packages/ai/src/index";
 import { buildModel } from "../../packages/catalog/src/build";

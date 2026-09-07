@@ -1,3 +1,15 @@
+/**
+ * Render model chain submenu transitions for editing fallback model lists.
+ *
+ * Constructs a model chain submenu component and executes keyboard inputs to delete
+ * a fallback model, append a new fallback model, and replace the primary model. Renders
+ * before and after interactive submenu states along with recorded persistence transitions
+ * as ANSI text.
+ *
+ * Usage:
+ *   bun scripts/demos/render-model-chain-editor.ts [--width 100] [--theme dark]
+ */
+
 import type { Model } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
 import { Container, Spacer, Text } from "@veyyon/tui";

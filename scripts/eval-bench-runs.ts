@@ -1,4 +1,16 @@
 #!/usr/bin/env bun
+
+/**
+ * Aggregate and report benchmark evaluation run summaries.
+ *
+ * Parses evaluation run summary files across specified directories, extracting task success
+ * percentages, verification rates, edit tool usage, patch failure metrics, token totals, and
+ * execution durations. Prints formatted comparison reports as text tables, markdown, CSV, or
+ * JSON sorted by selected metrics.
+ *
+ * Usage:
+ *   bun scripts/eval-bench-runs.ts <runs-dir>... [--aggregate] [--format table|md|csv|json] [--sort sep|model|task|edit|tokens]
+ */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 

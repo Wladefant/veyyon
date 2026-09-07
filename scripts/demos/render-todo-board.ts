@@ -1,3 +1,14 @@
+/**
+ * Render structured todo phase boards with status indicators and rail animations.
+ *
+ * Constructs multi-phase todo lists containing completed, in-progress, pending, and
+ * delegated items. Renders the todo board lines with options for expanded view, waiting
+ * status, idle frame animation, and settle rail motion, printing the result as ANSI text.
+ *
+ * Usage:
+ *   bun scripts/demos/render-todo-board.ts [--waiting] [--expanded] [--frame <n>] [--settle <n>] [--width 100] [--theme titanium]
+ */
+
 import { renderTodoBoardLines } from "../../packages/coding-agent/src/modes/terminal/components/dashboard/todo-board";
 import { paintRailMotion, railIdleHeadAt } from "../../packages/coding-agent/src/modes/terminal/draw/rail-motion";
 import { theme } from "../../packages/coding-agent/src/theme/theme";

@@ -1,3 +1,14 @@
+/**
+ * Render transcript todo reminders and rule notification cards.
+ *
+ * Constructs todo reminder components and single or multi-rule notification components.
+ * Sets terminal ground tints and renders note components either as standard transcript
+ * cards or as highlighted warning slabs, printing the output as ANSI text.
+ *
+ * Usage:
+ *   bun scripts/demos/render-todo-reminder.ts [--slab] [--flat] [--ground #rrggbb] [--width 100] [--theme titanium]
+ */
+
 import { Box, Spacer, Text } from "@veyyon/tui";
 import { stripAnsi } from "@veyyon/utils";
 import type { Rule } from "../../packages/coding-agent/src/discovery/capability/rule";

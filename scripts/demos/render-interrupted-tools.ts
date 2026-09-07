@@ -1,3 +1,15 @@
+/**
+ * Render tool execution transcript blocks across interrupted and terminal lifecycle states.
+ *
+ * Constructs tool execution components for bash commands under multiple execution states,
+ * including active execution without results, sealed by interrupt, aborted mid-execution,
+ * synthetic loop aborts before dispatch, successful completion, and exit errors. Prints each
+ * rendered block with section headers as ANSI text.
+ *
+ * Usage:
+ *   bun scripts/demos/render-interrupted-tools.ts [--width 100] [--theme titanium]
+ */
+
 import type { TUI } from "../../hosts/terminal/engine/src/tui";
 import { ToolExecutionComponent } from "../../packages/coding-agent/src/modes/terminal/components/transcript/tool-execution";
 import { theme } from "../../packages/coding-agent/src/theme/theme";

@@ -1,3 +1,15 @@
+/**
+ * Render status footline presets across terminal widths and column budgets.
+ *
+ * Evaluates status line presets across 80, 100, and 120 column terminal widths with
+ * composer horizontal insets. Renders quiet lines for standard sessions or focused
+ * subagent sessions, and prints each preset along with its segment allocations as
+ * ANSI text.
+ *
+ * Usage:
+ *   bun scripts/demos/render-footline-budget.ts [--focused] [--cwd <path>] [--theme titanium]
+ */
+
 import { COMPOSER_INSET_COLS } from "../../packages/coding-agent/src/modes/terminal/components/composer/composer-chrome";
 import { StatusLineComponent } from "../../packages/coding-agent/src/modes/terminal/components/status-line/component";
 import { STATUS_LINE_PRESETS } from "../../packages/coding-agent/src/modes/terminal/components/status-line/presets";

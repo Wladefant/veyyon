@@ -1,3 +1,15 @@
+/**
+ * Render status footlines across agent operating mode configurations.
+ *
+ * Builds mock sessions with combinations of approval bypass, plan mode, goal mode
+ * with token budgets, vibe mode, loop mode, and active subagent counts. Renders the
+ * status line component for each state combination and prints the resulting lines as
+ * ANSI text.
+ *
+ * Usage:
+ *   bun scripts/demos/render-mode-states.ts [--width 100] [--theme titanium]
+ */
+
 import { StatusLineComponent } from "../../packages/coding-agent/src/modes/terminal/components/status-line/component";
 import type { AgentSession } from "../../packages/coding-agent/src/session/agent-session";
 import { theme } from "../../packages/coding-agent/src/theme/theme";

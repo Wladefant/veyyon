@@ -1,3 +1,15 @@
+/**
+ * Render the settings selector model tab with configured default effort overrides.
+ *
+ * Initializes in-memory settings with a model role requiring high effort and a default
+ * effort setting requiring low effort. Opens the model settings tab, selects the default
+ * model entry, navigates into the effort picker, and prints the rendered selector lines
+ * as ANSI text.
+ *
+ * Usage:
+ *   bun scripts/demos/render-default-effort-ownership.ts [--width 100] [--theme dark]
+ */
+
 import type { Model } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";

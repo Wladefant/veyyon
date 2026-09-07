@@ -412,6 +412,7 @@ export const repoScriptTests = [
 	"scripts/release-bump-subject.test.ts",
 	"apps/site/tools/gen-changelog.test.ts",
 	"scripts/tracked-but-deleted-paths.test.ts",
+	"scripts/every-referenced-source-file-is-tracked.test.ts",
 	"apps/site/tools/undocumented-release-ratchet.test.ts",
 	"apps/site/tools/nav.test.ts",
 	"scripts/demos/lib/png.test.ts",

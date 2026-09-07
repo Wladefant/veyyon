@@ -1,3 +1,15 @@
+/**
+ * Render transcript component blocks including panels, download bars, and error banners.
+ *
+ * Assembles sample transcript elements such as composer prompt gutters, user chat messages,
+ * question-and-answer panels, rule confirmation dialogs, command messages, model download
+ * progress bars, tool execution ledgers, and error banners. Prints the combined transcript
+ * layout as ANSI text.
+ *
+ * Usage:
+ *   bun scripts/demos/render-transcript-blocks.ts [--ruler] [--width 100] [--theme titanium]
+ */
+
 import { type Component, Container, type TUI } from "../../hosts/terminal/engine/src/index";
 import type { AgentMessage } from "../../packages/agent/src/index";
 import { TinyTitleDownloadProgressComponent } from "../../packages/coding-agent/src/modes/terminal/components/chrome/tiny-title-download-progress";

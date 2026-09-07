@@ -1,3 +1,15 @@
+/**
+ * Render the subagent dashboard across roster, inspector, and communication views.
+ *
+ * Registers mock subagents with activity logs, models, and timestamps, and injects IRC
+ * traffic across sessions. Constructs the agent dashboard component and renders live
+ * roster views, row hover actions, termination confirmation overlays, or comms message
+ * streams as ANSI text.
+ *
+ * Usage:
+ *   bun scripts/demos/render-subagent-dashboard.ts [--view live|live-hover|termination|comms|comms-filtered] [--width 100] [--height 34] [--theme titanium]
+ */
+
 import type { Component, TUI } from "../../hosts/terminal/engine/src";
 import { AgentDashboard } from "../../packages/coding-agent/src/modes/terminal/components/dashboard/agent-dashboard";
 import { AgentRegistry, MAIN_AGENT_ID } from "../../packages/coding-agent/src/registry/agent-registry";

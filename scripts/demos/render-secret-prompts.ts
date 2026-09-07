@@ -1,3 +1,14 @@
+/**
+ * Render interactive input prompts for the secret command.
+ *
+ * Constructs hook input components representing the masked secret value prompt, a masked
+ * prompt with pasted credentials, and the trailing unmasked secret name prompt. Prints
+ * each rendered prompt section with labels as ANSI text.
+ *
+ * Usage:
+ *   bun scripts/demos/render-secret-prompts.ts [--width 100] [--theme titanium]
+ */
+
 import { DEFAULT_MASK_CHAR } from "@veyyon/tui";
 import { HookInputComponent } from "../../packages/coding-agent/src/modes/terminal/components/dialogs/hook-input";
 import {

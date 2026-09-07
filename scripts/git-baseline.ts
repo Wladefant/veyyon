@@ -16,6 +16,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
+import { existingOnly } from "./check-doc-links";
 
 /**
  * Pinned merge-base commit against which all parity ledgers and differential suites are measured.
@@ -411,7 +412,7 @@ export function listTrackedFiles(
 			cwd: repoRoot,
 			maxBuffer: 64 * 1024 * 1024,
 		});
-		return output.toString("utf-8").split("\0").filter(Boolean);
+		return existingOnly(repoRoot, output.toString("utf-8").split("\0").filter(Boolean));
 	} catch (error) {
 		throw new Error(
 			`Failed to enumerate files under "${typeof paths === "string" ? paths : Array.isArray(paths) ? paths.join(", ") : "."}" via git ls-files at ${repoRoot}: ${error instanceof Error ? error.message : String(error)}`,

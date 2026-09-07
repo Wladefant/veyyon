@@ -1,3 +1,15 @@
+/**
+ * Render the account manager component across credential and usage states as ANSI text.
+ *
+ * Populates an isolated SQLite credential store with mock Anthropic, OpenAI Codex, and
+ * Groq accounts. Renders the account manager in several interactive configurations,
+ * including healthy accounts, failing credentials, logout armed state, inline account
+ * renaming, sidebar navigation, and rate-limited fallback serving.
+ *
+ * Usage:
+ *   bun scripts/demos/render-account-manager.ts [--only <substring>] [--width 100] [--theme titanium]
+ */
+
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";

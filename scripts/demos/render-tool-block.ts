@@ -1,3 +1,14 @@
+/**
+ * Render tool execution output blocks across status states and borders.
+ *
+ * Constructs output block options for read operations, multi-section command executions,
+ * and command failure messages. Renders each block using standard transcript block styling
+ * or enclosed box border styling, printing the resulting lines as ANSI text.
+ *
+ * Usage:
+ *   bun scripts/demos/render-tool-block.ts [--box] [--width 100] [--theme titanium]
+ */
+
 import { padding } from "@veyyon/utils/padding";
 import { visibleWidth } from "@veyyon/utils/width";
 import { wrapTextWithAnsi } from "@veyyon/utils/wrap";

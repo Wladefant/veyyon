@@ -1,3 +1,15 @@
+/**
+ * Render terminal chrome surfaces for main and focused subagent interactive sessions.
+ *
+ * Initializes an interactive mode session with mock todo phases, running subagents,
+ * error banners, and composer shortcuts. Renders the combined todo container, subagent
+ * container, error banner, status line, and composer shortcuts for the main view or a
+ * focused subagent view as ANSI text.
+ *
+ * Usage:
+ *   bun scripts/demos/render-focused-view-surfaces.ts [--view main|focused] [--before] [--width 100] [--theme dark]
+ */
+
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";

@@ -1,3 +1,14 @@
+/**
+ * Render reasoning effort picker step interfaces for different model effort ladders.
+ *
+ * Constructs mock models for a two-tier effort ladder and a five-tier effort ladder.
+ * Renders the effort picker step container for Gemini and GPT models side by side or
+ * individually, and prints the rendered components as ANSI text.
+ *
+ * Usage:
+ *   bun scripts/demos/render-effort-variants.ts [--wide-only] [--two-tier-only] [--width 100] [--theme titanium]
+ */
+
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import { Container, Spacer } from "@veyyon/tui";

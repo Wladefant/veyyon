@@ -1,3 +1,14 @@
+/**
+ * Render the setup wizard theme configuration scene with accessibility toggles.
+ *
+ * Initializes isolated settings in a temporary directory and mounts the theme setup
+ * scene. Applies optional toggles for colorblind and ASCII modes, advances the step
+ * through simulated keyboard inputs, and prints the rendered scene as ANSI text.
+ *
+ * Usage:
+ *   bun scripts/demos/render-setup-theme-step.ts [--toggles colorblind,ascii] [--width 100] [--theme titanium]
+ */
+
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

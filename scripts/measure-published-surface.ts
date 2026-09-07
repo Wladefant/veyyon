@@ -17,6 +17,7 @@ import type {
 	ObjectPattern,
 	RestElement,
 } from "@babel/types";
+import { existingOnly } from "./check-doc-links";
 import {
 	batchReadGitBlobs,
 	ensureBaselineAvailable,
@@ -145,13 +146,13 @@ export function filesUnderMember(member: string, repoRoot: string = REPO_ROOT): 
 	}
 	const raw = stdout.toString("utf-8");
 	if (raw.length === 0) return [];
-	return raw
-		.split("\0")
-		.filter(entry => entry.length > 0)
-		.filter(entry => {
-			const full = join(repoRoot, entry);
-			return existsSync(full) && statSync(full).isFile();
-		});
+	return existingOnly(
+		repoRoot,
+		raw.split("\0").filter(entry => entry.length > 0),
+	).filter(entry => {
+		const full = join(repoRoot, entry);
+		return statSync(full).isFile();
+	});
 }
 
 export function exportTarget(value: unknown): string | null {

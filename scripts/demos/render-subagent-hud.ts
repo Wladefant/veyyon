@@ -1,3 +1,14 @@
+/**
+ * Render the subagent heads-up display lines with model badges and rail animations.
+ *
+ * Builds mock observable subagent sessions with tool executions, model descriptions, and
+ * retry states. Renders the subagent HUD lines and optionally applies idle rail motion
+ * styling for a designated frame index, printing the result as ANSI text.
+ *
+ * Usage:
+ *   bun scripts/demos/render-subagent-hud.ts [--frame <n>] [--width 100] [--theme titanium]
+ */
+
 import { renderSubagentHudLines } from "../../packages/coding-agent/src/modes/terminal/components/dashboard/subagent-hud";
 import { paintRailMotion, railIdleHeadAt } from "../../packages/coding-agent/src/modes/terminal/draw/rail-motion";
 import type { ObservableSession } from "../../packages/coding-agent/src/modes/terminal/session-observer-registry";
