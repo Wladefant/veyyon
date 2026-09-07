@@ -14237,7 +14237,12 @@ export class AgentSession {
 					willRetry: false,
 					skipped: true,
 				});
-				const noProgressDeadEnd = reason !== "idle";
+				// Nothing to summarize is a dead end only while the context is still
+				// over the bar. Once an earlier pass in this turn created headroom —
+				// a rescue tier, a prune, a dedup — the next threshold check finds
+				// nothing left to cut, and warning there tells the operator to start
+				// a fresh session moments after maintenance succeeded.
+				const noProgressDeadEnd = reason !== "idle" && !this.#compactionMeets("recovery-band");
 				let continuationScheduled = false;
 				if (!suppressContinuation && this.agent.hasQueuedMessages()) {
 					this.#scheduleAgentContinue({

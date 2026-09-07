@@ -187,6 +187,7 @@
 ### Fixed
 
 - The library entry point retains read-selector functions, write-preview helpers, filesystem-source extraction and the goal view after renderer separation.
+- An auto-compaction pass that finds nothing to summarize warns about a compaction dead end only while the context is still over the recovery band, so a pass that runs after maintenance already freed the context no longer advises starting a fresh session.
 - The MCP add wizard retains manually entered credentials for stdio, HTTP and SSE servers and opens OAuth settings after authentication errors.
 - Retry and Edit OAuth settings accept pointer input immediately after OAuth failure or cancellation in the MCP add wizard.
 - Kernel codec and shutdown defaults remain active when optional configuration fields are undefined.
