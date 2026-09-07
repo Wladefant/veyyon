@@ -184,6 +184,8 @@
 - The status row reads its truncation limits from `tools/core/render-limits`, a leaf that imports nothing, rather than `tools/core/render-utils`, which drops the tool renderers, path helpers and image resizing from the launch card's import graph; first-frame time is unchanged, because those modules only declare functions.
 - An MCP tool describes its call and result cards as a `ToolView` instead of building terminal components in `mcp/render.ts`, which is deleted; the terminal states the same arguments, structure walk, raw rows, held-back count and spill warning, indented two columns under the row that heads them and without the branch glyph the call row opened with.
 - `SETTING_KIND_HANDLERS` is typed per setting kind, so each handler receives the definition variant its key selects instead of the whole union widened to `any`. No user-visible behavior changes.
+- Subagent drive paths share abort-aware promise handling with unchanged cancellation behavior.
+- Hook and user-message selectors share search editing without per-keystroke callback or query-array allocations.
 
 ### Fixed
 

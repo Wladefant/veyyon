@@ -1,7 +1,6 @@
 import { type Component, ScrollView } from "@veyyon/tui";
 import { HoverController } from "@veyyon/tui/utils/hover-controller";
 import { fuzzyFilter } from "@veyyon/utils/fuzzy";
-import { extractPrintableText, matchesKey } from "@veyyon/utils/keys";
 import type { HoverFadeOptions } from "@veyyon/utils/motion";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import { padding } from "@veyyon/utils/padding";
@@ -18,7 +17,7 @@ import {
 	sizingForArea,
 } from "../chrome/modal-shell";
 import { handleListNavigationKey, routeModalCardMouse } from "./select-list-mouse-routing";
-import { hoverBandAt } from "./selector-helpers";
+import { applySearchInput, hoverBandAt } from "./selector-helpers";
 
 interface UserMessageItem {
 	id: string; // Entry ID in the session
@@ -134,20 +133,9 @@ class UserMessageList implements Component {
 
 	#handleSearchInput(keyData: string): boolean {
 		if (!this.#isSearchEnabled()) return false;
-
-		if (matchesKey(keyData, "backspace")) {
-			if (this.#searchQuery.length === 0) return false;
-			const chars = [...this.#searchQuery];
-			chars.pop();
-			this.#setSearchQuery(chars.join(""));
-			return true;
-		}
-
-		const printableText = extractPrintableText(keyData);
-		if (printableText === undefined) return false;
-		if (this.#searchQuery.length === 0 && printableText.trim().length === 0) return false;
-
-		this.#setSearchQuery(this.#searchQuery + printableText);
+		const query = applySearchInput(keyData, this.#searchQuery);
+		if (query === undefined) return false;
+		this.#setSearchQuery(query);
 		return true;
 	}
 

@@ -60,16 +60,7 @@ import type { MnemopiSessionState } from "../memory/mnemopi/state";
 import { subagentPrompts } from "../prompts/subagent/rows";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { AgentRegistry } from "../registry/agent-registry";
-// `createAgentSession` is loaded on demand, further down, where a subagent is
-// actually spawned. `../sdk` is the composition root and imports the whole
-// application, so naming it statically put this module in a 54-module import
-// cycle (task/executor -> sdk -> task/index -> task/executor) that also swept in
-// `main.ts`, the interactive UI, eval and the browser tool. A cycle is
-// instantiated as one unit, so importing `session/agent-session` cost 91 MB per
-// file. Deferring changes nothing at runtime: by the time anything spawns a
-// subagent the real program has loaded `sdk` anyway, and a test that never spawns
-// one no longer pays for it. The TYPE stays a static import because types are
-// erased.
+import { createAgentSession } from "../sdk";
 import type { AgentSession } from "../session/agent-session";
 import type { AgentSessionEvent } from "../session/agent-session-types";
 import { discoverAuthStorage } from "../session/auth-broker-config";
@@ -331,6 +322,27 @@ function withAbortTimeout<T>(
 	});
 
 	return wrappedPromise;
+}
+
+/**
+ * Awaits a promise that does not itself observe `abortSignal`, rejecting with `ToolAbortError` as
+ * soon as the signal fires. The listener is removed on every settle, so a signal that outlives many
+ * awaited steps does not accumulate one listener per step.
+ */
+function createAbortableAwaiter(abortSignal: AbortSignal): <T>(promise: Promise<T>) => Promise<T> {
+	return async <T>(promise: Promise<T>): Promise<T> => {
+		if (abortSignal.aborted) throw new ToolAbortError();
+		const { promise: abortPromise, reject } = Promise.withResolvers<never>();
+		const onAbort = () => {
+			if (abortSignal.aborted) reject(new ToolAbortError());
+		};
+		abortSignal.addEventListener("abort", onAbort, { once: true });
+		try {
+			return await Promise.race([promise, abortPromise]);
+		} finally {
+			abortSignal.removeEventListener("abort", onAbort);
+		}
+	};
 }
 
 function getReportFindingKey(value: unknown): string | null {
@@ -1991,26 +2003,7 @@ async function driveSessionToYield(
 	// Bookkeeping is deliberately absent here: an abort's MEANING is resolved once, in the `finally`
 	// below, from the state the turn actually ended in. Recording it at every throw site is what let
 	// four copies of the rule drift apart.
-	const checkAbort = () => {
-		if (abortSignal.aborted) throw new ToolAbortError();
-	};
-	const awaitAbortable = async <T>(promise: Promise<T>): Promise<T> => {
-		checkAbort();
-		const { promise: abortPromise, reject } = Promise.withResolvers<never>();
-		const onAbort = () => {
-			try {
-				checkAbort();
-			} catch (err) {
-				reject(err);
-			}
-		};
-		abortSignal.addEventListener("abort", onAbort, { once: true });
-		try {
-			return await Promise.race([promise, abortPromise]);
-		} finally {
-			abortSignal.removeEventListener("abort", onAbort);
-		}
-	};
+	const awaitAbortable = createAbortableAwaiter(abortSignal);
 
 	try {
 		try {
@@ -2764,10 +2757,7 @@ export function createSubagentSession(
 	parentSessionId: string | undefined,
 	sessionOptions: CreateAgentSessionOptions,
 ): Promise<CreateAgentSessionResult> {
-	return withInheritedBudgetGroup(parentSessionId ?? rootBudgetGroupOwnerId(), async () => {
-		// Loaded on demand for the reason given at the top of this file: naming
-		// `../sdk` statically puts this module in a 54-module import cycle.
-		const { createAgentSession } = await import("../sdk");
+	return withInheritedBudgetGroup(parentSessionId ?? rootBudgetGroupOwnerId(), () => {
 		return createAgentSession(sessionOptions);
 	});
 }
@@ -2958,23 +2948,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				throw new ToolAbortError();
 			}
 		};
-		const awaitAbortable = async <T>(promise: Promise<T>): Promise<T> => {
-			checkAbort();
-			const { promise: abortPromise, reject } = Promise.withResolvers<never>();
-			const onAbort = () => {
-				try {
-					checkAbort();
-				} catch (err) {
-					reject(err);
-				}
-			};
-			abortSignal.addEventListener("abort", onAbort, { once: true });
-			try {
-				return await Promise.race([promise, abortPromise]);
-			} finally {
-				abortSignal.removeEventListener("abort", onAbort);
-			}
-		};
+		const awaitAbortable = createAbortableAwaiter(abortSignal);
 		// Launch-latency phase marks (performance.now()); read by the debug log
 		// emitted before this closure returns. Left undefined when setup throws
 		// before reaching the phase, which itself localizes the cost.

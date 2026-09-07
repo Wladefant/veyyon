@@ -15,7 +15,7 @@ import {
 	type TUI,
 } from "@veyyon/tui";
 import { fuzzyFilter } from "@veyyon/utils/fuzzy";
-import { extractPrintableText, matchesKey } from "@veyyon/utils/keys";
+import { matchesKey } from "@veyyon/utils/keys";
 import { clampLow } from "@veyyon/utils/math";
 import { HoverFade } from "@veyyon/utils/motion";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
@@ -45,7 +45,7 @@ import {
 import { renderSliderLines } from "../chrome/segment-track";
 import { stripInlineMarkdown } from "../dialogs/plan-toc";
 import { routeModalCardMouse } from "./select-list-mouse-routing";
-import { hoverBandAt } from "./selector-helpers";
+import { applySearchInput, hoverBandAt } from "./selector-helpers";
 
 /** One segment of a {@link HookSelectorSlider} — a label and an optional
  *  detail line (e.g. the resolved model name) shown beneath the track while
@@ -644,20 +644,9 @@ export class HookSelectorComponent extends Container {
 
 	#handleSearchInput(keyData: string): boolean {
 		if (!this.#isSearchEnabled()) return false;
-
-		if (matchesKey(keyData, "backspace")) {
-			if (this.#searchQuery.length === 0) return false;
-			const chars = [...this.#searchQuery];
-			chars.pop();
-			this.#setSearchQuery(chars.join(""));
-			return true;
-		}
-
-		const printableText = extractPrintableText(keyData);
-		if (printableText === undefined) return false;
-		if (this.#searchQuery.length === 0 && printableText.trim().length === 0) return false;
-
-		this.#setSearchQuery(this.#searchQuery + printableText);
+		const query = applySearchInput(keyData, this.#searchQuery);
+		if (query === undefined) return false;
+		this.#setSearchQuery(query);
 		return true;
 	}
 
