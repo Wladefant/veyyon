@@ -3,7 +3,7 @@ import { ImageInputTooLargeError } from "../../utils/image-loading";
 import { VideoInputTooLargeError } from "../../utils/video-loading";
 import { AttachmentValidationError, abortTurn, executePromptTurn, getOrCreateAgentSession } from "../turns";
 import type { AttachmentSubmission } from "../wire";
-import { activateSession, replyError } from "./active-session";
+import { activateSession, replyError, requireActiveSession } from "./active-session";
 import type { ActionContext, ActionHandler, ActionHandlersMap } from "./types";
 
 const QUEUE_MODES = ["Steer", "Queue"] as const;
@@ -90,7 +90,8 @@ interface SessionRef {
 	session?: string;
 }
 
-const handleAbortTurn: ActionHandler<SessionRef | undefined> = async (ctx, _payload) => {
+const handleAbortTurn: ActionHandler<SessionRef | undefined> = async (ctx, payload) => {
+	if (!requireActiveSession(ctx, payload?.session)) return;
 	const session = ctx.clientState.agentSession;
 	if (!session?.isStreaming) {
 		ctx.reply.failure({
@@ -115,7 +116,7 @@ interface SetQueueModePayload {
 }
 
 const handleSetQueueMode: ActionHandler<SetQueueModePayload | undefined> = (ctx, payload) => {
-	if (!payload?.mode || !isQueueMode(payload.mode)) {
+	if (!payload?.session || !payload.mode || !isQueueMode(payload.mode)) {
 		ctx.reply.failure({
 			scope: "Session",
 			code: "INVALID_ARGUMENTS",
@@ -124,6 +125,7 @@ const handleSetQueueMode: ActionHandler<SetQueueModePayload | undefined> = (ctx,
 		});
 		return;
 	}
+	if (!requireActiveSession(ctx, payload.session)) return;
 	ctx.clientState.queueMode = payload.mode;
 	ctx.reply.success();
 };
@@ -139,7 +141,7 @@ interface CancelToolPayload {
  * abort a later call.
  */
 const handleCancelTool: ActionHandler<CancelToolPayload | undefined> = async (ctx, payload) => {
-	if (!payload?.tool_call_id) {
+	if (!payload?.session || !payload.tool_call_id) {
 		ctx.reply.failure({
 			scope: "Tool",
 			code: "INVALID_ARGUMENTS",
@@ -148,6 +150,7 @@ const handleCancelTool: ActionHandler<CancelToolPayload | undefined> = async (ct
 		});
 		return;
 	}
+	if (!requireActiveSession(ctx, payload.session, "Tool")) return;
 	const session = ctx.clientState.agentSession;
 	if (!session?.isStreaming || ctx.clientState.streamingToolCallId !== payload.tool_call_id) {
 		ctx.reply.failure({
@@ -173,7 +176,7 @@ interface RespondToInteractionPayload {
 }
 
 const handleRespondToInteraction: ActionHandler<RespondToInteractionPayload | undefined> = (ctx, payload) => {
-	if (!payload?.interaction_id) {
+	if (!payload?.session || !payload.interaction_id) {
 		ctx.reply.failure({
 			scope: "Interaction",
 			code: "INVALID_ARGUMENTS",
@@ -182,6 +185,7 @@ const handleRespondToInteraction: ActionHandler<RespondToInteractionPayload | un
 		});
 		return;
 	}
+	if (!requireActiveSession(ctx, payload.session, "Interaction")) return;
 	const rejection = ctx.clientState.interactions
 		? ctx.clientState.interactions.answer(payload.interaction_id, payload.response)
 		: { code: "INTERACTION_NOT_FOUND", message: "No session is attached, so nothing is waiting on an answer" };
