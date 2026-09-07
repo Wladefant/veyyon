@@ -127,17 +127,9 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 		reason:
 			"beforeSpawn runs the session gate, then adoptPid joins the child; custom tools, commands and extensions pass both",
 	},
-	"packages/coding-agent/src/eval/py/kernel.ts": {
+	"packages/coding-agent/src/eval/kernel-base.ts": {
 		wired: true,
-		reason: "kernel subprocess adopted via KernelStartOptions.adoptPid",
-	},
-	"packages/coding-agent/src/eval/rb/kernel.ts": {
-		wired: true,
-		reason: "kernel subprocess adopted via KernelStartOptions.adoptPid",
-	},
-	"packages/coding-agent/src/eval/jl/kernel.ts": {
-		wired: true,
-		reason: "kernel subprocess adopted via KernelStartOptions.adoptPid",
+		reason: "kernel subprocess adopted via KernelStartOptions.adoptPid; the per-language kernels share this spawn",
 	},
 
 	// Wired to the ROOT session: process-wide singletons every session shares.
