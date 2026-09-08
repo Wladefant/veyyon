@@ -949,7 +949,7 @@ export class Settings {
 			"defaultEffort",
 			"subagent.agents",
 			"subagent.model",
-			"subagent.modelByDepth",
+			"subagent.sharedModel",
 			"subagent.thinkingLevel",
 		];
 		const changed: { path: SettingPath; before: unknown; after: unknown }[] = [];

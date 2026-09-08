@@ -14,7 +14,7 @@ describe("config hot reload", () => {
 		const file = path.join(dir, "config.yml");
 		await fs.writeFile(
 			file,
-			"modelRoles:\n  worker: openai/old\nsubagent:\n  model: '@worker'\ndefaultEffort:\n  '*': low\n",
+			"modelRoles:\n  worker: openai/old\nsubagent:\n  sharedModel: true\n  model: '@worker'\ndefaultEffort:\n  '*': low\n",
 		);
 		const settings = await Settings.loadReadOnly({ agentDir: dir });
 		const existing = settings.forkWithRuntimeOverrides();
@@ -22,7 +22,7 @@ describe("config hot reload", () => {
 		expect(resolve(settings)).toEqual(["openai/old"]);
 		await fs.writeFile(
 			file,
-			"modelRoles:\n  worker: openai/new\nsubagent:\n  model: '@worker'\ndefaultEffort:\n  '*': high\nhideThinkingBlock: true\n",
+			"modelRoles:\n  worker: openai/new\nsubagent:\n  sharedModel: true\n  model: '@worker'\ndefaultEffort:\n  '*': high\nhideThinkingBlock: true\n",
 		);
 		const result = await settings.reloadConfig();
 		expect(resolve(settings)).toEqual(["openai/new"]);
