@@ -25,7 +25,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { atomicWriteFileSync } from "@veyyon/utils/atomic-write";
-import { errorMessage, getAgentDir, logger } from "@veyyon/utils";
+import { errorMessage, getAgentDir, isRecord, logger } from "@veyyon/utils";
 import nativeLedgerBridgeAssetPath from "./native-ledger-bridge.py" with { type: "file" };
 // --- Functional Topics & Keyword Mapping ---
 
@@ -325,8 +325,8 @@ export function resolveTopicName(worker: Partial<NativeActorSnapshot>): string {
  * free-form string can never be mistaken for permission.
  */
 export function isValidAuthorization(auth: unknown): boolean {
-	if (typeof auth !== "object" || auth === null || Array.isArray(auth)) return false;
-	const record = auth as Record<string, unknown>;
+	if (!isRecord(auth)) return false;
+	const record = auth;
 	if (record.status !== "authorized") return false;
 	if (typeof record.timestamp !== "string" || Number.isNaN(Date.parse(record.timestamp))) return false;
 	if (typeof record.scope !== "string" || record.scope.trim() === "") return false;

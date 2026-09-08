@@ -15,6 +15,7 @@
 ### Fixed
 
 - Broken child-stdin writes no longer terminate the host; quiet EPIPE shutdown requires an error observed on process stdout or stderr.
+- Repeated stdout or stderr errors during shutdown no longer interrupt asynchronous session persistence.
 
 ## [1.4.0] - 2026-09-04
 

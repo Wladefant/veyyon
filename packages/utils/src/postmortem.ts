@@ -173,6 +173,9 @@ if (isMainThread) {
 	for (const stream of [process.stdout, process.stderr]) {
 		stream.on("error", err => {
 			stdioErrors.add(err);
+			// The first failure owns shutdown. Teardown can itself emit output
+			// errors; re-entering would exit before asynchronous persistence settles.
+			if (cleanupStage !== "idle") return;
 			process.emit("uncaughtException", err);
 		});
 	}
@@ -195,6 +198,7 @@ if (isMainThread) {
 				return;
 			}
 			if (isStdioWriteEpipe(err)) {
+				if (cleanupStage !== "idle") return;
 				logger.info("stdout/stderr pipe closed by consumer; exiting quietly", { err });
 				await runCleanup(Reason.EXIT);
 				process.exit(0);
@@ -234,6 +238,7 @@ if (isMainThread) {
 			}
 			// Async stdout/stderr writes surface consumer-closed pipes here.
 			if (isStdioWriteEpipe(err)) {
+				if (cleanupStage !== "idle") return;
 				logger.info("stdout/stderr pipe closed by consumer; exiting quietly", { err });
 				await runCleanup(Reason.EXIT);
 				process.exit(0);

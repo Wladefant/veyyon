@@ -59,8 +59,61 @@ describe("postmortem.isStdioWriteEpipe", () => {
 
 const modulePath = fileURLToPath(new URL("../src/postmortem.ts", import.meta.url));
 const prelude = `import { register } from ${JSON.stringify(modulePath)};`;
+const terminalPath = fileURLToPath(new URL("../../tui/src/terminal.ts", import.meta.url));
 
 describe("global EPIPE routing", () => {
+	for (const secondEvent of ["error", "uncaughtException", "unhandledRejection"]) {
+		it(`finishes TUI persistence before exit after a second ${secondEvent}`, () => {
+			const result = spawnSync(
+				process.execPath,
+				[
+					"-e",
+					`${prelude}
+					import { EventEmitter } from "node:events";
+					import { setImmediate } from "node:timers/promises";
+					import { ProcessTerminal, emergencyTerminalRestore } from ${JSON.stringify(terminalPath)};
+					const exit = process.exit.bind(process);
+					let persisted = false;
+					let brokenWrites = 0;
+					const fake = new EventEmitter();
+					fake.broken = false;
+					const pipeError = () => Object.assign(new Error("closed TUI output"), { code: "EPIPE", syscall: "write" });
+					fake.write = () => {
+						if (!fake.broken) return true;
+						brokenWrites++;
+						const err = pipeError();
+						process.stdout.emit("error", err);
+						throw err;
+					};
+					process.stdout.write = fake.write;
+					Object.defineProperty(process.stdout, "isTTY", { value: true });
+					process.exit = code => {
+						process.stderr.write(JSON.stringify({ code, persisted, brokenWrites }));
+						exit(persisted && brokenWrites === 0 && code === 0 ? 0 : 91);
+					};
+					register("session-persistence", async () => {
+						const err = pipeError();
+						process.stdout.emit("error", err);
+						${secondEvent === "error" ? 'process.stdout.emit("error", pipeError());' : `process.emit(${JSON.stringify(secondEvent)}, err);`}
+						await setImmediate();
+						persisted = true;
+					});
+					const terminal = new ProcessTerminal();
+					terminal.start(() => {}, () => {});
+					fake.broken = true;
+					process.stdout.emit("error", pipeError());
+					// Also cover the blind restore after stop() released the active instance.
+					emergencyTerminalRestore();
+					`,
+				],
+				{ encoding: "utf8", timeout: 5000 },
+			);
+			expect(result.error).toBeUndefined();
+			expect(result.status).toBe(0);
+			expect(result.stderr).toContain('"persisted":true,"brokenWrites":0');
+		});
+	}
+
 	for (const event of ["uncaughtException", "unhandledRejection"]) {
 		for (const plain of [false, true]) {
 			it(`continues after child stdin ${event} (${plain ? "plain object" : "Error"})`, () => {
@@ -84,7 +137,7 @@ describe("global EPIPE routing", () => {
 		}
 	}
 
-	for (const output of ["stdout", "stderr"]) {
+	for (const output of ["stdout", "stderr"] as const) {
 		it(`exits zero when a real ${output} consumer closes its pipe`, async () => {
 			const child = spawn(
 				process.execPath,
