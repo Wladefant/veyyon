@@ -8,6 +8,10 @@
 - Support auto-update opt-out via `startup.autoUpdate: false`, `updates.auto: false`, and `VEYYON_NO_AUTO_UPDATE=1`.
 - Record skipped automatic updates in `update-history.json`.
 
+### Fixed
+
+- Collapsed todo boards prioritize in-progress tasks, announce row-trimmed active phases, and show canonical newly started tasks with concurrent counts even when replayed without call arguments.
+
 ## [1.4.1] - 2026-09-08
 
 ### Added

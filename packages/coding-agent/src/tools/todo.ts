@@ -179,6 +179,8 @@ export interface TodoToolDetails {
 	phases: TodoPhase[];
 	storage: "session" | "memory";
 	completedTasks?: TodoCompletionTransition[];
+	/** Canonical tasks entering in_progress in this write, retained for transcript replay. */
+	startedTasks?: TodoCompletionTransition[];
 	telemetry?: TodoTaskTelemetry;
 	/**
 	 * Non-fatal adjustments the tool made to a write that LANDED. Present only
@@ -350,7 +352,11 @@ function todoTransitionKey(phase: string, content: string): string {
 	return `${phase}\u0000${content}`;
 }
 
-function getCompletionTransitions(previous: TodoPhase[], updated: TodoPhase[]): TodoCompletionTransition[] {
+function getStatusTransitions(
+	previous: TodoPhase[],
+	updated: TodoPhase[],
+	status: TodoStatus = "completed",
+): TodoCompletionTransition[] {
 	const previousStatuses = new Map<string, TodoStatus>();
 	for (const phase of previous) {
 		for (const task of phase.tasks) {
@@ -361,9 +367,9 @@ function getCompletionTransitions(previous: TodoPhase[], updated: TodoPhase[]): 
 	const transitions: TodoCompletionTransition[] = [];
 	for (const phase of updated) {
 		for (const task of phase.tasks) {
-			if (task.status !== "completed") continue;
+			if (task.status !== status) continue;
 			const previousStatus = previousStatuses.get(todoTransitionKey(phase.name, task.content));
-			if (previousStatus && previousStatus !== "completed") {
+			if (previousStatus && previousStatus !== status) {
 				transitions.push({ phase: phase.name, content: task.content });
 			}
 		}
@@ -1376,11 +1382,13 @@ export class TodoTool implements AgentTool<typeof todoSchema, TodoToolDetails> {
 		// the ops that did land. State and rendered summary stay at previous.
 		const failed = errors.length > 0;
 		const effective = failed ? previousPhases : updated;
-		const completedTasks = readOnly || failed ? [] : getCompletionTransitions(previousPhases, updated);
+		const completedTasks = readOnly || failed ? [] : getStatusTransitions(previousPhases, updated);
 		if (!readOnly && !failed) this.session.setTodoPhases?.(updated);
 		const storage = this.session.getSessionFile() ? "session" : "memory";
 		const details: TodoToolDetails = { op: normalized.op, phases: effective, storage };
 		if (completedTasks.length > 0) details.completedTasks = completedTasks;
+		const startedTasks = readOnly || failed ? [] : getStatusTransitions(previousPhases, updated, "in_progress");
+		if (startedTasks.length > 0) details.startedTasks = startedTasks;
 		// A note describes an adjustment to a write that LANDED, so it is dropped
 		// when the batch failed: there is nothing applied for it to describe.
 		if (!failed && notes.length > 0) details.notes = notes;
@@ -1425,8 +1433,10 @@ export class TodoTool implements AgentTool<typeof todoSchema, TodoToolDetails> {
 		// value the schema does not accept.
 		const batchOp: TodoOperation = ops[0]?.op ?? "view";
 		const details: TodoToolDetails = { op: batchOp, phases: effective, storage };
-		const completedTasks = failed ? [] : getCompletionTransitions(previousPhases, updated);
+		const completedTasks = failed ? [] : getStatusTransitions(previousPhases, updated);
 		if (completedTasks.length > 0) details.completedTasks = completedTasks;
+		const startedTasks = failed ? [] : getStatusTransitions(previousPhases, updated, "in_progress");
+		if (startedTasks.length > 0) details.startedTasks = startedTasks;
 		if (!failed && notes.length > 0) details.notes = notes;
 		const telemetryDetail = sessionTelemetryDetail(
 			this.session.settings.get("session.instrumentation"),
@@ -1696,18 +1706,26 @@ export const todoToolRenderer = {
 		// Expanded (the block's own toggle) it is the full list, which is what a
 		// reader scrolling back through history wants — by then the board is gone.
 		if (!options.expanded) {
-			const active = allTasks.find(task => task.status === "in_progress");
-			const moved = active ?? completedTasks[completedTasks.length - 1];
-			const phaseOf = phases.find(phase => phase.tasks.some(task => task.content === moved?.content));
+			const inProgress = allTasks.filter(task => task.status === "in_progress");
+			const started = result.details?.startedTasks?.at(-1);
+			const targetedPhase = started ? phases.find(phase => phase.name === started.phase) : undefined;
+			const targetedTask = targetedPhase?.tasks.find(task => task.content === started?.content);
+			const moved = targetedTask ?? inProgress[0] ?? completedTasks[completedTasks.length - 1];
+			const phaseOf =
+				targetedPhase ?? phases.find(phase => phase.tasks.some(task => task.content === moved?.content));
 			const parts = [
 				uiTheme.fg("dim", formatCount("done", allTasks.filter(task => task.status === "completed").length)),
 			];
+			if (inProgress.length > 1) {
+				parts.push(uiTheme.fg("accent", `${inProgress.length} in progress`));
+			}
 			if (phaseOf && phases.length > 1) {
 				parts.push(uiTheme.fg("muted", boundedTodoPreviewText(phaseOf.name, TODO_ITEM_PREVIEW_WIDTH)));
 			}
 			if (moved) {
-				const mark = active ? uiTheme.checkbox.progress : uiTheme.checkbox.checked;
-				const color = active ? "accent" : "success";
+				const isTaskActive = moved.status === "in_progress";
+				const mark = isTaskActive ? uiTheme.checkbox.progress : uiTheme.checkbox.checked;
+				const color = isTaskActive ? "accent" : "success";
 				parts.push(uiTheme.fg(color, `${mark} ${boundedTodoPreviewText(moved.content, TODO_ITEM_PREVIEW_WIDTH)}`));
 			}
 			return new Text(`${header} ${uiTheme.fg("dim", "·")} ${parts.join(uiTheme.fg("dim", " · "))}`, 0, 0);
