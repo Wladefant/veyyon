@@ -77,9 +77,12 @@ export type DeferredEditorAction = (typeof DEFERRED_EDITOR_ACTIONS)[number];
  * only the ids in {@link ConfigurableEditorAction} are picked out, so an action
  * this editor does not handle cannot arrive by accident.
  */
-const DEFAULT_ACTION_KEYS = Object.fromEntries(
-	CONFIGURABLE_EDITOR_ACTIONS.map(action => [action, [...[KEYBINDINGS[action].defaultKeys].flat()] as KeyId[]]),
-) as Record<ConfigurableEditorAction, KeyId[]>;
+const DEFAULT_ACTION_MATCH_KEYS: ReadonlyMap<ConfigurableEditorAction, ReadonlySet<string>> = new Map(
+	CONFIGURABLE_EDITOR_ACTIONS.map(action => {
+		const keys = KEYBINDINGS[action].defaultKeys;
+		return [action, buildMatchKeys(typeof keys === "string" ? [keys] : keys)];
+	}),
+);
 
 function buildMatchKeys(keys: readonly KeyId[]): Set<string> {
 	const matchKeys = new Set<string>();
@@ -592,29 +595,16 @@ export class CustomEditor extends Editor {
 	#spaceHoldActive = false;
 	/** Idle timer that fires `onSpaceHoldEnd` once repeated spaces stop arriving. */
 	#spaceHoldTimer: NodeJS.Timeout | undefined;
-	#actionKeys = new Map<ConfigurableEditorAction, KeyId[]>(
-		Object.entries(DEFAULT_ACTION_KEYS).map(([action, keys]) => [action as ConfigurableEditorAction, keys.slice()]),
-	);
-	#actionMatchKeys = new Map<ConfigurableEditorAction, Set<string>>(
-		Object.entries(DEFAULT_ACTION_KEYS).map(([action, keys]) => [
-			action as ConfigurableEditorAction,
-			buildMatchKeys(keys),
-		]),
-	);
+	#actionMatchKeys = new Map(DEFAULT_ACTION_MATCH_KEYS);
 
 	setActionKeys(action: ConfigurableEditorAction, keys: KeyId[]): void {
-		this.#actionKeys.set(action, keys.slice());
-		this.#rebuildActionMatchKeys(action);
+		this.#actionMatchKeys.set(action, buildMatchKeys(keys));
 	}
 
 	applyKeybindings(keybindings: { getKeys(action: AppKeybinding): KeyId[] }): void {
 		for (const action of CONFIGURABLE_EDITOR_ACTIONS) {
 			this.setActionKeys(action, keybindings.getKeys(action));
 		}
-	}
-
-	#rebuildActionMatchKeys(action: ConfigurableEditorAction): void {
-		this.#actionMatchKeys.set(action, buildMatchKeys(this.#actionKeys.get(action) ?? []));
 	}
 
 	#rebuildCustomMatchKeys(): void {
