@@ -173,12 +173,12 @@ describe("config hot reload", () => {
 	it("keeps the activated snapshot across reload and later saves without firing restart-only hooks", async () => {
 		const dir = dirs();
 		const file = path.join(dir, "config.yml");
-		await fs.writeFile(file, "hideThinkingBlock: false\nsubagent:\n  model: openai/old\n");
+		await fs.writeFile(file, "hideThinkingBlock: false\nsubagent:\n  model: openai/old\n  sharedModel: true\n");
 		const settings = await Settings.loadIsolated({ agentDir: dir });
 		const notifications: string[] = [];
 		const unsubscribe = settings.onEffectiveSettingChanged(key => notifications.push(key));
 		try {
-			await fs.writeFile(file, "hideThinkingBlock: true\nsubagent:\n  model: openai/new\n");
+			await fs.writeFile(file, "hideThinkingBlock: true\nsubagent:\n  model: openai/new\n  sharedModel: true\n");
 			expect((await settings.reloadConfig()).restartRequired).toContain("hideThinkingBlock");
 			expect(settings.get("hideThinkingBlock")).toBe(false);
 			for (const model of ["openai/saved", "openai/saved-again"]) {
