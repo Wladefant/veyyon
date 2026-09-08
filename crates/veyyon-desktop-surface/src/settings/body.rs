@@ -15,9 +15,9 @@ pub mod providers;
 pub mod themes;
 pub mod usage;
 
-use veyyon_desktop_kit::{Axis, ScrollView, TokenSet};
+use veyyon_desktop_kit::TokenSet;
 use veyyon_desktop_tokens::SettingsSurfaceTokens;
-use veyyon_gpui::{Context, IntoElement, ParentElement, Styled, div, px};
+use veyyon_gpui::{Context, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled, div};
 
 use super::{SettingsPage, SettingsState};
 use crate::{ShellView, controls::ControlStates};
@@ -30,12 +30,14 @@ pub fn render_page_body(
 	tokens: &TokenSet,
 	cx: &Context<ShellView>,
 ) -> impl IntoElement {
-	let mut container = div()
+	let container = div()
+		.id(("settings-page-body", state.page as usize))
 		.flex_1()
+		.min_h_0()
+		.w_full()
 		.flex()
 		.flex_col()
-		.gap(px(geometry.row_gap))
-		.overflow_hidden();
+		.overflow_y_scroll();
 
 	let body_content = match state.page {
 		SettingsPage::General => general::render_general_page(state, controls, geometry, tokens, cx),
@@ -60,6 +62,5 @@ pub fn render_page_body(
 
 	// The body scrolls along one axis: a page longer than the overlay is
 	// reached by scrolling, never by a second column.
-	container = container.child(ScrollView::new(body_content).axis(Axis::Vertical));
-	container
+	container.child(div().w_full().flex_shrink_0().child(body_content))
 }

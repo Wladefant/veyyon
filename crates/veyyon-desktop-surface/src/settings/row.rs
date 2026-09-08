@@ -103,7 +103,8 @@ pub fn setting_row_with_secondary(
 		.child(Row::new(SpacingStep::S2).children(secondary).child(control));
 
 	div()
-		.h(px(geometry.row_height_px))
+		.min_h(px(geometry.row_height_px))
+		.flex_shrink_0()
 		.w_full()
 		.flex()
 		.flex_row()
