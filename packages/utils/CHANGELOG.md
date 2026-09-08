@@ -12,6 +12,10 @@
 
 - Removed `isNewerVersion` in favor of publication-order comparison and equality checks.
 
+### Fixed
+
+- Broken child-stdin writes no longer terminate the host; quiet EPIPE shutdown requires an error observed on process stdout or stderr.
+
 ## [1.4.0] - 2026-09-04
 
 ### Added

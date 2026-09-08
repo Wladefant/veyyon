@@ -10,6 +10,7 @@
 - Swarm presets: `swarm` and `wide` are built in, and the console saves the current shape under a name to `presets.json` beside the autoresearch databases, offered in every repository.
 - The run screen's `running` row shows the last twelve lines the harness printed under the command, refreshed once a second, with escapes stripped and a carriage-return progress row shown in its final state.
 - The setup form's models note lists up to three authenticated models close to a spec that resolves to nothing (`No model matches "opus4". Close: anthropic/claude-opus-4, …`).
+- The todo tool and /todo command support a pending operation to reset tasks or phases to pending, honoring explicit pending statuses in whole-board writes without demoting omitted items.
 - `Form`: a component of labelled fields — `text` with an in-field caret, `stepper` with `◂`/`▸` arrows and typed digits, `toggle`, `segmented`, `button` and `note` — that lays every value out at one column after the widest label, moves a ring with `↑↓`/`tab`, routes a click to the caret, arrow, option, switch or button under the pointer, windows a `segmented` strip wider than its row around the chosen option, and moves the ring on from a text field whose Enter nothing takes.
 - `Input` routes a click to the caret position under it (`routeMouse`) and reports the caret with `getCursor()`.
 - A `MouseRoutable` overlay drawn over the transcript on the normal screen receives the wheel and click reports inside its bounds; reports outside it keep scrolling the transcript and reaching the pinned footer.
@@ -34,6 +35,9 @@
 
 ### Fixed
 
+- Starting a task or importing phased lists preserves concurrent in-progress tasks without demoting active work to pending, and the collapsed todo board displays all phases with active tasks.
+- Resetting tasks or phases to pending preserves an all-pending state without auto-promotion, multi-active reminders and goal prompts enforce strict context preview budgets, and collapsed boards reserve space for overflow notices under the row cap.
+- Fixed native topic replenishment to reject incomplete authorization, preserve ticket identity through dispatch and completion, retry failed dispatches, advance QA and review stages, and reserve concurrent worker capacity without exceeding configured limits ([#4629](https://github.com/santhreal/veyyon/issues/4629)).
 - The permission card's title bar reads `Permission required` instead of the markdown source `## Permission required`; a select dialog's title bar draws the heading's text and leaves the markdown to the body.
 - A hook status set through `ctx.ui.setStatus` keeps the theme colours it was painted with, as its contract states, so the autoresearch status row shows its kept count in green, its flagged count in yellow and its best metric in the tool colour instead of one grey line; cursor moves, hyperlinks and graphics in a status are still stripped.
 - Interrupting Claude mid-thinking no longer fails every later turn with `Refusal (reasoning_extraction)` on an endpoint that enforces the classifier: the hidden continuity message that carries the unfinished reasoning states which turn it came from, and the request drops it on same-model replay to a signing Anthropic endpoint, and after one refusal on any other, instead of re-sending it on the retry and for the rest of the session.
@@ -42,6 +46,7 @@
 - A compaction, branch-summary or turn-prefix transcript leaves out a user or developer message that carries prior reasoning as prose (`demotedReasoningSource`), the message a user-interrupted turn leaves behind, instead of quoting that reasoning back at the endpoint inside the summary request.
 - A user or developer message that carries prior-turn reasoning as prose declares its origin through `demotedReasoningSource`, and `transformMessages` holds it to the unsigned-thinking replay policy: a signing Anthropic endpoint drops it on same-model replay, and every `anthropic-messages` target drops it once `replayDemotedPriorReasoning` is off by catalog or learned from a `reasoning_extraction` refusal, instead of re-sending the same prose on the retry and on every later turn of the session.
 - An inline image whose first rows have scrolled into native scrollback is repainted as a placement clipped to its visible rows, so a forced viewport repaint (an overlay opening or closing, a resize, a tool finalizing) no longer draws it too low over the text below it or erases part of it.
+- Broken child-stdin writes no longer terminate the host; quiet EPIPE shutdown requires an error observed on process stdout or stderr.
 
 ## [1.4.0] - 2026-09-04
 
