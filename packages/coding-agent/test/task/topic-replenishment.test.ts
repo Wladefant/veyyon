@@ -18,6 +18,7 @@ import {
 	claimNextAuthorizedTicket,
 	completeClaimedTicket,
 	FileLock,
+	getSystemMemory,
 	isValidAuthorization,
 	recordNativeDispatch,
 	recoverOrphanedClaims,
@@ -25,6 +26,7 @@ import {
 	reconcileRunningTopics,
 	resolveTopicName,
 	RUNNABLE_TOPIC_NAMES,
+	setSystemMemoryProviderForTesting,
 	TopicReplenishmentEngine,
 	type LedgerFileShape,
 	type NativeActorSnapshot,
@@ -128,23 +130,68 @@ async function runTests(): Promise<void> {
 		assert.ok(liveCheck.freeMb > 0, "Must report free memory");
 		console.log(`  Live memory check: ${liveCheck.usedPct}% used, ${liveCheck.freeMb} MB free (admitted=${liveCheck.admitted})`);
 
-		// Enforce ceiling at 95%
-		const blockedCheck = await checkMemoryAdmission({ maxPct: 10.0 }); // force threshold lower than actual used
+		// Healthy admission with injected RAM reading (50% used)
+		const healthyCheck = await checkMemoryAdmission({
+			memoryProvider: () => ({ total: 16384 * 1024 * 1024, free: 8192 * 1024 * 1024 }),
+		});
+		assert.equal(healthyCheck.admitted, true, "Must admit when RAM used is below ceiling");
+		assert.equal(healthyCheck.usedPct, 50.0);
+		assert.equal(healthyCheck.totalMb, 16384);
+		assert.equal(healthyCheck.freeMb, 8192);
+
+		// Enforce ceiling at 95% with deterministic injected RAM reading (96.09% used)
+		const blockedCheck = await checkMemoryAdmission({
+			memoryProvider: () => ({ total: 16384 * 1024 * 1024, free: 640 * 1024 * 1024 }),
+		});
 		assert.equal(blockedCheck.admitted, false, "Must reject when RAM used exceeds threshold");
 		assert.equal(blockedCheck.capacityException, true, "Must flag capacity exception");
 		assert.ok(blockedCheck.reason?.includes("No new workers permitted"), "Must state explicit refusal reason");
 
+		// Custom threshold override enforced deterministically
+		const customBlockedCheck = await checkMemoryAdmission({
+			maxPct: 10.0,
+			memoryProvider: () => ({ total: 16384 * 1024 * 1024, free: 14415 * 1024 * 1024 }), // 12.02% used > 10%
+		});
+		assert.equal(customBlockedCheck.admitted, false, "Must reject when RAM used exceeds custom threshold");
+		assert.equal(customBlockedCheck.capacityException, true);
+
 		// Test cleanup callback invocation at 85%
 		let cleanedUpCalled = false;
+		let currentMem = { total: 16384 * 1024 * 1024, free: 1600 * 1024 * 1024 }; // 90.23% used (>= 85% cleanup, < 95% ceiling)
 		const cleanCheck = await checkMemoryAdmission({
-			cleanupPct: 10.0, // trigger cleanup
-			maxPct: 99.9, // admit after cleanup
+			memoryProvider: () => currentMem,
 			onCleanup: () => {
 				cleanedUpCalled = true;
+				currentMem = { total: 16384 * 1024 * 1024, free: 8192 * 1024 * 1024 }; // drops to 50%
 			},
 		});
 		assert.equal(cleanedUpCalled, true, "Must invoke cleanup callback when above cleanup threshold");
 		assert.equal(cleanCheck.cleanedUp, true, "Must flag cleanedUp = true");
+		assert.equal(cleanCheck.admitted, true, "Must admit after cleanup frees memory below ceiling");
+
+		// Test post-cleanup still exceeding ceiling (starts in cleanup window 90%, exceeds ceiling 96% after)
+		let cleanFailedCalled = false;
+		let spikingMem = { total: 16384 * 1024 * 1024, free: 1600 * 1024 * 1024 }; // 90.23% used
+		const stillBlockedCheck = await checkMemoryAdmission({
+			memoryProvider: () => spikingMem,
+			onCleanup: () => {
+				cleanFailedCalled = true;
+				spikingMem = { total: 16384 * 1024 * 1024, free: 640 * 1024 * 1024 }; // 96.09% used (>= 95% ceiling)
+			},
+		});
+		assert.equal(cleanFailedCalled, true, "Must invoke cleanup callback when above cleanup threshold");
+		assert.equal(stillBlockedCheck.admitted, false, "Must reject when memory remains above ceiling after cleanup");
+		assert.equal(stillBlockedCheck.capacityException, true, "Must flag capacity exception");
+		assert.ok(stillBlockedCheck.reason?.includes("even after cleanup"), "Must state failure after cleanup");
+
+		// Test module-level stub of measurement function
+		setSystemMemoryProviderForTesting(() => ({ total: 16384 * 1024 * 1024, free: 640 * 1024 * 1024 }));
+		try {
+			const stubbedCheck = await checkMemoryAdmission();
+			assert.equal(stubbedCheck.admitted, false, "Must reject via stubbed measurement function");
+		} finally {
+			setSystemMemoryProviderForTesting(null);
+		}
 
 		console.log("  [PASS] checkMemoryAdmission enforces RAM limits and cleanup\n");
 	}
@@ -844,7 +891,8 @@ async function runTests(): Promise<void> {
 		assert.ok(exported.checkMemoryAdmission, "checkMemoryAdmission must be exported");
 		assert.ok(exported.FileLock, "FileLock must be exported");
 		assert.ok(exported.isValidAuthorization, "isValidAuthorization must be exported");
-
+		assert.ok(exported.getSystemMemory, "getSystemMemory must be exported");
+		assert.ok(exported.setSystemMemoryProviderForTesting, "setSystemMemoryProviderForTesting must be exported");
 		if (previousWorkflowsDir === undefined) delete process.env.VEYYON_WORKFLOWS_DIR;
 		else process.env.VEYYON_WORKFLOWS_DIR = previousWorkflowsDir;
 		await fs.promises.rm(testDir, { recursive: true, force: true }).catch(() => {});
