@@ -150,6 +150,57 @@ describe("config hot reload", () => {
 		expect(resolveSubagentModel({ settings, agentName: "task" }).patterns).toEqual(["openai/allowed"]);
 	});
 
+	it("rejects semantic-invalid nested lanes with the startup schema diagnostic", async () => {
+		const dir = dirs();
+		const file = path.join(dir, "config.yml");
+		await fs.writeFile(file, "subagent:\n  agents:\n    task:\n      model: openai/old\n");
+		const settings = await Settings.loadReadOnly({ agentDir: dir });
+		for (const member of [
+			{ maxNestedSpawnDepth: 1.5 },
+			{ maxNestedSpawnDepth: -2 },
+			{ thinkingLevel: "impossible" },
+		]) {
+			await fs.writeFile(file, JSON.stringify({ subagent: { agents: { task: { subagents: member } } } }));
+			const startup = await Settings.loadReadOnly({ agentDir: dir });
+			expect(startup.invalidValues).toHaveLength(1);
+			const diagnostic = startup.invalidValues[0].reason;
+			expect(diagnostic).toContain("subagent.agents.task.subagents");
+			await expect(settings.reloadConfig()).rejects.toThrow(diagnostic);
+			expect(resolveSubagentModel({ settings, agentName: "task" }).patterns).toEqual(["openai/old"]);
+		}
+	});
+
+	it("keeps the activated snapshot across reload and later saves without firing restart-only hooks", async () => {
+		const dir = dirs();
+		const file = path.join(dir, "config.yml");
+		await fs.writeFile(file, "hideThinkingBlock: false\nsubagent:\n  model: openai/old\n");
+		const settings = await Settings.loadIsolated({ agentDir: dir });
+		const notifications: string[] = [];
+		const unsubscribe = settings.onEffectiveSettingChanged(key => notifications.push(key));
+		try {
+			await fs.writeFile(file, "hideThinkingBlock: true\nsubagent:\n  model: openai/new\n");
+			expect((await settings.reloadConfig()).restartRequired).toContain("hideThinkingBlock");
+			expect(settings.get("hideThinkingBlock")).toBe(false);
+			for (const model of ["openai/saved", "openai/saved-again"]) {
+				settings.set("subagent.model", model);
+				await settings.flush();
+				expect(settings.get("hideThinkingBlock")).toBe(false);
+				expect(resolveSubagentModel({ settings, agentName: "task" }).patterns).toEqual([model]);
+				expect(await fs.readFile(file, "utf8")).toContain("hideThinkingBlock: true");
+				expect((await settings.reloadConfig()).restartRequired).toContain("hideThinkingBlock");
+			}
+			expect(notifications).not.toContain("hideThinkingBlock");
+			// An explicit setter remains an activation, unlike a disk-preserving save.
+			settings.set("hideThinkingBlock", true);
+			await settings.flush();
+			expect(settings.get("hideThinkingBlock")).toBe(true);
+			expect(notifications.filter(key => key === "hideThinkingBlock")).toHaveLength(1);
+			expect((await settings.reloadConfig()).restartRequired).not.toContain("hideThinkingBlock");
+		} finally {
+			unsubscribe();
+		}
+	});
+
 	it("reloads defaults when the main file is deleted", async () => {
 		const dir = dirs();
 		const file = path.join(dir, "config.yml");

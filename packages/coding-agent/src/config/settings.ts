@@ -947,7 +947,13 @@ export class Settings {
 		}
 		candidate.#collectInvalidValues(candidate.#global, candidate.#configPath ?? this.#configPath);
 		candidate.#collectInvalidValues(candidate.#configOverlay, "--config overlays");
-		if (candidate.#invalidValues.length) throw new Error("Invalid config settings; reload rejected.");
+		if (candidate.#invalidValues.length) {
+			throw new Error(
+				`Invalid config settings; reload rejected:\n${candidate.#invalidValues
+					.map(({ file, reason }) => `${file}: ${reason}`)
+					.join("\n")}`,
+			);
+		}
 		candidate.#rebuildMerged();
 		if (
 			JSON.stringify([this.#global, this.#configOverlay, this.#overrides]) !== original ||
@@ -2622,9 +2628,10 @@ export class Settings {
 					setByPath(current, segments, value);
 				}
 
-				// Update our global with any external changes we preserved
-				this.#global = current;
-				await this.#writeConfigPreservingText(configPath, this.#global);
+				// #global is the last activated source snapshot, updated only by
+				// explicit setters or reload. Disk preservation is not activation:
+				// adopting this tree would bypass validation and setting hooks.
+				await this.#writeConfigPreservingText(configPath, current);
 			});
 			// The file took the write, so whatever was wrong is over.
 			this.#saveFailure = undefined;

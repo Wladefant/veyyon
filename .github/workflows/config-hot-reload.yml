@@ -19,12 +19,34 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 0
       - uses: ./.github/actions/setup-system-deps
       - uses: ./.github/actions/bun-install
       - name: Build test sandbox
         run: bash scripts/test-sandbox/run.sh --build
+      - name: Prove both contracts reject the pre-fix implementation
+        run: |
+          settings=packages/coding-agent/src/config/settings.ts
+          lanes=packages/coding-agent/src/config/settings-domains/subagents.ts
+          cp "$settings" /tmp/hot-reload-settings.ts
+          cp "$lanes" /tmp/hot-reload-lanes.ts
+          trap 'cp /tmp/hot-reload-settings.ts "$settings"; cp /tmp/hot-reload-lanes.ts "$lanes"' EXIT
+          git show 2c38b9dc4688fed0c9e116436211b36322321315:"$settings" > "$settings"
+          git show 2c38b9dc4688fed0c9e116436211b36322321315:"$lanes" > "$lanes"
+          for contract in "rejects semantic-invalid nested lanes" "keeps the activated snapshot"; do
+            if bash scripts/test-sandbox/run.sh bun test ./packages/coding-agent/test/config-hot-reload.test.ts --test-name-pattern "$contract" > /tmp/contract-red.log 2>&1; then
+              cat /tmp/contract-red.log
+              echo "Regression contract unexpectedly passed on the pre-fix source"
+              exit 1
+            fi
+            cat /tmp/contract-red.log
+            grep -q "1 fail" /tmp/contract-red.log
+          done
       - name: Focused settings contracts
         run: bash scripts/test-sandbox/run.sh bun test packages/coding-agent/test/config-hot-reload.test.ts packages/coding-agent/test/settings-reload-cwd.test.ts
+      - name: Coding-agent package tests
+        run: bash scripts/test-sandbox/run.sh bun run --cwd packages/coding-agent test
       - name: Exact-parity routing bench
         run: bash scripts/test-sandbox/run.sh bun packages/coding-agent/bench/config-hot-reload.bench.ts
       - name: Build private-display recorder
