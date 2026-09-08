@@ -63,7 +63,13 @@ fn project_settings_domains(store: &Store, state: &mut SettingsState) {
 fn project_palette_domains(store: &Store, state: &mut PaletteState) {
 	match state.mode {
 		PaletteMode::Files => {
-			if let Some(tree) = &store.domains.file_tree {
+			if !state.query.trim().is_empty() && let Some(search) = &store.domains.search {
+				let mut items = Vec::new();
+				for (idx, path) in search.paths.iter().enumerate() {
+					items.push(PaletteItem::file(idx as u64 + 1000, path.clone()));
+				}
+				state.items = items;
+			} else if let Some(tree) = &store.domains.file_tree {
 				let mut items = Vec::new();
 				for (idx, entry) in tree.entries.iter().enumerate() {
 					if entry.kind == FileKind::File {
@@ -148,5 +154,61 @@ mod tests {
 			settings.entry("editor.copy_on_select").is_some(),
 			"settings already in the store must reach an overlay opened later"
 		);
+	}
+
+	#[test]
+	fn palette_in_files_mode_projects_search_results_and_file_tree() {
+		let mut store = Store::new();
+		store.domains.search = Some(veyyon_desktop_model::SearchResultsView {
+			query: "lib".to_string(),
+			paths: vec!["src/lib.rs".to_string(), "crates/lib.rs".to_string()],
+			truncated: false,
+		});
+		store.domains.file_tree = Some(veyyon_desktop_model::FileTreeView {
+			root: ".".to_string(),
+			entries: vec![
+				veyyon_desktop_model::FileNode {
+					name: "main.rs".to_string(),
+					path: "src/main.rs".to_string(),
+					kind: FileKind::File,
+					depth: 1,
+				},
+			],
+			truncated: false,
+		});
+
+		let mut state = ShellState {
+			overlay: Some(Overlay::Palette(PaletteState {
+				query: "lib".to_string(),
+				mode: PaletteMode::Files,
+				selected: 0,
+				items: Vec::new(),
+				browse_path: Vec::new(),
+				browse_root: None,
+			})),
+			..ShellState::default()
+		};
+
+		project_overlay(&store, &mut state);
+
+		let palette = state.overlay.as_ref().and_then(Overlay::as_palette).expect("palette open");
+		assert_eq!(palette.items.len(), 2);
+		assert_eq!(palette.items[0].title, "src/lib.rs");
+
+		let mut state_empty = ShellState {
+			overlay: Some(Overlay::Palette(PaletteState {
+				query: String::new(),
+				mode: PaletteMode::Files,
+				selected: 0,
+				items: Vec::new(),
+				browse_path: Vec::new(),
+				browse_root: None,
+			})),
+			..ShellState::default()
+		};
+		project_overlay(&store, &mut state_empty);
+		let palette_empty = state_empty.overlay.as_ref().and_then(Overlay::as_palette).expect("palette open");
+		assert_eq!(palette_empty.items.len(), 1);
+		assert_eq!(palette_empty.items[0].title, "src/main.rs");
 	}
 }

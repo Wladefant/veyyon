@@ -53,6 +53,12 @@ impl PaletteState {
 		}
 	}
 
+	/// Creates an empty palette state initialized for file search.
+	#[must_use]
+	pub const fn files() -> Self {
+		Self::new(PaletteMode::Files)
+	}
+
 	/// Creates a palette state initialized with default commands.
 	#[must_use]
 	pub fn commands() -> Self {
@@ -174,8 +180,28 @@ impl PaletteState {
 		if self.query.is_empty() {
 			return self.items.iter().collect();
 		}
-		let ranked = fuzzy_rank(&self.query, &self.items, |item| &item.title);
-		ranked.into_iter().map(|(_, _, item)| item).collect()
+		let mut scored: Vec<(usize, i32, &PaletteItem)> = self
+			.items
+			.iter()
+			.enumerate()
+			.filter_map(|(idx, item)| {
+				let title_score = fuzzy_score(&self.query, &item.title);
+				let subtitle_score = item
+					.subtitle
+					.as_deref()
+					.and_then(|sub| fuzzy_score(&self.query, sub));
+				let best = match (title_score, subtitle_score) {
+					(Some(t), Some(s)) => Some(t.max(s)),
+					(Some(t), None) => Some(t),
+					(None, Some(s)) => Some(s),
+					(None, None) => None,
+				};
+				best.map(|score| (idx, score, item))
+			})
+			.collect();
+
+		scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+		scored.into_iter().map(|(_, _, item)| item).collect()
 	}
 
 	/// Returns the currently highlighted item if one exists.

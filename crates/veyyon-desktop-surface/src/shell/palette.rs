@@ -87,14 +87,7 @@ impl ShellView {
 			match event {
 				EditorEvent::Changed => {
 					let query = editor.read(cx).text().to_owned();
-					if let Some(palette) = view
-						.state
-						.overlay
-						.as_mut()
-						.and_then(Overlay::as_palette_mut)
-					{
-						palette.set_query(query);
-					}
+					view.dispatch(Intent::PaletteQuery(query), cx);
 				},
 				EditorEvent::Submit => view.run_palette(cx),
 				EditorEvent::Escape => view.close_palette(cx),

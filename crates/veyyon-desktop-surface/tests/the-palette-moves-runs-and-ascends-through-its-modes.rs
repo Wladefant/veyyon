@@ -248,3 +248,35 @@ fn palette_result_rows_share_queue_line_row_geometry() {
 		"canonical line row height is 36px per §5.2/§5.8"
 	);
 }
+
+#[test]
+fn command_palette_resolves_file_and_open_queries_to_actionable_items() {
+	let mut state = PaletteState::commands();
+	state.set_query("file");
+	let file_results = state.filtered_items();
+	assert!(
+		!file_results.is_empty(),
+		"command palette must resolve 'file' query to matching commands"
+	);
+	assert!(
+		file_results.iter().any(|item| item.title == "/files" || item.title == "/open" || item.title == "/attach"),
+		"results must include file-related commands"
+	);
+
+	state.set_query("open");
+	let open_results = state.filtered_items();
+	assert!(
+		!open_results.is_empty(),
+		"command palette must resolve 'open' query to matching commands"
+	);
+	assert_eq!(
+		open_results[0].title, "/open",
+		"top result for 'open' must be the open command"
+	);
+
+	let run_intent = state.run_intent();
+	assert!(
+		matches!(&run_intent, Some(Intent::OpenOverlay(overlay)) if matches!(overlay.as_ref(), Overlay::Palette(p) if p.mode == PaletteMode::Files)),
+		"executing /open must transition to files palette mode"
+	);
+}

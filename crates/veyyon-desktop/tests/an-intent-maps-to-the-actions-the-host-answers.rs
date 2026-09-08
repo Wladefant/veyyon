@@ -25,7 +25,8 @@ use veyyon_desktop_model::{
 	SnapshotSection, Store, TerminalStatus, reduce,
 };
 use veyyon_desktop_surface::{
-	Attachment, Card, Intent, MediaType, ShellState, composer::payload_for,
+	Attachment, Card, Intent, MediaType, Overlay, PaletteMode, PaletteState, ShellState,
+	composer::payload_for,
 };
 
 fn store_with_decisions() -> (Store, SessionIndex) {
@@ -243,5 +244,56 @@ fn a_decision_at_a_position_of_the_wrong_kind_is_dropped_not_misdelivered() {
 		(pending.approvals.len(), pending.questions.len(), pending.plans.len()),
 		(1, 1, 1),
 		"the mis-kinded answers took nothing; the bad option took its question"
+	);
+}
+
+#[test]
+fn palette_queries_route_to_search_files_and_empty_queries_remain_bounded() {
+	let (mut store, index) = store_with_decisions();
+
+	// 1. Non-empty palette query emits SearchFiles with trimmed query
+	assert_eq!(
+		actions_for(&Intent::PaletteQuery("  src/lib.rs  ".into()), &index, &mut store),
+		[HostAction::SearchFiles { query: "src/lib.rs".into() }],
+		"non-empty query must ask the host to search files"
+	);
+
+	// 2. Empty query produces no action, preventing INVALID_ARGUMENTS failure
+	assert!(
+		actions_for(&Intent::PaletteQuery(String::new()), &index, &mut store).is_empty(),
+		"empty query must not emit SearchFiles"
+	);
+	assert!(
+		actions_for(&Intent::PaletteQuery("   ".into()), &index, &mut store).is_empty(),
+		"whitespace-only query must not emit SearchFiles"
+	);
+
+	// 3. Opening palette in Files or Browse mode asks the host to load the file tree
+	assert_eq!(
+		actions_for(
+			&Intent::OpenOverlay(Box::new(Overlay::Palette(PaletteState::new(PaletteMode::Files)))),
+			&index,
+			&mut store
+		),
+		[HostAction::LoadFileTree { root: None }],
+		"opening palette in Files mode must ask the host to load the file tree"
+	);
+	assert_eq!(
+		actions_for(
+			&Intent::OpenOverlay(Box::new(Overlay::Palette(PaletteState::new(PaletteMode::Browse)))),
+			&index,
+			&mut store
+		),
+		[HostAction::LoadFileTree { root: None }],
+		"opening palette in Browse mode must ask the host to load the file tree"
+	);
+	assert!(
+		actions_for(
+			&Intent::OpenOverlay(Box::new(Overlay::Palette(PaletteState::commands()))),
+			&index,
+			&mut store
+		)
+		.is_empty(),
+		"opening palette in Commands mode does not request file tree"
 	);
 }
