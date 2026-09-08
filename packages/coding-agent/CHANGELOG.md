@@ -26,6 +26,7 @@
 ### Fixed
 
 - Config reload reports the startup schema's nested-lane diagnostics and retains the last activated settings across later saves, preserving restart-required disk edits without silently applying them.
+- A rejected `/reload-config` submitted as a TUI follow-up displays an error and preserves the draft and active config instead of escaping as an unhandled rejection; text transports still receive failure.
 - Starting a task or importing phased lists preserves concurrent in-progress tasks without demoting active work to pending, and the collapsed todo board displays all phases with active tasks.
 - Resetting tasks or phases to pending preserves an all-pending state without auto-promotion, multi-active reminders and goal prompts enforce strict context preview budgets, and collapsed boards reserve space for overflow notices under the row cap.
 - Fixed native topic replenishment to reject incomplete authorization, preserve ticket identity through dispatch and completion, retry failed dispatches, advance QA and review stages, and reserve concurrent worker capacity without exceeding configured limits ([#4629](https://github.com/santhreal/veyyon/issues/4629)).
