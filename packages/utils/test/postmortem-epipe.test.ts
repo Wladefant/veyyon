@@ -137,7 +137,7 @@ describe("global EPIPE routing", () => {
 		}
 	}
 
-	for (const output of ["stdout", "stderr"]) {
+	for (const output of ["stdout", "stderr"] as const) {
 		it(`exits zero when a real ${output} consumer closes its pipe`, async () => {
 			const child = spawn(
 				process.execPath,
