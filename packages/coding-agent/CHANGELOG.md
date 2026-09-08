@@ -8,6 +8,10 @@
 - Support auto-update opt-out via `startup.autoUpdate: false`, `updates.auto: false`, and `VEYYON_NO_AUTO_UPDATE=1`.
 - Record skipped automatic updates in `update-history.json`.
 
+### Fixed
+
+- Collapsed todo boards prioritize in-progress tasks, announce row-trimmed active phases, and show canonical newly started tasks with concurrent counts even when replayed without call arguments.
+
 ## [1.4.1] - 2026-09-08
 
 ### Added
@@ -37,7 +41,6 @@
 - A rejected `/reload-config` submitted as a TUI follow-up displays an error and preserves the draft and active config instead of escaping as an unhandled rejection; text transports still receive failure.
 - Starting a task or importing phased lists preserves concurrent in-progress tasks without demoting active work to pending, and the collapsed todo board displays all phases with active tasks.
 - Resetting tasks or phases to pending preserves an all-pending state without auto-promotion, multi-active reminders and goal prompts enforce strict context preview budgets, and collapsed boards reserve space for overflow notices under the row cap.
-- Collapsed todo boards prioritize in-progress tasks over pending tasks, announce row-trimmed active phases in the overflow notice, and display targeted started tasks alongside concurrent in-progress counts in tool result cards.
 - Fixed native topic replenishment to reject incomplete authorization, preserve ticket identity through dispatch and completion, retry failed dispatches, advance QA and review stages, and reserve concurrent worker capacity without exceeding configured limits ([#4629](https://github.com/santhreal/veyyon/issues/4629)).
 - The permission card's title bar reads `Permission required` instead of the markdown source `## Permission required`; a select dialog's title bar draws the heading's text and leaves the markdown to the body.
 - A hook status set through `ctx.ui.setStatus` keeps the theme colours it was painted with, as its contract states, so the autoresearch status row shows its kept count in green, its flagged count in yellow and its best metric in the tool colour instead of one grey line; cursor moves, hyperlinks and graphics in a status are still stripped.
