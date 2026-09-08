@@ -222,7 +222,7 @@ pub fn render_shell(
 	let mut columns = view
 		.laid_out()
 		.track_children(columns, move |index| column_regions.get(index).copied().flatten());
-	if let Some(overlay) = super::float::overlay_layer(view, window, cx) {
+	if let Some(overlay) = super::float::overlay_layer(view, window, chrome_px, cx) {
 		columns = columns.child(overlay);
 	}
 	if let Some(menu) = view.row_menu() {

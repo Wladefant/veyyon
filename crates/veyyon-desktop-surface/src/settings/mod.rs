@@ -17,7 +17,7 @@ use veyyon_desktop_model::{
 use veyyon_desktop_tokens::SettingsSurfaceTokens;
 use veyyon_gpui::{
 	ClickEvent, Context, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement,
-	Styled, Window, div, px,
+	Pixels, Size, Styled, div, px,
 };
 
 pub use self::{body::*, pages::*, row::*};
@@ -104,7 +104,7 @@ pub fn settings_surface(
 	controls: &ControlStates,
 	geometry: &SettingsSurfaceTokens,
 	tokens: &TokenSet,
-	window: &Window,
+	viewport: Size<Pixels>,
 	cx: &Context<ShellView>,
 ) -> impl IntoElement {
 	let radius = tokens.radius(RadiusStep::Xl);
@@ -115,8 +115,8 @@ pub fn settings_surface(
 
 	let mut dialog = div()
 		.id("settings-dialog")
-		.w(px(860.0).min(window.viewport_size().width - margin))
-		.h(px(560.0).min(window.viewport_size().height - margin))
+		.w(px(860.0).min(viewport.width - margin))
+		.h(px(560.0).min(viewport.height - margin))
 		.rounded(radius)
 		.bg(bg)
 		.border_1()

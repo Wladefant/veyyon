@@ -6,7 +6,7 @@ use std::time::Instant;
 use veyyon_desktop_kit::SpacingStep;
 use veyyon_gpui::{
 	Anchor, AnyElement, Context, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
-	ParentElement, Styled, Window, anchored, deferred, div, px,
+	ParentElement, Styled, Window, anchored, deferred, div, px, size,
 };
 
 use super::overlay::overlay_scrim;
@@ -15,6 +15,7 @@ use crate::{Overlay, ShellView, palette::palette_surface, settings::settings_sur
 pub(super) fn overlay_layer(
 	view: &mut ShellView,
 	window: &mut Window,
+	chrome_height: f32,
 	cx: &mut Context<ShellView>,
 ) -> Option<AnyElement> {
 	if view.palette_input.restore_focus {
@@ -65,12 +66,16 @@ pub(super) fn overlay_layer(
 	geometry.width_px = geometry
 		.width_px
 		.min(f32::from(window.viewport_size().width - margin * 2.0));
+	let settings_viewport = size(
+		window.viewport_size().width,
+		window.viewport_size().height - px(chrome_height),
+	);
 	let content = match retained {
 		Overlay::Palette(state) => {
 			palette_surface(state, editor, &geometry, tokens, cx).into_any_element()
 		},
 		Overlay::Settings(state) => {
-			settings_surface(state, &view.state.controls, &surface.settings, tokens, window, cx)
+			settings_surface(state, &view.state.controls, &surface.settings, tokens, settings_viewport, cx)
 				.into_any_element()
 		},
 	};
@@ -108,6 +113,17 @@ pub(super) fn overlay_layer(
 			)
 			.with_priority(1)
 			.into_any_element(),
+		)
+	} else if matches!(retained, Overlay::Settings(_)) {
+		Some(
+			div()
+				.absolute()
+				.top_0()
+				.left_0()
+				.w_full()
+				.h(settings_viewport.height)
+				.child(overlay_scrim(content, &surface.panels, tokens, cx))
+				.into_any_element(),
 		)
 	} else {
 		Some(overlay_scrim(content, &surface.panels, tokens, cx).into_any_element())
