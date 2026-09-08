@@ -61,10 +61,10 @@ describe("config hot reload", () => {
 			output: text => {
 				output.push(text);
 			},
-			get session() {
+			get session(): never {
 				throw new Error("reload must not rebind the session");
 			},
-			get sessionManager() {
+			get sessionManager(): never {
 				throw new Error("reload must not touch session persistence");
 			},
 			refreshCommands: () => {
@@ -101,7 +101,7 @@ describe("config hot reload", () => {
 		const result = await settings.reloadConfig();
 		expect(resolve(settings)).toEqual(["openai/new"]);
 		expect(resolve(existing)).toEqual(["openai/old"]);
-		expect(resolveEffort({ defaultEffort: settings.get("defaultEffort") }).level).toBe("high");
+		expect(resolveEffort({ defaultEffort: settings.get("defaultEffort") }).level as string).toBe("high");
 		expect(settings.get("hideThinkingBlock")).toBe(false);
 		expect(result.restartRequired).toContain("hideThinkingBlock");
 		expect(result.changed.map(row => row.path)).toEqual(expect.arrayContaining(["modelRoles", "defaultEffort"]));
