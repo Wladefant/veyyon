@@ -84,6 +84,11 @@ export interface BuiltinSlashCommandDeclaration {
 
 export const BUILTIN_SLASH_COMMAND_DECLARATIONS = [
 	{
+		name: "reload-config",
+		description: "Reload model and effort defaults for new subagents (keeps running agents unchanged)",
+		textMode: true,
+	},
+	{
 		name: "settings",
 		description: "Open settings menu",
 	},

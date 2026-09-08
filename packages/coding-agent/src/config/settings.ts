@@ -915,6 +915,72 @@ export class Settings {
 	}
 
 	/**
+	 * Reload routing defaults for subsequent spawns without replacing this store or
+	 * rebinding live agents. Other settings deliberately remain startup-owned.
+	 */
+	async reloadConfig(): Promise<{
+		changed: { path: SettingPath; before: unknown; after: unknown }[];
+		restartRequired: SettingPath[];
+	}> {
+		if (!this.#configPath) throw new Error("Cannot reload an in-memory settings store.");
+		if (this.#modified.size || this.#savePromise) {
+			throw new Error("Settings are being saved; retry /reload-config after the save finishes.");
+		}
+		const original = JSON.stringify([this.#global, this.#configOverlay, this.#overrides]);
+		const candidate = new Settings({ cwd: this.#cwd, agentDir: this.#agentDir, readOnly: true });
+		// Unlike startup's forgiving loader, a reload must never quarantine or
+		// replace a malformed file and must leave the live routing table intact.
+		candidate.#global = await candidate.#loadOverlayYaml(this.#configPath);
+		candidate.#configFiles = this.#configFiles;
+		candidate.#configOverlay = await candidate.#loadConfigOverlays();
+		candidate.#overrides = this.#overrides;
+		candidate.#collectInvalidValues(candidate.#global, this.#configPath);
+		candidate.#collectInvalidValues(candidate.#configOverlay, "--config overlays");
+		if (candidate.#invalidValues.length) throw new Error("Invalid config settings; reload rejected.");
+		candidate.#rebuildMerged();
+		if (
+			JSON.stringify([this.#global, this.#configOverlay, this.#overrides]) !== original ||
+			this.#modified.size ||
+			this.#savePromise
+		) {
+			throw new Error("Settings changed during reload; retry /reload-config.");
+		}
+		const reloadable: readonly SettingPath[] = [
+			"modelRoles",
+			"defaultEffort",
+			"subagent.agents",
+			"subagent.model",
+			"subagent.modelByDepth",
+			"subagent.thinkingLevel",
+		];
+		const changed: { path: SettingPath; before: unknown; after: unknown }[] = [];
+		const restartRequired: SettingPath[] = [];
+		for (const key of Object.keys(SETTINGS_SCHEMA) as SettingPath[]) {
+			if (GLOBAL_SETTING_BINDINGS[key]) continue;
+			const before = this.get(key);
+			const after = candidate.get(key);
+			if (JSON.stringify(before) === JSON.stringify(after)) continue;
+			if (reloadable.includes(key)) changed.push({ path: key, before, after });
+			else restartRequired.push(key);
+		}
+		// Replace only the supported source fields, including deletions. Keep
+		// overlays and runtime overrides in their original precedence layers.
+		for (const key of reloadable) {
+			const segments = key.split(".");
+			for (const [target, source] of [
+				[this.#global, candidate.#global],
+				[this.#configOverlay, candidate.#configOverlay],
+			]) {
+				const value = getByPath(source, segments);
+				if (value === undefined) deleteByPath(target, segments);
+				else setByPath(target, segments, value);
+			}
+		}
+		this.#rebuildMerged();
+		return { changed, restartRequired };
+	}
+
+	/**
 	 * Create a non-persisting runtime fork while retaining the provenance of
 	 * every layer. Unlike flattening get() values into Settings.isolated(), this
 	 * leaves CLI config files in the config overlay and genuine runtime
