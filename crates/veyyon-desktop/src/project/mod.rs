@@ -27,7 +27,7 @@ mod queue;
 mod transcript;
 use std::collections::HashMap;
 
-use veyyon_desktop_model::{QueuePartition, SessionId, Store};
+use veyyon_desktop_model::{QueuePartition, RequestRegistry, SessionId, Store};
 use veyyon_desktop_surface::{Badge, ShellState, terminal::TerminalEmulator};
 
 pub use self::{
@@ -91,6 +91,18 @@ impl SessionIndex {
 		let index = usize::try_from(row.checked_sub(1)?).ok()?;
 		self.sessions.get(index)
 	}
+}
+
+/// Reprojects host-backed state that a window-local intent has just made
+/// visible, without overwriting other window-owned fields.
+pub fn project_after_intents(
+	store: &Store,
+	registry: &RequestRegistry,
+	index: &SessionIndex,
+	state: &mut ShellState,
+) {
+	project_overlay(store, state);
+	project_controls(store, registry, index, state);
 }
 
 /// Projects the store onto the shell state's host-owned fields.

@@ -21,8 +21,8 @@ use veyyon_desktop_scene::{
 	headless::{RenderOptions, headless_context},
 };
 use veyyon_desktop_surface::{
-	Badge, Command, Keymap, KeymapError, Overlay, Row, Scope, Section, ShellState, ShellView,
-	attach::ConnectionPhase, install_tokens, resolve_chord,
+	Badge, Command, Intent, Keymap, KeymapError, Overlay, Row, Scope, Section, ShellState,
+	ShellView, attach::ConnectionPhase, install_tokens, resolve_chord,
 };
 use veyyon_gpui::{App, AppContext};
 
@@ -269,4 +269,24 @@ fn keystrokes_dispatch_intents_on_real_shellview_in_headless_session() {
 			);
 		})
 		.expect("queue collapsed state verified");
+
+	// 4. Opening Settings must also request fresh host-backed domains.
+	let settings_chord = resolve_chord("primary-,");
+	assert!(
+		session.keystroke(&settings_chord).expect("settings keystroke dispatches"),
+		"primary-, must be handled by the shell"
+	);
+	session
+		.update(|view, _window, _cx| {
+			assert!(
+				matches!(view.state().overlay, Some(Overlay::Settings(_))),
+				"primary-, must open settings"
+			);
+			assert_eq!(
+				view.pending(),
+				&[Intent::ReloadSettings],
+				"opening settings must ask the host for settings domains"
+			);
+		})
+		.expect("settings overlay and reload intent verified");
 }

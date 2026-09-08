@@ -13,7 +13,7 @@ use veyyon_desktop::{
 	HostLink, SessionIndex, actions_for,
 	cli::{Cli, Command},
 	connect_or_spawn, current_timestamp_ms, discover_asset_paths, land_failure, load_startup_bundle,
-	project,
+	project, project_after_intents,
 	project::connection_notice,
 	project_controls, request_frame, scene, start_token_supervision,
 };
@@ -256,7 +256,12 @@ fn main() {
 					}
 				}
 				view.update(cx, |view, cx| {
-					project_controls(&host.store, &host.registry, &host.index, view.state_mut());
+					project_after_intents(
+						&host.store,
+						&host.registry,
+						&host.index,
+						view.state_mut(),
+					);
 					cx.notify();
 				});
 			})

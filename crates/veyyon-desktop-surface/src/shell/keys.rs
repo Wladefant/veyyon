@@ -48,6 +48,7 @@ pub fn bind_global_keys(root: Div, cx: &Context<ShellView>) -> Div {
 		}))
 		.on_action(cx.listener(|view, _: &OpenSettings, _window, cx| {
 			view.dispatch(Intent::OpenOverlay(Box::new(Overlay::Settings(Box::default()))), cx);
+			view.dispatch(Intent::ReloadSettings, cx);
 		}))
 		.on_action(cx.listener(|view, _: &ToggleQueue, _window, cx| {
 			view.dispatch(Intent::ToggleQueue, cx);

@@ -66,6 +66,38 @@ export function isActive(sm: SessionManager | undefined, session: string): sm is
 	return sm !== undefined && (sm.getSessionId() === session || sm.getSessionFile() === session);
 }
 
+/**
+ * Bind a session-scoped control to this connection's active session.
+ *
+ * Controls such as abort and interaction replies must never switch sessions:
+ * a stale surface can otherwise act on whichever session this socket opened
+ * most recently. Actions that intentionally navigate use `activateSession`.
+ */
+export function requireActiveSession(
+	ctx: ActionContext,
+	session: string | undefined,
+	scope: ErrorScope = "Session",
+): SessionManager | undefined {
+	if (!session) {
+		ctx.reply.failure({
+			scope,
+			code: "INVALID_ARGUMENTS",
+			message: `${ctx.actionTag} requires session`,
+			retryable: false,
+		});
+		return undefined;
+	}
+	const active = activeManager(ctx);
+	if (isActive(active, session)) return active;
+	ctx.reply.failure({
+		scope,
+		code: "SESSION_NOT_ACTIVE",
+		message: `Session '${session}' is not active on this connection`,
+		retryable: false,
+	});
+	return undefined;
+}
+
 export function replyError(ctx: ActionContext, code: string, error: unknown, scope: ErrorScope = "Session"): void {
 	ctx.reply.failure({
 		scope,

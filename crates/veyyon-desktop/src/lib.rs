@@ -29,7 +29,8 @@ pub use framing::{FrameDecoder, FramingError, MAX_FRAME_BYTES, encode_authentica
 pub use link::{HostLink, TRANSPORT_THREAD_NAME};
 pub use project::{
 	NO_SESSION_OPEN, PANE_LINE_CEILING, SessionIndex, actions_for, drawer_lines, elapsed_label,
-	land_failure, project, project_controls, project_turn_phase, strip_control_sequences,
+	land_failure, project, project_after_intents, project_controls, project_turn_phase,
+	strip_control_sequences,
 	tree_rows_from_changes,
 };
 pub use reconnect::{

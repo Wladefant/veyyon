@@ -5,6 +5,7 @@ import { sessionEntryToTranscriptEntry, sessionHeaderToView } from "../session-b
 import { getOrCreateAgentSession } from "../turns";
 import type { UsageTotals } from "../wire";
 import type { ActionHandler, ActionHandlersMap } from "./types";
+import { requireActiveSession } from "./active-session";
 
 /**
  * Real diagnostic snapshot shape returned by RefreshDiagnostics:
@@ -184,7 +185,8 @@ interface ClearOutputPayload {
 	session?: string;
 }
 
-const handleClearOutput: ActionHandler<ClearOutputPayload | undefined> = async (ctx, _payload) => {
+const handleClearOutput: ActionHandler<ClearOutputPayload | undefined> = async (ctx, payload) => {
+	if (!requireActiveSession(ctx, payload?.session)) return;
 	try {
 		const agent = ctx.clientState.agentSession ?? (await getOrCreateAgentSession(ctx.clientState, ctx.socket, ctx));
 		await agent.newSession();
@@ -219,6 +221,7 @@ interface GetUsagePayload {
 }
 
 const handleGetUsage: ActionHandler<GetUsagePayload | undefined> = async (ctx, payload) => {
+	if (payload?.session && !requireActiveSession(ctx, payload.session, "Usage")) return;
 	const session = ctx.clientState.agentSession ?? (await getOrCreateAgentSession(ctx.clientState, ctx.socket, ctx));
 
 	if (!session) {
@@ -260,6 +263,7 @@ interface GetContextBreakdownPayload {
 }
 
 const handleGetContextBreakdown: ActionHandler<GetContextBreakdownPayload | undefined> = async (ctx, payload) => {
+	if (!requireActiveSession(ctx, payload?.session, "Diagnostic")) return;
 	const session = ctx.clientState.agentSession ?? (await getOrCreateAgentSession(ctx.clientState, ctx.socket, ctx));
 
 	if (!session) {
