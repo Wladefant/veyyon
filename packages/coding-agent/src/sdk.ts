@@ -2649,12 +2649,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			onSubagentComplete: async record => {
 				const engine = replenishmentEngine;
 				if (engine) {
-					const activeRoster = AgentRegistry.global().list().map(ref => ({
-						id: ref.id,
-						status: ref.status,
-						role: ref.kind,
-						task: ref.activity,
-					}));
+					const activeRoster = AgentRegistry.global()
+						.list()
+						.map(ref => ({
+							id: ref.id,
+							status: ref.status,
+							role: ref.kind,
+							task: ref.activity,
+						}));
 					await engine.onWorkerComplete(
 						{
 							agentId: record.agentId,
@@ -4537,12 +4539,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				});
 			replenishmentEngine = engine;
 
-			const activeRoster = AgentRegistry.global().list().map(ref => ({
-				id: ref.id,
-				status: ref.status,
-				role: ref.kind,
-				task: ref.activity,
-			}));
+			const activeRoster = AgentRegistry.global()
+				.list()
+				.map(ref => ({
+					id: ref.id,
+					status: ref.status,
+					role: ref.kind,
+					task: ref.activity,
+				}));
 			void engine.onSessionRecovery(activeRoster).catch(err => {
 				logger.warn("TopicReplenishmentEngine: session recovery failed", {
 					error: errorMessage(err),

@@ -12,8 +12,8 @@ import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
 import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
 import {
 	type ClaimedTicket,
-	TopicReplenishmentEngine,
 	type SubagentCompleteEvent,
+	TopicReplenishmentEngine,
 } from "@veyyon/coding-agent/task/topic-replenishment";
 
 interface RuntimeTaskTool {

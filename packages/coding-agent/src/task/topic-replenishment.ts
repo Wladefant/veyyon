@@ -19,13 +19,13 @@
  *    Missing executor fails immediately before claiming or incrementing counts.
  * 7. On worker dispatch error, claimed tickets are rolled back to pending with audit history.
  */
-import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { atomicWriteFileSync } from "@veyyon/utils/atomic-write";
 import { errorMessage, getAgentDir, isRecord, logger } from "@veyyon/utils";
+import { atomicWriteFileSync } from "@veyyon/utils/atomic-write";
 import nativeLedgerBridgeAssetPath from "./native-ledger-bridge.py" with { type: "file" };
 // --- Functional Topics & Keyword Mapping ---
 
@@ -590,10 +590,9 @@ export function resolveBridgeScriptPath(): string {
 	try {
 		assetBytes = fs.readFileSync(nativeLedgerBridgeAssetPath);
 	} catch (err) {
-		throw new Error(
-			`Native ledger bridge asset is missing or unreadable at ${nativeLedgerBridgeAssetPath}`,
-			{ cause: err },
-		);
+		throw new Error(`Native ledger bridge asset is missing or unreadable at ${nativeLedgerBridgeAssetPath}`, {
+			cause: err,
+		});
 	}
 
 	if (!assetBytes || assetBytes.length === 0) {
@@ -640,7 +639,7 @@ export async function runLedgerBridge<T = unknown>(
 		try {
 			const parsed = JSON.parse(stdout.trim()) as T;
 			resolve(parsed);
-		} catch (parseErr) {
+		} catch {
 			reject(new Error(`Failed to parse bridge output: ${stdout}\nstderr: ${stderr}`));
 		}
 	});
@@ -836,7 +835,8 @@ export async function completeClaimedTicket(
 		if (optionsOrStatus.runId) args.push("--run-id", optionsOrStatus.runId);
 		if (optionsOrStatus.taskHandle) args.push("--task-handle", optionsOrStatus.taskHandle);
 		if (optionsOrStatus.agentId) args.push("--agent-id", optionsOrStatus.agentId);
-		if (optionsOrStatus.structuredResult) args.push("--result-json", JSON.stringify(optionsOrStatus.structuredResult));
+		if (optionsOrStatus.structuredResult)
+			args.push("--result-json", JSON.stringify(optionsOrStatus.structuredResult));
 		if (typeof optionsOrStatus.exitCode === "number") args.push("--exit-code", String(optionsOrStatus.exitCode));
 		if (optionsOrStatus.error) args.push("--error", optionsOrStatus.error);
 		if (optionsOrStatus.lockTimeoutMs) args.push("--timeout", (optionsOrStatus.lockTimeoutMs / 1000).toFixed(1));
@@ -1154,4 +1154,3 @@ export class TopicReplenishmentEngine {
 		return this.replenish(currentRoster, options);
 	}
 }
-

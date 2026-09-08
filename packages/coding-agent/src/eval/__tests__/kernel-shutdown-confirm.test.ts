@@ -84,6 +84,7 @@ describe("BaseKernel.shutdown exit confirmation", () => {
 		});
 		let endObserved = false;
 		const rejectedEnd = {
+			// biome-ignore lint/suspicious/noThenProperty: explicitly tests custom thenable rejection behavior
 			then(_resolve: (value: number) => void, reject: (error: Error) => void): void {
 				endObserved = true;
 				reject(brokenPipe);

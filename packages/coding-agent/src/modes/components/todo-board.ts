@@ -272,7 +272,8 @@ export function renderTodoBoardLines(phases: readonly TodoPhase[], options: Todo
 				.slice(baseIdx + 1 + SUBSEQUENT_PHASE_CAP)
 				.filter(phase =>
 					phase.tasks.some(
-						task => task.status === "in_progress" || (task.status === "pending" && options.owned.has(task.content)),
+						task =>
+							task.status === "in_progress" || (task.status === "pending" && options.owned.has(task.content)),
 					),
 				)
 		: [];
