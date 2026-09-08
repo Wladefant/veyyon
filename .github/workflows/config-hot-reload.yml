@@ -45,13 +45,14 @@ jobs:
           done
       - name: Focused settings contracts
         run: bash scripts/test-sandbox/run.sh bun test packages/coding-agent/test/config-hot-reload.test.ts packages/coding-agent/test/settings-reload-cwd.test.ts
+      - name: Prepare package native dependency
+        run: bun --cwd=packages/natives run ensure
       - name: Coding-agent package tests
         run: bash scripts/test-sandbox/run.sh bun run --cwd packages/coding-agent test
       - name: Exact-parity routing bench
         run: bash scripts/test-sandbox/run.sh bun packages/coding-agent/bench/config-hot-reload.bench.ts
       - name: Build private-display recorder
         run: |
-          bun --cwd=packages/natives run ensure
           bash proof/docker/build-recorder.sh
       - name: Record production command differential
         env:
