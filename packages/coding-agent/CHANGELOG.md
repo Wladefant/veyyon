@@ -47,6 +47,7 @@
 
 ### Changed
 
+- Autoresearch experiment tools share active-branch session resolution without changing errors or session selection.
 - Autoresearch session updates share optional-column assembly without changing stored values, omitted-field handling, or database errors.
 - Extension dashboard loading shares disable and shadow precedence across capability kinds without changing state or metadata.
 - `settings-selector.ts` writes its escape comparison as `\x1b` instead of a raw control byte. No user-visible behavior changes.

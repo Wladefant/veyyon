@@ -11,7 +11,6 @@ import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TailBuffer, truncateTail } from "
 // browser-side owner in `@veyyon/tool-render` cannot do. The module binds no runtime value from
 // `@veyyon/tui`, so taking a string helper from it leaves this tool host-agnostic.
 import { shortenPath } from "../../tools/core/render-utils";
-import * as git from "../../utils/git";
 import { parseWorkDirDirtyPaths } from "../git";
 import {
 	EXPERIMENT_MAX_BYTES,
@@ -22,9 +21,9 @@ import {
 	gitWorkDirPrefix,
 	parseAsiLines,
 	parseMetricLines,
+	resolveActiveBranchSession,
 } from "../helpers";
 import { buildExperimentState } from "../state";
-import { openAutoresearchStorageIfExists } from "../storage";
 import type {
 	AutoresearchToolFactoryOptions,
 	RunDetails,
@@ -64,19 +63,9 @@ export function createRunExperimentTool(
 		parameters: runExperimentSchema,
 		defaultInactive: true,
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
-			const storage = await openAutoresearchStorageIfExists(ctx.cwd);
-			const currentBranch = (await git.branch.current(ctx.cwd)) ?? null;
-			const session = storage?.getActiveSessionForBranch(currentBranch) ?? null;
-			if (!storage || !session) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: "Error: no active autoresearch session for the current branch. Call init_experiment first.",
-						},
-					],
-				};
-			}
+			const sessionResult = await resolveActiveBranchSession(ctx.cwd);
+			if (!sessionResult.ok) return sessionResult.result;
+			const { storage, session } = sessionResult;
 
 			const runtime = options.getRuntime(ctx);
 
