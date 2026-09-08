@@ -54,6 +54,9 @@ jobs:
           bun --cwd=packages/natives run ensure
           bash proof/docker/build-recorder.sh
       - name: Record production command differential
+        env:
+          # This command proves static states, not an animation cadence.
+          SCENE_MOTION_FLOOR: "0"
         run: bash proof/record.sh proof/scenes/config-hot-reload.sh
       - name: Preserve rendered command proof
         if: always()
