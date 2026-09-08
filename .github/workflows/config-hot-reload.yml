@@ -4,6 +4,9 @@ on:
     branches: [feat/native-topic-replenishment]
     paths:
       - packages/coding-agent/src/config/settings.ts
+      - packages/coding-agent/src/config/settings-domains/subagents.ts
+      - packages/coding-agent/bench/config-hot-reload.bench.ts
+      - proof/scenes/config-hot-reload.sh
       - packages/coding-agent/src/slash-commands/**
       - packages/coding-agent/test/config-hot-reload.test.ts
       - .github/workflows/config-hot-reload.yml
@@ -22,3 +25,5 @@ jobs:
         run: bash scripts/test-sandbox/run.sh --build
       - name: Focused settings contracts
         run: bash scripts/test-sandbox/run.sh bun test packages/coding-agent/test/config-hot-reload.test.ts packages/coding-agent/test/settings-reload-cwd.test.ts
+      - name: Exact-parity routing bench
+        run: bash scripts/test-sandbox/run.sh bun packages/coding-agent/bench/config-hot-reload.bench.ts
