@@ -18,9 +18,9 @@ import {
 	markdownToPhases,
 	nextActionableTask,
 	phasesToMarkdown,
-	type TodoPhase,
 	TODO_ITEM_PREVIEW_WIDTH,
 	TODO_TOTAL_PREVIEW_WIDTH,
+	type TodoPhase,
 	TodoTool,
 	USER_TODO_EDIT_CUSTOM_TYPE,
 } from "@veyyon/coding-agent/tools/todo";
@@ -120,7 +120,9 @@ describe("concurrent todo tasks: production-path regression and backtest", () =>
 		];
 
 		expect(todoBoardIsLive(phases, new Set())).toBe(true);
-		expect(todoBoardRailTravels({ transitions: true, agentInMotion: true, live: todoBoardIsLive(phases, new Set()) })).toBe(true);
+		expect(
+			todoBoardRailTravels({ transitions: true, agentInMotion: true, live: todoBoardIsLive(phases, new Set()) }),
+		).toBe(true);
 
 		// Frame 0 rendering
 		const linesFrame0 = renderTodoBoardLines(phases, boardOptions({ frame: 0, animate: true }));
@@ -132,7 +134,8 @@ describe("concurrent todo tasks: production-path regression and backtest", () =>
 		expect(textFrame0).toContain("Verify GUI motion across phases");
 
 		// Verification is pending, so it should carry unchecked checkbox glyph
-		const verificationLine = linesFrame0.find(l => Bun.stripANSI(l).includes("Verify GUI motion across phases")) ?? "";
+		const verificationLine =
+			linesFrame0.find(l => Bun.stripANSI(l).includes("Verify GUI motion across phases")) ?? "";
 		expect(verificationLine).toContain(theme.checkbox.unchecked);
 
 		// Both Phase 1 and Phase 2 lines carry the active workingMark (accent), not unchecked checkbox
@@ -469,7 +472,11 @@ describe("concurrent todo tasks: production-path regression and backtest", () =>
 		});
 		expect(soleRes.isError).toBeUndefined();
 		expect(phases()[0]!.tasks[0]!.status).toBe("pending");
-		expect(phases().flatMap(p => p.tasks).some(t => t.status === "in_progress")).toBe(false);
+		expect(
+			phases()
+				.flatMap(p => p.tasks)
+				.some(t => t.status === "in_progress"),
+		).toBe(false);
 
 		// 2. Multiple phases: Phase 1 completed, Phase 2 in_progress
 		await tool.execute("call-3", {
@@ -488,14 +495,22 @@ describe("concurrent todo tasks: production-path regression and backtest", () =>
 		expect(phaseRes.isError).toBeUndefined();
 		expect(phases()[1]!.tasks[0]!.status).toBe("pending");
 		expect(phases()[1]!.tasks[1]!.status).toBe("pending");
-		expect(phases().flatMap(p => p.tasks).some(t => t.status === "in_progress")).toBe(false);
+		expect(
+			phases()
+				.flatMap(p => p.tasks)
+				.some(t => t.status === "in_progress"),
+		).toBe(false);
 
 		// 3. Reset all tasks
 		await tool.execute("call-7", { op: "start", task: "Pending Task" });
 		expect(phases()[1]!.tasks[0]!.status).toBe("in_progress");
 		const allRes = await tool.execute("call-8", { op: "pending" });
 		expect(allRes.isError).toBeUndefined();
-		expect(phases().flatMap(p => p.tasks).every(t => t.status !== "in_progress")).toBe(true);
+		expect(
+			phases()
+				.flatMap(p => p.tasks)
+				.every(t => t.status !== "in_progress"),
+		).toBe(true);
 
 		// 4. TodoWrite compatibility with all pending tasks
 		const writeRes = await tool.execute("call-9", {
@@ -506,7 +521,11 @@ describe("concurrent todo tasks: production-path regression and backtest", () =>
 			merge: false,
 		} as unknown as Parameters<typeof tool.execute>[1]);
 		expect(writeRes.isError).toBeUndefined();
-		expect(phases().flatMap(p => p.tasks).every(t => t.status === "pending")).toBe(true);
+		expect(
+			phases()
+				.flatMap(p => p.tasks)
+				.every(t => t.status === "pending"),
+		).toBe(true);
 	});
 
 	/**

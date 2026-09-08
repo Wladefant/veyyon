@@ -22,10 +22,9 @@ import * as path from "node:path";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 const SOURCE_BRIDGE = path.join(REPO_ROOT, "packages/coding-agent/src/task/native-ledger-bridge.py");
-const TOPIC_REPLENISHMENT_SOURCE = path.join(
-	REPO_ROOT,
-	"packages/coding-agent/src/task/topic-replenishment.ts",
-).replace(/\\/g, "/");
+const TOPIC_REPLENISHMENT_SOURCE = path
+	.join(REPO_ROOT, "packages/coding-agent/src/task/topic-replenishment.ts")
+	.replace(/\\/g, "/");
 
 async function main(): Promise<void> {
 	console.log("Starting compiled-bridge-materializes-os-script-and-claims-ticket test suite...\n");
@@ -91,25 +90,21 @@ process.exit(1);
 		fs.writeFileSync(runnerSrc, runnerCode, "utf-8");
 
 		console.log("Compiling standalone test harness with bun build --compile...");
-		const buildRes = spawnSync(
-			process.execPath,
-			["build", "--compile", runnerSrc, "--outfile", compiledExe],
-			{
-				cwd: scratchDir,
-				env: {
-					...process.env,
-					USERPROFILE: scratchHome,
-					HOME: scratchHome,
-				},
-				stdio: "pipe",
-				encoding: "utf-8",
+		const buildRes = spawnSync(process.execPath, ["build", "--compile", runnerSrc, "--outfile", compiledExe], {
+			cwd: scratchDir,
+			env: {
+				...process.env,
+				USERPROFILE: scratchHome,
+				HOME: scratchHome,
 			},
-		);
+			stdio: "pipe",
+			encoding: "utf-8",
+		});
 
 		if (buildRes.status !== 0) {
 			throw new Error(`Failed to compile test runner:\nstdout: ${buildRes.stdout}\nstderr: ${buildRes.stderr}`);
 		}
-		console.log("Compilation succeeded: " + compiledExe);
+		console.log(`Compilation succeeded: ${compiledExe}`);
 
 		// Test 1: Probe path in compiled executable
 		{
@@ -135,7 +130,7 @@ process.exit(1);
 				materializedBytes.equals(sourceBytes),
 				"Materialized bridge script must byte-for-byte match native-ledger-bridge.py source",
 			);
-			console.log("  [PASS] Bridge script successfully materialized and verified at: " + parsed.bridgePath);
+			console.log(`  [PASS] Bridge script successfully materialized and verified at: ${parsed.bridgePath}`);
 		}
 
 		// Test 2: Reject invalid/empty ledger fail-closed
@@ -203,7 +198,11 @@ process.exit(1);
 
 			// Verify on-disk ledger state mutation through the Python bridge
 			const updatedLedger = JSON.parse(fs.readFileSync(validLedgerPath, "utf-8"));
-			assert.equal(updatedLedger.requests["req-valid-claim-1"].state, "implementation", "Ledger request state must transition to implementation");
+			assert.equal(
+				updatedLedger.requests["req-valid-claim-1"].state,
+				"implementation",
+				"Ledger request state must transition to implementation",
+			);
 			assert.equal(
 				updatedLedger.requests["req-valid-claim-1"].owner,
 				"test-worker-valid",

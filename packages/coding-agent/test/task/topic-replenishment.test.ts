@@ -18,20 +18,18 @@ import {
 	claimNextAuthorizedTicket,
 	completeClaimedTicket,
 	FileLock,
-	getSystemMemory,
 	isValidAuthorization,
+	type LedgerFileShape,
+	type NativeActorSnapshot,
+	reconcileRunningTopics,
 	recordNativeDispatch,
 	recoverOrphanedClaims,
 	rollbackClaimedTicket,
-	reconcileRunningTopics,
-	resolveTopicName,
-	RUNNABLE_TOPIC_NAMES,
+	type SubagentCompleteEvent,
 	setSystemMemoryProviderForTesting,
 	TopicReplenishmentEngine,
-	type LedgerFileShape,
-	type NativeActorSnapshot,
-	type SubagentCompleteEvent,
 } from "../../src/task/topic-replenishment";
+
 const scratchHead = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 
 function prepareScratchLedger(ledger: LedgerFileShape): void {
@@ -70,7 +68,6 @@ if (detectedPython) {
 	process.env.PYTHON = detectedPython;
 }
 
-
 async function runTests(): Promise<void> {
 	console.log("Starting topic-replenishment verification suite...\n");
 	const validAuthorization = {
@@ -97,7 +94,11 @@ async function runTests(): Promise<void> {
 	assert.equal(isValidAuthorization(true), false, "boolean primitive must be rejected");
 	assert.equal(isValidAuthorization(false), false, "boolean primitive must be rejected");
 	assert.equal(isValidAuthorization(Symbol("auth")), false, "symbol primitive must be rejected");
-	assert.equal(isValidAuthorization(() => {}), false, "function must be rejected");
+	assert.equal(
+		isValidAuthorization(() => {}),
+		false,
+		"function must be rejected",
+	);
 	assert.equal(isValidAuthorization({}), false, "empty record lacks required fields and must be rejected");
 
 	// Test 1: reconcileRunningTopics - strict running-only and idle/parked/fake rejection
@@ -169,7 +170,9 @@ async function runTests(): Promise<void> {
 		const liveCheck = await checkMemoryAdmission();
 		assert.ok(liveCheck.totalMb > 0, "Must report total memory");
 		assert.ok(liveCheck.freeMb > 0, "Must report free memory");
-		console.log(`  Live memory check: ${liveCheck.usedPct}% used, ${liveCheck.freeMb} MB free (admitted=${liveCheck.admitted})`);
+		console.log(
+			`  Live memory check: ${liveCheck.usedPct}% used, ${liveCheck.freeMb} MB free (admitted=${liveCheck.admitted})`,
+		);
 
 		// Healthy admission with injected RAM reading (50% used)
 		const healthyCheck = await checkMemoryAdmission({
@@ -238,106 +241,77 @@ async function runTests(): Promise<void> {
 	}
 
 	// Test 4: FileLock - real two-process mutual exclusion against Python ledger locking (Finding 4)
-	{
-		console.log("Test 4: FileLock - real two-process mutual exclusion against Python ledger locking");
-		if (!detectedPython) {
-			console.log("  [SKIP] python absent in environment — skipping two-process Python FileLock test\n");
-		} else {
-			const testDir = path.join(os.tmpdir(), `test-lock-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-			await fs.promises.mkdir(testDir, { recursive: true });
-			const targetFile = path.join(testDir, "test.json");
-			const lockFile = `${targetFile}.lock`;
-			const python = detectedPython;
-			const bridgeScript = path.resolve("packages/coding-agent/src/task/native-ledger-bridge.py");
+	console.log("Test 4: FileLock - real two-process mutual exclusion against Python ledger locking");
+	if (!detectedPython) {
+		console.log("  [SKIP] python absent in environment — skipping two-process Python FileLock test\n");
+	} else {
+		const testDir = path.join(os.tmpdir(), `test-lock-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		await fs.promises.mkdir(testDir, { recursive: true });
+		const targetFile = path.join(testDir, "test.json");
+		const lockFile = `${targetFile}.lock`;
+		const python = detectedPython;
+		const bridgeScript = path.resolve("packages/coding-agent/src/task/native-ledger-bridge.py");
 
-			// 1. Start a separate Python process (Process 1) holding the OS lock
-			const p1 = spawn(
-				python,
-				[
-					bridgeScript,
-					"hold-lock",
-					"--lock-path",
-					lockFile,
-					"--duration",
-					"10",
-					"--ready-signal",
-					"LOCKED",
-				],
-				{ stdio: ["ignore", "pipe", "pipe"] },
-			);
+		// 1. Start a separate Python process (Process 1) holding the OS lock
+		const p1 = spawn(
+			python,
+			[bridgeScript, "hold-lock", "--lock-path", lockFile, "--duration", "10", "--ready-signal", "LOCKED"],
+			{ stdio: ["ignore", "pipe", "pipe"] },
+		);
 
-			// Wait for P1 to acquire the lock
-			const { promise: p1Acquired, resolve: p1Resolve, reject: p1Reject } = Promise.withResolvers<void>();
-			p1.stdout?.on("data", (chunk: Buffer) => {
-				if (chunk.toString().includes("LOCKED")) p1Resolve();
-			});
-			p1.on("error", p1Reject);
-			p1.on("close", code => {
-				p1Reject(new Error(`P1 exited prematurely with code ${code}`));
-			});
-			await p1Acquired;
+		// Wait for P1 to acquire the lock
+		const { promise: p1Acquired, resolve: p1Resolve, reject: p1Reject } = Promise.withResolvers<void>();
+		p1.stdout?.on("data", (chunk: Buffer) => {
+			if (chunk.toString().includes("LOCKED")) p1Resolve();
+		});
+		p1.on("error", p1Reject);
+		p1.on("close", code => {
+			p1Reject(new Error(`P1 exited prematurely with code ${code}`));
+		});
+		await p1Acquired;
 
-			// 2. While Python holds the lock, TypeScript attempt to acquire must fail/timeout
-			const lockTs = new FileLock(targetFile);
-			let tsAcquisitionBlocked = false;
-			try {
-				await lockTs.acquire(400); // short timeout
-			} catch (err) {
-				tsAcquisitionBlocked = true;
-				console.log("  [P1 held lock] TS acquisition correctly timed out:", String(err).slice(0, 70));
-			}
-			assert.equal(tsAcquisitionBlocked, true, "TypeScript must be blocked while Python holds lock");
-
-			// 3. Release Python process 1
-			p1.kill();
-			await once(p1, "close");
-
-			// 4. TypeScript acquires the lock
-			await lockTs.acquire(5000);
-			console.log("  [TS acquired lock]");
-
-			// 5. While TypeScript holds the lock, a concurrent Python child process must be blocked
-			const p2 = spawn(
-				python,
-				[
-					bridgeScript,
-					"hold-lock",
-					"--lock-path",
-					lockFile,
-					"--duration",
-					"0.1",
-					"--timeout",
-					"0.4",
-				],
-				{ stdio: ["ignore", "ignore", "pipe"] },
-			);
-			const [p2ExitCode] = (await once(p2, "close")) as [number];
-			assert.notEqual(p2ExitCode, 0, "Concurrent Python process must fail to acquire while TS holds lock");
-			console.log("  [TS held lock] Concurrent Python child process blocked with non-zero exit code");
-
-			// 6. Release lock from TypeScript
-			await lockTs.release();
-
-			// 7. After release, a new Python process acquires immediately
-			const p3 = spawn(
-				python,
-				[
-					bridgeScript,
-					"hold-lock",
-					"--lock-path",
-					lockFile,
-					"--duration",
-					"0.1",
-					"--timeout",
-					"2.0",
-				],
-				{ stdio: ["ignore", "ignore", "pipe"] },
-			);
-			const [p3ExitCode] = (await once(p3, "close")) as [number];
-			assert.equal(p3ExitCode, 0, "Python process acquires lock successfully after TS release");
-			await fs.promises.rm(testDir, { recursive: true, force: true }).catch(() => {});
-			console.log("  [PASS] FileLock proves bidirectional two-process OS-level mutual exclusion\n");
+		// 2. While Python holds the lock, TypeScript attempt to acquire must fail/timeout
+		const lockTs = new FileLock(targetFile);
+		let tsAcquisitionBlocked = false;
+		try {
+			await lockTs.acquire(400); // short timeout
+		} catch (err) {
+			tsAcquisitionBlocked = true;
+			console.log("  [P1 held lock] TS acquisition correctly timed out:", String(err).slice(0, 70));
 		}
+		assert.equal(tsAcquisitionBlocked, true, "TypeScript must be blocked while Python holds lock");
+
+		// 3. Release Python process 1
+		p1.kill();
+		await once(p1, "close");
+
+		// 4. TypeScript acquires the lock
+		await lockTs.acquire(5000);
+		console.log("  [TS acquired lock]");
+
+		// 5. While TypeScript holds the lock, a concurrent Python child process must be blocked
+		const p2 = spawn(
+			python,
+			[bridgeScript, "hold-lock", "--lock-path", lockFile, "--duration", "0.1", "--timeout", "0.4"],
+			{ stdio: ["ignore", "ignore", "pipe"] },
+		);
+		const [p2ExitCode] = (await once(p2, "close")) as [number];
+		assert.notEqual(p2ExitCode, 0, "Concurrent Python process must fail to acquire while TS holds lock");
+		console.log("  [TS held lock] Concurrent Python child process blocked with non-zero exit code");
+
+		// 6. Release lock from TypeScript
+		await lockTs.release();
+
+		// 7. After release, a new Python process acquires immediately
+		const p3 = spawn(
+			python,
+			[bridgeScript, "hold-lock", "--lock-path", lockFile, "--duration", "0.1", "--timeout", "2.0"],
+			{ stdio: ["ignore", "ignore", "pipe"] },
+		);
+		const [p3ExitCode] = (await once(p3, "close")) as [number];
+		assert.equal(p3ExitCode, 0, "Python process acquires lock successfully after TS release");
+		await fs.promises.rm(testDir, { recursive: true, force: true }).catch(() => {});
+		console.log("  [PASS] FileLock proves bidirectional two-process OS-level mutual exclusion\n");
 	}
 	if (!detectedPython) {
 		console.log("  [SKIP] python absent in environment — skipping Python-dependent ledger bridge tests (5-12)\n");
@@ -346,7 +320,6 @@ async function runTests(): Promise<void> {
 		console.log("=================================================");
 		return;
 	}
-
 
 	// Test 5: claimNextAuthorizedTicket - atomic claiming, authorization, forbidden target and cancellation guards
 	{
@@ -469,7 +442,11 @@ async function runTests(): Promise<void> {
 
 		assert.equal(claim1.claimed, true, "Must claim an eligible ticket");
 		assert.ok(claim1.ticket, "Ticket must be defined");
-		assert.equal(claim1.ticket.id, "req-eligible-motion", "Must prioritize uncovered topic Motion over already-covered GUI");
+		assert.equal(
+			claim1.ticket.id,
+			"req-eligible-motion",
+			"Must prioritize uncovered topic Motion over already-covered GUI",
+		);
 		assert.equal(claim1.ticket.owner, "native-worker-motion-1", "Must assign specified worker id");
 		assert.equal(claim1.ticket.state, "implementation", "Must advance state from pending to implementation");
 
@@ -693,7 +670,10 @@ async function runTests(): Promise<void> {
 		assert.equal(failReq.state, "pending", "Failed dispatch must roll back ticket to pending");
 		assert.equal(failReq.owner, "", "Owner must be cleared on rollback");
 		assert.equal(failReq.blocker, null, "Retryable dispatch failure must not permanently block the ticket");
-		assert.ok(Array.isArray(failReq.history) && failReq.history.length >= 2, "History must record claim and rollback");
+		assert.ok(
+			Array.isArray(failReq.history) && failReq.history.length >= 2,
+			"History must record claim and rollback",
+		);
 
 		const retried: string[] = [];
 		const retryEngine = new TopicReplenishmentEngine({
@@ -838,7 +818,11 @@ async function runTests(): Promise<void> {
 		});
 		assert.equal(resError.ok, false, "Must not advance on exit0 when error is present");
 		const postError = JSON.parse(await fs.promises.readFile(ledgerPath, "utf-8")) as LedgerFileShape;
-		assert.equal(postError.requests["req-native-1"].state, "implementation", "State must remain implementation on error");
+		assert.equal(
+			postError.requests["req-native-1"].state,
+			"implementation",
+			"State must remain implementation on error",
+		);
 		assert.ok(postError.requests["req-native-1"].blocker?.includes("Unexpected runtime failure"));
 
 		// Focus Test B: verdict fail stays unadvanced
@@ -857,7 +841,11 @@ async function runTests(): Promise<void> {
 		});
 		assert.equal(resVerdictFail.ok, false, "Must not advance on failed verdict");
 		const postFail = JSON.parse(await fs.promises.readFile(ledgerPath, "utf-8")) as LedgerFileShape;
-		assert.equal(postFail.requests["req-native-1"].state, "implementation", "State must remain implementation on failed verdict");
+		assert.equal(
+			postFail.requests["req-native-1"].state,
+			"implementation",
+			"State must remain implementation on failed verdict",
+		);
 
 		// Focus Test C: empty checks stays unadvanced
 		await bindCompletion("run-test-c");
@@ -875,7 +863,11 @@ async function runTests(): Promise<void> {
 		});
 		assert.equal(resEmptyChecks.ok, false, "Must not advance on pass verdict with empty checks");
 		const postEmpty = JSON.parse(await fs.promises.readFile(ledgerPath, "utf-8")) as LedgerFileShape;
-		assert.equal(postEmpty.requests["req-native-1"].state, "implementation", "State must remain implementation on empty checks");
+		assert.equal(
+			postEmpty.requests["req-native-1"].state,
+			"implementation",
+			"State must remain implementation on empty checks",
+		);
 
 		// Focus Test D: valid native structured result advances via canonical validator
 		await bindCompletion("run-test-d");
@@ -889,12 +881,24 @@ async function runTests(): Promise<void> {
 				head_sha: "abcdef1234567890abcdef1234567890abcdef12",
 				verdict: "pass",
 				summary: "Verification succeeded",
-				checks: [{ name: "check-spring", command: ["git", "status"], exit_code: 0, observed: "clean", purpose: "verification" }],
+				checks: [
+					{
+						name: "check-spring",
+						command: ["git", "status"],
+						exit_code: 0,
+						observed: "clean",
+						purpose: "verification",
+					},
+				],
 			},
 		});
 		assert.equal(resValid.ok, true, "Must advance on valid canonical structured result");
 		const postValid = JSON.parse(await fs.promises.readFile(ledgerPath, "utf-8")) as LedgerFileShape;
-		assert.equal(postValid.requests["req-native-1"].state, "QA", "Stage must advance to QA on valid implementation result");
+		assert.equal(
+			postValid.requests["req-native-1"].state,
+			"QA",
+			"Stage must advance to QA on valid implementation result",
+		);
 		assert.equal(postValid.requests["req-native-1"].blocker, null, "Blocker must be cleared on success");
 
 		// Focus Test E: full engine lifecycle with onWorkerComplete and automatic replenishment
@@ -923,7 +927,9 @@ async function runTests(): Promise<void> {
 				request_id: "req-native-1",
 				verdict: "pass",
 				summary: "Review passed",
-				checks: [{ name: "c1", command: ["git", "status"], exit_code: 0, observed: "clean", purpose: "verification" }],
+				checks: [
+					{ name: "c1", command: ["git", "status"], exit_code: 0, observed: "clean", purpose: "verification" },
+				],
 			},
 		};
 
@@ -1001,11 +1007,13 @@ async function runTests(): Promise<void> {
 		console.log("  [PASS] concurrent cycles share reservations and respect maxCeiling\n");
 	}
 
-
 	// Test 10: session recovery releases only owners absent from the live roster.
 	{
 		console.log("Test 10: recovery reclaims a crashed worker's durable claim");
-		const testDir = path.join(os.tmpdir(), `test-orphan-recovery-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const testDir = path.join(
+			os.tmpdir(),
+			`test-orphan-recovery-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+		);
 		const ledgerPath = path.join(testDir, "ledger.json");
 		await fs.promises.mkdir(testDir, { recursive: true });
 		const ledger: LedgerFileShape = {
@@ -1049,7 +1057,10 @@ async function runTests(): Promise<void> {
 	// Test 11: a late completion cannot advance a ticket after rollback and reclaim.
 	{
 		console.log("Test 11: stale worker completion cannot advance a reclaimed ticket");
-		const testDir = path.join(os.tmpdir(), `test-stale-completion-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const testDir = path.join(
+			os.tmpdir(),
+			`test-stale-completion-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+		);
 		const ledgerPath = path.join(testDir, "ledger.json");
 		await fs.promises.mkdir(testDir, { recursive: true });
 		const ledger: LedgerFileShape = {
@@ -1085,7 +1096,9 @@ async function runTests(): Promise<void> {
 			request_id: "reclaimed-ticket",
 			head_sha: scratchHead,
 			verdict: "pass",
-			checks: [{ name: "verify", command: ["git", "status"], exit_code: 0, observed: "clean", purpose: "verification" }],
+			checks: [
+				{ name: "verify", command: ["git", "status"], exit_code: 0, observed: "clean", purpose: "verification" },
+			],
 		};
 		const stale = await completeClaimedTicket(ledgerPath, "reclaimed-ticket", {
 			runId: oldClaim.ticket.runId,
@@ -1113,7 +1126,10 @@ async function runTests(): Promise<void> {
 	// Test 12: completion persistence failure is surfaced and blocks replenishment.
 	{
 		console.log("Test 12: completion persistence failure does not silently replenish");
-		const testDir = path.join(os.tmpdir(), `test-completion-outage-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const testDir = path.join(
+			os.tmpdir(),
+			`test-completion-outage-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+		);
 		const ledgerPath = path.join(testDir, "ledger.json");
 		await fs.promises.mkdir(testDir, { recursive: true });
 		const ledger: LedgerFileShape = {

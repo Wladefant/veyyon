@@ -27,13 +27,21 @@ describe("config hot reload", () => {
 			sessionManager: { getCwd: () => dir },
 			editor: {
 				getExpandedText: () => draft,
-				setText: (text: string) => { draft = text; },
-				addToHistory: (text: string) => { history.push(text); },
+				setText: (text: string) => {
+					draft = text;
+				},
+				addToHistory: (text: string) => {
+					history.push(text);
+				},
 				pendingImages: [],
 				pendingImageLinks: [],
 			},
-			showError: (text: string) => { errors.push(text); },
-			showStatus: (text: string) => { statuses.push(text); },
+			showError: (text: string) => {
+				errors.push(text);
+			},
+			showStatus: (text: string) => {
+				statuses.push(text);
+			},
 		} as unknown as InputControllerContext;
 		const input = new InputController(ctx);
 		await fs.writeFile(file, "subagent: [");

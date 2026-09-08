@@ -211,7 +211,9 @@ export interface TodoOpReport {
 // Schema
 // =============================================================================
 
-const TodoOp = type('"init" | "start" | "done" | "rm" | "drop" | "append" | "view" | "pending"').describe("operation to apply");
+const TodoOp = type('"init" | "start" | "done" | "rm" | "drop" | "append" | "view" | "pending"').describe(
+	"operation to apply",
+);
 
 const InitListEntry = type({
 	"phase?": type("string").describe("phase name; omitted entries continue the previous phase"),
@@ -987,7 +989,11 @@ export function adaptTodoWriteBatch(
 				if (!replace) {
 					const existing = currentPhases
 						.flatMap(phase => phase.tasks)
-						.find(t => (normalizeForTodoMatch(t.content) || t.content) === (normalizeForTodoMatch(todo.content) || todo.content));
+						.find(
+							t =>
+								(normalizeForTodoMatch(t.content) || t.content) ===
+								(normalizeForTodoMatch(todo.content) || todo.content),
+						);
 					if (existing && existing.status !== "pending") {
 						ops.push({ op: "pending", task: todo.content });
 					}
@@ -996,7 +1002,12 @@ export function adaptTodoWriteBatch(
 			}
 		}
 	}
-	if (replace && todos.length > 0 && !todos.some(t => t.status === "in_progress") && todos.every(t => t.status === "pending")) {
+	if (
+		replace &&
+		todos.length > 0 &&
+		!todos.some(t => t.status === "in_progress") &&
+		todos.every(t => t.status === "pending")
+	) {
 		ops.push({ op: "pending" });
 	}
 	return { ops, notes };
@@ -1166,7 +1177,11 @@ function formatMutationSummary(phases: TodoPhase[], params: TodoParams): string 
 			changed = task ? `Removed: ${task}.` : `Removed phase: ${phase}.`;
 			break;
 		case "pending":
-			changed = task ? `Reset to pending: ${task}.` : phase ? `Reset phase to pending: ${phase}.` : "Reset all tasks to pending.";
+			changed = task
+				? `Reset to pending: ${task}.`
+				: phase
+					? `Reset phase to pending: ${phase}.`
+					: "Reset all tasks to pending.";
 			break;
 		case "view":
 			throw new Error("view operations require the full todo summary");

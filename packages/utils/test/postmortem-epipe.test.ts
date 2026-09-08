@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { spawnSync, spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import * as postmortem from "../src/postmortem";
 

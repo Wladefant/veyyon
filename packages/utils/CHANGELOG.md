@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `BUILD_TAG` export in `@veyyon/utils/dirs` for build metadata and custom build identification.
+
 ## [1.4.1] - 2026-09-08
 
 ### Added

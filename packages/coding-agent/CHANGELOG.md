@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+
+- Guard against auto-updating or replacing custom and local Veyyon binary builds.
+- Support auto-update opt-out via `startup.autoUpdate: false`, `updates.auto: false`, and `VEYYON_NO_AUTO_UPDATE=1`.
+- Record skipped automatic updates in `update-history.json`.
+
 ## [1.4.1] - 2026-09-08
 
 ### Added
