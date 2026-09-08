@@ -9,7 +9,7 @@ import { AgentRegistry, MAIN_AGENT_ID } from "../../../registry/agent-registry";
 import * as sdk from "../../../sdk";
 import type { AgentSession } from "../../../session/agent-session";
 import { BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE } from "../../../session/messages";
-import { createAgentSettings, createMCPProxyTools } from "../../../task/executor";
+import { createMCPProxyTools, createSubagentSettings } from "../../../task/executor";
 import { USER_TODO_EDIT_CUSTOM_TYPE } from "../../../tools/agent/todo";
 import { previewLine } from "../../../tools/core/render-utils";
 import type { InteractiveModeContext } from "../types";
@@ -82,7 +82,7 @@ export class TanCommandController {
 		// session) rather than as a top-level sibling, so it shares the parent's
 		// artifacts in place — no copy needed.
 		const sessionDir = parentFile.slice(0, -6);
-		const settings = createAgentSettings(this.ctx.settings);
+		const settings = createSubagentSettings(this.ctx.settings);
 		const customTools = mcpManager ? createMCPProxyTools(mcpManager) : undefined;
 		const enableLsp = this.ctx.settings.get("agent.enableLsp") !== false;
 		const agentRegistry = AgentRegistry.global();

@@ -4,7 +4,7 @@
  * Handles `veyyon agents unpack` for writing bundled agent definitions to disk.
  *
  * The default target is the one directory discovery reads for user-authored
- * definitions, `~/<config>/agents` ({@link getGlobalAgentsDir}). It used
+ * definitions, `~/<config>/subagents` ({@link getGlobalSubagentsDir}). It used
  * to be `<agentDir>/agents`, and it stayed there after definitions moved to the
  * global dir, so an unpacked agent landed where nothing loads it: the command
  * reported files written and the model never saw one of them. `--dir` is the
@@ -14,7 +14,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getGlobalAgentsDir, getProjectDir, isEnoent } from "@veyyon/utils";
+import { getGlobalSubagentsDir, getProjectDir, isEnoent } from "@veyyon/utils";
 import { YAML } from "bun";
 import chalk from "chalk";
 import { loadBundledAgents } from "../task/agents";
@@ -53,7 +53,7 @@ function resolveTargetDir(flags: AgentsCommandArgs["flags"]): string {
 		return path.resolve(getProjectDir(), flags.dir.trim());
 	}
 
-	return getGlobalAgentsDir();
+	return getGlobalSubagentsDir();
 }
 
 function toFrontmatter(agent: AgentDefinition): Record<string, unknown> {

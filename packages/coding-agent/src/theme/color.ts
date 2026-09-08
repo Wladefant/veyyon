@@ -252,7 +252,7 @@ export type ThemeColor =
 	| "statusLineUntracked"
 	| "statusLineOutput"
 	| "statusLineCost"
-	| "statusLineAgents"
+	| "statusLineSubagents"
 	| "sessionAccent"
 	| "modeAccent"
 	| "shareAccent"
@@ -321,7 +321,7 @@ const THEME_COLOR_RECORD = {
 	statusLineUntracked: true,
 	statusLineOutput: true,
 	statusLineCost: true,
-	statusLineAgents: true,
+	statusLineSubagents: true,
 	sessionAccent: true,
 	modeAccent: true,
 	shareAccent: true,

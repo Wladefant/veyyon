@@ -33,7 +33,7 @@ import {
 	attachFaultSink,
 	type DetachFaultSink,
 	type Fault,
-	getGlobalAgentsDir,
+	getGlobalSubagentsDir,
 	removeWithRetries,
 	SUBAGENTS_DIR_NAME,
 } from "@veyyon/utils";
@@ -82,11 +82,11 @@ describe("user agents are global and their tools are checked", () => {
 	}
 
 	test("resolves the directory off the config root, not off a profile", () => {
-		expect(getGlobalAgentsDir()).toBe(agentsDir);
-		expect(path.basename(getGlobalAgentsDir())).toBe(SUBAGENTS_DIR_NAME);
+		expect(getGlobalSubagentsDir()).toBe(agentsDir);
+		expect(path.basename(getGlobalSubagentsDir())).toBe(SUBAGENTS_DIR_NAME);
 		// The profile segment must not appear: that is what made the directory
 		// profile-scoped before.
-		expect(getGlobalAgentsDir()).not.toContain(`${path.sep}profiles${path.sep}`);
+		expect(getGlobalSubagentsDir()).not.toContain(`${path.sep}profiles${path.sep}`);
 	});
 
 	test("finds a definition there whatever profile the caller names", async () => {

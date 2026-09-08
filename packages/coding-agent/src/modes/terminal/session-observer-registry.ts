@@ -1,7 +1,7 @@
 // `../../task/types`, the module that DECLARES these, not the `../../task` barrel that re-exports them: the
 // barrel is the whole task subsystem, 1,406 modules, and this file subscribes to two channels by name.
 import type { AgentLifecyclePayload, AgentProgress, AgentProgressPayload } from "../../task/types";
-import { TASK_AGENT_LIFECYCLE_CHANNEL, TASK_AGENT_PROGRESS_CHANNEL } from "../../task/types";
+import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } from "../../task/types";
 import type { EventBus } from "../../utils/event-bus";
 
 export interface ObservableSession {
@@ -168,7 +168,7 @@ export class SessionObserverRegistry {
 		this.#eventBusUnsubscribers = [];
 
 		this.#eventBusUnsubscribers.push(
-			eventBus.on(TASK_AGENT_LIFECYCLE_CHANNEL, data => {
+			eventBus.on(TASK_SUBAGENT_LIFECYCLE_CHANNEL, data => {
 				const payload = data as AgentLifecyclePayload;
 				const status = STATUS_MAP[payload.status];
 				if (!status) return;
@@ -204,7 +204,7 @@ export class SessionObserverRegistry {
 		);
 
 		this.#eventBusUnsubscribers.push(
-			eventBus.on(TASK_AGENT_PROGRESS_CHANNEL, data => {
+			eventBus.on(TASK_SUBAGENT_PROGRESS_CHANNEL, data => {
 				const payload = data as AgentProgressPayload;
 				const progress = payload.progress;
 				const id = progress.id;

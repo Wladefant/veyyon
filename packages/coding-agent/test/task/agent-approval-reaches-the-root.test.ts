@@ -8,7 +8,7 @@
  * "requires approval but no interactive UI available" instead of asking anybody. The
  * child died mid-task with no card ever drawn and no operator ever consulted.
  *
- * That was survivable only while `createAgentSettings` forced every child to `yolo`,
+ * That was survivable only while `createSubagentSettings` forced every child to `yolo`,
  * because a `yolo` child never asks. Removing that hardcode (children now inherit the
  * operator's rung) turned a dormant hole into a hard failure on an ordinary call, which
  * is why the surfacing below is load-bearing rather than a nicety.
@@ -31,7 +31,7 @@
  *
  * WHY REAL COLLABORATORS. The whole defect was a missing argument between a real
  * `ExtensionRunner` and a real `ExtensionToolWrapper`, so both are the production classes
- * here, the rung comes from the real `createAgentSettings`, and the lookup runs against
+ * here, the rung comes from the real `createSubagentSettings`, and the lookup runs against
  * the real process-global `AgentRegistry`. A stubbed `hasUI: () => true` would have been
  * green throughout the entire period the bug existed.
  */
@@ -52,7 +52,7 @@ import { ExtensionToolWrapper } from "@veyyon/coding-agent/extensibility/extensi
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import * as sdkModule from "@veyyon/coding-agent/sdk";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { createAgentSettings, resolveRootUIContext, runSubprocess } from "@veyyon/coding-agent/task/executor";
+import { createSubagentSettings, resolveRootUIContext, runSubprocess } from "@veyyon/coding-agent/task/executor";
 import type { AgentDefinition } from "@veyyon/coding-agent/task/types";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { type } from "arktype";
@@ -134,12 +134,12 @@ interface CallOutcome {
 /**
  * Drive one tool call through the production wrapper, as agent `agentId` would.
  *
- * The rung comes from the real `createAgentSettings` fork of a parent at `rung`, so a
+ * The rung comes from the real `createSubagentSettings` fork of a parent at `rung`, so a
  * change to how a spawn inherits permission moves these assertions rather than leaving
  * them asserting a literal this file wrote.
  */
 async function callAsAgent(agentId: string, rung: string, tool: AgentTool = makeTool()): Promise<CallOutcome> {
-	const settings = createAgentSettings(Settings.isolated({ "tools.approvalMode": rung }));
+	const settings = createSubagentSettings(Settings.isolated({ "tools.approvalMode": rung }));
 	// The child's own runner, wired exactly as `runSubprocess` wires it: named, then
 	// handed whatever surface the ROOT resolves to.
 	const runner = makeRunner(resolveRootUIContext(agentId));

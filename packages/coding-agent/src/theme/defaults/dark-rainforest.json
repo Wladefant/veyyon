@@ -80,7 +80,7 @@
 		"statusLineUntracked": "orchidPurple",
 		"statusLineOutput": "treefrogOrange",
 		"statusLineCost": "fireflyGold",
-		"statusLineAgents": "orchidPurple",
+		"statusLineSubagents": "orchidPurple",
 		"pythonMode": "#f0c040"
 	},
 	"export": {

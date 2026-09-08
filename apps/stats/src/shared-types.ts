@@ -146,7 +146,7 @@ export interface DashboardStats {
  * `main` agent, an `__advisor.jsonl` is the passive `advisor`, and any other
  * nested transcript is a task spawn.
  */
-export type AgentType = "main" | "spawn" | "advisor";
+export type AgentType = "main" | "subagent" | "advisor";
 
 /**
  * Token usage aggregated by {@link AgentType} over the active range. Token

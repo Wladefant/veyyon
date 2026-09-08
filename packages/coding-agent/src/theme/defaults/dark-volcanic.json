@@ -80,7 +80,7 @@
 		"statusLineUntracked": "obsidianBlue",
 		"statusLineOutput": "emberGold",
 		"statusLineCost": "sulfurYellow",
-		"statusLineAgents": "magmaOrange",
+		"statusLineSubagents": "magmaOrange",
 		"pythonMode": "#f0c040"
 	},
 	"export": {

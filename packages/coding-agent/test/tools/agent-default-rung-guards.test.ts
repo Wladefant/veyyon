@@ -5,11 +5,11 @@
  * `default-rung-guards.test.ts` proves the guards that sit on top of the rung survive
  * that move. Every case in that file drives the MAIN session. Not one of them drives a
  * SPAWNED agent, and a spawned agent does not run on the operator's rung: it runs on
- * whatever `createAgentSettings` writes into its runtime override layer.
+ * whatever `createSubagentSettings` writes into its runtime override layer.
  *
  * That distinction is not academic. The wrapper opts a call out of the working-directory
  * boundary and the secret-use boundary on exactly one condition, `approvalMode === "yolo"`,
- * and `createAgentSettings` sets `"tools.approvalMode": "yolo"` unconditionally for
+ * and `createSubagentSettings` sets `"tools.approvalMode": "yolo"` unconditionally for
  * every spawned agent. So a `read` of `/etc/passwd` and a `bash` that spends a stored
  * credential are ungated for an agent, on a default install, with the operator having
  * configured nothing. A guard that holds only on the main session is the worst version
@@ -17,7 +17,7 @@
  * the boundary exists, and delegates the same work to an agent that has no boundary.
  *
  * WHY IT IS WRITTEN AGAINST THE REAL SETTINGS BUILDER. The rung an agent gets is
- * decided by `createAgentSettings`, so a test that hand-writes a mode string is
+ * decided by `createSubagentSettings`, so a test that hand-writes a mode string is
  * testing its own literal. These cases fork the real builder from a bare parent
  * `Settings` (nothing configured, exactly like a fresh install) and hand the RESULT to
  * the same `ExtensionToolWrapper` production uses, so changing the override in
@@ -34,7 +34,7 @@ import type { AgentTool, ToolApprovalDecision } from "@veyyon/agent-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ExtensionRunner } from "@veyyon/coding-agent/extensibility/extensions/runner";
 import { ExtensionToolWrapper } from "@veyyon/coding-agent/extensibility/extensions/wrapper";
-import { createAgentSettings } from "@veyyon/coding-agent/task/executor";
+import { createSubagentSettings } from "@veyyon/coding-agent/task/executor";
 import { type } from "arktype";
 
 /** Text the tool returns when it actually runs, so "it ran" is observable. */
@@ -105,7 +105,7 @@ interface RunOptions {
  */
 async function runAgentCall(options: RunOptions = {}): Promise<RunOutcome> {
 	const parent = Settings.isolated(options.parentSettings ?? {});
-	const settings = options.asMainSession === true ? parent : createAgentSettings(parent);
+	const settings = options.asMainSession === true ? parent : createSubagentSettings(parent);
 	const cards: string[] = [];
 	const runner = {
 		hasHandlers: () => false,
@@ -145,7 +145,7 @@ describe("a spawned agent inherits the spawning session's rung", () => {
 	/**
 	 * THE RULING THIS PINS: agents inherit the parent's permissions. Stated as an
 	 * EQUALITY across every rung, not as "the child is not yolo", because the defect was
-	 * not the specific literal `"yolo"`, it was `createAgentSettings` writing ANY
+	 * not the specific literal `"yolo"`, it was `createSubagentSettings` writing ANY
 	 * literal at all. A hardcoded `"auto"` would satisfy a negative assertion and still
 	 * override an operator who chose `ask`.
 	 *
@@ -155,7 +155,7 @@ describe("a spawned agent inherits the spawning session's rung", () => {
 	it("resolves to exactly the parent's rung, for every rung", () => {
 		for (const configured of ["plan", "ask", "ask-command", "auto-edit", "auto", "yolo"]) {
 			const parent = Settings.isolated({ "tools.approvalMode": configured });
-			const child = createAgentSettings(parent);
+			const child = createSubagentSettings(parent);
 			expect(`${configured} -> ${child.get("tools.approvalMode")}`).toBe(`${configured} -> ${configured}`);
 		}
 	});
@@ -168,7 +168,7 @@ describe("a spawned agent inherits the spawning session's rung", () => {
 	it("inherits the unset default when the operator configured nothing", () => {
 		const parent = Settings.isolated({});
 		expect(parent.get("tools.approvalMode")).toBe("auto");
-		expect(createAgentSettings(parent).get("tools.approvalMode")).toBe("auto");
+		expect(createSubagentSettings(parent).get("tools.approvalMode")).toBe("auto");
 	});
 
 	/**
@@ -178,7 +178,7 @@ describe("a spawned agent inherits the spawning session's rung", () => {
 	 */
 	it("keeps the rung across a nested spawn", () => {
 		const parent = Settings.isolated({ "tools.approvalMode": "ask" });
-		const grandchild = createAgentSettings(createAgentSettings(parent));
+		const grandchild = createSubagentSettings(createSubagentSettings(parent));
 		expect(grandchild.get("tools.approvalMode")).toBe("ask");
 	});
 
@@ -188,7 +188,7 @@ describe("a spawned agent inherits the spawning session's rung", () => {
 	 * quietly re-enabling async jobs and bash auto-backgrounding inside agents.
 	 */
 	it("still applies the headless runtime policies it does own", () => {
-		const child = createAgentSettings(Settings.isolated({ "tools.approvalMode": "ask" }));
+		const child = createSubagentSettings(Settings.isolated({ "tools.approvalMode": "ask" }));
 		expect(child.get("async.enabled")).toBe(false);
 		expect(child.get("bash.autoBackground.enabled")).toBe(false);
 	});

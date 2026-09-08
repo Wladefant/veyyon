@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import type { CreateAgentSessionOptions } from "@veyyon/coding-agent/session/factory-options";
-import { isInProcessChildSession, isSpawnedSession } from "@veyyon/coding-agent/session/factory-options";
+import { isInProcessChildSession, isSubagentSession } from "@veyyon/coding-agent/session/factory-options";
 
 const SDK = path.join(import.meta.dir, "../../src/sdk.ts");
 
@@ -18,7 +18,7 @@ type SessionRoleOptions = Pick<CreateAgentSessionOptions, "taskDepth" | "parentT
 
 /**
  * `sdk.ts` asks two different questions about a session's role, and they used to
- * look like the same question asked two ways: `isSpawnedSession` in four places,
+ * look like the same question asked two ways: `isSubagentSession` in four places,
  * and a bare `!options.parentTaskPrefix` in four others that decided who owns the
  * process-global singletons. Reading the file, nothing said whether the second
  * group was a narrower question on purpose or an inline copy that had drifted.
@@ -27,15 +27,15 @@ type SessionRoleOptions = Pick<CreateAgentSessionOptions, "taskDepth" | "parentT
  * where the two disagree, and pins the call sites, so neither can be "simplified"
  * into the other by someone who reads them as duplicates.
  */
-describe("isSpawnedSession", () => {
+describe("isSubagentSession", () => {
 	/**
 	 * The plain top-level session: no depth, no parent. Everything else here is a
 	 * departure from this shape.
 	 */
 	it("is false for a session with neither signal", () => {
-		expect(isSpawnedSession({})).toBe(false);
-		expect(isSpawnedSession({ taskDepth: 0 })).toBe(false);
-		expect(isSpawnedSession({ taskDepth: 0, parentTaskPrefix: undefined })).toBe(false);
+		expect(isSubagentSession({})).toBe(false);
+		expect(isSubagentSession({ taskDepth: 0 })).toBe(false);
+		expect(isSubagentSession({ taskDepth: 0, parentTaskPrefix: undefined })).toBe(false);
 	});
 
 	/**
@@ -49,7 +49,7 @@ describe("isSpawnedSession", () => {
 		["a prefix alone", { parentTaskPrefix: "agent-7" }],
 		["both together, as the executor sends them", { taskDepth: 1, parentTaskPrefix: "agent-7" }],
 	])("is true for %s", (_label, options) => {
-		expect(isSpawnedSession(options)).toBe(true);
+		expect(isSubagentSession(options)).toBe(true);
 	});
 
 	/**
@@ -60,7 +60,7 @@ describe("isSpawnedSession", () => {
 	 * make a top-level session behave as an agent.
 	 */
 	it("does not treat an empty prefix as a parent", () => {
-		expect(isSpawnedSession({ parentTaskPrefix: "" })).toBe(false);
+		expect(isSubagentSession({ parentTaskPrefix: "" })).toBe(false);
 	});
 });
 
@@ -94,7 +94,7 @@ describe("the two predicates are not interchangeable", () => {
 	it("disagree exactly on depth without a parent prefix", () => {
 		const depthOnly: SessionRoleOptions = { taskDepth: 1 };
 
-		expect(isSpawnedSession(depthOnly)).toBe(true);
+		expect(isSubagentSession(depthOnly)).toBe(true);
 		expect(isInProcessChildSession(depthOnly)).toBe(false);
 	});
 
@@ -112,7 +112,7 @@ describe("the two predicates are not interchangeable", () => {
 		[{ taskDepth: 1, parentTaskPrefix: "agent-7" }],
 		[{ taskDepth: 3, parentTaskPrefix: "agent-9" }],
 	])("agree on %o", options => {
-		expect(isSpawnedSession(options)).toBe(isInProcessChildSession(options));
+		expect(isSubagentSession(options)).toBe(isInProcessChildSession(options));
 	});
 });
 
@@ -123,7 +123,7 @@ describe("the ownership sites ask through the predicate", () => {
 	 * The four ownership decisions -- constructing the process-global `AsyncJobManager`,
 	 * scoping to an inherited one, installing the active skills and rules, and installing
 	 * the global `MCPManager` -- were each a bare `!options.parentTaskPrefix`, which is
-	 * what let them drift from each other and from `isSpawnedSession` silently.
+	 * what let them drift from each other and from `isSubagentSession` silently.
 	 *
 	 * DELETED HERE: four `expect(source).toContain("<exact expression>")` cases, one per
 	 * decision. They named no bug the case below does not already catch, and they were

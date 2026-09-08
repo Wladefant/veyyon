@@ -58,8 +58,8 @@ export function classifyAgentType(sessionPath: string): AgentType {
 		return "advisor";
 	}
 	const rel = path.relative(getSessionsDir(), sessionPath);
-	// `<project>/<file>.jsonl` -> 2 segments. Deeper nesting is a spawned agent.
-	return rel.split(path.sep).length <= 2 ? "main" : "spawn";
+	// `<project>/<file>.jsonl` -> 2 segments. Deeper nesting is a spawned subagent.
+	return rel.split(path.sep).length <= 2 ? "main" : "subagent";
 }
 
 /**

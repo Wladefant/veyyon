@@ -84,7 +84,7 @@
 		"statusLineUntracked": "love",
 		"statusLineOutput": "pine",
 		"statusLineCost": "rose",
-		"statusLineAgents": "iris",
+		"statusLineSubagents": "iris",
 		"pythonMode": "gold"
 	},
 	"export": {

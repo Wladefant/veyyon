@@ -79,7 +79,7 @@
 		"statusLineUntracked": "cool",
 		"statusLineOutput": "light",
 		"statusLineCost": "warm",
-		"statusLineAgents": "warm",
+		"statusLineSubagents": "warm",
 		"pythonMode": "#f0c040"
 	},
 	"export": {

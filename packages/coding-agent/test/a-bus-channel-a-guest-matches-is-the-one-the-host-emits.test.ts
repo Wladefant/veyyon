@@ -12,7 +12,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { OPENAI_HEADERS } from "@veyyon/catalog/wire/codex";
-import { TASK_AGENT_LIFECYCLE_CHANNEL, TASK_AGENT_PROGRESS_CHANNEL } from "@veyyon/coding-agent/task/types";
+import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } from "@veyyon/coding-agent/task/types";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
 import type { BusChannel } from "@veyyon/wire";
 
@@ -20,8 +20,8 @@ describe("a bus channel a guest matches is the one the host emits", () => {
 	test("the progress and lifecycle channels are the wire spellings", () => {
 		// Assignability to the wire union is the compile-time half: a constant that
 		// leaves the union fails `check:ts`. The equality is the run-time half.
-		const progress: BusChannel = TASK_AGENT_PROGRESS_CHANNEL;
-		const lifecycle: BusChannel = TASK_AGENT_LIFECYCLE_CHANNEL;
+		const progress: BusChannel = TASK_SUBAGENT_PROGRESS_CHANNEL;
+		const lifecycle: BusChannel = TASK_SUBAGENT_LIFECYCLE_CHANNEL;
 		expect(progress).toBe("task:subagent:progress");
 		expect(lifecycle).toBe("task:subagent:lifecycle");
 	});
@@ -31,8 +31,8 @@ describe("a bus channel a guest matches is the one the host emits", () => {
 		const received: unknown[] = [];
 		bus.on("task:subagent:progress", data => received.push(data));
 		bus.on("task:subagent:lifecycle", data => received.push(data));
-		bus.emit(TASK_AGENT_PROGRESS_CHANNEL, { id: "SpawnA" });
-		bus.emit(TASK_AGENT_LIFECYCLE_CHANNEL, { id: "SpawnA", status: "started" });
+		bus.emit(TASK_SUBAGENT_PROGRESS_CHANNEL, { id: "SpawnA" });
+		bus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, { id: "SpawnA", status: "started" });
 		expect(received).toEqual([{ id: "SpawnA" }, { id: "SpawnA", status: "started" }]);
 	});
 

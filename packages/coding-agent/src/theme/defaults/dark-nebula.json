@@ -79,7 +79,7 @@
 		"statusLineUntracked": "teal",
 		"statusLineOutput": "star",
 		"statusLineCost": "magenta",
-		"statusLineAgents": "magenta",
+		"statusLineSubagents": "magenta",
 		"pythonMode": "#f0c040"
 	},
 	"export": {

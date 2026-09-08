@@ -3,7 +3,7 @@
  *
  * The bypass is the one part of the rung that does NOT live in settings.
  * `AgentSession.setApprovalBypass` is documented as session scoped and never
- * written to settings, so the settings fork in `createAgentSettings` that
+ * written to settings, so the settings fork in `createSubagentSettings` that
  * carries every other inherited rung cannot see it. Before this guard,
  * `buildAgentSessionOptions` simply omitted `bypassAllApprovals`, so a child
  * resolved `tools.approvalMode` from settings alone, got the `auto` default, and
@@ -82,7 +82,7 @@ describe("an agent inherits the parent's /yolo approval bypass", () => {
 	 * a rung: a parent that prompts spawns a child that prompts. A fix that
 	 * hardcoded `true` here would pass the test above and silently ungate every
 	 * agent on a default install, which is the exact defect the executor
-	 * removed when it stopped hardcoding `"yolo"` in `createAgentSettings`.
+	 * removed when it stopped hardcoding `"yolo"` in `createSubagentSettings`.
 	 */
 	it("does not invent a bypass the parent did not have", async () => {
 		expect((await spawnAndCaptureSessionOptions(false))?.bypassAllApprovals).toBe(false);

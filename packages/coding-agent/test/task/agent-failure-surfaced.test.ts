@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { resolveAgentErrorText } from "@veyyon/coding-agent/task/executor";
+import { resolveSubagentErrorText } from "@veyyon/coding-agent/task/executor";
 import { classifyAgentOutcome, describeAgentBatch, summarizeAgentBatch } from "@veyyon/coding-agent/task/outcome";
 import type { SingleResult } from "@veyyon/coding-agent/task/types";
 
@@ -258,14 +258,14 @@ describe("the error text a failed run carries", () => {
 	 * and rewording or prefixing it would bury the part the parent needs.
 	 */
 	it("uses the child's own stderr when it reported one", () => {
-		expect(resolveAgentErrorText(1, "TypeError: cannot read property 'x' of undefined", "", false)).toBe(
+		expect(resolveSubagentErrorText(1, "TypeError: cannot read property 'x' of undefined", "", false)).toBe(
 			"TypeError: cannot read property 'x' of undefined",
 		);
 	});
 
 	/** Surrounding whitespace is not a message; it is trimmed before the check. */
 	it("treats whitespace-only stderr as no message at all", () => {
-		const text = resolveAgentErrorText(1, "   \n\t ", "", false);
+		const text = resolveSubagentErrorText(1, "   \n\t ", "", false);
 
 		expect(text).toContain("reported no error");
 	});
@@ -280,7 +280,7 @@ describe("the error text a failed run carries", () => {
 	 * what stops the parent retrying the same prompt against the same limit.
 	 */
 	it("synthesizes a message when a crashed child said nothing at all", () => {
-		const text = resolveAgentErrorText(137, "", "", false);
+		const text = resolveSubagentErrorText(137, "", "", false);
 
 		expect(text).toBeDefined();
 		expect(text).toContain("137");
@@ -293,7 +293,7 @@ describe("the error text a failed run carries", () => {
 	 * must NOT claim there was no output, because the parent can go read it.
 	 */
 	it("does not claim there was no output when the child produced some", () => {
-		const text = resolveAgentErrorText(1, "", "partial work here", false);
+		const text = resolveSubagentErrorText(1, "", "partial work here", false);
 
 		expect(text).toBeDefined();
 		expect(text).not.toContain("produced no output");
@@ -307,7 +307,7 @@ describe("the error text a failed run carries", () => {
 	 * error would make every successful run look failed.
 	 */
 	it("reports no error for a successful run even with stderr output", () => {
-		expect(resolveAgentErrorText(0, "warning: deprecated flag", "the result", false)).toBeUndefined();
+		expect(resolveSubagentErrorText(0, "warning: deprecated flag", "the result", false)).toBeUndefined();
 	});
 
 	/**
@@ -316,7 +316,7 @@ describe("the error text a failed run carries", () => {
 	 * and not for a signal-derived code would leave crashes silent again.
 	 */
 	it.each([1, 2, 127, 130, 137, 139, 143, 255])("always produces a message for exit %i", code => {
-		const text = resolveAgentErrorText(code, "", "", false);
+		const text = resolveSubagentErrorText(code, "", "", false);
 
 		expect(text).toBeDefined();
 		expect(text).toContain(String(code));
@@ -330,7 +330,7 @@ describe("the error text a failed run carries", () => {
 	 * bridge already depends on this emptiness to fall through to the reason.
 	 */
 	it("stays silent for an aborted run so the abort reason is what speaks", () => {
-		expect(resolveAgentErrorText(1, "", "", true)).toBeUndefined();
+		expect(resolveSubagentErrorText(1, "", "", true)).toBeUndefined();
 	});
 
 	/**
@@ -338,6 +338,6 @@ describe("the error text a failed run carries", () => {
 	 * The rule is "do not invent a reason", not "discard the one it gave".
 	 */
 	it("still passes through real stderr on an aborted run", () => {
-		expect(resolveAgentErrorText(1, "connection reset", "", true)).toBe("connection reset");
+		expect(resolveSubagentErrorText(1, "connection reset", "", true)).toBe("connection reset");
 	});
 });

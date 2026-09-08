@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { createAgentSettingsForCwd } from "@veyyon/coding-agent/task/executor";
+import { createSubagentSettingsForCwd } from "@veyyon/coding-agent/task/executor";
 import { getProjectAgentDir, TempDir } from "@veyyon/utils";
 
 async function writeProjectSettings(cwd: string, values: Record<string, unknown>): Promise<void> {
@@ -73,7 +73,7 @@ describe("agent cwd settings provenance", () => {
 		});
 		expect(parentB.get("secrets.enabled")).toBe(false);
 
-		const childA = await createAgentSettingsForCwd(parentB, projectA);
+		const childA = await createSubagentSettingsForCwd(parentB, projectA);
 		expect(childA.getCwd()).toBe(path.normalize(projectA));
 		// A's `settings.json` asks for all three of these and gets none of them.
 		expect(childA.get("secrets.enabled")).toBe(false);
@@ -91,7 +91,7 @@ describe("agent cwd settings provenance", () => {
 
 	it("moves a live child between projects without either project changing its policy", async () => {
 		const parentA = await Settings.loadReadOnly({ cwd: projectA, agentDir });
-		const childA = await createAgentSettingsForCwd(parentA, projectA);
+		const childA = await createSubagentSettingsForCwd(parentA, projectA);
 
 		const childB = await childA.cloneForCwd(projectB);
 		expect(childB.getCwd()).toBe(path.normalize(projectB));
@@ -99,7 +99,7 @@ describe("agent cwd settings provenance", () => {
 		expect(childB.get("compaction.enabled")).toBe(childA.get("compaction.enabled"));
 		expect(childB.get("read.summarize.enabled")).toBe(childA.get("read.summarize.enabled"));
 		// The approval ladder must survive the fork AND the move. A hardcoded
-		// `yolo` in `createAgentSettings` is what made the whole ladder dead
+		// `yolo` in `createSubagentSettings` is what made the whole ladder dead
 		// code: every agent bypassed every prompt regardless of what the
 		// operator had configured. The child's mode is the parent's resolved
 		// mode, so the assertion is the parent's value and never a literal.
@@ -118,7 +118,7 @@ describe("agent cwd settings provenance", () => {
 			overrides: { "read.summarize.enabled": true },
 		});
 
-		const childB = await createAgentSettingsForCwd(parentA, projectB);
+		const childB = await createSubagentSettingsForCwd(parentA, projectB);
 		// A CLI overlay and a runtime override are genuine layers and survive the
 		// destination change. B's `settings.json` asks for the opposite of both
 		// and loses to each.
@@ -129,7 +129,7 @@ describe("agent cwd settings provenance", () => {
 
 	it("changes nothing at all when the destination is the cwd the child already had", async () => {
 		const parentA = await Settings.loadReadOnly({ cwd: projectA, agentDir });
-		const childA = await createAgentSettingsForCwd(parentA, projectA);
+		const childA = await createSubagentSettingsForCwd(parentA, projectA);
 		const sameCwd = await childA.cloneForCwd(projectA);
 
 		expect(sameCwd.getCwd()).toBe(path.normalize(projectA));

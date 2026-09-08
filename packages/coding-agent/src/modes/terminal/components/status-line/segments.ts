@@ -475,7 +475,7 @@ const agentsSegment: StatusLineSegment = {
 			return { content: "", visible: false };
 		}
 		const content = withIcon(theme.icon.agents, `${ctx.agentCount}`);
-		return { content: theme.fg("statusLineAgents", content), visible: true };
+		return { content: theme.fg("statusLineSubagents", content), visible: true };
 	},
 };
 /**

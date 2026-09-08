@@ -172,7 +172,7 @@ export async function initDb(): Promise<Database> {
 		db.run("ALTER TABLE messages ADD COLUMN premium_requests REAL NOT NULL DEFAULT 0");
 	}
 	db.run("UPDATE messages SET premium_requests = 0 WHERE premium_requests IS NULL");
-	// Token-usage-by-agent: each message is classified main / spawn / advisor
+	// Token-usage-by-agent: each message is classified main / subagent / advisor
 	// from its transcript path. A brand-new table gets the column from CREATE
 	// TABLE and the parser labels rows at insert time; a pre-existing table gets
 	// the column here (defaulting every prior row to 'main') and enrolls the

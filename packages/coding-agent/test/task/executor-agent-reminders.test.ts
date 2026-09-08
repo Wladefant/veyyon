@@ -10,9 +10,9 @@ import * as sdkModule from "@veyyon/coding-agent/sdk";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { PromptOptions } from "@veyyon/coding-agent/session/agent-session-types";
 import {
-	AGENT_WARNING_MISSING_YIELD,
 	finalizeSubprocessOutput,
 	runSubprocess,
+	SUBAGENT_WARNING_MISSING_YIELD,
 } from "@veyyon/coding-agent/task/executor";
 import type { AgentDefinition } from "@veyyon/coding-agent/task/types";
 import { isRecord, logger } from "@veyyon/utils";
@@ -446,7 +446,7 @@ describe("runSubprocess yield reminders", () => {
 		expect(prompts).toHaveLength(4);
 		expect(result.exitCode).toBe(1);
 		expect(result.aborted).toBe(false);
-		expect(result.stderr).toBe(AGENT_WARNING_MISSING_YIELD);
+		expect(result.stderr).toBe(SUBAGENT_WARNING_MISSING_YIELD);
 		expect(result.abortReason).toBeUndefined();
 	});
 

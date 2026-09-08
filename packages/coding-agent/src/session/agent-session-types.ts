@@ -299,7 +299,7 @@ export interface AgentSessionConfig {
 	/**
 	 * Whether this session was spawned by another session in the SAME process.
 	 *
-	 * Set from `isSpawnedSession` in `sdk.ts`, which is the one owner of that
+	 * Set from `isSubagentSession` in `sdk.ts`, which is the one owner of that
 	 * question. It governs re-rooting: a spawned agent shares the process with its
 	 * parent and its siblings, so moving its working directory must not move
 	 * theirs. See {@link AgentSession.rescopeToCwd}. Default false, which is the

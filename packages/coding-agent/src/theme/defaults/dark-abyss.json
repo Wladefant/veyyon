@@ -80,7 +80,7 @@
 		"statusLineUntracked": "glowCyan",
 		"statusLineOutput": "crystalBlue",
 		"statusLineCost": "warningAmber",
-		"statusLineAgents": "glowCyan",
+		"statusLineSubagents": "glowCyan",
 		"pythonMode": "#f0c040"
 	},
 	"export": {

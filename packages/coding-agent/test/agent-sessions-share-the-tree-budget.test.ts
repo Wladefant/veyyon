@@ -17,7 +17,7 @@
  * suite builds two real sessions through the real SDK and checks the group
  * they land in.
  *
- * It also drives `createSpawnedSession`, the executor's own factory and the
+ * It also drives `createSubagentSession`, the executor's own factory and the
  * only way production builds an agent session, so deleting the pin inside
  * that factory turns this suite RED instead of leaving the registry-level
  * helper tests green.
@@ -39,7 +39,7 @@ import {
 	withInheritedBudgetGroup,
 } from "@veyyon/coding-agent/session/cpu-limit";
 import type { CreateAgentSessionOptions } from "@veyyon/coding-agent/session/factory-options";
-import { createSpawnedSession } from "@veyyon/coding-agent/task/executor";
+import { createSubagentSession } from "@veyyon/coding-agent/task/executor";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { Snowflake, setAgentDir, TempDir } from "@veyyon/utils";
 import { isolatedAuthStorage } from "./helpers/isolated-auth-storage";
@@ -108,7 +108,7 @@ async function makeSession(spawn?: {
 	const { session } =
 		spawn === undefined
 			? await createAgentSession(sessionOptions)
-			: await createSpawnedSession(spawn.parentSessionId, sessionOptions);
+			: await createSubagentSession(spawn.parentSessionId, sessionOptions);
 	sessions.push(session);
 	const sessionId = session.sessionManager.getSessionId();
 	if (!sessionId) throw new Error("Expected the session manager to have minted an id");
@@ -141,7 +141,7 @@ describe("a session created inside a pinned scope joins that group", () => {
 	});
 
 	/**
-	 * The link the registry-level tests cannot see. `createSpawnedSession` is
+	 * The link the registry-level tests cannot see. `createSubagentSession` is
 	 * what production calls, and its pin is the whole reason an agent does not
 	 * open a second budget group. Delete `withInheritedBudgetGroup` from it and
 	 * every helper test stays green while this one fails.

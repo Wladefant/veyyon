@@ -11,7 +11,7 @@ describe("bundled agent parsing", () => {
 	 * The reviewer states no effort of its own, so an `:effort` suffix on whichever
 	 * model the operator gave its agents survives all the way to the request.
 	 * A level here would silently outrank that suffix (see
-	 * `resolveEffectiveAgentThinkingLevel`).
+	 * `resolveEffectiveSubagentThinkingLevel`).
 	 */
 	it("lets reviewer inherit thinking effort from the resolved agent model", () => {
 		const reviewer = getBundledAgent("reviewer");

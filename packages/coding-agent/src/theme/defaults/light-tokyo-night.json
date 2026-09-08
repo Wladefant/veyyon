@@ -100,7 +100,7 @@
 		"statusLineUntracked": "blue",
 		"statusLineOutput": "magenta",
 		"statusLineCost": "warning",
-		"statusLineAgents": "teal",
+		"statusLineSubagents": "teal",
 		"pythonMode": "yellow"
 	},
 	"export": {

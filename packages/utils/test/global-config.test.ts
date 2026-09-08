@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-	getGlobalAgentsDir,
 	getGlobalConfigRootDir,
+	getGlobalSubagentsDir,
 	getSharedAuthDir,
 	migrateLegacyDefaultProfileLayout,
 	profileEnvIsSet,
@@ -354,9 +354,9 @@ describe("migrateLegacyDefaultProfileLayout", () => {
 	 * user-authored agent, and nothing reports it — discovery reads an absent
 	 * directory as an empty one.
 	 */
-	it("exempts the directory getGlobalAgentsDir resolves to", () => {
+	it("exempts the directory getGlobalSubagentsDir resolves to", () => {
 		const root = getGlobalConfigRootDir();
-		const agents = getGlobalAgentsDir();
+		const agents = getGlobalSubagentsDir();
 		expect(path.dirname(agents)).toBe(root);
 		fs.mkdirSync(path.join(root, "agent"), { recursive: true });
 		fs.writeFileSync(path.join(root, "agent", "agent.db"), "db");

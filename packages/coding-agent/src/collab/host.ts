@@ -26,7 +26,7 @@ import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { type AgentRef, AgentRegistry } from "../registry/agent-registry";
 import type { AgentSessionEvent } from "../session/agent-session-types";
 import { stripImagesFromMessage, USER_INTERRUPT_LABEL } from "../session/messages";
-import { TASK_AGENT_LIFECYCLE_CHANNEL, TASK_AGENT_PROGRESS_CHANNEL } from "../task/types";
+import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } from "../task/types";
 import { generateRoomKey, generateWriteToken, importRoomKey } from "./crypto";
 import { collabDisplayName } from "./display-name";
 import {
@@ -65,8 +65,8 @@ const AGENTS_DEBOUNCE_MS = 100;
 const STREAMING_STATE_INTERVAL_MS = 2000;
 const WELCOME_IMAGE_STRIP_THRESHOLD = 24 * 1024 * 1024;
 const COLLAB_BUS_CHANNELS = [
-	TASK_AGENT_LIFECYCLE_CHANNEL,
-	TASK_AGENT_PROGRESS_CHANNEL,
+	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
+	TASK_SUBAGENT_PROGRESS_CHANNEL,
 ] as const satisfies readonly BusChannel[];
 
 // How long the host waits for the REMOTE relay websocket to open. Crosses the

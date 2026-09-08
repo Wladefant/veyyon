@@ -12,7 +12,7 @@ import type {
 } from "../types";
 
 /** Fixed display order for the agent-token-share breakdown. */
-const AGENT_TYPE_ORDER: AgentType[] = ["main", "spawn", "advisor"];
+const AGENT_TYPE_ORDER: AgentType[] = ["main", "subagent", "advisor"];
 
 export interface AgentTokenSegment {
 	agentType: AgentType;

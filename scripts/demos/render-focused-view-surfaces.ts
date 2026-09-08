@@ -46,7 +46,7 @@ import { buildComposerShortcuts } from "../../packages/coding-agent/src/modes/te
 import { InteractiveMode } from "../../packages/coding-agent/src/modes/terminal/interactive-mode";
 import { AgentRegistry, MAIN_AGENT_ID } from "../../packages/coding-agent/src/registry/agent-registry";
 import { AgentSession } from "../../packages/coding-agent/src/session/agent-session";
-import { TASK_AGENT_LIFECYCLE_CHANNEL } from "../../packages/coding-agent/src/task";
+import { TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "../../packages/coding-agent/src/task";
 import { initTheme, setTheme } from "../../packages/coding-agent/src/theme/theme";
 import { EventBus } from "../../packages/coding-agent/src/utils/event-bus";
 import { flag, hasFlag, renderWidth } from "./render-args";
@@ -105,7 +105,7 @@ for (const [index, spawn] of (
 		["SchemaMigrator", "Migrating the users table"],
 	] as const
 ).entries()) {
-	eventBus.emit(TASK_AGENT_LIFECYCLE_CHANNEL, {
+	eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
 		id: spawn[0],
 		index,
 		agent: "task",
@@ -116,7 +116,7 @@ for (const [index, spawn] of (
 		detached: true,
 	});
 }
-// Drain the observer coalesce window (AGENT_OBSERVER_UI_COALESCE_MS = 100).
+// Drain the observer coalesce window (SUBAGENT_OBSERVER_UI_COALESCE_MS = 100).
 await Bun.sleep(160);
 
 mode.showPinnedError("Provider returned 529 overloaded — the turn did not complete");

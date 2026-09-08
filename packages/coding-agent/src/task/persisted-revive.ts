@@ -10,7 +10,7 @@ import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 // static import of `../sdk`, the composition root, is what put this module in a
 // 54-module cycle.
 import type { AgentSession } from "../session/agent-session";
-import { createAgentSettingsForCwd, createMCPProxyTools } from "./executor";
+import { createMCPProxyTools, createSubagentSettingsForCwd } from "./executor";
 
 /**
  * Ambient context the reviver needs at revive time. The parent artifact
@@ -111,7 +111,7 @@ export function createPersistedAgentReviverFactory(ctx: PersistedAgentReviveCont
 				cwd: runtimeCwd,
 				authStorage: ctx.authStorage,
 				modelRegistry: ctx.modelRegistry,
-				settings: await createAgentSettingsForCwd(
+				settings: await createSubagentSettingsForCwd(
 					ctx.settings,
 					runtimeCwd,
 					init.readSummarize === false ? { "read.summarize.enabled": false } : undefined,

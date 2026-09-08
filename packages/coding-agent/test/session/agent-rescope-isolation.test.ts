@@ -69,7 +69,7 @@ describe("an agent's re-root leaves the process where it is", () => {
 
 	/**
 	 * Build a session at `cwd`. `isSpawned` is the one thing under test here, and it
-	 * is passed exactly as `sdk.ts` passes it, from `isSpawnedSession(options)`.
+	 * is passed exactly as `sdk.ts` passes it, from `isSubagentSession(options)`.
 	 */
 	async function createSession(cwd: string, isSpawned: boolean): Promise<AgentSession> {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");

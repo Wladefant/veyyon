@@ -131,9 +131,9 @@ import {
 	MAX_OUTPUT_LINES,
 	type ReviewFinding,
 	type SingleResult,
-	TASK_AGENT_EVENT_CHANNEL,
-	TASK_AGENT_LIFECYCLE_CHANNEL,
-	TASK_AGENT_PROGRESS_CHANNEL,
+	TASK_SUBAGENT_EVENT_CHANNEL,
+	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
+	TASK_SUBAGENT_PROGRESS_CHANNEL,
 	type TaskToolDetails,
 	type YieldItem,
 } from "./types";
@@ -190,7 +190,7 @@ function formatSalvageSnippet(text: string, maxLength = 500): string {
  * function must not re-apply any of those layers — resolving frontmatter a second
  * time behind the caller is how the same axis came to have two answers.
  */
-export function resolveEffectiveAgentThinkingLevel(
+export function resolveEffectiveSubagentThinkingLevel(
 	explicitThinkingLevel: boolean,
 	resolvedThinkingLevel: ConfiguredThinkingLevel | undefined,
 	configuredThinkingLevel: ConfiguredThinkingLevel | undefined,
@@ -645,8 +645,9 @@ interface FinalizeSubprocessOutputResult {
 	abortedViaYield: boolean;
 	hasYield: boolean;
 }
-export const AGENT_WARNING_NULL_YIELD = "SYSTEM WARNING: Agent called yield with null data.";
-export const AGENT_WARNING_MISSING_YIELD = "SYSTEM WARNING: Agent exited without calling yield tool after 3 reminders.";
+export const SUBAGENT_WARNING_NULL_YIELD = "SYSTEM WARNING: Agent called yield with null data.";
+export const SUBAGENT_WARNING_MISSING_YIELD =
+	"SYSTEM WARNING: Agent exited without calling yield tool after 3 reminders.";
 
 /** Build a schema_violation outcome — surfaced as a non-zero exit so callers treat it as a failure. */
 function buildSchemaViolationOutcome(
@@ -723,12 +724,12 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 			const assembled = assembleYieldResult(yieldItems, lastAssistantText, arrayValuedLabels(outputSchema));
 			if (!assembled || assembled.missingData) {
 				const hasRawOutput = rawOutput.trim().length > 0;
-				rawOutput = rawOutput ? `${AGENT_WARNING_NULL_YIELD}\n\n${rawOutput}` : AGENT_WARNING_NULL_YIELD;
+				rawOutput = rawOutput ? `${SUBAGENT_WARNING_NULL_YIELD}\n\n${rawOutput}` : SUBAGENT_WARNING_NULL_YIELD;
 				// Mirror the missing-yield policy: yielding unusable data is a harder failure than
 				// never yielding, so it must not exit 0 and hand the warning back as the result.
 				if (hasOutputSchema || !hasRawOutput) {
 					exitCode = 1;
-					if (!stderr.trim()) stderr = AGENT_WARNING_NULL_YIELD;
+					if (!stderr.trim()) stderr = SUBAGENT_WARNING_NULL_YIELD;
 				}
 			} else {
 				const { validator, error: schemaError } = buildOutputValidator(outputSchema);
@@ -804,10 +805,10 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 			// comes from `resolveRunVerdict`. Before the verdict moved there, an aborted turn arrived
 			// here with a non-zero exit code and this branch was skipped for that reason instead.
 			const hasRawOutput = rawOutput.trim().length > 0;
-			rawOutput = rawOutput ? `${AGENT_WARNING_MISSING_YIELD}\n\n${rawOutput}` : AGENT_WARNING_MISSING_YIELD;
+			rawOutput = rawOutput ? `${SUBAGENT_WARNING_MISSING_YIELD}\n\n${rawOutput}` : SUBAGENT_WARNING_MISSING_YIELD;
 			if (hasOutputSchema || !hasRawOutput) {
 				exitCode = 1;
-				stderr = AGENT_WARNING_MISSING_YIELD;
+				stderr = SUBAGENT_WARNING_MISSING_YIELD;
 			}
 		}
 	}
@@ -941,7 +942,7 @@ export function createMCPProxyTools(mcpManager: MCPManager): CustomTool[] {
 	});
 }
 
-export function createAgentSettings(
+export function createSubagentSettings(
 	baseSettings: Settings,
 	overrides?: Partial<Record<SettingPath, unknown>>,
 	inheritedServiceTier?: ServiceTierByFamily | null,
@@ -1006,7 +1007,7 @@ export function createAgentSettings(
  * `test/task/agent-settings-cwd-provenance.test.ts` writes a hostile
  * `settings.json` into each destination and asserts it changes nothing.
  */
-export async function createAgentSettingsForCwd(
+export async function createSubagentSettingsForCwd(
 	baseSettings: Settings,
 	cwd: string,
 	overrides?: Partial<Record<SettingPath, unknown>>,
@@ -1014,7 +1015,7 @@ export async function createAgentSettingsForCwd(
 ): Promise<Settings> {
 	const runtimeFork = baseSettings.forkWithRuntimeOverrides();
 	const destinationSettings = await runtimeFork.cloneForCwd(cwd);
-	return createAgentSettings(destinationSettings, overrides, inheritedServiceTier);
+	return createSubagentSettings(destinationSettings, overrides, inheritedServiceTier);
 }
 
 export type AbortReason = "signal" | "terminate" | "timeout" | "budget";
@@ -1322,7 +1323,7 @@ function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 			progress.lastIntent ?? (progress.currentTool ? `running ${progress.currentTool}` : undefined);
 		if (activityGist) AgentRegistry.global().setActivity(id, activityGist);
 		if (args.eventBus) {
-			args.eventBus.emit(TASK_AGENT_PROGRESS_CHANNEL, {
+			args.eventBus.emit(TASK_SUBAGENT_PROGRESS_CHANNEL, {
 				index,
 				agent: agent.name,
 				agentSource: agent.source,
@@ -1503,7 +1504,7 @@ function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 
 	const emitAgentEvent = (event: AgentSessionEvent) => {
 		if (!args.eventBus) return;
-		args.eventBus.emit(TASK_AGENT_EVENT_CHANNEL, {
+		args.eventBus.emit(TASK_SUBAGENT_EVENT_CHANNEL, {
 			id,
 			event,
 		});
@@ -2182,7 +2183,7 @@ interface FinalizeRunArgs {
  * of it. Guessing "it most likely crashed or ran out of memory" for a run the
  * parent itself cancelled would be actively wrong.
  */
-export function resolveAgentErrorText(
+export function resolveSubagentErrorText(
 	exitCode: number,
 	stderr: string,
 	rawOutput: string,
@@ -2370,7 +2371,7 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 
 	// Emit lifecycle end event after finalization so yield status is reflected
 	if (args.eventBus) {
-		args.eventBus.emit(TASK_AGENT_LIFECYCLE_CHANNEL, {
+		args.eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
 			id,
 			agent: agent.name,
 			parentToolCallId: args.parentToolCallId,
@@ -2403,7 +2404,7 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 		contextWindow: progress.contextWindow,
 		modelOverride,
 		resolvedModel: progress.resolvedModel,
-		error: resolveAgentErrorText(exitCode, stderr, rawOutput, wasAborted),
+		error: resolveSubagentErrorText(exitCode, stderr, rawOutput, wasAborted),
 		aborted: wasAborted,
 		abortReason: finalAbortReason,
 		usage: monitor.hasUsage() ? monitor.accumulatedUsage : undefined,
@@ -2485,7 +2486,7 @@ function agentSignOffText(monitor: AgentRunMonitor): string | undefined {
  * kept-alive, revivable agent is treated as a self-inflicted stop rather than
  * a kill — the agent stays interrogable and resumable (irc wake / revival).
  */
-export async function finalizeAgentLifecycle(args: {
+export async function finalizeSubagentLifecycle(args: {
 	id: string;
 	session: AgentSession;
 	aborted: boolean;
@@ -2580,7 +2581,7 @@ export async function finalizeAgentLifecycle(args: {
 	});
 }
 
-/** Options for {@link runAgentFollowUpTurn}. */
+/** Options for {@link runSubagentFollowUpTurn}. */
 export interface FollowUpTurnOptions {
 	/** Registry id of the (live or parked) agent to continue. */
 	id: string;
@@ -2611,7 +2612,7 @@ export interface FollowUpTurnOptions {
  * stays adopted by the {@link AgentLifecycleManager} (idle → TTL park →
  * revive), and an aborted turn only aborts the in-flight turn.
  */
-export async function runAgentFollowUpTurn(options: FollowUpTurnOptions): Promise<SingleResult> {
+export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Promise<SingleResult> {
 	const { id, agent, message, signal } = options;
 	const index = options.index ?? 0;
 	const startTime = Date.now();
@@ -2637,7 +2638,7 @@ export async function runAgentFollowUpTurn(options: FollowUpTurnOptions): Promis
 	});
 
 	if (options.eventBus) {
-		options.eventBus.emit(TASK_AGENT_LIFECYCLE_CHANNEL, {
+		options.eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
 			id,
 			agent: agent.name,
 			parentToolCallId: options.parentToolCallId,
@@ -2669,7 +2670,7 @@ export async function runAgentFollowUpTurn(options: FollowUpTurnOptions): Promis
 		if (active) monitor.captureSalvage(active);
 		monitor.finish();
 		// The waiting flag describes the agent's LATEST word, not its first. A follow-up
-		// turn does not go through `finalizeAgentLifecycle`, so without this an agent
+		// turn does not go through `finalizeSubagentLifecycle`, so without this an agent
 		// that once signed off "waiting on X" and has since reported done keeps the
 		// longer close grace for the rest of the session, and the operator's ordinary
 		// budget is never applied to it again.
@@ -2759,7 +2760,7 @@ export function resolveRootUIContext(childId: string): ExtensionUIContext | unde
  * multiplication would come back unnoticed. Now the only way to build a
  * agent session is the way that joins the tree.
  */
-export function createSpawnedSession(
+export function createSubagentSession(
 	parentSessionId: string | undefined,
 	sessionOptions: CreateAgentSessionOptions,
 ): Promise<CreateAgentSessionResult> {
@@ -2830,7 +2831,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 	const sourceSettings = options.settings ?? Settings.isolated();
 	const effectiveCwd = worktree ?? cwd;
-	const agentSettings = await createAgentSettingsForCwd(
+	const agentSettings = await createSubagentSettingsForCwd(
 		sourceSettings,
 		effectiveCwd,
 		agent.readSummarize === false ? { "read.summarize.enabled": false } : undefined,
@@ -3041,7 +3042,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			if (model?.contextWindow && model.contextWindow > 0) {
 				progress.contextWindow = model.contextWindow;
 			}
-			const selectedThinkingLevel = resolveEffectiveAgentThinkingLevel(
+			const selectedThinkingLevel = resolveEffectiveSubagentThinkingLevel(
 				explicitThinkingLevel,
 				resolvedThinkingLevel,
 				thinkingLevel,
@@ -3186,7 +3187,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				},
 			});
 
-			const sessionPromise = createSpawnedSession(
+			const sessionPromise = createSubagentSession(
 				options.parentSessionId,
 				buildAgentSessionOptions(sessionManager, agentSettings),
 			);
@@ -3231,7 +3232,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						reopened.adoptArtifactManager(options.parentArtifactManager);
 					}
 					const revivedSettings = await agentSettings.cloneForCwd(reopened.getCwd());
-					const { session: revived } = await createSpawnedSession(
+					const { session: revived } = await createSubagentSession(
 						options.parentSessionId,
 						buildAgentSessionOptions(reopened, revivedSettings),
 					);
@@ -3242,7 +3243,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 			// Emit lifecycle start event
 			if (options.eventBus) {
-				options.eventBus.emit(TASK_AGENT_LIFECYCLE_CHANNEL, {
+				options.eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
 					id,
 					agent: agent.name,
 					parentToolCallId: options.parentToolCallId,
@@ -3421,7 +3422,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			const session = monitor.takeActiveSession();
 			if (session) {
 				monitor.captureSalvage(session);
-				await finalizeAgentLifecycle({
+				await finalizeSubagentLifecycle({
 					id,
 					session,
 					aborted: turnAborted,

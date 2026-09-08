@@ -148,7 +148,7 @@ export const WEB_EXPORT_PALETTE = {
 	"--statusLineUntracked": "#c96f6e", // red
 	"--statusLineOutput": "#b4bac4",
 	"--statusLineCost": "#c6cbd4", // silver
-	"--statusLineAgents": "#f0862e", // ember
+	"--statusLineSubagents": "#f0862e", // ember
 } as const satisfies Record<string, string>;
 
 /** Serialize the palette as `--key: value;` declarations for `:root { … }`. */

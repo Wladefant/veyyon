@@ -631,7 +631,7 @@ describe("runEvalAgent", () => {
 				session: cleanupSession,
 				status: "idle",
 			});
-			await taskExecutor.finalizeAgentLifecycle({
+			await taskExecutor.finalizeSubagentLifecycle({
 				id: options.id,
 				session: cleanupSession,
 				aborted: false,

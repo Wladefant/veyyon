@@ -4,7 +4,7 @@
  * Owns the persistent, addressable worker sessions ("CLIs") the vibe director
  * drives. Each worker is a real task-executor agent with full tool access:
  * spawned once through {@link runSubprocess} (keep-alive), continued
- * turn-by-turn through {@link runAgentFollowUpTurn}. Between turns the
+ * turn-by-turn through {@link runSubagentFollowUpTurn}. Between turns the
  * worker lives in the AgentRegistry / AgentLifecycleManager as an adopted idle
  * agent (TTL park + JSONL revive), so its conversation context survives across
  * turns and even across parking.
@@ -34,7 +34,7 @@ import {
 } from "../task/agent-settings";
 import { inheritContextFiles } from "../task/context-inheritance";
 import { discoverAgents, getAgent } from "../task/discovery";
-import { type ExecutorOptions, runAgentFollowUpTurn, runSubprocess } from "../task/executor";
+import { type ExecutorOptions, runSubagentFollowUpTurn, runSubprocess } from "../task/executor";
 import { inheritResolvedCollection } from "../task/inherited-collections";
 import { generateTaskName } from "../task/name-generator";
 import { AgentOutputManager } from "../task/output-manager";
@@ -693,7 +693,7 @@ export class VibeSessionRegistry {
 				try {
 					const result = options.first
 						? await runSubprocess(await this.#buildSpawnOptions(session, record, message, signal, onProgress))
-						: await runAgentFollowUpTurn({
+						: await runSubagentFollowUpTurn({
 								id: record.id,
 								agent: record.agent,
 								message,

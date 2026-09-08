@@ -392,10 +392,41 @@ class CodingAgentSettingsHooks implements SettingsStoreHooks {
 		// not theoretical: writing `raw["agent.delegation"]` made this whole
 		// migration a no-op, and only a test that loaded a legacy config and read the
 		// new setting back caught it.
-		const read = (segments: string[]): unknown => getByPath(raw, segments);
+		const read = (segments: string[]): unknown => {
+			const nested = getByPath(raw, segments);
+			if (nested !== undefined) return nested;
+			const flat = raw[segments.join(".")];
+			if (flat !== undefined) return flat;
+			for (let i = 1; i < segments.length; i++) {
+				const parent = getByPath(raw, segments.slice(0, i));
+				if (isRecord(parent)) {
+					const val = (parent as Record<string, unknown>)[segments.slice(i).join(".")];
+					if (val !== undefined) return val;
+				}
+				const flatParent = raw[segments.slice(0, i).join(".")];
+				if (isRecord(flatParent)) {
+					const val = getByPath(flatParent as Record<string, unknown>, segments.slice(i));
+					if (val !== undefined) return val;
+				}
+			}
+			return undefined;
+		};
 		const take = (segments: string[]): unknown => {
-			const value = getByPath(raw, segments);
-			if (value !== undefined) deleteByPath(raw, segments);
+			const value = read(segments);
+			if (value !== undefined) {
+				deleteByPath(raw, segments);
+				delete raw[segments.join(".")];
+				for (let i = 1; i < segments.length; i++) {
+					const parent = getByPath(raw, segments.slice(0, i));
+					if (isRecord(parent)) {
+						delete (parent as Record<string, unknown>)[segments.slice(i).join(".")];
+					}
+					const flatParent = raw[segments.slice(0, i).join(".")];
+					if (isRecord(flatParent)) {
+						deleteByPath(flatParent as Record<string, unknown>, segments.slice(i));
+					}
+				}
+			}
 			return value;
 		};
 		const setNew = (key: string[], value: unknown): void => {
@@ -406,22 +437,47 @@ class CodingAgentSettingsHooks implements SettingsStoreHooks {
 			setByPath(raw, ["agent", ...key], value);
 		};
 
+		// Fold flat modelRoles.<role> into raw.modelRoles so both modelRoles.task migration
+		// and surviving modelRoles (e.g. modelRoles.default) see a unified modelRoles tree.
+		for (const key of Object.keys(raw)) {
+			if (key.startsWith("modelRoles.")) {
+				const role = key.slice("modelRoles.".length);
+				if (role) {
+					const existing = isRecord(raw.modelRoles) ? (raw.modelRoles as Record<string, unknown>) : {};
+					if (!(role in existing)) existing[role] = raw[key];
+					raw.modelRoles = existing;
+					delete raw[key];
+				}
+			}
+		}
+
 		// The area itself was `subagent.*` before it was `agent.*`. Fold it first,
 		// leaf for leaf, so the older migrations below see one tree: a legacy
 		// `subagent.autoClose.parkedMs` becomes `agent.autoClose.parkedMs` here and
 		// `agent.prune.afterMs` a few lines down. `advisor.subagents` and
 		// `argot.subagents` moved with it; `tier.subagent` is folded with the other
 		// tier keys further down.
-		const legacyArea = raw.subagent;
-		if (isRecord(legacyArea)) {
-			const fold = (node: Record<string, unknown>, path: string[]): void => {
+		const fold = (node: unknown, path: string[]): void => {
+			if (isRecord(node)) {
 				for (const [key, value] of Object.entries(node)) {
-					if (isRecord(value)) fold(value, path.concat(key));
-					else setNew(path.concat(key), value);
+					fold(value, path.concat(key.includes(".") ? key.split(".") : key));
 				}
-			};
-			fold(legacyArea, []);
+			} else {
+				setNew(path, node);
+			}
+		};
+		if (isRecord(raw.subagent)) {
+			fold(raw.subagent, []);
 			delete raw.subagent;
+		}
+		for (const key of Object.keys(raw)) {
+			if (key.startsWith("subagent.")) {
+				const leaf = key.slice("subagent.".length);
+				if (leaf) {
+					fold(raw[key], leaf.split("."));
+					delete raw[key];
+				}
+			}
 		}
 		for (const area of ["advisor", "argot"] as const) {
 			const value = take([area, "subagents"]);
@@ -447,6 +503,7 @@ class CodingAgentSettingsHooks implements SettingsStoreHooks {
 		// leaving it would fail validation and read as a corrupt config.
 		if (read(["agent", "delegation"]) === "off") {
 			deleteByPath(raw, ["agent", "delegation"]);
+			delete raw["agent.delegation"];
 			if (read(["agent", "enabled"]) === undefined) {
 				setByPath(raw, ["agent", "enabled"], false);
 			}
@@ -478,6 +535,9 @@ class CodingAgentSettingsHooks implements SettingsStoreHooks {
 			setNew(["prune", next], take(["agent", "autoClose", legacy]));
 		}
 		if (read(["agent", "autoClose"]) !== undefined) deleteByPath(raw, ["agent", "autoClose"]);
+		delete raw["agent.autoClose.enabled"];
+		delete raw["agent.autoClose.parkedMs"];
+		delete raw["agent.autoClose.waitingMs"];
 
 		// The old depth counted the root as level 1. The replacement counts only
 		// nested agent levels, so old 1 becomes new 0. Old 0 disabled even the
@@ -488,7 +548,7 @@ class CodingAgentSettingsHooks implements SettingsStoreHooks {
 		const legacyAgentDepth = take(["agent", "maxRecursionDepth"]);
 		const legacyDepth = legacyAgentDepth ?? legacyTaskDepth;
 		if (legacyDepth !== undefined) {
-			if (legacyDepth === 0) setByPath(raw, ["agent", "enabled"], false);
+			if (legacyDepth === 0) setNew(["enabled"], false);
 			const nestedDepth =
 				typeof legacyDepth === "number" && Number.isInteger(legacyDepth)
 					? legacyDepth < 0
@@ -501,6 +561,18 @@ class CodingAgentSettingsHooks implements SettingsStoreHooks {
 		// task.isolation.* -> agent.isolation.*
 		for (const key of ["mode", "merge", "commits"] as const) {
 			setNew(["isolation", key], take(["task", "isolation", key]));
+		}
+		const isolationMode = read(["agent", "isolation", "mode"]);
+		if (typeof isolationMode === "string") {
+			const isolationLegacyMode: Record<string, string> = {
+				worktree: "rcopy",
+				"fuse-overlay": "overlayfs",
+				"fuse-projfs": "projfs",
+			};
+			const mapped = isolationLegacyMode[isolationMode];
+			if (mapped !== undefined) {
+				setByPath(raw, ["agent", "isolation", "mode"], mapped);
+			}
 		}
 
 		// The two agent-keyed maps become one row per agent. Two parallel maps meant
@@ -544,11 +616,11 @@ class CodingAgentSettingsHooks implements SettingsStoreHooks {
 		// leaving it would restore two owners for one value, with role expansion
 		// answering first, which is exactly why an agent model setting used to have
 		// no effect.
-		const legacyRoleModel = read(["modelRoles", "task"]);
+		const legacyRoleModel = take(["modelRoles", "task"]);
 		if (typeof legacyRoleModel === "string" && legacyRoleModel.trim()) {
 			setNew(["model"], legacyRoleModel.trim());
-			deleteByPath(raw, ["modelRoles", "task"]);
 		}
+		if (isRecord(raw.modelRoles) && Object.keys(raw.modelRoles).length === 0) delete raw.modelRoles;
 
 		// Leave no empty husk behind: a surviving `task: {}` block is a second place
 		// to look for settings that no longer live there.
@@ -633,18 +705,23 @@ class CodingAgentSettingsHooks implements SettingsStoreHooks {
 		// sources this never rewrites (project files, `--config` overlays, and
 		// non-persisting instances).
 		const compaction = raw.compaction as Record<string, unknown> | undefined;
-		if (compaction && ("thresholdTokens" in compaction || "thresholdPercent" in compaction)) {
-			if (compaction.threshold === undefined) {
-				const legacyTokens = compaction.thresholdTokens;
-				const legacyPercent = compaction.thresholdPercent;
+		const legacyTokens = compaction?.thresholdTokens ?? raw["compaction.thresholdTokens"];
+		const legacyPercent = compaction?.thresholdPercent ?? raw["compaction.thresholdPercent"];
+		if (legacyTokens !== undefined || legacyPercent !== undefined) {
+			const currentThreshold = compaction?.threshold ?? raw["compaction.threshold"];
+			if (currentThreshold === undefined) {
 				if (typeof legacyTokens === "number" && Number.isFinite(legacyTokens) && legacyTokens > 0) {
-					compaction.threshold = String(legacyTokens);
+					setByPath(raw, ["compaction", "threshold"], String(legacyTokens));
 				} else if (typeof legacyPercent === "number" && Number.isFinite(legacyPercent) && legacyPercent > 0) {
-					compaction.threshold = `${legacyPercent}%`;
+					setByPath(raw, ["compaction", "threshold"], `${legacyPercent}%`);
 				}
 			}
-			delete compaction.thresholdTokens;
-			delete compaction.thresholdPercent;
+			if (compaction) {
+				delete compaction.thresholdTokens;
+				delete compaction.thresholdPercent;
+			}
+			delete raw["compaction.thresholdTokens"];
+			delete raw["compaction.thresholdPercent"];
 		}
 
 		// Optional numeric settings once stored `-1` to mean "unset", which made -1
@@ -682,6 +759,12 @@ class CodingAgentSettingsHooks implements SettingsStoreHooks {
 			}
 			delete isolationObj.enabled;
 		}
+		if (typeof raw["task.isolation.enabled"] === "boolean") {
+			if (raw["task.isolation.mode"] === undefined) {
+				raw["task.isolation.mode"] = raw["task.isolation.enabled"] ? "auto" : "none";
+			}
+			delete raw["task.isolation.enabled"];
+		}
 
 		// task.simple: removed — the task tool no longer accepts a per-call
 		// schema (workflows drive structured output via eval agent()) and the
@@ -689,11 +772,15 @@ class CodingAgentSettingsHooks implements SettingsStoreHooks {
 		if (taskObj && "simple" in taskObj) {
 			delete taskObj.simple;
 		}
+		delete raw["task.simple"];
 
 		// task.eager / todo.eager: boolean -> enum (default | preferred | always).
 		// `true` reproduced the previous "on" behavior, which is now `always`.
 		if (taskObj && typeof taskObj.eager === "boolean") {
 			taskObj.eager = taskObj.eager ? "always" : "default";
+		}
+		if (typeof raw["task.eager"] === "boolean") {
+			raw["task.eager"] = raw["task.eager"] ? "always" : "default";
 		}
 		const todoObj = raw.todo as Record<string, unknown> | undefined;
 		if (todoObj && typeof todoObj.eager === "boolean") {
@@ -705,15 +792,21 @@ class CodingAgentSettingsHooks implements SettingsStoreHooks {
 		// and `fuse-projfs` are now the platform-named `overlayfs` / `projfs`
 		// kinds; the PAL falls back internally when the chosen one isn't
 		// available, so we don't need the old TS-side platform guards.
+		const isolationLegacyMode: Record<string, string> = {
+			worktree: "rcopy",
+			"fuse-overlay": "overlayfs",
+			"fuse-projfs": "projfs",
+		};
 		if (isolationObj && typeof isolationObj.mode === "string") {
-			const legacy: Record<string, string> = {
-				worktree: "rcopy",
-				"fuse-overlay": "overlayfs",
-				"fuse-projfs": "projfs",
-			};
-			const mapped = legacy[isolationObj.mode as string];
+			const mapped = isolationLegacyMode[isolationObj.mode as string];
 			if (mapped !== undefined) {
 				isolationObj.mode = mapped;
+			}
+		}
+		if (typeof raw["task.isolation.mode"] === "string") {
+			const mapped = isolationLegacyMode[raw["task.isolation.mode"]];
+			if (mapped !== undefined) {
+				raw["task.isolation.mode"] = mapped;
 			}
 		}
 
@@ -867,13 +960,18 @@ class CodingAgentSettingsHooks implements SettingsStoreHooks {
 		const memoryBackendObj = raw.memory as Record<string, unknown> | undefined;
 		const memoryBackendSet = memoryBackendObj && typeof memoryBackendObj.backend === "string";
 		const memoriesObj = raw.memories as Record<string, unknown> | undefined;
-		if (!memoryBackendSet && memoriesObj && typeof memoriesObj.enabled === "boolean") {
-			const next = memoriesObj.enabled ? "local" : "off";
+		const memoriesEnabled =
+			(typeof memoriesObj?.enabled === "boolean" ? memoriesObj.enabled : undefined) ??
+			(typeof raw["memories.enabled"] === "boolean" ? raw["memories.enabled"] : undefined);
+		if (!memoryBackendSet && typeof memoriesEnabled === "boolean") {
+			const next = memoriesEnabled ? "local" : "off";
 			const memoryRoot = (memoryBackendObj ?? {}) as Record<string, unknown>;
 			memoryRoot.backend = next;
 			raw.memory = memoryRoot;
 		}
-
+		if (memoriesObj) delete memoriesObj.enabled;
+		delete raw["memories.enabled"];
+		if (isRecord(raw.memories) && Object.keys(raw.memories).length === 0) delete raw.memories;
 		// Rename the legacy local `mnemosyne` memory backend to `mnemopi`.
 		// - `memory.backend: "mnemosyne"` now selects the renamed backend.
 		// - the top-level `mnemosyne` settings object becomes `mnemopi`.
@@ -1081,9 +1179,11 @@ class CodingAgentSettingsHooks implements SettingsStoreHooks {
 		// moved to `agent.*` leaf for leaf, and the three keys other areas kept
 		// under the old word moved with it. New wins, legacy is deleted, so this is
 		// a fixed point like the rest of this method.
-		if ("subagent" in tierObj) {
-			setTier("agent", tierObj.subagent);
+		if ("subagent" in tierObj || "tier.subagent" in raw) {
+			const legacyTierSubagent = tierObj.subagent ?? raw["tier.subagent"];
+			setTier("agent", mapInheritTier(legacyTierSubagent));
 			delete tierObj.subagent;
+			delete raw["tier.subagent"];
 			tierTouched = true;
 		}
 		if ("serviceTierAdvisor" in raw) {

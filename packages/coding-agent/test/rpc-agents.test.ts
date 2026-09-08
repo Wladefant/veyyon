@@ -16,9 +16,9 @@ import {
 	type AgentLifecyclePayload,
 	type AgentProgress,
 	type AgentProgressPayload,
-	TASK_AGENT_EVENT_CHANNEL,
-	TASK_AGENT_LIFECYCLE_CHANNEL,
-	TASK_AGENT_PROGRESS_CHANNEL,
+	TASK_SUBAGENT_EVENT_CHANNEL,
+	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
+	TASK_SUBAGENT_PROGRESS_CHANNEL,
 } from "@veyyon/coding-agent/task";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
 import { removeSyncWithRetries } from "@veyyon/utils";
@@ -55,7 +55,7 @@ function createProgress(overrides: Partial<AgentProgress> = {}): AgentProgress {
 function createRegistryWithSnapshot(): RpcAgentRegistry {
 	const eventBus = new EventBus();
 	const registry = new RpcAgentRegistry(eventBus, () => {});
-	eventBus.emit(TASK_AGENT_LIFECYCLE_CHANNEL, {
+	eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
 		id: "SpawnA",
 		index: 0,
 		agent: "task",
@@ -112,9 +112,9 @@ describe("RPC agent registry", () => {
 		};
 
 		expect(registry.getSubscriptionLevel()).toBe("off");
-		eventBus.emit(TASK_AGENT_LIFECYCLE_CHANNEL, lifecycle);
-		eventBus.emit(TASK_AGENT_PROGRESS_CHANNEL, progressPayload);
-		eventBus.emit(TASK_AGENT_EVENT_CHANNEL, eventPayload);
+		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, lifecycle);
+		eventBus.emit(TASK_SUBAGENT_PROGRESS_CHANNEL, progressPayload);
+		eventBus.emit(TASK_SUBAGENT_EVENT_CHANNEL, eventPayload);
 
 		expect(frames).toHaveLength(0);
 		expect(registry.getAgents()).toMatchObject([
@@ -153,8 +153,8 @@ describe("RPC agent registry", () => {
 			progress: createProgress(),
 		};
 
-		eventBus.emit(TASK_AGENT_LIFECYCLE_CHANNEL, lifecycle);
-		eventBus.emit(TASK_AGENT_PROGRESS_CHANNEL, progressPayload);
+		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, lifecycle);
+		eventBus.emit(TASK_SUBAGENT_PROGRESS_CHANNEL, progressPayload);
 
 		expect(frames.map(frame => frame.type)).toEqual(["subagent_lifecycle", "subagent_progress"]);
 		expect(registry.getAgents()).toMatchObject([
@@ -174,7 +174,7 @@ describe("RPC agent registry", () => {
 	test("clears stale snapshots when the active RPC session changes", () => {
 		const eventBus = new EventBus();
 		const registry = new RpcAgentRegistry(eventBus, () => {});
-		eventBus.emit(TASK_AGENT_LIFECYCLE_CHANNEL, {
+		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
 			id: "SpawnA",
 			index: 0,
 			agent: "task",
@@ -270,7 +270,7 @@ describe("RPC agent registry", () => {
 		const eventBus = new EventBus();
 		const registry = new RpcAgentRegistry(eventBus, () => {});
 		const sessionFile = "/tmp/agent.jsonl";
-		eventBus.emit(TASK_AGENT_LIFECYCLE_CHANNEL, {
+		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
 			id: "SpawnA",
 			index: 0,
 			agent: "task",
@@ -280,7 +280,7 @@ describe("RPC agent registry", () => {
 		} satisfies AgentLifecyclePayload);
 
 		expect(registry.getAgents()).toHaveLength(1);
-		eventBus.emit(TASK_AGENT_LIFECYCLE_CHANNEL, {
+		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
 			id: "SpawnA",
 			index: 0,
 			agent: "task",
@@ -304,11 +304,11 @@ describe("RPC agent registry", () => {
 			event: { type: "agent_start" },
 		};
 
-		eventBus.emit(TASK_AGENT_EVENT_CHANNEL, eventPayload);
+		eventBus.emit(TASK_SUBAGENT_EVENT_CHANNEL, eventPayload);
 		expect(frames).toHaveLength(0);
 
 		registry.setSubscriptionLevel("events");
-		eventBus.emit(TASK_AGENT_EVENT_CHANNEL, eventPayload);
+		eventBus.emit(TASK_SUBAGENT_EVENT_CHANNEL, eventPayload);
 
 		expect(frames).toHaveLength(1);
 		expect(frames[0]).toEqual({ type: "subagent_event", payload: eventPayload });

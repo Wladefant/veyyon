@@ -79,7 +79,7 @@
 		"statusLineUntracked": "sea",
 		"statusLineOutput": "ink",
 		"statusLineCost": "sun",
-		"statusLineAgents": "terracotta",
+		"statusLineSubagents": "terracotta",
 		"pythonMode": "#f0c040"
 	},
 	"export": {

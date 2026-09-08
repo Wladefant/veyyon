@@ -95,7 +95,7 @@
 		"statusLineUntracked": "sky",
 		"statusLineOutput": "maroon",
 		"statusLineCost": "maroon",
-		"statusLineAgents": "peach",
+		"statusLineSubagents": "peach",
 		"pythonMode": "yellow"
 	},
 	"export": {

@@ -6,7 +6,7 @@
  * retained) load read-only from the JSONL session file — no writer, no lock.
  *
  * Agents that are no longer in the `AgentRegistry` — one-shot helpers
- * unregistered after `finalizeAgentLifecycle` (`keepAlive: false`, e.g. the
+ * unregistered after `finalizeSubagentLifecycle` (`keepAlive: false`, e.g. the
  * `eval` `agent()` bridge), agents released via the agent dashboard / vibe kill, or
  * any agent after a session resume — remain reachable: `resolve`, `complete`,
  * and the index all fall back to scanning artifacts dirs for `<id>.jsonl`,

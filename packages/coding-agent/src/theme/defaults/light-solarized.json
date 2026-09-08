@@ -91,7 +91,7 @@
 		"statusLineUntracked": "blue",
 		"statusLineOutput": "magenta",
 		"statusLineCost": "red",
-		"statusLineAgents": "cyan",
+		"statusLineSubagents": "cyan",
 		"pythonMode": "yellow"
 	},
 	"export": {

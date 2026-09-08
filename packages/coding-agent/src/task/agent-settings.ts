@@ -930,7 +930,7 @@ export function resolveAgentModel(options: {
  *
  * An explicit `:level` suffix on the resolved model pattern outranks all of these. The executor
  * applies that, since only it knows whether the suffix was present (see
- * `resolveEffectiveAgentThinkingLevel`).
+ * `resolveEffectiveSubagentThinkingLevel`).
  *
  * A configured value naming no level is reported with the setting and the accepted values, then
  * skipped so the next layer decides, rather than becoming the default or a neighbouring level.

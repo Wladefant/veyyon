@@ -33,7 +33,7 @@ import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import * as sdkModule from "@veyyon/coding-agent/sdk";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { resolveAgentPruneBudget } from "@veyyon/coding-agent/task/agent-settings";
-import { finalizeAgentLifecycle, runSubprocess, saysItIsWaitingOnAPeer } from "@veyyon/coding-agent/task/executor";
+import { finalizeSubagentLifecycle, runSubprocess, saysItIsWaitingOnAPeer } from "@veyyon/coding-agent/task/executor";
 import {
 	createAssistantStopMessage,
 	createAssistantToolCallMessage,
@@ -125,7 +125,7 @@ async function advance(ms: number): Promise<void> {
  *
  * Every other case in this file hands `adopt()` a budget directly, so the suite proves the
  * MECHANISM works GIVEN a budget and says nothing about whether a budget ever arrives. The supply
- * line is `resolveAgentPruneBudget(settings)` -> `prune` -> `finalizeAgentLifecycle`
+ * line is `resolveAgentPruneBudget(settings)` -> `prune` -> `finalizeSubagentLifecycle`
  * -> `adopt`. Drop the `prune` argument at the executor call site, or return zeros from the
  * resolver, and nothing prunes an agent ever again while this suite stays fully green.
  */
@@ -160,7 +160,7 @@ describe("the operator's setting reaches the prune stage", () => {
 	/**
 	 * That resolved budget, handed to the real finalizer the way production hands it, prunes.
 	 *
-	 * `finalizeAgentLifecycle` is the only production caller of `adopt`, and it reads
+	 * `finalizeSubagentLifecycle` is the only production caller of `adopt`, and it reads
 	 * `args.prune?.afterMs ?? 0`, so the `?? 0` silently disables the whole stage the moment
 	 * the argument stops being passed.
 	 */
@@ -176,7 +176,7 @@ describe("the operator's setting reaches the prune stage", () => {
 			sessionFile: "/tmp/Wired.jsonl",
 		});
 
-		await finalizeAgentLifecycle({
+		await finalizeSubagentLifecycle({
 			id: "Wired",
 			session,
 			aborted: false,
@@ -215,7 +215,7 @@ describe("the operator's setting reaches the prune stage", () => {
 			sessionFile: "/tmp/Kept.jsonl",
 		});
 
-		await finalizeAgentLifecycle({
+		await finalizeSubagentLifecycle({
 			id: "Kept",
 			session,
 			aborted: false,
@@ -496,7 +496,7 @@ describe("a finished run arms the prune through the executor", () => {
 			session,
 			sessionFile: `/tmp/${id}.jsonl`,
 		});
-		await finalizeAgentLifecycle({
+		await finalizeSubagentLifecycle({
 			id,
 			session,
 			aborted: false,
@@ -948,7 +948,7 @@ describe("an aborted agent refuses a wake", () => {
 			sessionFile: "/tmp/Killed.jsonl",
 		});
 
-		const settled = finalizeAgentLifecycle({
+		const settled = finalizeSubagentLifecycle({
 			id: "Killed",
 			session,
 			aborted: true,
@@ -1014,7 +1014,7 @@ describe("the waiting signal reads the sign-off, not the whole run", () => {
 	 * developer's real profile and the run fails before it produces anything.
 	 *
 	 * The stub registers the agent because the real `createAgentSession` does. Stand in
-	 * for the sdk without it and every registry call in `finalizeAgentLifecycle` is a
+	 * for the sdk without it and every registry call in `finalizeSubagentLifecycle` is a
 	 * silent no-op on an unknown id, so both assertions below read `undefined` and pass
 	 * or fail for a reason that has nothing to do with the sign-off.
 	 */

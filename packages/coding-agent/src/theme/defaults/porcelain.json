@@ -80,7 +80,7 @@
 		"statusLineUntracked": "mutedBlue",
 		"statusLineOutput": "wedgwoodBlue",
 		"statusLineCost": "goldTrim",
-		"statusLineAgents": "deepWedgwood",
+		"statusLineSubagents": "deepWedgwood",
 		"pythonMode": "#f0c040"
 	},
 	"export": {

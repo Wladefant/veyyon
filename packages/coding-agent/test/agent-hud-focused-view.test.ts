@@ -34,7 +34,7 @@ import { SessionObserverRegistry } from "@veyyon/coding-agent/modes/terminal/ses
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { type AgentLifecyclePayload, TASK_AGENT_LIFECYCLE_CHANNEL } from "@veyyon/coding-agent/task";
+import { type AgentLifecyclePayload, TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "@veyyon/coding-agent/task";
 import { initTheme, setTheme, stopThemeWatcher } from "@veyyon/coding-agent/theme/theme";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
@@ -159,7 +159,7 @@ describe("the agent HUD while the view is focused on an agent", () => {
 
 	/**
 	 * Emit the spawn, then drive the observer coalesce window (100ms,
-	 * AGENT_OBSERVER_UI_COALESCE_MS) on the fake clock: the flush that
+	 * SUBAGENT_OBSERVER_UI_COALESCE_MS) on the fake clock: the flush that
 	 * re-renders the HUD is a setTimeout, and faking only around the emit keeps
 	 * VirtualTerminal.waitForRender (itself real-time) working. The flush's
 	 * requestRender lands on the fake clock too, so re-request on the real
@@ -168,7 +168,7 @@ describe("the agent HUD while the view is focused on an agent", () => {
 	async function spawnDetached(id: string, index: number, description: string): Promise<void> {
 		if (!eventBus) throw new Error("eventBus not booted");
 		vi.useFakeTimers();
-		eventBus.emit(TASK_AGENT_LIFECYCLE_CHANNEL, makeLifecycle(id, index, description));
+		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, makeLifecycle(id, index, description));
 		vi.advanceTimersByTime(150);
 		vi.useRealTimers();
 		mode?.ui.requestRender();
@@ -244,9 +244,9 @@ describe("SessionObserverRegistry.getSessionsSpawnedBy", () => {
 		const registry = new SessionObserverRegistry();
 		const bus = new EventBus();
 		registry.subscribeToEventBus(bus);
-		bus.emit(TASK_AGENT_LIFECYCLE_CHANNEL, makeLifecycle("Anna", 0, "top level work"));
-		bus.emit(TASK_AGENT_LIFECYCLE_CHANNEL, makeLifecycle("Anna.Bob", 1, "nested work"));
-		bus.emit(TASK_AGENT_LIFECYCLE_CHANNEL, makeLifecycle("Anna.Bob.Carol", 2, "doubly nested work"));
+		bus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, makeLifecycle("Anna", 0, "top level work"));
+		bus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, makeLifecycle("Anna.Bob", 1, "nested work"));
+		bus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, makeLifecycle("Anna.Bob.Carol", 2, "doubly nested work"));
 		return registry;
 	}
 

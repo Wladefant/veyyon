@@ -84,7 +84,7 @@
 		"statusLineUntracked": 244,
 		"statusLineOutput": 250,
 		"statusLineCost": 250,
-		"statusLineAgents": "accent",
+		"statusLineSubagents": "accent",
 		"pythonMode": "#C9A84A"
 	},
 	"export": {

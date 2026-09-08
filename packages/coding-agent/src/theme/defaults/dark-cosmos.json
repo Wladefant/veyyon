@@ -79,7 +79,7 @@
 		"statusLineUntracked": "starblue",
 		"statusLineOutput": "starlight",
 		"statusLineCost": "nebula",
-		"statusLineAgents": "nebula",
+		"statusLineSubagents": "nebula",
 		"pythonMode": "#f0c040"
 	},
 	"export": {

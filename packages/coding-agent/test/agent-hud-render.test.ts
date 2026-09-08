@@ -29,7 +29,10 @@ import {
 	renderAgentHudLines,
 } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-hud";
 import { paintRailMotion, railIdleHeadAt } from "@veyyon/coding-agent/modes/terminal/draw/rail-motion";
-import { AGENT_OBSERVER_UI_COALESCE_MS, InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
+import {
+	InteractiveMode,
+	SUBAGENT_OBSERVER_UI_COALESCE_MS,
+} from "@veyyon/coding-agent/modes/terminal/interactive-mode";
 import {
 	type ObservableSession,
 	SessionObserverRegistry,
@@ -39,8 +42,8 @@ import {
 	type AgentLifecyclePayload,
 	type AgentProgress,
 	type AgentProgressPayload,
-	TASK_AGENT_LIFECYCLE_CHANNEL,
-	TASK_AGENT_PROGRESS_CHANNEL,
+	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
+	TASK_SUBAGENT_PROGRESS_CHANNEL,
 } from "@veyyon/coding-agent/task";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
@@ -272,9 +275,9 @@ describe("agent HUD lines", () => {
 		const registry = new SessionObserverRegistry();
 		registry.subscribeToEventBus(eventBus);
 
-		eventBus.emit(TASK_AGENT_LIFECYCLE_CHANNEL, makeLifecycle("Detached", 0, "background work", true));
-		eventBus.emit(TASK_AGENT_LIFECYCLE_CHANNEL, makeLifecycle("Inline", 1, "sync work"));
-		eventBus.emit(TASK_AGENT_PROGRESS_CHANNEL, makeProgressPayload("FromProgress", 2, "background work", true));
+		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, makeLifecycle("Detached", 0, "background work", true));
+		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, makeLifecycle("Inline", 1, "sync work"));
+		eventBus.emit(TASK_SUBAGENT_PROGRESS_CHANNEL, makeProgressPayload("FromProgress", 2, "background work", true));
 
 		const out = renderAt(registry.getSessions());
 		expect(rowFor(out, "Detached")).toContain("background work");
@@ -302,26 +305,26 @@ describe("agent HUD lines", () => {
 				.map(session => session.id);
 
 		eventBus.emit(
-			TASK_AGENT_LIFECYCLE_CHANNEL,
+			TASK_SUBAGENT_LIFECYCLE_CHANNEL,
 			makeLifecycle("BlastRadius", 1, "Survey id-keyed downstream consumers"),
 		);
 		eventBus.emit(
-			TASK_AGENT_LIFECYCLE_CHANNEL,
+			TASK_SUBAGENT_LIFECYCLE_CHANNEL,
 			makeLifecycle("SelectorSurfaces", 0, "Map model-selector resolution surfaces"),
 		);
 		eventBus.emit(
-			TASK_AGENT_LIFECYCLE_CHANNEL,
+			TASK_SUBAGENT_LIFECYCLE_CHANNEL,
 			makeLifecycle("VariantsSurvey", 2, "Survey tier-variant ids across catalog"),
 		);
 
 		expect(activeIds()).toEqual(["SelectorSurfaces", "BlastRadius", "VariantsSurvey"]);
 
 		eventBus.emit(
-			TASK_AGENT_PROGRESS_CHANNEL,
+			TASK_SUBAGENT_PROGRESS_CHANNEL,
 			makeProgressPayload("VariantsSurvey", 2, "Survey tier-variant ids across catalog"),
 		);
 		eventBus.emit(
-			TASK_AGENT_PROGRESS_CHANNEL,
+			TASK_SUBAGENT_PROGRESS_CHANNEL,
 			makeProgressPayload("BlastRadius", 1, "Survey id-keyed downstream consumers"),
 		);
 
@@ -566,13 +569,13 @@ describe("InteractiveMode agent observer UI sync", () => {
 
 		for (let index = 0; index < 6; index++) {
 			eventBus.emit(
-				TASK_AGENT_PROGRESS_CHANNEL,
+				TASK_SUBAGENT_PROGRESS_CHANNEL,
 				makeProgressPayload(`BurstAgent${index}`, index, `Burst job ${index}`, true),
 			);
 		}
 
 		await Promise.resolve();
-		vi.advanceTimersByTime(AGENT_OBSERVER_UI_COALESCE_MS);
+		vi.advanceTimersByTime(SUBAGENT_OBSERVER_UI_COALESCE_MS);
 		await Promise.resolve();
 
 		const rows = Bun.stripANSI(mode.agentContainer.render(120).join("\n")).split("\n");

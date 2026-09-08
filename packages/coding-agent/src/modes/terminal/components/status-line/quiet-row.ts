@@ -620,7 +620,7 @@ export function statusLineSettingsFromConfig(): StatusLineSettings {
  * everything and renders at zero as readily as at three.
  */
 export function agentBadgeText(count: number): string {
-	return theme.fg("statusLineAgents", withIcon(theme.icon.agents, `${count}`));
+	return theme.fg("statusLineSubagents", withIcon(theme.icon.agents, `${count}`));
 }
 
 /**

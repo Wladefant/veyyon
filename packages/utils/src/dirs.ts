@@ -89,7 +89,7 @@ export const MAIN_CONFIG_FILENAMES = ["config.yml", "config.yaml"] as const;
 
 /**
  * Basename of the cross-profile directory holding user-authored agent
- * definitions ({@link getGlobalAgentsDir}).
+ * definitions ({@link getGlobalSubagentsDir}).
  *
  * `subagents`, not `agents`: the config root already holds `profiles/`, whose
  * every entry carries an `agent/` dir, so an `agent/agents/` path named two
@@ -1086,7 +1086,7 @@ export function getSharedAuthDir(): string {
  * Not XDG-redirected, for the reason {@link getSharedAuthDir} is not: one fixed
  * machine-wide location is the whole point.
  */
-export function getGlobalAgentsDir(): string {
+export function getGlobalSubagentsDir(): string {
 	return path.join(getBaseConfigRoot(), SUBAGENTS_DIR_NAME);
 }
 

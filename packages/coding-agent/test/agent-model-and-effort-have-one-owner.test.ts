@@ -64,7 +64,7 @@ import {
 	resolveAgentThinkingLevel,
 	SUPERSEDED_AGENT_ROW_FIELDS,
 } from "@veyyon/coding-agent/task/agent-settings";
-import { resolveEffectiveAgentThinkingLevel } from "@veyyon/coding-agent/task/executor";
+import { resolveEffectiveSubagentThinkingLevel } from "@veyyon/coding-agent/task/executor";
 import type { AgentDefinition } from "@veyyon/coding-agent/task/types";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { CONFIGURED_THINKING_LEVELS, type ConfiguredThinkingLevel } from "@veyyon/coding-agent/thinking";
@@ -1036,7 +1036,7 @@ describe("a config written before the lane tree", () => {
 });
 
 /**
- * The last seam before an agent runs. `resolveEffectiveAgentThinkingLevel` picks between the level
+ * The last seam before an agent runs. `resolveEffectiveSubagentThinkingLevel` picks between the level
  * the caller already resolved and the one a `:level` suffix on the model pattern carried, and its own
  * doc comment names the defect it must not develop: re-applying a layer behind the caller, which is how
  * one axis came to have two answers. It takes no settings, and this is what holds it to that: it is
@@ -1063,7 +1063,7 @@ describe("the effort a spawn finally runs at answers only from what it was hande
 		for (const explicit of [true, false]) {
 			for (const resolved of candidates) {
 				for (const configured of candidates) {
-					const answer = resolveEffectiveAgentThinkingLevel(explicit, resolved, configured);
+					const answer = resolveEffectiveSubagentThinkingLevel(explicit, resolved, configured);
 					if (answer !== undefined && answer !== resolved && answer !== configured) {
 						invented.push(`${explicit}/${String(resolved)}/${String(configured)} -> ${String(answer)}`);
 					}
@@ -1081,8 +1081,12 @@ describe("the effort a spawn finally runs at answers only from what it was hande
 	 * this the case above passes on a function that always answers `undefined`.
 	 */
 	it("prefers the suffix when there is one and the resolved level when there is not", () => {
-		expect(resolveEffectiveAgentThinkingLevel(true, ThinkingLevel.High, ThinkingLevel.Low)).toBe(ThinkingLevel.High);
-		expect(resolveEffectiveAgentThinkingLevel(false, ThinkingLevel.High, ThinkingLevel.Low)).toBe(ThinkingLevel.Low);
-		expect(resolveEffectiveAgentThinkingLevel(false, ThinkingLevel.High, undefined)).toBe(ThinkingLevel.High);
+		expect(resolveEffectiveSubagentThinkingLevel(true, ThinkingLevel.High, ThinkingLevel.Low)).toBe(
+			ThinkingLevel.High,
+		);
+		expect(resolveEffectiveSubagentThinkingLevel(false, ThinkingLevel.High, ThinkingLevel.Low)).toBe(
+			ThinkingLevel.Low,
+		);
+		expect(resolveEffectiveSubagentThinkingLevel(false, ThinkingLevel.High, undefined)).toBe(ThinkingLevel.High);
 	});
 });

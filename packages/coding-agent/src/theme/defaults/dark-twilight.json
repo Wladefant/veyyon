@@ -80,7 +80,7 @@
 		"statusLineUntracked": "teal",
 		"statusLineOutput": "afterglow",
 		"statusLineCost": "sunset",
-		"statusLineAgents": "rose",
+		"statusLineSubagents": "rose",
 		"pythonMode": "#f0c040"
 	},
 	"export": {

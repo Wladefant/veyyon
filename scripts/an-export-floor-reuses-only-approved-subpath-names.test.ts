@@ -18,7 +18,6 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	APPROVED_EXPORT_BASELINE_COMMIT,
-	APPROVED_EXPORT_RENAMES,
 	BASELINE_FILE_PATH,
 	computeExportFloorLedger,
 	EXPORT_FLOOR_SCHEMA_VERSION,
@@ -37,10 +36,7 @@ describe("an export floor reuses only approved subpath names", () => {
 		});
 		const expectedFloor = JSON.parse(rawGitShow) as Record<string, string[]>;
 		const sortedExpected: Record<string, string[]> = Object.fromEntries(
-			Object.entries(expectedFloor).map(([key, names]) => [
-				key,
-				names.map(name => APPROVED_EXPORT_RENAMES[name] ?? name).sort(),
-			]),
+			Object.entries(expectedFloor).map(([key, names]) => [key, names.toSorted()]),
 		);
 
 		// Verify the zero-addition fixture against independent witness

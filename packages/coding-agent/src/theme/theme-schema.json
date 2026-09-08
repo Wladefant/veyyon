@@ -100,7 +100,7 @@
 				"statusLineUntracked",
 				"statusLineOutput",
 				"statusLineCost",
-				"statusLineAgents"
+				"statusLineSubagents"
 			],
 			"properties": {
 				"accent": {
@@ -367,7 +367,7 @@
 					"$ref": "#/$defs/colorValue",
 					"description": "Status line cost segment"
 				},
-				"statusLineAgents": {
+				"statusLineSubagents": {
 					"$ref": "#/$defs/colorValue",
 					"description": "Status line agents segment"
 				}

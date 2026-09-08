@@ -80,7 +80,7 @@
 		"statusLineUntracked": "heronBlue",
 		"statusLineOutput": "heronBlue",
 		"statusLineCost": "warningGold",
-		"statusLineAgents": "heronBlue",
+		"statusLineSubagents": "heronBlue",
 		"pythonMode": "#f0c040"
 	},
 	"export": {

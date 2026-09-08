@@ -45,7 +45,7 @@ import { paintRailMotion, railIdleHeadAt } from "@veyyon/coding-agent/modes/term
 import { ANCHORED_BLOCK_PADDING_X, InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
 import type { ObservableSession } from "@veyyon/coding-agent/modes/terminal/session-observer-registry";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { type AgentProgressPayload, TASK_AGENT_PROGRESS_CHANNEL } from "@veyyon/coding-agent/task";
+import { type AgentProgressPayload, TASK_SUBAGENT_PROGRESS_CHANNEL } from "@veyyon/coding-agent/task";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import type { TodoItem, TodoPhase } from "@veyyon/coding-agent/tools/agent/todo";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
@@ -260,7 +260,7 @@ describe("the live agent HUD fits the width the mode reports", () => {
 			vi.useFakeTimers();
 
 			for (const [index, lane] of laneSessions().entries()) {
-				eventBus.emit(TASK_AGENT_PROGRESS_CHANNEL, {
+				eventBus.emit(TASK_SUBAGENT_PROGRESS_CHANNEL, {
 					index,
 					agent: "task",
 					agentSource: "bundled",
@@ -290,7 +290,7 @@ describe("the live agent HUD fits the width the mode reports", () => {
 		Object.defineProperty(mode.ui.terminal, "columns", { get: () => 100, configurable: true });
 		vi.useFakeTimers();
 
-		eventBus.emit(TASK_AGENT_PROGRESS_CHANNEL, {
+		eventBus.emit(TASK_SUBAGENT_PROGRESS_CHANNEL, {
 			index: 0,
 			agent: "task",
 			agentSource: "bundled",

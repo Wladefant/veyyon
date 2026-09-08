@@ -299,7 +299,7 @@ import {
 	type CreateAgentSessionOptions,
 	type CreateAgentSessionResult,
 	isInProcessChildSession,
-	isSpawnedSession,
+	isSubagentSession,
 } from "./session/factory-options";
 import {
 	createCustomToolsExtension,
@@ -1012,7 +1012,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// session and loads its task's project itself, `inherit` forks the parent's
 		// codec. Correctness never rests on this (the boundary rule expands every
 		// emitted seam); the policy trades tokens.
-		const sessionIsSpawned = isSpawnedSession(options);
+		const sessionIsSpawned = isSubagentSession(options);
 		const argot = createArgotSession({
 			enabled: argotEnabled,
 			isSpawned: sessionIsSpawned,

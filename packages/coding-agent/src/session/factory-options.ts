@@ -316,7 +316,7 @@ export interface CreateAgentSessionOptions {
  * teeth, because a spawned agent that re-roots the process moves the working directory
  * out from under its parent and every sibling sharing the process.
  */
-export function isSpawnedSession(options: Pick<CreateAgentSessionOptions, "taskDepth" | "parentTaskPrefix">): boolean {
+export function isSubagentSession(options: Pick<CreateAgentSessionOptions, "taskDepth" | "parentTaskPrefix">): boolean {
 	return (options.taskDepth ?? 0) > 0 || Boolean(options.parentTaskPrefix);
 }
 
@@ -324,7 +324,7 @@ export function isSpawnedSession(options: Pick<CreateAgentSessionOptions, "taskD
  * Whether another session in THIS process spawned this one, and therefore already
  * owns the process-global singletons it should inherit rather than replace.
  *
- * Deliberately NOT `isSpawnedSession`, and the difference is the point. That
+ * Deliberately NOT `isSubagentSession`, and the difference is the point. That
  * predicate answers "is this a spawned agent", and takes `taskDepth` into account
  * because a session can be one without carrying a parent's prefix. This one
  * answers a narrower question about OWNERSHIP, and only a `parentTaskPrefix` can
@@ -333,7 +333,7 @@ export function isSpawnedSession(options: Pick<CreateAgentSessionOptions, "taskD
  * greater than zero says the session sits at some recursion depth, which does not
  * imply anyone here owns anything.
  *
- * Swapping in `isSpawnedSession` here would change behaviour for a session
+ * Swapping in `isSubagentSession` here would change behaviour for a session
  * carrying depth but no prefix. It would stop installing the skills, rules and
  * MCP singletons, and it would take `AsyncJobManager.instance()` as its scoped
  * manager, which is `undefined` when nothing installed one. That session would

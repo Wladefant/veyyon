@@ -20,7 +20,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { runAgentsCommand } from "@veyyon/coding-agent/cli/agents-cli";
 import { discoverAgents } from "@veyyon/coding-agent/task/discovery";
-import { getGlobalAgentsDir, SUBAGENTS_DIR_NAME } from "@veyyon/utils";
+import { getGlobalSubagentsDir, SUBAGENTS_DIR_NAME } from "@veyyon/utils";
 import { useContextScopeFixture } from "./helpers/context-scope-fixture";
 
 const fixture = useContextScopeFixture("unpacked-agent-");
@@ -49,7 +49,7 @@ describe("an unpacked agent lands where discovery reads it", () => {
 		const f = fixture("unpack-profile");
 		const targetDir = await unpack();
 
-		const agentsDir = getGlobalAgentsDir();
+		const agentsDir = getGlobalSubagentsDir();
 		expect(targetDir).toBe(agentsDir);
 		expect(agentsDir).toBe(path.join(f.globalRoot, SUBAGENTS_DIR_NAME));
 		const unpacked = fs

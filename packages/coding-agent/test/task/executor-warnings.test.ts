@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import {
-	AGENT_WARNING_MISSING_YIELD,
-	AGENT_WARNING_NULL_YIELD,
 	finalizeSubprocessOutput,
+	SUBAGENT_WARNING_MISSING_YIELD,
+	SUBAGENT_WARNING_NULL_YIELD,
 } from "@veyyon/coding-agent/task/executor";
 
 describe("agent warning injection", () => {
@@ -17,7 +17,7 @@ describe("agent warning injection", () => {
 			outputSchema: undefined,
 		});
 
-		expect(result.rawOutput).toBe(`${AGENT_WARNING_NULL_YIELD}\n\npartial output`);
+		expect(result.rawOutput).toBe(`${SUBAGENT_WARNING_NULL_YIELD}\n\npartial output`);
 		expect(result.hasYield).toBe(true);
 	});
 
@@ -32,7 +32,7 @@ describe("agent warning injection", () => {
 			outputSchema: { properties: { ok: { type: "boolean" } } },
 		});
 
-		expect(result.rawOutput).toBe(AGENT_WARNING_MISSING_YIELD);
+		expect(result.rawOutput).toBe(SUBAGENT_WARNING_MISSING_YIELD);
 		expect(result.hasYield).toBe(false);
 	});
 
@@ -62,7 +62,7 @@ describe("agent warning injection", () => {
 			outputSchema: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
 		});
 
-		expect(result.rawOutput).toBe(`${AGENT_WARNING_MISSING_YIELD}\n\nagent stopped after writing analysis`);
+		expect(result.rawOutput).toBe(`${SUBAGENT_WARNING_MISSING_YIELD}\n\nagent stopped after writing analysis`);
 	});
 
 	it("does not inject missing-submit warning when execution exits non-zero", () => {

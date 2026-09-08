@@ -81,7 +81,7 @@
 		"statusLineUntracked": "silverDim",
 		"statusLineOutput": "silver",
 		"statusLineCost": "amber",
-		"statusLineAgents": "silver",
+		"statusLineSubagents": "silver",
 		"pythonMode": "amber"
 	},
 	"export": {

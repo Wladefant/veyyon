@@ -18,15 +18,15 @@ export const MAX_OUTPUT_BYTES = $envpos("VEYYON_TASK_MAX_OUTPUT_BYTES", 500_000)
 export const MAX_OUTPUT_LINES = $envpos("VEYYON_TASK_MAX_OUTPUT_LINES", 5000);
 
 /** EventBus channel for raw agent events */
-export const TASK_AGENT_EVENT_CHANNEL = "task:agent:event";
+export const TASK_SUBAGENT_EVENT_CHANNEL = "task:agent:event";
 
 /** EventBus channel for aggregated agent progress. The string is a wire spelling a collab guest matches on; it does not change. */
-export const TASK_AGENT_PROGRESS_CHANNEL = "task:subagent:progress";
+export const TASK_SUBAGENT_PROGRESS_CHANNEL = "task:subagent:progress";
 
 /** EventBus channel for agent lifecycle (start/end). The string is a wire spelling a collab guest matches on; it does not change. */
-export const TASK_AGENT_LIFECYCLE_CHANNEL = "task:subagent:lifecycle";
+export const TASK_SUBAGENT_LIFECYCLE_CHANNEL = "task:subagent:lifecycle";
 
-/** Payload emitted on TASK_AGENT_PROGRESS_CHANNEL */
+/** Payload emitted on TASK_SUBAGENT_PROGRESS_CHANNEL */
 export interface AgentProgressPayload {
 	index: number;
 	agent: string;
@@ -40,13 +40,13 @@ export interface AgentProgressPayload {
 	detached?: boolean;
 }
 
-/** Payload emitted on TASK_AGENT_EVENT_CHANNEL */
+/** Payload emitted on TASK_SUBAGENT_EVENT_CHANNEL */
 export interface AgentEventPayload {
 	id: string;
 	event: AgentSessionEvent;
 }
 
-/** Payload emitted on TASK_AGENT_LIFECYCLE_CHANNEL */
+/** Payload emitted on TASK_SUBAGENT_LIFECYCLE_CHANNEL */
 export interface AgentLifecyclePayload {
 	id: string;
 	agent: string;

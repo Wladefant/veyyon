@@ -9,7 +9,7 @@
  *    queueing when the worker is mid-turn but not steerable (drained into the
  *    next turn automatically), and starting a follow-up turn on the SAME
  *    worker id when idle.
- * 3. `runAgentFollowUpTurn` continues a live session in place: consecutive
+ * 3. `runSubagentFollowUpTurn` continues a live session in place: consecutive
  *    turns hit the same AgentSession instance (context retained) and the
  *    finalized result carries the yield payload + tool trace.
  * 4. `wait` wakes on the FIRST settling turn among concurrent sessions and
@@ -584,7 +584,7 @@ describe("vibe session registry", () => {
 			return makeResult(options.id);
 		});
 		const followUps: Array<{ id: string; message: string }> = [];
-		vi.spyOn(executorModule, "runAgentFollowUpTurn").mockImplementation(async options => {
+		vi.spyOn(executorModule, "runSubagentFollowUpTurn").mockImplementation(async options => {
 			followUps.push({ id: options.id, message: options.message });
 			return makeResult(options.id, { output: "queued work done" });
 		});
@@ -629,7 +629,7 @@ describe("vibe session registry", () => {
 			return makeResult(options.id);
 		});
 		const followUps: Array<{ id: string; message: string }> = [];
-		vi.spyOn(executorModule, "runAgentFollowUpTurn").mockImplementation(async options => {
+		vi.spyOn(executorModule, "runSubagentFollowUpTurn").mockImplementation(async options => {
 			followUps.push({ id: options.id, message: options.message });
 			options.onProgress?.(
 				progressSnapshot(options.id, {
@@ -660,7 +660,7 @@ describe("vibe session registry", () => {
 		expect(registry.screens("Main")[0]?.turns).toBe(2);
 	});
 
-	it("runAgentFollowUpTurn continues the same live session and finalizes trace + yield response", async () => {
+	it("runSubagentFollowUpTurn continues the same live session and finalizes trace + yield response", async () => {
 		const fake = createFakeWorkerSession();
 		AgentRegistry.global().register({
 			id: "Worker",
@@ -674,7 +674,7 @@ describe("vibe session registry", () => {
 
 		fake.setScript({ events: yieldTurnEvents({ report: "did the first thing" }), responseText: "first summary" });
 		const progressSnapshots: AgentProgress[] = [];
-		const first = await executorModule.runAgentFollowUpTurn({
+		const first = await executorModule.runSubagentFollowUpTurn({
 			id: "Worker",
 			agent,
 			message: "do the first thing",
@@ -686,7 +686,7 @@ describe("vibe session registry", () => {
 
 		// Second turn lands on the SAME session instance — prior context retained.
 		fake.setScript({ events: yieldTurnEvents({ report: "built on prior work" }), responseText: "second summary" });
-		const second = await executorModule.runAgentFollowUpTurn({ id: "Worker", agent, message: "now extend it" });
+		const second = await executorModule.runSubagentFollowUpTurn({ id: "Worker", agent, message: "now extend it" });
 		expect(second.exitCode).toBe(0);
 		expect(second.output).toContain("built on prior work");
 		expect(fake.prompts).toEqual(["do the first thing", "now extend it"]);
@@ -750,7 +750,7 @@ describe("vibe session registry", () => {
 			return makeResult(options.id, { output: "First turn done." });
 		});
 		const followUpGate = deferred();
-		vi.spyOn(executorModule, "runAgentFollowUpTurn").mockImplementation(async options => {
+		vi.spyOn(executorModule, "runSubagentFollowUpTurn").mockImplementation(async options => {
 			await followUpGate.promise;
 			return makeResult(options.id, { output: "Follow-up done." });
 		});

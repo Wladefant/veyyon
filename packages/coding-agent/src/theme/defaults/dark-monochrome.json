@@ -82,7 +82,7 @@
 		"statusLineUntracked": "gray6",
 		"statusLineOutput": "gray7",
 		"statusLineCost": "gray7",
-		"statusLineAgents": "accent",
+		"statusLineSubagents": "accent",
 		"pythonMode": "#f0c040"
 	},
 	"export": {

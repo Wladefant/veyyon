@@ -65,7 +65,7 @@ the tools an agent can call. For example, `designer` remains a designer and
 specialist for each independent slice:
 
 ```yaml
-# ~/.veyyon/agents/accessibility-reviewer.md frontmatter
+# ~/.veyyon/subagents/accessibility-reviewer.md frontmatter
 name: accessibility-reviewer
 description: Reviews terminal interfaces for accessibility problems and reports findings
 tools: read, search
@@ -93,7 +93,7 @@ Agents → Roster**. The roster lists every discovered agent with its state,
 resolved model, and deciding setting. Enter opens one agent to set its state,
 model, and effort, or reset it to defaults.
 
-To add an agent, put a markdown definition in `~/.veyyon/agents/`, or start
+To add an agent, put a markdown definition in `~/.veyyon/subagents/`, or start
 from the shipped definitions by running `veyyon agents unpack`. The definition
 makes the role available. Enable its row before the model may start it.
 [Writing an agent](./agents-authoring.md) covers the frontmatter fields, the

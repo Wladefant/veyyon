@@ -1075,7 +1075,7 @@ Applied whenever raw settings are loaded (profile config, `--config` overlays, a
 | `task.agentIdleTtlMs` | `agent.idleTtlMs` |
 | `task.isolation.*` | `agent.isolation.*` |
 | `task.disabledAgents` | one row per agent in `agent.agents` |
-| `task.agentModelOverrides` | dropped, and each override is named in the log. Per-agent models no longer exist: `agent.model` (with `agent.thinkingLevel`) is the one owner, and an agent that needs its own model declares it in its own `model:` frontmatter. A `agent.agents.<name>.model` or `.thinkingLevel` left in a config is ignored and reported the same way. |
+| `task.agentModelOverrides` | Dropped and reported; configure per-agent `model` and `thinkingLevel` under `agent.agents.<name>` with `agent.sharedModel: false`, or set `model:` in agent frontmatter. |
 | `modelRoles.task` | `agent.model` (the `task` role is retired) |
 | `lastChangelogVersion` | moved to a marker file and stripped from `config.yml` |
 | `collapseChangelog` | removed; startup no longer prints release notes, so there is nothing to collapse. Use `startup.updateNotice` to control the one-line notice that replaced it. |

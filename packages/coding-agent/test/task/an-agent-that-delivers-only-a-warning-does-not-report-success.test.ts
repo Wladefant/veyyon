@@ -1,7 +1,7 @@
 /**
  * WHY: `finalizeSubprocessOutput` could return `exitCode: 0` while the entire delivered payload was
  * a `SYSTEM WARNING:` sentence. An agent that called `yield` with unusable data took the null-yield
- * arm, which prepended {@link AGENT_WARNING_NULL_YIELD} to `rawOutput` and changed nothing else,
+ * arm, which prepended {@link SUBAGENT_WARNING_NULL_YIELD} to `rawOutput` and changed nothing else,
  * so the parent read a success whose result text was the warning. The missing-yield arm — the milder
  * failure, where the child never yielded at all — already set a non-zero exit and a stderr, so the
  * worse failure reported better than the lesser one.
@@ -18,9 +18,9 @@
 import { describe, expect, it } from "bun:test";
 import * as executor from "@veyyon/coding-agent/task/executor";
 import {
-	AGENT_WARNING_MISSING_YIELD,
-	AGENT_WARNING_NULL_YIELD,
 	finalizeSubprocessOutput,
+	SUBAGENT_WARNING_MISSING_YIELD,
+	SUBAGENT_WARNING_NULL_YIELD,
 } from "@veyyon/coding-agent/task/executor";
 
 /** A yield that reports success but carries no data at all — the null-yield case. */
@@ -53,9 +53,9 @@ describe("an agent that delivers only a warning does not report success", () => 
 	// which arm it belongs to, rather than slipping past a hardcoded pair.
 	it("covers every exported agent warning sentinel", () => {
 		const sentinels = Object.keys(executor)
-			.filter(key => key.startsWith("AGENT_WARNING_"))
+			.filter(key => key.startsWith("SUBAGENT_WARNING_"))
 			.sort();
-		expect(sentinels).toEqual(["AGENT_WARNING_MISSING_YIELD", "AGENT_WARNING_NULL_YIELD"]);
+		expect(sentinels).toEqual(["SUBAGENT_WARNING_MISSING_YIELD", "SUBAGENT_WARNING_NULL_YIELD"]);
 	});
 
 	describe("a null yield", () => {
@@ -63,7 +63,7 @@ describe("an agent that delivers only a warning does not report success", () => 
 			const result = finalize({ rawOutput: "partial output", yieldItems: NULL_YIELD, outputSchema: SCHEMA });
 
 			expect(result.exitCode).not.toBe(0);
-			expect(result.stderr).toBe(AGENT_WARNING_NULL_YIELD);
+			expect(result.stderr).toBe(SUBAGENT_WARNING_NULL_YIELD);
 			expect(result.hasYield).toBe(true);
 		});
 
@@ -71,17 +71,17 @@ describe("an agent that delivers only a warning does not report success", () => 
 			const result = finalize({ rawOutput: "", yieldItems: NULL_YIELD, outputSchema: SCHEMA });
 
 			expect(result.exitCode).not.toBe(0);
-			expect(result.stderr).toBe(AGENT_WARNING_NULL_YIELD);
-			expect(result.rawOutput).toBe(AGENT_WARNING_NULL_YIELD);
+			expect(result.stderr).toBe(SUBAGENT_WARNING_NULL_YIELD);
+			expect(result.rawOutput).toBe(SUBAGENT_WARNING_NULL_YIELD);
 		});
 
 		it("fails when nothing at all was delivered, even with no schema to satisfy", () => {
 			const result = finalize({ rawOutput: "", yieldItems: NULL_YIELD, outputSchema: undefined });
 
 			expect(result.exitCode).not.toBe(0);
-			expect(result.stderr).toBe(AGENT_WARNING_NULL_YIELD);
+			expect(result.stderr).toBe(SUBAGENT_WARNING_NULL_YIELD);
 			// The whole payload is the warning; there is no answer behind it.
-			expect(result.rawOutput).toBe(AGENT_WARNING_NULL_YIELD);
+			expect(result.rawOutput).toBe(SUBAGENT_WARNING_NULL_YIELD);
 		});
 
 		it("stays successful when no schema was demanded and real prose came back", () => {
@@ -89,14 +89,14 @@ describe("an agent that delivers only a warning does not report success", () => 
 
 			// Deliberate: the prose is the deliverable, the warning only annotates it.
 			expect(result.exitCode).toBe(0);
-			expect(result.rawOutput).toBe(`${AGENT_WARNING_NULL_YIELD}\n\nplain text notes`);
+			expect(result.rawOutput).toBe(`${SUBAGENT_WARNING_NULL_YIELD}\n\nplain text notes`);
 		});
 
 		it("treats whitespace-only output as nothing delivered", () => {
 			const result = finalize({ rawOutput: "   \n\t ", yieldItems: NULL_YIELD, outputSchema: undefined });
 
 			expect(result.exitCode).not.toBe(0);
-			expect(result.stderr).toBe(AGENT_WARNING_NULL_YIELD);
+			expect(result.stderr).toBe(SUBAGENT_WARNING_NULL_YIELD);
 		});
 
 		it("keeps an earlier real failure message instead of overwriting it with the warning", () => {
@@ -118,7 +118,7 @@ describe("an agent that delivers only a warning does not report success", () => 
 			const result = finalize({ rawOutput: "", yieldItems: NO_YIELD, outputSchema: SCHEMA });
 
 			expect(result.exitCode).not.toBe(0);
-			expect(result.stderr).toBe(AGENT_WARNING_MISSING_YIELD);
+			expect(result.stderr).toBe(SUBAGENT_WARNING_MISSING_YIELD);
 			expect(result.hasYield).toBe(false);
 		});
 
@@ -126,14 +126,14 @@ describe("an agent that delivers only a warning does not report success", () => 
 			const result = finalize({ rawOutput: "partial output", yieldItems: NO_YIELD, outputSchema: SCHEMA });
 
 			expect(result.exitCode).not.toBe(0);
-			expect(result.stderr).toBe(AGENT_WARNING_MISSING_YIELD);
+			expect(result.stderr).toBe(SUBAGENT_WARNING_MISSING_YIELD);
 		});
 
 		it("fails when nothing at all was delivered, even with no schema to satisfy", () => {
 			const result = finalize({ rawOutput: "", yieldItems: NO_YIELD, outputSchema: undefined });
 
 			expect(result.exitCode).not.toBe(0);
-			expect(result.stderr).toBe(AGENT_WARNING_MISSING_YIELD);
+			expect(result.stderr).toBe(SUBAGENT_WARNING_MISSING_YIELD);
 		});
 
 		it("stays successful when no schema was demanded and real prose came back", () => {

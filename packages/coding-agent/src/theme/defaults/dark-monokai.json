@@ -86,7 +86,7 @@
 		"statusLineUntracked": "monokaiCyan",
 		"statusLineOutput": "monokaiPink",
 		"statusLineCost": "monokaiPink",
-		"statusLineAgents": "monokaiOrange",
+		"statusLineSubagents": "monokaiOrange",
 		"pythonMode": "#f0c040"
 	},
 	"export": {

@@ -89,7 +89,7 @@ What you need to know before using it:
 - A sink that throws does not break the caller, because these run inside helpers whose contract is to carry on. It does not block the other sinks either, and the throw is recorded on its own line.
 - Detach in test teardown with the handle `attachFaultSink` returned. A sink that outlives the test that installed it collects another test's faults and reports them against the wrong subject.
 
-`fs-optional.ts` is the reason this exists. Its header promised that a directory that exists and cannot be listed "is not allowed to be silent", and it reported that with `logger.warn`, so an unreadable `~/.veyyon/agents` showed the operator "no agents" and put the cause in a file nobody opens.
+`fs-optional.ts` is the reason this exists. Its header promised that a directory that exists and cannot be listed "is not allowed to be silent", and it reported that with `logger.warn`, so an unreadable `~/.veyyon/subagents` showed the operator "no agents" and put the cause in a file nobody opens.
 
 ## On-Disk Layout
 

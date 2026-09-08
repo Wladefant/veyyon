@@ -279,7 +279,7 @@ const MODEL_CYCLE_TRACK_CLEAR_MS = 4000;
  *  is rebuilt once. Exported because a test that drives the burst has to
  *  advance exactly this window: the block arms a repeating rail-motion interval
  *  as soon as it has lanes, so draining every pending timer never returns. */
-export const AGENT_OBSERVER_UI_COALESCE_MS = 100;
+export const SUBAGENT_OBSERVER_UI_COALESCE_MS = 100;
 
 /**
  * Horizontal margin the two anchored blocks are mounted with, and the number
@@ -2007,7 +2007,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#observerUiSyncTimer = setTimeout(() => {
 			this.#observerUiSyncTimer = undefined;
 			this.#flushObserverUiSync();
-		}, AGENT_OBSERVER_UI_COALESCE_MS);
+		}, SUBAGENT_OBSERVER_UI_COALESCE_MS);
 		this.#observerUiSyncTimer.unref?.();
 	}
 

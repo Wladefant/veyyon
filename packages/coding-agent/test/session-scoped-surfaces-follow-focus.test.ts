@@ -43,7 +43,7 @@ import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { type AgentLifecyclePayload, TASK_AGENT_LIFECYCLE_CHANNEL } from "@veyyon/coding-agent/task";
+import { type AgentLifecyclePayload, TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "@veyyon/coding-agent/task";
 import { initTheme, setTheme, stopThemeWatcher } from "@veyyon/coding-agent/theme/theme";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
@@ -159,7 +159,7 @@ describe("session-scoped surfaces while the view is focused on an agent", () => 
 		const { mode: m, terminal: t } = booted();
 		if (!eventBus) throw new Error("eventBus not booted");
 		vi.useFakeTimers();
-		eventBus.emit(TASK_AGENT_LIFECYCLE_CHANNEL, {
+		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
 			id,
 			index,
 			agent: "task",

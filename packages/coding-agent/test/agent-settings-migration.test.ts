@@ -149,6 +149,35 @@ describe("agent settings migration", () => {
 	});
 
 	/**
+	 * An explicit `agent.enabled: true` (flat or nested) must win over a legacy
+	 * recursion depth of zero (flat or nested under task or subagent).
+	 */
+	test("leaves explicit agent.enabled alone when legacy recursion depth zero is present (cross-product)", async () => {
+		for (const legacyPrefix of ["task", "subagent"] as const) {
+			for (const legacyFormat of ["nested", "flat"] as const) {
+				for (const enabledFormat of ["nested", "flat"] as const) {
+					const config: Record<string, unknown> = {};
+					if (legacyFormat === "nested") {
+						config[legacyPrefix] = { maxRecursionDepth: 0 };
+					} else {
+						config[`${legacyPrefix}.maxRecursionDepth`] = 0;
+					}
+					if (enabledFormat === "nested") {
+						config.agent = { enabled: true };
+					} else {
+						config["agent.enabled"] = true;
+					}
+
+					writeConfig(config);
+					const settings = await load();
+					const desc = `${legacyPrefix} (${legacyFormat}) depth 0 + agent.enabled (${enabledFormat}) true`;
+					expect(settings.get("agent.enabled"), desc).toBe(true);
+					expect(settings.get("agent.maxNestedSpawnDepth"), desc).toBe(0);
+				}
+			}
+		}
+	});
+	/**
 	 * A cap already written under the replacement key is the operator's current
 	 * choice. Consuming stale legacy paths must never overwrite that explicit value.
 	 */
@@ -600,6 +629,189 @@ describe("agent settings migration", () => {
 	});
 
 	/**
+	 * Flat dotted keys in YAML must migrate identically to their nested equivalents.
+	 * In YAML, `subagent.model: openai/gpt-5` produces a top-level key `"subagent.model"`
+	 * rather than a nested `{ subagent: { model: "..." } }`.
+	 */
+	describe("flat dotted legacy settings migration", () => {
+		test("migrates flat subagent.* keys (model, delegation: off, maxConcurrency, etc.)", async () => {
+			writeConfig({
+				"subagent.model": "openai/gpt-5",
+				"subagent.delegation": "off",
+				"subagent.maxConcurrency": 12,
+				"subagent.idleTtlMs": 180_000,
+				"subagent.batch": false,
+				"subagent.enableLsp": true,
+				"subagent.maxRuntimeMs": 45_000,
+			});
+
+			const settings = await load();
+			expect(settings.get("agent.model")).toBe("openai/gpt-5");
+			expect(settings.get("agent.enabled")).toBe(false);
+			expect(settings.get("agent.delegation")).toBe("preferred");
+			expect(settings.get("agent.maxConcurrency")).toBe(12);
+			expect(settings.get("agent.idleTtlMs")).toBe(180_000);
+			expect(settings.get("agent.batch")).toBe(false);
+			expect(settings.get("agent.enableLsp")).toBe(true);
+			expect(settings.get("agent.maxRuntimeMs")).toBe(45_000);
+		});
+
+		test("migrates flat subagent.autoClose and subagent.prune keys onto agent.prune", async () => {
+			writeConfig({
+				"subagent.autoClose.parkedMs": 45_000,
+				"subagent.autoClose.waitingMs": 90_000,
+				"subagent.autoClose.enabled": false,
+			});
+
+			const settings = await load();
+			expect(settings.get("agent.prune.afterMs")).toBe(45_000);
+			expect(settings.get("agent.prune.waitingAfterMs")).toBe(90_000);
+			expect(settings.get("agent.prune.enabled")).toBe(false);
+		});
+
+		test("migrates flat agent.autoClose keys onto agent.prune", async () => {
+			writeConfig({
+				"agent.autoClose.parkedMs": 55_000,
+				"agent.autoClose.waitingMs": 110_000,
+				"agent.autoClose.enabled": false,
+			});
+
+			const settings = await load();
+			expect(settings.get("agent.prune.afterMs")).toBe(55_000);
+			expect(settings.get("agent.prune.waitingAfterMs")).toBe(110_000);
+			expect(settings.get("agent.prune.enabled")).toBe(false);
+		});
+
+		test("migrates flat task.* keys (eager, maxConcurrency, agentIdleTtlMs, disabledAgents, maxRecursionDepth)", async () => {
+			writeConfig({
+				"task.eager": "always",
+				"task.maxConcurrency": 14,
+				"task.agentIdleTtlMs": 900_000,
+				"task.disabledAgents": ["designer", "librarian"],
+				"task.maxRecursionDepth": 3,
+			});
+
+			const settings = await load();
+			expect(settings.get("agent.delegation")).toBe("required");
+			expect(settings.get("agent.maxConcurrency")).toBe(14);
+			expect(settings.get("agent.idleTtlMs")).toBe(900_000);
+			expect(settings.get("agent.agents")).toEqual({
+				designer: { enabled: false },
+				librarian: { enabled: false },
+			});
+			expect(settings.get("agent.maxNestedSpawnDepth")).toBe(2);
+		});
+
+		test("migrates flat modelRoles.task onto agent.model", async () => {
+			writeConfig({
+				"modelRoles.task": "openai/gpt-5:high",
+				"modelRoles.default": "anthropic/claude-opus-4-5",
+			});
+
+			const settings = await load();
+			expect(settings.get("agent.model")).toBe("openai/gpt-5:high");
+			expect(settings.getModelRole("task")).toBeUndefined();
+			expect(settings.getModelRole("default")).toBe("anthropic/claude-opus-4-5");
+		});
+
+		test("migrates flat tier.subagent, advisor.subagents, and argot.subagents", async () => {
+			writeConfig({
+				"tier.subagent": "flex",
+				"advisor.subagents": true,
+				"argot.subagents": "inherit",
+			});
+
+			const settings = await load();
+			expect(settings.get("tier.agent")).toBe("flex");
+			expect(settings.get("advisor.agents")).toBe(true);
+			expect(settings.get("argot.agents")).toBe("inherit");
+		});
+
+		test("precedence: explicit new keys (flat or nested) win over legacy keys (flat or nested)", async () => {
+			// Flat new over flat legacy
+			writeConfig({
+				"subagent.model": "openai/gpt-5-legacy",
+				"agent.model": "anthropic/claude-sonnet-4-5-new",
+				"subagent.delegation": "off",
+				"agent.enabled": true,
+				"task.eager": "always",
+				"agent.delegation": "allowed",
+				"tier.subagent": "flex",
+				"tier.agent": "priority",
+				"advisor.subagents": false,
+				"advisor.agents": true,
+				"argot.subagents": "off",
+				"argot.agents": "inherit",
+			});
+
+			const settings = await load();
+			expect(settings.get("agent.model")).toBe("anthropic/claude-sonnet-4-5-new");
+			expect(settings.get("agent.enabled")).toBe(true);
+			expect(settings.get("agent.delegation")).toBe("allowed");
+			expect(settings.get("tier.agent")).toBe("priority");
+			expect(settings.get("advisor.agents")).toBe(true);
+			expect(settings.get("argot.agents")).toBe("inherit");
+		});
+
+		test("cleans flat legacy keys on flush", async () => {
+			writeConfig({
+				"subagent.model": "openai/gpt-5",
+				"task.maxConcurrency": 8,
+				"tier.subagent": "flex",
+				"advisor.subagents": true,
+				"argot.subagents": "inherit",
+				"modelRoles.task": "openai/gpt-5",
+			});
+
+			const settings = await load();
+			await settings.set("ask.notify" as never, "on" as never);
+			await settings.flush?.();
+
+			const rawOnDisk = fs.readFileSync(path.join(agentDir, "config.yml"), "utf8");
+			expect(rawOnDisk).not.toContain("subagent");
+			expect(rawOnDisk).not.toContain("task.maxConcurrency");
+			expect(rawOnDisk).not.toContain("modelRoles.task");
+
+			const onDisk = YAML.parse(rawOnDisk) as Record<string, unknown>;
+			expect(onDisk["subagent.model"]).toBeUndefined();
+			expect(onDisk["task.maxConcurrency"]).toBeUndefined();
+			expect(onDisk["tier.subagent"]).toBeUndefined();
+			expect(onDisk["advisor.subagents"]).toBeUndefined();
+			expect(onDisk["argot.subagents"]).toBeUndefined();
+			expect(onDisk["modelRoles.task"]).toBeUndefined();
+		});
+
+		test("cleans mixed dotted legacy containers after flush", async () => {
+			writeConfig({
+				subagent: {
+					"autoClose.parkedMs": 45_000,
+					"isolation.mode": "worktree",
+				},
+				task: {
+					"isolation.mode": "worktree",
+					eager: "always",
+				},
+			});
+
+			const settings = await load();
+			expect(settings.get("agent.prune.afterMs")).toBe(45_000);
+			expect(settings.get("agent.isolation.mode")).toBe("rcopy");
+			expect(settings.get("agent.delegation")).toBe("required");
+
+			await settings.set("ask.notify" as never, "on" as never);
+			await settings.flush?.();
+
+			const rawOnDisk = fs.readFileSync(path.join(agentDir, "config.yml"), "utf8");
+			expect(rawOnDisk).not.toContain("subagent");
+			expect(rawOnDisk).not.toContain("task");
+
+			const onDisk = YAML.parse(rawOnDisk) as Record<string, unknown>;
+			expect(onDisk.subagent).toBeUndefined();
+			expect(onDisk.task).toBeUndefined();
+		});
+	});
+
+	/**
 	 * WHERE EVERY AGENT SETTING'S LEGACY VALUE COMES FROM, ENUMERATED AT RUN TIME.
 	 *
 	 * Each case above pins one legacy key, which prunes those incidents and nothing else. The next
@@ -690,6 +902,17 @@ describe("agent settings migration", () => {
 			expect(carried.sort()).toEqual([...CARRIES_FROM_TASK].sort());
 		});
 
+		test("carries exactly the settings recorded as same-name task keys when provided flat dotted", async () => {
+			const carried: string[] = [];
+			for (const setting of agentPaths) {
+				const probe = probeValueFor(setting);
+				writeConfig({ [`task.${setting.slice("agent.".length)}`]: probe });
+				if (same((await load()).get(setting), probe)) carried.push(setting);
+			}
+
+			expect(carried.sort()).toEqual([...CARRIES_FROM_TASK].sort());
+		});
+
 		test("classifies every setting in the section", () => {
 			const classified = [...CARRIES_FROM_TASK, ...Object.keys(LEGACY_SOURCES), ...NO_LEGACY_SOURCE];
 
@@ -707,6 +930,51 @@ describe("agent settings migration", () => {
 			}
 
 			expect(inert).toEqual([]);
+		});
+
+		test("still reaches the setting from every recorded legacy key when provided flat dotted", async () => {
+			function flatten(obj: Record<string, unknown>, prefix = ""): Record<string, unknown> {
+				const flat: Record<string, unknown> = {};
+				for (const [k, v] of Object.entries(obj)) {
+					const full = prefix ? `${prefix}.${k}` : k;
+					if (v !== null && typeof v === "object" && !Array.isArray(v)) {
+						Object.assign(flat, flatten(v as Record<string, unknown>, full));
+					} else {
+						flat[full] = v;
+					}
+				}
+				return flat;
+			}
+
+			const inert: string[] = [];
+			for (const [setting, legacy] of Object.entries(LEGACY_SOURCES)) {
+				if (!isSettingPath(setting)) throw new Error(`not a setting path: ${setting}`);
+				writeConfig(flatten(legacy));
+				if (same((await load()).get(setting), getDefault(setting))) inert.push(setting);
+			}
+
+			expect(inert).toEqual([]);
+		});
+
+		test("nested and flat legacy subagent keys migrate identically for every applicable setting", async () => {
+			const subagentApplicable = agentPaths.filter(
+				p => p !== "agent.sharedModel" && p !== "agent.thinkingLevel" && p !== "agent.modelByDepth",
+			);
+			for (const setting of subagentApplicable) {
+				const probe = probeValueFor(setting);
+				const leaf = setting.slice("agent.".length);
+
+				// 1. Nested
+				writeConfig({ subagent: nest(leaf.split("."), probe) });
+				const nestedVal = (await load()).get(setting);
+
+				// 2. Flat dotted
+				writeConfig({ [`subagent.${leaf}`]: probe });
+				const flatVal = (await load()).get(setting);
+
+				expect(flatVal, `setting: ${setting}`).toEqual(nestedVal);
+				expect(same(flatVal, getDefault(setting)), `setting: ${setting} did not default`).toBe(false);
+			}
 		});
 	});
 });

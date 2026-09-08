@@ -1585,7 +1585,7 @@ export class StatusLineComponent implements Component {
 		const runningBackgroundJobs = this.#backgroundJobBadgeCount();
 		const badgeParts: string[] = [];
 		if (runningBackgroundJobs > 0) {
-			badgeParts.push(theme.fg("statusLineAgents", withIcon(theme.icon.job, `${runningBackgroundJobs}`)));
+			badgeParts.push(theme.fg("statusLineSubagents", withIcon(theme.icon.job, `${runningBackgroundJobs}`)));
 		}
 		const expansion = this.#expansionProgress();
 		const groups = gatherQuietSegments({

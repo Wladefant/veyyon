@@ -62,14 +62,14 @@ Because bundled parsing uses `level: "fatal"`, malformed bundled frontmatter thr
 
 ### Discovery inputs
 
-1. Authored definitions dir: `getGlobalAgentsDir()`, `~/.veyyon/agents` at the base config root, read whatever profile is active. `veyyon agents unpack` writes there. A repository's `.veyyon/agents/` is not read: an agent definition carries a system prompt, a tool allowlist, a model, and a `spawns` field, so a checked-in one could shadow a bundled agent by name. `discoverAgents` returns `projectAgentsDir: null` unconditionally; the field survives only because `task/index.ts` plumbs it into `TaskToolDetails` for display.
+1. Authored definitions dir: `getGlobalSubagentsDir()`, `~/.veyyon/subagents` at the base config root, read whatever profile is active. `veyyon agents unpack` writes there. A repository's `.veyyon/agents/` is not read: an agent definition carries a system prompt, a tool allowlist, a model, and a `spawns` field, so a checked-in one could shadow a bundled agent by name. `discoverAgents` returns `projectAgentsDir: null` unconditionally; the field survives only because `task/index.ts` plumbs it into `TaskToolDetails` for display.
 2. Veyyon extension-package `agents/` dirs (`listVeyyonExtensionRoots`): only when `isProviderEnabled("veyyon-plugins")`; consumed in source-precedence order (CLI roots > user `extensions:` settings > installed npm/link plugins, marketplace installs excluded by realpath)
 3. Claude marketplace plugin roots (`listClaudePluginRoots(home, cwd)`) with `agents/` subdirs: only when `isProviderEnabled("claude-plugins")`; project-scope plugin installs are filtered out
 4. Bundled agents (`loadBundledAgents()`)
 
 ### Actual source order
 
-1. `~/.veyyon/agents`
+1. `~/.veyyon/subagents`
 2. Veyyon extension-package `agents/` dirs (CLI > user settings > installed plugins)
 3. Claude plugin `agents/` dirs (user-scope only)
 4. bundled agents last

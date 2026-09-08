@@ -8,11 +8,11 @@ spawn it once its row is enabled.
 ## Where the file goes
 
 ```console
-$ mkdir -p ~/.veyyon/agents
-$ $EDITOR ~/.veyyon/agents/accessibility-reviewer.md
+$ mkdir -p ~/.veyyon/subagents
+$ $EDITOR ~/.veyyon/subagents/accessibility-reviewer.md
 ```
 
-`~/.veyyon/agents/*.md` is the only place veyyon reads user-authored agents from.
+`~/.veyyon/subagents/*.md` is the only place veyyon reads user-authored agents from.
 Every profile reads that directory, so an agent is written once. Whether a profile
 may spawn it is a separate answer, `agent.agents.<name>.enabled`, stored per
 profile.
@@ -90,7 +90,7 @@ and `thinkingLevel:` in the file.
 
 ## Start from a bundled agent
 
-`veyyon agents unpack` writes the shipped definitions to `~/.veyyon/agents/` as
+`veyyon agents unpack` writes the shipped definitions to `~/.veyyon/subagents/` as
 ordinary markdown files, frontmatter and all. Copy one under a new name and edit it.
 
 ```console
@@ -101,7 +101,7 @@ $ veyyon agents unpack --dir ./unpacked-agents
 directory discovery reads.
 
 A definition that keeps a bundled agent's `name` replaces that agent: a file in
-`~/.veyyon/agents/` outranks the bundled definition of the same name, so writing
+`~/.veyyon/subagents/` outranks the bundled definition of the same name, so writing
 `reviewer.md` there means your reviewer is the reviewer.
 
 ## Check the result

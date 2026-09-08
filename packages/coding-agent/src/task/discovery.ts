@@ -12,7 +12,7 @@
  *     authors rather than a path the operator types.
  *
  * DISCOVERY IS GLOBAL, ENABLING IS PER-PROFILE. The definitions dir hangs off
- * the base config root ({@link getGlobalAgentsDir}), not off the active
+ * the base config root ({@link getGlobalSubagentsDir}), not off the active
  * profile's agent dir, so an agent is authored once and every profile sees it;
  * `agent.agents.<name>.enabled` is the per-profile answer to whether the
  * model may spawn it. The previous location was `<agentDir>/agents/`, which
@@ -35,7 +35,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getGlobalAgentsDir, readdirIfPresent, reportFault } from "@veyyon/utils";
+import { getGlobalSubagentsDir, readdirIfPresent, reportFault } from "@veyyon/utils";
 import { isProviderEnabled } from "../discovery/capability";
 import { listClaudePluginRoots, pluginsRootFor } from "../discovery/helpers";
 import { listVeyyonExtensionRoots } from "../discovery/veyyon-extension-roots";
@@ -155,9 +155,9 @@ export async function discoverAgents(
 
 	// The user-authored definitions dir is GLOBAL and therefore does not consult
 	// `agentDir`: switching profile changes which agents are ENABLED, never which
-	// ones exist. `getGlobalAgentsDir()` reads the base config root, so
+	// ones exist. `getGlobalSubagentsDir()` reads the base config root, so
 	// `VEYYON_CONFIG_DIR` still isolates it — that is the seam the suites use.
-	const orderedDirs: Array<{ dir: string; source: AgentSource }> = [{ dir: getGlobalAgentsDir(), source: "user" }];
+	const orderedDirs: Array<{ dir: string; source: AgentSource }> = [{ dir: getGlobalSubagentsDir(), source: "user" }];
 
 	// veyyon extension-package agents/ dirs. `listVeyyonExtensionRoots` returns roots in
 	// source-precedence order (CLI > user `extensions:` settings > installed npm/link
