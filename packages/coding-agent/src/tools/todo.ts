@@ -1681,18 +1681,26 @@ export const todoToolRenderer = {
 		// Expanded (the block's own toggle) it is the full list, which is what a
 		// reader scrolling back through history wants — by then the board is gone.
 		if (!options.expanded) {
-			const active = allTasks.find(task => task.status === "in_progress");
-			const moved = active ?? completedTasks[completedTasks.length - 1];
+			const inProgress = allTasks.filter(task => task.status === "in_progress");
+			const ops = normalizeTodoArg(_args);
+			const targetContent = ops.find(op => op.task)?.task;
+			const targetedTask = targetContent ? allTasks.find(task => task.content === targetContent) : undefined;
+			const active = targetedTask?.status === "in_progress" ? targetedTask : inProgress[0];
+			const moved = (targetedTask?.status === "in_progress" ? targetedTask : undefined) ?? active ?? completedTasks[completedTasks.length - 1];
 			const phaseOf = phases.find(phase => phase.tasks.some(task => task.content === moved?.content));
 			const parts = [
 				uiTheme.fg("dim", formatCount("done", allTasks.filter(task => task.status === "completed").length)),
 			];
+			if (inProgress.length > 1) {
+				parts.push(uiTheme.fg("accent", `${inProgress.length} in progress`));
+			}
 			if (phaseOf && phases.length > 1) {
 				parts.push(uiTheme.fg("muted", boundedTodoPreviewText(phaseOf.name, TODO_ITEM_PREVIEW_WIDTH)));
 			}
 			if (moved) {
-				const mark = active ? uiTheme.checkbox.progress : uiTheme.checkbox.checked;
-				const color = active ? "accent" : "success";
+				const isTaskActive = moved.status === "in_progress";
+				const mark = isTaskActive ? uiTheme.checkbox.progress : uiTheme.checkbox.checked;
+				const color = isTaskActive ? "accent" : "success";
 				parts.push(uiTheme.fg(color, `${mark} ${boundedTodoPreviewText(moved.content, TODO_ITEM_PREVIEW_WIDTH)}`));
 			}
 			return new Text(`${header} ${uiTheme.fg("dim", "·")} ${parts.join(uiTheme.fg("dim", " · "))}`, 0, 0);
