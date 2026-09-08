@@ -929,7 +929,7 @@ export class Settings {
 		const candidate = new Settings({ cwd: this.#cwd, agentDir: this.#agentDir, readOnly: true });
 		// Unlike startup's forgiving loader, a reload must never quarantine or
 		// replace a malformed file and must leave the live routing table intact.
-		candidate.#global = await candidate.#loadOverlayYaml(this.#configPath);
+		candidate.#global = (await candidate.#loadExistingMainYaml(true)) ?? {};
 		candidate.#configFiles = this.#configFiles;
 		candidate.#configOverlay = await candidate.#loadConfigOverlays();
 		candidate.#overrides = this.#overrides;
@@ -945,7 +945,7 @@ export class Settings {
 				}
 			}
 		}
-		candidate.#collectInvalidValues(candidate.#global, this.#configPath);
+		candidate.#collectInvalidValues(candidate.#global, candidate.#configPath ?? this.#configPath);
 		candidate.#collectInvalidValues(candidate.#configOverlay, "--config overlays");
 		if (candidate.#invalidValues.length) throw new Error("Invalid config settings; reload rejected.");
 		candidate.#rebuildMerged();
@@ -987,6 +987,7 @@ export class Settings {
 				else setByPath(target, segments, value);
 			}
 		}
+		this.#configPath = candidate.#configPath;
 		this.#rebuildMerged();
 		for (const change of changed) {
 			this.#fireEffectiveSettingChanged(change.path, this.get(change.path), change.before);
@@ -1458,11 +1459,13 @@ export class Settings {
 		}
 	}
 
-	async #loadExistingMainYaml(): Promise<RawSettings | null> {
+	async #loadExistingMainYaml(strict = false): Promise<RawSettings | null> {
 		if (!this.#configPath) return null;
 		for (const filename of MAIN_CONFIG_FILENAMES) {
 			const configPath = path.join(this.#agentDir, filename);
-			const loaded = await this.#loadYamlIfPresent(configPath);
+			const loaded = strict
+				? await this.#loadOverlayYaml(configPath, true)
+				: await this.#loadYamlIfPresent(configPath);
 			if (loaded instanceof UnreadableConfig) {
 				// The file at this name exists, so it is the config even though this
 				// read failed. Falling through to the next candidate would start
@@ -1482,7 +1485,9 @@ export class Settings {
 	async #loadConfigOverlays(): Promise<RawSettings> {
 		let merged: RawSettings = {};
 		for (const filePath of this.#configFiles) {
-			merged = this.#deepMerge(merged, await this.#loadOverlayYaml(filePath));
+			const overlay = await this.#loadOverlayYaml(filePath);
+			if (overlay === null) throw new Error(`Config overlay not found: ${filePath}`);
+			merged = this.#deepMerge(merged, overlay);
 		}
 		return merged;
 	}
@@ -1492,11 +1497,12 @@ export class Settings {
 	 * missing or malformed files are hard errors so a typo'd path cannot
 	 * silently fall back to the persistent settings.
 	 */
-	async #loadOverlayYaml(filePath: string): Promise<RawSettings> {
+	async #loadOverlayYaml(filePath: string, allowMissing = false): Promise<RawSettings | null> {
 		let content: string;
 		try {
 			content = await Bun.file(filePath).text();
 		} catch (error) {
+			if (allowMissing && isEnoent(error)) return null;
 			throw new Error(
 				isEnoent(error)
 					? `Config overlay not found: ${filePath}`

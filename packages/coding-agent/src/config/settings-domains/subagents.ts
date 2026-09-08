@@ -93,6 +93,43 @@ export interface SubagentLaneSettings {
 /** The top level of a lane chain is a lane like any other. */
 export type SubagentAgentSettings = SubagentLaneSettings;
 
+/** Validate every level before a hand-edited roster can reach spawn routing. */
+function validateLane(key: string, value: unknown): string | undefined {
+	const seen = new Set<object>();
+	let current = value;
+	let location = `subagent.agents.${key}`;
+	while (current !== undefined) {
+		if (current === null || typeof current !== "object" || Array.isArray(current)) {
+			return `${location}: expected a lane object`;
+		}
+		if (seen.has(current)) return `${location}: cyclic lane`;
+		seen.add(current);
+		const lane = current as Record<string, unknown>;
+		if (lane.enabled !== undefined && typeof lane.enabled !== "boolean") {
+			return `${location}.enabled: expected a boolean`;
+		}
+		if (
+			lane.model !== undefined &&
+			typeof lane.model !== "string" &&
+			!(Array.isArray(lane.model) && lane.model.every(model => typeof model === "string"))
+		) {
+			return `${location}.model: expected a model pattern or list of patterns`;
+		}
+		if (lane.thinkingLevel !== undefined && typeof lane.thinkingLevel !== "string") {
+			return `${location}.thinkingLevel: expected a string`;
+		}
+		if (
+			lane.maxNestedSpawnDepth !== undefined &&
+			(typeof lane.maxNestedSpawnDepth !== "number" || !Number.isFinite(lane.maxNestedSpawnDepth))
+		) {
+			return `${location}.maxNestedSpawnDepth: expected a finite number`;
+		}
+		current = lane.subagents;
+		location += ".subagents";
+	}
+	return undefined;
+}
+
 /**
  * The one bundled agent enabled out of the box: the end-to-end delegate.
  *
@@ -243,6 +280,7 @@ export const SUBAGENTS_SETTINGS = {
 	"subagent.agents": {
 		type: "record",
 		default: {} as Record<string, SubagentAgentSettings>,
+		validateEntry: validateLane,
 		ui: {
 			tab: "subagents",
 			group: "Subagents",
