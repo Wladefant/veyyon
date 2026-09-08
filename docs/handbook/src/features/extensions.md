@@ -434,4 +434,4 @@ Use the right surface:
 - **Hooks** (`src/extensibility/hooks/*`): separate legacy event API.
 - **Custom-tools** (`src/extensibility/custom-tools/*`): tool-focused modules; when loaded alongside extensions they are adapted and still pass through extension interception wrappers.
 
-If you need one package that owns policy, tools, command UX, and rendering together, use extensions.
+If you need one package that combines policy, tools, command UX, and rendering together, use extensions.

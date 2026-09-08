@@ -50,10 +50,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-695ab59a.js";
+            window.path_to_searchindex_js = "../searchindex-ddda0f12.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-b613f6a6.js"></script>
+        <script src="../toc-a67314e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -303,7 +303,7 @@ which:</p>
 <li><strong>Steer (<code>Enter</code>).</strong> The message is injected into the <em>current</em> turn: the model sees it at the
 next tool boundary and adjusts course without abandoning its work.</li>
 <li><strong>Queue a follow-up (<code>Ctrl+Q</code>, or <code>Ctrl+Enter</code> where the terminal delivers it).</strong> The message is queued in the running process and starts a
-<strong>new turn</strong> once the current one finishes. The queue lives in memory for the lifetime of the
+<strong>new turn</strong> once the current one finishes. The queue is stored in memory for the lifetime of the
 process; it is not written to the session file, so it does not survive a restart. Slash commands and <code>!</code> shell escapes
 queue client-side instead; they are local actions, not model input.</li>
 </ul>

@@ -50,10 +50,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-695ab59a.js";
+            window.path_to_searchindex_js = "../searchindex-ddda0f12.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-b613f6a6.js"></script>
+        <script src="../toc-a67314e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -232,7 +232,7 @@ close the card.</p>
 <p>Switching is <strong>per provider</strong>. Choosing another Anthropic account changes Anthropic and nothing else,
 because several providers serve one session at the same time: your main model, your subagent roles,
 and web search can each be a different provider. Moving between providers is a model choice, so it
-lives in <code>/models</code>.</p>
+is in <code>/models</code>.</p>
 <h2 id="naming-an-account"><a class="header" href="#naming-an-account">Naming an account</a></h2>
 <p>An email is not always the thing you recognise, especially when two subscriptions share one login.
 Give an account a name and every surface uses it:</p>
@@ -302,7 +302,7 @@ a <code>.env</code> file) is used without an interactive sign-in. OAuth-only pro
 </tbody>
 </table>
 </div>
-<p>The full provider → variable map lives in <a href="../models/providers.html">Providers</a>. <code>.env</code> files are loaded
+<p>The full provider → variable map is documented in <a href="../models/providers.html">Providers</a>. <code>.env</code> files are loaded
 from <code>&lt;cwd&gt;/.env</code>, <code>~/.veyyon/profiles/default/agent/.env</code>, <code>~/.veyyon/.env</code>, and <code>~/.env</code>, with earlier sources winning.</p>
 <h2 id="how-keys-are-resolved"><a class="header" href="#how-keys-are-resolved">How keys are resolved</a></h2>
 <p>When a provider needs a key, Veyyon resolves it in order (first match wins):</p>

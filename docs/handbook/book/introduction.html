@@ -50,10 +50,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-695ab59a.js";
+            window.path_to_searchindex_js = "searchindex-ddda0f12.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-b613f6a6.js"></script>
+        <script src="toc-a67314e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -208,7 +208,7 @@ place. Every step that touches the tree goes through an approval tier.</p>
 <p>The installer downloads a release binary and verifies its checksum. To build from
 source, clone the repository and run <code>bun run setup &amp;&amp; bun dev</code> in that checkout. See
 <a href="./using/install.html">Install</a> for platforms, pinned releases, updates, and uninstall.</p>
-<p>The binary is <code>veyyon</code>, aliased to <code>vey</code>. Configuration lives under <code>~/.veyyon</code>; the
+<p>The binary is <code>veyyon</code>, aliased to <code>vey</code>. Configuration is stored under <code>~/.veyyon</code>; the
 default profile keeps its state in <code>~/.veyyon/profiles/default/agent/</code>.</p>
 <h2 id="where-things-are"><a class="header" href="#where-things-are">Where things are</a></h2>
 <div class="table-wrapper">
@@ -238,7 +238,7 @@ compaction model are separate settings. Named roles pin a model to a kind of wor
 no operating-system sandbox: no Landlock, no seccomp, no Seatbelt, no bubblewrap.
 Approvals are the control point.</li>
 <li><strong>Engine modes.</strong> Plan mode, goal mode, vibe mode, compaction, and task subagents
-live in the agent loop, not in prompt text.</li>
+are implemented in the agent loop, not in prompt text.</li>
 </ul>
 <p>Veyyon is a fork of <a href="https://github.com/can1357/oh-my-pi">oh-my-pi</a>. See
 <a href="./acknowledgements.html">Acknowledgements</a> for credits.</p>

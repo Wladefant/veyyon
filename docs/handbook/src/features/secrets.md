@@ -317,7 +317,7 @@ No verb prints a value: not on a row, not truncated onto one, not behind a key. 
 
 Every change reloads the live secret runtime, so a credential you revoke stops being spendable in the session you are sitting in rather than at the next restart. A reload that fails is reported rather than swallowed, because the vault write is already durable and you are the only one who can decide what to do about the gap.
 
-**Names are never completed.** The dropdown after `/secret ` offers verbs and nothing else. Completing a stored name would put part of your vault on screen on a keystroke, and accepting one would type a name onto a line whose first word decides between a command and a credential. `/secret list` is where names are read.
+**Names are never completed.** The dropdown after `/secret ` offers verbs and nothing else. Completing a stored name would put part of your vault on screen on a keystroke, and accepting one would type a name onto a line whose first word distinguishes between a command and a credential. `/secret list` is where names are read.
 
 ### Finding what is masked and not stored
 
@@ -585,11 +585,11 @@ memory for `add` under a different command, which puts the credential itself in 
 
 ### Encryption, and what it does not do
 
-Vault files use AES-256-GCM. Each write uses a fresh 12 byte nonce and the full 16 byte authentication tag. The key is a 32 byte file at `~/.veyyon/vault.key`, created on first use. It never lives inside a project directory.
+Vault files use AES-256-GCM. Each write uses a fresh 12 byte nonce and the full 16 byte authentication tag. The key is a 32 byte file at `~/.veyyon/vault.key`, created on first use. It is never stored inside a project directory.
 
 On POSIX, the key is mode 0600. Its directory must be owned by you and not writable by another user. On Windows, Veyyon applies and verifies a protected owner-only ACL. Existing vault files receive the same platform permission checks before they are read.
 
-A project-scoped vault lives inside the repository you are working in, so Veyyon keeps it out of your commits. The first time it stores a project secret, it writes `.veyyon/.gitignore` covering `vault.json` and the `vault.json.unreadable-*` file that a discarded vault is renamed to. If that file already exists, Veyyon adds the two rules and leaves your own lines alone. Only the vault is ignored, so anything else you keep in `.veyyon/`, such as prompt templates, stays trackable. Commit the generated `.veyyon/.gitignore` along with the rest of your project.
+A project-scoped vault is stored inside the repository you are working in, so Veyyon keeps it out of your commits. The first time it stores a project secret, it writes `.veyyon/.gitignore` covering `vault.json` and the `vault.json.unreadable-*` file that a discarded vault is renamed to. If that file already exists, Veyyon adds the two rules and leaves your own lines alone. Only the vault is ignored, so anything else you keep in `.veyyon/`, such as prompt templates, stays trackable. Commit the generated `.veyyon/.gitignore` along with the rest of your project.
 
 Committing a vault would not expose the credentials directly, because the ciphertext is unusable without the machine key. It would still put a credential store in your history, and nobody who clones the repository can open it, including you on another machine. A vault is not a portable backup. The authenticated location includes the semantic scope, canonical path, and physical scope-directory identity. If you move or recreate that directory, store those entries again.
 
@@ -599,7 +599,7 @@ Veyyon rejects symlinks, hard-linked files, directories, devices, insecure permi
 
 The sealed descriptor is limited to 8 MiB before it is read into memory. Writes enforce a separate 6,291,402-byte encoded plaintext limit before serialization, encryption, or Base64 expansion. A legacy version 1 envelope is rejected because it is not bound to its scope and path. Store those entries again so they use the current authenticated format.
 
-These failures are deliberately loud:
+These failures fail fast:
 
 - A vault file present with no readable key stops the session. It is never treated as empty.
 - A vault whose nonce, ciphertext, authentication tag, or bound location changed is rejected.
@@ -676,7 +676,7 @@ secrets:
   auditLog: false
 ```
 
-The file is mode 0600 and lives in the profile rather than the project. If veyyon cannot append to it, it reports it and the command still runs. The value is still protected either way.
+The file is mode 0600 and is stored in the profile rather than the project. If veyyon cannot append to it, it reports it and the command still runs. The value is still protected either way.
 
 At two megabytes, roughly ten thousand uses, the log is atomically moved to `secret-audit.jsonl.1` and a fresh one is started. A cross-process lock covers the size check, rotation, append, and read snapshot, so two sessions cannot overwrite a generation or exceed the record cap at the boundary. Oversized rows bound every field and report how many placeholder references were omitted. Both generations are read, so a report requested right after a rotation still fills up.
 

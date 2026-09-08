@@ -51,10 +51,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-695ab59a.js";
+            window.path_to_searchindex_js = "searchindex-ddda0f12.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-b613f6a6.js"></script>
+        <script src="toc-a67314e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -206,7 +206,7 @@ place. Every step that touches the tree goes through an approval tier.</p>
 <p>The installer downloads a release binary and verifies its checksum. To build from
 source, clone the repository and run <code>bun run setup &amp;&amp; bun dev</code> in that checkout. See
 <a href="#install-1">Install</a> for platforms, pinned releases, updates, and uninstall.</p>
-<p>The binary is <code>veyyon</code>, aliased to <code>vey</code>. Configuration lives under <code>~/.veyyon</code>; the
+<p>The binary is <code>veyyon</code>, aliased to <code>vey</code>. Configuration is stored under <code>~/.veyyon</code>; the
 default profile keeps its state in <code>~/.veyyon/profiles/default/agent/</code>.</p>
 <h2 id="where-things-are"><a class="header" href="#where-things-are">Where things are</a></h2>
 <div class="table-wrapper">
@@ -236,7 +236,7 @@ compaction model are separate settings. Named roles pin a model to a kind of wor
 no operating-system sandbox: no Landlock, no seccomp, no Seatbelt, no bubblewrap.
 Approvals are the control point.</li>
 <li><strong>Engine modes.</strong> Plan mode, goal mode, vibe mode, compaction, and task subagents
-live in the agent loop, not in prompt text.</li>
+are implemented in the agent loop, not in prompt text.</li>
 </ul>
 <p>Veyyon is a fork of <a href="https://github.com/can1357/oh-my-pi">oh-my-pi</a>. See
 <a href="#acknowledgements">Acknowledgements</a> for credits.</p>
@@ -786,7 +786,7 @@ holding it is still running, so a <code>veyyon.&lt;id&gt;.new</code> or a <code>
 outlive the update that made it. Uninstall removes those too, so the install
 directory is left empty rather than holding a few hundred megabytes you have no
 name for. A backup you saved yourself under a name of your own is left alone.</p>
-<p>Two things it deliberately leaves behind. If you already had your own <code>vey</code> command, the installer never created that alias in the first place (it reports that at install time and prints the <code>veyyon</code> command instead), so uninstall does not touch it or its completion file. And if a checkout at <code>~/.veyyon/src</code> has uncommitted edits or commits on a local branch that is on no remote, it is moved to <code>~/.veyyon/src.bak-&lt;timestamp&gt;</code> instead of being deleted, so nothing you wrote is lost. Older installers created that tree. The current installer never does, so uninstall only ever cleans up one an older version left behind.</p>
+<p>Two things it leaves behind. If you already had your own <code>vey</code> command, the installer never created that alias in the first place (it reports that at install time and prints the <code>veyyon</code> command instead), so uninstall does not touch it or its completion file. And if a checkout at <code>~/.veyyon/src</code> has uncommitted edits or commits on a local branch that is on no remote, it is moved to <code>~/.veyyon/src.bak-&lt;timestamp&gt;</code> instead of being deleted, so nothing you wrote is lost. Older installers created that tree. The current installer never does, so uninstall only ever cleans up one an older version left behind.</p>
 <pre><code class="language-console">$ curl -fsSL https://get.veyyon.dev | sh -s -- --uninstall
 </code></pre>
 <p>On Windows:</p>
@@ -835,7 +835,7 @@ close the card.</p>
 <p>Switching is <strong>per provider</strong>. Choosing another Anthropic account changes Anthropic and nothing else,
 because several providers serve one session at the same time: your main model, your subagent roles,
 and web search can each be a different provider. Moving between providers is a model choice, so it
-lives in <code>/models</code>.</p>
+is in <code>/models</code>.</p>
 <h2 id="naming-an-account"><a class="header" href="#naming-an-account">Naming an account</a></h2>
 <p>An email is not always the thing you recognise, especially when two subscriptions share one login.
 Give an account a name and every surface uses it:</p>
@@ -905,7 +905,7 @@ a <code>.env</code> file) is used without an interactive sign-in. OAuth-only pro
 </tbody>
 </table>
 </div>
-<p>The full provider → variable map lives in <a href="#the-provider-stack-and-bring-your-own-key">Providers</a>. <code>.env</code> files are loaded
+<p>The full provider → variable map is documented in <a href="#the-provider-stack-and-bring-your-own-key">Providers</a>. <code>.env</code> files are loaded
 from <code>&lt;cwd&gt;/.env</code>, <code>~/.veyyon/profiles/default/agent/.env</code>, <code>~/.veyyon/.env</code>, and <code>~/.env</code>, with earlier sources winning.</p>
 <h2 id="how-keys-are-resolved"><a class="header" href="#how-keys-are-resolved">How keys are resolved</a></h2>
 <p>When a provider needs a key, Veyyon resolves it in order (first match wins):</p>
@@ -1075,7 +1075,7 @@ $ veyyon
 <h1 id="configuring-providers"><a class="header" href="#configuring-providers">Configuring providers</a></h1>
 <p>Copy-paste setups for bring-your-own-key (BYOK) and local providers.
 Once a provider works, see <a href="#model-and-provider-configuration-modelsyml--modelsyaml">Models and providers</a> to choose and switch models.
-For what the harness owns versus what the provider owns, see
+For harness responsibilities versus provider responsibilities, see
 <a href="#model-contract">Model contract</a>.</p>
 <p>Custom providers live under <code>providers:</code> in <code>~/.veyyon/profiles/default/agent/models.yml</code>. Keys are resolved from the
 environment, stored auth, OAuth, or a <code>models.yml</code> <code>apiKey</code> (see <a href="#the-provider-stack-and-bring-your-own-key">Providers</a>
@@ -1490,7 +1490,7 @@ OpenAI-compatible gateway.</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Fact</th><th>What it is</th><th>Where it lives</th></tr>
+<tr><th>Fact</th><th>What it is</th><th>Where it is defined</th></tr>
 </thead>
 <tbody>
 <tr><td><strong>Endpoint</strong></td><td>Base URL and API kind</td><td>A built-in provider, or a custom provider under <code>providers:</code> in <code>~/.veyyon/profiles/default/agent/models.yml</code></td></tr>
@@ -1517,8 +1517,8 @@ providers:
 <pre><code class="language-console">$ export DEEPSEEK_API_KEY=sk-...
 $ veyyon --model deepseek/deepseek-chat
 </code></pre>
-<h2 id="what-the-harness-owns"><a class="header" href="#what-the-harness-owns">What the harness owns</a></h2>
-<p>These behaviors stay constant no matter which endpoint you point at:</p>
+<h2 id="harness-responsibilities"><a class="header" href="#harness-responsibilities">Harness responsibilities</a></h2>
+<p>These behaviors remain constant across endpoints:</p>
 <ul>
 <li>The workflow: read, edit, verify, stop when the work is done.</li>
 <li>Tool dispatch, argument handling, and edit verification through the <strong>hashline</strong> edit engine
@@ -1529,7 +1529,7 @@ $ veyyon --model deepseek/deepseek-chat
 </ul>
 <p>Provider is configuration (endpoint, credentials, model id). Keep the same
 commands.</p>
-<h2 id="what-the-provider-owns"><a class="header" href="#what-the-provider-owns">What the provider owns</a></h2>
+<h2 id="provider-responsibilities"><a class="header" href="#provider-responsibilities">Provider responsibilities</a></h2>
 <p>The provider defines the wire protocol, auth scheme, model list, rate limits, and the tokens it returns.
 Veyyon adapts to that surface through the provider’s <code>api</code> kind:</p>
 <ul>
@@ -1608,13 +1608,13 @@ under <code>modelRoles</code>:</p>
 <ul>
 <li><code>modelRoles.tiny</code> (or <code>smol</code>): lightweight background work (titles, memory, auto-thinking).</li>
 </ul>
-<p>Subagent models are not roles. They live in the Subagents settings area, on two exclusive scopes.
-With <strong>Same Model for All Subagents</strong> off, the first of these names the model: that agent’s row in
+<p>Subagent models are not roles. They are configured in the Subagents settings area, on two exclusive scopes.
+With <strong>Same Model for All Subagents</strong> off, the first of these sets the model: that agent’s row in
 <code>subagent.agents</code>, then the agent definition’s own <code>model:</code>, otherwise the <code>default</code> model role.
-With it on, <code>subagent.model</code> names it for every agent and the rows above are not read. There is no
+With it on, <code>subagent.model</code> sets it for every agent and the rows above are not read. There is no
 silent blend, and a configured value that matches no available model rejects the spawn instead of
 quietly handing the decision to the next layer. <code>/agents</code> shows the resolved model and which
-setting decided.
+setting applied.
 See <a href="#subagents-2">Settings: Subagents</a> and
 <a href="#models-roles-and-profiles">Models, roles, and profiles</a>.</p>
 <h2 id="automation-note"><a class="header" href="#automation-note">Automation note</a></h2>
@@ -1807,10 +1807,10 @@ run unattended, pass <code>--yolo</code> or pick a mode that does not prompt for
 process exit status follows the run.</p>
 <h2 id="critical-bash-commands-1"><a class="header" href="#critical-bash-commands-1">Critical bash commands</a></h2>
 <p>Some shell commands always prompt in <code>plan</code>, <code>ask</code>, <code>ask-command</code> and <code>auto</code>, even over a per-tool
-<code>allow</code> override. The guard lives in <code>packages/coding-agent/src/tools/bash-guard.ts</code> and has
+<code>allow</code> override. The guard is implemented in <code>packages/coding-agent/src/tools/bash-guard.ts</code> and has
 two halves.</p>
-<p>The first half judges what a command would delete, after expansion rather than as text. It
-resolves a leading tilde and <code>$HOME</code>, judges every target rather than only the first, and
+<p>The first half inspects what a command would delete, after expansion rather than as text. It
+resolves a leading tilde and <code>$HOME</code>, evaluates every target rather than only the first, and
 stops a recursive delete of the home directory, of anything containing it, of a system
 directory, or of a directory holding your credentials. It also stops a recursive delete whose
 target it cannot resolve, such as <code>rm -rf "$dir"/*</code>, because an empty <code>$dir</code> makes that
@@ -2254,7 +2254,7 @@ The previous value is gone. #GITHUB_TOKEN# now spends the credential you just st
 <p><code>scope</code> rejects a move onto a name the destination vault already holds, rather than overwriting it. It moves the time REMAINING rather than the original lifetime, so moving a secret cannot lengthen its life. The copy is written to the destination before the source is removed, so an interrupted move leaves two copies you can see rather than none.</p>
 <p>No verb prints a value: not on a row, not truncated onto one, not behind a key. A value put into the vault has stopped being visible, and the surface most likely to end up in a screenshot is the one that must not break that.</p>
 <p>Every change reloads the live secret runtime, so a credential you revoke stops being spendable in the session you are sitting in rather than at the next restart. A reload that fails is reported rather than swallowed, because the vault write is already durable and you are the only one who can decide what to do about the gap.</p>
-<p><strong>Names are never completed.</strong> The dropdown after <code>/secret </code> offers verbs and nothing else. Completing a stored name would put part of your vault on screen on a keystroke, and accepting one would type a name onto a line whose first word decides between a command and a credential. <code>/secret list</code> is where names are read.</p>
+<p><strong>Names are never completed.</strong> The dropdown after <code>/secret </code> offers verbs and nothing else. Completing a stored name would put part of your vault on screen on a keystroke, and accepting one would type a name onto a line whose first word distinguishes between a command and a credential. <code>/secret list</code> is where names are read.</p>
 <h3 id="finding-what-is-masked-and-not-stored"><a class="header" href="#finding-what-is-masked-and-not-stored">Finding what is masked and not stored</a></h3>
 <p><code>/secret list</code> ends with what the session is masking that no name can reach. This is the counterpart to the composer’s <code>N masked</code> chip: both read one counter, so the number below the table and the number above the prompt are the same number.</p>
 <pre><code class="language-text">  2 values masked in what is sent, detected rather than declared.
@@ -2443,14 +2443,14 @@ something by.</p>
 <p>The refusal states the position and never repeats the word, because the realistic slip is muscle
 memory for <code>add</code> under a different command, which puts the credential itself in that position.</p>
 <h3 id="encryption-and-what-it-does-not-do"><a class="header" href="#encryption-and-what-it-does-not-do">Encryption, and what it does not do</a></h3>
-<p>Vault files use AES-256-GCM. Each write uses a fresh 12 byte nonce and the full 16 byte authentication tag. The key is a 32 byte file at <code>~/.veyyon/vault.key</code>, created on first use. It never lives inside a project directory.</p>
+<p>Vault files use AES-256-GCM. Each write uses a fresh 12 byte nonce and the full 16 byte authentication tag. The key is a 32 byte file at <code>~/.veyyon/vault.key</code>, created on first use. It is never stored inside a project directory.</p>
 <p>On POSIX, the key is mode 0600. Its directory must be owned by you and not writable by another user. On Windows, Veyyon applies and verifies a protected owner-only ACL. Existing vault files receive the same platform permission checks before they are read.</p>
-<p>A project-scoped vault lives inside the repository you are working in, so Veyyon keeps it out of your commits. The first time it stores a project secret, it writes <code>.veyyon/.gitignore</code> covering <code>vault.json</code> and the <code>vault.json.unreadable-*</code> file that a discarded vault is renamed to. If that file already exists, Veyyon adds the two rules and leaves your own lines alone. Only the vault is ignored, so anything else you keep in <code>.veyyon/</code>, such as prompt templates, stays trackable. Commit the generated <code>.veyyon/.gitignore</code> along with the rest of your project.</p>
+<p>A project-scoped vault is stored inside the repository you are working in, so Veyyon keeps it out of your commits. The first time it stores a project secret, it writes <code>.veyyon/.gitignore</code> covering <code>vault.json</code> and the <code>vault.json.unreadable-*</code> file that a discarded vault is renamed to. If that file already exists, Veyyon adds the two rules and leaves your own lines alone. Only the vault is ignored, so anything else you keep in <code>.veyyon/</code>, such as prompt templates, stays trackable. Commit the generated <code>.veyyon/.gitignore</code> along with the rest of your project.</p>
 <p>Committing a vault would not expose the credentials directly, because the ciphertext is unusable without the machine key. It would still put a credential store in your history, and nobody who clones the repository can open it, including you on another machine. A vault is not a portable backup. The authenticated location includes the semantic scope, canonical path, and physical scope-directory identity. If you move or recreate that directory, store those entries again.</p>
 <p>Updates use a synchronized owner-only temporary file. Kernel no-replace and exchange operations publish the synced inode without overwriting a destination that appeared after the last check. Veyyon holds the scope directory open during the transaction, so replacing the lexical parent cannot redirect the read or write.</p>
 <p>Veyyon rejects symlinks, hard-linked files, directories, devices, insecure permissions, and paths whose resolved parent crosses the requested scope. It also rejects ciphertext copied to a different scope or physical directory.</p>
 <p>The sealed descriptor is limited to 8 MiB before it is read into memory. Writes enforce a separate 6,291,402-byte encoded plaintext limit before serialization, encryption, or Base64 expansion. A legacy version 1 envelope is rejected because it is not bound to its scope and path. Store those entries again so they use the current authenticated format.</p>
-<p>These failures are deliberately loud:</p>
+<p>These failures fail fast:</p>
 <ul>
 <li>A vault file present with no readable key stops the session. It is never treated as empty.</li>
 <li>A vault whose nonce, ciphertext, authentication tag, or bound location changed is rejected.</li>
@@ -2499,7 +2499,7 @@ Uses of #GITHUB_TOKEN#:
 <pre><code class="language-yaml">secrets:
   auditLog: false
 </code></pre>
-<p>The file is mode 0600 and lives in the profile rather than the project. If veyyon cannot append to it, it reports it and the command still runs. The value is still protected either way.</p>
+<p>The file is mode 0600 and is stored in the profile rather than the project. If veyyon cannot append to it, it reports it and the command still runs. The value is still protected either way.</p>
 <p>At two megabytes, roughly ten thousand uses, the log is atomically moved to <code>secret-audit.jsonl.1</code> and a fresh one is started. A cross-process lock covers the size check, rotation, append, and read snapshot, so two sessions cannot overwrite a generation or exceed the record cap at the boundary. Oversized rows bound every field and report how many placeholder references were omitted. Both generations are read, so a report requested right after a rotation still fills up.</p>
 <h2 id="declaring-secrets-yourself"><a class="header" href="#declaring-secrets-yourself">Declaring secrets yourself</a></h2>
 <p>Environment variable detection covers the common case. For anything else, list entries in a <code>secrets.yml</code> file. Two locations are read:</p>
@@ -2598,7 +2598,7 @@ Set "minLength" on the entry if short matches are real secrets, or tighten the p
 <h1 id="models-and-providers"><a class="header" href="#models-and-providers">Models and providers</a></h1>
 <p>You choose an endpoint and a model id. Veyyon then calls that provider’s API directly with your credentials. The endpoint can be a local server, a hosted API, or any OpenAI-compatible gateway.</p>
 <ul>
-<li>Contract (what the harness owns vs the provider): <a href="#model-contract">Model contract</a></li>
+<li>Contract (harness responsibilities vs provider responsibilities): <a href="#model-contract">Model contract</a></li>
 <li>Copy-paste provider setups: <a href="#configuring-providers">Configuring providers</a></li>
 <li>Built-in provider stack internals: <a href="#the-provider-stack-and-bring-your-own-key">Provider stack and BYOK</a></li>
 </ul>
@@ -2868,7 +2868,7 @@ which:</p>
 <li><strong>Steer (<code>Enter</code>).</strong> The message is injected into the <em>current</em> turn: the model sees it at the
 next tool boundary and adjusts course without abandoning its work.</li>
 <li><strong>Queue a follow-up (<code>Ctrl+Q</code>, or <code>Ctrl+Enter</code> where the terminal delivers it).</strong> The message is queued in the running process and starts a
-<strong>new turn</strong> once the current one finishes. The queue lives in memory for the lifetime of the
+<strong>new turn</strong> once the current one finishes. The queue is stored in memory for the lifetime of the
 process; it is not written to the session file, so it does not survive a restart. Slash commands and <code>!</code> shell escapes
 queue client-side instead; they are local actions, not model input.</li>
 </ul>
@@ -2899,7 +2899,7 @@ of the conversation you are having.</p>
 <code>/settings</code>, backed by the <code>subagent.*</code> settings. <code>/agents</code> is the live picture of a
 run in progress: which agents are working right now and what they are saying to each
 other. It does not configure anything.</p>
-<h2 id="what-you-get-out-of-the-box"><a class="header" href="#what-you-get-out-of-the-box">What you get out of the box</a></h2>
+<h2 id="default-configuration"><a class="header" href="#default-configuration">Default configuration</a></h2>
 <p>One agent type, the general-purpose worker, and delegation that the prompt requests:</p>
 <pre><code class="language-yaml">subagent:
   delegation: preferred   # the default; the prompt requests that substantial work be delegated
@@ -3017,7 +3017,7 @@ that names a model wins:</p>
 </code></pre>
 <p>Effort resolves on the same three layers, ending at <code>medium</code>. An explicit <code>:effort</code>
 suffix on the resolved model pattern outranks all of them.</p>
-<p>On, one pair decides for the whole roster, and the per-agent Model and Effort rows are
+<p>When enabled, one pair applies to the whole roster, and the per-agent Model and Effort rows are
 hidden. <strong>Shared Model</strong> (<code>subagent.model</code>) and <strong>Shared Effort</strong>
 (<code>subagent.thinkingLevel</code>) sit under the switch; an unset chain runs every agent on the
 <code>default</code> model role:</p>
@@ -3026,7 +3026,7 @@ hidden. <strong>Shared Model</strong> (<code>subagent.model</code>) and <strong>
   model: openai/gpt-5
   thinkingLevel: high
 </code></pre>
-<p>A lane keeps whatever it holds while the switch is on, and decides again the moment the
+<p>A lane retains its configuration while the switch is on, and re-evaluates when the
 switch goes off.</p>
 <p>The <code>default</code> model role is the model the main assistant starts on, and it is the
 one keystroke path for the common case: <code>/model</code> writes it, and every agent with no
@@ -3096,7 +3096,7 @@ has a tool in flight. The head crosses the whole block, so the cycle belongs to 
 block rather than the row, and arrives cold on a lane that is waiting or recovering.
 Where <code>display.transitions</code> is off, the block is still.</p>
 <p>There is no elapsed clock and no context gauge. Total age ranks agents by seniority,
-which nothing acts on, and a parent decides nothing with a subagent’s remaining
+which nothing acts on, and a parent does not use a subagent’s remaining
 window. Whether a lane is stuck is answered by the recovery column. <code>/agents</code> carries
 the roster with the numbers.</p>
 <p>A lane keeps its badge on its own row.
@@ -3798,10 +3798,10 @@ https://web.example/collab/#relay.example.com/r/&lt;roomId&gt;.&lt;key&gt;   →
 </table>
 </div>
 <p>Any other close code is transient, and a client reconnects with exponential backoff up to thirty seconds. That
-default is why the table matters: a client that does not recognise a fatal code retries against a condition
-that will never clear, quietly, so the codes are declared once in <code>packages/wire/src/relay.ts</code> and both the CLI
+default requires standard fatal codes: a client that does not recognise a fatal code retries against a condition
+that will not clear, so the codes are declared once in <code>packages/wire/src/relay.ts</code> and both the CLI
 and browser clients read them from there. If you write your own relay, close with these codes and these
-reasons; a code outside the table tells a client to come back.</p>
+reasons; a code outside the table causes a client to reconnect.</p>
 <h2 id="architecture-notes"><a class="header" href="#architecture-notes">Architecture notes</a></h2>
 <p>Hub topology, the host is authoritative, guests never peer:</p>
 <ol>
@@ -4066,7 +4066,7 @@ recording environment and the regeneration command.</p>
 </code></pre>
 <p>Statuses: <code>active</code>, <code>paused</code>, <code>budget-limited</code>, <code>complete</code>, <code>dropped</code>.</p>
 <h3 id="goal-tool"><a class="header" href="#goal-tool">Goal tool</a></h3>
-<p>When goal mode is active, the agent can call the <code>goal</code> tool with ops: <code>create</code>, <code>get</code>, <code>complete</code>, <code>resume</code>, <code>drop</code>. The tool never accepts a budget argument. The interactive Settings UI owns <code>goal.modelBudgetsEnabled</code>, which controls whether persisted budgets are exposed and enforced. Continuation prompts inject on idle turns per <code>goal.continuationModes</code>.</p>
+<p>When goal mode is active, the agent can call the <code>goal</code> tool with ops: <code>create</code>, <code>get</code>, <code>complete</code>, <code>resume</code>, <code>drop</code>. The tool never accepts a budget argument. The interactive Settings UI configures <code>goal.modelBudgetsEnabled</code>, which controls whether persisted budgets are exposed and enforced. Continuation prompts inject on idle turns per <code>goal.continuationModes</code>.</p>
 <h3 id="example-1"><a class="header" href="#example-1">Example</a></h3>
 <pre><code class="language-console">$ veyyon
 </code></pre>
@@ -4146,7 +4146,7 @@ the repository root down to your working directory. Each directory offers
 <code>.veyyon/AGENTS.md</code> (only from the nearest non-empty <code>.veyyon/</code>), then
 <code>AGENTS.md</code>, then <code>CLAUDE.md</code>, and the first one with content wins. The rest of
 that directory’s candidates are not read, so a <code>CLAUDE.md</code> sitting beside an
-<code>AGENTS.md</code> is deliberately not loaded and the same rules are never inlined
+<code>AGENTS.md</code> is not loaded and the same rules are never inlined
 twice. The choice is made per directory, so a repository root using <code>AGENTS.md</code>
 and a package using <code>CLAUDE.md</code> both load.</li>
 <li>The active profile’s <code>AGENTS.md</code>
@@ -4948,7 +4948,7 @@ pi.registerAssistantThinkingRenderer((context, theme) =&gt; {
 <li><strong>Hooks</strong> (<code>src/extensibility/hooks/*</code>): separate legacy event API.</li>
 <li><strong>Custom-tools</strong> (<code>src/extensibility/custom-tools/*</code>): tool-focused modules; when loaded alongside extensions they are adapted and still pass through extension interception wrappers.</li>
 </ul>
-<p>If you need one package that owns policy, tools, command UX, and rendering together, use extensions.</p>
+<p>If you need one package that combines policy, tools, command UX, and rendering together, use extensions.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="extensions-authoring"><a href="#extensions-authoring" class="header">Extensions authoring</a></h1>
 <hr>
@@ -6408,7 +6408,7 @@ thinking suffixes. A <code>WATCHDOG.yml</code> roster entry’s own <code>model:
 note text
 &lt;/advisory&gt;
 </code></pre>
-<p>When you deliberately interrupt the agent (Esc, or a cancel from collab, ACP, RPC, the SDK, or an extension), the advisor stops auto-resuming it. An interrupting <code>concern</code>/<code>blocker</code> raised while the run is stopped is recorded as a visible advisor card instead of restarting the turn, and a concern already in flight when you interrupt is preserved the same way rather than driving a surprise resume. The advice re-enters context the next time you resume, a new message, the <code>.</code>/<code>c</code> continue shortcut, or a steer/follow-up. A normal yield is unaffected: the advisor can still steer and resume a run the agent ended on its own.</p>
+<p>When you interrupt the agent (Esc, or a cancel from collab, ACP, RPC, the SDK, or an extension), the advisor stops auto-resuming it. An interrupting <code>concern</code>/<code>blocker</code> raised while the run is stopped is recorded as a visible advisor card instead of restarting the turn, and a concern already in flight when you interrupt is preserved the same way rather than driving a surprise resume. The advice re-enters context the next time you resume, a new message, the <code>.</code>/<code>c</code> continue shortcut, or a steer/follow-up. A normal yield is unaffected: the advisor can still steer and resume a run the agent ended on its own.</p>
 <p><code>advisor.immuneTurns</code> limits interruption frequency. After the advisor successfully delivers a <code>concern</code> or <code>blocker</code> through the steering channel, later concerns/blockers are routed as non-interrupting asides until the configured number of primary turns has completed. The default is <code>3</code>. <code>nit</code> notes are unchanged, and advice raised while user-interrupt auto-resume suppression is active is still preserved instead of restarting a stopped run.</p>
 <h3 id="emission-guard"><a class="header" href="#emission-guard">Emission guard</a></h3>
 <p><code>AdvisorEmissionGuard</code> (in <code>src/advisor/emission-guard.ts</code>) sits on the <code>enqueueAdvice</code> boundary in <code>AgentSession</code> and enforces, in code, the advisor system prompt’s “at most one <code>advise</code> per update” and “NEVER send the same advice twice” rules. Each call to the advisor’s <code>advise</code> tool runs through the guard before it routes to the YieldQueue / steer channel:</p>
@@ -6600,8 +6600,8 @@ python3 bench.py            # prints: METRIC ms=192.78
 </tbody>
 </table>
 </div>
-<p>The primary metric decides whether a change is kept. Secondary metrics are
-recorded and shown but do not decide anything.</p>
+<p>The primary metric determines whether a change is kept. Secondary metrics are
+recorded and shown but do not determine changes.</p>
 <p>Autoresearch commits <code>autoresearch.sh</code> on a dedicated <code>autoresearch/*</code> branch
 before the first iteration, and that commit is the baseline every later run is
 measured against. Editing the harness mid-session invalidates the comparison, so
@@ -6730,7 +6730,7 @@ the resume, and prints
 The stored goal typed back is a resume with nothing to add: no notice, and the
 model is not told the goal a second time.</p>
 <p><code>/autoresearch clear</code> resets the worktree to the segment baseline, deletes
-untracked files and closes the session. It asks first, naming the commit it
+untracked files and closes the session. It prompts first, naming the commit it
 resets to and how many files hold uncommitted changes; a decline resets nothing
 and leaves the session open. The reset restores <code>autoresearch.sh</code> as committed
 on the branch. Off an <code>autoresearch/*</code> branch, <code>clear</code> closes the session and
@@ -7211,7 +7211,7 @@ operational failure modes.</p>
 <li>both backends (<code>eval.py=true</code>, <code>eval.js=true</code>, or <code>VEYYON_PY=1 VEYYON_JS=1</code>)</li>
 </ul>
 <p><code>VEYYON_PY</code> and <code>VEYYON_JS</code> use normal boolean flag parsing. Each flag, when set, overrides only its own setting; an unset flag falls back to its setting (<code>eval.py</code> / <code>eval.js</code>, both default <code>true</code>).</p>
-<p><code>eval.pyWorkspace</code> defaults to <code>false</code>. When enabled, the model-facing <code>eval</code> description tells the agent to retain large <code>tool.*</code> results in Python variables, transform them in the kernel, reuse helper functions, and display only compact conclusions. It adds guidance only; it does not add Python APIs or change cell execution.</p>
+<p><code>eval.pyWorkspace</code> defaults to <code>false</code>. When enabled, the model-facing <code>eval</code> description instructs the agent to retain large <code>tool.*</code> results in Python variables, transform them in the kernel, reuse helper functions, and display only compact conclusions. It adds guidance only; it does not add Python APIs or change cell execution.</p>
 <p>If Python preflight fails and <code>eval.js</code> is enabled, <code>eval</code> remains available for <code>js</code> cells; <code>py</code> cells fail with a Python-backend availability error.</p>
 <p>Python prelude helpers include <code>agent(prompt, *, agent="deep", model=None, label=None, schema=None, handle=False, isolated=None, apply=None, merge=None)</code>. It synchronously calls the host bridge, runs one subagent through the task executor, and returns the final text. When <code>schema</code> is supplied, the helper parses the subagent’s JSON output and returns the object. When <code>handle=True</code>, it instead returns a DAG node dict (<code>{"text", "output", "handle", "id", "agent"}</code>) whose <code>handle</code> is the spawned agent’s recoverable <code>agent://&lt;id&gt;</code> URI (the parsed object lands under <code>"data"</code> when <code>schema</code> is also set), so a downstream <code>pipeline</code>/<code>parallel</code> stage can reference the transcript by handle instead of re-inlining it.</p>
 <h3 id="persisted-helper-state"><a class="header" href="#persisted-helper-state">Persisted helper state</a></h3>
@@ -7737,15 +7737,15 @@ one-time migration from the legacy bare-root layout.</p>
 <code>veyyon profile default [name]</code>, or edit it on the <strong>Global</strong> tab of <code>/settings</code>.</li>
 <li><code>default</code>.</li>
 </ol>
-<h2 id="what-a-profile-owns-shipped"><a class="header" href="#what-a-profile-owns-shipped">What a profile owns (shipped)</a></h2>
+<h2 id="profile-configuration-scope-shipped"><a class="header" href="#profile-configuration-scope-shipped">Profile configuration scope (shipped)</a></h2>
 <p>When a profile <code>&lt;name&gt;</code> is active, native Veyyon paths resolve under:</p>
 <pre><code class="language-text">~/.veyyon/profiles/&lt;name&gt;/agent/
 </code></pre>
 <p>That resolution is uniform across settings, sessions, blobs, slash commands, sticky rules, prompts, hooks, tools, extensions, skills, MCP, keybindings, theme, the profile <code>AGENTS.md</code>, <code>RULES.md</code>, and <code>PROMPT_SECTIONS/</code>. Operational state (logs, plugins, caches, worktrees) resolves under the profile root <code>~/.veyyon/profiles/&lt;name&gt;/</code> the same way. A profile never reads another profile’s tree at runtime.</p>
 <p><strong>Provider credentials are the one exception:</strong> by default they live in a machine-wide store (<code>~/.veyyon/shared-auth/agent.db</code>) that every profile reads, so you sign in once. Set <code>profileSharing: false</code> in the global <code>~/.veyyon/config.yml</code> (or toggle it on the <strong>Global</strong> tab of <code>/settings</code>) to give each profile its own private credential store instead. See <a href="#credentials-are-shared-across-profiles">Signing in › Credentials are shared across profiles</a>.</p>
-<p><strong>Keybindings:</strong> each profile owns <code>agent/keybindings.*</code>. New profiles seeded with <code>veyyon profile new --from default</code> copy the default profile’s keybindings once. On first launch of an older named profile that has no keybindings file, Veyyon performs the same one-time seed and logs it. There is no live merge from the default profile after that.</p>
+<p><strong>Keybindings:</strong> each profile defines <code>agent/keybindings.*</code>. New profiles seeded with <code>veyyon profile new --from default</code> copy the default profile’s keybindings once. On first launch of an older named profile that has no keybindings file, Veyyon performs the same one-time seed and logs it. There is no live merge from the default profile after that.</p>
 <p>Project-level dirs (<code>&lt;cwd&gt;/.veyyon</code>, <code>.claude</code>, etc.) are <strong>not</strong> profile-scoped; they follow the working directory.</p>
-<p><strong>Other tools’ config</strong> (skills and <code>CLAUDE.md</code>/<code>AGENTS.md</code> written for Claude, Codex, and similar) is <strong>off by default</strong> and controlled per profile by <code>discovery.importForeignConfig</code>, so each profile decides on its own whether to ambiently read foreign files or run native-only. Another tool’s own global dir (<code>~/.claude/skills</code>, …) cannot be relocated into a profile, see <a href="#discovery-pipeline">Skills › Profiles isolate skills</a>.</p>
+<p><strong>Other tools’ config</strong> (skills and <code>CLAUDE.md</code>/<code>AGENTS.md</code> written for Claude, Codex, and similar) is <strong>off by default</strong> and controlled per profile by <code>discovery.importForeignConfig</code>, allowing each profile to configure whether to ambiently read foreign files or run native-only. Another tool’s own global dir (<code>~/.claude/skills</code>, …) cannot be relocated into a profile, see <a href="#discovery-pipeline">Skills › Profiles isolate skills</a>.</p>
 <h2 id="activating-a-profile"><a class="header" href="#activating-a-profile">Activating a profile</a></h2>
 <ul>
 <li><strong>CLI:</strong> <code>veyyon --profile &lt;name&gt;</code> (no short form; <code>-p</code> is <code>--print</code>).</li>
@@ -7908,7 +7908,7 @@ modelRoles:
 <tr><th>Setting</th><th>Effect</th></tr>
 </thead>
 <tbody>
-<tr><td><code>subagent.sharedModel</code></td><td>Which scope decides a subagent’s model and effort. Off, each agent’s own row does. On, the two rows below do, for every agent.</td></tr>
+<tr><td><code>subagent.sharedModel</code></td><td>Which scope sets a subagent’s model and effort. Off, each agent’s own row does. On, the two rows below do, for every agent.</td></tr>
 <tr><td><code>subagent.model</code></td><td>Ordered model chain every subagent runs while <code>subagent.sharedModel</code> is on. The first entry is primary and later entries are fallbacks. Unset runs every agent on the <code>default</code> model role.</td></tr>
 <tr><td><code>subagent.thinkingLevel</code></td><td>Effort every subagent runs at while <code>subagent.sharedModel</code> is on.</td></tr>
 <tr><td><code>subagent.agents</code></td><td>Per-agent <code>enabled</code>, <code>model</code>, <code>thinkingLevel</code>, and <code>maxNestedSpawnDepth</code> choices. The <code>model</code> and <code>thinkingLevel</code> on a row decide while <code>subagent.sharedModel</code> is off, and are not read while it is on.</td></tr>
@@ -9141,7 +9141,7 @@ leniency (e.g. hashline parsing) is layered on top. See <a href="#tool-call-repa
 <h3 id="long-running-and-stuck-commands"><a class="header" href="#long-running-and-stuck-commands">Long-running and stuck commands</a></h3>
 <p>Two settings decide when a foreground <code>bash</code> call is moved to a background job. Auto-background is on by default; stall detection is off. Both hand the command to the <code>job</code> tool so its result still arrives later. You set them per profile in <code>/settings</code>, under Shell.</p>
 <p><strong>Bash Auto-Background</strong> caps how long a command holds the model in the foreground. Once a call runs longer than “Auto-Background After” (<code>bash.autoBackground.thresholdMs</code>, default 5 minutes), it moves to the background and the model keeps working. This fires on elapsed time even while the command is still printing: a test suite that takes forty minutes should not hold the model, and a long foreground command would otherwise outlast the prompt cache. Set the value to “Immediately” to background every command up front, or turn <strong>Bash Auto-Background</strong> off to let a command hold the foreground until it finishes or times out.</p>
-<p>Turn on <strong>Bash Stall Detection</strong> to catch a command that has gone quiet. When a call produces no new output for “Stall After” (<code>bash.stallDetection.stallMs</code>, default 30 seconds), it is backgrounded and the model is told it may be stuck, along with the exact <code>job</code> cancel to run. This measures idle output, not total run time, so a command that keeps printing never trips it. The model decides: if the quiet was expected (a slow compile, a network wait), it lets the job finish; if the command is genuinely hung, it cancels it. The setting recommends, it never force-kills.</p>
+<p>Turn on <strong>Bash Stall Detection</strong> to catch a command that has gone quiet. When a call produces no new output for “Stall After” (<code>bash.stallDetection.stallMs</code>, default 30 seconds), it is backgrounded and the model is notified that the command may be stuck, along with the exact <code>job</code> cancel to run. This measures idle output, not total run time, so a command that keeps printing never trips it. The model evaluates whether the quiet was expected (such as a slow compile or network wait) and lets the job finish, or cancels the command if hung. The setting recommends, it never force-kills.</p>
 <h2 id="agent-coordination"><a class="header" href="#agent-coordination">Agent coordination</a></h2>
 <div class="table-wrapper">
 <table>
@@ -9580,12 +9580,12 @@ code paths in:</p>
 </ol>
 <p>Precedence is not the same as load order, and the difference matters if you are reading the source. Part of the home <code>.env</code> is applied FIRST, by <code>packages/utils/src/dotenv-home.ts</code>, because a <code>VEYYON_CODING_AGENT_DIR</code> or <code>XDG_CONFIG_HOME</code> set there sets where layers 3 and 4 are. <code>packages/utils/src/dirs.ts</code> imports that module before it resolves anything, so a directory is never computed from a pre-<code>.env</code> environment. <code>env.ts</code> then applies all four layers in full, overriding the values home contributed and nothing else, and refreshes the directory resolver. The result is the precedence listed above, whichever module a program imported.</p>
 <p>That early phase applies only the variables that decide where a directory is: <code>VEYYON_CODING_AGENT_DIR</code>, <code>VEYYON_CONFIG_DIR</code>, and the four <code>XDG_*</code> bases. Everything else in your home <code>.env</code>, including every API key, waits for <code>env.ts</code>. The reason is that whatever is in the environment that early is inherited by every process veyyon spawns, and the sandboxed evaluator that runs your <code>eval</code> code is one of them: it should not receive your credentials.</p>
-<p>Two variables are deliberately not read from a <code>.env</code> file at all. <code>VEYYON_PROFILE</code> selects the profile, and the profile sets where layers 3 and 4 are, so reading it out of one of them would be circular; set it in your shell or pass <code>--profile</code>. <code>PATH</code> is read only after <code>env.ts</code> has run, which is when binary lookup happens anyway, so extending <code>PATH</code> in a <code>.env</code> works as it always has.</p>
+<p>Two variables are not read from a <code>.env</code> file at all. <code>VEYYON_PROFILE</code> selects the profile, and the profile sets where layers 3 and 4 are, so reading it out of one of them would be circular; set it in your shell or pass <code>--profile</code>. <code>PATH</code> is read only after <code>env.ts</code> has run, which is when binary lookup happens anyway, so extending <code>PATH</code> in a <code>.env</code> works as it always has.</p>
 <hr>
 <h2 id="1-modelprovider-authentication"><a class="header" href="#1-modelprovider-authentication">1) Model/provider authentication</a></h2>
 <p>These are consumed via <code>getEnvApiKey()</code> (<code>packages/ai/src/env-api-key.ts</code>) unless noted otherwise.</p>
 <h3 id="core-provider-credentials"><a class="header" href="#core-provider-credentials">Core provider credentials</a></h3>
-<p>The provider-first projection of this map lives in <a href="#environment-variables-and-env-files">Providers</a>; the two tables are two views of one source.</p>
+<p>The provider-first projection of this map is documented in <a href="#environment-variables-and-env-files">Providers</a>; the two tables are two views of one source.</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -10412,9 +10412,9 @@ disabledProviders:
 <h3 id="models"><a class="header" href="#models">Models</a></h3>
 <p><code>modelRoles</code>, <code>modelTags</code>, and <code>cycleOrder</code> work together. Role values may carry a thinking suffix (<code>:off</code>, <code>:auto</code>, <code>:minimal</code>, <code>:low</code>, <code>:medium</code>, <code>:high</code>, <code>:xhigh</code>, <code>:max</code>). The same suffix works on <code>subagent.model</code> and <code>compaction.model</code>, so any model slot can run at a chosen effort.</p>
 <p>A suffix on a role use overrides the role’s stored suffix. For example, if <code>modelRoles.slow</code> is <code>anthropic/claude-opus-5:low</code>, then <code>@slow:high</code> resolves to <code>anthropic/claude-opus-5:high</code>, not a double-suffixed model id.</p>
-<p>When you pick a role, subagent, or compaction model in <code>/settings</code>, Veyyon opens a separate effort step only if that model exposes configurable effort. The first row, <strong>Model default</strong>, stores no suffix. The remaining rows contain <code>auto</code>, <code>off</code> when the model permits it, and only the model’s catalog-defined effort variants. For example, a low/high Gemini model does not show medium or xhigh. A fixed-reasoning model skips the effort step. The <strong>Default Model</strong> picker is deliberately model-only: it stores a bare selector, and <strong>Default Effort</strong> is the one UI surface for its saved effort. Providers sometimes publish effort tiers as separate upstream model IDs. Veyyon collapses effort-only siblings into one logical model and routes the selected effort to the correct upstream ID.</p>
+<p>When you pick a role, subagent, or compaction model in <code>/settings</code>, Veyyon opens a separate effort step only if that model exposes configurable effort. The first row, <strong>Model default</strong>, stores no suffix. The remaining rows contain <code>auto</code>, <code>off</code> when the model permits it, and only the model’s catalog-defined effort variants. For example, a low/high Gemini model does not show medium or xhigh. A fixed-reasoning model skips the effort step. The <strong>Default Model</strong> picker is model-only: it stores a bare selector, and <strong>Default Effort</strong> is the one UI surface for its saved effort. Providers sometimes publish effort tiers as separate upstream model IDs. Veyyon collapses effort-only siblings into one logical model and routes the selected effort to the correct upstream ID.</p>
 <p><code>compaction.model</code> and <code>subagent.model</code> are ordered chains. The first entry is the primary model and later entries are fallbacks. Enter edits the highlighted position, <strong>Add fallback</strong> appends a position, and Delete removes only the highlighted position. The settings rows show a stored effort as <code> · high</code> instead of the raw <code>:high</code> suffix.</p>
-<p>The model you are working with (the main conversation) is persisted as <strong><code>modelRoles.default</code></strong>. That slot is not a selectable role: it is hidden from role pickers and stripped from <code>cycleOrder</code> on load. In the code it has one name, <code>DEFAULT_MODEL_SLOT</code>, and <code>interactive</code> is accepted as an alias for it wherever a role is passed. Selectable built-in roles: <code>smol</code>, <code>slow</code>, <code>vision</code>, <code>plan</code>, <code>designer</code>, <code>commit</code>, <code>tiny</code>, <code>advisor</code>. There is no <code>task</code> role: the model your subagents run lives in <a href="#subagents-2">Subagents</a>, which is its one owner.</p>
+<p>The model you are working with (the main conversation) is persisted as <strong><code>modelRoles.default</code></strong>. That slot is not a selectable role: it is hidden from role pickers and stripped from <code>cycleOrder</code> on load. In the code it has one name, <code>DEFAULT_MODEL_SLOT</code>, and <code>interactive</code> is accepted as an alias for it wherever a role is passed. Selectable built-ins: <code>smol</code>, <code>slow</code>, <code>vision</code>, <code>plan</code>, <code>designer</code>, <code>commit</code>, <code>tiny</code>, <code>advisor</code>. There is no <code>task</code> role: the model your subagents run is configured in <a href="#subagents-2">Subagents</a>.</p>
 <pre><code class="language-yaml">modelRoles:
   default: anthropic/claude-sonnet-4-5   # interactive model (persisted default)
   smol: openai/gpt-4.1-mini
@@ -10617,7 +10617,7 @@ thinkingBudgets:
 <tr><th>Key</th><th>Type</th><th>Default</th><th>Notes</th></tr>
 </thead>
 <tbody>
-<tr><td><code>tools.approvalMode</code></td><td>enum</td><td><code>auto</code></td><td>Canonical: <code>plan</code> (read auto; write asks with an active plan-mode session, otherwise write/exec denied), <code>ask</code> (nothing auto; every tier asks, reads included), <code>ask-command</code> (read+write auto; exec ask), <code>auto</code> (all tiers auto, with the per-tool, working-directory, credential and critical-call guards still asking), <code>yolo</code> (all tiers auto). Legacy aliases still accepted: <code>always-ask</code> → <code>ask</code>, <code>write</code> and <code>auto-edit</code> → <code>ask-command</code>. Override per run with <code>--approval-mode</code> / <code>--auto-approve</code> / <code>--yolo</code>.</td></tr>
+<tr><td><code>tools.approvalMode</code></td><td>enum</td><td><code>auto</code></td><td>Canonical: <code>plan</code> (read auto; write prompts with an active plan-mode session, otherwise write/exec denied), <code>ask</code> (nothing auto; every tier prompts, reads included), <code>ask-command</code> (read+write auto; exec prompt), <code>auto</code> (all tiers auto, with the per-tool, working-directory, credential and critical-call guards still prompting), <code>yolo</code> (all tiers auto). Legacy aliases still accepted: <code>always-ask</code> → <code>ask</code>, <code>write</code> and <code>auto-edit</code> → <code>ask-command</code>. Override per run with <code>--approval-mode</code> / <code>--auto-approve</code> / <code>--yolo</code>.</td></tr>
 <tr><td><code>tools.approval</code></td><td>record</td><td><code>{}</code></td><td>Per-tool policy keyed by tool name; each value is <code>allow</code>, <code>deny</code>, or <code>prompt</code>. Any other value denies that tool and is named in a startup warning. e.g. <code>veyyon config set tools.approval '{"bash":"prompt"}'</code>.</td></tr>
 <tr><td><code>tools.discoveryMode</code></td><td>enum</td><td><code>auto</code></td><td><code>auto</code>, <code>off</code>, <code>mcp-only</code>, <code>all</code>. <code>all</code> hides non-essential built-ins and first-party heavyweight tools such as <code>generate_image</code> until the discovery search activates them.</td></tr>
 <tr><td><code>tools.essentialOverride</code></td><td>array</td><td><code>[]</code></td><td>Tool names kept available even when tools are narrowed.</td></tr>
@@ -10714,7 +10714,7 @@ the instruction.</strong> That is the whole mechanism, and it is why the Agents 
 delegation setting rather than a cosmetic one.</p>
 <p>With only the worker enabled, the guidance is about splitting execution across
 parallel workers and keeping bulk reading out of your session’s context. Nothing tells
-the model to send research to a <code>scout</code> it cannot spawn, and nothing tells it to send
+the model to send research to a <code>scout</code> it cannot spawn, and no prompt instructs it to send
 a review to a <code>reviewer</code> that does not exist. Enable the <code>reviewer</code> and you have said
 reviews are delegable here; the prompt then lists it. Enable the <code>scout</code> and bulk
 exploration becomes something it is told to route away from its own context.</p>
@@ -10802,7 +10802,7 @@ are enabled is still decided there.</p>
 <p>The shared model and its effort appear on screen only while the switch is on. Off, they
 are not shown at all: a greyed row displaying a model nobody runs is the duplication the
 switch exists to end. There is no Subagent Model row on the Models tab and none on the
-Subagents tab; one page owns the question.</p>
+Subagents tab; one page configures it.</p>
 <p>None of the bundled agents pin a model, so on a fresh install every subagent runs the
 model you are looking at. To move them all at once, turn the switch on and set the model
 under it. To give one agent its own, open that agent in <strong>Roster</strong>, or write it in the
@@ -10966,7 +10966,7 @@ read:
 </tbody>
 </table>
 </div>
-<p><code>edit.afterEdit</code> applies to the main agent; subagents are exempt from every value. <code>verify</code> continues once when the turn’s last successful edit has no later successful <code>bash</code>, <code>eval</code>, <code>debug</code> or <code>browser</code> result, and asks for one to be run. <code>review</code> continues once naming every code file changed since the last user message, and asks for a correctness, maintainability and cross-file contract pass; a file whose edit has left the context window is listed apart with an instruction to read it first. Documentation, lockfiles, binary files, media, archives and databases are not code files. Repeated calls for the same normalized path count once. A reply that ends with a question to the user defers both, and the window moves with the next user message, so changes made before a question are not reviewed after it. A configuration written before this setting existed carries a <code>critiqueCodeMutations</code> boolean under <code>edit</code>, which migrates on load: true becomes <code>review</code>, false becomes <code>verify</code>.</p>
+<p><code>edit.afterEdit</code> applies to the main agent; subagents are exempt from every value. <code>verify</code> continues once when the turn’s last successful edit has no later successful <code>bash</code>, <code>eval</code>, <code>debug</code> or <code>browser</code> result, and requests that one be run. <code>review</code> continues once naming every code file changed since the last user message, and prompts for a correctness, maintainability and cross-file contract pass; a file whose edit has left the context window is listed apart with an instruction to read it first. Documentation, lockfiles, binary files, media, archives and databases are not code files. Repeated calls for the same normalized path count once. A reply that ends with a question to the user defers both, and the window moves with the next user message, so changes made before a question are not reviewed after it. A configuration written before this setting existed carries a <code>critiqueCodeMutations</code> boolean under <code>edit</code>, which migrates on load: true becomes <code>review</code>, false becomes <code>verify</code>.</p>
 <h3 id="automatic-tool-issue-reports"><a class="header" href="#automatic-tool-issue-reports">Automatic tool issue reports</a></h3>
 <p>Auto QA records a model’s report when a built-in tool behaves differently from its contract. Recording
 is local to the active profile. Automatic upload is a separate setting and is off by default.</p>
@@ -11366,7 +11366,7 @@ veyyon config get compaction.threshold
 </thead>
 <tbody>
 <tr><td><code>inlineToolDescriptors</code></td><td>Inline Tool Descriptors</td><td>enum</td><td><code>auto</code></td><td>Render full tool descriptors in the system prompt and strip top-level/nested descriptions from provider tool schemas so descriptor text is sent once. Auto follows the active model, enabling this for Gemini and disabling it otherwise. Values: <code>auto</code>, <code>on</code>, <code>off</code>.</td></tr>
-<tr><td><code>includeModelInPrompt</code></td><td>Include Model in Prompt</td><td>boolean</td><td><code>false</code></td><td>Surface the active model identifier in the system prompt so the agent knows which model it is. Costs a full prompt-cache invalidation on every model switch.</td></tr>
+<tr><td><code>includeModelInPrompt</code></td><td>Include Model in Prompt</td><td>boolean</td><td><code>false</code></td><td>Surface the active model identifier in the system prompt so the active model identifier is available to the agent. Costs a full prompt-cache invalidation on every model switch.</td></tr>
 <tr><td><code>includeWorkspaceTree</code></td><td>Include Workspace Tree</td><td>boolean</td><td><code>false</code></td><td>Render the workspace directory tree in the system prompt. WARNING: This can bust prompt caching across sessions when files are modified.</td></tr>
 <tr><td><code>personality</code></td><td>Personality</td><td>string</td><td><code>default</code></td><td>Communication style rendered into the system prompt’s personality block. Extend via ~/.veyyon/personalities/&lt;name&gt;.md or project .veyyon/personalities/&lt;name&gt;.md.</td></tr>
 </tbody>
@@ -11380,7 +11380,7 @@ veyyon config get compaction.threshold
 </thead>
 <tbody>
 <tr><td><code>retry.maxRetries</code></td><td>Retry Attempts</td><td>number</td><td><code>10</code></td><td>Maximum retry attempts on API errors.</td></tr>
-<tr><td><code>retry.maxDelayMs</code></td><td>Max Retry Delay</td><td>number</td><td><code>300000</code></td><td>Maximum wait between retries, in ms. When the provider asks us to wait longer than this and no credential or model fallback succeeds, the request fails fast instead of sleeping (e.g. 3-hour Anthropic rate-limit windows).</td></tr>
+<tr><td><code>retry.maxDelayMs</code></td><td>Max Retry Delay</td><td>number</td><td><code>300000</code></td><td>Maximum wait between retries, in ms. When the provider response requires a wait longer than this and no credential or model fallback succeeds, the request fails fast instead of sleeping (e.g. 3-hour Anthropic rate-limit windows).</td></tr>
 <tr><td><code>retry.modelFallback</code></td><td>Retry Model Fallback</td><td>boolean</td><td><code>true</code></td><td>Allow retry recovery to switch to configured fallback models.</td></tr>
 <tr><td><code>retry.fallbackChains</code></td><td>Retry Fallback Chains</td><td>record</td><td><code>{}</code></td><td>JSON object mapping model roles, model selectors (“provider/model-id”), or provider wildcards (“provider/<em>”) to ordered fallback selectors, e.g. {“default”:[“openai/gpt-4o-mini”],“google-antigravity/</em>”:[“google/<em>”,“google-vertex/</em>”]}. Model-oriented keys apply whenever that model/provider is active, regardless of role; a “provider/*” entry keeps the failing model’s id and swaps the provider.</td></tr>
 <tr><td><code>retry.perProvider</code></td><td>Per-Provider Retry</td><td>record</td><td><code>{}</code></td><td>JSON object overriding retry limits for specific backends, keyed like Retry Fallback Chains: a model selector (“provider/model-id”), a provider wildcard (“provider/*”), or a bare provider name. Each value may set maxRetries, baseDelayMs, and maxDelayMs; anything omitted falls back to the global retry settings. Example: {“cursor”:{“maxRetries”:3,“baseDelayMs”:2000}}. Backends whose retries are intrinsically expensive (cursor, devin) already ship with sensible limits; an entry here overrides those.</td></tr>
@@ -11756,7 +11756,7 @@ veyyon config get compaction.threshold
 </thead>
 <tbody>
 <tr><td><code>hindsight.apiUrl</code></td><td>Hindsight API URL</td><td>string</td><td><code>http://localhost:8888</code></td><td>Hindsight server URL (Cloud or self-hosted).</td></tr>
-<tr><td><code>hindsight.bankId</code></td><td>Hindsight Bank ID</td><td>string</td><td><em>(unset)</em></td><td>Base memory bank name. Unset uses <code>veyyon</code>. Hindsight Bank Prefix is prepended when set, and Hindsight Scoping decides whether the project name is appended (per-project) or carried as a <code>project:</code> tag instead (per-project-tagged).</td></tr>
+<tr><td><code>hindsight.bankId</code></td><td>Hindsight Bank ID</td><td>string</td><td><em>(unset)</em></td><td>Base memory bank name. Unset uses <code>veyyon</code>. Hindsight Bank Prefix is prepended when set, and Hindsight Scoping sets whether the project name is appended (per-project) or carried as a <code>project:</code> tag instead (per-project-tagged).</td></tr>
 <tr><td><code>hindsight.scoping</code></td><td>Hindsight Scoping</td><td>enum</td><td><code>per-project-tagged</code></td><td>global = one shared bank; per-project = isolated bank per cwd; per-project-tagged = shared bank with project tags so global + project memories merge on recall. Values: <code>global</code>, <code>per-project</code>, <code>per-project-tagged</code>.</td></tr>
 <tr><td><code>hindsight.autoRecall</code></td><td>Hindsight Auto Recall</td><td>boolean</td><td><code>true</code></td><td>Recall memories on the first turn of each session.</td></tr>
 <tr><td><code>hindsight.autoRetain</code></td><td>Hindsight Auto Retain</td><td>boolean</td><td><code>true</code></td><td>Retain transcript every N turns and at session boundaries.</td></tr>
@@ -12056,8 +12056,8 @@ veyyon config get compaction.threshold
 <tr><th>Key</th><th>Setting</th><th>Type</th><th>Default</th><th>What it does</th></tr>
 </thead>
 <tbody>
-<tr><td><code>subagent.enabled</code></td><td>Subagents</td><td>boolean</td><td><code>true</code></td><td>Whether this session may use subagents at all. Off removes the task tool and every delegation instruction from the prompt, so nothing can be spawned. This is the only setting that takes the ability away: Subagent Delegation below decides how hard the model is PUSHED to delegate, never whether it may. Your delegation strength and your Roster are kept while this is off and take effect again when you turn it back on.</td></tr>
-<tr><td><code>subagent.delegation</code></td><td>Subagent Delegation</td><td>enum</td><td><code>preferred</code></td><td>How strongly this session routes work to the subagent types you enabled. Allowed leaves delegation available without prompting for it. Preferred asks for substantial eligible work to be delegated. Required adds a first-turn reminder. The enabled Roster is the routing policy: each name is a distinct type that owns only work matching its description, no type is a fallback for another, and work no enabled type covers stays with the main agent. Turn Subagents off above to remove delegation entirely. Values: <code>allowed</code>, <code>preferred</code>, <code>required</code>.</td></tr>
+<tr><td><code>subagent.enabled</code></td><td>Subagents</td><td>boolean</td><td><code>true</code></td><td>Whether this session may use subagents at all. Off removes the task tool and every delegation instruction from the prompt, so nothing can be spawned. This is the only setting that takes the ability away: Subagent Delegation below controls how strongly the model is prompted to delegate, never whether it may. Your delegation strength and your Roster are kept while this is off and take effect again when you turn it back on.</td></tr>
+<tr><td><code>subagent.delegation</code></td><td>Subagent Delegation</td><td>enum</td><td><code>preferred</code></td><td>How strongly this session routes work to the subagent types you enabled. Allowed leaves delegation available without prompting for it. Preferred prompts for substantial eligible work to be delegated. Required adds a first-turn reminder. The enabled Roster is the routing policy: each name is a distinct type that covers only work matching its description, no type is a fallback for another, and work no enabled type covers stays with the main agent. Turn Subagents off above to remove delegation entirely. Values: <code>allowed</code>, <code>preferred</code>, <code>required</code>.</td></tr>
 <tr><td><code>subagent.batch</code></td><td>Batch Task Calls</td><td>boolean</td><td><code>true</code></td><td>Switch the task tool to its batch shape: one call carries { agent, context, tasks[] } — one subagent per item (with per-item isolation) and a required shared context prepended to every assignment. With async.enabled=true, each spawn runs as an independent background agent with the normal idle/parked lifecycle; otherwise the call blocks for merged results. Disable to restore the flat single-spawn schema. Shown under the tab’s Advanced fold.</td></tr>
 </tbody>
 </table>
@@ -12113,7 +12113,7 @@ veyyon config get compaction.threshold
 <tbody>
 <tr><td><code>subagent.prune.enabled</code></td><td>Prune Parked Subagents</td><td>boolean</td><td><code>true</code></td><td>Stage two, and a different thing from parking. Pruning takes a parked subagent out of the roster and gives up the ability to wake it; parking only released its session. Nothing on disk is touched: the transcript stays where it is and stays readable at <code>history://\&lt;agent&gt;</code>. Off keeps every parked subagent listed and wakeable until you exit.</td></tr>
 <tr><td><code>subagent.prune.afterMs</code></td><td>Prune After</td><td>number</td><td><code>3600000</code></td><td>How long a parked subagent stays in the roster before it is pruned (ms). Counted from its last activity, so a subagent read back from a previous run is judged on when its transcript was last written rather than on when this session found it.</td></tr>
-<tr><td><code>subagent.prune.waitingAfterMs</code></td><td>Prune After While Waiting</td><td>number</td><td><code>7200000</code></td><td>The same budget for a subagent whose last message said it was waiting on another agent (ms). It stopped on purpose to let a peer finish, so it keeps its row longer than one that simply went quiet: pruning it on the ordinary budget would drop the agent you are most likely to message next. Set it equal to Prune After to treat both the same; a shorter value is raised to it.</td></tr>
+<tr><td><code>subagent.prune.waitingAfterMs</code></td><td>Prune After While Waiting</td><td>number</td><td><code>7200000</code></td><td>The same budget for a subagent whose last message indicated it was waiting on another agent (ms). It stopped on purpose to let a peer finish, so it keeps its row longer than one that went quiet: pruning it on the ordinary budget would drop the agent you are most likely to message next. Set it equal to Prune After to treat both the same; a shorter value is raised to it.</td></tr>
 </tbody>
 </table>
 </div>
@@ -12176,7 +12176,7 @@ veyyon config get compaction.threshold
 <tr><td><code>speech.enhanced</code></td><td>Enhanced Speech Rewriting</td><td>boolean</td><td><code>false</code></td><td>Rewrite assistant output into natural spoken prose with the tiny/smol model before synthesis (describes code, drops links and markdown). Falls back to mechanical cleanup on failure.</td></tr>
 <tr><td><code>speech.voice</code></td><td>Speech Vocalization Voice</td><td>enum</td><td><code>af_heart</code></td><td>Kokoro voice used when speaking the assistant’s output aloud. Values: <code>af_heart</code>, <code>af_bella</code>, <code>af_nicole</code>, <code>af_aoede</code>, <code>af_kore</code>, <code>af_sarah</code>, <code>am_michael</code>, <code>am_fenrir</code>, <code>am_puck</code>, <code>bf_emma</code>, <code>bm_george</code>, <code>bm_fable</code>.</td></tr>
 <tr><td><code>providers.fetch</code></td><td>Fetch Provider</td><td>enum</td><td><code>auto</code></td><td>Reader backend priority for the fetch/read URL tool. Values: <code>auto</code>, <code>native</code>, <code>trafilatura</code>, <code>lynx</code>, <code>parallel</code>, <code>jina</code>.</td></tr>
-<tr><td><code>codexResets.autoRedeem</code></td><td>Codex Auto-Redeem Saved Resets</td><td>enum</td><td><code>unset</code></td><td>When a turn is blocked by the Codex weekly limit on the active account and no other account is available, run the conservative saved-reset check. unset asks before spending the first eligible reset, yes spends eligible resets without prompting, and no disables the check entirely. Requires retries enabled. Values: <code>unset</code>, <code>yes</code>, <code>no</code>.</td></tr>
+<tr><td><code>codexResets.autoRedeem</code></td><td>Codex Auto-Redeem Saved Resets</td><td>enum</td><td><code>unset</code></td><td>When a turn is blocked by the Codex weekly limit on the active account and no other account is available, run the conservative saved-reset check. unset prompts before spending the first eligible reset, yes spends eligible resets without prompting, and no disables the check entirely. Requires retries enabled. Values: <code>unset</code>, <code>yes</code>, <code>no</code>.</td></tr>
 <tr><td><code>codexResets.minBlockedMinutes</code></td><td>Codex Auto-Redeem Min Block</td><td>number</td><td><code>60</code></td><td>Only auto-redeem when the natural weekly reset is at least this many minutes away (don’t spend a ~30-day credit to save a short wait).</td></tr>
 <tr><td><code>codexResets.keepCredits</code></td><td>Codex Auto-Redeem Reserve</td><td>number</td><td><code>0</code></td><td>Never auto-spend below this many saved resets (0 = the last credit may be spent automatically).</td></tr>
 <tr><td><code>exa.enabled</code></td><td>Exa</td><td>boolean</td><td><code>true</code></td><td>Master toggle for all Exa search tools.</td></tr>
@@ -12315,8 +12315,8 @@ veyyon config get compaction.threshold
 <tbody>
 <tr><td><code>machine.cpuLimitCores</code></td><td>Machine CPU Limit</td><td>number</td><td><code>0</code></td><td>Maximum CPU every veyyon process on this machine may use TOGETHER, in cores (0 = no limit). Stored in ~/.veyyon/config.yml rather than in a profile, so it covers every profile and every veyyon running at once, which is what makes it a machine limit: held per profile, two profiles would read their own copy and the machine would get the sum. Each session’s budget group is created INSIDE this one, so on Linux the kernel caps the whole subtree and no combination of sessions can exceed it. A per-session limit larger than this one is bounded by it and does not raise it. The machine tier therefore needs a parent that delegates two levels; a host that delegates one, such as a container whose cgroup root holds processes, still holds per-session limits and reports the machine tier as unheld. Where the kernel cannot hold it, a notice says so once at startup rather than reporting a cap that does not exist. Stored machine-wide, not per profile.</td></tr>
 <tr><td><code>machine.memoryLimitGb</code></td><td>Machine Memory Limit</td><td>number</td><td><code>0</code></td><td>Maximum memory every veyyon process on this machine may hold together, in gigabytes (0 = no limit). Stored in ~/.veyyon/config.yml, so it spans profiles and concurrent veyyon instances. Every session budget group sits inside this one, so on Linux this is cgroup v2 memory.max on the parent, with memory.swap.max pinned to 0 so the cap is the whole anonymous footprint rather than a resident cap a process escapes by swapping. The kernel reclaims, then OOM-kills, inside the subtree once the total is reached — whichever process the kernel picks, with no warning and no chance to finish. Set it where an OOM kill is preferable to the machine swapping. Where no memory controller is delegated the cap cannot be held, and a notice says so once at startup. Stored machine-wide, not per profile.</td></tr>
-<tr><td><code>machine.writeBudgetGb</code></td><td>Machine Write Budget</td><td>number</td><td><code>0</code></td><td>Cumulative gigabytes every veyyon process on this machine may WRITE before further writes are refused (0 = no limit). Stored in ~/.veyyon/config.yml, so it spans profiles and concurrent veyyon instances. Unlike CPU and memory this is a total that accumulates, not a level: it counts bytes written since the machine budget was last reset, across every session, and refuses new commands and harness writes once the total is reached. A write budget is the one limit no kernel enforces on its own — cgroup io accounting MEASURES bytes and caps rate, not a lifetime total — so this is a refusal, and work already writing runs to completion. Stored machine-wide, not per profile.</td></tr>
-<tr><td><code>machine.maxProcesses</code></td><td>Machine Max Processes</td><td>number</td><td><code>0</code></td><td>Hard cap on how many processes every veyyon on this machine may have alive at once (0 = no limit). Stored in ~/.veyyon/config.yml, so it spans profiles and concurrent veyyon instances. Every session budget group sits inside this one, so on Linux this is cgroup v2 pids.max on the parent and the kernel refuses the fork itself once the subtree is full, whichever session asked. Where pids is not delegated the cap is a refusal at the spawn path instead, and a notice says so once at startup. Stored machine-wide, not per profile.</td></tr>
+<tr><td><code>machine.writeBudgetGb</code></td><td>Machine Write Budget</td><td>number</td><td><code>0</code></td><td>Cumulative gigabytes every veyyon process on this machine may WRITE before further writes are blocked (0 = no limit). Stored in ~/.veyyon/config.yml, so it spans profiles and concurrent veyyon instances. Unlike CPU and memory this is a total that accumulates, not a level: it counts bytes written since the machine budget was last reset, across every session, and blocks new commands and harness writes once the total is reached. A write budget is the one limit no kernel enforces on its own — cgroup io accounting MEASURES bytes and caps rate, not a lifetime total — so this is an explicit rejection, and work already writing runs to completion. Stored machine-wide, not per profile.</td></tr>
+<tr><td><code>machine.maxProcesses</code></td><td>Machine Max Processes</td><td>number</td><td><code>0</code></td><td>Hard cap on how many processes every veyyon on this machine may have alive at once (0 = no limit). Stored in ~/.veyyon/config.yml, so it spans profiles and concurrent veyyon instances. Every session budget group sits inside this one, so on Linux this is cgroup v2 pids.max on the parent and the kernel rejects the fork itself once the subtree is full, whichever session issued the request. Where pids is not delegated the cap is a refusal at the spawn path instead, and a notice says so once at startup. Stored machine-wide, not per profile.</td></tr>
 </tbody>
 </table>
 </div>
@@ -12643,7 +12643,7 @@ underscores) reads that variable too.</li>
 <p>A variable named in cases 2 or 3 that is unset, or set to an empty string, resolves to nothing: the
 key is not installed, no request contains it, and a warning states the variable and the setting.
 Earlier versions used the variable’s own name as the value, so <code>apiKey: DEEPSEK_API_KEY</code> was sent to
-the provider as the key. A key that is genuinely upper case text rather than a variable name is
+the provider as the key. A key that is uppercase text rather than a variable name is
 written <code>literal:MY_KEY</code>.</p>
 <h2 id="merge-and-override-order"><a class="header" href="#merge-and-override-order">Merge and override order</a></h2>
 <p>ModelRegistry pipeline (on refresh):</p>
@@ -13174,7 +13174,7 @@ and the per-provider dispatcher mapping.</p>
 <p>When a provider needs an API key, <code>veyyon</code> resolves it in this order (first match wins):</p>
 <ol>
 <li><strong>Runtime override</strong>: a key supplied for the current process, e.g. CLI <code>--api-key</code>. Never persisted.</li>
-<li><strong><code>models.yml</code> config key</strong>: an <code>apiKey</code> pinned on a custom provider, registered as a config-sourced bearer. This deliberately beats stored OAuth, so a key supplied for a custom <code>baseUrl</code>/gateway is honored instead of forwarding an upstream OAuth token the proxy would reject.</li>
+<li><strong><code>models.yml</code> config key</strong>: an <code>apiKey</code> pinned on a custom provider, registered as a config-sourced bearer. This takes precedence over stored OAuth, so a key supplied for a custom <code>baseUrl</code>/gateway is honored instead of forwarding an upstream OAuth token the proxy would reject.</li>
 <li><strong>Stored API key</strong>: an API-key credential saved in the auth store.</li>
 <li><strong>Stored OAuth credential</strong>: refreshed when needed; multiple accounts are ranked/rotated automatically. For Anthropic, each organization counts as its own account: one email holding both a Team seat and a personal plan can log in once per subscription (pick the workspace on the browser consent page) and rotation treats them as two accounts.</li>
 <li><strong>Provider environment variable</strong>: including values loaded from <code>.env</code> files (see <a href="#environment-variables-and-env-files">the env-var table</a>).</li>
@@ -13461,8 +13461,8 @@ disabledProviders:
 <li>Capability providers (the editor configs Veyyon also reads): <code>packages/coding-agent/src/discovery/</code></li>
 <li>Schema: <code>packages/coding-agent/src/config/mcp-schema.json</code></li>
 </ul>
-<h2 id="where-mcp-config-lives"><a class="header" href="#where-mcp-config-lives">Where MCP config lives</a></h2>
-<p>Veyyon-native MCP config lives in exactly one file, the active profile’s agent directory:</p>
+<h2 id="mcp-configuration-location"><a class="header" href="#mcp-configuration-location">MCP configuration location</a></h2>
+<p>Veyyon-native MCP config is defined in one file, in the active profile’s agent directory:</p>
 <ul>
 <li><code>~/.veyyon/profiles/default/agent/mcp.json</code></li>
 <li><code>~/.veyyon/profiles/&lt;name&gt;/agent/mcp.json</code> when a named profile is active (see <a href="#profiles-5">Profiles</a>)</li>
@@ -14128,7 +14128,7 @@ it. Until you decide, it is withheld.</p>
 </div>
 <p>A file outside the project root is not affected. Profile extensions, installed
 plugins and paths you set in <code>extensions:</code> load as before — a configured path is
-your own instruction and loads even when it lives inside the project, which is
+your own instruction and loads even when stored inside the project, which is
 where an extension is written while you are developing it. Settings come from
 your profile and your home directory, so a repository cannot add itself to that
 list.</p>
@@ -14865,7 +14865,7 @@ export default function (pi: HookAPI): void {
 provider allowlist to <code>loadCapability("skills")</code>, so only the profile-native
 providers run and no foreign-tool directory is ever scanned:</p>
 <ul>
-<li><code>native</code> (priority 100): the profile’s <code>.../agent/skills</code> dir, user level only, via <code>src/discovery/builtin.ts</code>. Project-local <code>.veyyon/skills</code> is deliberately not scanned.</li>
+<li><code>native</code> (priority 100): the profile’s <code>.../agent/skills</code> dir, user level only, via <code>src/discovery/builtin.ts</code>. Project-local <code>.veyyon/skills</code> is not scanned.</li>
 <li><code>veyyon-plugins</code> (priority 90): <code>skills/</code> bundled with plugins installed into the active profile</li>
 <li><code>veyyon-managed</code> (priority 5): auto-learn skills under <code>.../agent/managed-skills</code>, discovered unconditionally (only writing/nudging is gated by <code>autolearn.enabled</code>); always defers to a same-named authored skill</li>
 </ul>
@@ -16115,7 +16115,7 @@ unmarked tool-name literal.</p>
 <p><code>createAgentSession()</code> runs two background optimizations to overlap I/O with the rest of session setup:</p>
 <ul>
 <li>
-<p><strong>Model-host preconnect.</strong> As soon as the model is resolved, the SDK fires a best-effort <code>fetch.preconnect()</code> call against the model host so DNS + TCP + TLS + HTTP/2 to the provider’s host happens in parallel with extension/skill load, tool registry build, and system-prompt assembly. The first real <code>fetch(...)</code> then reuses the warm connection, saving 100–300 ms on transcontinental hops (e.g. residential IP → <code>api.anthropic.com</code>). Implementation lives in <code>preconnectModelHost()</code> in <code>packages/coding-agent/src/sdk.ts</code>. If Bun’s <code>preconnect</code> is unavailable (non-Bun runtime) or the call throws, the optimization is silently skipped: never a hard dependency. Applies to every mode (interactive, print, RPC, ACP).</p>
+<p><strong>Model-host preconnect.</strong> As soon as the model is resolved, the SDK fires a best-effort <code>fetch.preconnect()</code> call against the model host so DNS + TCP + TLS + HTTP/2 to the provider’s host happens in parallel with extension/skill load, tool registry build, and system-prompt assembly. The first real <code>fetch(...)</code> then reuses the warm connection, saving 100–300 ms on transcontinental hops (e.g. residential IP → <code>api.anthropic.com</code>). Implementation is in <code>preconnectModelHost()</code> in <code>packages/coding-agent/src/sdk.ts</code>. If Bun’s <code>preconnect</code> is unavailable (non-Bun runtime) or the call throws, the optimization is silently skipped: never a hard dependency. Applies to every mode (interactive, print, RPC, ACP).</p>
 </li>
 <li>
 <p><strong>Conditional LSP warmup.</strong> Startup LSP servers (those returned by <code>discoverStartupLspServers(cwd)</code>) are only warmed when <strong>all</strong> of these hold:</p>
@@ -16606,7 +16606,7 @@ gemini                 priority  60
 <h3 id="directory-admission-rules"><a class="header" href="#directory-admission-rules">Directory admission rules</a></h3>
 <ul>
 <li>The profile agent directory is used only when it exists and is non-empty.</li>
-<li>Skills are loaded only from the active profile’s agent dir (<code>~/.veyyon/profiles/&lt;name&gt;/agent/skills</code>). Project-local <code>.veyyon/skills</code> directories are deliberately not scanned, so no repository can inject skills into a session by ambient autodiscovery.</li>
+<li>Skills are loaded only from the active profile’s agent dir (<code>~/.veyyon/profiles/&lt;name&gt;/agent/skills</code>). Project-local <code>.veyyon/skills</code> directories are not scanned, preventing repositories from injecting skills into a session via ambient autodiscovery.</li>
 <li><code>AGENTS.md</code> has three scopes: the global cross-profile <code>~/.veyyon/AGENTS.md</code>, the active profile’s first matching instruction file, and the project walk from the working directory to the repository root (one file per directory level: <code>.veyyon/AGENTS.md</code> at the nearest non-empty <code>.veyyon/</code> claims its level, bare <code>AGENTS.md</code> next, bare <code>CLAUDE.md</code> last). <code>RULES.md</code> is the active profile’s file only; a repository’s <code>.veyyon/RULES.md</code> is not read. Persistent system-prompt changes use <code>PROMPT_SECTIONS/</code> under the active profile’s agent dir. See <a href="#system-prompt-customization"><code>docs/handbook/src/models/system-prompt.md</code></a>.</li>
 </ul>
 <h3 id="scope-specific-loading"><a class="header" href="#scope-specific-loading">Scope-specific loading</a></h3>
@@ -16739,7 +16739,7 @@ auth, request, and response formats.</p>
 protocol types.</li>
 </ul>
 <h2 id="implementation-1"><a class="header" href="#implementation-1">Implementation</a></h2>
-<p>The provider stack lives in the <code>@veyyon/ai</code> package.</p>
+<p>The provider stack is implemented in the <code>@veyyon/ai</code> package.</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -16921,7 +16921,7 @@ and never the credential. Redaction runs before truncation, so a value sitting a
 the tombstone that keeps an old value hidden from providers keeps it out of this entry too.</p>
 <p>The full arguments the model wrote are persisted with the assistant message, and those hold the
 placeholder, since the model never saw anything else.</p>
-<p>What the command printed is a different matter. Tool output is saved as it was printed and
+<p>What the command printed is handled separately. Tool output is saved as it was printed and
 redacted on its way to the provider, not on its way to disk, so a command that echoes a credential
 puts it in the session file. Veyyon redacts what it records itself; it cannot redact what a command
 chose to print.</p>
@@ -16942,9 +16942,9 @@ chose to print.</p>
 <ul>
 <li>A plain <code>obfuscate</code> entry under 8 characters <strong>stops startup</strong> with an error stating the entry and the fix. It is not skipped. Skipping it would send the value to the provider while the file stated otherwise.</li>
 <li>Use <code>mode: replace</code> for a short value. Replace is one-way, needs no reversible placeholder, and has no minimum.</li>
-<li>A <strong>regex</strong> match under the floor is skipped rather than rejected, because a short match usually means the pattern reached into ordinary prose. The skip is recorded once per pattern so you can see that the pattern is over-matching. If short matches are genuinely secret, set <code>minLength</code> on that entry.</li>
+<li>A <strong>regex</strong> match under the floor is skipped rather than rejected, because a short match usually means the pattern reached into ordinary prose. The skip is recorded once per pattern so you can see that the pattern is over-matching. If short matches are secret, set <code>minLength</code> on that entry.</li>
 </ul>
-<p>An unreadable or malformed <code>secrets.yml</code> also stops startup. A missing file does not: nothing was declared, so there is nothing to protect. The distinction matters because reading a broken file as “no secrets” starts a session that believes it has nothing to hide.</p>
+<p>An unreadable or malformed <code>secrets.yml</code> also stops startup. A missing file does not: nothing was declared, so there is nothing to protect. The distinction is significant: reading a broken file as “no secrets” starts a session with unconfigured protection.</p>
 <h3 id="per-entry-validation-is-a-refusal-not-a-skip"><a class="header" href="#per-entry-validation-is-a-refusal-not-a-skip">Per-entry validation is a refusal, not a skip</a></h3>
 <p><code>validateEntry</code> rejects a malformed entry instead of warning and dropping it. The default transport set is <code>{ file: true }</code> with no console transport (<code>logger.ts:219</code>), so a warn-and-drop hides the fault in a log file and sends the credential the operator declared to the provider in plain text.</p>
 <p>Problems accumulate and are reported together, so three typos cost one restart. The message states the entry index, the field and the fix. It never quotes the offending <code>content</code>: on a plain entry that content is the credential.</p>
@@ -17018,7 +17018,7 @@ chose to print.</p>
 <p><code>SECRET_SUBCOMMAND_SHAPES</code> also records how many words each command reads and which are required: one for <code>rm</code>, <code>value</code>, <code>copy</code>, <code>clear</code> and <code>discard</code>, two for <code>rename</code>, <code>scope</code>, <code>extend</code> and <code>from-env</code>, none for <code>list</code>, <code>log</code> and <code>help</code>, and unbounded for a terminal <code>add</code>. <code>add</code> is unbounded because the whole line after it is rejoined into the credential and a passphrase contains spaces, so a word count would reject <code>/secret add gpg my long pass phrase</code> as five arguments when it is two. <code>clear</code> and <code>discard</code> read one word and it is a vault rather than a name, because each acts on a whole file.</p>
 <p>A word a command does not read is <strong>rejected</strong>, stating the position it arrived in. An earlier grammar parsed every option for every verb and let each subcommand read only the fields it cared about, so <code>/secret extend NAME --scope global</code> reported success and did nothing about the scope, and <code>/secret rm NAME --scope project</code> read as “the project copy is gone” when the copy in effect had been removed and the others were untouched. The rule covers plain words too: <code>/secret extend TOKEN global</code> is rejected rather than re-dated with the vault word ignored.</p>
 <p>The refusal states the POSITION and never repeats the word. The common slip is muscle memory for <code>add</code> under another command (<code>/secret extend TOKEN sk-live-...</code>, <code>/secret rm TOKEN sk-live-...</code>, a value appended to <code>/secret list</code>), so the extra word is very often the credential, and quoting it would write that credential into the scrollback and the saved transcript permanently. A digit-only word is echoed, because a number cannot be a credential and the echo is what makes the hint useful: <code>/secret rm TOKEN 50</code> can then state what a bare number would have meant. In a terminal the refusal also states the value form.</p>
-<p><code>needsValuePrompt</code> sets whether a surface prompts, and it lives in the pure command layer so the TUI and text/ACP paths cannot disagree about when a masked field is warranted. A surface that cannot mask must not substitute an unmasked prompt: absent <code>promptForValue</code>, <code>runSecretCommand</code> rejects the add and names <code>from-env</code>. That same absence is what selects the grammar, so a client is never offered a field it cannot open.</p>
+<p><code>needsValuePrompt</code> sets whether a surface prompts, and it is defined in the command layer so the TUI and text/ACP paths cannot disagree about when a masked field is warranted. A surface that cannot mask must not substitute an unmasked prompt: absent <code>promptForValue</code>, <code>runSecretCommand</code> rejects the add and names <code>from-env</code>. That same absence is what selects the grammar, so a client is never offered a field it cannot open.</p>
 <h3 id="discard-the-repair-for-a-vault-that-cannot-be-read"><a class="header" href="#discard-the-repair-for-a-vault-that-cannot-be-read"><code>discard</code>: the repair for a vault that cannot be read</a></h3>
 <p><code>load()</code> skips a scope whose file exists and cannot be read, with a notice, and <code>remove()</code> will not touch one. Between them the operator could start and could not repair: <code>discardUnreadableScope</code> had no caller, so the only route was deleting the file by hand. <code>/secret discard &lt;vault&gt;</code> is that route, and it parses on every surface, so one notice states one repair whichever client prints it.</p>
 <p>It <strong>moves</strong> the file to a <code>vault.json.unreadable-&lt;timestamp&gt;-&lt;uuid&gt;</code> sibling rather than deleting it. The file still holds real credentials, sealed with a key that is still on disk, so the damage may be a truncated tail with recoverable entries behind it. The new path is returned and printed: it is the operator’s only route back to those entries, and a message that omitted it would make a recoverable move indistinguishable from a delete.</p>
@@ -17039,10 +17039,10 @@ chose to print.</p>
 <p>Entries without a name get a generated name (<code>SECRET_1</code>), so every vault entry has a placeholder the model can reference. Plain environment and <code>secrets.yml</code> values use the machine-keyed unnamed form.</p>
 <h3 id="completing-secret"><a class="header" href="#completing-secret">Completing <code>/secret</code></a></h3>
 <p>Argument completion offers the subcommands and nothing else, derived from <code>SECRET_TUI_SUBCOMMANDS</code>, which the parser builds from the same table it routes with. A verb cannot be typeable and unoffered, and a word cannot be offered and unparseable. The operator-facing account is <a href="#managing-what-you-stored">Managing what you stored</a>.</p>
-<p>No stored NAME is ever offered. Completing one from <code>session.obfuscator.namedSecretNames()</code> renders part of the vault on a keystroke, and accepting a suggestion writes it onto a line whose first word decides between a command and a credential, so a fumbled verb stores the suggestion instead of running it. <code>/secret list</code> is where names are read.</p>
+<p>No stored NAME is ever offered. Completing one from <code>session.obfuscator.namedSecretNames()</code> renders part of the vault on a keystroke, and accepting a suggestion writes it onto a line whose first word determines whether the input is a command or a credential, so a fumbled verb stores the suggestion instead of running it. <code>/secret list</code> is where names are read.</p>
 <p>The prefix filter keeps the menu out of a paste. A pasted credential arrives as one insert, so the prefix is the whole token and matches nothing; only a hand-typed word that is the start of a subcommand opens the dropdown. Nothing about the vault is read to build it, so completion still works when secret protection is off.</p>
 <h3 id="what-the-model-is-told-about-a-stored-secret"><a class="header" href="#what-the-model-is-told-about-a-stored-secret">What the model is told about a stored secret</a></h3>
-<p>The operator-facing account is <a href="#what-the-agent-knows-and-when">What the agent knows, and when</a>. Two mechanisms carry it, with different jobs.</p>
+<p>The operator-facing account is <a href="#what-the-agent-receives-and-when">What the agent receives, and when</a>. Two mechanisms carry it, with different jobs.</p>
 <p><strong>The inventory</strong> is a system-prompt section. <code>SecretObfuscator.namedSecretNames()</code> returns every readable name the live runtime can expand, sorted, and never a value. It calls <code>#forgetExpired()</code> first, so a name stops being answered at the moment it stops working. That list becomes an optional option-backed runtime section registered in <code>RUNTIME_SECTIONS</code> (<code>system-prompt-builder/section-registry.ts</code>) and supplied where <code>sdk.ts</code> calls the system-prompt builder, beside <code>secretsEnabled</code>. <code>AgentSession.refreshSecrets()</code> reloads the runtime and rebuilds the base prompt, which is what makes a removed or expired name stop appearing.</p>
 <p>Sorted because the section sits in the cached prompt prefix. Map insertion order would shuffle between refreshes and invalidate the provider’s prompt cache without changing the section text.</p>
 <p>An optional section renders only when its option is present, so protection being off, or nothing being spendable, produces no section rather than an empty heading. Names are listed in placeholder form, which is the form the model has to write. Index-form secrets are absent, having no name to list.</p>
@@ -17227,7 +17227,7 @@ chose to print.</p>
   replacement: "postgres://***"
 </code></pre>
 <h2 id="interaction-with-env-var-detection"><a class="header" href="#interaction-with-env-var-detection">Interaction with env var detection</a></h2>
-<p>Environment variables are collected first, then file-defined entries are appended. File entries can cover secrets that do not live in environment variables, such as values in local configuration. Equal plain values converge on the same machine-keyed placeholder, so their provider representation is independent of declaration order.</p>
+<p>Environment variables are collected first, then file-defined entries are appended. File entries can cover secrets that are not defined in environment variables, such as values in local configuration. Equal plain values converge on the same machine-keyed placeholder, so their provider representation is independent of declaration order.</p>
 <h2 id="key-files-1"><a class="header" href="#key-files-1">Key files</a></h2>
 <ul>
 <li><code>packages/coding-agent/src/secrets/audit.ts</code> – the expansion log: record shape, atomic-append cap, reader</li>
@@ -17281,7 +17281,7 @@ chose to print.</p>
 <li>Cite the memory artifact path when memory changes the plan, and pair it with current-repo evidence before acting.</li>
 <li>Prefer repo state and user instruction when they conflict with memory; treat conflicting memory as stale.</li>
 </ul>
-<p>A backend contributes in two places, and which one it uses matters for what a session costs you:</p>
+<p>A backend contributes in two locations, which determine token usage and caching behavior:</p>
 <ul>
 <li><strong>The system prompt</strong> contains the guidance that does not change while the session runs. The provider caches the prompt as
 the prefix of every request, so this text is paid for once.</li>
@@ -17416,7 +17416,7 @@ memories every turn.</p>
 <li><code>packages/coding-agent/src/config/settings-schema.ts</code></li>
 </ul>
 <h2 id="session-entry-model"><a class="header" href="#session-entry-model">Session entry model</a></h2>
-<p>Compaction and branch summaries are first-class session entries, not plain assistant/user messages.</p>
+<p>Compaction and branch summaries are distinct session entry types, not assistant or user messages.</p>
 <ul>
 <li><code>CompactionEntry</code>
 <ul>
@@ -17555,7 +17555,7 @@ boundary, <code>prepareCompaction</code> then hard-bounds the tail: a kept turn 
 has its heavy non-error tool results replaced with an elision marker (largest first, originals
 offloaded to a recovery <code>artifact://</code> blob), so the tail stays within budget even when one turn
 alone is bigger. User messages, assistant text, tool calls, and error results are never elided.</p>
-<p>Note that the summary prompt does not state any of that. Its opening line requests “a structured
+<p>The summary prompt does not state any of that. Its opening line requests “a structured
 handoff summary for another LLM to resume the task”, which describes a cold restart that compaction
 does not perform. This is inherited from upstream, whose engine keeps the same recent tail, so the
 mismatch is upstream’s rather than a fork difference. It is recorded here because a summarizer told
@@ -17718,8 +17718,8 @@ In that case the session picker falls back again to the first user message, so n
 context inside the provider and returns the compacted window. Veyyon uses it when the
 model’s <code>compat.supportsServerCompaction</code> flag is set, which is resolved per host at
 model build time: the official OpenAI API and Azure’s v1 API today, and any gateway
-that opts in with an override. The Codex provider stays out, because its transport
-owns history state server-side and a client-minted window has no replay contract there.
+that opts in with an override. The Codex provider is excluded because its transport
+maintains history state server-side and a client-minted window has no replay contract there.
 A re-pointed <code>openai</code> model also stays out, since another vendor’s host does not serve
 that path. Turning <code>compaction.remote</code> off is the only thing that disables it; leaving
 it unset leaves it on.</p>
@@ -17732,8 +17732,8 @@ remote call plus the exact summary the remote call was supposed to replace, and 
 of the two was ever read. Writing readable text here is not a missing feature that could
 be added later. The only way to produce it is to pay a second model to describe a span,
 which is the local strategy with an extra network round trip in front of it, and any text
-derived from the blob rather than the span would be invented. An empty summary is the
-honest record of what happened.</p>
+derived from the blob rather than the span would be invented. An empty summary
+records what happened.</p>
 <p>Because the entry cannot explain itself, the rebuild will not trust it outside the
 provider that minted it. <code>buildSessionContext</code> treats a compaction as usable only when the
 stored window replays on the active provider, or when there is real summary text. When
@@ -17886,7 +17886,7 @@ After navigation with summary:
 <li><code>compaction.autoContinue</code> = <code>true</code></li>
 <li><code>compaction.midTurnEnabled</code> = <code>true</code></li>
 <li><code>compaction.remoteEndpoint</code> = <code>undefined</code></li>
-<li><code>compaction.threshold</code> = <code>auto</code>; the one trigger setting, with its unit in the value. <code>auto</code> is <code>contextWindow - max(15% of contextWindow, reserveTokens)</code>. <code>85%</code> is a percent of the current model’s window. <code>170000</code> is an absolute token amount, model-independent: compaction runs once context exceeds that many tokens whatever the current model’s window is, and when the amount is larger than that window it is honored up to <code>contextWindow - 1</code> with a one-time warning (never silently reinterpreted). Resolution and the migration off the two retired keys live in <code>packages/agent/src/compaction/threshold.ts</code>.</li>
+<li><code>compaction.threshold</code> = <code>auto</code>; the one trigger setting, with its unit in the value. <code>auto</code> is <code>contextWindow - max(15% of contextWindow, reserveTokens)</code>. <code>85%</code> is a percent of the current model’s window. <code>170000</code> is an absolute token amount, model-independent: compaction runs once context exceeds that many tokens whatever the current model’s window is, and when the amount is larger than that window it is honored up to <code>contextWindow - 1</code> with a one-time warning (never silently reinterpreted). Resolution and migration logic for retired keys is defined in <code>packages/agent/src/compaction/threshold.ts</code>.</li>
 <li><code>compaction.thresholdTokens</code> = <code>-1</code> and <code>compaction.thresholdPercent</code> = <code>-1</code>; retired. The global config is rewritten on load (<code>#migrateRawSettings</code>): a positive amount becomes <code>threshold: &lt;amount&gt;</code>, a positive percent becomes <code>threshold: &lt;percent&gt;%</code> (the amount wins when both are set), and both keys are dropped, so the ambiguity leaves the file without moving the trigger. Config sources that are never rewritten — project files, <code>--config</code> overlays — are folded in at read time by <code>withLegacyCompactionThreshold</code> with the same precedence, and the session reports which retired key supplied the value.</li>
 <li><code>compaction.idleEnabled</code> = <code>false</code></li>
 <li><code>compaction.idleThresholdTokens</code> = <code>200000</code></li>
@@ -18531,7 +18531,7 @@ default edit surface, Veyyon uses hashline by default.</p>
 <p>You do not have to read the source to find out what Veyyon sends a model. Run:</p>
 <pre><code>veyyon prompt --prompts
 </code></pre>
-<p>That lists every prompt by id, grouped by the directory it lives in, with one line on what
+<p>That lists every prompt by id, grouped by directory, with one line on what
 each is for. An id is the file’s path under that directory without the <code>.md</code>, so
 <code>turn-control/auto-continue</code> and <code>dialect/gemma</code> name their own files.</p>
 <p>Then look at one:</p>
@@ -18551,7 +18551,7 @@ tool-policy/lsp                                  412      103   4.0%  tools has 
 <p>Two things to read from it. The cost is MARGINAL: it is what the prompt would be shorter by without
 that rule, not the length of the rule’s text, so the numbers add up to their section rather than
 exceeding it. And the condition states what turns the rule on, which is what you need to know
-before deciding a rule is not earning its tokens.</p>
+before deciding whether to disable a rule.</p>
 <p>Under the table is every rule this configuration leaves out, with the condition that would include
 it, so a rule being off is visible as a fact rather than as an absence you have to notice:</p>
 <pre><code>not in this prompt (33 of 68):
@@ -18603,7 +18603,7 @@ understand why the parts are split where they are, and where a new part would be
 <ul>
 <li><code>packages/coding-agent/src/system-prompt.ts</code> (<code>buildSystemPrompt</code>)</li>
 <li><code>packages/coding-agent/src/main.ts</code> (resolves the two prompt flags; there is no file discovery for either)</li>
-<li><code>packages/coding-agent/src/prompts/&lt;directory&gt;/rows.ts</code> (the prompts one directory owns, each with its id and purpose) and <code>packages/coding-agent/src/prompts/registry.ts</code> (which aggregates all of them)</li>
+<li><code>packages/coding-agent/src/prompts/&lt;directory&gt;/rows.ts</code> (the prompts defined in one directory, each with its id and purpose) and <code>packages/coding-agent/src/prompts/registry.ts</code> (which aggregates all of them)</li>
 <li><code>packages/utils/src/prompt-registry.ts</code> (what a registry IS: the row shape, <code>definePromptRegistry</code>, and <code>requirePromptFrom</code>, the one lookup that rejects an unknown id)</li>
 <li><code>packages/coding-agent/src/system-prompt-builder/banner-grammar.ts</code> (what a banner IS for every prompt: how one is written, how one is recognised, and <code>splitBanneredDocument</code>, the one parser that cuts a prompt at its banners)</li>
 <li><code>packages/coding-agent/src/system-prompt-builder/section-registry.ts</code> (the section registry: which sections exist, their banners, and their order)</li>
@@ -18613,7 +18613,7 @@ understand why the parts are split where they are, and where a new part would be
 <li><code>packages/coding-agent/src/prompts/session/project-prompt.md</code> (project/environment footer)</li>
 <li><code>packages/coding-agent/src/utils/host-environment.ts</code> (the workstation rows that footer renders: OS, kernel, arch, CPU, GPU, terminal)</li>
 </ul>
-<h2 id="where-prompts-live"><a class="header" href="#where-prompts-live">Where prompts live</a></h2>
+<h2 id="where-prompts-are-defined"><a class="header" href="#where-prompts-are-defined">Where prompts are defined</a></h2>
 <p>A package defines its own prompts. Each package that ships any keeps them under its own <code>src/prompts/</code> directory with a <code>registry.ts</code> beside them, and that registry is the only module allowed to import one:</p>
 <div class="table-wrapper">
 <table>
@@ -18630,9 +18630,9 @@ understand why the parts are split where they are, and where a new part would be
 </table>
 </div>
 <p>An id is the file’s path under its registry’s directory without the <code>.md</code>, so <code>turn-control/auto-continue</code> is <code>packages/coding-agent/src/prompts/turn-control/auto-continue.md</code> and <code>dialect/gemma</code> is <code>packages/ai/src/prompts/dialect/gemma.md</code>. Ids are unique across the registries, so you never have to name the package to ask about a prompt. <code>@veyyon/hashline</code> is the one package whose prompt is not under a <code>prompts/</code> directory: its single file is published at <code>@veyyon/hashline/prompt.md</code> for anyone embedding hashline in their own agent, so moving it would break a public subpath.</p>
-<p>To find a prompt, read the registry or run <code>veyyon prompt --prompts</code>, which lists every id in the four product registries under its directory, with a line saying what it is for. The benchmark harness’s prompts are not listed there: they are used by a measurement tool rather than by the agent.</p>
+<p>To find a prompt, read the registry or run <code>veyyon prompt --prompts</code>, which lists every id in the four product registries under its directory, with a line stating what it is for. The benchmark harness’s prompts are not listed there: they are used by a measurement tool rather than by the agent.</p>
 <p>The registries are the whole set by construction, not by anyone remembering to add a row. The import is the registration, so a prompt file with no row is unreachable code, and <code>prompt-registry-coverage.test.ts</code> fails if the set on disk and the set in a registry disagree in either direction, or if any module outside a registry imports a <code>.md</code> as text.</p>
-<p>A registry is one <code>definePromptRegistry(dir, rows)</code> call, and the descriptor it returns is what other code takes. That matters for the same reason the rest of this section does: the directory is stated once, in that call, and <code>veyyon prompt</code>, the coverage suite and the generated inventory read it off the descriptor instead of each writing the path again. They used to write it again, and the inventory’s copy had gone stale, listing three directories while claiming one per package. The same test fails if a directory is written down twice.</p>
+<p>A registry is one <code>definePromptRegistry(dir, rows)</code> call, and the descriptor it returns is what other code takes. The directory is stated once, in that call, and <code>veyyon prompt</code>, the coverage suite, and the generated inventory read it from the descriptor instead of writing the path again.</p>
 <p>A descriptor gives you <code>dir</code>, <code>prompts</code>, <code>ids</code>, <code>text(id)</code>, <code>require(id)</code>, <code>has(id)</code> and <code>fileFor(id)</code>. Use <code>prompts["some/id"].text</code> where the id is a literal, since that is checked at compile time; use <code>require(id)</code> where the id comes from a variable, because it throws on an unknown one rather than handing back a prompt with no text.</p>
 <hr>
 <h2 id="1-inputs"><a class="header" href="#1-inputs">1) Inputs</a></h2>
@@ -18702,7 +18702,7 @@ block and keeps the dynamic project footer.</p>
 <h3 id="tweak-the-default-keep-default-add-a-few-rules"><a class="header" href="#tweak-the-default-keep-default-add-a-few-rules">“Tweak the default”: keep default, add a few rules</a></h3>
 <p>Write an <code>AGENTS.md</code>. The default instructions and the project footer stay intact, and your text is inlined into the prompt with the other context files. This is the everyday answer, and it needs no flag.</p>
 <pre><code class="language-text"># ~/.veyyon/profiles/default/agent/AGENTS.md
-Prefer Bun APIs over Node APIs in this project.
+Format TypeScript with 2-space indentation.
 When you change a public function, run `bun check` before yielding.
 </code></pre>
 <p>An <code>AGENTS.md</code> beside the code applies to that project; the one in your profile applies to every session in that profile; the global one applies everywhere. All of them are discovered for you.</p>
@@ -18711,7 +18711,7 @@ When you change a public function, run `bun check` before yielding.
 <pre><code class="language-console">$ veyyon --system-prompt ./reviewer-prompt.md
 </code></pre>
 <p>There is no file veyyon picks up on its own for this. A prompt that replaces the whole assembly is a per-invocation decision by a caller who wants exactly that, not a setting that follows you into every session.</p>
-<p>Reach for this only when you want a genuinely different base prompt. If you are keeping most of the default and changing one part, use <code>PROMPT_SECTIONS/</code> instead (section 8): it edits a single section and leaves the rest as shipped, so you do not have to maintain a copy of the default tool guidance, exploration rules, or workflow rules.</p>
+<p>Use this when supplying a different base prompt. If you are keeping most of the default and changing one part, use <code>PROMPT_SECTIONS/</code> instead (section 8): it edits a single section and leaves the rest as shipped, so you do not have to maintain a copy of the default tool guidance, exploration rules, or workflow rules.</p>
 <h3 id="customize-while-keeping-the-tool-inventory-and-default-workflow-guidance"><a class="header" href="#customize-while-keeping-the-tool-inventory-and-default-workflow-guidance">“Customize while keeping the tool inventory and default workflow guidance”</a></h3>
 <p>Use <code>AGENTS.md</code>, not <code>--system-prompt</code>. The tool inventory, role guidance, and default exploration and workflow rules come from statement modules in <code>src/system-prompt-builder/statements/</code>. A custom system prompt switches to <code>session/custom-system-prompt.md</code>, so those default statements are not available to the model.</p>
 <p>A custom system prompt still keeps the generated project content: <code>session/custom-system-prompt.md</code> renders context files, discovered skills, always-apply rules, and rules alongside your text, and the <code>project-prompt.md</code> footer still carries workstation info, the workspace tree, the current date, and cwd.</p>
@@ -18726,7 +18726,7 @@ If the message contains no concrete task, output exactly `none`.
 <h3 id="replace-everything-including-project-context-sdk-only"><a class="header" href="#replace-everything-including-project-context-sdk-only">“Replace everything, including project context”: SDK-only</a></h3>
 <p>The CLI flag path intentionally preserves <code>defaultPrompt.slice(1)</code>. Code using <code>CreateAgentSessionOptions.systemPrompt</code> directly can return a full replacement array and omit the project footer, but that is not what <code>--system-prompt</code> does.</p>
 <h3 id="change-one-section-of-the-default-instructions-keep-the-rest"><a class="header" href="#change-one-section-of-the-default-instructions-keep-the-rest">“Change one section of the default instructions, keep the rest”</a></h3>
-<p>Use <code>PROMPT_SECTIONS/</code>, described in section 8. Put your text in <code>PROMPT_SECTIONS/&lt;section&gt;.append.md</code> to add to a section, or <code>PROMPT_SECTIONS/&lt;section&gt;.md</code> to replace it. Every other section stays exactly as shipped, including the generated skills, rules, and tool guidance, so this is the option to reach for whenever you want to change one thing rather than own the whole prompt.</p>
+<p>Use <code>PROMPT_SECTIONS/</code>, described in section 8. Put your text in <code>PROMPT_SECTIONS/&lt;section&gt;.append.md</code> to add to a section, or <code>PROMPT_SECTIONS/&lt;section&gt;.md</code> to replace it. Every other section stays exactly as shipped, including the generated skills, rules, and tool guidance, so use this option when changing one section.</p>
 <p>Run <code>veyyon prompt --sections</code> to see the section names for your configuration.</p>
 <hr>
 <h2 id="5-deduplication"><a class="header" href="#5-deduplication">5) Deduplication</a></h2>
@@ -18749,7 +18749,7 @@ If the message contains no concrete task, output exactly `none`.
 <tr><td>Append text for one run</td><td><code>--append-system-prompt</code></td></tr>
 <tr><td>Customize automatic session titles</td><td><code>TITLE_SYSTEM.md</code>; the agent’s own prompt does not affect title generation</td></tr>
 <tr><td>Use <code>{{cwd}}</code> / <code>{{date}}</code> / other internals in my file</td><td>Not supported. Caller-supplied prompts are inserted verbatim.</td></tr>
-<tr><td>See the prompt a configuration actually produces</td><td><code>veyyon prompt</code> (see section 9)</td></tr>
+<tr><td>See the prompt a configuration produces</td><td><code>veyyon prompt</code> (see section 9)</td></tr>
 <tr><td>Change instructions per repository</td><td>An <code>AGENTS.md</code> in that repository</td></tr>
 <tr><td>Change instructions everywhere</td><td>The global <code>AGENTS.md</code>, or the one in your profile’s agent directory</td></tr>
 </tbody>
@@ -18832,7 +18832,7 @@ delivery-contract   template      0     4053     1014   10.9%
 </code></pre>
 <p>That reports the prompt’s sections and which of them are optional, so you can tell a subagent prompt that rendered three of its five sections because the task had no plan and no worktree from one that lost two sections to a bug.</p>
 <p>Most of these prompts are a single region with no internal structure, and they report one <code>body</code> section. The subagent prompt has five: <code>role</code>, <code>context</code>, <code>plan</code>, <code>coop</code>, and <code>completion</code>.</p>
-<p>The list is grouped by the directory each prompt lives in, and the lookup spans all four groups, so <code>veyyon prompt --prompt compaction/summarization-system</code> and <code>veyyon prompt --prompt dialect/gemma</code> work the same way as one from the coding agent’s own tree. A mistyped id is rejected with the nearest registered id quoted back, rather than printing an empty description that would read as a prompt with nothing in it.</p>
+<p>The list is grouped by the directory each prompt is defined in, and the lookup spans all four groups, so <code>veyyon prompt --prompt compaction/summarization-system</code> and <code>veyyon prompt --prompt dialect/gemma</code> work the same way as one from the coding agent’s own tree. A mistyped id is rejected with the nearest registered id quoted back, rather than printing an empty description that would read as a prompt with nothing in it.</p>
 <hr>
 <h2 id="10-adding-a-section-contributors"><a class="header" href="#10-adding-a-section-contributors">10) Adding a section (contributors)</a></h2>
 <p>The sections above are data, not code. <code>section-registry.ts</code> holds two registries, and everything else about a section is derived from its row there.</p>
@@ -18909,7 +18909,7 @@ export const turnControlPrompts = {
 const text = turnControlPrompts["turn-control/auto-continue"].text;
 </code></pre>
 <p>The import is the registration, so there is nothing else to remember. A file with no row is unreachable code rather than a prompt that quietly ships unlisted, and <code>prompt-registry-coverage.test.ts</code> fails if the directory and the rows disagree in either direction.</p>
-<p><code>prompts/registry.ts</code> aggregates all twenty-one row modules into <code>PROMPTS</code>, which is still the aggregate every cross-directory consumer takes, and <code>PromptId</code> is still the union of every id. Prefer the row module: it is the reason the rows are split at all. The registry held all 163 <code>.md</code> imports itself, so importing it for one string reached all 163 prompt modules, which cost the file-reading tool 167 modules for its own description. Reach for the aggregate when a module genuinely spans directories, or when the id is not known statically and you need <code>requirePrompt</code>.</p>
+<p><code>prompts/registry.ts</code> aggregates all twenty-one row modules into <code>PROMPTS</code>, which is still the aggregate every cross-directory consumer takes, and <code>PromptId</code> is still the union of every id. Prefer the row module: it is the reason the rows are split at all. The registry held all 163 <code>.md</code> imports itself, so importing it for one string reached all 163 prompt modules, which cost the file-reading tool 167 modules for its own description. Import the aggregate when a module spans directories, or when the id is not known statically and you need <code>requirePrompt</code>.</p>
 <p>The <code>satisfies</code> clause is not decoration. An annotation (<code>: Record&lt;string, PromptEntry&gt;</code>) typechecks and widens every key to <code>string</code>, and <code>PromptId</code> then accepts any string: a typo compiles and renders as the empty prompt.</p>
 <p>Three things that suite will refuse, each because it has happened:</p>
 <ul>
@@ -18917,11 +18917,11 @@ const text = turnControlPrompts["turn-control/auto-continue"].text;
 <li><strong>Writing a prompts directory down twice.</strong> Consumers read <code>dir</code> off the descriptor. Four of them used to type the path themselves and one had gone stale.</li>
 <li><strong>A row whose <code>purpose</code> states nothing.</strong> The purpose is what makes the registry a list a person can read instead of a directory listing with extra steps.</li>
 </ul>
-<p>If you are adding the first prompt to a package that has none, give it a <code>src/prompts/registry.ts</code> of its own rather than reaching into another package’s. Rows per directory are worth it once a registry is large enough that a consumer of one prompt paying for all of them matters; the other three packages hold their rows in the registry itself. A package defines its prompts; sharing the row SHAPE is what <code>@veyyon/utils</code> is for.</p>
+<p>If you are adding the first prompt to a package that has none, give it a <code>src/prompts/registry.ts</code> of its own rather than reaching into another package’s. Split rows by directory when a registry grows large enough that importing all prompts incurs unnecessary module evaluation; the other three packages hold their rows in the registry itself. A package defines its prompts; sharing the row SHAPE is what <code>@veyyon/utils</code> is for.</p>
 <hr>
 <h2 id="12-settings-that-change-the-prompt"><a class="header" href="#12-settings-that-change-the-prompt">12) Settings that change the prompt</a></h2>
 <h3 id="the-rule-policy-is-a-setting-not-a-sentence"><a class="header" href="#the-rule-policy-is-a-setting-not-a-sentence">The rule: policy is a setting, not a sentence</a></h3>
-<p>The outer <code>system-prompt.md</code> scaffold holds no policy, prose, conditions, or banners. Anything that decides <strong>what the model should do</strong> belongs to a setting and a statement row. Put whole-statement presence conditions in <code>statement-registry.ts</code>. Put wording-level Handlebars variables inside that statement’s Markdown module.</p>
+<p>The outer <code>system-prompt.md</code> scaffold holds no policy, prose, conditions, or banners. Anything that controls <strong>what the model should do</strong> belongs to a setting and a statement row. Put whole-statement presence conditions in <code>statement-registry.ts</code>. Put wording-level Handlebars variables inside that statement’s Markdown module.</p>
 <p>The failure this rule exists to prevent is concrete. The delegation section used to carry a
 literal category list:</p>
 <blockquote>
@@ -18942,8 +18942,8 @@ session that did not happen to match it.</p>
 <tbody>
 <tr><td>Structure: headings, ordering, the shape of a list</td><td>Yes</td></tr>
 <tr><td>A fact about this session (<code>{{cwd}}</code>, the tool names, the concurrency cap)</td><td>Yes, as a variable</td></tr>
-<tr><td>A behavior a setting decides</td><td>No — a <code>{{#if}}</code> on that setting’s gate</td></tr>
-<tr><td>A behavior nothing decides, stated as a rule the operator cannot see or change</td><td>No — make it a setting first</td></tr>
+<tr><td>A behavior controlled by a setting</td><td>No — a <code>{{#if}}</code> on that setting’s gate</td></tr>
+<tr><td>A behavior with no controlling setting, stated as a rule the operator cannot see or change</td><td>No — make it a setting first</td></tr>
 </tbody>
 </table>
 </div>
@@ -18957,7 +18957,7 @@ when the session can still spawn subagents, the delegation section changes wordi
 <code>subagent.delegation</code>, and the personality block disappears when <code>personality</code> is <code>none</code>.</p>
 <p>Those settings are listed in one place,
 <code>packages/coding-agent/src/system-prompt-builder/gate-registry.ts</code>. Each row records the
-setting path, the template variables it decides, one line on what the model sees change, and
+setting path, the template variables it controls, one line on what the prompt changes, and
 whether flipping it reaches a running session.</p>
 <h3 id="live-and-frozen-gates"><a class="header" href="#live-and-frozen-gates">Live and frozen gates</a></h3>
 <p>A <strong>live</strong> gate takes effect when you change it. The settings UI rebuilds the system prompt
@@ -18972,18 +18972,18 @@ from the registry, so the model sees the new text on its next request. These are
 <tr><td><code>tui.renderMermaid</code></td><td>whether the model is told Mermaid fences render as terminal diagrams</td></tr>
 <tr><td><code>subagent.enabled</code></td><td>the whole Delegation section, which is absent when subagents are off</td></tr>
 <tr><td><code>subagent.delegation</code></td><td>whether the section requests delegation, and whether it uses MUST/ONLY wording</td></tr>
-<tr><td><code>subagent.batch</code></td><td>which call shape the delegation guidance teaches</td></tr>
+<tr><td><code>subagent.batch</code></td><td>which call shape the delegation guidance specifies</td></tr>
 <tr><td><code>subagent.maxConcurrency</code></td><td>the concurrency limit quoted in that guidance</td></tr>
 <tr><td><code>subagent.maxNestedSpawnDepth</code></td><td>the IRC coordination clause, present only when this session can spawn</td></tr>
 <tr><td><code>subagent.agents</code></td><td>which specialists delegation prose names</td></tr>
 <tr><td><code>includeModelInPrompt</code></td><td>whether the active model is surfaced in the workstation block</td></tr>
 <tr><td><code>tools.format</code></td><td>whether tools are described inline or left to the provider’s tool list</td></tr>
-<tr><td><code>inlineToolDescriptors</code></td><td>whether descriptors live in the prompt or provider schemas for the active model</td></tr>
+<tr><td><code>inlineToolDescriptors</code></td><td>whether descriptors are placed in the prompt or provider schemas for the active model</td></tr>
 <tr><td><code>tools.intentTracing</code></td><td>whether the prompt explains the intent field, and whether tool schemas carry it</td></tr>
 </tbody>
 </table>
 </div>
-<p><code>tools.intentTracing</code> and <code>inlineToolDescriptors</code> also decide provider schema shape. When intent
+<p><code>tools.intentTracing</code> and <code>inlineToolDescriptors</code> also control provider schema shape. When intent
 tracing is on, every tool schema sent to the model contains an extra <code>intent</code> field and the prompt
 explains it. Descriptor placement sends full descriptions in exactly one place. In <code>auto</code> mode,
 Gemini receives them inline while other native tool-calling models receive them in their schemas.
@@ -19002,14 +19002,14 @@ One gate remains frozen:</p>
 </tbody>
 </table>
 </div>
-<h3 id="what-a-gate-is-worth-when-nobody-says"><a class="header" href="#what-a-gate-is-worth-when-nobody-says">What a gate is worth when nobody says</a></h3>
+<h3 id="fallback-behavior-for-omitted-gates"><a class="header" href="#fallback-behavior-for-omitted-gates">Fallback behavior for omitted gates</a></h3>
 <p><code>buildSystemPrompt</code> takes every gate as an optional argument, so a caller can omit all of them.
 That is what the SDK does when it builds a prompt outside a session, and what tests do. The
-fallbacks live in one table, <code>OMITTED_GATE_DEFAULTS</code> in
+fallbacks are defined in one table, <code>OMITTED_GATE_DEFAULTS</code> in
 <code>packages/coding-agent/src/system-prompt-builder/gate-inputs.ts</code>, and the builder reads them from
 there rather than repeating a value next to each argument.</p>
 <p>An omitted gate means the caller has no configuration to offer, so the gate renders off or empty.
-That is not the same as a default session, and on four gates it is deliberately different:</p>
+That is not the same as a default session, and four gates differ:</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -19068,8 +19068,8 @@ the schemas never change.</p>
 <hr>
 <h2 id="13-statements-the-prompt-is-a-list-not-a-document"><a class="header" href="#13-statements-the-prompt-is-a-list-not-a-document">13) Statements: the prompt is a list, not a document</a></h2>
 <p>The system prompt is a list of <strong>statements</strong>. A statement is a fragment of prompt text with an id,
-a condition, and a purpose. Its text lives in
-<code>src/system-prompt-builder/statements/&lt;section&gt;/&lt;id&gt;.md</code>, and the row that registers it lives in
+a condition, and a purpose. Its text is in
+<code>src/system-prompt-builder/statements/&lt;section&gt;/&lt;id&gt;.md</code>, and the row that registers it is in
 <code>statement-registry.ts</code>.</p>
 <h3 id="why"><a class="header" href="#why">Why</a></h3>
 <p>Sections were already rows, so a section is addressable, orderable and overridable. The
@@ -19137,9 +19137,9 @@ into fragments and make the registry finer than behavior requires. The division 
 </ul>
 <p>This is why statement Markdown can still contain <code>{{#each skills}}</code>, <code>{{toolRefs.task}}</code>, and
 <code>{{#list globs join=", "}}</code>. The outer <code>system-prompt.md</code> scaffold contains none of them.</p>
-<h3 id="the-registry-owns-section-structure"><a class="header" href="#the-registry-owns-section-structure">The registry owns section structure</a></h3>
+<h3 id="section-structure-is-defined-in-the-registry"><a class="header" href="#section-structure-is-defined-in-the-registry">Section structure is defined in the registry</a></h3>
 <p>A statement file never contains a section banner. <code>assembleSection</code> renders the banner from the
-section registry at the width <code>banner-grammar.ts</code> owns. A <code>PROMPT_SECTIONS/&lt;id&gt;.md</code> replacement also
+section registry at the width <code>banner-grammar.ts</code> defines. A <code>PROMPT_SECTIONS/&lt;id&gt;.md</code> replacement also
 contains body text only. The same assembler adds its registry banner, so shipped statements and
 operator replacements cannot disagree about a section boundary.</p>
 <h3 id="how-statements-reach-the-model"><a class="header" href="#how-statements-reach-the-model">How statements reach the model</a></h3>
@@ -19155,7 +19155,7 @@ assembleDefaultTemplate({ ...statementSections, ...sectionOverrides });
 </code></pre>
 <p>The complete document is rendered once, so formatting and variable expansion are global rather
 than changing with statement boundaries. <code>assembleDefaultTemplate</code> defines the one newline between
-adjacent static sections. Statement modules own only their own final line.</p>
+adjacent static sections. Statement modules define only their own final line.</p>
 <p>Operator section overrides win because they are spread after the shipped statement map. Append mode
 starts from the complete statement-assembled section, then adds your body inside that region. There
 is no prose-bearing template fallback.</p>
@@ -19164,7 +19164,7 @@ is no prose-bearing template fallback.</p>
 <ul>
 <li><code>system-prompt.md</code> contains exactly the <code>{{templateSections}}</code> variable and no literal prose,
 condition, or banner.</li>
-<li>Every static section declared by <code>section-registry.ts</code> owns at least one statement. A missing
+<li>Every static section declared by <code>section-registry.ts</code> contains at least one statement. A missing
 section fails module loading.</li>
 <li>The registry supplies section order and banner bytes.</li>
 <li>Replacement files are body-only. A legacy file containing its own banner fails loudly.</li>
@@ -19175,9 +19175,9 @@ section ordering reach the model.</li>
 <p>There is no frozen prose copy and no migration byte-parity fixture. Prompt behavior is tested from
 the one modular source.</p>
 <h3 id="what-each-rule-costs-and-testing-one-of-them"><a class="header" href="#what-each-rule-costs-and-testing-one-of-them">What each rule costs, and testing one of them</a></h3>
-<p>Two things follow from a rule having a name, and both are the reason the migration was worth doing.</p>
+<p>Two capabilities follow from named rules:</p>
 <p><code>veyyon prompt --statements</code> prints what each rule costs. The number is MARGINAL: what the prompt
-would be shorter by without that rule, not the length of the rule’s text. The distinction matters
+would be shorter by without that rule, not the length of the rule’s text. The distinction is required
 because <code>render</code> ends in a <code>format</code> pass that normalizes whitespace across statement boundaries, so
 the lengths of the statement texts do not add up to the length of the section they form. Measured the
 other way, the parts reconcile with the whole exactly:</p>
@@ -19194,13 +19194,13 @@ because a rule being off is a configuration rather than a failure.</p>
 replacement text, or to <code>null</code> to remove the rule entirely:</p>
 <pre><code>VEYYON_EVAL_SYSTEM_PROMPT_STATEMENTS='{"tool-policy/delegation-gates": null}'
 </code></pre>
-<p>Same instrument as <code>VEYYON_EVAL_SYSTEM_PROMPT_SECTIONS</code>, one level finer, and deliberately the same
+<p>Same instrument as <code>VEYYON_EVAL_SYSTEM_PROMPT_SECTIONS</code>, one level finer, and uses the same
 shape: environment variable only, no config key, no CLI flag. A config-reachable prompt override could
 silently contaminate a production run, and a contaminated eval reports a number that looks valid.</p>
-<p><code>null</code> and <code>""</code> are different operations, so pick deliberately. <code>null</code> ablates: the row and the
+<p><code>null</code> and <code>""</code> are different operations, so select the appropriate value. <code>null</code> ablates: the row and the
 separation it contains both leave the prompt, because a statement’s text includes its own separation.
 <code>""</code> keeps the row present and empty, so the separation stays and only the words go. Use the first to
-ask whether a rule is worth having, the second to ask whether it needs saying at all.</p>
+evaluate whether to remove a rule, the second to evaluate removing rule text while preserving spacing.</p>
 <p>Every way an override could do nothing is an error rather than a no-op: an unknown statement id, a
 value that is neither a string nor <code>null</code>, malformed JSON. An arm that quietly did nothing would
 report the shipped prompt’s score as the arm’s score, which is a false result with no signal that
@@ -19418,7 +19418,7 @@ is indexed whole and in parts, so <code>sqlite</code> reaches <code>SQLite</code
 </tbody>
 </table>
 </div>
-<p>Two details matter:</p>
+<p>Key discovery behaviors:</p>
 <ul>
 <li><strong>Walk-up to the repository root.</strong> Discovery starts in the current working directory and climbs through each ancestor up to the repository root. The nearest non-empty <code>.veyyon/</code> directory claims its own level with its <code>AGENTS.md</code>; every other level contributes a bare <code>AGENTS.md</code>, falling back to a bare <code>CLAUDE.md</code> when no <code>AGENTS.md</code> has content there.</li>
 <li><strong>The <code>.veyyon/</code> directory must be non-empty.</strong> An empty <code>.veyyon/</code> directory is skipped during the walk-up, so the search continues to the next ancestor. An empty <code>AGENTS.md</code> file contributes nothing and shadows nothing.</li>
@@ -19488,7 +19488,7 @@ is indexed whole and in parts, so <code>sqlite</code> reaches <code>SQLite</code
 </ul>
 <p>After deduplication, project files are sorted so <strong>farther ancestors appear first</strong> and files <strong>closer to the cwd appear last</strong>. Both are project scope, so this is one project directory refining another, not a project file outranking a broader scope.</p>
 <h3 id="scope-authority-your-own-configuration-is-last-and-wins"><a class="header" href="#scope-authority-your-own-configuration-is-last-and-wins">Scope authority: your own configuration is last and wins</a></h3>
-<p>Provider priority and depth decide which files <em>survive</em>. A separate axis sets where each survivor is <em>rendered</em>, and therefore which one wins an outright conflict. These are two different orders and it is easy to read one as the other:</p>
+<p>Provider priority and depth select which files <em>survive</em>. A separate axis sets where each survivor is <em>rendered</em>, and therefore which one wins an outright conflict. These are two distinct orders:</p>
 <ul>
 <li><strong>Resolution order</strong> is the order the three scopes are read: global, then profile, then project.</li>
 <li><strong>Authority order</strong> is the order they are rendered, least authoritative first: the project group (farther ancestors first, closest to the cwd last), then the profile file, then the cross-profile global <code>~/.veyyon/AGENTS.md</code> <strong>last of all</strong>.</li>
@@ -19535,8 +19535,8 @@ one you read FIRST is the narrowest, not the strongest: ...
 &lt;/context&gt;
 </code></pre>
 <p>The agent sees each file’s absolute path and its fully expanded Markdown content (with <code>@</code> imports already resolved, see below). When discovery is enabled, matching context files are injected at session start.</p>
-<p>A sentence stating that your live instruction in the conversation has absolute authority renders in every session, whether or not any context file loaded, because a rule or a memory can tell the agent to reject just as a file can. The scope ladder above renders only when at least one context file loaded, since there is nothing to rank otherwise. Below your live instruction, the surviving context files win over conflicting generic Veyyon workflow defaults, retrieved material, and historical summaries; among themselves they rank by the scope ladder, and a project file never overrides your own configuration.</p>
-<p>Deeper-directory <code>AGENTS.md</code> files that were <em>not</em> auto-loaded (for example, ones below the current directory) are surfaced separately in a <code>&lt;dir-context&gt;</code> block that lists their paths and tells the agent to read them before editing those directories. Those files are pointers, not full injected content.</p>
+<p>A sentence stating that your live instruction in the conversation has absolute authority renders in every session, whether or not any context file loaded, because a rule or a memory can instruct the agent to reject just as a file can. The scope ladder above renders only when at least one context file loaded, since there is nothing to rank otherwise. Below your live instruction, the surviving context files win over conflicting generic Veyyon workflow defaults, retrieved material, and historical summaries; among themselves they rank by the scope ladder, and a project file never overrides your own configuration.</p>
+<p>Deeper-directory <code>AGENTS.md</code> files that were <em>not</em> auto-loaded (for example, ones below the current directory) are surfaced separately in a <code>&lt;dir-context&gt;</code> block that lists their paths and instructs the agent to read them before editing those directories. Those files are pointers, not full injected content.</p>
 <h2 id="-imports-1"><a class="header" href="#-imports-1"><code>@</code> imports</a></h2>
 <p>Inside any context file, an <code>@path</code> token expands inline to the referenced file’s content before injection:</p>
 <pre><code class="language-markdown"># Project notes
@@ -19584,7 +19584,7 @@ disabledProviders:
 <tr><th>Id kind</th><th>Examples</th><th>Effect when listed</th></tr>
 </thead>
 <tbody>
-<tr><td>Discovery provider ids</td><td><code>native</code>, <code>claude</code>, <code>codex</code>, <code>gemini</code>, <code>opencode</code>, <code>github</code>, <code>agents</code>, <code>agents-md</code></td><td>The entire config source is removed, not just its context files, but also any MCP servers, slash commands, skills, hooks, tools, prompts, and settings it would have contributed.</td></tr>
+<tr><td>Discovery provider ids</td><td><code>native</code>, <code>claude</code>, <code>codex</code>, <code>gemini</code>, <code>opencode</code>, <code>github</code>, <code>agents</code>, <code>agents-md</code></td><td>The entire config source is removed, including its context files, MCP servers, slash commands, skills, hooks, tools, prompts, and settings.</td></tr>
 <tr><td>Model provider ids</td><td><code>anthropic</code>, <code>openai</code>, <code>google</code>, <code>groq</code>, <code>ollama</code>, <code>openrouter</code></td><td>The model backend is removed from selection even when its credentials are present. See <a href="#providers-1">Providers</a>.</td></tr>
 </tbody>
 </table>
@@ -19974,7 +19974,7 @@ edit ergonomics all carry forward from it. Incorporated MIT code keeps its permi
 the repository <code>LICENSE</code>.</li>
 <li><strong>codex</strong>, by OpenAI, under the Apache 2.0 license. oh-my-pi and Veyyon carry forward the codex
 <code>apply_patch</code> patch format and parts of the agent-loop shape as an independent TypeScript
-reimplementation, see <code>NOTICE</code> for exactly which files are format-compatible versus which actually
+reimplementation, see <code>NOTICE</code> for which files are format-compatible versus which
 vendor Apache 2.0 code (the OpenAI wire types and the Playwright ARIA-snapshot bundle do; the
 <code>apply_patch</code> parser and the Codex backend client do not).</li>
 <li><strong>OpenCode</strong>, under the MIT license. Veyyon studies its plan/build workflow, project memory, compact
@@ -19984,7 +19984,7 @@ compacted-history inspection tools.</li>
 <li><strong>command-code</strong>, by Langbase. command-code is proprietary. Veyyon only studies observable mechanisms
 clean-room, copying no code or bundled implementation text.</li>
 </ul>
-<p>Legal credits and upstream notices live in the repository <code>LICENSE</code>, <code>NOTICE</code>, and <code>UPSTREAM.md</code>.</p>
+<p>Legal credits and upstream notices are in the repository <code>LICENSE</code>, <code>NOTICE</code>, and <code>UPSTREAM.md</code>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="glossary"><a class="header" href="#glossary">Glossary</a></h1>
 <p>A concise vocabulary of the primitives that shape Veyyon’s runtime behavior.</p>

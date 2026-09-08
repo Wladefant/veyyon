@@ -50,10 +50,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-695ab59a.js";
+            window.path_to_searchindex_js = "../searchindex-ddda0f12.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-b613f6a6.js"></script>
+        <script src="../toc-a67314e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -217,12 +217,12 @@ code paths in:</p>
 </ol>
 <p>Precedence is not the same as load order, and the difference matters if you are reading the source. Part of the home <code>.env</code> is applied FIRST, by <code>packages/utils/src/dotenv-home.ts</code>, because a <code>VEYYON_CODING_AGENT_DIR</code> or <code>XDG_CONFIG_HOME</code> set there sets where layers 3 and 4 are. <code>packages/utils/src/dirs.ts</code> imports that module before it resolves anything, so a directory is never computed from a pre-<code>.env</code> environment. <code>env.ts</code> then applies all four layers in full, overriding the values home contributed and nothing else, and refreshes the directory resolver. The result is the precedence listed above, whichever module a program imported.</p>
 <p>That early phase applies only the variables that decide where a directory is: <code>VEYYON_CODING_AGENT_DIR</code>, <code>VEYYON_CONFIG_DIR</code>, and the four <code>XDG_*</code> bases. Everything else in your home <code>.env</code>, including every API key, waits for <code>env.ts</code>. The reason is that whatever is in the environment that early is inherited by every process veyyon spawns, and the sandboxed evaluator that runs your <code>eval</code> code is one of them: it should not receive your credentials.</p>
-<p>Two variables are deliberately not read from a <code>.env</code> file at all. <code>VEYYON_PROFILE</code> selects the profile, and the profile sets where layers 3 and 4 are, so reading it out of one of them would be circular; set it in your shell or pass <code>--profile</code>. <code>PATH</code> is read only after <code>env.ts</code> has run, which is when binary lookup happens anyway, so extending <code>PATH</code> in a <code>.env</code> works as it always has.</p>
+<p>Two variables are not read from a <code>.env</code> file at all. <code>VEYYON_PROFILE</code> selects the profile, and the profile sets where layers 3 and 4 are, so reading it out of one of them would be circular; set it in your shell or pass <code>--profile</code>. <code>PATH</code> is read only after <code>env.ts</code> has run, which is when binary lookup happens anyway, so extending <code>PATH</code> in a <code>.env</code> works as it always has.</p>
 <hr>
 <h2 id="1-modelprovider-authentication"><a class="header" href="#1-modelprovider-authentication">1) Model/provider authentication</a></h2>
 <p>These are consumed via <code>getEnvApiKey()</code> (<code>packages/ai/src/env-api-key.ts</code>) unless noted otherwise.</p>
 <h3 id="core-provider-credentials"><a class="header" href="#core-provider-credentials">Core provider credentials</a></h3>
-<p>The provider-first projection of this map lives in <a href="./providers.html#environment-variables-and-env-files">Providers</a>; the two tables are two views of one source.</p>
+<p>The provider-first projection of this map is documented in <a href="./providers.html#environment-variables-and-env-files">Providers</a>; the two tables are two views of one source.</p>
 <div class="table-wrapper">
 <table>
 <thead>

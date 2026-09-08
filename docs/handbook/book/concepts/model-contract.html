@@ -50,10 +50,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-695ab59a.js";
+            window.path_to_searchindex_js = "../searchindex-ddda0f12.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-b613f6a6.js"></script>
+        <script src="../toc-a67314e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -208,7 +208,7 @@ OpenAI-compatible gateway.</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Fact</th><th>What it is</th><th>Where it lives</th></tr>
+<tr><th>Fact</th><th>What it is</th><th>Where it is defined</th></tr>
 </thead>
 <tbody>
 <tr><td><strong>Endpoint</strong></td><td>Base URL and API kind</td><td>A built-in provider, or a custom provider under <code>providers:</code> in <code>~/.veyyon/profiles/default/agent/models.yml</code></td></tr>
@@ -235,8 +235,8 @@ providers:
 <pre><code class="language-console">$ export DEEPSEEK_API_KEY=sk-...
 $ veyyon --model deepseek/deepseek-chat
 </code></pre>
-<h2 id="what-the-harness-owns"><a class="header" href="#what-the-harness-owns">What the harness owns</a></h2>
-<p>These behaviors stay constant no matter which endpoint you point at:</p>
+<h2 id="harness-responsibilities"><a class="header" href="#harness-responsibilities">Harness responsibilities</a></h2>
+<p>These behaviors remain constant across endpoints:</p>
 <ul>
 <li>The workflow: read, edit, verify, stop when the work is done.</li>
 <li>Tool dispatch, argument handling, and edit verification through the <strong>hashline</strong> edit engine
@@ -247,7 +247,7 @@ $ veyyon --model deepseek/deepseek-chat
 </ul>
 <p>Provider is configuration (endpoint, credentials, model id). Keep the same
 commands.</p>
-<h2 id="what-the-provider-owns"><a class="header" href="#what-the-provider-owns">What the provider owns</a></h2>
+<h2 id="provider-responsibilities"><a class="header" href="#provider-responsibilities">Provider responsibilities</a></h2>
 <p>The provider defines the wire protocol, auth scheme, model list, rate limits, and the tokens it returns.
 Veyyon adapts to that surface through the provider’s <code>api</code> kind:</p>
 <ul>
@@ -326,13 +326,13 @@ under <code>modelRoles</code>:</p>
 <ul>
 <li><code>modelRoles.tiny</code> (or <code>smol</code>): lightweight background work (titles, memory, auto-thinking).</li>
 </ul>
-<p>Subagent models are not roles. They live in the Subagents settings area, on two exclusive scopes.
-With <strong>Same Model for All Subagents</strong> off, the first of these names the model: that agent’s row in
+<p>Subagent models are not roles. They are configured in the Subagents settings area, on two exclusive scopes.
+With <strong>Same Model for All Subagents</strong> off, the first of these sets the model: that agent’s row in
 <code>subagent.agents</code>, then the agent definition’s own <code>model:</code>, otherwise the <code>default</code> model role.
-With it on, <code>subagent.model</code> names it for every agent and the rows above are not read. There is no
+With it on, <code>subagent.model</code> sets it for every agent and the rows above are not read. There is no
 silent blend, and a configured value that matches no available model rejects the spawn instead of
 quietly handing the decision to the next layer. <code>/agents</code> shows the resolved model and which
-setting decided.
+setting applied.
 See <a href="../reference/settings.html#subagents">Settings: Subagents</a> and
 <a href="../using/roles-and-profiles.html">Models, roles, and profiles</a>.</p>
 <h2 id="automation-note"><a class="header" href="#automation-note">Automation note</a></h2>

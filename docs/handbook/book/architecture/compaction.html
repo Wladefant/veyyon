@@ -50,10 +50,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-695ab59a.js";
+            window.path_to_searchindex_js = "../searchindex-ddda0f12.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-b613f6a6.js"></script>
+        <script src="../toc-a67314e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -216,7 +216,7 @@
 <li><code>packages/coding-agent/src/config/settings-schema.ts</code></li>
 </ul>
 <h2 id="session-entry-model"><a class="header" href="#session-entry-model">Session entry model</a></h2>
-<p>Compaction and branch summaries are first-class session entries, not plain assistant/user messages.</p>
+<p>Compaction and branch summaries are distinct session entry types, not assistant or user messages.</p>
 <ul>
 <li><code>CompactionEntry</code>
 <ul>
@@ -355,7 +355,7 @@ boundary, <code>prepareCompaction</code> then hard-bounds the tail: a kept turn 
 has its heavy non-error tool results replaced with an elision marker (largest first, originals
 offloaded to a recovery <code>artifact://</code> blob), so the tail stays within budget even when one turn
 alone is bigger. User messages, assistant text, tool calls, and error results are never elided.</p>
-<p>Note that the summary prompt does not state any of that. Its opening line requests “a structured
+<p>The summary prompt does not state any of that. Its opening line requests “a structured
 handoff summary for another LLM to resume the task”, which describes a cold restart that compaction
 does not perform. This is inherited from upstream, whose engine keeps the same recent tail, so the
 mismatch is upstream’s rather than a fork difference. It is recorded here because a summarizer told
@@ -518,8 +518,8 @@ In that case the session picker falls back again to the first user message, so n
 context inside the provider and returns the compacted window. Veyyon uses it when the
 model’s <code>compat.supportsServerCompaction</code> flag is set, which is resolved per host at
 model build time: the official OpenAI API and Azure’s v1 API today, and any gateway
-that opts in with an override. The Codex provider stays out, because its transport
-owns history state server-side and a client-minted window has no replay contract there.
+that opts in with an override. The Codex provider is excluded because its transport
+maintains history state server-side and a client-minted window has no replay contract there.
 A re-pointed <code>openai</code> model also stays out, since another vendor’s host does not serve
 that path. Turning <code>compaction.remote</code> off is the only thing that disables it; leaving
 it unset leaves it on.</p>
@@ -532,8 +532,8 @@ remote call plus the exact summary the remote call was supposed to replace, and 
 of the two was ever read. Writing readable text here is not a missing feature that could
 be added later. The only way to produce it is to pay a second model to describe a span,
 which is the local strategy with an extra network round trip in front of it, and any text
-derived from the blob rather than the span would be invented. An empty summary is the
-honest record of what happened.</p>
+derived from the blob rather than the span would be invented. An empty summary
+records what happened.</p>
 <p>Because the entry cannot explain itself, the rebuild will not trust it outside the
 provider that minted it. <code>buildSessionContext</code> treats a compaction as usable only when the
 stored window replays on the active provider, or when there is real summary text. When
@@ -686,7 +686,7 @@ After navigation with summary:
 <li><code>compaction.autoContinue</code> = <code>true</code></li>
 <li><code>compaction.midTurnEnabled</code> = <code>true</code></li>
 <li><code>compaction.remoteEndpoint</code> = <code>undefined</code></li>
-<li><code>compaction.threshold</code> = <code>auto</code>; the one trigger setting, with its unit in the value. <code>auto</code> is <code>contextWindow - max(15% of contextWindow, reserveTokens)</code>. <code>85%</code> is a percent of the current model’s window. <code>170000</code> is an absolute token amount, model-independent: compaction runs once context exceeds that many tokens whatever the current model’s window is, and when the amount is larger than that window it is honored up to <code>contextWindow - 1</code> with a one-time warning (never silently reinterpreted). Resolution and the migration off the two retired keys live in <code>packages/agent/src/compaction/threshold.ts</code>.</li>
+<li><code>compaction.threshold</code> = <code>auto</code>; the one trigger setting, with its unit in the value. <code>auto</code> is <code>contextWindow - max(15% of contextWindow, reserveTokens)</code>. <code>85%</code> is a percent of the current model’s window. <code>170000</code> is an absolute token amount, model-independent: compaction runs once context exceeds that many tokens whatever the current model’s window is, and when the amount is larger than that window it is honored up to <code>contextWindow - 1</code> with a one-time warning (never silently reinterpreted). Resolution and migration logic for retired keys is defined in <code>packages/agent/src/compaction/threshold.ts</code>.</li>
 <li><code>compaction.thresholdTokens</code> = <code>-1</code> and <code>compaction.thresholdPercent</code> = <code>-1</code>; retired. The global config is rewritten on load (<code>#migrateRawSettings</code>): a positive amount becomes <code>threshold: &lt;amount&gt;</code>, a positive percent becomes <code>threshold: &lt;percent&gt;%</code> (the amount wins when both are set), and both keys are dropped, so the ambiguity leaves the file without moving the trigger. Config sources that are never rewritten — project files, <code>--config</code> overlays — are folded in at read time by <code>withLegacyCompactionThreshold</code> with the same precedence, and the session reports which retired key supplied the value.</li>
 <li><code>compaction.idleEnabled</code> = <code>false</code></li>
 <li><code>compaction.idleThresholdTokens</code> = <code>200000</code></li>

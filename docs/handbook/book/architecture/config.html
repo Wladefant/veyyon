@@ -50,10 +50,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-695ab59a.js";
+            window.path_to_searchindex_js = "../searchindex-ddda0f12.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-b613f6a6.js"></script>
+        <script src="../toc-a67314e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -402,7 +402,7 @@ gemini                 priority  60
 <h3 id="directory-admission-rules"><a class="header" href="#directory-admission-rules">Directory admission rules</a></h3>
 <ul>
 <li>The profile agent directory is used only when it exists and is non-empty.</li>
-<li>Skills are loaded only from the active profile’s agent dir (<code>~/.veyyon/profiles/&lt;name&gt;/agent/skills</code>). Project-local <code>.veyyon/skills</code> directories are deliberately not scanned, so no repository can inject skills into a session by ambient autodiscovery.</li>
+<li>Skills are loaded only from the active profile’s agent dir (<code>~/.veyyon/profiles/&lt;name&gt;/agent/skills</code>). Project-local <code>.veyyon/skills</code> directories are not scanned, preventing repositories from injecting skills into a session via ambient autodiscovery.</li>
 <li><code>AGENTS.md</code> has three scopes: the global cross-profile <code>~/.veyyon/AGENTS.md</code>, the active profile’s first matching instruction file, and the project walk from the working directory to the repository root (one file per directory level: <code>.veyyon/AGENTS.md</code> at the nearest non-empty <code>.veyyon/</code> claims its level, bare <code>AGENTS.md</code> next, bare <code>CLAUDE.md</code> last). <code>RULES.md</code> is the active profile’s file only; a repository’s <code>.veyyon/RULES.md</code> is not read. Persistent system-prompt changes use <code>PROMPT_SECTIONS/</code> under the active profile’s agent dir. See <a href="../models/system-prompt.html"><code>docs/handbook/src/models/system-prompt.md</code></a>.</li>
 </ul>
 <h3 id="scope-specific-loading"><a class="header" href="#scope-specific-loading">Scope-specific loading</a></h3>

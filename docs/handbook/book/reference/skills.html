@@ -50,10 +50,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-695ab59a.js";
+            window.path_to_searchindex_js = "../searchindex-ddda0f12.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-b613f6a6.js"></script>
+        <script src="../toc-a67314e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -258,7 +258,7 @@
 provider allowlist to <code>loadCapability("skills")</code>, so only the profile-native
 providers run and no foreign-tool directory is ever scanned:</p>
 <ul>
-<li><code>native</code> (priority 100): the profile’s <code>.../agent/skills</code> dir, user level only, via <code>src/discovery/builtin.ts</code>. Project-local <code>.veyyon/skills</code> is deliberately not scanned.</li>
+<li><code>native</code> (priority 100): the profile’s <code>.../agent/skills</code> dir, user level only, via <code>src/discovery/builtin.ts</code>. Project-local <code>.veyyon/skills</code> is not scanned.</li>
 <li><code>veyyon-plugins</code> (priority 90): <code>skills/</code> bundled with plugins installed into the active profile</li>
 <li><code>veyyon-managed</code> (priority 5): auto-learn skills under <code>.../agent/managed-skills</code>, discovered unconditionally (only writing/nudging is gated by <code>autolearn.enabled</code>); always defers to a same-named authored skill</li>
 </ul>

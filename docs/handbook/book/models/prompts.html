@@ -50,10 +50,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-695ab59a.js";
+            window.path_to_searchindex_js = "../searchindex-ddda0f12.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-b613f6a6.js"></script>
+        <script src="../toc-a67314e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -212,7 +212,7 @@ default edit surface, Veyyon uses hashline by default.</p>
 <p>You do not have to read the source to find out what Veyyon sends a model. Run:</p>
 <pre><code>veyyon prompt --prompts
 </code></pre>
-<p>That lists every prompt by id, grouped by the directory it lives in, with one line on what
+<p>That lists every prompt by id, grouped by directory, with one line on what
 each is for. An id is the file’s path under that directory without the <code>.md</code>, so
 <code>turn-control/auto-continue</code> and <code>dialect/gemma</code> name their own files.</p>
 <p>Then look at one:</p>
@@ -232,7 +232,7 @@ tool-policy/lsp                                  412      103   4.0%  tools has 
 <p>Two things to read from it. The cost is MARGINAL: it is what the prompt would be shorter by without
 that rule, not the length of the rule’s text, so the numbers add up to their section rather than
 exceeding it. And the condition states what turns the rule on, which is what you need to know
-before deciding a rule is not earning its tokens.</p>
+before deciding whether to disable a rule.</p>
 <p>Under the table is every rule this configuration leaves out, with the condition that would include
 it, so a rule being off is visible as a fact rather than as an absence you have to notice:</p>
 <pre><code>not in this prompt (33 of 68):

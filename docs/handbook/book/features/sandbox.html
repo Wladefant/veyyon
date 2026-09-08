@@ -50,10 +50,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-695ab59a.js";
+            window.path_to_searchindex_js = "../searchindex-ddda0f12.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-b613f6a6.js"></script>
+        <script src="../toc-a67314e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -266,10 +266,10 @@ run unattended, pass <code>--yolo</code> or pick a mode that does not prompt for
 process exit status follows the run.</p>
 <h2 id="critical-bash-commands"><a class="header" href="#critical-bash-commands">Critical bash commands</a></h2>
 <p>Some shell commands always prompt in <code>plan</code>, <code>ask</code>, <code>ask-command</code> and <code>auto</code>, even over a per-tool
-<code>allow</code> override. The guard lives in <code>packages/coding-agent/src/tools/bash-guard.ts</code> and has
+<code>allow</code> override. The guard is implemented in <code>packages/coding-agent/src/tools/bash-guard.ts</code> and has
 two halves.</p>
-<p>The first half judges what a command would delete, after expansion rather than as text. It
-resolves a leading tilde and <code>$HOME</code>, judges every target rather than only the first, and
+<p>The first half inspects what a command would delete, after expansion rather than as text. It
+resolves a leading tilde and <code>$HOME</code>, evaluates every target rather than only the first, and
 stops a recursive delete of the home directory, of anything containing it, of a system
 directory, or of a directory holding your credentials. It also stops a recursive delete whose
 target it cannot resolve, such as <code>rm -rf "$dir"/*</code>, because an empty <code>$dir</code> makes that

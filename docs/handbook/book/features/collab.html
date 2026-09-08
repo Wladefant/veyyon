@@ -50,10 +50,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-695ab59a.js";
+            window.path_to_searchindex_js = "../searchindex-ddda0f12.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-b613f6a6.js"></script>
+        <script src="../toc-a67314e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -310,10 +310,10 @@ https://web.example/collab/#relay.example.com/r/&lt;roomId&gt;.&lt;key&gt;   →
 </table>
 </div>
 <p>Any other close code is transient, and a client reconnects with exponential backoff up to thirty seconds. That
-default is why the table matters: a client that does not recognise a fatal code retries against a condition
-that will never clear, quietly, so the codes are declared once in <code>packages/wire/src/relay.ts</code> and both the CLI
+default requires standard fatal codes: a client that does not recognise a fatal code retries against a condition
+that will not clear, so the codes are declared once in <code>packages/wire/src/relay.ts</code> and both the CLI
 and browser clients read them from there. If you write your own relay, close with these codes and these
-reasons; a code outside the table tells a client to come back.</p>
+reasons; a code outside the table causes a client to reconnect.</p>
 <h2 id="architecture-notes"><a class="header" href="#architecture-notes">Architecture notes</a></h2>
 <p>Hub topology, the host is authoritative, guests never peer:</p>
 <ol>

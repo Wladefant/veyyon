@@ -304,11 +304,11 @@ Every key below is defined in the settings schema; `veyyon config list` shows th
 
 A suffix on a role use overrides the role's stored suffix. For example, if `modelRoles.slow` is `anthropic/claude-opus-5:low`, then `@slow:high` resolves to `anthropic/claude-opus-5:high`, not a double-suffixed model id.
 
-When you pick a role, subagent, or compaction model in `/settings`, Veyyon opens a separate effort step only if that model exposes configurable effort. The first row, **Model default**, stores no suffix. The remaining rows contain `auto`, `off` when the model permits it, and only the model's catalog-defined effort variants. For example, a low/high Gemini model does not show medium or xhigh. A fixed-reasoning model skips the effort step. The **Default Model** picker is deliberately model-only: it stores a bare selector, and **Default Effort** is the one UI surface for its saved effort. Providers sometimes publish effort tiers as separate upstream model IDs. Veyyon collapses effort-only siblings into one logical model and routes the selected effort to the correct upstream ID.
+When you pick a role, subagent, or compaction model in `/settings`, Veyyon opens a separate effort step only if that model exposes configurable effort. The first row, **Model default**, stores no suffix. The remaining rows contain `auto`, `off` when the model permits it, and only the model's catalog-defined effort variants. For example, a low/high Gemini model does not show medium or xhigh. A fixed-reasoning model skips the effort step. The **Default Model** picker is model-only: it stores a bare selector, and **Default Effort** is the one UI surface for its saved effort. Providers sometimes publish effort tiers as separate upstream model IDs. Veyyon collapses effort-only siblings into one logical model and routes the selected effort to the correct upstream ID.
 
 `compaction.model` and `subagent.model` are ordered chains. The first entry is the primary model and later entries are fallbacks. Enter edits the highlighted position, **Add fallback** appends a position, and Delete removes only the highlighted position. The settings rows show a stored effort as ` · high` instead of the raw `:high` suffix.
 
-The model you are working with (the main conversation) is persisted as **`modelRoles.default`**. That slot is not a selectable role: it is hidden from role pickers and stripped from `cycleOrder` on load. In the code it has one name, `DEFAULT_MODEL_SLOT`, and `interactive` is accepted as an alias for it wherever a role is passed. Selectable built-in roles: `smol`, `slow`, `vision`, `plan`, `designer`, `commit`, `tiny`, `advisor`. There is no `task` role: the model your subagents run lives in [Subagents](#subagents), which is its one owner.
+The model you are working with (the main conversation) is persisted as **`modelRoles.default`**. That slot is not a selectable role: it is hidden from role pickers and stripped from `cycleOrder` on load. In the code it has one name, `DEFAULT_MODEL_SLOT`, and `interactive` is accepted as an alias for it wherever a role is passed. Selectable built-ins: `smol`, `slow`, `vision`, `plan`, `designer`, `commit`, `tiny`, `advisor`. There is no `task` role: the model your subagents run is configured in [Subagents](#subagents).
 
 ```yaml
 modelRoles:
@@ -504,7 +504,7 @@ tools:
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `tools.approvalMode` | enum | `auto` | Canonical: `plan` (read auto; write asks with an active plan-mode session, otherwise write/exec denied), `ask` (nothing auto; every tier asks, reads included), `ask-command` (read+write auto; exec ask), `auto` (all tiers auto, with the per-tool, working-directory, credential and critical-call guards still asking), `yolo` (all tiers auto). Legacy aliases still accepted: `always-ask` → `ask`, `write` and `auto-edit` → `ask-command`. Override per run with `--approval-mode` / `--auto-approve` / `--yolo`. |
+| `tools.approvalMode` | enum | `auto` | Canonical: `plan` (read auto; write prompts with an active plan-mode session, otherwise write/exec denied), `ask` (nothing auto; every tier prompts, reads included), `ask-command` (read+write auto; exec prompt), `auto` (all tiers auto, with the per-tool, working-directory, credential and critical-call guards still prompting), `yolo` (all tiers auto). Legacy aliases still accepted: `always-ask` → `ask`, `write` and `auto-edit` → `ask-command`. Override per run with `--approval-mode` / `--auto-approve` / `--yolo`. |
 | `tools.approval` | record | `{}` | Per-tool policy keyed by tool name; each value is `allow`, `deny`, or `prompt`. Any other value denies that tool and is named in a startup warning. e.g. `veyyon config set tools.approval '{"bash":"prompt"}'`. |
 | `tools.discoveryMode` | enum | `auto` | `auto`, `off`, `mcp-only`, `all`. `all` hides non-essential built-ins and first-party heavyweight tools such as `generate_image` until the discovery search activates them. |
 | `tools.essentialOverride` | array | `[]` | Tool names kept available even when tools are narrowed. |
@@ -603,7 +603,7 @@ delegation setting rather than a cosmetic one.
 
 With only the worker enabled, the guidance is about splitting execution across
 parallel workers and keeping bulk reading out of your session's context. Nothing tells
-the model to send research to a `scout` it cannot spawn, and nothing tells it to send
+the model to send research to a `scout` it cannot spawn, and no prompt instructs it to send
 a review to a `reviewer` that does not exist. Enable the `reviewer` and you have said
 reviews are delegable here; the prompt then lists it. Enable the `scout` and bulk
 exploration becomes something it is told to route away from its own context.
@@ -696,7 +696,7 @@ are enabled is still decided there.
 The shared model and its effort appear on screen only while the switch is on. Off, they
 are not shown at all: a greyed row displaying a model nobody runs is the duplication the
 switch exists to end. There is no Subagent Model row on the Models tab and none on the
-Subagents tab; one page owns the question.
+Subagents tab; one page configures it.
 
 None of the bundled agents pin a model, so on a fresh install every subagent runs the
 model you are looking at. To move them all at once, turn the switch on and set the model
@@ -851,7 +851,7 @@ read:
 | `read.toolResultPreview` | boolean | `false` | Inline preview of tool results. |
 | `readLineNumbers` | boolean | `false` | Show plain line numbers. |
 
-`edit.afterEdit` applies to the main agent; subagents are exempt from every value. `verify` continues once when the turn's last successful edit has no later successful `bash`, `eval`, `debug` or `browser` result, and asks for one to be run. `review` continues once naming every code file changed since the last user message, and asks for a correctness, maintainability and cross-file contract pass; a file whose edit has left the context window is listed apart with an instruction to read it first. Documentation, lockfiles, binary files, media, archives and databases are not code files. Repeated calls for the same normalized path count once. A reply that ends with a question to the user defers both, and the window moves with the next user message, so changes made before a question are not reviewed after it. A configuration written before this setting existed carries a `critiqueCodeMutations` boolean under `edit`, which migrates on load: true becomes `review`, false becomes `verify`.
+`edit.afterEdit` applies to the main agent; subagents are exempt from every value. `verify` continues once when the turn's last successful edit has no later successful `bash`, `eval`, `debug` or `browser` result, and requests that one be run. `review` continues once naming every code file changed since the last user message, and prompts for a correctness, maintainability and cross-file contract pass; a file whose edit has left the context window is listed apart with an instruction to read it first. Documentation, lockfiles, binary files, media, archives and databases are not code files. Repeated calls for the same normalized path count once. A reply that ends with a question to the user defers both, and the window moves with the next user message, so changes made before a question are not reviewed after it. A configuration written before this setting existed carries a `critiqueCodeMutations` boolean under `edit`, which migrates on load: true becomes `review`, false becomes `verify`.
 
 
 ### Automatic tool issue reports

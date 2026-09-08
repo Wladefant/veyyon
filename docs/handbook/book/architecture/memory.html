@@ -50,10 +50,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-695ab59a.js";
+            window.path_to_searchindex_js = "../searchindex-ddda0f12.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-b613f6a6.js"></script>
+        <script src="../toc-a67314e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -224,7 +224,7 @@
 <li>Cite the memory artifact path when memory changes the plan, and pair it with current-repo evidence before acting.</li>
 <li>Prefer repo state and user instruction when they conflict with memory; treat conflicting memory as stale.</li>
 </ul>
-<p>A backend contributes in two places, and which one it uses matters for what a session costs you:</p>
+<p>A backend contributes in two locations, which determine token usage and caching behavior:</p>
 <ul>
 <li><strong>The system prompt</strong> contains the guidance that does not change while the session runs. The provider caches the prompt as
 the prefix of every request, so this text is paid for once.</li>

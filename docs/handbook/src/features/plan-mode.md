@@ -48,7 +48,7 @@ Statuses: `active`, `paused`, `budget-limited`, `complete`, `dropped`.
 
 ### Goal tool
 
-When goal mode is active, the agent can call the `goal` tool with ops: `create`, `get`, `complete`, `resume`, `drop`. The tool never accepts a budget argument. The interactive Settings UI owns `goal.modelBudgetsEnabled`, which controls whether persisted budgets are exposed and enforced. Continuation prompts inject on idle turns per `goal.continuationModes`.
+When goal mode is active, the agent can call the `goal` tool with ops: `create`, `get`, `complete`, `resume`, `drop`. The tool never accepts a budget argument. The interactive Settings UI configures `goal.modelBudgetsEnabled`, which controls whether persisted budgets are exposed and enforced. Continuation prompts inject on idle turns per `goal.continuationModes`.
 
 ### Example
 

@@ -50,10 +50,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-695ab59a.js";
+            window.path_to_searchindex_js = "../searchindex-ddda0f12.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-b613f6a6.js"></script>
+        <script src="../toc-a67314e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -222,7 +222,7 @@
 </tbody>
 </table>
 </div>
-<p>Two details matter:</p>
+<p>Key discovery behaviors:</p>
 <ul>
 <li><strong>Walk-up to the repository root.</strong> Discovery starts in the current working directory and climbs through each ancestor up to the repository root. The nearest non-empty <code>.veyyon/</code> directory claims its own level with its <code>AGENTS.md</code>; every other level contributes a bare <code>AGENTS.md</code>, falling back to a bare <code>CLAUDE.md</code> when no <code>AGENTS.md</code> has content there.</li>
 <li><strong>The <code>.veyyon/</code> directory must be non-empty.</strong> An empty <code>.veyyon/</code> directory is skipped during the walk-up, so the search continues to the next ancestor. An empty <code>AGENTS.md</code> file contributes nothing and shadows nothing.</li>
@@ -292,7 +292,7 @@
 </ul>
 <p>After deduplication, project files are sorted so <strong>farther ancestors appear first</strong> and files <strong>closer to the cwd appear last</strong>. Both are project scope, so this is one project directory refining another, not a project file outranking a broader scope.</p>
 <h3 id="scope-authority-your-own-configuration-is-last-and-wins"><a class="header" href="#scope-authority-your-own-configuration-is-last-and-wins">Scope authority: your own configuration is last and wins</a></h3>
-<p>Provider priority and depth decide which files <em>survive</em>. A separate axis sets where each survivor is <em>rendered</em>, and therefore which one wins an outright conflict. These are two different orders and it is easy to read one as the other:</p>
+<p>Provider priority and depth select which files <em>survive</em>. A separate axis sets where each survivor is <em>rendered</em>, and therefore which one wins an outright conflict. These are two distinct orders:</p>
 <ul>
 <li><strong>Resolution order</strong> is the order the three scopes are read: global, then profile, then project.</li>
 <li><strong>Authority order</strong> is the order they are rendered, least authoritative first: the project group (farther ancestors first, closest to the cwd last), then the profile file, then the cross-profile global <code>~/.veyyon/AGENTS.md</code> <strong>last of all</strong>.</li>
@@ -339,8 +339,8 @@ one you read FIRST is the narrowest, not the strongest: ...
 &lt;/context&gt;
 </code></pre>
 <p>The agent sees each file’s absolute path and its fully expanded Markdown content (with <code>@</code> imports already resolved, see below). When discovery is enabled, matching context files are injected at session start.</p>
-<p>A sentence stating that your live instruction in the conversation has absolute authority renders in every session, whether or not any context file loaded, because a rule or a memory can tell the agent to reject just as a file can. The scope ladder above renders only when at least one context file loaded, since there is nothing to rank otherwise. Below your live instruction, the surviving context files win over conflicting generic Veyyon workflow defaults, retrieved material, and historical summaries; among themselves they rank by the scope ladder, and a project file never overrides your own configuration.</p>
-<p>Deeper-directory <code>AGENTS.md</code> files that were <em>not</em> auto-loaded (for example, ones below the current directory) are surfaced separately in a <code>&lt;dir-context&gt;</code> block that lists their paths and tells the agent to read them before editing those directories. Those files are pointers, not full injected content.</p>
+<p>A sentence stating that your live instruction in the conversation has absolute authority renders in every session, whether or not any context file loaded, because a rule or a memory can instruct the agent to reject just as a file can. The scope ladder above renders only when at least one context file loaded, since there is nothing to rank otherwise. Below your live instruction, the surviving context files win over conflicting generic Veyyon workflow defaults, retrieved material, and historical summaries; among themselves they rank by the scope ladder, and a project file never overrides your own configuration.</p>
+<p>Deeper-directory <code>AGENTS.md</code> files that were <em>not</em> auto-loaded (for example, ones below the current directory) are surfaced separately in a <code>&lt;dir-context&gt;</code> block that lists their paths and instructs the agent to read them before editing those directories. Those files are pointers, not full injected content.</p>
 <h2 id="-imports"><a class="header" href="#-imports"><code>@</code> imports</a></h2>
 <p>Inside any context file, an <code>@path</code> token expands inline to the referenced file’s content before injection:</p>
 <pre><code class="language-markdown"># Project notes
@@ -388,7 +388,7 @@ disabledProviders:
 <tr><th>Id kind</th><th>Examples</th><th>Effect when listed</th></tr>
 </thead>
 <tbody>
-<tr><td>Discovery provider ids</td><td><code>native</code>, <code>claude</code>, <code>codex</code>, <code>gemini</code>, <code>opencode</code>, <code>github</code>, <code>agents</code>, <code>agents-md</code></td><td>The entire config source is removed, not just its context files, but also any MCP servers, slash commands, skills, hooks, tools, prompts, and settings it would have contributed.</td></tr>
+<tr><td>Discovery provider ids</td><td><code>native</code>, <code>claude</code>, <code>codex</code>, <code>gemini</code>, <code>opencode</code>, <code>github</code>, <code>agents</code>, <code>agents-md</code></td><td>The entire config source is removed, including its context files, MCP servers, slash commands, skills, hooks, tools, prompts, and settings.</td></tr>
 <tr><td>Model provider ids</td><td><code>anthropic</code>, <code>openai</code>, <code>google</code>, <code>groq</code>, <code>ollama</code>, <code>openrouter</code></td><td>The model backend is removed from selection even when its credentials are present. See <a href="../reference/providers.html">Providers</a>.</td></tr>
 </tbody>
 </table>

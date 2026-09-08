@@ -50,10 +50,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-695ab59a.js";
+            window.path_to_searchindex_js = "../searchindex-ddda0f12.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-b613f6a6.js"></script>
+        <script src="../toc-a67314e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -530,7 +530,7 @@ holding it is still running, so a <code>veyyon.&lt;id&gt;.new</code> or a <code>
 outlive the update that made it. Uninstall removes those too, so the install
 directory is left empty rather than holding a few hundred megabytes you have no
 name for. A backup you saved yourself under a name of your own is left alone.</p>
-<p>Two things it deliberately leaves behind. If you already had your own <code>vey</code> command, the installer never created that alias in the first place (it reports that at install time and prints the <code>veyyon</code> command instead), so uninstall does not touch it or its completion file. And if a checkout at <code>~/.veyyon/src</code> has uncommitted edits or commits on a local branch that is on no remote, it is moved to <code>~/.veyyon/src.bak-&lt;timestamp&gt;</code> instead of being deleted, so nothing you wrote is lost. Older installers created that tree. The current installer never does, so uninstall only ever cleans up one an older version left behind.</p>
+<p>Two things it leaves behind. If you already had your own <code>vey</code> command, the installer never created that alias in the first place (it reports that at install time and prints the <code>veyyon</code> command instead), so uninstall does not touch it or its completion file. And if a checkout at <code>~/.veyyon/src</code> has uncommitted edits or commits on a local branch that is on no remote, it is moved to <code>~/.veyyon/src.bak-&lt;timestamp&gt;</code> instead of being deleted, so nothing you wrote is lost. Older installers created that tree. The current installer never does, so uninstall only ever cleans up one an older version left behind.</p>
 <pre><code class="language-console">$ curl -fsSL https://get.veyyon.dev | sh -s -- --uninstall
 </code></pre>
 <p>On Windows:</p>

@@ -50,10 +50,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-695ab59a.js";
+            window.path_to_searchindex_js = "../searchindex-ddda0f12.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-b613f6a6.js"></script>
+        <script src="../toc-a67314e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -258,7 +258,7 @@ modelRoles:
 <tr><th>Setting</th><th>Effect</th></tr>
 </thead>
 <tbody>
-<tr><td><code>subagent.sharedModel</code></td><td>Which scope decides a subagent’s model and effort. Off, each agent’s own row does. On, the two rows below do, for every agent.</td></tr>
+<tr><td><code>subagent.sharedModel</code></td><td>Which scope sets a subagent’s model and effort. Off, each agent’s own row does. On, the two rows below do, for every agent.</td></tr>
 <tr><td><code>subagent.model</code></td><td>Ordered model chain every subagent runs while <code>subagent.sharedModel</code> is on. The first entry is primary and later entries are fallbacks. Unset runs every agent on the <code>default</code> model role.</td></tr>
 <tr><td><code>subagent.thinkingLevel</code></td><td>Effort every subagent runs at while <code>subagent.sharedModel</code> is on.</td></tr>
 <tr><td><code>subagent.agents</code></td><td>Per-agent <code>enabled</code>, <code>model</code>, <code>thinkingLevel</code>, and <code>maxNestedSpawnDepth</code> choices. The <code>model</code> and <code>thinkingLevel</code> on a row decide while <code>subagent.sharedModel</code> is off, and are not read while it is on.</td></tr>

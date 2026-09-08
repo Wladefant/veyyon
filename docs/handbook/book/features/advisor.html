@@ -50,10 +50,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-695ab59a.js";
+            window.path_to_searchindex_js = "../searchindex-ddda0f12.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-b613f6a6.js"></script>
+        <script src="../toc-a67314e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -295,7 +295,7 @@ thinking suffixes. A <code>WATCHDOG.yml</code> roster entry’s own <code>model:
 note text
 &lt;/advisory&gt;
 </code></pre>
-<p>When you deliberately interrupt the agent (Esc, or a cancel from collab, ACP, RPC, the SDK, or an extension), the advisor stops auto-resuming it. An interrupting <code>concern</code>/<code>blocker</code> raised while the run is stopped is recorded as a visible advisor card instead of restarting the turn, and a concern already in flight when you interrupt is preserved the same way rather than driving a surprise resume. The advice re-enters context the next time you resume, a new message, the <code>.</code>/<code>c</code> continue shortcut, or a steer/follow-up. A normal yield is unaffected: the advisor can still steer and resume a run the agent ended on its own.</p>
+<p>When you interrupt the agent (Esc, or a cancel from collab, ACP, RPC, the SDK, or an extension), the advisor stops auto-resuming it. An interrupting <code>concern</code>/<code>blocker</code> raised while the run is stopped is recorded as a visible advisor card instead of restarting the turn, and a concern already in flight when you interrupt is preserved the same way rather than driving a surprise resume. The advice re-enters context the next time you resume, a new message, the <code>.</code>/<code>c</code> continue shortcut, or a steer/follow-up. A normal yield is unaffected: the advisor can still steer and resume a run the agent ended on its own.</p>
 <p><code>advisor.immuneTurns</code> limits interruption frequency. After the advisor successfully delivers a <code>concern</code> or <code>blocker</code> through the steering channel, later concerns/blockers are routed as non-interrupting asides until the configured number of primary turns has completed. The default is <code>3</code>. <code>nit</code> notes are unchanged, and advice raised while user-interrupt auto-resume suppression is active is still preserved instead of restarting a stopped run.</p>
 <h3 id="emission-guard"><a class="header" href="#emission-guard">Emission guard</a></h3>
 <p><code>AdvisorEmissionGuard</code> (in <code>src/advisor/emission-guard.ts</code>) sits on the <code>enqueueAdvice</code> boundary in <code>AgentSession</code> and enforces, in code, the advisor system prompt’s “at most one <code>advise</code> per update” and “NEVER send the same advice twice” rules. Each call to the advisor’s <code>advise</code> tool runs through the guard before it routes to the YieldQueue / steer channel:</p>

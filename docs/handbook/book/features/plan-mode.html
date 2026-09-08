@@ -50,10 +50,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-695ab59a.js";
+            window.path_to_searchindex_js = "../searchindex-ddda0f12.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-b613f6a6.js"></script>
+        <script src="../toc-a67314e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -232,7 +232,7 @@
 </code></pre>
 <p>Statuses: <code>active</code>, <code>paused</code>, <code>budget-limited</code>, <code>complete</code>, <code>dropped</code>.</p>
 <h3 id="goal-tool"><a class="header" href="#goal-tool">Goal tool</a></h3>
-<p>When goal mode is active, the agent can call the <code>goal</code> tool with ops: <code>create</code>, <code>get</code>, <code>complete</code>, <code>resume</code>, <code>drop</code>. The tool never accepts a budget argument. The interactive Settings UI owns <code>goal.modelBudgetsEnabled</code>, which controls whether persisted budgets are exposed and enforced. Continuation prompts inject on idle turns per <code>goal.continuationModes</code>.</p>
+<p>When goal mode is active, the agent can call the <code>goal</code> tool with ops: <code>create</code>, <code>get</code>, <code>complete</code>, <code>resume</code>, <code>drop</code>. The tool never accepts a budget argument. The interactive Settings UI configures <code>goal.modelBudgetsEnabled</code>, which controls whether persisted budgets are exposed and enforced. Continuation prompts inject on idle turns per <code>goal.continuationModes</code>.</p>
 <h3 id="example"><a class="header" href="#example">Example</a></h3>
 <pre><code class="language-console">$ veyyon
 </code></pre>

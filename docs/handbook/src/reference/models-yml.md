@@ -170,7 +170,7 @@ providers:
 A variable named in cases 2 or 3 that is unset, or set to an empty string, resolves to nothing: the
 key is not installed, no request contains it, and a warning states the variable and the setting.
 Earlier versions used the variable's own name as the value, so `apiKey: DEEPSEK_API_KEY` was sent to
-the provider as the key. A key that is genuinely upper case text rather than a variable name is
+the provider as the key. A key that is uppercase text rather than a variable name is
 written `literal:MY_KEY`.
 
 ## Merge and override order

@@ -10,7 +10,7 @@ Everything about them is configured in one place: the **Subagents** tab in
 run in progress: which agents are working right now and what they are saying to each
 other. It does not configure anything.
 
-## What you get out of the box
+## Default configuration
 
 One agent type, the general-purpose worker, and delegation that the prompt requests:
 
@@ -150,7 +150,7 @@ subagent:
 Effort resolves on the same three layers, ending at `medium`. An explicit `:effort`
 suffix on the resolved model pattern outranks all of them.
 
-On, one pair decides for the whole roster, and the per-agent Model and Effort rows are
+When enabled, one pair applies to the whole roster, and the per-agent Model and Effort rows are
 hidden. **Shared Model** (`subagent.model`) and **Shared Effort**
 (`subagent.thinkingLevel`) sit under the switch; an unset chain runs every agent on the
 `default` model role:
@@ -162,7 +162,7 @@ subagent:
   thinkingLevel: high
 ```
 
-A lane keeps whatever it holds while the switch is on, and decides again the moment the
+A lane retains its configuration while the switch is on, and re-evaluates when the
 switch goes off.
 
 The `default` model role is the model the main assistant starts on, and it is the
@@ -255,7 +255,7 @@ block rather than the row, and arrives cold on a lane that is waiting or recover
 Where `display.transitions` is off, the block is still.
 
 There is no elapsed clock and no context gauge. Total age ranks agents by seniority,
-which nothing acts on, and a parent decides nothing with a subagent's remaining
+which nothing acts on, and a parent does not use a subagent's remaining
 window. Whether a lane is stuck is answered by the recovery column. `/agents` carries
 the roster with the numbers.
 

@@ -50,10 +50,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-695ab59a.js";
+            window.path_to_searchindex_js = "../searchindex-ddda0f12.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-b613f6a6.js"></script>
+        <script src="../toc-a67314e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -206,7 +206,7 @@
 <ul>
 <li><code>packages/coding-agent/src/system-prompt.ts</code> (<code>buildSystemPrompt</code>)</li>
 <li><code>packages/coding-agent/src/main.ts</code> (resolves the two prompt flags; there is no file discovery for either)</li>
-<li><code>packages/coding-agent/src/prompts/&lt;directory&gt;/rows.ts</code> (the prompts one directory owns, each with its id and purpose) and <code>packages/coding-agent/src/prompts/registry.ts</code> (which aggregates all of them)</li>
+<li><code>packages/coding-agent/src/prompts/&lt;directory&gt;/rows.ts</code> (the prompts defined in one directory, each with its id and purpose) and <code>packages/coding-agent/src/prompts/registry.ts</code> (which aggregates all of them)</li>
 <li><code>packages/utils/src/prompt-registry.ts</code> (what a registry IS: the row shape, <code>definePromptRegistry</code>, and <code>requirePromptFrom</code>, the one lookup that rejects an unknown id)</li>
 <li><code>packages/coding-agent/src/system-prompt-builder/banner-grammar.ts</code> (what a banner IS for every prompt: how one is written, how one is recognised, and <code>splitBanneredDocument</code>, the one parser that cuts a prompt at its banners)</li>
 <li><code>packages/coding-agent/src/system-prompt-builder/section-registry.ts</code> (the section registry: which sections exist, their banners, and their order)</li>
@@ -216,7 +216,7 @@
 <li><code>packages/coding-agent/src/prompts/session/project-prompt.md</code> (project/environment footer)</li>
 <li><code>packages/coding-agent/src/utils/host-environment.ts</code> (the workstation rows that footer renders: OS, kernel, arch, CPU, GPU, terminal)</li>
 </ul>
-<h2 id="where-prompts-live"><a class="header" href="#where-prompts-live">Where prompts live</a></h2>
+<h2 id="where-prompts-are-defined"><a class="header" href="#where-prompts-are-defined">Where prompts are defined</a></h2>
 <p>A package defines its own prompts. Each package that ships any keeps them under its own <code>src/prompts/</code> directory with a <code>registry.ts</code> beside them, and that registry is the only module allowed to import one:</p>
 <div class="table-wrapper">
 <table>
@@ -233,9 +233,9 @@
 </table>
 </div>
 <p>An id is the file’s path under its registry’s directory without the <code>.md</code>, so <code>turn-control/auto-continue</code> is <code>packages/coding-agent/src/prompts/turn-control/auto-continue.md</code> and <code>dialect/gemma</code> is <code>packages/ai/src/prompts/dialect/gemma.md</code>. Ids are unique across the registries, so you never have to name the package to ask about a prompt. <code>@veyyon/hashline</code> is the one package whose prompt is not under a <code>prompts/</code> directory: its single file is published at <code>@veyyon/hashline/prompt.md</code> for anyone embedding hashline in their own agent, so moving it would break a public subpath.</p>
-<p>To find a prompt, read the registry or run <code>veyyon prompt --prompts</code>, which lists every id in the four product registries under its directory, with a line saying what it is for. The benchmark harness’s prompts are not listed there: they are used by a measurement tool rather than by the agent.</p>
+<p>To find a prompt, read the registry or run <code>veyyon prompt --prompts</code>, which lists every id in the four product registries under its directory, with a line stating what it is for. The benchmark harness’s prompts are not listed there: they are used by a measurement tool rather than by the agent.</p>
 <p>The registries are the whole set by construction, not by anyone remembering to add a row. The import is the registration, so a prompt file with no row is unreachable code, and <code>prompt-registry-coverage.test.ts</code> fails if the set on disk and the set in a registry disagree in either direction, or if any module outside a registry imports a <code>.md</code> as text.</p>
-<p>A registry is one <code>definePromptRegistry(dir, rows)</code> call, and the descriptor it returns is what other code takes. That matters for the same reason the rest of this section does: the directory is stated once, in that call, and <code>veyyon prompt</code>, the coverage suite and the generated inventory read it off the descriptor instead of each writing the path again. They used to write it again, and the inventory’s copy had gone stale, listing three directories while claiming one per package. The same test fails if a directory is written down twice.</p>
+<p>A registry is one <code>definePromptRegistry(dir, rows)</code> call, and the descriptor it returns is what other code takes. The directory is stated once, in that call, and <code>veyyon prompt</code>, the coverage suite, and the generated inventory read it from the descriptor instead of writing the path again.</p>
 <p>A descriptor gives you <code>dir</code>, <code>prompts</code>, <code>ids</code>, <code>text(id)</code>, <code>require(id)</code>, <code>has(id)</code> and <code>fileFor(id)</code>. Use <code>prompts["some/id"].text</code> where the id is a literal, since that is checked at compile time; use <code>require(id)</code> where the id comes from a variable, because it throws on an unknown one rather than handing back a prompt with no text.</p>
 <hr>
 <h2 id="1-inputs"><a class="header" href="#1-inputs">1) Inputs</a></h2>
@@ -305,7 +305,7 @@ block and keeps the dynamic project footer.</p>
 <h3 id="tweak-the-default-keep-default-add-a-few-rules"><a class="header" href="#tweak-the-default-keep-default-add-a-few-rules">“Tweak the default”: keep default, add a few rules</a></h3>
 <p>Write an <code>AGENTS.md</code>. The default instructions and the project footer stay intact, and your text is inlined into the prompt with the other context files. This is the everyday answer, and it needs no flag.</p>
 <pre><code class="language-text"># ~/.veyyon/profiles/default/agent/AGENTS.md
-Prefer Bun APIs over Node APIs in this project.
+Format TypeScript with 2-space indentation.
 When you change a public function, run `bun check` before yielding.
 </code></pre>
 <p>An <code>AGENTS.md</code> beside the code applies to that project; the one in your profile applies to every session in that profile; the global one applies everywhere. All of them are discovered for you.</p>
@@ -314,7 +314,7 @@ When you change a public function, run `bun check` before yielding.
 <pre><code class="language-console">$ veyyon --system-prompt ./reviewer-prompt.md
 </code></pre>
 <p>There is no file veyyon picks up on its own for this. A prompt that replaces the whole assembly is a per-invocation decision by a caller who wants exactly that, not a setting that follows you into every session.</p>
-<p>Reach for this only when you want a genuinely different base prompt. If you are keeping most of the default and changing one part, use <code>PROMPT_SECTIONS/</code> instead (section 8): it edits a single section and leaves the rest as shipped, so you do not have to maintain a copy of the default tool guidance, exploration rules, or workflow rules.</p>
+<p>Use this when supplying a different base prompt. If you are keeping most of the default and changing one part, use <code>PROMPT_SECTIONS/</code> instead (section 8): it edits a single section and leaves the rest as shipped, so you do not have to maintain a copy of the default tool guidance, exploration rules, or workflow rules.</p>
 <h3 id="customize-while-keeping-the-tool-inventory-and-default-workflow-guidance"><a class="header" href="#customize-while-keeping-the-tool-inventory-and-default-workflow-guidance">“Customize while keeping the tool inventory and default workflow guidance”</a></h3>
 <p>Use <code>AGENTS.md</code>, not <code>--system-prompt</code>. The tool inventory, role guidance, and default exploration and workflow rules come from statement modules in <code>src/system-prompt-builder/statements/</code>. A custom system prompt switches to <code>session/custom-system-prompt.md</code>, so those default statements are not available to the model.</p>
 <p>A custom system prompt still keeps the generated project content: <code>session/custom-system-prompt.md</code> renders context files, discovered skills, always-apply rules, and rules alongside your text, and the <code>project-prompt.md</code> footer still carries workstation info, the workspace tree, the current date, and cwd.</p>
@@ -329,7 +329,7 @@ If the message contains no concrete task, output exactly `none`.
 <h3 id="replace-everything-including-project-context-sdk-only"><a class="header" href="#replace-everything-including-project-context-sdk-only">“Replace everything, including project context”: SDK-only</a></h3>
 <p>The CLI flag path intentionally preserves <code>defaultPrompt.slice(1)</code>. Code using <code>CreateAgentSessionOptions.systemPrompt</code> directly can return a full replacement array and omit the project footer, but that is not what <code>--system-prompt</code> does.</p>
 <h3 id="change-one-section-of-the-default-instructions-keep-the-rest"><a class="header" href="#change-one-section-of-the-default-instructions-keep-the-rest">“Change one section of the default instructions, keep the rest”</a></h3>
-<p>Use <code>PROMPT_SECTIONS/</code>, described in section 8. Put your text in <code>PROMPT_SECTIONS/&lt;section&gt;.append.md</code> to add to a section, or <code>PROMPT_SECTIONS/&lt;section&gt;.md</code> to replace it. Every other section stays exactly as shipped, including the generated skills, rules, and tool guidance, so this is the option to reach for whenever you want to change one thing rather than own the whole prompt.</p>
+<p>Use <code>PROMPT_SECTIONS/</code>, described in section 8. Put your text in <code>PROMPT_SECTIONS/&lt;section&gt;.append.md</code> to add to a section, or <code>PROMPT_SECTIONS/&lt;section&gt;.md</code> to replace it. Every other section stays exactly as shipped, including the generated skills, rules, and tool guidance, so use this option when changing one section.</p>
 <p>Run <code>veyyon prompt --sections</code> to see the section names for your configuration.</p>
 <hr>
 <h2 id="5-deduplication"><a class="header" href="#5-deduplication">5) Deduplication</a></h2>
@@ -352,7 +352,7 @@ If the message contains no concrete task, output exactly `none`.
 <tr><td>Append text for one run</td><td><code>--append-system-prompt</code></td></tr>
 <tr><td>Customize automatic session titles</td><td><code>TITLE_SYSTEM.md</code>; the agent’s own prompt does not affect title generation</td></tr>
 <tr><td>Use <code>{{cwd}}</code> / <code>{{date}}</code> / other internals in my file</td><td>Not supported. Caller-supplied prompts are inserted verbatim.</td></tr>
-<tr><td>See the prompt a configuration actually produces</td><td><code>veyyon prompt</code> (see section 9)</td></tr>
+<tr><td>See the prompt a configuration produces</td><td><code>veyyon prompt</code> (see section 9)</td></tr>
 <tr><td>Change instructions per repository</td><td>An <code>AGENTS.md</code> in that repository</td></tr>
 <tr><td>Change instructions everywhere</td><td>The global <code>AGENTS.md</code>, or the one in your profile’s agent directory</td></tr>
 </tbody>
@@ -435,7 +435,7 @@ delivery-contract   template      0     4053     1014   10.9%
 </code></pre>
 <p>That reports the prompt’s sections and which of them are optional, so you can tell a subagent prompt that rendered three of its five sections because the task had no plan and no worktree from one that lost two sections to a bug.</p>
 <p>Most of these prompts are a single region with no internal structure, and they report one <code>body</code> section. The subagent prompt has five: <code>role</code>, <code>context</code>, <code>plan</code>, <code>coop</code>, and <code>completion</code>.</p>
-<p>The list is grouped by the directory each prompt lives in, and the lookup spans all four groups, so <code>veyyon prompt --prompt compaction/summarization-system</code> and <code>veyyon prompt --prompt dialect/gemma</code> work the same way as one from the coding agent’s own tree. A mistyped id is rejected with the nearest registered id quoted back, rather than printing an empty description that would read as a prompt with nothing in it.</p>
+<p>The list is grouped by the directory each prompt is defined in, and the lookup spans all four groups, so <code>veyyon prompt --prompt compaction/summarization-system</code> and <code>veyyon prompt --prompt dialect/gemma</code> work the same way as one from the coding agent’s own tree. A mistyped id is rejected with the nearest registered id quoted back, rather than printing an empty description that would read as a prompt with nothing in it.</p>
 <hr>
 <h2 id="10-adding-a-section-contributors"><a class="header" href="#10-adding-a-section-contributors">10) Adding a section (contributors)</a></h2>
 <p>The sections above are data, not code. <code>section-registry.ts</code> holds two registries, and everything else about a section is derived from its row there.</p>
@@ -512,7 +512,7 @@ export const turnControlPrompts = {
 const text = turnControlPrompts["turn-control/auto-continue"].text;
 </code></pre>
 <p>The import is the registration, so there is nothing else to remember. A file with no row is unreachable code rather than a prompt that quietly ships unlisted, and <code>prompt-registry-coverage.test.ts</code> fails if the directory and the rows disagree in either direction.</p>
-<p><code>prompts/registry.ts</code> aggregates all twenty-one row modules into <code>PROMPTS</code>, which is still the aggregate every cross-directory consumer takes, and <code>PromptId</code> is still the union of every id. Prefer the row module: it is the reason the rows are split at all. The registry held all 163 <code>.md</code> imports itself, so importing it for one string reached all 163 prompt modules, which cost the file-reading tool 167 modules for its own description. Reach for the aggregate when a module genuinely spans directories, or when the id is not known statically and you need <code>requirePrompt</code>.</p>
+<p><code>prompts/registry.ts</code> aggregates all twenty-one row modules into <code>PROMPTS</code>, which is still the aggregate every cross-directory consumer takes, and <code>PromptId</code> is still the union of every id. Prefer the row module: it is the reason the rows are split at all. The registry held all 163 <code>.md</code> imports itself, so importing it for one string reached all 163 prompt modules, which cost the file-reading tool 167 modules for its own description. Import the aggregate when a module spans directories, or when the id is not known statically and you need <code>requirePrompt</code>.</p>
 <p>The <code>satisfies</code> clause is not decoration. An annotation (<code>: Record&lt;string, PromptEntry&gt;</code>) typechecks and widens every key to <code>string</code>, and <code>PromptId</code> then accepts any string: a typo compiles and renders as the empty prompt.</p>
 <p>Three things that suite will refuse, each because it has happened:</p>
 <ul>
@@ -520,11 +520,11 @@ const text = turnControlPrompts["turn-control/auto-continue"].text;
 <li><strong>Writing a prompts directory down twice.</strong> Consumers read <code>dir</code> off the descriptor. Four of them used to type the path themselves and one had gone stale.</li>
 <li><strong>A row whose <code>purpose</code> states nothing.</strong> The purpose is what makes the registry a list a person can read instead of a directory listing with extra steps.</li>
 </ul>
-<p>If you are adding the first prompt to a package that has none, give it a <code>src/prompts/registry.ts</code> of its own rather than reaching into another package’s. Rows per directory are worth it once a registry is large enough that a consumer of one prompt paying for all of them matters; the other three packages hold their rows in the registry itself. A package defines its prompts; sharing the row SHAPE is what <code>@veyyon/utils</code> is for.</p>
+<p>If you are adding the first prompt to a package that has none, give it a <code>src/prompts/registry.ts</code> of its own rather than reaching into another package’s. Split rows by directory when a registry grows large enough that importing all prompts incurs unnecessary module evaluation; the other three packages hold their rows in the registry itself. A package defines its prompts; sharing the row SHAPE is what <code>@veyyon/utils</code> is for.</p>
 <hr>
 <h2 id="12-settings-that-change-the-prompt"><a class="header" href="#12-settings-that-change-the-prompt">12) Settings that change the prompt</a></h2>
 <h3 id="the-rule-policy-is-a-setting-not-a-sentence"><a class="header" href="#the-rule-policy-is-a-setting-not-a-sentence">The rule: policy is a setting, not a sentence</a></h3>
-<p>The outer <code>system-prompt.md</code> scaffold holds no policy, prose, conditions, or banners. Anything that decides <strong>what the model should do</strong> belongs to a setting and a statement row. Put whole-statement presence conditions in <code>statement-registry.ts</code>. Put wording-level Handlebars variables inside that statement’s Markdown module.</p>
+<p>The outer <code>system-prompt.md</code> scaffold holds no policy, prose, conditions, or banners. Anything that controls <strong>what the model should do</strong> belongs to a setting and a statement row. Put whole-statement presence conditions in <code>statement-registry.ts</code>. Put wording-level Handlebars variables inside that statement’s Markdown module.</p>
 <p>The failure this rule exists to prevent is concrete. The delegation section used to carry a
 literal category list:</p>
 <blockquote>
@@ -545,8 +545,8 @@ session that did not happen to match it.</p>
 <tbody>
 <tr><td>Structure: headings, ordering, the shape of a list</td><td>Yes</td></tr>
 <tr><td>A fact about this session (<code>{{cwd}}</code>, the tool names, the concurrency cap)</td><td>Yes, as a variable</td></tr>
-<tr><td>A behavior a setting decides</td><td>No — a <code>{{#if}}</code> on that setting’s gate</td></tr>
-<tr><td>A behavior nothing decides, stated as a rule the operator cannot see or change</td><td>No — make it a setting first</td></tr>
+<tr><td>A behavior controlled by a setting</td><td>No — a <code>{{#if}}</code> on that setting’s gate</td></tr>
+<tr><td>A behavior with no controlling setting, stated as a rule the operator cannot see or change</td><td>No — make it a setting first</td></tr>
 </tbody>
 </table>
 </div>
@@ -560,7 +560,7 @@ when the session can still spawn subagents, the delegation section changes wordi
 <code>subagent.delegation</code>, and the personality block disappears when <code>personality</code> is <code>none</code>.</p>
 <p>Those settings are listed in one place,
 <code>packages/coding-agent/src/system-prompt-builder/gate-registry.ts</code>. Each row records the
-setting path, the template variables it decides, one line on what the model sees change, and
+setting path, the template variables it controls, one line on what the prompt changes, and
 whether flipping it reaches a running session.</p>
 <h3 id="live-and-frozen-gates"><a class="header" href="#live-and-frozen-gates">Live and frozen gates</a></h3>
 <p>A <strong>live</strong> gate takes effect when you change it. The settings UI rebuilds the system prompt
@@ -575,18 +575,18 @@ from the registry, so the model sees the new text on its next request. These are
 <tr><td><code>tui.renderMermaid</code></td><td>whether the model is told Mermaid fences render as terminal diagrams</td></tr>
 <tr><td><code>subagent.enabled</code></td><td>the whole Delegation section, which is absent when subagents are off</td></tr>
 <tr><td><code>subagent.delegation</code></td><td>whether the section requests delegation, and whether it uses MUST/ONLY wording</td></tr>
-<tr><td><code>subagent.batch</code></td><td>which call shape the delegation guidance teaches</td></tr>
+<tr><td><code>subagent.batch</code></td><td>which call shape the delegation guidance specifies</td></tr>
 <tr><td><code>subagent.maxConcurrency</code></td><td>the concurrency limit quoted in that guidance</td></tr>
 <tr><td><code>subagent.maxNestedSpawnDepth</code></td><td>the IRC coordination clause, present only when this session can spawn</td></tr>
 <tr><td><code>subagent.agents</code></td><td>which specialists delegation prose names</td></tr>
 <tr><td><code>includeModelInPrompt</code></td><td>whether the active model is surfaced in the workstation block</td></tr>
 <tr><td><code>tools.format</code></td><td>whether tools are described inline or left to the provider’s tool list</td></tr>
-<tr><td><code>inlineToolDescriptors</code></td><td>whether descriptors live in the prompt or provider schemas for the active model</td></tr>
+<tr><td><code>inlineToolDescriptors</code></td><td>whether descriptors are placed in the prompt or provider schemas for the active model</td></tr>
 <tr><td><code>tools.intentTracing</code></td><td>whether the prompt explains the intent field, and whether tool schemas carry it</td></tr>
 </tbody>
 </table>
 </div>
-<p><code>tools.intentTracing</code> and <code>inlineToolDescriptors</code> also decide provider schema shape. When intent
+<p><code>tools.intentTracing</code> and <code>inlineToolDescriptors</code> also control provider schema shape. When intent
 tracing is on, every tool schema sent to the model contains an extra <code>intent</code> field and the prompt
 explains it. Descriptor placement sends full descriptions in exactly one place. In <code>auto</code> mode,
 Gemini receives them inline while other native tool-calling models receive them in their schemas.
@@ -605,14 +605,14 @@ One gate remains frozen:</p>
 </tbody>
 </table>
 </div>
-<h3 id="what-a-gate-is-worth-when-nobody-says"><a class="header" href="#what-a-gate-is-worth-when-nobody-says">What a gate is worth when nobody says</a></h3>
+<h3 id="fallback-behavior-for-omitted-gates"><a class="header" href="#fallback-behavior-for-omitted-gates">Fallback behavior for omitted gates</a></h3>
 <p><code>buildSystemPrompt</code> takes every gate as an optional argument, so a caller can omit all of them.
 That is what the SDK does when it builds a prompt outside a session, and what tests do. The
-fallbacks live in one table, <code>OMITTED_GATE_DEFAULTS</code> in
+fallbacks are defined in one table, <code>OMITTED_GATE_DEFAULTS</code> in
 <code>packages/coding-agent/src/system-prompt-builder/gate-inputs.ts</code>, and the builder reads them from
 there rather than repeating a value next to each argument.</p>
 <p>An omitted gate means the caller has no configuration to offer, so the gate renders off or empty.
-That is not the same as a default session, and on four gates it is deliberately different:</p>
+That is not the same as a default session, and four gates differ:</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -671,8 +671,8 @@ the schemas never change.</p>
 <hr>
 <h2 id="13-statements-the-prompt-is-a-list-not-a-document"><a class="header" href="#13-statements-the-prompt-is-a-list-not-a-document">13) Statements: the prompt is a list, not a document</a></h2>
 <p>The system prompt is a list of <strong>statements</strong>. A statement is a fragment of prompt text with an id,
-a condition, and a purpose. Its text lives in
-<code>src/system-prompt-builder/statements/&lt;section&gt;/&lt;id&gt;.md</code>, and the row that registers it lives in
+a condition, and a purpose. Its text is in
+<code>src/system-prompt-builder/statements/&lt;section&gt;/&lt;id&gt;.md</code>, and the row that registers it is in
 <code>statement-registry.ts</code>.</p>
 <h3 id="why"><a class="header" href="#why">Why</a></h3>
 <p>Sections were already rows, so a section is addressable, orderable and overridable. The
@@ -740,9 +740,9 @@ into fragments and make the registry finer than behavior requires. The division 
 </ul>
 <p>This is why statement Markdown can still contain <code>{{#each skills}}</code>, <code>{{toolRefs.task}}</code>, and
 <code>{{#list globs join=", "}}</code>. The outer <code>system-prompt.md</code> scaffold contains none of them.</p>
-<h3 id="the-registry-owns-section-structure"><a class="header" href="#the-registry-owns-section-structure">The registry owns section structure</a></h3>
+<h3 id="section-structure-is-defined-in-the-registry"><a class="header" href="#section-structure-is-defined-in-the-registry">Section structure is defined in the registry</a></h3>
 <p>A statement file never contains a section banner. <code>assembleSection</code> renders the banner from the
-section registry at the width <code>banner-grammar.ts</code> owns. A <code>PROMPT_SECTIONS/&lt;id&gt;.md</code> replacement also
+section registry at the width <code>banner-grammar.ts</code> defines. A <code>PROMPT_SECTIONS/&lt;id&gt;.md</code> replacement also
 contains body text only. The same assembler adds its registry banner, so shipped statements and
 operator replacements cannot disagree about a section boundary.</p>
 <h3 id="how-statements-reach-the-model"><a class="header" href="#how-statements-reach-the-model">How statements reach the model</a></h3>
@@ -758,7 +758,7 @@ assembleDefaultTemplate({ ...statementSections, ...sectionOverrides });
 </code></pre>
 <p>The complete document is rendered once, so formatting and variable expansion are global rather
 than changing with statement boundaries. <code>assembleDefaultTemplate</code> defines the one newline between
-adjacent static sections. Statement modules own only their own final line.</p>
+adjacent static sections. Statement modules define only their own final line.</p>
 <p>Operator section overrides win because they are spread after the shipped statement map. Append mode
 starts from the complete statement-assembled section, then adds your body inside that region. There
 is no prose-bearing template fallback.</p>
@@ -767,7 +767,7 @@ is no prose-bearing template fallback.</p>
 <ul>
 <li><code>system-prompt.md</code> contains exactly the <code>{{templateSections}}</code> variable and no literal prose,
 condition, or banner.</li>
-<li>Every static section declared by <code>section-registry.ts</code> owns at least one statement. A missing
+<li>Every static section declared by <code>section-registry.ts</code> contains at least one statement. A missing
 section fails module loading.</li>
 <li>The registry supplies section order and banner bytes.</li>
 <li>Replacement files are body-only. A legacy file containing its own banner fails loudly.</li>
@@ -778,9 +778,9 @@ section ordering reach the model.</li>
 <p>There is no frozen prose copy and no migration byte-parity fixture. Prompt behavior is tested from
 the one modular source.</p>
 <h3 id="what-each-rule-costs-and-testing-one-of-them"><a class="header" href="#what-each-rule-costs-and-testing-one-of-them">What each rule costs, and testing one of them</a></h3>
-<p>Two things follow from a rule having a name, and both are the reason the migration was worth doing.</p>
+<p>Two capabilities follow from named rules:</p>
 <p><code>veyyon prompt --statements</code> prints what each rule costs. The number is MARGINAL: what the prompt
-would be shorter by without that rule, not the length of the rule’s text. The distinction matters
+would be shorter by without that rule, not the length of the rule’s text. The distinction is required
 because <code>render</code> ends in a <code>format</code> pass that normalizes whitespace across statement boundaries, so
 the lengths of the statement texts do not add up to the length of the section they form. Measured the
 other way, the parts reconcile with the whole exactly:</p>
@@ -797,13 +797,13 @@ because a rule being off is a configuration rather than a failure.</p>
 replacement text, or to <code>null</code> to remove the rule entirely:</p>
 <pre><code>VEYYON_EVAL_SYSTEM_PROMPT_STATEMENTS='{"tool-policy/delegation-gates": null}'
 </code></pre>
-<p>Same instrument as <code>VEYYON_EVAL_SYSTEM_PROMPT_SECTIONS</code>, one level finer, and deliberately the same
+<p>Same instrument as <code>VEYYON_EVAL_SYSTEM_PROMPT_SECTIONS</code>, one level finer, and uses the same
 shape: environment variable only, no config key, no CLI flag. A config-reachable prompt override could
 silently contaminate a production run, and a contaminated eval reports a number that looks valid.</p>
-<p><code>null</code> and <code>""</code> are different operations, so pick deliberately. <code>null</code> ablates: the row and the
+<p><code>null</code> and <code>""</code> are different operations, so select the appropriate value. <code>null</code> ablates: the row and the
 separation it contains both leave the prompt, because a statement’s text includes its own separation.
 <code>""</code> keeps the row present and empty, so the separation stays and only the words go. Use the first to
-ask whether a rule is worth having, the second to ask whether it needs saying at all.</p>
+evaluate whether to remove a rule, the second to evaluate removing rule text while preserving spacing.</p>
 <p>Every way an override could do nothing is an error rather than a no-op: an unknown statement id, a
 value that is neither a string nor <code>null</code>, malformed JSON. An arm that quietly did nothing would
 report the shipped prompt’s score as the arm’s score, which is a false result with no signal that

@@ -50,10 +50,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-695ab59a.js";
+            window.path_to_searchindex_js = "../searchindex-ddda0f12.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-b613f6a6.js"></script>
+        <script src="../toc-a67314e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -218,7 +218,7 @@
 <p>When a provider needs an API key, <code>veyyon</code> resolves it in this order (first match wins):</p>
 <ol>
 <li><strong>Runtime override</strong>: a key supplied for the current process, e.g. CLI <code>--api-key</code>. Never persisted.</li>
-<li><strong><code>models.yml</code> config key</strong>: an <code>apiKey</code> pinned on a custom provider, registered as a config-sourced bearer. This deliberately beats stored OAuth, so a key supplied for a custom <code>baseUrl</code>/gateway is honored instead of forwarding an upstream OAuth token the proxy would reject.</li>
+<li><strong><code>models.yml</code> config key</strong>: an <code>apiKey</code> pinned on a custom provider, registered as a config-sourced bearer. This takes precedence over stored OAuth, so a key supplied for a custom <code>baseUrl</code>/gateway is honored instead of forwarding an upstream OAuth token the proxy would reject.</li>
 <li><strong>Stored API key</strong>: an API-key credential saved in the auth store.</li>
 <li><strong>Stored OAuth credential</strong>: refreshed when needed; multiple accounts are ranked/rotated automatically. For Anthropic, each organization counts as its own account: one email holding both a Team seat and a personal plan can log in once per subscription (pick the workspace on the browser consent page) and rotation treats them as two accounts.</li>
 <li><strong>Provider environment variable</strong>: including values loaded from <code>.env</code> files (see <a href="#environment-variables-and-env-files">the env-var table</a>).</li>
