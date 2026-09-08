@@ -4,6 +4,7 @@
 
 ### Added
 
+- `/reload-config` and `Settings.reloadConfig()` refresh profile model roles and subagent routing/effort defaults in place, report effective changes, and reject invalid files or concurrent saves without replacing live settings. Existing model bindings remain unchanged.
 - The `/autoswarm` dashboard lists a `New session` action (`n`) over an existing session, which closes it keeping every file and every logged run and starts a fresh one with the setup as it stands.
 - Swarm presets: `swarm` and `wide` are built in, and the console saves the current shape under a name to `presets.json` beside the autoresearch databases, offered in every repository.
 - The run screen's `running` row shows the last twelve lines the harness printed under the command, refreshed once a second, with escapes stripped and a carriage-return progress row shown in its final state.
@@ -24,6 +25,8 @@
 
 ### Fixed
 
+- Config reload reports the startup schema's nested-lane diagnostics and retains the last activated settings across later saves, preserving restart-required disk edits without silently applying them.
+- A rejected `/reload-config` submitted as a TUI follow-up displays an error and preserves the draft and active config instead of escaping as an unhandled rejection; text transports still receive failure.
 - Starting a task or importing phased lists preserves concurrent in-progress tasks without demoting active work to pending, and the collapsed todo board displays all phases with active tasks.
 - Resetting tasks or phases to pending preserves an all-pending state without auto-promotion, multi-active reminders and goal prompts enforce strict context preview budgets, and collapsed boards reserve space for overflow notices under the row cap.
 - Fixed native topic replenishment to reject incomplete authorization, preserve ticket identity through dispatch and completion, retry failed dispatches, advance QA and review stages, and reserve concurrent worker capacity without exceeding configured limits ([#4629](https://github.com/santhreal/veyyon/issues/4629)).
