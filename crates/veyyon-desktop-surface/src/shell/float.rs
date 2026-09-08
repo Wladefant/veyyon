@@ -70,7 +70,7 @@ pub(super) fn overlay_layer(
 			palette_surface(state, editor, &geometry, tokens, cx).into_any_element()
 		},
 		Overlay::Settings(state) => {
-			settings_surface(state, &view.state.controls, &surface.settings, tokens, cx)
+			settings_surface(state, &view.state.controls, &surface.settings, tokens, window, cx)
 				.into_any_element()
 		},
 	};

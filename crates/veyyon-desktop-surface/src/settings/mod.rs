@@ -17,7 +17,7 @@ use veyyon_desktop_model::{
 use veyyon_desktop_tokens::SettingsSurfaceTokens;
 use veyyon_gpui::{
 	ClickEvent, Context, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement,
-	Styled, div, px,
+	Styled, Window, div, px,
 };
 
 pub use self::{body::*, pages::*, row::*};
@@ -104,17 +104,21 @@ pub fn settings_surface(
 	controls: &ControlStates,
 	geometry: &SettingsSurfaceTokens,
 	tokens: &TokenSet,
+	window: &Window,
 	cx: &Context<ShellView>,
 ) -> impl IntoElement {
 	let radius = tokens.radius(RadiusStep::Xl);
 	let bg = tokens.color(ColorRole::Float);
 	let border = tokens.color(ColorRole::Hairline);
 	let pad = tokens.spacing(SpacingStep::S6);
+	let margin = tokens.spacing(SpacingStep::S4) * 2.0;
 
 	let mut dialog = div()
 		.id("settings-dialog")
 		.w(px(860.0))
+		.max_w(window.viewport_size().width - margin)
 		.h(px(560.0))
+		.max_h(window.viewport_size().height - margin)
 		.rounded(radius)
 		.bg(bg)
 		.border_1()
@@ -126,7 +130,9 @@ pub fn settings_surface(
 
 	// Left sidebar (200px width).
 	let mut sidebar = div()
+		.id("settings-sidebar")
 		.w(px(200.0))
+		.flex_shrink_0()
 		.h_full()
 		.border_r_1()
 		.border_color(border)
@@ -134,10 +140,11 @@ pub fn settings_surface(
 		.flex()
 		.flex_col()
 		.gap(tokens.spacing(SpacingStep::S1))
-		.overflow_hidden();
+		.overflow_y_scroll();
 
 	sidebar = sidebar.child(
 		div()
+			.flex_shrink_0()
 			.px(tokens.spacing(SpacingStep::S2))
 			.py(tokens.spacing(SpacingStep::S2))
 			.text_size(tokens.font_size(TextRamp::Head))
@@ -163,6 +170,7 @@ pub fn settings_surface(
 		let page_btn = div()
 			.id(("settings-tab", page as usize))
 			.h(px(32.0))
+			.flex_shrink_0()
 			.px(tokens.spacing(SpacingStep::S3))
 			.rounded(tokens.radius(RadiusStep::Sm))
 			.bg(tab_bg)
@@ -199,6 +207,8 @@ pub fn settings_surface(
 	// Right content area.
 	let mut content = div()
 		.flex_1()
+		.min_w_0()
+		.min_h_0()
 		.h_full()
 		.p(pad)
 		.flex()
@@ -207,6 +217,7 @@ pub fn settings_surface(
 
 	// Page Header.
 	let header = div()
+		.flex_shrink_0()
 		.mb(px(geometry.group_gap))
 		.flex()
 		.flex_col()
