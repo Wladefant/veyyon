@@ -162,6 +162,10 @@ Reference an issue with `Refs #911` or a bare `#911`. Both link the commit to th
 nothing. An issue closes when the reporter has confirmed the fix in a release, and only when the
 request says to close it.
 
+veybot is the one exception, bounded to the issue it was opened for: `gh_open_pr` in
+`python/veybot/src/host_tools.py` rejects a body without `Fixes #N` for that number. Every other
+pull request writes `Refs #N`.
+
 A closing keyword that already landed cannot be undone by editing the commit message: reopen the
 issue and say it autoclosed.
 
