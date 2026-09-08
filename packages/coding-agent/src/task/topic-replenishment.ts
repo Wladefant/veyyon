@@ -232,6 +232,20 @@ export interface ClaimTicketResult {
 	uncoveredTopics?: string[];
 }
 
+export type MemoryMeasurement = {
+	total: number;
+	free: number;
+};
+
+export type MemoryMeasurementProvider = () => MemoryMeasurement | Promise<MemoryMeasurement>;
+
+export interface MemoryAdmissionOptions {
+	maxPct?: number;
+	cleanupPct?: number;
+	onCleanup?: () => Promise<void> | void;
+	memoryProvider?: MemoryMeasurementProvider;
+}
+
 export interface TopicReplenishmentEngineOptions {
 	ledgerPath?: string;
 	executor?: (ticket: ClaimedTicket) => Promise<unknown>;
@@ -240,6 +254,7 @@ export interface TopicReplenishmentEngineOptions {
 	maxCeiling?: number;
 	maxRamPct?: number;
 	cleanupRamPct?: number;
+	memoryProvider?: MemoryMeasurementProvider;
 }
 
 export interface ReplenishmentDispatchOptions {
@@ -251,6 +266,7 @@ export interface ReplenishmentDispatchOptions {
 	cleanupRamPct?: number;
 	onCleanup?: () => Promise<void> | void;
 	dispatchWorker?: (ticket: ClaimedTicket) => Promise<unknown>;
+	memoryProvider?: MemoryMeasurementProvider;
 }
 
 export interface ReplenishmentOutcome {
@@ -436,18 +452,29 @@ export function reconcileRunningTopics(
  * NOTE: This is an advisory pre-spawn check. It guarantees pre-admission bounds,
  * but cannot guarantee that running processes will not subsequently spike memory.
  */
-export async function checkMemoryAdmission(options?: {
-	maxPct?: number;
-	cleanupPct?: number;
-	onCleanup?: () => Promise<void> | void;
-}): Promise<MemoryAdmissionResult> {
+export function getSystemMemory(): MemoryMeasurement {
+	return {
+		total: os.totalmem(),
+		free: os.freemem(),
+	};
+}
+
+let activeSystemMemoryProvider: MemoryMeasurementProvider = getSystemMemory;
+
+export function setSystemMemoryProviderForTesting(provider: MemoryMeasurementProvider | null): void {
+	activeSystemMemoryProvider = provider ?? getSystemMemory;
+}
+
+export async function checkMemoryAdmission(options?: MemoryAdmissionOptions): Promise<MemoryAdmissionResult> {
 	const maxPct = options?.maxPct ?? HARD_RAM_CEILING_PCT;
 	const cleanupPct = options?.cleanupPct ?? CLEANUP_RAM_PCT;
+	const measure = options?.memoryProvider ?? activeSystemMemoryProvider;
 
-	const total = os.totalmem();
-	let free = os.freemem();
+	const initial = await measure();
+	const total = initial.total;
+	let free = initial.free;
 	let used = total - free;
-	let usedPct = (used / total) * 100;
+	let usedPct = total > 0 ? (used / total) * 100 : 0;
 	const totalMb = Math.round(total / (1024 * 1024));
 	let freeMb = Math.round(free / (1024 * 1024));
 
@@ -467,9 +494,10 @@ export async function checkMemoryAdmission(options?: {
 		try {
 			await options.onCleanup();
 			cleanedUp = true;
-			free = os.freemem();
+			const after = await measure();
+			free = after.free;
 			used = total - free;
-			usedPct = (used / total) * 100;
+			usedPct = total > 0 ? (used / total) * 100 : 0;
 			freeMb = Math.round(free / (1024 * 1024));
 		} catch {
 			// On cleanup error, continue with fresh measurement
@@ -860,6 +888,7 @@ export class TopicReplenishmentEngine {
 	readonly maxCeiling: number;
 	readonly maxRamPct: number;
 	readonly cleanupRamPct: number;
+	readonly memoryProvider?: MemoryMeasurementProvider;
 
 	constructor(options?: TopicReplenishmentEngineOptions) {
 		this.ledgerPath = options?.ledgerPath ?? getDefaultLedgerPath();
@@ -869,6 +898,7 @@ export class TopicReplenishmentEngine {
 		this.maxCeiling = options?.maxCeiling ?? DEFAULT_MAX_CEILING;
 		this.maxRamPct = options?.maxRamPct ?? HARD_RAM_CEILING_PCT;
 		this.cleanupRamPct = options?.cleanupRamPct ?? CLEANUP_RAM_PCT;
+		this.memoryProvider = options?.memoryProvider;
 	}
 
 	setNativeExecutor(executor: (ticket: ClaimedTicket) => Promise<unknown>): void {
@@ -920,6 +950,7 @@ export class TopicReplenishmentEngine {
 		options?: {
 			onCleanup?: () => Promise<void> | void;
 			dispatchWorker?: (ticket: ClaimedTicket) => Promise<unknown>;
+			memoryProvider?: MemoryMeasurementProvider;
 		},
 	): Promise<ReplenishmentOutcome> {
 		return await withReplenishmentLease(this.ledgerPath, () => this.#replenishOnce(currentRoster, options));
@@ -930,6 +961,7 @@ export class TopicReplenishmentEngine {
 		options?: {
 			onCleanup?: () => Promise<void> | void;
 			dispatchWorker?: (ticket: ClaimedTicket) => Promise<unknown>;
+			memoryProvider?: MemoryMeasurementProvider;
 		},
 	): Promise<ReplenishmentOutcome> {
 		const activeExecutor = options?.dispatchWorker ?? this.executor;
@@ -948,6 +980,7 @@ export class TopicReplenishmentEngine {
 			maxPct: this.maxRamPct,
 			cleanupPct: this.cleanupRamPct,
 			onCleanup: options?.onCleanup,
+			memoryProvider: options?.memoryProvider ?? this.memoryProvider,
 		});
 
 		if (!memoryAdmission.admitted) {
@@ -983,7 +1016,10 @@ export class TopicReplenishmentEngine {
 		let currentRunning = effectiveActiveCount;
 
 		while (currentRunning < this.targetCount && currentRunning < this.maxCeiling) {
-			const stepMem = await checkMemoryAdmission({ maxPct: this.maxRamPct });
+			const stepMem = await checkMemoryAdmission({
+				maxPct: this.maxRamPct,
+				memoryProvider: options?.memoryProvider ?? this.memoryProvider,
+			});
 			if (!stepMem.admitted) {
 				break;
 			}
