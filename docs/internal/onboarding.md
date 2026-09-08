@@ -135,10 +135,11 @@ format). Match the surrounding code.
 ## Opening a pull request
 
 Pull requests are open to everyone, see [CONTRIBUTING.md](../../CONTRIBUTING.md).
-Open the PR against `main`. Put your change under the affected package's
-`## [Unreleased]` changelog section, keep the PR description short (what broke, the
-fix), and make sure `bun run check` and the tests pass. Opening the PR runs
-`Checks` and `CI` against it; a maintainer makes the final call and decides
-whether an automated review is requested.
+A bug fix may open with no issue; anything else needs an issue first and `Refs #N`
+in the body. Open the PR against `main`. Put your change under the affected
+package's `## [Unreleased]` changelog section, keep the PR description short (what
+broke, the fix), and make sure `bun run check` and the tests pass. Opening the PR
+runs `Checks` and `CI` against it; a maintainer makes the final call on whether an
+automated review is requested.
 
-*Verified against `61c974a6c` on 2026-08-21.*
+*Verified against `27ce431318` on 2026-09-08.*
