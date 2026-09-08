@@ -136,8 +136,21 @@ The regeneration command belongs in the handbook page that owns the surface.
 
 ## GitHub
 
-Never comment on GitHub (issues, PRs, discussions) and never create issues, unless the request says
-exactly what to write.
+Comment, open, review, label, edit and close when instructed to. The instruction is the approval,
+whether or not it specifies the wording. Write the text, post it, then report what was posted.
+Never act uninstructed: no unsolicited comment, issue or review, and nothing on a repository
+outside these accounts.
+
+### A pull request needs an issue first
+
+A bug fix may open with no issue. Everything else — feature, refactor, dependency, migration —
+needs an issue first, and `Refs #N` in the pull request body.
+
+Scope is settled on the issue, before the work exists. For a large pull request with no issue
+behind it, request the issue instead of reviewing the diff.
+
+One concern per pull request. The description covers every change in the diff; an undescribed
+change is itself a finding, per [`review.md`](review.md). Split a fix that includes unrelated work.
 
 Never write a closing keyword into a commit message, a pull request title, or a pull request body.
 `Closes`, `Fixes`, `Resolves` and their variants (`close`, `closed`, `fix`, `fixed`, `resolve`,
@@ -148,6 +161,10 @@ the same approval as closing the issue by hand, and a push to `main` grants no s
 Reference an issue with `Refs #911` or a bare `#911`. Both link the commit to the issue and close
 nothing. An issue closes when the reporter has confirmed the fix in a release, and only when the
 request says to close it.
+
+veybot is the one exception, bounded to the issue it was opened for: `gh_open_pr` in
+`python/veybot/src/host_tools.py` rejects a body without `Fixes #N` for that number. Every other
+pull request writes `Refs #N`.
 
 A closing keyword that already landed cannot be undone by editing the commit message: reopen the
 issue and say it autoclosed.
@@ -636,9 +653,11 @@ bun run release minor          # do it.
 Rust workspace, the natives sentinel and the lockfiles, rolls each package's `## [Unreleased]` into a
 dated section, regenerates the root changelog, and commits `chore: bump version to vX.Y.Z`. It then
 shows the commit and tag and asks once; on yes it pushes `main`, waits for that SHA's checks, and
-tags. It needs explicit approval to run because it pushes: the prompt is that approval, no flag
-answers it in advance, and an agent never answers it. `release:dry` publishes nothing, which is why
-it is non-interactive.
+tags. `release:dry` publishes nothing, which is why it is non-interactive.
+
+Mechanics are here. Approval is in the operator's global `AGENTS.md`. The script's prompt is a
+terminal confirmation, not the approval; it fails without a TTY, hence the three by-hand moves
+below.
 
 Only a tag publishes. A push, a green run, and a waiting `## [Unreleased]` bullet do not. The three
 underlying moves, which every non-publishing exit prints and which you can finish by hand:

@@ -90,8 +90,8 @@ import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
 import { renderResult, renderCall as renderTaskCall } from "./render";
 import { repairTaskParams } from "./repair-args";
 import { treeSpawnSemaphore } from "./spawn-semaphore";
-import { parseIsolationMode } from "./worktree";
 import { recordNativeDispatch } from "./topic-replenishment";
+import { parseIsolationMode } from "./worktree";
 
 function renderSubagentUserPrompt(assignment: string): string {
 	return prompt.render(subagentPrompts["subagent/user-prompt"].text, {
