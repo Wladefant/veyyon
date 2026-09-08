@@ -976,6 +976,9 @@ export class Settings {
 			}
 		}
 		this.#rebuildMerged();
+		for (const change of changed) {
+			this.#fireEffectiveSettingChanged(change.path, this.get(change.path), change.before);
+		}
 		return { changed, restartRequired };
 	}
 
@@ -2566,6 +2569,17 @@ export class Settings {
 	}
 
 	async #saveNow(): Promise<void> {
+		while (this.#savePromise) await this.#savePromise;
+		const pending = this.#persistNow();
+		this.#savePromise = pending;
+		try {
+			await pending;
+		} finally {
+			if (this.#savePromise === pending) this.#savePromise = undefined;
+		}
+	}
+
+	async #persistNow(): Promise<void> {
 		if (!this.#persist || !this.#configPath || this.#modified.size === 0) return;
 
 		const configPath = this.#configPath;
