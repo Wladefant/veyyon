@@ -412,7 +412,7 @@ argot. Never hand-roll handle logic here.
 ## Commands
 
 - Commit frequently: each logical chunk as its own commit once it stands alone and its gate is green.
-  Pushing is separate and needs explicit approval.
+  Pushing follows the operator's global `AGENTS.md`; this file does not set it.
 - Stage only the paths you changed. `git add -A` is banned; this tree carries other lanes' in-flight
   work.
 - Never `tsc`/`npx tsc`. Always `bun run check`.
