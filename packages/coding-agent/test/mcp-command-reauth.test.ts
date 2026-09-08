@@ -252,7 +252,7 @@ describe("/mcp auth commands", () => {
 				await controller.handle("/mcp reauth envserver");
 				expect(authorizationScopes).toEqual([scenario.expected]);
 				expect(registeredScopes).toEqual([scenario.expected]);
-				expect(showError).toHaveBeenCalled();
+				expect(showError.mock.calls.flat().join("\n")).toContain("Consent cancelled");
 				expect(authStorage.get(credentialId)).toEqual(previous);
 			});
 		}
