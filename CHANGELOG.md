@@ -38,6 +38,8 @@
 
 ### Fixed
 
+- Config reload reports the startup schema's nested-lane diagnostics and retains the last activated settings across later saves, preserving restart-required disk edits without silently applying them.
+- A rejected `/reload-config` submitted as a TUI follow-up displays an error and preserves the draft and active config instead of escaping as an unhandled rejection; text transports still receive failure.
 - Starting a task or importing phased lists preserves concurrent in-progress tasks without demoting active work to pending, and the collapsed todo board displays all phases with active tasks.
 - Resetting tasks or phases to pending preserves an all-pending state without auto-promotion, multi-active reminders and goal prompts enforce strict context preview budgets, and collapsed boards reserve space for overflow notices under the row cap.
 - Fixed native topic replenishment to reject incomplete authorization, preserve ticket identity through dispatch and completion, retry failed dispatches, advance QA and review stages, and reserve concurrent worker capacity without exceeding configured limits ([#4629](https://github.com/santhreal/veyyon/issues/4629)).
@@ -50,7 +52,9 @@
 - A user or developer message that carries prior-turn reasoning as prose declares its origin through `demotedReasoningSource`, and `transformMessages` holds it to the unsigned-thinking replay policy: a signing Anthropic endpoint drops it on same-model replay, and every `anthropic-messages` target drops it once `replayDemotedPriorReasoning` is off by catalog or learned from a `reasoning_extraction` refusal, instead of re-sending the same prose on the retry and on every later turn of the session.
 - OpenCode Zen and Go turns no longer fail with `400 only '"auto"' is supported for 'tool_choice'`. The gateways reject `"none"`, `"required"` and named function choices, so both OpenAI-shaped compat builders now declare `tool_choice` unsupported for them and omit the field, which is what `"auto"` means on that wire. The guided goal pins its `respond` tool by name and so failed on every interview turn; models reached under a custom provider id pointed at `opencode.ai` are covered by the same host match.
 - An inline image whose first rows have scrolled into native scrollback is repainted as a placement clipped to its visible rows, so a forced viewport repaint (an overlay opening or closing, a resize, a tool finalizing) no longer draws it too low over the text below it or erases part of it.
+- Fatal stdout errors disable terminal output before cleanup, preventing restore writes to a closed stream.
 - Broken child-stdin writes no longer terminate the host; quiet EPIPE shutdown requires an error observed on process stdout or stderr.
+- Repeated stdout or stderr errors during shutdown no longer interrupt asynchronous session persistence.
 
 ## [1.4.0] - 2026-09-04
 
