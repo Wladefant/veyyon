@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-09-08
+
 ### Added
 
 - `/reload-config` and `Settings.reloadConfig()` refresh profile model roles and subagent routing/effort defaults in place, report effective changes, and reject invalid files or concurrent saves without replacing live settings. Existing model bindings remain unchanged.

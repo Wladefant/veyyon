@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-09-08
+
 ### Added
 
 - `/reload-config` and `Settings.reloadConfig()` refresh profile model roles and subagent routing/effort defaults in place, report effective changes, and reject invalid files or concurrent saves without replacing live settings. Existing model bindings remain unchanged.
@@ -46,6 +48,7 @@
 - The setup form's models note states a spec past the last arm (`"glm" has no arm at breadth 2.`), which the persisted setup dropped without a word when breadth came down.
 - A compaction, branch-summary or turn-prefix transcript leaves out a user or developer message that carries prior reasoning as prose (`demotedReasoningSource`), the message a user-interrupted turn leaves behind, instead of quoting that reasoning back at the endpoint inside the summary request.
 - A user or developer message that carries prior-turn reasoning as prose declares its origin through `demotedReasoningSource`, and `transformMessages` holds it to the unsigned-thinking replay policy: a signing Anthropic endpoint drops it on same-model replay, and every `anthropic-messages` target drops it once `replayDemotedPriorReasoning` is off by catalog or learned from a `reasoning_extraction` refusal, instead of re-sending the same prose on the retry and on every later turn of the session.
+- OpenCode Zen and Go turns no longer fail with `400 only '"auto"' is supported for 'tool_choice'`. The gateways reject `"none"`, `"required"` and named function choices, so both OpenAI-shaped compat builders now declare `tool_choice` unsupported for them and omit the field, which is what `"auto"` means on that wire. The guided goal pins its `respond` tool by name and so failed on every interview turn; models reached under a custom provider id pointed at `opencode.ai` are covered by the same host match.
 - An inline image whose first rows have scrolled into native scrollback is repainted as a placement clipped to its visible rows, so a forced viewport repaint (an overlay opening or closing, a resize, a tool finalizing) no longer draws it too low over the text below it or erases part of it.
 - Broken child-stdin writes no longer terminate the host; quiet EPIPE shutdown requires an error observed on process stdout or stderr.
 

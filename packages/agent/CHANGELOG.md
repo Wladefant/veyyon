@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-09-08
+
 ### Fixed
 
 - A compaction, branch-summary or turn-prefix transcript leaves out a user or developer message that carries prior reasoning as prose (`demotedReasoningSource`), the message a user-interrupted turn leaves behind, instead of quoting that reasoning back at the endpoint inside the summary request.
