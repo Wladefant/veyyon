@@ -57,7 +57,14 @@ describe("config hot reload", () => {
 		const file = path.join(dir, "config.yml");
 		await fs.writeFile(file, "subagent:\n  model: openai/old\n");
 		const settings = await Settings.loadReadOnly({ agentDir: dir });
-		for (const invalid of ["[broken", "- sequence", "subagent:\n  model: 42\n"]) {
+		for (const invalid of [
+			"[broken",
+			"- sequence",
+			"subagent:\n  model: 42\n",
+			"subagent: 42\n",
+			"subagent: null\n",
+			"subagent: []\n",
+		]) {
 			await fs.writeFile(file, invalid);
 			await expect(settings.reloadConfig()).rejects.toThrow();
 			expect(settings.get("subagent.model")).toBe("openai/old");

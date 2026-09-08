@@ -828,6 +828,7 @@ const BUILTIN_SLASH_COMMAND_HANDLERS: { [Name in BuiltinSlashCommandName]: Handl
 				);
 			} catch (error) {
 				await runtime.output(`Config reload failed: ${error instanceof Error ? error.message : String(error)}`);
+				throw error;
 			}
 		},
 	},

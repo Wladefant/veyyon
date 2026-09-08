@@ -905,7 +905,7 @@ export class Settings {
 			clearTimeout(this.#saveTimer);
 			this.#saveTimer = undefined;
 		}
-		if (this.#savePromise) {
+		while (this.#savePromise) {
 			await this.#savePromise;
 		}
 		if (this.#modified.size > 0) {
@@ -933,6 +933,18 @@ export class Settings {
 		candidate.#configFiles = this.#configFiles;
 		candidate.#configOverlay = await candidate.#loadConfigOverlays();
 		candidate.#overrides = this.#overrides;
+		for (const source of [candidate.#global, candidate.#configOverlay]) {
+			for (const settingPath of Object.keys(SETTINGS_SCHEMA)) {
+				const segments = settingPath.split(".");
+				for (let depth = 1; depth < segments.length; depth++) {
+					const namespace = getByPath(source, segments.slice(0, depth));
+					if (namespace === undefined) break;
+					if (namespace === null || typeof namespace !== "object" || Array.isArray(namespace)) {
+						throw new Error(`Invalid config namespace ${segments.slice(0, depth).join(".")}; reload rejected.`);
+					}
+				}
+			}
+		}
 		candidate.#collectInvalidValues(candidate.#global, this.#configPath);
 		candidate.#collectInvalidValues(candidate.#configOverlay, "--config overlays");
 		if (candidate.#invalidValues.length) throw new Error("Invalid config settings; reload rejected.");
