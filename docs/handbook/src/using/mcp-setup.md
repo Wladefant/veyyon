@@ -154,11 +154,16 @@ TUI with `/mcp reauth <name>`:
     "crm": {
       "type": "http",
       "url": "https://crm.example.com/mcp",
-      "oauth": { "clientId": "veyyon-crm-client" }
+      "oauth": {
+        "clientId": "veyyon-crm-client",
+        "scopes": "read write"
+      }
     }
   }
 }
 ```
+
+To override discovered scopes during dynamic client registration and authorization, set `scopes` to a space-separated string.
 
 ## Approve tools
 

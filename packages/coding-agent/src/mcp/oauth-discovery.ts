@@ -107,7 +107,7 @@ export function extractOAuthEndpoints(error: Error): OAuthEndpoints | null {
 		const scopeFromArray = Array.isArray(obj.scopes_supported)
 			? (obj.scopes_supported as unknown[]).filter(v => typeof v === "string").join(" ")
 			: undefined;
-		const scopes = (obj.scopes as string | undefined) || (obj.scope as string | undefined) || scopeFromArray;
+		const scopes = scopeFromArray || (obj.scopes as string | undefined) || (obj.scope as string | undefined);
 		const clientId =
 			(obj.client_id as string | undefined) ||
 			(obj.clientId as string | undefined) ||
@@ -155,10 +155,18 @@ export function extractOAuthEndpoints(error: Error): OAuthEndpoints | null {
 				const oauthData = (errorBody.oauth || errorBody.authorization || errorBody.auth) as Record<string, unknown>;
 				const endpoints = readEndpointsFromObject(oauthData);
 				if (endpoints) {
+					// Top-level error body represents the protected resource; resource scopes
+					// take precedence over nested authorization-server endpoints scopes (RFC 9728 §3).
+					const resourceScopeFromArray = Array.isArray(errorBody.scopes_supported)
+						? (errorBody.scopes_supported as unknown[]).filter(v => typeof v === "string").join(" ")
+						: undefined;
+					const resourceScopes =
+						resourceScopeFromArray || (errorBody.scopes as string | undefined) || (errorBody.scope as string | undefined);
+
 					return {
 						...endpoints,
 						clientId: endpoints.clientId || clientIdFromAuthUrl(endpoints.authorizationUrl),
-						scopes: endpoints.scopes || scopeFromAuthUrl(endpoints.authorizationUrl),
+						scopes: resourceScopes || endpoints.scopes || scopeFromAuthUrl(endpoints.authorizationUrl),
 					};
 				}
 			}
@@ -243,7 +251,7 @@ export function analyzeAuthError(error: Error, serverUrl?: string): AuthDetectio
 	const challengeScopes = extractOAuthChallengeScopes(error);
 
 	if (oauth) {
-		const mergedScopes = oauth.scopes ?? challengeScopes;
+		const mergedScopes = challengeScopes ?? oauth.scopes;
 		// Callers on the JSON-error-body path use `authResult.oauth` directly and
 		// skip `discoverOAuthEndpoints`; without merging the challenge scope back
 		// into the returned endpoints, `/mcp reauth` and `/mcp add` still mint a
@@ -403,7 +411,7 @@ export async function discoverOAuthEndpoints(
 	serverUrl: string,
 	authServerUrl?: string,
 	resourceMetadataUrl?: string,
-	opts?: { fetch?: FetchImpl; protectedResource?: string; protectedScopes?: string },
+	opts?: { fetch?: FetchImpl; protectedResource?: string; protectedScopes?: string; scopes?: string },
 ): Promise<OAuthEndpoints | null> {
 	const fetchImpl: FetchImpl = opts?.fetch ?? fetch;
 	const wellKnownPaths = [
@@ -475,7 +483,7 @@ export async function discoverOAuthEndpoints(
 								: typeof metadata.public_client_id === "string"
 									? metadata.public_client_id
 									: undefined,
-				scopes: readMetadataScopes(metadata) ?? protectedScopes,
+				scopes: opts?.scopes ?? protectedScopes ?? readMetadataScopes(metadata),
 				resource,
 			};
 		}
@@ -499,7 +507,7 @@ export async function discoverOAuthEndpoints(
 									: typeof oauthData.public_client_id === "string"
 										? oauthData.public_client_id
 										: undefined,
-					scopes: readMetadataScopes(oauthData) ?? protectedScopes,
+					scopes: opts?.scopes ?? protectedScopes ?? readMetadataScopes(oauthData),
 					resource,
 				};
 			}
@@ -553,6 +561,7 @@ export async function discoverOAuthEndpoints(
 									fetch: fetchImpl,
 									protectedResource: discoveredProtectedResource,
 									protectedScopes: readMetadataScopes(metadata) ?? protectedScopes,
+									scopes: opts?.scopes,
 								});
 								if (discovered) return discovered;
 							}
