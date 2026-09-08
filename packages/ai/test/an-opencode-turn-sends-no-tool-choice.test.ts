@@ -41,8 +41,8 @@
  * WHAT IT DOES NOT CATCH. Whether the model then chooses the tool. Dropping the
  * pin means the upstream is asked rather than told, so a turn that depended on
  * forcing a call now depends on the model complying; both callers survive that
- * by parsing a JSON text reply when no tool call arrives (`parseJsonPayload` in
- * `goals/guided-setup.ts` and `eval/completion-bridge.ts`).
+ * by parsing a JSON text reply when no tool call arrives (`parseJsonPayload`, in
+ * guided goal setup and in the eval completion bridge).
  */
 import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
@@ -89,8 +89,8 @@ const OTHER_SHAPED = GATEWAY_MODELS.filter(({ model }) => !OPENAI_SHAPED_APIS.in
 
 /**
  * Every shape a caller can hand to `toolChoice`, including the two spellings of
- * a named pin: `{ type: "tool" }` is what `goals/guided-setup.ts` and
- * `eval/completion-bridge.ts` send, and `{ type: "function" }` is what
+ * a named pin: `{ type: "tool" }` is what guided goal setup and the eval
+ * completion bridge send, and `{ type: "function" }` is what
  * `buildNamedToolChoice` returns for these APIs.
  */
 const TOOL_CHOICES: readonly { label: string; value: ToolChoice }[] = [
