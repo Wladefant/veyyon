@@ -28,6 +28,8 @@
  *     when named", and nobody could tell what the switch did.
  */
 
+import { parseConfiguredThinkingLevel } from "../../thinking";
+
 /**
  * One lane in {@link SUBAGENTS_SETTINGS}`["subagent.agents"]`, keyed at the top
  * level by agent name (`deep`, `scout`, a user-authored agent, …).
@@ -115,14 +117,20 @@ function validateLane(key: string, value: unknown): string | undefined {
 		) {
 			return `${location}.model: expected a model pattern or list of patterns`;
 		}
-		if (lane.thinkingLevel !== undefined && typeof lane.thinkingLevel !== "string") {
-			return `${location}.thinkingLevel: expected a string`;
+		if (
+			lane.thinkingLevel !== undefined &&
+			(typeof lane.thinkingLevel !== "string" ||
+				(lane.thinkingLevel.trim() !== "" && parseConfiguredThinkingLevel(lane.thinkingLevel.trim()) === undefined))
+		) {
+			return `${location}.thinkingLevel: expected a configured effort level or blank`;
 		}
 		if (
 			lane.maxNestedSpawnDepth !== undefined &&
-			(typeof lane.maxNestedSpawnDepth !== "number" || !Number.isFinite(lane.maxNestedSpawnDepth))
+			(typeof lane.maxNestedSpawnDepth !== "number" ||
+				!Number.isInteger(lane.maxNestedSpawnDepth) ||
+				lane.maxNestedSpawnDepth < -1)
 		) {
-			return `${location}.maxNestedSpawnDepth: expected a finite number`;
+			return `${location}.maxNestedSpawnDepth: expected -1 or a non-negative integer`;
 		}
 		current = lane.subagents;
 		location += ".subagents";

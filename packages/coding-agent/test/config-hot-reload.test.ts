@@ -118,6 +118,9 @@ describe("config hot reload", () => {
 			{ enabled: "false" },
 			{ thinkingLevel: 42 },
 			{ maxNestedSpawnDepth: "2" },
+			{ maxNestedSpawnDepth: 1.5 },
+			{ maxNestedSpawnDepth: -2 },
+			{ thinkingLevel: "impossible" },
 			{ subagents: [] },
 			{ subagents: null },
 		]) {
@@ -129,6 +132,22 @@ describe("config hot reload", () => {
 				expect(await fs.readFile(file, "utf8")).toBe(contents);
 			}
 		}
+		await fs.writeFile(
+			file,
+			JSON.stringify({
+				subagent: {
+					agents: {
+						task: {
+							model: "openai/allowed",
+							thinkingLevel: "high",
+							subagents: { enabled: true, thinkingLevel: " ", maxNestedSpawnDepth: -1 },
+						},
+					},
+				},
+			}),
+		);
+		await settings.reloadConfig();
+		expect(resolveSubagentModel({ settings, agentName: "task" }).patterns).toEqual(["openai/allowed"]);
 	});
 
 	it("reloads defaults when the main file is deleted", async () => {

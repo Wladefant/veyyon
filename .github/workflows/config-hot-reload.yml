@@ -27,3 +27,16 @@ jobs:
         run: bash scripts/test-sandbox/run.sh bun test packages/coding-agent/test/config-hot-reload.test.ts packages/coding-agent/test/settings-reload-cwd.test.ts
       - name: Exact-parity routing bench
         run: bash scripts/test-sandbox/run.sh bun packages/coding-agent/bench/config-hot-reload.bench.ts
+      - name: Build private-display recorder
+        run: |
+          bun --cwd=packages/natives run ensure
+          bash proof/docker/build-recorder.sh
+      - name: Record production command differential
+        run: bash proof/record.sh proof/scenes/config-hot-reload.sh
+      - name: Preserve rendered command proof
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: config-hot-reload-proof
+          path: proof/captures/x11/
+          if-no-files-found: error
