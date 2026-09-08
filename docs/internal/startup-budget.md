@@ -199,9 +199,10 @@ last change to rendered text, cell styles or cursor position during the observat
 The final screen must still contain the resolved metadata and retained input.
 Nonvisual terminal queries do not restart the interval.
 
-`--observe-ms` defaults to 5000. `--stable-ms` requires at least 1000 milliseconds
-without a final screen change. Missing metadata, lost input, early exit or an
-insufficient stable interval fails the arm. `--columns` and `--rows` change the PTY
+`--observe-ms` defaults to 5000. `--stable-ms` sets the required unchanged
+interval and defaults to 1000 milliseconds without a final screen change.
+Missing metadata, lost input, early exit or an insufficient stable interval
+fails the arm. `--columns` and `--rows` change the PTY
 and parser dimensions together. Each run writes a timestamped screen trace under
 the scratch directory, including failed runs. Process-tree termination is awaited.
 
@@ -370,5 +371,4 @@ The binary meets the first target at 84ms warm and 79ms cold, medians of 5 on an
 It is still a target and not a gate. Wiring it to CI needs a runner whose timings are stable enough
 that a red build means a regression, and a first-frame median here moves by more than 50% between
 repetitions, and by more than that when a type check shares the machine.
-
 *Verified against `9c904aa2db` on 2026-09-05.*
