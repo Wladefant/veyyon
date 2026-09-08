@@ -1,5 +1,9 @@
 import * as os from "node:os";
 import { scheduler } from "node:timers/promises";
+import {
+	CHATGPT_WEB_PROVIDER_ID,
+	isChatGptWebLoopbackUrl,
+} from "@veyyon/catalog/discovery/chatgpt-web";
 import { calculateCost, discardAttemptUsage, emptyUsage, scaleUsageCost } from "@veyyon/catalog/models";
 import {
 	CODEX_BASE_URL,
@@ -78,6 +82,7 @@ import { createRequestDebugSession, isRequestDebugEnabled, type RequestDebugResp
 import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
 import { notifyRawSseEvent } from "../utils/sse-debug";
 import { compactGrammarDefinition } from "./grammar";
+import { applyChatGptWebTurnContract } from "./openai-codex/chatgpt-web-trusted-context";
 import {
 	type CodexReasoningContext,
 	type CodexRequestOptions,
@@ -1360,6 +1365,37 @@ async function buildCodexRequestContext(
 		compaction,
 	});
 	transformedBody.client_metadata = requestMetadata.clientMetadata;
+	// The last place every half of the bridge's turn contract is final and still
+	// on one object: the turn id was minted two statements ago, the input array
+	// has been through `transformRequestBody`, and every transport below (SSE,
+	// the websocket `response.create` frame, and both reopen paths) reads this
+	// same `transformedBody`. Applying it earlier would miss the turn id;
+	// applying it per transport would need it in four places. `options.cwd` is
+	// the host's own session directory (the agent re-reads it per call from its
+	// session manager), which is the only trustworthy source for the daemon's
+	// trusted-environment envelope.
+	//
+	// Both clauses are load-bearing. `chatgpt-web` is the only provider whose
+	// catalog comes from the daemon, so it can never be the official Codex
+	// provider; and a `chatgpt-web` row pointed anywhere but loopback is not the
+	// daemon (it binds 127.0.0.1 only, and discovery refuses to hand it the
+	// ChatGPT bearer off loopback), so it must not receive daemon-specific
+	// fields either. Every other Codex-family request — OpenAI's host, and any
+	// other Codex-compatible server on loopback — goes out byte-identical.
+	if (model.provider === CHATGPT_WEB_PROVIDER_ID && isChatGptWebLoopbackUrl(baseUrl)) {
+		const outcome = applyChatGptWebTurnContract(transformedBody, requestMetadata.turnId, options?.cwd);
+		if (outcome !== "sent") {
+			// Not cosmetic and not rate-limited: a Full-mode daemon refuses EVERY
+			// turn in this state, so the operator needs the missing prerequisite
+			// named on the request that fails rather than a generic
+			// `response.failed` carrying the daemon's error.
+			logger.warn("chatgpt-web bridge turn is missing its trusted Codex context", {
+				outcome,
+				model: model.id,
+				hasCwd: typeof options?.cwd === "string" && options.cwd.length > 0,
+			});
+		}
+	}
 	return {
 		apiKey,
 		accountId,
@@ -4061,10 +4097,24 @@ function redactHeaders(headers: Headers): Record<string, string> {
 	return redacted;
 }
 
+/**
+ * Resolve the Responses route from a Codex base URL.
+ *
+ * OpenAI serves it at `{base}/codex/responses`, so a base that names neither
+ * segment gets both appended. Two other shapes exist and must be left alone:
+ * a base that already ends in the full route, and one that ends at `/codex`.
+ *
+ * The `/responses` case is the general form of the first: a local Codex-
+ * compatible bridge serves `POST {base}/responses` with no `/codex` segment
+ * (the `codex-chatgpt-web` daemon installs itself into a Codex config as
+ * `openai_base_url = "http://127.0.0.1:17841/v1"` and answers `/v1/responses`),
+ * so a base URL that already names the route is final wherever it came from.
+ * Appending `/codex/responses` to it would 404 the whole session.
+ */
 function resolveCodexResponsesUrl(baseUrl: string | undefined): string {
 	const raw = baseUrl && baseUrl.trim().length > 0 ? baseUrl : CODEX_BASE_URL;
 	const normalized = trimTrailingSlashes(raw);
-	if (normalized.endsWith("/codex/responses")) return normalized;
+	if (normalized.endsWith("/responses")) return normalized;
 	if (normalized.endsWith("/codex")) return `${normalized}/responses`;
 	return `${normalized}/codex/responses`;
 }

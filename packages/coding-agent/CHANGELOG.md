@@ -9,6 +9,7 @@
 
 ### Added
 
+- `ExtensionContext` and `ExtensionCommandContext` expose runtime session identity fields: `isSubagent` (boolean), `taskDepth` (number), `agentId` (optional string), and `parentTaskPrefix` (optional string). Extensions can now reliably detect whether they are attached to the root interactive session or to a delegated task subagent without depending on `hasUI` or probing internal registries.
 - The composer chips (`interrupt`, `background`, `dequeue`) are click targets. A left click on a chip runs the same action its keybinding runs. Hover paint stays off: the main session holds press/release tracking only, so drag-select in the terminal keeps working.
 - The `/pause` screen resumes on a click. It is a fullscreen overlay, so it already held the whole mouse-tracking set and every report reached it and was dropped: the pointer did nothing on the one screen whose only job is to let you out. A left press anywhere on the scene now resumes exactly as Esc does, motion, drag, release, wheel and the other buttons still do nothing, and both the full scene and the compact card name the click in their hint.
 - `install.sh --force` and `install.ps1 -Force` install over a file at the target path the installer cannot account for. The file is moved to `<name>.unowned.<pid>` and its new path printed; nothing is deleted, and no sweep or uninstall touches that name. Without the switch the refusal is unchanged.

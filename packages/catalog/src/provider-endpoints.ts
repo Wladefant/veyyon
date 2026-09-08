@@ -155,3 +155,14 @@ export const CURSOR_API_ENDPOINT = "https://api2.cursor.sh";
  * The `/v1` segment is part of the value, since every consumer appends a path to it.
  */
 export const OPENROUTER_API_ENDPOINT = "https://openrouter.ai/api/v1";
+
+/**
+ * The `codex-chatgpt-web` bridge's loopback Responses base, the default when no
+ * endpoint is configured for the `chatgpt-web` provider.
+ *
+ * The daemon refuses to bind anything but `127.0.0.1` and installs itself into
+ * a Codex config as `openai_base_url = "http://127.0.0.1:17841/v1"`, so both
+ * the host and the `/v1` segment are part of the value: every consumer appends
+ * a route (`/models`, `/responses`) to it.
+ */
+export const CHATGPT_WEB_LOCAL_ENDPOINT = "http://127.0.0.1:17841/v1";

@@ -1,0 +1,244 @@
+{
+	"models": [
+		{
+			"slug": "gpt-5.6-sol",
+			"display_name": "GPT-5.6 Sol",
+			"description": "Native Codex Sol",
+			"input_modalities": [
+				"text",
+				"image"
+			],
+			"visibility": "list",
+			"supported_in_api": true,
+			"priority": 0,
+			"prefer_websockets": true,
+			"use_responses_lite": true,
+			"tool_mode": null,
+			"multi_agent_version": "v1",
+			"default_reasoning_level": "high",
+			"supported_reasoning_levels": [
+				{
+					"effort": "low",
+					"description": "Native low"
+				},
+				{
+					"effort": "medium",
+					"description": "Native medium"
+				},
+				{
+					"effort": "high",
+					"description": "Native high"
+				},
+				{
+					"effort": "xhigh",
+					"description": "Native xhigh"
+				},
+				{
+					"effort": "ultra",
+					"description": "Native ultra"
+				}
+			],
+			"context_window": 372000,
+			"max_context_window": 372000,
+			"auto_compact_token_limit": 300000,
+			"comp_hash": "abc",
+			"availability_nux": "none",
+			"additional_speed_tiers": [
+				{
+					"name": "fast"
+				}
+			],
+			"service_tiers": [
+				{
+					"name": "priority"
+				}
+			],
+			"default_service_tier": "auto",
+			"tools": [
+				{
+					"type": "function"
+				}
+			]
+		},
+		{
+			"slug": "chatgpt-web/light",
+			"display_name": "ChatGPT Web — Instant",
+			"description": "ChatGPT Web Instant through the native Codex harness.",
+			"input_modalities": [
+				"text",
+				"image"
+			],
+			"visibility": "list",
+			"supported_in_api": true,
+			"priority": 1,
+			"prefer_websockets": true,
+			"use_responses_lite": true,
+			"tool_mode": null,
+			"multi_agent_version": "v1",
+			"default_reasoning_level": "low",
+			"supported_reasoning_levels": [
+				{
+					"effort": "low",
+					"description": "ChatGPT Web — Instant"
+				}
+			],
+			"context_window": 111193,
+			"max_context_window": 111193,
+			"auto_compact_token_limit": 95000,
+			"additional_speed_tiers": [],
+			"service_tiers": [],
+			"default_service_tier": null,
+			"tools": [
+				{
+					"type": "function"
+				}
+			],
+			"upgrade": null,
+			"effective_context_window_percent": 85
+		},
+		{
+			"slug": "chatgpt-web/medium",
+			"display_name": "ChatGPT Web — Medium",
+			"description": "ChatGPT Web Medium through the native Codex harness.",
+			"input_modalities": [
+				"text",
+				"image"
+			],
+			"visibility": "list",
+			"supported_in_api": true,
+			"priority": 0,
+			"prefer_websockets": true,
+			"use_responses_lite": true,
+			"tool_mode": null,
+			"multi_agent_version": "v1",
+			"default_reasoning_level": "medium",
+			"supported_reasoning_levels": [
+				{
+					"effort": "medium",
+					"description": "ChatGPT Web — Medium"
+				}
+			],
+			"context_window": 111193,
+			"max_context_window": 111193,
+			"auto_compact_token_limit": 95000,
+			"additional_speed_tiers": [],
+			"service_tiers": [],
+			"default_service_tier": null,
+			"tools": [
+				{
+					"type": "function"
+				}
+			],
+			"upgrade": null,
+			"effective_context_window_percent": 85
+		},
+		{
+			"slug": "chatgpt-web/high",
+			"display_name": "ChatGPT Web — High",
+			"description": "ChatGPT Web High through the native Codex harness.",
+			"input_modalities": [
+				"text",
+				"image"
+			],
+			"visibility": "list",
+			"supported_in_api": true,
+			"priority": 0,
+			"prefer_websockets": true,
+			"use_responses_lite": true,
+			"tool_mode": null,
+			"multi_agent_version": "v1",
+			"default_reasoning_level": "high",
+			"supported_reasoning_levels": [
+				{
+					"effort": "high",
+					"description": "ChatGPT Web — High"
+				}
+			],
+			"context_window": 111193,
+			"max_context_window": 111193,
+			"auto_compact_token_limit": 95000,
+			"additional_speed_tiers": [],
+			"service_tiers": [],
+			"default_service_tier": null,
+			"tools": [
+				{
+					"type": "function"
+				}
+			],
+			"upgrade": null,
+			"effective_context_window_percent": 85
+		},
+		{
+			"slug": "chatgpt-web/extra-high",
+			"display_name": "ChatGPT Web — Extra High",
+			"description": "Account-gated ChatGPT Web Extra High through the native Codex harness.",
+			"input_modalities": [
+				"text",
+				"image"
+			],
+			"visibility": "list",
+			"supported_in_api": true,
+			"priority": 0,
+			"prefer_websockets": true,
+			"use_responses_lite": true,
+			"tool_mode": null,
+			"multi_agent_version": "v1",
+			"default_reasoning_level": "xhigh",
+			"supported_reasoning_levels": [
+				{
+					"effort": "xhigh",
+					"description": "ChatGPT Web — Extra High"
+				}
+			],
+			"context_window": 111193,
+			"max_context_window": 111193,
+			"auto_compact_token_limit": 95000,
+			"additional_speed_tiers": [],
+			"service_tiers": [],
+			"default_service_tier": null,
+			"tools": [
+				{
+					"type": "function"
+				}
+			],
+			"upgrade": null,
+			"effective_context_window_percent": 85
+		},
+		{
+			"slug": "chatgpt-web/pro",
+			"display_name": "ChatGPT Web — Pro",
+			"description": "Account-gated ChatGPT Pro through the native Codex harness.",
+			"input_modalities": [
+				"text",
+				"image"
+			],
+			"visibility": "list",
+			"supported_in_api": true,
+			"priority": 0,
+			"prefer_websockets": true,
+			"use_responses_lite": true,
+			"tool_mode": null,
+			"multi_agent_version": "v1",
+			"default_reasoning_level": "ultra",
+			"supported_reasoning_levels": [
+				{
+					"effort": "ultra",
+					"description": "ChatGPT Web — Pro"
+				}
+			],
+			"context_window": 112193,
+			"max_context_window": 112193,
+			"auto_compact_token_limit": 95000,
+			"additional_speed_tiers": [],
+			"service_tiers": [],
+			"default_service_tier": null,
+			"tools": [
+				{
+					"type": "function"
+				}
+			],
+			"upgrade": null,
+			"effective_context_window_percent": 85
+		}
+	]
+}

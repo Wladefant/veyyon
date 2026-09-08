@@ -45,6 +45,17 @@ export interface CodexRequestOptions {
 	responsesLite?: boolean;
 }
 
+/**
+ * Per-item Codex turn provenance (`internal_chat_message_metadata_passthrough`).
+ * Only the local `codex-chatgpt-web` bridge reads it, and only
+ * `chatgpt-web-turn-stamp.ts` writes it; the field is declared here because this
+ * is where the outgoing input-item shape is owned.
+ */
+export interface CodexItemMetadataPassthrough {
+	turn_id?: string;
+	[key: string]: unknown;
+}
+
 export interface InputItem {
 	id?: string | null;
 	type?: string | null;
@@ -56,6 +67,7 @@ export interface InputItem {
 	arguments?: unknown;
 	/** `additional_tools` developer item payload (Responses Lite). */
 	tools?: unknown;
+	internal_chat_message_metadata_passthrough?: CodexItemMetadataPassthrough;
 }
 
 export interface RequestBody {
