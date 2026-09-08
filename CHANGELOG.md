@@ -11,6 +11,10 @@
 - Record skipped automatic updates in `update-history.json`.
 - `BUILD_TAG` export in `@veyyon/utils/dirs` for build metadata and custom build identification.
 
+### Fixed
+
+- Collapsed todo boards prioritize in-progress tasks, announce row-trimmed active phases, and show canonical newly started tasks with concurrent counts even when replayed without call arguments.
+
 ## [1.4.1] - 2026-09-08
 
 ### Added
