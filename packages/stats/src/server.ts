@@ -29,7 +29,7 @@ const IS_BUN_COMPILED =
 	import.meta.url.includes("$bunfs") ||
 	import.meta.url.includes("~BUN") ||
 	import.meta.url.includes("%7EBUN");
-// The prepacked npm bundle (coding-agent dist/cli.js) constant-folds
+// The prepacked bundle (coding-agent dist/cli.js) constant-folds
 // process.env.VEYYON_BUNDLED at build time. Like compiled binaries, it ships no
 // dashboard sources or prebuilt dist/client next to the bundle, so the
 // embedded archive is the only viable asset source.

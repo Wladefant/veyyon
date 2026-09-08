@@ -1,6 +1,6 @@
 import { errorMessage, isAbortError, logger, postmortem, Snowflake, workerHostEntry } from "@veyyon/utils";
 // Coding-agent binary/bundle workers route through the CLI entrypoint with a
-// hidden argv mode, so compiled/npm builds only need one JavaScript entry.
+// hidden argv mode, so compiled/standalone builds only need one JavaScript entry.
 import { registerOwnedResourceDisposer } from "../../session/owned-resources";
 import {
 	createWorkerHandle,

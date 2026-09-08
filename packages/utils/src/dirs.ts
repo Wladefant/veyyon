@@ -2051,7 +2051,7 @@ export function getPluginsDir(home?: string): string {
 	return dirs.rootSubdir("plugins", "data");
 }
 
-/** Where npm installs packages (profile plugins dir / node_modules). */
+/** Where plugin packages are installed (profile plugins dir / node_modules). */
 export function getPluginsNodeModules(home?: string): string {
 	return path.join(getPluginsDir(home), "node_modules");
 }

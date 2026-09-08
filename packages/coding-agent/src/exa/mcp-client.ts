@@ -20,7 +20,7 @@ export interface ProviderMcpCallOptions extends CallMcpOptions {
 	resolveProviderTextTransform?: ProviderTextTransformResolver;
 }
 
-/** Find EXA_API_KEY from Bun.env or .env files */
+/** Find EXA_API_KEY from process.env or .env files */
 export function findApiKey(): string | null {
 	return $env.EXA_API_KEY;
 }

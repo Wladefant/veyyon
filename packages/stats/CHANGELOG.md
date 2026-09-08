@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Corrected comments that named a distribution channel or runtime API the project does not use; no behavior change.
+
 ## [1.4.0] - 2026-09-04
 
 ### Changed

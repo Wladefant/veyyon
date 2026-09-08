@@ -1399,7 +1399,7 @@ function buildMCPPromptCommands(manager: MCPManager): LoadedCustomCommand[] {
  * // Full control
  * const { session } = await createAgentSession({
  *   model: myModel,
- *   getApiKey: async () => Bun.env.MY_KEY,
+ *   getApiKey: async () => process.env.MY_KEY,
  *   systemPrompt: ['You are helpful.'],
  *   tools: codingTools({ cwd: getProjectDir() }),
  *   skills: [],

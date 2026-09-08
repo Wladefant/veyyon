@@ -37,7 +37,7 @@ import type {
 import { targetIdForPage, targetIdForTarget } from "./target-id";
 
 // Coding-agent binary/bundle workers route through the CLI entrypoint with a
-// hidden argv mode, so compiled/npm builds only need one JavaScript entry.
+// hidden argv mode, so compiled/standalone builds only need one JavaScript entry.
 
 interface WorkerHandle {
 	send(msg: TabWorkerInbound, transferList?: Transferable[]): void;
