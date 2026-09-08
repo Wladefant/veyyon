@@ -1,7 +1,7 @@
 //! From what the operator asked to what the host is sent.
 
 use veyyon_desktop_model::{AttachmentSubmission, HostAction, Store, TerminalStatus};
-use veyyon_desktop_surface::{Attachment, AttachmentSource, Intent};
+use veyyon_desktop_surface::{Attachment, AttachmentSource, Intent, Overlay, PaletteMode};
 
 use super::{SessionIndex, cards::take_interaction};
 
@@ -120,8 +120,21 @@ pub fn actions_for(intent: &Intent, index: &SessionIndex, store: &mut Store) -> 
 			},
 			_ => Vec::new(),
 		},
-		Intent::OpenOverlay(_) | Intent::CloseOverlay | Intent::PaletteMove(_) => Vec::new(),
-		Intent::PaletteQuery(query) => vec![HostAction::SearchFiles { query: query.clone() }],
+		Intent::OpenOverlay(overlay) => match &**overlay {
+			Overlay::Palette(p) if matches!(p.mode, PaletteMode::Files | PaletteMode::Browse) => {
+				vec![HostAction::LoadFileTree { root: None }]
+			},
+			_ => Vec::new(),
+		},
+		Intent::CloseOverlay | Intent::PaletteMove(_) => Vec::new(),
+		Intent::PaletteQuery(query) => {
+			let trimmed = query.trim();
+			if trimmed.is_empty() {
+				Vec::new()
+			} else {
+				vec![HostAction::SearchFiles { query: trimmed.to_string() }]
+			}
+		},
 		Intent::PaletteRun => Vec::new(),
 		Intent::PaletteAscend => vec![HostAction::LoadFileTree { root: None }],
 		Intent::SettingChanged { key, value } => {

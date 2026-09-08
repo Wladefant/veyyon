@@ -2,7 +2,7 @@
 
 use strum::{EnumIter, IntoEnumIterator};
 
-use super::{PaletteItem, PaletteItemKind};
+use super::{PaletteItem, PaletteItemKind, PaletteMode, PaletteState};
 use crate::{
 	Intent, Overlay,
 	settings::{SettingsPage, SettingsState},
@@ -65,14 +65,40 @@ pub fn command_items() -> Vec<PaletteItem> {
 		items.push(item);
 	}
 	for command in ComposerCommand::iter() {
+		let subtitle = match command {
+			ComposerCommand::AttachFiles => Some("Attach files to composer".to_owned()),
+			ComposerCommand::Models => Some("Choose language model".to_owned()),
+			ComposerCommand::Effort => Some("Select reasoning effort level".to_owned()),
+			ComposerCommand::QueueMode => Some("Toggle queue or steer mode".to_owned()),
+			ComposerCommand::Steer => Some("Steer running turn".to_owned()),
+			ComposerCommand::Queue => Some("Queue follow-up turn".to_owned()),
+		};
 		items.push(PaletteItem {
 			id:       items.len() as u64 + 1,
 			title:    command.name().to_owned(),
-			subtitle: None,
+			subtitle,
 			badge:    None,
 			meta:     None,
 			kind:     PaletteItemKind::Composer { command },
 		});
 	}
+	let open_id = items.len() as u64 + 1;
+	let mut open_item = PaletteItem::command(
+		open_id,
+		"/open",
+		Intent::OpenOverlay(Box::new(Overlay::Palette(PaletteState::new(PaletteMode::Files)))),
+		Some("Cmd/Ctrl P"),
+	);
+	open_item.subtitle = Some("Open workspace file".to_owned());
+	items.push(open_item);
+	let files_id = items.len() as u64 + 1;
+	let mut files_item = PaletteItem::command(
+		files_id,
+		"/files",
+		Intent::OpenOverlay(Box::new(Overlay::Palette(PaletteState::new(PaletteMode::Files)))),
+		None,
+	);
+	files_item.subtitle = Some("Search files by name".to_owned());
+	items.push(files_item);
 	items
 }
