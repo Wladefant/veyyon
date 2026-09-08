@@ -43,6 +43,18 @@ jobs:
             cat /tmp/contract-red.log
             grep -q "1 fail" /tmp/contract-red.log
           done
+      - name: Prove TUI rejection contract fails before dispatcher repair
+        run: |
+          registry=packages/coding-agent/src/slash-commands/builtin-registry.ts
+          cp "$registry" /tmp/hot-reload-registry.ts
+          trap 'cp /tmp/hot-reload-registry.ts "$registry"' EXIT
+          git show 3c22e09bebb15a8869c2cea3ab2534584e582716:"$registry" > "$registry"
+          if bash scripts/test-sandbox/run.sh bun test ./packages/coding-agent/test/config-hot-reload.test.ts --test-name-pattern "contains rejected reloads through the real TUI" > /tmp/tui-red.log 2>&1; then
+            cat /tmp/tui-red.log
+            exit 1
+          fi
+          cat /tmp/tui-red.log
+          grep -q "1 fail" /tmp/tui-red.log
       - name: Focused settings contracts
         run: bash scripts/test-sandbox/run.sh bun test packages/coding-agent/test/config-hot-reload.test.ts packages/coding-agent/test/settings-reload-cwd.test.ts
       - name: Prepare package native dependency

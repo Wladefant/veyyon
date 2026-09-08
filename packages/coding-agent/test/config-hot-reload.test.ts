@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { resolveEffort } from "../src/config/effort-resolver";
 import { Settings } from "../src/config/settings";
+import { InputController, type InputControllerContext } from "../src/modes/controllers/input-controller";
 import { executeAcpBuiltinSlashCommand } from "../src/slash-commands/acp-builtins";
 import type { SlashCommandRuntime } from "../src/slash-commands/types";
 import { resolveSubagentModel } from "../src/task/subagent-settings";
@@ -11,6 +12,43 @@ import { useTrackedTempDirs } from "./helpers/tracked-temp-dir";
 const dirs = useTrackedTempDirs("config-reload-");
 
 describe("config hot reload", () => {
+	it("contains rejected reloads through the real TUI follow-up dispatcher and permits retry", async () => {
+		const dir = dirs();
+		const file = path.join(dir, "config.yml");
+		await fs.writeFile(file, "subagent:\n  model: openai/old\n  sharedModel: true\n");
+		const settings = await Settings.loadReadOnly({ agentDir: dir });
+		let draft = "/reload-config";
+		const errors: string[] = [];
+		const statuses: string[] = [];
+		const history: string[] = [];
+		const ctx = {
+			settings,
+			session: { isCompacting: false },
+			sessionManager: { getCwd: () => dir },
+			editor: {
+				getExpandedText: () => draft,
+				setText: (text: string) => { draft = text; },
+				addToHistory: (text: string) => { history.push(text); },
+				pendingImages: [],
+				pendingImageLinks: [],
+			},
+			showError: (text: string) => { errors.push(text); },
+			showStatus: (text: string) => { statuses.push(text); },
+		} as unknown as InputControllerContext;
+		const input = new InputController(ctx);
+		await fs.writeFile(file, "subagent: [");
+		await expect(input.handleFollowUp()).resolves.toBeUndefined();
+		expect(errors).toHaveLength(1);
+		expect(statuses.join("\n")).toContain("Config reload failed");
+		expect(resolveSubagentModel({ settings, agentName: "task" }).patterns).toEqual(["openai/old"]);
+		expect(draft).toBe("/reload-config");
+		await fs.writeFile(file, "subagent:\n  model: openai/new\n  sharedModel: true\n");
+		await expect(input.handleFollowUp()).resolves.toBeUndefined();
+		expect(resolveSubagentModel({ settings, agentName: "task" }).patterns).toEqual(["openai/new"]);
+		expect(draft).toBe("");
+		expect(history).toEqual(["/reload-config", "/reload-config"]);
+	});
+
 	it("dispatches the real text command with an off/on routing differential", async () => {
 		const dir = dirs();
 		const file = path.join(dir, "config.yml");
