@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-09-08
+
 ### Added
 
 - `Form`: a component of labelled fields — `text` with an in-field caret, `stepper` with `◂`/`▸` arrows and typed digits, `toggle`, `segmented`, `button` and `note` — that lays every value out at one column after the widest label, moves a ring with `↑↓`/`tab`, routes a click to the caret, arrow, option, switch or button under the pointer, windows a `segmented` strip wider than its row around the chosen option, and moves the ring on from a text field whose Enter nothing takes.

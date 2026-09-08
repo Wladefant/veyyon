@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-09-08
+
 ### Added
 
 - The `/autoswarm` dashboard lists a `New session` action (`n`) over an existing session, which closes it keeping every file and every logged run and starts a fresh one with the setup as it stands.
