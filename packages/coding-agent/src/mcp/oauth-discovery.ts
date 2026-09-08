@@ -16,6 +16,8 @@ export interface OAuthEndpoints {
 	/** Dynamic client registration endpoint advertised by the authorization server. */
 	registrationUrl?: string;
 	scopes?: string;
+	/** Whether scopes are a provider-authored request rather than a supported-set fallback. */
+	explicitScopes?: boolean;
 	resource?: string;
 }
 
@@ -104,10 +106,8 @@ export function extractOAuthEndpoints(error: Error): OAuthEndpoints | null {
 
 		if (!authorizationUrl || !tokenUrl) return null;
 
-		const scopeFromArray = Array.isArray(obj.scopes_supported)
-			? (obj.scopes_supported as unknown[]).filter(v => typeof v === "string").join(" ")
-			: undefined;
-		const scopes = scopeFromArray || (obj.scopes as string | undefined) || (obj.scope as string | undefined);
+		const explicitScopes = readExplicitScopes(obj, authorizationUrl);
+		const scopes = explicitScopes ?? readMetadataScopes(obj);
 		const clientId =
 			(obj.client_id as string | undefined) ||
 			(obj.clientId as string | undefined) ||
@@ -119,7 +119,15 @@ export function extractOAuthEndpoints(error: Error): OAuthEndpoints | null {
 			(obj.resource_uri as string | undefined) ||
 			(obj.resourceUri as string | undefined);
 
-		return { authorizationUrl, tokenUrl, registrationUrl: readRegistrationUrl(obj), clientId, scopes, resource };
+		return {
+			authorizationUrl,
+			tokenUrl,
+			registrationUrl: readRegistrationUrl(obj),
+			clientId,
+			scopes,
+			explicitScopes: explicitScopes !== undefined,
+			resource,
+		};
 	};
 
 	const clientIdFromAuthUrl = (authorizationUrl: string): string | undefined => {
@@ -155,18 +163,18 @@ export function extractOAuthEndpoints(error: Error): OAuthEndpoints | null {
 				const oauthData = (errorBody.oauth || errorBody.authorization || errorBody.auth) as Record<string, unknown>;
 				const endpoints = readEndpointsFromObject(oauthData);
 				if (endpoints) {
-					// Top-level error body represents the protected resource; resource scopes
-					// take precedence over nested authorization-server endpoints scopes (RFC 9728 §3).
-					const resourceScopeFromArray = Array.isArray(errorBody.scopes_supported)
-						? (errorBody.scopes_supported as unknown[]).filter(v => typeof v === "string").join(" ")
-						: undefined;
-					const resourceScopes =
-						resourceScopeFromArray || (errorBody.scopes as string | undefined) || (errorBody.scope as string | undefined);
+					const resourceExplicitScopes = readExplicitScopes(errorBody);
+					const resourceScopes = readMetadataScopes(errorBody);
 
 					return {
 						...endpoints,
 						clientId: endpoints.clientId || clientIdFromAuthUrl(endpoints.authorizationUrl),
-						scopes: resourceScopes || endpoints.scopes || scopeFromAuthUrl(endpoints.authorizationUrl),
+						scopes:
+							resourceExplicitScopes ??
+							(endpoints.explicitScopes ? endpoints.scopes : undefined) ??
+							resourceScopes ??
+							endpoints.scopes,
+						explicitScopes: resourceExplicitScopes !== undefined || endpoints.explicitScopes,
 					};
 				}
 			}
@@ -211,6 +219,9 @@ export function extractOAuthEndpoints(error: Error): OAuthEndpoints | null {
 					challengeValues.get("registration_uri"),
 				clientId: challengeValues.get("client_id") || clientIdFromAuthUrl(authorizationUrl),
 				scopes: challengeValues.get("scope") || challengeValues.get("scopes") || scopeFromAuthUrl(authorizationUrl),
+				explicitScopes: Boolean(
+					challengeValues.get("scope") || challengeValues.get("scopes") || scopeFromAuthUrl(authorizationUrl),
+				),
 				resource,
 			};
 		}
@@ -225,6 +236,7 @@ export function extractOAuthEndpoints(error: Error): OAuthEndpoints | null {
 			tokenUrl: wwwAuthMatch[2],
 			clientId: clientIdFromAuthUrl(wwwAuthMatch[1]),
 			scopes: scopeFromAuthUrl(wwwAuthMatch[1]),
+			explicitScopes: scopeFromAuthUrl(wwwAuthMatch[1]) !== undefined,
 		};
 	}
 
@@ -256,7 +268,11 @@ export function analyzeAuthError(error: Error, serverUrl?: string): AuthDetectio
 		// skip `discoverOAuthEndpoints`; without merging the challenge scope back
 		// into the returned endpoints, `/mcp reauth` and `/mcp add` still mint a
 		// scope-less grant when the challenge advertised `scope="…"`.
-		const mergedOAuth: OAuthEndpoints = mergedScopes === oauth.scopes ? oauth : { ...oauth, scopes: mergedScopes };
+		const mergedOAuth: OAuthEndpoints = {
+			...oauth,
+			scopes: mergedScopes,
+			explicitScopes: challengeScopes !== undefined || oauth.explicitScopes,
+		};
 		return {
 			requiresAuth: true,
 			authType: "oauth",
@@ -346,6 +362,21 @@ function issuerMatchesBase(metadataIssuer: unknown, baseUrl: string): boolean {
 	return normalizedIssuer === normalizedBase;
 }
 
+function readExplicitScopes(metadata: Record<string, unknown>, authorizationUrl?: string): string | undefined {
+	for (const value of [metadata.scope, metadata.scopes]) {
+		if (typeof value === "string" && value.trim() !== "") return value;
+	}
+	if (authorizationUrl) {
+		try {
+			const params = new URL(authorizationUrl).searchParams;
+			return params.get("scope") ?? params.get("scopes") ?? undefined;
+		} catch {
+			// An invalid endpoint has no usable scope hint; endpoint validation owns the error.
+		}
+	}
+	return undefined;
+}
+
 /**
  * Read space-separated OAuth scopes off a metadata document. Accepts either
  * an array (RFC 8414 `scopes_supported`) or a space-separated string
@@ -353,12 +384,12 @@ function issuerMatchesBase(metadataIssuer: unknown, baseUrl: string): boolean {
  * `/.well-known/oauth-*`.
  */
 function readMetadataScopes(metadata: Record<string, unknown>): string | undefined {
+	const explicit = readExplicitScopes(metadata);
+	if (explicit !== undefined) return explicit;
 	if (Array.isArray(metadata.scopes_supported)) {
 		const joined = metadata.scopes_supported.filter((scope): scope is string => typeof scope === "string").join(" ");
 		if (joined) return joined;
 	}
-	if (typeof metadata.scopes === "string" && metadata.scopes.trim() !== "") return metadata.scopes;
-	if (typeof metadata.scope === "string" && metadata.scope.trim() !== "") return metadata.scope;
 	return undefined;
 }
 
@@ -445,7 +476,7 @@ export async function discoverOAuthEndpoints(
 			});
 			if (metaResp.ok) {
 				const meta = (await metaResp.json()) as Record<string, unknown>;
-				protectedScopes = readMetadataScopes(meta) ?? protectedScopes;
+				protectedScopes ??= readMetadataScopes(meta);
 				if (typeof meta.resource === "string" && meta.resource.trim() !== "") {
 					protectedResource = meta.resource;
 				}
@@ -483,7 +514,16 @@ export async function discoverOAuthEndpoints(
 								: typeof metadata.public_client_id === "string"
 									? metadata.public_client_id
 									: undefined,
-				scopes: opts?.scopes ?? protectedScopes ?? readMetadataScopes(metadata),
+				scopes:
+					opts?.scopes ??
+					readExplicitScopes(metadata, String(metadata.authorization_endpoint)) ??
+					opts?.protectedScopes ??
+					protectedScopes ??
+					readMetadataScopes(metadata),
+				explicitScopes:
+					opts?.scopes !== undefined ||
+					opts?.protectedScopes !== undefined ||
+					readExplicitScopes(metadata, String(metadata.authorization_endpoint)) !== undefined,
 				resource,
 			};
 		}
@@ -507,7 +547,18 @@ export async function discoverOAuthEndpoints(
 									: typeof oauthData.public_client_id === "string"
 										? oauthData.public_client_id
 										: undefined,
-					scopes: opts?.scopes ?? protectedScopes ?? readMetadataScopes(oauthData),
+					scopes:
+						opts?.scopes ??
+						readExplicitScopes(oauthData, oauthData.authorization_url) ??
+						readExplicitScopes(metadata) ??
+						opts?.protectedScopes ??
+						protectedScopes ??
+						readMetadataScopes(oauthData),
+					explicitScopes:
+						opts?.scopes !== undefined ||
+						opts?.protectedScopes !== undefined ||
+						readExplicitScopes(oauthData, oauthData.authorization_url) !== undefined ||
+						readExplicitScopes(metadata) !== undefined,
 					resource,
 				};
 			}
@@ -560,7 +611,7 @@ export async function discoverOAuthEndpoints(
 								const discovered = await discoverOAuthEndpoints(serverUrl, discoveredAuthServer, undefined, {
 									fetch: fetchImpl,
 									protectedResource: discoveredProtectedResource,
-									protectedScopes: readMetadataScopes(metadata) ?? protectedScopes,
+									protectedScopes: protectedScopes ?? readMetadataScopes(metadata),
 									scopes: opts?.scopes,
 								});
 								if (discovered) return discovered;

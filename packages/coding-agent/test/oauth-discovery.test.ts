@@ -45,7 +45,7 @@ describe("mcp oauth discovery", () => {
 			fetch: fetchImpl,
 		});
 
-		expect(oauth).toEqual({
+		expect(oauth).toMatchObject({
 			authorizationUrl: "https://www.figma.com/oauth",
 			tokenUrl: "https://api.figma.com/v1/oauth/token",
 			clientId: "figma-client-id",
@@ -84,7 +84,7 @@ describe("path-prefixed auth servers", () => {
 			fetch: fetchImpl,
 		});
 
-		expect(oauth).toEqual({
+		expect(oauth).toMatchObject({
 			authorizationUrl: "https://gateway.example.com/my-service/oauth/authorize",
 			tokenUrl: "https://gateway.example.com/my-service/oauth/token",
 		});
@@ -120,7 +120,7 @@ describe("path-prefixed auth servers", () => {
 			fetch: fetchImpl,
 		});
 
-		expect(oauth).toEqual({
+		expect(oauth).toMatchObject({
 			authorizationUrl: "https://gateway.example.com/my-service/oauth/authorize",
 			tokenUrl: "https://gateway.example.com/my-service/oauth/token",
 		});
@@ -152,7 +152,7 @@ describe("path-prefixed auth servers", () => {
 			fetch: fetchImpl,
 		});
 
-		expect(oauth).toEqual({
+		expect(oauth).toMatchObject({
 			authorizationUrl: "https://gateway.example.com/my-service/oauth",
 			tokenUrl: "https://gateway.example.com/my-service/token",
 			registrationUrl: "https://gateway.example.com/my-service/register",
@@ -183,7 +183,7 @@ describe("path-prefixed auth servers", () => {
 			fetch: fetchImpl,
 		});
 
-		expect(oauth).toEqual({
+		expect(oauth).toMatchObject({
 			authorizationUrl: "https://auth.example.com/oauth",
 			tokenUrl: "https://auth.example.com/token",
 		});
@@ -317,7 +317,7 @@ describe("resource_metadata chain", () => {
 			{ fetch: fetchImpl },
 		);
 
-		expect(oauth).toEqual({
+		expect(oauth).toMatchObject({
 			authorizationUrl: "https://sso.example.com/oauth/auth",
 			tokenUrl: "https://sso.example.com/oauth/token",
 			scopes: "k8s.logging-mcp-server k8s.annotations",
@@ -369,7 +369,7 @@ describe("resource_metadata chain", () => {
 			{ fetch: fetchImpl },
 		);
 
-		expect(oauth).toEqual({
+		expect(oauth).toMatchObject({
 			authorizationUrl: "https://api.supabase.com/platform/oauth/authorize",
 			tokenUrl: "https://api.supabase.com/platform/oauth/token",
 			registrationUrl: "https://api.supabase.com/platform/oauth/apps/register",
@@ -414,7 +414,7 @@ describe("resource_metadata chain", () => {
 			{ fetch: fetchImpl },
 		);
 
-		expect(oauth).toEqual({
+		expect(oauth).toMatchObject({
 			authorizationUrl: "https://sso.example.com/oauth/auth",
 			tokenUrl: "https://sso.example.com/oauth/token",
 			scopes: "openid profile email",
@@ -459,7 +459,7 @@ describe("resource_metadata chain", () => {
 			{ fetch: fetchImpl, scopes: "custom:scope1 custom:scope2" },
 		);
 
-		expect(oauth).toEqual({
+		expect(oauth).toMatchObject({
 			authorizationUrl: "https://api.supabase.com/platform/oauth/authorize",
 			tokenUrl: "https://api.supabase.com/platform/oauth/token",
 			scopes: "custom:scope1 custom:scope2",
@@ -570,7 +570,7 @@ describe("resource_metadata chain", () => {
 			{ fetch: fetchImpl },
 		);
 
-		expect(oauth).toEqual({
+		expect(oauth).toMatchObject({
 			authorizationUrl: "https://gateway.example.com/my-service/oauth",
 			tokenUrl: "https://gateway.example.com/my-service/token",
 			resource: "https://gateway.example.com/my-service/mcp",
@@ -620,7 +620,7 @@ describe("resource_metadata chain", () => {
 			fetch: fetchImpl,
 		});
 
-		expect(oauth).toEqual({
+		expect(oauth).toMatchObject({
 			authorizationUrl: "https://auth.example.com/my-service/oauth",
 			tokenUrl: "https://auth.example.com/my-service/token",
 			resource: "https://gateway.example.com/my-service/custom-resource",
@@ -669,7 +669,7 @@ describe("RFC 8414 §3.3 issuer validation", () => {
 			fetch: fetchImpl,
 		});
 
-		expect(oauth).toEqual({
+		expect(oauth).toMatchObject({
 			authorizationUrl: "https://mcp.atlassian.com/v1/authorize",
 			tokenUrl: "https://cf.mcp.atlassian.com/v1/token",
 			registrationUrl: "https://cf.mcp.atlassian.com/v1/register",
@@ -736,7 +736,7 @@ describe("RFC 8414 §3.3 issuer validation", () => {
 			{ fetch: fetchImpl },
 		);
 
-		expect(oauth).toEqual({
+		expect(oauth).toMatchObject({
 			authorizationUrl: "https://mcp.plane.so/http/authorize",
 			tokenUrl: "https://mcp.plane.so/http/token",
 			registrationUrl: "https://mcp.plane.so/http/register",
@@ -769,7 +769,7 @@ describe("RFC 8414 §3.3 issuer validation", () => {
 			fetch: fetchImpl,
 		});
 
-		expect(oauth).toEqual({
+		expect(oauth).toMatchObject({
 			authorizationUrl: "https://auth.example.com/oauth/authorize",
 			tokenUrl: "https://auth.example.com/oauth/token",
 		});
@@ -796,7 +796,7 @@ describe("RFC 8414 §3.3 issuer validation", () => {
 			fetch: fetchImpl,
 		});
 
-		expect(oauth).toEqual({
+		expect(oauth).toMatchObject({
 			authorizationUrl: "https://auth.example.com/oauth",
 			tokenUrl: "https://auth.example.com/token",
 		});

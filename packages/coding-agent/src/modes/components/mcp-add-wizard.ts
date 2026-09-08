@@ -1170,7 +1170,7 @@ export class MCPAddWizard implements Component {
 						// Ignore discovery failures and fallback to manual auth.
 					}
 				}
-				if (oauth && !oauth.scopes && authResult.resourceMetadataUrl) {
+				if (oauth && !oauth.explicitScopes && authResult.resourceMetadataUrl) {
 					// JSON-error-body path skips `discoverOAuthEndpoints` when the body
 					// already carries endpoints, so scopes advertised only in the
 					// protected-resource metadata document never reach the grant.

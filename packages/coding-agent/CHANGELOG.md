@@ -10,6 +10,7 @@
 
 ### Fixed
 
+- HTTP/SSE MCP OAuth honors configured scopes and explicit provider scope requests before protected-resource and authorization-server supported-scope fallbacks.
 - Collapsed todo boards prioritize in-progress tasks, announce row-trimmed active phases, and show canonical newly started tasks with concurrent counts even when replayed without call arguments.
 
 ## [1.4.1] - 2026-09-08
