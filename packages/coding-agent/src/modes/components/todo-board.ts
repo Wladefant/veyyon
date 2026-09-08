@@ -156,10 +156,7 @@ function collapsedTasks(phase: TodoPhase): TodoItem[] {
 	if (open.length === 0) return closed.slice(-ACTIVE_TASK_CAP);
 	const inProgress = open.filter(task => task.status === "in_progress");
 	const pending = open.filter(task => task.status !== "in_progress");
-	const openToKeep = [
-		...inProgress,
-		...pending.slice(0, Math.max(0, ACTIVE_TASK_CAP - inProgress.length)),
-	];
+	const openToKeep = [...inProgress, ...pending.slice(0, Math.max(0, ACTIVE_TASK_CAP - inProgress.length))];
 	const keep = new Set<TodoItem>([...closed.slice(-DONE_TASK_CAP), ...openToKeep]);
 	return phase.tasks.filter(task => keep.has(task));
 }

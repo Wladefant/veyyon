@@ -1,16 +1,9 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import {
-	renderTodoBoardLines,
-	type TodoBoardOptions,
-} from "@veyyon/coding-agent/modes/components/todo-board";
+import { renderTodoBoardLines, type TodoBoardOptions } from "@veyyon/coding-agent/modes/components/todo-board";
 import { initTheme, theme } from "@veyyon/coding-agent/modes/theme/theme";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import {
-	type TodoPhase,
-	TodoTool,
-	todoToolRenderer,
-} from "@veyyon/coding-agent/tools/todo";
+import { type TodoPhase, TodoTool, todoToolRenderer } from "@veyyon/coding-agent/tools/todo";
 
 function createSession(initialPhases: TodoPhase[] = []): { session: ToolSession; phases: () => TodoPhase[] } {
 	let phases = initialPhases;
@@ -76,12 +69,10 @@ describe("concurrent checklist execution status display", () => {
 		const result = await tool.execute("call-start-b1", { op: "start", task: "Task B1" });
 		expect(result.isError).toBeUndefined();
 
-		const component = todoToolRenderer.renderResult(
-			result,
-			{ expanded: false, isPartial: false },
-			theme,
-			{ op: "start", task: "Task B1" },
-		);
+		const component = todoToolRenderer.renderResult(result, { expanded: false, isPartial: false }, theme, {
+			op: "start",
+			task: "Task B1",
+		});
 
 		const rendered = Bun.stripANSI(component.render(120).join("\n"));
 
@@ -90,6 +81,27 @@ describe("concurrent checklist execution status display", () => {
 		// Must indicate Phase B and Task B1 (the task newly started by this operation)
 		expect(rendered).toContain("Phase B");
 		expect(rendered).toContain("Task B1");
+	});
+
+	it.each([true, false])("restores normalized start targets with call arguments=%s", async withArgs => {
+		const { session } = createSession([
+			{ name: "Earlier", tasks: [{ content: "Task A", status: "in_progress" }] },
+			{ name: "Later", tasks: [{ content: "Task B", status: "pending" }] },
+		]);
+		const args = { op: "start" as const, task: "task b" };
+		const result = await new TodoTool(session).execute("normalized-start", args);
+		expect(result.isError).toBeUndefined();
+		const restored = JSON.parse(JSON.stringify(result));
+		const component = todoToolRenderer.renderResult(
+			restored,
+			{ expanded: false, isPartial: false },
+			theme,
+			withArgs ? args : undefined,
+		);
+		const rendered = Bun.stripANSI(component.render(120).join("\n"));
+		expect(rendered).toContain("2 in progress");
+		expect(rendered).toContain("Later");
+		expect(rendered).toContain("Task B");
 	});
 
 	/**
@@ -146,9 +158,7 @@ describe("concurrent checklist execution status display", () => {
 			},
 			{
 				name: "Phase 2",
-				tasks: [
-					{ content: "P2 Concurrent Active", status: "in_progress" },
-				],
+				tasks: [{ content: "P2 Concurrent Active", status: "in_progress" }],
 			},
 		];
 
