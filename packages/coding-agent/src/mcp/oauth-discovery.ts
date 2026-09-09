@@ -218,7 +218,10 @@ export function extractOAuthEndpoints(error: Error): OAuthEndpoints | null {
 					challengeValues.get("registration_url") ||
 					challengeValues.get("registration_uri"),
 				clientId: challengeValues.get("client_id") || clientIdFromAuthUrl(authorizationUrl),
-				scopes: challengeValues.get("scope") || challengeValues.get("scopes") || scopeFromAuthUrl(authorizationUrl),
+				scopes: mergeRequestedScopes(
+					challengeValues.get("scope") || challengeValues.get("scopes"),
+					scopeFromAuthUrl(authorizationUrl),
+				),
 				explicitScopes: Boolean(
 					challengeValues.get("scope") || challengeValues.get("scopes") || scopeFromAuthUrl(authorizationUrl),
 				),
@@ -263,7 +266,9 @@ export function analyzeAuthError(error: Error, serverUrl?: string): AuthDetectio
 	const challengeScopes = extractOAuthChallengeScopes(error);
 
 	if (oauth) {
-		const mergedScopes = challengeScopes ?? oauth.scopes;
+		const mergedScopes = oauth.explicitScopes
+			? mergeRequestedScopes(challengeScopes, oauth.scopes)
+			: (challengeScopes ?? oauth.scopes);
 		// Callers on the JSON-error-body path use `authResult.oauth` directly and
 		// skip `discoverOAuthEndpoints`; without merging the challenge scope back
 		// into the returned endpoints, `/mcp reauth` and `/mcp add` still mint a
@@ -362,6 +367,13 @@ function issuerMatchesBase(metadataIssuer: unknown, baseUrl: string): boolean {
 	return normalizedIssuer === normalizedBase;
 }
 
+/** Combine explicit requests only; supported sets must never widen a requested grant. */
+function mergeRequestedScopes(challenge: string | undefined, provider: string | undefined): string | undefined {
+	if (!challenge) return provider;
+	if (!provider) return challenge;
+	return [...new Set([...challenge.split(/\s+/), ...provider.split(/\s+/)].filter(Boolean))].join(" ");
+}
+
 function readExplicitScopes(metadata: Record<string, unknown>, authorizationUrl?: string): string | undefined {
 	for (const value of [metadata.scope, metadata.scopes]) {
 		if (typeof value === "string" && value.trim() !== "") return value;
@@ -442,7 +454,13 @@ export async function discoverOAuthEndpoints(
 	serverUrl: string,
 	authServerUrl?: string,
 	resourceMetadataUrl?: string,
-	opts?: { fetch?: FetchImpl; protectedResource?: string; protectedScopes?: string; scopes?: string },
+	opts?: {
+		fetch?: FetchImpl;
+		protectedResource?: string;
+		protectedScopes?: string;
+		resourceScopes?: string;
+		scopes?: string;
+	},
 ): Promise<OAuthEndpoints | null> {
 	const fetchImpl: FetchImpl = opts?.fetch ?? fetch;
 	const wellKnownPaths = [
@@ -457,7 +475,7 @@ export async function discoverOAuthEndpoints(
 	const visitedAuthServers = new Set<string>();
 
 	let protectedResource = opts?.protectedResource;
-	let protectedScopes = opts?.protectedScopes;
+	let protectedScopes = opts?.resourceScopes;
 	const addDiscoveryBase = (url: string | undefined, issuerCandidate: boolean): void => {
 		if (!url || visitedAuthServers.has(url)) return;
 		urlsToQuery.push({ url, issuerCandidate });
@@ -516,8 +534,10 @@ export async function discoverOAuthEndpoints(
 									: undefined,
 				scopes:
 					opts?.scopes ??
-					readExplicitScopes(metadata, String(metadata.authorization_endpoint)) ??
-					opts?.protectedScopes ??
+					mergeRequestedScopes(
+						opts?.protectedScopes,
+						readExplicitScopes(metadata, String(metadata.authorization_endpoint)),
+					) ??
 					protectedScopes ??
 					readMetadataScopes(metadata),
 				explicitScopes:
@@ -549,9 +569,10 @@ export async function discoverOAuthEndpoints(
 										: undefined,
 					scopes:
 						opts?.scopes ??
-						readExplicitScopes(oauthData, oauthData.authorization_url) ??
-						readExplicitScopes(metadata) ??
-						opts?.protectedScopes ??
+						mergeRequestedScopes(
+							opts?.protectedScopes,
+							readExplicitScopes(oauthData, oauthData.authorization_url) ?? readExplicitScopes(metadata),
+						) ??
 						protectedScopes ??
 						readMetadataScopes(oauthData),
 					explicitScopes:
@@ -611,7 +632,8 @@ export async function discoverOAuthEndpoints(
 								const discovered = await discoverOAuthEndpoints(serverUrl, discoveredAuthServer, undefined, {
 									fetch: fetchImpl,
 									protectedResource: discoveredProtectedResource,
-									protectedScopes: protectedScopes ?? readMetadataScopes(metadata),
+									protectedScopes: opts?.protectedScopes,
+									resourceScopes: protectedScopes ?? readMetadataScopes(metadata),
 									scopes: opts?.scopes,
 								});
 								if (discovered) return discovered;
