@@ -95,7 +95,7 @@ DEPLOY_TOKEN=#0A1B2C3D4E5F678901234567#
 
 The placeholder is stable across restarts on the same machine. It contains a keyed HMAC rather than a load-order index, so seeing it does not give the provider an offline dictionary test for the value. A named vault entry instead uses its readable name, such as `#GITHUB_TOKEN#`, so the model can choose the right credential.
 
-The model is told two things about a placeholder: that putting one where a credential belongs is expected and works, and that it is opaque otherwise. It does not have the value and cannot request it. For named vault entries it is told one more thing, which credentials it currently has, covered under [What the agent knows, and when](#what-the-agent-knows-and-when).
+The model is told two things about a placeholder: that putting one where a credential belongs is expected and works, and that it is opaque otherwise. It does not have the value and cannot request it. For named vault entries it is told one more thing, which credentials it currently has, covered under [What the agent receives, and when](#what-the-agent-receives-and-when).
 
 ## Using a secret in a command
 
@@ -111,7 +111,7 @@ The command that actually executes contains the real token. The substitution hap
 
 The substituted command is not written down. Veyyon records one diagnostic entry per tool call so that a session interrupted mid-call can tell you on resume what was running, and that entry stores the placeholder form, not the substituted one. This matters because `/share` uploads the session file and backups copy it. What the command prints is a separate question, covered under [What this does not protect](#what-this-does-not-protect).
 
-## What the agent knows, and when
+## What the agent receives, and when
 
 Store `GITHUB_TOKEN` today, quit, and start a new session tomorrow. Ask for your open pull requests, and the agent writes `#GITHUB_TOKEN#` into the `curl` command without you mentioning the credential again.
 
@@ -282,7 +282,7 @@ Replaced GITHUB_TOKEN in the profile vault, 1d left.
 The previous value is gone. #GITHUB_TOKEN# now spends the credential you just stored.
 ```
 
-The agent is told at once that a credential exists and that it should write `#GITHUB_TOKEN#` where the value belongs. It is never given the value and cannot request it. It also keeps knowing after this session ends, because the inventory in the system prompt is rebuilt from the vault rather than remembered from the conversation. See [What the agent knows, and when](#what-the-agent-knows-and-when).
+The agent is told at once that a credential exists and that it should write `#GITHUB_TOKEN#` where the value belongs. It is never given the value and cannot request it. It also keeps knowing after this session ends, because the inventory in the system prompt is rebuilt from the vault rather than remembered from the conversation. See [What the agent receives, and when](#what-the-agent-receives-and-when).
 
 ### Managing what you stored
 
@@ -375,7 +375,7 @@ The `STATUS` column and the closing line appear only when at least one entry has
 
 With nothing stored, `list` reports it and shows the one entry form that surface has, rather than printing an empty table.
 
-Removing and extending each notify the agent of what changed, whichever surface you did it from, so a placeholder you revoked stops being used instead of arriving at a command as literal text. See [What the agent knows, and when](#what-the-agent-knows-and-when).
+Removing and extending each notify the agent of what changed, whichever surface you did it from, so a placeholder you revoked stops being used instead of arriving at a command as literal text. See [What the agent receives, and when](#what-the-agent-receives-and-when).
 
 ### When a vault file cannot be read
 
