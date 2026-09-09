@@ -208,7 +208,7 @@ export const MODEL_SETTINGS = {
 			group: "Prompt",
 			label: "Include Model in Prompt",
 			description:
-				"Surface the active model identifier in the system prompt so the agent knows which model it is. Costs a full prompt-cache invalidation on every model switch",
+				"Surface the active model identifier in the system prompt so the active model identifier is available to the agent. Costs a full prompt-cache invalidation on every model switch",
 		},
 	},
 
@@ -492,7 +492,7 @@ export const MODEL_SETTINGS = {
 			group: "Retry & Fallback",
 			label: "Max Retry Delay",
 			description:
-				"Maximum wait between retries, in ms. When the provider asks us to wait longer than this and no credential or model fallback succeeds, the request fails fast instead of sleeping (e.g. 3-hour Anthropic rate-limit windows).",
+				"Maximum wait between retries, in ms. When the provider response requires a wait longer than this and no credential or model fallback succeeds, the request fails fast instead of sleeping (e.g. 3-hour Anthropic rate-limit windows).",
 		},
 	},
 	"retry.modelFallback": {

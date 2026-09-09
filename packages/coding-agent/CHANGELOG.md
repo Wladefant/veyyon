@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Reworded the Include Model in Prompt, Max Retry Delay, Hindsight Bank ID, Subagents and Subagent Delegation setting descriptions shown in `/settings`.
+
 ### Fixed
 
 - Corrected comments that named a distribution channel or runtime API the project does not use; no behavior change.

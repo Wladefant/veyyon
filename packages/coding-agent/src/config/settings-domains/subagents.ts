@@ -165,7 +165,7 @@ export const SUBAGENTS_SETTINGS = {
 			group: "Delegation",
 			label: "Subagents",
 			description:
-				"Whether this session may use subagents at all. Off removes the task tool and every delegation instruction from the prompt, so nothing can be spawned. This is the only setting that takes the ability away: Subagent Delegation below decides how hard the model is PUSHED to delegate, never whether it may. Your delegation strength and your Roster are kept while this is off and take effect again when you turn it back on.",
+				"Whether this session may use subagents at all. Off removes the task tool and every delegation instruction from the prompt, so nothing can be spawned. This is the only setting that takes the ability away: Subagent Delegation below controls how strongly the model is prompted to delegate, never whether it may. Your delegation strength and your Roster are kept while this is off and take effect again when you turn it back on.",
 			keywords: ["subagent", "spawn", "delegate", "off", "disable"],
 		},
 	},
@@ -179,7 +179,7 @@ export const SUBAGENTS_SETTINGS = {
 			group: "Delegation",
 			label: "Subagent Delegation",
 			description:
-				"How strongly this session routes work to the subagent types you enabled. Allowed leaves delegation available without prompting for it. Preferred asks for substantial eligible work to be delegated. Required adds a first-turn reminder. The enabled Roster is the routing policy: each name is a distinct type that owns only work matching its description, no type is a fallback for another, and work no enabled type covers stays with the main agent. Turn Subagents off above to remove delegation entirely.",
+				"How strongly this session routes work to the subagent types you enabled. Allowed leaves delegation available without prompting for it. Preferred prompts for substantial eligible work to be delegated. Required adds a first-turn reminder. The enabled Roster is the routing policy: each name is a distinct type that covers only work matching its description, no type is a fallback for another, and work no enabled type covers stays with the main agent. Turn Subagents off above to remove delegation entirely.",
 			keywords: ["subagent", "spawn", "fan out", "parallel", "eager"],
 			options: [
 				{ value: "allowed", label: "Allowed", description: "Offered, never asked for — the model decides" },
