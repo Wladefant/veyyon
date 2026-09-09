@@ -111,6 +111,55 @@ describe("mcp oauth flow", () => {
 		expect(authUrl.searchParams.get("client_id")).toBe("registered-client-id");
 	});
 
+	it("overrides discovered scope in authorizationUrl with configured scopes", async () => {
+		const flow = new MCPOAuthFlow(
+			{
+				authorizationUrl: "https://provider.example/authorize?scope=discovered-scope",
+				tokenUrl: "https://provider.example/token",
+				clientId: "client-id",
+				scopes: "configured-scope-1 configured-scope-2",
+			},
+			{},
+		);
+
+		const { url } = await flow.generateAuthUrl("test-state", "http://127.0.0.1:53173/callback");
+		const authUrl = new URL(url);
+		expect(authUrl.searchParams.get("scope")).toBe("configured-scope-1 configured-scope-2");
+	});
+
+	it("sends resolved PRM scope in dynamic client registration body", async () => {
+		let registrationPayload: Record<string, unknown> | null = null;
+		const prmScopes = "organizations:read projects:read database:write";
+
+		const flow = new MCPOAuthFlow(
+			{
+				authorizationUrl: "https://api.supabase.com/platform/oauth/authorize",
+				tokenUrl: "https://api.supabase.com/platform/oauth/token",
+				registrationUrl: "https://api.supabase.com/platform/oauth/apps/register",
+				scopes: prmScopes,
+				fetch: async (input, init) => {
+					const url = String(input);
+					if (url === "https://api.supabase.com/platform/oauth/apps/register") {
+						registrationPayload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+						return new Response(
+							JSON.stringify({ client_id: "supabase-client-id", client_secret: "supabase-client-secret" }),
+							{ status: 200, headers: { "Content-Type": "application/json" } },
+						);
+					}
+					return new Response("not found", { status: 404 });
+				},
+			},
+			{},
+		);
+
+		const { url } = await flow.generateAuthUrl("test-state", "http://127.0.0.1:53173/callback");
+		const authUrl = new URL(url);
+
+		expect(registrationPayload).not.toBeNull();
+		expect((registrationPayload as { scope?: string } | null)?.scope).toBe(prmScopes);
+		expect(authUrl.searchParams.get("scope")).toBe(prmScopes);
+	});
+
 	it("omits prompt by default so provider-specific reauth pages can use returning grants", async () => {
 		const flow = new MCPOAuthFlow(
 			{

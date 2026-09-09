@@ -597,13 +597,13 @@ export class MCPCommandController {
 									finalConfig.url,
 									authResult.authServerUrl,
 									authResult.resourceMetadataUrl,
-									{ protectedScopes: authResult.scopes },
+									{ protectedScopes: authResult.scopes, scopes: finalConfig.oauth?.scopes },
 								);
 							} catch {
 								// Ignore discovery error and handle below.
 							}
 						}
-						if (oauth && !oauth.scopes && authResult.resourceMetadataUrl) {
+						if (oauth && !oauth.explicitScopes && authResult.resourceMetadataUrl) {
 							// JSON-error-body path skips `discoverOAuthEndpoints`; fetch the
 							// advertised protected-resource metadata for the required scopes.
 							const scopes = await fetchResourceMetadataScopes(authResult.resourceMetadataUrl);
@@ -626,7 +626,7 @@ export class MCPCommandController {
 								oauth.tokenUrl,
 								oauth.clientId ?? finalConfig.oauth?.clientId ?? "",
 								finalConfig.oauth?.clientSecret ?? "",
-								oauth.scopes ?? "",
+								finalConfig.oauth?.scopes ?? oauth.scopes ?? "",
 								{
 									callbackPort: finalConfig.oauth?.callbackPort,
 									callbackPath: finalConfig.oauth?.callbackPath,
@@ -1101,9 +1101,10 @@ export class MCPCommandController {
 		if (!oauth && (config.type === "http" || config.type === "sse") && config.url) {
 			oauth = await discoverOAuthEndpoints(config.url, authResult.authServerUrl, authResult.resourceMetadataUrl, {
 				protectedScopes: authResult.scopes,
+				scopes: config.oauth?.scopes,
 			});
 		}
-		if (oauth && !oauth.scopes && authResult.resourceMetadataUrl) {
+		if (oauth && !oauth.explicitScopes && !config.oauth?.scopes && authResult.resourceMetadataUrl) {
 			// JSON-error-body path skips `discoverOAuthEndpoints`; fetch the
 			// advertised protected-resource metadata for the required scopes.
 			const scopes = await fetchResourceMetadataScopes(authResult.resourceMetadataUrl);
@@ -1114,7 +1115,7 @@ export class MCPCommandController {
 			throw new Error("Could not discover OAuth endpoints from server response.");
 		}
 
-		return oauth;
+		return config.oauth?.scopes !== undefined ? { ...oauth, scopes: config.oauth.scopes } : oauth;
 	}
 
 	async #waitForServerConnectionWithAnimation(
