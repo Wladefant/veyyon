@@ -1007,6 +1007,16 @@ export async function createSubagentSettingsForCwd(
 
 export type AbortReason = "signal" | "terminate" | "timeout" | "budget";
 
+/**
+ * The selector a subagent's model badge prints: `provider/id[@route][:effort]`,
+ * the same string the inline task widget, the anchored HUD and the `/agents`
+ * roster format through `modelBadgeFromSelector`. The effort is the level the
+ * agent ACTUALLY runs at, not only one somebody typed as a `:level` suffix.
+ */
+function resolvedModelBadge(model: Model<Api>, thinkingLevel: ConfiguredThinkingLevel | undefined): string {
+	return formatModelSelectorValue(formatModelStringWithRouting(model), thinkingLevel);
+}
+
 /** Inputs for the run monitor driving one subagent assignment. */
 interface RunMonitorArgs {
 	index: number;
@@ -1019,6 +1029,14 @@ interface RunMonitorArgs {
 	modelRegistry?: ModelRegistry;
 	/** Parent settings for tiny-model label generation. */
 	settings?: Settings;
+	/**
+	 * The parent session's live model selector. Label generation inherits it when
+	 * the tiny/commit/smol roles are unset, the way a session title inherits the
+	 * live model: a spawn is not a headless context, and resolving the label
+	 * through the persisted default role instead ran it on whatever the config
+	 * file last named, which is not necessarily a model that answers.
+	 */
+	parentActiveModelPattern?: string;
 	obfuscateProviderText?: (text: string) => string;
 	completeImpl?: SideCompleteImpl;
 	modelOverride?: string | string[];
@@ -1358,6 +1376,12 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 	// failures just leave the label unset.
 	const labelSource = assignment?.trim();
 	if (!args.description && args.modelRegistry && args.settings && labelSource) {
+		// The model the label inherits when no title role is configured. A pattern
+		// that no longer resolves (a retired id, a signed-out provider) leaves the
+		// title generator on its headless path, the persisted default role.
+		const liveModel = args.parentActiveModelPattern
+			? resolveModelOverride([args.parentActiveModelPattern], args.modelRegistry, args.settings).model
+			: undefined;
 		generateTaskLabel(
 			labelSource,
 			args.modelRegistry,
@@ -1365,6 +1389,7 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 			id,
 			args.obfuscateProviderText,
 			args.completeImpl,
+			liveModel,
 		)
 			.then(label => {
 				if (!label || abortSignal.aborted || progress.description) return;
@@ -2623,6 +2648,12 @@ export async function runSubagentFollowUpTurn(options: FollowUpTurnOptions): Pro
 		softRequestBudgetNotice: false,
 		maxRuntimeMs: options.maxRuntimeMs ?? 0,
 	});
+	// A follow-up turn's progress snapshot replaces the spawn's in every observer,
+	// so it carries the same badge or the row loses it the moment the agent is
+	// woken. The live session is the one authority on what it runs.
+	if (session.model) {
+		monitor.progress.resolvedModel = resolvedModelBadge(session.model, session.thinkingLevel);
+	}
 
 	if (options.eventBus) {
 		options.eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
@@ -2901,6 +2932,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		description: options.description,
 		modelRegistry: options.modelRegistry,
 		settings,
+		parentActiveModelPattern: options.parentActiveModelPattern,
 		obfuscateProviderText: options.obfuscateProviderText,
 		completeImpl: options.completeImpl,
 		modelOverride,
@@ -3053,10 +3085,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				// agent running at a perfectly definite effort that no suffix names. The badge printed the
 				// bare model for exactly those, which reads as "this one has no effort level" next to a
 				// sibling that shows one, when both have one and they may well differ.
-				const badgeLevel = effectiveThinkingLevel;
-				progress.resolvedModel = badgeLevel
-					? formatModelSelectorValue(formatModelStringWithRouting(model), badgeLevel)
-					: formatModelStringWithRouting(model);
+				progress.resolvedModel = resolvedModelBadge(model, effectiveThinkingLevel);
 			}
 			resolvedAt = performance.now();
 
@@ -3200,6 +3229,14 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 			monitor.setActiveSession(session);
 			installRegistryStatusSync(session);
+			// No override resolved, so the session picked its model itself: the
+			// parent's, or the persisted default. The badge names what runs either
+			// way. Left unset, an inherited model drew a bare row next to a sibling
+			// that showed one, which reads as "this agent has no model".
+			if (!progress.resolvedModel && session.model) {
+				progress.resolvedModel = resolvedModelBadge(session.model, effectiveThinkingLevel);
+				progress.contextWindow ??= session.model.contextWindow || undefined;
+			}
 			if (worktree === undefined) {
 				// Lifecycle reviver: park closed the JSONL writer, so reopening takes
 				// the single-writer lock cleanly and restores the full message history

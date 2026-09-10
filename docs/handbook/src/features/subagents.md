@@ -228,45 +228,44 @@ which of the three layers decided.
 ## Watching a run
 
 While a spawn is in flight, the `Subagents` block sits above the composer with one
-lane per agent. A lane reads left to right: a rail, the agent's id, what it is doing,
-and the model it resolved to.
+row per agent. The rows hang from the header on tree connectors, `├─` on every agent
+and `└─` on the last. A row reads left to right: the rail, the connector, a mark, the
+agent's id, the one-line label of what it was given, and the model and effort it runs
+on.
 
 ```text
 Subagents
- ▏ DockerSecretHarness    bash cargo test --workspace --all-targets         claude-opus-5 high
- ▏ SecretModeFlowUX       read modes/interactive-mode.ts                    claude-opus-5 high
- ▏ SecretModularityAudit  Audit secrets subsystem modularity, wiring, and…  claude-opus-5 med
- ▏ RateLimitedWorker      Retrying (2/5) in 38s · 429 rate limit exceeded   claude-opus-5 high
+ ▏ ├─ ▪ DockerSecretHarness: Run the workspace tests in Docker · claude-opus-5 high
+ ▏ ├─ ▪ SecretModeFlowUX: Review the secret mode flow · claude-opus-5 high
+ ▏ └─ ▪ SecretModularityAudit: Audit secrets subsystem modularity · gemini-3.7-flash med
 ```
 
 The id is painted in that agent's own accent, the same hue the status line gives its
 name and the same one a delegated todo row uses to point back at it.
 
-The middle column holds the most urgent fact the agent has. An agent asleep between
-provider attempts shows the recovery, its attempt count and the reason, counting down.
-An agent running a tool shows the tool and its argument. An agent waiting on the model
-has nothing to report, so it shows the work it was given instead, dimmed. Every lower
-rank is still true when a higher one is, and a lane that printed the description while
-the agent was asleep on a rate limit was byte-identical to one thinking.
+The label is the spawn description, or a label generated from the assignment when
+the spawn gave none. It is generated with the tiny, commit or smol role when one is
+configured and with the session's live model otherwise, the way a session title is.
+The badge is the model the agent runs on: the resolved `subagent.model` or
+per-agent override when one matched, else the session's own model that the agent
+inherited. An agent that fell back to another model shows a dim `↓` before its badge.
+`subagent.showResolvedModelBadge: false` drops the badge.
 
-Light travels down the rail while agents are working, and a lane is lit only while it
-has a tool in flight. The head crosses the whole block, so the cycle belongs to the
-block rather than the row, and arrives cold on a lane that is waiting or recovering.
-Where `display.transitions` is off, the block is still.
+Light travels down the rail while agents are working. The head crosses the whole block,
+so the cycle belongs to the block rather than the row. Where `display.transitions` is
+off, the block is still.
 
 There is no elapsed clock and no context gauge. Total age ranks agents by seniority,
 which nothing acts on, and a parent does not use a subagent's remaining
-window. Whether a lane is stuck is answered by the recovery column. `/agents` carries
-the roster with the numbers.
+window. `/agents` carries the roster with the numbers.
 
-A lane keeps its badge on its own row.
-Narrow the terminal and the model badge comes off first, then the columns shrink to
+Narrow the terminal and the model badge comes off first, then the label shortens to
 what is left. Nothing wraps: the block draws no row it cannot fit, and draws nothing
 at all rather than overflow.
 
-Eight lanes are drawn. Past that the block states how many more are running and points
-at `/agents`, which is the full roster. That row is the only place a count appears; the
-header is bare.
+Eight rows are drawn. Past that the block states how many more are running under the
+last row and points at `/agents`, which is the full roster. That row is the only place
+a count appears; the header is bare.
 
 ## Limits and isolation
 

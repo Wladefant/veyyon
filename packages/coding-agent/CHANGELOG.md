@@ -5,10 +5,13 @@
 ### Changed
 
 - Reworded the Include Model in Prompt, Max Retry Delay, Hindsight Bank ID, Subagents and Subagent Delegation setting descriptions shown in `/settings`.
+- The anchored Subagents block hangs its rows from the header on tree connectors again, `├─` on every agent and `└─` on the last, with the `… N more running — /agents for the full roster` count under the closing row.
 
 ### Fixed
 
 - Corrected comments that named a distribution channel or runtime API the project does not use; no behavior change.
+- A subagent that inherits the session's model shows that model and effort in its Subagents row, the task widget and the `/agents` roster, and keeps the badge when a follow-up turn wakes it.
+- A subagent's row label is generated with the session's live model when no tiny, commit or smol role is configured, as a session title is, instead of the persisted default role.
 
 ## [1.4.1] - 2026-09-08
 
