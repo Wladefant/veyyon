@@ -32,8 +32,9 @@ import { getBundledModel } from "@veyyon/catalog/models";
  * and the caller's instruction reaching only the final merge, staging forced by
  * the caller, staging chosen when the single request cannot fit the window
  * (with the estimator admitting that candidate), a failure that is not a timeout
- * propagating unchanged, cancellation propagating as cancellation, and the merge
- * planner terminating on summaries larger than its budget.
+ * propagating unchanged, cancellation propagating as cancellation, and the
+ * `compaction/staged-summary` planners: a segment never opening on a tool
+ * result, and merge rounds terminating on summaries larger than their budget.
  *
  * Does not catch: a segment request that itself never answers (the provider
  * watchdog is the only bound), or a merged summary that is fluent and wrong.

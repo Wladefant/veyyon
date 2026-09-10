@@ -29,6 +29,7 @@
 
 import type { Message, Model } from "@veyyon/ai";
 import type { Dialect } from "@veyyon/ai/dialect";
+import { clampLow } from "@veyyon/utils";
 import { countTokens } from "../tokenizer";
 import { serializeConversationForSummary } from "./utils";
 
@@ -55,10 +56,7 @@ const MIN_SEGMENT_TOKENS = 2_000;
 export function stagedSegmentBudget(model: Model): number {
 	const contextWindow = model.contextWindow ?? 0;
 	if (contextWindow <= 0) return STAGED_SUMMARY_SEGMENT_TOKENS;
-	return Math.max(
-		MIN_SEGMENT_TOKENS,
-		Math.min(STAGED_SUMMARY_SEGMENT_TOKENS, Math.floor(contextWindow * SEGMENT_WINDOW_SHARE)),
-	);
+	return clampLow(Math.floor(contextWindow * SEGMENT_WINDOW_SHARE), MIN_SEGMENT_TOKENS, STAGED_SUMMARY_SEGMENT_TOKENS);
 }
 
 /** One consecutive slice of the span, serialized the way the single request serializes it. */
