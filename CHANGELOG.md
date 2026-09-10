@@ -7,10 +7,13 @@
 ### Changed
 
 - Reworded the Include Model in Prompt, Max Retry Delay, Hindsight Bank ID, Subagents and Subagent Delegation setting descriptions shown in `/settings`.
+- The anchored Subagents block hangs its rows from the header on tree connectors again, `├─` on every agent and `└─` on the last, with the `… N more running — /agents for the full roster` count under the closing row.
 
 ### Fixed
 
 - Corrected comments that named a distribution channel or runtime API the project does not use; no behavior change.
+- A subagent that inherits the session's model shows that model and effort in its Subagents row, the task widget and the `/agents` roster, and keeps the badge when a follow-up turn wakes it.
+- A subagent's row label is generated with the session's live model when no tiny, commit or smol role is configured, as a session title is, instead of the persisted default role.
 - A stream that stalls after its first event ("<provider> stream stalled while waiting for the next event") classifies as a timeout as well as transient, so auto-compaction moves to the next candidate model instead of re-sending the full context to the model that stalled up to `retry.maxRetries` times.
 - A Codex websocket turn that the server accepts and then leaves without progress for the idle window is retried on the websocket once and then run over SSE, instead of spending the whole websocket retry budget on stalls, which held one compaction summary for thirty minutes per attempt.
 
