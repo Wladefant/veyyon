@@ -147,11 +147,15 @@ describe("a stalled summary is not re-sent to the same model", () => {
 	for (const message of STALL_MESSAGES) {
 		it(`sends the summary once when it fails with "${message}"`, async () => {
 			createSession();
-			const compactSpy = vi.spyOn(compactionModule, "compact").mockRejectedValue(new Error(message));
+			let sent = 0;
+			vi.spyOn(compactionModule, "compact").mockImplementation(async () => {
+				sent += 1;
+				throw new Error(message);
+			});
 
 			const ends = await runAutoCompaction();
 
-			expect(compactSpy).toHaveBeenCalledTimes(1);
+			expect(sent).toBe(1);
 			expect(ends).toHaveLength(1);
 			expect(ends[0].result).toBeUndefined();
 			expect(ends[0].errorMessage).toContain(message);
@@ -160,12 +164,16 @@ describe("a stalled summary is not re-sent to the same model", () => {
 
 	it("still retries a transient failure that is not a timeout", async () => {
 		createSession();
-		const compactSpy = vi.spyOn(compactionModule, "compact").mockRejectedValue(new Error(TRANSIENT_MESSAGE));
+		let sent = 0;
+		vi.spyOn(compactionModule, "compact").mockImplementation(async () => {
+			sent += 1;
+			throw new Error(TRANSIENT_MESSAGE);
+		});
 
 		const ends = await runAutoCompaction();
 
 		// The first attempt plus `retry.maxRetries` retries.
-		expect(compactSpy).toHaveBeenCalledTimes(4);
+		expect(sent).toBe(4);
 		expect(ends).toHaveLength(1);
 		expect(ends[0].result).toBeUndefined();
 	});

@@ -3812,9 +3812,11 @@ describe("openai-codex streaming", () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
 		const token = createCodexTestToken();
+		let sseRequests = 0;
 		const fetchMock = vi.fn(async (input: string | URL) => {
 			const url = typeof input === "string" ? input : input.toString();
 			if (url === "https://chatgpt.com/backend-api/codex/responses") {
+				sseRequests += 1;
 				return new Response(createStatefulCodexSse("Hello SSE", "resp_sse_after_stall"), {
 					status: 200,
 					headers: { "content-type": "text/event-stream" },
@@ -3857,9 +3859,9 @@ describe("openai-codex streaming", () => {
 			streamIdleTimeoutMs: 20,
 		}).result();
 
-		// The attempt that stalled and exactly one websocket retry.
+		// The attempt that stalled and exactly one websocket retry, then one SSE turn.
 		expect(sendCount).toBe(2);
-		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(sseRequests).toBe(1);
 		expect(result.stopReason).toBe("stop");
 		expect(result.content).toEqual([expect.objectContaining({ type: "text", text: "Hello SSE" })]);
 		const transport = getOpenAICodexTransportDetails(model, {
