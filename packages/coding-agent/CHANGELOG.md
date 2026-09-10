@@ -12,6 +12,7 @@
 - A subagent that inherits the session's model shows that model and effort in its Subagents row, the task widget and the `/agents` roster, and keeps the badge when a follow-up turn wakes it.
 - An inherited subagent model's badge prints the effort the session settled on, so a parent running `auto` shows the resolved level rather than `auto`.
 - A subagent's row label is generated with the session's live model when no tiny, commit or smol role is configured, as a session title is, instead of the persisted default role.
+- A compaction candidate whose single-request summary timed out and was completed in stages starts the next compaction on that model staged, instead of waiting out the same timeout first.
 
 ## [1.4.1] - 2026-09-08
 

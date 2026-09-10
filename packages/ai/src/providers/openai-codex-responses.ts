@@ -3636,14 +3636,12 @@ class CodexWebSocketConnection {
 			const priorResponseId = this.#lastSeenResponseId;
 			while (true) {
 				let timeoutMs: number | undefined;
-				let timeoutReason: string;
+				const timeoutReason = (): string =>
+					createCodexWebSocketTimeoutMessage(
+						sawFirstEvent ? "idle timeout waiting for websocket" : "timeout waiting for first websocket event",
+						{ lastEventAt, lastEventType, lastProgressAt, lastProgressEventType },
+					);
 				if (sawFirstEvent) {
-					timeoutReason = createCodexWebSocketTimeoutMessage("idle timeout waiting for websocket", {
-						lastEventAt,
-						lastEventType,
-						lastProgressAt,
-						lastProgressEventType,
-					});
 					if (idleTimeoutMs !== undefined && idleTimeoutMs > 0) {
 						timeoutMs = idleTimeoutMs - (Date.now() - lastProgressAt);
 						if (timeoutMs <= 0) {
@@ -3654,19 +3652,11 @@ class CodexWebSocketConnection {
 									msSinceLastEvent: Date.now() - lastEventAt,
 									msSinceLastProgress: Date.now() - lastProgressAt,
 								});
-							throw new CodexWebSocketTransportError(`${timeoutReason}`);
+							throw new CodexWebSocketTransportError(timeoutReason());
 						}
 					}
-				} else {
-					timeoutReason = createCodexWebSocketTimeoutMessage("timeout waiting for first websocket event", {
-						lastEventAt,
-						lastEventType,
-						lastProgressAt,
-						lastProgressEventType,
-					});
-					if (firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0) {
-						timeoutMs = firstEventTimeoutMs;
-					}
+				} else if (firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0) {
+					timeoutMs = firstEventTimeoutMs;
 				}
 				const next = await this.#nextMessage(timeoutMs, timeoutReason);
 				if (next instanceof Error) {
@@ -3908,7 +3898,10 @@ class CodexWebSocketConnection {
 
 	async #nextMessage(
 		timeoutMs: number | undefined,
-		timeoutReason: string,
+		// Built when the deadline fires, not when the wait starts: the message
+		// reports how long ago the last progress was, and a value computed before
+		// a 300 s wait reported "31087ms ago" for a stall of five minutes.
+		timeoutReason: () => string,
 	): Promise<Record<string, unknown> | Error | null> {
 		while (this.#queue.length === 0) {
 			const { promise, resolve } = Promise.withResolvers<void>();
@@ -3928,7 +3921,7 @@ class CodexWebSocketConnection {
 			await promise;
 			if (timeout) clearTimeout(timeout);
 			if (timedOut && this.#queue.length === 0) {
-				return new CodexWebSocketTransportError(`${timeoutReason}`);
+				return new CodexWebSocketTransportError(timeoutReason());
 			}
 		}
 		return this.#queue.shift() ?? null;

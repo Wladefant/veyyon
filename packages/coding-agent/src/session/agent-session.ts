@@ -2084,6 +2084,12 @@ export class AgentSession {
 	#announcedCompactionFallbacks = new Set<string>();
 	/** Server-side compaction failure notices already emitted, keyed by error text. */
 	#announcedServerCompactionFailures = new Set<string>();
+	/**
+	 * Compaction candidates whose single-request summary was superseded by a
+	 * staged one this session. The next compaction on such a model starts staged
+	 * instead of paying the single request's timeout again.
+	 */
+	#stagedSummaryModels = new Set<string>();
 	#hindsightSessionState: HindsightSessionState | undefined = undefined;
 	readonly rawSseDebugBuffer: RawSseDebugBuffer;
 
@@ -15627,6 +15633,19 @@ export class AgentSession {
 	}
 
 	/**
+	 * Remember a candidate whose summary was produced in stages, so the next
+	 * compaction on it does not first wait out the single request that never
+	 * answers. A single-stage result clears the memo: the model answered as one
+	 * request again, so staging is no longer forced.
+	 */
+	#recordSummaryStaging(candidate: Model, result: CompactionResult): void {
+		if (result.summaryStages === undefined) return;
+		const key = this.#getModelKey(candidate);
+		if (result.summaryStages > 1) this.#stagedSummaryModels.add(key);
+		else this.#stagedSummaryModels.delete(key);
+	}
+
+	/**
 	 * Say so when compaction ran on anything other than the first candidate.
 	 *
 	 * A chain that quietly lands three models down is worse than no chain: the
@@ -15861,8 +15880,10 @@ export class AgentSession {
 						// the tier the operator selected for this candidate's family,
 						// that request is billed and paced on a tier they never chose.
 						serviceTier: this.#effectiveServiceTier(candidate),
+						summaryStaging: this.#stagedSummaryModels.has(this.#getModelKey(candidate)) ? "staged" : undefined,
 					},
 				);
+				this.#recordSummaryStaging(candidate, compacted);
 				this.#announceCompactionFallback(candidates, candidate, skipReasons);
 				return compacted;
 			} catch (error) {
@@ -16480,6 +16501,7 @@ export class AgentSession {
 						codexCompaction,
 						completeImpl: this.#sideCompleteImpl,
 						serviceTier: this.#effectiveServiceTier(candidate),
+						summaryStaging: this.#stagedSummaryModels.has(this.#getModelKey(candidate)) ? "staged" : undefined,
 					};
 					const candidateWindow =
 						typeof configuredCompactionWindow === "number" && configuredCompactionWindow > 0
@@ -16590,6 +16612,7 @@ export class AgentSession {
 					}
 
 					if (compactResult) {
+						this.#recordSummaryStaging(candidate, compactResult);
 						this.#announceCompactionFallback(candidates, candidate, skipReasons);
 						break;
 					}

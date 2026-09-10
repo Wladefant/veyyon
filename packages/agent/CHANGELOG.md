@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- A history summary whose single request times out, or does not fit the summarizing model's context window, is produced in stages: the span is summarized as consecutive segments of up to 32k tokens, four at a time, and the segment summaries are merged in rounds into one summary, so a 234k-token session on a model that never begins a whole-span answer still compacts; `compact()` reports the segment count in `summaryStages` and takes `summaryStaging: "staged"` to start staged.
+- A provider's server-side compaction runs under its own ten-minute deadline instead of the three-minute remote-summarizer deadline that cut every codex compaction of a large span.
+
 ## [1.4.1] - 2026-09-08
 
 ### Fixed
