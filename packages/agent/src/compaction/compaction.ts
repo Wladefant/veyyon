@@ -24,8 +24,9 @@ import type {
 	Usage,
 } from "@veyyon/ai";
 import { withAuth } from "@veyyon/ai/auth-retry";
-import * as AIError from "@veyyon/ai/error";
 import { ProviderHttpError } from "@veyyon/ai/error/classes";
+import { Flag, is as hasFlag } from "@veyyon/ai/error/flag";
+import { classify as classifyError } from "@veyyon/ai/error/flags";
 import { createOpenAICodexCompactionRequestContext } from "@veyyon/ai/providers/openai-codex-responses";
 import { detectDegenerateRepetition } from "@veyyon/ai/utils/thinking-loop";
 import { Effort } from "@veyyon/catalog/effort";
@@ -927,7 +928,7 @@ export interface GeneratedSummary {
 /** Whether a failed summarization request timed out rather than being refused. */
 function isSummaryTimeout(error: unknown, model: Model): boolean {
 	if (error instanceof CompactionCancelledError) return false;
-	return AIError.is(AIError.classify(error, model.api), AIError.Flag.Timeout);
+	return hasFlag(classifyError(error, model.api), Flag.Timeout);
 }
 
 /**
