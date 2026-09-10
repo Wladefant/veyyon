@@ -5,9 +5,8 @@
  * self-clears. Sync task spawns and eval `agent()` spawns are excluded: their
  * progress is already rendered inline (tool block / eval cell).
  *
- * Each row is `<rail> <connector> <dot> <id>: <description> · <modelBadge>`,
- * `├─` on every agent row but the last and `└─` on the last, so the rows hang
- * from the header as a tree. Task prompts (progress.task) are excluded.
+ * Each row is `<rail> <dot> <id>: <description> · <modelBadge>`. Tree connectors
+ * (├, └, │) and task prompts (progress.task) are excluded.
  *
  * The class of defect this file exists to close is a row that does not fit: this
  * block is an anchored live region, so a row wider than the viewport does not
@@ -122,9 +121,9 @@ function fitsIn(out: string, columns: number): string {
 	return out;
 }
 
-/** The agent row naming `id`, without the leading rail, its connector and their spaces. */
+/** The agent row naming `id`, without the leading rail and its space. */
 function rowFor(out: string, id: string): string {
-	return (out.split("\n").find(line => line.includes(id)) ?? "").replace(/^▏\s*(?:├─|└─)\s*/, "");
+	return (out.split("\n").find(line => line.includes(id)) ?? "").replace(/^▏\s*/, "");
 }
 
 describe("subagent HUD lines", () => {
@@ -192,7 +191,7 @@ describe("subagent HUD lines", () => {
 		expect(rowFor(fromTask, "Worker")).toBe("▪ Worker");
 	});
 
-	it("hangs every agent row from the header on a connector, └─ on the last, and never draws progress.task", () => {
+	it("draws no tree connectors and never draws progress.task", () => {
 		const out = renderAt([
 			makeSession({
 				id: "WorkerA",
@@ -204,23 +203,11 @@ describe("subagent HUD lines", () => {
 				description: "second worker",
 				progress: makeProgress({ id: "WorkerB", task: "Secret task prompt for B" }),
 			}),
-			makeSession({
-				id: "WorkerC",
-				description: "third worker",
-				progress: makeProgress({ id: "WorkerC", task: "Secret task prompt for C" }),
-			}),
 		]);
-		const lines = out.split("\n");
-		expect(lines.slice(2)).toEqual([
-			"▏ ├─ ▪ WorkerA: first worker",
-			"▏ ├─ ▪ WorkerB: second worker",
-			"▏ └─ ▪ WorkerC: third worker",
-		]);
+		expect(out).not.toContain("├");
+		expect(out).not.toContain("└");
+		expect(out).not.toContain("│");
 		expect(out).not.toContain("Secret task prompt");
-
-		// One agent is the last agent: it closes the block on its own.
-		const alone = renderAt([makeSession({ id: "Only", description: "solo" })]).split("\n");
-		expect(alone[2]).toBe("▏ └─ ▪ Only: solo");
 	});
 
 	/**
@@ -458,9 +445,7 @@ describe("subagent HUD lines", () => {
 			for (const line of painted) {
 				expect(Bun.stringWidth(Bun.stripANSI(line))).toBeLessThanOrEqual(columns - 1);
 			}
-			// Rail, connector and mark with their spaces are seven columns, one
-			// letter of a name is the eighth, and the last column stays clear.
-			if (columns <= 8) {
+			if (columns <= 5) {
 				expect(lines).toEqual([]);
 			} else {
 				expect(lines.length).toBeGreaterThan(0);
@@ -517,11 +502,7 @@ describe("subagent HUD lines", () => {
 		for (const session of active.slice(0, shown))
 			expect(rowFor(out, session.id)).toContain(`job ${session.id.slice(6)}`);
 		for (const session of active.slice(shown)) expect(out).not.toContain(session.id);
-		// The last DRAWN agent closes the tree; the count sits under it with no
-		// connector, since it is not an agent.
-		const rows = out.split("\n");
-		expect(rows[rows.length - 2]).toBe(`▏ └─ ▪ Worker${shown - 1}: job ${shown - 1}`);
-		expect(rows[rows.length - 1]).toBe(`▏ … 2 more running — /agents for the full roster`);
+		expect(out).toContain(`… 2 more running — /agents for the full roster`);
 	});
 });
 

@@ -8,12 +8,6 @@
  * than as a short list of names, and the activity column drew whatever text a
  * tool call happened to carry.
  *
- * The rows hang from the header on tree connectors, `├─` for every agent but
- * the last and `└─` for the last, the way the inline task widget's rows hang
- * from their call. The connectors are what close the block: without them the
- * last row and the overflow count below it read as two more lines of the same
- * list, and a block of eight bare marks is a column of dots with a title.
- *
  * One thing is added, which is the RAIL. `block.rail` is the first non-space
  * cell of every row, the one arrangement {@link paintRailMotion} and
  * `findRailCell` can find, so light travels down the left edge of the block the
@@ -27,7 +21,6 @@
 import { visibleWidth } from "@veyyon/tui";
 import { formatTaskId } from "../../task/render";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../../tools/render-utils";
-import { getTreeBranch } from "../../tui/utils";
 import type { ObservableSession } from "../session-observer-registry";
 import { theme } from "../theme/theme";
 import { modelBadgeFromSelector } from "./agent-model-badge";
@@ -91,23 +84,25 @@ export function renderSubagentHudLines(sessions: readonly ObservableSession[], o
 	// it makes the region taller on every rebuild.
 	const usable = Math.max(1, options.columns - 1);
 	const content = Math.max(0, usable - visibleWidth(rail) - 1);
-	// `body` is what a row has left after the rail, its space, the connector and
-	// its space, the mark and its space, and every budget below is charged
-	// against it. Budgeting against the block's whole content width instead drew
-	// a row past the bound, and an anchored row that overflows does not scroll
-	// away: `Text` soft-wraps it and the region grows a line on every rebuild.
-	// `├─` and `└─` are the same width, so one budget serves every row.
-	const body = content - visibleWidth(theme.tree.branch) - 1 - visibleWidth(dot) - 1;
-	// A rail, a connector, a mark and no room for one letter of a name is chrome
-	// and not a block. The empty block is how this says so — the same path it
-	// takes when nothing is running, so the container clears rather than drawing
-	// a row wider than the terminal.
+	// `body` is what a row has left after the rail, its space, the mark and its
+	// space, and every budget below is charged against it. Budgeting against the
+	// block's whole content width instead drew a row past the bound, and an
+	// anchored row that overflows does not scroll away: `Text` soft-wraps it and
+	// the region grows a line on every rebuild.
+	const body = content - visibleWidth(dot) - 1;
+	// A rail, a mark and no room for one letter of a name is chrome and not a
+	// block. The empty block is how this says so — the same path it takes when
+	// nothing is running, so the container clears rather than drawing a row wider
+	// than the terminal.
 	if (body < 1) return [];
 
-	const rows = visible.map((session, index) => {
-		const branch = theme.fg("dim", getTreeBranch(index === visible.length - 1, theme));
+	// One row per agent, with no tree connectors. Four branches drawn under a
+	// header to hold four flat siblings is scaffolding for a hierarchy this block
+	// does not have, and it put a second vertical edge two cells inside the rail,
+	// which is the block's own left edge.
+	const rows = visible.map(session => {
 		const idText = cell(formatTaskId(session.id), body);
-		let line = `${branch} ${dot} ${theme.fg("accent", theme.bold(idText))}`;
+		let line = `${dot} ${theme.fg("accent", theme.bold(idText))}`;
 		let left = body - visibleWidth(idText);
 		const resolved = session.progress?.resolvedModel;
 		let badge =

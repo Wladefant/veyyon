@@ -228,16 +228,14 @@ which of the three layers decided.
 ## Watching a run
 
 While a spawn is in flight, the `Subagents` block sits above the composer with one
-row per agent. The rows hang from the header on tree connectors, `├─` on every agent
-and `└─` on the last. A row reads left to right: the rail, the connector, a mark, the
-agent's id, the one-line label of what it was given, and the model and effort it runs
-on.
+row per agent. A row reads left to right: the rail, a mark, the agent's id, the
+one-line label of what it was given, and the model and effort it runs on.
 
 ```text
 Subagents
- ▏ ├─ ▪ DockerSecretHarness: Run the workspace tests in Docker · claude-opus-5 high
- ▏ ├─ ▪ SecretModeFlowUX: Review the secret mode flow · claude-opus-5 high
- ▏ └─ ▪ SecretModularityAudit: Audit secrets subsystem modularity · gemini-3.7-flash med
+ ▏ ▪ DockerSecretHarness: Run the workspace tests in Docker · claude-opus-5 high
+ ▏ ▪ SecretModeFlowUX: Review the secret mode flow · claude-opus-5 high
+ ▏ ▪ SecretModularityAudit: Audit secrets subsystem modularity · gemini-3.7-flash med
 ```
 
 The id is painted in that agent's own accent, the same hue the status line gives its
