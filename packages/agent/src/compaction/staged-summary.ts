@@ -164,7 +164,7 @@ export async function mapWithConcurrency<T, R>(
 			}
 		}
 	};
-	const workers = Array.from({ length: Math.max(1, Math.min(concurrency, items.length)) }, () => worker());
+	const workers = Array.from({ length: clampLow(concurrency, 1, items.length) }, () => worker());
 	await Promise.all(workers);
 	if (failure) throw failure.error;
 	return results;
