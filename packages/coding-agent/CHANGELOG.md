@@ -10,6 +10,7 @@
 
 - Corrected comments that named a distribution channel or runtime API the project does not use; no behavior change.
 - A subagent that inherits the session's model shows that model and effort in its Subagents row, the task widget and the `/agents` roster, and keeps the badge when a follow-up turn wakes it.
+- An inherited subagent model's badge prints the effort the session settled on, so a parent running `auto` shows the resolved level rather than `auto`.
 - A subagent's row label is generated with the session's live model when no tiny, commit or smol role is configured, as a session title is, instead of the persisted default role.
 
 ## [1.4.1] - 2026-09-08

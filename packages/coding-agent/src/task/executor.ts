@@ -3231,10 +3231,12 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			installRegistryStatusSync(session);
 			// No override resolved, so the session picked its model itself: the
 			// parent's, or the persisted default. The badge names what runs either
-			// way. Left unset, an inherited model drew a bare row next to a sibling
-			// that showed one, which reads as "this agent has no model".
+			// way, at the effort the session settled on — `auto` resolved, an
+			// unsupported level clamped — the same authority the follow-up turn
+			// reads. Left unset, an inherited model drew a bare row next to a
+			// sibling that showed one, which reads as "this agent has no model".
 			if (!progress.resolvedModel && session.model) {
-				progress.resolvedModel = resolvedModelBadge(session.model, effectiveThinkingLevel);
+				progress.resolvedModel = resolvedModelBadge(session.model, session.thinkingLevel);
 				progress.contextWindow ??= session.model.contextWindow || undefined;
 			}
 			if (worktree === undefined) {

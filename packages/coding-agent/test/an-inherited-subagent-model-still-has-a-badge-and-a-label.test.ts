@@ -16,8 +16,9 @@
  *
  * Class closed: every progress snapshot the executor emits for a running agent
  * names the model it runs on, from the created session when nothing was resolved
- * ahead of it; and label generation follows the parent's live model exactly as a
- * session title does.
+ * ahead of it, at the effort the session settled on rather than the selector
+ * (`auto`) the parent typed; and label generation follows the parent's live
+ * model exactly as a session title does.
  *
  * Not caught here: a provider that accepts the request and returns no title, and
  * the HUD's own width budget for the badge (subagent-hud-render.test.ts).
@@ -34,6 +35,7 @@ import * as sdkModule from "@veyyon/coding-agent/sdk";
 import { runSubagentFollowUpTurn, runSubprocess } from "@veyyon/coding-agent/task/executor";
 import type { AgentDefinition, AgentProgress, SubagentProgressPayload } from "@veyyon/coding-agent/task/types";
 import { TASK_SUBAGENT_PROGRESS_CHANNEL } from "@veyyon/coding-agent/task/types";
+import { AUTO_THINKING } from "@veyyon/coding-agent/thinking";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
 import { TempDir } from "@veyyon/utils";
 import { createMockSession, createSessionResult, yieldSuccessEvent } from "./helpers/subagent-session";
@@ -64,14 +66,14 @@ function observeProgress(eventBus: EventBus): AgentProgress[] {
 	return snapshots;
 }
 
-/** A child that runs on `running` and yields after `beforeYield` settles. */
-function createChild(running: Model<Api>, beforeYield: () => Promise<void> = async () => {}) {
+/** A child that runs on `running` at `effort` and yields after `beforeYield` settles. */
+function createChild(running: Model<Api>, effort?: ThinkingLevel, beforeYield: () => Promise<void> = async () => {}) {
 	return createMockSession(
 		async ({ emit }) => {
 			await beforeYield();
 			emit(yieldSuccessEvent(undefined));
 		},
-		{ model: running, activeToolNames: ["yield"] },
+		{ model: running, thinkingLevel: effort, activeToolNames: ["yield"] },
 	);
 }
 
@@ -88,9 +90,13 @@ describe("an inherited subagent model still has a badge and a label", () => {
 		for (const dir of tempDirs.splice(0)) dir.removeSync();
 	});
 
-	it("names the session's own model on every progress snapshot when no override resolved", async () => {
+	it("names the session's own model, at the effort it settled on, on every progress snapshot when no override resolved", async () => {
 		const live = model("parent", "live-model");
-		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(createChild(live)));
+		// The parent runs `auto`; the session resolved it to `medium`. The badge
+		// prints the resolved level, not the selector.
+		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(
+			createSessionResult(createChild(live, ThinkingLevel.Medium)),
+		);
 		const eventBus = new EventBus();
 		const snapshots = observeProgress(eventBus);
 
@@ -100,7 +106,7 @@ describe("an inherited subagent model still has a badge and a label", () => {
 			task: "work",
 			index: 0,
 			id: "Inherits",
-			parentThinkingLevel: ThinkingLevel.High,
+			parentThinkingLevel: AUTO_THINKING,
 			settings: Settings.isolated(),
 			modelRegistry: { refresh: async () => {}, getAvailable: () => [live], getApiKey: async () => "k" } as never,
 			enableLsp: false,
@@ -108,9 +114,9 @@ describe("an inherited subagent model still has a badge and a label", () => {
 			artifactsDir: artifactsDir(),
 		});
 
-		expect(result.resolvedModel).toBe("parent/live-model:high");
+		expect(result.resolvedModel).toBe("parent/live-model:medium");
 		expect(snapshots.length).toBeGreaterThan(0);
-		expect(new Set(snapshots.map(snapshot => snapshot.resolvedModel))).toEqual(new Set(["parent/live-model:high"]));
+		expect(new Set(snapshots.map(snapshot => snapshot.resolvedModel))).toEqual(new Set(["parent/live-model:medium"]));
 		expect(snapshots[0]?.contextWindow).toBe(128000);
 	});
 
@@ -160,8 +166,7 @@ describe("an inherited subagent model still has a badge and a label", () => {
 
 	it("carries the badge through a follow-up turn instead of erasing it", async () => {
 		const live = model("parent", "live-model");
-		const child = createChild(live);
-		Object.assign(child as object, { thinkingLevel: "medium" });
+		const child = createChild(live, ThinkingLevel.Medium);
 		vi.spyOn(AgentLifecycleManager.global(), "ensureLive").mockResolvedValue(child);
 		const eventBus = new EventBus();
 		const snapshots = observeProgress(eventBus);
@@ -181,14 +186,18 @@ describe("an inherited subagent model still has a badge and a label", () => {
 	it("labels the assignment with the parent's live model, not the persisted default role", async () => {
 		const live = model("parent", "live-model");
 		const stale = model("stale", "default-model");
-		const complete = vi.spyOn(ai, "completeSimple").mockResolvedValue({
-			stopReason: "stop",
-			content: [{ type: "text", text: "<title>Audit the registry</title>" }],
-		} as never);
+		const labelledBy: string[] = [];
+		vi.spyOn(ai, "completeSimple").mockImplementation(async (model: Model<Api>) => {
+			labelledBy.push(`${model.provider}/${model.id}`);
+			return {
+				stopReason: "stop",
+				content: [{ type: "text", text: "<title>Audit the registry</title>" }],
+			} as never;
+		});
 		const settings = Settings.isolated({ "providers.tinyModel": "online" });
 		settings.setModelRole("default", "stale/default-model");
 		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(
-			createSessionResult(createChild(live, () => sleep(20))),
+			createSessionResult(createChild(live, undefined, () => sleep(20))),
 		);
 		const eventBus = new EventBus();
 		const snapshots = observeProgress(eventBus);
@@ -215,9 +224,7 @@ describe("an inherited subagent model still has a badge and a label", () => {
 			artifactsDir: artifactsDir(),
 		});
 
-		expect(complete).toHaveBeenCalledTimes(1);
-		const labelModel = complete.mock.calls[0]?.[0] as Model<Api>;
-		expect(`${labelModel.provider}/${labelModel.id}`).toBe("parent/live-model");
+		expect(labelledBy).toEqual(["parent/live-model"]);
 		expect(result.description).toBe("Audit the registry");
 		expect(snapshots.some(snapshot => snapshot.description === "Audit the registry")).toBe(true);
 	});
