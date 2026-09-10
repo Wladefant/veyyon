@@ -69,7 +69,12 @@ import {
 import { clearStreamingPartialJson, kStreamingLastParseLen, kStreamingPartialJson } from "../utils/block-symbols";
 import { withEmptyCompletionRetry } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
-import { type FirstEventBudget, isPreResponseStall, openStallLadderBudget } from "../utils/first-event-budget";
+import {
+	type FirstEventBudget,
+	isPreResponseStall,
+	openStallLadderBudget,
+	PRE_RESPONSE_STALL_ATTEMPTS,
+} from "../utils/first-event-budget";
 import { materializeDumpBody, type RawHttpRequestDump } from "../utils/http-inspector";
 import {
 	armPreResponseTimeout,
@@ -828,6 +833,8 @@ class CodexStreamRuntime {
 	/** Summary deltas buffered while waiting to see whether atomic `.done` events arrive. */
 	pendingSummaryDeltas = new Map<CodexOpenItem, string[]>();
 	websocketStreamRetries = 0;
+	/** Websocket retries spent on a stall alone; bounded by {@link PRE_RESPONSE_STALL_ATTEMPTS}. */
+	websocketStallRetries = 0;
 	providerRetryAttempt = 0;
 	sawTerminalEvent = false;
 	canSafelyReplayWebsocketOverSse = true;
@@ -1111,6 +1118,15 @@ function isCodexWebSocketRetryableStreamError(error: unknown): boolean {
 		message.includes("timeout waiting for first websocket event") ||
 		message.includes("syntaxerror") ||
 		message.includes("json")
+	);
+}
+
+/** The two websocket watchdog messages: the server took the request and then sent no progress. */
+function isCodexWebSocketStallError(error: Error): boolean {
+	const message = error.message.toLowerCase();
+	return (
+		message.includes("idle timeout waiting for websocket") ||
+		message.includes("timeout waiting for first websocket event")
 	);
 }
 function toCodexHeaderRecord(value: unknown): Record<string, string> | null {
@@ -2468,16 +2484,30 @@ class CodexStreamProcessor {
 		const isFatal = CODEX_WEBSOCKET_FATAL_PATTERNS.some(pattern =>
 			fatalWebSocketMessage.includes(pattern.toLowerCase()),
 		);
+		// A stall is the socket's own watchdog firing: the server took the request
+		// and then sent no progress for the whole idle (or first-event) window. A
+		// dead socket is worth a fresh one; a server that accepted the request and
+		// went silent is not made to answer by re-sending the same context, and
+		// each re-send costs the full window again. So a stall rides the same
+		// two-attempt ladder the pre-response budget states: the attempt that
+		// stalled and one retry, after which the turn moves to SSE. Measured
+		// 2026-09-09: five stalled websocket retries at the default idle window
+		// held one compaction summary for thirty minutes per attempt.
+		const isStall = isCodexWebSocketStallError(streamError);
+		const stallLadderExhausted = isStall && this.runtime.websocketStallRetries >= PRE_RESPONSE_STALL_ATTEMPTS - 1;
 		const activateFallback =
 			replayingBufferedOutputOverSse ||
 			isFatal ||
+			stallLadderExhausted ||
 			this.runtime.websocketStreamRetries >= CODEX_WEBSOCKET_RETRY_BUDGET;
 		recordCodexWebSocketFailure(state, activateFallback, {
 			cause: replayingBufferedOutputOverSse
 				? "stream-failed-while-replaying-over-sse"
 				: isFatal
 					? "fatal-stream-error"
-					: "stream-retry-budget-exhausted",
+					: stallLadderExhausted
+						? "stall-ladder-exhausted"
+						: "stream-retry-budget-exhausted",
 			error: streamError.message,
 		});
 		CODEX_DEBUG &&
@@ -2492,6 +2522,7 @@ class CodexStreamProcessor {
 
 		if (!activateFallback) {
 			this.runtime.websocketStreamRetries += 1;
+			if (isStall) this.runtime.websocketStallRetries += 1;
 			// Full re-send on a fresh socket: clear accumulator state from the failed
 			// attempt. Content is empty here, but blockless native items (e.g.
 			// web_search_call) may already have accumulated.
