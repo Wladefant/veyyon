@@ -7,7 +7,6 @@
 ### Changed
 
 - Reworded the Include Model in Prompt, Max Retry Delay, Hindsight Bank ID, Subagents and Subagent Delegation setting descriptions shown in `/settings`.
-- The anchored Subagents block hangs its rows from the header on tree connectors again, `├─` on every agent and `└─` on the last, with the `… N more running — /agents for the full roster` count under the closing row.
 
 ### Fixed
 
