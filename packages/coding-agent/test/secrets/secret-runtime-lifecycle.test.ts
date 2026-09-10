@@ -21,7 +21,7 @@ import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
 import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
 import { runSecretCommandForSurface } from "@veyyon/coding-agent/slash-commands/helpers/secret";
 import { createPersistedSubagentReviverFactory } from "@veyyon/coding-agent/task/persisted-revive";
-import { TempDir } from "@veyyon/utils";
+import { getProjectDir, setProjectDir, TempDir } from "@veyyon/utils";
 import { useIsolatedConfigRoot } from "../helpers/isolated-agent-dir";
 import { useSpyTeardown } from "../helpers/spy-teardown";
 
@@ -71,9 +71,12 @@ interface RuntimeFixture {
 	agentDir: string;
 	settings: Settings;
 	session: AgentSession;
+	/** Where the process stood before the session moved it; put back before `root` goes. */
+	originalProjectDir: string;
 }
 
 async function createRuntimeFixture(extension?: ExtensionFactory): Promise<RuntimeFixture> {
+	const originalProjectDir = getProjectDir();
 	const root = TempDir.createSync("secret-runtime-lifecycle-");
 	const projectA = path.resolve(root.join("project-a"));
 	const projectB = path.resolve(root.join("project-b"));
@@ -110,7 +113,7 @@ async function createRuntimeFixture(extension?: ExtensionFactory): Promise<Runti
 		enableLsp: false,
 		skipPythonPreflight: true,
 	});
-	return { root, projectA, projectB, vaultA, vaultB, agentDir, settings, session };
+	return { root, projectA, projectB, vaultA, vaultB, agentDir, settings, session, originalProjectDir };
 }
 
 /**
@@ -120,20 +123,36 @@ async function createRuntimeFixture(extension?: ExtensionFactory): Promise<Runti
  * revision fingerprint ignores changes this process made, so a session does not read its own
  * `/secret add` as tampering and refuse to spend the credential it just stored. These tests are
  * about the OTHER case, a vault mutated behind the session's back, so the write has to look like
- * one. Rewriting the file's own bytes in place does exactly that and leaves the content valid, so
- * the reload still finds the secret the add stored.
+ * one. Publishing the same bytes at a NEW inode, the way an atomic writer in another process
+ * does, is the one external change every kernel reports: rewriting the bytes in place moved only
+ * mtime and ctime, and a kernel with coarse-grained timestamps (the ubuntu-24.04 runner's 6.8)
+ * stamps a write landing in the same tick as the add with the same values, so the fingerprint
+ * saw nothing and the test failed on the runner while passing on a multigrain-timestamp kernel.
  *
  * Deliberately a real filesystem write rather than a stub over `revision()`: stubbing the
  * fingerprint would keep these tests passing even if the fingerprint stopped detecting anything.
+ * The revision is asserted to have moved so a test can never quietly pass against a session that
+ * was still fresh.
  */
 async function addSecretAndForgeAnExternalWrite(fixture: RuntimeFixture, projectDir: string): Promise<void> {
 	await fixture.vaultA.add({ name: "LATE_TOKEN", value: ADDED_WHILE_OFF_VALUE, scope: "project" });
+	const captured = fixture.vaultA.revision();
 	const vaultPath = path.join(projectDir, ".veyyon", "vault.json");
-	await fs.writeFile(vaultPath, await fs.readFile(vaultPath));
+	const staging = path.join(projectDir, ".veyyon", "vault.json.external");
+	await fs.writeFile(staging, await fs.readFile(vaultPath), { mode: 0o600 });
+	await fs.rename(staging, vaultPath);
+	expect(fixture.vaultA.revision()).not.toBe(captured);
 }
 
+/**
+ * `setCwd` re-scopes the PROCESS, since this session owns it, so a row that moved to project B
+ * left the process standing in a directory this removes. Put it back first: a later suite that
+ * restores its own state fails with ENOENT on a directory it never created, and the leak tracer
+ * cannot even take its after-test snapshot.
+ */
 async function disposeFixture(fixture: RuntimeFixture): Promise<void> {
 	await fixture.session.dispose();
+	setProjectDir(fixture.originalProjectDir);
 	await fixture.root.remove();
 }
 
