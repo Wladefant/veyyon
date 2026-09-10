@@ -14,8 +14,13 @@
 - A subagent that inherits the session's model shows that model and effort in its Subagents row, the task widget and the `/agents` roster, and keeps the badge when a follow-up turn wakes it.
 - An inherited subagent model's badge prints the effort the session settled on, so a parent running `auto` shows the resolved level rather than `auto`.
 - A subagent's row label is generated with the session's live model when no tiny, commit or smol role is configured, as a session title is, instead of the persisted default role.
+- A compaction candidate whose single-request summary timed out and was completed in stages starts the next compaction on that model staged, instead of waiting out the same timeout first.
+- A history summary whose single request times out, or does not fit the summarizing model's context window, is produced in stages: the span is summarized as consecutive segments of up to 32k tokens, four at a time, and the segment summaries are merged in rounds into one summary, so a 234k-token session on a model that never begins a whole-span answer still compacts; `compact()` reports the segment count in `summaryStages` and takes `summaryStaging: "staged"` to start staged.
+- A provider's server-side compaction runs under its own ten-minute deadline instead of the three-minute remote-summarizer deadline that cut every codex compaction of a large span.
 - A stream that stalls after its first event ("<provider> stream stalled while waiting for the next event") classifies as a timeout as well as transient, so auto-compaction moves to the next candidate model instead of re-sending the full context to the model that stalled up to `retry.maxRetries` times.
 - A Codex websocket turn that the server accepts and then leaves without progress for the idle window is retried on the websocket once and then run over SSE, instead of spending the whole websocket retry budget on stalls, which held one compaction summary for thirty minutes per attempt.
+- A codex server-side compaction cut by its deadline fails as a timeout, and one the caller cancels fails as a cancellation, instead of both reporting "stream closed before response.completed" as a backend fault.
+- The codex websocket watchdog message reports the time since the last progress as of the moment it fires, instead of a value computed before the wait.
 
 ## [1.4.1] - 2026-09-08
 
