@@ -177,13 +177,17 @@ for sha in $shas; do
 		fi
 		book="$checkout/docs/handbook/book"
 		if [ -d "$book" ]; then
+			# A page references its assets relative to its own directory, so a nested
+			# page writes `../css/chrome-<hash>.css` for `book/css/chrome-<hash>.css`.
+			# Strip the climb and resolve against the book root.
 			refs="${TMPDIR:-/tmp}/veyyon-prepush-refs-$$"
-			grep -ohE '"[^"]*-[0-9a-f]{8}\.(js|css)"' "$book"/*.html "$book"/**/*.html 2>/dev/null | tr -d '"' | sort -u >"$refs" || true
+			(shopt -s globstar nullglob; grep -ohE '"[^"]*-[0-9a-f]{8}\.(js|css)"' "$book"/**/*.html 2>/dev/null) | tr -d '"' | sort -u >"$refs" || true
 			absent=""
 			while read -r asset; do
 				[ -z "$asset" ] && continue
-				base="${asset##*/}"
-				if [ ! -e "$book/$asset" ] && [ ! -e "$book/$base" ]; then
+				rel="$asset"
+				while [ "${rel#../}" != "$rel" ]; do rel="${rel#../}"; done
+				if [ ! -e "$book/$rel" ]; then
 					absent="$absent $asset"
 				fi
 			done <"$refs"

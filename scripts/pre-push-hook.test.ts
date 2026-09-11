@@ -64,7 +64,7 @@ async function runHook(options: {
 	/**
 	 * Stub mdbook behavior on PATH:
 	 * - undefined / "missing": no mdbook binary on PATH
-	 * - "success": mdbook stub that builds book and creates referenced content-hashed assets
+	 * - "success": mdbook stub that builds a root page and a nested page, each referencing its content-hashed assets the way mdbook writes them (`css/<name>-<hash>.css` from the root, `../css/<name>-<hash>.css` from a nested page)
 	 * - "missing-assets": mdbook stub that creates HTML referencing non-existent content-hashed assets
 	 * - "failing": mdbook stub that exits with error code 1
 	 */
@@ -124,7 +124,7 @@ async function runHook(options: {
 	if (options.mdbook === "success") {
 		await Bun.write(
 			path.join(binDir, "mdbook"),
-			`#!/usr/bin/env bash\nif [ "$1" = "build" ]; then\n  book="$2/book"\n  mkdir -p "$book"\n  echo '<html><head><script src="searchindex-12345678.js"></script><link rel="stylesheet" href="theme-abcdef01.css"></head><body>built</body></html>' > "$book/index.html"\n  echo '/* search */' > "$book/searchindex-12345678.js"\n  echo '/* theme */' > "$book/theme-abcdef01.css"\n  exit 0\nfi\nexit 0\n`,
+			`#!/usr/bin/env bash\nif [ "$1" = "build" ]; then\n  book="$2/book"\n  mkdir -p "$book/css" "$book/nested"\n  echo '<html><head><script src="searchindex-12345678.js"></script><link rel="stylesheet" href="css/chrome-abcdef01.css"></head><body>built</body></html>' > "$book/index.html"\n  echo '<html><head><script src="../searchindex-12345678.js"></script><link rel="stylesheet" href="../css/chrome-abcdef01.css"></head><body>nested</body></html>' > "$book/nested/page.html"\n  echo '/* search */' > "$book/searchindex-12345678.js"\n  echo '/* chrome */' > "$book/css/chrome-abcdef01.css"\n  exit 0\nfi\nexit 0\n`,
 		);
 		await Bun.$`chmod +x ${path.join(binDir, "mdbook")}`.quiet();
 	} else if (options.mdbook === "missing-assets") {
