@@ -199,11 +199,23 @@ describe("the modules that were repointed stay cut", () => {
 	 * re-exports the contract module. A contract imports nothing in this repository, so no consumer
 	 * gained an edge to a subsystem it did not already reach.
 	 */
+	/**
+	 * Re-measured 2026-09-11: `parser.ts` 119 -> 120, `db.ts` 121 -> 122, `sync-worker.ts` 120 -> 121,
+	 * each by the one module `@veyyon/utils/tab-width`, a zero-import leaf holding `DEFAULT_TAB_WIDTH`
+	 * and `replaceTabs`, split out of `tab-spacing.ts` (already on every one of these reaches through
+	 * the `@veyyon/utils` entry point) so the browser bundles can share the width without the
+	 * `.editorconfig` reader. `shared-llm.ts` 205 -> 207 by two leaves under files already reached:
+	 * `ai/providers/initial-message.ts` (the empty Responses assistant message, imported by
+	 * `providers/gitlab-duo-workflow.ts` instead of restated; imports only `@veyyon/catalog/models`)
+	 * and `catalog/discovery/failure.ts` (the discovery-failure vocabulary and its `readDiscoveryJson`
+	 * reader, taken by `provider-models/ollama.ts`; imports only `@veyyon/utils/type-guards`). No
+	 * consumer gained an edge to a subsystem it did not already reach.
+	 */
 	it.each([
 		["agent/src/proxy.ts", 145],
-		["apps/stats/src/parser.ts", 119],
-		["apps/stats/src/db.ts", 121],
-		["apps/stats/src/sync-worker.ts", 120],
+		["apps/stats/src/parser.ts", 120],
+		["apps/stats/src/db.ts", 122],
+		["apps/stats/src/sync-worker.ts", 121],
 		["plugins/mnemopi/src/core/embeddings.ts", 131],
 		// Re-measured 2026-08-28 at 66, from 127. The file took `trimTrailingSlashes` and
 		// `withScopedTimeoutSignal` from the `@veyyon/utils` entry point, so every module that entry
@@ -215,11 +227,11 @@ describe("the modules that were repointed stay cut", () => {
 		// used to spell `"\x1b"` inline and now takes `ESC` from that owner. The leaf adds no edge of
 		// its own, so nothing outside this closure was gained.
 		["coding-agent/src/config/api-key-resolver.ts", 56],
-		// Re-measured 2026-09-04 at 205, from 202: the three `@veyyon/model` leaves named above. 202
-		// was one module from the catalog OpenCode discovery header leaf; 184 was the 2026-07-27
-		// engine-call remeasure; 325 before that was the leak. The file still takes no name from the
-		// barrel.
-		["coding-agent/src/commit/shared-llm.ts", 205],
+		// Re-measured 2026-09-11 at 207, from 205: the two leaves named above. 205 was the three
+		// `@veyyon/model` leaves of 2026-09-04; 202 was one module from the catalog OpenCode discovery
+		// header leaf; 184 was the 2026-07-27 engine-call remeasure; 325 before that was the leak. The
+		// file still takes no name from the barrel.
+		["coding-agent/src/commit/shared-llm.ts", 207],
 		// The agent's hot loop and the `Agent` class. Both STREAM, so both reach the engine whatever
 		// specifier they use; the ceilings are what the other ten names cost when taken from the entry
 		// point. 378 -> 321 and 380 -> 323.
