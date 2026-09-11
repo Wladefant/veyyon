@@ -1523,9 +1523,9 @@ export class Editor implements Component, Focusable, MouseRoutable {
 		if (!Number.isFinite(cursor.line) || !Number.isFinite(cursor.col)) {
 			throw new RangeError("Cursor line and column must be finite numbers");
 		}
-		const lineIndex = Math.max(0, Math.min(this.#state.lines.length - 1, Math.trunc(cursor.line)));
+		const lineIndex = clampLow(Math.trunc(cursor.line), 0, this.#state.lines.length - 1);
 		const line = this.#state.lines[lineIndex]!;
-		let col = Math.max(0, Math.min(line.length, Math.trunc(cursor.col)));
+		let col = clampLow(Math.trunc(cursor.col), 0, line.length);
 		const token = this.#atomicTokenAt(line, col);
 		if (token) col = token.start;
 		if (col > 0 && col < line.length) {

@@ -16,16 +16,12 @@
  */
 
 import { beforeAll, describe, expect, it } from "bun:test";
-import { stripVTControlCharacters } from "node:util";
 import type { AnyAgentTool } from "@veyyon/agent-core";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import type { TUI } from "@veyyon/tui";
+import { stripAnsi } from "@veyyon/utils/strip-ansi";
 import type { ToolView, ToolViewContext } from "@veyyon/view";
 import { createToolExecution } from "./helpers/tool-execution";
-
-function stripAnsi(text: string): string {
-	return stripVTControlCharacters(text);
-}
 
 const mockUi: TUI = {
 	requestRender() {},

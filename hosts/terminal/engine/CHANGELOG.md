@@ -21,6 +21,7 @@
 
 ### Changed
 
+- `Editor.setCursor` clamps its line and column through `clampLow` from `@veyyon/utils/math`; no behavior change.
 - `Editor` and `Input` deliver a chunk's typed prefix, paste payload and remainder through `BracketedPasteHandler.route` with sinks built once per component; the bytes each part reaches are unchanged.
 - Input drain and terminal stop pop the kitty keyboard protocol, cancel the pending modifyOtherKeys probe and reset modifyOtherKeys through one `#disableKeyboardProtocols`; the bytes written at shutdown are unchanged.
 - The Markdown component derives the default text style's SGR prefix from the same style chain that paints its text; no behavior change.

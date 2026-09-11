@@ -1,4 +1,5 @@
 import { toolResultNeverRan } from "@veyyon/agent-core";
+import { isRecord } from "@veyyon/utils/type-guards";
 import type { ReadEntryView } from "@veyyon/wire/presentation/transcript";
 import { extractResultTextOrUndefined } from "../tools/core/output-notice";
 import { splitPathAndSel } from "../tools/core/path-utils";
@@ -16,13 +17,8 @@ interface ReadResultDetails {
 }
 
 export function readArgsTarget(args: unknown): string | undefined {
-	if (!args || typeof args !== "object" || Array.isArray(args)) return undefined;
-	const record = args as Record<string, unknown>;
-	return typeof record.path === "string"
-		? record.path
-		: typeof record.file_path === "string"
-			? record.file_path
-			: undefined;
+	if (!isRecord(args)) return undefined;
+	return typeof args.path === "string" ? args.path : typeof args.file_path === "string" ? args.file_path : undefined;
 }
 
 /** Partial results do not settle a read entry or replace its completed preview. */

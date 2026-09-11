@@ -280,7 +280,6 @@ describe("ACP lazy startup", () => {
 				task: { model: "claude-sonnet-4-20250514", effort: "inherit" },
 			},
 			"memory.backend": "local",
-			"memories.enabled": true,
 			"advisor.enabled": true,
 			"advisor.agents": true,
 			"advisor.syncBacklog": "5",

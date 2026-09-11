@@ -1,7 +1,7 @@
 import { type AnyAgentTool, type SyntheticToolResultDetails, toolResultNeverRan } from "@veyyon/agent-core";
 import type { SnapshotStore } from "@veyyon/hashline";
 import { clampLow, getProjectDir, sanitizeText } from "@veyyon/utils";
-import { isRecord } from "@veyyon/utils/type-guards";
+import { errorMessage, isRecord } from "@veyyon/utils/type-guards";
 import type { ToolView, ToolViewContext, ToolViewRenderer } from "@veyyon/view";
 import type {
 	BlockId,
@@ -298,7 +298,7 @@ export function buildToolExecutionDisplay(params: ToolExecutionBuildParams): Too
 					multiFileViews.push({
 						path: fileResult.path,
 						isError: true,
-						errorNotice: err instanceof Error ? err.message : String(err),
+						errorNotice: errorMessage(err),
 					});
 				}
 			}
@@ -325,7 +325,7 @@ export function buildToolExecutionDisplay(params: ToolExecutionBuildParams): Too
 				} catch (err) {
 					failures ??= {};
 					failures.call = {
-						error: err instanceof Error ? err.message : String(err),
+						error: errorMessage(err),
 					};
 				}
 			}
@@ -345,7 +345,7 @@ export function buildToolExecutionDisplay(params: ToolExecutionBuildParams): Too
 					const raw = getTextOutput(renderableResult);
 					failures ??= {};
 					failures.result = {
-						error: err instanceof Error ? err.message : String(err),
+						error: errorMessage(err),
 						fallbackText: raw || undefined,
 					};
 				}

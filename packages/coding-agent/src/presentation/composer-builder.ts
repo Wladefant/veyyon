@@ -8,6 +8,7 @@
  * disagree with the one beside it.
  */
 
+import { clampLow } from "@veyyon/utils/math";
 import type { Attachment, CompletionState, ComposerMode, ComposerState } from "@veyyon/wire/presentation";
 
 /** What the composer is built from. */
@@ -103,12 +104,12 @@ export function offsetToCursor(lines: readonly string[], offset: number): { line
  * Convert line and column coordinates into a 0-based character offset.
  */
 export function cursorToOffset(lines: readonly string[], cursor: { line: number; col: number }): number {
-	const maxLine = Math.max(0, Math.min(lines.length - 1, Math.max(0, Math.trunc(cursor.line))));
+	const maxLine = clampLow(Math.trunc(cursor.line), 0, lines.length - 1);
 	let offset = 0;
 	for (let i = 0; i < maxLine; i++) {
 		offset += (lines[i]?.length ?? 0) + 1;
 	}
 	const curLine = lines[maxLine] ?? "";
-	offset += Math.max(0, Math.min(curLine.length, Math.max(0, Math.trunc(cursor.col))));
+	offset += clampLow(Math.trunc(cursor.col), 0, curLine.length);
 	return offset;
 }

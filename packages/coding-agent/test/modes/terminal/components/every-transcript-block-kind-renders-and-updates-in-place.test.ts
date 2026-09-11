@@ -16,6 +16,7 @@
 
 import { describe, expect, it } from "bun:test";
 import { Text, type TUI } from "@veyyon/tui";
+import { stripAnsi } from "@veyyon/utils/strip-ansi";
 import {
 	type AssistantMessageBlock,
 	type BashExecutionBlock,
@@ -55,10 +56,6 @@ function createOptions(overrides: Partial<TranscriptBlockComponentOptions> = {})
 		onRequestRender: () => {},
 		...overrides,
 	};
-}
-
-function stripAnsi(text: string): string {
-	return text.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
 function sampleBlockOfKind(kind: TranscriptBlock["kind"]): TranscriptBlock {

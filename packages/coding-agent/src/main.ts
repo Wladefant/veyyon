@@ -146,9 +146,10 @@ const HOST_DEFAULTED_SETTING_PATHS: SettingPath[] = [
 	"agent.maxNestedSpawnDepth",
 	"agent.agents",
 	// Memory subsystems are off-by-default for RPC/ACP hosts; embedders that want
-	// memory should opt in explicitly through their own settings layer.
+	// memory should opt in explicitly through their own settings layer. The legacy
+	// `memories.enabled` boolean is migrated into `memory.backend` at load and deleted,
+	// so it is never a configured path here.
 	"memory.backend",
-	"memories.enabled",
 ];
 
 const RPC_BACKGROUND_DEFAULTED_SETTING_PATHS: SettingPath[] = [

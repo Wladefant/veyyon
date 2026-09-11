@@ -27,6 +27,7 @@
 - `metadataLine` is exported from `tools/core/render-utils` instead of `tools/web/search/view`.
 - Removed the unused `inheritedAgentDir` keybinding option and `ohMyPiXAIUserAgent` alias; xAI requests continue to use `veyyonXAIUserAgent`.
 - Provider-specific test override setters are replaced by `setProviderModuleOverrideForTest(api, module)`.
+- `countLines`, `parseReadArgs`, `parseReadDetails`, `parseWriteArgs` and `parseWriteDetails` are `@veyyon/utils/fs-tool-args`; the package no longer exports them.
 - `@veyyon/tui` exports rendering only. The string, escape, keyboard, mouse, motion and layout-math primitives it also carried are now `@veyyon/utils` modules, imported by subpath: `@veyyon/utils/{ansi,autocomplete,bar,bracketed-paste,deccara,fuzzy,keybindings,keys,kill-ring,kitty-graphics,latex-block,latex-unicode,loop-watchdog,motion,mouse,padding,paint-columns,paint-ground,paint-surface,sgr,symbols,tab-width,text-sizing,tight-mode,tmux,width,word-nav,wrap}`. The barrel re-exports none of them.
 - `MOTION` and the grow, hover, paint and settle curve tables are one module, `@veyyon/utils/motion`.
 - `EditorComponent` is `@veyyon/tui/components/editor-component`.
@@ -87,6 +88,7 @@
 - Forced render requests accept `preserveViewport` to paint changed rows immediately while retaining pending full-repaint and scrollback requests.
 - `TUI.frameScrollable` states whether the last composed frame had content above the viewport, so a host can render a scroll affordance without re-deriving it from row counts it cannot see.
 - The package is `hosts/terminal/engine` in the repository, beside the other halves of the terminal host. The published package name, exports and entry points are unchanged.
+- `@veyyon/utils/fs-tool-args` parses a `read` or `write` tool call's arguments and result details (`parseReadArgs`, `parseReadDetails`, `parseWriteArgs`, `parseWriteDetails`, `countLines`), moved from `@veyyon/tool-render` so every host reads them without the React renderers.
 - `BracketedPasteHandler.route(data, sinks)` delivers one chunk's parts to `PasteSinks`: bytes before the start marker to `keys`, the assembled payload to `paste`, and bytes after the end marker to `reenter`; it returns `false` when the chunk held no paste sequence.
 - `@veyyon/utils/tab-width` is the one definition of `replaceTabs` and `DEFAULT_TAB_WIDTH`, a dependency-free module the browser bundles share; `@veyyon/utils/wrap` and `@veyyon/utils/tab-spacing` re-export them unchanged.
 - `@veyyon/utils/terminal-emulator` resolves terminal identity without loading the terminal renderer.
@@ -133,6 +135,8 @@
 
 ### Changed
 
+- The read and write cards parse their arguments and details through `@veyyon/utils/fs-tool-args`, so a terminal launch no longer evaluates `@veyyon/tool-render`; the cards draw the same rows.
+- The legacy `memories.enabled` key is no longer a host-defaulted setting: it migrates to `memory.backend` on load and nothing reads it afterwards. The presentation module's error messages, read-target parsing and cursor clamping use the `@veyyon/utils` helpers; no behavior change.
 - Reworded the Include Model in Prompt, Max Retry Delay, Hindsight Bank ID, Subagents and Subagent Delegation setting descriptions shown in `/settings`.
 - The HTML export attaches sub-sessions, redacts and writes the file through one `finishExport` for the session-manager and file entry points, a stage-1 memory job is completed under its ownership token through one `completeOwnedStage1Job` for the with-output and no-output paths and the global phase-2 claim reads its row through one `readGlobalJobRow`, the JavaScript eval cell builds its success, cancelled and failed results through one `finish`, the GitHub commit watch reports each poll and its grace and confirm notes through one `reportWatching`, and a capability scope splits `(`, `[` and `{` groups through one keyed depth table so a closer of another kind never ends the open group; no behavior change.
 - The token-rate helpers are `presentation/token-rate.ts`, moved from `modes/components/status-line/token-rate.ts` without a forwarding module, and the status view-model is `presentation/status-producer.ts` with no `presentation/status-builder.ts` beside it; the search card limits are exported from `tools/search/search-card-limits.ts` only, and `callMeta` and `readyPendingSummary` from `tools/shell/launch-view.ts` only.
@@ -431,6 +435,7 @@
 - `genericRenderer` is exported once, through the `generic` module, instead of also being re-exported by the registry. No user-visible behavior changes.
 - React list keys are derived from each item's own identity (id, path, label or text) through a `keyed` helper instead of the array index; rendered output is unchanged.
 - `react` and `react-dom` are named as literal `19.2.7` peer dependencies so a consumer outside the workspace resolves them; the version is the one the workspace catalog pins.
+- `Editor.setCursor` clamps its line and column through `clampLow` from `@veyyon/utils/math`; no behavior change.
 - `Editor` and `Input` deliver a chunk's typed prefix, paste payload and remainder through `BracketedPasteHandler.route` with sinks built once per component; the bytes each part reaches are unchanged.
 - Input drain and terminal stop pop the kitty keyboard protocol, cancel the pending modifyOtherKeys probe and reset modifyOtherKeys through one `#disableKeyboardProtocols`; the bytes written at shutdown are unchanged.
 - The Markdown component derives the default text style's SGR prefix from the same style chain that paints its text; no behavior change.
