@@ -52,6 +52,7 @@ import {
 	fetchChatGptWebModels,
 	isChatGptWebLoopbackUrl,
 	normalizeChatGptWebBaseUrl,
+} from "@veyyon/catalog/discovery/chatgpt-web";
 import { Effort } from "@veyyon/catalog/effort";
 import { CHATGPT_WEB_LOCAL_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 import { chatGptWebModelManagerOptions } from "@veyyon/catalog/provider-models/chatgpt-web";
