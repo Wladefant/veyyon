@@ -3,8 +3,22 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse } from "@babel/parser";
+import * as searchCardLimits from "@veyyon/coding-agent/tools/search/search-card-limits";
 import type { Component } from "@veyyon/tui";
 import { readGitFileBuffer, readGitTree } from "../../../../scripts/git-baseline";
+
+/**
+ * Tool modules whose card limits moved to `tools/search/search-card-limits`. A pinned oracle that
+ * takes only limit names (plus erased `type` specifiers) from one of these is redirected to the leaf,
+ * which is where the number it draws with is declared now; an oracle that takes anything else from
+ * the tool module keeps its import and fails loudly on the missing export.
+ */
+const SEARCH_LIMIT_SPECIFIERS = new Set([
+	"@veyyon/coding-agent/tools/search/structure-search",
+	"@veyyon/coding-agent/tools/search/text-search",
+]);
+const SEARCH_LIMIT_NAMES = new Set(Object.keys(searchCardLimits));
+const SEARCH_LIMIT_MODULE = "@veyyon/coding-agent/tools/search/search-card-limits";
 
 export type RenderFn<TArgs = unknown, TOptions = unknown, TTheme = unknown, TRes = Component> = (
 	args?: TArgs,
@@ -32,7 +46,7 @@ export const ORACLE_SOURCE_DIRECTORY = "packages/coding-agent/test/oracles";
 export const ORACLE_CACHE_DIRECTORY = path.join(
 	import.meta.dirname,
 	".cache",
-	`historical-v6-${ORACLE_SNAPSHOT_COMMIT}`,
+	`historical-v7-${ORACLE_SNAPSHOT_COMMIT}`,
 );
 export const ADAPTER_FILENAME = "historical-render-utils-adapter.ts";
 export const ADAPTER_SPECIFIER = "historical-render-utils-adapter";
@@ -190,6 +204,24 @@ function deriveExecutableSource(originalSource: string): string {
 				start: node.source.start,
 				end: node.source.end,
 				replacement: `"./${ADAPTER_SPECIFIER}"`,
+			});
+		} else if (
+			node.type === "ImportDeclaration" &&
+			node.importKind !== "type" &&
+			SEARCH_LIMIT_SPECIFIERS.has(node.source.value) &&
+			typeof node.source.start === "number" &&
+			typeof node.source.end === "number" &&
+			node.specifiers.every(
+				specifier =>
+					specifier.type === "ImportSpecifier" &&
+					(specifier.importKind === "type" ||
+						(specifier.imported.type === "Identifier" && SEARCH_LIMIT_NAMES.has(specifier.imported.name))),
+			)
+		) {
+			replacements.push({
+				start: node.source.start,
+				end: node.source.end,
+				replacement: `"${SEARCH_LIMIT_MODULE}"`,
 			});
 		}
 	}
