@@ -2,19 +2,14 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { ThinkingLevel } from "@veyyon/agent-core";
 import type { ApiKeyResolver, Model } from "@veyyon/ai";
-import * as ai from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import * as ai from "@veyyon/ai/stream";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import { getBundledModel } from "@veyyon/catalog/models";
-import {
-	classifyDifficulty,
-	parseDifficultyBucket,
-	parseDifficultyLevel,
-} from "@veyyon/coding-agent/auto-thinking/classifier";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { SecretObfuscator } from "@veyyon/coding-agent/secrets/obfuscator";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
 import {
 	AUTO_THINKING,
 	clampAutoThinkingEffort,
@@ -24,6 +19,11 @@ import {
 	parseThinkingLevel,
 	resolveProvisionalAutoLevel,
 } from "@veyyon/coding-agent/thinking";
+import {
+	classifyDifficulty,
+	parseDifficultyBucket,
+	parseDifficultyLevel,
+} from "@veyyon/coding-agent/thinking/auto-classifier";
 import type { TinyMemoryLocalModelKey } from "@veyyon/coding-agent/tiny/models";
 import { tinyModelClient } from "@veyyon/coding-agent/tiny/title-client";
 import { TempDir } from "@veyyon/utils";
@@ -176,9 +176,6 @@ describe("auto thinking classifier helpers", () => {
 			getModelRole(role: string) {
 				return role === "smol" ? `${classifierModel.provider}/${classifierModel.id}` : undefined;
 			},
-			getStorage() {
-				return undefined;
-			},
 		} as never;
 		const registry = {
 			getAvailable: () => [classifierModel],
@@ -214,9 +211,6 @@ describe("auto thinking classifier helpers", () => {
 			},
 			getModelRole(role: string) {
 				return role === "smol" ? `${classifierModel.provider}/${classifierModel.id}` : undefined;
-			},
-			getStorage() {
-				return undefined;
 			},
 		} as never;
 		const registry = {

@@ -9,8 +9,8 @@ import { Effort } from "@veyyon/catalog/effort";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { CustomTool } from "@veyyon/coding-agent/extensibility/custom-tools/types";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
-import type { OutputMeta } from "@veyyon/coding-agent/tools/output-meta";
+import type { OutputMeta } from "@veyyon/coding-agent/tools/core/output-meta";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries } from "@veyyon/utils";
 import { type } from "arktype";
 
@@ -955,14 +955,14 @@ describe("AgentSession MCP discovery", () => {
 	it("getDiscoverableTools({source:'builtin'}) excludes hidden and non-declared registry tools", () => {
 		const readTool = createBasicTool("read", "Read");
 		readTool.loadMode = "essential";
-		const findTool = createBasicTool("find", "Find");
-		findTool.loadMode = "discoverable";
-		findTool.summary = "Find files and directories matching a glob pattern";
+		const lspTool = createBasicTool("lsp", "LSP");
+		lspTool.loadMode = "discoverable";
+		lspTool.summary = "Query language server for diagnostics";
 		const resolveTool = createBasicTool("resolve", "Resolve"); // hidden — must be excluded
 		const customTool = createBasicTool("custom_inactive", "Custom"); // not in metadata — must be excluded
 		const toolRegistry = new Map([
 			[readTool.name, readTool],
-			[findTool.name, findTool],
+			[lspTool.name, lspTool],
 			[resolveTool.name, resolveTool],
 			[customTool.name, customTool],
 		]);
@@ -975,7 +975,7 @@ describe("AgentSession MCP discovery", () => {
 			settings: Settings.isolated({ "tools.discoveryMode": "all" }),
 			modelRegistry: {} as never,
 			toolRegistry,
-			builtInToolNames: [readTool.name, findTool.name, resolveTool.name],
+			builtInToolNames: [readTool.name, lspTool.name, resolveTool.name],
 			mcpDiscoveryEnabled: false,
 			rebuildSystemPrompt: async toolNames => ({ systemPrompt: [`tools:${toolNames.join(",")}`] }),
 		});
@@ -983,7 +983,7 @@ describe("AgentSession MCP discovery", () => {
 
 		const builtin = session.getDiscoverableTools({ source: "builtin" });
 		const names = builtin.map(t => t.name);
-		expect(names).toContain("find"); // declared discoverable AND present in registry
+		expect(names).toContain("lsp"); // declared discoverable AND present in registry
 		expect(names).not.toContain("read"); // already active
 		expect(names).not.toContain("resolve"); // hidden — no discoverable loadMode
 		expect(names).not.toContain("custom_inactive"); // unknown — no discoverable loadMode

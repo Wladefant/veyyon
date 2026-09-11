@@ -15,16 +15,54 @@
 - OAuth providers models.dev catalogs only under their API-key twin now carry the declared reasoning surface on live-discovered models, not just on rows baked into the bundle. The twin knowledge (`xai` → `xai-oauth`, `openai` → `openai-codex`, `google` → `google-gemini-cli`) previously ran only in the catalog generator, so a model the OAuth endpoint started serving between regenerations listed with no effort ladder while models.dev declared one; `xai-oauth/grok-4.6` was the reported case. Twin overlay rows are enrich-only: they fill surfaces on ids the endpoint actually serves and never introduce an id of their own, because the OAuth listing is subscription-gated and an additive overlay would offer models that fail at request time. `grok-4.6` joins the xAI OAuth curated seed and the wire effort allowlist, and the bundle bakes its declared ladder. `google-antigravity` is intentionally not twinned from `google`: its auth is the Antigravity IDE's unofficial OAuth surface, whose served set and effort variants differ from the Google API's and stay curated from captured client traffic. Two declarations stay unmapped by design: `grok-4.20-multi-agent-0309` is marked `tool_call: false` upstream and OpenCode Zen's `gemini-3-pro` is marked deprecated, so both are filtered before their ladders can reach a row.
 - Antigravity discovery no longer leaves the `-tiered` Gemini flash deployments without an effort surface. The endpoint serves `gemini-3.7-flash-tiered` as the only 3.7 Flash id and `gemini-3.6-flash-tiered` beside the 3.6 family, and both arrived as raw unknowns with no thinking block, so the picker offered no effort levels. `gemini-3.7-flash-tiered` now collapses to a logical `gemini-3.7-flash` row, and `gemini-3.6-flash-tiered` stands alone under its wire id because the `gemini-3.6-flash` logical id already belongs to the per-tier effort family. Both carry the declared low/medium/high ladder on the `google-level` transport, sending the tier as `thinkingLevel` in the request body. The surface is curated per id; an uncurated future `-tiered` id still gets no invented ladder.
 - The ChatGPT Codex backend declares `supportsServerCompaction`, so a codex session compacts server-side instead of paying a second model to paraphrase the span. The flag resolved true only for `api.openai.com` and Azure, on the stated ground that the codex session transport owns history state. It does not: codex-rs posts the span to `chatgpt.com/backend-api/codex/responses/compact` and stores the window it gets back, exactly as the official host does. A new `codexBackend` host class carries the classification, so provider id `openai-codex` and any `chatgpt.com/backend-api` base URL are covered while a repointed proxy row still is not.
+- `closeModelCache()` closes the shared model-cache database and permits reopening it at the current cache path.
 
-## [1.0.49] - 2026-08-14
+### Changed
+
+- GitLab Duo Workflow discovery reads a record's declared root namespace (`root_namespace_id`, `rootNamespaceId`, or the id or path of its `root_namespace`/`rootAncestor` record) through one `declaredRootNamespaceId` for the explicit and nested lookups; no behavior change.
+- The Antigravity, Codex, Gemini and Ollama discovery readers report a non-ok status as the `status` stage and an unparseable body as the `body` stage through one exported `readDiscoveryJson` in `discovery/failure`; no behavior change.
+- Model spec rejection checks its string, cost and limit fields from ordered tables, reporting the same field names in the same order; no behavior change.
+- The canonical-id generator runs its multi-candidate expanders from one ordered table; no behavior change.
+- Canonical model normalization shares ordered transformation dispatch without changing identity resolution or cache precedence.
+- `Effort`, `ThinkingConfig` and the model and message types are re-exported from `@veyyon/model`, which is their single definition; the exported names and values are unchanged.
+- Bundled models resolve on demand per provider while explicitly installed full-registry snapshot stores remain supported.
+- Provider cache namespaces resolve without constructing discovery options; persisted cache keys are unchanged.
+- Bundled model snapshots use the shared integrity-framed format without repeated JSON serialization or durability flushes, and obsolete snapshots rebuild on load.
+- The model row, thinking config, effort ladder and service-tier vocabulary are defined in `@veyyon/model`; `@veyyon/catalog/types`, `@veyyon/catalog/effort` and `@veyyon/catalog/provider-models/wire-capabilities` re-export every name they exported before, so no caller changes.
+- Typed tuple copies use spreads rather than `.concat()`, which a `as const` array does not define. No user-visible behavior changes.
+- A comment on `OPENROUTER_BASE_URL` names the Perplexity auth module at `tools/web/search/providers/perplexity-auth.ts`. No behavior change.
+- An OpenAI-compatible listing's model name falls back to its id through the shared non-empty-string reader; discovered names are unchanged.
+
+### Fixed
+
+- Case-insensitive host classification no longer treats control characters as URL punctuation.
+## [1.4.1] - 2026-09-08
+
+### Fixed
+
+- OpenCode Zen and Go turns no longer fail with `400 only '"auto"' is supported for 'tool_choice'`. The gateways reject `"none"`, `"required"` and named function choices, so both OpenAI-shaped compat builders now declare `tool_choice` unsupported for them and omit the field, which is what `"auto"` means on that wire. The guided goal pins its `respond` tool by name and so failed on every interview turn; models reached under a custom provider id pointed at `opencode.ai` are covered by the same host match.
+
+## [1.4.0] - 2026-09-04
 
 ### Added
 
-- Refreshed the bundled catalog from models.dev: 127 rows across 22 providers that upstream already served, including `gemini-3.7-flash` on Google, Vertex, GitHub Copilot, OpenRouter, Kilo, NanoGPT, OpenCode Zen and Vercel AI Gateway, each carrying the declared `low`/`medium`/`high` effort ladder. The bundle had drifted far enough that a model released the day before was absent from every provider that serves it. A row missing from the bundle still recovers its ladder at runtime through the models.dev fallback, so what this closes is the cold-start and offline window before that fetch lands, not a broken lookup.
+- A model's thinking config carries `prefixBinding`, set for Claude 5.1 and later, stating that its thinking blocks are bound to the conversation prefix they were produced against.
+- An `anthropic-messages` model's compat carries `replayDemotedPriorReasoning`, which drops prior-turn reasoning on a signing endpoint instead of replaying it as demoted prose.
+- The bundled ChatGPT Codex catalog carries `gpt-6-astra` and `gpt-reserve`, each with the low-through-max effort ladder and the freeform `apply_patch` tool the endpoint declares.
 
-### Removed
+### Changed
 
-- Dropped `novita/inclusionai/ling-3.0-tiny` and `umans/umans-deepseek-v4-flash-0731-lab`, which upstream no longer lists.
+- The server-side compaction capability comment states the route the ChatGPT Codex backend actually serves. No behavior change.
+
+### Fixed
+
+- The Claude Code fingerprint version is 2.1.257, so Anthropic OAuth requests for current models are no longer rejected with `claude_code_version_too_old`.
+- ChatGPT Codex discovery identifies as Codex CLI 0.153.2, the floor `gpt-6-astra` requires, so a subscription that has the model lists it instead of receiving the pre-0.153 model set.
+- A ChatGPT Codex model's effort ladder and `apply_patch` tool type come from the `supported_reasoning_levels` and `apply_patch_tool_type` the endpoint declares for that row, so a newly listed SKU offers effort control at once instead of arriving with none until models.dev catalogs it.
+- Antigravity discovery gives `gemini-3.8-flash-tiered` the same effort surface as 3.7: the endpoint serves 3.8 Flash only under that wire id, with no bare id and no per-tier siblings, so the row arrived raw with no effort levels. It now collapses to a logical `gemini-3.8-flash` row carrying the low/medium/high ladder models.dev declares for `google/gemini-3.8-flash` on the `google-level` transport, and its wire profile pins the 65536 output cap the endpoint reports.
+- OpenCode Zen and Go discovery resolves the wire API of an id the bundle predates from live models.dev, so `muse-spark-1.3-contributor-free` and `muse-spark-1.3-contributor` route to `/responses` instead of failing with HTTP 500 on `/chat/completions`; the bundle also carries both rows.
+- OpenCode Zen and Go model discovery sends the `Veyyon/<version>` user agent the gateway requires, so a discovery request is no longer unlabeled traffic that can be filtered into an empty model picker.
+- An OpenCode Zen or Go discovery whose models.dev lookup fails falls back to the bundle without reporting a discovery failure, so a working gateway listing is no longer warned about as a provider that could not be discovered.
 
 ## [16.5.2] - 2026-07-14
 
@@ -730,6 +768,71 @@
 ### Removed
 
 - Removed the runtime enrichment layer: `enrichModelThinking` (and its non-enumerable memo-slot cache), `refreshModelThinking`, `modelOmitsReasoningEffort`, and the `model-thinking` re-exports of generator-only policies. Thinking metadata is resolved exactly once inside `buildModel`; runtime helpers (`getSupportedEfforts`, `clampThinkingLevelForModel`, `requireSupportedEffort`, the effort mappers) are pure field reads.
+
+## [1.3.0] - 2026-08-28
+
+### Added
+
+- Export `normalizeOllamaBaseUrl` and `toOllamaNativeBaseUrl`, the single definition of how an Ollama base URL is spelled for each of its two APIs.
+- Added the Command Code provider catalog, with its documented coding flagships as the offline seed and credentialed discovery for the wider Provider API list.
+- Added the Nous Research provider catalog, whose credentialed discovery keeps tool-capable chat models and excludes embedding, media-generation and non-tool rows.
+- Added the `publishesOwnModelLimits` provider flag, which stops generation from backfilling a context window or output cap from another host's same-family model.
+- `ProviderWireCapabilities.anthropicMessages` declares how a provider serves the Anthropic Messages API — its endpoint, credential placement, rejected request features and retryable model errors — and `declaredProviders()` and `declaredCapabilityNames()` derive the declaring sets from the table.
+- Bundled model resolution persists a content-verified enriched snapshot, and a registry cache stamp moves on every row-content write, and on a row crossing the freshness window it is read under, without treating SQLite sidecar churn or a provider re-verifying models it already had as a change.
+- Added `supportsServerCompaction` capability data for ChatGPT Codex backend models on the Responses API.
+
+### Fixed
+
+- LM Studio discovery reports the context window the running server accepts (`loaded_context_length`) rather than the model's compiled ceiling (`max_context_length`), so a model loaded below its ceiling no longer plans a session for context the server refuses.
+
+### Removed
+
+- Removed `derive-tmp.ts`, a scratch probe swept into the package by accident; nothing imported it and no entry point exposed it.
+
+## [1.2.0] - 2026-08-23
+
+### Breaking Changes
+
+- The minimum supported Bun runtime is now 1.4.0.
+
+### Changed
+
+- `compat/markup-leaks.ts` owns which endpoints leak model markup into visible content. The provider list for DeepSeek's DSML envelope and the Kimi-K2 rule existed twice, byte for byte — once here as a `Set` and once in `@veyyon/ai` as an or-chain — so a newly-leaking host could be added to one and not the other. `isOfficialOpenAIEndpoint` is exported for the same reason: the streaming engine carried a third copy of the `api.openai.com` hostname check.
+- The five provider discovery readers share one set of payload readers. `codex`, `gemini`, `cursor`, `openai-compatible` and `antigravity` each declared schemas at module scope to answer questions of the form "is this field a string", so importing the descriptor table to list models built a validator graph for every provider before any request was made, and `codex.ts` also carried its own copies of three field readers. `utils.ts` — already the shared reader for cross-package callers — gained `toFields`, `toStringValue`, `toNonEmptyString`, `toFiniteNumber`, `toArray` and `toStringArray`, and the readers use those. `toFields` accepts an array, keeping the previous behavior where a bare array envelope reads as an empty model list rather than a failed response.
+- `identity` exports `statesOpenAIWireGeneration`, so a caller can tell a model below a version floor from one whose id states no version at all.
+- `provider-models/wire-capabilities.ts` declares what each provider realizes on the wire, so a service tier's effect is read from one per-provider entry instead of the provider-name comparisons that decided it in four functions.
+- Strict tool schemas, a local chat-template renderer and a loopback proxy that forwards upstream are declared per provider in `provider-models/wire-capabilities.ts`, so `compat/openai.ts` reads one entry instead of a six-provider comparison chain and two provider sets.
+
+### Fixed
+
+- The GitLab Duo Workflow discovery reader accepts a `signal` and passes it to every request of the handshake, and stops the walk when it fires. The runtime entry point runs on a turn's critical path — a namespace lookup, a project lookup, a paginated group walk and two GraphQL queries in series — with no deadline of any kind, so an endpoint that accepted the connection and answered nothing held the turn open for as long as the platform's socket timeout allowed. Worse, each step reported a stall as "this candidate produced nothing usable" and the reader concluded with "Set GITLAB_DUO_NAMESPACE_ID to a root namespace": a configuration remedy for a network fault. An abort now ends the handshake and surfaces as the deadline it was. A catalog refresh that passes no signal is unchanged, and one that passes a signal still degrades to `null` rather than throwing, because `fetchGitLabDuoWorkflowModels` catches.
+- Anthropic model discovery reads the versioned endpoint, so a provider configured with the SDK's own base URL discovers models instead of 404ing. Anthropic's REST API lives under `/v1` and its SDK takes the host without it (it appends `/v1/messages` itself), so both spellings are legitimate configuration — but `anthropicModelManagerOptions` handed the configured base straight to the catalog read, which appends `/models`. A provider pointed at `https://api.anthropic.com` therefore streamed normally and asked `https://api.anthropic.com/models` for its catalog, which answered 404 fifty-five times in the recorded logs. Nothing failed loudly: the manager fell back to the bundled catalog, so the only symptom was a model list that never learned anything new, and a warn line naming a URL that looked right. Discovery now uses the versioned base while the model specs keep the base the caller configured, which is what the SDK is handed — the same split `vercelAiGatewayModelManagerOptions` already made.
+- A GitLab Duo handshake stops when the server refuses the caller, instead of blaming configuration for it. The signal fix above covered a stall; a refusal took the other road to the same wrong answer. `requestGitLabJson` reported a `401` and a `404` as distinct reasons and then returned the same "this candidate produced nothing usable" for both, so a wrong or expired token walked the namespace override, the project lookup, the paginated group walk and both GraphQL queries — every one of them rejected — and concluded with "Set GITLAB_DUO_NAMESPACE_ID to a root namespace", a configuration remedy for a credential the server would not accept. A `401` now ends the handshake naming the token, and a `429` ends it naming the wait. A `403` and a `404` still move to the next candidate, because those are about the namespace rather than the caller, and the next one may well be visible.
+- Cursor model discovery records one reason per request. Four events end an HTTP/2 attempt — the connect timeout, a session error, a stream error, and a non-2xx status — and every one of them reported, while the promise behind them absorbed the second answer silently, so the result was single-valued and the reasons were not. One unresolvable host reported both `HTTP/2 connection failed: getaddrinfo ENOTFOUND` and `HTTP/2 stream failed: The pending stream has been canceled`, which lists a cancellation nobody can act on beside the fault that caused it, and doubles a per-provider failure count. The first event is the cause and is now the only one recorded.
+
+## [1.1.0] - 2026-08-20
+
+### Changed
+
+- No user-facing change: `provider-models/openai-compat.ts` is reformatted to what the repository formatter prints, so the Biome gate passes on it. Behaviour, descriptors and resolution rules are untouched.
+
+### Fixed
+
+- The generator now reads OAuth credentials from the machine-wide shared-auth store when the broker-profile path finds none, so a catalog regeneration on a logged-in machine sees the same credentials the app wrote instead of reporting no credentials and silently falling back to the previous snapshot.
+- A successful Antigravity discovery fetch is now the served-set truth for the `google-antigravity` bundle section. Previous-snapshot rows the endpoint no longer serves no longer ride forward into the bundle, so the picker stops offering ids the subscription-gated endpoint would refuse at request time. The section regenerates to exactly what the endpoint serves; a failed or credential-less run keeps the previous snapshot as the offline floor.
+- OAuth providers models.dev catalogs only under their API-key twin now carry the declared reasoning surface on live-discovered models, not just on rows baked into the bundle. The twin knowledge (`xai` → `xai-oauth`, `openai` → `openai-codex`, `google` → `google-gemini-cli`) previously ran only in the catalog generator, so a model the OAuth endpoint started serving between regenerations listed with no effort ladder while models.dev declared one; `xai-oauth/grok-4.6` was the reported case. Twin overlay rows are enrich-only: they fill surfaces on ids the endpoint actually serves and never introduce an id of their own, because the OAuth listing is subscription-gated and an additive overlay would offer models that fail at request time. `grok-4.6` joins the xAI OAuth curated seed and the wire effort allowlist, and the bundle bakes its declared ladder. `google-antigravity` is intentionally not twinned from `google`: its auth is the Antigravity IDE's unofficial OAuth surface, whose served set and effort variants differ from the Google API's and stay curated from captured client traffic. Two declarations stay unmapped by design: `grok-4.20-multi-agent-0309` is marked `tool_call: false` upstream and OpenCode Zen's `gemini-3-pro` is marked deprecated, so both are filtered before their ladders can reach a row.
+- Antigravity discovery no longer leaves the `-tiered` Gemini flash deployments without an effort surface. The endpoint serves `gemini-3.7-flash-tiered` as the only 3.7 Flash id and `gemini-3.6-flash-tiered` beside the 3.6 family, and both arrived as raw unknowns with no thinking block, so the picker offered no effort levels. `gemini-3.7-flash-tiered` now collapses to a logical `gemini-3.7-flash` row, and `gemini-3.6-flash-tiered` stands alone under its wire id because the `gemini-3.6-flash` logical id already belongs to the per-tier effort family. Both carry the declared low/medium/high ladder on the `google-level` transport, sending the tier as `thinkingLevel` in the request body. The surface is curated per id; an uncurated future `-tiered` id still gets no invented ladder.
+- The ChatGPT Codex backend declares `supportsServerCompaction`, so a codex session compacts server-side instead of paying a second model to paraphrase the span. The flag resolved true only for `api.openai.com` and Azure, on the stated ground that the codex session transport owns history state. It does not: codex-rs posts the span to `chatgpt.com/backend-api/codex/responses/compact` and stores the window it gets back, exactly as the official host does. A new `codexBackend` host class carries the classification, so provider id `openai-codex` and any `chatgpt.com/backend-api` base URL are covered while a repointed proxy row still is not.
+
+## [1.0.49] - 2026-08-14
+
+### Added
+
+- Refreshed the bundled catalog from models.dev: 127 rows across 22 providers that upstream already served, including `gemini-3.7-flash` on Google, Vertex, GitHub Copilot, OpenRouter, Kilo, NanoGPT, OpenCode Zen and Vercel AI Gateway, each carrying the declared `low`/`medium`/`high` effort ladder. The bundle had drifted far enough that a model released the day before was absent from every provider that serves it. A row missing from the bundle still recovers its ladder at runtime through the models.dev fallback, so what this closes is the cold-start and offline window before that fetch lands, not a broken lookup.
+
+### Removed
+
+- Dropped `novita/inclusionai/ling-3.0-tiny` and `umans/umans-deepseek-v4-flash-0731-lab`, which upstream no longer lists.
 
 ## [1.0.47] - 2026-08-13
 

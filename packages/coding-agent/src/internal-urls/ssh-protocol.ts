@@ -21,8 +21,8 @@
  */
 // Owners, not the `@veyyon/utils` barrel: 1 module against 74.
 import { formatCount } from "@veyyon/utils/format";
-import * as capability from "../capability";
-import { type SSHHost, sshCapability } from "../capability/ssh";
+import * as capability from "../discovery/capability";
+import { type SSHHost, sshCapability } from "../discovery/capability/ssh";
 import type { SSHConnectionTarget } from "../ssh/connection-manager";
 import {
 	listRemoteDir,
@@ -326,7 +326,7 @@ export class SshProtocolHandler implements ProtocolHandler {
 		signal?: AbortSignal,
 		skipListing?: boolean,
 	): Promise<InternalResource> {
-		// `search`/`find` reject an ssh:// directory outright, so they pass `skipListing`
+		// `search` rejects an ssh:// directory outright, so it passes `skipListing`
 		// to avoid draining a full remote `ls` we would only discard.
 		const content = skipListing ? "" : formatDirListing(await listRemoteDir(target, remotePath, { signal }));
 		return {

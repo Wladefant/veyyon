@@ -6,11 +6,14 @@ import { isOfficialAnthropicApiUrl } from "@veyyon/catalog/compat/anthropic";
 import { mapEffortToAnthropicAdaptiveEffort } from "@veyyon/catalog/model-thinking";
 import { calculateCost, discardAttemptUsage, emptyCost, emptyUsage, getBundledModel } from "@veyyon/catalog/models";
 import { ANTHROPIC_API_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
+import type { ProviderAnthropicMessagesCapability } from "@veyyon/catalog/provider-models/wire-capabilities";
+import { providerWireCapabilities } from "@veyyon/catalog/provider-models/wire-capabilities";
 import { isAnthropicOAuthToken } from "@veyyon/catalog/utils";
 import { ANTHROPIC_WEB_SEARCH_TOOL, CLAUDE_CODE_VERSION as claudeCodeVersion } from "@veyyon/catalog/wire/anthropic";
 import { parseGitHubCopilotApiKey } from "@veyyon/catalog/wire/github-copilot";
 import { getInstallId } from "@veyyon/utils/dirs";
 import { $env } from "@veyyon/utils/env";
+import { DEFAULT_MAX_DELAY_MS } from "@veyyon/utils/fetch-retry";
 import { isEnoent } from "@veyyon/utils/fs-error";
 import { parseJsonWithRepair, parseStreamingJsonThrottled } from "@veyyon/utils/json-parse";
 import * as logger from "@veyyon/utils/logger";
@@ -59,7 +62,7 @@ import type {
 	ToolResultMessage,
 	Usage,
 } from "../types";
-import { EMPTY_ERROR_TOOL_RESULT_TEXT } from "../types";
+import { EMPTY_ERROR_TOOL_RESULT_TEXT, realizesPriorityServiceTier } from "../types";
 import { isRecord, normalizeSystemPrompts, normalizeToolCallId, resolveCacheRetention } from "../utils";
 import { createAbortSourceTracker } from "../utils/abort";
 import {
@@ -70,9 +73,11 @@ import {
 } from "../utils/block-symbols";
 import { withEmptyCompletionRetry } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
+import { isPreResponseStall, openStallLadderBudget } from "../utils/first-event-budget";
 import { isFoundryEnabled } from "../utils/foundry";
-import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
+import { finalizeErrorMessage, materializeDumpBody, type RawHttpRequestDump } from "../utils/http-inspector";
 import { getStreamFirstEventTimeoutMs, getStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
+import { conversationIdForOpenCode, getOpenCodeHeaders, isOpenCodeProvider } from "../utils/opencode-headers";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { COMBINATOR_KEYS, NO_STRICT, toolWireSchema } from "../utils/schema";
 import { spillToDescription } from "../utils/schema/spill";
@@ -132,7 +137,7 @@ export function normalizeAnthropicBaseUrl(baseUrl?: string): string | undefined 
 export function buildBetaHeader(baseBetas: readonly string[], extraBetas: readonly string[]): string {
 	const seen = new Set<string>();
 	const result: string[] = [];
-	for (const beta of [...baseBetas, ...extraBetas]) {
+	for (const beta of baseBetas.concat(extraBetas)) {
 		const trimmed = beta.trim();
 		if (trimmed && !seen.has(trimmed)) {
 			seen.add(trimmed);
@@ -192,7 +197,7 @@ function buildClaudeCodeBetas(
 	}
 	if (!agentRequest) return betas;
 	if (thinkingRequest) betas.push(effortBeta);
-	betas.push(...claudeCodeAgentPostEffortBetas);
+	for (let bi = 0; bi < claudeCodeAgentPostEffortBetas.length; bi++) betas.push(claudeCodeAgentPostEffortBetas[bi]!);
 	return betas;
 }
 
@@ -240,7 +245,7 @@ const reportedDroppedEnforcedHeaders = new Set<string>();
  * dropped.
  */
 function reportDroppedEnforcedHeaders(keys: string[]): void {
-	const signature = [...keys].sort().join(",");
+	const signature = Array.from(keys).sort().join(",");
 	const detail = { headers: keys };
 	if (reportedDroppedEnforcedHeaders.has(signature)) {
 		logger.debug("anthropic: still ignoring caller-supplied enforced headers", detail);
@@ -403,6 +408,15 @@ type AnthropicProviderSessionState = ProviderSessionState & {
 	 */
 	replayUnsignedThinkingDisabled: boolean;
 	/**
+	 * Runtime-learned: this endpoint answered `stop_reason: "refusal"` with
+	 * category `reasoning_extraction` for a request carrying prior-turn
+	 * reasoning demoted to text, so that prose must be dropped rather than
+	 * replayed from now on. All subsequent requests to this (baseUrl, modelId)
+	 * omit demoted prior reasoning, same behavior as an explicit
+	 * `compat.replayDemotedPriorReasoning: false`. Cleared on session close.
+	 */
+	priorReasoningReplayDisabled: boolean;
+	/**
 	 * Prompt-cache observations for this endpoint+model, so a miss can be judged
 	 * against the previous turn rather than guessed at. Kept here because the
 	 * cache identity is the conversation prefix, which is exactly what this key
@@ -416,11 +430,13 @@ function createAnthropicProviderSessionState(): AnthropicProviderSessionState {
 		strictToolsDisabled: false,
 		fastModeDisabled: false,
 		replayUnsignedThinkingDisabled: false,
+		priorReasoningReplayDisabled: false,
 		cacheTracker: createCacheTrackerState(),
 		close: () => {
 			state.strictToolsDisabled = false;
 			state.fastModeDisabled = false;
 			state.replayUnsignedThinkingDisabled = false;
+			state.priorReasoningReplayDisabled = false;
 			state.cacheTracker = createCacheTrackerState();
 		},
 	};
@@ -514,7 +530,7 @@ function getCacheControl(
  * This re-export keeps the name callers already import.
  */
 export { CLAUDE_CODE_VERSION as claudeCodeVersion } from "@veyyon/catalog/wire/anthropic";
-export const claudeAgentSdkVersion = "0.3.165";
+export const claudeAgentSdkVersion = "0.3.257";
 export const claudeClientVersion = "1.11187.4";
 export const claudeToolPrefix: string = "_";
 export const claudeCodeSystemInstruction = "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
@@ -522,6 +538,15 @@ export const claudeCodeSystemInstruction = "You are a Claude agent, built on Ant
 // higher (e.g. Opus 4.8 supports 128k); OAuth requests clamp to match the wire
 // fingerprint. API-key requests keep the full model ceiling.
 export const CLAUDE_CODE_MAX_OUTPUT_TOKENS = 64000;
+
+/**
+ * What the model's provider declares about this wire: which credential it takes,
+ * whether it is Anthropic's own endpoint, and which request features it rejects.
+ * Every branch below reads this instead of comparing a provider id.
+ */
+function anthropicWire(model: Pick<Model<"anthropic-messages">, "provider">): ProviderAnthropicMessagesCapability {
+	return providerWireCapabilities(model.provider)?.anthropicMessages ?? {};
+}
 
 export function mapStainlessOs(platform: string): "MacOS" | "Windows" | "Linux" | "FreeBSD" | `Other::${string}` {
 	switch (platform.toLowerCase()) {
@@ -831,7 +856,7 @@ function getUmansWebSearchProvider(headers: Record<string, string> | undefined):
 }
 
 function isUmansAnthropicModel(model: Model<"anthropic-messages">): boolean {
-	return model.provider === "umans" || model.baseUrl.toLowerCase().includes("api.code.umans.ai");
+	return anthropicWire(model).gatewayWebSearch === true || model.baseUrl.toLowerCase().includes("api.code.umans.ai");
 }
 
 function getUmansWebSearchHeader(
@@ -1191,6 +1216,13 @@ export type AnthropicClientOptionsArgs = {
 	disableStrictTools?: boolean;
 	fetch?: FetchImpl;
 	claudeCodeSessionId?: string;
+	/**
+	 * The conversation this request belongs to, for the OpenCode session header.
+	 * Not `claudeCodeSessionId`: a side-channel turn gives provider routing a
+	 * unique per-request session id while keeping the conversation's prompt-cache
+	 * key, so routing on it would send a new session per recap.
+	 */
+	conversationId?: string;
 };
 
 export type AnthropicClientOptionsResult = {
@@ -1248,16 +1280,17 @@ function foundryTlsOptionsCacheKey(): string {
 }
 
 function resolveAnthropicBaseUrl(model: Model<"anthropic-messages">, apiKey?: string): string | undefined {
-	if (model.provider === "github-copilot") {
+	const wire = anthropicWire(model);
+	if (wire.credential === "copilot-bearer") {
 		return normalizeAnthropicBaseUrl(resolveGitHubCopilotBaseUrl(model.baseUrl, apiKey) ?? model.baseUrl);
 	}
-	if (model.provider === "anthropic" && isFoundryEnabled()) {
+	if (wire.directEndpoint && isFoundryEnabled()) {
 		const foundryBaseUrl = normalizeAnthropicBaseUrl($env.FOUNDRY_BASE_URL);
 		if (foundryBaseUrl) {
 			return foundryBaseUrl;
 		}
 	}
-	if (model.provider === "anthropic") {
+	if (wire.directEndpoint) {
 		return normalizeAnthropicBaseUrl(model.baseUrl) ?? ANTHROPIC_API_ENDPOINT;
 	}
 	return normalizeAnthropicBaseUrl(model.baseUrl);
@@ -1300,7 +1333,7 @@ export function resolveAnthropicCustomHeadersForBaseUrl(
 }
 
 function resolveAnthropicCustomHeaders(model: Model<"anthropic-messages">): Record<string, string> | undefined {
-	if (model.provider !== "anthropic") return undefined;
+	if (!anthropicWire(model).directEndpoint) return undefined;
 	return resolveAnthropicCustomHeadersForBaseUrl(model.baseUrl);
 }
 
@@ -1328,7 +1361,7 @@ function resolvePemValue(value: string | undefined, name: string): string | unde
 }
 
 function resolveFoundryTlsOptions(model: Model<"anthropic-messages">): FoundryTlsOptions | undefined {
-	if (model.provider !== "anthropic") return undefined;
+	if (!anthropicWire(model).directEndpoint) return undefined;
 	if (!isFoundryEnabled()) return undefined;
 
 	const cacheKey = foundryTlsOptionsCacheKey();
@@ -1345,7 +1378,7 @@ function resolveFoundryTlsOptions(model: Model<"anthropic-messages">): FoundryTl
 	}
 
 	const options: FoundryTlsOptions = {};
-	if (ca) options.ca = [...tls.rootCertificates, ca];
+	if (ca) options.ca = tls.rootCertificates.concat([ca]);
 	if (cert) options.cert = cert;
 	if (key) options.key = key;
 	const resolved = Object.keys(options).length > 0 ? options : undefined;
@@ -1357,7 +1390,7 @@ function buildClaudeCodeTlsFetchOptions(
 	model: Model<"anthropic-messages">,
 	baseUrl: string | undefined,
 ): AnthropicFetchOptions | undefined {
-	if (model.provider !== "anthropic") return undefined;
+	if (!anthropicWire(model).directEndpoint) return undefined;
 	if (!baseUrl) return undefined;
 
 	let serverName: string;
@@ -1615,15 +1648,18 @@ function shouldIgnoreAnthropicPreambleEvent(eventType: unknown): boolean {
 
 /**
  * Whether an Anthropic (or Copilot-over-Anthropic) stream error should be
- * retried. The classification lives in {@link AIError.isProviderRetryableError};
- * this wrapper injects the Copilot-specific `model_not_supported` transient
- * check, which the error module must not import directly.
+ * retried. The classification is {@link AIError.isProviderRetryableError}; this
+ * supplies the one hook it cannot import — Copilot's `model_not_supported`,
+ * which is transient only when the provider is Copilot. It carries its own name
+ * because a second `isProviderRetryableError` in the package made a caller's
+ * retry decision depend on which module it happened to import.
  */
-export function isProviderRetryableError(error: unknown, provider?: string): boolean {
+export function isAnthropicStreamRetryable(error: unknown, provider?: string): boolean {
 	return AIError.isProviderRetryableError(error, {
 		provider,
-		isProviderTransient:
-			provider === "github-copilot" ? (err): boolean => AIError.isCopilotTransientModelError(err) : undefined,
+		isProviderTransient: providerWireCapabilities(provider)?.anthropicMessages?.transientModelErrors
+			? (err): boolean => AIError.isCopilotTransientModelError(err)
+			: undefined,
 	});
 }
 
@@ -1862,6 +1898,8 @@ const streamAnthropicOnce = (
 			timestamp: Date.now(),
 		};
 		let rawRequestDump: RawHttpRequestDump | undefined;
+		/** Exact bytes of the last sent request body; materialized into a dump only on the 400/413 path. */
+		let anthropicWireBodyJson: string | undefined;
 		let activeAbortTracker = createAbortSourceTracker(options?.signal);
 
 		const onSseEvent = options?.onSseEvent;
@@ -1872,7 +1910,7 @@ const streamAnthropicOnce = (
 			// an error event instead of an unhandled rejection that leaves the stream
 			// (and any consumer awaiting `result()`) hanging forever.
 			const copilotDynamicHeaders =
-				model.provider === "github-copilot"
+				anthropicWire(model).credential === "copilot-bearer"
 					? buildCopilotDynamicHeaders({
 							messages: context.messages,
 							hasImages: hasCopilotVisionInput(context.messages),
@@ -1895,6 +1933,7 @@ const streamAnthropicOnce = (
 				(providerSessionState?.strictToolsDisabled ?? false) || (model.compat?.disableStrictTools ?? false);
 			let dropFastMode = providerSessionState?.fastModeDisabled ?? false;
 			let forceDemoteUnsignedThinking = providerSessionState?.replayUnsignedThinkingDisabled ?? false;
+			let omitDemotedPriorReasoning = providerSessionState?.priorReasoningReplayDisabled ?? false;
 			const mergedCallerHeaders = mergeHeaders(model.headers, options?.headers);
 			const umansGatewayWebSearchHeader = getUmansWebSearchHeader(model, mergedCallerHeaders);
 
@@ -1906,7 +1945,7 @@ const streamAnthropicOnce = (
 				isOAuthToken = false;
 			} else {
 				const extraBetas = normalizeExtraBetas(options?.betas);
-				const wantsAnthropicPriority = model.provider === "anthropic" && options?.serviceTier === "priority";
+				const wantsAnthropicPriority = realizesPriorityServiceTier(options?.serviceTier, model);
 				// Skip the fast-mode beta when this session already learned the
 				// endpoint+model rejects fast mode; `speed` is dropped from the params
 				// too (dropFastMode), so the request stays a faithful non-fast request.
@@ -1950,8 +1989,7 @@ const streamAnthropicOnce = (
 				if (
 					model.reasoning &&
 					options?.thinkingEnabled &&
-					model.provider !== "github-copilot" &&
-					model.provider !== "google-vertex" &&
+					!anthropicWire(model).rejectsContextManagement &&
 					!extraBetas.includes(contextManagementBeta)
 				) {
 					extraBetas.push(contextManagementBeta);
@@ -1992,6 +2030,7 @@ const streamAnthropicOnce = (
 					thinkingDisplay: options?.thinkingDisplay,
 					fetch: options?.fetch,
 					claudeCodeSessionId: options?.sessionId ?? extractClaudeMetadataSessionId(options?.metadata?.user_id),
+					conversationId: conversationIdForOpenCode(options),
 					disableStrictTools,
 				});
 				client = created.client;
@@ -2007,6 +2046,7 @@ const streamAnthropicOnce = (
 					disableStrictTools,
 					umansGatewayWebSearchHeader !== undefined,
 					forceDemoteUnsignedThinking,
+					omitDemotedPriorReasoning,
 				);
 				if (disableStrictTools) {
 					dropAnthropicStrictTools(nextParams);
@@ -2019,14 +2059,17 @@ const streamAnthropicOnce = (
 					nextParams = replacementPayload as typeof nextParams;
 				}
 				nextParams = toWellFormedDeep(nextParams) as typeof nextParams;
+				// Retain the exact sent BYTES, not the parsed object: a dump body is
+				// read only on the 400/413 path, and holding the graph here pinned a
+				// full context-sized object for the whole stream.
 				rawRequestDump = {
 					provider: model.provider,
 					api: output.api,
 					model: model.id,
 					method: "POST",
 					url: `${baseUrl}/v1/messages${isOAuthToken ? "?beta=true" : ""}`,
-					body: nextParams,
 				};
+				anthropicWireBodyJson = JSON.stringify(nextParams);
 				return nextParams;
 			};
 			let params = await prepareParams();
@@ -2133,6 +2176,13 @@ const streamAnthropicOnce = (
 			// Provider-level transport/rate-limit failures: only before any streamed content starts.
 			// Malformed envelopes/JSON: only before replay-unsafe text/tool events are visible on this stream.
 			let providerRetryAttempt = 0;
+			// The declared first-event timeout is one attempt's deadline; the
+			// pre-first-event PHASE is that deadline times the stall allowance.
+			// A stall retried PROVIDER_MAX_RETRIES times used to multiply the
+			// caller's number by the ladder plus its backoff, so a dead endpoint
+			// held a turn for minutes under a budget that said one hundred
+			// seconds. One retry survives; the second stall ends the phase.
+			const firstEventBudget = openStallLadderBudget(firstEventTimeoutMs);
 			const firstEventTimeoutAbortError = new AIError.StreamTimeoutError(
 				"Anthropic stream timed out while waiting for the first event",
 			);
@@ -2675,7 +2725,10 @@ const streamAnthropicOnce = (
 						// success (consumers treat its presence as failure).
 						logger.warn("anthropic: strict tools rejected, retrying without strict tools", {
 							model: model.id,
-							error: await finalizeErrorMessage(streamFailure, rawRequestDump),
+							error: await finalizeErrorMessage(
+								streamFailure,
+								materializeDumpBody(rawRequestDump, anthropicWireBodyJson),
+							),
 						});
 						if (providerSessionState) {
 							providerSessionState.strictToolsDisabled = true;
@@ -2712,10 +2765,43 @@ const streamAnthropicOnce = (
 						firstTokenTime = undefined;
 						continue;
 					}
+					// Anthropic's `reasoning_extraction` classifier answered
+					// `stop_reason: "refusal"`, so this endpoint read the prior-turn
+					// reasoning this request replayed as demoted prose as extracted
+					// reasoning. The prose is the request's, not the model's, so the fix
+					// is to stop sending it: drop prior reasoning that cannot be replayed
+					// under signature, then retry. Learned for the session so the rest of
+					// the conversation does not pay for the discovery again, mirroring the
+					// signing-400 path above. Bounded to one extra attempt by the flag.
+					if (
+						!omitDemotedPriorReasoning &&
+						firstTokenTime === undefined &&
+						!streamedReplayUnsafeContent &&
+						output.stopDetails?.type === "refusal" &&
+						output.stopDetails.category === "reasoning_extraction"
+					) {
+						logger.warn(
+							"anthropic: reasoning_extraction refusal, dropping demoted prior reasoning and retrying",
+							{
+								provider: model.provider,
+								model: model.id,
+								baseUrl,
+								error: output.errorMessage,
+							},
+						);
+						if (providerSessionState) {
+							providerSessionState.priorReasoningReplayDisabled = true;
+						}
+						omitDemotedPriorReasoning = true;
+						params = await prepareParams();
+						providerRetryAttempt = 0;
+						discardAnthropicAttempt(model, output, copilotDynamicHeaders?.premiumRequests);
+						firstTokenTime = undefined;
+						continue;
+					}
 					if (
 						!dropFastMode &&
-						model.provider === "anthropic" &&
-						options?.serviceTier === "priority" &&
+						realizesPriorityServiceTier(options?.serviceTier, model) &&
 						firstTokenTime === undefined &&
 						AIError.isFastModeUnsupported(streamFailure)
 					) {
@@ -2752,10 +2838,26 @@ const streamAnthropicOnce = (
 						!isLocalIdleTimeout &&
 						firstTokenTime === undefined &&
 						!streamedReplayUnsafeContent &&
-						isProviderRetryableError(streamFailure, model.provider);
+						isAnthropicStreamRetryable(streamFailure, model.provider);
+					// A failure where NOTHING came back may not outlive the declared
+					// first-event budget. The server never answered, so another
+					// attempt cannot produce an event any sooner than this one did,
+					// and the caller's number is the whole point of asking. Two
+					// shapes qualify: a stall, and an envelope that ended before
+					// `message_start`. The second is retryable and was retried the
+					// full ten times with exponential backoff, which spent 49s of a
+					// declared 5s budget on an endpoint that answered `200` with an
+					// empty body. A 429 is deliberately NOT in this set: the server
+					// answered, and its retry entitlement is bounded by the caller's
+					// `maxRetryDelayMs` below rather than by this fence.
+					const nothingArrivedOutlivedBudget =
+						firstTokenTime === undefined &&
+						(isPreResponseStall(streamFailure) || AIError.isEmptyStreamEnvelopeError(streamFailure)) &&
+						firstEventBudget.spent();
 					if (
 						activeAbortTracker.wasCallerAbort() ||
 						providerRetryAttempt >= PROVIDER_MAX_RETRIES ||
+						nothingArrivedOutlivedBudget ||
 						(!canRetryTransientEnvelopeFailure && !canRetryProviderFailure)
 					) {
 						throw streamFailure;
@@ -2764,11 +2866,19 @@ const streamAnthropicOnce = (
 					const backoffDelayMs = calculateAnthropicRetryDelayMs(providerRetryAttempt - 1);
 					// Honor the server's retry hint (`retry-after-ms`/`retry-after`) on
 					// 429/529-style failures: retrying sooner than the server asked is a
-					// guaranteed failure that just burns the retry budget.
+					// guaranteed failure that just burns the retry budget. Honor it up to
+					// the longest wait the caller will tolerate, and no further: the hint
+					// was taken verbatim, so a `retry-after: 86400` slept for a day, ten
+					// times over, with nothing armed to interrupt it — the caller's
+					// first-event watchdog covers a request, not the gap between two.
+					// Past the cap the refusal is the answer, which is the rule
+					// `fetchWithRetry` already states for every other provider.
 					const headerDelayMs =
 						streamFailure instanceof Error && streamFailure instanceof AnthropicApiError
 							? retryDelayFromHeaders(streamFailure.headers)
 							: undefined;
+					const maxRetryDelayMs = options?.maxRetryDelayMs ?? DEFAULT_MAX_DELAY_MS;
+					if (headerDelayMs !== undefined && headerDelayMs > maxRetryDelayMs) throw streamFailure;
 					const delayMs = headerDelayMs !== undefined ? Math.max(headerDelayMs, backoffDelayMs) : backoffDelayMs;
 					if (options?.providerRetryWait) {
 						await options.providerRetryWait(delayMs, options.signal);
@@ -2781,7 +2891,7 @@ const streamAnthropicOnce = (
 			}
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
-			if (dropFastMode && model.provider === "anthropic" && options?.serviceTier === "priority") {
+			if (dropFastMode && realizesPriorityServiceTier(options?.serviceTier, model)) {
 				output.disabledFeatures = [...(output.disabledFeatures ?? []), "priority"];
 			}
 			if (forceDemoteUnsignedThinking && model.compat.replayUnsignedThinking) {
@@ -2797,12 +2907,9 @@ const streamAnthropicOnce = (
 				api: model.api,
 				provider: model.provider,
 				abortTracker: activeAbortTracker,
-				rawRequestDump,
+				rawRequestDump: materializeDumpBody(rawRequestDump, anthropicWireBodyJson),
 			});
-			output.stopReason = result.stopReason;
-			output.errorStatus = result.status;
-			output.errorId = result.id;
-			output.errorMessage = maybeAddReplayUnsignedThinkingHint(model, result.message);
+			AIError.applyFinalizeResult(output, result, maybeAddReplayUnsignedThinkingHint(model, result.message));
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
@@ -2821,7 +2928,7 @@ const streamAnthropicOnce = (
  * with the OpenAI-completions provider via `withEmptyCompletionRetry`.
  */
 export const streamAnthropic: StreamFunction<"anthropic-messages"> = (model, context, options) =>
-	withEmptyCompletionRetry(model, context, options, streamAnthropicOnce);
+	withEmptyCompletionRetry(model, context, options, streamAnthropicOnce, { providerRetriesStalls: true });
 
 export type AnthropicSystemBlock = {
 	type: "text";
@@ -2907,6 +3014,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		thinkingDisplay,
 		isOAuth,
 		claudeCodeSessionId,
+		conversationId,
 		disableStrictTools: disableStrictToolsOverride,
 	} = args;
 	const compat = model.compat;
@@ -2926,13 +3034,14 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	// Only OAuth requests inject the CC billing header; no API-key request can ever
 	// contain it, so there is no need to install the rewriter for those.
 	const cchFetch = oauthToken ? wrapFetchForCch(baseFetch) : baseFetch;
-	if (model.provider === "github-copilot") {
+	const wire = anthropicWire(model);
+	if (wire.credential === "copilot-bearer") {
 		const copilotApiKey = parseGitHubCopilotApiKey(apiKey).accessToken;
 		// The GitHub Copilot Anthropic proxy doesn't accept Anthropic beta
 		// features (and the catalog already forces `supportsEagerToolInputStreaming
 		// = false` for this host, so `needsFineGrainedToolStreamingBeta` is true
 		// whenever tools are present). Forward only caller-supplied betas.
-		const betaFeatures = [...extraBetas];
+		const betaFeatures = extraBetas.slice();
 		const defaultHeaders = mergeHeaders(
 			{
 				Accept: stream ? "text/event-stream" : "application/json",
@@ -2959,7 +3068,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		};
 	}
 
-	const betaFeatures = [...extraBetas];
+	const betaFeatures = extraBetas.slice();
 	if (needsFineGrainedToolStreamingBeta) {
 		betaFeatures.push(fineGrainedToolStreamingBeta);
 	}
@@ -2967,6 +3076,8 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		betaFeatures.push(interleavedThinkingBeta);
 	}
 
+	// First in the merge below, so a caller-supplied header still wins.
+	const openCodeHeaders = isOpenCodeProvider(model.provider) ? getOpenCodeHeaders(conversationId) : undefined;
 	const defaultHeaders = buildAnthropicHeaders({
 		apiKey,
 		baseUrl,
@@ -2974,13 +3085,14 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		extraBetas: betaFeatures,
 		stream,
 		modelHeaders: mergeHeaders(
+			openCodeHeaders,
 			model.headers,
 			foundryCustomHeaders,
 			getUmansWebSearchHeader(model, mergeHeaders(model.headers, headers)),
 			headers,
 			dynamicHeaders,
 		),
-		isCloudflareAiGateway: model.provider === "cloudflare-ai-gateway",
+		isCloudflareAiGateway: wire.credential === "gateway-managed",
 		claudeCodeSessionId,
 		claudeCodeBetas: oauthToken
 			? buildClaudeCodeBetas(
@@ -2992,7 +3104,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 			: [],
 	});
 
-	if (model.provider === "cloudflare-ai-gateway") {
+	if (wire.credential === "gateway-managed") {
 		return {
 			isOAuthToken: false,
 			apiKey: null,
@@ -3005,9 +3117,9 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		};
 	}
 
-	// OpenCode Go and Umans validate Anthropic-compatible API-key auth through
-	// `X-Api-Key`; bearer-only requests reach the endpoint but fail auth.
-	if (model.provider === "opencode-go" || model.provider === "umans") {
+	// A provider declaring `api-key-header` validates Anthropic-compatible API-key
+	// auth through `X-Api-Key`; a bearer-only request reaches it but fails auth.
+	if (wire.credential === "api-key-header") {
 		delete defaultHeaders.Authorization;
 		return {
 			isOAuthToken: false,
@@ -3020,9 +3132,9 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 			fetchOptions,
 		};
 	}
-	// OpenCode Zen's Anthropic-compatible gateway accepts bearer auth only;
-	// leaving apiKey set lets the client add X-Api-Key, which upstream Alibaba rejects.
-	if (model.provider === "opencode-zen") {
+	// A `bearer-only` gateway rejects the client-added `X-Api-Key`, so the key is
+	// dropped and only the `Authorization` header the request already carries goes out.
+	if (wire.credential === "bearer-only") {
 		return {
 			isOAuthToken: false,
 			apiKey: null,
@@ -3179,7 +3291,7 @@ function applyPromptCaching(params: MessageCreateParamsStreaming, cacheControl?:
 		}
 
 		// Veyyon's first own system block is the stable harness shared across
-		// parent and subagent prompts. Anchor it before project, assignment, and
+		// parent and agent prompts. Anchor it before project, assignment, and
 		// Argot blocks so those changing suffixes cannot invalidate the shared
 		// prefix. OAuth prepends billing and Claude Code instruction blocks, so
 		// the harness sits at index 2 there and index 0 otherwise.
@@ -3434,14 +3546,27 @@ function buildParams(
 	disableStrictTools = false,
 	useUmansGatewayWebSearch = false,
 	forceDemoteUnsignedThinking = false,
+	omitDemotedPriorReasoning = false,
 ): MessageCreateParamsStreaming {
 	// A session-scoped auto-demote (learned from a live signing 400) clones the
 	// resolved compat with `replayUnsignedThinking: false` so every subsequent
 	// downstream read (convertAnthropicMessages, transformMessages) sees the
-	// demoted default without mutating the shared `model` reference.
+	// demoted default without mutating the shared `model` reference. A learned
+	// `reasoning_extraction` refusal clears `replayDemotedPriorReasoning` the
+	// same way, which makes the transform drop prior reasoning it would
+	// otherwise hand over as prose.
+	const demoteUnsigned = forceDemoteUnsignedThinking && model.compat.replayUnsignedThinking;
+	const dropPriorReasoning = omitDemotedPriorReasoning && model.compat.replayDemotedPriorReasoning;
 	const effectiveModel =
-		forceDemoteUnsignedThinking && model.compat.replayUnsignedThinking
-			? { ...model, compat: { ...model.compat, replayUnsignedThinking: false } }
+		demoteUnsigned || dropPriorReasoning
+			? {
+					...model,
+					compat: {
+						...model.compat,
+						...(demoteUnsigned ? { replayUnsignedThinking: false } : {}),
+						...(dropPriorReasoning ? { replayDemotedPriorReasoning: false } : {}),
+					},
+				}
 			: model;
 	const { cacheControl } = getCacheControl(model, options?.cacheRetention, isOAuthToken);
 
@@ -3461,7 +3586,7 @@ function buildParams(
 		tools = convertTools(
 			context.tools,
 			isOAuthToken,
-			disableStrictTools || model.provider === "github-copilot",
+			disableStrictTools || anthropicWire(model).rejectsBetas === true,
 			model.compat.supportsEagerToolInputStreaming,
 			model.compat.escapeBuiltinToolNames,
 			useUmansGatewayWebSearch,
@@ -3545,8 +3670,7 @@ function buildParams(
 	// Anthropic HTTP beta header this code can add.
 	const shouldKeepThinkingContext =
 		!options?.client &&
-		model.provider !== "github-copilot" &&
-		model.provider !== "google-vertex" &&
+		!anthropicWire(model).rejectsContextManagement &&
 		(thinking?.type === "adaptive" || thinking?.type === "enabled");
 	const contextManagement = shouldKeepThinkingContext
 		? { edits: [{ type: "clear_thinking_20251015" as const, keep: "all" as const }] }
@@ -3608,7 +3732,7 @@ function buildParams(
 			seqs.length > ANTHROPIC_STOP_SEQUENCES_MAX ? seqs.slice(0, ANTHROPIC_STOP_SEQUENCES_MAX) : seqs;
 	}
 
-	if (model.provider === "anthropic" && options?.serviceTier === "priority") {
+	if (realizesPriorityServiceTier(options?.serviceTier, model)) {
 		params.speed = "fast";
 	}
 
@@ -3792,6 +3916,12 @@ export function convertAnthropicMessages(
 				} else if (block.type === "thinking") {
 					if (hasSignedThinking) {
 						if (!block.thinkingSignature || block.thinkingSignature.trim().length === 0) {
+							// An unsigned block cannot ride alongside a signed one, so it
+							// would otherwise demote to prose here. Once this endpoint has
+							// refused demoted prior reasoning it is dropped instead:
+							// re-sending the prose earns the same `reasoning_extraction`
+							// refusal, and the one retry that learned the flag is spent.
+							if (!model.compat.replayDemotedPriorReasoning) continue;
 							if (block.thinking.trim().length === 0) continue;
 							blocks.push({
 								type: "text",
@@ -4021,7 +4151,7 @@ const ANTHROPIC_TOOL_SCHEMA_STRING_FORMATS = new Set([
 	"ipv6",
 	"uuid",
 ]);
-const ANTHROPIC_STRICT_TOOL_ALLOWLIST = new Set(["bash", "python", "edit", "find"]);
+const ANTHROPIC_STRICT_TOOL_ALLOWLIST = new Set(["bash", "python", "edit", "search"]);
 const MAX_ANTHROPIC_STRICT_TOOLS = 20;
 const MAX_ANTHROPIC_STRICT_OPTIONAL_PARAMETERS = 24;
 const MAX_ANTHROPIC_STRICT_UNION_PARAMETERS = 16;
@@ -4245,10 +4375,10 @@ function makeAnthropicNullableSchema(schema: unknown, budget: AnthropicStrictBud
 	if (isRecord(schema)) {
 		if (hasNullVariant(schema)) return schema;
 		if (Array.isArray(schema.anyOf)) {
-			return { ...schema, anyOf: [...schema.anyOf, { type: "null" }] };
+			return { ...schema, anyOf: schema.anyOf.concat([{ type: "null" }]) };
 		}
 		if (Array.isArray(schema.type)) {
-			return { ...schema, type: [...schema.type, "null"] };
+			return { ...schema, type: schema.type.concat(["null"]) };
 		}
 	}
 

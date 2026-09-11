@@ -23,13 +23,14 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, setSystemTime, 
 import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { Agent } from "@veyyon/agent-core";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings, settings } from "@veyyon/coding-agent/config/settings";
-import { StatusLineComponent } from "@veyyon/coding-agent/modes/components/status-line/component";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
+import { StatusLineComponent } from "@veyyon/coding-agent/modes/terminal/components/status-line/component";
+import { StatusPresentationProducer } from "@veyyon/coding-agent/presentation/status-producer";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 
 describe("location line model-run clock", () => {
@@ -78,7 +79,7 @@ describe("location line model-run clock", () => {
 	}
 
 	it("shows nothing before the model has ever run — no idle wall-clock ticking", () => {
-		const statusLine = new StatusLineComponent(session);
+		const statusLine = new StatusLineComponent(new StatusPresentationProducer(session));
 		at(3_600_000);
 		const line = locationLine(statusLine);
 		expect(line).not.toBeNull();
@@ -87,7 +88,7 @@ describe("location line model-run clock", () => {
 	});
 
 	it("ticks the current run's elapsed after the roomy gap while the agent runs", () => {
-		const statusLine = new StatusLineComponent(session);
+		const statusLine = new StatusLineComponent(new StatusPresentationProducer(session));
 		at(10_000);
 		statusLine.markActivityStart();
 		at(10_000 + 95_000);
@@ -97,7 +98,7 @@ describe("location line model-run clock", () => {
 	});
 
 	it("freezes into the stopped receipt ✓ <clock> when the run ends", () => {
-		const statusLine = new StatusLineComponent(session);
+		const statusLine = new StatusLineComponent(new StatusPresentationProducer(session));
 		statusLine.markActivityStart();
 		at(95_000);
 		statusLine.markActivityEnd();
@@ -108,7 +109,7 @@ describe("location line model-run clock", () => {
 	});
 
 	it("restarts per run: a new run ticks from zero and replaces the stopped receipt", () => {
-		const statusLine = new StatusLineComponent(session);
+		const statusLine = new StatusLineComponent(new StatusPresentationProducer(session));
 		statusLine.markActivityStart();
 		at(95_000);
 		statusLine.markActivityEnd();
@@ -121,7 +122,7 @@ describe("location line model-run clock", () => {
 	});
 
 	it("carries the readout on the single-footline renderer too (one owner)", () => {
-		const statusLine = new StatusLineComponent(session);
+		const statusLine = new StatusLineComponent(new StatusPresentationProducer(session));
 		statusLine.markActivityStart();
 		at(95_000);
 		const line = statusLine.renderQuietLine(120);
@@ -135,7 +136,7 @@ describe("location line model-run clock", () => {
 	 * no width may exist where a capability segment is gone while the clock
 	 * stays. */
 	it("sheds the clock from the single footline before any capability segment", () => {
-		const statusLine = new StatusLineComponent(session);
+		const statusLine = new StatusLineComponent(new StatusPresentationProducer(session));
 		statusLine.markActivityStart();
 		const wide = statusLine.renderQuietLine(300);
 		expect(wide).not.toBeNull();
@@ -164,7 +165,7 @@ describe("location line model-run clock", () => {
 		settings.set("statusLine.preset", "custom");
 		settings.set("statusLine.leftSegments", ["model"]);
 		settings.set("statusLine.rightSegments", ["context_pct"]);
-		const statusLine = new StatusLineComponent(session);
+		const statusLine = new StatusLineComponent(new StatusPresentationProducer(session));
 		statusLine.markActivityStart();
 		const { locationLine: line } = statusLine.renderQuietLines(120);
 		expect(line).toBeNull();

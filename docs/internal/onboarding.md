@@ -6,7 +6,7 @@ is the map of the code; this is the path through it.
 ## Prerequisites
 
 - **Bun** (the version in `package.json` `packageManager` and the
-  `oven-sh/setup-bun` pin, currently 1.3.14). veyyon is Bun-first; do not
+  `oven-sh/setup-bun` pin, currently 1.4.0). veyyon runs on Bun; do not
   substitute Node.
 - **Rust** (the pinned `nightly-2026-04-29` toolchain in
   `rust-toolchain.toml`). It is required by `bun run check` and by the fuller
@@ -88,8 +88,10 @@ Testing rules and anti-patterns: [testing.md](testing.md).
 
 ### The pre-push hook
 
-The `pre-push` hook activated above runs `bun run check:ts` and refuses the
-push when it fails. It takes about 15 seconds on a warm cache.
+The `pre-push` hook activated above runs `bun run check:ts`, `bun run check:tools`
+and `bun run changelog:root:check`, and refuses the push when one of them fails.
+It also refuses a commit whose built handbook pages load a hashed asset the commit
+does not carry. The typecheck takes about 15 seconds on a warm cache.
 
 It checks each pushed ref-tip SHA, not your working tree. That matters because
 this tree usually has in-flight work in it, and a hook that typechecked
@@ -123,8 +125,8 @@ are covered.
 | A CLI command / TUI behavior | `packages/coding-agent/src/`, see DEVELOPMENT.md's source map |
 | A tool (read, bash, edit, grep) | `packages/coding-agent/src/` tools + `docs/internal/*-tool-runtime.md` |
 | A provider / model | `packages/ai`, `packages/catalog`, and [adding-a-provider.md](adding-a-provider.md) |
-| A Rust hot path | `crates/` + [natives-architecture.md](natives-architecture.md) |
-| The website / docs | `website/`, `docs/handbook/src/`, this `docs/internal/` tree |
+| A Rust hot path | `natives/` + [natives-architecture.md](natives-architecture.md) |
+| The website / docs | `apps/site/`, `docs/handbook/src/`, this `docs/internal/` tree |
 
 ## Conventions
 
@@ -135,9 +137,11 @@ format). Match the surrounding code.
 ## Opening a pull request
 
 Pull requests are open to everyone, see [CONTRIBUTING.md](../../CONTRIBUTING.md).
-Open the PR against `main`. Put your change under the affected package's
-`## [Unreleased]` changelog section, keep the PR description short (what broke, the
-fix), and make sure `bun run check` and the tests pass. CI and the automated review
-(`.github/workflows/autoreview.yml`) run before a maintainer reviews it.
+A bug fix may open with no issue; anything else needs an issue first and `Refs #N`
+in the body. Open the PR against `main`. Put your change under the affected
+package's `## [Unreleased]` changelog section, keep the PR description short (what
+broke, the fix), and make sure `bun run check` and the tests pass. Opening the PR
+runs `Checks` and `CI` against it; a maintainer makes the final call on whether an
+automated review is requested.
 
-*Verified against `7e4c6374` on 2026-08-06.*
+*Verified against `504c88b39f` on 2026-09-11.*

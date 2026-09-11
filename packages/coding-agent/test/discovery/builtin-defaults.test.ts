@@ -5,10 +5,14 @@
  * rule of the same name overrides a bundled default (first-wins dedup).
  */
 import { describe, expect, it } from "bun:test";
-import { getCapability } from "@veyyon/coding-agent/capability";
-import { BUILTIN_DEFAULTS_PROVIDER_ID, type Rule, ruleCapability } from "@veyyon/coding-agent/capability/rule";
-import type { LoadContext } from "@veyyon/coding-agent/capability/types";
 import { BUILTIN_RULE_SOURCES } from "@veyyon/coding-agent/discovery/builtin-rules/index";
+import { getCapability } from "@veyyon/coding-agent/discovery/capability";
+import {
+	BUILTIN_DEFAULTS_PROVIDER_ID,
+	type Rule,
+	ruleCapability,
+} from "@veyyon/coding-agent/discovery/capability/rule";
+import type { LoadContext } from "@veyyon/coding-agent/discovery/capability/types";
 import { prompt } from "@veyyon/utils";
 // Register all discovery providers as a side effect.
 import "@veyyon/coding-agent/discovery";
@@ -85,13 +89,13 @@ describe("builtin-defaults rule provider", () => {
 		const manager = new TtsrManager(undefined, { getCwd: () => "/workspaces/veyyon-fixture" });
 		expect(manager.addRule(rule)).toBe(true);
 
-		// A read/grep/glob call carrying a deep absolute path (the shape produced only
-		// when reaching into another project) fires the nudge on each nav tool — once the
-		// rule's own warm-up is past, since it says nothing about the first such reach.
+		// A read/search call carrying a deep absolute path (the shape produced only
+		// when reaching into another project) fires the nudge on each workspace
+		// navigation tool once the rule's own warm-up is past.
 		const foreign =
 			'{"path":"/workspaces/santh-fixture/software/keyhog/crates/cli/src/subcommands/calibrate_autoroute.rs:1-260"}';
 		warmUpRule(manager, rule, foreign, { source: "tool", toolName: "read" });
-		for (const toolName of ["read", "grep", "glob", "ast_grep"]) {
+		for (const toolName of ["read", "search"]) {
 			manager.resetBuffer();
 			expect(
 				manager.checkDelta(foreign, { source: "tool", toolName }).map(r => r.name),
@@ -101,8 +105,8 @@ describe("builtin-defaults rule provider", () => {
 
 		// In-cwd work uses short RELATIVE paths, which carry no leading slash and never fire.
 		for (const relative of [
-			'{"path":"src/tools/read.ts"}',
-			'{"path":"packages/coding-agent/src/tools/read.ts:1-40"}',
+			'{"path":"src/tools/fs/read.ts"}',
+			'{"path":"packages/coding-agent/src/tools/fs/read.ts:1-40"}',
 		]) {
 			manager.resetBuffer();
 			expect(manager.checkDelta(relative, { source: "tool", toolName: "read" }), relative).toEqual([]);
@@ -127,7 +131,7 @@ describe("builtin-defaults rule provider", () => {
 		// path it happens to have in absolute form.
 		manager.resetBuffer();
 		expect(
-			manager.checkDelta('{"path":"/workspaces/veyyon-fixture/packages/coding-agent/src/tools/read.ts"}', {
+			manager.checkDelta('{"path":"/workspaces/veyyon-fixture/packages/coding-agent/src/tools/fs/read.ts"}', {
 				source: "tool",
 				toolName: "read",
 			}),

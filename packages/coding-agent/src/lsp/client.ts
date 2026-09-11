@@ -1,9 +1,9 @@
 import * as path from "node:path";
 import { errorMessage, isEnoent, logger, postmortem, ptree, untilAborted } from "@veyyon/utils";
-import { MessageFramer } from "../jsonrpc/message-framing";
 import { primarySessionCpuAdoption } from "../session/cpu-limit";
-import { ToolAbortError, throwIfAborted } from "../tools/tool-errors";
+import { ToolAbortError, throwIfAborted } from "../tools/core/tool-errors";
 import { scopedTimeoutSignal } from "../utils/fetch-timeout";
+import { MessageFramer } from "../utils/jsonrpc-framing";
 import { applyWorkspaceEdit } from "./edits";
 import { getLspmuxCommand, isLspmuxSupported } from "./lspmux";
 import type {
@@ -454,7 +454,12 @@ async function handleApplyEditRequest(client: LspClient, message: LspJsonRpcRequ
 		await applyWorkspaceEdit(params.edit, client.cwd);
 		await sendResponse(client, message.id, { applied: true }, "workspace/applyEdit");
 	} catch (err) {
-		await sendResponse(client, message.id, { applied: false, failureReason: String(err) }, "workspace/applyEdit");
+		await sendResponse(
+			client,
+			message.id,
+			{ applied: false, failureReason: errorMessage(err) },
+			"workspace/applyEdit",
+		);
 	}
 }
 
@@ -533,7 +538,7 @@ async function sendResponse(
 	try {
 		await queueWriteMessage(client, response);
 	} catch (err) {
-		logger.error("LSP failed to respond.", { method, error: String(err) });
+		logger.error("LSP failed to respond.", { method, error: errorMessage(err) });
 	}
 }
 
@@ -865,12 +870,31 @@ export async function ensureFileOpen(client: LspClient, filePath: string, signal
  */
 export async function waitForProjectLoaded(client: LspClient, signal?: AbortSignal): Promise<void> {
 	if (signal?.aborted) return;
-	await Promise.race([
-		client.projectLoaded,
-		...(signal
-			? [new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }))]
-			: []),
-	]);
+	if (!signal) {
+		await client.projectLoaded;
+	} else {
+		// `{ once: true }` detaches the listener only once abort FIRES. This race is
+		// normally won by an already-settled `projectLoaded`, so without an explicit
+		// removal every LSP feature call leaves one more listener on a signal that
+		// lives as long as the turn, and all of them run when it finally aborts.
+		let onAbort: (() => void) | undefined;
+		try {
+			await Promise.race([
+				client.projectLoaded,
+				new Promise<void>(resolve => {
+					onAbort = () => resolve();
+					signal.addEventListener("abort", onAbort, { once: true });
+				}),
+			]);
+		} finally {
+			if (onAbort) signal.removeEventListener("abort", onAbort);
+		}
+	}
+	// The race above resolves on abort, so the signal has to be read again before the second
+	// wait. Without this, aborting mid-wait returns cleanly on every server and throws
+	// `AbortError` out of `waitForRustAnalyzerWorkspace` on rust-analyzer alone: one function,
+	// two contracts, decided by which language the file happened to be in.
+	if (signal?.aborted) return;
 	if (isRustAnalyzerClient(client)) {
 		await waitForRustAnalyzerWorkspace(client, signal);
 	}

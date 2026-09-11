@@ -19,14 +19,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/types";
+import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import { SecretObfuscator } from "@veyyon/coding-agent/secrets";
-import { NONINTERACTIVE_SECRET_COMMAND_USAGE, SECRET_COMMAND_USAGE } from "@veyyon/coding-agent/secrets/secret-command";
+import {
+	NONINTERACTIVE_SECRET_COMMAND_USAGE,
+	SECRET_COMMAND_USAGE,
+	type SecretSubcommand,
+} from "@veyyon/coding-agent/secrets/secret-command";
 import { resolveVaultLocations, SecretVault } from "@veyyon/coding-agent/secrets/vault";
-import { OperatorNotices } from "@veyyon/coding-agent/session/operator-notices";
 import { executeBuiltinSlashCommand } from "@veyyon/coding-agent/slash-commands/builtin-registry";
 import { maskedPromptTitle, runSecretCommandForSurface } from "@veyyon/coding-agent/slash-commands/helpers/secret";
-import { DEFAULT_MASK_CHAR } from "@veyyon/tui";
+import { OperatorNotices } from "@veyyon/kernel/session/operator-notices";
 
 /** The credential under test. Long enough to be obfuscatable, distinctive enough to grep for. */
 const VALUE = "ghp_maskedEntryTestCredential99";
@@ -163,9 +166,9 @@ function harness(options?: {
  * THE TUI SURFACE, which is the one that owns the masked field.
  *
  * Every row here supplies `promptForValue`, and its presence is what selects that surface. The
- * invocations are therefore verbless: a bare `/secret` opens the hidden field, an argument line IS
- * the credential, and a name — when a row needs a named placeholder to assert on — arrives from the
- * visible field afterwards via `nameReturns`. A client with no field takes the noninteractive
+ * invocations therefore lead with `add`: `/secret add` alone opens the hidden field, the line after
+ * `add` IS the credential, and a name — when a row needs a named placeholder to assert on — arrives
+ * from the visible field afterwards via `nameReturns`. A client with no field takes the noninteractive
  * grammar instead, which the next describe covers.
  */
 describe("a value entered through a masked prompt", () => {
@@ -179,7 +182,7 @@ describe("a value entered through a masked prompt", () => {
 	it("opens the masked field when the line carried no value and no source", async () => {
 		const h = harness({ promptReturns: VALUE });
 
-		await runSecretCommandForSurface("", h.port);
+		await runSecretCommandForSurface("add", h.port);
 
 		expect(h.prompted).toEqual(["value"]);
 	});
@@ -192,7 +195,7 @@ describe("a value entered through a masked prompt", () => {
 		process.env.VEYYON_MASKED_TEST_TOKEN = VALUE;
 		try {
 			const h = harness();
-			await runSecretCommandForSurface("--from-env VEYYON_MASKED_TEST_TOKEN", h.port);
+			await runSecretCommandForSurface("from-env VEYYON_MASKED_TEST_TOKEN", h.port);
 
 			expect(h.prompted).toEqual([]);
 		} finally {
@@ -210,7 +213,7 @@ describe("a value entered through a masked prompt", () => {
 	it("appears in no output, no agent message and no session message", async () => {
 		const h = harness({ promptReturns: VALUE });
 
-		const outcome = await runSecretCommandForSurface("", h.port);
+		const outcome = await runSecretCommandForSurface("add", h.port);
 
 		expect(outcome.message).not.toContain(VALUE);
 		expect(JSON.stringify(h.agentMessages)).not.toContain(VALUE);
@@ -225,7 +228,7 @@ describe("a value entered through a masked prompt", () => {
 	it("is stored in the vault and readable back", async () => {
 		const h = harness({ promptReturns: VALUE, nameReturns: "github-token" });
 
-		await runSecretCommandForSurface("", h.port);
+		await runSecretCommandForSurface("add", h.port);
 
 		const vault = new SecretVault(
 			resolveVaultLocations({
@@ -244,7 +247,7 @@ describe("a value entered through a masked prompt", () => {
 	it("is not stored as plain text on disk", async () => {
 		const h = harness({ promptReturns: VALUE });
 
-		await runSecretCommandForSurface("", h.port);
+		await runSecretCommandForSurface("add", h.port);
 
 		const vaultFile = await fs.readFile(path.join(home, "profiles", "default", "vault.json"), "utf8");
 		expect(vaultFile).not.toContain(VALUE);
@@ -255,7 +258,7 @@ describe("a value entered through a masked prompt", () => {
 	it("is protected by the running obfuscator straight away", async () => {
 		const h = harness({ promptReturns: VALUE, nameReturns: "github-token" });
 
-		await runSecretCommandForSurface("", h.port);
+		await runSecretCommandForSurface("add", h.port);
 
 		expect(h.obfuscator.hasNamedSecret("GITHUB_TOKEN")).toBe(true);
 		expect(h.obfuscator.obfuscate(`token is ${VALUE}`)).toBe("token is #GITHUB_TOKEN#");
@@ -265,7 +268,7 @@ describe("a value entered through a masked prompt", () => {
 	it("introduces the placeholder to the model in both places", async () => {
 		const h = harness({ promptReturns: VALUE, nameReturns: "github-token" });
 
-		await runSecretCommandForSurface("", h.port);
+		await runSecretCommandForSurface("add", h.port);
 
 		expect(h.agentMessages).toHaveLength(1);
 		expect(h.sessionMessages).toHaveLength(1);
@@ -282,7 +285,7 @@ describe("a value entered through a masked prompt", () => {
 	it("does not warn about a scrollback exposure that did not happen", async () => {
 		const h = harness({ promptReturns: VALUE, nameReturns: "github-token" });
 
-		const outcome = await runSecretCommandForSurface("", h.port);
+		const outcome = await runSecretCommandForSurface("add", h.port);
 
 		expect(outcome.message).not.toContain("scrollback");
 		expect(outcome.message).toContain("#GITHUB_TOKEN#");
@@ -293,6 +296,10 @@ describe("non-interactive secret commands", () => {
 	/**
 	 * ACP and RPC have no masked terminal. An inline credential would remain in their request
 	 * history, so the adapter refuses it without repeating any credential byte.
+	 *
+	 * NOR THE NAME, which it used to repeat. `add` reads no words at all on this surface now, so
+	 * `add remote-token ghp_...` and `add ghp_...` arrive as the same shape and nothing tells the name
+	 * from the credential. Echoing position one would print a live token for the second line.
 	 */
 	it("refuses ACP/RPC inline credentials without echoing them", async () => {
 		const h = harness({ interactive: false });
@@ -301,20 +308,18 @@ describe("non-interactive secret commands", () => {
 			(error: unknown) => error,
 		);
 
-		expect(String(failure)).toContain("--from-env");
+		expect(String(failure)).toContain("/secret from-env MY_TOKEN <name>");
 		expect(String(failure)).not.toContain(VALUE);
+		expect(String(failure)).not.toContain("remote-token");
 		await expect(fs.stat(path.join(home, "profiles", "default", "vault.json"))).rejects.toThrow();
 	});
 
 	/** The documented non-interactive source remains an ordinary successful command. */
-	it("accepts --from-env without a terminal", async () => {
+	it("accepts a from-env without a terminal", async () => {
 		process.env.VEYYON_NONINTERACTIVE_SECRET = VALUE;
 		try {
 			const h = harness({ interactive: false });
-			const outcome = await runSecretCommandForSurface(
-				"add remote-token --from-env VEYYON_NONINTERACTIVE_SECRET",
-				h.port,
-			);
+			const outcome = await runSecretCommandForSurface("from-env VEYYON_NONINTERACTIVE_SECRET remote-token", h.port);
 			const vault = new SecretVault(
 				resolveVaultLocations({
 					globalConfigRoot: home,
@@ -334,37 +339,54 @@ describe("non-interactive secret commands", () => {
 	 * A missing value in a headless client must not recommend the inline form that the same adapter
 	 * refuses. Contradictory recovery instructions turn a safe failure into an unusable loop.
 	 */
-	it("recommends only --from-env when no noninteractive value was supplied", async () => {
-		const failure = await runSecretCommandForSurface("add remote-token", harness({ interactive: false }).port).then(
-			() => undefined,
-			(error: unknown) => String(error),
-		);
+	it("recommends only from-env when no noninteractive value was supplied", async () => {
+		// BOTH WAYS A CLIENT CAN ARRIVE AT `add` WITHOUT A VALUE IT CAN USE: the bare command, refused by
+		// the runner because there is no field to open, and the command with something after it, refused
+		// by the parser because whatever that something is may be the credential. Both are covered here
+		// because the two refusals are written in different files, and it was the pair of them that had
+		// to agree: one of them recommending the inline form is what would make the loop unusable.
+		for (const line of ["add", "add remote-token"]) {
+			const failure = await runSecretCommandForSurface(line, harness({ interactive: false }).port).then(
+				() => undefined,
+				(error: unknown) => String(error),
+			);
 
-		expect(failure).toContain("/secret add REMOTE_TOKEN --from-env MY_TOKEN");
-		expect(failure).not.toContain("pass the value directly");
-		expect(failure).not.toContain("scrollback");
+			expect(failure).toContain("/secret from-env MY_TOKEN");
+			expect(failure).not.toContain("pass the value directly");
+			expect(failure).not.toContain("scrollback");
+		}
 	});
 
 	/**
-	 * Help is capability-aware, and the capability difference now shows in WHAT a bare `/secret`
-	 * does, not only in the words it prints.
+	 * Help is capability-aware, and the capability difference is in the words each surface prints, not
+	 * in what a bare `/secret` does.
 	 *
-	 * A headless client gets the usage text, because usage is all it can act on, and that text must
-	 * never teach inline or supposedly-hidden typing its transport cannot provide. A terminal gets
-	 * the FIELD instead, because it has one — so the TUI half of this row is the absence of a help
-	 * dump, plus the on-screen warning that used to sit in the help text and now rides the
-	 * confirmation of an inline store, which is the only place it is true.
+	 * A BARE LINE IS HELP ON BOTH SURFACES, which is what requiring a verb means: there is no gesture
+	 * that stores a credential without naming a command, so a bare line has nothing to do but say what
+	 * the commands are. It used to open the masked field in a terminal, and that asymmetry is gone.
+	 *
+	 * What remains asymmetric is the TEXT: a headless client must never be taught inline or
+	 * supposedly-hidden typing its transport cannot provide, so its usage names `from-env` and neither
+	 * `<value>` nor a field. The terminal's names both, and the on-screen warning rides the confirmation
+	 * of an inline store rather than the help text, which is the only place it is true.
 	 */
-	it("prints safe noninteractive help, and opens a field in a terminal instead", async () => {
+	it("prints help per surface for a bare line, and opens a field on add", async () => {
 		const headless = await runSecretCommandForSurface("", harness({ interactive: false }).port);
+		const bareTerminal = harness({ promptReturns: VALUE });
+		const bare = await runSecretCommandForSurface("", bareTerminal.port);
 		const terminal = harness({ promptReturns: VALUE });
-		const masked = await runSecretCommandForSurface("", terminal.port);
-		const inline = await runSecretCommandForSurface(`ghp_typedStraightOntoTheLine11`, harness().port);
+		const masked = await runSecretCommandForSurface("add", terminal.port);
+		const inline = await runSecretCommandForSurface(`add ghp_typedStraightOntoTheLine11`, harness().port);
 
 		expect(headless.message).toBe(NONINTERACTIVE_SECRET_COMMAND_USAGE);
-		expect(headless.message).toContain("--from-env");
+		expect(headless.message).toContain("/secret from-env <VAR> <name>");
 		expect(headless.message).not.toContain("<value>");
 		expect(headless.message).not.toContain("hidden field");
+
+		// A bare terminal line prints the terminal's usage and opens NOTHING. The empty `prompted` is
+		// the half that matters: a field opened here would mean the verbless store gesture survived.
+		expect(bare.message).toBe(SECRET_COMMAND_USAGE);
+		expect(bareTerminal.prompted).toEqual([]);
 
 		expect(terminal.prompted).toEqual(["value"]);
 		expect(masked.message).toContain("Stored");
@@ -386,7 +408,7 @@ describe("non-interactive secret commands", () => {
 			(error: unknown) => String(error),
 		);
 
-		expect(failure).toContain("--from-env");
+		expect(failure).toContain("/secret from-env <VAR> <name>");
 		expect(failure).not.toContain("prompt for the value");
 		expect(failure).not.toContain("<value>");
 		expect(failure).not.toContain("visible on screen");
@@ -396,22 +418,26 @@ describe("non-interactive secret commands", () => {
 	 * An unusable NAME is refused before the missing-value refusal, on the surface that still takes
 	 * a name positionally.
 	 *
-	 * Both refusals apply to `add ab`, and the order decides what the operator is told. The name is
-	 * the half that is wrong, so being handed `--from-env` advice instead would send them to fix
-	 * the other half of the line and hit the same wall again. Nothing is written either way.
+	 * Both refusals apply to `from-env NOT_SET_ANYWHERE ab`, and the order decides what the operator is
+	 * told. The name is the half that is wrong on the line, so being sent after the variable instead
+	 * would have them fix the other half and hit the same wall again. Nothing is written either way.
 	 *
-	 * NONINTERACTIVE, because a positional name is only a name in this grammar: a terminal reads
-	 * `add ab` as a six-byte credential, and the refusal of an unusable name typed into the VISIBLE
-	 * FIELD, which is where a terminal names a secret, is covered in the masked-prompt suite.
+	 * ON `from-env`, because that is the command that reads a name positionally: `add` reads no words
+	 * on this surface at all. The refusal of an unusable name typed into the VISIBLE FIELD, which is
+	 * where a terminal names a secret, is covered in the masked-prompt suite.
 	 */
 	it("refuses an unusable name before complaining about the missing value", async () => {
-		const failure = await runSecretCommandForSurface("add ab", harness({ interactive: false }).port).then(
+		const failure = await runSecretCommandForSurface(
+			"from-env VEYYON_NOT_SET_ANYWHERE ab",
+			harness({ interactive: false }).port,
+		).then(
 			() => undefined,
 			(error: unknown) => String(error),
 		);
 
 		expect(failure).toContain("not a usable secret name");
-		expect(failure).not.toContain("--from-env");
+		expect(failure).not.toContain("VEYYON_NOT_SET_ANYWHERE");
+		expect(failure).not.toMatch(/(^|\s)--/u);
 		await expect(fs.stat(path.join(home, "profiles", "default", "vault.json"))).rejects.toThrow();
 	});
 });
@@ -444,7 +470,7 @@ describe("default lifetime resolution at the surface", () => {
 	it("validates the default lifetime before prompting for a value", async () => {
 		const h = harness({ defaultTtl: "not-a-lifetime", promptReturns: VALUE });
 
-		await expect(runSecretCommandForSurface("", h.port)).rejects.toThrow(/The secrets\.defaultTtl setting/);
+		await expect(runSecretCommandForSurface("add", h.port)).rejects.toThrow(/The secrets\.defaultTtl setting/);
 		expect(h.prompted).toEqual([]);
 		await expect(fs.stat(path.join(home, "profiles", "default", "vault.json"))).rejects.toThrow();
 	});
@@ -461,9 +487,9 @@ describe("default lifetime resolution at the surface", () => {
 			const h = harness({ defaultTtl: "not-a-lifetime", interactive: false });
 
 			await expect(
-				runSecretCommandForSurface("add explicit-token --from-env VEYYON_EXPLICIT_TTL_SECRET --ttl never", h.port),
+				runSecretCommandForSurface("from-env VEYYON_EXPLICIT_TTL_SECRET explicit-token never", h.port),
 			).resolves.toHaveProperty("message");
-			await expect(runSecretCommandForSurface("extend explicit-token --ttl 7d", h.port)).resolves.toHaveProperty(
+			await expect(runSecretCommandForSurface("extend explicit-token 7d", h.port)).resolves.toHaveProperty(
 				"message",
 			);
 		} finally {
@@ -480,7 +506,7 @@ describe("live obfuscator reconciliation", () => {
 	it("reconciles an existing obfuscator when the setting snapshot says disabled", async () => {
 		const h = harness({ promptReturns: VALUE, secretsEnabled: false, nameReturns: "live-token" });
 
-		const outcome = await runSecretCommandForSurface("", h.port);
+		const outcome = await runSecretCommandForSurface("add", h.port);
 
 		expect(h.obfuscator.hasNamedSecret("LIVE_TOKEN")).toBe(true);
 		expect(outcome.message).not.toContain("protection is OFF");
@@ -495,10 +521,7 @@ describe("live obfuscator reconciliation", () => {
 		try {
 			const h = harness({ interactive: false, secretsEnabled: true, liveObfuscator: false });
 
-			const outcome = await runSecretCommandForSurface(
-				"add dormant-token --from-env VEYYON_NO_LIVE_OBFUSCATOR",
-				h.port,
-			);
+			const outcome = await runSecretCommandForSurface("from-env VEYYON_NO_LIVE_OBFUSCATOR dormant-token", h.port);
 
 			expect(outcome.message).toContain("protection is OFF");
 			expect(h.obfuscator.hasNamedSecret("DORMANT_TOKEN")).toBe(false);
@@ -518,7 +541,7 @@ describe("live obfuscator reconciliation", () => {
 			throw new Error("reload failed");
 		};
 
-		const failure = await runSecretCommandForSurface("", h.port).then(
+		const failure = await runSecretCommandForSurface("add", h.port).then(
 			() => undefined,
 			(error: unknown) => error,
 		);
@@ -546,7 +569,7 @@ describe("live obfuscator reconciliation", () => {
 			throw new Error("session append failed");
 		};
 
-		const failure = await runSecretCommandForSurface("", h.port).then(
+		const failure = await runSecretCommandForSurface("add", h.port).then(
 			() => undefined,
 			(error: unknown) => error,
 		);
@@ -577,7 +600,7 @@ describe("a cancelled masked prompt", () => {
 	it("stores nothing when escape is pressed", async () => {
 		const h = harness({ promptReturns: undefined });
 
-		const outcome = await runSecretCommandForSurface("", h.port);
+		const outcome = await runSecretCommandForSurface("add", h.port);
 
 		expect(outcome.cancelled).toBe(true);
 		expect(outcome.message).toContain("Nothing was stored");
@@ -589,7 +612,7 @@ describe("a cancelled masked prompt", () => {
 	it("stores nothing when nothing was typed", async () => {
 		const h = harness({ promptReturns: "" });
 
-		const outcome = await runSecretCommandForSurface("", h.port);
+		const outcome = await runSecretCommandForSurface("add", h.port);
 
 		expect(outcome.cancelled).toBe(true);
 		expect(outcome.message).toContain("nothing was stored");
@@ -600,7 +623,7 @@ describe("a cancelled masked prompt", () => {
 	it("writes no vault file", async () => {
 		const h = harness({ promptReturns: undefined });
 
-		await runSecretCommandForSurface("", h.port);
+		await runSecretCommandForSurface("add", h.port);
 
 		await expect(fs.stat(path.join(home, "profiles", "default", "vault.json"))).rejects.toThrow();
 	});
@@ -624,7 +647,7 @@ describe("the TUI path", () => {
 		});
 		const showStatus = vi.fn();
 
-		const handled = await executeBuiltinSlashCommand("/secret", {
+		const handled = await executeBuiltinSlashCommand("/secret add", {
 			ctx: {
 				editor: { setText },
 				showHookInput,
@@ -650,7 +673,7 @@ describe("the TUI path", () => {
 	it("opens the field with a mask", async () => {
 		const showHookInput = vi.fn(async () => undefined);
 
-		await executeBuiltinSlashCommand("/secret", {
+		await executeBuiltinSlashCommand("/secret add", {
 			ctx: {
 				editor: { setText: vi.fn() },
 				showHookInput,
@@ -666,13 +689,13 @@ describe("the TUI path", () => {
 		const [title, placeholder, inputOptions] = showHookInput.mock.calls[0] as unknown as [
 			string,
 			undefined,
-			{ mask?: string },
+			{ mask?: boolean },
 		];
-		expect(inputOptions.mask).toBe(DEFAULT_MASK_CHAR);
+		expect(inputOptions.mask).toBe(true);
 		expect(placeholder).toBeUndefined();
 		expect(title).toBe(maskedPromptTitle());
-		// And it carries NO name, because under the verbless grammar there is not one yet to carry:
-		// this field is the whole of a bare `/secret`, and the naming question comes after it.
+		// And it carries NO name, because at this point there is not one yet to carry: `/secret add`
+		// with nothing after it is the whole of this field, and the naming question comes after it.
 		expect(title).not.toContain("GITHUB_TOKEN");
 	});
 
@@ -725,7 +748,7 @@ describe("storing a credential while protection is off", () => {
 	it("turns secret protection on", async () => {
 		const h = harness({ promptReturns: VALUE, secretsEnabled: false });
 
-		await runSecretCommandForSurface("", h.port);
+		await runSecretCommandForSurface("add", h.port);
 
 		expect(h.settingWrites).toEqual([{ key: "secrets.enabled", value: true }]);
 	});
@@ -742,7 +765,7 @@ describe("storing a credential while protection is off", () => {
 	it("flushes the enable to disk instead of leaving it queued", async () => {
 		const h = harness({ promptReturns: VALUE, secretsEnabled: false });
 
-		await runSecretCommandForSurface("", h.port);
+		await runSecretCommandForSurface("add", h.port);
 
 		expect(h.settingFlushes).toEqual([["secrets.enabled"]]);
 	});
@@ -758,7 +781,7 @@ describe("storing a credential while protection is off", () => {
 			throw new Error("read-only file system");
 		};
 
-		const outcome = await runSecretCommandForSurface("", h.port);
+		const outcome = await runSecretCommandForSurface("add", h.port);
 
 		expect(outcome.message).toContain("it is now on for this session, but it could not be saved");
 		expect(outcome.message).toContain("read-only file system");
@@ -769,7 +792,7 @@ describe("storing a credential while protection is off", () => {
 	it("says so in the confirmation", async () => {
 		const h = harness({ promptReturns: VALUE, secretsEnabled: false, nameReturns: "first-token" });
 
-		const outcome = await runSecretCommandForSurface("", h.port);
+		const outcome = await runSecretCommandForSurface("add", h.port);
 
 		expect(outcome.message).toContain("Stored FIRST_TOKEN");
 		expect(outcome.message).toContain(
@@ -781,18 +804,18 @@ describe("storing a credential while protection is off", () => {
 	it("writes nothing when protection is already on", async () => {
 		const h = harness({ promptReturns: VALUE, secretsEnabled: true });
 
-		const outcome = await runSecretCommandForSurface("", h.port);
+		const outcome = await runSecretCommandForSurface("add", h.port);
 
 		expect(h.settingWrites).toEqual([]);
 		expect(outcome.message).not.toContain("Secret protection was off");
 	});
 
 	/**
-	 * Only `add` enables. Listing is a read, and `rm` is the operator reducing what is stored: an
-	 * `/secret rm` that switched protection on would be the command doing the opposite of what it
-	 * says.
+	 * Only a command that STORES enables. Listing is a read, and `rm` is the operator reducing what is
+	 * stored: an `/secret rm` that switched protection on would be the command doing the opposite of
+	 * what it says.
 	 *
-	 * NONINTERACTIVE, because these three words are verbs only there. A terminal has no subcommand
+	 * NONINTERACTIVE, because these three words are commands only there. A terminal has no subcommand
 	 * to leave the setting alone for — every line it is given is a credential, which is the `add`
 	 * path — so the surface that still parses them is the surface that can still get this wrong.
 	 */
@@ -804,11 +827,80 @@ describe("storing a credential while protection is off", () => {
 		}
 	});
 
+	/**
+	 * THE CLASS, SWEPT OVER EVERY COMMAND: protection turns on exactly when the vault gained an entry
+	 * it did not have, whichever command put it there.
+	 *
+	 * WHAT IT CLOSES. The rows above pin `add`, and `add` was the whole story while reading a value out
+	 * of the environment was a modifier on it. Splitting `from-env` into a command of its own left the
+	 * opt-in reading `subcommand === "add"`, so a client -- which cannot take a value inline at all,
+	 * and therefore reaches the vault ONLY through `from-env` -- stored its first credential and left
+	 * protection off. That is the exact state this feature exists to prevent, and every hand-written row
+	 * in this describe passed while it shipped.
+	 *
+	 * WHY IT IS DERIVED THIS WAY. The condition is read off the VAULT rather than off a list of command
+	 * names: a command enables protection if and only if running it on a fresh vault leaves an entry
+	 * behind. So a new storing command is covered the day it parses, without anybody extending a
+	 * fixture, and a rule rewritten against one command name turns this red for the others.
+	 *
+	 * WHAT IT DOES NOT CATCH. It says nothing about `value`, which replaces an entry and therefore
+	 * cannot store the first one: on a fresh vault it refuses, which this row reads as "stored
+	 * nothing". Whether a rotation should re-enable protection the operator switched off is a judgement
+	 * and is deliberately not asserted here.
+	 */
+	it("turns protection on for every command that stores a credential, and no other", async () => {
+		process.env.VEYYON_SWEEP_ENTRY_VALUE = VALUE;
+		try {
+			const lines: Record<SecretSubcommand, string> = {
+				add: "add",
+				"from-env": "from-env VEYYON_SWEEP_ENTRY_VALUE SWEPT_TOKEN",
+				list: "list",
+				rm: "rm SWEPT_TOKEN",
+				clear: "clear profile",
+				rename: "rename SWEPT_TOKEN OTHER_TOKEN",
+				value: "value SWEPT_TOKEN from-env VEYYON_SWEEP_ENTRY_VALUE",
+				scope: "scope SWEPT_TOKEN global",
+				copy: "copy SWEPT_TOKEN",
+				extend: "extend SWEPT_TOKEN 7d",
+				log: "log",
+				discard: "discard project",
+				help: "help",
+			};
+			const stored: SecretSubcommand[] = [];
+			const enabled: SecretSubcommand[] = [];
+
+			for (const command of Object.keys(lines) as SecretSubcommand[]) {
+				// A fresh home per command, so one command's entry cannot make the next one's answer.
+				home = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-masked-home-"));
+				const h = harness({ secretsEnabled: false, promptReturns: VALUE, nameReturns: "swept-token" });
+				await runSecretCommandForSurface(lines[command], h.port).catch(() => undefined);
+				const entries = await new SecretVault(
+					resolveVaultLocations({
+						globalConfigRoot: home,
+						agentDir: path.join(home, "profiles", "default"),
+						cwd: project,
+					}),
+				).load();
+
+				if (entries.length > 0) stored.push(command);
+				if (h.settingWrites.length > 0) enabled.push(command);
+			}
+
+			// Non-vacuity: a sweep in which nothing stored anything would satisfy the equality below.
+			expect(stored).toEqual(["add", "from-env"]);
+			expect(enabled).toEqual(stored);
+			// And the write is the exact one, on every command that made it, rather than any write at all.
+			expect(new Set(enabled.map(() => JSON.stringify({ key: "secrets.enabled", value: true }))).size).toBe(1);
+		} finally {
+			delete process.env.VEYYON_SWEEP_ENTRY_VALUE;
+		}
+	});
+
 	/** A cancelled masked prompt stores nothing, so there is nothing to enable protection for. */
 	it("leaves the setting alone when the prompt is cancelled", async () => {
 		const h = harness({ promptReturns: undefined, secretsEnabled: false });
 
-		const outcome = await runSecretCommandForSurface("", h.port);
+		const outcome = await runSecretCommandForSurface("add", h.port);
 
 		expect(outcome.cancelled).toBe(true);
 		expect(h.settingWrites).toEqual([]);
@@ -824,10 +916,7 @@ describe("storing a credential while protection is off", () => {
 		try {
 			const h = harness({ interactive: false, secretsEnabled: false, liveObfuscator: false });
 
-			const outcome = await runSecretCommandForSurface(
-				"add refused-token --from-env VEYYON_AUTO_ENABLE_REFUSED",
-				h.port,
-			);
+			const outcome = await runSecretCommandForSurface("from-env VEYYON_AUTO_ENABLE_REFUSED refused-token", h.port);
 
 			expect(h.settingWrites).toEqual([{ key: "secrets.enabled", value: true }]);
 			expect(outcome.message).toContain("Secret protection is OFF");

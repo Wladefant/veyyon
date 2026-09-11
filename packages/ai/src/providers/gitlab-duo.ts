@@ -162,7 +162,7 @@ export function getGitLabDuoModels(): Model<Api>[] {
 			provider: "gitlab-duo",
 			baseUrl: mapping.provider === "anthropic" ? ANTHROPIC_PROXY_URL : OPENAI_PROXY_URL,
 			reasoning: mapping.reasoning,
-			input: [...mapping.input],
+			input: mapping.input.slice(),
 			cost: { ...mapping.cost },
 			contextWindow: mapping.contextWindow,
 			maxTokens: mapping.maxTokens,
@@ -199,7 +199,7 @@ async function getDirectAccessToken(
 	});
 
 	if (!response.ok) {
-		const detail = AIError.boundProviderErrorDetail(await response.text());
+		const detail = await AIError.readProviderErrorDetail(response);
 		if (response.status === 403) {
 			throw new AIError.ProviderResponseError(
 				`GitLab Duo access denied. Ensure Duo is enabled for this account. ${detail}`,

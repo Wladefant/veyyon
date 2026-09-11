@@ -6,7 +6,7 @@ import {
 	GeminiProvider,
 	geminiPerformedSearch,
 	searchGemini,
-} from "@veyyon/coding-agent/web/search/providers/gemini";
+} from "@veyyon/coding-agent/tools/web/search/providers/gemini";
 
 // A realistic grounded Cloud Code response: text PLUS groundingMetadata (a real
 // Google Search grounding always carries chunks/queries). The request-shaping
@@ -190,6 +190,23 @@ describe("searchGemini tools serialization", () => {
 		expect(capturedRequest?.body?.request).toMatchObject({
 			tools: [{ googleSearch: { dynamicRetrievalConfig: { mode: "MODE_DYNAMIC" } } }],
 		});
+	});
+
+	it("runs the OAuth and developer-API request bodies through the live text transform", async () => {
+		const resolveProviderTextTransform = () => (text: string) => text.replace("secret", "[redacted]");
+
+		await searchGemini({ ...makeParams("find secret one"), fetch: mockGeminiFetch(), resolveProviderTextTransform });
+		expect(capturedRequest?.body?.request).toMatchObject({
+			contents: [{ role: "user", parts: [{ text: "find [redacted] one" }] }],
+		});
+
+		await searchGemini({
+			...makeParams("find secret two"),
+			authStorage: apiKeyAuthStorage,
+			fetch: mockGeminiFetch(DEVELOPER_SSE_RESPONSE),
+			resolveProviderTextTransform,
+		});
+		expect(capturedRequest?.body?.contents).toEqual([{ role: "user", parts: [{ text: "find [redacted] two" }] }]);
 	});
 
 	it("includes codeExecution and urlContext tools when provided", async () => {

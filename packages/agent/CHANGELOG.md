@@ -2,9 +2,50 @@
 
 ## [Unreleased]
 
+### Added
+
+- `AgentTool.view` takes a host-agnostic `ToolViewRenderer` from `@veyyon/view`, so a tool describes its call and result cards without receiving a theme or returning a host component; where a tool also declares `renderCall`/`renderResult`, the host-specific pair still wins.
+
+### Changed
+
+- Legacy hook messages reuse custom-message fields without changing their public type signatures.
+- The turn loop rejects a Harmony leak through one `rejectHarmonyLeak` whether the stream ends with a `done` event or without one; no behavior change.
+- `AgentToolResult`, `AgentToolUpdateCallback`, `ToolTier`, `ToolApprovalDecision` and `ToolApproval` are defined in `@veyyon/tool` as `ToolResult`, `ToolUpdateCallback` and the same approval names; `@veyyon/agent` exports every name it exported before, so no caller changes.
+- The session-entry vocabulary (`SessionEntry` and every member), `AgentMessage` and the `CustomAgentMessages` and `CustomCompactionSessionEntries` hooks are defined in `@veyyon/session`; `@veyyon/agent-core` and `@veyyon/agent-core/compaction/entries` export every name they exported before, and an augmentation now names `@veyyon/session`.
+- Typed tuple and Set copies use spreads rather than `.concat()` or `.slice()`, which those types do not define. No user-visible behavior changes.
+- A source-path comment in `thinking.ts` names the coding-agent module its reader moved to; behavior is unchanged.
+- Doc comments refer to a child run as an agent rather than a subagent. No behavior change.
+- `onSpanStart` and `onSpanEnd` run through one guarded call that reports a throw as the same `on_span_start_failed` / `on_span_end_failed` warning, with the thrown error attached; no behavior change.
+- The steering and follow-up queues drain through one step that takes the first message in `one-at-a-time` mode and every message in `all` mode; delivery order and turn count are unchanged.
+- A tool call's arguments and result serialize through one telemetry path keyed by the `contentSerializer` field, and an `onChatUsage` throw or rejection is reported as `on_chat_usage_failed` from one place on both the agent-loop and the manual-record path; no behavior change.
+
 ### Fixed
 
-- `compactWithProvider` forwards the live session identity (`sessionId`, provider session state, and the codex compaction context, tagged `responses_compact`) to the transport, which is what a host keying request identity to the conversation needs. Server-side compaction now runs for a ChatGPT OAuth (codex) session, where it previously could not resolve a transport at all and every compaction fell through to a local summary.
+- `AgentTool.renderResult` accepts the optional call arguments already supported by custom and extension tool renderers.
+- A history summary whose single request times out, or does not fit the summarizing model's context window, is produced in stages: the span is summarized as consecutive segments of up to 32k tokens, four at a time, and the segment summaries are merged in rounds into one summary, so a 234k-token session on a model that never begins a whole-span answer still compacts; `compact()` reports the segment count in `summaryStages` and takes `summaryStaging: "staged"` to start staged.
+- A provider's server-side compaction runs under its own ten-minute deadline instead of the three-minute remote-summarizer deadline that cut every codex compaction of a large span.
+- The staged-summary segment budget and worker count clamp through the shared `clampLow`, and the engine classifies a summary timeout through the error-flag leaf modules rather than the error barrel; no behavior change.
+
+## [1.4.1] - 2026-09-08
+
+### Fixed
+
+- A compaction, branch-summary or turn-prefix transcript leaves out a user or developer message that carries prior reasoning as prose (`demotedReasoningSource`), the message a user-interrupted turn leaves behind, instead of quoting that reasoning back at the endpoint inside the summary request.
+
+## [1.4.0] - 2026-09-04
+
+### Added
+
+- Compaction can truncate the middle of an oversized text, keeping both edges, in any message role — including the roles that store their model-visible text outside `content`, such as a shell cell's `output`, a summary's `summary` and a file mention's `files[i].content`.
+- `pruneSupersededToolResults` accepts `cacheWarmSuffixTokens`, a hard ceiling on the sent context a rewrite may sit behind; a candidate over the ceiling is never rewritten, including as part of a batch the cache math would otherwise pay for.
+
+### Fixed
+
+- A compaction summary is written from a transcript with the model's own reasoning removed, on every dialect and with none, which was quoting thinking back at the endpoint and drawing a `reasoning_extraction` refusal.
+- Codex remote compaction requests declare the `responses_compaction_v2` implementation, matching the `{base}/codex/responses` route they are sent to.
+- A ChatGPT Codex server-side compaction now reduces the context it was paid to reduce: its stored window was not on the list of apis whose window can be replayed, so the entry counted as unusable, the whole pre-compaction span was re-expanded on the next rebuild, and the session crossed the threshold and compacted again on every turn.
+- Compaction shake keeps the image blocks in a tool result instead of discarding them with the text it replaces.
+- Remote compaction forwards the session's prompt cache key to the provider, so a session whose cache key differs from its session id compacts on the same cache lineage its turns use.
 
 ## [16.5.2] - 2026-07-14
 
@@ -1042,6 +1083,55 @@
 ## [1.337.0] - 2026-01-02
 
 Initial release under @oh-my-pi scope. See previous releases at [badlogic/pi-mono](https://github.com/badlogic/pi-mono).
+
+## [1.3.0] - 2026-08-28
+
+### Breaking Changes
+
+- `AgentOptions.cursorRulesResolver` is removed: an agent no longer supplies a second, per-api rule channel beside its system prompt.
+
+### Added
+
+- A ChatGPT OAuth (Codex) session compacts server-side via the Responses compaction endpoint, preserving encrypted reasoning state.
+
+### Changed
+
+- Compaction imports `ProviderHttpError` from its owning module rather than the `@veyyon/ai/error` barrel, cutting 14 modules off the engine's load graph with no change in behavior.
+- Streaming `message_update` snapshots share tool-call arguments by reference instead of deep-cloning them on every delta, cutting a large structured tool call's per-delta snapshot cost from ~0.5 s to ~8 ms, while terminal messages and the authoritative tool call a `toolcall_end` carries keep the sanitizing deep clone.
+- Superseded and useless tool results are now pruned as a batch whose combined size pays for the prompt-cache rewrite it forces, instead of only when a single result sits within 8,000 tokens of the end of the conversation.
+- The tokenizer takes `estimateTokensFromText` from `@veyyon/utils/tokens` rather than the package barrel, cutting the modules a token estimate loads from 92 to 10.
+- Compaction's directory-list documentation now uses canonical `search` `files` terminology instead of the retired `find` tool name. No runtime behavior changed.
+- A tool that blocks on only some of its operations declares interruptibility per call, so an interrupt arriving beside a non-blocking or malformed call no longer replaces that call's own result with a skipped placeholder.
+- A tool result that ran and failed no longer supersedes an earlier successful read of the same path, which replaced that file's content with a supersede notice and left the conversation only the error text.
+- A tool call whose id already carries a real result in the transcript is never executed a second time, whichever channel answered it; a never-ran placeholder still counts as unanswered and is retried.
+- An interrupted `cursor-agent` turn keeps a tool call whose arguments the start frame already delivered, instead of deleting it and telling the model its arguments never finished.
+
+### Fixed
+
+- Converted message wrappers preserve reference identity across turns when inputs are unchanged, avoiding unnecessary allocations and memo invalidations.
+- Fixed tool-result supersede pruning to parse multi-target `read` calls into target sets with per-target URL scheme exemption, retiring an earlier read result when all of its targets are covered by newer reads while preserving results with partial coverage.
+- Side requests derive a stable conversation ID per oneshot kind, preventing compaction, handoff, and branch summaries from overwriting live Cursor and Devin conversation state.
+- Aborting while paused rejects the pause wait and prevents the agent loop from starting another provider turn or paused tool.
+- A branch-summary reserve at or above the model's context window now falls back to the proportional 15% reserve instead of leaving a non-positive budget, which the entry preparation read as "no limit" and which sent the whole branch.
+
+## [1.2.0] - 2026-08-23
+
+### Breaking Changes
+
+- The minimum supported Bun runtime is now 1.4.0.
+
+### Fixed
+
+- The remote-summarizer cap comment names the profile-scoped log directory it writes to (`~/.veyyon/profiles/<name>/logs`) instead of the pre-migration `~/.veyyon/logs`. Comment only; the cap and the write path are unchanged.
+- A cancelled turn carries `Flag.Abort` whatever reason it was aborted with, instead of only when its text matched the generic `Request was aborted` sentinel.
+
+## [1.1.0] - 2026-08-20
+
+### Fixed
+
+- A generated summary that repeats itself is refused, and the history it would have replaced survives. Emptiness was already refused in three places, because an empty summary deletes the conversation and reports success; a summary that samples one sentence until the budget runs out is the same loss wearing content, and it passed every check. It is reachable by design: compaction generates through `completeSimple`, whose loop guard re-samples a stalled generation three times and then runs one final pass with the guard DISABLED so a stubborn loop returns raw output instead of a fatal stall — correct for a live turn that is on screen and can be interrupted, wrong for text that replaces the span it describes and is then read by every later turn as its own past. Every artifact a compaction leaves behind is covered, not just the one that was reported: `generateSummary` rejects a degenerate summary the way it rejects an empty one, `assertValidCompactionResult` rejects one from any other source (remote summarizer, compaction hook) in both `summary` and `shortSummary` immediately before history is rewritten, `generateHandoffFromContext` rejects a degenerate document rather than appending the `<files>` block to a loop, and `generateBranchSummary` degrades to its explicit "No summary generated" fallback and logs a warning, since a throw there would block the branch switch on a provider hiccup, which is why its empty case does not throw either. The floors are the loop guard's own, so one text cannot be a loop in the transcript and a compaction in the archive.
+- `compactWithProvider` forwards the live session identity (`sessionId`, provider session state, and the codex compaction context, tagged `responses_compact`) to the transport, which is what a host keying request identity to the conversation needs. Server-side compaction now runs for a ChatGPT OAuth (codex) session, where it previously could not resolve a transport at all and every compaction fell through to a local summary.
+- `estimateTokens` counts `fileMention` and `pythonExecution` messages, which both fell through to `default: return 0` and cost a session nothing. A `@file` mention carries up to 50KB of file body per turn and a `$` cell carries its code and its output, all of it sent to the provider and billed, so the compaction trigger, the pruning budgets and the context gauge each read short by the whole payload: one measured session's gauge said "61% left" while the request it had just sent was 40459 tokens against a 32768-token window, and the provider refused it. Host-contributed roles are now counted from one table beside `bashExecution`, and a mentioned image is charged the same fixed estimate as any other inline image.
 
 ## [1.0.47] - 2026-08-13
 

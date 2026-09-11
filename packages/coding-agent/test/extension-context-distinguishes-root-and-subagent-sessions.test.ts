@@ -22,8 +22,8 @@ import type {
 } from "@veyyon/coding-agent/extensibility/extensions";
 import { ExtensionRunner, ExtensionToolWrapper } from "@veyyon/coding-agent/extensibility/extensions";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 
 interface ObservedContextState {
@@ -63,7 +63,7 @@ describe("ExtensionContext distinguishes root and subagent sessions", () => {
 		fs.mkdirSync(cwd, { recursive: true });
 
 		const observationsFile = path.join(tempDir, "observations.jsonl");
-		const extensionPath = path.join(cwd, "identity-probe-extension.ts");
+		const extensionPath = path.join(tempDir, "identity-probe-extension.ts");
 
 		const extensionSource = `
 import * as fs from "node:fs";
@@ -130,6 +130,7 @@ export default function probeExtension(pi: ExtensionAPI): void {
 		const runner = session.extensionRunner;
 		expect(runner).toBeDefined();
 		if (runner) {
+			runner.initialize({} as ExtensionActions, {} as ExtensionContextActions, undefined, {} as ExtensionUIContext);
 			await runner.emit({ type: "session_start" });
 		}
 
@@ -270,6 +271,7 @@ export default function probeExtension(pi: ExtensionAPI): void {
 		const runner = session.extensionRunner;
 		expect(runner).toBeDefined();
 		if (runner) {
+			runner.initialize({} as ExtensionActions, {} as ExtensionContextActions, undefined, {} as ExtensionUIContext);
 			await runner.emit({ type: "session_start" });
 		}
 
@@ -451,7 +453,7 @@ export default function probeExtension(pi: ExtensionAPI): void {
 		const mockRootUI = {
 			select: async (title: string) => {
 				rootCards.push({ body: title });
-				return "allow-session";
+				return "Approve for session";
 			},
 		} as unknown as ExtensionUIContext;
 
@@ -497,7 +499,7 @@ export default function probeExtension(pi: ExtensionAPI): void {
 		const mockChildUI = {
 			select: async (title: string) => {
 				childCards.push({ body: title });
-				return "allow-session";
+				return "Approve for session";
 			},
 		} as unknown as ExtensionUIContext;
 

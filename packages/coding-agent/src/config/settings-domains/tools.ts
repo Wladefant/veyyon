@@ -1,5 +1,5 @@
 /** Tools domain slice of SETTINGS_SCHEMA — composed in ../settings-schema.ts. */
-import { DEFAULT_APPROVAL_MODE } from "../../tools/approval-modes";
+import { DEFAULT_APPROVAL_MODE } from "../../tools/core/approval-modes";
 import { DEFAULT_INLINE_FLOOR_FRACTION } from "./shared";
 
 export const TOOLS_SETTINGS = {
@@ -16,13 +16,13 @@ export const TOOLS_SETTINGS = {
 			group: "Approvals",
 			label: "Tool Approval Policies",
 			description:
-				"Per-tool approval policies. Set to 'allow' to auto-approve, 'prompt' to require confirmation, or 'deny' to block. Overrides are honored in every approval mode.",
+				"Per-tool approval policies. Set to 'allow' to auto-approve, 'prompt' to require confirmation, or 'deny' to block. Overrides are honored in every approval mode. Any other value denies that tool and is reported at startup.",
 		},
 	},
 
 	// Extra paths the destructive-command guard refuses to delete recursively.
 	//
-	// ADDITIONS ONLY, BY CONSTRUCTION. The compiled set in src/tools/bash-guard.ts
+	// ADDITIONS ONLY, BY CONSTRUCTION. The compiled set in src/tools/shell/bash-guard.ts
 	// (the home directory, the system roots, the credential directories) is not
 	// reachable from config in any direction, so this setting can make the guard
 	// stricter and can never make it weaker. A setting that could shrink a safety
@@ -41,7 +41,7 @@ export const TOOLS_SETTINGS = {
 
 	// Default tool approval mode (interaction tab, but governs the tool wrapper).
 	// The rungs and what each one still stops for live in
-	// `src/tools/approval-modes.ts`; `normalizeApprovalMode` maps the legacy
+	// `src/tools/core/approval-modes.ts`; `normalizeApprovalMode` maps the legacy
 	// names ("always-ask" = ask, "write"/"auto-edit" = ask-command), which stay
 	// accepted from stored configs and the CLI but are not offered in the UI.
 	"tools.approvalMode": {
@@ -67,7 +67,7 @@ export const TOOLS_SETTINGS = {
 				{
 					value: "ask",
 					label: "Ask everything",
-					description: "Every tool call asks first, reads included.",
+					description: "Every tool call prompts for approval, reads included.",
 				},
 				{
 					value: "ask-command",
@@ -147,7 +147,7 @@ export const TOOLS_SETTINGS = {
 			label: "Create Todos Automatically",
 			description: "How strongly to push automatic todo-list creation after the first message",
 			options: [
-				{ value: "default", label: "Default", description: "Model decides; no automatic todo list" },
+				{ value: "default", label: "Default", description: "Left to the model; no automatic todo list" },
 				{
 					value: "preferred",
 					label: "Preferred",
@@ -155,29 +155,6 @@ export const TOOLS_SETTINGS = {
 				},
 				{ value: "always", label: "Always", description: "Forces a comprehensive todo list on the first message" },
 			],
-		},
-	},
-
-	// Grep, glob, and AST tools
-	"glob.enabled": {
-		type: "boolean",
-		default: true,
-		ui: {
-			tab: "tools",
-			group: "Available Tools",
-			label: "Glob",
-			description: "Enable the glob tool for glob-based file lookup",
-		},
-	},
-
-	"grep.enabled": {
-		type: "boolean",
-		default: true,
-		ui: {
-			tab: "tools",
-			group: "Available Tools",
-			label: "Grep",
-			description: "Enable the grep tool for regex content search",
 		},
 	},
 
@@ -202,9 +179,9 @@ export const TOOLS_SETTINGS = {
 			group: "Output Limits",
 			label: "Inline Output Floor",
 			description:
-				"Smallest share of the inline output budget an early tool result may use before the rest spills to an artifact. A result that arrives early is re-read on every later turn, so it is charged more tightly than one that arrives near the end. Lower spills sooner and costs fewer context tokens; 1 keeps the flat cap and never spills early. This governs every tool that streams output, including eval, bash, ssh and the interactive shell, as well as grep and the browser.",
+				"Smallest share of the inline output budget a tool result early in the conversation may use before the rest is saved as an artifact. A lower value saves output to an artifact sooner and costs fewer context tokens. 1: every result gets the full budget. Applies to every tool that streams output: bash, eval, ssh, the interactive shell, search and the browser.",
 			options: [
-				{ value: "1", label: "Flat cap (no early spill)" },
+				{ value: "1", label: "Flat cap (full budget for every result)" },
 				{ value: "0.5", label: "Half budget" },
 				{ value: "0.25", label: "Quarter budget" },
 				{ value: "0.1", label: "Tenth budget" },
@@ -213,14 +190,14 @@ export const TOOLS_SETTINGS = {
 		},
 	},
 
-	"grep.contextBefore": {
+	"search.contextBefore": {
 		type: "number",
 		default: 1,
 		ui: {
 			tab: "tools",
-			group: "Grep & Browser",
-			label: "Grep Context Before",
-			description: "Lines of context before each grep match",
+			group: "Search Context",
+			label: "Text Context Before",
+			description: "Lines of context before each text search match",
 			options: [
 				{ value: "0", label: "0 lines" },
 				{ value: "1", label: "1 line" },
@@ -231,14 +208,20 @@ export const TOOLS_SETTINGS = {
 		},
 	},
 
-	"grep.contextAfter": {
+	// Three trailing lines came from the retired `grep` tool, where the number was
+	// chosen for the terminal code frame a person reads. A tool result is also sent
+	// to the model on every later request of the session, so a line kept here is
+	// billed once per remaining request, not once. Measured over eight searches of
+	// this repository, three trailing lines cost 16,836 tokens against 11,483 at
+	// one, for context the model reaches by reading the file at a range instead.
+	"search.contextAfter": {
 		type: "number",
-		default: 3,
+		default: 1,
 		ui: {
 			tab: "tools",
-			group: "Grep & Browser",
-			label: "Grep Context After",
-			description: "Lines of context after each grep match",
+			group: "Search Context",
+			label: "Text Context After",
+			description: "Lines of context after each text search match",
 			options: [
 				{ value: "0", label: "0 lines" },
 				{ value: "1", label: "1 line" },
@@ -247,17 +230,6 @@ export const TOOLS_SETTINGS = {
 				{ value: "5", label: "5 lines" },
 				{ value: "10", label: "10 lines" },
 			],
-		},
-	},
-
-	"astGrep.enabled": {
-		type: "boolean",
-		default: true,
-		ui: {
-			tab: "tools",
-			group: "Available Tools",
-			label: "AST Grep",
-			description: "Enable the ast_grep tool for structural AST search",
 		},
 	},
 
@@ -281,7 +253,8 @@ export const TOOLS_SETTINGS = {
 			tab: "tools",
 			group: "Available Tools",
 			label: "Debug",
-			description: "Enable the debug tool for DAP-based debugging",
+			description:
+				"Enable the debug tool for DAP-based debugging. The tool loads only where a configured adapter command resolves.",
 		},
 	},
 
@@ -293,6 +266,27 @@ export const TOOLS_SETTINGS = {
 			group: "Available Tools",
 			label: "Launch",
 			description: "Enable the launch tool for supervising shared long-running project processes",
+		},
+	},
+	"launch.cleanupWaitMs": {
+		type: "number",
+		default: 15 * 60 * 1000,
+		ui: {
+			tab: "tools",
+			group: "Launch",
+			label: "Launch Cleanup Wait",
+			min: 0, // Wait TTL cannot be negative (0 = never clean up)
+			condition: "launchEnabled",
+			description:
+				"How long an exited process record is retained before being purged from memory and disk (0 = never clean up)",
+			options: [
+				{ value: "0", label: "Never", description: "Retain exited process records indefinitely" },
+				{ value: "300000", label: "5 minutes", description: "Purge exited process records after 5 minutes" },
+				{ value: "600000", label: "10 minutes", description: "Purge exited process records after 10 minutes" },
+				{ value: "900000", label: "15 minutes", description: "Purge exited process records after 15 minutes" },
+				{ value: "1800000", label: "30 minutes", description: "Purge exited process records after 30 minutes" },
+				{ value: "3600000", label: "1 hour", description: "Purge exited process records after 1 hour" },
+			],
 		},
 	},
 
@@ -308,7 +302,7 @@ export const TOOLS_SETTINGS = {
 	},
 	"generate_image.enabled": {
 		type: "boolean",
-		default: true,
+		default: false,
 		ui: {
 			tab: "tools",
 			group: "Available Tools",
@@ -462,7 +456,7 @@ export const TOOLS_SETTINGS = {
 		default: true,
 		ui: {
 			tab: "tools",
-			group: "Grep & Browser",
+			group: "Browser",
 			label: "Headless Browser",
 			condition: "browserEnabled",
 			description: "Launch browser in headless mode (disable to show browser UI)",
@@ -474,7 +468,7 @@ export const TOOLS_SETTINGS = {
 		default: true,
 		ui: {
 			tab: "tools",
-			group: "Grep & Browser",
+			group: "Browser",
 			label: "cmux Browser",
 			condition: "browserEnabled",
 			description:
@@ -486,7 +480,7 @@ export const TOOLS_SETTINGS = {
 		default: undefined,
 		ui: {
 			tab: "tools",
-			group: "Grep & Browser",
+			group: "Browser",
 			label: "Screenshot Directory",
 			condition: "browserEnabled",
 			description:
@@ -502,7 +496,7 @@ export const TOOLS_SETTINGS = {
 			tab: "tools",
 			group: "Execution",
 			label: "Intent Tracing",
-			description: "Ask the agent to describe the intent of each tool call before executing it",
+			description: "Prompt the model to state the intent of each tool call before it runs",
 		},
 	},
 	"tools.abortOnFabricatedResult": {
@@ -515,6 +509,12 @@ export const TOOLS_SETTINGS = {
 			description:
 				"With in-band tool calls, stop the model immediately when it starts hallucinating a tool result mid-turn. Disable to let the model finish generating and discard the fabricated continuation instead.",
 		},
+	},
+
+	// Optional Python eval workspace guidance
+	"eval.pyWorkspace": {
+		type: "boolean",
+		default: false,
 	},
 
 	"tools.maxTimeout": {
@@ -582,11 +582,11 @@ export const TOOLS_SETTINGS = {
 		type: "number",
 		default: 120_000,
 		ui: {
-			tab: "subagents",
+			tab: "agents",
 			group: "Coordination",
 			label: "IRC Timeout",
 			description:
-				"Default timeout for irc wait (and send await:true) in milliseconds; 0 disables the timeout. IRC is how a parent and its subagents talk, which is why it is configured here.",
+				"How long an irc wait, or an irc send with await, waits for a reply before it returns without one. Disabled: waits until a reply arrives.",
 			options: [
 				{ value: "0", label: "Disabled" },
 				{ value: "30000", label: "30 seconds" },
@@ -617,7 +617,7 @@ export const TOOLS_SETTINGS = {
 			group: "Bash",
 			label: "Auto-Background After",
 			description:
-				"Max wall-clock time a bash call runs in the foreground before it is moved to a background job (result delivered later). Frees the model to keep working and protects the prompt cache, which a long foreground command would otherwise blow past. Fires on elapsed time even while output is streaming. 0 backgrounds immediately.",
+				"How long a bash call runs in the foreground before it is moved to a background job whose result is delivered later. Counted on elapsed time, including while output is streaming. 0: every call is backgrounded at once.",
 			options: [
 				{ value: "0", label: "Immediately" },
 				{ value: "30000", label: "30 seconds" },
@@ -637,7 +637,7 @@ export const TOOLS_SETTINGS = {
 			group: "Bash",
 			label: "Stall After",
 			description:
-				"When stall detection is on, how long a bash call may produce no new output before it is treated as possibly stuck, backgrounded, and flagged so the model can cancel it if it is truly hung. Measures idle time (quiet output), not total run time.",
+				"How long a bash call may produce no output before it is moved to a background job and flagged as possibly stuck. Counted from the last output, not from the start of the call.",
 			options: [
 				{ value: "15000", label: "15 seconds" },
 				{ value: "30000", label: "30 seconds" },
@@ -670,7 +670,7 @@ export const TOOLS_SETTINGS = {
 			group: "Discovery & MCP",
 			label: "Essential Tools Override",
 			description:
-				"Override the always-loaded built-in tools (default: read, bash, launch, edit, write, glob, eval). Leave empty to use defaults.",
+				"Override the always-loaded built-in tools (default: read, bash, launch, edit, write, search, eval). Leave empty to use defaults.",
 		},
 	},
 
@@ -682,7 +682,7 @@ export const TOOLS_SETTINGS = {
 			tab: "tools",
 			group: "Discovery & MCP",
 			label: "MCP Tool Discovery",
-			description: "Hide MCP tools by default and expose them through a tool discovery tool",
+			description: "Hide MCP tools from the tool list and expose them through a tool discovery tool",
 		},
 	},
 
@@ -715,9 +715,9 @@ export const TOOLS_SETTINGS = {
 			min: 0, // a debounce cannot be negative
 			tab: "tools",
 			group: "Discovery & MCP",
-			label: "MCP Notification Debounce",
+			label: "MCP Notification Delay",
 			description:
-				"Debounce window in milliseconds for MCP resource updates before injecting them into the conversation",
+				"Milliseconds of quiet after an MCP resource update before one notification for that resource is added to the conversation; further updates to the same resource inside the window restart it",
 		},
 	},
 } as const;

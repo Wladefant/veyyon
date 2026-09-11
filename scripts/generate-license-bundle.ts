@@ -8,19 +8,19 @@ const LEGAL_ARTIFACTS = [
 	"LICENSE",
 	"NOTICE",
 	"UPSTREAM.md",
-	"crates/veyyon-natives/src/fonts/Silver.LICENSE",
-	"crates/veyyon-shell/NOTICE",
-	"docs/handbook/book/fonts/OPEN-SANS-LICENSE.txt",
-	"docs/handbook/book/fonts/SOURCE-CODE-PRO-LICENSE.txt",
-	"packages/coding-agent/src/markit/NOTICE",
+	"natives/bridge/addon/src/fonts/Silver.LICENSE",
+	"natives/shell/NOTICE",
+	"docs/handbook/fonts/OPEN-SANS-LICENSE.txt",
+	"docs/handbook/fonts/SOURCE-CODE-PRO-LICENSE.txt",
+	"packages/coding-agent/src/export/markit/NOTICE",
 	"packages/utils/src/vendor/mermaid-ascii/NOTICE",
-	"python/veybot/LICENSE",
-	"python/veyyon-rpc/LICENSE",
+	"clients/python/veybot/LICENSE",
+	"clients/python/veyyon-rpc/LICENSE",
 ] as const;
 
 async function legalArtifactPaths(root: string): Promise<string[]> {
 	const paths: string[] = [...LEGAL_ARTIFACTS];
-	const vendorLicenses = new Glob("crates/vendor/**/LICENSE");
+	const vendorLicenses = new Glob("natives/vendor/**/LICENSE");
 	for await (const file of vendorLicenses.scan({ cwd: root, onlyFiles: true })) paths.push(file);
 	return [...new Set(paths)].sort();
 }

@@ -25,7 +25,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isReleaseTag } from "@veyyon/utils/semver";
-import { hasVersionHeading, unreleasedEntries } from "./changelog-unreleased.ts";
+import { hasVersionHeading, unreleasedEntries } from "./changelog-unreleased";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -204,7 +204,7 @@ export async function verifyPublishedAssetManifest(tag: string): Promise<void> {
 /**
  * The one changelog every published version is read back from.
  *
- * `website/tools/gen-changelog.mjs` reconciles published GitHub releases against this single file and
+ * `apps/site/tools/gen-changelog.mjs` reconciles published GitHub releases against this single file and
  * `reportUndocumentedReleases` fails the website build for any published version missing from it. A
  * package changelog that documents nothing costs nothing; this one costs a public, undocumented
  * release, so it is the file a cut may never leave behind.
@@ -266,7 +266,7 @@ export function assertReleaseIsDocumented(version: string, changelogs: readonly 
  * The post-condition of the changelog roll, checked against what the roll actually wrote. Two ways it
  * can be wrong: the version has no section in the changelog the release notes are built from, or a
  * package still holds bullets under `## [Unreleased]` (the roll found nothing to anchor to and left
- * real entries stranded, which is how `packages/hashline` once published a phantom version).
+ * real entries stranded, which is how `plugins/hashline` once published a phantom version).
  */
 export function preparedReleaseChangelogFailures(version: string, changelogs: readonly PackageChangelog[]): string[] {
 	const failures: string[] = [];

@@ -4,7 +4,7 @@
  * WHY EACH DIRECTORY OWNS ITS OWN ROWS. `registry.ts` is still the ONE place that says which prompts exist,
  * and it aggregates every module like this one; what changed is that the 163 `import … with { type: "text" }`
  * specifiers no longer sit in a single module. They did, and the consequence was that importing one prompt
- * statically reached all 163: `tools/read.ts` needs `PROMPTS["tools/read"]` to render its own description and
+ * statically reached all 163: `tools/fs/read.ts` needs `PROMPTS["tools/read"]` to render its own description and
  * paid 167 modules for it, the largest single edge that file had. A consumer now imports the directory it
  * belongs to and pays for that directory.
  *
@@ -18,18 +18,18 @@
  * for these ids, and the coverage suite fails on a second importer.
  */
 
-import type { PromptEntry } from "@veyyon/utils/prompt-registry";
+import { definePromptRows, type PromptEntry } from "@veyyon/utils/prompt-registry";
 
 import planModeActive from "./active.md" with { type: "text" };
+import planModeAgent from "./agent.md" with { type: "text" };
 import planModeApproved from "./approved.md" with { type: "text" };
 import planModeCompactInstructions from "./compact-instructions.md" with { type: "text" };
 import planModeReference from "./reference.md" with { type: "text" };
-import planModeSubagent from "./subagent.md" with { type: "text" };
 import planModeToolDecisionReminder from "./tool-decision-reminder.md" with { type: "text" };
 import planModeYoloHandoff from "./yolo-handoff.md" with { type: "text" };
 
 /** Every prompt under `src/prompts/plan-mode/`, keyed by its id (the path under `src/prompts/`). */
-export const planModePrompts = {
+export const planModePrompts = definePromptRows({
 	"plan-mode/active": { text: planModeActive, purpose: "the read-only contract while plan mode is on" },
 	"plan-mode/approved": { text: planModeApproved, purpose: "hands over an approved plan for execution" },
 	"plan-mode/compact-instructions": {
@@ -37,9 +37,9 @@ export const planModePrompts = {
 		purpose: "distills the plan-mode discussion before execution",
 	},
 	"plan-mode/reference": { text: planModeReference, purpose: "points a later turn back at the approved plan file" },
-	"plan-mode/subagent": {
-		text: planModeSubagent,
-		purpose: "the prompt a subagent runs under while plan mode is active",
+	"plan-mode/agent": {
+		text: planModeAgent,
+		purpose: "the prompt a spawned agent runs under while plan mode is active",
 	},
 	"plan-mode/tool-decision-reminder": {
 		text: planModeToolDecisionReminder,
@@ -49,4 +49,4 @@ export const planModePrompts = {
 		text: planModeYoloHandoff,
 		purpose: "hands an approved plan to an agent that did not draft it",
 	},
-} satisfies Record<string, PromptEntry>;
+} satisfies Record<string, PromptEntry>);

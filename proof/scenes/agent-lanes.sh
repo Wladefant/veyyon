@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Two workers on one session, and the panel that shows them.
+#
+# An agent row has to show the part a transcript alone cannot: two lanes running
+# at once, each with its own progress, and the control centre listing them while
+# they are live rather than after they returned. So the scene opens the panel while
+# the workers are still working, and again once they are idle, which is the same
+# differential the row claims.
+settle 20
+shot idle
+
+# The server is warmed by the runner before the recording starts, with a request that
+# never reaches the screen. This scene used to spend its first turn asking the model to
+# say "ready", which paid for prompt evaluation in full view: the published row opened
+# on a question nobody asked and an answer that means nothing.
+
+submit "use two task agents in parallel: one inspects src/rate-limiter.ts and one inspects src/rate-limiter.test.ts. Each reports one concise observation. Neither edits anything."
+settle 25
+shot lanes-live
+
+slash "/agents"
+settle 8
+shot control-centre-live
+k Escape
+sleep 1.5
+
+settle 60
+shot lanes-returned
+
+slash "/agents"
+settle 8
+shot control-centre-idle
+k Escape
+sleep 1.5

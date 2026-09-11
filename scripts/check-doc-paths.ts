@@ -32,7 +32,8 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { listTrackedMarkdown, readIfPresent } from "./check-doc-links";
+import { listTrackedMarkdown } from "./check-doc-links";
+import { readIfPresent } from "./workspace-layout";
 
 export interface DeadPath {
 	file: string;
@@ -57,16 +58,49 @@ export interface PathCheckResult {
  * `~/.veyyon/config.yml`, `and/or`, other projects' trees. Anchoring on real
  * top-level directories is what keeps the gate's failures worth reading.
  *
- * `.veyyon/` is deliberately absent, even though it is a real tracked directory.
- * It names two different things in this repo's docs and only one of them is a
- * file here: `.veyyon/skills/ui` is tracked, while `.veyyon/mcp.json`,
- * `.veyyon/settings.json` and `.veyyon/RULES.md` are files a USER creates in
- * THEIR project. Every page that teaches project configuration writes the second
- * kind, so anchoring on the prefix produces a screenful of failures that are all
- * the documentation working correctly, and a gate whose failures are usually
- * wrong is a gate people turn off.
+ * Every tracked top-level directory is a root, and
+ * `check-doc-paths.test.ts` derives that set from the tree at run time, so a new
+ * one fails the suite until it is listed here or excluded below. The list used to
+ * stop at `packages/`, `scripts/`, `docs/`, `website/`, `examples/`, `assets/` and
+ * `.github/`, which left `contracts/`, `hosts/`, `kernel/`, `natives/`,
+ * `plugins/`, `tests/`, `proof/`, `python/`, `fixtures/`, `fuzz/`, `patches/`,
+ * `types/` and `.githooks/` invisible -- the directories a doc names most often
+ * right after code moves into them, which is the one moment this gate exists for.
+ * `examples/` is gone with them: no such directory is tracked, so every span
+ * under it was dead by construction.
  */
-const SOURCE_ROOTS = ["packages/", "scripts/", "docs/", "website/", "examples/", "assets/", ".github/"] as const;
+export const SOURCE_ROOTS = [
+	".githooks/",
+	".github/",
+	"apps/",
+	"assets/",
+	"clients/",
+	"contracts/",
+	"demo/",
+	"docs/",
+	"hosts/",
+	"kernel/",
+	"natives/",
+	"packages/",
+	"patches/",
+	"plugins/",
+	"proof/",
+	"scripts/",
+	"tests/",
+	"types/",
+] as const;
+
+/**
+ * Tracked top-level directories that are deliberately not source roots.
+ *
+ * `.veyyon/` is the only one. In this repo's docs it names files a USER creates in
+ * THEIR project -- `.veyyon/mcp.json`, `.veyyon/settings.json`, `.veyyon/RULES.md`
+ * -- not the profile fixtures tracked here under the same name. Every page that
+ * teaches project configuration writes that kind, so anchoring on the prefix
+ * produces a screenful of failures that are all the documentation working
+ * correctly, and a gate whose failures are usually wrong is a gate people turn off.
+ */
+export const NON_SOURCE_ROOTS: readonly string[] = Object.freeze([".veyyon/"]);
 
 /**
  * Extensions that make a code span a FILE reference rather than a prose fragment.
@@ -160,27 +194,39 @@ export function extractCodeSpanPaths(markdown: string): FoundPath[] {
 }
 
 /**
- * The package directory a doc lives in, or undefined for a doc outside `packages/`.
+ * The bases a doc's paths resolve against, nearest first: every directory on the
+ * doc's own path, then the repo root.
  *
- * A README inside a package writes its own paths package-relative, because that is
- * how its reader will run them: `packages/catalog/README.md` says "regenerate with
- * `scripts/generate-models.ts`", and `packages/catalog/scripts/generate-models.ts`
- * is exactly where that file is. Judging those against the repo root alone reports
- * every in-package README as broken, which is the false-positive class that would
- * have made this gate unusable.
+ * A doc inside a workspace member writes its own paths member-relative, because
+ * that is how its reader will run them: `packages/catalog/README.md` says
+ * "regenerate with `scripts/generate-models.ts`", and
+ * `packages/catalog/scripts/generate-models.ts` is exactly where that file is.
+ * Judging those against the repo root alone reports every in-member README as
+ * broken, which is the false-positive class that would have made this gate
+ * unusable.
+ *
+ * The rule used to name `packages/<name>` alone, so it could not see a member at
+ * any other depth: `hosts/terminal/engine`, `contracts/wire`, `natives/bridge/addon`
+ * and `kernel` all write their own paths the same way, and nothing in the rule
+ * distinguished them from a doc with no member to be relative to. Walking the
+ * doc's own directory chain answers for every depth without a list of member
+ * layouts to keep current.
  */
-function enclosingPackage(relFile: string): string | undefined {
+function docBases(relFile: string): string[] {
 	const parts = relFile.split("/");
-	if (parts[0] !== "packages" || parts.length < 3) return undefined;
-	return `${parts[0]}/${parts[1]}`;
+	const bases: string[] = [];
+	// The file's own name is not a directory, and the deepest directory is the
+	// nearest base, so the chain is walked inward from the file and reversed.
+	for (let end = parts.length - 1; end > 0; end--) bases.push(parts.slice(0, end).join("/"));
+	return bases;
 }
 
 /**
  * Paths the repository itself declares are generated, asked of `.gitignore`.
  *
  * A doc that names a build output names something no clean checkout contains:
- * `packages/deepswe-bench/runs/` appears on the first benchmark run,
- * `packages/natives/native/.build/` when napi-rs compiles, and
+ * `tests/evals/runs/` appears on the first benchmark run,
+ * `natives/bridge/bindings/native/.build/` when napi-rs compiles, and
  * `tool-views.generated.js` when `bun run gen:tool-views` does. The gate reported
  * all of them as rot, and they are the opposite: a doc telling you where the
  * build will put something is doing its job.
@@ -227,15 +273,15 @@ function ignoredPaths(rootDir: string, candidates: readonly string[]): Set<strin
 /**
  * Whether `target`, as written in `relFile`, names something that exists.
  *
- * Two bases, in the order a reader would try them: the repo root, then the package
- * the doc belongs to. A doc outside `packages/` gets the repo root only, so a path
- * in `docs/internal/` must be written from the root -- which is the whole point,
- * since its reader has no package to be relative to.
+ * The bases a reader would try, in that order: the repo root, then the doc's own
+ * directory chain from nearest outward. A doc directly under `docs/` therefore
+ * gets the root and `docs/`, so a path in `docs/internal/` is still written from
+ * the root -- which is the whole point, since its reader has no member to be
+ * relative to.
  */
 function resolvesFor(rootDir: string, relFile: string, target: string): boolean {
 	if (fs.existsSync(path.join(rootDir, target))) return true;
-	const pkg = enclosingPackage(relFile);
-	return pkg !== undefined && fs.existsSync(path.join(rootDir, pkg, target));
+	return docBases(relFile).some(base => fs.existsSync(path.join(rootDir, base, target)));
 }
 
 /**
@@ -252,34 +298,29 @@ function resolvesFor(rootDir: string, relFile: string, target: string): boolean 
  *    `scripts/foo.js` in a prompt teaching skill invocation), which by definition
  *    does not exist yet;
  *  - a path in the USER'S project rather than this one
- *    (`.github/copilot-instructions.md`, the illustrative
- *    `packages/server/src/database/connection.ts` that argot's docs use as a
- *    stand-in for "some long path in your repo").
+ *    (`.github/copilot-instructions.md`).
  *
- * An entry here is a promise to remove it, and two have been kept. The list used
- * to carry `docs/internal/natives-architecture.md:77`, which named a generator
- * script for the per-platform natives leaf packages. The script did not move, it
- * was deleted when the npm publish channel was removed, and the doc had gone on
- * describing it. The doc now describes what actually ships, so the path is gone
- * and the entry with it. It also carried `docs/context-files.md:151:docs/setup.md`,
- * which was only the filler path in an example of trailing-punctuation trimming;
- * the example now uses `notes/setup.md`, which names no source root, so it needs
- * no entry at all. Every remaining entry is one of the three kinds above.
+ * An entry here is a promise to remove it, and four have been kept. The list
+ * used to carry `docs/internal/natives-architecture.md:77`, which named a
+ * generator script for the per-platform natives leaf packages. The script did not
+ * move, it was deleted when the npm publish channel was removed, and the doc had
+ * gone on describing it. The doc now describes what actually ships, so the path is
+ * gone and the entry with it. It also carried
+ * `docs/handbook/src/context/context-files.md:151:docs/setup.md`, which was only the filler path in an
+ * example of trailing-punctuation trimming; the example now uses
+ * `notes/setup.md`, which names no source root, so it needs no entry at all. Every
+ * remaining entry is one of the three kinds above.
  *
  * Adding to this list is deliberately awkward: the exact line number is part of
  * the key, so an entry stops matching the moment the doc is edited around it, and
  * a stale entry is caught by `check-doc-paths.test.ts`.
  */
 export const DEAD_PATH_BASELINE: readonly string[] = Object.freeze([
-	".veyyon/skills/tool-prompt-optimization/SKILL.md:14:scripts/probe.ts",
-	".veyyon/skills/tool-prompt-optimization/SKILL.md:28:scripts/probe-builtin.ts",
-	"docs/context-files.md:64:.github/copilot-instructions.md",
-	"docs/context-files.md:67:.github/instructions/",
-	"docs/context-files.md:243:.github/copilot-instructions.md",
+	"docs/handbook/src/context/context-files.md:64:.github/copilot-instructions.md",
+	"docs/handbook/src/context/context-files.md:67:.github/instructions/",
+	"docs/handbook/src/context/context-files.md:243:.github/copilot-instructions.md",
 	"docs/internal/toolconv/deepseek.md:101:assets/search_tool_trajectory.html",
 	"packages/coding-agent/src/prompts/skills/user-invocation.md:8:scripts/foo.js",
-	"website/blog/argot.md:12:packages/server/src/database/connection.ts",
-	"website/blog/argot.md:43:packages/server/src/database/connection.ts",
 ]);
 
 /** The baseline key for a finding: file, line, and the span exactly as written. */
@@ -318,13 +359,12 @@ export function checkDocPaths(rootDir: string, relFiles: string[]): PathCheckRes
 	// which is the doc doing its job rather than rot. Asked once, in a batch,
 	// after the scan, so the common case costs nothing.
 	//
-	// Both spellings are offered, the same two `resolvesFor` tries: a package
-	// README naming its own build output writes it package-relative, and asking
-	// only the root-relative form would report it as rot.
+	// Every spelling `resolvesFor` tries is offered: a member README naming its own
+	// build output writes it member-relative, and asking only the root-relative form
+	// would report it as rot.
 	const spellings = (d: DeadPath): string[] => {
 		const target = withoutLocator(d.target);
-		const pkg = enclosingPackage(d.file);
-		return pkg === undefined ? [target] : [target, `${pkg}/${target}`];
+		return [target, ...docBases(d.file).map(base => `${base}/${target}`)];
 	};
 	const generated = ignoredPaths(rootDir, result.dead.flatMap(spellings));
 	result.dead = result.dead.filter(d => !spellings(d).some(s => generated.has(s)));

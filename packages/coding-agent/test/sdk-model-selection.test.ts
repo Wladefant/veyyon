@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { FetchImpl } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { buildModel } from "@veyyon/catalog/build";
 import { writeModelCache } from "@veyyon/catalog/model-cache";
 import { getBundledModel } from "@veyyon/catalog/models";
@@ -10,8 +11,7 @@ import { AsyncJobManager } from "@veyyon/coding-agent/async/job-manager";
 import { ModelRegistry, type ProviderConfigInput } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession, type ExtensionFactory } from "@veyyon/coding-agent/sdk";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 
 describe("createAgentSession deferred model pattern resolution", () => {
@@ -51,7 +51,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 	const providerExtension: ExtensionFactory = pi => {
 		pi.registerProvider("runtime-provider", {
 			baseUrl: "https://runtime.example.com/v1",
-			apiKey: "RUNTIME_KEY",
+			apiKey: "literal:RUNTIME_KEY",
 			api: "openai-completions",
 			models: [
 				{
@@ -78,7 +78,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 
 	const dynamicOnlyProviderConfig: ProviderConfigInput = {
 		baseUrl: "https://runtime.example.com/v1",
-		apiKey: "RUNTIME_KEY",
+		apiKey: "literal:RUNTIME_KEY",
 		api: "openai-completions",
 		fetchDynamicModels: async () => [
 			{
@@ -205,7 +205,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		expect(modelFallbackMessage).toContain("/model");
 	});
 
-	test("uses auth fallback when deferred subagent modelPattern resolves without working credentials", async () => {
+	test("uses auth fallback when deferred agent modelPattern resolves without working credentials", async () => {
 		const parentModel = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!parentModel) {
 			throw new Error("Expected bundled anthropic parent model");
@@ -266,17 +266,17 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		}
 	});
 
-	test("installs fallback chain for remaining deferred subagent modelPattern candidates", async () => {
+	test("installs fallback chain for remaining deferred agent modelPattern candidates", async () => {
 		const { session } = await createAgentSession({
 			...(await buildSessionOptions(["runtime-provider/runtime-model", "runtime-provider/runtime-reasoning-model"])),
-			modelPatternFallbackRole: "subagent:deferred",
+			modelPatternFallbackRole: "agent:deferred",
 		});
 
 		try {
 			expect(session.model?.provider).toBe("runtime-provider");
 			expect(session.model?.id).toBe("runtime-model");
-			expect(session.settings.getModelRole("subagent:deferred")).toBe("runtime-provider/runtime-model");
-			expect(session.settings.get("retry.fallbackChains")["subagent:deferred"]).toEqual([
+			expect(session.settings.getModelRole("agent:deferred")).toBe("runtime-provider/runtime-model");
+			expect(session.settings.get("retry.fallbackChains")["agent:deferred"]).toEqual([
 				"runtime-provider/runtime-reasoning-model",
 			]);
 		} finally {
@@ -287,14 +287,14 @@ describe("createAgentSession deferred model pattern resolution", () => {
 	test("splits deferred comma-delimited modelPattern and installs fallback chain", async () => {
 		const { session } = await createAgentSession({
 			...(await buildSessionOptions("runtime-provider/runtime-model,runtime-provider/runtime-reasoning-model")),
-			modelPatternFallbackRole: "subagent:deferred",
+			modelPatternFallbackRole: "agent:deferred",
 		});
 
 		try {
 			expect(session.model?.provider).toBe("runtime-provider");
 			expect(session.model?.id).toBe("runtime-model");
-			expect(session.settings.getModelRole("subagent:deferred")).toBe("runtime-provider/runtime-model");
-			expect(session.settings.get("retry.fallbackChains")["subagent:deferred"]).toEqual([
+			expect(session.settings.getModelRole("agent:deferred")).toBe("runtime-provider/runtime-model");
+			expect(session.settings.get("retry.fallbackChains")["agent:deferred"]).toEqual([
 				"runtime-provider/runtime-reasoning-model",
 			]);
 		} finally {

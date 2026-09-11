@@ -21,7 +21,6 @@ Common launch options:
 | `--approval-mode <policy>` | When to ask before running commands |
 | `--profile <name>` | Use an isolated profile agent directory |
 | `--model <id>` | Interactive model (`provider/model`) |
-| `--subagent-model <id>` | Model for spawned task subagents |
 | `--compaction-model <id>` | Model for context compaction |
 
 Config precedence: CLI flags → `--config` overlays → profile config → defaults. See
@@ -66,6 +65,7 @@ Unknown first tokens route to `launch` as a prompt:
 | `tiny-models` | | On-device tiny model utilities |
 | `token` | | Print a provider's API key or OAuth token |
 | `ttsr` | | Time-traveling stream rules test |
+| `trust` | | Decide whether this project's code may run ([Project trust](./project-trust.md)) |
 | `update` | | Self-update |
 | `usage` | | Provider usage limits |
 | `worktree` | `wt` | Git worktree helpers |
@@ -101,7 +101,7 @@ The `session.instrumentation` setting controls the stored detail:
 - `off` stores the normal resumable conversation and tool history without extra telemetry. Stats still use normal assistant usage and messages.
 - `basic` adds lifecycle and checkpoints, task-state transitions, tool wall-clock and status, and model request timing.
 - `rich` adds context attribution, agent-message delivery, tool scheduling and result weight, model token throughput, and richer rollups.
-- `ultra` adds argument fingerprints, abort state, compaction links, directional agent routes, per-task transitions, cache and reasoning detail, and upstream-provider provenance.
+- `ultra` adds argument fingerprints, abort state, compaction links, directional agent routes, per-task transitions, cache and reasoning detail, and upstream-provider details.
 
 The setting applies immediately. A new level starts a new measured lifecycle interval. A turn already in flight keeps the lower of its dispatch level and the current level when it is stored. If you turn instrumentation off before that turn finishes, its added study fields are omitted. Normal conversation and tool history remain resumable.
 
@@ -110,7 +110,7 @@ Use `ultra` for a session you want to study in full, or create a study profile w
 setting and profile behavior.
 
 `--json` prints the complete report, including every turn; the text view caps the
-longest tables and says so when it does.
+longest tables and reports it when it does.
 
 There are no `veyyon app-server`, `exec-server`, `execpolicy`, or `responses-api-proxy` subcommands,
 and no top-level `resume` / `fork` / `archive` verbs. Resume and branch from the TUI (`/resume`,

@@ -3,7 +3,7 @@
  * Why: operator prompt must not drop reason or invent MCP origin for local tools.
  */
 import { describe, expect, it } from "bun:test";
-import { formatApprovalPrompt } from "../src/tools/approval";
+import { formatApprovalPrompt } from "../src/tools/core/approval";
 
 describe("formatApprovalPrompt reason and details matrix", () => {
 	it("bare tool name only", () => {
@@ -57,7 +57,7 @@ describe("formatApprovalPrompt reason and details matrix", () => {
 		expect(out).toBe("Allow tool: bash\nkeep");
 	});
 
-	const tools = ["bash", "read", "write", "edit", "grep", "glob", "mcp__a__b", "resolve"];
+	const tools = ["bash", "read", "write", "edit", "search", "mcp__a__b", "resolve"];
 	for (const name of tools) {
 		it(`name line for ${name}`, () => {
 			expect(formatApprovalPrompt({ name }, {}).startsWith(`Allow tool: ${name}`)).toBe(true);

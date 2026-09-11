@@ -5,11 +5,11 @@ import {
 	MANAGED_SKILLS_PROVIDER_ID,
 	sanitizeManagedDescription,
 } from "../autolearn/managed-skills";
-import { skillCapability } from "../capability/skill";
-import type { SourceMeta } from "../capability/types";
 import type { SkillsSettings } from "../config/settings";
 import { type DiscoveredSkill, loadCapability } from "../discovery";
 import { PROVIDER_ID as NATIVE_SKILL_PROVIDER } from "../discovery/builtin";
+import { skillCapability } from "../discovery/capability/skill";
+import type { SourceMeta } from "../discovery/capability/types";
 import { compareSkillOrder, scanSkillsFromDir } from "../discovery/helpers";
 import { PROVIDER_ID as VEYYON_PLUGINS_SKILL_PROVIDER } from "../discovery/veyyon-plugins";
 import { skillsPrompts } from "../prompts/skills/rows";
@@ -124,6 +124,19 @@ export interface LoadSkillsOptions extends SkillsSettings {
 	agentDir?: string;
 }
 
+/** Each skill's real path, resolved in parallel; a path that cannot be resolved stands for itself. */
+function realPathsOf(skills: readonly DiscoveredSkill[]): Promise<string[]> {
+	return Promise.all(
+		skills.map(async skill => {
+			try {
+				return await fs.realpath(skill.path);
+			} catch {
+				return skill.path;
+			}
+		}),
+	);
+}
+
 /**
  * Load skills from all configured locations.
  * Returns skills and any validation warnings.
@@ -201,15 +214,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 	});
 
 	// Batch resolve all real paths in parallel
-	const realPaths = await Promise.all(
-		filteredSkills.map(async capSkill => {
-			try {
-				return await fs.realpath(capSkill.path);
-			} catch {
-				return capSkill.path;
-			}
-		}),
-	);
+	const realPaths = await realPathsOf(filteredSkills);
 
 	// Process skills with resolved paths
 	for (let i = 0; i < filteredSkills.length; i++) {
@@ -270,15 +275,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 			.filter(capSkill => capSkill._source.provider !== MANAGED_SKILLS_PROVIDER_ID)
 			.map(capSkill => capSkill.name),
 	);
-	const managedRealPaths = await Promise.all(
-		managedCandidates.map(async capSkill => {
-			try {
-				return await fs.realpath(capSkill.path);
-			} catch {
-				return capSkill.path;
-			}
-		}),
-	);
+	const managedRealPaths = await realPathsOf(managedCandidates);
 	for (let i = 0; i < managedCandidates.length; i++) {
 		const capSkill = managedCandidates[i];
 		const resolvedPath = managedRealPaths[i];
@@ -382,7 +379,7 @@ export function parseSkillInvocation(text: string): ParsedSkillInvocation | unde
  * Whether the (already left-trimmed) draft begins with a TUI local-execution
  * sigil that downstream branches will consume verbatim — `!`/`!!` for the bash
  * tool and `$`/`$$` followed by ASCII whitespace for the python tool. Mirrors
- * `pythonCommandPrefixLength` in `modes/controllers/input-controller` so the
+ * `pythonCommandPrefixLength` in `modes/terminal/controllers/input-controller` so the
  * two checks agree without forcing a circular import.
  */
 function startsWithLocalExecutionPrefix(trimmedStart: string): boolean {

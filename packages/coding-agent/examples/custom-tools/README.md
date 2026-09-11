@@ -12,12 +12,11 @@ Minimal example showing the basic structure of a custom tool.
 
 ## Usage
 
-Custom tools are discovered from the tools directories (`~/.veyyon/agent/tools`
-for the user, `.veyyon/tools` in a project):
+Custom tools are discovered from the active profile's tools directory:
 
 ```bash
-# Copy the example folder to a tools directory
-cp -r hello ~/.veyyon/agent/tools/
+# Copy the example folder to the profile's tools directory
+cp -r hello ~/.veyyon/profiles/<profile>/agent/tools/
 ```
 
 Then in veyyon:
@@ -28,7 +27,7 @@ Then in veyyon:
 
 ## Writing Custom Tools
 
-See [docs/custom-tools.md](../../../../docs/custom-tools.md) for full documentation.
+See [docs/handbook/src/using/custom-tools.md](../../../../docs/handbook/src/using/custom-tools.md) for full documentation.
 
 ### Key Points
 

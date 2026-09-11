@@ -76,6 +76,25 @@ function trim1(n: number): string {
 }
 
 /**
+ * Tokens used against the limit, one unit on both sides: `47K/200K`.
+ *
+ * It used to render `47.3%/200,000` — a percent and a token count either side of a slash, a
+ * notation that everywhere else means a ratio of like quantities, with no reading of it that is
+ * arithmetically true. An unknown limit is `47K/?` rather than `47K/0`, because a zero denominator
+ * reads as a real number.
+ *
+ * It is here rather than beside the context gauge because three surfaces state the same reading and
+ * only one of them is a terminal status line: an agent progress row and an eval cell's agent tree
+ * report it too, and a tool that reached into the status line's module for it would be importing a
+ * host to format a number.
+ */
+export function formatContextUsage(usedTokens: number, limitTokens: number): string {
+	const used = Number.isFinite(usedTokens) && usedTokens > 0 ? usedTokens : 0;
+	if (!Number.isFinite(limitTokens) || limitTokens <= 0) return `${formatNumber(used)}/?`;
+	return `${formatNumber(used)}/${formatNumber(limitTokens)}`;
+}
+
+/**
  * Format a byte count to a human-readable string.
  * Examples: "512B", "1.5KB", "2.3MB", "1.2GB"
  */
@@ -106,7 +125,7 @@ export function formatBytes(bytes: number): string {
  */
 export function truncate(str: string, maxLen: number, ellipsis = "…"): string {
 	if (str.length <= maxLen) return str;
-	const chars = [...str];
+	const chars = Array.from(str);
 	if (chars.length <= maxLen) return str;
 	const sliceLen = Math.max(0, maxLen - ellipsis.length);
 	return `${chars.slice(0, sliceLen).join("")}${ellipsis}`;
@@ -159,7 +178,7 @@ export function pluralize(label: string, count: number): string {
  *
  * WHY THIS HAS AN OWNER. Nineteen surfaces write this phrase: every collapsed tool
  * block, the read tool's continuation notice, the edit preview, the LSP hover, the
- * MCP and eval renderers, the Agent Control Center's comms fold. Every one of them
+ * MCP and eval renderers, the agent dashboard's comms fold. Every one of them
  * wrote `${n} more lines` inline, so every one of them said "1 more lines" on the
  * commonest case of all, a block that hid exactly one line.
  *
@@ -182,4 +201,26 @@ export function formatPercent(ratio: number): string {
 	// not clamped (a ratio above 1 legitimately renders above 100%).
 	if (!Number.isFinite(ratio)) return "0.0%";
 	return `${(ratio * 100).toFixed(1)}%`;
+}
+
+/**
+ * Tiered fixed-precision dollar display for terminal output.
+ *
+ * Sub-cent figures keep four decimals because a single request costs less than a cent and would
+ * otherwise print as `$0.00`.
+ *
+ * Declared here rather than in `@veyyon/stats`, whose only startup-path consumers were the status
+ * row and the stats CLI: importing one leaf of that package put the whole dashboard package on the
+ * graph a session evaluates before it draws anything. The web client's locale-aware `formatCost`
+ * (`apps/stats/src/client/data/formatters.ts`) is a different display contract and is unchanged.
+ */
+export function formatCostTiered(n: number): string {
+	if (n < 0.01) return `$${n.toFixed(4)}`;
+	if (n < 1) return `$${n.toFixed(3)}`;
+	return `$${n.toFixed(2)}`;
+}
+
+/** Premium-request counts are fractional units; display rounded to 2 decimals. */
+export function normalizePremiumRequests(n: number): number {
+	return Math.round((n + Number.EPSILON) * 100) / 100;
 }

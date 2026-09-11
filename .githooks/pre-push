@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Refuse to push a commit that does not typecheck, or whose root changelog is
-# a stale render of the package changelogs.
+# Refuse to push a commit that does not typecheck, fails formatting or import
+# order, or whose root changelog is a stale render of the package changelogs.
 #
 # Why this exists: main has gone red from a pushed commit four separate times,
 # every one of them a TypeScript error that `bun run check:ts` reports in well
@@ -85,8 +85,14 @@ link_node_modules() {
 		[ -e "$entry" ] || continue
 		name=${entry##*/}
 		target=$(readlink "$entry" 2>/dev/null || true)
+		# Every workspace member is linked relative to the repository root, whatever root it sits
+		# under: `../../packages/ai`, `../../hosts/terminal/engine`, `../../plugins/web`,
+		# `../../kernel`. Matching `packages/*` alone sent the other eight back to the dirty tree,
+		# which is the failure this whole function exists to prevent, and it also gave a module two
+		# identities in one program: `@veyyon/tui` resolved outside the checkout while a relative
+		# import of the same file resolved inside it.
 		case "$target" in
-		../../packages/*) ln -sfn "$1/${target#../../}" "$dst/@veyyon/$name" ;;
+		../../*) ln -sfn "$1/${target#../../}" "$dst/@veyyon/$name" ;;
 		*) ln -sfn "$entry" "$dst/@veyyon/$name" ;;
 		esac
 	done
@@ -118,6 +124,19 @@ for sha in $shas; do
 		exit 1
 	fi
 
+	# Lint & format is a CI gate too, and biome checks the whole tree in about
+	# two seconds. Twenty formatting and import-order errors reached main in one
+	# night from separate commits that never ran it, and Lint & format then failed
+	# on six open PRs at once, none of which had caused it. Diagnosing an
+	# inherited red check costs far more than the two seconds spent here.
+	if ! (cd "$checkout" && bun run check:tools); then
+		echo >&2
+		echo "pre-push: REFUSED. Commit $short fails biome formatting, import order or a" >&2
+		echo "          lint rule, which turns Lint & format red on every open PR." >&2
+		echo "          Run: bun run fix:tools, then commit the result" >&2
+		exit 1
+	fi
+
 	# The root CHANGELOG.md is a render of every packages/*/CHANGELOG.md, so adding a
 	# bullet to a package without regenerating it leaves the two out of sync. CI catches
 	# it (checks.yml, `Changelog entry`), which costs a full run to learn something this
@@ -129,6 +148,56 @@ for sha in $shas; do
 		echo "          fresh render of the package changelogs." >&2
 		echo "          Run: bun scripts/sync-root-changelog.ts, then commit CHANGELOG.md" >&2
 		exit 1
+	fi
+
+	# docs/handbook/book is a gitignored build output and must never be committed.
+	# Catch any tracked files under docs/handbook/book/ in the commit being pushed.
+	if git -C "$checkout" ls-files --error-unmatch docs/handbook/book >/dev/null 2>&1; then
+		echo >&2
+		echo "pre-push: REFUSED. Commit $short tracks generated files under docs/handbook/book/." >&2
+		echo "          docs/handbook/book is a gitignored build artifact and must not be committed." >&2
+		echo "          Run: git rm -r --cached docs/handbook/book, then commit" >&2
+		exit 1
+	fi
+
+	# When handbook sources changed, build the book and verify that all generated
+	# content-hashed assets (*-[0-9a-f]{8}.(js|css)) and search index are complete.
+	if git -C "$repo_root" diff-tree -m -r --no-commit-id --name-only "$sha" | grep -qE '^docs/handbook/(src/|book\.toml)'; then
+		if ! command -v mdbook >/dev/null 2>&1; then
+			echo >&2
+			echo "pre-push: REFUSED. Commit $short changes handbook sources, but 'mdbook' is not on PATH." >&2
+			echo "          Install mdbook v0.5.2 to verify handbook builds before pushing:" >&2
+			echo "            curl -fsSL https://github.com/rust-lang/mdBook/releases/download/v0.5.2/mdbook-v0.5.2-x86_64-unknown-linux-musl.tar.gz | tar -xz -C ~/.local/bin" >&2
+			exit 1
+		fi
+		if ! (cd "$checkout" && mdbook build docs/handbook >/dev/null 2>&1); then
+			echo >&2
+			echo "pre-push: REFUSED. Commit $short fails 'mdbook build docs/handbook'." >&2
+			exit 1
+		fi
+		book="$checkout/docs/handbook/book"
+		if [ -d "$book" ]; then
+			# A page references its assets relative to its own directory, so a nested
+			# page writes `../css/chrome-<hash>.css` for `book/css/chrome-<hash>.css`.
+			# Strip the climb and resolve against the book root.
+			refs="${TMPDIR:-/tmp}/veyyon-prepush-refs-$$"
+			(shopt -s globstar nullglob; grep -ohE '"[^"]*-[0-9a-f]{8}\.(js|css)"' "$book"/**/*.html 2>/dev/null) | tr -d '"' | sort -u >"$refs" || true
+			absent=""
+			while read -r asset; do
+				[ -z "$asset" ] && continue
+				rel="$asset"
+				while [ "${rel#../}" != "$rel" ]; do rel="${rel#../}"; done
+				if [ ! -e "$book/$rel" ]; then
+					absent="$absent $asset"
+				fi
+			done <"$refs"
+			rm -f "$refs"
+			if [ -n "$absent" ]; then
+				echo >&2
+				echo "pre-push: REFUSED. Commit $short generates handbook pages that load missing assets:$absent" >&2
+				exit 1
+			fi
+		fi
 	fi
 	cleanup
 	checkout=""

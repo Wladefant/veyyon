@@ -3,16 +3,16 @@ import * as path from "node:path";
 import * as core from "@veyyon/agent-core";
 import { ThinkingLevel } from "@veyyon/agent-core";
 import type { Api, ApiKey, Context, Model, SimpleStreamOptions } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { runGuidedGoalTurn } from "@veyyon/coding-agent/goals/guided-setup";
-import { InteractiveMode } from "@veyyon/coding-agent/modes/interactive-mode";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
+import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { AgentSession as RealAgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { createTools, type Tool, type ToolSession } from "@veyyon/coding-agent/tools";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 
 const planModel = { provider: "test", id: "plan" } as unknown as Model<Api>;
@@ -56,6 +56,13 @@ function mockResponse(args: unknown) {
 	return {
 		stopReason: "tool_use",
 		content: [{ type: "toolCall", name: "respond", arguments: args }],
+	};
+}
+
+function mockTextResponse(text: string) {
+	return {
+		stopReason: "stop",
+		content: [{ type: "text", text }],
 	};
 }
 
@@ -255,6 +262,45 @@ describe("guided goal setup", () => {
 		expect(result).toEqual({ kind: "question", question: "What is done?", objective: "Ship the feature." });
 	});
 
+	// WHY: the OpenCode gateways reject every non-"auto" tool_choice, so veyyon omits the field
+	// there and the respond tool is offered rather than required. A model that answers in text
+	// instead of calling it is the ordinary case on those hosts, not a malformed reply, and the
+	// interview has to continue from it. Turn-level coverage stopped at the tool-call route, so a
+	// regression in the text branch of runGuidedGoalTurn would have surfaced only as a dead
+	// interview on a live gateway. The shapes suite covers the parse; these cover the route.
+	// Does not catch: whether the model actually chooses to answer in either form.
+	it("reads a question the model answered in text instead of calling the tool", async () => {
+		spyOn(core, "instrumentedCompleteSimple").mockResolvedValue(
+			mockTextResponse(JSON.stringify({ kind: "question", question: "What is done?" })) as never,
+		);
+
+		const result = await runGuidedGoalTurn(createSession(), { messages: [{ role: "user", content: "Ship it" }] });
+
+		expect(result).toEqual({ kind: "question", question: "What is done?" });
+	});
+
+	it("starts a goal the model declared ready in text around prose", async () => {
+		spyOn(core, "instrumentedCompleteSimple").mockResolvedValue(
+			mockTextResponse(
+				`Here is the objective:\n\n${JSON.stringify({ kind: "ready", objective: "Deliver the confirmed feature." })}`,
+			) as never,
+		);
+
+		const result = await runGuidedGoalTurn(createSession(), { messages: [{ role: "user", content: "Ship it" }] });
+
+		expect(result).toEqual({ kind: "ready", objective: "Deliver the confirmed feature." });
+	});
+
+	it("rejects a text answer that carried no payload", async () => {
+		spyOn(core, "instrumentedCompleteSimple").mockResolvedValue(
+			mockTextResponse("Sure, I can help you set that up.") as never,
+		);
+
+		await expect(
+			runGuidedGoalTurn(createSession(), { messages: [{ role: "user", content: "Ship it" }] }),
+		).rejects.toThrow("No JSON payload found in response");
+	});
+
 	it("obfuscates secrets in the transcript before the request and deobfuscates the echoed objective", async () => {
 		const obfuscator = {
 			hasSecrets: () => true,
@@ -417,6 +463,41 @@ describe("guided goal setup", () => {
 			expect(warning).not.toHaveBeenCalledWith(
 				"Guided goal setup needs more detail. Run /guided-goal again with a narrower objective.",
 			);
+		} finally {
+			await harness.cleanup();
+		}
+	});
+
+	it("shows progress in the status area while a guided turn is in flight", async () => {
+		// A guided turn is a one-shot completion that emits no session events, so
+		// the only sign of work is what the status area holds WHILE the request is
+		// open. Reading it after the turn resolves finds an empty container either
+		// way, which is why the screen looked inert and nothing caught it.
+		const harness = await createInteractiveGoalHarness();
+		try {
+			const model = harness.session.model;
+			if (!model) throw new Error("expected session model");
+			spyOn(harness.session, "resolveRoleModelWithThinking").mockReturnValue({
+				model,
+				explicitThinkingLevel: false,
+			} as never);
+			spyOn(harness.modelRegistry, "getApiKey").mockResolvedValue("test-key");
+
+			const statusChildrenDuringTurn: number[] = [];
+			spyOn(core, "instrumentedCompleteSimple").mockImplementation((async () => {
+				statusChildrenDuringTurn.push(harness.mode.statusContainer.children.length);
+				return mockResponse({ kind: "question", question: "Who is the user?" });
+			}) as never);
+			vi.spyOn(harness.mode, "showHookEditor").mockResolvedValueOnce("answer 1").mockResolvedValue(undefined);
+
+			await harness.mode.handleGuidedGoalCommand("Initial goal");
+
+			// Every turn, not only the first: the second one is where the user has
+			// answered and is waiting with nothing on screen.
+			expect(statusChildrenDuringTurn).toEqual([1, 1]);
+			// And it comes down again, so the question is not printed under a
+			// spinner that never stopped.
+			expect(harness.mode.statusContainer.children).toHaveLength(0);
 		} finally {
 			await harness.cleanup();
 		}

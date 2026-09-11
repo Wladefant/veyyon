@@ -4,7 +4,7 @@
  * WHY EACH DIRECTORY OWNS ITS OWN ROWS. `registry.ts` is still the ONE place that says which prompts exist,
  * and it aggregates every module like this one; what changed is that the 163 `import … with { type: "text" }`
  * specifiers no longer sit in a single module. They did, and the consequence was that importing one prompt
- * statically reached all 163: `tools/read.ts` needs `PROMPTS["tools/read"]` to render its own description and
+ * statically reached all 163: `tools/fs/read.ts` needs `PROMPTS["tools/read"]` to render its own description and
  * paid 167 modules for it, the largest single edge that file had. A consumer now imports the directory it
  * belongs to and pays for that directory.
  *
@@ -18,7 +18,7 @@
  * for these ids, and the coverage suite fails on a second importer.
  */
 
-import type { PromptEntry } from "@veyyon/utils/prompt-registry";
+import { definePromptRows, type PromptEntry } from "@veyyon/utils/prompt-registry";
 
 import turnControlAutoContinue from "./auto-continue.md" with { type: "text" };
 import turnControlEagerTask from "./eager-task.md" with { type: "text" };
@@ -39,14 +39,14 @@ import turnControlUnexpectedStopClassifier from "./unexpected-stop-classifier.md
 import turnControlUnexpectedStopRetry from "./unexpected-stop-retry.md" with { type: "text" };
 
 /** Every prompt under `src/prompts/turn-control/`, keyed by its id (the path under `src/prompts/`). */
-export const turnControlPrompts = {
+export const turnControlPrompts = definePromptRows({
 	"turn-control/auto-continue": {
 		text: turnControlAutoContinue,
 		purpose: "resumes the user's most recent intent after compaction",
 	},
 	"turn-control/eager-task": {
 		text: turnControlEagerTask,
-		purpose: "the delegation block telling the agent subagents are the default",
+		purpose: "the delegation block telling the driving agent that spawned agents are the default",
 	},
 	"turn-control/eager-todo": { text: turnControlEagerTodo, purpose: "requires a phased todo before substantive work" },
 	"turn-control/empty-stop-retry": {
@@ -99,4 +99,4 @@ export const turnControlPrompts = {
 		text: turnControlUnexpectedStopRetry,
 		purpose: "restarts a turn that promised an action and stopped",
 	},
-} satisfies Record<string, PromptEntry>;
+} satisfies Record<string, PromptEntry>);

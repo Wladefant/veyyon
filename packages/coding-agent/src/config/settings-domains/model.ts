@@ -1,6 +1,6 @@
 import { THINKING_EFFORTS } from "@veyyon/catalog/effort";
-import { AUTO_THINKING } from "../../thinking";
-import { unsetNumberOption } from "../optional-number";
+import { unsetNumberOption } from "@veyyon/kernel/settings/optional-number";
+import { AUTO_THINKING } from "../../thinking/constants";
 import {
 	SERVICE_TIER_ANTHROPIC_OPTIONS,
 	SERVICE_TIER_ANTHROPIC_VALUES,
@@ -146,6 +146,18 @@ export const MODEL_SETTINGS = {
 			description: "Consecutive identical tool calls required before the corrective steer is injected",
 		},
 	},
+	"model.toolCallLoopGuard.readSubsumptionThreshold": {
+		type: "number",
+		default: 3,
+		ui: {
+			min: 1,
+			tab: "model",
+			group: "Thinking",
+			label: "Read Subsumption Loop Threshold",
+			description:
+				"Consecutive fully-subsumed or redundant read calls on unchanged files before the corrective steer is injected",
+		},
+	},
 
 	"model.toolCallLoopGuard.exemptTools": {
 		type: "array",
@@ -196,7 +208,7 @@ export const MODEL_SETTINGS = {
 			group: "Prompt",
 			label: "Include Model in Prompt",
 			description:
-				"Surface the active model identifier in the system prompt so the agent knows which model it is. Costs a full prompt-cache invalidation on every model switch",
+				"Surface the active model identifier in the system prompt so the active model identifier is available to the agent. Costs a full prompt-cache invalidation on every model switch",
 		},
 	},
 
@@ -215,7 +227,7 @@ export const MODEL_SETTINGS = {
 	// Value is a personality name resolved at runtime against built-ins plus
 	// Tier-B `~/.veyyon/personalities/*.md` and `.veyyon/personalities/*.md`
 	// data files (project > user > built-in). "none" is a reserved sentinel
-	// that omits the block. See packages/coding-agent/src/personality/resolver.ts.
+	// that omits the block. See packages/coding-agent/src/config/personality-resolver.ts.
 	personality: {
 		type: "string",
 		default: "default",
@@ -418,16 +430,16 @@ export const MODEL_SETTINGS = {
 		},
 	},
 
-	"tier.subagent": {
+	"tier.agent": {
 		type: "enum",
 		values: SERVICE_TIER_INHERIT_SETTING_VALUES,
 		default: "inherit",
 		ui: {
 			tab: "model",
 			group: "Sampling",
-			label: "Service Tier — Subagent",
+			label: "Service Tier — Spawned Agents",
 			description:
-				"How spawned task/eval subagent requests are queued and served. Inherit matches the main agent's live per-family tiers (tracks /fast); pick a value to apply it to whichever family the subagent's model belongs to.",
+				"How spawned task/eval agent requests are queued and served. Inherit matches the main agent's live per-family tiers (tracks /fast); pick a value to apply it to whichever family the spawned agent's model belongs to.",
 			keywords: ["fast", "priority", "queue", "latency", "serving"],
 			options: SERVICE_TIER_INHERIT_OPTIONS,
 		},
@@ -480,7 +492,7 @@ export const MODEL_SETTINGS = {
 			group: "Retry & Fallback",
 			label: "Max Retry Delay",
 			description:
-				"Maximum wait between retries, in ms. When the provider asks us to wait longer than this and no credential or model fallback succeeds, the request fails fast instead of sleeping (e.g. 3-hour Anthropic rate-limit windows).",
+				"Maximum wait between retries, in ms. When the provider response requires a wait longer than this and no credential or model fallback succeeds, the request fails fast instead of sleeping (e.g. 3-hour Anthropic rate-limit windows).",
 		},
 	},
 	"retry.modelFallback": {
@@ -543,7 +555,7 @@ export const MODEL_SETTINGS = {
 			group: "Retry & Fallback",
 			label: "Anthropic Server-Side Fallback (Fable 5)",
 			description:
-				"When a Claude Fable 5 / Mythos 5 request is blocked by Anthropic's safety classifier, retry it on Claude Opus 4.8 server-side (Anthropic `server-side-fallback-2026-06-01` beta). Opt-in — leaving this off preserves the pre-fallback behavior for every request.",
+				"Retry a Claude Fable 5 or Mythos 5 request that Anthropic's safety classifier blocks on Claude Opus 4.8, on the provider side (the `server-side-fallback-2026-06-01` beta). Off: the request fails.",
 		},
 	},
 } as const;

@@ -16,20 +16,20 @@
  */
 import * as path from "node:path";
 import { tryParseJson } from "@veyyon/utils";
-import { registerProvider } from "../capability";
-import { type ContextFile, contextFileCapability } from "../capability/context-file";
-import { type ExtensionManifest, extensionCapability, type ManifestExtension } from "../capability/extension";
-import { type ExtensionModule, extensionModuleCapability } from "../capability/extension-module";
-import { readDirEntries, readFile } from "../capability/fs";
-import { type MCPServer, mcpCapability } from "../capability/mcp";
-import type { LoadContext, LoadResult } from "../capability/types";
+import { registerProvider } from "./capability";
+import { type ContextFile, contextFileCapability } from "./capability/context-file";
+import { type ExtensionManifest, extensionCapability, type ManifestExtension } from "./capability/extension";
+import { type ExtensionModule, extensionModuleCapability } from "./capability/extension-module";
+import { readDirEntries, readFile } from "./capability/fs";
+import { type MCPServer, mcpCapability } from "./capability/mcp";
+import type { LoadContext, LoadResult } from "./capability/types";
+import { expandEnvVarsDeep, warnUnresolved } from "./env-expansion";
 import {
 	buildExtensionModuleItems,
 	createSourceMeta,
 	discoverExtensionModulePaths,
-	expandEnvVarsDeep,
 	getUserPath,
-	readContextFile,
+	loadUserContextFile,
 } from "./helpers";
 
 const PROVIDER_ID = "gemini";
@@ -74,7 +74,7 @@ async function loadMCPFromSettings(_ctx: LoadContext, path: string): Promise<Loa
 		return { items, warnings };
 	}
 
-	const servers = expandEnvVarsDeep(parsed.mcpServers);
+	const servers = expandEnvVarsDeep(parsed.mcpServers, warnUnresolved(warnings, path));
 
 	for (const [name, config] of Object.entries(servers)) {
 		if (!config || typeof config !== "object") {
@@ -119,24 +119,7 @@ async function loadMCPFromSettings(_ctx: LoadContext, path: string): Promise<Loa
  * loses to it on priority (native 100 against 60).
  */
 async function loadContextFiles(ctx: LoadContext): Promise<LoadResult<ContextFile>> {
-	const items: ContextFile[] = [];
-	const warnings: string[] = [];
-
-	const userGeminiMd = getUserPath(ctx, "gemini", "GEMINI.md");
-	if (userGeminiMd) {
-		const { content, warning } = await readContextFile(userGeminiMd);
-		if (warning) warnings.push(warning);
-		if (content) {
-			items.push({
-				path: userGeminiMd,
-				content,
-				level: "user",
-				_source: createSourceMeta(PROVIDER_ID, userGeminiMd, "user"),
-			});
-		}
-	}
-
-	return { items, warnings };
+	return loadUserContextFile(ctx, PROVIDER_ID, "gemini", "GEMINI.md");
 }
 
 // =============================================================================

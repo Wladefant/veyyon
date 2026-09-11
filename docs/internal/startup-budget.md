@@ -1,0 +1,374 @@
+# Startup budget
+
+Startup latency is the interval from process launch to a visually settled, editable screen. First-byte, composer and input timings are separate intermediate measurements.
+
+Mode-specific Vibe tools load through the agent tool manifest on `/vibe` activation, not during runtime warmup. Activation awaits tool construction before changing the registry or active toolset. A failed load leaves both unchanged; first-use measurements include this deferred work.
+
+Session initialization and runtime warmup import streaming helpers from `@veyyon/ai/stream`
+and register usage backends through `@veyyon/ai/usage/defaults`. Image inspection,
+Mnemopi initialization and search-provider loading also use AI subpath imports rather
+than evaluating the `@veyyon/ai` package barrel. Usage providers and credential-ranking
+strategies remain available when these entry points load independently.
+
+Interactive startup starts background model discovery after terminal initialization
+and an event-loop yield. Initial model resolution still completes before session
+construction returns. ACP, RPC, noninteractive launches and subsequent session
+creation retain their existing discovery order.
+
+The launch and session composer footlines use the same filesystem-derived repository
+and linked-worktree location context and draft-token estimate. Typing before session
+initialization updates the estimate on the launch card; mounting the session does not
+replace the location format or add an estimate that was previously absent.
+
+The launch and live status rows use `statusLineSettingsFromConfig`. Launch redraws
+read segment options and compaction flags directly from their declared paths,
+without constructing complete settings groups.
+Group reads reuse declaration-path membership and read current values from the
+requesting settings instance. Prefixes without declared members are not retained.
+
+First-frame replay persistence uses asynchronous filesystem operations. Terminal
+output capture ends before persistence starts. Recording bytes and screen geometry
+are snapshotted before the first filesystem await, so later input and repainting
+do not change the recording. Startup awaits publication before runtime warmup.
+
+First-frame input requests an immediate differential render with `preserveViewport`.
+Pending full-viewport repaint and scrollback replacement requests retain precedence.
+Filesystem card views import selector parsing from `tools/core/path-utils` without
+evaluating filesystem tool implementations.
+
+Record typing from the first launch frame through initialization with:
+
+```sh
+SCENE_COMMAND='env STARTUP_EXECUTABLE=/repo/path/to/binary bash -l' \
+  proof/record.sh proof/scenes/startup-immediate-input.sh
+```
+
+The scene checks the complete retained draft and initialized model name. Use the
+same dimensions, configuration and input timing for each compiled target.
+
+Record linked-worktree startup and typing through session initialization with:
+
+```sh
+SCENE_COMMAND='bash -l' SCENE_MOTION_FLOOR=1 \
+  proof/record.sh proof/scenes/startup-worktree-draft.sh
+```
+
+The scene checks the retained draft, configured model display name and resolved
+context gauge. Its low motion threshold accounts for the stationary startup screen.
+For compiled comparisons, set `SCENE_COMMAND` to
+`env STARTUP_EXECUTABLE=/repo/path/to/binary bash -l` for each isolated target and
+use a separate `OUT_DIR` per arm. The scene disables automatic updates in the
+container configuration before either executable starts.
+
+Postpaint submissions are captured through the native editor submit handler until
+session hooks and event subscriptions finish initializing. Dispatch does not await
+model-turn completion. Each pending action retains its text and attachments; later
+drafts remain separate, including when an extension replaces the editor.
+
+Record the immediate settings action with the same compiled-target setup:
+
+```sh
+SCENE_COMMAND='env STARTUP_EXECUTABLE=/repo/path/to/binary bash -l' \
+  SCENE_MOTION_FLOOR=1 proof/record.sh proof/scenes/startup-early-settings.sh
+```
+
+The launch composer loads the configured keybindings before accepting input.
+The interactive session reuses that manager. Model-selector actions entered
+during initialization open after the session is ready and preserve the draft.
+
+```sh
+SCENE_COMMAND='env STARTUP_EXECUTABLE=/repo/path/to/binary bash -l' \
+  SCENE_MOTION_FLOOR=1 proof/record.sh proof/scenes/startup-early-model-selectors.sh
+```
+
+Bundled and resolved model snapshots use `@veyyon/utils/json-snapshot`. Each write
+serializes its payload once; each read verifies the fingerprint and payload bytes
+before parsing. Replacement is atomic without a durability flush because a missing
+or invalid snapshot rebuilds from its inputs. Bundled format v4 and resolved-stage
+format v9 reject snapshots from preceding formats. The resolved stage stores only
+discovery-derived models and provider state. Bundled models resolve once per requested
+provider, without installing a disk snapshot store during production startup.
+Explicitly installed catalog snapshot stores remain supported. Provider overrides
+are applied when the provider's records are resolved.
+Standard provider cache reads use each descriptor's cache-ID resolver rather than
+constructing discovery options. Versioned, endpoint-scoped and credential-scoped
+namespaces retain their existing format. Constant namespaces do not require a
+model-derived base URL.
+
+Endpoint host markers compile once as literal, case-insensitive patterns. Matching
+does not allocate a normalized URL and does not fold punctuation or control characters.
+
+## Measure it
+
+```sh
+bun scripts/bench-startup.ts --runs 5                          # bun source; caches retained between runs
+bun scripts/bench-startup.ts --runs 5 --bin ~/.local/bin/veyyon # the shipped binary
+bun scripts/bench-startup.ts --runs 5 --cold                    # the first launch after an install
+```
+
+The bench seeds its own agent home under `.captures/bench-startup/`, marked onboarded and with the
+native addon already extracted, so no run measures the setup wizard, no run touches the machine's
+profile, sessions, or vault, and no run pays a write an install has already done. `--cold` deletes
+that home before every arm and re-seeds it, because one arm otherwise warms the GPU cache and the
+model catalog for the next.
+With `--seed`, cold arms also replace the copied configuration before each launch.
+Warm arms copy it once and retain subsequent configuration and cache changes.
+The source seed is never modified. Each PTY arm terminates its process tree before
+the next arm starts, and `--cwd` applies to native extraction and measured launches.
+
+Every invocation replaces the scratch directory. The first iteration initializes
+application caches even without `--cold`. Warm-only comparisons exclude that
+iteration and use later iterations from the same invocation.
+
+Extraction belongs to the seed because every install path performs it: `install.sh` runs
+`doctor_natives`, `install.ps1` runs its mirror, and the self-updater runs the same search probe. A
+compiled binary cannot `dlopen` the addon it carries, so the first native call writes it to
+`<home>/.veyyon/natives/<version>/`. A seed that skipped that step charged every cold launch 264ms
+of extraction against a 293ms frame, and no user reaches that state without deleting the agent home
+from under an installed binary.
+
+Thirteen arms:
+
+| Arm | Measures |
+| --- | --- |
+| `version` | `--version`, which returns before the command registry loads: runtime init plus the entry module's graph. |
+| `help` | `--help`, which loads the command registry. |
+| `ready:load` | The timing tree's `(before instrumentation)` line: runtime init plus module load, before the first marker. |
+| `ready:boot` | The timing tree's `Total`: every boot phase from the first marker to the TUI handoff. |
+| `ready` | Wall time of an interactive launch under `VEYYON_TIMING=x`, which prints the tree and exits where the TUI would start. |
+| `first-frame` | Wall time from spawn to the first byte the process writes to a pty. This does not establish a settled or editable screen. |
+| `composer` | The composer's placeholder row on screen. A first byte is not a screen anyone can read. |
+| `editable` | A character typed after the first byte coming back echoed: the moment the terminal answers. |
+| `statusrow` | The status row on screen, matched by the approval rung between two of the row's separator dots. |
+| `replay` | The first byte of a launch that replays the recording the launch before it wrote, rather than composing the card. |
+| `replay:composer` | The composer's placeholder row on that replayed launch. |
+| `replay:editable` | The echo on that replayed launch: how long the replayed card is a picture. |
+| `replay:statusrow` | The status row on that replayed launch. |
+
+`first-frame` and `replay` are the off and on arms of the first-frame replay, at exact parity: one
+binary, one seeded home, one terminal size, two consecutive launches, and the recording is the only
+difference between them.
+
+The `statusrow` marker keys on the approval rung because the context gauge is the row's last
+segment, and the bench's eighty-column pty sheds it: the arm reported nothing at all while the
+gauge was the marker. `packages/coding-agent/test/the-startup-bench-sees-the-status-row.test.ts`
+holds the marker against the row the card renders.
+
+`VEYYON_TIMING=x veyyon` prints the phase tree on its own, without the bench, and exits. `full`
+adds every module-load span.
+
+### Settled editable screen
+
+```sh
+bun scripts/bench-startup.ts --only settled --cold --runs 5 \
+  --seed /path/to/isolated-config --expect-model 'Model Display Name' \
+  --cwd /path/to/project --json .captures/settled-startup.json
+
+# Use the same observer, seed and project with another source checkout:
+bun scripts/bench-startup.ts --only settled --cold --runs 5 \
+  --source /path/to/checkout/packages/coding-agent/src/cli.ts \
+  --seed /path/to/isolated-config --expect-model 'Model Display Name' \
+  --cwd /path/to/project --json .captures/settled-startup-baseline.json
+```
+
+`--seed` copies an isolated config root containing `config.yml` and
+`profiles/default/agent/` into the benchmark scratch directory. Use synthetic
+credentials and a local model definition for offline measurements. Set
+`onboardingVersion: 1` in the root config and the default model role in the profile
+config. Do not seed launch-fact, replay or model-discovery caches for a cold run.
+`--bin` selects a compiled executable instead of `--source`.
+
+Compiled targets are copied into the scratch directory before execution. The supplied
+executable is not run or modified. Reports include the copy's SHA-256, and a changed
+digest after measurement rejects the run without writing a result. Rebuild a target
+whose provenance cannot be established; a filename does not establish its revision.
+
+The benchmark disables `startup.checkUpdate` and `startup.autoUpdate` in its copied
+root and profile configuration. Other seed values remain unchanged. Both comparison
+arms use this override, so these measurements exclude release checks and installation.
+Without `--cold`, the first repetition still starts with an empty scratch directory;
+use subsequent repetitions for warm-state comparisons.
+
+The settled arm uses a 140-column, 45-row PTY and a headless terminal parser. It
+requires the expected model display name, a resolved percentage gauge and an edited
+probe on the composer row. PTY echo is disabled. The probe includes deletion, so its
+final text is not sent literally. Terminal responses are returned to the process.
+
+`settled:editable-frame` is the later of the first successful edited probe and the
+last change to rendered text, cell styles or cursor position during the observation.
+The final screen must still contain the resolved metadata and retained input.
+Nonvisual terminal queries do not restart the interval.
+
+`--observe-ms` defaults to 5000. `--stable-ms` sets the required unchanged
+interval and defaults to 1000 milliseconds without a final screen change.
+Missing metadata, lost input, early exit or an insufficient stable interval
+fails the arm. `--columns` and `--rows` change the PTY
+and parser dimensions together. Each run writes a timestamped screen trace under
+the scratch directory, including failed runs. Process-tree termination is awaited.
+
+The observation interval bounds the result: an update after it is not covered.
+This measures cold profile state, not a flushed operating-system page cache.
+Terminal-parser traces are timing diagnostics, not visual proof. The responsive arm
+measures typing separately; deferred capability readiness and immediate actions
+require their own interaction scenarios.
+
+### Input during initialization
+
+```sh
+bun scripts/bench-startup.ts --only responsive --cold --runs 5 \
+  --seed /path/to/isolated-config --expect-model 'Model Display Name' \
+  --cwd /path/to/project --json .captures/startup-input.json
+```
+
+The responsive arm sends an initial edited probe, then appends and deletes characters
+every 50 milliseconds for 40 probes. `--probe-interval-ms` and `--probe-count`
+change that schedule. Every expected draft must render, and the final screen must
+retain the entire draft. A coalesced repaint timestamps all newly visible input at
+that repaint, including time spent waiting for the event loop.
+
+`responsive:input` reports send-to-render latency for every probe.
+`responsive:worst-input` reports the maximum latency in each launch.
+The `input-before-metadata` and `input-after-metadata` subsets use the visible
+model name and context gauge at the acknowledging frame; neither establishes that
+a deferred capability is ready. Traces include each draft, send time and render time.
+
+The responsive arm runs in a separate process from the settled arm because its
+repeated edits change the screen. Run `--only settled,responsive` to record both.
+Use matching seeds, dimensions, schedules, runtime versions and source revisions
+for comparisons. This arm covers typing and deletion, not paste, submit or selectors.
+
+## Guard a change against a regression
+
+`scripts/bench-startup.ts` answers what the boot costs.
+`packages/coding-agent/scripts/bench-guard.ts` answers whether a change made it worse, on one
+machine, against a baseline captured on that machine.
+
+```sh
+bun packages/coding-agent/scripts/bench-guard.ts --update   # capture the baseline for this host
+bun packages/coding-agent/scripts/bench-guard.ts            # measure again and compare
+```
+
+It needs `hyperfine` and `script` on `PATH`. Each arm is 3 warmup launches and at least 20 measured
+ones, each with its own `HOME` and `XDG_CONFIG_HOME`, so a populated profile, a session history or
+an MCP config cannot move the median. The launch runs under a pty: the interactive command refuses
+a stdin that is not a terminal, and it refuses before it reaches the `VEYYON_TIMING=x` exit, so
+without one the guard would time the refusal.
+
+The exit code is the answer. `0` is within the 5% median budget, `1` is a regression, `2` is a
+refusal to compare at all. A refusal names what differed: platform, arch, CPU model, host, Bun
+version, the benchmark command, whether `HOME` was isolated, or a median taken over fewer than 20
+runs. The revision and a dirty tree travel with the baseline and are printed, but they do not
+refuse — the candidate arm is expected to be other code.
+
+The baseline lands in `packages/coding-agent/bench/` as `boot-baseline.json`, which is gitignored.
+Boot wall time is a fact about a machine, so a baseline committed to the repository would be a
+number from someone else's laptop; recapture it where you measure.
+
+## Baseline
+
+Linux x64, AMD Ryzen 9 9950X, medians of 3, measured at `96175566f`.
+
+| Arm | Binary warm | Binary cold | Source warm | Source cold |
+| --- | --- | --- | --- | --- |
+| `version` | 94ms | 98ms | 41ms | 56ms |
+| `help` | 464ms | 441ms | 692ms | 767ms |
+| `ready:load` | 269ms | 298ms | 505ms | 573ms |
+| `ready:boot` | 381ms | 944ms | 402ms | 680ms |
+| `ready` | 715ms | 1290ms | 943ms | 1292ms |
+| `first-frame` | 686ms | 1230ms | 937ms | 1397ms |
+
+The binary is what a user runs. Source arms carry Bun's transpile cost and read pessimistic on
+module load, optimistic on `version` because the entry module alone is small.
+
+A first launch on a machine whose page cache holds neither the binary nor the agent home measured
+3028ms to first byte. The bench cannot isolate that state, so it is recorded here and not in the
+table.
+
+The cold column predates the seed fix and does not compare to a cold run today. It measured a home
+with no native addon, so every cold arm paid an extraction that an install performs. Measured again
+after the fix, 5 runs each on the same machine, the binary reports a 79ms cold first frame against
+84ms warm. Those are the same number, which is the result: extraction was the whole of the
+difference, and nothing else in the pre-paint path depends on a warm agent home.
+
+## Where the time goes
+
+From the tree, binary, warm, in order of cost:
+
+- **Module load, 269ms.** Runtime init plus the static import graph reachable from `cli.ts`. Paid
+  before any marker, so no phase can be blamed for it and no lazy import inside a phase reduces it.
+- **`createAgentSession`, 150-320ms.** Context files, rules, watchdogs, advisor configs, prompt
+  templates, slash commands, skills, tools, and the system prompt. Most children run in parallel;
+  `buildSystemPrompt` dominates.
+- **`getCachedGpu:getGpuModel`, 224-557ms cold, 0.6ms warm.** A hardware probe inside
+  `buildSystemPrompt`, cached to disk after the first run. It used to be paid in full before the
+  first frame; it now runs unwaited and writes the cache for the next launch, so one launch per
+  machine omits the GPU row and none of them waits for it. The baseline table above was measured
+  before that change, so a cold `ready:boot` re-measured today is lower than the number it records.
+- **`modelRegistry:init` 43ms, `discoverAuthStorage` 35ms, `initTheme:final` 33ms.** Fixed cost, warm
+  or cold.
+- **`discoverAndLoadMCPTools`, off the pre-paint path.** With a UI it runs unwaited after the
+  session is built, so it appears in the tree only when a launch has no UI to protect. A configured
+  stdio server's spawn and `initialize` handshake are therefore paid concurrently with the first
+  turn, not before the first frame.
+
+## Measured deltas
+
+Bun source, cold home, medians of 3, same machine.
+
+| Arm | Before | After the GPU probe stopped blocking | Change |
+| --- | --- | --- | --- |
+| `ready:boot` | 680ms | 532ms | -148ms |
+| `ready` | 1292ms | 1168ms | -124ms |
+| `first-frame` | 1397ms | 1122ms | -275ms |
+
+`version` and `ready:load` are unchanged within noise, which is the expected shape: the probe was
+inside a boot phase, not in module load.
+
+The first native call carries its own arm, measured separately because its cost comes from the
+user's disk rather than from the code. Five runs per cell, fresh child process per run, a seeded
+cache root holding three 150MiB dead version directories:
+
+| First native call | No stale cache | 450MiB stale | Change |
+| --- | --- | --- | --- |
+| Prune inside `loadNative` | 124.9ms | 146.4ms | +17.2% |
+| Prune handed to the event loop | 123.7ms | 123.0ms | -0.6% |
+
+`cleanupStaleNativeVersions` ran between `dlopen` returning and the bindings reaching the caller,
+so a launch paid for whatever dead cache was on disk: 7ms for one 150MiB directory, 24ms for three,
+105ms for three that also held 5000 small files. `scheduleStaleNativeCleanup` hands the same prune
+to the event loop with the unlink work off the calling thread. A process that exits within the tick
+reclaims nothing and the next launch prunes instead, and `natives/bridge/bindings/scripts/ensure-native.ts`
+still prunes synchronously at install time, which is when a stale cache appears.
+
+## What codex did
+
+Techniques taken from openai/codex's own startup work, each with what it maps onto here.
+
+- **Do not scan a growing store to answer a bounded question.** codex issue #38373 recorded a full
+  session-database scan costing about 1.87s at startup on a large history; codex v0.147 took resume
+  and fork from 3.58s to 0.23s. veyyon's boot tree shows no session-store read before the first
+  frame — the recent list is built when it is asked for — so this is a property to keep rather than
+  a cost to remove. Anything added to the pre-paint path that reads the session directory reopens it.
+- **Start a subprocess when it is first used, not when it is configured.** codex#3726 made MCP
+  servers start lazily. veyyon already defers this on the UI path: `deferMCPDiscoveryForUI` in
+  `packages/coding-agent/src/sdk.ts` builds the manager, starts discovery without awaiting it, and
+  delivers the tools through `refreshMCPTools` once the servers answer, so a hung server costs the
+  first frame nothing. The headless path still awaits the connect, because a caller with no frame to
+  protect expects a fully provisioned session on return.
+  `packages/coding-agent/test/mcp/a-configured-server-never-delays-the-first-frame.test.ts` holds
+  both halves: the fence is a server that never writes a byte.
+- **Keep hardware and network out of the pre-paint path.** The GPU probe above is this technique
+  applied: the answer is computed for the next launch instead of waited for by this one.
+
+## Budget
+
+- First frame within 150ms on the shipped binary. A cold home carries no separate target, because a
+  seed that models an install measures the same as a warm one.
+- Nothing that probes hardware, the network, or an external process runs before the first frame.
+- A phase added to the pre-paint path states its measured cost in the change that adds it.
+
+The binary meets the first target at 84ms warm and 79ms cold, medians of 5 on an idle workstation.
+It is still a target and not a gate. Wiring it to CI needs a runner whose timings are stable enough
+that a red build means a regression, and a first-frame median here moves by more than 50% between
+repetitions, and by more than that when a type check shares the machine.
+*Verified against `46980a2485` on 2026-09-11.*

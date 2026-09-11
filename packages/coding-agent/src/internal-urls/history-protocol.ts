@@ -7,7 +7,7 @@
  *
  * Agents that are no longer in the `AgentRegistry` — one-shot helpers
  * unregistered after `finalizeSubagentLifecycle` (`keepAlive: false`, e.g. the
- * `eval` `agent()` bridge), agents released via the Agent Control Center / vibe kill, or
+ * `eval` `agent()` bridge), agents released via the agent dashboard / vibe kill, or
  * any agent after a session resume — remain reachable: `resolve`, `complete`,
  * and the index all fall back to scanning artifacts dirs for `<id>.jsonl`,
  * mirroring how `agent://` reads `.md` outputs straight off disk.
@@ -16,10 +16,11 @@
  * - history:// - Index of all registry + on-disk agents (id, status, kind, last activity)
  * - history://<agentId> - Concise markdown transcript of that agent
  */
+
+import { loadSessionMessagesReadOnly } from "@veyyon/kernel/session/session-loader";
 import type { AgentRef } from "../registry/agent-registry";
 import { AgentRegistry } from "../registry/agent-registry";
 import { formatSessionHistoryMarkdown } from "../session/session-history-format";
-import { loadSessionMessagesReadOnly } from "../session/session-loader";
 import { ambiguousSessionFileIds, liveConversationScopes, sessionFilesFromDisk } from "./registry-helpers";
 import type { InternalResource, InternalUrl, ProtocolHandler, UrlCompletion } from "./types";
 
@@ -78,7 +79,7 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 					`Read the transcript from the session that spawned the agent, or open its session file directly.`,
 			);
 		}
-		// Advisor transcripts are observability-only — surfaced in the Agent Control Center, never
+		// Advisor transcripts are observability-only — surfaced in the agent dashboard, never
 		// in the agent-facing roster. Hide them from the index, lookup, and completions.
 		const visible = registry.list().filter(ref => ref.kind !== "advisor");
 
@@ -113,7 +114,7 @@ export class HistoryProtocolHandler implements ProtocolHandler {
 			const ambiguous = await ambiguousSessionFileIds();
 			const collided = ambiguous.has(agentId)
 				? agentId
-				: [...ambiguous].find(id => id.toLowerCase() === agentId.toLowerCase());
+				: Array.from(ambiguous).find(id => id.toLowerCase() === agentId.toLowerCase());
 			if (collided !== undefined) {
 				throw new Error(
 					`Ambiguous agent: ${collided}\n` +

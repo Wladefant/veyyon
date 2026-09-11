@@ -1,12 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { RenderResultOptions } from "@veyyon/agent-core";
-import type { SettingPath, SettingValue } from "@veyyon/coding-agent/config/settings";
-import { resetSettingsForTest, Settings, settings } from "@veyyon/coding-agent/config/settings";
+import {
+	resetSettingsForTest,
+	type SettingPath,
+	Settings,
+	type SettingValue,
+	settings,
+} from "@veyyon/coding-agent/config/settings";
 import type { RetryRecoveryMode } from "@veyyon/coding-agent/modes/retry-display";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/modes/theme/theme";
-import { taskToolRenderer } from "@veyyon/coding-agent/task/renderer";
+import { viewToolRenderer } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
+import { taskToolView } from "@veyyon/coding-agent/task/task-view";
 import type { AgentProgress, SingleResult, TaskToolDetails } from "@veyyon/coding-agent/task/types";
+import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { useFullColor } from "../helpers/theme-assertions";
+
+/** The card the terminal draws from the task tool's view, which is what the product renders. */
+const taskToolRenderer = viewToolRenderer(taskToolView, { mergeCallAndResult: true });
 
 function runningProgress(overrides: Partial<AgentProgress> = {}): AgentProgress {
 	return {
@@ -263,11 +272,14 @@ describe("task progress rendering", () => {
 		const stripped = Bun.stripANSI(row);
 		expect(stripped).toContain(`${theme.status.done} DonePkg: List workspace packages`);
 		expect(stripped).not.toContain(theme.symbol("tool.task"));
-		// Same dot as live rows; completion reads as the label settling from
-		// accent to the plain foreground color.
-		const titlePart = `${theme.bold("DonePkg")}: List workspace packages`;
-		expect(row).toContain(theme.fg("text", titlePart));
-		expect(row).not.toContain(theme.fg("accent", titlePart));
+		// Same dot as live rows; completion reads as the label settling from accent to the plain
+		// foreground colour. The row states the id and its description as two runs of that colour
+		// rather than one, since each is a span the card named, so assert the colour on both and
+		// assert the accent is gone from either.
+		expect(row).toContain(theme.fg("text", theme.bold("DonePkg")));
+		expect(row).toContain(theme.fg("text", ": List workspace packages"));
+		expect(row).not.toContain(theme.fg("accent", theme.bold("DonePkg")));
+		expect(row).not.toContain(theme.fg("accent", ": List workspace packages"));
 	});
 
 	it("shows the dispatch glyph in the header while agents run, not a spinner", async () => {
@@ -452,10 +464,10 @@ describe("task progress rendering", () => {
 		expect(collapsed).toContain("1 failed");
 	});
 
-	// The user must be able to see the model of every subagent launched. The
-	// resolved-model badge now defaults on, so a launched subagent's model id
+	// The user must be able to see the model of every agent launched. The
+	// resolved-model badge now defaults on, so a launched agent's model id
 	// shows in its status line without any opt-in.
-	it("shows the resolved model badge on a running subagent by default", async () => {
+	it("shows the resolved model badge on a running agent by default", async () => {
 		const theme = (await getThemeByName("dark"))!;
 		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
 		const progress = runningProgress({
@@ -482,7 +494,7 @@ describe("task progress rendering", () => {
 	});
 
 	it("hides the resolved model badge when the setting is turned off", async () => {
-		settings.set("subagent.showResolvedModelBadge", false);
+		settings.set("agent.showResolvedModelBadge", false);
 		const theme = (await getThemeByName("dark"))!;
 		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
 		const progress = runningProgress({

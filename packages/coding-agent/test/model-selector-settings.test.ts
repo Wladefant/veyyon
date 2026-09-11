@@ -4,12 +4,12 @@ import {
 	cachedAuthAwareBrowserItems,
 	formatModelAuthBadge,
 	resolveModelAuthStatus,
-} from "@veyyon/coding-agent/modes/components/model-selector";
+} from "@veyyon/coding-agent/modes/terminal/components/selectors/model-selector";
 import {
 	DEFAULT_MODEL_SETTING_ID,
 	getSettingsForTab,
 	invalidateSettingDefsCache,
-} from "@veyyon/coding-agent/modes/components/settings-defs";
+} from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-defs";
 
 describe("settings model pickers", () => {
 	it("exposes modelRoles as a searchable roles editor, not a JSON text field", () => {
@@ -26,22 +26,21 @@ describe("settings model pickers", () => {
 	});
 
 	/**
-	 * The subagent model is a picker too, but it lives on the Subagents tab beside
-	 * the per-agent rows and the delegation switch that decide alongside it. It sat
-	 * on the Model tab while the per-agent overrides sat behind `/agents` and a role
-	 * called "Subtask" sat in the role table: three places to look for one decision,
-	 * which is how an operator could set a subagent model and watch something else
-	 * win.
+	 * The shared agent model is a picker on the Agents tab and nowhere else, drawn under the
+	 * switch that turns it on. It also sat on the Model tab while the per-agent overrides sat behind
+	 * `/agents` and a role called "Subtask" sat in the role table: three places to look for one
+	 * decision, which is how an operator could set an agent model and watch something else win. A
+	 * Model-tab row is that split reopening.
 	 */
-	it("exposes subagent.model as a model selector on the subagents tab", () => {
+	it("exposes agent.model on the Agents tab only", () => {
 		invalidateSettingDefsCache();
-		expect(getSettingsForTab("subagents").find(def => def.path === "subagent.model")?.type).toBe("modelSelector");
-		expect(getSettingsForTab("model").find(def => def.path === "subagent.model")).toBeUndefined();
+		expect(getSettingsForTab("agents").find(def => def.path === "agent.model")?.type).toBe("modelSelector");
+		expect(getSettingsForTab("model").find(def => def.path === "agent.model")).toBeUndefined();
 	});
 
 	/**
 	 * The gap this closes: `/settings` had no control for the DEFAULT (main)
-	 * model — only roles and the subagent slot — so a user could not pick the
+	 * model — only roles and the agent slot — so a user could not pick the
 	 * model each new session starts on without editing config by hand. The entry
 	 * is synthetic (no schema key; it maps to the `default` model-role slot the
 	 * interactive `/model` choice persists to) and must sit at the very top of the

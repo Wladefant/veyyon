@@ -68,7 +68,7 @@ export const CHANGELOG_URL: string = "https://veyyon.dev/changelog";
  * release tooling that names a version. They must agree, so the anchor format
  * lives here rather than being rebuilt at each call site.
  *
- * The format is the one `website/tools/gen-changelog.mjs` emits: it writes
+ * The format is the one `apps/site/tools/gen-changelog.mjs` emits: it writes
  * `<h2 id="v1-2-3">` for version `1.2.3`, replacing every dot with a dash
  * because a dot in a fragment id is legal but awkward to select in CSS. A
  * leading `v` in the argument is tolerated, since callers hold versions both
@@ -86,6 +86,17 @@ export const CONFIG_DIR_NAME: string = ".veyyon";
 
 /** Ordered main settings filenames: canonical write target first, legacy-compatible YAML fallback second. */
 export const MAIN_CONFIG_FILENAMES = ["config.yml", "config.yaml"] as const;
+
+/**
+ * Basename of the cross-profile directory holding user-authored agent
+ * definitions ({@link getGlobalSubagentsDir}).
+ *
+ * `subagents`, not `agents`: the config root already holds `profiles/`, whose
+ * every entry carries an `agent/` dir, so an `agent/agents/` path named two
+ * unrelated things one segment apart. `<extension>/agents/` keeps its own name
+ * — that is the published plugin-authoring convention, not this directory.
+ */
+export const SUBAGENTS_DIR_NAME = "subagents";
 
 /**
  * Bounded retry for a PRESENT-but-momentarily-unreadable global config (EMFILE /
@@ -255,24 +266,19 @@ function isUsableXdgBase(envVar: string, value: string): boolean {
 /**
  * The user's home directory, refused rather than guessed when it is unusable.
  *
- * Every path veyyon owns hangs off this one value, so a bad answer here is not a
- * bad path, it is every path. Two answers are bad in ways that do not announce
- * themselves:
+ * Every path veyyon owns hangs off this one value, so a bad answer here is not a bad path, it is
+ * every path. Two answers are bad without announcing themselves:
  *
- *  - EMPTY (`HOME=` with no usable passwd entry, common in a stripped container
- *    or a `env -i` invocation). `path.join("", ".veyyon")` is `.veyyon`, a
- *    RELATIVE path, so config, sessions, and credentials would be created in
- *    whatever directory the process happened to start in, and a second run from
- *    a different directory would silently see a different, empty veyyon.
- *  - the filesystem ROOT (`HOME=/`). Every write then lands in `/.veyyon`,
- *    outside the user's control and usually not writable, and on the occasions
- *    it IS writable (a root shell) it litters the root of the filesystem.
+ *  - Empty (`HOME=` with no usable passwd entry, common in a stripped container or an `env -i`
+ *    invocation). `path.join("", ".veyyon")` is `.veyyon`, a relative path, so config, sessions and
+ *    credentials are created in whatever directory the process started in, and a second run from a
+ *    different directory sees a different, empty veyyon.
+ *  - The filesystem root (`HOME=/`). Every write lands in `/.veyyon`, outside the user's control
+ *    and usually not writable; where it is writable, it litters the root of the filesystem.
  *
- * Both are configuration faults with a one-line fix, so this throws and names
- * the fix rather than proceeding somewhere arbitrary.
- *
- * Exported so the refusal can be tested directly: `os.homedir()` is resolved
- * once per process, so a test cannot reach the empty case by assigning `HOME`.
+ * Both are configuration faults with a one-line fix, so this throws and states the fix rather than
+ * proceeding somewhere arbitrary. Exported so the refusal can be tested directly: `os.homedir()` is
+ * resolved once per process, so a test cannot reach the empty case by assigning `HOME`.
  */
 export function resolveHomeDirOrThrow(): string {
 	const home = os.homedir();
@@ -799,6 +805,93 @@ export function writeGlobalProfileSharing(shared: boolean): string {
 }
 
 /**
+ * The GLOBAL config key holding machine-wide resource limits.
+ *
+ * These are machine-wide rather than per-profile because they bound VEYYON,
+ * not one session and not one profile. Two profiles running at once share one
+ * CPU and one disk, so a cap held per profile is not the cap it names: each
+ * copy reads its own file, and the machine gets the sum. Grouped under one
+ * mapping so a hand-edited config keeps them together instead of scattering
+ * four numbers across the top level.
+ *
+ * The key is also the settings-path prefix (`machine.cpuLimitCores` is stored
+ * at `machine.cpuLimitCores`), so the panel, the generated reference and the
+ * file a person opens all spell the value the same way.
+ */
+export const GLOBAL_MACHINE_CONFIG_KEY = "machine";
+
+/**
+ * Every machine-wide limit, by leaf name under {@link GLOBAL_MACHINE_CONFIG_KEY}.
+ * The leaf names match the per-session setting they bound, so the two tiers of
+ * one resource are recognisably the same knob at two scopes.
+ *
+ * Enumerated here rather than at each call site: the settings domain, the
+ * bindings map and the budget placement all derive from this list, so adding a
+ * resource is one edit and cannot reach three of the four places.
+ */
+export const GLOBAL_RESOURCE_LIMITS = ["cpuLimitCores", "memoryLimitGb", "writeBudgetGb", "maxProcesses"] as const;
+
+export type GlobalResourceLimit = (typeof GLOBAL_RESOURCE_LIMITS)[number];
+
+/**
+ * One machine-wide limit from the GLOBAL config. `0` means no limit, which is
+ * also what an absent key means, so an unconfigured machine and an explicitly
+ * lifted one behave identically.
+ *
+ * Throws on a value that is present but not a non-negative finite number,
+ * naming the file and the key: a limit is a safety control, and a typo that
+ * silently read as "no limit" is the failure this must not have.
+ */
+export function resolveGlobalResourceLimit(limit: GlobalResourceLimit): number {
+	const { record, filePath } = readGlobalConfigRecord();
+	const resources = record[GLOBAL_MACHINE_CONFIG_KEY];
+	if (!isRecord(resources)) return 0;
+	const value = resources[limit];
+	if (value === undefined) return 0;
+	if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+		throw new Error(
+			`Global config ${filePath}: ${GLOBAL_MACHINE_CONFIG_KEY}.${limit} must be a non-negative number ` +
+				`(0 = no limit). Got ${JSON.stringify(value)}.`,
+		);
+	}
+	return value;
+}
+
+/**
+ * Module-load-safe variant of {@link resolveGlobalResourceLimit}. A broken
+ * global config must never crash a bare import or the settings panel.
+ *
+ * It reports NO limit rather than some limit, because the alternative is worse:
+ * a config the reader cannot parse would otherwise cap a machine at a number
+ * nobody chose, with no way to see where it came from. The budget placement
+ * surfaces the parse failure through {@link resolveGlobalResourceLimit} on the
+ * path that actually applies limits, so the error is reported rather than lost.
+ */
+export function readGlobalResourceLimitSafe(limit: GlobalResourceLimit): number {
+	try {
+		return resolveGlobalResourceLimit(limit);
+	} catch {
+		return 0;
+	}
+}
+
+/**
+ * Set or lift one machine-wide limit, preserving every other key. `0` deletes
+ * the leaf and an emptied `resources` mapping, so a fully lifted config leaves
+ * no stub behind. Returns the file written.
+ */
+export function writeGlobalResourceLimit(limit: GlobalResourceLimit, value: number): string {
+	return mutateGlobalConfigKey(GLOBAL_MACHINE_CONFIG_KEY, existing => {
+		const resources = isRecord(existing[GLOBAL_MACHINE_CONFIG_KEY])
+			? { ...(existing[GLOBAL_MACHINE_CONFIG_KEY] as Record<string, unknown>) }
+			: {};
+		if (Number.isFinite(value) && value > 0) resources[limit] = Math.floor(value);
+		else delete resources[limit];
+		return Object.keys(resources).length > 0 ? resources : undefined;
+	});
+}
+
+/**
  * The onboarding-generation key in the GLOBAL config.
  *
  * Onboarding is something a HUMAN does once per machine, so its marker belongs
@@ -979,6 +1072,24 @@ export function getSharedAuthDir(): string {
 	return path.join(getBaseConfigRoot(), "shared-auth");
 }
 
+/**
+ * Directory holding user-authored agent definitions (`<name>.md`, YAML
+ * frontmatter + prompt body), read by every profile.
+ *
+ * DISCOVERY IS GLOBAL, ENABLING IS PER-PROFILE. A definition is authored
+ * content, so it lives once at the base config root beside the global
+ * `config.yml`; whether a profile may spawn it is that profile's
+ * `agent.agents.<name>.enabled`. Keeping the file inside a profile's agent
+ * dir meant re-authoring the same agent for every profile, and it read as
+ * profile state rather than as something the operator wrote.
+ *
+ * Not XDG-redirected, for the reason {@link getSharedAuthDir} is not: one fixed
+ * machine-wide location is the whole point.
+ */
+export function getGlobalSubagentsDir(): string {
+	return path.join(getBaseConfigRoot(), SUBAGENTS_DIR_NAME);
+}
+
 /** Module-load-safe variant of {@link resolveGlobalDefaultProfile}: a broken global config must not crash a bare import; the CLI re-validates loudly. */
 export function readGlobalDefaultProfileSafe(): string | undefined {
 	try {
@@ -1057,13 +1168,37 @@ export function pathIsWithin(root: string, candidate: string): boolean {
 	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+/**
+ * The path from `root` down to `candidate`, or null when `candidate` is not under it.
+ *
+ * THE RELATIVE PATH IS TAKEN FROM THE CANDIDATE'S OWN SPELLING. Containment is decided on
+ * `normalizePathForComparison`, which lowercases on Windows because that filesystem is
+ * case-insensitive; the string handed back must not be, and it was. A project in
+ * `C:\Users\dev\Projects\MyApp\Src` reported `myapp\src`, and that string is what the status
+ * line paints and what a rule path is named by, so a Windows session read its own directories
+ * in a case it had never used.
+ */
 export function relativePathWithinRoot(root: string, candidate: string): string | null {
-	if (!pathIsWithin(root, candidate)) return null;
-	const normalizedRoot = normalizePathForComparison(root);
-	const normalizedCandidate = normalizePathForComparison(candidate);
+	const resolvedRoot = resolveEquivalentPath(root);
+	const resolvedCandidate = resolveEquivalentPath(candidate);
+	const normalizedRoot = process.platform === "win32" ? resolvedRoot.toLowerCase() : resolvedRoot;
+	const normalizedCandidate = process.platform === "win32" ? resolvedCandidate.toLowerCase() : resolvedCandidate;
 	const relative = path.relative(normalizedRoot, normalizedCandidate);
-	return relative || null;
+	if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) return null;
+	// HOW DEEP, from the folded comparison; WHICH NAMES, from the candidate. Asking
+	// `path.relative` for the answer over the resolved spellings is not enough: it folds case
+	// on win32 and not on posix, so a root configured in one case and a directory on disk in
+	// another walked up and back down (`../../Users/dev/Projects/MyApp`) wherever the platform
+	// compares exactly. Containment is already settled above, so the tail is that many
+	// segments off the end of the candidate.
+	const depth = relative.split(PATH_SEPARATORS).filter(segment => segment !== "").length;
+	if (depth === 0) return null;
+	const segments = resolvedCandidate.split(PATH_SEPARATORS).filter(segment => segment !== "");
+	return segments.slice(Math.max(0, segments.length - depth)).join(path.sep) || null;
 }
+
+/** Either platform's separator, since a resolved path may be spelled with either. */
+const PATH_SEPARATORS = /[\\/]+/u;
 
 let projectDir = standardizeMacOSPath(process.cwd());
 
@@ -1139,44 +1274,23 @@ function isUnderPath(candidate: string, root: string): boolean {
 /**
  * The config root named by `VEYYON_CONFIG_DIR`, or `undefined` when it is unset.
  *
- * ## The bug this is the fix for
+ * The value is a path, not a name: absolute is taken as written, relative is resolved against the
+ * home. It is then checked against the one thing it must never be, somewhere inside the operator's
+ * home. A joined name instead makes `~/.veyyon-<anything>` reachable from one environment variable,
+ * and a suite setting one in the belief that it has isolated itself writes into the real home,
+ * because assigning `process.env.HOME` does not move `os.homedir()` under Bun, which resolves it
+ * once at process start.
  *
- * This used to be `getConfigDirName()`, which returned a NAME that every caller
- * `path.join`ed onto `os.homedir()`. A location that can only ever land inside the home
- * is not a location, it is a rename, and both halves of that produced damage:
+ * The default root `~/.veyyon` is unaffected: that is what an unset variable gives, and this
+ * function is not consulted for it.
  *
- *  - A BARE NAME created a real directory in the operator's real home. Assigning
- *    `process.env.HOME` does not move `os.homedir()` under Bun -- it is resolved once at
- *    process start -- so a suite setting `VEYYON_CONFIG_DIR=".veyyon-mysuite"` believing
- *    it had isolated itself was writing to `~/.veyyon-mysuite`. 136 of those accumulated
- *    in one real home before anyone counted them. The mechanism read as isolation and
- *    was its opposite.
- *  - An ABSOLUTE PATH was REFUSED, so the one spelling that could NOT land in the home
- *    was the one spelling forbidden, and the sanctioned escape was
- *    `path.relative(os.homedir(), tempRoot)`: a run of `..` segments whose correctness
- *    depends on a home the reader cannot see from the call site.
+ * Inside the test sandbox the home is a tmpfs the guest owns, with the operator's real home absent
+ * from the filesystem view, so {@link SANDBOX_MARKER_ENV_KEY} lifts the refusal. It is trusted in
+ * this one direction only; the strong half of the pair is the reachability proof in
+ * `packages/utils/test/helpers/sandbox-gate.ts`, which refuses to let the process start when a real
+ * home is in reach.
  *
- * So the rule is inverted. The value is a PATH -- absolute taken as written, relative
- * resolved against the home, which keeps the `..` form above working -- and then checked
- * against the one thing it must never be: somewhere inside the operator's home. The
- * default root `~/.veyyon` is unaffected: that is what you get when the variable is
- * unset, and this function is not consulted.
- *
- * ## Why the sandbox marker grants it
- *
- * Inside the test sandbox the home IS disposable: a tmpfs the guest owns, with the
- * operator's real home absent from the filesystem view entirely. Refusing there would
- * break every suite that legitimately puts its config root under its own temp home while
- * protecting nothing. {@link SANDBOX_MARKER_ENV_KEY} is trusted in this one direction
- * only, and it is the weaker half of the pair: the strong half is the reachability proof
- * in `packages/utils/test/helpers/sandbox-gate.ts`, which has already refused to let the
- * process start if a real home was in reach.
- *
- * ## What breaks if this regresses
- *
- * Reverting to a joined name makes `~/.veyyon-<anything>` reachable from one environment
- * variable again, which is how the 136 directories were created.
- * `packages/utils/test/sandbox-gate-contracts.test.ts` fails when it does.
+ * `packages/utils/test/sandbox-gate-contracts.test.ts` fails when this regresses to a joined name.
  */
 export function getConfigRootOverride(): string | undefined {
 	const override = pickProcessEnv(...CONFIG_DIR_ENV_KEYS);
@@ -1786,8 +1900,29 @@ export function profileExists(profile: string | undefined): boolean {
  * Root entries that stay GLOBAL (cross-profile) under the new layout. Every
  * other entry in the config root belongs to the legacy default profile and is
  * moved into `profiles/default/` by {@link migrateLegacyDefaultProfileLayout}.
+ *
+ * The literals name state this module does not own but the config root holds:
+ * `shared-auth/` ({@link getSharedAuthDir}), the cross-profile `AGENTS.md` the
+ * native guidance provider reads, and the global vault pair the secrets runtime
+ * addresses through {@link getGlobalConfigRootDir}. Moving one of them into a
+ * single profile takes it away from every other profile, and the vault key
+ * takes every sealed credential with it, so the move never sees them.
+ *
+ * {@link SUBAGENTS_DIR_NAME} is here for the same reason and is the one entry
+ * whose omission would be silent: a moved `subagents/` still resolves for the
+ * default profile, so the definitions would keep working for whoever ran the
+ * migration and vanish for every other profile.
  */
-const GLOBAL_ROOT_ENTRIES = new Set<string>([PROFILES_DIR_NAME, INSTALL_ID_FILE, ...MAIN_CONFIG_FILENAMES]);
+const GLOBAL_ROOT_ENTRIES: Record<string, true> = {
+	[PROFILES_DIR_NAME]: true,
+	[SUBAGENTS_DIR_NAME]: true,
+	[INSTALL_ID_FILE]: true,
+	"shared-auth": true,
+	"AGENTS.md": true,
+	"vault.json": true,
+	"vault.key": true,
+	...Object.fromEntries(MAIN_CONFIG_FILENAMES.map(name => [name, true])),
+};
 
 export interface LegacyLayoutMigrationResult {
 	migrated: boolean;
@@ -1836,8 +1971,17 @@ export function migrateLegacyDefaultProfileLayout(): LegacyLayoutMigrationResult
 		return { migrated: false, movedEntries: [], targetDir };
 	}
 	if (fs.existsSync(targetDir) && !resuming) {
-		// A completed new-layout dir (no marker) next to a legacy one: genuine
-		// conflict, never a mid-migration state. Refuse rather than guess.
+		// An EMPTY `agent/` is not a second candidate profile. It holds no data to
+		// merge, so the refusal below would hand the operator an instruction ("move
+		// the contents") with no contents, and no choice that resolves it — a
+		// directory recreated after a migration, or left behind by one, would stop
+		// every launch until they deleted it by hand. Drop it and carry on.
+		if (fs.readdirSync(legacyAgentDir).length === 0) {
+			fs.rmSync(legacyAgentDir, { recursive: true, force: true });
+			return { migrated: false, movedEntries: [], targetDir };
+		}
+		// A completed new-layout dir (no marker) next to a legacy one WITH data:
+		// genuine conflict, never a mid-migration state. Refuse rather than guess.
 		throw new Error(
 			`Both the legacy default-profile layout (${legacyAgentDir}) and the new one (${targetDir}) exist. ` +
 				`Veyyon cannot guess which is current. Merge or remove one — typically: move the contents of ` +
@@ -1851,7 +1995,7 @@ export function migrateLegacyDefaultProfileLayout(): LegacyLayoutMigrationResult
 	fs.writeFileSync(markerPath, "");
 	const movedEntries: string[] = [];
 	for (const entry of fs.readdirSync(root)) {
-		if (GLOBAL_ROOT_ENTRIES.has(entry)) continue;
+		if (GLOBAL_ROOT_ENTRIES[entry]) continue;
 		fs.renameSync(path.join(root, entry), path.join(targetDir, entry));
 		movedEntries.push(entry);
 	}
@@ -1907,7 +2051,7 @@ export function getPluginsDir(home?: string): string {
 	return dirs.rootSubdir("plugins", "data");
 }
 
-/** Where npm installs packages (profile plugins dir / node_modules). */
+/** Where plugin packages are installed (profile plugins dir / node_modules). */
 export function getPluginsNodeModules(home?: string): string {
 	return path.join(getPluginsDir(home), "node_modules");
 }
@@ -2036,25 +2180,33 @@ export function getGpuCachePath(): string {
 }
 
 /**
- * Get the GitHub view cache database path (profile `cache/github-cache.db`).
- * Honors the `VEYYON_GITHUB_CACHE_DB` env var when set so tests can isolate the
- * cache file without touching the rest of the config root.
+ * Get the launch facts path (profile `cache/launch-facts.json`).
+ *
+ * Holds what the last launch of a project knew about it at rest — the model's
+ * display name, whether the working tree was dirty, and what the context gauge
+ * read — so the launch card can state those instead of placeholders in the half
+ * second before the session finishes booting.
  */
+export function getLaunchFactsCachePath(): string {
+	return dirs.rootSubdir(path.join("cache", "launch-facts.json"), "cache");
+}
+
+/** A profile `cache/<file>` path, or the value of `envVar` when it is set so a test or operator can relocate it. */
+function cacheFilePath(envVar: string, file: string): string {
+	return pickProcessEnv(envVar) || dirs.rootSubdir(path.join("cache", file), "cache");
+}
+
+/** Get the GitHub view cache database path (profile `cache/github-cache.db`, `VEYYON_GITHUB_CACHE_DB` overrides). */
 export function getGithubCacheDbPath(): string {
-	const override = pickProcessEnv("VEYYON_GITHUB_CACHE_DB");
-	if (override) return override;
-	return dirs.rootSubdir(path.join("cache", "github-cache.db"), "cache");
+	return cacheFilePath("VEYYON_GITHUB_CACHE_DB", "github-cache.db");
 }
 
 /**
- * Get the encrypted auth-broker snapshot cache path (profile `cache/auth-broker-snapshot.enc`).
- * Honors the `VEYYON_AUTH_BROKER_SNAPSHOT_CACHE` env var when set so tests and
- * operators can isolate or relocate the cache file.
+ * Get the encrypted auth-broker snapshot cache path (profile `cache/auth-broker-snapshot.enc`,
+ * `VEYYON_AUTH_BROKER_SNAPSHOT_CACHE` overrides).
  */
 export function getAuthBrokerSnapshotCachePath(): string {
-	const override = pickProcessEnv("VEYYON_AUTH_BROKER_SNAPSHOT_CACHE");
-	if (override) return override;
-	return dirs.rootSubdir(path.join("cache", "auth-broker-snapshot.enc"), "cache");
+	return cacheFilePath("VEYYON_AUTH_BROKER_SNAPSHOT_CACHE", "auth-broker-snapshot.enc");
 }
 
 /** Get the local FastEmbed model cache directory (profile `cache/fastembed`). */

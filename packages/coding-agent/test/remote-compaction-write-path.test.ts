@@ -35,15 +35,17 @@ import {
 	resolveServerCompactionTransport,
 } from "@veyyon/agent-core/compaction";
 import type { AssistantMessage } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { resetServerCompactionRouteCache } from "@veyyon/ai/providers/openai-compaction";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { willCompactRemotely } from "@veyyon/coding-agent/modes/components/compaction-summary-message";
-import { AgentSession, type AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import type { CompactionEntry } from "@veyyon/coding-agent/session/session-entries";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { resolveCompactionKind } from "@veyyon/coding-agent/presentation/summary-builder";
+import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
+import type { CompactionEntry } from "@veyyon/kernel/session/session-entries";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 
 /** The compaction item OpenAI returns: opaque, and the whole point of the window. */
@@ -65,7 +67,12 @@ interface CompactServer {
 	close(): Promise<void>;
 }
 
-async function startCompactServer(): Promise<CompactServer> {
+/**
+ * `compactStatus` makes the compact route answer a status other than 200. A
+ * host that does not serve the route at all answers 404, which is the shape a
+ * real ChatGPT Codex session hit.
+ */
+async function startCompactServer(compactStatus = 200): Promise<CompactServer> {
 	const requests: Array<Record<string, unknown>> = [];
 	const server = http.createServer((req, res) => {
 		let body = "";
@@ -78,6 +85,10 @@ async function startCompactServer(): Promise<CompactServer> {
 				return;
 			}
 			requests.push(JSON.parse(body || "{}"));
+			if (compactStatus !== 200) {
+				res.writeHead(compactStatus, { "content-type": "application/json" }).end('{"detail":"Not Found"}');
+				return;
+			}
 			res.writeHead(200, { "content-type": "application/json" }).end(
 				JSON.stringify({
 					id: "resp_compact_1",
@@ -225,7 +236,7 @@ describe("a remote compaction result reaching the driver write path", () => {
 		// No duplicate compaction: the window the provider returned is the
 		// artifact, so the local summarizer must never run for the same span.
 		expect(sideStreamCalls).toBe(0);
-		expect(willCompactRemotely(session)).toBe(true);
+		expect(resolveCompactionKind(session)).toBe("openai-remote");
 
 		// Single-window: no summary text, and the window is the artifact.
 		expect(result.summary).toBe("");
@@ -401,7 +412,7 @@ describe("compaction.remote off: the local pass runs with the configured compact
 	});
 
 	it("writes a standard summary produced by the configured model and never calls the provider endpoint", async () => {
-		expect(willCompactRemotely(session)).toBe(false);
+		expect(resolveCompactionKind(session)).toBe("local");
 
 		const result = await session.compact();
 
@@ -536,8 +547,8 @@ describe("remote compaction with no resolvable credential", () => {
 	});
 
 	it("falls back to the local summarizer and announces the downgrade once", async () => {
-		// The label still resolves remote: the notice is the honesty backstop.
-		expect(willCompactRemotely(session)).toBe(true);
+		// The label still names the remote route: the notice is the honesty backstop.
+		expect(resolveCompactionKind(session)).toBe("openai-remote");
 
 		const result = await session.compact();
 
@@ -580,5 +591,164 @@ describe("remote compaction with no resolvable credential", () => {
 		expect(
 			notices.filter(n => n.level === "warning" && n.message.includes("no API key for openai/gpt-5.1")),
 		).toHaveLength(1);
+	});
+});
+
+/**
+ * WHY: a live session compacting on a host that does not serve the compact
+ * route produced, on every compaction for the whole session:
+ *
+ *   Server-side compaction failed (Server-side compaction failed (404 Not
+ *   Found)); falling back to local compaction.
+ *
+ * Two defects in one line. The message was wrapped in its own prefix, and the
+ * 404 was retried once per compaction even though the route cannot appear
+ * mid-run. Both are driver-visible, so both are asserted here through
+ * `AgentSession.compact()` rather than at the transport.
+ *
+ * What this does NOT catch: the transport-level status matrix (which statuses
+ * are permanent and which are retried). That is
+ * `packages/ai/test/a-compact-route-that-answers-404-is-not-asked-again.test.ts`.
+ */
+describe("a compact route that answers 404 during a live session", () => {
+	let tempDir: TempDir;
+	let compactServer: CompactServer;
+	let session: AgentSession;
+	let sessionManager: SessionManager;
+	let authStorage: AuthStorage;
+	let notices: Array<Extract<AgentSessionEvent, { type: "notice" }>>;
+
+	beforeEach(async () => {
+		resetServerCompactionRouteCache();
+		notices = [];
+		tempDir = TempDir.createSync("@pi-remote-compaction-404-");
+		compactServer = await startCompactServer(404);
+
+		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
+		authStorage.setRuntimeApiKey("openai", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage);
+		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
+
+		const bundled = getBundledModel("openai", "gpt-5.1");
+		if (!bundled) throw new Error("Expected built-in openai/gpt-5.1 to exist");
+		const model = { ...bundled, baseUrl: compactServer.baseUrl, contextWindow: 200_000, maxTokens: 64_000 };
+		expect(resolveServerCompactionTransport(model)).toBeDefined();
+
+		for (let i = 0; i < 8; i++) {
+			sessionManager.appendMessage({ role: "user", content: `turn ${i}`, timestamp: Date.now() });
+			sessionManager.appendMessage({
+				role: "assistant",
+				content: [{ type: "text", text: `reply ${i}` }],
+				api: "openai-responses",
+				provider: "openai",
+				model: "gpt-5.1",
+				stopReason: "stop",
+				usage: {
+					input: 1000,
+					output: 100,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 1100,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				timestamp: Date.now(),
+			});
+		}
+
+		const agent = new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } });
+		const sideStreamFn: StreamFn = () => {
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				stream.push({
+					type: "done",
+					reason: "stop",
+					message: {
+						role: "assistant",
+						content: [{ type: "text", text: "local fallback summary" }],
+						api: "openai-responses",
+						provider: "openai",
+						model: "gpt-5.1",
+						stopReason: "stop",
+						usage: {
+							input: 1,
+							output: 1,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 2,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						timestamp: Date.now(),
+					},
+				});
+			});
+			return stream;
+		};
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settings: Settings.isolated({ "compaction.remote": true, "compaction.keepRecentTokens": 200 }),
+			modelRegistry,
+			sideStreamFn,
+		});
+		session.subscribe(event => {
+			if (event.type === "notice") notices.push(event);
+		});
+	});
+
+	afterEach(async () => {
+		vi.restoreAllMocks();
+		resetServerCompactionRouteCache();
+		try {
+			await session?.dispose();
+		} finally {
+			authStorage?.close();
+			await compactServer?.close();
+			await tempDir?.remove();
+		}
+	});
+
+	it("names the model the route is missing for, without wrapping the message in itself", async () => {
+		await session.compact();
+
+		expect(compactServer.requests).toHaveLength(1);
+		const warnings = notices.filter(n => n.level === "warning").map(n => n.message);
+		expect(warnings).toEqual([
+			"Server-side compaction is not available for openai/gpt-5.1 (404 Not Found); falling back to local compaction.",
+		]);
+		for (const warning of warnings) {
+			expect(warning.split("Server-side compaction")).toHaveLength(2);
+		}
+	});
+
+	it("does not ask the route again on the next compaction", async () => {
+		await session.compact();
+		expect(compactServer.requests).toHaveLength(1);
+
+		for (let i = 0; i < 8; i++) {
+			session.sessionManager.appendMessage({ role: "user", content: `after ${i}`, timestamp: Date.now() });
+			session.sessionManager.appendMessage({
+				role: "assistant",
+				content: [{ type: "text", text: `after reply ${i}` }],
+				api: "openai-responses",
+				provider: "openai",
+				model: "gpt-5.1",
+				stopReason: "stop",
+				usage: {
+					input: 1000,
+					output: 100,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 1100,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				timestamp: Date.now(),
+			});
+		}
+		await session.compact();
+
+		// The route cannot appear mid-run, so the second pass takes the local
+		// path without spending a round trip to be told 404 again.
+		expect(compactServer.requests).toHaveLength(1);
+		expect(notices.filter(n => n.level === "warning")).toHaveLength(1);
 	});
 });

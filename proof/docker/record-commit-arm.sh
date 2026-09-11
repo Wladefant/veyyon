@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+# Record one arm of one commit, in a real terminal, inside the container.
+#
+#   record-commit-arm.sh <hash> <before|after> <hold-seconds> <command...>
+#
+# The arm decides which SOURCE the terminal runs: `after` is the commit's own
+# tree, `before` is its first parent's. Nothing else differs -- same image, same
+# seeded home, same command, same geometry -- so a difference between the two
+# videos is the commit and cannot be anything else.
+#
+# The tree is a `git archive` extraction rather than a worktree: it costs under
+# a second, carries no .git, and cannot be confused with a checkout someone is
+# working in. `proof/captures` is excluded because it is 92MB of the branch's
+# own recordings and no source depends on it.
+#
+# node_modules is bind-mounted from the working tree at /repo/node_modules. Its
+# `@veyyon/*` entries are RELATIVE symlinks (`../../hosts/terminal/engine`), so inside
+# the container they resolve into the archived tree's own packages, not into the
+# working tree. That is the whole reason the mount is safe: the arm runs the
+# commit's source, and only its third-party dependencies come from outside.
+#
+# The rig -- scenes, xsession, seed -- is mounted separately at /rig from the
+# CURRENT branch, because a commit from the middle of the branch predates the
+# recorder itself. The scene is therefore the same for both arms of every
+# commit, whatever the tree under it knows about recording.
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# The tag carries the bun the image was built with; proof/docker/recorder-image.sh
+# owns it, and a bump makes a stale image a missing one.
+# shellcheck source=proof/docker/recorder-image.sh
+source "${REPO_ROOT}/proof/docker/recorder-image.sh"
+# shellcheck source=proof/docker/scene-config.sh
+source "${REPO_ROOT}/proof/docker/scene-config.sh"
+HASH="${1:?usage: record-commit-arm.sh <hash> <arm> <hold> <command...>}"
+ARM="${2:?arm}"
+HOLD="${3:?hold seconds}"
+shift 3
+COMMAND="${*:?command}"
+
+case "${ARM}" in
+before) REF="${HASH}^" ;;
+after) REF="${HASH}" ;;
+*)
+	echo "arm must be before or after" >&2
+	exit 2
+	;;
+esac
+
+# One scratch worktree per arm. Kept beside the repository rather than under a
+# path spelled from somebody's home directory: a default naming one machine's
+# account is unrunnable everywhere else and publishes the account. Override
+# COMMIT_PROOF_TREES to put the trees on another filesystem.
+TREES="${COMMIT_PROOF_TREES:-${REPO_ROOT}/.commit-proof-trees}"
+TREE="${TREES}/${HASH}-${ARM}"
+OUT="${REPO_ROOT}/proof/captures/x11/commits/${HASH}-${ARM}"
+
+rm -rf "${TREE}"
+mkdir -p "${TREE}" "${OUT}"
+git -C "${REPO_ROOT}" archive "${REF}" | tar -x -C "${TREE}" --exclude='proof/captures/*' -f -
+
+# A test the commit ADDS does not exist in its parent, so the before arm would
+# record a missing file instead of a failing assertion. Every non-shipped file
+# the commit touched is copied into the before tree: the test is then identical
+# in both arms and the only variable left is the shipped source it is pointed at.
+# `tests/simulations` is the whole test-harness package (private, never
+# published), so a suite whose harness grew a measurement in the same commit
+# still compiles against the parent instead of dying on a missing export.
+if [[ "${ARM}" == "before" && "${OVERLAY_TESTS:-1}" == "1" ]]; then
+	while IFS= read -r f; do
+		[[ -z "${f}" ]] && continue
+		case "${f}" in
+		*.test.ts | tests/simulations/src/*.ts | tests/simulations/src/*/*.ts | scripts/demos/*.ts | proof/scenes/*.sh) ;;
+		*) continue ;;
+		esac
+		mkdir -p "${TREE}/$(dirname "${f}")"
+		git -C "${REPO_ROOT}" show "${HASH}:${f}" >"${TREE}/${f}" 2>/dev/null || true
+	done < <(git -C "${REPO_ROOT}" show --pretty= --name-only "${HASH}")
+fi
+
+# The command goes in as a FILE, never as an environment string: the terminal's
+# bootstrap runs `exec ${SCENE_COMMAND}` unquoted, so a command carrying its own
+# quotes is word-split into pieces and the terminal opens on a syntax error. The
+# trailing sleep is what keeps the window alive after the command finishes --
+# the scene, not the command, decides when the camera stops.
+SCENE_COMMAND="bash /out/cmd.sh"
+SCENE_HOLD="${HOLD}"
+SCENE_CWD="${SCENE_CWD:-/repo}"
+scene_docker_env_args
+
+cat >"${OUT}/cmd.sh" <<EOF
+cd /repo
+${COMMAND}
+echo
+echo "--- command finished, arm=${ARM} ref=${REF}"
+touch /tmp/scene-done
+sleep 99999
+EOF
+
+docker run --rm \
+	--network "${PROOF_NETWORK:-veyyon-proof}" \
+	--mount "type=bind,src=${TREE},dst=/repo" \
+	--mount "type=bind,src=${REPO_ROOT}/node_modules,dst=/repo/node_modules,readonly" \
+	--mount "type=bind,src=${REPO_ROOT}/proof,dst=/rig,readonly" \
+	--mount "type=bind,src=${REPO_ROOT}/natives/bridge/bindings/native/veyyon_natives.linux-x64-modern.node,dst=/repo/natives/bridge/bindings/native/veyyon_natives.linux-x64-modern.node,readonly" \
+	--mount "type=bind,src=${REPO_ROOT}/natives/bridge/bindings/native/veyyon_natives.linux-x64-baseline.node,dst=/repo/natives/bridge/bindings/native/veyyon_natives.linux-x64-baseline.node,readonly" \
+	--mount "type=bind,src=${REPO_ROOT}/packages/coding-agent/src/export/html/tool-views.generated.js,dst=/repo/packages/coding-agent/src/export/html/tool-views.generated.js,readonly" \
+	--mount "type=bind,src=${OUT},dst=/out" \
+	--tmpfs /sandbox/home:exec,size=1g \
+	--tmpfs /tmp:exec,size=2g \
+	--shm-size=256m \
+	-e HOME=/sandbox/home \
+	-e TERM=xterm-kitty \
+	-e COLORTERM=truecolor \
+	-e LANG=C.UTF-8 \
+	-e LC_ALL=C.UTF-8 \
+	-e LOCAL_LLM_KEY=none \
+	-e DISPLAY=:99 \
+	-e "VEYYON_TEST_HOST_HOME=${HOME}" \
+	-e VEYYON_TEST_SANDBOX=docker-recorder \
+	-e SCENE_LIB=/rig/scenes/lib.sh \
+	"${SCENE_DOCKER_ENV[@]}" \
+	-w /repo \
+	"${RECORDER_IMAGE}" \
+	bash -lc '
+		set -e
+		mkdir -p /sandbox/home/.veyyon
+		cp -r /rig/docker/home-seed/. /sandbox/home/.veyyon/
+		mkdir -p /sandbox/home/demo/src
+		printf "export function parse(s) {\n\tif (!s) throw new Error(\"empty focus string\");\n\treturn s.trim();\n}\n" > /sandbox/home/demo/src/parser.ts
+		printf "# demo\n\nA tiny project the recording drives.\n" > /sandbox/home/demo/README.md
+		exec /rig/docker/xsession.sh /rig/scenes/'"${SCENE:-hold}"'.sh
+	' >"${OUT}/record.log" 2>&1
+
+# A scene that hit its ceiling recorded a command that never finished, and that is
+# worth knowing rather than hiding: `d4d2a4290`'s before arm hangs in the container
+# on a suite that passes locally in 836ms, and the recording of it hanging is the
+# most informative thing that arm can produce.
+#
+# So the clip is KEPT and the ceiling is RECORDED beside it, for the page to say out
+# loud. What must never ship is a clip that shows nothing -- the same arm previously
+# filed 171.6 seconds of a bare cursor, because a piped command prints only when its
+# pipe closes. That judgement belongs to one place, the blank-clip gate in
+# build-proof.py, which reads tighten.py's measurements: a clip that drew nothing
+# fails the page build wherever it came from. Deleting it here would have destroyed
+# the evidence AND left the gate nothing to catch.
+timed_out=""
+if [[ -f "${OUT}/scene-timeout" ]]; then
+	timed_out="yes"
+	rm -f "${OUT}/scene-timeout"
+	printf '%s\n' "${HOLD}" >"${OUT}/timeout-seconds"
+else
+	rm -f "${OUT}/timeout-seconds"
+fi
+
+mv -f "${OUT}/${SCENE:-hold}.mp4" "${OUT}/../${HASH}-${ARM}.mp4"
+mv -f "${OUT}/${SCENE:-hold}.gif" "${OUT}/../${HASH}-${ARM}.gif"
+
+# Every held frame past a readable beat is runtime the reader pays and learns
+# nothing from: the campaign's 178 clips summed to 38.8 minutes, of which 33
+# were frozen frames. Trim at the source so a new recording never ships holds.
+# One clip by name, never the directory: six containers record at once and two
+# encoders must never meet on the same file.
+python3 "${REPO_ROOT}/proof/tighten.py" trim "${OUT}/../${HASH}-${ARM}.mp4" --show 0 >/dev/null
+rm -rf "${TREE}"
+if [[ -n "${timed_out}" ]]; then
+	echo "recorded ${HASH}-${ARM} BUT the command was still running at the ${HOLD}s ceiling" >&2
+	exit 3
+fi
+echo "recorded ${HASH}-${ARM}"

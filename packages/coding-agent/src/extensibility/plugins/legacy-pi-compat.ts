@@ -236,11 +236,11 @@ const TYPEBOX_SPECIFIER_FILTER = /^(?:@sinclair\/typebox|typebox)$/;
 // pre-#3423 helpers that derived `/$bunfs/root/...` paths from
 // `import.meta.dir` are gone. Dev / source-link / installed-package modes
 // still need a real filesystem path for the source shims, which
-// `sourceShimPath` computes either from the npm prebuilt `dist/cli.js`
+// `sourceShimPath` computes either from the prebuilt `dist/cli.js`
 // bundle (`VEYYON_BUNDLED=true`) or directly from the monorepo source tree.
 
 /**
- * Compute the package root for the npm prebuilt `dist/cli.js` bundle.
+ * Compute the package root for the prebuilt `dist/cli.js` bundle.
  *
  * `bundle-dist.ts` defines `process.env.VEYYON_BUNDLED="true"`; after bundling,
  * `import.meta.dir` points at `<package>/dist`. Do not resolve the package via
@@ -275,6 +275,32 @@ function sourceShimPath(file: string): string {
 }
 
 /**
+ * The on-disk path of a compat shim that another workspace package owns, or
+ * `null` when this build has no source copy of it.
+ *
+ * Two shims left this package when the plugin loader and the tool registry moved
+ * into `@veyyon/kernel`, and a path built from this file's own directory stopped
+ * finding them: the binary build failed on
+ * `src/extensibility/legacy-pi-ai-shim.ts`, a file that no longer exists. The
+ * module resolver already states where a package publishes a subpath, so the
+ * owner is asked instead of a path being spelled here, and the next move is
+ * followed rather than restated.
+ */
+function packageShimPath(specifier: string): string | null {
+	try {
+		return url.fileURLToPath(import.meta.resolve(specifier));
+	} catch {
+		return null;
+	}
+}
+
+/** The kernel subpath serving the pi-ai root, which owns the borrowed `Type` runtime. */
+const KERNEL_PI_AI_SHIM_SPECIFIER = "@veyyon/kernel/loader/legacy-pi-ai-shim";
+
+/** The kernel subpath serving the Zod-backed TypeBox surface. */
+const KERNEL_TYPEBOX_SHIM_SPECIFIER = "@veyyon/kernel/registry/typebox";
+
+/**
  * Resolve the path the TypeBox compatibility shim ships at, then drop it when
  * the source file is missing.
  *
@@ -303,7 +329,10 @@ export function __resolveTypeBoxShimPath(
 	return pathExistsSync(sourcePath) ? sourcePath : null;
 }
 
-const TYPEBOX_SHIM_PATH = __resolveTypeBoxShimPath(IS_COMPILED_BINARY, sourceShimPath("typebox.ts"));
+const TYPEBOX_SHIM_PATH = __resolveTypeBoxShimPath(
+	IS_COMPILED_BINARY,
+	packageShimPath(KERNEL_TYPEBOX_SHIM_SPECIFIER) ?? "",
+);
 
 // Legacy extensions historically imported `Type` (and `Static`/`TSchema`) from
 // the package root of `@(scope)/pi-ai`. pi-ai 15.1.0 removed the runtime `Type`
@@ -315,7 +344,7 @@ const TYPEBOX_SHIM_PATH = __resolveTypeBoxShimPath(IS_COMPILED_BINARY, sourceShi
 // against the bundled pi-ai package.
 const LEGACY_PI_AI_SHIM_PATH = IS_COMPILED_BINARY
 	? bundledModuleVirtualSpecifier(`${CANONICAL_PI_SCOPE}/pi-ai`)
-	: sourceShimPath("legacy-pi-ai-shim.ts");
+	: (packageShimPath(KERNEL_PI_AI_SHIM_SPECIFIER) ?? "");
 
 // The coding-agent's own `./src/index.ts` cannot be listed as an extra
 // `bun --compile` entrypoint alongside the CLI entry without breaking binary
@@ -327,6 +356,17 @@ const LEGACY_PI_AI_SHIM_PATH = IS_COMPILED_BINARY
 const LEGACY_PI_CODING_AGENT_SHIM_PATH = IS_COMPILED_BINARY
 	? bundledModuleVirtualSpecifier(`${CANONICAL_PI_SCOPE}/pi-coding-agent`)
 	: sourceShimPath("legacy-pi-coding-agent-shim.ts");
+
+// `@veyyon/tui` stopped re-exporting the string, escape and input primitives when
+// they moved to `@veyyon/utils`, which breaks every extension published against
+// the old barrel (`visibleWidth` from `@earendil-works/pi-tui`, `Key` from
+// plannotator) at import time rather than at call time. The bare tui root
+// therefore resolves to a sibling shim that re-exports the renderer plus every
+// module the barrel dropped. Subpath imports such as `@veyyon/tui/terminal`
+// continue to resolve directly against the bundled tui package.
+const LEGACY_PI_TUI_SHIM_PATH = IS_COMPILED_BINARY
+	? bundledModuleVirtualSpecifier(`${CANONICAL_PI_SCOPE}/pi-tui`)
+	: sourceShimPath("legacy-pi-tui-shim.ts");
 
 // Package-root overrides. Shim entries (`pi-ai`, `pi-coding-agent`) always
 // replace the canonical surface so the legacy `Type` runtime and the legacy
@@ -390,6 +430,8 @@ export function __buildLegacyPiPackageRootOverrides(
 		[`${CANONICAL_PI_SCOPE}/ai`]: LEGACY_PI_AI_SHIM_PATH,
 		[`${CANONICAL_PI_SCOPE}/pi-coding-agent`]: LEGACY_PI_CODING_AGENT_SHIM_PATH,
 		[`${CANONICAL_PI_SCOPE}/coding-agent`]: LEGACY_PI_CODING_AGENT_SHIM_PATH,
+		[`${CANONICAL_PI_SCOPE}/pi-tui`]: LEGACY_PI_TUI_SHIM_PATH,
+		[`${CANONICAL_PI_SCOPE}/tui`]: LEGACY_PI_TUI_SHIM_PATH,
 	};
 	if (isCompiled) {
 		for (const key of bundledModuleKeys) {
@@ -578,8 +620,18 @@ async function rewriteLegacyExtensionSource(
 					`${prefix}${toImportSpecifier(TYPEBOX_SHIM_PATH)}${suffix}`,
 			)
 		: withPi;
-	const withPkg = await rewriteExtensionPackageImports(withTypeBox, importerPath, mtimeTag);
-	const withBare = await rewriteExtensionBareImports(withPkg, importerPath, mtimeTag);
+	const withPkg = await rewriteExtensionImports(
+		withTypeBox,
+		PACKAGE_IMPORT_SPECIFIER_REGEX,
+		specifier => resolvePackageImportSpecifier(specifier, importerPath),
+		mtimeTag,
+	);
+	const withBare = await rewriteExtensionImports(
+		withPkg,
+		BARE_EXTENSION_IMPORT_SPECIFIER_REGEX,
+		specifier => resolveExtensionBareDependency(specifier, importerPath),
+		mtimeTag,
+	);
 	const withNativeAddons = await rewriteExtensionNativeAddonRequires(withBare, importerPath);
 	if (!mtimeTag) {
 		return withNativeAddons;
@@ -815,21 +867,22 @@ async function resolvePackageImportSpecifier(specifier: string, importerPath: st
 
 const PACKAGE_IMPORT_SPECIFIER_REGEX = /((?:from\s+|import\s+|import\s*\(\s*)["'])(#[^"'()\s]+)(["'])/g;
 
-async function rewriteExtensionPackageImports(
+async function rewriteExtensionImports(
 	source: string,
-	importerPath: string,
+	regex: RegExp,
+	resolve: (specifier: string) => Promise<string | null>,
 	mtimeTag: string | null = null,
 ): Promise<string> {
 	let rewritten = "";
 	let lastIndex = 0;
-	for (const match of source.matchAll(PACKAGE_IMPORT_SPECIFIER_REGEX)) {
+	for (const match of source.matchAll(regex)) {
 		const matchIndex = match.index;
 		if (matchIndex === undefined) continue;
 
 		const [fullMatch, prefix, specifier, suffix] = match;
 		if (!prefix || !specifier || !suffix) continue;
 
-		const resolved = await resolvePackageImportSpecifier(specifier, importerPath);
+		const resolved = await resolve(specifier);
 		if (!resolved) continue;
 
 		rewritten += source.slice(lastIndex, matchIndex);
@@ -877,14 +930,27 @@ function splitBarePackageSpecifier(specifier: string): BarePackageSpecifier | nu
 	return { name, subpath: rest.length > 0 ? rest.join("/") : null };
 }
 
-async function findNodePackageRoot(packageName: string, importerPath: string): Promise<string | null> {
-	const cacheKey = `${packageName}\0${path.resolve(path.dirname(importerPath))}`;
-	const cached = nodePackageRootCache.get(cacheKey);
+/**
+ * The cached promise under `key`, or the one `compute` starts now. The promise itself is cached
+ * rather than its value, so concurrent callers of one key share one computation and a rejection
+ * is repeated to each of them.
+ */
+function memoized<T>(cache: Map<string, Promise<T>>, key: string, compute: () => Promise<T>): Promise<T> {
+	const cached = cache.get(key);
 	if (cached) return cached;
-
-	const promise = findNodePackageRootUncached(packageName, importerPath);
-	nodePackageRootCache.set(cacheKey, promise);
+	const promise = compute();
+	cache.set(key, promise);
 	return promise;
+}
+
+function importerCacheKey(specifier: string, importerPath: string): string {
+	return `${specifier}\0${path.resolve(path.dirname(importerPath))}`;
+}
+
+function findNodePackageRoot(packageName: string, importerPath: string): Promise<string | null> {
+	return memoized(nodePackageRootCache, importerCacheKey(packageName, importerPath), () =>
+		findNodePackageRootUncached(packageName, importerPath),
+	);
 }
 
 async function findNodePackageRootUncached(packageName: string, importerPath: string): Promise<string | null> {
@@ -902,13 +968,8 @@ async function findNodePackageRootUncached(packageName: string, importerPath: st
 	}
 }
 
-async function readPackageManifest(packageRoot: string): Promise<Record<string, unknown> | null> {
-	const cached = packageManifestCache.get(packageRoot);
-	if (cached) return cached;
-
-	const promise = readPackageManifestUncached(packageRoot);
-	packageManifestCache.set(packageRoot, promise);
-	return promise;
+function readPackageManifest(packageRoot: string): Promise<Record<string, unknown> | null> {
+	return memoized(packageManifestCache, packageRoot, () => readPackageManifestUncached(packageRoot));
 }
 
 /**
@@ -1031,13 +1092,9 @@ async function resolveExtensionBareDependency(specifier: string, importerPath: s
 		return null;
 	}
 
-	const cacheKey = `${specifier}\0${path.resolve(path.dirname(importerPath))}`;
-	const cached = bareDependencyResolutionCache.get(cacheKey);
-	if (cached) return cached;
-
-	const promise = resolveExtensionBareDependencyUncached(specifier, importerPath);
-	bareDependencyResolutionCache.set(cacheKey, promise);
-	return promise;
+	return memoized(bareDependencyResolutionCache, importerCacheKey(specifier, importerPath), () =>
+		resolveExtensionBareDependencyUncached(specifier, importerPath),
+	);
 }
 
 async function resolveExtensionBareDependencyUncached(specifier: string, importerPath: string): Promise<string | null> {
@@ -1071,13 +1128,9 @@ async function resolveExtensionNativeAddon(specifier: string, importerPath: stri
 		return null;
 	}
 
-	const cacheKey = `${specifier}\0${path.resolve(path.dirname(importerPath))}`;
-	const cached = nativeAddonResolutionCache.get(cacheKey);
-	if (cached) return cached;
-
-	const promise = resolveExtensionNativeAddonUncached(specifier, importerPath);
-	nativeAddonResolutionCache.set(cacheKey, promise);
-	return promise;
+	return memoized(nativeAddonResolutionCache, importerCacheKey(specifier, importerPath), () =>
+		resolveExtensionNativeAddonUncached(specifier, importerPath),
+	);
 }
 
 async function resolveExtensionNativeAddonUncached(specifier: string, importerPath: string): Promise<string | null> {
@@ -1139,13 +1192,8 @@ async function rewriteExtensionNativeAddonRequires(source: string, importerPath:
  * extension graph so {@link rewriteExtensionNativeAddonRequires} can pin its
  * platform-package requires to absolute paths.
  */
-async function moduleRequiresNativeAddon(modulePath: string): Promise<boolean> {
-	const cached = nativeAddonRequireScanCache.get(modulePath);
-	if (cached) return cached;
-
-	const promise = moduleRequiresNativeAddonUncached(modulePath);
-	nativeAddonRequireScanCache.set(modulePath, promise);
-	return promise;
+function moduleRequiresNativeAddon(modulePath: string): Promise<boolean> {
+	return memoized(nativeAddonRequireScanCache, modulePath, () => moduleRequiresNativeAddonUncached(modulePath));
 }
 
 async function moduleRequiresNativeAddonUncached(modulePath: string): Promise<boolean> {
@@ -1165,34 +1213,6 @@ async function moduleRequiresNativeAddonUncached(modulePath: string): Promise<bo
 		}
 	}
 	return false;
-}
-
-async function rewriteExtensionBareImports(
-	source: string,
-	importerPath: string,
-	mtimeTag: string | null = null,
-): Promise<string> {
-	let rewritten = "";
-	let lastIndex = 0;
-	for (const match of source.matchAll(BARE_EXTENSION_IMPORT_SPECIFIER_REGEX)) {
-		const matchIndex = match.index;
-		if (matchIndex === undefined) continue;
-
-		const [fullMatch, prefix, specifier, suffix] = match;
-		if (!prefix || !specifier || !suffix) continue;
-
-		const resolved = await resolveExtensionBareDependency(specifier, importerPath);
-		if (!resolved) continue;
-
-		rewritten += source.slice(lastIndex, matchIndex);
-		rewritten += `${prefix}${toGraphImportSpecifier(resolved, mtimeTag)}${suffix}`;
-		lastIndex = matchIndex + fullMatch.length;
-	}
-
-	if (lastIndex === 0) {
-		return source;
-	}
-	return `${rewritten}${source.slice(lastIndex)}`;
 }
 
 // Match source modules in an extension graph: relative imports, package
@@ -1218,13 +1238,8 @@ function nextLegacyPiLoadTag(): string {
 }
 
 /** Resolve symlinks in a path, falling back to the input if realpath fails. */
-async function realpathOrSelf(p: string): Promise<string> {
-	const cached = realpathCache.get(p);
-	if (cached) return cached;
-
-	const promise = realpathOrSelfUncached(p);
-	realpathCache.set(p, promise);
-	return promise;
+function realpathOrSelf(p: string): Promise<string> {
+	return memoized(realpathCache, p, () => realpathOrSelfUncached(p));
 }
 
 async function realpathOrSelfUncached(p: string): Promise<string> {
@@ -1369,9 +1384,9 @@ function installExtensionGraphHook(
 	}
 
 	if (asyncModules.size > 0) {
-		const alternation = [...asyncModules.keys()].map(escapeRegExp).join("|");
+		const alternation = Array.from(asyncModules.keys()).map(escapeRegExp).join("|");
 		const filter = new RegExp(`^(?:${alternation})(?:\\?mtime=\\d+)?$`);
-		const hookId = Bun.hash(`${entryRealPath}\0async\0${[...asyncModules.keys()].join("\0")}`).toString(36);
+		const hookId = Bun.hash(`${entryRealPath}\0async\0${Array.from(asyncModules.keys()).join("\0")}`).toString(36);
 		Bun.plugin({
 			name: `veyyon:legacy-pi-ext:${hookId}`,
 			setup(build) {
@@ -1398,9 +1413,11 @@ function installExtensionGraphHook(
 	}
 
 	if (syncCommonJsModules.size > 0) {
-		const alternation = [...syncCommonJsModules.keys()].map(escapeRegExp).join("|");
+		const alternation = Array.from(syncCommonJsModules.keys()).map(escapeRegExp).join("|");
 		const filter = new RegExp(`^(?:${alternation})(?:\\?mtime=\\d+)?$`);
-		const hookId = Bun.hash(`${entryRealPath}\0sync-cjs\0${[...syncCommonJsModules.keys()].join("\0")}`).toString(36);
+		const hookId = Bun.hash(
+			`${entryRealPath}\0sync-cjs\0${Array.from(syncCommonJsModules.keys()).join("\0")}`,
+		).toString(36);
 		Bun.plugin({
 			name: `veyyon:legacy-pi-ext:${hookId}`,
 			setup(build) {

@@ -20,19 +20,19 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
-	applySamplingKnob,
-	isSamplingKnob,
-	optionalNumber,
-	type SamplingKnobs,
-	toNumberOrUndefined,
-} from "@veyyon/coding-agent/config/optional-number";
-import {
 	SETTINGS_MIGRATION_VERSION,
 	Settings,
 	stampOwnedConfigMigrations,
 	stripLegacyUnsetSentinels,
 } from "@veyyon/coding-agent/config/settings";
 import { getDefault, isUnsetNumberPath } from "@veyyon/coding-agent/config/settings-schema";
+import {
+	applySamplingKnob,
+	isSamplingKnob,
+	optionalNumber,
+	type SamplingKnobs,
+	toNumberOrUndefined,
+} from "@veyyon/kernel/settings/optional-number";
 import { removeWithRetries } from "@veyyon/utils";
 import * as YAML from "yaml";
 import { guardDestructivePath } from "../../utils/test/helpers/destructive-guard";

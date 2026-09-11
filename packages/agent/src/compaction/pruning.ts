@@ -71,13 +71,15 @@ export const SUPERSEDED_NOTICE = "[Superseded by a newer read of this file]";
 export const USELESS_NOTICE = "[Uneventful result elided]";
 
 /**
- * Maps a tool call to a supersede key. Results sharing a key form a group in
- * which every result except the newest is a supersede candidate. A key `K`
- * additionally supersedes keys with prefix `K + "\u0000"` (selector-free read
- * supersedes selector-carrying reads of the same base path). Return
- * `undefined` to exempt a call from supersede grouping.
+ * Maps a tool call to its supersede targets. A tool result is superseded when
+ * every target it carries is covered by later (newer) tool results (either by an
+ * identical target or by a selector-free read of the same base path).
+ * Return `undefined` to exempt a call from supersede grouping.
  */
-export type SupersedeKeyFn = (toolName: string, args: Record<string, unknown>) => string | undefined;
+export type SupersedeKeyFn = (
+	toolName: string,
+	args: Record<string, unknown>,
+) => string | readonly string[] | ReadonlySet<string> | undefined;
 
 export interface SupersedePruneConfig {
 	/** Supersede key function; results sharing a key supersede older ones. */
@@ -86,6 +88,37 @@ export interface SupersedePruneConfig {
 	pruneUseless?: boolean;
 	/** Prune a candidate now when all messages after it total at most this many estimated tokens. Default 8 000. */
 	suffixTokenLimit?: number;
+	/**
+	 * Hard ceiling on how much sent context a rewrite may sit behind. A
+	 * candidate whose all-message suffix EXCEEDS this is never rewritten, not
+	 * even as part of a batch the cache math would otherwise pay for. Undefined
+	 * = no ceiling, and the batch decides on price alone.
+	 *
+	 * Set to 0 for a model that binds thinking blocks to their conversation
+	 * prefix: there the price of an in-place edit is not a cache write, it is
+	 * every thinking block recorded after the edited message, which no amount
+	 * of reclaimed tokens pays back.
+	 */
+	cacheWarmSuffixTokens?: number;
+	/**
+	 * Read-equivalent price of re-writing one already-cached token, used to decide
+	 * whether a batch of victims is worth the cache write it forces. Providers
+	 * charge roughly 1.25x base input to write a cache entry and 0.1x to read one,
+	 * so a rewritten token costs about 12.5 reads of the same token. Default 12.5.
+	 */
+	cacheWritePremium?: number;
+	/**
+	 * Turns the reclaimed tokens are assumed to survive if nothing prunes them,
+	 * i.e. how many times they would be re-read before the next compaction drops
+	 * them anyway. This is the other half of the trade: reclaiming M tokens saves
+	 * `M * paybackTurns` reads and costs `cacheWritePremium * suffix` writes.
+	 * Default 30. A backtest over 659 recorded sessions (550k turns) priced the
+	 * sweep at 30, 60 and 120: 60 reclaims more in total but leaves 15 sessions
+	 * worse by up to +8% because their real remaining life was shorter than the
+	 * assumption; 30 leaves 2 sessions worse by at most +1.4% and still nets
+	 * -0.5% of the total bill with a 0.02-point cache-hit change.
+	 */
+	paybackTurns?: number;
 	/**
 	 * Prune all candidates when the last message is at least this old: the
 	 * provider prompt cache is then cold, so re-writing it is free. MUST exceed
@@ -108,6 +141,8 @@ export interface SupersedePruneConfig {
 
 const DEFAULT_SUFFIX_TOKEN_LIMIT = 8_000;
 const DEFAULT_IDLE_FLUSH_MS = 30 * 60_000;
+const DEFAULT_CACHE_WRITE_PREMIUM = 12.5;
+const DEFAULT_PAYBACK_TURNS = 30;
 
 function createPrunedNotice(tokens: number): string {
 	return `[Output truncated - ${tokens} tokens]`;
@@ -157,9 +192,13 @@ interface SupersedeCandidate {
 
 /**
  * Collect superseded tool results: for every unpruned, unprotected tool result
- * whose paired call resolves a supersede key, a LATER result with the same key
- * — or with a key that is the `"\u0000"`-prefix parent of this one — marks it
- * superseded. Returned in message order.
+ * whose paired call resolves supersede targets, the result is marked superseded
+ * if and only if EVERY target it carries has been covered by later tool results.
+ * A target is covered by an identical target or by a selector-free read of the
+ * same base path. Partial cover (e.g. later read of `a.ts` when earlier read was
+ * `a.ts; b.ts`) does NOT retire the earlier result, preserving content that has
+ * not been re-read.
+ * Returned in message order.
  */
 function collectSupersededResults(
 	entries: readonly SessionEntry[],
@@ -168,7 +207,7 @@ function collectSupersededResults(
 	protectedTools: readonly ProtectedToolMatcher[],
 ): SupersedeCandidate[] {
 	const candidates: SupersedeCandidate[] = [];
-	const seenKeys = new Set<string>();
+	const seenTargets = new Set<string>();
 	for (let i = entries.length - 1; i >= 0; i--) {
 		const entry = entries[i];
 		const message = getToolResultMessage(entry);
@@ -176,19 +215,37 @@ function collectSupersededResults(
 		const toolCall = toolCallsById.get(message.toolCallId);
 		if (!toolCall) continue;
 		if (isProtectedToolResult(message, toolCall, protectedTools)) continue;
-		// A placeholder for a call that never reached the tool is not a read of the file it
-		// names, in either direction. It must not be blanked to "[Superseded by a newer read
-		// of this file]", which replaces the one fact it carries (nothing ran) with a claim
-		// about a read that did not happen; and it must not COUNT as the newer read either,
-		// which is the half that loses data: the group is walked newest first, so a dropped
-		// call's placeholder marked the last real read of that path superseded and the model
-		// was left with a pointer to a read that never ran instead of the content it had.
-		if (toolResultNeverRan(message.details)) continue;
-		const key = supersedeKey(toolCall.name, toolCall.arguments as Record<string, unknown>);
-		if (key === undefined) continue;
-		const separator = key.indexOf("\u0000");
-		const superseded = seenKeys.has(key) || (separator >= 0 && seenKeys.has(key.slice(0, separator)));
-		seenKeys.add(key);
+		// A result that carries no file content is not a read of the file it names,
+		// in either direction. It must not be blanked to "[Superseded by a newer read
+		// of this file]", which replaces the one fact it carries with a claim about a
+		// read that did not happen; and it must not COUNT as the newer read either,
+		// which is the half that loses data: the group is walked newest first, so such
+		// a result marked the last real read of that path superseded and left the model
+		// a pointer to a read that produced nothing.
+		//
+		// Two members. A placeholder for a call that never reached the tool, and a call
+		// that reached it and failed. The second was unguarded: a read of a path that
+		// errored blanked the earlier successful read of the same path, so the content
+		// left context and only the error string remained. `collectUselessResults` below
+		// already excludes `isError` for this reason.
+		if (toolResultNeverRan(message.details) || message.isError === true) continue;
+		const rawKey = supersedeKey(toolCall.name, toolCall.arguments as Record<string, unknown>);
+		if (rawKey === undefined) continue;
+		const targets: readonly string[] =
+			typeof rawKey === "string" ? [rawKey] : Array.isArray(rawKey) ? rawKey : Array.from(rawKey);
+		if (targets.length === 0) continue;
+
+		// An earlier read is superseded only when EVERY target it carries is covered
+		// by newer reads. A target is covered if an identical target was read later, or
+		// if a selector-free read of the same base path was read later.
+		const superseded = targets.every(t => {
+			if (seenTargets.has(t)) return true;
+			const sep = t.indexOf("\u0000");
+			return sep >= 0 && seenTargets.has(t.slice(0, sep));
+		});
+		for (const t of targets) {
+			seenTargets.add(t);
+		}
 		if (!superseded) continue;
 		candidates.push({
 			entry: entry as SessionMessageEntry,
@@ -228,12 +285,46 @@ function collectUselessResults(
 }
 
 /**
+ * Deepest batch of victims whose reclaimed tokens pay for the one cache rewrite
+ * they force, or an empty array when no batch does.
+ *
+ * Rewriting a message invalidates every cached token after it, so the price of a
+ * sweep is set by its EARLIEST victim and is paid once, while the saving is the
+ * whole batch's mass, collected on every later turn. That is why the answer is a
+ * batch: `dead * paybackTurns` against `premium * suffix(earliest)`. Candidates
+ * arrive in message order, so each prefix of the list is a legal cut and the best
+ * one is a single scan from the deep end.
+ */
+function chooseWorthwhileSweep(
+	candidates: readonly SupersedeCandidate[],
+	suffixTokens: readonly number[],
+	config: SupersedePruneConfig,
+): SupersedeCandidate[] {
+	const premium = config.cacheWritePremium ?? DEFAULT_CACHE_WRITE_PREMIUM;
+	const payback = config.paybackTurns ?? DEFAULT_PAYBACK_TURNS;
+	let mass = 0;
+	let bestValue = 0;
+	let bestCut = candidates.length;
+	for (let i = candidates.length - 1; i >= 0; i--) {
+		const candidate = candidates[i]!;
+		mass += estimatePrunedSavings(candidate.tokens, candidate.notice);
+		const value = mass * payback - premium * (suffixTokens[candidate.index] ?? 0);
+		if (value > bestValue) {
+			bestValue = value;
+			bestCut = i;
+		}
+	}
+	return bestCut === candidates.length ? [] : candidates.slice(bestCut);
+}
+
+/**
  * Prune superseded tool results (e.g. stale `read` outputs replaced by a newer
  * read of the same file) and, when `pruneUseless` is set, results their tool
- * flagged contextually useless. Cheap, incremental, and prompt-cache-aware: a
- * candidate is pruned now only when the suffix after it is small (tail case —
- * the read→edit→read loop) or when the context has been idle long enough that
- * the provider cache is cold anyway (then all still-sent candidates flush).
+ * flagged contextually useless. Prompt-cache-aware in three ways: a candidate
+ * whose own suffix is small is rewritten on its own (the read→edit→read loop), a
+ * deeper BATCH is rewritten when its combined mass pays for the one cache write
+ * it forces (see {@link chooseWorthwhileSweep}), and an idle context flushes
+ * everything because its cache has expired anyway.
  * Never mutates entries before `keepBoundaryId` (summarized away — not sent).
  */
 export function pruneSupersededToolResults(entries: SessionEntry[], config: SupersedePruneConfig): PruneResult {
@@ -243,7 +334,8 @@ export function pruneSupersededToolResults(entries: SessionEntry[], config: Supe
 		: [];
 	if (config.pruneUseless) {
 		const exclude = new Set(candidates.map(candidate => candidate.message));
-		candidates.push(...collectUselessResults(entries, toolCallsById, config.protectedTools, exclude));
+		const useless = collectUselessResults(entries, toolCallsById, config.protectedTools, exclude);
+		for (let ui = 0; ui < useless.length; ui++) candidates.push(useless[ui]!);
 		candidates.sort((a, b) => a.index - b.index);
 	}
 	if (candidates.length === 0) return { prunedCount: 0, tokensSaved: 0 };
@@ -271,13 +363,23 @@ export function pruneSupersededToolResults(entries: SessionEntry[], config: Supe
 	} else {
 		const suffixTokenLimit = config.suffixTokenLimit ?? DEFAULT_SUFFIX_TOKEN_LIMIT;
 		// suffixTokens[i] = estimated tokens of all messages strictly after entry i.
-		// Mutating a candidate re-writes its suffix in the warm cache, so prune only
-		// when that suffix is small (cheap-to-recache tail) and the candidate sits
-		// at/after the compaction boundary.
 		const suffixTokens = computeMessageSuffixTokens(entries);
-		toPrune = candidates.filter(
-			candidate => candidate.index >= boundaryIndex && suffixTokens[candidate.index] <= suffixTokenLimit,
+		const cacheWarmSuffixTokens = config.cacheWarmSuffixTokens;
+		const eligible = candidates.filter(
+			candidate =>
+				candidate.index >= boundaryIndex &&
+				(cacheWarmSuffixTokens === undefined || (suffixTokens[candidate.index] ?? 0) <= cacheWarmSuffixTokens),
 		);
+		// The cheap tail: a candidate whose own suffix is small is worth rewriting on
+		// its own, which is the read -> edit -> read loop.
+		const tail = eligible.filter(candidate => suffixTokens[candidate.index] <= suffixTokenLimit);
+		// Deeper than the tail, one victim never pays for the rewrite it forces, but a
+		// batch of them does. Asking the question per candidate is why a long session
+		// reclaimed almost nothing: at 120k of context every candidate outside the last
+		// few thousand tokens failed the test alone, while together they were most of
+		// the dead weight in the window.
+		const batch = chooseWorthwhileSweep(eligible, suffixTokens, config);
+		toPrune = batch.length > tail.length ? batch : tail;
 	}
 	if (toPrune.length === 0) return { prunedCount: 0, tokensSaved: 0 };
 
@@ -398,20 +500,28 @@ export function pruneToolOutputs(entries: SessionEntry[], config: PruneConfig = 
 }
 
 /**
- * Supersede key for the `read` tool: the file path with the trailing line/raw
- * selector stripped (the read tool's own splitter grammar via
- * {@link splitReadSelector}, e.g. `src/foo.ts:50-200`, `:2-4:raw`).
- * Internal/URL-scheme paths (`skill://…`, `https://…`) are exempt.
+ * Supersede targets for the `read` tool: a list of normalized target keys.
  * Selector-free reads key on the bare path; selector-carrying reads key on
- * `path + "\u0000" + selector`, so two reads collide only when the newer is
- * selector-free or the selectors are identical (the pass's prefix rule lets a
- * bare-path read supersede selector-carrying reads of the same file).
+ * `path + "\u0000" + selector` (via {@link splitReadSelector}).
+ * Multi-target reads (`a.ts; b.ts`) are split into distinct targets.
+ * URL and internal schemes (`skill://…`, `https://…`) are exempt per target.
  */
-export function readToolSupersedeKey(toolName: string, args: Record<string, unknown>): string | undefined {
+export function readToolSupersedeKey(toolName: string, args: Record<string, unknown>): readonly string[] | undefined {
 	if (toolName !== "read") return undefined;
 	const path = args.path;
 	if (typeof path !== "string" || path.length === 0) return undefined;
-	if (path.includes("://")) return undefined;
-	const { path: base, sel } = splitReadSelector(path);
-	return sel === undefined ? base : `${base}\u0000${sel}`;
+	const targets: string[] = [];
+	const seen = new Set<string>();
+	for (const chunk of path.split(";")) {
+		const trimmed = chunk.trim();
+		if (trimmed.length === 0) continue;
+		if (trimmed.includes("://")) continue;
+		const { path: base, sel } = splitReadSelector(trimmed);
+		const target = sel === undefined ? base : `${base}\u0000${sel}`;
+		if (target.length > 0 && !seen.has(target)) {
+			seen.add(target);
+			targets.push(target);
+		}
+	}
+	return targets.length > 0 ? targets : undefined;
 }

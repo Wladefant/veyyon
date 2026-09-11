@@ -1,18 +1,17 @@
 import { type } from "arktype";
-import type { CommitAgentState } from "../../../commit/agentic/state";
-import {
-	capDetails,
-	MAX_DETAIL_ITEMS,
-	normalizeSummary,
-	SUMMARY_MAX_CHARS,
-	validateSummaryRules,
-	validateTypeConsistency,
-} from "../../../commit/agentic/validation";
-import { validateAnalysis } from "../../../commit/analysis/validation";
-import type { CommitType, ConventionalAnalysis, ConventionalDetail } from "../../../commit/types";
-import { normalizeDetails } from "../../../commit/utils";
 import type { CustomTool } from "../../../extensibility/custom-tools/types";
 import * as git from "../../../utils/git";
+import { validateAnalysis } from "../../analysis/validation";
+import type { CommitType, ConventionalAnalysis, ConventionalDetail } from "../../types";
+import { normalizeDetails } from "../../utils";
+import type { CommitAgentState } from "../state";
+import {
+	capDetails,
+	normalizeSummary,
+	validateSummaryRules,
+	validateTypeConsistency,
+	verdictWithLimits,
+} from "../validation";
 import { commitTypeSchema, detailSchema } from "./schemas.js";
 
 const proposeCommitSchema = type({
@@ -64,8 +63,8 @@ export function createProposeCommitTool(cwd: string, state: CommitAgentState): C
 				details: cappedDetails,
 			});
 
-			const errors = [...summaryValidation.errors, ...analysisValidation.errors, ...typeValidation.errors];
-			const warnings = [...summaryValidation.warnings, ...detailWarnings, ...typeValidation.warnings];
+			const errors = summaryValidation.errors.concat(analysisValidation.errors, typeValidation.errors);
+			const warnings = summaryValidation.warnings.concat(detailWarnings, typeValidation.warnings);
 
 			const response: ProposalResponse = {
 				valid: errors.length === 0,
@@ -88,17 +87,7 @@ export function createProposeCommitTool(cwd: string, state: CommitAgentState): C
 				};
 			}
 
-			const text = JSON.stringify(
-				{
-					...response,
-					constraints: {
-						maxSummaryChars: SUMMARY_MAX_CHARS,
-						maxDetailItems: MAX_DETAIL_ITEMS,
-					},
-				},
-				null,
-				2,
-			);
+			const text = verdictWithLimits(response);
 
 			return {
 				content: [{ type: "text", text }],

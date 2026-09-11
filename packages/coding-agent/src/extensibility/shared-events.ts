@@ -15,11 +15,11 @@
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { CompactionPreparation, CompactionResult } from "@veyyon/agent-core/compaction";
 import type { AssistantRetryRecovery, ImageContent, TextContent, ToolResultMessage } from "@veyyon/ai";
-import type { Rule } from "../capability/rule";
+import type { BranchSummaryEntry, CompactionEntry, SessionEntry } from "@veyyon/kernel/session/session-entries";
 import type { CompactionEngineAction } from "../config/compaction-strategy";
+import type { Rule } from "../discovery/capability/rule";
 import type { Goal, GoalModeState } from "../goals/state";
-import type { BranchSummaryEntry, CompactionEntry, SessionEntry } from "../session/session-entries";
-import type { TodoItem } from "../tools/todo";
+import type { TodoItem } from "../tools/agent/todo";
 
 // ============================================================================
 // Session Events
@@ -76,7 +76,7 @@ export interface SessionBeforeCompactEvent {
 
 /** Fired before compaction summarization to customize prompts/context */
 export interface SessionCompactingEvent {
-	type: "session.compacting";
+	type: "session_compacting";
 	sessionId: string;
 	messages: AgentMessage[];
 }
@@ -347,7 +347,7 @@ export interface SessionBeforeCompactResult {
 	compaction?: CompactionResult;
 }
 
-/** Return type for `session.compacting` handlers */
+/** Return type for `session_compacting` handlers */
 export interface SessionCompactingResult {
 	/** Additional context lines to include in summary */
 	context?: string[];

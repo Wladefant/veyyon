@@ -1,6 +1,8 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { type ManifestHolder, manifestFromPackageJson } from "@veyyon/kernel/loader/manifest-key";
+import { parseInstalledPluginsRegistry } from "@veyyon/kernel/loader/plugins/installed-registry";
 import { FileType, glob } from "@veyyon/natives";
 import {
 	errorMessage,
@@ -15,15 +17,24 @@ import {
 	parseFrontmatter,
 	tryParseJson,
 } from "@veyyon/utils";
-import type { ExtensionModule } from "../capability/extension-module";
-import { invalidate as invalidateFsCache, readDirEntries, readFile } from "../capability/fs";
-import { parseRuleConditionAndScope, type Rule, type RuleFrontmatter } from "../capability/rule";
-import type { DiscoveredSkill, SkillFrontmatter } from "../capability/skill";
-import type { LoadContext, LoadResult, SourceMeta } from "../capability/types";
-import { type ManifestHolder, manifestFromPackageJson } from "../extensibility/manifest-key";
+import {
+	canonicalProjectRoot,
+	describeProjectExecutable,
+	describeRefusal,
+	ProjectTrust,
+} from "../config/project-trust";
 import { type ConfiguredThinkingLevel, parseConfiguredThinkingLevel } from "../thinking";
-import { normalizeToolNames, TOOL } from "../tools/builtin-names";
-
+import { normalizeToolNames, TOOL } from "../tools/core/builtin-names";
+import { registerProvider } from "./capability";
+import type { ContextFile } from "./capability/context-file";
+import type { ExtensionModule } from "./capability/extension-module";
+import { invalidate as invalidateFsCache, readDirEntries, readFile } from "./capability/fs";
+import type { Hook } from "./capability/hook";
+import { parseRuleConditionAndScope, type Rule, type RuleFrontmatter } from "./capability/rule";
+import type { DiscoveredSkill, SkillFrontmatter } from "./capability/skill";
+import type { SlashCommand } from "./capability/slash-command";
+import type { DiscoveredCustomTool } from "./capability/tool";
+import type { LoadContext, LoadResult, SourceMeta } from "./capability/types";
 import { buildPluginDirRoot } from "./plugin-dir-roots";
 
 /**
@@ -160,6 +171,35 @@ export async function readContextFile(filePath: string): Promise<{ content: stri
 			warning: `${filePath} exists but could not be read: ${errorMessage(err)}`,
 		};
 	}
+}
+
+/**
+ * Load a single user-level context file for a provider if present.
+ */
+export async function loadUserContextFile(
+	ctx: LoadContext,
+	providerId: string,
+	source: SourceId,
+	filename: string,
+): Promise<LoadResult<ContextFile>> {
+	const items: ContextFile[] = [];
+	const warnings: string[] = [];
+
+	const filePath = getUserPath(ctx, source, filename);
+	if (filePath) {
+		const { content, warning } = await readContextFile(filePath);
+		if (warning) warnings.push(warning);
+		if (content) {
+			items.push({
+				path: filePath,
+				content,
+				level: "user",
+				_source: createSourceMeta(providerId, filePath, "user"),
+			});
+		}
+	}
+
+	return { items, warnings };
 }
 
 export function parseBoolean(value: unknown): boolean | undefined {
@@ -315,9 +355,9 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 	let tools = parseArrayOrCSV(frontmatter.tools);
 	if (tools) tools = normalizeToolNames(tools);
 
-	// Subagents with explicit tool lists always need yield
+	// Agents with explicit tool lists always need yield
 	if (tools && !tools.includes(TOOL.yield)) {
-		tools = [...tools, TOOL.yield];
+		tools = tools.concat([TOOL.yield]);
 	}
 
 	// Parse spawns field (array, "*", or CSV)
@@ -468,7 +508,7 @@ export async function scanSkillsFromDir(options: ScanSkillsFromDirOptions): Prom
 		entries = await fs.promises.readdir(dir, { withFileTypes: true });
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-			warnings.push(`Failed to read skills directory: ${dir} (${String(error)})`);
+			warnings.push(`Failed to read skills directory: ${dir} (${errorMessage(error)})`);
 		}
 		return { items, warnings };
 	}
@@ -520,39 +560,6 @@ export async function scanSkillsFromDir(options: ScanSkillsFromDirOptions): Prom
 	items.sort((a, b) => compareSkillOrder(a.name, a.path, b.name, b.path));
 
 	return { items, warnings };
-}
-
-/**
- * Expand environment variables in a string.
- * Supports ${VAR} and ${VAR:-default} syntax.
- */
-function expandEnvVars(value: string, extraEnv?: Record<string, string>): string {
-	return value.replace(/\$\{([^}:]+)(?::-([^}]*))?\}/g, (_, varName: string, defaultValue?: string) => {
-		const envValue = extraEnv?.[varName] ?? Bun.env[varName];
-		if (envValue !== undefined) return envValue;
-		if (defaultValue !== undefined) return defaultValue;
-		return `\${${varName}}`;
-	});
-}
-
-/**
- * Recursively expand environment variables in an object.
- */
-export function expandEnvVarsDeep<T>(obj: T, extraEnv?: Record<string, string>): T {
-	if (typeof obj === "string") {
-		return expandEnvVars(obj, extraEnv) as T;
-	}
-	if (Array.isArray(obj)) {
-		return obj.map(item => expandEnvVarsDeep(item, extraEnv)) as T;
-	}
-	if (obj !== null && typeof obj === "object") {
-		const result: Record<string, unknown> = {};
-		for (const [key, value] of Object.entries(obj)) {
-			result[key] = expandEnvVarsDeep(value, extraEnv);
-		}
-		return result as T;
-	}
-	return obj;
 }
 
 /**
@@ -642,6 +649,133 @@ export async function loadFilesFromDir<T>(
 		}
 	}
 	return { items, warnings };
+}
+
+/**
+ * Scan all custom tool files and derive script names and descriptions.
+ */
+export async function scanCustomToolsFromDir(
+	dir: string,
+	provider: string,
+	level: "user" | "project",
+): Promise<LoadResult<DiscoveredCustomTool>> {
+	return await loadFilesFromDir<DiscoveredCustomTool>(dir, provider, level, {
+		transform: (name, _content, filePath, source) => {
+			const toolName = name.replace(/\.(ts|js|sh|bash|py)$/, "");
+			return {
+				name: toolName,
+				path: filePath,
+				description: `${toolName} custom tool`,
+				level,
+				_source: source,
+			};
+		},
+	});
+}
+
+/**
+ * Scan `pre/` and `post/` subdirectories under `hooksDir` for tool hook scripts.
+ */
+export async function scanSubdirectoryHooks(
+	hooksDir: string,
+	provider: string,
+	level: "user" | "project",
+): Promise<LoadResult<Hook>> {
+	const items: Hook[] = [];
+	const warnings: string[] = [];
+	const hookTypes = ["pre", "post"] as const;
+
+	const results = await Promise.all(
+		hookTypes.map(hookType =>
+			loadFilesFromDir<Hook>(path.join(hooksDir, hookType), provider, level, {
+				transform: (name, _content, filePath, source) => {
+					const toolName = name.replace(/\.(sh|bash|zsh|fish)$/, "");
+					return {
+						name,
+						path: filePath,
+						type: hookType,
+						tool: toolName,
+						level,
+						_source: source,
+					};
+				},
+			}),
+		),
+	);
+
+	for (const result of results) {
+		items.push(...result.items);
+		if (result.warnings) warnings.push(...result.warnings);
+	}
+	return { items, warnings };
+}
+
+export interface ScanMarkdownCommandsOptions {
+	/** Whether to parse YAML frontmatter for custom command name */
+	parseFrontmatter?: boolean;
+	/** Optional namespace prefix to prepend to command names (e.g., plugin name) */
+	prefix?: string;
+	/** Whether to recurse into subdirectories */
+	recursive?: boolean;
+}
+
+/**
+ * Scan a directory for markdown slash commands (`*.md`).
+ */
+export async function scanMarkdownCommands(
+	dir: string,
+	provider: string,
+	level: "user" | "project",
+	options?: ScanMarkdownCommandsOptions,
+): Promise<LoadResult<SlashCommand>> {
+	return await loadFilesFromDir<SlashCommand>(dir, provider, level, {
+		extensions: ["md"],
+		recursive: options?.recursive ?? false,
+		transform: (name, content, filePath, source) => {
+			let cmdName: string;
+			let body: string;
+			if (options?.parseFrontmatter) {
+				const parsed = parseFrontmatter(content, { source: filePath });
+				cmdName = String(parsed.frontmatter.name || name.replace(/\.md$/, ""));
+				body = parsed.body;
+			} else {
+				cmdName = name.replace(/\.md$/, "");
+				body = content;
+			}
+			const commandName = options?.prefix ? `${options.prefix}:${cmdName}` : cmdName;
+			return {
+				name: commandName,
+				path: filePath,
+				content: body,
+				level,
+				_source: source,
+			};
+		},
+	});
+}
+
+export interface ProviderCapabilityRegistration<T = unknown> {
+	capabilityId: string;
+	description: string;
+	load: (ctx: LoadContext) => Promise<LoadResult<T>>;
+}
+
+/**
+ * Register multiple capabilities for a single provider in one declaration block.
+ */
+export function registerProviderCapabilities(
+	meta: { id: string; displayName: string; priority: number },
+	registrations: ReadonlyArray<ProviderCapabilityRegistration<unknown>>,
+): void {
+	for (const { capabilityId, description, load } of registrations) {
+		registerProvider(capabilityId, {
+			id: meta.id,
+			displayName: meta.displayName,
+			description,
+			priority: meta.priority,
+			load,
+		});
+	}
 }
 
 /**
@@ -741,8 +875,8 @@ export async function discoverExtensionModulePaths(dir: string): Promise<string[
 		// Native glob does not follow linked extension directories.
 		discoverLinkedExtensionModuleFiles(dir),
 	]);
-	const indexFiles = [...globIndexFiles, ...linkedFiles.indexFiles];
-	const packageJsonFiles = [...globPackageJsonFiles, ...linkedFiles.packageJsonFiles];
+	const indexFiles = globIndexFiles.concat(linkedFiles.indexFiles);
+	const packageJsonFiles = globPackageJsonFiles.concat(linkedFiles.packageJsonFiles);
 
 	// The native glob walker runs with follow_links=false, so a symlinked extension
 	// directory is yielded as a Symlink entry but never descended into: its inner
@@ -807,7 +941,7 @@ export async function discoverExtensionModulePaths(dir: string): Promise<string[
 	for (const preferredPath of preferredIndexBySubdir.values()) {
 		discovered.add(path.join(dir, preferredPath));
 	}
-	return [...discovered];
+	return Array.from(discovered);
 }
 
 /**
@@ -902,16 +1036,44 @@ export interface ClaudePluginRoot {
  * Parse Claude Code installed_plugins.json content.
  */
 export function parseClaudePluginsRegistry(content: string): ClaudePluginsRegistry | null {
-	const data = tryParseJson<ClaudePluginsRegistry>(content);
-	if (!data || typeof data !== "object") return null;
-	if (
-		typeof data.version !== "number" ||
-		!data.plugins ||
-		typeof data.plugins !== "object" ||
-		Array.isArray(data.plugins)
-	)
-		return null;
-	return data;
+	return parseInstalledPluginsRegistry(content);
+}
+
+function collectRegistryRoots(
+	registry: ClaudePluginsRegistry,
+	warnings: string[],
+	defaultScope: "user" | "project",
+	target: ClaudePluginRoot[],
+): void {
+	for (const [pluginId, entries] of Object.entries(registry.plugins)) {
+		if (!Array.isArray(entries) || entries.length === 0) continue;
+
+		const atIndex = pluginId.lastIndexOf("@");
+		if (atIndex === -1) {
+			warnings.push(`Invalid plugin ID format (missing @marketplace): ${pluginId}`);
+			continue;
+		}
+
+		const pluginName = pluginId.slice(0, atIndex);
+		const marketplace = pluginId.slice(atIndex + 1);
+
+		for (const entry of entries) {
+			if (!entry.installPath || typeof entry.installPath !== "string") {
+				warnings.push(`Plugin ${pluginId} entry has no installPath`);
+				continue;
+			}
+			if (entry.enabled === false) continue;
+
+			target.push({
+				id: pluginId,
+				marketplace,
+				plugin: pluginName,
+				version: entry.version || "unknown",
+				path: entry.installPath,
+				scope: entry.scope || defaultScope,
+			});
+		}
+	}
 }
 
 /**
@@ -1009,6 +1171,28 @@ export function pluginsRootFor(agentDir: string): string | undefined {
 }
 
 /**
+ * Whether the project-scoped plugin registry at `registryPath` may be read at all.
+ *
+ * The registry itself is the trusted unit, not the plugins it names: its `installPath` entries
+ * are arbitrary absolute paths, so filtering by location would let a project point at a payload
+ * anywhere on disk. A registry that lives outside the canonical project root is not
+ * project-controlled and is left alone, which is what keeps a profile-level registry working.
+ */
+export async function projectRegistryIsTrusted(
+	registryPath: string,
+	cwd: string,
+	agentDir?: string,
+): Promise<{ allowed: true } | { allowed: false; reason: string }> {
+	const canonicalRoot = await canonicalProjectRoot(cwd);
+	const executable = await describeProjectExecutable(registryPath, canonicalRoot);
+	if (!executable) return { allowed: true };
+	const trust = await ProjectTrust.load(agentDir ?? getAgentDir());
+	const verdict = trust.evaluate(canonicalRoot, executable);
+	if (verdict === "trusted") return { allowed: true };
+	return { allowed: false, reason: describeRefusal("plugins", executable.relativePath, verdict) };
+}
+
+/**
  * List all installed Claude Code plugin roots from the plugin cache.
  * Reads ~/.claude/plugins/installed_plugins.json and profile plugins/installed_plugins.json,
  * and optionally the nearest project-scoped registry resolved from `cwd`.
@@ -1027,10 +1211,14 @@ export async function listClaudePluginRoots(
 	home: string,
 	cwd?: string,
 	pluginsRoot?: string,
+	agentDir?: string,
 ): Promise<{ roots: ClaudePluginRoot[]; warnings: string[] }> {
 	const resolvedProjectPath = cwd ? await resolveActiveProjectRegistryPath(cwd) : null;
 	const resolvedPluginsRoot = pluginsRoot ?? getPluginsDir(home);
-	const cacheKey = `${home}:${resolvedProjectPath ?? ""}:${resolvedPluginsRoot}`;
+	const resolvedAgentDir = agentDir ?? getAgentDir();
+	// The agent dir is part of the key because the project-trust decision is per profile: without
+	// it, one profile's refusal would be served to a profile that had approved the same repository.
+	const cacheKey = `${home}:${resolvedProjectPath ?? ""}:${resolvedPluginsRoot}:${resolvedAgentDir}`;
 	const cached = pluginRootsCache.get(cacheKey);
 	if (cached) return cached;
 
@@ -1047,38 +1235,7 @@ export async function listClaudePluginRoots(
 		if (!registry) {
 			warnings.push(`Failed to parse Claude Code plugin registry: ${registryPath}`);
 		} else {
-			for (const [pluginId, entries] of Object.entries(registry.plugins)) {
-				if (!Array.isArray(entries) || entries.length === 0) continue;
-
-				// Parse plugin ID format: "plugin-name@marketplace"
-				const atIndex = pluginId.lastIndexOf("@");
-				if (atIndex === -1) {
-					warnings.push(`Invalid plugin ID format (missing @marketplace): ${pluginId}`);
-					continue;
-				}
-
-				const pluginName = pluginId.slice(0, atIndex);
-				const marketplace = pluginId.slice(atIndex + 1);
-
-				// Process all valid entries, not just the first one.
-				// This handles plugins with multiple installs (different scopes/versions).
-				for (const entry of entries) {
-					if (!entry.installPath || typeof entry.installPath !== "string") {
-						warnings.push(`Plugin ${pluginId} entry has no installPath`);
-						continue;
-					}
-					if (entry.enabled === false) continue;
-
-					roots.push({
-						id: pluginId,
-						marketplace,
-						plugin: pluginName,
-						version: entry.version || "unknown",
-						path: entry.installPath,
-						scope: entry.scope || "user",
-					});
-				}
-			}
+			collectRegistryRoots(registry, warnings, "user", roots);
 		}
 	}
 
@@ -1094,39 +1251,16 @@ export async function listClaudePluginRoots(
 	if (ompContent) {
 		const ompRegistry = parseClaudePluginsRegistry(ompContent);
 		if (ompRegistry) {
-			for (const [pluginId, entries] of Object.entries(ompRegistry.plugins)) {
-				if (!Array.isArray(entries) || entries.length === 0) continue;
+			const ompRoots: ClaudePluginRoot[] = [];
+			collectRegistryRoots(ompRegistry, warnings, "user", ompRoots);
+			const ompIds = new Set(ompRoots.map(r => r.id));
+			const filtered = roots.filter(r => !ompIds.has(r.id));
+			roots.length = 0;
+			roots.push(...filtered);
 
-				const atIndex = pluginId.lastIndexOf("@");
-				if (atIndex === -1) {
-					warnings.push(`Invalid plugin ID format (missing @marketplace): ${pluginId}`);
-					continue;
-				}
-				const pluginName = pluginId.slice(0, atIndex);
-				const marketplace = pluginId.slice(atIndex + 1);
-
-				// veyyon is authoritative: drop all Claude-sourced entries for this plugin ID
-				const filtered = roots.filter(r => r.id !== pluginId);
-				roots.length = 0;
-				roots.push(...filtered);
-
-				for (const entry of entries) {
-					if (!entry.installPath || typeof entry.installPath !== "string") {
-						warnings.push(`Plugin ${pluginId} entry has no installPath`);
-						continue;
-					}
-					if (entry.enabled === false) continue;
-					// Deduplicate by installPath within same ID
-					if (roots.some(r => r.id === pluginId && r.path === entry.installPath)) continue;
-
-					roots.push({
-						id: pluginId,
-						marketplace,
-						plugin: pluginName,
-						version: entry.version || "unknown",
-						path: entry.installPath,
-						scope: entry.scope || "user",
-					});
+			for (const root of ompRoots) {
+				if (!roots.some(r => r.id === root.id && r.path === root.path)) {
+					roots.push(root);
 				}
 			}
 		} else {
@@ -1135,40 +1269,33 @@ export async function listClaudePluginRoots(
 	}
 
 	// ── Project-scoped veyyon registry ────────────────────────────────────────
-	// Loaded from the nearest .veyyon/plugins/installed_plugins.json relative to cwd.
-	// Project entries take precedence over user entries for the same plugin ID.
-	if (resolvedProjectPath) {
-		const projectContent = await readFile(resolvedProjectPath);
-		if (projectContent) {
-			const projectRegistry = parseClaudePluginsRegistry(projectContent);
-			if (projectRegistry) {
-				for (const [pluginId, entries] of Object.entries(projectRegistry.plugins)) {
-					if (!Array.isArray(entries) || entries.length === 0) continue;
-					const atIndex = pluginId.lastIndexOf("@");
-					if (atIndex === -1) {
-						warnings.push(`Invalid plugin ID format (missing @marketplace): ${pluginId}`);
-						continue;
-					}
-					const pluginName = pluginId.slice(0, atIndex);
-					const marketplace = pluginId.slice(atIndex + 1);
-					for (const entry of entries) {
-						if (!entry.installPath || typeof entry.installPath !== "string") {
-							warnings.push(`Plugin ${pluginId} entry has no installPath`);
-							continue;
-						}
-						if (entry.enabled === false) continue;
-						projectRoots.push({
-							id: pluginId,
-							marketplace,
-							plugin: pluginName,
-							version: entry.version || "unknown",
-							path: entry.installPath,
-							scope: "project",
-						});
-					}
+	// Loaded from the nearest .veyyon/plugins/installed_plugins.json relative to cwd, and ONLY
+	// once the operator has trusted that file's exact bytes.
+	//
+	// This registry is repository-controlled content that names `installPath` directories, and
+	// those directories then supply extensions, hooks, custom tools, slash commands and MCP
+	// servers — code and spawn commands, loaded during startup, before any tool approval can
+	// apply. `installPath` is arbitrary, so the danger is not that the plugin lives in the
+	// project: a project registry pointing at `/tmp/anything` is the same exploit with the
+	// payload moved. Trusting the REGISTRY FILE is therefore the gate, because it is the one
+	// thing the repository must author to reach any of it.
+	//
+	// Failing closed here is silent by design at this layer — this is a cached discovery helper
+	// with no operator channel — so the refusal is reported as a warning, which every capability
+	// load already surfaces.
+	if (resolvedProjectPath && cwd) {
+		const trusted = await projectRegistryIsTrusted(resolvedProjectPath, cwd, resolvedAgentDir);
+		if (!trusted.allowed) {
+			warnings.push(trusted.reason);
+		} else {
+			const projectContent = await readFile(resolvedProjectPath);
+			if (projectContent) {
+				const projectRegistry = parseClaudePluginsRegistry(projectContent);
+				if (projectRegistry) {
+					collectRegistryRoots(projectRegistry, warnings, "project", projectRoots);
+				} else {
+					warnings.push(`Failed to parse project plugin registry: ${resolvedProjectPath}`);
 				}
-			} else {
-				warnings.push(`Failed to parse project plugin registry: ${resolvedProjectPath}`);
 			}
 		}
 	}
@@ -1200,7 +1327,7 @@ export async function listClaudePluginRoots(
 export function clearClaudePluginRootsCache(): void {
 	pluginRootsCache.clear();
 	for (const invalidate of pluginCacheInvalidators) invalidate();
-	preloadedPluginRoots = [...injectedPluginDirRoots];
+	preloadedPluginRoots = injectedPluginDirRoots.slice();
 	// Re-warm preloaded roots asynchronously so sync LSP config reads stay valid
 	if (lastPreloadHome) {
 		void preloadPluginRoots(lastPreloadHome, getProjectDir());

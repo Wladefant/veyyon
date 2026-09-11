@@ -1,7 +1,6 @@
-import { DEFAULT_SHARE_URL } from "@veyyon/wire";
-import { DEFAULT_RELAY_URL } from "../../collab/protocol";
-import { DEFAULT_STT_MODEL_KEY, STT_MODEL_OPTIONS, STT_MODEL_VALUES } from "../../stt/models";
-import { STT_SUBMIT_TRIGGER_OPTIONS, STT_SUBMIT_TRIGGER_VALUES } from "../../stt/submit-trigger";
+import { DEFAULT_RELAY_URL, DEFAULT_SHARE_URL } from "@veyyon/wire";
+import { DEFAULT_STT_MODEL_KEY, STT_MODEL_OPTIONS, STT_MODEL_VALUES } from "../../speech/stt/models";
+import { STT_SUBMIT_TRIGGER_OPTIONS, STT_SUBMIT_TRIGGER_VALUES } from "../../speech/stt/submit-trigger";
 
 /** Interaction domain slice of SETTINGS_SCHEMA — composed in ../settings-schema.ts. */
 export const INTERACTION_SETTINGS = {
@@ -322,7 +321,7 @@ export const INTERACTION_SETTINGS = {
 			tab: "interaction",
 			group: "Notifications",
 			label: "Completion Notification",
-			description: "Notify when the agent finishes a turn (off by default: the turn is on your screen)",
+			description: "Notify when the agent finishes a turn.",
 		},
 	},
 
@@ -443,7 +442,40 @@ export const INTERACTION_SETTINGS = {
 			group: "Profile",
 			label: "Default Working Directory",
 			description:
-				"Per-profile default session working directory used when launching without an explicit --cwd. Precedence: an explicit --cwd wins, then this setting, then the directory you launched from. Use an absolute or ~-relative path; a relative path or a missing directory makes launch fail loudly. The agent can override the live session cwd for that session only via set_cwd / /cwd without writing this setting.",
+				"Working directory a session starts in when --cwd is not given. --cwd takes precedence, then this setting, then the directory the command was run from. Absolute or ~-relative; a relative path or a missing directory fails the launch. set_cwd and /cwd change the directory for one session without writing this.",
+		},
+	},
+
+	/**
+	 * What `/new` does to a turn that is still streaming.
+	 *
+	 * Two outcomes, and the difference is money: keeping the old conversation
+	 * alive finishes work that would otherwise be thrown away mid-turn, and it
+	 * also keeps spending tokens on a screen nobody is reading. Both are
+	 * defensible, so this states which one happens rather than leaving it to
+	 * whether a turn happened to be in flight.
+	 *
+	 * Default is `false`: `/new` stops the old turn and closes its provider
+	 * stream. A conversation that leaves the screen stops costing money, which
+	 * is what an operator reaching for a clean prompt expects, and it is the
+	 * behavior `/new` had before a background conversation was possible at all.
+	 * Turning it on keeps the old turn running and is the deliberate choice:
+	 * the status line counts the background conversation, which is the only
+	 * surface it has.
+	 *
+	 * A change takes effect on the next launch, not in the running session, so
+	 * the description says so rather than letting the next `/new` disagree with
+	 * the value on screen (issue #928).
+	 */
+	"session.newKeepsBackground": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "interaction",
+			group: "Session",
+			label: "/new Keeps The Old Session",
+			description:
+				"What /new does while a response is still streaming. On: the old conversation keeps running in the background and the screen attaches to a new one; the status line counts background conversations. Off: the old turn is stopped and its provider stream closed before the new session starts. Takes effect at the next start.",
 		},
 	},
 

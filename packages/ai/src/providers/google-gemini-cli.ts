@@ -5,7 +5,7 @@
  */
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { scheduler } from "node:timers/promises";
-import { calculateCost, emptyCost, emptyUsage, inheritUsageCarryovers } from "@veyyon/catalog/models";
+import { calculateCost, emptyCost, inheritUsageCarryovers } from "@veyyon/catalog/models";
 import {
 	ANTIGRAVITY_ENDPOINTS,
 	ANTIGRAVITY_PRIMARY_ENDPOINT,
@@ -18,7 +18,7 @@ import {
 	getAntigravityUserAgent,
 	getGeminiCliHeaders,
 } from "@veyyon/catalog/wire/gemini-headers";
-import { extractHttpStatusFromError, fetchWithRetry } from "@veyyon/utils/fetch-retry";
+import { extractHttpStatusFromError } from "@veyyon/utils/fetch-retry";
 import { readSseJson } from "@veyyon/utils/stream";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import { type } from "arktype";
@@ -38,15 +38,19 @@ import type {
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { extractGoogleValidationUrl, formatGoogleValidationRequiredMessage } from "../utils/google-validation";
-import type { RawHttpRequestDump } from "../utils/http-inspector";
+import { materializeDumpBody, type RawHttpRequestDump } from "../utils/http-inspector";
 import { armPreResponseTimeout, getStreamFirstEventTimeoutMs } from "../utils/idle-iterator";
+import { fetchProviderWithRetry } from "../utils/provider-fetch";
 // Refresh is the sole responsibility of AuthStorage (broker-aware, single-flighted);
 // the stream provider trusts the access token threaded through `options.apiKey`.
 import { normalizeSchemaForCCA } from "../utils/schema";
 import { StreamMarkupHealing, type StreamMarkupHealingEvent } from "../utils/stream-markup-healing";
+import { stopReasonForTerminallessEof } from "../utils/terminalless-eof";
 import { interleavedThinkingBeta } from "./anthropic";
 import type { Content, FunctionCallingConfigMode, ThinkingConfig, ThinkingLevel } from "./google-shared";
 import {
+	buildGoogleBaseGenerationConfig,
+	buildGoogleToolConfig,
 	convertMessages,
 	convertTools,
 	EMPTY_STREAM_BASE_DELAY_MS,
@@ -55,7 +59,6 @@ import {
 	isThinkingPart,
 	MAX_EMPTY_STREAM_RETRIES,
 	mapStopReasonString,
-	mapToolChoice,
 	nextToolCallId,
 	pushBlockEndEvent,
 	pushToolCallEvents,
@@ -63,6 +66,7 @@ import {
 	retainThoughtSignature,
 	startTextOrThinkingBlock,
 } from "./google-shared";
+import { createInitialResponsesAssistantMessage } from "./initial-message";
 
 /**
  * Thinking level for Gemini 3 models. Re-exported from `google-shared` so existing
@@ -526,17 +530,14 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 		const startTime = performance.now();
 		let firstTokenTime: number | undefined;
 
-		const output: AssistantMessage = {
-			role: "assistant",
-			content: [],
-			api: "google-gemini-cli" as Api,
-			provider: model.provider,
-			model: model.id,
-			usage: emptyUsage(),
-			stopReason: "stop",
-			timestamp: Date.now(),
-		};
+		const output: AssistantMessage = createInitialResponsesAssistantMessage(
+			"google-gemini-cli" as Api,
+			model.provider,
+			model.id,
+		);
 		let rawRequestDump: RawHttpRequestDump | undefined;
+		/** Exact bytes of the last sent request body; materialized into a dump only on the 400/413 path. */
+		let wireBodyJson: string | undefined;
 
 		try {
 			const apiKeyRaw = options?.apiKey;
@@ -586,7 +587,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 							endpoints = [baseUrl];
 							if (providerState) providerState.lastGoodEndpoint = undefined;
 						} else {
-							const defaultFallbacks = [...ANTIGRAVITY_ENDPOINTS] as string[];
+							const defaultFallbacks = ANTIGRAVITY_ENDPOINTS.slice() as string[];
 							const lastGood = providerState?.lastGoodEndpoint;
 							if (lastGood && defaultFallbacks.includes(lastGood)) {
 								endpoints = [lastGood, ...defaultFallbacks.filter(e => e !== lastGood)];
@@ -595,7 +596,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 							}
 						}
 					} else {
-						const defaultFallbacks = [...ANTIGRAVITY_ENDPOINTS] as string[];
+						const defaultFallbacks = ANTIGRAVITY_ENDPOINTS.slice() as string[];
 						const lastGood = providerState?.lastGoodEndpoint;
 						if (lastGood && defaultFallbacks.includes(lastGood)) {
 							endpoints = [lastGood, ...defaultFallbacks.filter(e => e !== lastGood)];
@@ -629,9 +630,9 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 				api: output.api,
 				model: model.id,
 				method: "POST",
-				body: requestBody,
 				headers: requestHeaders,
 			};
+			wireBodyJson = requestBodyJson;
 
 			// Direct callers that skip `register-builtins` (which installs the
 			// iterator-level watchdog) need a pre-response timer alongside
@@ -766,7 +767,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 				for await (const chunk of readSseJson<CloudCodeAssistResponseChunk>(
 					activeResponse.body!,
 					options?.signal,
-					event => options?.onSseEvent?.({ event: event.event, data: event.data, raw: [...event.raw] }, model),
+					event => options?.onSseEvent?.({ event: event.event, data: event.data, raw: event.raw.slice() }, model),
 				)) {
 					if (chunk.error) {
 						const detail = chunk.error.message || chunk.error.status || "unknown error";
@@ -873,7 +874,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 						} else {
 							output.stopReason = mapped;
 							if (mapped === "error") {
-								output.errorMessage = `Generation failed with finish reason: ${candidate.finishReason}`;
+								output.errorMessage = AIError.providerFinishErrorMessage(candidate.finishReason);
 							}
 						}
 					}
@@ -925,13 +926,14 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 					started = false;
 					resetOutput();
 
+					const requestUrl = `${endpoint}/v1internal:streamGenerateContent?alt=sse`;
 					// Per attempt: arm a pre-response (TTFT) timer, cleared the instant
 					// headers arrive so it never aborts the actively streaming body —
 					// an absolute `AbortSignal.timeout` would (issue #2422).
 					const watchdog = armPreResponseTimeout(callerSignal, firstEventTimeoutMs);
 					let response: Response;
 					try {
-						response = await fetchWithRetry(() => `${endpoint}/v1internal:streamGenerateContent?alt=sse`, {
+						response = await fetchProviderWithRetry(() => requestUrl, {
 							method: "POST",
 							headers: requestHeaders,
 							body: requestBodyJson,
@@ -952,15 +954,15 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 								continue;
 							}
 						}
-						const errorText = await response.text();
-						const validationUrl = extractGoogleValidationUrl(errorText);
+						const errorBody = await AIError.readProviderErrorBody(response);
+						const validationUrl = extractGoogleValidationUrl(errorBody.text);
 						const errorMessage = validationUrl
 							? formatGoogleValidationRequiredMessage(
 									validationUrl,
 									"retry your request",
 									parsedCredentials.email,
 								)
-							: errorText;
+							: errorBody.detail;
 						throw new AIError.GeminiCliApiError(
 							`Cloud Code Assist API error (${response.status}): ${errorMessage}`,
 							response.status,
@@ -968,7 +970,11 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 						);
 					}
 
-					const requestUrl = response.url;
+					// The URL this attempt POSTed to, not `response.url`: a custom
+					// `options.fetch` that answers with a constructed `Response`
+					// leaves that empty, and the empty-stream retry below then
+					// failed with a configuration error naming a URL the provider
+					// had in hand all along.
 					let currentResponse = response;
 
 					for (let emptyAttempt = 0; emptyAttempt <= MAX_EMPTY_STREAM_RETRIES; emptyAttempt++) {
@@ -982,10 +988,6 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 								await scheduler.wait(backoffMs, { signal: options?.signal });
 							} catch {
 								throw new AIError.RequestAbortError("Request was aborted");
-							}
-
-							if (!requestUrl) {
-								throw new AIError.ConfigurationError("Missing request URL");
 							}
 
 							currentResponse = await (options?.fetch ?? fetch)(requestUrl, {
@@ -1034,11 +1036,24 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 						throw new AIError.RequestAbortError("Request was aborted");
 					}
 
+					// Same judgement as every other dialect, and for the same reason:
+					// a body that ends without a `finishReason` is a clean EOF, not a
+					// dropped transport, and rejecting all of them failed turns that
+					// had arrived whole. `stopReasonForTerminallessEof` owns it. A
+					// Cloud Code Assist function call arrives whole in one part with
+					// parsed `args`, so a missing name is the only partial shape.
 					if (!sawFinishReason) {
-						throw new AIError.ProviderResponseError(
-							"Cloud Code Assist stream ended without a finish reason (connection dropped or response truncated)",
-							{ provider: model.provider, kind: "incomplete-stream" },
+						const toolBatchIsComplete = output.content.every(
+							block => block.type !== "toolCall" || block.name.length > 0,
 						);
+						const stopReason = stopReasonForTerminallessEof(output.content, toolBatchIsComplete);
+						if (stopReason === undefined) {
+							throw new AIError.ProviderResponseError(
+								"Cloud Code Assist stream ended without a finish reason (connection dropped or response truncated)",
+								{ provider: model.provider, kind: "incomplete-stream" },
+							);
+						}
+						output.stopReason = stopReason;
 					}
 
 					// Succeeded! Break the endpoints loop.
@@ -1078,11 +1093,12 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
-			const result = await AIError.finalize(error, { api: model.api, signal: options?.signal, rawRequestDump });
-			output.stopReason = result.stopReason;
-			output.errorStatus = result.status;
-			output.errorId = result.id;
-			output.errorMessage = result.message;
+			const result = await AIError.finalize(error, {
+				api: model.api,
+				signal: options?.signal,
+				rawRequestDump: materializeDumpBody(rawRequestDump, wireBodyJson),
+			});
+			AIError.applyFinalizeResult(output, result);
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
@@ -1227,28 +1243,8 @@ export function buildRequest(
 ): CloudCodeAssistRequest {
 	const systemPrompts = normalizeSystemPrompts(context.systemPrompt);
 	const contents = convertMessages(model, context);
-	const generationConfig: CloudCodeAssistRequest["request"]["generationConfig"] = {};
-	if (options.temperature !== undefined) {
-		generationConfig.temperature = options.temperature;
-	}
-	if (options.maxTokens !== undefined) {
-		generationConfig.maxOutputTokens = options.maxTokens;
-	}
-	if (options.topP !== undefined) {
-		generationConfig.topP = options.topP;
-	}
-	if (options.topK !== undefined) {
-		generationConfig.topK = options.topK;
-	}
-	if (options.minP !== undefined) {
-		generationConfig.minP = options.minP;
-	}
-	if (options.presencePenalty !== undefined) {
-		generationConfig.presencePenalty = options.presencePenalty;
-	}
-	if (options.repetitionPenalty !== undefined) {
-		generationConfig.repetitionPenalty = options.repetitionPenalty;
-	}
+	const generationConfig: CloudCodeAssistRequest["request"]["generationConfig"] =
+		buildGoogleBaseGenerationConfig(options);
 
 	// Thinking config
 	if (options.thinking?.enabled && model.reasoning) {
@@ -1299,23 +1295,9 @@ export function buildRequest(
 	if (context.tools && context.tools.length > 0) {
 		const convertedTools = convertTools(context.tools, model);
 		request.tools = isAntigravity ? normalizeAntigravityTools(convertedTools) : convertedTools;
-		if (options.toolChoice) {
-			const choice = options.toolChoice;
-			if (typeof choice === "string") {
-				const mode = mapToolChoice(choice);
-				if (mode !== "AUTO") {
-					request.toolConfig = {
-						functionCallingConfig: { mode },
-					};
-				}
-			} else {
-				request.toolConfig = {
-					functionCallingConfig: {
-						mode: "ANY",
-						allowedFunctionNames: [...choice.allowedFunctionNames],
-					},
-				};
-			}
+		const toolConfig = buildGoogleToolConfig(options.toolChoice);
+		if (toolConfig) {
+			request.toolConfig = toolConfig;
 		}
 		// Antigravity's default tool mode is VALIDATED (verified for Gemini and
 		// Claude); an explicit non-auto tool choice above wins.

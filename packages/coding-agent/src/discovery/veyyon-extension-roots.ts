@@ -18,10 +18,10 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getAgentDir, isEnoent, logger, tryParseJson } from "@veyyon/utils";
-import { readDirEntries, readFile } from "../capability/fs";
-import type { LoadContext } from "../capability/types";
 import { getEnabledPlugins } from "../extensibility/plugins/loader";
-import { expandTilde } from "../tools/path-utils";
+import { expandTilde } from "../tools/core/path-utils";
+import { readDirEntries, readFile } from "./capability/fs";
+import type { LoadContext } from "./capability/types";
 import { listClaudePluginRoots, pluginsRootFor } from "./helpers";
 
 /** A resolved extension package directory wired into the discovery surfaces. */
@@ -62,7 +62,7 @@ export function injectVeyyonExtensionCliRoots(paths: readonly string[], home: st
 		// CLI scope mirrors how `--extension` is treated elsewhere — user-level overrides win.
 		if (!merged.has(resolved)) merged.set(resolved, { path: resolved, level: "user" });
 	}
-	injectedCliRoots = [...merged.values()];
+	injectedCliRoots = Array.from(merged.values());
 }
 
 /** Drop every CLI-injected root. Tests use this between cases. */
@@ -225,7 +225,7 @@ async function listInstalledPluginRoots(ctx: LoadContext, pluginsRoot: string | 
 			// marketplace installs, or a package the named profile installed by hand
 			// gets dropped because the ACTIVE profile happens to have it from a
 			// marketplace, and vice versa.
-			listClaudePluginRoots(ctx.home, ctx.cwd, pluginsRoot),
+			listClaudePluginRoots(ctx.home, ctx.cwd, pluginsRoot, ctx.agentDir),
 		]);
 		const marketplaceRealpaths = new Set(
 			await Promise.all(marketplaceRoots.roots.map(root => realpathOrResolved(root.path))),

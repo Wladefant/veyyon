@@ -19,13 +19,13 @@
  *
  * THE ROWS LIVE ONE MODULE PER DIRECTORY, and this file aggregates them. It held
  * all 163 `import … with { type: "text" }` specifiers itself, which made importing
- * ONE prompt reach all 163: `tools/read.ts` needs `PROMPTS["tools/read"]` to render
+ * ONE prompt reach all 163: `tools/fs/read.ts` needs `PROMPTS["tools/read"]` to render
  * its own description and paid 167 modules for that string, the largest single edge
  * it had, and 95 files in this package import a prompt the same way. Each directory
  * now owns its rows in `<directory>/rows.ts`, this file spreads them into the same
  * `PROMPTS`, and a consumer imports the directory it belongs to:
  *
- *   import { toolsPrompts } from "../prompts/tools/rows";
+ *   import { toolsPrompts } from "./tools/rows";
  *   const description = toolsPrompts["tools/read"].text;
  *
  * Take the aggregate instead when a module genuinely spans directories, which three
@@ -51,7 +51,7 @@
  *   side-channel/   turns that reuse the session's context but are not the task:
  *                   a side question, a recap, an IRC message, a speech rewrite,
  *                   a fork's handover.
- *   subagent/       what a delegated agent runs under, and what creates or
+ *   agent/       what a delegated agent runs under, and what creates or
  *                   orchestrates one.
  *   plan-mode/      the read-only contract and its handovers.
  *   agents/         the bundled agent definitions themselves.
@@ -82,6 +82,7 @@
 // From the module that defines them, not the `@veyyon/utils` barrel: 3 modules against 74.
 import { definePromptRegistry, type PromptEntry, type PromptSection } from "@veyyon/utils/prompt-registry";
 import { advisorPrompts } from "./advisor/rows";
+import { agentPrompts } from "./agent/rows";
 import { agentsPrompts } from "./agents/rows";
 import { autolearnPrompts } from "./autolearn/rows";
 import { autoresearchPrompts } from "./autoresearch/rows";
@@ -97,7 +98,6 @@ import { sessionPrompts } from "./session/rows";
 import { sideChannelPrompts } from "./side-channel/rows";
 import { skillsPrompts } from "./skills/rows";
 import { steeringPrompts } from "./steering/rows";
-import { subagentPrompts } from "./subagent/rows";
 import { thinkingPrompts } from "./thinking/rows";
 import { titlesPrompts } from "./titles/rows";
 import { toolsPrompts } from "./tools/rows";
@@ -132,7 +132,7 @@ export const codingAgentPrompts = definePromptRegistry("packages/coding-agent/sr
 	...sideChannelPrompts,
 	...skillsPrompts,
 	...steeringPrompts,
-	...subagentPrompts,
+	...agentPrompts,
 	...thinkingPrompts,
 	...titlesPrompts,
 	...toolsPrompts,

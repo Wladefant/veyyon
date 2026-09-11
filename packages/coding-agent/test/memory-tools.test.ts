@@ -11,17 +11,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
-import { HindsightApi } from "@veyyon/coding-agent/hindsight/client";
-import type { HindsightConfig } from "@veyyon/coding-agent/hindsight/config";
+import { HindsightApi } from "@veyyon/coding-agent/memory/hindsight/client";
+import type { HindsightConfig } from "@veyyon/coding-agent/memory/hindsight/config";
 import {
 	HINDSIGHT_RETAIN_BATCH_SIZE,
 	HindsightSessionState,
 	MEMORY_RETAIN_MAX_BYTES,
 	MEMORY_RETAIN_MAX_ITEM_BYTES,
 	MEMORY_RETAIN_MAX_ITEMS,
-} from "@veyyon/coding-agent/hindsight/state";
-import { mnemopiBackend } from "@veyyon/coding-agent/mnemopi/backend";
-import { loadMnemopiConfig, type MnemopiBackendConfig } from "@veyyon/coding-agent/mnemopi/config";
+} from "@veyyon/coding-agent/memory/hindsight/state";
+import { mnemopiBackend } from "@veyyon/coding-agent/memory/mnemopi/backend";
+import { loadMnemopiConfig, type MnemopiBackendConfig } from "@veyyon/coding-agent/memory/mnemopi/config";
 import {
 	getMnemopiScopedDbPaths,
 	getMnemopiSessionState,
@@ -29,12 +29,12 @@ import {
 	loadMnemopiCore,
 	MnemopiSessionState,
 	setMnemopiSessionState,
-} from "@veyyon/coding-agent/mnemopi/state";
+} from "@veyyon/coding-agent/memory/mnemopi/state";
+import { MemoryEditTool } from "@veyyon/coding-agent/tools/agent/memory-edit";
+import { MemoryRecallTool } from "@veyyon/coding-agent/tools/agent/memory-recall";
+import { MemoryReflectTool } from "@veyyon/coding-agent/tools/agent/memory-reflect";
+import { MemoryRetainTool } from "@veyyon/coding-agent/tools/agent/memory-retain";
 import type { ToolSession } from "@veyyon/coding-agent/tools/index";
-import { MemoryEditTool } from "@veyyon/coding-agent/tools/memory-edit";
-import { MemoryRecallTool } from "@veyyon/coding-agent/tools/memory-recall";
-import { MemoryReflectTool } from "@veyyon/coding-agent/tools/memory-reflect";
-import { MemoryRetainTool } from "@veyyon/coding-agent/tools/memory-retain";
 import { resetMemoryForTests } from "@veyyon/mnemopi";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
@@ -155,10 +155,7 @@ function makeMnemopiConfig(
 			embeddingApiKey: undefined,
 			llm: false,
 		},
-		llmMode: "none",
-		llmBaseUrl: undefined,
-		llmApiKey: undefined,
-		llmModel: undefined,
+		llm: { mode: "none" },
 		...overrides,
 	};
 }
@@ -203,7 +200,7 @@ describe("Hindsight tool factories", () => {
 	});
 
 	it("retain/recall/reflect factories return null when memory.backend !== hindsight", () => {
-		const settings = Settings.isolated({ "memory.backend": "local", "memories.enabled": false });
+		const settings = Settings.isolated({ "memory.backend": "local" });
 		const session = makeSession(settings);
 		expect(MemoryRetainTool.createIf(session)).toBeNull();
 		expect(MemoryRecallTool.createIf(session)).toBeNull();
@@ -242,9 +239,9 @@ describe("Mnemopi tool factories", () => {
 	});
 
 	it("memory tool factories gate on supported backends", () => {
-		const offSettings = Settings.isolated({ "memory.backend": "off", "memories.enabled": false });
+		const offSettings = Settings.isolated({ "memory.backend": "off" });
 		const hindsightSettings = Settings.isolated({ "memory.backend": "hindsight" });
-		const localSession = makeSession(Settings.isolated({ "memory.backend": "local", "memories.enabled": false }));
+		const localSession = makeSession(Settings.isolated({ "memory.backend": "local" }));
 		expect(MemoryRetainTool.createIf(localSession)).toBeNull();
 		expect(MemoryRecallTool.createIf(localSession)).toBeNull();
 		expect(MemoryReflectTool.createIf(localSession)).toBeNull();
@@ -657,7 +654,7 @@ describe("Mnemopi backend lifecycle", () => {
 		expect(options.embedText).not.toContain(":end]");
 	});
 
-	it("registers subagent aliases from parent Mnemopi state without Hindsight", async () => {
+	it("registers agent aliases from parent Mnemopi state without Hindsight", async () => {
 		const settings = Settings.isolated({ "memory.backend": "mnemopi" });
 		const parentState = registerMnemopiState();
 		const childSession = {
@@ -788,7 +785,7 @@ describe("Mnemopi backend lifecycle", () => {
 		registeredMnemopiState = undefined;
 	});
 
-	it("skips consolidation when disposing an aliased subagent state (#2320)", async () => {
+	it("skips consolidation when disposing an aliased agent state (#2320)", async () => {
 		const settings = Settings.isolated({ "memory.backend": "mnemopi" });
 		const parentState = registerMnemopiState();
 		const parentMemory = parentState.getScopedRetainTarget().memory;
@@ -817,14 +814,14 @@ describe("Mnemopi backend lifecycle", () => {
 		await childState?.dispose();
 
 		// Alias dispose must not touch the parent's owned memories or trigger
-		// parent retention; the parent state outlives the subagent.
+		// parent retention; the parent state outlives the agent.
 		expect(flushSpy).not.toHaveBeenCalled();
 		expect(sleepSpy).not.toHaveBeenCalled();
 		expect(closeSpy).not.toHaveBeenCalled();
 		expect(parentRetainSpy).not.toHaveBeenCalled();
 	});
 
-	it("aliased subagent enqueue still flushes and sleeps the parent's shared banks (#2327 review)", async () => {
+	it("aliased agent enqueue still flushes and sleeps the parent's shared banks (#2327 review)", async () => {
 		const settings = Settings.isolated({ "memory.backend": "mnemopi" });
 		const parentState = registerMnemopiState();
 		const parentMemory = parentState.getScopedRetainTarget().memory;
@@ -854,9 +851,9 @@ describe("Mnemopi backend lifecycle", () => {
 
 		await mnemopiBackend.enqueue(path.dirname(tempDbPath!), "/tmp", childSession);
 
-		// /memory enqueue from a subagent must still consolidate the shared
+		// /memory enqueue from an agent must still consolidate the shared
 		// banks; `forceRetainCurrentSession` is the one piece that the alias
-		// guard short-circuits (the subagent's transcript is the parent's
+		// guard short-circuits (the agent's transcript is the parent's
 		// concern), but the SQL-level flush and sleep must reach every owned
 		// bank or the user's enqueue silently no-ops.
 		expect(flushSpy).toHaveBeenCalledTimes(1);

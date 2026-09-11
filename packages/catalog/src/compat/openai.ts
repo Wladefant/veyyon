@@ -21,6 +21,7 @@ import {
 	isQwenModelId,
 	modelFamilyToken,
 } from "../identity/family";
+import { providerWireCapabilities } from "../provider-models/wire-capabilities";
 import type {
 	ModelSpec,
 	OpenAICompat,
@@ -32,6 +33,7 @@ import type {
 } from "../types";
 import { applyCompatOverrides } from "./apply";
 import { matchesKimiK27CodeFamily } from "./kimi";
+import { leakedToolCallGrammar } from "./markup-leaks";
 
 /** GLM coding-plan SKUs idle for minutes mid-reasoning; see `streamIdleTimeoutMs`. */
 const GLM_CODING_PLAN_MODEL_PATTERN = /(^|\/)glm-5(?:[.-]|$)/i;
@@ -55,17 +57,6 @@ const ALIBABA_CODING_PLAN_STREAM_IDLE_TIMEOUT_MS = 600_000;
 /** Local OpenAI-compatible backends can spend minutes cold-loading a model before the first SSE event. */
 const LOCAL_OPENAI_COMPAT_STREAM_IDLE_TIMEOUT_MS = 300_000;
 const MINIMAX_PROVIDER_OR_ID_PATTERN = /minimax/i;
-const DSML_HEALING_PROVIDERS = new Set([
-	"ollama",
-	"ollama-cloud",
-	"nvidia",
-	"deepseek",
-	"fireworks",
-	"nanogpt",
-	"opencode-go",
-	"openrouter",
-]);
-
 // Ollama's OpenAI-compatible `reasoning.effort` accepts `high|medium|low|max|none`;
 // `ollama`-provider reasoning models carry that host-declared `low..max` effort
 // ladder (see OLLAMA_WIRE_EFFORTS), so no compat-level remapping is needed.
@@ -104,18 +95,14 @@ function detectStreamMarkupHealingPattern(
 	modelId: string,
 	baseUrl: string,
 ): OpenAIStreamMarkupHealingPattern | undefined {
-	if (provider === "kimi-code" || provider === "moonshot" || /kimi[-/_.]?k2/i.test(modelId)) {
-		return "kimi";
-	}
-	if (isDeepseekModelIdOrName(modelId) && DSML_HEALING_PROVIDERS.has(provider)) {
-		return "dsml";
-	}
+	const grammar = leakedToolCallGrammar(provider, modelId);
+	if (grammar) return grammar;
 	if (isOfficialOpenAIEndpoint(provider, baseUrl)) return undefined;
 	return "thinking";
 }
 
 /** Strict official-OpenAI check: provider id `openai` and an `api.openai.com` host (missing baseUrl defaults there). */
-function isOfficialOpenAIEndpoint(provider: string, baseUrl: string): boolean {
+export function isOfficialOpenAIEndpoint(provider: string, baseUrl: string): boolean {
 	if (provider !== "openai") return false;
 	if (!baseUrl) return true;
 	try {
@@ -156,17 +143,13 @@ function mergeMimoReasoningEffortMap(compat: ResolvedOpenAISharedCompat, enabled
 	compat.reasoningEffortMap = { ...MIMO_REASONING_EFFORT_MAP, ...compat.reasoningEffortMap };
 }
 
+/**
+ * A provider whose entry declares `strictTools`, or a host known to honor them
+ * — a model pointed at one of those hosts under a custom provider id gets the
+ * same answer as the provider it is really talking to.
+ */
 function detectStrictModeSupport(provider: string, baseUrl: string): boolean {
-	if (
-		provider === "openai" ||
-		provider === "openrouter" ||
-		provider === "cerebras" ||
-		provider === "together" ||
-		provider === "github-copilot" ||
-		provider === "zenmux"
-	) {
-		return true;
-	}
+	if (providerWireCapabilities(provider)?.strictTools) return true;
 	return (
 		hostMatchesUrl(baseUrl, "openai") ||
 		hostMatchesUrl(baseUrl, "azureOpenAI") ||
@@ -178,27 +161,17 @@ function detectStrictModeSupport(provider: string, baseUrl: string): boolean {
 }
 
 /**
- * Local OpenAI-compatible inference servers whose chat templates re-tokenize
- * the entire prompt every request — llama.cpp prefix-KV-cache reuse only
- * survives when the rendered tokens stay byte-identical across turns. The
- * runtime auto-enables {@link OpenAICompat.replayReasoningContent} for these
- * providers (and for any provider pointed at a loopback / RFC1918 baseUrl) so
- * Qwen3 / DeepSeek-R1 / GLM templates can reconstruct the prior assistant
- * turn's `<think>` block from `reasoning_content` (#3528).
+ * True for a provider running a local chat-template renderer, or for any
+ * provider pointed at a loopback / RFC1918 baseUrl, and false for a provider
+ * that declares it forwards to an unrelated upstream. Which providers are which
+ * is declared in `provider-models/wire-capabilities.ts`, next to what every
+ * other per-provider decision reads.
  */
-const LOCAL_OPENAI_COMPAT_PROVIDERS = new Set(["llama.cpp", "lm-studio", "vllm", "ollama"]);
-
-/**
- * Local proxy providers that share the loopback-default baseUrl but forward
- * to an unrelated upstream (OpenAI, Anthropic, …) rather than running a
- * chat-template renderer themselves — `replayReasoningContent` would push
- * `reasoning_content` to the upstream, which gains no KV-cache benefit and
- * may 400 on the extra field. Excluded from BOTH the provider check above
- * and the loopback heuristic below; users who want the replay on a custom
- * proxy setup can opt in via the sparse `compat.replayReasoningContent`
- * override.
- */
-const PROXY_OPENAI_COMPAT_PROVIDERS = new Set(["litellm"]);
+function isLocalOpenAICompatEndpoint(provider: string, baseUrl: string): boolean {
+	const capabilities = providerWireCapabilities(provider);
+	if (capabilities?.forwardsUpstream) return false;
+	return capabilities?.localInference === true || hasLocalLoopbackBaseUrl(baseUrl);
+}
 
 /**
  * Build the resolved chat-completions compat record for a model spec.
@@ -266,9 +239,7 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		isMoonshotNative ||
 		isOpenCodeHost;
 	const isOpenCodeProvider = provider === "opencode-go" || provider === "opencode-zen";
-	const isLocalOpenAICompatBackend =
-		!PROXY_OPENAI_COMPAT_PROVIDERS.has(provider) &&
-		(LOCAL_OPENAI_COMPAT_PROVIDERS.has(provider) || hasLocalLoopbackBaseUrl(baseUrl));
+	const isLocalOpenAICompatBackend = isLocalOpenAICompatEndpoint(provider, baseUrl);
 
 	const useMaxTokens =
 		isMistral ||
@@ -405,7 +376,18 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		alwaysSendMaxTokens: isKimiModel,
 		disableReasoningOnForcedToolChoice: isKimiModel || isAnthropicModel,
 		disableReasoningOnToolChoice: isDeepseekFamily && Boolean(spec.reasoning) && !isOpenRouter,
-		supportsToolChoice: !isDirectDeepseekReasoning,
+		// OpenCode's gateways reject every `tool_choice` value but `"auto"`:
+		// `[invalid_request_error] only '"auto"' is supported for 'tool_choice'.
+		// '"none"', '"required"', and named function choices are not currently
+		// supported`. Omitting the field is what `"auto"` means on an
+		// OpenAI-compatible endpoint, so dropping it costs nothing and is the only
+		// setting that covers all three rejected forms at once. Reported against
+		// the guided goal, which pins its `respond` tool by name and so 400ed on
+		// every interview turn; `"none"` reaches the same upstream from a
+		// side-channel turn. `isOpenCodeHost` covers the provider ids and the
+		// `opencode.ai` URL marker, so a custom provider pointed at the gateway
+		// answers the same way.
+		supportsToolChoice: !isDirectDeepseekReasoning && !isOpenCodeHost,
 		supportsForcedToolChoice: !requiresEnabledThinking,
 		supportsNamedToolChoice: provider !== "llama.cpp",
 		maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
@@ -567,6 +549,7 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 	const isCodexBackend = modelMatchesHost({ provider: spec.provider, baseUrl }, "codexBackend");
 	const isOpenRouter = modelMatchesHost({ provider: spec.provider, baseUrl }, "openrouter");
 	const isHuggingfaceRouter = modelMatchesHost({ provider: spec.provider, baseUrl }, "huggingfaceRouter");
+	const isOpenCodeHost = modelMatchesHost({ provider: spec.provider, baseUrl }, "opencode");
 	const isOpenAIUrl = hostMatchesUrl(baseUrl, "openai");
 	const id = spec.id ?? "";
 	const thinkingFormat: ResolvedOpenAISharedCompat["thinkingFormat"] = isOpenRouter ? "openrouter" : "openai";
@@ -574,9 +557,7 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 	const isAnthropicModel = id ? isClaudeModelId(id) || isAnthropicNamespacedModelId(id) : false;
 	const isDeepseekFamily = id ? isDeepseekModelIdOrName(id) || isDeepseekModelIdOrName(spec.name) : false;
 	const reasoningCapable = Boolean(spec.reasoning);
-	const isLocalOpenAICompatBackend =
-		!PROXY_OPENAI_COMPAT_PROVIDERS.has(spec.provider) &&
-		(LOCAL_OPENAI_COMPAT_PROVIDERS.has(spec.provider) || hasLocalLoopbackBaseUrl(baseUrl));
+	const isLocalOpenAICompatBackend = isLocalOpenAICompatEndpoint(spec.provider, baseUrl);
 
 	const compat: ResolvedOpenAIResponsesCompat = {
 		supportsDeveloperRole: isAzure || isOpenAIUrl || hostMatchesUrl(baseUrl, "githubCopilot"),
@@ -602,7 +583,11 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 		filterReasoningHistory: spec.provider === "xai-oauth" || (isOpenRouter && isAnthropicModel),
 		disableReasoningOnForcedToolChoice: isKimiModel,
 		disableReasoningOnToolChoice: isDeepseekFamily && reasoningCapable && !isOpenRouter,
-		supportsToolChoice: true,
+		// The OpenCode gateways accept only `"auto"`, on this endpoint as much as on
+		// chat-completions, and the reported failure came through here: the bundle
+		// routes `muse-spark-1.3-contributor` to `/responses`. See the matching
+		// comment in `buildOpenAICompat` for the upstream's own wording.
+		supportsToolChoice: !isOpenCodeHost,
 		supportsForcedToolChoice: true,
 		supportsNamedToolChoice: true,
 		reasoningContentField: "reasoning_content",
@@ -636,17 +621,19 @@ export function buildOpenAIResponsesCompat(spec: OpenAIResponsesSpecLike): Resol
 		// first-party OpenAI row. `isOfficialOpenAIEndpoint` is the pair of claims
 		// actually meant here, unset-means-official and a re-pointed host means not.
 		supportsObfuscationOptOut: isOfficialOpenAIEndpoint(spec.provider, baseUrl),
-		// `POST /responses/compact` is documented for the official OpenAI API
-		// (Compaction guide), for Azure OpenAI's v1 API (Microsoft Learn,
-		// `{resource}.openai.azure.com/openai/v1/responses/compact`), and it is
-		// what codex-rs itself calls on the ChatGPT Codex backend
-		// (`chatgpt.com/backend-api/codex/responses/compact`) for a ChatGPT
-		// OAuth session. Codex was held off on the theory that its session
-		// transport owns history state; it does not — the endpoint is stateless
-		// there too, the window it returns is the client's to store and replay,
-		// and it carries the same encrypted reasoning the turn path already
-		// sends. A compatible gateway opts in with a `supportsServerCompaction`
-		// override.
+		// Server-side compaction is documented as `POST /responses/compact` for
+		// the official OpenAI API (Compaction guide) and for Azure OpenAI's v1
+		// API (Microsoft Learn,
+		// `{resource}.openai.azure.com/openai/v1/responses/compact`). The
+		// ChatGPT Codex backend serves no compact route — that path answers 404
+		// — and compacts through a streaming `{base}/codex/responses` request
+		// whose last input item is `compaction_trigger`, declared
+		// `responses_compaction_v2`; the route and the declaration are one
+		// decision, pinned by
+		// `packages/agent/test/the-codex-compaction-wire-does-not-regress.test.ts`.
+		// The host is admitted here because the window is still the client's to
+		// store and replay. A compatible gateway opts in with a
+		// `supportsServerCompaction` override.
 		supportsServerCompaction: isOfficialOpenAIEndpoint(spec.provider, baseUrl) || isAzure || isCodexBackend,
 		stripDeepseekSpecialTokens:
 			Boolean(id) && isDeepseekModelIdOrName(id) && (spec.provider === "nvidia" || spec.provider === "deepseek"),

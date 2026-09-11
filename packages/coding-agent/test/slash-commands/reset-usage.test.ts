@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { ResetCreditAccountStatus, ResetCreditRedeemOutcome } from "@veyyon/coding-agent/session/auth-storage";
+import type { ResetCreditAccountStatus, ResetCreditRedeemOutcome } from "@veyyon/ai/auth-storage";
 import {
 	describeRedeemOutcome,
 	type ResetUsageAccount,

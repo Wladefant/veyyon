@@ -17,15 +17,15 @@ import {
 import * as ai from "@veyyon/ai";
 import type { AssistantMessage, Model, Usage } from "@veyyon/ai/types";
 import { getBundledModel } from "@veyyon/catalog/models";
-import { buildSessionContext } from "@veyyon/coding-agent/session/session-context";
+import { buildSessionContext } from "@veyyon/kernel/session/session-context";
 import type {
 	CompactionEntry,
 	ModelChangeEntry,
 	SessionEntry,
 	SessionMessageEntry,
 	ThinkingLevelChangeEntry,
-} from "@veyyon/coding-agent/session/session-entries";
-import { migrateSessionEntries } from "@veyyon/coding-agent/session/session-migrations";
+} from "@veyyon/kernel/session/session-entries";
+import { migrateSessionEntries } from "@veyyon/kernel/session/session-migrations";
 import { e2eApiKey } from "./helpers/e2e-session";
 
 // ============================================================================
@@ -97,7 +97,7 @@ function buildLargeSessionEntries(): SessionEntry[] {
 						{
 							type: "toolCall",
 							id,
-							name: pick(["read", "grep", "bash", "edit"]),
+							name: pick(["read", "search", "bash", "edit"]),
 							arguments: { path: "src/mod.ts" },
 						},
 					]

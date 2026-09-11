@@ -3,10 +3,12 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isEexist, isEnoent, postmortem } from "@veyyon/utils";
+import { isSettingsInitialized, Settings } from "../config/settings";
 import { resolveWorkerSpawnCmd, workerEnvFromParent } from "../subprocess/worker-client";
 import { canonicalProjectDir, daemonBrokerEndpoint, daemonBrokerTokenPath, daemonRuntimeDir } from "./paths";
 import {
 	DAEMON_BROKER_WORKER_ARG,
+	DAEMON_CLEANUP_WAIT_ENV,
 	DAEMON_IDLE_GRACE_ENV,
 	DAEMON_PROJECT_DIR_ENV,
 	DAEMON_RUNTIME_DIR_ENV,
@@ -37,6 +39,8 @@ export interface DaemonBrokerClientOptions {
 	runtimeDir?: string;
 	/** Last-client shutdown grace override in milliseconds. */
 	idleGraceMs?: number;
+	/** Exited process retention TTL before purge in milliseconds (0 = never clean up). */
+	cleanupWaitMs?: number;
 	/**
 	 * Session CPU budget hook for the broker spawn. The broker is shared per
 	 * project and spawns every managed daemon, so adopting the broker joins
@@ -126,6 +130,7 @@ class SocketDaemonClient implements DaemonBrokerClient {
 	readonly #endpoint: string;
 	readonly #token: string;
 	readonly #idleGraceMs: number | undefined;
+	readonly #cleanupWaitMs: number | undefined;
 	readonly #adoptSpawnedPid: ((pid: number) => void) | undefined;
 	readonly #pending = new Map<string, PendingRequest>();
 	#socket: net.Socket | undefined;
@@ -140,6 +145,7 @@ class SocketDaemonClient implements DaemonBrokerClient {
 		this.#token = token;
 		this.#idleGraceMs = options.idleGraceMs;
 		this.#adoptSpawnedPid = options.adoptSpawnedPid;
+		this.#cleanupWaitMs = options.cleanupWaitMs;
 	}
 
 	async request(operation: DaemonOperation, signal?: AbortSignal): Promise<DaemonRpcResult> {
@@ -222,6 +228,7 @@ class SocketDaemonClient implements DaemonBrokerClient {
 			[DAEMON_RUNTIME_DIR_ENV]: this.#runtimeDir,
 		};
 		if (this.#idleGraceMs !== undefined) overlay[DAEMON_IDLE_GRACE_ENV] = String(this.#idleGraceMs);
+		if (this.#cleanupWaitMs !== undefined) overlay[DAEMON_CLEANUP_WAIT_ENV] = String(this.#cleanupWaitMs);
 		const child = Bun.spawn(spawn.cmd, {
 			cwd: spawn.cwd,
 			env: workerEnvFromParent(overlay),
@@ -313,8 +320,20 @@ export async function daemonClientForProject(
 	const canonical = await canonicalProjectDir(projectDir);
 	let pending = sharedClients.get(canonical);
 	if (!pending) {
-		pending = createDaemonBrokerClient(canonical, options);
+		const cleanupWaitMs =
+			options.cleanupWaitMs ?? (isSettingsInitialized() ? Settings.instance.get("launch.cleanupWaitMs") : undefined);
+		pending = createDaemonBrokerClient(canonical, { ...options, cleanupWaitMs });
 		sharedClients.set(canonical, pending);
+		// A connection that fails is not cached. `createDaemonBrokerClient` reads
+		// the runtime token and canonicalizes the project directory, and both fail
+		// transiently while a broker is still binding its socket. Caching the
+		// rejected promise made every later `launch` in the process fail with the
+		// first error, with no route back short of a restart. The identity check
+		// leaves a later successful client in place.
+		const attempt = pending;
+		void attempt.catch(() => {
+			if (sharedClients.get(canonical) === attempt) sharedClients.delete(canonical);
+		});
 		if (!cancelExitCleanup) {
 			cancelExitCleanup = postmortem.register("daemon-broker-clients", () => closeDaemonClients());
 		}
@@ -324,9 +343,13 @@ export async function daemonClientForProject(
 
 /** Close every project broker connection held by this veyyon process. */
 export async function closeDaemonClients(): Promise<void> {
-	const pending = [...sharedClients.values()];
+	const pending = Array.from(sharedClients.values());
 	sharedClients.clear();
-	for (const client of await Promise.all(pending)) client.close();
+	// One connection that never resolved must not strand the rest: settle every
+	// entry and close the ones that produced a client.
+	for (const result of await Promise.allSettled(pending)) {
+		if (result.status === "fulfilled") result.value.close();
+	}
 	cancelExitCleanup?.();
 	cancelExitCleanup = undefined;
 }

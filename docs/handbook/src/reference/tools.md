@@ -22,17 +22,30 @@ leniency (e.g. hashline parsing) is layered on top. See [Repair overview](../rep
 | `edit` | Apply changes, default **hashline** (`edit.mode: hashline`); also `apply_patch` / `patch` / `replace` modes |
 | `write` | Create or overwrite a whole file |
 
-Hashline flow: `read`/`grep` mint `[path#TAG]` anchors → model copies tags into `edit` →
+Hashline flow: `read`/`search` mint `[path#TAG]` anchors → model copies tags into `edit` →
 `@veyyon/hashline` applies ops. See [Edit engine](../edit/engine.md) and
 [`docs/tools/edit.md`](../../../tools/edit.md).
+
+### Late diagnostics
+
+Late diagnostics are grouped by file, with errors before warnings and informational
+messages. Paths under the home directory use `~`. Collapsed messages show a held-back
+count; the tool-output expansion key (`Ctrl+O` by default) displays the remaining messages.
+
+Record the collapsed and expanded states with:
+
+```sh
+proof/record.sh --width 960 proof/scenes/late-diagnostics.sh
+proof/record.sh --width 1200 proof/scenes/late-diagnostics.sh
+proof/record.sh --width 1440 proof/scenes/late-diagnostics.sh
+```
 
 ## Read and search
 
 | Tool | Purpose |
 | --- | --- |
 | `read` | Files, dirs, URLs, archives, SQLite, `memory://`, `skill://`, … |
-| `grep` | Ripgrep-backed search; hashline headers in hashline display mode |
-| `glob` | Path globbing |
+| `search` | Unified workspace search (files/paths, text/regex, and code structure) |
 | `search_tool_bm25` | Discover tools by description (when enabled) |
 
 ## Shell and execution
@@ -48,17 +61,17 @@ Hashline flow: `read`/`grep` mint `[path#TAG]` anchors → model copies tags int
 
 ### Long-running and stuck commands
 
-Two opt-in settings decide when a foreground `bash` call is moved to a background job. Both are off by default, and both hand the command to the `job` tool so its result still arrives later. You set them per profile in `/settings`, under Shell.
+Two settings decide when a foreground `bash` call is moved to a background job. Auto-background is on by default; stall detection is off. Both hand the command to the `job` tool so its result still arrives later. You set them per profile in `/settings`, under Shell.
 
-Turn on **Bash Auto-Background** to cap how long a command holds the model in the foreground. Once a call runs longer than "Auto-Background After" (`bash.autoBackground.thresholdMs`, default 1 minute), it moves to the background and the model keeps working. This fires on elapsed time even while the command is still printing: a test suite that takes forty minutes should not hold the model, and a long foreground command would otherwise outlast the prompt cache. Set the value to "Immediately" to background every command up front.
+**Bash Auto-Background** caps how long a command holds the model in the foreground. Once a call runs longer than "Auto-Background After" (`bash.autoBackground.thresholdMs`, default 5 minutes), it moves to the background and the model keeps working. This fires on elapsed time even while the command is still printing: a test suite that takes forty minutes should not hold the model, and a long foreground command would otherwise outlast the prompt cache. Set the value to "Immediately" to background every command up front, or turn **Bash Auto-Background** off to let a command hold the foreground until it finishes or times out.
 
-Turn on **Bash Stall Detection** to catch a command that has gone quiet. When a call produces no new output for "Stall After" (`bash.stallDetection.stallMs`, default 30 seconds), it is backgrounded and the model is told it may be stuck, along with the exact `job` cancel to run. This measures idle output, not total run time, so a command that keeps printing never trips it. The model decides: if the quiet was expected (a slow compile, a network wait), it lets the job finish; if the command is genuinely hung, it cancels it. The setting recommends, it never force-kills.
+Turn on **Bash Stall Detection** to catch a command that has gone quiet. When a call produces no new output for "Stall After" (`bash.stallDetection.stallMs`, default 30 seconds), it is backgrounded and the model is notified that the command may be stuck, along with the exact `job` cancel to run. This measures idle output, not total run time, so a command that keeps printing never trips it. The model evaluates whether the quiet was expected (such as a slow compile or network wait) and lets the job finish, or cancels the command if hung. The setting recommends, it never force-kills.
 
 ## Agent coordination
 
 | Tool | Purpose |
 | --- | --- |
-| `task` | Spawn subagents |
+| `task` | Spawn agents |
 | `irc` | Inter-agent messaging |
 | `todo` | Structured task lists |
 | `goal` | Goal card updates (with goal mode) |
@@ -74,7 +87,7 @@ Turn on **Bash Stall Detection** to catch a command that has gone quiet. When a 
 
 ## Other builtins
 
-`web_search`, `github`, `lsp`, `ast_edit`, `ast_grep`, `checkpoint`, `rewind`, `resolve`,
+`web_search`, `github`, `lsp`, `ast_edit`, `checkpoint`, `rewind`, `resolve`,
 `set_cwd`, `manage_skill`, `launch`, `inspect_image`, `argot_load`, `argot_unload`,
 `generate_image`, `tts`, and MCP tools (`mcp__*`). Extension hooks may register more.
 `goal`, `yield`, and `report_finding` are hidden session-lifecycle tools with no user-facing

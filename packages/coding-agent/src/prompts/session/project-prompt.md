@@ -21,7 +21,7 @@ Before making changes within these directories, you MUST read:
 {{/if}}
 
 {{#ifAny contextFiles.length agentsMdSearch.files.length}}
-The context files above are loaded automatically: one project file per directory, from the working directory up to the repository root, is already inlined, along with the user and global ones. Each directory contributes only its highest-priority file (`.veyyon/AGENTS.md`, else `AGENTS.md`, else `CLAUDE.md`), so a `CLAUDE.md` sitting beside an `AGENTS.md` is deliberately not loaded and is not a rule you are missing. You NEVER `grep`/`glob` for `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, or similar agent/context files: the relevant ones are already in your context, and any others are noise. The exception is a file named under `<dir-context>`: those sit below the working directory, so read one before changing anything inside its directory.
+The context files above are loaded automatically: one project file per directory, from the working directory up to the repository root, is already inlined, along with the user and global ones. Each directory contributes only its highest-priority file (`.veyyon/AGENTS.md`, else `AGENTS.md`, else `CLAUDE.md`), so a `CLAUDE.md` sitting beside an `AGENTS.md` is deliberately not loaded and is not a rule you are missing. You NEVER use `search` to look for `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, or similar agent/context files: the relevant ones are already in your context, and any others are noise. The exception is a file named under `<dir-context>`: those sit below the working directory, so read one before changing anything inside its directory.
 {{/ifAny}}
 
 <working-directory>
@@ -31,7 +31,7 @@ The rules above were found by walking up from the working directory, so they des
 - The working directory is a home, temp, or launch directory rather than the project you were asked about.
 Re-rooting loads the destination's `AGENTS.md` and makes tool headers relative instead of absolute. Do not re-root to pass through a file or two, and do not re-root to a parent of the current directory to reach one file.
 {{#if nonProjectCwd}}
-The third case is already confirmed for this session: `{{cwd}}` is not a project root, because {{nonProjectCwd}}. No project `AGENTS.md` has loaded and every path you touch will be absolute. As soon as you know which project the work is in, `set_cwd` to its root before doing anything else.
+The third case is already confirmed for this session: the working directory is not a project root, because {{nonProjectCwd}}. No project `AGENTS.md` has loaded and every path you touch will be absolute. As soon as you know which project the work is in, `set_cwd` to its root before doing anything else.
 {{/if}}
 {{#unless (includes tools "set_cwd")}}
 `set_cwd` is not in your active toolset right now, so find and activate it with `search_tool_bm25` before calling it.
@@ -44,13 +44,11 @@ The third case is already confirmed for this session: `{{cwd}}` is not a project
 Working directory layout (sorted by mtime, recent first; depth ≤ 3):
 {{workspaceTree.rendered}}
 {{#if workspaceTree.truncated}}
-(some entries elided to keep the tree short — use `glob`/`read` to drill in)
+(some entries elided to keep the tree short — use `search`/`read` to drill in)
 {{/if}}
 </workspace-tree>
 {{/if}}
 {{/if}}
-
-Today is {{date}}, and the current working directory is '{{cwd}}'.
 
 {{!--
   Volatile-last, and it must stay that way. `<workstation>` carries `Model:` and

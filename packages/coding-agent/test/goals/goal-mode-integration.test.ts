@@ -2,18 +2,19 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import * as path from "node:path";
 import { Agent, type AgentEvent } from "@veyyon/agent-core";
 import type { Model } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
-import { GoalTool } from "@veyyon/coding-agent/goals/tools/goal-tool";
-import { InteractiveMode } from "@veyyon/coding-agent/modes/interactive-mode";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
+import type { DiscoverableTool } from "@veyyon/coding-agent/discovery/tool-index";
+import { GoalTool } from "@veyyon/coding-agent/goals/goal-tool";
+import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
+import type { SubmittedUserInput } from "@veyyon/coding-agent/modes/terminal/types";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
 import { normalizeCustomMessagePayload } from "@veyyon/coding-agent/session/messages";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
-import type { DiscoverableTool } from "@veyyon/coding-agent/tool-discovery/tool-index";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { createTools, type Tool, type ToolSession } from "@veyyon/coding-agent/tools";
-import type { TodoPhase } from "@veyyon/coding-agent/tools/todo";
+import type { TodoPhase } from "@veyyon/coding-agent/tools/agent/todo";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 
 function createToolSession(cwd: string, settings: Settings, overrides: Partial<ToolSession> = {}): ToolSession {
@@ -136,15 +137,17 @@ async function waitForMicrotasks(): Promise<void> {
 async function armInputWaiter(mode: InteractiveMode): Promise<{
 	inputPromise: Promise<void>;
 	getResolvedText: () => string | undefined;
+	getResolvedCustomType: () => string | undefined;
 }> {
-	let resolvedText: string | undefined;
+	let resolved: SubmittedUserInput | undefined;
 	const inputPromise = mode.getUserInput().then(input => {
-		resolvedText = input.text;
+		resolved = input;
 	});
 	await waitForMicrotasks();
 	return {
 		inputPromise,
-		getResolvedText: () => resolvedText,
+		getResolvedText: () => resolved?.text,
+		getResolvedCustomType: () => resolved?.customType,
 	};
 }
 
@@ -172,8 +175,8 @@ describe("InteractiveMode goal mode integration", () => {
 		await harness.cleanup();
 	});
 
-	it("toggles goal tool exposure when goal mode enters and pauses", async () => {
-		expect(await toolNamesFor(harness)).not.toContain("goal");
+	it("keeps the goal tool available before entry and while a goal is paused", async () => {
+		expect(await toolNamesFor(harness)).toContain("goal");
 
 		await harness.mode.handleGoalModeCommand("Ship the release");
 
@@ -187,7 +190,62 @@ describe("InteractiveMode goal mode integration", () => {
 		expect(harness.mode.goalModeEnabled).toBe(false);
 		expect(harness.mode.goalModePaused).toBe(true);
 		expect(harness.session.getGoalModeState()?.goal.status).toBe("paused");
-		expect(await toolNamesFor(harness)).not.toContain("goal");
+		expect(await toolNamesFor(harness)).toContain("goal");
+	});
+
+	it("removes goal from plan mode and restores it after exit", async () => {
+		expect(harness.session.getActiveToolNames()).toContain("goal");
+
+		await harness.mode.handlePlanModeCommand();
+		expect(harness.mode.planModeEnabled).toBe(true);
+		expect(harness.session.getActiveToolNames()).not.toContain("goal");
+
+		await harness.mode.handlePlanModeCommand();
+		expect(harness.mode.planModeEnabled).toBe(false);
+		expect(harness.session.getActiveToolNames()).toContain("goal");
+	});
+
+	it("lets the model create the initial persistent goal from an ordinary session", async () => {
+		await harness.mode.init();
+		harness.session.agent.emitExternalEvent({
+			type: "message_start",
+			message: {
+				role: "user",
+				content: [{ type: "text", text: "Build Nebula Drift" }],
+				timestamp: Date.now(),
+			},
+		});
+		await waitForMicrotasks();
+		const appendModeChange = vi.spyOn(harness.session.sessionManager, "appendModeChange");
+		const goalTool = (await createTools(harness.toolSession, harness.session.getActiveToolNames())).find(
+			tool => tool.name === "goal",
+		);
+		if (!goalTool) throw new Error("Expected goal tool in the ordinary session tool set");
+
+		await goalTool.execute("create-goal", {
+			op: "create",
+			objective: "Build Nebula Drift",
+		});
+
+		expect(harness.session.getGoalModeState()).toMatchObject({
+			enabled: true,
+			mode: "active",
+			goal: { objective: "Build Nebula Drift", status: "active" },
+		});
+		expect(harness.mode.goalModeEnabled).toBe(true);
+		expect(harness.mode.goalModePaused).toBe(false);
+		expect(harness.session.getActiveToolNames()).toContain("goal");
+		expect(appendModeChange).toHaveBeenCalledWith(
+			"goal",
+			expect.objectContaining({
+				goal: expect.objectContaining({ objective: "Build Nebula Drift", status: "active" }),
+			}),
+		);
+		const buildContinuation = vi.spyOn(harness.session.goalRuntime, "buildContinuationPrompt");
+		const continuationInput = await armInputWaiter(harness.mode);
+		expect(buildContinuation).toHaveBeenCalledTimes(1);
+		harness.mode.onInputCallback?.(harness.mode.startPendingSubmission({ text: "cleanup" }));
+		await continuationInput.inputPromise;
 	});
 
 	it("replaces the active goal via /goal set", async () => {
@@ -426,15 +484,34 @@ describe("InteractiveMode goal mode integration", () => {
 		expect(content).not.toContain("Run focused checks");
 	});
 
-	it("drops a goal continuation tick while the agent is streaming", async () => {
-		// Repro for the race the streaming guard on /goal set X exposed: the
-		// 800ms continuation timer armed by getUserInput() can outlive the idle
-		// window when streaming starts between schedule and fire (e.g. /goal set
-		// taking the streaming branch, or any extension that triggers a turn).
-		// Without the streaming-aware guard the timer fires onInputCallback
-		// with a `goal-continuation` and submitInteractiveInput resurfaces
-		// AgentBusyError via promptCustomMessage. Driven with fake timers so the
-		// 800ms window is exercised deterministically without a real wall-clock wait.
+	it("delivers the goal and vibe contexts hidden, agent-attributed and on the requested channel", async () => {
+		await harness.mode.handleGoalModeCommand("Ship the release");
+		harness.session.setVibeModeState({ enabled: true });
+		const sendCustomMessage = vi.spyOn(harness.session, "sendCustomMessage").mockResolvedValue(false);
+
+		await harness.session.sendGoalModeContext({ deliverAs: "steer" });
+		await harness.session.sendVibeModeContext({ deliverAs: "followUp" });
+
+		expect(sendCustomMessage.mock.calls).toHaveLength(2);
+		const [goalCall, vibeCall] = sendCustomMessage.mock.calls;
+		expect(goalCall?.[0]).toMatchObject({ customType: "goal-mode-context", display: false, attribution: "agent" });
+		expect(goalCall?.[1]).toEqual({ deliverAs: "steer" });
+		expect(vibeCall?.[0]).toMatchObject({ customType: "vibe-mode-context", display: false, attribution: "agent" });
+		expect(normalizeCustomMessagePayload(vibeCall?.[0]).content).toContain("<vibe-mode>");
+		expect(vibeCall?.[1]).toEqual({ deliverAs: "followUp" });
+
+		sendCustomMessage.mockClear();
+		harness.session.setVibeModeState(undefined);
+		await harness.session.sendVibeModeContext({ deliverAs: "steer" });
+		expect(sendCustomMessage.mock.calls).toEqual([]);
+	});
+
+	it("holds a goal continuation tick while the agent is streaming", async () => {
+		// The 800ms continuation timer armed by getUserInput() can outlive the idle window when
+		// streaming starts between schedule and fire (e.g. /goal set taking the streaming branch,
+		// or any extension that starts a turn while we wait). Firing then would route through
+		// submitInteractiveInput → promptCustomMessage with no `streamingBehavior` and resurface
+		// AgentBusyError. Driven with fake timers so the 800ms window is deterministic.
 		await harness.mode.handleGoalModeCommand("Ship the release");
 
 		vi.useFakeTimers();
@@ -454,8 +531,151 @@ describe("InteractiveMode goal mode integration", () => {
 		await waiter.inputPromise;
 	});
 
+	/**
+	 * BACKTEST of a recorded run. An unattended goal ran for hours, ended a turn with prose and no
+	 * tool call, and then sat `active` and idle while the process stayed alive — the log kept
+	 * writing for another eight minutes and never opened another turn. A human had to type.
+	 *
+	 * The recorded shape, minimized and sanitized, is the event sequence below: goal active, an
+	 * operator-opened turn that DID call tools (so nothing suppressed the goal), a clean text-only
+	 * `agent_end`, and post-turn maintenance still draining when the continuation tick landed. The
+	 * fire-time guard discarded that tick and relied on "the next `agent_end`" to reschedule, but
+	 * that `agent_end` was the last one and every other re-arm edge was already behind it.
+	 *
+	 * One boundary is substituted: the DURATION of the maintenance, held busy across the window
+	 * rather than run for real. The sequence the guards read is driven through the mode itself.
+	 *
+	 * What it does not catch: a non-transient block (an operator draft left in the composer, a
+	 * suppressed goal), a stall upstream of the mode in the session's own continuation path, or a
+	 * fault that produces no `agent_end` at all because the process died.
+	 */
+	it("opens the continuation it owes after the last turn of a run settles", async () => {
+		await harness.mode.init();
+		await harness.mode.handleGoalModeCommand("Ship the release");
+
+		const emit = (event: AgentEvent) => harness.session.agent.emitExternalEvent(event);
+		const deliver = async (event: AgentEvent): Promise<void> => {
+			const delivered = Promise.withResolvers<void>();
+			const unsubscribe = harness.session.subscribe(received => {
+				if (received.type === event.type) delivered.resolve();
+			});
+			emit(event);
+			await delivered.promise;
+			unsubscribe();
+			await waitForMicrotasks();
+		};
+
+		// The recorded turn: opened by the operator, carried real tool work, ended on its own terms
+		// with text and no tool call. `turnsCompleted` went 0 -> 1 on exactly this `agent_end`.
+		emit({ type: "turn_start" });
+		await waitForMicrotasks();
+		await deliver({ type: "agent_start" });
+		await deliver({
+			type: "message_start",
+			message: { role: "user", content: [{ type: "text", text: "Keep going." }], timestamp: Date.now() },
+		});
+		await deliver({
+			type: "tool_execution_start",
+			toolCallId: "bash-1",
+			toolName: "bash",
+			args: { command: "git commit -m 'record the run'" },
+		});
+		const ended = Promise.withResolvers<void>();
+		const unsubscribeEnd = harness.session.subscribe(event => {
+			if (event.type === "agent_end") ended.resolve();
+		});
+		emit({ type: "agent_end", messages: [] });
+		await ended.promise;
+		await harness.session.waitForIdle();
+		unsubscribeEnd();
+		await waitForMicrotasks();
+
+		// The recorded state at the stall: the goal is still driving and counted the turn.
+		expect(harness.session.getGoalModeState()?.goal.status).toBe("active");
+		expect(harness.session.getGoalModeState()?.goal.turnsCompleted).toBe(1);
+
+		vi.useFakeTimers();
+		let draining = true;
+		Object.defineProperty(harness.session, "hasPostPromptWork", { configurable: true, get: () => draining });
+		const waiter = await armInputWaiter(harness.mode);
+
+		// Maintenance outlives the delay window, and no further `agent_end` is coming.
+		vi.advanceTimersByTime(800);
+		await waitForMicrotasks();
+		expect(waiter.getResolvedText()).toBeUndefined();
+
+		draining = false;
+		vi.advanceTimersByTime(800);
+		await waitForMicrotasks();
+
+		expect(waiter.getResolvedCustomType()).toBe("goal-continuation");
+		await waiter.inputPromise;
+	});
+
+	// Every input to the mode's busy test, swept: `#isAutoSubmitBlocked` reads exactly these three,
+	// and each one must delay the continuation rather than discard it. A fourth source added to
+	// that getter without a row here leaves its own silent-stall hole.
+	for (const flag of ["isStreaming", "isCompacting", "hasPostPromptWork"] as const) {
+		it(`re-arms the continuation it owes while ${flag} holds the session busy`, async () => {
+			await harness.mode.handleGoalModeCommand("Ship the release");
+
+			vi.useFakeTimers();
+			const waiter = await armInputWaiter(harness.mode);
+
+			let blocked = true;
+			Object.defineProperty(harness.session, flag, { configurable: true, get: () => blocked });
+
+			for (let tick = 0; tick < 5; tick++) {
+				vi.advanceTimersByTime(800);
+				await waitForMicrotasks();
+			}
+			expect(waiter.getResolvedText()).toBeUndefined();
+
+			blocked = false;
+			vi.advanceTimersByTime(800);
+			await waitForMicrotasks();
+
+			expect(waiter.getResolvedCustomType()).toBe("goal-continuation");
+			await waiter.inputPromise;
+		});
+	}
+
+	it("stops waiting for a session that never goes idle, and says so", async () => {
+		await harness.mode.handleGoalModeCommand("Ship the release");
+
+		vi.useFakeTimers();
+		const warnings: string[] = [];
+		vi.spyOn(harness.mode, "showWarning").mockImplementation((message: string) => {
+			warnings.push(message);
+		});
+		const waiter = await armInputWaiter(harness.mode);
+
+		Object.defineProperty(harness.session, "hasPostPromptWork", { configurable: true, get: () => true });
+
+		let clock = Date.now();
+		vi.spyOn(Date, "now").mockImplementation(() => clock);
+
+		// Past the five-minute busy-wait deadline: the mode must give up rather than re-arm forever.
+		for (let tick = 0; tick < 4; tick++) {
+			clock += 100_000;
+			vi.advanceTimersByTime(800);
+			await waitForMicrotasks();
+		}
+
+		expect(waiter.getResolvedText()).toBeUndefined();
+		expect(warnings).toEqual(["Goal mode stopped waiting for the session to go idle. Send a message to resume it."]);
+
+		// It really stopped: no timer was left armed to fire later.
+		vi.advanceTimersByTime(10_000);
+		await waitForMicrotasks();
+		expect(waiter.getResolvedText()).toBeUndefined();
+
+		harness.mode.onInputCallback?.(harness.mode.startPendingSubmission({ text: "cleanup" }));
+		await waiter.inputPromise;
+	});
+
 	it("pauses after a visible no-tool user turn and resumes only after user-driven tool work", async () => {
-		await harness.mode.init({ suppressWelcomeIntro: true });
+		await harness.mode.init();
 		await harness.mode.handleGoalModeCommand("Ship the release");
 		const userMessage = (text: string) => ({
 			role: "user" as const,
@@ -623,12 +843,10 @@ describe("InteractiveMode goal mode integration", () => {
 		);
 		expect(completionText).toContain("Goal achieved. Report final budget usage to the user: tokens used: 0 of 50.");
 		expect(harness.session.getGoalModeState()?.mode).toBe("exiting");
-		// Per fix #1: completeGoalFromTool clears state.enabled so subsequent createTools
-		// calls (e.g. mid-turn refreshes) no longer advertise the goal tool. The model's
-		// existing toolset for the in-flight turn is unaffected — what we care about here
-		// is that the next createTools observation reflects the deactivation.
+		// Goal completion deactivates continuation, but the lifecycle tool remains
+		// available for a later model-created goal.
 		expect(harness.session.getGoalModeState()?.enabled).toBe(false);
-		expect(await toolNamesFor(harness)).not.toContain("goal");
+		expect(await toolNamesFor(harness)).toContain("goal");
 
 		const nextTurn = harness.mode.getUserInput();
 		// getUserInput observes mode === "exiting" and awaits #exitGoalMode before
@@ -639,7 +857,7 @@ describe("InteractiveMode goal mode integration", () => {
 		expect(harness.mode.goalModeEnabled).toBe(false);
 		expect(harness.mode.goalModePaused).toBe(false);
 		expect(harness.session.getGoalModeState()).toBeUndefined();
-		expect(await toolNamesFor(harness)).not.toContain("goal");
+		expect(await toolNamesFor(harness)).toContain("goal");
 		expect(appendCustomEntry).toHaveBeenCalledWith(
 			"goal-completed",
 			expect.objectContaining({

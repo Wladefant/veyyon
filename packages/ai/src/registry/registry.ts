@@ -8,6 +8,7 @@ import { basetenProvider } from "./baseten";
 import { cerebrasProvider } from "./cerebras";
 import { chatgptWebProvider } from "./chatgpt-web";
 import { cloudflareAiGatewayProvider } from "./cloudflare-ai-gateway";
+import { commandCodeProvider } from "./command-code";
 import { coreWeaveProvider } from "./coreweave";
 import { cursorProvider } from "./cursor";
 import { deepseekProvider } from "./deepseek";
@@ -35,6 +36,8 @@ import { minimaxCodeCnProvider } from "./minimax-code-cn";
 import { mistralProvider } from "./mistral";
 import { moonshotProvider } from "./moonshot";
 import { nanogptProvider } from "./nanogpt";
+import { nousResearchProvider } from "./nous-research";
+import { nousResearchApiKeyProvider } from "./nous-research-api-key";
 import { novitaProvider } from "./novita";
 import { nvidiaProvider } from "./nvidia";
 import { ollamaProvider } from "./ollama";
@@ -108,6 +111,7 @@ const ALL = [
 	deepseekProvider,
 	moonshotProvider,
 	cerebrasProvider,
+	commandCodeProvider,
 	basetenProvider,
 	fireworksProvider,
 	togetherProvider,
@@ -144,6 +148,8 @@ const ALL = [
 	groqProvider,
 	mistralProvider,
 	minimaxProvider,
+	nousResearchProvider,
+	nousResearchApiKeyProvider,
 	amazonBedrockProvider,
 ];
 

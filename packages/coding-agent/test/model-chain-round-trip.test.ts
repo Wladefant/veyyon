@@ -2,7 +2,7 @@
  * Contract: one encoding for a model chain, read the same way by every consumer.
  *
  * The settings picker persists it as a string array; legacy configs may still
- * hold a comma-separated string. Compaction and the subagent spawner read both
+ * hold a comma-separated string. Compaction and the agent spawner read both
  * through `normalizeModelPatternList`. If those two ever disagree, the picker
  * shows a chain the runtime does not run,
  * which is the worst kind of settings bug: it looks configured and does nothing.
@@ -16,8 +16,8 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { normalizeModelPatternList, resolveCompactionModelPatterns } from "@veyyon/coding-agent/config/model-resolver";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
-import type { SubagentAgentSettings } from "@veyyon/coding-agent/config/settings-domains/subagents";
-import { resolveSubagentModel } from "@veyyon/coding-agent/task/subagent-settings";
+import type { AgentSettings } from "@veyyon/coding-agent/config/settings-domains/agents";
+import { resolveAgentModel } from "@veyyon/coding-agent/task/agent-settings";
 import { TempDir } from "@veyyon/utils";
 import { YAML } from "bun";
 
@@ -85,34 +85,64 @@ describe("model chain encoding", () => {
 	});
 
 	/**
-	 * The subagent side keeps the whole chain too. The Agents column reads
-	 * `patterns.length` to say "+2 fallbacks", and the executor slices everything
-	 * after the selected entry into the retry role, so a truncated list here
-	 * silently removes every fallback the user configured.
+	 * A model chain read back out of the settings must keep EVERY entry. The task
+	 * widget uses `patterns.length` to say "+2 fallbacks", and the executor slices
+	 * everything after the selected entry into the retry role, so a truncated list
+	 * here silently removes every fallback the user configured.
+	 *
+	 * The chain is a LANE, because a lane is where a model is chosen now: one
+	 * agent, one page, one chain.
 	 */
-	it("resolveSubagentModel keeps the whole blanket chain, in order", () => {
-		const settings = Settings.isolated({ "subagent.model": "anthropic/opus,anthropic/sonnet,anthropic/haiku" });
-		const resolved = resolveSubagentModel({ settings, agentName: "reviewer", agentModel: undefined });
-		expect(resolved.source).toBe("blanket");
+	it("resolveAgentModel keeps a lane's whole chain, in order", () => {
+		const settings = Settings.isolated({
+			"agent.agents": { reviewer: { model: "anthropic/opus,anthropic/sonnet,anthropic/haiku" } },
+		} as Parameters<typeof Settings.isolated>[0]);
+		const resolved = resolveAgentModel({ settings, agentName: "reviewer", agentModel: undefined });
+		expect(resolved.source).toBe("lane");
 		expect(resolved.patterns).toEqual(["anthropic/opus", "anthropic/sonnet", "anthropic/haiku"]);
 	});
 
 	/**
-	 * A retired per-agent row cannot truncate the chain. It used to replace the
-	 * blanket list wholesale, so a leftover single-model row on an old config would
-	 * quietly strip every fallback the operator configured — the exact failure this
-	 * suite exists to catch, arriving through a field nothing is supposed to read.
+	 * A lane row is the most specific statement anyone can make — it names the
+	 * agent — so it decides the chain and reports `source: "lane"`, which is what
+	 * the Agents column badges. The field was retired once for outranking a
+	 * setting from a screen that did not show it, and reinstated when every page
+	 * that shows a lane's model became the page that edits it. This asserts the
+	 * layer that decided is named, so a silent replacement can never come back.
 	 */
-	it("ignores a retired per-agent model row and keeps the blanket chain", () => {
-		// The retired shape is no longer expressible as a literal, and an old config still holds it.
-		const staleRow: SubagentAgentSettings = {};
-		Object.assign(staleRow, { model: "openai/gpt-5" });
+	it("lets a lane row outrank the definition, and names the layer that decided", () => {
+		const lane: AgentSettings = { model: ["openai/gpt-5", "openai/gpt-5-mini"] };
 		const settings = Settings.isolated({
-			"subagent.model": "anthropic/opus,anthropic/sonnet",
-			"subagent.agents": { reviewer: staleRow },
+			"agent.agents": { reviewer: lane },
+		} as Parameters<typeof Settings.isolated>[0]);
+		const resolved = resolveAgentModel({
+			settings,
+			agentName: "reviewer",
+			agentModel: "anthropic/opus,anthropic/sonnet",
 		});
-		const resolved = resolveSubagentModel({ settings, agentName: "reviewer", agentModel: undefined });
-		expect(resolved.source).toBe("blanket");
+		expect(resolved.source).toBe("lane");
+		// The lane keeps its own whole chain, in order: truncating here would strip
+		// the fallbacks the caller configured.
+		expect(resolved.patterns).toEqual(["openai/gpt-5", "openai/gpt-5-mini"]);
+	});
+
+	/**
+	 * The failure this suite exists to catch: a leftover row quietly stripping
+	 * every fallback. A row that names NO model must not touch the chain, so a
+	 * row carrying only `enabled` — or only the superseded `maxNestedSpawnDepth`
+	 * an older release wrote — resolves exactly as if the table were empty.
+	 */
+	it("keeps the definition's chain whole under a row that names no model", () => {
+		const row: AgentSettings = { enabled: true, maxNestedSpawnDepth: 0 };
+		const settings = Settings.isolated({
+			"agent.agents": { reviewer: row },
+		} as Parameters<typeof Settings.isolated>[0]);
+		const resolved = resolveAgentModel({
+			settings,
+			agentName: "reviewer",
+			agentModel: "anthropic/opus,anthropic/sonnet",
+		});
+		expect(resolved.source).toBe("frontmatter");
 		expect(resolved.patterns).toEqual(["anthropic/opus", "anthropic/sonnet"]);
 	});
 });

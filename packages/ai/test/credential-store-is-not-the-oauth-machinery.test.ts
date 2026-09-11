@@ -87,8 +87,33 @@ const ROWS_CEILING = 8;
 /**
  * Measured at 30: the rows module, `bun:sqlite`, the sqlite helper, one error class, and the utils owners
  * behind them. It was 83, the same barrel arriving through both this module and the rows module.
+ *
+ * RE-MEASURED 2026-08-22 at 37. The one new module is `@veyyon/utils/stream-frame-limit`, a zero-import
+ * leaf the error classifier reads so a provider stream's framing violation is never retried. It arrives
+ * through the error class this store imports, and the leaf is the whole reason the classifier does not
+ * reach `stream.ts` instead — which the neighbouring assertion still refuses by name.
+ *
+ * RE-MEASURED 2026-08-22 at 43. The six new modules are the error subsystem's classification tree —
+ * `error/flag.ts`, `error/registry.ts` and `error/domains/{network,account,request,turn}.ts` — which
+ * arrive through the same error class, since classifying a failure is what that class is for. Every one
+ * is a leaf inside `ai/src/error/`: their own imports (`../classes`, `../flag`, `../aws`,
+ * `../rate-limit`, `@veyyon/utils/fetch-retry`) were already on this reach before the split, so the
+ * store gained no edge outside the subsystem. `.internal/reach-delta.ts` prints the names.
+ *
+ * RE-MEASURED 2026-08-26 at 44. The one new module is `error/provider.ts`, which `error/domains/turn.ts`
+ * now imports for `PROVIDER_FINISH_ERROR_PATTERN`. That pattern had been declared twice — once in the
+ * domain and once beside the producer that emits the wording — and the two drifted, so a Bedrock or
+ * Google `finish_reason: error` matched neither and was classified with no flags at all. The owner is a
+ * sibling leaf inside `ai/src/error/`, its own imports were already on this reach, and the neighbouring
+ * assertion still refuses `auth-storage.ts`, the registry and `stream.ts` by name.
+ *
+ * RE-MEASURED 2026-08-28 at 45. The one new module is `@veyyon/utils/ansi`, a zero-import leaf that owns
+ * the terminal escape constants. `sanitize-text.ts` is already on this reach and used to spell `"\x1b"`
+ * inline; it now takes `ESC` from that owner, so the constant has one declaration instead of one per
+ * caller. The leaf imports nothing, so this closure gained a name and no edge, and the neighbouring
+ * assertion still refuses `auth-storage.ts`, the registry and `stream.ts` by name.
  */
-const STORE_CEILING = 36;
+const STORE_CEILING = 45;
 
 describe("the row helpers are pure", () => {
 	/**

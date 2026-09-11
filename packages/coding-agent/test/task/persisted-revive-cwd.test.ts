@@ -1,14 +1,14 @@
 import { expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
-import { createPersistedSubagentReviverFactory } from "@veyyon/coding-agent/task/persisted-revive";
+import { createPersistedAgentReviverFactory } from "@veyyon/coding-agent/task/persisted-revive";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { getProjectAgentDir, Snowflake, TempDir } from "@veyyon/utils";
 import { useIsolatedConfigRoot } from "../helpers/isolated-agent-dir";
 
@@ -79,7 +79,7 @@ it("reopens a reusable persisted reviver at the child's latest cwd, and at no pr
 		await childManager.close();
 
 		const id = `Revive-${Snowflake.next()}`;
-		const factory = createPersistedSubagentReviverFactory({
+		const factory = createPersistedAgentReviverFactory({
 			session: parent,
 			authStorage,
 			modelRegistry,

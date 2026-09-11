@@ -47,7 +47,7 @@ import {
 	withEmptyCompletionRetry,
 } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
-import type { RawHttpRequestDump } from "../utils/http-inspector";
+import { materializeDumpBody, type RawHttpRequestDump } from "../utils/http-inspector";
 import {
 	getOpenAIStreamFirstEventTimeoutMs,
 	getOpenAIStreamIdleTimeoutMs,
@@ -55,6 +55,7 @@ import {
 	iterateWithTerminalGrace,
 } from "../utils/idle-iterator";
 import { OpenAIHttpError, type OpenAIStreamHandle, postOpenAIStream } from "../utils/openai-http";
+import { conversationIdForOpenCode } from "../utils/opencode-headers";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { callWithCopilotModelRetry } from "../utils/retry";
 import { adaptSchemaForStrict, NO_STRICT, normalizeSchemaForMoonshot, toolWireSchema } from "../utils/schema";
@@ -64,8 +65,10 @@ import {
 	StreamMarkupHealing,
 	type StreamMarkupHealingEvent,
 } from "../utils/stream-markup-healing";
+import { stopReasonForTerminallessEof } from "../utils/terminalless-eof";
 import { isForcedToolChoice, mapToOpenAICompletionsToolChoice } from "../utils/tool-choice";
 import type { CacheControlEphemeral } from "./anthropic-wire";
+import { createInitialResponsesAssistantMessage } from "./initial-message";
 import type {
 	ChatCompletionAssistantMessageParam,
 	ChatCompletionChunk,
@@ -96,7 +99,6 @@ import {
 	applyWireModelIdTransform,
 	calculateOpenAIUsageAccounting,
 	clearOpenAIStrictToolsState,
-	createInitialResponsesAssistantMessage,
 	createOpenAIStrictToolsState,
 	disableStrictToolsForScope,
 	getOpenAIPromptCacheKey,
@@ -439,7 +441,7 @@ function hasToolHistory(messages: Message[]): boolean {
  * Without this filter, every keepalive resets `iterateWithIdleTimeout`'s
  * deadline, so a provider that streams nothing but pings keeps the watchdog
  * asleep indefinitely — observed against z.ai/GLM via OpenRouter where a
- * subagent stalled for hours with no error surfaced.
+ * agent stalled for hours with no error surfaced.
  *
  * A chunk counts as progress when it carries terminal usage, a finish reason,
  * or a model-produced delta (content / tool calls / reasoning / refusal).
@@ -607,6 +609,8 @@ const streamOpenAICompletionsOnce = (
 
 		const output: AssistantMessage = createInitialResponsesAssistantMessage(model.api, model.provider, model.id);
 		let rawRequestDump: RawHttpRequestDump | undefined;
+		/** Exact bytes of the last sent request body; materialized into a dump only on the 400/413 path. */
+		let wireBodyJson: string | undefined;
 		const abortTracker = createAbortSourceTracker(options?.signal);
 		const firstEventTimeoutAbortError = new AIError.StreamTimeoutError(
 			OPENAI_COMPLETIONS_FIRST_EVENT_TIMEOUT_MESSAGE,
@@ -640,6 +644,7 @@ const streamOpenAICompletionsOnce = (
 				options?.headers,
 				options?.initiatorOverride,
 				getOpenAIPromptCacheKey(options),
+				conversationIdForOpenCode(options),
 			);
 			const premiumRequestsTotal = copilotPremiumRequests;
 			let appliedStrictTools = false;
@@ -683,11 +688,27 @@ const streamOpenAICompletionsOnce = (
 				}
 				activeReasoningEffortFallbackKey = reasoningEffortFallbackKey;
 				const prepareRequest = async (): Promise<RequestInit> => {
-					const attemptParams = structuredClone(params);
-					const replacementPayload = await options?.onPayload?.(attemptParams, model);
-					const wireParams =
-						replacementPayload !== undefined ? (replacementPayload as OpenAICompletionsParams) : attemptParams;
+					// Serialize once. The hook, when present, gets an isolated parse of
+					// exactly those bytes; when no extension handles the event it
+					// returns that same object, and the wire reuses `bodyJson` instead
+					// of re-serializing. structuredClone + stringify measured 82ms on a
+					// 32MiB context where serialize-once costs 9ms — paid on every
+					// submit before the first byte leaves the process.
+					const bodyJson = JSON.stringify(params);
+					let wireParams = params;
+					if (options?.onPayload) {
+						const attemptParams = JSON.parse(bodyJson) as OpenAICompletionsParams;
+						const replacementPayload = await options.onPayload(attemptParams, model);
+						wireParams =
+							replacementPayload !== undefined && replacementPayload !== attemptParams
+								? (replacementPayload as OpenAICompletionsParams)
+								: attemptParams;
+					}
 					activeRequestParams = wireParams;
+					const body = wireParams === params ? bodyJson : JSON.stringify(wireParams);
+					// Retain the exact sent BYTES, not the parsed object: a dump body
+					// is read only on the 400/413 path, and holding the graph here
+					// pinned a full context-sized clone for the whole stream.
 					rawRequestDump = {
 						provider: model.provider,
 						api: output.api,
@@ -695,9 +716,9 @@ const streamOpenAICompletionsOnce = (
 						method: "POST",
 						url: completionsUrl,
 						headers: requestHeaders,
-						body: wireParams,
 					};
-					return { body: JSON.stringify(wireParams) };
+					wireBodyJson = body;
+					return { body };
 				};
 				if (captureOnly) {
 					await prepareRequest();
@@ -725,6 +746,7 @@ const streamOpenAICompletionsOnce = (
 						signal: requestSignal,
 						fetch: options?.fetch,
 						prepareInit: prepareRequest,
+						maxRetryDelayMs: options?.maxRetryDelayMs,
 						// Transient 408/429/5xx get Retry-After-aware transport retries.
 						// The first-event watchdog above aborts `requestSignal`, which
 						// bounds every attempt and backoff sleep — retries cannot
@@ -820,6 +842,20 @@ const streamOpenAICompletionsOnce = (
 				if (!block) return Math.max(0, output.content.length - 1);
 				return output.content.indexOf(block);
 			};
+			const hasCompleteToolCallBatch = (): boolean => {
+				const toolCalls = output.content.filter((block): block is ToolCallStreamBlock => block.type === "toolCall");
+				if (toolCalls.length === 0) return false;
+				return toolCalls.every(block => {
+					if (!block.id || !block.name) return false;
+					const argumentsValue =
+						block.partialArgs === undefined
+							? block.arguments
+							: typeof block.partialArgs === "string"
+								? tryParseJson(block.partialArgs)
+								: block.partialArgs;
+					return isRecord(argumentsValue);
+				});
+			};
 			const finishToolCallBlock = (block: ToolCallStreamBlock): void => {
 				if (block.partialArgs === undefined) return;
 				const contentIndex = blockIndex(block);
@@ -855,7 +891,7 @@ const streamOpenAICompletionsOnce = (
 				stream.push({ type: "toolcall_end", contentIndex, toolCall: block, partial: output });
 			};
 			const finishPendingToolCallBlocks = (): void => {
-				for (const block of [...pendingToolCallBlocks]) {
+				for (const block of pendingToolCallBlocks.slice()) {
 					finishToolCallBlock(block);
 				}
 			};
@@ -1091,9 +1127,18 @@ const streamOpenAICompletionsOnce = (
 
 				const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
 				if (!choice) {
-					// Trailing usage-only chunk (`stream_options.include_usage`) after
-					// `finish_reason`: the response is complete — stop pulling instead
-					// of waiting for `[DONE]`/close from hosts that never send either.
+					// A trailing usage-only frame is emitted after generation. A few
+					// OpenAI-compatible gateways omit both `finish_reason` and `[DONE]`
+					// after a tool batch, but still send this accounting frame. Accept
+					// that alternate terminal signal only when every streamed call has
+					// an id, a name, and strictly complete JSON-object arguments. Text
+					// and partial-call EOFs remain errors below.
+					if (sawUsagePayload && hasCompleteToolCallBatch()) {
+						output.stopReason = "toolUse";
+						streamFinishedAt ??= Date.now();
+						break;
+					}
+					// Normal compliant path: usage follows an explicit finish reason.
 					if (streamFinishedAt !== undefined && sawUsagePayload) break;
 					continue;
 				}
@@ -1311,15 +1356,21 @@ const streamOpenAICompletionsOnce = (
 				throw new AIError.RequestAbortError();
 			}
 
-			// A completion is authoritative only after the provider emits a
-			// finish_reason. Treat transport EOF before that terminal signal as a
-			// truncated response, before partial tool arguments can be repaired
-			// and promoted into an apparently successful tool-use turn.
+			// Reaching the end of the async iterator without an exception is a
+			// clean HTTP body EOF, not a dropped transport, so the accumulated
+			// shape decides what it was. `stopReasonForTerminallessEof` owns that
+			// judgement for every dialect; see its header for why rejecting or
+			// accepting unconditionally are both wrong.
 			if (streamFinishedAt === undefined) {
-				throw new AIError.ProviderResponseError(
-					"OpenAI completions stream closed before a terminal finish reason was received",
-					{ provider: model.provider, kind: "incomplete-stream" },
-				);
+				const stopReason = stopReasonForTerminallessEof(output.content, hasCompleteToolCallBatch());
+				if (stopReason === undefined) {
+					throw new AIError.ProviderResponseError(
+						"OpenAI completions stream closed before a terminal finish reason was received",
+						{ provider: model.provider, kind: "incomplete-stream" },
+					);
+				}
+				output.stopReason = stopReason;
+				streamFinishedAt = Date.now();
 			}
 
 			if (streamMarkupHealing) {
@@ -1398,13 +1449,10 @@ const streamOpenAICompletionsOnce = (
 				api: model.api,
 				provider: model.provider,
 				abortTracker,
-				rawRequestDump,
+				rawRequestDump: materializeDumpBody(rawRequestDump, wireBodyJson),
 				capturedErrorResponse,
 			});
-			output.stopReason = result.stopReason;
-			output.errorStatus = result.status;
-			output.errorId = result.id;
-			output.errorMessage = result.message;
+			AIError.applyFinalizeResult(output, result);
 			// Some providers via OpenRouter include extra details here.
 			const rawMetadata = (error as { error?: { metadata?: { raw?: string } } })?.error?.metadata?.raw;
 			if (rawMetadata) output.errorMessage += `\n${rawMetadata}`;
@@ -1434,6 +1482,7 @@ function createRequestSetup(
 	extraHeaders?: Record<string, string>,
 	initiatorOverride?: MessageAttribution,
 	promptCacheSessionId?: string,
+	conversationId?: string,
 ): OpenAIRequestSetup & { baseUrl: string } {
 	const apiVersion = $env.AZURE_OPENAI_API_VERSION || "2024-10-21";
 	const deploymentName = parseAzureDeploymentNameMap($env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP).get(model.id) ?? model.id;
@@ -1442,6 +1491,7 @@ function createRequestSetup(
 		extraHeaders,
 		initiatorOverride,
 		promptCacheSessionId,
+		conversationId,
 		messages: context.messages,
 		defaultBaseUrl: "https://api.openai.com/v1",
 		// Provider auth/header overlay: Kimi-code hosts require shared client
@@ -2303,20 +2353,16 @@ function mapStopReason(reason: ChatCompletionChunk.Choice["finish_reason"] | str
 		case "tool_calls":
 			return { stopReason: "toolUse" };
 		case "content_filter":
-			return { stopReason: "error", errorMessage: "Provider finish_reason: content_filter" };
+			return { stopReason: "error", errorMessage: AIError.providerFinishErrorMessage("content_filter") };
 		case "network_error":
-			return { stopReason: "error", errorMessage: "Provider finish_reason: network_error" };
-		case "error":
-			// Gateways (OpenRouter, Vercel AI Gateway, …) report upstream model
-			// failures as a bare `finish_reason: "error"` with no detail. These are
-			// almost always transient (e.g. Gemini MALFORMED_FUNCTION_CALL), so word
-			// the message to match the session retry classifier's transient-transport
-			// pattern (`provider.?returned.?error`) and get the turn auto-retried.
-			return { stopReason: "error", errorMessage: "Provider returned error finish_reason" };
+			return { stopReason: "error", errorMessage: AIError.providerFinishErrorMessage("network_error") };
 		default:
+			// Gateways (OpenRouter, Vercel AI Gateway, …) report upstream model
+			// failures as a bare `finish_reason: "error"` with no detail, which the
+			// turn domain retries. Every other unrecognised reason states itself.
 			return {
 				stopReason: "error",
-				errorMessage: `Provider finish_reason: ${reason}`,
+				errorMessage: AIError.providerFinishErrorMessage(typeof reason === "string" ? reason : undefined),
 			};
 	}
 }

@@ -10,13 +10,14 @@
 import type { AuthStorage, UsageHistoryEntry, UsageLimit, UsageReport, UsageUnit } from "@veyyon/ai";
 import { resolveUsedFraction } from "@veyyon/ai/usage";
 import { clamp01, DAY_MS, formatCount, formatDuration, formatNumber, pluralize, sanitizeText } from "@veyyon/utils";
+import { SUB_CELL_BAR_RAMP, subCellBar } from "@veyyon/utils/bar";
 import chalk from "chalk";
 import { credentialRemedySentence } from "../config/missing-credentials";
 import { ModelRegistry } from "../config/model-registry";
+import { formatProviderName } from "../session/account-format";
 // `session/auth-broker-config`, which OWNS this, not the `sdk` barrel that re-exports it: the barrel is
 // the whole application and this file wants one function.
 import { discoverAuthStorage } from "../session/auth-broker-config";
-import { formatProviderName } from "../slash-commands/helpers/format";
 
 const BAR_WIDTH = 28;
 
@@ -56,7 +57,7 @@ export interface UsageAccountIdentity {
  * Duplicate strings (same account on two providers) share a mask.
  */
 export function buildRedactionMap(values: Iterable<string>): Map<string, string> {
-	const unique = [...new Set(values)];
+	const unique = Array.from(new Set(values));
 	const map = new Map<string, string>();
 	const byAnchor = new Map<string, string[]>();
 	for (const value of unique) {
@@ -216,13 +217,20 @@ function describeAmount(limit: UsageLimit): string {
 	return parts.join(" · ");
 }
 
+/**
+ * One usage bar for the CLI report: fill in the status colour, track dimmed.
+ *
+ * STATIC. This is a one-shot print with no render loop to settle a value on,
+ * and the default (unicode) ramp because a plain CLI carries no theme — the
+ * glyphs it drew before were the same unconditional block glyphs.
+ */
 function renderBar(limit: UsageLimit): string {
 	const fraction = resolveUsedFraction(limit);
 	if (fraction === undefined) return chalk.dim("·".repeat(BAR_WIDTH));
-	const clamped = clamp01(fraction);
-	const filled = Math.round(clamped * BAR_WIDTH);
+	const bar = subCellBar(clamp01(fraction), BAR_WIDTH);
+	const trackAt = bar.indexOf(SUB_CELL_BAR_RAMP.track);
 	const color = STATUS_COLOR[resolveStatus(limit)];
-	return color("█".repeat(filled)) + chalk.dim("░".repeat(BAR_WIDTH - filled));
+	return trackAt < 0 ? color(bar) : color(bar.slice(0, trackAt)) + chalk.dim(bar.slice(trackAt));
 }
 
 /** Append the window label when the limit label doesn't already carry it. */
@@ -477,7 +485,7 @@ export function computeProviderWindowStats(reports: UsageReport[]): ProviderWind
 		}
 		for (const [key, fraction] of accountMax) buckets.get(key)!.fractions.push(fraction);
 	}
-	return [...buckets.values()]
+	return Array.from(buckets.values())
 		.sort((a, b) => (a.durationMs ?? Number.POSITIVE_INFINITY) - (b.durationMs ?? Number.POSITIVE_INFINITY))
 		.map(bucket => {
 			const usedAccounts = bucket.fractions.reduce((sum, fraction) => sum + fraction, 0);
@@ -516,9 +524,9 @@ export function formatUsageBreakdown(
 		unreportedByProvider.set(account.provider, list);
 	}
 
-	const providers = [...new Set([...reportsByProvider.keys(), ...unreportedByProvider.keys()])].sort((a, b) =>
-		a.localeCompare(b),
-	);
+	const providers = Array.from(
+		new Set(Array.from(reportsByProvider.keys()).concat(Array.from(unreportedByProvider.keys()))),
+	).sort((a, b) => a.localeCompare(b));
 
 	const lines: string[] = [];
 	const latestFetchedAt = Math.max(0, ...reports.map(report => report.fetchedAt ?? 0));
@@ -534,7 +542,7 @@ export function formatUsageBreakdown(
 			`${chalk.bold.cyan(formatProviderName(provider))} ${chalk.dim(`— ${formatCount("account", accountCount)}`)}`,
 		);
 		// Provider-wide disclaimers render once per provider, not per limit.
-		const providerNotes = [...new Set(providerReports.flatMap(report => report.notes ?? []))];
+		const providerNotes = Array.from(new Set(providerReports.flatMap(report => report.notes ?? [])));
 		for (const note of providerNotes)
 			lines.push(`  ${chalk.dim(sanitizeText(note.replace(/[\r\n]+/g, " ").replace(/\t/g, "  ")))}`);
 
@@ -552,7 +560,8 @@ export function formatUsageBreakdown(
 			for (const template of providerLimitTemplates) {
 				const limit = limitsById.get(template.id);
 				if (limit) {
-					lines.push(...formatLimitLine(limit, labelWidth, nowMs));
+					const limitLines = formatLimitLine(limit, labelWidth, nowMs);
+					for (let li = 0; li < limitLines.length; li++) lines.push(limitLines[li]!);
 				} else {
 					lines.push(formatMissingLimitLine(template, labelWidth));
 				}
@@ -682,17 +691,20 @@ export function formatUsageHistory(
 		`${chalk.bold("Usage history")}${chalk.dim(` · last ${formatDuration(nowMs - sinceMs)} · peak per bucket`)}`,
 	);
 
-	for (const provider of [...providers.keys()].sort((a, b) => a.localeCompare(b))) {
+	for (const provider of Array.from(providers.keys()).sort((a, b) => a.localeCompare(b))) {
 		const accounts = providers.get(provider) ?? new Map<string, HistoryAccount>();
 		lines.push("");
 		lines.push(
 			`${chalk.bold.cyan(formatProviderName(provider))} ${chalk.dim(`— ${formatCount("account", accounts.size)}`)}`,
 		);
-		const sortedAccounts = [...accounts.values()].sort((a, b) => a.label.localeCompare(b.label));
+		const sortedAccounts = Array.from(accounts.values()).sort((a, b) => a.label.localeCompare(b.label));
 		for (const account of sortedAccounts) {
 			lines.push(`  ${chalk.bold(redaction?.get(account.label) ?? account.label)}`);
-			const labelWidth = [...account.series.values()].reduce((max, series) => Math.max(max, series.title.length), 0);
-			const sortedSeries = [...account.series.values()].sort((a, b) => a.title.localeCompare(b.title));
+			const labelWidth = Array.from(account.series.values()).reduce(
+				(max, series) => Math.max(max, series.title.length),
+				0,
+			);
+			const sortedSeries = Array.from(account.series.values()).sort((a, b) => a.title.localeCompare(b.title));
 			for (const series of sortedSeries) {
 				const fractions = series.entries
 					.map(entry => entry.usedFraction)

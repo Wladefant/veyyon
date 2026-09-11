@@ -4,15 +4,15 @@
  * Taps the host session's event stream and SessionManager append chokepoint,
  * broadcasting entries/events/state to guests through the relay. Guests prompt
  * and abort through us; the host machine runs the agent and tools. The host's
- * subagent ecosystem is mirrored too: task EventBus traffic (observer HUD),
- * agent-registry snapshots (the Agent Control Center roster), hub chat/kill/revive commands,
- * and incremental subagent-transcript reads.
+ * agent ecosystem is mirrored too: task EventBus traffic (observer HUD),
+ * agent-registry snapshots (the agent dashboard roster), hub chat/kill/revive commands,
+ * and incremental agent-transcript reads.
  */
 
 import { timingSafeEqual } from "node:crypto";
 import * as fs from "node:fs/promises";
 import type { ImageContent, TextContent } from "@veyyon/ai";
-import { logger } from "@veyyon/utils";
+import { errorMessage, logger } from "@veyyon/utils";
 import type {
 	BusChannel,
 	CollabUiRequest,
@@ -21,10 +21,17 @@ import type {
 	WireSessionEntry,
 } from "@veyyon/wire";
 import { mapJsonStrings } from "../json-transform";
-import type { InteractiveModeContext } from "../modes/types";
+import type { InteractiveModeContext } from "../modes/terminal/types";
+import {
+	extractToolResultContent,
+	extractToolResultDetails,
+	recordToolCorrelationEntry,
+	type ToolCallCorrelation,
+	type ToolResultCorrelation,
+} from "../presentation/web-tool-display";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { type AgentRef, AgentRegistry } from "../registry/agent-registry";
-import type { AgentSessionEvent } from "../session/agent-session";
+import type { AgentSessionEvent } from "../session/agent-session-types";
 import { stripImagesFromMessage, USER_INTERRUPT_LABEL } from "../session/messages";
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } from "../task/types";
 import { generateRoomKey, generateWriteToken, importRoomKey } from "./crypto";
@@ -37,6 +44,7 @@ import {
 	type CollabParticipant,
 	type CollabPromptDetails,
 	type CollabSessionState,
+	contextUsageFrame,
 	formatCollabLink,
 	formatCollabWebLink,
 	generateRoomId,
@@ -134,6 +142,8 @@ export class CollabHost {
 	#busUnsubscribers: (() => void)[] = [];
 	#registryUnsubscribe?: () => void;
 	#stopped = false;
+	#toolCalls = new Map<string, ToolCallCorrelation>();
+	#toolResults = new Map<string, ToolResultCorrelation>();
 
 	constructor(ctx: CollabHostContext) {
 		this.#ctx = ctx;
@@ -199,7 +209,7 @@ export class CollabHost {
 	 * Redact a frame on its way to a guest.
 	 *
 	 * A collab link is a bearer capability the operator may have forwarded once, and everything
-	 * the host sees goes down it: entries, live events, subagent bus traffic, error strings. The
+	 * the host sees goes down it: entries, live events, agent bus traffic, error strings. The
 	 * same transcript routed through `/share` or `/export` has its configured secrets replaced
 	 * with placeholders, so a guest must not receive the literal value instead. This is the one
 	 * seam every outbound frame passes through, so the walk lives here rather than at each of the
@@ -286,7 +296,22 @@ export class CollabHost {
 		}
 
 		this.#unsubscribe = this.#ctx.session.subscribe(event => {
-			const wireEvent = toWireAgentEvent(event);
+			if (event.type === "tool_execution_start") {
+				this.#toolCalls.set(event.toolCallId, {
+					toolCallId: event.toolCallId,
+					toolName: event.toolName,
+					args: event.args,
+					intent: event.intent,
+				});
+			} else if (event.type === "tool_execution_end") {
+				this.#toolResults.set(event.toolCallId, {
+					toolCallId: event.toolCallId,
+					content: extractToolResultContent(event.result),
+					details: extractToolResultDetails(event.result),
+					isError: event.isError === true,
+				});
+			}
+			const wireEvent = toWireAgentEvent(event, this.#toolCalls);
 			if (wireEvent) this.#broadcast({ t: "event", event: shrinkForReplication(wireEvent) });
 			this.#onEventForState(event);
 		});
@@ -298,7 +323,8 @@ export class CollabHost {
 		}
 		this.#registryUnsubscribe = AgentRegistry.global().onChange(() => this.#scheduleAgentsBroadcast());
 		this.#ctx.sessionManager.onEntryAppended = entry => {
-			const wire = toWireSessionEntry(entry);
+			recordToolCorrelationEntry(entry, this.#toolCalls, this.#toolResults);
+			const wire = toWireSessionEntry(entry, this.#toolCalls, this.#toolResults);
 			if (wire) this.#broadcast({ t: "entry", entry: shrinkForReplication(wire) });
 			// Model/thinking/title changes land as entries while idle; refresh
 			// guest state promptly (debounce + JSON diff dedupe).
@@ -333,6 +359,8 @@ export class CollabHost {
 		for (const pending of this.#pendingUi.values()) pending.settle({ kind: "unavailable" });
 		this.#pendingUi.clear();
 		this.#peers.clear();
+		this.#toolCalls.clear();
+		this.#toolResults.clear();
 		this.#socket?.close();
 		this.#socket = null;
 		this.#ctx.collabHost = undefined;
@@ -416,7 +444,12 @@ export class CollabHost {
 		// every undeclared field on the VALUE, and a guest persists what it receives.
 		// `toWireSessionEntry` answers undefined for an entry no guest renders, so the filter and
 		// the projection are one step and an unprojected entry cannot be broadcast.
-		const entries = snapshot.entries.map(toWireSessionEntry).filter(entry => entry !== undefined);
+		for (const entry of snapshot.entries) {
+			recordToolCorrelationEntry(entry, this.#toolCalls, this.#toolResults);
+		}
+		const entries = snapshot.entries
+			.map(entry => toWireSessionEntry(entry, this.#toolCalls, this.#toolResults))
+			.filter(entry => entry !== undefined);
 		const socket = this.#socket;
 		if (!socket) return;
 		this.#sendTo(
@@ -517,8 +550,8 @@ export class CollabHost {
 				{ streamingBehavior: "steer", queueChipText: text },
 			)
 			.catch(err => {
-				logger.warn("collab guest prompt failed", { error: String(err) });
-				this.#sendTo({ t: "error", message: `prompt failed: ${String(err)}` }, fromPeer);
+				logger.warn("collab guest prompt failed", { error: errorMessage(err) });
+				this.#sendTo({ t: "error", message: `prompt failed: ${errorMessage(err)}` }, fromPeer);
 			});
 	}
 
@@ -532,7 +565,7 @@ export class CollabHost {
 		void this.#ctx.session
 			.abort({ reason: USER_INTERRUPT_LABEL })
 			.then(() => this.#ctx.session.emitNotice("info", `${name} interrupted`, "collab"))
-			.catch(err => logger.warn("collab guest abort failed", { error: String(err) }));
+			.catch(err => logger.warn("collab guest abort failed", { error: errorMessage(err) }));
 	}
 
 	#handlePeerLeft(peer: number): void {
@@ -545,11 +578,6 @@ export class CollabHost {
 
 	#buildState(): CollabSessionState {
 		const session = this.#ctx.session;
-		// Context numbers come from the status line's memoized breakdown so guests
-		// render exactly the same anchored, provider-real count the host's own
-		// status line shows.
-		const breakdown = this.#ctx.statusLine.getCachedContextBreakdown();
-		const tokens = breakdown.usedTokens ?? 0;
 		return {
 			isStreaming: session.isStreaming,
 			isAborting: session.isAborting,
@@ -558,11 +586,9 @@ export class CollabHost {
 			cwd: this.#ctx.sessionManager.getCwd(),
 			model: session.model ? toWireModel(session.model) : undefined,
 			thinkingLevel: session.thinkingLevel,
-			contextUsage: {
-				tokens,
-				contextWindow: breakdown.contextWindow,
-				percent: breakdown.contextWindow > 0 ? (tokens / breakdown.contextWindow) * 100 : 0,
-			},
+			// The status line's memoized breakdown, so a guest renders exactly the number
+			// the host's own footline shows.
+			contextUsage: contextUsageFrame(this.#ctx.statusLine.getCachedContextBreakdown()),
 			participants: this.participants,
 		};
 	}
@@ -643,8 +669,8 @@ export class CollabHost {
 			return;
 		}
 		const fail = (err: unknown) => {
-			logger.warn("collab agent-cmd failed", { cmd, agentId, error: String(err) });
-			this.#sendTo({ t: "error", message: `agent ${agentId}: ${String(err)}` }, fromPeer);
+			logger.warn("collab agent-cmd failed", { cmd, agentId, error: errorMessage(err) });
+			this.#sendTo({ t: "error", message: `agent ${agentId}: ${errorMessage(err)}` }, fromPeer);
 		};
 		switch (cmd) {
 			case "chat": {
@@ -720,8 +746,8 @@ export class CollabHost {
 			}
 			reply(slice.toString("utf-8"), reachedEof ? stat.size : fromByte + slice.byteLength);
 		} catch (err) {
-			logger.debug("collab transcript read failed", { agentId, error: String(err) });
-			reply("", fromByte, String(err));
+			logger.debug("collab transcript read failed", { agentId, error: errorMessage(err) });
+			reply("", fromByte, errorMessage(err));
 		}
 	}
 

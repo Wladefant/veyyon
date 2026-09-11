@@ -7,6 +7,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentMessage, AgentTool } from "@veyyon/agent-core";
 import type { ImageContent, TextContent } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { discoverAndLoadExtensions } from "@veyyon/coding-agent/extensibility/extensions/loader";
 import {
@@ -16,9 +17,8 @@ import {
 } from "@veyyon/coding-agent/extensibility/extensions/runner";
 import { APPROVAL_SELECT_OPTIONS, ExtensionToolWrapper } from "@veyyon/coding-agent/extensibility/extensions/wrapper";
 import { HookRunner } from "@veyyon/coding-agent/extensibility/hooks/runner";
-import { Type } from "@veyyon/coding-agent/extensibility/typebox";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { Type } from "@veyyon/kernel/registry/typebox";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { getProjectAgentDir, logger, TempDir } from "@veyyon/utils";
 
 /**
@@ -1359,16 +1359,12 @@ describe("ExtensionRunner", () => {
 					setStatus: () => {},
 					setWorkingMessage: () => {},
 					setWidget: () => {},
-					setFooter: () => {},
-					setHeader: () => {},
 					setTitle: () => {},
-					custom: async <T>() => undefined as T,
 					pasteToEditor: () => {},
 					setEditorText: () => {},
 					getEditorText: () => "",
 					editor: async () => undefined,
 					addAutocompleteProvider: () => {},
-					setEditorComponent: () => {},
 					get theme() {
 						return {} as never;
 					},

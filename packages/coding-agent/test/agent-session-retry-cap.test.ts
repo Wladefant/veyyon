@@ -4,15 +4,16 @@ import { scheduler } from "node:timers/promises";
 import { Agent } from "@veyyon/agent-core";
 import type { ApiKeyResolveContext, AssistantMessage, ToolCall } from "@veyyon/ai";
 import { unregisterCustomApis } from "@veyyon/ai/api-registry";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, registerMockApi } from "@veyyon/ai/providers/mock";
 import * as aiStream from "@veyyon/ai/stream";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { AgentSession, type AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 
 type AutoRetryEndEvent = Extract<AgentSessionEvent, { type: "auto_retry_end" }>;
@@ -45,7 +46,7 @@ function resolveInitialApiKey(
  * state and skipping the long sleep entirely.
  *
  * Without this defense, an Anthropic `429 rate_limit_error` with
- * `retry-after-ms=11180000` (≈3 hours) pinned a subagent in the retry
+ * `retry-after-ms=11180000` (≈3 hours) pinned an agent in the retry
  * sleep, leaving the parent task tool stuck on the review phase for hours
  * (see GitHub issue #607).
  */
@@ -75,6 +76,24 @@ describe("AgentSession retry delay cap", () => {
 		authStorage.close();
 		tempDir.removeSync();
 	});
+
+	/**
+	 * Re-create the storage and the registry with account movement ON, and return the storage so a
+	 * test reads the same instance the registry holds.
+	 *
+	 * `AuthStorageOptions.loadBalancing` defaults to OFF, matching the `accounts.loadBalancing`
+	 * setting: off means a session waits out the window of the account it was told to use instead of
+	 * spending a sibling nobody offered. The three tests that call this are ABOUT the move between
+	 * siblings, so they have to ask for it; a rotation assertion resting on an ambient default is
+	 * describing whatever the default happens to be, not the behavior it names.
+	 */
+	async function withAccountMovement(): Promise<AuthStorage> {
+		authStorage.close();
+		authStorage = await AuthStorage.create(path.join(tempDir.path(), "balanced-auth.db"), { loadBalancing: true });
+		authStorage.setRuntimeApiKey("anthropic", "anthropic-test-key");
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		return authStorage;
+	}
 
 	it("bails immediately when retry-after exceeds retry.maxDelayMs", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
@@ -210,6 +229,7 @@ describe("AgentSession retry delay cap", () => {
 	});
 
 	it("rolls through four sibling credentials inside one AgentSession prompt before delay-cap retry", async () => {
+		await withAccountMovement();
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		const fallbackModel = getBundledModel("openai", "gpt-5");
 		if (!model || !fallbackModel) {
@@ -316,6 +336,7 @@ describe("AgentSession retry delay cap", () => {
 	});
 
 	it("switches same-provider credentials before model fallback on ChatGPT usage limits", async () => {
+		await withAccountMovement();
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
 		const fallbackModel = getBundledModel("openai", "gpt-5.5");
 		if (!primaryModel || !fallbackModel) {
@@ -389,6 +410,7 @@ describe("AgentSession retry delay cap", () => {
 	});
 
 	it("waits for the earliest sibling unblock instead of failing the delay cap", async () => {
+		await withAccountMovement();
 		// Regression: with every sibling credential momentarily blocked (e.g. a
 		// short post-401 or usage-probe block), a usage-limit 429 with a
 		// multi-hour retry-after used to adopt the full provider wait and trip

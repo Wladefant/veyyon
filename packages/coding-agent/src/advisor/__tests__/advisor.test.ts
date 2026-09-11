@@ -1,19 +1,22 @@
 import { describe, expect, it, vi } from "bun:test";
 import type { AgentMessage, AgentTelemetryConfig } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
+import { YieldQueue } from "@veyyon/kernel/session/yield-queue";
 import type { TUI } from "@veyyon/tui";
 import { stripAnsi } from "@veyyon/utils/strip-ansi";
 import { type } from "arktype";
 import type { ModelRegistry } from "../../config/model-registry";
-import type { Settings } from "../../config/settings";
-import { type AdvisorConfigDeps, AdvisorConfigOverlayComponent } from "../../modes/components/advisor-config";
-import { createAdvisorMessageCard } from "../../modes/components/advisor-message";
-import { getThemeByName, setThemeInstance } from "../../modes/theme/theme";
+import { Settings } from "../../config/settings";
+import {
+	type AdvisorConfigDeps,
+	AdvisorConfigOverlayComponent,
+} from "../../modes/terminal/components/dialogs/advisor-config";
+import { createAdvisorMessageCard } from "../../modes/terminal/components/transcript/advisor-message";
 import { advisorPrompts } from "../../prompts/advisor/rows";
 import { SecretObfuscator } from "../../secrets/obfuscator";
 import { formatSessionHistoryMarkdown } from "../../session/session-history-format";
-import { YieldQueue } from "../../session/yield-queue";
-import { BUILTIN_TOOL_NAMES } from "../../tools/builtin-names";
+import { getThemeByName, setThemeInstance } from "../../theme/theme";
+import { BUILTIN_TOOL_NAMES } from "../../tools/core/builtin-names";
 import {
 	ADVISOR_DEFAULT_TOOL_NAMES,
 	AdviseTool,
@@ -46,8 +49,8 @@ describe("advisor", () => {
 						{
 							type: "toolCall",
 							id: "search-timeout",
-							name: "grep",
-							arguments: { pattern: "needle", path: "packages/coding-agent/src" },
+							name: "search",
+							arguments: { type: "text", input: "needle", path: "packages/coding-agent/src" },
 						},
 					],
 					timestamp: 1,
@@ -55,7 +58,7 @@ describe("advisor", () => {
 				{
 					role: "toolResult",
 					toolCallId: "search-timeout",
-					toolName: "grep",
+					toolName: "search",
 					content: [{ type: "text", text: "timed out after 30s" }],
 					isError: true,
 					timestamp: 2,
@@ -64,14 +67,14 @@ describe("advisor", () => {
 
 			const rendered = formatSessionHistoryMarkdown(messages);
 
-			expect(rendered).toContain("→ grep(needle @ packages/coding-agent/src) ⇒ error");
+			expect(rendered).toContain("→ search(text: needle @ packages/coding-agent/src) ⇒ error");
 			expect(rendered).not.toContain("paths[0]");
 			expect(advisorPrompts["advisor/system"].text).toContain(
 				"Arguments absent from the rendered transcript are UNKNOWN",
 			);
 			expect(advisorPrompts["advisor/system"].text).toContain("NEVER assert concrete values, array indexes");
 			expect(advisorPrompts["advisor/system"].text).toContain(
-				"NEVER claim `paths[0]`, array flattening, or malformed `paths`",
+				"NEVER invent a hidden `path`, flattened array, or malformed scope",
 			);
 		});
 	});
@@ -521,7 +524,7 @@ describe("advisor", () => {
 
 			const errorMessage = quarantineAdvisorUnsafeOutput(
 				message,
-				new Set(["advise", "read", "grep", "glob"]),
+				new Set(["advise", "read", "search"]),
 				"### Session update\n\nThe agent checked a networking design document.",
 			);
 			if (errorMessage === undefined) throw new Error("expected destructive advise-note quarantine");
@@ -601,8 +604,8 @@ describe("advisor", () => {
 
 			const errorMessage = quarantineAdvisorUnsafeOutput(
 				message,
-				new Set(["advise", "read", "grep", "glob"]),
-				"### Session update\n\nGrep found the networking document is internally consistent.",
+				new Set(["advise", "read", "search"]),
+				"### Session update\n\nSearch found the networking document is internally consistent.",
 			);
 			if (errorMessage === undefined) throw new Error("expected destructive-output quarantine");
 
@@ -1451,13 +1454,13 @@ describe("advisor", () => {
 				} as AgentMessage,
 				{
 					role: "assistant",
-					content: [{ type: "toolCall", id: "b", name: "grep", arguments: { pattern: "y" } }],
+					content: [{ type: "toolCall", id: "b", name: "search", arguments: { type: "text", input: "y" } }],
 					timestamp: 4,
 				} as unknown as AgentMessage,
 				{
 					role: "toolResult",
 					toolCallId: "b",
-					toolName: "grep",
+					toolName: "search",
 					content: [{ type: "text", text: "ok" }],
 					isError: false,
 					timestamp: 5,
@@ -1712,6 +1715,68 @@ describe("advisor", () => {
 			await Bun.sleep(0);
 
 			expect(promptInputs).toHaveLength(2);
+			expect(runtime.backlog).toBe(0);
+		});
+
+		/**
+		 * WHY. `AgentSession.abort()` stopped the primary agent, bash and eval, and left
+		 * every configured advisor streaming. An operator running a panel of advisors paid
+		 * for one full review per advisor of a turn they had just interrupted, and nothing
+		 * on screen said so.
+		 *
+		 * THE CLASS. A stop verb that does not stop every model the session is paying for.
+		 *
+		 * WHY IT IS SUBTLE. The drain loop treats a rejected prompt as transient and
+		 * requeues it, so aborting the agent WITHOUT bumping the epoch re-runs the very
+		 * review the operator interrupted. Degrading `cancelInFlight` into a bare
+		 * `agent.abort()` was mutation-tested here: the batch goes back on the queue and
+		 * `backlog` stays at 1, which is the assertion that goes red. The retry test
+		 * directly above is the control, proving this same harness DOES retry an
+		 * ordinary failure.
+		 *
+		 * WHAT IT DOES NOT CATCH. That `AgentSession.abort()` reaches every entry in
+		 * `#advisors` — this drives one runtime directly, not the session seam.
+		 */
+		it("cancels the review in flight without retrying it, unlike a transient failure", async () => {
+			const promptInputs: string[] = [];
+			const aborts: string[] = [];
+			const started = Promise.withResolvers<void>();
+			let rejectInFlight: ((err: Error) => void) | undefined;
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					const inFlight = Promise.withResolvers<void>();
+					rejectInFlight = inFlight.reject;
+					started.resolve();
+					await inFlight.promise;
+				},
+				abort: reason => {
+					aborts.push(String(reason ?? ""));
+					rejectInFlight?.(new Error("aborted"));
+				},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const messages: AgentMessage[] = [{ role: "user", content: "aaa", timestamp: 1 } as AgentMessage];
+			const host: AdvisorRuntimeHost = {
+				snapshotMessages: () => messages,
+				enqueueAdvice: () => {},
+			};
+			const runtime = new AdvisorRuntime(agent, host, 0);
+
+			runtime.onTurnEnd(messages);
+			// Await the prompt the runtime actually issued rather than a delay, so the
+			// test never races the drain loop's scheduling.
+			await started.promise;
+			expect(promptInputs).toHaveLength(1);
+
+			runtime.cancelInFlight("user interrupt");
+			// Let the rejection propagate through the drain loop's catch. Microtasks
+			// only: a retry would be queued here, and this is where it would appear.
+			for (let tick = 0; tick < 8; tick++) await Promise.resolve();
+
+			expect(aborts).toEqual(["user interrupt"]);
+			expect(promptInputs).toHaveLength(1);
 			expect(runtime.backlog).toBe(0);
 		});
 
@@ -2441,12 +2506,12 @@ describe("advisor", () => {
 	});
 
 	describe("advisor default tools", () => {
-		it("defaults to read/grep/glob, a subset of the full grantable tool pool", () => {
-			expect([...ADVISOR_DEFAULT_TOOL_NAMES]).toEqual(["read", "grep", "glob"]);
+		it("defaults to read and search, a subset of the full grantable tool pool", () => {
+			expect([...ADVISOR_DEFAULT_TOOL_NAMES]).toEqual(["read", "search"]);
 			// The advisor is a full agent now: every built tool is grantable (no hard
 			// read-only restriction), including mutating ones like edit/bash/write.
 			const builtin = new Set<string>(BUILTIN_TOOL_NAMES);
-			for (const name of ["read", "grep", "glob", "edit", "bash", "write"]) {
+			for (const name of ["read", "search", "edit", "bash", "write"]) {
 				expect(builtin.has(name)).toBe(true);
 			}
 			for (const name of ADVISOR_DEFAULT_TOOL_NAMES) {
@@ -2666,7 +2731,7 @@ describe("advisor", () => {
 			modelRegistry: {} as unknown as ModelRegistry,
 			settings: {} as unknown as Settings,
 			scopedModels: [],
-			availableToolNames: ["read", "grep", "glob", "lsp", "web_search"],
+			availableToolNames: ["read", "search", "lsp", "web_search"],
 		};
 		const callbacks = {
 			loadDoc: async () => ({ advisors: [] }),
@@ -2680,7 +2745,7 @@ describe("advisor", () => {
 			new AdvisorConfigOverlayComponent({} as unknown as TUI, { ...deps, ...extra }, "project", doc, callbacks);
 		const fullHeight = Math.max(14, process.stdout.rows || 40);
 
-		it("paints a full-screen split frame: roster sidebar + selected-advisor preview", async () => {
+		it("paints a split frame sized to its content: roster sidebar + selected-advisor preview", async () => {
 			const uiTheme = await getThemeByName("dark");
 			if (!uiTheme) throw new Error("theme unavailable");
 			setThemeInstance(uiTheme);
@@ -2692,9 +2757,11 @@ describe("advisor", () => {
 				],
 			});
 			const frame = overlay.render(200);
-			// Fills the screen top-to-bottom (the fix for the bottom-anchored frame
-			// whose offset broke mouse hit-testing and wasted the upper space).
-			expect(frame.length).toBe(fullHeight);
+			// The frame starts at screen row 0 — the bottom-anchored one broke mouse
+			// hit-testing — and ends where its content does, rather than padding the
+			// roster out to the terminal with empty bordered rows.
+			expect(frame.length).toBeLessThan(fullHeight);
+			expect(frame.length).toBeGreaterThan(4);
 			const text = strip(frame);
 			expect(text).toContain("Advisor configuration");
 			expect(text).toContain("project");
@@ -2704,7 +2771,7 @@ describe("advisor", () => {
 			expect(text).toContain("Save & apply");
 			// Right preview reflects the highlighted (first) advisor.
 			expect(text).toContain("x-ai/grok-code-fast:high");
-			expect(text).toContain("read, grep, glob (default)");
+			expect(text).toContain("read, search (default)");
 		});
 
 		it("renders an explicit no-tools advisor distinctly from the omitted default", async () => {
@@ -2717,7 +2784,7 @@ describe("advisor", () => {
 
 			const text = strip(overlay.render(200));
 			expect(text.toLowerCase()).toContain("no tools");
-			expect(text).not.toContain("read, grep, glob (default)");
+			expect(text).not.toContain("read, search (default)");
 		});
 
 		it("moves the preview with keyboard selection and preserves an explicit tool set", async () => {
@@ -2742,7 +2809,10 @@ describe("advisor", () => {
 			overlay.render(120);
 			overlay.handleInput("\x1b[<0;4;2M"); // left-button press, col 4, row 2
 			const text = strip(overlay.render(120));
-			expect(text).toContain("Editing");
+			// The detail screen, identified by a row only it has. The footer used to
+			// say `Editing "<name>"` and now states the chord and the verb, because
+			// the name is the first row of the list below it.
+			expect(text).toContain("Delete this advisor");
 			expect(text).toContain("Architecture");
 		});
 
@@ -2754,6 +2824,90 @@ describe("advisor", () => {
 			const text = strip(overlay.render(200));
 			expect(text).toContain("default");
 			expect(text).toContain("anthropic/claude-opus");
+		});
+
+		/**
+		 * A failed write must not report success. `save` carries the host's disk and live-runtime
+		 * effects and it can fail — a read-only checkout, a full disk, a rebuild that throws. The
+		 * rejection used to escape the SelectList callback unhandled while the overlay cleared its
+		 * dirty flag regardless, so the editor claimed a save that never reached the file and the
+		 * next Close discarded the edit as already-persisted.
+		 */
+		it("reports a failed save instead of clearing the buffer", async () => {
+			const uiTheme = await getThemeByName("dark");
+			if (!uiTheme) throw new Error("theme unavailable");
+			setThemeInstance(uiTheme);
+			const notices: string[] = [];
+			const overlay = new AdvisorConfigOverlayComponent(
+				{} as unknown as TUI,
+				deps,
+				"project",
+				{ advisors: [{ name: "Architecture" }] },
+				{
+					...callbacks,
+					save: async () => {
+						throw new Error("read-only file system");
+					},
+					notify: (message: string) => {
+						notices.push(message);
+					},
+				},
+			);
+			const frame = overlay.render(120);
+			const saveRow = frame.findIndex(line => stripAnsi(line).includes("Save & apply"));
+			expect(saveRow).toBeGreaterThan(0);
+
+			// Rows are hit-tested against the rendered frame from screen row 0, so frame index N is
+			// SGR row N+1; column 4 lands inside the sidebar.
+			overlay.handleInput(`\x1b[<0;4;${saveRow + 1}M`);
+			for (let tick = 0; tick < 8; tick++) await Promise.resolve();
+
+			expect(notices.join("\n")).toContain("read-only file system");
+		});
+
+		/**
+		 * WHY: a model-registry failure reached this picker as an empty list, which reads as "you have
+		 * no models" — a different answer from "the catalog could not be read", and the one a user
+		 * acts on wrongly. CLASS: a swallowed dependency failure rendered as an empty successful
+		 * result. GAP: does not cover the scoped-model path, which never consults the registry.
+		 */
+		it("states a model-registry failure instead of offering an empty model list", async () => {
+			const uiTheme = await getThemeByName("dark");
+			if (!uiTheme) throw new Error("theme unavailable");
+			setThemeInstance(uiTheme);
+			const notices: string[] = [];
+			const overlay = new AdvisorConfigOverlayComponent(
+				{} as unknown as TUI,
+				{
+					...deps,
+					settings: Settings.isolated({}),
+					modelRegistry: {
+						getAvailable: () => {
+							throw new Error("catalog unreadable");
+						},
+					} as unknown as ModelRegistry,
+				},
+				"project",
+				{ advisors: [{ name: "Architecture" }] },
+				{
+					...callbacks,
+					notify: (message: string) => {
+						notices.push(message);
+					},
+				},
+			);
+
+			// The roster list opens on the first advisor and its detail screen opens on "Name", so
+			// Enter, Down, Enter is the keyboard route to the model picker.
+			overlay.handleInput("\r");
+			overlay.handleInput("\x1b[B");
+			overlay.handleInput("\r");
+
+			expect(notices.join("\n")).toContain("catalog unreadable");
+			// The picker still opens; it is the reason that was missing, not the screen.
+			// Asserted on the picker's own body rather than its footer, which states
+			// chords and is not evidence of which screen is up.
+			expect(stripAnsi(overlay.render(120).join("\n"))).toContain("No models available in this scope");
 		});
 	});
 });

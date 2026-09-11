@@ -1,15 +1,13 @@
-import { Text } from "@veyyon/tui";
+import { replaceTabs } from "@veyyon/utils/tab-width";
+import { truncateToWidth } from "@veyyon/utils/width";
 import { type } from "arktype";
 import type { ToolDefinition } from "../../extensibility/extensions";
-import type { Theme } from "../../modes/theme/theme";
-import { replaceTabs, truncateToWidth } from "../../tools/render-utils";
-import * as git from "../../utils/git";
+import { resolveActiveBranchSession } from "../helpers";
 import { buildExperimentState } from "../state";
-import { openAutoresearchStorageIfExists } from "../storage";
 import type { AutoresearchToolFactoryOptions } from "../types";
 
 const updateNotesSchema = type({
-	body: type("string").describe("replacement notes body"),
+	"body?": type("string").describe("replacement notes body"),
 	"append_idea?": type("string").describe("append as bullet under Ideas instead of replacing body"),
 });
 
@@ -28,24 +26,14 @@ export function createUpdateNotesTool(
 		parameters: updateNotesSchema,
 		defaultInactive: true,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const storage = await openAutoresearchStorageIfExists(ctx.cwd);
-			const currentBranch = (await git.branch.current(ctx.cwd)) ?? null;
-			const session = storage?.getActiveSessionForBranch(currentBranch) ?? null;
-			if (!storage || !session) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: "Error: no active autoresearch session for the current branch. Call init_experiment first.",
-						},
-					],
-				};
-			}
+			const sessionResult = await resolveActiveBranchSession(ctx.cwd);
+			if (!sessionResult.ok) return sessionResult.result;
+			const { storage, session } = sessionResult;
 
 			const nextNotes =
 				params.append_idea !== undefined && params.append_idea.trim().length > 0
 					? appendIdea(session.notes, params.append_idea.trim())
-					: params.body;
+					: (params.body ?? session.notes);
 
 			storage.updateSession(session.id, { notes: nextNotes });
 			const refreshed = storage.getSessionById(session.id);
@@ -54,7 +42,8 @@ export function createUpdateNotesTool(
 			if (refreshed) {
 				runtime.state = buildExperimentState(refreshed, loggedRuns);
 			}
-			options.dashboard.updateWidget(ctx, runtime);
+			options.dashboard.update(ctx, runtime);
+			options.dashboard.requestRender();
 
 			return {
 				content: [
@@ -69,17 +58,24 @@ export function createUpdateNotesTool(
 				details: { notes: nextNotes },
 			};
 		},
-		renderCall(args, _options, theme): Text {
-			const preview = args.append_idea ?? args.body.slice(0, 100);
-			return new Text(
-				`${theme.fg("toolTitle", theme.bold("update_notes"))} ${theme.fg("muted", truncateToWidth(replaceTabs(preview), 100))}`,
-				0,
-				0,
-			);
-		},
-		renderResult(result, _options, theme: Theme): Text {
-			const text = replaceTabs(result.content.find(part => part.type === "text")?.text ?? "");
-			return new Text(theme.fg("muted", text), 0, 0);
+		view: {
+			renderCall: args => {
+				const preview = args.append_idea ?? args.body?.slice(0, 100) ?? "";
+				return {
+					kind: "textBlock",
+					spans: [
+						{ text: "update_notes", tone: "title", bold: true },
+						{ text: " " },
+						{ text: truncateToWidth(replaceTabs(preview), 100), tone: "muted" },
+					],
+				};
+			},
+			renderResult: result => ({
+				kind: "textBlock",
+				spans: [
+					{ text: replaceTabs(result.content.find(part => part.type === "text")?.text ?? ""), tone: "muted" },
+				],
+			}),
 		},
 	};
 }

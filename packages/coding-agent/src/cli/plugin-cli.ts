@@ -7,8 +7,8 @@
 import { APP_NAME, errorMessage, getProjectDir } from "@veyyon/utils";
 import chalk from "chalk";
 import { PluginManager, parseSettingValue, validateSetting } from "../extensibility/plugins";
-import { createMarketplaceManager, type MarketplaceManager } from "../extensibility/plugins/marketplace/index.js";
-import { theme } from "../modes/theme/theme";
+import { createMarketplaceManager, type MarketplaceManager } from "../extensibility/plugins/marketplace";
+import { theme } from "../theme/theme";
 
 // =============================================================================
 // Types
@@ -286,6 +286,40 @@ async function handleInstall(
 		const target = classifyInstallTarget(spec, knownMarketplaces);
 
 		if (target.type === "marketplace") {
+			if (flags.dryRun) {
+				// Resolve against the catalog the way the npm path resolves through bun. Echoing the
+				// spec back proves nothing (#911), and this branch used to skip the check entirely:
+				// a marketplace `--dry-run` fetched, extracted, wrote the cache and the registries,
+				// and reported a completed install.
+				const planned = await mktMgr.getPluginInfo(target.name, target.marketplace);
+				if (!planned) {
+					console.error(
+						chalk.red(
+							`${theme.status.error} Failed to install ${spec}: ${target.marketplace} lists no plugin named ${target.name}`,
+						),
+					);
+					process.exit(1);
+				}
+				if (flags.json) {
+					console.log(
+						JSON.stringify(
+							{
+								dryRun: true,
+								action: "install",
+								name: target.name,
+								marketplace: target.marketplace,
+								version: planned.version,
+							},
+							null,
+							2,
+						),
+					);
+				} else {
+					const resolved = planned.version ? `${target.name}@${planned.version}` : target.name;
+					console.log(chalk.dim(`[dry-run] Would install ${resolved} from ${target.marketplace}`));
+				}
+				continue;
+			}
 			try {
 				const entry = await mktMgr.installPlugin(target.name, target.marketplace, {
 					force: flags.force,
@@ -363,7 +397,10 @@ async function handleInstall(
 				console.log(JSON.stringify(result, null, 2));
 			} else {
 				if (flags.dryRun) {
-					console.log(chalk.dim(`[dry-run] Would install ${spec}`));
+					// Name the version bun resolved: the whole value of the dry run is that
+					// the target was resolved, and echoing the spec back proved nothing (#911).
+					const resolved = result.version ? `${result.name}@${result.version}` : result.name;
+					console.log(chalk.dim(`[dry-run] Would install ${resolved}`));
 				} else {
 					console.log(chalk.green(`${theme.status.success} Installed ${result.name}@${result.version}`));
 					if (result.enabledFeatures && result.enabledFeatures.length > 0) {
@@ -589,7 +626,7 @@ async function handleFeatures(
 			}
 		}
 
-		await manager.setEnabledFeatures(pluginName, [...currentFeatures]);
+		await manager.setEnabledFeatures(pluginName, Array.from(currentFeatures));
 		console.log(chalk.green(`${theme.status.success} Updated features for ${pluginName}`));
 	}
 
@@ -650,9 +687,22 @@ async function handleConfig(
 		return;
 	}
 
+	const CONFIG_SUBCOMMANDS = ["list", "get", "set", "delete", "validate"];
+	if (!CONFIG_SUBCOMMANDS.includes(subcommand)) {
+		// `plugin config <plugin>` reads as complete, so it arrived here with the
+		// plugin name parsed as the subcommand and reported "Plugin name required"
+		// about a name the operator had just typed.
+		console.error(chalk.red(`Unknown config subcommand "${subcommand}".`));
+		console.error(
+			chalk.dim(`Usage: ${APP_NAME} plugin config <${CONFIG_SUBCOMMANDS.join("|")}> <plugin> [key] [value]`),
+		);
+		console.error(chalk.dim(`Example: ${APP_NAME} plugin config list ${subcommand}`));
+		process.exit(EXIT_USAGE);
+	}
+
 	if (!pluginName) {
-		console.error(chalk.red("Plugin name required"));
-		process.exit(1);
+		console.error(chalk.red(`Plugin name required: ${APP_NAME} plugin config ${subcommand} <plugin>`));
+		process.exit(EXIT_USAGE);
 	}
 
 	const plugins = await manager.list();

@@ -1,10 +1,10 @@
 /**
  * GRAN-4: the MAIN (top-level) session records a `session_init` entry with its
- * exact system prompt + active tools at start — the same entry type a subagent
+ * exact system prompt + active tools at start — the same entry type an agent
  * writes — so the main agent's run is replayable/backtestable at full fidelity.
  *
  * Why this suite exists:
- *   Subagents persisted `session_init` (exact system prompt, tools) enabling
+ *   Agents persisted `session_init` (exact system prompt, tools) enabling
  *   faithful revive/replay, but the main top-level session did not: its exact
  *   system prompt AS SENT was never in the record, only reconstructable from
  *   config. A faithful backtest of the main agent could not reproduce the exact
@@ -21,13 +21,13 @@
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import * as path from "node:path";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import type { SessionInitEntry } from "@veyyon/coding-agent/session/session-entries";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import type { SessionInitEntry } from "@veyyon/kernel/session/session-entries";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 
 const CUSTOM_PROMPT = "You are the MAIN test agent guarding GRAN-4.";

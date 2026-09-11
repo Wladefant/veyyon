@@ -2,7 +2,7 @@
  * WHY THIS SUITE EXISTS (EVERY-EFFORT-SURFACE-NARROWS-TO-THE-MODEL — THE WHOLE CLASS).
  *
  * The defect: a surface that offers effort levels shipped a FIXED ladder instead of asking the model
- * in scope which levels it declares. It shipped three times in three different shapes — the Subagent
+ * in scope which levels it declares. It shipped three times in three different shapes — the Agent
  * Effort row printed the whole vocabulary, Model → Default Effort headed a one-row list "Valid effort
  * variants for <model>" with no explanation, and RPC `set_thinking_level` accepted any level and
  * answered success while the session clamped it. Each was fixed where it was found.
@@ -46,12 +46,12 @@ import { ANY_MODEL_EFFORT_KEY } from "@veyyon/coding-agent/config/effort-resolve
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings, settings } from "@veyyon/coding-agent/config/settings";
 import { getUi, isSettingPath, SETTINGS_SCHEMA, type SettingPath } from "@veyyon/coding-agent/config/settings-schema";
-import { renderEffortStep } from "@veyyon/coding-agent/modes/components/effort-picker";
-import { ModelHubComponent } from "@veyyon/coding-agent/modes/components/model-hub";
-import { SettingsSelectorComponent } from "@veyyon/coding-agent/modes/components/settings-selector";
-import { ThinkingSelectorComponent } from "@veyyon/coding-agent/modes/components/thinking-selector";
 import { rpcThinkingLevelRefusal } from "@veyyon/coding-agent/modes/rpc/rpc-mode";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
+import { renderEffortStep } from "@veyyon/coding-agent/modes/terminal/components/selectors/effort-picker";
+import { ModelHubComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/model-hub";
+import { SettingsSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-selector";
+import { ThinkingSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/thinking-selector";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import * as thinking from "@veyyon/coding-agent/thinking";
 import type { TUI } from "@veyyon/tui";
 import { Container } from "@veyyon/tui";
@@ -324,10 +324,14 @@ function classifiedExports(): { producers: string[]; narrowing: string[]; fixed:
 
 /**
  * `scope` is the session's catalog. It defaults to the one model in scope, which is what every
- * per-model case wants; a blanket row (`subagent.thinkingLevel`, Default Effort's `*`) reads it
+ * per-model case wants; a blanket row (`agent.thinkingLevel`, Default Effort's `*`) reads it
  * instead of a model, so those cases pass a corpus explicitly.
  */
-function buildSelector(model: Model<Api> | undefined, scope?: ReadonlyArray<Model<Api>>): SettingsSelectorComponent {
+function buildSelector(
+	model: Model<Api> | undefined,
+	scope?: ReadonlyArray<Model<Api>>,
+	requestRender?: () => void,
+): SettingsSelectorComponent {
 	return new SettingsSelectorComponent(
 		{
 			model,
@@ -339,6 +343,7 @@ function buildSelector(model: Model<Api> | undefined, scope?: ReadonlyArray<Mode
 			cwd: process.cwd(),
 			modelRegistry,
 			availableModels: scope ?? (model ? [model] : []),
+			requestRender,
 		},
 		{ onChange: () => {}, onCancel: () => {} },
 	);
@@ -373,6 +378,19 @@ function openSettingsRow(path: SettingPath, model: Model<Api> | undefined, scope
 	expect(component.selectSetting(path)).toBe(true);
 	component.handleInput(ENTER);
 	return stripVTControlCharacters(component.render(PANEL_WIDTH).join("\n"));
+}
+
+/**
+ * The shared agent effort, opened the way a user reaches it: Agents tab →
+ * Shared Effort, the row that appears once Same Model for All Agents is on.
+ *
+ * The switch goes on first because the row carries the `agentSharedModel`
+ * condition and is not drawn without it, which is the same gate a user passes
+ * through.
+ */
+function openAgentEffortRow(model: Model<Api> | undefined, scope?: ReadonlyArray<Model<Api>>): string {
+	settings.set("agent.sharedModel", true);
+	return openSettingsRow("agent.thinkingLevel", model, scope);
 }
 
 /** Open Settings → Model → Default Effort on a row already stored for `model`. */
@@ -446,8 +464,13 @@ interface EffortSurface {
 	readonly id: string;
 	/** The narrowing export from the vocabulary owner this surface reads. Ties SURFACES to enumeration 1. */
 	readonly reads: string;
-	/** The levels this surface offers for `model`. */
-	offered(model: Model<Api>): string[];
+	/**
+	 * The levels this surface offers for `model`.
+	 *
+	 * A surface reached through a page that loads before it draws answers with a
+	 * promise; every call site awaits, so a synchronous surface needs no wrapper.
+	 */
+	offered(model: Model<Api>): string[] | Promise<string[]>;
 	/**
 	 * The levels this surface COULD offer at all. RPC speaks `ThinkingLevel`, which has no `auto`
 	 * sentinel, so its expected answer is the declared ladder intersected with what it can express.
@@ -456,18 +479,18 @@ interface EffortSurface {
 	/** The sentence this surface owes a user when it has narrowed to nothing. */
 	readonly emptyNotice?: string;
 	/** The full frame this surface draws, for surfaces that draw one. Only rendered surfaces owe a notice. */
-	render?(model: Model<Api>): string;
+	render?(model: Model<Api>): string | Promise<string>;
 }
 
 const RPC_EXPRESSIBLE: readonly string[] = Object.values(ThinkingLevel).map(String);
 
 const SURFACES: readonly EffortSurface[] = [
 	{
-		id: "settings row Subagents → Subagent Effort",
+		id: "settings row Agents → Shared Effort",
 		reads: "configuredThinkingLevelOptions",
-		offered: model => effortWordsIn(openSettingsRow("subagent.thinkingLevel", model)),
+		offered: model => effortWordsIn(openAgentEffortRow(model)),
 		emptyNotice: thinking.noSelectableEffortNotice(SETTINGS_INHERIT_LABEL),
-		render: model => openSettingsRow("subagent.thinkingLevel", model),
+		render: model => openAgentEffortRow(model),
 	},
 	{
 		id: "settings row Model → Default Effort, per-model row",
@@ -562,12 +585,19 @@ describe("every settings row that leaves its options to the runtime is an effort
 		return effortWordsIn(rendered).join(",") === declaredWords(model).join(",");
 	}
 
+	/**
+	 * No TAB ROW is an effort picker any more: the one that was, the shared
+	 * agent effort, moved inside the roster page and gave up its `ui` block.
+	 * The sweep still ratchets — a runtime row added anywhere must be either a
+	 * correctly narrowing effort picker or recorded above — and the roster's own
+	 * picker keeps its coverage as a SURFACE, driven through the page.
+	 */
 	it("classifies every runtime row, and the non-effort ones are recorded exactly", () => {
 		const effortRows = runtimeRows.filter(isEffortPicker);
 		const others = runtimeRows.filter(path => !effortRows.includes(path));
 
 		expect(others.map(String).sort()).toEqual([...NON_EFFORT_RUNTIME_ROWS].sort());
-		expect(effortRows).toEqual(["subagent.thinkingLevel"]);
+		expect(effortRows).toEqual([]);
 	});
 
 	/**
@@ -605,11 +635,11 @@ describe("every settings row that leaves its options to the runtime is an effort
 describe("every effort surface offers exactly the levels the model declares", () => {
 	for (const shape of Object.keys(LADDER_SHAPES) as LadderShape[]) {
 		for (const surface of SURFACES) {
-			it(`${surface.id} · a model that ${shape.replace(/-/g, " ")}`, () => {
+			it(`${surface.id} · a model that ${shape.replace(/-/g, " ")}`, async () => {
 				const model = shapeModel(shape);
 				const expected = expectedFor(surface, model);
 
-				expect(surface.offered(model).sort()).toEqual([...expected].sort());
+				expect((await surface.offered(model)).sort()).toEqual([...expected].sort());
 			});
 		}
 	}
@@ -632,8 +662,8 @@ describe("a surface that has narrowed to nothing says why", () => {
 	for (const surface of SURFACES) {
 		const { emptyNotice, render } = surface;
 		if (emptyNotice === undefined || render === undefined) continue;
-		it(`${surface.id} explains its one-row list`, () => {
-			const rendered = paneText(render(shapeModel("declares-nothing")));
+		it(`${surface.id} explains its one-row list`, async () => {
+			const rendered = paneText(await render(shapeModel("declares-nothing")));
 
 			expect(rendered).toContain(emptyNotice);
 			// The heading a one-row list must NOT carry: it reads as a truncated list.
@@ -653,7 +683,7 @@ describe("a surface that has narrowed to nothing says why", () => {
 
 		expect(explaining).toEqual(drawn);
 		expect(drawn).toEqual([
-			"settings row Subagents → Subagent Effort",
+			"settings row Agents → Shared Effort",
 			"settings row Model → Default Effort, per-model row",
 			"model selector effort step",
 		]);
@@ -666,9 +696,7 @@ describe("a surface that has narrowed to nothing says why", () => {
 	it("says nothing of the kind for a model that has a ladder", () => {
 		const withLadder = shapeModel("declares-a-strict-subset");
 
-		expect(openSettingsRow("subagent.thinkingLevel", withLadder)).not.toContain(
-			thinking.noSelectableEffortNotice(SETTINGS_INHERIT_LABEL),
-		);
+		expect(openAgentEffortRow(withLadder)).not.toContain(thinking.noSelectableEffortNotice(SETTINGS_INHERIT_LABEL));
 		expect(openEffortStep(withLadder)).toContain("Valid effort variants");
 		expect(openEffortStep(withLadder)).not.toContain(thinking.noSelectableEffortNotice(MODEL_STEP_INHERIT_LABEL));
 	});
@@ -707,7 +735,7 @@ describe("a surface that has narrowed to nothing says why", () => {
 
 describe("a row with no single model offers the union its catalog declares, and never more", () => {
 	/**
-	 * `subagent.thinkingLevel` and `defaultEffort`'s any-model row store a level clamped later against
+	 * `agent.thinkingLevel` and `defaultEffort`'s any-model row store a level clamped later against
 	 * whatever model runs, so neither can narrow to one model. They used to answer with the whole
 	 * vocabulary instead, which is how `minimal` reached a session whose every model declares
 	 * `low, high, max`. The honest answer is the UNION of what the session's catalog declares: every
@@ -725,10 +753,8 @@ describe("a row with no single model offers the union its catalog declares, and 
 		expect(UNION.length).toBeLessThan(VOCABULARY.length);
 	});
 
-	it("offers the catalog's union on the subagent effort row with no session model", () => {
-		expect(effortWordsIn(openSettingsRow("subagent.thinkingLevel", undefined, BLANKET_SCOPE)).sort()).toEqual(
-			[...UNION].sort(),
-		);
+	it("offers the catalog's union on the agent effort row with no session model", () => {
+		expect(effortWordsIn(openAgentEffortRow(undefined, BLANKET_SCOPE)).sort()).toEqual([...UNION].sort());
 	});
 
 	it("offers the catalog's union on the any-model default-effort row", () => {
@@ -753,7 +779,7 @@ describe("a row with no single model offers the union its catalog declares, and 
 	it("offers no level at all when nothing in the catalog declares one", () => {
 		const barren = [shapeModel("declares-nothing")];
 		expect(thinking.configuredThinkingLevelsInScope(barren)).toEqual([]);
-		expect(effortWordsIn(openSettingsRow("subagent.thinkingLevel", undefined, barren))).toEqual([]);
+		expect(effortWordsIn(openAgentEffortRow(undefined, barren))).toEqual([]);
 	});
 
 	it("refuses nothing over RPC when there is no model to narrow against", () => {

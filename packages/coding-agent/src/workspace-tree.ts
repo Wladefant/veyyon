@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { FileType, type GlobMatch, listWorkspace } from "@veyyon/natives";
+import { isNativeAddonUnavailable } from "@veyyon/natives/loader-state";
 // Owners, not the `@veyyon/utils` barrel: 1 module against 74.
 import { formatAge, formatBytes } from "@veyyon/utils/format";
 
@@ -49,6 +50,12 @@ export interface BuildWorkspaceTreeOptions {
  * shown, .gitignore is not consulted, and the standard non-source directories
  * (`node_modules`, `.git`, build outputs, caches…) are pruned by the native
  * walker. Used by the read tool's directory-listing path.
+ *
+ * A scan that fails refuses unless the directory is simply not there. This
+ * answers a directory the caller asked to see, so reporting one that nothing
+ * could be read out of as empty states something false about the tree.
+ * `buildWorkspaceTree` below degrades instead, because it fills a block of the
+ * system prompt that no one asked for.
  */
 export async function buildDirectoryTree(cwd: string, options: BuildDirectoryTreeOptions = {}): Promise<DirectoryTree> {
 	const rootPath = path.resolve(cwd);
@@ -56,30 +63,110 @@ export async function buildDirectoryTree(cwd: string, options: BuildDirectoryTre
 	const perDirLimit = options.perDirLimit === undefined ? null : options.perDirLimit;
 	const rootLimit = options.rootLimit === undefined ? perDirLimit : options.rootLimit;
 
-	let entries: readonly GlobMatch[];
-	let nativeTruncated: boolean;
 	try {
-		const result = await listWorkspace({
+		const { entries, truncated: nativeTruncated } = await listWorkspace({
 			path: rootPath,
 			maxDepth,
 			hidden: true,
 			gitignore: false,
 		});
-		entries = result.entries;
-		nativeTruncated = result.truncated;
-	} catch {
+
+		return assembleTree(rootPath, entries, {
+			perDirLimit,
+			rootLimit,
+			lineCap: options.lineCap === undefined ? null : options.lineCap,
+			nativeTruncated,
+			// Tool output (read tool directory listing), not a cached prefix —
+			// the human-friendly relative "ago" is appropriate here.
+			ageMode: "relative",
+		});
+	} catch (error) {
+		if (!isAbsentDirectory(error)) throw error;
 		return emptyTree(rootPath);
 	}
+}
 
-	return assembleTree(rootPath, entries, {
-		perDirLimit,
-		rootLimit,
-		lineCap: options.lineCap === undefined ? null : options.lineCap,
-		nativeTruncated,
-		// Tool output (read tool directory listing), not a cached prefix —
-		// the human-friendly relative "ago" is appropriate here.
-		ageMode: "relative",
-	});
+export interface TopLevelDirectoryListing extends DirectoryTree {
+	/** Top-level entries omitted by `entryLimit`. */
+	omittedTopLevel: number;
+}
+
+export interface BuildTopLevelDirectoryListingOptions {
+	/** Top-level entry cap. `null` disables the cap. Default: `null`. */
+	entryLimit?: number | null;
+}
+
+/**
+ * Build a concise, depth-1 listing of a directory: every top-level entry on
+ * one line, each subdirectory annotated with its direct-child count. The scan
+ * still walks two levels so the counts come from the same native pass; nothing
+ * below the top level is rendered. Used by the read tool for any directory read
+ * that names no depth, where the model needs the top-level convention rather
+ * than a recursive tree.
+ */
+export async function buildTopLevelDirectoryListing(
+	cwd: string,
+	options: BuildTopLevelDirectoryListingOptions = {},
+): Promise<TopLevelDirectoryListing> {
+	const rootPath = path.resolve(cwd);
+	const entryLimit = options.entryLimit === undefined ? null : options.entryLimit;
+
+	try {
+		const { entries, truncated: nativeTruncated } = await listWorkspace({
+			path: rootPath,
+			maxDepth: 2,
+			hidden: true,
+			gitignore: false,
+		});
+
+		// Direct-child count per top-level directory, from the same depth-2 scan.
+		const childCounts = new Map<string, number>();
+		const topLevel: Array<{ name: string; isDir: boolean; mtimeMs: number; size: number }> = [];
+		for (const entry of entries) {
+			const slash = entry.path.lastIndexOf("/");
+			const parentPath = slash === -1 ? "" : entry.path.slice(0, slash);
+			if (parentPath === "") {
+				topLevel.push({
+					name: entry.path,
+					isDir: entry.fileType === FileType.Dir,
+					mtimeMs: entry.mtime ?? 0,
+					size: entry.size ?? 0,
+				});
+			} else if (!parentPath.includes("/")) {
+				childCounts.set(parentPath, (childCounts.get(parentPath) ?? 0) + 1);
+			}
+		}
+		topLevel.sort((a, b) => b.mtimeMs - a.mtimeMs || a.name.localeCompare(b.name));
+
+		const capped = entryLimit !== null && topLevel.length > entryLimit;
+		const shown = capped && entryLimit !== null ? topLevel.slice(0, entryLimit) : topLevel;
+		const omitted = topLevel.length - shown.length;
+
+		const formatNodeAge = makeAgeFormatter("relative");
+		const lines: RenderedLine[] = [{ label: ".", depth: 0, isRoot: true }];
+		for (const node of shown) {
+			const count = childCounts.get(node.name) ?? 0;
+			const countText = node.isDir ? `  (${count} ${count === 1 ? "entry" : "entries"})` : "";
+			lines.push({
+				label: `  - ${node.name}${node.isDir ? "/" : ""}${countText}`,
+				depth: 1,
+				isRoot: false,
+				size: node.isDir ? undefined : formatBytes(node.size),
+				age: formatNodeAge(node.mtimeMs),
+			});
+		}
+
+		return {
+			rootPath,
+			rendered: formatLines(lines),
+			truncated: nativeTruncated || capped,
+			totalLines: lines.length,
+			omittedTopLevel: omitted,
+		};
+	} catch (error) {
+		if (!isAbsentDirectory(error)) throw error;
+		return { ...emptyTree(rootPath), omittedTopLevel: 0 };
+	}
 }
 
 /**
@@ -109,7 +196,8 @@ export async function buildWorkspaceTree(cwd: string, options: BuildWorkspaceTre
 			ageMode: "absolute",
 		});
 		return { ...tree, agentsMdFiles: result.agentsMdFiles };
-	} catch {
+	} catch (error) {
+		refuseWithoutAddon(error);
 		return { ...emptyTree(rootPath), agentsMdFiles: [] };
 	}
 }
@@ -285,7 +373,7 @@ function applyLineCap(
 	lines: readonly RenderedLine[],
 	lineCap: number | null,
 ): { lines: RenderedLine[]; elidedCount: number } {
-	if (lineCap === null || lines.length <= lineCap) return { lines: [...lines], elidedCount: 0 };
+	if (lineCap === null || lines.length <= lineCap) return { lines: lines.slice(), elidedCount: 0 };
 
 	const PROTECTED_DEPTH = 1;
 	const target = Math.max(1, lineCap - 1);
@@ -294,7 +382,7 @@ function applyLineCap(
 		.filter(({ line }) => !line.isRoot && line.depth > PROTECTED_DEPTH)
 		.sort((a, b) => b.line.depth - a.line.depth || b.index - a.index)
 		.slice(0, lines.length - target);
-	if (removable.length === 0) return { lines: [...lines], elidedCount: 0 };
+	if (removable.length === 0) return { lines: lines.slice(), elidedCount: 0 };
 
 	const removed = new Set(removable.map(item => item.index));
 	const kept = lines.filter((_, index) => !removed.has(index));
@@ -315,6 +403,32 @@ function formatLines(lines: readonly RenderedLine[]): string {
 			return `${line.label.padEnd(maxLabelLength + 2)}${sizeColumn}  ${line.age.padEnd(4)}`.trimEnd();
 		})
 		.join("\n");
+}
+
+/**
+ * Re-throw a scan failure that means the native addon could not load.
+ *
+ * A missing or unreadable directory is a finding: an empty tree is the honest
+ * answer and every caller renders it as one. An addon that never loaded is not
+ * a finding, because the scan did not run. Returning an empty tree for it
+ * rendered a full checkout as an empty workspace, both in the tool's directory
+ * listing and in the workspace tree the system prompt carries.
+ */
+function refuseWithoutAddon(error: unknown): void {
+	if (isNativeAddonUnavailable(error)) throw error;
+}
+
+/**
+ * Whether a scan failure means the directory is not there.
+ *
+ * A directory that does not exist has no entries, so an empty tree states the
+ * truth about it. Every other failure — an addon that will not load, a
+ * directory this process cannot open — produced no information at all, and
+ * answering `empty` for one of those reports a full directory as an empty one.
+ */
+function isAbsentDirectory(error: unknown): boolean {
+	if (typeof error !== "object" || error === null || !("code" in error)) return false;
+	return error.code === "ENOENT";
 }
 
 function emptyTree(rootPath: string): DirectoryTree {

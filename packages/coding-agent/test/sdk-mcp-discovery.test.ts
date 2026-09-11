@@ -3,15 +3,16 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { ThinkingLevel } from "@veyyon/agent-core";
-import { AuthStorage, Effort, type Model } from "@veyyon/ai";
+import { AuthStorage, type Model } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
+import { Effort } from "@veyyon/catalog/effort";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
+import { TOOL_DISCOVERY_AUTO_THRESHOLD } from "@veyyon/coding-agent/discovery/mode";
 import type { CustomTool } from "@veyyon/coding-agent/extensibility/custom-tools/types";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
-import { TOOL_DISCOVERY_AUTO_THRESHOLD } from "@veyyon/coding-agent/tool-discovery/mode";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { type } from "arktype";
 
@@ -74,6 +75,13 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 	beforeEach(() => {
 		tempDir = path.join(os.tmpdir(), `pi-sdk-mcp-discovery-${Snowflake.next()}`);
 		fs.mkdirSync(tempDir, { recursive: true });
+		// `debug` stands in for a discoverable built-in here, and it loads only where a debug
+		// adapter command resolves. An adapter whose command is this very binary keeps the tool
+		// set the same on a machine with no debugger installed.
+		fs.writeFileSync(
+			path.join(tempDir, "dap.json"),
+			JSON.stringify({ adapters: { "test-adapter": { command: process.execPath, languages: ["javascript"] } } }),
+		);
 	});
 
 	afterEach(() => {
@@ -177,7 +185,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 		// its own switch instead of discovery. The second session below is the control that
 		// separates the two, and these names are the ones the permission table admits with the
 		// default settings this session was built with.
-		for (const name of ["read", "bash", "edit", "grep", "glob", "task", "todo", "web_search"]) {
+		for (const name of ["read", "bash", "edit", "search", "task", "todo", "web_search"]) {
 			expect(activeNames, `${name} is entitled and must be directly callable`).toContain(name);
 		}
 		expect(activeNames).not.toContain("browser");
@@ -228,7 +236,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 
 		const prompt = session.systemPrompt.join("\n");
 		const searchTool = session.agent.state.tools.find(tool => tool.name === "search_tool_bm25");
-		expect(session.getActiveToolNames()).not.toContain("search");
+		expect(session.getActiveToolNames()).not.toContain("debug");
 		expect(prompt).toContain("call `search_tool_bm25` before concluding no such tool exists");
 		expect(searchTool?.description).toContain("Total discoverable tools available:");
 	});
@@ -250,7 +258,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 			agentDir: tempDir,
 			modelRegistry,
 			sessionManager: SessionManager.inMemory(),
-			settings: Settings.isolated({ "tools.discoveryMode": "all", "subagent.delegation": delegation }),
+			settings: Settings.isolated({ "tools.discoveryMode": "all", "agent.delegation": delegation }),
 			model: getBundledModel("openai", "gpt-4o-mini"),
 			disableExtensionDiscovery: true,
 			skills: [],
@@ -294,7 +302,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 	 * reachable through `search_tool_bm25`, and the prompt drops the delegation gates with it.
 	 *
 	 * This test USED to omit the setting and rely on the default being `allowed`. The default is
-	 * `preferred` (`settings-domains/subagents.ts`), so it was silently a duplicate of the preferred
+	 * `preferred` (`settings-domains/agents.ts`), so it was silently a duplicate of the preferred
 	 * case and failed for the right reason: `task` was correctly present. The strength is named
 	 * explicitly here, which is the only way this test exercises the floor at all, and it stays
 	 * correct if the default moves again.
@@ -426,15 +434,15 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 			enableLsp: false,
 		});
 
-		expect(await session.activateDiscoveredTools(["grep"])).toEqual(["grep"]);
-		expect(session.getSelectedDiscoveredToolNames()).toContain("grep");
+		expect(await session.activateDiscoveredTools(["debug"])).toEqual(["debug"]);
+		expect(session.getSelectedDiscoveredToolNames()).toContain("debug");
 
 		await session.setActiveToolsByName(["read", "search_tool_bm25"]);
 
-		expect(session.getActiveToolNames()).not.toContain("grep");
-		expect(session.getSelectedDiscoveredToolNames()).not.toContain("grep");
-		expect(await session.activateDiscoveredTools(["grep"])).toEqual(["grep"]);
-		expect(session.getActiveToolNames()).toContain("grep");
+		expect(session.getActiveToolNames()).not.toContain("debug");
+		expect(session.getSelectedDiscoveredToolNames()).not.toContain("debug");
+		expect(await session.activateDiscoveredTools(["debug"])).toEqual(["debug"]);
+		expect(session.getActiveToolNames()).toContain("debug");
 	});
 	it("restores explicit MCP, thinking, and service-tier entries when resuming without rewriting the session file", async () => {
 		const firstManager = SessionManager.create(tempDir, tempDir);

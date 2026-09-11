@@ -26,7 +26,7 @@ Schema default: `personality: default` in `settings-schema.ts`. The setting is a
 personality: pragmatic
 ```
 
-There is no `/personality` slash command in the shipped registry. Subagents use `none` regardless of the main setting (`sdk.ts`).
+There is no `/personality` slash command in the shipped registry. Agents use `none` regardless of the main setting (`sdk.ts`).
 
 ## Extending the catalog
 
@@ -43,7 +43,7 @@ Edge cases:
 - An empty or whitespace-only personality file is treated as absent: the next tier (or the built-in) is used instead, so the block is never emitted empty.
 - Setting `personality` to a name that resolves to nothing (no built-in, user, or project file) falls back to `default` and prints a visible warning; the `<personality>` block is never silently emitted empty for a real (non-`none`) request.
 
-See `packages/coding-agent/src/personality/resolver.ts` for the resolver implementation.
+See `packages/coding-agent/src/config/personality-resolver.ts` for the resolver implementation.
 
 ## Boundaries
 
@@ -53,4 +53,4 @@ See `packages/coding-agent/src/personality/resolver.ts` for the resolver impleme
 ## See also
 
 - [Configuration](../using/configuration.md)
-- [System prompt customization](https://github.com/santhreal/veyyon/blob/main/docs/system-prompt-customization.md) (engine doc)
+- [System prompt customization](https://github.com/santhreal/veyyon/blob/main/docs/handbook/src/models/system-prompt.md) (engine doc)

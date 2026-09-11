@@ -2,7 +2,7 @@
    Veyyon Harness Handbook — Linear-style premium theme
    Silver-and-ember on pitch black. No gradients, no glow, no blue/cyan/purple.
    Matches the canonical Veyyon identity (docs/internal/brand.md,
-   website/site.css): pitch-black #000000 ground on every surface — hierarchy
+   apps/site/site.css): pitch-black #000000 ground on every surface — hierarchy
    comes from silver hairlines and text weight, never raised/tinted panels —
    with silver (#c6cbd4) as the structural color and the ember sun (#f0862e) as
    the single accent, carried by links, the focus ring, and syntax keywords.
@@ -33,7 +33,7 @@
     --vy-ember:          #f0862e;
     --vy-ember-hi:       #fb9e44;
 
-    /* Semantic trio — exact canonical values (website/site.css). */
+    /* Semantic trio — exact canonical values (apps/site/site.css). */
     --vy-green:          #7fb98a;
     --vy-amber:          #c9a24b;
     --vy-red:            #c96f6e;

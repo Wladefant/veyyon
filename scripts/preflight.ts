@@ -91,7 +91,7 @@ const CONTRACTS: readonly Contract[] = [
 	},
 	{
 		suite: "packages/coding-agent/test/context-files-agent-type-parity.test.ts",
-		symptom: "a spawned subagent runs without the standing instructions its parent has",
+		symptom: "a spawned agent runs without the standing instructions its parent has",
 	},
 	{
 		suite: "packages/coding-agent/test/context-files-scope-failures.test.ts",
@@ -122,7 +122,7 @@ const CONTRACTS: readonly Contract[] = [
 		symptom: "an existing session transcript can no longer be loaded",
 	},
 	{
-		suite: "packages/coding-agent/test/modes/components/settings-layout.test.ts",
+		suite: "packages/coding-agent/test/modes/terminal/components/settings-layout.test.ts",
 		symptom: "a settings group is unreachable in /settings, so its settings cannot be changed",
 	},
 ];

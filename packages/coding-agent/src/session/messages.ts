@@ -9,7 +9,9 @@ import type { AgentMessage } from "@veyyon/agent-core";
 import {
 	type BranchSummaryMessage,
 	type CompactionSummaryMessage,
+	type CustomMessage,
 	convertMessageToLlm,
+	type HookMessage,
 } from "@veyyon/agent-core/compaction/messages";
 // Owner, not the `@veyyon/agent-core` barrel: a value import of the barrel drags
 // the whole agent runtime and the `@veyyon/utils` barrel into `tools/read`.
@@ -20,6 +22,7 @@ import {
 } from "@veyyon/agent-core/tool-batch-ledger";
 import type {
 	AssistantMessage,
+	DemotedReasoningSource,
 	ImageContent,
 	Message,
 	MessageAttribution,
@@ -28,46 +31,40 @@ import type {
 	UserMessage,
 } from "@veyyon/ai";
 import * as AIError from "@veyyon/ai/error";
-// Owners, not the `@veyyon/utils` barrel: 1 module against 74.
+import { isBlobRef, isTextBlobRef } from "@veyyon/kernel/session/blob-store";
+import { isCustomMessageContent } from "@veyyon/kernel/session/custom-message-payload";
+import { agentMessageKind } from "@veyyon/kernel/session/message-kinds";
 import { isRecord } from "@veyyon/utils/type-guards";
-import { formatExitCodeNotice } from "../exec/exit-notice";
-import { ToolAbortError } from "../tools/tool-errors";
-import { isBlobRef, isTextBlobRef } from "./blob-store";
+// Owner, not the `@veyyon/utils` barrel: 1 module against 74.
+import { ToolAbortError } from "../tools/core/tool-errors";
+import { imageDisplayStateForCall, imageVisibilityNotice, isImageVisibilityNotice } from "./image-visibility";
 
 export {
 	type BranchSummaryMessage,
 	type CompactionSummaryMessage,
+	type CustomMessage,
 	createBranchSummaryMessage,
 	createCompactionSummaryMessage,
 	createCustomMessage,
+	type HookMessage,
 } from "@veyyon/agent-core/compaction/messages";
 
-// The notice text, not the tool layer that builds it: `../tools/output-meta` reaches 177 modules
-// because it owns the builder, the tool wrapper and the spill configuration, and appending a notice to
-// a message needs none of them. `../tools/output-notice` owns the wording and the metadata shape.
-import type { OutputMeta } from "../tools/output-notice";
-import { formatOutputNotice } from "../tools/output-notice";
+export {
+	type CustomMessageContent,
+	type CustomMessagePayload,
+	DEFAULT_CUSTOM_MESSAGE_TYPE,
+	INTERNAL_DETAILS_FIELDS,
+	isCustomMessageContent,
+	type NormalizedCustomMessagePayload,
+	normalizeCustomMessagePayload,
+	readQueueChipText,
+	sanitizeRehydratedOpenAIResponsesAssistantMessage,
+	stripInternalDetailsFields,
+} from "@veyyon/kernel/session/custom-message-payload";
 
 export const SKILL_PROMPT_MESSAGE_TYPE = "skill-prompt";
 export const LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE = "lsp-late-diagnostic";
 export const BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE = "background-tan-dispatch";
-
-/** Fallback type for extension-injected messages that omit a custom type. */
-export const DEFAULT_CUSTOM_MESSAGE_TYPE = "custom-message";
-
-/** Content shape accepted for extension-injected messages. */
-export type CustomMessageContent = string | (TextContent | ImageContent)[];
-
-/** Public input accepted by `pi.sendMessage` and `AgentSession.sendCustomMessage`. */
-export type CustomMessagePayload<T = unknown> =
-	| string
-	| Partial<Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">>;
-
-/** Custom message payload after applying runtime defaults. */
-export type NormalizedCustomMessagePayload<T = unknown> = Pick<
-	CustomMessage<T>,
-	"customType" | "content" | "display" | "details" | "attribution"
->;
 
 /** Custom message type for hidden interrupted-thinking continuity context. */
 export const INTERRUPTED_THINKING_MESSAGE_TYPE = "interrupted-thinking";
@@ -151,13 +148,66 @@ function followedByInterruptedThinking(messages: AgentMessage[], index: number):
 }
 
 /**
+ * The origin of the reasoning a continuity message carries, read from its
+ * persisted details. A message that lost them is still demoted reasoning, so
+ * it is still tagged; the provider layer then applies only the endpoint-level
+ * drop.
+ */
+function interruptedThinkingSource(details: unknown): DemotedReasoningSource {
+	if (!isRecord(details)) return {};
+	return {
+		...(typeof details.provider === "string" ? { provider: details.provider } : {}),
+		...(typeof details.model === "string" ? { model: details.model } : {}),
+	};
+}
+
+/**
+ * LLM view of the hidden continuity message: the developer message every
+ * custom message becomes, tagged with `demotedReasoningSource` so
+ * `transformMessages` can subject the prose to the unsigned-thinking replay
+ * policy of the request's target. Without the tag the run reaches a signing
+ * Anthropic endpoint as plain text, which the `reasoning_extraction`
+ * classifier refuses, and the refusal retry cannot remove it.
+ */
+function convertInterruptedThinkingToLlm(message: CustomMessage): Message[] {
+	const cached = codingAgentMessageCache.get(message);
+	if (
+		cached?.role === "interruptedThinking" &&
+		cached.content === message.content &&
+		cached.details === message.details
+	) {
+		return cached.converted;
+	}
+	const base = convertMessageToLlm(message);
+	const converted: Message[] =
+		base?.role === "developer"
+			? [{ ...base, demotedReasoningSource: interruptedThinkingSource(message.details) }]
+			: [];
+	codingAgentMessageCache.set(message, {
+		role: "interruptedThinking",
+		converted,
+		content: message.content,
+		details: message.details,
+	});
+	return converted;
+}
+
+/**
  * Drop the demoted trailing thinking run from an assistant message for the LLM
  * view only. The run is incomplete and unsigned, so providers reject it; the
  * continuity message that follows carries the reasoning instead.
  */
+const strippedThinkingCache = new WeakMap<AssistantMessage, { sourceContent: unknown; stripped: AssistantMessage }>();
+
 function stripDemotedThinkingForLlm(message: AssistantMessage): AssistantMessage {
+	const cached = strippedThinkingCache.get(message);
+	if (cached && cached.sourceContent === message.content) {
+		return cached.stripped;
+	}
 	const demoted = demoteInterruptedThinking(message);
-	return demoted ? { ...message, content: demoted.strippedContent } : message;
+	const stripped = demoted ? { ...message, content: demoted.strippedContent } : message;
+	strippedThinkingCache.set(message, { sourceContent: message.content, stripped });
+	return stripped;
 }
 
 /** Details persisted on a `/tan` background-dispatch breadcrumb. */
@@ -284,97 +334,6 @@ export function resolveAbortLabel(
 	return ToolAbortError.MESSAGE;
 }
 
-/** Extract the optional `__queueChipText` field from a CustomMessage's
- *  `details` blob. Safe over `unknown`; returns undefined when the field is
- *  absent or non-string. */
-export function readQueueChipText(details: unknown): string | undefined {
-	if (typeof details !== "object" || details === null) return undefined;
-	const candidate = (details as { __queueChipText?: unknown }).__queueChipText;
-	return typeof candidate === "string" ? candidate : undefined;
-}
-
-/** Explicit allowlist of `details` field names that are AgentSession-internal
- *  transient bookkeeping and MUST be removed before SessionManager persists
- *  the CustomMessageEntry to disk. Scoped intentionally narrow: only fields
- *  declared here are stripped. Adding a new entry is a deliberate, reviewed
- *  change — unrelated future payload fields are never silently dropped. */
-export const INTERNAL_DETAILS_FIELDS = ["__queueChipText"] as const;
-
-/** Return a `details` copy with every key in `INTERNAL_DETAILS_FIELDS`
- *  removed. Returns the input unchanged when there is nothing to strip
- *  (null/non-object, or no listed fields present) so callers don't pay a
- *  clone cost on the common path. */
-export function stripInternalDetailsFields<T>(details: T | undefined): T | undefined {
-	if (details == null || typeof details !== "object") return details;
-	const obj = details as Record<string, unknown>;
-	let hit = false;
-	for (const key of INTERNAL_DETAILS_FIELDS) {
-		if (key in obj) {
-			hit = true;
-			break;
-		}
-	}
-	if (!hit) return details;
-	const cleaned: Record<string, unknown> = { ...obj };
-	for (const key of INTERNAL_DETAILS_FIELDS) {
-		delete cleaned[key];
-	}
-	return cleaned as T;
-}
-
-/** True when a persisted or extension-supplied value can be sent as custom-message content. */
-export function isCustomMessageContent(content: unknown): content is CustomMessageContent {
-	return typeof content === "string" || Array.isArray(content);
-}
-
-function normalizeCustomMessageContent(content: unknown): CustomMessageContent {
-	return isCustomMessageContent(content) ? content : "";
-}
-
-function normalizeCustomMessageType(customType: unknown): string {
-	return typeof customType === "string" && customType.length > 0 ? customType : DEFAULT_CUSTOM_MESSAGE_TYPE;
-}
-
-function normalizeCustomMessageAttribution(attribution: unknown): MessageAttribution {
-	return attribution === "user" ? "user" : "agent";
-}
-
-function isCustomMessagePayloadObject<T>(
-	payload: unknown,
-): payload is Partial<Pick<CustomMessage<T>, "customType" | "content" | "display" | "details" | "attribution">> {
-	return isRecord(payload);
-}
-
-/** Normalizes extension-provided custom message input before it reaches session state or disk. */
-export function normalizeCustomMessagePayload<T = unknown>(
-	payload: CustomMessagePayload<T> | unknown,
-): NormalizedCustomMessagePayload<T> {
-	if (typeof payload === "string") {
-		return {
-			customType: DEFAULT_CUSTOM_MESSAGE_TYPE,
-			content: payload,
-			display: true,
-			attribution: "agent",
-		};
-	}
-	if (!isCustomMessagePayloadObject<T>(payload)) {
-		const content = payload === undefined || payload === null ? "" : String(payload);
-		return {
-			customType: DEFAULT_CUSTOM_MESSAGE_TYPE,
-			content,
-			display: content.length > 0,
-			attribution: "agent",
-		};
-	}
-	return {
-		customType: normalizeCustomMessageType(payload.customType),
-		content: normalizeCustomMessageContent(payload.content),
-		display: typeof payload.display === "boolean" ? payload.display : false,
-		details: payload.details,
-		attribution: normalizeCustomMessageAttribution(payload.attribution),
-	};
-}
-
 /** Result of filtering image blocks out of a `(TextContent | ImageContent)[]` array. */
 interface StripContentResult {
 	content: (TextContent | ImageContent)[];
@@ -480,7 +439,9 @@ export function stripImagesFromMessage(message: AgentMessage): number {
  * operator blocked them outright (`images.blockImages`).
  *
  * Consecutive placeholder texts collapse into one so a message that was nothing
- * but images does not balloon into a run of identical notes.
+ * but images does not balloon into a run of identical notes. The visibility
+ * notice a tool result carries goes with the images it describes: once the
+ * pictures are out of the request, a sentence about where they are is stale.
  */
 export function replaceLlmImagesWithText(messages: Message[], placeholder: string): Message[] {
 	let out: Message[] | undefined;
@@ -492,6 +453,7 @@ export function replaceLlmImagesWithText(messages: Message[], placeholder: strin
 		const replaced: (TextContent | ImageContent)[] = [];
 		for (const part of content) {
 			if (part.type !== "image") {
+				if (part.type === "text" && isImageVisibilityNotice(part.text)) continue;
 				replaced.push(part);
 				continue;
 			}
@@ -598,77 +560,6 @@ export function replaceLostBlobPayloads(messages: Message[]): Message[] {
 }
 
 /**
- * Message type for bash executions via the ! command.
- */
-export interface BashExecutionMessage {
-	role: "bashExecution";
-	command: string;
-	output: string;
-	exitCode: number | undefined;
-	/**
-	 * The signal that killed the command, when it died from one.
-	 *
-	 * A `!` command is run through the same executor as the agent's bash tool, so
-	 * it inherits the same ambiguity: `exitCode` 137 is produced both by an
-	 * out-of-memory kill and by a program calling `exit(137)`. Optional because
-	 * sessions recorded before this field existed do not have it, and its absence
-	 * means "not known", not "not a signal".
-	 */
-	signal?: number;
-	cancelled: boolean;
-	truncated: boolean;
-	meta?: OutputMeta;
-	timestamp: number;
-	/** If true, this message is excluded from LLM context (!! prefix) */
-	excludeFromContext?: boolean;
-}
-
-/**
- * Message type for user-initiated Python executions via the $ command.
- * Shares the same kernel session as eval's Python backend.
- */
-export interface PythonExecutionMessage {
-	role: "pythonExecution";
-	code: string;
-	output: string;
-	exitCode: number | undefined;
-	cancelled: boolean;
-	truncated: boolean;
-	meta?: OutputMeta;
-	timestamp: number;
-	/** If true, this message is excluded from LLM context ($$ prefix) */
-	excludeFromContext?: boolean;
-}
-
-/**
- * Message type for extension-injected messages via sendMessage().
- */
-export interface CustomMessage<T = unknown> {
-	role: "custom";
-	customType: string;
-	content: CustomMessageContent;
-	display: boolean;
-	details?: T;
-	/** Who initiated this message for billing/attribution semantics. */
-	attribution?: MessageAttribution;
-	timestamp: number;
-}
-
-/**
- * Legacy hook message type (pre-extensions). Kept for session migration.
- */
-export interface HookMessage<T = unknown> {
-	role: "hookMessage";
-	customType: string;
-	content: CustomMessageContent;
-	display: boolean;
-	details?: T;
-	/** Who initiated this message for billing/attribution semantics. */
-	attribution?: MessageAttribution;
-	timestamp: number;
-}
-
-/**
  * Message type for auto-read file mentions via @filepath syntax.
  */
 export interface FileMentionMessage {
@@ -695,91 +586,16 @@ export interface FileMentionMessage {
 
 // Extend CustomAgentMessages via declaration merging
 // Legacy hookMessage is kept for migration; new code should use custom.
-declare module "@veyyon/agent-core" {
+// The `!` command and `$` run roles are the shell domain's, declared with their conversion in
+// `tools/shell/execution-messages.ts` and reached below through the kernel's kind table.
+declare module "@veyyon/session" {
 	interface CustomAgentMessages {
-		bashExecution: BashExecutionMessage;
-		pythonExecution: PythonExecutionMessage;
 		custom: CustomMessage;
 		hookMessage: HookMessage;
 		branchSummary: BranchSummaryMessage;
 		compactionSummary: CompactionSummaryMessage;
 		fileMention: FileMentionMessage;
 	}
-}
-
-/**
- * Convert a BashExecutionMessage to user message text for LLM context.
- */
-export function bashExecutionToText(msg: BashExecutionMessage): string {
-	let text = `Ran \`${msg.command}\`\n`;
-	if (msg.output) {
-		text += `\`\`\`\n${msg.output}\n\`\`\``;
-	} else {
-		text += "(no output)";
-	}
-	if (msg.cancelled) {
-		text += "\n\n(command cancelled)";
-	} else if (msg.exitCode !== null && msg.exitCode !== undefined && msg.exitCode !== 0) {
-		text += `\n\n${formatExitCodeNotice(msg.exitCode, msg.signal)}`;
-	}
-	text += formatOutputNotice(msg.meta);
-	return text;
-}
-
-/**
- * Convert a PythonExecutionMessage to user message text for LLM context.
- */
-export function pythonExecutionToText(msg: PythonExecutionMessage): string {
-	let text = `Ran Python:\n\`\`\`python\n${msg.code}\n\`\`\`\n`;
-	if (msg.output) {
-		text += `Output:\n\`\`\`\n${msg.output}\n\`\`\``;
-	} else {
-		text += "(no output)";
-	}
-	if (msg.cancelled) {
-		text += "\n\n(execution cancelled)";
-	} else if (msg.exitCode !== null && msg.exitCode !== undefined && msg.exitCode !== 0) {
-		text += `\n\nExecution failed with code ${msg.exitCode}`;
-	}
-	text += formatOutputNotice(msg.meta);
-	return text;
-}
-
-export function sanitizeRehydratedOpenAIResponsesAssistantMessage(message: AssistantMessage): AssistantMessage {
-	if (message.providerPayload?.type !== "openaiResponsesHistory") {
-		return message;
-	}
-	// Only GitHub Copilot rejects replayed assistant-side native history on a
-	// warmed (resumed) session with HTTP 401 — that is the sole reason this strip
-	// exists. For every other Responses-family provider (OpenAI, OpenAI-Codex,
-	// Azure) the encrypted reasoning and native response items are self-contained
-	// and MUST survive rehydration: remote compaction replays them to rebuild
-	// faithful native history (user + assistant turns + encrypted reasoning), and
-	// same-model live turns reuse them for prompt-cache continuity. Stripping them
-	// for all providers is what left resumed sessions compacting tool-call-only
-	// history with no reasoning and no assistant prose.
-	if (message.provider !== "github-copilot") {
-		return message;
-	}
-
-	let didSanitizeContent = false;
-	const sanitizedContent = message.content.map(block => {
-		if (block.type !== "thinking" || block.thinkingSignature === undefined) {
-			return block;
-		}
-		didSanitizeContent = true;
-		return { ...block, thinkingSignature: undefined };
-	});
-
-	// Strip the assistant-side native replay payload entirely. After rehydration
-	// it belongs to a previous live Copilot connection and replaying it on a
-	// warmed session causes 401 rejections. User/developer payloads are preserved
-	// separately by the caller.
-	return {
-		...message,
-		...(didSanitizeContent ? { content: sanitizedContent } : {}),
-		providerPayload: undefined,
-	};
 }
 
 function customMessageContentToLlmContent(content: CustomMessage["content"]): (TextContent | ImageContent)[] {
@@ -790,9 +606,24 @@ function isUserInvokedSkillPrompt(message: CustomMessage): boolean {
 	return message.customType === SKILL_PROMPT_MESSAGE_TYPE && message.attribution === "user";
 }
 
+const imageBearingCustomMessageCache = new WeakMap<
+	CustomMessage | HookMessage,
+	{ sourceContent: unknown; attribution: MessageAttribution | undefined; customType?: string; converted: Message[] }
+>();
+
 function convertImageBearingCustomMessage(message: CustomMessage | HookMessage): Message[] | undefined {
 	if (!isCustomMessageContent(message.content)) return undefined;
 	if (typeof message.content === "string") return undefined;
+	const customType = (message as CustomMessage).customType;
+	const cached = imageBearingCustomMessageCache.get(message);
+	if (
+		cached &&
+		cached.sourceContent === message.content &&
+		cached.attribution === message.attribution &&
+		cached.customType === customType
+	) {
+		return cached.converted;
+	}
 	const textBlocks = message.content.filter((content): content is TextContent => content.type === "text");
 	const imageBlocks = message.content.filter((content): content is ImageContent => content.type === "image");
 	if (imageBlocks.length === 0) return undefined;
@@ -811,6 +642,12 @@ function convertImageBearingCustomMessage(message: CustomMessage | HookMessage):
 		content: [{ type: "text", text: `Images attached to ${message.customType}.` }, ...imageBlocks],
 		attribution: message.attribution,
 		timestamp: message.timestamp,
+	});
+	imageBearingCustomMessageCache.set(message, {
+		sourceContent: message.content,
+		attribution: message.attribution,
+		customType,
+		converted,
 	});
 	return converted;
 }
@@ -837,6 +674,11 @@ function convertImageBearingCustomMessage(message: CustomMessage | HookMessage):
  * The stored result is untouched: the transcript still renders the full ledger,
  * and the details it renders from (`batchLedger`) are what this reads.
  */
+const expiredBatchLedgerCache = new WeakMap<
+	ToolResultMessage,
+	{ sourceContent: unknown; expired: ToolResultMessage }
+>();
+
 function expireAnsweredBatchLedger(
 	messages: AgentMessage[],
 	index: number,
@@ -845,6 +687,10 @@ function expireAnsweredBatchLedger(
 	const ledger = (message.details as { batchLedger?: ToolBatchLedger } | undefined)?.batchLedger;
 	if (ledger === undefined) return message;
 	if (!batchAnsweredAfter(messages, index)) return message;
+	const cached = expiredBatchLedgerCache.get(message);
+	if (cached && cached.sourceContent === message.content) {
+		return cached.expired;
+	}
 	// Rendered by the ONE owner, so the slice cannot drift from what was written.
 	const rendered = renderToolBatchLedger(ledger);
 	let changed = false;
@@ -855,7 +701,9 @@ function expireAnsweredBatchLedger(
 		changed = true;
 		return { ...block, text: block.text.slice(0, at).trimEnd() };
 	});
-	return changed ? { ...message, content } : message;
+	const expired = changed ? { ...message, content } : message;
+	expiredBatchLedgerCache.set(message, { sourceContent: message.content, expired });
+	return expired;
 }
 
 /** Has an assistant turn responded to the batch this message belongs to. */
@@ -886,6 +734,57 @@ function isAnsweredBatchLedgerNotice(messages: AgentMessage[], index: number, me
 }
 
 /**
+ * State, on the tool result that carries them, whether the images reached the
+ * user's screen. A model holding a picture in its own context otherwise reports
+ * having shown it, while the user is looking at a placeholder row.
+ *
+ * The terminal decides most of this before the result is converted; a budget
+ * demotion and a failed format conversion are decided later, by the block that
+ * drew them, and reach the sentence through the record that block keeps.
+ */
+const imageVisibilityCache = new WeakMap<
+	ToolResultMessage,
+	{ sourceContent: unknown; notice: string | undefined; stamped: ToolResultMessage }
+>();
+
+function statePlacedImageVisibility(message: ToolResultMessage): ToolResultMessage {
+	const images = message.content.filter(block => block.type === "image").length;
+	if (images === 0) return message;
+	const notice = imageVisibilityNotice(imageDisplayStateForCall(message.toolCallId, images), images);
+	if (!notice) return message;
+	const cached = imageVisibilityCache.get(message);
+	if (cached && cached.sourceContent === message.content && cached.notice === notice) {
+		return cached.stamped;
+	}
+	const stamped: ToolResultMessage = { ...message, content: [...message.content, { type: "text", text: notice }] };
+	imageVisibilityCache.set(message, { sourceContent: message.content, notice, stamped });
+	return stamped;
+}
+
+interface CachedFileMention {
+	role: "fileMention";
+	converted: Message[];
+	files: unknown;
+}
+
+interface CachedSkillPrompt {
+	role: "skillPrompt";
+	converted: Message[];
+	content: unknown;
+}
+
+interface CachedInterruptedThinking {
+	role: "interruptedThinking";
+	converted: Message[];
+	content: unknown;
+	details: unknown;
+}
+
+type CachedCodingAgentMessage = CachedFileMention | CachedSkillPrompt | CachedInterruptedThinking;
+
+const codingAgentMessageCache = new WeakMap<AgentMessage, CachedCodingAgentMessage>();
+
+/**
  * Transform AgentMessages (including custom types) to LLM-compatible Messages.
  *
  * This is used by:
@@ -896,38 +795,11 @@ function isAnsweredBatchLedgerNotice(messages: AgentMessage[], index: number, me
 export function convertToLlm(messages: AgentMessage[]): Message[] {
 	return messages.flatMap((m, index): Message[] => {
 		switch (m.role) {
-			case "bashExecution":
-				if (m.excludeFromContext) {
-					return [];
-				}
-				return [
-					{
-						role: "user",
-						content: [{ type: "text", text: bashExecutionToText(m) }],
-						attribution: "user",
-						timestamp: m.timestamp,
-					},
-				];
-			case "pythonExecution":
-				if (m.excludeFromContext) {
-					return [];
-				}
-				return [
-					{
-						role: "user",
-						content: [{ type: "text", text: pythonExecutionToText(m) }],
-						attribution: "user",
-						timestamp: m.timestamp,
-					},
-				];
 			case "fileMention": {
-				// One `fileMention` can mix `@notes.md` (text) and `@screenshot.png` (image)
-				// in the same turn (`generateFileMentionMessages` packs every `@…` into a
-				// single message). Splitting by image presence keeps text-only mentions on
-				// the higher-priority `developer` slot while routing image attachments
-				// through `user`, the only Responses content slot that legitimately accepts
-				// `input_image` (Codex chatgpt.com /codex/responses rejects everything else
-				// with `Invalid value: 'input_image'`, #3443).
+				const cached = codingAgentMessageCache.get(m);
+				if (cached?.role === "fileMention" && cached.files === m.files) {
+					return cached.converted;
+				}
 				const wrap = (file: FileMentionMessage["files"][number]): string => {
 					const inner = file.content ? `\n${file.content}\n` : "\n";
 					return `<file path="${file.path}">${inner}</file>`;
@@ -957,12 +829,21 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 						timestamp: m.timestamp,
 					});
 				}
+				codingAgentMessageCache.set(m, {
+					role: "fileMention",
+					converted: out,
+					files: m.files,
+				});
 				return out;
 			}
 			case "custom": {
 				if (!isCustomMessageContent(m.content)) return [];
 				if (isUserInvokedSkillPrompt(m)) {
-					return [
+					const cached = codingAgentMessageCache.get(m);
+					if (cached?.role === "skillPrompt" && cached.content === m.content) {
+						return cached.converted;
+					}
+					const converted: Message[] = [
 						{
 							role: "user",
 							content: customMessageContentToLlmContent(m.content),
@@ -970,6 +851,15 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 							timestamp: m.timestamp,
 						},
 					];
+					codingAgentMessageCache.set(m, {
+						role: "skillPrompt",
+						converted,
+						content: m.content,
+					});
+					return converted;
+				}
+				if (m.customType === INTERRUPTED_THINKING_MESSAGE_TYPE) {
+					return convertInterruptedThinkingToLlm(m);
 				}
 				const split = convertImageBearingCustomMessage(m);
 				if (split) return split;
@@ -996,7 +886,8 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 			case "toolResult": {
 				// Core roles share one transformer with agent-core, but this one carries
 				// a standing instruction with an expiry, so it is spelled out.
-				const converted = convertMessageToLlm(expireAnsweredBatchLedger(messages, index, m));
+				const withVisibility = statePlacedImageVisibility(expireAnsweredBatchLedger(messages, index, m));
+				const converted = convertMessageToLlm(withVisibility);
 				return converted ? [converted] : [];
 			}
 			case "user": {
@@ -1014,8 +905,10 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 				return converted ? [converted] : [];
 			}
 			default:
-				m satisfies never;
-				return [];
+				// A role a tool domain added — the shell's `!` command and `$` run — converts through
+				// the kind its manifest declared. A role nobody declared throws rather than
+				// vanishing from the request.
+				return agentMessageKind<typeof m>(m.role).toLlm(m);
 		}
 	});
 }

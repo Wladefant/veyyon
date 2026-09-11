@@ -1,0 +1,118 @@
+import { Database } from "bun:sqlite";
+import { mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { mnemopiHome } from "../config";
+import { toUtcIso } from "../util/datetime";
+
+/**
+ * Resolved per call, for the reason given on `mnemopiHome`: a path decided at import
+ * time is a path no test and no operator can redirect.
+ */
+export function costLogDb(env: NodeJS.ProcessEnv = process.env): string {
+	return join(mnemopiHome(env), ".mnemopi", "data", "cost_log.db");
+}
+
+export interface CostStats {
+	total_calls: number;
+	total_memories_injected: number;
+	total_tokens: number;
+	total_estimated_cost_usd: number;
+}
+
+type AggregateRow = {
+	calls: number | null;
+	total_memories: number | null;
+	total_tokens: number | null;
+	total_cost: number | null;
+};
+
+export function getConn(dbPath?: string): Database {
+	const path = dbPath ?? costLogDb();
+	mkdirSync(dirname(path), { recursive: true });
+	return new Database(path, { create: true, readwrite: true, strict: true });
+}
+
+export const COST_LOG_SCHEMA_VERSION = 1;
+
+export function initCostLog(dbPath?: string): void {
+	const conn = getConn(dbPath);
+	try {
+		conn.run(`
+			CREATE TABLE IF NOT EXISTS cost_entries (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				session_id TEXT,
+				memory_count INTEGER,
+				token_count INTEGER,
+				estimated_cost_usd REAL,
+				model TEXT DEFAULT 'default',
+				timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+			)
+		`);
+
+		const cols = conn.query("PRAGMA table_info(cost_entries)").all() as Array<{ name: string }>;
+		if (!cols.some(c => c.name === "model")) {
+			conn.run("ALTER TABLE cost_entries ADD COLUMN model TEXT DEFAULT 'default'");
+		}
+
+		const versionRow = conn.query("PRAGMA user_version").get() as { user_version: number } | null;
+		const currentVersion = versionRow?.user_version ?? 0;
+		if (currentVersion < COST_LOG_SCHEMA_VERSION) {
+			conn.run(`PRAGMA user_version = ${COST_LOG_SCHEMA_VERSION}`);
+		}
+	} finally {
+		conn.close();
+	}
+}
+export function logCost(
+	sessionId: string,
+	memoryCount: number,
+	tokenCount: number,
+	estimatedCostUsd: number,
+	model = "default",
+	dbPath?: string,
+): void {
+	initCostLog(dbPath);
+	const conn = getConn(dbPath);
+	try {
+		conn
+			.query(`
+				INSERT INTO cost_entries (session_id, memory_count, token_count, estimated_cost_usd, model, timestamp)
+				VALUES (?, ?, ?, ?, ?, ?)
+			`)
+			.run(sessionId, memoryCount, tokenCount, estimatedCostUsd, model, toUtcIso());
+	} finally {
+		conn.close();
+	}
+}
+export function getCostStats(sessionId?: string, dbPath?: string): CostStats {
+	initCostLog(dbPath);
+	const conn = getConn(dbPath);
+	try {
+		const row = (
+			sessionId
+				? conn
+						.query(`
+						SELECT COUNT(*) as calls, SUM(memory_count) as total_memories,
+							SUM(token_count) as total_tokens, SUM(estimated_cost_usd) as total_cost
+						FROM cost_entries WHERE session_id = ?
+					`)
+						.get(sessionId)
+				: conn
+						.query(`
+						SELECT COUNT(*) as calls, SUM(memory_count) as total_memories,
+							SUM(token_count) as total_tokens, SUM(estimated_cost_usd) as total_cost
+						FROM cost_entries
+					`)
+						.get()
+		) as AggregateRow | null;
+
+		return {
+			total_calls: row?.calls ?? 0,
+			total_memories_injected: row?.total_memories ?? 0,
+			total_tokens: row?.total_tokens ?? 0,
+			total_estimated_cost_usd: Math.round((row?.total_cost ?? 0) * 1_000_000) / 1_000_000,
+		};
+	} finally {
+		conn.close();
+	}
+}

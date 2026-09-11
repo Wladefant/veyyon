@@ -23,12 +23,10 @@ const ALL_TOOLS = [
 	"edit",
 	"write",
 	"lsp",
-	"grep",
-	"glob",
+	"search",
 	"bash",
 	"inspect_image",
 	"report_tool_issue",
-	"ast_grep",
 	"ast_edit",
 ];
 
@@ -125,7 +123,7 @@ export const MATRIX: readonly { readonly label: string; readonly context: Record
 		},
 	},
 	{ label: "a language server and nothing else", context: { tools: ["lsp"], toolRefs: TOOL_REFS } },
-	{ label: "structural search only", context: { tools: ["ast_grep"], toolRefs: TOOL_REFS } },
+	{ label: "unified search only", context: { tools: ["search"], toolRefs: TOOL_REFS } },
 	{ label: "structural edit only", context: { tools: ["ast_edit"], toolRefs: TOOL_REFS } },
 	{ label: "the tool-issue reporter only", context: { tools: ["report_tool_issue"], toolRefs: TOOL_REFS } },
 	{
@@ -147,14 +145,14 @@ export const MATRIX: readonly { readonly label: string; readonly context: Record
 		context: {
 			tools: ALL_TOOLS,
 			toolRefs: TOOL_REFS,
-			subagentNames: ["scout"],
-			hasSpawnableSubagent: true,
+			agentNames: ["scout"],
+			hasSpawnableAgent: true,
 			eagerTasks: true,
 		},
 	},
 	{
 		label: "specialists enabled",
-		context: { tools: ALL_TOOLS, toolRefs: TOOL_REFS, hasSubagentSpecialists: true, eagerTasks: true },
+		context: { tools: ALL_TOOLS, toolRefs: TOOL_REFS, hasAgentSpecialists: true, eagerTasks: true },
 	},
 	{ label: "a personality configured", context: { personality: "Be terse." } },
 	{
@@ -181,9 +179,9 @@ export const MATRIX: readonly { readonly label: string; readonly context: Record
 			taskBatch: true,
 			taskIrcEnabled: true,
 			MAX_CONCURRENCY: 4,
-			subagentNames: ["scout"],
-			hasSpawnableSubagent: true,
-			hasSubagentSpecialists: true,
+			agentNames: ["scout"],
+			hasSpawnableAgent: true,
+			hasAgentSpecialists: true,
 			useCodexTaskPrompt: false,
 			personality: "Be terse.",
 		},

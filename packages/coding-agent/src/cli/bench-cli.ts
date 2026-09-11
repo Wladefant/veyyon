@@ -15,8 +15,9 @@ import type {
 } from "@veyyon/ai";
 import { resolveModelServiceTier, streamSimple } from "@veyyon/ai";
 import { buildModelProviderPriorityRank } from "@veyyon/catalog/identity";
-import { replaceTabs, truncateToWidth } from "@veyyon/tui";
-import { formatDuration, getAgentDir, getProjectDir } from "@veyyon/utils";
+import { errorMessage, formatDuration, getAgentDir, getProjectDir } from "@veyyon/utils";
+import { replaceTabs } from "@veyyon/utils/tab-width";
+import { truncateToWidth } from "@veyyon/utils/width";
 import chalk from "chalk";
 import type { ApiKeyResolverModel } from "../config/api-key-resolver";
 import { credentialRemedySentence } from "../config/missing-credentials";
@@ -131,11 +132,6 @@ export interface BenchDependencies {
 	streamSimple?: BenchStreamSimple;
 	now?: () => number;
 	stdoutIsTTY?: boolean;
-}
-
-function getErrorMessage(error: unknown): string {
-	if (error instanceof Error && error.message) return error.message;
-	return String(error);
 }
 
 function normalizePositiveInteger(name: string, value: number | undefined, fallback: number): number {
@@ -310,7 +306,7 @@ async function runBenchRequest(
 			tokensPerSecond: durationMs > 0 ? (outputTokens * 1000) / durationMs : 0,
 		};
 	} catch (error) {
-		return { ok: false, error: getErrorMessage(error) };
+		return { ok: false, error: errorMessage(error) };
 	} finally {
 		closeProviderSessionStates(providerSessionState);
 	}
@@ -352,7 +348,7 @@ function formatRunLine(result: BenchRunResult, index: number, total: number): st
 }
 
 export function formatBenchTable(summary: BenchSummary): string {
-	const ranked = [...summary.models].sort((a, b) => {
+	const ranked = summary.models.slice().sort((a, b) => {
 		if (a.average === null && b.average === null) return 0;
 		if (a.average === null) return 1;
 		if (b.average === null) return -1;
@@ -407,7 +403,7 @@ interface BenchTarget {
 function pickHighestPriorityProvider(models: Model<Api>[], providerOrder?: readonly string[]): Model<Api> | undefined {
 	if (models.length <= 1) return models[0];
 	const priority = buildModelProviderPriorityRank(providerOrder);
-	return [...models].sort((a, b) => {
+	return models.slice().sort((a, b) => {
 		const aRank = priority.get(a.provider.toLowerCase()) ?? Number.POSITIVE_INFINITY;
 		const bRank = priority.get(b.provider.toLowerCase()) ?? Number.POSITIVE_INFINITY;
 		return aRank - bRank;
@@ -457,7 +453,7 @@ function resolveBenchModels(
 	const resolved: BenchTarget[] = [];
 	const errors: string[] = [];
 	for (const selector of selectors) {
-		const result = resolveCliModel({ cliModel: selector, modelRegistry, preferences });
+		const result = resolveCliModel({ cliModel: selector, modelRegistry, preferences, settings });
 		if (result.error) {
 			errors.push(`${selector}: ${result.error}`);
 			continue;

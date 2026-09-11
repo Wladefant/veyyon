@@ -1,10 +1,17 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isEnoent, isRecord, logger, quarantineUnparseableFile, syncYamlTextToSettings } from "@veyyon/utils";
+import {
+	errorMessage,
+	isEnoent,
+	isRecord,
+	logger,
+	quarantineUnparseableFile,
+	syncYamlTextToSettings,
+} from "@veyyon/utils";
 import { type } from "arktype";
 import { YAML } from "bun";
 import { expandAtImports } from "../discovery/at-imports";
-import { BUILTIN_TOOL_NAMES, normalizeToolNames } from "../tools/builtin-names";
+import { BUILTIN_TOOL_NAMES, normalizeToolNames } from "../tools/core/builtin-names";
 import { collectConfigCandidates } from "./watchdog";
 
 /**
@@ -13,9 +20,8 @@ import { collectConfigCandidates } from "./watchdog";
  * resolved exactly like any other model override; `tools` is a subset of
  * `BUILTIN_TOOL_NAMES` — any built-in name, including mutating tools such as
  * `edit`/`write`/`bash` (the advisor is a full agent). Omitted falls back to
- * the default `read`/`grep`/`glob` subset; an explicit empty list grants no
- * tools. `instructions` is the advisor's specialization, appended to the shared
- * baseline.
+ * the default `read`/`search` subset; an explicit empty list grants no tools.
+ * `instructions` is the advisor's specialization, appended to the shared baseline.
  */
 export interface AdvisorConfig {
 	name: string;
@@ -95,13 +101,13 @@ const KNOWN_TOOL_NAMES = new Set<string>(BUILTIN_TOOL_NAMES);
  * Keep only valid tool names from an advisor's `tools` list, dropping unknowns
  * with a warning. The advisor is a full agent, so any built tool may be granted;
  * the runtime further filters to what's actually available this session.
- * `undefined` means "use the default subset" (read/grep/glob); only an explicit
- * raw empty list means "no tools".
+ * `undefined` means "use the default subset" (`read` and `search`); only an
+ * explicit raw empty list means "no tools".
  */
 function filterAdvisorTools(tools: string[] | undefined, sourcePath: string): string[] | undefined {
 	if (tools === undefined) return undefined;
 	if (tools.length === 0) return [];
-	// Normalize legacy aliases (search→grep, find→glob) and dedupe before validating.
+	// Normalize casing and deduplicate before validating.
 	const filtered = normalizeToolNames(tools).filter(name => {
 		if (KNOWN_TOOL_NAMES.has(name)) return true;
 		logger.warn("Advisor config: dropping unknown tool", { path: sourcePath, tool: name });
@@ -128,7 +134,7 @@ export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Pr
 		try {
 			parsed = YAML.parse(item.content);
 		} catch (err) {
-			logger.warn("Advisor config: failed to parse YAML", { path: item.path, error: String(err) });
+			logger.warn("Advisor config: failed to parse YAML", { path: item.path, error: errorMessage(err) });
 			continue;
 		}
 		if (!isRecord(parsed)) {
@@ -161,7 +167,7 @@ export async function discoverAdvisorConfigs(cwd: string, agentDir?: string): Pr
 	}
 
 	return {
-		advisors: [...advisors.values()],
+		advisors: Array.from(advisors.values()),
 		sharedInstructions: sharedParts.length > 0 ? sharedParts.join("\n\n") : undefined,
 	};
 }
@@ -225,7 +231,7 @@ export async function loadWatchdogConfigFile(filePath: string): Promise<Watchdog
 		text = await Bun.file(filePath).text();
 	} catch (err) {
 		if (!isEnoent(err))
-			logger.warn("Advisor config: failed to read for edit", { path: filePath, error: String(err) });
+			logger.warn("Advisor config: failed to read for edit", { path: filePath, error: errorMessage(err) });
 		return { advisors: [] };
 	}
 	let parsed: unknown;
@@ -251,7 +257,7 @@ export async function loadWatchdogConfigFile(filePath: string): Promise<Watchdog
 		advisors: (result.advisors ?? []).map(a => ({
 			name: a.name,
 			model: a.model?.trim() || undefined,
-			tools: a.tools === undefined ? undefined : [...a.tools],
+			tools: a.tools === undefined ? undefined : Array.from(a.tools),
 			instructions: a.instructions?.trim() ? a.instructions : undefined,
 		})),
 	};
@@ -270,7 +276,7 @@ export function serializeWatchdogConfig(doc: WatchdogConfigDoc): string {
 		out.advisors = doc.advisors.map(a => {
 			const entry: AdvisorConfig = { name: a.name };
 			if (a.model?.trim()) entry.model = a.model;
-			if (a.tools !== undefined) entry.tools = [...a.tools];
+			if (a.tools !== undefined) entry.tools = Array.from(a.tools);
 			if (a.instructions?.trim()) entry.instructions = a.instructions;
 			return entry;
 		});
@@ -316,7 +322,7 @@ export async function saveWatchdogConfigFile(filePath: string, doc: WatchdogConf
 		edited = syncYamlTextToSettings(existingText, YAML.parse(content) as Record<string, unknown>);
 	} catch (err) {
 		throw new Error(
-			`Cannot save ${filePath}: its current contents cannot be edited in place (${String(err)}). ` +
+			`Cannot save ${filePath}: its current contents cannot be edited in place (${errorMessage(err)}). ` +
 				"Fix the file, or move it aside and save again.",
 			{ cause: err },
 		);

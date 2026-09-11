@@ -1,10 +1,10 @@
 import { beforeAll, describe, expect, test, vi } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
-import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/types";
-import { UiHelpers } from "@veyyon/coding-agent/modes/utils/ui-helpers";
-import { buildSessionContext, type SessionContext } from "@veyyon/coding-agent/session/session-context";
+import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
+import { UiHelpers } from "@veyyon/coding-agent/modes/terminal/utils/ui-helpers";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import { buildSessionContext, type SessionContext } from "@veyyon/kernel/session/session-context";
 import { type Component, Container } from "@veyyon/tui";
 
 function renderLastLine(container: Container, width = 120): string {

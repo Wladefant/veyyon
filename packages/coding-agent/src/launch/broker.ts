@@ -2,9 +2,10 @@ import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Process, type PtyRunResult, PtySession } from "@veyyon/natives";
+import { type PtyRunResult, PtySession } from "@veyyon/natives";
 import {
 	atomicWriteFile,
+	clamp,
 	clampLow,
 	errorMessage,
 	isEexist,
@@ -14,8 +15,10 @@ import {
 	postmortem,
 	sanitizeText,
 } from "@veyyon/utils";
+import { processHandle } from "@veyyon/utils/native-process";
 import { truncateHead, truncateHeadBytes, truncateTail, truncateTailBytes } from "../session/streaming-output";
 import { workerEnvFromParent } from "../subprocess/worker-client";
+import { appendDaemonCompletion, readDaemonCompletions } from "./completions";
 import {
 	daemonBrokerEndpoint,
 	daemonBrokerLeasePath,
@@ -29,17 +32,21 @@ import {
 } from "./paths";
 import { hasLiveDaemonProjectPresence } from "./presence";
 import {
+	DAEMON_CLEANUP_WAIT_ENV,
 	DAEMON_IDLE_GRACE_ENV,
 	DAEMON_PROJECT_DIR_ENV,
 	DAEMON_PTY_COLUMNS,
 	DAEMON_PTY_ROWS,
 	DAEMON_RUNTIME_DIR_ENV,
+	type DaemonCompletionRecord,
 	type DaemonOperation,
 	type DaemonReadySpec,
 	type DaemonRpcResult,
 	type DaemonSignal,
 	type DaemonSnapshot,
 	type DaemonSpec,
+	type DaemonTerminationOwner,
+	DEFAULT_CLEANUP_WAIT_MS,
 	parseDaemonSnapshot,
 	parseDaemonSpec,
 	parseDaemonWireRequest,
@@ -54,6 +61,34 @@ const LOG_ROTATE_BYTES = 25 * 1024 * 1024;
 const LOG_READ_BYTES = 2 * 1024 * 1024;
 const READINESS_BUFFER_CHARS = 64 * 1024;
 const RESTART_MAX_DELAY_MS = 30_000;
+/** Output carried in a retained completion record, in lines and in bytes. */
+const COMPLETION_TAIL_LINES = 40;
+const COMPLETION_TAIL_BYTES = 4_000;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+/**
+ * Attribution for a termination a broker component is about to cause: which
+ * component, and the triggering condition as a human sentence. Set on the
+ * record BEFORE the signal goes out, so the settle that observes the death can
+ * name its cause instead of reporting an unexplained signal.
+ */
+interface DaemonTerminationSource {
+	owner: DaemonTerminationOwner;
+	reason: string;
+	/** The signal sent, when the path sent one, so a PTY daemon (which reports no signalCode) still names it. */
+	signal?: DaemonSignal;
+	/** When the attribution was set; an operator-signal attribution expires (see #settle). */
+	at: number;
+}
+
+/**
+ * How long a `launch send signal=...` attribution stays valid. A handled
+ * signal (a SIGHUP a daemon traps) does not kill, and attributing a natural
+ * exit minutes later to it would be exactly the mislabeled death this exists
+ * to prevent, so the attribution expires and the settle falls back to the
+ * process's own end.
+ */
+const SIGNAL_ATTRIBUTION_WINDOW_MS = 10_000;
 
 const SIGNAL_NUMBER: Record<DaemonSignal, number> = {
 	SIGINT: os.constants.signals.SIGINT,
@@ -74,6 +109,7 @@ interface ManagedProcess {
 	 */
 	signalCode?: string | null;
 	unref(): void;
+	kill(signal?: number): void;
 }
 
 interface ManagedDaemon {
@@ -94,6 +130,8 @@ interface ManagedDaemon {
 	restartTimer?: NodeJS.Timeout;
 	consecutiveFailures: number;
 	persistQueue: Promise<void>;
+	/** Attribution for the death of the CURRENT generation, set before the signal goes out. */
+	termination?: DaemonTerminationSource;
 }
 
 interface BrokerLease {
@@ -299,20 +337,32 @@ class DaemonBroker {
 	readonly #endpoint: string;
 	readonly #token: string;
 	readonly #idleGraceMs: number;
+	readonly #cleanupWaitMs: number;
+	readonly #cleanupTimers = new Map<string, NodeJS.Timeout>();
 	readonly #records = new Map<string, ManagedDaemon>();
 	readonly #clients = new Set<net.Socket>();
 	readonly #finished = Promise.withResolvers<void>();
 	readonly #sockets = new Set<net.Socket>();
+	/** Serializes read-modify-write passes over the completion store. */
+	#completionsQueue: Promise<void> = Promise.resolve();
 	#server: net.Server | undefined;
 	#idleTimer: NodeJS.Timeout | undefined;
 	#shuttingDown = false;
 
-	constructor(projectDir: string, runtimeDir: string, token: string, idleGraceMs: number) {
+	constructor(
+		projectDir: string,
+		runtimeDir: string,
+		token: string,
+		idleGraceMs: number,
+		cleanupWaitMs = DEFAULT_CLEANUP_WAIT_MS,
+	) {
 		this.#projectDir = projectDir;
 		this.#runtimeDir = runtimeDir;
 		this.#endpoint = daemonBrokerEndpoint(projectDir, runtimeDir);
 		this.#token = token;
-		this.#idleGraceMs = idleGraceMs;
+		this.#idleGraceMs = Number.isFinite(idleGraceMs) && idleGraceMs >= 0 ? idleGraceMs : DEFAULT_IDLE_GRACE_MS;
+		this.#cleanupWaitMs =
+			Number.isFinite(cleanupWaitMs) && cleanupWaitMs >= 0 ? cleanupWaitMs : DEFAULT_CLEANUP_WAIT_MS;
 	}
 
 	async run(): Promise<void> {
@@ -330,18 +380,31 @@ class DaemonBroker {
 		await this.#finished.promise;
 	}
 
-	async shutdown(): Promise<void> {
+	async shutdown(
+		termination: DaemonTerminationSource = {
+			owner: "os-signal",
+			reason: "the broker process itself is exiting (OS signal or process exit)",
+			at: Date.now(),
+		},
+	): Promise<void> {
 		if (this.#shuttingDown) return this.#finished.promise;
 		this.#shuttingDown = true;
 		clearTimeout(this.#idleTimer);
 		this.#idleTimer = undefined;
+		for (const timer of this.#cleanupTimers.values()) clearTimeout(timer);
+		this.#cleanupTimers.clear();
 		for (const record of this.#records.values()) {
 			const detached = record.spec.detached && !record.stopRequested && record.snapshot.pid !== undefined;
-			if (!detached && !terminalState(record.snapshot.state)) await this.#stopRecord(record, 2_000);
+			if (!detached && !terminalState(record.snapshot.state)) await this.#stopRecord(record, 2_000, termination);
 			clearTimeout(record.restartTimer);
 			await record.log?.close();
 			await record.persistQueue;
 		}
+		for (const timer of this.#cleanupTimers.values()) clearTimeout(timer);
+		this.#cleanupTimers.clear();
+		// Settles queue completion records asynchronously; the store write must
+		// land before the socket closes or a shutdown loses the deaths it caused.
+		await this.#completionsQueue;
 		for (const socket of this.#sockets) socket.destroy();
 		this.#sockets.clear();
 		this.#clients.clear();
@@ -401,7 +464,17 @@ class DaemonBroker {
 			onAuthenticated();
 			const result = await this.#dispatch(request.operation);
 			socket.write(`${JSON.stringify({ id, ok: true, result })}\n`);
-			if (request.operation.op === "shutdown") setTimeout(() => void this.shutdown(), 10);
+			if (request.operation.op === "shutdown") {
+				setTimeout(
+					() =>
+						void this.shutdown({
+							owner: "broker-shutdown",
+							reason: "a veyyon client requested broker shutdown",
+							at: Date.now(),
+						}),
+					10,
+				);
+			}
 		} catch (error) {
 			const message = errorMessage(error);
 			socket.write(`${JSON.stringify({ id, ok: false, error: message })}\n`);
@@ -415,12 +488,13 @@ class DaemonBroker {
 			case "start":
 				return this.#start(operation.spec, operation.owner);
 			case "list": {
-				await Promise.all([...this.#records.values()].map(record => this.#refreshDetached(record)));
+				await Promise.all(Array.from(this.#records.values()).map(record => this.#refreshDetached(record)));
 				return {
 					op: "list",
-					daemons: [...this.#records.values()]
+					daemons: Array.from(this.#records.values())
 						.sort((left, right) => left.snapshot.createdAt - right.snapshot.createdAt)
 						.map(record => record.snapshot),
+					completions: await this.#completionRecords(),
 				};
 			}
 			case "logs":
@@ -461,6 +535,7 @@ class DaemonBroker {
 			throw new Error('Windows batch files require application "cmd.exe" with the batch path after "/c"');
 		}
 		const existing = this.#records.get(spec.name);
+		this.#cancelCleanup(spec.name);
 		if (existing) await this.#refreshDetached(existing);
 		if (existing && !terminalState(existing.snapshot.state)) {
 			throw new Error(`Daemon ${spec.name} is already ${existing.snapshot.state}`);
@@ -518,6 +593,7 @@ class DaemonBroker {
 		record.generation++;
 		const generation = record.generation;
 		record.stopRequested = false;
+		record.termination = undefined;
 		record.snapshot.state = record.spec.ready ? "starting" : "running";
 		record.snapshot.startedAt = Date.now();
 		record.snapshot.readyAt = undefined;
@@ -525,6 +601,7 @@ class DaemonBroker {
 		record.snapshot.exitCode = undefined;
 		record.snapshot.signal = undefined;
 		record.snapshot.exitReason = undefined;
+		record.snapshot.terminatedBy = undefined;
 		record.snapshot.pid = undefined;
 		record.snapshot.readyMatch = undefined;
 		record.logReady = !record.spec.ready?.log;
@@ -542,6 +619,11 @@ class DaemonBroker {
 		} catch (error) {
 			const message = errorMessage(error);
 			record.log?.append(`Daemon launch failed: ${message}\n`);
+			record.termination = {
+				owner: "launch-failure",
+				reason: `the broker failed to launch it: ${message}`,
+				at: Date.now(),
+			};
 			await this.#settle(record, generation, undefined, message);
 		}
 	}
@@ -710,7 +792,7 @@ class DaemonBroker {
 		const generation = record.generation;
 		await this.#readDetachedOutput(record, generation);
 		if (generation !== record.generation || record.process) return;
-		const processRef = record.snapshot.pid === undefined ? null : Process.fromPid(record.snapshot.pid);
+		const processRef = record.snapshot.pid === undefined ? null : processHandle(record.snapshot.pid);
 		if (processRef?.status() === "running") return;
 		await this.#settle(record, generation);
 	}
@@ -755,7 +837,18 @@ class DaemonBroker {
 		// stopRequested — so a stop-terminated daemon reports SIGTERM and suppresses
 		// the shell's misleading numeric exit code. (A crash the operator did NOT
 		// request keeps its exitCode and normal failed/restart handling below.)
-		const signal = record.process?.signalCode ?? (record.stopRequested ? "SIGTERM" : undefined);
+		// Name the killer. An unexplained death is indistinguishable from a
+		// crash, so EVERY terminal transition records an owner and a reason: the
+		// attribution a component set before signalling, an external signal
+		// nothing in veyyon sent, or the process's own end. An operator-signal
+		// attribution expires: a trapped signal does not kill, and blaming it
+		// for a much later natural exit would be a mislabeled death.
+		let attribution = record.termination;
+		if (attribution?.owner === "operator-signal" && Date.now() - attribution.at > SIGNAL_ATTRIBUTION_WINDOW_MS) {
+			attribution = undefined;
+		}
+		record.termination = undefined;
+		const signal = record.process?.signalCode ?? (record.stopRequested ? "SIGTERM" : attribution?.signal);
 		record.process = undefined;
 		record.input = undefined;
 		record.pty = undefined;
@@ -763,13 +856,27 @@ class DaemonBroker {
 		record.snapshot.exitedAt = Date.now();
 		record.snapshot.exitCode = signal ? undefined : exitCode;
 		record.snapshot.signal = signal ?? undefined;
-		record.snapshot.exitReason = error;
 		record.snapshot.readyPending = undefined;
+		if (attribution) {
+			record.snapshot.terminatedBy = attribution.owner;
+			record.snapshot.exitReason = attribution.reason;
+		} else if (signal) {
+			record.snapshot.terminatedBy = "external-signal";
+			record.snapshot.exitReason = `terminated by ${signal}; no veyyon component sent a signal, so the killer was external (another process, or the OOM killer)`;
+		} else if (error !== undefined) {
+			record.snapshot.terminatedBy = "process-exit";
+			record.snapshot.exitReason = error;
+		} else {
+			record.snapshot.terminatedBy = "process-exit";
+			record.snapshot.exitReason =
+				exitCode === undefined ? "the process ended without an exit code" : `exited with code ${exitCode}`;
+		}
 		const failed = error !== undefined || (exitCode !== undefined && exitCode !== 0);
 		const shouldRestart =
 			!record.stopRequested &&
 			(record.spec.restart === "always" || (record.spec.restart === "on-failure" && failed));
 		if (shouldRestart && !this.#shuttingDown) {
+			this.#queueCompletion(record);
 			const uptime = Date.now() - record.snapshot.startedAt;
 			record.consecutiveFailures = uptime >= 30_000 ? 0 : record.consecutiveFailures + 1;
 			record.snapshot.restartCount++;
@@ -785,10 +892,58 @@ class DaemonBroker {
 			}, delay);
 			return;
 		}
-		record.snapshot.state = failed && !record.stopRequested ? "failed" : "exited";
-		this.#persist(record);
+		// Close the log and queue the retained completion record BEFORE the
+		// terminal state becomes visible. `#stopRecord` returns as soon as a
+		// terminal state is observed, and broker shutdown follows it out of the
+		// process, so the completion write has to be on the queue by then or a
+		// shutdown loses the record of the deaths it caused.
 		await record.log?.close();
 		record.log = undefined;
+		this.#queueCompletion(record);
+		record.snapshot.state = failed && !record.stopRequested ? "failed" : "exited";
+		this.#persist(record);
+		this.#scheduleCleanup(record);
+	}
+
+	#cancelCleanup(name: string): void {
+		const timer = this.#cleanupTimers.get(name);
+		if (timer === undefined) return;
+		clearTimeout(timer);
+		this.#cleanupTimers.delete(name);
+	}
+
+	#scheduleCleanup(record: ManagedDaemon): void {
+		if (this.#shuttingDown || this.#cleanupWaitMs <= 0) return;
+		const name = record.snapshot.name;
+		this.#cancelCleanup(name);
+		const exitedAt = record.snapshot.exitedAt ?? Date.now();
+		const delayMs = clamp(exitedAt + this.#cleanupWaitMs - Date.now(), 0, MAX_TIMER_DELAY_MS);
+		const timer = setTimeout(() => {
+			this.#cleanupTimers.delete(name);
+			void this.#purgeRecord(name);
+		}, delayMs);
+		// A retained record is not a reason to keep the broker alive; the socket is.
+		timer.unref();
+		this.#cleanupTimers.set(name, timer);
+	}
+
+	async #purgeRecord(name: string): Promise<void> {
+		const record = this.#records.get(name);
+		if (!record || !terminalState(record.snapshot.state)) return;
+		this.#cancelCleanup(name);
+		// Nothing is torn down until the purge is committed. `persistQueue` yields,
+		// and a start under the same name during that yield replaces the record: an
+		// early `log.close()` left the new generation live in `#records` with no log
+		// handle, and the later `fs.rm` wiped its directory.
+		await record.persistQueue;
+		if (this.#records.get(name) !== record || !terminalState(record.snapshot.state)) return;
+		this.#records.delete(name);
+		clearTimeout(record.restartTimer);
+		await record.log?.close();
+		record.log = undefined;
+		await fs.rm(record.dir, { recursive: true, force: true }).catch(error => {
+			logger.warn("Failed to remove purged daemon directory", { name, error: errorMessage(error) });
+		});
 	}
 
 	async #logs(operation: Extract<DaemonOperation, { op: "logs" }>): Promise<DaemonRpcResult> {
@@ -868,11 +1023,19 @@ class DaemonBroker {
 			} else throw new Error(`Daemon ${operation.name} stdin is unavailable`);
 		}
 		if (operation.signal) {
+			// Attribute before signalling: the settle that observes this death
+			// reports WHO sent the signal rather than an unexplained termination.
+			record.termination = {
+				owner: "operator-signal",
+				reason: `${operation.signal} delivered by launch send`,
+				signal: operation.signal,
+				at: Date.now(),
+			};
 			if (process.platform === "win32" && record.pty) {
 				if (operation.signal === "SIGINT") record.pty.write("\u0003");
 				else record.pty.kill();
 			} else {
-				const processRef = record.snapshot.pid === undefined ? null : Process.fromPid(record.snapshot.pid);
+				const processRef = record.snapshot.pid === undefined ? null : processHandle(record.snapshot.pid);
 				if (!processRef) throw new Error(`Daemon ${operation.name} process is unavailable`);
 				processRef.killTree(SIGNAL_NUMBER[operation.signal]);
 			}
@@ -880,32 +1043,72 @@ class DaemonBroker {
 		return { op: "send", daemon: record.snapshot };
 	}
 
-	async #stopRecord(record: ManagedDaemon, timeoutMs: number): Promise<void> {
+	async #stopRecord(
+		record: ManagedDaemon,
+		timeoutMs: number,
+		termination: DaemonTerminationSource = {
+			owner: "operator-stop",
+			reason: "stopped by launch stop (SIGTERM)",
+			signal: "SIGTERM",
+			at: Date.now(),
+		},
+	): Promise<void> {
 		await this.#refreshDetached(record);
 		if (terminalState(record.snapshot.state)) return;
 		record.stopRequested = true;
+		record.termination = termination;
 		if (record.restartTimer) {
 			clearTimeout(record.restartTimer);
 			record.restartTimer = undefined;
+			record.snapshot.terminatedBy = termination.owner;
+			record.snapshot.exitReason = `${termination.reason}; the pending restart is cancelled`;
 			record.snapshot.state = "exited";
 			record.snapshot.exitedAt = Date.now();
 			this.#persist(record);
 			await record.log?.close();
 			record.log = undefined;
+			// No completion is queued here. `#settle` already queued one for this
+			// execution generation when the process crashed and armed the restart, so
+			// a second write put two deaths for one run into `completions.json`. The
+			// operator-stop attribution reaches `list` through the persisted snapshot
+			// above.
+			this.#scheduleCleanup(record);
 			return;
 		}
 		record.snapshot.state = "stopping";
 		this.#persist(record);
-		const processRef = record.snapshot.pid === undefined ? null : Process.fromPid(record.snapshot.pid);
+		const processRef = record.snapshot.pid === undefined ? null : processHandle(record.snapshot.pid);
 		if (processRef) await processRef.terminate({ group: true, gracefulMs: timeoutMs, timeoutMs: timeoutMs + 1_000 });
 		else record.pty?.kill();
+		// Process.terminate kills the OS PID and its group, but for pipe-spawned
+		// daemons Bun's Subprocess streams may not close immediately, blocking the
+		// `Promise.all([stdout, stderr, process.exited])` settle path.  Kill the
+		// Bun Subprocess directly so its streams are torn down and #settle fires.
+		record.process?.kill();
 		const settled = await this.#waitUntil(record, () => terminalState(record.snapshot.state), timeoutMs + 1_000);
-		if (!settled && record.pty) record.pty.kill();
+		if (!settled) {
+			// The process is confirmed dead (Process.terminate awaited above) but the
+			// settle callback has not fired yet — the PTY or Bun Subprocess exit
+			// notification lagged.  Force-settle so the completion record is queued
+			// before shutdown flushes the queue.
+			record.pty?.kill();
+			record.process?.kill();
+			await this.#settle(record, record.generation);
+		}
 	}
 
 	async #restart(name: string): Promise<DaemonRpcResult> {
 		const record = this.#record(name);
-		await this.#stopRecord(record, 2_000);
+		await this.#stopRecord(record, 2_000, {
+			owner: "operator-restart",
+			reason: "stopped by launch restart to start a new generation",
+			signal: "SIGTERM",
+			at: Date.now(),
+		});
+		// Stopping a live record settles it, and settling arms a purge timer. The
+		// cancel has to follow the stop, or the new generation runs with a timer
+		// armed against the corpse of the old one.
+		this.#cancelCleanup(name);
 		await record.log?.close();
 		record.log = await DaemonLog.open(record.dir);
 		record.stopRequested = false;
@@ -929,7 +1132,7 @@ class DaemonBroker {
 	#record(name: string): ManagedDaemon {
 		const record = this.#records.get(name);
 		if (record) return record;
-		const names = [...this.#records.keys()];
+		const names = Array.from(this.#records.keys());
 		throw new Error(`Unknown daemon ${name}${names.length ? `. Available: ${names.join(", ")}` : ""}`);
 	}
 
@@ -943,6 +1146,67 @@ class DaemonBroker {
 					error: errorMessage(error),
 				});
 			});
+	}
+
+	/**
+	 * Retain the completion record of one terminal generation: exit code or
+	 * signal, WHO ended it and WHY, timestamps, and the tail of its output.
+	 * The write is serialized through `#completionsQueue` so concurrent settles
+	 * cannot interleave a read-modify-write of the store.
+	 */
+	#queueCompletion(record: ManagedDaemon): void {
+		const snapshot = record.snapshot;
+		const completion: DaemonCompletionRecord = {
+			name: snapshot.name,
+			id: snapshot.id,
+			owner: snapshot.owner,
+			terminatedBy: snapshot.terminatedBy ?? "process-exit",
+			exitReason: snapshot.exitReason,
+			exitCode: snapshot.exitCode,
+			signal: snapshot.signal,
+			createdAt: snapshot.createdAt,
+			startedAt: snapshot.startedAt,
+			exitedAt: snapshot.exitedAt ?? Date.now(),
+			restartCount: snapshot.restartCount,
+			outputBytes: snapshot.outputBytes,
+			outputTail: "",
+		};
+		this.#completionsQueue = this.#completionsQueue
+			.then(async () => {
+				const tail = await DaemonLog.readFiles(
+					managedDaemonLogPath(record.dir),
+					managedDaemonPreviousLogPath(record.dir),
+					false,
+					COMPLETION_TAIL_LINES,
+				);
+				completion.outputTail =
+					tail.text.length > COMPLETION_TAIL_BYTES ? `…${tail.text.slice(-COMPLETION_TAIL_BYTES)}` : tail.text;
+				await appendDaemonCompletion(this.#runtimeDir, completion);
+			})
+			.catch(error => {
+				logger.warn("Failed to retain daemon completion record", {
+					name: snapshot.name,
+					error: errorMessage(error),
+				});
+			});
+	}
+
+	/**
+	 * The retained completion records for the `list` result. A store that
+	 * cannot be read — corrupt, or written by another schema version — is
+	 * rejected rather than served: the caller gets no records and a log line,
+	 * never a stale one.
+	 */
+	async #completionRecords(): Promise<DaemonCompletionRecord[]> {
+		await this.#completionsQueue;
+		try {
+			return await readDaemonCompletions(this.#runtimeDir);
+		} catch (error) {
+			logger.warn("Rejected unreadable daemon completion records", {
+				error: errorMessage(error),
+			});
+			return [];
+		}
 	}
 
 	async #recoverRecords(): Promise<void> {
@@ -961,23 +1225,39 @@ class DaemonBroker {
 				}
 				const snapshot = parseDaemonSnapshot(decoded.daemon);
 				const spec = parseDaemonSpec(decoded.spec);
-				const processRef = snapshot.pid === undefined ? null : Process.fromPid(snapshot.pid);
+				const processRef = snapshot.pid === undefined ? null : processHandle(snapshot.pid);
+				const wasTerminal = terminalState(snapshot.state);
 				const detached =
-					spec.detached &&
-					!terminalState(snapshot.state) &&
-					snapshot.state !== "stopping" &&
-					processRef?.status() === "running";
-				if (!detached) {
+					spec.detached && !wasTerminal && snapshot.state !== "stopping" && processRef?.status() === "running";
+				if (!detached && !wasTerminal) {
 					if (processRef) await processRef.terminate({ group: true, gracefulMs: 500, timeoutMs: 2_000 });
 					snapshot.pid = undefined;
 					snapshot.state = "exited";
 					snapshot.exitedAt = Date.now();
-					snapshot.exitReason = "previous broker exited";
-				} else if (snapshot.state === "restarting") {
-					snapshot.state = spec.ready ? "starting" : "running";
+					if (spec.detached) {
+						// A detached daemon outlives its broker by design, so one that is
+						// already gone was not terminated by this replacement. Recording
+						// `broker-recovery` here asserted both that the replacement killed
+						// it and that it was non-detached, and neither is true.
+						snapshot.terminatedBy = "process-exit";
+						snapshot.exitReason = "exited while no broker was supervising it";
+					} else {
+						snapshot.terminatedBy = "broker-recovery";
+						snapshot.exitReason =
+							"the previous broker exited; its replacement terminated this non-detached daemon";
+					}
+				} else if (wasTerminal) {
+					snapshot.pid = undefined;
 				}
 				snapshot.persist = spec.persist;
 				snapshot.detached = spec.detached;
+				if (this.#cleanupWaitMs > 0 && terminalState(snapshot.state)) {
+					const exitedAt = snapshot.exitedAt ?? Date.now();
+					if (Date.now() - exitedAt >= this.#cleanupWaitMs) {
+						await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+						continue;
+					}
+				}
 				const record: ManagedDaemon = {
 					spec,
 					snapshot,
@@ -997,6 +1277,14 @@ class DaemonBroker {
 				if (detached && spec.ready?.port !== undefined && snapshot.state !== "ready") {
 					void this.#pollPort(record, record.generation, spec.ready);
 				}
+				// A daemon the dead broker never settled never got a completion
+				// record; the recovery kill above IS its terminal transition, so
+				// retain it here. One already terminal on disk was recorded by the
+				// broker that settled it.
+				if (!detached && !wasTerminal) this.#queueCompletion(record);
+				if (terminalState(snapshot.state)) {
+					this.#scheduleCleanup(record);
+				}
 				this.#persist(record);
 			} catch (error) {
 				logger.warn("Failed to recover daemon record", {
@@ -1013,7 +1301,7 @@ class DaemonBroker {
 		this.#idleTimer = setTimeout(() => {
 			this.#idleTimer = undefined;
 			void (async () => {
-				const livePersistent = [...this.#records.values()].some(
+				const livePersistent = Array.from(this.#records.values()).some(
 					record => record.spec.persist && !terminalState(record.snapshot.state),
 				);
 				if (this.#clients.size > 0 || livePersistent) return;
@@ -1021,7 +1309,14 @@ class DaemonBroker {
 					this.#scheduleIdleShutdown();
 					return;
 				}
-				if (this.#clients.size === 0) await this.shutdown();
+				if (this.#clients.size === 0) {
+					await this.shutdown({
+						owner: "idle-reaper",
+						reason:
+							"the last veyyon client disconnected and the idle grace elapsed with no persistent daemon or live project presence remaining",
+						at: Date.now(),
+					});
+				}
 			})();
 		}, this.#idleGraceMs);
 	}
@@ -1038,13 +1333,17 @@ export async function startDaemonBrokerFromEnvironment(): Promise<void> {
 	delete process.env[DAEMON_IDLE_GRACE_ENV];
 	const parsedGrace = rawGrace === undefined ? DEFAULT_IDLE_GRACE_MS : Number.parseInt(rawGrace, 10);
 	const idleGraceMs = Number.isFinite(parsedGrace) && parsedGrace >= 0 ? parsedGrace : DEFAULT_IDLE_GRACE_MS;
+	const rawCleanup = process.env[DAEMON_CLEANUP_WAIT_ENV];
+	delete process.env[DAEMON_CLEANUP_WAIT_ENV];
+	const parsedCleanup = rawCleanup === undefined ? DEFAULT_CLEANUP_WAIT_MS : Number.parseInt(rawCleanup, 10);
+	const cleanupWaitMs = Number.isFinite(parsedCleanup) && parsedCleanup >= 0 ? parsedCleanup : DEFAULT_CLEANUP_WAIT_MS;
 	await fs.mkdir(runtimeDir, { recursive: true, mode: 0o700 });
 	const lease = await acquireBrokerLease(runtimeDir);
 	if (!lease) return;
 	process.title = "veyyon daemon broker";
 	const token = (await Bun.file(daemonBrokerTokenPath(runtimeDir)).text()).trim();
 	if (!token) throw new Error("Daemon broker token is empty");
-	const broker = new DaemonBroker(projectDir, runtimeDir, token, idleGraceMs);
+	const broker = new DaemonBroker(projectDir, runtimeDir, token, idleGraceMs, cleanupWaitMs);
 	const cancelCleanup = postmortem.register("daemon-broker", () => broker.shutdown());
 	try {
 		await broker.run();

@@ -15,6 +15,7 @@ import {
 	zLoadSessionResponse,
 	zNewSessionResponse,
 	zPromptResponse,
+	zResumeSessionResponse,
 	zSessionNotification,
 } from "@agentclientprotocol/sdk/dist/schema/zod.gen.js";
 import type { Model } from "@veyyon/ai";
@@ -32,17 +33,18 @@ import {
 	createAcpExtensionUiContext,
 } from "@veyyon/coding-agent/modes/acp/acp-agent";
 import type { PlanModeState } from "@veyyon/coding-agent/plan-mode/state";
-import type { AgentSession, AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 import { SILENT_ABORT_MARKER } from "@veyyon/coding-agent/session/messages";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
-import { DEFAULT_STT_MODEL_KEY, STT_MODEL_OPTIONS } from "@veyyon/coding-agent/stt/models";
-import { CONFIGURED_THINKING_LEVELS, configuredThinkingLevelsForModel } from "@veyyon/coding-agent/thinking";
+import { DEFAULT_STT_MODEL_KEY, STT_MODEL_OPTIONS } from "@veyyon/coding-agent/speech/stt/models";
 import {
 	DEFAULT_TTS_LOCAL_MODEL_KEY,
 	DEFAULT_TTS_VOICE,
 	TTS_LOCAL_MODELS,
 	TTS_LOCAL_VOICE_OPTIONS,
-} from "@veyyon/coding-agent/tts/models";
+} from "@veyyon/coding-agent/speech/tts/models";
+import { CONFIGURED_THINKING_LEVELS, configuredThinkingLevelsForModel } from "@veyyon/coding-agent/thinking";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { setAgentDir } from "@veyyon/utils";
 import type { z } from "zod/v4";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
@@ -1038,6 +1040,37 @@ describe("ACP agent", () => {
 				update => typeof getChunkMessageId(update) === "string" && getChunkMessageId(update)!.length > 0,
 			),
 		).toBe(true);
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("resumes a stored session without replaying it, and refuses a missing id or a foreign cwd", async () => {
+		const harness = await createHarness();
+		const stored = new FakeAgentSession(harness.cwdA);
+		harness.sessions.push(stored);
+		stored.sessionManager.appendMessage({ role: "user", content: "hello", timestamp: Date.now() });
+		stored.sessionManager.appendMessage(makeAssistantMessage("reply", "reasoning"));
+		await stored.sessionManager.ensureOnDisk();
+		await stored.sessionManager.flush();
+
+		const resumed = await harness.agent.resumeSession({ sessionId: stored.sessionId, cwd: harness.cwdA });
+		expectAcpStructure(zResumeSessionResponse, resumed);
+		expect(
+			harness.updates.filter(
+				update =>
+					update.sessionId === stored.sessionId &&
+					(update.update.sessionUpdate === "user_message_chunk" ||
+						update.update.sessionUpdate === "agent_message_chunk"),
+			),
+		).toEqual([]);
+
+		await expect(harness.agent.resumeSession({ sessionId: stored.sessionId, cwd: harness.cwdB })).rejects.toThrow(
+			`ACP session ${stored.sessionId} is already loaded for`,
+		);
+		await expect(harness.agent.resumeSession({ sessionId: "no-such-session", cwd: harness.cwdA })).rejects.toThrow(
+			"ACP session not found: no-such-session",
+		);
 
 		harness.abortController.abort();
 		await Bun.sleep(0);

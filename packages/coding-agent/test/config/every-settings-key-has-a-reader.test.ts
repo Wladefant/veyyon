@@ -2,7 +2,7 @@
  * Every declared setting is read by something that is not a test.
  *
  * WHY THIS EXISTS. A setting is a promise to the operator: it appears in the settings UI
- * and in `docs/settings-reference.md`, so turning it on is supposed to change what the
+ * and in `docs/handbook/src/reference/settings-reference.md`, so turning it on is supposed to change what the
  * agent does. A key that nothing reads is a control wired to nothing, and it fails in the
  * worst way: silently, and only for the person who trusted it. There is no compiler error
  * for a key whose reader was deleted or renamed, because the schema and the reader are
@@ -34,11 +34,15 @@ import { describe, expect, it } from "bun:test";
 import type { Dirent } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import * as path from "node:path";
+import {
+	MEMBER_ROOTS,
+	MEMBERS,
+	memberRelative,
+	memberRootOf,
+	REPO_ROOT,
+} from "../../../utils/test/support/package-sources";
 import { GLOBAL_SETTING_BINDINGS } from "../../src/config/settings-domains/global";
 import { SETTINGS_SCHEMA } from "../../src/config/settings-schema";
-
-const PACKAGE_DIR = path.join(import.meta.dir, "..", "..");
-const PACKAGES_DIR = path.join(PACKAGE_DIR, "..");
 
 /**
  * Keys assembled at runtime rather than written as literals, with the site that builds
@@ -50,6 +54,9 @@ const ASSEMBLED_AT_RUNTIME: Readonly<Record<string, string>> = {
 	"magicKeywords.ultrathink": "session/agent-session.ts",
 	"magicKeywords.orchestrate": "session/agent-session.ts",
 	"magicKeywords.workflow": "session/agent-session.ts",
+	// `eval/backend-helpers.ts`: readSetting(session, `${settingPrefix}.kernelMode`)
+	"ruby.kernelMode": "eval/backend-helpers.ts",
+	"julia.kernelMode": "eval/backend-helpers.ts",
 };
 
 /** Every `.ts` file under a directory, skipping dependencies and build output. */
@@ -72,16 +79,16 @@ async function typescriptFiles(dir: string, out: string[] = []): Promise<string[
 	return out;
 }
 
-/** All non-test source across every workspace package, excluding the schema itself. */
+/** All non-test source across every workspace member, excluding the schema itself. */
 async function productionFiles(): Promise<Array<{ file: string; text: string }>> {
-	const packages = await readdir(PACKAGES_DIR, { withFileTypes: true });
 	const out: Array<{ file: string; text: string }> = [];
-	for (const pkg of packages) {
-		if (!pkg.isDirectory()) continue;
-		for (const file of await typescriptFiles(path.join(PACKAGES_DIR, pkg.name, "src"))) {
+	// Every workspace member, not `packages/` alone: a reader of a setting could live under another
+	// root or at depth, and a key nothing appeared to read reads exactly like a dead flag.
+	for (const member of MEMBERS) {
+		for (const file of await typescriptFiles(path.join(REPO_ROOT, member, "src"))) {
 			if (file.includes(`${path.sep}settings-domains${path.sep}`)) continue;
 			if (file.includes(`${path.sep}__tests__${path.sep}`) || file.endsWith(".test.ts")) continue;
-			out.push({ file: path.relative(PACKAGES_DIR, file), text: await readFile(file, "utf8") });
+			out.push({ file: memberRelative(file), text: await readFile(file, "utf8") });
 		}
 	}
 	return out;
@@ -264,6 +271,11 @@ describe("the walk this lock depends on", () => {
 		expect(SOURCE.length).toBeGreaterThan(1_000_000);
 		expect(GROUPS_READ.size).toBeGreaterThan(5);
 		expect(FILES.length).toBeGreaterThan(1_000);
+
+		// And the corpus spans every root the workspace declares. A root nobody walked contributes no
+		// reader, so a key read only from there reads exactly like a dead flag.
+		const roots = new Set(FILES.map(entry => memberRootOf(entry.file)));
+		expect([...roots].sort()).toEqual([...MEMBER_ROOTS].sort());
 	});
 
 	/**

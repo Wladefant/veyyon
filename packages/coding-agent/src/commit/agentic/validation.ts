@@ -1,13 +1,28 @@
 import { collapseWhitespace } from "@veyyon/utils";
-import { stripTypePrefix } from "../../commit/analysis/summary";
-import { SUMMARY_MAX_CHARS, validateSummary } from "../../commit/analysis/validation";
-import type { CommitType, ConventionalDetail } from "../../commit/types";
 import { normalizeUnicode } from "../../edit/normalize";
+import { stripTypePrefix } from "../analysis/summary";
+import { SUMMARY_MAX_CHARS, validateSummary } from "../analysis/validation";
+import type { CommitType, ConventionalDetail } from "../types";
 
 // Imported as well as re-exported: a bare `export { X } from ...` publishes the name
 // without binding it locally, and this module uses the limit itself below.
 export { SUMMARY_MAX_CHARS };
 export const MAX_DETAIL_ITEMS = 6;
+
+/** A validation verdict as the model reads it: the response plus the limits it was judged against. */
+export function verdictWithLimits(response: object): string {
+	return JSON.stringify(
+		{
+			...response,
+			constraints: {
+				maxSummaryChars: SUMMARY_MAX_CHARS,
+				maxDetailItems: MAX_DETAIL_ITEMS,
+			},
+		},
+		null,
+		2,
+	);
+}
 
 const fillerWords = ["comprehensive", "various", "several", "improved", "enhanced", "better"];
 const metaPhrases = ["this commit", "this change", "updated code", "modified files"];
@@ -75,7 +90,7 @@ export function validateSummaryRules(summary: string): { errors: string[]; warni
 	const warnings: string[] = [];
 	const basic = validateSummary(summary, SUMMARY_MAX_CHARS);
 	if (!basic.valid) {
-		errors.push(...basic.errors);
+		for (let ei = 0; ei < basic.errors.length; ei++) errors.push(basic.errors[ei]!);
 	}
 
 	const words = summary.trim().split(/\s+/);

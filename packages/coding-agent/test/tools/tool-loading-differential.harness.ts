@@ -3,10 +3,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
-import { Settings } from "@veyyon/coding-agent/config/settings";
-import type { SettingPath } from "@veyyon/coding-agent/config/settings-schema";
-import { type CreateAgentSessionOptions, createAgentSession, type ExtensionFactory } from "@veyyon/coding-agent/sdk";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { type SettingPath, Settings } from "@veyyon/coding-agent/config/settings";
+import { TOOL_DISCOVERY_AUTO_THRESHOLD } from "@veyyon/coding-agent/discovery/mode";
+import { createAgentSession, type ExtensionFactory } from "@veyyon/coding-agent/sdk";
+import type { CreateAgentSessionOptions } from "@veyyon/coding-agent/session/factory-options";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { type } from "arktype";
 import { isolatedAuthStorage } from "../helpers/isolated-auth-storage";
@@ -27,8 +28,8 @@ import { isolatedAuthStorage } from "../helpers/isolated-auth-storage";
  *
  * - `github.enabled` is already false by default, but `GithubTool.createIf` additionally
  *   probes for the `gh` CLI; pinning the setting keeps the tool absent either way.
- * - `generate_image.enabled` defaults TRUE and builds its tools from the live model registry,
- *   so leaving it on would make the outcome depend on which models happen to be cached.
+ * - `generate_image.enabled` builds tools from the live model registry; pinning its default-off state
+ *   keeps the outcome independent of whichever image models happen to be cached on the host.
  * - `speechgen`, `exa` and `checkpoint`/`inspect_image` are pinned to their off state so a
  *   future default flip is caught here as an explicit edit rather than a silent diff.
  */
@@ -155,11 +156,31 @@ export class ToolLoadRunner {
 }
 
 /**
+ * Non-`search_tool_bm25` tools the fixture registry holds, which is what the auto rule
+ * counts against the threshold.
+ *
+ * A literal, because the cases below are a static array and cannot boot a session to
+ * measure one, and no frozen outcome reports it either — an outcome lists what survived
+ * the loading rules, which is fewer. It does not go stale in silence: it is the operand
+ * that puts `auto-at-threshold` exactly ON the line, so a tool added to or removed from
+ * the registry slides that case across, its real boot registers `search_tool_bm25` where
+ * the frozen outcome has none, and the cell goes red carrying the direction to re-count.
+ */
+export const FIXTURE_REGISTRY_SIZE = 23;
+
+/**
+ * Bulk tools that land the fixture registry exactly ON the threshold, so registering one
+ * more crosses it. Derived from both operands, so moving either the threshold or the
+ * registry keeps the pair straddling rather than quietly landing on one side.
+ */
+export const AT_THRESHOLD_BULK = TOOL_DISCOVERY_AUTO_THRESHOLD - FIXTURE_REGISTRY_SIZE;
+
+/**
  * The matrix. Every cell names one input the loading rules read; together they cover
  * `tools.discoveryMode` (all four values), `tools.essentialOverride` (empty and not),
  * a per-tool enable flag, an `eval` backend toggle, a harness-profile tool allowlist, an
- * explicit `toolNames` request, a restored selection, a `forceActive` trigger, and tool
- * counts on both sides of the 40-tool auto threshold.
+ * explicit `toolNames` request, a restored selection, a `forceActive` trigger, and a tool
+ * count past the auto threshold.
  *
  * Cells are earned, not guessed: each one was added because a deliberate mutation of the
  * rule it covers survived the suite. Adding a rule to `tools/loading/policy.ts` without a
@@ -168,22 +189,23 @@ export class ToolLoadRunner {
 export const TOOL_LOAD_CASES: readonly ToolLoadCase[] = [
 	{ name: "discovery-auto-under-threshold" },
 	{ name: "discovery-off", settings: { "tools.discoveryMode": "off" } },
+	{ name: "goal-disabled", settings: { "goal.enabled": false } },
 	{ name: "discovery-mcp-only", settings: { "tools.discoveryMode": "mcp-only" } },
 	{ name: "discovery-all", settings: { "tools.discoveryMode": "all" } },
 	{
 		name: "discovery-all-essential-override",
-		settings: { "tools.discoveryMode": "all", "tools.essentialOverride": ["read", "grep"] },
+		settings: { "tools.discoveryMode": "all", "tools.essentialOverride": ["read", "debug"] },
 	},
 	{ name: "browser-disabled", settings: { "browser.enabled": false } },
 	{
 		name: "browser-disabled-discovery-all",
 		settings: { "tools.discoveryMode": "all", "browser.enabled": false },
 	},
-	{ name: "explicit-tool-names", toolNames: ["read", "grep", "glob"] },
+	{ name: "explicit-tool-names", toolNames: ["read", "search"] },
 	{
 		name: "explicit-tool-names-discovery-all",
 		settings: { "tools.discoveryMode": "all" },
-		toolNames: ["read", "grep", "glob"],
+		toolNames: ["read", "search"],
 	},
 	// Both default-true backends off; `eval.rb` / `eval.jl` default false, so no backend is
 	// allowed and the tool must not exist. Covers `resolveEvalToolAvailability`.
@@ -191,7 +213,7 @@ export const TOOL_LOAD_CASES: readonly ToolLoadCase[] = [
 	// Harness profile allowlist keyed to the fixture model. Covers the pipeline's final stage.
 	{
 		name: "harness-profile-tool-allowlist",
-		settings: { "harness.profiles": { "openai/gpt-4o-mini": { tools: ["read", "grep", "todo"] } } },
+		settings: { "harness.profiles": { "openai/gpt-4o-mini": { tools: ["read", "search", "todo"] } } },
 	},
 	{
 		name: "restored-selection-discovery-all",
@@ -204,12 +226,15 @@ export const TOOL_LOAD_CASES: readonly ToolLoadCase[] = [
 	},
 	{
 		name: "delegation-off-discovery-all",
-		settings: { "tools.discoveryMode": "all", "subagent.delegation": "off" },
+		settings: { "tools.discoveryMode": "all", "agent.delegation": "off" },
 	},
-	// 17 and 18 straddle the boundary exactly: the fixture registry holds 23 non-`search_tool_bm25`
-	// tools, so 23+17 = 40 is NOT "> TOOL_DISCOVERY_AUTO_THRESHOLD" and 23+18 = 41 is. The count was
-	// 24 while `browser` shipped on by default; the straddle is arithmetic on the active tool count,
-	// so a tool leaving the default set moves it and both counts step up to keep the boundary here.
-	{ name: "auto-at-threshold", extensions: [bulkToolExtension(17, "bulk")] },
-	{ name: "auto-over-threshold", extensions: [bulkToolExtension(18, "bulk")] },
+	// The two cells straddle the boundary exactly: `FIXTURE_REGISTRY_SIZE + AT_THRESHOLD_BULK`
+	// is NOT "> TOOL_DISCOVERY_AUTO_THRESHOLD" and one more tool is. Both counts derive from
+	// the threshold and the registry size rather than restating them, so a tool added to the
+	// shipped registry turns the parity cell red with the number to re-pin instead of sliding
+	// both cells onto the same side of a line they are here to bracket. The off-by-one is
+	// asserted directly against `resolveEffectiveMode` in `discovery/tool-discovery-mode-resolves-from-tools-and-mcp-settings.test.ts`;
+	// these two prove the real boot path agrees with it.
+	{ name: "auto-at-threshold", extensions: [bulkToolExtension(AT_THRESHOLD_BULK, "bulk")] },
+	{ name: "auto-over-threshold", extensions: [bulkToolExtension(AT_THRESHOLD_BULK + 1, "bulk")] },
 ];

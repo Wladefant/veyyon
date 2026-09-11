@@ -12,7 +12,7 @@ import { ExtensionRuntime } from "@veyyon/coding-agent/extensibility/extensions/
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import { SecretAuditLog } from "@veyyon/coding-agent/secrets/audit";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { postmortem, removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { useIsolatedConfigRoot } from "./helpers/isolated-agent-dir";
 
@@ -46,7 +46,7 @@ const failOAuthRefresh = (): void => {
 
 /**
  * Drives `ExtensionRunner.initialize` with no-op stubs so credential_disabled events flush
- * out of the runner's pre-init buffer. Mode controllers (interactive/RPC/ACP/print/subagent)
+ * out of the runner's pre-init buffer. Mode controllers (interactive/RPC/ACP/print/agent)
  * normally do this with mode-specific actions; tests just need any initialize call to flip
  * the runner's `#initialized` flag and drain the buffer.
  */

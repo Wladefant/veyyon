@@ -3,7 +3,7 @@
 Implementation and contributor docs, how Veyyon works, ships, and is built, for the people changing
 it. None of this is published to the website or needed to *use* Veyyon; the operator-facing manual is
 the [handbook](../handbook/). For the map from `src/` subsystems to their authoritative doc, start at
-[`packages/coding-agent/DEVELOPMENT.md`](../../packages/coding-agent/DEVELOPMENT.md); load-bearing
+[`packages/coding-agent/DEVELOPMENT.md`](../../packages/coding-agent/DEVELOPMENT.md); architectural
 decisions are recorded as [ADRs](../adr/).
 
 New here? Read [onboarding](onboarding.md) and [testing](testing.md) first.
@@ -12,13 +12,14 @@ New here? Read [onboarding](onboarding.md) and [testing](testing.md) first.
 
 - **One page per topic.** Extend the existing page instead of adding a second one on the same subject.
 - **Match tests and code.** A claim here must be true of the code, or it is a bug in the doc. When a
-  page describes a planned mechanism, label it and say what ships today.
+  page describes a planned mechanism, label it and state what ships today.
 - **Keep it navigable.** Every new internal doc gets a row in the relevant table below.
 - **Verification stamps.** A doc whose claims have been checked against the code ends with
   `*Verified against \`<commit-sha>\` on YYYY-MM-DD.*` as its last line. `scripts/check-doc-freshness.ts`
   (a `docs.yml` gate) fails a stamped doc edited after its stamp date, re-verify and re-stamp in the
-  same change. Stamping is earned by actually verifying, never backfilled blind; unstamped docs are
-  reported loudly but do not fail.
+  same change. A change confined to markdown path tokens that resolve in the tree they are read
+  against is exempt, and reported by name. Stamping is earned by verifying, never backfilled blind;
+  unstamped docs are reported loudly but do not fail.
 
 ## Getting started and process
 
@@ -26,10 +27,15 @@ New here? Read [onboarding](onboarding.md) and [testing](testing.md) first.
 | --- | --- |
 | [onboarding.md](onboarding.md) | Clone, run from source (`bun setup` / `bun dev`), and the gate. |
 | [testing.md](testing.md) | How the suites are organized and what to run. |
-| [fuzzing.md](fuzzing.md) | The cargo-fuzz suite in `fuzz/`: running it, the targets, and what to do with a finding. |
+| [fuzzing.md](fuzzing.md) | The cargo-fuzz suite in `tests/fuzz/`: running it, the targets, and what to do with a finding. |
+| [whole-product-rust-conformance.md](whole-product-rust-conformance.md) | Planned Rust conformance, fuzzing, mutation, and compiled-product test migration. |
 | [releasing.md](releasing.md) | The only release page: cut, what runs, what it produces, verify, recover, roll back. |
 | [deployment.md](deployment.md) | Website (Cloudflare Pages) and install-script deployment. |
 | [agent-workflow.md](agent-workflow.md) | How an autonomous agent works this repo and ships updates. |
+| [../../review.md](../../review.md) | How to review a pull request: provenance, security, correctness, complexity, maintainability. Lives at the repo root. |
+| [startup-budget.md](startup-budget.md) | What runs before the first frame, the measured baseline, and how to measure it again. |
+| [repo-gates.md](repo-gates.md) | Which gate runs in which workflow, and the cost measurements behind that split. |
+| [bun-surface.md](bun-surface.md) | The frozen Bun surface: node/fs/stream/spawn conventions, and worker hosting. |
 
 ## Design and brand
 
@@ -45,7 +51,7 @@ New here? Read [onboarding](onboarding.md) and [testing](testing.md) first.
 | Doc | Covers |
 | --- | --- |
 | [natives-architecture.md](natives-architecture.md) | How the `veyyon-natives` addon is structured and loaded. |
-| [native-crates.md](native-crates.md) | The Rust crate layout under `crates/`. |
+| [native-crates.md](native-crates.md) | The Rust crate layout under `natives/`. |
 | [natives-binding-contract.md](natives-binding-contract.md) | The JS/TS ↔ native binding contract. |
 | [natives-addon-loader-runtime.md](natives-addon-loader-runtime.md) | Runtime resolution and load of the native addon. |
 | [natives-build-release-debugging.md](natives-build-release-debugging.md) | Building, releasing, and debugging the natives (incl. the robomp cache). |
@@ -62,6 +68,7 @@ New here? Read [onboarding](onboarding.md) and [testing](testing.md) first.
 | --- | --- |
 | [tui-core-renderer.md](tui-core-renderer.md) | The append-only renderer contract. |
 | [tui-runtime-internals.md](tui-runtime-internals.md) | TUI runtime internals. |
+| [renderer-defect-oracle.md](renderer-defect-oracle.md) | Terminal renderer composer-zone defect oracles and corpus replay. |
 
 ## Tools and runtime
 
@@ -73,7 +80,7 @@ New here? Read [onboarding](onboarding.md) and [testing](testing.md) first.
 | [slash-command-internals.md](slash-command-internals.md) | How slash commands are registered and dispatched. |
 | [handoff-generation-pipeline.md](handoff-generation-pipeline.md) | The `/handoff` generation pipeline. |
 | [ttsr-injection-lifecycle.md](ttsr-injection-lifecycle.md) | Time-traveling stream-rule injection lifecycle. |
-| [task-agent-discovery.md](task-agent-discovery.md) | How `task` subagents are discovered and selected. |
+| [task-agent-discovery.md](task-agent-discovery.md) | How `task` agents are discovered and selected. |
 
 ## MCP
 
@@ -92,6 +99,7 @@ New here? Read [onboarding](onboarding.md) and [testing](testing.md) first.
 | [provider-streaming-internals.md](provider-streaming-internals.md) | Streaming decode/encode internals. |
 | [ai-schema-normalize.md](ai-schema-normalize.md) | Tool-schema normalization across providers. |
 | [non-compaction-retry-policy.md](non-compaction-retry-policy.md) | The non-compaction auto-retry policy. |
+| [retry-loops.md](retry-loops.md) | Every loop that sends a request again, its budget, and which verdict it reads. |
 | [local-tiny-models.md](local-tiny-models.md) | Embedded local tiny-model experiments. |
 
 ## Prompts and caching
@@ -106,7 +114,7 @@ New here? Read [onboarding](onboarding.md) and [testing](testing.md) first.
 | Doc | Covers |
 | --- | --- |
 | [session.md](session.md) | Session storage and the entry model. |
-| [session-tree-plan.md](session-tree-plan.md) | The session-tree architecture. |
+| [session-tree-architecture.md](session-tree-architecture.md) | The session-tree architecture. |
 | [session-operations-export-share-fork-resume.md](session-operations-export-share-fork-resume.md) | export / dump / share / fresh / fork / resume. |
 | [session-switching-and-recent-listing.md](session-switching-and-recent-listing.md) | Switching sessions and the recent-list. |
 | [mnemosyne-memory-backend.md](mnemosyne-memory-backend.md) | The mnemopi memory backend. |
@@ -150,4 +158,4 @@ Per-model tool-call wire-format notes live in [toolconv/](toolconv/) (Anthropic,
 
 Step-by-step runbooks for when something breaks live in [runbooks/](runbooks/).
 
-*Verified against `27538ffb` on 2026-08-05.*
+*Verified against `63ffc8131ffb8d35ccbbb1c5de69531a7016eff4` on 2026-09-06.*

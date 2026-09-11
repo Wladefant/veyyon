@@ -3,14 +3,14 @@
  */
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { CredentialDisabledEvent, ImageContent, Model, ProviderResponseMetadata } from "@veyyon/ai";
-import type { KeyId } from "@veyyon/tui";
+import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { errorMessage, logger } from "@veyyon/utils";
+import type { KeyId } from "@veyyon/utils/keys";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { Settings } from "../../config/settings";
 import type { LocalProtocolOptions } from "../../internal-urls/local-protocol";
-import type { MemoryRuntimeContext } from "../../memory-backend";
-import { type Theme, theme } from "../../modes/theme/theme";
-import type { SessionManager } from "../../session/session-manager";
+import type { MemoryRuntimeContext } from "../../memory/backend";
+import { type Theme, theme } from "../../theme/theme";
 import type { BranchHandler, NavigateTreeHandler, NewSessionHandler } from "../session-handler-types";
 import { createExtensionModelQuery } from "./model-api";
 import type {
@@ -163,7 +163,7 @@ type RunnerEmitResult<TEvent extends RunnerEmitEvent> = TEvent extends { type: "
 			? SessionBeforeCompactResult | undefined
 			: TEvent extends { type: "session_before_tree" }
 				? SessionBeforeTreeResult | undefined
-				: TEvent extends { type: "session.compacting" }
+				: TEvent extends { type: "session_compacting" }
 					? SessionCompactingResult | undefined
 					: TEvent extends { type: "session_stop" }
 						? SessionStopEventResult | undefined
@@ -200,16 +200,12 @@ const noOpUIContext: ExtensionUIContext = {
 	setStatus: () => {},
 	setWorkingMessage: () => {},
 	setWidget: () => {},
-	setFooter: () => {},
-	setHeader: () => {},
 	setTitle: () => {},
-	custom: async () => undefined as never,
 	setEditorText: () => {},
 	pasteToEditor: () => {},
 	getEditorText: () => "",
 	editor: async () => undefined,
 	addAutocompleteProvider: () => {},
-	setEditorComponent: () => {},
 	get theme() {
 		return theme;
 	},
@@ -230,10 +226,10 @@ export interface ExtensionRunnerIdentityOptions {
 export class ExtensionRunner {
 	#uiContext: ExtensionUIContext;
 	/**
-	 * Registry id of the agent this runner drives, when it is a spawned subagent.
+	 * Registry id of the agent this runner drives, when it is a spawned agent.
 	 *
 	 * Undefined for a root session, which needs no attribution: its prompts are
-	 * self-evidently its own. A subagent's are not. The operator answers ONE
+	 * self-evidently its own. An agent's are not. The operator answers ONE
 	 * queue at the root, so two children asking at the same moment are two
 	 * identical cards unless each says who is asking, and an anonymous prompt is
 	 * nearly as bad as no prompt: it can be answered, but not answered correctly.
@@ -383,7 +379,7 @@ export class ExtensionRunner {
 	 *
 	 * If {@link initialize} has not yet run, the event is buffered and replayed once
 	 * initialize wires the runtime/UI context. This matters because mode controllers
-	 * (interactive, RPC, ACP, print, subagent) call `initialize()` AFTER `createAgentSession`
+	 * (interactive, RPC, ACP, print, agent) call `initialize()` AFTER `createAgentSession`
 	 * returns, but `AuthStorage` can fire `credential_disabled` during startup model probes
 	 * inside `createAgentSession()`. Without deferral, extension handlers would observe
 	 * `hasUI=false`, an unset model, and no-op runtime actions on exactly the headline
@@ -734,7 +730,7 @@ export class ExtensionRunner {
 					}
 				}
 
-				if (event.type === "session.compacting" && handlerResult) {
+				if (event.type === "session_compacting" && handlerResult) {
 					result = handlerResult as SessionCompactingResult;
 				}
 
@@ -945,13 +941,16 @@ export class ExtensionRunner {
 				const result = handlerResult as ResourcesDiscoverResult | undefined;
 
 				if (result?.skillPaths?.length) {
-					skillPaths.push(...result.skillPaths.map(path => ({ path, extensionPath: ext.path })));
+					const sp = result.skillPaths.map(path => ({ path, extensionPath: ext.path }));
+					for (let si = 0; si < sp.length; si++) skillPaths.push(sp[si]!);
 				}
 				if (result?.promptPaths?.length) {
-					promptPaths.push(...result.promptPaths.map(path => ({ path, extensionPath: ext.path })));
+					const pp = result.promptPaths.map(path => ({ path, extensionPath: ext.path }));
+					for (let pi = 0; pi < pp.length; pi++) promptPaths.push(pp[pi]!);
 				}
 				if (result?.themePaths?.length) {
-					themePaths.push(...result.themePaths.map(path => ({ path, extensionPath: ext.path })));
+					const tp = result.themePaths.map(path => ({ path, extensionPath: ext.path }));
+					for (let ti = 0; ti < tp.length; ti++) themePaths.push(tp[ti]!);
 				}
 			}
 		}

@@ -2,7 +2,7 @@ import type { Effort } from "@veyyon/catalog/effort";
 import { toFirepassWireModelId, toFireworksWireModelId } from "@veyyon/catalog/fireworks-model-id";
 import { isGlm52ReasoningEffortModelId } from "@veyyon/catalog/identity";
 import { getSupportedEfforts } from "@veyyon/catalog/model-thinking";
-import { calculateCost, emptyCost, emptyUsage, inheritUsageCarryovers, scaleUsageCost } from "@veyyon/catalog/models";
+import { calculateCost, emptyCost, inheritUsageCarryovers, scaleUsageCost } from "@veyyon/catalog/models";
 import type {
 	OpenAICompat,
 	OpenAIReasoningDisableMode,
@@ -67,6 +67,7 @@ import {
 } from "../utils/block-symbols";
 import type { AssistantMessageEventStream } from "../utils/event-stream";
 import type { CapturedHttpErrorResponse } from "../utils/http-inspector";
+import { getOpenCodeHeaders, isOpenCodeProvider } from "../utils/opencode-headers";
 import { getOpenRouterHeaders } from "../utils/openrouter-headers";
 import { isForcedToolChoice } from "../utils/tool-choice";
 import {
@@ -93,7 +94,7 @@ import type {
 	ResponseStatus,
 	ResponseStreamEvent,
 } from "./openai-responses-wire";
-import { transformMessages } from "./transform-messages";
+import { staleToolResultNote, transformMessages } from "./transform-messages";
 import { joinTextWithImagePlaceholder, NON_VISION_IMAGE_PLACEHOLDER, partitionVisionContent } from "./vision-guard";
 
 export interface OpenAIModelIdentity {
@@ -141,6 +142,13 @@ export interface OpenAIRequestSetupOptions {
 	};
 	openAISessionId?: string;
 	promptCacheSessionId?: string;
+	/**
+	 * The conversation this request belongs to, for the OpenCode session header.
+	 * Distinct from the two above, which are withheld once cache retention is
+	 * "none", and from the routing session id, which a side-channel turn makes
+	 * unique per request while keeping the conversation's prompt-cache key.
+	 */
+	conversationId?: string;
 }
 
 export interface OpenAIRequestSetup {
@@ -199,6 +207,18 @@ export function resolveOpenAIRequestSetup(
 	let headers = { ...(model.headers ?? {}) };
 	if (model.provider === "openrouter") {
 		Object.assign(headers, getOpenRouterHeaders());
+	}
+	if (isOpenCodeProvider(model.provider)) {
+		// Set only when absent, so `model.headers` above and `extraHeaders` below
+		// both still win. Keyed on the raw conversation id rather than the
+		// prompt-cache key, so a session that disables caching still routes to one
+		// upstream provider, and so both transport families derive the same value
+		// for the same conversation.
+		for (const [name, value] of Object.entries(
+			getOpenCodeHeaders(options.conversationId ?? options.promptCacheSessionId ?? options.openAISessionId),
+		)) {
+			setHeaderIfAbsent(headers, name, value);
+		}
 	}
 	Object.assign(headers, options.extraHeaders);
 	if (model.provider === "coreweave") {
@@ -1028,22 +1048,40 @@ export function applyChatCompletionsToolStream(
 	}
 }
 
+/**
+ * The sentence a rejection was stated in, wherever the provider put it.
+ *
+ * A captured body and an `Error.message` are two halves of one answer: some endpoints put the reason
+ * in the envelope the SDK threw, some only in the body the request-inspector kept. Reading one half
+ * is how a rejection goes unrecognised on one path and recognised on another.
+ */
+function rejectionText(error: unknown, capturedErrorResponse: CapturedHttpErrorResponse | undefined): string {
+	return [error instanceof Error ? error.message : undefined, capturedErrorResponse?.bodyText]
+		.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+		.join("\n");
+}
+
+/**
+ * The narrow rejection a caller answers by dropping strict tools for the whole session, rather than
+ * for one attempt. The words are the registry's; the status and the assembly are this path's.
+ */
 export function isCompiledGrammarTooLargeStrictError(
 	error: unknown,
 	capturedErrorResponse: CapturedHttpErrorResponse | undefined,
 ): boolean {
 	const status = extractHttpStatusFromError(error) ?? capturedErrorResponse?.status;
 	if (status !== 400) return false;
-	const messageParts = [error instanceof Error ? error.message : undefined, capturedErrorResponse?.bodyText]
-		.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-		.join("\n");
-	return (
-		/invalid_request_error/i.test(messageParts) &&
-		/compiled grammar/i.test(messageParts) &&
-		/too large/i.test(messageParts)
-	);
+	return AIError.matchesCompiledGrammarTooLargeText(rejectionText(error, capturedErrorResponse));
 }
 
+/**
+ * Whether this endpoint rejected the request for carrying strict tools.
+ *
+ * The vocabulary is `matchesStrictToolsRejectionText`, the grammar family's, and it used to be a
+ * private regex here that answered the same question with different words: the registry read
+ * `invalid_request_error` plus a grammar or schema complaint, this path read a wire-format code and a
+ * `strict` value it could not mix, and each recognised rejections the other let through.
+ */
 export function shouldRetryWithoutStrictTools(
 	error: unknown,
 	capturedErrorResponse: CapturedHttpErrorResponse | undefined,
@@ -1053,12 +1091,7 @@ export function shouldRetryWithoutStrictTools(
 	if (!tools || tools.length === 0 || !strictToolsApplied) return false;
 	const status = extractHttpStatusFromError(error) ?? capturedErrorResponse?.status;
 	if (status !== 400 && status !== 422) return false;
-	const messageParts = [error instanceof Error ? error.message : undefined, capturedErrorResponse?.bodyText]
-		.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-		.join("\n");
-	return /wrong_api_format|mixed values for 'strict'|tool[s]?\b.*strict|\bstrict\b.*tool|tool parameters? schema|invalid schema for function|structured[_ -]?outputs?\b[^\n]*(?:not (?:supported|available|enabled)|unsupported)|(?:not support|unsupported)[^\n]*structured[_ -]?outputs?\b/i.test(
-		messageParts,
-	);
+	return AIError.matchesStrictToolsRejectionText(rejectionText(error, capturedErrorResponse));
 }
 
 function normalizeOpenAIStableId(value: string | undefined, maxLength: number, hashPrefix: string): string | undefined {
@@ -1183,7 +1216,7 @@ export function collectCustomCallIds(messages: ResponseInput): Set<string> {
 /**
  * Convert orphan `function_call_output` / `custom_tool_call_output` items —
  * those whose `call_id` has no matching preceding `function_call` /
- * `custom_tool_call` in the same input — into assistant text notes.
+ * `custom_tool_call` in the same input — into user-role notes.
  *
  * The Responses API rejects unpaired outputs with
  * `400 No tool call found for function call output with call_id …`. Orphans
@@ -1198,10 +1231,12 @@ export function collectCustomCallIds(messages: ResponseInput): Set<string> {
  *   `function_call` ever landing in any persisted provider payload.
  *
  * Dropping the result loses information the model needs to recover; sending
- * it as-is 400s the request. Folding it into an assistant `message` preserves
- * the payload (call_id + truncated output) while staying within the Responses
- * input grammar. Matches the behavior of {@link transformRequestBody} in the
- * codex provider — issue #1351 / regression of #472.
+ * it as-is 400s the request. Folding it into a `message` preserves the payload
+ * (call_id + truncated output) while staying within the Responses input
+ * grammar. {@link staleToolResultNote} decides the envelope and the role, and
+ * states why the role is never `assistant`. Matches the behavior of
+ * {@link transformRequestBody} in the codex provider — issue #1351 /
+ * regression of #472.
  */
 export function repairOrphanResponsesToolOutputs(input: ResponseInput): ResponseInput {
 	const knownCallIds = new Set<string>();
@@ -1211,17 +1246,22 @@ export function repairOrphanResponsesToolOutputs(input: ResponseInput): Response
 		if (typeof callId !== "string") continue;
 		if (t === "function_call" || t === "custom_tool_call") knownCallIds.add(callId);
 	}
-	let hasOrphan = false;
+	const orphanCallIds: string[] = [];
 	for (const item of input) {
 		const t = (item as { type?: string }).type;
 		if (t !== "function_call_output" && t !== "custom_tool_call_output") continue;
 		const callId = (item as { call_id?: unknown }).call_id;
-		if (typeof callId === "string" && !knownCallIds.has(callId)) {
-			hasOrphan = true;
-			break;
-		}
+		if (typeof callId === "string" && !knownCallIds.has(callId)) orphanCallIds.push(callId);
 	}
-	if (!hasOrphan) return input;
+	if (orphanCallIds.length === 0) return input;
+	// The fold is the only trace of how the pairing was lost. The reported
+	// occurrences (an imitated note in a session with no compaction and every
+	// result paired in storage) cannot be diagnosed from the transcript alone.
+	logger.warn("openai-responses: folding tool outputs whose call is missing from the request", {
+		orphanCallIds,
+		knownCallIds: [...knownCallIds],
+		inputItems: input.length,
+	});
 	return input.map(item => {
 		const t = (item as { type?: string }).type;
 		if (t !== "function_call_output" && t !== "custom_tool_call_output") return item;
@@ -1244,8 +1284,8 @@ export function repairOrphanResponsesToolOutputs(input: ResponseInput): Response
 		if (text.length > ORPHAN_OUTPUT_LIMIT) text = `${text.slice(0, ORPHAN_OUTPUT_LIMIT)}\n...[truncated]`;
 		return {
 			type: "message",
-			role: "assistant",
-			content: `[Orphan ${toolName} result; call_id=${callId}]: ${text}`,
+			role: "user",
+			content: staleToolResultNote({ toolName, toolCallId: callId, text }),
 		} as ResponseInput[number];
 	});
 }
@@ -1553,7 +1593,7 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 					: undefined;
 				if (nativeReplayEnabled && sanitizedHistoryItems) {
 					if (providerPayload?.dt) {
-						messages.push(...sanitizedHistoryItems);
+						for (let hi = 0; hi < sanitizedHistoryItems.length; hi++) messages.push(sanitizedHistoryItems[hi]!);
 					} else {
 						messages.splice(0, messages.length, ...sanitizedHistoryItems);
 					}
@@ -1580,7 +1620,7 @@ export function buildResponsesInput<TApi extends Api>(options: BuildResponsesInp
 				? sanitizeOpenAIResponsesAssistantFallbackItemsForReplay(convertedOutputItems)
 				: convertedOutputItems;
 			if (outputItems.length === 0) continue;
-			messages.push(...outputItems);
+			for (let oi = 0; oi < outputItems.length; oi++) messages.push(outputItems[oi]!);
 		} else if (msg.role === "toolResult") {
 			appendResponsesToolResultMessages(
 				messages,
@@ -1761,13 +1801,26 @@ export function appendResponsesToolResultMessages<TApi extends Api>(
 	if (strictResponsesPairing && !knownCallIds.has(normalized.callId)) {
 		// Strict backends (Azure, Copilot) reject unpaired outputs outright, but
 		// silently dropping the result loses information the model needs. Fold it
-		// into an assistant note instead (same shape as repairOrphanResponsesToolOutputs).
+		// into a note instead (same shape as repairOrphanResponsesToolOutputs).
+		logger.warn("openai-responses: folding a tool result whose call is missing from the request", {
+			provider: model.provider,
+			model: model.id,
+			toolName: toolResult.toolName,
+			toolCallId: toolResult.toolCallId,
+			normalizedCallId: normalized.callId,
+			knownCallIds: [...knownCallIds],
+		});
 		const limit = 16_000;
 		const noteText = output.length > limit ? `${output.slice(0, limit)}\n...[truncated]` : output;
 		messages.push({
 			type: "message",
-			role: "assistant",
-			content: `[Orphan ${toolResult.toolName || "tool"} result; call_id=${normalized.callId}]: ${noteText}`,
+			role: "user",
+			content: staleToolResultNote({
+				toolName: toolResult.toolName || "tool",
+				toolCallId: normalized.callId,
+				text: noteText,
+				isError: toolResult.isError,
+			}),
 		} as ResponseInput[number]);
 		return;
 	}
@@ -2008,36 +2061,107 @@ export function finalizeMessageText(item: ResponseOutputMessage, streamedText: s
 	return item.content.map(part => (part.type === "output_text" ? (part.text ?? "") : (part.refusal ?? ""))).join("");
 }
 
+export type ToolCallArgumentsDeltaShape = "incremental" | "cumulative";
+
 /**
- * Merge one Responses function-argument event into the live buffer.
+ * Declared wire shape for tool-call argument deltas across Responses-family providers.
  *
- * The wire contract calls the payload a delta, but gateways may replay the
- * complete prefix. Treat a value that extends the current buffer as an
- * authoritative cumulative snapshot; otherwise preserve true delta semantics.
+ * Every provider or API that routes into `processResponsesStream` or `accumulateToolCallArgumentsDelta`
+ * must explicitly declare its stream shape here. A provider added without a declared shape
+ * throws rather than silently inheriting an arbitrary default.
  */
-function mergeToolCallArgumentsDelta(current: string, delta: string): { buffer: string; appended: string } {
-	if (!delta.startsWith(current)) {
-		return { buffer: current + delta, appended: delta };
-	}
-	return { buffer: delta, appended: delta.slice(current.length) };
+export const RESPONSES_PROVIDER_TOOL_CALL_DELTA_SHAPES: Readonly<Record<string, ToolCallArgumentsDeltaShape>> = {
+	azure: "incremental",
+	"github-copilot": "incremental",
+	"gitlab-duo": "incremental",
+	ollama: "incremental",
+	openai: "incremental",
+	"openai-codex": "cumulative",
+	opencode: "incremental",
+	"opencode-go": "incremental",
+	"opencode-zen": "incremental",
+	openrouter: "incremental",
+	sakana: "incremental",
+	"xai-oauth": "incremental",
+};
+
+/**
+ * Declared wire shape fallback by built-in Responses API identifier when provider is not matched.
+ */
+export const RESPONSES_API_TOOL_CALL_DELTA_SHAPES: Readonly<Record<string, ToolCallArgumentsDeltaShape>> = {
+	"openai-responses": "incremental",
+	"azure-openai-responses": "incremental",
+	"openai-codex-responses": "cumulative",
+	openrouter: "incremental",
+};
+
+export function resolveResponsesToolCallDeltaShape(
+	providerOrModel: string | { provider?: string; api?: string },
+	api?: string,
+): ToolCallArgumentsDeltaShape {
+	const provider = typeof providerOrModel === "string" ? providerOrModel : (providerOrModel.provider ?? "");
+	const resolvedApi = typeof providerOrModel === "object" ? (providerOrModel.api ?? api) : api;
+
+	const providerShape = provider ? RESPONSES_PROVIDER_TOOL_CALL_DELTA_SHAPES[provider] : undefined;
+	if (providerShape) return providerShape;
+
+	const apiShape = resolvedApi ? RESPONSES_API_TOOL_CALL_DELTA_SHAPES[resolvedApi] : undefined;
+	if (apiShape) return apiShape;
+
+	throw new Error(
+		`Undeclared tool-call argument delta wire shape for provider "${provider}" (api: "${resolvedApi}"). Explicitly declare its shape in RESPONSES_PROVIDER_TOOL_CALL_DELTA_SHAPES before routing through the Responses accumulator.`,
+	);
 }
 
+/**
+ * Accumulate one streamed function-argument delta into the live buffer.
+ *
+ * Wire streams differ in the shape of `response.function_call_arguments.delta`:
+ * - Incremental providers (e.g. OpenAI Responses, Azure OpenAI Responses) deliver
+ *   true incremental string fragments.
+ * - Cumulative providers (e.g. OpenAI Codex Responses) deliver cumulative snapshots
+ *   representing the full arguments string accumulated so far.
+ *
+ * The accumulator behavior is driven by the explicitly declared {@link ToolCallArgumentsDeltaShape}
+ * rather than guessing or inferring from payload bytes: inferring cumulative resends
+ * via prefix heuristics on an incremental stream risks corrupting valid arguments
+ * (such as repeated keys or indentation that coincidental prefix matches truncate),
+ * while unconditional appending on a cumulative stream doubles argument text.
+ *
+ * Authoritative final arguments are applied on `response.function_call_arguments.done` via
+ * {@link finalizeToolCallArgumentsDone}.
+ */
 export function accumulateToolCallArgumentsDelta(
 	block: ResponsesToolCallBlock,
 	delta: string,
 	stream: AssistantMessageEventStream,
 	output: AssistantMessage,
 	contentIndex: number,
+	shape: ToolCallArgumentsDeltaShape,
 ): void {
-	const merged = mergeToolCallArgumentsDelta(block[kStreamingPartialJson], delta);
-	block[kStreamingPartialJson] = merged.buffer;
-	const throttled = parseStreamingJsonThrottled(block[kStreamingPartialJson], block[kStreamingLastParseLen] ?? 0);
-	if (throttled) {
-		block.arguments = throttled.value;
-		block[kStreamingLastParseLen] = throttled.parsedLen;
-	}
-	if (merged.appended) {
-		stream.push({ type: "toolcall_delta", contentIndex, delta: merged.appended, partial: output });
+	if (shape === "cumulative") {
+		const previous = block[kStreamingPartialJson] ?? "";
+		const accumulated = delta.startsWith(previous) ? delta : previous + delta;
+		const incrementalDelta = accumulated.slice(previous.length);
+		block[kStreamingPartialJson] = accumulated;
+		const throttled = parseStreamingJsonThrottled(block[kStreamingPartialJson], block[kStreamingLastParseLen] ?? 0);
+		if (throttled) {
+			block.arguments = throttled.value;
+			block[kStreamingLastParseLen] = throttled.parsedLen;
+		}
+		if (incrementalDelta) {
+			stream.push({ type: "toolcall_delta", contentIndex, delta: incrementalDelta, partial: output });
+		}
+	} else {
+		block[kStreamingPartialJson] = (block[kStreamingPartialJson] ?? "") + delta;
+		const throttled = parseStreamingJsonThrottled(block[kStreamingPartialJson], block[kStreamingLastParseLen] ?? 0);
+		if (throttled) {
+			block.arguments = throttled.value;
+			block[kStreamingLastParseLen] = throttled.parsedLen;
+		}
+		if (delta) {
+			stream.push({ type: "toolcall_delta", contentIndex, delta, partial: output });
+		}
 	}
 }
 
@@ -2116,6 +2240,7 @@ export async function processResponsesStream<TApi extends Api>(
 	model: Model<TApi>,
 	options?: ProcessResponsesStreamOptions,
 ): Promise<void> {
+	const deltaShape = resolveResponsesToolCallDeltaShape(model);
 	type StreamingToolCallBlock = ToolCall & {
 		[kStreamingPartialJson]: string;
 		[kStreamingLastParseLen]?: number;
@@ -2462,7 +2587,14 @@ export async function processResponsesStream<TApi extends Api>(
 		} else if (event.type === "response.function_call_arguments.delta") {
 			const entry = lookupOpenFunctionCallItem(event);
 			if (entry?.item.type === "function_call" && entry.block.type === "toolCall") {
-				accumulateToolCallArgumentsDelta(entry.block, event.delta, stream, output, contentIndexOf(entry.block));
+				accumulateToolCallArgumentsDelta(
+					entry.block,
+					event.delta,
+					stream,
+					output,
+					contentIndexOf(entry.block),
+					deltaShape,
+				);
 			}
 		} else if (event.type === "response.function_call_arguments.done") {
 			const entry = lookupOpenFunctionCallItem(event);
@@ -2727,19 +2859,7 @@ export function promoteResponsesToolUseStopReason(output: AssistantMessage, endT
 	}
 }
 
-/** Initial empty `AssistantMessage` that streaming providers accumulate into. */
-export function createInitialResponsesAssistantMessage(api: Api, provider: string, modelId: string): AssistantMessage {
-	return {
-		role: "assistant",
-		content: [],
-		api,
-		provider,
-		model: modelId,
-		usage: emptyUsage(),
-		stopReason: "stop",
-		timestamp: Date.now(),
-	};
-}
+export * from "./initial-message";
 
 /** Extension fields we add on top of `ResponseCreateParamsStreaming` across the Responses-family providers. */
 export type ResponsesSamplingParamsExtras = {

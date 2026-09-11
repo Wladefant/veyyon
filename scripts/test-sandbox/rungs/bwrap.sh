@@ -23,6 +23,13 @@ probe_bwrap() {
 }
 
 run_bwrap() {
+	# A linked worktree's `.git` names an absolute path outside the repo bind, so it is
+	# bound read-only at that same path or every `git` call inside sees a tree that is
+	# not a repository. The driver leaves SANDBOX_GITDIR empty for a checkout that owns
+	# its own `.git`, and for one whose git directory is inside the home being hidden.
+	local -a gitdir_args=()
+	[ -n "${SANDBOX_GITDIR:-}" ] && gitdir_args=(--ro-bind "${SANDBOX_GITDIR}" "${SANDBOX_GITDIR}")
+
 	local -a extra_mounts=()
 	if [ -L "${REPO_ROOT}/node_modules" ]; then
 		local nm_target
@@ -45,6 +52,7 @@ run_bwrap() {
 		--proc /proc --dev /dev \
 		--tmpfs /home --tmpfs /tmp --tmpfs /sandbox --tmpfs /run \
 		--bind "${REPO_ROOT}" "${REPO_ROOT}" \
+		"${gitdir_args[@]+"${gitdir_args[@]}"}" \
 		"${extra_mounts[@]}" \
 		--chdir "${REPO_ROOT}" \
 		--setenv VEYYON_TEST_SANDBOX bwrap-userns \

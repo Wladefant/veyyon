@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { bumpVersion, parseVersion, rewriteCargoWorkspaceVersion, rewritePackageVersion } from "./release.ts";
+import { bumpVersion, parseVersion, rewriteCargoWorkspaceVersion, rewritePackageVersion } from "./release";
 
 // The version-bump arithmetic decides the number of EVERY release cut by
 // release.ts. A regression here does not fail loudly — it silently publishes the
@@ -77,6 +77,20 @@ describe("release metadata rewriting", () => {
 
 		expect(rewritePackageVersion(before, "1.2.4")).toBe(
 			'{\n  "name": "@veyyon/example",\n  "version": "1.2.4",\n  "dependencies": { "other": "1.2.3" }\n}\n',
+		);
+	});
+
+	/**
+	 * A literal `@veyyon/*` peer pin names the version the workspace resolves; left at the old
+	 * version, the bump commit fails the catalog-pins gate and `bun install` reaches for the
+	 * registry. `catalog:`, `workspace:*` and third-party ranges are not versions to move.
+	 */
+	it("moves a literal workspace peer pin with the manifest version and nothing else", () => {
+		const before =
+			'{\n  "name": "@veyyon/plugin-x",\n  "version": "1.2.3",\n  "dependencies": { "@veyyon/utils": "catalog:", "@veyyon/wire": "workspace:*", "zod": "1.2.3" },\n  "peerDependencies": { "@veyyon/coding-agent": "1.2.3", "react": "19.2.7" }\n}\n';
+
+		expect(rewritePackageVersion(before, "1.2.4")).toBe(
+			'{\n  "name": "@veyyon/plugin-x",\n  "version": "1.2.4",\n  "dependencies": { "@veyyon/utils": "catalog:", "@veyyon/wire": "workspace:*", "zod": "1.2.3" },\n  "peerDependencies": { "@veyyon/coding-agent": "1.2.4", "react": "19.2.7" }\n}\n',
 		);
 	});
 

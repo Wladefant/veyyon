@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { Api, ApiKeyResolver, Model } from "@veyyon/ai";
-import * as ai from "@veyyon/ai";
+import * as ai from "@veyyon/ai/stream";
 import { type GeneratedProvider, getBundledModel } from "@veyyon/catalog/models";
 import { SecretObfuscator } from "@veyyon/coding-agent/secrets/obfuscator";
 import { generateSessionTitle } from "@veyyon/coding-agent/utils/title-generator";
@@ -26,9 +26,6 @@ function createSettings(model: Model<Api>, tinyModel = "online") {
 		},
 		getModelRole(role: string) {
 			return role === "smol" ? `${model.provider}/${model.id}` : undefined;
-		},
-		getStorage() {
-			return undefined;
 		},
 	} as never;
 }
@@ -645,9 +642,6 @@ describe("title generator", () => {
 				if (role === "smol") return `${smolModel.provider}/${smolModel.id}`;
 				return undefined;
 			},
-			getStorage() {
-				return undefined;
-			},
 		} as never;
 
 		const registry = {
@@ -675,9 +669,6 @@ describe("title generator", () => {
 				if (role === "smol") return `${smolModel.provider}/${smolModel.id}`;
 				return undefined;
 			},
-			getStorage() {
-				return undefined;
-			},
 		} as never;
 
 		await generateSessionTitle("Some message", registry, currentSettings);
@@ -694,9 +685,6 @@ describe("title generator", () => {
 			},
 			getModelRole(role: string) {
 				if (role === "smol") return `${smolModel.provider}/${smolModel.id}`;
-				return undefined;
-			},
-			getStorage() {
 				return undefined;
 			},
 		} as never;

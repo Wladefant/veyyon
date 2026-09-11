@@ -6,339 +6,7 @@ Identical license texts are grouped so the binary does not carry duplicate copie
 
 ================================================================================
 Files covered:
-- crates/vendor/brush-builtins/LICENSE
-
-This directory contains a vendored, locally-patched copy of brush-builtins from
-the brush shell project (https://github.com/reubeno/brush), used under the MIT
-License. It is wired into the workspace via `[patch.crates-io]` so these
-modifications can be maintained against the published release (brush-builtins
-0.2.0).
-
-  Copyright (c) 2024 reuben olinsky
-
-Local modifications include: implementing previously-stubbed builtins, the
-`wait` builtin (PID targeting plus the `-f`/`-n`/`-p` flags), and cancellation
-support for the `read` builtin via poll. The remaining logic tracks upstream so
-behavior matches the published crate.
-
-MIT License
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-================================================================================
-Files covered:
-- crates/vendor/brush-core/LICENSE
-
-This directory contains a vendored, locally-patched copy of brush-core from the
-brush shell project (https://github.com/reubeno/brush), used under the MIT
-License. It is wired into the workspace via `[patch.crates-io]` so these
-modifications can be maintained against the published release (brush-core
-0.5.0).
-
-  Copyright (c) 2024 reuben olinsky
-
-Local modifications include: Windows path handling fixes (drive-alias and
-rooted-path normalization in globs), an async background-PID fix for the nohup
-wrapper, treating `/dev/null` as poll-ready to avoid an infinite poll on macOS,
-and indentation/formatting standardization. The remaining logic tracks upstream
-so behavior matches the published crate.
-
-MIT License
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-================================================================================
-Files covered:
-- crates/vendor/jaq/LICENSE
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-
-================================================================================
-Files covered:
-- crates/vendor/uu-b2sum/LICENSE
-- crates/vendor/uu-base32/LICENSE
-- crates/vendor/uu-base64/LICENSE
-- crates/vendor/uu-basename/LICENSE
-- crates/vendor/uu-cat/LICENSE
-- crates/vendor/uu-checksum-common/LICENSE
-- crates/vendor/uu-cut/LICENSE
-- crates/vendor/uu-date/LICENSE
-- crates/vendor/uu-dirname/LICENSE
-- crates/vendor/uu-find/LICENSE
-- crates/vendor/uu-head/LICENSE
-- crates/vendor/uu-hostname/LICENSE
-- crates/vendor/uu-ln/LICENSE
-- crates/vendor/uu-ls/LICENSE
-- crates/vendor/uu-md5sum/LICENSE
-- crates/vendor/uu-mkdir/LICENSE
-- crates/vendor/uu-mktemp/LICENSE
-- crates/vendor/uu-mv/LICENSE
-- crates/vendor/uu-nproc/LICENSE
-- crates/vendor/uu-printenv/LICENSE
-- crates/vendor/uu-readlink/LICENSE
-- crates/vendor/uu-realpath/LICENSE
-- crates/vendor/uu-rm/LICENSE
-- crates/vendor/uu-seq/LICENSE
-- crates/vendor/uu-sha1sum/LICENSE
-- crates/vendor/uu-sha224sum/LICENSE
-- crates/vendor/uu-sha256sum/LICENSE
-- crates/vendor/uu-sha384sum/LICENSE
-- crates/vendor/uu-sha512sum/LICENSE
-- crates/vendor/uu-sort/LICENSE
-- crates/vendor/uu-stat/LICENSE
-- crates/vendor/uu-tac/LICENSE
-- crates/vendor/uu-tail/LICENSE
-- crates/vendor/uu-tee/LICENSE
-- crates/vendor/uu-touch/LICENSE
-- crates/vendor/uu-tr/LICENSE
-- crates/vendor/uu-truncate/LICENSE
-- crates/vendor/uu-uname/LICENSE
-- crates/vendor/uu-uniq/LICENSE
-- crates/vendor/uu-wc/LICENSE
-- crates/vendor/uu-whoami/LICENSE
-- crates/vendor/uu-yes/LICENSE
-
-Copyright (c) uutils developers
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of
-this software and associated documentation files (the "Software"), to deal in
-the Software without restriction, including without limitation the rights to
-use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software is furnished to do so,
-subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
-FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
-COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-================================================================================
-Files covered:
-- crates/vendor/uu-comm/LICENSE
-- crates/vendor/uu-paste/LICENSE
-
-Copyright (c) uutils developers
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of
-this software and associated documentation files (the "Software"), to deal in
-the Software without restriction, including without limitation the rights to
-use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software is furnished to do so,
-subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-================================================================================
-Files covered:
-- crates/vendor/uu-sed/LICENSE
-
-MIT License
-
-Copyright (c) 2025 Diomidis Spinellis
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-================================================================================
-Files covered:
-- crates/vendor/uu-wc/src/utf8/LICENSE
-
-// spell-checker:ignore Sapin
-Copyright (c) Simon Sapin and many others
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-
-================================================================================
-Files covered:
-- crates/vendor/uu-xargs/LICENSE
-
-Copyright (c) Google Inc. 
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of
-this software and associated documentation files (the "Software"), to deal in
-the Software without restriction, including without limitation the rights to
-use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software is furnished to do so,
-subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
-FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
-COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-================================================================================
-Files covered:
-- crates/veyyon-natives/src/fonts/Silver.LICENSE
-
-Silver — a pixel font for games
-
-Source:  https://poppyworks.itch.io/silver
-Author:  Poppy Works, Wolfgang Wozniak
-Major contributors:
-  - Itou Hiro (PixelMPlus)
-  - leedheo (DOSGothic)
-  - ぶち (Buchidot)
-
-License: Creative Commons Attribution 4.0 International (CC BY 4.0)
-         https://creativecommons.org/licenses/by/4.0/
-
-This license allows the work and adaptations of it to be shared and used
-commercially, as long as it is attributed to Poppy Works. The font is bundled
-here (crates/veyyon-natives/src/fonts/Silver.ttf) as a CJK/Unicode bitmap fallback.
-
-================================================================================
-Files covered:
-- crates/veyyon-shell/NOTICE
-
-This file documents third-party attribution for the shell-output minimizer in
-this crate, which adapts an algorithm from RTK (https://github.com/rtk-ai/rtk),
-used under the MIT License.
-
-  Copyright (c) the RTK authors (rtk-ai/rtk)
-
-Adapted component: the `build_pytest_summary` algorithm from the upstream
-`src/cmds/python/pytest_cmd.rs` (pinned at commit
-878af7de99e0ba71da2e8fd996f6b52a1836e06c), re-implemented here in
-`src/minimizer/filters/python.rs` as the pytest state machine (`filter_pytest`,
-`pytest_success`, `is_pytest_*`, `looks_like_pytest_summary_part`). It preserves
-failures, errors, and the final summary line; strips header framing, progress
-dots, and verbose `PASSED` rows; and falls through unchanged on unknown-state
-lines (RTK's defensive default) so xdist `[gwN]` prefixes and custom reporters
-never cause data loss.
-
-MIT License
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-================================================================================
-Files covered:
-- docs/handbook/book/fonts/OPEN-SANS-LICENSE.txt
+- docs/handbook/fonts/OPEN-SANS-LICENSE.txt
 
 
                                  Apache License
@@ -545,7 +213,7 @@ Files covered:
 
 ================================================================================
 Files covered:
-- docs/handbook/book/fonts/SOURCE-CODE-PRO-LICENSE.txt
+- docs/handbook/fonts/SOURCE-CODE-PRO-LICENSE.txt
 
 Copyright 2010, 2012 Adobe Systems Incorporated (http://www.adobe.com/), with Reserved Font Name 'Source'. All Rights Reserved. Source is a trademark of Adobe Systems Incorporated in the United States and/or other countries.
 
@@ -644,8 +312,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 ================================================================================
 Files covered:
 - LICENSE
-- python/veybot/LICENSE
-- python/veyyon-rpc/LICENSE
+- clients/python/veybot/LICENSE
+- clients/python/veyyon-rpc/LICENSE
 
 MIT License
 
@@ -669,6 +337,338 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+================================================================================
+Files covered:
+- natives/bridge/addon/src/fonts/Silver.LICENSE
+
+Silver — a pixel font for games
+
+Source:  https://poppyworks.itch.io/silver
+Author:  Poppy Works, Wolfgang Wozniak
+Major contributors:
+  - Itou Hiro (PixelMPlus)
+  - leedheo (DOSGothic)
+  - ぶち (Buchidot)
+
+License: Creative Commons Attribution 4.0 International (CC BY 4.0)
+         https://creativecommons.org/licenses/by/4.0/
+
+This license allows the work and adaptations of it to be shared and used
+commercially, as long as it is attributed to Poppy Works. The font is bundled
+here (natives/bridge/addon/src/fonts/Silver.ttf) as a CJK/Unicode bitmap fallback.
+
+================================================================================
+Files covered:
+- natives/shell/NOTICE
+
+This file documents third-party attribution for the shell-output minimizer in
+this crate, which adapts an algorithm from RTK (https://github.com/rtk-ai/rtk),
+used under the MIT License.
+
+  Copyright (c) the RTK authors (rtk-ai/rtk)
+
+Adapted component: the `build_pytest_summary` algorithm from the upstream
+`src/cmds/python/pytest_cmd.rs` (pinned at commit
+878af7de99e0ba71da2e8fd996f6b52a1836e06c), re-implemented here in
+`src/minimizer/filters/python.rs` as the pytest state machine (`filter_pytest`,
+`pytest_success`, `is_pytest_*`, `looks_like_pytest_summary_part`). It preserves
+failures, errors, and the final summary line; strips header framing, progress
+dots, and verbose `PASSED` rows; and falls through unchanged on unknown-state
+lines (RTK's defensive default) so xdist `[gwN]` prefixes and custom reporters
+never cause data loss.
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+Files covered:
+- natives/vendor/brush-builtins/LICENSE
+
+This directory contains a vendored, locally-patched copy of brush-builtins from
+the brush shell project (https://github.com/reubeno/brush), used under the MIT
+License. It is wired into the workspace via `[patch.crates-io]` so these
+modifications can be maintained against the published release (brush-builtins
+0.2.0).
+
+  Copyright (c) 2024 reuben olinsky
+
+Local modifications include: implementing previously-stubbed builtins, the
+`wait` builtin (PID targeting plus the `-f`/`-n`/`-p` flags), and cancellation
+support for the `read` builtin via poll. The remaining logic tracks upstream so
+behavior matches the published crate.
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+Files covered:
+- natives/vendor/brush-core/LICENSE
+
+This directory contains a vendored, locally-patched copy of brush-core from the
+brush shell project (https://github.com/reubeno/brush), used under the MIT
+License. It is wired into the workspace via `[patch.crates-io]` so these
+modifications can be maintained against the published release (brush-core
+0.5.0).
+
+  Copyright (c) 2024 reuben olinsky
+
+Local modifications include: Windows path handling fixes (drive-alias and
+rooted-path normalization in globs), an async background-PID fix for the nohup
+wrapper, treating `/dev/null` as poll-ready to avoid an infinite poll on macOS,
+and indentation/formatting standardization. The remaining logic tracks upstream
+so behavior matches the published crate.
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+Files covered:
+- natives/vendor/jaq/LICENSE
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+================================================================================
+Files covered:
+- natives/vendor/uu-b2sum/LICENSE
+- natives/vendor/uu-base32/LICENSE
+- natives/vendor/uu-base64/LICENSE
+- natives/vendor/uu-basename/LICENSE
+- natives/vendor/uu-cat/LICENSE
+- natives/vendor/uu-checksum-common/LICENSE
+- natives/vendor/uu-cut/LICENSE
+- natives/vendor/uu-date/LICENSE
+- natives/vendor/uu-dirname/LICENSE
+- natives/vendor/uu-find/LICENSE
+- natives/vendor/uu-head/LICENSE
+- natives/vendor/uu-hostname/LICENSE
+- natives/vendor/uu-ln/LICENSE
+- natives/vendor/uu-ls/LICENSE
+- natives/vendor/uu-md5sum/LICENSE
+- natives/vendor/uu-mkdir/LICENSE
+- natives/vendor/uu-mktemp/LICENSE
+- natives/vendor/uu-mv/LICENSE
+- natives/vendor/uu-nproc/LICENSE
+- natives/vendor/uu-printenv/LICENSE
+- natives/vendor/uu-readlink/LICENSE
+- natives/vendor/uu-realpath/LICENSE
+- natives/vendor/uu-rm/LICENSE
+- natives/vendor/uu-seq/LICENSE
+- natives/vendor/uu-sha1sum/LICENSE
+- natives/vendor/uu-sha224sum/LICENSE
+- natives/vendor/uu-sha256sum/LICENSE
+- natives/vendor/uu-sha384sum/LICENSE
+- natives/vendor/uu-sha512sum/LICENSE
+- natives/vendor/uu-sort/LICENSE
+- natives/vendor/uu-stat/LICENSE
+- natives/vendor/uu-tac/LICENSE
+- natives/vendor/uu-tail/LICENSE
+- natives/vendor/uu-tee/LICENSE
+- natives/vendor/uu-touch/LICENSE
+- natives/vendor/uu-tr/LICENSE
+- natives/vendor/uu-truncate/LICENSE
+- natives/vendor/uu-uname/LICENSE
+- natives/vendor/uu-uniq/LICENSE
+- natives/vendor/uu-wc/LICENSE
+- natives/vendor/uu-whoami/LICENSE
+- natives/vendor/uu-yes/LICENSE
+
+Copyright (c) uutils developers
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+================================================================================
+Files covered:
+- natives/vendor/uu-comm/LICENSE
+- natives/vendor/uu-paste/LICENSE
+
+Copyright (c) uutils developers
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+Files covered:
+- natives/vendor/uu-sed/LICENSE
+
+MIT License
+
+Copyright (c) 2025 Diomidis Spinellis
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+Files covered:
+- natives/vendor/uu-wc/src/utf8/LICENSE
+
+// spell-checker:ignore Sapin
+Copyright (c) Simon Sapin and many others
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+================================================================================
+Files covered:
+- natives/vendor/uu-xargs/LICENSE
+
+Copyright (c) Google Inc. 
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ================================================================================
 Files covered:
@@ -709,7 +709,7 @@ headers; the Apache License 2.0 full text is available at
   `packages/ai/src/providers/openai-responses-wire.ts` — wire-type
   definitions vendored from `openai-node` v6.42.0 (Copyright OpenAI,
   Apache-2.0), trimmed to the streaming wire surface this repo speaks.
-- `packages/coding-agent/src/tools/browser/aria/aria-snapshot.bundle.txt` —
+- `packages/coding-agent/src/tools/web/browser/aria-snapshot.bundle.txt` —
   a generated, committed bundle of Playwright's injected ARIA-snapshot
   sources (Copyright Microsoft Corporation, Apache-2.0), pinned and rebuilt
   by `packages/coding-agent/scripts/generate-aria-snapshot.ts`. The upstream
@@ -722,7 +722,7 @@ the `apply_patch` patch-envelope *format* popularized by OpenAI's Codex CLI
 (`openai/codex`, Apache-2.0) so Veyyon can read/write patches in that shape.
 This repository does not vendor Codex source code for that format: the
 parser, renderer, and patch application logic under `packages/coding-agent`
-and `packages/hashline` are Veyyon/oh-my-pi's own TypeScript implementation.
+and `plugins/hashline` are Veyyon/oh-my-pi's own TypeScript implementation.
 Likewise, `packages/ai/src/providers/openai-codex-responses.ts` and
 `packages/catalog/src/wire/codex.ts` implement a client for OpenAI's public
 Codex/ChatGPT backend wire protocol (endpoints, headers, streaming shape) —
@@ -731,48 +731,47 @@ carries forward here because no Codex source is present in this tree.
 
 ## MIT components
 
-- `crates/veyyon-shell/NOTICE` documents the RTK-derived (`rtk-ai/rtk`, MIT)
+- `natives/shell/NOTICE` documents the RTK-derived (`rtk-ai/rtk`, MIT)
   pytest-output-minimizer algorithm adapted in that crate.
-- `crates/vendor/*` contains vendored/patched copies of MIT-licensed Rust
+- `natives/vendor/*` contains vendored/patched copies of MIT-licensed Rust
   crates (uutils coreutils reimplementations `uu-*`, `brush-core` /
   `brush-builtins` from `reubeno/brush`, and `jaq`). Each subdirectory
   carries its own `LICENSE` file from the upstream project; those are the
   authoritative permission notices for that code and are not restated here.
-- `packages/coding-agent/src/markit/NOTICE` documents the document-conversion
+- `packages/coding-agent/src/export/markit/NOTICE` documents the document-conversion
   code adapted from `markit-ai` under the MIT License.
 - `packages/utils/src/vendor/mermaid-ascii/NOTICE` documents the ASCII diagram
   renderer adapted from `beautiful-mermaid` under the MIT License.
 - `packages/ai/src/registry/oauth/xai-oauth.ts`,
-  `packages/coding-agent/src/lib/xai-http.ts`, and
-  `packages/coding-agent/src/tools/tts.ts` contain code adapted from
+  `packages/coding-agent/src/tools/web/xai-http.ts`, and
+  `packages/coding-agent/src/tools/web/tts.ts` contain code adapted from
   `NousResearch/hermes-agent` (Copyright (c) 2025 Nous Research, MIT).
 - `packages/ai/src/error/rate-limit.ts` contains code adapted from
   `NoeFabris/opencode-antigravity-auth` (Copyright (c) 2025 Jens, MIT).
 
-## Source provenance without a declared upstream license
+## Source credits without a declared upstream license
 
-- `packages/coding-agent/src/markit/converters/pdf/grid.ts` and
-  `packages/coding-agent/src/markit/converters/pdf/render.ts` identify
+- `packages/coding-agent/src/export/markit/converters/pdf/grid.ts` and
+  `packages/coding-agent/src/export/markit/converters/pdf/render.ts` identify
   `@oharato/pdf2md-ts` as a source. Its published v0.1.4 package does not
-  declare or include a license. This notice preserves the known provenance;
-  it does not assert a license grant for that package.
+  declare or include a license. This notice records the known source; it does
+  not assert a license grant for that package.
 
 ## Fonts and other assets
 
-- `docs/handbook/book/fonts/OPEN-SANS-LICENSE.txt` and
-  `website/docs/fonts/OPEN-SANS-LICENSE.txt` — Open Sans font, Apache
-  License 2.0.
-- `docs/handbook/book/fonts/SOURCE-CODE-PRO-LICENSE.txt` and
-  `website/docs/fonts/SOURCE-CODE-PRO-LICENSE.txt` — Source Code Pro, SIL
-  Open Font License 1.1.
-- `crates/veyyon-natives/src/fonts/Silver.LICENSE` — Silver, Creative
+- `docs/handbook/fonts/OPEN-SANS-LICENSE.txt` — Open Sans font, Apache
+  License 2.0. mdbook bundles the font and this notice into the handbook
+  build (`docs/handbook/book/fonts/`, served as `docs/fonts/` on the site).
+- `docs/handbook/fonts/SOURCE-CODE-PRO-LICENSE.txt` — Source Code Pro, SIL
+  Open Font License 1.1; bundled the same way.
+- `natives/bridge/addon/src/fonts/Silver.LICENSE` — Silver, Creative
   Commons Attribution 4.0 International.
-- `crates/veyyon-natives/src/fonts/{5x8,6x12,8x13}.bdf` and
-  `crates/veyyon-natives/src/fonts/unscii-8.hex` — public-domain bitmap fonts.
+- `natives/bridge/addon/src/fonts/{5x8,6x12,8x13}.bdf` and
+  `natives/bridge/addon/src/fonts/unscii-8.hex` — public-domain bitmap fonts.
 
 ================================================================================
 Files covered:
-- packages/coding-agent/src/markit/NOTICE
+- packages/coding-agent/src/export/markit/NOTICE
 
 This directory contains an in-house document-to-markdown engine adapted from
 markit-ai (https://github.com/Michaelliv/markit), used under the MIT License.
@@ -789,8 +788,8 @@ so conversion output matches the upstream package.
 
 The PDF grid and rendering modules also identify `@oharato/pdf2md-ts` v0.1.4
 as a source. That published package does not declare or include a license.
-This notice preserves the known provenance; it does not assert a license grant
-for that package.
+This notice records the known source; it does not assert a license grant for
+that package.
 
 MIT License
 
@@ -859,136 +858,29 @@ SOFTWARE.
 Files covered:
 - UPSTREAM.md
 
-# Upstream and fork provenance
+# Upstream and fork credits
 
 Veyyon is a source fork of **oh-my-pi** (`can1357/oh-my-pi`), MIT licensed.
-This document explains what "fork" means in practice for this repository,
-what changed, and where the legal notices live. It is a provenance map, not
-a license grant — see `LICENSE` for the license text and `NOTICE` for
-third-party attribution.
-
-## What was forked
-
-- The TypeScript/Bun agent loop, TUI, and mode system (`packages/coding-agent`,
-  `packages/agent`, `packages/tui`, `packages/ai`, `packages/catalog`, and
-  most of `packages/*`).
-- The Rust native hot paths, including their vendored third-party dependencies
-  under `crates/vendor/`. The crates were renamed after the fork, so the paths
-  here are the current ones: search lives in `crates/veyyon-grep-kernel` and
-  `crates/veyyon-uu-grep`, the shell and its output minimizer in
-  `crates/veyyon-shell`, and the PTY and the rest of the N-API surface in
-  `crates/veyyon-natives`. The hashline edit engine is TypeScript and lives in
-  `packages/hashline`, not in a crate.
-- The prompt/agent model, hashline edit engine, mnemopi memory system, and
-  provider catalog that oh-my-pi shipped. These are the reasons this project
-  forked oh-my-pi rather than starting from scratch.
-
-The canonical repositories record that lineage:
 
 ```
 Veyyon     https://github.com/santhreal/veyyon.git
 oh-my-pi   https://github.com/can1357/oh-my-pi.git
 ```
 
-## What changed (rebrand + product direction)
-
-Veyyon began with a rebrand of oh-my-pi: the name, brand constants, config
-directory, package scope, splash and theme, emoji removal, and settings
-simplification. Since the fork, this repository has changed the prompt and
-context contract, model effort and subsystem routing, compaction, credential
-and session storage, tool and extension architecture, worker operations,
-native kernels, and documentation. The README [Provenance](README.md#provenance)
-section separates the inherited foundation from those Veyyon-owned contracts.
-
-Veyyon is not a drop-in resync target. Changes here are not assumed to belong
-upstream, and upstream changes are not pulled automatically.
-
-This repository's history begins with one imported snapshot rather than
-oh-my-pi's individual pre-fork commits. Commits after that snapshot record
-Veyyon's work. Use the `upstream` remote to compare current oh-my-pi behavior
-with Veyyon when you reconcile a specific change. The
-[porting guide](docs/internal/porting-from-pi-mono.md) records verified sync
-markers and intentional divergences.
-
 ## Where the legal notices live
 
-- `LICENSE` — Veyyon's own license (MIT), which is also the license under
-  which oh-my-pi's incorporated MIT code is used.
+- `LICENSE` — Veyyon's license (MIT), which is also the license under which
+  oh-my-pi's incorporated MIT code is used.
 - `NOTICE` — third-party attribution for code vendored or adapted under
   licenses other than plain MIT-via-`LICENSE` (Apache-2.0 wire types,
   Apache-2.0 generated bundles), plus pointers to crate-level notices.
-- `crates/veyyon-shell/NOTICE` — crate-scoped attribution for a specific
-  adapted algorithm (RTK, MIT); kept in place rather than merged into the
-  root file so it stays next to the code it describes.
-- `crates/vendor/*/LICENSE` — per-crate upstream license files for vendored
-  Rust dependencies; authoritative for that code.
-- `docs/handbook/src/acknowledgements.md` — the human-readable, prose
-  version of this provenance for handbook readers; kept reconciled with
-  this file and `NOTICE`.
+- `natives/shell/NOTICE` — crate-scoped attribution for an adapted
+  algorithm (RTK, MIT), next to the code it describes.
+- `natives/vendor/*/LICENSE` — per-crate upstream license files for vendored
+  Rust dependencies, authoritative for that code.
+- `docs/handbook/src/acknowledgements.md` — the credits page for handbook
+  readers.
 
-## Staying current: the port pipeline
-
-Upstream keeps merging fixes after the fork point, so the repo runs an
-automated port pipeline. It has two halves:
-
-1. The radar (`.github/workflows/upstream-radar.yml`, every 30 minutes)
-   mirrors newly merged upstream fixes and performance corrections. It also
-   mirrors feature additions whose touched files avoid every architecture-owned
-   surface in `scripts/upstream-port-policy.json`. This is a conservative
-   candidate screen, not an assertion that the feature belongs in veyyon.
-   Refactors, chores, and upstream product or infrastructure direction remain
-   excluded. Documentation-only feature diffs are excluded; documentation
-   accompanying an implementation does not block an otherwise clean candidate.
-   Fixes touching a diverged surface still enter semantic triage with
-   a warning so the underlying bug can be adapted to veyyon's design.
-2. veybot (`python/veybot`) watches the `upstream-port` label. It prepares each
-   port in its own worktree and opens exactly one candidate pull request that
-   closes the tracking issue. The issue body is evidence only; the execution
-   contract lives in veybot's own prompts, starting at
-   `python/veybot/src/prompts/kickoff_port_upstream.md`. When a candidate's
-   checks go red veybot repairs that branch in place, at most
-   `VEYBOT_CI_MAX_REPAIRS` times per head commit, and never by weakening a
-   gate.
-
-veybot never merges a pull request, never enables auto-merge, and never pushes
-to the default branch. No merge path exists anywhere in its tree, and that
-absence is the guarantee that makes it safe to run unattended. An issue
-carrying only `upstream-port` is queued; once a candidate is open, the pull
-request is the state a human reviews.
-
-`RADAR_MAX_ISSUES` is an advisory burst threshold, not a truncation limit.
-The runner creates every eligible issue it found in the current lookback window
-because it has no separate durable queue for deferred PRs.
-
-### Reviewing a candidate port
-
-Prove the fix before you merge it. Run the ported test, revert the source
-change, and confirm the test fails; restore it and confirm the test passes. A
-ported test that passes both ways is testing nothing, which is easy to ship
-when the fix is someone else's and the mechanism is unfamiliar. Ports #6217,
-#6226, #6233 and #6296 were each landed after checking the test in both
-directions.
-
-Add the cases the port left out while you are there. An upstream fix arrives
-with the one test that reproduces its bug and rarely with the negative twin:
-#6296 gained coverage for the per-tool floor still winning over the global cap
-and for `0` meaning no cap, and #6233 gained proof that the discovery pass it
-adds to startup stays off the path an ordinary launch takes.
-
-Read the whole diff, not the title. A porting agent works from a clone that
-goes stale while it runs, and reconciling that clone in its own favour quietly
-reverses commits that landed meanwhile. It is invisible in the title and nearly
-invisible in review: PR #184 was titled a one-file IME composition fix, and its
-diff reverted the port manager, the radar, four workflows and 180 rendered
-handbook pages. `neverPorted` in `scripts/upstream-port-policy.json` lists the
-paths a port has no business authoring, which is the checklist to read that
-diff against.
-
-## Non-goals
-
-This file does not track ordinary runtime dependency licenses declared in
-`package.json` / `Cargo.toml` and resolved via `bun.lock` / `Cargo.lock` —
-those are managed by the package managers and audited separately. It only
-covers code that is forked, vendored, or adapted directly into this
-repository's source tree.
+What was forked, what diverged since, the port pipeline, and how to review a
+candidate port: [porting guide](docs/internal/porting-from-pi-mono.md).
 

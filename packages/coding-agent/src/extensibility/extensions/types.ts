@@ -30,11 +30,17 @@ import type {
 	TSchema,
 } from "@veyyon/ai";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@veyyon/ai/oauth/types";
-import type { AutocompleteItem, AutocompleteProvider, Component, EditorTheme, KeyId, TUI } from "@veyyon/tui";
+import type { HostView } from "@veyyon/kernel/registry/host-view";
+import type * as TypeBox from "@veyyon/kernel/registry/typebox";
+import type { ExtensionWidgetContent, ExtensionWidgetOptions } from "@veyyon/kernel/registry/widget";
+import type { CompactMode } from "@veyyon/kernel/session/compact-modes";
+import type { ReadonlySessionManager, SessionManager } from "@veyyon/kernel/session/session-manager";
 import type { logger as PiLogger } from "@veyyon/utils";
+import type { AutocompleteItem, AutocompleteProvider } from "@veyyon/utils/autocomplete";
+import type { KeyId } from "@veyyon/utils/keys";
+import type { ToolViewRenderer } from "@veyyon/view";
 import type { Type as arktype } from "arktype";
 import type * as zod from "zod/v4";
-import type { KeybindingsManager } from "../../config/keybindings";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { EditToolDetails } from "../../edit";
 import type { PythonResult } from "../../eval/py/executor";
@@ -42,24 +48,19 @@ import type { BashResult } from "../../exec/bash-executor";
 import type { ExecOptions, ExecResult } from "../../exec/exec";
 import type * as PiCodingAgent from "../../index";
 import type { LocalProtocolOptions } from "../../internal-urls/local-protocol";
-import type { MemoryRuntimeContext } from "../../memory-backend";
-import type { CustomEditor } from "../../modes/components/custom-editor";
-import type { Theme } from "../../modes/theme/theme";
-import type { CompactMode } from "../../session/compact-modes";
+import type { MemoryRuntimeContext } from "../../memory/backend";
 import type { CustomMessage, CustomMessagePayload } from "../../session/messages";
-import type { ReadonlySessionManager, SessionManager } from "../../session/session-manager";
+import type { Theme } from "../../theme/theme";
 import type {
 	BashToolDetails,
 	BashToolInput,
-	GlobToolDetails,
-	GlobToolInput,
-	GrepToolDetails,
-	GrepToolInput,
 	ReadToolDetails,
 	ReadToolInput,
+	SearchToolDetails,
+	SearchToolInput,
 	WriteToolInput,
 } from "../../tools";
-import type { ApprovalMode } from "../../tools/approval";
+import type { ApprovalMode } from "../../tools/core/approval";
 import type { EventBus } from "../../utils/event-bus";
 import type {
 	AgentEndEvent,
@@ -97,7 +98,7 @@ import type {
 	TurnStartEvent,
 } from "../shared-events";
 import type { SlashCommandInfo } from "../slash-commands";
-import type * as TypeBox from "../typebox";
+import type { ExtensionTerminalCapability } from "../terminal-capability";
 
 export type { AppKeybinding, KeybindingsManager } from "../../config/keybindings";
 export type { ExecOptions, ExecResult } from "../../exec/exec";
@@ -180,8 +181,6 @@ export interface ExtensionUIDialogOptions {
 	 * (an ACP client's elicitation form) cannot honour it and say so where they are wired.
 	 */
 	secret?: boolean;
-	/** Render an outlined list for select dialogs */
-	outline?: boolean;
 	/** Invoked when user presses left arrow in select dialogs */
 	onLeft?: () => void;
 	/** Invoked when user presses right arrow in select dialogs */
@@ -206,15 +205,18 @@ export interface ExtensionUIDialogOptions {
 /** Raw terminal input listener for extensions. */
 export type TerminalInputHandler = (data: string) => { consume?: boolean; data?: string } | undefined;
 
-export type WidgetPlacement = "aboveEditor" | "belowEditor";
-
-export interface ExtensionWidgetOptions {
-	placement?: WidgetPlacement;
-}
-
-export type ExtensionUiComponent = Component & { dispose?(): void };
-export type ExtensionUiComponentFactory = (tui: TUI, theme: Theme) => ExtensionUiComponent;
-export type ExtensionWidgetContent = string[] | ExtensionUiComponentFactory | undefined;
+export type { ExtensionWidgetContent, ExtensionWidgetOptions, WidgetPlacement } from "@veyyon/kernel/registry/widget";
+/**
+ * The component types and the screen-takeover capability are declared by
+ * `terminal-capability.ts`, which owns them; the widget vocabulary is declared by
+ * `widget.ts`, because no part of it is terminal-only. Both are re-exported here
+ * because they are published under these names.
+ */
+export type {
+	ExtensionTerminalCapability,
+	ExtensionUiComponent,
+	ExtensionUiComponentFactory,
+} from "../terminal-capability";
 
 /** Wrap the current autocomplete provider with additional behavior (pi-compatible). */
 export type AutocompleteProviderFactory = (current: AutocompleteProvider) => AutocompleteProvider;
@@ -262,28 +264,21 @@ export interface ExtensionUIContext {
 	/** Set the working/loading message shown during streaming. Call with no argument to restore default. */
 	setWorkingMessage(message?: string): void;
 
-	/** Set a widget to display above or below the editor. Accepts string array or component factory. */
+	/** Set a widget of text lines above or below the editor. A component widget goes through `terminal`. */
 	setWidget(key: string, content: ExtensionWidgetContent, options?: ExtensionWidgetOptions): void;
-
-	/** Set a custom footer component, or undefined to restore the built-in footer. */
-	setFooter(factory: ExtensionUiComponentFactory | undefined): void;
-
-	/** Set a custom header component, or undefined to restore the built-in header. */
-	setHeader(factory: ExtensionUiComponentFactory | undefined): void;
 
 	/** Set the terminal window/tab title. */
 	setTitle(title: string): void;
 
-	/** Show a custom component with keyboard focus. */
-	custom<T>(
-		factory: (
-			tui: TUI,
-			theme: Theme,
-			keybindings: KeybindingsManager,
-			done: (result: T) => void,
-		) => ExtensionUiComponent | Promise<ExtensionUiComponent>,
-		options?: { overlay?: boolean },
-	): Promise<T>;
+	/**
+	 * Screen takeover, when the host is a terminal that offers it.
+	 *
+	 * Undefined on every host that cannot hand out a live `TUI` — print, RPC,
+	 * ACP and agents. Reach it as `ctx.ui.terminal?.custom(...)`; an
+	 * extension that needs it unconditionally should check `terminal` and say
+	 * what it cannot do rather than assume a terminal is there.
+	 */
+	readonly terminal?: ExtensionTerminalCapability;
 
 	/** Set the text in the core input editor. */
 	setEditorText(text: string): void;
@@ -311,20 +306,9 @@ export interface ExtensionUIContext {
 	 * Stack additional autocomplete behavior on top of the built-in provider
 	 * (pi-compatible). Interactive mode rebuilds the editor's provider through
 	 * every registered factory, in registration order; headless modes (print,
-	 * RPC, ACP, subagents) accept and ignore the factory.
+	 * RPC, ACP, agents) accept and ignore the factory.
 	 */
 	addAutocompleteProvider(factory: AutocompleteProviderFactory): void;
-
-	/**
-	 * Set a custom editor component via factory function, or `undefined` to restore the default editor.
-	 *
-	 * The factory must return a {@link CustomEditor} subclass. Plain `EditorComponent`/`Editor`
-	 * instances do not implement the action-keys, escape callbacks, and custom-key-handler surface
-	 * required by interactive mode.
-	 */
-	setEditorComponent(
-		factory: ((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => CustomEditor) | undefined,
-	): void;
 
 	/** Get the current theme for styling. */
 	readonly theme: Theme;
@@ -568,17 +552,47 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	/** Called on session lifecycle events - use to reconstruct state or cleanup resources */
 	onSession?: (event: ToolSessionEvent, ctx: ExtensionContext) => void | Promise<void>;
 
-	/** Custom rendering for tool call display */
-	renderCall?: (args: Static<TParams>, options: ToolRenderResultOptions, theme: Theme) => Component;
+	/** Custom rendering for tool call display. Returns whatever the active host draws. */
+	renderCall?: (args: Static<TParams>, options: ToolRenderResultOptions, theme: Theme) => HostView;
 
-	/** Custom rendering for tool result display */
+	/** Custom rendering for tool result display. Returns whatever the active host draws. */
 	renderResult?: (
 		result: AgentToolResult<TDetails>,
 		options: ToolRenderResultOptions,
 		theme: Theme,
 		args?: Static<TParams>,
-	) => Component;
+	) => HostView;
+
+	/**
+	 * Host-agnostic description of this tool's card, which whichever host is attached draws.
+	 *
+	 * `renderCall` and `renderResult` return `HostView` — whatever the attached host draws, a
+	 * terminal `Component` today — so a tool that ships them runs under the terminal and nowhere
+	 * else. A `view` is data instead: each host maps a tone and a status to its own appearance. Where
+	 * a tool ships both, the host-specific pair wins, so a renderer part-way through migration keeps
+	 * its exact bytes.
+	 */
+	view?: ToolViewRenderer<Static<TParams>, AgentToolResult<TDetails>>;
 }
+
+/**
+ * The view vocabulary, re-exported because a plugin cannot fill in `ToolDefinition.view` without it.
+ *
+ * A plugin is written against `@veyyon/coding-agent/extensibility/*` and nothing else, so a type it
+ * has to construct has to arrive from here. Re-exported rather than restated: `@veyyon/view` is the
+ * one definition, and a second copy of `ViewTone` in this file would be a second contract the day
+ * one of them gained a member.
+ */
+export type {
+	StatusRowView,
+	TextBlockView,
+	ToolView,
+	ToolViewContext,
+	ToolViewRenderer,
+	ViewSpan,
+	ViewStatus,
+	ViewTone,
+} from "@veyyon/view";
 
 // ============================================================================
 // Resource Events
@@ -805,14 +819,9 @@ export interface WriteToolCallEvent extends ToolCallEventBase {
 	input: WriteToolInput;
 }
 
-export interface GrepToolCallEvent extends ToolCallEventBase {
-	toolName: "grep";
-	input: GrepToolInput;
-}
-
-export interface GlobToolCallEvent extends ToolCallEventBase {
-	toolName: "glob";
-	input: GlobToolInput;
+export interface SearchToolCallEvent extends ToolCallEventBase {
+	toolName: "search";
+	input: SearchToolInput;
 }
 
 export interface CustomToolCallEvent extends ToolCallEventBase {
@@ -826,8 +835,7 @@ export type ToolCallEvent =
 	| ReadToolCallEvent
 	| EditToolCallEvent
 	| WriteToolCallEvent
-	| GrepToolCallEvent
-	| GlobToolCallEvent
+	| SearchToolCallEvent
 	| CustomToolCallEvent;
 
 interface ToolResultEventBase {
@@ -858,14 +866,9 @@ export interface WriteToolResultEvent extends ToolResultEventBase {
 	details: undefined;
 }
 
-export interface GrepToolResultEvent extends ToolResultEventBase {
-	toolName: "grep";
-	details: GrepToolDetails | undefined;
-}
-
-export interface GlobToolResultEvent extends ToolResultEventBase {
-	toolName: "glob";
-	details: GlobToolDetails | undefined;
+export interface SearchToolResultEvent extends ToolResultEventBase {
+	toolName: "search";
+	details: SearchToolDetails | undefined;
 }
 
 export interface CustomToolResultEvent extends ToolResultEventBase {
@@ -879,8 +882,7 @@ export type ToolResultEvent =
 	| ReadToolResultEvent
 	| EditToolResultEvent
 	| WriteToolResultEvent
-	| GrepToolResultEvent
-	| GlobToolResultEvent
+	| SearchToolResultEvent
 	| CustomToolResultEvent;
 
 /**
@@ -907,8 +909,7 @@ export function isToolCallEventType(toolName: "bash", event: ToolCallEvent): eve
 export function isToolCallEventType(toolName: "read", event: ToolCallEvent): event is ReadToolCallEvent;
 export function isToolCallEventType(toolName: "edit", event: ToolCallEvent): event is EditToolCallEvent;
 export function isToolCallEventType(toolName: "write", event: ToolCallEvent): event is WriteToolCallEvent;
-export function isToolCallEventType(toolName: "grep", event: ToolCallEvent): event is GrepToolCallEvent;
-export function isToolCallEventType(toolName: "glob", event: ToolCallEvent): event is GlobToolCallEvent;
+export function isToolCallEventType(toolName: "search", event: ToolCallEvent): event is SearchToolCallEvent;
 export function isToolCallEventType<TName extends string, TInput extends Record<string, unknown>>(
 	toolName: TName,
 	event: ToolCallEvent,
@@ -1027,7 +1028,7 @@ export type MessageRenderer<T = unknown> = (
 	message: CustomMessage<T>,
 	options: MessageRenderOptions,
 	theme: Theme,
-) => Component | undefined;
+) => HostView;
 
 export interface AssistantThinkingRenderContext {
 	contentIndex: number;
@@ -1036,10 +1037,7 @@ export interface AssistantThinkingRenderContext {
 	requestRender(): void;
 }
 
-export type AssistantThinkingRenderer = (
-	context: AssistantThinkingRenderContext,
-	theme: Theme,
-) => Component | undefined;
+export type AssistantThinkingRenderer = (context: AssistantThinkingRenderContext, theme: Theme) => HostView;
 
 // ============================================================================
 // Command Registration
@@ -1105,7 +1103,7 @@ export interface ExtensionAPI {
 		event: "session_before_compact",
 		handler: ExtensionHandler<SessionBeforeCompactEvent, SessionBeforeCompactResult>,
 	): void;
-	on(event: "session.compacting", handler: ExtensionHandler<SessionCompactingEvent, SessionCompactingResult>): void;
+	on(event: "session_compacting", handler: ExtensionHandler<SessionCompactingEvent, SessionCompactingResult>): void;
 	on(event: "session_compact", handler: ExtensionHandler<SessionCompactEvent>): void;
 	on(event: "session_shutdown", handler: ExtensionHandler<SessionShutdownEvent>): void;
 	on(event: "session_before_tree", handler: ExtensionHandler<SessionBeforeTreeEvent, SessionBeforeTreeResult>): void;
@@ -1240,8 +1238,14 @@ export interface ExtensionAPI {
 	/** Get available slash commands in the current session. */
 	getCommands(): SlashCommandInfo[];
 
-	/** Set the current model. Returns false if no API key available. */
-	setModel(model: Model): Promise<boolean>;
+	/**
+	 * Set the current model. Returns false if no API key available.
+	 *
+	 * `ephemeral` records the switch as a fallback rather than as the session's model, so
+	 * resuming the session returns to the model it had before: for a model the caller will
+	 * put back itself, such as the model an autoswarm arm builds on.
+	 */
+	setModel(model: Model, options?: SetModelOptions): Promise<boolean>;
 
 	/** Get current thinking level. */
 	getThinkingLevel(): ThinkingLevel | undefined;
@@ -1277,7 +1281,9 @@ export interface ExtensionAPI {
 	 * // Register a new provider with custom models and streaming
 	 * pi.registerProvider("google-vertex-claude", {
 	 *   baseUrl: "https://us-east5-aiplatform.googleapis.com",
-	 *   apiKey: "GOOGLE_CLOUD_PROJECT",
+	 *   // A bare `NAME_LIKE_THIS` reads the environment variable and resolves to nothing
+	 *   // when it is unset. Write `${NAME}` for a reference or `literal:<text>` for a value.
+	 *   apiKey: "${GOOGLE_CLOUD_PROJECT}",
 	 *   api: "vertex-claude-api",
 	 *   streamSimple: myStreamFunction,
 	 *   models: [
@@ -1429,7 +1435,12 @@ export type GetCommandsHandler = () => SlashCommandInfo[];
 
 export type SetActiveToolsHandler = (toolNames: string[]) => Promise<void>;
 
-export type SetModelHandler = (model: Model) => Promise<boolean>;
+export interface SetModelOptions {
+	/** Record the switch as a fallback, so a resumed session opens on the model before it. */
+	ephemeral?: boolean;
+}
+
+export type SetModelHandler = (model: Model, options?: SetModelOptions) => Promise<boolean>;
 
 export type GetThinkingLevelHandler = () => ThinkingLevel | undefined;
 
@@ -1497,7 +1508,7 @@ export interface ExtensionRuntime extends ExtensionRuntimeState, ExtensionAction
  * LOADED is the distinguishing word. `ManifestExtension`
  * (`capability/extension.ts`) is a Gemini-style extension directory found on disk
  * and never executed, and `ExtensionRow`
- * (`modes/components/extensions/types.ts`) is a dashboard row that normalizes every
+ * (`extensibility/extension-state/types.ts`) is a dashboard row that normalizes every
  * capability kind. All three were called `Extension`, so an editor auto-import
  * picked whichever it offered and nothing compared them.
  */
@@ -1518,6 +1529,12 @@ export interface LoadedExtension {
 export interface LoadExtensionsResult {
 	extensions: LoadedExtension[];
 	errors: Array<{ path: string; error: string }>;
+	/**
+	 * Project-scoped extensions that were NOT imported because the project carries no trust
+	 * decision covering them. Separate from `errors` because nothing failed: the code is intact
+	 * and deliberately not run, and the operator's next move is a decision rather than a fix.
+	 */
+	withheld: Array<{ path: string; reason: string }>;
 	runtime: ExtensionRuntime;
 }
 

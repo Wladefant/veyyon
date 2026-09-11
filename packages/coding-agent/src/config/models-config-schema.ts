@@ -1,5 +1,22 @@
 import { THINKING_EFFORTS } from "@veyyon/catalog/effort";
-import { scope } from "arktype";
+import { scope, type Traversal, type Type } from "arktype";
+
+/**
+ * Rejects the first key in `keys` whose value is the empty string, in list
+ * order, with the message `<key> a non-empty string`. A key that is absent or
+ * holds a non-string is left to the object schema.
+ */
+function rejectEmptyStrings<T extends object>(value: T, ctx: Traversal, keys: readonly (keyof T & string)[]): boolean {
+	for (const key of keys) {
+		const field: unknown = value[key];
+		if (typeof field === "string" && field.length === 0) return ctx.mustBe(`${key} a non-empty string`);
+	}
+	return true;
+}
+
+const MODEL_DEFINITION_NON_EMPTY_KEYS = ["id", "name", "baseUrl", "contextPromotionTarget", "compactionModel"] as const;
+const MODEL_OVERRIDE_NON_EMPTY_KEYS = ["name", "contextPromotionTarget", "compactionModel"] as const;
+const PROVIDER_CONFIG_NON_EMPTY_KEYS = ["baseUrl", "apiKey"] as const;
 
 // Schema construction is deferred behind modelsConfigSchemas(): even with the
 // jitless scope below (~65% cheaper than default ArkType codegen), building
@@ -200,33 +217,7 @@ function buildModelsConfigSchemas() {
 		"contextPromotionTarget?": "string",
 		"compactionModel?": "string",
 		"remoteCompaction?": RetiredRemoteCompactionSchema,
-	}).narrow((value, ctx) => {
-		// Enforce id non-empty
-		if (typeof value.id === "string" && value.id.length === 0) {
-			return ctx.mustBe("id a non-empty string");
-		}
-		if (value.name !== undefined && typeof value.name === "string" && value.name.length === 0) {
-			return ctx.mustBe("name a non-empty string");
-		}
-		if (value.baseUrl !== undefined && typeof value.baseUrl === "string" && value.baseUrl.length === 0) {
-			return ctx.mustBe("baseUrl a non-empty string");
-		}
-		if (
-			value.contextPromotionTarget !== undefined &&
-			typeof value.contextPromotionTarget === "string" &&
-			value.contextPromotionTarget.length === 0
-		) {
-			return ctx.mustBe("contextPromotionTarget a non-empty string");
-		}
-		if (
-			value.compactionModel !== undefined &&
-			typeof value.compactionModel === "string" &&
-			value.compactionModel.length === 0
-		) {
-			return ctx.mustBe("compactionModel a non-empty string");
-		}
-		return true;
-	});
+	}).narrow((value, ctx) => rejectEmptyStrings(value, ctx, MODEL_DEFINITION_NON_EMPTY_KEYS));
 
 	const ModelOverrideSchema = type({
 		"name?": "string",
@@ -249,26 +240,7 @@ function buildModelsConfigSchemas() {
 		"contextPromotionTarget?": "string",
 		"compactionModel?": "string",
 		"remoteCompaction?": RetiredRemoteCompactionSchema,
-	}).narrow((value, ctx) => {
-		if (value.name !== undefined && typeof value.name === "string" && value.name.length === 0) {
-			return ctx.mustBe("name a non-empty string");
-		}
-		if (
-			value.contextPromotionTarget !== undefined &&
-			typeof value.contextPromotionTarget === "string" &&
-			value.contextPromotionTarget.length === 0
-		) {
-			return ctx.mustBe("contextPromotionTarget a non-empty string");
-		}
-		if (
-			value.compactionModel !== undefined &&
-			typeof value.compactionModel === "string" &&
-			value.compactionModel.length === 0
-		) {
-			return ctx.mustBe("compactionModel a non-empty string");
-		}
-		return true;
-	});
+	}).narrow((value, ctx) => rejectEmptyStrings(value, ctx, MODEL_OVERRIDE_NON_EMPTY_KEYS));
 
 	const ProviderDiscoverySchema = type({
 		type: '"ollama" | "llama.cpp" | "lm-studio" | "openai-models-list" | "proxy" | "litellm"',
@@ -297,34 +269,168 @@ function buildModelsConfigSchemas() {
 		 * and `apiKey` must carry the gateway bearer.
 		 */
 		"transport?": '"pi-native"',
-	}).narrow((value, ctx) => {
-		if (value.baseUrl !== undefined && typeof value.baseUrl === "string" && value.baseUrl.length === 0) {
-			return ctx.mustBe("baseUrl a non-empty string");
-		}
-		if (value.apiKey !== undefined && typeof value.apiKey === "string" && value.apiKey.length === 0) {
-			return ctx.mustBe("apiKey a non-empty string");
-		}
-		return true;
-	});
+	}).narrow((value, ctx) => rejectEmptyStrings(value, ctx, PROVIDER_CONFIG_NON_EMPTY_KEYS));
 
 	const ModelsConfigSchema = type({
 		"providers?": { "[string]": ProviderConfigSchema },
 	});
 
-	return { OpenAICompatSchema, ModelOverrideSchema, ProviderDiscoverySchema, ProviderAuthSchema, ModelsConfigSchema };
+	const schemas: ModelsConfigSchemas = {
+		OpenAICompatSchema,
+		ModelOverrideSchema,
+		ProviderDiscoverySchema,
+		ProviderAuthSchema,
+		ModelsConfigSchema,
+	};
+	return schemas;
 }
 
-type Schemas = ReturnType<typeof buildModelsConfigSchemas>;
+export type ProviderAuthMode = "apiKey" | "none" | "oauth";
 
-let schemasCache: Schemas | undefined;
+export interface ProviderDiscovery {
+	type: "ollama" | "llama.cpp" | "lm-studio" | "openai-models-list" | "proxy" | "litellm";
+}
+
+export interface ModelCost {
+	input?: number;
+	output?: number;
+	cacheRead?: number;
+	cacheWrite?: number;
+}
+export interface OpenAICompatOverride {
+	supportsStore?: boolean;
+	supportsDeveloperRole?: boolean;
+	supportsMultipleSystemMessages?: boolean;
+	supportsReasoningEffort?: boolean;
+	reasoningEffortMap?: {
+		minimal?: string;
+		low?: string;
+		medium?: string;
+		high?: string;
+		xhigh?: string;
+		max?: string;
+	};
+	maxTokensField?: "max_completion_tokens" | "max_tokens";
+	supportsUsageInStreaming?: boolean;
+	requiresToolResultName?: boolean;
+	requiresMistralToolIds?: boolean;
+	requiresAssistantAfterToolResult?: boolean;
+	requiresThinkingAsText?: boolean;
+	reasoningContentField?: "reasoning_content" | "reasoning" | "reasoning_text";
+	requiresReasoningContentForToolCalls?: boolean;
+	allowsSyntheticReasoningContentForToolCalls?: boolean;
+	requiresAssistantContentForToolCalls?: boolean;
+	supportsToolChoice?: boolean;
+	supportsForcedToolChoice?: boolean;
+	disableReasoningOnForcedToolChoice?: boolean;
+	disableReasoningOnToolChoice?: boolean;
+	thinkingFormat?: "openai" | "openrouter" | "zai" | "qwen" | "qwen-chat-template";
+	openRouterRouting?: {
+		only?: string[];
+		order?: string[];
+	};
+	vercelGatewayRouting?: {
+		only?: string[];
+		order?: string[];
+	};
+	extraBody?: Record<string, unknown>;
+	cacheControlFormat?: "anthropic";
+	supportsStrictMode?: boolean;
+	toolStrictMode?: "all_strict" | "none";
+	streamIdleTimeoutMs?: number;
+	supportsLongPromptCacheRetention?: boolean;
+	supportsReasoningParams?: boolean;
+	alwaysSendMaxTokens?: boolean;
+	strictResponsesPairing?: boolean;
+	supportsImageDetailOriginal?: boolean;
+	supportsServerCompaction?: boolean;
+	requiresToolResultId?: boolean;
+	replayUnsignedThinking?: boolean;
+	whenThinking?: OpenAICompatOverride;
+}
+
+export interface ModelDefinition {
+	id: string;
+	name?: string;
+	api?: string;
+	baseUrl?: string;
+	reasoning?: boolean;
+	thinking?: {
+		type?: "enabled" | "disabled" | "thought-budget";
+		budgetTokens?: number;
+	};
+	input?: ("text" | "image")[];
+	supportsTools?: boolean;
+	cost?: {
+		input: number;
+		output: number;
+		cacheRead: number;
+		cacheWrite: number;
+	};
+	premiumMultiplier?: number;
+	contextWindow?: number;
+	maxTokens?: number;
+	omitMaxOutputTokens?: boolean;
+	headers?: Record<string, string>;
+	compat?: OpenAICompatOverride;
+	contextPromotionTarget?: string;
+	compactionModel?: string;
+	remoteCompaction?: unknown;
+}
+
+export interface ModelOverride {
+	name?: string;
+	reasoning?: boolean;
+	thinking?: {
+		type?: "enabled" | "disabled" | "thought-budget";
+		budgetTokens?: number;
+	};
+	input?: ("text" | "image")[];
+	supportsTools?: boolean;
+	cost?: ModelCost;
+	premiumMultiplier?: number;
+	contextWindow?: number;
+	maxTokens?: number;
+	omitMaxOutputTokens?: boolean;
+	headers?: Record<string, string>;
+	compat?: OpenAICompatOverride;
+	contextPromotionTarget?: string;
+	compactionModel?: string;
+	remoteCompaction?: unknown;
+}
+
+export interface ProviderConfig {
+	baseUrl?: string;
+	apiKey?: string;
+	api?: string;
+	headers?: Record<string, string>;
+	compat?: OpenAICompatOverride;
+	remoteCompaction?: unknown;
+	authHeader?: boolean;
+	auth?: ProviderAuthMode;
+	discovery?: ProviderDiscovery;
+	models?: ModelDefinition[];
+	modelOverrides?: Record<string, ModelOverride>;
+	disableStrictTools?: boolean;
+	transport?: "pi-native";
+}
+
+export interface ModelsConfig {
+	providers?: Record<string, ProviderConfig>;
+}
+
+export interface ModelsConfigSchemas {
+	OpenAICompatSchema: Type;
+	ModelOverrideSchema: Type;
+	ProviderDiscoverySchema: Type;
+	ProviderAuthSchema: Type;
+	ModelsConfigSchema: Type;
+}
+
+let schemasCache: ModelsConfigSchemas | undefined;
 
 /** The models-config schema set, built lazily on first config load. */
-export function modelsConfigSchemas(): Schemas {
+export function modelsConfigSchemas(): ModelsConfigSchemas {
 	schemasCache ??= buildModelsConfigSchemas();
 	return schemasCache;
 }
-
-export type ModelOverride = Schemas["ModelOverrideSchema"]["infer"];
-export type ProviderAuthMode = Schemas["ProviderAuthSchema"]["infer"];
-export type ProviderDiscovery = Schemas["ProviderDiscoverySchema"]["infer"];
-export type ModelsConfig = Schemas["ModelsConfigSchema"]["infer"];

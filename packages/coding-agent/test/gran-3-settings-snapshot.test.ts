@@ -5,7 +5,7 @@
  * Why this suite exists:
  *   The session recorded model/thinking/tier/mode CHANGES but never the FULL
  *   effective settings that governed a run (compaction strategy, reserve tokens,
- *   advisor/subagent config, tool config, every Tier-A knob). A backtest could not
+ *   advisor/agent config, tool config, every Tier-A knob). A backtest could not
  *   reproduce behavior because the config that produced it was not in the record.
  *   The user named this a co-equal pillar: "the session file AND the settings for
  *   the levels of richness." A `settings_snapshot` entry captures every resolved
@@ -22,16 +22,16 @@
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import * as path from "node:path";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import type { SettingsSnapshotEntry } from "@veyyon/coding-agent/session/session-entries";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import type { SettingsSnapshotEntry } from "@veyyon/kernel/session/session-entries";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 
-const KNOWN_PATH = "subagent.maxConcurrency";
+const KNOWN_PATH = "agent.maxConcurrency";
 const KNOWN_VALUE = 7;
 
 function assistantMessage(text: string) {

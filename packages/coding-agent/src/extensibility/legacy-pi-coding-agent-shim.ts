@@ -16,6 +16,8 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { TSchema } from "@veyyon/ai";
+import { LEGACY_TOOL_DEFINITION_MARKER } from "@veyyon/kernel/registry/legacy-tool-marker";
+import { Type } from "@veyyon/kernel/registry/typebox";
 import { Text } from "@veyyon/tui";
 import {
 	errorMessage,
@@ -28,14 +30,14 @@ import type { PromptTemplate } from "../config/prompt-templates";
 import { type SettingPath, Settings } from "../config/settings";
 import { EditTool } from "../edit";
 import { formatExitCodeNotice } from "../exec/exit-notice";
-import type { CreateAgentSessionOptions, CreateAgentSessionResult, LoadExtensionsResult } from "../sdk";
+import { type LoadExtensionsResult, createAgentSession as ompCreateAgentSession } from "../sdk";
 import {
 	discoverContextFiles,
 	discoverPromptTemplates,
 	discoverSessionExtensionPaths,
 	discoverSkills,
-	createAgentSession as ompCreateAgentSession,
-} from "../sdk";
+} from "../session/factory-extensions";
+import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "../session/factory-options";
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
@@ -44,27 +46,23 @@ import {
 	truncateTail,
 } from "../session/streaming-output";
 import type { Tool, ToolSession } from "../tools";
-import { BashTool } from "../tools/bash";
-import { GlobTool } from "../tools/glob";
-import { GrepTool } from "../tools/grep";
-import { ReadTool } from "../tools/read";
-import { formatBytes } from "../tools/render-utils";
-import { WriteTool } from "../tools/write";
+import { formatBytes } from "../tools/core/render-utils";
+import { ReadTool } from "../tools/fs/read";
+import { WriteTool } from "../tools/fs/write";
+import { SearchTool } from "../tools/search/search";
+import { BashTool } from "../tools/shell/bash";
 import { EventBus } from "../utils/event-bus";
 import { loadExtensionFromFactory, loadExtensions } from "./extensions";
 import { ExtensionRuntime } from "./extensions/loader";
 import type { ExtensionFactory, ToolDefinition } from "./extensions/types";
-import { LEGACY_TOOL_DEFINITION_MARKER } from "./legacy-tool-marker";
-import type { Skill } from "./skills";
-import { loadSkillsFromDir } from "./skills";
-import { Type } from "./typebox";
+import { loadSkillsFromDir, type Skill } from "./skills";
 
 const LEGACY_BUILTIN_TOOL_MARKER = "__veyyonLegacyBuiltinTool";
 const LEGACY_CODING_TOOL_NAMES = ["read", "bash", "edit", "write"] as const;
 const LEGACY_READ_ONLY_TOOL_NAMES = ["read", "grep", "find", "ls"] as const;
 
 type LegacyCodingToolName = (typeof LEGACY_CODING_TOOL_NAMES)[number];
-type LegacyRegistryToolName = LegacyCodingToolName | "grep" | "glob";
+type LegacyRegistryToolName = LegacyCodingToolName | "search";
 type LegacyBuiltinToolDefinition = ToolDefinition & { [LEGACY_BUILTIN_TOOL_MARKER]: true };
 
 type LegacySettingOverrides = Partial<Record<SettingPath, unknown>>;
@@ -200,10 +198,8 @@ function createRegistryTool(
 			return new BashTool(session);
 		case "edit":
 			return new EditTool(session);
-		case "glob":
-			return new GlobTool(session);
-		case "grep":
-			return new GrepTool(session);
+		case "search":
+			return new SearchTool(session);
 		case "read":
 			return new ReadTool(session);
 		case "write":
@@ -290,6 +286,17 @@ function legacyRenderResult(result: AgentToolResult<unknown>, _options: unknown,
 	const theme = renderTheme(themeArg, undefined);
 	const output = textResult(result);
 	return new Text(output ? `\n${themedMuted(theme, output)}` : "", 0, 0);
+}
+
+/** A legacy call card: the tool's title, then `detail(params)` in the muted colour. */
+function legacyRenderCall(
+	title: string,
+	detail: (params: unknown) => string,
+): (params: unknown, optionsArg: unknown, themeArg: unknown) => Text {
+	return (params, optionsArg, themeArg) => {
+		const theme = renderTheme(optionsArg, themeArg);
+		return new Text(`${themedTitle(theme, title)} ${themedMuted(theme, detail(params))}`, 0, 0);
+	};
 }
 
 function lineRangePath(readPath: string, offset: number | undefined, limit: number | undefined): string {
@@ -411,11 +418,7 @@ export function createReadToolDefinition(cwd: string, options?: ReadToolOptions)
 		description: tool.description,
 		parameters: legacyReadSchema,
 		approval: "read",
-		renderCall: (params, options, themeArg) => {
-			const theme = renderTheme(options, themeArg);
-			const readPath = stringField(params, "path") ?? "";
-			return new Text(`${themedTitle(theme, "read")} ${themedMuted(theme, readPath)}`, 0, 0);
-		},
+		renderCall: legacyRenderCall("read", params => stringField(params, "path") ?? ""),
 		renderResult: legacyRenderResult,
 		execute: (toolCallId, params, signal, onUpdate) => {
 			const readPath = stringField(params, "path") ?? "";
@@ -439,11 +442,7 @@ export function createBashToolDefinition(cwd: string, options?: BashToolOptions)
 		description: tool.description,
 		parameters: legacyBashSchema,
 		approval: "exec",
-		renderCall: (params, optionsArg, themeArg) => {
-			const theme = renderTheme(optionsArg, themeArg);
-			const command = stringField(params, "command") ?? "";
-			return new Text(`${themedTitle(theme, "bash")} ${themedMuted(theme, command)}`, 0, 0);
-		},
+		renderCall: legacyRenderCall("bash", params => stringField(params, "command") ?? ""),
 		renderResult: legacyRenderResult,
 		execute: (toolCallId, params, signal, onUpdate) => {
 			const rawCommand = stringField(params, "command") ?? "";
@@ -489,19 +488,17 @@ export function createGrepToolDefinition(cwd: string, options?: GrepToolOptions)
 				"defineTool() instead of passing operations to createGrepTool()/createGrepToolDefinition().",
 		);
 	}
-	const tool = createRegistryTool(cwd, "grep");
+	const tool = createRegistryTool(cwd, "search");
 	return markToolDefinition({
 		name: "grep",
 		label: "grep",
 		description: "Search file contents for a pattern.",
 		parameters: legacyGrepSchema,
 		approval: "read",
-		renderCall: (params, optionsArg, themeArg) => {
-			const theme = renderTheme(optionsArg, themeArg);
-			const pattern = stringField(params, "pattern") ?? "";
-			const searchPath = stringField(params, "path") ?? ".";
-			return new Text(`${themedTitle(theme, "grep")} ${themedMuted(theme, `/${pattern}/ in ${searchPath}`)}`, 0, 0);
-		},
+		renderCall: legacyRenderCall(
+			"grep",
+			params => `/${stringField(params, "pattern") ?? ""}/ in ${stringField(params, "path") ?? "."}`,
+		),
 		renderResult: legacyRenderResult,
 		execute: (toolCallId, params, signal, onUpdate) => {
 			const rawPattern = stringField(params, "pattern") ?? "";
@@ -509,19 +506,20 @@ export function createGrepToolDefinition(cwd: string, options?: GrepToolOptions)
 			const searchPath = stringField(params, "path") ?? ".";
 			const glob = stringField(params, "glob");
 			const context = numberField(params, "context");
-			// The new grep reads context from settings fixed at construction; build a
-			// per-call tool when the model passes an explicit legacy `context`.
-			const grepTool =
+			// Unified text search reads context from settings fixed at construction;
+			// build a per-call tool when the legacy API passes an explicit context.
+			const searchTool =
 				context === undefined
 					? tool
-					: createRegistryTool(cwd, "grep", {
-							"grep.contextBefore": Math.max(0, Math.floor(context)),
-							"grep.contextAfter": Math.max(0, Math.floor(context)),
+					: createRegistryTool(cwd, "search", {
+							"search.contextBefore": Math.max(0, Math.floor(context)),
+							"search.contextAfter": Math.max(0, Math.floor(context)),
 						});
-			return grepTool.execute(
+			return searchTool.execute(
 				toolCallId,
 				{
-					pattern,
+					type: "text",
+					input: pattern,
 					path: glob ? joinLegacyGlob(searchPath, glob) : searchPath,
 					case: booleanField(params, "ignoreCase") ? false : undefined,
 				},
@@ -539,19 +537,17 @@ export function createGrepTool(cwd: string, options?: GrepToolOptions): ToolDefi
 
 /** Create the legacy find tool definition. */
 export function createFindToolDefinition(cwd: string, options?: FindToolOptions): ToolDefinition {
-	const tool = createRegistryTool(cwd, "glob");
+	const tool = createRegistryTool(cwd, "search");
 	return markToolDefinition({
 		name: "find",
 		label: "find",
 		description: "Find files by glob pattern.",
 		parameters: legacyFindSchema,
 		approval: "read",
-		renderCall: (params, optionsArg, themeArg) => {
-			const theme = renderTheme(optionsArg, themeArg);
-			const pattern = stringField(params, "pattern") ?? "";
-			const searchPath = stringField(params, "path") ?? ".";
-			return new Text(`${themedTitle(theme, "find")} ${themedMuted(theme, `${pattern} in ${searchPath}`)}`, 0, 0);
-		},
+		renderCall: legacyRenderCall(
+			"find",
+			params => `${stringField(params, "pattern") ?? ""} in ${stringField(params, "path") ?? "."}`,
+		),
 		renderResult: legacyRenderResult,
 		execute: async (toolCallId, params, signal, onUpdate) => {
 			const pattern = stringField(params, "pattern") ?? "*";
@@ -580,7 +576,7 @@ export function createFindToolDefinition(cwd: string, options?: FindToolOptions)
 			}
 			return tool.execute(
 				toolCallId,
-				{ path: joinLegacyGlob(searchPath, pattern), hidden: true, gitignore: true, limit },
+				{ type: "files", input: joinLegacyGlob(searchPath, pattern), hidden: true, gitignore: true, limit },
 				signal,
 				onUpdate,
 			);
@@ -601,10 +597,7 @@ export function createLsToolDefinition(cwd: string, options?: LsToolOptions): To
 		description: "List directory entries.",
 		parameters: legacyLsSchema,
 		approval: "read",
-		renderCall: (params, optionsArg, themeArg) => {
-			const theme = renderTheme(optionsArg, themeArg);
-			return new Text(`${themedTitle(theme, "ls")} ${themedMuted(theme, stringField(params, "path") ?? ".")}`, 0, 0);
-		},
+		renderCall: legacyRenderCall("ls", params => stringField(params, "path") ?? "."),
 		renderResult: legacyRenderResult,
 		execute: async (_toolCallId, params, _signal, _onUpdate) => {
 			const rawPath = stringField(params, "path") ?? ".";
@@ -623,7 +616,7 @@ export function createLsToolDefinition(cwd: string, options?: LsToolOptions): To
 				return { content: [{ type: "text", text: rawPath }] };
 			}
 			const entries = ops ? await ops.readdir(absolutePath) : await fs.readdir(absolutePath);
-			const sorted = [...entries].sort((a, b) => a.localeCompare(b));
+			const sorted = entries.slice().sort((a, b) => a.localeCompare(b));
 			const limited = sorted.slice(0, limit);
 			const output = limited.join("\n");
 			const details = sorted.length > limited.length ? { entryLimitReached: limit } : undefined;
@@ -670,7 +663,7 @@ export const SettingsManager = {
  * prompt / theme / AGENTS.md discovery inside a `DefaultResourceLoader`
  * instance that the caller constructs, `reload()`s, and hands to
  * `createAgentSession({ resourceLoader })`. Every published version of
- * pi-schedule-prompt (≥0.2.0) and other pi extensions that spawn subagents
+ * pi-schedule-prompt (≥0.2.0) and other pi extensions that spawn agents
  * import the class at module scope; a missing export takes the whole
  * extension down at parse time (issue #4567).
  *
@@ -793,7 +786,12 @@ export class DefaultResourceLoader implements ResourceLoader {
 	readonly __veyyonLegacyPiLoader = true as const;
 	#state: ResolvedLoaderState;
 	#options: DefaultResourceLoaderOptions;
-	#extensionsResult: LoadExtensionsResult = { extensions: [], errors: [], runtime: new ExtensionRuntime() };
+	#extensionsResult: LoadExtensionsResult = {
+		extensions: [],
+		errors: [],
+		withheld: [],
+		runtime: new ExtensionRuntime(),
+	};
 	#skills: Skill[] = [];
 	#skillDiagnostics: ResourceDiagnostic[] = [];
 	#prompts: PromptTemplate[] = [];
@@ -942,7 +940,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		const { cwd, agentDir, noExtensions, additionalExtensionPaths, extensionFactories, eventBus } = this.#state;
 
 		if (noExtensions && additionalExtensionPaths.length === 0 && extensionFactories.length === 0) {
-			return { extensions: [], errors: [], runtime: new ExtensionRuntime() };
+			return { extensions: [], errors: [], withheld: [], runtime: new ExtensionRuntime() };
 		}
 
 		// `agentDir` for the same reason `reload()` passes it to skills, prompt
@@ -959,7 +957,10 @@ export class DefaultResourceLoader implements ResourceLoader {
 			agentDir,
 		);
 
-		const result = await loadExtensions(paths, cwd, eventBus);
+		const result = await loadExtensions(paths, cwd, eventBus, undefined, {
+			agentDir,
+			configuredPaths: [...additionalExtensionPaths, ...(settings.get("extensions") ?? [])],
+		});
 		for (let i = 0; i < extensionFactories.length; i++) {
 			const loaded = await loadExtensionFromFactory(
 				extensionFactories[i],
@@ -988,7 +989,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 					dir: skillDir,
 					source: "legacy-resource-loader",
 				});
-				skills.push(...result.skills);
+				for (let si = 0; si < result.skills.length; si++) skills.push(result.skills[si]!);
 				diagnostics.push(
 					...result.warnings.map(w => ({
 						type: "warning" as const,
@@ -1120,7 +1121,7 @@ export class DefaultResourceLoader implements ResourceLoader {
  * context-file discovery are configured directly on the session options — so
  * an untranslated call would silently ignore the loader (including its
  * `noExtensions`/`noSkills` opt-outs), re-run veyyon's own discovery, and
- * happily re-load the calling extension into the subagent. That's exactly
+ * happily re-load the calling extension into the agent. That's exactly
  * the recursion the caller passed the loader to prevent.
  *
  * Translate the loader's captured state into veyyon's option fields, then
@@ -1206,6 +1207,6 @@ export async function createAgentSession(
 	return ompCreateAgentSession(forwarded);
 }
 
+export { Type } from "@veyyon/kernel/registry/typebox";
 export * from "../index";
-export { formatBytes as formatSize } from "../tools/render-utils";
-export { Type } from "./typebox";
+export { formatBytes as formatSize } from "../tools/core/render-utils";

@@ -16,8 +16,8 @@
   - `packages/coding-agent/src/lsp/clients/lsp-linter-client.ts`: LSP-backed linter adapter
   - `packages/coding-agent/src/lsp/clients/biome-client.ts`: Biome CLI diagnostics/formatting adapter
   - `packages/coding-agent/src/lsp/clients/swiftlint-client.ts`: SwiftLint CLI diagnostics adapter
-  - `packages/coding-agent/src/tools/index.ts`: tool registration and `lsp.enabled` gating
-  - `packages/coding-agent/src/tools/tool-timeouts.ts`: timeout defaults and clamping
+  - `packages/coding-agent/src/tools/index.ts`: tool registration; `lsp.enabled` starts servers, `lsp.tool` exposes the agent tool
+  - `packages/coding-agent/src/tools/core/tool-timeouts.ts`: timeout defaults and clamping
   - `packages/coding-agent/src/lsp/defaults.json`: built-in server definitions for auto-detect
 
 ## Inputs
@@ -43,7 +43,7 @@
 - Many validation failures are returned as ordinary text results with `details.success: false`; aborts throw `ToolAbortError` instead.
 
 ## Flow
-1. `packages/coding-agent/src/tools/index.ts` registers `lsp: LspTool.createIf`; session creation also gates it behind `session.enableLsp !== false` and `settings.get("lsp.enabled")`.
+1. `packages/coding-agent/src/tools/index.ts` registers `lsp: LspTool.createIf`; session creation also gates it behind `session.enableLsp !== false`, `settings.get("lsp.enabled")`, and `settings.get("lsp.tool")`. Injected diagnostics after write/edit are `lsp.diagnosticsOnWrite` / `lsp.diagnosticsOnEdit` and do not require the agent tool.
 2. `LspTool.execute()` in `packages/coding-agent/src/lsp/index.ts` clamps `timeout` with `clampTimeout("lsp", ...)`, builds an `AbortSignal.timeout(...)`, and combines it with the caller signal.
 3. `getConfig()` loads and caches `LspConfig` per cwd, applies idle-timeout config via `setIdleTimeout()`, and reuses the cached config on later calls.
 4. Config loading in `packages/coding-agent/src/lsp/config.ts` merges `defaults.json` with JSON/YAML overrides from project, project config dirs, user config dirs, plugin roots, and home; if there are no overrides it auto-detects servers from root markers plus executable discovery.
@@ -268,7 +268,7 @@ Same as `definition`, but sends `textDocument/implementation` and reports `imple
   - Background message readers persist for each live client until process exit/shutdown.
 
 ## Limits & Caps
-- Tool timeout clamp: default `20`, min `5`, max `60` seconds: `TOOL_TIMEOUTS.lsp` in `packages/coding-agent/src/tools/tool-timeouts.ts`.
+- Tool timeout clamp: default `20`, min `5`, max `60` seconds: `TOOL_TIMEOUTS.lsp` in `packages/coding-agent/src/tools/core/tool-timeouts.ts`.
 - LSP request default timeout inside `sendRequest()`: `30_000ms`: `DEFAULT_REQUEST_TIMEOUT_MS` in `packages/coding-agent/src/lsp/client.ts`.
 - Warmup initialize timeout default: `5_000ms`: `WARMUP_TIMEOUT_MS` in `packages/coding-agent/src/lsp/client.ts`.
 - Project-load wait fallback: `15_000ms`: `PROJECT_LOAD_TIMEOUT_MS` in `packages/coding-agent/src/lsp/client.ts`.
@@ -313,5 +313,5 @@ Same as `definition`, but sends `textDocument/implementation` and reports `imple
 - `reload` does not recreate a client immediately after killing it; the next request triggers reinitialization.
 - `workspace/applyEdit` can apply edits initiated by the server outside the direct tool action result path.
 - `detectLspmux()` can be disabled with `VEYYON_DISABLE_LSPMUX=1`; only `rust-analyzer` is in `DEFAULT_SUPPORTED_SERVERS`.
-- Startup LSP discovery (`discoverStartupLspServers(cwd)` in `sdk.ts`) runs for `enableLsp && options.hasUI`; the background warmup additionally requires `!settings.get("lsp.lazy")`. `lsp.lazy` defaults to `true`, so by default discovered servers are surfaced with status `"available"` (gray dot in the welcome screen) and cold-start through `getOrCreateClient()` on first use (lsp tool call or edit/write on a matching file type). Print/RPC/ACP/script sessions skip discovery and warmup entirely. See `docs/sdk.md` § Startup performance.
+- Startup LSP discovery (`discoverStartupLspServers(cwd)` in `sdk.ts`) runs for `enableLsp && options.hasUI`; the background warmup additionally requires `!settings.get("lsp.lazy")`. `lsp.lazy` defaults to `true`, so by default discovered servers are surfaced with status `"available"` (gray dot in the welcome screen) and cold-start through `getOrCreateClient()` on first use (lsp tool call or edit/write on a matching file type). Print/RPC/ACP/script sessions skip discovery and warmup entirely. See `docs/handbook/src/reference/sdk.md` § Startup performance.
 - `configCache` is per-process and never auto-invalidated; config changes require a fresh process to be observed by `getConfig()` callers.

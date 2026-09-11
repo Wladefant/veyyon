@@ -2,101 +2,67 @@
  * Tool renderer registry. Keys are current wire tool names; aliases keep old
  * transcript names renderable. Unknown tools fall back to the generic JSON renderer.
  */
+import { createElement } from "react";
+import { agentDescriptors } from "./descriptors/agent";
+import { fsDescriptors } from "./descriptors/fs";
+import { memoryDescriptors } from "./descriptors/memory";
+import { searchDescriptors } from "./descriptors/search";
+import { systemDescriptors } from "./descriptors/system";
 import { genericRenderer } from "./generic";
-import { argotLoadRenderer, argotUnloadRenderer } from "./tools/argot";
-import { askRenderer } from "./tools/ask";
-import { astEditRenderer } from "./tools/ast-edit";
-import { astGrepRenderer } from "./tools/ast-grep";
-import { bashRenderer } from "./tools/bash";
-import { browserRenderer } from "./tools/browser";
-import { checkpointRenderer, rewindRenderer } from "./tools/checkpoint";
-import { debugRenderer } from "./tools/debug";
-import { editRenderer } from "./tools/edit";
-import { evalRenderer } from "./tools/eval";
-import { fetchRenderer } from "./tools/fetch";
-import { generateImageRenderer } from "./tools/generate-image";
-import { githubRenderer } from "./tools/github";
-import { globRenderer } from "./tools/glob";
-import { goalRenderer } from "./tools/goal";
-import { grepRenderer } from "./tools/grep";
-import { inspectImageRenderer } from "./tools/inspect-image";
-import { ircRenderer } from "./tools/irc";
-import { jobRenderer } from "./tools/job";
-import { launchRenderer } from "./tools/launch";
-import { learnRenderer } from "./tools/learn";
-import { lspRenderer } from "./tools/lsp";
-import { manageSkillRenderer } from "./tools/manage-skill";
-import { memoryEditRenderer } from "./tools/memory-edit";
-import { recallRenderer } from "./tools/memory-recall";
-import { reflectRenderer } from "./tools/memory-reflect";
-import { retainRenderer } from "./tools/memory-retain";
-import { readRenderer } from "./tools/read";
-import { reportFindingRenderer } from "./tools/report-finding";
-import { reportToolIssueRenderer } from "./tools/report-tool-issue";
-import { resolveRenderer } from "./tools/resolve";
-import { searchBm25Renderer } from "./tools/search-bm25";
-import { setCwdRenderer } from "./tools/set-cwd";
-import { sshRenderer } from "./tools/ssh";
-import { taskRenderer } from "./tools/task";
-import { todoRenderer } from "./tools/todo";
-import { webSearchRenderer } from "./tools/web-search";
-import { writeRenderer } from "./tools/write";
-import { yieldRenderer } from "./tools/yield";
-import type { ToolRenderer } from "./types";
+import type { ToolDescriptor, ToolRenderer, ToolRenderProps } from "./types";
+import { ToolExecutionBody, ToolExecutionSummary } from "./ViewRenderer";
 
-const RENDERERS: Record<string, ToolRenderer> = {
-	argot_load: argotLoadRenderer,
-	argot_unload: argotUnloadRenderer,
-	ask: askRenderer,
-	ast_edit: astEditRenderer,
-	ast_grep: astGrepRenderer,
-	bash: bashRenderer,
-	browser: browserRenderer,
-	puppeteer: browserRenderer,
-	checkpoint: checkpointRenderer,
-	rewind: rewindRenderer,
-	debug: debugRenderer,
-	edit: editRenderer,
-	apply_patch: editRenderer,
-	eval: evalRenderer,
-	js: evalRenderer,
-	python: evalRenderer,
-	notebook: evalRenderer,
-	fetch: fetchRenderer,
-	glob: globRenderer,
-	find: globRenderer,
-	generate_image: generateImageRenderer,
-	github: githubRenderer,
-	goal: goalRenderer,
-	inspect_image: inspectImageRenderer,
-	irc: ircRenderer,
-	job: jobRenderer,
-	await: jobRenderer,
-	poll: jobRenderer,
-	cancel_job: jobRenderer,
-	launch: launchRenderer,
-	learn: learnRenderer,
-	lsp: lspRenderer,
-	manage_skill: manageSkillRenderer,
-	memory_edit: memoryEditRenderer,
-	recall: recallRenderer,
-	reflect: reflectRenderer,
-	retain: retainRenderer,
-	read: readRenderer,
-	report_finding: reportFindingRenderer,
-	report_tool_issue: reportToolIssueRenderer,
-	resolve: resolveRenderer,
-	grep: grepRenderer,
-	search: grepRenderer,
-	search_tool_bm25: searchBm25Renderer,
-	set_cwd: setCwdRenderer,
-	ssh: sshRenderer,
-	task: taskRenderer,
-	todo: todoRenderer,
-	web_search: webSearchRenderer,
-	write: writeRenderer,
-	yield: yieldRenderer,
-};
+const ALL_DESCRIPTORS: readonly ToolDescriptor[] = [
+	...fsDescriptors,
+	...agentDescriptors,
+	...systemDescriptors,
+	...searchDescriptors,
+	...memoryDescriptors,
+];
+
+function wrapDescriptor(desc: ToolDescriptor): ToolDescriptor {
+	const SpecializedSummary = desc.Summary;
+	const SpecializedBody = desc.Body;
+
+	const Summary = (props: ToolRenderProps) => {
+		if (props.display) {
+			return createElement(ToolExecutionSummary, { ...props, name: props.name || desc.name });
+		}
+		return createElement(SpecializedSummary, props);
+	};
+
+	const Body = SpecializedBody
+		? (props: ToolRenderProps) => {
+				if (props.display) {
+					return createElement(ToolExecutionBody, { ...props, name: props.name || desc.name });
+				}
+				return createElement(SpecializedBody, props);
+			}
+		: undefined;
+
+	return {
+		name: desc.name,
+		aliases: desc.aliases,
+		Summary,
+		Body,
+	};
+}
+
+export const RENDERERS: Record<string, ToolRenderer> = Object.create(null);
+
+for (const rawDesc of ALL_DESCRIPTORS) {
+	const desc = wrapDescriptor(rawDesc);
+	RENDERERS[desc.name] = desc;
+	if (desc.aliases) {
+		for (const alias of desc.aliases) {
+			RENDERERS[alias] = desc;
+		}
+	}
+}
+
+export function getRegisteredToolNames(): string[] {
+	return Object.keys(RENDERERS);
+}
 
 /**
  * Wire tool names are attacker/model-controlled input, so a plain-object
@@ -107,5 +73,5 @@ const RENDERERS: Record<string, ToolRenderer> = {
  * the render (`Object.hasOwn` restricts lookups to declared own keys).
  */
 export function resolveToolRenderer(name: string): ToolRenderer {
-	return Object.hasOwn(RENDERERS, name) ? RENDERERS[name] : genericRenderer;
+	return Object.hasOwn(RENDERERS, name) ? RENDERERS[name]! : genericRenderer;
 }

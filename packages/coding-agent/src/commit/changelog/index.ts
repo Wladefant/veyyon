@@ -1,10 +1,10 @@
 import * as path from "node:path";
 import type { ThinkingLevel } from "@veyyon/agent-core";
 import type { Api, ApiKey, Model } from "@veyyon/ai";
-import { logger } from "@veyyon/utils";
-import { CHANGELOG_CATEGORIES } from "../../commit/types";
+import { errorMessage, logger } from "@veyyon/utils";
 import * as git from "../../utils/git";
 import type { ResolveObfuscateProviderText } from "../shared-llm";
+import { CHANGELOG_CATEGORIES } from "../types";
 import { detectChangelogBoundaries } from "./detect";
 import { generateChangelogEntries } from "./generate";
 import { parseUnreleasedSection } from "./parse";
@@ -35,7 +35,7 @@ function canonicalizeSectionKeys(entries: Record<string, string[]>): Record<stri
 	const result: Record<string, string[]> = {};
 	for (const [section, items] of Object.entries(entries)) {
 		const key = canonicalizeSectionName(section);
-		result[key] = result[key] ? [...result[key], ...items] : [...items];
+		result[key] = result[key] ? result[key].concat(items) : items.slice();
 	}
 	return result;
 }
@@ -103,7 +103,7 @@ export async function runChangelogFlow({
 		} catch (error) {
 			logger.warn("commit changelog parse skipped", {
 				path: sanitizeProviderText(boundary.changelogPath),
-				error: sanitizeProviderText(String(error)),
+				error: sanitizeProviderText(errorMessage(error)),
 			});
 			continue;
 		}
@@ -161,7 +161,7 @@ export async function applyChangelogProposals({
 		try {
 			unreleased = parseUnreleasedSection(changelogContent);
 		} catch (error) {
-			logger.warn("commit changelog parse skipped", { path: proposal.path, error: String(error) });
+			logger.warn("commit changelog parse skipped", { path: proposal.path, error: errorMessage(error) });
 			continue;
 		}
 		const normalized = normalizeEntries(proposal.entries);
@@ -219,7 +219,7 @@ export function applyChangelogEntries(
 	// before a heading, so insert exactly one separator when there is following
 	// content, and none at end-of-file so the changelog gains no trailing blank.
 	const separator = after.length > 0 ? [""] : [];
-	return [...before, ...sectionLines, ...separator, ...after].join("\n");
+	return before.concat(sectionLines, separator, after).join("\n");
 }
 
 function applyDeletions(

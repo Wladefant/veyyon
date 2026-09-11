@@ -11,17 +11,14 @@ import {
 	type StreamingPartialJsonCarrier,
 	setStreamingPartialJson,
 } from "@veyyon/ai/utils/block-symbols";
-import {
-	type ArgotGate,
-	type ArgotSession,
-	makeGate,
-	makeStreamDecoder,
-	type StreamDecoder,
-	type Vocabulary,
-} from "argot";
+import type { SessionContext } from "@veyyon/kernel/session/session-context";
+import type { SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
+import { type ArgotGate, makeGate } from "argot/policy";
+import type { ArgotSession } from "argot/session";
+import { makeStreamDecoder, type StreamDecoder } from "argot/stream";
+import type { Vocabulary } from "argot/types";
 import { type JsonWithOptionalFields, mapJsonStrings } from "./json-transform";
 import { mapAgentMessageStrings, mapAssistantContentStrings } from "./secrets/obfuscator";
-import type { SessionContext } from "./session/session-context";
 
 /**
  * Adapt veyyon's three settings fields to an argot gate. The gate SHAPE and its
@@ -42,10 +39,10 @@ export function expandToolArguments(argot: ArgotSession, args: Record<string, un
 }
 
 /**
- * Expand handles in a subagent's returned text at the RETURN boundary — the last
+ * Expand handles in a child agent's returned text at the RETURN boundary — the last
  * seam a child emits across, and the one a broken harness silently skips.
  *
- * A subagent running `fresh`/`inherit` writes `§handle` tokens keyed to its OWN
+ * A spawned agent running `fresh`/`inherit` writes `§handle` tokens keyed to its OWN
  * codec. The raw assistant text the executor captures from the child's stream
  * events (accumulated output chunks, the final turn, cancelled-run salvage) is in
  * that handle form, and it becomes the parent's tool result and on-disk artifact.
@@ -61,13 +58,13 @@ export function expandToolArguments(argot: ArgotSession, args: Record<string, un
  * identity; `expand` on text carrying no sigil is also identity. Both make it safe
  * to route every captured chunk through here unconditionally.
  */
-export function expandSubagentReturn(codec: ArgotSession | undefined, text: string): string {
+export function expandAgentReturn(codec: ArgotSession | undefined, text: string): string {
 	if (!text || codec === undefined || !codec.loaded) return text;
 	return codec.expand(text);
 }
 
 /**
- * Build a stream decoder for a subagent's LIVE token preview — the streaming
+ * Build a stream decoder for a child agent's LIVE token preview — the streaming
  * display seam. This is the one display seam a plain {@link ArgotSession.expand}
  * cannot serve, because the child's text arrives token by token and a handle can
  * split across two deltas (`§db` then `conn`): expanding each delta alone would
@@ -82,7 +79,7 @@ export function expandSubagentReturn(codec: ArgotSession | undefined, text: stri
  * child message and feed every delta to `decoder.push`, rendering only its
  * return; call `decoder.flush()` at message end and `decoder.reset()` on abort.
  */
-export function createSubagentStreamDecoder(codec: ArgotSession | undefined): StreamDecoder | undefined {
+export function createAgentStreamDecoder(codec: ArgotSession | undefined): StreamDecoder | undefined {
 	if (codec === undefined || !codec.loaded) return undefined;
 	return codec.streamDecoder();
 }
@@ -351,7 +348,8 @@ export class ArgotStreamDisplayDecoder {
 			if (content !== source.partial.content) patch.partial = { ...source.partial, content };
 		}
 
-		return Object.keys(patch).length === 0 ? event : { ...event, ...patch };
+		for (const _ in patch) return { ...event, ...patch };
+		return event;
 	}
 
 	/**
@@ -496,4 +494,33 @@ export function expandSessionContext(argot: ArgotSession, context: SessionContex
 	if (!argot.loaded) return context;
 	const messages = mapAgentMessageStrings(context.messages, s => argot.expand(s), DISPLAY_WALK);
 	return messages === context.messages ? context : { ...context, messages };
+}
+
+/**
+ * Expand handles across persisted transcript entries read straight off disk.
+ *
+ * `expandSessionContext` covers a rebuild that goes through `SessionManager`.
+ * The agent dashboard's transcript viewer does not: it parses a spawned agent's
+ * or advisor's `.jsonl` itself, because those two cases have no live session to
+ * hand the view over to. The persisted file keeps the cheap handles (see
+ * {@link expandSessionContext}), so that viewer was the one display that showed
+ * the model's raw `§handle` text. Same walk, same codec, one entry list instead
+ * of a `SessionContext`.
+ *
+ * Identity until a dictionary loads, and identity when nothing changed, so the
+ * viewer's append path can keep comparing entry arrays by reference.
+ */
+export function expandSessionMessageEntries(
+	argot: ArgotSession,
+	entries: SessionMessageEntry[],
+): SessionMessageEntry[] {
+	if (!argot.loaded) return entries;
+	const source = entries.map(entry => entry.message);
+	const expanded = mapAgentMessageStrings(source, s => argot.expand(s), DISPLAY_WALK);
+	// `mapAgentMessageStrings` hands the input array back untouched when no
+	// string moved, which is the common case once a transcript is fully read.
+	if (expanded === source) return entries;
+	return entries.map((entry, index) =>
+		expanded[index] === entry.message ? entry : { ...entry, message: expanded[index] },
+	);
 }

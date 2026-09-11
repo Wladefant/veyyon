@@ -99,7 +99,7 @@ describe("the declarations are a leaf", () => {
 		const reached = reachedNames("slash-commands/builtin-declarations.ts");
 
 		expect(reached).toContain(path.join("packages", "coding-agent", "src", "config", "service-tier.ts"));
-		expect(reached).toContain(path.join("packages", "coding-agent", "src", "session", "compact-modes.ts"));
+		expect(reached).toContain(path.join("kernel", "src", "session", "compact-modes.ts"));
 	});
 });
 
@@ -148,7 +148,7 @@ describe("the split kept one set of commands", () => {
 	 * the number is only useful if a change to it has to be justified:
 	 *
 	 *   - DOWN to 66: `/cockpit` (with its `/hub` alias) was folded into `/agents` as an alias when
-	 *     the Agent Hub overlay and the Agent Control Center stopped being two screens. A command
+	 *     the Agent Hub overlay and the agent dashboard stopped being two screens. A command
 	 *     that becomes an alias of another leaves the set of NAMES unchanged and the set of
 	 *     DECLARATIONS one shorter, which is exactly what this number counts.
 	 *   - UP to 67: `/secret` was added, storing a credential the agent can reference by
@@ -164,9 +164,29 @@ describe("the split kept one set of commands", () => {
 	 *   - UP to 71: `/cpu-limit` was added. `session.cpuLimitCores` is a per-profile setting, so a
 	 *     session that needs a different budget than the profile chose had no way to say so, and no
 	 *     way to lift the cap for one piece of work without editing the profile.
+	 *   - UP to 72: `/stats` was added. The dashboard parser and launcher existed, exported and
+	 *     fully tested, and nothing in the product called either — so `Usage: /stats [<port>]`
+	 *     described a command that was not registered, and the dashboard was reachable only as
+	 *     `veyyon stats` from a shell. Declaring it is what makes that usage string true.
+	 *   - UP to 73: `/trust` was added. Project code (a plugin registry, an extension, a hook, an
+	 *     MCP server it names) is withheld until the operator decides, and a refusal with no way to
+	 *     answer it inside the session is a dead end: the CLI `veyyon trust` needs a shell, which a
+	 *     running TUI does not have.
+	 *   - UP to 74: `/advisor` was added. The advisor subsystem shipped complete — a roster loaded
+	 *     from `WATCHDOG.yml`, per-advisor models, tools and instructions, `getAdvisorStats`,
+	 *     `formatAdvisorStatus`, `formatAdvisorHistoryAsText`, and a full-screen roster editor with
+	 *     its own tests — and nothing in the product reached any of it. The three handlers behind it
+	 *     answered "Advisor/watchdog was removed from Veyyon", which was inherited from upstream and
+	 *     had stopped being true the moment the subsystem was re-added. Declaring the command is what
+	 *     makes the editor reachable and those handlers report the running session.
+	 *   - UP to 75: `/rephrase` was added. Asking for the same answer in plainer prose is a whole
+	 *     turn a user retypes constantly, and typing it by hand varies the instruction each time,
+	 *     so the reply varies with it. The command sends one fixed instruction, and refuses unless
+	 *     the conversation is resting on a finished reply — there is nothing to rephrase mid-turn,
+	 *     or after a turn that produced only tool calls or an error.
 	 */
-	it("there are the 71 builtins the declarations hold", () => {
-		expect(BUILTIN_SLASH_COMMAND_DECLARATIONS.length).toBe(71);
+	it("there are the 75 builtins the declarations hold", () => {
+		expect(BUILTIN_SLASH_COMMAND_DECLARATIONS.length).toBe(75);
 	});
 
 	/**

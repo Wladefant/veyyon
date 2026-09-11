@@ -61,8 +61,17 @@ import { PACKAGES, reach, reachedNames } from "../helpers/module-reach-gate";
  * So the leaf is admitted on the same terms as `json.ts` above: one module, zero imports of its own,
  * so the edge cannot grow, and no measurable time. A raise for a module that pulls a graph behind it
  * is a different question and this precedent does not cover it.
+ *
+ * 37 from 2026-08-31, two modules above the 35 the graph measured just before it and one above the
+ * ceiling that stood over it. The modules are `cli/first-frame-replay-entry.ts` and
+ * `cli/first-frame-replay.ts`, the first-frame replay that writes the previous bare launch's
+ * recorded card to fd 1 during the entry's own evaluation. They are on this path on purpose: the
+ * write only beats the import graph from the first import of `cli.ts`, so moving either behind an
+ * `await import(...)` deletes the feature. The pair reaches `node:fs`, `node:os` and `node:path`
+ * and one type-only import of `@veyyon/tui/tui`, which erases, so the edge cannot grow into the
+ * package the way a value import would.
  */
-const BOOT_CEILING = 36;
+const BOOT_CEILING = 37;
 
 /** The same measurement as a floor, so a broken walk fails instead of passing quietly. */
 const BOOT_FLOOR = 25;
@@ -72,7 +81,7 @@ const BOOT_FLOOR = 25;
  *
  * Every entry is a module a plausible edit would pull onto the boot path. `main.ts` is the obvious
  * one and the reason `cli.ts` ends with `await import("./main")` rather than a static import.
- * `config/settings.ts` and `modes/theme/theme.ts` are the two most-imported modules in the package,
+ * `config/settings.ts` and `theme/theme.ts` are the two most-imported modules in the package,
  * so any helper that touches a setting or a colour drags them along. The tool implementations are
  * the claim `tools/index.ts` makes in prose.
  */
@@ -82,13 +91,13 @@ const OFF_THE_BOOT_PATH = [
 	"coding-agent/src/index.ts",
 	"coding-agent/src/config/settings.ts",
 	"coding-agent/src/config/settings-schema.ts",
-	"coding-agent/src/modes/theme/theme.ts",
+	"coding-agent/src/theme/theme.ts",
 	"coding-agent/src/session/agent-session.ts",
 	"coding-agent/src/session/session-manager.ts",
 	"coding-agent/src/tools/index.ts",
-	"coding-agent/src/tools/read.ts",
-	"coding-agent/src/tools/bash.ts",
-	"coding-agent/src/tools/grep.ts",
+	"coding-agent/src/tools/fs/read.ts",
+	"coding-agent/src/tools/shell/bash.ts",
+	"coding-agent/src/tools/search/search.ts",
 	"coding-agent/src/edit/index.ts",
 ] as const;
 
@@ -103,17 +112,18 @@ const ON_THE_BOOT_PATH = [
 	"coding-agent/src/cli/flag-tables.ts",
 	"coding-agent/src/cli-commands.ts",
 	"coding-agent/src/worker-args.ts",
+	"coding-agent/src/cli/first-frame-replay-entry.ts",
 ] as const;
 
 /**
  * The one module under `tools/` the boot path may reach.
  *
- * `tools/approval-modes.ts` is the approval-mode value list, and `cli/flag-tables.ts` imports it to
+ * `tools/core/approval-modes.ts` is the approval-mode value list, and `cli/flag-tables.ts` imports it to
  * validate `--approval`. Its own header says it is kept free of runtime dependencies for exactly
  * this reason, so it reaches nothing and costs one module. Any OTHER `tools/` module appearing here
  * means a tool implementation is being parsed at startup.
  */
-const BOOT_TOOL_MODULES = ["coding-agent/src/tools/approval-modes.ts"];
+const BOOT_TOOL_MODULES = ["coding-agent/src/tools/core/approval-modes.ts"];
 
 /** A `/`-written path in the shape `reachedNames` produces, so the lists read the same on Windows. */
 function asPath(name: string): string {

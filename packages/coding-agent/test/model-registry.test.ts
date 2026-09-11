@@ -4,12 +4,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { FetchImpl, Model, OpenAICompat, ThinkingConfig } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import { writeModelCache } from "@veyyon/catalog/model-cache";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 
 describe("ModelRegistry", () => {
@@ -1401,39 +1401,47 @@ describe("ModelRegistry", () => {
 
 	describe("github-copilot oauth endpoint alignment", () => {
 		test("getApiKey does not mutate bundled github-copilot baseUrl", async () => {
-			await authStorage.set("github-copilot", [
-				{
-					type: "oauth",
-					access: "ghu_individual_token_123",
-					refresh: "ghu_individual_token_123",
-					expires: Date.now() + 60_000,
-				},
-				{
-					type: "oauth",
-					access: "ghu_enterprise_token_456",
-					refresh: "ghu_enterprise_token_456",
-					expires: Date.now() + 60_000,
-					enterpriseUrl: "ghe.example.com",
-				},
-			]);
+			// Two accounts have to serve in turn for the enterprise credential to reach the second
+			// call, and a sessionless caller only rotates with load balancing on: off, one account
+			// serves every call.
+			const rotating = await AuthStorage.create(":memory:", { loadBalancing: true });
+			try {
+				await rotating.set("github-copilot", [
+					{
+						type: "oauth",
+						access: "ghu_individual_token_123",
+						refresh: "ghu_individual_token_123",
+						expires: Date.now() + 60_000,
+					},
+					{
+						type: "oauth",
+						access: "ghu_enterprise_token_456",
+						refresh: "ghu_enterprise_token_456",
+						expires: Date.now() + 60_000,
+						enterpriseUrl: "ghe.example.com",
+					},
+				]);
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
-			const model = registry.find("github-copilot", "gpt-4o");
-			expect(model).toBeDefined();
-			if (!model) throw new Error("Expected github-copilot/gpt-4o model");
+				const registry = new ModelRegistry(rotating, modelsJsonPath);
+				const model = registry.find("github-copilot", "gpt-4o");
+				expect(model).toBeDefined();
+				if (!model) throw new Error("Expected github-copilot/gpt-4o model");
 
-			const initialBaseUrl = model.baseUrl;
-			const firstApiKey = await registry.getApiKey(model);
-			expect(firstApiKey).toBeDefined();
-			const firstParsed = JSON.parse(firstApiKey!) as { token?: string; enterpriseUrl?: string };
-			expect(firstParsed.token).toBe("ghu_individual_token_123");
-			expect(firstParsed.enterpriseUrl).toBeUndefined();
-			const secondApiKey = await registry.getApiKey(model);
-			expect(secondApiKey).toBeDefined();
-			const secondParsed = JSON.parse(secondApiKey!) as { token?: string; enterpriseUrl?: string };
-			expect(secondParsed.token).toBe("ghu_enterprise_token_456");
-			expect(secondParsed.enterpriseUrl).toBe("ghe.example.com");
-			expect(model.baseUrl).toBe(initialBaseUrl);
+				const initialBaseUrl = model.baseUrl;
+				const firstApiKey = await registry.getApiKey(model);
+				expect(firstApiKey).toBeDefined();
+				const firstParsed = JSON.parse(firstApiKey!) as { token?: string; enterpriseUrl?: string };
+				expect(firstParsed.token).toBe("ghu_individual_token_123");
+				expect(firstParsed.enterpriseUrl).toBeUndefined();
+				const secondApiKey = await registry.getApiKey(model);
+				expect(secondApiKey).toBeDefined();
+				const secondParsed = JSON.parse(secondApiKey!) as { token?: string; enterpriseUrl?: string };
+				expect(secondParsed.token).toBe("ghu_enterprise_token_456");
+				expect(secondParsed.enterpriseUrl).toBe("ghe.example.com");
+				expect(model.baseUrl).toBe(initialBaseUrl);
+			} finally {
+				rotating.close();
+			}
 		});
 
 		test("refreshProvider uses enterprise Copilot discovery host for peeked credentials", async () => {
@@ -1530,6 +1538,28 @@ describe("ModelRegistry", () => {
 				url => url.includes("127.0.0.1:11434") || url.includes("127.0.0.1:8080") || url.includes("127.0.0.1:1234"),
 			);
 			expect(disabledProbeUrls).toEqual([]);
+		});
+
+		test("refresh probes a built-in local provider at its models.yml baseUrl override", async () => {
+			writeRawModelsJson({ ollama: { baseUrl: "http://127.0.0.1:41434/v1" } });
+			await Settings.init({
+				inMemory: true,
+				overrides: {
+					disabledProviders: ["llama.cpp", "lm-studio"],
+				},
+			});
+			const requestedUrls: string[] = [];
+			const fetchMock: FetchImpl = input => {
+				requestedUrls.push(String(input));
+				throw new Error(`Unexpected URL: ${String(input)}`);
+			};
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+			await registry.refresh("online");
+
+			const ollamaProbeUrls = requestedUrls.filter(url => url.includes("127.0.0.1:41434"));
+			expect(ollamaProbeUrls).not.toEqual([]);
+			expect(requestedUrls.filter(url => url.includes("127.0.0.1:11434"))).toEqual([]);
 		});
 	});
 	describe("bundled Anthropic catalog availability", () => {

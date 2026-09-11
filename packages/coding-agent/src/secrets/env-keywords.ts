@@ -74,7 +74,7 @@ export function buildEnvSecretPattern(keywords: readonly string[]): RegExp {
 		// variable", which would send every environment value through the obfuscator.
 		return /(?!)/;
 	}
-	const escaped = [...normalized].map(keyword => keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+	const escaped = Array.from(normalized).map(keyword => keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 	return new RegExp(`(?:${escaped.join("|")})(?:_|$)`, "i");
 }
 
@@ -131,12 +131,12 @@ export async function loadEnvSecretKeywords(options: { cwd: string; agentDir: st
 		} catch (error) {
 			if (isEnoent(error)) continue;
 			throw new Error(
-				`Refusing to start: ${filePath} exists but could not be read (${String(error)}). ` +
+				`Refusing to start: ${filePath} exists but could not be read (${errorMessage(error)}). ` +
 					`Fix the file's permissions or remove it. Continuing without it would leave every variable ` +
 					`its keywords cover undetected.`,
 			);
 		}
 		for (const keyword of parseKeywords(text, filePath)) keywords.add(keyword);
 	}
-	return [...keywords];
+	return Array.from(keywords);
 }

@@ -1,34 +1,16 @@
 // A version heading may appear at most once in a package changelog.
 //
-// The incident this locks out: `packages/coding-agent/CHANGELOG.md` shipped with the
-// ENTIRE `## [1.0.38] - 2026-07-31` section in it TWICE, and nothing noticed. Not the
-// release script, not CI, not the website changelog generator, not review. It sat in a
-// published changelog across six releases.
+// Why: `packages/coding-agent/CHANGELOG.md` shipped with the
+// entire `## [1.0.38] - 2026-07-31` section in it twice.
 //
-// It got there without anyone making a mistake. The clean, conflict-free auto-merge in
-// 47ced98a merged two branches that had both edited the top of the 1.0.38 section: one
-// added nine `### Fixed` bullets, the other reordered `### Changed` above `### Fixed`.
-// Git expressed the reorder as a large delete-plus-reinsert, decided the two edits
-// touched disjoint text, and applied both, emitting the section header twice.
-// `git merge-tree` replays that to a byte-identical result, so there was no conflict to
-// resolve and no marker to catch. That is the point: a duplicate section is what a
-// changelog merge FAILS AS, silently, and the only defence is counting the headings.
-//
-// What breaks if this regresses: a duplicated section is a lie about what shipped. It
-// double-reports fixes to users reading the changelog, it makes the website changelog
-// render a release twice, and because the second copy carried a DIFFERENT bullet set
-// than the first, deleting either copy on sight would have destroyed real entries.
-// Reconciling that by hand months later means diffing two large blocks to find out
-// which bullets exist in only one of them. Catching it at the heading is cheap; the
-// entire cost of this incident was that nobody did.
 
 import { describe, expect, it } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
-import { versionHeadings } from "./changelog-unreleased.ts";
+import { versionHeadings } from "./changelog-unreleased";
+import { typeScriptMembers } from "./workspace-layout";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "..");
-const PACKAGES_DIR = path.join(REPO_ROOT, "packages");
 
 /** A version heading and every line it was found on, in file order. */
 type Duplicate = { version: string; lines: number[] };
@@ -50,11 +32,23 @@ export function duplicateVersionHeadings(markdown: string): Duplicate[] {
 	return [...seen].filter(([, lines]) => lines.length > 1).map(([version, lines]) => ({ version, lines }));
 }
 
-/** Every package changelog (`CHANGELOG.md` directly under a `packages/` entry), repo-relative. */
+/**
+ * Every member changelog (`CHANGELOG.md` directly under a workspace member), repo-relative.
+ *
+ * The members are read from the root manifest. Scanning `packages/` alone left `contracts/wire` and
+ * `contracts/view` outside the rule, so either could ship a duplicated release section — the exact
+ * incident this gate exists for — with the gate green. The root view was in turn blind to literal
+ * paths (`natives/bridge/bindings`, `clients/python/veybot/web`), which `typeScriptMembers()` now reaches.
+ */
 function packageChangelogs(): string[] {
-	return [...new Bun.Glob("*/CHANGELOG.md").scanSync(PACKAGES_DIR)]
-		.map(rel => path.posix.join("packages", rel.split(path.sep).join("/")))
-		.sort();
+	const found: string[] = [];
+	for (const member of typeScriptMembers()) {
+		const rel = `${member}/CHANGELOG.md`;
+		if (existsSync(path.join(REPO_ROOT, rel))) {
+			found.push(rel);
+		}
+	}
+	return found.sort();
 }
 
 describe("duplicateVersionHeadings", () => {
@@ -136,12 +130,14 @@ describe("duplicateVersionHeadings", () => {
 	});
 });
 
-describe("every packages/*/CHANGELOG.md", () => {
+describe("every member CHANGELOG.md", () => {
 	const changelogs = packageChangelogs();
 
-	it("finds the package changelogs to check", () => {
-		// A glob that silently matched nothing would make every check below vacuous.
+	it("finds the member changelogs to check, under every root", () => {
+		// A glob that silently matched nothing would make every check below vacuous, and a glob that
+		// matched one root only would make it vacuous for the members under the others.
 		expect(changelogs).toContain("packages/coding-agent/CHANGELOG.md");
+		expect(changelogs).toContain("contracts/wire/CHANGELOG.md");
 		expect(changelogs.length).toBeGreaterThanOrEqual(15);
 	});
 

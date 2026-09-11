@@ -7,8 +7,8 @@ import { AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai";
 import * as mcpClient from "@veyyon/coding-agent/mcp/client";
 import * as oauthFlow from "@veyyon/coding-agent/mcp/oauth-flow";
 import type { MCPServerConfig } from "@veyyon/coding-agent/mcp/types";
-import { MCPCommandController } from "@veyyon/coding-agent/modes/controllers/mcp-command-controller";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
+import { MCPCommandController } from "@veyyon/coding-agent/modes/terminal/controllers/mcp-command-controller";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { getMCPConfigPath, getProjectDir, removeWithRetries, setAgentDir, setProjectDir } from "@veyyon/utils";
 import { captureDirOverrides, restoreDirOverrides } from "@veyyon/utils/dirs";
 
@@ -46,6 +46,7 @@ function createController(authStorage: AuthStorage, mcpManagerOverrides: Record<
 	const mcpManager = {
 		prepareConfig,
 		disconnectAll: vi.fn(async () => {}),
+		invalidateCommandCredentials: vi.fn(() => 0),
 		discoverAndConnect: vi.fn(async () => ({ errors: new Map<string, string>() })),
 		getTools: vi.fn(() => []),
 		waitForConnection: vi.fn(async () => {}),

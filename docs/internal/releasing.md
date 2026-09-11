@@ -97,8 +97,8 @@ still a commit `main` tested.
 (`bun run release:dry`) it decides the same things and writes none of them.
 
 1. **Preflight.** Require the `main` branch and a clean tree, so the bump commit
-   contains the bump and nothing else. Require the new version to be greater than
-   the latest tag; a repository with no `v*` tags reads as a `0.0.0` baseline.
+   contains the bump and nothing else. The version is a label. The only refusal
+   is a version that already exists as a tag, and the no-tag baseline stays `0.0.0`.
 2. **Documented.** Assert `packages/coding-agent/CHANGELOG.md` has something to
    release: a bullet under `## [Unreleased]`, or a `## [version]` section already
    written by an earlier cut of the same version.
@@ -150,7 +150,7 @@ tag, asks once, then:
 
 Every way this can stop leaves the bump commit on `main` and prints the tag
 command to finish by hand, because a half-finished cut must never need archaeology
-to complete. That covers a red gate, a wait that exceeds ninety minutes, and
+to complete. That covers a red gate, a wait that exceeds sixty minutes, and
 answering no at the prompt (which stops before the push, with the bump still
 local).
 
@@ -193,8 +193,8 @@ hang off the draft and run in parallel.
    `releases/latest` on Linux x64, Linux arm64, macOS x64, macOS arm64, and
    Windows x64. Each run requires the installed binary to report the new tag.
 
-Nothing is code-signed, notarized, or attested, and no workflow claims
-provenance. The checksum sidecar is the whole integrity story.
+Nothing is code-signed, notarized, or attested, and no workflow claims a verified
+build origin. The checksum sidecar is the whole integrity story.
 
 Any failed, cancelled, or skipped required job files or updates one pinned
 `release-train` issue. Only a run where every required artifact succeeded closes
@@ -214,12 +214,12 @@ One owner per concern, so a change lands in one place.
 | Tag and asset policy | `scripts/release-policy.ts` |
 | Version authorities | `validateReleaseVersionAuthorities` in `scripts/release.ts` |
 | Changelog normalization | `scripts/fix-changelogs.ts` |
-| Root changelog | `renderRootChangelog` in `website/tools/gen-changelog.mjs`, written by `scripts/sync-root-changelog.ts` |
+| Root changelog | `renderRootChangelog` in `apps/site/tools/gen-changelog.mjs`, written by `scripts/sync-root-changelog.ts` |
 | Release notes body | `scripts/ci-release-notes.ts` |
 | Binary target table | `packages/coding-agent/scripts/binary-targets.ts` |
 | Binary build | `scripts/ci-release-build-binaries.ts` |
 | Publication | `release_github_publish` in `.github/workflows/ci.yml` |
-| Site and install endpoint | `website/build.mjs` and `website/deploy.mjs`, see [deployment.md](./deployment.md) |
+| Site and install endpoint | `apps/site/build.mjs` and `apps/site/deploy.mjs`, see [deployment.md](./deployment.md) |
 
 Two things that look like release steps and are not. `bun run gen:changelog`
 (`scripts/rewrite-changelog.ts`) asks a model to rewrite an `## [Unreleased]`
@@ -227,6 +227,10 @@ section into shipped-behavior prose; it is an authoring aid you run by hand befo
 a release, and no release invokes it. `bun run check-spoofed-versions` compares the
 external tool versions veyyon impersonates against their upstream releases; it is
 maintenance, unrelated to cutting one.
+
+### Release order is publication order
+
+Release order is publication order. A version string such as `0.0.1` or `1.4.0` is a label. Release B is newer than release A if and only if B was published after A. No tool sorts changelog sections by version number. Changelog document order preserves publication order, with `## [Unreleased]` first and released sections newest first.
 
 ## What a release produces
 
@@ -249,7 +253,7 @@ The native addons ship as `veyyon_natives.<platform>-<arch>[-variant].node` so a
 source install stays toolchain-free: `ensure-native.ts` fetches the addon for its
 own checkout's tag instead of requiring cargo.
 
-**The website** (`veyyon.dev`). `website/changelog.html`, regenerated from
+**The website** (`veyyon.dev`). `apps/site/changelog.html`, regenerated from
 `packages/coding-agent/CHANGELOG.md` and reconciled against the published GitHub
 releases for real dates and permalinks.
 
@@ -266,10 +270,10 @@ The website build fails when a version exists on GitHub Releases that
 version, so the changelog has to say what is in it.
 
 The gate is unconditional. `UNDOCUMENTED_RELEASE_BASELINE` in
-`website/tools/gen-changelog.mjs` is empty, so no version is exempt. Write the
+`apps/site/tools/gen-changelog.mjs` is empty, so no version is exempt. Write the
 entry when you see the failure. Do not add the version to the baseline: it is a
 shrinking record of old debt, and
-`website/tools/undocumented-release-ratchet.test.ts` pins it empty.
+`apps/site/tools/undocumented-release-ratchet.test.ts` pins it empty.
 
 The website build is the last place that can catch this, and it catches it too
 late: v1.0.38 through v1.0.46 were each tagged at a tree with no section, so each
@@ -304,7 +308,7 @@ The cut refused, or `main`'s CI went red on the bump commit. No remote
 tag exists, so nothing was published and nothing needs undoing remotely.
 
 If it refused before it wrote anything, it named the reason: a
-dirty tree, the wrong branch, a version that is not ahead of the latest tag, or
+dirty tree, the wrong branch, a version that already exists as a tag, or
 an undocumented package. Fix it and run it again — the tree is untouched.
 
 If it failed part-way — an unreconcilable natives sentinel, a changelog the
@@ -574,4 +578,4 @@ the checked-in state. All three copies are gitignored and the assets are declare
 in `types/assets/index.d.ts`, so the generated state still type checks and cannot
 be committed by accident.
 
-*Verified against `bb79b0574` on 2026-08-11.*
+*Verified against `9c904aa2db` on 2026-09-05.*

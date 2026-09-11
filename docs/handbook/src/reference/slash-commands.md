@@ -3,7 +3,7 @@
 Slash commands run inside an interactive Veyyon session. Type `/` in the composer to open the
 picker. Commands below are the **builtin** set; extensions may add more.
 
-A command nothing can handle is refused, not sent to the model. If you mistype a name, or type a
+A command nothing can handle is rejected, not sent to the model. If you mistype a name, or type a
 command your installed build does not have, you get:
 
 ```text
@@ -11,7 +11,7 @@ Unknown command "/secrt". Nothing handled it, so it was not sent to the model. T
 commands this build has, or drop the leading slash to send it as a message.
 ```
 
-The refusal names the command and never repeats what followed it, because the tail of a mistyped
+The refusal states the command and never repeats what followed it, because the tail of a mistyped
 `/secret` is a credential. The rule reaches further than one mistyped word: in a terminal the whole
 argument line of `/secret` is the credential, whatever it happens to spell, so there is no tail
 there that is safe to echo back.
@@ -24,6 +24,57 @@ A message that merely begins with a filesystem path is prose, not a command, and
 
 The separator decides. A command name is one segment of letters, digits, underscores and hyphens
 starting with a letter, so anything holding a slash is a path.
+
+## Every argument is a plain word
+
+No slash command takes an option. Nothing is spelled with a dash, so there is nothing to look up
+and nothing to get in the wrong order. A word means something for one of two reasons: the POSITION
+it sits in, or a CLOSED SET or SHAPE it belongs to.
+
+Plenty of commands take a single argument, listed with them in the tables below. These are the ones
+with a grammar to state, and each used to spell part of it with dashes:
+
+```text
+/mcp add <name> [http|sse] [url <url>] [token <token>] [run <command...>]
+/mcp remove <name>
+/mcp smithery-search <keyword...> [<limit 1-100>] [semantic]
+/ssh add <name> <host> [user <user>] [<port>] [key <keyPath>]
+/ssh remove <name>
+/stats [<port>]
+```
+
+`/secret` has its own grammar and its own page: see [Secrets](../features/secrets.md).
+
+Position covers every required word, so `/mcp remove project` removes a server actually named
+`project`. Where meaning is taken from a word's shape instead, the sets provably cannot overlap: on
+`/ssh add` a port is digits and nothing else the command reads is, and `user` and `key` are the only
+two keywords, each taking the word after it. A word the command cannot use is rejected rather than
+ignored, because a word that is silently dropped looks like a setting that was applied.
+
+### A spelling that was an option
+
+Each of these commands remembers the option spellings it used to have, and rejects them, stating the
+plain word that replaced each one:
+
+```text
+/ssh add box example.com --port 2222
+--port is gone: write the port as a plain integer.
+Usage: /ssh add <name> <host> [user <user>] [<port>] [key <keyPath>]
+```
+
+The plain word gets the same answer as the dashed one. `/stats port 8080` is rejected the way
+`/stats --port 8080` is, and `/mcp add srv project` the way `/mcp add srv --scope project` is,
+because the operator who types the word an older grammar taught is asking the same question either
+way and wants the same answer. Which words those are is read from the same table the refusal text
+comes from, so the two spellings cannot drift apart.
+
+A word that never was an option is rejected more briefly, since there is no replacement to name:
+`Unknown argument: <word>`, or `Invalid port: <word>` where a port was the only thing the command
+reads.
+
+`/mcp smithery-search` is the exception, and it is one on purpose: its trailing words are search
+terms, arbitrary text with no closed set, so a plain `project` there is a keyword to search for and
+is searched for. Only the dashed spellings are rejected.
 
 ## A bare command that has subcommands
 
@@ -69,7 +120,7 @@ act on a bare invocation: `/yolo`, `/fast`, and `/browser` flip a switch, `/goal
 | `/switch` | Try a model for this session only, without saving it as default (same as alt+p) |
 | `/fast on\|off\|status` | Fast mode |
 | `/effort [level]` (`/thinking`) | Set reasoning effort; no argument opens the picker |
-| `/cpu-limit [cores]` (`/cpu`) | Set this session's CPU budget for spawned commands |
+| `/cpu-limit [status\|lift\|reset]` (`/cpu`) | Report the machine and session resource limits and what is enforcing them, or lift this session's CPU cap. Sets nothing: limits are configured in `/settings` under Resources |
 | `/permissions [rung]` (`/approval`) | Set how much the agent does unasked, for this session only: `ask`, `ask-command`, `auto`, `yolo`, or `plan`. `/permissions status` reports the rung in force and where it came from; `reset` drops the session override and returns to the saved default from Settings. A bare `/permissions` opens the picker |
 | `/yolo on\|off\|status` | Remove this session's permission prompts (a blatantly destructive command, an explicit deny, and plan mode still block; needs confirmation) |
 | `/plan` | Toggle plan mode |
@@ -77,8 +128,8 @@ act on a bare invocation: `/yolo`, `/fast`, and `/browser` flip a switch, `/goal
 | `/goal …` | Goal set/show/pause/resume/drop/budget |
 | `/guided-goal` | Guided goal wizard |
 | `/loop` | Loop mode controls |
-| `/prewalk` | Prewalk edit path |
-| `/secret` | Store a credential the agent uses by placeholder and never sees. In a terminal the argument line is the credential and a bare `/secret` opens a hidden field; the name is asked afterwards and Enter accepts the generated one. Every surface runs the verbs `add`, `list`, `rm`, `rename`, `value`, `scope`, `copy`, `extend`, `log`, `discard`, `help`; `/secret -- <value>` stores a credential that starts with one of them. See [Secrets](../features/secrets.md) |
+| `/prewalk [model]` | Arm the prewalk switch for this session: the agent moves to the cheap model at its next edit or write, once the todo list exists. The target comes from the argument or `prewalk.cheapModel`; with neither, the command fails naming the setting |
+| `/secret` | Store a credential the agent uses by placeholder and never sees. A command comes first on every surface and every argument after it is a plain word: `/secret add <value>` stores it in a terminal, `/secret add` alone opens a hidden field, `/secret from-env <VAR>` reads it out of the environment, and the name is prompted afterwards, with Enter accepting the generated one. The commands are `add`, `from-env`, `list`, `rm`, `clear`, `rename`, `value`, `scope`, `copy`, `extend`, `log`, `discard`, `help`; a first word that is none of them is rejected and nothing is stored. See [Secrets](../features/secrets.md) |
 | `/settings`, `/setup` | Settings UI; `/setup` opens first-run provider sign-in |
 | `/providers`, `/account manager` | Open the account manager: every stored account per provider, with its email, plan, health, and usage. See [Authentication](../using/authentication.md) |
 | `/account status` | Show which account each provider is serving this session with. A bare `/account` opens the picker |
@@ -86,6 +137,7 @@ act on a bare invocation: `/yolo`, `/fast`, and `/browser` flip a switch, `/goal
 | `/account switch <provider>` | Open the manager focused on one provider, to move that provider to another of your accounts |
 | `/statusline` | Settings UI, jumped to Status Line (preset/segments/separator) |
 | `/reload-plugins` | Reload extensions |
+| `/trust` | Decide whether this project's code may run; `approve`, `deny`, `forget`, or a path ([Project trust](./project-trust.md)) |
 | `/force <tool> [prompt]` (`/force:`) | Force the next turn to use a specific tool |
 
 ## Tools, context, and jobs
@@ -102,6 +154,7 @@ act on a bare invocation: `/yolo`, `/fast`, and `/browser` flip a switch, `/goal
 | `/browser …` | Browser tool mode |
 | `/memory …` | Memory backend view/stats/clear/enqueue |
 | `/copy` | Pick text or code from the conversation to copy |
+| `/rephrase` | Ask for the last reply again, in plainer prose. Needs a finished reply to work from |
 | `/lsp` | Show language server status |
 
 ## Auth and usage
@@ -111,6 +164,7 @@ act on a bare invocation: `/yolo`, `/fast`, and `/browser` flip a switch, `/goal
 | `/login [provider\|url]` | OAuth / API key login |
 | `/logout [provider]` | Log out |
 | `/usage show\|reset` | Provider rate limits |
+| `/stats [<port>]` | Open the usage dashboard in a browser. The port is a plain integer and defaults to 3847; `veyyon stats` opens the same dashboard from a shell |
 | `/changelog` | Open the release notes on the web |
 
 ## Extensions
@@ -121,8 +175,8 @@ act on a bare invocation: `/yolo`, `/fast`, and `/browser` flip a switch, `/goal
 | `/mcp notifications` | Show notification capabilities and subscriptions |
 | `/plugins …` | Plugin browser |
 | `/extensions`, `/status` | Extension Control Center dashboard. `/status` is an alias for it, not a session-status view |
-| `/agents` (aliases `/cockpit`, `/hub`) | Open the Agent Control Center: live agent roster and the agent-to-agent comms stream |
-| `/ssh …` | SSH host setup |
+| `/agents` (aliases `/cockpit`, `/hub`) | Open the agent dashboard: live agent roster and the agent-to-agent comms stream |
+| `/ssh …` | SSH host setup. `add` takes the name and host by position, then `user <user>`, a plain port, and `key <keyPath>` in any order: see [Every argument is a plain word](#every-argument-is-a-plain-word) |
 | `/hotkeys` | Active keybinding chords |
 | `/collab …`, `/join`, `/leave` | Live collab sessions |
 | `/share` | Share the session via an encrypted link (share server or secret gist) |
@@ -133,6 +187,7 @@ act on a bare invocation: `/yolo`, `/fast`, and `/browser` flip a switch, `/goal
 | --- | --- |
 | `/btw` | Ephemeral side question |
 | `/tan` | Run a full background agent on tangential work |
+| `/advisor …` | Show, configure, start or stop the advisor that reviews each turn |
 | `/omfg` | Forge a TTSR rule from a complaint to stop a recurring behavior |
 | `/vibe` | Toggle vibe mode (director + `vibe_*` worker tools) |
 | `/retry` | Retry failed turn |
@@ -154,8 +209,8 @@ own page; typing the bare command lists them with their descriptions.
 | `/fast` | `on`, `off`, `status` |
 | `/permissions` | `status`, `ask`, `ask-command`, `auto`, `yolo`, `plan`, `reset` |
 | `/yolo` | `on`, `off`, `status` |
-| `/cpu-limit` | `status`, `remove`, `reset`, `kill` |
-| `/secret` | `add`, `list`, `rm`, `rename`, `value`, `scope`, `copy`, `extend`, `log`, `discard`, `help` |
+| `/cpu-limit` | `status`, `lift`, `reset` |
+| `/secret` | `add`, `from-env`, `list`, `rm`, `clear`, `rename`, `value`, `scope`, `copy`, `extend`, `log`, `discard`, `help` |
 | `/collab` | `start`, `view`, `status`, `stop` |
 | `/browser` | `headless`, `visible` |
 | `/todo` | `edit`, `copy`, `export`, `import`, `append`, `start`, `done`, `drop`, `rm` |
@@ -167,5 +222,7 @@ own page; typing the bare command lists them with their descriptions.
 | `/shake` | `elide`, `images` |
 | `/memory` | `view`, `stats`, `diagnose`, `clear`, `reset`, `enqueue`, `rebuild`, `mm list`, `mm show`, `mm refresh`, `mm history`, `mm seed`, `mm delete`, `mm reload` |
 | `/plugins` | `list` |
+| `/trust` | `approve`, `deny`, `forget` |
+| `/advisor` | `status`, `configure`, `on`, `off`, `dump` |
 
 Extension packages (for example swarm) register additional commands when installed. The live set is whatever the session registers; use `/help` or the command palette in the TUI. Status line: `/statusline` opens the Status Line settings group (see [Multi-agent monitoring](../features/cockpit.md)). Keybindings: `/hotkeys`. Memory: `/memory` and settings under the active memory backend.

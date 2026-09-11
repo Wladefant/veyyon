@@ -8,15 +8,21 @@
 import * as fsSync from "node:fs";
 import * as os from "node:os";
 import { createInterface } from "node:readline/promises";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { EventLoopKeepalive } from "@veyyon/agent-core";
-import type { ImageContent } from "@veyyon/ai";
+import type { ImageContent, Model } from "@veyyon/ai";
+import type { AuthStorage } from "@veyyon/ai/auth-storage";
+import type { HostNotifier } from "@veyyon/host";
+import { describePendingToolCalls } from "@veyyon/kernel/session/exit-diagnostics";
+import { formatNotice, OperatorNotices, stderrNoticeSink } from "@veyyon/kernel/session/operator-notices";
+import { resolveResumableSession, type SessionInfo } from "@veyyon/kernel/session/session-listing";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import {
 	$env,
 	directoryExists,
 	errorMessage,
 	getLogPath,
 	getProjectDir,
-	isNewerVersion,
 	isUuid,
 	logger,
 	normalizePathForComparison,
@@ -26,14 +32,14 @@ import {
 } from "@veyyon/utils";
 import { isSessionFileName } from "@veyyon/utils/session-file";
 import chalk from "chalk";
-import { reset as resetCapabilities } from "./capability";
 import { type Args, reportUnrecognizedFlags } from "./cli/args";
 import { EXIT_FAILURE, EXIT_OK, EXIT_USAGE } from "./cli/exit-codes";
 import { applyExtensionFlags, type ExtensionFlagSink } from "./cli/extension-flags";
 import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage } from "./cli/initial-message";
+import { takeStartupPrologue } from "./cli/prologue-handoff";
 import { selectSession } from "./cli/session-picker";
-import { announceAutoChdir, applySessionWorkdir, applyStartupCwd } from "./cli/startup-cwd";
+import { applySessionWorkdir, applyStartupCwd } from "./cli/startup-cwd";
 import { getLatestRelease, type ReleaseInfo, runAutoUpdate } from "./cli/update-cli";
 import { missingCredentialsMessage } from "./config/missing-credentials";
 import { ModelRegistry } from "./config/model-registry";
@@ -42,6 +48,9 @@ import {
 	expandRoleAlias,
 	fallbackForUnavailableDefault,
 	getModelMatchPreferences,
+	type ModelMatchPreferences,
+	normalizeModelPatternList,
+	type ResolveCliModelResult,
 	resolveCliModel,
 	resolveModelRoleValue,
 	resolveModelScope,
@@ -51,6 +60,7 @@ import { DEFAULT_MODEL_SLOT } from "./config/model-roles";
 import { ModelsConfigFile } from "./config/models-config";
 import { getDefault, type SettingPath, Settings, settings } from "./config/settings";
 import { initializeWithSettings } from "./discovery";
+import { reset as resetCapabilities } from "./discovery/capability";
 import {
 	clearPluginRootsAndCaches,
 	injectPluginDirRoots,
@@ -63,33 +73,27 @@ import type { ExtensionUIContext } from "./extensibility/extensions/types";
 import { scheduleMarketplaceAutoUpdate } from "./extensibility/plugins/marketplace-auto-update";
 import { registerDaemonProjectPresence } from "./launch/presence";
 import type { MCPManager } from "./mcp";
-import { setLaunchTip, updateInstalledTip } from "./modes/components/launch-tip";
-import type { InteractiveMode } from "./modes/interactive-mode";
 import type { PrintModeOptions } from "./modes/print-mode";
 import { CURRENT_SETUP_VERSION, resolveOnboardingGeneration } from "./modes/setup-version";
-import { initTheme, stopThemeWatcher } from "./modes/theme/theme";
-import type { SubmittedUserInput } from "./modes/types";
+import { setLaunchTip, updateInstalledTip } from "./modes/terminal/components/dialogs/launch-tip";
+import type * as firstFrameModule from "./modes/terminal/first-frame";
+import type * as interactiveModeModule from "./modes/terminal/interactive-mode";
+import type { InteractiveMode } from "./modes/terminal/interactive-mode";
+import type { SubmittedUserInput } from "./modes/terminal/types";
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
-import {
-	type CreateAgentSessionOptions,
-	type CreateAgentSessionResult,
-	createAgentSession,
-	discoverAuthStorage,
-	loadSessionExtensions,
-} from "./sdk";
+import { createAgentSession, discoverAuthStorage } from "./sdk";
 import type { AgentSession } from "./session/agent-session";
-import type { AuthStorage } from "./session/auth-storage";
-import { primarySessionCpuAdoption } from "./session/cpu-limit";
-import { describePendingToolCalls } from "./session/exit-diagnostics";
-import { formatNotice, OperatorNotices, stderrNoticeSink } from "./session/operator-notices";
-import { resolveResumableSession, type SessionInfo } from "./session/session-listing";
-import { SessionManager } from "./session/session-manager";
+import type { InteractiveSessionFactory } from "./session/background-sessions";
+import { rootBudgetGroupOwnerId, sessionCpuExecHooks } from "./session/cpu-limit";
+import { loadSessionExtensions } from "./session/factory-extensions";
+import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "./session/factory-options";
 import { executeBuiltinSlashCommand } from "./slash-commands/builtin-registry";
 import { shouldShowStartupSplash } from "./startup-splash";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "./system-prompt";
-import { createPersistedSubagentReviverFactory } from "./task/persisted-revive";
-import { resolveSubagentAutoCloseBudget, resolveSubagentIdleTtlMs } from "./task/subagent-settings";
+import { resolveAgentIdleTtlMs, resolveAgentPruneBudget } from "./task/agent-settings";
+import { createPersistedAgentReviverFactory } from "./task/persisted-revive";
 import { initTelemetryExport, isTelemetryExportEnabled } from "./telemetry-export";
+import { initTheme, stopThemeWatcher } from "./theme/theme";
 import type { LspStartupServerInfo } from "./tools";
 import { decideUpdateNotice, readLastChangelogVersion, writeLastChangelogVersion } from "./utils/changelog";
 import { EventBus } from "./utils/event-bus";
@@ -115,23 +119,16 @@ export function writeStartupNotice(parsedArgs: Pick<Args, "mode">, text: string)
  */
 const STARTUP_VERSION_CHECK_TIMEOUT_MS = 5_000;
 
-async function checkForNewVersion(currentVersion: string): Promise<ReleaseInfo | undefined> {
+export async function checkForNewVersion(currentVersion: string): Promise<ReleaseInfo | undefined> {
 	if (!settings.get("startup.checkUpdate")) {
 		return undefined;
 	}
-	// Delegates to the single registry lookup and the single version comparator.
-	// This used to hand-roll both, which meant a launch made two round trips for
-	// the same answer, and the two comparisons could disagree: the check used
-	// `Bun.semver.order` while the update path used a split/Number comparator
-	// that mis-ranked prereleases, so a prerelease could be announced here and
-	// then judged "already up to date" by the installer.
 	try {
 		const release = await getLatestRelease(STARTUP_VERSION_CHECK_TIMEOUT_MS);
-		return isNewerVersion(release.version, currentVersion) ? release : undefined;
+		return release.version !== currentVersion ? release : undefined;
 	} catch (error) {
-		// Not reachable, rate-limited, offline, or a version string we cannot
-		// order. None of that should interrupt a launch, but none of it is
-		// allowed to vanish either (Law 10).
+		// Not reachable, rate-limited, or offline. None of that should interrupt a launch,
+		// but none of it is allowed to vanish either.
 		logger.debug("Startup version check did not complete", { error: errorMessage(error) });
 		return undefined;
 	}
@@ -140,18 +137,19 @@ async function checkForNewVersion(currentVersion: string): Promise<ReleaseInfo |
 // Todo settings are caller-controlled in protocol modes. Do not host-default them:
 // embedders need project-level opt-outs for reminder/prelude prompt injection.
 const HOST_DEFAULTED_SETTING_PATHS: SettingPath[] = [
-	"subagent.isolation.mode",
-	"subagent.isolation.merge",
-	"subagent.isolation.commits",
-	"subagent.delegation",
-	"subagent.batch",
-	"subagent.maxConcurrency",
-	"subagent.maxNestedSpawnDepth",
-	"subagent.agents",
+	"agent.isolation.mode",
+	"agent.isolation.merge",
+	"agent.isolation.commits",
+	"agent.delegation",
+	"agent.batch",
+	"agent.maxConcurrency",
+	"agent.maxNestedSpawnDepth",
+	"agent.agents",
 	// Memory subsystems are off-by-default for RPC/ACP hosts; embedders that want
-	// memory should opt in explicitly through their own settings layer.
+	// memory should opt in explicitly through their own settings layer. The legacy
+	// `memories.enabled` boolean is migrated into `memory.backend` at load and deleted,
+	// so it is never a configured path here.
 	"memory.backend",
-	"memories.enabled",
 ];
 
 const RPC_BACKGROUND_DEFAULTED_SETTING_PATHS: SettingPath[] = [
@@ -230,7 +228,7 @@ export async function readStdinWithFirstByteBound(
 			const next = reader.read();
 			// Only the FIRST read races the deadline. `Promise.race` leaves the losing timer pending, so it
 			// is cleared explicitly rather than left to keep the process alive.
-			let timer: ReturnType<typeof setTimeout> | undefined;
+			let timer: NodeJS.Timeout | undefined;
 			const result =
 				chunks.length === 0
 					? await Promise.race([
@@ -504,11 +502,18 @@ export function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSess
 	};
 }
 
-let interactiveModeLoad: Promise<typeof import("./modes/interactive-mode")> | undefined;
+let interactiveModeLoad: Promise<typeof interactiveModeModule> | undefined;
 
-function loadInteractiveMode(): Promise<typeof import("./modes/interactive-mode")> {
-	interactiveModeLoad ??= import("./modes/interactive-mode");
+function loadInteractiveMode(): Promise<typeof interactiveModeModule> {
+	interactiveModeLoad ??= import("./modes/terminal/interactive-mode");
 	return interactiveModeLoad;
+}
+
+let firstFrameLoad: Promise<typeof firstFrameModule> | undefined;
+
+function loadFirstFrame(): Promise<typeof firstFrameModule> {
+	firstFrameLoad ??= import("./modes/terminal/first-frame");
+	return firstFrameLoad;
 }
 
 async function runInteractiveMode(
@@ -527,9 +532,20 @@ async function runInteractiveMode(
 	initialMessage?: string,
 	initialImages?: ImageContent[],
 	joinLink?: string,
+	createNextSession?: InteractiveSessionFactory,
+	setToolNotifier?: (notify: HostNotifier) => void,
 ): Promise<void> {
 	const { InteractiveMode } = await loadInteractiveMode();
-	const mode = new InteractiveMode(session, version, setExtensionUIContext, lspServers, mcpManager, eventBus);
+	const mode = new InteractiveMode(
+		session,
+		version,
+		setExtensionUIContext,
+		lspServers,
+		mcpManager,
+		eventBus,
+		setToolNotifier,
+	);
+	mode.createNextSession = createNextSession;
 
 	// Cold-launch gate: the full setup wizard (every scene + the overlay and
 	// their TUI/OAuth/search/theme deps) is heavy, yet the common case only needs
@@ -544,7 +560,7 @@ async function runInteractiveMode(
 	const onboarding = resolveOnboardingGeneration(settings);
 	const setupStale = !onboarding.unreadable && onboarding.version < CURRENT_SETUP_VERSION;
 	const setupWizard =
-		forceSetupWizard || setupStale || showStartupSplash ? await import("./modes/setup-wizard") : undefined;
+		forceSetupWizard || setupStale || showStartupSplash ? await import("./modes/terminal/setup-wizard") : undefined;
 	const setupScenes = setupWizard
 		? await setupWizard.selectSetupScenes(onboarding.version, setupWizard.ALL_SCENES, mode, {
 				resuming,
@@ -556,9 +572,12 @@ async function runInteractiveMode(
 		: [];
 	const playStartupSplash = showStartupSplash && setupScenes.length === 0;
 
-	await mode.init({
-		suppressWelcomeIntro: resuming || setupScenes.length > 0 || playStartupSplash,
-	});
+	await mode.init();
+
+	// Yield once so the completed first frame can flush to stdout before the background
+	// discovery refresh begins.
+	await yieldToEventLoop();
+	session.modelRegistry?.refreshInBackground();
 
 	// Subscribed BEFORE the wizard, not after it. The write-side twin of the
 	// unparseable-settings notice, and it cannot be a startup check: a save happens
@@ -720,7 +739,10 @@ async function runInteractiveMode(
 
 	while (true) {
 		const input = await mode.getUserInput();
-		await submitInteractiveInput(mode, session, input);
+		// `mode.session`, not the session this function was handed: `/new` on a
+		// running turn re-points the UI at a new session, and the next prompt
+		// belongs to whichever one is attached now.
+		await submitInteractiveInput(mode, mode.session, input);
 	}
 }
 
@@ -874,7 +896,13 @@ export async function createSessionManager(
 				"Run `veyyon --resume` without an argument to pick from recent sessions, or `veyyon` to start a new one.",
 			);
 		}
-		if (match.scope === "local") {
+		// A match from another project (a global match whose recorded cwd is not
+		// this one) is forked; a match whose recorded cwd no longer exists is
+		// moved first, whichever scope found it.
+		const crossProject =
+			match.scope === "global" &&
+			normalizePathForComparison(cwd) !== normalizePathForComparison(match.session.cwd || cwd);
+		if (match.scope === "local" || crossProject) {
 			const moveResult = await moveMissingCwdSessionIfNeeded(
 				sessionArg,
 				match.session,
@@ -889,37 +917,20 @@ export async function createSessionManager(
 				return undefined;
 			}
 		}
-		if (match.scope === "global") {
-			const normalizedCwd = normalizePathForComparison(cwd);
-			const normalizedMatchCwd = normalizePathForComparison(match.session.cwd || cwd);
-			if (normalizedCwd !== normalizedMatchCwd) {
-				const moveResult = await moveMissingCwdSessionIfNeeded(
-					sessionArg,
-					match.session,
-					cwd,
-					parsed.sessionDir,
-					askToMoveSession,
+		if (crossProject) {
+			const forkPromptResult = await askToForkSession(match.session);
+			if (forkPromptResult === "unavailable") {
+				throw new SessionResolutionError(
+					`Session "${sessionArg}" is in another project (${match.session.cwd}); run interactively to fork it into the current project.`,
 				);
-				if (moveResult.status === "moved") {
-					return moveResult.manager;
-				}
-				if (moveResult.status === "declined") {
-					return undefined;
-				}
-				const forkPromptResult = await askToForkSession(match.session);
-				if (forkPromptResult === "unavailable") {
-					throw new SessionResolutionError(
-						`Session "${sessionArg}" is in another project (${match.session.cwd}); run interactively to fork it into the current project.`,
-					);
-				}
-				if (forkPromptResult === "declined") {
-					// User declined the cross-project fork prompt. Caller distinguishes
-					// this cancellation from the "default new session" undefined return
-					// by checking `typeof parsed.resume === "string"`.
-					return undefined;
-				}
-				return await SessionManager.forkFrom(match.session.path, cwd, parsed.sessionDir);
 			}
+			if (forkPromptResult === "declined") {
+				// User declined the cross-project fork prompt. Caller distinguishes
+				// this cancellation from the "default new session" undefined return
+				// by checking `typeof parsed.resume === "string"`.
+				return undefined;
+			}
+			return await SessionManager.forkFrom(match.session.path, cwd, parsed.sessionDir);
 		}
 		return await SessionManager.open(match.session.path, parsed.sessionDir);
 	}
@@ -958,6 +969,30 @@ export function applyResolvedSystemPromptInputs(
 	if (resolvedAppendPrompt) {
 		options.appendSystemPrompt = resolvedAppendPrompt;
 	}
+}
+
+/**
+ * Resolve a model pattern a launch flag or setting named. A resolution warning is
+ * printed; an unresolved pattern or missing credentials throws the failure `role` owns.
+ */
+function resolveLaunchModel(
+	pattern: string,
+	role: string,
+	modelRegistry: ModelRegistry,
+	preferences: ModelMatchPreferences,
+	settings?: Settings,
+): ResolveCliModelResult & { model: Model } {
+	const resolved = resolveCliModel({ cliModel: pattern, modelRegistry, preferences, settings });
+	if (resolved.warning) {
+		process.stderr.write(`${chalk.yellow(`Warning: ${resolved.warning}`)}\n`);
+	}
+	if (resolved.error || !resolved.model) {
+		throw new Error(resolved.error ?? modelResolutionFailureMessage([pattern], modelRegistry));
+	}
+	if (!modelRegistry.hasConfiguredAuth(resolved.model)) {
+		throw new Error(missingCredentialsMessage(resolved.model.provider, resolved.model.id, role));
+	}
+	return { ...resolved, model: resolved.model };
 }
 
 /** Builds startup session options from parsed CLI flags, scoped models, and resolved session lineage. */
@@ -1099,36 +1134,58 @@ export async function buildSessionOptions(
 		: parsed.prewalk === true || parsed.prewalkInto !== undefined
 			? true
 			: activeSettings.get("prewalk.enabled");
+	if (prewalkEnabled && !parsed.model && !parsed.continue && !parsed.resume) {
+		// Strong-model override: the start model an operator named for prewalk
+		// alone. An explicit --model wins; unset inherits the normal start chain.
+		// A resumed or continued session restores its own last model instead —
+		// populating options.model here would make sdk.ts treat the session as
+		// explicitly modeled and silently drop that restoration. Like the
+		// remembered-default branch, this names no persisted default role: it is
+		// a per-launch start override, not a new owner of the default slot.
+		const strongPattern = normalizeModelPatternList(activeSettings.get("prewalk.strongModel"))[0];
+		if (strongPattern) {
+			const resolved = resolveLaunchModel(
+				strongPattern,
+				"prewalk.strongModel",
+				modelRegistry,
+				modelMatchPreferences,
+				activeSettings,
+			);
+			options.model = resolved.model;
+			if (!parsed.thinking && resolved.thinkingLevel) {
+				options.thinkingLevel = resolved.thinkingLevel;
+				options.thinkingSource = "selector";
+			}
+		}
+	}
 	if (prewalkEnabled) {
-		const rolePattern = expandRoleAlias(parsed.prewalkInto ?? "@smol", activeSettings);
-		const resolved = resolveCliModel({ cliModel: rolePattern, modelRegistry, preferences: modelMatchPreferences });
-		if (resolved.warning) {
-			process.stderr.write(`${chalk.yellow(`Warning: ${resolved.warning}`)}\n`);
+		// The cheap target no longer falls back to a role alias. An unset role
+		// stopped resolving to a model (#980 fail-closed), so a target the
+		// operator did not name fails loud and points at the setting that fixes
+		// it, instead of dying inside role expansion with no corrective action.
+		const cheapPattern =
+			normalizeModelPatternList(parsed.prewalkInto)[0] ||
+			normalizeModelPatternList(activeSettings.get("prewalk.cheapModel"))[0];
+		if (!cheapPattern) {
+			throw new Error(
+				'Prewalk needs a cheap target model: set "prewalk.cheapModel" in settings or pass --prewalk-into <model>.',
+			);
 		}
-		if (resolved.error || !resolved.model) {
-			throw new Error(resolved.error ?? modelResolutionFailureMessage([rolePattern], modelRegistry));
-		}
-		if (!modelRegistry.hasConfiguredAuth(resolved.model)) {
-			throw new Error(missingCredentialsMessage(resolved.model.provider, resolved.model.id, "--prewalk target"));
-		}
+		const resolved = resolveLaunchModel(
+			cheapPattern,
+			"--prewalk target",
+			modelRegistry,
+			modelMatchPreferences,
+			activeSettings,
+		);
 		options.prewalk = { target: resolved.model, thinkingLevel: resolved.thinkingLevel };
 	}
-
 	if (parsed.planYoloInto !== undefined && !parsed.planYolo) {
 		throw new Error("--plan-yolo-into requires --plan-yolo");
 	}
 	if (parsed.planYolo) {
 		const rolePattern = expandRoleAlias(parsed.planYoloInto ?? "@smol", activeSettings);
-		const resolved = resolveCliModel({ cliModel: rolePattern, modelRegistry, preferences: modelMatchPreferences });
-		if (resolved.warning) {
-			process.stderr.write(`${chalk.yellow(`Warning: ${resolved.warning}`)}\n`);
-		}
-		if (resolved.error || !resolved.model) {
-			throw new Error(resolved.error ?? modelResolutionFailureMessage([rolePattern], modelRegistry));
-		}
-		if (!modelRegistry.hasConfiguredAuth(resolved.model)) {
-			throw new Error(missingCredentialsMessage(resolved.model.provider, resolved.model.id, "--plan-yolo target"));
-		}
+		const resolved = resolveLaunchModel(rolePattern, "--plan-yolo target", modelRegistry, modelMatchPreferences);
 		options.planYolo = { target: resolved.model, thinkingLevel: resolved.thinkingLevel };
 	}
 
@@ -1256,23 +1313,34 @@ export function __startupWatchdogArmedForTests(): boolean {
 }
 
 async function runRootCommandInner(parsed: Args, rawArgs: string[], deps: RunRootCommandDependencies): Promise<void> {
-	// Initialize theme early with defaults (CLI commands need symbols)
-	// Will be re-initialized with user preferences later
-	await logger.time("initTheme:initial", initTheme);
+	// The card may already be on screen: `commands/launch.ts` runs the prologue
+	// -- cwd, settings, theme, paint -- ahead of this module's runtime graph, so
+	// a bare interactive launch reaches a typable composer without waiting for
+	// it. Single-use: a second `runRootCommand` in this process is handed
+	// nothing and settles its own cwd, settings and screen.
+	const prologue = takeStartupPrologue();
+	// Initialize theme early with defaults (CLI commands need symbols).
+	// Re-initialized with user preferences below, and skipped outright when the
+	// prologue already settled it from those same preferences.
+	if (!prologue) await logger.time("initTheme:initial", initTheme);
 
 	const parsedArgs = parsed;
 	// Relocates away from a bare $HOME launch (before Settings.init, since
-	// discovery is cwd-relative). The announcement is deferred until after
-	// applySessionWorkdir below, so a profile session.workdir that re-roots
-	// elsewhere doesn't leave a false "Started in /tmp instead" line.
-	const autoChdirTarget = await logger.time("applyStartupCwd", applyStartupCwd, parsedArgs);
+	// discovery is cwd-relative).
+	if (!prologue) await logger.time("applyStartupCwd", applyStartupCwd, parsedArgs);
 
 	const notifs: (InteractiveModeNotify | null)[] = [];
 
-	// Create AuthStorage and ModelRegistry upfront
-	const authStorage = await logger.time("discoverAuthStorage", deps.discoverAuthStorage ?? discoverAuthStorage);
-	const modelRegistry = logger.time("modelRegistry:init", () => new ModelRegistry(authStorage));
-
+	// Kick off AuthStorage and ModelRegistry discovery in parallel with settings/theme init.
+	// Awaited when resolveModelScope / session construction needs it.
+	const authStoragePromise = logger.time("discoverAuthStorage", deps.discoverAuthStorage ?? discoverAuthStorage);
+	const modelRegistryPromise = authStoragePromise.then(async auth => {
+		const registry = logger.time("modelRegistry:init", () => new ModelRegistry(auth));
+		// Cached discovery otherwise continues through session construction in one microtask chain.
+		await yieldToEventLoop();
+		return registry;
+	});
+	modelRegistryPromise.catch(() => {});
 	if (parsedArgs.version) {
 		writeStartupNotice(parsedArgs, `${VERSION}\n`);
 		process.exit(EXIT_OK);
@@ -1322,26 +1390,19 @@ async function runRootCommandInner(parsed: Args, rawArgs: string[], deps: RunRoo
 
 	let cwd = getProjectDir();
 	const settingsInstance =
-		deps.settings ?? (await logger.time("settings:init", Settings.init, { cwd, configFiles: parsedArgs.config }));
+		deps.settings ??
+		prologue?.settings ??
+		(await logger.time("settings:init", Settings.init, { cwd, configFiles: parsedArgs.config }));
 	// Profile session.workdir outranks process cwd but loses to an explicit --cwd.
 	// Applied after Settings.init so the profile layer is available; re-sync `cwd`
 	// so session construction and discovery see the resolved root.
-	const workdirApplied = await logger.time(
-		"applySessionWorkdir",
-		applySessionWorkdir,
-		settingsInstance,
-		parsedArgs.cwd,
-	);
+	const workdirApplied = prologue
+		? prologue.workdirApplied
+		: await logger.time("applySessionWorkdir", applySessionWorkdir, settingsInstance, parsedArgs.cwd);
 	if (workdirApplied) {
 		cwd = getProjectDir();
 	}
-	// Now that session.workdir has had its say, announce the $HOME auto-chdir —
-	// but only when it is the session's final root. If session.workdir re-rooted
-	// the session, the /tmp fallback was superseded and announcing it would be a
-	// false message (the exact autochdir-announce-vs-workdir bug).
-	if (autoChdirTarget && !workdirApplied) {
-		announceAutoChdir(os.homedir(), autoChdirTarget);
-	}
+
 	if (parsedArgs.approvalMode) {
 		// Runtime override (not persisted): every settings.get("tools.approvalMode") downstream
 		// sees this value. The wrapper still honours --auto-approve / --yolo on top of it.
@@ -1441,9 +1502,6 @@ async function runRootCommandInner(parsed: Args, rawArgs: string[], deps: RunRoo
 			plan: planModel,
 		});
 	}
-	if (parsedArgs.subagentModel) {
-		settingsInstance.override("subagent.model", parsedArgs.subagentModel);
-	}
 	if (parsedArgs.compactionModel) {
 		settingsInstance.override("compaction.model", parsedArgs.compactionModel);
 	}
@@ -1464,15 +1522,56 @@ async function runRootCommandInner(parsed: Args, rawArgs: string[], deps: RunRoo
 		settingsInstance.override("advisor.enabled", true);
 	}
 
-	await logger.time(
-		"initTheme:final",
-		initTheme,
-		isInteractive,
-		settingsInstance.get("symbolPreset"),
-		settingsInstance.get("colorBlindMode"),
-		settingsInstance.get("theme.dark"),
-		settingsInstance.get("theme.light"),
-	);
+	// The prologue settled the theme from these same settings before it painted,
+	// so re-running it here would reload the same theme files and change nothing.
+	if (!prologue) {
+		await logger.time(
+			"initTheme:final",
+			initTheme,
+			isInteractive,
+			settingsInstance.get("symbolPreset"),
+			settingsInstance.get("colorBlindMode"),
+			settingsInstance.get("theme.dark"),
+			settingsInstance.get("theme.light"),
+		);
+	}
+	const showStartupSplash =
+		prologue?.showStartupSplash ??
+		shouldShowStartupSplash({
+			configured: settingsInstance.get("startup.showSplash"),
+			isInteractive,
+			resuming: Boolean(parsedArgs.continue || parsedArgs.resume || parsedArgs.fork),
+			quiet: settingsInstance.get("startup.quiet"),
+			timing: Boolean($env.VEYYON_TIMING),
+			stdinIsTTY: process.stdin.isTTY,
+			stdoutIsTTY: process.stdout.isTTY,
+		});
+
+	// Paint the launch card immediately once settings and the theme are up.
+	// The sun, the wordmark, the version, and the tips need no session, no models,
+	// and no plugins. Everything below — model registry, plugin preload, extension
+	// discovery, and session construction — runs while the finished resting frame
+	// is already in front of the operator. An ordinary interactive launch has one
+	// already: the prologue painted it before this module's graph was loaded.
+	if (!prologue && isInteractive && !isProtocolMode) {
+		const onboarding = resolveOnboardingGeneration(settingsInstance);
+		const { paintFirstFrame, shouldPaintFirstFrame } = await loadFirstFrame();
+		const paint = shouldPaintFirstFrame({
+			isInteractive,
+			protocolMode: isProtocolMode,
+			quiet: settingsInstance.get("startup.quiet"),
+			splash: showStartupSplash,
+			setupWizard:
+				deps.forceSetupWizard === true || (!onboarding.unreadable && onboarding.version < CURRENT_SETUP_VERSION),
+			stdinIsTTY: process.stdin.isTTY,
+			stdoutIsTTY: process.stdout.isTTY,
+			resuming: Boolean(parsedArgs.continue || parsedArgs.resume || parsedArgs.fork),
+		});
+		if (paint) logger.time("paintFirstFrame", paintFirstFrame, VERSION);
+	}
+
+	const authStorage = await authStoragePromise;
+	const modelRegistry = await modelRegistryPromise;
 
 	let scopedModels: ScopedModel[] = [];
 	const modelPatterns = parsedArgs.models ?? settingsInstance.get("enabledModels");
@@ -1644,12 +1743,19 @@ async function runRootCommandInner(parsed: Args, rawArgs: string[], deps: RunRoo
 	}
 
 	const createAgentSessionImpl = deps.createAgentSession ?? createAgentSession;
-	const createSession = async (options: CreateAgentSessionOptions): Promise<CreateAgentSessionResult> => {
+	const createSession = async (
+		options: CreateAgentSessionOptions,
+		deferModelRefresh = false,
+	): Promise<CreateAgentSessionResult> => {
 		const result = await logger.time("createAgentSession", createAgentSessionImpl, options);
-		// Kick off background model discovery only after createAgentSession finishes its parallel
-		// discovery arms; running these concurrently contends for the event loop and stretches
-		// every parallel arm by ~30ms.
-		modelRegistry.refreshInBackground();
+		if (!deferModelRefresh) {
+			await yieldToEventLoop();
+			// Kick off background model discovery only after createAgentSession finishes its parallel
+			// discovery arms; running these concurrently contends for the event loop and stretches
+			// every parallel arm by ~30ms.
+			modelRegistry.refreshInBackground();
+			await yieldToEventLoop();
+		}
 		return result;
 	};
 
@@ -1677,15 +1783,18 @@ async function runRootCommandInner(parsed: Args, rawArgs: string[], deps: RunRoo
 		// file — and the same result is handed to createAgentSession via
 		// `preloadedExtensions` so the discovery work is not repeated.
 		const eventBus = new EventBus();
-		// Loaded before the session exists, so extension `exec` spawns join the
-		// root session's CPU budget, resolved lazily once that session starts.
+		// Loaded before the session exists. Adopt and gate resolve lazily
+		// against the root session once it registers: adopting alone still
+		// lets a saturated budget start an uncapped child.
+		const cliCpu = sessionCpuExecHooks(() => rootBudgetGroupOwnerId() ?? null);
 		const extensionsResult = await loadSessionExtensions(
 			sessionOptions,
 			cwd,
 			settingsInstance,
 			eventBus,
 			undefined,
-			primarySessionCpuAdoption(),
+			cliCpu.adoptPid,
+			cliCpu.gate,
 		);
 		const extensionFlagSink: ExtensionFlagSink = {
 			getFlags: () => ExtensionRunner.aggregateFlags(extensionsResult.extensions),
@@ -1748,53 +1857,75 @@ async function runRootCommandInner(parsed: Args, rawArgs: string[], deps: RunRoo
 			process.exit(EXIT_USAGE);
 		}
 
-		const showStartupSplash = shouldShowStartupSplash({
-			configured: settingsInstance.get("startup.showSplash"),
-			isInteractive,
-			resuming: Boolean(parsedArgs.continue || parsedArgs.resume || parsedArgs.fork),
-			quiet: settingsInstance.get("startup.quiet"),
-			timing: Boolean($env.VEYYON_TIMING),
-			stdinIsTTY: process.stdin.isTTY,
-			stdoutIsTTY: process.stdout.isTTY,
-		});
-
 		// The TUI cannot render anything until its screen exists, and session startup is exactly
 		// when a degraded skill or an unprotectable secret is discovered. An interactive run
 		// therefore hands `createSession` a collector with NO sink, so those notices buffer and
 		// the TUI delivers them once it is up (see `InteractiveMode.start`). Every other mode
 		// keeps the default, which writes to stderr as they arrive.
 		const operatorNotices = isInteractive ? new OperatorNotices() : new OperatorNotices(stderrNoticeSink);
-		const { session, setToolUIContext, modelFallbackMessage, lspServers, mcpManager } = await createSession({
-			...sessionOptions,
-			eventBus,
-			operatorNotices,
-			preloadedExtensions: extensionsResult,
-		});
+		const { session, setToolUIContext, setToolNotifier, modelFallbackMessage, lspServers, mcpManager } =
+			await createSession(
+				{
+					...sessionOptions,
+					eventBus,
+					operatorNotices,
+					preloadedExtensions: extensionsResult,
+				},
+				isInteractive,
+			);
 
-		// Cold-revive support: a `parked` subagent ref restored from disk (the persisted-subagent
+		// Cold-revive support: a `parked` agent ref restored from disk (the persisted-agent
 		// scan, collab mirror, resumed process) has a sessionFile but no in-memory
 		// reviver, so `ensureLive` (IRC sends, hub focus) would refuse it. Install a
-		// factory — bound to THIS top-level session — that rebuilds the subagent from
+		// factory — bound to THIS top-level session — that rebuilds the agent from
 		// its persisted JSONL (see persisted-revive.ts). Scoped to the non-ACP
 		// bootstrap: ACP keeps several concurrent top-level sessions and a single
 		// process-global factory must not be clobbered by the most recent one.
-		AgentLifecycleManager.global().setPersistedSubagentReviverFactory(
-			createPersistedSubagentReviverFactory({
+		AgentLifecycleManager.global().setPersistedAgentReviverFactory(
+			createPersistedAgentReviverFactory({
 				session,
 				authStorage,
 				modelRegistry,
 				settings: settingsInstance,
 				enableLsp: sessionOptions.enableLsp ?? true,
 			}),
-			resolveSubagentIdleTtlMs(settingsInstance),
-			// The operator's current close budgets, so a ref revived from disk rejoins the
-			// close stage instead of staying listed for the rest of the session. Read here
-			// rather than defaulted in the manager because this is where the settings are.
-			resolveSubagentAutoCloseBudget(settingsInstance),
+			() => resolveAgentIdleTtlMs(settingsInstance),
+			// The operator's close budgets, so a ref restored from disk or revived
+			// rejoins the close stage instead of staying listed for the rest of the
+			// session. Read through a function rather than snapshotted here, so a
+			// change in /settings governs every agent adopted after it; the deadlines
+			// already armed keep the budget they were armed with until their next
+			// status change re-derives them.
+			() => resolveAgentPruneBudget(settingsInstance),
 		);
 		if (parsedArgs.apiKey && !sessionOptions.model && session.model) {
 			authStorage.setRuntimeApiKey(session.model.provider, parsedArgs.apiKey);
 		}
+
+		// `/new` while a turn is in flight moves the UI here instead of aborting.
+		// Overridden against the launch options: a fresh SessionManager so the
+		// running turn keeps writing its own transcript, and no inherited
+		// provider state, which `AgentSession.newSession` also drops when it
+		// resets in place. `mcpManager` is passed so the new session reuses the
+		// connected servers rather than re-discovering and re-owning them; the
+		// handed-off session stays their owner for the life of the process.
+		const createNextSession: InteractiveSessionFactory = async () => {
+			const activeCwd = getProjectDir();
+			const nextSessionManager = SessionManager.create(activeCwd, parsedArgs.sessionDir);
+			const { session: next } = await createSession({
+				...sessionOptions,
+				cwd: activeCwd,
+				eventBus,
+				operatorNotices,
+				preloadedExtensions: extensionsResult,
+				sessionManager: nextSessionManager,
+				mcpManager,
+				providerSessionId: undefined,
+				providerPromptCacheKey: undefined,
+				providerPromptCacheKeySource: undefined,
+			});
+			return next;
+		};
 
 		if (modelFallbackMessage) {
 			notifs.push({ kind: "warn", message: modelFallbackMessage });
@@ -1870,6 +2001,8 @@ async function runRootCommandInner(parsed: Args, rawArgs: string[], deps: RunRoo
 				initialMessage,
 				initialImages,
 				parsedArgs.join,
+				createNextSession,
+				setToolNotifier,
 			);
 		} else {
 			stopStartupWatchdog();

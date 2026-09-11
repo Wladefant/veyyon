@@ -1,14 +1,15 @@
 import { afterEach, describe, expect, it, type Mock, vi } from "bun:test";
+import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { Skill } from "@veyyon/coding-agent/extensibility/skills";
 import * as skillsModule from "@veyyon/coding-agent/extensibility/skills";
 import * as sdkModule from "@veyyon/coding-agent/sdk";
-import type { PromptOptions } from "@veyyon/coding-agent/session/agent-session";
+import type { PromptOptions } from "@veyyon/coding-agent/session/agent-session-types";
 import { SKILL_PROMPT_MESSAGE_TYPE } from "@veyyon/coding-agent/session/messages";
 import { runSubprocess } from "@veyyon/coding-agent/task/executor";
 import type { AgentDefinition } from "@veyyon/coding-agent/task/types";
+import { createMockSession, createSessionResult, yieldSuccessEvent } from "../helpers/agent-session";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
-import { createMockSession, createSessionResult, yieldSuccessEvent } from "../helpers/subagent-session";
 
 // Spawning a task writes a session (and, for worktree runs, a checkout) under the
 // ACTIVE PROFILE's agent dir, so without this the suite creates them inside the
@@ -34,11 +35,11 @@ describe("autoloadSkills in executor", () => {
 		agent: baseAgent,
 		task: "do work",
 		index: 0,
-		id: "subagent-1",
+		id: "agent-1",
 		settings: Settings.isolated(),
 		modelRegistry: {
 			refresh: async () => {},
-		} as unknown as import("@veyyon/coding-agent/config/model-registry").ModelRegistry,
+		} as unknown as ModelRegistry,
 		enableLsp: false,
 	};
 

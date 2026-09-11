@@ -31,13 +31,13 @@ Generated IDs are lowercase RFC 4122 UUIDs. Existing persisted values are accept
 
 ## Consumers
 
-- `packages/coding-agent/src/tools/report-tool-issue.ts`: included as `installId` in the auto-QA grievance push body so the backend can deduplicate repeated reports from the same install. See `dev.autoqaPush.*` settings and `VEYYON_AUTO_QA_PUSH_*` env vars.
+- `packages/coding-agent/src/tools/agent/report-tool-issue.ts`: included as `installId` in the auto-QA grievance push body so the backend can deduplicate repeated reports from the same install. See `dev.autoqaPush.*` settings and `VEYYON_AUTO_QA_PUSH_*` env vars.
 
 New consumers MUST treat the value as opaque and MUST NOT derive PII from it; the helper does not mix in hostname, username, or any other host-identifying entropy.
 
 ## See also
 
-- [environment-variables.md](../environment-variables.md): `VEYYON_CONFIG_DIR` controls where `install-id` lives.
-- [config-usage.md](../config-usage.md): broader config-root layout.
+- [../handbook/src/reference/environment-complete.md](../handbook/src/reference/environment-complete.md): `VEYYON_CONFIG_DIR` controls where `install-id` lives.
+- [../handbook/src/architecture/config.md](../handbook/src/architecture/config.md): broader config-root layout.
 
 *Verified against `d3e3db30` on 2026-07-23.*

@@ -1,7 +1,7 @@
 /**
  * Every hand-written source file survives a text scan.
  *
- * WHAT WENT WRONG, TWICE. `crates/veyyon-text/src/lib.rs` carried two raw 0x00 bytes in a doc
+ * WHAT WENT WRONG, TWICE. `natives/text/measure/src/lib.rs` carried two raw 0x00 bytes in a doc
  * comment, where the author meant to name the NUL byte and wrote the byte itself.
  * `packages/coding-agent/test/gallery-cli.test.ts` carried two raw 0x1b bytes in
  * `expect(...).toContain("<ESC>[")`, where `"\x1b["` was meant. Neither broke anything a build or a
@@ -15,13 +15,13 @@
  * it had fifty-one. Every audit built on searching the tree silently excluded them. A file that
  * cannot be searched cannot be reviewed, and nothing in CI would ever have said so.
  *
- * WHAT THIS PINS. No source file under `packages/`, `crates/` or `scripts/` contains a control byte
+ * WHAT THIS PINS. No source file under `packages/`, `natives/`, `tests/` or `scripts/` contains a control byte
  * that a text tool treats as a binary marker. Tab, newline and carriage return are ordinary source
  * bytes; everything else below 0x20, plus the 0x7f delete, is not. The rule is about the FILE and
  * not about string literals, because both real defects were places no linter looks: one in a
  * comment, one inside a string a formatter is happy to leave alone.
  *
- * The walk goes over the filesystem rather than `git ls-files`. Only `crates/vendor/**` is tracked
+ * The walk goes over the filesystem rather than `git ls-files`. Only `natives/vendor/**` is tracked
  * in this repository, so a git-based enumeration covers none of our own Rust crates, which is where
  * the first defect lived.
  *
@@ -29,14 +29,14 @@
  * Both are ASCII text and neither trips the classifier.
  *
  * The Rust half of the same rule lives in
- * `crates/veyyon-shell/tests/a_source_file_that_reads_as_binary_is_invisible.rs`, because a cargo
+ * `natives/shell/tests/a_source_file_that_reads_as_binary_is_invisible.rs`, because a cargo
  * test can fail a Rust developer's gate without a bun run. That one covers the `.rs` files under
- * `crates`; this one covers every source extension in every root, so the two overlap there on
+ * `natives`; this one covers every source extension in every root, so the two overlap there on
  * purpose.
  */
 
 import { describe, expect, it } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { type Dirent, readdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
@@ -45,7 +45,7 @@ const repoRoot = path.resolve(import.meta.dir, "..");
 const SOURCE_EXTENSIONS = [".ts", ".tsx", ".js", ".mjs", ".cjs", ".rs", ".py", ".sh"];
 
 /** The trees walked. All three hold hand-written source; everything else at the root is output. */
-const ROOTS = ["packages", "crates", "scripts"];
+const ROOTS = ["packages", "natives", "tests", "scripts"];
 
 /**
  * Directory names that hold generated or foreign content, skipped wherever they appear.
@@ -55,11 +55,12 @@ const ROOTS = ["packages", "crates", "scripts"];
  *
  * - Generated output. `docs/handbook/book` is mdBook OUTPUT whose minified highlight.js carries 0x7f,
  *   and `devin-gen` is protobuf codegen. Regenerating them is the only way to change them.
- * - Foreign code. `vendor` trees are read-only snapshots, and `repo-cache` is where deepswe-bench
- *   clones upstream repositories to run benchmarks against. Editing either is meaningless: the
- *   vendored copy is clobbered on re-vendor and the cache is re-cloned. Between them they account for
- *   every offender this rule found outside our own source, including test fixtures that contain raw
- *   0x1b on purpose because they are testing a terminal reporter.
+ * - Foreign code. `vendor` trees are read-only snapshots, and `repo-cache` and `.cache` are where the
+ *   evals suites clone upstream repositories and vendor pinned benchmark datasets to run against.
+ *   Editing either is meaningless: the vendored copy is clobbered on re-vendor and the cache is
+ *   re-cloned. Between them they account for every offender this rule found outside our own source,
+ *   including test fixtures that contain raw 0x1b on purpose because they are testing a terminal
+ *   reporter, and a dataset task that ships a minified PDF worker.
  * - Build artefacts: `target`, `dist`, `build`, `node_modules`.
  *
  * Kept as an explicit, short list rather than a pattern, so adding to it is a decision a reader can
@@ -75,6 +76,7 @@ const SKIP_DIRS = new Set([
 	"build",
 	"vendor",
 	"repo-cache",
+	".cache",
 	"devin-gen",
 	"book",
 ]);
@@ -89,13 +91,13 @@ function trackedSources(): Array<{ file: string; bytes: Buffer }> {
 }
 
 function collect(dir: string, found: Array<{ file: string; bytes: Buffer }>): void {
-	let entries: ReturnType<typeof readdirSync>;
+	let entries: Dirent[];
 	try {
-		entries = readdirSync(dir, { withFileTypes: true }) as never;
+		entries = readdirSync(dir, { withFileTypes: true });
 	} catch {
 		return;
 	}
-	for (const entry of entries as unknown as Array<{ name: string; isDirectory(): boolean }>) {
+	for (const entry of entries) {
 		const full = path.join(dir, entry.name);
 		if (entry.isDirectory()) {
 			if (!SKIP_DIRS.has(entry.name)) {
@@ -168,7 +170,7 @@ describe("a source file that reads as binary is invisible", () => {
 	it("scans the two files that carried the defect", () => {
 		const sources = trackedSources();
 		for (const [name, minimumBytes] of [
-			["crates/veyyon-text/src/lib.rs", 50_000],
+			["natives/text/measure/src/lib.rs", 50_000],
 			["packages/coding-agent/test/gallery-cli.test.ts", 1_000],
 		] as const) {
 			const found = sources.find(({ file }) => file === name);
@@ -247,7 +249,7 @@ describe("a source file that reads as binary is invisible", () => {
 	 */
 	it("keeps the skip list too small to hide the rule", () => {
 		expect(SKIP_DIRS.size).toBeLessThanOrEqual(10);
-		for (const name of ["src", "test", "tests", "packages", "crates", "scripts", "lib", "core"]) {
+		for (const name of ["src", "test", "tests", "packages", "natives", "scripts", "lib", "core"]) {
 			expect(SKIP_DIRS.has(name), `skipping ${name} would gut the scan`).toBe(false);
 		}
 	});
@@ -256,8 +258,8 @@ describe("a source file that reads as binary is invisible", () => {
 	 * The walk reaches both languages and both roots, at depth.
 	 *
 	 * The count assertion above is satisfied by two thousand TypeScript files alone, so it does not
-	 * prove `crates/` is covered. That mattered here: the first version of this gate enumerated with
-	 * `git ls-files`, and because only `crates/vendor/**` is tracked, every one of our own Rust crates
+	 * prove `natives/` is covered. That mattered here: the first version of this gate enumerated with
+	 * `git ls-files`, and because only `natives/vendor/**` is tracked, every one of our own Rust crates
 	 * was outside the scan while the count still looked healthy. The file that started this whole rule
 	 * is a `.rs` file, so a gate blind to Rust would have been decoration.
 	 */
@@ -271,11 +273,13 @@ describe("a source file that reads as binary is invisible", () => {
 		// whole crate or a whole package tree from the walk trips them.
 		expect(rust.length).toBeGreaterThan(120);
 		expect(typescript.length).toBeGreaterThan(5000);
-		expect(rust.filter(({ file }) => file.startsWith("crates/")).length).toBeGreaterThan(120);
+		expect(
+			rust.filter(({ file }) => file.startsWith("natives/") || file.startsWith("tests/")).length,
+		).toBeGreaterThan(120);
 		expect(sources.some(({ file }) => file.startsWith("packages/"))).toBe(true);
 		expect(sources.some(({ file }) => file.startsWith("scripts/"))).toBe(true);
 
-		// A `.rs` outside `crates/` is a test fixture rather than a compiled crate, and it is in scope
+		// A `.rs` outside `natives/` is a test fixture rather than a compiled crate, and it is in scope
 		// for exactly the same reason: a control byte in it would make the fixture unsearchable too.
 		expect(rust.some(({ file }) => file.startsWith("packages/"))).toBe(true);
 

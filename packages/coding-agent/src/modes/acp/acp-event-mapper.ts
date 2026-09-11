@@ -6,9 +6,9 @@ import type {
 	ToolCallLocation,
 	ToolKind,
 } from "@agentclientprotocol/sdk";
-import type { AgentSessionEvent } from "../../session/agent-session";
-import { resolveToCwd } from "../../tools/path-utils";
-import type { TodoStatus } from "../../tools/todo";
+import type { AgentSessionEvent } from "../../session/agent-session-types";
+import type { TodoStatus } from "../../tools/agent/todo";
+import { resolveToCwd, splitPathAndSel } from "../../tools/core/path-utils";
 import { canonicalizeMessage } from "../../utils/thinking-display";
 
 interface MessageProgress {
@@ -144,9 +144,7 @@ export function mapToolKind(toolName: string): ToolKind {
 		case "exec":
 		case "eval":
 			return "execute";
-		case "grep":
-		case "glob":
-		case "ast_grep":
+		case "search":
 			return "search";
 		case "web_search":
 			return "fetch";
@@ -506,7 +504,7 @@ function mergeToolUpdateContent(startContent: ToolCallContent[], resultContent: 
 	if (startContent.length === 0) {
 		return resultContent;
 	}
-	const merged = [...startContent];
+	const merged = startContent.slice();
 	for (const item of resultContent) {
 		if (
 			item.type === "content" &&
@@ -555,13 +553,20 @@ function buildToolTitle(toolName: string, args: unknown, intent: string | undefi
  * omitted we pass the value through unchanged (callers without session
  * context, e.g. some legacy entry points and tests); the ACP-side caller
  * always supplies cwd so notifications carry absolute paths.
+ *
+ * The read grammar lets a tool call name a range (`src/foo.ts:50-200`), and a
+ * location is a place an editor navigates to, not a range it selects. Peeling
+ * the selector first stops a client that follows the location from opening a
+ * file whose name ends in a colon and a line range. `splitPathAndSel` uses the
+ * strict grammar, so a colon that is part of a real filename survives.
  */
 function toAcpLocationPath(value: string, cwd?: string): string {
-	if (!cwd) return value;
+	const { path: bare } = splitPathAndSel(value);
+	if (!cwd) return bare;
 	try {
-		return resolveToCwd(value, cwd);
+		return resolveToCwd(bare, cwd);
 	} catch {
-		return value;
+		return bare;
 	}
 }
 
@@ -594,7 +599,7 @@ function extractToolLocationsFromResult(result: unknown, cwd?: string): ToolCall
 		return direct;
 	}
 	const seen = new Set(direct.map(loc => loc.path));
-	const locations = [...direct];
+	const locations = direct.slice();
 	for (const entry of perFile) {
 		const raw = extractStringProperty<PathContainer>(entry, "path");
 		if (!raw) continue;
@@ -653,11 +658,11 @@ function terminalToolCallContent(terminalId: string): ToolCallContent {
 function extractToolCallContent(value: unknown, options: AcpEventMapperOptions): ToolCallContent[] {
 	const richContent = extractStructuredToolCallContent(value, options);
 	const detailsImageContent = extractDetailsImageToolCallContent(value, options, richContent);
-	const combinedContent = [...richContent, ...detailsImageContent];
+	const combinedContent = richContent.concat(detailsImageContent);
 	const terminalId = extractTerminalId(value);
 	const content =
 		terminalId && !hasTerminalContent(combinedContent, terminalId)
-			? [...combinedContent, terminalToolCallContent(terminalId)]
+			? combinedContent.concat([terminalToolCallContent(terminalId)])
 			: combinedContent;
 	const fallbackText = extractReadableText(value);
 	if (!fallbackText) {
@@ -666,7 +671,7 @@ function extractToolCallContent(value: unknown, options: AcpEventMapperOptions):
 	if (hasEquivalentTextContent(content, fallbackText)) {
 		return content;
 	}
-	return [...content, textToolCallContent(fallbackText)];
+	return content.concat([textToolCallContent(fallbackText)]);
 }
 
 function extractStructuredToolCallContent(value: unknown, options: AcpEventMapperOptions): ToolCallContent[] {

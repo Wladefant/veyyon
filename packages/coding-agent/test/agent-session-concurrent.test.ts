@@ -9,19 +9,19 @@ import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { Agent, AgentBusyError, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
 import type { AssistantMessage, Message, ToolCall } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { AsyncJobManager } from "@veyyon/coding-agent/async";
-import type { Rule } from "@veyyon/coding-agent/capability/rule";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { type SettingPath, Settings } from "@veyyon/coding-agent/config/settings";
+import type { Rule } from "@veyyon/coding-agent/discovery/capability/rule";
 import { TtsrManager } from "@veyyon/coding-agent/export/ttsr";
 import type { ExtensionRunner } from "@veyyon/coding-agent/extensibility/extensions";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
 import { convertToLlm } from "@veyyon/coding-agent/session/messages";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { type } from "arktype";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
@@ -717,10 +717,10 @@ describe("AgentSession concurrent prompt guard", () => {
 		).toBe(true);
 	});
 
-	it("does not emit session_stop for subagent sessions", async () => {
+	it("does not emit session_stop for agent sessions", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({
-			handler: () => ({ content: ["Subagent done"] }),
+			handler: () => ({ content: ["Agent done"] }),
 		});
 		const agent = new Agent({
 			getApiKey: () => "test-key",
@@ -750,7 +750,7 @@ describe("AgentSession concurrent prompt guard", () => {
 			agentKind: "sub",
 		});
 
-		await session.prompt("Subagent message");
+		await session.prompt("Agent message");
 		await session.waitForIdle();
 
 		expect(mock.calls).toHaveLength(1);

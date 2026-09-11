@@ -3,9 +3,9 @@
  * Uses Biome's CLI with JSON output instead of LSP (which has stale diagnostics issues).
  */
 import path from "node:path";
-import { logger, readPipeText } from "@veyyon/utils";
-import type { Diagnostic, DiagnosticSeverity, LinterClient, ServerConfig } from "../../lsp/types";
+import { errorMessage, logger, readPipeText } from "@veyyon/utils";
 import { adoptIntoPrimarySessionCpuBudget } from "../../session/cpu-limit";
+import type { Diagnostic, DiagnosticSeverity, LinterClient, ServerConfig } from "../types";
 
 // =============================================================================
 // Biome JSON Output Types
@@ -34,7 +34,7 @@ interface BiomeDiagnostic {
  * Convert byte offsets to line:column positions in a single pass over the source.
  */
 function offsetsToPositions(source: string, offsets: number[]): Map<number, { line: number; column: number }> {
-	const sorted = [...new Set(offsets)].sort((a, b) => a - b);
+	const sorted = Array.from(new Set(offsets)).sort((a, b) => a - b);
 	const result = new Map<number, { line: number; column: number }>();
 	let line = 1;
 	let column = 1;
@@ -109,7 +109,7 @@ async function runBiome(
 
 		return { stdout, stderr, success: exitCode === 0 };
 	} catch (err) {
-		return { stdout: "", stderr: String(err), success: false };
+		return { stdout: "", stderr: errorMessage(err), success: false };
 	}
 }
 

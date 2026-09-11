@@ -2,16 +2,16 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
 import type { TextContent } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
 import { convertToLlm } from "@veyyon/coding-agent/session/messages";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import { TodoTool } from "@veyyon/coding-agent/tools/todo";
+import { TodoTool } from "@veyyon/coding-agent/tools/agent/todo";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
@@ -64,6 +64,23 @@ function getMessageText(message: AgentMessage): string {
 		.join("\n");
 }
 
+/**
+ * One observed call, read from after the hidden `session-state` block.
+ *
+ * WHAT FLIPPED. The date and the working directory left the cached system prompt and now arrive as
+ * a hidden `session-state` developer message at the head of the transcript, so every turn observed
+ * here opens with one. It is not this suite's subject — the subject is what the eager preludes put
+ * next to the user message — so a turn is read from after that block, and the block is asserted on
+ * the way past, which is what keeps its disappearance visible from here.
+ */
+function turn(call: ObservedPromptCall | undefined): { roles: AgentMessage["role"][]; texts: string[] } {
+	const roles = call?.messageRoles ?? [];
+	const texts = call?.messageTexts ?? [];
+	expect(roles[0], "a turn opens with the hidden session-state block").toBe("developer");
+	expect(texts[0], "the leading developer message is the session-state block").toContain("<session-state>");
+	return { roles: roles.slice(1), texts: texts.slice(1) };
+}
+
 describe("AgentSession eager task prelude", () => {
 	let tempDir: TempDir;
 	const harnesses: Harness[] = [];
@@ -86,8 +103,8 @@ describe("AgentSession eager task prelude", () => {
 	 * The agent types the mock task tool will accept.
 	 *
 	 * Not decoration. Delegation strength is resolved against the agents a session can ACTUALLY
-	 * spawn (`enabledSubagentNames` reads `enabledAgentNames` off the live task tool), so a mock
-	 * without this models a session whose task tool refuses everything, and `subagent.delegation:
+	 * spawn (`enabledAgentNames` reads `enabledAgentNames` off the live task tool), so a mock
+	 * without this models a session whose task tool refuses everything, and `agent.delegation:
 	 * "required"` correctly resolves to no delegation at all. Every prelude case in this file was
 	 * asserting against that mock and passing only because the resolution used to ignore the tool.
 	 */
@@ -110,7 +127,7 @@ describe("AgentSession eager task prelude", () => {
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), `models-${harnesses.length}.yml`));
 		const settings = Settings.isolated({
 			"compaction.enabled": false,
-			"subagent.delegation": "required",
+			"agent.delegation": "required",
 			"todo.enabled": false,
 			"todo.eager": "default",
 			...settingsOverride,
@@ -197,7 +214,7 @@ describe("AgentSession eager task prelude", () => {
 			agentKind,
 			rebuildSystemPrompt: async () => {
 				if (promptRefreshGate) await promptRefreshGate;
-				return { systemPrompt: [`subagent.batch:${settings.get("subagent.batch")}`] };
+				return { systemPrompt: [`agent.batch:${settings.get("agent.batch")}`] };
 			},
 		});
 
@@ -213,24 +230,23 @@ describe("AgentSession eager task prelude", () => {
 
 		expect(observedCalls).toHaveLength(1);
 		expect(observedCalls[0]?.toolChoice).toBeUndefined();
-		expect(observedCalls[0]?.messageRoles).toEqual(["developer", "user"]);
-		expect(observedCalls[0]?.messageTexts[0]).toContain("delegation is enabled");
-		expect(observedCalls[0]?.messageTexts[0]).toContain("Batch independent slices");
-		expect(observedCalls[0]?.messageTexts[0]).toContain("`task`");
-		expect(
-			observedCalls[0]?.messageTexts.filter(text => text.includes("refactor the parser across modules")),
-		).toHaveLength(1);
-		expect(observedCalls[0]?.messageTexts[0]).not.toContain("refactor the parser across modules");
+		const { roles, texts } = turn(observedCalls[0]);
+		expect(roles).toEqual(["developer", "user"]);
+		expect(texts[0]).toContain("delegation is enabled");
+		expect(texts[0]).toContain("Batch independent slices");
+		expect(texts[0]).toContain("`task`");
+		expect(texts.filter(text => text.includes("refactor the parser across modules"))).toHaveLength(1);
+		expect(texts[0]).not.toContain("refactor the parser across modules");
 	});
 
 	/**
 	 * A prompt started immediately after a task-prompt setting write must wait for
 	 * the queued rebuild rather than sending stale system-prompt bytes.
 	 */
-	it("applies a subagent setting change before the immediately following turn", async () => {
+	it("applies an agent setting change before the immediately following turn", async () => {
 		const refresh = Promise.withResolvers<void>();
 		const { session, settings, observedCalls } = await createHarness(
-			{ "subagent.delegation": "off" },
+			{ "agent.delegation": "off" },
 			undefined,
 			undefined,
 			undefined,
@@ -238,7 +254,7 @@ describe("AgentSession eager task prelude", () => {
 			refresh.promise,
 		);
 
-		settings.set("subagent.batch", false);
+		settings.set("agent.batch", false);
 		const pendingPrompt = session.prompt("continue the work");
 		await Promise.resolve();
 		expect(observedCalls).toHaveLength(0);
@@ -246,7 +262,7 @@ describe("AgentSession eager task prelude", () => {
 		refresh.resolve();
 		await pendingPrompt;
 		expect(observedCalls).toHaveLength(1);
-		expect(observedCalls[0]?.systemPrompt).toBe("subagent.batch:false");
+		expect(observedCalls[0]?.systemPrompt).toBe("agent.batch:false");
 	});
 
 	it("skips eager task prelude for prompts ending with a question mark", async () => {
@@ -255,8 +271,8 @@ describe("AgentSession eager task prelude", () => {
 		await session.prompt("should I refactor the parser?");
 
 		expect(observedCalls).toHaveLength(1);
-		expect(observedCalls[0]?.messageRoles).toEqual(["user"]);
-		expect(observedCalls[0]?.messageTexts).toEqual(["should I refactor the parser?"]);
+		expect(turn(observedCalls[0]).roles).toEqual(["user"]);
+		expect(turn(observedCalls[0]).texts).toEqual(["should I refactor the parser?"]);
 	});
 
 	it("skips eager task prelude for prompts ending with an exclamation mark", async () => {
@@ -265,8 +281,8 @@ describe("AgentSession eager task prelude", () => {
 		await session.prompt("refactor the parser now!");
 
 		expect(observedCalls).toHaveLength(1);
-		expect(observedCalls[0]?.messageRoles).toEqual(["user"]);
-		expect(observedCalls[0]?.messageTexts).toEqual(["refactor the parser now!"]);
+		expect(turn(observedCalls[0]).roles).toEqual(["user"]);
+		expect(turn(observedCalls[0]).texts).toEqual(["refactor the parser now!"]);
 	});
 
 	it("skips eager task prelude for subsequent user messages", async () => {
@@ -274,48 +290,49 @@ describe("AgentSession eager task prelude", () => {
 
 		await session.prompt("refactor the parser across modules");
 		expect(observedCalls).toHaveLength(1);
-		expect(observedCalls[0]?.messageRoles).toEqual(["developer", "user"]);
+		expect(turn(observedCalls[0]).roles).toEqual(["developer", "user"]);
 
 		observedCalls.length = 0;
 		await session.prompt("now update the serializer too");
 
 		expect(observedCalls).toHaveLength(1);
 		expect(observedCalls[0]?.toolChoice).toBeUndefined();
-		expect(observedCalls[0]?.messageRoles.at(-1)).toBe("user");
+		const second = turn(observedCalls[0]);
+		expect(second.roles.at(-1)).toBe("user");
 		// The turn-1 prelude persists in history; the contract is that NO fresh prelude is
 		// prepended adjacent to the new user message on a subsequent turn.
-		expect(observedCalls[0]?.messageRoles.at(-2)).not.toBe("developer");
-		expect(observedCalls[0]?.messageTexts.at(-1)).toBe("now update the serializer too");
+		expect(second.roles.at(-2)).not.toBe("developer");
+		expect(second.texts.at(-1)).toBe("now update the serializer too");
 	});
 
 	it("skips the delegation reminder when delegation is merely allowed", async () => {
-		const { session, observedCalls } = await createHarness({ "subagent.delegation": "allowed" });
+		const { session, observedCalls } = await createHarness({ "agent.delegation": "allowed" });
 
 		await session.prompt("refactor the parser across modules");
 
 		expect(observedCalls).toHaveLength(1);
-		expect(observedCalls[0]?.messageRoles).toEqual(["user"]);
-		expect(observedCalls[0]?.messageTexts).toEqual(["refactor the parser across modules"]);
+		expect(turn(observedCalls[0]).roles).toEqual(["user"]);
+		expect(turn(observedCalls[0]).texts).toEqual(["refactor the parser across modules"]);
 	});
 
 	it("skips the delegation reminder when delegation is preferred (prompt section only)", async () => {
-		const { session, observedCalls } = await createHarness({ "subagent.delegation": "preferred" });
+		const { session, observedCalls } = await createHarness({ "agent.delegation": "preferred" });
 
 		await session.prompt("refactor the parser across modules");
 
 		expect(observedCalls).toHaveLength(1);
-		expect(observedCalls[0]?.messageRoles).toEqual(["user"]);
-		expect(observedCalls[0]?.messageTexts).toEqual(["refactor the parser across modules"]);
+		expect(turn(observedCalls[0]).roles).toEqual(["user"]);
+		expect(turn(observedCalls[0]).texts).toEqual(["refactor the parser across modules"]);
 	});
 
-	it("skips eager task prelude for subagent sessions", async () => {
-		const { session, observedCalls } = await createHarness({}, "SubAgent", undefined, "sub");
+	it("skips eager task prelude for agent sessions", async () => {
+		const { session, observedCalls } = await createHarness({}, "Agent", undefined, "sub");
 
 		await session.prompt("refactor the parser across modules");
 
 		expect(observedCalls).toHaveLength(1);
-		expect(observedCalls[0]?.messageRoles).toEqual(["user"]);
-		expect(observedCalls[0]?.messageTexts).toEqual(["refactor the parser across modules"]);
+		expect(turn(observedCalls[0]).roles).toEqual(["user"]);
+		expect(turn(observedCalls[0]).texts).toEqual(["refactor the parser across modules"]);
 	});
 
 	it("prepends eager task prelude for a main session with a custom agent id", async () => {
@@ -324,8 +341,8 @@ describe("AgentSession eager task prelude", () => {
 		await session.prompt("refactor the parser across modules");
 
 		expect(observedCalls).toHaveLength(1);
-		expect(observedCalls[0]?.messageRoles).toEqual(["developer", "user"]);
-		expect(observedCalls[0]?.messageTexts[0]).toContain("delegation is enabled");
+		expect(turn(observedCalls[0]).roles).toEqual(["developer", "user"]);
+		expect(turn(observedCalls[0]).texts[0]).toContain("delegation is enabled");
 	});
 
 	it("prepends both todo and task preludes when both are eager, keeping the forced todo choice", async () => {
@@ -341,20 +358,20 @@ describe("AgentSession eager task prelude", () => {
 		// eager-todo still forces the todo tool choice on the first turn
 		expect(observedCalls[0]?.toolChoice).toBe("todo");
 		// both hidden preludes precede the user message: todo first, then task
-		expect(observedCalls[0]?.messageRoles).toEqual(["developer", "developer", "user"]);
-		const texts = observedCalls[0]?.messageTexts ?? [];
+		expect(turn(observedCalls[0]).roles).toEqual(["developer", "developer", "user"]);
+		const texts = turn(observedCalls[0]).texts;
 		expect(texts.at(-1)).toBe("refactor the parser across modules");
 		// the task reminder is the second prelude (after the todo reminder)
 		expect(texts.findIndex(text => text.includes("delegation is enabled"))).toBe(1);
 	});
 
 	it("omits batch-call guidance from the eager task reminder when task.batch is disabled", async () => {
-		const { session, observedCalls } = await createHarness({ "subagent.batch": false });
+		const { session, observedCalls } = await createHarness({ "agent.batch": false });
 
 		await session.prompt("refactor the parser across modules");
 
 		expect(observedCalls).toHaveLength(1);
-		const reminder = observedCalls[0]?.messageTexts[0] ?? "";
+		const reminder = turn(observedCalls[0]).texts[0] ?? "";
 		expect(reminder).toContain("delegation is enabled");
 		expect(reminder).not.toContain("Batch independent slices");
 	});
@@ -365,7 +382,7 @@ describe("AgentSession eager task prelude", () => {
 		await session.prompt("refactor the parser across modules");
 
 		expect(observedCalls).toHaveLength(1);
-		const reminder = observedCalls[0]?.messageTexts[0] ?? "";
+		const reminder = turn(observedCalls[0]).texts[0] ?? "";
 		expect(reminder).toContain("`delegate`");
 		expect(reminder).not.toContain("`task`");
 	});
@@ -374,8 +391,8 @@ describe("AgentSession eager task prelude", () => {
 	 * The negative twin every case above was missing, and the reason they all broke at once.
 	 *
 	 * Delegation strength is resolved against the agents the task tool will actually accept, so a
-	 * session with `subagent.delegation: "required"` and NOTHING to delegate to must send no
-	 * reminder at all. Telling a model it MUST fan work out to subagents, in a session where every
+	 * session with `agent.delegation: "required"` and NOTHING to delegate to must send no
+	 * reminder at all. Telling a model it MUST fan work out to agents, in a session where every
 	 * `task` call will be refused, is worse than saying nothing: it spends context asking for the
 	 * one action guaranteed to fail.
 	 *
@@ -390,8 +407,8 @@ describe("AgentSession eager task prelude", () => {
 		await session.prompt("refactor the parser across modules");
 
 		expect(observedCalls).toHaveLength(1);
-		expect(observedCalls[0]?.messageRoles).toEqual(["user"]);
-		expect(observedCalls[0]?.messageTexts).toEqual(["refactor the parser across modules"]);
+		expect(turn(observedCalls[0]).roles).toEqual(["user"]);
+		expect(turn(observedCalls[0]).texts).toEqual(["refactor the parser across modules"]);
 	});
 
 	/**
@@ -405,7 +422,7 @@ describe("AgentSession eager task prelude", () => {
 		await session.prompt("refactor the parser across modules");
 
 		expect(observedCalls).toHaveLength(1);
-		expect(observedCalls[0]?.messageRoles).toEqual(["developer", "user"]);
-		expect(observedCalls[0]?.messageTexts[0]).toContain("delegation is enabled");
+		expect(turn(observedCalls[0]).roles).toEqual(["developer", "user"]);
+		expect(turn(observedCalls[0]).texts[0]).toContain("delegation is enabled");
 	});
 });

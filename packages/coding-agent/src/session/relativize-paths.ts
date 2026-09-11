@@ -7,15 +7,13 @@
  * relative to their root; persisted history keeps the original absolute bytes
  * (fidelity/audit) and inbound model output passes through untouched (tools
  * resolve relative paths against the live cwd).
- *
- * Roots accumulate over the session (initial cwd plus every setCwd target, in
- * order), so a mid-session setCwd only grows the root set: old history keeps
- * rendering byte-identically and the prompt-cache prefix survives the change.
+ * The active cwd is the single registered root so paths under the current working
+ * directory render relative while paths under other roots stay absolute and distinct.
  */
 
 import type { AssistantMessage, Message, TextContent, ToolResultMessage } from "@veyyon/ai";
 import { escapeRegExp } from "@veyyon/utils";
-import { SET_CWD_TOOL_NAME } from "../tools/reroot-hint";
+import { SET_CWD_TOOL_NAME } from "../tools/fs/reroot-hint";
 
 export interface RelativizeResult {
 	messages: Message[];
@@ -23,15 +21,15 @@ export interface RelativizeResult {
 	bytesSaved: number;
 }
 
-/** Normalize, dedup, and sort roots longest-first so the longest prefix wins. */
-export function normalizeRoots(roots: readonly string[]): string[] {
-	const seen = new Set<string>();
-	for (const root of roots) {
-		let normalized = root.trim();
-		while (normalized.length > 1 && normalized.endsWith("/")) normalized = normalized.slice(0, -1);
-		if (normalized.length > 1 && normalized.startsWith("/")) seen.add(normalized);
-	}
-	return [...seen].sort((a, b) => b.length - a.length);
+/**
+ * Normalize an active working directory root for wire-path relativization.
+ * Trims whitespace and trailing slashes, rejecting non-absolute or root-only paths.
+ */
+export function normalizeRoots(root: string): string[] {
+	let normalized = root.trim();
+	while (normalized.length > 1 && normalized.endsWith("/")) normalized = normalized.slice(0, -1);
+	if (normalized.length > 1 && normalized.startsWith("/")) return [normalized];
+	return [];
 }
 
 const BOUNDARY_CHARS = new Set([" ", "\t", "\n", "\r", "(", "[", "{", "<", '"', "'", "`", "=", ":", ";", ","]);
@@ -93,7 +91,7 @@ function relativizeArguments(value: unknown, roots: readonly string[], state: { 
 		for (let i = 0; i < value.length; i++) {
 			const next = relativizeArguments(value[i], roots, state);
 			if (next !== value[i]) {
-				items ??= [...value];
+				items ??= value.slice();
 				items[i] = next;
 			}
 		}
@@ -125,7 +123,7 @@ function relativizeAssistant(
 		if (block.type === "text") {
 			const next = relativizeText(block.text, compiled);
 			if (next) {
-				content ??= [...message.content];
+				content ??= message.content.slice();
 				content[i] = { ...block, text: next.text };
 				state.saved += next.saved;
 			}
@@ -133,7 +131,7 @@ function relativizeAssistant(
 			const argState = { changed: false };
 			const args = relativizeArguments(block.arguments, roots, argState);
 			if (argState.changed) {
-				content ??= [...message.content];
+				content ??= message.content.slice();
 				content[i] = { ...block, arguments: args as Record<string, unknown> };
 			}
 		}
@@ -168,7 +166,7 @@ function relativizeMessage(
 			if (block.type !== "text") continue;
 			const next = relativizeText(block.text, compiled);
 			if (next) {
-				content ??= [...result.content];
+				content ??= result.content.slice();
 				content[i] = { ...block, text: next.text } as TextContent;
 				state.saved += next.saved;
 			}
@@ -188,7 +186,7 @@ function relativizeMessage(
 		if (block.type !== "text") continue;
 		const next = relativizeText(block.text, compiled);
 		if (next) {
-			content ??= [...message.content];
+			content ??= message.content.slice();
 			content[i] = { ...block, text: next.text };
 			state.saved += next.saved;
 		}
@@ -227,7 +225,7 @@ export function relativizePathsUnderRoots(messages: Message[], roots: readonly s
 		const next = relativizer.transform(messages[i]);
 		bytesSaved += next.bytesSaved;
 		if (next.message !== messages[i]) {
-			out ??= [...messages];
+			out ??= messages.slice();
 			out[i] = next.message;
 		}
 	}

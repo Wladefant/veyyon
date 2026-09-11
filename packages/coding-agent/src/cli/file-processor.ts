@@ -6,9 +6,9 @@ import * as path from "node:path";
 import type { ImageContent } from "@veyyon/ai";
 import { errorMessage, getProjectDir, isEnoent, readImageMetadata } from "@veyyon/utils";
 import chalk from "chalk";
-import { CONVERTIBLE_EXTENSIONS } from "../markit";
-import { resolveReadPath } from "../tools/path-utils";
-import { formatBytes } from "../tools/render-utils";
+import { CONVERTIBLE_EXTENSIONS } from "../export/markit/convertible-extensions";
+import { resolveReadPath } from "../tools/core/path-utils";
+import { formatBytes } from "../tools/core/render-utils";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize";
 import { convertFileWithMarkit } from "../utils/markit";
 
@@ -58,7 +58,7 @@ export async function processFileArguments(fileArgs: string[], options?: Process
 		// Read file, handling not-found gracefully
 		let buffer: Uint8Array;
 		try {
-			buffer = await Bun.file(absolutePath).bytes();
+			buffer = await fs.promises.readFile(absolutePath);
 		} catch (err) {
 			if (isEnoent(err)) {
 				console.error(chalk.red(`Error: File not found: ${absolutePath}`));
@@ -72,7 +72,7 @@ export async function processFileArguments(fileArgs: string[], options?: Process
 
 		if (mimeType) {
 			// Handle image file
-			const base64Content = buffer.toBase64();
+			const base64Content = Buffer.from(buffer).toString("base64");
 			let attachment: ImageContent;
 			let dimensionNote: string | undefined;
 

@@ -5,11 +5,11 @@
  * Unlike markdown commands which expand to prompts, custom commands can execute
  * arbitrary logic with full access to the hook context.
  */
+import type * as TypeBox from "@veyyon/kernel/registry/typebox";
 import type * as arktype from "arktype";
 import type * as zod from "zod/v4";
-import type { ExecOptions, ExecResult, HookCommandContext } from "../../extensibility/hooks/types";
 import type * as PiCodingAgent from "../../index";
-import type * as TypeBox from "../typebox";
+import type { ExecOptions, ExecResult, HookCommandContext } from "../hooks/types";
 
 // Re-export for custom commands to use
 export type { ExecOptions, ExecResult, HookCommandContext };
@@ -93,10 +93,10 @@ export interface CustomCommand {
 	/** Description shown in command autocomplete */
 	description: string;
 	/**
-	 * Subagent types this command's prompt names outright, granted for the turn it
+	 * Agent types this command's prompt names outright, granted for the turn it
 	 * starts even when those agents are disabled.
 	 *
-	 * `subagent.agents.<name>.enabled` governs THE MODEL: enabled means the model
+	 * `agent.agents.<name>.enabled` governs THE MODEL: enabled means the model
 	 * may choose that agent on its own initiative. It is not meant to govern the
 	 * person typing, and `/review` is the case that proves it — its prompt says
 	 * `agent: "reviewer"`, and someone running `/review` is asking for a review,

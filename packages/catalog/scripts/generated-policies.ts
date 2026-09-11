@@ -18,6 +18,7 @@ import { isMimoModelIdOrName } from "../src/identity/family";
 import { getLongestModelLikeIdSegment } from "../src/identity/id";
 import { buildModelReferenceIndex, resolveModelReference } from "../src/identity/reference";
 import { resolveModelThinking } from "../src/model-thinking";
+import { PROVIDERS_PUBLISHING_OWN_MODEL_LIMITS } from "../src/provider-models/descriptors";
 import { resolveWaferServerlessThinkingFormat } from "../src/provider-models/openai-compat";
 import type { Api, Model, ModelSpec } from "../src/types";
 import { isVariantCollapsedSpec } from "../src/variant-collapse";
@@ -161,7 +162,8 @@ export function linkOpenAIPromotionTargets(models: ModelSpec<Api>[]): void {
  * backfills any field it leaves null.
  *
  * Only `null` fields are filled; provider-specific limits that discovery
- * returned explicitly are never overwritten.
+ * returned explicitly are never overwritten. Routers that explicitly leave
+ * completion ceilings unknown may opt out of this fallback.
  */
 export function applyCanonicalLimitFallback(models: ModelSpec<Api>[]): void {
 	if (!models.some(model => model.contextWindow === null || model.maxTokens === null)) {
@@ -176,6 +178,11 @@ export function applyCanonicalLimitFallback(models: ModelSpec<Api>[]): void {
 	const referenceIndex = buildModelReferenceIndex(catalog);
 
 	for (const model of models) {
+		if (PROVIDERS_PUBLISHING_OWN_MODEL_LIMITS.has(model.provider)) {
+			// The endpoint owns its limits; a cross-provider same-family
+			// reference must not invent one it never published.
+			continue;
+		}
 		if (model.contextWindow !== null && model.maxTokens !== null) {
 			continue;
 		}
@@ -207,6 +214,11 @@ function applyGeneratedModelPolicy(model: ModelSpec<Api>): void {
 	if (copilotLimits) {
 		model.contextWindow = copilotLimits.contextWindow;
 		model.maxTokens = copilotLimits.maxTokens;
+	}
+	if (model.provider === "command-code") {
+		// Cross-provider metadata may have filled a same-family output cap before
+		// this pass. The Provider API does not publish or promise one.
+		model.maxTokens = null;
 	}
 
 	if (model.provider === "ollama-cloud") {
@@ -284,11 +296,22 @@ function applyGeneratedModelPolicy(model: ModelSpec<Api>): void {
 		};
 	}
 	const parsedModel = parseKnownModel(model.id);
-	const applyPatchToolType = inferGeneratedApplyPatchToolType(model, parsedModel);
-	if (applyPatchToolType) {
-		model.applyPatchToolType = applyPatchToolType;
-	} else {
-		delete model.applyPatchToolType;
+	// Codex discovery declares `apply_patch_tool_type` per SKU, and on that
+	// transport the declaration outranks the version-derived default, which
+	// stops at GPT-5 and would strip GPT-6 Astra of the freeform patch tool the
+	// endpoint states it takes. Every other transport keeps the inferred value
+	// only, so a stale flag copied onto a completions row is still removed.
+	const declaredOnCodex =
+		model.provider === "openai-codex" &&
+		model.api === "openai-codex-responses" &&
+		model.applyPatchToolType !== undefined;
+	if (!declaredOnCodex) {
+		const applyPatchToolType = inferGeneratedApplyPatchToolType(model, parsedModel);
+		if (applyPatchToolType) {
+			model.applyPatchToolType = applyPatchToolType;
+		} else {
+			delete model.applyPatchToolType;
+		}
 	}
 	if (parsedModel.family === "anthropic") {
 		applyAnthropicCatalogPolicy(model, parsedModel);

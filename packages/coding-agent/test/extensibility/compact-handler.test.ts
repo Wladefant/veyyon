@@ -4,6 +4,7 @@ import {
 	runExtensionCompact,
 	runExtensionSetModel,
 } from "@veyyon/coding-agent/extensibility/extensions/compact-handler";
+import type { ConfiguredThinkingLevel } from "@veyyon/coding-agent/thinking";
 
 /**
  * These two adapters bridge the extension-facing API shape to AgentSession's method
@@ -46,14 +47,28 @@ describe("runExtensionCompact", () => {
 describe("runExtensionSetModel", () => {
 	const makeSession = (key: string | undefined) => {
 		let setCount = 0;
+		const temporaryCalls: Array<{
+			model: Model;
+			thinkingLevel: ConfiguredThinkingLevel | undefined;
+			options: { ephemeral?: boolean } | undefined;
+		}> = [];
 		return {
 			session: {
 				modelRegistry: { getApiKey: async () => key },
 				setModel: async () => {
 					setCount += 1;
 				},
+				setModelTemporary: async (
+					model: Model,
+					thinkingLevel?: ConfiguredThinkingLevel,
+					options?: { ephemeral?: boolean },
+				) => {
+					temporaryCalls.push({ model, thinkingLevel, options });
+				},
 			},
 			setCount: () => setCount,
+			temporaryCalls,
+			temporaryCount: () => temporaryCalls.length,
 		};
 	};
 
@@ -61,6 +76,13 @@ describe("runExtensionSetModel", () => {
 		const { session, setCount } = makeSession("sk-x");
 		expect(await runExtensionSetModel(session, model)).toBe(true);
 		expect(setCount()).toBe(1);
+	});
+
+	it("switches through the temporary path, and only there, when the switch is ephemeral", async () => {
+		const { session, setCount, temporaryCount } = makeSession("sk-x");
+		expect(await runExtensionSetModel(session, model, { ephemeral: true })).toBe(true);
+		expect(setCount()).toBe(0);
+		expect(temporaryCount()).toBe(1);
 	});
 
 	it("returns false and does not switch when there is no key", async () => {
@@ -73,5 +95,11 @@ describe("runExtensionSetModel", () => {
 		const { session, setCount } = makeSession("");
 		expect(await runExtensionSetModel(session, model)).toBe(false);
 		expect(setCount()).toBe(0);
+	});
+	it.each([undefined, "", "sk-x"])("uses only an ephemeral switch when authorized with %p", async key => {
+		const { session, setCount, temporaryCalls } = makeSession(key);
+		expect(await runExtensionSetModel(session, model, { ephemeral: true })).toBe(Boolean(key));
+		expect(setCount()).toBe(0);
+		expect(temporaryCalls).toEqual(key ? [{ model, thinkingLevel: undefined, options: { ephemeral: true } }] : []);
 	});
 });

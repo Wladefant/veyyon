@@ -183,15 +183,19 @@ export function computeFileLists(fileOps: FileOperations): { readFiles: string[]
 	// Drop any `scheme://` URLs (e.g. legacy `conflict://`/`artifact://` entries
 	// rehydrated straight into `fileOps` from a pre-fix compaction summary) — only
 	// real files belong in `<files>`. New tool-call scans are already filtered.
-	const modified = new Set([...fileOps.edited, ...fileOps.written].filter(f => !isUrlSchemePath(f)));
-	const readOnly = [...fileOps.read].filter(f => !isUrlSchemePath(f) && !modified.has(f)).sort();
-	const modifiedFiles = [...modified].sort();
+	const modified = new Set<string>();
+	for (const f of fileOps.edited) if (!isUrlSchemePath(f)) modified.add(f);
+	for (const f of fileOps.written) if (!isUrlSchemePath(f)) modified.add(f);
+	const readOnly = Array.from(fileOps.read)
+		.filter(f => !isUrlSchemePath(f) && !modified.has(f))
+		.sort();
+	const modifiedFiles = Array.from(modified).sort();
 	return { readFiles: readOnly, modifiedFiles };
 }
 
 /**
  * Format file operations as one `<files>` tag: a grouped, prefix-folded
- * directory tree (find-tool shape — `# dir/` headers, bare basenames) with a
+ * directory tree (search `files` shape — `# dir/` headers, bare basenames) with a
  * ` (Read)` / ` (Write)` / ` (RW)` marker per file instead of separate
  * read/modified lists. `readSet` is the cumulative read set (`fileOps.read`),
  * used to tell modified files that were also read (RW) from blind writes.
@@ -216,7 +220,7 @@ export function formatFileOperations(
 	const mode = new Map<string, "Read" | "Write" | "RW">();
 	for (const file of readFiles) mode.set(file, "Read");
 	for (const file of modifiedFiles) mode.set(file, readSet?.has(file) ? "RW" : "Write");
-	const all = [...mode.keys()].sort();
+	const all = Array.from(mode.keys()).sort();
 	let files = formatGroupedPaths(all.slice(0, FILE_OPERATION_SUMMARY_LIMIT), path => ` (${mode.get(path)})`);
 	if (all.length > FILE_OPERATION_SUMMARY_LIMIT) {
 		files += `\n[…${all.length - FILE_OPERATION_SUMMARY_LIMIT} files elided…]`;
@@ -360,8 +364,27 @@ export function serializeConversationForSummary(messages: Message[], dialect?: D
 /**
  * Serialize LLM messages to transcript text.
  * Call convertToLlm() first to handle custom message types.
+ *
+ * Prior reasoning is dropped rather than rendered. Every caller of this
+ * function puts the result inside a user turn — a summarization request, a
+ * branch summary, a handoff — and a user turn carrying the model's own chain of
+ * thought is what Anthropic's `reasoning_extraction` classifier refuses: the
+ * Anthropic dialect renders thinking as `<thinking>` tags, so compacting a
+ * session that had thinking on came back as `Compaction failed: Summarization
+ * failed: Refusal (reasoning_extraction)` and the history was never compacted.
+ * `renderDemotedThinking` in `@veyyon/ai/dialect/demotion` states why bare
+ * prose is no answer here either: the classifier's heat is cumulative in block
+ * count, and a compaction payload replays every thinking block in the discarded
+ * range at once. A summary describes what was asked, done and decided, all of
+ * which survives in the text, tool calls and results this still renders. A
+ * user or developer message that carries prior reasoning as prose
+ * (`demotedReasoningSource`) is the same chain of thought in another slot and
+ * is dropped for the same reason.
  */
 export function serializeConversation(messages: Message[], dialect?: Dialect): string {
+	messages = messages.filter(
+		msg => (msg.role !== "user" && msg.role !== "developer") || msg.demotedReasoningSource === undefined,
+	);
 	// Tool results flagged contextually useless (and their paired calls) are
 	// dropped from the serialized text: the source region is discarded after
 	// summarization anyway, so excluding them costs nothing and keeps garbage
@@ -376,7 +399,9 @@ export function serializeConversation(messages: Message[], dialect?: Dialect): s
 		const processed: Message[] = [];
 		for (const msg of messages) {
 			if (msg.role === "assistant") {
-				const content = msg.content.filter(block => block.type !== "toolCall" || !uselessCallIds.has(block.id));
+				const content = msg.content.filter(
+					block => block.type !== "thinking" && (block.type !== "toolCall" || !uselessCallIds.has(block.id)),
+				);
 				if (content.length > 0) processed.push(content.length === msg.content.length ? msg : { ...msg, content });
 				continue;
 			}
@@ -411,23 +436,17 @@ export function serializeConversation(messages: Message[], dialect?: Dialect): s
 			if (content) parts.push(`[User]: ${content}`);
 		} else if (msg.role === "assistant") {
 			const textParts: string[] = [];
-			const thinkingParts: string[] = [];
 			const toolCalls: ToolCall[] = [];
 
 			for (const block of msg.content) {
 				if (block.type === "text") {
 					textParts.push(block.text);
-				} else if (block.type === "thinking") {
-					thinkingParts.push(block.thinking);
 				} else if (block.type === "toolCall") {
 					if (uselessCallIds.has(block.id)) continue;
 					toolCalls.push(block);
 				}
 			}
 
-			if (thinkingParts.length > 0) {
-				parts.push(`[Think]: ${thinkingParts.join("\n")}`);
-			}
 			if (textParts.length > 0) {
 				parts.push(`[Assistant]: ${textParts.join("\n")}`);
 			}

@@ -11,12 +11,12 @@ import {
 	type SessionNotification,
 } from "@agentclientprotocol/sdk";
 import type { Model } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { buildModel } from "@veyyon/catalog/build";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAcpConnection } from "@veyyon/coding-agent/modes/acp/acp-mode";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 
 const TEST_MODEL: Model = buildModel({
@@ -268,21 +268,20 @@ describe("ACP lazy startup", () => {
 		const { runRootCommand } = await import("@veyyon/coding-agent/main");
 
 		const explicit = {
-			"subagent.isolation.mode": "rcopy",
-			"subagent.isolation.merge": "branch",
-			"subagent.isolation.commits": "ai",
-			"subagent.delegation": "required",
-			"subagent.batch": false,
-			"subagent.maxConcurrency": 4,
-			"subagent.maxNestedSpawnDepth": 5,
-			"subagent.agents": {
+			"agent.isolation.mode": "rcopy",
+			"agent.isolation.merge": "branch",
+			"agent.isolation.commits": "ai",
+			"agent.delegation": "required",
+			"agent.batch": false,
+			"agent.maxConcurrency": 4,
+			"agent.maxNestedSpawnDepth": 5,
+			"agent.agents": {
 				scout: { enabled: true },
 				task: { model: "claude-sonnet-4-20250514", effort: "inherit" },
 			},
 			"memory.backend": "local",
-			"memories.enabled": true,
 			"advisor.enabled": true,
-			"advisor.subagents": true,
+			"advisor.agents": true,
 			"advisor.syncBacklog": "5",
 			"advisor.immuneTurns": 7,
 		} as const;

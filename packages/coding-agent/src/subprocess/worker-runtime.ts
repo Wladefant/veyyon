@@ -12,7 +12,7 @@ import {
 } from "@veyyon/utils";
 import { readPipeText } from "@veyyon/utils/stream";
 import packageJson from "../../package.json" with { type: "json" };
-import { ONNXRUNTIME_NODE_PACKAGE } from "../tts/runtime";
+import { ONNXRUNTIME_NODE_PACKAGE } from "../speech/tts/runtime";
 
 /**
  * Child-side scaffolding shared by the ONNX inference worker bodies
@@ -44,7 +44,7 @@ const sourceRequire = createRequire(import.meta.url);
 // ── Error serialization ─────────────────────────────────────────────
 
 export function errorText(error: unknown): string {
-	return error instanceof Error ? (error.stack ?? error.message) : String(error);
+	return error instanceof Error ? (error.stack ?? error.message) : errorMessage(error);
 }
 
 // ── Structured logging ──────────────────────────────────────────────

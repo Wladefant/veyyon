@@ -19,6 +19,19 @@ const SERVER_ERROR_BACKOFF_MS = 20 * 1000; // 20s
 const ACCOUNT_RATE_LIMIT_PATTERN =
 	/\baccount(?:'s)?\b[^\n]{0,80}\brate.?limit\b|\brate.?limit\b[^\n]{0,80}\baccount\b/i;
 const INSUFFICIENT_BALANCE_PATTERN = /insufficient.?balance/i;
+// A status code named in prose is a whole number. `lower.includes("503")` also
+// fired inside `5030 credits remaining` and inside a request id, which routed an
+// exhausted balance to a 45-second capacity backoff instead of rotating the
+// credential. Digit boundaries, not substrings. A bare `500ms` latency figure
+// still reads as a status, which no report has produced and which a unit suffix
+// would have to be enumerated to exclude.
+const CAPACITY_STATUS_PATTERN = /(?<!\d)(?:503|529)(?!\d)/;
+// 502 and 504 are the same claim 500 makes — an upstream broke or timed out, and the next attempt
+// reaches a peer that may not have. They were missing, so a bare `HTTP 502 Bad Gateway` matched no
+// branch, returned UNKNOWN, and the fallback selector was suppressed for five minutes over a
+// gateway blip that a twenty-second wait clears. Same digit-boundary guard as above: `5040` is a
+// token count, not a status.
+const SERVER_ERROR_STATUS_PATTERN = /(?<!\d)(?:500|502|504)(?!\d)/;
 
 /**
  * Classify a rate-limit error message into a reason category.
@@ -43,8 +56,7 @@ export function parseRateLimitReason(errorMessage: string): RateLimitReason {
 	if (
 		lower.includes("capacity") ||
 		lower.includes("overloaded") ||
-		lower.includes("529") ||
-		lower.includes("503") ||
+		CAPACITY_STATUS_PATTERN.test(lower) ||
 		lower.includes("resource exhausted")
 	) {
 		return "MODEL_CAPACITY_EXHAUSTED";
@@ -78,7 +90,11 @@ export function parseRateLimitReason(errorMessage: string): RateLimitReason {
 		return "QUOTA_EXHAUSTED";
 	}
 
-	if (lower.includes("500") || lower.includes("internal error") || lower.includes("internal server error")) {
+	if (
+		SERVER_ERROR_STATUS_PATTERN.test(lower) ||
+		lower.includes("internal error") ||
+		lower.includes("internal server error")
+	) {
 		return "SERVER_ERROR";
 	}
 
@@ -108,40 +124,12 @@ export function calculateRateLimitBackoffMs(reason: RateLimitReason): number {
 const USAGE_LIMIT_PATTERN =
 	/usage.?limit|usage_limit_reached|usage_not_included|limit_reached|quota.?(?:exceeded|reached|insufficient)|额度不足|额度耗尽|resource.?exhausted|exhausted your capacity|quota will reset|insufficient.?(?:balance|quota)|run out of credits|out of credits|spending[- _]?limit|personal-team-blocked/i;
 
-/**
- * HTTP status codes that, absent richer body classification, represent an
- * account-local usage cap rather than a bad credential or a transient blip.
- * Always combine with {@link isUsageLimitOutcome} when a message is available
- * — a 429 carrying transient rate-limit wording is NOT a usage cap.
- */
-export function isUsageLimitStatus(status: number | undefined): boolean {
-	return status === 429;
-}
-
-/**
- * Returns true for failures that should burn one credential and rotate to a
- * sibling account. Decision tree:
- *
- *  1. Body matches {@link isUsageLimitError} (Codex `usage_limit_reached`,
- *     Anthropic account rate-limit, Google `resource_exhausted`, OpenAI
- *     `insufficient_quota`, …) → rotate.
- *  2. Status is not 429 → backoff (caller's domain).
- *  3. Body is absent or {@link isOpaqueStatusBody opaque} (just the status,
- *     empty JSON, HTTP framing only) → rotate conservatively: the server
- *     gave us nothing else to go on.
- *  4. Body has content → defer to {@link parseRateLimitReason}. Only
- *     `QUOTA_EXHAUSTED` rotates; `RATE_LIMIT_EXCEEDED` (`Too many requests`,
- *     per-minute caps), `MODEL_CAPACITY_EXHAUSTED` (`Service overloaded`),
- *     `SERVER_ERROR`, and `UNKNOWN` (`Please retry in 5s`) stay in the
- *     provider's own backoff layer so transient 429s don't burn sibling
- *     credentials.
- */
-export function isUsageLimitOutcome(status: number | undefined, message: string | undefined): boolean {
-	if (message && matchesUsageLimitText(message)) return true;
-	if (!isUsageLimitStatus(status)) return false;
-	if (!message || isOpaqueStatusBody(message)) return true;
-	return parseRateLimitReason(message) === "QUOTA_EXHAUSTED";
-}
+// `isUsageLimitStatus` and `isUsageLimitOutcome` are gone. They were the quota decision tree written
+// a second time, outside the registry: `isUsageLimit(error) || isUsageLimitOutcome(status, message)`
+// appeared at six call sites, because each half missed a case the other caught. The rules now live
+// once, in the `quota` family in `domains/account.ts`, and the question has one accessor,
+// `isUsageLimit` in `flags.ts`. The parts that family reads — `matchesUsageLimitText`,
+// `isOpaqueStatusBody`, `parseRateLimitReason` — stay here.
 
 /**
  * A 429 body is opaque when it carries no signal beyond the status itself —

@@ -24,17 +24,16 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
 import type { Model } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createArgotSession } from "@veyyon/coding-agent/argot-cache";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { formatModelString } from "@veyyon/coding-agent/config/model-resolver";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { usesCursorRuleDelivery } from "@veyyon/coding-agent/cursor";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
 import { usesCodexTaskPrompt } from "@veyyon/coding-agent/task/prompt-policy";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import { ArgotUnloadTool } from "@veyyon/coding-agent/tools/argot";
+import { ArgotUnloadTool } from "@veyyon/coding-agent/tools/agent/argot";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries } from "@veyyon/utils";
 import type { Vocabulary } from "argot";
 import { useTrackedTempDirs } from "./helpers/tracked-temp-dir";
@@ -76,13 +75,11 @@ describe("system prompt prefix invalidation", () => {
 	 *
 	 * `resolveEditMode` sends any model whose string contains `kimi` to `replace`
 	 * while everything else keeps the `hashline` default, and neither model may be
-	 * a GPT-5.6 task-policy model or a cursor-agent model, or
-	 * `#currentPromptModelKey` would move too and the reason under test would no
-	 * longer isolate the edit variant.
+	 * a GPT-5.6 task-policy model, or `#currentPromptModelKey` would move too and
+	 * the reason under test would no longer isolate the edit variant.
 	 */
 	function pickEditVariantPair(): [Model, Model] {
-		const sameCohort = (model: Model): boolean => !usesCodexTaskPrompt(model.id) && !usesCursorRuleDelivery(model);
-		const all = modelRegistry.getAll().filter(sameCohort);
+		const all = modelRegistry.getAll().filter(model => !usesCodexTaskPrompt(model.id));
 		const hashline = all.find(model => !formatModelString(model).toLowerCase().includes("kimi"));
 		const replace = all.find(model => formatModelString(model).toLowerCase().includes("kimi"));
 		if (!hashline || !replace) throw new Error("Expected a kimi and a non-kimi model in the same prompt cohort");
@@ -160,7 +157,7 @@ describe("system prompt prefix invalidation", () => {
 	 */
 	it("names the prompt-model-key when the switch moves the model cohort", async () => {
 		const all = modelRegistry.getAll();
-		const defaultPolicy = all.find(model => !usesCodexTaskPrompt(model.id) && !usesCursorRuleDelivery(model));
+		const defaultPolicy = all.find(model => !usesCodexTaskPrompt(model.id));
 		const codexPolicy = all.find(model => usesCodexTaskPrompt(model.id));
 		if (!defaultPolicy || !codexPolicy) throw new Error("Expected default-policy and GPT-5.6 models");
 		authStorage.setRuntimeApiKey(defaultPolicy.provider, "key-a");
@@ -263,7 +260,7 @@ describe("argot tools", () => {
 		const root = makeArgotDir();
 		fs.writeFileSync(path.join(root, ".argot"), "");
 
-		const argot = createArgotSession({ enabled: true, isSubagent: false, subagentMode: "off" });
+		const argot = createArgotSession({ enabled: true, isSpawned: false, agentMode: "off" });
 		if (argot === undefined) throw new Error("expected a codec for an enabled top-level session");
 		argot.load(root, vocabulary());
 

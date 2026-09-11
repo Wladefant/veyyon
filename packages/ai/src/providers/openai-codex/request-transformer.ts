@@ -1,8 +1,14 @@
 import { Effort } from "@veyyon/catalog/effort";
-import { supportsAllTurnsReasoningContext, supportsCodexReasoningSummary } from "@veyyon/catalog/identity";
+import {
+	statesOpenAIWireGeneration,
+	supportsAllTurnsReasoningContext,
+	supportsCodexReasoningSummary,
+} from "@veyyon/catalog/identity";
 import { requireSupportedEffort } from "@veyyon/catalog/model-thinking";
+import * as logger from "@veyyon/utils/logger";
 import type { Model } from "../../types";
 import { mapOpenAIReasoningEffort, ORPHAN_TOOL_CALL_PLACEHOLDER } from "../openai-shared";
+import { staleToolResultNote } from "../transform-messages";
 
 /** Reasoning replay scope for the Codex Responses API (`reasoning.context`). */
 export type CodexReasoningContext = "auto" | "current_turn" | "all_turns";
@@ -98,15 +104,48 @@ export interface RequestBody {
 	[key: string]: unknown;
 }
 
+/** The narrow view of a model both Codex reasoning-context rules read. */
+type CodexReasoningContextModel = Pick<Model<"openai-codex-responses">, "id"> & { useResponsesLite?: boolean };
+
 /**
- * Resolve whether a Codex request uses the Responses Lite transport: an
- * explicit option wins, otherwise the model's catalog flag (codex-rs
- * `model_info.use_responses_lite`) decides.
+ * Whether this model may be sent `reasoning.context: "all_turns"`.
+ *
+ * Two facts decide it, and this is the only place they meet. The version floor
+ * reads a wire generation out of the id: pre-5.4 Codex ids (`gpt-5.1-codex`,
+ * `gpt-5.3-codex`, `gpt-5.3-codex-spark`) reject `all_turns` with
+ * `Unsupported value: 'all_turns' is not supported with this model`, and that
+ * refusal is authoritative for any id that states a generation.
+ *
+ * A codename states none. The catalog ships two of those marked for the
+ * Responses Lite transport (`codex-auto-review`, `gpt-daybreak-blue-latest`),
+ * and that transport's server contract REQUIRES `all_turns`, so for an id the
+ * floor cannot read, the lite flag is the evidence.
  */
-export function resolveCodexResponsesLite(
-	model: Model<"openai-codex-responses">,
-	requested: boolean | undefined,
-): boolean {
+export function acceptsAllTurnsReasoningContext(model: CodexReasoningContextModel): boolean {
+	if (supportsAllTurnsReasoningContext(model.id)) return true;
+	return !statesOpenAIWireGeneration(model.id) && model.useResponsesLite === true;
+}
+
+/**
+ * Resolves whether a Codex request uses the Responses Lite transport.
+ *
+ * This is the single authority for lite enablement across every Codex request
+ * builder: the HTTP SSE body, the WebSocket frame and its upgrade headers,
+ * prewarming, server-side compaction, and web search.
+ *
+ * The lite transport requires `reasoning.context: "all_turns"` on the wire, so
+ * a model that cannot be sent that value ({@link acceptsAllTurnsReasoningContext})
+ * is structurally ineligible: the marker header, the client metadata and the
+ * lite body shape are all suppressed and the request goes out on the regular
+ * Responses transport, whatever the catalog flag or the caller asked for. The
+ * two rules therefore cannot disagree about one request, which is what sent a
+ * lite-marked request with no `context` and earned
+ * `X-OpenAI-Internal-Codex-Responses-Lite requires reasoning.context to be all_turns`.
+ */
+export function resolveCodexResponsesLite(model: CodexReasoningContextModel, requested?: boolean): boolean {
+	if (!acceptsAllTurnsReasoningContext(model)) {
+		return false;
+	}
 	return requested ?? model.useResponsesLite === true;
 }
 
@@ -188,8 +227,8 @@ function orphanFunctionOutputToMessage(item: InputItem, callId: string): InputIt
 	}
 	return {
 		type: "message",
-		role: "assistant",
-		content: `[Previous ${toolName} result; call_id=${callId}]: ${text}`,
+		role: "user",
+		content: staleToolResultNote({ toolName, toolCallId: callId, text }),
 	} as InputItem;
 }
 
@@ -198,7 +237,7 @@ function orphanFunctionOutputToMessage(item: InputItem, callId: string): InputIt
  * stays valid — the API rejects either orphan with a 400:
  *
  * - `function_call_output` / `custom_tool_call_output` with no matching call →
- *   folded into an assistant message (`400 No tool call found for … output`).
+ *   folded into a user-role note (`400 No tool call found for … output`).
  *   Regression of #472 / #1351.
  * - `function_call` / `custom_tool_call` with no matching `*_output` → a
  *   placeholder output is synthesized immediately after the call
@@ -228,6 +267,11 @@ function repairToolCallPairs(input: InputItem[]): InputItem[] {
 			callId !== undefined &&
 			!callIds.has(callId)
 		) {
+			logger.warn("openai-codex: folding a tool output whose call is missing from the request", {
+				toolCallId: callId,
+				knownCallIds: [...callIds],
+				inputItems: input.length,
+			});
 			repaired.push(orphanFunctionOutputToMessage(item, callId));
 			continue;
 		}
@@ -280,6 +324,7 @@ export interface CodexLiteShapedBody {
 	tools?: unknown;
 	input?: unknown;
 	parallel_tool_calls?: unknown;
+	reasoning?: { context?: string } & Record<string, unknown>;
 }
 
 /**
@@ -288,8 +333,14 @@ export interface CodexLiteShapedBody {
  * detail, forces parallel tool calling off, moves tools into a leading
  * `additional_tools` developer item and the base instructions into a
  * developer message, then omits top-level `instructions`/`tools`. Shared by
- * normal turns and both remote-compaction paths — codex-rs routes
- * `/responses/compact` through the same builder.
+ * normal turns and both remote-compaction paths — codex-rs routes the
+ * compaction request through the same builder.
+ *
+ * `reasoning.context` is forced to `all_turns` here because the lite marker
+ * header and that value are one contract: the backend answers a lite request
+ * without it `X-OpenAI-Internal-Codex-Responses-Lite requires reasoning.context
+ * to be all_turns`. Setting it in the shaper rather than in each caller is why
+ * the compaction body cannot drift from the turn body again.
  *
  * The developer instruction block carries no `prompt_cache_breakpoint`: the
  * ChatGPT Codex backend rejects that field with `invalid_parameter` and fails
@@ -300,6 +351,7 @@ export function applyCodexResponsesLiteShape(body: CodexLiteShapedBody): void {
 	const input = Array.isArray(body.input) ? body.input : [];
 	stripImageDetails(input);
 	body.parallel_tool_calls = false;
+	body.reasoning = { ...body.reasoning, context: "all_turns" };
 	const prefix: InputItem[] = [
 		{ type: "additional_tools", role: "developer", tools: Array.isArray(body.tools) ? body.tools : [] },
 	];
@@ -310,7 +362,7 @@ export function applyCodexResponsesLiteShape(body: CodexLiteShapedBody): void {
 			content: [{ type: "input_text", text: body.instructions }],
 		});
 	}
-	body.input = [...prefix, ...input];
+	body.input = prefix.concat(input);
 	delete body.instructions;
 	delete body.tools;
 }
@@ -338,7 +390,7 @@ export async function transformRequestBody(
 			content: [{ type: "input_text", text }],
 		}));
 		const input = Array.isArray(body.input) ? body.input : [];
-		body.input = [...developerMessages, ...input];
+		body.input = developerMessages.concat(input);
 	}
 
 	let finalInstruction = prompt?.developerMessages.findLast(text => text.trim().length > 0);
@@ -401,17 +453,16 @@ export async function transformRequestBody(
 			...reasoningConfig,
 		};
 		// Default reasoning replay to `all_turns`, mirroring codex-rs; an
-		// explicit `reasoningContext` overrides the default. The `all_turns`
-		// value is only accepted from gpt-5.4 onward — earlier Codex ids
-		// (gpt-5.1-codex, gpt-5.3-codex, gpt-5.3-codex-spark) reject it with
-		// "Unsupported value: 'all_turns' is not supported with this model".
-		// For those, drop `context` so the server applies its `current_turn`
-		// default. The version gate is authoritative: even an explicit
-		// `all_turns` override is suppressed on unsupported models, while
-		// `current_turn`/`auto` (universally supported) always pass through.
-		// Note: Responses Lite forces `all_turns` to satisfy the transport's server invariant.
+		// explicit `reasoningContext` overrides the default. A model that cannot
+		// be sent `all_turns` ({@link acceptsAllTurnsReasoningContext}) has
+		// `context` dropped instead, and the server applies its `current_turn`
+		// default; that gate is authoritative, so even an explicit `all_turns`
+		// override is suppressed there, while `current_turn` and `auto` are
+		// universally supported and always pass through. Responses Lite forces
+		// `all_turns` because its server contract requires it, and it is only
+		// ever on for a model that accepts the value.
 		const context = responsesLite ? "all_turns" : (options.reasoningContext ?? "all_turns");
-		if (context === "all_turns" && !supportsAllTurnsReasoningContext(model.id)) {
+		if (context === "all_turns" && !acceptsAllTurnsReasoningContext(model)) {
 			delete body.reasoning.context;
 		} else {
 			body.reasoning.context = context;
@@ -442,7 +493,7 @@ export async function transformRequestBody(
 		verbosity: options.textVerbosity || "medium",
 	};
 
-	const include = Array.isArray(options.include) ? [...options.include] : [];
+	const include = Array.isArray(options.include) ? options.include.slice() : [];
 	include.push("reasoning.encrypted_content");
 	body.include = Array.from(new Set(include));
 

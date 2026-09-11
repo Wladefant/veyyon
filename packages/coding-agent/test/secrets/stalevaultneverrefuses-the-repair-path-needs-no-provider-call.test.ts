@@ -24,15 +24,15 @@ import { describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { unregisterCustomApis } from "@veyyon/ai/api-registry";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, registerMockApi } from "@veyyon/ai/providers/mock";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import * as obfuscatorModule from "@veyyon/coding-agent/secrets/obfuscator";
 import { resolveVaultLocations, SecretVault, vaultPathFor } from "@veyyon/coding-agent/secrets/vault";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
 import { runSecretCommandForSurface } from "@veyyon/coding-agent/slash-commands/helpers/secret";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { makeScopeUnreadable } from "./stalevaultneverrefuses-corrupt-vault-fixture";
 
@@ -70,7 +70,7 @@ interface Harness {
 /**
  * A live session whose profile vault scope is corrupt, and whose model throws if it is ever asked
  * for a turn. `promptForValue` is absent, which selects the noninteractive surface, so the only
- * accepted way to supply a value is `--from-env`: the form that never puts a credential in argv.
+ * accepted way to supply a value is `from-env`: the form that never puts a credential in argv.
  */
 async function harness(): Promise<Harness> {
 	const tempDir = TempDir.createSync("veyyon-repair-path-lane-");
@@ -192,7 +192,7 @@ describe("the /secret repair path while a vault scope cannot be read", () => {
 			fs.rmSync(vaultPathFor(h.locations, "profile"));
 			process.env[REPAIRED_ENV_VAR] = REPAIRED_VALUE;
 
-			const message = await h.secret(`add ${REPAIRED_NAME} --from-env ${REPAIRED_ENV_VAR}`);
+			const message = await h.secret(`from-env ${REPAIRED_ENV_VAR} ${REPAIRED_NAME}`);
 
 			expect(message).toContain(REPAIRED_NAME);
 			// Read back through a fresh vault: the repair has to survive the process, not just report.
@@ -212,7 +212,7 @@ describe("the /secret repair path while a vault scope cannot be read", () => {
 			// The global scope is readable, so storing there must work even before the profile file is
 			// dealt with. This is what makes the planned egress gate survivable: the operator is never
 			// required to fix the vault before they are allowed to touch the vault.
-			const message = await h.secret(`add ${REPAIRED_NAME} --from-env ${REPAIRED_ENV_VAR} --scope global`);
+			const message = await h.secret(`from-env ${REPAIRED_ENV_VAR} ${REPAIRED_NAME} global`);
 
 			expect(message).toContain(REPAIRED_NAME);
 			expect(h.modelCalls()).toBe(0);
@@ -227,7 +227,9 @@ describe("the /secret repair path while a vault scope cannot be read", () => {
 			// The noninteractive surface cannot mask, so it must not accept a value in argv where it
 			// would persist in command history. Adversarial row: the repair path staying provider-free
 			// must not come at the cost of the rule that keeps values out of the scrollback.
-			await expect(h.secret(`add ${REPAIRED_NAME} hunter2_inline_credential_value`)).rejects.toThrow(/--from-env/);
+			await expect(h.secret(`add ${REPAIRED_NAME} hunter2_inline_credential_value`)).rejects.toThrow(
+				/\/secret from-env/,
+			);
 			expect(h.modelCalls()).toBe(0);
 		} finally {
 			await h.dispose();
@@ -239,7 +241,7 @@ describe("the /secret repair path while a vault scope cannot be read", () => {
 		try {
 			process.env[REPAIRED_ENV_VAR] = REPAIRED_VALUE;
 			await h.secret("list");
-			await h.secret(`add ${REPAIRED_NAME} --from-env ${REPAIRED_ENV_VAR} --scope global`);
+			await h.secret(`from-env ${REPAIRED_ENV_VAR} ${REPAIRED_NAME} global`);
 
 			// THE PLACEMENT PROOF. The egress gate refuses at the outbound provider seam, which is
 			// `transformProviderContext` in `sdk.ts` delegating to `obfuscateProviderContext`. If a

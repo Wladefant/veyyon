@@ -2,11 +2,12 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type AssistantMessageEventStream, clearCustomApis, Effort, type FetchImpl, getCustomApi } from "@veyyon/ai";
+import { type AssistantMessageEventStream, clearCustomApis, type FetchImpl, getCustomApi } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { getOAuthProviders, unregisterOAuthProviders } from "@veyyon/ai/oauth";
 import type { OAuthCredentials } from "@veyyon/ai/oauth/types";
+import { Effort } from "@veyyon/catalog/effort";
 import { ModelRegistry, type ProviderConfigInput } from "@veyyon/coding-agent/config/model-registry";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 
 describe("ModelRegistry runtime provider registration", () => {
@@ -178,7 +179,13 @@ describe("ModelRegistry runtime provider registration", () => {
 		const providerName = "anthropic";
 
 		expect(getProviderModels(registry, providerName).length).toBeGreaterThan(1);
-		registry.registerProvider(providerName, { apiKey: "RUNTIME_AUTH_KEY", authHeader: true }, "ext://runtime");
+		// `literal:` because this is a key, not a variable name: a bare environment-name
+		// shape now resolves from the environment and fails closed when it is unset.
+		registry.registerProvider(
+			providerName,
+			{ apiKey: "literal:RUNTIME_AUTH_KEY", authHeader: true },
+			"ext://runtime",
+		);
 		await expectProviderHeaderAcrossRefresh(registry, providerName, "Authorization", "Bearer RUNTIME_AUTH_KEY");
 
 		registry.clearSourceRegistrations("ext://runtime");

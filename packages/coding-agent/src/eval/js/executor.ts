@@ -1,8 +1,8 @@
-import { isCancellation, isTimeoutError } from "@veyyon/utils";
+import { errorMessage, isCancellation, isTimeoutError } from "@veyyon/utils";
 import { OutputSink } from "../../session/streaming-output";
 import type { ToolSession } from "../../tools";
-import { inlineBudgetFor } from "../../tools/output-artifact";
-import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../../tools/output-meta";
+import { inlineBudgetFor } from "../../tools/core/output-artifact";
+import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../../tools/core/output-meta";
 import { scopedTimeoutSignal } from "../../utils/fetch-timeout";
 import { isEvalTimeoutControlEvent } from "../bridge-timeout";
 import { executeInVmContext, type JsDisplayOutput } from "./context-manager";
@@ -35,6 +35,8 @@ export interface JsExecutorOptions {
 	session: ToolSession;
 	/** On-disk roots the helpers substitute for internal-URL schemes (e.g. `local://`). */
 	localRoots?: Record<string, string>;
+	/** Session artifacts directory; the `kv` helper stores under it so values outlive the kernel. */
+	artifactsDir?: string | null;
 }
 
 export interface JsResult {
@@ -87,6 +89,21 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 	// only the runtime-work budget; use it solely as worker cold-start headroom
 	// and never derive a competing fixed timer from it.
 	const acquireBudgetMs = legacyTimeoutMs ?? options.idleTimeoutMs;
+	const finish = async (exitCode: number | undefined, cancelled: boolean): Promise<JsResult> => {
+		const summary = await outputSink.dump();
+		return {
+			output: summary.output,
+			exitCode,
+			cancelled,
+			truncated: summary.truncated,
+			artifactId: summary.artifactId,
+			totalLines: summary.totalLines,
+			totalBytes: summary.totalBytes,
+			outputLines: summary.outputLines,
+			outputBytes: summary.outputBytes,
+			displayOutputs,
+		};
+	};
 
 	try {
 		await executeInVmContext({
@@ -96,6 +113,7 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 			cwd: options.cwd ?? options.session.cwd,
 			session: options.session,
 			localRoots: options.localRoots,
+			artifactsDir: options.artifactsDir,
 			reset: options.reset,
 			code,
 			filename: `js-cell-${crypto.randomUUID()}.js`,
@@ -114,53 +132,17 @@ export async function executeJs(code: string, options: JsExecutorOptions): Promi
 				},
 			},
 		});
-		const summary = await outputSink.dump();
-		return {
-			output: summary.output,
-			exitCode: 0,
-			cancelled: false,
-			truncated: summary.truncated,
-			artifactId: summary.artifactId,
-			totalLines: summary.totalLines,
-			totalBytes: summary.totalBytes,
-			outputLines: summary.outputLines,
-			outputBytes: summary.outputBytes,
-			displayOutputs,
-		};
+		return await finish(0, false);
 	} catch (error) {
 		if (signal?.aborted || isCancellation(error)) {
 			const timedOut = isTimeoutError(signal?.reason) || isTimeoutError(options.signal?.reason);
 			if (timedOut) {
 				outputSink.push(formatJsTimeoutAnnotation(legacyTimeoutMs ?? options.idleTimeoutMs));
 			}
-			const summary = await outputSink.dump();
-			return {
-				output: summary.output,
-				exitCode: undefined,
-				cancelled: true,
-				truncated: summary.truncated,
-				artifactId: summary.artifactId,
-				totalLines: summary.totalLines,
-				totalBytes: summary.totalBytes,
-				outputLines: summary.outputLines,
-				outputBytes: summary.outputBytes,
-				displayOutputs,
-			};
+			return await finish(undefined, true);
 		}
-		const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
+		const message = error instanceof Error ? (error.stack ?? error.message) : errorMessage(error);
 		outputSink.push(message);
-		const summary = await outputSink.dump();
-		return {
-			output: summary.output,
-			exitCode: 1,
-			cancelled: false,
-			truncated: summary.truncated,
-			artifactId: summary.artifactId,
-			totalLines: summary.totalLines,
-			totalBytes: summary.totalBytes,
-			outputLines: summary.outputLines,
-			outputBytes: summary.outputBytes,
-			displayOutputs,
-		};
+		return await finish(1, false);
 	}
 }

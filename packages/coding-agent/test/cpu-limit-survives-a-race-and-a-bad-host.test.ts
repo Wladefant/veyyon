@@ -24,15 +24,24 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { CpuBudgetGroupHandle, CpuLimitEnvironment } from "../src/session/cpu-limit";
 import {
+	type CpuLimitEnvironment,
 	defaultCpuLimitEnvironment,
 	probeCpuLimitSupport,
+} from "@veyyon/kernel/session/cgroup-host";
+import {
+	type CpuBudgetGroupHandle,
+	CpuLimitDeniedError,
 	SessionCpuLimit,
 	sessionCpuBudgetName,
 } from "../src/session/cpu-limit";
-import type { FakeHost } from "./helpers/fake-cgroup";
-import { makeCgroupRoot, makeDelegatedParent, makeFakeHost, removeCgroupRoots } from "./helpers/fake-cgroup";
+import {
+	type FakeHost,
+	makeCgroupRoot,
+	makeDelegatedParent,
+	makeFakeHost,
+	removeCgroupRoots,
+} from "./helpers/fake-cgroup";
 
 afterEach(removeCgroupRoots);
 
@@ -128,6 +137,9 @@ describe("a budget whose first setup failed", () => {
 
 		expect(await limiter.ensureGroup()).toBeUndefined();
 		expect(notices.some(text => text.includes("could not be created"))).toBe(true);
+		expect(notices.some(text => text.includes("will run uncapped"))).toBe(false);
+		expect(notices.some(text => text.includes("refused rather than run uncapped"))).toBe(true);
+		expect(() => limiter.assertMaySpawn("a bash command")).toThrow(CpuLimitDeniedError);
 		// The failure is sticky WITHIN one setting: a retry on every spawn would
 		// pay the full setup cost again on each command.
 		expect(await limiter.ensureGroup()).toBeUndefined();

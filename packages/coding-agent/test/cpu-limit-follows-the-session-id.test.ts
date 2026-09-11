@@ -26,11 +26,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
 import {
 	initSessionCpuLimit,
 	primarySessionCpuLimit,
@@ -38,7 +38,7 @@ import {
 	resetSessionCpuLimitsForTests,
 	sessionCpuLimit,
 } from "@veyyon/coding-agent/session/cpu-limit";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 
 /** Registering at 0 cores creates no group and touches no cgroup tree, which is all these cases need. */

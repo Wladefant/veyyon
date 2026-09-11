@@ -1,14 +1,14 @@
 /**
  * Regression: when an image-only or text+image submission is delivered to a
- * focused subagent (`#submitToFocusedSession`) and `viewSession.prompt`
+ * focused agent (`#submitToFocusedSession`) and `viewSession.prompt`
  * rejects, the controller must restore both `text` AND `pendingImages` /
  * `pendingImageLinks`. Previously only `text` was handed back, so the pasted
  * image silently disappeared from the composer on retry.
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { ImageContent } from "@veyyon/ai";
-import { InputController } from "@veyyon/coding-agent/modes/controllers/input-controller";
-import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/types";
+import { InputController } from "@veyyon/coding-agent/modes/terminal/controllers/input-controller";
+import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 
 function createContext(opts: { pendingImages: ImageContent[]; pendingImageLinks?: (string | undefined)[] }) {
 	let editorText = "";

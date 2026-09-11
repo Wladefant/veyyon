@@ -1,4 +1,9 @@
 #!/usr/bin/env bun
+// FIRST, and it has to stay first: this import writes the previous bare launch's card to the
+// terminal during its own evaluation, which is the only position from which it beats the ~33ms of
+// import below it. It reaches node builtins only. See ./cli/first-frame-replay.
+import "./cli/first-frame-replay-entry";
+import { CliUsageError } from "@veyyon/utils/cli-usage-error";
 // Subpath, NOT the "@veyyon/utils" barrel: the barrel re-exports ./env, which
 // eagerly parses the agent-directory .env at import time (env.ts). Pulling that
 // in here would load the .env BEFORE runCli() calls setProfile(), so
@@ -35,11 +40,11 @@ import {
 	setProfile,
 	VERSION,
 } from "@veyyon/utils/dirs";
+import * as logger from "@veyyon/utils/logger";
 import { declareWorkerHostEntry, installWorkerInbox } from "@veyyon/utils/worker-host";
 import { EXIT_FAILURE, EXIT_USAGE } from "./cli/exit-codes";
 import { installProfileAlias, resolveProfileAliasCommandFromProcess } from "./cli/profile-alias";
 import { extractProfileFlags } from "./cli/profile-bootstrap";
-import { CliUsageError } from "./cli/usage-error";
 import { DAEMON_BROKER_WORKER_ARG } from "./launch/protocol";
 import {
 	JS_EVAL_PROCESS_ARG,
@@ -51,6 +56,13 @@ import {
 	TINY_WORKER_ARG,
 	TTS_WORKER_ARG,
 } from "./worker-args";
+
+// The earliest point this process can mark. Everything before it -- Bun's own
+// start and the evaluation of this file's static import graph -- is what the
+// tree reports as `(before instrumentation)`; everything after is attributed to
+// a span. Idempotent, so the later calls in `runCli` and `runRootCommand` are
+// no-ops, and nothing is recorded unless VEYYON_TIMING is set.
+logger.startTiming();
 
 if (Bun.semver.order(Bun.version, MIN_BUN_VERSION) < 0) {
 	process.stderr.write(
@@ -88,11 +100,11 @@ async function showHelp(config: CliConfig): Promise<void> {
  * Smoke-test entry. Spawns bundled workers, pings everything, then exits.
  *
  * Purpose: catch the silent worker-load and bundled-asset regressions that hit
- * compiled binaries and the npm CLI bundle. Version/help paths do not spawn
+ * compiled binaries and standalone bundles. Version/help paths do not spawn
  * worker modules or serve dashboard assets on a fresh install, so this probe is
  * the minimal end-to-end test that proves those distribution-only paths work.
- * Wired into `scripts/install-tests/run-ci.sh` so binary / source-link /
- * tarball installs all exercise it on every CI run.
+ * Wired into `scripts/install-tests/run-ci.sh` so binary and source-link
+ * installs all exercise it on every CI run.
  */
 async function runSmokeTest(): Promise<void> {
 	// Force the core `@veyyon/natives` addon to actually LOAD and RUN first. The
@@ -114,9 +126,9 @@ async function runSmokeTest(): Promise<void> {
 
 	const { smokeTestSyncWorker, startServer } = await import("@veyyon/stats");
 	const { smokeTestTinyTitleWorker } = await import("./tiny/title-client");
-	const { smokeTestSttWorker } = await import("./stt/asr-client");
-	const { smokeTestTtsWorker } = await import("./tts/tts-client");
-	const { smokeTestMnemopiEmbedWorker } = await import("./mnemopi/embed-client");
+	const { smokeTestSttWorker } = await import("./speech/stt/asr-client");
+	const { smokeTestTtsWorker } = await import("./speech/tts/tts-client");
+	const { smokeTestMnemopiEmbedWorker } = await import("./memory/mnemopi/embed-client");
 	const { smokeTestJsEvalWorker } = await import("./eval/js/context-manager");
 	// Smoke dependencies stay lazy so normal CLI startup does not load worker clients.
 	const { smokeTestDaemonBroker } = await import("./launch/client");
@@ -157,7 +169,7 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 	// module binds the real handler once loaded.
 	if (arg === TAB_WORKER_ARG) {
 		if (parentPort) installWorkerInbox(parentPort);
-		await import("./tools/browser/tab-worker-entry");
+		await import("./tools/web/browser/tab-worker-entry");
 		return true;
 	}
 	if (arg === JS_EVAL_WORKER_ARG) {
@@ -174,17 +186,17 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 		return true;
 	}
 	if (arg === STT_WORKER_ARG) {
-		const { startSttWorker } = await import("./stt/asr-worker");
+		const { startSttWorker } = await import("./speech/stt/asr-worker");
 		await runIpcSubprocessWorker(startSttWorker);
 		return true;
 	}
 	if (arg === TTS_WORKER_ARG) {
-		const { startTtsWorker } = await import("./tts/tts-worker");
+		const { startTtsWorker } = await import("./speech/tts/tts-worker");
 		await runIpcSubprocessWorker(startTtsWorker);
 		return true;
 	}
 	if (arg === MNEMOPI_EMBED_WORKER_ARG) {
-		const { startMnemopiEmbedWorker } = await import("./mnemopi/embed-worker");
+		const { startMnemopiEmbedWorker } = await import("./memory/mnemopi/embed-worker");
 		await runIpcSubprocessWorker(startMnemopiEmbedWorker);
 		return true;
 	}
@@ -321,6 +333,10 @@ async function runTinyWorker(): Promise<void> {
 
 /** Run the CLI with the given argv (no `process.argv` prefix). */
 export async function runCli(argv: string[]): Promise<void> {
+	// A second start for an embedder that calls `runCli` without going through
+	// this module's entry (the SDK, a profile test). Idempotent, so the module
+	// scope call above wins in a real process.
+	logger.startTiming();
 	let resolvedArgv = argv;
 	try {
 		const extracted = extractProfileFlags(resolvedArgv);
@@ -402,10 +418,9 @@ export async function runCli(argv: string[]): Promise<void> {
 		await runSmokeTest();
 		return;
 	}
-	const [{ run }, { commands, resolveCliArgv }] = await Promise.all([
-		import("@veyyon/utils/cli"),
-		import("./cli-commands"),
-	]);
+	const [{ run }, { commands, resolveCliArgv }] = await logger.time("import:cli-runner", () =>
+		Promise.all([import("@veyyon/utils/cli"), import("./cli-commands")]),
+	);
 	// --help and --version are handled by run() directly, don't rewrite those.
 	// Everything else that isn't a known subcommand routes to "launch".
 	const resolved = resolveCliArgv(resolvedArgv);
@@ -417,7 +432,13 @@ export async function runCli(argv: string[]): Promise<void> {
 		process.exitCode = EXIT_USAGE;
 		return;
 	}
-	return run({ bin: APP_NAME, version: VERSION, argv: resolved.argv, commands, help: showHelp });
+	return logger.time("cliRun", run, {
+		bin: APP_NAME,
+		version: VERSION,
+		argv: resolved.argv,
+		commands,
+		help: showHelp,
+	});
 }
 
 /**
@@ -492,12 +513,12 @@ export function formatCliFatal(err: unknown, opts: { stack: boolean; colors: boo
 				out += formatAggregateMembers(cause, seen, "    ");
 				cause = cause.cause;
 			} else {
-				out += `\n  caused by: ${String(cause)}`;
+				out += `\n  caused by: ${errorMessage(cause)}`;
 				break;
 			}
 		}
 	} else {
-		out = `Error: ${String(err)}`;
+		out = `Error: ${errorMessage(err)}`;
 	}
 	return `${out}\n  (set VEYYON_STACK=1 for the full stack trace)\n`;
 }

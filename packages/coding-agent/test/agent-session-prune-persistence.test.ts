@@ -2,12 +2,12 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import { SUPERSEDED_NOTICE, USELESS_NOTICE } from "@veyyon/agent-core/compaction/pruning";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 
 /**
@@ -17,7 +17,7 @@ import { TempDir } from "@veyyon/utils";
  * ("feat(cache): make blocking on a rejected cache an opt-in setting") deleted
  * both methods and both call sites as collateral while touching an unrelated
  * setting, which left `compaction.supersedeReads` and `compaction.dropUseless`
- * defaulting to true and controlling nothing, and left docs/compaction.md
+ * defaulting to true and controlling nothing, and left docs/handbook/src/architecture/compaction.md
  * describing two passes that never ran. These tests observe the passes firing
  * end to end through the real session, and pin both settings in both positions
  * so an accidental unwiring goes red again instead of silently degrading.
@@ -90,11 +90,11 @@ describe("AgentSession per-turn prune", () => {
 			content: "Investigate every module of the project.",
 			timestamp: now - 200,
 		});
-		sessionManager.appendMessage(assistantCall(BIG_CALL_ID, "grep", { pattern: "TODO" }, now - 180));
+		sessionManager.appendMessage(assistantCall(BIG_CALL_ID, "search", { type: "text", input: "TODO" }, now - 180));
 		sessionManager.appendMessage({
 			role: "toolResult",
 			toolCallId: BIG_CALL_ID,
-			toolName: "grep",
+			toolName: "search",
 			content: [{ type: "text", text: USELESS_TEXT }],
 			isError: false,
 			useless: true,

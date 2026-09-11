@@ -54,6 +54,8 @@ Unified LLM API with automatic model discovery, provider configuration, token an
 - **Mistral**
 - **Groq**
 - **Cerebras**
+- **Command Code** (requires `CMD_API_KEY` or `COMMAND_CODE_API_KEY`)
+- **Nous Research** (`/login nous-research` for the Portal device flow, `/login nous-research-api-key` to paste a Portal key; `NOUS_API_KEY` is available for headless setups)
 - **Together**
 - **Moonshot** (requires `MOONSHOT_API_KEY`)
 - **Qianfan** (requires `QIANFAN_API_KEY`)
@@ -105,7 +107,7 @@ Then, in your own project:
 bun link @veyyon/ai
 ```
 
-See [the SDK guide](../../docs/sdk.md#installation) for the same steps in full.
+See [the SDK guide](../../docs/handbook/src/reference/sdk.md#installation) for the same steps in full.
 
 ## Quick Start
 
@@ -965,6 +967,8 @@ In Node.js environments, you can set environment variables to avoid passing API 
 | Groq           | `GROQ_API_KEY`                                                               |
 | Cerebras       | `CEREBRAS_API_KEY`                                                           |
 | Together       | `TOGETHER_API_KEY`                                                           |
+| Command Code   | `CMD_API_KEY` or `COMMAND_CODE_API_KEY`                                      |
+| Nous Research  | `NOUS_API_KEY` (headless fallback; prefer `/login nous-research` or `/login nous-research-api-key`) |
 | Qianfan        | `QIANFAN_API_KEY`                                                            |
 | Hugging Face   | `HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`                                        |
 | Synthetic      | `SYNTHETIC_API_KEY`                                                          |
@@ -995,12 +999,10 @@ For Anthropic Foundry routing, set `CLAUDE_CODE_USE_FOUNDRY=true` plus:
 `FOUNDRY_BASE_URL`, `ANTHROPIC_FOUNDRY_API_KEY`, optional `ANTHROPIC_CUSTOM_HEADERS`,
 and optional mTLS material (`CLAUDE_CODE_CLIENT_CERT`, `CLAUDE_CODE_CLIENT_KEY`).
 
-`NODE_EXTRA_CA_CERTS` (PEM file path or inline PEM, mirroring Node's contract)
-is honoured on every provider fetch — OpenAI-compatible, Codex, Ollama, Azure
-Responses, Google, and Anthropic alike — for corporate relays or private CA
-bundles. Bun's `fetch` does not consume the env var natively, so veyyon injects
-the bundle into `RequestInit.tls.ca` and seeds the system root store
-alongside it.
+`NODE_EXTRA_CA_CERTS` (PEM file path or inline PEM) is honored across provider
+fetches (OpenAI-compatible, Codex, Ollama, Azure Responses, Google, Anthropic)
+for custom CA bundles. Veyyon injects the bundle into `RequestInit.tls.ca` and
+seeds the system root store alongside it.
 
 Provider endpoint defaults for the current OpenAI-compatible integrations:
 
@@ -1010,6 +1012,8 @@ Provider endpoint defaults for the current OpenAI-compatible integrations:
 - NVIDIA: `https://integrate.api.nvidia.com/v1`
 - NanoGPT: `https://nano-gpt.com/api/v1`
 - Novita: `https://api.novita.ai/openai/v1`
+- Command Code: `https://api.commandcode.ai/provider/v1` (keys: `https://commandcode.ai/studio/provider`; default model: `moonshotai/Kimi-K2.7-Code`)
+- Nous Research: `https://inference-api.nousresearch.com/v1` (device-flow login `/login nous-research`, pasted-key login `/login nous-research-api-key`; default model: `anthropic/claude-sonnet-4.6`)
 - Hugging Face Inference: `https://router.huggingface.co/v1`
 - Venice: `https://api.venice.ai/api/v1`
 - Xiaomi MiMo: `https://api.xiaomimimo.com/v1`
@@ -1105,14 +1109,14 @@ veyyon auth-broker login              # interactive provider selection
 veyyon auth-broker login anthropic    # login to a specific provider
 veyyon auth-broker login vllm         # store vLLM API key (or placeholder for local no-auth)
 veyyon auth-broker list               # list supported providers
-veyyon auth-broker logout             # interactive — pick a stored credential to remove
+veyyon auth-broker logout             # interactive removal of stored credentials
 ```
 
 Credentials are saved to `agent.db` in the agent directory. `/login qianfan` opens the Qianfan console and stores the pasted API key.
 
-`login` supports OAuth providers (Anthropic, OpenAI Codex, GitHub Copilot, Gemini CLI, Antigravity) and API-key onboarding flows.
+`login` supports OAuth providers (Anthropic, OpenAI Codex, GitHub Copilot, Gemini CLI, Antigravity, and Nous Research) and API-key onboarding flows. Nous Research stores a durable refresh token and uses its short-lived inference access token for requests and model discovery. It also accepts a Portal key through `nous-research-api-key`, which files the credential under `nous-research`; `NOUS_API_KEY` remains an explicit fallback for headless setups.
 
-For the current API-key onboarding flows, the library covers Together, Moonshot, Qianfan, NVIDIA, NanoGPT, Novita, Hugging Face, Venice, Xiaomi, vLLM, LiteLLM, Cloudflare AI Gateway, Qwen Portal, and Ollama Cloud. Ollama remains the local runtime integration; set `OLLAMA_API_KEY` only when your local or self-hosted deployment enforces bearer auth.
+For the current API-key onboarding flows, the library covers Together, Moonshot, Qianfan, NVIDIA, NanoGPT, Novita, Hugging Face, Venice, Command Code, Xiaomi, vLLM, LiteLLM, Cloudflare AI Gateway, Qwen Portal, and Ollama Cloud. Ollama remains the local runtime integration; set `OLLAMA_API_KEY` only when your local or self-hosted deployment enforces bearer auth.
 
 ### Programmatic OAuth
 
@@ -1236,19 +1240,12 @@ import "@veyyon/ai/usage/defaults";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 ```
 
-Forgetting it is reported rather than silent. `AuthStorage` reads the backends through a registry,
-and a registry nothing has filled warns once, naming this import. It has to say something: an empty
-table answers "no backend" for every provider, which is indistinguishable from a provider that
-genuinely reports no quota, so every number would disappear from your UI with nothing to explain it.
+`AuthStorage` reads usage backends through a registry. If the registry is empty,
+it logs a single warning referencing `@veyyon/ai/usage/defaults`.
 
-It warns rather than refusing because the same registry holds the credential-ranking strategies, and
-`getApiKey` reads those. Refusing there would stop a process selecting a credential over a feature it
-never asked for.
-
-The split also keeps the credential store light. Storing a token and reading a quota are different
-jobs, and the backends pull in provider transports the store has no use for, so `auth-storage.ts`
-imports the registry interface and `usage/defaults.ts` imports the backends.
-
+The split isolates credential storage from provider-specific usage quota
+transports: `auth-storage.ts` imports the registry interface and
+`usage/defaults.ts` imports the backends.
 To report no usage at all in a process, pass the resolvers explicitly rather than leaving the
 registry unfilled:
 

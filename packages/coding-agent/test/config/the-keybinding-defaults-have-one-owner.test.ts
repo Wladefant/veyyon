@@ -26,10 +26,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { getDefaultPasteImageKeys, KEYBINDINGS } from "@veyyon/coding-agent/config/keybinding-defs";
 import { KEYBINDINGS as VIA_LOADER } from "@veyyon/coding-agent/config/keybindings";
-import { moduleSpecifiersIn } from "@veyyon/utils/module-reach";
+import { moduleSpecifiersIn, namedImportsFrom, typeOnlyModuleSpecifiersIn } from "@veyyon/utils/module-reach";
 
 const SRC = path.resolve(import.meta.dir, "../../src");
-const EDITOR = path.join(SRC, "modes", "components", "custom-editor.ts");
+const EDITOR = path.join(SRC, "modes", "terminal", "components", "composer", "custom-editor.ts");
 const DEFS = path.join(SRC, "config", "keybinding-defs.ts");
 
 const EDITOR_SOURCE = fs.readFileSync(EDITOR, "utf8");
@@ -52,14 +52,18 @@ describe("the keybinding defaults have one owner", () => {
 	 * table without pulling in yaml, atomic writes, the quarantine path and the
 	 * profile resolver, and one import of the loader from here would undo that
 	 * silently, since everything would still compile and pass.
+	 *
+	 * The specifiers are the owning leaves rather than a barrel, which is the same
+	 * rule one level down: `@veyyon/utils` re-exports every shared helper in the
+	 * package, and this file wants a key table and a key id.
 	 */
-	it("imports nothing but the TUI from the leaf", () => {
-		const imported = [...DEFS_SOURCE.matchAll(/^import .*?from "([^"]+)";$/gm)].map(match => match[1] as string);
+	it("imports nothing but the keyboard primitives from the leaf", () => {
+		const imported = [...moduleSpecifiersIn(DEFS_SOURCE), ...typeOnlyModuleSpecifiersIn(DEFS_SOURCE)];
 
 		expect(
-			imported.sort(),
-			"keybinding-defs.ts is the leaf a UI component reads. Keep its imports to @veyyon/tui",
-		).toEqual(["@veyyon/tui", "@veyyon/tui"]);
+			[...new Set(imported)].sort(),
+			"keybinding-defs.ts is the leaf a UI component reads. Keep its imports to the @veyyon/utils keyboard modules",
+		).toEqual(["@veyyon/utils/keybindings", "@veyyon/utils/keys"]);
 	});
 
 	/**
@@ -81,10 +85,14 @@ describe("the keybinding defaults have one owner", () => {
 	 * The editor reads the leaf, stated positively so that deleting the table AND
 	 * the import would not pass the rule above by leaving the editor with no
 	 * defaults at all.
+	 *
+	 * The binding is pinned by exact equality, which is what the byte match this
+	 * replaced could not do: it searched the whole editor for the words
+	 * `CONFIGURABLE_EDITOR_ACTIONS` and found the editor's OWN list of action ids,
+	 * so it would have stayed green with the import deleted.
 	 */
 	it("reads the shared table in the editor", () => {
-		expect(moduleSpecifiersIn(EDITOR_SOURCE)).toContain("../../config/keybinding-defs");
-		expect(EDITOR_SOURCE).toContain("CONFIGURABLE_EDITOR_ACTIONS");
+		expect(namedImportsFrom(EDITOR_SOURCE, "../../../../config/keybinding-defs")).toEqual(["KEYBINDINGS"]);
 	});
 });
 

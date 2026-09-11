@@ -213,6 +213,18 @@ describe("skills", () => {
 			});
 		});
 
+		it("loads one skill file reached through two paths once, without a collision warning", async () => {
+			const pluginRoot = path.join(tempHome, "linked-plugin");
+			await writeSkill(agentSkillsDir, "calendar", "Profile calendar.");
+			await fs.mkdir(pluginRoot, { recursive: true });
+			await fs.symlink(agentSkillsDir, path.join(pluginRoot, "skills"), "dir");
+			await fs.writeFile(path.join(agentDir, "settings.json"), JSON.stringify({ extensions: [pluginRoot] }));
+
+			const { skills, warnings } = await loadSkills({ cwd: tempCwd });
+			expect(skills.filter(skill => skill.name === "calendar")).toHaveLength(1);
+			expect(warnings).toEqual([]);
+		});
+
 		it("never loads foreign ~/.claude, ~/.codex, or ~/.agents skills", async () => {
 			await writeSkill(agentSkillsDir, "profile-skill", "A skill in the active profile.");
 			for (const [dir, name] of [

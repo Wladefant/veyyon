@@ -1,50 +1,17 @@
 /**
- * TUI renderers for built-in tools.
- *
- * These provide rich visualization for tool calls and results in the TUI.
+ * Terminal adapters for the canonical tool view definitions.
+ * Shared definitions retain one adapter identity across provider aliases.
  */
 import type { Component } from "@veyyon/tui";
-import { editToolRenderer } from "../edit/renderer";
+import type { ToolViewRenderer } from "@veyyon/view";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
-import { goalToolRenderer } from "../goals/tools/goal-tool";
-import { lspToolRenderer } from "../lsp/render";
-import type { Theme } from "../modes/theme/theme";
-import { taskToolRenderer } from "../task/renderer";
-import { webSearchToolRenderer } from "../web/search/render";
-import { askToolRenderer } from "./ask";
-import { astEditToolRenderer } from "./ast-edit";
-import { astGrepToolRenderer } from "./ast-grep";
-import { bashToolRenderer } from "./bash";
-import { browserToolRenderer } from "./browser/render";
-import { debugToolRenderer } from "./debug";
-import { evalToolRenderer } from "./eval-render";
-import { githubToolRenderer } from "./gh-renderer";
-import { globToolRenderer } from "./glob";
-import { grepToolRenderer } from "./grep";
-import { inspectImageToolRenderer } from "./inspect-image-renderer";
-import { ircToolRenderer } from "./irc-render";
-import { jobToolRenderer } from "./job";
-import { launchToolRenderer } from "./launch";
-import { recallToolRenderer, reflectToolRenderer, retainToolRenderer } from "./memory-render";
-import { readToolRenderer } from "./read";
-import { resolveToolRenderer } from "./resolve";
-import { searchToolBm25Renderer } from "./search-tool-bm25";
-import { setCwdToolRenderer } from "./set-cwd";
-import { sshToolRenderer } from "./ssh";
-import { todoToolRenderer } from "./todo";
-import { createVibeToolRenderer } from "./vibe-render";
-import { writeToolRenderer } from "./write";
+import { viewToolRenderer } from "../modes/terminal/draw/draw-tool-view";
+import type { Theme } from "../theme/theme";
+import { type ToolViewDefinition, toolViewDefinitions } from "./view-registry";
 
-/**
- * Per-renderer opt-in for a full viewport replay when the first result
- * replaces a painted pending-call render. A predicate receives the painted
- * call args and render options so the repaint stays scoped to the pending
- * shapes that actually re-anchor (an over-eager replay wipes native
- * scrollback on direct terminals).
- */
-export type FirstResultViewportRepaint = boolean | ((args: unknown, options: RenderResultOptions) => boolean);
+export * from "./view-registry";
 
-export type ToolRenderer = {
+export type ToolRenderer = Omit<ToolViewDefinition, "view"> & {
 	renderCall: (args: unknown, options: RenderResultOptions, theme: Theme) => Component;
 	renderResult: (
 		result: { content: Array<{ type: string; text?: string }>; details?: unknown; isError?: boolean },
@@ -52,84 +19,28 @@ export type ToolRenderer = {
 		theme: Theme,
 		args?: unknown,
 	) => Component;
-	mergeCallAndResult?: boolean;
 	/**
-	 * Whether the call render IS an interactive widget rather than a preview of one.
+	 * The host-agnostic card this entry draws, present only on an entry built by `viewToolRenderer`.
 	 *
-	 * `ask` paints the whole selectable question in `renderCall`, because until a result arrives
-	 * that widget is the card. For a call that never reached the tool, painting it puts an
-	 * answerable question on screen for a question that was never asked, so the component falls
-	 * back to the plain tool label. Only set this where the call render invites an answer: a
-	 * command preview (`bash`) or a diff preview is the one fact the card must keep in that state.
+	 * An entry either DESCRIBES its card as a {@link ToolViewRenderer} and lets a host draw it, or
+	 * draws terminal components itself. Both look the same from the two members above, so the
+	 * distinction is stated here rather than inferred, and the architecture gate that records every
+	 * card still drawn in terminal components resolves the split from the registry instead of from a
+	 * list kept by hand.
 	 */
-	callIsLiveWidget?: boolean;
-	/** Render without background box, inline in the response flow */
-	inline?: boolean;
-	/**
-	 * Whether the renderer's pending-call path visibly consumes
-	 * `options.spinnerFrame`. Used to avoid scheduling repaint ticks for live
-	 * partial calls whose bytes cannot change between spinner frames.
-	 */
-	animatedPendingPreview?: boolean | ((args: unknown) => boolean);
-	/**
-	 * Whether the renderer's partial-result path visibly consumes
-	 * `options.spinnerFrame`.
-	 */
-	animatedPartialResult?: boolean | ((args: unknown) => boolean);
-	/**
-	 * Whether replacing a pending call render with the first result requires a
-	 * full viewport repaint. Use for merged renderers whose pending rows can be
-	 * re-anchored instead of preserved by the result render.
-	 */
-	forceFirstResultViewportRepaint?: FirstResultViewportRepaint;
-	/**
-	 * Whether settling a provisional partial result into the final render requires
-	 * a full viewport repaint. Use when the result renderer changes chrome or
-	 * frame topology at `options.isPartial: true -> false`.
-	 */
-	forceResultViewportRepaintOnSettle?: boolean;
+	view?: ToolViewRenderer<never, never>;
 };
 
-export const toolRenderers: Record<string, ToolRenderer> = {
-	ask: askToolRenderer as ToolRenderer,
-	ast_grep: astGrepToolRenderer as ToolRenderer,
-	ast_edit: astEditToolRenderer as ToolRenderer,
-	bash: bashToolRenderer as ToolRenderer,
-	browser: browserToolRenderer as ToolRenderer,
-	debug: debugToolRenderer as ToolRenderer,
-	eval: evalToolRenderer as ToolRenderer,
-	edit: editToolRenderer as ToolRenderer,
-	apply_patch: editToolRenderer as ToolRenderer,
-	glob: globToolRenderer as ToolRenderer,
-	grep: grepToolRenderer as ToolRenderer,
-	lsp: lspToolRenderer as ToolRenderer,
-	inspect_image: inspectImageToolRenderer as ToolRenderer,
-	irc: ircToolRenderer as ToolRenderer,
-	launch: launchToolRenderer as ToolRenderer,
-	read: readToolRenderer as ToolRenderer,
-	job: jobToolRenderer as ToolRenderer,
-	resolve: resolveToolRenderer as ToolRenderer,
-	retain: retainToolRenderer as ToolRenderer,
-	recall: recallToolRenderer as ToolRenderer,
-	reflect: reflectToolRenderer as ToolRenderer,
-	search_tool_bm25: searchToolBm25Renderer as ToolRenderer,
-	ssh: sshToolRenderer as ToolRenderer,
-	// Lazy getter: `taskToolRenderer` lives in a module that closes an import
-	// cycle back here (task/renderer → task/render → … → tools/renderers), so
-	// reading it at init order-dependently hits its temporal dead zone. Deferring
-	// the read to first access (render time) sidesteps the cycle entirely.
-	get task(): ToolRenderer {
-		return taskToolRenderer as ToolRenderer;
-	},
-	todo: todoToolRenderer as ToolRenderer,
-	set_cwd: setCwdToolRenderer as ToolRenderer,
-	github: githubToolRenderer as ToolRenderer,
-	goal: goalToolRenderer as ToolRenderer,
-	web_search: webSearchToolRenderer as ToolRenderer,
-	vibe_spawn: createVibeToolRenderer("spawn") as ToolRenderer,
-	vibe_send: createVibeToolRenderer("send") as ToolRenderer,
-	vibe_wait: createVibeToolRenderer("wait") as ToolRenderer,
-	vibe_kill: createVibeToolRenderer("kill") as ToolRenderer,
-	vibe_list: createVibeToolRenderer("list") as ToolRenderer,
-	write: writeToolRenderer as ToolRenderer,
-};
+export const toolRenderers: Record<string, ToolRenderer> = {};
+{
+	const adapters = new Map<ToolViewDefinition, ToolRenderer>();
+	for (const name of Object.keys(toolViewDefinitions)) {
+		const definition = toolViewDefinitions[name];
+		let renderer = adapters.get(definition);
+		if (renderer === undefined) {
+			renderer = viewToolRenderer(definition.view, definition) as ToolRenderer;
+			adapters.set(definition, renderer);
+		}
+		toolRenderers[name] = renderer;
+	}
+}

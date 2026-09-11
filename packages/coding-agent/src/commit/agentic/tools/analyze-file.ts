@@ -1,15 +1,15 @@
+import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import { prompt } from "@veyyon/utils";
 import { type } from "arktype";
-import type { CommitAgentState } from "../../../commit/agentic/state";
-import type { NumstatEntry } from "../../../commit/types";
 import type { ModelRegistry } from "../../../config/model-registry";
 import type { Settings } from "../../../config/settings";
 import type { CustomTool, CustomToolContext } from "../../../extensibility/custom-tools/types";
 import { commitAgenticPrompts } from "../../../prompts/commit-agentic/rows";
-import type { AuthStorage } from "../../../session/auth-storage";
 import { TaskTool } from "../../../task";
 import type { TaskParams } from "../../../task/types";
 import type { ToolSession } from "../../../tools";
+import type { NumstatEntry } from "../../types";
+import type { CommitAgentState } from "../state";
 import { getFilePriority } from "./git-file-diff";
 
 const analyzeFileSchema = type({
@@ -76,7 +76,7 @@ export function createAnalyzeFileTool(options: {
 			const toolSession = buildToolSession(ctx, options);
 			// The hand-built ToolSession carries no asyncJobManager, so every
 			// execute() below takes the task tool's sync fallback and resolves
-			// with the subagent's result inline — exactly what this flow needs.
+			// with the agent's result inline — exactly what this flow needs.
 			// The tool's session semaphore bounds the parallel fan-out.
 			const taskTool = await TaskTool.create(toolSession);
 			const numstat = options.state.overview?.numstat ?? [];

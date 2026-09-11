@@ -23,7 +23,7 @@ never scanned, and a project-local `.veyyon/skills` directory next to your code 
 not read either. Skills belong to your profile, so switching profiles switches
 the whole skill set, and no repository you open can inject a skill into a session.
 
-Full provider list and dedup rules: [`docs/skills.md`](../../../skills.md).
+Full provider list and dedup rules: [`docs/handbook/src/reference/skills.md`](../reference/skills.md).
 
 ## Importing another tool's skills
 
@@ -63,7 +63,7 @@ Veyyon's own instructions load in four layers, and only these four:
    `.veyyon/AGENTS.md` (only from the nearest non-empty `.veyyon/`), then
    `AGENTS.md`, then `CLAUDE.md`, and the first one with content wins. The rest of
    that directory's candidates are not read, so a `CLAUDE.md` sitting beside an
-   `AGENTS.md` is deliberately not loaded and the same rules are never inlined
+   `AGENTS.md` is not loaded and the same rules are never inlined
    twice. The choice is made per directory, so a repository root using `AGENTS.md`
    and a package using `CLAUDE.md` both load.
 4. The active profile's `AGENTS.md`
@@ -195,4 +195,4 @@ Toggles persist immediately to `disabledExtensions`; there is no close-time summ
 For goal-shaped "give the agent a new capability" flows that stitch skills with MCP and
 plugins, see [Task guides](../using/task-guides.md).
 
-Engineering detail: [`docs/skills.md`](../../../skills.md).
+Engineering detail: [`docs/handbook/src/reference/skills.md`](../reference/skills.md).

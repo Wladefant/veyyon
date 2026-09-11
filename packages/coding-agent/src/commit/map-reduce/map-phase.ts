@@ -1,13 +1,13 @@
 import type { ThinkingLevel } from "@veyyon/agent-core";
 import type { Api, ApiKey, AssistantMessage, Model } from "@veyyon/ai";
 import { prompt } from "@veyyon/utils";
-import type { FileDiff, FileObservation } from "../../commit/types";
-import { isExcludedFile } from "../../commit/utils/exclusions";
 import { commitPrompts } from "../../prompts/commit/rows";
 import { mapWithConcurrencyLimit } from "../../task/parallel";
 import { toReasoningEffort } from "../../thinking";
 import { withScopedTimeoutSignal } from "../../utils/fetch-timeout";
 import { completeCommitSimple, type ResolveObfuscateProviderText } from "../shared-llm";
+import type { FileDiff, FileObservation } from "../types";
+import { isExcludedFile } from "../utils/exclusions";
 import { MAX_FILE_TOKENS, truncateToTokenLimit } from "./utils";
 
 const MAX_CONTEXT_FILES = 20;
@@ -60,7 +60,7 @@ export async function runMapPhase({
 	const retryBackoffMs = config?.retryBackoffMs ?? RETRY_BACKOFF_MS;
 	// Bounded worker pool is owned by task/parallel.ts. It normalizes
 	// `maxConcurrency <= 0`/non-finite to "run all at once" (veyyon's shared
-	// `subagent.maxConcurrency = 0` = Unlimited convention) and fails fast, cancelling
+	// `agent.maxConcurrency = 0` = Unlimited convention) and fails fast, cancelling
 	// in-flight siblings, if any file errors after its retries are exhausted.
 	const { results } = await mapWithConcurrencyLimit(filtered, maxConcurrency, async file => {
 		if (file.isBinary) {

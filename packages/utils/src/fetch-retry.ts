@@ -1,5 +1,6 @@
+import { STATUS_CODES } from "node:http";
 import { scheduler } from "node:timers/promises";
-import { isAbortError } from "./abortable";
+import { cancellationError, isAbortError } from "./abortable";
 
 // "reset after 1h2m3s" / "10m15s" / "39s"
 const QUOTA_RESET_PATTERN = /reset after (?:(\d+)h)?(?:(\d+)m)?(\d+(?:\.\d+)?)s/i;
@@ -144,7 +145,7 @@ export function resetHeaderTargetMs(value: number): { atMs: number } | { delta: 
  *  - `retry-after-ms` (milliseconds)
  *  - `Retry-After` (numeric seconds, or HTTP date)
  *  - `x-ratelimit-reset-ms` (delta ms, or Unix epoch ms/s for large values)
- *  - `x-ratelimit-reset` (Unix epoch seconds)
+ *  - `x-ratelimit-reset` (delta seconds, or Unix epoch s/ms for large values)
  *  - `x-ratelimit-reset-after` (seconds)
  *  - `anthropic-ratelimit-*-reset` (see {@link anthropicResetDelayMs})
  *
@@ -185,9 +186,15 @@ export function extractRetryHint(source: Response | Headers | null | undefined, 
 		}
 		const rateLimitReset = headers.get("x-ratelimit-reset");
 		if (rateLimitReset) {
-			const resetSeconds = Number.parseInt(rateLimitReset, 10);
-			if (!Number.isNaN(resetSeconds)) {
-				const delta = resetSeconds * 1000 - Date.now();
+			const value = Number.parseInt(rateLimitReset, 10);
+			if (Number.isFinite(value) && value > 0) {
+				// Same three shapes as the `-ms` variant above, so the same owner
+				// disambiguates them. Read as a bare epoch this branch discarded every
+				// delta a gateway sent: `x-ratelimit-reset: 60` computed 60000 - now,
+				// which is negative, so the server's own wait was dropped.
+				const target = resetHeaderTargetMs(value);
+				if ("delta" in target) return value * 1000; // header's own unit is seconds
+				const delta = target.atMs - Date.now();
 				if (delta > 0) return delta;
 			}
 		}
@@ -287,11 +294,21 @@ export interface FetchWithRetryOptions extends RequestInit {
 	 */
 	fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 	/**
-	 * Optional retry gate for HTTP responses whose status is retryable. Receives a
-	 * cloned body string so callers can fail fast on deterministic provider
-	 * failures that happen to use a 5xx status.
+	 * The retry verdict for a FAILED response — any status that is not 2xx, not only the transient
+	 * set. Receives a cloned body string, because a status means something only next to a body: a 429
+	 * that says `overloaded` is a throttle, one with nothing to read is a wall, and a 400 carrying a
+	 * deterministic parse failure is the same wall at a different number. Absent, the transient set
+	 * ({@link isRetryableStatus}) decides, which is all this module can say on its own.
 	 */
 	shouldRetryResponse?: (response: Response, bodyText: string, attempt: number) => boolean | Promise<boolean>;
+	/**
+	 * Optional retry gate for a THROWN transport failure — no response arrived.
+	 * Returning `false` re-throws instead of retrying. The loop's own bounds
+	 * (`maxAttempts`, the HTTP/2 verdict) cannot see a budget the caller is
+	 * keeping, and a stall retried to the attempt ceiling multiplies whatever
+	 * deadline the caller declared by the ladder plus its backoff.
+	 */
+	shouldRetryError?: (error: Error, attempt: number) => boolean | Promise<boolean>;
 	/**
 	 * Bun extension forwarded verbatim to the underlying `fetch` call. `false`
 	 * disables Bun's native ~300s pre-response timeout (callers that own a
@@ -302,15 +319,22 @@ export interface FetchWithRetryOptions extends RequestInit {
 	timeout?: number | false;
 }
 
-const DEFAULT_MAX_DELAY_MS = 60_000;
+/**
+ * The longest single server-directed wait a retry will sit on when the caller
+ * declared no cap of its own. Exported because a provider that runs its own
+ * retry ladder outside this helper (the Anthropic client honors
+ * `retry-after-ms` itself) has to bound it by the same number, or the same
+ * `retry-after` means one minute on one path and an unbounded sleep on another.
+ */
+export const DEFAULT_MAX_DELAY_MS = 60_000;
 const DEFAULT_MAX_ATTEMPTS = 5;
 
 /**
- * Fetch with bounded retries and sensible defaults. Retries on any
- * `isRetryableStatus` (5xx, 408, 429) and on transient network errors. Server
- * `Retry-After`/quota hints are honoured up to `maxDelayMs`; a hint that exceeds
- * the cap returns the current response so the caller can fail fast. Aborts on
- * `init.signal` propagate as `"Request was aborted"`.
+ * Fetch with bounded retries and sensible defaults. A 2xx is returned untouched; every other status
+ * goes to `shouldRetryResponse`, or to `isRetryableStatus` (5xx, 408, 429) when the caller passes no
+ * verdict. Transient network errors are retried. Server `Retry-After`/quota hints are honoured up to
+ * `maxDelayMs`; a hint that exceeds the cap returns the current response so the caller can fail fast.
+ * Aborts on `init.signal` propagate as `"Request was aborted"`.
  *
  * The caller is responsible for inspecting `!response.ok` once the call returns.
  */
@@ -324,6 +348,7 @@ export async function fetchWithRetry(
 		defaultDelayMs,
 		prepareInit,
 		shouldRetryResponse,
+		shouldRetryError,
 		fetch: fetchImpl = fetch,
 		timeout = false,
 		...baseInit
@@ -331,7 +356,7 @@ export async function fetchWithRetry(
 	const signal = baseInit.signal as AbortSignal | undefined;
 
 	for (let attempt = 0; ; attempt++) {
-		if (signal?.aborted) throw new Error("Request was aborted");
+		if (signal?.aborted) throw cancellationError();
 		const requestUrl = typeof url === "function" ? url(attempt) : url;
 		// `timeout` is destructured out of `baseInit`, so forward it to the underlying
 		// fetch on the no-`prepareInit` path too. Without this, callers that pass
@@ -350,7 +375,7 @@ export async function fetchWithRetry(
 		try {
 			response = await fetchImpl(requestUrl, init);
 		} catch (error) {
-			if (signal?.aborted) throw new Error("Request was aborted");
+			if (signal?.aborted) throw cancellationError();
 			const wrapped = wrapNetworkError(error);
 			// A named HTTP/2 code this module has already ruled deterministic
 			// (`NON_RETRYABLE_HTTP2_ERROR_CODES`) fails the same way on every replay,
@@ -360,15 +385,27 @@ export async function fetchWithRetry(
 			// full four more times to reach the same answer.
 			if (http2RetryVerdict(wrapped.message) === false) throw wrapped;
 			if (attempt + 1 >= maxAttempts) throw wrapped;
+			if (shouldRetryError && !(await shouldRetryError(wrapped, attempt))) throw wrapped;
 			await scheduler.wait(resolveDefaultDelay(defaultDelayMs, attempt, maxDelayMs), { signal });
 			continue;
 		}
 
-		if (!isRetryableStatus(response.status)) return response;
+		// A SUCCESS IS NEVER RETRIED AND ITS BODY IS NEVER READ: a 2xx may be a live stream, and
+		// `clone().text()` on one buffers the whole response. Every other status is a failure, so the
+		// caller's verdict decides it — including the ones outside the transient set, which is what
+		// `isRetryableStatus` stops being: it was the gate in front of the verdict, so a status an API
+		// documents as retryable (Anthropic's 409) and a body a provider knows a replay reproduces
+		// (llama.cpp's deterministic tool-call parse failure) were answered here, by a module that
+		// cannot read a body and does not know which API sent it. It is the DEFAULT now, for a caller
+		// that passes no verdict at all.
+		if (response.ok) return response;
 		if (attempt + 1 >= maxAttempts) return response;
 
 		const retryBody = await response.clone().text();
-		if (shouldRetryResponse && !(await shouldRetryResponse(response, retryBody, attempt))) return response;
+		const retry = shouldRetryResponse
+			? await shouldRetryResponse(response, retryBody, attempt)
+			: isRetryableStatus(response.status);
+		if (!retry) return response;
 
 		const hint = extractRetryHint(response, retryBody);
 		if (hint !== undefined && hint > maxDelayMs) return response;
@@ -394,7 +431,7 @@ function mergeInit(base: RequestInit, overlay: RequestInit, timeout: number | fa
 function wrapNetworkError(error: unknown): Error {
 	if (error instanceof Error) {
 		if (isAbortError(error) || error.message === "Request was aborted") {
-			return new Error("Request was aborted");
+			return cancellationError();
 		}
 		if (error.message === "fetch failed" && error.cause instanceof Error) {
 			return new Error(`Network error: ${error.cause.message}`);
@@ -419,10 +456,26 @@ function resolveDefaultDelay(
  * Inspect an arbitrary error value (or its `cause` chain, up to depth 2) for an
  * HTTP status code. Reads `status`, `statusCode`, and `response.status` fields,
  * coerces string values, and falls back to scanning the error message for
- * common patterns like `Error: 401`, `error (429)`, or `HTTP 503`.
+ * common patterns like `Error: 401`, `error (429)`, `status_code: 503` or
+ * `429 Too Many Requests`.
+ *
+ * ONE EXTRACTOR, and it is this one. `@veyyon/ai/error/flags` carried a second
+ * with a different pattern list and a different traversal, so the two answered
+ * differently on the same string: `error(503)` and `502 error` were a status
+ * here and nothing there, `status_code: 429` and `429 Too Many Requests` were a
+ * status there and nothing here. Since the auth ladder rotates a credential on a
+ * 401 and the retry ladder backs off on a 5xx, and they read different sides of
+ * that split, one provider message could be retried by one and reported by the
+ * other. `AIError.status` now delegates here.
+ *
+ * STRUCTURED EVIDENCE WINS OVER PROSE, at every depth, which is the third thing
+ * the two disagreed about: this one read its own message before the cause's
+ * `status` field and the other read the cause first. A numeric field says what
+ * the transport reported; a message is a string somebody formatted. So the whole
+ * chain is asked for a field before any of it is asked for a sentence.
  */
 export function extractHttpStatusFromError(error: unknown): number | undefined {
-	return extractHttpStatusFromErrorInternal(error, 0);
+	return structuredStatus(error, 0) ?? messageStatus(error, 0);
 }
 
 type HttpErrorLike = {
@@ -434,7 +487,7 @@ type HttpErrorLike = {
 	cause?: unknown;
 };
 
-function extractHttpStatusFromErrorInternal(error: unknown, depth: number): number | undefined {
+function structuredStatus(error: unknown, depth: number): number | undefined {
 	if (!error || typeof error !== "object" || depth > 2) return undefined;
 	const info = error as HttpErrorLike;
 	const rawStatus = info.status ?? info.statusCode ?? info.response?.status;
@@ -447,22 +500,74 @@ function extractHttpStatusFromErrorInternal(error: unknown, depth: number): numb
 		if (Number.isFinite(parsed)) status = parsed;
 	}
 	if (status !== undefined && status >= 100 && status <= 599) return status;
+	return structuredStatus(info.cause, depth + 1);
+}
 
+function messageStatus(error: unknown, depth: number): number | undefined {
+	if (!error || typeof error !== "object" || depth > 2) return undefined;
+	const info = error as HttpErrorLike;
 	if (info.message) {
 		const extracted = extractStatusFromMessage(info.message);
 		if (extracted !== undefined) return extracted;
 	}
-	if (info.cause) return extractHttpStatusFromErrorInternal(info.cause, depth + 1);
-	return undefined;
+	return messageStatus(info.cause, depth + 1);
 }
 
+/**
+ * The union of the two lists that used to disagree, most specific first. A
+ * reason phrase is read separately, by {@link statusFromReasonPhrase}.
+ *
+ * The anchored pattern is a status line: the code the response carried, at the
+ * start of the message, followed by the body. `503 {"type":"error",...}`,
+ * `401 Your session has expired`, `403 You have run out of credits`.
+ *
+ * POSITION IS WHAT SEPARATES IT from the reason-phrase rule, which refuses a
+ * bare code followed by arbitrary words so that `Processed 200 Total Records`
+ * is not a success and `gave up after 401 Failed Attempts` is not an expired
+ * credential. Both of those carry the number MID-SENTENCE. Every status line a
+ * provider in this workspace writes carries it FIRST, which is a shape a
+ * sentence about counting cannot take. The rule that replaced the old
+ * `(?:^|\s)(\d{3})\s+[A-Z]...` pattern kept its false positives out and took
+ * the true ones with them: a `401` naming its own reason stopped reporting 401
+ * at all, and `isAuthError` rotates a credential on exactly that number, so a
+ * dead grant stopped being recognised as one. Anchoring keeps both answers.
+ */
 const STATUS_MESSAGE_PATTERNS = [
-	/\berror\s*[:=]\s*(\d{3})\b/i,
-	/error\s*\((\d{3})\)/i,
-	/status\s*[:=]?\s*(\d{3})/i,
+	/^(\d{3})\s/,
+	/\bstatus(?:_code)?\s*[:=]?\s*(\d{3})\b/i,
 	/\bhttp\s*(\d{3})\b/i,
+	/error\s*\((\d{3})\)/i,
+	/\b(?:error|failed)\s*[:=]?\s*(\d{3})\b/i,
 	/\b(\d{3})\s*(?:status|error)\b/i,
 ] as const;
+
+/** A three-digit run that could open a status line, with the text after it. */
+const CODE_THEN_TEXT = /(?:^|\s)(\d{3})\s+/g;
+
+/**
+ * A reason phrase is how a gateway that sets no field still names its status
+ * (`429 Too Many Requests`), and it is evidence only when it is the phrase that
+ * belongs to the code beside it. Matching a bare number followed by capitalised
+ * words read `Processed 200 Total Records` as a success and `gave up after 401
+ * Failed Attempts` as an expired credential, and the second of those reaches
+ * `isAuthError`, which rotates credentials.
+ *
+ * `node:http` owns the code-to-phrase table, so there is none to maintain here.
+ */
+function statusFromReasonPhrase(message: string): number | undefined {
+	for (const match of message.matchAll(CODE_THEN_TEXT)) {
+		const code = Number(match[1]);
+		const phrase = STATUS_CODES[code];
+		if (phrase === undefined) continue;
+		const rest = message.slice(match.index + match[0].length);
+		if (!rest.toLowerCase().startsWith(phrase.toLowerCase())) continue;
+		// The phrase must end where a word ends, so `503 Service Unavailableish`
+		// is not a status line.
+		const next = rest.charAt(phrase.length);
+		if (next === "" || !/[A-Za-z0-9]/.test(next)) return code;
+	}
+	return undefined;
+}
 
 function extractStatusFromMessage(message: string): number | undefined {
 	for (const pattern of STATUS_MESSAGE_PATTERNS) {
@@ -471,7 +576,7 @@ function extractStatusFromMessage(message: string): number | undefined {
 		const value = Number(match[1]);
 		if (Number.isFinite(value) && value >= 100 && value <= 599) return value;
 	}
-	return undefined;
+	return statusFromReasonPhrase(message);
 }
 
 /**
@@ -582,35 +687,17 @@ export function http2RetryVerdict(message: string): boolean | undefined {
 	return HTTP2_GOAWAY_PATTERN.test(message) ? true : undefined;
 }
 
-const TRANSIENT_MESSAGE_PATTERN =
-	/overloaded|rate.?limit|too many requests|service.?unavailable|server error|internal error|connection.?error|unable to connect|fetch failed|network error|stream stall|other side closed|HTTP2(?:StreamReset|RefusedStream|EnhanceYourCalm)/i;
-
-const VALIDATION_MESSAGE_PATTERN =
-	/invalid|validation|bad request|unsupported|schema|missing required|not found|unauthorized|forbidden/i;
-
 /**
- * Identify errors that should be retried: aborts/timeouts in the error name or
- * message, retryable HTTP statuses (see `isRetryableStatus`), unexpected socket
- * closes, and the standard transient phrases. 4xx statuses other than 408/429
- * and validation-shaped messages short-circuit to `false`.
+ * THERE IS NO `isRetryableError` HERE ANY MORE, and that is the contract.
  *
- * A named HTTP/2 error code (see {@link http2RetryVerdict}) answers first,
- * because it is a fact about the transport rather than an inference from
- * wording.
+ * This module kept its own transient vocabulary (`overloaded`, `rate limit`, `service unavailable`,
+ * `connection error`, `unable to connect`, …) and its own validation veto, and
+ * `@veyyon/ai`'s `isProviderRetryableError` consulted it as a last resort. So one provider sentence
+ * was matched by two rule sets that had drifted apart by a phrase, and a failure the utils list
+ * recognised came back retryable while carrying no flag — which is what the session layer reads.
+ *
+ * `utils` cannot import `ai`, so the split is by KIND rather than by convenience: what a transport
+ * states about itself lives here ({@link http2RetryVerdict}, {@link isRetryableStatus},
+ * {@link isUnexpectedSocketCloseMessage}, {@link extractHttpStatusFromError}), and what a failure
+ * MEANS is `@veyyon/ai/error`'s registry, which composes these. A retry decision belongs there.
  */
-export function isRetryableError(error: unknown): boolean {
-	const info = error as { message?: string; name?: string } | null;
-	const message = info?.message ?? "";
-	const http2Verdict = http2RetryVerdict(message);
-	if (http2Verdict !== undefined) return http2Verdict;
-	if (isAbortError(error) || /timeout|timed out|aborted/i.test(message)) return true;
-
-	const status = extractHttpStatusFromError(error);
-	if (status !== undefined) {
-		if (isRetryableStatus(status)) return true;
-		if (status >= 400 && status < 500) return false;
-	}
-
-	if (VALIDATION_MESSAGE_PATTERN.test(message)) return false;
-	return isUnexpectedSocketCloseMessage(message) || TRANSIENT_MESSAGE_PATTERN.test(message);
-}

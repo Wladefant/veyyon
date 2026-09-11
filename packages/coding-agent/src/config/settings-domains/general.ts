@@ -62,8 +62,7 @@ export const GENERAL_SETTINGS = {
 			tab: "interaction",
 			group: "Power (macOS)",
 			label: "Sleep Prevention",
-			description:
-				"Prevent macOS sleep during active sessions. Each level is cumulative — it adds the flags of all lower levels.",
+			description: "Prevent macOS sleep while a session is active. Each level includes the levels below it.",
 			options: [
 				{
 					value: "off",
@@ -96,28 +95,17 @@ export const GENERAL_SETTINGS = {
 			group: "Advisor",
 			label: "Enable Advisor",
 			description:
-				"Pair a second model (assigned to the 'advisor' role) that passively reviews each turn and injects notes.",
+				"Pair a second model that passively reviews each turn and injects notes. Which model it runs is Advisor Model, directly below.",
 		},
 	},
-	"prewalk.enabled": {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "model",
-			group: "Prewalk",
-			label: "Enable Prewalk",
-			description:
-				"Start on the active model, then switch to a fast/cheap model (default the 'smol' role) at the first edit/write after the plan nudge's todo list exists — the strong model plans, commits the todos, and starts the implementation before handing off. Overridable per session with --prewalk / --no-prewalk.",
-		},
-	},
-	"advisor.subagents": {
+	"advisor.agents": {
 		type: "boolean",
 		default: false,
 		ui: {
 			tab: "model",
 			group: "Advisor",
-			label: "Advisor for Subagents",
-			description: "Also enable the advisor on spawned task/eval subagents.",
+			label: "Advisor for Spawned Agents",
+			description: "Also enable the advisor on spawned task/eval agents.",
 			condition: "advisorEnabled",
 		},
 	},
@@ -152,6 +140,41 @@ export const GENERAL_SETTINGS = {
 				{ value: "5", label: "5 turns" },
 			],
 			condition: "advisorEnabled",
+		},
+	},
+	"prewalk.enabled": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "model",
+			group: "Prewalk",
+			label: "Enable Prewalk",
+			description:
+				"Start a session on Prewalk Strong Model and switch to Prewalk Cheap Model at the first edit or write after the todo list exists. --prewalk and --no-prewalk override it for one session.",
+		},
+	},
+	"prewalk.cheapModel": {
+		type: "modelChain",
+		default: undefined,
+		ui: {
+			tab: "model",
+			group: "Prewalk",
+			label: "Prewalk Cheap Model",
+			condition: "prewalkEnabled",
+			description:
+				"Model prewalk hands off to at the first edit/write. Required once prewalk is on: /prewalk and --prewalk fail with a message naming this setting when it is unset. --prewalk-into overrides it per session; only the first entry is used.",
+		},
+	},
+	"prewalk.strongModel": {
+		type: "modelChain",
+		default: undefined,
+		ui: {
+			tab: "model",
+			group: "Prewalk",
+			label: "Prewalk Strong Model",
+			condition: "prewalkEnabled",
+			description:
+				"Model a prewalk session starts on. Unset: the normal start model (--model or the remembered default). Only the first entry is used.",
 		},
 	},
 	shellPath: { type: "string", default: undefined },
@@ -194,7 +217,7 @@ export const GENERAL_SETTINGS = {
 			group: "Roles",
 			label: "Role Models",
 			description:
-				"Assign a model to each role (task, plan, advisor, …). Opens a searchable picker with auth status. Scoped to the active profile — never edit config by hand.",
+				"Assign a model to each role (Fast, Thinking, Vision, Architect, Designer, Commit, Tiny). Opens a searchable picker with auth status. The advisor's model is set in the Advisor group and a spawned agent's in Agents → Roster. Stored in the active profile.",
 		},
 	},
 

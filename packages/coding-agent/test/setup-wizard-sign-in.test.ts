@@ -1,9 +1,9 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import type { AuthStorage } from "@veyyon/ai";
 import type { OAuthLoginCallbacks, OAuthProviderId } from "@veyyon/ai/oauth/types";
-import { SignInTab } from "@veyyon/coding-agent/modes/setup-wizard/scenes/sign-in";
-import type { SetupSceneHost } from "@veyyon/coding-agent/modes/setup-wizard/scenes/types";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
+import { SignInTab } from "@veyyon/coding-agent/modes/terminal/setup-wizard/scenes/sign-in";
+import type { SetupSceneHost } from "@veyyon/coding-agent/modes/terminal/setup-wizard/scenes/types";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import * as clipboard from "@veyyon/coding-agent/utils/clipboard";
 import type { Component } from "@veyyon/tui";
 
@@ -269,6 +269,61 @@ describe("SignInTab", () => {
 			tab.dispose();
 			loginGate.resolve();
 			await loginGate.promise;
+		}
+	});
+
+	it("returns to a cleared provider search after a cancelled login", async () => {
+		const authStorage = {
+			has: (_providerId: string) => false,
+			hasAuth: (_providerId: string) => false,
+			getCredentialOrigin: (_providerId: string) => undefined,
+			login(_provider: OAuthProviderId, ctrl: OAuthLoginCallbacks): Promise<void> {
+				ctrl.onAuth({ url: "https://example.com/oauth/authorize?state=cancel" });
+				const cancelled = Promise.withResolvers<void>();
+				ctrl.signal?.addEventListener("abort", () => cancelled.reject(new Error("aborted")), { once: true });
+				return cancelled.promise;
+			},
+		} as unknown as AuthStorage;
+
+		const host = {
+			ctx: {
+				openInBrowser(): void {},
+				session: {
+					modelRegistry: {
+						authStorage,
+						async refresh(): Promise<void> {},
+					},
+				},
+			},
+			requestRender(): void {},
+			finish(): void {},
+			setFocus(): void {},
+			restoreFocus(): void {},
+		} as unknown as SetupSceneHost;
+
+		const tab = new SignInTab(host);
+		try {
+			for (const char of "anthropic") tab.handleInput(char);
+			tab.handleInput("\n");
+			expect(tab.modal).toBe(true);
+
+			tab.handleInput("\x1b");
+			// The abort rejects the login on a microtask; the catch path runs on the next.
+			await Promise.resolve();
+			await Promise.resolve();
+			expect(tab.modal).toBe(false);
+
+			// The search that found the provider is gone with the login it started, so Esc
+			// is back to leaving setup and the next search starts from nothing.
+			expect(tab.escapeAction()).toBeUndefined();
+			for (const char of "groq") tab.handleInput(char);
+			const plain = tab.render(80).map(line => Bun.stripANSI(line).trim());
+			expect(plain).toContain("Login cancelled.");
+			expect(plain.some(line => line.startsWith("Search: groq"))).toBe(true);
+			expect(plain.some(line => line.includes("Groq"))).toBe(true);
+			expect(plain).not.toContain("No matching providers");
+		} finally {
+			tab.dispose();
 		}
 	});
 });

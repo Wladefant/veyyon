@@ -2,7 +2,7 @@
  * Contract: asking what a message costs does not load the machinery that compacts one.
  *
  * WHAT WAS WRONG. `estimateTokens` lived in `compaction/compaction.ts`, which is the compaction ENGINE: the
- * summarizer, the cut-point search and the provider round trip. It reaches 395 modules to do that job, and it
+ * summarizer, the cut-point search and the provider round trip. It reaches 302 modules to do that job, and it
  * should. Estimating a message needs a tokenizer and nothing else.
  *
  * Three modules in the same directory wanted only the estimate, and the marginal cost of that one import was
@@ -58,21 +58,47 @@ function runtimeImportsOf(relative: string): string[] {
 }
 
 /**
- * Measured at 85. Almost all of it is `../tokenizer` (83), which is the native tokenizer binding and is the
- * one thing an estimate genuinely needs. The rest is `@veyyon/utils/json` for `stringifyJson`, named as the
- * owner subpath rather than the `@veyyon/utils` barrel, which would have cost 74 modules for one function.
+ * RE-MEASURED 2026-08-26 at 10, down from 92. `tokenizer.ts` took `estimateTokensFromText` from the
+ * `@veyyon/utils` barrel, which put all 85 of that barrel's modules behind an estimate; it names
+ * `@veyyon/utils/tokens` now. What remains is the native tokenizer binding, `@veyyon/utils/json` for
+ * `stringifyJson`, and the archive module, which imports nothing at all — the test below pins that, so the
+ * constant's home cannot grow a graph behind this ceiling.
  */
-const TOKEN_ESTIMATE_CEILING = 90;
+const TOKEN_ESTIMATE_CEILING = 12;
 
-/** Measured at 88, down from 398. Its own graph is the estimator plus a handful of local modules. */
-const SHAKE_CEILING = 95;
+/** RE-MEASURED 2026-08-26 at 13, down from 88. Its own graph is the estimator plus a handful of local modules. */
+const SHAKE_CEILING = 16;
 
 /**
- * Measured at 204, down from 398. It does not reach the ceiling above because it genuinely uses more of the
- * directory: the entry helpers, the message shapes and the read-selector split. 204 is that work, not a
- * leftover edge into the engine, which is why this ceiling is not "the same as shake".
+ * RE-MEASURED 2026-08-26 at 187, down from 204. It does not reach the ceiling above because it genuinely uses
+ * more of the directory: the entry helpers, the message shapes and the read-selector split. 187 is that work,
+ * not a leftover edge into the engine, which is why this ceiling is not "the same as shake".
  */
-const PRUNING_CEILING = 215;
+const PRUNING_CEILING = 195;
+
+/**
+ * The engine and the remote summarizer both took `ProviderHttpError` from the `@veyyon/ai/error` barrel,
+ * which is 21 modules for one class. They name `@veyyon/ai/error/classes` now.
+ *
+ * RE-MEASURED 2026-08-26: engine 302, down from 316; remote summarizer 209, down from 223. These are not
+ * leaf ceilings — the engine's graph is the job it does — but a ceiling here is what stops a barrel edge
+ * from coming back, which is how those 14 got there.
+ *
+ * RE-MEASURED 2026-09-04: engine 311, remote summarizer 218. The five new modules on both closures are
+ * the leaves of `contracts/model/src/` -- `effort.ts`, `model.ts`, `message.ts`, `service-tier.ts`,
+ * `stream-block.ts` -- carved out of `catalog/types.ts`, `catalog/effort.ts`, `ai/types.ts` and
+ * `ai/utils/block-symbols.ts`, which were already here and now re-export them. A contract imports nothing
+ * in this repository, so the growth is file count and no subtree; the barrel edge is still asserted by
+ * specifier below.
+ *
+ * RE-MEASURED 2026-09-11: engine 317, remote summarizer 220. The three new modules on the engine's closure
+ * are `compaction/staged-summary.ts` and the two prompt bodies it imports as text,
+ * `prompts/compaction/compaction-staged-segment.md` and `prompts/compaction/compaction-staged-merge.md` --
+ * the staged summarization the engine falls back to when one request times out or cannot fit. The stager
+ * imports only what the engine already reached, so the growth is those three files and no subtree.
+ */
+const COMPACTION_ENGINE_CEILING = 317;
+const REMOTE_SUMMARIZER_CEILING = 221;
 
 describe("the estimator is a leaf", () => {
 	it(`token-estimate reaches at most ${TOKEN_ESTIMATE_CEILING} modules`, () => {
@@ -95,14 +121,27 @@ describe("the estimator is a leaf", () => {
 
 	/**
 	 * NON-VACUITY for the absences above: the walk really resolved this module, so "reaches none of those" is
-	 * an answer about the graph and not what an empty set gives for free. The tokenizer is the edge an
-	 * estimator must have, and it is the bulk of the 85.
+	 * an answer about the graph and not what an empty set gives for free. The edges are named rather than
+	 * counted, because a magnitude proxy stops meaning anything the moment the graph legitimately shrinks.
 	 */
 	it("still reaches the tokenizer, which is what an estimate is made of", () => {
 		const reached = reachedNames("compaction/token-estimate.ts");
 
 		expect(reached).toContain(path.join("packages", "agent", "src", "tokenizer.ts"));
-		expect(reached.length).toBeGreaterThan(50);
+		expect(reached).toContain(path.join("packages", "utils", "src", "tokens.ts"));
+		expect(reached).toContain(path.join("natives", "bridge", "bindings", "native", "index.js"));
+	});
+
+	/**
+	 * The one non-tokenizer sibling the estimator reaches is a constant with no graph of its own: its reach is
+	 * itself. That is what keeps this ceiling a statement about the tokenizer, and an import added to the
+	 * archive module fails here rather than spending the estimator's budget unnoticed.
+	 */
+	it("takes the legacy frame constant from a module that imports nothing", () => {
+		expect(reachedNames("compaction/legacy-snapcompact-archive.ts")).toEqual([
+			path.join("packages", "agent", "src", "compaction", "legacy-snapcompact-archive.ts"),
+		]);
+		expect(runtimeImportsOf("compaction/legacy-snapcompact-archive.ts")).toEqual([]);
 	});
 
 	/**
@@ -153,6 +192,31 @@ describe("the three callers take the estimate from the leaf", () => {
 			path.join("packages", "agent", "src", "compaction", "compaction.ts"),
 		);
 	});
+});
+
+describe("one error class does not cost an error barrel", () => {
+	it(`the compaction engine reaches at most ${COMPACTION_ENGINE_CEILING} modules`, () => {
+		expect(reach("compaction/compaction.ts")).toBeLessThanOrEqual(COMPACTION_ENGINE_CEILING);
+	});
+
+	it(`the remote summarizer reaches at most ${REMOTE_SUMMARIZER_CEILING} modules`, () => {
+		expect(reach("compaction/remote-summarizer.ts")).toBeLessThanOrEqual(REMOTE_SUMMARIZER_CEILING);
+	});
+
+	/**
+	 * Asserted as the specifier as well as the count, because the two spellings compile identically. The
+	 * ceilings above are wide enough that one barrel edge returning would not necessarily break them, and
+	 * this is the edge that put 14 modules behind a single `instanceof`.
+	 */
+	it.each(["compaction/compaction.ts", "compaction/remote-summarizer.ts"])(
+		"%s names the error-class owner rather than the error barrel",
+		relative => {
+			const imports = runtimeImportsOf(relative);
+
+			expect(imports).toContain("@veyyon/ai/error/classes");
+			expect(imports).not.toContain("@veyyon/ai/error");
+		},
+	);
 });
 
 describe("the engine keeps the name its callers already import", () => {

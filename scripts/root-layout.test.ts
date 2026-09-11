@@ -2,16 +2,17 @@
  * The generated directories at the repository root stay generated, and stay out of git.
  *
  * WHY THIS SUITE EXISTS. Four directories at the root hold output rather than source: `runs/` (the
- * default artifact sink for the benchmark harnesses), `website-get/` (staged by `website/build.mjs`
+ * default artifact sink for the benchmark harnesses), `website-get/` (staged by `apps/site/build.mjs`
  * and deployed to get.veyyon.dev), `relative-cache/` (a Bun cache pile), and
- * `packages/deepswe-bench/{runs,repo-cache}` (trial output and cloned task repos, several gigabytes).
+ * `tests/evals/{runs,.cache,datasets/repo-cache,datasets/deep-swe/corpus}` (trial output, vendored
+ * task corpora and cloned task repos, several gigabytes).
  * None of them is source, and each looks exactly like source to anyone reading `ls`.
  *
  * The failure this guards is a directory quietly becoming tracked. `relative-cache/` had no ignore
  * entry at all for a while, so every `git status` offered to add a Bun cache and any `git add -A`
  * would have taken it. Once a generated tree is committed, it is committed with whatever it happened
  * to contain that day, it conflicts on every machine, and removing it later reads as deleting real
- * files. The 4G of cloned upstream repositories under `deepswe-bench` is the version of this mistake
+ * files. The 4G of cloned upstream repositories under `tests/evals` is the version of this mistake
  * nobody recovers from casually.
  *
  * The staging assertion is the other half. `website-get/` must stay UNTRACKED and must still be
@@ -28,10 +29,24 @@ const repoRoot = path.resolve(import.meta.dir, "..");
 /** Paths that hold generated output, with the ignore entry each one is expected to carry. */
 const GENERATED: ReadonlyArray<{ dir: string; ignoreEntry: string; why: string }> = [
 	{ dir: "runs", ignoreEntry: "/runs/", why: "default artifact sink for the benchmark harnesses" },
-	{ dir: "website-get", ignoreEntry: "/website-get/", why: "staged by website/build.mjs, deployed to get.veyyon.dev" },
+	{
+		dir: "website-get",
+		ignoreEntry: "/website-get/",
+		why: "staged by apps/site/build.mjs, deployed to get.veyyon.dev",
+	},
 	{ dir: "relative-cache", ignoreEntry: "relative-cache/", why: "Bun cache pile written at the repo root" },
-	{ dir: "packages/deepswe-bench/runs", ignoreEntry: "runs/", why: "benchmark trial output" },
-	{ dir: "packages/deepswe-bench/repo-cache", ignoreEntry: "repo-cache/", why: "cloned upstream task repositories" },
+	{ dir: "tests/evals/runs", ignoreEntry: "runs/", why: "benchmark trial output" },
+	{ dir: "tests/evals/.cache", ignoreEntry: ".cache/", why: "vendored dataset checkouts" },
+	{
+		dir: "tests/evals/datasets/repo-cache",
+		ignoreEntry: "datasets/repo-cache/",
+		why: "cloned upstream task repositories",
+	},
+	{
+		dir: "tests/evals/datasets/deep-swe/corpus",
+		ignoreEntry: "datasets/deep-swe/corpus/",
+		why: "vendored DeepSWE task corpus",
+	},
 ];
 
 function trackedFileCount(dir: string): number {
@@ -40,9 +55,9 @@ function trackedFileCount(dir: string): number {
 	return text === "" ? 0 : text.split("\n").length;
 }
 
-/** The ignore file that is expected to carry an entry, since deepswe-bench has its own. */
+/** The ignore file that is expected to carry an entry, since evals has its own. */
 function ignoreFileFor(dir: string): string {
-	return dir.startsWith("packages/deepswe-bench/") ? "packages/deepswe-bench/.gitignore" : ".gitignore";
+	return dir.startsWith("tests/evals/") ? "tests/evals/.gitignore" : ".gitignore";
 }
 
 describe("generated directories at the root", () => {
@@ -71,7 +86,7 @@ describe("generated directories at the root", () => {
 		// The ignore entry above is only correct while something produces the directory. If this
 		// staging step is removed or renamed, `website-get/` becomes an ignored directory nobody
 		// writes and the install endpoint deploys whatever is left over on the runner.
-		const build = readFileSync(path.join(repoRoot, "website/build.mjs"), "utf-8");
+		const build = readFileSync(path.join(repoRoot, "apps/site/build.mjs"), "utf-8");
 
 		expect(build).toContain('const GET = join(REPO, "website-get")');
 		expect(build).toContain("install.sh");

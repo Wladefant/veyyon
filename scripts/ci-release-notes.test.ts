@@ -4,11 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
 	boundReleaseNotesBody,
-	compareVersions,
 	enumerateChangelogVersions,
 	formatCommitSummary,
 	groupCommitsByType,
 	mergePackageSection,
+	resolvePublishedFloorFromList,
 } from "./ci-release-notes";
 
 const FIXTURE = [
@@ -59,45 +59,44 @@ const FIXTURE = [
 	"",
 ].join("\n");
 
-describe("compareVersions", () => {
-	it("orders semver tags numerically across all components", () => {
-		expect(compareVersions("15.12.5", "15.13.0") < 0).toBe(true);
-		expect(compareVersions("v15.13.0", "15.12.6") > 0).toBe(true);
-		expect(compareVersions("15.12.6", "15.12.6") === 0).toBe(true);
-		// Numeric (not lexicographic) — 15.2.0 < 15.13.0.
-		expect(compareVersions("15.2.0", "15.13.0") < 0).toBe(true);
+describe("resolvePublishedFloorFromList", () => {
+	it("resolves floor 1.4.0 for target 0.0.1 when v0.0.1 was published after v1.4.0", () => {
+		const releases = [
+			{ tagName: "v0.0.1", publishedAt: "2026-09-05T00:00:00Z" },
+			{ tagName: "v1.4.0", publishedAt: "2026-08-01T00:00:00Z" },
+		];
+		const { floor, versionsInRange } = resolvePublishedFloorFromList(releases, "0.0.1");
+		expect(floor).toBe("1.4.0");
+		expect(versionsInRange).toEqual(["0.0.1"]);
 	});
 
-	it("orders a prerelease against released versions instead of calling everything equal", () => {
-		// REGRESSION: this comparator used to match `X.Y.Z` only and return 0 for
-		// anything else, meaning "same version". A prerelease target compared equal
-		// to every released version, so mergePackageSection selected the whole
-		// changelog and the release notes for an rc contained the entire history.
-		expect(compareVersions("1.2.1-rc.1", "1.2.0") > 0).toBe(true);
-		expect(compareVersions("1.2.1-rc.1", "1.2.1") < 0).toBe(true);
-		expect(compareVersions("1.0.0", "1.2.1-rc.1") < 0).toBe(true);
-		expect(compareVersions("1.2.1-rc.1", "1.2.1-rc.1") === 0).toBe(true);
-	});
-});
-
-describe("mergePackageSection with a prerelease target", () => {
-	it("selects no released section for a prerelease that has none of its own", () => {
-		// The concrete failure the comparator bug produced: every released section
-		// compared equal to the rc target and was merged into its notes.
-		const changelog = ["## [1.2.0]", "### Added", "- older feature", "", "## [1.1.0]", "### Added", "- oldest"].join(
-			"\n",
-		);
-
-		expect(mergePackageSection(changelog, null, "1.2.1-rc.1")).toBe("");
+	it("resolves the floor to the most recent published release other than target", () => {
+		const releases = [
+			{ tagName: "v15.13.0", publishedAt: "2026-06-14T12:00:00Z" },
+			{ tagName: "v15.12.6", publishedAt: "2026-06-14T06:00:00Z" },
+			{ tagName: "v15.12.5", publishedAt: "2026-06-14T00:00:00Z" },
+			{ tagName: "v15.12.4", publishedAt: "2026-06-13T00:00:00Z" },
+		];
+		const { floor, versionsInRange } = resolvePublishedFloorFromList(releases, "15.13.0");
+		expect(floor).toBe("15.12.6");
+		expect(versionsInRange).toEqual(["15.13.0"]);
 	});
 
-	it("still selects the range below a prerelease when a floor is given", () => {
-		const changelog = ["## [1.2.0]", "### Added", "- newer", "", "## [1.1.0]", "### Added", "- older"].join("\n");
+	it("resolves floor 15.12.4 when intermediate versions were silent tags not in GitHub releases", () => {
+		const releases = [
+			{ tagName: "v15.13.0", publishedAt: "2026-06-14T12:00:00Z" },
+			{ tagName: "v15.12.4", publishedAt: "2026-06-13T00:00:00Z" },
+		];
+		const { floor, versionsInRange } = resolvePublishedFloorFromList(releases, "15.13.0");
+		expect(floor).toBe("15.12.4");
+		expect(versionsInRange).toEqual(["15.13.0"]);
+	});
 
-		const merged = mergePackageSection(changelog, "1.1.0", "1.2.1-rc.1");
-
-		expect(merged).toContain("- newer");
-		expect(merged).not.toContain("- older");
+	it("returns floor null when no other published release exists", () => {
+		const releases = [{ tagName: "v0.0.1", publishedAt: "2026-09-05T00:00:00Z" }];
+		const { floor, versionsInRange } = resolvePublishedFloorFromList(releases, "0.0.1");
+		expect(floor).toBeNull();
+		expect(versionsInRange).toEqual(["0.0.1"]);
 	});
 });
 
@@ -121,8 +120,12 @@ describe("enumerateChangelogVersions", () => {
 });
 
 describe("mergePackageSection", () => {
-	it("includes every silent-tag section above floor up to target inclusive", () => {
-		const merged = mergePackageSection(FIXTURE, "15.12.4", "15.13.0");
+	// The window a release_github run computes for v15.13.0 when v15.12.4 was the
+	// last release that published: the target plus every silent tag after it.
+	const SILENT_WINDOW = ["15.13.0", "15.12.6", "15.12.5"];
+
+	it("includes every silent-tag section in the window, target inclusive", () => {
+		const merged = mergePackageSection(FIXTURE, SILENT_WINDOW);
 		// 15.12.6 and 15.12.5 unique fingerprints must land.
 		expect(merged).toContain("Removed `writeLine`/`writeLineSync` from the public SessionStorageWriter contract.");
 		expect(merged).toContain("Added package-level exports for session context.");
@@ -133,21 +136,46 @@ describe("mergePackageSection", () => {
 		expect(merged).not.toContain("Unreleased entry");
 	});
 
+	it("takes exactly the 0.0.1 sections for a window of [0.0.1] cut after 1.4.0", () => {
+		const changelog = [
+			"# Changelog",
+			"",
+			"## [Unreleased]",
+			"",
+			"## [0.0.1] - 2026-09-05",
+			"",
+			"### Fixed",
+			"",
+			"- Fix in 0.0.1.",
+			"",
+			"## [1.4.0] - 2026-08-01",
+			"",
+			"### Added",
+			"",
+			"- Feature in 1.4.0.",
+			"",
+		].join("\n");
+
+		const merged = mergePackageSection(changelog, ["0.0.1"]);
+		expect(merged).toContain("- Fix in 0.0.1.");
+		expect(merged).not.toContain("Feature in 1.4.0.");
+	});
+
 	it("dedupes bullets flattened forward into multiple versions", () => {
-		const merged = mergePackageSection(FIXTURE, "15.12.4", "15.13.0");
+		const merged = mergePackageSection(FIXTURE, SILENT_WINDOW);
 		const dupRegex = /Fixed unknown `--`-prefixed flags being silently consumed as prompt text\./g;
 		expect(merged.match(dupRegex)?.length).toBe(1);
 	});
 
 	it("groups bullets under the canonical category order regardless of source-version order", () => {
-		const merged = mergePackageSection(FIXTURE, "15.12.4", "15.13.0");
+		const merged = mergePackageSection(FIXTURE, SILENT_WINDOW);
 		// Expected canonical order: Breaking Changes → Added → Changed → Fixed → Removed.
 		const headings = [...merged.matchAll(/^### (.+)$/gm)].map(m => m[1]);
 		expect(headings).toEqual(["Breaking Changes", "Added", "Changed", "Fixed", "Removed"]);
 	});
 
-	it("floor=null reproduces single-version (legacy) extraction for the target", () => {
-		const merged = mergePackageSection(FIXTURE, null, "15.13.0");
+	it("a one-version window reproduces single-version extraction for the target", () => {
+		const merged = mergePackageSection(FIXTURE, ["15.13.0"]);
 		expect(merged).toContain("Fixed something only in 15.13.0");
 		expect(merged).toContain("Removed a deprecated thing in 15.13.0");
 		// Anything below the target stays out when no floor is set.
@@ -157,14 +185,14 @@ describe("mergePackageSection", () => {
 
 	it("returns empty string when no version in the requested range carries body content", () => {
 		const empty = ["# Changelog", "", "## [15.13.0] - 2026-06-14", "", "## [15.12.6] - 2026-06-14"].join("\n");
-		expect(mergePackageSection(empty, "15.12.5", "15.13.0")).toBe("");
+		expect(mergePackageSection(empty, ["15.13.0", "15.12.6"])).toBe("");
 	});
 
 	it("never emits a category with only blank/whitespace bullets after dedup", () => {
 		// If 15.13.0 already pulled the only Fixed bullet, an older section
 		// contributing the identical bullet must not produce an empty
 		// `### Fixed` heading by itself.
-		const merged = mergePackageSection(FIXTURE, "15.12.4", "15.13.0");
+		const merged = mergePackageSection(FIXTURE, SILENT_WINDOW);
 		expect(merged).not.toMatch(/### Fixed\s*\n\s*(### |$)/);
 	});
 });
@@ -297,7 +325,7 @@ describe("boundReleaseNotesBody", () => {
 	 * draft with HTTP 422. The bounded body keeps only complete entries and names
 	 * the immutable sources for every omitted detail.
 	 */
-	it("shortens an oversized body only at a complete bullet boundary", () => {
+	it("shortens an oversized body only at a complete bullet boundary and links to the aggregate CHANGELOG.md", () => {
 		const entries = Array.from(
 			{ length: 40 },
 			(_, index) => `- Entry ${index}: ${"x".repeat(80)}\n  continuation-${index}.`,
@@ -314,7 +342,10 @@ describe("boundReleaseNotesBody", () => {
 		for (const index of included) expect(prefix).toContain(`continuation-${index}.`);
 		expect(prefix).toMatch(/continuation-\d+\.$/);
 		expect(bounded).toContain("shortened from");
-		expect(bounded).toContain("/tree/v1.0.38/packages");
+		expect(bounded).toContain("/blob/v1.0.38/CHANGELOG.md");
+		expect(bounded).toContain(
+			"Read the [complete changelog](https://github.com/santhreal/veyyon/blob/v1.0.38/CHANGELOG.md)",
+		);
 		expect(bounded).toContain("/compare/v1.0.37...v1.0.38");
 	});
 
@@ -326,7 +357,30 @@ describe("boundReleaseNotesBody", () => {
 
 		expect(bounded.length).toBeLessThanOrEqual(600);
 		expect(bounded).not.toContain("secret-detail");
+		expect(bounded).toContain("/blob/v1.0.38/CHANGELOG.md");
 		expect(bounded).toContain("/commits/v1.0.38");
+	});
+
+	/** Trailing orphaned headings are stripped when none of their bullets fit within the budget. */
+	it("prunes trailing section headers when no bullets from that section fit", () => {
+		const body =
+			"## @veyyon/coding-agent\n\n### Fixed\n\n- Main bullet.\n\n## @veyyon/orphaned\n\n### Added\n\n- Big bullet that does not fit " +
+			"x".repeat(300);
+		const bounded = boundReleaseNotesBody(body, { version: "1.0.38", floor: "1.0.37", maxChars: 400 });
+
+		expect(bounded.length).toBeLessThanOrEqual(400);
+		expect(bounded).toContain("- Main bullet.");
+		expect(bounded).not.toContain("## @veyyon/orphaned");
+		expect(bounded).not.toContain("### Added");
+		expect(bounded).toContain("/blob/v1.0.38/CHANGELOG.md");
+	});
+
+	/** Budgets smaller than the notice itself fail loud rather than producing negative budgets or overflow. */
+	it("rejects maxChars budgets too small to contain the truncation notice", () => {
+		const body = "- Entry exceeding the available body budget.\n".repeat(3);
+		expect(() => boundReleaseNotesBody(body, { version: "1.0.38", floor: null, maxChars: 50 })).toThrow(
+			"too small for the",
+		);
 	});
 });
 
@@ -430,6 +484,13 @@ describe("ci-release-notes end-to-end against a real tagged git repo", () => {
 	beforeEach(() => {
 		repo = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-notes-e2e-"));
 		git(["init", "-q", "-b", "main"], repo);
+		// The generator resolves member changelogs from the root manifest, the way the
+		// real repository declares them, so the fixture is a workspace rather than a
+		// bare `packages/` directory.
+		fs.writeFileSync(
+			path.join(repo, "package.json"),
+			JSON.stringify({ workspaces: { packages: ["packages/*", "plugins/*"] } }),
+		);
 		fs.mkdirSync(path.join(repo, "packages", "alpha"), { recursive: true });
 		fs.writeFileSync(path.join(repo, "packages", "alpha", "package.json"), JSON.stringify({ name: "@veyyon/alpha" }));
 	});
@@ -440,6 +501,14 @@ describe("ci-release-notes end-to-end against a real tagged git repo", () => {
 
 	function writeChangelog(body: string): void {
 		fs.writeFileSync(path.join(repo, "packages", "alpha", "CHANGELOG.md"), body);
+	}
+
+	/** The same changelog, for a member that does not live under `packages/`. */
+	function writePluginChangelog(body: string): void {
+		const dir = path.join(repo, "plugins", "beta");
+		fs.mkdirSync(dir, { recursive: true });
+		fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "@veyyon/beta" }));
+		fs.writeFileSync(path.join(dir, "CHANGELOG.md"), body);
 	}
 
 	it("emits curated sections then the commit summary for the (floor, target] range", () => {
@@ -487,6 +556,39 @@ describe("ci-release-notes end-to-end against a real tagged git repo", () => {
 		expect(body).not.toContain("initial alpha release");
 		// Ordering: curated package section precedes the derived summary.
 		expect(body.indexOf("## @veyyon/alpha")).toBeLessThan(body.indexOf("## What changed"));
+	});
+
+	/**
+	 * WHY THIS CELL EXISTS. The generator globbed `packages/*​/CHANGELOG.md`, so a
+	 * release body carried entries from members under `packages/` and silently dropped
+	 * every other one. Nine members keep a changelog outside it -- `kernel`, both
+	 * `contracts/*`, `hosts/terminal/engine`, `natives/bridge/bindings` and the four
+	 * `plugins/*` -- and the terminal engine's was `packages/tui` until it moved, so
+	 * the omission arrived with a directory rename and nothing failed. The member list
+	 * comes from the root manifest now, which is the same authority the root changelog
+	 * and the changelog gate read.
+	 *
+	 * What it does not catch: a member whose manifest declares no `name`, which falls
+	 * back to its directory name in the heading rather than failing.
+	 */
+	it("carries the curated section of a member that does not live under packages/", () => {
+		writeChangelog(["# Changelog", "", "## [1.1.0]", "", "### Added", "", "- Added an alpha flag.", ""].join("\n"));
+		writePluginChangelog(
+			["# Changelog", "", "## [1.1.0]", "", "### Fixed", "", "- Stopped dropping a plugin hook.", ""].join("\n"),
+		);
+		git(["add", "-A"], repo);
+		commit("feat: seed");
+		git(["tag", "v1.0.0"], repo);
+		commit("fix(plugin): stop dropping a plugin hook");
+		git(["tag", "v1.1.0"], repo);
+
+		const { code, body } = runNotes("v1.1.0", "1.0.0");
+		expect(code).toBe(0);
+		expect(body).toContain("## @veyyon/beta");
+		expect(body).toContain("- Stopped dropping a plugin hook.");
+		// Both members appear, so the widening added a source rather than replacing one.
+		expect(body).toContain("## @veyyon/alpha");
+		expect(body).toContain("- Added an alpha flag.");
 	});
 
 	it("still writes a real body from commits alone when no changelog bullet exists", () => {

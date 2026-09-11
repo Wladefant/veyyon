@@ -1,0 +1,482 @@
+/**
+ * WHY: Focusing a parked agent attaches its durable transcript and reconstructs
+ * all conversation history, tool calls, and tool execution results. When durable state
+ * is unrevivable (missing file, deleted cwd, corrupted JSONL), focusing must fail cleanly
+ * without corrupting or orphaning the driving session view.
+ *
+ * Closes the class of:
+ * - Transcript component loss on parked agent revival
+ * - Unhandled crashes / orphaned views when revived session directory or file is missing/corrupted
+ * - Spurious auto-unfocus on parked state vs true termination
+ */
+import "./helpers/tool-views-preload";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { Agent } from "@veyyon/agent-core";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
+import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
+import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
+import { AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
+import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { createPersistedAgentReviverFactory } from "@veyyon/coding-agent/task/persisted-revive";
+import { initTheme, setTheme, stopThemeWatcher } from "@veyyon/coding-agent/theme/theme";
+import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { TUI } from "@veyyon/tui";
+import { TempDir } from "@veyyon/utils";
+import { VirtualTerminal } from "../../../hosts/terminal/engine/test/virtual-terminal";
+
+const WIDTH = 120;
+
+describe("focused agent transcript reconstruction", () => {
+	let tempDir: TempDir | undefined;
+	let agentDir: TempDir | undefined;
+	let authStorage: AuthStorage | undefined;
+	let mainSession: AgentSession | undefined;
+	let mode: InteractiveMode | undefined;
+	let terminal: VirtualTerminal | undefined;
+	let eventBus: EventBus | undefined;
+
+	beforeAll(async () => {
+		await initTheme();
+		await setTheme("dark");
+	});
+
+	beforeEach(async () => {
+		resetSettingsForTest();
+		AgentRegistry.resetGlobalForTests();
+		AgentLifecycleManager.resetGlobalForTests();
+		tempDir = TempDir.createSync("@pi-focused-agent-main-");
+		agentDir = TempDir.createSync("@pi-focused-agent-sub-");
+		const dir = tempDir.path();
+		await Settings.init({ inMemory: true, cwd: dir, overrides: { "startup.quiet": true } });
+
+		authStorage = await AuthStorage.create(path.join(dir, "testauth.db"));
+		const modelRegistry = new ModelRegistry(authStorage);
+		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
+
+		mainSession = new AgentSession({
+			agent: new Agent({ initialState: { model, systemPrompt: ["Main"], tools: [], messages: [] } }),
+			sessionManager: SessionManager.create(dir, dir),
+			settings: Settings.isolated({ "startup.quiet": true }),
+			modelRegistry,
+		});
+
+		eventBus = new EventBus();
+		mode = new InteractiveMode(mainSession, "test", undefined, undefined, undefined, eventBus);
+		terminal = new VirtualTerminal(WIDTH, 40);
+		mode.ui = new TUI(terminal);
+		vi.spyOn(mode.statusLine, "watchGitState").mockImplementation(() => {});
+		await mode.init();
+		await terminal.waitForRender();
+	});
+
+	afterEach(async () => {
+		mode?.stop();
+		await mainSession?.dispose();
+		authStorage?.close();
+		tempDir?.removeSync();
+		agentDir?.removeSync();
+		mode = undefined;
+		mainSession = undefined;
+		terminal = undefined;
+		eventBus = undefined;
+		vi.restoreAllMocks();
+		resetSettingsForTest();
+		AgentRegistry.resetGlobalForTests();
+		AgentLifecycleManager.resetGlobalForTests();
+	});
+
+	afterAll(() => {
+		stopThemeWatcher();
+	});
+
+	it("reconstructs assistant tool calls and results when focusing a parked agent with durable session file", async () => {
+		if (!mode || !terminal || !mainSession || !agentDir) throw new Error("not booted");
+
+		// Synthetic durable session: enough history to prove every visible role is rebuilt.
+		const sessionFilePath = path.join(agentDir.path(), "Worker.jsonl");
+		const sessionLines = [
+			JSON.stringify({
+				type: "session",
+				version: 3,
+				id: "focused-transcript-fixture",
+				timestamp: "2026-01-01T00:00:00.000Z",
+				cwd: agentDir.path(),
+			}),
+			JSON.stringify({
+				type: "model_change",
+				id: "model",
+				parentId: null,
+				timestamp: "2026-01-01T00:00:00.001Z",
+				model: "anthropic/claude-sonnet-4-5",
+			}),
+			JSON.stringify({
+				type: "thinking_level_change",
+				id: "thinking",
+				parentId: "model",
+				timestamp: "2026-01-01T00:00:00.002Z",
+				thinkingLevel: "low",
+				configured: null,
+			}),
+			JSON.stringify({
+				type: "session_init",
+				id: "init",
+				parentId: "thinking",
+				timestamp: "2026-01-01T00:00:00.003Z",
+				systemPrompt: "Synthetic agent fixture",
+				tools: ["read"],
+			}),
+			JSON.stringify({
+				type: "message",
+				id: "user",
+				parentId: "init",
+				timestamp: "2026-01-01T00:00:00.004Z",
+				message: {
+					role: "user",
+					content: [{ type: "text", text: "Inspect fixture.ts" }],
+					attribution: "agent",
+					timestamp: 4,
+				},
+			}),
+			JSON.stringify({
+				type: "message",
+				id: "assistant-tool",
+				parentId: "user",
+				timestamp: "2026-01-01T00:00:00.005Z",
+				message: {
+					role: "assistant",
+					content: [
+						{
+							type: "toolCall",
+							id: "call-read",
+							name: "read",
+							arguments: { path: "fixture.ts", i: "Read fixture" },
+						},
+					],
+					api: "anthropic",
+					provider: "anthropic",
+					model: "claude-sonnet-4-5",
+					usage: {
+						input: 1,
+						output: 1,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 2,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+				},
+			}),
+			JSON.stringify({
+				type: "custom",
+				customType: "tool_execution_start",
+				data: {
+					toolCallId: "call-read",
+					toolName: "read",
+					startedAt: "2026-01-01T00:00:00.006Z",
+					args: { path: "fixture.ts" },
+					intent: "Read fixture",
+				},
+				id: "tool-start",
+				parentId: "assistant-tool",
+				timestamp: "2026-01-01T00:00:00.006Z",
+			}),
+			JSON.stringify({
+				type: "message",
+				id: "tool-result",
+				parentId: "tool-start",
+				timestamp: "2026-01-01T00:00:00.007Z",
+				message: {
+					role: "toolResult",
+					toolCallId: "call-read",
+					toolName: "read",
+					content: [{ type: "text", text: "export const fixture = 1;" }],
+					details: { displayContent: { text: "export const fixture = 1;", startLine: 1, lineNumbers: [1] } },
+					isError: false,
+					timestamp: 7,
+				},
+			}),
+			JSON.stringify({
+				type: "message",
+				id: "assistant-final",
+				parentId: "tool-result",
+				timestamp: "2026-01-01T00:00:00.008Z",
+				message: {
+					role: "assistant",
+					content: [{ type: "text", text: "Fixture inspected." }],
+					api: "anthropic",
+					provider: "anthropic",
+					model: "claude-sonnet-4-5",
+					stopReason: "stop",
+					usage: {
+						input: 1,
+						output: 1,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 2,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+				},
+			}),
+		];
+		await fs.writeFile(sessionFilePath, `${sessionLines.join("\n")}\n`, "utf-8");
+
+		// Register the agent as parked with sessionFile in AgentRegistry
+		const registry = AgentRegistry.global();
+		registry.register({
+			id: "Worker",
+			displayName: "Worker",
+			kind: "sub",
+			parentId: MAIN_AGENT_ID,
+			session: null,
+			sessionFile: sessionFilePath,
+			status: "parked",
+		});
+
+		// Install persisted reviver factory like in main.ts
+		const settings = Settings.isolated({ "startup.quiet": true });
+		AgentLifecycleManager.global().setPersistedAgentReviverFactory(
+			createPersistedAgentReviverFactory({
+				session: mainSession,
+				authStorage: authStorage!,
+				modelRegistry: mainSession.modelRegistry,
+				settings,
+				enableLsp: false,
+			}),
+			60_000,
+		);
+
+		// Focus the agent
+		await mode.focusAgentSession("Worker");
+		await terminal.waitForRender();
+
+		// Verify the transcript contains all user, assistant, and tool components
+		const children = mode.chatContainer.children;
+		const userComponents = children.filter(c => c.constructor.name === "UserMessageComponent");
+		const assistantComponents = children.filter(c => c.constructor.name === "AssistantMessageComponent");
+		const toolComponents = children.filter(
+			c => c.constructor.name === "ToolExecutionComponent" || c.constructor.name === "ReadToolGroupComponent",
+		);
+
+		expect(userComponents.length).toBe(1);
+		expect(assistantComponents.length).toBe(2);
+		expect(toolComponents.length).toBe(1);
+
+		// Verify parking the agent does not eject the focused view
+		registry.setStatus("Worker", "parked");
+		for (let i = 0; i < 5; i++) await Promise.resolve();
+		expect(mode.focusedAgentId).toBe("Worker");
+	});
+
+	it("refuses to focus a parked agent whose session file does not exist, keeping main view intact", async () => {
+		if (!mode || !terminal || !mainSession || !agentDir) throw new Error("not booted");
+
+		const missingFilePath = path.join(agentDir.path(), "NonExistent.jsonl");
+		const registry = AgentRegistry.global();
+		registry.register({
+			id: "MissingAgent",
+			displayName: "MissingAgent",
+			kind: "sub",
+			parentId: MAIN_AGENT_ID,
+			session: null,
+			sessionFile: missingFilePath,
+			status: "parked",
+		});
+
+		const settings = Settings.isolated({ "startup.quiet": true });
+		AgentLifecycleManager.global().setPersistedAgentReviverFactory(
+			createPersistedAgentReviverFactory({
+				session: mainSession,
+				authStorage: authStorage!,
+				modelRegistry: mainSession.modelRegistry,
+				settings,
+				enableLsp: false,
+			}),
+			60_000,
+		);
+
+		await expect(mode.focusAgentSession("MissingAgent")).rejects.toThrow();
+		expect(mode.focusedAgentId).toBeUndefined();
+		expect(mode.viewSession).toBe(mainSession);
+	});
+
+	it("refuses to focus a parked agent whose recorded working directory was deleted", async () => {
+		if (!mode || !terminal || !mainSession || !agentDir) throw new Error("not booted");
+
+		const deletedSubDir = path.join(agentDir.path(), "deleted-worktree");
+		await fs.mkdir(deletedSubDir, { recursive: true });
+		const sessionFilePath = path.join(deletedSubDir, "DeletedCwdAgent.jsonl");
+		const sessionLines = [
+			JSON.stringify({
+				type: "session",
+				version: 3,
+				id: "deleted-cwd-fixture",
+				timestamp: "2026-01-01T00:00:00.000Z",
+				cwd: deletedSubDir,
+			}),
+			JSON.stringify({
+				type: "session_init",
+				id: "init",
+				parentId: null,
+				timestamp: "2026-01-01T00:00:00.001Z",
+				systemPrompt: "Synthetic fixture",
+				tools: ["read"],
+			}),
+		];
+		await fs.writeFile(sessionFilePath, `${sessionLines.join("\n")}\n`, "utf-8");
+
+		// Delete the working directory
+		await fs.rm(deletedSubDir, { recursive: true, force: true });
+
+		const registry = AgentRegistry.global();
+		registry.register({
+			id: "DeletedCwdAgent",
+			displayName: "DeletedCwdAgent",
+			kind: "sub",
+			parentId: MAIN_AGENT_ID,
+			session: null,
+			sessionFile: sessionFilePath,
+			status: "parked",
+		});
+
+		const settings = Settings.isolated({ "startup.quiet": true });
+		AgentLifecycleManager.global().setPersistedAgentReviverFactory(
+			createPersistedAgentReviverFactory({
+				session: mainSession,
+				authStorage: authStorage!,
+				modelRegistry: mainSession.modelRegistry,
+				settings,
+				enableLsp: false,
+			}),
+			60_000,
+		);
+
+		await expect(mode.focusAgentSession("DeletedCwdAgent")).rejects.toThrow();
+		expect(mode.focusedAgentId).toBeUndefined();
+		expect(mode.viewSession).toBe(mainSession);
+	});
+
+	it("refuses to focus a parked agent with corrupted or truncated JSONL", async () => {
+		if (!mode || !terminal || !mainSession || !agentDir) throw new Error("not booted");
+
+		const corruptFilePath = path.join(agentDir.path(), "Corrupt.jsonl");
+		// Corrupted file missing session_init contract
+		await fs.writeFile(
+			corruptFilePath,
+			`{"type":"session","version":3,"cwd":"${agentDir.path()}"}\n{"bad_json\n`,
+			"utf-8",
+		);
+
+		const registry = AgentRegistry.global();
+		registry.register({
+			id: "CorruptAgent",
+			displayName: "CorruptAgent",
+			kind: "sub",
+			parentId: MAIN_AGENT_ID,
+			session: null,
+			sessionFile: corruptFilePath,
+			status: "parked",
+		});
+
+		const settings = Settings.isolated({ "startup.quiet": true });
+		AgentLifecycleManager.global().setPersistedAgentReviverFactory(
+			createPersistedAgentReviverFactory({
+				session: mainSession,
+				authStorage: authStorage!,
+				modelRegistry: mainSession.modelRegistry,
+				settings,
+				enableLsp: false,
+			}),
+			60_000,
+		);
+		await expect(mode.focusAgentSession("CorruptAgent")).rejects.toThrow();
+		expect(mode.focusedAgentId).toBeUndefined();
+		expect(mode.viewSession).toBe(mainSession);
+	});
+
+	it("refuses to focus an agent belonging to a different conversation scope on the real interactive mode path", async () => {
+		if (!mode || !terminal || !mainSession || !agentDir) throw new Error("not booted");
+
+		const registry = AgentRegistry.global();
+		const mainScope = mainSession.sessionManager.getSessionId();
+		registry.register({
+			id: MAIN_AGENT_ID,
+			displayName: "Main",
+			kind: "main",
+			session: mainSession,
+			scope: mainScope,
+		});
+
+		// Register an agent belonging to another conversation
+		registry.register({
+			id: "ForeignMain",
+			displayName: "ForeignMain",
+			kind: "main",
+			session: null,
+			scope: "foreign-session-scope",
+		});
+		registry.register({
+			id: "ForeignWorker",
+			displayName: "ForeignWorker",
+			kind: "sub",
+			parentId: "ForeignMain",
+			session: null,
+			sessionFile: path.join(agentDir.path(), "foreign.jsonl"),
+			status: "parked",
+			scope: "foreign-session-scope",
+		});
+
+		await expect(mode.focusAgentSession("ForeignWorker")).rejects.toThrow(/different conversation/);
+		expect(mode.focusedAgentId).toBeUndefined();
+		expect(mode.viewSession).toBe(mainSession);
+	});
+
+	it("auto-unfocuses the real interactive mode to main session when the focused agent is removed from registry", async () => {
+		if (!mode || !terminal || !mainSession || !agentDir) throw new Error("not booted");
+
+		// Create and register a live agent session
+		const agentSession = new AgentSession({
+			agent: new Agent({
+				initialState: {
+					model: mainSession.modelRegistry.find("anthropic", "claude-sonnet-4-5")!,
+					systemPrompt: ["Sub"],
+					tools: [],
+					messages: [],
+				},
+			}),
+			sessionManager: SessionManager.create(agentDir.path(), agentDir.path()),
+			settings: Settings.isolated({ "startup.quiet": true }),
+			modelRegistry: mainSession.modelRegistry,
+		});
+
+		const registry = AgentRegistry.global();
+		registry.register({
+			id: "LiveWorker",
+			displayName: "LiveWorker",
+			kind: "sub",
+			parentId: MAIN_AGENT_ID,
+			session: agentSession,
+			status: "running",
+		});
+
+		await mode.focusAgentSession("LiveWorker");
+		expect(mode.focusedAgentId).toBe("LiveWorker");
+		expect(mode.viewSession).toBe(agentSession);
+
+		// Remove the agent from registry (simulating close budget expiry or hard release)
+		registry.unregister("LiveWorker");
+
+		// Settle registry event and unfocus chain
+		for (let i = 0; i < 5; i++) await Promise.resolve();
+		await terminal.waitForRender();
+
+		expect(mode.focusedAgentId).toBeUndefined();
+		expect(mode.viewSession).toBe(mainSession);
+
+		await agentSession.dispose();
+	});
+});

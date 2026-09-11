@@ -1,11 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Tool as AiTool } from "@veyyon/ai";
 import { toolWireSchema } from "@veyyon/ai/utils/schema";
-import { Settings } from "@veyyon/coding-agent/config/settings";
-import type { SettingPath } from "@veyyon/coding-agent/config/settings-schema";
+import { type SettingPath, Settings } from "@veyyon/coding-agent/config/settings";
 import { loadBundledAgents } from "@veyyon/coding-agent/task/agents";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import { EvalTool, getEvalToolDescription } from "@veyyon/coding-agent/tools/eval";
+import { EvalTool, getEvalToolDescription } from "@veyyon/coding-agent/tools/shell/eval";
 import { makeToolSession } from "../helpers/tool-session";
 
 /**
@@ -63,7 +62,7 @@ describe("eval tool description", () => {
 	});
 
 	it("omits agent() when the session forbids spawning", () => {
-		// Subagents with spawns: undefined (resolved to "") cannot launch tasks.
+		// Agents with spawns: undefined (resolved to "") cannot launch tasks.
 		// The prelude doc must not promise a helper that always throws.
 		const text = getEvalToolDescription({ py: true, js: true, spawns: false });
 		expect(text).not.toContain("agent(prompt");
@@ -171,5 +170,46 @@ describe("eval tool dynamic schema", () => {
 		expect(tool.summary).toBe("Execute Python, JavaScript, or Ruby code in a persistent eval backend");
 		expect(tool.description).toMatch(/ruby/i);
 		expect(tool.description).not.toMatch(/julia/i);
+	});
+});
+
+describe("python workspace mode guidance", () => {
+	it("preserves exact default description byte parity when eval.pyWorkspace is false", () => {
+		const baseline = getEvalToolDescription({ py: true, js: true, spawns: true });
+		const withExplicitFalse = getEvalToolDescription({ py: true, js: true, spawns: true, pyWorkspace: false });
+		expect(withExplicitFalse).toBe(baseline);
+		expect(baseline).not.toContain("<workspace>");
+		expect(baseline).not.toContain("Retain large results in variables");
+
+		const defaultSessionTool = new EvalTool(makeSession({}));
+		const explicitFalseSessionTool = new EvalTool(makeSession({ backends: { "eval.pyWorkspace": false } }));
+		expect(defaultSessionTool.description).toBe(explicitFalseSessionTool.description);
+		expect(defaultSessionTool.description).not.toContain("<workspace>");
+	});
+
+	it("includes workspace guidance when pyWorkspace is true and Python is enabled", () => {
+		const description = getEvalToolDescription({ py: true, js: true, spawns: true, pyWorkspace: true });
+		expect(description).toContain("<workspace>");
+		expect(description).toContain("Use the persistent Python kernel as your working data environment:");
+		expect(description).toContain("Retain large results in variables");
+		expect(description).toContain("Inspect and transform in-kernel");
+		expect(description).toContain("Define reusable helpers");
+		expect(description).toContain("Display only compact conclusions");
+
+		const sessionTool = new EvalTool(makeSession({ backends: { "eval.pyWorkspace": true } }));
+		expect(sessionTool.description).toContain("<workspace>");
+		expect(sessionTool.description).toContain("Retain large results in variables");
+	});
+
+	it("omits workspace guidance when Python is disabled even if pyWorkspace is true", () => {
+		const pyDisabledDirect = getEvalToolDescription({ py: false, js: true, spawns: true, pyWorkspace: true });
+		expect(pyDisabledDirect).not.toContain("<workspace>");
+		expect(pyDisabledDirect).not.toContain("Retain large results in variables");
+
+		const pyDisabledSessionTool = new EvalTool(
+			makeSession({ backends: { "eval.py": false, "eval.pyWorkspace": true } }),
+		);
+		expect(pyDisabledSessionTool.description).not.toContain("<workspace>");
+		expect(pyDisabledSessionTool.description).not.toContain("Retain large results in variables");
 	});
 });

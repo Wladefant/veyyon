@@ -1,10 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
-import { StatusLineComponent } from "@veyyon/coding-agent/modes/components/status-line";
-import { renderSegment } from "@veyyon/coding-agent/modes/components/status-line/segments";
-import type { SegmentContext } from "@veyyon/coding-agent/modes/components/status-line/types";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
+import type { SegmentContext } from "@veyyon/coding-agent/modes/terminal/components/status-line/segments";
+import { renderSegment } from "@veyyon/coding-agent/modes/terminal/components/status-line/segments";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import { StatusLineComponent } from "../src/modes/terminal/components/status-line/component";
+import { StatusPresentationProducer } from "../src/presentation/status-producer";
+import { statusLineSessionParts } from "./helpers/status-line-session";
 import { useFullColor } from "./helpers/theme-assertions";
 
 beforeAll(async () => {
@@ -21,37 +24,25 @@ function makeComponent(
 	reports: unknown,
 	options: { provider?: string; activeIdentity?: { accountId?: string; email?: string; projectId?: string } } = {},
 ): StatusLineComponent {
-	const component = new StatusLineComponent({
-		state: { messages: [], model: { contextWindow: 1000, provider: options.provider } },
-		model: { contextWindow: 1000, provider: options.provider },
-		sessionManager: {
-			getUsageStatistics: () => ({
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				orchestrationInput: 0,
-				orchestrationOutput: 0,
-				orchestrationCacheRead: 0,
-				premiumRequests: 0,
-				cost: 0,
-			}),
-		},
-		fetchUsageReports: async () => reports,
-		modelRegistry: {
-			authStorage: {
-				getOAuthAccountIdentity: (provider: string) =>
-					provider === options.provider ? options.activeIdentity : undefined,
-				// This session stores no credentials: these cases are about usage windows, and the
-				// footline's account segment reads the store to decide whether there is more than one
-				// account to tell apart.
-				listStoredCredentials: () => [],
+	const component = new StatusLineComponent(
+		new StatusPresentationProducer({
+			...statusLineSessionParts({ contextWindow: 1000, contextUsage: undefined }),
+			state: { messages: [], model: { contextWindow: 1000, provider: options.provider } },
+			model: { contextWindow: 1000, provider: options.provider },
+			fetchUsageReports: async () => reports,
+			modelRegistry: {
+				isUsingOAuth: () => false,
+				authStorage: {
+					getOAuthAccountIdentity: (provider: string) =>
+						provider === options.provider ? options.activeIdentity : undefined,
+					// This session stores no credentials: these cases are about usage windows, and the
+					// footline's account segment reads the store to decide whether there is more than one
+					// account to tell apart.
+					listStoredCredentials: () => [],
+				},
 			},
-		},
-		getAsyncJobSnapshot: () => ({ running: [] }),
-		getContextUsage: () => undefined,
-	} as unknown as ConstructorParameters<typeof StatusLineComponent>[0]);
+		} as unknown as AgentSession),
+	);
 	component.updateSettings({
 		preset: "custom",
 		leftSegments: [],
@@ -194,25 +185,15 @@ describe("usage status-line segment", () => {
 				limits: [{ scope: { windowId: "5h", tier: "prolite" }, amount: { usedFraction: 0.8 } }],
 			},
 		];
+		// The model object is MUTATED below rather than replaced, which is how the
+		// session reports a provider switch mid-run: the cache key has to notice.
 		const session = {
+			...statusLineSessionParts({ contextWindow: 1000, contextUsage: undefined }),
 			state: { messages: [], model },
 			model,
-			sessionManager: {
-				getUsageStatistics: () => ({
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 0,
-					orchestrationInput: 0,
-					orchestrationOutput: 0,
-					orchestrationCacheRead: 0,
-					premiumRequests: 0,
-					cost: 0,
-				}),
-			},
 			fetchUsageReports: async () => reports,
 			modelRegistry: {
+				isUsingOAuth: () => false,
 				authStorage: {
 					getOAuthAccountIdentity: (requestedProvider: string) =>
 						requestedProvider === provider && provider === "openai-codex"
@@ -223,10 +204,8 @@ describe("usage status-line segment", () => {
 					listStoredCredentials: () => [],
 				},
 			},
-			getAsyncJobSnapshot: () => ({ running: [] }),
-			getContextUsage: () => undefined,
 		} as unknown as ConstructorParameters<typeof StatusLineComponent>[0];
-		const component = new StatusLineComponent(session);
+		const component = new StatusLineComponent(new StatusPresentationProducer(session as unknown as AgentSession));
 		component.updateSettings({
 			preset: "custom",
 			leftSegments: [],

@@ -144,6 +144,32 @@ const FONT: Readonly<Record<string, string>> = {
 	"▒": "#.#.#/.#.#./#.#.#/.#.#./#.#.#/.#.#./#.#.#",
 	"▓": "##.##/#####/##.##/#####/##.##/#####/##.##",
 
+	// Eighth blocks, vertical and horizontal. These are how a terminal animates
+	// below one cell: a card that grows by an eighth of a row per frame has eight
+	// times the resolution of one that grows by a row, and that is the difference
+	// between motion a viewer sees and motion a viewer is told about. A proof of
+	// sub-cell motion is a proof about WHICH of these glyphs each frame chose, so
+	// the font has to be able to draw all of them.
+	//
+	// A 5x7 cell cannot hold eight distinct fill levels. Each glyph rounds to the
+	// nearest row (or column), so three pairs land on the same bitmap: ▃ with the
+	// existing ▄, ▆ with ▇, and ▏ with ▎, ▍ with ▌, ▊ with ▉ horizontally. The
+	// collision is in the picture only: an assertion about sub-cell motion reads
+	// the glyph out of the bytes, where all eight levels differ.
+	"▁": "...../...../...../...../...../...../#####",
+	"▂": "...../...../...../...../...../#####/#####",
+	"▃": "...../...../...../...../#####/#####/#####",
+	"▅": "...../...../#####/#####/#####/#####/#####",
+	"▆": "...../#####/#####/#####/#####/#####/#####",
+	"▇": "...../#####/#####/#####/#####/#####/#####",
+	"▏": "#..../#..../#..../#..../#..../#..../#....",
+	"▎": "#..../#..../#..../#..../#..../#..../#....",
+	"▍": "##.../##.../##.../##.../##.../##.../##...",
+	"▌": "##.../##.../##.../##.../##.../##.../##...",
+	"▋": "###../###../###../###../###../###../###..",
+	"▊": "####./####./####./####./####./####./####.",
+	"▉": "####./####./####./####./####./####./####.",
+
 	// The handful of symbols veyyon's status lines and lists actually use.
 	"•": "...../...../.###./.###./.###./...../.....",
 	"·": "...../...../...../..#../...../...../.....",
@@ -155,6 +181,10 @@ const FONT: Readonly<Record<string, string>> = {
 	"↓": "..#../..#../..#../#.#.#/.###./..#../.....",
 	// Reply arrow: the Comms stream marks a message that answers another with it.
 	"↩": "....#/....#/..#.#/.#..#/#####/.#.../..#..",
+	// The rewind mark an injected-rule note carries in its headline. The note's whole
+	// claim is "a rule matched and the stream is going back", so a proof of that block
+	// with this drawn as an anonymous box has lost half of what it went to show.
+	"↶": "...../.###./#...#/#...#/#..../##.../.....",
 	"⌕": "...../.###./#...#/#...#/.###./...#./....#",
 	"…": "...../...../...../...../...../#.#.#/.....",
 	"▶": ".#.../.##../.###./.####/.###./.##../.#...",
@@ -204,6 +234,11 @@ const FONT: Readonly<Record<string, string>> = {
 	// settings differential is a picture of ONE row and its group heading, so drawing the heading's
 	// mark as a hollow box makes the shot ambiguous about whether the row is in a group at all.
 	"◆": "..#../.###./#####/#####/.###./..#../.....",
+	// The cache-miss divider's mark. A transcript divider proof is a picture of a short rule and its
+	// label, so the mark IS the subject: rastered as a hollow box it says only that the font is
+	// missing something. A ring struck by one diagonal, and deliberately not `⊗`'s full cross, since
+	// the two mean different things and a proof that confuses them is worse than no proof.
+	"⊘": "...../.###./#..##/#.#.#/##..#/.###./.....",
 };
 
 /**

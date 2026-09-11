@@ -1,4 +1,6 @@
-import assert from "node:assert/strict";
+// One invariant check, thrown by hand rather than through `node:assert/strict`. That module cost
+// 8.6ms of evaluation, measured on compiled binaries against an empty baseline, and this module is
+// on the launch path, so the card waited on an assertion library for a single `if`.
 
 /**
  * The error the abortable helpers in this module reject with.
@@ -22,7 +24,7 @@ import assert from "node:assert/strict";
  */
 export class AbortError extends Error {
 	constructor(signal: AbortSignal) {
-		assert(signal.aborted, "Abort signal must be aborted");
+		if (!signal.aborted) throw new Error("Abort signal must be aborted");
 
 		const { reason } = signal;
 		const message = reason instanceof Error ? reason.message : "Cancelled";
@@ -35,6 +37,25 @@ export class AbortError extends Error {
 		const reasonName = errorName(reason);
 		this.name = reasonName !== undefined && reasonName.length > 0 ? reasonName : "AbortError";
 	}
+}
+
+/**
+ * Mint a cancellation error that {@link isAbortError} recognises.
+ *
+ * THE NAME IS THE CONTRACT, and a bare `new Error("Request was aborted")` breaks it: the sentence
+ * says the work was cancelled and every predicate that asks reads `name`, so such an error is a
+ * cancellation only to a human. `fetchWithRetry` minted three of them, and downstream the auth
+ * gateway classified the result as a server fault rather than a client that closed the request,
+ * while the provider retry ladder could only recognise it by matching the word `aborted` in its
+ * own message — which retried what the caller had just cancelled.
+ *
+ * {@link AbortError} is the class for an aborted SIGNAL, whose reason supplies both the name and
+ * the message. This is for the sites that have a sentence and no signal to read.
+ */
+export function cancellationError(message = "Request was aborted"): Error {
+	const error = new Error(message);
+	error.name = "AbortError";
+	return error;
 }
 
 /** The `name` of a thrown value, for any shape that carries one. */

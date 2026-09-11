@@ -2,10 +2,10 @@
  * Hook runner - executes hooks and manages their lifecycle.
  */
 import type { AgentMessage } from "@veyyon/agent-core";
-import type { Model } from "@veyyon/ai";
+import type { ImageContent, Model } from "@veyyon/ai";
+import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { errorMessage } from "@veyyon/utils";
 import type { ModelRegistry } from "../../config/model-registry";
-import type { SessionManager } from "../../session/session-manager";
 import { createNoOpUIContext } from "../utils";
 import type {
 	AppendEntryHandler,
@@ -307,7 +307,7 @@ export class HookRunner {
 					if (event.type === "tool_result" && handlerResult) {
 						result = handlerResult as ToolResultEventResult;
 					}
-					if (event.type === "session.compacting" && handlerResult) {
+					if (event.type === "session_compacting" && handlerResult) {
 						result = handlerResult as SessionCompactingResult;
 					}
 				} catch (err) {
@@ -397,7 +397,7 @@ export class HookRunner {
 	 */
 	async emitBeforeAgentStart(
 		prompt: string,
-		images?: import("@veyyon/ai").ImageContent[],
+		images?: ImageContent[],
 	): Promise<BeforeAgentStartEventResult | undefined> {
 		const ctx = this.#createContext();
 		let result: BeforeAgentStartEventResult | undefined;

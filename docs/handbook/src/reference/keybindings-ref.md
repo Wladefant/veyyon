@@ -27,7 +27,7 @@ live list after your remaps. For the full guide on customizing, see
 | `alt+r` | Retry the last failed assistant turn (`app.retry`) |
 | `alt+up` | Dequeue a queued message back into the editor (`app.message.dequeue`) |
 | `alt+shift+p` | Toggle plan mode (`app.plan.toggle`) |
-| `alt+a` | Open the Agent Control Center (`app.agents.hub`) |
+| `alt+a` | Open the agent dashboard (`app.agents.hub`) |
 | `ctrl+r` | Search prompt history (`app.history.search`) |
 | `alt+shift+l` | Copy the current line (`app.clipboard.copyLine`) |
 | `alt+shift+c` | Copy the whole prompt (`app.clipboard.copyPrompt`) |
@@ -48,6 +48,10 @@ Unbound by default, remappable: `app.session.new`, `app.session.tree`, `app.sess
 | `enter` | Submit the current message (`tui.input.submit`) |
 | `shift+enter` or `ctrl+j` | Insert a new line (`tui.input.newLine`) |
 | `tab` | Autocomplete (`tui.input.tab`) |
+
+With file completion open, `enter` accepts a matching suggestion without submitting.
+If an edit invalidates the suggestion prefix, `enter` dismisses the popup and submits
+the current message; `tab` dismisses it without submitting.
 
 The composer does not copy. Use `alt+shift+l` to copy the current line and
 `alt+shift+c` to copy the whole prompt, both listed under Clipboard above.
@@ -107,4 +111,4 @@ flat legacy names and `keybindings.json` files migrate automatically to the name
 load. Run **`/hotkeys`** in a session to see active chords.
 
 Full action-ID list and status-line gestures: [Keybindings and Vim mode](../features/keybindings.md)
-and repository [`docs/keybindings.md`](../../../keybindings.md).
+and repository [`docs/handbook/src/reference/keybindings-config.md`](keybindings-config.md).

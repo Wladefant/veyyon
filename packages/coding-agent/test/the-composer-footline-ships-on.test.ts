@@ -31,7 +31,7 @@
  *     the working-message accent, which have nothing to do with this row.
  *
  * The composer path is the harness on purpose. The gate lives at the one caller that decides
- * whether the row exists (`#composerFootline` in `modes/interactive-mode.ts`), not inside the
+ * whether the row exists (`#composerFootline` in `modes/terminal/interactive-mode.ts`), not inside the
  * status-line component, so a test that drove the component directly would prove nothing about
  * what the operator's composer does.
  *
@@ -47,16 +47,16 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:
 import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { Agent } from "@veyyon/agent-core";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { SETTINGS_SCHEMA } from "@veyyon/coding-agent/config/settings-schema";
-import { SettingsSelectorComponent } from "@veyyon/coding-agent/modes/components/settings-selector";
-import { InteractiveMode } from "@veyyon/coding-agent/modes/interactive-mode";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
+import { SettingsSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-selector";
+import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { stubStdoutGeometry } from "./helpers/stdout-geometry";
 
@@ -99,8 +99,8 @@ describe("the composer footline ships on", () => {
 		mode = new InteractiveMode(session, "test", () => {}, [], undefined, new EventBus());
 		// A real fs.watch on the repo HEAD from a parallel Bun worker is enough to trip a SIGTRAP
 		// in unrelated workers; this contract is the footline gate, not branch watching.
-		vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
-		await mode.init({ suppressWelcomeIntro: true });
+		vi.spyOn(mode.statusLine, "watchGitState").mockImplementation(() => {});
+		await mode.init();
 	});
 
 	afterEach(async () => {

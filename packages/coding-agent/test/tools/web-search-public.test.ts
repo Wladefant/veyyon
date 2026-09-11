@@ -1,14 +1,18 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import type { AuthStorage, FetchImpl } from "@veyyon/ai";
-import { setExcludedSearchProviders } from "@veyyon/coding-agent/web/search/provider";
-import type { SearchParams } from "@veyyon/coding-agent/web/search/providers/base";
+import { setExcludedSearchProviders } from "@veyyon/coding-agent/tools/web/search/provider";
+import type { SearchParams } from "@veyyon/coding-agent/tools/web/search/providers/base";
 import {
 	dedupKey,
 	type MergedSource,
 	mergeSources,
 	searchPublicWeb,
-} from "@veyyon/coding-agent/web/search/providers/public";
-import { SearchProviderError, type SearchProviderId, type SearchSource } from "@veyyon/coding-agent/web/search/types";
+} from "@veyyon/coding-agent/tools/web/search/providers/public";
+import {
+	SearchProviderError,
+	type SearchProviderId,
+	type SearchSource,
+} from "@veyyon/coding-agent/tools/web/search/types";
 
 const fakeAuthStorage = {
 	async getApiKey() {
@@ -23,7 +27,7 @@ const fakeAuthStorage = {
 } as unknown as AuthStorage;
 
 /** Restrict the fan-out to the two engines these tests provide fixtures for. */
-const NON_TEST_ENGINES: readonly SearchProviderId[] = ["ecosia", "startpage", "mojeek"];
+const NON_TEST_ENGINES: readonly SearchProviderId[] = ["startpage", "mojeek"];
 
 function makeParams(query: string, fetch: FetchImpl): SearchParams {
 	return {
@@ -153,22 +157,84 @@ describe("Public Web aggregate provider", () => {
 		expect(response.sources).toEqual([{ title: "Alpha", url: "https://a.example/one", snippet: "alpha snippet" }]);
 	});
 
-	it("returns whatever it has at the hard deadline even with zero successes", async () => {
+	/**
+	 * WHY: an engine that answers HTTP 200 with zero parsed results was counted as
+	 * having answered, so it satisfied the soft deadline on its own and the
+	 * aggregate returned nothing while a slower engine was about to deliver. Live,
+	 * Startpage began serving a proof-of-work interstitial at 200 and parsed to
+	 * zero results in ~380ms, which took the whole tool down to "Public Web
+	 * returned no renderable search content" even though Mojeek answered with ten
+	 * sources at ~1.8s.
+	 *
+	 * WHAT CLASS THIS CLOSES: an empty answer standing in for an answer, in both
+	 * places the fan-out decides it has waited long enough — the soft-deadline
+	 * extension and the `firstSuccess` latch that ends the extended wait.
+	 *
+	 * WHAT IT DOES NOT CATCH: an engine that returns plausible but wrong results,
+	 * and the hard-deadline cap, which the case above owns.
+	 */
+	it("does not let a fast empty answer end the wait for an engine that has results", async () => {
+		setExcludedSearchProviders(NON_TEST_ENGINES);
+		const fetchMock: FetchImpl = async input => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("google.com")) {
+				// Answers at once, parses to nothing: a bot wall served as 200.
+				return new Response('<html><body><div class="MjjYud"></div></body></html>', { status: 200 });
+			}
+			await Bun.sleep(60);
+			return new Response(ddgResult("https://a.example/one", "Alpha", "alpha snippet"), { status: 200 });
+		};
+
+		const response = await searchPublicWeb(makeParams("empty fast engine", fetchMock), { softMs: 10, hardMs: 400 });
+
+		expect(response.sources).toEqual([{ title: "Alpha", url: "https://a.example/one", snippet: "alpha snippet" }]);
+	});
+
+	it("ends the extended wait on the first engine with results, not the first to reply", async () => {
+		setExcludedSearchProviders(NON_TEST_ENGINES);
+		const fetchMock: FetchImpl = async input => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url.includes("google.com")) {
+				await Bun.sleep(30);
+				return new Response('<html><body><div class="MjjYud"></div></body></html>', { status: 200 });
+			}
+			await Bun.sleep(60);
+			return new Response(ddgResult("https://a.example/one", "Alpha", "alpha snippet"), { status: 200 });
+		};
+
+		// A generous hard cap: if the latch fires on the empty reply at ~30ms the
+		// call returns empty long before it, so the assertion is on content, and
+		// the elapsed bound proves the wait ended at the result rather than at the cap.
+		const started = Date.now();
+		const response = await searchPublicWeb(makeParams("latch on results", fetchMock), { softMs: 10, hardMs: 5_000 });
+
+		expect(response.sources).toEqual([{ title: "Alpha", url: "https://a.example/one", snippet: "alpha snippet" }]);
+		expect(Date.now() - started).toBeLessThan(2_000);
+	});
+
+	it("says the deadline ran out, rather than reporting an empty web, when an engine never answers", async () => {
+		// duckduckgo serves a bot wall that parses to zero results; google never settles and ignores
+		// abort, so only the hard cap ends the wait. Returning empty sources here reported the
+		// deadline as a fact about the web, and the tool then told the model "no renderable search
+		// content" — a claim about the internet, made because one engine was slow and another was
+		// walled. The bound is still the contract; what changed is that the aggregate says why.
 		setExcludedSearchProviders(NON_TEST_ENGINES);
 		const fetchMock: FetchImpl = input => {
 			const url = typeof input === "string" ? input : input.toString();
 			if (url.includes("duckduckgo.com")) {
 				return Promise.resolve(new Response(DDG_CHALLENGE, { status: 200 }));
 			}
-			// google: never settles and ignores abort — only the hard cap can end the wait.
 			const { promise } = Promise.withResolvers<Response>();
 			return promise;
 		};
 
-		const response = await searchPublicWeb(makeParams("hard cap", fetchMock), { softMs: 10, hardMs: 40 });
+		const started = Date.now();
+		const search = searchPublicWeb(makeParams("hard cap", fetchMock), { softMs: 10, hardMs: 40 });
 
-		expect(response.provider).toBe("public");
-		expect(response.sources).toEqual([]);
+		await expect(search).rejects.toThrow(/did not answer/);
+		await expect(search).rejects.toThrow(/google/);
+		// The whole point of the hard cap: it still ends, and it ends on time.
+		expect(Date.now() - started).toBeLessThan(2_000);
 	});
 
 	/**

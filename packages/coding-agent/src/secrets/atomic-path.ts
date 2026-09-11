@@ -27,21 +27,21 @@ function atomicFailure(operation: string, error: number): Error {
 /**
  * Read `errno` from the pointer libc hands back, refusing rather than guessing when there is none.
  *
- * `__errno_location` and `__error` are typed `Pointer | null`, and the null case cannot be papered
- * over with a cast or a `?? 0`. This number is not just a message: {@link publishWithoutReplacing}
- * compares it against `EEXIST` to tell "the destination already existed", which is the SAFE outcome
- * this module exists to produce, from a genuine failure. A fabricated `0` reads as neither, so the
- * caller would throw "failed with operating-system error 0" over a race it was supposed to handle.
- * A null location means the libc handle is unusable and the failure cannot be classified at all, so
- * that is what gets reported (Law 10: no silent fallback).
+ * `__errno_location` and `__error` return Bun FFI pointer values (`Pointer | bigint | null`).
+ * The null case cannot be papered over with a cast or a `?? 0`. This value is not just a message:
+ * {@link publishWithoutReplacing} compares it against `EEXIST` to tell "the destination already existed",
+ * which is the SAFE outcome this module exists to produce, from a genuine failure. A fabricated `0`
+ * reads as neither, so the caller would throw "failed with operating-system error 0" over a race it
+ * was supposed to handle. A null location means the libc handle is unusable and the failure cannot
+ * be classified at all, so that is what gets reported (Law 10: no silent fallback).
  */
-function readErrno(location: Pointer | null, symbol: string): number {
+function readErrno(location: Pointer | bigint | null, symbol: string): number {
 	if (location === null) {
 		throw new Error(
 			`Secure atomic path publication could not read errno: ${symbol}() returned no location, so the failure cannot be classified.`,
 		);
 	}
-	return read.i32(location);
+	return read.i32(location as Pointer);
 }
 
 function cString(value: string): Buffer {
@@ -185,6 +185,30 @@ export interface AtomicReplacement {
 	rollback(): void;
 }
 
+type PosixExchange = (from: string, to: string, flags: number) => AtomicCallResult;
+
+/** Exchange `stagedPath` and `destinationPath` through a POSIX rename flag, with the same exchange as rollback. */
+function exchangeWithRollback(
+	exchange: PosixExchange,
+	stagedPath: string,
+	destinationPath: string,
+	flags: number,
+): AtomicReplacement {
+	const replacement = exchange(stagedPath, destinationPath, flags);
+	if (!replacement.ok) {
+		throw atomicFailure("The atomic vault exchange", replacement.error);
+	}
+	return {
+		displacedPath: stagedPath,
+		rollback(): void {
+			const rollback = exchange(stagedPath, destinationPath, flags);
+			if (!rollback.ok) {
+				throw atomicFailure("The atomic vault exchange rollback", rollback.error);
+			}
+		},
+	};
+}
+
 /** Replace an existing destination atomically while retaining an atomic rollback path. */
 export function replaceWithRollback(
 	stagedPath: string,
@@ -192,34 +216,10 @@ export function replaceWithRollback(
 	windowsBackupPath: string,
 ): AtomicReplacement {
 	if (linuxRename !== undefined) {
-		const replacement = linuxRename(stagedPath, destinationPath, RENAME_EXCHANGE);
-		if (!replacement.ok) {
-			throw atomicFailure("The atomic vault exchange", replacement.error);
-		}
-		return {
-			displacedPath: stagedPath,
-			rollback(): void {
-				const rollback = linuxRename(stagedPath, destinationPath, RENAME_EXCHANGE);
-				if (!rollback.ok) {
-					throw atomicFailure("The atomic vault exchange rollback", rollback.error);
-				}
-			},
-		};
+		return exchangeWithRollback(linuxRename, stagedPath, destinationPath, RENAME_EXCHANGE);
 	}
 	if (darwinRename !== undefined) {
-		const replacement = darwinRename(stagedPath, destinationPath, RENAME_SWAP);
-		if (!replacement.ok) {
-			throw atomicFailure("The atomic vault exchange", replacement.error);
-		}
-		return {
-			displacedPath: stagedPath,
-			rollback(): void {
-				const rollback = darwinRename(stagedPath, destinationPath, RENAME_SWAP);
-				if (!rollback.ok) {
-					throw atomicFailure("The atomic vault exchange rollback", rollback.error);
-				}
-			},
-		};
+		return exchangeWithRollback(darwinRename, stagedPath, destinationPath, RENAME_SWAP);
 	}
 	if (windowsPaths !== undefined) {
 		const replacement = windowsPaths.replace(destinationPath, stagedPath, windowsBackupPath);

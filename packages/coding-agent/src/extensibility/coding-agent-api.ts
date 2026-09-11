@@ -8,7 +8,7 @@
  * library exports, loaded on every launch: `src/index.ts` re-exports `./modes`, whose barrel re-exports
  * `interactive-mode`, which pulls the entire `modes/components` subtree. A `veyyon -p "hi"` run with no
  * extensions installed loaded the settings overlay, the plugin-settings panel and the interactive mode it
- * would never construct, and `main.ts`'s deliberate `import("./modes/interactive-mode")` -- written so
+ * would never construct, and `main.ts`'s deliberate `import("./modes/terminal/interactive-mode")` -- written so
  * print, rpc and acp runs "never pay for it at all" -- bought nothing, because the barrel had already
  * pulled the same subtree in behind its back.
  *
@@ -24,9 +24,10 @@
  */
 
 import { once } from "@veyyon/utils";
+import type * as PiIndex from "../index";
 
 /** The package's public surface, as an extension author sees it through `api.pi`. */
-export type CodingAgentApi = typeof import("../index");
+export type CodingAgentApi = typeof PiIndex;
 
 /**
  * The package namespace, imported on first use and reused afterwards.

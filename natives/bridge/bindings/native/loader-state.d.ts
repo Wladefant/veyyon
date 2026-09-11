@@ -1,0 +1,339 @@
+export interface EmbeddedAddonFile {
+	variant: "modern" | "baseline" | "default";
+	filename: string;
+	size?: number;
+	filePath?: string;
+	/** The archive carrying this variant. One per variant, so extracting one inflates only it. */
+	archive?: EmbeddedAddonArchive;
+}
+
+export interface EmbeddedAddonArchive {
+	format: "tar.gz";
+	filename: string;
+	filePath: string;
+}
+
+export interface EmbeddedAddon {
+	platformTag: string;
+	version: string;
+	files: EmbeddedAddonFile[];
+	archive?: EmbeddedAddonArchive;
+}
+
+export interface DetectCompiledBinaryInput {
+	embeddedAddon: EmbeddedAddon | null | undefined;
+	env: Record<string, string | undefined>;
+	importMetaUrl: string | null | undefined;
+}
+
+export function detectCompiledBinary(input: DetectCompiledBinaryInput): boolean;
+
+export interface GetAddonFilenamesInput {
+	tag: string;
+	arch: string;
+	variant: "modern" | "baseline" | null | undefined;
+}
+
+export function getAddonFilenames(input: GetAddonFilenamesInput): string[];
+
+export interface ShouldStageNodeModulesAddonInput {
+	platform: NodeJS.Platform | string;
+	isCompiledBinary: boolean;
+	nativeDir: string;
+}
+
+export function shouldStageNodeModulesAddon(input: ShouldStageNodeModulesAddonInput): boolean;
+
+export interface ResolveLoaderCandidatesInput {
+	addonFilenames: string[];
+	isCompiledBinary: boolean;
+	stageFromNodeModules?: boolean;
+	nativeDir: string;
+	leafPackageDir?: string | null;
+	execDir: string;
+	versionedDir: string;
+	userDataDir: string;
+}
+
+export function resolveLoaderCandidates(input: ResolveLoaderCandidatesInput): string[];
+
+/** The per-version native cache dir (`<natives root>/<version>/`); the single owner of that path shape. */
+export function versionedNativeCacheDir(version: string): string;
+
+/** The natives cache root, `<data home>/veyyon/natives`. */
+export function nativesRootDir(): string;
+
+/** Loader context fields {@link buildHelpMessage} reads to compose the load-failure remediation. */
+export interface BuildHelpMessageInput {
+	isCompiledBinary: boolean;
+	addonFilenames: string[];
+	versionedDir: string;
+}
+
+/** The operator-facing "how to fix a failed native load" paragraph, branched on compiled vs source install. */
+export function buildHelpMessage(input: BuildHelpMessageInput): string;
+
+export interface CleanupStaleNativeVersionsInput {
+	nativesDir: string;
+	currentVersion: string;
+}
+
+/**
+ * Remove every per-version native cache except the current one. Never throws;
+ * a directory that could not be removed comes back in `failed`.
+ */
+export function cleanupStaleNativeVersions(input: CleanupStaleNativeVersionsInput): {
+	removed: string[];
+	failed: { dir: string; reason: string }[];
+};
+
+/** Every per-version cache under the root that is not the current version. The single owner of "which directory is dead". */
+export function staleNativeVersionDirs(input: CleanupStaleNativeVersionsInput): string[];
+
+/** The same prune with the unlink work off the calling thread. Never rejects; failures come back in `failed`. */
+export function reclaimStaleNativeVersions(input: CleanupStaleNativeVersionsInput): Promise<NativeCachePruneReport>;
+
+/** What a prune did: the caches it reclaimed, and the ones it could not, with the reason. */
+export interface NativeCachePruneReport {
+	removed: string[];
+	failed: { dir: string; reason: string }[];
+}
+
+export interface ScheduleStaleNativeCleanupInput extends CleanupStaleNativeVersionsInput {
+	schedule?: (callback: () => void, delayMs: number) => unknown;
+	reclaim?: (input: CleanupStaleNativeVersionsInput) => Promise<NativeCachePruneReport>;
+	report?: (message: string) => void;
+}
+
+/**
+ * Hand the prune to the event loop and return at once, so a launch never waits on
+ * deleting a dead cache. The handle is unref'd when it carries `unref`; `settled`
+ * resolves once the prune has run and reported.
+ */
+export function scheduleStaleNativeCleanup(input: ScheduleStaleNativeCleanupInput): {
+	handle: unknown;
+	settled: Promise<NativeCachePruneReport>;
+};
+
+export interface ExtractEmbeddedAddonArchiveInput {
+	archivePath: string;
+	files: EmbeddedAddonFile[];
+	targetDir: string;
+}
+
+export function extractEmbeddedAddonArchive(input: ExtractEmbeddedAddonArchiveInput): string[];
+
+export interface PlanEmbeddedAddonExtractionInput {
+	files: EmbeddedAddonFile[];
+	arch: string;
+	selectedVariant: "modern" | "baseline";
+}
+
+export interface EmbeddedAddonExtractionPlan {
+	/** The single variant this host loads, or null when no variant is usable on `arch`. */
+	selected: EmbeddedAddonFile | null;
+	/** Every other variant. Written only when `selected` is present but fails to load. */
+	remaining: EmbeddedAddonFile[];
+}
+
+/**
+ * Split embedded variants into the one a host loads and the ones it does not, so a
+ * cold launch writes one addon rather than all of them. `selected` and `remaining`
+ * always partition `files`.
+ */
+export function planEmbeddedAddonExtraction(input: PlanEmbeddedAddonExtractionInput): EmbeddedAddonExtractionPlan;
+
+export interface EmbeddedAddonBundle {
+	platformTag: string;
+	version: string;
+	files: EmbeddedAddonFile[];
+}
+
+/** The loader-context fields the embedded-addon extractors read. */
+export interface EmbeddedAddonExtractionContext {
+	isCompiledBinary: boolean;
+	platformTag: string;
+	packageVersion: string;
+	selectedVariant: "modern" | "baseline";
+	versionedDir: string;
+}
+
+/**
+ * Write the one embedded variant this host loads into `ctx.versionedDir` and return
+ * its path, or null when there is nothing to extract. `bundle` defaults to the
+ * generated embedded addon, which is null outside a compiled binary.
+ */
+export function maybeExtractEmbeddedAddon(
+	ctx: EmbeddedAddonExtractionContext,
+	errors: string[],
+	bundle?: EmbeddedAddonBundle | null,
+): string | null;
+
+/**
+ * Write the variants {@link maybeExtractEmbeddedAddon} skipped, for a retry after the
+ * selected one failed to load. Returns the newly written paths.
+ */
+export function extractRemainingEmbeddedAddons(
+	ctx: EmbeddedAddonExtractionContext,
+	errors: string[],
+	bundle?: EmbeddedAddonBundle | null,
+): string[];
+
+/** Tri-state AVX2 detection: the probe ran and found it, ran and didn't, or could not run. */
+export type Avx2Support = "supported" | "unsupported" | "unknown";
+
+/** Injectable probes for {@link classifyAvx2Support} so every platform branch is testable without the real host. */
+export interface Avx2Probes {
+	platform: NodeJS.Platform;
+	arch: string;
+	readCpuInfo: () => string | null;
+	runCommand: (command: string, args: string[]) => string | null;
+	/** Ground-truth fallback: trial-load the modern addon in a child process. Win32 only. */
+	trialLoad?: () => Avx2Support;
+}
+
+/** Pure, side-effect-free AVX2 classification from injected probes (the runtime twin of scripts/host-detect's classifier). */
+export function classifyAvx2Support(probes: Avx2Probes): Avx2Support;
+
+export interface HostCpuDescriptor {
+	model?: string;
+}
+
+/** Stable CPU-model identity used to reject a persisted verdict after hardware changes. */
+export function hostCpuIdentity(cpus?: HostCpuDescriptor[]): string | null;
+
+/** Parse a versioned, hardware-keyed host-variant.json body, or null when stale, foreign, or corrupt. */
+export function parseHostVariantVerdict(
+	text: string | undefined | null,
+	host: { platform: NodeJS.Platform; arch: string; cpuIdentity: string | null },
+): Avx2Support | null;
+
+/** Persist a genuine hardware-keyed verdict; best-effort, never throws. */
+export function writeHostVariantVerdict(
+	nativesDir: string,
+	verdict: "supported" | "unsupported",
+	host: { platform: NodeJS.Platform; arch: string; cpuIdentity: string | null },
+): void;
+
+/** Classify a modern-addon child trial; only an illegal-instruction exit proves unsupported. */
+export function classifyTrialLoadResult(result: {
+	stdout?: unknown;
+	status?: number | null;
+	signal?: string | null;
+	error?: unknown;
+}): Avx2Support;
+
+export interface SelectCpuVariantInput {
+	arch: string;
+	override: "modern" | "baseline" | null | undefined;
+	env: Record<string, string | undefined>;
+	detectAvx2: () => Avx2Support;
+}
+
+export interface SelectCpuVariantResult {
+	variant: "modern" | "baseline" | null;
+	source: "non-x64" | "override" | "cache" | "detect" | "detect-unknown";
+	cacheEnvKey?: string;
+	cacheEnvValue?: string;
+	/** True only when detection could not run (`detect-unknown`): baseline was chosen for ABI safety but the verdict is a guess and is NOT cached. */
+	detectionFailed?: boolean;
+}
+
+export function selectCpuVariant(input: SelectCpuVariantInput): SelectCpuVariantResult;
+
+/** Accept / warn / throw decision for a loaded native addon, keyed on its version sentinel. */
+export type LoadedBindingsDecision =
+	| { action: "accept" }
+	| { action: "warn"; builtVersion: string; message: string }
+	| { action: "throw"; builtVersion: string; message: string };
+
+/** Pure, side-effect-free version-sentinel gate for a loaded addon (the runtime load-failure decision). */
+export function evaluateLoadedBindings(
+	ctx: { versionSentinelExport: string; isWorkspaceLoad: boolean; packageVersion: string },
+	bindings: Record<string, unknown>,
+	candidate: string,
+): LoadedBindingsDecision;
+
+export function loadNative(): Record<string, unknown>;
+
+/** The exported symbol name the Rust addon emits for a version, mapping `x.y.z` -> `__veyyonNativesVx_y_z`. */
+export function versionSentinelExportFor(version: string): string;
+
+/** The version a loaded addon was built for, read back from its sentinel export, or `"unknown"`. */
+export function detectBuiltNativeVersion(bindings: Record<string, unknown>): string;
+
+/** Every `__veyyonNativesV<major>_<minor>_<patch>` sentinel physically present in a built `.node`'s bytes, deduplicated. */
+export function nativeSentinelsInBuffer(buffer: Uint8Array): string[];
+
+export interface StaleAddon {
+	filename: string;
+	expected: string;
+	builtFor: string[];
+}
+
+/** The first variant whose bytes do not carry `__veyyonNativesV<version>`, or `null` when every variant is fresh. The ship-path (embed-native.ts) fails closed on a non-null result. */
+export function findStaleAddon(addons: Array<{ filename: string; bytes: Uint8Array }>, version: string): StaleAddon | null;
+
+/** The loud, actionable build-time refusal message for a stale variant found by `findStaleAddon`. */
+export function staleAddonMessage(stale: StaleAddon, version: string): string;
+
+/** `owner/repo` for a package.json `repository.url`; fails closed to `santhreal/veyyon` when missing or unparseable. */
+export function repoSlugFromRepositoryUrl(raw: string | null | undefined): string;
+
+/**
+ * Whether a candidate failed because it is not there, because the host
+ * environment cannot load it, or because it is broken.
+ *
+ * `absent` is an ordinary probe result and the loop moves on quietly;
+ * `incompatible` means the file exists but the host's C library is too old
+ * (GLIBC/GLIBCXX version mismatch), which is an environment limitation, not
+ * a stale rebuild — the warning is suppressed; `broken` means a file exists
+ * where the addon should be and cannot be loaded for any other reason, which
+ * is announced. The three used to be indistinguishable, which is how a
+ * corrupt binary read as "not installed".
+ */
+export function classifyCandidateFailure(error: unknown): "absent" | "incompatible" | "broken";
+
+/** The warning printed when a present addon is skipped, kept beside the classification. */
+export function brokenAddonSkippedMessage(skipped: { candidate: string; reason: string }): string;
+
+/**
+ * Load the first candidate that both loads AND validates, or report why none did.
+ *
+ * `validate` runs OUTSIDE the try on purpose: it is what refuses an addon built
+ * for another release, and its throw must reach the caller instead of becoming
+ * "try the next path".
+ */
+export function loadFirstUsableAddon(input: {
+	candidates: string[];
+	requireAddon: (candidate: string) => Record<string, unknown>;
+	validate: (bindings: Record<string, unknown>, candidate: string) => void;
+	onBrokenAddon?: (skipped: { candidate: string; reason: string }) => void;
+	initialErrors?: string[];
+}): { bindings?: Record<string, unknown>; candidate?: string; errors: string[] };
+
+/**
+ * The `code` stamped on every failure that means this process has no usable
+ * native addon: no `.node` on any candidate path, a GLIBC too old for the one
+ * that shipped, or a copy built for another release.
+ */
+export const NATIVE_ADDON_UNAVAILABLE_CODE: "VEYYON_NATIVE_ADDON_UNAVAILABLE";
+
+/** Stamp {@link NATIVE_ADDON_UNAVAILABLE_CODE} on a load failure and return the same error. */
+export function markNativeAddonUnavailable(error: unknown): unknown;
+
+/**
+ * True when the native addon could not be loaded at all, so a result derived
+ * from a native call carries no information and must never be reported as a
+ * finding.
+ */
+export function isNativeAddonUnavailable(error: unknown): boolean;
+
+/** The loaded bindings, loading them on first call and once only. */
+export function native(trigger?: string): Record<string, unknown>;
+
+/** A function export that resolves its native binding on FIRST CALL, so importing for types alone loads no addon. */
+export function lazyNativeFn(name: string): (...args: unknown[]) => unknown;
+
+/** A class export that resolves its native binding on first construct or property access. */
+export function lazyNativeClass(name: string): new (...args: unknown[]) => unknown;

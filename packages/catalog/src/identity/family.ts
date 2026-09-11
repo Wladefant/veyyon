@@ -192,6 +192,19 @@ export const supportsOpenAIPromptCacheBreakpoints = memo((modelId: string): bool
 export const supportsAllTurnsReasoningContext = isOpenAIWireGen54Plus;
 
 /**
+ * Whether an id states an OpenAI wire generation at all.
+ *
+ * Every version floor above answers false for two different situations: a model
+ * below the floor, and a model whose id carries no version to read. A codename
+ * (`gpt-daybreak-blue-latest`, `codex-auto-review`) is the second, and a caller
+ * that has other evidence about such a model — a catalog transport flag, say —
+ * needs to tell the two apart before it trusts a floor's refusal.
+ */
+export const statesOpenAIWireGeneration = memo((modelId: string): boolean => {
+	return parseOpenAIModel(bareModelId(modelId)) !== null;
+});
+
+/**
  * OpenAI Codex models that accept `reasoning.summary`. Shares the gpt-5.4 wire
  * floor with {@link supportsAllTurnsReasoningContext}: earlier Codex ids
  * (`gpt-5.1-codex`, `gpt-5.3-codex`, `gpt-5.3-codex-spark`) reject the field
@@ -273,6 +286,19 @@ export const modelFamilyToken = memo((modelId: string): string => {
 export const supportsAdaptiveThinkingDisplay = memo((modelId: string): boolean => {
 	const parsed = parseAnthropicModel(bareModelId(modelId));
 	return parsed !== null && isAnthropicAdaptiveGenAtLeast(parsed, "4.7");
+});
+
+/**
+ * The API verifies each thinking block's signature against the bytes that
+ * preceded it — system prompt, tool set, and every earlier message — and
+ * rejects a block whose prefix the client rewrote. Enforced from Claude Fable
+ * 5.1; every later Anthropic generation inherits it, so the floor is a version
+ * compare rather than a fixed id list.
+ * @see https://platform.claude.com/docs/en/build-with-claude/preserved-thinking
+ */
+export const enforcesThinkingPrefixBinding = memo((modelId: string): boolean => {
+	const parsed = parseAnthropicModel(bareModelId(modelId));
+	return parsed !== null && semverGte(parsed.version, "5.1");
 });
 
 /**

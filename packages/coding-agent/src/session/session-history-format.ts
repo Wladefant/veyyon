@@ -10,18 +10,17 @@ import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, ImageContent, TextContent, ToolResultMessage } from "@veyyon/ai";
 // Owners, not the `@veyyon/utils` barrel: 3 modules against 74.
 import { collapseWhitespace } from "@veyyon/utils/collapse-whitespace";
+import { contentText } from "@veyyon/utils/content-text";
 import { formatCount, truncate } from "@veyyon/utils/format";
 import { escapeXmlText } from "@veyyon/utils/sanitize-text";
 import { INTENT_FIELD } from "@veyyon/wire";
-import { contentText } from "./content-text";
+import type { BashExecutionMessage, PythonExecutionMessage } from "../tools/shell/execution-messages";
 import type {
-	BashExecutionMessage,
 	BranchSummaryMessage,
 	CompactionSummaryMessage,
 	CustomMessage,
 	FileMentionMessage,
 	HookMessage,
-	PythonExecutionMessage,
 } from "./messages";
 
 export interface HistoryFormatOptions {
@@ -109,20 +108,13 @@ function primaryArg(name: string, args: Record<string, unknown> | undefined): st
 		if (note) return oneLine(note);
 		if (severity) return oneLine(severity);
 	}
-	if (name === "grep") {
-		const pattern = primaryArgValue(args.pattern);
-		const paths = primaryArgValue(args.path) || primaryArgValue(args.paths);
-		if (pattern && paths) return oneLine(`${pattern} @ ${paths}`);
-		if (pattern) return oneLine(pattern);
-		if (paths) return oneLine(paths);
-	}
-	if (name === "glob") {
-		const paths = primaryArgValue(args.path) || primaryArgValue(args.paths);
-		if (paths) return oneLine(paths);
-	}
-	if (name === "ast_grep") {
-		const pattern = primaryArgValue(args.pat);
-		if (pattern) return oneLine(pattern);
+	if (name === "search") {
+		const type = primaryArgValue(args.type);
+		const input = primaryArgValue(args.input);
+		const path = primaryArgValue(args.path);
+		if (type && input && path) return oneLine(`${type}: ${input} @ ${path}`);
+		if (type && input) return oneLine(`${type}: ${input}`);
+		if (input) return oneLine(input);
 	}
 	for (const key of PRIMARY_ARG_KEYS) {
 		const value = args[key];
@@ -327,13 +319,18 @@ export function formatSessionHistoryMarkdown(messages: unknown[], opts?: History
 				if (opts?.watchedRoles) {
 					const label = "**agent**:";
 					if (lastWatchedLabel === label) {
-						lines.push(...body, "");
+						for (let bi = 0; bi < body.length; bi++) lines.push(body[bi]!);
+						lines.push("");
 					} else {
-						lines.push(label, ...body, "");
+						lines.push(label);
+						for (let bi = 0; bi < body.length; bi++) lines.push(body[bi]!);
+						lines.push("");
 						lastWatchedLabel = label;
 					}
 				} else {
-					lines.push("## assistant", "", ...body, "");
+					lines.push("## assistant", "");
+					for (let bi = 0; bi < body.length; bi++) lines.push(body[bi]!);
+					lines.push("");
 				}
 				break;
 			}

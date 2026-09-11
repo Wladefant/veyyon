@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { Glob } from "bun";
 import { renderLicenseBundle } from "../../../scripts/generate-license-bundle";
+import { typeScriptMembers } from "../../../scripts/workspace-layout";
 import { hermeticSpawnEnv } from "./helpers/hermetic-spawn-env";
 
 const ROOT = `${import.meta.dir}/../../..`;
@@ -27,17 +28,17 @@ describe("license preservation", () => {
 	 */
 	it("retains the vendored and adapted component notices", async () => {
 		const expectations = new Map<string, readonly string[]>([
-			["crates/veyyon-shell/NOTICE", ["rtk-ai/rtk", "MIT License"]],
+			["natives/shell/NOTICE", ["rtk-ai/rtk", "MIT License"]],
 			[
-				"crates/veyyon-natives/src/fonts/Silver.LICENSE",
+				"natives/bridge/addon/src/fonts/Silver.LICENSE",
 				["Poppy Works", "Creative Commons Attribution 4.0 International"],
 			],
-			["docs/handbook/book/fonts/OPEN-SANS-LICENSE.txt", ["Apache License", "Version 2.0"]],
+			["docs/handbook/fonts/OPEN-SANS-LICENSE.txt", ["Apache License", "Version 2.0"]],
 			[
-				"docs/handbook/book/fonts/SOURCE-CODE-PRO-LICENSE.txt",
+				"docs/handbook/fonts/SOURCE-CODE-PRO-LICENSE.txt",
 				["Adobe Systems Incorporated", "SIL OPEN FONT LICENSE Version 1.1"],
 			],
-			["packages/coding-agent/src/markit/NOTICE", ["markit-ai", "@oharato/pdf2md-ts", "MIT License"]],
+			["packages/coding-agent/src/export/markit/NOTICE", ["markit-ai", "@oharato/pdf2md-ts", "MIT License"]],
 			[
 				"packages/utils/src/vendor/mermaid-ascii/NOTICE",
 				[
@@ -63,15 +64,15 @@ describe("license preservation", () => {
 	it("indexes every separate notice at its current Veyyon path", async () => {
 		const notice = await readRepositoryFile("NOTICE");
 		const requiredPaths = [
-			"crates/veyyon-shell/NOTICE",
-			"crates/veyyon-natives/src/fonts/Silver.LICENSE",
-			"docs/handbook/book/fonts/OPEN-SANS-LICENSE.txt",
-			"docs/handbook/book/fonts/SOURCE-CODE-PRO-LICENSE.txt",
-			"packages/coding-agent/src/markit/NOTICE",
+			"natives/shell/NOTICE",
+			"natives/bridge/addon/src/fonts/Silver.LICENSE",
+			"docs/handbook/fonts/OPEN-SANS-LICENSE.txt",
+			"docs/handbook/fonts/SOURCE-CODE-PRO-LICENSE.txt",
+			"packages/coding-agent/src/export/markit/NOTICE",
 			"packages/utils/src/vendor/mermaid-ascii/NOTICE",
 		] as const;
 		for (const path of requiredPaths) expect(notice).toContain(`\`${path}\``);
-		expect(notice).not.toContain("crates/pi-shell/NOTICE");
+		expect(notice).not.toContain("pi-shell/NOTICE");
 		for (const attribution of [
 			"NousResearch/hermes-agent",
 			"NoeFabris/opencode-antigravity-auth",
@@ -83,14 +84,14 @@ describe("license preservation", () => {
 
 	/**
 	 * Rebranding package identities must not remove their machine-readable MIT
-	 * declaration. This scans every JavaScript workspace package, including new
-	 * packages added after this regression suite.
+	 * declaration. This scans every JavaScript workspace member, including a member
+	 * the root manifest names by a literal path rather than a glob, and including
+	 * members added after this regression suite.
 	 */
 	it("keeps every Veyyon JavaScript package manifest MIT licensed", async () => {
-		const paths = ["package.json"];
-		for (const pattern of ["packages/*/package.json", "python/**/package.json"]) {
-			const glob = new Glob(pattern);
-			for await (const path of glob.scan({ cwd: ROOT })) paths.push(path);
+		const paths = ["package.json", ...typeScriptMembers().map(member => `${member}/package.json`)];
+		for await (const path of new Glob("clients/python/**/package.json").scan({ cwd: ROOT })) {
+			if (!paths.includes(path)) paths.push(path);
 		}
 
 		const offenders: Array<{ name: string; license: unknown }> = [];
@@ -106,7 +107,7 @@ describe("license preservation", () => {
 		// and the packages the grant has to cover, so adding a package cannot silently
 		// exempt it and cannot fail this test either.
 		expect(paths).toContain("package.json");
-		for (const owner of ["packages/coding-agent", "packages/tui", "packages/argot", "packages/hashline"]) {
+		for (const owner of ["packages/coding-agent", "hosts/terminal/engine", "plugins/argot", "plugins/hashline"]) {
 			expect(paths).toContain(`${owner}/package.json`);
 		}
 		expect(offenders).toEqual([]);
@@ -117,7 +118,7 @@ describe("license preservation", () => {
 	 * the same machine-readable MIT grant as the repository that ships them.
 	 */
 	it("keeps every Veyyon Python package MIT licensed", async () => {
-		const pyprojects = ["python/veyyon-rpc/pyproject.toml", "python/veybot/pyproject.toml"] as const;
+		const pyprojects = ["clients/python/veyyon-rpc/pyproject.toml", "clients/python/veybot/pyproject.toml"] as const;
 		for (const path of pyprojects) {
 			const pyproject = await readRepositoryFile(path);
 			expect(pyproject).toMatch(/\[project\][\s\S]*?\nlicense\s*=\s*"MIT"/);
@@ -130,12 +131,12 @@ describe("license preservation", () => {
 	 */
 	it("ships the complete MIT text in each Python package", async () => {
 		const rootLicense = await readRepositoryFile("LICENSE");
-		for (const root of ["python/veyyon-rpc", "python/veybot"]) {
+		for (const root of ["clients/python/veyyon-rpc", "clients/python/veybot"]) {
 			expect(await readRepositoryFile(`${root}/LICENSE`)).toBe(rootLicense);
 			expect(await readRepositoryFile(`${root}/pyproject.toml`)).toContain('license-files = ["LICENSE"]');
 		}
 		const dockerfile = await readRepositoryFile("Dockerfile.veybot");
-		expect(dockerfile).toContain("COPY python/veybot/LICENSE ./");
+		expect(dockerfile).toContain("COPY clients/python/veybot/LICENSE ./");
 		const dockerignore = await readRepositoryFile("Dockerfile.veybot.dockerignore");
 		expect(dockerignore).toMatch(/^\/LICENSE$/m);
 		expect(dockerignore).not.toMatch(/^LICENSE$/m);
@@ -146,7 +147,7 @@ describe("license preservation", () => {
 	 * authoritative license. This locks out the uu-find and uu-tail omissions.
 	 */
 	it("keeps a license beside every vendored Rust manifest", async () => {
-		const manifests = new Glob("crates/vendor/*/Cargo.toml");
+		const manifests = new Glob("natives/vendor/*/Cargo.toml");
 		const missing: string[] = [];
 		for await (const manifest of manifests.scan({ cwd: ROOT, onlyFiles: true })) {
 			const licensePath = manifest.replace(/Cargo\\.toml$/, "LICENSE");
@@ -206,16 +207,30 @@ describe("license preservation", () => {
 	});
 
 	/**
-	 * The provenance map must name the current crate and repository topology,
-	 * never removed pi-* paths, a nonexistent backlog, or an unconfigured remote.
+	 * `UPSTREAM.md` states the fork and where the notices live. The crate-and-repository
+	 * provenance moved to the porting guide, so each claim is asserted against the file that
+	 * owns it: a stale `pi-*` crate path is a defect wherever it is written.
 	 */
 	it("keeps fork provenance aligned with the current repository", async () => {
 		const upstream = await readRepositoryFile("UPSTREAM.md");
-		for (const current of ["crates/veyyon-natives", "crates/veyyon-shell", "santhreal/veyyon", "can1357/oh-my-pi"]) {
-			expect(upstream).toContain(current);
+		for (const required of ["santhreal/veyyon", "can1357/oh-my-pi", "natives/shell/NOTICE", "LICENSE"]) {
+			expect(upstream).toContain(required);
 		}
-		for (const stale of ["crates/pi-grep", "crates/pi-pty", "BACKLOG.md", "origin    ", "upstream  "]) {
-			expect(upstream).not.toContain(stale);
+		const porting = await readRepositoryFile("docs/internal/porting-from-pi-mono.md");
+		for (const current of ["natives/bridge/addon", "natives/shell", "oh-my-pi"]) {
+			expect(porting).toContain(current);
+		}
+		for (const stale of ["pi-grep", "pi-pty", "origin    ", "upstream  "]) {
+			expect({ file: "UPSTREAM.md", stale, present: upstream.includes(stale) }).toEqual({
+				file: "UPSTREAM.md",
+				stale,
+				present: false,
+			});
+			expect({ file: "porting", stale, present: porting.includes(stale) }).toEqual({
+				file: "porting",
+				stale,
+				present: false,
+			});
 		}
 	});
 

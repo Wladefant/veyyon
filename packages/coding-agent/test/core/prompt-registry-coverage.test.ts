@@ -31,10 +31,14 @@ import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { agentCorePrompts } from "@veyyon/agent-core/prompts/registry";
 import { aiPrompts } from "@veyyon/ai/prompts/registry";
+import * as registryModule from "@veyyon/coding-agent/prompts/registry";
 import { codingAgentPrompts, PROMPT_IDS } from "@veyyon/coding-agent/prompts/registry";
 import { renderBanner } from "@veyyon/coding-agent/system-prompt-builder/banner-grammar";
 import { hashlinePrompts } from "@veyyon/hashline/prompts/registry";
 import { type PromptRegistryView, prompt } from "@veyyon/utils";
+// `scripts/` is not a package, so the one place the workspace's roots are stated is reached
+// by path rather than by specifier.
+import { typeScriptMemberTopLevels } from "../../../../scripts/workspace-layout";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "../../../..");
 
@@ -52,7 +56,7 @@ const REPO_ROOT = path.resolve(import.meta.dir, "../../../..");
  *
  * `minPrompts` is per owner because the registries are not the same size: a shared floor
  * would have to be the smallest one, and would then stop guarding the large registries
- * against losing most of their rows. `@veyyon/metaharness` also owns a registry, and the
+ * against losing most of their rows. `@veyyon/evals` also owns a registry, and the
  * containment scan below covers it like everything else, but its set-equality and row
  * quality are checked in its own package: it is a private benchmark harness with no
  * exports map, so reaching it from here means a relative path into another package's
@@ -89,7 +93,7 @@ const CODING_AGENT_REGISTRY_MODULE = registryModuleOf(codingAgentPrompts);
  * The row modules `registry.ts` aggregates, READ OFF ITS OWN IMPORTS rather than listed here.
  *
  * WHY THE CODING AGENT'S REGISTRY LOOKS DIFFERENT FROM THE OTHER THREE. Its 163 rows used to sit in one
- * module, which meant a consumer of one prompt statically reached all 163: `tools/read.ts` imported the
+ * module, which meant a consumer of one prompt statically reached all 163: `tools/fs/read.ts` imported the
  * registry to render its own description and paid 167 modules for one string, the largest single edge that
  * file had. The rows now live one per prompt DIRECTORY (`prompts/tools/rows.ts` and twenty siblings), and
  * `registry.ts` spreads them into the same `PROMPTS` it always exported, so nothing about the registry's
@@ -130,7 +134,11 @@ const REGISTRY_MODULES = new Set<string>([
 	// The coding agent's `.md` imports live in the row modules its registry aggregates, so the registry
 	// itself holds none and listing it here would fail the "listed but imports no markdown" check below.
 	...ROW_MODULES,
-	"packages/metaharness/adapters/edit/prompts/registry.ts",
+	"tests/evals/suites/typescript-edit/prompts/benchmark-registry.ts",
+	// The same suite one directory up: the adapter's registry owns what a scored run is asked
+	// to do, and this one owns the suite's own text, the difficulty templates and the Argot
+	// arms. Two registries, two directories, neither reaching into the other's.
+	"tests/evals/suites/typescript-edit/prompts/registry.ts",
 	"packages/coding-agent/src/discovery/builtin-rules/index.ts",
 	// The system prompt's STATEMENT registry, which registers the fragments one prompt is
 	// assembled from rather than whole prompts. Same contract, so the same exemption: the import
@@ -152,7 +160,7 @@ async function idsOnDisk(dir: string): Promise<string[]> {
 }
 
 /**
- * Every `.ts` under `packages/`, read once.
+ * Every `.ts` under every workspace root, read once.
  *
  * Six cases in this file walk that tree and read every file, and two of them are
  * `it.each`, so the walk ran roughly fifteen times per run: about 250ms of real
@@ -162,52 +170,74 @@ async function idsOnDisk(dir: string): Promise<string[]> {
  * which is the worst thing a gate can do: it teaches people to re-run a red, and they
  * will re-run the one that was telling the truth. The tree does not change during a run.
  *
+ * THE ROOTS ARE DERIVED, not written. This scanned `packages/` alone, which was every
+ * member's home until one moved: relocating hashline to `plugins/` put its registry
+ * outside the walk, so its directory read as stated nowhere and its own import as
+ * absent, and both halves of this suite went red for a reason that had nothing to do
+ * with the contract they defend. A root the workspace gains is now scanned without an
+ * edit here.
+ *
  * `repo-cache` is excluded here for every caller, including the prompt-import scan which
  * used to look inside it. That directory holds cached copies of OTHER repositories; a
  * markdown import in one of them is not a registration this repository owes a row for.
  */
-let packageSourceCache: Promise<ReadonlyArray<{ file: string; text: string }>> | undefined;
+const WORKSPACE_ROOTS: readonly string[] = typeScriptMemberTopLevels();
 
-function packageSources(): Promise<ReadonlyArray<{ file: string; text: string }>> {
-	packageSourceCache ??= readPackageSources();
-	return packageSourceCache;
+let workspaceSourceCache: Promise<ReadonlyArray<{ file: string; text: string }>> | undefined;
+
+function workspaceSources(): Promise<ReadonlyArray<{ file: string; text: string }>> {
+	workspaceSourceCache ??= readWorkspaceSources();
+	return workspaceSourceCache;
 }
 
-async function readPackageSources(): Promise<ReadonlyArray<{ file: string; text: string }>> {
-	const sources: Array<{ file: string; text: string }> = [];
-	for await (const relative of new Bun.Glob("packages/**/*.ts").scan({ cwd: REPO_ROOT, onlyFiles: true })) {
-		const file = relative.replace(/\\/g, "/");
-		if (file.includes("node_modules") || file.includes("repo-cache")) continue;
-		sources.push({ file, text: await Bun.file(path.join(REPO_ROOT, file)).text() });
+async function readWorkspaceSources(): Promise<ReadonlyArray<{ file: string; text: string }>> {
+	const files: string[] = [];
+	for (const root of WORKSPACE_ROOTS) {
+		for await (const relative of new Bun.Glob(`${root}/**/*.ts`).scan({ cwd: REPO_ROOT, onlyFiles: true })) {
+			const file = relative.replace(/\\/g, "/");
+			if (file.includes("node_modules") || file.includes("repo-cache")) continue;
+			files.push(file);
+		}
 	}
-	return sources;
+	return await Promise.all(
+		files.map(async file => ({
+			file,
+			text: await Bun.file(path.join(REPO_ROOT, file)).text(),
+		})),
+	);
 }
 
 /**
- * Every module under `sourceGlob` that imports a `.md` as text, with the specifier.
+ * Every module in the workspace that imports a `.md` as text, with the specifier.
  *
- * Six cases ask this question of three different subtrees, so the tree is scanned ONCE
- * off {@link packageSources} and each caller filters the one result by its own prefix.
- * Every glob used here is `<dir>/**​/*.ts`, so the prefix is exactly the part before the
- * `**` and the filter answers the same set the walk did.
+ * Six cases ask this question, so the tree is scanned ONCE off {@link workspaceSources} and the
+ * one result is shared. It used to take a glob and answer the part of the scan whose module path
+ * started with the glob's prefix, which is how the scan came to cover one root: `packages/**` was
+ * both "which subtree does this case ask about" and "which subtree exists at all". The two are
+ * separated now — the rule that a markdown text import is a registration has no subtree, and a
+ * case that really does ask about one says so through {@link textImportersUnder}.
  */
 let textImporterCache: Promise<ReadonlyArray<{ module: string; specifier: string }>> | undefined;
 
-async function textImporters(sourceGlob: string): Promise<ReadonlyArray<{ module: string; specifier: string }>> {
+function textImporters(): Promise<ReadonlyArray<{ module: string; specifier: string }>> {
 	textImporterCache ??= scanTextImporters();
-	const prefix = sourceGlob.slice(0, sourceGlob.indexOf("**"));
-	return (await textImporterCache).filter(use => use.module.startsWith(prefix));
+	return textImporterCache;
 }
 
 async function scanTextImporters(): Promise<ReadonlyArray<{ module: string; specifier: string }>> {
 	const found: Array<{ module: string; specifier: string }> = [];
-	for (const { file, text } of await packageSources()) {
+	for (const { file, text } of await workspaceSources()) {
 		if (!text.includes('.md" with')) continue;
 		for (const match of text.matchAll(/import\s+\w+\s+from\s+"([^"]+\.md)"\s+with\s+\{\s*type:\s*"text"\s*\}/g)) {
 			found.push({ module: file, specifier: match[1] as string });
 		}
 	}
 	return found;
+}
+
+/** The importers whose module path is under `prefix`, for a case whose subject is one subtree. */
+async function textImportersUnder(prefix: string): Promise<ReadonlyArray<{ module: string; specifier: string }>> {
+	return (await textImporters()).filter(use => use.module.startsWith(prefix));
 }
 
 describe.each(OWNERS)("$registry.dir registers every prompt it ships", ({ registry, minPrompts }) => {
@@ -299,22 +329,35 @@ describe("a registry exports nothing the descriptor already carries", () => {
 		"agentPromptText",
 	];
 
+	/**
+	 * The one reader both halves below use. Written twice, the anti-vacuity half stopped
+	 * proving anything: mutating the absence pattern alone left the control matching on its
+	 * own copy, so every superseded name read as absent for the wrong reason and the suite
+	 * stayed green.
+	 */
+	const exportsName = (source: string, name: string): boolean =>
+		new RegExp(`^export (?:const|type|function) ${name}\\b`, "m").test(source);
+
 	it.each(SUPERSEDED)("does not export %s, which the descriptor already answers", async name => {
-		const pattern = new RegExp(`^export (?:const|type|function) ${name}\\b`, "m");
-		const found = (await packageSources()).filter(source => pattern.test(source.text)).map(source => source.file);
+		const found = (await workspaceSources())
+			.filter(source => exportsName(source.text, name))
+			.map(source => source.file);
 
 		expect(found).toEqual([]);
 	});
 
 	it("still finds the exports that are deliberately kept, so the pattern works", async () => {
-		// The anti-vacuity half. Written the same way as the check above, so a pattern that
-		// stopped matching `export const` would report every superseded name as absent for
-		// the wrong reason.
-		const registry = await Bun.file(path.join(REPO_ROOT, "packages/coding-agent/src/prompts/registry.ts")).text();
+		// The anti-vacuity half, anchored on what the module really exports rather than on a
+		// restated list. A reader that stopped matching `export const` would report every
+		// superseded name as absent for the wrong reason, so the same reader is run against
+		// the names a static import proves are exported.
+		const kept = Object.keys(registryModule);
+		expect(kept).toContain("codingAgentPrompts");
 
-		for (const kept of ["promptText", "requirePrompt", "PROMPT_IDS", "PROMPTS", "codingAgentPrompts"]) {
-			expect(new RegExp(`^export (?:const|type) ${kept}\\b`, "m").test(registry), kept).toBe(true);
-		}
+		const sources = await workspaceSources();
+		const missed = kept.filter(name => !sources.some(source => exportsName(source.text, name)));
+
+		expect(missed).toEqual([]);
 	});
 });
 
@@ -338,7 +381,7 @@ describe("a registry's directory is written down once", () => {
 	 * assertion tautological, which is a worse trade than one more place a path is typed.
 	 */
 	it.each(OWNERS)("is stated only in $registry.dir's own registry", async ({ registry }) => {
-		const holders = (await packageSources())
+		const holders = (await workspaceSources())
 			.filter(source => !source.file.endsWith(".test.ts") && source.text.includes(`"${registry.dir}"`))
 			.map(source => source.file);
 
@@ -351,12 +394,12 @@ describe("a registry's directory is written down once", () => {
 	it("would notice a second statement, so the check is not passing on a bad glob", async () => {
 		// The anti-vacuity half. A path every registry demonstrably does NOT own must be
 		// found where it IS written, or the scan above proves nothing about uniqueness.
-		const found = (await packageSources()).filter(
+		const found = (await workspaceSources()).filter(
 			source =>
-				!source.file.endsWith(".test.ts") && source.text.includes('"packages/metaharness/adapters/edit/prompts"'),
+				!source.file.endsWith(".test.ts") && source.text.includes('"tests/evals/suites/typescript-edit/prompts"'),
 		).length;
 
-		expect(found).toBe(1);
+		expect(found).toBe(2);
 	});
 });
 
@@ -368,7 +411,7 @@ describe("no module outside a registry imports a prompt", () => {
 	 * narrower: it scanned two `src` trees and, within them, only flagged an import
 	 * whose resolved path landed INSIDE a registered prompts directory. Both narrowings
 	 * hid real cases. `packages/ai` shipped fourteen format guides next to the fourteen
-	 * dialect modules that imported them and `packages/metaharness` shipped three
+	 * dialect modules that imported them and `@veyyon/evals` shipped three
 	 * benchmark prompts the same way: model-facing text, unregistered, and invisible to
 	 * the check because their `.md` files were not under a prompts directory, so the
 	 * predicate that decided "is this a prompt" was "is it already registered". And
@@ -376,17 +419,14 @@ describe("no module outside a registry imports a prompt", () => {
 	 * path, which the scan never saw because `scripts/` is not `src/`.
 	 *
 	 * So the rule is now the general one: a `.md`-as-text import is a REGISTRATION, and
-	 * it may only appear in a module that is a registry. Everything under `packages/` is
-	 * scanned, wherever the `.md` lives, and the exceptions are two named lists above
+	 * it may only appear in a module that is a registry. Every workspace root is scanned,
+	 * wherever the `.md` lives, and the exceptions are two named lists above
 	 * with a reason each rather than a shape the predicate happens to let through.
 	 *
-	 * SCOPE, stated rather than left to be discovered: the scan reads `.ts` only.
-	 * `packages/metaharness/adapters/edit` also holds transpiled `.js` copies of its
-	 * `.ts` sources, and those copies contain the pre-registry imports; they are dead
-	 * (nothing imports them) and duplicated source is its own defect, tracked in
-	 * BACKLOG.md rather than answered by a waiver here.
+	 * SCOPE, stated rather than left to be discovered: the scan reads `.ts` only, and a
+	 * package that ships prompts only as `.md` beside a registry is covered by the
+	 * registry scan rather than by an import scan.
 	 */
-	const SOURCE_GLOB = "packages/**/*.ts";
 
 	it("leaves prompt imports to the registries alone, in every package", async () => {
 		// No exceptions, and there used to be one. `@veyyon/hashline` publishes its tool
@@ -398,7 +438,7 @@ describe("no module outside a registry imports a prompt", () => {
 		// goes through a row, and the rule holds with nothing carved out of it.
 		const offenders: string[] = [];
 
-		for (const use of await textImporters(SOURCE_GLOB)) {
+		for (const use of await textImporters()) {
 			if (REGISTRY_MODULES.has(use.module)) continue;
 			offenders.push(`${use.module} imports ${use.specifier}`);
 		}
@@ -412,7 +452,7 @@ describe("no module outside a registry imports a prompt", () => {
 		// the worst possible reason and keep passing forever. Checked per owner: the
 		// coding agent's 160 rows would mask a registry whose imports had all stopped
 		// being recognised if the count were taken across the whole scan.
-		const uses = await textImporters(SOURCE_GLOB);
+		const uses = await textImporters();
 
 		for (const { registry } of OWNERS) {
 			// The coding agent's imports are spread over its row modules, so the count that has to come
@@ -429,7 +469,7 @@ describe("no module outside a registry imports a prompt", () => {
 		// A listed module that no longer imports markdown is worse than a missing one: it
 		// reads as a live registry, so the next reader treats the location as a valid home
 		// for a prompt, while the check that would have caught the drift is inert.
-		const modules = new Set((await textImporters(SOURCE_GLOB)).map(use => use.module));
+		const modules = new Set((await textImporters()).map(use => use.module));
 
 		for (const module of REGISTRY_MODULES) {
 			expect(modules.has(module), `${module} is listed as a registry but imports no markdown`).toBe(true);
@@ -441,7 +481,7 @@ describe("no module outside a registry imports a prompt", () => {
 		// package's exports map is the one place its prompt's location is written. A
 		// relative path records that layout a second time and breaks quietly when the
 		// file moves, so it is an offender even for the same file.
-		const reachingIn = (await textImporters(SOURCE_GLOB)).filter(
+		const reachingIn = (await textImporters()).filter(
 			use => use.specifier.startsWith(".") && use.specifier.includes("../../"),
 		);
 
@@ -468,7 +508,7 @@ describe("each prompt directory owns its rows and registry.ts aggregates every o
 	 */
 	async function rowModuleImports(): Promise<Map<string, string[]>> {
 		const byModule = new Map<string, string[]>();
-		for (const use of await textImporters("packages/coding-agent/src/**/*.ts")) {
+		for (const use of await textImportersUnder("packages/coding-agent/src/")) {
 			if (!ROW_MODULES.includes(use.module)) continue;
 			const ids = byModule.get(use.module) ?? [];
 			// The id is the file's path under `src/prompts/`, and a row module's specifier is relative to
@@ -537,7 +577,7 @@ describe("each prompt directory owns its rows and registry.ts aggregates every o
 	it("leaves registry.ts holding no markdown import of its own", async () => {
 		// The aggregation is the whole point: an import left behind here is a prompt whose cost every
 		// one of the 95 consumers pays again, and the split would erode one convenient row at a time.
-		const uses = await textImporters("packages/coding-agent/src/prompts/**/*.ts");
+		const uses = await textImportersUnder("packages/coding-agent/src/prompts/");
 
 		expect(uses.filter(use => use.module === CODING_AGENT_REGISTRY_MODULE)).toEqual([]);
 		// And the scan does see this tree, or the assertion above passes for the wrong reason.
@@ -561,7 +601,8 @@ describe("each prompt directory owns its rows and registry.ts aggregates every o
 		// accept any string, a typo would compile, and `PROMPTS[typo]` would render as `undefined`. The
 		// compile-time half of this lives in the row modules' `satisfies` clause; this is the runtime
 		// half, which fails if a row module ever stops contributing its ids.
-		expect(PROMPT_IDS.length).toBe(169);
+		// 171 since `autoresearch/stall-nudge` was added.
+		expect(PROMPT_IDS.length).toBe(171);
 		expect(PROMPT_IDS).toContain("tools/read");
 		expect(new Set(PROMPT_IDS).size).toBe(PROMPT_IDS.length);
 	});
@@ -625,6 +666,11 @@ describe("the tree stays a taxonomy and not a drawer", () => {
 		// The doc comment is what tells the next author where a new prompt goes. A
 		// directory missing from it is a category nobody can be expected to use
 		// correctly, so the drawer re-forms one convenient placement at a time.
+		//
+		// This reads a comment on purpose, and is not the banned "the comment must say X":
+		// there is no behavior underneath to assert instead, because the taxonomy the header
+		// carries IS the contract. The match is a directory name and its slash, so a reflow
+		// or a reworded sentence moves nothing, and only dropping the directory fails.
 		const registry = await Bun.file(path.join(REPO_ROOT, "packages/coding-agent/src/prompts/registry.ts")).text();
 		const header = registry.slice(0, registry.indexOf("*/"));
 		const directories = [...new Set(PROMPT_IDS.map(id => id.split("/")[0] as string))];

@@ -33,15 +33,16 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession, type ExtensionFactory } from "@veyyon/coding-agent/sdk";
 import { deobfuscateToolArguments, SecretObfuscator } from "@veyyon/coding-agent/secrets/obfuscator";
 import { SecretVault } from "@veyyon/coding-agent/secrets/vault";
-import type { AgentSession, SecretRuntimeLease } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
-import { TempDir } from "@veyyon/utils";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { SecretRuntimeLease } from "@veyyon/coding-agent/session/agent-session-types";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { getProjectDir, setProjectDir, TempDir } from "@veyyon/utils";
 import { useIsolatedConfigRoot } from "../helpers/isolated-agent-dir";
 
 const A_VALUE = "redaction-outlives-project-a-value-13579";
@@ -71,9 +72,12 @@ interface Fixture {
 	vaultA: SecretVault;
 	settings: Settings;
 	session: AgentSession;
+	/** Where the process stood before the session moved it; put back before `root` goes. */
+	originalProjectDir: string;
 }
 
 async function createFixture(extension?: ExtensionFactory): Promise<Fixture> {
+	const originalProjectDir = getProjectDir();
 	const root = TempDir.createSync("redaction-outlives-");
 	const projectA = path.resolve(root.join("project-a"));
 	const projectB = path.resolve(root.join("project-b"));
@@ -105,11 +109,18 @@ async function createFixture(extension?: ExtensionFactory): Promise<Fixture> {
 		enableLsp: false,
 		skipPythonPreflight: true,
 	});
-	return { root, projectA, projectB, vaultA, settings, session };
+	return { root, projectA, projectB, vaultA, settings, session, originalProjectDir };
 }
 
+/**
+ * `setCwd` re-scopes the PROCESS, since this session owns it, so a row that moved to project B
+ * left the process standing in a directory this removes. Put it back first: a later suite that
+ * restores its own state fails with ENOENT on a directory it never created, and the leak tracer
+ * cannot even take its after-test snapshot.
+ */
 async function dispose(fixture: Fixture): Promise<void> {
 	await fixture.session.dispose();
+	setProjectDir(fixture.originalProjectDir);
 	await fixture.root.remove();
 }
 

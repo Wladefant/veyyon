@@ -20,15 +20,15 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
 import type { ToolCall } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockModel, type MockResponse } from "@veyyon/ai/providers/mock";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import type { IrcMessage } from "@veyyon/coding-agent/irc/bus";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
 import { USER_INTERRUPT_LABEL } from "@veyyon/coding-agent/session/messages";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import type { IrcMessage } from "@veyyon/coding-agent/task/irc-bus";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { Snowflake, TempDir } from "@veyyon/utils";
 import { type } from "arktype";
 

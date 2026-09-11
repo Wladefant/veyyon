@@ -1,0 +1,188 @@
+# The recording guest: the sandbox userland plus a real terminal to record in.
+#
+# The proof images have to come out of a REAL terminal running the REAL binary,
+# so this image carries kitty, an X display to run it on, xdotool to drive it and
+# ffmpeg to encode what it draws, on top of the same bun+git userland the test
+# sandbox uses. Nothing here reads the operator's home: the container runs with
+# HOME on a tmpfs and only the repo is bind-mounted.
+# No default: proof/docker/build-recorder.sh passes the guest tag derived from the
+# repo's declared bun version, and a build that forgets it must fail rather than
+# silently produce an image on whatever guest generation is lying around.
+ARG BASE
+
+# A Wayland compositor with blur, rounded corners and shadows, built because no
+# packaged one has all three. This stage is why the recorder can record glass at
+# all, and the version pins below are the only combination that resolves.
+#
+# picom on X11 gets rounding, a shadow and a kernel blur, but its blur is a fixed
+# convolution and its glx backend -- the one with dual_kawase -- composites a
+# window with NO CONTENTS on this GL stack, because texture-from-pixmap never
+# hands it the terminal's surface. A Wayland compositor has no pixmap to scrape:
+# the client's buffer is what it composites, so that failure cannot happen.
+#
+# What was rejected, with the reason:
+#   * hyprland -- not in trixie, and its chain (aquamarine, hyprutils, hyprlang,
+#     hyprcursor, hyprwayland-scanner) is a longer build than this one.
+#   * kwin-wayland 6.3.6 -- packaged, and its blur only applies to windows that
+#     ask through org_kde_kwin_blur. kitty never asks, so the terminal gets none.
+#   * wayfire 0.9 -- packaged, kawase blur works here and is genuinely good, but
+#     rounded corners live in wayfire-plugins-extra, which trixie does not ship,
+#     and its winshadows plugin drew no measurable shadow (the field next to the
+#     window edge came out BRIGHTER than the field further out).
+#   * sway, weston, labwc -- no blur at all.
+#
+# The pins: trixie ships libwlroots-0.18-dev, and no swayfx tag wants 0.18.
+# swayfx 0.4 wants wlroots <0.18; swayfx 0.5.2 needs scenefx-0.4, which needs
+# wlroots >=0.19. Neither repo carries a meson wrap, so nothing resolves
+# implicitly and wlroots 0.19 is built here. Everything lands in /opt/glass
+# rather than /usr/local, because the final stage already keeps tools there.
+FROM ${BASE} AS glass
+RUN set -eux; \
+	apt-get update; \
+	DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+		build-essential meson ninja-build pkg-config git ca-certificates \
+		wayland-protocols libwayland-dev libdrm-dev libgbm-dev libinput-dev \
+		libxkbcommon-dev libpixman-1-dev libseat-dev libdisplay-info-dev \
+		libliftoff-dev libjson-c-dev libpcre2-dev libcairo2-dev libpango1.0-dev \
+		libgdk-pixbuf-2.0-dev libevdev-dev libudev-dev libegl1-mesa-dev \
+		libgles2-mesa-dev libxcb1-dev libxcb-composite0-dev libxcb-icccm4-dev \
+		libxcb-res0-dev libxcb-ewmh-dev libxcb-errors-dev libx11-xcb-dev \
+		libvulkan-dev glslang-tools scdoc libsystemd-dev hwdata; \
+	rm -rf /var/lib/apt/lists/*
+# meson prints its errors on STDOUT, so nothing in this stage is quietened: the
+# first two attempts at this build were silenced into a bare exit 1.
+RUN set -eux; \
+	export PKG_CONFIG_PATH=/opt/glass/lib/x86_64-linux-gnu/pkgconfig; \
+	export LD_LIBRARY_PATH=/opt/glass/lib/x86_64-linux-gnu; \
+	mkdir -p /build; cd /build; \
+	git clone --depth 1 -b 0.19.1 https://gitlab.freedesktop.org/wlroots/wlroots.git; \
+	cd wlroots; \
+	meson setup build --prefix=/opt/glass -Dexamples=false -Dwerror=false; \
+	ninja -C build; ninja -C build install; \
+	cd /build; \
+	git clone --depth 1 -b 0.4.1 https://github.com/wlrfx/scenefx.git; \
+	cd scenefx; \
+	meson setup build --prefix=/opt/glass -Dexamples=false -Dwerror=false; \
+	ninja -C build; ninja -C build install; \
+	cd /build; \
+	git clone --depth 1 -b 0.5.2 https://github.com/WillPower3309/swayfx.git; \
+	cd swayfx; \
+	meson setup build --prefix=/opt/glass -Dwerror=false -Dsd-bus-provider=libsystemd; \
+	ninja -C build; ninja -C build install; \
+	rm -rf /build
+FROM ${BASE}
+
+RUN set -eux; \
+	apt-get update; \
+	DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+		ffmpeg fonts-dejavu-core fontconfig; \
+	apt-get clean; \
+	rm -rf /var/lib/apt/lists/*
+
+# The terminal font the capture configuration names. Without it fontconfig
+# substitutes something proportional and every column in the capture drifts.
+ARG FONT_VERSION=2.304
+RUN set -eux; \
+	mkdir -p /usr/share/fonts/truetype/jetbrains; \
+	curl -fsSL -o /tmp/jb.zip \
+		"https://github.com/JetBrains/JetBrainsMono/releases/download/v${FONT_VERSION}/JetBrainsMono-${FONT_VERSION}.zip"; \
+	cd /tmp && python3 -c "import zipfile,sys; zipfile.ZipFile('/tmp/jb.zip').extractall('/tmp/jb')"; \
+	find /tmp/jb -name "*.ttf" -exec cp {} /usr/share/fonts/truetype/jetbrains/ \; ; \
+	fc-cache -f; \
+	fc-list | grep -i "jetbrains" | head -3; \
+	rm -rf /tmp/jb.zip /tmp/jb
+
+# Xvfb gives the container a real X display, kitty and xterm are real terminal
+# emulators that speak SGR 1006 mouse reporting, xdotool moves the pointer and
+# presses keys at it, and ffmpeg records the display as video rather than a frame
+# at a time. imagemagick's `import` takes the stills.
+#
+# picom and xwallpaper are what make a themed capture possible: a demo recorded on
+# a flat black rectangle says nothing about the product. xwallpaper puts a gradient
+# behind the window and picom rounds the window's corners and casts its shadow, so
+# the capture is a terminal on a desktop rather than a slab.
+#
+# Translucency is the compositor's here, not the client's. A terminal's own
+# `background_opacity` needs an ARGB visual, this display's GLX configurations carry
+# no alpha channel, and kitty says so in its own log. picom's window opacity and
+# kernel blur need nothing from the client, so the lit backdrop bleeds through the
+# window anyway.
+RUN set -eux; \
+	apt-get update; \
+	DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+		xvfb x11-utils x11-xserver-utils xdotool xterm kitty picom xwallpaper \
+		libgl1-mesa-dri mesa-utils imagemagick; \
+	apt-get clean; \
+	rm -rf /var/lib/apt/lists/*; \
+	xdotool --version; \
+	kitty --version; \
+	picom --version
+
+# A language server, because one gallery row is the product driving one: the model
+# asks the server for the references to a symbol and applies the rename the server
+# returns, rather than grepping for a string. veyyon only offers the server it can
+# resolve on PATH against a project whose root markers exist (`loadConfig` in
+# packages/coding-agent/src/lsp/config.ts), so the binary has to be here and the
+# seeded fixture has to carry a tsconfig.
+#
+# node as well as bun: typescript-language-server is a node program with a node
+# shebang, and bun is the runtime for the product, not for every tool it spawns.
+#
+# typescript is pinned to 5.x because the language server drives `tsserver.js` and
+# the 7.x line on npm is the native preview, which has no such file: with
+# typescript 7.0.2 installed the server answered `initialize` with "Could not find
+# a valid TypeScript installation" and no rename was possible.
+RUN set -eux; \
+	apt-get update; \
+	DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nodejs npm; \
+	npm install -g --no-audit --no-fund typescript-language-server "typescript@5"; \
+	apt-get clean; \
+	rm -rf /var/lib/apt/lists/* /root/.npm; \
+	node --version; \
+	typescript-language-server --version; \
+	tsc --version
+
+# The glass session: swayfx from the builder stage, plus the runtime libraries it
+# links and the Wayland capture tools. grim replaces `import` for stills and
+# wf-recorder replaces ffmpeg's x11grab for video, because both take their pixels
+# through wlr-screencopy rather than off an X screen. swaybg draws the backdrop,
+# which xwallpaper did on X11.
+#
+# One thing this image cannot fix, recorded here because it costs a container to
+# rediscover: swayfx refuses to run as root and exits at main.cpp:59, so the
+# session script runs it as an unprivileged user. wlroots also refuses to start
+# its gles2 renderer without a DRM render node, even headless, so the container
+# needs `--device /dev/dri/renderD128` and the render group. The software
+# renderer (WLR_RENDERER=pixman) needs no node and cannot run the blur shader,
+# which makes the node a requirement rather than an optimisation.
+COPY --from=glass /opt/glass /opt/glass
+RUN set -eux; \
+	apt-get update; \
+	DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+		swaybg grim slurp wf-recorder wl-clipboard \
+		libwlroots-0.18 libseat1 libinput10 libdisplay-info2 libliftoff0 \
+		libjson-c5 libpcre2-8-0 libcairo2 libpango-1.0-0 libpangocairo-1.0-0 \
+		libgdk-pixbuf-2.0-0 libevdev2 libvulkan1 libxkbcommon0 libpixman-1-0 \
+		libgbm1 libegl1 libgles2 xwayland; \
+	apt-get clean; \
+	rm -rf /var/lib/apt/lists/*; \
+	printf '%s\n' /opt/glass/lib/x86_64-linux-gnu >/etc/ld.so.conf.d/glass.conf; \
+	ldconfig; \
+	PATH=/opt/glass/bin:"${PATH}" sway --version
+ENV PATH=/opt/glass/bin:$PATH
+
+# tmux, because a status line whose segments are CLICKED has to be checked inside a
+# multiplexer and not only argued about. tmux translates a terminal mouse report into
+# pane-local coordinates before the pane's application reads it, so the column the
+# click handler resolves is tmux's arithmetic and not the emulator's, and a pane that
+# is one row shorter than the window moves the footline the pointer is aimed at.
+#
+# Its own layer, at the end: adding the package to the terminal layer above
+# invalidates the language-server and Wayland layers behind it, which is twenty
+# minutes of rebuild for one apt package.
+RUN set -eux; \
+	apt-get update; \
+	DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tmux; \
+	apt-get clean; \
+	rm -rf /var/lib/apt/lists/*; \
+	tmux -V

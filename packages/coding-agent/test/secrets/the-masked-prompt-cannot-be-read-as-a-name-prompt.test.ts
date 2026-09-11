@@ -1,5 +1,5 @@
 /**
- * The verbless `/secret` grammar and its two fields, driven the way an operator drives them:
+ * The terminal `/secret` grammar and its two fields, driven the way an operator drives them:
  * real keystrokes into real components.
  *
  * WHY THIS SUITE EXISTS. Every other `/secret` test stubs `showHookInput` and returns a string,
@@ -26,11 +26,9 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { HookInputComponent } from "@veyyon/coding-agent/modes/components/hook-input";
-import { ExtensionUiController } from "@veyyon/coding-agent/modes/controllers/extension-ui-controller";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/modes/theme/theme";
+import type { HookInputComponent } from "@veyyon/coding-agent/modes/terminal/components/dialogs/hook-input";
+import { ExtensionUiController } from "@veyyon/coding-agent/modes/terminal/controllers/extension-ui-controller";
 import { resolveVaultLocations, SecretVault } from "@veyyon/coding-agent/secrets/vault";
-import { OperatorNotices } from "@veyyon/coding-agent/session/operator-notices";
 import {
 	maskedPromptHint,
 	maskedPromptTitle,
@@ -38,9 +36,11 @@ import {
 	runSecretCommandForSurface,
 	type SecretCommandOutcome,
 } from "@veyyon/coding-agent/slash-commands/helpers/secret";
+import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import { OperatorNotices } from "@veyyon/kernel/session/operator-notices";
 import { DEFAULT_MASK_CHAR } from "@veyyon/tui";
-import { PASTE_END, PASTE_START } from "@veyyon/tui/bracketed-paste";
 import { stripAnsi } from "@veyyon/utils";
+import { PASTE_END, PASTE_START } from "@veyyon/utils/bracketed-paste";
 
 let home: string;
 let project: string;
@@ -92,6 +92,47 @@ function mustNotOpen(field: string): Drive {
 }
 
 /**
+ * The host the controller presents a field INTO.
+ *
+ * The hook input is a floating card on the overlay stack, not a child of the editor slot, so
+ * `showOverlay` is the seam the field has to cross to be on screen at all. The stack is kept
+ * here and read by the callers below: a field the controller built but never handed to an
+ * overlay is a field the operator cannot see, and a host missing the call would otherwise make
+ * every case in this suite fail for the host rather than for the grammar or the wording.
+ */
+function hookHost(): {
+	overlays: unknown[];
+	ctx: { hookInput: HookInputComponent | undefined };
+} {
+	const overlays: unknown[] = [];
+	const ctx = {
+		ui: {
+			setFocus() {},
+			requestRender() {},
+			requestComponentRender() {},
+			showOverlay(component: unknown) {
+				overlays.push(component);
+				return {
+					hide() {
+						const at = overlays.indexOf(component);
+						if (at >= 0) overlays.splice(at, 1);
+					},
+					setHidden() {},
+				};
+			},
+			terminal: { columns: 100, rows: 40 },
+		},
+		editorContainer: { clear() {}, addChild() {} },
+		editor: {},
+		focusActiveEditorArea() {},
+		session: { isStreaming: false },
+		clearWorkingLoader: () => false,
+		hookInput: undefined as HookInputComponent | undefined,
+	};
+	return { overlays, ctx };
+}
+
+/**
  * Run `/secret <args>` through the REAL dialogs, with `typeValue`/`typeName` driving the real
  * components.
  *
@@ -104,19 +145,15 @@ async function secretThroughRealDialog(
 ): Promise<{ fields: PresentedField[]; outcome: SecretCommandOutcome }> {
 	const { typeName } = options;
 	const fields: PresentedField[] = [];
-	const uiCtx = {
-		ui: { setFocus() {}, requestRender() {}, requestComponentRender() {}, terminal: { rows: 40 } },
-		editorContainer: { clear() {}, addChild() {} },
-		editor: {},
-		hookInput: undefined as { handleInput(bytes: string): void } | undefined,
-	};
+	const { overlays, ctx: uiCtx } = hookHost();
 	const controller = new ExtensionUiController(uiCtx as never);
 
-	const present = (title: string, mask: string | undefined, drive: Drive): Promise<string | undefined> => {
-		fields.push({ title, masked: mask !== undefined });
-		const pending = controller.showHookInput(title, undefined, undefined, mask ? { mask } : undefined);
+	const present = (title: string, masked: boolean, drive: Drive): Promise<string | undefined> => {
+		fields.push({ title, masked });
+		const pending = controller.showHookInput(title, undefined, undefined, masked ? { mask: true } : undefined);
 		const component = uiCtx.hookInput;
 		if (component === undefined) throw new Error("The field was never presented.");
+		if (!overlays.includes(component)) throw new Error("The field was built but never put on screen.");
 		drive(bytes => component.handleInput(bytes));
 		return pending;
 	};
@@ -141,9 +178,8 @@ async function secretThroughRealDialog(
 		agentDir: agentDir(),
 		// Always supplied, because its presence is what selects the TUI surface. A test whose
 		// contract is that the masked field stays shut passes `mustNotOpen`.
-		promptForValue: () =>
-			present(maskedPromptTitle(), DEFAULT_MASK_CHAR, options.typeValue ?? mustNotOpen("masked value")),
-		...(typeName === undefined ? {} : { promptForName: () => present(namePromptTitle(), undefined, typeName) }),
+		promptForValue: () => present(maskedPromptTitle(), true, options.typeValue ?? mustNotOpen("masked value")),
+		...(typeName === undefined ? {} : { promptForName: () => present(namePromptTitle(), false, typeName) }),
 	};
 
 	const outcome = await runSecretCommandForSurface(args, port as never);
@@ -164,37 +200,66 @@ function type(text: string): Drive {
 }
 
 /**
- * The terminal grammar: the argument line is the credential, and only the verbs are reserved.
+ * The terminal grammar: a verb, then what the verb takes.
  *
  * This is the layer that makes the original bug unreachable rather than merely discouraged. There
  * is no longer a position in the command where a name is expected, so a pasted token cannot land
- * in one.
+ * in one -- and a line with no verb at all is not a credential either, it is a refusal.
  */
-describe("the verbless /secret grammar in a terminal", () => {
+describe("the terminal grammar leads with a verb", () => {
 	/**
-	 * LOCKS OUT the whole class of "which positional was that" mistakes: a token pasted straight
-	 * after `/secret` is the VALUE, byte for byte, and no field opens to ask for it. If a verb or a
-	 * leading name is ever reintroduced, this token would be parsed as a name and the test fails.
+	 * A LINE WITH NO VERB STORES NOTHING, driven through the real dialogs and the real vault.
+	 *
+	 * This row is the inverse of what it asserted before: `/secret ghp_…` used to BE the store
+	 * gesture, and the whole argument line was read as the credential. That cost one paste and it
+	 * cost the grammar three mechanisms to stay safe, because a mistyped verb was indistinguishable
+	 * from a credential. A first word that is not a command is now refused.
+	 *
+	 * The vault is asserted empty, not merely that a message was thrown: the failure worth closing is
+	 * a line that refuses in the transcript and stores something anyway.
 	 */
-	it("stores a pasted token as the value without opening the masked field", async () => {
-		const { fields } = await secretThroughRealDialog("ghp_inlineCredential4242", { typeName: type("") });
+	it("refuses a line with no verb and stores nothing", async () => {
+		await expect(
+			secretThroughRealDialog("ghp_inlineCredential4242", { typeName: mustNotOpen("name") }),
+		).rejects.toThrow(/Unknown \/secret command/u);
 
-		expect(fields).toEqual([{ title: namePromptTitle(), masked: false }]);
-		const entries = await stored();
-		expect(entries).toHaveLength(1);
-		expect(entries[0]?.value).toBe("ghp_inlineCredential4242");
+		expect(await stored()).toEqual([]);
+	});
+
+	/**
+	 * AND IT SAYS THE CREDENTIAL IS EXPOSED. The operator who types this is the one with the old
+	 * gesture in muscle memory, and they are now in the worst of both worlds: nothing was stored, and
+	 * the credential is in the scrollback of a session that will not obfuscate it, because the vault
+	 * never saw it. A refusal that only says "unknown command" leaves them believing a credential is
+	 * protected when it is on screen in plaintext, which is the failure mode of the whole feature.
+	 *
+	 * The word itself must still never be echoed, so both halves are asserted together: the warning
+	 * is present AND the bytes are not.
+	 */
+	it("warns that the refused line is exposed, without repeating it", async () => {
+		const refusal = await secretThroughRealDialog("ghp_inlineCredential4242", {
+			typeName: mustNotOpen("name"),
+		}).then(
+			() => "",
+			(error: unknown) => (error instanceof Error ? error.message : String(error)),
+		);
+
+		expect(refusal).toContain("Nothing was stored.");
+		expect(refusal).toContain("scrollback");
+		expect(refusal).toContain("rotate it");
+		expect(refusal).not.toContain("ghp_inlineCredential4242");
 	});
 
 	/**
 	 * THE EXACT INVERSE OF THE ORIGINAL BUG, driven through the real dialogs: `/secret add <value>`
 	 * stores the VALUE and asks for a name afterwards, so `GITHUB_TOKEN` here is the credential and
-	 * never becomes a name with no value attached. `add` is a synonym for the bare form in a
-	 * terminal, and a regression that restored positional-name parsing would store nothing under
-	 * that value and fail.
+	 * never becomes a name with no value attached. A regression that restored positional-name parsing
+	 * would store nothing under that value and fail.
 	 */
-	it("reads add as a synonym for the bare value form", async () => {
-		await secretThroughRealDialog("add GITHUB_TOKEN", { typeName: type("") });
+	it("reads the word after add as the value, never as a name", async () => {
+		const { fields } = await secretThroughRealDialog("add GITHUB_TOKEN", { typeName: type("") });
 
+		expect(fields).toEqual([{ title: namePromptTitle(), masked: false }]);
 		const entries = await stored();
 		expect(entries).toHaveLength(1);
 		expect(entries[0]?.value).toBe("GITHUB_TOKEN");
@@ -208,7 +273,7 @@ describe("the verbless /secret grammar in a terminal", () => {
 	 * so, which is the worst available failure.
 	 */
 	it("keeps whitespace inside the credential and drops only what surrounds it", async () => {
-		await secretThroughRealDialog("   correct horse  battery staple   ", { typeName: type("") });
+		await secretThroughRealDialog("add    correct horse  battery staple   ", { typeName: type("") });
 
 		const entries = await stored();
 		expect(entries[0]?.value).toBe("correct horse  battery staple");
@@ -236,7 +301,18 @@ describe("the verbless /secret grammar in a terminal", () => {
 	 * `/secret log 50` into a credential named after the command the operator was trying to run.
 	 */
 	it("refuses a malformed reserved line rather than storing it", async () => {
-		await expect(secretThroughRealDialog("log 50", { typeName: type("") })).rejects.toThrow(/\/secret -- <value>/u);
+		// THE WELL-FORMED ONE RUNS, which is the half that makes the refusal below mean something: `log
+		// 50` is fifty records, and the defect this row descends from stored the string `log 50` as a
+		// credential because the shape did not fit the grammar of the day.
+		await secretThroughRealDialog("log 50", { typeName: type("") });
+		expect(await stored()).toEqual([]);
+
+		// AND A LINE THAT FITS NO SHAPE IS REFUSED, still without storing: `log` reads a name and a
+		// limit, so a fourth word fits nothing. The refusal names the value form, because the second
+		// reading of this line is a credential that begins with a command word.
+		await expect(
+			secretThroughRealDialog("log GITHUB_TOKEN 50 ghp_wouldHaveBeenStoredOnce", { typeName: type("") }),
+		).rejects.toThrow(/\/secret add <value>/u);
 
 		expect(await stored()).toEqual([]);
 	});
@@ -247,23 +323,61 @@ describe("the verbless /secret grammar in a terminal", () => {
 	 * credential is long because the vault refuses anything under the obfuscatable-length floor, and
 	 * a six-character escape would have failed here for a reason that has nothing to do with the
 	 * escape.
+	 *
+	 * THE ESCAPE IS THE VERB. `add` hands the rest of the line to the same value reader the bare form
+	 * uses, which is what made the older `--` spelling redundant.
 	 */
 	it("stores an escaped line whose first word is reserved", async () => {
-		await secretThroughRealDialog("-- log ghp_startsWithAReservedWord", { typeName: type("") });
+		await secretThroughRealDialog("add log ghp_startsWithAReservedWord", { typeName: type("") });
 
 		const entries = await stored();
 		expect(entries[0]?.value).toBe("log ghp_startsWithAReservedWord");
 	});
 
 	/**
-	 * `--from-env` survives the grammar change, in leading position only. It is the single entry
-	 * form that never puts the credential on screen at all, so losing it from the terminal would
-	 * have left the safest path available to ACP clients and not to the operator.
+	 * AND EVERY REMOVED SPELLING REACHES THE VAULT WITH NOTHING, which is the half a parser test cannot
+	 * show. Deleting the guard would have stored `-- log ghp_...` verbatim -- a live credential with two
+	 * dashes and a space welded to its front, expanding under `#NAME#` into requests that fail
+	 * somewhere unrelated -- and it would have stored the literal text `--from-env MY_TOKEN` as
+	 * somebody's token while the confirmation said a secret had been stored. These assert the vault
+	 * stayed empty, not merely that a message was thrown.
+	 *
+	 * DERIVED OVER THE WHOLE SET, so a spelling added to the guard is covered here and one deleted from
+	 * it turns this red. The dashes are the only shape refused: the row below stores a private key,
+	 * whose first bytes are five of them.
+	 */
+	it("stores nothing at all for any removed option spelling", async () => {
+		for (const removed of ["--", "--from-env", "--ttl", "--scope", "--limit", "--name"]) {
+			await expect(
+				secretThroughRealDialog(`add ${removed} log ghp_startsWithAReservedWord`, { typeName: type("") }),
+			).rejects.toThrow(/\/secret add <value>/u);
+
+			expect(await stored()).toEqual([]);
+		}
+	});
+
+	/**
+	 * AND A CREDENTIAL THAT MERELY BEGINS WITH DASHES IS STORED, which is the boundary of the guard
+	 * above and the reason it matches exact words rather than a leading dash: a PEM private key opens
+	 * with five of them, and refusing that shape would lock the operator out of the one credential
+	 * format they cannot retype.
+	 */
+	it("stores a value whose first word merely begins with dashes", async () => {
+		await secretThroughRealDialog("add -----BEGIN OPENSSH PRIVATE KEY-----", { typeName: type("") });
+
+		const entries = await stored();
+		expect(entries[0]?.value).toBe("-----BEGIN OPENSSH PRIVATE KEY-----");
+	});
+
+	/**
+	 * Reading a value out of the environment survives the grammar change, as a command of its own. It
+	 * is the single entry form that never puts the credential on screen at all, so losing it from the
+	 * terminal would have left the safest path available to ACP clients and not to the operator.
 	 */
 	it("still reads a credential out of the environment without a field", async () => {
 		process.env.VEYYON_TEST_FROM_ENV_TOKEN = "ghp_fromEnvCredential77";
 		try {
-			await secretThroughRealDialog("--from-env VEYYON_TEST_FROM_ENV_TOKEN", { typeName: type("") });
+			await secretThroughRealDialog("from-env VEYYON_TEST_FROM_ENV_TOKEN", { typeName: type("") });
 		} finally {
 			delete process.env.VEYYON_TEST_FROM_ENV_TOKEN;
 		}
@@ -274,12 +388,13 @@ describe("the verbless /secret grammar in a terminal", () => {
 	});
 
 	/**
-	 * A `--from-env` that names nothing is refused rather than stored as the literal text
-	 * `--from-env`. The flag reading and the credential reading of that word are mutually
-	 * exclusive, so the ambiguous case must fail loudly instead of picking one.
+	 * A `from-env` that names nothing is refused rather than stored, and rather than reading the empty
+	 * string out of the environment. It is a command with a required word missing, which is the same
+	 * mistake as a bare `rm`, so it gets the same answer: nothing is stored and the missing word is
+	 * named.
 	 */
-	it("refuses a --from-env with no variable rather than storing the flag", async () => {
-		await expect(secretThroughRealDialog("--from-env")).rejects.toThrow(/needs the name of an environment variable/);
+	it("refuses a from-env with no variable rather than storing anything", async () => {
+		await expect(secretThroughRealDialog("from-env")).rejects.toThrow(/still needs an environment variable name/);
 		expect(await stored()).toEqual([]);
 	});
 });
@@ -301,23 +416,44 @@ describe("the verbless /secret grammar in a terminal", () => {
  * statement that it masks what you type.
  */
 describe("the masked credential field as the operator sees it", () => {
-	/** Present the masked field the way the registry does, and return what it paints. */
+	/** Present a masked field through the real controller, and return what it paints at 100 columns. */
+	function paintedField(title: string, hint: string): string {
+		const { overlays, ctx: uiCtx } = hookHost();
+		const controller = new ExtensionUiController(uiCtx as never);
+		void controller.showHookInput(title, undefined, undefined, { mask: true, hint });
+		const field = uiCtx.hookInput;
+		if (field === undefined) throw new Error("The field was never presented.");
+		if (!overlays.includes(field)) throw new Error("The field was built but never put on screen.");
+		return stripAnsi(field.render(100).join("\n"));
+	}
+
+	/** The field the way the registry presents it, which is what the wording cases below read. */
 	function paintedMaskedField(): string {
-		const uiCtx = {
-			ui: { setFocus() {}, requestRender() {}, requestComponentRender() {}, terminal: { rows: 40 } },
-			editorContainer: { clear() {}, addChild() {} },
-			editor: {},
-			hookInput: undefined as HookInputComponent | undefined,
-		};
+		return paintedField(maskedPromptTitle(), maskedPromptHint());
+	}
+
+	/**
+	 * The caller states THAT the field is masked and never WHICH character stands in for a keystroke:
+	 * the glyph belongs to the host that draws the field, which is why `inputOptions.mask` is a
+	 * boolean. The proof is the painted field after typing, because a controller that stopped
+	 * resolving the boolean would hand the component no mask and paint the credential itself.
+	 */
+	it("draws the terminal's own mask character in place of what was typed", () => {
+		const { overlays, ctx: uiCtx } = hookHost();
 		const controller = new ExtensionUiController(uiCtx as never);
 		void controller.showHookInput(maskedPromptTitle(), undefined, undefined, {
-			mask: DEFAULT_MASK_CHAR,
+			mask: true,
 			hint: maskedPromptHint(),
 		});
 		const field = uiCtx.hookInput;
 		if (field === undefined) throw new Error("The field was never presented.");
-		return stripAnsi(field.render(100).join("\n"));
-	}
+		if (!overlays.includes(field)) throw new Error("The field was built but never put on screen.");
+		field.handleInput("sk-live-42");
+		const painted = stripAnsi(field.render(100).join("\n"));
+
+		expect(painted).not.toContain("sk-live-42");
+		expect(painted).toContain(DEFAULT_MASK_CHAR.repeat("sk-live-42".length));
+	});
 
 	/**
 	 * LOCKS OUT the exact defect: a field titled "Paste the secret", which an operator reads as a
@@ -364,15 +500,69 @@ describe("the masked credential field as the operator sees it", () => {
 	});
 
 	/**
-	 * The legend keeps its keys. The hint shares that row, and a naive implementation that
+	 * THE CARD IS AS WIDE AS ITS OWN SENTENCES. The field is a floating card sized at a fraction of
+	 * the terminal, and a 60% card on a 100-column terminal cut the instruction to "You can name it
+	 * afte…" and the promise to "stored encr…". Both sentences are the field's defence against
+	 * storing a NAME as a credential, so neither may end in an ellipsis: `HookInputComponent` raises
+	 * the card's width floor to fit them. Asserted as "no ellipsis on the title or the hint row"
+	 * rather than as a width number, because the contract is legibility and not a column count.
+	 */
+	it("shows its instruction and its promise whole, with nothing cut off", () => {
+		const rows = paintedMaskedField().split("\n");
+		const titleRow = rows.find(row => row.includes("Paste the secret value")) ?? "";
+		const hintRow = rows.find(row => row.includes("hidden as you type")) ?? "";
+
+		expect(titleRow).toContain("You can name it afterwards.");
+		expect(titleRow).not.toContain("…");
+		expect(hintRow).toContain("stored encrypted");
+		expect(hintRow).not.toContain("…");
+	});
+
+	/**
+	 * EITHER sentence sets the width, and this is the arm that proves it separately.
+	 *
+	 * The shipped wording happens to have the longer requirement in the TITLE, so a card that sized
+	 * itself to the title alone still painted the shipped hint whole and the case above stayed green
+	 * while half the rule was gone. These two fields invert the pair: one whose hint is far longer
+	 * than its title, one whose title is far longer than its hint. Each must be readable, so
+	 * dropping either term of the width floor fails here even when the shipped strings would not
+	 * notice.
+	 */
+	it("sizes to whichever of the two sentences is longer", () => {
+		const longHint = "a hint that is considerably longer than the title above it, and still one line";
+		const hintLed = paintedField("Short title", longHint);
+		expect(hintLed.split("\n").find(row => row.includes("considerably longer")) ?? "").toContain("still one line");
+		expect(hintLed).not.toContain("…");
+
+		const longTitle = "A title that is considerably longer than the hint under it, ending in a period.";
+		const titleLed = paintedField(longTitle, "short hint");
+		expect(titleLed.split("\n").find(row => row.includes("considerably longer")) ?? "").toContain(
+			"ending in a period.",
+		);
+		expect(titleLed).not.toContain("…");
+	});
+
+	/**
+	 * The legend keeps its keys, in the same footer band as the hint. A naive implementation that
 	 * REPLACED the legend rather than joining it would take the only statement of how to submit or
 	 * escape off the screen.
+	 *
+	 * The keys are asserted by ACTION rather than by one spelling of a binding: `cancel` is bound to
+	 * esc and to ctrl+c, the chip names every live binding, and pinning "esc cancel" as a literal
+	 * made the suite fail for a card that named one key MORE than it used to.
 	 */
-	it("keeps the submit and cancel keys beside the hint", () => {
-		const painted = paintedMaskedField();
+	it("keeps the submit and cancel keys in the footer band beside the hint", () => {
+		const rows = paintedMaskedField().split("\n");
+		const hintRow = rows.findIndex(row => row.includes("hidden as you type"));
+		const keyRow = rows.findIndex(row => row.includes("submit"));
 
-		expect(painted).toContain("enter submit");
-		expect(painted).toContain("esc cancel");
+		expect(hintRow).toBeGreaterThanOrEqual(0);
+		// Same band: the keys sit on the hint's row or the one under it, never elsewhere on screen.
+		expect(keyRow - hintRow).toBeGreaterThanOrEqual(0);
+		expect(keyRow - hintRow).toBeLessThanOrEqual(1);
+		expect(rows[keyRow]).toContain("enter");
+		expect(rows[keyRow]).toContain("cancel");
+		expect(rows[keyRow]).toContain("esc");
 	});
 });
 
@@ -383,7 +573,7 @@ describe("a credential entered through the real masked dialog", () => {
 	 * regression anywhere in dialog settlement, masking, or `request.value` assignment fails here.
 	 */
 	it("stores exactly the typed bytes under the name given afterwards", async () => {
-		await secretThroughRealDialog("", {
+		await secretThroughRealDialog("add", {
 			typeValue: type("ghp_typedCredential12345"),
 			typeName: type("github token"),
 		});
@@ -397,7 +587,7 @@ describe("a credential entered through the real masked dialog", () => {
 	 * silently persist a credential that does not authenticate.
 	 */
 	it("stores a bracketed paste as the credential, without its framing", async () => {
-		await secretThroughRealDialog("", {
+		await secretThroughRealDialog("add", {
 			typeValue: feed => {
 				feed(`${PASTE_START}ghp_pastedCredential67890${PASTE_END}`);
 				feed("\r");
@@ -414,7 +604,7 @@ describe("a credential entered through the real masked dialog", () => {
 	 * as the VALUE rather than refusing for want of a name.
 	 */
 	it("stores the typed value under a generated name when no name field exists", async () => {
-		const { fields } = await secretThroughRealDialog("", { typeValue: type("ghp_unnamedCredential999") });
+		const { fields } = await secretThroughRealDialog("add", { typeValue: type("ghp_unnamedCredential999") });
 
 		expect(fields).toEqual([{ title: maskedPromptTitle(), masked: true }]);
 		const entries = await stored();
@@ -429,7 +619,7 @@ describe("a credential entered through the real masked dialog", () => {
 	 * bytes, which is worse than storing nothing at all.
 	 */
 	it("stores nothing when the value field is cancelled", async () => {
-		const { outcome } = await secretThroughRealDialog("", {
+		const { outcome } = await secretThroughRealDialog("add", {
 			typeValue: feed => {
 				for (const character of "ghp_halfTypedCredential") feed(character);
 				feed("\x1b");
@@ -458,7 +648,7 @@ describe("the optional name field shown after the credential", () => {
 	 * credential is back.
 	 */
 	it("asks for the value first, masked, then the name, unmasked", async () => {
-		const { fields } = await secretThroughRealDialog("", {
+		const { fields } = await secretThroughRealDialog("add", {
 			typeValue: type("ghp_twoStepCredential11"),
 			typeName: type("github token"),
 		});
@@ -475,7 +665,7 @@ describe("the optional name field shown after the credential", () => {
 	 * to cost one paste. An empty name keeps the generated one and the value is still stored.
 	 */
 	it("generates a name when the field is left empty", async () => {
-		await secretThroughRealDialog("ghp_generatedNameCred22", { typeName: type("") });
+		await secretThroughRealDialog("add ghp_generatedNameCred22", { typeName: type("") });
 
 		const entries = await stored();
 		expect(entries).toHaveLength(1);
@@ -489,7 +679,7 @@ describe("the optional name field shown after the credential", () => {
 	 * they never saw is the one reading they did not ask for.
 	 */
 	it("stores nothing when the name field is cancelled", async () => {
-		const { outcome } = await secretThroughRealDialog("ghp_abandonedCredential", {
+		const { outcome } = await secretThroughRealDialog("add ghp_abandonedCredential", {
 			typeName: feed => feed("\x1b"),
 		});
 
@@ -503,7 +693,7 @@ describe("the optional name field shown after the credential", () => {
 	 * partial is written under a name the vault could not hold.
 	 */
 	it("refuses an unusable typed name and stores nothing", async () => {
-		await expect(secretThroughRealDialog("ghp_unusableNameCred55", { typeName: type("ab") })).rejects.toThrow(
+		await expect(secretThroughRealDialog("add ghp_unusableNameCred55", { typeName: type("ab") })).rejects.toThrow(
 			/not a usable secret name/,
 		);
 		expect(await stored()).toEqual([]);

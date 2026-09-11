@@ -5,13 +5,14 @@ import * as path from "node:path";
 import type { AgentTool } from "@veyyon/agent-core";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { EDIT_MODE_STRATEGIES } from "@veyyon/coding-agent/edit";
-import { COMPOSER_INSET_COLS } from "@veyyon/coding-agent/modes/components/composer-chrome";
-import type { ToolExecutionComponent } from "@veyyon/coding-agent/modes/components/tool-execution";
-import { theme as activeTheme, initTheme } from "@veyyon/coding-agent/modes/theme/theme";
-import { previewWindowRows } from "@veyyon/coding-agent/tools/render-utils";
-import { TUI, visibleWidth } from "@veyyon/tui";
+import { COMPOSER_INSET_COLS } from "@veyyon/coding-agent/modes/terminal/components/composer/composer-chrome";
+import type { ToolExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/tool-execution";
+import { theme as activeTheme, initTheme } from "@veyyon/coding-agent/theme/theme";
+import { previewWindowRows } from "@veyyon/coding-agent/tools/core/render-utils";
+import { TUI } from "@veyyon/tui";
 import { removeWithRetries } from "@veyyon/utils";
-import { VirtualTerminal } from "../../tui/test/virtual-terminal";
+import { visibleWidth } from "@veyyon/utils/width";
+import { VirtualTerminal } from "../../../hosts/terminal/engine/test/virtual-terminal";
 import { createToolExecution } from "./helpers/tool-execution";
 
 // The streaming edit preview is a fixed-height tail window ("cursor"): the last
@@ -404,34 +405,39 @@ describe("streaming tool call preview height (bounded across renderers)", () => 
 	}
 
 	function getRenderedLines(lines: readonly string[]): string[] {
+		const rail = activeTheme.symbol("block.rail");
 		return lines
 			.map(line => Bun.stripANSI(line).trim())
-			.filter(line => line.startsWith("│") && line.endsWith("│"))
-			.map(line => line.slice(1, -1).trim())
+			.filter(line => line.startsWith(rail))
+			.map(line => line.slice(rail.length).trim())
 			.filter(line => line !== "" && !line.includes("earlier lines"));
 	}
 
 	/**
-	 * The frame spans the tool's width INSIDE the transcript rail: it starts at
-	 * `COMPOSER_INSET_COLS` and ends the same distance from the right edge. It used to
-	 * start at column 0 and run edge to edge, which put it two columns left of every
-	 * other block on screen; see `transcript-one-left-rail.test.ts` for the rail itself.
-	 * What this test still guards is that the frame is a full-width band within that
-	 * rail rather than hugging its content, which is what a preview must not do while
-	 * args stream in and the content width jumps every tick.
+	 * The preview hangs on a rail at `COMPOSER_INSET_COLS`, inside the transcript rail, and
+	 * the row it sits on is padded to the full width by the container. It used to be a box
+	 * band spanning that same width: the band belongs to the container now and the block
+	 * hugs its own ink, so what still has to hold is that the preview starts two columns in
+	 * rather than at column 0 (it did, once, which put it left of every other block on
+	 * screen; see `transcript-one-left-rail.test.ts` for the rail itself) and that the row
+	 * under it is a full rectangle for the transcript to paint on.
 	 */
-	test("framed inline tool previews span the full tool width inside the rail", () => {
+	test("inline tool previews hang on a rail at the transcript inset", () => {
 		const width = 80;
+		const rail = activeTheme.symbol("block.rail");
 		const { lines } = renderPending("bash", { command: "echo hi" });
 		const strippedLines = lines.map(line => Bun.stripANSI(line));
-		const topBorder = strippedLines.find(line => line.includes(activeTheme.boxSharp.topLeft));
+		const railed = strippedLines.filter(line => line.includes(rail));
 
-		expect(topBorder).toBeDefined();
-		const trimmed = (topBorder ?? "").trimEnd();
-		expect(trimmed.length - trimmed.trimStart().length).toBe(COMPOSER_INSET_COLS);
-		expect(trimmed.trimStart()[0]).toBe(activeTheme.boxSharp.topLeft);
-		expect(trimmed.endsWith(activeTheme.boxSharp.topRight)).toBe(true);
-		expect(visibleWidth(trimmed)).toBe(width - COMPOSER_INSET_COLS);
+		expect(railed.length).toBeGreaterThan(0);
+		for (const row of railed) {
+			expect(row.indexOf(rail)).toBe(COMPOSER_INSET_COLS);
+			expect(visibleWidth(row)).toBe(width);
+		}
+		const box = activeTheme.boxSharp;
+		for (const glyph of [box.topLeft, box.topRight, box.bottomLeft, box.vertical]) {
+			for (const row of strippedLines) expect(row, glyph).not.toContain(glyph);
+		}
 	});
 
 	test("bash/ssh pending previews stay short even with very long multiline args", () => {
@@ -468,11 +474,10 @@ describe("streaming tool call preview height (bounded across renderers)", () => 
 	test("eval pending preview windows the code to the viewport tail", () => {
 		// Eval cell code is capped to the same viewport-sized TAIL window as
 		// bash/ssh: the live edge stays visible behind an "… N earlier lines"
-		// marker on top; ctrl+o uncaps. Unlike bash, the marker row sits above
-		// the window, so previewWindowRows() code lines stay visible.
+		// marker on top; ctrl+o uncaps. The marker is one of the window's rows.
 		const window = previewWindowRows();
 		const total = window + 5;
-		const hidden = total - window;
+		const hidden = total - (window - 1);
 		const longLines = Array.from({ length: total }, (_, i) => `line-${i}`);
 		const { lines, text } = renderPending("eval", {
 			language: "js",

@@ -6,26 +6,31 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { ThinkingLevel } from "@veyyon/agent-core";
 import type { ImageContent, Model, TextContent, TSchema } from "@veyyon/ai";
-import type { KeyId } from "@veyyon/tui";
-import { errorMessage, hasFsCode, isEacces, isEnoent, logger, reportFault } from "@veyyon/utils";
+import { factoryExportMissingMessage, moduleImportFailedMessage } from "@veyyon/kernel/loader/load-failure";
+import { type ManifestHolder, manifestFromPackageJson } from "@veyyon/kernel/loader/manifest-key";
+import * as TypeBox from "@veyyon/kernel/registry/typebox";
+import { errorMessage, getAgentDir, hasFsCode, isEacces, isEnoent, logger, reportFault } from "@veyyon/utils";
+import type { KeyId } from "@veyyon/utils/keys";
 import { Type } from "arktype";
 import * as zodModule from "zod/v4";
-import { type ExtensionModule, extensionModuleCapability } from "../../capability/extension-module";
-import { type Hook, hookCapability } from "../../capability/hook";
+import {
+	canonicalProjectRoot,
+	describeProjectExecutable,
+	describeRefusal,
+	type ProjectExecutable,
+	ProjectTrust,
+} from "../../config/project-trust";
 import { loadCapability } from "../../discovery";
-import { discoverExtensionModulePaths, getExtensionNameFromPath } from "../../discovery/helpers";
-import type { ExecOptions } from "../../exec/exec";
-import { execCommand } from "../../exec/exec";
+import { type ExtensionModule, extensionModuleCapability } from "../../discovery/capability/extension-module";
+import { type Hook, hookCapability } from "../../discovery/capability/hook";
+import { discoverExtensionModulePaths, getExtensionNameFromPath, pluginsRootFor } from "../../discovery/helpers";
+import { type ExecOptions, execCommand, withSessionCpuExec } from "../../exec/exec";
 import type { CustomMessagePayload } from "../../session/messages";
 import { EventBus } from "../../utils/event-bus";
 // Runtime self-reference: dereference this namespace only inside loader functions to keep the index.ts cycle safe.
 import { type CodingAgentApi, loadCodingAgentApi } from "../coding-agent-api";
-import { factoryExportMissingMessage, moduleImportFailedMessage } from "../load-failure";
-import { type ManifestHolder, manifestFromPackageJson } from "../manifest-key";
 import { installLegacyPiSpecifierShim, loadLegacyPiModule } from "../plugins/legacy-pi-compat";
 import { getAllPluginExtensionPaths } from "../plugins/loader";
-import * as TypeBox from "../typebox";
-
 import { resolvePath, withExitGuard } from "../utils";
 import type {
 	AssistantThinkingRenderer,
@@ -38,6 +43,7 @@ import type {
 	MessageRenderer,
 	ProviderConfig,
 	RegisteredCommand,
+	SetModelOptions,
 	ToolDefinition,
 } from "./types";
 
@@ -129,17 +135,11 @@ export class ExtensionRuntime implements IExtensionRuntime {
  * Registration methods write to the extension object.
  * Action methods delegate to the shared runtime.
  */
-class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
+class ConcreteExtensionAPI implements ExtensionAPI {
 	readonly logger = logger;
 	readonly typebox = TypeBox;
 	readonly arktype = Type;
 	readonly zod = zodModule;
-	readonly flagValues = new Map<string, boolean | string>();
-	readonly pendingProviderRegistrations: Array<{
-		name: string;
-		config: ProviderConfig;
-		sourceId: string;
-	}> = [];
 
 	constructor(
 		public readonly pi: CodingAgentApi,
@@ -148,6 +148,7 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 		private readonly cwd: string,
 		public readonly events: EventBus,
 		private readonly adoptSpawnedPid?: (pid: number) => void,
+		private readonly gateSpawn?: (what: string) => Promise<void>,
 	) {}
 
 	on<F extends HandlerFn>(event: string, handler: F): void {
@@ -234,7 +235,7 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 			command,
 			args,
 			options?.cwd ?? this.cwd,
-			this.adoptSpawnedPid ? { ...options, adoptPid: this.adoptSpawnedPid } : options,
+			withSessionCpuExec(options, this.adoptSpawnedPid, this.gateSpawn, "an extension command"),
 		);
 	}
 
@@ -254,8 +255,8 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 		return this.runtime.getCommands();
 	}
 
-	setModel(model: Model): Promise<boolean> {
-		return this.runtime.setModel(model);
+	setModel(model: Model, options?: SetModelOptions): Promise<boolean> {
+		return this.runtime.setModel(model, options);
 	}
 
 	getThinkingLevel(): ThinkingLevel | undefined {
@@ -302,6 +303,7 @@ async function loadExtension(
 	eventBus: EventBus,
 	runtime: IExtensionRuntime,
 	adoptSpawnedPid?: (pid: number) => void,
+	gateSpawn?: (what: string) => Promise<void>,
 ): Promise<{ extension: LoadedExtension | null; error: string | null }> {
 	const resolvedPath = resolvePath(extensionPath, cwd);
 	try {
@@ -323,6 +325,7 @@ async function loadExtension(
 			cwd,
 			eventBus,
 			adoptSpawnedPid,
+			gateSpawn,
 		);
 		await withExitGuard(async () => {
 			await factory(api);
@@ -344,29 +347,88 @@ export async function loadExtensionFromFactory(
 	runtime: IExtensionRuntime,
 	name = "<inline>",
 	adoptSpawnedPid?: (pid: number) => void,
+	gateSpawn?: (what: string) => Promise<void>,
 ): Promise<LoadedExtension> {
 	const extension = createExtension(name, name);
-	const api = new ConcreteExtensionAPI(await loadCodingAgentApi(), extension, runtime, cwd, eventBus, adoptSpawnedPid);
+	const api = new ConcreteExtensionAPI(
+		await loadCodingAgentApi(),
+		extension,
+		runtime,
+		cwd,
+		eventBus,
+		adoptSpawnedPid,
+		gateSpawn,
+	);
 	await factory(api);
 	return extension;
 }
 
 /**
+ * How the trust gate is resolved for one load.
+ *
+ * `agentDir` names the profile whose decisions apply; omitted means the process-booted one,
+ * resolved by the caller that has it. `trust` lets a caller pass a store it has already loaded
+ * (the session loads one and hands the same instance to the MCP gate) so a startup path reads
+ * the file once.
+ *
+ * `configuredPaths` are paths the OPERATOR named — `extensions:` in their config, a `--config`
+ * overlay, an SDK argument — and they are exempt even when they live inside the project, because
+ * that is where an extension is written while it is being developed. The exemption is sound
+ * because there is no project-level `config.yml`: settings come from the profile and from home
+ * (see `SOURCE_PATHS` in `discovery/helpers.ts`), so a repository cannot put a path in this list.
+ * A caller that forgets to pass it gates MORE, never less, which is the direction a mistake has
+ * to fail in.
+ */
+export interface ExtensionTrustOptions {
+	agentDir?: string;
+	trust?: ProjectTrust;
+	configuredPaths?: readonly string[];
+}
+
+/**
  * Load extensions from paths.
+ *
+ * THE GATE LIVES HERE, not in the callers, because this is the only function in the product
+ * that imports an extension module: `loadExtension` runs top-level code and then the factory,
+ * and there are five call sites reaching it (the session, the shim, `veyyon models`, the SDK's
+ * `discoverExtensions`, and agents replaying a parent's path list). A gate in front of one
+ * of them is a gate the other four walk around, and the dangerous default — "this caller
+ * forgot" — has to be a refusal rather than an execution.
+ *
+ * A path OUTSIDE the project is the operator's own: their profile's extensions, an installed
+ * plugin, a path they typed into `extensions:`. Those are unchanged. A path inside the project
+ * is repository-controlled and needs a decision covering its exact bytes.
  */
 export async function loadExtensions(
 	paths: string[],
 	cwd: string,
 	eventBus?: EventBus,
 	adoptSpawnedPid?: (pid: number) => void,
+	trustOptions?: ExtensionTrustOptions,
+	gateSpawn?: (what: string) => Promise<void>,
 ): Promise<LoadExtensionsResult> {
 	const extensions: LoadedExtension[] = [];
 	const errors: Array<{ path: string; error: string }> = [];
+	const withheld: Array<{ path: string; reason: string }> = [];
 	const resolvedEventBus = eventBus ?? new EventBus();
 	const runtime = new ExtensionRuntime();
+	const gate = await openTrustGate(paths, cwd, trustOptions);
 
 	for (const extPath of paths) {
-		const { extension, error } = await loadExtension(extPath, cwd, resolvedEventBus, runtime, adoptSpawnedPid);
+		const refusal = await gate(extPath);
+		if (refusal) {
+			withheld.push({ path: extPath, reason: refusal });
+			continue;
+		}
+
+		const { extension, error } = await loadExtension(
+			extPath,
+			cwd,
+			resolvedEventBus,
+			runtime,
+			adoptSpawnedPid,
+			gateSpawn,
+		);
 
 		if (error) {
 			errors.push({ path: extPath, error });
@@ -381,8 +443,66 @@ export async function loadExtensions(
 	return {
 		extensions,
 		errors,
+		withheld,
 		runtime,
 	};
+}
+
+/**
+ * Build the per-path decision function, doing the store read and the root resolution once.
+ *
+ * Returns a function answering with a refusal sentence, or null when the path may load. When no
+ * candidate path is inside the project the store is never opened at all, which is the common
+ * case (a profile's own extensions) and keeps a cold startup free of an extra file read.
+ */
+async function openTrustGate(
+	paths: string[],
+	cwd: string,
+	trustOptions?: ExtensionTrustOptions,
+): Promise<(extPath: string) => Promise<string | null>> {
+	const allow = async (): Promise<string | null> => null;
+	if (paths.length === 0) return allow;
+
+	const root = await canonicalProjectRoot(cwd);
+	// A configured entry may name a FILE or a DIRECTORY, and discovery expands a directory into
+	// the entry files inside it, so exact-path equality exempted the operator's `extensions: [./dev]`
+	// and then gated every file that entry resolved to. Containment is the same claim the operator
+	// made: they named that tree.
+	const exempt = (trustOptions?.configuredPaths ?? []).map(configured => resolvePath(configured, cwd));
+	const isExempt = (resolved: string): boolean =>
+		exempt.some(entry => {
+			if (entry === resolved) return true;
+			const relative = path.relative(entry, resolved);
+			return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+		});
+	const candidates = new Map<string, ProjectExecutable>();
+	for (const extPath of paths) {
+		const resolved = resolvePath(extPath, cwd);
+		if (isExempt(resolved)) continue;
+		const executable = await describeProjectExecutable(resolved, root);
+		if (executable) candidates.set(extPath, executable);
+	}
+	if (candidates.size === 0) return allow;
+
+	const trust = trustOptions?.trust ?? (await loadTrustStore(trustOptions?.agentDir));
+	return async extPath => {
+		const executable = candidates.get(extPath);
+		if (!executable) return null;
+		const verdict = trust.evaluate(root, executable);
+		if (verdict === "trusted") return null;
+		return describeRefusal("extensions", executable.relativePath, verdict);
+	};
+}
+
+/**
+ * Open the profile's store.
+ *
+ * A caller that names an agent dir gets that profile's decisions; a caller that does not gets
+ * the process-booted profile, which is the only answer available to a free function and is
+ * correct for every path that reaches here without a session.
+ */
+async function loadTrustStore(agentDir?: string): Promise<ProjectTrust> {
+	return await ProjectTrust.load(agentDir ?? getAgentDir());
 }
 
 interface ExtensionManifest {
@@ -405,9 +525,9 @@ async function readExtensionManifest(packageJsonPath: string): Promise<Extension
 		}
 		logger.warn(
 			`The extension manifest ${packageJsonPath} could not be read, so this directory's declared entry points ` +
-				`are not loaded and only its index.ts/index.js is tried: ${String(error)}. ` +
+				`are not loaded and only its index.ts/index.js is tried: ${errorMessage(error)}. ` +
 				"Fix: check the file's permissions and that it is valid JSON.",
-			{ path: packageJsonPath, error: String(error) },
+			{ path: packageJsonPath, error: errorMessage(error) },
 		);
 		return null;
 	}
@@ -472,7 +592,7 @@ async function resolveExtensionEntries(dir: string): Promise<string[] | null> {
  * `.veyyon`/`.pi` extension capabilities, JS/TS hook factories, the
  * installed-plugin tree, and any configured paths.
  *
- * Subagents reuse the parent's collected paths via the SDK's
+ * Agents reuse the parent's collected paths via the SDK's
  * `preloadedExtensionPaths` option, then call {@link loadExtensions} themselves
  * so each session rebuilds Extension instances bound to its OWN
  * `ExtensionAPI` (cwd, eventBus, runtime). Forwarding the parent's
@@ -580,8 +700,7 @@ export async function discoverExtensionPaths(
 	}
 
 	// 3. Discover extension entry points from installed plugins
-	addPaths(await getAllPluginExtensionPaths(cwd));
-
+	addPaths(await getAllPluginExtensionPaths(cwd, agentDir ? pluginsRootFor(agentDir) : undefined));
 	// 4. Explicitly configured paths
 	for (const configuredPath of configuredPaths) {
 		const resolved = resolvePath(configuredPath, cwd);
@@ -625,7 +744,8 @@ export async function discoverAndLoadExtensions(
 	cwd: string,
 	eventBus?: EventBus,
 	disabledExtensionIds?: string[],
+	agentDir?: string,
 ): Promise<LoadExtensionsResult> {
-	const paths = await discoverExtensionPaths(configuredPaths, cwd, disabledExtensionIds);
-	return loadExtensions(paths, cwd, eventBus);
+	const paths = await discoverExtensionPaths(configuredPaths, cwd, disabledExtensionIds, agentDir);
+	return loadExtensions(paths, cwd, eventBus, undefined, { configuredPaths, agentDir });
 }

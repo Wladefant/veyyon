@@ -8,27 +8,27 @@ import * as path from "node:path";
 import { getAgentDir, getConfigDirName, logger, parseFrontmatter, tryParseJson } from "@veyyon/utils";
 import { APP_DISPLAY_NAME } from "@veyyon/utils/app-identity";
 import { getManagedSkillsDir, MANAGED_SKILLS_PROVIDER_ID } from "../autolearn/managed-skills";
-import { registerProvider } from "../capability";
-import { type ContextFile, contextFileCapability } from "../capability/context-file";
-import { type ExtensionManifest, extensionCapability, type ManifestExtension } from "../capability/extension";
-import { type ExtensionModule, extensionModuleCapability } from "../capability/extension-module";
-import { readDirEntries, readFile } from "../capability/fs";
-import { type Hook, hookCapability } from "../capability/hook";
-import { type Instruction, instructionCapability } from "../capability/instruction";
-import { type MCPServer, mcpCapability } from "../capability/mcp";
-import { type Prompt, promptCapability } from "../capability/prompt";
-import { type Rule, ruleCapability } from "../capability/rule";
-import { type DiscoveredSkill, skillCapability } from "../capability/skill";
-import { type SlashCommand, slashCommandCapability } from "../capability/slash-command";
-import { type DiscoveredCustomTool, toolCapability } from "../capability/tool";
-import type { LoadContext, LoadResult } from "../capability/types";
-import { expandTilde } from "../tools/path-utils";
+import { expandTilde } from "../tools/core/path-utils";
 import { getGlobalAgentsPath, getProfileAgentsCandidates, stripManagedGuidance } from "./agents-guidance";
+import { registerProvider } from "./capability";
+import { type ContextFile, contextFileCapability } from "./capability/context-file";
+import { type ExtensionManifest, extensionCapability, type ManifestExtension } from "./capability/extension";
+import { type ExtensionModule, extensionModuleCapability } from "./capability/extension-module";
+import { readDirEntries, readFile } from "./capability/fs";
+import { type Hook, hookCapability } from "./capability/hook";
+import { type Instruction, instructionCapability } from "./capability/instruction";
+import { type MCPServer, mcpCapability } from "./capability/mcp";
+import { type Prompt, promptCapability } from "./capability/prompt";
+import { type Rule, ruleCapability } from "./capability/rule";
+import { type DiscoveredSkill, skillCapability } from "./capability/skill";
+import { type SlashCommand, slashCommandCapability } from "./capability/slash-command";
+import { type DiscoveredCustomTool, toolCapability } from "./capability/tool";
+import type { LoadContext, LoadResult } from "./capability/types";
+import { expandEnvVarsDeep, warnUnresolved } from "./env-expansion";
 import {
 	buildRuleFromMarkdown,
 	createSourceMeta,
 	discoverExtensionModulePaths,
-	expandEnvVarsDeep,
 	getExtensionNameFromPath,
 	loadFilesFromDir,
 	readContextFile,
@@ -126,7 +126,7 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 		}
 		if (!data.mcpServers) return result;
 
-		const expanded = expandEnvVarsDeep(data.mcpServers);
+		const expanded = expandEnvVarsDeep(data.mcpServers, warnUnresolved(warnings, path));
 		for (const [serverName, config] of Object.entries(expanded)) {
 			const serverConfig = config as Record<string, unknown>;
 
@@ -798,7 +798,7 @@ registerProvider<DiscoveredCustomTool>(toolCapability.id, {
  * PROJECT CONTEXT PRECEDENCE, ONE DIRECTORY LEVEL AT A TIME.
  *
  * This comment is the single owner of the rule. Everything else in this file,
- * in `capability/context-file.ts`, and in `docs/context-files.md` points here
+ * in `capability/context-file.ts`, and in `docs/handbook/src/context/context-files.md` points here
  * instead of restating it: precedence prose that lives in four places is how the
  * resolution-order axis and the prominence axis got confused before.
  *

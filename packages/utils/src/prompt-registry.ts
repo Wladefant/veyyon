@@ -7,7 +7,7 @@
  * that is not there.
  *
  * WHY THE CONTRACT LIVES HERE AND NOT IN A REGISTRY. Four packages ship prompts
- * (`coding-agent`, `agent-core`, `ai`, `metaharness`) and each needs the same row
+ * (`coding-agent`, `agent-core`, `ai`, `evals`) and each needs the same row
  * type. Written per package that is four declarations of one concept, which is the
  * failure this file exists to end: `PromptEntry` was already declared twice, and the
  * two copies had diverged — the `agent-core` copy had no `sections` field, so a
@@ -21,7 +21,8 @@
  * concern and lives with the parser that reads it. This file describes what a row
  * claims; the grammar decides what the bytes look like.
  */
-
+import { $env } from "./env";
+import { announceEvalPromptOverrides, applyEvalPromptOverrides } from "./eval-prompt-overrides";
 import { nearestNames } from "./levenshtein";
 
 /**
@@ -68,6 +69,67 @@ export interface PromptEntry {
 	readonly purpose: string;
 	/** Present only where a prompt has addressable regions; absent means one undivided body. */
 	readonly sections?: readonly PromptSection[];
+}
+
+/**
+ * Declare a directory's prompt rows — the seam where prompt text enters the program.
+ *
+ * WHY THE ROWS AND NOT ONLY THE REGISTRY. A module that sends one prompt imports its
+ * row table directly (`toolsPrompts["tools/bash"].text`) rather than the aggregate,
+ * which is the documented convention and is what 190 call sites do. The registry is
+ * built from the same rows, so replacing text there alone reaches the inspection
+ * commands and nothing a model is sent: an eval-only override announced itself
+ * loudly, `veyyon prompt --tools` reported the bash description unchanged at 971
+ * bytes, and the arm would have measured its own control while the results table
+ * called it a treatment. Text is substituted where it is READ, so every consumer of a
+ * row sees one prompt.
+ *
+ * Takes no directory, deliberately: the directory a row's id is relative to is stated
+ * once, in the `definePromptRegistry` call that owns it, and a rows file that restated
+ * it would be a second copy of that fact in 21 more places.
+ *
+ * Costs one string comparison per read and allocates nothing while no override is set:
+ * the rows are handed back by identity and each read returns the caller's own entry.
+ */
+export function definePromptRows<const T extends Record<string, PromptEntry>>(rows: T): T {
+	const current = overrideView(rows);
+	const live: Record<string, PromptEntry> = {};
+	for (const id of Object.keys(rows)) {
+		Object.defineProperty(live, id, { enumerable: true, get: () => current()[id] });
+	}
+	return live as T;
+}
+
+/**
+ * The rows in force NOW, re-applied when `VEYYON_EVAL_PROMPTS` changes.
+ *
+ * WHY A VIEW AND NOT A SNAPSHOT. The variable is set per benchmark arm, and an arm can
+ * run in the same process as the arm before it: the eval harness's in-process backend
+ * builds a session without spawning, so it sets the variable long after these modules
+ * were imported. A table applied once at import then serves the FIRST arm's text to
+ * every later arm, and the results table names a treatment that never reached the model.
+ *
+ * The parse behind this is cached per distinct value (`evalPromptOverrides`), so a read
+ * while nothing changed is one env read and one string comparison.
+ */
+function overrideView<T extends Record<string, PromptEntry>>(rows: T): () => Readonly<Record<string, PromptEntry>> {
+	let appliedRaw = $env.VEYYON_EVAL_PROMPTS;
+	let effective: Readonly<Record<string, PromptEntry>> = apply(rows);
+	return () => {
+		const raw = $env.VEYYON_EVAL_PROMPTS;
+		if (raw !== appliedRaw) {
+			appliedRaw = raw;
+			effective = apply(rows);
+		}
+		return effective;
+	};
+}
+
+/** Replace what an override names, and say so once. */
+function apply<T extends Record<string, PromptEntry>>(rows: T): Readonly<Record<string, PromptEntry>> {
+	const { prompts, appliedIds } = applyEvalPromptOverrides(rows);
+	announceEvalPromptOverrides(appliedIds);
+	return prompts;
 }
 
 /**
@@ -185,6 +247,12 @@ export interface PromptRegistry<T extends Record<string, PromptEntry> = Record<s
  * union with no members to derive, which is the same widening an explicit
  * `readonly PromptEntry[]` annotation causes on a section list.
  *
+ * An eval-only override (`VEYYON_EVAL_PROMPTS`, see `eval-prompt-overrides.ts`) may
+ * replace the text of rows this registry owns. That is the ONLY thing it may do here:
+ * the id list, the file paths and every other field stay the shipped ones, and an id
+ * this package does not hold is left alone rather than refused, because a sibling
+ * registry may own it.
+ *
  * @param dir repository-relative directory holding the `.md` files, without a trailing slash
  * @param prompts every row, keyed by the file's path under `dir` without `.md`
  */
@@ -192,14 +260,22 @@ export function definePromptRegistry<const T extends Record<string, PromptEntry>
 	dir: string,
 	prompts: T,
 ): PromptRegistry<T> {
+	// The production path is the identity path. A registry is read once per tool per
+	// turn, so an unconditional spread would be paid by every session to serve a
+	// benchmark that is not running; with no override set, `applyEvalPromptOverrides`
+	// hands back this very table and every accessor below reads it directly. The view
+	// re-applies only when the variable changes, which is one string comparison.
+	const current = overrideView(prompts);
 	const ids = Object.keys(prompts) as (keyof T & string)[];
 	return {
 		dir,
-		prompts,
+		get prompts(): T {
+			return current() as T;
+		},
 		ids,
-		text: id => prompts[id].text,
-		require: id => requirePromptFrom(prompts as Record<string, PromptEntry>, id, dir),
-		has: id => Object.hasOwn(prompts, id),
+		text: id => current()[id].text,
+		require: id => requirePromptFrom(current(), id, dir),
+		has: id => Object.hasOwn(current(), id),
 		fileFor: id => `${dir}/${id}.md`,
 	};
 }

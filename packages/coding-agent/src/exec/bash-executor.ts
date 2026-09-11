@@ -9,8 +9,8 @@ import { isExecutable, type ShellConfig } from "@veyyon/utils/procmgr";
 import { Settings, type ShellMinimizerSettings } from "../config/settings";
 import { sessionCpuLimit } from "../session/cpu-limit";
 import { OutputSink } from "../session/streaming-output";
-import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../tools/output-meta";
-import { TOOL_TIMEOUTS } from "../tools/tool-timeouts";
+import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../tools/core/output-meta";
+import { TOOL_TIMEOUTS } from "../tools/core/tool-timeouts";
 import { getOrCreateSnapshot } from "../utils/shell-snapshot";
 import { buildNonInteractiveEnv } from "./non-interactive-env";
 
@@ -202,7 +202,7 @@ function ensureInteractiveShellArgs(shell: string, args: string[]): string[] {
 
 	const commandIndex = args.findIndex(arg => arg === "-c" || arg === "--command");
 	if (commandIndex !== -1) {
-		return [...args.slice(0, commandIndex), "-i", ...args.slice(commandIndex)];
+		return args.slice(0, commandIndex).concat("-i", args.slice(commandIndex));
 	}
 
 	const compactCommandIndex = args.findIndex(arg => /^-[^-]*c[^-]*$/.test(arg));
@@ -210,7 +210,7 @@ function ensureInteractiveShellArgs(shell: string, args: string[]): string[] {
 		return args.map((arg, index) => (index === compactCommandIndex ? arg.replace("c", "ic") : arg));
 	}
 
-	return [...args, "-i"];
+	return args.concat("-i");
 }
 
 function quoteShellArg(value: string): string {
@@ -298,7 +298,12 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 	// saturation, and hand the native shell the budget name so every external
 	// command it spawns joins the group (see veyyon-shell's spawn observer).
 	const cpuLimit = sessionCpuLimit(options?.cpuSessionId ?? options?.sessionKey);
-	cpuLimit?.assertMaySpawn("a bash command");
+	if (cpuLimit) {
+		// gateSpawn creates the group first: assertMaySpawn is sync and used
+		// to skip memory/setup checks until #group existed, so the first
+		// command raced unbounded.
+		await cpuLimit.gateSpawn("a bash command");
+	}
 	const cpuBudgetId =
 		options?.cpuBudgetId ?? (cpuLimit && (await cpuLimit.ensureGroup()) ? cpuLimit.budgetName : undefined);
 	const sessionKey = buildSessionKey(shell, prefix, snapshotPath, shellEnv, options?.sessionKey, minimizer);

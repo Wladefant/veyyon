@@ -1,6 +1,4 @@
-import { emptyUsage } from "@veyyon/catalog/models";
 import { normalizeOllamaCloudBaseUrl } from "@veyyon/catalog/provider-models/ollama";
-import { fetchWithRetry } from "@veyyon/utils/fetch-retry";
 import { parseStreamingJson } from "@veyyon/utils/json-parse";
 import * as AIError from "../error";
 import { getEnvApiKey } from "../stream";
@@ -28,6 +26,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream";
 import {
 	type CapturedHttpErrorResponse,
 	captureHttpErrorResponse,
+	materializeDumpBody,
 	type RawHttpRequestDump,
 } from "../utils/http-inspector";
 import {
@@ -35,6 +34,7 @@ import {
 	getOpenAIStreamFirstEventTimeoutMs,
 	getOpenAIStreamIdleTimeoutMs,
 } from "../utils/idle-iterator";
+import { fetchProviderWithRetry } from "../utils/provider-fetch";
 import { sanitizeSchemaForOllama, toolWireSchema } from "../utils/schema";
 import {
 	getStreamMarkupHealingPattern,
@@ -42,6 +42,8 @@ import {
 	StreamMarkupHealing,
 	type StreamMarkupHealingEvent,
 } from "../utils/stream-markup-healing";
+import { stopReasonForTerminallessEof } from "../utils/terminalless-eof";
+import { createInitialResponsesAssistantMessage } from "./initial-message";
 import { transformMessages } from "./transform-messages";
 import { joinTextWithImagePlaceholder, partitionVisionContent } from "./vision-guard";
 
@@ -248,7 +250,7 @@ function convertMessages(model: Model<"ollama-chat">, context: Context): OllamaM
 		content: systemPrompt,
 		timestamp: Date.now(),
 	}));
-	const messages: Message[] = [...systemMessages, ...context.messages];
+	const messages: Message[] = systemMessages.concat(context.messages);
 	const isCloud = model.provider === "ollama-cloud";
 	const supportsImages = model.input.includes("image");
 	return transformMessages(messages, model).map((msg, index) => {
@@ -326,9 +328,15 @@ function createChatBody(model: Model<"ollama-chat">, context: Context, options: 
 	};
 }
 
-function shouldRetryOllamaResponse(response: Response, bodyText: string): boolean {
-	return response.status < 500 || !AIError.LLAMA_CPP_TOOL_CALL_PARSE_PATTERN.test(bodyText);
-}
+/**
+ * What a local server states for itself: the llama.cpp tool-call parse failure, which answers 500 and
+ * reproduces on every replay because the same prompt produces the same malformed output. The rest of
+ * the verdict is `retryResponse`'s.
+ */
+const OLLAMA_RESPONSE_RETRY_POLICY: AIError.ResponseRetryPolicy = {
+	api: "ollama-chat",
+	refusesReplay: body => AIError.LLAMA_CPP_TOOL_CALL_PARSE_PATTERN.test(body),
+};
 
 async function* iterateNdjson(stream: ReadableStream<Uint8Array>): AsyncGenerator<OllamaChatChunk> {
 	const reader = stream.getReader();
@@ -358,19 +366,6 @@ async function* iterateNdjson(stream: ReadableStream<Uint8Array>): AsyncGenerato
 	if (tail) {
 		yield JSON.parse(tail) as OllamaChatChunk;
 	}
-}
-
-function createEmptyOutput(model: Model<"ollama-chat">): AssistantMessage {
-	return {
-		role: "assistant",
-		content: [],
-		api: "ollama-chat" as Api,
-		provider: model.provider,
-		model: model.id,
-		usage: emptyUsage(),
-		stopReason: "stop",
-		timestamp: Date.now(),
-	};
 }
 
 function endThinkingBlock(stream: AssistantMessageEventStream, output: AssistantMessage, index: number): void {
@@ -424,16 +419,22 @@ const streamOllamaOnce = (
 	void (async () => {
 		const startTime = performance.now();
 		let firstTokenTime: number | undefined;
-		const output = createEmptyOutput(model);
+		let sawDone = false;
+		const output = createInitialResponsesAssistantMessage("ollama-chat" as Api, model.provider, model.id);
 		let rawRequestDump: RawHttpRequestDump | undefined;
+		/** Exact bytes of the last sent request body; materialized into a dump only on the 400/413 path. */
+		let wireBodyJson: string | undefined;
 		let capturedErrorResponse: CapturedHttpErrorResponse | undefined;
 		let activeThinkingIndex: number | undefined;
 		let activeTextIndex: number | undefined;
 		const activeToolIndices = new Set<number>();
-		const streamMarkupHealingPattern = getStreamMarkupHealingPattern(model.provider, model.id);
-		const streamMarkupHealing = streamMarkupHealingPattern
-			? new StreamMarkupHealing({ pattern: streamMarkupHealingPattern })
-			: undefined;
+		// `getStreamMarkupHealingPattern` always names a pattern -- "thinking" is the
+		// floor, not an absence -- so the healer is always present here. Ollama heals
+		// inline rather than through the generic wrap because it alone knows whether
+		// the provider also streamed native reasoning (`suppressHealedThinking`).
+		const streamMarkupHealing = new StreamMarkupHealing({
+			pattern: getStreamMarkupHealingPattern(model.provider, model.id),
+		});
 		let healedToolCallEmitted = false;
 		// Once the provider streams native reasoning (`message.thinking`), drop any
 		// thinking the text-channel healer also recovers so a model that emits both
@@ -522,7 +523,6 @@ const streamOllamaOnce = (
 			}
 		};
 		const drainHealedToolCalls = (): void => {
-			if (!streamMarkupHealing) return;
 			for (const call of streamMarkupHealing.drainCompleted()) emitHealedToolCall(call);
 		};
 		try {
@@ -542,8 +542,8 @@ const streamOllamaOnce = (
 				model: model.id,
 				method: "POST",
 				url: `${baseUrl}/api/chat`,
-				body,
 			};
+			wireBodyJson = JSON.stringify(body);
 			// Direct callers that bypass `register-builtins` (which installs
 			// the iterator-level watchdog) need a pre-response timer alongside
 			// `timeout: false`; otherwise an Ollama server that accepts the
@@ -557,7 +557,7 @@ const streamOllamaOnce = (
 			const watchdog = armPreResponseTimeout(options.signal, firstEventTimeoutMs);
 			let response: Response;
 			try {
-				response = await fetchWithRetry(`${baseUrl}/api/chat`, {
+				response = await fetchProviderWithRetry(`${baseUrl}/api/chat`, {
 					method: "POST",
 					headers: {
 						...model.headers,
@@ -568,7 +568,8 @@ const streamOllamaOnce = (
 					body: JSON.stringify(body),
 					signal: watchdog.signal,
 					defaultDelayMs: OLLAMA_RETRY_DELAYS_MS,
-					shouldRetryResponse: shouldRetryOllamaResponse,
+					maxDelayMs: options.maxRetryDelayMs,
+					retry: OLLAMA_RESPONSE_RETRY_POLICY,
 					fetch: options.fetch,
 					timeout: false,
 				});
@@ -613,15 +614,11 @@ const streamOllamaOnce = (
 				const chunkContent = chunk.message?.content;
 				const structuredCalls = chunk.message?.tool_calls?.length ? chunk.message.tool_calls : undefined;
 				if (chunkContent) {
-					if (streamMarkupHealing) {
-						const healingEvents = structuredCalls
-							? streamMarkupHealing.feedEventsWithoutCalls(chunkContent)
-							: streamMarkupHealing.feedEvents(chunkContent);
-						for (const event of healingEvents) {
-							emitHealingEvent(event);
-						}
-					} else {
-						appendVisibleText(chunkContent);
+					const healingEvents = structuredCalls
+						? streamMarkupHealing.feedEventsWithoutCalls(chunkContent)
+						: streamMarkupHealing.feedEvents(chunkContent);
+					for (const event of healingEvents) {
+						emitHealingEvent(event);
 					}
 				}
 				if (structuredCalls) {
@@ -654,12 +651,11 @@ const streamOllamaOnce = (
 					}
 				}
 				if (chunk.done) {
-					if (streamMarkupHealing) {
-						for (const event of streamMarkupHealing.flushEvents()) {
-							emitHealingEvent(event);
-						}
-						drainHealedToolCalls();
+					sawDone = true;
+					for (const event of streamMarkupHealing.flushEvents()) {
+						emitHealingEvent(event);
 					}
+					drainHealedToolCalls();
 					endActiveThinkingBlock();
 					endActiveTextBlock();
 					for (const index of activeToolIndices) {
@@ -675,17 +671,30 @@ const streamOllamaOnce = (
 					output.usage.totalTokens = output.usage.input + output.usage.output;
 				}
 			}
-			if (streamMarkupHealing) {
-				for (const event of streamMarkupHealing.flushEvents()) {
-					emitHealingEvent(event);
-				}
-				drainHealedToolCalls();
-				if (healedToolCallEmitted && output.stopReason === "stop") {
-					output.stopReason = "toolUse";
-				}
+			for (const event of streamMarkupHealing.flushEvents()) {
+				emitHealingEvent(event);
+			}
+			drainHealedToolCalls();
+			if (healedToolCallEmitted && output.stopReason === "stop") {
+				output.stopReason = "toolUse";
 			}
 			endActiveThinkingBlock();
 			endActiveTextBlock();
+			// No chunk ever carried `done`, so nothing in the response said the
+			// turn was over and `output.stopReason` is still the seed it was given
+			// before the first line arrived — an empty body reached the session as
+			// a finished answer. A tool call still open at EOF is a partial batch:
+			// its arguments never closed.
+			if (!sawDone) {
+				const stopReason = stopReasonForTerminallessEof(output.content, activeToolIndices.size === 0);
+				if (stopReason === undefined) {
+					throw new AIError.ProviderResponseError(
+						"Ollama stream ended without a done chunk (connection dropped or response truncated)",
+						{ provider: model.provider, kind: "incomplete-stream" },
+					);
+				}
+				output.stopReason = stopReason;
+			}
 			if (output.stopReason === "length" && !hasVisibleAssistantContent(output)) {
 				output.stopReason = "error";
 				output.errorMessage = EMPTY_OLLAMA_LENGTH_COMPLETION_MESSAGE;
@@ -719,14 +728,10 @@ const streamOllamaOnce = (
 			const result = await AIError.finalize(error, {
 				api: model.api,
 				provider: model.provider,
-				signal: options.signal,
-				rawRequestDump,
+				rawRequestDump: materializeDumpBody(rawRequestDump, wireBodyJson),
 				capturedErrorResponse,
 			});
-			output.stopReason = result.stopReason;
-			output.errorStatus = result.status;
-			output.errorId = result.id;
-			output.errorMessage = result.message;
+			AIError.applyFinalizeResult(output, result);
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) {
 				output.ttft = firstTokenTime - startTime;

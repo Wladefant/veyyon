@@ -15,29 +15,31 @@ import type { Model } from "@veyyon/ai";
 import { getOAuthProviders } from "@veyyon/ai/oauth";
 import { isZodSchema, zodToWireSchema } from "@veyyon/ai/utils/schema";
 import { $env, errorMessage, isRecord, readJsonl, Snowflake } from "@veyyon/utils";
-import { reset as resetCapabilities } from "../../capability";
+import { reset as resetCapabilities } from "../../discovery/capability";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import {
 	type ExtensionUIContext,
 	type ExtensionUIDialogOptions,
 	type ExtensionUISelectItem,
+	type ExtensionWidgetContent,
 	type ExtensionWidgetOptions,
 	getExtensionUISelectOptionLabel,
 } from "../../extensibility/extensions";
 import { buildSkillPromptMessage, parseSkillInvocation } from "../../extensibility/skills";
 import { loadSlashCommands } from "../../extensibility/slash-commands";
-import { type Theme, theme } from "../../modes/theme/theme";
 import type { AgentSession } from "../../session/agent-session";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands } from "../../slash-commands/available-commands";
+import { type Theme, theme } from "../../theme/theme";
 import { configuredThinkingLevelsForModel } from "../../thinking";
 import type { EventBus } from "../../utils/event-bus";
 import { initializeExtensions } from "../runtime-init";
 import { isRpcHostToolResult, isRpcHostToolUpdate, RpcHostToolBridge } from "./host-tools";
 import { isRpcHostUriResult, RpcHostUriBridge } from "./host-uris";
-import { RpcSubagentRegistry, readRpcSubagentTranscript } from "./rpc-subagents";
+import { RpcAgentRegistry, readRpcAgentTranscript } from "./rpc-agents";
 import type {
+	RpcAgentSubscriptionLevel,
 	RpcCommand,
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
@@ -51,7 +53,6 @@ import type {
 	RpcHostUriResult,
 	RpcResponse,
 	RpcSessionState,
-	RpcSubagentSubscriptionLevel,
 } from "./rpc-types";
 
 // Re-export types for consumers
@@ -462,30 +463,30 @@ export class RpcShutdownCoordinator {
 	}
 }
 
-export type RpcSubagentResetRegistry = Pick<RpcSubagentRegistry, "clear">;
+export type RpcAgentResetRegistry = Pick<RpcAgentRegistry, "clear">;
 
 export async function handleRpcSessionChange(
 	session: RpcSessionChangeSession,
 	command: RpcSessionChangeCommand,
-	subagentRegistry?: RpcSubagentResetRegistry,
+	agentRegistry?: RpcAgentResetRegistry,
 ): Promise<RpcSessionChangeResult> {
 	switch (command.type) {
 		case "new_session": {
 			const options = command.parentSession ? { parentSession: command.parentSession } : undefined;
 			const cancelled = !(await session.newSession(options));
-			if (!cancelled) subagentRegistry?.clear();
+			if (!cancelled) agentRegistry?.clear();
 			return { type: "new_session", data: { cancelled } };
 		}
 
 		case "switch_session": {
 			const cancelled = !(await session.switchSession(command.sessionPath));
-			if (!cancelled) subagentRegistry?.clear();
+			if (!cancelled) agentRegistry?.clear();
 			return { type: "switch_session", data: { cancelled } };
 		}
 
 		case "branch": {
 			const result = await session.branch(command.entryId);
-			if (!result.cancelled) subagentRegistry?.clear();
+			if (!result.cancelled) agentRegistry?.clear();
 			return { type: "branch", data: { text: result.selectedText, cancelled: result.cancelled } };
 		}
 	}
@@ -535,7 +536,7 @@ function shouldEmitRpcTitles(): boolean {
 	return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
-function isSubagentSubscriptionLevel(value: unknown): value is RpcSubagentSubscriptionLevel {
+function isAgentSubscriptionLevel(value: unknown): value is RpcAgentSubscriptionLevel {
 	return value === "off" || value === "progress" || value === "events";
 }
 
@@ -693,7 +694,7 @@ export async function runRpcMode(
 	const pendingExtensionRequests = new RpcPendingExtensionRequests();
 	const hostToolBridge = new RpcHostToolBridge(output);
 	const hostUriBridge = new RpcHostUriBridge(output);
-	const subagentRegistry = eventBus ? new RpcSubagentRegistry(eventBus, output) : undefined;
+	const agentRegistry = eventBus ? new RpcAgentRegistry(eventBus, output) : undefined;
 
 	// Shutdown request flag (wrapped in object to allow mutation with const)
 	const shutdownState = { requested: false };
@@ -835,27 +836,15 @@ export async function runRpcMode(
 			// Not supported in RPC mode
 		}
 
-		setWidget(key: string, content: unknown, options?: ExtensionWidgetOptions): void {
-			// Only support string arrays in RPC mode - factory functions are ignored
-			if (content === undefined || Array.isArray(content)) {
-				this.output({
-					type: "extension_ui_request",
-					id: Snowflake.next() as string,
-					method: "setWidget",
-					widgetKey: key,
-					widgetLines: content as string[] | undefined,
-					widgetPlacement: options?.placement,
-				} as RpcExtensionUIRequest);
-			}
-			// Component factories are not supported in RPC mode - would need TUI access
-		}
-
-		setFooter(_factory: unknown): void {
-			// Custom footer not supported in RPC mode - requires TUI access
-		}
-
-		setHeader(_factory: unknown): void {
-			// Custom header not supported in RPC mode - requires TUI access
+		setWidget(key: string, content: ExtensionWidgetContent, options?: ExtensionWidgetOptions): void {
+			this.output({
+				type: "extension_ui_request",
+				id: Snowflake.next() as string,
+				method: "setWidget",
+				widgetKey: key,
+				widgetLines: content,
+				widgetPlacement: options?.placement,
+			} as RpcExtensionUIRequest);
 		}
 
 		setTitle(title: string): void {
@@ -932,10 +921,6 @@ export async function runRpcMode(
 
 		setToolsExpanded(_expanded: boolean) {
 			// Tool expansion not supported in RPC mode - no TUI
-		}
-
-		setEditorComponent(): void {
-			// Custom editor components not supported in RPC mode
 		}
 	}
 
@@ -1071,7 +1056,7 @@ export async function runRpcMode(
 			case "new_session":
 			case "switch_session":
 			case "branch": {
-				const result = await handleRpcSessionChange(session, command, subagentRegistry);
+				const result = await handleRpcSessionChange(session, command, agentRegistry);
 				if (!result.data.cancelled) await emitAvailableCommandsUpdate();
 				return success(id, result.type, result.data);
 			}
@@ -1134,37 +1119,37 @@ export async function runRpcMode(
 			}
 
 			case "set_subagent_subscription": {
-				if (!subagentRegistry) {
-					return error(id, "set_subagent_subscription", "Subagent event bus is unavailable");
+				if (!agentRegistry) {
+					return error(id, "set_subagent_subscription", "Agent event bus is unavailable");
 				}
-				if (!isSubagentSubscriptionLevel(command.level)) {
+				if (!isAgentSubscriptionLevel(command.level)) {
 					return error(
 						id,
 						"set_subagent_subscription",
-						`Invalid subagent subscription level: ${String(command.level)}`,
+						`Invalid agent subscription level: ${String(command.level)}`,
 					);
 				}
-				subagentRegistry.setSubscriptionLevel(command.level);
-				return success(id, "set_subagent_subscription", { level: subagentRegistry.getSubscriptionLevel() });
+				agentRegistry.setSubscriptionLevel(command.level);
+				return success(id, "set_subagent_subscription", { level: agentRegistry.getSubscriptionLevel() });
 			}
 
 			case "get_subagents": {
-				if (!subagentRegistry) {
-					return error(id, "get_subagents", "Subagent event bus is unavailable");
+				if (!agentRegistry) {
+					return error(id, "get_subagents", "Agent event bus is unavailable");
 				}
-				return success(id, "get_subagents", { subagents: subagentRegistry.getSubagents() });
+				return success(id, "get_subagents", { agents: agentRegistry.getAgents() });
 			}
 
 			case "get_subagent_messages": {
-				if (!subagentRegistry) {
-					return error(id, "get_subagent_messages", "Subagent event bus is unavailable");
+				if (!agentRegistry) {
+					return error(id, "get_subagent_messages", "Agent event bus is unavailable");
 				}
 				try {
 					if (command.fromByte !== undefined && !Number.isFinite(command.fromByte)) {
 						return error(id, "get_subagent_messages", "fromByte must be a finite number");
 					}
-					const sessionFile = subagentRegistry.resolveSessionFile(command);
-					const transcript = await readRpcSubagentTranscript(sessionFile, command.fromByte);
+					const sessionFile = agentRegistry.resolveSessionFile(command);
+					const transcript = await readRpcAgentTranscript(sessionFile, command.fromByte);
 					return success(id, "get_subagent_messages", transcript);
 				} catch (err) {
 					return error(id, "get_subagent_messages", errorMessage(err));
@@ -1368,6 +1353,7 @@ export async function runRpcMode(
 								url: info.url,
 								launchUrl: info.launchUrl,
 								instructions: info.instructions,
+								credential: knownProvider.credential,
 							} as RpcExtensionUIRequest);
 						},
 						onProgress: message => {
@@ -1451,6 +1437,6 @@ export async function runRpcMode(
 	hostUriBridge.clear("RPC client disconnected before host URI request completed");
 	await inputDispatcher.drain();
 	await shutdownCoordinator.drain();
-	subagentRegistry?.dispose();
+	agentRegistry?.dispose();
 	process.exit(0);
 }

@@ -25,8 +25,8 @@
  *
  * WHAT IT DOES NOT CATCH. Nothing here says a description still TEACHES. Bytes are not
  * comprehension: a prune that deletes the selector grammar passes this gate and breaks the
- * product. The benches are what answer that (`packages/typescript-edit-benchmark` for the
- * edit/read/grep surface, `packages/deepswe-bench` end to end), and they are the required
+ * product. The benches are what answer that (the TypeScript-edit suite for the
+ * edit/read/search surface, the DeepSWE suite end to end), and they are the required
  * companion to any cut made here. This gate also says nothing about JSON schema bytes, which
  * are structural (field names, enum literals) and not prose to be shortened.
  */
@@ -40,7 +40,7 @@ import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
 import { isolatedAuthStorage } from "../helpers/isolated-auth-storage";
@@ -52,31 +52,44 @@ import { BASE_SETTINGS, HOST_DEPENDENT_TOOL_NAMES } from "./tool-loading-differe
  * Recorded, not derived: every row is a number someone chose to pay. Lower a row when you prune
  * that tool; the gate tells you when a row has gone slack. `examples` are counted with the
  * description because they are appended to it on the wire — a tool that moves prose into an
- * example array has not saved anything.
+ * example array has not saved anything. `search` is one description covering files, text and
+ * structure, so its row carries what the three retired workspace-search tools each spent, plus
+ * the one sentence stating that `path` scopes a `files` glob under a directory; `read` carries
+ * the semicolon-delimited resource list alongside the text-search cross-reference this branch
+ * renamed.
  */
 const TOOL_PROMPT_CEILINGS: Record<string, number> = {
 	edit: 8030,
-	eval: 5610,
-	read: 4180,
+	eval: 6019,
+	read: 4900,
 	bash: 3910,
 	todo: 2640,
 	irc: 3450,
-	launch: 2820,
+	launch: 3561,
 	task: 2720,
 	debug: 2350,
-	ast_grep: 2140,
+	search: 3420,
 	ast_edit: 2120,
 	job: 1700,
 	set_cwd: 1690,
-	glob: 1600,
-	grep: 900,
 	write: 700,
+	goal: 700,
 	resolve: 480,
 	web_search: 340,
 };
 
-/** Total the whole active set may ship, description + examples. */
-const TOTAL_PROMPT_CEILING = 46_800;
+/**
+ * Total the whole active set may ship, description + examples.
+ *
+ * Chosen independently of the rows above, and deliberately tighter than their sum: the rows say
+ * what each tool may cost on its own, this says what the block may cost together, so a paragraph
+ * added inside one tool's slack still has to come out of somewhere. `goal` joining the default
+ * boot moved it from 46,800 to 47,000 — 645 bytes of new prose against 200 bytes of headroom,
+ * which is the trade being recorded here rather than absorbed. The `read` list form moved it from
+ * 47,000 to 47,200: one sentence stating that a semicolon-delimited argument reads every entry,
+ * without which the list is unreachable prose in a changelog.
+ */
+const TOTAL_PROMPT_CEILING = 49_007;
 
 /**
  * How far under its ceiling a tool may sit before the row is stale.

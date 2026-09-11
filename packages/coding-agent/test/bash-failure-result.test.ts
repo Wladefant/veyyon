@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import { BashTool } from "@veyyon/coding-agent/tools/bash";
+import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import { useIsolatedGlobalSettings } from "./helpers/isolated-global-settings";
 import { makeToolSession } from "./helpers/tool-session";
 
@@ -20,10 +20,8 @@ function makeSession(): ToolSession {
 				if (key === "bash.autoBackground.enabled") return false;
 				if (key === "bash.autoBackground.thresholdMs") return 60_000;
 				if (key === "bashInterceptor.enabled") return false;
-				if (key === "astGrep.enabled") return false;
+
 				if (key === "astEdit.enabled") return false;
-				if (key === "grep.enabled") return false;
-				if (key === "glob.enabled") return false;
 				return undefined;
 			},
 			getBashInterceptorRules() {

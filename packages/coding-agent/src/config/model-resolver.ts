@@ -25,8 +25,9 @@ import { stripThinkingVariantToken } from "@veyyon/catalog/identity/family";
 import { modelsAreEqual } from "@veyyon/catalog/models";
 import { DEFAULT_MODEL_PER_PROVIDER } from "@veyyon/catalog/provider-models";
 import { resolveBareVariantAlias, resolveVariantAlias } from "@veyyon/catalog/variant-collapse";
-import { fuzzyMatch } from "@veyyon/tui";
+import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
 import { logger } from "@veyyon/utils";
+import { fuzzyMatch } from "@veyyon/utils/fuzzy";
 import MODEL_PRIO from "../priority.json" with { type: "json" };
 import {
 	AUTO_THINKING,
@@ -72,7 +73,7 @@ export function pickDefaultAvailableModel(availableModels: Model<Api>[]): Model<
 			isKnownProvider(model.provider) &&
 			DEFAULT_MODEL_PER_PROVIDER[model.provider] === model.id,
 	);
-	return [...sharedDefaultMatches].sort((a, b) => {
+	return sharedDefaultMatches.slice().sort((a, b) => {
 		const aRank = providerPriority.get(a.provider.toLowerCase()) ?? Number.POSITIVE_INFINITY;
 		const bRank = providerPriority.get(b.provider.toLowerCase()) ?? Number.POSITIVE_INFINITY;
 		if (aRank !== bRank) return aRank - bRank;
@@ -179,7 +180,10 @@ function resolveGlobScopePattern(
 
 /**
  * Parse a model string in "provider/modelId" format.
- * Returns undefined if the format is invalid.
+ * Returns undefined if the format is invalid, which includes a selector that
+ * names a provider and no model (`openai/`, `openai/:high`): an empty id
+ * matches nothing, so returning one hands every caller a selector that fails
+ * later at model lookup instead of failing here where the text is still visible.
  */
 export function parseModelString(
 	modelStr: string,
@@ -188,17 +192,17 @@ export function parseModelString(
 	const slashIdx = modelStr.indexOf("/");
 	if (slashIdx <= 0) return undefined;
 	const id = modelStr.slice(slashIdx + 1);
+	if (!id) return undefined;
 	const provider = modelStr.slice(0, slashIdx);
 	// Strip strict thinking level suffixes first (e.g. "claude-sonnet-4-6:high" -> id "claude-sonnet-4-6", thinkingLevel "high").
 	const strict = splitThinkingSuffix(id);
-	if (strict.level) return { provider, id: strict.base, thinkingLevel: strict.level };
+	if (strict.level) return strict.base ? { provider, id: strict.base, thinkingLevel: strict.level } : undefined;
 	// `max` is a real thinking level, but real model IDs can also end in
 	// `:max`. Context-aware callers pass a literal lookup so those models win.
 	const maxAlias = splitThinkingSuffix(id, -1, options);
 	if (maxAlias.level) {
-		return options?.isLiteralModelId?.(provider, id) === true
-			? { provider, id }
-			: { provider, id: maxAlias.base, thinkingLevel: maxAlias.level };
+		if (options?.isLiteralModelId?.(provider, id) === true) return { provider, id };
+		return maxAlias.base ? { provider, id: maxAlias.base, thinkingLevel: maxAlias.level } : undefined;
 	}
 	return { provider, id };
 }
@@ -531,10 +535,11 @@ function buildPreferenceContext(
 }
 
 export function getModelMatchPreferences(
-	settings?: Partial<Pick<Settings, "get" | "getStorage">>,
+	settings?: Partial<Pick<Settings, "get" | "getAgentDir">>,
 ): ModelMatchPreferences {
+	const agentDir = settings?.getAgentDir?.();
 	return {
-		usageOrder: settings?.getStorage?.()?.getModelUsageOrder(),
+		usageOrder: agentDir ? AgentStorage.forAgentDir(agentDir)?.getModelUsageOrder() : undefined,
 		providerOrder: settings?.get?.("modelProviderOrder"),
 	};
 }
@@ -554,7 +559,7 @@ function mergeModelMatchPreferences(
 
 function pickPreferredModel(candidates: Model<Api>[], context: ModelPreferenceContext): Model<Api> {
 	if (candidates.length <= 1) return candidates[0];
-	return [...candidates].sort((a, b) => {
+	return candidates.slice().sort((a, b) => {
 		if (context.hasConfiguredAuth) {
 			const aAuth = context.hasConfiguredAuth(a);
 			const bAuth = context.hasConfiguredAuth(b);
@@ -625,7 +630,7 @@ function includeSyntheticAllowedModels(available: Model<Api>[], allowedModels: I
 		}
 	}
 
-	result.push(...allowedByKey.values());
+	for (const model of allowedByKey.values()) result.push(model);
 	return result;
 }
 
@@ -767,7 +772,7 @@ function matchModel(
 		return datedVersions[0];
 	}
 
-	const sortedById = [...datedVersions].sort((a, b) => b.id.localeCompare(a.id));
+	const sortedById = datedVersions.slice().sort((a, b) => b.id.localeCompare(a.id));
 	const topId = sortedById[0]?.id;
 	if (!topId) return undefined;
 	const topCandidates = sortedById.filter(model => model.id === topId);
@@ -927,7 +932,7 @@ function getModelRoleAlias(value: string, settings?: Settings): string | undefin
  *
  * `"opus,sonnet"` and `["opus", "sonnet"]` are the same chain. This is the ONE
  * splitter: the settings chain picker reads and writes through it, so what the
- * picker shows as entry two is exactly what compaction and the subagent spawner
+ * picker shows as entry two is exactly what compaction and the agent spawner
  * try second. Role aliases are left alone here; expansion happens in
  * {@link resolveConfiguredModelPatterns}.
  */
@@ -950,8 +955,8 @@ export function normalizeModelPatternList(value: string | string[] | undefined):
  * Returning `priority.json` defaults here instead is the bug this shape exists
  * to prevent: `@smol` / `@slow` / `@designer` resolved to concrete — and
  * different — models even though every role picker showed "inherit (follows main
- * model)". Subagents took this path (agent frontmatter carried role aliases), so
- * a stock install silently fanned out across several models and no subagent
+ * model)". Spawned agents took this path (agent frontmatter carried role aliases), so
+ * a stock install silently fanned out across several models and no spawned agent
  * model setting could hold. `priority.json` is for FIRST-RUN model selection
  * ({@link findSmolModel} / {@link findSlowModel}), not for role expansion.
  */
@@ -1031,14 +1036,14 @@ export function resolveConfiguredModelPatterns(value: string | string[] | undefi
  * There is deliberately no agent-model resolver here.
  *
  * `resolveAgentModelPatterns` used to live at this spot and re-implemented the
- * whole subagent precedence chain — settings override, then `subagent.model`,
+ * whole agent precedence chain — settings override, then `agent.model`,
  * then the agent's frontmatter, then inherit — with a silent fall-through at
  * every step and a special case for the retired `@task` role. That made it a
- * second owner of "what model does this subagent run", disagreeing with the
- * spawn path on unresolvable values, and it is why changing the subagent model
- * appeared to do nothing. The one owner is now `resolveSubagentModel` in
- * `task/subagent-settings.ts`, which also reports WHICH layer decided and
- * refuses instead of falling through. Resolve subagent models there.
+ * second owner of "what model does this agent run", disagreeing with the
+ * spawn path on unresolvable values, and it is why changing the agent model
+ * appeared to do nothing. The one owner is now `resolveAgentModel` in
+ * `task/agent-settings.ts`, which also reports WHICH layer decided and
+ * refuses instead of falling through. Resolve agent models there.
  */
 
 /**
@@ -1246,9 +1251,9 @@ export function resolveModelOverride(
  * Resolve a list of override patterns to the first matching model, with an
  * auth-aware fallback to the parent session's active model.
  *
- * If the resolved subagent model has no working credentials (provider has no
+ * If the resolved spawned agent model has no working credentials (provider has no
  * usable auth), and the parent's active model resolves with working auth,
- * use the parent's model instead. This prevents subagent dispatch from
+ * use the parent's model instead. This prevents spawned agent dispatch from
  * silently routing to a provider the user can't actually call (e.g.
  * `modelRoles.task` pointing at an unqualified id whose only available
  * provider variant has no configured credentials — see #985).
@@ -1256,7 +1261,7 @@ export function resolveModelOverride(
  * `sessionId` is forwarded to `getApiKey` so that session-sticky OAuth
  * credentials resolve correctly during the pre-flight auth check. Without it,
  * providers with multiple OAuth accounts may return `undefined` even though
- * the credential is usable once the subagent session starts — see #5325.
+ * the credential is usable once the agent session starts — see #5325.
  *
  * Keyless-by-design providers (llama.cpp, ollama, lm-studio) advertise the
  * `kNoAuth` sentinel from `getApiKey` to signal that they do not require
@@ -1264,7 +1269,7 @@ export function resolveModelOverride(
  * configured local model is never silently rerouted to the parent's remote
  * provider (see #1008).
  *
- * If neither the subagent nor the parent has working auth, returns the
+ * If neither the spawned agent nor the parent has working auth, returns the
  * primary resolution unchanged so the existing error path still surfaces
  * a meaningful failure downstream.
  */

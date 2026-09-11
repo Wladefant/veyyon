@@ -23,25 +23,31 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { captureDirOverrides, getModelDbPath, restoreDirOverrides, setAgentDir } from "@veyyon/utils";
+import {
+	captureDirOverrides,
+	getModelDbPath,
+	removeWithRetries,
+	restoreDirOverrides,
+	setAgentDir,
+} from "@veyyon/utils";
 // Relative imports, not `@veyyon/catalog/...`: the workspace `node_modules` link resolves to the primary
 // checkout rather than to this worktree, so the package specifier would test someone else's source.
 import {
 	AGENT_GATEWAY_DEFAULT_CONTEXT_WINDOW,
 	AGENT_GATEWAY_DEFAULT_MAX_TOKENS,
 } from "../src/discovery/default-limits";
-import { readModelCache, writeModelCache } from "../src/model-cache";
+import { closeModelCache, readModelCache, writeModelCache } from "../src/model-cache";
 import { resolveProviderModels } from "../src/model-manager";
 import { getBundledModels } from "../src/models";
 import type { Api, Model } from "../src/types";
 
 /**
- * The version the current writer stamps on a row. Bumping `CACHE_SCHEMA_VERSION` is how this repo retires
- * cached rows whose values were produced by a rule that no longer holds, and it has been used for exactly
- * that five times (the retired 222222/8888 limit sentinels were v6). The gateway limit fix needs its own
- * bump, which is what this number records.
+ * The version the current writer stamps on a row. Bumping
+ * `CACHE_SCHEMA_VERSION` retires cached records whose persisted contract has
+ * changed. v11 adds the row-content fingerprint consumed by static-registry
+ * snapshots; v10 retired gateway rows with assumed limits.
  */
-const EXPECTED_CACHE_VERSION = 10;
+const EXPECTED_CACHE_VERSION = 11;
 
 const TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -179,8 +185,9 @@ describe("a cached gateway row from before the limits were resolved", () => {
 			expect(readModelCache<Api>("cursor", TTL_MS, Date.now)).toBeNull();
 			expect(rowCount(sharedPath), "the open-time delete refused it, so this case proves nothing").toBe(1);
 		} finally {
+			closeModelCache();
 			restoreDirOverrides(overrides);
-			await fs.rm(agentDir, { recursive: true, force: true });
+			await removeWithRetries(agentDir);
 		}
 	});
 });

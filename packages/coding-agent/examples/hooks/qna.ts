@@ -8,7 +8,7 @@
  */
 import { type Context, complete, type UserMessage } from "@veyyon/ai";
 import type { HookAPI } from "@veyyon/coding-agent";
-import { BorderedLoader } from "@veyyon/coding-agent";
+import { ComposerLoader } from "@veyyon/coding-agent";
 import { mapJsonStrings } from "@veyyon/coding-agent/secrets/obfuscator";
 
 const SYSTEM_PROMPT = `You are a question extractor. Given text from a conversation, extract any questions that need answering and format them for the user to fill in.
@@ -70,9 +70,16 @@ export default function (pi: HookAPI) {
 				return;
 			}
 
+			// The loader takes over the screen, so it needs a host that offers one.
+			const terminal = ctx.ui.terminal;
+			if (!terminal) {
+				ctx.ui.notify("Question extraction needs an interactive terminal.", "warning");
+				return;
+			}
+
 			// Run extraction with loader UI
-			const result = await ctx.ui.custom<string | null>((tui, theme, done) => {
-				const loader = new BorderedLoader(tui, theme, `Extracting questions using ${ctx.model!.id}…`);
+			const result = await terminal.custom<string | null>((tui, theme, done) => {
+				const loader = new ComposerLoader(tui, theme, `Extracting questions using ${ctx.model!.id}…`);
 				loader.onAbort = () => done(null);
 
 				// Do the work

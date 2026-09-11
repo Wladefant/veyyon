@@ -1,21 +1,21 @@
 import { describe, expect, it } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
+import * as modalShell from "@veyyon/coding-agent/modes/terminal/components/chrome/modal-shell";
 import {
-	applyModalReveal,
 	computeModalDims,
 	fitTipLine,
 	hitTestModalChrome,
 	MODAL_SIZING_LARGE,
 	MODAL_SIZING_MEDIUM,
 	MODAL_SIZING_SETTINGS,
-	ModalRevealDriver,
+	type ModalShortcut,
 	minModalChromeRows,
 	renderModalShell,
 	renderModalShortcuts,
 	SETTINGS_BROWSE_SHORTCUTS,
 	sizingForArea,
-} from "@veyyon/coding-agent/modes/components/modal-shell";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
+} from "@veyyon/coding-agent/modes/terminal/components/chrome/modal-shell";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
 
 await initTheme(false, "unicode", false, "titanium", "light");
 
@@ -119,25 +119,48 @@ describe("ModalShell", () => {
 		// are joined by the shared `·` separator (one grammar across the TUI).
 		expect(rows[1]?.includes("·")).toBe(true);
 		expect(rows[1]).toContain("esc cancel");
+		// The cascade moves chips between rows; it never drops one off the band.
+		for (const chip of shortcuts) expect(rows.join(" ")).toContain(chip.label);
 	});
 
-	it("cascades the orphan-avoidance fix back through 3+ wrapped rows", () => {
-		// Regression: a single-hop fix only rescues the trailing row when its
-		// immediate predecessor can spare a chip without dropping below 2. At
-		// this width SETTINGS_BROWSE_SHORTCUTS' first chip is too wide to share
-		// a row, forcing 3 rows; the fix must ripple the deficiency all the way
-		// back to row 0 instead of leaving a lone "esc close" on the last row.
-		const rows = renderModalShortcuts(SETTINGS_BROWSE_SHORTCUTS, 28).map(line =>
-			stripVTControlCharacters(line).trim(),
+	// WHY: the orphan-avoidance fix is a cascade, and a single-hop version of it
+	// only rescues the trailing row when its immediate predecessor can spare a
+	// chip without dropping below two. The defect it closes is a solitary chip
+	// stranded under a fuller row. This sweeps every footer chip band the module
+	// ships across every width a modal can be drawn at, so a band that gains a
+	// chip — as SETTINGS_BROWSE_SHORTCUTS did when `left categories` was added —
+	// is covered without an edit here, and a new band fails until it is clean.
+	// What it does not catch: the chip TEXT, and any band a caller builds inline
+	// rather than exporting from this module.
+	it("never strands a solitary chip under a fuller row, at any width", () => {
+		const bands = Object.entries(modalShell).filter(
+			(entry): entry is [string, readonly ModalShortcut[]] =>
+				entry[0].endsWith("_SHORTCUTS") && Array.isArray(entry[1]),
 		);
-		expect(rows.length).toBe(3);
-		// No row after the first may be a solitary chip beneath a fuller row. A row
-		// with the shared `·` separator carries two or more chips.
-		for (let i = 1; i < rows.length; i++) {
-			const soloChip = !rows[i]!.includes("·");
-			expect(soloChip && rows[i - 1]!.includes("·")).toBe(false);
+		expect(bands.map(([name]) => name).sort()).toEqual([
+			"SELECT_LIST_SHORTCUTS",
+			"SETTINGS_BROWSE_SHORTCUTS",
+			"SETTINGS_FILTER_SHORTCUTS",
+			"SETTINGS_SUBPANE_SHORTCUTS",
+		]);
+		let cascades = 0;
+		const stranded: string[] = [];
+		for (const [name, band] of bands) {
+			for (let width = 12; width <= 140; width++) {
+				const rows = renderModalShortcuts(band, width).map(line => stripVTControlCharacters(line).trim());
+				// A row carrying the shared `·` separator holds two or more chips.
+				if (rows.length >= 3) cascades++;
+				for (let i = 1; i < rows.length; i++) {
+					if (!rows[i]!.includes("·") && rows[i - 1]!.includes("·")) {
+						stranded.push(`${name}@${width}: ${rows.join(" | ")}`);
+					}
+				}
+			}
 		}
-		expect(rows.join(" ")).toContain("esc close");
+		expect(stranded).toEqual([]);
+		// A sweep that never wrapped past two rows would prove nothing about the
+		// cascade, so the multi-row case has to be reached.
+		expect(cascades).toBeGreaterThan(0);
 	});
 
 	it("never clips the bottom border or shortcut chips on a short terminal", () => {
@@ -191,140 +214,6 @@ describe("ModalShell", () => {
 		expect(close).toEqual({ kind: "close" });
 		const outside = hitTestModalChrome(geometry, 0, 0, { leftClick: true });
 		expect(outside).toEqual({ kind: "outside" });
-	});
-});
-
-describe("applyModalReveal — the open unfold (TOUCH-5)", () => {
-	// Why this suite exists: overlay open used to be a hard cut. The reveal
-	// clips the rendered frame to an unfolding card (top border fixed, bottom
-	// border sliding down). These tests lock the clip's contracts so the
-	// animation can never leak partial card rows below the moving border,
-	// paint a borderless sliver, or alter the settled frame.
-	function renderCard() {
-		return renderModalShell({
-			title: "Reveal",
-			sizing: MODAL_SIZING_SETTINGS,
-			areaWidth: 120,
-			areaHeight: 40,
-			body: Array.from({ length: 10 }, (_, i) => `row ${i}`),
-			shortcuts: SETTINGS_BROWSE_SHORTCUTS,
-		});
-	}
-
-	it("returns the frame byte-identical at reveal >= 1 (settled state)", () => {
-		const shell = renderCard();
-		expect(applyModalReveal(shell, 120, 1)).toBe(shell.lines);
-		expect(applyModalReveal(shell, 120, 2)).toBe(shell.lines);
-	});
-
-	it("returns the frame untouched when the terminal was too small (null geometry)", () => {
-		const shell = renderModalShell({
-			title: "Tiny",
-			sizing: MODAL_SIZING_SETTINGS,
-			areaWidth: 18,
-			areaHeight: 40,
-			body: ["x"],
-			shortcuts: [],
-		});
-		expect(shell.geometry).toBeNull();
-		expect(applyModalReveal(shell, 18, 0.5)).toBe(shell.lines);
-	});
-
-	it("keeps the top border fixed and slides the BOTTOM border up mid-reveal", () => {
-		const shell = renderCard();
-		const geometry = shell.geometry!;
-		const clipped = applyModalReveal(shell, 120, 0.5);
-		// Top border row is byte-identical to the settled frame.
-		expect(clipped[geometry.cardRowStart]).toBe(shell.lines[geometry.cardRowStart]!);
-		// cardRowEnd is exclusive, matching hitTestModalChrome.
-		const cardRows = geometry.cardRowEnd - geometry.cardRowStart;
-		const visible = Math.max(2, Math.round(cardRows * 0.5));
-		// The last visible row is the card's real bottom border, not a sheared body row.
-		expect(clipped[geometry.cardRowStart + visible - 1]).toBe(shell.lines[geometry.cardRowEnd - 1]!);
-		// Everything between the moved border and the settled border is blank.
-		for (let row = geometry.cardRowStart + visible; row < geometry.cardRowEnd; row++) {
-			expect(stripVTControlCharacters(clipped[row]!).trim()).toBe("");
-		}
-	});
-
-	it("never shows a borderless sliver: reveal 0 still paints both border rows", () => {
-		const shell = renderCard();
-		const geometry = shell.geometry!;
-		const clipped = applyModalReveal(shell, 120, 0);
-		expect(clipped[geometry.cardRowStart]).toBe(shell.lines[geometry.cardRowStart]!);
-		expect(clipped[geometry.cardRowStart + 1]).toBe(shell.lines[geometry.cardRowEnd - 1]!);
-	});
-
-	it("grows monotonically: a larger reveal never shows fewer card rows", () => {
-		const shell = renderCard();
-		const geometry = shell.geometry!;
-		const visibleRows = (reveal: number): number => {
-			const clipped = applyModalReveal(shell, 120, reveal);
-			let count = 0;
-			for (let row = geometry.cardRowStart; row < geometry.cardRowEnd; row++) {
-				if (stripVTControlCharacters(clipped[row]!).trim() !== "") count++;
-			}
-			return count;
-		};
-		let previous = 0;
-		for (const reveal of [0, 0.2, 0.4, 0.6, 0.8, 1]) {
-			const current = visibleRows(reveal);
-			expect(current).toBeGreaterThanOrEqual(previous);
-			previous = current;
-		}
-		// Settled: every card row that is non-blank in the full frame is shown.
-		let settled = 0;
-		for (let row = geometry.cardRowStart; row < geometry.cardRowEnd; row++) {
-			if (stripVTControlCharacters(shell.lines[row]!).trim() !== "") settled++;
-		}
-		expect(previous).toBe(settled);
-	});
-
-	it("leaves rows outside the card region untouched at every phase", () => {
-		const shell = renderCard();
-		const geometry = shell.geometry!;
-		for (const reveal of [0, 0.3, 0.7]) {
-			const clipped = applyModalReveal(shell, 120, reveal);
-			for (let row = 0; row < geometry.cardRowStart; row++) {
-				expect(clipped[row]).toBe(shell.lines[row]!);
-			}
-			for (let row = geometry.cardRowEnd; row < shell.lines.length; row++) {
-				expect(clipped[row]).toBe(shell.lines[row]!);
-			}
-		}
-	});
-});
-
-describe("ModalRevealDriver — the wall-clock phase driver", () => {
-	// Why: the driver is the only stateful piece of the unfold. These tests
-	// lock its lifecycle so a settled overlay can never keep ticking renders
-	// (a leaked interval re-rendering forever) and a started reveal always
-	// begins collapsed instead of flashing the full card first.
-	it("reports 1 before start (a never-animated card renders settled)", () => {
-		const driver = new ModalRevealDriver();
-		expect(driver.value).toBe(1);
-	});
-
-	it("starts collapsed, ticks renders, then settles at exactly 1 and stops ticking", async () => {
-		const driver = new ModalRevealDriver();
-		let ticks = 0;
-		driver.start(() => {
-			ticks++;
-		});
-		expect(driver.value).toBeLessThan(0.7); // collapsed-ish right after start
-		expect(ticks).toBeGreaterThanOrEqual(1); // first paint requested synchronously
-		await new Promise(resolve => setTimeout(resolve, 250)); // > REVEAL_MS
-		expect(driver.value).toBe(1);
-		const settledTicks = ticks;
-		await new Promise(resolve => setTimeout(resolve, 120));
-		expect(ticks).toBe(settledTicks); // interval self-cleared; no leak
-	});
-
-	it("stop() settles immediately mid-flight (dismount kills the animation)", () => {
-		const driver = new ModalRevealDriver();
-		driver.start(() => {});
-		driver.stop();
-		expect(driver.value).toBe(1);
 	});
 });
 

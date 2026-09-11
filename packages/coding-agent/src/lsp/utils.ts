@@ -4,10 +4,9 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 // Owners, not the `@veyyon/utils` barrel: 1 module against 74.
 import { isEnoent } from "@veyyon/utils/fs-error";
-import { theme } from "../modes/theme/theme-binding";
-import type { Theme } from "../modes/theme/theme-class";
-import { formatGroupedFiles } from "../tools/grouped-file-output";
-import { formatPathRelativeToCwd, resolveToCwd } from "../tools/path-utils";
+import { theme } from "../theme/theme-binding";
+import type { Theme } from "../theme/theme-class";
+import { formatPathRelativeToCwd, resolveToCwd } from "../tools/core/path-utils";
 import type {
 	CodeAction,
 	Command,
@@ -22,7 +21,9 @@ import type {
 	TextEdit,
 	WorkspaceEdit,
 } from "./types";
+import { SYMBOL_KIND_NAMES } from "./types";
 
+export { formatGroupedDiagnosticMessages } from "../tools/core/grouped-file-output";
 export { detectLanguageId } from "../utils/lang-from-path";
 
 // =============================================================================
@@ -169,57 +170,6 @@ export function formatDiagnostic(diagnostic: Diagnostic, filePath: string): stri
 	const message = stripDiagnosticNoise(diagnostic.message);
 
 	return `${filePath}:${line}:${col} [${severity}] ${source}${message}${code}`;
-}
-
-// Regex: split on the first `:digits:digits` boundary to separate path from the rest
-const DIAG_PATH_RE = /^(.+?):(\d+:\d+\s+.*)$/;
-
-/**
- * Reformat pre-formatted diagnostic messages into a multi-level, prefix-folded
- * directory/file grouping (see `formatGroupedFiles`).
- * Input:  ["path:line:col [sev] msg", ...]
- * Output: "# pkg/src/\n## file.ts\n  line:col [sev] msg"
- *
- * Messages that don't match the expected format are appended ungrouped at the end.
- */
-export function formatGroupedDiagnosticMessages(messages: string[]): string {
-	const diagnosticsByFile = new Map<string, string[]>();
-	const fileOrder: string[] = [];
-	const ungrouped: string[] = [];
-
-	for (const msg of messages) {
-		const match = DIAG_PATH_RE.exec(msg);
-		if (!match) {
-			ungrouped.push(msg);
-			continue;
-		}
-
-		const [, rawFilePath, rest] = match;
-		const filePath = rawFilePath.replace(/\\/g, "/");
-		if (!diagnosticsByFile.has(filePath)) {
-			diagnosticsByFile.set(filePath, []);
-			fileOrder.push(filePath);
-		}
-		diagnosticsByFile.get(filePath)?.push(rest);
-	}
-
-	if (diagnosticsByFile.size === 0) {
-		return ungrouped.join("\n");
-	}
-
-	const grouped = formatGroupedFiles(fileOrder, filePath => ({
-		modelLines: (diagnosticsByFile.get(filePath) ?? []).map(diagnostic => `  ${diagnostic}`),
-	}));
-	const lines: string[] = grouped.model;
-
-	if (ungrouped.length > 0) {
-		lines.push("");
-		for (const msg of ungrouped) {
-			lines.push(msg);
-		}
-	}
-
-	return lines.join("\n");
 }
 
 /**
@@ -432,35 +382,7 @@ export function symbolKindToIcon(kind: SymbolKind): string {
  * Get name for symbol kind.
  */
 export function symbolKindToName(kind: SymbolKind): string {
-	const names: Record<number, string> = {
-		1: "File",
-		2: "Module",
-		3: "Namespace",
-		4: "Package",
-		5: "Class",
-		6: "Method",
-		7: "Property",
-		8: "Field",
-		9: "Constructor",
-		10: "Enum",
-		11: "Interface",
-		12: "Function",
-		13: "Variable",
-		14: "Constant",
-		15: "String",
-		16: "Number",
-		17: "Boolean",
-		18: "Array",
-		19: "Object",
-		20: "Key",
-		21: "Null",
-		22: "EnumMember",
-		23: "Struct",
-		24: "Event",
-		25: "Operator",
-		26: "TypeParameter",
-	};
-	return names[kind] ?? "Unknown";
+	return SYMBOL_KIND_NAMES[kind] ?? "Unknown";
 }
 
 /**
@@ -475,7 +397,8 @@ export function formatDocumentSymbol(symbol: DocumentSymbol, indent = 0): string
 
 	if (symbol.children) {
 		for (const child of symbol.children) {
-			results.push(...formatDocumentSymbol(child, indent + 1));
+			const childResults = formatDocumentSymbol(child, indent + 1);
+			for (let ri = 0; ri < childResults.length; ri++) results.push(childResults[ri]!);
 		}
 	}
 

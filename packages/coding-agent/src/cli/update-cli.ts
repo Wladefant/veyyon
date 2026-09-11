@@ -15,13 +15,11 @@ import {
 	APP_NAME,
 	bareVersion,
 	changelogUrlForVersion,
-	compareSemver,
 	errorMessage,
 	getAutoUpdateStatePath,
 	getUpdateHistoryPath,
 	isCompiledBinary,
 	isEnoent,
-	isNewerVersion,
 	isValidSemver,
 	logger,
 	readPipeText,
@@ -33,7 +31,7 @@ import {
 } from "@veyyon/utils";
 import { $ } from "bun";
 import chalk from "chalk";
-import { theme } from "../modes/theme/theme";
+import { theme } from "../theme/theme";
 import { isTimeoutError, withTimeoutSignal } from "../utils/fetch-timeout";
 import {
 	AUTO_UPDATE_FAILURE_COOLDOWN_MS,
@@ -416,7 +414,7 @@ const RELEASES_PAGE_SIZE = 100;
 const RELEASES_MAX_PAGES = 10;
 
 /**
- * Every published release, newest first.
+ * Every published release, newest first by publication date.
  *
  * Rollback needs the catalog, not just its newest entry, and this is the only
  * place that asks for it. It is also the only thing left in this file that calls
@@ -461,8 +459,37 @@ export async function getAllReleases(timeoutMs: number = RELEASE_METADATA_TIMEOU
 		);
 	}
 
-	releases.sort((a, b) => compareSemver(b.version, a.version));
+	sortReleasesByPublicationDate(releases);
 	return releases;
+}
+/**
+ * Sort releases by publication date descending.
+ *
+ * Releases with a valid `publishedAt` timestamp are sorted newest first.
+ * Undated entries and entries with unparseable timestamps keep their original
+ * API positions, so only dated entries are reordered against each other.
+ */
+function sortReleasesByPublicationDate(releases: ReleaseListing[]): void {
+	const datedIndices: number[] = [];
+	const datedEntries: ReleaseListing[] = [];
+
+	for (let i = 0; i < releases.length; i++) {
+		const entry = releases[i]!;
+		if (entry.publishedAt && !Number.isNaN(Date.parse(entry.publishedAt))) {
+			datedIndices.push(i);
+			datedEntries.push(entry);
+		}
+	}
+
+	datedEntries.sort((a, b) => {
+		const timeA = Date.parse(a.publishedAt!);
+		const timeB = Date.parse(b.publishedAt!);
+		return timeB - timeA;
+	});
+
+	for (let i = 0; i < datedIndices.length; i++) {
+		releases[datedIndices[i]!] = datedEntries[i]!;
+	}
 }
 
 /** One raw GitHub page plus its filtered installable releases. */
@@ -761,7 +788,7 @@ export async function verifyBinaryVersion(
 		// The spawn itself failed, which is where ENOEXEC (wrong architecture) and
 		// EACCES (no execute bit, or a `noexec` mount) land. There is no exit code
 		// because no process ever started.
-		return { ok: false, path: binPath, reason: describeUnrunnableBinary(binPath, undefined, String(err)) };
+		return { ok: false, path: binPath, reason: describeUnrunnableBinary(binPath, undefined, errorMessage(err)) };
 	}
 }
 
@@ -1603,12 +1630,12 @@ export async function updateViaSourceAt(
 		{ label: "Installing dependencies", command: ["bun", "install"], cwd: checkoutRoot },
 		{
 			label: "Regenerating build artifacts",
-			command: ["bun", "--cwd=packages/collab-web", "run", "gen:tool-views"],
+			command: ["bun", "--cwd=clients/web", "run", "gen:tool-views"],
 			cwd: checkoutRoot,
 		},
 		{
 			label: "Ensuring native addon",
-			command: ["bun", "--cwd=packages/natives", "run", "ensure"],
+			command: ["bun", "--cwd=natives/bridge/bindings", "run", "ensure"],
 			cwd: checkoutRoot,
 		},
 	];
@@ -1621,12 +1648,12 @@ export async function updateViaSourceAt(
 		{ label: "Restoring dependencies", command: ["bun", "install"], cwd: checkoutRoot },
 		{
 			label: "Restoring build artifacts",
-			command: ["bun", "--cwd=packages/collab-web", "run", "gen:tool-views"],
+			command: ["bun", "--cwd=clients/web", "run", "gen:tool-views"],
 			cwd: checkoutRoot,
 		},
 		{
 			label: "Restoring native addon",
-			command: ["bun", "--cwd=packages/natives", "run", "ensure"],
+			command: ["bun", "--cwd=natives/bridge/bindings", "run", "ensure"],
 			cwd: checkoutRoot,
 		},
 	];
@@ -1961,7 +1988,7 @@ export async function runAutoUpdate(
 			return { status: "failed", error: errorMessage(err) };
 		}
 	}
-	if (!isNewerVersion(release.version, currentVersion)) {
+	if (release.version === currentVersion) {
 		return { status: "up-to-date" };
 	}
 
@@ -2053,14 +2080,14 @@ export async function runUpdateCommand(
 		process.exit(1);
 	}
 
-	const comparison = compareSemver(release.version, VERSION);
+	const isDifferent = release.version !== VERSION;
 
-	if (comparison <= 0 && !opts.force) {
+	if (!isDifferent && !opts.force) {
 		console.log(chalk.green(`${typeof theme === "undefined" ? "✓" : theme.status.success} Already up to date`));
 		return;
 	}
 
-	if (comparison > 0) {
+	if (isDifferent) {
 		console.log(chalk.cyan(`New version available: ${release.version}`));
 	} else if (opts.check) {
 		// Up to date, but --force was passed alongside --check. Check mode installs

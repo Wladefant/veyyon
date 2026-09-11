@@ -1,0 +1,494 @@
+import { BracketedPasteHandler, decodeReencodedPasteControls, type PasteSinks } from "@veyyon/utils/bracketed-paste";
+import { getKeybindings, type Keybinding } from "@veyyon/utils/keybindings";
+import { extractPrintableText, isLoneLineFeed } from "@veyyon/utils/keys";
+import { KillRing } from "@veyyon/utils/kill-ring";
+import { clampLow } from "@veyyon/utils/math";
+import type { MouseRoutable, SgrMouseEvent } from "@veyyon/utils/mouse";
+import { padding } from "@veyyon/utils/padding";
+import { replaceTabs } from "@veyyon/utils/tab-width";
+import { getSegmenter, offsetAtVisualCol, sliceWithWidth, visibleWidth } from "@veyyon/utils/width";
+import { getWordNavKind, moveWordLeft, moveWordRight } from "@veyyon/utils/word-nav";
+import { type Component, CURSOR_MARKER, type Focusable } from "../tui";
+import { firstGrapheme, lastGrapheme } from "../utils/text-layout";
+
+const segmenter = getSegmenter();
+
+interface InputState {
+	value: string;
+	cursor: number;
+}
+
+/** Default character a masked input renders in place of each grapheme typed. */
+export const DEFAULT_MASK_CHAR = "•";
+
+/**
+ * Project a value to its masked form, and the cursor to the matching position.
+ *
+ * ONE MASK CHARACTER PER GRAPHEME, not per code unit, so an emoji or a combining sequence
+ * counts once and the cursor lands where the typist expects. Exported because the mask is worth
+ * asserting on directly: a test that only inspects rendered output cannot tell a mask that
+ * happens to look right from one whose cursor arithmetic is off by a code unit.
+ */
+export function maskValue(value: string, cursor: number, maskChar: string): { value: string; cursor: number } {
+	let masked = "";
+	let maskedCursor = 0;
+	for (const { index } of segmenter.segment(value)) {
+		if (index < cursor) maskedCursor += maskChar.length;
+		masked += maskChar;
+	}
+	return { value: masked, cursor: Math.min(maskedCursor, masked.length) };
+}
+
+/**
+ * Input component - single-line text input with horizontal scrolling
+ */
+export class Input implements Component, Focusable, MouseRoutable {
+	/**
+	 * The viewport of the last paint: the prompt's columns and the first value
+	 * column shown after them. A click is resolved against the paint the
+	 * pointer was over, so a scrolled field lands the caret under the pointer
+	 * rather than offset by the hidden prefix.
+	 */
+	#lastPromptWidth = 0;
+	#lastStartCol = 0;
+	#value: string = "";
+	#cursor: number = 0; // Cursor position in the value
+	#useTerminalCursor = false;
+	/**
+	 * When set, the value is rendered as this character repeated, never as itself.
+	 *
+	 * For entering a credential. Masking lives HERE rather than in a separate secret-input
+	 * component because everything else about editing (the kill ring, bracketed paste, word
+	 * motion, undo) has to behave identically, and a second implementation of a text field would
+	 * drift from this one. Masking only changes {@link render}; {@link getValue} still returns
+	 * what was typed, which is what the caller stores.
+	 */
+	mask: string | undefined;
+	/**
+	 * Credential entry is a byte-preserving paste mode with mandatory masked
+	 * rendering. Terminal paste framing is removed by the handler, but payload
+	 * tabs, CR/LF, trailing spaces, decomposed Unicode and C0/DEL code units are
+	 * inserted unchanged. Ordinary inputs retain the single-line cleanup below.
+	 */
+	credentialMode = false;
+	/** Rendered before the editable area; set to "" for chrome-less embedding. */
+	prompt = "> ";
+	onSubmit?: (value: string) => void;
+	onEscape?: () => void;
+	/**
+	 * Optional surface-specific cancel matcher. It runs inside this Input only
+	 * after bracketed-paste framing has completed, so pasted escape/interrupt
+	 * bytes can never close the parent dialog.
+	 */
+	isEscapeInput?: (data: string) => boolean;
+
+	/** Focusable interface - set by TUI when focus changes */
+	focused: boolean = false;
+
+	// Bracketed paste mode buffering; the sinks are built once, and a remainder re-enters `handleInput`.
+	#pasteHandler = new BracketedPasteHandler();
+	readonly #pasteSinks: PasteSinks = {
+		keys: bytes => this.#handleKeyInput(bytes),
+		paste: content => this.#handlePaste(content),
+		reenter: rest => this.handleInput(rest),
+	};
+
+	// Kill ring for Emacs-style kill/yank operations
+	#killRing = new KillRing();
+	#lastAction: "kill" | "yank" | "type-word" | null = null;
+
+	// Undo support
+	#undoStack: InputState[] = [];
+
+	getValue(): string {
+		return this.#value;
+	}
+
+	setValue(value: string): void {
+		this.#value = value;
+		// Callers seed or replace the value wholesale; typing continues at the end.
+		this.#cursor = value.length;
+	}
+
+	/** Caret offset into the value, in code units. */
+	getCursor(): number {
+		return this.#cursor;
+	}
+
+	/** Put the caret at `offset` code units, clamped to the value. */
+	setCursor(offset: number): void {
+		this.#cursor = clampLow(offset, 0, this.#value.length);
+	}
+
+	setUseTerminalCursor(useTerminalCursor: boolean): void {
+		this.#useTerminalCursor = useTerminalCursor;
+	}
+
+	getUseTerminalCursor(): boolean {
+		return this.#useTerminalCursor;
+	}
+
+	handleInput(data: string): void {
+		if (this.#pasteHandler.route(data, this.#pasteSinks)) return;
+		this.#handleKeyInput(data);
+	}
+
+	/**
+	 * Every editing keybinding this field answers after escape, undo and submit, in precedence
+	 * order: the first binding the bytes match wins, so a user who binds one key to two actions
+	 * gets the earlier one. The three matched first each have a second trigger or take precedence.
+	 */
+	readonly #keyActions: ReadonlyArray<readonly [Keybinding, () => void]> = [
+		["tui.editor.deleteCharBackward", () => this.#handleBackspace()],
+		["tui.editor.deleteCharForward", () => this.#handleForwardDelete()],
+		["tui.editor.deleteWordBackward", () => this.#deleteWordBackwards()],
+		["tui.editor.deleteWordForward", () => this.#deleteWordForward()],
+		["tui.editor.deleteToLineStart", () => this.#deleteToLineStart()],
+		["tui.editor.deleteToLineEnd", () => this.#deleteToLineEnd()],
+		["tui.editor.yank", () => this.#yank()],
+		["tui.editor.yankPop", () => this.#yankPop()],
+		["tui.editor.cursorLeft", () => this.#moveCursorLeft()],
+		["tui.editor.cursorRight", () => this.#moveCursorRight()],
+		["tui.editor.cursorLineStart", () => this.#moveCursorTo(0)],
+		["tui.editor.cursorLineEnd", () => this.#moveCursorTo(this.#value.length)],
+		["tui.editor.cursorWordLeft", () => this.#moveWordBackwards()],
+		["tui.editor.cursorWordRight", () => this.#moveWordForwards()],
+	];
+
+	#handleKeyInput(data: string): void {
+		const kb = getKeybindings();
+
+		if (this.isEscapeInput?.(data) || kb.matches(data, "tui.select.cancel")) {
+			this.onEscape?.();
+			return;
+		}
+
+		// Undo precedes submit: a key bound to both undoes rather than submits.
+		if (kb.matches(data, "tui.editor.undo")) {
+			this.#undo();
+			return;
+		}
+
+		if (kb.matches(data, "tui.input.submit") || isLoneLineFeed(data)) {
+			if (this.onSubmit) this.onSubmit(this.#value);
+			return;
+		}
+
+		for (const [binding, action] of this.#keyActions) {
+			if (kb.matches(data, binding)) {
+				action();
+				return;
+			}
+		}
+
+		// Regular character input, including Kitty CSI-u text-producing sequences.
+		const printableText = extractPrintableText(data);
+		if (printableText) {
+			this.#insertCharacter(printableText);
+		}
+	}
+
+	#moveCursorTo(cursor: number): void {
+		this.#lastAction = null;
+		this.#cursor = cursor;
+	}
+
+	#moveCursorLeft(): void {
+		this.#lastAction = null;
+		if (this.#cursor > 0) {
+			this.#cursor -= lastGrapheme(this.#value.slice(0, this.#cursor)).length || 1;
+		}
+	}
+
+	#moveCursorRight(): void {
+		this.#lastAction = null;
+		if (this.#cursor < this.#value.length) {
+			this.#cursor += firstGrapheme(this.#value.slice(this.#cursor)).length || 1;
+		}
+	}
+
+	/** Apply terminal paste semantics to text from non-bracketed paste transports
+	 *  (e.g. kitty's OSC 5522 enhanced clipboard read). Mirrors `Editor.pasteText`. */
+	pasteText(text: string): void {
+		this.#handlePaste(text);
+	}
+
+	#insertCharacter(text: string): void {
+		let isWordChunk = true;
+		for (const seg of segmenter.segment(text)) {
+			if (getWordNavKind(seg.segment) === "whitespace") {
+				isWordChunk = false;
+				break;
+			}
+		}
+		// Undo coalescing: consecutive word typing coalesces into one undo unit.
+		if (!isWordChunk || this.#lastAction !== "type-word") {
+			this.#pushUndo();
+		}
+		this.#lastAction = "type-word";
+
+		this.#value = this.#value.slice(0, this.#cursor) + text + this.#value.slice(this.#cursor);
+		this.#cursor += text.length;
+	}
+
+	#handleBackspace(): void {
+		this.#lastAction = null;
+		if (this.#cursor <= 0) {
+			return;
+		}
+
+		this.#pushUndo();
+
+		const beforeCursor = this.#value.slice(0, this.#cursor);
+		const graphemeLength = lastGrapheme(beforeCursor).length || 1;
+
+		this.#value = this.#value.slice(0, this.#cursor - graphemeLength) + this.#value.slice(this.#cursor);
+		this.#cursor -= graphemeLength;
+	}
+
+	#handleForwardDelete(): void {
+		this.#lastAction = null;
+		if (this.#cursor >= this.#value.length) {
+			return;
+		}
+
+		this.#pushUndo();
+
+		const afterCursor = this.#value.slice(this.#cursor);
+		const graphemeLength = firstGrapheme(afterCursor).length || 1;
+
+		this.#value = this.#value.slice(0, this.#cursor) + this.#value.slice(this.#cursor + graphemeLength);
+	}
+
+	#deleteRange(from: number, to: number, prepend: boolean): void {
+		if (from === to) return;
+		const wasKill = this.#lastAction === "kill";
+		this.#pushUndo();
+		const deletedText = this.#value.slice(from, to);
+		this.#killRing.push(deletedText, { prepend, accumulate: wasKill });
+		this.#lastAction = "kill";
+		this.#value = this.#value.slice(0, from) + this.#value.slice(to);
+		this.#cursor = from;
+	}
+
+	#deleteToLineStart(): void {
+		this.#deleteRange(0, this.#cursor, true);
+	}
+
+	#deleteToLineEnd(): void {
+		const oldCursor = this.#cursor;
+		this.#deleteRange(oldCursor, this.#value.length, false);
+		this.#cursor = oldCursor;
+	}
+
+	#deleteWordBackwards(): void {
+		if (this.#cursor === 0) return;
+		const oldCursor = this.#cursor;
+		this.#moveWordBackwards();
+		const deleteFrom = this.#cursor;
+		this.#deleteRange(deleteFrom, oldCursor, true);
+	}
+
+	#deleteWordForward(): void {
+		if (this.#cursor >= this.#value.length) return;
+		const oldCursor = this.#cursor;
+		this.#moveWordForwards();
+		const deleteTo = this.#cursor;
+		this.#deleteRange(oldCursor, deleteTo, false);
+		this.#cursor = oldCursor;
+	}
+	#yank(): void {
+		const text = this.#killRing.peek();
+		if (!text) {
+			return;
+		}
+
+		this.#pushUndo();
+		this.#value = this.#value.slice(0, this.#cursor) + text + this.#value.slice(this.#cursor);
+		this.#cursor += text.length;
+		this.#lastAction = "yank";
+	}
+
+	#yankPop(): void {
+		if (this.#lastAction !== "yank" || this.#killRing.length <= 1) {
+			return;
+		}
+
+		this.#pushUndo();
+
+		const prevText = this.#killRing.peek() ?? "";
+		this.#value = this.#value.slice(0, this.#cursor - prevText.length) + this.#value.slice(this.#cursor);
+		this.#cursor -= prevText.length;
+
+		this.#killRing.rotate();
+		const text = this.#killRing.peek() ?? "";
+		this.#value = this.#value.slice(0, this.#cursor) + text + this.#value.slice(this.#cursor);
+		this.#cursor += text.length;
+		this.#lastAction = "yank";
+	}
+
+	#pushUndo(): void {
+		this.#undoStack.push({ value: this.#value, cursor: this.#cursor });
+	}
+
+	#undo(): void {
+		const snapshot = this.#undoStack.pop();
+		if (!snapshot) {
+			return;
+		}
+		this.#value = snapshot.value;
+		this.#cursor = snapshot.cursor;
+		this.#lastAction = null;
+	}
+
+	#moveWordBackwards(): void {
+		if (this.#cursor === 0) {
+			return;
+		}
+		this.#lastAction = null;
+		this.#cursor = moveWordLeft(this.#value, this.#cursor);
+	}
+
+	#moveWordForwards(): void {
+		if (this.#cursor >= this.#value.length) {
+			return;
+		}
+		this.#lastAction = null;
+		this.#cursor = moveWordRight(this.#value, this.#cursor);
+	}
+
+	#handlePaste(pastedText: string): void {
+		this.#lastAction = null;
+		this.#pushUndo();
+
+		// A credential is an opaque payload. Only bracketed-paste transport
+		// markers have been consumed before this point; changing normalization,
+		// whitespace or control code units would change the stored credential.
+		//
+		// Ordinary single-line input deliberately keeps its established cleanup:
+		// decode tmux control-key transport, flatten lines/tabs, NFC-normalize and
+		// remove remaining C0/DEL bytes.
+		const insertedText = this.credentialMode
+			? pastedText
+			: replaceTabs(
+					decodeReencodedPasteControls(pastedText).replace(/\r\n/g, "").replace(/\r/g, "").replace(/\n/g, ""),
+				)
+					.normalize("NFC")
+					.replace(/[\x00-\x1F\x7F]/g, "");
+
+		this.#value = this.#value.slice(0, this.#cursor) + insertedText + this.#value.slice(this.#cursor);
+		this.#cursor += insertedText.length;
+	}
+
+	invalidate(): void {
+		// No cached state to invalidate currently
+	}
+
+	/**
+	 * A left click places the caret under the pointer. The field is one row, so
+	 * only its row answers; a click past the end of the text lands at the end.
+	 * Wheel and motion are not this field's: the host scrolls with the wheel and
+	 * a text field has no hover.
+	 */
+	routeMouse(event: SgrMouseEvent, line: number, col: number): void {
+		if (!event.leftClick || line !== 0) return;
+		const wanted = col - this.#lastPromptWidth + this.#lastStartCol;
+		if (wanted < 0) {
+			this.#cursor = 0;
+			return;
+		}
+		const effectiveMask = this.credentialMode ? (this.mask ?? DEFAULT_MASK_CHAR) : this.mask;
+		if (effectiveMask === undefined) {
+			this.#cursor = offsetAtVisualCol(this.#value, wanted);
+			return;
+		}
+		// A masked field shows one mask glyph per grapheme, so the pointer's
+		// column is a grapheme count, mapped back to the source offset.
+		const maskWidth = Math.max(1, visibleWidth(effectiveMask));
+		const graphemeIndex = Math.floor(wanted / maskWidth);
+		let cursor = this.#value.length;
+		let seen = 0;
+		for (const { index } of segmenter.segment(this.#value)) {
+			if (seen === graphemeIndex) {
+				cursor = index;
+				break;
+			}
+			seen += 1;
+		}
+		this.#cursor = cursor;
+	}
+
+	render(width: number): readonly string[] {
+		// Calculate visible window
+		const prompt = this.prompt;
+		const availableWidth = width - visibleWidth(prompt);
+
+		if (availableWidth <= 0) {
+			return [prompt];
+		}
+
+		// The one place the value becomes something a terminal can show, and therefore the one
+		// place masking has to happen. Everything below works on `sourceValue`, so a masked field
+		// scrolls, clamps and positions its cursor exactly as an unmasked one does.
+		const effectiveMask = this.credentialMode ? (this.mask ?? DEFAULT_MASK_CHAR) : this.mask;
+		const { value: sourceValue, cursor: cursorIndex } =
+			effectiveMask === undefined
+				? { value: this.#value, cursor: this.#cursor }
+				: maskValue(this.#value, this.#cursor, effectiveMask);
+		// Ensure we always have a grapheme to invert at the cursor (space at end).
+		const displayValue = cursorIndex >= sourceValue.length ? `${sourceValue} ` : sourceValue;
+
+		const totalCols = visibleWidth(displayValue);
+		const cursorCols = visibleWidth(displayValue.slice(0, cursorIndex));
+
+		// Width of the grapheme at the cursor, for ensuring it fits in the viewport.
+		const cursorIter = segmenter.segment(displayValue.slice(cursorIndex))[Symbol.iterator]();
+		const cursorG = cursorIter.next().value?.segment ?? " ";
+		const cursorGWidth = visibleWidth(cursorG);
+
+		const maxStart = Math.max(0, totalCols - availableWidth);
+		let startCol = 0;
+		if (totalCols > availableWidth) {
+			const half = Math.floor(availableWidth / 2);
+			startCol = clampLow(cursorCols - half, 0, maxStart);
+
+			// Ensure the cursor grapheme is inside the viewport (and fits fully if wide).
+			const maxCursorRel = Math.max(0, availableWidth - cursorGWidth);
+			const cursorRel = cursorCols - startCol;
+			if (cursorRel > maxCursorRel) {
+				startCol = clampLow(cursorCols - maxCursorRel, 0, maxStart);
+			}
+		}
+		this.#lastPromptWidth = visibleWidth(prompt);
+		this.#lastStartCol = startCol;
+
+		const visibleText = sliceWithWidth(displayValue, startCol, availableWidth, true).text;
+		const prefixText = sliceWithWidth(displayValue, startCol, Math.max(0, cursorCols - startCol), true).text;
+		let cursorDisplay = prefixText.length;
+		cursorDisplay = clampLow(cursorDisplay, 0, visibleText.length);
+
+		// Build the visible line and insert the cursor marker at the buffer cursor.
+		const cursorGrapheme = firstGrapheme(visibleText.slice(cursorDisplay));
+
+		const beforeCursor = visibleText.slice(0, cursorDisplay);
+		const atCursor = cursorGrapheme;
+		const afterCursor = visibleText.slice(cursorDisplay + atCursor.length);
+
+		// Hardware cursor marker (zero-width, emitted before the cursor cell for IME positioning)
+		const marker = this.focused ? CURSOR_MARKER : "";
+		const cursorChar = this.#useTerminalCursor ? atCursor : `\x1b[7m${atCursor || " "}\x1b[27m`;
+
+		// Clamp only the trailing text (measured in terminal cells), keeping the cursor marker intact.
+		const beforeWidth = visibleWidth(beforeCursor);
+		const cursorWidth = this.#useTerminalCursor ? visibleWidth(atCursor) : visibleWidth(atCursor || " ");
+		const remainingAfterWidth = Math.max(0, availableWidth - beforeWidth - cursorWidth);
+		const clampedAfterCursor = sliceWithWidth(afterCursor, 0, remainingAfterWidth, true).text;
+		const renderedNoMarker = beforeCursor + cursorChar + clampedAfterCursor;
+		const textWithCursor = beforeCursor + marker + cursorChar + clampedAfterCursor;
+
+		const visualLength = visibleWidth(renderedNoMarker);
+		const pad = padding(Math.max(0, availableWidth - visualLength));
+		const line = prompt + textWithCursor + pad;
+		return [line];
+	}
+}

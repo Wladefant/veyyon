@@ -97,6 +97,7 @@ import {
 	type ToolBatchLedgerCause,
 } from "./tool-batch-ledger";
 import { capToolResultContent } from "./tool-result-cap";
+import { toolResultNeverRan } from "./tool-result-never-ran";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -119,6 +120,8 @@ export const STREAM_INTERRUPTED_AFTER_CONTENT_STOP_DETAIL = "stream_interrupted_
 
 /** Sentinel returned by the abort race in `streamAssistantResponse`. */
 const ABORTED: unique symbol = Symbol("agent-loop-aborted");
+
+const EMPTY_STRING_SET: ReadonlySet<string> = new Set<string>();
 
 /**
  * Cap on consecutive re-samples triggered by a non-terminal stop
@@ -231,7 +234,24 @@ export function resolveOwnedDialectFromEnv(value: string | undefined): Dialect |
 type AssistantContentBlock = AssistantMessage["content"][number];
 type AssistantToolCallBlock = Extract<AssistantContentBlock, { type: "toolCall" }>;
 
-function snapshotAssistantContentBlock(block: AssistantContentBlock): AssistantContentBlock {
+type SnapshotMode = "full" | "delta";
+
+/**
+ * Copy a content block for an immutable subscriber view.
+ *
+ * `delta` mode serves the per-streaming-event path, where cost scales with
+ * event count: a `toolCall` block copies its fields but shares `arguments` by
+ * reference. That stays immutable under provider activity because every
+ * arguments write across `packages/ai` REPLACES the value wholesale (`parseStreamingJson`,
+ * throttle re-parses, object merges, literals) and none mutates an existing
+ * arguments object in place, so a reference captured now never changes later.
+ * The block itself is still copied because providers do mutate block fields
+ * (`text +=`, marker keys) across deltas. `full` mode additionally deep-clones
+ * `arguments` with own-enumerable-only semantics; it runs once per message at
+ * terminal paths (`done`, `error`, `message_end`, final `toolCall` events),
+ * where the sanitized view is authoritative.
+ */
+function snapshotAssistantContentBlock(block: AssistantContentBlock, mode: SnapshotMode): AssistantContentBlock {
 	switch (block.type) {
 		case "text":
 			return { ...block };
@@ -242,28 +262,31 @@ function snapshotAssistantContentBlock(block: AssistantContentBlock): AssistantC
 		case "fallback":
 			return { ...block, from: { ...block.from }, to: { ...block.to } };
 		case "toolCall":
-			return { ...block, arguments: structuredCloneJSON(block.arguments) };
+			return mode === "delta" ? { ...block } : { ...block, arguments: structuredCloneJSON(block.arguments) };
 	}
 }
 
-function snapshotAssistantMessage(message: AssistantMessage): AssistantMessage {
+function snapshotAssistantMessage(message: AssistantMessage, mode: SnapshotMode = "full"): AssistantMessage {
 	return {
 		...message,
-		content: message.content.map(snapshotAssistantContentBlock),
+		content: message.content.map(block => snapshotAssistantContentBlock(block, mode)),
 		usage: {
 			...message.usage,
 			cost: { ...message.usage.cost },
 		},
-		disabledFeatures: message.disabledFeatures ? [...message.disabledFeatures] : undefined,
+		disabledFeatures: message.disabledFeatures ? message.disabledFeatures.slice() : undefined,
 		toolCallAbortMessages: message.toolCallAbortMessages ? { ...message.toolCallAbortMessages } : undefined,
 	};
 }
 
 /**
- * Deep-clone an assistant streaming event so subscribers get an immutable view.
- * Pass `partialSnapshot` when the caller has already snapshotted `event.partial`
- * (the `message_update` push sites alias it as the event's `message`) so the
- * identical partial is not deep-cloned twice per streaming delta.
+ * Copy an assistant streaming event so subscribers get an immutable view.
+ *
+ * Pass `partialSnapshot` when the caller has already snapshotted
+ * `event.partial` (the `message_update` push sites alias it as the event's
+ * `message`) so the identical partial is not copied twice per streaming delta.
+ * Streaming arms use `delta` mode; terminal events (`done`, `error`, and a
+ * `toolcall_end`'s authoritative tool call) keep full sanitizing clones.
  */
 function snapshotAssistantMessageEvent(
 	event: AssistantMessageEvent,
@@ -271,7 +294,7 @@ function snapshotAssistantMessageEvent(
 ): AssistantMessageEvent {
 	switch (event.type) {
 		case "start":
-			return { ...event, partial: partialSnapshot ?? snapshotAssistantMessage(event.partial) };
+			return { ...event, partial: partialSnapshot ?? snapshotAssistantMessage(event.partial, "delta") };
 		case "text_start":
 		case "text_delta":
 		case "text_end":
@@ -280,12 +303,12 @@ function snapshotAssistantMessageEvent(
 		case "thinking_end":
 		case "toolcall_start":
 		case "toolcall_delta":
-			return { ...event, partial: partialSnapshot ?? snapshotAssistantMessage(event.partial) };
+			return { ...event, partial: partialSnapshot ?? snapshotAssistantMessage(event.partial, "delta") };
 		case "toolcall_end":
 			return {
 				...event,
-				toolCall: snapshotAssistantContentBlock(event.toolCall) as AssistantToolCallBlock,
-				partial: partialSnapshot ?? snapshotAssistantMessage(event.partial),
+				toolCall: snapshotAssistantContentBlock(event.toolCall, "full") as AssistantToolCallBlock,
+				partial: partialSnapshot ?? snapshotAssistantMessage(event.partial, "delta"),
 			};
 		case "done":
 			return { ...event, message: snapshotAssistantMessage(event.message) };
@@ -391,10 +414,10 @@ export function agentLoop(
 	const stream = createAgentStream();
 
 	(async () => {
-		const newMessages: AgentMessage[] = [...prompts];
+		const newMessages: AgentMessage[] = prompts.slice();
 		const currentContext: AgentContext = {
 			...context,
-			messages: [...context.messages, ...prompts],
+			messages: context.messages.concat(prompts),
 		};
 
 		stream.push({ type: "agent_start" });
@@ -440,7 +463,7 @@ export function agentLoopContinue(
 
 	(async () => {
 		const newMessages: AgentMessage[] = [];
-		const currentContext: AgentContext = { ...context, messages: [...context.messages] };
+		const currentContext: AgentContext = { ...context, messages: context.messages.slice() };
 
 		stream.push({ type: "agent_start" });
 		stream.push({ type: "turn_start" });
@@ -665,7 +688,7 @@ function injectIntentIntoSchema(
 		return {
 			...schemaRecord,
 			...(needsReorder ? { properties: { [INTENT_FIELD]: intentProp, ...rest } } : {}),
-			...(needsRequired ? { required: [...required, INTENT_FIELD] } : {}),
+			...(needsRequired ? { required: required.concat(INTENT_FIELD) } : {}),
 		};
 	}
 	return {
@@ -676,7 +699,7 @@ function injectIntentIntoSchema(
 				: { type: "string" },
 			...properties,
 		},
-		...(mode === "require" ? { required: [...required, INTENT_FIELD] } : {}),
+		...(mode === "require" ? { required: required.concat(INTENT_FIELD) } : {}),
 	};
 }
 
@@ -917,7 +940,28 @@ async function runLoopBody(
 				// engaged (host /pause). An external abort releases the park so a
 				// cancelled run still unwinds while everything else stays frozen.
 				const pauseGate = config.pauseGate ?? agentPauseGate;
-				if (pauseGate.paused) await pauseGate.waitUntilResumed(signal);
+				if (pauseGate.paused) {
+					try {
+						await pauseGate.waitUntilResumed(signal);
+					} catch (err) {
+						if (isAbortError(err) || signal?.aborted) {
+							const message = emitAbortedAssistantMessage(
+								null,
+								false,
+								EMPTY_STRING_SET,
+								currentContext,
+								config,
+								stream,
+								signal,
+							);
+							newMessages.push(message);
+							await emitTurnEnd(stream, currentContext, message, [], config, signal, { willContinue: false });
+							endAgentStream(stream, newMessages, telemetry, stepCounter.count);
+							return;
+						}
+						throw err;
+					}
+				}
 				if (!firstTurn) {
 					stream.push({ type: "turn_start" });
 				} else {
@@ -1153,9 +1197,18 @@ async function runLoopBody(
 				// tool through the caller's `execHandler` and buffered the result for
 				// out-of-band emission. Running it here again would duplicate the same
 				// side-effecting call (issue #4348 review by @chatgpt-codex-connector).
+				//
+				// The marker is provider bookkeeping and can be missed; the transcript
+				// cannot. A call that already carries a result RAN, whoever ran it, so
+				// it is not runnable here either. That is the invariant the marker is
+				// one implementation of, and it holds for every provider that answers a
+				// call out of band.
+				const answered = executedToolCallIds(currentContext.messages);
 				const toolCalls = message.content.filter(
 					(c): c is ToolCallContent =>
-						c.type === "toolCall" && (c as CursorExecResolvedCarrier)[kCursorExecResolved] !== true,
+						c.type === "toolCall" &&
+						(c as CursorExecResolvedCarrier)[kCursorExecResolved] !== true &&
+						!answered.has(c.id),
 				);
 				const runnableStop = message.stopReason === "toolUse" || message.stopReason === "stop";
 				hasMoreToolCalls = runnableStop && toolCalls.length > 0;
@@ -1247,7 +1300,7 @@ async function runLoopBody(
 					}
 				}
 
-				// A tool hook may mark its completed result as terminal (e.g. subagent yield).
+				// A tool hook may mark its completed result as terminal (e.g. agent yield).
 				// Stop before the next provider call without changing external/user abort semantics.
 				if (signal?.reason === TERMINAL_TOOL_RESULT_ABORT_REASON) {
 					hasMoreToolCalls = false;
@@ -1288,7 +1341,7 @@ async function runLoopBody(
 				if (hasMoreToolCalls) {
 					// Mid-work: fold any non-interrupting asides into the next turn alongside steering.
 					const asides = signal?.aborted ? [] : resolveAsides(await config.getAsideMessages?.());
-					pendingMessages = asides.length > 0 ? [...steering, ...asides] : steering;
+					pendingMessages = asides.length > 0 ? steering.concat(asides) : steering;
 				} else {
 					// Stop boundary: only steering (live user input) forces another turn here. Leave
 					// asides for the outer drain below so a passive aside can't trigger an extra model
@@ -1318,7 +1371,7 @@ async function runLoopBody(
 			const followUpMessages = signal?.aborted ? [] : (await config.getFollowUpMessages?.()) || [];
 			if (lateSteering.length > 0 || asideMessages.length > 0 || followUpMessages.length > 0) {
 				// Set as pending so the inner loop processes them before stopping.
-				pendingMessages = [...lateSteering, ...asideMessages, ...followUpMessages];
+				pendingMessages = lateSteering.concat(asideMessages, followUpMessages);
 				continue;
 			}
 
@@ -1417,7 +1470,9 @@ async function streamAssistantResponse(
 		promptToolWireTools = llmContext.tools;
 		llmContext = {
 			...llmContext,
-			systemPrompt: [...(llmContext.systemPrompt ?? []), renderInbandToolPrompt(promptToolWireTools, ownedDialect)],
+			systemPrompt: (llmContext.systemPrompt ?? []).concat(
+				renderInbandToolPrompt(promptToolWireTools, ownedDialect),
+			),
 			messages: encodeInbandToolHistory(llmContext.messages, ownedDialect, promptToolWireTools),
 			tools: undefined,
 		};
@@ -1548,6 +1603,26 @@ async function streamAssistantResponse(
 			let partialMessage: AssistantMessage | null = null;
 			let addedPartial = false;
 			const completedToolCallIds = new Set<string>();
+			// Both stream endings, the `done`/`error` event and a stream that ends
+			// without one, reject a Harmony leak the same way: discard the committed
+			// partial, then interrupt the turn with what was recovered from the leak.
+			const rejectHarmonyLeak = (message: AssistantMessage): void => {
+				if (!harmonyMitigationEnabled) return;
+				const detection = detectHarmonyLeakInAssistantMessage(message);
+				if (!detection) return;
+				const recovered = recoverHarmonyToolCall(message, detection);
+				const removed = recovered?.removed ?? extractHarmonyRemoved(message, detection);
+				if (addedPartial) {
+					emitDiscardedHarmonyPartial(
+						partialMessage,
+						stream,
+						`Discarded after GPT-5 Harmony protocol leakage (${signalListLabel(detection.signals)})`,
+					);
+					context.messages.pop();
+					addedPartial = false;
+				}
+				throw new HarmonyLeakInterruption(detection, removed, recovered);
+			};
 
 			const responseIterator = response[Symbol.asyncIterator]();
 			const finishAbortedStream = async (): Promise<AssistantMessage> => {
@@ -1637,23 +1712,7 @@ async function streamAssistantResponse(
 							),
 							storedToolCallIds(context.messages, addedPartial),
 						);
-						if (harmonyMitigationEnabled) {
-							const detection = detectHarmonyLeakInAssistantMessage(finalMessage);
-							if (detection) {
-								const recovered = recoverHarmonyToolCall(finalMessage, detection);
-								const removed = recovered?.removed ?? extractHarmonyRemoved(finalMessage, detection);
-								if (addedPartial) {
-									emitDiscardedHarmonyPartial(
-										partialMessage,
-										stream,
-										`Discarded after GPT-5 Harmony protocol leakage (${signalListLabel(detection.signals)})`,
-									);
-									context.messages.pop();
-									addedPartial = false;
-								}
-								throw new HarmonyLeakInterruption(detection, removed, recovered);
-							}
-						}
+						rejectHarmonyLeak(finalMessage);
 						finalMessage = snapshotAssistantMessage(finalMessage);
 						if (turnInstrumentation !== "off") {
 							const status: AssistantTurnStatus =
@@ -1714,9 +1773,10 @@ async function streamAssistantResponse(
 								completedToolCallIds.clear();
 								// `message` and `assistantMessageEvent.partial` intentionally share one
 								// immutable snapshot of the streaming partial: every message_update
-								// consumer treats both as read-only, so cloning the identical partial
-								// twice per delta was pure waste.
-								const messageSnapshot = snapshotAssistantMessage(partialMessage);
+								// consumer treats both as read-only. Delta mode shares tool-call
+								// `arguments` by reference (providers replace, never mutate) so
+								// per-delta cost no longer scales with accumulated argument size.
+								const messageSnapshot = snapshotAssistantMessage(partialMessage, "delta");
 								stream.push({
 									type: "message_update",
 									assistantMessageEvent: snapshotAssistantMessageEvent(event, messageSnapshot),
@@ -1747,9 +1807,10 @@ async function streamAssistantResponse(
 								config.onAssistantMessageEvent?.(partialMessage, event);
 								// `message` and `assistantMessageEvent.partial` intentionally share one
 								// immutable snapshot of the streaming partial: every message_update
-								// consumer treats both as read-only, so cloning the identical partial
-								// twice per delta was pure waste.
-								const messageSnapshot = snapshotAssistantMessage(partialMessage);
+								// consumer treats both as read-only. Delta mode shares tool-call
+								// `arguments` by reference (providers replace, never mutate) so
+								// per-delta cost no longer scales with accumulated argument size.
+								const messageSnapshot = snapshotAssistantMessage(partialMessage, "delta");
 								stream.push({
 									type: "message_update",
 									assistantMessageEvent: snapshotAssistantMessageEvent(event, messageSnapshot),
@@ -1764,23 +1825,7 @@ async function streamAssistantResponse(
 			}
 
 			let trailing = await response.result();
-			if (harmonyMitigationEnabled) {
-				const detection = detectHarmonyLeakInAssistantMessage(trailing);
-				if (detection) {
-					const recovered = recoverHarmonyToolCall(trailing, detection);
-					const removed = recovered?.removed ?? extractHarmonyRemoved(trailing, detection);
-					if (addedPartial) {
-						emitDiscardedHarmonyPartial(
-							partialMessage,
-							stream,
-							`Discarded after GPT-5 Harmony protocol leakage (${signalListLabel(detection.signals)})`,
-						);
-						context.messages.pop();
-						addedPartial = false;
-					}
-					throw new HarmonyLeakInterruption(detection, removed, recovered);
-				}
-			}
+			rejectHarmonyLeak(trailing);
 			trailing = snapshotAssistantMessage(trailing);
 			if (addedPartial) {
 				context.messages[context.messages.length - 1] = trailing;
@@ -1948,7 +1993,7 @@ function disambiguateToolCallIds(message: AssistantMessage, takenIds: ReadonlySe
 		while (taken(`${block.id}_${suffix}`)) suffix += 1;
 		const unique = `${block.id}_${suffix}`;
 		seen.add(unique);
-		content ??= [...message.content];
+		content ??= message.content.slice();
 		content[index] = { ...block, id: unique };
 	}
 	return content ? { ...message, content } : message;
@@ -2073,10 +2118,13 @@ function emitAbortedAssistantMessage(
 ): AssistantMessage {
 	const model = config.getModel?.() ?? config.model;
 	const errorMessage = abortReasonText(requestSignal);
-	const errorId =
-		errorMessage === "Request was aborted"
-			? AIError.create(AIError.Flag.Abort)
-			: AIError.classify(requestSignal?.reason) || undefined;
+	// THIS MESSAGE IS AN ABORT, so it carries the flag whatever the reason said. The flag used to
+	// be attached only when the text matched the generic sentinel byte for byte, so a cancellation
+	// that carried a reason — the user-interrupt label, a tool-scoped stop — produced an `aborted`
+	// message whose id classified as nothing, and every reader of the id (recovery, retry, the
+	// renderer) saw an unclassified failure. Whatever the reason itself classifies as rides
+	// alongside rather than replacing it.
+	const errorId = AIError.create(AIError.Flag.Abort) | (AIError.classify(requestSignal?.reason) || 0);
 	const base: AssistantMessage = partialMessage
 		? { ...partialMessage, stopReason: "aborted", errorMessage, errorId }
 		: {
@@ -2115,6 +2163,34 @@ function emitAbortedAssistantMessage(
 }
 
 /**
+ * Tool-call ids this conversation has already ANSWERED with a real result.
+ *
+ * WHY. A tool call is answered once. When something outside the loop runs a
+ * call and writes its result — Cursor's exec channel dispatches an MCP call
+ * through the caller's handler inside the provider stream and answers it there
+ * — the loop must not run the same call again. The provider marks such a block
+ * `kCursorExecResolved`, but that marker is bookkeeping kept by the code that
+ * had the defect: a recorded session shows a `set_cwd` call answered by the
+ * exec channel and then executed a second time by the loop, which failed
+ * validation and appended a second result under an id that already had one.
+ * The transcript is the fact the marker only reports, so read the transcript.
+ *
+ * A never-ran placeholder is not an answer: the loop writes those for calls it
+ * abandoned, and a continuation that reissues them must still be able to run
+ * them. {@link toolResultNeverRan} owns that distinction for every subsystem
+ * that needs it.
+ */
+function executedToolCallIds(messages: ReadonlyArray<AgentMessage>): Set<string> {
+	const executed = new Set<string>();
+	for (const message of messages) {
+		if (message.role !== "toolResult") continue;
+		if (toolResultNeverRan(message.details)) continue;
+		executed.add(message.toolCallId);
+	}
+	return executed;
+}
+
+/**
  * Execute tool calls from an assistant message.
  */
 async function executeToolCalls(
@@ -2140,12 +2216,15 @@ async function executeToolCalls(
 	} = config;
 	const instrumentationLevel = instrumentation ?? "off";
 	type ToolCallContent = Extract<AssistantMessage["content"][number], { type: "toolCall" }>;
-	// Defensive: the outer loop already filters exec-resolved blocks before
-	// deciding to invoke `executeToolCalls`, but skip them here too so the
-	// guarantee lives with the code that would re-run the tool.
+	// Defensive: the outer loop already filters exec-resolved and already-answered
+	// blocks before deciding to invoke `executeToolCalls`, but skip them here too
+	// so the guarantee lives with the code that would re-run the tool.
+	const alreadyAnswered = executedToolCallIds(currentContext.messages);
 	const toolCalls = assistantMessage.content.filter(
 		(c): c is ToolCallContent =>
-			c.type === "toolCall" && (c as CursorExecResolvedCarrier)[kCursorExecResolved] !== true,
+			c.type === "toolCall" &&
+			(c as CursorExecResolvedCarrier)[kCursorExecResolved] !== true &&
+			!alreadyAnswered.has(c.id),
 	);
 	const emittedToolResults: ToolResultMessage[] = [];
 	const toolCallInfos = toolCalls.map(call => ({ id: call.id, name: call.name }));
@@ -2176,12 +2255,38 @@ async function executeToolCalls(
 		const tool =
 			tools?.find(t => t.name === toolCall.name) ??
 			tools?.find(t => t.customWireName !== undefined && t.customWireName === toolCall.name);
+		// `interruptible` may be declared per call: a tool where only some
+		// operations block (an `irc` wait, a `job` poll) is not interruptible for
+		// the rest of them. Resolving it per call matters beyond latency, because
+		// a call whose signal aborted before it started is answered below with a
+		// "skipped" placeholder instead of its own result. Under a blanket flag an
+		// unrelated interrupt therefore swallowed a non-blocking call's real
+		// result, including the validation error a malformed call was reporting.
+		const declaredInterruptible = tool?.interruptible;
+		let interruptible: boolean;
+		if (typeof declaredInterruptible === "function") {
+			// Resolved from raw pre-validation args; a throwing resolver must not
+			// take down the whole batch, so fall back to the conservative side —
+			// an uninterruptible call always keeps its own result.
+			try {
+				interruptible = declaredInterruptible(toolCall.arguments as Record<string, unknown>) === true;
+			} catch (error) {
+				interruptible = false;
+				logger.warn("tool interruptible resolver threw; treating the call as uninterruptible", {
+					tool: tool?.name,
+					error: errorMessage(error),
+				});
+			}
+		} else {
+			interruptible = declaredInterruptible === true;
+		}
 		return {
 			toolCall,
 			tool,
 			batchIndex,
 			args: toolCall.arguments as Record<string, unknown>,
-			signal: tool?.interruptible ? interruptibleSignal : nonInterruptibleSignal,
+			interruptible,
+			signal: interruptible ? interruptibleSignal : nonInterruptibleSignal,
 			started: false,
 			// `started` means the UI was told the call is running, which includes the
 			// time it spends in `beforeToolCall` (permission prompts). `entered` means
@@ -2293,7 +2398,7 @@ async function executeToolCalls(
 						batchIndex: record.batchIndex,
 						batchSize: toolCalls.length,
 						status,
-						interruptible: record.tool?.interruptible === true,
+						interruptible: record.interruptible,
 						signalAborted: record.signal.aborted,
 						resultContent: cappedContent,
 						useless: result.useless === true,
@@ -2335,7 +2440,17 @@ async function executeToolCalls(
 		// engaged. Tools already executing are unaffected (pausing never aborts);
 		// a batch interrupted mid-pause unwinds via the signal checks below.
 		const pauseGate = config.pauseGate ?? agentPauseGate;
-		if (pauseGate.paused) await pauseGate.waitUntilResumed(record.signal);
+		if (pauseGate.paused) {
+			try {
+				await pauseGate.waitUntilResumed(record.signal);
+			} catch (err) {
+				if (isAbortError(err) || record.signal.aborted) {
+					record.skipped = true;
+					return;
+				}
+				throw err;
+			}
+		}
 
 		const { toolCall, tool } = record;
 		let argsForExecution = toolCall.arguments as Record<string, unknown>;
@@ -2748,7 +2863,7 @@ async function executeToolCalls(
 	const watchSteeringWhileRunning =
 		shouldInterruptImmediately &&
 		(hasSteeringMessages !== undefined || hasIrcInterrupts !== undefined) &&
-		records.some(r => r.tool?.interruptible === true);
+		records.some(r => r.interruptible);
 	const steeringWatchTimer = watchSteeringWhileRunning
 		? setInterval(() => void checkSteering(), STEERING_INTERRUPT_POLL_MS)
 		: undefined;

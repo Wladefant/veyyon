@@ -6,12 +6,13 @@
  */
 import * as path from "node:path";
 import { getAgentDir, tryParseJson } from "@veyyon/utils";
-import { registerProvider } from "../capability";
-import { readFile } from "../capability/fs";
-import { type SSHHost, sshCapability } from "../capability/ssh";
-import type { LoadContext, LoadResult, SourceMeta } from "../capability/types";
-import { expandTilde } from "../tools/path-utils";
-import { createSourceMeta, expandEnvVarsDeep } from "./helpers";
+import { expandTilde } from "../tools/core/path-utils";
+import { registerProvider } from "./capability";
+import { readFile } from "./capability/fs";
+import { type SSHHost, sshCapability } from "./capability/ssh";
+import type { LoadContext, LoadResult, SourceMeta } from "./capability/types";
+import { expandEnvVarsDeep, warnUnresolved } from "./env-expansion";
+import { createSourceMeta } from "./helpers";
 
 const PROVIDER_ID = "ssh-json";
 const DISPLAY_NAME = "SSH Config";
@@ -96,7 +97,7 @@ async function loadSshJsonFile(ctx: LoadContext, filePath: string): Promise<Load
 		warnings.push(`Failed to parse JSON in ${filePath}`);
 		return { items, warnings };
 	}
-	const config = expandEnvVarsDeep(parsed);
+	const config = expandEnvVarsDeep(parsed, warnUnresolved(warnings, filePath));
 	if (!config.hosts || typeof config.hosts !== "object") {
 		warnings.push(`Missing hosts in ${filePath}`);
 		return { items, warnings };

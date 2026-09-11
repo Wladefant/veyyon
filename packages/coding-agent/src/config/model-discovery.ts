@@ -9,16 +9,14 @@ import type { ApiKey, FetchImpl } from "@veyyon/ai";
 import { withAuth } from "@veyyon/ai/auth-retry";
 import type { Api, Model } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { resolveBundledModelReference, stripBracketedModelIdAffixes } from "@veyyon/catalog/identity";
 import {
-	getBundledModelReferenceIndex,
-	resolveModelReference,
-	stripBracketedModelIdAffixes,
-} from "@veyyon/catalog/identity";
-import {
+	normalizeOllamaBaseUrl as catalogNormalizeOllamaBaseUrl,
 	fetchLiteLLMRichModels,
 	fetchLmStudioNativeModelMetadata,
 	OPENAI_COMPAT_DISCOVERY_DEFAULT_CONTEXT_WINDOW,
 	OPENAI_COMPAT_DISCOVERY_DEFAULT_MAX_TOKENS,
+	toOllamaNativeBaseUrl,
 } from "@veyyon/catalog/provider-models/openai-compat";
 import type { ModelSpec, OpenAICompat } from "@veyyon/catalog/types";
 import { isRecord, trimTrailingSlashes } from "@veyyon/utils";
@@ -658,7 +656,7 @@ export async function discoverOpenAIModelsList(
 		? await withAuth(apiKey, key => attempt({ ...baseHeaders, Authorization: `Bearer ${key}` }))
 		: await attempt(baseHeaders);
 	const models = payload.data ?? [];
-	const references = getBundledModelReferenceIndex();
+
 	const discovered: Model<Api>[] = [];
 	for (const item of models) {
 		const id = item.id;
@@ -673,7 +671,7 @@ export async function discoverOpenAIModelsList(
 		// reasoning support — flows through when the provider is silent. Local
 		// runtime state and provider-reported values still win; proxy-specific
 		// headers/baseUrl/cost stay local.
-		const reference = resolveModelReference(id, references) as ModelSpec<Api> | undefined;
+		const reference = resolveBundledModelReference(id) as ModelSpec<Api> | undefined;
 		const referenceCompat = reference?.compat as OpenAICompat | undefined;
 		const contextWindow =
 			toPositiveNumberOrUndefined(item.max_model_len) ??
@@ -724,8 +722,8 @@ export async function discoverLiteLLMModels(
 	ctx: DiscoveryContext,
 ): Promise<Model<Api>[]> {
 	const baseUrl = normalizeLiteLLMDiscoveryBaseUrl(providerConfig.baseUrl);
-	const references = getBundledModelReferenceIndex();
-	const resolveReference = (id: string) => resolveModelReference(id, references) as ModelSpec<Api> | undefined;
+
+	const resolveReference = (id: string) => resolveBundledModelReference(id) as ModelSpec<Api> | undefined;
 	const baseHeaders: Record<string, string> = { ...(providerConfig.headers ?? {}) };
 	let headers = baseHeaders;
 	const attempt = async (h: Record<string, string>) => {
@@ -829,7 +827,7 @@ export async function discoverProxyModels(
 				: providerConfig.api;
 		if (!api) continue;
 		const isAnthropic = api === "anthropic-messages";
-		const reference = resolveModelReference(id, getBundledModelReferenceIndex());
+		const reference = resolveBundledModelReference(id);
 		const discoveryName = typeof item.name === "string" ? item.name.trim() : "";
 		const displayName =
 			reference?.name ??
@@ -917,12 +915,14 @@ export function normalizeOpenAIModelsListBaseUrl(baseUrl?: string): string {
 	}
 }
 
+/**
+ * The native-API base URL for an Ollama endpoint.
+ *
+ * This used to return `${protocol}//${host}`, which discards the path. An Ollama behind a reverse
+ * proxy is mounted at a subpath, so a configured `http://gateway:11434/ollama` was discovered at
+ * `http://gateway:11434/api/tags` here and at `http://gateway:11434/ollama/api/tags` by the
+ * catalog's own discovery, and only the second one answered. The catalog owns both spellings now.
+ */
 function normalizeOllamaBaseUrl(baseUrl?: string): string {
-	const raw = baseUrl || DEFAULT_OLLAMA_BASE_URL;
-	try {
-		const parsed = new URL(raw);
-		return `${parsed.protocol}//${parsed.host}`;
-	} catch {
-		return DEFAULT_OLLAMA_BASE_URL;
-	}
+	return toOllamaNativeBaseUrl(catalogNormalizeOllamaBaseUrl(baseUrl || DEFAULT_OLLAMA_BASE_URL));
 }

@@ -55,8 +55,42 @@ const reachable = moduleReach(BARREL);
  * IF YOU ARE HERE BECAUSE THIS FAILED: the failure message lists every module the barrel reaches. Check
  * first whether the new import belongs on the barrel at all, or whether the consumer that needed it should
  * name the owning module by subpath, which is what every other reach gate in this repository pushes toward.
+ *
+ * RE-MEASURED 2026-08-22 at 83. The new module is `eval-prompt-overrides.ts`, which owns the
+ * `VEYYON_EVAL_PROMPTS` parse and substitution. It is not a consumer's import choice and a subpath
+ * cannot move it off the graph: `prompt-registry.ts` is exported from the barrel and imports the
+ * override seam directly, because `definePromptRows` applies it. Measured both ways: deleting
+ * `export * from "./eval-prompt-overrides"` from the barrel leaves the reach at 83, and
+ * `moduleReach("prompt-registry.ts")` reaches it in 27.
+ *
+ * RE-MEASURED 2026-08-22 at 84. The new module is `stream-frame-limit.ts`, which owns the frame
+ * bound the streaming readers enforce and the error they throw. `stream.ts` is on the barrel and
+ * re-exports it, so a subpath cannot move it off the graph, and it is deliberately a zero-import
+ * leaf: `@veyyon/ai`'s error classifier keys off the error class structurally and must not pull the
+ * reader stack in to do it. `moduleReach("stream-frame-limit.ts")` is 1.
+ *
+ * RE-MEASURED 2026-08-25 at 85. The new module is `native-process.ts`, which owns the decision that a
+ * host unable to load the native addon gets no process handle rather than a throw (issue #917). A
+ * subpath cannot move it off the graph: `ptree.ts` and `procmgr.ts` are both exported from the barrel
+ * and call it directly, which is the point of the module — every `Process.fromPid` and
+ * `Process.fromPath` call site resolves through one owner. It adds no new edge to `@veyyon/natives`,
+ * which both of those modules already imported for the same symbol.
+ *
+ * RE-MEASURED 2026-08-27 at 86. The new module is `ansi.ts`, the owner of the terminal control bytes
+ * (`ESC`, `CSI`, `ST`, the SGR resets), which moved here from `@veyyon/tui` when the string and escape
+ * primitives were pulled below the terminal layer. `sanitize-text.ts` is exported from the barrel and
+ * imports `ESC` from it, which retires the `ESC_CHAR = "\x1b"` copy that only existed because utils
+ * could not import upward into tui. A subpath cannot move it off the graph. It is a zero-import leaf:
+ * `moduleReach("ansi.ts")` is 1, so the barrel pays one module for one declaration of the byte.
+ *
+ * RE-MEASURED 2026-09-11 at 87. The new module is `tab-width.ts`, the owner of `DEFAULT_TAB_WIDTH`
+ * and `replaceTabs`, split out of `tab-spacing.ts` so the browser bundles (`@veyyon/tool-render`,
+ * the web client) share the one tab width without the `.editorconfig` reader that touches the
+ * filesystem. `tab-spacing.ts` re-exports `DEFAULT_TAB_WIDTH` from it and is exported from the
+ * barrel, so a subpath cannot move it off the graph without dropping a root export main published.
+ * It is a zero-import leaf: `moduleReach("tab-width.ts")` is 1.
  */
-const BARREL_CEILING = 82;
+const BARREL_CEILING = 87;
 
 describe("the @veyyon/utils barrel", () => {
 	/** The number that multiplies by six hundred realms. */

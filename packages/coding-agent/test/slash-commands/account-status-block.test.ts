@@ -15,6 +15,8 @@
 import { describe, expect, it } from "bun:test";
 import type { AccountInventory, AccountRow } from "@veyyon/coding-agent/session/account-inventory";
 import {
+	ACCOUNT_STATUS_TITLE,
+	type AccountStatusStyle,
 	accountRoleAnnotations,
 	NAME_HINT,
 	NO_NAME_PLACEHOLDER,
@@ -102,7 +104,7 @@ const fullInventory = inventory(
 
 const fullRoles = accountRoleAnnotations({
 	mainModel: { provider: "anthropic", id: "opus-5" },
-	subagentProviders: ["openai-codex"],
+	agentProviders: ["openai-codex"],
 	webSearchPreference: "gemini",
 });
 
@@ -120,15 +122,15 @@ describe("the /account status block reports the accounts in use", () => {
 				"",
 				"  Anthropic          work                        main model  (opus-5)",
 				"                     first@example.com · org Example Org",
-				"                     5h      [███████░░░] 71%   resets in 2h",
-				"                     7d      [███░░░░░░░] 34%   resets in 4d",
+				"                     5h      [███████▏░░] 71%   resets in 2h",
+				"                     7d      [███▍░░░░░░] 34%   resets in 4d",
 				"",
 				"  Google Gemini CLI  (no name set)               web search",
 				"                     second@example.com · project example-project",
 				"",
-				"  OpenAI Codex       codex-main                  subagents",
+				"  OpenAI Codex       codex-main                  agents",
 				"                     first@example.com",
-				"                     5h      [████░░░░░░] 44%   resets in 1h",
+				"                     5h      [████▍░░░░░] 44%   resets in 1h",
 				"",
 				// ONE hint for the block. The per-row form printed this sentence once per unnamed
 				// account, which in a real eight-provider session meant seven repetitions of it.
@@ -332,17 +334,17 @@ describe("role annotations name why a provider is in the session", () => {
 
 	/**
 	 * One provider can serve several roles, and each role is said once. A provider repeated in the
-	 * sources (main model and subagent inheritance both landing on it) must not read
-	 * "subagents · subagents".
+	 * sources (main model and agent inheritance both landing on it) must not read
+	 * "agents · agents".
 	 */
 	it("collects several roles per provider without repeating one", () => {
 		const roles = accountRoleAnnotations({
 			mainModel: { provider: "anthropic", id: "opus-5" },
-			subagentProviders: ["anthropic", "anthropic"],
+			agentProviders: ["anthropic", "anthropic"],
 			webSearchPreference: "anthropic",
 		});
 
-		expect(roles.get("anthropic")).toEqual(["main model  (opus-5)", "subagents", "web search"]);
+		expect(roles.get("anthropic")).toEqual(["main model  (opus-5)", "agents", "web search"]);
 	});
 
 	/**
@@ -404,5 +406,82 @@ describe("the status block points at a signed-out login", () => {
 	/** No dead login, no pointer. A healthy session must not carry a line about signing in again. */
 	it("says nothing about signed-out logins when there are none", () => {
 		expect(render(fullInventory, fullRoles)).not.toContain("signed-out login");
+	});
+});
+
+describe("styled account status applies AccountStatusStyle", () => {
+	const mockStyle: AccountStatusStyle = {
+		title: text => `[TITLE:${text}]`,
+		name: text => `[NAME:${text}]`,
+		muted: text => `[MUTED:${text}]`,
+		warn: text => `[WARN:${text}]`,
+		command: text => `[CMD:${text}]`,
+	};
+
+	it("exports ACCOUNT_STATUS_TITLE constant", () => {
+		expect(ACCOUNT_STATUS_TITLE).toBe("Accounts in use by this session");
+	});
+
+	it("applies style transformations to the empty inventory", () => {
+		const emptyInv = inventory();
+		const rendered = renderAccountStatus(emptyInv, NOW, new Map(), mockStyle).join("\n");
+		expect(rendered).toBe(
+			[
+				`[TITLE:${ACCOUNT_STATUS_TITLE}]`,
+				"",
+				"  [MUTED:No provider has routed a request in this session yet.]",
+				"",
+				"  [MUTED:0 of 0 providers in use · ][CMD:/providers][MUTED: to manage accounts]",
+			].join("\n"),
+		);
+	});
+
+	it("applies style transformations across routed providers, roles, warnings, and commands", () => {
+		const rendered = renderAccountStatus(fullInventory, NOW, fullRoles, mockStyle).join("\n");
+		expect(rendered).toContain(`[TITLE:${ACCOUNT_STATUS_TITLE}]`);
+		expect(rendered).toContain(
+			"[NAME:Anthropic          ][NAME:work                        ][MUTED:main model  (opus-5)]",
+		);
+		expect(rendered).toContain("[NAME:Google Gemini CLI  ][MUTED:(no name set)               ][MUTED:web search]");
+		expect(rendered).toContain("[MUTED:1 account has no name · ][CMD:/account name <text>]");
+		expect(rendered).toContain("[MUTED:3 of 4 providers in use · ][CMD:/providers][MUTED: to manage accounts]");
+	});
+
+	it("applies warning and command styles on rotated provider divergence", () => {
+		const pinnedWork = row({
+			provider: "anthropic",
+			providerLabel: "Anthropic",
+			credentialId: 1,
+			name: "work",
+			email: "first@example.com",
+			selectedForProvider: true,
+			blockedUntilMs: NOW + 2 * HOUR + 14 * 60_000,
+		});
+		const servingPersonal = row({
+			provider: "anthropic",
+			providerLabel: "Anthropic",
+			credentialId: 2,
+			name: "personal",
+			email: "second@example.com",
+			activeForSession: true,
+		});
+		const rotated = inventory({ provider: "anthropic", label: "Anthropic", rows: [pinnedWork, servingPersonal] });
+		const rendered = renderAccountStatus(rotated, NOW, new Map(), mockStyle).join("\n");
+		expect(rendered).toContain("[WARN:you chose work, rotated off it (usage limit)]");
+		expect(rendered).toContain("[CMD:/account use anthropic work][MUTED: to switch back · 2h until it unblocks]");
+	});
+
+	it("applies warning and command styles on signed-out logins", () => {
+		const withDeadLogin: AccountInventory = {
+			...fullInventory,
+			providers: [
+				...fullInventory.providers,
+				{ provider: "kimi-code", label: "Kimi Code", rows: [], disabledCause: "oauth refresh failed: revoked" },
+			],
+		};
+		const rendered = renderAccountStatus(withDeadLogin, NOW, fullRoles, mockStyle).join("\n");
+		expect(rendered).toContain(
+			"[WARN:1 provider has a signed-out login (Kimi Code)][MUTED: · ][CMD:/providers][MUTED: to sign in again]",
+		);
 	});
 });

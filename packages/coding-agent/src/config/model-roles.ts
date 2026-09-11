@@ -3,12 +3,12 @@
  */
 
 // Import from the leaf color module, not the heavy `theme` barrel. The barrel pulls
-// modes/theme/shimmer -> config/settings -> discovery -> ... -> config/model-resolver,
+// theme/shimmer -> config/settings -> discovery -> ... -> config/model-resolver,
 // and model-resolver imports this file back, so routing through the barrel forms an
 // import cycle whose top-level `const MODEL_ROLE_ALIAS_PREFIXES = [...]` reads this
 // module's still-uninitialized exports (a TDZ ReferenceError) whenever model-roles is
-// the entry point. color.ts is a true leaf (arktype only), so this edge breaks the cycle.
-import { isValidThemeColor, type ThemeColor } from "../modes/theme/color";
+// the entry point. color.ts reaches type guards and nothing else, so this edge breaks the cycle.
+import { isValidThemeColor, type ThemeColor } from "../theme/color";
 import type { Settings } from "./settings";
 
 /** Canonical prefix for a configured model role selector. */
@@ -46,12 +46,12 @@ export interface ModelRoleInfo {
 export const ROLE_INHERIT_LABEL = "inherit (follows main model)";
 
 /**
- * There is deliberately NO `task` role. The model a subagent runs lives in the
- * Subagents settings area (`subagent.model`, and `subagent.agents.<name>.model`
+ * There is deliberately NO `task` role. The model a spawned agent runs lives in the
+ * Agents settings area (`agent.model`, and `agent.agents.<name>.model`
  * per agent), which is its one owner. A `modelRoles.task` entry beside those was
- * a second owner for the same value, and it is what made "I changed the subagent
+ * a second owner for the same value, and it is what made "I changed the spawned agent
  * model" fail to take: role expansion answered first. Old configs are migrated
- * onto `subagent.model`; see `#migrateSubagentSettings`.
+ * onto `agent.model`; see `#migrateAgentSettings`.
  */
 export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
 	/** Legacy only — not selectable; interactive model is the session model, not a role. */
@@ -68,8 +68,17 @@ export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
 
 export const MODEL_ROLE_IDS: ModelRole[] = ["smol", "slow", "vision", "plan", "designer", "commit", "tiny", "advisor"];
 
-/** Built-in roles that may appear in settings-backed role assignment UI. */
-export const SELECTABLE_MODEL_ROLE_IDS: ModelRole[] = MODEL_ROLE_IDS;
+/**
+ * Built-in roles that may appear in the settings Roles table.
+ *
+ * `advisor` is deliberately absent. The model the advisor runs is asked for in
+ * one place, the Advisor group's own Advisor Model row, which writes this same
+ * `advisor` slot. A second row for it in the Roles table was a second surface
+ * for one value, and the operator who set it in the table then could not find
+ * it from the feature that uses it. The slot itself stays, so `@advisor`
+ * resolves and `resolveAdvisorRoleSelection` is unchanged.
+ */
+export const SELECTABLE_MODEL_ROLE_IDS: ModelRole[] = MODEL_ROLE_IDS.filter(role => role !== "advisor");
 
 /**
  * The slot every interactive model choice persists to, and the ONE name for it.

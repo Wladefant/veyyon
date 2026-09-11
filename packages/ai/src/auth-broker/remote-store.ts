@@ -23,7 +23,8 @@ import * as AIError from "../error";
 import type { OAuthCredentials } from "../registry/oauth/types";
 import type { Provider } from "../types";
 import type { UsageReport } from "../usage";
-import { type AuthBrokerClient, AuthBrokerStreamUnsupportedError } from "./client";
+import { raceWithSignal } from "../utils/abort";
+import type { AuthBrokerClient } from "./client";
 import type {
 	CredentialBlockSnapshot,
 	RefresherSchedule,
@@ -107,7 +108,7 @@ function credentialEntryWithBlocks(
 	blocks: readonly CredentialBlockSnapshot[] | undefined,
 ): SnapshotEntry {
 	const incoming: SnapshotEntry = { ...entry, rotatesInMs: null };
-	if (blocks && blocks.length > 0) incoming.blocks = [...blocks].sort(compareCredentialBlockSnapshots);
+	if (blocks && blocks.length > 0) incoming.blocks = blocks.slice().sort(compareCredentialBlockSnapshots);
 	return incoming;
 }
 
@@ -311,7 +312,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 					continue;
 				} catch (error) {
 					if (this.#closed || this.#backgroundAbort.signal.aborted) break;
-					if (error instanceof AuthBrokerStreamUnsupportedError) {
+					if (error instanceof AIError.AuthBrokerStreamUnsupportedError) {
 						this.#streamingUnsupported = true;
 						logger.debug("auth-broker snapshot stream unsupported; falling back to long-poll");
 						continue;
@@ -398,7 +399,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		if (blocksChanged) this.#invalidateUsageCache();
 		const credentials =
 			index === -1
-				? [...this.#snapshot.credentials, incoming]
+				? this.#snapshot.credentials.concat([incoming])
 				: this.#snapshot.credentials.map((candidate, i) => (i === index ? incoming : candidate));
 		if (blocksChanged) this.#protectNewSnapshotBlocks(this.#snapshot.credentials, credentials, Date.now());
 		this.#snapshot = { ...this.#snapshot, generation, serverNowMs, refresher, credentials };
@@ -692,17 +693,17 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		);
 		const others = this.#snapshot.credentials.filter(entry => entry.provider !== provider);
 		const incoming = entries.map(entry => credentialEntryWithBlocks(entry, existingBlocks.get(entry.id)));
-		this.#snapshot = { ...this.#snapshot, credentials: [...others, ...incoming] };
+		this.#snapshot = { ...this.#snapshot, credentials: others.concat(incoming) };
 	}
 	#applyCredentialEntry(entry: AuthCredentialSnapshotEntry): void {
 		const index = this.#snapshot.credentials.findIndex(candidate => candidate.id === entry.id);
 		const existingBlocks = index === -1 ? undefined : this.#snapshot.credentials[index]?.blocks;
 		const incoming = credentialEntryWithBlocks(entry, existingBlocks);
 		if (index === -1) {
-			this.#snapshot = { ...this.#snapshot, credentials: [...this.#snapshot.credentials, incoming] };
+			this.#snapshot = { ...this.#snapshot, credentials: this.#snapshot.credentials.concat([incoming]) };
 			return;
 		}
-		const credentials = [...this.#snapshot.credentials];
+		const credentials = this.#snapshot.credentials.slice();
 		credentials[index] = incoming;
 		this.#snapshot = { ...this.#snapshot, credentials };
 	}
@@ -739,7 +740,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		if (index === -1) return;
 		const entry = this.#snapshot.credentials[index]!;
 		const incoming = toCredentialBlockSnapshot(block);
-		const blocks = entry.blocks ? [...entry.blocks] : [];
+		const blocks = entry.blocks ? entry.blocks.slice() : [];
 		const blockIndex = blocks.findIndex(
 			candidate => candidate.providerKey === incoming.providerKey && candidate.blockScope === incoming.blockScope,
 		);
@@ -753,7 +754,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			};
 		}
 		blocks.sort(compareCredentialBlockSnapshots);
-		const credentials = [...this.#snapshot.credentials];
+		const credentials = this.#snapshot.credentials.slice();
 		credentials[index] = { ...entry, blocks };
 		this.#snapshot = { ...this.#snapshot, credentials };
 	}
@@ -765,7 +766,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		if (!entry.blocks || entry.blocks.length === 0) return;
 		const next: SnapshotEntry = { ...entry };
 		delete next.blocks;
-		const credentials = [...this.#snapshot.credentials];
+		const credentials = this.#snapshot.credentials.slice();
 		credentials[index] = next;
 		this.#snapshot = { ...this.#snapshot, credentials };
 	}
@@ -902,7 +903,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	 * residential laptop is, so all credentials surface every cycle.
 	 */
 	async fetchUsageReports(signal?: AbortSignal): Promise<UsageReport[] | null> {
-		const reports = await this.#raceWithSignal(this.#loadUsageReports(), signal);
+		const reports = await raceWithSignal(this.#loadUsageReports(), signal, "auth-broker request aborted");
 		return reports ? this.#applyUsageOverlays(reports) : null;
 	}
 
@@ -920,7 +921,7 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 		credential: OAuthCredential,
 		signal?: AbortSignal,
 	): Promise<UsageReport | null> {
-		const reports = await this.#raceWithSignal(this.#loadUsageReports(), signal);
+		const reports = await raceWithSignal(this.#loadUsageReports(), signal, "auth-broker request aborted");
 		const matched = reports ? matchUsageReport(reports, provider, credential) : null;
 		const overlay = this.#getActiveUsageOverlay(provider, credential);
 		if (matched && overlay) return mergeUsageReports(matched, overlay);
@@ -948,11 +949,11 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	#applyUsageOverlays(reports: UsageReport[]): UsageReport[] {
-		const overlays = [...this.#usageOverlays.values()].filter(
+		const overlays = Array.from(this.#usageOverlays.values()).filter(
 			overlay => Date.now() - overlay.fetchedAt < USAGE_CACHE_TTL_MS,
 		);
 		if (overlays.length === 0) return reports;
-		const merged = [...reports];
+		const merged = reports.slice();
 		for (const overlay of overlays) {
 			const matchIndex = findMatchingReportIndex(merged, overlay);
 			if (matchIndex === -1) {
@@ -962,34 +963,6 @@ export class RemoteAuthCredentialStore implements AuthCredentialStore {
 			}
 		}
 		return merged;
-	}
-
-	/**
-	 * Reject the awaited promise when the caller's signal aborts, without
-	 * affecting the shared upstream fetch. Used to give each caller their
-	 * own cancel without one caller's abort cascading into a peer's in-flight
-	 * request through the single-flight `#usageInflight`.
-	 */
-	#raceWithSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
-		if (!signal) return promise;
-		if (signal.aborted) return Promise.reject(new AIError.RequestAbortError("auth-broker request aborted"));
-		return new Promise<T>((resolve, reject) => {
-			const onAbort = (): void => {
-				signal.removeEventListener("abort", onAbort);
-				reject(new AIError.RequestAbortError("auth-broker request aborted"));
-			};
-			signal.addEventListener("abort", onAbort, { once: true });
-			promise.then(
-				value => {
-					signal.removeEventListener("abort", onAbort);
-					resolve(value);
-				},
-				err => {
-					signal.removeEventListener("abort", onAbort);
-					reject(err);
-				},
-			);
-		});
 	}
 
 	#loadUsageReports(): Promise<UsageReport[] | null> {

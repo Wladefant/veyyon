@@ -37,16 +37,17 @@ import { constants as fsConstants, type Stats } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import type { OperatorNotices } from "@veyyon/kernel/session/operator-notices";
 import {
 	applyOwnerOnlyWindowsAcl,
 	clamp,
+	errorMessage,
 	escapeTerminalText,
 	isEnoent,
 	isRecord,
 	verifyOwnerOnlyWindowsAcl,
 	withFileLock,
 } from "@veyyon/utils";
-import type { OperatorNotices } from "../session/operator-notices";
 import { PLACEHOLDER_RE } from "./placeholder";
 import type { VaultLocations } from "./vault";
 
@@ -90,7 +91,7 @@ const MAX_PENDING_BYTES = MAX_PENDING_RECORDS * MAX_RECORD_BYTES;
  *
  * ROTATION, NOT TRUNCATION. Deleting the oldest history to make room for the newest would throw
  * away exactly the records an incident asks about. The previous generation is kept as
- * `secret-audit.jsonl.1` and {@link SecretAuditLog.read} reads through it, so a `--limit 20`
+ * `secret-audit.jsonl.1` and {@link SecretAuditLog.read} reads through it, so a `/secret log 20`
  * issued just after a rotation still answers with twenty records rather than with however few
  * happen to have landed since.
  */
@@ -1095,7 +1096,7 @@ export class SecretAuditLog {
 				this.#notices?.error(
 					"secrets",
 					`The secret audit log at ${escapeTerminalText(this.#logPath)} could not be appended to ` +
-						`(${escapeTerminalText(String(error))}). ${batch.length} bounded queued ` +
+						`(${escapeTerminalText(errorMessage(error))}). ${batch.length} bounded queued ` +
 						`record${batch.length === 1 ? " was" : "s were"} not written. Credentials remain protected; ` +
 						`credential use is no longer being recorded until the next append recovers.`,
 				);
@@ -1238,7 +1239,7 @@ export class SecretAuditLog {
 			if (isEnoent(error)) return { records: [], malformed: 0 };
 			throw new Error(
 				`The secret audit log at ${escapeTerminalText(filePath)} could not be read safely ` +
-					`(${escapeTerminalText(String(error))}).`,
+					`(${escapeTerminalText(errorMessage(error))}).`,
 			);
 		}
 	}

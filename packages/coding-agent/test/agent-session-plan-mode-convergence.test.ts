@@ -12,16 +12,16 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Agent, type AgentMessage, type AgentTool, type StreamFn } from "@veyyon/agent-core";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockModel, type MockResponse } from "@veyyon/ai/providers/mock";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { IrcBus, type IrcMessage } from "@veyyon/coding-agent/irc/bus";
 import { PROMPTS } from "@veyyon/coding-agent/prompts/registry";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { IrcBus, type IrcMessage } from "@veyyon/coding-agent/task/irc-bus";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { Snowflake, TempDir } from "@veyyon/utils";
 import { type } from "arktype";
 
@@ -247,7 +247,7 @@ describe("AgentSession plan-mode convergence", () => {
 		]);
 
 		// Todos are ENABLED (default) with an incomplete item, so a missing plan-mode
-		// gate in #checkTodoCompletion would inject a todo reminder and schedule an
+		// gate in TodoRuntime.checkCompletionAtSettle would inject a todo reminder and schedule an
 		// 8th continuation past the cap — the mock.calls.length === 7 assertion below
 		// is the behavioral guard for that bypass.
 		harness.session.setTodoPhases([{ name: "Plan", tasks: [{ content: "draft the plan", status: "pending" }] }]);

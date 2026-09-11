@@ -8,8 +8,8 @@ and `rate-edit-tool.py`. A library, not a command.
 Run: not directly. Run a benchmark that imports it:
     VEYYON_EDIT_VARIANT=vim scripts/edit-benchmark.py
 
-Unrelated to `@veyyon/typescript-edit-benchmark`, which is the in-process
-TypeScript-mutation suite CI runs. See `edit-benchmark.py` for why both exist.
+Unrelated to the `typescript-edit` suite in `@veyyon/evals`, which is the
+in-process TypeScript-mutation suite CI runs. See `edit-benchmark.py` for why both exist.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT / "python/veyyon-rpc/src"))
+sys.path.insert(0, str(REPO_ROOT / "clients/python/veyyon-rpc/src"))
 
 from veyyon_rpc import (
     MessageEndEvent,

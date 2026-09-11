@@ -307,9 +307,13 @@ export async function runModelsListing(options: RunModelsListingOptions): Promis
 
 	const eventBus = new EventBus();
 	const extensionsResult = disableExtensionDiscovery
-		? await loadExtensions(additionalExtensionPaths, cwd, eventBus)
+		? // The paths came from `--extension`, so they are the operator's own even when they
+			// live inside the project; the gate exempts them exactly as a session's do.
+			await loadExtensions(additionalExtensionPaths, cwd, eventBus, undefined, {
+				configuredPaths: additionalExtensionPaths,
+			})
 		: await discoverAndLoadExtensions(
-				[...additionalExtensionPaths, ...settingsExtensions],
+				additionalExtensionPaths.concat(settingsExtensions),
 				cwd,
 				eventBus,
 				disabledExtensionIds,

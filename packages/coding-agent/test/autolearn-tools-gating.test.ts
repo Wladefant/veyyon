@@ -5,11 +5,11 @@ import * as path from "node:path";
 import { getManagedSkillsDir } from "@veyyon/coding-agent/autolearn/managed-skills";
 import { type SettingPath, Settings } from "@veyyon/coding-agent/config/settings";
 import { resetActiveSkillsForTests, type Skill, setActiveSkills } from "@veyyon/coding-agent/extensibility/skills";
-import type { HindsightSessionState } from "@veyyon/coding-agent/hindsight/state";
-import type { MnemopiSessionState } from "@veyyon/coding-agent/mnemopi/state";
+import type { HindsightSessionState } from "@veyyon/coding-agent/memory/hindsight/state";
+import type { MnemopiSessionState } from "@veyyon/coding-agent/memory/mnemopi/state";
 import { createTools, type ToolSession } from "@veyyon/coding-agent/tools";
-import { LearnTool } from "@veyyon/coding-agent/tools/learn";
-import { ManageSkillTool } from "@veyyon/coding-agent/tools/manage-skill";
+import { LearnTool } from "@veyyon/coding-agent/tools/agent/learn";
+import { ManageSkillTool } from "@veyyon/coding-agent/tools/agent/manage-skill";
 import { removeWithRetries } from "@veyyon/utils";
 import { captureDirOverrides, type DirOverridesSnapshot, restoreDirOverrides, setAgentDir } from "@veyyon/utils/dirs";
 import { type } from "arktype";
@@ -71,8 +71,8 @@ describe("autolearn tool gating", () => {
 		expect(noBackend).not.toContain("learn");
 	});
 
-	it("excludes the tools from a subagent even with an explicit list", async () => {
-		// taskDepth > 0: the controller never runs here, so a subagent's explicit
+	it("excludes the tools from an agent even with an explicit list", async () => {
+		// taskDepth > 0: the controller never runs here, so an agent's explicit
 		// whitelist must not be silently widened with write-capable tools.
 		const sub = (
 			await createTools(makeSession({ "autolearn.enabled": true, "memory.backend": "mnemopi" }, { taskDepth: 1 }), [

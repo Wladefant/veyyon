@@ -1,18 +1,19 @@
 import { describe, expect, it } from "bun:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { resolveToolRenderer } from "../src/registry";
 import { stripAnsi } from "../src/util";
 
 /**
  * Every wire name the coding-agent can emit must resolve to a renderer with a
- * Summary. Aliases (apply_patch→edit, find→glob, …) must share the primary
- * renderer. Prototype keys must never resolve as accidental "registered" tools.
+ * Summary. Current aliases (apply_patch→edit, js/python/notebook→eval, …)
+ * must share the primary renderer. Prototype keys must never resolve accidentally.
  */
 const REGISTERED_NAMES = [
 	"argot_load",
 	"argot_unload",
 	"ask",
 	"ast_edit",
-	"ast_grep",
 	"bash",
 	"browser",
 	"puppeteer",
@@ -26,8 +27,6 @@ const REGISTERED_NAMES = [
 	"python",
 	"notebook",
 	"fetch",
-	"glob",
-	"find",
 	"generate_image",
 	"github",
 	"goal",
@@ -49,7 +48,6 @@ const REGISTERED_NAMES = [
 	"report_finding",
 	"report_tool_issue",
 	"resolve",
-	"grep",
 	"search",
 	"search_tool_bm25",
 	"set_cwd",
@@ -67,11 +65,9 @@ const ALIASES: Array<[string, string]> = [
 	["js", "eval"],
 	["python", "eval"],
 	["notebook", "eval"],
-	["find", "glob"],
 	["await", "job"],
 	["poll", "job"],
 	["cancel_job", "job"],
-	["search", "grep"],
 ];
 
 describe("@veyyon/tool-render registry", () => {
@@ -100,6 +96,13 @@ describe("@veyyon/tool-render registry", () => {
 		}
 	});
 
+	it("retired search tool names do not register and fall back to generic", () => {
+		const generic = resolveToolRenderer("definitely-not-a-real-tool-xyz");
+		for (const retired of ["glob", "grep", "find", "ast_grep"]) {
+			expect(resolveToolRenderer(retired)).toBe(generic);
+		}
+	});
+
 	it("does not treat Object.prototype keys as registered tools", () => {
 		const generic = resolveToolRenderer("definitely-not-a-real-tool-xyz");
 		// constructor / toString / hasOwnProperty must fall through to generic.
@@ -109,6 +112,48 @@ describe("@veyyon/tool-render registry", () => {
 		expect(resolveToolRenderer("__proto__")).toBe(generic);
 	});
 
+	it("preserves historical specialized Summary/Body rendering without display and delegates to ToolExecution with display", () => {
+		const readRenderer = resolveToolRenderer("read");
+		expect(readRenderer.Summary).toBeDefined();
+		expect(readRenderer.Body).toBeDefined();
+
+		// Summary without display: specialized PathText with range
+		const summaryWithout = renderToStaticMarkup(
+			createElement(readRenderer.Summary, {
+				name: "read",
+				args: { path: "src/main.ts", offset: 10, limit: 20 },
+			}),
+		);
+		expect(summaryWithout).toContain("src/main.ts");
+		expect(summaryWithout).toContain(":10-29");
+
+		// Body without display: specialized read rendering with resolved KvGrid
+		const htmlWithout = renderToStaticMarkup(
+			createElement(readRenderer.Body!, {
+				name: "read",
+				args: { path: "src/main.ts" },
+				result: {
+					content: [{ type: "text", text: "const a = 1;" }],
+					details: { resolvedPath: "src/main.ts" },
+				},
+			}),
+		);
+		expect(htmlWithout).toContain("resolved");
+		expect(htmlWithout).toContain("src/main.ts");
+		expect(htmlWithout).toContain("const a = 1;");
+
+		// With display: canonical projection rendering
+		const htmlWith = renderToStaticMarkup(
+			createElement(readRenderer.Body!, {
+				name: "read",
+				args: { path: "src/main.ts" },
+				display: {
+					generic: { icon: "done", outputText: "projected output text", isJson: false },
+				},
+			}),
+		);
+		expect(htmlWith).toContain("projected output text");
+	});
 	it("keeps stripAnsi browser-safe (no Node deps in the util path)", () => {
 		expect(stripAnsi("plain\x1b[31mred\x1b[0m")).toBe("plainred");
 	});

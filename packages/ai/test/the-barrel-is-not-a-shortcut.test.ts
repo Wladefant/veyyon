@@ -25,7 +25,7 @@
  *     streaming engine, which this file now genuinely calls, so its ceiling is re-measured below rather
  *     than left red. That is the distinction this whole suite is about: an engine a file uses is a cost,
  *     an engine a file merely imported a predicate through is a leak.
- *   - `coding-agent/src/web/search/providers/perplexity.ts` wanted an OAuth retry wrapper. 372 -> 327.
+ *   - `coding-agent/src/tools/web/search/providers/perplexity.ts` wanted an OAuth retry wrapper. 372 -> 327.
  *
  * WHAT IS STILL ALLOWED, and it is most of the remaining list. `completeSimple` and `streamSimple` ARE the
  * engine, so a module that calls one of them reaches it whichever specifier it uses. The rule below is about
@@ -46,18 +46,16 @@ import {
 	typeOnlyModuleSpecifiersIn,
 } from "@veyyon/utils/module-reach";
 import { workspaceModuleReachResolution } from "@veyyon/utils/module-reach-workspace";
-
-const PACKAGES = path.join(import.meta.dir, "..", "..");
-const REPO_ROOT = path.join(PACKAGES, "..");
+import { MEMBERS, memberFileOf, memberRelative, REPO_ROOT } from "../../utils/test/support/package-sources";
 
 const RESOLUTION: ModuleReachResolution = workspaceModuleReachResolution(REPO_ROOT);
 const CACHE = createModuleReachCache();
 
 function reach(relative: string): number {
-	return moduleReachCount(path.join(PACKAGES, relative), RESOLUTION, CACHE);
+	return moduleReachCount(memberFileOf(relative), RESOLUTION, CACHE);
 }
 
-/** Every `.ts` under `packages/<pkg>/src`, which is the set a "nowhere in this repo" claim has to cover. */
+/** Every `.ts` under a member's `src`, which is the set a "nowhere in this repo" claim has to cover. */
 function sourceFiles(dir: string, found: string[] = []): string[] {
 	for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
 		const full = path.join(dir, entry.name);
@@ -71,13 +69,10 @@ function sourceFiles(dir: string, found: string[] = []): string[] {
 	return found;
 }
 
-const SOURCES: Array<readonly [string, string]> = fs
-	.readdirSync(PACKAGES, { withFileTypes: true })
-	.filter(entry => entry.isDirectory())
-	.map(entry => path.join(PACKAGES, entry.name, "src"))
+const SOURCES: Array<readonly [string, string]> = MEMBERS.map(member => path.join(REPO_ROOT, member, "src"))
 	.filter(dir => fs.existsSync(dir))
 	.flatMap(dir => sourceFiles(dir))
-	.map(file => [path.relative(PACKAGES, file).replaceAll("\\", "/"), fs.readFileSync(file, "utf-8")] as const);
+	.map(file => [memberRelative(file), fs.readFileSync(file, "utf-8")] as const);
 
 /**
  * The runtime names a file takes from the `@veyyon/ai` entry point.
@@ -138,16 +133,36 @@ describe("nobody takes one cheap name from the whole package", () => {
 	 * import clause, and a formatting change is exactly what defeats that class of pattern. If it stopped
 	 * matching, the rule would pass on a repository full of violations.
 	 *
-	 * The engine names are the proof, because they are the ones the rule deliberately allows: they must be
-	 * FOUND and then excused, not missed.
+	 * Proven in two halves, because one filename cannot carry both. Inline clauses pin the spellings the
+	 * regex has to survive, and they cannot go stale: repointing a file at its owner is the outcome this
+	 * suite exists to produce, so a control anchored to a named file expires the moment the suite works.
+	 * That is what happened to the previous anchor, `coding-agent/src/tools/fs/inspect-image.ts`, which now
+	 * takes its names as `import type` and is no longer a runtime importer at all.
+	 *
+	 * The repository half then proves the regex still matches THIS tree, and the engine names are the proof
+	 * because they are the ones the rule deliberately allows: they must be FOUND and then excused, not
+	 * missed. Both halves derive their subject at run time, so the next repointing shrinks the set without
+	 * turning the control vacuous.
 	 */
 	it("the detector really finds single-name barrel imports", () => {
-		const singles = SOURCES.filter(([, source]) => barrelRuntimeNames(source).length === 1).map(
-			([relative]) => relative,
+		expect(barrelRuntimeNames('import { completeSimple } from "@veyyon/ai";')).toEqual(["completeSimple"]);
+		expect(barrelRuntimeNames('import {\n\tcompleteSimple,\n} from "@veyyon/ai";')).toEqual(["completeSimple"]);
+		expect(barrelRuntimeNames("import { streamSimple } from '@veyyon/ai';")).toEqual(["streamSimple"]);
+		expect(barrelRuntimeNames('import { type Model, isUsageLimitOutcome } from "@veyyon/ai";')).toEqual([
+			"isUsageLimitOutcome",
+		]);
+		expect(barrelRuntimeNames('import type { Model } from "@veyyon/ai";')).toEqual([]);
+		expect(barrelRuntimeNames('import { completeSimple } from "@veyyon/ai/stream";')).toEqual([]);
+
+		const singles = SOURCES.map(([relative, source]) => [relative, barrelRuntimeNames(source)] as const).filter(
+			([, names]) => names.length === 1,
 		);
 
-		expect(singles.length).toBeGreaterThan(5);
-		expect(singles).toContain("coding-agent/src/utils/title-generator.ts");
+		expect(singles.length).toBeGreaterThan(0);
+		expect(
+			singles.filter(([, names]) => !ENGINE_NAMES.has(names[0] as string)).map(([relative]) => relative),
+			"a single non-engine name must be reported by the rule above, not swallowed here",
+		).toEqual([]);
 	});
 });
 
@@ -156,19 +171,67 @@ describe("the modules that were repointed stay cut", () => {
 	 * Ceilings, one per file, each a little above its measurement so an unrelated dependency does not fail
 	 * the gate while a returned barrel import does. The numbers are the point: without them the rule above is
 	 * satisfied by a file that takes TWO names from the barrel, which costs exactly the same.
+	 *
+	 * FOUR OF THEM ROSE BY SIX ON 2026-08-22, and the six are named rather than assumed. The error
+	 * subsystem's classification moved out of one file into `error/flag.ts`, `error/registry.ts` and
+	 * `error/domains/{network,account,request,turn}.ts`, and everything that classifies a failure reaches
+	 * all six through `error/flags`. `.internal/reach-delta.ts` prints the reached names: the delta is
+	 * exactly those six, every one a leaf inside `ai/src/error/` whose own imports (`../classes`,
+	 * `../flag`, `../aws`, `../rate-limit`, `@veyyon/utils/fetch-retry`) were already reached before the
+	 * split. No consumer gained an edge to anything outside the subsystem, which is the only reason these
+	 * numbers may move: a raise that cannot name its new edges is a leak with a bigger ceiling.
+	 */
+	/**
+	 * `agent/src/proxy.ts` was re-measured at 145 on 2026-08-23. Thirteen modules in this closure did not
+	 * exist when it was last measured, and every one is a leaf that was carved out of a file already here:
+	 * `error/{registry,flag,error-body,response}.ts` and `error/domains/{network,account,request,turn}.ts`
+	 * from the error subsystem, `catalog/compat/markup-leaks.ts` and
+	 * `catalog/provider-models/wire-capabilities.ts` from the compat and provider tables, and
+	 * `utils/{stream-frame-limit,eval-prompt-overrides}.ts`. No consumer gained an edge to a subsystem it
+	 * did not already reach, which is the only reason this number may move.
+	 */
+	/**
+	 * Re-measured 2026-09-04 when the model and message vocabulary moved to `@veyyon/model`: `parser.ts`
+	 * 115 -> 119, `db.ts` 120 -> 121, `shared-llm.ts` 202 -> 205, `sync-worker.ts` unchanged at 120. Every
+	 * new module is a leaf of `contracts/model/src/` -- `effort.ts`, `model.ts`, `message.ts`,
+	 * `service-tier.ts`, `stream-block.ts` -- carved out of `catalog/types.ts`, `catalog/effort.ts`,
+	 * `ai/types.ts` and `ai/utils/block-symbols.ts`, each of which was already on the reach and now
+	 * re-exports the contract module. A contract imports nothing in this repository, so no consumer
+	 * gained an edge to a subsystem it did not already reach.
+	 */
+	/**
+	 * Re-measured 2026-09-11: `parser.ts` 119 -> 120, `db.ts` 121 -> 122, `sync-worker.ts` 120 -> 121,
+	 * each by the one module `@veyyon/utils/tab-width`, a zero-import leaf holding `DEFAULT_TAB_WIDTH`
+	 * and `replaceTabs`, split out of `tab-spacing.ts` (already on every one of these reaches through
+	 * the `@veyyon/utils` entry point) so the browser bundles can share the width without the
+	 * `.editorconfig` reader. `shared-llm.ts` 205 -> 207 by two leaves under files already reached:
+	 * `ai/providers/initial-message.ts` (the empty Responses assistant message, imported by
+	 * `providers/gitlab-duo-workflow.ts` instead of restated; imports only `@veyyon/catalog/models`)
+	 * and `catalog/discovery/failure.ts` (the discovery-failure vocabulary and its `readDiscoveryJson`
+	 * reader, taken by `provider-models/ollama.ts`; imports only `@veyyon/utils/type-guards`). No
+	 * consumer gained an edge to a subsystem it did not already reach.
 	 */
 	it.each([
-		["agent/src/proxy.ts", 130],
-		["stats/src/parser.ts", 115],
-		["stats/src/db.ts", 120],
-		["stats/src/sync-worker.ts", 120],
-		["mnemopi/src/core/embeddings.ts", 125],
-		["mnemopi/src/core/extraction/client.ts", 120],
-		["coding-agent/src/config/api-key-resolver.ts", 55],
-		// Re-measured 2026-07-27 at 184, from 112. The file gained a real `completeSimple` call, and the
-		// engine is 72 modules whichever specifier reaches it. Raised only after the barrel import was
-		// repointed and the number stopped moving; the 325 it sat at before that was the leak, not this.
-		["coding-agent/src/commit/shared-llm.ts", 195],
+		["agent/src/proxy.ts", 145],
+		["apps/stats/src/parser.ts", 120],
+		["apps/stats/src/db.ts", 122],
+		["apps/stats/src/sync-worker.ts", 121],
+		["plugins/mnemopi/src/core/embeddings.ts", 131],
+		// Re-measured 2026-08-28 at 66, from 127. The file took `trimTrailingSlashes` and
+		// `withScopedTimeoutSignal` from the `@veyyon/utils` entry point, so every module that entry
+		// re-exports rode along and each new one raised this count by hand; both names are now taken
+		// from `@veyyon/utils/url` and `@veyyon/utils/scoped-timeout`, which own them.
+		["plugins/mnemopi/src/core/extraction/client.ts", 70],
+		// Re-measured 2026-08-28 at 56, from 55. The one new module is `@veyyon/utils/ansi`, a
+		// zero-import leaf that owns the escape constants; `sanitize-text.ts`, already on this reach,
+		// used to spell `"\x1b"` inline and now takes `ESC` from that owner. The leaf adds no edge of
+		// its own, so nothing outside this closure was gained.
+		["coding-agent/src/config/api-key-resolver.ts", 56],
+		// Re-measured 2026-09-11 at 207, from 205: the two leaves named above. 205 was the three
+		// `@veyyon/model` leaves of 2026-09-04; 202 was one module from the catalog OpenCode discovery
+		// header leaf; 184 was the 2026-07-27 engine-call remeasure; 325 before that was the leak. The
+		// file still takes no name from the barrel.
+		["coding-agent/src/commit/shared-llm.ts", 207],
 		// The agent's hot loop and the `Agent` class. Both STREAM, so both reach the engine whatever
 		// specifier they use; the ceilings are what the other ten names cost when taken from the entry
 		// point. 378 -> 321 and 380 -> 323.
@@ -184,13 +247,13 @@ describe("the modules that were repointed stay cut", () => {
 	 */
 	it.each([
 		"agent/src/proxy.ts",
-		"stats/src/parser.ts",
-		"mnemopi/src/core/embeddings.ts",
-		"mnemopi/src/core/extraction/client.ts",
+		"apps/stats/src/parser.ts",
+		"plugins/mnemopi/src/core/embeddings.ts",
+		"plugins/mnemopi/src/core/extraction/client.ts",
 		"coding-agent/src/config/api-key-resolver.ts",
 		"coding-agent/src/mcp/manager.ts",
 		"coding-agent/src/commit/shared-llm.ts",
-		"coding-agent/src/web/search/providers/perplexity.ts",
+		"coding-agent/src/tools/web/search/providers/perplexity.ts",
 		"agent/src/agent-loop.ts",
 		"agent/src/agent.ts",
 	])("%s takes no runtime name from the barrel", relative => {

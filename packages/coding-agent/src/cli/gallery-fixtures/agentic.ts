@@ -1,13 +1,13 @@
 // Gallery fixtures for the agentic orchestration tools (task, irc, goal, job).
 import type { Usage } from "@veyyon/ai";
 import type { TaskToolDetails } from "../../task/types";
-import type { IrcDetails } from "../../tools/irc";
+import type { IrcDetails } from "../../tools/agent/irc";
 import type { GalleryFixture } from "./types";
 
 /** Message/activity timestamps are offsets from load time so gallery ages stay plausible. */
 const FIXTURE_NOW = Date.now();
 
-/** Plausible cumulative usage for a fixture subagent run. */
+/** Plausible cumulative usage for a fixture agent run. */
 const fixtureUsage = (tokens: { input: number; output: number }, costTotal: number): Usage => ({
 	input: tokens.input,
 	output: tokens.output,
@@ -134,7 +134,7 @@ export const agenticFixtures: Record<string, GalleryFixture> = {
 						contextWindow: 200_000,
 						resolvedModel: "anthropic/claude-sonnet",
 						usage: fixtureUsage({ input: 10_900, output: 1_400 }, 0.1),
-						error: "Subagent exited 1: target file packages/server/src/auth/rate-limit.ts does not exist.",
+						error: "Agent exited 1: target file packages/server/src/auth/rate-limit.ts does not exist.",
 						outputMeta: { lineCount: 0, charCount: 0 },
 					},
 				],
@@ -406,7 +406,7 @@ export const agenticFixtures: Record<string, GalleryFixture> = {
 						status: "failed",
 						label: "Refactor the session store to Redis",
 						durationMs: 52_300,
-						errorText: "Subagent exited 1: Redis connection string is missing.",
+						errorText: "Agent exited 1: Redis connection string is missing.",
 					},
 				],
 			},

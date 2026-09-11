@@ -1,6 +1,6 @@
 # Multi-agent monitoring
 
-The interactive TUI is the main surface for one session. Status line, session tree, background jobs, the Agent Control Center, and optional swarm orchestration cover multi-agent work.
+The interactive TUI is the main surface for one session. Status line, session tree, background jobs, the agent dashboard, and optional swarm orchestration cover multi-agent work.
 
 ## Status line
 
@@ -15,7 +15,7 @@ Configure under **Settings → Appearance → Status Line** (`/statusline` jumps
 | `statusLine.sessionAccent` | Tint the editor border with the session color |
 | `statusLine.showHookStatus` | Show active hook status when hooks run |
 
-Built-in segment IDs include: `pi` (legacy product mark segment), `profile`, `model`, `account`, `secrets`, `mode`, `path`, `git`, `pr`, `subagents`, `token_in`, `token_out`, `token_total`, `token_rate`, `cost`, `context_pct`, `context_total`, `time_spent`, `time`, `session`, `hostname`, `cache_read`, `cache_write`, `cache_hit`, `session_name`, `usage`, `collab`.
+Built-in segment IDs include: `pi` (legacy product mark segment), `profile`, `model`, `account`, `mode`, `path`, `git`, `pr`, `agents`, `token_in`, `token_out`, `token_total`, `token_rate`, `cost`, `context_pct`, `context_total`, `time_spent`, `time`, `session`, `hostname`, `cache_read`, `cache_write`, `cache_hit`, `session_name`, `usage`, `collab`.
 
 The `model` segment shows the model you are working with, then two things that are easy to confuse, so they are drawn differently:
 
@@ -36,18 +36,82 @@ main|AM              applying a patch series with git am
 detached|BISECT      bisecting
 ```
 
-A rebase detaches HEAD, so without the suffix the segment could only say `detached`, which tells you neither which branch you are rebasing nor that a rebase is running. Veyyon reads the branch back from the rebase's own record, so you see `topic|REBASE`. A merge is the opposite case: it leaves HEAD on its branch, so the segment would look like an ordinary checkout while your working tree holds conflict markers. The suffix is what distinguishes them.
+A rebase detaches HEAD, so without the suffix the segment could only say `detached`, which shows neither the branch being rebased nor that a rebase is running. Veyyon reads the branch back from the rebase's own record, so you see `topic|REBASE`. A merge is the opposite case: it leaves HEAD on its branch, so the segment would look like an ordinary checkout while your working tree holds conflict markers. The suffix is what distinguishes them.
 
 The `pr` segment is skipped while any of these operations is in progress. A branch being rebased does not yet point where it is going to end up, so a pull request looked up against it would describe a state that is about to be replaced.
 
 The `profile` segment shows the active profile name (`work`, `rec`, a client sandbox), so you always know which profile's config, sessions, and keys are live. It hides itself on the built-in `default` profile, so an unconfigured status line stays clean. Every built-in preset places it, so switching profiles is visible without any configuration.
 
-The `secrets` segment says a stored credential is live where you are working: `2 secrets`. It counts
-what would actually expand at the tool boundary in this directory, not what is in the vault file, so
-a credential scoped elsewhere or already expired is not counted. It hides itself when nothing is
-live, so a session with no vault shows nothing. When the soonest deadline is under an hour it appends
-the time left in the warning color, `2 secrets (34m left)`, which is the window in which extending it
-with `e` in `/secret` still helps; a deadline further out belongs to the card's EXPIRES column.
+The `path` segment shows the working directory, shortened in three steps: a workspace root is
+stripped off the front, the home directory collapses to `~`, and what is left is clipped to a
+column budget from its front, so the directory you are in stays readable. Each step is a
+`statusLine.segmentOptions.path` key:
+
+```yaml
+statusLine:
+  preset: custom
+  segmentOptions:
+    path:
+      displayRoots: ["~/code", "/srv/workspaces"]  # workspace roots, most specific first
+      maxLength: 40                                 # columns the path may spend
+      abbreviate: true                              # collapse the home directory to ~
+      stripWorkPrefix: true                         # strip a workspace root at all
+```
+
+`displayRoots` lists the directories your projects live under, and `~` stands for the home
+directory. A working directory under one of them is shown relative to it, so
+`/srv/workspaces/platform-services/normalizer` reads `platform-services/normalizer`. The first
+entry that matches wins, which is how a nested root is named ahead of the one above it. The list
+replaces the defaults rather than adding to them; without it the defaults are `~/Projects` and
+`/work/`. An entry that is not an absolute path cannot contain a directory, so it is dropped and
+named in the log once. `stripWorkPrefix: false` turns the whole step off.
+
+A project inside a temporary directory is shown relative to that temporary directory instead,
+with its own icon, whatever `displayRoots` says.
+
+The launch composer accepts input while the session initializes. Enter submits the
+current text and attachments after initialization completes. Later drafts remain
+editable and are not cleared by the earlier submission. Input buffered before the
+launch card appears remains a draft; a buffered Enter does not submit it.
+
+The launch card draws the whole row before the session mounts. The working directory comes from the
+process, the branch from `.git/HEAD` and its ref files, and the mode from config. The model name,
+the effort beside it, the dirty marker (`*`) and the context gauge are what a previous launch
+recorded, in `cache/launch-facts.json`.
+
+That file records three kinds of fact. The model's display name, its provider, the effort and the
+at-rest context reading belong to the model, so they are stated in every project you use it in,
+including one you open for the first time. The dirty marker belongs to the project, because it
+describes that working tree. The gauge is recorded under both, as two different numbers: the
+project keeps the whole reading measured in that directory, and the model keeps the same reading
+with that project's context files subtracted. A project that has never been measured states the
+model's number, so it starts from a cost every project shares rather than from the last
+directory's `AGENTS.md`. Those two maps are keyed by the release as well.
+
+The third fact is the terminal's background color, keyed by the terminal and by nothing else. A new
+release does not change what an emulator draws, and it is the same window whichever directory is
+open in it. Veyyon queries the background at startup and the reply arrives after the card is on
+screen, so the card mixes the composer hairline, the composer outline and the transcript rules out
+of the background this terminal reported last time. A reply that contradicts the record takes
+effect on the next frame. Each of the three maps holds its 24 most recently written entries.
+
+Each recorded fact is replaced by a measured one as the session mounts. A tree committed from
+another terminal since the last launch keeps the recorded marker until `git status` answers, about
+130ms in. A project you open for the first time has no dirty marker. The gauge reads `?` only
+until this model has idled somewhere once; after that a new project starts at the model's
+subtracted reading and the session adds what this project's own context costs, so the bar fills
+rather than empties when the session lands. Configuring a different model resets it to `?` again,
+because a reading is a fraction of the window it was taken against. A model you have never run
+states its configured id's last path segment until the catalog supplies a display name.
+
+A repository whose refs are in a reftable has no ref files to read, so its branch appears with the
+session rather than with the card, as does a detached HEAD with no operation to name.
+
+`/secret list` states what is live where you are working: the credentials the vault holds here, and
+a count of the values being masked that nothing can name, with the environment variable or
+`secrets.yml` path each came from. The status row does not carry a count. It reported one that
+nothing else in the product agreed with, and a number a reader cannot reconcile with `/secret list`
+is worse than no number.
 
 The `context_pct` segment answers one question: how much room is left before the context runs out. "Runs out" means whichever comes first, auto-compaction firing or the model's window filling, so with auto-compaction on the segment measures against the compaction trigger, not the window. The window itself is what `context_total` prints.
 
@@ -65,18 +129,31 @@ Two run clocks tick alongside the segments, both measuring model runtime, never 
 | `/branch` | Branch a new session file from an earlier user message |
 | `/fork` | Duplicate the current session into a new file |
 | `/session info` | Session metadata and stats |
-| `/agents` | Agent Control Center: the live roster (agent type, status, activity; Enter opens one agent's session) and the Comms stream of agent-to-agent messages |
+| `/agents` | Agent dashboard: the live roster (agent type, status, activity; Enter opens one agent's session) and the Comms stream of agent-to-agent messages |
 | `/jobs` | List background async tool jobs |
 
 `/cockpit` and `/hub` are aliases of `/agents`, as is the `app.agents.hub` keybinding and a double-tap of the left arrow on an empty composer. They used to open a separate screen with its own roster and its own drill-in, which meant "which agents are running" had two answers that could disagree with each other. They all open the one card now.
+
+### One conversation at a time
+
+A process runs more than one conversation at a time. `/new` stops the previous one
+unless `session.newKeepsBackground` is on, and an ACP client keeps every
+open session in the same process. Changing `session.newKeepsBackground` takes
+effect on the next launch; the running session keeps the value it started with
+([#928](https://github.com/santhreal/veyyon/issues/928)).
+
+The card is scoped to the conversation on screen: the roster, the Comms stream and
+the transcripts it opens are that conversation's. A conversation this process is
+still running off-screen is counted by the status line's background chip and has no
+card of its own.
 
 ### The Live roster
 
 Each row is one agent that exists right now: a status glyph, its call sign, the TYPE of agent it was spawned from (`reviewer`, `scout`), its status, how long since it last did anything, and what it is doing. Rows sit in spawn order, oldest first, with your own session at the top. The row you are on is marked two ways, a cursor glyph in the first column and a band across the whole row, so it stays readable on a terminal that renders no colour. Agents from earlier runs of the same session appear too, marked `parked`, because their transcripts are still on disk even though this process never started them.
 
-Press Enter on a row and the main view becomes that agent's session: the transcript, the composer, and the status line all point at it, so you read what it is doing and then answer it. Press Esc there to come back to your own session. While you are focused on an agent, the composer footline carries a persistent `<agent-id> · esc to go back` badge at the left, and the inline `Subagents` block above the composer lists that session's own spawns, so inside a leaf agent with no spawns of its own the block disappears. Opening a parked agent revives it on the way in.
+Press Enter on a row and the main view becomes that agent's session: the transcript, the composer, and the status line all point at it, so you read what it is doing and then answer it. Press Esc there to come back to your own session. While you are focused on an agent, the composer footline contains a persistent `<agent-id> · esc to go back` badge at the left, and the inline `Agents` block above the composer lists that session's own spawns, so inside a leaf agent with no spawns of its own the block disappears. Opening a parked agent revives it on the way in.
 
-To terminate a subagent, select its row and press `x`, or hover the row and click the `[x]` at its right edge. Both gestures open the same confirmation card. Choose **Dismiss** to return without changing the agent, or choose **Yes, terminate** to abort any turn in flight and release the session. The transcript stays on disk. Your main session and read-only advisor transcripts do not show the termination action.
+To terminate an agent, select its row and press `x`, or hover the row and click the `[x]` at its right edge. Both gestures open the same confirmation card. Choose **Dismiss** to return without changing the agent, or choose **Yes, terminate** to abort any turn in flight and release the session. The transcript stays on disk. Your main session and read-only advisor transcripts do not show the termination action.
 
 Clicking elsewhere on a row does the same thing as Enter, and clicking a name in the view strip switches to that view. Opening an agent is reversible with Esc, so a row click opens rather than only moving the cursor. The scroll wheel moves whatever the arrow keys move: the roster cursor on Live, the stream on Comms. Page up and page down move by a screenful, on either view.
 
@@ -84,15 +161,15 @@ The roster is a table, so you can scan a column instead of reading every row: th
 
 Two agents open a read-only transcript instead of handing the main view over. An advisor is observability-only and is not an addressable peer, so there is nothing on the other end to receive a reply. A collab guest's agents live on the host, so there is no local session to point at.
 
-The inline task widget also shows the model each subagent runs on, right in its status line, so you can see which model every launched subagent used without opening the Control Center. The `Subagents` block above the composer in your main session shows the same badge on every running row, so the answer to "what is that one running on" is on screen without opening anything. To show the badge, keep `subagent.showResolvedModelBadge` on (Subagents settings); turning it off hides it on all three surfaces.
+The inline task widget also shows the model each agent runs on, right in its status line, so you can see which model every launched agent used without opening the Control Center. The `Agents` block above the composer in your main session shows the same badge on every running row, so the answer to "what is that one running on" is on screen without opening anything. To show the badge, keep `agent.showResolvedModelBadge` on (Agents settings); turning it off hides it on all three surfaces.
 
 Session files are append-only JSONL under the active profile’s agent `sessions/` directory. See [Sessions](../using/sessions.md).
 
 ## Inter-agent messaging
 
-Subagents and the main agent use the `irc` tool (`send`, `wait`, `inbox`, `list`) over a process-global mailbox. The **Comms** view of `/agents` streams that traffic as it happens, oldest first, including the messages that failed to reach their recipient and the reason they did not land. Long messages are folded to their first few lines with a count of what was hidden; `ctrl+o` unfolds every message in the view, and pressing it again folds them back. Both ends of a message are labelled with the call sign the Live roster shows for that agent, so you follow a conversation by who is speaking rather than by an id you have to look up on the other view. An agent that has since been released has no call sign left to show, so its messages print its id instead.
+Agents and the main agent use the `irc` tool (`send`, `wait`, `inbox`, `list`) over a process-global mailbox. The **Comms** view of `/agents` streams that traffic as it happens, oldest first, including the messages that failed to reach their recipient and the reason they did not land. Long messages are folded to their first few lines with a count of what was hidden; `ctrl+o` unfolds every message in the view, and pressing it again folds them back. Both ends of a message are labelled with the call sign the Live roster shows for that agent, so you follow a conversation by who is speaking rather than by an id you have to look up on the other view. An agent that has since been released has no call sign left to show, so its messages print its id instead.
 
-The view reads the message bus, not the session files. A subagent's transcript records what THAT agent received, so a view built from transcripts would show each half of a conversation in a different file and would never show a message that failed to arrive at all. `/btw` is an ephemeral side question; `/tan` spawns a background agent for tangential work. (`/omfg` is unrelated: it forges a TTSR rule from a complaint to stop a recurring behavior.)
+The view reads the message bus, not the session files. An agent's transcript records what THAT agent received, so a view built from transcripts would show each half of a conversation in a different file and would never show a message that failed to arrive at all. `/btw` is an ephemeral side question; `/tan` spawns a background agent for tangential work. (`/omfg` is unrelated: it forges a TTSR rule from a complaint to stop a recurring behavior.)
 
 ## Swarm extension
 

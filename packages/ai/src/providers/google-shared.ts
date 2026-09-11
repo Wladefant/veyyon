@@ -32,9 +32,10 @@ import type {
 import { shouldSendServiceTier } from "../types";
 import { normalizeSystemPrompts } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
-import type { RawHttpRequestDump } from "../utils/http-inspector";
+import { materializeDumpBody, type RawHttpRequestDump } from "../utils/http-inspector";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { normalizeSchemaForCCA, normalizeSchemaForGoogle, toolWireSchema } from "../utils/schema";
+import { stopReasonForTerminallessEof } from "../utils/terminalless-eof";
 import type {
 	Content,
 	FinishReason,
@@ -46,6 +47,7 @@ import type {
 	ThinkingConfig,
 	ThinkingLevel,
 } from "./google-types";
+import { createInitialResponsesAssistantMessage } from "./initial-message";
 import { transformMessages } from "./transform-messages";
 import { NON_VISION_IMAGE_PLACEHOLDER } from "./vision-guard";
 
@@ -884,7 +886,7 @@ export async function consumeGoogleStream<T extends GoogleApiType>(args: {
 			} else {
 				output.stopReason = mapped;
 				if (mapped === "error") {
-					output.errorMessage = `Generation failed with finish reason: ${candidate.finishReason}`;
+					output.errorMessage = AIError.providerFinishErrorMessage(candidate.finishReason);
 				}
 			}
 		}
@@ -916,11 +918,23 @@ export async function consumeGoogleStream<T extends GoogleApiType>(args: {
 		throw new AIError.RequestAbortError();
 	}
 
+	// Reaching the end of the body without a `finishReason` is a transport-clean
+	// EOF, not a dropped connection, and several Gemini-compatible servers never
+	// send the marker at all. `stopReasonForTerminallessEof` owns that judgement
+	// for every dialect; see its header for why rejecting unconditionally — which
+	// this did — fails turns that were complete. Google delivers a function call
+	// whole in one part, with `args` already parsed and an id minted above, so a
+	// name is the only field a partial call can be missing.
 	if (!sawFinishReason) {
-		throw new AIError.ProviderResponseError(
-			"Google API stream ended without a finish reason (connection dropped or response truncated)",
-			{ provider: model.provider, kind: "incomplete-stream" },
-		);
+		const toolBatchIsComplete = output.content.every(block => block.type !== "toolCall" || block.name.length > 0);
+		const stopReason = stopReasonForTerminallessEof(output.content, toolBatchIsComplete);
+		if (stopReason === undefined) {
+			throw new AIError.ProviderResponseError(
+				"Google API stream ended without a finish reason (connection dropped or response truncated)",
+				{ provider: model.provider, kind: "incomplete-stream" },
+			);
+		}
+		output.stopReason = stopReason;
 	}
 
 	if (output.stopReason === "aborted" || output.stopReason === "error") {
@@ -935,12 +949,46 @@ export async function consumeGoogleStream<T extends GoogleApiType>(args: {
  * Generation/sampling fields that map directly onto Gemini's `GenerateContentConfig`.
  * Excludes any provider-specific extensions (`topP`/`topK`/etc are all forwarded as-is).
  */
-interface GoogleGenerationConfig extends GenerateContentConfig {
+export interface GoogleGenerationConfig extends GenerateContentConfig {
 	topP?: number;
 	topK?: number;
 	minP?: number;
 	presencePenalty?: number;
 	repetitionPenalty?: number;
+}
+
+/**
+ * Extract and populate base Gemini generation configuration options.
+ */
+export function buildGoogleBaseGenerationConfig(options: StreamOptions): GoogleGenerationConfig {
+	const generationConfig: GoogleGenerationConfig = {};
+	if (options.temperature !== undefined) generationConfig.temperature = options.temperature;
+	if (options.maxTokens !== undefined) generationConfig.maxOutputTokens = options.maxTokens;
+	if (options.topP !== undefined) generationConfig.topP = options.topP;
+	if (options.topK !== undefined) generationConfig.topK = options.topK;
+	if (options.minP !== undefined) generationConfig.minP = options.minP;
+	if (options.presencePenalty !== undefined) generationConfig.presencePenalty = options.presencePenalty;
+	if (options.repetitionPenalty !== undefined) generationConfig.repetitionPenalty = options.repetitionPenalty;
+	return generationConfig;
+}
+
+/**
+ * Build Gemini toolConfig from a standard tool choice option.
+ */
+export function buildGoogleToolConfig(
+	toolChoice?: GoogleSharedStreamOptions["toolChoice"],
+): { functionCallingConfig: { mode: FunctionCallingConfigMode; allowedFunctionNames?: string[] } } | undefined {
+	if (!toolChoice) return undefined;
+	if (typeof toolChoice === "string") {
+		const mode = mapToolChoice(toolChoice);
+		return mode !== "AUTO" ? { functionCallingConfig: { mode } } : undefined;
+	}
+	return {
+		functionCallingConfig: {
+			mode: "ANY",
+			allowedFunctionNames: toolChoice.allowedFunctionNames.slice(),
+		},
+	};
 }
 
 /**
@@ -960,14 +1008,7 @@ export function buildGoogleGenerateContentParams<T extends "google-generative-ai
 	const systemPrompts = normalizeSystemPrompts(context.systemPrompt);
 	const contents = convertMessages(model, context);
 
-	const generationConfig: GoogleGenerationConfig = {};
-	if (options.temperature !== undefined) generationConfig.temperature = options.temperature;
-	if (options.maxTokens !== undefined) generationConfig.maxOutputTokens = options.maxTokens;
-	if (options.topP !== undefined) generationConfig.topP = options.topP;
-	if (options.topK !== undefined) generationConfig.topK = options.topK;
-	if (options.minP !== undefined) generationConfig.minP = options.minP;
-	if (options.presencePenalty !== undefined) generationConfig.presencePenalty = options.presencePenalty;
-	if (options.repetitionPenalty !== undefined) generationConfig.repetitionPenalty = options.repetitionPenalty;
+	const generationConfig = buildGoogleBaseGenerationConfig(options);
 
 	const config: GenerateContentConfig = {
 		...(Object.keys(generationConfig).length > 0 && generationConfig),
@@ -984,23 +1025,9 @@ export function buildGoogleGenerateContentParams<T extends "google-generative-ai
 	}
 
 	if (context.tools && context.tools.length > 0 && options.toolChoice) {
-		const choice = options.toolChoice;
-		if (typeof choice === "string") {
-			const mode = mapToolChoice(choice);
-			if (mode !== "AUTO") {
-				config.toolConfig = {
-					functionCallingConfig: { mode },
-				};
-			}
-		} else {
-			// Named-tool routing — `mode: "ANY"` plus an explicit allow-list. The
-			// caller is responsible for ensuring the names exist in `context.tools`.
-			config.toolConfig = {
-				functionCallingConfig: {
-					mode: "ANY",
-					allowedFunctionNames: [...choice.allowedFunctionNames],
-				},
-			};
+		const toolConfig = buildGoogleToolConfig(options.toolChoice);
+		if (toolConfig) {
+			config.toolConfig = toolConfig;
 		}
 	} else {
 		config.toolConfig = undefined;
@@ -1065,17 +1092,10 @@ export function streamGoogleGenAI<T extends "google-generative-ai" | "google-ver
 		const startTime = performance.now();
 		let firstTokenTime: number | undefined;
 
-		const output: AssistantMessage = {
-			role: "assistant",
-			content: [],
-			api: api as Api,
-			provider: model.provider,
-			model: model.id,
-			usage: emptyUsage(),
-			stopReason: "stop",
-			timestamp: Date.now(),
-		};
+		const output: AssistantMessage = createInitialResponsesAssistantMessage(api as Api, model.provider, model.id);
 		let rawRequestDump: RawHttpRequestDump | undefined;
+		/** Exact bytes of the last sent request body; materialized into a dump only on the 400/413 path. */
+		let wireBodyJson: string | undefined;
 
 		try {
 			const plan = await prepare();
@@ -1098,11 +1118,14 @@ export function streamGoogleGenAI<T extends "google-generative-ai" | "google-ver
 				model: model.id,
 				method: "POST",
 				url: plan.url,
-				body: params,
 				headers: plan.headers,
 			};
 
+			// Retain the exact sent BYTES, not the parsed object: a dump body is read
+			// only on the 400/413 path, and holding the graph here pinned a full
+			// context-sized object for the whole stream.
 			const bodyJson = JSON.stringify(paramsToWireBody(params));
+			wireBodyJson = bodyJson;
 			const fetchImpl = plan.fetch ?? options?.fetch ?? (globalThis.fetch.bind(globalThis) as FetchImpl);
 			const openStreamAt = async (requestUrl: string): Promise<ReadableStream<Uint8Array>> => {
 				const response = await fetchImpl(requestUrl, {
@@ -1114,10 +1137,11 @@ export function streamGoogleGenAI<T extends "google-generative-ai" | "google-ver
 				await notifyProviderResponse(options, response, model, response.headers.get("x-request-id"));
 				if (!response.ok) {
 					// The STATUS is the failure; the body is the detail. An unreadable body degrades to empty rather than
-					// replacing the status with a read error.
-					const errorText = await response.text().catch(() => "");
+					// replacing the status with a read error, and the read is bounded because the HTML-page case has no
+					// size a provider promised.
+					const errorBody = await AIError.readProviderErrorBody(response);
 					throw new AIError.GoogleApiError(
-						`Google API error (${response.status}): ${extractGoogleErrorMessage(errorText)}`,
+						`Google API error (${response.status}): ${extractGoogleErrorMessage(errorBody)}`,
 						response.status,
 						{ headers: response.headers },
 					);
@@ -1153,7 +1177,7 @@ export function streamGoogleGenAI<T extends "google-generative-ai" | "google-ver
 			// silently halts mid-task, so retry a bounded number of times before giving up.
 			for (let emptyAttempt = 0; ; emptyAttempt++) {
 				const googleStream = readSseJson<GenerateContentResponse>(body, options?.signal, event =>
-					options?.onSseEvent?.({ event: event.event, data: event.data, raw: [...event.raw] }, model),
+					options?.onSseEvent?.({ event: event.event, data: event.data, raw: event.raw.slice() }, model),
 				);
 				await consumeGoogleStream({
 					googleStream,
@@ -1188,11 +1212,12 @@ export function streamGoogleGenAI<T extends "google-generative-ai" | "google-ver
 			stream.push({ type: "done", reason: output.stopReason as "length" | "stop" | "toolUse", message: output });
 			stream.end();
 		} catch (error) {
-			const result = await AIError.finalize(error, { api: model.api, signal: options?.signal, rawRequestDump });
-			output.stopReason = result.stopReason;
-			output.errorStatus = result.status;
-			output.errorId = result.id;
-			output.errorMessage = result.message;
+			const result = await AIError.finalize(error, {
+				api: model.api,
+				signal: options?.signal,
+				rawRequestDump: materializeDumpBody(rawRequestDump, wireBodyJson),
+			});
+			AIError.applyFinalizeResult(output, result);
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
@@ -1258,13 +1283,14 @@ function paramsToWireBody(params: GenerateContentParameters): Record<string, unk
  * response body, because the per-site caps had drifted to four different
  * numbers and three of them were "none".
  */
-function extractGoogleErrorMessage(errorText: string): string {
-	if (!errorText) return "Unknown error";
+function extractGoogleErrorMessage(body: AIError.ProviderErrorBody): string {
+	if (!body.text) return "Unknown error";
 	try {
-		const parsed = JSON.parse(errorText) as { error?: { message?: string } };
+		const parsed = JSON.parse(body.text) as { error?: { message?: string } };
 		if (parsed.error?.message) return AIError.boundProviderErrorDetail(parsed.error.message);
 	} catch {
-		// Non-JSON body: keep the raw text, capped below.
+		// Non-JSON body: the bounded read's own detail, which is capped and says when it
+		// stopped early.
 	}
-	return AIError.boundProviderErrorDetail(errorText);
+	return body.detail;
 }

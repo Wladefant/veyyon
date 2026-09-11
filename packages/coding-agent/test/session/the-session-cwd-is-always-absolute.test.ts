@@ -32,8 +32,8 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
-import { MemorySessionStorage } from "@veyyon/coding-agent/session/session-storage";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { MemorySessionStorage } from "@veyyon/kernel/session/session-storage";
 
 /** A real directory tree to re-root around, removed when the test ends. */
 function tempProject(): { root: string; child: string; cleanup: () => void } {

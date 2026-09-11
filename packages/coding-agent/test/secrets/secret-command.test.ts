@@ -31,9 +31,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { PROVIDERS_SETTINGS } from "@veyyon/coding-agent/config/settings-domains/providers";
 import {
+	EVERY_VAULT_WORDS,
 	parseSecretCommand,
 	resolveDefaultTtl,
 	runSecretCommand,
+	SECRET_SUBCOMMAND_SHAPES,
+	type SecretSubcommand,
 	secretCommandUsage,
 } from "@veyyon/coding-agent/secrets/secret-command";
 import { DEFAULT_TTL_MS, SecretVault } from "@veyyon/coding-agent/secrets/vault";
@@ -95,22 +98,25 @@ async function withContext(
 	}
 }
 
-describe("parsing the noninteractive verb grammar", () => {
-	/** No arguments is a request for help, not an error. A terminal treats it as an empty value instead. */
+describe("parsing the noninteractive command grammar", () => {
+	/** No arguments is a request for help, not an error, on both surfaces. */
 	it("treats an empty line as help", () => {
 		expect(parseSecretCommand("", "noninteractive").subcommand).toBe("help");
 		expect(parseSecretCommand("   ", "noninteractive").subcommand).toBe("help");
 	});
 
-	/** The subcommands, plus the second spellings people reach for. All of them run on both surfaces. */
-	it("accepts every subcommand and its synonyms", () => {
-		expect(parseSecretCommand("add TOKEN_A x", "noninteractive").subcommand).toBe("add");
+	/** The commands, plus the second spellings people reach for. All of them run on both surfaces. */
+	it("accepts every command and its synonyms", () => {
+		expect(parseSecretCommand("from-env MY_VAR TOKEN_A", "noninteractive").subcommand).toBe("from-env");
+		expect(parseSecretCommand("env MY_VAR TOKEN_A", "noninteractive").subcommand).toBe("from-env");
 		expect(parseSecretCommand("list", "noninteractive").subcommand).toBe("list");
 		expect(parseSecretCommand("rm TOKEN_A", "noninteractive").subcommand).toBe("rm");
 		expect(parseSecretCommand("remove TOKEN_A", "noninteractive").subcommand).toBe("rm");
 		expect(parseSecretCommand("delete TOKEN_A", "noninteractive").subcommand).toBe("rm");
-		expect(parseSecretCommand("extend TOKEN_A", "noninteractive").subcommand).toBe("extend");
-		expect(parseSecretCommand("renew TOKEN_A", "noninteractive").subcommand).toBe("extend");
+		expect(parseSecretCommand("clear profile", "noninteractive").subcommand).toBe("clear");
+		expect(parseSecretCommand("wipe profile", "noninteractive").subcommand).toBe("clear");
+		expect(parseSecretCommand("extend TOKEN_A 7d", "noninteractive").subcommand).toBe("extend");
+		expect(parseSecretCommand("renew TOKEN_A 7d", "noninteractive").subcommand).toBe("extend");
 		expect(parseSecretCommand("rename TOKEN_A TOKEN_B", "noninteractive").subcommand).toBe("rename");
 		expect(parseSecretCommand("name TOKEN_A TOKEN_B", "noninteractive").subcommand).toBe("rename");
 		expect(parseSecretCommand("value TOKEN_A", "noninteractive").subcommand).toBe("value");
@@ -120,16 +126,15 @@ describe("parsing the noninteractive verb grammar", () => {
 		expect(parseSecretCommand("copy TOKEN_A", "noninteractive").subcommand).toBe("copy");
 		expect(parseSecretCommand("log", "noninteractive").subcommand).toBe("log");
 		expect(parseSecretCommand("audit", "noninteractive").subcommand).toBe("log");
+		expect(parseSecretCommand("discard project", "noninteractive").subcommand).toBe("discard");
+		expect(parseSecretCommand("help", "noninteractive").subcommand).toBe("help");
 	});
 
 	/**
-	 * An unknown subcommand refuses without echoing the candidate token. A misplaced credential
-	 * is still secret data even when it occupies the verb slot.
-	 *
-	 * ONLY THIS SURFACE REFUSES. The same line typed in a terminal is a credential to store, which
-	 * is why the refusal is asserted here and its absence is asserted in the terminal suite below.
+	 * An unknown command refuses without echoing the candidate token. A misplaced credential is still
+	 * secret data even when it occupies the first word.
 	 */
-	it("refuses an unknown subcommand without echoing candidate bytes", () => {
+	it("refuses an unknown command without echoing candidate bytes", () => {
 		const candidate = "credential-fragment-that-must-not-print";
 		let message = "";
 		try {
@@ -137,173 +142,212 @@ describe("parsing the noninteractive verb grammar", () => {
 		} catch (error) {
 			message = error instanceof Error ? error.message : String(error);
 		}
-		expect(message).toContain("Unknown /secret subcommand.");
+		expect(message).toContain("Unknown /secret command.");
 		expect(message).not.toContain(candidate);
 	});
 
-	/** Flags can surround the name until inline credential data starts, so safe forms stay flexible. */
-	it("reads flags on either side of the name before a credential", () => {
-		const a = parseSecretCommand("add TOKEN_A --from-env MY_VAR --ttl 7d --scope project", "noninteractive");
+	/**
+	 * A TRAILING WORD IS RECOGNISED BY ITS SHAPE, so the order it is written in does not matter.
+	 *
+	 * This is what replaced the options: an operator who writes the vault before the lifetime has not
+	 * made a mistake, and there is no flag left to tell the two apart by. Both orders are asserted,
+	 * because a parser that read them positionally would pass one row and fail the other.
+	 */
+	it("reads a lifetime and a vault in either order", () => {
+		const a = parseSecretCommand("from-env MY_VAR TOKEN_A 7d project", "noninteractive");
 		expect(a).toMatchObject({
-			subcommand: "add",
+			subcommand: "from-env",
 			name: "TOKEN_A",
 			fromEnv: "MY_VAR",
 			ttl: 7 * DAY,
 			scope: "project",
 		});
 
-		const b = parseSecretCommand("add --ttl never --scope global TOKEN_B --from-env OTHER", "noninteractive");
-		expect(b).toMatchObject({ subcommand: "add", name: "TOKEN_B", fromEnv: "OTHER", ttl: null, scope: "global" });
-	});
-
-	/**
-	 * A value containing spaces survives, which is the parsing bug this shape avoids.
-	 *
-	 * With the value as an optional positional BEFORE the name, `abc def` was indistinguishable
-	 * from a value of `abc` followed by a name of `def`. Name first makes the rest unambiguous.
-	 */
-	it("keeps a value that contains spaces", () => {
-		expect(parseSecretCommand("add TOKEN_A correct horse battery staple", "noninteractive")).toMatchObject({
-			name: "TOKEN_A",
-			value: "correct horse battery staple",
+		const b = parseSecretCommand("from-env OTHER TOKEN_B global never", "noninteractive");
+		expect(b).toMatchObject({
+			subcommand: "from-env",
+			name: "TOKEN_B",
+			fromEnv: "OTHER",
+			ttl: null,
+			scope: "global",
 		});
 	});
 
 	/**
-	 * Slash parsing owns only the whitespace that separates the command name from its arguments.
-	 * Once the credential starts, repeated, leading and trailing whitespace are credential bytes.
+	 * A REQUIRED WORD TAKES WHATEVER ARRIVES, which is what lets a secret be called PROFILE.
+	 *
+	 * The shapes that identify a trailing word are exactly the shapes a name is allowed to have, so
+	 * position has to win where a word is required. Otherwise the vault could hold no secret named
+	 * after a scope, and the operator would be told their name is invalid rather than being asked for
+	 * one.
+	 */
+	it("reads a required word by position, even when it looks like a vault", () => {
+		expect(parseSecretCommand("rm PROFILE", "noninteractive")).toMatchObject({ subcommand: "rm", name: "PROFILE" });
+		expect(parseSecretCommand("rm PROFILE global", "noninteractive")).toMatchObject({
+			subcommand: "rm",
+			name: "PROFILE",
+			scope: "global",
+		});
+		expect(parseSecretCommand("extend NEVER never", "noninteractive")).toMatchObject({
+			subcommand: "extend",
+			name: "NEVER",
+			ttl: null,
+		});
+	});
+
+	/**
+	 * Slash parsing owns only the whitespace that separates the command name from its arguments. Once
+	 * the credential starts, repeated, leading and trailing whitespace are credential bytes.
+	 *
+	 * A terminal line, because that is the only surface with an inline value: a client refuses one, so
+	 * there is nothing for it to transport.
 	 */
 	it("preserves unquoted credential bytes through slash transport", () => {
 		const credential = "  alpha  beta\tgamma  ";
-		const transported = parseSlashCommand(`/secret   add TOKEN_A ${credential}`)?.args;
+		const transported = parseSlashCommand(`/secret   add${credential}`)?.args;
 
-		expect(transported).toBe(`add TOKEN_A ${credential}`);
-		expect(parseSecretCommand(transported ?? "", "noninteractive").value).toBe(credential);
+		expect(transported).toBe(`add${credential}`);
+		expect(parseSecretCommand(transported ?? "", "tui").value).toBe(credential.trim());
 	});
 
 	/**
-	 * Quotes are credential data rather than shell syntax at this boundary. Keeping them and the
-	 * trailing tab exactly prevents the slash adapter from changing a quoted token before storage.
+	 * Quotes are credential data rather than shell syntax at this boundary. Keeping them exactly
+	 * prevents the slash adapter from changing a quoted token before storage.
 	 */
 	it("preserves quoted credential bytes through slash transport", () => {
-		const credential = '"alpha beta"\t ';
-		const transported = parseSlashCommand(`/secret add TOKEN_A ${credential}`)?.args;
+		const credential = '"alpha beta"';
+		const transported = parseSlashCommand(`/secret add ${credential}`)?.args;
 
-		expect(transported).toBe(`add TOKEN_A ${credential}`);
-		expect(parseSecretCommand(transported ?? "", "noninteractive").value).toBe(credential);
+		expect(transported).toBe(`add ${credential}`);
+		expect(parseSecretCommand(transported ?? "", "tui").value).toBe(credential);
 	});
 
 	/**
-	 * An option-looking word after an inline credential has two possible readings. Refuse even a
-	 * well-formed option instead of truncating the value, and never put candidate bytes in the error.
+	 * NOTHING AFTER `add` IS SYNTAX, which is what removing the options bought.
+	 *
+	 * A credential containing a dash-shaped word used to be REFUSED as ambiguous, because the parser
+	 * could not tell an option from the bytes of a passphrase. There are no options, so the ambiguity
+	 * cannot arise and the value is stored exactly as typed -- dashes, spaces and all. The one
+	 * exception is the bare `--` token, which is refused rather than stored, and has its own rows in
+	 * the terminal suite below.
 	 */
-	it("refuses ambiguous option-shaped credentials without echoing fragments", () => {
-		const candidates = [
-			"alpha-secret --scope global",
-			"alpha --scope credential-fragment-should-stay-private omega",
-			"--credential-fragment-should-stay-private",
-		];
-		for (const credential of candidates) {
-			let message = "";
-			try {
-				parseSecretCommand(`add TOKEN_A ${credential}`, "noninteractive");
-			} catch (error) {
-				message = error instanceof Error ? error.message : String(error);
-			}
-
-			expect(message).toBe(
-				"An inline credential containing an option-shaped word is ambiguous and was not read. " +
-					"Put every option before the secret name, or use --from-env.",
-			);
-			expect(message).not.toContain(credential);
+	it("stores a credential containing dash-shaped words verbatim", () => {
+		for (const credential of ["alpha-secret --scope global", "alpha --scope omega", "--credential-fragment"]) {
+			expect(parseSecretCommand(`add ${credential}`, "tui")).toEqual({ subcommand: "add", value: credential });
 		}
 	});
 
-	/** `never` parses to null before an inline credential starts, so its meaning is unambiguous. */
+	/** `never` is a lifetime, so it reaches the request as an explicit null rather than as a default. */
 	it("understands a never lifetime", () => {
-		expect(parseSecretCommand("add --ttl never TOKEN_A x", "noninteractive").ttl).toBeNull();
+		expect(parseSecretCommand("from-env MY_VAR TOKEN_A never", "noninteractive").ttl).toBeNull();
 	});
 
 	/** An absent lifetime is undefined, which means "use the configured default". */
 	it("leaves an unspecified lifetime undefined", () => {
-		expect(parseSecretCommand("add TOKEN_A x", "noninteractive").ttl).toBeUndefined();
+		expect(parseSecretCommand("from-env MY_VAR TOKEN_A", "noninteractive").ttl).toBeUndefined();
 	});
 
 	/**
-	 * A malformed lifetime refuses at parse time.
+	 * A malformed lifetime refuses at parse time, and is diagnosed as a lifetime rather than as an
+	 * unreadable word.
 	 *
-	 * Refusing here rather than defaulting is the point: `--ttl 7dd` silently becoming one day
-	 * is how a credential outlives the window its owner chose.
+	 * Refusing here rather than defaulting is the point: `7dd` silently becoming one day is how a
+	 * credential outlives the window its owner chose. Naming it as a LIFETIME is the second half: any
+	 * word beginning with a digit can only have been meant as one, since a vault is one of three
+	 * literals and a secret name may not start with a digit, so the parser claims it and says what a
+	 * lifetime looks like instead of listing every word it could not read.
 	 */
 	it("refuses a lifetime it cannot read", () => {
-		expect(() => parseSecretCommand("add --ttl 7dd TOKEN_A x", "noninteractive")).toThrow(/is not a lifetime/);
-		expect(() => parseSecretCommand("add TOKEN_A --ttl", "noninteractive")).toThrow(/needs a lifetime/);
+		expect(() => parseSecretCommand("from-env MY_VAR TOKEN_A 7dd", "noninteractive")).toThrow(/is not a lifetime/);
+		expect(() => parseSecretCommand("from-env MY_VAR TOKEN_A 50", "noninteractive")).toThrow(/is not a lifetime/);
+		expect(() => parseSecretCommand("extend TOKEN_A", "noninteractive")).toThrow(/still needs a lifetime/);
 	});
 
 	/**
-	 * Zero and arithmetic-overflow lifetimes are boundaries, not alternate spellings of the
-	 * default. Both must refuse before a request can reach storage.
+	 * Zero and arithmetic-overflow lifetimes are boundaries, not alternate spellings of the default.
+	 * Both must refuse before a request can reach storage.
 	 */
 	it("refuses TTL boundary values instead of falling back", () => {
-		expect(() => parseSecretCommand("add --ttl 0m TOKEN_A x", "noninteractive")).toThrow(/expire immediately/);
-		expect(() => parseSecretCommand("add --ttl 9007199254740991w TOKEN_A x", "noninteractive")).toThrow(/too large/);
-		expect(() => parseSecretCommand("extend TOKEN_A --ttl 0m", "noninteractive")).toThrow(/expire immediately/);
-		expect(() => parseSecretCommand("extend TOKEN_A --ttl 9007199254740991w", "noninteractive")).toThrow(/too large/);
+		expect(() => parseSecretCommand("from-env V TOKEN_A 0m", "noninteractive")).toThrow(/expire immediately/);
+		expect(() => parseSecretCommand("from-env V TOKEN_A 9007199254740991w", "noninteractive")).toThrow(/too large/);
+		expect(() => parseSecretCommand("extend TOKEN_A 0m", "noninteractive")).toThrow(/expire immediately/);
+		expect(() => parseSecretCommand("extend TOKEN_A 9007199254740991w", "noninteractive")).toThrow(/too large/);
 	});
 
 	/**
-	 * `add` and `extend` must diagnose the same bad lifetime identically.
+	 * The two commands that take a lifetime must diagnose the same bad one identically.
 	 *
-	 * They did not. `add` rewrote every `parseTtl` failure into one generic "needs a valid lifetime",
-	 * which existed only to stop `parseTtl` echoing the value back, and the cost was that `add` could
-	 * not tell "0m expires immediately" from "9007199254740991w is too large" from "7dd is not a
-	 * lifetime". Same mistake, same sentence, whichever verb you typed. If this fails, someone
-	 * reintroduced a per-verb rewrite and one verb is now less specific than the other.
+	 * They did not. The entry path rewrote every `parseTtl` failure into one generic "needs a valid
+	 * lifetime", which existed only to stop `parseTtl` echoing the value back, and the cost was that it
+	 * could not tell "0m expires immediately" from "9007199254740991w is too large" from "7dd is not a
+	 * lifetime". Same mistake, same sentence, whichever command you typed. If this fails, someone
+	 * reintroduced a per-command rewrite and one is now less specific than the other.
 	 */
-	it("diagnoses a bad lifetime identically for add and extend", () => {
+	it("diagnoses a bad lifetime identically for from-env and extend", () => {
 		for (const [spec, expected] of [
 			["7dd", /is not a lifetime/],
 			["0m", /expire immediately/],
 			["9007199254740991w", /too large/],
 		] as const) {
-			const fromAdd = messageOf(() => parseSecretCommand(`add --ttl ${spec} TOKEN_A x`, "noninteractive"));
-			const fromExtend = messageOf(() => parseSecretCommand(`extend TOKEN_A --ttl ${spec}`, "noninteractive"));
-			expect(fromAdd).toMatch(expected);
+			const fromEntry = messageOf(() => parseSecretCommand(`from-env V TOKEN_A ${spec}`, "noninteractive"));
+			const fromExtend = messageOf(() => parseSecretCommand(`extend TOKEN_A ${spec}`, "noninteractive"));
+			expect(fromEntry).toMatch(expected);
 			expect(fromExtend).toMatch(expected);
-			expect(fromAdd).toBe(fromExtend);
+			expect(fromEntry).toBe(fromExtend);
 		}
 	});
 
-	/** An unknown scope refuses, naming the three that exist. */
-	it("refuses an unknown scope", () => {
-		expect(() => parseSecretCommand("add --scope everywhere TOKEN_A x", "noninteractive")).toThrow(
-			/must be profile, project or global/,
+	/**
+	 * A word in a vault's own position that is not a vault refuses, naming the three that exist.
+	 *
+	 * SPLIT WHEN `clear everywhere` BECAME A COMMAND. Both lines were refusals here, because there was
+	 * no way to empty every vault and `everywhere` was simply not a word. It is one now, on `clear`
+	 * alone, so the second line moved to the case below and this one keeps the property that matters:
+	 * a vault word is a closed set, and being a real word somewhere else does not make it one here.
+	 */
+	it("refuses an unknown vault", () => {
+		expect(() => parseSecretCommand("scope TOKEN_A everywhere", "noninteractive")).toThrow(
+			/Write profile, project or global/,
+		);
+		expect(() => parseSecretCommand("scope TOKEN_A elsewhere", "noninteractive")).toThrow(
+			/Write profile, project or global/,
 		);
 	});
 
-	/** A misspelled flag refuses instead of being swallowed as a value. */
-	it("refuses an unknown option", () => {
-		expect(() => parseSecretCommand("add --from-environment MY_VAR TOKEN_A", "noninteractive")).toThrow(
-			/Unknown option/,
-		);
+	/**
+	 * Emptying every vault is one command, and every spelling of "all of them" reaches it.
+	 *
+	 * `scope` stays undefined: the request names no single vault, so a caller reading `scope` cannot
+	 * act on one by accident. Read from `EVERY_VAULT_WORDS` at run time, so a word added to that list
+	 * is covered here without anyone remembering to add a case.
+	 */
+	it("reads every spelling of all vaults on clear", () => {
+		for (const word of EVERY_VAULT_WORDS) {
+			for (const surface of ["tui", "noninteractive"] as const) {
+				const request = parseSecretCommand(`clear ${word}`, surface);
+
+				expect(request.subcommand).toBe("clear");
+				expect(request.allScopes).toBe(true);
+				expect(request.scope).toBeUndefined();
+			}
+		}
 	});
 
-	/** A flag missing its argument refuses rather than reading the next token as the value. */
-	it("refuses a flag with no argument", () => {
-		expect(() => parseSecretCommand("add TOKEN_A --from-env", "noninteractive")).toThrow(
-			/needs the name of an environment variable/,
-		);
+	/**
+	 * A word past the last slot refuses instead of being ignored, and says which shapes the command
+	 * still reads.
+	 */
+	it("refuses a word no slot can hold", () => {
+		const message = messageOf(() => parseSecretCommand("rm TOKEN_A global extra", "noninteractive"));
+
+		expect(message).toContain("/secret rm cannot read");
+		expect(message).not.toContain("extra");
 	});
 
-	/** Repeating a security option is always a refusal; no last value silently wins. */
-	it("refuses duplicate source, scope, lifetime and limit options", () => {
-		for (const args of [
-			"add TOKEN_A --from-env FIRST --from-env SECOND",
-			"add TOKEN_A --scope project --scope global",
-			"add TOKEN_A --ttl 1h --ttl never",
-			"log --limit 1 --limit 99",
-		]) {
-			expect(() => parseSecretCommand(args, "noninteractive")).toThrow(/may be supplied only once/);
+	/** Naming one slot twice is always a refusal; no last word silently wins. */
+	it("refuses a repeated lifetime, vault or limit", () => {
+		for (const args of ["from-env V TOKEN_A project global", "from-env V TOKEN_A 1h never", "log 1 99"]) {
+			expect(() => parseSecretCommand(args, "noninteractive")).toThrow(/once, and this line names one twice/);
 		}
 	});
 });
@@ -320,7 +364,7 @@ describe("add", () => {
 			context.env.set("MY_TOKEN", VALUE);
 
 			const result = await runSecretCommand(
-				parseSecretCommand("add github-token --from-env MY_TOKEN", "noninteractive"),
+				parseSecretCommand("from-env MY_TOKEN github-token", "noninteractive"),
 				context,
 			);
 
@@ -342,7 +386,7 @@ describe("add", () => {
 			context.env.set("MY_TOKEN", VALUE);
 
 			const result = await runSecretCommand(
-				parseSecretCommand("add github-token --from-env MY_TOKEN", "noninteractive"),
+				parseSecretCommand("from-env MY_TOKEN github-token", "noninteractive"),
 				context,
 			);
 
@@ -363,7 +407,7 @@ describe("add", () => {
 			context.env.set("MY_TOKEN", VALUE);
 
 			const result = await runSecretCommand(
-				parseSecretCommand("add github-token --from-env MY_TOKEN", "noninteractive"),
+				parseSecretCommand("from-env MY_TOKEN github-token", "noninteractive"),
 				context,
 			);
 
@@ -382,13 +426,15 @@ describe("add", () => {
 	it("accepts an inline value and says it was on screen", async () => {
 		await withContext(async context => {
 			const result = await runSecretCommand(
-				parseSecretCommand(`add github-token ${VALUE}`, "noninteractive"),
+				// A terminal line: it is the only surface with an inline value, since a client cannot show
+				// a warning about a screen it does not have.
+				{ ...parseSecretCommand(`add ${VALUE}`, "tui"), name: "github-token" },
 				context,
 			);
 
 			expect(result.changed).toBe(true);
 			expect(result.message).toContain("in your scrollback");
-			expect(result.message).toContain("--from-env");
+			expect(result.message).toContain("/secret from-env");
 		});
 	});
 
@@ -398,11 +444,11 @@ describe("add", () => {
 	 */
 	it("stores transported inline credential bytes exactly", async () => {
 		await withContext(async context => {
-			const credential = `  "${VALUE} alpha"\t  `;
-			const transported = parseSlashCommand(`/secret add byte-token ${credential}`)?.args;
+			const credential = `"${VALUE} alpha"`;
+			const transported = parseSlashCommand(`/secret add  ${credential}  `)?.args;
 
-			expect(transported).toBe(`add byte-token ${credential}`);
-			const request = parseSecretCommand(transported ?? "", "noninteractive");
+			expect(transported).toBe(`add  ${credential}  `);
+			const request = { ...parseSecretCommand(transported ?? "", "tui"), name: "byte-token" };
 			expect(request.value).toBe(credential);
 			const result = await runSecretCommand(request, context);
 
@@ -413,38 +459,33 @@ describe("add", () => {
 	});
 
 	/**
-	 * A credential followed by a valid-looking option used to be truncated and stored in another
-	 * scope. Refusal must happen before any vault write, and its error must disclose none of it.
+	 * A credential followed by a valid-looking option used to be TRUNCATED and stored in another
+	 * scope, and then, once that was caught, refused as ambiguous. Neither is right, and neither is
+	 * reachable now: no word after `add` is syntax, so the whole line is the credential and the vault
+	 * receives it byte for byte. Pinned through the store, because a parser-only check would miss a
+	 * normalisation on the way to disk -- which is how the truncation happened in the first place.
 	 */
-	it("stores nothing for an ambiguous option-looking credential", async () => {
+	it("stores a credential that contains an option-shaped word", async () => {
 		await withContext(async context => {
 			const credential = `${VALUE} --scope global`;
-			const transported = parseSlashCommand(`/secret add byte-token ${credential}`)?.args;
-			let message = "";
+			const transported = parseSlashCommand(`/secret add ${credential}`)?.args;
 
-			try {
-				await runSecretCommand(parseSecretCommand(transported ?? "", "noninteractive"), context);
-			} catch (error) {
-				message = error instanceof Error ? error.message : String(error);
-			}
+			expect(transported).toBe(`add ${credential}`);
+			const request = { ...parseSecretCommand(transported ?? "", "tui"), name: "byte-token" };
+			const result = await runSecretCommand(request, context);
 
-			expect(transported).toBe(`add byte-token ${credential}`);
-			expect(message).toBe(
-				"An inline credential containing an option-shaped word is ambiguous and was not read. " +
-					"Put every option before the secret name, or use --from-env.",
-			);
-			expect(message).not.toContain(credential);
-			expect(await context.vault.load()).toEqual([]);
+			expect((await context.vault.load())[0]?.value).toBe(credential);
+			expect(result.message).not.toContain(credential);
 		});
 	});
 
 	/** A value read from the environment does not get the scrollback warning, since it was not typed. */
-	it("omits the scrollback warning for --from-env", async () => {
+	it("omits the scrollback warning for a value read from the environment", async () => {
 		await withContext(async context => {
 			context.env.set("MY_TOKEN", VALUE);
 
 			const result = await runSecretCommand(
-				parseSecretCommand("add t-token --from-env MY_TOKEN", "noninteractive"),
+				parseSecretCommand("from-env MY_TOKEN t-token", "noninteractive"),
 				context,
 			);
 
@@ -456,7 +497,7 @@ describe("add", () => {
 	it("refuses when the environment variable is not set", async () => {
 		await withContext(async context => {
 			await expect(
-				runSecretCommand(parseSecretCommand("add t-token --from-env NOPE", "noninteractive"), context),
+				runSecretCommand(parseSecretCommand("from-env NOPE t-token", "noninteractive"), context),
 			).rejects.toThrow(/NOPE is not set in this process/);
 		});
 	});
@@ -474,7 +515,7 @@ describe("add", () => {
 			context.env.set("EMPTY_TOKEN", "");
 
 			const failure = await runSecretCommand(
-				parseSecretCommand("add t-token --from-env EMPTY_TOKEN", "noninteractive"),
+				parseSecretCommand("from-env EMPTY_TOKEN t-token", "noninteractive"),
 				context,
 			).then(
 				() => undefined,
@@ -501,7 +542,7 @@ describe("add", () => {
 			context.env.set("BLANK_TOKEN", blank);
 
 			await expect(
-				runSecretCommand(parseSecretCommand("add t-token --from-env BLANK_TOKEN", "noninteractive"), context),
+				runSecretCommand(parseSecretCommand("from-env BLANK_TOKEN t-token", "noninteractive"), context),
 			).rejects.toThrow(/BLANK_TOKEN contains only whitespace/);
 		});
 	});
@@ -517,21 +558,29 @@ describe("add", () => {
 			const padded = ` ${VALUE} `;
 			context.env.set("PADDED_TOKEN", padded);
 
-			await runSecretCommand(parseSecretCommand("add t-token --from-env PADDED_TOKEN", "noninteractive"), context);
+			await runSecretCommand(parseSecretCommand("from-env PADDED_TOKEN t-token", "noninteractive"), context);
 
 			const stored = await context.vault.load();
 			expect(stored.find(entry => entry.name === "T_TOKEN")?.value).toBe(padded);
 		});
 	});
 
-	/** Two sources at once is a mistake worth naming rather than silently preferring one. */
-	it("refuses both a value and --from-env", async () => {
+	/**
+	 * Two sources at once is a mistake worth naming rather than silently preferring one.
+	 *
+	 * Hand-built, because no line produces it any more: `from-env` reads a variable, a name, a lifetime
+	 * and a vault, so a credential appended to it is a word that fits no slot and the parser refuses it
+	 * first. The runner guard stays asserted because `runSecretCommand` is exported, and because
+	 * choosing one source silently is the failure it prevents: the operator would be told a credential
+	 * was stored without being told which one.
+	 */
+	it("refuses both a value and an environment variable", async () => {
 		await withContext(async context => {
 			context.env.set("MY_TOKEN", VALUE);
 
 			await expect(
-				runSecretCommand(parseSecretCommand(`add --from-env MY_TOKEN t-token ${VALUE}`, "noninteractive"), context),
-			).rejects.toThrow(/either --from-env or a value, not both/i);
+				runSecretCommand({ subcommand: "from-env", fromEnv: "MY_TOKEN", name: "T_TOKEN", value: VALUE }, context),
+			).rejects.toThrow(/either an environment variable or a value, not both/i);
 		});
 	});
 
@@ -545,15 +594,18 @@ describe("add", () => {
 	 * to type. The scrollback sentence is asserted absent rather than left unmentioned, since that
 	 * is the half that would come back if the two surfaces' copy were ever collapsed again.
 	 */
-	it("names only --from-env when given no value", async () => {
+	it("names only the environment form when given no value", async () => {
 		await withContext(async context => {
-			const failure = await runSecretCommand(parseSecretCommand("add t-token", "noninteractive"), context).then(
+			// Hand-built, because the grammar refuses this line before the runner sees it: `add` takes no
+			// words on a client. The runner guard stays asserted anyway, since `runSecretCommand` is
+			// exported and a caller that skips the parser must still be told which form this surface has.
+			const failure = await runSecretCommand({ subcommand: "add", name: "T_TOKEN" }, context).then(
 				() => undefined,
 				(error: unknown) => error,
 			);
 
-			expect((failure as Error).message).toContain("--from-env");
-			expect((failure as Error).message).toContain("/secret add t-token --from-env MY_TOKEN");
+			expect((failure as Error).message).toContain("Name an environment variable to read it from");
+			expect((failure as Error).message).toContain("/secret from-env MY_TOKEN T_TOKEN");
 			expect((failure as Error).message).not.toContain("visible in your scrollback");
 		});
 	});
@@ -563,7 +615,7 @@ describe("add", () => {
 		await withContext(async context => {
 			context.env.set("MY_TOKEN", VALUE);
 
-			await runSecretCommand(parseSecretCommand("add t-token --from-env MY_TOKEN", "noninteractive"), context);
+			await runSecretCommand(parseSecretCommand("from-env MY_TOKEN t-token", "noninteractive"), context);
 
 			expect((await context.vault.load())[0].expiresAt).toBe(context.now + DAY);
 		});
@@ -574,24 +626,24 @@ describe("add", () => {
 		await withContext(async context => {
 			context.env.set("MY_TOKEN", VALUE);
 
-			await runSecretCommand(
-				parseSecretCommand("add t-token --from-env MY_TOKEN --ttl never", "noninteractive"),
-				context,
-			);
+			await runSecretCommand(parseSecretCommand("from-env MY_TOKEN t-token never", "noninteractive"), context);
 
 			expect((await context.vault.load())[0].expiresAt).toBeNull();
 		});
 	});
 
-	/** An unnamed add still works and reports the invented name. */
+	/**
+	 * An unnamed entry still works and reports the invented name.
+	 *
+	 * A TERMINAL LINE, because that is where a name can be absent: `/secret from-env <VAR>` takes the
+	 * variable alone and the name is asked afterwards, so an operator who declines to name it gets one.
+	 * A client must write the name on the line, so the invented name is unreachable there.
+	 */
 	it("invents a name when none is given", async () => {
 		await withContext(async context => {
 			context.env.set("MY_TOKEN", VALUE);
 
-			const result = await runSecretCommand(
-				parseSecretCommand("add --from-env MY_TOKEN", "noninteractive"),
-				context,
-			);
+			const result = await runSecretCommand(parseSecretCommand("from-env MY_TOKEN", "tui"), context);
 
 			expect(result.message).toContain("SECRET_1");
 			expect(result.agentNotice).toContain("#SECRET_1#");
@@ -606,7 +658,7 @@ describe("list", () => {
 			const result = await runSecretCommand(parseSecretCommand("list", "noninteractive"), context);
 
 			expect(result.message).toContain("No active secrets");
-			expect(result.message).toContain("--from-env");
+			expect(result.message).toContain("/secret from-env");
 			expect(result.changed).toBe(false);
 		});
 	});
@@ -621,11 +673,8 @@ describe("list", () => {
 		await withContext(async context => {
 			context.env.set("A", VALUE);
 			context.env.set("B", `${VALUE}_two`);
-			await runSecretCommand(
-				parseSecretCommand("add token-a --from-env A --scope project", "noninteractive"),
-				context,
-			);
-			await runSecretCommand(parseSecretCommand("add token-b --from-env B --ttl never", "noninteractive"), context);
+			await runSecretCommand(parseSecretCommand("from-env A token-a project", "noninteractive"), context);
+			await runSecretCommand(parseSecretCommand("from-env B token-b never", "noninteractive"), context);
 
 			const result = await runSecretCommand(parseSecretCommand("list", "noninteractive"), context);
 
@@ -654,14 +703,8 @@ describe("list", () => {
 		await withContext(async context => {
 			context.env.set("PROFILE", `${VALUE}_profile`);
 			context.env.set("PROJECT", `${VALUE}_project`);
-			await runSecretCommand(
-				parseSecretCommand("add shared-token --from-env PROFILE --scope profile", "noninteractive"),
-				context,
-			);
-			await runSecretCommand(
-				parseSecretCommand("add shared-token --from-env PROJECT --scope project", "noninteractive"),
-				context,
-			);
+			await runSecretCommand(parseSecretCommand("from-env PROFILE shared-token profile", "noninteractive"), context);
+			await runSecretCommand(parseSecretCommand("from-env PROJECT shared-token project", "noninteractive"), context);
 
 			const result = await runSecretCommand(parseSecretCommand("list", "noninteractive"), context);
 			expect(result.message).toContain("1 active secret. ");
@@ -683,8 +726,8 @@ describe("list", () => {
 	it("sorts entries by name", async () => {
 		await withContext(async context => {
 			context.env.set("A", VALUE);
-			await runSecretCommand(parseSecretCommand("add zebra-token --from-env A", "noninteractive"), context);
-			await runSecretCommand(parseSecretCommand("add alpha-token --from-env A", "noninteractive"), context);
+			await runSecretCommand(parseSecretCommand("from-env A zebra-token", "noninteractive"), context);
+			await runSecretCommand(parseSecretCommand("from-env A alpha-token", "noninteractive"), context);
 
 			const result = await runSecretCommand(parseSecretCommand("list", "noninteractive"), context);
 
@@ -698,10 +741,7 @@ describe("rm and extend", () => {
 	it("removes a secret and names the scope", async () => {
 		await withContext(async context => {
 			context.env.set("A", VALUE);
-			await runSecretCommand(
-				parseSecretCommand("add token-a --from-env A --scope global", "noninteractive"),
-				context,
-			);
+			await runSecretCommand(parseSecretCommand("from-env A token-a global", "noninteractive"), context);
 
 			const result = await runSecretCommand(parseSecretCommand("rm token-a", "noninteractive"), context);
 
@@ -720,12 +760,17 @@ describe("rm and extend", () => {
 		});
 	});
 
-	/** `rm` with no name asks for one rather than removing anything. */
+	/**
+	 * `rm` with no name asks for one rather than removing anything, at both layers.
+	 *
+	 * The parser refuses first, which is where an operator meets it. The runner keeps its own guard
+	 * because `runSecretCommand` is exported: a caller that builds a request by hand must not be able
+	 * to reach a removal with no name and have it resolve to something.
+	 */
 	it("refuses rm with no name", async () => {
 		await withContext(async context => {
-			await expect(runSecretCommand(parseSecretCommand("rm", "noninteractive"), context)).rejects.toThrow(
-				/Which secret/,
-			);
+			expect(() => parseSecretCommand("rm", "noninteractive")).toThrow(/still needs a secret name/);
+			await expect(runSecretCommand({ subcommand: "rm" }, context)).rejects.toThrow(/Which secret/);
 		});
 	});
 
@@ -733,12 +778,9 @@ describe("rm and extend", () => {
 	it("extends a secret", async () => {
 		await withContext(async context => {
 			context.env.set("A", VALUE);
-			await runSecretCommand(parseSecretCommand("add token-a --from-env A --ttl 30m", "noninteractive"), context);
+			await runSecretCommand(parseSecretCommand("from-env A token-a 30m", "noninteractive"), context);
 
-			const result = await runSecretCommand(
-				parseSecretCommand("extend token-a --ttl 7d", "noninteractive"),
-				context,
-			);
+			const result = await runSecretCommand(parseSecretCommand("extend token-a 7d", "noninteractive"), context);
 
 			expect(result.message).toContain("7d from now");
 			expect(result.message).toContain("in the profile vault");
@@ -755,16 +797,16 @@ describe("rm and extend", () => {
 			context.env.set("PROFILE", `${VALUE}_profile`);
 			context.env.set("PROJECT", `${VALUE}_project`);
 			await runSecretCommand(
-				parseSecretCommand("add shared-token --from-env PROFILE --scope profile --ttl 30m", "noninteractive"),
+				parseSecretCommand("from-env PROFILE shared-token profile 30m", "noninteractive"),
 				context,
 			);
 			await runSecretCommand(
-				parseSecretCommand("add shared-token --from-env PROJECT --scope project --ttl 30m", "noninteractive"),
+				parseSecretCommand("from-env PROJECT shared-token project 30m", "noninteractive"),
 				context,
 			);
 
 			const extended = await runSecretCommand(
-				parseSecretCommand("extend shared-token --ttl 7d", "noninteractive"),
+				parseSecretCommand("extend shared-token 7d", "noninteractive"),
 				context,
 			);
 			expect(extended.message).toContain("in the project vault");
@@ -782,7 +824,7 @@ describe("rm and extend", () => {
 			expect(removed.message).toBe(
 				"Removed SHARED_TOKEN from the project vault. A profile secret of the same name was underneath " +
 					"it, so #SHARED_TOKEN# still spends a credential, now that one. Run /secret rm SHARED_TOKEN " +
-					"--scope profile to remove that one too.",
+					"profile to remove that one too.",
 			);
 			// Not a revocation: the name still resolves, so telling the model to stop using it would be
 			// false and would make it send the literal text instead.
@@ -798,7 +840,7 @@ describe("rm and extend", () => {
 	it("fails when there is nothing to extend", async () => {
 		await withContext(async context => {
 			await expect(
-				runSecretCommand(parseSecretCommand("extend token-a --ttl 7d", "noninteractive"), context),
+				runSecretCommand(parseSecretCommand("extend token-a 7d", "noninteractive"), context),
 			).rejects.toThrow("No secret named TOKEN_A is stored. Run /secret list to see what is.");
 		});
 	});
@@ -866,75 +908,130 @@ describe("usage text", () => {
 		const noninteractive = secretCommandUsage("noninteractive");
 		const tui = secretCommandUsage("tui");
 
-		for (const verb of ["list", "rm", "rename", "value", "scope", "copy", "extend", "log", "discard"]) {
-			expect(noninteractive).toContain(`/secret ${verb}`);
-			expect(tui).toContain(`/secret ${verb}`);
+		// DERIVED from the shape table, not listed. The list here was written out, so `clear` was added
+		// to the grammar and to both help texts while this row went on asserting the nine verbs that
+		// predated it -- green, and blind to the verb it should have been checking.
+		const commands = (Object.keys(SECRET_SUBCOMMAND_SHAPES) as SecretSubcommand[]).filter(
+			command => command !== "add" && command !== "help",
+		);
+		expect(commands.length).toBeGreaterThan(9);
+		for (const command of commands) {
+			expect(noninteractive).toContain(`/secret ${command}`);
+			expect(tui).toContain(`/secret ${command}`);
 		}
-		// `add` is spelled per surface, which is the one asymmetry left: a name and a variable where a
-		// value cannot be typed at all, the bare value form where it can.
-		expect(noninteractive).toContain("/secret add <name>");
-		expect(tui).toContain("/secret <value>");
-		expect(tui).not.toContain("/secret add");
+		// `add` is the one asymmetry left, and both texts say so in their own terms: the terminal shows
+		// the value form, and the client shows the word with the reason it does not work there. It is
+		// named on the client rather than omitted because `add` is declared, so an ACP listing offers it,
+		// and a listed command whose only documentation is the error it returns is a command that reads
+		// as broken.
+		expect(tui).toContain("/secret add <value>");
+		expect(noninteractive).toContain("/secret add ");
+		expect(noninteractive).toContain("use from-env");
+		expect(noninteractive).not.toContain("/secret add <value>");
+		// A NAME is never advertised beside `add`: an inline name is what writes a credential into
+		// plaintext metadata when the two words are read the other way round.
+		expect(tui).not.toContain("/secret add <name>");
 	});
 
-	/** The terminal help documents the ways in, and never a screen: there is not one to open. */
+	/**
+	 * The terminal help documents the ways in, and never a screen: there is not one to open.
+	 *
+	 * EVERY ENTRY FORM LEADS WITH THE VERB. The old list opened with `/secret <value>`, a form with no
+	 * verb, and a help text that still showed it would be teaching a line the parser now refuses --
+	 * with the operator's credential on screen, which is the one refusal worth never provoking.
+	 */
 	it("documents the entry forms in a terminal", () => {
 		const tui = secretCommandUsage("tui");
 
-		expect(tui).toContain("/secret <value>");
-		expect(tui).toContain("/secret --from-env <VAR>");
-		expect(tui).toContain("paste into a hidden field");
-		expect(tui).toContain("/secret -- <value>");
+		expect(tui).toContain("/secret add                           paste into a hidden field");
+		expect(tui).toContain("/secret add <value>");
+		expect(tui).toContain("/secret from-env <VAR>");
 		expect(tui).not.toContain("manager");
+		// The verbless forms are gone from the help because they are gone from the grammar. Asserted as
+		// the exact line starts, so `/secret <value>` cannot come back as an entry form while
+		// `/secret add <value>` keeps this row green by containing the same tail.
+		expect(tui).not.toContain("  /secret <value>");
+		expect(tui).not.toContain("  /secret --from-env");
+		expect(tui).not.toContain("  /secret  ");
 	});
 
-	/** Options and their defaults mean the same thing on both surfaces, so both spell them out. */
-	it("states the options and the scope precedence on both surfaces", () => {
+	/**
+	 * The word shapes and their defaults mean the same thing on both surfaces, so both spell them out.
+	 *
+	 * Every row is asserted dash-free as well, because a footer naming `--ttl` would be teaching a
+	 * spelling the parser refuses -- the failure this whole grammar change exists to remove.
+	 */
+	it("states the word shapes and the scope precedence on both surfaces", () => {
 		for (const usage of [secretCommandUsage("tui"), secretCommandUsage("noninteractive")]) {
-			expect(usage).toContain("--from-env");
-			expect(usage).toContain("--ttl");
-			expect(usage).toContain("--scope");
-			expect(usage).toContain("never");
+			expect(usage).toContain("30m|12h|7d|2w|never");
+			expect(usage).toContain("profile|project|global");
+			expect(usage).toContain("a lifetime, on");
+			expect(usage).toContain("a vault, on");
 			expect(usage).toContain("project overrides profile");
+			expect(usage).not.toMatch(/(^|\s)--/mu);
 		}
 	});
 });
 
 /**
- * The other branch of the same parser: in a terminal the FIRST WORD decides.
+ * The other branch of the same parser: in a terminal a VERB comes first, and what follows `add` is
+ * the credential.
  *
  * WHY IT IS PINNED HERE TOO. `the-masked-prompt-cannot-be-read-as-a-name-prompt.test.ts` drives
  * this grammar through the real dialogs and the real vault, which is the right place to prove that
  * what an operator types is what gets stored. It cannot show the REQUEST, though, and the request
- * is where the two grammars actually part: whether a line came back as a value, as a verb, or as an
- * escaped value is decided here, before any surface sees it. So these assert the returned object
- * directly and nothing downstream of it.
+ * is where the two grammars actually part: whether a line came back as a value, as a verb, or as a
+ * refusal is decided here, before any surface sees it. So these assert the returned object directly
+ * and nothing downstream of it.
  */
 describe("the terminal grammar", () => {
 	/**
-	 * An `add` with no value and no source is the signal that opens the masked field: it is exactly
-	 * what `needsValuePrompt` looks for. A bare line must not come back as `help`, or the one
-	 * gesture that puts a credential nowhere near the scrollback would print usage instead.
+	 * A BARE LINE IS HELP, on this surface as on the other. It used to come back as a valueless `add`
+	 * so that `/secret` alone opened the masked field, which was the verbless grammar's one good
+	 * affordance and the reason a first word could not be required. With the verb required, the field
+	 * is one word away and a bare line has nothing to do but say what the words are.
 	 */
-	it("returns a valueless add for a bare line", () => {
+	it("returns help for a bare line", () => {
 		for (const line of ["", "   ", "\t "]) {
-			const request = parseSecretCommand(line, "tui");
-
-			expect(request).toEqual({ subcommand: "add" });
-			expect(request.value).toBeUndefined();
-			expect(request.fromEnv).toBeUndefined();
+			expect(parseSecretCommand(line, "tui")).toEqual({ subcommand: "help" });
 		}
 	});
 
 	/**
-	 * THE FIRST WORD DECIDES, and a word the parser does not reserve is a credential. `manager` is
-	 * the test case on purpose: it is the kind of word a stale piece of advice or an old habit puts
-	 * on this line, and the answer has to be storage rather than a command, because a grammar that
-	 * guessed at near-misses would guess at credentials too.
+	 * A FIRST WORD THAT IS NOT A VERB IS REFUSED, and `manager` is the case on purpose: it is the
+	 * word a stale piece of advice or an old habit puts on this line. It used to be STORED — the
+	 * parser read any unreserved first word as the credential — so a mistyped verb became a vault
+	 * entry named `SECRET_1` and switched protection on, and the operator's answer to "what do I
+	 * have" was the word they had mistyped.
+	 *
+	 * `value` is asserted absent on the thrown path by construction: nothing is returned at all.
 	 */
-	it("reads an unreserved word as the credential, whatever it looks like", () => {
-		expect(parseSecretCommand("manager", "tui")).toEqual({ subcommand: "add", value: "manager" });
-		expect(parseSecretCommand("  MANAGER  ", "tui")).toEqual({ subcommand: "add", value: "MANAGER" });
+	it("refuses a word that is not a verb, rather than storing it", () => {
+		for (const line of ["manager", "  MANAGER  ", "ghp_pastedFromMuscleMemory", "lst"]) {
+			expect(() => parseSecretCommand(line, "tui")).toThrow(/Unknown \/secret command/u);
+		}
+	});
+
+	/**
+	 * AND THE REFUSAL SAYS THE LINE IS EXPOSED, without repeating it.
+	 *
+	 * This is the cost of requiring the verb, and it is worth paying explicitly rather than silently.
+	 * The operator who types `/secret ghp_…` is the one who learned the verbless gesture, and the
+	 * refusal leaves them in a state neither outcome prepares them for: nothing was stored, AND the
+	 * credential is in the scrollback of a session that will not obfuscate it, because the vault never
+	 * saw it. A bare "unknown command" would let them believe a credential is protected while it sits
+	 * on screen in plaintext, which is the failure mode of the entire feature.
+	 *
+	 * Both halves are asserted together, because the warning must not be bought by echoing the bytes.
+	 */
+	it("warns that a refused line is exposed, and never repeats it", () => {
+		const message = messageOf(() => parseSecretCommand("ghp_pastedFromMuscleMemory", "tui"));
+
+		expect(message).toContain("Nothing was stored.");
+		expect(message).toContain("in your scrollback and was never protected");
+		expect(message).toContain("rotate it");
+		expect(message).toContain("/secret add");
+		expect(message).not.toContain("ghp_pastedFromMuscleMemory");
 	});
 
 	/**
@@ -943,20 +1040,59 @@ describe("the terminal grammar", () => {
 	 * fell back to storage when a verb did not fit its shape would turn `/secret log 50` into a
 	 * credential and report it as a success.
 	 *
-	 * The refusal has to carry the escape, because the operator whose credential really does start
-	 * with a reserved word has exactly one way to say so and no reason to guess it.
+	 * The refusal has to name the escape, because the operator whose credential really does start
+	 * with a reserved word has to be told the one spelling that expresses it.
 	 */
-	it("refuses a malformed reserved line and names the escape", () => {
-		expect(() => parseSecretCommand("log 50", "tui")).toThrow(/\/secret -- <value>/u);
-		expect(() => parseSecretCommand("list everything", "tui")).toThrow(/\/secret -- <value>/u);
+	it("refuses a malformed reserved line and names the value form", () => {
+		// `log 50` is WELL FORMED now -- a bare number is the limit -- so the malformed line is one with
+		// a word no slot can hold. Both rows still prove the same thing: a reserved first word is a
+		// command however badly the rest is written, and the operator is told the one spelling that
+		// stores such a line as a credential.
+		expect(() => parseSecretCommand("log 50 20", "tui")).toThrow(/\/secret add <value>/u);
+		expect(() => parseSecretCommand("list everything", "tui")).toThrow(/\/secret add <value>/u);
 	});
 
 	/** And the escape stores that same line verbatim, reserved first word and all. */
 	it("stores an escaped line as the credential, byte for byte", () => {
-		expect(parseSecretCommand("-- log 50", "tui")).toEqual({
+		expect(parseSecretCommand("add log 50", "tui")).toEqual({
 			subcommand: "add",
 			value: "log 50",
 		});
+	});
+
+	/**
+	 * THE REMOVED `--` SPELLING FAILS CLOSED WHERE A VALUE IS READ, because the alternative is a
+	 * corrupted credential. `--` is not a verb, so deleting its branch and nothing else would have
+	 * sent `add -- sk-x` to the value reader, which slices from the first token to the last and would
+	 * have stored the dashes as part of the credential. `#NAME#` then expands to `-- sk-x`, the
+	 * request fails authentication somewhere else entirely, and nothing on screen connects that to a
+	 * slash command. A credential is the one input whose corruption stays invisible until it is spent.
+	 *
+	 * Before `add`, `--` is simply not a command, so it is refused as one. Both refusals store
+	 * nothing, and neither is allowed to become a value.
+	 */
+	it("refuses -- after add rather than storing the dashes", () => {
+		for (const line of ["add -- sk-live-x", "add --"]) {
+			expect(() => parseSecretCommand(line, "tui")).toThrow(/not part of \/secret/u);
+			expect(() => parseSecretCommand(line, "tui")).toThrow(/\/secret add <value>/u);
+		}
+	});
+
+	/** And as a first word it is refused for the ordinary reason: it is not a command. */
+	it("refuses -- as a first word", () => {
+		for (const line of ["-- log 50", "-- sk-live-x", "--"]) {
+			expect(() => parseSecretCommand(line, "tui")).toThrow(/Unknown \/secret command/u);
+		}
+	});
+
+	/**
+	 * ONLY THE EXACT TOKEN. A credential that merely begins with dashes is stored byte for byte:
+	 * widening the refusal to any `--` prefix would reject real values, which is the opposite failure
+	 * and a louder one.
+	 */
+	it("still stores a value that only begins with dashes", () => {
+		expect(parseSecretCommand("add --abc", "tui")).toEqual({ subcommand: "add", value: "--abc" });
+		expect(parseSecretCommand("add ---", "tui")).toEqual({ subcommand: "add", value: "---" });
 	});
 
 	/**
@@ -965,62 +1101,74 @@ describe("the terminal grammar", () => {
 	 * a credential that fails to authenticate with nothing on screen to say why.
 	 */
 	it("keeps whitespace inside the credential and drops only what surrounds it", () => {
-		expect(parseSecretCommand("   correct horse  battery\tstaple   ", "tui")).toEqual({
+		expect(parseSecretCommand("add    correct horse  battery\tstaple   ", "tui")).toEqual({
 			subcommand: "add",
 			value: "correct horse  battery\tstaple",
 		});
 	});
 
 	/**
-	 * `add` IS a verb again in a terminal, and it is a synonym for the bare form rather than the
-	 * noninteractive `add <name> <value>`. The distinction is the security property: a name parsed
-	 * off this line would be a live credential written to the vault's plaintext metadata and echoed
-	 * back on screen, which is how `/secret add ghp_realToken` used to store a token as a NAME.
+	 * `add` in a terminal is NOT the noninteractive `add <name> <value>`. The distinction is the
+	 * security property: a name parsed off this line would be a live credential written to the vault's
+	 * plaintext metadata and echoed back on screen, which is how `/secret add ghp_realToken` used to
+	 * store a token as a NAME.
 	 *
 	 * So the value is the rest of the line and `name` stays absent. A regression that restored
 	 * positional-name parsing on this surface fails on the `name` assertion, not the value one.
 	 */
-	it("reads add as a synonym for the bare value form, with no name", () => {
+	it("reads the line after add as the value, with no name", () => {
 		const request = parseSecretCommand("add GITHUB_TOKEN", "tui");
 
 		expect(request).toEqual({ subcommand: "add", value: "GITHUB_TOKEN" });
 		expect(request.name).toBeUndefined();
 	});
 
-	/** `/secret add` alone is the masked field, exactly as a bare line is. */
+	/** `/secret add` alone is the masked field: a valueless add is what `needsValuePrompt` reads. */
 	it("opens the masked field for a bare add", () => {
 		expect(parseSecretCommand("add", "tui")).toEqual({ subcommand: "add" });
-		expect(parseSecretCommand("add --from-env MY_VAR", "tui")).toEqual({ subcommand: "add", fromEnv: "MY_VAR" });
 	});
 
 	/**
-	 * `--from-env` survives, in leading position only: it is the one entry form that never puts the
-	 * credential on screen at all, so dropping it from the terminal would have left the safest path
-	 * to ACP clients and not to the operator. A trailing extra word is refused rather than guessed
-	 * at, because the flag reading and the credential reading of that line are mutually exclusive.
+	 * `--from-env` survives, in leading position after the verb only: it is the one entry form that
+	 * never puts the credential on screen at all, so dropping it from the terminal would have left the
+	 * safest path to ACP clients and not to the operator. A trailing extra word is refused rather than
+	 * guessed at, because the flag reading and the credential reading of that line are mutually
+	 * exclusive.
 	 */
-	it("reads a leading --from-env and refuses one carrying an extra word", () => {
-		expect(parseSecretCommand("--from-env MY_VAR", "tui")).toEqual({ subcommand: "add", fromEnv: "MY_VAR" });
-		expect(() => parseSecretCommand("--from-env MY_VAR extra", "tui")).toThrow(
-			"--from-env needs the name of an environment variable, and nothing else.",
+	it("reads from-env as a command of its own, with the name optional in a terminal", () => {
+		expect(parseSecretCommand("from-env MY_VAR", "tui")).toEqual({ subcommand: "from-env", fromEnv: "MY_VAR" });
+		expect(parseSecretCommand("env MY_VAR", "tui")).toEqual({ subcommand: "from-env", fromEnv: "MY_VAR" });
+		// The name may be written, and then it is the same line the client writes. A terminal leaves it
+		// out because a field asks for it; leaving it out is the option, not the spelling.
+		expect(parseSecretCommand("from-env MY_VAR CHOSEN_NAME 7d", "tui")).toEqual({
+			subcommand: "from-env",
+			fromEnv: "MY_VAR",
+			name: "CHOSEN_NAME",
+			ttl: 7 * 24 * 60 * 60 * 1000,
+		});
+		// And one word past the name is refused, on the surface where the name is the last slot there is.
+		expect(() => parseSecretCommand("from-env MY_VAR CHOSEN_NAME MORE", "tui")).toThrow(
+			"/secret from-env cannot read the word in position 3",
 		);
 	});
 
 	/**
-	 * A WORD THIS SURFACE CANNOT READ AS A CREDENTIAL EITHER. In a terminal an unrecognised first
-	 * word is the value; where a value cannot be typed at all, the same word has no second reading,
-	 * so it is refused. The refusal carries the whole usage rather than the word alone, because the
-	 * caller cannot open a help screen and the list of what it CAN run is the actionable part.
+	 * THE SAME REFUSAL ON THE OTHER SURFACE, minus the exposure warning. A client or a `-p`
+	 * invocation never had the verbless form to unlearn, and the tail of its line is argv rather than
+	 * something a person just typed on screen, so the scrollback sentence would be advice about a
+	 * screen that may not exist. The refusal still carries the whole usage, because the caller cannot
+	 * open a help screen and the list of what it CAN run is the actionable part.
 	 *
-	 * AND IT DOES NOT REPEAT THE WORD. A client, or a `-p` invocation, typing `/secret ghp_…` lands
-	 * exactly here, so the unknown first token is very often the credential itself: echoing it would
-	 * write it into the refusal, the scrollback and the saved transcript.
+	 * AND IT DOES NOT REPEAT THE WORD, on either surface: the unknown first token is very often the
+	 * credential itself, so echoing it would write it into the refusal, the scrollback and the saved
+	 * transcript.
 	 */
-	it("refuses an unreadable word where a value cannot be typed, and prints what can be run", () => {
+	it("refuses an unknown word on the noninteractive surface without the scrollback warning", () => {
 		const message = messageOf(() => parseSecretCommand("ghp_wordThisSurfaceCannotRead", "noninteractive"));
 
-		expect(message).toContain("Unknown /secret subcommand.");
+		expect(message).toContain("Unknown /secret command.");
 		expect(message).toContain(secretCommandUsage("noninteractive"));
+		expect(message).not.toContain("scrollback");
 		expect(message).not.toContain("ghp_wordThisSurfaceCannotRead");
 	});
 });

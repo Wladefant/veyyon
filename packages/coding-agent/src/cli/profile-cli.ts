@@ -72,7 +72,7 @@ export const PROFILE_COPY_ITEMS: readonly ProfileCopyItem[] = [
 		key: "settings",
 		label: "Settings",
 		description: "Everything `veyyon config list` shows",
-		files: [...MAIN_CONFIG_FILENAMES],
+		files: MAIN_CONFIG_FILENAMES.slice(),
 	},
 	{ key: "mcp", label: "MCP servers", description: "mcp.json server config", files: ["mcp.json"] },
 	{ key: "ssh", label: "SSH targets", description: "ssh.json remote targets", files: ["ssh.json"] },
@@ -107,8 +107,9 @@ export interface ProfilePreset {
  * args fingerprints — see captureToolCallMetrics) and enables Argot, the
  * experimental token-shorthand codec. Both are safe with any model, so a fresh
  * `dev` profile runs without extra configuration. Vision-only experiments
- * and role-model features (advisor, prewalk) are left off
- * because they need a vision or extra-role model to be useful; enable them per
+ * and the advisor (a role-model feature) are left off because they need a
+ * vision or extra-role model to be useful; prewalk instead needs its two
+ * model settings (prewalk.cheapModel, prewalk.strongModel). Enable these per
  * session once those models are configured.
  */
 export const PROFILE_PRESETS: Record<string, ProfilePreset> = {
@@ -298,7 +299,7 @@ async function clearCopiedDisplayName(agentDir: string): Promise<void> {
 		try {
 			parsed = YAML.parse(text);
 		} catch (error) {
-			throw new Error(`Copied settings file ${filePath} is not valid YAML: ${String(error)}`);
+			throw new Error(`Copied settings file ${filePath} is not valid YAML: ${errorMessage(error)}`);
 		}
 		if (!isRecord(parsed)) continue;
 		const root = parsed as Record<string, unknown>;

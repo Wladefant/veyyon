@@ -173,7 +173,9 @@ describe("AuthStorage codex oauth ranking", () => {
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-ai-auth-codex-selection-"));
 		dbPath = path.join(tempDir, "agent.db");
 		store = await SqliteAuthCredentialStore.open(dbPath);
+		// Ranking and rotation among accounts nobody chose is opt-in; the default decides nothing.
 		authStorage = new AuthStorage(store, {
+			loadBalancing: true,
 			usageProviderResolver: provider => (provider === "openai-codex" ? usageProvider : undefined),
 		});
 		usageByAccount.clear();
@@ -290,6 +292,37 @@ describe("AuthStorage codex oauth ranking", () => {
 
 		const apiKey = await authStorage.getApiKey("openai-codex", "session-exhausted");
 		expect(apiKey).toBe("api-acct-healthy");
+	});
+
+	test("falls back to the earliest-unblocking account when all are exhausted and it is listed last", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+
+		// The mirror of the all-exhausted fallback below: the soonest reset sits at the end of the
+		// list, so only a block ordered by its reset, not the list order, can name it.
+		await authStorage.set("openai-codex", [
+			{ type: "oauth", ...createCredential("acct-later-first", "later-first@example.com") },
+			{ type: "oauth", ...createCredential("acct-soon-last", "soon-last@example.com") },
+		]);
+
+		usageByAccount.set(
+			"acct-later-first",
+			createCodexUsageReport({
+				accountId: "acct-later-first",
+				primary: { usedFraction: 1, resetInMs: 30 * 60 * 1000 },
+				secondary: { usedFraction: 1, resetInMs: 30 * 60 * 1000 },
+			}),
+		);
+		usageByAccount.set(
+			"acct-soon-last",
+			createCodexUsageReport({
+				accountId: "acct-soon-last",
+				primary: { usedFraction: 1, resetInMs: 5 * 60 * 1000 },
+				secondary: { usedFraction: 1, resetInMs: 5 * 60 * 1000 },
+			}),
+		);
+
+		const apiKey = await authStorage.getApiKey("openai-codex", "session-all-exhausted-reversed");
+		expect(apiKey).toBe("api-acct-soon-last");
 	});
 
 	test("temporarily blocks only the exhausted Codex OAuth credential after a quota 429", async () => {
@@ -703,6 +736,7 @@ describe("AuthStorage codex oauth ranking", () => {
 
 		const reopenedStore = await SqliteAuthCredentialStore.open(dbPath);
 		const reopenedAuthStorage = new AuthStorage(reopenedStore, {
+			loadBalancing: true,
 			usageProviderResolver: provider => (provider === "openai-codex" ? usageProvider : undefined),
 		});
 		try {
@@ -788,8 +822,8 @@ describe("AuthStorage codex oauth ranking", () => {
 				initialSnapshot: initialResult.snapshot,
 				streamSnapshots: false,
 			});
-			const clientStorageA = new AuthStorage(remoteStoreA);
-			const clientStorageB = new AuthStorage(remoteStoreB);
+			const clientStorageA = new AuthStorage(remoteStoreA, { loadBalancing: true });
+			const clientStorageB = new AuthStorage(remoteStoreB, { loadBalancing: true });
 			await clientStorageA.reload();
 			await clientStorageB.reload();
 			try {
@@ -936,7 +970,7 @@ describe("AuthStorage codex oauth ranking", () => {
 				initialSnapshot: snapshotWithBlock.snapshot,
 				streamSnapshots: false,
 			});
-			const clientStorageB = new AuthStorage(remoteStoreB);
+			const clientStorageB = new AuthStorage(remoteStoreB, { loadBalancing: true });
 			await clientStorageB.reload();
 			try {
 				expect(remoteStoreB.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBe(blockedUntilMs);
@@ -1043,7 +1077,7 @@ describe("AuthStorage codex oauth ranking", () => {
 				initialSnapshot: clientAInitial.snapshot,
 				streamSnapshots: false,
 			});
-			const clientStorageA = new AuthStorage(remoteStoreA);
+			const clientStorageA = new AuthStorage(remoteStoreA, { loadBalancing: true });
 			await clientStorageA.reload();
 			try {
 				let blockedSessionId: string | undefined;
@@ -1096,7 +1130,7 @@ describe("AuthStorage codex oauth ranking", () => {
 					initialSnapshot: snapshotWithBlock.snapshot,
 					streamSnapshots: false,
 				});
-				const clientStorageB = new AuthStorage(remoteStoreB);
+				const clientStorageB = new AuthStorage(remoteStoreB, { loadBalancing: true });
 				await clientStorageB.reload();
 				try {
 					expect(remoteStoreB.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeDefined();
@@ -1282,7 +1316,7 @@ describe("AuthStorage codex oauth ranking", () => {
 				initialSnapshot: initialResult.snapshot,
 				streamSnapshots: false,
 			});
-			const clientStorage = new AuthStorage(remoteStore);
+			const clientStorage = new AuthStorage(remoteStore, { loadBalancing: true });
 			await clientStorage.reload();
 			try {
 				expect(remoteStore.getCredentialBlock(blockedRow.id, "openai-codex:oauth", "shared")).toBeDefined();
@@ -1722,6 +1756,7 @@ describe("AuthStorage codex oauth ranking", () => {
 		if (!store) throw new Error("test setup failed");
 
 		const slowAuthStorage = new AuthStorage(store, {
+			loadBalancing: true,
 			usageProviderResolver: provider =>
 				provider === "openai-codex"
 					? ({
@@ -2112,7 +2147,9 @@ describe("AuthStorage claude oauth ranking", () => {
 	beforeEach(async () => {
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-ai-auth-claude-selection-"));
 		store = await SqliteAuthCredentialStore.open(path.join(tempDir, "agent.db"));
+		// Headroom ranking is account movement, which the library holds off unless a host opts in.
 		authStorage = new AuthStorage(store, {
+			loadBalancing: true,
 			usageProviderResolver: provider => (provider === "anthropic" ? usageProvider : undefined),
 		});
 		usageByAccount.clear();

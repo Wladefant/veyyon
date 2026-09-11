@@ -1,6 +1,6 @@
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
-import type { DiscoveryFailure, DiscoveryHooks } from "../discovery/failure";
+import { type DiscoveryFailure, type DiscoveryHooks, readDiscoveryJson } from "../discovery/failure";
 import {
 	fetchOpenAICompatibleModels,
 	type OpenAICompatibleModelMapperContext,
@@ -33,8 +33,8 @@ import type {
 	ThinkingConfig,
 } from "../types";
 import { discoveryFetch, isAnthropicOAuthToken, isRecord, toBoolean, toNumber, toPositiveNumber } from "../utils";
-import { coreWeaveProjectHeaders } from "../wire/coreweave";
 import { CODEX_BASE_URL } from "../wire/codex";
+import { coreWeaveProjectHeaders } from "../wire/coreweave";
 import {
 	COPILOT_API_HEADERS,
 	getGitHubCopilotBaseUrl,
@@ -42,6 +42,7 @@ import {
 	PERSONAL_GITHUB_COPILOT_BASE_URL,
 	parseGitHubCopilotApiKey,
 } from "../wire/github-copilot";
+import { getOpenCodeUserAgent } from "../wire/opencode-headers";
 import { basetenRouteReasoning } from "./baseten-reasoning";
 import { createBundledReferenceMap, createReferenceResolver, toModelSpec } from "./bundled-references";
 
@@ -171,11 +172,7 @@ export function mapModelsDevReasoningOptions(
 }
 
 function toModelName(value: unknown, fallback: string): string {
-	if (typeof value !== "string") {
-		return fallback;
-	}
-	const trimmed = value.trim();
-	return trimmed.length > 0 ? trimmed : fallback;
+	return toNonEmptyString(value) ?? fallback;
 }
 
 function toInputCapabilities(value: unknown): ("text" | "image")[] {
@@ -399,7 +396,15 @@ function toAnthropicDiscoveryBaseUrl(baseUrl: string): string {
 	return baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
 }
 
-function normalizeOllamaBaseUrl(baseUrl?: string): string {
+/**
+ * The OpenAI-compatible base URL for an Ollama endpoint: the configured origin AND PATH, with
+ * exactly one `/v1` on the end.
+ *
+ * The path is the part worth stating. An Ollama reached through a reverse proxy is mounted at a
+ * subpath (`http://gateway:11434/ollama`), and a normalizer that keeps only the origin sends every
+ * request to the proxy's root, where nothing answers.
+ */
+export function normalizeOllamaBaseUrl(baseUrl?: string): string {
 	const value = baseUrl?.trim();
 	if (!value) {
 		return "http://127.0.0.1:11434/v1";
@@ -408,7 +413,8 @@ function normalizeOllamaBaseUrl(baseUrl?: string): string {
 	return trimmed.endsWith("/v1") ? trimmed : `${trimmed}/v1`;
 }
 
-function toOllamaNativeBaseUrl(baseUrl: string): string {
+/** The same endpoint addressed by Ollama's own API, which is the OpenAI-compatible one without `/v1`. */
+export function toOllamaNativeBaseUrl(baseUrl: string): string {
 	return baseUrl.endsWith("/v1") ? baseUrl.slice(0, -3) : baseUrl;
 }
 
@@ -435,19 +441,12 @@ async function fetchOllamaNativeModels(
 		report("request", errorMessage(error));
 		return null;
 	}
-	if (!response.ok) {
-		report("status", `HTTP ${response.status} ${response.statusText}`.trim());
-		return null;
-	}
-	let payload: { models?: Array<{ name?: string; model?: string }> };
-	try {
-		payload = (await response.json()) as { models?: Array<{ name?: string; model?: string }> };
-	} catch (error) {
-		// Previously this threw out of the whole fetcher rather than answering `null`, so a captive portal or
-		// an HTML proxy page turned one provider's discovery into an `unhandled` stage blamed on this reader.
-		report("body", errorMessage(error));
-		return null;
-	}
+	// A captive portal or an HTML proxy page is a `body` failure answered with `null`, not an `unhandled`
+	// stage thrown out of the whole fetcher and blamed on this reader.
+	const payload = (await readDiscoveryJson(response, report)) as
+		| { models?: Array<{ name?: string; model?: string }> }
+		| undefined;
+	if (payload === undefined) return null;
 	const entries = payload.models ?? [];
 	const resolved = await Promise.all(
 		entries.map(async (entry): Promise<ModelSpec<"openai-responses"> | null> => {
@@ -527,7 +526,7 @@ function getOllamaThinkingConfig(capabilities: string[] | undefined): ThinkingCo
 	if (!capabilities?.includes("thinking")) {
 		return undefined;
 	}
-	return { mode: "effort", efforts: [...OLLAMA_WIRE_EFFORTS] };
+	return { mode: "effort", efforts: OLLAMA_WIRE_EFFORTS.slice() };
 }
 
 /**
@@ -564,17 +563,10 @@ async function fetchOllamaShowMetadata(
 		report("request", errorMessage(error));
 		return undefined;
 	}
-	if (!response.ok) {
-		report("status", `HTTP ${response.status} ${response.statusText}`.trim());
-		return undefined;
-	}
-	let payload: { capabilities?: unknown; model_info?: Record<string, unknown> };
-	try {
-		payload = (await response.json()) as { capabilities?: unknown; model_info?: Record<string, unknown> };
-	} catch (error) {
-		report("body", errorMessage(error));
-		return undefined;
-	}
+	const payload = (await readDiscoveryJson(response, report)) as
+		| { capabilities?: unknown; model_info?: Record<string, unknown> }
+		| undefined;
+	if (payload === undefined) return undefined;
 	const capabilities = getOllamaCapabilities(payload.capabilities);
 	const contextWindow = getOllamaContextWindow(payload.model_info);
 	return {
@@ -1056,7 +1048,7 @@ function isGeneratedOpenAIProReasoningAlias(model: ModelSpec<Api>): boolean {
 export function projectOpenAIProReasoningAliases(models: readonly ModelSpec<Api>[]): ModelSpec<Api>[] {
 	const kept = models.filter(model => !isGeneratedOpenAIProReasoningAlias(model));
 	const ids = new Set(kept.map(model => `${model.provider}/${model.id}`));
-	const out = [...kept];
+	const out = kept.slice();
 	for (const model of kept) {
 		if (model.provider !== "openai") continue;
 		if (!OPENAI_PRO_REASONING_BASE_IDS[model.id]) continue;
@@ -1510,7 +1502,7 @@ function applyXAIOAuthCuration(dynamic: readonly ModelSpec<"openai-responses">[]
 		(e): e is ModelSpec<"openai-responses"> => e !== undefined,
 	);
 	const rest = filtered.filter(e => !curatedIds.has(e.id)).map(withXaiOAuthCompatDefaults);
-	return [...curatedFirst, ...rest];
+	return curatedFirst.concat(rest);
 }
 
 /**
@@ -2273,6 +2265,9 @@ export interface OpenCodeModelManagerConfig {
 	fetch?: FetchImpl;
 }
 
+const OPENCODE_ZEN_DEFAULT_BASE_PATH = "https://opencode.ai/zen";
+const OPENCODE_GO_DEFAULT_BASE_PATH = "https://opencode.ai/zen/go";
+
 function normalizeOpenCodeBasePath(baseUrl: string | undefined, fallbackBasePath: string): string {
 	const value = normalizeAnthropicBaseUrl(baseUrl, fallbackBasePath);
 	return value.endsWith("/v1") ? value.slice(0, -3) : value;
@@ -2280,6 +2275,11 @@ function normalizeOpenCodeBasePath(baseUrl: string | undefined, fallbackBasePath
 
 function openCodeBaseUrlForApi(api: Api, basePath: string): string {
 	return api === "anthropic-messages" ? basePath : `${basePath}/v1`;
+}
+
+function resolveOpenCodeDiscoveryBaseUrl(baseUrl: string | undefined, defaultBasePath: string): string {
+	const basePath = normalizeOpenCodeBasePath(baseUrl, defaultBasePath);
+	return openCodeBaseUrlForApi("openai-completions", basePath);
 }
 
 function openCodeModelCacheProviderId(
@@ -2292,6 +2292,41 @@ function openCodeModelCacheProviderId(
 	return `${providerId}:models-v1:${Bun.hash(scope).toString(36)}`;
 }
 
+export function resolveOpencodeZenCacheProviderId(config?: OpenCodeModelManagerConfig): string {
+	const discoveryBaseUrl = resolveOpenCodeDiscoveryBaseUrl(config?.baseUrl, OPENCODE_ZEN_DEFAULT_BASE_PATH);
+	return openCodeModelCacheProviderId("opencode-zen", config?.apiKey, discoveryBaseUrl);
+}
+
+export function resolveOpencodeGoCacheProviderId(config?: OpenCodeModelManagerConfig): string {
+	const discoveryBaseUrl = resolveOpenCodeDiscoveryBaseUrl(config?.baseUrl, OPENCODE_GO_DEFAULT_BASE_PATH);
+	return openCodeModelCacheProviderId("opencode-go", config?.apiKey, discoveryBaseUrl);
+}
+
+/**
+ * Provider-scoped models.dev rows for one OpenCode gateway. The gateway's
+ * `/v1/models` listing carries ids only, so the wire API for an id the bundle
+ * predates (`muse-spark-1.3-contributor-free` shipped as `@ai-sdk/openai`,
+ * i.e. Responses-only; `/chat/completions` returns HTTP 500) can only come
+ * from models.dev. The same descriptor rules the generator uses resolve the
+ * row, so runtime and bundle agree; the bundle is the offline fallback.
+ *
+ * No discovery hooks: `onFailure` is the reason for a `null` catalog, and a
+ * models.dev miss leaves the gateway listing intact and the bundle in place.
+ * Reporting it would warn "discovery failed" for a provider whose models were
+ * discovered.
+ */
+async function loadOpenCodeModelsDevReferences(
+	providerId: "opencode-go" | "opencode-zen",
+	fetchImpl?: FetchImpl,
+): Promise<Map<string, ModelSpec<Api>>> {
+	const references = new Map<string, ModelSpec<Api>>();
+	const payload = await fetchModelsDevPayload(fetchImpl);
+	if (!isRecord(payload)) return references;
+	const descriptors = MODELS_DEV_PROVIDER_DESCRIPTORS.filter(descriptor => descriptor.providerId === providerId);
+	for (const model of mapModelsDevToModels(payload, descriptors)) references.set(model.id, model);
+	return references;
+}
+
 function openCodeModelManagerOptions(
 	providerId: "opencode-go" | "opencode-zen",
 	defaultBasePath: string,
@@ -2300,21 +2335,25 @@ function openCodeModelManagerOptions(
 	const apiKey = config?.apiKey;
 	const basePath = normalizeOpenCodeBasePath(config?.baseUrl, defaultBasePath);
 	const discoveryBaseUrl = openCodeBaseUrlForApi("openai-completions", basePath);
-	const references = createBundledReferenceMap<Api>(providerId);
+	const bundledReferences = createBundledReferenceMap<Api>(providerId);
 	return {
 		providerId,
 		cacheProviderId: openCodeModelCacheProviderId(providerId, apiKey, discoveryBaseUrl),
 		dynamicModelsAuthoritative: true,
 		...(apiKey && {
-			fetchDynamicModels: hooks =>
-				fetchOpenAICompatibleModels<Api>({
+			fetchDynamicModels: async hooks => {
+				const modelsDevReferences = await loadOpenCodeModelsDevReferences(providerId, config?.fetch);
+				return fetchOpenAICompatibleModels<Api>({
 					onFailure: hooks?.onFailure,
 					api: "openai-completions",
 					provider: providerId,
 					baseUrl: discoveryBaseUrl,
 					apiKey,
+					// The gateway flags traffic with no client user agent, and discovery
+					// reads it with the same key as a completion request.
+					headers: { "User-Agent": getOpenCodeUserAgent() },
 					mapModel: (entry, defaults) => {
-						const reference = references.get(defaults.id);
+						const reference = modelsDevReferences.get(defaults.id) ?? bundledReferences.get(defaults.id);
 						const name = toModelName(entry.name, reference?.name ?? defaults.name);
 						if (!reference) {
 							return {
@@ -2332,17 +2371,18 @@ function openCodeModelManagerOptions(
 						};
 					},
 					fetch: config?.fetch,
-				}),
+				});
+			},
 		}),
 	};
 }
 
 export function opencodeZenModelManagerOptions(config?: OpenCodeModelManagerConfig): ModelManagerOptions<Api> {
-	return openCodeModelManagerOptions("opencode-zen", "https://opencode.ai/zen", config);
+	return openCodeModelManagerOptions("opencode-zen", OPENCODE_ZEN_DEFAULT_BASE_PATH, config);
 }
 
 export function opencodeGoModelManagerOptions(config?: OpenCodeModelManagerConfig): ModelManagerOptions<Api> {
-	return openCodeModelManagerOptions("opencode-go", "https://opencode.ai/zen/go", config);
+	return openCodeModelManagerOptions("opencode-go", OPENCODE_GO_DEFAULT_BASE_PATH, config);
 }
 
 // ---------------------------------------------------------------------------
@@ -2424,6 +2464,12 @@ export interface OpenRouterModelManagerConfig {
 	fetch?: FetchImpl;
 }
 
+const OPENROUTER_CACHE_PROVIDER_ID = "openrouter:pseudo-api";
+
+export function resolveOpenrouterCacheProviderId(_config?: OpenRouterModelManagerConfig): string {
+	return OPENROUTER_CACHE_PROVIDER_ID;
+}
+
 export function openrouterModelManagerOptions(
 	config?: OpenRouterModelManagerConfig,
 ): ModelManagerOptions<"openrouter"> {
@@ -2435,7 +2481,7 @@ export function openrouterModelManagerOptions(
 		// Older builds cached OpenRouter discovery rows as `api: "openai-completions"`.
 		// Namespace the refreshed pseudo-API cache separately so those rows cannot
 		// override bundled `api: "openrouter"` models during online-if-uncached startup.
-		cacheProviderId: "openrouter:pseudo-api",
+		cacheProviderId: OPENROUTER_CACHE_PROVIDER_ID,
 		fetchDynamicModels: hooks =>
 			fetchOpenAICompatibleModels({
 				onFailure: hooks?.onFailure,
@@ -2836,7 +2882,12 @@ function getLmStudioNativeInput(entry: Record<string, unknown>): ("text" | "imag
 }
 
 function getLmStudioNativeContextWindow(entry: Record<string, unknown>): number | undefined {
+	// `loaded_context_length` is the window the server was started with and the only one it
+	// accepts; `max_context_length` is the model's ceiling, which a load smaller than the
+	// ceiling never reaches. Reading the ceiling made a session plan for context the server
+	// refuses, so a long run failed with a provider error instead of compacting in time.
 	return (
+		toPositiveNumber(entry.loaded_context_length, null) ??
 		toPositiveNumber(entry.max_context_length, null) ??
 		toPositiveNumber(entry.context_length, null) ??
 		toPositiveNumber(entry.max_model_len, null) ??
@@ -3164,6 +3215,212 @@ export function coreWeaveModelManagerOptions(
 		...config,
 		headers: () => coreWeaveProjectHeaders(Bun.env),
 	});
+}
+
+// ---------------------------------------------------------------------------
+// 15.6 Command Code
+// ---------------------------------------------------------------------------
+
+/**
+ * The Command Code models the provider documents with fixed rates and context
+ * windows (the coding flagships of its open-model catalog). Its Provider API
+ * lists every hosted model publicly, so live discovery with a key widens the
+ * list at runtime; the seed keeps the provider usable when generation has no
+ * key. Output ceilings are left unset: the endpoint is an OpenAI-compatible
+ * proxy and does not document a per-model completion cap.
+ */
+export const COMMAND_CODE_STATIC_MODELS: readonly ModelSpec<"openai-completions">[] = [
+	{
+		id: "moonshotai/Kimi-K2.7-Code",
+		name: "Kimi K2.7 Code",
+		api: "openai-completions",
+		provider: "command-code",
+		baseUrl: "https://api.commandcode.ai/provider/v1",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 },
+		contextWindow: 256000,
+		maxTokens: null,
+	},
+	{
+		id: "zai-org/GLM-5.3",
+		name: "GLM-5.3",
+		api: "openai-completions",
+		provider: "command-code",
+		baseUrl: "https://api.commandcode.ai/provider/v1",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
+		contextWindow: 1000000,
+		maxTokens: null,
+	},
+	{
+		id: "MiniMaxAI/MiniMax-M3",
+		name: "MiniMax M3",
+		api: "openai-completions",
+		provider: "command-code",
+		baseUrl: "https://api.commandcode.ai/provider/v1",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 },
+		contextWindow: 1000000,
+		maxTokens: null,
+	},
+];
+
+export interface CommandCodeModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+export function commandCodeModelManagerOptions(
+	config?: CommandCodeModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	return createSimpleOpenAICompletionsOptions(
+		"command-code",
+		"https://api.commandcode.ai/provider/v1",
+		config,
+		(entry, model) => ({
+			...model,
+			contextWindow: toPositiveNumber(entry.context_length, model.contextWindow),
+			// The Provider API publishes context_length but no output ceiling.
+			maxTokens: null,
+		}),
+	);
+}
+
+// ---------------------------------------------------------------------------
+// 15.7 Nous Research
+// ---------------------------------------------------------------------------
+
+/**
+ * Nous Portal serves an OpenRouter-shaped catalog containing chat, embedding,
+ * and media-generation rows. Only tool-capable text-output models can drive the
+ * coding agent, so discovery rejects the other product surfaces before they
+ * reach the runtime picker.
+ */
+const NOUS_RESEARCH_BASE_URL = "https://inference-api.nousresearch.com/v1";
+
+export const NOUS_RESEARCH_STATIC_MODELS: readonly ModelSpec<"openai-completions">[] = [
+	{
+		id: "anthropic/claude-sonnet-4.6",
+		name: "Anthropic: Claude Sonnet 4.6",
+		api: "openai-completions",
+		provider: "nous-research",
+		baseUrl: NOUS_RESEARCH_BASE_URL,
+		reasoning: true,
+		input: ["text"],
+		supportsTools: true,
+		compat: { supportsToolChoice: false },
+		cost: { input: 2.4, output: 12, cacheRead: 0.24, cacheWrite: 3 },
+		pricing: "published",
+		contextWindow: 1000000,
+		maxTokens: null,
+	},
+];
+
+/** Static rows eligible for the credential-less coding-model bundle. */
+export const NOUS_RESEARCH_BUNDLED_MODELS = NOUS_RESEARCH_STATIC_MODELS;
+
+function isNousToolCapableChatModel(entry: OpenAICompatibleModelRecord): boolean {
+	const parameters = Array.isArray(entry.supported_parameters)
+		? entry.supported_parameters.filter((value): value is string => typeof value === "string")
+		: [];
+	if (!parameters.includes("tools")) {
+		return false;
+	}
+	const architecture = isRecord(entry.architecture) ? entry.architecture : {};
+	const outputModalities = Array.isArray(architecture.output_modalities) ? architecture.output_modalities : [];
+	if (outputModalities.length > 0) {
+		return outputModalities.includes("text");
+	}
+	const modality = typeof architecture.modality === "string" ? architecture.modality : "";
+	return modality.length === 0 || modality.split("->").at(-1) === "text";
+}
+
+function mapNousResearchModel(
+	entry: OpenAICompatibleModelRecord,
+	defaults: ModelSpec<"openai-completions">,
+	reference: ModelSpec<"openai-completions"> | undefined,
+): ModelSpec<"openai-completions"> {
+	const baseModel = mapWithBundledReference(entry, defaults, reference);
+	const parameters = Array.isArray(entry.supported_parameters)
+		? entry.supported_parameters.filter((value): value is string => typeof value === "string")
+		: [];
+	const architecture = isRecord(entry.architecture) ? entry.architecture : {};
+	const pricing = isRecord(entry.pricing) ? entry.pricing : undefined;
+	const topProvider = isRecord(entry.top_provider) ? entry.top_provider : undefined;
+	const reasoningMetadata = isRecord(entry.reasoning) ? entry.reasoning : undefined;
+	const reasoning =
+		parameters.includes("reasoning") ||
+		parameters.includes("reasoning_effort") ||
+		parameters.includes("include_reasoning") ||
+		reasoningMetadata !== undefined;
+	const efforts = Array.isArray(reasoningMetadata?.supported_efforts)
+		? reasoningMetadata.supported_efforts.filter((value): value is Effort => isEffort(value))
+		: [];
+	const inputModalities = Array.isArray(architecture.input_modalities)
+		? architecture.input_modalities
+		: typeof architecture.modality === "string" && architecture.modality.includes("image")
+			? ["text", "image"]
+			: ["text"];
+
+	return {
+		...baseModel,
+		reasoning,
+		...(reasoning && efforts.length > 0
+			? { reasoningOptions: { efforts: canonicalizeEfforts(efforts) } }
+			: { reasoningOptions: undefined }),
+		input: toInputCapabilities(inputModalities),
+		supportsTools: true,
+		cost: {
+			input: toPositiveNumber(pricing?.prompt, 0) * 1000000,
+			output: toPositiveNumber(pricing?.completion, 0) * 1000000,
+			cacheRead: toPositiveNumber(pricing?.input_cache_read, 0) * 1000000,
+			cacheWrite: toPositiveNumber(pricing?.input_cache_write, 0) * 1000000,
+		},
+		pricing: pricing ? "published" : "unknown",
+		contextWindow: toPositiveNumber(
+			topProvider?.context_length,
+			toPositiveNumber(entry.context_length, baseModel.contextWindow),
+		),
+		maxTokens: toPositiveNumber(topProvider?.max_completion_tokens, null),
+		compat: {
+			...(baseModel.compat ?? {}),
+			supportsToolChoice: parameters.includes("tool_choice"),
+		},
+	};
+}
+
+export interface NousResearchModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+export function nousResearchModelManagerOptions(
+	config?: NousResearchModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? NOUS_RESEARCH_BASE_URL;
+	const references = createBundledReferenceMap<"openai-completions">("nous-research");
+	return {
+		providerId: "nous-research",
+		...(apiKey && {
+			fetchDynamicModels: hooks =>
+				fetchOpenAICompatibleModels({
+					onFailure: hooks?.onFailure,
+					api: "openai-completions",
+					provider: "nous-research",
+					baseUrl,
+					apiKey,
+					filterModel: isNousToolCapableChatModel,
+					mapModel: (entry, defaults) => mapNousResearchModel(entry, defaults, references.get(defaults.id)),
+					fetch: config?.fetch,
+				}),
+		}),
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -3850,11 +4107,23 @@ export async function fetchLiteLLMRichModels<TApi extends Api>(
 	return options.timeoutMs !== undefined ? withCatalogDiscoveryTimeout(options.timeoutMs, fetchModels) : fetchModels();
 }
 
+function resolveLiteLLMBaseUrl(baseUrl?: string): string {
+	return baseUrl ?? Bun.env.LITELLM_BASE_URL ?? "http://localhost:4000/v1";
+}
+
+function liteLLMModelCacheProviderId(baseUrl: string): string {
+	return `litellm:rich-v4:${Bun.hash(baseUrl).toString(36)}`;
+}
+
+export function resolveLitellmCacheProviderId(config?: LiteLLMModelManagerConfig): string {
+	return liteLLMModelCacheProviderId(resolveLiteLLMBaseUrl(config?.baseUrl));
+}
+
 export function litellmModelManagerOptions(
 	config?: LiteLLMModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
 	const apiKey = config?.apiKey;
-	const baseUrl = config?.baseUrl ?? Bun.env.LITELLM_BASE_URL ?? "http://localhost:4000/v1";
+	const baseUrl = resolveLiteLLMBaseUrl(config?.baseUrl);
 	return {
 		providerId: "litellm",
 		// rich-v4 invalidates rows cached before LiteLLM ids gained bundled
@@ -3863,7 +4132,7 @@ export function litellmModelManagerOptions(
 		// reseller usage-suffix stripping and placeholder-only `all-team-models`
 		// filtering; bump the version whenever the mappers below change, or warm
 		// authoritative caches keep serving pre-change rows for the full TTL.
-		cacheProviderId: `litellm:rich-v4:${Bun.hash(baseUrl).toString(36)}`,
+		cacheProviderId: liteLLMModelCacheProviderId(baseUrl),
 		// litellm is a local-only proxy and is never bundled in models.json (that
 		// would leak the machine's localhost catalog). Prefer the proxy's richer
 		// management metadata, then enrich ids against models.dev with the bundled
@@ -3909,13 +4178,27 @@ export interface VllmModelManagerConfig {
 	fetch?: FetchImpl;
 }
 
+const VLLM_DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1";
+
+function resolveVllmBaseUrl(baseUrl?: string): string {
+	return baseUrl ?? VLLM_DEFAULT_BASE_URL;
+}
+
+function vllmModelCacheProviderId(baseUrl: string): string {
+	return `vllm:${Bun.hash(baseUrl).toString(36)}`;
+}
+
+export function resolveVllmCacheProviderId(config?: VllmModelManagerConfig): string {
+	return vllmModelCacheProviderId(resolveVllmBaseUrl(config?.baseUrl));
+}
+
 export function vllmModelManagerOptions(config?: VllmModelManagerConfig): ModelManagerOptions<"openai-completions"> {
 	const apiKey = config?.apiKey;
-	const baseUrl = config?.baseUrl ?? "http://127.0.0.1:8000/v1";
+	const baseUrl = resolveVllmBaseUrl(config?.baseUrl);
 	const references = createBundledReferenceMap<"openai-completions">("vllm" as Parameters<typeof getBundledModels>[0]);
 	return {
 		providerId: "vllm",
-		cacheProviderId: `vllm:${Bun.hash(baseUrl).toString(36)}`,
+		cacheProviderId: vllmModelCacheProviderId(baseUrl),
 		fetchDynamicModels: hooks =>
 			fetchOpenAICompatibleModels({
 				onFailure: hooks?.onFailure,
@@ -4329,6 +4612,14 @@ export function anthropicModelManagerOptions(
 ): ModelManagerOptions<"anthropic-messages"> {
 	const apiKey = config?.apiKey;
 	const baseUrl = config?.baseUrl ?? ANTHROPIC_BASE_URL;
+	// Anthropic's REST API is versioned at `/v1`, and the SDK takes the host
+	// without it: it appends `/v1/messages` itself. So an operator who points
+	// this provider at `https://api.anthropic.com` streams fine and discovers
+	// nothing — the catalog read asked for `/models` and the endpoint answered
+	// 404, fifty-five times in the recorded logs, each one a warn nobody could
+	// act on. Discovery gets the versioned base; the model specs keep the base
+	// the caller configured, because that is what the SDK is handed.
+	const discoveryBaseUrl = toAnthropicDiscoveryBaseUrl(baseUrl);
 	return {
 		providerId: "anthropic",
 		modelsDev: {
@@ -4357,7 +4648,7 @@ export function anthropicModelManagerOptions(
 						onFailure: hooks?.onFailure,
 						api: "anthropic-messages",
 						provider: "anthropic",
-						baseUrl,
+						baseUrl: discoveryBaseUrl,
 						headers: buildAnthropicDiscoveryHeaders(apiKey),
 						mapModel: (
 							entry: OpenAICompatibleModelRecord,
@@ -4497,7 +4788,7 @@ export function mapModelsDevToModels(
 				const result = desc.transformModel(mapped, modelId, m);
 				if (result === null) continue;
 				if (Array.isArray(result)) {
-					models.push(...result);
+					for (let ri = 0; ri < result.length; ri++) models.push(result[ri]!);
 				} else {
 					models.push(result);
 				}
@@ -4798,9 +5089,15 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_CORE: readonly ModelsDevProviderDescriptor
 	// wire/gemini-headers.ts profiles) and differ from the Google API's — e.g.
 	// Gemini 3.1 Pro is low/high only there. Its surfaces stay curated from
 	// those captures.
-	simpleModelsDevDescriptor("google", "google-gemini-cli", "google-gemini-cli", "https://cloudcode-pa.googleapis.com", {
-		enrichOnly: true,
-	}),
+	simpleModelsDevDescriptor(
+		"google",
+		"google-gemini-cli",
+		"google-gemini-cli",
+		"https://cloudcode-pa.googleapis.com",
+		{
+			enrichOnly: true,
+		},
+	),
 	// --- DeepSeek ---
 	openAiCompletionsDescriptor("deepseek", "deepseek", "https://api.deepseek.com", {
 		// Only ship the v4 family as built-ins; older deepseek-chat / deepseek-reasoner

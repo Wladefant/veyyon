@@ -10,7 +10,7 @@
  * What each loss costs the reader is why the two are worth reporting. Artifacts are what an
  * `artifact://` URL resolves against: an empty list means every truncated tool output in the session
  * becomes unreachable, with no error to trace. `peekSessionInit` is the cold-revival peek for a
- * subagent, so a null there is presented to the user as a session that does not exist, which is a
+ * agent, so a null there is presented to the user as a session that does not exist, which is a
  * false statement about their own file when the file is right where they left it.
  *
  * The split is the same one drawn in `session-listing.ts` and in the `@veyyon/stats` session parser,
@@ -25,8 +25,8 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { ArtifactManager } from "@veyyon/coding-agent/session/artifacts";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { ArtifactManager } from "@veyyon/kernel/session/artifacts";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { logger } from "@veyyon/utils";
 
 /** Captured `logger.warn` calls: the message and its structured fields. */

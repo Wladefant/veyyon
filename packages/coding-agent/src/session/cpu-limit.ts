@@ -19,11 +19,11 @@
  * reports into the group's write accountant, because no group counter can see
  * a process that is not in the group.
  *
- * ONE GROUP PER SESSION TREE, NOT PER AGENT. A subagent opens its own
+ * ONE GROUP PER SESSION TREE, NOT PER AGENT. An agent opens its own
  * `SessionManager` and therefore its own `AgentSession`, so registering by
- * session id alone gave every subagent a group of its own and multiplied the
- * operator's cap by the number of live subagents. The task executor pins an
- * inherited group id around subagent session creation
+ * session id alone gave every agent a group of its own and multiplied the
+ * operator's cap by the number of live agents. The task executor pins an
+ * inherited group id around agent session creation
  * ({@link withInheritedBudgetGroup}); a session that registers inside that
  * scope becomes an ALIAS of the root group instead of an owner of a new one,
  * at any depth. Aliases live in their own table, never in `limiters` or
@@ -81,26 +81,39 @@
  * throttling. A watcher gap means slower, never uncapped.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
-import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { CpuBudgetGroup as NativeCpuBudgetGroup } from "@veyyon/natives";
-// Owners, not the `@veyyon/utils` barrel: 2 modules against 81.
-import * as logger from "@veyyon/utils/logger";
-import { errorMessage } from "@veyyon/utils/type-guards";
-import type { Settings } from "../config/settings";
-import { settingsOrNull } from "../config/settings-instance";
-import { registerOwnedResourceDisposer } from "./owned-resources";
+import { formatLimitFileValue, formatSystemdCpuQuota, memoryCapControls } from "@veyyon/kernel/session/cgroup-format";
+import {
+	type CpuLimitEnvironment,
+	type CpuLimitProbe,
+	probeCpuLimitSupport,
+	resolveCpuLimitEnvironment,
+} from "@veyyon/kernel/session/cgroup-host";
+import {
+	addMachineHarnessWrite,
+	anyMachineLimitActive,
+	ensureMachineBudget,
+	type MachineBudgetLimits,
+	type MachineBudgetPlacement,
+	machineBudgetLimits,
+	machineHarnessWrittenBytes,
+	machineSpawnedWrittenBytes,
+} from "@veyyon/kernel/session/machine-budget";
+import { registerOwnedResourceDisposer } from "@veyyon/kernel/session/owned-resources";
 import {
 	BYTES_PER_GB,
 	formatWriteBytes,
 	type SpawnedWriteSource,
 	sampleSpawnedWrites,
 	WriteAccountant,
-} from "./write-accounting";
-
-/** cgroup v2 cpu.max period the quota is expressed against (microseconds). */
-export const CPU_LIMIT_PERIOD_USEC = 100_000;
+} from "@veyyon/kernel/session/write-accounting";
+import { CpuBudgetGroup as NativeCpuBudgetGroup } from "@veyyon/natives";
+// Owners, not the `@veyyon/utils` barrel: 2 modules against 81.
+import * as logger from "@veyyon/utils/logger";
+import { errorMessage } from "@veyyon/utils/type-guards";
+import type { Settings } from "../config/settings";
+import { settingsOrNull } from "../config/settings-instance";
 
 /** Default watcher cadence: one usage sample per second. */
 export const CPU_LIMIT_WATCH_INTERVAL_MS = 1_000;
@@ -116,79 +129,6 @@ const SATURATION_RATIO = 0.95;
 
 /** Nice level applied to budget members on sustained saturation where no kernel quota exists. */
 export const CPU_LIMIT_SATURATION_NICE = 10;
-
-/** The `cpu.max` value for `cores` cores: quota over the fixed period. */
-export function formatCpuMaxValue(cores: number): string {
-	return `${Math.round(cores * CPU_LIMIT_PERIOD_USEC)} ${CPU_LIMIT_PERIOD_USEC}`;
-}
-
-/** Result of running a helper binary (systemd-run, systemctl) during probe or setup. */
-export interface CpuLimitCommandResult {
-	code: number;
-	stdout: string;
-	stderr: string;
-}
-
-/**
- * Everything the limiter needs from the host that is NOT part of the native
- * budget surface, injected so tests drive a tmpdir cgroup tree, a scripted
- * `run`, and a fixed clock.
- */
-export interface CpuLimitEnvironment {
-	platform: string;
-	uid: number;
-	/** cgroup v2 mount root; `/sys/fs/cgroup` in production, a tmpdir in tests. */
-	cgroupRoot: string;
-	/** The harness's own cgroup path relative to the root ("" when unknown). */
-	ownCgroupPath: string;
-	run(cmd: string[]): Promise<CpuLimitCommandResult>;
-	kill(pid: number, signal: "SIGTERM"): void;
-	now(): number;
-	/**
-	 * procfs mount, `/proc` in production and a tmpdir in tests. Read for the
-	 * `/proc/<pid>/io` write fallback when the `io` controller is not delegated.
-	 */
-	procRoot: string;
-	/**
-	 * Remove a probe directory. On a real cgroupfs this is `rmdir` (the
-	 * controller files are virtual); a tmpdir stand-in must remove the real
-	 * files the probe's writes created.
-	 */
-	removeDir(dir: string): Promise<void>;
-}
-
-/** Which enforcement mechanism the probe selected. */
-export type CpuLimitBackend =
-	| { kind: "direct"; parentDir: string }
-	| { kind: "systemd-run" }
-	| { kind: "job-object" }
-	| { kind: "tracked" };
-
-/**
- * Which of the group's limits the KERNEL will hold, per controller. cgroup v2
- * delegation is per controller and a stock systemd user session hands out
- * `cpu memory pids` and not `io`, so this is measured against a real probe
- * child rather than inferred from the backend or from one controller's
- * presence. Everything false is the honest reading for a backend that has no
- * cgroup at all.
- */
-export interface CgroupControllerCapabilities {
-	cpu: boolean;
-	pids: boolean;
-	memory: boolean;
-}
-
-/** Outcome of the once-per-process capability probe. */
-export interface CpuLimitProbe {
-	supported: boolean;
-	/** Whether the selected backend makes the kernel throttle the group. */
-	throttles: boolean;
-	backend: CpuLimitBackend | null;
-	/** Which limits this backend's kernel can hold, measured not assumed. */
-	kernelLimits: CgroupControllerCapabilities;
-	/** Which backend was selected, or WHY none works. Shown verbatim. */
-	detail: string;
-}
 
 /** The piece of the native `CpuBudgetGroup` the limiter drives. */
 export interface CpuBudgetGroupHandle {
@@ -230,161 +170,6 @@ function createNativeBudgetGroup(spec: CpuBudgetGroupSpec): CpuBudgetGroupHandle
 		renice: level => group.renice(level),
 		dispose: () => group.dispose(),
 	};
-}
-
-async function readOptional(file: string): Promise<string | undefined> {
-	try {
-		return await fs.readFile(file, "utf8");
-	} catch {
-		return undefined;
-	}
-}
-
-/** The `pids.max` / `memory.max` value for a limit, or the kernel's "no cap". */
-function limitFileValue(value: number): string {
-	return value > 0 ? String(Math.floor(value)) : "max";
-}
-
-/**
- * Which limits `dir` can host for a session cgroup, or null when it cannot
- * host one at all. `cpu` is the qualifying controller: without it there is no
- * CPU budget and the candidate is rejected outright, which is what picks the
- * `direct` backend. `pids` and `memory` are then probed the SAME way rather
- * than assumed from cpu, because delegation is per controller: a stock
- * systemd user session gets `cpu memory pids` and no `io`, and a container
- * can get any subset.
- *
- * Each step is tried for real against a probe child because the cgroup v2
- * delegation rules (no internal processes, controller must be delegated by
- * the parent) are not visible from permission bits alone. The probe child is
- * removed before returning, pass or fail.
- */
-async function tryDirectParent(env: CpuLimitEnvironment, dir: string): Promise<CgroupControllerCapabilities | null> {
-	const controllers = (await readOptional(path.join(dir, "cgroup.controllers")))?.split(/\s+/) ?? [];
-	if (!controllers.includes("cpu")) return null;
-	const probeChild = path.join(dir, `.veyyon-cpu-probe-${env.uid}`);
-	const subtreeControlFile = path.join(dir, "cgroup.subtree_control");
-	const delegate = async (controller: string, probeFile: string, probeValue: string): Promise<boolean> => {
-		if (!controllers.includes(controller)) return false;
-		try {
-			const subtreeControl = await readOptional(subtreeControlFile);
-			if (!subtreeControl?.split(/\s+/).includes(controller)) {
-				await fs.writeFile(subtreeControlFile, `+${controller}`);
-			}
-			await fs.writeFile(path.join(probeChild, probeFile), probeValue);
-			return true;
-		} catch {
-			return false;
-		}
-	};
-	try {
-		await fs.mkdir(probeChild);
-		const cpu = await delegate("cpu", "cpu.max", formatCpuMaxValue(1));
-		if (!cpu) return null;
-		return {
-			cpu,
-			pids: await delegate("pids", "pids.max", "max"),
-			memory: await delegate("memory", "memory.max", "max"),
-		};
-	} catch {
-		return null;
-	} finally {
-		await env.removeDir(probeChild).catch(() => {});
-	}
-}
-
-function unsupported(detail: string): CpuLimitProbe {
-	return {
-		supported: false,
-		throttles: false,
-		backend: null,
-		kernelLimits: { cpu: false, pids: false, memory: false },
-		detail,
-	};
-}
-
-/** Probe the host once: platform, controller availability, backend. */
-export async function probeCpuLimitSupport(env: CpuLimitEnvironment): Promise<CpuLimitProbe> {
-	if (env.platform === "win32") {
-		return {
-			supported: true,
-			throttles: true,
-			backend: { kind: "job-object" },
-			// A Job Object caps CPU rate and nothing else the native surface
-			// exposes: no process limit, no commit limit, no I/O counters. The
-			// process cap still holds as policy; memory and the spawned half of
-			// the write budget do not, and say so.
-			kernelLimits: { cpu: true, pids: false, memory: false },
-			detail: "Windows Job Object with a hard CPU rate cap",
-		};
-	}
-	if (env.platform === "darwin") {
-		return {
-			supported: true,
-			throttles: false,
-			backend: { kind: "tracked" },
-			kernelLimits: { cpu: false, pids: false, memory: false },
-			detail:
-				"macOS has no per-group CPU quota, so the budget is enforced as policy only: " +
-				"new commands are refused while the group is saturated, and members are reniced " +
-				"(or killed, with session.cpuLimitKill). There is no kernel throttle.",
-		};
-	}
-	if (env.platform !== "linux") {
-		return unsupported(`per-session CPU limits are unimplemented on ${env.platform}`);
-	}
-	const rootControllers = await readOptional(path.join(env.cgroupRoot, "cgroup.controllers"));
-	if (rootControllers === undefined) {
-		return unsupported(`cgroups v2 is not mounted at ${env.cgroupRoot} (a v1 or hybrid hierarchy has no cpu.max)`);
-	}
-	const userService = path.join(env.cgroupRoot, "user.slice", `user-${env.uid}.slice`, `user@${env.uid}.service`);
-	const ownDir = env.ownCgroupPath ? path.join(env.cgroupRoot, env.ownCgroupPath) : undefined;
-	// The harness's own cgroup usually holds processes, and cgroup v2 refuses to
-	// enable a controller for the children of a cgroup that has member processes.
-	// Its PARENT is the delegated directory in that layout, so try both.
-	const ownParent = ownDir && path.dirname(ownDir).startsWith(env.cgroupRoot) ? path.dirname(ownDir) : undefined;
-	const candidates = [ownDir, ownParent, path.join(userService, "app.slice"), userService].filter(
-		(dir): dir is string => dir !== undefined,
-	);
-	for (const dir of candidates) {
-		const kernelLimits = await tryDirectParent(env, dir);
-		if (kernelLimits) {
-			return {
-				supported: true,
-				throttles: true,
-				backend: { kind: "direct", parentDir: dir },
-				kernelLimits,
-				detail: `direct cgroup writes under ${dir}`,
-			};
-		}
-	}
-	const systemctl = await env
-		.run(["systemctl", "--user", "show-environment"])
-		.catch((error): CpuLimitCommandResult => ({ code: 1, stdout: "", stderr: errorMessage(error) }));
-	if (systemctl.code === 0) {
-		// The unit's own cgroup does not exist yet, so the closest measurable
-		// stand-in is what the user manager itself was delegated: systemd hands
-		// a transient unit the controllers it holds. Optimism here would be
-		// worse than pessimism, so a controller the manager does not have is
-		// reported unenforceable and corrected upward only if the real write to
-		// the unit's cgroup later succeeds.
-		const managerControllers = (await readOptional(path.join(userService, "cgroup.controllers")))?.split(/\s+/) ?? [];
-		return {
-			supported: true,
-			throttles: true,
-			backend: { kind: "systemd-run" },
-			kernelLimits: {
-				cpu: true,
-				pids: managerControllers.includes("pids"),
-				memory: managerControllers.includes("memory"),
-			},
-			detail: "systemd user services via systemd-run --user",
-		};
-	}
-	return unsupported(
-		"no writable cgroup has the cpu controller delegated, and no systemd user manager answered " +
-			`(systemctl --user failed: ${systemctl.stderr.trim() || `exit ${systemctl.code}`})`,
-	);
 }
 
 /**
@@ -466,12 +251,23 @@ export class SessionCpuLimit {
 	#systemdUnit: string | undefined;
 	/** The group's own cgroup directory, when the backend has one. */
 	#cgroupDir: string | undefined;
+	/**
+	 * The MACHINE group this session's group sits inside, when one exists.
+	 * Undefined on every host and configuration with no machine tier, which is
+	 * what makes every machine check below a no-op there.
+	 */
+	#machineDir: string | undefined;
+	/** The machine write budget in GB, 0 when none is set. Read with the placement. */
+	#machineWriteBudgetGb = 0;
+	/** Bytes the machine cgroup subtree has written, from the last watcher sample. */
+	#machineSpawnedWrittenBytes = 0;
 	#setupFailed = false;
 	#timer: NodeJS.Timeout | undefined;
 	#lastSample: WatcherSample | undefined;
 	#window: boolean[] = [];
 	#denied = false;
-	#killedThisEpisode = false;
+	/** 0 idle, 1 SIGTERM sent this episode, 2 SIGKILL sent. */
+	#killWave = 0;
 	#reniced = false;
 	#lastCoresUsed = 0;
 	#lastKillReport: string | undefined;
@@ -492,6 +288,13 @@ export class SessionCpuLimit {
 	 * through a gate is still capped.
 	 */
 	#limitsSupplied: boolean;
+	/**
+	 * Whether the MACHINE tier has any limit set. Read once here, synchronously
+	 * from the global config, because it decides whether a group is created at
+	 * all — a question that has to be answered before the first spawn, not
+	 * after the async placement resolves.
+	 */
+	readonly #machineLimitActive: boolean;
 
 	constructor(options: SessionCpuLimitOptions) {
 		this.#options = options;
@@ -505,6 +308,17 @@ export class SessionCpuLimit {
 			options.writeBudgetGb !== undefined ||
 			options.maxProcesses !== undefined ||
 			options.memoryLimitGb !== undefined;
+		// An unreadable global config is reported by the placement, which names
+		// the file. Here it must only decide whether to bother with a group, and
+		// "no machine limit" is the safe reading of a config nobody can parse.
+		let machineLimits: MachineBudgetLimits | undefined;
+		try {
+			machineLimits = machineBudgetLimits();
+		} catch {
+			machineLimits = undefined;
+		}
+		this.#machineLimitActive = machineLimits !== undefined && anyMachineLimitActive(machineLimits);
+		this.#machineWriteBudgetGb = machineLimits?.writeBudgetGb ?? 0;
 		this.#probe = Promise.resolve(options.probe);
 	}
 
@@ -517,7 +331,7 @@ export class SessionCpuLimit {
 	 * MCP server would join a group carrying no `memory.max` and no `pids.max`,
 	 * and a runaway allocation in a Python cell would meet no ceiling at all.
 	 *
-	 * A gate that DOES supply limits wins permanently, because a subagent's
+	 * A gate that DOES supply limits wins permanently, because an agent's
 	 * cloned settings are a better answer than the process-wide singleton.
 	 */
 	async #applyConfiguredLimits(): Promise<void> {
@@ -586,13 +400,27 @@ export class SessionCpuLimit {
 	}
 
 	/**
-	 * Whether ANY limit is set. The group exists for the union of them, not
-	 * for CPU alone: a write budget needs the group's `io.stat` and member
-	 * list, a process cap needs `pids.max`, and a memory cap needs
+	 * Whether ANY limit is set, at EITHER scope. The group exists for the union
+	 * of them, not for CPU alone: a write budget needs the group's `io.stat`
+	 * and member list, a process cap needs `pids.max`, and a memory cap needs
 	 * `memory.max`, none of which exist without a group.
+	 *
+	 * A machine limit counts even when every session limit is 0. The machine
+	 * cgroup bounds its MEMBERS, and the only things that ever become members
+	 * are processes adopted into a session group inside it — so without a
+	 * session group there is nothing in the machine group and the machine limit
+	 * bounds an empty set. Leaving this out is the silent failure where the
+	 * setting is written, the cgroup exists with the right quota, and every
+	 * command runs outside it.
 	 */
 	get #anyLimitActive(): boolean {
-		return this.#cores > 0 || this.#writeBudgetGb > 0 || this.#maxProcesses > 0 || this.#memoryLimitGb > 0;
+		return (
+			this.#cores > 0 ||
+			this.#writeBudgetGb > 0 ||
+			this.#maxProcesses > 0 ||
+			this.#memoryLimitGb > 0 ||
+			this.#machineLimitActive
+		);
 	}
 
 	/**
@@ -693,6 +521,17 @@ export class SessionCpuLimit {
 	}
 
 	/**
+	 * Create the group if needed, then refuse the spawn when any budget says so.
+	 * Spawn sites call this instead of `ensureGroup` then `assertMaySpawn`: the
+	 * gate is sync and cannot see a setup failure until the group has been asked
+	 * for, so the order is part of the contract, not a local habit.
+	 */
+	async gateSpawn(what: string): Promise<void> {
+		await this.ensureGroup();
+		this.assertMaySpawn(what);
+	}
+
+	/**
 	 * Move a spawned child into the session group. Fire-and-forget at spawn
 	 * sites: membership is inherited across fork (and job-object children
 	 * inherit the job), so adopting the direct child caps its whole tree.
@@ -718,6 +557,13 @@ export class SessionCpuLimit {
 	 * accountant's running total, and the group's live member list).
 	 */
 	assertMaySpawn(what: string): void {
+		if (this.#setupFailed && this.#anyLimitActive) {
+			throw new CpuLimitDeniedError(
+				`Refused to start ${what}: this session's resource budget group could not be created, ` +
+					`so a configured limit cannot be enforced. New commands are refused rather than run uncapped. ` +
+					`Fix: wait until the host can create the group, or set the limit to 0.`,
+			);
+		}
 		if (this.#denied) {
 			throw new CpuLimitDeniedError(
 				`Refused to start ${what}: this session's CPU budget of ${this.#cores} core(s) is saturated ` +
@@ -748,32 +594,75 @@ export class SessionCpuLimit {
 					`Fix: wait for a running command to finish, or raise session.maxProcesses.`,
 			);
 		}
+		const machineWritten = this.#machineWrittenBytes();
+		if (machineWritten !== undefined && machineWritten >= this.#machineWriteLimitBytes()) {
+			throw new CpuLimitDeniedError(
+				`Refused to start ${what}: this machine's veyyon write budget of ${this.#machineWriteBudgetGb} GB is ` +
+					`spent (${formatWriteBytes(machineWritten)} written across every session on this machine). ` +
+					`Fix: raise machine.writeBudgetGb, or clear it to lift the machine limit.`,
+			);
+		}
 	}
 
 	/**
 	 * Refuse a harness tool write that the budget cannot afford, counting the
 	 * bytes it is ABOUT to write: a budget that only notices after the write
 	 * lets a single oversized write blow through it by any amount.
+	 *
+	 * Both tiers are checked, and the session tier first: when a write breaches
+	 * both, the session budget is the one the person can act on without
+	 * touching a machine-wide setting.
 	 */
 	assertMayWrite(bytes: number, what: string): void {
-		if (this.#writeBudgetGb <= 0) return;
-		const total = this.#writes.totalBytes;
-		if (total + bytes <= this.#writeLimitBytes) return;
-		throw new WriteBudgetDeniedError(
-			`Refused to write ${what}: this session tree's write budget of ${this.#writeBudgetGb} GB does not cover it ` +
-				`(${formatWriteBytes(total)} already written, this write is ${formatWriteBytes(bytes)}). ` +
-				`Fix: raise session.writeBudgetGb, or start a new session.`,
-		);
+		if (this.#writeBudgetGb > 0) {
+			const total = this.#writes.totalBytes;
+			if (total + bytes > this.#writeLimitBytes) {
+				throw new WriteBudgetDeniedError(
+					`Refused to write ${what}: this session tree's write budget of ${this.#writeBudgetGb} GB does not ` +
+						`cover it (${formatWriteBytes(total)} already written, this write is ${formatWriteBytes(bytes)}). ` +
+						`Fix: raise session.writeBudgetGb, or start a new session.`,
+				);
+			}
+		}
+		const machineWritten = this.#machineWrittenBytes();
+		if (machineWritten !== undefined && machineWritten + bytes > this.#machineWriteLimitBytes()) {
+			throw new WriteBudgetDeniedError(
+				`Refused to write ${what}: this machine's veyyon write budget of ${this.#machineWriteBudgetGb} GB does ` +
+					`not cover it (${formatWriteBytes(machineWritten)} already written across every session on this ` +
+					`machine, this write is ${formatWriteBytes(bytes)}). ` +
+					`Fix: raise machine.writeBudgetGb, or clear it to lift the machine limit.`,
+			);
+		}
 	}
 
 	/**
-	 * Count bytes veyyon's own tools wrote. The harness is not in the budget
-	 * group by design, so no group counter will ever see these.
+	 * Count bytes veyyon's own tools wrote, against both tiers.
+	 *
+	 * The harness is not a member of either budget group by design, so no
+	 * kernel counter will ever see these bytes; the machine half goes to a
+	 * cross-process tally so a second veyyon's writes are in the same total.
 	 */
 	recordHarnessWrite(bytes: number): void {
+		if (this.#machineWriteBudgetGb > 0) addMachineHarnessWrite(bytes);
 		if (this.#writeBudgetGb <= 0) return;
 		this.#writes.recordHarnessWrite(bytes);
 		this.#evaluateWriteBudget();
+	}
+
+	/** The machine write budget in bytes, or infinity when none is set. */
+	#machineWriteLimitBytes(): number {
+		return this.#machineWriteBudgetGb > 0 ? this.#machineWriteBudgetGb * BYTES_PER_GB : Number.POSITIVE_INFINITY;
+	}
+
+	/**
+	 * Bytes charged to the machine write budget, or undefined when no machine
+	 * write budget is set. The spawned half comes from the last watcher sample
+	 * of the machine cgroup's `io.stat`; the harness half is read fresh, because
+	 * another veyyon may have written since this one last sampled.
+	 */
+	#machineWrittenBytes(): number | undefined {
+		if (this.#machineWriteBudgetGb <= 0) return undefined;
+		return this.#machineSpawnedWrittenBytes + machineHarnessWrittenBytes();
 	}
 
 	/** Live processes in the group, from the group itself rather than a stale sample. */
@@ -848,7 +737,7 @@ export class SessionCpuLimit {
 		if (sustained && !this.#denied) {
 			this.#denied = true;
 			if (this.#killEnabled) {
-				this.#killOverBudget();
+				this.#killOverBudget("SIGTERM");
 			} else {
 				if (!group.throttles) {
 					group.renice(CPU_LIMIT_SATURATION_NICE);
@@ -861,9 +750,11 @@ export class SessionCpuLimit {
 						`Fix: raise session.cpuLimitCores, or set session.cpuLimitKill to terminate over-budget commands instead.`,
 				);
 			}
+		} else if (sustained && this.#denied && this.#killEnabled && this.#killWave === 1) {
+			this.#killOverBudget("SIGKILL");
 		} else if (!sustained && this.#denied) {
 			this.#denied = false;
-			this.#killedThisEpisode = false;
+			this.#killWave = 0;
 			if (this.#reniced) {
 				group.renice(0);
 				this.#reniced = false;
@@ -876,8 +767,18 @@ export class SessionCpuLimit {
 	 * Runs on every tick while the budget is on, INCLUDING while a process is
 	 * still alive, because `/proc/<pid>/io` disappears with the process and a
 	 * once-at-exit reading would lose everything a finished command wrote.
+	 *
+	 * The machine total is sampled on the same tick and from the machine
+	 * cgroup's own `io.stat`, which aggregates every session's subtree — so it
+	 * counts what another veyyon spawned too, which is the whole point of a
+	 * machine budget and is not derivable from this session's numbers.
 	 */
 	async #pollWriteBudget(group: CpuBudgetGroupHandle): Promise<void> {
+		if (this.#machineWriteBudgetGb > 0) {
+			this.#machineSpawnedWrittenBytes = await machineSpawnedWrittenBytes(this.#machineDir).catch(
+				() => this.#machineSpawnedWrittenBytes,
+			);
+		}
 		if (this.#writeBudgetGb <= 0) return;
 		const sample = await sampleSpawnedWrites({
 			cgroupDir: this.#cgroupDir,
@@ -1002,7 +903,12 @@ export class SessionCpuLimit {
 
 	async #createGroup(): Promise<CpuBudgetGroupHandle | undefined> {
 		const probe = await this.#probe;
-		if (!probe.supported || !probe.backend) return undefined;
+		if (!probe.supported || !probe.backend) {
+			// Same fail-closed contract as a thrown create: a configured limit
+			// must not silently let the first command run unbounded.
+			if (this.#anyLimitActive) this.#setupFailed = true;
+			return undefined;
+		}
 		const create = this.#options.createGroup ?? createNativeBudgetGroup;
 		try {
 			if (probe.backend.kind === "systemd-run") {
@@ -1013,19 +919,32 @@ export class SessionCpuLimit {
 				// deadline killed it, setup was marked failed for the whole session, and the budget
 				// silently did nothing on every host that reached this backend. A service forks, so
 				// systemd-run returns as soon as the unit is registered and the quota is in place.
+				const cpuQuota = formatSystemdCpuQuota(this.#cores);
 				const launched = await this.#options.env.run([
 					"systemd-run",
 					"--user",
 					"--quiet",
 					"--collect",
 					`--unit=${unitBase}`,
+					// Without Delegate=yes, systemd owns the unit cgroup and rejects
+					// native writes to cgroup.procs, so adopt was a silent no-op.
+					"-p",
+					"Delegate=yes",
+					// A oneshot that has already exited leaves an empty delegated
+					// cgroup (RemainAfterExit keeps the unit). `sleep infinity` as a
+					// service would occupy pids.max and never return under --scope;
+					// the service form returns, but the sleeper still sat in the
+					// group as a live member.
+					"-p",
+					"Type=oneshot",
+					"-p",
+					"RemainAfterExit=yes",
 					// A group can exist for the write, process or memory limit with
 					// no CPU limit at all, and `CPUQuota=0%` is a quota of no CPU
 					// rather than an absent one.
-					...(this.#cores > 0 ? ["-p", `CPUQuota=${this.#cores * 100}%`] : []),
+					...(cpuQuota ? ["-p", cpuQuota] : []),
 					"--",
-					"sleep",
-					"infinity",
+					"true",
 				]);
 				if (launched.code !== 0) {
 					throw new Error(`systemd-run failed: ${launched.stderr.trim() || `exit ${launched.code}`}`);
@@ -1051,14 +970,25 @@ export class SessionCpuLimit {
 					existingCgroupDir: this.#cgroupDir,
 				});
 			} else if (probe.backend.kind === "direct") {
+				// The machine tier is a cgroup BETWEEN the delegated parent and this
+				// session's group, so the kernel bounds every session at once. It
+				// returns the delegated parent unchanged when no machine limit is
+				// set or the host cannot host one, which is why this reads the
+				// placement rather than branching on whether a limit exists.
+				const placement = await machineBudgetPlacement(this.#options.env, probe.backend.parentDir);
+				this.#machineDir = placement.machineDir;
+				// Once per session, not once per group creation: a machine limit
+				// nobody is holding is exactly the silent failure a limit must not
+				// have, and the notice names which resource and why.
+				if (placement.unenforceable) this.#emitNoticeOnce("machine-budget", placement.unenforceable);
 				// The native Linux backend creates `<parent>/<name>`; the other
 				// three limits are ordinary files in that same directory, so the
 				// path is derived here rather than round-tripped through napi.
-				this.#cgroupDir = path.join(probe.backend.parentDir, this.budgetName);
+				this.#cgroupDir = path.join(placement.parentDir, this.budgetName);
 				this.#group = create({
 					name: this.budgetName,
 					cores: this.#cores,
-					cgroupParentDir: probe.backend.parentDir,
+					cgroupParentDir: placement.parentDir,
 				});
 			} else {
 				this.#group = create({ name: this.budgetName, cores: this.#cores });
@@ -1079,7 +1009,7 @@ export class SessionCpuLimit {
 			this.#setupFailed = true;
 			this.#emitNotice(
 				`session.cpuLimitCores is set to ${this.#cores} but the session CPU budget group could not be created: ` +
-					`${errorMessage(error)}. Spawned commands will run uncapped.`,
+					`${errorMessage(error)}. New commands are refused rather than run uncapped.`,
 			);
 			return undefined;
 		}
@@ -1112,12 +1042,12 @@ export class SessionCpuLimit {
 			}
 			return;
 		}
-		this.#pidsEnforced = await this.#writeCgroupFile(dir, "pids.max", limitFileValue(this.#maxProcesses));
-		this.#memoryEnforced = await this.#writeCgroupFile(
-			dir,
-			"memory.max",
-			limitFileValue(this.#memoryLimitGb > 0 ? this.#memoryLimitGb * BYTES_PER_GB : 0),
-		);
+		this.#pidsEnforced = await this.#writeCgroupFile(dir, "pids.max", formatLimitFileValue(this.#maxProcesses));
+		const memory = memoryCapControls(this.#memoryLimitGb);
+		this.#memoryEnforced = await this.#writeCgroupFile(dir, "memory.max", memory.max);
+		// The cap above bounds RESIDENT memory; without this the overflow goes to
+		// swap and the group runs on past the limit. See memoryCapControls.
+		await this.#writeCgroupFile(dir, "memory.swap.max", memory.swapMax);
 		if (this.#maxProcesses > 0 && !this.#pidsEnforced) {
 			this.#emitNoticeOnce(
 				"pids-unenforceable",
@@ -1154,7 +1084,7 @@ export class SessionCpuLimit {
 	async #setQuota(cores: number): Promise<void> {
 		try {
 			if (this.#systemdUnit) {
-				const quota = cores > 0 ? `CPUQuota=${cores * 100}%` : "CPUQuota=";
+				const quota = formatSystemdCpuQuota(cores) ?? "CPUQuota=";
 				await this.#options.env.run(["systemctl", "--user", "set-property", this.#systemdUnit, quota]);
 			} else {
 				this.#group?.setCores(cores);
@@ -1173,13 +1103,15 @@ export class SessionCpuLimit {
 		this.#timer.unref();
 	}
 
-	#killOverBudget(): void {
-		if (this.#killedThisEpisode || !this.#group) return;
-		this.#killedThisEpisode = true;
+	#killOverBudget(signal: "SIGTERM" | "SIGKILL"): void {
+		if (!this.#group) return;
+		if (signal === "SIGTERM" && this.#killWave !== 0) return;
+		if (signal === "SIGKILL" && this.#killWave !== 1) return;
+		this.#killWave = signal === "SIGTERM" ? 1 : 2;
 		let killed = 0;
 		for (const pid of this.#group.members()) {
 			try {
-				this.#options.env.kill(pid, "SIGTERM");
+				this.#options.env.kill(pid, signal);
 				killed++;
 			} catch {
 				// The process exited between listing and signal; nothing to report.
@@ -1187,7 +1119,7 @@ export class SessionCpuLimit {
 		}
 		const report =
 			`Session CPU budget exceeded: limit ${this.#cores} core(s), spawned commands used ` +
-			`~${this.#lastCoresUsed.toFixed(2)} cores for ${this.#windowSeconds()}s. Sent SIGTERM to ${killed} process(es) ` +
+			`~${this.#lastCoresUsed.toFixed(2)} cores for ${this.#windowSeconds()}s. Sent ${signal} to ${killed} process(es) ` +
 			`because session.cpuLimitKill is on. A command that just stopped was killed by the CPU budget, not a crash.`;
 		this.#lastKillReport = report;
 		this.#emitNotice(report);
@@ -1198,7 +1130,7 @@ export class SessionCpuLimit {
 function unsupportedText(cores: number, probe: CpuLimitProbe): string {
 	return (
 		`session.cpuLimitCores is set to ${cores} but a CPU limit cannot be enforced here: ${probe.detail}. ` +
-		`Spawned commands will run uncapped.`
+		`New commands are refused rather than run uncapped.`
 	);
 }
 
@@ -1218,7 +1150,7 @@ const registrationOrder: string[] = [];
  * things that read that map as "one entry, one owned group":
  *
  * - the owned-resource disposer below resolves by id and calls `dispose()`
- *   unconditionally, so the FIRST subagent to finish would tear the root
+ *   unconditionally, so the FIRST agent to finish would tear the root
  *   group down and silently stop enforcing for the whole tree, with a kill
  *   knob turning a normal child exit into a SIGTERM path;
  * - `rekeySessionCpuLimit` treats an existing entry at the destination id as
@@ -1226,7 +1158,7 @@ const registrationOrder: string[] = [];
  *   `limiters` could get the root disposed on `/new`.
  *
  * Aliases also stay out of `registrationOrder`, because that is what
- * `primarySessionCpuLimit` reads: a subagent must never become the process's
+ * `primarySessionCpuLimit` reads: an agent must never become the process's
  * "root session" for shared spawns.
  */
 const aliasOwners = new Map<string, string>();
@@ -1236,7 +1168,7 @@ const aliasesByOwner = new Map<string, Set<string>>();
 /**
  * The limiter for a live session, undefined before registration or after
  * dispose. An alias resolves to the group it borrows, which is what makes a
- * subagent's spawns land in the root session tree's budget.
+ * agent's spawns land in the root session tree's budget.
  */
 export function sessionCpuLimit(sessionId: string | null | undefined): SessionCpuLimit | undefined {
 	if (!sessionId) return undefined;
@@ -1248,7 +1180,7 @@ export function sessionCpuLimit(sessionId: string | null | undefined): SessionCp
 
 /**
  * The id of the session that OWNS this session's budget group: itself for a
- * root session, its spawner's owner for a subagent at any depth. Undefined
+ * root session, its spawner's owner for an agent at any depth. Undefined
  * before registration.
  *
  * This is the process's one answer to "which session tree is this", and
@@ -1363,6 +1295,33 @@ export function sessionCpuAdoption(getSessionId: () => string | null): (pid: num
 }
 
 /**
+ * Refuse a new eval kernel cell (or any other caller that has a session id
+ * but not the limiter object) when the session budget is saturated or setup
+ * failed. No-op when the session has no limiter.
+ */
+export async function gateSessionCpuSpawn(sessionId: string | null | undefined, what: string): Promise<void> {
+	const limiter = sessionCpuLimit(sessionId);
+	if (!limiter) return;
+	await limiter.gateSpawn(what);
+}
+
+/**
+ * Spawn hooks for `exec` wrappers (custom tools, commands, extensions, hooks).
+ * `adoptPid` joins the child to the session group; `gate` refuses the spawn
+ * when the group is saturated or could not be created. Call `gate` before
+ * the process exists — adopting afterwards cannot un-run an uncapped child.
+ */
+export function sessionCpuExecHooks(getSessionId: () => string | null): {
+	adoptPid: (pid: number) => void;
+	gate: (what: string) => Promise<void>;
+} {
+	return {
+		adoptPid: sessionCpuAdoption(getSessionId),
+		gate: what => gateSessionCpuSpawn(getSessionId(), what),
+	};
+}
+
+/**
  * Adopt one pid into the root session's budget. Used by spawns that belong to
  * the process as a whole rather than to one session: shared service workers,
  * language servers, debug adapters, the managed browser, speech, and plugin
@@ -1385,7 +1344,7 @@ export function primarySessionCpuAdoption(): (pid: number) => void {
 
 /**
  * The session id that OWNS the root budget group, for a spawn path that knows
- * it is starting a subagent but was not told whose child it is. Aliases are
+ * it is starting an agent but was not told whose child it is. Aliases are
  * never in `registrationOrder`, so this is always a real owner.
  */
 export function rootBudgetGroupOwnerId(): string | undefined {
@@ -1407,17 +1366,70 @@ let cachedProbe: Promise<CpuLimitProbe> | undefined;
 /** The process-wide probe result, computed once. */
 export function probeSessionCpuLimitSupport(env?: CpuLimitEnvironment): Promise<CpuLimitProbe> {
 	if (env) return probeCpuLimitSupport(env);
-	cachedProbe ??= defaultResolvedEnvironment().then(probeCpuLimitSupport);
+	cachedProbe ??= probeCpuLimitSupport(resolveCpuLimitEnvironment());
 	return cachedProbe;
 }
 
-/** Reset the registry and probe cache. Test-only. */
+/**
+ * The machine budget group, resolved once per process.
+ *
+ * Memoized on the delegated parent because every session in this process
+ * lands in the same machine group, and re-running the mkdir and the three
+ * control writes per session would be the same work for the same answer. It
+ * is NOT memoized across processes: a second veyyon runs this too, finds the
+ * directory already there, and rewrites the same values from the same config,
+ * which is what keeps the cap shared rather than duplicated.
+ *
+ * A machine limit that cannot be parsed is reported as unenforceable rather
+ * than thrown: a broken global config must not stop a session from starting,
+ * and a limit nobody can read is a limit nobody is holding.
+ */
+const machinePlacements = new Map<string, Promise<MachineBudgetPlacement>>();
+
+export function machineBudgetPlacement(env: CpuLimitEnvironment, parentDir: string): Promise<MachineBudgetPlacement> {
+	const existing = machinePlacements.get(parentDir);
+	if (existing) return existing;
+	const resolved = (async (): Promise<MachineBudgetPlacement> => {
+		let limits: MachineBudgetLimits;
+		try {
+			limits = machineBudgetLimits();
+		} catch (error) {
+			return {
+				parentDir,
+				machineDir: undefined,
+				kernelHeld: { cpu: false, pids: false, memory: false },
+				unenforceable: `A machine-wide resource limit could not be read, so none is held: ${errorMessage(error)}`,
+			};
+		}
+		return ensureMachineBudget({ platform: env.platform, parentDir }, limits);
+	})();
+	machinePlacements.set(parentDir, resolved);
+	return resolved;
+}
+
+/**
+ * The machine placement this process already resolved, or undefined when no
+ * session has needed one yet.
+ *
+ * Never creates the group. A report must not have the side effect of applying
+ * a limit, and "nothing has needed the budget yet" is itself the honest answer
+ * for a session that has spawned nothing. Every session in this process shares
+ * one delegated parent, so the map holds at most one entry in practice; the
+ * first is the one every session is bounded by.
+ */
+export function resolvedMachineBudgetPlacement(): Promise<MachineBudgetPlacement> | undefined {
+	for (const placement of machinePlacements.values()) return placement;
+	return undefined;
+}
+
+/** Reset the registry, probe cache and machine placement. Test-only. */
 export function resetSessionCpuLimitsForTests(): void {
 	limiters.clear();
 	registrationOrder.length = 0;
 	aliasOwners.clear();
 	aliasesByOwner.clear();
 	cachedProbe = undefined;
+	machinePlacements.clear();
 }
 
 /**
@@ -1435,11 +1447,11 @@ const inheritedBudgetGroup = new AsyncLocalStorage<string>();
 
 /**
  * Run `fn` with sessions created inside it joining `rootSessionId`'s budget
- * group as aliases. The task executor wraps subagent session creation in this.
+ * group as aliases. The task executor wraps agent session creation in this.
  *
  * Depth is unbounded because the pinned id is resolved through the alias
  * table: a depth-2 spawn pins its own (already aliased) session id, which
- * resolves to the same owner, so a subagent of a subagent lands in the root
+ * resolves to the same owner, so an agent of an agent lands in the root
  * group rather than in its parent's copy of it.
  */
 export function withInheritedBudgetGroup<T>(rootSessionId: string | null | undefined, fn: () => T): T {
@@ -1493,7 +1505,16 @@ export async function initSessionCpuLimit(options: InitSessionCpuLimitOptions): 
 		siblings.add(options.sessionId);
 		return inherited;
 	}
-	const env = options.env ?? defaultCpuLimitEnvironment();
+	// The same environment the probe measured. They were resolved separately,
+	// and only the probe's copy carried `ownCgroupPath`, so anything reading it
+	// off the limiter's copy saw "unknown" for the directory the probe had just
+	// selected. Nothing does today; resolving once means nothing can.
+	//
+	// Resolved synchronously so this function reaches `limiters.set` before it
+	// yields: `AgentSession` launches it with `void`, and a spawn site that
+	// resolves the limiter by session id in the same tick would otherwise find
+	// nothing registered and run the command outside every budget.
+	const env = options.env ?? resolveCpuLimitEnvironment();
 	const probe = probeSessionCpuLimitSupport(options.env);
 	const limiter = new SessionCpuLimit({
 		sessionId: options.sessionId,
@@ -1530,7 +1551,7 @@ registerOwnedResourceDisposer({
 	name: "session-cpu-limit",
 	scope: "session",
 	dispose: async ownerId => {
-		// A subagent finishing must not tear down the group its whole tree is
+		// An agent finishing must not tear down the group its whole tree is
 		// still enforcing against: an alias drops its own entry and nothing else.
 		if (unregisterAlias(ownerId)) return;
 		const limiter = limiters.get(ownerId);
@@ -1545,59 +1566,6 @@ registerOwnedResourceDisposer({
 		await limiter.dispose();
 	},
 });
-
-// ---------------------------------------------------------------------------
-// Production environment
-// ---------------------------------------------------------------------------
-
-let cachedOwnCgroupPath: string | undefined;
-
-async function ownCgroupPath(): Promise<string> {
-	if (cachedOwnCgroupPath !== undefined) return cachedOwnCgroupPath;
-	const text = await readOptional("/proc/self/cgroup");
-	// cgroup v2 collapses the hierarchy to one line: `0::/user.slice/...`.
-	const v2Line = text?.split("\n").find(line => line.startsWith("0::"));
-	cachedOwnCgroupPath = v2Line ? v2Line.slice(3).trim() : "";
-	return cachedOwnCgroupPath;
-}
-
-async function defaultResolvedEnvironment(): Promise<CpuLimitEnvironment> {
-	return { ...defaultCpuLimitEnvironment(), ownCgroupPath: await ownCgroupPath() };
-}
-
-function runHostCommand(cmd: string[]): Promise<CpuLimitCommandResult> {
-	const { promise, resolve } = Promise.withResolvers<CpuLimitCommandResult>();
-	// `execFile` can fault SYNCHRONOUSLY, before it ever returns a promise or calls back: a
-	// spawn implementation that rejects the argument shape, EMFILE, a bad executable path. Every
-	// caller treats this as "the host cannot answer" and guards the async rejection only, so a
-	// synchronous throw escapes past those guards as an unhandled error and takes the process
-	// down while a probe of an OPTIONAL capability is all that failed. A failed spawn is a
-	// nonzero exit with the reason on stderr, which is exactly what the callers already read.
-	try {
-		execFile(cmd[0], cmd.slice(1), { timeout: 10_000 }, (error, stdout, stderr) => {
-			const code = typeof error?.code === "number" ? error.code : error ? 1 : 0;
-			resolve({ code, stdout: String(stdout), stderr: String(stderr || error?.message || "") });
-		});
-	} catch (error) {
-		resolve({ code: 1, stdout: "", stderr: errorMessage(error) });
-	}
-	return promise;
-}
-
-/** The production environment: real /sys/fs/cgroup, real systemctl, real SIGTERM. */
-export function defaultCpuLimitEnvironment(): CpuLimitEnvironment {
-	return {
-		platform: process.platform,
-		uid: typeof process.getuid === "function" ? process.getuid() : -1,
-		cgroupRoot: "/sys/fs/cgroup",
-		ownCgroupPath: "",
-		procRoot: "/proc",
-		run: runHostCommand,
-		kill: (pid, signal) => process.kill(pid, signal),
-		now: () => Date.now(),
-		removeDir: dir => fs.rmdir(dir),
-	};
-}
 
 // ---------------------------------------------------------------------------
 // Harness write accounting

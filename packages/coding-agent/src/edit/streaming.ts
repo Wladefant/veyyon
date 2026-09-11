@@ -6,8 +6,6 @@
  *   (`extractCompleteEdits`),
  * - compute unified diff previews for the in-flight args
  *   (`computeDiffPreview`), and
- * - render a text placeholder while no diff exists yet
- *   (`renderStreamingFallback`).
  *
  * The shared renderer / `ToolExecutionComponent` consult the strategy via
  * the injected `editMode` rather than probing argument shape.
@@ -18,9 +16,9 @@ import {
 	type PatchSection as HashlineInputSection,
 	Patch as HashlinePatch,
 	type SnapshotStore,
+	stripApplyPatchPathNoise,
 } from "@veyyon/hashline";
 import { errorMessage } from "@veyyon/utils";
-import type { Theme } from "../modes/theme/theme";
 import { type EditMode, resolveEditMode } from "../utils/edit-mode";
 import {
 	ABORT_MARKER,
@@ -84,11 +82,6 @@ export interface EditStreamingStrategy<Args = unknown> {
 	 */
 	computeDiffPreview(args: Args, ctx: StreamingDiffContext): Promise<PerFileDiffPreview[] | null>;
 	/**
-	 * Rendered inline while the diff hasn't been computed yet (or when the
-	 * compute returned `null` because args are still too partial).
-	 */
-	renderStreamingFallback(args: Args, uiTheme: Theme): string;
-	/**
 	 * Project the (potentially partial) args onto the plain text the edit
 	 * introduces into files — added lines without patch grammar — so stream
 	 * matchers (TTSR rules) can run source-level patterns against real content
@@ -132,16 +125,16 @@ export interface EditStreamingStrategy<Args = unknown> {
  * preview from showing an incomplete edit.
  */
 export function dropIncompleteLastEdit<T>(edits: readonly T[], partialJson: string | undefined, listKey: string): T[] {
-	if (!Array.isArray(edits) || edits.length === 0) return [...(edits ?? [])];
-	if (!partialJson) return [...edits];
+	if (!Array.isArray(edits) || edits.length === 0) return (edits ?? []).slice();
+	if (!partialJson) return edits.slice();
 
 	const keyMarker = `"${listKey}"`;
 	const keyIdx = partialJson.indexOf(keyMarker);
-	if (keyIdx === -1) return [...edits];
+	if (keyIdx === -1) return edits.slice();
 
 	// Find the `[` that opens the list value.
 	let i = partialJson.indexOf("[", keyIdx + keyMarker.length);
-	if (i === -1) return [...edits];
+	if (i === -1) return edits.slice();
 	i++;
 
 	let depth = 0;
@@ -187,7 +180,7 @@ export function dropIncompleteLastEdit<T>(edits: readonly T[], partialJson: stri
 	if (lastClose === -1 || (listIsStillOpen && sawNewObjectAfterLastClose)) {
 		return edits.slice(0, -1);
 	}
-	return [...edits];
+	return edits.slice();
 }
 
 // -----------------------------------------------------------------------------
@@ -243,17 +236,6 @@ function extractHashlineHeaderPaths(input: string): string[] {
 		if (candidate.length > 0) paths.push(candidate);
 	}
 	return paths;
-}
-
-/**
- * Strip the `*** Add/Update/Delete File:` / `*** Move to:` noise that the
- * model sometimes pastes into a hashline header (the hashline tokenizer does
- * the same in its recovery path).
- */
-function stripApplyPatchPathNoise(value: string): string {
-	return value
-		.replace(/^\s*\*{3}\s*(?:Add|Update|Delete)\s+File\s*:\s*/i, "")
-		.replace(/^\s*\*{3}\s*Move\s+to\s*:\s*/i, "");
 }
 
 /** Extract `*** Add/Update/Delete File:` paths from a (possibly partial) apply_patch envelope. */
@@ -340,6 +322,17 @@ interface ReplaceArgs {
 	__partialJson?: string;
 }
 
+/** `list` when it holds at least one item, else `undefined` so the caller falls back. */
+function nonEmpty<T>(list: readonly T[]): readonly T[] | undefined {
+	return list.length > 0 ? list : undefined;
+}
+
+/** One matcher entry for a single-path edit, once both its path and its digest are known. */
+function singlePathEntries(path: unknown, digest: string | undefined): readonly EditMatcherEntry[] | undefined {
+	if (typeof path !== "string" || path.length === 0 || digest === undefined) return undefined;
+	return [{ path, digest }];
+}
+
 const replaceStrategy: EditStreamingStrategy<ReplaceArgs> = {
 	extractCompleteEdits(args, partialJson) {
 		if (!args?.edits) return args;
@@ -350,20 +343,14 @@ const replaceStrategy: EditStreamingStrategy<ReplaceArgs> = {
 		const first = args.edits?.[0];
 		if (!first || first.old_text === undefined || first.new_text === undefined) return null;
 		ctx.signal.throwIfAborted();
-		const result = await computeEditDiff(
-			args.path,
-			first.old_text,
-			first.new_text,
-			ctx.cwd,
-			ctx.allowFuzzy ?? true,
-			first.all,
-			ctx.fuzzyThreshold,
-		);
+		const result = await computeEditDiff(args.path, first.old_text, first.new_text, ctx.cwd, {
+			fuzzy: ctx.allowFuzzy ?? true,
+			all: first.all,
+			threshold: ctx.fuzzyThreshold,
+			streaming: ctx.isStreaming,
+		});
 		ctx.signal.throwIfAborted();
 		return [toPerFilePreview(args.path, result)];
-	},
-	renderStreamingFallback() {
-		return "";
 	},
 	matcherDigest(args) {
 		const edits = args?.edits;
@@ -379,10 +366,7 @@ const replaceStrategy: EditStreamingStrategy<ReplaceArgs> = {
 		return typeof args?.path === "string" && args.path.length > 0 ? [args.path] : undefined;
 	},
 	matcherEntries(args) {
-		const path = args?.path;
-		if (typeof path !== "string" || path.length === 0) return undefined;
-		const digest = replaceStrategy.matcherDigest(args);
-		return digest === undefined ? undefined : [{ path, digest }];
+		return singlePathEntries(args?.path, replaceStrategy.matcherDigest(args));
 	},
 };
 
@@ -412,9 +396,6 @@ const patchStrategy: EditStreamingStrategy<PatchArgs> = {
 		ctx.signal.throwIfAborted();
 		return [toPerFilePreview(args.path, result)];
 	},
-	renderStreamingFallback() {
-		return "";
-	},
 	matcherDigest(args) {
 		const edits = args?.edits;
 		if (!Array.isArray(edits)) return undefined;
@@ -432,10 +413,7 @@ const patchStrategy: EditStreamingStrategy<PatchArgs> = {
 		return typeof args?.path === "string" && args.path.length > 0 ? [args.path] : undefined;
 	},
 	matcherEntries(args) {
-		const path = args?.path;
-		if (typeof path !== "string" || path.length === 0) return undefined;
-		const digest = patchStrategy.matcherDigest(args);
-		return digest === undefined ? undefined : [{ path, digest }];
+		return singlePathEntries(args?.path, patchStrategy.matcherDigest(args));
 	},
 };
 
@@ -592,14 +570,6 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 		}
 		return previews.length > 0 ? previews : null;
 	},
-	renderStreamingFallback() {
-		// Never leak raw hashline syntax (`64:`, `|payload`, `[path#hash]`)
-		// to the user — the streaming preview already projects every
-		// parseable op onto the real file via applyPartialTo, and an
-		// unparseable trailing chunk renders as "no preview yet" rather
-		// than a sigil dump.
-		return "";
-	},
 	matcherDigest(args) {
 		const input = hashlineEditText(args);
 		if (typeof input !== "string") return undefined;
@@ -608,15 +578,11 @@ const hashlineStrategy: EditStreamingStrategy<HashlineArgs> = {
 	},
 	matcherPaths(args) {
 		const input = hashlineEditText(args);
-		if (typeof input !== "string" || input.length === 0) return undefined;
-		const paths = extractHashlineHeaderPaths(input);
-		return paths.length > 0 ? paths : undefined;
+		return input ? nonEmpty(extractHashlineHeaderPaths(input)) : undefined;
 	},
 	matcherEntries(args) {
 		const input = hashlineEditText(args);
-		if (typeof input !== "string" || input.length === 0) return undefined;
-		const entries = splitHashlinePerFile(input);
-		return entries.length > 0 ? entries : undefined;
+		return input ? nonEmpty(splitHashlinePerFile(input)) : undefined;
 	},
 };
 
@@ -667,9 +633,6 @@ const applyPatchStrategy: EditStreamingStrategy<ApplyPatchArgs> = {
 		}
 		return previews.length > 0 ? previews : null;
 	},
-	renderStreamingFallback() {
-		return "";
-	},
 	matcherDigest(args) {
 		const input = args?.input;
 		if (typeof input !== "string") return undefined;
@@ -678,15 +641,11 @@ const applyPatchStrategy: EditStreamingStrategy<ApplyPatchArgs> = {
 	},
 	matcherPaths(args) {
 		const input = args?.input;
-		if (typeof input !== "string" || input.length === 0) return undefined;
-		const paths = extractApplyPatchEnvelopePaths(input);
-		return paths.length > 0 ? paths : undefined;
+		return input ? nonEmpty(extractApplyPatchEnvelopePaths(input)) : undefined;
 	},
 	matcherEntries(args) {
 		const input = args?.input;
-		if (typeof input !== "string" || input.length === 0) return undefined;
-		const entries = splitApplyPatchPerFile(input);
-		return entries.length > 0 ? entries : undefined;
+		return input ? nonEmpty(splitApplyPatchPerFile(input)) : undefined;
 	},
 };
 export const EDIT_MODE_STRATEGIES: Record<EditMode, EditStreamingStrategy<unknown>> = {

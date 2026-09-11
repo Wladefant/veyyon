@@ -3,9 +3,9 @@
  */
 import type { AgentTool, AgentToolContext, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { Static, TSchema } from "@veyyon/ai";
+import { applyToolProxy } from "@veyyon/kernel/registry/tool-proxy";
 import { errorMessage } from "@veyyon/utils";
 import { normalizeToolEventInput, resolveToolEventInput } from "../tool-event-input";
-import { applyToolProxy } from "../tool-proxy";
 import type { HookRunner } from "./runner";
 import type { ToolCallEventResult, ToolResultEventResult } from "./types";
 
@@ -70,7 +70,7 @@ export class HookToolWrapper<TParameters extends TSchema = TSchema, TDetails = u
 				}
 				throw new Error(
 					`A hook threw a non-error value while vetting this ${this.tool.name} call, so the call was blocked ` +
-						`rather than run unchecked: ${String(err)}. Do not retry it; tell the operator that hook is ` +
+						`rather than run unchecked: ${errorMessage(err)}. Do not retry it; tell the operator that hook is ` +
 						"failing.",
 				);
 			}

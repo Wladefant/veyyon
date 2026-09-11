@@ -2,16 +2,16 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:
 import * as path from "node:path";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
 import type { Api, Model } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { Effort } from "@veyyon/catalog/effort";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
 import { ModelRegistry } from "../src/config/model-registry";
-import { InteractiveMode } from "../src/modes/interactive-mode";
+import { InteractiveMode } from "../src/modes/terminal/interactive-mode";
 
 function makeTool(name: string): AgentTool {
 	return {
@@ -112,7 +112,7 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 	it("enters plan mode at startup when the setting is enabled", async () => {
 		const created = createHarness(Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false }));
 
-		await created.init({ suppressWelcomeIntro: true });
+		await created.init();
 
 		expect(created.planModeEnabled).toBe(true);
 		expect(session?.getPlanModeState()).toMatchObject({ enabled: true, planFilePath: "local://PLAN.md" });
@@ -133,7 +133,7 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 
 		expect(session?.getActiveToolNames()).not.toContain("write");
 
-		await created.init({ suppressWelcomeIntro: true });
+		await created.init();
 
 		expect(created.planModeEnabled).toBe(true);
 		expect(session?.getActiveToolNames()).toContain("write");
@@ -146,7 +146,7 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 			extraRegistryTools: [shadowWriteTool],
 		});
 
-		await created.init({ suppressWelcomeIntro: true });
+		await created.init();
 
 		expect(created.planModeEnabled).toBe(true);
 		expect(session?.getActiveToolNames()).toContain("resolve");
@@ -156,7 +156,7 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 	it("does not enter plan mode at startup by default", async () => {
 		const created = createHarness(Settings.isolated({ "compaction.enabled": false }));
 
-		await created.init({ suppressWelcomeIntro: true });
+		await created.init();
 
 		expect(created.planModeEnabled).toBe(false);
 		expect(session?.getPlanModeState()).toBeUndefined();
@@ -170,7 +170,7 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		const created = createHarness(Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false }));
 		created.sessionManager.appendMessage({ role: "user", content: "prior turn", timestamp: Date.now() });
 
-		await created.init({ suppressWelcomeIntro: true });
+		await created.init();
 
 		expect(created.planModeEnabled).toBe(false);
 		expect(session?.getPlanModeState()).toBeUndefined();
@@ -185,7 +185,7 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		created.sessionManager.appendModelChange("anthropic/claude-sonnet-4-5");
 		created.sessionManager.appendThinkingLevelChange("medium");
 
-		await created.init({ suppressWelcomeIntro: true });
+		await created.init();
 
 		expect(created.planModeEnabled).toBe(true);
 		expect(session?.getPlanModeState()).toMatchObject({ enabled: true });
@@ -199,7 +199,7 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		created.sessionManager.appendModelChange("anthropic/claude-sonnet-4-5");
 		created.sessionManager.appendCustomEntry("my-extension-state", { foo: "bar" });
 
-		await created.init({ suppressWelcomeIntro: true });
+		await created.init();
 
 		expect(created.planModeEnabled).toBe(true);
 		expect(session?.getPlanModeState()).toMatchObject({ enabled: true });
@@ -213,7 +213,7 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		created.sessionManager.appendModelChange("anthropic/claude-sonnet-4-5");
 		created.sessionManager.appendCompaction("prior conversation summary", undefined, "first-kept", 1000);
 
-		await created.init({ suppressWelcomeIntro: true });
+		await created.init();
 
 		expect(created.planModeEnabled).toBe(false);
 		expect(session?.getPlanModeState()).toBeUndefined();
@@ -227,7 +227,7 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		created.sessionManager.appendModeChange("plan", { planFilePath: "local://PLAN.md" });
 		created.sessionManager.appendModeChange("none");
 
-		await created.init({ suppressWelcomeIntro: true });
+		await created.init();
 
 		expect(created.planModeEnabled).toBe(false);
 		expect(session?.getPlanModeState()).toBeUndefined();
@@ -238,7 +238,7 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 			Settings.isolated({ "plan.defaultOnStartup": true, "plan.enabled": false, "compaction.enabled": false }),
 		);
 
-		await created.init({ suppressWelcomeIntro: true });
+		await created.init();
 
 		expect(created.planModeEnabled).toBe(false);
 		expect(session?.getPlanModeState()).toBeUndefined();

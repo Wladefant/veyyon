@@ -19,16 +19,16 @@ import * as path from "node:path";
 import { Agent, type AgentMessage } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
 import type { TextContent } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { getBundledModel } from "@veyyon/catalog/models";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
 import { resolveLocalUrlToPath } from "../src/internal-urls";
 import { AgentSession } from "../src/session/agent-session";
-import { AuthStorage } from "../src/session/auth-storage";
 import { convertToLlm } from "../src/session/messages";
-import { SessionManager } from "../src/session/session-manager";
 
 const CONTINUE_MARKER = "Resume work on the user's most recent intent";
 
@@ -147,7 +147,7 @@ describe("AgentSession approved-plan reference re-injection after compaction (is
 		const settings = Settings.isolated({
 			"compaction.enabled": true,
 			"compaction.autoContinue": true,
-			"subagent.delegation": "allowed",
+			"agent.delegation": "allowed",
 			"todo.enabled": false,
 			"todo.eager": "default",
 			"todo.reminders": false,

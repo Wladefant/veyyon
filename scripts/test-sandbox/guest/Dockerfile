@@ -34,6 +34,15 @@
 #                          bite, and it cost a lane a misattributed failure.
 #   ripgrep                64 test files reference it.
 #   openssh-client         20 test files reference the ssh tool.
+#   openssh-server         sshd, spawned by the ssh integration suite. The client
+#                          alone can only be pointed at a host that is not there,
+#                          so every property that matters -- that OpenSSH accepts
+#                          the control path veyyon computes, that the master comes
+#                          up, that commands multiplex over it, that an unusable
+#                          control directory degrades to a direct connection --
+#                          was untestable until the guest could be its own remote.
+#                          A control path one byte too long broke every ssh call
+#                          on a real host while the whole suite stayed green.
 #   python3                8 test files reference it.
 #   util-linux             setpriv, used by the guest init to drop from PID 1 root
 #                          to the synthetic account.
@@ -42,6 +51,21 @@
 #                          the archive records root ownership.
 #   procps, xz-utils,      ps, decompression, and `ip link set lo up`, all of which
 #   iproute2               the suites or the guest init expect to exist.
+#
+#   ffmpeg                 ffmpeg and ffprobe, spawned by proof/motion-gate.sh and
+#                          the suite that pins it. That gate is the only thing that
+#                          can tell a smooth capture from a 60 fps file carrying
+#                          three changes a second, and a suite it cannot run is a
+#                          hole exactly where a stuttering take slipped through
+#                          once already.
+#
+#   imagemagick            `magick`, spawned by proof/compose-chrome.sh and the
+#                          suite that pins it. The chrome is drawn after a take
+#                          rather than by a compositor during it, so the pass that
+#                          draws it is ordinary software this sandbox can run --
+#                          and a suite that cannot run it is a hole exactly where
+#                          a bare square-cornered capture would ship as the themed
+#                          take.
 #
 #   gh                     The GitHub CLI. It is NOT in Debian's archive, so it is
 #                          installed from the official release tarball below. It
@@ -60,20 +84,25 @@
 # under the operator's home. `bash scripts/test-sandbox/run.sh --clean` removes the
 # `docker image rm veyyon-test-guest:<version>` removes the image.
 
-ARG BUN_VERSION=1.3.14
+ARG BUN_VERSION=1.4.0
 FROM oven/bun:${BUN_VERSION}-debian
 
 RUN set -eux; \
     apt-get update; \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         git ca-certificates util-linux kmod procps xz-utils cpio iproute2 \
-        ripgrep openssh-client python3 curl; \
+        ripgrep openssh-client openssh-server python3 curl ffmpeg imagemagick \
+        clang mold build-essential; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*; \
     git --version; \
     bun --version; \
     rg --version; \
     python3 --version; \
+    test -x /usr/sbin/sshd; \
+    ffmpeg -version >/dev/null; \
+    ffprobe -version >/dev/null; \
+    magick -version >/dev/null; \
     test -x /usr/bin/setpriv
 
 # gh is pinned to the version the host carries (gh 2.45.0), so a suite that shells
@@ -81,25 +110,49 @@ RUN set -eux; \
 # it comes with the bun base image.
 ARG GH_VERSION=2.45.0
 RUN set -eux; \
-    curl -fsSL -o /tmp/gh.tgz \
+    mkdir -p /var/cache/gh; \
+    curl -fsSL -o /var/cache/gh/gh.tgz \
         "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz"; \
-    tar -xzf /tmp/gh.tgz -C /tmp; \
-    install -m 0755 "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh; \
-    rm -rf /tmp/gh.tgz "/tmp/gh_${GH_VERSION}_linux_amd64"; \
+    tar -xzf /var/cache/gh/gh.tgz -C /var/cache/gh; \
+    install -m 0755 "/var/cache/gh/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh; \
+    rm -rf /var/cache/gh; \
     gh --version
 
+# mdbook is pinned to v0.5.2 across docs.yml, site.yml, ci.yml, and deployment.md.
+ARG MDBOOK_VERSION=0.5.2
+RUN set -eux; \
+    mkdir -p /var/cache/mdbook; \
+    curl -fsSL -o /var/cache/mdbook/mdbook.tar.gz \
+        "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-musl.tar.gz"; \
+    tar -xzf /var/cache/mdbook/mdbook.tar.gz -C /usr/local/bin; \
+    rm -rf /var/cache/mdbook; \
+    mdbook --version
+
+# Node 22 is required for Cloudflare Pages deploy tooling outside Bun.
+ARG NODE_VERSION=22.14.0
+RUN set -eux; \
+    mkdir -p /var/cache/node; \
+    curl -fsSL -o /var/cache/node/node.tar.xz \
+        "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz"; \
+    tar -xJf /var/cache/node/node.tar.xz -C /usr/local --strip-components=1 --no-same-owner; \
+    rm -rf /var/cache/node; \
+    node --version; \
+    npm --version
 # The kernel opens /dev/console to give PID 1 its stdio, and it does that BEFORE
 # /init can mount devtmpfs. So this node has to exist in the initramfs itself.
 RUN set -eux; \
     mkdir -p /dev; \
     [ -e /dev/console ] || mknod -m 0600 /dev/console c 5 1; \
     [ -e /dev/null ] || mknod -m 0666 /dev/null c 1 3
-# The one and only account inside the guest. Its home is created on a tmpfs at boot
-# by /init; this entry exists so getpwuid(1000) resolves and tools that read the
-# passwd database see a home that is not the operator's.
+# Accounts inside the guest for synthetic users (1000..1010). Their homes are created
+# on a tmpfs at boot by /init or by the sandbox docker runner; these entries exist so
+# getpwuid resolves for the host runner's UID (e.g. 1000 on desktop, 1001 on GitHub
+# Actions) and tools that query the passwd database see a valid account.
 RUN set -eux; \
-    if ! getent group 1000 >/dev/null; then groupadd -g 1000 veyyon; fi; \
-    if ! getent passwd 1000 >/dev/null; then useradd -u 1000 -g 1000 -d /home/veyyon -s /bin/bash veyyon; fi; \
+    for uid in $(seq 1000 1010); do \
+        if ! getent group "$uid" >/dev/null; then groupadd -g "$uid" "veyyon$uid"; fi; \
+        if ! getent passwd "$uid" >/dev/null; then useradd -u "$uid" -g "$uid" -d /home/veyyon -s /bin/bash "veyyon$uid"; fi; \
+    done; \
     usermod -d /home/veyyon "$(getent passwd 1000 | cut -d: -f1)"
 
 COPY guest-init.sh /init

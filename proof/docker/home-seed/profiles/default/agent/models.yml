@@ -1,0 +1,77 @@
+providers:
+  local:
+    baseUrl: http://veyyon-proof-llm:8080/v1
+    api: openai-completions
+    apiKey: LOCAL_LLM_KEY
+    models:
+      # Every row points at the one llama.cpp server on the recorder's network,
+      # which serves whatever weights it was started with and ignores the model
+      # name in a request. The rows below the first are catalog entries for the
+      # other quantizations of the same weights, so the model picker has a list
+      # a pointer can travel over. A turn on any of them is a real turn.
+      - id: qwen2.5-1.5b
+        name: Qwen2.5 1.5B (local)
+        contextWindow: 32768
+        maxTokens: 1024
+      - id: qwen2.5-1.5b-q8
+        name: Qwen2.5 1.5B q8_0 (local)
+        contextWindow: 32768
+        maxTokens: 1024
+      - id: qwen2.5-1.5b-q5
+        name: Qwen2.5 1.5B q5_k_m (local)
+        contextWindow: 32768
+        maxTokens: 1024
+      - id: qwen2.5-1.5b-q4
+        name: Qwen2.5 1.5B q4_k_m (local)
+        contextWindow: 32768
+        maxTokens: 1024
+      - id: qwen2.5-1.5b-f16
+        name: Qwen2.5 1.5B f16 (local)
+        contextWindow: 32768
+        maxTokens: 1024
+      # The HD demo runs against a 30B mixture-of-experts served by ollama on the
+      # recorder host instead of the 1.5B above: a demo has to show real tool use,
+      # and a 1.5B answers a question but does not drive an edit. Ollama DOES honor
+      # the model name in a request, so this id is the tag it serves, aliased with
+      # `ollama cp` to a name with no colon in it.
+      - id: demo-qwen3-30b
+        name: Qwen3 30B A3B (local)
+        contextWindow: 131072
+        maxTokens: 4096
+      # The same weights declared with a smaller window, for the compaction scene.
+      # Compaction is driven by pressure on the window the model row declares, and
+      # 131k is more than this tiny project can fill in a recording: the session
+      # reaches 22k and `/compact` correctly refuses with "nothing to compact". The
+      # size is measured rather than picked -- the system prompt and the tool
+      # schemas alone are about 19k of that 22k, so a window under 24k cannot hold
+      # a session at all, and 32k leaves room for two read turns to reach the
+      # autocompact buffer. Nothing here is a trick: the request is truncated to
+      # this window and the report is measured against it, so the recording shows
+      # the product's own behaviour under a window that is genuinely filling.
+      - id: demo-qwen3-30b-32k
+        name: Qwen3 30B A3B 32k (local)
+        contextWindow: 32768
+        maxTokens: 2048
+      # What the gallery records against: Qwen3.8 27B, served by ollama on the recorder
+      # host as demo-qwen38-27b-64k. It generates 67 tokens a second at 100% GPU and
+      # sits at 22.1 GB of the card's 24.5 GB with this window allocated, measured
+      # rather than assumed.
+      #
+      # The window is 64k because 32k is not one. The system prompt and the tool schemas
+      # alone are about 20k, so a 32k session crosses the automatic-maintenance
+      # threshold within two turns and the product starts saying, correctly, that
+      # compaction cannot free enough to help -- which is a true statement about a
+      # window that small and a terrible thing to record in every row. Ollama fixes the
+      # context length when it loads the weights and an OpenAI-compatible request cannot
+      # raise it, so this number is the served number: a row declaring more would be a
+      # client accounting against a server that silently truncates.
+      - id: demo-qwen38-27b-64k
+        name: Qwen3.8 27B (local)
+        contextWindow: 65536
+        maxTokens: 2048
+      # The long hero uses a distinct server model loaded with a 96k window. This
+      # is not a client-side request to enlarge the 64k row above.
+      - id: demo-qwen38-27b-96k
+        name: Qwen3.8 27B 96k (local)
+        contextWindow: 98304
+        maxTokens: 2048

@@ -1,7 +1,7 @@
-import { errorMessage, isAbortError, logger, postmortem, Snowflake, workerHostEntry } from "@veyyon/utils";
 // Coding-agent binary/bundle workers route through the CLI entrypoint with a
-// hidden argv mode, so compiled/npm builds only need one JavaScript entry.
-import { registerOwnedResourceDisposer } from "../../session/owned-resources";
+// hidden argv mode, so compiled/standalone builds only need one JavaScript entry.
+import { registerOwnedResourceDisposer } from "@veyyon/kernel/session/owned-resources";
+import { errorMessage, isAbortError, logger, postmortem, Snowflake, workerHostEntry } from "@veyyon/utils";
 import {
 	createWorkerHandle,
 	createWorkerSubprocess,
@@ -10,7 +10,7 @@ import {
 } from "../../subprocess/worker-client";
 import { logWorkerMessage } from "../../subprocess/worker-log";
 import type { ToolSession } from "../../tools";
-import { ToolAbortError, ToolError } from "../../tools/tool-errors";
+import { ToolAbortError, ToolError } from "../../tools/core/tool-errors";
 import { raceWithTimeout } from "../../utils/fetch-timeout";
 import { safeSend as safeSendIpc } from "../../utils/ipc";
 import { JS_EVAL_PROCESS_ARG, JS_EVAL_WORKER_ARG } from "../../worker-args";
@@ -116,6 +116,7 @@ export async function executeInVmContext(options: {
 	cwd: string;
 	session: ToolSession;
 	localRoots?: Record<string, string>;
+	artifactsDir?: string | null;
 	reset?: boolean;
 	code: string;
 	filename: string;
@@ -160,7 +161,12 @@ export async function executeInVmContext(options: {
 	}
 	const session = await acquireSession(
 		options.sessionKey,
-		{ cwd: options.cwd, sessionId: options.sessionId, localRoots: options.localRoots },
+		{
+			cwd: options.cwd,
+			sessionId: options.sessionId,
+			localRoots: options.localRoots,
+			artifactsDir: options.artifactsDir,
+		},
 		options.timeoutMs,
 	);
 	// Record which agent session owns this context so it can be reaped on that
@@ -178,10 +184,10 @@ export async function resetVmContext(sessionKey: string): Promise<void> {
 }
 
 export async function disposeAllVmContexts(): Promise<void> {
-	const pending = [...startingSessions.values()];
+	const pending = Array.from(startingSessions.values());
 	startingSessions.clear();
 	const started = await Promise.allSettled(pending);
-	const all = [...sessions.values()];
+	const all = Array.from(sessions.values());
 	for (const result of started) {
 		if (result.status !== "fulfilled") continue;
 		if (!all.includes(result.value)) all.push(result.value);
@@ -200,7 +206,7 @@ export async function disposeAllVmContexts(): Promise<void> {
  */
 export async function disposeVmContextsByOwner(ownerId: string): Promise<void> {
 	const toKill: JsSession[] = [];
-	for (const session of [...sessions.values()]) {
+	for (const session of Array.from(sessions.values())) {
 		if (!session.ownerIds.has(ownerId)) continue;
 		if (session.ownerIds.size === 1) {
 			toKill.push(session);
@@ -272,6 +278,7 @@ async function runOnce(
 		cwd: string;
 		session: ToolSession;
 		localRoots?: Record<string, string>;
+		artifactsDir?: string | null;
 		code: string;
 		filename: string;
 		runState: VmRunState;
@@ -311,7 +318,12 @@ async function runOnce(
 			runId,
 			code: options.code,
 			filename: options.filename,
-			snapshot: { cwd: options.cwd, sessionId: options.sessionId, localRoots: options.localRoots },
+			snapshot: {
+				cwd: options.cwd,
+				sessionId: options.sessionId,
+				localRoots: options.localRoots,
+				artifactsDir: options.artifactsDir,
+			},
 		});
 		return await promise;
 	} finally {
@@ -561,7 +573,7 @@ function toErrorPayload(error: unknown): EvalRunErrorPayload {
 			isToolError: error instanceof ToolError || error.name === "ToolError",
 		};
 	}
-	return { message: String(error) };
+	return { message: errorMessage(error) };
 }
 
 function spawnJsWorker(): WorkerHandle {
@@ -780,3 +792,4 @@ registerOwnedResourceDisposer({
 	scope: "eval-kernel-owner",
 	dispose: disposeVmContextsByOwner,
 });
+postmortem.register("js-eval-cleanup", disposeAllVmContexts);

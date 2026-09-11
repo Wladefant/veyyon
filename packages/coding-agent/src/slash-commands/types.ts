@@ -1,15 +1,15 @@
+import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import type { CollabGuestContext } from "../collab/guest";
 import type { CollabHostContext } from "../collab/host";
 import type { Settings } from "../config/settings";
-import type { InteractiveModeContext } from "../modes/types";
+import type { InteractiveModeContext } from "../modes/terminal/types";
 import type { AgentSession } from "../session/agent-session";
-import type { SessionManager } from "../session/session-manager";
 
 /** Declarative subcommand definition for commands like /mcp. */
 export interface SubcommandDef {
 	name: string;
 	description: string;
-	/** Usage hint shown as dim ghost text, e.g. "<name> [--scope project|user]". */
+	/** Usage hint shown as dim ghost text, e.g. "<name> [project|user]". */
 	usage?: string;
 }
 
@@ -116,6 +116,8 @@ export type TuiSlashCommandHostContext = CollabHostContext &
 		| "collabHost"
 		| "editor"
 		| "goalModeEnabled"
+		| "handleAdvisorDumpCommand"
+		| "handleAdvisorStatusCommand"
 		| "handleBtwCommand"
 		| "handleChangelogCommand"
 		| "handleClearCommand"
@@ -139,6 +141,7 @@ export type TuiSlashCommandHostContext = CollabHostContext &
 		| "handlePlanModeCommand"
 		| "handleQueueCommand"
 		| "handleRenameCommand"
+		| "handleRephraseCommand"
 		| "handleResumeSession"
 		| "handleSessionCommand"
 		| "handleSessionDeleteCommand"
@@ -165,6 +168,7 @@ export type TuiSlashCommandHostContext = CollabHostContext &
 		| "sessionManager"
 		| "settings"
 		| "showAccountManager"
+		| "showAdvisorConfigure"
 		| "showAgentsDashboard"
 		| "showAskDialog"
 		| "showCopySelector"
@@ -181,6 +185,7 @@ export type TuiSlashCommandHostContext = CollabHostContext &
 		| "showResetUsageSelector"
 		| "showSessionSelector"
 		| "showSettingsSelector"
+		| "showReport"
 		| "showStatus"
 		| "showSubcommandPicker"
 		| "showThinkingSelector"

@@ -88,7 +88,7 @@ const stablePrefixIndex = isCCLayout ? 2 : 0;
 Under OAuth the provider prepends a billing header block and a Claude Code instruction block,
 so Veyyon's own first block sits at index 2. Under an API key it is index 0. That first block is
 block 0 from the [system prompt architecture](system-prompt-architecture.md): the static harness
-prefix shared between a parent session and its subagents. Anchoring it means a changing suffix
+prefix shared between a parent session and its agents. Anchoring it means a changing suffix
 (project context, the argot handle table, the secret inventory) cannot invalidate the shared
 prefix.
 
@@ -350,7 +350,7 @@ Prefix caching is positional, so an edit invalidates everything **after** it, no
 | More than 5 minutes idle (`short`) or 1 hour (`long`) | the entry expires; the next turn is a cold write |
 
 Compaction is written to preserve the prefix rather than to minimize tokens for its own sake.
-[Compaction](../compaction.md) records the rule directly: a divergent prefix cold-misses the
+[Compaction](../handbook/src/architecture/compaction.md) records the rule directly: a divergent prefix cold-misses the
 provider prompt cache, so entries are rewritten through `rewriteEntries()` and a sub-floor tool
 result is never blanked, because the `[Output truncated - N tokens]` placeholder costs about 8
 tokens and pruning below that would grow the context and churn the cache for nothing.
@@ -434,7 +434,7 @@ nothing.
 - Do not add a `cache_control` or `cachePoint` in a new place without counting the budget. On
   Anthropic the budget is 4 including markers you did not place, and going over means
   `enforceCacheControlLimit` silently strips one of yours.
-- Do not iterate a `Map` into a prompt section. `secrets.md` records why the secret inventory is
+- Do not iterate a `Map` into a prompt section. `../handbook/src/architecture/secrets.md` records why the secret inventory is
   sorted: insertion order shuffles between refreshes and invalidates the prefix without changing
   anything the section says.
 - Do not mix TTLs and rely on the request surviving. Longer must precede shorter, and the
@@ -466,7 +466,7 @@ than we do, and the comparison is included because it makes the gap concrete.
   it does not observe. The two operator settings still describe themselves as Anthropic-only
   (`packages/coding-agent/src/config/settings-domains/context.ts:508-536`). The in-session divider
   is a separate and weaker signal: `usesExplicitPromptCache`
-  (`coding-agent/src/modes/components/cache-invalidation-marker.ts:59-65`) is a display heuristic,
+  (`coding-agent/src/modes/terminal/components/transcript/cache-invalidation-marker.ts:59-65`) is a display heuristic,
   not a verdict, and it admits only `anthropic-messages`, `bedrock-converse-stream` and the
   Responses generations that accept explicit breakpoints. Api `openrouter` fails that test, so no
   Claude-on-OpenRouter row gets a verdict or a divider. Widening the predicate is worth doing only
@@ -539,8 +539,8 @@ than we do, and the comparison is included because it makes the gap concrete.
 | Verdicts, windows, floors | `packages/ai/src/cache/verdict.ts` |
 | Enforcement levels and the deferred throw | `packages/ai/src/cache/policy.ts` |
 | Per-key tracking state | `packages/ai/src/cache/tracker.ts` |
-| In-session cache-miss divider (display heuristic) | `packages/coding-agent/src/modes/components/cache-invalidation-marker.ts` |
+| In-session cache-miss divider (display heuristic) | `packages/coding-agent/src/modes/terminal/components/transcript/cache-invalidation-marker.ts` |
 | Operator settings | `packages/coding-agent/src/config/settings-domains/context.ts` |
 | Cache-aligned compaction request | `packages/agent/src/compaction/cache-aligned-context.ts` |
 
-*Verified against `31e6a6670` on 2026-08-11.*
+*Verified against `63ffc8131ffb8d35ccbbb1c5de69531a7016eff4` on 2026-09-06.*

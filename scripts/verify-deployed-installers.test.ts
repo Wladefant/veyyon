@@ -15,7 +15,7 @@ import { describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { DEPLOYED_INSTALLERS, describeMismatch, sha256 } from "./verify-deployed-installers.ts";
+import { DEPLOYED_INSTALLERS, describeMismatch, sha256 } from "./verify-deployed-installers";
 
 const repoRoot = path.join(import.meta.dir, "..");
 
@@ -119,37 +119,5 @@ describe("describeMismatch", () => {
 		const message = describeMismatch("https://get.veyyon.dev/install.ps1", sha256("x"), "$ErrorActionPreference");
 		expect(message).toContain("scripts/install.ps1");
 		expect(message).not.toContain("scripts/install.sh");
-	});
-});
-
-describe("the workflows that run the gate", () => {
-	const workflow = (name: string) => fs.readFileSync(path.join(repoRoot, ".github", "workflows", name), "utf8");
-
-	/**
-	 * `site.yml` used to publish only veyyon.dev, so installer changes left
-	 * get.veyyon.dev serving an older tree. Both projects now use the canonical
-	 * deployer; the project environment selects the installer tree.
-	 */
-	it("site.yml deploys both Pages projects through the canonical deployer", () => {
-		const site = workflow("site.yml");
-		expect(site.match(/run: node website\/deploy\.mjs --skip-build/g)).toHaveLength(2);
-		expect(site).toContain("VEYYON_PAGES_PROJECT: veyyon-get");
-	});
-
-	/** Both workflows that publish the endpoint must verify what it then serves. */
-	it("both deploying workflows run the content check", () => {
-		for (const name of ["site.yml", "ci.yml"]) {
-			expect(workflow(name)).toContain("bun scripts/verify-deployed-installers.ts");
-		}
-	});
-
-	/**
-	 * The shape check is what let the drift through. If it reappears next to the
-	 * content check, the weaker one will be the one someone trusts.
-	 */
-	it("no workflow still verifies the endpoint by grepping for a shebang", () => {
-		for (const name of ["site.yml", "ci.yml"]) {
-			expect(workflow(name)).not.toContain('check_script "https://get.veyyon.dev"');
-		}
 	});
 });

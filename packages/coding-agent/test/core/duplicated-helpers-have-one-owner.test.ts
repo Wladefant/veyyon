@@ -54,23 +54,29 @@
  *    needed. Both are shared across package boundaries, so the owner is the package that already owns
  *    the concept: `@veyyon/wire` for the envelope, beside the header length it reads, and
  *    `@veyyon/utils` for the byte coercion.
+ *  - the collab link grammar (room id, base64url codec, relay-origin normalisation, link formatting
+ *    and parsing), which the host minted with `Buffer` and the browser guest parsed with `atob`
+ *    under a header that called itself a vendored mirror. Owned by `@veyyon/wire` beside the key
+ *    sizes and the default relay it reads; only the web deep link stays in the host, because its
+ *    base-URL check reads `@veyyon/utils/url`.
  *  - `buildTreePrefix`, drawn by three renderers, one of which had drifted to the opposite argument
  *    order; `isThenable`, whose two copies came with a comment justifying one of them; and the CLI
  *    model-runtime bootstrap, whose copies both had to close the credential store on failure.
  */
 
 import { describe, expect, it, spyOn } from "bun:test";
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { tryReadHeadSha } from "@veyyon/coding-agent/autoresearch/git";
 import * as collabCrypto from "@veyyon/coding-agent/collab/crypto";
 import * as collabProtocol from "@veyyon/coding-agent/collab/protocol";
 import { canonicalProjectDir } from "@veyyon/coding-agent/launch/paths";
-import { formatProviderName } from "@veyyon/coding-agent/slash-commands/helpers/format";
+import { buildTreePrefix } from "@veyyon/coding-agent/modes/terminal/draw/utils";
+import { formatProviderName } from "@veyyon/coding-agent/session/account-format";
 import * as workerClient from "@veyyon/coding-agent/subprocess/worker-client";
 import type { WorkerLogPayload } from "@veyyon/coding-agent/subprocess/worker-log";
 import * as workerLog from "@veyyon/coding-agent/subprocess/worker-log";
-import { buildTreePrefix } from "@veyyon/coding-agent/tui/utils";
 import { branch } from "@veyyon/coding-agent/utils/git";
 import { errorMessage, parseJsonOrYamlByExtension, TempDir } from "@veyyon/utils";
 import { asStrictBytes } from "@veyyon/utils/bytes";
@@ -79,21 +85,38 @@ import { moduleSpecifiersIn } from "@veyyon/utils/module-reach";
 import * as wire from "@veyyon/wire";
 
 const SRC = path.join(import.meta.dir, "../../src");
-const PACKAGES = path.join(SRC, "../..");
+const REPO_ROOT = path.join(SRC, "../../..");
 
 /**
- * The runtime module specifiers `relative` (under `src/`) names.
+ * The modules `relative` (under `src/`) imports, each named by its own identity rather than by the
+ * path it was written as: a relative specifier is resolved against the importing file and reported
+ * as a `src`-relative module path, and a package specifier is reported verbatim.
  *
  * This is the "no private copy" proof, not a search for one: a module cannot import a binding and
  * also declare it, so the presence of the edge is checked here and its exclusivity by `bun check`.
+ *
+ * The specifier is resolved because a pin on the written form states the DEPTH of the importer and
+ * not the owner, so moving either file reddens the check while the edge it guards is intact. The
+ * owner is the thing this suite is about.
  */
 function importsOf(relative: string): string[] {
-	return moduleSpecifiersIn(fs.readFileSync(path.join(SRC, relative), "utf-8"));
+	const dir = path.posix.dirname(relative.split(path.sep).join("/"));
+
+	return moduleSpecifiersIn(fs.readFileSync(path.join(SRC, relative), "utf-8")).map(specifier =>
+		specifier.startsWith(".")
+			? path.posix.normalize(path.posix.join(dir, specifier)).replace(/\.tsx?$/, "")
+			: specifier,
+	);
 }
 
-/** The same, for a file in a sibling package. */
+/** The same, for a file in another member, `relative` to the repository root. */
 function packageImportsOf(relative: string): string[] {
-	return moduleSpecifiersIn(fs.readFileSync(path.join(PACKAGES, relative), "utf-8"));
+	return moduleSpecifiersIn(fs.readFileSync(path.join(REPO_ROOT, relative), "utf-8"));
+}
+
+/** One git command in `cwd`, output trimmed. Throws with git's own message when it fails. */
+function gitIn(cwd: string, args: string[]): string {
+	return execFileSync("git", args, { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
 describe("canonicalProjectDir", () => {
@@ -129,7 +152,7 @@ describe("canonicalProjectDir", () => {
 	/** Both launch callers take it from `./paths`, which is also the proof neither declares its own. */
 	it("is defined once, and the two launch callers import it", () => {
 		for (const file of ["launch/client.ts", "launch/presence.ts"]) {
-			expect(importsOf(file), file).toContain("./paths");
+			expect(importsOf(file), file).toContain("launch/paths");
 		}
 	});
 });
@@ -155,7 +178,7 @@ describe("parseJsonOrYamlByExtension", () => {
 	});
 
 	it("is what both config readers call, and neither defines its own", () => {
-		for (const file of ["lsp/config.ts", "dap/config.ts"]) {
+		for (const file of ["lsp/config.ts", "debug/dap/config.ts"]) {
 			expect(importsOf(file), file).toContain("@veyyon/utils");
 		}
 	});
@@ -185,13 +208,12 @@ describe("formatProviderName", () => {
 	});
 
 	it("is defined once and imported by all three surfaces", () => {
-		const surfaces: ReadonlyArray<readonly [string, string]> = [
-			["slash-commands/helpers/usage-report.ts", "./format"],
-			["cli/usage-cli.ts", "../slash-commands/helpers/format"],
-			["modes/controllers/command-controller.ts", "../../slash-commands/helpers/format"],
-		];
-		for (const [file, owner] of surfaces) {
-			expect(importsOf(file), file).toContain(owner);
+		for (const file of [
+			"slash-commands/helpers/usage-report.ts",
+			"cli/usage-cli.ts",
+			"modes/terminal/controllers/command-controller.ts",
+		]) {
+			expect(importsOf(file), file).toContain("session/account-format");
 		}
 	});
 });
@@ -216,7 +238,7 @@ describe("the DAP client's error rendering", () => {
 	 * the failure and one that says nothing. So the copies are gone rather than moved.
 	 */
 	it("goes through the shared owner, and no private copy remains", () => {
-		for (const file of ["dap/client.ts", "dap/session.ts"]) {
+		for (const file of ["debug/dap/client.ts", "debug/dap/session.ts"]) {
 			expect(importsOf(file), file).toContain("@veyyon/utils");
 		}
 	});
@@ -246,15 +268,64 @@ describe("tryReadHeadSha", () => {
 		expect(await tryReadHeadSha(dir.path())).toBeNull();
 	});
 
-	it("reads this repository's HEAD as a full hex sha", async () => {
-		const sha = await tryReadHeadSha(path.join(import.meta.dir, "../.."));
+	/**
+	 * A repository the test builds, rather than the one the suite happens to be checked out in. Reading
+	 * the ambient tree asserted the same branch and could not be run at all where the tree is reachable
+	 * but its git directory is not — a linked worktree mounted into a container, which is where this
+	 * arm spent its life reporting `null` and saying nothing about the helper.
+	 */
+	it("reads the HEAD of a repository as a full hex sha", async () => {
+		using dir = TempDir.createSync("@veyyon-head-sha-repo-");
+		const repo = dir.path();
+		gitIn(repo, ["init", "--initial-branch=main"]);
+		gitIn(repo, ["config", "user.email", "test@example.invalid"]);
+		gitIn(repo, ["config", "user.name", "Test"]);
+		fs.writeFileSync(path.join(repo, "file.txt"), "one\n");
+		gitIn(repo, ["add", "file.txt"]);
+		gitIn(repo, ["commit", "-q", "-m", "one"]);
+
+		const sha = await tryReadHeadSha(repo);
 
 		expect(sha).toMatch(/^[0-9a-f]{40}$/);
+		expect(sha).toBe(gitIn(repo, ["rev-parse", "HEAD"]));
+	});
+
+	/**
+	 * The case the ambient read was silently failing on. A linked worktree's `.git` is a FILE pointing at
+	 * `…/worktrees/<name>`, its `HEAD` is a symbolic ref, and the branch it names lives in the common
+	 * directory two levels up — three indirections, each of which the helper has to follow, and none of
+	 * which a repository with a `.git` directory exercises.
+	 *
+	 * The main branch is moved on AFTER the worktree is added, on purpose. Reading the wrong HEAD of the
+	 * two is not an error a reader reports, it is a plausible sha for the wrong checkout, so a fixture
+	 * whose two branches share a commit passes whichever HEAD is read and proves nothing about either.
+	 */
+	it("reads the linked worktree's own HEAD, not the one in the common directory", async () => {
+		using dir = TempDir.createSync("@veyyon-head-sha-worktree-");
+		const repo = path.join(dir.path(), "repo");
+		fs.mkdirSync(repo, { recursive: true });
+		gitIn(repo, ["init", "--initial-branch=main"]);
+		gitIn(repo, ["config", "user.email", "test@example.invalid"]);
+		gitIn(repo, ["config", "user.name", "Test"]);
+		fs.writeFileSync(path.join(repo, "file.txt"), "one\n");
+		gitIn(repo, ["add", "file.txt"]);
+		gitIn(repo, ["commit", "-q", "-m", "one"]);
+		const linked = path.join(dir.path(), "linked");
+		gitIn(repo, ["worktree", "add", "-q", "-b", "side", linked]);
+		fs.writeFileSync(path.join(repo, "file.txt"), "two\n");
+		gitIn(repo, ["commit", "-q", "-a", "-m", "two"]);
+
+		const linkedHead = gitIn(linked, ["rev-parse", "HEAD"]);
+		const mainHead = gitIn(repo, ["rev-parse", "HEAD"]);
+		expect(fs.statSync(path.join(linked, ".git")).isFile()).toBe(true);
+		expect(linkedHead).not.toBe(mainHead);
+		expect(await tryReadHeadSha(linked)).toBe(linkedHead);
+		expect(await tryReadHeadSha(repo)).toBe(mainHead);
 	});
 
 	it("is defined once in autoresearch/git.ts and imported by both experiment tools", () => {
 		for (const file of ["autoresearch/tools/init-experiment.ts", "autoresearch/tools/log-experiment.ts"]) {
-			expect(importsOf(file), file).toContain("../git");
+			expect(importsOf(file), file).toContain("autoresearch/git");
 		}
 	});
 });
@@ -280,23 +351,23 @@ describe("branch.currentOrHead", () => {
 
 	it("is what both bundled commands call, and neither defines its own", async () => {
 		for (const file of [
-			"extensibility/custom-commands/bundled/review/index.ts",
-			"extensibility/custom-commands/bundled/ci-green/index.ts",
+			"extensibility/custom-commands/bundled/review.ts",
+			"extensibility/custom-commands/bundled/ci-green.ts",
 		]) {
-			expect(importsOf(file), file).toContain("../../../../utils/git");
+			expect(importsOf(file), file).toContain("utils/git");
 		}
 	});
 });
 
 describe("sanitizeDiagnosticDisplayText", () => {
 	/**
-	 * Two surfaces render diagnostics (the LSP panel and the tool-result renderer) and each had its own
+	 * Two surfaces render diagnostics (the LSP card and the tool-result renderer) and each had its own
 	 * copy of the same one-line rule. A literal tab in a rendered diagnostic lands on the terminal's tab
 	 * stops, so a column marker under it points at the wrong column; the two surfaces disagreeing about
 	 * that would mean the same diagnostic reads differently depending on where it appeared.
 	 */
-	it("is defined once in render-utils, and the LSP renderer imports it", () => {
-		expect(importsOf("lsp/render.ts")).toContain("../tools/render-utils");
+	it("is defined once in render-utils, and the LSP card imports it", () => {
+		expect(importsOf("lsp/view.ts")).toContain("tools/core/render-utils");
 	});
 });
 
@@ -308,8 +379,8 @@ describe("the browser tab target id", () => {
 	 * Both had a private copy of both functions.
 	 */
 	it("is derived by one module that both sides import", () => {
-		for (const file of ["tools/browser/tab-supervisor.ts", "tools/browser/tab-worker.ts"]) {
-			expect(importsOf(file), file).toContain("./target-id");
+		for (const file of ["tools/web/browser/tab-supervisor.ts", "tools/web/browser/tab-worker.ts"]) {
+			expect(importsOf(file), file).toContain("tools/web/browser/target-id");
 		}
 	});
 });
@@ -321,7 +392,7 @@ describe("the collab wire envelope", () => {
 	 * one wire format. Drift there does not throw: the payload still decrypts, because the room key is
 	 * untouched, and the frame is simply delivered to the wrong peer. `@veyyon/wire` already owned
 	 * `ENVELOPE_HEADER_LENGTH`, so the three functions that read it belong beside it. The format itself is
-	 * pinned byte by byte in `packages/wire/test/envelope.test.ts`.
+	 * pinned byte by byte in `contracts/wire/test/envelope.test.ts`.
 	 */
 	/**
 	 * IDENTITY, which is the strongest form available here and the one a text search cannot reach: the
@@ -339,7 +410,49 @@ describe("the collab wire envelope", () => {
 	 * available, and it is still a graph fact rather than a substring.
 	 */
 	it("is what the browser guest imports too", () => {
-		expect(packageImportsOf("collab-web/src/lib/link.ts")).toContain("@veyyon/wire");
+		expect(packageImportsOf("clients/web/src/lib/link.ts")).toContain("@veyyon/wire");
+	});
+});
+
+describe("the collab link grammar", () => {
+	/**
+	 * A link the host mints is what the browser guest parses, so the grammar is a wire format: the room
+	 * id length, the key and token sizes, the dot-versus-hash joiner and the `%23` tolerance were all
+	 * stated twice. Drift there is silent in the worst direction, because a link that formats on one side
+	 * and fails to parse on the other reads as a bad relay. The behaviour is pinned in
+	 * `test/collab/crypto.test.ts` and `clients/web/test/link.test.ts`, through these same objects.
+	 */
+	it("is parsed and formatted by @veyyon/wire, and the host re-exports those exact functions", () => {
+		expect(collabProtocol.parseCollabLink).toBe(wire.parseCollabLink);
+		expect(collabProtocol.formatCollabLink).toBe(wire.formatCollabLink);
+		expect(collabProtocol.generateRoomId).toBe(wire.generateRoomId);
+	});
+
+	/**
+	 * The web deep link is the one link the host still renders itself. It nests the wire package's
+	 * dot-joined payload, so a link the host mints for the browser parses back to the same room through
+	 * the wire package alone, which is what the browser guest has.
+	 */
+	it("nests the wire payload in the host's web deep link", () => {
+		const key = wire.generateRoomKey();
+		const token = wire.generateWriteToken();
+		const roomId = wire.generateRoomId();
+		const parsed = wire.parseCollabLink(
+			collabProtocol.formatCollabWebLink(
+				"wss://relay.example.com:8443",
+				roomId,
+				key,
+				token,
+				"https://web.example/app",
+			),
+		);
+		if ("error" in parsed) throw new Error(parsed.error);
+		expect(parsed).toEqual({ wsUrl: `wss://relay.example.com:8443/r/${roomId}`, roomId, key, writeToken: token });
+	});
+
+	/** The browser guest, a browser-graph module this realm cannot import, states the same edge. */
+	it("is what the browser guest imports too", () => {
+		expect(packageImportsOf("clients/web/src/lib/link.ts")).toEqual(["@veyyon/wire"]);
 	});
 });
 
@@ -375,7 +488,7 @@ describe("asStrictBytes", () => {
 	 * unconditional (neither spans its own buffer), so a plain `new Uint8Array` is identical.
 	 */
 	it("is what every remaining crypto call site imports", () => {
-		for (const file of ["ai/src/providers/aws-sigv4.ts", "ai/src/auth-broker/snapshot-cache.ts"]) {
+		for (const file of ["packages/ai/src/providers/aws-sigv4.ts", "packages/ai/src/auth-broker/snapshot-cache.ts"]) {
 			expect(packageImportsOf(file), file).toContain("@veyyon/utils/bytes");
 		}
 	});
@@ -387,7 +500,7 @@ describe("asStrictBytes", () => {
 	 * for every browser-graph root; this pins the one call site that reaches it from a signing path.
 	 */
 	it("is reached through the submodule where the barrel would be wrong", () => {
-		const specifiers = packageImportsOf("ai/src/providers/aws-sigv4.ts");
+		const specifiers = packageImportsOf("packages/ai/src/providers/aws-sigv4.ts");
 
 		expect(specifiers).toContain("@veyyon/utils/bytes");
 		expect(specifiers).not.toContain("@veyyon/utils");
@@ -401,7 +514,7 @@ describe("the AES-256-GCM frame seal", () => {
 	 * itself a mirror of the host's. Drift fails in the worst available way, because a GCM tag mismatch
 	 * cannot distinguish a wrong key from a wrong layout: change the IV length on one side and every
 	 * frame fails to authenticate with nothing naming the cause, which reads as a broken relay or a bad
-	 * link. The format is pinned in `packages/wire/test/seal.test.ts`; this is the lock that neither side
+	 * link. The format is pinned in `contracts/wire/test/seal.test.ts`; this is the lock that neither side
 	 * states it again.
 	 */
 	/**
@@ -432,20 +545,20 @@ describe("the AES-256-GCM frame seal", () => {
 
 	/** And the browser guest states the same edge, since it cannot be imported into this realm. */
 	it("is what the browser guest codec imports", () => {
-		expect(packageImportsOf("collab-web/src/lib/codec.ts")).toContain("@veyyon/wire");
+		expect(packageImportsOf("clients/web/src/lib/codec.ts")).toContain("@veyyon/wire");
 	});
 
 	/**
-	 * `@veyyon/wire` has no dependencies, which is what lets the browser guest import it directly. The
-	 * seal was the one thing that looked like it needed `@veyyon/utils`, so this fails if a dependency
-	 * appears rather than waiting for a browser build to break.
+	 * Wire payloads project model messages and host-independent tool views through type-only
+	 * contract imports. Pin both dependencies so adding a runtime package still fails here;
+	 * the contract-layer suite separately verifies erased imports and the acyclic graph.
 	 */
-	it("did not give @veyyon/wire a dependency", () => {
-		const manifest = JSON.parse(fs.readFileSync(path.join(PACKAGES, "wire/package.json"), "utf-8")) as {
+	it("limits wire dependencies to its model and tool-view projection contracts", () => {
+		const manifest = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "contracts/wire/package.json"), "utf-8")) as {
 			dependencies?: Record<string, string>;
 		};
 
-		expect(manifest.dependencies ?? {}).toEqual({});
+		expect(manifest.dependencies ?? {}).toEqual({ "@veyyon/model": "catalog:", "@veyyon/view": "catalog:" });
 	});
 });
 
@@ -465,10 +578,38 @@ describe("buildTreePrefix", () => {
 		expect(buildTreePrefix([true, false, true], theme)).toBe("│     │  ");
 	});
 
-	it("has one definition, and the two other renderers import it", () => {
-		for (const file of ["task/render.ts", "tools/json-tree.ts"]) {
-			expect(importsOf(file), file).toContain("../tui/utils");
-		}
+	/**
+	 * The consumer set moved when the task card became a ToolView: `task/render.ts` drew the agent
+	 * tree as terminal strings and is gone, and the host draws that tree in `modes/terminal/draw/draw-tool-view.ts`,
+	 * which resolves the ancestors from the depth a view states rather than being handed a list. So
+	 * the JSON renderer is the one caller left, and the guard against a fourth copy is the set of
+	 * files allowed to touch the rule glyph at all: a new tree drawn by hand reddens this until
+	 * someone records why it is not the helper's job.
+	 */
+	it("has one definition, the JSON renderer imports it, and no new file rolls the rule by hand", () => {
+		expect(importsOf("tools/core/json-tree-render.ts")).toContain("modes/terminal/draw/utils");
+
+		const drawers = fs
+			.readdirSync(SRC, { recursive: true, encoding: "utf8" })
+			.filter(entry => entry.endsWith(".ts"))
+			.filter(entry => fs.readFileSync(path.join(SRC, entry), "utf8").includes("tree.vertical"))
+			.map(entry => entry.split(path.sep).join("/"))
+			.sort();
+
+		expect(drawers).toEqual([
+			// The two selectors draw their own tree of a filesystem, through `getTreeContinuePrefix`
+			// beside the helper this cell is about.
+			"modes/terminal/components/selectors/copy-selector.ts",
+			"modes/terminal/components/selectors/tree-selector.ts",
+			// The host's view drawer, which knows a line's depth and its last-child answer and not its
+			// ancestor list, and dims each rule as it lays it down.
+			"modes/terminal/draw/draw-tool-view.ts",
+			// The owner.
+			"modes/terminal/draw/utils.ts",
+			// Where the glyph itself is declared and resolved for a theme.
+			"theme/symbols.ts",
+			"theme/theme-class.ts",
+		]);
 	});
 
 	/**
@@ -513,7 +654,7 @@ describe("the CLI model runtime", () => {
 	 */
 	it("is what both CLIs default to, and neither builds its own", () => {
 		for (const file of ["cli/bench-cli.ts", "cli/dry-balance-cli.ts"]) {
-			expect(importsOf(file), file).toContain("./model-runtime");
+			expect(importsOf(file), file).toContain("cli/model-runtime");
 		}
 	});
 });
@@ -527,8 +668,8 @@ describe("the worker log replay", () => {
 	 * is reading, without any sign that it happened.
 	 */
 	it("has one owner that both supervisors import", () => {
-		for (const file of ["eval/js/context-manager.ts", "tools/browser/tab-supervisor.ts"]) {
-			expect(importsOf(file), file).toContain("../../subprocess/worker-log");
+		for (const file of ["eval/js/context-manager.ts", "tools/web/browser/tab-supervisor.ts"]) {
+			expect(importsOf(file), file).toContain("subprocess/worker-log");
 		}
 	});
 

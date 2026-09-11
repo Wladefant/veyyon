@@ -31,13 +31,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import { resolveVaultLocations, SecretVault, vaultPathFor } from "@veyyon/coding-agent/secrets/vault";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { OperatorNotices } from "@veyyon/coding-agent/session/operator-notices";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { OperatorNotices } from "@veyyon/kernel/session/operator-notices";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { useIsolatedConfigRoot } from "../helpers/isolated-agent-dir";
 
@@ -108,7 +108,7 @@ describe("an SDK session over a project whose vault cannot be read", () => {
 				const text = reported[0]?.text ?? "";
 				// Names the scope, the file, and the repair.
 				expect(text).toContain("project");
-				expect(text).toContain("/secret discard --scope project");
+				expect(text).toContain("/secret discard project");
 				// MOVES rather than deletes: the file still holds a real credential under a live key.
 				expect(text).toContain("aside");
 				// Reachable from wherever this is being read, which is the whole point of starting

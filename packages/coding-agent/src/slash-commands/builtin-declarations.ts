@@ -26,8 +26,8 @@
  * third import that pulled in anything larger would undo the split, so weigh one before adding it.
  */
 
+import { COMPACT_MODES } from "@veyyon/kernel/session/compact-modes";
 import { PRIORITY_TIER_LABEL } from "../config/service-tier";
-import { COMPACT_MODES } from "../session/compact-modes";
 
 /** One command's declared surface. The handler side is `SlashCommandSpec` in the registry. */
 export interface BuiltinSlashCommandDeclaration {
@@ -294,14 +294,13 @@ export const BUILTIN_SLASH_COMMAND_DECLARATIONS = [
 		name: "cpu-limit",
 		textMode: true,
 		aliases: ["cpu"],
-		description: "Set this session's CPU budget for spawned commands (the saved default lives in /settings)",
-		acpDescription: "Set the session CPU budget",
-		acpInputHint: "[status|<cores>|remove|reset|kill on|kill off]",
+		description: "Report resource limits, or lift this session's CPU cap (configure in /settings under Resources)",
+		acpDescription: "Report resource limits, or lift this session's CPU cap",
+		acpInputHint: "[status|lift|reset]",
 		subcommands: [
-			{ name: "status", description: "Show the budget, where it came from, and what it is enforcing" },
-			{ name: "remove", description: "Lift the cap for this session, leaving the saved setting alone" },
-			{ name: "reset", description: "Drop the session override and use the saved default" },
-			{ name: "kill", description: "on|off: kill over-budget commands instead of refusing new ones" },
+			{ name: "status", description: "Show the machine and session limits and what is enforcing them" },
+			{ name: "lift", description: "Lift the CPU cap for this session, changing no setting" },
+			{ name: "reset", description: "Drop the session override and use the configured limit" },
 		],
 		allowArgs: true,
 	},
@@ -309,8 +308,11 @@ export const BUILTIN_SLASH_COMMAND_DECLARATIONS = [
 	{
 		name: "prewalk",
 		textMode: true,
-		description: "Switch to a fast/cheap model at the next action (works even without --prewalk)",
+		description:
+			"Switch to the cheap model at the next action; /prewalk <model> or prewalk.cheapModel picks it (works even without --prewalk)",
+		inlineHint: "[model]",
 		acpDescription: "Prewalk at the next action",
+		allowArgs: true,
 	},
 
 	{
@@ -340,26 +342,40 @@ export const BUILTIN_SLASH_COMMAND_DECLARATIONS = [
 		description: "Store a credential the agent can use without ever seeing it",
 		acpDescription: "Manage credentials; new values are accepted only from environment variables",
 		allowArgs: true,
-		// The value form first, then the verbs a new operator reaches for. The rest of the grammar is
-		// in the dropdown rather than the ghost text: one line cannot carry eleven verbs and still
-		// show that a bare value is all `/secret` needs.
-		inlineHint: "<value> | list | rm | rename | value | extend | log | --from-env VAR",
-		acpInputHint: "add <name> --from-env <VAR>",
-		// Bare /secret opens the masked value field rather than a subcommand picker: the value form
-		// needs no verb, so `add` is a synonym rather than a hidden default, and a picker would put a
-		// mandatory verb back in front of the one action that does not need one.
+		// A command comes first, and `add` leads because it is the one an operator arrives to run. The
+		// rest of the grammar is in the dropdown rather than the ghost text: one line cannot carry
+		// twelve commands.
+		inlineHint: "add <value> | from-env VAR | list | rm | rename | value | extend | log",
+		acpInputHint: "from-env <VAR> <name>",
+		// Bare /secret prints this command's own usage rather than the generic subcommand list, which
+		// is the same text `/secret help` prints and is not a hidden default: it runs no subcommand and
+		// stores nothing. The generic list cannot stand in for it, because a `SubcommandDef.usage` is
+		// one string for every surface and `add`'s shape is not — a terminal is shown `add <value>`
+		// and a client `from-env <VAR> <name>`. Printing the declaration's spelling in a terminal
+		// would advertise typing a NAME where the value goes, which is the exposure this feature exists
+		// to remove.
 		bareAction: "distinct",
 		subcommands: [
 			{
 				name: "add",
 				description: "Store a credential, prompting for the value with it hidden as you type",
-				usage: "/secret add <name> [--from-env <VAR>] [--ttl 7d] [--scope profile|project|global]",
+				usage: "/secret add <value>",
+			},
+			{
+				name: "from-env",
+				description: "Store the value of an environment variable, typing the credential nowhere",
+				usage: "/secret from-env <VAR> <name> [7d] [profile|project|global]",
 			},
 			{ name: "list", description: "Show active secrets, never their values", usage: "/secret list" },
 			{
 				name: "rm",
 				description: "Remove a stored secret",
-				usage: "/secret rm <name> [--scope profile|project|global]",
+				usage: "/secret rm <name> [profile|project|global]",
+			},
+			{
+				name: "clear",
+				description: "Remove every secret in one vault, or in all three, naming what it removed",
+				usage: "/secret clear profile|project|global|everywhere",
 			},
 			{
 				name: "rename",
@@ -369,7 +385,7 @@ export const BUILTIN_SLASH_COMMAND_DECLARATIONS = [
 			{
 				name: "value",
 				description: "Replace a stored secret's value, keeping its name and deadline",
-				usage: "/secret value <name> [--from-env <VAR>]",
+				usage: "/secret value <name> [from-env <VAR>]",
 			},
 			{
 				name: "scope",
@@ -384,17 +400,17 @@ export const BUILTIN_SLASH_COMMAND_DECLARATIONS = [
 			{
 				name: "extend",
 				description: "Give a stored secret a fresh lifetime",
-				usage: "/secret extend <name> --ttl 7d",
+				usage: "/secret extend <name> 7d",
 			},
 			{
 				name: "log",
 				description: "Show which secrets were used, in which command, and when",
-				usage: "/secret log [--name <name>] [--limit 50]",
+				usage: "/secret log [<name>] [50]",
 			},
 			{
 				name: "discard",
 				description: "Move a vault file aside that could not be read",
-				usage: "/secret discard --scope profile|project|global",
+				usage: "/secret discard profile|project|global",
 			},
 			{ name: "help", description: "Show every way to store and manage a credential", usage: "/secret help" },
 		],
@@ -546,9 +562,8 @@ export const BUILTIN_SLASH_COMMAND_DECLARATIONS = [
 		// command, one description, one screen.
 		name: "agents",
 		aliases: ["cockpit", "hub"],
-		description: "Agent Control Center: live agent roster and comms stream",
+		description: "Agent dashboard: live agent roster and comms stream",
 	},
-
 	{
 		name: "branch",
 		description: "Create a new branch from a previous message",
@@ -592,10 +607,10 @@ export const BUILTIN_SLASH_COMMAND_DECLARATIONS = [
 			{
 				name: "add",
 				description: "Add a new MCP server",
-				usage: "<name> [--scope project|user] [--url <url>] [-- <command...>]",
+				usage: "<name> [http|sse] [url <url>] [token <token>] [run <command...>]",
 			},
 			{ name: "list", description: "List all configured MCP servers" },
-			{ name: "remove", description: "Remove an MCP server", usage: "<name> [--scope project|user]" },
+			{ name: "remove", description: "Remove an MCP server", usage: "<name>" },
 			{ name: "test", description: "Test connection to a server", usage: "<name>" },
 			{ name: "reauth", description: "Reauthorize OAuth for a server", usage: "<name>" },
 			{ name: "unauth", description: "Remove OAuth auth from a server", usage: "<name>" },
@@ -604,7 +619,7 @@ export const BUILTIN_SLASH_COMMAND_DECLARATIONS = [
 			{
 				name: "smithery-search",
 				description: "Search Smithery registry and deploy an MCP server",
-				usage: "<keyword> [--scope project|user] [--limit <1-100>] [--semantic]",
+				usage: "<keyword...> [<limit 1-100>] [semantic]",
 			},
 			{ name: "smithery-login", description: "Login to Smithery and cache API key" },
 			{ name: "smithery-logout", description: "Remove cached Smithery API key" },
@@ -628,12 +643,23 @@ export const BUILTIN_SLASH_COMMAND_DECLARATIONS = [
 			{
 				name: "add",
 				description: "Add an SSH host",
-				usage: "<name> --host <host> [--user <user>] [--port <port>] [--key <keyPath>]",
+				usage: "<name> <host> [user <user>] [<port>] [key <keyPath>]",
 			},
 			{ name: "list", description: "List all configured SSH hosts" },
-			{ name: "remove", description: "Remove an SSH host", usage: "<name> [--scope project|user]" },
+			{ name: "remove", description: "Remove an SSH host", usage: "<name>" },
 			{ name: "help", description: "Show help message" },
 		],
+		allowArgs: true,
+	},
+
+	{
+		name: "stats",
+		textMode: true,
+		description: "Open the usage dashboard in a browser",
+		acpDescription: "Open the usage statistics dashboard",
+		// The port is the only thing this command reads, so it is a plain integer
+		// rather than a keyword and a value.
+		inlineHint: "[<port>]",
 		allowArgs: true,
 	},
 
@@ -732,6 +758,11 @@ export const BUILTIN_SLASH_COMMAND_DECLARATIONS = [
 	},
 
 	{
+		name: "rephrase",
+		description: "Ask for the last reply again, in plainer prose",
+	},
+
+	{
 		name: "debug",
 		description: "Open debug tools selector",
 	},
@@ -823,6 +854,22 @@ export const BUILTIN_SLASH_COMMAND_DECLARATIONS = [
 	},
 
 	{
+		name: "trust",
+		textMode: true,
+		description: "Decide whether the code this project carries may run (plugins, extensions, hooks, MCP)",
+		acpDescription: "Decide whether project code may run",
+		acpInputHint: "[approve|deny|forget]",
+		// Bare /trust reports; it never approves. A decision that runs project code is not something
+		// a bare command should do on a keystroke.
+		subcommands: [
+			{ name: "approve", description: "Approve the project files exactly as they are now" },
+			{ name: "deny", description: "Refuse this project, and remember the refusal" },
+			{ name: "forget", description: "Drop the decision so it is asked again" },
+		],
+		allowArgs: true,
+	},
+
+	{
 		name: "force",
 		textMode: true,
 		description: "Force next turn to use a specific tool",
@@ -832,8 +879,27 @@ export const BUILTIN_SLASH_COMMAND_DECLARATIONS = [
 	},
 
 	{
+		name: "advisor",
+		textMode: true,
+		description: "Show, configure, start or stop the advisor that reviews this session",
+		acpDescription: "Inspect and configure the advisor",
+		acpInputHint: "[status|configure|on|off|dump]",
+		allowArgs: true,
+		// Bare /advisor opens the picker. `status` is a declared subcommand, so a bare form
+		// that reported status would hide `configure` behind knowledge nobody is given: the
+		// roster editor has no other entry point.
+		subcommands: [
+			{ name: "status", description: "Show whether the advisor is running, on what model, and what it has spent" },
+			{ name: "configure", description: "Edit the WATCHDOG.yml advisor roster and apply it to this session" },
+			{ name: "on", description: "Start the advisor for this session" },
+			{ name: "off", description: "Stop the advisor for this session" },
+			{ name: "dump", description: "Copy the advisor's own transcript to the clipboard" },
+		],
+	},
+
+	{
 		name: "pause",
-		description: "Freeze all agents (main, subagents, advisor) until resumed",
+		description: "Freeze all agents (main, spawned agents, advisor) until resumed",
 	},
 
 	{

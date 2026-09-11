@@ -15,7 +15,7 @@
       const { header, entries, leafId: defaultLeafId, systemPrompt, tools, subSessions } = data;
 
       // Session render context: scopes entry lookups and tool-view host
-      // wiring to one transcript (main session or an embedded subagent).
+      // wiring to one transcript (main session or an embedded agent).
       const mainSctx = { entries, prefix: '', idPrefix: 'entry-' };
 
       // ============================================================
@@ -173,7 +173,7 @@
         const stack = [];
 
         // Add roots (prioritize branch containing active leaf)
-        const orderedRoots = [...roots].sort((a, b) => 
+        const orderedRoots = roots.slice().sort((a, b) =>
           Number(containsActive.get(b)) - Number(containsActive.get(a))
         );
         for (let i = orderedRoots.length - 1; i >= 0; i--) {
@@ -190,7 +190,7 @@
           const multipleChildren = children.length > 1;
 
           // Order children (active branch first)
-          const orderedChildren = [...children].sort((a, b) => 
+          const orderedChildren = children.slice().sort((a, b) => 
             Number(containsActive.get(b)) - Number(containsActive.get(a))
           );
 
@@ -212,7 +212,7 @@
           const currentDisplayIndent = multipleRoots ? Math.max(0, indent - 1) : indent;
           const connectorPosition = Math.max(0, currentDisplayIndent - 1);
           const childGutters = connectorDisplayed
-            ? [...gutters, { position: connectorPosition, show: !isLast }]
+            ? gutters.concat([{ position: connectorPosition, show: !isLast }])
             : gutters;
 
           // Add children in reverse order for stack
@@ -433,12 +433,12 @@
             const cmd = rawCmd.replace(/[\n\t]/g, ' ').trim().slice(0, 50);
             return `[bash: ${cmd}${rawCmd.length > 50 ? '...' : ''}]`;
           }
-          case 'search':
-          case 'grep':
-            return `[grep: /${args.pattern || ''}/ in ${shortenPath(String((args.paths || [args.path || '.']).join(', ')))}]`;
-          case 'find':
-          case 'glob':
-            return `[glob: ${shortenPath(String((args.paths || [args.pattern || '.']).join(', ')))}]`;
+          case 'search': {
+            const type = String(args.type || '?');
+            const input = String(args.input || '');
+            const scope = args.path ? ` in ${shortenPath(String(args.path))}` : '';
+            return `[search:${type} ${input}${scope}]`;
+          }
           case 'ls':
             return `[ls: ${shortenPath(String(args.path || '.'))}]`;
           default: {
@@ -448,10 +448,19 @@
         }
       }
 
+      // Escapes the five characters that change meaning in markup, in both text
+      // and attribute position. The earlier `div.textContent` round-trip escaped
+      // only `&`, `<` and `>`: the serializer quotes an attribute value it writes
+      // itself, but a text node keeps its quotes verbatim. Every `href="..."`,
+      // `src="..."` and `title="..."` built from this therefore accepted a `"` and
+      // let the value close the attribute and open an event handler.
       function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+        return String(text ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
       }
 
       function canonicalizeMessage(text) {
@@ -738,6 +747,7 @@
           name: call.name,
           args: call.arguments || {},
           result: result || undefined,
+          display: (result && result.display) ? result.display : (call.display || undefined),
           host: {
             hasAgent: (id) => !!lookupSubSession(sctx.prefix, id),
             openAgent: (id) => openSubSession(joinKey(sctx.prefix, id)),
@@ -751,7 +761,7 @@
       // ============================================================
       //
       // Task tool cards expose agent chips (wired through the payload `host`
-      // above); clicking one opens that subagent's transcript in a stacked
+      // above); clicking one opens that agent's transcript in a stacked
       // overlay. Keys are slash-joined agent ids relative to the main
       // session: top-level agent 'ToolAsk', its child 'ToolAsk/Helper'.
 
@@ -779,7 +789,7 @@
       }
 
       /**
-       * Root-to-leaf path through an arbitrary entry list (subagent
+       * Root-to-leaf path through an arbitrary entry list (agent
        * transcripts are linear chains; same parent-walk as getPath).
        */
       function getPathIn(entryList, targetId) {
@@ -807,10 +817,10 @@
         subOverlayEl.id = 'subsession-overlay';
         subOverlayEl.innerHTML = `
           <div class="subsession-backdrop"></div>
-          <div class="subsession-panel" role="dialog" aria-modal="true" aria-label="Subagent session" tabindex="-1">
+          <div class="subsession-panel" role="dialog" aria-modal="true" aria-label="Agent session" tabindex="-1">
             <div class="subsession-header">
-              <nav class="subsession-breadcrumb" aria-label="Subagent breadcrumb"></nav>
-              <button type="button" class="subsession-close" title="Close (Esc)" aria-label="Close subagent view">&times;</button>
+              <nav class="subsession-breadcrumb" aria-label="Agent breadcrumb"></nav>
+              <button type="button" class="subsession-close" title="Close (Esc)" aria-label="Close agent view">&times;</button>
             </div>
             <div class="subsession-meta"></div>
             <div class="subsession-body"></div>
@@ -1044,7 +1054,7 @@
               if (images.length > 0) {
                 html += '<div class="message-images">';
                 for (const img of images) {
-                  html += `<img src="data:${img.mimeType};base64,${img.data}" class="message-image" />`;
+                  html += `<img src="data:${escapeHtml(img.mimeType)};base64,${escapeHtml(img.data)}" class="message-image" />`;
                 }
                 html += '</div>';
               }
@@ -1244,7 +1254,7 @@
             <div class="help-bar">T toggle thinking · O toggle tools</div>
             <div class="header-info">
               <div class="info-item"><span class="info-label">Date:</span><span class="info-value">${header?.timestamp ? new Date(header.timestamp).toLocaleString() : 'unknown'}</span></div>
-              <div class="info-item"><span class="info-label">Models:</span><span class="info-value">${globalStats.models.join(', ') || 'unknown'}</span></div>
+              <div class="info-item"><span class="info-label">Models:</span><span class="info-value">${escapeHtml(globalStats.models.join(', ')) || 'unknown'}</span></div>
               <div class="info-item"><span class="info-label">Messages:</span><span class="info-value">${msgParts.join(', ') || '0'}</span></div>
               <div class="info-item"><span class="info-label">Tool Calls:</span><span class="info-value">${globalStats.toolCalls}</span></div>
               <div class="info-item"><span class="info-label">Tokens:</span><span class="info-value">${tokenParts.join(' ') || '0'}</span></div>

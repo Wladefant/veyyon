@@ -10,7 +10,7 @@
  * provider with no login turns this suite red until someone writes that reason down. The exception
  * set itself is pinned to the three providers that genuinely cannot be one pasted key, and each
  * exception is cross-checked against the registry so a stale entry (provider deleted, or provider
- * that has since grown a login) also goes red. For the seven single-key providers the login is
+ * that has since grown a login) also goes red. For every enumerated single-key provider the login is
  * driven end to end through a fake controller: the pasted key comes back trimmed, `onAuth` receives
  * that vendor's real key page, the validation request goes to that vendor's real endpoint, and an
  * all-whitespace paste is rejected.
@@ -21,7 +21,7 @@
  * `AuthStorage`, and whether the login list renders the new entries.
  */
 import { describe, expect, test, vi } from "bun:test";
-import { ApiKeyRequiredError } from "@veyyon/ai/error";
+import { ApiKeyRequiredError, LoginCancelledError } from "@veyyon/ai/error";
 import { PROVIDER_REGISTRY } from "@veyyon/ai/registry";
 import type { OAuthAuthInfo, OAuthLoginCallbacks } from "@veyyon/ai/registry/oauth/types";
 import type { ProviderDefinition } from "@veyyon/ai/registry/types";
@@ -75,6 +75,41 @@ const SINGLE_KEY_PROVIDERS: readonly SingleKeyProvider[] = [
 		validationUrl: "https://api.minimax.io/v1/models",
 	},
 	{ id: "aimlapi", authUrl: "https://aimlapi.com/app/keys", validationUrl: null },
+	{
+		id: "command-code",
+		authUrl: "https://commandcode.ai/studio/provider",
+		validationUrl: "https://api.commandcode.ai/provider/v1/chat/completions",
+	},
+	{
+		id: "cloudflare-ai-gateway",
+		authUrl: "https://developers.cloudflare.com/ai-gateway/configuration/authentication/",
+		validationUrl: null,
+	},
+	{
+		id: "vercel-ai-gateway",
+		authUrl: "https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai-gateway%2Fapi-keys&title=AI+Gateway+API+Keys",
+		validationUrl: null,
+	},
+	{
+		id: "litellm",
+		authUrl: "https://docs.litellm.ai/docs/proxy/deploy",
+		validationUrl: null,
+	},
+	{
+		id: "parallel",
+		authUrl: "https://platform.parallel.ai/settings?tab=api-keys",
+		validationUrl: null,
+	},
+	{
+		id: "tavily",
+		authUrl: "https://app.tavily.com/home",
+		validationUrl: null,
+	},
+	{
+		id: "kagi",
+		authUrl: "https://kagi.com/settings/api",
+		validationUrl: null,
+	},
 ];
 
 function providerById(id: string): ProviderDefinition {
@@ -85,17 +120,26 @@ function providerById(id: string): ProviderDefinition {
 	return def;
 }
 
+type CapturedRequest = {
+	url: string;
+	init?: RequestInit;
+};
+
 type Harness = {
 	callbacks: OAuthLoginCallbacks;
 	authCalls: OAuthAuthInfo[];
 	fetchUrls: string[];
+	fetchRequests: CapturedRequest[];
 };
 
 function harness(paste: string): Harness {
 	const authCalls: OAuthAuthInfo[] = [];
 	const fetchUrls: string[] = [];
-	const fetchStub: FetchImpl = vi.fn(async (input: string | URL | Request) => {
-		fetchUrls.push(String(input));
+	const fetchRequests: CapturedRequest[] = [];
+	const fetchStub: FetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+		const url = String(input);
+		fetchUrls.push(url);
+		fetchRequests.push({ url, init });
 		return new Response(JSON.stringify({ data: [] }), {
 			status: 200,
 			headers: { "Content-Type": "application/json" },
@@ -104,6 +148,7 @@ function harness(paste: string): Harness {
 	return {
 		authCalls,
 		fetchUrls,
+		fetchRequests,
 		callbacks: {
 			onAuth: vi.fn((info: OAuthAuthInfo) => {
 				authCalls.push(info);
@@ -171,4 +216,35 @@ describe("single-key providers have a real /login", () => {
 			expect(fetchUrls).toEqual([]);
 		},
 	);
+
+	test.each(SINGLE_KEY_PROVIDERS.map(provider => [provider.id, provider] as const))(
+		"%s throws LoginCancelledError when the abort signal is aborted",
+		async (_id, provider) => {
+			const def = providerById(provider.id);
+			const login = def.login;
+			if (typeof login !== "function") {
+				throw new Error(`provider ${provider.id} has no callable login`);
+			}
+
+			const controller = new AbortController();
+			controller.abort();
+			const { callbacks } = harness("pasted-secret-key");
+			await expect(login({ ...callbacks, signal: controller.signal })).rejects.toBeInstanceOf(LoginCancelledError);
+		},
+	);
+
+	test("Command Code validates the trimmed key with the documented bearer request and model", async () => {
+		const login = providerById("command-code").login;
+		if (typeof login !== "function") throw new Error("provider command-code has no callable login");
+		const { callbacks, fetchRequests } = harness("  command-secret  ");
+
+		await expect(login(callbacks)).resolves.toBe("command-secret");
+
+		expect(fetchRequests).toHaveLength(1);
+		const request = fetchRequests[0];
+		expect(request?.url).toBe("https://api.commandcode.ai/provider/v1/chat/completions");
+		expect(new Headers(request?.init?.headers).get("Authorization")).toBe("Bearer command-secret");
+		const body = JSON.parse(String(request?.init?.body)) as { model?: unknown };
+		expect(body.model).toBe("moonshotai/Kimi-K2.7-Code");
+	});
 });

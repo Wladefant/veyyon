@@ -3,15 +3,15 @@ import * as path from "node:path";
 import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
 import type { AssistantMessage, Message, ThinkingContent } from "@veyyon/ai";
 import { z } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockContent, type MockModel, type MockResponse } from "@veyyon/ai/providers/mock";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
 import { convertToLlm } from "@veyyon/coding-agent/session/messages";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import { RewindTool } from "@veyyon/coding-agent/tools/checkpoint";
+import { RewindTool } from "@veyyon/coding-agent/tools/fs/checkpoint";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 
 const checkpointSchema = z.object({ goal: z.string() });
@@ -201,9 +201,22 @@ describe("AgentSession checkpoint rewind branch context", () => {
 			finalCall.context.messages.some(message => message.role === "toolResult" && message.toolName === "rewind"),
 		).toBe(false);
 
-		const activeRoles = session.messages.map(message => message.role);
+		// WHAT FLIPPED. The date and the working directory left the cached system prompt for a
+		// hidden `session-state` custom block unshifted at the head of every transcript, so the
+		// active history carries one extra leading `custom` message. Pin that block by its
+		// persisted type rather than letting a bare "custom" in the sequence absorb it, then
+		// assert the rebuilt order exactly as before.
+		const head = session.messages[0];
+		expect(head?.role).toBe("custom");
+		expect(head && "customType" in head ? head.customType : undefined).toBe("session-state");
+		const activeRoles = session.messages.slice(1).map(message => message.role);
 		expect(activeRoles).toEqual(["user", "assistant", "toolResult", "branchSummary", "custom", "assistant"]);
-		expect(activeRoles).toEqual(session.sessionManager.buildSessionContext().messages.map(message => message.role));
+		expect(activeRoles).toEqual(
+			session.sessionManager
+				.buildSessionContext()
+				.messages.slice(1)
+				.map(message => message.role),
+		);
 
 		const finalAssistant = expectLastAssistant(session.messages);
 		const finalThinking = finalAssistant.content.find((block): block is ThinkingContent => block.type === "thinking");

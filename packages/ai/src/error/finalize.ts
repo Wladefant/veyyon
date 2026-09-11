@@ -1,5 +1,5 @@
 import { errorMessage } from "@veyyon/utils/type-guards";
-import type { Api } from "../types";
+import type { Api, AssistantMessage } from "../types";
 import type { AbortSourceTracker } from "../utils/abort";
 import type { CapturedHttpErrorResponse, RawHttpRequestDump } from "../utils/http-inspector";
 import { classify, classifyMessage, status } from "./flags";
@@ -29,6 +29,25 @@ export interface FinalizeResult {
 	status: number | undefined;
 	/** `"aborted"` when the caller cancelled, otherwise `"error"`. */
 	stopReason: "aborted" | "error";
+	/**
+	 * How loud a provider's own record of this outcome should be.
+	 *
+	 * A caller abort is not a failure. Pressing stop is the one outcome that was
+	 * asked for, and grading it `error` files a red record for it: four of
+	 * twenty-two recorded terminal Devin stream failures were cancellations
+	 * logged at `error`, which is noise sitting on top of the eighteen that were
+	 * real. The level is derived from the same `aborted` fact `stopReason` comes
+	 * from, so a record can never say "aborted" at `error` or the reverse.
+	 */
+	logLevel: "debug" | "error";
+	/**
+	 * The classification rules that decided this id, in registry order.
+	 *
+	 * A record that states only the outcome leaves "which rule said so" to be re-derived by hand
+	 * against the provider's sentence, which is what a misclassification costs to diagnose. The names
+	 * come from the same walk that produced `id`, so a record can never name a rule that did not fire.
+	 */
+	rules: readonly string[];
 	/** User-facing message from {@link formatMessage}, or a local abort reason. */
 	message: string;
 }
@@ -54,17 +73,41 @@ export async function finalize(error: unknown, opts: FinalizeOptions = {}): Prom
 		message = errorMessage(error);
 	}
 
-	const id = classifyMessage({
-		api: opts.api,
-		errorId: classify(error, opts.api),
-		errorMessage: message,
-		errorStatus: currentStatus,
-	});
+	const trace: string[] = [];
+	const id = classifyMessage(
+		{
+			api: opts.api,
+			errorId: classify(error, opts.api, trace),
+			errorMessage: message,
+			errorStatus: currentStatus,
+		},
+		trace,
+	);
 
 	return {
 		id,
 		status: currentStatus,
 		stopReason: aborted ? "aborted" : "error",
+		logLevel: aborted ? "debug" : "error",
+		rules: Array.from(new Set(trace)),
 		message,
 	};
+}
+
+/**
+ * Assign a finalized error bundle onto an {@link AssistantMessage}'s error fields.
+ *
+ * Centralizes the repeated `stopReason`, `errorStatus`, `errorId`, and `errorMessage`
+ * assignment while keeping timing calculations, streaming error-event emission,
+ * and custom message post-processing (diagnostics, hints) under provider ownership.
+ */
+export function applyFinalizeResult(
+	output: AssistantMessage,
+	result: FinalizeResult,
+	message: string = result.message,
+): asserts output is AssistantMessage & { stopReason: "aborted" | "error" } {
+	output.stopReason = result.stopReason;
+	output.errorStatus = result.status;
+	output.errorId = result.id;
+	output.errorMessage = message;
 }

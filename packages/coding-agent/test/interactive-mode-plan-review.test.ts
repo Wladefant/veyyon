@@ -3,24 +3,26 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Agent, AgentBusyError, ThinkingLevel } from "@veyyon/agent-core";
 import type { AssistantMessage, Usage } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import * as AIError from "@veyyon/ai/error";
 import { KeybindingsManager } from "@veyyon/coding-agent/config/keybindings";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { resolveLocalUrlToPath } from "@veyyon/coding-agent/internal-urls";
-import { AssistantMessageComponent } from "@veyyon/coding-agent/modes/components/assistant-message";
-import type { HookSelectorSlider } from "@veyyon/coding-agent/modes/components/hook-selector";
-import type { PlanReviewOverlay } from "@veyyon/coding-agent/modes/components/plan-review-overlay";
-import { InteractiveMode } from "@veyyon/coding-agent/modes/interactive-mode";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
+import type { PlanReviewOverlay } from "@veyyon/coding-agent/modes/terminal/components/dialogs/plan-review-overlay";
+import type { HookSelectorSlider } from "@veyyon/coding-agent/modes/terminal/components/selectors/hook-selector";
+import { AssistantMessageComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/assistant-message";
+import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
+import { toAssistantMessageView } from "@veyyon/coding-agent/presentation/transcript-builder";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
 import { SILENT_ABORT_MARKER, USER_INTERRUPT_LABEL } from "@veyyon/coding-agent/session/messages";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { AUTO_THINKING } from "@veyyon/coding-agent/thinking";
 import * as clipboard from "@veyyon/coding-agent/utils/clipboard";
-import { setKeybindings, Text } from "@veyyon/tui";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { Text } from "@veyyon/tui";
 import { formatNumber, TempDir } from "@veyyon/utils";
+import { setKeybindings } from "@veyyon/utils/keybindings";
 
 /**
  * Matches the plan-approved synthetic-prompt dispatch. `#approvePlan` calls
@@ -1762,7 +1764,7 @@ describe("InteractiveMode plan review rendering", () => {
 	// ==========================================================================
 
 	function renderAssistant(message: AssistantMessage, width = 120): string {
-		const component = new AssistantMessageComponent(message);
+		const component = new AssistantMessageComponent(toAssistantMessageView(message));
 		return Bun.stripANSI(component.render(width).join("\n"));
 	}
 

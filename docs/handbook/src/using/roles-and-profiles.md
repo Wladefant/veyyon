@@ -6,7 +6,7 @@
 | --- | --- |
 | **Default model** | The model used for the main conversation, and the one a new session starts on. Chosen with `/model` or `--model`, or in `/settings` under Model. Persisted under `modelRoles.default`, which is a slot rather than a selectable role, so it does not appear in role pickers. |
 | **Role** | A named model assignment for a kind of work (`smol`, `plan`, `advisor`, and others). Configure it in `modelRoles` or Settings → Model → Roles. |
-| **Subagent policy** | The blanket model and effort plus per-agent `enabled`, `model`, `thinkingLevel`, and `maxNestedSpawnDepth` choices under `subagent`. |
+| **Agent policy** | The blanket model and effort plus per-agent `enabled`, `model`, `thinkingLevel`, and `maxNestedSpawnDepth` choices under `agent`. |
 | **Profile** | User config tree at `~/.veyyon/profiles/<name>/` (including `default`). |
 
 ## Interactive model
@@ -41,30 +41,34 @@ From `packages/coding-agent/src/config/model-roles.ts`:
 | `designer` | Designer | Design-oriented work |
 | `commit` | Commit | Commit / changelog generation |
 | `tiny` | Tiny | Lightweight background work: titles, classifiers |
-| `advisor` | Advisor | Advisor runtime |
+| `advisor` | Advisor | Advisor runtime; set in Settings → Model → Advisor → Advisor Model, not in the Roles table |
 
 Custom role names can appear via `modelRoles`, `modelTags`, or `cycleOrder` entries.
 
-Unset selectable roles, `advisor` included, **inherit the live interactive model** at use time. No role carries a built-in model chain: a role you have not set names no model of its own, so nothing you did not choose ends up running.
+Unset selectable roles, `advisor` included, **inherit the live interactive model** at use time. No role has a built-in model chain: a role you have not set specifies no model of its own, so nothing you did not choose ends up running.
 
-A caller may still ask for several roles in order. Title generation, for example, asks for `tiny`, then `commit`, then `smol`, and takes the first one you have set. That order belongs to the caller, not to the role: `tiny` does not fall back to `smol`, the title generator prefers `tiny` and accepts `smol`. If you have set none of them, the whole list is unset and the caller inherits the interactive model like any other unset role.
+The Roles table lists `smol`, `slow`, `vision`, `plan`, `designer`, `commit` and `tiny`. `advisor` is a real slot with the same resolution, and `@advisor` names it, but it is edited from the Advisor group instead, beside the toggle that turns the feature on.
 
-There is no `task` role. The model your subagents run is set in the Subagents settings area, which owns that decision on its own; see [Settings: Subagents](../../../settings.md#subagents).
+A caller may still request several roles in order. Title generation, for example, requests `tiny`, then `commit`, then `smol`, and takes the first one you have set. That order belongs to the caller, not to the role: `tiny` does not fall back to `smol`, the title generator prefers `tiny` and accepts `smol`. If you have set none of them, the whole list is unset and the caller inherits the interactive model like any other unset role.
+
+There is no `task` role. The model your agents run is set in the Agents settings area, which sets it on its own; see [Settings: Agents](../reference/settings.md#agents).
 
 To return an assigned role or model policy to its unset state, open its picker in `/settings` and choose the first row, `(inherit main model)` (the default model's picker reads `(auto-select on launch)`). Del or Backspace with an empty search does the same.
 
-## Subagent policy and compaction overrides
+## Agent policy and compaction overrides
 
 | Setting | Effect |
 | --- | --- |
-| `subagent.model` | Ordered model chain for every subagent that has no model of its own. The first entry is primary and later entries are fallbacks. Unset inherits the interactive model. |
-| `subagent.thinkingLevel` | Blanket subagent effort. Unset inherits the live parent effort. |
-| `subagent.agents` | Per-agent `enabled`, `model`, `thinkingLevel`, and `maxNestedSpawnDepth` choices. Per-agent values win over the blanket policy. |
-| `subagent.delegation` | How strongly the model is prompted to delegate: `allowed`, `preferred`, or `required`. |
+| `agent.sharedModel` | Which scope sets an agent's model and effort. Off, each agent's own row does. On, the two rows below do, for every agent. |
+| `agent.model` | Ordered model chain every agent runs while `agent.sharedModel` is on. The first entry is primary and later entries are fallbacks. Unset runs every agent on the `default` model role. |
+| `agent.thinkingLevel` | Effort every agent runs at while `agent.sharedModel` is on. |
+| `agent.agents` | Per-agent `enabled`, `model`, `thinkingLevel`, and `maxNestedSpawnDepth` choices. The `model` and `thinkingLevel` on a row decide while `agent.sharedModel` is off, and are not read while it is on. |
+| `agent.delegation` | How strongly the model is prompted to delegate: `allowed`, `preferred`, or `required`. |
 | `compaction.model` | Ordered model chain for compaction. Unset inherits the interactive model. |
 
 ```yaml
-subagent:
+agent:
+  sharedModel: true
   model: deepseek/deepseek-chat:high,anthropic/claude-sonnet-5:low
   agents:
     scout:
@@ -125,6 +129,6 @@ See [Approvals](../features/sandbox.md).
 
 ## Related
 
-- [Models and providers](./models.md)
-- [Settings: models](../../../settings.md) (repo `docs/settings.md`)
+- [Models and providers](../reference/models-yml.md)
+- [Settings: models](../reference/settings.md) (repo `docs/handbook/src/reference/settings.md`)
 - [Compaction](../context/compaction-memory.md)

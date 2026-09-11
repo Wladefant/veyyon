@@ -99,8 +99,10 @@ import statementExecutionImplement from "./statements/execution-workflow/impleme
 import statementExecutionImplementAskFirst from "./statements/execution-workflow/implement-ask-first.md" with {
 	type: "text",
 };
-import statementExecutionImplementGrep from "./statements/execution-workflow/implement-grep.md" with { type: "text" };
 import statementExecutionImplementNoDestructive from "./statements/execution-workflow/implement-no-destructive.md" with {
+	type: "text",
+};
+import statementExecutionImplementSearch from "./statements/execution-workflow/implement-search.md" with {
 	type: "text",
 };
 import statementExecutionReadRulesOnly from "./statements/execution-workflow/read-rules-only.md" with { type: "text" };
@@ -138,10 +140,12 @@ import statementRuntimeSkillsHeading from "./statements/runtime/skills-rules-hea
 import statementRuntimeInventoryText from "./statements/runtime/tool-inventory-text.md" with { type: "text" };
 import statementToolPolicyAst from "./statements/tool-policy/ast.md" with { type: "text" };
 import statementToolPolicyAstEdit from "./statements/tool-policy/ast-edit.md" with { type: "text" };
-import statementToolPolicyAstGrep from "./statements/tool-policy/ast-grep.md" with { type: "text" };
-import statementToolPolicyAstPlainText from "./statements/tool-policy/ast-plain-text.md" with { type: "text" };
+import statementToolPolicyAstSearch from "./statements/tool-policy/ast-search.md" with { type: "text" };
 import statementToolPolicyBashCwd from "./statements/tool-policy/bash-cwd.md" with { type: "text" };
 import statementToolPolicyDelegation from "./statements/tool-policy/delegation.md" with { type: "text" };
+import statementToolPolicyDelegationAgentValue from "./statements/tool-policy/delegation-agent-value.md" with {
+	type: "text",
+};
 import statementToolPolicyDelegationAllowed from "./statements/tool-policy/delegation-allowed.md" with { type: "text" };
 import statementToolPolicyDelegationCodexEager from "./statements/tool-policy/delegation-codex-eager.md" with {
 	type: "text",
@@ -162,29 +166,25 @@ import statementToolPolicyDelegationPreferred from "./statements/tool-policy/del
 import statementToolPolicyDelegationRequired from "./statements/tool-policy/delegation-required.md" with {
 	type: "text",
 };
-import statementToolPolicyDelegationSubagentValue from "./statements/tool-policy/delegation-subagent-value.md" with {
-	type: "text",
-};
 import statementToolPolicyExploration from "./statements/tool-policy/exploration.md" with { type: "text" };
-import statementToolPolicyExplorationGlob from "./statements/tool-policy/exploration-glob.md" with { type: "text" };
-import statementToolPolicyExplorationGrep from "./statements/tool-policy/exploration-grep.md" with { type: "text" };
 import statementToolPolicyExplorationRead from "./statements/tool-policy/exploration-read.md" with { type: "text" };
+import statementToolPolicyExplorationSearch from "./statements/tool-policy/exploration-search.md" with { type: "text" };
 import statementToolPolicyGeneral from "./statements/tool-policy/general.md" with { type: "text" };
 import statementToolPolicyInspectImage from "./statements/tool-policy/inspect-image.md" with { type: "text" };
 import statementToolPolicyIntentField from "./statements/tool-policy/intent-field.md" with { type: "text" };
 import statementToolPolicyLsp from "./statements/tool-policy/lsp.md" with { type: "text" };
-import statementToolPolicyParallelMeansSubagents from "./statements/tool-policy/parallel-means-subagents.md" with {
+import statementToolPolicyParallelMeansAgents from "./statements/tool-policy/parallel-means-agents.md" with {
 	type: "text",
 };
 import statementToolPolicyReportToolIssue from "./statements/tool-policy/report-tool-issue.md" with { type: "text" };
+import statementToolPolicyResultContract from "./statements/tool-policy/result-contract.md" with { type: "text" };
+import statementToolPolicySearch from "./statements/tool-policy/search.md" with { type: "text" };
 import statementToolPolicySecretsRedaction from "./statements/tool-policy/secrets-redaction.md" with { type: "text" };
 import statementToolPolicySpecializedBash from "./statements/tool-policy/specialized-bash.md" with { type: "text" };
 import statementToolPolicySpecializedBashLitmus from "./statements/tool-policy/specialized-bash-litmus.md" with {
 	type: "text",
 };
 import statementToolPolicySpecializedEdit from "./statements/tool-policy/specialized-edit.md" with { type: "text" };
-import statementToolPolicySpecializedGlob from "./statements/tool-policy/specialized-glob.md" with { type: "text" };
-import statementToolPolicySpecializedGrep from "./statements/tool-policy/specialized-grep.md" with { type: "text" };
 import statementToolPolicySpecializedLsp from "./statements/tool-policy/specialized-lsp.md" with { type: "text" };
 import statementToolPolicySpecializedRead from "./statements/tool-policy/specialized-read.md" with { type: "text" };
 import statementToolPolicySpecializedTools from "./statements/tool-policy/specialized-tools.md" with { type: "text" };
@@ -273,8 +273,8 @@ export function not(condition: StatementCondition): StatementCondition {
  * should be able to answer here instead of by grepping the builder.
  *
  * A VARIABLE BELONGS TO EXACTLY ONE OF THE TWO LISTS, and the suite checks they are disjoint. It
- * caught `hasSubagentSpecialists` here on the first run: it reads like a session fact, but it is
- * derived from the agents the task tool will accept and that tool is built from `subagent.agents`,
+ * caught `hasAgentSpecialists` here on the first run: it reads like a session fact, but it is
+ * derived from the agents the task tool will accept and that tool is built from `agent.agents`,
  * so the gate row owns it. Two owners would leave a reader unable to tell whether a setting controls
  * it, which is the question this list exists to answer.
  */
@@ -453,12 +453,12 @@ export const PROMPT_STATEMENTS = [
 		purpose: "the General heading and the five tool-use rules that hold whatever tools exist",
 	},
 	{
-		id: "tool-policy/parallel-means-subagents",
+		id: "tool-policy/parallel-means-agents",
 		section: "tool-policy",
 		condition: contains("tools", "task"),
-		text: statementToolPolicyParallelMeansSubagents,
+		text: statementToolPolicyParallelMeansAgents,
 		purpose:
-			"tells the model that the word `parallel` demands subagents, which is only answerable when the task tool is built",
+			"tells the model that the word `parallel` demands spawned agents, which is only answerable when the task tool is built",
 	},
 	{
 		id: "tool-policy/tool-io",
@@ -527,18 +527,11 @@ export const PROMPT_STATEMENTS = [
 		purpose: "routes code intelligence to the language server rather than to search",
 	},
 	{
-		id: "tool-policy/specialized-grep",
+		id: "tool-policy/search",
 		section: "tool-policy",
-		condition: contains("tools", "grep"),
-		text: statementToolPolicySpecializedGrep,
-		purpose: "routes regex search to the grep tool and names the shell commands it replaces",
-	},
-	{
-		id: "tool-policy/specialized-glob",
-		section: "tool-policy",
-		condition: contains("tools", "glob"),
-		text: statementToolPolicySpecializedGlob,
-		purpose: "routes globbing to the glob tool and names the shell commands it replaces",
+		condition: contains("tools", "search"),
+		text: statementToolPolicySearch,
+		purpose: "makes the unified search tool own workspace paths, text, and code structure",
 	},
 	{
 		id: "tool-policy/specialized-bash",
@@ -571,6 +564,14 @@ export const PROMPT_STATEMENTS = [
 			"the critical block asking the model to report inconsistent tool output, which is pointless without the tool that receives it",
 	},
 	{
+		id: "tool-policy/result-contract",
+		section: "tool-policy",
+		condition: contains("tools", "bash"),
+		text: statementToolPolicyResultContract,
+		purpose:
+			"instructs the model to treat [clean] and [errors] result headers as authoritative and not to search the command result",
+	},
+	{
 		id: "tool-policy/exploration",
 		section: "tool-policy",
 		condition: { kind: "always" },
@@ -578,18 +579,11 @@ export const PROMPT_STATEMENTS = [
 		purpose: "the Exploration heading and the rule against opening files hopefully, true of every tool set",
 	},
 	{
-		id: "tool-policy/exploration-grep",
+		id: "tool-policy/exploration-search",
 		section: "tool-policy",
-		condition: contains("tools", "grep"),
-		text: statementToolPolicyExplorationGrep,
-		purpose: "names grep as the way to locate targets during exploration",
-	},
-	{
-		id: "tool-policy/exploration-glob",
-		section: "tool-policy",
-		condition: contains("tools", "glob"),
-		text: statementToolPolicyExplorationGlob,
-		purpose: "names glob as the way to map structure during exploration",
+		condition: contains("tools", "search"),
+		text: statementToolPolicyExplorationSearch,
+		purpose: "uses search to locate targets and map workspace structure during exploration",
 	},
 	{
 		id: "tool-policy/exploration-read",
@@ -609,17 +603,16 @@ export const PROMPT_STATEMENTS = [
 	{
 		id: "tool-policy/ast",
 		section: "tool-policy",
-		condition: anyOf(contains("tools", "ast_grep"), contains("tools", "ast_edit")),
+		condition: anyOf(contains("tools", "search"), contains("tools", "ast_edit")),
 		text: statementToolPolicyAst,
-		purpose: "the AST heading and the prefer-syntax-aware rule, present when either AST tool is built",
+		purpose: "the AST heading and syntax-aware rule for structural search or edits",
 	},
 	{
-		id: "tool-policy/ast-grep",
+		id: "tool-policy/ast-search",
 		section: "tool-policy",
-		condition: contains("tools", "ast_grep"),
-		text: statementToolPolicyAstGrep,
-		purpose:
-			"names the structural discovery tool, separate from the edit tool because either can be built without the other",
+		condition: contains("tools", "search"),
+		text: statementToolPolicyAstSearch,
+		purpose: "names structural search under the AST heading when unified search is active",
 	},
 	{
 		id: "tool-policy/ast-edit",
@@ -629,18 +622,11 @@ export const PROMPT_STATEMENTS = [
 		purpose:
 			"names the codemod tool, its own row because a session can have structural search without structural edit",
 	},
-	{
-		id: "tool-policy/ast-plain-text",
-		section: "tool-policy",
-		condition: anyOf(contains("tools", "ast_grep"), contains("tools", "ast_edit")),
-		text: statementToolPolicyAstPlainText,
-		purpose:
-			"confines plain grep to cases where structure is irrelevant, which only needs saying when a structural tool exists",
-	},
+
 	{
 		id: "tool-policy/delegation",
 		section: "tool-policy",
-		condition: allOf(contains("tools", "task"), when("hasSpawnableSubagent")),
+		condition: allOf(contains("tools", "task"), when("hasSpawnableAgent")),
 		text: statementToolPolicyDelegation,
 		purpose: "the Delegation heading, which opens the section the task tool makes real",
 	},
@@ -649,7 +635,7 @@ export const PROMPT_STATEMENTS = [
 		section: "tool-policy",
 		condition: allOf(
 			contains("tools", "task"),
-			when("hasSpawnableSubagent"),
+			when("hasSpawnableAgent"),
 			when("useCodexTaskPrompt"),
 			when("eagerTasks"),
 		),
@@ -662,7 +648,7 @@ export const PROMPT_STATEMENTS = [
 		section: "tool-policy",
 		condition: allOf(
 			contains("tools", "task"),
-			when("hasSpawnableSubagent"),
+			when("hasSpawnableAgent"),
 			when("useCodexTaskPrompt"),
 			not(when("eagerTasks")),
 		),
@@ -675,7 +661,7 @@ export const PROMPT_STATEMENTS = [
 		section: "tool-policy",
 		condition: allOf(
 			contains("tools", "task"),
-			when("hasSpawnableSubagent"),
+			when("hasSpawnableAgent"),
 			not(when("useCodexTaskPrompt")),
 			when("eagerTasks"),
 			when("eagerTasksAlways"),
@@ -689,7 +675,7 @@ export const PROMPT_STATEMENTS = [
 		section: "tool-policy",
 		condition: allOf(
 			contains("tools", "task"),
-			when("hasSpawnableSubagent"),
+			when("hasSpawnableAgent"),
 			not(when("useCodexTaskPrompt")),
 			when("eagerTasks"),
 			not(when("eagerTasksAlways")),
@@ -702,14 +688,14 @@ export const PROMPT_STATEMENTS = [
 		id: "tool-policy/delegation-allowed",
 		section: "tool-policy",
 		// The floor, and the level that had no sentence at all: the section rendered its heading, its
-		// gates and its subagent-value bullets with nothing saying when spawning is appropriate, so the
+		// gates and its agent-value bullets with nothing saying when spawning is appropriate, so the
 		// capability was described and its trigger was not. `not(eagerTasks)` is exactly `allowed`,
 		// since `eagerTasks` is `preferred`-or-stronger. Codex models take
 		// `delegation-codex-off` in this state instead, which already says the same thing in their
 		// wording, hence `not(useCodexTaskPrompt)` like its two siblings.
 		condition: allOf(
 			contains("tools", "task"),
-			when("hasSpawnableSubagent"),
+			when("hasSpawnableAgent"),
 			not(when("useCodexTaskPrompt")),
 			not(when("eagerTasks")),
 		),
@@ -718,21 +704,21 @@ export const PROMPT_STATEMENTS = [
 			"the weakest delegation setting: the ability stays, an explicit request is the trigger, and the model does not fan out on its own initiative",
 	},
 	{
-		id: "tool-policy/delegation-subagent-value",
+		id: "tool-policy/delegation-agent-value",
 		section: "tool-policy",
-		// `hasSpawnableSubagent` as well as the tool, because the tool outlives the agents. It stays
+		// `hasSpawnableAgent` as well as the tool, because the tool outlives the agents. It stays
 		// built with every row disabled so an ephemeral `/` command can still grant one, and this
 		// prose cannot: with nothing the model may choose, advice about what to delegate is advice it
 		// can only fail to follow.
-		condition: allOf(contains("tools", "task"), when("hasSpawnableSubagent"), not(when("useCodexTaskPrompt"))),
-		text: statementToolPolicyDelegationSubagentValue,
+		condition: allOf(contains("tools", "task"), when("hasSpawnableAgent"), not(when("useCodexTaskPrompt"))),
+		text: statementToolPolicyDelegationAgentValue,
 		purpose:
-			"the first bullet on what a subagent is FOR: a separate context rather than a lesser model. The brace nesting hides this group inside the not-Codex branch rather than the task block",
+			"the first bullet on what an agent is FOR: a separate context rather than a lesser model. The brace nesting hides this group inside the not-Codex branch rather than the task block",
 	},
 	{
 		id: "tool-policy/delegation-no-shrinking",
 		section: "tool-policy",
-		condition: allOf(contains("tools", "task"), when("hasSpawnableSubagent"), not(when("useCodexTaskPrompt"))),
+		condition: allOf(contains("tools", "task"), when("hasSpawnableAgent"), not(when("useCodexTaskPrompt"))),
 		text: statementToolPolicyDelegationNoShrinking,
 		purpose: "keeps scope intact while limiting delegation to assignments an enabled role can actually own",
 	},
@@ -742,7 +728,7 @@ export const PROMPT_STATEMENTS = [
 		// The task tool remains built when every agent row is disabled so a direct
 		// slash command can grant one for a turn. Model-facing role guidance must
 		// disappear in that state because it has no enabled destination.
-		condition: allOf(contains("tools", "task"), when("hasSpawnableSubagent")),
+		condition: allOf(contains("tools", "task"), when("hasSpawnableAgent")),
 		text: statementToolPolicyDelegationGates,
 		purpose:
 			"the Delegation gates list: scope and plan ownership, real independence, prerequisites, necessary sequencing, and who owns the user's intent",
@@ -750,7 +736,7 @@ export const PROMPT_STATEMENTS = [
 	{
 		id: "tool-policy/delegation-concurrency-cap",
 		section: "tool-policy",
-		condition: allOf(contains("tools", "task"), when("hasSpawnableSubagent"), when("MAX_CONCURRENCY")),
+		condition: allOf(contains("tools", "task"), when("hasSpawnableAgent"), when("MAX_CONCURRENCY")),
 		text: statementToolPolicyDelegationConcurrencyCap,
 		purpose:
 			"quotes the concurrency cap, gated on there being one; the template compares MAX_CONCURRENCY against zero with the `when` helper, and Handlebars truthiness already makes 0 falsy, so a plain `when` condition is exactly equivalent and no comparison form is needed",
@@ -841,11 +827,11 @@ export const PROMPT_STATEMENTS = [
 		purpose: "the Implement heading and the fix-at-source, prefer-existing-files, review-as-the-user rules",
 	},
 	{
-		id: "execution-workflow/implement-grep",
+		id: "execution-workflow/implement-search",
 		section: "execution-workflow",
-		condition: contains("tools", "grep"),
-		text: statementExecutionImplementGrep,
-		purpose: "grep instead of guessing, which needs the tool that makes it possible",
+		condition: contains("tools", "search"),
+		text: statementExecutionImplementSearch,
+		purpose: "search instead of guessing when locating code or affected call sites",
 	},
 	{
 		id: "execution-workflow/implement-ask-first",
@@ -1001,7 +987,7 @@ export const STATEMENT_SECTIONS: readonly string[] = TEMPLATE_SECTION_IDS;
 				"the zero-prose outer template has no fallback content.",
 		);
 	}
-	const stray = [...covered].filter(section => !STATEMENT_SECTIONS.includes(section));
+	const stray = Array.from(covered).filter(section => !STATEMENT_SECTIONS.includes(section));
 	if (stray.length > 0) {
 		throw new Error(
 			`statements name sections the document does not have: ${stray.join(", ")}. ` +

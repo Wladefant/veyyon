@@ -27,10 +27,14 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
-import * as path from "node:path";
-
-const repoRoot = path.resolve(import.meta.dir, "..");
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import {
+	readPackageJson,
+	REPO_ROOT as repoRoot,
+	typeScriptMemberTopLevels,
+	workspaceManifests,
+} from "./workspace-layout";
 
 /** Fields whose entries are resolved for THIS workspace, so `catalog:` is usable in them. */
 const RESOLVED_FIELDS = ["dependencies", "devDependencies", "optionalDependencies"] as const;
@@ -41,31 +45,26 @@ interface PackageManifest {
 	devDependencies?: Record<string, string>;
 	optionalDependencies?: Record<string, string>;
 	peerDependencies?: Record<string, string>;
-	workspaces?: { catalog?: Record<string, string> };
 }
 
-function readManifest(file: string): PackageManifest {
-	return JSON.parse(readFileSync(file, "utf-8")) as PackageManifest;
+const rootManifest = readPackageJson("", repoRoot);
+const rawCatalog =
+	rootManifest &&
+	typeof rootManifest === "object" &&
+	"workspaces" in rootManifest &&
+	rootManifest.workspaces &&
+	typeof rootManifest.workspaces === "object" &&
+	"catalog" in rootManifest.workspaces &&
+	rootManifest.workspaces.catalog &&
+	typeof rootManifest.workspaces.catalog === "object"
+		? rootManifest.workspaces.catalog
+		: {};
+const catalog: Record<string, string> = {};
+for (const [k, v] of Object.entries(rawCatalog)) {
+	if (typeof v === "string") catalog[k] = v;
 }
 
-const catalog: Record<string, string> = readManifest(path.join(repoRoot, "package.json")).workspaces?.catalog ?? {};
-
-/** Every workspace package under `packages/`, by its manifest path. */
-function workspaceManifests(): Array<{ rel: string; manifest: PackageManifest }> {
-	const packagesDir = path.join(repoRoot, "packages");
-	const found: Array<{ rel: string; manifest: PackageManifest }> = [];
-	for (const entry of readdirSync(packagesDir, { withFileTypes: true })) {
-		if (!entry.isDirectory()) continue;
-		const file = path.join(packagesDir, entry.name, "package.json");
-		try {
-			found.push({ rel: `packages/${entry.name}/package.json`, manifest: readManifest(file) });
-		} catch {
-			// `packages/` holds one non-package entry (the shared tsconfig), which has no manifest.
-			// Skipping it is correct here; ORG-XP-5 owns whether it should live there at all.
-		}
-	}
-	return found;
-}
+const manifests = workspaceManifests(repoRoot) as Array<{ rel: string; manifest: PackageManifest }>;
 
 /** A spec that names a version rather than deferring to the catalog or the workspace. */
 function isLiteralVersion(spec: string): boolean {
@@ -77,9 +76,15 @@ function isLiteralVersion(spec: string): boolean {
 	);
 }
 
-const manifests = workspaceManifests();
-
 describe("the catalog is the only place a shared version is written", () => {
+	it("reads a manifest under every root the workspace declares", () => {
+		// A root the sweep never opened has no literal pin as far as this gate is concerned, which is
+		// the same green as a root with none. Pinned by equality so a new root records a decision.
+		const roots = new Set(manifests.map(entry => entry.rel.split("/")[0]));
+
+		expect([...roots].sort()).toEqual(typeScriptMemberTopLevels());
+	});
+
 	it("has no package pinning a catalogued dependency with a literal range", () => {
 		// The lock. A literal that agrees with the catalog today is the exact shape the four
 		// migrated pins had, so agreement is not a defence: the offence is having a second place
@@ -145,7 +150,7 @@ describe("the catalog versions the migration was verified against", () => {
 		"react-dom": "19.2.7",
 		"@types/react": "^19.2.17",
 		"@types/react-dom": "^19.2.3",
-		"@types/bun": "^1.3.14",
+		"@types/bun": "^1.4.0",
 		"fast-check": "4.9.0",
 		// Moved 1.26.0 -> 1.21.0 deliberately, which is the review this table exists to force.
 		// `fastembed@2.1.0` declares an exact `onnxruntime-node: 1.21.0` and its native addon links
@@ -170,7 +175,7 @@ describe("the lockfile", () => {
 		// for one of these names would mean two versions installed side by side, which is the
 		// outcome the whole change exists to prevent. Nested entries (`fastembed/onnxruntime-node`)
 		// are a dependency's own private resolution and are not this contract's business.
-		const lock = readFileSync(path.join(repoRoot, "bun.lock"), "utf-8");
+		const lock = readFileSync(join(repoRoot, "bun.lock"), "utf-8");
 		for (const name of ["react", "react-dom", "@types/react", "@types/bun", "fast-check", "onnxruntime-node"]) {
 			const entries = [
 				...lock.matchAll(new RegExp(`^\\s*"${name.replace("/", "\\/")}": \\["${name}@([^"]+)"`, "gm")),
@@ -180,7 +185,7 @@ describe("the lockfile", () => {
 	});
 
 	it("resolves the react family to the single version the catalog names", () => {
-		const lock = readFileSync(path.join(repoRoot, "bun.lock"), "utf-8");
+		const lock = readFileSync(join(repoRoot, "bun.lock"), "utf-8");
 		expect(lock).toContain('"react": ["react@19.2.7"');
 		expect(lock).toContain('"react-dom": ["react-dom@19.2.7"');
 		expect(lock).toContain('"fast-check": ["fast-check@4.9.0"');

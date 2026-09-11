@@ -9,7 +9,7 @@ import type { ModelRegistry } from "../../config/model-registry";
 import { Settings } from "../../config/settings";
 import { SecretObfuscator } from "../../secrets/obfuscator";
 import type { ToolSession } from "../../tools";
-import { ToolError } from "../../tools/tool-errors";
+import { ToolError } from "../../tools/core/tool-errors";
 import { EVAL_TIMEOUT_PAUSE_OP, EVAL_TIMEOUT_RESUME_OP } from "../bridge-timeout";
 import { EVAL_COMPLETION_BRIDGE_NAME, runEvalCompletion } from "../completion-bridge";
 import { IdleTimeout } from "../idle-timeout";
@@ -52,7 +52,7 @@ interface SessionOptions {
 }
 
 function makeSession(opts: SessionOptions = {}): ToolSession {
-	const settings = Settings.isolated({ "async.enabled": false, "subagent.isolation.mode": "none" });
+	const settings = Settings.isolated({ "async.enabled": false, "agent.isolation.mode": "none" });
 	const roles = opts.roles ?? { smol: "p/smol", slow: "p/slow" };
 	for (const role in roles) {
 		const value = roles[role as keyof typeof roles];
@@ -195,7 +195,7 @@ const SMOL = {
 	contextWindow: 128000,
 	maxTokens: 4096,
 };
-const settings = Settings.isolated({ "async.enabled": false, "subagent.isolation.mode": "none" });
+const settings = Settings.isolated({ "async.enabled": false, "agent.isolation.mode": "none" });
 settings.setModelRole("smol", "p/smol");
 settings.setModelRole("slow", "p/slow");
 const session = {

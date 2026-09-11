@@ -2,6 +2,8 @@ import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
+import { listSessionsReadOnly, type SessionInfo, type SessionStatus } from "@veyyon/kernel/session/session-listing";
+import { FileSessionStorage } from "@veyyon/kernel/session/session-storage";
 import {
 	atomicWriteFile,
 	DAY_MS,
@@ -22,8 +24,6 @@ import { SESSION_BACKUP_EXTENSION, SESSION_FILE_EXTENSION } from "@veyyon/utils/
 import { tableExists } from "@veyyon/utils/sqlite";
 import { Settings } from "../config/settings";
 import { getDefault } from "../config/settings-schema";
-import { listSessionsReadOnly, type SessionInfo, type SessionStatus } from "../session/session-listing";
-import { FileSessionStorage } from "../session/session-storage";
 
 const HASH_RE = /^[a-f0-9]{64}$/;
 const BLOB_FILE_RE = /^([a-f0-9]{64})(?:\.[A-Za-z0-9][A-Za-z0-9._-]{0,31})?$/;
@@ -272,31 +272,9 @@ async function readTextIfPresent(file: string): Promise<string> {
 	}
 }
 
-async function collectJsonlFiles(root: string): Promise<string[]> {
+async function collectSessionFiles(root: string, glob: Bun.Glob): Promise<string[]> {
 	try {
-		const files = await Array.fromAsync(JSONL_GLOB.scan(root), name => path.join(root, name));
-		files.sort();
-		return files;
-	} catch (error) {
-		if (codeOf(error) === "ENOENT") return [];
-		throw error;
-	}
-}
-
-async function collectCompressedJsonlFiles(root: string): Promise<string[]> {
-	try {
-		const files = await Array.fromAsync(JSONL_GZ_GLOB.scan(root), name => path.join(root, name));
-		files.sort();
-		return files;
-	} catch (error) {
-		if (codeOf(error) === "ENOENT") return [];
-		throw error;
-	}
-}
-
-async function collectBackupJsonlFiles(root: string): Promise<string[]> {
-	try {
-		const files = await Array.fromAsync(JSONL_BACKUP_GLOB.scan(root), name => path.join(root, name));
+		const files = await Array.fromAsync(glob.scan(root), name => path.join(root, name));
 		files.sort();
 		return files;
 	} catch (error) {
@@ -309,9 +287,9 @@ async function collectReferencedBlobHashes(sessionRoots: string[]): Promise<Set<
 	const hashes = new Set<string>();
 	for (const root of sessionRoots) {
 		const files = [
-			...(await collectJsonlFiles(root)),
-			...(await collectCompressedJsonlFiles(root)),
-			...(await collectBackupJsonlFiles(root)),
+			...(await collectSessionFiles(root, JSONL_GLOB)),
+			...(await collectSessionFiles(root, JSONL_GZ_GLOB)),
+			...(await collectSessionFiles(root, JSONL_BACKUP_GLOB)),
 		];
 		for (const file of files) {
 			const text = await readTextIfPresent(file);
@@ -348,7 +326,7 @@ async function collectBlobCandidates(blobDir: string): Promise<BlobCandidate[]> 
 		candidate.mtimeMs = Math.max(candidate.mtimeMs, stat.mtimeMs);
 		byHash.set(hash, candidate);
 	}
-	return [...byHash.values()].sort((a, b) => a.hash.localeCompare(b.hash));
+	return Array.from(byHash.values()).sort((a, b) => a.hash.localeCompare(b.hash));
 }
 
 async function runBlobGc(options: ResolvedGcOptions, archiveSessionsRoot: string): Promise<BlobGcResult> {
@@ -398,18 +376,22 @@ async function listActiveSessions(sessionsRoot: string): Promise<SessionInfo[]> 
 	const sessions: SessionInfo[] = [];
 	for (const entry of entries) {
 		if (!entry.isDirectory()) continue;
-		sessions.push(...(await listSessionsReadOnly(path.join(sessionsRoot, entry.name), storage)));
+		const subSessions = await listSessionsReadOnly(path.join(sessionsRoot, entry.name), storage);
+		for (let si = 0; si < subSessions.length; si++) sessions.push(subSessions[si]!);
 	}
 	sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
 	return sessions;
 }
 
 async function listNestedSessionsReadOnly(artifactsRoot: string): Promise<SessionInfo[]> {
-	const files = await collectJsonlFiles(artifactsRoot);
-	const dirs = [...new Set(files.map(file => path.dirname(file)))].sort();
+	const files = await collectSessionFiles(artifactsRoot, JSONL_GLOB);
+	const dirs = Array.from(new Set(files.map(file => path.dirname(file)))).sort();
 	const storage = new FileSessionStorage();
 	const sessions: SessionInfo[] = [];
-	for (const dir of dirs) sessions.push(...(await listSessionsReadOnly(dir, storage)));
+	for (const dir of dirs) {
+		const subSessions = await listSessionsReadOnly(dir, storage);
+		for (let si = 0; si < subSessions.length; si++) sessions.push(subSessions[si]!);
+	}
 	sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
 	return sessions;
 }
@@ -605,11 +587,11 @@ function deleteHistoryRowsForSessions(dbPath: string, sessionIds: string[]): { d
 
 async function collectArchivedSessionIds(archiveRoot: string): Promise<string[]> {
 	const ids = new Set<string>();
-	for (const file of await collectCompressedJsonlFiles(archiveRoot)) {
+	for (const file of await collectSessionFiles(archiveRoot, JSONL_GZ_GLOB)) {
 		const id = await archivedSessionIdFromFile(file);
 		if (id) ids.add(id);
 	}
-	return [...ids].sort();
+	return Array.from(ids).sort();
 }
 
 async function cleanupHistoryRowsForArchivedSessions(
@@ -629,7 +611,7 @@ async function cleanupHistoryRowsForArchivedSessions(
 	}
 
 	try {
-		const cleanup = deleteHistoryRowsForSessions(dbPath, [...cleanupIds]);
+		const cleanup = deleteHistoryRowsForSessions(dbPath, Array.from(cleanupIds));
 		result.historyRowsDeleted = cleanup.deleted;
 		result.ftsRebuilt = cleanup.ftsRebuilt;
 	} catch (error) {

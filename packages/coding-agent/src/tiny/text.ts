@@ -1,4 +1,4 @@
-import { ALNUM_WORD_RE } from "@veyyon/utils";
+import { ALNUM_WORD_RE, collapseWhitespace } from "@veyyon/utils";
 import { cleanTinyMessage, isPreformattedChatContext, stripChatScaffolding } from "./message-preproc";
 
 /**
@@ -142,6 +142,19 @@ export function isLowSignalTitleInput(message: string): boolean {
  */
 export const NO_TITLE_SENTINEL = "none";
 
+/**
+ * A complete markup tag: `<tools>`, `</think>`, `<tool_call>`, `<|channel|>`, `<title/>`.
+ *
+ * A LEAKED TAG IS NOT A TITLE. The title role resolves to the tiny model, then the commit model,
+ * then the session's own model, so on a machine with no tiny model the titler is whatever is
+ * serving the session -- and a local Qwen3 answered the title prompt with `<tools>`, which was
+ * accepted, written to the session header, painted on the footline and set as the terminal title.
+ * A published frame of that session reads as a placeholder nobody filled in, which is exactly what
+ * it is. Refusing it costs nothing: the caller leaves the session unnamed and the next message
+ * gets a fresh attempt, the same path the `none` sentinel and `<title/>` already take.
+ */
+const MARKUP_TAG_RE = /<\/?[|a-z_][^<>]*>/gi;
+
 export function normalizeGeneratedTitle(value: string | null | undefined, sourceText?: string): string | null {
 	const firstLine = value?.trim().split(/\r?\n/, 1)[0]?.trim();
 	if (!firstLine) return null;
@@ -154,7 +167,21 @@ export function normalizeGeneratedTitle(value: string | null | undefined, source
 		.replace(/[.!?]$/, "")
 		.trim();
 	if (!title || title.toLowerCase() === NO_TITLE_SENTINEL) return null;
-	return sourceText === undefined ? title : reconcileTitleCasing(title, sourceText);
+	// Prose that survives beside a tag is kept and the tag dropped, because a title carrying one
+	// leaked marker is still a description of the work; a title that is ONLY markup describes
+	// nothing and is refused rather than shown.
+	//
+	// A tag the USER typed is not leakage, it is the subject. Someone whose message is "fix title
+	// generation for <think> tag parsing" gets "Fix <think> tag parsing", not "Fix tag parsing",
+	// which reads as a title with a word missing. Matched against the message that started the
+	// session, so the exemption cannot be produced by the model on its own: with no source text --
+	// the worker path, and any caller that has none -- every tag still goes.
+	const spoken = sourceText?.toLowerCase();
+	const detagged = collapseWhitespace(
+		title.replace(MARKUP_TAG_RE, tag => (spoken?.includes(tag.toLowerCase()) ? tag : " ")),
+	);
+	if (!detagged || detagged.toLowerCase() === NO_TITLE_SENTINEL) return null;
+	return sourceText === undefined ? detagged : reconcileTitleCasing(detagged, sourceText);
 }
 
 /**

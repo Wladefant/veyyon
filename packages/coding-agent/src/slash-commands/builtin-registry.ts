@@ -1,14 +1,16 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import { getOAuthProviders, type OAuthProviderInfo } from "@veyyon/ai/oauth";
 import { PROVIDER_REGISTRY } from "@veyyon/ai/registry";
 import { stripEffortTierSuffix } from "@veyyon/catalog/variant-collapse";
-import { type AutocompleteItem, Spacer } from "@veyyon/tui";
+import { parseCompactArgs } from "@veyyon/kernel/session/compact-modes";
+import { resolveResumableSession } from "@veyyon/kernel/session/session-listing";
+import { formatShakeSummary, type ShakeMode } from "@veyyon/kernel/session/shake-types";
 import {
 	APP_NAME,
 	CHANGELOG_URL,
-	collapseWhitespace,
 	getActiveProfile,
 	getAgentDir,
 	getGlobalConfigRootDir,
@@ -18,14 +20,18 @@ import {
 	nearestNames,
 	truncate,
 } from "@veyyon/utils";
-import { COLLAB_GUEST_ALLOWED_COMMANDS, CollabGuestLink } from "../collab/guest";
-import { CollabHost } from "../collab/host";
+import type { AutocompleteItem } from "@veyyon/utils/autocomplete";
+import { sanitizeStatusText } from "@veyyon/utils/sanitize-status-text";
+import { advisorStatusNextStep, describeAdvisorToggle } from "../advisor/messages";
+import { runTrustSlashCommand } from "../cli/trust-cli";
+import { COLLAB_GUEST_ALLOWED_COMMANDS } from "../collab/guest-commands";
+import type { CollabHost } from "../collab/host";
 import { DEFAULT_EFFORT_POINTER } from "../config/effort-resolver";
 import { credentialRemedySentence, missingCredentialsMessage } from "../config/missing-credentials";
 import { modelResolutionFailureMessage } from "../config/model-resolution-failure";
 import {
-	expandRoleAlias,
 	getModelMatchPreferences,
+	normalizeModelPatternList,
 	resolveCliModel,
 	resolveConfiguredModelPatterns,
 	resolveModelFromString,
@@ -37,13 +43,14 @@ import { settings } from "../config/settings-instance";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../discovery/helpers.js";
 import { shareSession } from "../export/share";
 import { PluginManager } from "../extensibility/plugins";
-import { buildMemoryPayloadForDisplay, resolveMemoryBackend } from "../memory-backend";
-import { runPauseScreen } from "../modes/components/pause-screen";
+import { buildMemoryPayloadForDisplay, resolveMemoryBackend } from "../memory/backend";
 import { describeLoopLimitRuntime } from "../modes/loop-limit";
-import { theme } from "../modes/theme/theme";
-import type { InteractiveModeContext } from "../modes/types";
-import { extractLastCodeBlock, extractLastCommand } from "../modes/utils/copy-targets";
+import { runPauseScreen } from "../modes/terminal/components/dialogs/pause-screen";
+import { urlHyperlinkAlways } from "../modes/terminal/draw/hyperlink";
+import type { InteractiveModeContext } from "../modes/terminal/types";
+import { extractLastCodeBlock, extractLastCommand } from "../modes/terminal/utils/copy-targets";
 import { SECRET_TUI_SUBCOMMANDS } from "../secrets/secret-command";
+import { formatDurationCoarse, formatProviderName } from "../session/account-format";
 import {
 	type AccountRow,
 	accountDisplayLabel,
@@ -53,16 +60,14 @@ import {
 	applyUsageReports,
 	loadAccountInventory,
 } from "../session/account-inventory";
-import type { AgentSession, FreshSessionResult, HandoffResult } from "../session/agent-session";
-import type { AuthStorage } from "../session/auth-storage";
-import { parseCompactArgs } from "../session/compact-modes";
-import { resolveResumableSession } from "../session/session-listing";
-import { formatShakeSummary, type ShakeMode } from "../session/shake-types";
+import type { AgentSession } from "../session/agent-session";
+import type { FreshSessionResult, HandoffResult } from "../session/agent-session-types";
+import { configuredAgentModelChains } from "../task/agent-settings";
+import { theme } from "../theme/theme";
 import { configuredThinkingLevelsForModel, parseConfiguredThinkingLevel } from "../thinking";
-import { normalizeApprovalMode } from "../tools/approval";
-import { AUTONOMY_LABEL, isKnownApprovalMode } from "../tools/approval-modes";
-import { expandTilde, resolveToCwd } from "../tools/path-utils";
-import { urlHyperlinkAlways } from "../tui";
+import { normalizeApprovalMode } from "../tools/core/approval";
+import { AUTONOMY_LABEL, isKnownApprovalMode } from "../tools/core/approval-modes";
+import { expandTilde, resolveToCwd } from "../tools/core/path-utils";
 import { copyToClipboard } from "../utils/clipboard";
 import { bareInvocationShowsSubcommands } from "./bare-subcommand";
 import {
@@ -70,16 +75,22 @@ import {
 	type BuiltinSlashCommandDeclaration,
 	type BuiltinSlashCommandName,
 } from "./builtin-declarations";
-import { type AccountRoleSources, accountRoleAnnotations, renderAccountStatus } from "./helpers/account-status";
+import {
+	ACCOUNT_STATUS_TITLE,
+	type AccountRoleSources,
+	type AccountStatusStyle,
+	accountRoleAnnotations,
+	renderAccountStatus,
+} from "./helpers/account-status";
 import { CollabQrCodeComponent } from "./helpers/collab-qrcode";
 import { buildContextReportText } from "./helpers/context-report";
 import { applyCpuLimitCommand } from "./helpers/cpu-limit";
-import { formatDurationCoarse, formatProviderName } from "./helpers/format";
 import { handleMcpAcp } from "./helpers/mcp";
 import { commandConsumed, errorMessage, parseSlashCommand, parseSubcommand, usage } from "./helpers/parse";
 import { describeRedeemOutcome, type ResetUsageAccount, toResetUsageAccounts } from "./helpers/reset-usage";
 import { interactiveSecretPort, runSecretCommandForSurface } from "./helpers/secret";
 import { handleSshAcp } from "./helpers/ssh";
+import { handleStatsAcp } from "./helpers/stats-dashboard";
 import { handleTodoAcp } from "./helpers/todo";
 import { buildUsageReportText } from "./helpers/usage-report";
 import type { ProfileCommandPort } from "./profile-command";
@@ -90,6 +101,7 @@ import type {
 	SlashCommandRuntime,
 	SlashCommandSpec,
 	SubcommandDef,
+	TuiSlashCommandHostContext,
 	TuiSlashCommandRuntime,
 } from "./types";
 
@@ -216,8 +228,13 @@ function noThinkingControlMessage(session: AgentSession): string {
 
 const AUTOCOMPLETE_DETAIL_LIMIT = 48;
 
+/**
+ * A command's detail column: one line, plain, capped. The value is not this file's -- a goal
+ * objective is typed or written by a model -- so an escape sequence in it would style the rest of
+ * the autocomplete row, and `sanitizeStatusText` strips it before the cap counts characters.
+ */
 function shortDetail(value: string, limit = AUTOCOMPLETE_DETAIL_LIMIT): string {
-	return truncate(collapseWhitespace(value), limit);
+	return truncate(sanitizeStatusText(value), limit);
 }
 
 function formatTokenCount(value: number): string {
@@ -250,7 +267,7 @@ function collabLinkHint(host: CollabHost, heading: string, view = false): string
 
 function showCollabQrCode(ctx: Pick<InteractiveModeContext, "present" | "showError">, webLink: string): void {
 	try {
-		ctx.present([new Spacer(1), new CollabQrCodeComponent(webLink)]);
+		ctx.present([new CollabQrCodeComponent(webLink)]);
 	} catch (err) {
 		ctx.showError(`Failed to render collab QR code: ${errorMessage(err)}`);
 	}
@@ -276,6 +293,17 @@ const shutdownHandlerTui = (_command: ParsedSlashCommand, runtime: TuiSlashComma
 	void runtime.ctx.shutdown();
 	return commandConsumed();
 };
+
+/** A TUI handler that clears the composer and hands the trimmed text after the command name to `dispatch`. */
+function argumentHandlerTui(
+	dispatch: (ctx: TuiSlashCommandHostContext, text: string) => Promise<void>,
+): (command: ParsedSlashCommand, runtime: TuiSlashCommandRuntime) => Promise<void> {
+	return async (command, runtime) => {
+		const text = command.text.slice(`/${command.name}`.length).trim();
+		runtime.ctx.editor.setText("");
+		await dispatch(runtime.ctx, text);
+	};
+}
 
 async function handleUsageResetCommand(
 	arg: string,
@@ -350,32 +378,43 @@ const ACCOUNT_VERBS: readonly string[] = BUILTIN_SLASH_COMMAND_DECLARATIONS.flat
  * Which providers this session routes to, and for what, as `/account status` annotates them.
  *
  * The three roles are the three ways a provider ends up serving one session: the model the user is
- * looking at, the model subagents run on, and the web-search backend. They are read from the
+ * looking at, the models spawned agents run on, and the web-search backend. They are read from the
  * settings the runtime itself obeys, so the block cannot claim a role the router does not honor.
- * `subagent.model` left unset means every subagent INHERITS the session model, which is why the
- * main provider is annotated for subagents in that case instead of the annotation going missing.
+ *
+ * Spawned agents are a UNION of every chain a spawn can land on: the default model role, the shared
+ * chain, and every lane that names a model of its own. Both scopes are read, because the scope
+ * switch is one keystroke and re-annotating providers on it would make the badges flicker.
+ * Nothing resolvable at all falls back to the main provider, which is what a spawn reaches when
+ * the default role is unset.
  */
 function accountRoleSources(session: AgentSession): AccountRoleSources {
 	const model = session.model;
-	const subagentProviders: string[] = [];
-	const configured = resolveConfiguredModelPatterns(session.settings.get("subagent.model"), session.settings);
-	if (configured.length === 0) {
-		if (model) subagentProviders.push(model.provider);
-	} else {
-		const available = session.modelRegistry.getAvailable();
-		const preferences = getModelMatchPreferences(session.settings);
-		for (const pattern of configured) {
+	const available = session.modelRegistry.getAvailable();
+	const preferences = getModelMatchPreferences(session.settings);
+	const agentProviders: string[] = [];
+	for (const chain of configuredAgentModelChains(session.settings)) {
+		for (const pattern of resolveConfiguredModelPatterns(chain, session.settings)) {
 			const resolved = resolveModelFromString(pattern, available, preferences);
-			if (resolved) subagentProviders.push(resolved.provider);
+			if (resolved && !agentProviders.includes(resolved.provider)) agentProviders.push(resolved.provider);
 		}
 	}
+	if (agentProviders.length === 0 && model) agentProviders.push(model.provider);
 	const webSearch = session.settings.get("providers.webSearch");
 	return {
 		...(model ? { mainModel: { provider: model.provider, id: model.id } } : {}),
-		subagentProviders,
+		agentProviders,
 		...(typeof webSearch === "string" ? { webSearchPreference: webSearch } : {}),
 	};
 }
+
+/** The TUI's colours for the `/account status` block; a text client passes none. */
+const ACCOUNT_STATUS_TUI_STYLE: AccountStatusStyle = {
+	title: text => text,
+	name: text => theme.bold(text),
+	muted: text => theme.fg("dim", text),
+	warn: text => theme.fg("warning", text),
+	command: text => theme.fg("accent", text),
+};
 
 /**
  * The `/account status` block for a session: routing read from disk, usage from the provider.
@@ -383,8 +422,11 @@ function accountRoleSources(session: AgentSession): AccountRoleSources {
  * Usage comes through the same `session.fetchUsageReports()` that `/usage` calls, so the two
  * surfaces cannot disagree about a percentage. A failed fetch degrades to the routing-only block
  * rather than failing the command: which account is serving is on disk and still worth printing.
+ *
+ * Returns the block's lines; line one is the title. A text client prints them as they are, the TUI
+ * lifts the title into a transcript block header (see {@link presentAccountStatus}).
  */
-async function buildAccountStatusText(session: AgentSession): Promise<string> {
+async function buildAccountStatusLines(session: AgentSession, style?: AccountStatusStyle): Promise<string[]> {
 	let inventory = await loadAccountInventory(session.modelRegistry.authStorage, { sessionId: session.sessionId });
 	try {
 		const reports = await session.fetchUsageReports();
@@ -392,7 +434,17 @@ async function buildAccountStatusText(session: AgentSession): Promise<string> {
 	} catch (error) {
 		logger.debug("account status: usage fetch failed", { error: errorMessage(error) });
 	}
-	return renderAccountStatus(inventory, Date.now(), accountRoleAnnotations(accountRoleSources(session))).join("\n");
+	return renderAccountStatus(inventory, Date.now(), accountRoleAnnotations(accountRoleSources(session)), style);
+}
+
+/**
+ * The TUI form of `/account status`: a transcript block with the title as its header, not a
+ * paragraph printed as though the assistant had said it.
+ */
+async function presentAccountStatus(ctx: Pick<TuiSlashCommandHostContext, "showReport" | "session">): Promise<void> {
+	const lines = await buildAccountStatusLines(ctx.session, ACCOUNT_STATUS_TUI_STYLE);
+	// Line one is the title and line two the blank under it; the header row carries both.
+	ctx.showReport(ACCOUNT_STATUS_TITLE, lines.slice(2).join("\n"));
 }
 
 /** How a probed credential reads in the `/account refresh` delta. */
@@ -805,13 +857,13 @@ const BUILTIN_SLASH_COMMAND_HANDLERS: { [Name in BuiltinSlashCommandName]: Handl
 				const missing = loadConfig(process.cwd()).missingServers;
 				if (missing.length > 0) {
 					const lines = [
-						"No language servers running. Detected for this project but not installed:",
+						theme.fg("dim", "Detected for this project but not installed:"),
 						...missing.map(
 							server =>
 								`${theme.fg("warning", theme.status.pending)} ${server.name} ${theme.fg("dim", `(needs \`${server.command}\` on $PATH · ${server.fileTypes.join(", ")})`)}`,
 						),
 					];
-					runtime.ctx.showStatus(lines.join("\n"), { dim: false });
+					runtime.ctx.showReport("Language Servers", lines.join("\n"));
 				} else {
 					runtime.ctx.showStatus("No language servers configured for this project.");
 				}
@@ -828,7 +880,7 @@ const BUILTIN_SLASH_COMMAND_HANDLERS: { [Name in BuiltinSlashCommandName]: Handl
 					server =>
 						`${glyph(server.status)} ${server.name} ${theme.fg("dim", `(${server.status} · ${server.fileTypes.join(", ")})`)}`,
 				);
-				runtime.ctx.showStatus(lines.join("\n"), { dim: false });
+				runtime.ctx.showReport("Language Servers", lines.join("\n"));
 			}
 			runtime.ctx.editor.setText("");
 		},
@@ -855,7 +907,7 @@ const BUILTIN_SLASH_COMMAND_HANDLERS: { [Name in BuiltinSlashCommandName]: Handl
 		handle: async (command, runtime) => {
 			const { verb, rest } = parseSubcommand(command.args);
 			if (!verb || verb === "status") {
-				await runtime.output(await buildAccountStatusText(runtime.session));
+				await runtime.output((await buildAccountStatusLines(runtime.session)).join("\n"));
 				return commandConsumed();
 			}
 			if (verb === "name") {
@@ -891,7 +943,7 @@ const BUILTIN_SLASH_COMMAND_HANDLERS: { [Name in BuiltinSlashCommandName]: Handl
 			const { verb, rest } = parseSubcommand(command.args);
 			runtime.ctx.editor.setText("");
 			if (!verb || verb === "status") {
-				runtime.ctx.showStatus(await buildAccountStatusText(runtime.ctx.session), { dim: false });
+				await presentAccountStatus(runtime.ctx);
 				return;
 			}
 			if (verb === "manager") {
@@ -922,7 +974,7 @@ const BUILTIN_SLASH_COMMAND_HANDLERS: { [Name in BuiltinSlashCommandName]: Handl
 				return;
 			}
 			if (verb === "refresh") {
-				runtime.ctx.showStatus(await refreshActiveAccounts(runtime.ctx.session), { dim: false });
+				runtime.ctx.showReport("Account Refresh", await refreshActiveAccounts(runtime.ctx.session));
 				return;
 			}
 			if (verb === "use") {
@@ -1341,16 +1393,32 @@ const BUILTIN_SLASH_COMMAND_HANDLERS: { [Name in BuiltinSlashCommandName]: Handl
 		},
 	},
 	prewalk: {
-		handle: async (_command, runtime) => {
-			const rolePattern = expandRoleAlias("@smol", runtime.settings);
+		handle: async (command, runtime) => {
+			// The target no longer defaults to a role alias: an unset role stopped
+			// resolving to a model (#980 fail-closed). `/prewalk <model>` names the
+			// target for this session; without an argument, `prewalk.cheapModel`
+			// is required, and the refusal names the setting that fixes it.
+			const arg = command.args.trim();
+			// Same chain normalization the setting gets: a comma list contributes
+			// its first entry, an empty argument falls through to the setting.
+			const cheapPattern =
+				normalizeModelPatternList(arg)[0] ||
+				normalizeModelPatternList(runtime.settings.get("prewalk.cheapModel"))[0];
+			if (!cheapPattern) {
+				return usage(
+					'Prewalk needs a cheap target model: run /prewalk <model> or set "prewalk.cheapModel" in settings.',
+					runtime,
+				);
+			}
 			const resolved = resolveCliModel({
-				cliModel: rolePattern,
+				cliModel: cheapPattern,
 				modelRegistry: runtime.session.modelRegistry,
 				preferences: getModelMatchPreferences(runtime.settings),
+				settings: runtime.settings,
 			});
 			if (resolved.error || !resolved.model) {
 				return usage(
-					resolved.error ?? modelResolutionFailureMessage([rolePattern], runtime.session.modelRegistry),
+					resolved.error ?? modelResolutionFailureMessage([cheapPattern], runtime.session.modelRegistry),
 					runtime,
 				);
 			}
@@ -1475,7 +1543,7 @@ const BUILTIN_SLASH_COMMAND_HANDLERS: { [Name in BuiltinSlashCommandName]: Handl
 			return `${base} · protection on, ${stored} stored`;
 		},
 		/**
-		 * Text and ACP: no terminal to hide anything on, so there is no prompt. `--from-env` is the
+		 * Text and ACP: no terminal to hide anything on, so there is no prompt. `/secret from-env` is the
 		 * form that never types the credential at all, and `runSecretCommand` says so when a value
 		 * is missing rather than reading one into the scrollback.
 		 */
@@ -1494,13 +1562,13 @@ const BUILTIN_SLASH_COMMAND_HANDLERS: { [Name in BuiltinSlashCommandName]: Handl
 			return commandConsumed();
 		},
 		/**
-		 * The TUI, which CAN hide what is typed, so a bare `/secret` opens a masked field.
+		 * The TUI, which CAN hide what is typed, so `/secret add` with nothing after it opens a masked
+		 * field.
 		 *
-		 * THE EDITOR IS CLEARED BEFORE THE VALUE IS READ, not after. That matters far more under
-		 * the verbless grammar than it did before: the argument line IS the credential now, so
-		 * leaving it in the input buffer would park a live token there for as long as the prompt is
-		 * open, and a cancelled prompt would leave it there for good. The prompt is a local dialog,
-		 * never raced against a collab guest, so a masked field cannot be answered from another
+		 * THE EDITOR IS CLEARED BEFORE THE VALUE IS READ, not after. The line after `add` IS the
+		 * credential, so leaving it in the input buffer would park a live token there for as long as the
+		 * prompt is open, and a cancelled prompt would leave it there for good. The prompt is a local
+		 * dialog, never raced against a collab guest, so a masked field cannot be answered from another
 		 * machine.
 		 */
 		handleTui: async (command, runtime) => {
@@ -1582,6 +1650,9 @@ const BUILTIN_SLASH_COMMAND_HANDLERS: { [Name in BuiltinSlashCommandName]: Handl
 			// Scheme-less relay args default to wss (ws:// must be spelled out for localhost).
 			const relayUrl = relayInput.includes("://") ? relayInput : `wss://${relayInput}`;
 			const webUrl = ctx.settings.get("collab.webUrl") || "";
+			// The host client (relay socket, room crypto, wire codecs) loads here
+			// rather than at startup: a session that never hosts never evaluates it.
+			const { CollabHost } = await import("../collab/host");
 			const host = new CollabHost(ctx);
 			try {
 				await host.start(relayUrl, webUrl);
@@ -1611,6 +1682,7 @@ const BUILTIN_SLASH_COMMAND_HANDLERS: { [Name in BuiltinSlashCommandName]: Handl
 				return;
 			}
 			try {
+				const { CollabGuestLink } = await import("../collab/guest");
 				await new CollabGuestLink(ctx).join(link);
 			} catch (err) {
 				ctx.showError(`Failed to join collab session: ${errorMessage(err)}`);
@@ -1815,7 +1887,7 @@ const BUILTIN_SLASH_COMMAND_HANDLERS: { [Name in BuiltinSlashCommandName]: Handl
 			const snapshot = runtime.session.getAsyncJobSnapshot({ recentLimit: 5 });
 			if (!snapshot || (snapshot.running.length === 0 && snapshot.recent.length === 0)) {
 				await runtime.output(
-					"No background jobs running. (Background jobs run async tools — e.g. long-running bash, debug, or task subagents that would otherwise tie up a turn. They appear here while alive and for ~5 minutes after.)",
+					"No background jobs running. (Background jobs run async tools — e.g. long-running bash, debug, or task spawned agents that would otherwise tie up a turn. They appear here while alive and for ~5 minutes after.)",
 				);
 				return commandConsumed();
 			}
@@ -1874,6 +1946,64 @@ const BUILTIN_SLASH_COMMAND_HANDLERS: { [Name in BuiltinSlashCommandName]: Handl
 			}
 			runtime.ctx.showStatus("Usage: /usage [show|reset [account|active]]");
 			runtime.ctx.editor.setText("");
+		},
+	},
+	advisor: {
+		getTuiAutocompleteDescription: runtime => {
+			const stats = runtime.ctx.session.getAdvisorStats();
+			if (!stats.configured) return "Advisor · off";
+			if (!stats.active) return "Advisor · on, but no model resolved";
+			if (stats.advisors.length > 1) return `Advisor · ${stats.advisors.length} running`;
+			return `Advisor · ${stats.advisors[0].model.id}`;
+		},
+		handle: async (command, runtime) => {
+			const { verb } = parseSubcommand(command.args);
+			if (!verb || verb === "status") {
+				const stats = runtime.session.getAdvisorStats();
+				await runtime.output(
+					`${runtime.session.formatAdvisorStatus()}\n${advisorStatusNextStep(stats.configured, stats.active)}`,
+				);
+				return commandConsumed();
+			}
+			if (verb === "on" || verb === "off") {
+				const running = runtime.session.setAdvisorEnabled(verb === "on");
+				await runtime.output(describeAdvisorToggle(verb === "on", running));
+				return commandConsumed();
+			}
+			if (verb === "dump") {
+				const dump = runtime.session.formatAdvisorHistoryAsText({ compact: true });
+				await runtime.output(dump ?? "No advisor is running, so there is no advisor transcript to show.");
+				return commandConsumed();
+			}
+			if (verb === "configure") {
+				await runtime.output(
+					"/advisor configure needs the interactive TUI. Edit WATCHDOG.yml to change the roster from here.",
+				);
+				return commandConsumed();
+			}
+			return usage("Usage: /advisor [status|configure|on|off|dump]", runtime);
+		},
+		handleTui: async (command, runtime) => {
+			const { verb } = parseSubcommand(command.args);
+			runtime.ctx.editor.setText("");
+			if (verb === "status") {
+				await runtime.ctx.handleAdvisorStatusCommand();
+				return;
+			}
+			if (verb === "configure") {
+				await runtime.ctx.showAdvisorConfigure();
+				return;
+			}
+			if (verb === "on" || verb === "off") {
+				const running = runtime.ctx.session.setAdvisorEnabled(verb === "on");
+				runtime.ctx.showStatus(describeAdvisorToggle(verb === "on", running));
+				return;
+			}
+			if (verb === "dump") {
+				runtime.ctx.handleAdvisorDumpCommand();
+				return;
+			}
+			runtime.ctx.showStatus("Usage: /advisor [status|configure|on|off|dump]");
 		},
 	},
 	changelog: {
@@ -2012,6 +2142,9 @@ const BUILTIN_SLASH_COMMAND_HANDLERS: { [Name in BuiltinSlashCommandName]: Handl
 			runtime.ctx.editor.setText("");
 			await runtime.ctx.handleSSHCommand(command.text);
 		},
+	},
+	stats: {
+		handle: handleStatsAcp,
 	},
 	"new": {
 		handleTui: async (_command, runtime) => {
@@ -2168,27 +2301,9 @@ const BUILTIN_SLASH_COMMAND_HANDLERS: { [Name in BuiltinSlashCommandName]: Handl
 			await runtime.ctx.handleResumeSession(match.session.path);
 		},
 	},
-	btw: {
-		handleTui: async (command, runtime) => {
-			const question = command.text.slice(`/${command.name}`.length).trim();
-			runtime.ctx.editor.setText("");
-			await runtime.ctx.handleBtwCommand(question);
-		},
-	},
-	tan: {
-		handleTui: async (command, runtime) => {
-			const work = command.text.slice(`/${command.name}`.length).trim();
-			runtime.ctx.editor.setText("");
-			await runtime.ctx.handleTanCommand(work);
-		},
-	},
-	omfg: {
-		handleTui: async (command, runtime) => {
-			const complaint = command.text.slice(`/${command.name}`.length).trim();
-			runtime.ctx.editor.setText("");
-			await runtime.ctx.handleOmfgCommand(complaint);
-		},
-	},
+	btw: { handleTui: argumentHandlerTui((ctx, question) => ctx.handleBtwCommand(question)) },
+	tan: { handleTui: argumentHandlerTui((ctx, work) => ctx.handleTanCommand(work)) },
+	omfg: { handleTui: argumentHandlerTui((ctx, complaint) => ctx.handleOmfgCommand(complaint)) },
 	retry: {
 		handleTui: async (_command, runtime) => {
 			const didRetry = await runtime.ctx.session.retry();
@@ -2196,6 +2311,11 @@ const BUILTIN_SLASH_COMMAND_HANDLERS: { [Name in BuiltinSlashCommandName]: Handl
 				runtime.ctx.showStatus("Nothing to retry");
 			}
 			runtime.ctx.editor.setText("");
+		},
+	},
+	rephrase: {
+		handleTui: (_command, runtime) => {
+			runtime.ctx.handleRephraseCommand();
 		},
 	},
 	debug: {
@@ -2439,6 +2559,21 @@ const BUILTIN_SLASH_COMMAND_HANDLERS: { [Name in BuiltinSlashCommandName]: Handl
 			runtime.ctx.editor.setText("");
 		},
 	},
+	trust: {
+		handle: async (command, runtime) => {
+			await runtime.output(await runTrustSlashCommand(command.args, runtime.settings.getAgentDir(), runtime.cwd));
+			return commandConsumed();
+		},
+		handleTui: async (command, runtime) => {
+			runtime.ctx.editor.setText("");
+			const report = await runTrustSlashCommand(
+				command.args,
+				runtime.ctx.settings.getAgentDir(),
+				runtime.ctx.sessionManager.getCwd(),
+			);
+			runtime.ctx.showReport("Trust", report.trimEnd());
+		},
+	},
 	force: {
 		getTuiAutocompleteDescription: runtime => {
 			const count = runtime.ctx.session.getActiveToolNames().length;
@@ -2510,7 +2645,7 @@ function toSlashCommandSpec(declaration: BuiltinSlashCommandDeclaration): SlashC
 		description: declaration.description,
 		...BUILTIN_SLASH_COMMAND_HANDLERS[declaration.name as BuiltinSlashCommandName],
 	};
-	if (declaration.aliases) spec.aliases = [...declaration.aliases];
+	if (declaration.aliases) spec.aliases = Array.from(declaration.aliases);
 	if (declaration.allowArgs !== undefined) spec.allowArgs = declaration.allowArgs;
 	if (declaration.inlineHint !== undefined) spec.inlineHint = declaration.inlineHint;
 	if (declaration.acpDescription !== undefined) spec.acpDescription = declaration.acpDescription;
@@ -2639,7 +2774,7 @@ function buildProfileArgumentCompletions(): (prefix: string) => Promise<Autocomp
  * the terminal does not parse is stored as a credential instead of run.
  *
  * NAMES ARE NEVER OFFERED. Completing the names of stored secrets would render part of the vault on
- * a keystroke, and under the verbless grammar it would also store the whole suggestion as a
+ * a keystroke, and under the verbless grammar it once also stored the whole suggestion as a
  * credential when the verb turned out not to parse. `/secret list` is where names are read, on
  * purpose and in one place.
  *
@@ -2813,6 +2948,7 @@ export const BUILTIN_SLASH_COMMAND_CATEGORIES: Readonly<Record<string, string>> 
 	extensions: "setup",
 	plugins: "setup",
 	"reload-plugins": "setup",
+	trust: "setup",
 	plan: "modes",
 	"plan-review": "modes",
 	vibe: "modes",
@@ -2831,6 +2967,10 @@ export const BUILTIN_SLASH_COMMAND_CATEGORIES: Readonly<Record<string, string>> 
 	effort: "model",
 	force: "model",
 	retry: "model",
+	// Beside /btw and /tan: all three act on what the conversation just said, not on the model.
+	rephrase: "context",
+	// Beside the model roles: the advisor IS a model role, and its knobs sit under the Model tab.
+	advisor: "model",
 	share: "share",
 	collab: "share",
 	join: "share",
@@ -2844,6 +2984,8 @@ export const BUILTIN_SLASH_COMMAND_CATEGORIES: Readonly<Record<string, string>> 
 	agents: "workspace",
 	jobs: "workspace",
 	usage: "workspace",
+	// Beside `/usage`: both answer "what has this cost", one inline and one in a browser.
+	stats: "workspace",
 	todo: "context",
 	context: "context",
 	memory: "context",

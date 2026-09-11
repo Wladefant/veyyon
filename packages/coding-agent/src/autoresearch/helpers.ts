@@ -1,6 +1,7 @@
 import { nonEmptyTrimmed, trimTrailingSlashes } from "@veyyon/utils";
 import * as git from "../utils/git";
-import type { ASIData, ASIValue, MetricDirection, NumericMetricMap } from "./types";
+import { type AutoresearchStorage, openAutoresearchStorageIfExists, type SessionRow } from "./storage";
+import type { ASIData, ASIValue, AutoresearchToolResult, MetricDirection, NumericMetricMap } from "./types";
 
 export const METRIC_LINE_PREFIX = "METRIC";
 export const ASI_LINE_PREFIX = "ASI";
@@ -90,10 +91,19 @@ export function fmtNum(value: number, decimals: number = 0): string {
 	return `${value < 0 ? "-" : ""}${commas(Number(whole))}${fraction}`;
 }
 
+/**
+ * A metric with its unit: `192.78ms`, `12MiB`, `1,596,000 comparisons`. A short
+ * symbol or abbreviation attaches to the number; a word gets a space, since
+ * `1,596,000comparisons` reads as one token.
+ */
 export function formatNum(value: number | null, unit: string): string {
 	if (value === null) return "-";
-	if (Number.isInteger(value)) return `${fmtNum(value)}${unit}`;
-	return `${fmtNum(value, 2)}${unit}`;
+	const number = Number.isInteger(value) ? fmtNum(value) : fmtNum(value, 2);
+	return `${number}${unitSeparator(unit)}${unit}`;
+}
+
+function unitSeparator(unit: string): string {
+	return unit.length > 3 && /^\p{L}+$/u.test(unit) ? " " : "";
 }
 
 /**
@@ -257,4 +267,35 @@ export async function gitStatusPorcelain(cwd: string): Promise<string> {
 export async function gitWorkDirPrefix(cwd: string): Promise<string> {
 	if (!(await git.repo.resolve(cwd))) return "";
 	return git.show.prefix(cwd);
+}
+
+export type ActiveBranchSessionResult =
+	| { ok: true; storage: AutoresearchStorage; session: SessionRow }
+	| { ok: false; result: AutoresearchToolResult<never> };
+
+/**
+ * Open autoresearch storage and resolve the active session for the current branch.
+ *
+ * Returns `{ ok: true, storage, session }` when storage exists and has an active session
+ * on the current branch, or `{ ok: false, result }` with the standard missing-session error
+ * tool result.
+ */
+export async function resolveActiveBranchSession(cwd: string): Promise<ActiveBranchSessionResult> {
+	const storage = await openAutoresearchStorageIfExists(cwd);
+	const currentBranch = (await git.branch.current(cwd)) ?? null;
+	const session = storage?.getActiveSessionForBranch(currentBranch) ?? null;
+	if (!storage || !session) {
+		return {
+			ok: false,
+			result: {
+				content: [
+					{
+						type: "text",
+						text: "Error: no active autoresearch session for the current branch. Call init_experiment first.",
+					},
+				],
+			},
+		};
+	}
+	return { ok: true, storage, session };
 }

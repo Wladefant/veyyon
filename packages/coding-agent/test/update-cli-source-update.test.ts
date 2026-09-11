@@ -95,11 +95,11 @@ describe("updateViaSourceAt (source-install update steps)", () => {
 			// Explicit regen: Bun runs no root lifecycle scripts on workspace
 			// installs, so `bun install` alone leaves gitignored build artifacts
 			// stale or missing.
-			"bun --cwd=packages/collab-web run gen:tool-views",
+			"bun --cwd=clients/web run gen:tool-views",
 			// The addon is version-sentinel-checked at boot: an advanced checkout
 			// with the previous release's addon dies like a missing one, so the
 			// update must provision a current addon (see ensure-native.ts).
-			"bun --cwd=packages/natives run ensure",
+			"bun --cwd=natives/bridge/bindings run ensure",
 		]);
 		// launcher/../../../.. resolves to the checkout root the steps run in.
 		for (const call of calls) expect(path.resolve(call.cwd)).toBe("/opt/checkout");

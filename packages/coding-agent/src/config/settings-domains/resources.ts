@@ -9,16 +9,28 @@
  * The keys did not change when the rows moved, so an existing `config.yml` that sets
  * `session.cpuLimitCores` keeps working and there is no migration.
  *
- * SCOPE OF EVERY LIMIT ON THIS TAB: the session TREE, not one agent. That is this
- * session, every subagent under it at any depth, and every process any of them
- * spawned. They share ONE budget group (see session/cpu-limit.ts), so a limit cannot
- * be multiplied by delegating.
+ * ONE SCOPE PER TAB. Everything here is `session.*`: it bounds the session TREE,
+ * meaning this session, every agent under it at any depth, and every process
+ * any of them spawned. They share ONE budget group (see session/cpu-limit.ts),
+ * so a limit cannot be multiplied by delegating. It is per-profile, in the
+ * profile's `agent/config.yml`.
+ *
+ * The `machine.*` limits bound every veyyon on the machine at once. They are
+ * declared in ./global.ts and shown on the Global tab under "Machine Limits".
+ * They were interleaved here, one machine row above one session row inside each
+ * resource group, on the theory that "how much CPU" is one question with two
+ * halves. It reads as eight rows of near-identical prose where four of them
+ * silently write a different file, and the row a person came for is whichever
+ * one they did not read. The scopes are now separated by tab, which is the
+ * boundary that actually differs: this tab writes the profile, that one writes
+ * ~/.veyyon/config.yml. The Resources tab opens with a row naming where the
+ * machine limits are (settings-selector.ts, MACHINE_LIMITS_POINTER_ROW_ID), and
+ * settings search spans tabs, so "machine cpu" still finds the row from here.
+ *
+ * Session groups are nested inside the machine group, so the outer cap holds
+ * whatever the inner ones say. Both scopes default to 0, which is no limit.
  */
 export const RESOURCES_SETTINGS = {
-	// ────────────────────────────────────────────────────────────────────────
-	// CPU
-	// ────────────────────────────────────────────────────────────────────────
-
 	"session.cpuLimitCores": {
 		type: "number",
 		default: 0,
@@ -27,11 +39,11 @@ export const RESOURCES_SETTINGS = {
 			group: "CPU",
 			label: "Session CPU Limit",
 			description:
-				"Maximum CPU a session's spawned processes may use, in cores (0 = off). This is the per-profile default: every session that profile starts inherits it, and one session can depart from it with /cpu-limit <cores> or lift it entirely with /cpu-limit remove, neither of which writes this setting. Every process the session starts (bash commands, MCP servers, custom tools, launch tasks, workers) joins a per-session budget group: a cgroup v2 quota on Linux, a Job Object hard cap on Windows, both kernel-enforced, so the group throttles as a whole. While the group runs saturated, new commands are refused with an error naming the budget. On macOS there is no kernel quota, so enforcement is policy-only (refuse new commands, renice, optional kill) and a startup warning says so. The harness's own compute (agent turns, in-process workers) is never capped.",
+				"Maximum CPU processes spawned by this session and its agents may use, in cores. Off: no limit. Stored in the active profile.",
 			keywords: ["cpu", "limit", "quota", "cgroup", "throttle", "cores", "budget"],
 			// A numeric setting with no option list is dropped by the UI adapter
 			// (pathToSettingDef treats optionless numbers as schema-only), so the
-			// ladder is what makes the row exist. See subagent.idleTtlMs.
+			// ladder is what makes the row exist. See agent.idleTtlMs.
 			options: [
 				{ value: "0", label: "Off", description: "Default" },
 				{ value: "1", label: "1 core" },
@@ -51,15 +63,11 @@ export const RESOURCES_SETTINGS = {
 			group: "CPU",
 			label: "Kill Over-Budget Commands",
 			description:
-				"What happens when spawned commands stay at the CPU limit for seconds at a time. Off (default): new commands are refused until usage drops, running ones keep running (throttled where the OS offers a quota, reniced on macOS). On: the over-budget group is also sent SIGTERM, and the kill is reported as a budget action, not a crash. /cpu-limit kill on|off changes it for one session without writing this setting.",
+				"Controls whether processes running over the session CPU limit are terminated. Off: running processes continue and new commands are refused while over budget. On: processes running over budget receive SIGTERM.",
 			keywords: ["cpu", "limit", "kill", "sigterm", "budget"],
 			condition: "cpuLimitEnabled",
 		},
 	},
-
-	// ────────────────────────────────────────────────────────────────────────
-	// Memory
-	// ────────────────────────────────────────────────────────────────────────
 
 	"session.memoryLimitGb": {
 		type: "number",
@@ -69,7 +77,7 @@ export const RESOURCES_SETTINGS = {
 			group: "Memory",
 			label: "Session Memory Limit",
 			description:
-				"Maximum resident memory the session tree may hold at once, in gigabytes (0 = off). The session tree is this session, every subagent under it at any depth, and every process any of them spawned: they share one budget group, so delegating work cannot multiply the allowance. This is a kernel cap, not a polite refusal: on Linux it is cgroup v2 memory.max on the session budget group, so a group at the limit is reclaimed first and then a process INSIDE it is OOM-killed by the kernel, whichever process the kernel picks, with no warning and no chance to finish. Set it where an OOM kill is preferable to the machine swapping, and leave it off if a killed command would cost more than the memory does. A host without a memory controller reports the limit as unenforceable once at startup rather than pretending to hold it.",
+				"Maximum resident memory processes spawned by this session and its agents may use, in gigabytes. Off: no limit. Stored in the active profile.",
 			keywords: ["memory", "ram", "limit", "oom", "cgroup", "budget", "gb"],
 			// Optionless numbers are dropped by the UI adapter; the ladder is what
 			// makes the row exist. See session.cpuLimitCores.
@@ -85,10 +93,6 @@ export const RESOURCES_SETTINGS = {
 		},
 	},
 
-	// ────────────────────────────────────────────────────────────────────────
-	// Disk
-	// ────────────────────────────────────────────────────────────────────────
-
 	"session.writeBudgetGb": {
 		type: "number",
 		default: 0,
@@ -97,7 +101,7 @@ export const RESOURCES_SETTINGS = {
 			group: "Disk",
 			label: "Session Write Budget",
 			description:
-				"Cumulative gigabytes the session tree may WRITE to disk before further writes are refused (0 = off). The session tree is this session, every subagent under it at any depth, and every process any of them spawned: they share one budget group, so delegating work cannot multiply the allowance. Writes are metered by the same group that meters CPU (cgroup v2 io accounting on Linux, Job Object I/O accounting on Windows). Once the total is reached, a new command is refused with an error naming the budget and how much it has written; already running commands keep running unless Kill Over-Budget Writers is on. A host where write accounting cannot be read reports the limit as unenforceable once at startup rather than pretending to hold it.",
+				"Cumulative disk writes permitted for this session and its agents, in gigabytes. Off: no limit. Once reached, subsequent commands and tool writes are refused.",
 			keywords: ["disk", "write", "budget", "gb", "io", "quota", "limit"],
 			// Optionless numbers are dropped by the UI adapter; the ladder is what
 			// makes the row exist. See session.cpuLimitCores.
@@ -121,15 +125,11 @@ export const RESOURCES_SETTINGS = {
 			group: "Disk",
 			label: "Kill Over-Budget Writers",
 			description:
-				"What happens when the session tree passes its write budget. Off (default): new commands are refused, and whatever is already writing runs to completion. On: the over-budget group is also sent SIGTERM, and the kill is reported as a budget action rather than a crash, so a command that vanished mid-write is explained instead of looking like a failure. Hidden while the write budget is 0, because a kill policy for a budget that does not exist is a knob with nothing behind it.",
+				"Controls whether processes are terminated when the session write budget is exceeded. Off: running processes continue and new commands are refused. On: running processes receive SIGTERM.",
 			keywords: ["disk", "write", "budget", "kill", "sigterm"],
 			condition: "writeBudgetEnabled",
 		},
 	},
-
-	// ────────────────────────────────────────────────────────────────────────
-	// Processes
-	// ────────────────────────────────────────────────────────────────────────
 
 	"session.maxProcesses": {
 		type: "number",
@@ -137,9 +137,9 @@ export const RESOURCES_SETTINGS = {
 		ui: {
 			tab: "resources",
 			group: "Processes",
-			label: "Max Processes",
+			label: "Session Max Processes",
 			description:
-				"Hard cap on how many processes may be alive at once across the session tree (0 = off). The session tree is this session, every subagent under it at any depth, and every process any of them spawned, all in one budget group, so the cap is not multiplied by delegating. Enforced by the kernel where it can be: cgroup v2 pids.max on Linux and a Job Object process limit on Windows both refuse the fork itself, so a runaway loop stops instead of filling the process table. Elsewhere the cap is policy-only, refusing a new spawn with an error naming the limit and the current count, and a startup notice says the kernel is not holding it.",
+				"Maximum concurrent processes that this session and its agents may run. Off: no limit. Stored in the active profile.",
 			keywords: ["processes", "pids", "fork", "limit", "cap", "bomb"],
 			// Optionless numbers are dropped by the UI adapter; the ladder is what
 			// makes the row exist. See session.cpuLimitCores.
