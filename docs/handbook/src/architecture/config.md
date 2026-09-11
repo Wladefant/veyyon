@@ -266,7 +266,7 @@ Native provider (`id: native`) reads native config from one place: the active pr
 ### Directory admission rules
 
 - The profile agent directory is used only when it exists and is non-empty.
-- Skills are loaded only from the active profile's agent dir (`~/.veyyon/profiles/<name>/agent/skills`). Project-local `.veyyon/skills` directories are deliberately not scanned, so no repository can inject skills into a session by ambient autodiscovery.
+- Skills are loaded only from the active profile's agent dir (`~/.veyyon/profiles/<name>/agent/skills`). Project-local `.veyyon/skills` directories are not scanned, preventing repositories from injecting skills into a session via ambient autodiscovery.
 - `AGENTS.md` has three scopes: the global cross-profile `~/.veyyon/AGENTS.md`, the active profile's first matching instruction file, and the project walk from the working directory to the repository root (one file per directory level: `.veyyon/AGENTS.md` at the nearest non-empty `.veyyon/` claims its level, bare `AGENTS.md` next, bare `CLAUDE.md` last). `RULES.md` is the active profile's file only; a repository's `.veyyon/RULES.md` is not read. Persistent system-prompt changes use `PROMPT_SECTIONS/` under the active profile's agent dir. See [`docs/handbook/src/models/system-prompt.md`](../models/system-prompt.md).
 
 ### Scope-specific loading

@@ -64,6 +64,8 @@ export const PROMPT_IDS: readonly string[] = [
 	"compaction/branch-summary",
 	"compaction/branch-summary-context",
 	"compaction/branch-summary-preamble",
+	"compaction/compaction-staged-merge",
+	"compaction/compaction-staged-segment",
 	"compaction/compaction-summary",
 	"compaction/compaction-summary-context",
 	"compaction/compaction-turn-prefix",

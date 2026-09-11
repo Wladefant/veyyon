@@ -267,5 +267,5 @@ Center dashboard's.
 | A provider | [adding-a-provider.md](../../docs/internal/adding-a-provider.md) |
 | Programmatic/SDK use | [sdk.md](../../docs/handbook/src/reference/sdk.md) |
 
-See also `AGENTS.md` at the repo root for repo-wide conventions (Bun-over-Node,
+See also `AGENTS.md` at the repo root for repo-wide conventions (portable-first runtime APIs,
 logging, TUI sanitization, generated files, changelog, releasing).

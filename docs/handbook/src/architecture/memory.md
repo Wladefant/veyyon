@@ -30,7 +30,7 @@ At session start, if a memory summary exists for the current project, it is inje
 - Cite the memory artifact path when memory changes the plan, and pair it with current-repo evidence before acting.
 - Prefer repo state and user instruction when they conflict with memory; treat conflicting memory as stale.
 
-A backend contributes in two places, and which one it uses matters for what a session costs you:
+A backend contributes in two locations, which determine token usage and caching behavior:
 
 - **The system prompt** contains the guidance that does not change while the session runs. The provider caches the prompt as
   the prefix of every request, so this text is paid for once.

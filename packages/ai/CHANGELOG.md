@@ -44,10 +44,19 @@
 
 ### Fixed
 
+- Corrected comments that named a distribution channel or runtime API the project does not use; no behavior change.
+- A stream that stalls after its first event ("<provider> stream stalled while waiting for the next event") classifies as a timeout as well as transient, so auto-compaction moves to the next candidate model instead of re-sending the full context to the model that stalled up to `retry.maxRetries` times.
+- A Codex websocket turn that the server accepts and then leaves without progress for the idle window is retried on the websocket once and then run over SSE, instead of spending the whole websocket retry budget on stalls, which held one compaction summary for thirty minutes per attempt.
+- A codex server-side compaction cut by its deadline fails as a timeout, and one the caller cancels fails as a cancellation, instead of both reporting "stream closed before response.completed" as a backend fault.
+- The codex websocket watchdog message reports the time since the last progress as of the moment it fires, instead of a value computed before the wait.
 - Cursor and Devin protobuf regeneration invokes the workspace compiler, and Cursor output is written to the catalog package.
-- A user or developer message that carries prior-turn reasoning as prose declares its origin through `demotedReasoningSource`, and `transformMessages` holds it to the unsigned-thinking replay policy: a signing Anthropic endpoint drops it on same-model replay, and every `anthropic-messages` target drops it once `replayDemotedPriorReasoning` is off by catalog or learned from a `reasoning_extraction` refusal, instead of re-sending the same prose on the retry and on every later turn of the session.
 - Credential-store startup applies SQLite busy handling and WAL mode before initializing refresh leases, allowing concurrent launches to wait for database locks.
 
+## [1.4.1] - 2026-09-08
+
+### Fixed
+
+- A user or developer message that carries prior-turn reasoning as prose declares its origin through `demotedReasoningSource`, and `transformMessages` holds it to the unsigned-thinking replay policy: a signing Anthropic endpoint drops it on same-model replay, and every `anthropic-messages` target drops it once `replayDemotedPriorReasoning` is off by catalog or learned from a `reasoning_extraction` refusal, instead of re-sending the same prose on the retry and on every later turn of the session.
 
 ## [1.4.0] - 2026-09-04
 

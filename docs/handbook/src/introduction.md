@@ -20,7 +20,7 @@ The installer downloads a release binary and verifies its checksum. To build fro
 source, clone the repository and run `bun run setup && bun dev` in that checkout. See
 [Install](./using/install.md) for platforms, pinned releases, updates, and uninstall.
 
-The binary is `veyyon`, aliased to `vey`. Configuration lives under `~/.veyyon`; the
+The binary is `veyyon`, aliased to `vey`. Configuration is stored under `~/.veyyon`; the
 default profile keeps its state in `~/.veyyon/profiles/default/agent/`.
 
 ## Where things are
@@ -47,7 +47,7 @@ engine is TypeScript in `@veyyon/hashline`, with native helpers for block resolu
   no operating-system sandbox: no Landlock, no seccomp, no Seatbelt, no bubblewrap.
   Approvals are the control point.
 - **Engine modes.** Plan mode, goal mode, vibe mode, compaction, and task agents
-  live in the agent loop, not in prompt text.
+  are implemented in the agent loop, not in prompt text.
 
 Veyyon is a fork of [oh-my-pi](https://github.com/can1357/oh-my-pi). See
 [Acknowledgements](./acknowledgements.md) for credits.

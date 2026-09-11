@@ -108,7 +108,7 @@
   - [Exit codes](./reference/exit-codes.md)
   - [File locations](./reference/file-locations.md)
 
-# Under the hood
+# Architecture and internals
 
 - [Architecture overview](./architecture/overview.md)
   - [Approvals internals](./architecture/sandbox.md)

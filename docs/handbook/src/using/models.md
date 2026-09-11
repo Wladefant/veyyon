@@ -2,7 +2,7 @@
 
 You choose an endpoint and a model id. Veyyon then calls that provider's API directly with your credentials. The endpoint can be a local server, a hosted API, or any OpenAI-compatible gateway.
 
-- Contract (what the harness owns vs the provider): [Model contract](../concepts/model-contract.md)
+- Contract (harness responsibilities vs provider responsibilities): [Model contract](../concepts/model-contract.md)
 - Copy-paste provider setups: [Configuring providers](./configuring-providers.md)
 - Built-in provider stack internals: [Provider stack and BYOK](../models/providers.md)
 

@@ -204,11 +204,18 @@ export function bumpVersion(current: string, bump: "major" | "minor" | "patch"):
 	}
 }
 
-/** Rewrite only a package manifest's own version, preserving every other byte. */
+/**
+ * Rewrite a package manifest's own version and every literal `@veyyon/*` pin in it, preserving
+ * every other byte. A workspace peer stays literal (a consumer outside the workspace cannot
+ * resolve `catalog:`), so it moves with the release the same way the root catalog does; a
+ * `catalog:` or `workspace:*` specifier and every third-party range are left as they are.
+ */
 export function rewritePackageVersion(content: string, version: string): string {
 	const pattern = /("version":\s*)"[^"]+"/;
 	if (!pattern.test(content)) throw new Error('Package manifest has no top-level "version" field.');
-	return content.replace(pattern, `$1"${version}"`);
+	return content
+		.replace(pattern, `$1"${version}"`)
+		.replace(/("@veyyon\/[^"]+":\s*)"\d+\.\d+\.\d+"/g, `$1"${version}"`);
 }
 
 /** Rewrite the root Cargo workspace version, never an unrelated package version. */

@@ -1307,8 +1307,8 @@ export function getEditorTheme(): EditorTheme {
 
 export function getSettingsListTheme(): SettingsListTheme {
 	// Plugins (e.g. pi-rtk-optimizer) may call this before `initTheme()` assigns
-	// the global `theme`, or from a separate module instance under npm-global
-	// installs where the live binding was never initialized. Fall back to plain
+	// the global `theme`, or from a separate module instance
+	// where the live binding was never initialized. Fall back to plain
 	// text so the call returns a usable (unstyled) theme instead of crashing with
 	// "undefined is not an object (evaluating 'theme.fg')". See #2998.
 	if (typeof theme === "undefined") {

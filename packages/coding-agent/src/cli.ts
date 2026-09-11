@@ -100,11 +100,11 @@ async function showHelp(config: CliConfig): Promise<void> {
  * Smoke-test entry. Spawns bundled workers, pings everything, then exits.
  *
  * Purpose: catch the silent worker-load and bundled-asset regressions that hit
- * compiled binaries and the npm CLI bundle. Version/help paths do not spawn
+ * compiled binaries and standalone bundles. Version/help paths do not spawn
  * worker modules or serve dashboard assets on a fresh install, so this probe is
  * the minimal end-to-end test that proves those distribution-only paths work.
- * Wired into `scripts/install-tests/run-ci.sh` so binary / source-link /
- * tarball installs all exercise it on every CI run.
+ * Wired into `scripts/install-tests/run-ci.sh` so binary and source-link
+ * installs all exercise it on every CI run.
  */
 async function runSmokeTest(): Promise<void> {
 	// Force the core `@veyyon/natives` addon to actually LOAD and RUN first. The

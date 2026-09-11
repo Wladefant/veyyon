@@ -236,11 +236,11 @@ const TYPEBOX_SPECIFIER_FILTER = /^(?:@sinclair\/typebox|typebox)$/;
 // pre-#3423 helpers that derived `/$bunfs/root/...` paths from
 // `import.meta.dir` are gone. Dev / source-link / installed-package modes
 // still need a real filesystem path for the source shims, which
-// `sourceShimPath` computes either from the npm prebuilt `dist/cli.js`
+// `sourceShimPath` computes either from the prebuilt `dist/cli.js`
 // bundle (`VEYYON_BUNDLED=true`) or directly from the monorepo source tree.
 
 /**
- * Compute the package root for the npm prebuilt `dist/cli.js` bundle.
+ * Compute the package root for the prebuilt `dist/cli.js` bundle.
  *
  * `bundle-dist.ts` defines `process.env.VEYYON_BUNDLED="true"`; after bundling,
  * `import.meta.dir` points at `<package>/dist`. Do not resolve the package via

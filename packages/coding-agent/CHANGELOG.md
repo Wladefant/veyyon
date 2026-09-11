@@ -55,6 +55,7 @@
 
 ### Changed
 
+- Reworded the Include Model in Prompt, Max Retry Delay, Hindsight Bank ID, Subagents and Subagent Delegation setting descriptions shown in `/settings`.
 - The HTML export attaches sub-sessions, redacts and writes the file through one `finishExport` for the session-manager and file entry points, a stage-1 memory job is completed under its ownership token through one `completeOwnedStage1Job` for the with-output and no-output paths and the global phase-2 claim reads its row through one `readGlobalJobRow`, the JavaScript eval cell builds its success, cancelled and failed results through one `finish`, the GitHub commit watch reports each poll and its grace and confirm notes through one `reportWatching`, and a capability scope splits `(`, `[` and `{` groups through one keyed depth table so a closer of another kind never ends the open group; no behavior change.
 - The token-rate helpers are `presentation/token-rate.ts`, moved from `modes/components/status-line/token-rate.ts` without a forwarding module, and the status view-model is `presentation/status-producer.ts` with no `presentation/status-builder.ts` beside it; the search card limits are exported from `tools/search/search-card-limits.ts` only, and `callMeta` and `readyPendingSummary` from `tools/shell/launch-view.ts` only.
 - The propose-commit and split-commit tools state the summary and detail limits in their verdict through one `verdictWithLimits`, Enter and Ctrl+Enter run a builtin slash command and recall the line as typed through one `#consumeBuiltinSlashCommand`, and a read records its hashline snapshot through one `recordFullHashlineContext` and renders an over-long first line through one `oversizedFirstLineText` on the ranged and whole-file paths; no behavior change.
@@ -90,7 +91,6 @@
 - The speech-to-text, tiny-model and TTS worker clients share one request lifecycle (`subprocess/worker-request-client`) and one progress-event shape; a worker error or client shutdown settles every pending request the same way in all three, with no user-facing effect.
 - Collab link formatting and parsing (`formatCollabLink`, `parseCollabLink`, `generateRoomId`) are `@veyyon/wire`'s, re-exported from `collab/protocol`; a link the host mints and the browser guest parses read one grammar, with no user-facing effect.
 - Claude plugin hooks, tools, skills, slash commands and MCP servers resolve their plugin roots through one `pluginRootsFor` step, and no loader can mutate the cached root warnings; no user-facing effect.
-
 - Terminal and presentation event handling share tool-argument correlation and retry traces, with stable block identities across streaming snapshots and session resets.
 - Standalone and adopted terminal drivers share transcript updates and composer bindings with unchanged read-card presentation.
 - Grouped read projections preserve per-call status, paths, previews and line numbers across serialization.
@@ -102,10 +102,8 @@
 - Eval bridge options share field declarations while preserving exported interfaces and runtime behavior.
 - Settings selectors share list initialization, model-picker attachment and inline updates without changing input routing or persistence.
 - Extension API instances no longer allocate unused flag maps and provider-registration arrays; flags and registrations remain in the shared session runtime.
-
 - MCP commands share argument parsing without changing terminal and CLI option policies or interpreting argument text as a second command.
 - DAP and LSP configuration discovery share source ordering, and Gemini and OpenCode share user-context loading, without changing precedence or warnings.
-
 - Editor keybinding matching shares default key sets while preserving remap isolation and fallback chords.
 - Autoresearch experiment tools share active-branch session resolution without changing errors or session selection.
 - Autoresearch session updates share optional-column assembly without changing stored values, omitted-field handling, or database errors.
@@ -113,7 +111,6 @@
 - `settings-selector.ts` writes its escape comparison as `\x1b` instead of a raw control byte. No user-visible behavior changes.
 - Output minimizer tool filters collapse repetitive line filtering, table formatting and subcommand routing into declarative specs with unchanged output behavior.
 - GitHub search operations in the web domain and vibe mode tools use shared parameterized dispatch tables; behavior is unchanged.
-
 - Terminal selector cards and command controllers share modal select delegation, mouse routing, subcommand dispatch, and markdown panel presentation without changing TUI behavior.
 - Settings selectors share model-chain summaries, heading rows, picker targeting and candidate deletion without changing display or persistence behavior.
 - Parity ledger schema validation, module specifier resolution, and workspace traversal logic are consolidated into shared script helpers without changing validation verdicts.
@@ -237,19 +234,7 @@
 - Multi-target `ast_grep` searches now execute concurrently while preserving globally ordered paging, totals, parse errors, cancellation, and target-order failures.
 - The vibe screens, the image-inspection call and an LSP hover code block draw no border of their own inside a tool block, so a block keeps one left edge; a tree connector remains only where a row belongs to the row above it, in the eval value tree, the grep line gutter, the job tree and the LSP reference tree.
 - The legacy Pi bundled-module generator states which package roots a compatibility shim serves, so the compiled-mode override sweep derives that set instead of carrying its own copy; behavior is unchanged.
-- The `/autoswarm` dashboard lists a `New session` action (`n`) over an existing session, which closes it keeping every file and every logged run and starts a fresh one with the setup as it stands.
-- Swarm presets: `swarm` and `wide` are built in, and the console saves the current shape under a name to `presets.json` beside the autoresearch databases, offered in every repository.
-- The run screen's `running` row shows the last twelve lines the harness printed under the command, refreshed once a second, with escapes stripped and a carriage-return progress row shown in its final state.
-- The setup form's models note lists up to three authenticated models close to a spec that resolves to nothing (`No model matches "opus4". Close: anthropic/claude-opus-4, …`).
 - The `/agents` dashboard uses a centered, bordered card with bracketed tabs and explicit agent status words.
-- The updater, startup version check and rollback picker order releases by publication date and treat any different latest version as an update.
-- `/autoswarm` opens the swarm console and takes no arguments, drawing a centered launcher card with the goal, a `swarm`/`wide` preset switch, breadth from 2 to 8, per-arm models, attempts, a certification toggle, an iteration cap and a preset `Save as` row on a branch with no session, and the run dashboard with its ledger, single-key actions (`s` start or resume, `p` pause, `n` new session, `x` stop, `c` clear session, `r` reset worktree), `e` for the setup form and Enter for the full-width detail view over a session.
-- A field edited in the setup form is written as it is typed, to the session on the branch or parked for the start; the form opens with the caret on the Goal row, Enter on the Goal row starts or resumes the swarm, `↑↓`/`tab` move between rows, `←→` or a digit set a count and `space` flips a toggle, `ctrl+u` clears a text row, a click lands the caret or steps, picks and flips the control under the pointer, and the footer names the keys of the highlighted row.
-- `/autoresearch` is the serial loop only, with the subcommands `status`, `resume`, `goal <text>`, `off` and `clear [--keep-tree|--reset-tree]`; `/autoswarm` no longer takes them.
-- The run screen opened by `ctrl+x` and `/autoresearch status` is the run ledger alone, with its type-to-filter and its `esc close` footer.
-- The dashboard hydrates the session on the branch from the store when the runtime has not loaded it, so its detail pane states the session's goal and runs instead of `(not stated)`.
-- A click on a single-line field places its caret under the pointer in the hook prompt, the login dialog, the MCP add wizard, the history search, the text and config rows of the settings screens, and the setup form; the rollback panel's list takes the pointer through the settings host.
-- `ctx.ui.custom(..., { overlay })` accepts `OverlayOptions` beside `true`, so an extension can place and size its own card over the transcript.
 - The status row reads its truncation limits from `tools/core/render-limits`, a leaf that imports nothing, rather than `tools/core/render-utils`, which drops the tool renderers, path helpers and image resizing from the launch card's import graph; first-frame time is unchanged, because those modules only declare functions.
 - An MCP tool describes its call and result cards as a `ToolView` instead of building terminal components in `mcp/render.ts`, which is deleted; the terminal states the same arguments, structure walk, raw rows, held-back count and spill warning, indented two columns under the row that heads them and without the branch glyph the call row opened with.
 - `SETTING_KIND_HANDLERS` is typed per setting kind, so each handler receives the definition variant its key selects instead of the whole union widened to `any`. No user-visible behavior changes.
@@ -258,19 +243,21 @@
 
 ### Fixed
 
+- Corrected comments that named a distribution channel or runtime API the project does not use; no behavior change.
+- A subagent that inherits the session's model shows that model and effort in its Subagents row, the task widget and the `/agents` roster, and keeps the badge when a follow-up turn wakes it.
+- An inherited subagent model's badge prints the effort the session settled on, so a parent running `auto` shows the resolved level rather than `auto`.
+- A subagent's row label is generated with the session's live model when no tiny, commit or smol role is configured, as a session title is, instead of the persisted default role.
+- A compaction candidate whose single-request summary timed out and was completed in stages starts the next compaction on that model staged, instead of waiting out the same timeout first.
 - Command-mode detection recognizes shell and Python prefixes after Unicode leading whitespace in loaded drafts.
 - An MCP server that repeats a pagination cursor or never ends its pages no longer hangs `resources/list`, `resources/templates/list` or `prompts/list`; every list method ends with a warning and the pages collected so far, as `tools/list` already did.
-
 - Tool result cards preserve raw-string and multipart text, including MCP output and grouped read previews, while runtime result cards select eval or launch from their call arguments.
 - Collab reconnect snapshots preserve completed tool result text and display metadata across current and historical tool-call record formats.
 - HTML export preserves provider fallback transitions and redacts their model text in primary and nested transcripts.
 - Empty job results render their success or error message for every registered job alias.
 - The website model catalog refreshes from its relocated repository path before using the deployed copy.
 - Release validation checks native sentinels under every discovered workspace root, and shortened release notes link to the complete tagged changelog.
-
 - Terminal input delivery continues to later subscribers when an earlier subscriber throws.
 - Tool cards retain wire-provided results during expansion and sealing, and restore expanded output when subsequent updates contain raw results.
-
 - Clearing or replacing presentation rows stops detached animations, preserves completed-call history, and keeps subsequent reads visible.
 - Stopping a terminal presentation driver releases card animation clocks even when its engine is not running.
 - Extension discovery resolves installed plugins from the session's selected profile.
@@ -280,7 +267,6 @@
 - Legacy tool result renderers receive the completed call arguments for partial and final results.
 - Background provider usage refreshes repaint the status line without requiring further input.
 - Tool cards retain both call and result renderer failure notices with their fallback output.
-
 - The library entry point retains read-selector functions, write-preview helpers, filesystem-source extraction and the goal view after renderer separation.
 - An auto-compaction pass that finds nothing to summarize warns about a compaction dead end only while the context is still over the recovery band, so a pass that runs after maintenance already freed the context no longer advises starting a fresh session.
 - The MCP add wizard retains manually entered credentials for stdio, HTTP and SSE servers and opens OAuth settings after authentication errors.
@@ -288,7 +274,6 @@
 - Kernel codec and shutdown defaults remain active when optional configuration fields are undefined.
 - Startup frame capture stops retaining terminal output after typing, recording settlement, or frame release.
 - Disabled launch status rows remain blank when the terminal is narrower than the composer inset.
-
 - `veyyon licenses` reads the Open Sans and Source Code Pro notices from the tracked `docs/handbook/fonts/` copies instead of the ignored mdbook build output, so the bundle regenerates and its test passes on a checkout without a handbook build.
 - A compaction that had just freed context no longer reports "Compaction freed too little context to make progress" when its entry is written in the same millisecond as the kept assistant turn; whether a turn predates the latest compaction is read from its position on the branch, not its timestamp.
 - The home anchor sizes its fills, the welcome hero mounts, and the per-frame sizing pass runs on the screen the interactive mode renders on rather than the one its constructor built, and `startup.quiet` is read from the session's settings like the other startup reads.
@@ -299,12 +284,6 @@
 - Failed task results without agent details retain error text styling.
 - Launch model context estimates exclude project context and clamp the remaining percentage to zero.
 - Launched processes report completion even when they exit before the completion watch registers.
-- The `/agents` card ships as it did in 1.4.0; the flat frame and the roster detail pane added after that release were withdrawn before this one.
-- The permission card's title bar reads `Permission required` instead of the markdown source `## Permission required`; a select dialog's title bar draws the heading's text and leaves the markdown to the body.
-- A hook status set through `ctx.ui.setStatus` keeps the theme colours it was painted with, as its contract states, so the autoresearch status row shows its kept count in green, its flagged count in yellow and its best metric in the tool colour instead of one grey line; cursor moves, hyperlinks and graphics in a status are still stripped.
-- Interrupting Claude mid-thinking no longer fails every later turn with `Refusal (reasoning_extraction)` on an endpoint that enforces the classifier: the hidden continuity message that carries the unfinished reasoning states which turn it came from, and the request drops it on same-model replay to a signing Anthropic endpoint, and after one refusal on any other, instead of re-sending it on the retry and for the rest of the session.
-- A logged metric of zero or below is a measurement: a session minimising a count tags the kept run that reached zero as best, and a signed metric's negative runs are ranked by direction in the Best row, the keep gate of `log_experiment`, the confidence figure, the `Trend` row and the prompt's recent-run rows; only a crash's logged placeholder reads as unmeasured, and it prints `no metric` in the prompt as it does on screen.
-- The setup form's models note states a spec past the last arm (`"glm" has no arm at breadth 2.`), which the persisted setup dropped without a word when breadth came down.
 - Autoresearch best-result and confidence calculations exclude unmeasured placeholder zeros while retaining measured zero values.
 - Configured shortcuts apply from the first editable frame, and model-selector shortcuts entered during startup preserve the draft through initialization.
 - The launch composer repaints typed input before runtime initialization continues and preserves the mounted editor's change handler.
@@ -359,6 +338,34 @@
 
 - `WRITE_GUTTER_MIN_WIDTH` is no longer exported: the line-number gutter of a code card is the host's, stated once in `src/modes/terminal/draw/draw-tool-view.ts`, and no tool sets it.
 
+## [1.4.1] - 2026-09-08
+
+### Added
+
+- The `/autoswarm` dashboard lists a `New session` action (`n`) over an existing session, which closes it keeping every file and every logged run and starts a fresh one with the setup as it stands.
+- Swarm presets: `swarm` and `wide` are built in, and the console saves the current shape under a name to `presets.json` beside the autoresearch databases, offered in every repository.
+- The run screen's `running` row shows the last twelve lines the harness printed under the command, refreshed once a second, with escapes stripped and a carriage-return progress row shown in its final state.
+- The setup form's models note lists up to three authenticated models close to a spec that resolves to nothing (`No model matches "opus4". Close: anthropic/claude-opus-4, …`).
+
+### Changed
+
+- The updater, startup version check and rollback picker order releases by publication date and treat any different latest version as an update.
+- `/autoswarm` opens the swarm console and takes no arguments. On a branch with no session it is a centered launcher card: a form with the goal, a `swarm`/`wide` preset switch, breadth from 2 to 8 with `◂`/`▸` steppers, per-arm models, attempts, a certification toggle, an iteration cap, a `Start` button and a `Save as` row for presets. Over a session it is the run dashboard: the ledger beside the detail of the highlighted row, the actions the swarm's state allows on single keys (`s` start or resume, `p` pause, `n` new session, `x` stop, `c` clear session, `r` reset worktree), `e` for the setup form and Enter for the full-width detail view.
+- A field edited in the setup form is written as it is typed, to the session on the branch or parked for the start; the form opens with the caret on the Goal row, Enter on the Goal row starts or resumes the swarm, `↑↓`/`tab` move between rows, `←→` or a digit set a count and `space` flips a toggle, `ctrl+u` clears a text row, a click lands the caret or steps, picks and flips the control under the pointer, and the footer names the keys of the highlighted row.
+- `/autoresearch` is the serial loop only, with the subcommands `status`, `resume`, `goal <text>`, `off` and `clear [--keep-tree|--reset-tree]`; `/autoswarm` no longer takes them.
+- The run screen opened by `ctrl+x` and `/autoresearch status` is the run ledger alone, with its type-to-filter and its `esc close` footer.
+- The dashboard hydrates the session on the branch from the store when the runtime has not loaded it, so its detail pane states the session's goal and runs instead of `(not stated)`.
+- A click on a single-line field places its caret under the pointer in the hook prompt, the login dialog, the MCP add wizard, the history search, the text and config rows of the settings screens, and the setup form; the rollback panel's list takes the pointer through the settings host.
+- `ctx.ui.custom(..., { overlay })` accepts `OverlayOptions` beside `true`, so an extension can place and size its own card over the transcript.
+- The `/agents` card ships as it did in 1.4.0; the flat frame and the roster detail pane added after that release were withdrawn before this one.
+
+### Fixed
+
+- The permission card's title bar reads `Permission required` instead of the markdown source `## Permission required`; a select dialog's title bar draws the heading's text and leaves the markdown to the body.
+- A hook status set through `ctx.ui.setStatus` keeps the theme colours it was painted with, as its contract states, so the autoresearch status row shows its kept count in green, its flagged count in yellow and its best metric in the tool colour instead of one grey line; cursor moves, hyperlinks and graphics in a status are still stripped.
+- Interrupting Claude mid-thinking no longer fails every later turn with `Refusal (reasoning_extraction)` on an endpoint that enforces the classifier: the hidden continuity message that carries the unfinished reasoning states which turn it came from, and the request drops it on same-model replay to a signing Anthropic endpoint, and after one refusal on any other, instead of re-sending it on the retry and for the rest of the session.
+- A logged metric of zero or below is a measurement: a session minimising a count tags the kept run that reached zero as best, and a signed metric's negative runs are ranked by direction in the Best row, the keep gate of `log_experiment`, the confidence figure, the `Trend` row and the prompt's recent-run rows; only a crash's logged placeholder reads as unmeasured, and it prints `no metric` in the prompt as it does on screen.
+- The setup form's models note states a spec past the last arm (`"glm" has no arm at breadth 2.`), which the persisted setup dropped without a word when breadth came down.
 
 ## [1.4.0] - 2026-09-04
 

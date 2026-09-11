@@ -87,9 +87,6 @@
 - Forced render requests accept `preserveViewport` to paint changed rows immediately while retaining pending full-repaint and scrollback requests.
 - `TUI.frameScrollable` states whether the last composed frame had content above the viewport, so a host can render a scroll affordance without re-deriving it from row counts it cannot see.
 - The package is `hosts/terminal/engine` in the repository, beside the other halves of the terminal host. The published package name, exports and entry points are unchanged.
-- `Form`: a component of labelled fields — `text` with an in-field caret, `stepper` with `◂`/`▸` arrows and typed digits, `toggle`, `segmented`, `button` and `note` — that lays every value out at one column after the widest label, moves a ring with `↑↓`/`tab`, routes a click to the caret, arrow, option, switch or button under the pointer, windows a `segmented` strip wider than its row around the chosen option, and moves the ring on from a text field whose Enter nothing takes.
-- `Input` routes a click to the caret position under it (`routeMouse`) and reports the caret with `getCursor()`.
-- A `MouseRoutable` overlay drawn over the transcript on the normal screen receives the wheel and click reports inside its bounds; reports outside it keep scrolling the transcript and reaching the pinned footer.
 - `BracketedPasteHandler.route(data, sinks)` delivers one chunk's parts to `PasteSinks`: bytes before the start marker to `keys`, the assembled payload to `paste`, and bytes after the end marker to `reenter`; it returns `false` when the chunk held no paste sequence.
 - `@veyyon/utils/tab-width` is the one definition of `replaceTabs` and `DEFAULT_TAB_WIDTH`, a dependency-free module the browser bundles share; `@veyyon/utils/wrap` and `@veyyon/utils/tab-spacing` re-export them unchanged.
 - `@veyyon/utils/terminal-emulator` resolves terminal identity without loading the terminal renderer.
@@ -136,6 +133,7 @@
 
 ### Changed
 
+- Reworded the Include Model in Prompt, Max Retry Delay, Hindsight Bank ID, Subagents and Subagent Delegation setting descriptions shown in `/settings`.
 - The HTML export attaches sub-sessions, redacts and writes the file through one `finishExport` for the session-manager and file entry points, a stage-1 memory job is completed under its ownership token through one `completeOwnedStage1Job` for the with-output and no-output paths and the global phase-2 claim reads its row through one `readGlobalJobRow`, the JavaScript eval cell builds its success, cancelled and failed results through one `finish`, the GitHub commit watch reports each poll and its grace and confirm notes through one `reportWatching`, and a capability scope splits `(`, `[` and `{` groups through one keyed depth table so a closer of another kind never ends the open group; no behavior change.
 - The token-rate helpers are `presentation/token-rate.ts`, moved from `modes/components/status-line/token-rate.ts` without a forwarding module, and the status view-model is `presentation/status-producer.ts` with no `presentation/status-builder.ts` beside it; the search card limits are exported from `tools/search/search-card-limits.ts` only, and `callMeta` and `readyPendingSummary` from `tools/shell/launch-view.ts` only.
 - The propose-commit and split-commit tools state the summary and detail limits in their verdict through one `verdictWithLimits`, Enter and Ctrl+Enter run a builtin slash command and recall the line as typed through one `#consumeBuiltinSlashCommand`, and a read records its hashline snapshot through one `recordFullHashlineContext` and renders an over-long first line through one `oversizedFirstLineText` on the ranged and whole-file paths; no behavior change.
@@ -314,19 +312,7 @@
 - Multi-target `ast_grep` searches now execute concurrently while preserving globally ordered paging, totals, parse errors, cancellation, and target-order failures.
 - The vibe screens, the image-inspection call and an LSP hover code block draw no border of their own inside a tool block, so a block keeps one left edge; a tree connector remains only where a row belongs to the row above it, in the eval value tree, the grep line gutter, the job tree and the LSP reference tree.
 - The legacy Pi bundled-module generator states which package roots a compatibility shim serves, so the compiled-mode override sweep derives that set instead of carrying its own copy; behavior is unchanged.
-- The `/autoswarm` dashboard lists a `New session` action (`n`) over an existing session, which closes it keeping every file and every logged run and starts a fresh one with the setup as it stands.
-- Swarm presets: `swarm` and `wide` are built in, and the console saves the current shape under a name to `presets.json` beside the autoresearch databases, offered in every repository.
-- The run screen's `running` row shows the last twelve lines the harness printed under the command, refreshed once a second, with escapes stripped and a carriage-return progress row shown in its final state.
-- The setup form's models note lists up to three authenticated models close to a spec that resolves to nothing (`No model matches "opus4". Close: anthropic/claude-opus-4, …`).
 - The `/agents` dashboard uses a centered, bordered card with bracketed tabs and explicit agent status words.
-- The updater, startup version check and rollback picker order releases by publication date and treat any different latest version as an update.
-- `/autoswarm` opens the swarm console and takes no arguments, drawing a centered launcher card with the goal, a `swarm`/`wide` preset switch, breadth from 2 to 8, per-arm models, attempts, a certification toggle, an iteration cap and a preset `Save as` row on a branch with no session, and the run dashboard with its ledger, single-key actions (`s` start or resume, `p` pause, `n` new session, `x` stop, `c` clear session, `r` reset worktree), `e` for the setup form and Enter for the full-width detail view over a session.
-- A field edited in the setup form is written as it is typed, to the session on the branch or parked for the start; the form opens with the caret on the Goal row, Enter on the Goal row starts or resumes the swarm, `↑↓`/`tab` move between rows, `←→` or a digit set a count and `space` flips a toggle, `ctrl+u` clears a text row, a click lands the caret or steps, picks and flips the control under the pointer, and the footer names the keys of the highlighted row.
-- `/autoresearch` is the serial loop only, with the subcommands `status`, `resume`, `goal <text>`, `off` and `clear [--keep-tree|--reset-tree]`; `/autoswarm` no longer takes them.
-- The run screen opened by `ctrl+x` and `/autoresearch status` is the run ledger alone, with its type-to-filter and its `esc close` footer.
-- The dashboard hydrates the session on the branch from the store when the runtime has not loaded it, so its detail pane states the session's goal and runs instead of `(not stated)`.
-- A click on a single-line field places its caret under the pointer in the hook prompt, the login dialog, the MCP add wizard, the history search, the text and config rows of the settings screens, and the setup form; the rollback panel's list takes the pointer through the settings host.
-- `ctx.ui.custom(..., { overlay })` accepts `OverlayOptions` beside `true`, so an extension can place and size its own card over the transcript.
 - The status row reads its truncation limits from `tools/core/render-limits`, a leaf that imports nothing, rather than `tools/core/render-utils`, which drops the tool renderers, path helpers and image resizing from the launch card's import graph; first-frame time is unchanged, because those modules only declare functions.
 - An MCP tool describes its call and result cards as a `ToolView` instead of building terminal components in `mcp/render.ts`, which is deleted; the terminal states the same arguments, structure walk, raw rows, held-back count and spill warning, indented two columns under the row that heads them and without the branch glyph the call row opened with.
 - `SETTING_KIND_HANDLERS` is typed per setting kind, so each handler receives the definition variant its key selects instead of the whole union widened to `any`. No user-visible behavior changes.
@@ -459,7 +445,6 @@
 - `onBackgroundColorChange` and `onAppearanceChange` register and replay a late subscriber through one step; a subscriber that throws during replay is logged and the others still run, as before.
 - `TerminalNotification` extends `HostNotification` from `@veyyon/utils/host-notification`, so a terminal is one host that can deliver a tool's notification and the two shapes cannot drift apart.
 - `visualColAtOffset` and `offsetAtVisualCol` are exported from `@veyyon/utils/width` and shared by `Editor` and `Input`.
-- `visualColAtOffset` and `offsetAtVisualCol` are exported from `@veyyon/tui` utils, shared by `Editor` and `Input`.
 - Source comments refer to the spawned-agent HUD as the agent HUD. No behavior change.
 - The relaxed JSON parser's object and array loops position on the next element and consume the delimiter after it through one pair of container steps, and both atomic-write target resolvers record a symlink hop and raise `ELOOP` through one helper; no behavior change.
 - Display LaTeX splits its top-level rows and an environment body splits its `\\` rows through one depth-aware scanner; no behavior change.
@@ -480,7 +465,6 @@
 - Source-path comments in `sanitize-text.ts`, `strip-ansi.ts`, `tab-spacing.ts` and `width.ts` name the Rust modules they cite at their new paths under `natives/`. No user-visible behavior changes.
 - The async and sync lock-directory inspectors classify a lock's `info` file (plain directory, link and size checks, opened-descriptor identity, owner record) through shared pure helpers between their own syscalls, with the same observations for every input.
 - Source-path comments in `adversarial-strings.ts`, `ansi.ts`, `tab-spacing.ts` and `width.ts` name the modules they cite at the paths those modules occupy: `visibleWidth`, `sliceWithWidth` and the ansi escape are `packages/utils` modules and their locks are `packages/utils` suites, while the adversarial-string helpers are `hosts/terminal/engine` test helpers. No user-visible behavior changes.
-- `stripAnsiExceptSgr()` strips every escape sequence `stripAnsi()` strips except SGR, for a surface that admits styled text.
 - `workspaceModuleReachResolution()` resolves every workspace member declared by the root manifest, at whatever depth it sits, instead of the direct children of `packages/`, so a cross-package specifier into `@veyyon/kernel`, `@veyyon/tui`, a contract or a plugin resolves again and every module-reach ceiling built on it measures what it claims.
 - `isKeyRelease` and `isKeyRepeat` classify a Kitty event through one check of the protocol state, the paste marker and the event pattern; the answers are unchanged.
 - Doc comments refer to the spawned-agent wall as the agent wall. No behavior change.
@@ -500,10 +484,14 @@
 
 - `WRITE_GUTTER_MIN_WIDTH` is no longer exported: the line-number gutter of a code card is the host's, stated once in `src/modes/terminal/draw/draw-tool-view.ts`, and no tool sets it.
 - `@veyyon/kernel/session/content-text` is gone: the session spine calls the `contentText` owner in `@veyyon/utils`, which carries the separator, image, `trimBlocks` and `trimString` options that copy held.
-- Removed `isNewerVersion` in favor of publication-order comparison and equality checks.
 
 ### Fixed
 
+- Corrected comments that named a distribution channel or runtime API the project does not use; no behavior change.
+- A subagent that inherits the session's model shows that model and effort in its Subagents row, the task widget and the `/agents` roster, and keeps the badge when a follow-up turn wakes it.
+- An inherited subagent model's badge prints the effort the session settled on, so a parent running `auto` shows the resolved level rather than `auto`.
+- A subagent's row label is generated with the session's live model when no tiny, commit or smol role is configured, as a session title is, instead of the persisted default role.
+- A compaction candidate whose single-request summary timed out and was completed in stages starts the next compaction on that model staged, instead of waiting out the same timeout first.
 - Command-mode detection recognizes shell and Python prefixes after Unicode leading whitespace in loaded drafts.
 - An MCP server that repeats a pagination cursor or never ends its pages no longer hangs `resources/list`, `resources/templates/list` or `prompts/list`; every list method ends with a warning and the pages collected so far, as `tools/list` already did.
 - Tool result cards preserve raw-string and multipart text, including MCP output and grouped read previews, while runtime result cards select eval or launch from their call arguments.
@@ -540,12 +528,6 @@
 - Failed task results without agent details retain error text styling.
 - Launch model context estimates exclude project context and clamp the remaining percentage to zero.
 - Launched processes report completion even when they exit before the completion watch registers.
-- The `/agents` card ships as it did in 1.4.0; the flat frame and the roster detail pane added after that release were withdrawn before this one.
-- The permission card's title bar reads `Permission required` instead of the markdown source `## Permission required`; a select dialog's title bar draws the heading's text and leaves the markdown to the body.
-- A hook status set through `ctx.ui.setStatus` keeps the theme colours it was painted with, as its contract states, so the autoresearch status row shows its kept count in green, its flagged count in yellow and its best metric in the tool colour instead of one grey line; cursor moves, hyperlinks and graphics in a status are still stripped.
-- Interrupting Claude mid-thinking no longer fails every later turn with `Refusal (reasoning_extraction)` on an endpoint that enforces the classifier: the hidden continuity message that carries the unfinished reasoning states which turn it came from, and the request drops it on same-model replay to a signing Anthropic endpoint, and after one refusal on any other, instead of re-sending it on the retry and for the rest of the session.
-- A logged metric of zero or below is a measurement: a session minimising a count tags the kept run that reached zero as best, and a signed metric's negative runs are ranked by direction in the Best row, the keep gate of `log_experiment`, the confidence figure, the `Trend` row and the prompt's recent-run rows; only a crash's logged placeholder reads as unmeasured, and it prints `no metric` in the prompt as it does on screen.
-- The setup form's models note states a spec past the last arm (`"glm" has no arm at breadth 2.`), which the persisted setup dropped without a word when breadth came down.
 - Autoresearch best-result and confidence calculations exclude unmeasured placeholder zeros while retaining measured zero values.
 - Configured shortcuts apply from the first editable frame, and model-selector shortcuts entered during startup preserve the draft through initialization.
 - The launch composer repaints typed input before runtime initialization continues and preserves the mounted editor's change handler.
@@ -596,9 +578,14 @@
 - The goal report from `/goal show` and the goal detail menu states the goal's status once: a paused goal read `Status: paused (paused)`, and a finished one `Status: complete (paused)`. Goal mode being off is now named only where the status does not already carry it, as `active (mode off)`.
 - A goal objective reaches every surface that shows it as one plain line: the `/goal show` report, the `/goal` menu title, the warning a disabled Goal Mode prints over a stored goal, the `/goal` autocomplete row and the goal tool's own card each formatted the objective raw, so an escape sequence in one styled or moved the rest of the surface, a tab opened a hole in it, and a newline split it across two fields.
 - `AgentTool.renderResult` accepts the optional call arguments already supported by custom and extension tool renderers.
-- A compaction, branch-summary or turn-prefix transcript leaves out a user or developer message that carries prior reasoning as prose (`demotedReasoningSource`), the message a user-interrupted turn leaves behind, instead of quoting that reasoning back at the endpoint inside the summary request.
+- A history summary whose single request times out, or does not fit the summarizing model's context window, is produced in stages: the span is summarized as consecutive segments of up to 32k tokens, four at a time, and the segment summaries are merged in rounds into one summary, so a 234k-token session on a model that never begins a whole-span answer still compacts; `compact()` reports the segment count in `summaryStages` and takes `summaryStaging: "staged"` to start staged.
+- A provider's server-side compaction runs under its own ten-minute deadline instead of the three-minute remote-summarizer deadline that cut every codex compaction of a large span.
+- The staged-summary segment budget and worker count clamp through the shared `clampLow`, and the engine classifies a summary timeout through the error-flag leaf modules rather than the error barrel; no behavior change.
+- A stream that stalls after its first event ("<provider> stream stalled while waiting for the next event") classifies as a timeout as well as transient, so auto-compaction moves to the next candidate model instead of re-sending the full context to the model that stalled up to `retry.maxRetries` times.
+- A Codex websocket turn that the server accepts and then leaves without progress for the idle window is retried on the websocket once and then run over SSE, instead of spending the whole websocket retry budget on stalls, which held one compaction summary for thirty minutes per attempt.
+- A codex server-side compaction cut by its deadline fails as a timeout, and one the caller cancels fails as a cancellation, instead of both reporting "stream closed before response.completed" as a backend fault.
+- The codex websocket watchdog message reports the time since the last progress as of the moment it fires, instead of a value computed before the wait.
 - Cursor and Devin protobuf regeneration invokes the workspace compiler, and Cursor output is written to the catalog package.
-- A user or developer message that carries prior-turn reasoning as prose declares its origin through `demotedReasoningSource`, and `transformMessages` holds it to the unsigned-thinking replay policy: a signing Anthropic endpoint drops it on same-model replay, and every `anthropic-messages` target drops it once `replayDemotedPriorReasoning` is off by catalog or learned from a `reasoning_extraction` refusal, instead of re-sending the same prose on the retry and on every later turn of the session.
 - Credential-store startup applies SQLite busy handling and WAL mode before initializing refresh leases, allowing concurrent launches to wait for database locks.
 - Case-insensitive host classification no longer treats control characters as URL punctuation.
 - `codingAgentDir()` resolves `packages/coding-agent` from the repository root, so the binary staleness preflight scans the coding agent's sources again after the package moved to `tests/evals`; it had resolved a sibling directory that does not exist and reported every binary current.
@@ -621,8 +608,49 @@
 - An inline image whose top has scrolled above the viewport, or which is taller than the terminal, is left undrawn until a repaint can reach its origin, instead of being stamped at full size over the top of the live transcript.
 - An inline image is handed pixels at exactly the cell box the terminal will scale it into, so the terminal's own scaler no longer smears a downscaled screenshot; the transmitted payload shrinks by more than half at the same size on screen.
 - The row shown in place of a picture names the setting that undoes the reason when there is one, instead of stating the reason alone.
-- An inline image whose first rows have scrolled into native scrollback is repainted as a placement clipped to its visible rows, so a forced viewport repaint (an overlay opening or closing, a resize, a tool finalizing) no longer draws it too low over the text below it or erases part of it.
 - `stripAnsi` removes a CSI sequence written with colon subparameters. The parameter class was `[0-9;?]`, but the spec's parameter bytes are the whole `0x30-0x3f` range, so `:` `<` `=` `>` were not matched: a true-color SGR of the form `ESC [ 38:2:255:0:0 m`, which libvte and several test runners emit, left `38:2:255:0:0m` behind as visible text in captured output. The class is now the spec's, and the three byte classes are disjoint so the pattern accepts exactly what a greedy scanner accepts. The behaviour is pinned against `tests/fixtures/ansi-strip-corpus.json`, which the Rust `strip_ansi` in the shell minimizer reads too, so the two implementations answer the same cases instead of drifting apart.
+
+## [1.4.1] - 2026-09-08
+
+### Added
+
+- The `/autoswarm` dashboard lists a `New session` action (`n`) over an existing session, which closes it keeping every file and every logged run and starts a fresh one with the setup as it stands.
+- Swarm presets: `swarm` and `wide` are built in, and the console saves the current shape under a name to `presets.json` beside the autoresearch databases, offered in every repository.
+- The run screen's `running` row shows the last twelve lines the harness printed under the command, refreshed once a second, with escapes stripped and a carriage-return progress row shown in its final state.
+- The setup form's models note lists up to three authenticated models close to a spec that resolves to nothing (`No model matches "opus4". Close: anthropic/claude-opus-4, …`).
+- `Form`: a component of labelled fields — `text` with an in-field caret, `stepper` with `◂`/`▸` arrows and typed digits, `toggle`, `segmented`, `button` and `note` — that lays every value out at one column after the widest label, moves a ring with `↑↓`/`tab`, routes a click to the caret, arrow, option, switch or button under the pointer, windows a `segmented` strip wider than its row around the chosen option, and moves the ring on from a text field whose Enter nothing takes.
+- `Input` routes a click to the caret position under it (`routeMouse`) and reports the caret with `getCursor()`.
+- A `MouseRoutable` overlay drawn over the transcript on the normal screen receives the wheel and click reports inside its bounds; reports outside it keep scrolling the transcript and reaching the pinned footer.
+- `stripAnsiExceptSgr()` strips every escape sequence `stripAnsi()` strips except SGR, for a surface that admits styled text.
+
+### Changed
+
+- The updater, startup version check and rollback picker order releases by publication date and treat any different latest version as an update.
+- `/autoswarm` opens the swarm console and takes no arguments. On a branch with no session it is a centered launcher card: a form with the goal, a `swarm`/`wide` preset switch, breadth from 2 to 8 with `◂`/`▸` steppers, per-arm models, attempts, a certification toggle, an iteration cap, a `Start` button and a `Save as` row for presets. Over a session it is the run dashboard: the ledger beside the detail of the highlighted row, the actions the swarm's state allows on single keys (`s` start or resume, `p` pause, `n` new session, `x` stop, `c` clear session, `r` reset worktree), `e` for the setup form and Enter for the full-width detail view.
+- A field edited in the setup form is written as it is typed, to the session on the branch or parked for the start; the form opens with the caret on the Goal row, Enter on the Goal row starts or resumes the swarm, `↑↓`/`tab` move between rows, `←→` or a digit set a count and `space` flips a toggle, `ctrl+u` clears a text row, a click lands the caret or steps, picks and flips the control under the pointer, and the footer names the keys of the highlighted row.
+- `/autoresearch` is the serial loop only, with the subcommands `status`, `resume`, `goal <text>`, `off` and `clear [--keep-tree|--reset-tree]`; `/autoswarm` no longer takes them.
+- The run screen opened by `ctrl+x` and `/autoresearch status` is the run ledger alone, with its type-to-filter and its `esc close` footer.
+- The dashboard hydrates the session on the branch from the store when the runtime has not loaded it, so its detail pane states the session's goal and runs instead of `(not stated)`.
+- A click on a single-line field places its caret under the pointer in the hook prompt, the login dialog, the MCP add wizard, the history search, the text and config rows of the settings screens, and the setup form; the rollback panel's list takes the pointer through the settings host.
+- `ctx.ui.custom(..., { overlay })` accepts `OverlayOptions` beside `true`, so an extension can place and size its own card over the transcript.
+- The `/agents` card ships as it did in 1.4.0; the flat frame and the roster detail pane added after that release were withdrawn before this one.
+- `visualColAtOffset` and `offsetAtVisualCol` are exported from `@veyyon/tui` utils, shared by `Editor` and `Input`.
+
+### Removed
+
+- Removed `isNewerVersion` in favor of publication-order comparison and equality checks.
+
+### Fixed
+
+- The permission card's title bar reads `Permission required` instead of the markdown source `## Permission required`; a select dialog's title bar draws the heading's text and leaves the markdown to the body.
+- A hook status set through `ctx.ui.setStatus` keeps the theme colours it was painted with, as its contract states, so the autoresearch status row shows its kept count in green, its flagged count in yellow and its best metric in the tool colour instead of one grey line; cursor moves, hyperlinks and graphics in a status are still stripped.
+- Interrupting Claude mid-thinking no longer fails every later turn with `Refusal (reasoning_extraction)` on an endpoint that enforces the classifier: the hidden continuity message that carries the unfinished reasoning states which turn it came from, and the request drops it on same-model replay to a signing Anthropic endpoint, and after one refusal on any other, instead of re-sending it on the retry and for the rest of the session.
+- A logged metric of zero or below is a measurement: a session minimising a count tags the kept run that reached zero as best, and a signed metric's negative runs are ranked by direction in the Best row, the keep gate of `log_experiment`, the confidence figure, the `Trend` row and the prompt's recent-run rows; only a crash's logged placeholder reads as unmeasured, and it prints `no metric` in the prompt as it does on screen.
+- The setup form's models note states a spec past the last arm (`"glm" has no arm at breadth 2.`), which the persisted setup dropped without a word when breadth came down.
+- A compaction, branch-summary or turn-prefix transcript leaves out a user or developer message that carries prior reasoning as prose (`demotedReasoningSource`), the message a user-interrupted turn leaves behind, instead of quoting that reasoning back at the endpoint inside the summary request.
+- A user or developer message that carries prior-turn reasoning as prose declares its origin through `demotedReasoningSource`, and `transformMessages` holds it to the unsigned-thinking replay policy: a signing Anthropic endpoint drops it on same-model replay, and every `anthropic-messages` target drops it once `replayDemotedPriorReasoning` is off by catalog or learned from a `reasoning_extraction` refusal, instead of re-sending the same prose on the retry and on every later turn of the session.
+- OpenCode Zen and Go turns no longer fail with `400 only '"auto"' is supported for 'tool_choice'`. The gateways reject `"none"`, `"required"` and named function choices, so both OpenAI-shaped compat builders now declare `tool_choice` unsupported for them and omit the field, which is what `"auto"` means on that wire. The guided goal pins its `respond` tool by name and so failed on every interview turn; models reached under a custom provider id pointed at `opencode.ai` are covered by the same host match.
+- An inline image whose first rows have scrolled into native scrollback is repainted as a placement clipped to its visible rows, so a forced viewport repaint (an overlay opening or closing, a resize, a tool finalizing) no longer draws it too low over the text below it or erases part of it.
 
 ## [1.4.0] - 2026-09-04
 

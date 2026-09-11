@@ -26,7 +26,7 @@ Precedence is not the same as load order, and the difference matters if you are 
 
 That early phase applies only the variables that decide where a directory is: `VEYYON_CODING_AGENT_DIR`, `VEYYON_CONFIG_DIR`, and the four `XDG_*` bases. Everything else in your home `.env`, including every API key, waits for `env.ts`. The reason is that whatever is in the environment that early is inherited by every process veyyon spawns, and the sandboxed evaluator that runs your `eval` code is one of them: it should not receive your credentials.
 
-Two variables are deliberately not read from a `.env` file at all. `VEYYON_PROFILE` selects the profile, and the profile sets where layers 3 and 4 are, so reading it out of one of them would be circular; set it in your shell or pass `--profile`. `PATH` is read only after `env.ts` has run, which is when binary lookup happens anyway, so extending `PATH` in a `.env` works as it always has.
+Two variables are not read from a `.env` file at all. `VEYYON_PROFILE` selects the profile, and the profile sets where layers 3 and 4 are, so reading it out of one of them would be circular; set it in your shell or pass `--profile`. `PATH` is read only after `env.ts` has run, which is when binary lookup happens anyway, so extending `PATH` in a `.env` works as it always has.
 
 
 ---
@@ -37,7 +37,7 @@ These are consumed via `getEnvApiKey()` (`packages/ai/src/env-api-key.ts`) unles
 
 ### Core provider credentials
 
-The provider-first projection of this map lives in [Providers](./providers.md#environment-variables-and-env-files); the two tables are two views of one source.
+The provider-first projection of this map is documented in [Providers](./providers.md#environment-variables-and-env-files); the two tables are two views of one source.
 
 | Variable                        | Used for                                         | Required when                                                  | Notes / precedence                                                                                  |
 | ------------------------------- | ------------------------------------------------ | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |

@@ -14,6 +14,9 @@
 - The `/api/stats/*` routes are one table of reads in the server rather than one `if` block each; every route answers the same JSON.
 - Every backfill reads and writes its `meta` sentinel through one pair of helpers, and the two file-offset re-parses share one enrol-and-wipe step; each backfill runs once, as before.
 - User and assistant session messages qualify for linking through one role-and-id check; a message without an id is skipped from both statistics, as before.
+### Fixed
+
+- Corrected comments that named a distribution channel or runtime API the project does not use; no behavior change.
 
 ## [1.4.0] - 2026-09-04
 

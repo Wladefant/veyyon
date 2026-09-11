@@ -25,6 +25,11 @@
 ### Fixed
 
 - Case-insensitive host classification no longer treats control characters as URL punctuation.
+## [1.4.1] - 2026-09-08
+
+### Fixed
+
+- OpenCode Zen and Go turns no longer fail with `400 only '"auto"' is supported for 'tool_choice'`. The gateways reject `"none"`, `"required"` and named function choices, so both OpenAI-shaped compat builders now declare `tool_choice` unsupported for them and omit the field, which is what `"auto"` means on that wire. The guided goal pins its `respond` tool by name and so failed on every interview turn; models reached under a custom provider id pointed at `opencode.ai` are covered by the same host match.
 
 ## [1.4.0] - 2026-09-04
 

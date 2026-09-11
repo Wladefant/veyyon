@@ -117,7 +117,7 @@ veyyon config get compaction.threshold
 | Key | Setting | Type | Default | What it does |
 |---|---|---|---|---|
 | `inlineToolDescriptors` | Inline Tool Descriptors | enum | `auto` | Render full tool descriptors in the system prompt and strip top-level/nested descriptions from provider tool schemas so descriptor text is sent once. Auto follows the active model, enabling this for Gemini and disabling it otherwise. Values: `auto`, `on`, `off`. |
-| `includeModelInPrompt` | Include Model in Prompt | boolean | `false` | Surface the active model identifier in the system prompt so the agent knows which model it is. Costs a full prompt-cache invalidation on every model switch. |
+| `includeModelInPrompt` | Include Model in Prompt | boolean | `false` | Surface the active model identifier in the system prompt so the active model identifier is available to the agent. Costs a full prompt-cache invalidation on every model switch. |
 | `includeWorkspaceTree` | Include Workspace Tree | boolean | `false` | Render the workspace directory tree in the system prompt. WARNING: This can bust prompt caching across sessions when files are modified. |
 | `personality` | Personality | string | `default` | Communication style rendered into the system prompt's personality block. Extend via ~/.veyyon/personalities/\<name>.md or project .veyyon/personalities/\<name>.md. |
 
@@ -126,7 +126,7 @@ veyyon config get compaction.threshold
 | Key | Setting | Type | Default | What it does |
 |---|---|---|---|---|
 | `retry.maxRetries` | Retry Attempts | number | `10` | Maximum retry attempts on API errors. |
-| `retry.maxDelayMs` | Max Retry Delay | number | `300000` | Maximum wait between retries, in ms. When the provider asks us to wait longer than this and no credential or model fallback succeeds, the request fails fast instead of sleeping (e.g. 3-hour Anthropic rate-limit windows). |
+| `retry.maxDelayMs` | Max Retry Delay | number | `300000` | Maximum wait between retries, in ms. When the provider response requires a wait longer than this and no credential or model fallback succeeds, the request fails fast instead of sleeping (e.g. 3-hour Anthropic rate-limit windows). |
 | `retry.modelFallback` | Retry Model Fallback | boolean | `true` | Allow retry recovery to switch to configured fallback models. |
 | `retry.fallbackChains` | Retry Fallback Chains | record | `{}` | JSON object mapping model roles, model selectors ("provider/model-id"), or provider wildcards ("provider/*") to ordered fallback selectors, e.g. {"default":["openai/gpt-4o-mini"],"google-antigravity/*":["google/*","google-vertex/*"]}. Model-oriented keys apply whenever that model/provider is active, regardless of role; a "provider/*" entry keeps the failing model's id and swaps the provider. |
 | `retry.perProvider` | Per-Provider Retry | record | `{}` | JSON object overriding retry limits for specific backends, keyed like Retry Fallback Chains: a model selector ("provider/model-id"), a provider wildcard ("provider/*"), or a bare provider name. Each value may set maxRetries, baseDelayMs, and maxDelayMs; anything omitted falls back to the global retry settings. Example: {"cursor":{"maxRetries":3,"baseDelayMs":2000}}. Backends whose retries are intrinsically expensive (cursor, devin) already ship with sensible limits; an entry here overrides those. |
@@ -372,7 +372,7 @@ veyyon config get compaction.threshold
 | Key | Setting | Type | Default | What it does |
 |---|---|---|---|---|
 | `hindsight.apiUrl` | Hindsight API URL | string | `http://localhost:8888` | Hindsight server URL (Cloud or self-hosted). |
-| `hindsight.bankId` | Hindsight Bank ID | string | _(unset)_ | Base memory bank name. Unset uses `veyyon`. Hindsight Bank Prefix is prepended when set, and Hindsight Scoping decides whether the project name is appended (per-project) or carried as a `project:` tag instead (per-project-tagged). |
+| `hindsight.bankId` | Hindsight Bank ID | string | _(unset)_ | Base memory bank name. Unset uses `veyyon`. Hindsight Bank Prefix is prepended when set, and Hindsight Scoping sets whether the project name is appended (per-project) or carried as a `project:` tag instead (per-project-tagged). |
 | `hindsight.scoping` | Hindsight Scoping | enum | `per-project-tagged` | global = one shared bank; per-project = isolated bank per cwd; per-project-tagged = shared bank with project tags so global + project memories merge on recall. Values: `global`, `per-project`, `per-project-tagged`. |
 | `hindsight.autoRecall` | Hindsight Auto Recall | boolean | `true` | Recall memories on the first turn of each session. |
 | `hindsight.autoRetain` | Hindsight Auto Retain | boolean | `true` | Retain transcript every N turns and at session boundaries. |

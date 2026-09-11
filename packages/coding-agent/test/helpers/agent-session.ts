@@ -17,6 +17,7 @@
  * choosing a documented behaviour rather than reinventing a session.
  */
 import { vi } from "bun:test";
+import type { ThinkingLevel } from "@veyyon/agent-core/thinking";
 import type { Api, AssistantMessage, Model } from "@veyyon/ai";
 import type { LoadExtensionsResult } from "@veyyon/coding-agent/extensibility/extensions/types";
 import type { Skill } from "@veyyon/coding-agent/extensibility/skills";
@@ -67,12 +68,19 @@ export interface MockSessionOptions {
 	/**
 	 * The value `session.model` reports.
 	 *
-	 * The executor reads it in exactly one place: `buildNamedToolChoice(YIELD_TOOL_NAME,
-	 * session.model)`, which returns `undefined` without a model and an api-shaped choice with one.
-	 * So a suite asserting a forced-yield reminder's `toolChoice` has to set this, and every other
+	 * The executor reads it in two places: `buildNamedToolChoice(YIELD_TOOL_NAME, session.model)`,
+	 * which returns `undefined` without a model and an api-shaped choice with one, and the model
+	 * badge of an agent that resolved no override, which names this model. A suite asserting a
+	 * forced-yield reminder's `toolChoice` or an inherited badge has to set this, and every other
 	 * suite is right to leave it off.
 	 */
 	readonly model?: Partial<Model<Api>>;
+	/**
+	 * The effort `session.thinkingLevel` reports: the level the session settled on after `auto`
+	 * resolved or an unsupported level was clamped. The executor prints it in the model badge of an
+	 * agent that resolved no override, and of every follow-up turn.
+	 */
+	readonly thinkingLevel?: ThinkingLevel;
 	/**
 	 * The tool names the session reports active, defaulting to `["read", "yield"]`.
 	 *
@@ -234,6 +242,7 @@ export function createMockSessionHandle(
 		state,
 		agent: { state: { systemPrompt: ["test"] } },
 		model: options.model,
+		thinkingLevel: options.thinkingLevel,
 		skills: options.skills ?? [],
 		extensionRunner: undefined,
 		sessionManager: {

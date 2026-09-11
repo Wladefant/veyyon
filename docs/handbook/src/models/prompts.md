@@ -23,7 +23,7 @@ You do not have to read the source to find out what Veyyon sends a model. Run:
 veyyon prompt --prompts
 ```
 
-That lists every prompt by id, grouped by the directory it lives in, with one line on what
+That lists every prompt by id, grouped by directory, with one line on what
 each is for. An id is the file's path under that directory without the `.md`, so
 `turn-control/auto-continue` and `dialect/gemma` name their own files.
 
@@ -52,7 +52,7 @@ tool-policy/lsp                                  412      103   4.0%  tools has 
 Two things to read from it. The cost is MARGINAL: it is what the prompt would be shorter by without
 that rule, not the length of the rule's text, so the numbers add up to their section rather than
 exceeding it. And the condition states what turns the rule on, which is what you need to know
-before deciding a rule is not earning its tokens.
+before deciding whether to disable a rule.
 
 Under the table is every rule this configuration leaves out, with the condition that would include
 it, so a rule being off is visible as a fact rather than as an absence you have to notice:

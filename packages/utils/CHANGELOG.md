@@ -42,18 +42,23 @@
 - Source-path comments in `sanitize-text.ts`, `strip-ansi.ts`, `tab-spacing.ts` and `width.ts` name the Rust modules they cite at their new paths under `natives/`. No user-visible behavior changes.
 - The async and sync lock-directory inspectors classify a lock's `info` file (plain directory, link and size checks, opened-descriptor identity, owner record) through shared pure helpers between their own syscalls, with the same observations for every input.
 - Source-path comments in `adversarial-strings.ts`, `ansi.ts`, `tab-spacing.ts` and `width.ts` name the modules they cite at the paths those modules occupy: `visibleWidth`, `sliceWithWidth` and the ansi escape are `packages/utils` modules and their locks are `packages/utils` suites, while the adversarial-string helpers are `hosts/terminal/engine` test helpers. No user-visible behavior changes.
-- `stripAnsiExceptSgr()` strips every escape sequence `stripAnsi()` strips except SGR, for a surface that admits styled text.
 - `workspaceModuleReachResolution()` resolves every workspace member declared by the root manifest, at whatever depth it sits, instead of the direct children of `packages/`, so a cross-package specifier into `@veyyon/kernel`, `@veyyon/tui`, a contract or a plugin resolves again and every module-reach ceiling built on it measures what it claims.
 - `isKeyRelease` and `isKeyRepeat` classify a Kitty event through one check of the protocol state, the paste marker and the event pattern; the answers are unchanged.
 
 ### Fixed
 
+- Corrected comments that named a distribution channel or runtime API the project does not use; no behavior change.
 - `stripAnsi` removes a CSI sequence written with colon subparameters. The parameter class was `[0-9;?]`, but the spec's parameter bytes are the whole `0x30-0x3f` range, so `:` `<` `=` `>` were not matched: a true-color SGR of the form `ESC [ 38:2:255:0:0 m`, which libvte and several test runners emit, left `38:2:255:0:0m` behind as visible text in captured output. The class is now the spec's, and the three byte classes are disjoint so the pattern accepts exactly what a greedy scanner accepts. The behaviour is pinned against `tests/fixtures/ansi-strip-corpus.json`, which the Rust `strip_ansi` in the shell minimizer reads too, so the two implementations answer the same cases instead of drifting apart.
+
+## [1.4.1] - 2026-09-08
+
+### Added
+
+- `stripAnsiExceptSgr()` strips every escape sequence `stripAnsi()` strips except SGR, for a surface that admits styled text.
 
 ### Removed
 
 - Removed `isNewerVersion` in favor of publication-order comparison and equality checks.
-
 
 ## [1.4.0] - 2026-09-04
 

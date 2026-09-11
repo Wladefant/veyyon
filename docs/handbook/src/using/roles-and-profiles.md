@@ -59,7 +59,7 @@ To return an assigned role or model policy to its unset state, open its picker i
 
 | Setting | Effect |
 | --- | --- |
-| `agent.sharedModel` | Which scope decides an agent's model and effort. Off, each agent's own row does. On, the two rows below do, for every agent. |
+| `agent.sharedModel` | Which scope sets an agent's model and effort. Off, each agent's own row does. On, the two rows below do, for every agent. |
 | `agent.model` | Ordered model chain every agent runs while `agent.sharedModel` is on. The first entry is primary and later entries are fallbacks. Unset runs every agent on the `default` model role. |
 | `agent.thinkingLevel` | Effort every agent runs at while `agent.sharedModel` is on. |
 | `agent.agents` | Per-agent `enabled`, `model`, `thinkingLevel`, and `maxNestedSpawnDepth` choices. The `model` and `thinkingLevel` on a row decide while `agent.sharedModel` is off, and are not read while it is on. |

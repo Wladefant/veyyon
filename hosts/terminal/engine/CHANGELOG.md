@@ -18,9 +18,6 @@
 - Forced render requests accept `preserveViewport` to paint changed rows immediately while retaining pending full-repaint and scrollback requests.
 - `TUI.frameScrollable` states whether the last composed frame had content above the viewport, so a host can render a scroll affordance without re-deriving it from row counts it cannot see.
 - The package is `hosts/terminal/engine` in the repository, beside the other halves of the terminal host. The published package name, exports and entry points are unchanged.
-- `Form`: a component of labelled fields — `text` with an in-field caret, `stepper` with `◂`/`▸` arrows and typed digits, `toggle`, `segmented`, `button` and `note` — that lays every value out at one column after the widest label, moves a ring with `↑↓`/`tab`, routes a click to the caret, arrow, option, switch or button under the pointer, windows a `segmented` strip wider than its row around the chosen option, and moves the ring on from a text field whose Enter nothing takes.
-- `Input` routes a click to the caret position under it (`routeMouse`) and reports the caret with `getCursor()`.
-- A `MouseRoutable` overlay drawn over the transcript on the normal screen receives the wheel and click reports inside its bounds; reports outside it keep scrolling the transcript and reaching the pinned footer.
 
 ### Changed
 
@@ -39,7 +36,6 @@
 - `onBackgroundColorChange` and `onAppearanceChange` register and replay a late subscriber through one step; a subscriber that throws during replay is logged and the others still run, as before.
 - `TerminalNotification` extends `HostNotification` from `@veyyon/utils/host-notification`, so a terminal is one host that can deliver a tool's notification and the two shapes cannot drift apart.
 - `visualColAtOffset` and `offsetAtVisualCol` are exported from `@veyyon/utils/width` and shared by `Editor` and `Input`.
-- `visualColAtOffset` and `offsetAtVisualCol` are exported from `@veyyon/tui` utils, shared by `Editor` and `Input`.
 - Source comments refer to the spawned-agent HUD as the agent HUD. No behavior change.
 
 ### Fixed
@@ -51,8 +47,22 @@
 - An inline image whose top has scrolled above the viewport, or which is taller than the terminal, is left undrawn until a repaint can reach its origin, instead of being stamped at full size over the top of the live transcript.
 - An inline image is handed pixels at exactly the cell box the terminal will scale it into, so the terminal's own scaler no longer smears a downscaled screenshot; the transmitted payload shrinks by more than half at the same size on screen.
 - The row shown in place of a picture names the setting that undoes the reason when there is one, instead of stating the reason alone.
-- An inline image whose first rows have scrolled into native scrollback is repainted as a placement clipped to its visible rows, so a forced viewport repaint (an overlay opening or closing, a resize, a tool finalizing) no longer draws it too low over the text below it or erases part of it.
 
+## [1.4.1] - 2026-09-08
+
+### Added
+
+- `Form`: a component of labelled fields — `text` with an in-field caret, `stepper` with `◂`/`▸` arrows and typed digits, `toggle`, `segmented`, `button` and `note` — that lays every value out at one column after the widest label, moves a ring with `↑↓`/`tab`, routes a click to the caret, arrow, option, switch or button under the pointer, windows a `segmented` strip wider than its row around the chosen option, and moves the ring on from a text field whose Enter nothing takes.
+- `Input` routes a click to the caret position under it (`routeMouse`) and reports the caret with `getCursor()`.
+- A `MouseRoutable` overlay drawn over the transcript on the normal screen receives the wheel and click reports inside its bounds; reports outside it keep scrolling the transcript and reaching the pinned footer.
+
+### Changed
+
+- `visualColAtOffset` and `offsetAtVisualCol` are exported from `@veyyon/tui` utils, shared by `Editor` and `Input`.
+
+### Fixed
+
+- An inline image whose first rows have scrolled into native scrollback is repainted as a placement clipped to its visible rows, so a forced viewport repaint (an overlay opening or closing, a resize, a tool finalizing) no longer draws it too low over the text below it or erases part of it.
 
 ## [1.4.0] - 2026-09-04
 

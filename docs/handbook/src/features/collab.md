@@ -132,10 +132,10 @@ A relay closes a socket with one of four codes when reconnecting would be pointl
 | `4029` | `room is full`                                | The room is at capacity.                                   |
 
 Any other close code is transient, and a client reconnects with exponential backoff up to thirty seconds. That
-default is why the table matters: a client that does not recognise a fatal code retries against a condition
-that will never clear, quietly, so the codes are declared once in `contracts/wire/src/relay.ts` and both the CLI
+default requires standard fatal codes: a client that does not recognise a fatal code retries against a condition
+that will not clear, so the codes are declared once in `contracts/wire/src/relay.ts` and both the CLI
 and browser clients read them from there. If you write your own relay, close with these codes and these
-reasons; a code outside the table tells a client to come back.
+reasons; a code outside the table causes a client to reconnect.
 
 
 
