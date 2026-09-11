@@ -95,7 +95,6 @@ fn prepare_destination(merged: &Path) -> IsoResult<()> {
 	Ok(())
 }
 
-
 fn is_git_worktree(path: &Path) -> bool {
 	// A regular working tree has `.git` as a dir; a linked worktree has it
 	// as a `gitdir: …` text file. Either way, presence of `.git` is the

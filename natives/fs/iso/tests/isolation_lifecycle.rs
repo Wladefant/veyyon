@@ -274,7 +274,9 @@ fn block_clone_replaces_stale_destinations() {
 		}
 
 		let backend = backend(BackendKind::WindowsBlockClone);
-		backend.start(&lower, &merged).expect("replace stale destination");
+		backend
+			.start(&lower, &merged)
+			.expect("replace stale destination");
 		let mut names = fs::read_dir(&merged)
 			.expect("read cloned directory")
 			.map(|entry| entry.expect("read cloned entry").file_name())
@@ -289,7 +291,8 @@ fn block_clone_replaces_stale_destinations() {
 	}
 }
 
-/// A destination file is not an isolation tree and must not be deleted by start or stop.
+/// A destination file is not an isolation tree and must not be deleted by start
+/// or stop.
 #[test]
 fn test_rcopy_preserves_regular_file_destination() {
 	let scratch = scratch_dir("iso-rcopy-file-destination");
@@ -310,8 +313,9 @@ fn test_rcopy_preserves_regular_file_destination() {
 	}
 }
 
-/// Binary and non-UTF-8 contents on either side of a link transition must not produce
-/// text patches. Text controls prevent dropping all transitions. Git mode is not covered here.
+/// Binary and non-UTF-8 contents on either side of a link transition must not
+/// produce text patches. Text controls prevent dropping all transitions. Git
+/// mode is not covered here.
 #[cfg(unix)]
 #[tokio::test]
 async fn plain_diff_classifies_binary_content_on_either_side_of_a_link() {
@@ -333,13 +337,23 @@ async fn plain_diff_classifies_binary_content_on_either_side_of_a_link() {
 					fs::write(entry, contents).unwrap();
 				}
 			}
-			let diff = backend(BackendKind::Rcopy).diff(&lower, &merged).await.unwrap();
+			let diff = backend(BackendKind::Rcopy)
+				.diff(&lower, &merged)
+				.await
+				.unwrap();
 			assert_eq!(diff.files.len(), 1);
 			assert_eq!(diff.files[0].path, Path::new("entry"));
 			assert_eq!(diff.files[0].op, ChangeKind::Modified);
 			if is_text {
-				let patch = diff.files[0].diff.as_ref().expect("text transition needs a patch");
-				let (old, new) = if before_is_link { ("missing-target", "text") } else { ("text", "missing-target") };
+				let patch = diff.files[0]
+					.diff
+					.as_ref()
+					.expect("text transition needs a patch");
+				let (old, new) = if before_is_link {
+					("missing-target", "text")
+				} else {
+					("text", "missing-target")
+				};
 				assert!(patch.contains(&format!("\n-{old}\n")), "{patch}");
 				assert!(patch.contains(&format!("\n+{new}\n")), "{patch}");
 			} else {
@@ -366,35 +380,57 @@ async fn test_walk_diff_handles_symlinks_and_broken_symlinks() {
 
 	// Kept symlink
 	std::os::unix::fs::symlink("kept.txt", lower.join("kept_link.txt")).expect("create lower link");
-	std::os::unix::fs::symlink("kept.txt", merged.join("kept_link.txt")).expect("create merged link");
+	std::os::unix::fs::symlink("kept.txt", merged.join("kept_link.txt"))
+		.expect("create merged link");
 
 	// Broken symlink in lower and merged (pointing to nonexistent file)
-	std::os::unix::fs::symlink("nonexistent", lower.join("broken_link.txt")).expect("create lower broken link");
-	std::os::unix::fs::symlink("nonexistent", merged.join("broken_link.txt")).expect("create merged broken link");
+	std::os::unix::fs::symlink("nonexistent", lower.join("broken_link.txt"))
+		.expect("create lower broken link");
+	std::os::unix::fs::symlink("nonexistent", merged.join("broken_link.txt"))
+		.expect("create merged broken link");
 
 	// Modified symlink target
-	std::os::unix::fs::symlink("target_a", lower.join("mod_link.txt")).expect("create lower mod link");
-	std::os::unix::fs::symlink("target_b", merged.join("mod_link.txt")).expect("create merged mod link");
+	std::os::unix::fs::symlink("target_a", lower.join("mod_link.txt"))
+		.expect("create lower mod link");
+	std::os::unix::fs::symlink("target_b", merged.join("mod_link.txt"))
+		.expect("create merged mod link");
 
 	// Added symlink
-	std::os::unix::fs::symlink("kept.txt", merged.join("added_link.txt")).expect("create added link");
+	std::os::unix::fs::symlink("kept.txt", merged.join("added_link.txt"))
+		.expect("create added link");
 
 	// Removed symlink
-	std::os::unix::fs::symlink("kept.txt", lower.join("removed_link.txt")).expect("create removed link");
+	std::os::unix::fs::symlink("kept.txt", lower.join("removed_link.txt"))
+		.expect("create removed link");
 
 	let backend = backend(BackendKind::Rcopy);
-	let diff = backend.diff(&lower, &merged).await.expect("diff with symlinks must succeed");
+	let diff = backend
+		.diff(&lower, &merged)
+		.await
+		.expect("diff with symlinks must succeed");
 
 	assert_eq!(diff.files.len(), 3);
-	let mod_entry = diff.files.iter().find(|f| f.path == Path::new("mod_link.txt")).expect("find mod_link.txt");
+	let mod_entry = diff
+		.files
+		.iter()
+		.find(|f| f.path == Path::new("mod_link.txt"))
+		.expect("find mod_link.txt");
 	assert_eq!(mod_entry.op, ChangeKind::Modified);
 	assert!(mod_entry.diff.as_ref().unwrap().contains("-target_a"));
 	assert!(mod_entry.diff.as_ref().unwrap().contains("+target_b"));
 
-	let added_entry = diff.files.iter().find(|f| f.path == Path::new("added_link.txt")).expect("find added_link.txt");
+	let added_entry = diff
+		.files
+		.iter()
+		.find(|f| f.path == Path::new("added_link.txt"))
+		.expect("find added_link.txt");
 	assert_eq!(added_entry.op, ChangeKind::Added);
 
-	let removed_entry = diff.files.iter().find(|f| f.path == Path::new("removed_link.txt")).expect("find removed_link.txt");
+	let removed_entry = diff
+		.files
+		.iter()
+		.find(|f| f.path == Path::new("removed_link.txt"))
+		.expect("find removed_link.txt");
 	assert_eq!(removed_entry.op, ChangeKind::Removed);
 }
 
@@ -407,7 +443,8 @@ fn test_linux_backends_lifecycle_and_fallback() {
 	fs::create_dir_all(&lower).expect("create source");
 	fs::write(lower.join("file.txt"), "hello linux\n").expect("write file.txt");
 
-	// Btrfs: on non-btrfs volume, start must fail with IsoError::Unavailable and clean up
+	// Btrfs: on non-btrfs volume, start must fail with IsoError::Unavailable and
+	// clean up
 	let btrfs = backend(BackendKind::Btrfs);
 	let btrfs_res = btrfs.start(&lower, &merged);
 	if let Err(err) = btrfs_res {
@@ -422,7 +459,8 @@ fn test_linux_backends_lifecycle_and_fallback() {
 		assert!(!merged.exists());
 	}
 
-	// Zfs: on non-zfs dataset, start must fail with IsoError::Unavailable and clean up
+	// Zfs: on non-zfs dataset, start must fail with IsoError::Unavailable and clean
+	// up
 	let zfs = backend(BackendKind::Zfs);
 	let zfs_res = zfs.start(&lower, &merged);
 	if let Err(err) = zfs_res {

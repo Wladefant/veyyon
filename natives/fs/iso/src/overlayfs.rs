@@ -89,17 +89,19 @@ mod imp {
 
 		let res = match kernel_mount(&merged, &opts) {
 			Ok(()) => {
-				ACTIVE_MOUNTS.lock().insert(merged.clone(), MountFlavor::Kernel);
+				ACTIVE_MOUNTS
+					.lock()
+					.insert(merged.clone(), MountFlavor::Kernel);
 				Ok(())
 			},
-			Err(err) if err.is_unavailable() => {
-				match fuse_mount(&lower, &upper, &work, &merged) {
-					Ok(()) => {
-						ACTIVE_MOUNTS.lock().insert(merged.clone(), MountFlavor::Fuse);
-						Ok(())
-					},
-					Err(fuse_err) => Err(fuse_err),
-				}
+			Err(err) if err.is_unavailable() => match fuse_mount(&lower, &upper, &work, &merged) {
+				Ok(()) => {
+					ACTIVE_MOUNTS
+						.lock()
+						.insert(merged.clone(), MountFlavor::Fuse);
+					Ok(())
+				},
+				Err(fuse_err) => Err(fuse_err),
 			},
 			Err(err) => Err(err),
 		};

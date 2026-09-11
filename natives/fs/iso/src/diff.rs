@@ -287,10 +287,9 @@ fn walk_diff_blocking(lower: &Path, merged: &Path) -> IsoResult<Diff> {
 			None => files.push(plain_change(merged, rel, ChangeKind::Added, None)?),
 			Some(l_meta) => {
 				if l_meta.is_symlink() && m_meta.is_symlink() {
-					if let (Ok(lt), Ok(mt)) = (
-						std::fs::read_link(lower.join(rel)),
-						std::fs::read_link(merged.join(rel)),
-					) && lt == mt
+					if let (Ok(lt), Ok(mt)) =
+						(std::fs::read_link(lower.join(rel)), std::fs::read_link(merged.join(rel)))
+						&& lt == mt
 					{
 						continue;
 					}
@@ -352,7 +351,8 @@ fn walk(root: &Path, dir: &Path, out: &mut BTreeMap<PathBuf, Metadata>) -> IsoRe
 		let entry =
 			entry.map_err(|err| IsoError::other(format!("dir entry in {}: {err}", dir.display())))?;
 		let path = entry.path();
-		let meta = entry.metadata()
+		let meta = entry
+			.metadata()
 			.map_err(|err| IsoError::other(format!("metadata {}: {err}", path.display())))?;
 		if meta.is_symlink() {
 			let rel = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
@@ -369,7 +369,8 @@ fn walk(root: &Path, dir: &Path, out: &mut BTreeMap<PathBuf, Metadata>) -> IsoRe
 	Ok(())
 }
 
-/// A symlink contributes its stored target, not the contents of its target file.
+/// A symlink contributes its stored target, not the contents of its target
+/// file.
 fn read_entry_bytes(path: &Path) -> IsoResult<Vec<u8>> {
 	let meta = std::fs::symlink_metadata(path)
 		.map_err(|err| IsoError::other(format!("stat {}: {err}", path.display())))?;
@@ -378,8 +379,7 @@ fn read_entry_bytes(path: &Path) -> IsoResult<Vec<u8>> {
 			.map(|target| target.into_os_string().into_encoded_bytes())
 			.map_err(|err| IsoError::other(format!("read_link {}: {err}", path.display())))
 	} else {
-		std::fs::read(path)
-			.map_err(|err| IsoError::other(format!("read {}: {err}", path.display())))
+		std::fs::read(path).map_err(|err| IsoError::other(format!("read {}: {err}", path.display())))
 	}
 }
 

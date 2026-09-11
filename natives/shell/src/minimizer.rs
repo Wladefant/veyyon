@@ -351,7 +351,11 @@ mod tests {
 			let transformed = MinimizerOutput::maybe_transformed(original, candidate.to_string());
 			assert!(transformed.changed, "differing candidate must be changed: {candidate:?}");
 			assert_eq!(transformed.text, expected, "transformed output must be normalized");
-			assert_eq!(transformed.input_bytes, original.len(), "input bytes must describe the capture");
+			assert_eq!(
+				transformed.input_bytes,
+				original.len(),
+				"input bytes must describe the capture"
+			);
 			assert_eq!(transformed.output_bytes, expected.len());
 			assert_eq!(transformed.filter, "");
 			assert!(transformed.original_text.is_none());

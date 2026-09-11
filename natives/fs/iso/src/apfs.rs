@@ -73,7 +73,6 @@ mod imp {
 		}
 	}
 
-
 	fn to_cstring(bytes: &[u8], label: &str) -> IsoResult<CString> {
 		CString::new(bytes)
 			.map_err(|err| IsoError::other(format!("{label} path contains NUL byte: {err}")))
