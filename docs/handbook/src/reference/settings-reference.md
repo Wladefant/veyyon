@@ -841,7 +841,6 @@ These keys are not in `/settings`. Some are state veyyon writes for itself (a sc
 | `hindsight.retainMission` | string | _(unset)_ |  |
 | `hindsight.retainOverlapTurns` | number | `2` |  |
 | `hindsight.retainTimeoutMs` | number | `60000` |  |
-| `memories.enabled` | boolean | `false` |  |
 | `memories.fallbackTokenLimit` | number | `16000` |  |
 | `memories.maxRawMemoriesForGlobal` | number | `200` |  |
 | `memories.maxRolloutAgeDays` | number | `30` |  |
@@ -900,4 +899,4 @@ These keys are not in `/settings`. Some are state veyyon writes for itself (a sc
 | `tui.maxInlineImageRows` | number | `20` |  |
 | `tui.maxInlineImages` | number | `8` |  |
 
-353 settings in /settings, 121 configuration-file keys, 474 in all.
+353 settings in /settings, 120 configuration-file keys, 473 in all.

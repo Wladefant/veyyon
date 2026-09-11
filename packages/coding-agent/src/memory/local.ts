@@ -1391,7 +1391,7 @@ async function resolveMemoryModel(options: {
 
 function loadMemoryConfig(settings: Settings): MemoryRuntimeConfig {
 	return {
-		enabled: settings.get("memory.backend") === "local" || settings.get("memories.enabled") === true,
+		enabled: settings.get("memory.backend") === "local",
 		maxRolloutsPerStartup: settings.get("memories.maxRolloutsPerStartup") ?? DEFAULTS.maxRolloutsPerStartup,
 		maxRolloutAgeDays: settings.get("memories.maxRolloutAgeDays") ?? DEFAULTS.maxRolloutAgeDays,
 		minRolloutIdleHours: settings.get("memories.minRolloutIdleHours") ?? DEFAULTS.minRolloutIdleHours,

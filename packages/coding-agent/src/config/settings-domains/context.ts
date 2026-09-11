@@ -539,14 +539,6 @@ export const CONTEXT_SETTINGS = {
 
 	"branchSummary.reserveTokens": { type: "number", default: 16384 },
 
-	// Memories
-	// Legacy local-memory enable flag kept only for back-compat migration.
-	// Hidden from UI — users should use `memory.backend` instead.
-	"memories.enabled": {
-		type: "boolean",
-		default: false,
-	},
-
 	"memories.maxRolloutsPerStartup": { type: "number", default: 64 },
 
 	"memories.maxRolloutAgeDays": { type: "number", default: 30 },
@@ -578,9 +570,9 @@ export const CONTEXT_SETTINGS = {
 	"memories.summaryInjectionTokenLimit": { type: "number", default: 5000 },
 
 	// Memory backend selector — picks between local memories pipeline,
-	// Mnemopi local SQLite, Hindsight remote memory, or off. Legacy
-	// `memories.enabled` keeps gating the local backend; see config/settings.ts
-	// migration for details.
+	// Mnemopi local SQLite, Hindsight remote memory, or off. The legacy
+	// `memories.enabled` boolean is migrated into this enum on load (see
+	// config/settings.ts) and is not a declared setting.
 	"memory.backend": {
 		type: "enum",
 		values: ["off", "local", "hindsight", "mnemopi"] as const,

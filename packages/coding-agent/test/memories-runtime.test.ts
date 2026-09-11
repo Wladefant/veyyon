@@ -68,7 +68,7 @@ async function createFixture(overrides?: Partial<Record<string, unknown>>): Prom
 	await fs.writeFile(sessionFile, `${JSON.stringify({ type: "session", id: "current-thread", cwd: agentDir })}\n`);
 
 	const settings = Settings.isolated({
-		"memories.enabled": true,
+		"memory.backend": "local",
 		"memories.minRolloutIdleHours": 0,
 		"memories.maxRolloutsPerStartup": 16,
 		"memories.threadScanLimit": 64,
@@ -159,7 +159,7 @@ describe("memories runtime", () => {
 	});
 
 	test("startup gating skips when disabled or agent depth", async () => {
-		const disabled = await createFixture({ "memories.enabled": false });
+		const disabled = await createFixture({ "memory.backend": "off" });
 		const openSpy = vi.spyOn(memoryStorage, "openMemoryDb");
 		startMemoryStartupTask({
 			session: disabled.session,
@@ -170,7 +170,7 @@ describe("memories runtime", () => {
 		});
 		expect(openSpy).not.toHaveBeenCalled();
 
-		const agent = await createFixture({ "memories.enabled": true });
+		const agent = await createFixture({ "memory.backend": "local" });
 		startMemoryStartupTask({
 			session: agent.session,
 			settings: agent.settings,

@@ -272,7 +272,7 @@ describe("memories/storage", () => {
 
 		const model = createMemoryTestModel();
 		const settings = Settings.isolated({
-			"memories.enabled": true,
+			"memory.backend": "local",
 			"memories.minRolloutIdleHours": 0,
 			"memories.maxRolloutsPerStartup": 16,
 			"memories.threadScanLimit": 64,
