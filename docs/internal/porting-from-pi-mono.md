@@ -486,4 +486,4 @@ handbook pages. `neverPorted` in `scripts/upstream-port-policy.json` lists the
 paths a port has no business authoring, which is the checklist to read that diff
 against.
 
-*Verified against `27ce431318` on 2026-09-08.*
+*Verified against `504c88b39f` on 2026-09-11.*

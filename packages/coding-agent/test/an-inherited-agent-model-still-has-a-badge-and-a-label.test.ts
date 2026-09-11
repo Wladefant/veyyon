@@ -33,12 +33,12 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import * as sdkModule from "@veyyon/coding-agent/sdk";
 import { runSubagentFollowUpTurn, runSubprocess } from "@veyyon/coding-agent/task/executor";
-import type { AgentDefinition, AgentProgress, SubagentProgressPayload } from "@veyyon/coding-agent/task/types";
+import type { AgentDefinition, AgentProgress, AgentProgressPayload } from "@veyyon/coding-agent/task/types";
 import { TASK_SUBAGENT_PROGRESS_CHANNEL } from "@veyyon/coding-agent/task/types";
 import { AUTO_THINKING } from "@veyyon/coding-agent/thinking";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
 import { TempDir } from "@veyyon/utils";
-import { createMockSession, createSessionResult, yieldSuccessEvent } from "./helpers/subagent-session";
+import { createMockSession, createSessionResult, yieldSuccessEvent } from "./helpers/agent-session";
 
 function model(provider: string, id: string): Model<Api> {
 	return buildModel({
@@ -61,7 +61,7 @@ const agent: AgentDefinition = { name: "task", description: "test", systemPrompt
 function observeProgress(eventBus: EventBus): AgentProgress[] {
 	const snapshots: AgentProgress[] = [];
 	eventBus.on(TASK_SUBAGENT_PROGRESS_CHANNEL, data => {
-		snapshots.push((data as SubagentProgressPayload).progress);
+		snapshots.push((data as AgentProgressPayload).progress);
 	});
 	return snapshots;
 }

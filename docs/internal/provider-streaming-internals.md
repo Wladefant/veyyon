@@ -231,4 +231,4 @@ Provider-specific (not fully abstracted):
 - [`../../agent/src/agent-loop.ts`](../../packages/agent/src/agent-loop.ts): provider stream consumption and `message_update` bridging.
 - [`../src/session/agent-session.ts`](../../packages/coding-agent/src/session/agent-session.ts): session-level handling of streaming updates, abort, retry, and persistence.
 
-*Verified against `d3e3db30` on 2026-07-23.*
+*Verified against `504c88b39f` on 2026-09-11.*

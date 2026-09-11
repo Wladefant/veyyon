@@ -144,4 +144,4 @@ broke, the fix), and make sure `bun run check` and the tests pass. Opening the P
 runs `Checks` and `CI` against it; a maintainer makes the final call on whether an
 automated review is requested.
 
-*Verified against `27ce431318` on 2026-09-08.*
+*Verified against `504c88b39f` on 2026-09-11.*
