@@ -6,7 +6,7 @@
 
 ### Breaking Changes
 
-- A spawned worker is an agent, not a subagent, across the product: the settings tab is Agents, every `subagent.*` setting is `agent.*` (`tier.subagent`, `advisor.subagents` and `argot.subagents` are `tier.agent`, `advisor.agents` and `argot.agents`), a legacy `subagent.*` key in a settings file is folded onto its new name on load with the new key winning, the `prompts/subagent/` and `plan-mode/subagent.md` prompt files are `prompts/agent/` and `plan-mode/agent.md`, and every module, type and export named with the old word is renamed (`rpc-subagents` is `rpc-agents`, `persisted-subagents` is `persisted-agents`, `SubagentLifecyclePayload` is `AgentLifecyclePayload`); the `subagent_spawn` session entry, the `subagent_*` RPC frame types and commands, and the `subagents/` definitions directory keep their on-disk and wire spellings. A session that a task spawned is `spawned` where the code distinguishes it from the one driving the conversation: `isSubagentSession` is `isSpawnedSession` and `createSubagentSession` is `createSpawnedSession`.
+- Agent settings use `agent.*`, `tier.agent`, `advisor.agents`, and `argot.agents`; legacy keys migrate on load, while historical runtime export names, custom-theme color tokens, session records, and RPC spellings remain unchanged.
 - Account formatting helpers are exported from `@veyyon/coding-agent/session/account-format` instead of `@veyyon/coding-agent/slash-commands/helpers/format`.
 - Screen takeover moved off `ExtensionUIContext` and `HookUIContext` onto an optional `ui.terminal` capability: `custom()` and `setEditorComponent()` are now `ctx.ui.terminal?.custom(...)` and `ctx.ui.terminal?.setEditorComponent(...)`, and a component widget goes through `ctx.ui.terminal?.setWidgetComponent(key, factory)` while `setWidget(key, lines)` keeps the text form every host draws. A host that is not a terminal omits `ui.terminal` rather than declaring members with empty bodies.
 - Removed `ui.setHeader()` and `ui.setFooter()`, which every host implemented as an empty function, interactive mode included.
@@ -15,6 +15,8 @@
 - `sanitizeStatusText` is `@veyyon/utils/sanitize-status-text`, so a subpath import previously resolved through `@veyyon/coding-agent/modes/sanitize-status-text` names the utils module: the function is text-only and every host reduces a value to one line the same way.
 - The 81 site scrapers, the page loader and the Parallel extraction client moved to `@veyyon/web`: a subpath import previously resolved through `@veyyon/coding-agent/web/scrapers/*` or `@veyyon/coding-agent/web/parallel` is now `@veyyon/web/scrapers/*` and `@veyyon/web/parallel`, and the search providers' `withHardTimeout` is `@veyyon/web/hard-timeout`.
 - `escapeMarkdownTableCell` and the Turndown helpers are `@veyyon/utils/markdown-table` and `@veyyon/utils/turndown`, and `htmlToBasicMarkdown` is `@veyyon/utils/html-markdown`, so a subpath import previously resolved through `@veyyon/coding-agent/utils/markdown-table`, `@veyyon/coding-agent/utils/turndown` or the scrapers barrel names the utils module.
+- `CliUsageError` is `@veyyon/utils/cli-usage-error`; `@veyyon/coding-agent/cli/usage-error` is removed, so a flag the root parser rejects and one the command framework rejects are the same class.
+- `@veyyon/coding-agent/session/auth-storage` is removed; the credential types and `AuthStorage` it re-exported are imported from `@veyyon/ai/auth-storage`, the module that defines them.
 - The setting declaration vocabulary — `SettingDef` and its definition kinds, `SettingType`, `SETTING_TYPES`, `isSettingType`, `SettingTab`, `AnyUiMetadata` and `SubmenuOption` — moved from `@veyyon/coding-agent/config/settings-schema` to `@veyyon/settings`; the schema, its readers, the tab metadata and the tab groups stay where they were.
 - URL target parsing is exported from `tools/web/read-url-target` instead of `tools/web/fetch`.
 - Setting-change signals are exported from `config/settings-signals` instead of `config/settings`.
@@ -23,19 +25,26 @@
 - Read selector helpers `parseSel` and `isRawSelector` are exported from `tools/core/path-utils` instead of `tools/fs/read`.
 - `readSourceFsPath` is exported from `tools/fs/read-view` instead of `tools/fs/read` and remains available from the package root.
 - `metadataLine` is exported from `tools/core/render-utils` instead of `tools/web/search/view`.
+- Removed the unused `inheritedAgentDir` keybinding option and `ohMyPiXAIUserAgent` alias; xAI requests continue to use `veyyonXAIUserAgent`.
 - Provider-specific test override setters are replaced by `setProviderModuleOverrideForTest(api, module)`.
-- `@veyyon/tui` exports rendering only. The string, escape, keyboard, mouse, motion and layout-math primitives it also carried are now `@veyyon/utils` modules, imported by subpath: `@veyyon/utils/{ansi,autocomplete,bar,bracketed-paste,deccara,fuzzy,keybindings,keys,kill-ring,kitty-graphics,latex-block,latex-unicode,loop-watchdog,motion,mouse,padding,paint-columns,paint-ground,paint-surface,sgr,symbols,text-sizing,tight-mode,tmux,width,word-nav,wrap}`. The barrel re-exports none of them.
+- `@veyyon/tui` exports rendering only. The string, escape, keyboard, mouse, motion and layout-math primitives it also carried are now `@veyyon/utils` modules, imported by subpath: `@veyyon/utils/{ansi,autocomplete,bar,bracketed-paste,deccara,fuzzy,keybindings,keys,kill-ring,kitty-graphics,latex-block,latex-unicode,loop-watchdog,motion,mouse,padding,paint-columns,paint-ground,paint-surface,sgr,symbols,tab-width,text-sizing,tight-mode,tmux,width,word-nav,wrap}`. The barrel re-exports none of them.
 - `MOTION` and the grow, hover, paint and settle curve tables are one module, `@veyyon/utils/motion`.
 - `EditorComponent` is `@veyyon/tui/components/editor-component`.
-- The render engine is `@veyyon/tui/core/*`: `component-types`, `container`, `cursor`, `image-budget`, `mouse-routing`, `overlay`, `renderer`, `scroll`, `terminal-session` and `tui`. `@veyyon/tui/tui` re-exports all of it, so an existing import path keeps resolving.
+- Render engine modules are available through `@veyyon/tui/core/*`: `component-types`, `container`, `cursor`, `image-budget`, `mouse-routing`, `overlay`, `renderer`, `scroll`, `terminal-session` and `tui`; existing TUI contract imports remain available through `@veyyon/tui/tui`.
 - `TUI.overlayStack` is private. The overlay stack's behavior is `OverlayStack` in `@veyyon/tui/core/overlay`.
 - `getTerminalId` is `@veyyon/utils/ttyid`, and `ImageFallbackReason` is `@veyyon/utils/image-fallback`. Neither is rendering, and a caller that needs a session id or the name of a cause no longer depends on the terminal renderer to get it.
 - `detectTerminalId` and `TerminalId` are exported from `@veyyon/utils/terminal-emulator` instead of `@veyyon/tui/terminal-capabilities`.
+- Bumped `COLLAB_PROTO` to `4`: tool execution display projections (`ToolExecutionDisplay`) are carried on tool calls, tool results, and live execution events. Old guests speaking proto v3 or below are rejected with the protocol-mismatch error.
 
 ### Added
 
+- Exported `projectToolDisplay` from `presentation/web-tool-display.ts`, projecting canonical tool execution displays for collab live sessions and HTML export.
+- `tools/view-registry.ts` exports `toolViewDefinitions`, the host-agnostic `ToolViewDefinition` for every tool card the terminal drew, and `tools/renderers.ts` derives the terminal adapters from it; the set of cards and their chrome are unchanged.
+- A tool card value-imports no tool: the search card limits are `tools/search/search-card-limits.ts`, the web search provider label is `tools/web/search/types.ts`, and the launch card owns `callMeta` and `readyPendingSummary`; each name is exported from that one module only. Print mode and the HTML export load a card without the tool behind it, and no output changes.
+- `presentation/transcript-builder.ts` is split into `content-text.ts`, `custom-display.ts` and `session-projection-engine.ts`, each under the presentation module size ceiling; no output changes.
 - `src/presentation/` builds the `@veyyon/wire/presentation` view-models from session state, and `PresentationEventBridge` turns session events into transcript updates, so a renderer draws a session without importing one.
 - `src/modes/terminal/driver.ts` implements `PresentationContext` on `@veyyon/tui`: it renders every transcript block kind, the status line, the composer and the dialogs from view-models alone, and reports operator input back as `UIEvent`s.
+- `InteractiveMode.presentation` applies transcript, status, composer and overlay updates to the existing terminal surface without constructing a second terminal or composer.
 - `/process-manager` opens the Agent Control Center across every conversation this process is running rather than only the one on screen, and `a` switches the roster, the comms stream and the transcript guard between the two scopes together.
 - `read` accepts a semicolon-delimited list of internal resources (`skill://demo/one.md;skill://demo/two.md`), the same list form `grep` and `glob` take, and returns one section per entry.
 - `@veyyon/coding-agent/session/facade` exposes `AgentSessionFacade`, a thirteen-member session API a front end drives — start, stop, submit, interrupt, retry, per-call tool approval, six event streams and the model, provider and context-usage readings — over a live `AgentSession`; the facade owns the permission prompt while it is started, and refuses a session another host already routes through.
@@ -43,7 +52,7 @@
 - `ToolDefinition.view` lets an extension describe its tool's call and result cards as a `ToolView` instead of building a terminal component, and re-exports the `@veyyon/view` vocabulary (`ToolView`, `StatusRowView`, `TextBlockView`, `ViewSpan`, `ViewTone`, `ViewStatus`) so a plugin can construct one; the terminal draws it, and a tool that also declares `renderCall`/`renderResult` keeps those.
 - `src/modes/terminal/draw/draw-tool-view.ts` draws a `ToolView` as terminal bytes through exhaustive tone-to-colour and status-to-icon records, so a tone added to the contract fails the type check until the terminal states how it looks.
 - A `ToolView` span carries `file` for a filesystem path a host opens however it can, separate from the `link` a URL rides on, and the tone vocabulary adds `diffAdded` and `diffRemoved` for the two sides of a change; the terminal wraps a `file` run in an OSC 8 link to its `file://` URI.
-- Each tool domain declares a `manifest.ts` naming its lazy tool factories and a `renderers.ts` holding its terminal renderers, and `tools/index.ts` and `tools/renderers.ts` compose those five pairs instead of listing every tool themselves, so a host that draws no terminal reads the manifests alone.
+- Tool domains declare lazy factories in `manifest.ts`, while `tools/view-registry.ts` defines their views and policies and `tools/renderers.ts` derives terminal adapters with shared identities for provider aliases.
 - `CustomTool.view` lets a tool authored as a custom tool describe its call and result cards as a `ToolView`, the member `ToolDefinition.view` already offered an extension, and both adapters forward it to the host.
 - The `ask` tool emits a host-agnostic `HostNotification` through `ToolSession.notify` instead of calling the terminal, and the running host installs its delivery through `setToolNotifier`; a host that cannot reach an operator outside its own window installs nothing and the capability reads as absent.
 - Source-path comments in `modes/terminal/controllers/input-controller.ts`, `tools/render-utils.ts`, `utils/block-context.ts` and `utils/shell-snapshot.ts` name the Rust modules they cite at their new paths under `natives/`. No user-visible behavior changes.
@@ -81,7 +90,10 @@
 - `Form`: a component of labelled fields — `text` with an in-field caret, `stepper` with `◂`/`▸` arrows and typed digits, `toggle`, `segmented`, `button` and `note` — that lays every value out at one column after the widest label, moves a ring with `↑↓`/`tab`, routes a click to the caret, arrow, option, switch or button under the pointer, windows a `segmented` strip wider than its row around the chosen option, and moves the ring on from a text field whose Enter nothing takes.
 - `Input` routes a click to the caret position under it (`routeMouse`) and reports the caret with `getCursor()`.
 - A `MouseRoutable` overlay drawn over the transcript on the normal screen receives the wheel and click reports inside its bounds; reports outside it keep scrolling the transcript and reaching the pinned footer.
+- `BracketedPasteHandler.route(data, sinks)` delivers one chunk's parts to `PasteSinks`: bytes before the start marker to `keys`, the assembled payload to `paste`, and bytes after the end marker to `reenter`; it returns `false` when the chunk held no paste sequence.
+- `@veyyon/utils/tab-width` is the one definition of `replaceTabs` and `DEFAULT_TAB_WIDTH`, a dependency-free module the browser bundles share; `@veyyon/utils/wrap` and `@veyyon/utils/tab-spacing` re-export them unchanged.
 - `@veyyon/utils/terminal-emulator` resolves terminal identity without loading the terminal renderer.
+- `@veyyon/utils/cli-usage-error` is the one `CliUsageError` class, a leaf a CLI entry catches without loading the command framework; `@veyyon/utils/cli` still exports it.
 - `@veyyon/utils/json-snapshot` atomically stores rebuildable JSON snapshots with one serialization and verifies their input fingerprint and exact payload bytes.
 - `@veyyon/utils/format` owns `formatCostTiered` and `normalizePremiumRequests`, the terminal cost and premium-request formatters the status row and the stats CLI read.
 - `@veyyon/utils/format` owns `formatContextUsage`, the `47K/200K` reading of tokens against a limit that the status-line gauge, an agent progress row and an eval cell's agent tree all state.
@@ -115,16 +127,72 @@
 - `ViewSpan.badge` states that one run is a short label the host sets off in its own bracket grammar, the line-level twin of `StatusRowView.badge`, so a row that marks what kind of thing it names leaves the brackets to the host.
 - `ViewSpan.live` states that the thing a run names is still in flight, so a host with a clock may animate that run alone while the settled columns beside it stand still, and a host with no clock draws it in its tone.
 - `StatusRowView.descriptionFits` states that a row must keep its description whole by shortening it inside itself, so a card whose description is the file it acted on keeps both the path and the counts after it, and a card whose description is prose is left for the host to clip at its own edge.
+- `ViewSpan.agentId` states a semantic agent identifier for subagent drill-down navigation in hosts that support it.
 - The site scrapers behind the `fetch` tool are their own package: 79 site handlers, the shared page loader and the Parallel extraction client, moved out of `@veyyon/coding-agent` unchanged.
 - A scraper states the host capabilities it needs through `ScrapeServices` — the credential store, document conversion, external-tool resolution, the session spawn hook and the fetch-provider preference — instead of importing the agent's settings, storage and process modules.
+- Tool execution display metadata includes per-call grouped-read status, paths, previews and line numbers.
 - `@veyyon/wire/presentation` states the renderer contract: `PresentationContext`, the transcript, status, composer and overlay view-models, the `UIEvent` union and an abstract hex-colour theme. A renderer implementing it draws a session without importing coding-agent. The subpath adds no dependencies.
+- `@veyyon/wire/collab-link` owns the collab link grammar: `encodeBase64Url`, `decodeBase64Url`, `isLocalHostname`, `normalizeRelayOrigin`, `generateRoomId`, `formatCollabLinkPayload`, `formatCollabLink` and `parseCollabLink`, beside `ROOM_ID_BYTES`, `ROOM_KEY_BYTES`, `WRITE_TOKEN_BYTES`, `DEFAULT_RELAY_URL` and `ParsedCollabLink`, which moved there and are re-exported from the barrel unchanged; base64url goes through `atob`/`btoa` so the browser guest and the host run the same code.
 
 ### Changed
 
+- The HTML export attaches sub-sessions, redacts and writes the file through one `finishExport` for the session-manager and file entry points, a stage-1 memory job is completed under its ownership token through one `completeOwnedStage1Job` for the with-output and no-output paths and the global phase-2 claim reads its row through one `readGlobalJobRow`, the JavaScript eval cell builds its success, cancelled and failed results through one `finish`, the GitHub commit watch reports each poll and its grace and confirm notes through one `reportWatching`, and a capability scope splits `(`, `[` and `{` groups through one keyed depth table so a closer of another kind never ends the open group; no behavior change.
+- The token-rate helpers are `presentation/token-rate.ts`, moved from `modes/components/status-line/token-rate.ts` without a forwarding module, and the status view-model is `presentation/status-producer.ts` with no `presentation/status-builder.ts` beside it; the search card limits are exported from `tools/search/search-card-limits.ts` only, and `callMeta` and `readyPendingSummary` from `tools/shell/launch-view.ts` only.
+- The propose-commit and split-commit tools state the summary and detail limits in their verdict through one `verdictWithLimits`, Enter and Ctrl+Enter run a builtin slash command and recall the line as typed through one `#consumeBuiltinSlashCommand`, and a read records its hashline snapshot through one `recordFullHashlineContext` and renders an over-long first line through one `oversizedFirstLineText` on the ranged and whole-file paths; no behavior change.
+- Tool-argument repair parses a stringified payload and a parse-sentinel payload through one `repairJsonObjectArguments`, the launch path resolves the prewalk strong, prewalk cheap and plan-yolo models through one `resolveLaunchModel`, `--resume` relocates a session whose recorded directory is gone through one block for local and cross-project matches, and the vault key scans staging entries through one bounded `stagedKeyEntries` for orphan recovery and crash-stage cleanup; no behavior change.
+- The models-config schema rejects an empty `id`, `name`, `baseUrl`, `apiKey`, `contextPromotionTarget` or `compactionModel` through one narrow helper, the URL fetcher assembles every render result through one `buildRenderResult`, the patch mode resolves a space-separated `outer inner` context through one `resolveInnerAfterOuter`, and the clipboard reads images and text from Windows through one `runPowerShell` bridge; no behavior change.
+- The plugin manager runs every `bun install`, `bun update`, `bun uninstall` and dry-run through one `#runBun`, the marketplace manager resolves where a plugin is installed and which scope a verb applies to through one lookup and one `#scopeFor`, the microphone recorder and its streaming twin walk the detected recorders through one fallback loop, the ZIP64 locator and end-of-central-directory record are parsed by one reader for the in-memory and ranged paths, and head and tail truncation build their single-line results through one helper each; no behavior change.
+- The profile bootstrap reads `--profile` and `--alias` through one flag reader, the vault's Linux and macOS atomic exchange share one rollback builder, the eval tool builds its cancelled, failed and completed results through one `finishCell`, and the lexical bracket scanner opens quote modes from one table; no behavior change.
+- `ToolExecutionComponent` rebuilds its block through one `#syncBlock` whenever the spinner frame, the expansion or the freeze changes, including when the spinner starts and stops, so a card that reads `context.frame` in its view (the vibe composer caret) blinks from its first paint and holds still once stopped.
+- The terminal tool card keeps four behaviors the producer split had dropped: a settled streaming diff preview is drawn without waiting for the next spinner tick, a live-widget call that never ran (`ask`) falls back to its label, a background `task` result finalizes its block while the job runs, and the write card coerces non-string `content` to text; `EventController.attachTo` seeds the projection engine from the engine's own message source.
+- `DapSessionManager.launch` and `attach` share one start sequence, and each breakpoint kind (source, function, instruction, data) replaces its list through one helper for both set and remove; no behavior change.
+- `CustomEditor` dispatches its twenty app-level shortcuts through one ordered table with the same precedence, deferral during early startup, bash-background fall-through and retry-yields-to-extension rules; no behavior change.
+- Every `ModalShell` host (tree, session, settings, model hub and model picker selectors, the agent dashboard and transcript viewer, the plan review, login, ask and MCP wizard dialogs, the extension dashboard) routes its close glyph, outside click, breadcrumb and footer chips through one `routeModalChrome` prelude instead of a hand-typed `hitTestModalChrome` sequence; no behavior change.
+- Goal and vibe mode context reach the model through one delivery step that keeps the hidden display, the agent attribution and the requested channel; plan-mode context is unchanged.
+- The `/btw` and `/omfg` panels settle every outcome (complete, saved, rejected, aborted, error) through one step per panel that clears a previous error and ignores a dismissed panel; the painted rows are unchanged.
+- The reftable ref readers answer `null` for a missing ref and rethrow an abort through one read-only git query, and the `github` ops raise the same "unavailable" `ToolError` for a missing repository root, primary root, branch or head through one check; no behavior change.
+- The legacy extension resolver's six promise caches (package root, manifest, bare dependency, native addon, addon-require scan, realpath) share one memoizer and one importer-scoped key; each result is cached once per key, as before.
+- `veyyon setup speech` picks the speech-to-text and text-to-speech models through one step that persists only a value the setting declares and flushes it before the next pick; no behavior change.
+- The SearXNG endpoint, token and Basic-auth readers share one settings-then-environment lookup, with an empty endpoint or token still read as unset, and the tool result builder records match, result and head limits through one setter; no behavior change.
+- ACP `session/resume` opens a stored session through the same step as `session/load` (same cwd check, same MCP configuration, same not-found error) without replaying history, and the `symbolPreset` and `colorBlindMode` settings apply to the theme through one signal hook that logs a fallback or a failed setter under the setting's name; no behavior change.
+- Single-range and multi-range `read` clip long lines to `tools.outputMaxColumns` through one display-only clipper that records each clipped line, including a block-context line outside the window, out of the seen-lines record and reports the column cap once; no behavior change.
+- `/btw`, `/tan` and `/omfg` read their argument and clear the composer through one handler; the composer's `locked` and `awaitingApproval` flags enter and leave their modes through one step; an agent's extension `sendMessage` and `sendUserMessage` are tracked and error-logged through one step; the `b`, `c` and down-arrow empty-composer keys install through one listener; and the `token_in`, `token_out`, `cache_read` and `cache_write` status segments render through one counter; no behavior change.
+- Async job deliveries and in-flight deliveries filter by owner and suppression through one step; the projection engine's running and background-task marks toggle set membership through one step; and skill loading resolves authored and managed skill real paths through one helper, so one `SKILL.md` reached through two paths loads once without a collision warning; no behavior change.
+- RPC agent and session events pass one typed-set check; every streaming edit mode recovers its matcher paths and entries through one non-empty and one single-path step; and skill, rule, context-file, prompt-template, slash-command and custom-command discovery resolve their project and agent roots through one step; no behavior change.
+- Streamed text and thinking segments reveal through one generic step; both Gemini search request paths build their per-attempt body through one transform step; and the cmux tab's `waitForSelector` is `waitFor`; no behavior change.
+- The `theme.dark` and `theme.light` setting hooks republish their slot through one factory; the RPC `host_tool_result` and `host_tool_update` frames pass one guard parameterised on the frame type and payload key; and the Hindsight `retainMode`, `recallBudget` and `scoping` env and settings values are accepted through one listed-value picker; no behavior change.
+- Built-in model discovery selects its standard and special providers through one predicate (disabled set, configured discovery rows, provider filter) and resolves each provider's discovery endpoint through one lookup (runtime override, `models.yml`, catalog); the `!` and `%` shortcuts present, stream into, settle and release their transcript block through one step with their own failure labels; no behavior change.
+- The agent executor reads a message's or event's `content` and `usage` through one field reader, and a symbol-preset or colour-blind change re-renders the committed theme through one ephemeral re-apply step; no behavior change.
+- The legacy `pi-coding-agent` read, bash, grep, find and ls tool definitions draw their call card through one step (title, then the call's own summary), with the same bytes as before; no behavior change.
+- Grouped read displays and path expansion share delimiter scanning while preserving escaped separators, glob braces and selector ranges.
+- Learn and Memory Edit result views share text projection while preserving titles, empty results and error formatting.
+- Collab and HTML tool previews build display data without serializing discarded transcript input.
+- Tab expansion imports `@veyyon/utils/tab-width`; no user-facing effect.
+- The speech-to-text, tiny-model and TTS worker clients share one request lifecycle (`subprocess/worker-request-client`) and one progress-event shape; a worker error or client shutdown settles every pending request the same way in all three, with no user-facing effect.
+- Collab link formatting and parsing (`formatCollabLink`, `parseCollabLink`, `generateRoomId`) are `@veyyon/wire`'s, re-exported from `collab/protocol`; a link the host mints and the browser guest parses read one grammar, with no user-facing effect.
+- Claude plugin hooks, tools, skills, slash commands and MCP servers resolve their plugin roots through one `pluginRootsFor` step, and no loader can mutate the cached root warnings; no user-facing effect.
+- Terminal and presentation event handling share tool-argument correlation and retry traces, with stable block identities across streaming snapshots and session resets.
+- Standalone and adopted terminal drivers share transcript updates and composer bindings with unchanged read-card presentation.
+- Grouped read projections preserve per-call status, paths, previews and line numbers across serialization.
+- Live and rebuilt tool cards share single-card rendering while preserving renderer precedence, streamed arguments and failure notices.
+- Status-line usage fields use the shared presentation contract without changing rendered output.
+- Bash and job cards load shared presentation helpers without importing their execution modules.
+- Plugin discovery shares installed-registry validation and root collection without changing scope precedence or warnings.
+- Runtime initialization no longer waits for first-frame replay cache publication.
+- Eval bridge options share field declarations while preserving exported interfaces and runtime behavior.
+- Settings selectors share list initialization, model-picker attachment and inline updates without changing input routing or persistence.
+- Extension API instances no longer allocate unused flag maps and provider-registration arrays; flags and registrations remain in the shared session runtime.
+- MCP commands share argument parsing without changing terminal and CLI option policies or interpreting argument text as a second command.
+- DAP and LSP configuration discovery share source ordering, and Gemini and OpenCode share user-context loading, without changing precedence or warnings.
+- Editor keybinding matching shares default key sets while preserving remap isolation and fallback chords.
+- Autoresearch experiment tools share active-branch session resolution without changing errors or session selection.
+- Autoresearch session updates share optional-column assembly without changing stored values, omitted-field handling, or database errors.
+- Extension dashboard loading shares disable and shadow precedence across capability kinds without changing state or metadata.
 - `settings-selector.ts` writes its escape comparison as `\x1b` instead of a raw control byte. No user-visible behavior changes.
 - Output minimizer tool filters collapse repetitive line filtering, table formatting and subcommand routing into declarative specs with unchanged output behavior.
 - GitHub search operations in the web domain and vibe mode tools use shared parameterized dispatch tables; behavior is unchanged.
 - Terminal selector cards and command controllers share modal select delegation, mouse routing, subcommand dispatch, and markdown panel presentation without changing TUI behavior.
+- Settings selectors share model-chain summaries, heading rows, picker targeting and candidate deletion without changing display or persistence behavior.
 - Parity ledger schema validation, module specifier resolution, and workspace traversal logic are consolidated into shared script helpers without changing validation verdicts.
 - Custom and legacy hook messages use the agent-core type definitions without changing message conversion or public type signatures.
 - Filesystem reads and writes share range calculations, candidate probing and result assembly while preserving SQLite row-operation exports.
@@ -141,6 +209,10 @@
 - First-frame replay recordings are written asynchronously so filesystem operations do not block editor input.
 - Launch status rendering reuses repository discovery when reading branch and worktree metadata.
 - Launch layout measures the fixed-height status footline without rendering it.
+- Every setting in every domain states what it does and what each value selects in one to three sentences, with no design history or internal vocabulary; the idle timeout row is labelled "Park Idle Agents After", the Park and Prune groups are one "Idle Agents" group, the artifact rows are "Artifact Threshold", "Artifact Head Size" and "Artifact Tail Size" with the unit on their options, and the MCP debounce row is "MCP Notification Delay".
+- `AgentRegistry.setStatus` consults `AGENT_TRANSITIONS` and throws `AgentTransitionError` for a status move the lifecycle does not perform, so a turn event that arrives after a kill or a park no longer revives the agent; a collab guest mirrors the host's roster through `mirrorStatus`.
+- An agent adopted at hand-over, revived from disk or listed from a previous run receives its idle and prune budgets through one builder, so a zero quiet budget disables pruning and a waiting budget is never shorter than the quiet one on every path; no behaviour changes on the paths that already agreed.
+- A retired `agent.*` setting is retired in one place: `rejectedAgentModelSettings` sweeps the keys the schema itself marks `retiredBy` instead of a second hardcoded list, and a retired key with no page hint is reported against the replacement the schema declares rather than being named as `undefined`; `agentsEnabled` is the one predicate for whether agents exist, replacing the `delegationEnabled` alias that returned it unchanged. No setting changes what it does.
 - Interactive chat and the transcript viewer use one replay implementation without changing displayed content or live-tool lifecycle.
 - Transcript rebuilds and live updates share tool-text projection without changing displayed content.
 - Settings group types derive from the settings schema while preserving their existing optional fields and value types.
@@ -148,13 +220,6 @@
 - Plugin discovery, import rewriting, MCP configuration toggles, Exa responses, secret-preserving text transforms, todo state cloning and projection, and session-file discovery use shared implementations without behavioral changes.
 - Tool views share progress rows, diff statistics, disclosure metadata, and task separators without changing rendered output.
 - Extension kind labels use a shared function without changing list or sidebar text.
-- Every setting in every domain states what it does and what each value selects in one to three sentences, with no design history or internal vocabulary; the idle timeout row is labelled "Park Idle Agents After", the Park and Prune groups are one "Idle Agents" group, the artifact rows are "Artifact Threshold", "Artifact Head Size" and "Artifact Tail Size" with the unit on their options, and the MCP debounce row is "MCP Notification Delay".
-- `AgentRegistry.setStatus` consults `AGENT_TRANSITIONS` and throws `AgentTransitionError` for a status move the lifecycle does not perform, so a turn event that arrives after a kill or a park no longer revives the agent; a collab guest mirrors the host's roster through `mirrorStatus`.
-- An agent adopted at hand-over, revived from disk or listed from a previous run receives its idle and prune budgets through one builder, so a zero quiet budget disables pruning and a waiting budget is never shorter than the quiet one on every path; no behaviour changes on the paths that already agreed.
-- A retired `agent.*` setting is retired in one place: `rejectedAgentModelSettings` sweeps the keys the schema itself marks `retiredBy` instead of a second hardcoded list, and a retired key with no page hint is reported against the replacement the schema declares rather than being named as `undefined`; `agentsEnabled` is the one predicate for whether agents exist, replacing the `delegationEnabled` alias that returned it unchanged. No setting changes what it does.
-- Interactive chat and the transcript viewer use one replay implementation without changing displayed content or live-tool lifecycle.
-- Settings group types derive from the settings schema while preserving their existing optional fields and value types.
-- JSON tree projections share bounded traversal, and code and Markdown cells share output assembly, with unchanged rendering.
 - Handbook HTML and search assets are generated during documentation and website builds instead of being tracked in Git.
 - Startup reads setting-change signals and terminal formatting without constructing the settings store or unrelated tool modules.
 - The terminal host constructs autoresearch screens and styled slash-command reports; headless command execution no longer imports those terminal components.
@@ -265,16 +330,34 @@
 - The status row reads its truncation limits from `tools/core/render-limits`, a leaf that imports nothing, rather than `tools/core/render-utils`, which drops the tool renderers, path helpers and image resizing from the launch card's import graph; first-frame time is unchanged, because those modules only declare functions.
 - An MCP tool describes its call and result cards as a `ToolView` instead of building terminal components in `mcp/render.ts`, which is deleted; the terminal states the same arguments, structure walk, raw rows, held-back count and spill warning, indented two columns under the row that heads them and without the branch glyph the call row opened with.
 - `SETTING_KIND_HANDLERS` is typed per setting kind, so each handler receives the definition variant its key selects instead of the whole union widened to `any`. No user-visible behavior changes.
+- Subagent drive paths share abort-aware promise handling with unchanged cancellation behavior.
+- Hook and user-message selectors share search editing without per-keystroke callback or query-array allocations.
 - Legacy hook messages reuse custom-message fields without changing their public type signatures.
+- The turn loop rejects a Harmony leak through one `rejectHarmonyLeak` whether the stream ends with a `done` event or without one; no behavior change.
 - `AgentToolResult`, `AgentToolUpdateCallback`, `ToolTier`, `ToolApprovalDecision` and `ToolApproval` are defined in `@veyyon/tool` as `ToolResult`, `ToolUpdateCallback` and the same approval names; `@veyyon/agent` exports every name it exported before, so no caller changes.
 - The session-entry vocabulary (`SessionEntry` and every member), `AgentMessage` and the `CustomAgentMessages` and `CustomCompactionSessionEntries` hooks are defined in `@veyyon/session`; `@veyyon/agent-core` and `@veyyon/agent-core/compaction/entries` export every name they exported before, and an augmentation now names `@veyyon/session`.
 - A source-path comment in `thinking.ts` names the coding-agent module its reader moved to; behavior is unchanged.
+- Doc comments refer to a child run as an agent rather than a subagent. No behavior change.
+- `onSpanStart` and `onSpanEnd` run through one guarded call that reports a throw as the same `on_span_start_failed` / `on_span_end_failed` warning, with the thrown error attached; no behavior change.
+- The steering and follow-up queues drain through one step that takes the first message in `one-at-a-time` mode and every message in `all` mode; delivery order and turn count are unchanged.
+- A tool call's arguments and result serialize through one telemetry path keyed by the `contentSerializer` field, and an `onChatUsage` throw or rejection is reported as `on_chat_usage_failed` from one place on both the agent-loop and the manual-record path; no behavior change.
+- The NVIDIA, Xiaomi, Xiaomi Token Plan and Alibaba Coding Plan logins take the pasted key through the same `promptApiKey` as every `createApiKeyLogin` provider: the key is trimmed, an empty paste is `ApiKeyRequiredError`, an abort during the paste is `LoginCancelledError`, and a host without `onPrompt` is `OnPromptRequiredError`; no behavior change.
+- API-key and OAuth credential ranking score usage windows and block a credential at its scoped limit through one `#rankUsageResults`, an OAuth refresh reads its candidate row before and after the lease through one `readRefreshCandidate`, and the plan-filter and usage-limit rejection runs before and after a refresh through one `usageRejects`; no behavior change.
+- Tool-argument validation runs its seven pre-validation normalizations through one ordered pass table, before the first check and after every issue-driven coercion, and the two schema-agnostic value walks share one copy-on-write array step; no behavior change.
+- GitLab Duo Workflow shares fresh-workflow restart handling without changing retry limits, request ordering, or surfaced errors.
+- Streaming provider initialization shares assistant-message construction without changing emitted metadata or mutable-state isolation.
+- Provider error projection, Google request options and Hermes/Qwen3 tool-call rendering share implementations without changing wire formats.
+- Removed duplicate OpenAI Responses moderation type declarations without changing exported types or wire formats.
+- OpenAI Responses computer actions share field declarations while preserving independent public namespace augmentation.
+- Response input and output items share field declarations while retaining namespace-specific nested types and augmentation.
+- GitLab Duo and GitLab Duo Workflow share token-response decoding and PKCE types without changing login or refresh behavior.
 - API-key validators share error-body handling without changing request formats, error messages or deadlines.
 - Lazy provider streams share import-promise caching while preserving provider loading and timeout behavior.
 - API-key logins share credential prompting and validation with unchanged provider messages and cancellation behavior.
+- Credential refresh and usage requests share cancellation handling while preserving abort reasons and independent completion of shared work.
+- The GLM, Gemini, Gemma and Qwen3 in-band scanners share one outside-text step (`scanOutsideText`) and Hermes and Qwen3 share one closed-body completion (`emitClosedToolCall`), with unchanged events at every chunking of a stream.
 - Provider module declarations share one typed stream signature with unchanged runtime output.
 - Hermes and Qwen tool calls use one JSON decoder with unchanged repair and partial-stream recovery.
-- Doc comments refer to a child run as an agent rather than a subagent. No behavior change.
 - `Tool` extends `ToolSpec` from `@veyyon/tool`, which owns the schema-independent declaration and the `ToolExample` kinds; `@veyyon/ai` exports every name it exported before, so no caller changes.
 - The message envelope, content blocks, `AssistantMessageEvent`, `StopDetails`, the turn and tool-call study records and the streaming partial-JSON symbol are defined in `@veyyon/model`; `@veyyon/ai` re-exports every name it exported before, so no caller changes.
 - A source comment in the OAuth callback page names the shared sun source at `apps/site/sun-field.js`; behavior is unchanged.
@@ -283,75 +366,135 @@
 - A source-path comment in `message-text.ts` names the coding-agent module its caller moved to; behavior is unchanged.
 - `CONTEXTUAL_USER_PREFIXES` is exported from the codex compaction module so the retained-window rule is asserted against the real list rather than a copy of it.
 - A source-path comment and the barrel-shortcut suite name the Perplexity search provider at `tools/web/search/providers/perplexity.ts`. No behavior change.
+- Hermes and Qwen3 share truncated-call recovery with unchanged tool names, arguments and completion events.
+- The Codex responses provider parses usage through one numeric field picker, resets the websocket chain (append baseline, turn state, models etag) through one helper at every site, and the whitespace-loop, stale-response and retryable-error recoveries share one turn restart and one delayed reopen; no behavior change.
+- The Qwen3, Hermes, GLM, Kimi, pi-native, Gemma and Gemini scanners and the thinking-healing scanner stream a reasoning section through one `ThinkingSection` and close a tag-delimited one through one `scanThinkingText` step, with the same events, the same held partial close tag and the same flush at end of stream.
+- The Cursor exec channel buffers stdout and stderr through one `ShellOutputChannel` per stream, sending on a newline, past 4 KiB or 100 ms after the first byte and holding an incomplete ANSI escape until its tail arrives; no behavior change.
+- `deleteAuthCredential` and `deleteAuthCredentialsForProvider` soft-delete through one step that reports a failed statement with the credential or provider it names; no behavior change.
+- `AuthStorage` delivers its credential-disabled, credential-failover and usage-limit-withheld notices through one subscriber call that isolates a throw or a rejection and logs it against the hook, addresses a refreshed broker row through one matcher that ignores the shared refresh sentinel, and reads a report's unanimous scope account or project id through one step; no behavior change.
 - Doc comments refer to child runs and roles as agents rather than subagents; the Codex protocol header `x-openai-subagent` and its `subagent_kind` metadata key are unchanged.
+- Both streaming gateway routes (the format endpoints and the pi-native fast path) abort the upstream call on a closed client response through one SSE cancel hook; no behavior change.
 - Array copies that allocated with a spread now use `.slice()`, `.concat()` or `Array.from()`. No user-visible behavior changes.
 - The package directory is `plugins/argot` instead of `packages/argot`; the published package name, entry points and behavior are unchanged.
 - Source-path comments in `constants.ts` and `generate.ts` name the benchmark modules they cite at their new paths under `tests/evals/`; behavior is unchanged.
 - Compacted dictionary generator candidate keywords with declarative lookup tables.
 - Doc comments refer to a child stream as an agent stream rather than a subagent stream. No behavior change.
+- GitLab Duo Workflow discovery reads a record's declared root namespace (`root_namespace_id`, `rootNamespaceId`, or the id or path of its `root_namespace`/`rootAncestor` record) through one `declaredRootNamespaceId` for the explicit and nested lookups; no behavior change.
+- The Antigravity, Codex, Gemini and Ollama discovery readers report a non-ok status as the `status` stage and an unparseable body as the `body` stage through one exported `readDiscoveryJson` in `discovery/failure`; no behavior change.
+- Model spec rejection checks its string, cost and limit fields from ordered tables, reporting the same field names in the same order; no behavior change.
+- The canonical-id generator runs its multi-candidate expanders from one ordered table; no behavior change.
+- Canonical model normalization shares ordered transformation dispatch without changing identity resolution or cache precedence.
 - `Effort`, `ThinkingConfig` and the model and message types are re-exported from `@veyyon/model`, which is their single definition; the exported names and values are unchanged.
 - Bundled models resolve on demand per provider while explicitly installed full-registry snapshot stores remain supported.
 - Provider cache namespaces resolve without constructing discovery options; persisted cache keys are unchanged.
 - Bundled model snapshots use the shared integrity-framed format without repeated JSON serialization or durability flushes, and obsolete snapshots rebuild on load.
 - The model row, thinking config, effort ladder and service-tier vocabulary are defined in `@veyyon/model`; `@veyyon/catalog/types`, `@veyyon/catalog/effort` and `@veyyon/catalog/provider-models/wire-capabilities` re-export every name they exported before, so no caller changes.
 - A comment on `OPENROUTER_BASE_URL` names the Perplexity auth module at `tools/web/search/providers/perplexity-auth.ts`. No behavior change.
+- An OpenAI-compatible listing's model name falls back to its id through the shared non-empty-string reader; discovered names are unchanged.
 - The package directory is `clients/web` instead of `packages/collab-web`; the package name, the relay and the guest client are unchanged.
+- Updated collaboration client to protocol v4, carrying tool execution displays on active tool state and tool result messages.
 - Unified patch operation definitions into a shared declarative operation table across tokenization and execution.
 - The package directory is `plugins/hashline` instead of `packages/hashline`; the published package name, entry points and behavior are unchanged.
+- Seen-line and clipped-line records merge into a snapshot through one keyed step; recorded provenance is unchanged.
+- Settings mutations and session storage writers share implementations without changing persistence, hook ordering or error behavior.
+- Installed plugin registry readers share JSON validation while preserving numeric-version handling and malformed-file behavior.
 - Plugin runtime configuration uses the shared record validator; behavior is unchanged.
 - Edit-specific event normalization remains in `@veyyon/coding-agent/extensibility/tool-event-input`; event payloads are unchanged.
 - Settings lookups reuse immutable registry key snapshots and build derived indexes in one pass after registrations or resets.
 - Settings stores share layer copying and override application while retaining profile values, per-directory resolution and isolated save-failure reports.
+- Session title overlays avoid encoding and copying the full transcript when the first line occupies the fixed 256-byte slot.
+- The TypeBox `unknown` converter is the `any` converter, which had the same body; emitted schemas are unchanged.
+- Session entry validation shares non-empty string checks, and branch labels avoid temporary identifier arrays.
 - `@veyyon/kernel/settings/store` exports `groupSettingPaths`, memoizing prefix-grouped schema paths on the schema index with automatic invalidation on schema resets.
 - `@veyyon/kernel/session/session-entries` reads the shared entry vocabulary from `@veyyon/session` and registers its own entry kinds there; every name it exported is still exported and no file format changes.
 - The plugin manifest vocabulary (`PluginManifest`, `PluginFeature`, `PluginSettingSchema` and its setting kinds, `PluginSettingType`) moved from `@veyyon/kernel/loader/plugins/types` to `@veyyon/plugin`; `InstalledPlugin`, the lock-file state, the project overrides and the doctor and install option types stay.
 - SQL session storage consolidates parameterized queries across PostgreSQL, MySQL, and SQLite dialects.
+- Gist participants and fact sources are read from their stored JSON columns through one `parseStoredStringList` in `util/sqlite`; a null, empty, non-JSON or non-array value still reads as no entries.
 - Deduplicated SQLite table migrations, schema declarations, and entity import pipelines across beam and triplestore modules.
 - Typed tuple copies use spreads rather than `.concat()`, which those types do not define. No user-visible behavior changes.
 - The package directory is `plugins/mnemopi` instead of `packages/mnemopi`; the published package name, entry points and behavior are unchanged.
+- The logging plugin records a remember and a recall through one memory-event step; each row still carries its own event name, memory id and content preview.
+- AAAK phrase and structural tables apply through one literal-replacement loop; encoded output is unchanged.
+- The logging, metrics, filter and compression plugins read their numeric cap through one option reader that accepts the snake_case key or its camelCase alias and falls back to the default for a non-finite value; no behavior change.
+- Shell filters share token matching and JSON field lookup while preserving exact-token matching and grep record-ending behavior.
+- Shell filters share result finalization while preserving output bytes, rewrite status and original-capture accounting.
 - Deduplicated tree-sitter language dispatch, filesystem isolation backend declarations, and syntect scope color matching across native crates.
+- Shell builtins share cancellation and argument-error handling, and GitHub and GitLab output filters share Markdown cleanup, without changing output or exit status.
 - Linux native CPU detection reads current kernel flags without consulting persisted CPU verdict files.
 - The loader's diagnostic comment names the addon crate at `natives/bridge/addon/src/lib.rs`, the path it moved to. No user-visible behavior changes.
 - The rebuild instruction in the stale-addon refusal reads `bun --cwd=natives/bridge/bindings run build`, the package's path after it moved out of `packages/`. The package name `@veyyon/natives` and every import specifier are unchanged.
-- Centralized shared request and error data table renderers across overview, requests, and errors routes.
-- Array spreads over iterators in the dashboard aggregators are `Array.from` calls and source comments reference `apps/stats` and `clients/web`; no user-visible change.
 - Doc comments refer to a spawned session as an agent and to its record as `AgentSpawnEntry`; the persisted `subagent_spawn` entry type is unchanged.
 - The `SettingTab` member for the agent pages is `agents` instead of `subagents`; the tab is an in-memory id and no persisted setting key changes.
-- The agent type of a session a task spawned is `spawn` instead of `subagent` in the per-type breakdown; the `main` and `advisor` types are unchanged.
+- Removed the duplicate JavaScript build script; the TypeScript build entrypoint produces unchanged dashboard assets.
+- Centralized shared request and error data table renderers across overview, requests, and errors routes.
+- The per-type breakdown labels spawned sessions as "Spawned agents" while preserving the `subagent` discriminator and historical token and cost totals.
 - The package directory is `apps/stats` instead of `packages/stats`; the published package name, entry points and behavior are unchanged.
 - Repointed a doc comment at `@veyyon/kernel/session/session-entries`, where the session header type now lives; no behavior change.
 - Array spreads over iterators in the dashboard aggregators are `Array.from` calls and source comments reference `apps/stats` and `clients/web`; no user-visible change.
+- The `/api/stats/*` routes are one table of reads in the server rather than one `if` block each; every route answers the same JSON.
+- Every backfill reads and writes its `meta` sentinel through one pair of helpers, and the two file-offset re-parses share one enrol-and-wipe step; each backfill runs once, as before.
+- User and assistant session messages qualify for linking through one role-and-id check; a message without an id is skipped from both statistics, as before.
 - The package directory is `plugins/mode-swarm` instead of `packages/swarm-extension`; the published package name, entry points and behavior are unchanged.
-- Consolidated React tool-call renderers into cohesive domain descriptors (fs, system, agent, memory, search) and centralized shared UI primitives.
+- Doc comments refer to the runtime a swarm agent runs on as the agent infrastructure. No behavior change.
+- `stripControlSequences`, `CANONICAL_SYMBOLS`, `safeHref`, the status, tone and diff-side class tables and the markdown helpers are exported from `view-core` only; `util` and `ViewRenderer` no longer re-export them. Rendered output is unchanged.
+- Consolidated React tool-call rendering to consume canonical ToolExecutionDisplay and ToolView view models directly from wire and view contracts.
+- HTML tool renderers share argument, parse-error and eval-cell formatting while retaining tool-specific image and metadata handling.
+- Argot cards share body layout, search cards share result adaptation, and runtime cards share operation dispatch without changing rendered output.
+- `replaceTabs` is the `@veyyon/utils/tab-width` function rather than a second copy; rendered output is unchanged.
+- The `task` renderer lifts the missing-yield warning out of the output preview under both its current spelling, `SYSTEM WARNING: Agent exited without calling yield tool`, and the `Subagent` spelling a session file recorded before it.
+- `genericRenderer` is exported once, through the `generic` module, instead of also being re-exported by the registry. No user-visible behavior changes.
+- React list keys are derived from each item's own identity (id, path, label or text) through a `keyed` helper instead of the array index; rendered output is unchanged.
+- `react` and `react-dom` are named as literal `19.2.7` peer dependencies so a consumer outside the workspace resolves them; the version is the one the workspace catalog pins.
+- `Editor` and `Input` deliver a chunk's typed prefix, paste payload and remainder through `BracketedPasteHandler.route` with sinks built once per component; the bytes each part reaches are unchanged.
+- Input drain and terminal stop pop the kitty keyboard protocol, cancel the pending modifyOtherKeys probe and reset modifyOtherKeys through one `#disableKeyboardProtocols`; the bytes written at shutdown are unchanged.
+- The Markdown component derives the default text style's SGR prefix from the same style chain that paints its text; no behavior change.
+- Cursor movement sequences and overlay percentage parsing use shared implementations without changing terminal output.
 - Collapsed and deduplicated scroll math, search input filtering, border framing, cursor deletion and autocomplete helpers across engine components without changing rendering or behavior.
 - Direct writes and component-scoped rendering share layout-reuse checks, and frame rendering shares cursor-marker extraction, selection and row-divergence scans without changing terminal output.
 - Markdown rendering uses the shared HTML entity decoder without changing displayed text.
 - Text layout and pointer-hover state use shared implementations without changing rendering or input handling.
+- The overlay stack resolves its topmost painted and topmost focusable entries by one reverse scan; focus and pointer routing are unchanged.
+- The ConPTY post-full-paint settle arms and cancels its trailing render timer through one pair of steps; a render requested inside the window still paints once the window closes, and a forced render still discards the pending trailing render.
+- The single-line `Input` answers its editing keybindings from one ordered table, and a key bound to two of them runs only the first.
+- `onBackgroundColorChange` and `onAppearanceChange` register and replay a late subscriber through one step; a subscriber that throws during replay is logged and the others still run, as before.
 - `TerminalNotification` extends `HostNotification` from `@veyyon/utils/host-notification`, so a terminal is one host that can deliver a tool's notification and the two shapes cannot drift apart.
-- `visualColAtOffset` and `offsetAtVisualCol` are exported from `@veyyon/tui` utils, shared by `Editor` and `Input`.
-- Literal prompt templates skip variable analysis and compilation while preserving formatted output.
-- Web and terminal Markdown rendering use shared HTML entity decoding with unchanged output.
-- Doc comments refer to the runtime a swarm agent runs on as the agent infrastructure. No behavior change.
-- The `task` renderer lifts the missing-yield warning out of the output preview under both its current spelling, `SYSTEM WARNING: Agent exited without calling yield tool`, and the `Subagent` spelling a session file recorded before it.
-- `TerminalNotification` extends `HostNotification` from `@veyyon/utils/host-notification`, so a terminal is one host that can deliver a tool's notification and the two shapes cannot drift apart.
+- `visualColAtOffset` and `offsetAtVisualCol` are exported from `@veyyon/utils/width` and shared by `Editor` and `Input`.
 - `visualColAtOffset` and `offsetAtVisualCol` are exported from `@veyyon/tui` utils, shared by `Editor` and `Input`.
 - Source comments refer to the spawned-agent HUD as the agent HUD. No behavior change.
+- The relaxed JSON parser's object and array loops position on the next element and consume the delimiter after it through one pair of container steps, and both atomic-write target resolvers record a symlink hop and raise `ELOOP` through one helper; no behavior change.
+- Display LaTeX splits its top-level rows and an environment body splits its `\\` rows through one depth-aware scanner; no behavior change.
+- Literal prompt templates skip variable analysis and compilation while preserving formatted output.
+- XML escaping, C1 normalization, OSC 66 alignment and tab counting share implementations without changing rendered text.
+- LaTeX rendering shares code-point counting with unchanged output, and `isNonEmptyString` provides shared session-field validation.
+- Web and terminal Markdown rendering use shared HTML entity decoding with unchanged output.
+- `getGlobalSubagentsDir` retains its public export name and definitions-directory behavior.
 - JSON snapshot parsing uses the shared JSON parser; snapshot validation is unchanged.
 - `HostNotification` and `HostNotifier` are defined in `@veyyon/host`; `@veyyon/utils/host-notification` re-exports both, so no caller changes.
 - Source-path comments in `dirs.ts` name the website changelog generator at `apps/site/tools/gen-changelog.mjs`; behavior is unchanged.
 - Root help lists subcommands from the registry summaries when those are present, and from the loaded command classes otherwise.
+- `moduleSpecifiersIn`, `typeOnlyModuleSpecifiersIn` and `dynamicImportSpecifiersIn` collect their specifiers through one capture loop; the reach they report is unchanged.
+- `getGithubCacheDbPath` and `getAuthBrokerSnapshotCachePath` resolve through one env-overridable cache-file step, and LaTeX `\overset`, `\stackrel` and `\underset` stack through one scripted step; resolved paths and rendered text are unchanged.
 - Source-path comments in `ansi.ts` and `sgr.ts` name the terminal output-block at `src/modes/terminal/draw/output-block.ts`. No user-visible behavior changes.
 - Source-path comments in `ansi.ts` and `eval-prompt-overrides.ts` name the benchmark modules they cite at their new paths under `tests/evals/`; behavior is unchanged.
 - `sanitize-text.ts` imports the escape byte from `@veyyon/utils/ansi` rather than declaring a second copy of it.
 - Source-path comments in `sanitize-text.ts`, `strip-ansi.ts`, `tab-spacing.ts` and `width.ts` name the Rust modules they cite at their new paths under `natives/`. No user-visible behavior changes.
+- The async and sync lock-directory inspectors classify a lock's `info` file (plain directory, link and size checks, opened-descriptor identity, owner record) through shared pure helpers between their own syscalls, with the same observations for every input.
 - Source-path comments in `adversarial-strings.ts`, `ansi.ts`, `tab-spacing.ts` and `width.ts` name the modules they cite at the paths those modules occupy: `visibleWidth`, `sliceWithWidth` and the ansi escape are `packages/utils` modules and their locks are `packages/utils` suites, while the adversarial-string helpers are `hosts/terminal/engine` test helpers. No user-visible behavior changes.
 - `stripAnsiExceptSgr()` strips every escape sequence `stripAnsi()` strips except SGR, for a surface that admits styled text.
 - `workspaceModuleReachResolution()` resolves every workspace member declared by the root manifest, at whatever depth it sits, instead of the direct children of `packages/`, so a cross-package specifier into `@veyyon/kernel`, `@veyyon/tui`, a contract or a plugin resolves again and every module-reach ceiling built on it measures what it claims.
+- `isKeyRelease` and `isKeyRepeat` classify a Kitty event through one check of the protocol state, the paste marker and the event pattern; the answers are unchanged.
+- Doc comments refer to the spawned-agent wall as the agent wall. No behavior change.
+- The Hugging Face handler fetches a model, dataset or space record and its README through one `loadHfResource`, and the YouTube handler downloads the manual and auto-generated subtitle tracks through one `downloadSubtitleText`; no behavior change.
 - Consolidated specialized web scraper site handlers into parameterized domain engines and declarative site definitions.
 - The Discourse handler trims its base path with `trimTrailingSlashes` from `@veyyon/utils/url` rather than its own inline strip. No user-visible behavior changes.
-- Doc comments refer to the spawned-agent wall as the agent wall. No behavior change.
+- Business, media, documentation, discussion and security-advisory handlers share dispatch without changing host matching or scrape results.
+- Package-registry scrapers share Markdown section assembly without changing rendered results.
+- Academic-paper, license and discussion scrapers share PDF conversion and Markdown assembly without changing site-specific output.
+- Package-registry, academic-paper and declarative scrapers omit unused metadata fallbacks while preserving request headers and failure handling.
+- Package-registry and academic-paper handlers share URL dispatch while preserving callback receivers and request-local notes.
 - `TextContent`, `ImageContent`, `ThinkingContent`, `RedactedThinkingContent`, `ToolCallContent`, `FallbackContent`, `WireStopReason` and `WireUsage` are `Pick` projections of the shapes `@veyyon/model` owns, imported type-only, with the same fields as before; the package declares `@veyyon/model` and no runtime dependency.
 - `AgentProgressPayload` and `AgentLifecyclePayload` are the payloads on the `task:subagent:progress` and `task:subagent:lifecycle` bus channels; `SubagentProgressPayload` and `SubagentLifecyclePayload` remain exported as the same types, and the channel spellings are unchanged.
+- `generateRoomKey` and `generateWriteToken` return the filled random buffer directly; the key and token lengths are unchanged.
 
 ### Removed
 
@@ -361,6 +504,25 @@
 
 ### Fixed
 
+- Command-mode detection recognizes shell and Python prefixes after Unicode leading whitespace in loaded drafts.
+- An MCP server that repeats a pagination cursor or never ends its pages no longer hangs `resources/list`, `resources/templates/list` or `prompts/list`; every list method ends with a warning and the pages collected so far, as `tools/list` already did.
+- Tool result cards preserve raw-string and multipart text, including MCP output and grouped read previews, while runtime result cards select eval or launch from their call arguments.
+- Collab reconnect snapshots preserve completed tool result text and display metadata across current and historical tool-call record formats.
+- HTML export preserves provider fallback transitions and redacts their model text in primary and nested transcripts.
+- Empty job results render their success or error message for every registered job alias.
+- The website model catalog refreshes from its relocated repository path before using the deployed copy.
+- Release validation checks native sentinels under every discovered workspace root, and shortened release notes link to the complete tagged changelog.
+- Terminal input delivery continues to later subscribers when an earlier subscriber throws.
+- Tool cards retain wire-provided results during expansion and sealing, and restore expanded output when subsequent updates contain raw results.
+- Clearing or replacing presentation rows stops detached animations, preserves completed-call history, and keeps subsequent reads visible.
+- Stopping a terminal presentation driver releases card animation clocks even when its engine is not running.
+- Extension discovery resolves installed plugins from the session's selected profile.
+- Python composer borders retain their mode color when an agent view is focused.
+- Completed and rebuilt tool cards retain their call arguments and rendered call details.
+- Disposing a tool card stops its animation clocks and detaches its presentation subscription.
+- Legacy tool result renderers receive the completed call arguments for partial and final results.
+- Background provider usage refreshes repaint the status line without requiring further input.
+- Tool cards retain both call and result renderer failure notices with their fallback output.
 - The library entry point retains read-selector functions, write-preview helpers, filesystem-source extraction and the goal view after renderer separation.
 - An auto-compaction pass that finds nothing to summarize warns about a compaction dead end only while the context is still over the recovery band, so a pass that runs after maintenance already freed the context no longer advises starting a fresh session.
 - The MCP add wizard retains manually entered credentials for stdio, HTTP and SSE servers and opens OAuth settings after authentication errors.
@@ -433,7 +595,9 @@
 - A turn that calls a tool and then stops with text is treated as ending in text: the todo reminder fires again as the board changes instead of falling silent after the first one, and the rewind, plan-mode, verification and code-review checks run at that stop.
 - The goal report from `/goal show` and the goal detail menu states the goal's status once: a paused goal read `Status: paused (paused)`, and a finished one `Status: complete (paused)`. Goal mode being off is now named only where the status does not already carry it, as `active (mode off)`.
 - A goal objective reaches every surface that shows it as one plain line: the `/goal show` report, the `/goal` menu title, the warning a disabled Goal Mode prints over a stored goal, the `/goal` autocomplete row and the goal tool's own card each formatted the objective raw, so an escape sequence in one styled or moved the rest of the surface, a tab opened a hole in it, and a newline split it across two fields.
+- `AgentTool.renderResult` accepts the optional call arguments already supported by custom and extension tool renderers.
 - A compaction, branch-summary or turn-prefix transcript leaves out a user or developer message that carries prior reasoning as prose (`demotedReasoningSource`), the message a user-interrupted turn leaves behind, instead of quoting that reasoning back at the endpoint inside the summary request.
+- Cursor and Devin protobuf regeneration invokes the workspace compiler, and Cursor output is written to the catalog package.
 - A user or developer message that carries prior-turn reasoning as prose declares its origin through `demotedReasoningSource`, and `transformMessages` holds it to the unsigned-thinking replay policy: a signing Anthropic endpoint drops it on same-model replay, and every `anthropic-messages` target drops it once `replayDemotedPriorReasoning` is off by catalog or learned from a `reasoning_extraction` refusal, instead of re-sending the same prose on the retry and on every later turn of the session.
 - Credential-store startup applies SQLite busy handling and WAL mode before initializing refresh leases, allowing concurrent launches to wait for database locks.
 - Case-insensitive host classification no longer treats control characters as URL punctuation.
@@ -444,7 +608,14 @@
 - `MemorySessionStorage.deleteSessionWithArtifacts` deletes the session entry and its artifact files from memory instead of returning early as a no-op.
 - `walkBranchPath` terminates when traversing cyclic parent entry chains.
 - `StringEnum` options in the legacy plugin shim avoid `any`.
+- Restored APFS isolation compilation on macOS and stale destination preparation for Windows block-clone isolation.
+- Plain isolation diffs classify binary contents on either side of a symlink transition without dereferencing links.
+- Tool summary formatting resolves its string conversion helper before normalizing whitespace and truncating output.
+- Shared HTML and React view adapters preserve symbol glyphs and render unknown symbol identifiers as text.
+- Compact tool card headers omit repeated tool labels while preserving operation suffixes and unrelated titles.
 - Restored field and badge parity across consolidated React tool descriptors for launch, job, bash, read, write, edit, set_cwd, generate_image, inspect_image, search, and memory tools.
+- Disposing a `Box` disposes its child components and their resources.
+- Enter submits the current message when an edit has invalidated the open file-completion popup.
 - Independent offscreen edits no longer accumulate into a false history rebuild, and changes to plain components preserve committed history until an explicit replay.
 - A sixel-capable terminal now renders inline images on Linux and macOS: the terminal is asked at startup instead of being matched against a list that named no sixel terminal at all, so images no longer silently fail to appear outside kitty, ghostty, wezterm, iTerm2 and Warp.
 - An inline image whose top has scrolled above the viewport, or which is taller than the terminal, is left undrawn until a repaint can reach its origin, instead of being stamped at full size over the top of the live transcript.
