@@ -20,11 +20,11 @@ import {
 import type { ToolDescriptor, ToolRenderProps, ToolResultBlock, ToolResultLike } from "../types";
 import {
 	detailsRecord,
+	finiteNumber,
 	isRecord,
 	keyed,
 	languageFromPath,
 	normalizeWs,
-	num,
 	replaceTabs,
 	resultImagesOf,
 	resultTextOf,
@@ -167,7 +167,7 @@ function MemoryEditBody({ args, result }: ToolRenderProps): ReactNode {
 	const op = str(args.op);
 	const id = str(args.id);
 	const content = str(args.content);
-	const importance = num(args.importance);
+	const importance = finiteNumber(args.importance);
 	const replacement = str(args.replacement_id);
 	return (
 		<>
@@ -321,7 +321,7 @@ function retainItems(args: Record<string, unknown>): RetainItem[] | null {
 function RetainSummary({ args, result }: ToolRenderProps): ReactNode {
 	const items = retainItems(args);
 	if (items === null) return <InvalidArg what="items" />;
-	const count = num(detailsRecord(result)?.count) ?? items.length;
+	const count = finiteNumber(detailsRecord(result)?.count) ?? items.length;
 	const first = items[0] ? truncate(normalizeWs(items[0].content), 80) : "";
 	return (
 		<>
@@ -333,7 +333,7 @@ function RetainSummary({ args, result }: ToolRenderProps): ReactNode {
 
 function RetainBody({ args, result }: ToolRenderProps): ReactNode {
 	const items = retainItems(args);
-	const count = num(detailsRecord(result)?.count);
+	const count = finiteNumber(detailsRecord(result)?.count);
 	let confirmation: string | null = null;
 	if (result && result.isError !== true) {
 		const text = resultTextOf(result).trim().replace(/\.$/, "");
@@ -457,7 +457,7 @@ function resolvedElsewhere(root: string | null, requested: string | null): boole
 function ArgotLoadSummary(props: ToolRenderProps): ReactNode {
 	const details = detailsRecord(props.result);
 	const root = argotRootOf(props);
-	const handles = details ? num(details.handles) : null;
+	const handles = details ? finiteNumber(details.handles) : null;
 	return (
 		<>
 			<Badge tone={props.result?.isError ? "err" : "ok"}>argot load</Badge>{" "}
@@ -493,7 +493,7 @@ function renderArgotBody(props: ToolRenderProps, badges: ReactNode[]): ReactNode
 
 function ArgotLoadBody(props: ToolRenderProps): ReactNode {
 	const details = detailsRecord(props.result);
-	const handles = details ? num(details.handles) : null;
+	const handles = details ? finiteNumber(details.handles) : null;
 	return renderArgotBody(props, [
 		<Badge key="op" tone={props.result?.isError ? "err" : "ok"}>
 			loaded
@@ -556,10 +556,10 @@ function ReportFindingSummary({ args }: ToolRenderProps): ReactNode {
 
 function ReportFindingBody({ args, result }: ToolRenderProps): ReactNode {
 	const priority = str(args.priority);
-	const confidence = num(args.confidence);
+	const confidence = finiteNumber(args.confidence);
 	const filePath = str(args.file_path);
-	const lineStart = num(args.line_start);
-	const lineEnd = num(args.line_end);
+	const lineStart = finiteNumber(args.line_start);
+	const lineEnd = finiteNumber(args.line_end);
 	const body = str(args.body);
 	return (
 		<>
@@ -1015,19 +1015,19 @@ function astEditDetailsOf(result: ToolRenderProps["result"]): AstEditDetails | n
 		for (const fr of d.fileReplacements) {
 			if (!isRecord(fr)) continue;
 			const path = str(fr.path);
-			if (path) fileReplacements.push({ path, count: num(fr.count) });
+			if (path) fileReplacements.push({ path, count: finiteNumber(fr.count) });
 		}
 	}
 	const parseErrors = strList(d.parseErrors);
 	return {
-		totalReplacements: num(d.totalReplacements),
-		filesTouched: num(d.filesTouched),
-		filesSearched: num(d.filesSearched),
+		totalReplacements: finiteNumber(d.totalReplacements),
+		filesTouched: finiteNumber(d.filesTouched),
+		filesSearched: finiteNumber(d.filesSearched),
 		limitReached: d.limitReached === true,
 		scopePath: str(d.scopePath),
 		fileReplacements,
 		parseErrors,
-		parseErrorsTotal: num(d.parseErrorsTotal),
+		parseErrorsTotal: finiteNumber(d.parseErrorsTotal),
 		displayContent: str(d.displayContent),
 	};
 }

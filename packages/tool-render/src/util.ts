@@ -10,14 +10,17 @@ import { collapseWhitespace } from "@veyyon/utils/collapse-whitespace";
 import { formatCount, truncate as truncateChars } from "@veyyon/utils/format";
 import { stringifyJsonSafe } from "@veyyon/utils/json";
 import { stripAnsi } from "@veyyon/utils/strip-ansi";
-import { isRecord } from "@veyyon/utils/type-guards";
-import { str } from "./scalars";
+import { finiteNumber, isRecord } from "@veyyon/utils/type-guards";
 import type { ToolResultImage, ToolResultLike } from "./types";
 
-export * from "./scalars";
 // Re-exported from the dependency-free type-guards subpath for the same
 // bundle-safety reason as stripAnsi above.
-export { formatCount, isRecord, stripAnsi };
+export { finiteNumber, formatCount, isRecord, stripAnsi };
+
+/** String passthrough; anything else (including null/undefined) → null. */
+export function str(value: unknown): string | null {
+	return typeof value === "string" ? value : null;
+}
 
 export function strList(value: unknown): string[] {
 	if (!Array.isArray(value)) return [];

@@ -9,7 +9,6 @@ export * from "./partial-tail";
 export * from "./parts";
 export * from "./registry";
 export * from "./StatusPill";
-export * from "./scalars";
 export * from "./ThemeToggle";
 export * from "./ToolView";
 export * from "./types";

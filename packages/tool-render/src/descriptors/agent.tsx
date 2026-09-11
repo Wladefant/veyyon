@@ -2,7 +2,7 @@ import { stripRecommendedSuffix } from "@veyyon/wire";
 import type { ReactNode } from "react";
 import { AgentLink, Badge, Badges, InvalidArg, Kv, KvGrid, Note, Output, ResultText, Row, type Tone } from "../parts";
 import type { ToolDescriptor, ToolRenderHost, ToolRenderProps } from "../types";
-import { argsDigest, detailsRecord, isRecord, keyed, normalizeWs, num, str, strList, truncate } from "../util";
+import { argsDigest, detailsRecord, finiteNumber, isRecord, keyed, normalizeWs, str, strList, truncate } from "../util";
 
 // ============================================================================
 // task
@@ -58,7 +58,7 @@ function fmtCount(n: number): string {
 
 function resultStatus(res: Record<string, unknown>): { label: string; tone: "ok" | "err" | "warn" } {
 	if (res.aborted === true) return { label: "aborted", tone: "err" };
-	if (num(res.exitCode) === 0) {
+	if (finiteNumber(res.exitCode) === 0) {
 		return str(res.error) ? { label: "merge failed", tone: "warn" } : { label: "done", tone: "ok" };
 	}
 	return { label: "failed", tone: "err" };
@@ -85,11 +85,11 @@ function AgentResult({ res, host }: { res: Record<string, unknown>; host?: ToolR
 	const id = str(res.id) ?? "agent";
 	const description = str(res.description);
 	const stats: string[] = [];
-	const tokens = num(res.tokens);
+	const tokens = finiteNumber(res.tokens);
 	if (tokens) stats.push(`${fmtCount(tokens)} tok`);
-	const requests = num(res.requests);
+	const requests = finiteNumber(res.requests);
 	if (requests) stats.push(`${requests} req`);
-	const durationMs = num(res.durationMs);
+	const durationMs = finiteNumber(res.durationMs);
 	if (durationMs != null) stats.push(fmtDuration(durationMs));
 	const model = str(res.resolvedModel);
 	if (model) stats.push(model);
@@ -144,11 +144,11 @@ function AgentProgressRow({ p, host }: { p: Record<string, unknown>; host?: Tool
 	const description = str(p.description);
 	const intent = str(p.lastIntent) ?? str(p.currentTool);
 	const bits: string[] = [];
-	const toolCount = num(p.toolCount);
+	const toolCount = finiteNumber(p.toolCount);
 	if (toolCount) bits.push(`${toolCount} tools`);
-	const tokens = num(p.tokens);
+	const tokens = finiteNumber(p.tokens);
 	if (tokens) bits.push(`${fmtCount(tokens)} tok`);
-	const durationMs = num(p.durationMs);
+	const durationMs = finiteNumber(p.durationMs);
 	if (durationMs) bits.push(fmtDuration(durationMs));
 	return (
 		<Row
@@ -187,7 +187,7 @@ function TaskBody({ args, result, host }: ToolRenderProps): ReactNode {
 			else if (label === "aborted") aborted++;
 			else failed++;
 		}
-		const total = details ? num(details.totalDurationMs) : null;
+		const total = details ? finiteNumber(details.totalDurationMs) : null;
 		footer = (
 			<Row>
 				{ok > 0 && <Badge tone="ok">{ok} succeeded</Badge>}{" "}
@@ -201,7 +201,11 @@ function TaskBody({ args, result, host }: ToolRenderProps): ReactNode {
 
 	const ordered = results
 		.slice()
-		.sort((a, b) => (num(a.durationMs) ?? 0) - (num(b.durationMs) ?? 0) || (num(a.index) ?? 0) - (num(b.index) ?? 0));
+		.sort(
+			(a, b) =>
+				(finiteNumber(a.durationMs) ?? 0) - (finiteNumber(b.durationMs) ?? 0) ||
+				(finiteNumber(a.index) ?? 0) - (finiteNumber(b.index) ?? 0),
+		);
 
 	return (
 		<>
@@ -308,7 +312,7 @@ function normalizeQuestions(raw: unknown): AskQuestion[] {
 			question: str(entry.question) ?? "",
 			options: normalizeOptions(entry.options),
 			multi: entry.multi === true,
-			recommended: num(entry.recommended) ?? undefined,
+			recommended: finiteNumber(entry.recommended) ?? undefined,
 		});
 	}
 	return out;
@@ -325,7 +329,7 @@ function questionsOf(args: Record<string, unknown>): AskQuestion[] {
 			question,
 			options: normalizeOptions(args.options),
 			multi: args.multi === true,
-			recommended: num(args.recommended) ?? undefined,
+			recommended: finiteNumber(args.recommended) ?? undefined,
 		},
 	];
 }
@@ -731,8 +735,8 @@ function screensOf(details: Record<string, unknown> | null): ScreenView[] {
 			cli: str(raw.cli),
 			state: str(raw.state),
 			model: str(raw.model),
-			turns: num(raw.turns),
-			queued: num(raw.queued),
+			turns: finiteNumber(raw.turns),
+			queued: finiteNumber(raw.queued),
 			turnMessage: str(raw.turnMessage),
 			currentTool: str(raw.currentTool),
 			lastIntent: str(raw.lastIntent),
@@ -963,9 +967,9 @@ function goalOf(details: Record<string, unknown> | null): GoalView | null {
 	return {
 		objective,
 		status,
-		tokenBudget: num(g.tokenBudget),
-		tokensUsed: num(g.tokensUsed),
-		timeUsedSeconds: num(g.timeUsedSeconds),
+		tokenBudget: finiteNumber(g.tokenBudget),
+		tokensUsed: finiteNumber(g.tokensUsed),
+		timeUsedSeconds: finiteNumber(g.timeUsedSeconds),
 	};
 }
 
@@ -1027,7 +1031,7 @@ function GoalSummary({ args, result }: ToolRenderProps): ReactNode {
 	const goal = goalOf(details);
 	const op = str(details?.op) ?? str(args.op);
 	const objective = goal?.objective ?? str(args.objective);
-	const budget = num(args.token_budget);
+	const budget = finiteNumber(args.token_budget);
 	return (
 		<>
 			{op === null && args.op !== undefined ? <InvalidArg what="op" /> : <span>{describeGoalOp(op)}</span>}
@@ -1045,7 +1049,7 @@ function GoalBody({ args, result }: ToolRenderProps): ReactNode {
 	const goal = goalOf(details);
 	const op = str(details?.op) ?? str(args.op);
 	const objective = goal?.objective ?? str(args.objective);
-	const budgetArg = num(args.token_budget);
+	const budgetArg = finiteNumber(args.token_budget);
 	const report = str(details?.completionBudgetReport);
 	const hasTokens = goal !== null && (goal.tokensUsed !== null || goal.tokenBudget !== null);
 	return (

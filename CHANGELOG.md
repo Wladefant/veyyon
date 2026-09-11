@@ -28,6 +28,7 @@
 - Removed the unused `inheritedAgentDir` keybinding option and `ohMyPiXAIUserAgent` alias; xAI requests continue to use `veyyonXAIUserAgent`.
 - Provider-specific test override setters are replaced by `setProviderModuleOverrideForTest(api, module)`.
 - `countLines`, `parseReadArgs`, `parseReadDetails`, `parseWriteArgs` and `parseWriteDetails` are `@veyyon/utils/fs-tool-args`; the package no longer exports them.
+- `num` is gone: the finite-number read is `finiteNumber` from `@veyyon/utils`, which `util` re-exports beside `isRecord`; `str` is defined in and exported from `util`, and the `scalars` module is removed.
 - `@veyyon/tui` exports rendering only. The string, escape, keyboard, mouse, motion and layout-math primitives it also carried are now `@veyyon/utils` modules, imported by subpath: `@veyyon/utils/{ansi,autocomplete,bar,bracketed-paste,deccara,fuzzy,keybindings,keys,kill-ring,kitty-graphics,latex-block,latex-unicode,loop-watchdog,motion,mouse,padding,paint-columns,paint-ground,paint-surface,sgr,symbols,tab-width,text-sizing,tight-mode,tmux,width,word-nav,wrap}`. The barrel re-exports none of them.
 - `MOTION` and the grow, hover, paint and settle curve tables are one module, `@veyyon/utils/motion`.
 - `EditorComponent` is `@veyyon/tui/components/editor-component`.

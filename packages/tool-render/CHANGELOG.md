@@ -7,6 +7,7 @@
 ### Breaking Changes
 
 - `countLines`, `parseReadArgs`, `parseReadDetails`, `parseWriteArgs` and `parseWriteDetails` are `@veyyon/utils/fs-tool-args`; the package no longer exports them.
+- `num` is gone: the finite-number read is `finiteNumber` from `@veyyon/utils`, which `util` re-exports beside `isRecord`; `str` is defined in and exported from `util`, and the `scalars` module is removed.
 
 ### Added
 

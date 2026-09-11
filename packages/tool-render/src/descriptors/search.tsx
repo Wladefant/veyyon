@@ -4,10 +4,10 @@ import { Badge, Badges, CodeBlock, InvalidArg, Kv, KvGrid, Note, Output, PathTex
 import type { ToolDescriptor, ToolRenderProps } from "../types";
 import {
 	detailsRecord,
+	finiteNumber,
 	isRecord,
 	keyed,
 	normalizeWs,
-	num,
 	resultTextOf,
 	scopePaths,
 	shortenPath,
@@ -28,9 +28,9 @@ function FileSearchSummary({ args }: ToolRenderProps): ReactNode {
 
 function FileSearchBody({ args, result }: ToolRenderProps): ReactNode {
 	const details = detailsRecord(result);
-	const limit = num(args.limit);
-	const fileCount = num(details?.fileCount);
-	const resultLimit = num(details?.resultLimitReached);
+	const limit = finiteNumber(args.limit);
+	const fileCount = finiteNumber(details?.fileCount);
+	const resultLimit = finiteNumber(details?.resultLimitReached);
 	const scopePath = str(details?.scopePath);
 	const error = str(details?.error);
 	const meta = details && isRecord(details.meta) ? details.meta : null;
@@ -80,7 +80,7 @@ function textArgBadges(args: Record<string, unknown>): ReactNode[] {
 	if (args.case === true) badges.push("case");
 	if (args.case === false) badges.push("no-case");
 	if (args.gitignore === false) badges.push("no-gitignore");
-	const skip = num(args.skip);
+	const skip = finiteNumber(args.skip);
 	if (skip !== null && skip > 0) badges.push(`skip=${skip}`);
 	return badges;
 }
@@ -104,8 +104,8 @@ function TextSearchSummary({ args }: ToolRenderProps): ReactNode {
 
 function TextSearchBody({ args, result }: ToolRenderProps): ReactNode {
 	const details = detailsRecord(result);
-	const matchCount = num(details?.matchCount);
-	const fileCount = num(details?.fileCount);
+	const matchCount = finiteNumber(details?.matchCount);
+	const fileCount = finiteNumber(details?.fileCount);
 	const truncated = details?.truncated === true;
 	const error = str(details?.error);
 	const missing: string[] = [];
@@ -162,19 +162,19 @@ function StructureSearchSummary({ args }: ToolRenderProps): ReactNode {
 function StructureSearchBody({ args, result }: ToolRenderProps): ReactNode {
 	const patterns = patternsOf(args);
 	const paths = scopePaths(args);
-	const skip = num(args.skip);
+	const skip = finiteNumber(args.skip);
 
 	const details = detailsRecord(result);
-	const matchCount = num(details?.matchCount);
-	const fileCount = num(details?.fileCount);
-	const filesSearched = num(details?.filesSearched);
+	const matchCount = finiteNumber(details?.matchCount);
+	const fileCount = finiteNumber(details?.fileCount);
+	const filesSearched = finiteNumber(details?.filesSearched);
 	const limitReached = details?.limitReached === true;
 	const scopePath = str(details?.scopePath);
 	const error = str(details?.error);
 	const parseErrors = Array.isArray(details?.parseErrors)
 		? details.parseErrors.filter((e): e is string => typeof e === "string")
 		: [];
-	const parseErrorsTotal = num(details?.parseErrorsTotal) ?? parseErrors.length;
+	const parseErrorsTotal = finiteNumber(details?.parseErrorsTotal) ?? parseErrors.length;
 
 	const argBadges: ReactNode[] = [skip !== null && skip > 0 && <Badge key="skip">skip:{skip}</Badge>];
 	const resultBadges: ReactNode[] =
@@ -304,13 +304,13 @@ function matchOf(value: unknown): Bm25Match | null {
 		label,
 		description: str(value.description) ?? "",
 		serverName: str(value.server_name ?? value.serverName),
-		score: num(value.score),
+		score: finiteNumber(value.score),
 	};
 }
 
 function SearchBm25Summary({ args, result }: ToolRenderProps): ReactNode {
 	const query = str(args.query);
-	const limit = num(args.limit);
+	const limit = finiteNumber(args.limit);
 	const details = detailsRecord(result);
 	const tools = details && Array.isArray(details.tools) ? details.tools : null;
 	return (
@@ -333,8 +333,8 @@ function SearchBm25Summary({ args, result }: ToolRenderProps): ReactNode {
 function SearchBm25Body({ args, result }: ToolRenderProps): ReactNode {
 	const details = detailsRecord(result);
 	const query = str(details?.query) ?? str(args.query);
-	const limit = num(details?.limit) ?? num(args.limit);
-	const totalTools = num(details?.total_tools);
+	const limit = finiteNumber(details?.limit) ?? finiteNumber(args.limit);
+	const totalTools = finiteNumber(details?.total_tools);
 	const activated = strList(details?.activated_tools);
 	const activeSelected = strList(details?.active_selected_tools);
 	const matches: Bm25Match[] = [];
@@ -401,7 +401,7 @@ function getDomain(url: string): string {
 }
 
 function formatAge(seconds: unknown): string {
-	const s = num(seconds);
+	const s = finiteNumber(seconds);
 	if (s === null || s < 0) return "";
 	const m = Math.floor(s / 60);
 	if (m < 60) return `${m}m ago`;
@@ -450,8 +450,8 @@ function SourceRow({ source, index }: { source: Record<string, unknown>; index: 
 function WebSearchBody({ args, result }: ToolRenderProps): ReactNode {
 	const query = str(args.query);
 	const recency = str(args.recency);
-	const limit = num(args.limit);
-	const numResults = num(args.num_search_results);
+	const limit = finiteNumber(args.limit);
+	const numResults = finiteNumber(args.num_search_results);
 
 	const details = detailsRecord(result);
 	const response = details && isRecord(details.response) ? details.response : null;
@@ -475,10 +475,10 @@ function WebSearchBody({ args, result }: ToolRenderProps): ReactNode {
 		response && isRecord(response.usage) ? response.usage : details && isRecord(details.usage) ? details.usage : null;
 	const usageParts: string[] = [];
 	if (usage) {
-		const inTok = num(usage.inputTokens);
-		const outTok = num(usage.outputTokens);
-		const totalTok = num(usage.totalTokens);
-		const searchReqs = num(usage.searchRequests);
+		const inTok = finiteNumber(usage.inputTokens);
+		const outTok = finiteNumber(usage.outputTokens);
+		const totalTok = finiteNumber(usage.totalTokens);
+		const searchReqs = finiteNumber(usage.searchRequests);
 		if (inTok !== null) usageParts.push(`in ${inTok}`);
 		if (outTok !== null) usageParts.push(`out ${outTok}`);
 		if (totalTok !== null) usageParts.push(`total ${totalTok}`);

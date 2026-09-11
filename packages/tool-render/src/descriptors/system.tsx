@@ -21,10 +21,10 @@ import {
 	argsDigest,
 	detailsRecord,
 	display,
+	finiteNumber,
 	isRecord,
 	keyed,
 	normalizeWs,
-	num,
 	replaceTabs,
 	resultTextOf,
 	shortenPath,
@@ -73,14 +73,14 @@ function BashBody({ args, result }: ToolRenderProps): ReactNode {
 	const command = args.command === undefined ? "…" : str(args.command);
 	const prefix = isRecord(args.env) ? envPrefix(args.env) : "";
 	const cwd = str(args.cwd);
-	const head = num(args.head);
-	const tail = num(args.tail);
+	const head = finiteNumber(args.head);
+	const tail = finiteNumber(args.tail);
 
 	const details = detailsRecord(result);
-	const exitCode = num(details?.exitCode);
-	const wallTimeMs = num(details?.wallTimeMs);
-	const timeoutSeconds = num(args.timeout) ?? num(details?.timeoutSeconds);
-	const requestedTimeoutSeconds = num(details?.requestedTimeoutSeconds);
+	const exitCode = finiteNumber(details?.exitCode);
+	const wallTimeMs = finiteNumber(details?.wallTimeMs);
+	const timeoutSeconds = finiteNumber(args.timeout) ?? finiteNumber(details?.timeoutSeconds);
+	const requestedTimeoutSeconds = finiteNumber(details?.requestedTimeoutSeconds);
 	const job = asyncDetailsOf(details);
 	const artifactId = ARTIFACT_NOTICE.exec(resultTextOf(result))?.[1] ?? null;
 
@@ -142,8 +142,8 @@ function sshTruncationOf(result: ToolRenderProps["result"]): SshTruncationInfo |
 	if (!isRecord(meta) || !isRecord(meta.truncation)) return null;
 	const t = meta.truncation;
 	return {
-		totalLines: num(t.totalLines),
-		outputLines: num(t.outputLines),
+		totalLines: finiteNumber(t.totalLines),
+		outputLines: finiteNumber(t.outputLines),
 		artifactId: str(t.artifactId),
 	};
 }
@@ -173,7 +173,7 @@ function SshBody({ args, result }: ToolRenderProps): ReactNode {
 	const host = str(args.host);
 	const command = str(args.command);
 	const cwd = str(args.cwd);
-	const timeout = num(args.timeout);
+	const timeout = finiteNumber(args.timeout);
 	const trunc = sshTruncationOf(result);
 	const stripped =
 		trunc !== null && result?.isError !== true ? stripSshTruncationNotice(resultTextOf(result).trim()) : null;
@@ -239,11 +239,11 @@ function daemonOf(value: unknown): Daemon | null {
 		name: str(value.name),
 		id: str(value.id),
 		state: str(value.state),
-		pid: num(value.pid),
-		exitCode: num(value.exitCode),
+		pid: finiteNumber(value.pid),
+		exitCode: finiteNumber(value.exitCode),
 		signal: str(value.signal),
 		exitReason: str(value.exitReason),
-		restartCount: num(value.restartCount),
+		restartCount: finiteNumber(value.restartCount),
 	};
 }
 
@@ -434,7 +434,7 @@ function jobOf(value: unknown): JobSnapshotLike | null {
 		type: str(value.type) ?? "",
 		status: str(value.status) ?? "",
 		label: str(value.label) ?? "",
-		durationMs: num(value.durationMs) ?? 0,
+		durationMs: finiteNumber(value.durationMs) ?? 0,
 		resultText: str(value.resultText) ?? "",
 		errorText: str(value.errorText) ?? "",
 	};
@@ -686,9 +686,9 @@ function snapshotOf(result: ToolResultLike | undefined): DebugSnapshot | null {
 		stopReason: str(s.stopReason),
 		frameName: str(s.frameName),
 		sourcePath: str(s.sourcePath),
-		line: num(s.line),
-		column: num(s.column),
-		exitCode: num(s.exitCode),
+		line: finiteNumber(s.line),
+		column: finiteNumber(s.column),
+		exitCode: finiteNumber(s.exitCode),
 		needsConfigurationDone: s.needsConfigurationDone === true,
 	};
 }
@@ -697,7 +697,7 @@ function DebugSummary(props: ToolRenderProps): ReactNode {
 	const { args } = props;
 	const program = str(args.program);
 	const file = str(args.file);
-	const line = num(args.line);
+	const line = finiteNumber(args.line);
 	const target = targetTextOf(args);
 	const action = str(args.action) ?? str(detailsRecord(props.result)?.action);
 	return (
@@ -718,7 +718,7 @@ function DebugBody(props: ToolRenderProps): ReactNode {
 	const { args, result } = props;
 	const program = str(args.program);
 	const file = str(args.file);
-	const line = num(args.line);
+	const line = finiteNumber(args.line);
 	const expression = str(args.expression);
 	const programArgs = Array.isArray(args.args) ? args.args.filter(a => typeof a === "string") : [];
 
@@ -1059,7 +1059,7 @@ function cellsFromArgs(args: Record<string, unknown>, name: string): EvalCell[] 
 		for (const item of raw) {
 			if (!isRecord(item)) continue;
 			const attrs: string[] = [];
-			const timeout = num(item.timeout);
+			const timeout = finiteNumber(item.timeout);
 			if (timeout !== null) attrs.push(`t=${timeout}s`);
 			if (item.reset === true) attrs.push("rst");
 			out.push({
@@ -1076,7 +1076,7 @@ function cellsFromArgs(args: Record<string, unknown>, name: string): EvalCell[] 
 	const code = str(args.code);
 	if (code !== null) {
 		const attrs: string[] = [];
-		const timeout = num(args.timeout);
+		const timeout = finiteNumber(args.timeout);
 		if (timeout !== null) attrs.push(`t=${timeout}s`);
 		if (args.reset === true) attrs.push("rst");
 		const lang = evalLangAlias(str(args.language) ?? undefined) ?? (name === "js" ? "js" : "py");
@@ -1105,14 +1105,14 @@ function detailCellsOf(details: Record<string, unknown> | null): DetailCell[] {
 		if (!isRecord(item)) continue;
 		const language = str(item.language);
 		out.push({
-			index: num(item.index) ?? i,
+			index: finiteNumber(item.index) ?? i,
 			title: str(item.title) ?? "",
 			code: str(item.code) ?? "",
 			lang: language !== null ? (evalLangAlias(language) ?? "py") : null,
 			output: str(item.output) ?? "",
 			status: str(item.status) ?? "",
-			durationMs: num(item.durationMs),
-			exitCode: num(item.exitCode),
+			durationMs: finiteNumber(item.durationMs),
+			exitCode: finiteNumber(item.exitCode),
 		});
 	}
 	return out;
@@ -1356,7 +1356,7 @@ function LocationRows({ text, rows }: { text: string; rows: LocRow[] }): ReactNo
 function LspSummary({ args }: ToolRenderProps): ReactNode {
 	const action = str(args.action);
 	const file = str(args.file);
-	const line = num(args.line);
+	const line = finiteNumber(args.line);
 	const symbol = str(args.symbol);
 	const query = str(args.query);
 	const newName = str(args.new_name);
@@ -1376,12 +1376,12 @@ function LspSummary({ args }: ToolRenderProps): ReactNode {
 function LspBody({ args, result }: ToolRenderProps): ReactNode {
 	const details = detailsRecord(result);
 	const file = str(args.file);
-	const line = num(args.line);
+	const line = finiteNumber(args.line);
 	const symbol = str(args.symbol);
 	const query = str(args.query);
 	const newName = str(args.new_name);
 	const apply = typeof args.apply === "boolean" ? args.apply : null;
-	const timeout = num(args.timeout);
+	const timeout = finiteNumber(args.timeout);
 	const payload = str(args.payload);
 	const serverName = details ? str(details.serverName) : null;
 	const action = str(args.action) ?? (details ? str(details.action) : null);
@@ -1515,9 +1515,9 @@ function BrowserBody({ args, result }: ToolRenderProps): ReactNode {
 	const url = details.url ?? str(args.url);
 	const browserDesc = describeBrowser(app, details);
 	const viewport = isRecord(args.viewport) ? args.viewport : null;
-	const vpWidth = viewport ? num(viewport.width) : null;
-	const vpHeight = viewport ? num(viewport.height) : null;
-	const vpScale = viewport ? num(viewport.scale) : null;
+	const vpWidth = viewport ? finiteNumber(viewport.width) : null;
+	const vpHeight = viewport ? finiteNumber(viewport.height) : null;
+	const vpScale = viewport ? finiteNumber(viewport.scale) : null;
 	const code = str(args.code);
 	return (
 		<>
@@ -1603,7 +1603,7 @@ function FetchSummary({ args, result }: ToolRenderProps): ReactNode {
 function FetchBody({ args, result }: ToolRenderProps): ReactNode {
 	const url = str(args.url) ?? str(args.path);
 	const method = (str(args.method) ?? "").toUpperCase();
-	const timeout = num(args.timeout);
+	const timeout = finiteNumber(args.timeout);
 	const details = fetchDetails(detailsRecord(result));
 	const redirected = Boolean(details?.finalUrl && details.url && details.finalUrl !== details.url);
 	return (
@@ -1637,12 +1637,12 @@ function Salient({ args }: { args: Record<string, unknown> }): ReactNode {
 	const repo = str(args.repo);
 	const owner = str(args.owner);
 	const fullRepo = repo && owner && !repo.includes("/") ? `${owner}/${repo}` : repo;
-	const n = num(args.pullNumber) ?? num(args.issueNumber);
+	const n = finiteNumber(args.pullNumber) ?? finiteNumber(args.issueNumber);
 	const title = str(args.title);
 	const head = str(args.head);
 	const base = str(args.base);
 	const branch = str(args.branch);
-	const runId = num(args.runId);
+	const runId = finiteNumber(args.runId);
 	const workflow = str(args.workflow);
 
 	const parts: { key: string; node: ReactNode }[] = [];
@@ -1729,7 +1729,7 @@ function RunBlock({ run }: { run: Record<string, unknown> }): ReactNode {
 	const sha = str(run.headSha);
 	if (branch) meta.push(branch);
 	else if (sha) meta.push(shortSha(sha));
-	const id = num(run.id);
+	const id = finiteNumber(run.id);
 	if (id !== null) meta.push(`#${id}`);
 	const conclusion = str(run.conclusion);
 	const status = str(run.status);
@@ -1749,9 +1749,9 @@ function RunBlock({ run }: { run: Record<string, unknown> }): ReactNode {
 			{jobs.map((job, index) => {
 				if (!isRecord(job)) return null;
 				const visual = jobVisual(job);
-				const duration = num(job.durationSeconds);
+				const duration = finiteNumber(job.durationSeconds);
 				return (
-					<Row key={num(job.id) ?? index}>
+					<Row key={finiteNumber(job.id) ?? index}>
 						<span className={visual.cls}>{visual.icon}</span> <span>{str(job.name) ?? "job"}</span>
 						{duration !== null && <span className="tv-faint"> {duration}s</span>}
 					</Row>
@@ -1765,7 +1765,7 @@ function WatchView({ watch }: { watch: Record<string, unknown> }): ReactNode {
 	const repo = str(watch.repo) ?? "";
 	const watching = str(watch.state) === "watching";
 	const run = isRecord(watch.run) ? watch.run : null;
-	const runId = run ? num(run.id) : null;
+	const runId = run ? finiteNumber(run.id) : null;
 	let header: string;
 	if (str(watch.mode) === "run" && runId !== null) {
 		header = `${watching ? "watching " : ""}run #${runId} on ${repo}`;
@@ -1789,15 +1789,15 @@ function WatchView({ watch }: { watch: Record<string, unknown> }): ReactNode {
 			{note && <div className="tv-faint">{note}</div>}
 			{runs.length === 0 && <div className="tv-faint">waiting for workflow runs…</div>}
 			{runs.map((item, index) => (
-				<RunBlock run={item} key={num(item.id) ?? index} />
+				<RunBlock run={item} key={finiteNumber(item.id) ?? index} />
 			))}
 			{keyed(
 				failedLogs.filter(isRecord),
-				entry => `${str(entry.jobName) ?? "job"}\u001f${num(entry.runId) ?? ""}`,
+				entry => `${str(entry.jobName) ?? "job"}\u001f${finiteNumber(entry.runId) ?? ""}`,
 			).map(({ key, item: entry }) => {
 				const jobName = str(entry.jobName) ?? "job";
 				const workflow = str(entry.workflowName);
-				const failedRunId = num(entry.runId);
+				const failedRunId = finiteNumber(entry.runId);
 				const context = workflow ?? "run";
 				const title = `${jobName} — ${context}${failedRunId !== null ? ` #${failedRunId}` : ""}`;
 				const tail = str(entry.tail);
@@ -1819,7 +1819,7 @@ function CheckoutRows({ checkouts }: { checkouts: readonly unknown[] }): ReactNo
 		<div className="tv-list">
 			{checkouts.map((entry, index) => {
 				if (!isRecord(entry)) return null;
-				const prNumber = num(entry.prNumber);
+				const prNumber = finiteNumber(entry.prNumber);
 				const worktree = str(entry.worktreePath);
 				return (
 					<Row k={prNumber !== null ? `#${prNumber}` : "PR"} key={prNumber ?? index}>

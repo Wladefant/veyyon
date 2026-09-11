@@ -24,11 +24,11 @@ import {
 import type { ToolDescriptor, ToolRenderProps } from "../types";
 import {
 	detailsRecord,
+	finiteNumber,
 	isRecord,
 	keyed,
 	languageFromPath,
 	normalizeWs,
-	num,
 	shortenPath,
 	str,
 	strList,
@@ -212,7 +212,7 @@ function fileEntry(d: Record<string, unknown>): FileEntry {
 	return {
 		path: str(d.path),
 		diff: str(d.diff),
-		firstChangedLine: num(d.firstChangedLine),
+		firstChangedLine: finiteNumber(d.firstChangedLine),
 		op: str(d.op),
 		move: str(d.move),
 		isError: d.isError === true,
@@ -386,7 +386,7 @@ function readChange({ result }: ToolRenderProps): RuleChange {
 		cwd: details ? str(details.cwd) : null,
 		applied: strList(details?.rulesApplied),
 		dropped: strList(details?.rulesDropped),
-		unchanged: details ? num(details.rulesUnchanged) : null,
+		unchanged: details ? finiteNumber(details.rulesUnchanged) : null,
 	};
 }
 
