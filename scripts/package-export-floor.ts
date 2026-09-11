@@ -2,12 +2,24 @@
  * The public-export floor `a-package-exports-its-public-surface.test.ts` reads and
  * `gen-package-exports-baseline.ts` regenerates: one sorted name list per published specifier.
  * The floor only grows. The generator refuses a current surface that drops a specifier or a name.
+ *
+ * The natives version sentinel (`__veyyonNativesV1_4_1`) is the one export whose name changes on
+ * every release, so a floor that pinned it would shrink on every bump. It is not a floor member: the
+ * generator drops it and the reader rejects a baseline that holds one. The native bucket pins the
+ * sentinel against the package version instead.
  */
 
 import { assertObject, isStringArray, sortRecordArrays } from "./ledger-schema";
 
-export const EXPORT_FLOOR_SCHEMA_VERSION = 3;
+export const EXPORT_FLOOR_SCHEMA_VERSION = 4;
 export const BASELINE_FILE_PATH = "scripts/package-exports-baseline.json";
+
+const VERSION_SENTINEL = /^__veyyonNativesV\d/;
+
+/** True for the natives version sentinel export, which no floor may pin. */
+export function isVersionSentinelExport(name: string): boolean {
+	return VERSION_SENTINEL.test(name);
+}
 
 export interface ExportFloorLedger {
 	readonly schemaVersion: number;
@@ -27,6 +39,12 @@ export function readExportFloor(raw: unknown): Record<string, string[]> {
 	for (const [specifier, names] of Object.entries(entries)) {
 		if (!isStringArray(names) || names.some(name => !IDENTIFIER.test(name))) {
 			throw new Error(`Export floor for ${specifier} must be a list of distinct identifier names`);
+		}
+		const sentinel = names.find(isVersionSentinelExport);
+		if (sentinel !== undefined) {
+			throw new Error(
+				`Export floor for ${specifier} pins the version sentinel ${sentinel}, which moves on every release; regenerate the export baseline`,
+			);
 		}
 	}
 	return sortRecordArrays(entries as Record<string, string[]>);
@@ -62,7 +80,9 @@ export function computeExportFloorLedger(
 	}
 	const merged: Record<string, string[]> = {};
 	for (const [specifier, currentNames] of Object.entries(currentSurface)) {
-		merged[specifier] = [...new Set([...(floor[specifier] ?? []), ...currentNames])];
+		merged[specifier] = [
+			...new Set([...(floor[specifier] ?? []), ...currentNames.filter(name => !isVersionSentinelExport(name))]),
+		];
 	}
 	return { schemaVersion: EXPORT_FLOOR_SCHEMA_VERSION, exports: sortRecordArrays(merged) };
 }

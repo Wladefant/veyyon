@@ -3,8 +3,10 @@
  * holds every published specifier to. The floor may only grow: the generator refuses a surface
  * that dropped a specifier or a name, and the reader refuses a file it cannot trust.
  *
- * WHAT THIS CLOSES: a regenerated baseline that silently lowered the floor, and a stale or
- * malformed baseline read as an empty floor (which would make the runtime gate pass vacuously).
+ * WHAT THIS CLOSES: a regenerated baseline that silently lowered the floor, a stale or malformed
+ * baseline read as an empty floor (which would make the runtime gate pass vacuously), and a floor
+ * that pinned the natives version sentinel, which the release bump renames and which then reads as a
+ * shrunk surface on the first run after every cut.
  *
  * WHAT IT DOES NOT CATCH: whether the committed floor matches the current surface; the runtime
  * gate imports every specifier for that.
@@ -62,6 +64,20 @@ describe("an export floor only grows", () => {
 		expect(readExportFloor(next)).toEqual(next.exports);
 	});
 
+	it("leaves the natives version sentinel out of the floor, so a release bump does not shrink it", () => {
+		const next = computeExportFloorLedger(FLOOR, {
+			"@veyyon/x": ["alpha", "beta", "__veyyonNativesV1_4_1"],
+			"@veyyon/x/sub": ["gamma"],
+		});
+		expect(next.exports["@veyyon/x"]).toEqual(["alpha", "beta"]);
+		// A helper export that shares the prefix but not the version shape stays a floor member.
+		const helper = computeExportFloorLedger(FLOOR, {
+			"@veyyon/x": ["alpha", "beta", "__veyyonInstallTokioRuntime"],
+			"@veyyon/x/sub": ["gamma"],
+		});
+		expect(helper.exports["@veyyon/x"]).toEqual(["__veyyonInstallTokioRuntime", "alpha", "beta"]);
+	});
+
 	it.each([
 		["unversioned", { exports: FLOOR }],
 		["stale version", { schemaVersion: 2, exports: FLOOR }],
@@ -70,6 +86,10 @@ describe("an export floor only grows", () => {
 		["duplicate name", { schemaVersion: EXPORT_FLOOR_SCHEMA_VERSION, exports: { "@veyyon/x": ["a", "a"] } }],
 		["non-identifier", { schemaVersion: EXPORT_FLOOR_SCHEMA_VERSION, exports: { "@veyyon/x": ["not a name"] } }],
 		["non-string name", { schemaVersion: EXPORT_FLOOR_SCHEMA_VERSION, exports: { "@veyyon/x": [1] } }],
+		[
+			"version-sentinel-pinning",
+			{ schemaVersion: EXPORT_FLOOR_SCHEMA_VERSION, exports: { "@veyyon/x": ["__veyyonNativesV1_4_0", "a"] } },
+		],
 	])("rejects a %s baseline instead of reading an empty floor", (_label, raw) => {
 		expect(() => readExportFloor(raw)).toThrow();
 	});

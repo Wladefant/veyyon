@@ -1,5 +1,5 @@
 {
-	"schemaVersion": 3,
+	"schemaVersion": 4,
 	"exports": {
 		"@veyyon/agent-core": [
 			"AGGRESSIVE_SHAKE_CONFIG",
@@ -3445,7 +3445,6 @@
 			"PtySession",
 			"Shell",
 			"__veyyonInstallTokioRuntime",
-			"__veyyonNativesV1_4_0",
 			"astEdit",
 			"astGrep",
 			"astMatch",
