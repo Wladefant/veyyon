@@ -1,6 +1,12 @@
 import { formatCount } from "@veyyon/utils/format";
+import {
+	countLines,
+	parseReadArgs,
+	parseReadDetails,
+	parseWriteArgs,
+	parseWriteDetails,
+} from "@veyyon/utils/fs-tool-args";
 import type { ReactNode } from "react";
-import { countLines, parseReadArgs, parseReadDetails, parseWriteArgs, parseWriteDetails } from "../fs-semantics";
 import {
 	Badge,
 	Badges,

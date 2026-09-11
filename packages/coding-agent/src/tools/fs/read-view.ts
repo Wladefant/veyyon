@@ -16,8 +16,8 @@
  */
 
 import * as path from "node:path";
-import { parseReadArgs, parseReadDetails } from "@veyyon/tool-render/fs-semantics";
 import { formatCount } from "@veyyon/utils/format";
+import { parseReadArgs, parseReadDetails } from "@veyyon/utils/fs-tool-args";
 import { hasUrlScheme } from "@veyyon/utils/url";
 import type {
 	FramedBlockView,

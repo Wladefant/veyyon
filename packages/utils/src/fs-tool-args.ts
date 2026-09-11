@@ -1,6 +1,14 @@
-import { splitReadSelector } from "@veyyon/utils/read-selector";
-import { isRecord } from "@veyyon/utils/type-guards";
-import { num, str } from "./scalars";
+/**
+ * What a `read` or `write` tool call and its result state, parsed once for every host that draws
+ * the card.
+ *
+ * The terminal view, the HTML export and the collab client each read the same argument and detail
+ * shapes; this module is the one owner of that reading. It sits here rather than beside the React
+ * renderers because the terminal evaluates it at startup, and a host that draws no React must not
+ * evaluate the package that does.
+ */
+import { splitReadSelector } from "./read-selector";
+import { finiteNumber, getStringProperty, isRecord } from "./type-guards";
 
 /**
  * Allocation-free line counter for text.
@@ -32,18 +40,18 @@ export function parseReadArgs(args: unknown): ParsedReadArgs {
 	if (!isRecord(args)) {
 		return { rawPath: "", path: "", sel: null, from: null, to: null, rangeSuffix: "" };
 	}
-	const rawPath = str(args.path) ?? str(args.file_path) ?? "";
+	const rawPath = getStringProperty(args, "path") ?? getStringProperty(args, "file_path") ?? "";
 	const split = splitReadSelector(rawPath);
-	const sel = str(args.sel) ?? split.sel ?? null;
-	const offset = num(args.offset);
-	const limit = num(args.limit);
+	const sel = getStringProperty(args, "sel") ?? split.sel ?? null;
+	const offset = finiteNumber(args.offset);
+	const limit = finiteNumber(args.limit);
 	const from = offset !== null || limit !== null ? (offset ?? 1) : null;
 	const to = from !== null && limit !== null ? from + limit - 1 : null;
 
 	let rangeSuffix = "";
 	if (args.offset !== undefined || args.limit !== undefined) {
-		const startLine = args.offset !== undefined ? (num(args.offset) ?? 1) : 1;
-		const endLine = args.limit === undefined ? "" : `-${startLine + (num(args.limit) ?? 0) - 1}`;
+		const startLine = args.offset !== undefined ? (finiteNumber(args.offset) ?? 1) : 1;
+		const endLine = args.limit === undefined ? "" : `-${startLine + (finiteNumber(args.limit) ?? 0) - 1}`;
 		rangeSuffix = `:${startLine}${endLine}`;
 	}
 
@@ -84,13 +92,13 @@ export function parseReadDetails(details: unknown): ParsedReadDetails {
 	const trunc = isRecord(details.truncation) ? details.truncation : null;
 
 	return {
-		resolvedPath: str(details.resolvedPath),
-		suffixTo: suffix ? str(suffix.to) : null,
-		suffixFrom: suffix ? str(suffix.from) : null,
-		elidedSpans: summary ? num(summary.elidedSpans) : null,
-		conflictCount: num(details.conflictCount),
+		resolvedPath: getStringProperty(details, "resolvedPath") ?? null,
+		suffixTo: suffix ? (getStringProperty(suffix, "to") ?? null) : null,
+		suffixFrom: suffix ? (getStringProperty(suffix, "from") ?? null) : null,
+		elidedSpans: summary ? finiteNumber(summary.elidedSpans) : null,
+		conflictCount: finiteNumber(details.conflictCount),
 		truncated: trunc !== null,
-		totalLines: trunc ? num(trunc.totalLines) : null,
+		totalLines: trunc ? finiteNumber(trunc.totalLines) : null,
 	};
 }
 
@@ -108,13 +116,12 @@ export function parseWriteArgs(args: unknown): ParsedWriteArgs {
 	if (!isRecord(args)) {
 		return { path: null, content: null, isValidContent: false };
 	}
-	const path = str(args.path) ?? str(args.file_path);
-	const isString = typeof args.content === "string";
-	const content = isString ? (args.content as string) : null;
+	const path = getStringProperty(args, "path") ?? getStringProperty(args, "file_path") ?? null;
+	const content = getStringProperty(args, "content") ?? null;
 	return {
 		path,
 		content,
-		isValidContent: isString,
+		isValidContent: content !== null,
 	};
 }
 
@@ -145,10 +152,10 @@ export function parseWriteDetails(details: unknown): ParsedWriteDetails {
 				if (typeof m === "string") messages.push(m);
 			}
 		}
-		const summary = str(d.summary);
+		const summary = getStringProperty(d, "summary") ?? null;
 		if (messages.length > 0 || summary !== null) {
 			diagnostics = {
-				server: str(d.server),
+				server: getStringProperty(d, "server") ?? null,
 				messages,
 				summary,
 				errored: d.errored === true,

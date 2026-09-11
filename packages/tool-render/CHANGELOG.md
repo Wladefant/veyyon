@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- `countLines`, `parseReadArgs`, `parseReadDetails`, `parseWriteArgs` and `parseWriteDetails` are `@veyyon/utils/fs-tool-args`; the package no longer exports them.
+
 ### Added
 
 - Added a `vibe` renderer covering `vibe_spawn`, `vibe_send`, `vibe_wait`, `vibe_kill` and `vibe_list`, so a non-terminal host draws screen state, per-op summaries and output tails instead of raw JSON.

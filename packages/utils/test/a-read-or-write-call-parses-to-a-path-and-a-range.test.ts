@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { countLines, parseReadArgs, parseReadDetails, parseWriteArgs, parseWriteDetails } from "../src/fs-semantics";
+import { countLines, parseReadArgs, parseReadDetails, parseWriteArgs, parseWriteDetails } from "../src/fs-tool-args";
 
 describe("a read or write call parses to a path and a range", () => {
 	describe("countLines", () => {

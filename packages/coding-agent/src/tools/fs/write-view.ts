@@ -9,8 +9,8 @@
  */
 
 import { Ellipsis } from "@veyyon/natives";
-import { countLines, parseWriteArgs, parseWriteDetails } from "@veyyon/tool-render/fs-semantics";
 import { formatCount } from "@veyyon/utils/format";
+import { countLines, parseWriteArgs, parseWriteDetails } from "@veyyon/utils/fs-tool-args";
 import { replaceTabs } from "@veyyon/utils/tab-width";
 import type {
 	FramedBlockView,

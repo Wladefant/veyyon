@@ -3,7 +3,6 @@
  * Host shells (`element.tsx` / `standalone.tsx`) stay in coding-agent and collab-web.
  */
 
-export * from "./fs-semantics";
 export * from "./generic";
 export * from "./JsonBlock";
 export * from "./partial-tail";
