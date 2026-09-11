@@ -400,6 +400,39 @@ export function workspacePackages(repoRoot: string = REPO_ROOT): WorkspacePackag
 	return out;
 }
 
+/**
+ * Map from declared package name to member directory path, read fresh from disk on each invocation.
+ */
+export function packageDirectories(repoRoot: string = REPO_ROOT): Map<string, string> {
+	const dirs = new Map<string, string>();
+	for (const member of typeScriptMembersOf(repoRoot)) {
+		const manifestPath = join(repoRoot, member, "package.json");
+		if (!existsSync(manifestPath)) continue;
+		try {
+			const data = JSON.parse(readFileSync(manifestPath, "utf-8")) as { name?: unknown };
+			if (typeof data.name === "string") dirs.set(data.name, join(repoRoot, member));
+		} catch {}
+	}
+	return dirs;
+}
+
+let workspaceDirectoriesByRepo: Map<string, Map<string, string>> | undefined;
+
+/**
+ * Resolves the directory of a TypeScript workspace package by its manifest name, cached per repository root.
+ */
+export function memberDirectoryOf(packageName: string, repoRoot: string = REPO_ROOT): string | undefined {
+	if (workspaceDirectoriesByRepo === undefined) {
+		workspaceDirectoriesByRepo = new Map();
+	}
+	let dirs = workspaceDirectoriesByRepo.get(repoRoot);
+	if (dirs === undefined) {
+		dirs = packageDirectories(repoRoot);
+		workspaceDirectoriesByRepo.set(repoRoot, dirs);
+	}
+	return dirs.get(packageName);
+}
+
 export interface WorkspaceManifestEntry {
 	readonly rel: string;
 	readonly manifest: Record<string, unknown>;

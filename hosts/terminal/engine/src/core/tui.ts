@@ -1263,8 +1263,8 @@ export class TUI extends Container {
 		component.setIgnoreTight?.(true);
 		const entry = { component, options, preFocus: this.#focusedComponent, hidden: false, exiting: false };
 		this.#overlays.push(entry);
-		// Only focus if overlay is actually visible
-		if (this.#overlays.isVisible(entry)) {
+		// Display-only overlays leave focus on the underlying interactive surface.
+		if (this.#overlays.isInteractive(entry)) {
 			this.setFocus(component);
 		}
 		this.terminal.hideCursor();
@@ -1312,8 +1312,8 @@ export class TUI extends Container {
 						this.#restoreFocusAfterOverlay(entry.preFocus);
 					}
 				} else {
-					// Restore focus to this overlay when showing (if it's actually visible)
-					if (this.#overlays.isVisible(entry)) {
+					// Display-only overlays also leave focus unchanged when shown again.
+					if (this.#overlays.isInteractive(entry)) {
 						this.setFocus(component);
 					}
 				}
@@ -1835,12 +1835,7 @@ export class TUI extends Container {
 			const now = this.#renderScheduler.now();
 			if (now < this.#postFullPaintSettleUntilMs) {
 				if (this.#postFullPaintSettleTimer === undefined) {
-					this.#postFullPaintSettleTimer = this.#renderScheduler.scheduleRender(() => {
-						this.#postFullPaintSettleTimer = undefined;
-						this.#postFullPaintSettleUntilMs = 0;
-						if (this.#stopped) return;
-						this.#requestOrdinaryRender();
-					}, this.#postFullPaintSettleUntilMs - now);
+					this.#schedulePostFullPaintSettle(this.#postFullPaintSettleUntilMs - now);
 				}
 				return;
 			}
@@ -1977,29 +1972,35 @@ export class TUI extends Container {
 			this.#renderTimer.cancel();
 			this.#renderTimer = undefined;
 		}
-		if (this.#postFullPaintSettleTimer) {
-			this.#postFullPaintSettleTimer.cancel();
-			this.#postFullPaintSettleTimer = undefined;
-		}
+		this.#cancelPostFullPaintSettleTimer();
 		if (hadPendingRender) {
 			// Replay the absorbed request via the trailing settle timer so the
 			// caller's render still happens — just deferred to the end of the
 			// window. Subsequent `requestRender(false)` calls during the
 			// settle see this timer and fold into it (existing gate at L1263).
-			this.#postFullPaintSettleTimer = this.#renderScheduler.scheduleRender(() => {
-				this.#postFullPaintSettleTimer = undefined;
-				this.#postFullPaintSettleUntilMs = 0;
-				if (this.#stopped) return;
-				this.#requestOrdinaryRender();
-			}, TUI.#CONPTY_POST_FULL_PAINT_SETTLE_MS);
+			this.#schedulePostFullPaintSettle(TUI.#CONPTY_POST_FULL_PAINT_SETTLE_MS);
 		}
 	}
 
-	#clearPostFullPaintSettle(): void {
+	/** Arm the one trailing render that closes the settle window after `delayMs`. */
+	#schedulePostFullPaintSettle(delayMs: number): void {
+		this.#postFullPaintSettleTimer = this.#renderScheduler.scheduleRender(() => {
+			this.#postFullPaintSettleTimer = undefined;
+			this.#postFullPaintSettleUntilMs = 0;
+			if (this.#stopped) return;
+			this.#requestOrdinaryRender();
+		}, delayMs);
+	}
+
+	#cancelPostFullPaintSettleTimer(): void {
 		if (this.#postFullPaintSettleTimer) {
 			this.#postFullPaintSettleTimer.cancel();
 			this.#postFullPaintSettleTimer = undefined;
 		}
+	}
+
+	#clearPostFullPaintSettle(): void {
+		this.#cancelPostFullPaintSettleTimer();
 		this.#postFullPaintSettleUntilMs = 0;
 	}
 
@@ -2163,7 +2164,8 @@ export class TUI extends Container {
 		// Ctrl+C/Esc use app-level double-press windows. Give those gestures one
 		// frame to drain queued input before an ordinary repaint; delaying every
 		// key would make idle navigation pay a full frame of latency.
-		if (matchesKey(data, "ctrl+c") || matchesKey(data, "escape")) {
+		const c0 = data.charCodeAt(0);
+		if ((c0 === 3 || c0 === 27) && (matchesKey(data, "ctrl+c") || matchesKey(data, "escape"))) {
 			this.#inputRenderGraceUntilMs = this.#renderScheduler.now() + TUI.#INPUT_RENDER_GRACE_MS;
 		}
 		if (this.#inputListeners.size > 0) {
@@ -2295,7 +2297,7 @@ export class TUI extends Container {
 		}
 
 		// Global debug key handler (Shift+Ctrl+D)
-		if (matchesKey(data, "shift+ctrl+d") && this.onDebug) {
+		if (this.onDebug && matchesKey(data, "shift+ctrl+d")) {
 			this.onDebug();
 			return;
 		}
@@ -2641,7 +2643,7 @@ export class TUI extends Container {
 			// byte for byte. Nothing in history changed and nothing is duplicated,
 			// so the erase-and-replay this used to request repaints the whole
 			// screen on every frame of a live turn — a strobe, and it is the reason
-			// a tall todo list or a busy subagent HUD makes the screen flash.
+			// a tall todo list or a busy agent HUD makes the screen flash.
 			// Rebase the index either way (rows the frame no longer draws are not
 			// committed), but report a resync ONLY when the surviving rows really
 			// disagree with the record, which is the duplicate-block case this
@@ -2794,7 +2796,7 @@ export class TUI extends Container {
 			// history; the next frame's audit reads that as a prefix violation and
 			// repairs it by erasing native scrollback and replaying the whole
 			// transcript, on every frame of the turn. That is the screen strobing,
-			// and a tall todo list or a busy subagent HUD is all it takes: once the
+			// and a tall todo list or a busy agent HUD is all it takes: once the
 			// pinned chrome outgrows the viewport, `frameLength - height` lands
 			// inside the live band. Freeze commits for such a frame — the window
 			// still paints in place, and the only rows that miss native scrollback
@@ -3037,7 +3039,7 @@ export class TUI extends Container {
 	 * Frame row where HISTORY ends. Root children that implement the native
 	 * scrollback contract are the transcript — the only rows that belong in the
 	 * terminal's own scrollback. Anything mounted after the last of them is
-	 * chrome: a todo or subagent HUD, the composer, the status line. Chrome
+	 * chrome: a todo or agent HUD, the composer, the status line. Chrome
 	 * rewrites itself every frame, so a chrome row that reached the committed
 	 * prefix is a prefix violation waiting to happen, and the repair for that is
 	 * an erase-and-replay of the whole screen.

@@ -16,6 +16,7 @@
  */
 
 import * as path from "node:path";
+import { parseReadArgs, parseReadDetails } from "@veyyon/tool-render/fs-semantics";
 import { formatCount } from "@veyyon/utils/format";
 import { hasUrlScheme } from "@veyyon/utils/url";
 import type {
@@ -100,10 +101,7 @@ function firstSelectorLine(sel: string | undefined): number | undefined {
 
 /** The range an `offset`/`limit` pair names, as the selector suffix a reader recognises. */
 function rangeSuffix(args: ReadRenderArgs | undefined): string {
-	if (args?.offset === undefined && args?.limit === undefined) return "";
-	const startLine = args.offset ?? 1;
-	const endLine = args.limit === undefined ? "" : `-${startLine + args.limit - 1}`;
-	return `:${startLine}${endLine}`;
+	return parseReadArgs(args).rangeSuffix;
 }
 
 /**
@@ -190,13 +188,13 @@ function header(
  */
 function resultMeta(details: ReadToolDetails | undefined): ViewLine[] {
 	const meta: ViewLine[] = [];
-	const suffix = details?.suffixResolution;
-	if (suffix) meta.push([{ text: `corrected from ${shortenPath(suffix.from)}`, tone: "dim" }]);
-	if (details?.summary) {
-		meta.push([{ text: `summary: ${formatCount("elided span", details.summary.elidedSpans)}` }]);
+	const d = parseReadDetails(details);
+	if (d.suffixFrom) meta.push([{ text: `corrected from ${shortenPath(d.suffixFrom)}`, tone: "dim" }]);
+	if (d.elidedSpans !== null) {
+		meta.push([{ text: `summary: ${formatCount("elided span", d.elidedSpans)}` }]);
 	}
-	if (details?.conflictCount !== undefined && details.conflictCount > 0) {
-		meta.push([{ text: `warn ${formatCount("conflict", details.conflictCount)}`, tone: "warning" }]);
+	if (d.conflictCount !== null && d.conflictCount > 0) {
+		meta.push([{ text: `warn ${formatCount("conflict", d.conflictCount)}`, tone: "warning" }]);
 	}
 	return meta;
 }

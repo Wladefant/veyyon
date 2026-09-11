@@ -16,7 +16,7 @@ declare_backend!(
 
 #[cfg(target_os = "macos")]
 mod imp {
-	use std::{ffi::CString, fs, os::unix::ffi::OsStrExt};
+	use std::{ffi::CString, fs, os::unix::ffi::OsStrExt, path::Path};
 
 	use crate::{IsoError, IsoResult, ProbeResult, canonical_existing_dir};
 
@@ -72,6 +72,7 @@ mod imp {
 			))),
 		}
 	}
+
 
 	fn to_cstring(bytes: &[u8], label: &str) -> IsoResult<CString> {
 		CString::new(bytes)

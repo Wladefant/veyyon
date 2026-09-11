@@ -691,4 +691,4 @@ thumb) and the attributes the terminal presents, through
 `VirtualTerminal#getViewportRowFaintColumns`. A byte assertion alone would still
 pass if a later reset in the same row cancelled the dim.
 
-*Verified against `9c904aa2db` on 2026-09-05.*
+*Verified against `46980a2485` on 2026-09-11.*

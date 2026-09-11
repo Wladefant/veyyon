@@ -1,19 +1,24 @@
 import { AI_PROMPTS } from "../prompts/registry";
-import type { ToolCall } from "../types";
-import { emitBestEffortToolEnd, mintToolCallId, parseNamedToolCall, partialSuffixOverlapAny } from "./coercion";
-import { chatMlTranscriptRenderer, renderThinkTags, renderToolResponseResults, stringifyJson } from "./rendering";
-import type {
-	DialectDefinition,
-	DialectRenderOptions,
-	InbandScanEvent,
-	InbandScanner,
-	InbandScannerOptions,
-} from "./types";
+import {
+	emitBestEffortToolEnd,
+	emitClosedToolCall,
+	mintToolCallId,
+	scanOutsideText,
+	scanThinkingText,
+	ThinkingSection,
+} from "./coercion";
+import {
+	chatMlTranscriptRenderer,
+	renderJsonAssistantToolCalls,
+	renderJsonToolCall,
+	renderThinkTags,
+	renderToolResponseResults,
+} from "./rendering";
+import type { DialectDefinition, InbandScanEvent, InbandScanner, InbandScannerOptions } from "./types";
 import { THINK_CLOSE, THINK_OPEN, TOOL_CALL_CLOSE, TOOL_CALL_OPEN } from "./wire-tags";
 
 const TOOL_START_TAGS = [TOOL_CALL_OPEN] as const;
 const START_TAGS = [TOOL_CALL_OPEN, THINK_OPEN] as const;
-const THINK_CLOSE_TAGS = [THINK_CLOSE] as const;
 const COMPLETE_NAME = /^\s*\{\s*"name"\s*:\s*("(?:\\.|[^"\\])*")/;
 
 type State = "outside" | "thinking" | "tool";
@@ -24,7 +29,7 @@ class Qwen3InbandScanner implements InbandScanner {
 	#id = "";
 	#name = "";
 	#started = false;
-	#thinking = "";
+	readonly #thinking = new ThinkingSection();
 	readonly #parseThinking: boolean;
 
 	constructor(options: InbandScannerOptions = {}) {
@@ -64,34 +69,16 @@ class Qwen3InbandScanner implements InbandScanner {
 	}
 
 	#consumeOutside(final: boolean, events: InbandScanEvent[]): void {
-		const tool = this.#buffer.indexOf(TOOL_CALL_OPEN);
-		const think = this.#parseThinking ? this.#buffer.indexOf(THINK_OPEN) : -1;
-		let start = tool;
-		let isThink = false;
-		if (think !== -1 && (start === -1 || think < start)) {
-			start = think;
-			isThink = true;
-		}
-
-		if (start === -1) {
-			const tags = this.#parseThinking ? START_TAGS : TOOL_START_TAGS;
-			const hold = final ? 0 : partialSuffixOverlapAny(this.#buffer, tags);
-			const emit = this.#buffer.slice(0, this.#buffer.length - hold);
-			if (emit.length > 0) events.push({ type: "text", text: emit });
-			this.#buffer = this.#buffer.slice(this.#buffer.length - hold);
-			return;
-		}
-
-		if (start > 0) events.push({ type: "text", text: this.#buffer.slice(0, start) });
-		if (isThink) {
-			this.#buffer = this.#buffer.slice(start + THINK_OPEN.length);
+		const tags = this.#parseThinking ? START_TAGS : TOOL_START_TAGS;
+		const { buffer, tag } = scanOutsideText(this.#buffer, tags, final, events);
+		this.#buffer = buffer;
+		if (tag === null) return;
+		if (tag === THINK_OPEN) {
 			this.#state = "thinking";
-			this.#thinking = "";
-			events.push({ type: "thinkingStart" });
+			this.#thinking.start(events);
 			return;
 		}
 
-		this.#buffer = this.#buffer.slice(start + TOOL_CALL_OPEN.length);
 		this.#state = "tool";
 		this.#id = mintToolCallId();
 		this.#name = "";
@@ -99,19 +86,9 @@ class Qwen3InbandScanner implements InbandScanner {
 	}
 
 	#consumeThinking(final: boolean, events: InbandScanEvent[]): void {
-		const close = this.#buffer.indexOf(THINK_CLOSE);
-		if (close === -1) {
-			const hold = final ? 0 : partialSuffixOverlapAny(this.#buffer, THINK_CLOSE_TAGS);
-			const delta = this.#buffer.slice(0, this.#buffer.length - hold);
-			this.#emitThinkingDelta(delta, events);
-			this.#buffer = this.#buffer.slice(this.#buffer.length - hold);
-			if (final) this.#endThinking(events);
-			return;
-		}
-
-		this.#emitThinkingDelta(this.#buffer.slice(0, close), events);
-		this.#buffer = this.#buffer.slice(close + THINK_CLOSE.length);
-		this.#endThinking(events);
+		const { buffer, closed } = scanThinkingText(this.#buffer, THINK_CLOSE, final, this.#thinking, events);
+		this.#buffer = buffer;
+		if (closed) this.#state = "outside";
 	}
 
 	#consumeTool(final: boolean, events: InbandScanEvent[]): void {
@@ -129,19 +106,14 @@ class Qwen3InbandScanner implements InbandScanner {
 			return;
 		}
 
-		const parsed = parseNamedToolCall(body);
-		const rawBlock = `${TOOL_CALL_OPEN}${body}${TOOL_CALL_CLOSE}`;
-		if (parsed) {
-			if (!this.#started) {
-				events.push({ type: "toolStart", id: this.#id, name: parsed.name });
-				this.#started = true;
-			}
-			events.push({ type: "toolEnd", id: this.#id, name: parsed.name, arguments: parsed.arguments, rawBlock });
-		} else {
-			// Body closed but did not parse. Balance an already-announced toolStart
-			// with a best-effort toolEnd rather than stranding a half-open call.
-			this.#emitBestEffortEnd(body, rawBlock, events);
-		}
+		emitClosedToolCall(
+			this.#started,
+			this.#id,
+			this.#name,
+			body,
+			`${TOOL_CALL_OPEN}${body}${TOOL_CALL_CLOSE}`,
+			events,
+		);
 		this.#buffer = this.#buffer.slice(close + TOOL_CALL_CLOSE.length);
 		this.#resetTool();
 	}
@@ -150,15 +122,8 @@ class Qwen3InbandScanner implements InbandScanner {
 		emitBestEffortToolEnd(this.#started, this.#id, this.#name, body, rawBlock, events);
 	}
 
-	#emitThinkingDelta(delta: string, events: InbandScanEvent[]): void {
-		if (delta.length === 0) return;
-		this.#thinking += delta;
-		events.push({ type: "thinkingDelta", delta });
-	}
-
 	#endThinking(events: InbandScanEvent[]): void {
-		events.push({ type: "thinkingEnd", thinking: this.#thinking });
-		this.#thinking = "";
+		this.#thinking.end(events);
 		this.#state = "outside";
 	}
 
@@ -185,26 +150,18 @@ class Qwen3InbandScanner implements InbandScanner {
 	}
 }
 
-function renderToolCall(call: ToolCall, _options: DialectRenderOptions = {}): string {
-	return `${TOOL_CALL_OPEN}\n${stringifyJson({ name: call.name, arguments: call.arguments })}\n${TOOL_CALL_CLOSE}`;
-}
-
-function renderAssistantToolCalls(calls: readonly ToolCall[], options: DialectRenderOptions = {}): string {
-	return calls.map(call => renderToolCall(call, options)).join("\n");
-}
-
 const definition: DialectDefinition = {
 	dialect: "qwen3",
 	prompt: AI_PROMPTS["dialect/qwen3"].text,
 	createScanner: options => new Qwen3InbandScanner(options),
-	renderToolCall,
-	renderAssistantToolCalls,
+	renderToolCall: renderJsonToolCall,
+	renderAssistantToolCalls: renderJsonAssistantToolCalls,
 	renderToolResults: renderToolResponseResults,
 	renderThinking: renderThinkTags,
 	renderTranscript: chatMlTranscriptRenderer({
 		toolResultRole: "user",
 		renderThinking: renderThinkTags,
-		renderCalls: renderAssistantToolCalls,
+		renderCalls: renderJsonAssistantToolCalls,
 		renderResultsBody: renderToolResponseResults,
 	}),
 };

@@ -10,7 +10,7 @@ import * as os from "node:os";
 import { createInterface } from "node:readline/promises";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { EventLoopKeepalive } from "@veyyon/agent-core";
-import type { ImageContent } from "@veyyon/ai";
+import type { ImageContent, Model } from "@veyyon/ai";
 import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import type { HostNotifier } from "@veyyon/host";
 import { describePendingToolCalls } from "@veyyon/kernel/session/exit-diagnostics";
@@ -48,7 +48,9 @@ import {
 	expandRoleAlias,
 	fallbackForUnavailableDefault,
 	getModelMatchPreferences,
+	type ModelMatchPreferences,
 	normalizeModelPatternList,
+	type ResolveCliModelResult,
 	resolveCliModel,
 	resolveModelRoleValue,
 	resolveModelScope,
@@ -88,8 +90,8 @@ import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "./sess
 import { executeBuiltinSlashCommand } from "./slash-commands/builtin-registry";
 import { shouldShowStartupSplash } from "./startup-splash";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "./system-prompt";
-import { createPersistedSubagentReviverFactory } from "./task/persisted-revive";
-import { resolveSubagentIdleTtlMs, resolveSubagentPruneBudget } from "./task/subagent-settings";
+import { resolveAgentIdleTtlMs, resolveAgentPruneBudget } from "./task/agent-settings";
+import { createPersistedAgentReviverFactory } from "./task/persisted-revive";
 import { initTelemetryExport, isTelemetryExportEnabled } from "./telemetry-export";
 import { initTheme, stopThemeWatcher } from "./theme/theme";
 import type { LspStartupServerInfo } from "./tools";
@@ -135,14 +137,14 @@ export async function checkForNewVersion(currentVersion: string): Promise<Releas
 // Todo settings are caller-controlled in protocol modes. Do not host-default them:
 // embedders need project-level opt-outs for reminder/prelude prompt injection.
 const HOST_DEFAULTED_SETTING_PATHS: SettingPath[] = [
-	"subagent.isolation.mode",
-	"subagent.isolation.merge",
-	"subagent.isolation.commits",
-	"subagent.delegation",
-	"subagent.batch",
-	"subagent.maxConcurrency",
-	"subagent.maxNestedSpawnDepth",
-	"subagent.agents",
+	"agent.isolation.mode",
+	"agent.isolation.merge",
+	"agent.isolation.commits",
+	"agent.delegation",
+	"agent.batch",
+	"agent.maxConcurrency",
+	"agent.maxNestedSpawnDepth",
+	"agent.agents",
 	// Memory subsystems are off-by-default for RPC/ACP hosts; embedders that want
 	// memory should opt in explicitly through their own settings layer.
 	"memory.backend",
@@ -893,7 +895,13 @@ export async function createSessionManager(
 				"Run `veyyon --resume` without an argument to pick from recent sessions, or `veyyon` to start a new one.",
 			);
 		}
-		if (match.scope === "local") {
+		// A match from another project (a global match whose recorded cwd is not
+		// this one) is forked; a match whose recorded cwd no longer exists is
+		// moved first, whichever scope found it.
+		const crossProject =
+			match.scope === "global" &&
+			normalizePathForComparison(cwd) !== normalizePathForComparison(match.session.cwd || cwd);
+		if (match.scope === "local" || crossProject) {
 			const moveResult = await moveMissingCwdSessionIfNeeded(
 				sessionArg,
 				match.session,
@@ -908,37 +916,20 @@ export async function createSessionManager(
 				return undefined;
 			}
 		}
-		if (match.scope === "global") {
-			const normalizedCwd = normalizePathForComparison(cwd);
-			const normalizedMatchCwd = normalizePathForComparison(match.session.cwd || cwd);
-			if (normalizedCwd !== normalizedMatchCwd) {
-				const moveResult = await moveMissingCwdSessionIfNeeded(
-					sessionArg,
-					match.session,
-					cwd,
-					parsed.sessionDir,
-					askToMoveSession,
+		if (crossProject) {
+			const forkPromptResult = await askToForkSession(match.session);
+			if (forkPromptResult === "unavailable") {
+				throw new SessionResolutionError(
+					`Session "${sessionArg}" is in another project (${match.session.cwd}); run interactively to fork it into the current project.`,
 				);
-				if (moveResult.status === "moved") {
-					return moveResult.manager;
-				}
-				if (moveResult.status === "declined") {
-					return undefined;
-				}
-				const forkPromptResult = await askToForkSession(match.session);
-				if (forkPromptResult === "unavailable") {
-					throw new SessionResolutionError(
-						`Session "${sessionArg}" is in another project (${match.session.cwd}); run interactively to fork it into the current project.`,
-					);
-				}
-				if (forkPromptResult === "declined") {
-					// User declined the cross-project fork prompt. Caller distinguishes
-					// this cancellation from the "default new session" undefined return
-					// by checking `typeof parsed.resume === "string"`.
-					return undefined;
-				}
-				return await SessionManager.forkFrom(match.session.path, cwd, parsed.sessionDir);
 			}
+			if (forkPromptResult === "declined") {
+				// User declined the cross-project fork prompt. Caller distinguishes
+				// this cancellation from the "default new session" undefined return
+				// by checking `typeof parsed.resume === "string"`.
+				return undefined;
+			}
+			return await SessionManager.forkFrom(match.session.path, cwd, parsed.sessionDir);
 		}
 		return await SessionManager.open(match.session.path, parsed.sessionDir);
 	}
@@ -977,6 +968,30 @@ export function applyResolvedSystemPromptInputs(
 	if (resolvedAppendPrompt) {
 		options.appendSystemPrompt = resolvedAppendPrompt;
 	}
+}
+
+/**
+ * Resolve a model pattern a launch flag or setting named. A resolution warning is
+ * printed; an unresolved pattern or missing credentials throws the failure `role` owns.
+ */
+function resolveLaunchModel(
+	pattern: string,
+	role: string,
+	modelRegistry: ModelRegistry,
+	preferences: ModelMatchPreferences,
+	settings?: Settings,
+): ResolveCliModelResult & { model: Model } {
+	const resolved = resolveCliModel({ cliModel: pattern, modelRegistry, preferences, settings });
+	if (resolved.warning) {
+		process.stderr.write(`${chalk.yellow(`Warning: ${resolved.warning}`)}\n`);
+	}
+	if (resolved.error || !resolved.model) {
+		throw new Error(resolved.error ?? modelResolutionFailureMessage([pattern], modelRegistry));
+	}
+	if (!modelRegistry.hasConfiguredAuth(resolved.model)) {
+		throw new Error(missingCredentialsMessage(resolved.model.provider, resolved.model.id, role));
+	}
+	return { ...resolved, model: resolved.model };
 }
 
 /** Builds startup session options from parsed CLI flags, scoped models, and resolved session lineage. */
@@ -1128,23 +1143,13 @@ export async function buildSessionOptions(
 		// a per-launch start override, not a new owner of the default slot.
 		const strongPattern = normalizeModelPatternList(activeSettings.get("prewalk.strongModel"))[0];
 		if (strongPattern) {
-			const resolved = resolveCliModel({
-				cliModel: strongPattern,
+			const resolved = resolveLaunchModel(
+				strongPattern,
+				"prewalk.strongModel",
 				modelRegistry,
-				preferences: modelMatchPreferences,
-				settings: activeSettings,
-			});
-			if (resolved.warning) {
-				process.stderr.write(`${chalk.yellow(`Warning: ${resolved.warning}`)}\n`);
-			}
-			if (resolved.error || !resolved.model) {
-				throw new Error(resolved.error ?? modelResolutionFailureMessage([strongPattern], modelRegistry));
-			}
-			if (!modelRegistry.hasConfiguredAuth(resolved.model)) {
-				throw new Error(
-					missingCredentialsMessage(resolved.model.provider, resolved.model.id, "prewalk.strongModel"),
-				);
-			}
+				modelMatchPreferences,
+				activeSettings,
+			);
 			options.model = resolved.model;
 			if (!parsed.thinking && resolved.thinkingLevel) {
 				options.thinkingLevel = resolved.thinkingLevel;
@@ -1165,21 +1170,13 @@ export async function buildSessionOptions(
 				'Prewalk needs a cheap target model: set "prewalk.cheapModel" in settings or pass --prewalk-into <model>.',
 			);
 		}
-		const resolved = resolveCliModel({
-			cliModel: cheapPattern,
+		const resolved = resolveLaunchModel(
+			cheapPattern,
+			"--prewalk target",
 			modelRegistry,
-			preferences: modelMatchPreferences,
-			settings: activeSettings,
-		});
-		if (resolved.warning) {
-			process.stderr.write(`${chalk.yellow(`Warning: ${resolved.warning}`)}\n`);
-		}
-		if (resolved.error || !resolved.model) {
-			throw new Error(resolved.error ?? modelResolutionFailureMessage([cheapPattern], modelRegistry));
-		}
-		if (!modelRegistry.hasConfiguredAuth(resolved.model)) {
-			throw new Error(missingCredentialsMessage(resolved.model.provider, resolved.model.id, "--prewalk target"));
-		}
+			modelMatchPreferences,
+			activeSettings,
+		);
 		options.prewalk = { target: resolved.model, thinkingLevel: resolved.thinkingLevel };
 	}
 	if (parsed.planYoloInto !== undefined && !parsed.planYolo) {
@@ -1187,16 +1184,7 @@ export async function buildSessionOptions(
 	}
 	if (parsed.planYolo) {
 		const rolePattern = expandRoleAlias(parsed.planYoloInto ?? "@smol", activeSettings);
-		const resolved = resolveCliModel({ cliModel: rolePattern, modelRegistry, preferences: modelMatchPreferences });
-		if (resolved.warning) {
-			process.stderr.write(`${chalk.yellow(`Warning: ${resolved.warning}`)}\n`);
-		}
-		if (resolved.error || !resolved.model) {
-			throw new Error(resolved.error ?? modelResolutionFailureMessage([rolePattern], modelRegistry));
-		}
-		if (!modelRegistry.hasConfiguredAuth(resolved.model)) {
-			throw new Error(missingCredentialsMessage(resolved.model.provider, resolved.model.id, "--plan-yolo target"));
-		}
+		const resolved = resolveLaunchModel(rolePattern, "--plan-yolo target", modelRegistry, modelMatchPreferences);
 		options.planYolo = { target: resolved.model, thinkingLevel: resolved.thinkingLevel };
 	}
 
@@ -1885,29 +1873,29 @@ async function runRootCommandInner(parsed: Args, rawArgs: string[], deps: RunRoo
 				isInteractive,
 			);
 
-		// Cold-revive support: a `parked` subagent ref restored from disk (the persisted-subagent
+		// Cold-revive support: a `parked` agent ref restored from disk (the persisted-agent
 		// scan, collab mirror, resumed process) has a sessionFile but no in-memory
 		// reviver, so `ensureLive` (IRC sends, hub focus) would refuse it. Install a
-		// factory — bound to THIS top-level session — that rebuilds the subagent from
+		// factory — bound to THIS top-level session — that rebuilds the agent from
 		// its persisted JSONL (see persisted-revive.ts). Scoped to the non-ACP
 		// bootstrap: ACP keeps several concurrent top-level sessions and a single
 		// process-global factory must not be clobbered by the most recent one.
-		AgentLifecycleManager.global().setPersistedSubagentReviverFactory(
-			createPersistedSubagentReviverFactory({
+		AgentLifecycleManager.global().setPersistedAgentReviverFactory(
+			createPersistedAgentReviverFactory({
 				session,
 				authStorage,
 				modelRegistry,
 				settings: settingsInstance,
 				enableLsp: sessionOptions.enableLsp ?? true,
 			}),
-			() => resolveSubagentIdleTtlMs(settingsInstance),
+			() => resolveAgentIdleTtlMs(settingsInstance),
 			// The operator's close budgets, so a ref restored from disk or revived
 			// rejoins the close stage instead of staying listed for the rest of the
 			// session. Read through a function rather than snapshotted here, so a
 			// change in /settings governs every agent adopted after it; the deadlines
 			// already armed keep the budget they were armed with until their next
 			// status change re-derives them.
-			() => resolveSubagentPruneBudget(settingsInstance),
+			() => resolveAgentPruneBudget(settingsInstance),
 		);
 		if (parsedArgs.apiKey && !sessionOptions.model && session.model) {
 			authStorage.setRuntimeApiKey(session.model.provider, parsedArgs.apiKey);

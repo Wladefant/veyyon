@@ -198,6 +198,11 @@ def _raise_command(message: str) -> NoReturn:
     raise RpcCommandError(message, error={"message": message})
 
 
+def _audit_command_error(bindings: ToolBindings, name: str, args: Mapping[str, Any], message: str) -> NoReturn:
+    _audit(bindings, name, args, error=message)
+    _raise_command(message)
+
+
 def _git_identity_env(author_name: str, author_email: str) -> dict[str, str]:
     return {
         "GIT_AUTHOR_NAME": author_name,
@@ -338,8 +343,7 @@ def _run_pre_publish_fix(
             "anything left uncommitted would be amended into your HEAD commit "
             "and silently land in the PR."
         )
-        _audit(bindings, tool_name, args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, tool_name, args, msg)
     if skip_checks:
         _audit(
             bindings,
@@ -352,8 +356,7 @@ def _run_pre_publish_fix(
         proc = _run_repo_command(bindings, argv, timeout=_PRE_PR_FIX_TIMEOUT_SECONDS)
     except FileNotFoundError:
         msg = f"refusing to {stage}: `{label}` is required before {stage}, but `{argv[0]}` is not on PATH."
-        _audit(bindings, tool_name, args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, tool_name, args, msg)
     except subprocess.TimeoutExpired as exc:
         output = _format_process_output(exc.stdout, exc.stderr)
         msg = (
@@ -362,8 +365,7 @@ def _run_pre_publish_fix(
             f"Investigate the hang, rerun the formatter, commit any resulting changes, "
             f"and retry."
         )
-        _audit(bindings, tool_name, args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, tool_name, args, msg)
     if proc.returncode != 0:
         output = _format_process_output(proc.stdout, proc.stderr)
         msg = (
@@ -372,8 +374,7 @@ def _run_pre_publish_fix(
             f"Resolve the formatter failure, rerun `{label}` successfully, commit any "
             f"resulting changes, and retry."
         )
-        _audit(bindings, tool_name, args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, tool_name, args, msg)
 
     status = _run_repo_command(bindings, ["git", "status", "--porcelain", "--untracked-files=normal"])
     if not status.stdout.strip():
@@ -390,8 +391,7 @@ def _run_pre_publish_fix(
             "(`git checkout -- . && git clean -fd`) and retry with `skip_checks=true`, "
             "documenting the bypass."
         )
-        _audit(bindings, tool_name, args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, tool_name, args, msg)
     head_identity = _run_repo_command(bindings, ["git", "log", "-1", "--format=%an%x1f%ae", "HEAD"])
     if head_identity.returncode != 0 or head_identity.stdout.strip("\n").split("\x1f") != [
         bindings.author_name,
@@ -403,21 +403,18 @@ def _run_pre_publish_fix(
             f"{author} — refusing to fold the formatter diff into a foreign commit. "
             "Fix the identity first (`git commit --amend --reset-author --no-edit`) and retry."
         )
-        _audit(bindings, tool_name, args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, tool_name, args, msg)
 
     add = _run_repo_command(bindings, ["git", "add", "-A"])
     if add.returncode != 0:
         err = (add.stderr or add.stdout).strip()
         msg = f"refusing to {stage}: `git add -A` failed after `{label}`: {err}"
-        _audit(bindings, tool_name, args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, tool_name, args, msg)
     commit = _run_repo_command(bindings, ["git", "commit", "--amend", "--no-edit"])
     if commit.returncode != 0:
         err = (commit.stderr or commit.stdout).strip()
         msg = f"refusing to {stage}: failed to amend `{label}` changes into HEAD: {err}"
-        _audit(bindings, tool_name, args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, tool_name, args, msg)
 
 
 def _run_pre_publish_check(
@@ -444,8 +441,7 @@ def _run_pre_publish_check(
         proc = _run_repo_command(bindings, argv, timeout=_PRE_PR_CHECK_TIMEOUT_SECONDS)
     except FileNotFoundError:
         msg = f"refusing to {stage}: `{label}` is required before {stage}, but `{argv[0]}` is not on PATH."
-        _audit(bindings, tool_name, args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, tool_name, args, msg)
     except subprocess.TimeoutExpired as exc:
         output = _format_process_output(exc.stdout, exc.stderr)
         msg = (
@@ -454,8 +450,7 @@ def _run_pre_publish_check(
             f"Fix the check hang/failure, rerun `{label}`, commit any resulting changes, "
             f"and retry."
         )
-        _audit(bindings, tool_name, args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, tool_name, args, msg)
     if proc.returncode != 0:
         output = _format_process_output(proc.stdout, proc.stderr)
         msg = (
@@ -464,8 +459,7 @@ def _run_pre_publish_check(
             f"Fix the reported failures, rerun `{label}` successfully, commit any resulting changes, "
             f"and retry."
         )
-        _audit(bindings, tool_name, args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, tool_name, args, msg)
 
 
 _AUTOCLOSE_INELIGIBLE_STATES: frozenset[str] = frozenset({"closed", "merged", "needs_info", "abandoned"})
@@ -534,8 +528,7 @@ def _repair_commit_message_escapes(bindings: ToolBindings, args: Mapping[str, An
             + bindings.repo.default_branch
             + "`, real newlines via `git commit -F <file>` or multiple `-m` flags) and retry."
         )
-        _audit(bindings, tool_name, args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, tool_name, args, msg)
 
     base = bindings.repo.default_branch
     rev_list = _run_repo_command(
@@ -618,8 +611,7 @@ def _repair_commit_message_escapes(bindings: ToolBindings, args: Mapping[str, An
 def _guarded_push_branch(bindings: ToolBindings, args: Mapping[str, Any], tool_name: str, branch: str) -> str:
     if bindings.review_mode:
         msg = "refusing to push: PR review worktrees are read-only."
-        _audit(bindings, tool_name, args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, tool_name, args, msg)
     if branch != bindings.workspace.branch:
         _raise_command(
             f"refusing to push: branch={branch!r} does not match workspace branch {bindings.workspace.branch!r}."
@@ -643,8 +635,7 @@ def _guarded_push_branch(bindings: ToolBindings, args: Mapping[str, Any], tool_n
     if identities.returncode != 0:
         err = (identities.stderr or identities.stdout).strip()
         msg = f"refusing to push: could not inspect commit authors for origin/{base}..HEAD: {err}"
-        _audit(bindings, tool_name, args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, tool_name, args, msg)
     offending: list[str] = []
     for line in (identities.stdout or "").strip().splitlines():
         parts = line.split("\t")
@@ -663,8 +654,7 @@ def _guarded_push_branch(bindings: ToolBindings, args: Mapping[str, Any], tool_n
             "(or rebase with `git rebase -i origin/" + base + " --exec "
             "'git commit --amend --reset-author --no-edit'`) and try again."
         )
-        _audit(bindings, tool_name, args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, tool_name, args, msg)
 
     status = _run_repo_command(bindings, ["git", "status", "--porcelain", "--untracked-files=normal"])
     if status.stdout.strip():
@@ -675,8 +665,7 @@ def _guarded_push_branch(bindings: ToolBindings, args: Mapping[str, Any], tool_n
             "Commit (or `git stash`) every change before pushing — anything in the "
             "worktree that isn't in a commit won't appear in the PR."
         )
-        _audit(bindings, tool_name, args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, tool_name, args, msg)
 
     try:
         result = bindings.git_transport.push_branch(
@@ -692,16 +681,14 @@ def _guarded_push_branch(bindings: ToolBindings, args: Mapping[str, Any], tool_n
             "refusing to push: HEAD changed between preflight and push "
             "(another commit landed; rerun the gate by re-issuing the push)."
         )
-        _audit(bindings, tool_name, args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, tool_name, args, msg)
     except GitCommandError as exc:
         err = (exc.stderr or exc.stdout).strip() or f"exit {exc.returncode}"
         _audit(bindings, tool_name, args, error=err)
         _raise_command(f"git push failed: {err}")
     except GitHubError as exc:
         msg = f"gh-proxy rejected push: {exc.status} {exc.message}"
-        _audit(bindings, tool_name, args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, tool_name, args, msg)
     _share_git_metadata_with_slots(repo_dir_path, bindings.slot_uid)
     _audit(bindings, tool_name, args, result={"head": result.head, "branch": result.branch})
     return result.head
@@ -743,16 +730,14 @@ def _enforce_impl_authorization(
         "a repo OWNER or allowlisted maintainer must @-mention you with an explicit go-ahead "
         "before any branch/PR. Post your analysis with `gh_post_comment` and stop."
     )
-    _audit(bindings, tool_name, args, error=msg)
-    _raise_command(msg)
+    _audit_command_error(bindings, tool_name, args, msg)
 
 
 def _require_review_mode(bindings: ToolBindings, name: str, args: Mapping[str, Any]) -> None:
     if bindings.review_mode:
         return
     msg = f"{name} is only available during incoming PR review tasks."
-    _audit(bindings, name, args, error=msg)
-    _raise_command(msg)
+    _audit_command_error(bindings, name, args, msg)
 
 
 def _format_pr_file(file: PullRequestFileInfo) -> str:
@@ -1038,32 +1023,26 @@ def _handle_pr_review_comment(bindings: ToolBindings, args: dict[str, Any]) -> s
     body = args.get("body")
     if not isinstance(path, str) or not path.strip():
         msg = "pr_review_comment requires a non-empty 'path'."
-        _audit(bindings, "pr_review_comment", args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, "pr_review_comment", args, msg)
     if not isinstance(line, int) or line <= 0:
         msg = "pr_review_comment requires a positive integer 'line'."
-        _audit(bindings, "pr_review_comment", args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, "pr_review_comment", args, msg)
     if not isinstance(body, str) or not body.strip():
         msg = "pr_review_comment requires a non-empty 'body'."
-        _audit(bindings, "pr_review_comment", args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, "pr_review_comment", args, msg)
     side = str(args.get("side") or "RIGHT")
     if side not in ("RIGHT", "LEFT"):
         msg = "pr_review_comment 'side' must be RIGHT or LEFT."
-        _audit(bindings, "pr_review_comment", args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, "pr_review_comment", args, msg)
     start_line = args.get("start_line")
     if start_line is not None and (not isinstance(start_line, int) or start_line <= 0):
         msg = "pr_review_comment 'start_line' must be a positive integer when provided."
-        _audit(bindings, "pr_review_comment", args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, "pr_review_comment", args, msg)
     start_side_raw = args.get("start_side")
     start_side = str(start_side_raw) if start_side_raw is not None else None
     if start_side is not None and start_side not in ("RIGHT", "LEFT"):
         msg = "pr_review_comment 'start_side' must be RIGHT or LEFT when provided."
-        _audit(bindings, "pr_review_comment", args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, "pr_review_comment", args, msg)
     staged = bindings.db.stage_review_comment(
         issue_key=bindings.issue_key,
         path=path.strip(),
@@ -1082,8 +1061,7 @@ def _handle_submit_pr_review(bindings: ToolBindings, args: dict[str, Any]) -> st
     body = args.get("body")
     if not isinstance(body, str) or not body.strip():
         msg = "submit_pr_review requires a non-empty 'body'."
-        _audit(bindings, "submit_pr_review", args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, "submit_pr_review", args, msg)
     staged = bindings.db.list_staged_review_comments(bindings.issue_key)
     comments = [_review_comment_to_payload(comment) for comment in staged]
     try:
@@ -1114,18 +1092,15 @@ def _handle_classify_pr(bindings: ToolBindings, args: dict[str, Any]) -> str:
     rank = args.get("rank")
     if rank not in _PR_RANKS:
         msg = f"classify_pr 'rank' must be one of {_PR_RANKS}; got {rank!r}."
-        _audit(bindings, "classify_pr", args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, "classify_pr", args, msg)
     pr_type = args.get("type")
     if pr_type not in _PR_TYPES:
         msg = f"classify_pr 'type' must be one of {_PR_TYPES}; got {pr_type!r}."
-        _audit(bindings, "classify_pr", args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, "classify_pr", args, msg)
     rationale = args.get("rationale")
     if not isinstance(rationale, str) or not rationale.strip():
         msg = "classify_pr requires a one-sentence 'rationale'."
-        _audit(bindings, "classify_pr", args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, "classify_pr", args, msg)
 
     labels: list[str] = ["triaged", str(rank), str(pr_type)]
     for area in args.get("area") or ():
@@ -1174,19 +1149,16 @@ def _handle_classify_issue(bindings: ToolBindings, args: dict[str, Any]) -> str:
     primary = args.get("primary")
     if primary not in _PRIMARY_TYPES:
         msg = f"classify_issue 'primary' must be one of {_PRIMARY_TYPES}; got {primary!r}."
-        _audit(bindings, "classify_issue", args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, "classify_issue", args, msg)
     rationale = args.get("rationale")
     if not isinstance(rationale, str) or not rationale.strip():
         msg = "classify_issue requires a one-sentence 'rationale'."
-        _audit(bindings, "classify_issue", args, error=msg)
-        _raise_command(msg)
+        _audit_command_error(bindings, "classify_issue", args, msg)
     priority = args.get("priority")
     if primary == "bug":
         if priority not in _PRIORITIES:
             msg = f"classify_issue requires 'priority' in {_PRIORITIES} when primary=='bug'."
-            _audit(bindings, "classify_issue", args, error=msg)
-            _raise_command(msg)
+            _audit_command_error(bindings, "classify_issue", args, msg)
     else:
         priority = None
     branch_slug = args.get("branch_slug")
@@ -1195,8 +1167,7 @@ def _handle_classify_issue(bindings: ToolBindings, args: dict[str, Any]) -> str:
             branch_slug = validate_branch_slug(branch_slug)
         except ValueError as exc:
             msg = f"classify_issue rejected branch_slug: {exc}"
-            _audit(bindings, "classify_issue", args, error=msg)
-            _raise_command(msg)
+            _audit_command_error(bindings, "classify_issue", args, msg)
     else:
         branch_slug = None
 
@@ -1517,8 +1488,7 @@ def _build_tool(spec: ToolSpec, bindings: ToolBindings) -> HostTool[Any, Any]:
         elif spec.review_mode is False and bindings.review_mode:
             target_str = "PR review worktrees" if spec.name == "gh_push_branch" else "PR review tasks"
             msg = f"refusing to {spec.impl_auth_action or 'execute'}: {target_str} are read-only."
-            _audit(bindings, spec.name, args, error=msg)
-            _raise_command(msg)
+            _audit_command_error(bindings, spec.name, args, msg)
 
         if spec.impl_auth_action is not None:
             _enforce_impl_authorization(bindings, spec.name, args, action=spec.impl_auth_action)

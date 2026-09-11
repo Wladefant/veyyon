@@ -12,8 +12,8 @@
  *     bun scripts/demos/render-cache-settings.ts --block on --width 92 --height 18
  */
 import { Settings } from "../../packages/coding-agent/src/config/settings";
-import { SettingsSelectorComponent } from "../../packages/coding-agent/src/modes/terminal/components/selectors/settings-selector";
 import { renderDemo } from "./render-args";
+import { createTestSettingsSelector } from "./render-settings-helper";
 
 await renderDemo(
 	({ width, flag, theme }) => {
@@ -22,17 +22,7 @@ await renderDemo(
 		// where the cursor happens to land.
 		Settings.instance.set("cache.reportRejection", true);
 		Settings.instance.set("cache.blockOnRejection", flag("block", "off") === "on");
-		const selector = new SettingsSelectorComponent(
-			{
-				availableThinkingLevels: [],
-				thinkingLevel: undefined,
-				availableThemes: [theme, "light"],
-				availablePersonalities: ["default"],
-				providers: ["anthropic"],
-				cwd: process.cwd(),
-			},
-			{ onChange: () => {}, onCancel: () => {} },
-		);
+		const selector = createTestSettingsSelector(theme);
 		// Type-to-search narrows to the two rows, which keeps the frame stable as
 		// unrelated settings are added above them.
 		for (const character of "cache rejection") selector.handleInput(character);

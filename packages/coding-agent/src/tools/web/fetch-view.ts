@@ -10,7 +10,7 @@
  */
 
 import { formatCount, truncate } from "@veyyon/utils/format";
-import { replaceTabs } from "@veyyon/utils/wrap";
+import { replaceTabs } from "@veyyon/utils/tab-width";
 import type { FramedBlockView, StatusRowView, ToolView, ToolViewRenderer, ViewLine, ViewSection } from "@veyyon/view";
 import { applyListLimit } from "../core/list-limit";
 // The notice module that owns the reference, not `output-meta`, which forwards it through the

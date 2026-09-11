@@ -1,4 +1,7 @@
 import { SUB_CELL_BAR_RAMP, type SubCellBarRamp } from "@veyyon/utils/bar";
+import type { SpinnerType, SymbolKey, SymbolPreset } from "@veyyon/wire/presentation/theme";
+
+export type { SpinnerType, SymbolKey, SymbolPreset };
 
 // Symbol presets, spinner frames and bar ramps: the single owner of every glyph
 // the TUI renders (status icons, tree connectors, box drawing, tool glyphs), of
@@ -9,13 +12,6 @@ import { SUB_CELL_BAR_RAMP, type SubCellBarRamp } from "@veyyon/utils/bar";
 // ============================================================================
 // Symbol Presets
 // ============================================================================
-
-export type SymbolPreset = "unicode" | "nerd" | "ascii";
-
-/**
- * Available symbol keys, derived from the canonical Unicode glyph table.
- */
-export type SymbolKey = keyof typeof UNICODE_SYMBOLS;
 
 export type SymbolMap = Record<SymbolKey, string>;
 
@@ -36,7 +32,7 @@ export const UNICODE_SYMBOLS = {
 	//
 	// Six picks failed that bar and were replaced on 2026-07-27. `⟳` (U+27F3)
 	// was the RUNNING status, and DejaVu does not have it, so every busy agent
-	// row in the subagent dashboard rendered a tofu box; it is `◐` now, which
+	// row in the agent dashboard rendered a tofu box; it is `◐` now, which
 	// joins the `●`/`◦` circle family the other status marks already use.
 	// `⤵`/`⤴` (U+2935/U+2934) were the token in/out icons in the status line and
 	// exist in none of the three fonts checked; they are `↓`/`↑`. `⧉` (U+29C9)
@@ -289,7 +285,7 @@ export const UNICODE_SYMBOLS = {
 	"tab.tools": "",
 	"tab.memory": "",
 	"tab.tasks": "",
-	"tab.subagents": "",
+	"tab.agents": "",
 	// icon-light doctrine applies to Global too — the lone 🌐 emoji among ten
 	// bare labels read as a glitch, not an accent.
 	"tab.providers": "",
@@ -557,7 +553,7 @@ export const NERD_SYMBOLS: SymbolMap = {
 	"tab.tools": "󰠭",
 	"tab.memory": "󰧑",
 	"tab.tasks": "󰐱",
-	"tab.subagents": "󰡐",
+	"tab.agents": "󰡐",
 	"tab.providers": "󰖟",
 	// mdi-earth: single-cell like every other tab glyph — the emoji 🌐 was the
 	// one double-width cell in the column and broke label alignment.
@@ -781,7 +777,7 @@ export const ASCII_SYMBOLS: SymbolMap = {
 	"tab.tools": "[T]",
 	"tab.memory": "[Y]",
 	"tab.tasks": "[K]",
-	"tab.subagents": "[B]",
+	"tab.agents": "[B]",
 	"tab.providers": "[P]",
 	"tab.global": "[G]",
 	"tab.experimental": "[E]",
@@ -818,8 +814,6 @@ export const SYMBOL_PRESETS: Record<SymbolPreset, SymbolMap> = {
 	nerd: NERD_SYMBOLS,
 	ascii: ASCII_SYMBOLS,
 };
-
-export type SpinnerType = "status" | "activity" | "thinking";
 
 export const SPINNER_FRAMES: Record<SymbolPreset, Record<SpinnerType, string[]>> = {
 	unicode: {

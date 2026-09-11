@@ -9,7 +9,7 @@
  * gone. This card is one row per CREDENTIAL, which is the thing you switch, name and log out.
  *
  * WHY SWITCHING IS PER PROVIDER. Several providers serve one session at once (main model,
- * subagent roles, web search), so there is no single "current account" to pick. `enter` uses the
+ * agent roles, web search), so there is no single "current account" to pick. `enter` uses the
  * selected account FOR ITS PROVIDER and the footer says so by name, because a key labelled just
  * `use` reads as a global switch and is not one. Moving from Anthropic to Google is a model
  * decision and lives in `/models`.
@@ -37,8 +37,6 @@ import { theme } from "../../../../theme/theme";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
 import {
 	computeModalDims,
-	consumeModalChipHover,
-	hitTestModalChrome,
 	MODAL_SIZING_LARGE,
 	type ModalShellGeometry,
 	type ModalShortcut,
@@ -48,6 +46,7 @@ import {
 	sizingForArea,
 } from "../chrome/modal-shell";
 import { fit } from "../chrome/overlay-box";
+import { routeModalChrome } from "../selectors/select-list-mouse-routing";
 import { hoverBandAt, renderScrollableList, selectionBand } from "../selectors/selector-helpers";
 import {
 	type AccountGlyphKind,
@@ -610,37 +609,32 @@ export class AccountManagerComponent implements Component {
 	}
 
 	#routeMouse(event: SgrMouseEvent): boolean {
-		const chrome = hitTestModalChrome(this.#shellGeometry, event.row, event.col, {
-			motion: event.motion,
-			leftClick: event.leftClick,
-		});
-		if (
-			consumeModalChipHover(chrome, this.#hoveredShortcutId, id => {
-				this.#hoveredShortcutId = id;
-				this.#requestRender?.();
-			})
-		) {
-			return true;
-		}
-		if (
-			chrome.kind === "close" ||
-			chrome.kind === "outside" ||
-			(chrome.kind === "shortcut" && chrome.id === "close")
-		) {
-			this.handleInput("\x1b");
-			this.#requestRender?.();
-			return true;
-		}
-		if (chrome.kind === "shortcut") {
-			// A chip runs the KEY it names, never a private copy of the action, so the footer and
-			// the keyboard can never drift apart.
-			const key = SHORTCUT_KEYS[chrome.id];
+		// A chip runs the KEY it names, never a private copy of the action, so the footer and
+		// the keyboard can never drift apart. `close` and `confirm` go the same way.
+		const pressChip = (id: string): boolean => {
+			const key = SHORTCUT_KEYS[id];
 			if (key) {
 				this.handleInput(key);
 				this.#requestRender?.();
 			}
 			return true;
-		}
+		};
+		const consumed = routeModalChrome({
+			shellGeometry: this.#shellGeometry,
+			event,
+			hoveredShortcutId: this.#hoveredShortcutId,
+			onHoverShortcut: id => {
+				this.#hoveredShortcutId = id;
+				this.#requestRender?.();
+			},
+			onCancel: () => {
+				this.handleInput("\x1b");
+				this.#requestRender?.();
+			},
+			onConfirm: () => pressChip("confirm"),
+			onShortcut: pressChip,
+		});
+		if (consumed) return true;
 
 		// `row()` insets content by the border column plus a space, and the card floats, so the
 		// split starts at `frameLeft + 2`.

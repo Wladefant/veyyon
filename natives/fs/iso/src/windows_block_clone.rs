@@ -21,7 +21,7 @@ mod imp {
 			fs::{FileTypeExt, OpenOptionsExt},
 			io::AsRawHandle,
 		},
-		path::{Path, PathBuf},
+		path::Path,
 	};
 
 	use windows_sys::Win32::{
@@ -46,6 +46,7 @@ mod imp {
 
 	pub fn start(lower: &Path, merged: &Path) -> IsoResult<()> {
 		let lower = canonical_existing_dir(lower, "block-clone")?;
+		prepare_destination(merged)?;
 
 		let result = recursive_block_clone(&lower, merged);
 		if result.is_err() {

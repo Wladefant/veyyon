@@ -7,16 +7,14 @@ import { matchesKey } from "@veyyon/utils/keys";
 import type { HoverFadeOptions } from "@veyyon/utils/motion";
 import { routeSgrMouseInput } from "@veyyon/utils/mouse";
 import { padding } from "@veyyon/utils/padding";
+import { replaceTabs } from "@veyyon/utils/tab-width";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
-import { replaceTabs } from "@veyyon/utils/wrap";
 import { withIcon } from "../../../../theme/icon-label";
 import { theme } from "../../../../theme/theme";
 import { shortenPath } from "../../../../tools/core/render-utils";
 import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
 import {
 	computeModalDims,
-	consumeModalChipHover,
-	hitTestModalChrome,
 	MODAL_SIZING_LARGE,
 	type ModalShellGeometry,
 	type ModalShortcut,
@@ -25,6 +23,7 @@ import {
 	sizingForArea,
 } from "../chrome/modal-shell";
 import { HookSelectorComponent } from "./hook-selector";
+import { routeModalChrome } from "./select-list-mouse-routing";
 import { hoverBandAt } from "./selector-helpers";
 
 /**
@@ -1098,34 +1097,23 @@ export class SessionSelectorComponent extends Container {
 			return;
 		}
 		routeSgrMouseInput(data, event => {
-			const chrome = hitTestModalChrome(this.#shellGeometry, event.row, event.col, {
-				motion: event.motion,
-				leftClick: event.leftClick,
-			});
-			if (
-				consumeModalChipHover(chrome, this.#hoveredShortcutId, id => {
+			const consumed = routeModalChrome({
+				shellGeometry: this.#shellGeometry,
+				event,
+				hoveredShortcutId: this.#hoveredShortcutId,
+				onHoverShortcut: id => {
 					this.#hoveredShortcutId = id;
 					this.#onRequestRender?.();
-				})
-			) {
-				return true;
-			}
-			if (
-				chrome.kind === "close" ||
-				chrome.kind === "outside" ||
-				(chrome.kind === "shortcut" && chrome.id === "close")
-			) {
-				this.#sessionList.onCancel?.();
-				return true;
-			}
-			if (chrome.kind === "shortcut" && chrome.id === "confirm") {
-				this.#sessionList.handleInput("\n");
-				return true;
-			}
-			if (chrome.kind === "shortcut" && chrome.id === "delete") {
-				this.#sessionList.handleInput("\x7f");
-				return true;
-			}
+				},
+				onCancel: () => this.#sessionList.onCancel?.(),
+				onConfirm: () => this.#sessionList.handleInput("\n"),
+				onShortcut: id => {
+					if (id !== "delete") return false;
+					this.#sessionList.handleInput("\x7f");
+					return true;
+				},
+			});
+			if (consumed) return true;
 			if (event.wheel !== null) {
 				this.#sessionList.handleWheel(event.wheel);
 				return true;
@@ -1149,30 +1137,18 @@ export class SessionSelectorComponent extends Container {
 		routeSgrMouseInput(data, event => {
 			const dialog = this.#confirmationDialog;
 			if (!dialog) return true;
-			const chrome = hitTestModalChrome(this.#shellGeometry, event.row, event.col, {
-				motion: event.motion,
-				leftClick: event.leftClick,
-			});
-			if (
-				consumeModalChipHover(chrome, this.#hoveredShortcutId, id => {
+			const consumed = routeModalChrome({
+				shellGeometry: this.#shellGeometry,
+				event,
+				hoveredShortcutId: this.#hoveredShortcutId,
+				onHoverShortcut: id => {
 					this.#hoveredShortcutId = id;
 					this.#onRequestRender?.();
-				})
-			) {
-				return true;
-			}
-			if (
-				chrome.kind === "close" ||
-				chrome.kind === "outside" ||
-				(chrome.kind === "shortcut" && chrome.id === "close")
-			) {
-				dialog.handleInput("\x1b");
-				return true;
-			}
-			if (chrome.kind === "shortcut" && chrome.id === "confirm") {
-				dialog.handleInput("\n");
-				return true;
-			}
+				},
+				onCancel: () => dialog.handleInput("\x1b"),
+				onConfirm: () => dialog.handleInput("\n"),
+			});
+			if (consumed) return true;
 			if (event.wheel !== null) {
 				dialog.handleWheel(event.wheel);
 				this.#onRequestRender?.();

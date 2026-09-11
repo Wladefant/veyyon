@@ -89,6 +89,7 @@ import {
 import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
 import { notifyRawSseEvent } from "../utils/sse-debug";
 import { compactGrammarDefinition } from "./grammar";
+import { createInitialResponsesAssistantMessage } from "./initial-message";
 import {
 	type CodexReasoningContext,
 	type CodexRequestOptions,
@@ -479,6 +480,7 @@ const CODEX_RESERVED_METADATA_KEYS: Record<string, true> = {
 	turn_started_at_unix_ms: true,
 	forked_from_thread_id: true,
 	parent_thread_id: true,
+	// Codex protocol metadata key; spelled as codex-rs spells it.
 	subagent_kind: true,
 	thread_source: true,
 	sandbox: true,
@@ -1807,19 +1809,14 @@ function isCodexStalePreviousResponseError(error: unknown): boolean {
 async function handleCodexStreamFailure(context: CodexStreamFailureContext, error: unknown): Promise<AssistantMessage> {
 	const { output } = context;
 	if (context.requestContext.websocketState) {
-		resetCodexWebSocketAppendState(context.requestContext.websocketState);
-		context.requestContext.websocketState.turnState = undefined;
-		context.requestContext.websocketState.modelsEtag = undefined;
+		resetCodexWebSocketChain(context.requestContext.websocketState);
 	}
 	const result = await AIError.finalize(error, {
 		api: context.model.api,
 		signal: context.options?.signal,
 		rawRequestDump: materializeDumpBody(context.requestContext.rawRequestDump, context.requestContext.wireBodyJson),
 	});
-	output.stopReason = result.stopReason;
-	output.errorStatus = result.status;
-	output.errorId = result.id;
-	output.errorMessage = result.message;
+	AIError.applyFinalizeResult(output, result);
 	output.duration = performance.now() - context.startTime;
 	if (context.firstTokenTime) {
 		output.ttft = context.firstTokenTime - context.startTime;
@@ -2308,9 +2305,7 @@ class CodexStreamProcessor {
 		this.runtime.whitespaceLoopRetries += 1;
 		const websocketState = this.requestContext.websocketState;
 		if (websocketState) {
-			resetCodexWebSocketAppendState(websocketState);
-			websocketState.turnState = undefined;
-			websocketState.modelsEtag = undefined;
+			resetCodexWebSocketChain(websocketState);
 		}
 
 		CODEX_DEBUG &&
@@ -2320,22 +2315,12 @@ class CodexStreamProcessor {
 				transport: this.runtime.transport,
 			});
 
-		this.runtime.resetAccumulators();
-		this.runtime.sawTerminalEvent = false;
+		this.#restartTurn();
 		this.runtime.whitespaceToolCallArgumentsDelta = undefined;
-		resetOutputState(this.model, this.output);
-		this.firstTokenTime = undefined;
-		await scheduler.wait(CODEX_WHITESPACE_LOOP_RETRY_DELAY_MS * this.runtime.whitespaceLoopRetries, {
-			signal: this.requestSetup.requestSignal,
-		});
-
-		if (this.runtime.transport === "websocket" && websocketState) {
-			await this.#reopenWebSocketStream(websocketState);
-			return true;
-		}
-
-		await this.#reopenSseStream(websocketState);
-		return true;
+		return this.#reopenAfterDelay(
+			CODEX_WHITESPACE_LOOP_RETRY_DELAY_MS * this.runtime.whitespaceLoopRetries,
+			websocketState,
+		);
 	}
 
 	/**
@@ -2434,13 +2419,8 @@ class CodexStreamProcessor {
 		}
 
 		this.runtime.providerRetryAttempt += 1;
-		resetCodexWebSocketAppendState(websocketState);
-		websocketState.turnState = undefined;
-		websocketState.modelsEtag = undefined;
-		this.runtime.resetAccumulators();
-		this.runtime.sawTerminalEvent = false;
-		resetOutputState(this.model, this.output);
-		this.firstTokenTime = undefined;
+		resetCodexWebSocketChain(websocketState);
+		this.#restartTurn();
 
 		CODEX_DEBUG &&
 			logger.debug("[codex] codex previous_response_id expired; retrying with full context", {
@@ -2530,9 +2510,7 @@ class CodexStreamProcessor {
 		this.runtime.providerRetryAttempt += 1;
 		const websocketState = this.requestContext.websocketState;
 		if (websocketState) {
-			resetCodexWebSocketAppendState(websocketState);
-			websocketState.turnState = undefined;
-			websocketState.modelsEtag = undefined;
+			resetCodexWebSocketChain(websocketState);
 		}
 
 		CODEX_DEBUG &&
@@ -2543,20 +2521,26 @@ class CodexStreamProcessor {
 				transport: this.runtime.transport,
 			});
 
+		this.#restartTurn();
+		return this.#reopenAfterDelay(CODEX_RETRY_DELAY_MS * this.runtime.providerRetryAttempt, websocketState);
+	}
+
+	/** Clears every accumulator of the failed attempt so the replayed request starts from an empty message. */
+	#restartTurn(): void {
 		this.runtime.resetAccumulators();
 		this.runtime.sawTerminalEvent = false;
 		resetOutputState(this.model, this.output);
 		this.firstTokenTime = undefined;
-		await scheduler.wait(CODEX_RETRY_DELAY_MS * this.runtime.providerRetryAttempt, {
-			signal: this.requestSetup.requestSignal,
-		});
+	}
 
+	/** Waits `delayMs`, then replays over the websocket when that is the live transport and over SSE otherwise. */
+	async #reopenAfterDelay(delayMs: number, websocketState: CodexWebSocketSessionState | undefined): Promise<true> {
+		await scheduler.wait(delayMs, { signal: this.requestSetup.requestSignal });
 		if (this.runtime.transport === "websocket" && websocketState) {
 			await this.#reopenWebSocketStream(websocketState);
-			return true;
+		} else {
+			await this.#reopenSseStream(websocketState);
 		}
-
-		await this.#reopenSseStream(websocketState);
 		return true;
 	}
 
@@ -2607,9 +2591,7 @@ class CodexStreamProcessor {
 		}
 		if (!this.runtime.sawTerminalEvent) {
 			if (this.requestContext.websocketState) {
-				resetCodexWebSocketAppendState(this.requestContext.websocketState);
-				this.requestContext.websocketState.turnState = undefined;
-				this.requestContext.websocketState.modelsEtag = undefined;
+				resetCodexWebSocketChain(this.requestContext.websocketState);
 			}
 			CODEX_DEBUG &&
 				logger.debug("[codex] codex stream ended unexpectedly", {
@@ -2645,16 +2627,11 @@ const streamOpenAICodexResponsesOnce = (
 
 	(async () => {
 		const startTime = performance.now();
-		const output: AssistantMessage = {
-			role: "assistant",
-			content: [],
-			api: "openai-codex-responses" as Api,
-			provider: model.provider,
-			model: model.id,
-			usage: emptyUsage(),
-			stopReason: "stop",
-			timestamp: Date.now(),
-		};
+		const output: AssistantMessage = createInitialResponsesAssistantMessage(
+			"openai-codex-responses" as Api,
+			model.provider,
+			model.id,
+		);
 		const requestSetup = createRequestSetup(options);
 		let processingContext: CodexStreamProcessor | undefined;
 		const cacheEnforcement: CacheEnforcement = resolveCacheEnforcement(options?.cacheEnforcement);
@@ -2888,6 +2865,13 @@ function resetCodexWebSocketAppendState(state: CodexWebSocketSessionState): void
 	state.lastResponseItems = undefined;
 }
 
+/** Drops the append baseline and the turn-state and models-etag headers, so the next request replays in full. */
+function resetCodexWebSocketChain(state: CodexWebSocketSessionState): void {
+	resetCodexWebSocketAppendState(state);
+	state.turnState = undefined;
+	state.modelsEtag = undefined;
+}
+
 /**
  * Record a codex websocket failure, and tear the socket down.
  *
@@ -3078,80 +3062,44 @@ function parseCodexResponseStatus(value: unknown): ResponseStatus | undefined {
 	}
 }
 
+/** Copies each named key whose value is a number; undefined when none is present. */
+function pickNumberFields<T extends Record<string, number | undefined>>(
+	value: unknown,
+	keys: ReadonlyArray<keyof T & string>,
+): T | undefined {
+	if (!value || typeof value !== "object") return undefined;
+	const source = value as Record<string, unknown>;
+	let picked: Record<string, number> | undefined;
+	for (const key of keys) {
+		const field = source[key];
+		if (typeof field !== "number") continue;
+		picked ??= {};
+		picked[key] = field;
+	}
+	return picked as T | undefined;
+}
+
 function parseCodexResponseUsage(value: unknown): CodexResponseUsage | undefined {
 	if (!value || typeof value !== "object") return undefined;
-	const usage: CodexResponseUsage = {};
-	let hasUsage = false;
-	if ("input_tokens" in value && typeof value.input_tokens === "number") {
-		usage.input_tokens = value.input_tokens;
-		hasUsage = true;
-	}
-	if ("output_tokens" in value && typeof value.output_tokens === "number") {
-		usage.output_tokens = value.output_tokens;
-		hasUsage = true;
-	}
-	if ("total_tokens" in value && typeof value.total_tokens === "number") {
-		usage.total_tokens = value.total_tokens;
-		hasUsage = true;
-	}
-	if ("prompt_cache_hit_tokens" in value && typeof value.prompt_cache_hit_tokens === "number") {
-		usage.prompt_cache_hit_tokens = value.prompt_cache_hit_tokens;
-		hasUsage = true;
-	}
-	if (
-		"input_tokens_details" in value &&
-		value.input_tokens_details &&
-		typeof value.input_tokens_details === "object"
-	) {
-		const details = value.input_tokens_details;
-		const parsedDetails: NonNullable<CodexResponseUsage["input_tokens_details"]> = {};
-		let hasDetails = false;
-		if ("cached_tokens" in details && typeof details.cached_tokens === "number") {
-			parsedDetails.cached_tokens = details.cached_tokens;
-			hasDetails = true;
-		}
-		if ("cache_write_tokens" in details && typeof details.cache_write_tokens === "number") {
-			parsedDetails.cache_write_tokens = details.cache_write_tokens;
-			hasDetails = true;
-		}
-		if ("orchestration_input_tokens" in details && typeof details.orchestration_input_tokens === "number") {
-			parsedDetails.orchestration_input_tokens = details.orchestration_input_tokens;
-			hasDetails = true;
-		}
-		if (
-			"orchestration_input_cached_tokens" in details &&
-			typeof details.orchestration_input_cached_tokens === "number"
-		) {
-			parsedDetails.orchestration_input_cached_tokens = details.orchestration_input_cached_tokens;
-			hasDetails = true;
-		}
-		if (hasDetails) {
-			usage.input_tokens_details = parsedDetails;
-			hasUsage = true;
-		}
-	}
-	if (
-		"output_tokens_details" in value &&
-		value.output_tokens_details &&
-		typeof value.output_tokens_details === "object"
-	) {
-		const details = value.output_tokens_details;
-		const parsedDetails: NonNullable<CodexResponseUsage["output_tokens_details"]> = {};
-		let hasDetails = false;
-		if ("reasoning_tokens" in details && typeof details.reasoning_tokens === "number") {
-			parsedDetails.reasoning_tokens = details.reasoning_tokens;
-			hasDetails = true;
-		}
-		if ("orchestration_output_tokens" in details && typeof details.orchestration_output_tokens === "number") {
-			parsedDetails.orchestration_output_tokens = details.orchestration_output_tokens;
-			hasDetails = true;
-		}
-		if (hasDetails) {
-			usage.output_tokens_details = parsedDetails;
-			hasUsage = true;
-		}
-	}
-	return hasUsage ? usage : undefined;
+	const usage: CodexResponseUsage =
+		pickNumberFields<Omit<CodexResponseUsage, "input_tokens_details" | "output_tokens_details">>(value, [
+			"input_tokens",
+			"output_tokens",
+			"total_tokens",
+			"prompt_cache_hit_tokens",
+		]) ?? {};
+	const source = value as Record<string, unknown>;
+	const inputDetails = pickNumberFields<NonNullable<CodexResponseUsage["input_tokens_details"]>>(
+		source.input_tokens_details,
+		["cached_tokens", "cache_write_tokens", "orchestration_input_tokens", "orchestration_input_cached_tokens"],
+	);
+	if (inputDetails) usage.input_tokens_details = inputDetails;
+	const outputDetails = pickNumberFields<NonNullable<CodexResponseUsage["output_tokens_details"]>>(
+		source.output_tokens_details,
+		["reasoning_tokens", "orchestration_output_tokens"],
+	);
+	if (outputDetails) usage.output_tokens_details = outputDetails;
+	return Object.keys(usage).length > 0 ? usage : undefined;
 }
 
 function describeCodexInputItemType(item: unknown): string {
@@ -3293,9 +3241,7 @@ function buildCodexChainedRequestBody(
 				hadTurnStateHeader: Boolean(state.turnState),
 				hadModelsEtagHeader: Boolean(state.modelsEtag),
 			});
-		resetCodexWebSocketAppendState(state);
-		state.turnState = undefined;
-		state.modelsEtag = undefined;
+		resetCodexWebSocketChain(state);
 	}
 	return requestBody;
 }

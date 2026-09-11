@@ -75,6 +75,12 @@ export class Box implements Component {
 		this.#invalidateCache();
 	}
 
+	dispose(): void {
+		for (const child of this.children) {
+			child.dispose?.();
+		}
+	}
+
 	setPaddingX(paddingX: number): void {
 		if (this.#paddingX === paddingX) return;
 		this.#paddingX = paddingX;

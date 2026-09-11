@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { errorMessage, formatBytes } from "@veyyon/utils";
-import { replaceTabs } from "@veyyon/utils/wrap";
+import { replaceTabs } from "@veyyon/utils/tab-width";
 import type { ViewSpan } from "@veyyon/view";
 import { type } from "arktype";
 import { executeBash } from "../../exec/bash-executor";

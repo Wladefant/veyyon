@@ -10,15 +10,10 @@ export interface DocMatch {
 	parsedUrl: URL;
 }
 
-export interface DocMeta {
-	title: string;
-	customMarkdown?: string | null;
-}
-
 export type DocContext = DeclarativeContext;
 
-export type DocDeclaration = DeclarativeSite<DocMatch, DocMeta>;
+export type DocDeclaration = DeclarativeSite<DocMatch>;
 
 export function createDocumentationHandler(decl: DocDeclaration, handlerName?: string): SpecialHandler {
-	return createDeclarativeHandler(decl, meta => `# ${meta.title}\n`, handlerName, true);
+	return createDeclarativeHandler(decl, handlerName, true);
 }

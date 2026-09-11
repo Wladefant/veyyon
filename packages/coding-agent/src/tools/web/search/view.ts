@@ -15,8 +15,8 @@
  */
 
 import { formatAge, formatCount } from "@veyyon/utils/format";
+import { replaceTabs } from "@veyyon/utils/tab-width";
 import { truncateToWidth } from "@veyyon/utils/width";
-import { replaceTabs } from "@veyyon/utils/wrap";
 import type { StatusRowView, ToolView, ToolViewRenderer, ViewLine, ViewSection, ViewSpan } from "@veyyon/view";
 import { extractResultText } from "../../core/output-notice";
 import { PREVIEW_LIMITS } from "../../core/render-limits";
@@ -28,8 +28,7 @@ import {
 	shortenEmbeddedPaths,
 	type ToolViewResult,
 } from "../../core/render-utils";
-import { getSearchProviderLabel } from "./provider";
-import type { SearchRenderDetails, SearchResponse, SearchSource } from "./types";
+import { getSearchProviderLabel, type SearchRenderDetails, type SearchResponse, type SearchSource } from "./types";
 
 /** Sources a collapsed card lists before it says how many it held back. */
 const MAX_COLLAPSED_ITEMS = PREVIEW_LIMITS.COLLAPSED_ITEMS;

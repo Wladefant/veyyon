@@ -36,10 +36,14 @@ import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { setTerminalHeadless } from "@veyyon/utils";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../utils/test/helpers/isolated-config-root";
+import { parseArgs } from "../src/cli/args";
 import { clearFirstFrameRecording, recordFirstFrame } from "../src/cli/first-frame-recorder";
 import { type FirstFrameRecording, recordingPath } from "../src/cli/first-frame-replay";
+import { runStartupPrologue } from "../src/cli/launch-card";
+import { type StartupPrologue, takeStartupPrologue } from "../src/cli/prologue-handoff";
 import { resetSettingsForTest, Settings } from "../src/config/settings";
 import { resetLaunchFactsForTest } from "../src/modes/launch-facts";
+import { CURRENT_SETUP_VERSION } from "../src/modes/setup-version";
 import { type FirstFrame, paintFirstFrame, takeFirstFrame } from "../src/modes/terminal/first-frame";
 import * as ttyInputFlush from "../src/modes/terminal/tty-input-flush";
 import { resetGroundTintsForTest } from "../src/theme/ground-tints";
@@ -533,6 +537,91 @@ describe("the first-frame capture wrapper lifecycle", () => {
 				await deletion;
 			} finally {
 				rmSpy.mockRestore();
+			}
+		}
+	});
+	it("completes runStartupPrologue handoff without blocking on asynchronous recorder filesystem completion", async () => {
+		resetSettingsForTest();
+		await Settings.init({
+			inMemory: true,
+			cwd: isolated.root,
+			overrides: {
+				onboardingVersion: CURRENT_SETUP_VERSION,
+				"startup.quiet": false,
+				"startup.showSplash": false,
+			},
+		});
+
+		const writeGate = Promise.withResolvers<void>();
+		const writeStarted = Promise.withResolvers<void>();
+		const handoffDeadline = Promise.withResolvers<never>();
+		const realRename = fsp.rename;
+		const destination = recordingPath();
+		const renameSpy = spyOn(fsp, "rename").mockImplementation(async (oldPath, newPath) => {
+			if (String(newPath) === destination) {
+				writeStarted.resolve();
+				await writeGate.promise;
+			}
+			return realRename(oldPath, newPath);
+		});
+		let handoff: Promise<StartupPrologue> | undefined;
+		let handoffTimeout: NodeJS.Timeout | undefined;
+		let writeTimeout: NodeJS.Timeout | undefined;
+		let frame: FirstFrame | undefined;
+		try {
+			handoff = runStartupPrologue(parseArgs([]));
+			handoffTimeout = setTimeout(
+				() => handoffDeadline.reject(new Error("prologue handoff waited for recorder publication")),
+				2000,
+			);
+			const prologue = await Promise.race([handoff, handoffDeadline.promise]);
+			clearTimeout(handoffTimeout);
+			expect(takeStartupPrologue()).toBe(prologue);
+			expect(takeStartupPrologue()).toBeUndefined();
+
+			frame = takeFirstFrame();
+			if (!frame) throw new Error("completed onboarding did not produce an interactive first frame");
+			frames.push(frame);
+			const terminal = frame.ui.terminal;
+			expect(terminal.write).toBe(Object.getPrototypeOf(terminal).write);
+
+			writeTimeout = setTimeout(
+				() => writeStarted.reject(new Error("recorder publication did not reach the filesystem barrier")),
+				2000,
+			);
+			await writeStarted.promise;
+			clearTimeout(writeTimeout);
+			expect(readPersistedRecording()).toBeUndefined();
+
+			send("post-handoff draft");
+			const inputFlushed = Promise.withResolvers<void>();
+			setImmediate(inputFlushed.resolve);
+			await inputFlushed.promise;
+			terminal.write("post-handoff output");
+			expect(frame.editor.getText()).toBe("post-handoff draft");
+			frame.release();
+			writeGate.resolve();
+			await frame.settleReplayRecording();
+
+			const recording = readPersistedRecording();
+			if (!recording) throw new Error("recorder did not publish after the filesystem barrier opened");
+			expect(recording.bytes).not.toContain("post-handoff draft");
+			expect(recording.bytes).not.toContain("post-handoff output");
+			expect(recording.screen.window.some(row => row.includes("post-handoff draft"))).toBe(false);
+		} finally {
+			clearTimeout(handoffTimeout);
+			clearTimeout(writeTimeout);
+			writeGate.resolve();
+			try {
+				await handoff;
+				takeStartupPrologue();
+				if (!frame) {
+					frame = takeFirstFrame();
+					if (frame) frames.push(frame);
+				}
+				await frame?.settleReplayRecording();
+			} finally {
+				renameSpy.mockRestore();
 			}
 		}
 	});

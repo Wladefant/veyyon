@@ -9,7 +9,7 @@
  * second copy of the grammar.
  */
 
-import { replaceTabs } from "@veyyon/utils/wrap";
+import { replaceTabs } from "@veyyon/utils/tab-width";
 import type { ViewLine, ViewSection, ViewSpan } from "@veyyon/view";
 import { getLanguageFromPath } from "../../utils/lang-from-path";
 import { heldBack } from "./render-utils";

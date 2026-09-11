@@ -20,6 +20,27 @@ export function isSqliteConstraint(error: unknown): boolean {
 	return error instanceof Error && error.message.toLowerCase().includes("constraint");
 }
 
+/**
+ * Reads a JSON string list stored in a text column. A null, empty, non-JSON or non-array value and
+ * every non-string item yield nothing: a row with a damaged list reads as a row with none, and the
+ * caller keeps the row rather than skipping it.
+ */
+export function parseStoredStringList(value: string | null): string[] {
+	if (value === null || value === "") return [];
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(value);
+	} catch {
+		return [];
+	}
+	if (!Array.isArray(parsed)) return [];
+	const strings: string[] = [];
+	for (const item of parsed) {
+		if (typeof item === "string") strings.push(item);
+	}
+	return strings;
+}
+
 export interface EntityImportStats {
 	inserted: number;
 	skipped: number;

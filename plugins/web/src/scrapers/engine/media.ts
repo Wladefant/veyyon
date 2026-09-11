@@ -8,15 +8,10 @@ export interface MediaMatch {
 	parsedUrl: URL;
 }
 
-export interface MediaMeta {
-	title: string;
-	customMarkdown?: string | null;
-}
-
 export type MediaContext = DeclarativeContext;
 
-export type MediaDeclaration = DeclarativeSite<MediaMatch, MediaMeta>;
+export type MediaDeclaration = DeclarativeSite<MediaMatch>;
 
 export function createMediaHandler(decl: MediaDeclaration, handlerName?: string): SpecialHandler {
-	return createDeclarativeHandler(decl, meta => `# ${meta.title}\n`, handlerName);
+	return createDeclarativeHandler(decl, handlerName);
 }

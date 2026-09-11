@@ -31,6 +31,8 @@ class, and the structure a stylesheet lays out arrives as data attributes: `data
 An embedder supplies its own icon set through `GuiViewOptions.symbols`, keyed by the symbol and
 emblem names a tool states and by `status:<name>` for the mark a status draws. A key with no entry
 draws the span's own text, which is the fallback the contract states.
+Only own properties of the symbol table are resolved; inherited names use the text fallback.
+Symbol values are escaped as text rather than parsed as HTML.
 
 ## What this host answers differently from the terminal
 

@@ -2,7 +2,7 @@
  * What an eval card shows, for any host.
  *
  * One card per call, whatever the call ran: a head row naming the kernel, then one group per cell
- * carrying its source, its output, the helper calls the cell made and the subagents it spawned, and
+ * carrying its source, its output, the helper calls the cell made and the agents it spawned, and
  * a closing group for the values it displayed and any notice about them. A cell is a GROUP rather
  * than a card of its own, which is the one shape change this conversion makes: a view is one card,
  * and a terminal drew three cells as three railed boxes.
@@ -39,7 +39,7 @@ import {
 	JSON_TREE_SCALAR_LEN_EXPANDED,
 	jsonTreeViewLines,
 } from "../core/json-tree-view";
-import { formatTruncationMetaNotice, stripOutputNotice } from "../core/output-notice";
+import { extractResultText, formatTruncationMetaNotice, stripOutputNotice } from "../core/output-notice";
 import {
 	collapsedProgressViewLines,
 	collapseProgressRuns,
@@ -64,7 +64,7 @@ const EXPANDED_MAX_LINES = 200;
 
 /** The columns one status-event detail row may spend. */
 const DETAIL_MAX_WIDTH = 80;
-/** The columns a subagent's preview, tool argument or intent may spend. */
+/** The columns an agent's preview, tool argument or intent may spend. */
 const AGENT_DETAIL_MAX_WIDTH = 48;
 /** The columns a resolved model name may spend. */
 const MODEL_MAX_WIDTH = 30;
@@ -172,7 +172,7 @@ function cellStatus(status: EvalCellResult["status"]): ViewStatus {
 /** The cell states a card reports, worst first, so the header states the worst of them. */
 const WORST_FIRST: readonly EvalCellResult["status"][] = ["error", "running", "pending"];
 
-/** The state a subagent reports, as the mark a host draws for it. */
+/** The state an agent reports, as the mark a host draws for it. */
 function agentStatus(value: unknown): ViewStatus {
 	switch (value) {
 		case "completed":
@@ -470,7 +470,7 @@ function statusSection(events: readonly EvalStatusEvent[], expanded: boolean): V
 	};
 }
 
-/** The facts a subagent's row carries after its id: how much it has done, and what it cost. */
+/** The facts an agent's row carries after its id: how much it has done, and what it cost. */
 function agentFacts(event: EvalStatusEvent): ViewSpan[] {
 	const spans: ViewSpan[] = [];
 	const toolCount = eventCount(event.toolCount);
@@ -482,7 +482,7 @@ function agentFacts(event: EvalStatusEvent): ViewSpan[] {
 	const cost = eventCount(event.cost);
 	if (cost > 0) spans.push({ text: `$${cost.toFixed(2)}`, tone: "info" });
 	const model = eventText(event.model);
-	if (model !== undefined && settings.get("subagent.showResolvedModelBadge")) {
+	if (model !== undefined && settings.get("agent.showResolvedModelBadge")) {
 		spans.push({ text: truncateToWidth(replaceTabs(model), MODEL_MAX_WIDTH, Ellipsis.Unicode), tone: "dim" });
 	}
 	const status = agentStatus(event.status);
@@ -494,7 +494,7 @@ function agentFacts(event: EvalStatusEvent): ViewSpan[] {
 }
 
 /**
- * The subagents a cell spawned, as a list of what each one is doing.
+ * The agents a cell spawned, as a list of what each one is doing.
  *
  * A running agent's row is followed by the tool it is in and the intent it stated, which is the one
  * thing a reader watching a spawned run wants; a settled agent's row is what it cost.
@@ -545,7 +545,7 @@ function agentSection(events: readonly EvalStatusEvent[]): ViewSection | undefin
 			]);
 		}
 	}
-	// A subagent tree is one row per agent plus what it is doing, so it is not a list the host marks:
+	// An agent tree is one row per agent plus what it is doing, so it is not a list the host marks:
 	// an item here is two lines and a list states one.
 	return { label: "Agents", lines };
 }
@@ -666,10 +666,7 @@ export const evalToolView: Required<ToolViewRenderer<EvalRenderArgs, EvalViewRes
 
 		// No cell ran, so there is no card to head: what the tool returned is the whole of it, which
 		// is what a kernel that failed before it started, and a replayed transcript, both carry.
-		const text = stripOutputNotice(
-			(result.content?.find(part => part.type === "text")?.text ?? "").trimEnd(),
-			details?.meta,
-		).trimEnd();
+		const text = stripOutputNotice(extractResultText(result.content).trimEnd(), details?.meta).trimEnd();
 		const lines: ViewLine[] = [];
 		if (text !== "") {
 			// A run of same-shape progress lines is condensed before the host measures its window, for

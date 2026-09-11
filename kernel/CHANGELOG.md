@@ -11,6 +11,7 @@
 - `@veyyon/kernel/loader/*` publishes plugin discovery, manifest parsing, the installed registry, the marketplace client and load-failure reporting.
 - `@veyyon/kernel/registry/*` publishes generic contribution interfaces, tool proxying, widget and host-view declarations, and TypeBox schema conversion.
 - `@veyyon/kernel/registry/tool-domain` declares `ToolDomainManifest`, the name and lazy-factory table a tool domain contributes, so a host reads a domain's tools without depending on the coding agent.
+- `SubagentSpawnEntry` and `SubagentSpawnRecord` in `@veyyon/kernel/session/session-entries` are `AgentSpawnEntry` and `AgentSpawnRecord`; the persisted `subagent_spawn` entry type is unchanged.
 - `@veyyon/kernel/registry/message-kind` declares `AgentMessageKind`, a transcript role a tool domain records with its conversion to provider messages and to text, and `ToolDomainManifest.messageKinds` carries a domain's kinds; `@veyyon/kernel/session/message-kinds` is the role-keyed table the session spine converts them through, which throws on a role no domain declared and on a second kind for one role.
 - `@veyyon/kernel/session/session-manager`, `session-context`, `session-loader` and `agent-storage` publish the session manager, its context builder, its file loader and the credential store, moved from `@veyyon/coding-agent/session/*` unchanged; `session/custom-message-payload` publishes the custom-message payload normaliser and the rehydration sanitiser they call.
 - `@veyyon/kernel/settings/schema` publishes the settings schema registry: `declareSettings` registers a package's table and rejects a path declared twice, `DeclaredSettings` merges each table's type so `SettingPath` and `SettingValue` span every registered table, and `getDefault`, `getType`, `getUi`, `hasUi`, `getPathsForTab`, `retiredBy`, `isSettingPath`, `getEnumValues`, `isUnsetNumberPath` and `describeSettingTypeMismatch` answer from the registry; a query before any table has registered, or for a path no table declares, throws naming the cause. `@veyyon/kernel/settings/optional-number` publishes the unset-number owner, moved from `@veyyon/coding-agent/config/optional-number` unchanged.
@@ -18,11 +19,14 @@
 
 ### Changed
 
+- Settings mutations and session storage writers share implementations without changing persistence, hook ordering or error behavior.
+- Installed plugin registry readers share JSON validation while preserving numeric-version handling and malformed-file behavior.
 - Plugin runtime configuration uses the shared record validator; behavior is unchanged.
 - Edit-specific event normalization remains in `@veyyon/coding-agent/extensibility/tool-event-input`; event payloads are unchanged.
 - Settings lookups reuse immutable registry key snapshots and build derived indexes in one pass after registrations or resets.
 - Settings stores share layer copying and override application while retaining profile values, per-directory resolution and isolated save-failure reports.
 - Session title overlays avoid encoding and copying the full transcript when the first line occupies the fixed 256-byte slot.
+- The TypeBox `unknown` converter is the `any` converter, which had the same body; emitted schemas are unchanged.
 - Session entry validation shares non-empty string checks, and branch labels avoid temporary identifier arrays.
 - `@veyyon/kernel/settings/store` exports `groupSettingPaths`, memoizing prefix-grouped schema paths on the schema index with automatic invalidation on schema resets.
 - Array copies that allocated with a spread now use `.slice()`, `.concat()` or `Array.from()`. No user-visible behavior changes.

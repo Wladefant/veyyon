@@ -33,6 +33,7 @@ import {
 	walkBranchPath,
 } from "./session-context";
 import {
+	type AgentSpawnRecord,
 	type BranchSummaryEntry,
 	CURRENT_SESSION_VERSION,
 	type FileEntry,
@@ -48,7 +49,6 @@ import {
 	type SessionLifecycleState,
 	type SessionTitleSource,
 	type SessionTreeNode,
-	type SubagentSpawnRecord,
 	TITLE_CHANGE_ENTRY_TYPE,
 	type TitleChangeEntry,
 	type UsageStatistics,
@@ -104,13 +104,13 @@ function artifactsDirectoryFor(sessionFile: string | undefined): string | null {
 }
 
 /**
- * Resolve a breadcrumb's recorded session file to its interactive root. Subagent
+ * Resolve a breadcrumb's recorded session file to its interactive root. Agent
  * (and other artifact) sessions live inside a parent session's artifacts dir —
  * `<parent>.jsonl` strips its suffix to `<parent>/`, and a child writes
  * `<parent>/<agentId>.jsonl`. A breadcrumb that points at such a child — a
- * pre-fix poisoned crumb left by a subagent that opened in the parent's TTY, or
+ * pre-fix poisoned crumb left by an agent that opened in the parent's TTY, or
  * any nested artifact — must resolve back up to the top-level session so
- * `--continue` resumes the real conversation instead of a subagent transcript.
+ * `--continue` resumes the real conversation instead of an agent transcript.
  */
 function resolveBreadcrumbToInteractiveRoot(sessionFile: string): string {
 	let current = path.resolve(sessionFile);
@@ -2094,7 +2094,7 @@ export class SessionManager {
 
 	/**
 	 * Open a new per-turn budget window: snapshot the cumulative output baseline,
-	 * reset the eval-subagent counter, and set the (optional) ceiling.
+	 * reset the eval-agent counter, and set the (optional) ceiling.
 	 */
 	beginTurnBudget(total: number | null, hard: boolean): void {
 		this.#turnBudgetTotal = total;
@@ -2103,7 +2103,7 @@ export class SessionManager {
 		this.#turnEvalOutput = 0;
 	}
 
-	recordEvalSubagentOutput(output: number): void {
+	recordEvalAgentOutput(output: number): void {
 		if (Number.isFinite(output) && output > 0) this.#turnEvalOutput += output;
 	}
 
@@ -2361,12 +2361,12 @@ export class SessionManager {
 	}
 
 	/**
-	 * Append a structured parent->child index entry recording one subagent this
+	 * Append a structured parent->child index entry recording one agent this
 	 * session spawned. The record points at the child's durable transcript and
 	 * captures its task, isolation, outcome, timing, and usage so a study/backtest
-	 * tool can enumerate a session's subagents without scraping tool-result prose.
+	 * tool can enumerate a session's agents without scraping tool-result prose.
 	 */
-	appendSubagentSpawn(record: SubagentSpawnRecord): string {
+	appendAgentSpawn(record: AgentSpawnRecord): string {
 		return this.#appendFresh({ type: "subagent_spawn", ...record });
 	}
 
@@ -2804,7 +2804,7 @@ export class SessionManager {
 	 * `options.sessionFile` pins the new session's file path (default: an
 	 * auto-named `<timestamp>_<id>.jsonl` in `sessionDir`). Callers that register
 	 * the fork as a named agent (e.g. `/tan`) pass `<agentId>.jsonl` so the
-	 * persisted-subagent scan keys the agent by the same id the live ref uses.
+	 * persisted-agent scan keys the agent by the same id the live ref uses.
 	 */
 	static async forkFrom(
 		sourcePath: string,
@@ -2911,7 +2911,7 @@ export class SessionManager {
 	}
 
 	/**
-	 * Lock-free peek for cold subagent revival: returns the recorded working
+	 * Lock-free peek for cold agent revival: returns the recorded working
 	 * directory (session header) and the latest `session_init` contract (system
 	 * prompt / tools / output schema) WITHOUT taking the single-writer lock that
 	 * {@link open} acquires — the caller re-opens for the actual revive. Returns
@@ -2993,7 +2993,7 @@ export class SessionManager {
 		let chosenSession: string | null | undefined;
 
 		if (breadcrumb) {
-			// Recover stale crumbs: a subagent open (pre-fix) may have pointed this
+			// Recover stale crumbs: an agent open (pre-fix) may have pointed this
 			// terminal's breadcrumb at an artifact child; resume the parent instead.
 			breadcrumb.sessionFile = resolveBreadcrumbToInteractiveRoot(breadcrumb.sessionFile);
 			const breadcrumbCwd = path.resolve(breadcrumb.cwd);

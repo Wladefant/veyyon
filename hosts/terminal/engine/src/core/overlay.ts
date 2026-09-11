@@ -94,6 +94,9 @@ export interface OverlayOptions {
 	/** Margin from terminal edges. Number applies to all sides. */
 	margin?: OverlayMargin | number;
 
+	/** Whether the overlay receives input and takes focus. Defaults to true. */
+	interactive?: boolean;
+
 	// === Visibility ===
 	/**
 	 * Control overlay visibility based on terminal dimensions.
@@ -404,7 +407,7 @@ export class OverlayStack {
 	 * keyboard, the mouse and `hasInteractive()` are concerned.
 	 */
 	isInteractive(entry: OverlayEntry): boolean {
-		return !entry.exiting && this.isVisible(entry);
+		return entry.options?.interactive !== false && !entry.exiting && this.isVisible(entry);
 	}
 
 	/** Whether any overlay can still take input. */
@@ -414,18 +417,12 @@ export class OverlayStack {
 
 	/** The topmost overlay that is PAINTED, including one that is playing itself out. */
 	topmostVisible(): OverlayEntry | undefined {
-		for (let i = this.#entries.length - 1; i >= 0; i--) {
-			if (this.isVisible(this.#entries[i]!)) return this.#entries[i];
-		}
-		return undefined;
+		return this.#entries.findLast(entry => this.isVisible(entry));
 	}
 
 	/** The topmost overlay that can hold focus, which an exiting card cannot. */
 	topmostInteractive(): OverlayEntry | undefined {
-		for (let i = this.#entries.length - 1; i >= 0; i--) {
-			if (this.isInteractive(this.#entries[i]!)) return this.#entries[i];
-		}
-		return undefined;
+		return this.#entries.findLast(entry => this.isInteractive(entry));
 	}
 
 	clearFrames(): void {

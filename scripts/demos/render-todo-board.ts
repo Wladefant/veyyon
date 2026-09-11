@@ -18,6 +18,11 @@ import { renderDemo } from "./render-args";
 const DELEGATED = "Audit the secrets subsystem for dead exports";
 const IN_FLIGHT = "Refresh a stored token before it expires";
 
+/**
+ * A plan mid-flight: one phase closed, the active phase carrying a completed
+ * task, the task the agent itself is on, and two pending — one of which a
+ * detached agent picked up.
+ */
 function phases(waiting: boolean): TodoPhase[] {
 	const active: TodoItem[] = [
 		{ content: "Move the settings domain onto the new reader", status: "completed" },

@@ -930,14 +930,27 @@ function splitBarePackageSpecifier(specifier: string): BarePackageSpecifier | nu
 	return { name, subpath: rest.length > 0 ? rest.join("/") : null };
 }
 
-async function findNodePackageRoot(packageName: string, importerPath: string): Promise<string | null> {
-	const cacheKey = `${packageName}\0${path.resolve(path.dirname(importerPath))}`;
-	const cached = nodePackageRootCache.get(cacheKey);
+/**
+ * The cached promise under `key`, or the one `compute` starts now. The promise itself is cached
+ * rather than its value, so concurrent callers of one key share one computation and a rejection
+ * is repeated to each of them.
+ */
+function memoized<T>(cache: Map<string, Promise<T>>, key: string, compute: () => Promise<T>): Promise<T> {
+	const cached = cache.get(key);
 	if (cached) return cached;
-
-	const promise = findNodePackageRootUncached(packageName, importerPath);
-	nodePackageRootCache.set(cacheKey, promise);
+	const promise = compute();
+	cache.set(key, promise);
 	return promise;
+}
+
+function importerCacheKey(specifier: string, importerPath: string): string {
+	return `${specifier}\0${path.resolve(path.dirname(importerPath))}`;
+}
+
+function findNodePackageRoot(packageName: string, importerPath: string): Promise<string | null> {
+	return memoized(nodePackageRootCache, importerCacheKey(packageName, importerPath), () =>
+		findNodePackageRootUncached(packageName, importerPath),
+	);
 }
 
 async function findNodePackageRootUncached(packageName: string, importerPath: string): Promise<string | null> {
@@ -955,13 +968,8 @@ async function findNodePackageRootUncached(packageName: string, importerPath: st
 	}
 }
 
-async function readPackageManifest(packageRoot: string): Promise<Record<string, unknown> | null> {
-	const cached = packageManifestCache.get(packageRoot);
-	if (cached) return cached;
-
-	const promise = readPackageManifestUncached(packageRoot);
-	packageManifestCache.set(packageRoot, promise);
-	return promise;
+function readPackageManifest(packageRoot: string): Promise<Record<string, unknown> | null> {
+	return memoized(packageManifestCache, packageRoot, () => readPackageManifestUncached(packageRoot));
 }
 
 /**
@@ -1084,13 +1092,9 @@ async function resolveExtensionBareDependency(specifier: string, importerPath: s
 		return null;
 	}
 
-	const cacheKey = `${specifier}\0${path.resolve(path.dirname(importerPath))}`;
-	const cached = bareDependencyResolutionCache.get(cacheKey);
-	if (cached) return cached;
-
-	const promise = resolveExtensionBareDependencyUncached(specifier, importerPath);
-	bareDependencyResolutionCache.set(cacheKey, promise);
-	return promise;
+	return memoized(bareDependencyResolutionCache, importerCacheKey(specifier, importerPath), () =>
+		resolveExtensionBareDependencyUncached(specifier, importerPath),
+	);
 }
 
 async function resolveExtensionBareDependencyUncached(specifier: string, importerPath: string): Promise<string | null> {
@@ -1124,13 +1128,9 @@ async function resolveExtensionNativeAddon(specifier: string, importerPath: stri
 		return null;
 	}
 
-	const cacheKey = `${specifier}\0${path.resolve(path.dirname(importerPath))}`;
-	const cached = nativeAddonResolutionCache.get(cacheKey);
-	if (cached) return cached;
-
-	const promise = resolveExtensionNativeAddonUncached(specifier, importerPath);
-	nativeAddonResolutionCache.set(cacheKey, promise);
-	return promise;
+	return memoized(nativeAddonResolutionCache, importerCacheKey(specifier, importerPath), () =>
+		resolveExtensionNativeAddonUncached(specifier, importerPath),
+	);
 }
 
 async function resolveExtensionNativeAddonUncached(specifier: string, importerPath: string): Promise<string | null> {
@@ -1192,13 +1192,8 @@ async function rewriteExtensionNativeAddonRequires(source: string, importerPath:
  * extension graph so {@link rewriteExtensionNativeAddonRequires} can pin its
  * platform-package requires to absolute paths.
  */
-async function moduleRequiresNativeAddon(modulePath: string): Promise<boolean> {
-	const cached = nativeAddonRequireScanCache.get(modulePath);
-	if (cached) return cached;
-
-	const promise = moduleRequiresNativeAddonUncached(modulePath);
-	nativeAddonRequireScanCache.set(modulePath, promise);
-	return promise;
+function moduleRequiresNativeAddon(modulePath: string): Promise<boolean> {
+	return memoized(nativeAddonRequireScanCache, modulePath, () => moduleRequiresNativeAddonUncached(modulePath));
 }
 
 async function moduleRequiresNativeAddonUncached(modulePath: string): Promise<boolean> {
@@ -1243,13 +1238,8 @@ function nextLegacyPiLoadTag(): string {
 }
 
 /** Resolve symlinks in a path, falling back to the input if realpath fails. */
-async function realpathOrSelf(p: string): Promise<string> {
-	const cached = realpathCache.get(p);
-	if (cached) return cached;
-
-	const promise = realpathOrSelfUncached(p);
-	realpathCache.set(p, promise);
-	return promise;
+function realpathOrSelf(p: string): Promise<string> {
+	return memoized(realpathCache, p, () => realpathOrSelfUncached(p));
 }
 
 async function realpathOrSelfUncached(p: string): Promise<string> {

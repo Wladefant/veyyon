@@ -13,7 +13,7 @@
  */
 
 import type { FramedBlockView, StatusRowView, ToolViewRenderer, ViewLine, ViewSection } from "@veyyon/view";
-import { formatTruncationMetaNotice, stripOutputNotice } from "../core/output-notice";
+import { extractResultText, formatTruncationMetaNotice, stripOutputNotice } from "../core/output-notice";
 import { PREVIEW_LIMITS, replaceTabs, shortenEmbeddedPaths, type ToolViewResult } from "../core/render-utils";
 import type { SSHToolDetails } from "./ssh";
 
@@ -55,7 +55,7 @@ function commandSection(command: string, expanded: boolean): ViewSection {
  * and printing both says the same thing twice in two registers.
  */
 function outputSection(result: SshViewResult, expanded: boolean): ViewSection {
-	const text = result.content?.find(block => block.type === "text")?.text ?? "";
+	const text = extractResultText(result.content);
 	const output = stripOutputNotice(text, result.details?.meta).trimEnd();
 	const isError = result.isError === true;
 	const lines: ViewLine[] = output

@@ -2166,6 +2166,8 @@ async def test_handle_comment_directive_bootstraps_untriaged_issue(
     row = db.get_issue("octo/widget#88")
     assert row is not None
     assert row.state == "reproducing"
+    assert row.branch == "farm/auto/octo__widget__88"
+    assert row.session_dir == str(tmp_path / "octo__widget__88" / "session")
     assert sandbox.ensure_calls, "ensure_workspace must be called"
     assert sandbox.remove_calls == [], "no removal on bootstrap"
     close_database()
@@ -2242,6 +2244,8 @@ async def test_handle_comment_directive_reopens_finalized_issue(
     assert post_comment_calls == [], "no 'this is closed' comment on reopen"
     row = db.get_issue("octo/widget#88")
     assert row is not None and row.state == "reproducing"
+    assert row.branch == "farm/auto/octo__widget__88"
+    assert call["inputs"].workspace.branch == "farm/auto/octo__widget__88"
     close_database()
 
 

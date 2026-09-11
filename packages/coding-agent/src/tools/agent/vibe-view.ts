@@ -13,7 +13,7 @@
  */
 
 import { formatDuration } from "@veyyon/utils/format";
-import { replaceTabs } from "@veyyon/utils/wrap";
+import { replaceTabs } from "@veyyon/utils/tab-width";
 import type {
 	HeadedBlockView,
 	StatusRowView,
@@ -27,7 +27,7 @@ import type {
 } from "@veyyon/view";
 import type { VibeCli, VibeScreenSnapshot, VibeSessionState } from "../../session/vibe-runtime";
 import { oneLineLabel } from "../../task/types";
-import { shortenEmbeddedPaths, type ToolViewResult } from "../core/render-utils";
+import { extractResultText, shortenEmbeddedPaths, type ToolViewResult } from "../core/render-utils";
 import type { VibeOp, VibeToolDetails } from "./vibe";
 
 const COMPOSER_LINE_MAX = 96;
@@ -231,7 +231,7 @@ function screenRows(
 
 /** The row a card that has no details of its own falls back to. */
 function fallbackText(result: VibeToolResult, absent: string): string {
-	return result.content.find(part => part.type === "text")?.text ?? absent;
+	return extractResultText(result.content) || absent;
 }
 
 /**

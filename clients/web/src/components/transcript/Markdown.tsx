@@ -1,16 +1,9 @@
+import { escapeHtml } from "@veyyon/tool-render/view-core";
 import { unescapeHtml } from "@veyyon/utils/strings";
 import { Marked } from "marked";
 import type { ReactNode } from "react";
 import { memo, useMemo } from "react";
 
-function escapeHtml(s: string): string {
-	return s
-		.replaceAll("&", "&amp;")
-		.replaceAll("<", "&lt;")
-		.replaceAll(">", "&gt;")
-		.replaceAll('"', "&quot;")
-		.replaceAll("'", "&#39;");
-}
 function safeHref(href: string): string | null {
 	const trimmed = href.trim();
 	if (/^(?:https?:|mailto:)/i.test(trimmed)) return trimmed;

@@ -1,4 +1,6 @@
 import { describe, expect, it } from "bun:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { resolveToolRenderer } from "../src/registry";
 import { stripAnsi } from "../src/util";
 
@@ -110,6 +112,48 @@ describe("@veyyon/tool-render registry", () => {
 		expect(resolveToolRenderer("__proto__")).toBe(generic);
 	});
 
+	it("preserves historical specialized Summary/Body rendering without display and delegates to ToolExecution with display", () => {
+		const readRenderer = resolveToolRenderer("read");
+		expect(readRenderer.Summary).toBeDefined();
+		expect(readRenderer.Body).toBeDefined();
+
+		// Summary without display: specialized PathText with range
+		const summaryWithout = renderToStaticMarkup(
+			createElement(readRenderer.Summary, {
+				name: "read",
+				args: { path: "src/main.ts", offset: 10, limit: 20 },
+			}),
+		);
+		expect(summaryWithout).toContain("src/main.ts");
+		expect(summaryWithout).toContain(":10-29");
+
+		// Body without display: specialized read rendering with resolved KvGrid
+		const htmlWithout = renderToStaticMarkup(
+			createElement(readRenderer.Body!, {
+				name: "read",
+				args: { path: "src/main.ts" },
+				result: {
+					content: [{ type: "text", text: "const a = 1;" }],
+					details: { resolvedPath: "src/main.ts" },
+				},
+			}),
+		);
+		expect(htmlWithout).toContain("resolved");
+		expect(htmlWithout).toContain("src/main.ts");
+		expect(htmlWithout).toContain("const a = 1;");
+
+		// With display: canonical projection rendering
+		const htmlWith = renderToStaticMarkup(
+			createElement(readRenderer.Body!, {
+				name: "read",
+				args: { path: "src/main.ts" },
+				display: {
+					generic: { icon: "done", outputText: "projected output text", isJson: false },
+				},
+			}),
+		);
+		expect(htmlWith).toContain("projected output text");
+	});
 	it("keeps stripAnsi browser-safe (no Node deps in the util path)", () => {
 		expect(stripAnsi("plain\x1b[31mred\x1b[0m")).toBe("plainred");
 	});

@@ -32,6 +32,7 @@
     "test": "bun test --parallel"
   },
   "dependencies": {
+    "@veyyon/tool-render": "catalog:",
     "@veyyon/view": "catalog:",
     "marked": "catalog:"
   },

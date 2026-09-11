@@ -6,10 +6,11 @@ import { padding } from "@veyyon/utils/padding";
 import { sgrCarryAfter } from "@veyyon/utils/sgr";
 import { unescapeHtml } from "@veyyon/utils/strings";
 import type { SymbolTheme } from "@veyyon/utils/symbols";
+import { replaceTabs } from "@veyyon/utils/tab-width";
 import { encodeTextSized } from "@veyyon/utils/text-sizing";
 import { getPaddingX } from "@veyyon/utils/tight-mode";
 import { getSegmenter, truncateToWidth, visibleWidth } from "@veyyon/utils/width";
-import { replaceTabs, wrapTextWithAnsi } from "@veyyon/utils/wrap";
+import { wrapTextWithAnsi } from "@veyyon/utils/wrap";
 import { LRUCache } from "lru-cache/raw";
 import { Marked, type Token, Tokenizer, type TokenizerAndRendererExtension, type Tokens } from "marked";
 import { TERMINAL } from "../terminal-capabilities";
@@ -1673,28 +1674,7 @@ export class Markdown implements Component {
 			return this.#defaultStylePrefix;
 		}
 
-		const sentinel = "\u0000";
-		let styled = sentinel;
-
-		if (this.#defaultTextStyle.color) {
-			styled = this.#defaultTextStyle.color(styled);
-		}
-
-		if (this.#defaultTextStyle.bold) {
-			styled = this.#theme.bold(styled);
-		}
-		if (this.#defaultTextStyle.italic) {
-			styled = this.#theme.italic(styled);
-		}
-		if (this.#defaultTextStyle.strikethrough) {
-			styled = this.#theme.strikethrough(styled);
-		}
-		if (this.#defaultTextStyle.underline) {
-			styled = this.#theme.underline(styled);
-		}
-
-		const sentinelIndex = styled.indexOf(sentinel);
-		this.#defaultStylePrefix = sentinelIndex >= 0 ? styled.slice(0, sentinelIndex) : "";
+		this.#defaultStylePrefix = this.#getStylePrefix(text => this.#applyDefaultStyle(text));
 		return this.#defaultStylePrefix;
 	}
 

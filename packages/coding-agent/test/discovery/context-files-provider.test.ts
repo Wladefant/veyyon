@@ -20,6 +20,8 @@ import { clearCache as clearFsCache } from "@veyyon/coding-agent/discovery/capab
 import { removeWithRetries } from "@veyyon/utils";
 import "@veyyon/coding-agent/discovery/claude";
 import "@veyyon/coding-agent/discovery/codex";
+import "@veyyon/coding-agent/discovery/gemini";
+import "@veyyon/coding-agent/discovery/opencode";
 
 describe("context file discovery provider semantics", () => {
 	let root = "";
@@ -34,6 +36,8 @@ describe("context file discovery provider semantics", () => {
 		project = path.join(root, "project");
 		await fs.mkdir(path.join(home, ".claude"), { recursive: true });
 		await fs.mkdir(path.join(home, ".codex"), { recursive: true });
+		await fs.mkdir(path.join(home, ".gemini"), { recursive: true });
+		await fs.mkdir(path.join(home, ".config", "opencode"), { recursive: true });
 		await fs.mkdir(path.join(project, ".claude"), { recursive: true });
 	});
 
@@ -90,5 +94,59 @@ describe("context file discovery provider semantics", () => {
 		const projectItem = result.items.find(i => i.level === "project");
 		expect(projectItem?.path).toBe(projectClaude);
 		expect(projectItem?.content).toBe("");
+	});
+
+	test("Gemini excludes empty GEMINI.md while discovering non-empty GEMINI.md", async () => {
+		const geminiMd = path.join(home, ".gemini", "GEMINI.md");
+		// First: empty file
+		await fs.writeFile(geminiMd, "");
+
+		const emptyResult = await loadCapability<ContextFile>(contextFileCapability.id, {
+			home,
+			cwd: project,
+			providers: ["gemini"],
+		});
+		expect(emptyResult.items).toEqual([]);
+
+		// Second: non-empty file
+		clearFsCache();
+		await fs.writeFile(geminiMd, "You are Gemini.\n");
+
+		const nonEmptyResult = await loadCapability<ContextFile>(contextFileCapability.id, {
+			home,
+			cwd: project,
+			providers: ["gemini"],
+		});
+		expect(nonEmptyResult.items).toHaveLength(1);
+		expect(nonEmptyResult.items[0].content).toBe("You are Gemini.\n");
+		expect(nonEmptyResult.items[0].level).toBe("user");
+		expect(nonEmptyResult.items[0]._source.provider).toBe("gemini");
+	});
+
+	test("OpenCode excludes empty AGENTS.md while discovering non-empty AGENTS.md", async () => {
+		const agentsMd = path.join(home, ".config", "opencode", "AGENTS.md");
+		// First: empty file
+		await fs.writeFile(agentsMd, "");
+
+		const emptyResult = await loadCapability<ContextFile>(contextFileCapability.id, {
+			home,
+			cwd: project,
+			providers: ["opencode"],
+		});
+		expect(emptyResult.items).toEqual([]);
+
+		// Second: non-empty file
+		clearFsCache();
+		await fs.writeFile(agentsMd, "You are OpenCode.\n");
+
+		const nonEmptyResult = await loadCapability<ContextFile>(contextFileCapability.id, {
+			home,
+			cwd: project,
+			providers: ["opencode"],
+		});
+		expect(nonEmptyResult.items).toHaveLength(1);
+		expect(nonEmptyResult.items[0].content).toBe("You are OpenCode.\n");
+		expect(nonEmptyResult.items[0].level).toBe("user");
+		expect(nonEmptyResult.items[0]._source.provider).toBe("opencode");
 	});
 });

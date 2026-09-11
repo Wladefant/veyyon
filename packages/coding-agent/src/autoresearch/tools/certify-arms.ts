@@ -1,6 +1,6 @@
 import { formatCount } from "@veyyon/utils";
+import { replaceTabs } from "@veyyon/utils/tab-width";
 import { truncateToWidth } from "@veyyon/utils/width";
-import { replaceTabs } from "@veyyon/utils/wrap";
 import { type } from "arktype";
 import type { ToolDefinition } from "../../extensibility/extensions";
 import { resolveActiveBranchSession } from "../helpers";

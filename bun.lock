@@ -13,6 +13,7 @@
         "@biomejs/biome": "catalog:",
         "@types/bun": "catalog:",
         "@typescript/native-preview": "catalog:",
+        "linkedom": "catalog:",
         "lint-staged": "catalog:",
         "prettier": "catalog:",
         "ts-morph": "catalog:",
@@ -149,6 +150,7 @@
       "name": "@veyyon/gui-host",
       "version": "1.4.0",
       "dependencies": {
+        "@veyyon/tool-render": "catalog:",
         "@veyyon/view": "catalog:",
         "marked": "catalog:",
       },
@@ -282,6 +284,7 @@
         "@veyyon/session": "catalog:",
         "@veyyon/settings": "catalog:",
         "@veyyon/stats": "catalog:",
+        "@veyyon/tool-render": "catalog:",
         "@veyyon/tui": "catalog:",
         "@veyyon/utils": "catalog:",
         "@veyyon/view": "catalog:",
@@ -314,7 +317,6 @@
         "@types/bun": "catalog:",
         "@types/react": "catalog:",
         "@types/react-dom": "catalog:",
-        "@veyyon/tool-render": "workspace:*",
       },
       "optionalDependencies": {
         "@huggingface/transformers": "catalog:",
@@ -326,17 +328,20 @@
       "version": "1.4.0",
       "dependencies": {
         "@veyyon/utils": "catalog:",
+        "@veyyon/view": "catalog:",
         "@veyyon/wire": "catalog:",
         "lucide-react": "catalog:",
+        "marked": "catalog:",
         "react": "catalog:",
       },
       "devDependencies": {
         "@types/bun": "catalog:",
         "@types/react": "catalog:",
+        "linkedom": "catalog:",
       },
       "peerDependencies": {
-        "react": "catalog:",
-        "react-dom": "catalog:",
+        "react": "19.2.7",
+        "react-dom": "19.2.7",
       },
     },
     "packages/utils": {

@@ -8,6 +8,7 @@
 - The package directory is `plugins/argot` instead of `packages/argot`; the published package name, entry points and behavior are unchanged.
 - Source-path comments in `constants.ts` and `generate.ts` name the benchmark modules they cite at their new paths under `tests/evals/`; behavior is unchanged.
 - Compacted dictionary generator candidate keywords with declarative lookup tables.
+- Doc comments refer to a child stream as an agent stream rather than a subagent stream. No behavior change.
 
 
 ## [1.3.0] - 2026-08-28

@@ -10,12 +10,22 @@
 
 ### Changed
 
-- Consolidated React tool-call renderers into cohesive domain descriptors (fs, system, agent, memory, search) and centralized shared UI primitives.
+- `stripControlSequences`, `CANONICAL_SYMBOLS`, `safeHref`, the status, tone and diff-side class tables and the markdown helpers are exported from `view-core` only; `util` and `ViewRenderer` no longer re-export them. Rendered output is unchanged.
+- Consolidated React tool-call rendering to consume canonical ToolExecutionDisplay and ToolView view models directly from wire and view contracts.
+- HTML tool renderers share argument, parse-error and eval-cell formatting while retaining tool-specific image and metadata handling.
 - Array copies that allocated with a spread now use `.slice()`, `.concat()` or `Array.from()`. No user-visible behavior changes.
 - Argot cards share body layout, search cards share result adaptation, and runtime cards share operation dispatch without changing rendered output.
+- `replaceTabs` is the `@veyyon/utils/tab-width` function rather than a second copy; rendered output is unchanged.
+- The `task` renderer lifts the missing-yield warning out of the output preview under both its current spelling, `SYSTEM WARNING: Agent exited without calling yield tool`, and the `Subagent` spelling a session file recorded before it.
+- `genericRenderer` is exported once, through the `generic` module, instead of also being re-exported by the registry. No user-visible behavior changes.
+- React list keys are derived from each item's own identity (id, path, label or text) through a `keyed` helper instead of the array index; rendered output is unchanged.
+- `react` and `react-dom` are named as literal `19.2.7` peer dependencies so a consumer outside the workspace resolves them; the version is the one the workspace catalog pins.
 
 ### Fixed
 
+- Tool summary formatting resolves its string conversion helper before normalizing whitespace and truncating output.
+- Shared HTML and React view adapters preserve symbol glyphs and render unknown symbol identifiers as text.
+- Compact tool card headers omit repeated tool labels while preserving operation suffixes and unrelated titles.
 - Restored field and badge parity across consolidated React tool descriptors for launch, job, bash, read, write, edit, set_cwd, generate_image, inspect_image, search, and memory tools.
 
 ## [1.3.0] - 2026-08-28

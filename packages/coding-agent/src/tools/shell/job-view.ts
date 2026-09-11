@@ -28,15 +28,30 @@ import type {
 import { stripTaskResultEnvelope } from "@veyyon/wire/task-result";
 import {
 	Ellipsis,
+	extractResultText,
 	formatDuration,
 	getPreviewLines,
+	PREVIEW_LIMITS,
 	replaceTabs,
 	sanitizeErrorText,
 	shortenEmbeddedPaths,
 	type ToolViewResult,
 	truncateToWidth,
 } from "../core/render-utils";
-import { type AgentActivitySnapshot, COLLAPSED_LIST_LIMIT, type JobSnapshot, type JobToolDetails } from "./job";
+import type { AgentActivitySnapshot, JobSnapshot, JobToolDetails } from "./job";
+
+/**
+ * A poll snapshot where every watched job is still running and nothing was
+ * cancelled — pure "still waiting" noise once a newer poll exists. The TUI
+ * keeps such a block un-finalized (displaceable) so a follow-up `job` call
+ * replaces it instead of stacking another waiting frame in the transcript.
+ */
+export function isWaitingPollDetails(details: unknown): boolean {
+	const d = details as JobToolDetails | undefined;
+	if (!d || !Array.isArray(d.jobs) || d.jobs.length === 0) return false;
+	if (d.cancelled?.length) return false;
+	return d.jobs.every(job => job?.status === "running");
+}
 
 /** The columns a job's label may spend before it is cut. */
 const LABEL_MAX_WIDTH = 60;
@@ -250,7 +265,7 @@ function summaryRow(
 /** The card a snapshot with neither a job nor an agent in it falls back to. */
 function emptyCard(result: JobViewResult, args: JobRenderArgs | undefined): HeadedBlockView {
 	if (result.isError) {
-		const fallback = result.content?.find(part => part.type === "text")?.text || "Job operation failed";
+		const fallback = extractResultText(result.content) || "Job operation failed";
 		const sanitized = sanitizeErrorText(fallback);
 		return {
 			kind: "headedBlock",
@@ -258,7 +273,7 @@ function emptyCard(result: JobViewResult, args: JobRenderArgs | undefined): Head
 			lines: sanitized.split("\n").map(line => [{ text: line, tone: "error" }]),
 		};
 	}
-	const fallback = result.content?.find(part => part.type === "text")?.text || "No jobs to process";
+	const fallback = extractResultText(result.content) || "No jobs to process";
 	return {
 		kind: "headedBlock",
 		header: { kind: "statusRow", status: "warning", title: describeTarget(args) || "Job" },
@@ -308,8 +323,8 @@ export const jobToolView: Required<ToolViewRenderer<JobRenderArgs, JobViewResult
 		const sorted = [...jobs].sort(
 			(left, right) => STATUS_ORDER[left.status] - STATUS_ORDER[right.status] || right.durationMs - left.durationMs,
 		);
-		const shownJobs = context.expanded ? sorted : sorted.slice(0, COLLAPSED_LIST_LIMIT);
-		const shownAgents = context.expanded ? agents : agents.slice(0, COLLAPSED_LIST_LIMIT);
+		const shownJobs = context.expanded ? sorted : sorted.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS);
+		const shownAgents = context.expanded ? agents : agents.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS);
 		const hidden = heldBack(sorted.length - shownJobs.length, agents.length - shownAgents.length);
 
 		return {

@@ -14,7 +14,7 @@
 
 import { HL_FILE_PREFIX, HL_FILE_SUFFIX, HL_MOVE_KEYWORD, HL_REM_KEYWORD } from "@veyyon/hashline";
 import { errorMessage, sanitizeText } from "@veyyon/utils";
-import { replaceTabs } from "@veyyon/utils/wrap";
+import { replaceTabs } from "@veyyon/utils/tab-width";
 import type {
 	FramedBlockView,
 	StatusRowView,
@@ -28,6 +28,7 @@ import type {
 import { diagnosticsSection } from "../tools/core/diagnostics";
 import {
 	diffStatsMetaLines,
+	extractResultText,
 	getDiffStats,
 	heldBack,
 	LINE_NOUN,
@@ -520,11 +521,7 @@ function resultSections(
 
 /** What one file's result says, as the card a single-file edit is and a section of a multi-file one. */
 function singleFileResult(
-	result: {
-		content?: Array<{ type: string; text?: string }>;
-		details?: EditToolDetails | EditToolPerFileResult;
-		isError?: boolean;
-	},
+	result: ToolViewResult<EditToolDetails | EditToolPerFileResult>,
 	context: ToolViewContext,
 	args: EditViewArgs | undefined,
 ): ToolView {
@@ -553,7 +550,7 @@ function singleFileResult(
 	const errorText = isError
 		? displayErrorText ||
 			(details && "errorText" in details ? (details.errorText ?? "") : "") ||
-			(result.content?.find(part => part.type === "text")?.text ?? "")
+			extractResultText(result.content)
 		: "";
 	const linkPath = details && "path" in details ? details.path : undefined;
 

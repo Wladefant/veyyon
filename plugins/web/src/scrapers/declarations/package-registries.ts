@@ -66,37 +66,34 @@ interface ArtifactHubPackage {
 	available_versions?: Array<{ version: string; ts: number }>;
 }
 
-function formatKindLabel(kind: string): string {
-	const labels: Record<string, string> = {
-		helm: "Helm Chart",
-		"helm-plugin": "Helm Plugin",
-		falco: "Falco Rules",
-		opa: "OPA Policy",
-		olm: "OLM Operator",
-		tbaction: "Tinkerbell Action",
-		krew: "Krew Plugin",
-		tekton: "Tekton Task",
-		"tekton-pipeline": "Tekton Pipeline",
-		keda: "KEDA Scaler",
-		coredns: "CoreDNS Plugin",
-		keptn: "Keptn Integration",
-		container: "Container Image",
-		kubewarden: "Kubewarden Policy",
-		gatekeeper: "Gatekeeper Policy",
-		kyverno: "Kyverno Policy",
-		"knative-client": "Knative Client Plugin",
-		backstage: "Backstage Plugin",
-		argo: "Argo Template",
-		kubearmor: "KubeArmor Policy",
-		kcl: "KCL Module",
-		headlamp: "Headlamp Plugin",
-		inspektor: "Inspektor Gadget",
-		"meshery-design": "Meshery Design",
-		"opencost-plugin": "OpenCost Plugin",
-		radius: "Radius Recipe",
-	};
-	return labels[kind] || kind.charAt(0).toUpperCase() + kind.slice(1);
-}
+const ARTIFACT_HUB_KIND_LABELS: Record<string, string> = {
+	helm: "Helm Chart",
+	"helm-plugin": "Helm Plugin",
+	falco: "Falco Rules",
+	opa: "OPA Policy",
+	olm: "OLM Operator",
+	tbaction: "Tinkerbell Action",
+	krew: "Krew Plugin",
+	tekton: "Tekton Task",
+	"tekton-pipeline": "Tekton Pipeline",
+	keda: "KEDA Scaler",
+	coredns: "CoreDNS Plugin",
+	keptn: "Keptn Integration",
+	container: "Container Image",
+	kubewarden: "Kubewarden Policy",
+	gatekeeper: "Gatekeeper Policy",
+	kyverno: "Kyverno Policy",
+	"knative-client": "Knative Client Plugin",
+	backstage: "Backstage Plugin",
+	argo: "Argo Template",
+	kubearmor: "KubeArmor Policy",
+	kcl: "KCL Module",
+	headlamp: "Headlamp Plugin",
+	inspektor: "Inspektor Gadget",
+	"meshery-design": "Meshery Design",
+	"opencost-plugin": "OpenCost Plugin",
+	radius: "Radius Recipe",
+};
 
 export const artifacthubDeclaration: PackageRegistryDeclaration = {
 	site: "artifacthub",
@@ -107,7 +104,6 @@ export const artifacthubDeclaration: PackageRegistryDeclaration = {
 		if (!match) return null;
 		return { name: `${match[1]}/${match[2]}/${match[3]}`, parsedUrl: parsed };
 	},
-	apiUrl: name => `https://artifacthub.io/api/v1/packages/${name}`,
 	customFetch: async (match, ctx) => {
 		const [kind, repo, name] = match.name.split("/");
 		const apiUrl = `https://artifacthub.io/api/v1/packages/${kind}/${repo}/${name}`;
@@ -123,7 +119,7 @@ export const artifacthubDeclaration: PackageRegistryDeclaration = {
 		if (!pkg) return ctx.scraperDegrade("artifacthub", "unexpected response shape");
 
 		const displayName = pkg.display_name || pkg.name;
-		const kindLabel = formatKindLabel(kind);
+		const kindLabel = ARTIFACT_HUB_KIND_LABELS[kind] || kind.charAt(0).toUpperCase() + kind.slice(1);
 
 		let md = renderHeader(displayName, pkg.description);
 
@@ -167,12 +163,7 @@ export const artifacthubDeclaration: PackageRegistryDeclaration = {
 			}
 		}
 
-		if (pkg.links?.length) {
-			md += "\n## Links\n\n";
-			for (const link of pkg.links) {
-				md += `- ${markdownLink(link.name, link.url)}\n`;
-			}
-		}
+		md += renderSimpleList("Links", pkg.links, link => markdownLink(link.name, link.url));
 
 		if (pkg.install) {
 			md += "\n## Installation\n\n```bash\n";
@@ -237,7 +228,6 @@ export const aurDeclaration: PackageRegistryDeclaration = {
 	hosts: ["aur.archlinux.org"],
 	canonicalUrls: ["https://aur.archlinux.org/packages/yay"],
 	pathPattern: /^\/packages\/([^/?#]+)/,
-	apiUrl: name => `https://aur.archlinux.org/rpc/?v=5&type=info&arg=${encodeURIComponent(name)}`,
 	customFetch: async (match, ctx) => {
 		const packageName = match.name;
 		const apiUrl = `https://aur.archlinux.org/rpc/?v=5&type=info&arg=${encodeURIComponent(packageName)}`;
@@ -361,7 +351,6 @@ export const brewDeclaration: PackageRegistryDeclaration = {
 		const name = decodeURIComponent(isFormula ? formulaMatch![1] : caskMatch![1]);
 		return { name: `${isFormula ? "formula" : "cask"}/${name}`, parsedUrl: parsed };
 	},
-	apiUrl: name => `https://formulae.brew.sh/api/${name}.json`,
 	customFetch: async (match, ctx) => {
 		const [type, name] = match.name.split("/");
 		const isFormula = type === "formula";
@@ -377,7 +366,6 @@ export const brewDeclaration: PackageRegistryDeclaration = {
 		if (isFormula) {
 			const formula = ctx.tryParseJson<BrewFormula>(result.content);
 			if (!formula) return ctx.scraperDegrade("brew", "unexpected response shape");
-
 			md = renderHeader(formula.full_name || formula.name, formula.desc);
 			md += `**Version:** ${formula.versions?.stable || "unknown"}`;
 			if (formula.license) md += ` · **License:** ${formula.license}`;
@@ -415,7 +403,6 @@ export const brewDeclaration: PackageRegistryDeclaration = {
 			md += renderStringList("Conflicts With", cask.conflicts_with?.cask);
 			md += renderDescriptionSection(cask.caveats, "Caveats");
 		}
-
 		return buildResult(md, {
 			url: ctx.url,
 			method: "brew",
@@ -464,14 +451,7 @@ export const chocolateyDeclaration: PackageRegistryDeclaration = {
 	site: "chocolatey",
 	hosts: ["community.chocolatey.org", "chocolatey.org"],
 	canonicalUrls: ["https://community.chocolatey.org/packages/git"],
-	match: parsed => {
-		const match = parsed.pathname.match(/^\/packages\/([^/]+)(?:\/([^/]+))?/);
-		if (!match) return null;
-		const packageName = decodeURIComponent(match[1]);
-		const specificVersion = match[2] ? decodeURIComponent(match[2]) : undefined;
-		return { name: packageName, version: specificVersion, parsedUrl: parsed };
-	},
-	apiUrl: name => `https://community.chocolatey.org/api/v2/Packages()?$filter=Id%20eq%20'${encodeURIComponent(name)}'`,
+	pathPattern: /^\/packages\/([^/]+)(?:\/([^/]+))?/,
 	customFetch: async (match, ctx) => {
 		const packageName = match.name;
 		const specificVersion = match.version;
@@ -674,7 +654,6 @@ export const clojarsDeclaration: PackageRegistryDeclaration = {
 		if (segments.length < 1 || segments.length > 2) return null;
 		return { name: path, parsedUrl: parsed };
 	},
-	apiUrl: name => `https://clojars.org/api/artifacts/${name}`,
 	customFetch: async (match, ctx) => {
 		const segments = match.name.split("/").filter(Boolean);
 		const groupFromUrl = segments.length === 2 ? decodeURIComponent(segments[0]) : null;
@@ -746,8 +725,6 @@ export const cratesIoDeclaration: PackageRegistryDeclaration = {
 	hosts: ["crates.io", "www.crates.io"],
 	canonicalUrls: ["https://crates.io/crates/serde"],
 	pathPattern: /^\/crates\/([^/]+)/,
-	apiUrl: name => `https://crates.io/api/v1/crates/${encodeURIComponent(name)}`,
-	headers: { "User-Agent": "veyyon-web-fetch/1.0 (https://github.com/santhreal/veyyon)" },
 	customFetch: async (match, ctx) => {
 		const crateName = match.name;
 		const apiUrl = `https://crates.io/api/v1/crates/${crateName}`;
@@ -774,7 +751,7 @@ export const cratesIoDeclaration: PackageRegistryDeclaration = {
 				created_at: string;
 				updated_at: string;
 			};
-			versions: Array<{
+			versions?: Array<{
 				num: string;
 				downloads: number;
 				created_at: string;
@@ -869,7 +846,6 @@ export const dockerhubDeclaration: PackageRegistryDeclaration = {
 		if (!repoMatch) return null;
 		return { name: `${repoMatch[1]}/${repoMatch[2]}`, parsedUrl: parsed };
 	},
-	apiUrl: name => `https://hub.docker.com/v2/repositories/${name}/`,
 	customFetch: async (match, ctx) => {
 		const [namespace, repository] = match.name.split("/");
 		const repoUrl = `https://hub.docker.com/v2/repositories/${namespace}/${repository}/`;
@@ -894,7 +870,6 @@ export const dockerhubDeclaration: PackageRegistryDeclaration = {
 			const tagsData = ctx.tryParseJson<DockerHubTagsResponse>(tagsResult.content);
 			if (tagsData?.results) tags = tagsData.results;
 		}
-
 		const fullName = namespace === "library" ? repo.name : `${namespace}/${repo.name}`;
 		let md = renderHeader(fullName, repo.description);
 
@@ -1006,11 +981,9 @@ export const fdroidDeclaration: PackageRegistryDeclaration = {
 	hosts: ["f-droid.org", "www.f-droid.org"],
 	canonicalUrls: ["https://f-droid.org/packages/org.mozilla.fennec_fdroid/"],
 	pathPattern: /^\/(?:en\/)?packages\/([^/]+)/,
-	apiUrl: name => `https://f-droid.org/api/v1/packages/${encodeURIComponent(name)}`,
 	customFetch: async (match, ctx) => {
 		const packageName = match.name;
 		const apiUrl = `https://f-droid.org/api/v1/packages/${encodeURIComponent(packageName)}`;
-
 		const result = await ctx.loadPage(apiUrl, {
 			timeout: ctx.timeout,
 			headers: { Accept: "application/json" },
@@ -1157,7 +1130,6 @@ export const firefoxAddonsDeclaration: PackageRegistryDeclaration = {
 		const slug = segments[addonIndex + 1] ? decodeURIComponent(segments[addonIndex + 1]) : "";
 		return slug ? { name: slug, parsedUrl: parsed } : null;
 	},
-	apiUrl: name => `https://addons.mozilla.org/api/v5/addons/addon/${encodeURIComponent(name)}/`,
 	customFetch: async (match, ctx) => {
 		const slug = match.name;
 		const apiUrl = `https://addons.mozilla.org/api/v5/addons/addon/${encodeURIComponent(slug)}/`;
@@ -1170,7 +1142,6 @@ export const firefoxAddonsDeclaration: PackageRegistryDeclaration = {
 
 		const data = ctx.tryParseJson<AddonData>(result.content);
 		if (!data) return ctx.scraperDegrade("firefox-addons", "unexpected response shape");
-
 		const defaultLocale = data.default_locale || "en-US";
 
 		const name = getLocalizedText(data.name, defaultLocale) ?? slug;
@@ -1383,7 +1354,6 @@ export const flathubDeclaration: PackageRegistryDeclaration = {
 		if (appMatch) return { name: decodeURIComponent(appMatch[1]), parsedUrl: parsed };
 		return null;
 	},
-	apiUrl: name => `https://flathub.org/api/v2/appstream/${encodeURIComponent(name)}`,
 	customFetch: async (match, ctx) => {
 		const appId = match.name;
 		const apiUrl = `https://flathub.org/api/v2/appstream/${encodeURIComponent(appId)}`;
@@ -1396,7 +1366,6 @@ export const flathubDeclaration: PackageRegistryDeclaration = {
 
 		const app = ctx.tryParseJson<FlathubAppStream>(result.content);
 		if (!app) return ctx.scraperDegrade("flathub", "unexpected response shape");
-
 		const name = app.name ?? app.id ?? appId;
 
 		let md = renderHeader(name, app.summary);
@@ -1472,7 +1441,6 @@ export const goPkgDeclaration: PackageRegistryDeclaration = {
 		const pathname = parsed.pathname.slice(1);
 		return pathname ? { name: pathname, parsedUrl: parsed } : null;
 	},
-	apiUrl: name => `https://proxy.golang.org/${encodeURIComponent(name)}/@latest`,
 	customFetch: async (match, ctx) => {
 		const pathname = match.name;
 		let modulePath: string;
@@ -1527,7 +1495,6 @@ export const goPkgDeclaration: PackageRegistryDeclaration = {
 				// Proxy lookup failed
 			}
 		}
-
 		const pageResult = await ctx.loadPage(ctx.url, { timeout: ctx.timeout, signal: ctx.signal });
 		if (!pageResult.ok) return ctx.scraperDegrade("go-pkg", ctx.loadFailure(pageResult));
 
@@ -1749,7 +1716,6 @@ export const hackageDeclaration: PackageRegistryDeclaration = {
 	hosts: ["hackage.haskell.org"],
 	canonicalUrls: ["https://hackage.haskell.org/package/aeson"],
 	pathPattern: /^\/package\/([^/]+)(?:\/|$)/,
-	apiUrl: name => `https://hackage.haskell.org/package/${encodeURIComponent(name)}.json`,
 	customFetch: async (match, ctx) => {
 		const packageId = match.name;
 		const versionUrl = `https://hackage.haskell.org/package/${encodeURIComponent(packageId)}.json`;
@@ -1808,7 +1774,6 @@ export const hexDeclaration: PackageRegistryDeclaration = {
 	hosts: ["hex.pm", "www.hex.pm"],
 	canonicalUrls: ["https://hex.pm/packages/phoenix"],
 	pathPattern: /^\/packages\/([^/]+)/,
-	apiUrl: name => `https://hex.pm/api/packages/${encodeURIComponent(name)}`,
 	customFetch: async (match, ctx) => {
 		const packageName = match.name;
 		const apiUrl = `https://hex.pm/api/packages/${packageName}`;
@@ -1980,7 +1945,6 @@ export const jetbrainsMarketplaceDeclaration: PackageRegistryDeclaration = {
 	hosts: ["plugins.jetbrains.com"],
 	canonicalUrls: ["https://plugins.jetbrains.com/plugin/1347-scala"],
 	pathPattern: /^\/plugin\/(\d+)/,
-	apiUrl: name => `https://plugins.jetbrains.com/api/plugins/${encodeURIComponent(name)}`,
 	customFetch: async (match, ctx) => {
 		const pluginId = match.name;
 		const pluginUrl = `https://plugins.jetbrains.com/api/plugins/${pluginId}`;
@@ -2029,12 +1993,11 @@ export const jetbrainsMarketplaceDeclaration: PackageRegistryDeclaration = {
 
 		const compatibility = update?.compatibleVersions ?? {};
 		const compatibilityEntries = Object.entries(compatibility).sort(([a], [b]) => a.localeCompare(b));
-		if (compatibilityEntries.length) {
-			md += "\n## IDE Compatibility\n\n";
-			for (const [product, version] of compatibilityEntries) {
-				md += `- ${product}: ${version}\n`;
-			}
-		}
+		md += renderSimpleList(
+			"IDE Compatibility",
+			compatibilityEntries,
+			([product, version]) => `${product}: ${version}`,
+		);
 
 		return buildResult(md, {
 			url: ctx.url,
@@ -2080,10 +2043,6 @@ export const mavenDeclaration: PackageRegistryDeclaration = {
 		const artifactId = match[2];
 		const version = match[3] || undefined;
 		return { name: `${groupId}:${artifactId}`, version, parsedUrl: parsed };
-	},
-	apiUrl: name => {
-		const [g, a] = name.split(":");
-		return `https://search.maven.org/solrsearch/select?q=g:${encodeURIComponent(g)}+AND+a:${encodeURIComponent(a)}&wt=json&rows=1`;
 	},
 	customFetch: async (match, ctx) => {
 		const [groupId, artifactId] = match.name.split(":");
@@ -2177,68 +2136,8 @@ interface MetaCPANReleaseResponse {
 	};
 }
 
-function formatMetaCPANModuleMarkdown(module: MetaCPANModuleResponse, release: MetaCPANReleaseResponse | null): string {
-	let md = `# ${module.name}\n\n`;
-	if (module.abstract) md += `${module.abstract}\n\n`;
-
-	md += `**Version:** ${module.version}`;
-	md += ` · **Distribution:** ${module.distribution}`;
-	md += ` · **Author:** ${markdownLink(module.author, `https://metacpan.org/author/${module.author}`)}\n`;
-
-	if (release) {
-		if (release.license?.length) {
-			md += `**License:** ${release.license.join(", ")}\n`;
-		}
-
-		const resources = release.metadata?.resources;
-		if (resources?.repository?.web || resources?.repository?.url) {
-			const repoUrl = resources.repository.web || resources.repository.url;
-			md += `**Repository:** ${repoUrl}\n`;
-		}
-		if (resources?.homepage) {
-			md += `**Homepage:** ${resources.homepage}\n`;
-		}
-		if (resources?.bugtracker?.web) {
-			md += `**Issues:** ${resources.bugtracker.web}\n`;
-		}
-
-		const runtimeDeps = release.dependency?.filter(
-			d => d.phase === "runtime" && d.relationship === "requires" && d.module !== "perl",
-		);
-		if (runtimeDeps?.length) {
-			md += `\n## Dependencies\n\n`;
-			for (const dep of runtimeDeps.slice(0, 20)) {
-				md += `- **${dep.module}**`;
-				if (dep.version && dep.version !== "0") md += ` >= ${dep.version}`;
-				md += "\n";
-			}
-			if (runtimeDeps.length > 20) {
-				md += `\n[…${runtimeDeps.length - 20} dependencies elided…]\n`;
-			}
-		}
-	}
-
-	md += `\n## Installation\n\n\`\`\`bash\ncpanm ${module.name}\n\`\`\`\n`;
-
-	return md;
-}
-
-function formatMetaCPANReleaseMarkdown(release: MetaCPANReleaseResponse): string {
-	let md = `# ${release.distribution}\n\n`;
-	if (release.abstract) md += `${release.abstract}\n\n`;
-
-	md += `**Version:** ${release.version}`;
-	md += ` · **Author:** ${markdownLink(release.author, `https://metacpan.org/author/${release.author}`)}\n`;
-
-	if (release.license?.length) {
-		md += `**License:** ${release.license.join(", ")}\n`;
-	}
-
-	if (release.stat?.mtime) {
-		const date = formatIsoDate(release.stat.mtime * 1000);
-		md += `**Released:** ${date}\n`;
-	}
-
+function formatMetaCPANResourcesAndDeps(release: MetaCPANReleaseResponse): string {
+	let md = "";
 	const resources = release.metadata?.resources;
 	if (resources?.repository?.web || resources?.repository?.url) {
 		const repoUrl = resources.repository.web || resources.repository.url;
@@ -2265,6 +2164,46 @@ function formatMetaCPANReleaseMarkdown(release: MetaCPANReleaseResponse): string
 			md += `\n[…${runtimeDeps.length - 20} dependencies elided…]\n`;
 		}
 	}
+	return md;
+}
+
+function formatMetaCPANModuleMarkdown(module: MetaCPANModuleResponse, release: MetaCPANReleaseResponse | null): string {
+	let md = `# ${module.name}\n\n`;
+	if (module.abstract) md += `${module.abstract}\n\n`;
+
+	md += `**Version:** ${module.version}`;
+	md += ` · **Distribution:** ${module.distribution}`;
+	md += ` · **Author:** ${markdownLink(module.author, `https://metacpan.org/author/${module.author}`)}\n`;
+
+	if (release) {
+		if (release.license?.length) {
+			md += `**License:** ${release.license.join(", ")}\n`;
+		}
+		md += formatMetaCPANResourcesAndDeps(release);
+	}
+
+	md += `\n## Installation\n\n\`\`\`bash\ncpanm ${module.name}\n\`\`\`\n`;
+
+	return md;
+}
+
+function formatMetaCPANReleaseMarkdown(release: MetaCPANReleaseResponse): string {
+	let md = `# ${release.distribution}\n\n`;
+	if (release.abstract) md += `${release.abstract}\n\n`;
+
+	md += `**Version:** ${release.version}`;
+	md += ` · **Author:** ${markdownLink(release.author, `https://metacpan.org/author/${release.author}`)}\n`;
+
+	if (release.license?.length) {
+		md += `**License:** ${release.license.join(", ")}\n`;
+	}
+
+	if (release.stat?.mtime) {
+		const date = formatIsoDate(release.stat.mtime * 1000);
+		md += `**Released:** ${date}\n`;
+	}
+
+	md += formatMetaCPANResourcesAndDeps(release);
 
 	md += `\n## Installation\n\n\`\`\`bash\ncpanm ${release.distribution}\n\`\`\`\n`;
 
@@ -2287,8 +2226,6 @@ export const metacpanDeclaration: PackageRegistryDeclaration = {
 		if (distMatch) return { name: `release/${decodeURIComponent(distMatch[1])}`, parsedUrl: parsed };
 		return null;
 	},
-	apiUrl: name =>
-		`https://fastapi.metacpan.org/v1/release/${encodeURIComponent(name.replace(/^(pod|release)\//, ""))}`,
 	customFetch: async (match, ctx) => {
 		const [kind, ...rest] = match.name.split("/");
 		const targetName = rest.join("/");
@@ -2347,7 +2284,6 @@ export const npmDeclaration: PackageRegistryDeclaration = {
 	hosts: ["npmjs.com", "www.npmjs.com"],
 	canonicalUrls: ["https://www.npmjs.com/package/express"],
 	pathPattern: /^\/package\/((?:@[^/]+\/)?[^/]+)/,
-	apiUrl: name => `https://registry.npmjs.org/${encodeURIComponent(name)}/latest`,
 	customFetch: async (match, ctx) => {
 		const packageName = match.name;
 		const latestUrl = `https://registry.npmjs.org/${packageName}/latest`;
@@ -2400,12 +2336,11 @@ export const npmDeclaration: PackageRegistryDeclaration = {
 		if (pkg.keywords?.length) md += `**Keywords:** ${pkg.keywords.join(", ")}\n`;
 		if (pkg.maintainers?.length) md += `**Maintainers:** ${pkg.maintainers.map(m => m.name).join(", ")}\n`;
 
-		if (pkg.dependencies && Object.keys(pkg.dependencies).length > 0) {
-			md += `\n## Dependencies\n\n`;
-			for (const [dep, version] of Object.entries(pkg.dependencies)) {
-				md += `- ${dep}: ${version}\n`;
-			}
-		}
+		md += renderSimpleList(
+			"Dependencies",
+			pkg.dependencies ? Object.entries(pkg.dependencies) : null,
+			([dep, version]) => `${dep}: ${version}`,
+		);
 
 		if (pkg.readme) {
 			md += `\n---\n\n## README\n\n${pkg.readme}\n`;
@@ -2461,15 +2396,7 @@ export const nugetDeclaration: PackageRegistryDeclaration = {
 	site: "nuget",
 	hosts: ["nuget.org", "www.nuget.org"],
 	canonicalUrls: ["https://www.nuget.org/packages/Newtonsoft.Json/"],
-	match: parsed => {
-		const match = parsed.pathname.match(/^\/packages\/([^/]+)(?:\/([^/]+))?/i);
-		if (!match) return null;
-		const packageName = decodeURIComponent(match[1]);
-		const requestedVersion = match[2] ? decodeURIComponent(match[2]) : undefined;
-		return { name: packageName, version: requestedVersion, parsedUrl: parsed };
-	},
-	apiUrl: name =>
-		`https://api.nuget.org/v3/registration5-gz-semver2/${encodeURIComponent(name.toLowerCase())}/index.json`,
+	pathPattern: /^\/packages\/([^/]+)(?:\/([^/]+))?/i,
 	customFetch: async (match, ctx) => {
 		const packageName = match.name;
 		const requestedVersion = match.version || null;
@@ -2481,7 +2408,6 @@ export const nugetDeclaration: PackageRegistryDeclaration = {
 
 		const index = ctx.tryParseJson<NuGetRegistrationIndex>(result.content);
 		if (!index) return ctx.scraperDegrade("nuget", "unexpected response shape");
-
 		if (!index.items?.length) return null;
 
 		let latestPage = index.items[index.items.length - 1];
@@ -2632,14 +2558,12 @@ export const openVsxDeclaration: PackageRegistryDeclaration = {
 		const version = match[3] ? decodeURIComponent(match[3]) : undefined;
 		return { name: `${namespace}/${extension}`, version, parsedUrl: parsed };
 	},
-	apiUrl: name => `https://open-vsx.org/api/${name}`,
 	customFetch: async (match, ctx) => {
 		const [namespace, extension] = match.name.split("/");
 		const version = match.version;
 
 		const baseUrl = `https://open-vsx.org/api/${encodeURIComponent(namespace)}/${encodeURIComponent(extension)}`;
 		const apiUrl = version ? `${baseUrl}/${encodeURIComponent(version)}` : baseUrl;
-
 		const result = await ctx.loadPage(apiUrl, { timeout: ctx.timeout, signal: ctx.signal });
 		if (!result.ok) return ctx.scraperDegrade("open-vsx", ctx.loadFailure(result));
 
@@ -2717,10 +2641,6 @@ export const packagistDeclaration: PackageRegistryDeclaration = {
 		const match = parsed.pathname.match(/^\/packages\/([^/]+)\/([^/]+)/);
 		if (!match) return null;
 		return { name: `${decodeURIComponent(match[1])}/${decodeURIComponent(match[2])}`, parsedUrl: parsed };
-	},
-	apiUrl: name => {
-		const [vendor, pkg] = name.split("/");
-		return `https://packagist.org/packages/${vendor}/${pkg}.json`;
 	},
 	customFetch: async (match, ctx) => {
 		const [vendor, packageName] = match.name.split("/");
@@ -2831,19 +2751,16 @@ export const packagistDeclaration: PackageRegistryDeclaration = {
 			md += `**GitHub:** ${stats.join(" · ")}\n`;
 		}
 
-		if (latestVersion?.require && Object.keys(latestVersion.require).length > 0) {
-			md += `\n## Requirements\n\n`;
-			for (const [dep, version] of Object.entries(latestVersion.require)) {
-				md += `- ${dep}: ${version}\n`;
-			}
-		}
-
-		if (latestVersion?.["require-dev"] && Object.keys(latestVersion["require-dev"]).length > 0) {
-			md += `\n## Dev Requirements\n\n`;
-			for (const [dep, version] of Object.entries(latestVersion["require-dev"])) {
-				md += `- ${dep}: ${version}\n`;
-			}
-		}
+		md += renderSimpleList(
+			"Requirements",
+			latestVersion?.require ? Object.entries(latestVersion.require) : null,
+			([dep, version]) => `${dep}: ${version}`,
+		);
+		md += renderSimpleList(
+			"Dev Requirements",
+			latestVersion?.["require-dev"] ? Object.entries(latestVersion["require-dev"]) : null,
+			([dep, version]) => `${dep}: ${version}`,
+		);
 
 		return buildResult(md, {
 			url: ctx.url,
@@ -2863,7 +2780,6 @@ export const pubDevDeclaration: PackageRegistryDeclaration = {
 	hosts: ["pub.dev", "www.pub.dev"],
 	canonicalUrls: ["https://pub.dev/packages/flutter_bloc"],
 	pathPattern: /^\/packages\/([^/]+)/,
-	apiUrl: name => `https://pub.dev/api/packages/${encodeURIComponent(name)}`,
 	customFetch: async (match, ctx) => {
 		const packageName = match.name;
 		const apiUrl = `https://pub.dev/api/packages/${encodeURIComponent(packageName)}`;
@@ -2997,7 +2913,6 @@ export const pypiDeclaration: PackageRegistryDeclaration = {
 	hosts: ["pypi.org", "www.pypi.org"],
 	canonicalUrls: ["https://pypi.org/project/requests/"],
 	pathPattern: /^\/project\/([^/]+)/,
-	apiUrl: name => `https://pypi.org/pypi/${encodeURIComponent(name)}/json`,
 	customFetch: async (match, ctx) => {
 		const packageName = match.name;
 		const apiUrl = `https://pypi.org/pypi/${packageName}/json`;
@@ -3036,7 +2951,6 @@ export const pypiDeclaration: PackageRegistryDeclaration = {
 			requires_dist?: string[];
 		}>(result.content);
 		if (!pkg) return ctx.scraperDegrade("pypi", "unexpected response shape");
-
 		const info = pkg.info;
 		let md = renderHeader(info.name, info.summary);
 		md += `**Latest:** ${info.version}`;
@@ -3174,10 +3088,6 @@ export const repologyDeclaration: PackageRegistryDeclaration = {
 	hosts: ["repology.org", "www.repology.org"],
 	canonicalUrls: ["https://repology.org/project/ripgrep"],
 	pathPattern: /^\/project\/([^/]+)/,
-	apiUrl: name => `https://repology.org/api/v1/project/${encodeURIComponent(name)}`,
-	headers: {
-		"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-	},
 	customFetch: async (match, ctx) => {
 		const packageName = match.name;
 		const apiUrl = `https://repology.org/api/v1/project/${encodeURIComponent(packageName)}`;
@@ -3337,7 +3247,6 @@ export const rubygemsDeclaration: PackageRegistryDeclaration = {
 	hosts: ["rubygems.org", "www.rubygems.org"],
 	canonicalUrls: ["https://rubygems.org/gems/rails"],
 	pathPattern: /^\/gems\/([^/]+)/,
-	apiUrl: name => `https://rubygems.org/api/v1/gems/${encodeURIComponent(name)}.json`,
 	customFetch: async (match, ctx) => {
 		const gemName = match.name;
 		const apiUrl = `https://rubygems.org/api/v1/gems/${encodeURIComponent(gemName)}.json`;
@@ -3494,8 +3403,6 @@ export const snapcraftDeclaration: PackageRegistryDeclaration = {
 	hosts: ["snapcraft.io", "www.snapcraft.io"],
 	canonicalUrls: ["https://snapcraft.io/vlc"],
 	pathPattern: /^\/([^/]+)/,
-	apiUrl: name => `https://api.snapcraft.io/v2/snaps/info/${encodeURIComponent(name)}`,
-	headers: { "Snap-Device-Series": "16" },
 	customFetch: async (match, ctx) => {
 		const snapName = match.name;
 		const apiUrl = `https://api.snapcraft.io/v2/snaps/info/${encodeURIComponent(snapName)}`;
@@ -3656,7 +3563,6 @@ export const terraformDeclaration: PackageRegistryDeclaration = {
 		}
 		return null;
 	},
-	apiUrl: name => `https://registry.terraform.io/v1/${name}`,
 	customFetch: async (match, ctx) => {
 		const parts = match.name.split("/");
 		const kind = parts[0];
@@ -3908,7 +3814,6 @@ export const vscodeMarketplaceDeclaration: PackageRegistryDeclaration = {
 		if (!decoded.includes(".")) return null;
 		return { name: decoded, parsedUrl: parsed };
 	},
-	apiUrl: name => `https://marketplace.visualstudio.com/items?itemName=${encodeURIComponent(name)}`,
 	notes: ["Fetched via VS Code Marketplace API"],
 	customFetch: async (match, ctx) => {
 		const itemName = match.name;

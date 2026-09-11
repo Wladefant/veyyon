@@ -25,49 +25,8 @@
 import { StatusLineComponent } from "../../packages/coding-agent/src/modes/terminal/components/status-line/component";
 import { STATUS_LINE_PRESETS } from "../../packages/coding-agent/src/modes/terminal/components/status-line/presets";
 import type { StatusLinePreset } from "../../packages/coding-agent/src/modes/terminal/components/status-line/types";
-import type { AgentSession } from "../../packages/coding-agent/src/session/agent-session";
 import { theme } from "../../packages/coding-agent/src/theme/theme";
-import { renderDemo } from "./render-args";
-
-/** A session with every value the footline can read, all of them fixed. */
-function stubSession(): AgentSession {
-	const usage = {
-		input: 12_000,
-		output: 3_400,
-		cacheRead: 48_000,
-		cacheWrite: 1_200,
-		totalTokens: 64_600,
-		orchestrationInput: 0,
-		orchestrationOutput: 0,
-		orchestrationCacheRead: 0,
-		premiumRequests: 2,
-		cost: 0.42,
-		tokensPerSecond: 58.4,
-	};
-	return {
-		messages: [],
-		model: { contextWindow: 200_000, id: "gpt-5", name: "gpt-5", provider: "openai" },
-		contextUsageRevision: 0,
-		systemPrompt: [],
-		agent: { state: { tools: [] } },
-		skills: [],
-		getContextUsage: () => ({ tokens: 84_000, contextWindow: 200_000 }),
-		state: { messages: [], model: { contextWindow: 200_000, id: "gpt-5", name: "gpt-5" } },
-		sessionManager: {
-			getUsageStatistics: () => usage,
-			getSessionName: () => "parser-rewrite",
-			getCwd: () => "/home/you/code/veyyon",
-		},
-		getPrewalkState: () => undefined,
-		getAsyncJobSnapshot: () => undefined,
-		settings: { getGroup: () => ({ enabled: false }) },
-		isAdvisorActive: () => false,
-		isApprovalBypassed: () => false,
-		isFastModeActive: () => false,
-		configuredThinkingLevel: () => "medium",
-		modelRegistry: { isUsingOAuth: () => false },
-	} as unknown as AgentSession;
-}
+import { createStubStatusSession, renderDemo } from "./render-args";
 
 const presets = Object.keys(STATUS_LINE_PRESETS) as StatusLinePreset[];
 
@@ -75,15 +34,15 @@ await renderDemo(
 	({ width }) => {
 		const lines: string[] = [];
 		for (const preset of presets) {
-			const statusLine = new StatusLineComponent(stubSession());
+			const statusLine = new StatusLineComponent(createStubStatusSession());
 			statusLine.updateSettings({ preset });
 			lines.push(theme.fg("dim", `${preset}:`));
 			lines.push(statusLine.renderQuietLine(width) ?? theme.fg("error", "(no footline rendered)"));
 			lines.push("");
 		}
 		lines.push(theme.fg("dim", "footline, viewing an agent:"));
-		const statusLine = new StatusLineComponent(stubSession());
-		statusLine.setSession(stubSession(), "designer-3");
+		const statusLine = new StatusLineComponent(createStubStatusSession());
+		statusLine.setSession(createStubStatusSession(), "designer-3");
 		lines.push(statusLine.renderQuietLine(width) ?? theme.fg("error", "(no footline rendered)"));
 		lines.push("");
 		console.error(

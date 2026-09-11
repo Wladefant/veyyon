@@ -15,13 +15,14 @@ import {
 	type TUI,
 } from "@veyyon/tui";
 import { fuzzyFilter } from "@veyyon/utils/fuzzy";
-import { matchesKey } from "@veyyon/utils/keys";
+import { type KeyId, matchesKey } from "@veyyon/utils/keys";
 import { clampLow } from "@veyyon/utils/math";
 import { HoverFade } from "@veyyon/utils/motion";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import { padding } from "@veyyon/utils/padding";
+import { replaceTabs } from "@veyyon/utils/tab-width";
 import { truncateToWidth } from "@veyyon/utils/width";
-import { replaceTabs, wrapTextWithAnsi } from "@veyyon/utils/wrap";
+import { wrapTextWithAnsi } from "@veyyon/utils/wrap";
 import { getMarkdownTheme } from "../../../../theme/markdown-theme";
 import { type ThemeColor, theme } from "../../../../theme/theme";
 import {
@@ -86,6 +87,24 @@ export interface HookSelectorOptions {
 	onExternalEditor?: () => void;
 	helpText?: string;
 	slider?: HookSelectorSlider;
+	/**
+	 * Explicit search/filtering enablement. Defaults to true when total option
+	 * rows exceed `maxVisible`.
+	 */
+	filterable?: boolean;
+	/**
+	 * Direct single-key shortcuts mapped to target original option indices
+	 * (e.g. `{"y": 0, "n": 1}` for confirm, or `{"y": 0, "n": 2}` for tool approval).
+	 */
+	keyShortcuts?: Partial<Record<KeyId, number>> | Record<string, number>;
+	/**
+	 * Explicit multi-select enablement. Space toggles checkboxes; enter/timeout submits all checked values.
+	 */
+	multi?: boolean;
+	/**
+	 * Optional callback receiving all checked option values in multi-select mode.
+	 */
+	onSelectValues?: (values: readonly string[]) => void;
 	/** Indices into the original options that cannot be selected: they render
 	 *  dimmed, are skipped during navigation, and reject enter/timeout. */
 	disabledIndices?: readonly number[];
@@ -115,6 +134,7 @@ export interface HookSelectorOptions {
 export interface HookSelectorOption {
 	label: string;
 	description?: string;
+	value?: string;
 }
 
 export type HookSelectorOptionInput = string | HookSelectorOption;
@@ -122,9 +142,9 @@ export type HookSelectorOptionInput = string | HookSelectorOption;
 function normalizeHookSelectorOption(option: HookSelectorOptionInput): HookSelectorOption {
 	if (typeof option === "string") return { label: option };
 	if (option.description?.trim()) {
-		return { label: option.label, description: option.description.trim() };
+		return { label: option.label, description: option.description.trim(), value: option.value };
 	}
-	return { label: option.label };
+	return { label: option.label, value: option.value };
 }
 
 /** One row of the option list. `highlight` causes the row (and its wrapped
@@ -155,8 +175,12 @@ export class HookSelectorComponent extends Container {
 	#checkedIndices: Set<number>;
 	#markableCount: number;
 	#maxVisible: number;
+	#filterable: boolean | undefined;
+	#keyShortcuts: Partial<Record<KeyId, number>> | Record<string, number> | undefined;
+	#multi: boolean;
+	#onSelectValuesCallback: ((values: readonly string[]) => void) | undefined;
 	readonly #listContainer = new Container();
-	#onSelectCallback: (option: string) => void;
+	#onSelectCallback: (option: string, selectedIndex: number) => void;
 	#onCancelCallback: () => void;
 	#titleComponent: Markdown | undefined;
 	#baseTitle: string;
@@ -194,7 +218,7 @@ export class HookSelectorComponent extends Container {
 	constructor(
 		title: string,
 		options: HookSelectorOptionInput[],
-		onSelect: (option: string) => void,
+		onSelect: (option: string, selectedIndex: number) => void,
 		onCancel: () => void,
 		opts?: HookSelectorOptions,
 	) {
@@ -210,12 +234,16 @@ export class HookSelectorComponent extends Container {
 		this.#selectionMarker = opts?.selectionMarker;
 		this.#checkedIndices = new Set(
 			(opts?.checkedIndices ?? []).filter(
-				index => Number.isInteger(index) && index >= 0 && index < this.#options.length,
+				index => Number.isInteger(index) && index >= 0 && index < this.#options.length && !this.#isDisabled(index),
 			),
 		);
 		this.#markableCount = clampLow(opts?.markableCount ?? this.#options.length, 0, this.#options.length);
 		this.#selectedIndex = this.#coerceSelectedIndex(opts?.initialIndex ?? 0);
 		this.#maxVisible = Math.max(3, opts?.maxVisible ?? 12);
+		this.#filterable = opts?.filterable;
+		this.#keyShortcuts = opts?.keyShortcuts;
+		this.#multi = opts?.multi === true;
+		this.#onSelectValuesCallback = opts?.onSelectValues;
 		this.#onSelectCallback = onSelect;
 		this.#onCancelCallback = onCancel;
 		const [firstTitleLine = "", ...restTitleLines] = title.split("\n");
@@ -263,13 +291,7 @@ export class HookSelectorComponent extends Container {
 				s => this.#showCountdown(s),
 				() => {
 					opts?.onTimeout?.();
-					// Auto-select current option on timeout (typically the first/recommended option)
-					const selected = this.#filteredOptions[this.#selectedIndex];
-					if (selected && !this.#isDisabled(selected.index)) {
-						this.#onSelectCallback(selected.option.label);
-					} else {
-						this.#onCancelCallback();
-					}
+					this.#selectCurrentOption();
 				},
 			);
 		}
@@ -615,6 +637,7 @@ export class HookSelectorComponent extends Container {
 	}
 
 	#isSearchEnabled(renderWidth = this.#lastRenderWidth, mdTheme?: MarkdownTheme): boolean {
+		if (this.#filterable !== undefined) return this.#filterable;
 		return this.#totalOptionRows(this.#options, renderWidth, mdTheme) > this.#maxVisible;
 	}
 
@@ -668,8 +691,29 @@ export class HookSelectorComponent extends Container {
 			return;
 		}
 
+		if (this.#multi && (matchesKey(keyData, "space") || keyData === " ")) {
+			const selected = this.#filteredOptions[this.#selectedIndex];
+			if (selected && !this.#isDisabled(selected.index)) {
+				this.#toggleChecked(selected.index);
+				this.#updateList();
+				this.#onRequestRender?.();
+			}
+			return;
+		}
 		if (this.#handleSearchInput(keyData)) {
 			return;
+		}
+		if (this.#keyShortcuts && !this.#isSearchEnabled()) {
+			for (const [key, targetIndex] of Object.entries(this.#keyShortcuts) as [KeyId, number][]) {
+				if (matchesKey(keyData, key)) {
+					const filteredIndex = this.#filteredOptions.findIndex(fo => fo.index === targetIndex);
+					if (filteredIndex >= 0 && !this.#isDisabled(targetIndex)) {
+						this.#selectedIndex = filteredIndex;
+						this.#selectCurrentOption();
+						return;
+					}
+				}
+			}
 		}
 
 		if (matchesSelectUp(keyData) || (!this.#isSearchEnabled() && matchesKey(keyData, "k"))) {
@@ -695,9 +739,42 @@ export class HookSelectorComponent extends Container {
 		}
 	}
 
+	#toggleChecked(index: number): void {
+		if (index < 0 || index >= this.#markableCount || this.#isDisabled(index)) return;
+		if (this.#checkedIndices.has(index)) {
+			this.#checkedIndices.delete(index);
+		} else {
+			this.#checkedIndices.add(index);
+		}
+	}
+
+	#getCheckedValues(): readonly string[] {
+		const indices = Array.from(this.#checkedIndices).sort((a, b) => a - b);
+		const values: string[] = [];
+		for (const index of indices) {
+			const option = this.#options[index];
+			if (option && index < this.#markableCount && !this.#isDisabled(index)) {
+				values.push(option.value ?? option.label);
+			}
+		}
+		return values;
+	}
+
 	#selectCurrentOption(): void {
+		if (this.#filteredOptions.length === 0) {
+			this.#onCancelCallback();
+			return;
+		}
 		const selected = this.#filteredOptions[this.#selectedIndex];
-		if (selected && !this.#isDisabled(selected.index)) this.#onSelectCallback(selected.option.label);
+		if (selected && !this.#isDisabled(selected.index)) {
+			if (this.#multi) {
+				const values = this.#getCheckedValues();
+				if (this.#onSelectValuesCallback) this.#onSelectValuesCallback(values);
+				else this.#onSelectCallback(values.join(", "), selected.index);
+				return;
+			}
+			this.#onSelectCallback(selected.option.value ?? selected.option.label, selected.index);
+		}
 	}
 
 	/**
@@ -761,6 +838,12 @@ export class HookSelectorComponent extends Container {
 				const filtered = this.#filteredOptions[index];
 				if (filtered && !this.#isDisabled(filtered.index)) {
 					this.#selectedIndex = index;
+					if (this.#multi) {
+						this.#toggleChecked(filtered.index);
+						this.#updateList();
+						this.#onRequestRender?.();
+						return;
+					}
 					this.#updateList();
 					this.#selectCurrentOption();
 				}

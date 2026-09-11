@@ -238,34 +238,29 @@ function formatReadHashlineHeader(displayPath: string, tag: string): string {
 	return formatHashlineHeader(anchor, tag);
 }
 
+/**
+ * Records the full text under the file's snapshot key so a later edit can anchor on what this
+ * read showed. `undefined` when hashlines are off or the path is not an absolute file.
+ */
 function recordFullHashlineContext(
 	session: ToolSession,
+	hashLines: boolean,
 	absolutePath: string | undefined,
-	displayPath: string,
 	fullText: string,
 ): HashlineHeaderContext | undefined {
-	if (!absolutePath || !path.isAbsolute(absolutePath)) return undefined;
+	if (!hashLines || !absolutePath || !path.isAbsolute(absolutePath)) return undefined;
 	const normalized = normalizeToLF(fullText);
 	const tag = getFileSnapshotStore(session).record(canonicalSnapshotKey(absolutePath), normalized);
 	return {
-		header: formatReadHashlineHeader(displayPath, tag),
+		header: formatReadHashlineHeader(formatPathRelativeToCwd(absolutePath, session.cwd), tag),
 		tag,
 		fullText: normalized,
 	};
 }
 
-async function readHashlineHeaderContext(
-	session: ToolSession,
-	absolutePath: string,
-	cwd: string,
-): Promise<HashlineHeaderContext> {
+async function readHashlineHeaderContext(session: ToolSession, absolutePath: string): Promise<HashlineHeaderContext> {
 	const fullText = await Bun.file(absolutePath).text();
-	const context = recordFullHashlineContext(
-		session,
-		absolutePath,
-		formatPathRelativeToCwd(absolutePath, cwd),
-		fullText,
-	);
+	const context = recordFullHashlineContext(session, true, absolutePath, fullText);
 	if (!context) throw new ToolError(`Cannot record hashline snapshot for non-absolute path: ${absolutePath}`);
 	return context;
 }
@@ -276,6 +271,30 @@ function hashlineHeaderContext(displayPath: string, tag: string): HashlineHeader
 
 function prependHashlineHeader(text: string, context: HashlineHeaderContext | undefined): string {
 	return context ? `${context.header}\n${text}` : text;
+}
+
+/**
+ * What a read shows for a first line wider than the byte budget: the snippet that fits, or a
+ * bracketed reason when none can be shown, since a hashline preview needs whole lines and an
+ * empty snippet means no valid UTF-8 prefix fit.
+ */
+function oversizedFirstLineText(
+	lineDisplay: number,
+	lineBytes: number,
+	budget: number,
+	snippet: string,
+	hashLines: boolean,
+	formatText: (content: string, startNum: number) => string,
+): string {
+	if (!hashLines) {
+		const formatted = formatText(snippet, lineDisplay);
+		if (snippet.length > 0) return formatted;
+	}
+	const reason =
+		snippet.length === 0
+			? "Unable to display a valid UTF-8 snippet."
+			: "Hashline output requires full lines; cannot emit an editable numbered preview for a truncated line.";
+	return `[Line ${lineDisplay} is ${formatBytes(lineBytes)}, exceeds ${formatBytes(budget)} limit. ${reason}]`;
 }
 
 function formatTextWithMode(
@@ -1146,6 +1165,59 @@ type InternalUrlRouting =
 	| { readonly kind: "promoted"; readonly readPath: string; readonly selector: string | undefined }
 	| { readonly kind: "not-internal" };
 
+/**
+ * Column clipping for one displayed selection. Column truncation is display-only: the source
+ * lines stay byte-for-byte with the file so the snapshot recorded for hashline edits can be
+ * verified against it, and the line numbers clipped here are withheld from the seen-lines record.
+ */
+class ColumnClip {
+	readonly clippedLines = new Set<number>();
+	readonly #displayLineByNumber = new Map<number, string>();
+	/** `maxColumns` once any line was clipped, else 0. */
+	columnTruncated = 0;
+
+	constructor(readonly maxColumns: number) {}
+
+	/**
+	 * `lines` with each one past `maxColumns` clipped, recording the clipped line numbers from
+	 * `startLine`; the same array when nothing was clipped.
+	 */
+	clip(lines: string[], startLine: number): string[] {
+		if (this.maxColumns <= 0) return lines;
+		let cloned: string[] | undefined;
+		for (let i = 0; i < lines.length; i++) {
+			const { text, wasTruncated } = truncateLine(lines[i], this.maxColumns);
+			if (wasTruncated) {
+				if (!cloned) cloned = lines.slice();
+				cloned[i] = text;
+				this.columnTruncated = this.maxColumns;
+				this.clippedLines.add(startLine + i);
+			}
+		}
+		return cloned ?? lines;
+	}
+
+	/** Record the display text of `lines` from `startLine`, so `lineText` answers with it. */
+	display(lines: string[], startLine: number): void {
+		for (let i = 0; i < lines.length; i++) {
+			this.#displayLineByNumber.set(startLine + i, lines[i] ?? "");
+		}
+	}
+
+	/** The text shown for `lineNumber`: its recorded display line, else `sourceText` clipped. */
+	readonly lineText = (lineNumber: number, sourceText: string): string => {
+		const visibleText = this.#displayLineByNumber.get(lineNumber);
+		if (visibleText !== undefined) return visibleText;
+		if (this.maxColumns <= 0) return sourceText;
+		const truncated = truncateLine(sourceText, this.maxColumns);
+		if (truncated.wasTruncated) {
+			this.columnTruncated = this.maxColumns;
+			this.clippedLines.add(lineNumber);
+		}
+		return truncated.text;
+	};
+}
+
 export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	readonly name = "read";
 	readonly approval = (args: unknown): ToolTier =>
@@ -1632,15 +1704,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 
 		const shouldAddHashLines = displayMode.hashLines;
 		const shouldAddLineNumbers = shouldAddHashLines ? false : displayMode.lineNumbers;
-		const hashContext =
-			shouldAddHashLines && options.sourcePath
-				? recordFullHashlineContext(
-						this.session,
-						options.sourcePath,
-						formatPathRelativeToCwd(options.sourcePath, this.session.cwd),
-						text,
-					)
-				: undefined;
+		const hashContext = recordFullHashlineContext(this.session, shouldAddHashLines, options.sourcePath, text);
 		let emittedHashlineHeader = false;
 		let seenLines: number[] | undefined;
 		let rawSeenLines: number[] | undefined;
@@ -1686,19 +1750,14 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			const budget = inlineBudgetFor(this.session);
 			const snippet = truncateHeadBytes(firstLine, budget);
 
-			if (shouldAddHashLines) {
-				outputText = `[Line ${startLineDisplay} is ${formatBytes(
-					firstLineBytes,
-				)}, exceeds ${formatBytes(budget)} limit. Hashline output requires full lines; cannot emit an editable numbered preview for a truncated line.]`;
-			} else {
-				outputText = formatText(snippet.text, startLineDisplay);
-			}
-
-			if (snippet.text.length === 0) {
-				outputText = `[Line ${startLineDisplay} is ${formatBytes(
-					firstLineBytes,
-				)}, exceeds ${formatBytes(budget)} limit. Unable to display a valid UTF-8 snippet.]`;
-			}
+			outputText = oversizedFirstLineText(
+				startLineDisplay,
+				firstLineBytes,
+				budget,
+				snippet.text,
+				shouldAddHashLines,
+				formatText,
+			);
 
 			details.truncation = truncation;
 			truncationInfo = {
@@ -1791,15 +1850,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const totalLines = allLines.length;
 		const shouldAddHashLines = displayMode.hashLines;
 		const shouldAddLineNumbers = shouldAddHashLines ? false : displayMode.lineNumbers;
-		const hashContext =
-			shouldAddHashLines && options.sourcePath
-				? recordFullHashlineContext(
-						this.session,
-						options.sourcePath,
-						formatPathRelativeToCwd(options.sourcePath, this.session.cwd),
-						text,
-					)
-				: undefined;
+		const hashContext = recordFullHashlineContext(this.session, shouldAddHashLines, options.sourcePath, text);
 		let emittedHashlineHeader = false;
 
 		let seenLines: number[] | undefined;
@@ -1943,11 +1994,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const blocks: string[] = [];
 		const notices: string[] = [];
 		const visibleSpans: Array<{ startLine: number; endLine: number }> = [];
-		const displayLineByNumber = new Map<number, string>();
 		const materialized = rawSelector ? undefined : await materializeFile(absolutePath, fileSize);
 		const fullLines = materialized?.lines;
-		let columnTruncated = 0;
-		const clippedLines = new Set<number>();
+		const clip = new ColumnClip(maxColumns);
 		let displayContent: { text: string; startLine: number; lineNumbers?: Array<number | null> } | undefined;
 
 		for (const range of ranges) {
@@ -2011,28 +2060,12 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				}
 			}
 
-			// Column truncation is display-only; clone before stamping ellipsis so
-			// the original on-disk lines stay intact for display reconstruction.
-			let displayLines: string[] = collectedLines;
-			if (!rawSelector && maxColumns > 0) {
-				let cloned: string[] | undefined;
-				for (let i = 0; i < collectedLines.length; i++) {
-					const { text, wasTruncated } = truncateLine(collectedLines[i], maxColumns);
-					if (wasTruncated) {
-						if (!cloned) cloned = collectedLines.slice();
-						cloned[i] = text;
-						columnTruncated = maxColumns;
-						clippedLines.add(range.startLine + i);
-					}
-				}
-				if (cloned) displayLines = cloned;
-			}
+			// Column truncation is display-only; the on-disk lines stay intact for display reconstruction.
+			const displayLines = rawSelector ? collectedLines : clip.clip(collectedLines, range.startLine);
 			if (displayLines.length > 0) {
 				const endLine = range.startLine + displayLines.length - 1;
 				visibleSpans.push({ startLine: range.startLine, endLine });
-				for (let i = 0; i < displayLines.length; i++) {
-					displayLineByNumber.set(range.startLine + i, displayLines[i] ?? "");
-				}
+				clip.display(displayLines, range.startLine);
 				if (!fullLines || rawSelector) {
 					const blockText = displayLines.join("\n");
 					blocks.push(formatTextWithMode(blockText, range.startLine, shouldAddHashLines, shouldAddLineNumbers));
@@ -2046,19 +2079,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				fullLines,
 				visibleSpans,
 				{ path: absolutePath, text: materialized?.text },
-				{
-					lineText: (lineNumber, sourceText) => {
-						const visibleText = displayLineByNumber.get(lineNumber);
-						if (visibleText !== undefined) return visibleText;
-						if (maxColumns <= 0) return sourceText;
-						const truncated = truncateLine(sourceText, maxColumns);
-						if (truncated.wasTruncated) {
-							columnTruncated = maxColumns;
-							clippedLines.add(lineNumber);
-						}
-						return truncated.text;
-					},
-				},
+				{ lineText: clip.lineText },
 			);
 			const firstLine = entries.find(entry => entry.kind === "line");
 			displayContent = {
@@ -2073,7 +2094,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		if (shouldAddHashLines && outputText) {
 			const tag = await recordFileSnapshot(this.session, absolutePath, undefined, materialized?.text);
 			if (tag) {
-				recordSeenLinesFromBody(this.session, absolutePath, tag, outputText, clippedLines);
+				recordSeenLinesFromBody(this.session, absolutePath, tag, outputText, clip.clippedLines);
 				outputText = `${formatReadHashlineHeader(formatPathRelativeToCwd(absolutePath, this.session.cwd), tag)}\n${outputText}`;
 			}
 		} else if (rawSelector && visibleSpans.length > 0) {
@@ -2083,7 +2104,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		if (notices.length > 0) {
 			outputText = outputText ? `${outputText}\n${notices.join("\n")}` : notices.join("\n");
 		}
-		return { outputText, columnTruncated, displayContent };
+		return { outputText, columnTruncated: clip.columnTruncated, displayContent };
 	}
 
 	async #readArchiveDirectory(
@@ -2572,9 +2593,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				: rendered.stoppedBy === "bytes"
 					? `[Summary reached the ${formatBytes(summaryBudget)} output budget. Use :${rendered.nextLine} to continue]`
 					: "";
-		const hashContext = hashLines
-			? await readHashlineHeaderContext(this.session, absolutePath, this.session.cwd)
-			: undefined;
+		const hashContext = hashLines ? await readHashlineHeaderContext(this.session, absolutePath) : undefined;
 		const bodyText = [rendered.text, footer, budgetNotice].filter(part => part).join("\n\n");
 		const modelText = prependHashlineHeader(bodyText, hashContext);
 		if (hashContext?.tag) {
@@ -2991,26 +3010,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					// below can be verified against the live file. Mutating it with
 					// ellipsis-truncated text made every long-line file uneditable on
 					// the next edit attempt.
-					let displayLines: string[] = collectedLines;
-					const clippedLines = new Set<number>();
-					if (!rawSelector && maxColumns > 0) {
-						let cloned: string[] | undefined;
-						for (let i = 0; i < collectedLines.length; i++) {
-							const { text, wasTruncated } = truncateLine(collectedLines[i], maxColumns);
-							if (wasTruncated) {
-								if (!cloned) cloned = collectedLines.slice();
-								cloned[i] = text;
-								columnTruncated = maxColumns;
-								clippedLines.add(startLineDisplay + i);
-							}
-						}
-						if (cloned) displayLines = cloned;
-					}
-
-					const displayLineByNumber = new Map<number, string>();
-					for (let i = 0; i < displayLines.length; i++) {
-						displayLineByNumber.set(startLineDisplay + i, displayLines[i] ?? "");
-					}
+					const clip = new ColumnClip(maxColumns);
+					const displayLines = rawSelector ? collectedLines : clip.clip(collectedLines, startLineDisplay);
+					clip.display(displayLines, startLineDisplay);
 					const bracketContextFullLines = materialized?.lines;
 					const displayedEndLine = startLineDisplay + Math.max(0, displayLines.length - 1);
 
@@ -3076,19 +3078,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 							bracketContextFullLines,
 							[{ startLine: startLineDisplay, endLine: displayedEndLine }],
 							{ path: absolutePath, text: materialized?.text },
-							{
-								lineText: (lineNumber, sourceText) => {
-									const visibleText = displayLineByNumber.get(lineNumber);
-									if (visibleText !== undefined) return visibleText;
-									if (maxColumns <= 0) return sourceText;
-									const truncated = truncateLine(sourceText, maxColumns);
-									if (truncated.wasTruncated) {
-										columnTruncated = maxColumns;
-										clippedLines.add(lineNumber);
-									}
-									return truncated.text;
-								},
-							},
+							{ lineText: clip.lineText },
 						);
 						const firstLine = entries.find(entry => entry.kind === "line");
 						capturedDisplayContent = {
@@ -3108,18 +3098,14 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						const firstLineBytes = firstLineByteLength ?? 0;
 						const snippet = firstLinePreview ?? { text: "", bytes: 0 };
 
-						if (shouldAddHashLines) {
-							outputText = `[Line ${startLineDisplay} is ${formatBytes(
-								firstLineBytes,
-							)}, exceeds ${formatBytes(maxBytesForRead)} limit. Hashline output requires full lines; cannot emit an editable numbered preview for a truncated line.]`;
-						} else {
-							outputText = formatText(snippet.text, startLineDisplay);
-						}
-						if (snippet.text.length === 0) {
-							outputText = `[Line ${startLineDisplay} is ${formatBytes(
-								firstLineBytes,
-							)}, exceeds ${formatBytes(maxBytesForRead)} limit. Unable to display a valid UTF-8 snippet.]`;
-						}
+						outputText = oversizedFirstLineText(
+							startLineDisplay,
+							firstLineBytes,
+							maxBytesForRead,
+							snippet.text,
+							shouldAddHashLines,
+							formatText,
+						);
 						details = { truncation };
 						sourcePath = absolutePath;
 						truncationInfo = {
@@ -3166,8 +3152,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					});
 					if (paddingNotice) outputText += `\n\n${paddingNotice}`;
 
+					if (clip.columnTruncated > 0) columnTruncated = clip.columnTruncated;
 					if (hashContext?.tag) {
-						recordSeenLinesFromBody(this.session, absolutePath, hashContext.tag, outputText, clippedLines);
+						recordSeenLinesFromBody(this.session, absolutePath, hashContext.tag, outputText, clip.clippedLines);
 					}
 					if (rawSelector && !firstLineExceedsLimit && collectedLines.length > 0) {
 						await recordFileSnapshot(

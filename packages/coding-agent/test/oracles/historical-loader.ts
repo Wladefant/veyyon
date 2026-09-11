@@ -27,12 +27,12 @@ export interface LegacyRenderer {
 
 // This commit contains the approved frozen renderers, including their import adaptations.
 // Their original production commits remain recorded in each historical file's header.
-export const ORACLE_SNAPSHOT_COMMIT = "de0ccbf5a571d9de1285cb4dddeff1cc23f882aa";
+export const ORACLE_SNAPSHOT_COMMIT = "81eee11283051f29967dbfc506b297d45fd375b1";
 export const ORACLE_SOURCE_DIRECTORY = "packages/coding-agent/test/oracles";
 export const ORACLE_CACHE_DIRECTORY = path.join(
 	import.meta.dirname,
 	".cache",
-	`historical-v5-${ORACLE_SNAPSHOT_COMMIT}`,
+	`historical-v6-${ORACLE_SNAPSHOT_COMMIT}`,
 );
 export const ADAPTER_FILENAME = "historical-render-utils-adapter.ts";
 export const ADAPTER_SPECIFIER = "historical-render-utils-adapter";
@@ -134,25 +134,28 @@ function getPinnedExportSources(sourcePath: string, names: readonly string[]): s
 function getHistoricalRenderUtilsAdapterBuffer(): Buffer {
 	if (cachedAdapterBuffer !== null) return cachedAdapterBuffer;
 	const formatDiagnosticsSource = getPinnedExportSources(PINNED_RENDER_UTILS_SOURCE_PATH, ["formatDiagnostics"]);
+	const diagnosticSources = getPinnedExportSources("packages/coding-agent/src/tools/core/diagnostics.ts", [
+		"sanitizeDiagnosticDisplayText",
+		"getSeverityRank",
+		"parseDiagnosticMessage",
+		"groupByFile",
+	]);
 	const writeDisplaySource = getPinnedExportSources("packages/coding-agent/src/tools/fs/write.ts", [
 		"normalizeDisplayText",
 		"WRITE_STREAMING_PREVIEW_LINES",
 	]);
 	const readDisplaySource = getPinnedExportSources("packages/coding-agent/src/tools/fs/read.ts", ["readSourceFsPath"]);
 	const adapterSource = `import type { Theme } from "@veyyon/coding-agent/theme/theme";
-import {
-	getSeverityRank,
-	type ParsedDiagnostic,
-	parseDiagnosticMessage,
-	sanitizeDiagnosticDisplayText,
-} from "@veyyon/coding-agent/tools/core/diagnostics";
+import type { ParsedDiagnostic } from "@veyyon/coding-agent/tools/core/diagnostics";
+import { replaceTabs } from "@veyyon/utils/tab-width";
 import { formatExpandHint } from "@veyyon/coding-agent/tools/core/render-utils";
 import type { ReadToolDetails } from "@veyyon/coding-agent/tools/fs/read";
 
 export * from "@veyyon/coding-agent/tools/core/render-utils";
 export * from "@veyyon/coding-agent/tools/core/path-utils";
 export type * from "@veyyon/coding-agent/tools/fs/read";
-export { sanitizeDiagnosticDisplayText } from "@veyyon/coding-agent/tools/core/diagnostics";
+
+${diagnosticSources}
 
 ${formatDiagnosticsSource}
 

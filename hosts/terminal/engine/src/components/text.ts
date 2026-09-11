@@ -1,7 +1,8 @@
 import { padding } from "@veyyon/utils/padding";
 import { sgrCarryAfter } from "@veyyon/utils/sgr";
+import { replaceTabs } from "@veyyon/utils/tab-width";
 import { getPaddingX } from "@veyyon/utils/tight-mode";
-import { normalizeWrapInput, replaceTabs, wrapTextWithAnsi } from "@veyyon/utils/wrap";
+import { normalizeWrapInput, wrapTextWithAnsi } from "@veyyon/utils/wrap";
 import type { Component } from "../tui";
 import { applyLineBackground } from "../utils/text-layout";
 

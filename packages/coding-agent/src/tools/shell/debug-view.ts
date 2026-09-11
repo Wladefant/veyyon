@@ -15,6 +15,7 @@ import { truncateToWidth } from "@veyyon/utils/width";
 import type { FramedBlockView, StatusRowView, ToolViewRenderer, ViewLine, ViewSection } from "@veyyon/view";
 import { formatSessionSnapshot } from "../../debug/session-snapshot";
 import {
+	extractResultText,
 	heldBack,
 	LINE_NOUN,
 	PREVIEW_LIMITS,
@@ -74,7 +75,7 @@ function sessionSection(details: DebugToolDetails | undefined): ViewSection | un
 
 /** The head of what the adapter said, and how much of it the card is not showing. */
 function outputSection(result: DebugViewResult, expanded: boolean): ViewSection {
-	const text = result.content.find(block => block.type === "text")?.text ?? "No output";
+	const text = extractResultText(result.content) || "No output";
 	const rawLines = replaceTabs(text).split("\n");
 	const limit = expanded ? PREVIEW_LIMITS.EXPANDED_LINES : PREVIEW_LIMITS.COLLAPSED_LINES;
 	const lines = rawLines

@@ -1,4 +1,3 @@
-import { emptyUsage } from "@veyyon/catalog/models";
 import { normalizeOllamaCloudBaseUrl } from "@veyyon/catalog/provider-models/ollama";
 import { parseStreamingJson } from "@veyyon/utils/json-parse";
 import * as AIError from "../error";
@@ -44,6 +43,7 @@ import {
 	type StreamMarkupHealingEvent,
 } from "../utils/stream-markup-healing";
 import { stopReasonForTerminallessEof } from "../utils/terminalless-eof";
+import { createInitialResponsesAssistantMessage } from "./initial-message";
 import { transformMessages } from "./transform-messages";
 import { joinTextWithImagePlaceholder, partitionVisionContent } from "./vision-guard";
 
@@ -368,19 +368,6 @@ async function* iterateNdjson(stream: ReadableStream<Uint8Array>): AsyncGenerato
 	}
 }
 
-function createEmptyOutput(model: Model<"ollama-chat">): AssistantMessage {
-	return {
-		role: "assistant",
-		content: [],
-		api: "ollama-chat" as Api,
-		provider: model.provider,
-		model: model.id,
-		usage: emptyUsage(),
-		stopReason: "stop",
-		timestamp: Date.now(),
-	};
-}
-
 function endThinkingBlock(stream: AssistantMessageEventStream, output: AssistantMessage, index: number): void {
 	const block = output.content[index];
 	if (block?.type === "thinking") {
@@ -433,7 +420,7 @@ const streamOllamaOnce = (
 		const startTime = performance.now();
 		let firstTokenTime: number | undefined;
 		let sawDone = false;
-		const output = createEmptyOutput(model);
+		const output = createInitialResponsesAssistantMessage("ollama-chat" as Api, model.provider, model.id);
 		let rawRequestDump: RawHttpRequestDump | undefined;
 		/** Exact bytes of the last sent request body; materialized into a dump only on the 400/413 path. */
 		let wireBodyJson: string | undefined;
@@ -744,10 +731,7 @@ const streamOllamaOnce = (
 				rawRequestDump: materializeDumpBody(rawRequestDump, wireBodyJson),
 				capturedErrorResponse,
 			});
-			output.stopReason = result.stopReason;
-			output.errorStatus = result.status;
-			output.errorId = result.id;
-			output.errorMessage = result.message;
+			AIError.applyFinalizeResult(output, result);
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) {
 				output.ttft = firstTokenTime - startTime;

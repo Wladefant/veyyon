@@ -190,6 +190,7 @@ Runtime behavior in TUI:
 
 - If hooks exist, tool output is rendered inside a `Box` container.
 - `renderResult` receives `{ expanded, isPartial, spinnerFrame? }`.
+- The fourth `renderResult` argument contains the completed call arguments for both partial and final results.
 
 If a rendering hook throws, veyyon catches it so the session keeps running, and
 then reports it where your card would have been:

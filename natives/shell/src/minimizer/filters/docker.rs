@@ -47,11 +47,7 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 		_ => primitives::head_tail_dedup(&cleaned),
 	};
 
-	if text == input {
-		MinimizerOutput::passthrough(input)
-	} else {
-		MinimizerOutput::transformed(text, input.len())
-	}
+	MinimizerOutput::maybe_transformed(input, text)
 }
 
 fn filter_docker(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> String {
@@ -172,7 +168,7 @@ fn is_explicit_kubectl_json_yaml(command: &str) -> bool {
 }
 
 fn is_kubectl_non_table_format(command: &str) -> bool {
-	if command.split_whitespace().any(|tok| tok == "--no-headers") {
+	if primitives::command_has_exact_token(command, "--no-headers") {
 		return true;
 	}
 	matches!(

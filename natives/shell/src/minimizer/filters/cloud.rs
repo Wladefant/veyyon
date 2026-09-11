@@ -49,11 +49,7 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 		_ => primitives::head_tail_dedup_capped(&cleaned, 80, 40),
 	};
 
-	if text == input {
-		MinimizerOutput::passthrough(input)
-	} else {
-		MinimizerOutput::transformed(text, input.len())
-	}
+	MinimizerOutput::maybe_transformed(input, text)
 }
 
 /// Returns `true` when the full command is `aws s3 ls [...]` (not `cp`, `sync`,
@@ -84,7 +80,7 @@ fn is_s3_ls(command: &str) -> bool {
 /// follow the positional (`aws s3 cp s3://bucket/key - --request-payer
 /// requester`); a false positive only skips minimization, which is safe.
 fn is_aws_stdout_pipe(command: &str) -> bool {
-	command.split_whitespace().any(|token| token == "-")
+	primitives::command_has_exact_token(command, "-")
 }
 
 fn filter_aws(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> String {

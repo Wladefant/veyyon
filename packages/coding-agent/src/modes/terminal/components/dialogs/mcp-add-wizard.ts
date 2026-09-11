@@ -9,8 +9,8 @@ import { errorMessage, getMCPConfigPath, getProjectDir } from "@veyyon/utils";
 import { matchesKey } from "@veyyon/utils/keys";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import { padding } from "@veyyon/utils/padding";
+import { replaceTabs } from "@veyyon/utils/tab-width";
 import { truncateToWidth } from "@veyyon/utils/width";
-import { replaceTabs } from "@veyyon/utils/wrap";
 import { validateServerName } from "../../../../mcp/config-writer";
 import { analyzeAuthError, discoverOAuthEndpoints, fetchResourceMetadataScopes } from "../../../../mcp/oauth-discovery";
 import type {
@@ -25,8 +25,6 @@ import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp } from "../../u
 import {
 	CARD_BODY_COL_INSET,
 	computeModalDims,
-	consumeModalChipHover,
-	hitTestModalChrome,
 	MODAL_SIZING_MEDIUM,
 	type ModalShellGeometry,
 	type ModalShortcut,
@@ -35,6 +33,7 @@ import {
 	renderModalShell,
 	sizingForArea,
 } from "../chrome/modal-shell";
+import { routeModalChrome } from "../selectors/select-list-mouse-routing";
 import { hoverBandAt } from "../selectors/selector-helpers";
 
 type TransportType = "stdio" | "http" | "sse";
@@ -474,42 +473,33 @@ export class MCPAddWizard implements Component {
 	}
 
 	#routeMouse(event: SgrMouseEvent): boolean {
-		const chrome = hitTestModalChrome(this.#shellGeometry, event.row, event.col, {
-			motion: event.motion,
-			leftClick: event.leftClick,
-		});
-		if (
-			consumeModalChipHover(chrome, this.#hoveredShortcutId, id => {
+		const consumed = routeModalChrome({
+			shellGeometry: this.#shellGeometry,
+			event,
+			hoveredShortcutId: this.#hoveredShortcutId,
+			onHoverShortcut: id => {
 				this.#hoveredShortcutId = id;
 				this.#requestRender();
-			})
-		) {
-			return true;
-		}
-		if (
-			chrome.kind === "close" ||
-			chrome.kind === "outside" ||
-			(chrome.kind === "shortcut" && chrome.id === "close")
-		) {
-			// The glyph closes the WIZARD, not the step: an abandoned add leaves
-			// nothing behind, and stepping back from a click on `[x]` would be a
-			// different action from the one the glyph draws.
-			if (this.#oauthAbort) {
-				this.#oauthAbort.abort("MCP OAuth flow cancelled by user");
+			},
+			onCancel: () => {
+				// The glyph closes the WIZARD, not the step: an abandoned add leaves
+				// nothing behind, and stepping back from a click on `[x]` would be a
+				// different action from the one the glyph draws.
+				if (this.#oauthAbort) {
+					this.#oauthAbort.abort("MCP OAuth flow cancelled by user");
+					return;
+				}
+				this.#onCancelCallback();
+			},
+			onConfirm: () => this.handleInput("\n"),
+			onShortcut: id => {
+				if (id !== "back") return false;
+				this.#goBack();
+				this.#requestRender();
 				return true;
-			}
-			this.#onCancelCallback();
-			return true;
-		}
-		if (chrome.kind === "shortcut" && chrome.id === "back") {
-			this.#goBack();
-			this.#requestRender();
-			return true;
-		}
-		if (chrome.kind === "shortcut" && chrome.id === "confirm") {
-			this.handleInput("\n");
-			return true;
-		}
+			},
+		});
+		if (consumed) return true;
 		const line = event.row - this.#bodyRowStart;
 		// An input step has no rows to pick; a click on the field places its caret.
 		if (this.#inputField) {

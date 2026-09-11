@@ -2,13 +2,13 @@ import { stripRecommendedSuffix } from "@veyyon/wire";
 import type { ReactNode } from "react";
 import { AgentLink, Badge, Badges, InvalidArg, Kv, KvGrid, Note, Output, ResultText, Row, type Tone } from "../parts";
 import type { ToolDescriptor, ToolRenderHost, ToolRenderProps } from "../types";
-import { argsDigest, detailsRecord, isRecord, normalizeWs, num, str, strList, truncate } from "../util";
+import { argsDigest, detailsRecord, isRecord, keyed, normalizeWs, num, str, strList, truncate } from "../util";
 
 // ============================================================================
 // task
 // ============================================================================
 
-const MISSING_YIELD_PREFIX = "SYSTEM WARNING: Subagent exited without calling yield tool";
+const MISSING_YIELD_PREFIX_RE = /^SYSTEM WARNING: (?:Agent|Subagent) exited without calling yield tool/;
 
 interface TaskItemView {
 	id: string | null;
@@ -98,7 +98,7 @@ function AgentResult({ res, host }: { res: Record<string, unknown>; host?: ToolR
 	let warning: string | null = null;
 	const nl = output.indexOf("\n");
 	const firstLine = (nl === -1 ? output : output.slice(0, nl)).trim();
-	if (firstLine.startsWith(MISSING_YIELD_PREFIX)) {
+	if (MISSING_YIELD_PREFIX_RE.test(firstLine)) {
 		warning = firstLine;
 		output = nl === -1 ? "" : output.slice(nl + 1).replace(/^\s*\n+/, "");
 	}
@@ -397,11 +397,11 @@ function QuestionBlock({ q, answer }: { q: AskQuestion; answer: AskAnswer | unde
 				{q.question ? <span>{q.question}</span> : <InvalidArg what="question" />}
 				{q.multi && <Badge>multi</Badge>}
 			</Row>
-			{q.options.map((opt, i) => {
+			{keyed(q.options, opt => opt.label).map(({ key, item: opt }, i) => {
 				const isSelected = selected.has(stripRecommendedSuffix(opt.label));
 				const marker = q.multi ? (isSelected ? "■" : "□") : isSelected ? "●" : "○";
 				return (
-					<Row key={i} k={<span className={isSelected ? "tv-ok-text" : undefined}>{marker}</span>}>
+					<Row key={key} k={<span className={isSelected ? "tv-ok-text" : undefined}>{marker}</span>}>
 						<span className={answer && !isSelected ? "tv-muted" : undefined}>{opt.label}</span>
 						{i === q.recommended && <Badge tone="accent">recommended</Badge>}
 						{opt.description && <span className="tv-muted"> — {opt.description}</span>}
@@ -430,9 +430,9 @@ function AskBody({ args, result }: ToolRenderProps): ReactNode {
 	if (questions.length === 0 && details) questions = questionsFromDetails(details);
 	return (
 		<>
-			{questions.map((q, i) => {
+			{keyed(questions, q => q.id).map(({ key, item: q }, i) => {
 				const answer = answers ? (answers.find(a => a.id !== undefined && a.id === q.id) ?? answers[i]) : undefined;
-				return <QuestionBlock key={i} q={q} answer={answer} />;
+				return <QuestionBlock key={key} q={q} answer={answer} />;
 			})}
 			{questions.length === 0 && !result && <InvalidArg what="questions" />}
 			{!answers && <ResultText result={result} maxLines={10} />}
@@ -640,8 +640,8 @@ function IrcBody({ args, result }: ToolRenderProps): ReactNode {
 			{message && <Note>{message}</Note>}
 			{receipts.length > 0 && (
 				<div className="tv-list">
-					{receipts.map((receipt, i) => (
-						<Row key={i} k={receipt.to}>
+					{keyed(receipts, receipt => receipt.to).map(({ key, item: receipt }) => (
+						<Row key={key} k={receipt.to}>
 							<Badge tone={outcomeTone(receipt.outcome)}>{receipt.outcome}</Badge>
 							{receipt.error && <span className="tv-err-text"> — {receipt.error}</span>}
 						</Row>
@@ -664,8 +664,8 @@ function IrcBody({ args, result }: ToolRenderProps): ReactNode {
 			{timedOut && <Note tone="warn">No reply yet — they may answer later; check inbox or wait again.</Note>}
 			{inbox.length > 0 && (
 				<div className="tv-list">
-					{inbox.map((msg, i) => (
-						<Row key={i} k={msg.from}>
+					{keyed(inbox, msg => `${msg.from}\u001f${msg.body}`).map(({ key, item: msg }) => (
+						<Row key={key} k={msg.from}>
 							{msg.body}
 							{msg.replyTo && (
 								<>
@@ -804,11 +804,27 @@ function opSummary(op: string, args: Record<string, unknown>, details: Record<st
 			return (
 				<Badges
 					items={[
-						wait?.waiting === true ? <Badge tone="accent">watching</Badge> : null,
-						settled > 0 ? <Badge tone="ok">{`${settled} settled`}</Badge> : null,
-						stillRunning > 0 ? <Badge tone="accent">{`${stillRunning} still running`}</Badge> : null,
-						wait?.timedOut === true ? <Badge tone="warn">timed out</Badge> : null,
-						wait === null && watching.length > 0 ? <Badge>{watching.join(", ")}</Badge> : null,
+						wait?.waiting === true ? (
+							<Badge key="watching" tone="accent">
+								watching
+							</Badge>
+						) : null,
+						settled > 0 ? (
+							<Badge key="settled" tone="ok">
+								{`${settled} settled`}
+							</Badge>
+						) : null,
+						stillRunning > 0 ? (
+							<Badge key="running" tone="accent">
+								{`${stillRunning} still running`}
+							</Badge>
+						) : null,
+						wait?.timedOut === true ? (
+							<Badge key="timedOut" tone="warn">
+								timed out
+							</Badge>
+						) : null,
+						wait === null && watching.length > 0 ? <Badge key="targets">{watching.join(", ")}</Badge> : null,
 					].filter(item => item !== null)}
 				/>
 			);
@@ -853,16 +869,30 @@ function Screen({ screen, settledStatus }: { screen: ScreenView; settledStatus?:
 			<Row k={screen.id}>
 				<Badges
 					items={[
-						screen.cli ? <Badge tone="accent">{screen.cli}</Badge> : null,
-						screen.state ? <Badge tone={vibeStateTone(screen.state)}>{screen.state}</Badge> : null,
+						screen.cli ? (
+							<Badge key="cli" tone="accent">
+								{screen.cli}
+							</Badge>
+						) : null,
+						screen.state ? (
+							<Badge key="state" tone={vibeStateTone(screen.state)}>
+								{screen.state}
+							</Badge>
+						) : null,
 						settledStatus ? (
-							<Badge tone={settledStatus === "completed" ? "ok" : "err"}>{settledStatus}</Badge>
+							<Badge key="settled" tone={settledStatus === "completed" ? "ok" : "err"}>
+								{settledStatus}
+							</Badge>
 						) : null,
-						screen.model ? <Badge>{screen.model}</Badge> : null,
+						screen.model ? <Badge key="model">{screen.model}</Badge> : null,
 						screen.turns !== null ? (
-							<Badge>{`${screen.turns} turn${screen.turns === 1 ? "" : "s"}`}</Badge>
+							<Badge key="turns">{`${screen.turns} turn${screen.turns === 1 ? "" : "s"}`}</Badge>
 						) : null,
-						screen.queued ? <Badge tone="warn">{`${screen.queued} queued`}</Badge> : null,
+						screen.queued ? (
+							<Badge key="queued" tone="warn">
+								{`${screen.queued} queued`}
+							</Badge>
+						) : null,
 					].filter(item => item !== null)}
 				/>
 			</Row>

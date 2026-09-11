@@ -75,6 +75,9 @@ run_docker() {
 	if [ -d "/mnt/FlareTraining/santh-archive/cargo-target" ]; then
 		mount_args+=(--mount "type=bind,src=/mnt/FlareTraining/santh-archive/cargo-target,dst=/mnt/FlareTraining/santh-archive/cargo-target")
 	fi
+	if [ -d "/var/santh-cargo-target" ]; then
+		mount_args+=(--mount "type=bind,src=/var/santh-cargo-target,dst=/var/santh-cargo-target")
+	fi
 	local -a tty_args=()
 	[ -t 0 ] && [ -t 1 ] && tty_args=(-it)
 

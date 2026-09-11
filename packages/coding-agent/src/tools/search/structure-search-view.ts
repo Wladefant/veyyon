@@ -36,12 +36,8 @@ import {
 	scopeMetaLine,
 	type ToolViewResult,
 } from "../core/render-utils";
-import {
-	COLLAPSED_MATCH_LIMIT,
-	MATCH_LIMIT_NOTICE_PREFIX,
-	type StructureSearchDetails,
-	type StructureSearchRenderArgs,
-} from "./structure-search";
+import { COLLAPSED_MATCH_LIMIT, MATCH_LIMIT_NOTICE_PREFIX } from "./search-card-limits";
+import type { StructureSearchDetails, StructureSearchRenderArgs } from "./structure-search";
 
 /** What every card of this tool is titled. */
 const STRUCTURE_SEARCH_TITLE = "Search structure";

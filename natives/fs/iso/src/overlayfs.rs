@@ -87,18 +87,28 @@ mod imp {
 			work.display()
 		);
 
-		match kernel_mount(&merged, &opts) {
+		let res = match kernel_mount(&merged, &opts) {
 			Ok(()) => {
-				ACTIVE_MOUNTS.lock().insert(merged, MountFlavor::Kernel);
+				ACTIVE_MOUNTS.lock().insert(merged.clone(), MountFlavor::Kernel);
 				Ok(())
 			},
 			Err(err) if err.is_unavailable() => {
-				fuse_mount(&lower, &upper, &work, &merged)?;
-				ACTIVE_MOUNTS.lock().insert(merged, MountFlavor::Fuse);
-				Ok(())
+				match fuse_mount(&lower, &upper, &work, &merged) {
+					Ok(()) => {
+						ACTIVE_MOUNTS.lock().insert(merged.clone(), MountFlavor::Fuse);
+						Ok(())
+					},
+					Err(fuse_err) => Err(fuse_err),
+				}
 			},
 			Err(err) => Err(err),
+		};
+		if res.is_err() {
+			let _ = remove_dir_if_exists(&upper, "overlay upper");
+			let _ = remove_dir_if_exists(&work, "overlay work");
+			let _ = remove_dir_if_exists(&merged, "overlay merged");
 		}
+		res
 	}
 
 	pub fn stop(merged: &Path) -> IsoResult<()> {

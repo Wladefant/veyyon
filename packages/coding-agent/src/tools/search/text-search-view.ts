@@ -40,12 +40,8 @@ import {
 	scopeMetaLine,
 	type ToolViewResult,
 } from "../core/render-utils";
-import {
-	COLLAPSED_TEXT_LIMIT,
-	EXPANDED_TEXT_LIMIT,
-	type TextSearchDetails,
-	type TextSearchRenderArgs,
-} from "./text-search";
+import { COLLAPSED_TEXT_LIMIT, EXPANDED_TEXT_LIMIT } from "./search-card-limits";
+import type { TextSearchDetails, TextSearchRenderArgs } from "./text-search";
 
 /** What every card of this tool is titled. */
 const TEXT_SEARCH_TITLE = "Search text";

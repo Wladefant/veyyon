@@ -19,8 +19,6 @@ import {
 import {
 	CARD_BODY_COL_INSET,
 	computeModalDims,
-	consumeModalChipHover,
-	hitTestModalChrome,
 	MODAL_SIZING_MEDIUM,
 	type ModalShellGeometry,
 	pointerMotionEnabled,
@@ -28,6 +26,7 @@ import {
 	SELECT_LIST_SHORTCUTS,
 	sizingForArea,
 } from "../chrome/modal-shell";
+import { routeModalChrome } from "../selectors/select-list-mouse-routing";
 import { centeredWindow, hoverBandAt, renderScrollableList, selectionBand } from "../selectors/selector-helpers";
 
 /** Visible result rows; also the jump distance for PageUp/PageDown. */
@@ -318,30 +317,18 @@ export class HistorySearchComponent implements Component {
 	}
 
 	#routeMouse(event: SgrMouseEvent): boolean {
-		const chrome = hitTestModalChrome(this.#shellGeometry, event.row, event.col, {
-			motion: event.motion,
-			leftClick: event.leftClick,
-		});
-		if (
-			consumeModalChipHover(chrome, this.#hoveredShortcutId, id => {
+		const consumed = routeModalChrome({
+			shellGeometry: this.#shellGeometry,
+			event,
+			hoveredShortcutId: this.#hoveredShortcutId,
+			onHoverShortcut: id => {
 				this.#hoveredShortcutId = id;
 				this.#onRequestRender?.();
-			})
-		) {
-			return true;
-		}
-		if (
-			chrome.kind === "close" ||
-			chrome.kind === "outside" ||
-			(chrome.kind === "shortcut" && chrome.id === "close")
-		) {
-			this.#onCancel();
-			return true;
-		}
-		if (chrome.kind === "shortcut" && chrome.id === "confirm") {
-			this.handleInput("\n");
-			return true;
-		}
+			},
+			onCancel: () => this.#onCancel(),
+			onConfirm: () => this.handleInput("\n"),
+		});
+		if (consumed) return true;
 		if (event.wheel !== null) {
 			if (this.#results.length > 0) {
 				this.#selectedIndex = Math.max(0, Math.min(this.#results.length - 1, this.#selectedIndex + event.wheel));

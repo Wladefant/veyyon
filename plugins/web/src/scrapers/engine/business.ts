@@ -11,15 +11,10 @@ export interface BusinessMatch {
 	parsedUrl: URL;
 }
 
-export interface BusinessMeta {
-	title: string;
-	customMarkdown?: string | null;
-}
-
 export type BusinessContext = DeclarativeContext;
 
-export type BusinessDeclaration = DeclarativeSite<BusinessMatch, BusinessMeta>;
+export type BusinessDeclaration = DeclarativeSite<BusinessMatch>;
 
 export function createBusinessHandler(decl: BusinessDeclaration, handlerName?: string): SpecialHandler {
-	return createDeclarativeHandler(decl, meta => `# ${meta.title}\n`, handlerName);
+	return createDeclarativeHandler(decl, handlerName);
 }

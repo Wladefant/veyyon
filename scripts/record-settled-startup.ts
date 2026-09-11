@@ -197,13 +197,13 @@ function collectDescendants(parent: Process): Process[] {
 	return descendants;
 }
 
-async function computeDigest(filePath: string): Promise<string> {
+export async function computeDigest(filePath: string): Promise<string> {
 	const hash = createHash("sha256");
 	for await (const chunk of createReadStream(filePath)) hash.update(chunk);
 	return hash.digest("hex");
 }
 
-function median(values: number[]): number {
+export function median(values: number[]): number {
 	if (values.length === 0) return 0;
 	const sorted = [...values].sort((a, b) => a - b);
 	const mid = Math.floor(sorted.length / 2);

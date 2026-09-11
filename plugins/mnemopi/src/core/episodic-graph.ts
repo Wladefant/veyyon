@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { closeQuietly, type DatabasePath, openDatabase } from "../db";
 import { toUtcIso } from "../util/datetime";
 import { unicodeWordTokens, WORD_TOKEN_HYPHEN_RE } from "../util/regex";
-import { tableExists } from "../util/sqlite";
+import { parseStoredStringList, tableExists } from "../util/sqlite";
 import { jaccardIndex, overlapScore } from "../util/text-similarity";
 import { CONTENT_STOPWORDS } from "./stopwords";
 
@@ -149,30 +149,12 @@ function unique(values: Iterable<string>, limit = Number.MAX_SAFE_INTEGER): stri
 	return out;
 }
 
-function parseJsonStringArray(value: string | null): string[] {
-	if (value === null || value === "") return [];
-	try {
-		const parsed: unknown = JSON.parse(value);
-		if (!Array.isArray(parsed)) return [];
-		const strings: string[] = [];
-		for (const item of parsed) {
-			if (typeof item === "string") strings.push(item);
-		}
-		return strings;
-	} catch {
-		// A stored tag list that is not JSON has no tags to return, which is the same empty list a row with no
-		// tags gives and the same one a non-array value gives above. Reading it cannot repair it, and the
-		// caller treats the memory as untagged rather than skipping the memory.
-		return [];
-	}
-}
-
 function rowToGist(row: GistRow): Gist {
 	return {
 		id: row.id,
 		text: row.text,
 		timestamp: row.timestamp ?? "",
-		participants: parseJsonStringArray(row.participants_json),
+		participants: parseStoredStringList(row.participants_json),
 		location: row.location,
 		emotion: row.emotion,
 		timeScope: row.time_scope,

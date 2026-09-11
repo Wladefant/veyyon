@@ -22,23 +22,13 @@
  *     bun scripts/demos/render-footline-settings.ts --footline on --width 100 --height 22
  */
 import { Settings } from "../../packages/coding-agent/src/config/settings";
-import { SettingsSelectorComponent } from "../../packages/coding-agent/src/modes/terminal/components/selectors/settings-selector";
 import { renderDemo } from "./render-args";
+import { createTestSettingsSelector } from "./render-settings-helper";
 
 await renderDemo(
 	({ width, flag, theme }) => {
 		Settings.instance.set("statusLine.enabled", flag("footline", "off") === "on");
-		const selector = new SettingsSelectorComponent(
-			{
-				availableThinkingLevels: [],
-				thinkingLevel: undefined,
-				availableThemes: [theme, "light"],
-				availablePersonalities: ["default"],
-				providers: ["anthropic"],
-				cwd: process.cwd(),
-			},
-			{ onChange: () => {}, onCancel: () => {} },
-		);
+		const selector = createTestSettingsSelector(theme);
 		// The toggle itself is the one row present in both states, so selecting it puts the Status Line
 		// group in the viewport of both shots and makes the missing preset row visible as an absence.
 		selector.selectSetting("statusLine.enabled");

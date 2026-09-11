@@ -10,6 +10,7 @@
 
 import type { StatusRowView, ToolView, ToolViewContext, ViewLine, ViewSection } from "@veyyon/view";
 import {
+	extractResultText,
 	metaLines,
 	replaceTabs,
 	sanitizeErrorText,
@@ -249,8 +250,7 @@ function answered(result: { selectedOptions?: readonly string[]; customInput?: s
 
 /** The row a card with no answer to report shows, which is the tool's own message. */
 function fallbackText(result: AskViewResult): string {
-	const text = result.content?.find(part => part.type === "text")?.text;
-	return text ?? "";
+	return extractResultText(result.content);
 }
 
 /** The question a reader is looking at, or the failure that there is none. */

@@ -14,8 +14,8 @@ import { collapseWhitespace } from "@veyyon/utils/collapse-whitespace";
 import { formatCount, pluralize } from "@veyyon/utils/format";
 import { getKeybindings } from "@veyyon/utils/keybindings";
 import { stripAnsi } from "@veyyon/utils/strip-ansi";
+import { replaceTabs } from "@veyyon/utils/tab-width";
 import { truncateToWidth } from "@veyyon/utils/width";
-import { replaceTabs } from "@veyyon/utils/wrap";
 import type { TextBlockView, ViewHiddenCount, ViewLine, ViewSection, ViewSpan, ViewTone } from "@veyyon/view";
 import { formatKeyHints, type KeyId } from "../../config/keybindings";
 // The slot leaf, not the 95-module store: this file reads settings, it does not fill them.
@@ -27,12 +27,14 @@ import { TRUNCATE_LENGTHS } from "./render-limits";
 import { shortenPath } from "./shorten-path";
 
 export { Ellipsis } from "@veyyon/natives";
+export { replaceTabs } from "@veyyon/utils/tab-width";
 export { truncateToWidth } from "@veyyon/utils/width";
-export { replaceTabs, wrapTextWithAnsi } from "@veyyon/utils/wrap";
+export { wrapTextWithAnsi } from "@veyyon/utils/wrap";
+export { extractResultText } from "./output-notice";
 export * from "./render-limits";
 
 export interface ToolViewResult<TDetails> extends Pick<AgentToolResult<TDetails>, "details" | "isError"> {
-	content: Array<{ type: string; text?: string }>;
+	content: Array<{ type?: string; text?: string }>;
 }
 
 export function errorTextBlock(message: string | undefined): TextBlockView {

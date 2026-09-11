@@ -1,7 +1,7 @@
 /**
- * WHY: the transcript builder is the only path from a session message to
- * something an operator sees, and its switch is on a role string. The defect
- * class this closes is a message role that reaches the builder and falls
+ * WHY: the serialized transcript projection dispatches on a message role.
+ * The defect class this closes is a message role that reaches the builder and
+ * falls
  * through: a new custom role a module of this package adds to
  * `CustomAgentMessages` by declaration merging, or a new member of the core
  * `Message` union, renders as an "Unrenderable message role" error block in
@@ -247,6 +247,35 @@ describe("hidden messages stay out of the transcript", () => {
 	});
 });
 
+describe("prompt projections preserve text and synthetic provenance", () => {
+	test.each(["user", "developer"] as const)("%s text chunks retain their original adjacency", role => {
+		const message: Extract<AgentMessage, { role: "user" | "developer" }> = {
+			role,
+			content: [
+				{ type: "text", text: "first" },
+				{ type: "text", text: "" },
+				{ type: "text", text: " second" },
+			],
+			timestamp: 1,
+		};
+		const block = toTranscriptBlock(message, { index: 0 });
+		expect(block.kind).toBe(role === "user" ? "user-message" : "developer-message");
+		if (block.kind !== "user-message" && block.kind !== "developer-message") throw new Error(block.kind);
+		expect(block.text).toBe("first second");
+		expect(block.synthetic).toBe(role === "developer");
+	});
+
+	test("a synthetic user prompt retains its provenance", () => {
+		const block = toTranscriptBlock(
+			{ role: "user", content: "generated prompt", synthetic: true, timestamp: 1 },
+			{ index: 0 },
+		);
+		if (block.kind !== "user-message") throw new Error(block.kind);
+		expect(block.synthetic).toBe(true);
+		expect(block.text).toBe("generated prompt");
+	});
+});
+
 describe("contentToText extracts wire-visible text across content structures", () => {
 	test("preserves string content verbatim", () => {
 		expect(contentToText("hello world")).toBe("hello world");
@@ -265,6 +294,16 @@ describe("contentToText extracts wire-visible text across content structures", (
 				{ type: "text", text: "hello" },
 			]),
 		).toBe("hello");
+	});
+
+	test("preserves empty text blocks after the first nonempty block", () => {
+		expect(
+			contentToText([
+				{ type: "text", text: "first" },
+				{ type: "text", text: "" },
+				{ type: "text", text: "last" },
+			]),
+		).toBe("first\n\nlast");
 	});
 
 	test("returns empty string for image-only content", () => {
@@ -332,6 +371,28 @@ describe("defaultToolText formats tool arguments safely", () => {
 });
 
 describe("toTranscriptBlock projects content and tool text faithfully", () => {
+	test("compaction preserves full context and reports pre-compaction tokens without inventing savings", () => {
+		const block = toTranscriptBlock(
+			{
+				role: "compactionSummary",
+				summary: "Full context.",
+				shortSummary: "Index-only abbreviation.",
+				tokensBefore: 8192,
+				compactedBy: "provider/model",
+				warning: "Repeated operation.",
+				timestamp: 1,
+			},
+			{ index: 0 },
+		);
+		if (block.kind !== "compaction-summary") throw new Error(block.kind);
+		expect(block.summary).toBe("Full context.");
+		expect(block.tokensBefore).toBe(8192);
+		expect(block.compactedBy).toBe("provider/model");
+		expect(block.warning).toBe("Repeated operation.");
+		expect(block).not.toHaveProperty("reclaimedTokens");
+		expect(block).not.toHaveProperty("replacedCount");
+	});
+
 	test("user message extracts multipart text and images", () => {
 		const message = {
 			role: "user",
@@ -344,7 +405,7 @@ describe("toTranscriptBlock projects content and tool text faithfully", () => {
 		} as AgentMessage;
 		const block = toTranscriptBlock(message, { index: 0 });
 		if (block.kind !== "user-message") throw new Error("expected user-message block");
-		expect(block.text).toBe("explain this:\nand this too");
+		expect(block.text).toBe("explain this:and this too");
 		expect(block.attachments).toEqual([{ kind: "image", name: "image/png" }]);
 	});
 

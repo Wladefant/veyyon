@@ -18,11 +18,7 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 		_ => compact_general(&cleaned),
 	};
 
-	if text == input {
-		MinimizerOutput::passthrough(input)
-	} else {
-		MinimizerOutput::transformed(text, input.len())
-	}
+	MinimizerOutput::maybe_transformed(input, text)
 }
 
 fn filter_build_like(label: &str, input: &str, exit_code: i32) -> String {
@@ -201,11 +197,13 @@ fn collect_format_json_rows(
 	match value {
 		serde_json::Value::Object(map) => {
 			let path =
-				first_string(map, &["FileName", "FilePath", "Path", "DocumentPath"]).or(inherited_path);
-			let diagnostic = first_string(map, &["DiagnosticId", "Id", "RuleId"]);
-			let message = first_string(map, &["Message", "FormatDescription", "Description"]);
-			let line = first_number(map, &["LineNumber", "Line"]);
-			let column = first_number(map, &["CharNumber", "Column"]);
+				primitives::first_json_string(map, &["FileName", "FilePath", "Path", "DocumentPath"])
+					.or(inherited_path);
+			let diagnostic = primitives::first_json_string(map, &["DiagnosticId", "Id", "RuleId"]);
+			let message =
+				primitives::first_json_string(map, &["Message", "FormatDescription", "Description"]);
+			let line = primitives::first_json_u64(map, &["LineNumber", "Line"]);
+			let column = primitives::first_json_u64(map, &["CharNumber", "Column"]);
 
 			if diagnostic.is_some() || message.is_some() || line.is_some() {
 				let mut row = if let Some(path) = path {
@@ -247,21 +245,6 @@ fn collect_format_json_rows(
 		},
 		_ => {},
 	}
-}
-
-fn first_string<'a>(
-	map: &'a serde_json::Map<String, serde_json::Value>,
-	keys: &[&str],
-) -> Option<&'a str> {
-	keys
-		.iter()
-		.find_map(|key| map.get(*key).and_then(|value| value.as_str()))
-}
-
-fn first_number(map: &serde_json::Map<String, serde_json::Value>, keys: &[&str]) -> Option<u64> {
-	keys
-		.iter()
-		.find_map(|key| map.get(*key).and_then(serde_json::Value::as_u64))
 }
 
 fn compact_general(input: &str) -> String {

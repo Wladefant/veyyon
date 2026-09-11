@@ -8,7 +8,7 @@
  */
 
 import { collapseWhitespace } from "@veyyon/utils";
-import { replaceTabs } from "@veyyon/utils/wrap";
+import { replaceTabs } from "@veyyon/utils/tab-width";
 import type {
 	FramedBlockView,
 	StatusRowView,

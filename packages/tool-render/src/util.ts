@@ -7,24 +7,17 @@
  */
 
 import { collapseWhitespace } from "@veyyon/utils/collapse-whitespace";
-import { truncate as truncateChars } from "@veyyon/utils/format";
+import { formatCount, truncate as truncateChars } from "@veyyon/utils/format";
 import { stringifyJsonSafe } from "@veyyon/utils/json";
 import { stripAnsi } from "@veyyon/utils/strip-ansi";
 import { isRecord } from "@veyyon/utils/type-guards";
+import { str } from "./scalars";
 import type { ToolResultImage, ToolResultLike } from "./types";
 
+export * from "./scalars";
 // Re-exported from the dependency-free type-guards subpath for the same
 // bundle-safety reason as stripAnsi above.
-export { isRecord, stripAnsi };
-
-/** String passthrough; anything else (including null/undefined) → null. */
-export function str(value: unknown): string | null {
-	return typeof value === "string" ? value : null;
-}
-
-export function num(value: unknown): number | null {
-	return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
+export { formatCount, isRecord, stripAnsi };
 
 export function strList(value: unknown): string[] {
 	if (!Array.isArray(value)) return [];
@@ -42,6 +35,21 @@ export function recordList(value: unknown): Record<string, unknown>[] {
 		if (isRecord(item)) out.push(item);
 	}
 	return out;
+}
+
+/**
+ * React keys for a sibling list whose items carry no id of their own. Each key is the item's
+ * identity as `identity` states it; siblings with equal identities are told apart by an ordinal
+ * among equals, so inserting or removing an unrelated sibling leaves every other key unchanged.
+ */
+export function keyed<T>(items: readonly T[], identity: (item: T) => string): { key: string; item: T }[] {
+	const seen = new Map<string, number>();
+	return items.map(item => {
+		const id = identity(item);
+		const ordinal = seen.get(id) ?? 0;
+		seen.set(id, ordinal + 1);
+		return { key: ordinal === 0 ? id : `${id}\u001f${ordinal}`, item };
+	});
 }
 
 export function truncateWs(value: unknown, maxLen = 80): string {
@@ -138,9 +146,7 @@ export function normalizeWs(s: string): string {
 	return collapseWhitespace(s);
 }
 
-export function replaceTabs(s: string): string {
-	return s.replace(/\t/g, "   ");
-}
+export { replaceTabs } from "@veyyon/utils/tab-width";
 
 const EXT_TO_LANG: Record<string, string> = {
 	ts: "typescript",
@@ -211,19 +217,49 @@ export function resultTextOf(result: ToolResultLike | undefined): string {
 	return parts.join("\n");
 }
 
+/** Whether a tool result contains at least one valid image content block (non-allocating). */
+export function resultHasImages(result: ToolResultLike | undefined): boolean {
+	if (!result) return false;
+	if (
+		Array.isArray(result.content) &&
+		result.content.some(
+			block =>
+				isRecord(block) &&
+				block.type === "image" &&
+				typeof block.data === "string" &&
+				typeof block.mimeType === "string",
+		)
+	) {
+		return true;
+	}
+	if (isRecord(result.details) && Array.isArray(result.details.images)) {
+		return result.details.images.some(
+			block => isRecord(block) && typeof block.data === "string" && typeof block.mimeType === "string",
+		);
+	}
+	return false;
+}
+
 export function resultImagesOf(result: ToolResultLike | undefined): ToolResultImage[] {
-	if (!result || !Array.isArray(result.content)) return [];
+	if (!result) return [];
 	const images: ToolResultImage[] = [];
-	for (const block of result.content) {
-		if (
-			isRecord(block) &&
-			block.type === "image" &&
-			"data" in block &&
-			typeof block.data === "string" &&
-			"mimeType" in block &&
-			typeof block.mimeType === "string"
-		) {
-			images.push({ type: "image", data: block.data, mimeType: block.mimeType });
+	if (Array.isArray(result.content)) {
+		for (const block of result.content) {
+			if (
+				isRecord(block) &&
+				block.type === "image" &&
+				typeof block.data === "string" &&
+				typeof block.mimeType === "string"
+			) {
+				images.push({ type: "image", data: block.data, mimeType: block.mimeType });
+			}
+		}
+	}
+	if (images.length === 0 && isRecord(result.details) && Array.isArray(result.details.images)) {
+		for (const block of result.details.images) {
+			if (isRecord(block) && typeof block.data === "string" && typeof block.mimeType === "string") {
+				images.push({ type: "image", data: block.data, mimeType: block.mimeType });
+			}
 		}
 	}
 	return images;
@@ -239,6 +275,16 @@ export function argsDigest(args: unknown, maxLen = 96): string {
 	if (args == null) return "";
 	if (isRecord(args) && Object.keys(args).length === 0) return "";
 	return truncate(normalizeWs(display(args)), maxLen);
+}
+
+/** Formatted JSON string representation with safe fallback (`try JSON.stringify ... catch String(...)`). */
+export function prettyJson(value: unknown, indent = 2): string {
+	if (value === undefined) return "";
+	try {
+		return JSON.stringify(value, null, indent) ?? "";
+	} catch {
+		return String(value);
+	}
 }
 
 interface HljsLike {

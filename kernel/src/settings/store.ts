@@ -202,21 +202,11 @@ export function setByPath(obj: RawSettings, segments: readonly string[], value: 
  * owner per value and the migration is a fixed point on its own output.
  */
 export function deleteByPath(obj: RawSettings, segments: readonly string[]): void {
-	let current: unknown = obj;
-	for (let i = 0; i < segments.length - 1; i++) {
-		const segment = segments[i];
-		if (
-			current === null ||
-			current === undefined ||
-			typeof current !== "object" ||
-			!Object.hasOwn(current, segment)
-		) {
-			return;
-		}
-		current = (current as Record<string, unknown>)[segment];
+	if (segments.length === 0) return;
+	const parent = getByPath(obj, segments.slice(0, -1));
+	if (isRecord(parent)) {
+		delete parent[segments[segments.length - 1]];
 	}
-	if (!isRecord(current)) return;
-	delete (current as Record<string, unknown>)[segments[segments.length - 1]];
 }
 
 /**
@@ -648,12 +638,7 @@ export class SettingsStore {
 		return getByPath(tree, segments);
 	}
 
-	/**
-	 * Set a setting value (sync).
-	 * Updates global settings and queues a background save.
-	 * Triggers hooks for settings that have side effects.
-	 */
-	set<P extends SettingPath>(path: P, value: SettingValue<P>): void {
+	#applyConfiguredMutation(path: SettingPath, value: unknown, isUnset: boolean): void {
 		const prev = this.get(path);
 
 		// Global-scoped settings persist to ~/.veyyon/config.yml through their
@@ -665,15 +650,18 @@ export class SettingsStore {
 		if (globalBinding) {
 			if (this.#persist) {
 				try {
-					globalBinding.write(value);
+					globalBinding.write(isUnset ? undefined : value);
 				} catch (error) {
-					logger.warn("Settings: global write rejected; value not saved", { path, error: String(error) });
+					logger.warn(
+						`Settings: global ${isUnset ? "unset" : "write"} rejected; value not ${isUnset ? "cleared" : "saved"}`,
+						{ path, error: String(error) },
+					);
 					this.#recordGlobalWriteFailure(error);
 					return;
 				}
 				this.#clearGlobalWriteFailure();
 			} else {
-				setByPath(this.#overrides, toSegments(path), value);
+				this.#mutateTree(this.#overrides, toSegments(path), value, isUnset);
 				this.rebuildMerged();
 			}
 			const next = this.get(path);
@@ -689,7 +677,15 @@ export class SettingsStore {
 		// value.
 		this.#stampOwnedMigrationsFor(path);
 		const segments = toSegments(path);
-		setByPath(this.#global, segments, value);
+		this.#mutateTree(this.#global, segments, value, isUnset);
+		if (isUnset) {
+			// Also drop a runtime override for the same path. Both are values this
+			// process owns, and leaving the override in place would make "Default"
+			// appear to do nothing whenever a flag or overlay had set the same knob. A
+			// value from a PROJECT config is not touched: this instance does not own
+			// that file, and get() still reports it as the effective value.
+			deleteByPath(this.#overrides, segments);
+		}
 		this.#modified.add(path);
 		this.rebuildMerged();
 		const next = this.get(path);
@@ -698,6 +694,27 @@ export class SettingsStore {
 		// Trigger hook if exists
 		this.#hooks.applyHook(path, next, prev);
 		this.#fireEffectiveSettingChanged(path, next, prev);
+	}
+
+	#mutateTree(tree: RawSettings, segments: readonly string[], value: unknown, isUnset: boolean): void {
+		if (isUnset) deleteByPath(tree, segments);
+		else setByPath(tree, segments, value);
+	}
+
+	#applyOverrideMutation(path: SettingPath, value: unknown, isClear: boolean): void {
+		const prev = this.get(path);
+		this.#mutateTree(this.#overrides, toSegments(path), value, isClear);
+		this.rebuildMerged();
+		this.#fireEffectiveSettingChanged(path, this.get(path), prev);
+	}
+
+	/**
+	 * Set a setting value (sync).
+	 * Updates global settings and queues a background save.
+	 * Triggers hooks for settings that have side effects.
+	 */
+	set<P extends SettingPath>(path: P, value: SettingValue<P>): void {
+		this.#applyConfiguredMutation(path, value, false);
 	}
 
 	/**
@@ -714,44 +731,7 @@ export class SettingsStore {
 	 * reader's point of view the effective value changed.
 	 */
 	unset(path: SettingPath): void {
-		const prev = this.get(path);
-
-		const globalBinding = this.#hooks.globalBinding(path);
-		if (globalBinding) {
-			if (this.#persist) {
-				try {
-					globalBinding.write(undefined);
-				} catch (error) {
-					logger.warn("Settings: global unset rejected; value not cleared", { path, error: String(error) });
-					this.#recordGlobalWriteFailure(error);
-					return;
-				}
-				this.#clearGlobalWriteFailure();
-			} else {
-				deleteByPath(this.#overrides, toSegments(path));
-				this.rebuildMerged();
-			}
-			const next = this.get(path);
-			this.#hooks.applyHook(path, next, prev);
-			this.#fireEffectiveSettingChanged(path, next, prev);
-			return;
-		}
-
-		this.#stampOwnedMigrationsFor(path);
-		const segments = toSegments(path);
-		deleteByPath(this.#global, segments);
-		// Also drop a runtime override for the same path. Both are values this
-		// process owns, and leaving the override in place would make "Default"
-		// appear to do nothing whenever a flag or overlay had set the same knob. A
-		// value from a PROJECT config is not touched: this instance does not own
-		// that file, and get() still reports it as the effective value.
-		deleteByPath(this.#overrides, segments);
-		this.#modified.add(path);
-		this.rebuildMerged();
-		const next = this.get(path);
-		this.#queueSave();
-		this.#hooks.applyHook(path, next, prev);
-		this.#fireEffectiveSettingChanged(path, next, prev);
+		this.#applyConfiguredMutation(path, undefined, true);
 	}
 
 	/**
@@ -774,21 +754,14 @@ export class SettingsStore {
 	 * Apply runtime overrides (not persisted).
 	 */
 	override<P extends SettingPath>(path: P, value: SettingValue<P>): void {
-		const prev = this.get(path);
-		const segments = toSegments(path);
-		setByPath(this.#overrides, segments, value);
-		this.rebuildMerged();
-		this.#fireEffectiveSettingChanged(path, this.get(path), prev);
+		this.#applyOverrideMutation(path, value, false);
 	}
 
 	/**
 	 * Clear a runtime override.
 	 */
 	clearOverride(path: SettingPath): void {
-		const prev = this.get(path);
-		deleteByPath(this.#overrides, toSegments(path));
-		this.rebuildMerged();
-		this.#fireEffectiveSettingChanged(path, this.get(path), prev);
+		this.#applyOverrideMutation(path, undefined, true);
 	}
 
 	#fireEffectiveSettingChanged(path: SettingPath, value: unknown, prev: unknown, applyProcessHooks = true): void {
@@ -903,7 +876,7 @@ export class SettingsStore {
 	 * Resolve every known setting to its effective value, keyed by dotted path.
 	 *
 	 * This is the complete config that governed a run — compaction strategy,
-	 * reserve tokens, advisor/subagent config, tool config, and every other
+	 * reserve tokens, advisor/agent config, tool config, and every other
 	 * Tier-A knob — captured as one flat map. A session records this at start so a
 	 * later study/backtest can reproduce the exact configuration the run used,
 	 * not merely guess it from current defaults. Keys are sorted for stable,
@@ -925,47 +898,34 @@ export class SettingsStore {
 	 * Load every source: the owned profile file (folding the legacy stores in on a first run),
 	 * the config overlays, then the merged view and every side-effect hook.
 	 */
-	async load(): Promise<this> {
-		if (this.#persist) {
-			const existingConfig = await this.#loadExistingMainYaml();
-			if (existingConfig) {
-				this.#global = existingConfig;
-			} else {
-				await this.#migrateFromLegacy();
-				this.#global = await this.#loadYaml(this.#configPath!);
-			}
+	async #loadProfileAndOverlays(readOnly: boolean): Promise<void> {
+		const existingConfig = await this.#loadExistingMainYaml();
+		if (existingConfig) {
+			this.#global = existingConfig;
+		} else if (!readOnly && this.#persist) {
+			await this.#migrateFromLegacy();
+			this.#global = await this.#loadYaml(this.#configPath!);
+		}
+
+		if (!readOnly && this.#persist) {
 			await this.#hooks.afterOwnedConfigLoaded(this.#agentDir);
-			// Drop the legacy `-1` sentinels from the owned config, in memory. Not
-			// stamped here: the stamp goes in when one of those paths is written (see
-			// stampOwnedConfigMigrations), so an upgrade does not add a line to every
-			// config on disk, and a `-1` written by this version is still safe from
-			// the next load.
 			this.#pendingSentinelStrips = stripLegacyUnsetSentinels(this.#global);
 		}
 
 		this.#configOverlay = await this.#loadConfigOverlays();
 		this.#collectInvalidValues(this.#global, this.#configPath ?? "");
-		this.#reportShadowedConfigFiles();
-
-		// Build merged view (profile → config overlays → overrides)
 		this.rebuildMerged();
+	}
+
+	async load(): Promise<this> {
+		await this.#loadProfileAndOverlays(false);
+		this.#reportShadowedConfigFiles();
 		this.#fireAllHooks();
 		return this;
 	}
 
-	/**
-	 * Load the effective settings from the profile file and the overlays without opening
-	 * storage, migrating legacy settings, or writing marker files.
-	 */
 	async loadReadOnly(): Promise<this> {
-		const existingConfig = await this.#loadExistingMainYaml();
-		if (existingConfig) {
-			this.#global = existingConfig;
-		}
-
-		this.#configOverlay = await this.#loadConfigOverlays();
-		this.#collectInvalidValues(this.#global, this.#configPath ?? "");
-		this.rebuildMerged();
+		await this.#loadProfileAndOverlays(true);
 		return this;
 	}
 
@@ -1184,13 +1144,13 @@ export class SettingsStore {
 	 * Expand every top-level dotted key that names a registered setting into the
 	 * nested tree it belongs in.
 	 *
-	 * `subagent.model: openai/gpt-5` at the top level of `config.yml` is the same
-	 * setting as `subagent: { model: openai/gpt-5 }` to anyone reading the file, and
+	 * `agent.model: openai/gpt-5` at the top level of `config.yml` is the same
+	 * setting as `agent: { model: openai/gpt-5 }` to anyone reading the file, and
 	 * people write it that way. It was parsed, merged, and then never read: {@link
 	 * get} walks nested segments, so the value sat in the tree under a literal
-	 * `"subagent.model"` key that nothing looked at, and the setting silently did
+	 * `"agent.model"` key that nothing looked at, and the setting silently did
 	 * nothing (Law 10). It affected every setting, not one — the shape was found
-	 * while migrating the subagent keys, where a migration writing this spelling made
+	 * while migrating the agent keys, where a migration writing this spelling made
 	 * every legacy config revert to defaults with no signal.
 	 *
 	 * Only paths the schema declares are expanded. An unknown dotted key is left

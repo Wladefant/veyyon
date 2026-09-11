@@ -32,7 +32,8 @@ import {
 	heldBack,
 	type ToolViewResult,
 } from "../core/render-utils";
-import { COLLAPSED_LIST_LIMIT, type FileSearchDetails, type FileSearchRenderArgs } from "./file-search";
+import type { FileSearchDetails, FileSearchRenderArgs } from "./file-search";
+import { COLLAPSED_LIST_LIMIT } from "./search-card-limits";
 
 /** What every card of this tool is titled. */
 const FILE_SEARCH_TITLE = "Search files";

@@ -1,6 +1,8 @@
 import { markdownLink } from "../../markdown-link";
+import { loadJson } from "../engine/declarative";
+import { renderKeyValues } from "../engine/markdown-assembly";
 import type { SecurityAdvisoryDeclaration } from "../engine/security-advisory";
-import { buildResult, formatIsoDate } from "../types";
+import { formatIsoDate, isScraperDegrade } from "../types";
 
 // --- CISA KEV ---
 
@@ -43,46 +45,28 @@ export const cisaKevDeclaration: SecurityAdvisoryDeclaration = {
 	notes: ["Fetched via CISA KEV feed"],
 	fetch: async (match, ctx) => {
 		const cveId = match.id;
-		const result = await ctx.loadPage(KEV_FEED_URL, {
-			timeout: ctx.timeout,
-			headers: { Accept: "application/json" },
-			signal: ctx.signal,
-		});
-
-		if (!result.ok) return ctx.scraperDegrade("cisa-kev", ctx.loadFailure(result));
-
-		const data = ctx.tryParseJson<KevCatalog>(result.content);
-		if (!data) return ctx.scraperDegrade("cisa-kev", "unexpected response shape");
+		const data = await loadJson<KevCatalog>(ctx, KEV_FEED_URL, "cisa-kev");
+		if (isScraperDegrade(data)) return data;
 
 		const entry = data.vulnerabilities?.find(item => item.cveID?.toUpperCase() === cveId);
 		if (!entry) return null;
 
 		let md = `# ${entry.cveID}\n\n`;
-		if (entry.vulnerabilityName) {
-			md += `${entry.vulnerabilityName}\n\n`;
-		}
+		if (entry.vulnerabilityName) md += `${entry.vulnerabilityName}\n\n`;
 
 		md += "## Metadata\n\n";
-		if (entry.vendorProject) md += `**Vendor:** ${entry.vendorProject}\n`;
-		if (entry.product) md += `**Product:** ${entry.product}\n`;
-		if (entry.dateAdded) md += `**Date Added:** ${entry.dateAdded}\n`;
-		if (entry.dueDate) md += `**Due Date:** ${entry.dueDate}\n`;
+		md += renderKeyValues([
+			["Vendor", entry.vendorProject],
+			["Product", entry.product],
+			["Date Added", entry.dateAdded],
+			["Due Date", entry.dueDate],
+		]);
 		md += "\n";
 
-		if (entry.shortDescription) {
-			md += `## Description\n\n${entry.shortDescription}\n\n`;
-		}
+		if (entry.shortDescription) md += `## Description\n\n${entry.shortDescription}\n\n`;
+		if (entry.requiredAction) md += `## Required Action\n\n${entry.requiredAction}\n\n`;
 
-		if (entry.requiredAction) {
-			md += `## Required Action\n\n${entry.requiredAction}\n\n`;
-		}
-
-		return buildResult(md, {
-			url: ctx.url,
-			method: "cisa-kev",
-			fetchedAt: ctx.fetchedAt,
-			notes: ["Fetched via CISA KEV feed"],
-		});
+		return md;
 	},
 };
 
@@ -190,16 +174,8 @@ export const nvdDeclaration: SecurityAdvisoryDeclaration = {
 	fetch: async (match, ctx) => {
 		const cveId = match.id;
 		const apiUrl = `https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=${cveId}`;
-		const result = await ctx.loadPage(apiUrl, {
-			timeout: ctx.timeout,
-			headers: { Accept: "application/json" },
-			signal: ctx.signal,
-		});
-
-		if (!result.ok) return ctx.scraperDegrade("nvd", ctx.loadFailure(result));
-
-		const data = ctx.tryParseJson<NvdResponse>(result.content);
-		if (!data) return ctx.scraperDegrade("nvd", "unexpected response shape");
+		const data = await loadJson<NvdResponse>(ctx, apiUrl, "nvd");
+		if (isScraperDegrade(data)) return data;
 
 		const vuln = data.vulnerabilities?.[0]?.cve;
 		if (!vuln) return null;
@@ -292,12 +268,7 @@ export const nvdDeclaration: SecurityAdvisoryDeclaration = {
 			}
 		}
 
-		return buildResult(md, {
-			url: ctx.url,
-			method: "nvd",
-			fetchedAt: ctx.fetchedAt,
-			notes: ["Fetched via NVD API"],
-		});
+		return md;
 	},
 };
 
@@ -360,17 +331,9 @@ export const osvDeclaration: SecurityAdvisoryDeclaration = {
 	fetch: async (match, ctx) => {
 		const vulnId = match.id;
 		const apiUrl = `https://api.osv.dev/v1/vulns/${encodeURIComponent(vulnId)}`;
-		const result = await ctx.loadPage(apiUrl, {
-			timeout: ctx.timeout,
-			headers: { Accept: "application/json" },
-			signal: ctx.signal,
-		});
-
-		if (!result.ok) return ctx.scraperDegrade("osv", ctx.loadFailure(result));
-
-		const vuln = ctx.tryParseJson<OsvVulnerability>(result.content);
+		const vuln = await loadJson<OsvVulnerability>(ctx, apiUrl, "osv");
+		if (isScraperDegrade(vuln)) return vuln;
 		if (!vuln?.id) return ctx.scraperDegrade("osv", "unexpected response shape");
-
 		let md = `# ${vuln.id}\n\n`;
 
 		if (vuln.summary) {
@@ -454,12 +417,7 @@ export const osvDeclaration: SecurityAdvisoryDeclaration = {
 			}
 		}
 
-		return buildResult(md, {
-			url: ctx.url,
-			method: "osv",
-			fetchedAt: ctx.fetchedAt,
-			notes: ["Fetched via OSV API"],
-		});
+		return md;
 	},
 };
 

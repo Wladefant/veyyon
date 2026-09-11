@@ -456,21 +456,10 @@ export function resolvePluginManifestEntries(
 		}
 	}
 
-	if (manifest.features && plugin.enabledFeatures) {
-		const enabledSet = new Set(plugin.enabledFeatures);
+	if (manifest.features && plugin.enabledFeatures !== undefined) {
+		const enabledSet = plugin.enabledFeatures ? new Set(plugin.enabledFeatures) : null;
 		for (const [featName, feat] of Object.entries(manifest.features)) {
-			if (!enabledSet.has(featName)) continue;
-			if (feat[key]) {
-				for (const entry of feat[key]) {
-					const resolvedEntry = resolveEntry(entry);
-					for (let ri = 0; ri < resolvedEntry.length; ri++) declared.push(resolvedEntry[ri]!);
-				}
-			}
-		}
-	} else if (manifest.features && plugin.enabledFeatures === null) {
-		// null means use defaults - enable features with default: true
-		for (const [_featName, feat] of Object.entries(manifest.features)) {
-			if (!feat.default) continue;
+			if (enabledSet ? !enabledSet.has(featName) : !feat.default) continue;
 			if (feat[key]) {
 				for (const entry of feat[key]) {
 					const resolvedEntry = resolveEntry(entry);
@@ -506,9 +495,9 @@ export function resolvePluginExtensionPaths(plugin: InstalledPlugin): string[] {
 async function getAllPluginPaths(
 	cwd: string,
 	resolvePaths: (plugin: ScopedInstalledPlugin) => string[],
-	opts?: GetEnabledPluginsOptions,
+	opts?: GetEnabledPluginsOptions | string,
 ): Promise<string[]> {
-	const plugins = await getEnabledPlugins(cwd, opts);
+	const plugins = await getEnabledPlugins(cwd, typeof opts === "string" ? { pluginsRoot: opts } : opts);
 	const paths: string[] = [];
 
 	for (const plugin of plugins) {
@@ -522,37 +511,66 @@ async function getAllPluginPaths(
 /**
  * Get all tool paths from all enabled plugins.
  *
- * `pluginsRoot` names WHICH profile's plugins directory supplies the user
- * scope, the same contract as {@link GetEnabledPluginsOptions.pluginsRoot}.
- * Undefined means the process-active profile, which is what
- * {@link pluginsRootFor} returns for the active agent dir, so a caller can
- * forward that result unconditionally.
+ * `pluginsRootOrOpts` names WHICH profile's plugins directory supplies the user
+ * scope (or full {@link GetEnabledPluginsOptions}), the same contract as
+ * {@link GetEnabledPluginsOptions.pluginsRoot}. Undefined means the
+ * process-active profile, which is what {@link pluginsRootFor} returns for
+ * the active agent dir, so a caller can forward that result unconditionally.
  */
-export async function getAllPluginToolPaths(cwd: string, pluginsRoot?: string): Promise<string[]> {
-	return getAllPluginPaths(cwd, resolvePluginToolPaths, { pluginsRoot });
+export async function getAllPluginToolPaths(
+	cwd: string,
+	pluginsRootOrOpts?: string | GetEnabledPluginsOptions,
+): Promise<string[]> {
+	return getAllPluginPaths(cwd, resolvePluginToolPaths, pluginsRootOrOpts);
 }
 
 /**
  * Get all hook paths from all enabled plugins.
+ *
+ * `pluginsRootOrOpts` names WHICH profile's plugins directory supplies the user
+ * scope (or full {@link GetEnabledPluginsOptions}), the same contract as
+ * {@link GetEnabledPluginsOptions.pluginsRoot}. Undefined means the
+ * process-active profile, which is what {@link pluginsRootFor} returns for
+ * the active agent dir, so a caller can forward that result unconditionally.
  */
-export async function getAllPluginHookPaths(cwd: string): Promise<string[]> {
-	return getAllPluginPaths(cwd, resolvePluginHookPaths);
+export async function getAllPluginHookPaths(
+	cwd: string,
+	pluginsRootOrOpts?: string | GetEnabledPluginsOptions,
+): Promise<string[]> {
+	return getAllPluginPaths(cwd, resolvePluginHookPaths, pluginsRootOrOpts);
 }
 
 /**
  * Get all command paths from all enabled plugins.
+ *
+ * `pluginsRootOrOpts` names WHICH profile's plugins directory supplies the user
+ * scope (or full {@link GetEnabledPluginsOptions}), the same contract as
+ * {@link GetEnabledPluginsOptions.pluginsRoot}. Undefined means the
+ * process-active profile, which is what {@link pluginsRootFor} returns for
+ * the active agent dir, so a caller can forward that result unconditionally.
  */
-export async function getAllPluginCommandPaths(cwd: string): Promise<string[]> {
-	return getAllPluginPaths(cwd, resolvePluginCommandPaths);
+export async function getAllPluginCommandPaths(
+	cwd: string,
+	pluginsRootOrOpts?: string | GetEnabledPluginsOptions,
+): Promise<string[]> {
+	return getAllPluginPaths(cwd, resolvePluginCommandPaths, pluginsRootOrOpts);
 }
 
 /**
  * Get all extension module paths from all enabled plugins.
+ *
+ * `pluginsRootOrOpts` names WHICH profile's plugins directory supplies the user
+ * scope (or full {@link GetEnabledPluginsOptions}), the same contract as
+ * {@link GetEnabledPluginsOptions.pluginsRoot}. Undefined means the
+ * process-active profile, which is what {@link pluginsRootFor} returns for
+ * the active agent dir, so a caller can forward that result unconditionally.
  */
-export async function getAllPluginExtensionPaths(cwd: string): Promise<string[]> {
-	return getAllPluginPaths(cwd, resolvePluginExtensionPaths);
+export async function getAllPluginExtensionPaths(
+	cwd: string,
+	pluginsRootOrOpts?: string | GetEnabledPluginsOptions,
+): Promise<string[]> {
+	return getAllPluginPaths(cwd, resolvePluginExtensionPaths, pluginsRootOrOpts);
 }
-
 /**
  * Get plugin settings for use in tool/hook contexts.
  * Merges global settings with project overrides.

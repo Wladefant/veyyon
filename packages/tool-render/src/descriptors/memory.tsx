@@ -21,6 +21,7 @@ import type { ToolDescriptor, ToolRenderProps, ToolResultBlock, ToolResultLike }
 import {
 	detailsRecord,
 	isRecord,
+	keyed,
 	languageFromPath,
 	normalizeWs,
 	num,
@@ -257,8 +258,8 @@ function RecallBody(props: ToolRenderProps): ReactNode {
 				<>
 					{asOf && <Badges items={[`as of ${asOf} UTC`]} />}
 					<div className="tv-list">
-						{entries.map((entry, i) => (
-							<Row key={i}>
+						{keyed(entries, entry => entry.text).map(({ key, item: entry }) => (
+							<Row key={key}>
 								<span>{entry.text}</span>
 								{(entry.type !== null || entry.date !== null) && <Badges items={[entry.type, entry.date]} />}
 							</Row>
@@ -345,8 +346,8 @@ function RetainBody({ args, result }: ToolRenderProps): ReactNode {
 			) : (
 				items.length > 0 && (
 					<div className="tv-list">
-						{items.map((item, i) => (
-							<Row key={i}>
+						{keyed(items, item => item.content).map(({ key, item }) => (
+							<Row key={key}>
 								{item.content}
 								{item.context && <span className="tv-faint"> — {item.context}</span>}
 							</Row>
@@ -893,8 +894,8 @@ function GenerateImageBody({ args, result }: ToolRenderProps): ReactNode {
 			</KvGrid>
 			{changes && changes.length > 0 && (
 				<div className="tv-list">
-					{changes.map((change, i) => (
-						<Row key={i} k={i === 0 ? "changes" : undefined}>
+					{keyed(changes, change => (typeof change === "string" ? change : "")).map(({ key, item: change }, i) => (
+						<Row key={key} k={i === 0 ? "changes" : undefined}>
 							{typeof change === "string" ? change : <InvalidArg what="change" />}
 						</Row>
 					))}
@@ -902,21 +903,23 @@ function GenerateImageBody({ args, result }: ToolRenderProps): ReactNode {
 			)}
 			{inputs && inputs.length > 0 && (
 				<div className="tv-list">
-					{inputs.map((input, i) => {
-						const path = isRecord(input) ? str(input.path) : null;
-						const mime = isRecord(input) ? str(input.mime_type) : null;
-						return (
-							<Row key={i} k={i === 0 ? "input" : undefined}>
-								{!isRecord(input) ? (
-									<InvalidArg what="input" />
-								) : path ? (
-									<PathText path={path} />
-								) : (
-									`base64 image${mime ? ` (${mime})` : ""}`
-								)}
-							</Row>
-						);
-					})}
+					{keyed(inputs, input => (isRecord(input) ? (str(input.path) ?? str(input.mime_type) ?? "") : "")).map(
+						({ key, item: input }, i) => {
+							const path = isRecord(input) ? str(input.path) : null;
+							const mime = isRecord(input) ? str(input.mime_type) : null;
+							return (
+								<Row key={key} k={i === 0 ? "input" : undefined}>
+									{!isRecord(input) ? (
+										<InvalidArg what="input" />
+									) : path ? (
+										<PathText path={path} />
+									) : (
+										`base64 image${mime ? ` (${mime})` : ""}`
+									)}
+								</Row>
+							);
+						},
+					)}
 				</div>
 			)}
 			{(provider || model) && <Badges items={[provider, model]} />}
@@ -924,8 +927,8 @@ function GenerateImageBody({ args, result }: ToolRenderProps): ReactNode {
 			<ResultImages result={merged} />
 			{paths.length > 0 && (
 				<div className="tv-list">
-					{paths.map((p, i) => (
-						<Row key={i} k={i === 0 ? "saved" : undefined}>
+					{keyed(paths, p => p).map(({ key, item: p }, i) => (
+						<Row key={key} k={i === 0 ? "saved" : undefined}>
 							<PathText path={p} />
 						</Row>
 					))}
@@ -1074,8 +1077,8 @@ function AstEditBody({ args, result }: ToolRenderProps): ReactNode {
 		<>
 			{paths.length > 1 && (
 				<div className="tv-list">
-					{paths.map((p, i) => (
-						<Row key={i}>
+					{keyed(paths, p => p).map(({ key, item: p }) => (
+						<Row key={key}>
 							<PathText path={p} />
 						</Row>
 					))}
@@ -1083,8 +1086,8 @@ function AstEditBody({ args, result }: ToolRenderProps): ReactNode {
 			)}
 			{ops.length > 0 && (
 				<div className="tv-cells">
-					{ops.map((op, i) => (
-						<OpCell key={i} op={op} lang={lang} />
+					{keyed(ops, op => `${op.pat}\u001f${op.out}`).map(({ key, item: op }) => (
+						<OpCell key={key} op={op} lang={lang} />
 					))}
 				</div>
 			)}
@@ -1103,8 +1106,8 @@ function AstEditBody({ args, result }: ToolRenderProps): ReactNode {
 			)}
 			{details && details.fileReplacements.length > 0 && (
 				<div className="tv-list">
-					{details.fileReplacements.map((fr, i) => (
-						<Row key={i} k={fr.count != null ? `×${fr.count}` : undefined}>
+					{keyed(details.fileReplacements, fr => fr.path).map(({ key, item: fr }) => (
+						<Row key={key} k={fr.count != null ? `×${fr.count}` : undefined}>
 							<PathText path={fr.path} />
 						</Row>
 					))}

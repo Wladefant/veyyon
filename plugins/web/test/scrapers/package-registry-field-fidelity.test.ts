@@ -645,7 +645,7 @@ describe("package registry field fidelity across all declared package registries
 				return {
 					content: JSON.stringify(fixture),
 					contentType: "application/json",
-					finalUrl: url,
+					finalUrl: "https://addons.mozilla.org/api/v5/addons/addon/ublock-origin/?src=redirect",
 					ok: true,
 					status: 200,
 				};
@@ -666,6 +666,8 @@ describe("package registry field fidelity across all declared package registries
 			expect(result.content).toContain("**License:** [GPL-3.0](https://www.gnu.org/licenses/gpl-3.0.html)");
 			expect(result.content).toContain("**Homepage:** https://github.com/gorhill/uBlock");
 			expect(result.content).toContain("## Permissions (4)\n\n- storage\n- tabs\n- webNavigation\n- <all_urls>");
+			expect(result.finalUrl).toBe("https://addons.mozilla.org/api/v5/addons/addon/ublock-origin/?src=redirect");
+			expect(result.url).toBe("https://addons.mozilla.org/en-US/firefox/addon/ublock-origin/");
 		});
 	});
 
@@ -708,7 +710,7 @@ describe("package registry field fidelity across all declared package registries
 				return {
 					content: JSON.stringify(fixture),
 					contentType: "application/json",
-					finalUrl: url,
+					finalUrl: "https://flathub.org/api/v2/appstream/org.gimp.GIMP?redirected=true",
 					ok: true,
 					status: 200,
 				};
@@ -725,6 +727,8 @@ describe("package registry field fidelity across all declared package registries
 			expect(result.content).toContain("## Permissions\n\n- pulseaudio\n- x11\n- ipc");
 			expect(result.content).toContain("## Screenshots\n\n- https://dl.flathub.org/gimp-full.png - Main Window");
 			expect(result.content).toContain("## Releases\n\n- **2.10.36** (2023-11-14) · stable");
+			expect(result.finalUrl).toBe("https://flathub.org/api/v2/appstream/org.gimp.GIMP?redirected=true");
+			expect(result.url).toBe("https://flathub.org/apps/org.gimp.GIMP");
 		});
 	});
 
@@ -792,6 +796,7 @@ describe("package registry field fidelity across all declared package registries
 			expect(result.content).toContain("Package gin implements a high performance HTTP router.");
 			expect(result.content).toContain("## Index\n\n- Default\n- New\n- Engine");
 			expect(result.content).toContain("## Imports\n\n- net/http\n- github.com/gin-contrib/sse");
+			expect(result.notes).toContain("published 2023-09-01T12:00:00Z");
 		});
 	});
 
@@ -2201,6 +2206,224 @@ stability: experimental
 				else expect(result.content).not.toContain(`**v${index}**`);
 			}
 			expect(result.content).not.toContain("elided");
+		});
+
+		it("preserves Clojars null return on falsy or malformed payload versus ScraperDegrade on fetch failure", async () => {
+			const decl = PACKAGE_REGISTRY_DECLARATIONS.find(d => d.site === "clojars")!;
+			const handler = createPackageRegistryHandler(decl);
+
+			// 1. Fetch failure -> ScraperDegrade
+			loadPageSpy = spyOn(scraperTypes, "loadPage").mockResolvedValueOnce({
+				content: "Internal Server Error",
+				contentType: "text/plain",
+				finalUrl: "https://clojars.org/api/artifacts/clj-http",
+				ok: false,
+				status: 500,
+			});
+			const failResult = await handler("https://clojars.org/clj-http", 10);
+			expect(failResult).toMatchObject({ scraperDegrade: true });
+
+			// 2. Malformed JSON -> null
+			loadPageSpy = spyOn(scraperTypes, "loadPage").mockResolvedValueOnce({
+				content: "not json",
+				contentType: "text/plain",
+				finalUrl: "https://clojars.org/api/artifacts/clj-http",
+				ok: true,
+				status: 200,
+			});
+			const badJsonResult = await handler("https://clojars.org/clj-http", 10);
+			expect(badJsonResult).toBeNull();
+
+			// 3. Non-record payload (e.g. primitive number) -> null
+			loadPageSpy = spyOn(scraperTypes, "loadPage").mockResolvedValueOnce({
+				content: "42",
+				contentType: "application/json",
+				finalUrl: "https://clojars.org/api/artifacts/clj-http",
+				ok: true,
+				status: 200,
+			});
+			const nonRecordResult = await handler("https://clojars.org/clj-http", 10);
+			expect(nonRecordResult).toBeNull();
+		});
+
+		it("preserves exact request headers for all package registry declarations", async () => {
+			const recordedHeaders = new Map<string, Record<string, string> | undefined>();
+
+			loadPageSpy = spyOn(scraperTypes, "loadPage").mockImplementation(async (url, options) => {
+				for (const decl of PACKAGE_REGISTRY_DECLARATIONS) {
+					if (decl.hosts.some(h => url.includes(h))) {
+						recordedHeaders.set(decl.site, options?.headers as Record<string, string> | undefined);
+					}
+				}
+				return {
+					content: "{}",
+					contentType: "application/json",
+					finalUrl: url,
+					ok: true,
+					status: 200,
+				};
+			});
+
+			for (const decl of PACKAGE_REGISTRY_DECLARATIONS) {
+				const handler = createPackageRegistryHandler(decl);
+				try {
+					await handler(decl.canonicalUrls[0], 10);
+				} catch {
+					// Expected to possibly fail on empty dummy payload {}
+				}
+			}
+
+			// Declarations that originally did NOT send Accept: application/json
+			expect(recordedHeaders.get("aur")?.Accept).toBeUndefined();
+			expect(recordedHeaders.get("brew")?.Accept).toBeUndefined();
+			expect(recordedHeaders.get("crates-io")?.Accept).toBeUndefined();
+			expect(recordedHeaders.get("crates-io")?.["User-Agent"]).toContain("veyyon-web-fetch");
+			expect(recordedHeaders.get("hex")?.Accept).toBeUndefined();
+			expect(recordedHeaders.get("npm")?.Accept).toBeUndefined();
+			expect(recordedHeaders.get("nuget")?.Accept).toBeUndefined();
+			expect(recordedHeaders.get("open-vsx")?.Accept).toBeUndefined();
+			expect(recordedHeaders.get("packagist")?.Accept).toBeUndefined();
+			expect(recordedHeaders.get("pub-dev")?.Accept).toBeUndefined();
+			expect(recordedHeaders.get("pypi")?.Accept).toBeUndefined();
+
+			// Declarations that DO send Accept: application/json
+			expect(recordedHeaders.get("artifacthub")?.Accept).toBe("application/json");
+			expect(recordedHeaders.get("clojars")?.Accept).toBe("application/json");
+			expect(recordedHeaders.get("dockerhub")?.Accept).toBe("application/json");
+			expect(recordedHeaders.get("fdroid")?.Accept).toBe("application/json");
+			expect(recordedHeaders.get("hackage")?.Accept).toBe("application/json");
+			expect(recordedHeaders.get("maven")?.Accept).toBe("application/json");
+			expect(recordedHeaders.get("repology")?.Accept).toBe("application/json");
+			expect(recordedHeaders.get("repology")?.["User-Agent"]).toContain("Mozilla/5.0");
+			expect(recordedHeaders.get("rubygems")?.Accept).toBe("application/json");
+			expect(recordedHeaders.get("snapcraft")?.Accept).toBe("application/json");
+			expect(recordedHeaders.get("snapcraft")?.["Snap-Device-Series"]).toBe("16");
+			expect(recordedHeaders.get("terraform")?.Accept).toBe("application/json");
+			expect(recordedHeaders.get("vscode-marketplace")?.Accept).toContain("application/json");
+		});
+
+		it("handles Flathub screenshot non-finite, sparse, and undefined dimensions safely", async () => {
+			const decl = PACKAGE_REGISTRY_DECLARATIONS.find(d => d.site === "flathub")!;
+			const handler = createPackageRegistryHandler(decl);
+
+			const fixture = {
+				id: "org.test.App",
+				name: "Test App",
+				summary: "Test Summary",
+				screenshots: [
+					{
+						sizes: [
+							{ width: Infinity as unknown as string, height: 100, src: "https://example.com/bad-infinity.png" },
+							{ width: NaN as unknown as string, height: 100, src: "https://example.com/bad-nan.png" },
+							{ width: "800", height: "600", src: "https://example.com/good-large.png" },
+							{ width: "400", height: "300", src: "https://example.com/good-small.png" },
+						],
+					},
+					{
+						sizes: [],
+					},
+				],
+			};
+
+			loadPageSpy = spyOn(scraperTypes, "loadPage").mockResolvedValueOnce({
+				content: JSON.stringify(fixture),
+				contentType: "application/json",
+				finalUrl: "https://flathub.org/apps/org.test.App",
+				ok: true,
+				status: 200,
+			});
+
+			const result = (await handler("https://flathub.org/apps/org.test.App", 10)) as scraperTypes.RenderResult;
+			expect(result).not.toBeNull();
+			expect(result.content).toContain("https://example.com/good-large.png");
+			expect(result.content).not.toContain("https://example.com/bad-infinity.png");
+		});
+	});
+	describe("package registry generic dispatch invariants: host matching, degradation, cancellation, and names", () => {
+		it("preserves handler names when handlerName is passed", () => {
+			for (const decl of PACKAGE_REGISTRY_DECLARATIONS) {
+				const handler = createPackageRegistryHandler(decl, `handle_${decl.site}`);
+				expect(handler.name).toBe(`handle_${decl.site}`);
+			}
+		});
+
+		it("rejects non-matching and foreign host URLs synchronously", async () => {
+			for (const decl of PACKAGE_REGISTRY_DECLARATIONS) {
+				const handler = createPackageRegistryHandler(decl);
+				expect(await handler("https://unrelated-domain.org/package/123", 10)).toBeNull();
+				expect(await handler("not-a-valid-url", 10)).toBeNull();
+			}
+		});
+
+		it("decodes URL components in pathPattern matches", async () => {
+			let recordedMatch: { name: string; version?: string } | undefined;
+			const sampleDecl = {
+				site: "test-registry",
+				hosts: ["test-registry.org"],
+				canonicalUrls: ["https://test-registry.org/packages/sample"],
+				pathPattern: /^\/packages\/([^/]+)(?:\/([^/]+))?/,
+				customFetch: async (match: { name: string; version?: string }) => {
+					recordedMatch = match;
+					return "ok";
+				},
+			};
+			const handler = createPackageRegistryHandler(sampleDecl);
+			const res = await handler("https://test-registry.org/packages/foo%2Bbar/1.0%2Bbeta%201", 10);
+			expect(res).not.toBeNull();
+			expect(recordedMatch?.name).toBe("foo+bar");
+			expect(recordedMatch?.version).toBe("1.0+beta 1");
+
+			for (const site of ["aur", "crates-io", "nuget"]) {
+				const decl = PACKAGE_REGISTRY_DECLARATIONS.find(d => d.site === site)!;
+				let declMatch: { name: string; version?: string } | undefined;
+				const h = createPackageRegistryHandler({
+					...decl,
+					customFetch: async match => {
+						declMatch = match;
+						return "ok";
+					},
+				});
+				if (site === "crates-io") {
+					await h("https://crates.io/crates/foo%2Bbar", 10);
+					expect(declMatch?.name).toBe("foo+bar");
+				} else if (site === "aur") {
+					await h("https://aur.archlinux.org/packages/foo%2Bbar", 10);
+					expect(declMatch?.name).toBe("foo+bar");
+				} else if (site === "nuget") {
+					await h("https://www.nuget.org/packages/foo%2Bbar/2.0%2Brev", 10);
+					expect(declMatch?.name).toBe("foo+bar");
+					expect(declMatch?.version).toBe("2.0+rev");
+				}
+			}
+		});
+
+		it("propagates cancellation without swallowing into ScraperDegrade", async () => {
+			for (const decl of PACKAGE_REGISTRY_DECLARATIONS) {
+				const cancellingDecl = {
+					...decl,
+					customFetch: async () => {
+						throw new DOMException("The operation was aborted", "AbortError");
+					},
+				};
+				const handler = createPackageRegistryHandler(cancellingDecl);
+				const sampleUrl = decl.canonicalUrls[0];
+				await expect(handler(sampleUrl, 10)).rejects.toMatchObject({ name: "AbortError" });
+			}
+		});
+
+		it("returns scraperDegrade on general thrown errors", async () => {
+			for (const decl of PACKAGE_REGISTRY_DECLARATIONS) {
+				const failingDecl = {
+					...decl,
+					customFetch: async () => {
+						throw new Error("network explosion");
+					},
+				};
+				const handler = createPackageRegistryHandler(failingDecl);
+				const sampleUrl = decl.canonicalUrls[0];
+				const res = await handler(sampleUrl, 10);
+				expect(res).toMatchObject({ scraperDegrade: true });
+			}
 		});
 	});
 });

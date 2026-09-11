@@ -949,9 +949,16 @@ const TOP_LEVEL_WHITESPACE_RE = /\s/;
 
 type DelimitedPathSplitMode = "comma" | "semicolon" | "whitespace" | "mixed";
 
-function hasTopLevelPathDelimiter(entry: string): boolean {
+/** Find a delimiter outside escaped characters and glob braces, starting at a top-level boundary. */
+export function findTopLevelPathDelimiter(
+	entry: string,
+	start: number,
+	mode: DelimitedPathSplitMode | "punctuation",
+): number {
+	if (!Number.isSafeInteger(start) || start < 0)
+		throw new RangeError("Path scan start must be a non-negative safe integer");
 	let braceDepth = 0;
-	for (let i = 0; i < entry.length; i++) {
+	for (let i = start; i < entry.length; i++) {
 		const ch = entry[i];
 		if (ch === "\\" && i + 1 < entry.length) {
 			i++;
@@ -965,31 +972,7 @@ function hasTopLevelPathDelimiter(entry: string): boolean {
 			if (braceDepth > 0) braceDepth--;
 			continue;
 		}
-		if (braceDepth === 0 && (ch === "," || ch === ";" || TOP_LEVEL_WHITESPACE_RE.test(ch))) {
-			return true;
-		}
-	}
-	return false;
-}
-
-export function splitTopLevelDelimitedPath(entry: string, mode: DelimitedPathSplitMode): string[] {
-	const parts: string[] = [];
-	let braceDepth = 0;
-	let start = 0;
-	for (let i = 0; i < entry.length; i++) {
-		const ch = entry[i];
-		if (ch === "\\" && i + 1 < entry.length) {
-			i++;
-			continue;
-		}
-		if (ch === "{") {
-			braceDepth++;
-			continue;
-		}
-		if (ch === "}") {
-			if (braceDepth > 0) braceDepth--;
-			continue;
-		}
+		if (braceDepth !== 0) continue;
 		const isSep =
 			mode === "comma"
 				? ch === ","
@@ -997,10 +980,20 @@ export function splitTopLevelDelimitedPath(entry: string, mode: DelimitedPathSpl
 					? ch === ";"
 					: mode === "whitespace"
 						? TOP_LEVEL_WHITESPACE_RE.test(ch)
-						: ch === "," || ch === ";" || TOP_LEVEL_WHITESPACE_RE.test(ch);
-		if (braceDepth !== 0 || !isSep) continue;
-		parts.push(entry.slice(start, i));
-		start = i + 1;
+						: ch === "," || ch === ";" || (mode !== "punctuation" && TOP_LEVEL_WHITESPACE_RE.test(ch));
+		if (isSep) return i;
+	}
+	return -1;
+}
+
+export function splitTopLevelDelimitedPath(entry: string, mode: DelimitedPathSplitMode): string[] {
+	const parts: string[] = [];
+	let start = 0;
+	for (;;) {
+		const delimiter = findTopLevelPathDelimiter(entry, start, mode);
+		if (delimiter === -1) break;
+		parts.push(entry.slice(start, delimiter));
+		start = delimiter + 1;
 	}
 	parts.push(entry.slice(start));
 	return parts;
@@ -1166,7 +1159,7 @@ export function splitDelimitedPathEntrySync(
 	options: DelimitedPathSplitOptions = {},
 ): string[] | null {
 	const normalizedEntry = normalizePathLikeInput(entry);
-	if (!hasTopLevelPathDelimiter(normalizedEntry)) return null;
+	if (findTopLevelPathDelimiter(normalizedEntry, 0, "mixed") === -1) return null;
 	if (isInternalUrlPath(normalizedEntry)) {
 		if (options.internalUrls !== "split-on-semicolon") return null;
 		return getDelimitedCandidates(normalizedEntry, "semicolon");
@@ -1212,7 +1205,7 @@ export async function splitDelimitedPathEntry(
 	options: DelimitedPathSplitOptions = {},
 ): Promise<string[] | null> {
 	const normalizedEntry = normalizePathLikeInput(entry);
-	if (!hasTopLevelPathDelimiter(normalizedEntry)) return null;
+	if (findTopLevelPathDelimiter(normalizedEntry, 0, "mixed") === -1) return null;
 	if (isInternalUrlPath(normalizedEntry)) {
 		if (options.internalUrls !== "split-on-semicolon") return null;
 		return getDelimitedCandidates(normalizedEntry, "semicolon");

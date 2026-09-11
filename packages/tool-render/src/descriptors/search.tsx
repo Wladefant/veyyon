@@ -5,6 +5,7 @@ import type { ToolDescriptor, ToolRenderProps } from "../types";
 import {
 	detailsRecord,
 	isRecord,
+	keyed,
 	normalizeWs,
 	num,
 	resultTextOf,
@@ -204,14 +205,16 @@ function StructureSearchBody({ args, result }: ToolRenderProps): ReactNode {
 			{patterns.length === 0 ? (
 				<InvalidArg what="input" />
 			) : (
-				patterns.map((pat, i) => <CodeBlock key={i} code={pat} title="pattern" maxLines={12} />)
+				keyed(patterns, pat => pat).map(({ key, item: pat }) => (
+					<CodeBlock key={key} code={pat} title="pattern" maxLines={12} />
+				))
 			)}
 			{(paths.length > 0 || scopePath) && (
 				<KvGrid>
 					{paths.length > 0 && (
 						<Kv k={paths.length === 1 ? "path" : "paths"}>
-							{paths.map((p, i) => (
-								<span key={i}>
+							{keyed(paths, p => p).map(({ key, item: p }, i) => (
+								<span key={key}>
 									{i > 0 && ", "}
 									<PathText path={p} />
 								</span>
@@ -368,8 +371,8 @@ function SearchBm25Body({ args, result }: ToolRenderProps): ReactNode {
 			)}
 			{matches.length > 0 && (
 				<div className="tv-list">
-					{matches.map((match, i) => (
-						<Row key={i} k={match.score !== null ? match.score.toFixed(3) : undefined}>
+					{keyed(matches, match => `${match.serverName ?? ""}\u001f${match.name}`).map(({ key, item: match }) => (
+						<Row key={key} k={match.score !== null ? match.score.toFixed(3) : undefined}>
 							<span className="tv-pattern">{match.label}</span>
 							{match.serverName && <Badge>{match.serverName}</Badge>}
 							{match.name && match.name !== match.label && <span className="tv-faint"> {match.name}</span>}

@@ -9,8 +9,11 @@ import {
 } from "@veyyon/utils";
 import { parseHTML } from "linkedom";
 import { markdownLink } from "../../markdown-link";
+import { loadJson } from "../engine/declarative";
 import type { DocContext, DocDeclaration } from "../engine/documentation";
-import { buildResult, htmlToBasicMarkdown } from "../types";
+import { renderDescriptionSection, renderStringList } from "../engine/markdown-assembly";
+import type { RenderResult } from "../types";
+import { buildResult, htmlToBasicMarkdown, isScraperDegrade } from "../types";
 import { asRecord, renderMarkdownTable, trimmedString } from "../utils";
 
 // --- MDN Helpers & Types ---
@@ -149,11 +152,39 @@ export const cheatshDeclaration: DocDeclaration = {
 			md += `\`\`\`\n${content}\n\`\`\`\n`;
 		}
 
-		return { title: `cheat.sh/${decodedTopic}`, customMarkdown: md };
+		return md;
 	},
 };
 
 // --- Choose a License ---
+function formatLicenseLabel(val: string): string {
+	const cleaned = collapseWhitespace(val.replace(/[-_]+/g, " "));
+	return cleaned ? cleaned.charAt(0).toUpperCase() + cleaned.slice(1) : val;
+}
+
+function normalizeLicenseList(val: unknown): string[] {
+	if (Array.isArray(val)) {
+		return val
+			.filter((x): x is string => typeof x === "string")
+			.map(x => x.trim())
+			.filter(x => x.length > 0);
+	}
+	if (typeof val === "string") {
+		return val
+			.split(",")
+			.map(x => x.trim())
+			.filter(x => x.length > 0);
+	}
+	return [];
+}
+
+function formatLicenseSection(secTitle: string, items: string[]): string {
+	let s = `## ${secTitle}\n\n`;
+	if (items.length === 0) return `${s}- None listed\n\n`;
+	for (const item of items) s += `- ${formatLicenseLabel(item)}\n`;
+	return `${s}\n`;
+}
+
 export const choosealicenseDeclaration: DocDeclaration = {
 	site: "choosealicense",
 	method: "choosealicense",
@@ -182,53 +213,25 @@ export const choosealicenseDeclaration: DocDeclaration = {
 
 		const { frontmatter, body } = parseFrontmatter(result.content, { source: rawUrl });
 		const fm = asRecord(frontmatter) ?? {};
-		const formatLabel = (val: string) => {
-			const cleaned = collapseWhitespace(val.replace(/[-_]+/g, " "));
-			return cleaned ? cleaned.charAt(0).toUpperCase() + cleaned.slice(1) : val;
-		};
-
-		const title = trimmedString(fm.title) ?? formatLabel(match.id);
+		const title = trimmedString(fm.title) ?? formatLicenseLabel(match.id);
 		const spdxId = trimmedString(fm.spdxId) ?? "Unknown";
 		const description = trimmedString(fm.description);
-
-		const normalizeList = (val: unknown): string[] => {
-			if (Array.isArray(val)) {
-				return val
-					.filter((x): x is string => typeof x === "string")
-					.map(x => x.trim())
-					.filter(x => x.length > 0);
-			}
-			if (typeof val === "string") {
-				return val
-					.split(",")
-					.map(x => x.trim())
-					.filter(x => x.length > 0);
-			}
-			return [];
-		};
-
-		const formatSection = (secTitle: string, items: string[]) => {
-			let s = `## ${secTitle}\n\n`;
-			if (items.length === 0) return s + "- None listed\n\n";
-			for (const item of items) s += `- ${formatLabel(item)}\n`;
-			return s + "\n";
-		};
 
 		let md = `# ${title}\n\n`;
 		if (description) md += `${description}\n\n`;
 		md += `**SPDX ID:** ${spdxId}\n`;
 		md += `**Source:** https://choosealicense.com${isApp ? "/appendix" : `/licenses/${match.id}/`}\n\n`;
 
-		md += formatSection("Permissions", normalizeList(fm.permissions));
-		md += formatSection("Conditions", normalizeList(fm.conditions));
-		md += formatSection("Limitations", normalizeList(fm.limitations));
+		md += formatLicenseSection("Permissions", normalizeLicenseList(fm.permissions));
+		md += formatLicenseSection("Conditions", normalizeLicenseList(fm.conditions));
+		md += formatLicenseSection("Limitations", normalizeLicenseList(fm.limitations));
 
 		const licenseText = body.trim();
 		if (licenseText.length > 0) {
 			md += `---\n\n## License Text\n\n${licenseText}\n`;
 		}
 
-		return { title, customMarkdown: md };
+		return md;
 	},
 };
 
@@ -382,6 +385,18 @@ async function fetchAuthorNames(authorKeys: string[], ctx: DocContext): Promise<
 }
 
 // --- Open Library ---
+function buildOpenLibraryUnavailableResult(isbn: string, sourceLabel: string, ctx: DocContext): RenderResult {
+	return buildResult(
+		`# Open Library Book\n\n**ISBN:** ${isbn}\n\nBook details are currently unavailable ${sourceLabel}.\n`,
+		{
+			url: ctx.url,
+			method: "openlibrary",
+			fetchedAt: ctx.fetchedAt,
+			notes: ["Fetched via Open Library API"],
+		},
+	);
+}
+
 export const openlibraryDeclaration: DocDeclaration = {
 	site: "openlibrary",
 	method: "openlibrary",
@@ -490,15 +505,7 @@ export const openlibraryDeclaration: DocDeclaration = {
 				result = await ctx.loadPage(apiUrl, { timeout: ctx.timeout, signal: ctx.signal });
 			}
 			if (!result.ok) {
-				return buildResult(
-					`# Open Library Book\n\n**ISBN:** ${match.id}\n\nBook details are currently unavailable from the Open Library books API.\n`,
-					{
-						url: ctx.url,
-						method: "openlibrary",
-						fetchedAt: ctx.fetchedAt,
-						notes: ["Fetched via Open Library API"],
-					},
-				);
+				return buildOpenLibraryUnavailableResult(match.id, "from the Open Library books API", ctx);
 			}
 
 			const data = ctx.tryParseJson<OpenLibraryBooksApiResponse>(result.content);
@@ -508,15 +515,7 @@ export const openlibraryDeclaration: DocDeclaration = {
 				const searchUrl = `https://openlibrary.org/search.json?isbn=${encodeURIComponent(match.id)}&limit=1`;
 				const searchResult = await ctx.loadPage(searchUrl, { timeout: ctx.timeout, signal: ctx.signal });
 				if (!searchResult.ok) {
-					return buildResult(
-						`# Open Library Book\n\n**ISBN:** ${match.id}\n\nBook details are currently unavailable from the Open Library search API.\n`,
-						{
-							url: ctx.url,
-							method: "openlibrary",
-							fetchedAt: ctx.fetchedAt,
-							notes: ["Fetched via Open Library API"],
-						},
-					);
+					return buildOpenLibraryUnavailableResult(match.id, "from the Open Library search API", ctx);
 				}
 				const searchData = ctx.tryParseJson<{
 					docs?: Array<{
@@ -528,15 +527,7 @@ export const openlibraryDeclaration: DocDeclaration = {
 				}>(searchResult.content);
 				const doc = searchData?.docs?.[0];
 				if (!doc?.title) {
-					return buildResult(
-						`# Open Library Book\n\n**ISBN:** ${match.id}\n\nBook details are currently unavailable from Open Library.\n`,
-						{
-							url: ctx.url,
-							method: "openlibrary",
-							fetchedAt: ctx.fetchedAt,
-							notes: ["Fetched via Open Library API"],
-						},
-					);
+					return buildOpenLibraryUnavailableResult(match.id, "from Open Library", ctx);
 				}
 
 				let fallbackMd = `# ${doc.title}\n\n`;
@@ -753,16 +744,9 @@ export const spdxDeclaration: DocDeclaration = {
 	notes: ["Fetched via SPDX license API"],
 	fetch: async (match, ctx) => {
 		const apiUrl = `https://spdx.org/licenses/${encodeURIComponent(match.id)}.json`;
-		const result = await ctx.loadPage(apiUrl, {
-			timeout: ctx.timeout,
-			headers: { Accept: "application/json" },
-			signal: ctx.signal,
-		});
-		if (!result.ok) return ctx.scraperDegrade("spdx", ctx.loadFailure(result));
-
-		const license = ctx.tryParseJson<SpdxLicense>(result.content);
+		const license = await loadJson<SpdxLicense>(ctx, apiUrl, "spdx");
+		if (isScraperDegrade(license)) return license;
 		if (!license) return ctx.scraperDegrade("spdx", "unexpected response shape");
-
 		const title = license.name || license.licenseId || match.id;
 		let md = `# ${title}\n\n`;
 
@@ -771,17 +755,10 @@ export const spdxDeclaration: DocDeclaration = {
 		md += `**FSF Libre:** ${formatYesNo(license.isFsfLibre)}\n`;
 
 		const description = license.licenseComments ?? license.comment;
-		if (description) {
-			md += `\n## Description\n\n${description}\n`;
-		}
+		md += renderDescriptionSection(description);
 
 		const crossReferences = collectCrossReferences(license);
-		if (crossReferences.length) {
-			md += `\n## Cross References\n\n`;
-			for (const ref of crossReferences) {
-				md += `- ${ref}\n`;
-			}
-		}
+		md += renderStringList("Cross References", crossReferences);
 
 		const licenseText = license.licenseText
 			? license.licenseText
@@ -793,12 +770,7 @@ export const spdxDeclaration: DocDeclaration = {
 			md += `\n## License Text\n\n\`\`\`\n${licenseText}\n\`\`\`\n`;
 		}
 
-		return buildResult(md, {
-			url: ctx.url,
-			method: "spdx-api",
-			fetchedAt: ctx.fetchedAt,
-			notes: ["Fetched via SPDX license API"],
-		});
+		return md;
 	},
 };
 
@@ -833,23 +805,16 @@ export const tldrDeclaration: DocDeclaration = {
 };
 
 // --- W3C Helpers & Types ---
-type JsonRecord = Record<string, unknown>;
-
-function getJsonString(record: JsonRecord | null, key: string): string | undefined {
-	if (!record) return undefined;
-	const value = record[key];
-	return typeof value === "string" ? value : undefined;
+function getJsonString(record: Record<string, unknown> | null, key: string): string | undefined {
+	return typeof record?.[key] === "string" ? (record[key] as string) : undefined;
 }
 
-function getJsonRecord(record: JsonRecord | null, key: string): JsonRecord | null {
-	if (!record) return null;
-	return asRecord(record[key]);
+function getJsonRecord(record: Record<string, unknown> | null, key: string): Record<string, unknown> | null {
+	return asRecord(record?.[key]);
 }
 
-function getJsonArray(record: JsonRecord | null, key: string): unknown[] | undefined {
-	if (!record) return undefined;
-	const value = record[key];
-	return Array.isArray(value) ? value : undefined;
+function getJsonArray(record: Record<string, unknown> | null, key: string): unknown[] | undefined {
+	return Array.isArray(record?.[key]) ? (record[key] as unknown[]) : undefined;
 }
 
 function extractShortname(pathname: string): string | null {
@@ -885,7 +850,7 @@ function normalizeStatus(status?: string): { code?: string; label?: string } {
 	return { label: status };
 }
 
-function extractEditors(editorsPayload: JsonRecord | null): string[] {
+function extractEditors(editorsPayload: Record<string, unknown> | null): string[] {
 	const links = getJsonRecord(editorsPayload, "_links");
 	const editors = getJsonArray(links, "editors") ?? [];
 	const names: string[] = [];
@@ -1239,16 +1204,12 @@ export const wikidataDeclaration: DocDeclaration = {
 	fetch: async (match, ctx) => {
 		const qid = match.id;
 		const apiUrl = `https://www.wikidata.org/wiki/Special:EntityData/${qid}.json`;
-		const result = await ctx.loadPage(apiUrl, { timeout: ctx.timeout, signal: ctx.signal });
-
-		if (!result.ok) return ctx.scraperDegrade("wikidata", ctx.loadFailure(result));
-
-		const data = ctx.tryParseJson<{ entities: Record<string, WikidataEntity> }>(result.content);
+		const data = await loadJson<{ entities: Record<string, WikidataEntity> }>(ctx, apiUrl, "wikidata");
+		if (isScraperDegrade(data)) return data;
 		if (!data) return ctx.scraperDegrade("wikidata", "unexpected response shape");
 
 		const entity = data.entities[qid];
 		if (!entity) return null;
-
 		const label = getLocalizedValue(entity.labels, "en") || qid;
 		const description = getLocalizedValue(entity.descriptions, "en");
 		const aliases = getLocalizedAliases(entity.aliases, "en");
@@ -1333,12 +1294,7 @@ export const wikidataDeclaration: DocDeclaration = {
 			}
 		}
 
-		return buildResult(md, {
-			url: ctx.url,
-			method: "wikidata",
-			fetchedAt: ctx.fetchedAt,
-			notes: ["Fetched via Wikidata EntityData API"],
-		});
+		return md;
 	},
 };
 
@@ -1403,7 +1359,7 @@ export const wikipediaDeclaration: DocDeclaration = {
 			}
 		}
 
-		return md ? { title: match.id, customMarkdown: md } : null;
+		return md || null;
 	},
 };
 

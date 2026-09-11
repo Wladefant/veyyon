@@ -36,6 +36,7 @@ import { runExtensionSetModel } from "../../../extensibility/extensions/compact-
 import { getSessionSlashCommands } from "../../../extensibility/extensions/get-commands-handler";
 import { createExtensionModelQuery } from "../../../extensibility/extensions/model-api";
 import type { TerminalWidgetContent } from "../../../extensibility/terminal-capability";
+import { toConfirmDialog, toPromptDialog, toSelectDialog } from "../../../presentation/overlay-builder";
 import { normalizeCustomMessagePayload, USER_INTERRUPT_LABEL } from "../../../session/messages";
 import { getAvailableThemesWithPaths, getThemeByName, setTheme, type Theme, theme } from "../../../theme/theme";
 import {
@@ -488,9 +489,20 @@ export class ExtensionUiController {
 		dialogOptions?: InteractiveSelectorDialogOptions,
 		extra?: { slider?: HookSelectorSlider },
 	): Promise<string | undefined> {
+		const selectDialog = toSelectDialog({
+			id: `select:${Date.now()}`,
+			title,
+			options: options.map(opt =>
+				typeof opt === "string"
+					? { value: opt, label: opt }
+					: { value: opt.label, label: opt.label, description: opt.description },
+			),
+			selectedIndex: dialogOptions?.initialIndex,
+			filterable: options.length > 12,
+		});
 		const request: CollabUiRequestDraft = {
 			kind: "select",
-			title,
+			title: selectDialog.title,
 			options: toWireSelectOptions(options),
 			initialIndex: dialogOptions?.initialIndex,
 			selectionMarker: dialogOptions?.selectionMarker,
@@ -499,7 +511,7 @@ export class ExtensionUiController {
 			helpText: dialogOptions?.helpText,
 		};
 		return this.#raceCollabDialog(request, dialogOptions?.signal, signal =>
-			this.showHookSelector(title, options, { ...dialogOptions, signal }, extra),
+			this.showHookSelector(selectDialog.title, options, { ...dialogOptions, signal }, extra),
 		);
 	}
 
@@ -884,8 +896,18 @@ export class ExtensionUiController {
 	 * Show a confirmation dialog for hooks.
 	 */
 	async showHookConfirm(title: string, message: string): Promise<boolean> {
-		const result = await this.showHookSelector(`${title}\n${message}`, ["Yes", "No"]);
-		return result === "Yes";
+		const dialog = toConfirmDialog({
+			id: `confirm:${Date.now()}`,
+			title,
+			body: message,
+			confirmLabel: "Yes",
+			cancelLabel: "No",
+		});
+		const result = await this.showHookSelector(dialog.body ? `${dialog.title}\n${dialog.body}` : dialog.title, [
+			dialog.confirmLabel,
+			dialog.cancelLabel,
+		]);
+		return result === dialog.confirmLabel;
 	}
 
 	/**
@@ -905,17 +927,24 @@ export class ExtensionUiController {
 		 */
 		inputOptions?: { mask?: boolean; hint?: string },
 	): Promise<string | undefined> {
+		const dialog = toPromptDialog({
+			id: `prompt:${Date.now()}`,
+			title,
+			placeholder,
+			masked: inputOptions?.mask,
+		});
 		return this.#presentDialog(dialogOptions?.signal, settle => {
 			const input = new HookInputComponent(
-				title,
-				placeholder,
+				dialog.title,
+				dialog.placeholder,
 				value => settle(value),
 				() => settle(undefined),
 				{
 					timeout: dialogOptions?.timeout,
 					onTimeout: dialogOptions?.onTimeout,
 					tui: this.ctx.ui,
-					mask: inputOptions?.mask === true ? DEFAULT_MASK_CHAR : undefined,
+					mask: dialog.masked ? DEFAULT_MASK_CHAR : undefined,
+					credentialMode: dialog.masked,
 					hint: inputOptions?.hint,
 					onRequestRender: () => this.ctx.ui.requestRender(),
 				},

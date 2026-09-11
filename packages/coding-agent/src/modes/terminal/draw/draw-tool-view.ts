@@ -53,7 +53,7 @@ import {
 	shortenEmbeddedPaths,
 } from "../../../tools/core/render-utils";
 import type { ToolUIStatus } from "../../../tools/core/tool-ui-status";
-import type { FirstResultViewportRepaint } from "../../../tools/renderers";
+import type { ToolRenderer } from "../../../tools/renderers";
 import { paintHotTail, shimmerPhase } from "../components/chrome/follow";
 import { renderDiff } from "../components/transcript/diff";
 import { fileHyperlink, urlHyperlink } from "./hyperlink";
@@ -1091,20 +1091,7 @@ export function drawToolView(view: ToolView, theme: Theme, spinnerFrame?: number
  * render consumes a spinner frame, and whether a shape change needs the viewport replayed. A view
  * states none of them, so a conversion moves them here from the deleted renderer object.
  */
-export interface ViewToolRendererPolicy {
-	mergeCallAndResult?: boolean;
-	/** Drawn in the response flow rather than in the card's own box, which is the row's placement. */
-	inline?: boolean;
-	/**
-	 * That the call render IS the live control a reader answers, so a call that never ran must not
-	 * paint it: a question nobody can answer any more draws its plain label instead.
-	 */
-	callIsLiveWidget?: boolean;
-	animatedPendingPreview?: boolean | ((args: unknown) => boolean);
-	animatedPartialResult?: boolean | ((args: unknown) => boolean);
-	forceFirstResultViewportRepaint?: FirstResultViewportRepaint;
-	forceResultViewportRepaintOnSettle?: boolean;
-}
+export interface ViewToolRendererPolicy extends Omit<ToolRenderer, "renderCall" | "renderResult" | "view"> {}
 
 /**
  * What the registry hands a renderer: the disclosure state, plus the loosely typed bag of surface

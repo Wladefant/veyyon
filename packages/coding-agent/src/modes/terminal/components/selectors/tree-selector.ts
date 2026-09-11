@@ -9,15 +9,13 @@ import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import { padding } from "@veyyon/utils/padding";
 import { truncateToWidth } from "@veyyon/utils/width";
 import type { TreeFilterMode } from "../../../../config/settings-schema";
+import { resolveAssistantErrorPresentation } from "../../../../presentation/transcript-builder";
 import { theme } from "../../../../theme/theme";
 import { shortenPath, TRUNCATE_LENGTHS } from "../../../../tools/core/render-utils";
 import { canonicalizeMessage } from "../../../../utils/thinking-display";
 import { matchesAppInterrupt, matchesSelectDown, matchesSelectUp } from "../../utils/keybinding-matchers";
-import { resolveAssistantErrorPresentation } from "../../utils/transcript-render-helpers";
 import {
 	computeModalDims,
-	consumeModalChipHover,
-	hitTestModalChrome,
 	MODAL_SIZING_LARGE,
 	type ModalShellGeometry,
 	type ModalShortcut,
@@ -26,6 +24,7 @@ import {
 	renderModalShell,
 	sizingForArea,
 } from "../chrome/modal-shell";
+import { routeModalChrome } from "./select-list-mouse-routing";
 import { centeredWindow, hoverBandAt, renderScrollableList, selectionBand } from "./selector-helpers";
 
 /** Gutter info: position (displayIndent where connector was) and whether to show │ */
@@ -1059,37 +1058,27 @@ export class TreeSelectorComponent implements Component {
 	}
 
 	#routeMouse(event: SgrMouseEvent): boolean {
-		const chrome = hitTestModalChrome(this.#shellGeometry, event.row, event.col, {
-			motion: event.motion,
-			leftClick: event.leftClick,
-		});
-		if (
-			consumeModalChipHover(chrome, this.#hoveredShortcutId, id => {
+		const consumed = routeModalChrome({
+			shellGeometry: this.#shellGeometry,
+			event,
+			hoveredShortcutId: this.#hoveredShortcutId,
+			onHoverShortcut: id => {
 				this.#hoveredShortcutId = id;
 				this.#onRequestRender?.();
-			})
-		) {
-			return true;
-		}
-		if (
-			chrome.kind === "close" ||
-			chrome.kind === "outside" ||
-			(chrome.kind === "shortcut" && chrome.id === "close")
-		) {
-			// While the label editor owns the body, close means "abandon the edit"
-			// — the same thing Esc does there — and the tree stays up.
-			if (this.#labelInput) {
-				this.#hideLabelInput();
-				this.#onRequestRender?.();
-				return true;
-			}
-			this.onCancel();
-			return true;
-		}
-		if (chrome.kind === "shortcut" && chrome.id === "confirm") {
-			this.handleInput("\n");
-			return true;
-		}
+			},
+			onCancel: () => {
+				// While the label editor owns the body, close means "abandon the edit"
+				// — the same thing Esc does there — and the tree stays up.
+				if (this.#labelInput) {
+					this.#hideLabelInput();
+					this.#onRequestRender?.();
+					return;
+				}
+				this.onCancel();
+			},
+			onConfirm: () => this.handleInput("\n"),
+		});
+		if (consumed) return true;
 		// The label editor has no rows to hit-test; only the chrome answers.
 		if (this.#labelInput) return true;
 		if (event.wheel !== null) {

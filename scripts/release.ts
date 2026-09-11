@@ -480,16 +480,30 @@ export async function validateReleaseVersionAuthorities(
 	}
 
 	const sentinelName = sentinelExportName(version);
-	const sentinelGlob = new Glob("{natives,tests,packages}/**/*.{rs,ts,mts,cts,js,mjs,cjs}");
+	const sentinelRoots = [
+		...new Set(
+			[...manifestPaths, ...cargoManifestPaths]
+				.map(manifestPath => {
+					const dir = normalizedRelativePath(path.posix.dirname(manifestPath));
+					return dir === "." ? "." : (dir.split("/")[0] ?? "");
+				})
+				.filter(root => root.length > 0),
+		),
+	].sort();
 	let sentinelAuthorities = 0;
-	for await (const sourcePath of sentinelGlob.scan({ cwd: rootDir, onlyFiles: true })) {
-		const normalizedPath = normalizedRelativePath(sourcePath);
-		if (isSentinelRewriteExcluded(normalizedPath)) continue;
-		const source = await Bun.file(path.join(rootDir, normalizedPath)).text();
-		for (const match of source.matchAll(/__veyyonNativesV[0-9][A-Za-z0-9_]*/g)) {
-			sentinelAuthorities++;
-			if (match[0] !== sentinelName) {
-				errors.push(`native sentinel ${match[0]} in ${normalizedPath} disagrees with expected ${sentinelName}`);
+	for (const root of sentinelRoots) {
+		const sentinelPattern =
+			root === "." ? "**/*.{rs,ts,mts,cts,js,mjs,cjs}" : `${root}/**/*.{rs,ts,mts,cts,js,mjs,cjs}`;
+		const sentinelGlob = new Glob(sentinelPattern);
+		for await (const sourcePath of sentinelGlob.scan({ cwd: rootDir, onlyFiles: true })) {
+			const normalizedPath = normalizedRelativePath(sourcePath);
+			if (isSentinelRewriteExcluded(normalizedPath)) continue;
+			const source = await Bun.file(path.join(rootDir, normalizedPath)).text();
+			for (const match of source.matchAll(/__veyyonNativesV[0-9][A-Za-z0-9_]*/g)) {
+				sentinelAuthorities++;
+				if (match[0] !== sentinelName) {
+					errors.push(`native sentinel ${match[0]} in ${normalizedPath} disagrees with expected ${sentinelName}`);
+				}
 			}
 		}
 	}

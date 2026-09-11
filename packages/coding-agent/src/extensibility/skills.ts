@@ -124,6 +124,19 @@ export interface LoadSkillsOptions extends SkillsSettings {
 	agentDir?: string;
 }
 
+/** Each skill's real path, resolved in parallel; a path that cannot be resolved stands for itself. */
+function realPathsOf(skills: readonly DiscoveredSkill[]): Promise<string[]> {
+	return Promise.all(
+		skills.map(async skill => {
+			try {
+				return await fs.realpath(skill.path);
+			} catch {
+				return skill.path;
+			}
+		}),
+	);
+}
+
 /**
  * Load skills from all configured locations.
  * Returns skills and any validation warnings.
@@ -201,15 +214,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 	});
 
 	// Batch resolve all real paths in parallel
-	const realPaths = await Promise.all(
-		filteredSkills.map(async capSkill => {
-			try {
-				return await fs.realpath(capSkill.path);
-			} catch {
-				return capSkill.path;
-			}
-		}),
-	);
+	const realPaths = await realPathsOf(filteredSkills);
 
 	// Process skills with resolved paths
 	for (let i = 0; i < filteredSkills.length; i++) {
@@ -270,15 +275,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 			.filter(capSkill => capSkill._source.provider !== MANAGED_SKILLS_PROVIDER_ID)
 			.map(capSkill => capSkill.name),
 	);
-	const managedRealPaths = await Promise.all(
-		managedCandidates.map(async capSkill => {
-			try {
-				return await fs.realpath(capSkill.path);
-			} catch {
-				return capSkill.path;
-			}
-		}),
-	);
+	const managedRealPaths = await realPathsOf(managedCandidates);
 	for (let i = 0; i < managedCandidates.length; i++) {
 		const capSkill = managedCandidates[i];
 		const resolvedPath = managedRealPaths[i];

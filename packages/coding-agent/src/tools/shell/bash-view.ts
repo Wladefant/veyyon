@@ -30,13 +30,15 @@ import { formatTruncationMetaNotice, stripOutputNotice, stripRawOutputArtifactNo
 import {
 	collapsedProgressViewLines,
 	collapseProgressRuns,
+	DEFAULT_TERMINAL_PREVIEW_LINES,
 	formatToolWorkingDirectory,
 	replaceTabs,
 	shortenEmbeddedPaths,
 	type ToolViewResult,
 } from "../core/render-utils";
 import { clampTimeout } from "../core/tool-timeouts";
-import { BASH_DEFAULT_PREVIEW_LINES, type BashToolDetails, formatBackgroundNotice } from "./bash";
+import type { BashToolDetails } from "./bash";
+import { formatBackgroundNotice } from "./execution-messages";
 
 /** The arguments the card reads off a bash call, which is any subset the model has sent so far. */
 export interface BashViewArgs {
@@ -362,7 +364,7 @@ function outputSections(
 		{
 			label: "Output",
 			lines,
-			...(expanded || carriesImage ? {} : { tail: { max: BASH_DEFAULT_PREVIEW_LINES, viewport: true } }),
+			...(expanded || carriesImage ? {} : { tail: { max: DEFAULT_TERMINAL_PREVIEW_LINES, viewport: true } }),
 		},
 		...(notices.length > 0 ? [{ lines: notices }] : []),
 	];

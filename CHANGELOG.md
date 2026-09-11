@@ -6,6 +6,7 @@
 
 ### Breaking Changes
 
+- A spawned worker is an agent, not a subagent, across the product: the settings tab is Agents, every `subagent.*` setting is `agent.*` (`tier.subagent`, `advisor.subagents` and `argot.subagents` are `tier.agent`, `advisor.agents` and `argot.agents`), a legacy `subagent.*` key in a settings file is folded onto its new name on load with the new key winning, the `prompts/subagent/` and `plan-mode/subagent.md` prompt files are `prompts/agent/` and `plan-mode/agent.md`, and every module, type and export named with the old word is renamed (`rpc-subagents` is `rpc-agents`, `persisted-subagents` is `persisted-agents`, `SubagentLifecyclePayload` is `AgentLifecyclePayload`); the `subagent_spawn` session entry, the `subagent_*` RPC frame types and commands, and the `subagents/` definitions directory keep their on-disk and wire spellings. A session that a task spawned is `spawned` where the code distinguishes it from the one driving the conversation: `isSubagentSession` is `isSpawnedSession` and `createSubagentSession` is `createSpawnedSession`.
 - Account formatting helpers are exported from `@veyyon/coding-agent/session/account-format` instead of `@veyyon/coding-agent/slash-commands/helpers/format`.
 - Screen takeover moved off `ExtensionUIContext` and `HookUIContext` onto an optional `ui.terminal` capability: `custom()` and `setEditorComponent()` are now `ctx.ui.terminal?.custom(...)` and `ctx.ui.terminal?.setEditorComponent(...)`, and a component widget goes through `ctx.ui.terminal?.setWidgetComponent(key, factory)` while `setWidget(key, lines)` keeps the text form every host draws. A host that is not a terminal omits `ui.terminal` rather than declaring members with empty bodies.
 - Removed `ui.setHeader()` and `ui.setFooter()`, which every host implemented as an empty function, interactive mode included.
@@ -62,6 +63,7 @@
 - `@veyyon/kernel/loader/*` publishes plugin discovery, manifest parsing, the installed registry, the marketplace client and load-failure reporting.
 - `@veyyon/kernel/registry/*` publishes generic contribution interfaces, tool proxying, widget and host-view declarations, and TypeBox schema conversion.
 - `@veyyon/kernel/registry/tool-domain` declares `ToolDomainManifest`, the name and lazy-factory table a tool domain contributes, so a host reads a domain's tools without depending on the coding agent.
+- `SubagentSpawnEntry` and `SubagentSpawnRecord` in `@veyyon/kernel/session/session-entries` are `AgentSpawnEntry` and `AgentSpawnRecord`; the persisted `subagent_spawn` entry type is unchanged.
 - `@veyyon/kernel/registry/message-kind` declares `AgentMessageKind`, a transcript role a tool domain records with its conversion to provider messages and to text, and `ToolDomainManifest.messageKinds` carries a domain's kinds; `@veyyon/kernel/session/message-kinds` is the role-keyed table the session spine converts them through, which throws on a role no domain declared and on a second kind for one role.
 - `@veyyon/kernel/session/session-manager`, `session-context`, `session-loader` and `agent-storage` publish the session manager, its context builder, its file loader and the credential store, moved from `@veyyon/coding-agent/session/*` unchanged; `session/custom-message-payload` publishes the custom-message payload normaliser and the rehydration sanitiser they call.
 - `@veyyon/kernel/settings/schema` publishes the settings schema registry: `declareSettings` registers a package's table and rejects a path declared twice, `DeclaredSettings` merges each table's type so `SettingPath` and `SettingValue` span every registered table, and `getDefault`, `getType`, `getUi`, `hasUi`, `getPathsForTab`, `retiredBy`, `isSettingPath`, `getEnumValues`, `isUnsetNumberPath` and `describeSettingTypeMismatch` answer from the registry; a query before any table has registered, or for a path no table declares, throws naming the cause. `@veyyon/kernel/settings/optional-number` publishes the unset-number owner, moved from `@veyyon/coding-agent/config/optional-number` unchanged.
@@ -82,7 +84,7 @@
 - `@veyyon/utils/terminal-emulator` resolves terminal identity without loading the terminal renderer.
 - `@veyyon/utils/json-snapshot` atomically stores rebuildable JSON snapshots with one serialization and verifies their input fingerprint and exact payload bytes.
 - `@veyyon/utils/format` owns `formatCostTiered` and `normalizePremiumRequests`, the terminal cost and premium-request formatters the status row and the stats CLI read.
-- `@veyyon/utils/format` owns `formatContextUsage`, the `47K/200K` reading of tokens against a limit that the status-line gauge, a subagent progress row and an eval cell's subagent tree all state.
+- `@veyyon/utils/format` owns `formatContextUsage`, the `47K/200K` reading of tokens against a limit that the status-line gauge, an agent progress row and an eval cell's agent tree all state.
 - The string, escape, keyboard, mouse, motion and layout-math primitives that `@veyyon/tui` used to own are `@veyyon/utils` modules, reachable by subpath and not on the barrel, so a caller that needs the escape bytes or the fuzzy matcher no longer declares a dependency on the terminal renderer.
 - `@veyyon/utils/color-format` states whether escape sequences are written as 24-bit or 256-colour SGR; `@veyyon/tui` sets it once the terminal's capabilities resolve, which is how a utils module renders colour without reading terminal state.
 - `@veyyon/utils/ttyid` reads the controlling terminal's identity, and `@veyyon/utils/image-fallback` states the four causes a client can fail to draw a picture for, as `IMAGE_FALLBACK_REASONS` and the `ImageFallbackReason` union over it. Both moved out of `@veyyon/tui`, so a conversation engine can name a session or a cause without importing a renderer.
@@ -146,6 +148,13 @@
 - Plugin discovery, import rewriting, MCP configuration toggles, Exa responses, secret-preserving text transforms, todo state cloning and projection, and session-file discovery use shared implementations without behavioral changes.
 - Tool views share progress rows, diff statistics, disclosure metadata, and task separators without changing rendered output.
 - Extension kind labels use a shared function without changing list or sidebar text.
+- Every setting in every domain states what it does and what each value selects in one to three sentences, with no design history or internal vocabulary; the idle timeout row is labelled "Park Idle Agents After", the Park and Prune groups are one "Idle Agents" group, the artifact rows are "Artifact Threshold", "Artifact Head Size" and "Artifact Tail Size" with the unit on their options, and the MCP debounce row is "MCP Notification Delay".
+- `AgentRegistry.setStatus` consults `AGENT_TRANSITIONS` and throws `AgentTransitionError` for a status move the lifecycle does not perform, so a turn event that arrives after a kill or a park no longer revives the agent; a collab guest mirrors the host's roster through `mirrorStatus`.
+- An agent adopted at hand-over, revived from disk or listed from a previous run receives its idle and prune budgets through one builder, so a zero quiet budget disables pruning and a waiting budget is never shorter than the quiet one on every path; no behaviour changes on the paths that already agreed.
+- A retired `agent.*` setting is retired in one place: `rejectedAgentModelSettings` sweeps the keys the schema itself marks `retiredBy` instead of a second hardcoded list, and a retired key with no page hint is reported against the replacement the schema declares rather than being named as `undefined`; `agentsEnabled` is the one predicate for whether agents exist, replacing the `delegationEnabled` alias that returned it unchanged. No setting changes what it does.
+- Interactive chat and the transcript viewer use one replay implementation without changing displayed content or live-tool lifecycle.
+- Settings group types derive from the settings schema while preserving their existing optional fields and value types.
+- JSON tree projections share bounded traversal, and code and Markdown cells share output assembly, with unchanged rendering.
 - Handbook HTML and search assets are generated during documentation and website builds instead of being tracked in Git.
 - Startup reads setting-change signals and terminal formatting without constructing the settings store or unrelated tool modules.
 - The terminal host constructs autoresearch screens and styled slash-command reports; headless command execution no longer imports those terminal components.
@@ -265,6 +274,7 @@
 - API-key logins share credential prompting and validation with unchanged provider messages and cancellation behavior.
 - Provider module declarations share one typed stream signature with unchanged runtime output.
 - Hermes and Qwen tool calls use one JSON decoder with unchanged repair and partial-stream recovery.
+- Doc comments refer to a child run as an agent rather than a subagent. No behavior change.
 - `Tool` extends `ToolSpec` from `@veyyon/tool`, which owns the schema-independent declaration and the `ToolExample` kinds; `@veyyon/ai` exports every name it exported before, so no caller changes.
 - The message envelope, content blocks, `AssistantMessageEvent`, `StopDetails`, the turn and tool-call study records and the streaming partial-JSON symbol are defined in `@veyyon/model`; `@veyyon/ai` re-exports every name it exported before, so no caller changes.
 - A source comment in the OAuth callback page names the shared sun source at `apps/site/sun-field.js`; behavior is unchanged.
@@ -273,10 +283,12 @@
 - A source-path comment in `message-text.ts` names the coding-agent module its caller moved to; behavior is unchanged.
 - `CONTEXTUAL_USER_PREFIXES` is exported from the codex compaction module so the retained-window rule is asserted against the real list rather than a copy of it.
 - A source-path comment and the barrel-shortcut suite name the Perplexity search provider at `tools/web/search/providers/perplexity.ts`. No behavior change.
+- Doc comments refer to child runs and roles as agents rather than subagents; the Codex protocol header `x-openai-subagent` and its `subagent_kind` metadata key are unchanged.
 - Array copies that allocated with a spread now use `.slice()`, `.concat()` or `Array.from()`. No user-visible behavior changes.
 - The package directory is `plugins/argot` instead of `packages/argot`; the published package name, entry points and behavior are unchanged.
 - Source-path comments in `constants.ts` and `generate.ts` name the benchmark modules they cite at their new paths under `tests/evals/`; behavior is unchanged.
 - Compacted dictionary generator candidate keywords with declarative lookup tables.
+- Doc comments refer to a child stream as an agent stream rather than a subagent stream. No behavior change.
 - `Effort`, `ThinkingConfig` and the model and message types are re-exported from `@veyyon/model`, which is their single definition; the exported names and values are unchanged.
 - Bundled models resolve on demand per provider while explicitly installed full-registry snapshot stores remain supported.
 - Provider cache namespaces resolve without constructing discovery options; persisted cache keys are unchanged.
@@ -303,8 +315,12 @@
 - The rebuild instruction in the stale-addon refusal reads `bun --cwd=natives/bridge/bindings run build`, the package's path after it moved out of `packages/`. The package name `@veyyon/natives` and every import specifier are unchanged.
 - Centralized shared request and error data table renderers across overview, requests, and errors routes.
 - Array spreads over iterators in the dashboard aggregators are `Array.from` calls and source comments reference `apps/stats` and `clients/web`; no user-visible change.
+- Doc comments refer to a spawned session as an agent and to its record as `AgentSpawnEntry`; the persisted `subagent_spawn` entry type is unchanged.
+- The `SettingTab` member for the agent pages is `agents` instead of `subagents`; the tab is an in-memory id and no persisted setting key changes.
+- The agent type of a session a task spawned is `spawn` instead of `subagent` in the per-type breakdown; the `main` and `advisor` types are unchanged.
 - The package directory is `apps/stats` instead of `packages/stats`; the published package name, entry points and behavior are unchanged.
 - Repointed a doc comment at `@veyyon/kernel/session/session-entries`, where the session header type now lives; no behavior change.
+- Array spreads over iterators in the dashboard aggregators are `Array.from` calls and source comments reference `apps/stats` and `clients/web`; no user-visible change.
 - The package directory is `plugins/mode-swarm` instead of `packages/swarm-extension`; the published package name, entry points and behavior are unchanged.
 - Consolidated React tool-call renderers into cohesive domain descriptors (fs, system, agent, memory, search) and centralized shared UI primitives.
 - Collapsed and deduplicated scroll math, search input filtering, border framing, cursor deletion and autocomplete helpers across engine components without changing rendering or behavior.
@@ -315,6 +331,11 @@
 - `visualColAtOffset` and `offsetAtVisualCol` are exported from `@veyyon/tui` utils, shared by `Editor` and `Input`.
 - Literal prompt templates skip variable analysis and compilation while preserving formatted output.
 - Web and terminal Markdown rendering use shared HTML entity decoding with unchanged output.
+- Doc comments refer to the runtime a swarm agent runs on as the agent infrastructure. No behavior change.
+- The `task` renderer lifts the missing-yield warning out of the output preview under both its current spelling, `SYSTEM WARNING: Agent exited without calling yield tool`, and the `Subagent` spelling a session file recorded before it.
+- `TerminalNotification` extends `HostNotification` from `@veyyon/utils/host-notification`, so a terminal is one host that can deliver a tool's notification and the two shapes cannot drift apart.
+- `visualColAtOffset` and `offsetAtVisualCol` are exported from `@veyyon/tui` utils, shared by `Editor` and `Input`.
+- Source comments refer to the spawned-agent HUD as the agent HUD. No behavior change.
 - JSON snapshot parsing uses the shared JSON parser; snapshot validation is unchanged.
 - `HostNotification` and `HostNotifier` are defined in `@veyyon/host`; `@veyyon/utils/host-notification` re-exports both, so no caller changes.
 - Source-path comments in `dirs.ts` name the website changelog generator at `apps/site/tools/gen-changelog.mjs`; behavior is unchanged.
@@ -328,7 +349,9 @@
 - `workspaceModuleReachResolution()` resolves every workspace member declared by the root manifest, at whatever depth it sits, instead of the direct children of `packages/`, so a cross-package specifier into `@veyyon/kernel`, `@veyyon/tui`, a contract or a plugin resolves again and every module-reach ceiling built on it measures what it claims.
 - Consolidated specialized web scraper site handlers into parameterized domain engines and declarative site definitions.
 - The Discourse handler trims its base path with `trimTrailingSlashes` from `@veyyon/utils/url` rather than its own inline strip. No user-visible behavior changes.
+- Doc comments refer to the spawned-agent wall as the agent wall. No behavior change.
 - `TextContent`, `ImageContent`, `ThinkingContent`, `RedactedThinkingContent`, `ToolCallContent`, `FallbackContent`, `WireStopReason` and `WireUsage` are `Pick` projections of the shapes `@veyyon/model` owns, imported type-only, with the same fields as before; the package declares `@veyyon/model` and no runtime dependency.
+- `AgentProgressPayload` and `AgentLifecyclePayload` are the payloads on the `task:subagent:progress` and `task:subagent:lifecycle` bus channels; `SubagentProgressPayload` and `SubagentLifecyclePayload` remain exported as the same types, and the channel spellings are unchanged.
 
 ### Removed
 
@@ -345,6 +368,11 @@
 - Kernel codec and shutdown defaults remain active when optional configuration fields are undefined.
 - Startup frame capture stops retaining terminal output after typing, recording settlement, or frame release.
 - Disabled launch status rows remain blank when the terminal is narrower than the composer inset.
+- `veyyon licenses` reads the Open Sans and Source Code Pro notices from the tracked `docs/handbook/fonts/` copies instead of the ignored mdbook build output, so the bundle regenerates and its test passes on a checkout without a handbook build.
+- A compaction that had just freed context no longer reports "Compaction freed too little context to make progress" when its entry is written in the same millisecond as the kept assistant turn; whether a turn predates the latest compaction is read from its position on the branch, not its timestamp.
+- The home anchor sizes its fills, the welcome hero mounts, and the per-frame sizing pass runs on the screen the interactive mode renders on rather than the one its constructor built, and `startup.quiet` is read from the session's settings like the other startup reads.
+- An agent whose session is on screen is no longer parked under it: opening an agent pins it for as long as the main view points at it, a park deadline that elapses meanwhile is deferred, and the idle TTL counts again from the return to the main session.
+- The task card lifts the missing-yield warning out of an agent's output under both its current spelling, `SYSTEM WARNING: Agent exited without calling yield tool`, and the `Subagent` spelling a session file recorded before it; the `task:subagent:progress` and `task:subagent:lifecycle` bus channels a collab guest matches on keep their spelling.
 - Custom tools retain their declared call and result views when converted into extension tool definitions.
 - Terminal tool cards shorten home-directory paths and replace tabs in metadata, notices, code, diffs, and generic argument previews before width fitting.
 - Failed task results without agent details retain error text styling.

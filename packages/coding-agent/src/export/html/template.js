@@ -15,7 +15,7 @@
       const { header, entries, leafId: defaultLeafId, systemPrompt, tools, subSessions } = data;
 
       // Session render context: scopes entry lookups and tool-view host
-      // wiring to one transcript (main session or an embedded subagent).
+      // wiring to one transcript (main session or an embedded agent).
       const mainSctx = { entries, prefix: '', idPrefix: 'entry-' };
 
       // ============================================================
@@ -747,6 +747,7 @@
           name: call.name,
           args: call.arguments || {},
           result: result || undefined,
+          display: (result && result.display) ? result.display : (call.display || undefined),
           host: {
             hasAgent: (id) => !!lookupSubSession(sctx.prefix, id),
             openAgent: (id) => openSubSession(joinKey(sctx.prefix, id)),
@@ -760,7 +761,7 @@
       // ============================================================
       //
       // Task tool cards expose agent chips (wired through the payload `host`
-      // above); clicking one opens that subagent's transcript in a stacked
+      // above); clicking one opens that agent's transcript in a stacked
       // overlay. Keys are slash-joined agent ids relative to the main
       // session: top-level agent 'ToolAsk', its child 'ToolAsk/Helper'.
 
@@ -788,7 +789,7 @@
       }
 
       /**
-       * Root-to-leaf path through an arbitrary entry list (subagent
+       * Root-to-leaf path through an arbitrary entry list (agent
        * transcripts are linear chains; same parent-walk as getPath).
        */
       function getPathIn(entryList, targetId) {
@@ -816,10 +817,10 @@
         subOverlayEl.id = 'subsession-overlay';
         subOverlayEl.innerHTML = `
           <div class="subsession-backdrop"></div>
-          <div class="subsession-panel" role="dialog" aria-modal="true" aria-label="Subagent session" tabindex="-1">
+          <div class="subsession-panel" role="dialog" aria-modal="true" aria-label="Agent session" tabindex="-1">
             <div class="subsession-header">
-              <nav class="subsession-breadcrumb" aria-label="Subagent breadcrumb"></nav>
-              <button type="button" class="subsession-close" title="Close (Esc)" aria-label="Close subagent view">&times;</button>
+              <nav class="subsession-breadcrumb" aria-label="Agent breadcrumb"></nav>
+              <button type="button" class="subsession-close" title="Close (Esc)" aria-label="Close agent view">&times;</button>
             </div>
             <div class="subsession-meta"></div>
             <div class="subsession-body"></div>

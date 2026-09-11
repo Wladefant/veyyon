@@ -47,6 +47,7 @@ import {
 } from "../tools/agent/review";
 import { jsonTreeViewLines } from "../tools/core/json-tree-view";
 import {
+	extractResultText,
 	formatDuration,
 	formatMoreItems,
 	previewLine,
@@ -56,7 +57,7 @@ import {
 	truncateToWidth,
 } from "../tools/core/render-utils";
 import { appendAgentStats, STATS_DOT, sanitizeRecentOutput, span } from "./agent-stats";
-import { classifySubagentOutcome } from "./outcome";
+import { classifyAgentOutcome } from "./outcome";
 import { repairDoubleEncodedJsonString, repairTaskParams } from "./repair-args";
 import { DEFAULT_SPAWN_AGENT } from "./spawn-policy";
 import { YIELD_TOOL_NAME } from "./subprocess-tool-registry";
@@ -357,9 +358,10 @@ const JSON_TREE_LINES = 24;
 const ASSIGNMENT_ROWS = 20;
 
 /** The brief an agent was given, which an expanded card shows under its row. */
-function assignmentRows(task: string, place: NodePlace, expanded: boolean): TaskRow[] {
+function assignmentRows(task: string | undefined, place: NodePlace, expanded: boolean): TaskRow[] {
+	if (!task || !expanded) return [];
 	const trimmed = sanitizeText(task).trim();
-	if (!expanded || !trimmed) return [];
+	if (!trimmed) return [];
 	const rows: TaskRow[] = [detailRow(place, [span("Task", "dim")])];
 	appendTruncatedLines(rows, trimmed.split("\n"), place, ASSIGNMENT_ROWS);
 	return rows;
@@ -541,18 +543,30 @@ function progressRows(
 	if (progress.status === "running" || progress.status === "pending") {
 		const tone: ViewTone = frozen ? "dim" : "accent";
 		line.push({ text: "", symbol: "status.done", tone }, span(" "));
-		line.push(description === undefined ? span(displayId, tone) : { text: displayId, tone, bold: true });
+		line.push(
+			description === undefined
+				? { text: displayId, tone, agentId: progress.id }
+				: { text: displayId, tone, bold: true, agentId: progress.id },
+		);
 		if (description) line.push(span(":", tone), span(" "), span(description, tone));
 	} else if (progress.status === "completed") {
 		// A finished row settles from the accent to the card's own body text: completion reads as a
 		// colour change rather than as a new mark, mark included.
 		line.push({ text: "", symbol: "status.done", tone: "text" }, span(" "));
-		if (description) line.push({ text: displayId, tone: "text", bold: true }, span(`: ${description}`, "text"));
-		else line.push(span(displayId, "text"));
+		if (description)
+			line.push(
+				{ text: displayId, tone: "text", bold: true, agentId: progress.id },
+				span(`: ${description}`, "text"),
+			);
+		else line.push({ text: displayId, tone: "text", agentId: progress.id });
 	} else {
 		line.push({ text: "", status: statusOf(progress.status), tone: iconTone }, span(" "));
-		if (description) line.push({ text: displayId, tone: "accent", bold: true }, span(`: ${description}`, "accent"));
-		else line.push(span(displayId, "accent"));
+		if (description)
+			line.push(
+				{ text: displayId, tone: "accent", bold: true, agentId: progress.id },
+				span(`: ${description}`, "accent"),
+			);
+		else line.push({ text: displayId, tone: "accent", agentId: progress.id });
 	}
 	line.push(...agentTypeBadge(progress.agent));
 
@@ -576,7 +590,7 @@ function progressRows(
 		line.push(span(" "), { text: progress.status === "failed" ? "failed" : "aborted", badge: true, tone: iconTone });
 	}
 
-	const showBadge = settings.get("subagent.showResolvedModelBadge");
+	const showBadge = settings.get("agent.showResolvedModelBadge");
 	if (progress.status === "running") {
 		if (!description) {
 			line.push(
@@ -699,7 +713,8 @@ const RETRY_MESSAGE_WIDTH = 60;
  * The rows arrive newest first, so they are reversed into reading order and the front is what a
  * window drops.
  */
-function liveOutput(recentOutput: readonly string[]): string {
+function liveOutput(recentOutput: readonly string[] | undefined): string {
+	if (!recentOutput || recentOutput.length === 0) return "";
 	const rows = sanitizeRecentOutput([...recentOutput].reverse().join("\n")).split("\n");
 	if (rows.length <= LIVE_OUTPUT_ROWS) return rows.join("\n");
 	const visible = LIVE_OUTPUT_ROWS <= 1 ? [] : rows.slice(rows.length - (LIVE_OUTPUT_ROWS - 1));
@@ -801,7 +816,7 @@ function resultRows(
 	const { warning: missingYieldWarning, rest: outputWithoutWarning } = extractMissingYieldWarning(result.output);
 	// The same classification the wire uses, so a row cannot read as done while the tool result is
 	// marked an error, or the reverse.
-	const outcome = classifySubagentOutcome(result);
+	const outcome = classifyAgentOutcome(result);
 	const aborted = outcome.kind === "aborted";
 	const mergeFailed = outcome.kind === "merge-failed";
 	const success = outcome.kind === "completed";
@@ -834,9 +849,12 @@ function resultRows(
 		span(" "),
 	];
 	if (description) {
-		line.push({ text: displayId, tone: titleTone, bold: true }, span(`: ${description}`, titleTone));
+		line.push(
+			{ text: displayId, tone: titleTone, bold: true, agentId: result.id },
+			span(`: ${description}`, titleTone),
+		);
 	} else {
-		line.push(span(displayId, titleTone));
+		line.push({ text: displayId, tone: titleTone, agentId: result.id });
 	}
 	line.push(...agentTypeBadge(result.agent));
 	line.push(span(" "), { text: statusText, badge: true, tone });
@@ -847,7 +865,7 @@ function resultRows(
 		contextWindow: result.contextWindow,
 		cost: result.usage?.cost.total ?? 0,
 		resolvedModel: result.resolvedModel,
-		showResolvedModelBadge: settings.get("subagent.showResolvedModelBadge"),
+		showResolvedModelBadge: settings.get("agent.showResolvedModelBadge"),
 	});
 	line.push(STATS_DOT, span(formatDuration(result.durationMs), "dim"));
 	if (result.truncated) line.push(span(" "), span("[truncated]", "warning"));
@@ -958,12 +976,16 @@ function resultRows(
 /** Output rows an expanded settled agent shows. */
 const SETTLED_OUTPUT_ROWS = 12;
 
-const MISSING_YIELD_WARNING_PREFIX = "SYSTEM WARNING: Subagent exited without calling yield tool";
+/** The runtime's spelling and the one a session file recorded before the `subagent` vocabulary was retired. */
+const MISSING_YIELD_WARNING_PREFIXES = [
+	"SYSTEM WARNING: Agent exited without calling yield tool",
+	"SYSTEM WARNING: Subagent exited without calling yield tool",
+];
 
-function extractMissingYieldWarning(output: string): { warning?: string; rest: string } {
-	const lines = output.split("\n");
+function extractMissingYieldWarning(output: string = ""): { warning?: string; rest: string } {
+	const lines = (output ?? "").split("\n");
 	const firstLine = lines[0]?.trim() ?? "";
-	if (!firstLine.startsWith(MISSING_YIELD_WARNING_PREFIX)) return { rest: output };
+	if (!MISSING_YIELD_WARNING_PREFIXES.some(prefix => firstLine.startsWith(prefix))) return { rest: output };
 	const rest = lines
 		.slice(1)
 		.join("\n")
@@ -1152,7 +1174,7 @@ function renderResult(result: TaskViewResult, context: ToolViewContext, rawArgs?
 	const expanded = context.expanded === true;
 	const partial = context.partial === true;
 	const frozen = context.frozen === true;
-	const fallbackText = result.content.find(c => c.type === "text")?.text ?? "";
+	const fallbackText = extractResultText(result.content);
 	const details = result.details;
 	const agentLabel = agentHeaderLabel(args);
 	if (!details) {
@@ -1184,7 +1206,7 @@ function renderResult(result: TaskViewResult, context: ToolViewContext, rawArgs?
 	if (hasResults) {
 		for (const r of details.results) {
 			requestTotal += r.requests ?? 0;
-			switch (classifySubagentOutcome(r).kind) {
+			switch (classifyAgentOutcome(r).kind) {
 				case "aborted":
 					abortedCount++;
 					break;

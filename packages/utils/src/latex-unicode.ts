@@ -1398,8 +1398,8 @@ class LatexParser {
 			return NOT_MAP[arg.text] ?? applyCombining(arg.text, "\u0338");
 		}
 
-		if (name === "overset" || name === "stackrel") return this.#scriptedAbove(style);
-		if (name === "underset") return this.#scriptedBelow(style);
+		if (name === "overset" || name === "stackrel") return this.#scripted(style, toSuperscript);
+		if (name === "underset") return this.#scripted(style, toSubscript);
 		if (name === "prescript") return this.#prescript(style);
 
 		const arrow = EXTENSIBLE_ARROWS[name];
@@ -1649,16 +1649,11 @@ class LatexParser {
 		return `${this.#wrapFrac(num)}/${this.#wrapFrac(den)}`;
 	}
 
-	#scriptedAbove(style: FontStyle | null): string {
-		const above = this.#argument(style);
+	/** `\overset{script}{base}` and `\underset{script}{base}`: the script argument precedes the base. */
+	#scripted(style: FontStyle | null, toScript: (text: string, group: boolean) => string): string {
+		const script = this.#argument(style);
 		const base = this.#argument(style);
-		return base.text + toSuperscript(above.text, true);
-	}
-
-	#scriptedBelow(style: FontStyle | null): string {
-		const below = this.#argument(style);
-		const base = this.#argument(style);
-		return base.text + toSubscript(below.text, true);
+		return base.text + toScript(script.text, true);
 	}
 
 	#prescript(style: FontStyle | null): string {

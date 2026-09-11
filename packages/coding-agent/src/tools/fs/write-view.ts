@@ -9,8 +9,9 @@
  */
 
 import { Ellipsis } from "@veyyon/natives";
+import { countLines, parseWriteArgs, parseWriteDetails } from "@veyyon/tool-render/fs-semantics";
 import { formatCount } from "@veyyon/utils/format";
-import { replaceTabs } from "@veyyon/utils/wrap";
+import { replaceTabs } from "@veyyon/utils/tab-width";
 import type {
 	FramedBlockView,
 	StatusRowView,
@@ -23,7 +24,6 @@ import type {
 import { getLanguageFromPath } from "../../utils/lang-from-path";
 import { diagnosticsSection } from "../core/diagnostics";
 import { extractResultText } from "../core/output-notice";
-import { pathOf } from "../core/path-utils";
 import {
 	errorSection,
 	heldBack,
@@ -162,7 +162,9 @@ export const writeToolView: Required<ToolViewRenderer<WriteViewArgs, WriteViewRe
 	 * the whole of it.
 	 */
 	renderCall(args, context: ToolViewContext): ToolView {
-		const rawPath = pathOf(args);
+		// The path through the shared parser; the content straight from the args, because a runtime
+		// that hands the tool an array or a number still shows its text here, coerced.
+		const rawPath = parseWriteArgs(args).path ?? "";
 		const content = normalizeDisplayText(args.content);
 		const section = codeSection(content, {
 			language: rawPath ? (getLanguageFromPath(rawPath) ?? "text") : "text",
@@ -178,7 +180,7 @@ export const writeToolView: Required<ToolViewRenderer<WriteViewArgs, WriteViewRe
 	},
 
 	renderResult(result, context: ToolViewContext, args): ToolView {
-		const rawPath = pathOf(args);
+		const rawPath = parseWriteArgs(args).path ?? "";
 		const linkTarget = result.details?.resolvedPath;
 		const language = rawPath ? getLanguageFromPath(rawPath) : undefined;
 
@@ -194,7 +196,8 @@ export const writeToolView: Required<ToolViewRenderer<WriteViewArgs, WriteViewRe
 
 		const partial = context.partial === true;
 		const content = normalizeDisplayText(args?.content);
-		const lineCount = content ? content.split("\n").length : 0;
+		const lineCount = countLines(content);
+		const parsedDetails = parseWriteDetails(result.details);
 		const section = codeSection(content, {
 			language,
 			visible: context.expanded ? undefined : WRITE_PREVIEW_LINES,
@@ -227,7 +230,7 @@ export const writeToolView: Required<ToolViewRenderer<WriteViewArgs, WriteViewRe
 			header: header(rawPath, {
 				...(partial ? { status: "running" } : { emblem: WRITE_EMBLEM }),
 				linkTarget,
-				meta: resultMeta(lineCount, !partial && result.details?.madeExecutable === true),
+				meta: resultMeta(lineCount, !partial && parsedDetails.madeExecutable),
 			}),
 			// A partial result keeps the spinner in its head row, where the streaming call card has
 			// none: the call card is the one that scroll-appends, and this one is replaced whole on

@@ -3,7 +3,7 @@
  *
  * `main.ts` imports the whole agent runtime at module scope — the SDK, the
  * model registry, the builtin slash commands, the system-prompt loader, the
- * subagent reviver. Evaluating that graph costs ~0.7s in the compiled binary,
+ * agent reviver. Evaluating that graph costs ~0.7s in the compiled binary,
  * and until this module existed `commands/launch.ts` awaited `import("../main")`
  * before anything reached the terminal, so the operator watched a blank screen
  * for the whole of it and the card arrived at ~760ms.
@@ -127,7 +127,7 @@ export async function runStartupPrologue(parsed: Args, forceSetupWizard = false)
 		// and restyles the chrome, and a recording taken ahead of it captures a card in a state no
 		// launch ends in. Nothing is recorded at all when the operator typed into the card, because
 		// what is on screen then is their draft, not a card the next launch can replay.
-		if (!typed) await logger.time("paintFirstFrame:record", () => frame.settleReplayRecording());
+		if (!typed) void logger.time("paintFirstFrame:record", () => frame.settleReplayRecording());
 	}
 
 	const prologue: StartupPrologue = { settings, workdirApplied, showStartupSplash };

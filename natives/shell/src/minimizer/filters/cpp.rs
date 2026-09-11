@@ -112,11 +112,7 @@ pub fn filter(ctx: &MinimizerCtx<'_>, input: &str, exit_code: i32) -> MinimizerO
 		Some(CppTool::GTest) => GTEST_SPEC.filter(&cleaned, exit_code),
 		None => primitives::head_tail_lines(&cleaned, 120, 80),
 	};
-	if text == input {
-		MinimizerOutput::passthrough(input)
-	} else {
-		MinimizerOutput::transformed(text, input.len())
-	}
+	MinimizerOutput::maybe_transformed(input, text)
 }
 
 fn direct_tool(program: &str) -> Option<CppTool> {

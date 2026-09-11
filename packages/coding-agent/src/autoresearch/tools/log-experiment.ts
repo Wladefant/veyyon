@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { errorMessage, formatCount, truncate } from "@veyyon/utils";
+import { replaceTabs } from "@veyyon/utils/tab-width";
 import { truncateToWidth } from "@veyyon/utils/width";
-import { replaceTabs } from "@veyyon/utils/wrap";
 import type { TextBlockView, ViewSpan, ViewTone } from "@veyyon/view";
 import { type } from "arktype";
 import type { ToolDefinition } from "../../extensibility/extensions";

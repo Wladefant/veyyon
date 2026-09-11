@@ -1,9 +1,10 @@
 import { formatNumber } from "@veyyon/utils";
 import { parseHTML } from "linkedom";
 import { markdownLink } from "../../markdown-link";
-import type { AcademicPaperDeclaration } from "../engine/academic-paper";
-import { buildResult, htmlToBasicMarkdown } from "../types";
-import { fetchBinary, partialIsoDate } from "../utils";
+import { type AcademicPaperDeclaration, appendConvertedPdfSection } from "../engine/academic-paper";
+import { loadJson } from "../engine/declarative";
+import { buildResult, htmlToBasicMarkdown, isScraperDegrade } from "../types";
+import { partialIsoDate } from "../utils";
 
 // 1. arXiv
 export const arxivDeclaration: AcademicPaperDeclaration = {
@@ -47,19 +48,9 @@ export const arxivDeclaration: AcademicPaperDeclaration = {
 		md += `---\n\n## Abstract\n\n${summary || "No abstract available."}\n\n`;
 
 		if (match.isPdf && pdfLink) {
-			ctx.notes.push("Fetching PDF for full content...");
-			const pdfRes = await fetchBinary(pdfLink, ctx.timeout, ctx.signal);
-			if (!ctx.services) {
-				ctx.notes.push("PDF not converted: no document converter was supplied");
-			} else if (pdfRes.ok) {
-				const converted = await ctx.services.convertDocument(pdfRes.buffer, ".pdf", ctx.timeout, ctx.signal);
-				if (converted.ok && converted.content.length > 500) {
-					md += `---\n\n## Full Paper\n\n${converted.content}\n`;
-					ctx.notes.push("PDF converted via markit");
-				}
-			}
+			md += await appendConvertedPdfSection(pdfLink, ctx);
 		}
-		return { title: title || "arXiv Paper", customMarkdown: md };
+		return md;
 	},
 };
 
@@ -106,13 +97,12 @@ export const biorxivDeclaration: AcademicPaperDeclaration = {
 			parsedUrl: parsed,
 		};
 	},
+	notes: m => [`Fetched via ${m.server === "medrxiv" ? "medRxiv" : "bioRxiv"} API`],
 	fetch: async (match, ctx) => {
 		const server = match.server || "biorxiv";
 		const serverName = server === "biorxiv" ? "bioRxiv" : "medRxiv";
 		const apiUrl = `https://api.${server}.org/details/${server}/${match.id}/na/json`;
-
 		const result = await ctx.loadPage(apiUrl, {
-			timeout: ctx.timeout,
 			headers: { Accept: "application/json" },
 			signal: ctx.signal,
 		});
@@ -169,12 +159,7 @@ export const biorxivDeclaration: AcademicPaperDeclaration = {
 			md += `- ${markdownLink("JATS XML", paper.jatsxml)}\n`;
 		}
 
-		return buildResult(md, {
-			url: ctx.url,
-			method: server,
-			fetchedAt: ctx.fetchedAt,
-			notes: [`Fetched via ${serverName} API`],
-		});
+		return md;
 	},
 };
 
@@ -209,6 +194,18 @@ interface CrossrefResponse {
 	message?: CrossrefMessage;
 }
 
+function formatCrossrefAuthors(authors?: CrossrefAuthor[]): string | null {
+	if (!authors?.length) return null;
+	const names = authors
+		.map(author => {
+			if (author.name) return author.name;
+			const parts = [author.given, author.family].filter(Boolean);
+			return parts.length > 0 ? parts.join(" ") : null;
+		})
+		.filter((name): name is string => Boolean(name));
+	return names.length > 0 ? names.join(", ") : null;
+}
+
 function formatCrossrefDate(date?: CrossrefDate): string | null {
 	const [year, month, day] = date?.["date-parts"]?.[0] ?? [];
 	return partialIsoDate(year, month, day);
@@ -225,34 +222,17 @@ export const crossrefDeclaration: AcademicPaperDeclaration = {
 		const id = decodeURIComponent(raw);
 		return { id, parsedUrl: parsed };
 	},
+	notes: ["Fetched via CrossRef API"],
 	fetch: async (match, ctx) => {
 		const apiUrl = `https://api.crossref.org/works/${encodeURIComponent(match.id)}`;
-		const result = await ctx.loadPage(apiUrl, {
-			timeout: ctx.timeout,
-			signal: ctx.signal,
-			headers: { Accept: "application/json" },
-		});
-
-		if (!result.ok) return ctx.scraperDegrade("crossref", ctx.loadFailure(result));
-
-		const data = ctx.tryParseJson<CrossrefResponse>(result.content);
+		const data = await loadJson<CrossrefResponse>(ctx, apiUrl, "crossref");
+		if (isScraperDegrade(data)) return data;
 		if (!data) return ctx.scraperDegrade("crossref", "unexpected response shape");
-
 		const message = data.message;
 		if (!message) return null;
 
 		const title = message.title?.[0]?.trim() || "CrossRef Record";
-		let authors: string | null = null;
-		if (message.author && message.author.length > 0) {
-			const names = message.author
-				.map(author => {
-					if (author.name) return author.name;
-					const parts = [author.given, author.family].filter(Boolean);
-					return parts.length > 0 ? parts.join(" ") : null;
-				})
-				.filter((name): name is string => Boolean(name));
-			if (names.length > 0) authors = names.join(", ");
-		}
+		const authors = formatCrossrefAuthors(message.author);
 		const journal = message["container-title"]?.[0] || message["short-container-title"]?.[0];
 		const publisher = message.publisher;
 		const published =
@@ -282,12 +262,7 @@ export const crossrefDeclaration: AcademicPaperDeclaration = {
 		md += abstract || "No abstract available.";
 		md += "\n";
 
-		return buildResult(md, {
-			url: ctx.url,
-			method: "crossref",
-			fetchedAt: ctx.fetchedAt,
-			notes: ["Fetched via CrossRef API"],
-		});
+		return md;
 	},
 };
 
@@ -301,6 +276,7 @@ export const iacrDeclaration: AcademicPaperDeclaration = {
 		const m = parsed.pathname.match(/\/(\d{4})\/(\d+)(?:\.pdf)?$/);
 		return m ? { id: `${m[1]}/${m[2]}`, isPdf: parsed.pathname.endsWith(".pdf"), parsedUrl: parsed } : null;
 	},
+	notes: ["Fetched from IACR ePrint Archive"],
 	fetch: async (match, ctx) => {
 		const pageUrl = `https://eprint.iacr.org/${match.id}`;
 		const result = await ctx.loadPage(pageUrl, {
@@ -344,25 +320,10 @@ export const iacrDeclaration: AcademicPaperDeclaration = {
 
 		if (match.isPdf) {
 			const pdfUrl = `https://eprint.iacr.org/${match.id}.pdf`;
-			ctx.notes.push("Fetching PDF for full content...");
-			const pdfResult = await fetchBinary(pdfUrl, ctx.timeout, ctx.signal);
-			if (!ctx.services) {
-				ctx.notes.push("PDF not converted: no document converter was supplied");
-			} else if (pdfResult.ok) {
-				const converted = await ctx.services.convertDocument(pdfResult.buffer, ".pdf", ctx.timeout, ctx.signal);
-				if (converted.ok && converted.content.length > 500) {
-					md += `---\n\n## Full Paper\n\n${converted.content}\n`;
-					ctx.notes.push("PDF converted via markit");
-				}
-			}
+			md += await appendConvertedPdfSection(pdfUrl, ctx);
 		}
 
-		return buildResult(md, {
-			url: ctx.url,
-			method: "iacr",
-			fetchedAt: ctx.fetchedAt,
-			notes: ctx.notes.length ? ctx.notes : ["Fetched from IACR ePrint Archive"],
-		});
+		return md;
 	},
 };
 
@@ -526,6 +487,7 @@ export const orcidDeclaration: AcademicPaperDeclaration = {
 		const m = parsed.pathname.match(/\/(\d{4}-\d{4}-\d{4}-\d{3}[\dXx])(?:\/|$)/);
 		return m ? { id: m[1], parsedUrl: parsed } : null;
 	},
+	notes: ["Fetched via ORCID Public API"],
 	fetch: async (match, ctx) => {
 		const apiUrl = `https://pub.orcid.org/v3.0/${match.id}/record`;
 		const result = await ctx.loadPage(apiUrl, {
@@ -609,12 +571,7 @@ export const orcidDeclaration: AcademicPaperDeclaration = {
 			md += "No works available.\n";
 		}
 
-		return buildResult(md, {
-			url: ctx.url,
-			method: "orcid-api",
-			fetchedAt: ctx.fetchedAt,
-			notes: ["Fetched via ORCID Public API"],
-		});
+		return md;
 	},
 };
 
@@ -656,28 +613,18 @@ export const pubmedDeclaration: AcademicPaperDeclaration = {
 		}
 		return pmid ? { id: pmid, pmid, parsedUrl: parsed } : null;
 	},
+	notes: ["Fetched via NCBI E-utilities"],
 	fetch: async (match, ctx) => {
 		const pmid = match.pmid || match.id;
-		const notes: string[] = [];
 
 		const fetchWithRetry = async (requestUrl: string, acceptJson = true) => {
-			let response = await ctx.loadPage(requestUrl, {
-				timeout: ctx.timeout,
-				signal: ctx.signal,
-				headers: {
-					...NCBI_HEADERS,
-					Accept: acceptJson ? "application/json" : "text/plain, */*;q=0.8",
-				},
-			});
+			const headers = {
+				...NCBI_HEADERS,
+				Accept: acceptJson ? "application/json" : "text/plain, */*;q=0.8",
+			};
+			let response = await ctx.loadPage(requestUrl, { timeout: ctx.timeout, signal: ctx.signal, headers });
 			if (!response.ok) {
-				response = await ctx.loadPage(requestUrl, {
-					timeout: ctx.timeout,
-					signal: ctx.signal,
-					headers: {
-						...NCBI_HEADERS,
-						Accept: acceptJson ? "application/json" : "text/plain, */*;q=0.8",
-					},
-				});
+				response = await ctx.loadPage(requestUrl, { timeout: ctx.timeout, signal: ctx.signal, headers });
 			}
 			return response;
 		};
@@ -705,9 +652,8 @@ export const pubmedDeclaration: AcademicPaperDeclaration = {
 		let abstractText = "";
 		if (abstractResult.ok) {
 			abstractText = abstractResult.content.trim();
-			notes.push("Fetched abstract via NCBI E-utilities");
+			ctx.notes.push("Fetched abstract via NCBI E-utilities");
 		}
-
 		let doi = "";
 		let pmcid = "";
 		if (article.articleids) {
@@ -776,19 +722,14 @@ export const pubmedDeclaration: AcademicPaperDeclaration = {
 					for (const term of meshTerms) {
 						md += `- ${term}\n`;
 					}
-					notes.push("Fetched MeSH terms via NCBI E-utilities");
+					ctx.notes.push("Fetched MeSH terms via NCBI E-utilities");
 				}
 			}
 		} catch {
 			// MeSH terms are optional
 		}
 
-		return buildResult(md, {
-			url: ctx.url,
-			method: "pubmed",
-			fetchedAt: ctx.fetchedAt,
-			notes: notes.length > 0 ? notes : ["Fetched via NCBI E-utilities"],
-		});
+		return md;
 	},
 };
 
@@ -987,6 +928,7 @@ export const semanticScholarDeclaration: AcademicPaperDeclaration = {
 		}
 		return null;
 	},
+	notes: ["Fetched via Semantic Scholar API"],
 	fetch: async (match, ctx) => {
 		const paperId = match.id;
 		const fields = [
@@ -1082,14 +1024,7 @@ export const semanticScholarDeclaration: AcademicPaperDeclaration = {
 			sections.push(links.join(" • "));
 			sections.push("");
 		}
-
-		const fullContent = sections.join("\n");
-		return buildResult(fullContent, {
-			url: ctx.url,
-			finalUrl: result.finalUrl,
-			method: "semantic-scholar",
-			fetchedAt: ctx.fetchedAt,
-		});
+		return sections.join("\n");
 	},
 };
 

@@ -1,9 +1,14 @@
 import { describe, expect, it } from "bun:test";
+import { type AcademicPaperDeclaration, createAcademicPaperHandler } from "../../src/scrapers/engine/academic-paper";
 import * as business from "../../src/scrapers/engine/business";
 import type { DeclarativeSite } from "../../src/scrapers/engine/declarative";
 import * as discussion from "../../src/scrapers/engine/discussion";
 import * as documentation from "../../src/scrapers/engine/documentation";
 import * as media from "../../src/scrapers/engine/media";
+import {
+	createPackageRegistryHandler,
+	type PackageRegistryDeclaration,
+} from "../../src/scrapers/engine/package-registry";
 import * as security from "../../src/scrapers/engine/security-advisory";
 import type { SpecialHandler } from "../../src/scrapers/types";
 
@@ -11,10 +16,7 @@ import type { SpecialHandler } from "../../src/scrapers/types";
  * Shared dispatch must preserve each family's exact versus wildcard host policy,
  * result passthrough, and cancellation. Upstream payload fidelity is tested separately.
  */
-type Declaration = DeclarativeSite<
-	{ id: string; parsedUrl: URL },
-	{ id: string; title: string; customMarkdown?: string }
->;
+type Declaration = DeclarativeSite<{ id: string; parsedUrl: URL }>;
 const factories: Record<string, (declaration: Declaration, name?: string) => SpecialHandler> = {
 	...business,
 	...discussion,
@@ -36,11 +38,55 @@ function declaration(hosts: string[]): Declaration {
 		hosts,
 		canonicalUrls: ["https://example.test/item"],
 		match: parsedUrl => ({ id: "sample", parsedUrl }),
-		fetch: async () => ({ id: "sample", title: "Sample", customMarkdown: "custom response" }),
+		fetch: async () => "custom response",
 	};
 }
 
 describe("shared declarative family dispatch", () => {
+	it("retains callback receivers and request-local notes across adapted families", async () => {
+		const registry: PackageRegistryDeclaration & { marker: string } = {
+			site: "registry",
+			marker: "package",
+			hosts: ["EXAMPLE.test"],
+			canonicalUrls: [],
+			match(parsedUrl) {
+				return { name: this.marker, parsedUrl };
+			},
+			async customFetch(match) {
+				return `${this.marker}:${match.name}`;
+			},
+		};
+		const paper: AcademicPaperDeclaration & { marker: string } = {
+			site: "academic",
+			marker: "paper",
+			hosts: ["EXAMPLE.test"],
+			canonicalUrls: [],
+			match(parsedUrl) {
+				return { id: this.marker, parsedUrl };
+			},
+			method(match) {
+				return `${this.marker}-${match.id}`;
+			},
+			async fetch(match, ctx) {
+				ctx.notes.push(this.marker);
+				return { title: `${this.marker}:${match.id}` };
+			},
+		};
+		const registryHandler = createPackageRegistryHandler(registry);
+		const paperHandler = createAcademicPaperHandler(paper);
+		for (let request = 0; request < 2; request++) {
+			expect(await registryHandler("https://example.test/item", 1)).toMatchObject({
+				content: "package:package",
+				method: "registry",
+			});
+			expect(await paperHandler("https://example.test/item", 1)).toMatchObject({
+				content: "paper:paper",
+				method: "paper-paper",
+				notes: ["paper"],
+			});
+		}
+	});
+
 	it("requires a host-policy decision for every exported factory", () => {
 		expect(Object.keys(factories).sort()).toEqual(Object.keys(wildcardPolicy).sort());
 	});

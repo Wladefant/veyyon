@@ -7,10 +7,17 @@
  * terminal draws them through `drawToolView`; a second host draws the same values its own way.
  */
 
+import { replaceTabs } from "@veyyon/utils/tab-width";
 import { truncateToWidth } from "@veyyon/utils/width";
-import { replaceTabs } from "@veyyon/utils/wrap";
 import type { HeadedBlockView, StatusRowView, TextBlockView, ToolViewRenderer, ViewLine } from "@veyyon/view";
-import { errorTextBlock, heldBack, LINE_NOUN, PREVIEW_LIMITS, shortenEmbeddedPaths } from "../core/render-utils";
+import {
+	errorTextBlock,
+	extractResultText,
+	heldBack,
+	LINE_NOUN,
+	PREVIEW_LIMITS,
+	shortenEmbeddedPaths,
+} from "../core/render-utils";
 
 /** The bullet a stored memory is marked with, resolved by the host from its own glyph table. */
 const BULLET = "format.bullet";
@@ -22,8 +29,8 @@ const MEMORY_EMBLEM = "tool.memory";
 const QUERY_WIDTH = 80;
 
 /** A tool result's text content, trimmed, or the empty string when it carries none. */
-export function memoryResultText(result: { content?: Array<{ type: string; text?: string }> }): string {
-	return replaceTabs(shortenEmbeddedPaths((result.content?.find(part => part.type === "text")?.text ?? "").trim()));
+export function memoryResultText(result: { content?: Array<{ type?: string; text?: string }> | string }): string {
+	return replaceTabs(shortenEmbeddedPaths(extractResultText(result.content).trim()));
 }
 
 /**

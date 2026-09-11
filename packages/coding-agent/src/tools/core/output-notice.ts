@@ -102,25 +102,37 @@ export function formatFullOutputReference(artifactId: string): string {
 	return `Read artifact://${artifactId} for full output`;
 }
 
+type ResultTextContent = ReadonlyArray<{ type?: string; text?: string } | string> | string | undefined;
+
 /**
  * Extract and join all text blocks from a tool result's content array.
  *
  * Preserves text block order, empty lines, and returns empty string if content
  * is undefined or contains no text blocks. Avoids intermediate array allocations.
  */
-export function extractResultText(content: ReadonlyArray<{ type: string; text?: string }> | undefined): string {
-	if (!content || content.length === 0) return "";
+export function extractResultText(content: ResultTextContent, fallback = ""): string {
+	return extractResultTextOrUndefined(content) ?? fallback;
+}
+
+/** Join text blocks while distinguishing absent content from an explicitly empty text block. */
+export function extractResultTextOrUndefined(content: ResultTextContent): string | undefined {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content) || content.length === 0) return undefined;
 	let result = "";
 	let separator = "";
 	for (let i = 0; i < content.length; i++) {
 		if (!(i in content)) continue;
 		const part = content[i];
-		if (part.type === "text") {
+		if (part == null) throw new TypeError("Tool result content contains a null or undefined block");
+		if (typeof part === "string") {
+			result += separator + part;
+			separator = "\n";
+		} else if (part && typeof part === "object" && (part.type === "text" || !part.type)) {
 			result += separator + `${part.text ?? ""}`;
 			separator = "\n";
 		}
 	}
-	return result;
+	return separator ? result : undefined;
 }
 
 const RAW_OUTPUT_ARTIFACT_PREFIX = "[raw output: artifact://";

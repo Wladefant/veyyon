@@ -3,7 +3,7 @@ import { sanitizeStatusText } from "@veyyon/utils/sanitize-status-text";
 import { truncateToWidth } from "@veyyon/utils/width";
 import type { ToolView, ToolViewContext, ToolViewRenderer, ViewLine, ViewSection, ViewTone } from "@veyyon/view";
 import { formatDurationCoarse } from "../session/account-format";
-import { sanitizeErrorText, TRUNCATE_LENGTHS } from "../tools/core/render-utils";
+import { extractResultText, sanitizeErrorText, TRUNCATE_LENGTHS } from "../tools/core/render-utils";
 import type { GoalToolInput } from "./goal-tool";
 import type { GoalStatus, GoalToolDetails } from "./state";
 
@@ -74,7 +74,7 @@ export const goalToolView: Required<ToolViewRenderer<GoalRenderArgs, GoalRenderR
 		const description = describeOp(details?.op ?? args?.op);
 
 		if (result.isError) {
-			const message = result.content?.find(part => part.type === "text")?.text ?? "";
+			const message = extractResultText(result.content);
 			return {
 				kind: "framedBlock",
 				header: { kind: "statusRow", status: "error", title: "Goal", description },

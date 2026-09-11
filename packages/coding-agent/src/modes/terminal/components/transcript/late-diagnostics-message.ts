@@ -1,15 +1,11 @@
 import { Container, Text } from "@veyyon/tui";
+import type { LateDiagnosticsFileDisplay } from "@veyyon/wire/presentation";
 import { theme } from "../../../../theme/theme";
 import { diagnosticsSection } from "../../../../tools/core/diagnostics";
 import { drawHiddenNote, drawSpans } from "../../draw/draw-tool-view";
 
 /** One file's worth of late LSP diagnostics, as carried on the transcript message. */
-export interface LateDiagnosticsFile {
-	path?: string;
-	summary?: string;
-	errored?: boolean;
-	messages?: string[];
-}
+export interface LateDiagnosticsFile extends LateDiagnosticsFileDisplay {}
 
 /**
  * Renders late LSP diagnostics with the same diagnostic section and span drawing
@@ -18,7 +14,7 @@ export interface LateDiagnosticsFile {
 export class LateDiagnosticsMessageComponent extends Container {
 	#expanded = false;
 
-	constructor(private readonly files: LateDiagnosticsFile[]) {
+	constructor(private readonly files: readonly LateDiagnosticsFileDisplay[]) {
 		super();
 		this.#rebuild();
 	}

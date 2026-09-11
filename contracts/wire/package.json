@@ -31,7 +31,8 @@
     "test": "bun test --parallel"
   },
   "dependencies": {
-    "@veyyon/model": "catalog:"
+    "@veyyon/model": "catalog:",
+    "@veyyon/view": "catalog:"
   },
   "devDependencies": {
     "@types/bun": "catalog:",

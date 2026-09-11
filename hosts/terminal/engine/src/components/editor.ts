@@ -1,11 +1,12 @@
 import { SGR_BG_RESET } from "@veyyon/utils/ansi";
 import {
 	type AutocompleteProvider,
+	applyAutocompleteCompletion,
 	findLeadingSlashCommandStart,
 	findTrailingSlashCommandStart,
 	midPromptSkillTokenMatches,
 } from "@veyyon/utils/autocomplete";
-import { BracketedPasteHandler, decodeReencodedPasteControls } from "@veyyon/utils/bracketed-paste";
+import { BracketedPasteHandler, decodeReencodedPasteControls, type PasteSinks } from "@veyyon/utils/bracketed-paste";
 import { getProjectDir } from "@veyyon/utils/dirs";
 import { getKeybindings, type KeybindingsManager } from "@veyyon/utils/keybindings";
 import { extractPrintableText, isLoneLineFeed, matchesKey } from "@veyyon/utils/keys";
@@ -28,8 +29,8 @@ import {
 
 export { offsetAtVisualCol, visualColAtOffset };
 
+import { replaceTabs } from "@veyyon/utils/tab-width";
 import { getWordNavKind, moveWordLeft, moveWordRight } from "@veyyon/utils/word-nav";
-import { replaceTabs } from "@veyyon/utils/wrap";
 import { type Component, CURSOR_MARKER, type Focusable } from "../tui";
 import { firstGrapheme, lastGrapheme } from "../utils/text-layout";
 import { type SelectItem, SelectList, type SelectListLayoutOptions, type SelectListTheme } from "./select-list";
@@ -449,8 +450,15 @@ export class Editor implements Component, Focusable, MouseRoutable {
 	#atomicTokenSource: string | undefined;
 	#atomicTokenRe: RegExp | undefined;
 
-	// Bracketed paste mode buffering
+	// Bracketed paste mode buffering. The sinks are built once: prefix bytes go to key handling,
+	// and a remainder re-enters `handleInput` so a second paste in the same chunk meets the jump-mode
+	// check above the paste gate.
 	#pasteHandler = new BracketedPasteHandler();
+	readonly #pasteSinks: PasteSinks = {
+		keys: bytes => this.#handleKeyInput(bytes),
+		paste: content => this.#handlePaste(content),
+		reenter: rest => this.handleInput(rest),
+	};
 
 	// Prompt history for up/down navigation
 	#history: string[] = [];
@@ -1101,26 +1109,7 @@ export class Editor implements Component, Focusable, MouseRoutable {
 			this.#jumpMode = null;
 		}
 
-		// Handle bracketed paste mode
-		const paste = this.#pasteHandler.process(data);
-		if (paste.handled) {
-			// Bytes before the start marker are ordinary input; route them straight
-			// to key handling (never back through the paste gate, which would fold
-			// them into the active buffer).
-			if (paste.prefix !== undefined && paste.prefix.length > 0) {
-				this.#handleKeyInput(paste.prefix);
-			}
-			if (paste.pasteContent !== undefined) {
-				this.#handlePaste(paste.pasteContent);
-				// `remaining` follows a completed paste and may itself begin another
-				// paste, so it goes through the full gate.
-				if (paste.remaining.length > 0) {
-					this.handleInput(paste.remaining);
-				}
-			}
-			return;
-		}
-
+		if (this.#pasteHandler.route(data, this.#pasteSinks)) return;
 		this.#handleKeyInput(data);
 	}
 
@@ -1187,23 +1176,8 @@ export class Editor implements Component, Focusable, MouseRoutable {
 					if (!this.#autocompletePrefixMatchesCursorText(currentTextBeforeCursor, selected)) {
 						this.#cancelAutocomplete();
 					} else {
-						if (selected && this.#autocompleteProvider) {
-							const result = this.#autocompleteProvider.applyCompletion(
-								this.#state.lines,
-								this.#state.cursorLine,
-								this.#state.cursorCol,
-								selected,
-								this.#autocompletePrefix,
-							);
-							this.#state.lines = result.lines;
-							this.#state.cursorLine = result.cursorLine;
-							this.#setCursorCol(result.cursorCol);
-							this.#cancelAutocomplete();
-							if (!isSlash) {
-								this.onAutocompleteUpdate?.();
-								if (this.onChange) this.onChange(this.getText());
-							}
-							result.onApplied?.();
+						if (selected) {
+							this.#applyAutocompleteSelection(selected, !isSlash);
 						} else {
 							this.#cancelAutocomplete();
 						}
@@ -1513,7 +1487,10 @@ export class Editor implements Component, Focusable, MouseRoutable {
 	}
 
 	getText(): string {
-		return this.#state.lines.join("\n");
+		const lines = this.#state.lines;
+		const len = lines.length;
+		if (len <= 1) return lines[0] ?? "";
+		return lines.join("\n");
 	}
 
 	#expandPasteMarkers(text: string): string {
@@ -1539,6 +1516,30 @@ export class Editor implements Component, Focusable, MouseRoutable {
 
 	getCursor(): { line: number; col: number } {
 		return { line: this.#state.cursorLine, col: this.#state.cursorCol };
+	}
+
+	/** Set a bounded cursor position without splitting a grapheme or an atomic token. */
+	setCursor(cursor: { line: number; col: number }): void {
+		if (!Number.isFinite(cursor.line) || !Number.isFinite(cursor.col)) {
+			throw new RangeError("Cursor line and column must be finite numbers");
+		}
+		const lineIndex = Math.max(0, Math.min(this.#state.lines.length - 1, Math.trunc(cursor.line)));
+		const line = this.#state.lines[lineIndex]!;
+		let col = Math.max(0, Math.min(line.length, Math.trunc(cursor.col)));
+		const token = this.#atomicTokenAt(line, col);
+		if (token) col = token.start;
+		if (col > 0 && col < line.length) {
+			for (const part of segmenter.segment(line)) {
+				if (part.index + part.segment.length > col) {
+					col = part.index;
+					break;
+				}
+			}
+		}
+		this.#resetKillSequence();
+		this.#state.cursorLine = lineIndex;
+		this.#setCursorCol(col);
+		this.#cancelAutocomplete(true);
 	}
 
 	moveToLineStart(): void {
@@ -1762,10 +1763,27 @@ export class Editor implements Component, Focusable, MouseRoutable {
 		// Undo coalescing: consecutive word typing collapses into one undo unit
 		// (mirrors Input); any other action resets the run via #lastAction.
 		let isWordChunk = true;
-		for (const seg of segmenter.segment(char)) {
-			if (getWordNavKind(seg.segment) === "whitespace") {
-				isWordChunk = false;
+		let isAscii = true;
+		for (let i = 0; i < char.length; i++) {
+			if (char.charCodeAt(i) >= 128) {
+				isAscii = false;
 				break;
+			}
+		}
+		if (isAscii) {
+			for (let i = 0; i < char.length; i++) {
+				const code = char.charCodeAt(i);
+				if (code === 32 || code === 9 || code === 10 || code === 13) {
+					isWordChunk = false;
+					break;
+				}
+			}
+		} else {
+			for (const seg of segmenter.segment(char)) {
+				if (getWordNavKind(seg.segment) === "whitespace") {
+					isWordChunk = false;
+					break;
+				}
 			}
 		}
 		if (!isWordChunk || this.#lastAction !== "type-word") {
@@ -1774,12 +1792,15 @@ export class Editor implements Component, Focusable, MouseRoutable {
 		this.#lastAction = isWordChunk ? "type-word" : null;
 
 		const line = this.#state.lines[this.#state.cursorLine] || "";
-
-		const before = line.slice(0, this.#state.cursorCol);
-		const after = line.slice(this.#state.cursorCol);
-
-		this.#state.lines[this.#state.cursorLine] = before + char + after;
-		this.#setCursorCol(this.#state.cursorCol + char.length);
+		const col = this.#state.cursorCol;
+		if (col >= line.length) {
+			this.#state.lines[this.#state.cursorLine] = line + char;
+		} else if (col === 0) {
+			this.#state.lines[this.#state.cursorLine] = char + line;
+		} else {
+			this.#state.lines[this.#state.cursorLine] = line.slice(0, col) + char + line.slice(col);
+		}
+		this.#setCursorCol(col + char.length);
 
 		if (this.onChange) {
 			this.onChange(this.getText());
@@ -2928,37 +2949,56 @@ export class Editor implements Component, Focusable, MouseRoutable {
 	 * would rewrite the wrong span, so a stale popup is cancelled and nothing is
 	 * applied.
 	 */
-	#acceptAutocompleteSelection(selected: SelectItem | null): void {
+	#applyAutocompleteSelection(
+		selected: SelectItem | null,
+		notifyUpdate: boolean = true,
+	): { onApplied?: () => void } | undefined {
 		const currentLine = this.#state.lines[this.#state.cursorLine] ?? "";
 		const currentTextBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
 		if (!this.#autocompletePrefixMatchesCursorText(currentTextBeforeCursor, selected)) {
 			this.#cancelAutocomplete();
-			return;
+			return undefined;
 		}
-		if (!selected || !this.#autocompleteProvider) return;
-		const shouldChainSlashCommandAutocomplete = this.#isSlashCommandNameAutocompleteSelection();
-		const result = this.#autocompleteProvider.applyCompletion(
-			this.#state.lines,
-			this.#state.cursorLine,
-			this.#state.cursorCol,
-			selected,
-			this.#autocompletePrefix,
-		);
+		if (!selected) {
+			this.#cancelAutocomplete();
+			return undefined;
+		}
+		const result = this.#autocompleteProvider
+			? this.#autocompleteProvider.applyCompletion(
+					this.#state.lines,
+					this.#state.cursorLine,
+					this.#state.cursorCol,
+					selected,
+					this.#autocompletePrefix,
+				)
+			: applyAutocompleteCompletion(
+					this.#state.lines,
+					this.#state.cursorLine,
+					this.#state.cursorCol,
+					selected,
+					this.#autocompletePrefix,
+				);
 
 		this.#state.lines = result.lines;
 		this.#state.cursorLine = result.cursorLine;
 		this.#setCursorCol(result.cursorCol);
 
 		this.#cancelAutocomplete();
-		this.onAutocompleteUpdate?.();
-
-		if (this.onChange) {
-			this.onChange(this.getText());
+		if (notifyUpdate) {
+			this.onAutocompleteUpdate?.();
+			if (this.onChange) {
+				this.onChange(this.getText());
+			}
 		}
 
 		result.onApplied?.();
+		return result;
+	}
 
-		if (shouldChainSlashCommandAutocomplete && this.#isCompletedSlashCommandAtCursor()) {
+	#acceptAutocompleteSelection(selected: SelectItem | null): void {
+		const shouldChainSlashCommandAutocomplete = this.#isSlashCommandNameAutocompleteSelection();
+		const result = this.#applyAutocompleteSelection(selected, true);
+		if (result && shouldChainSlashCommandAutocomplete && this.#isCompletedSlashCommandAtCursor()) {
 			void this.#tryTriggerAutocomplete();
 		}
 	}
@@ -3036,6 +3076,50 @@ export class Editor implements Component, Focusable, MouseRoutable {
 
 	isShowingAutocomplete(): boolean {
 		return this.#autocompleteState !== null;
+	}
+
+	/**
+	 * Explicitly set or clear the autocomplete suggestions list.
+	 */
+	setAutocompleteSuggestions(
+		suggestions:
+			| {
+					prefix: string;
+					items: Array<{ value: string; label?: string; description?: string; group?: string }>;
+					selectedIndex?: number;
+			  }
+			| null
+			| undefined,
+	): void {
+		this.#clearAutocompleteTimeout();
+		this.#autocompleteRequestId += 1;
+		if (suggestions && Array.isArray(suggestions.items) && suggestions.items.length > 0) {
+			const formattedItems = suggestions.items.map(item => ({
+				value: item.value,
+				label: item.label ?? item.value,
+				description: item.description,
+				group: item.group,
+			}));
+			this.#applyAutocompleteSuggestions({ prefix: suggestions.prefix, items: formattedItems }, "regular");
+			if (suggestions.selectedIndex !== undefined && suggestions.selectedIndex >= 0 && this.#autocompleteList) {
+				this.#autocompleteList.setSelectedIndex(suggestions.selectedIndex);
+			}
+		} else {
+			this.#cancelAutocomplete();
+			this.onAutocompleteUpdate?.();
+		}
+	}
+
+	/**
+	 * Get the active autocomplete state, or undefined if no completion popup is active.
+	 */
+	getAutocompleteState(): { prefix: string; items: readonly SelectItem[]; selectedIndex: number } | undefined {
+		if (!this.#autocompleteState || !this.#autocompleteList) return undefined;
+		return {
+			prefix: this.#autocompletePrefix,
+			items: this.#autocompleteList.getFilteredItems(),
+			selectedIndex: this.#autocompleteList.getSelectedIndex(),
+		};
 	}
 
 	async #updateAutocomplete(): Promise<void> {

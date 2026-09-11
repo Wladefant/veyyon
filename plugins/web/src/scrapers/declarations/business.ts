@@ -1,8 +1,9 @@
 import { escapeMarkdownTableCell } from "@veyyon/utils/markdown-table";
 import { markdownLink } from "../../markdown-link";
 import type { BusinessDeclaration } from "../engine/business";
-import { buildResult, formatNumber } from "../types";
-
+import { loadJson } from "../engine/declarative";
+import { renderKeyValues } from "../engine/markdown-assembly";
+import { buildResult, formatNumber, isScraperDegrade } from "../types";
 export interface Officer {
 	id: number;
 	name: string;
@@ -146,17 +147,9 @@ export const coingeckoDeclaration: BusinessDeclaration = {
 	fetch: async (match, ctx) => {
 		const coinId = match.id;
 		const apiUrl = `https://api.coingecko.com/api/v3/coins/${encodeURIComponent(coinId)}?localization=false&tickers=false&community_data=false&developer_data=false`;
-		const result = await ctx.loadPage(apiUrl, {
-			timeout: ctx.timeout,
-			headers: { Accept: "application/json" },
-			signal: ctx.signal,
-		});
-
-		if (!result.ok) return ctx.scraperDegrade("coingecko", ctx.loadFailure(result));
-
-		const coin = ctx.tryParseJson<CoinGeckoResponse>(result.content);
+		const coin = await loadJson<CoinGeckoResponse>(ctx, apiUrl, "coingecko");
+		if (isScraperDegrade(coin)) return coin;
 		if (!coin?.name) return ctx.scraperDegrade("coingecko", "unexpected response shape");
-
 		const market = coin.market_data;
 		let md = `# ${coin.name} (${coin.symbol.toUpperCase()})\n\n`;
 
@@ -236,12 +229,7 @@ export const coingeckoDeclaration: BusinessDeclaration = {
 			}
 		}
 
-		return buildResult(md, {
-			url: ctx.url,
-			method: "coingecko",
-			fetchedAt: ctx.fetchedAt,
-			notes: ["Fetched via CoinGecko API"],
-		});
+		return md;
 	},
 };
 
@@ -269,18 +257,10 @@ export const opencorporatesDeclaration: BusinessDeclaration = {
 		const jurisdiction = match.jurisdiction!;
 		const companyNumber = match.companyNumber!;
 		const apiUrl = `https://api.opencorporates.com/v0.4/companies/${encodeURIComponent(jurisdiction)}/${encodeURIComponent(companyNumber)}`;
-		const result = await ctx.loadPage(apiUrl, {
-			timeout: ctx.timeout,
-			headers: { Accept: "application/json" },
-			signal: ctx.signal,
-		});
-
-		if (!result.ok) return ctx.scraperDegrade("opencorporates", ctx.loadFailure(result));
-
-		const data = ctx.tryParseJson<{ results?: { company?: CompanyData } }>(result.content);
+		const data = await loadJson<{ results?: { company?: CompanyData } }>(ctx, apiUrl, "opencorporates");
+		if (isScraperDegrade(data)) return data;
 		const company = data?.results?.company;
 		if (!company) return ctx.scraperDegrade("opencorporates", "unexpected response shape");
-
 		let md = `# ${company.name}\n\n`;
 		md += renderCompanyInfoTable(company);
 		md += "\n";
@@ -543,20 +523,11 @@ export const secEdgarDeclaration: BusinessDeclaration = {
 	fetch: async (match, ctx) => {
 		const cik = match.id;
 		const apiUrl = `https://data.sec.gov/submissions/CIK${cik}.json`;
-		const result = await ctx.loadPage(apiUrl, {
-			timeout: ctx.timeout,
-			signal: ctx.signal,
-			headers: {
-				"User-Agent": "CodingAgent/1.0 (research tool)",
-				Accept: "application/json",
-			},
+		const company = await loadJson<SecCompany>(ctx, apiUrl, "sec-edgar", {
+			headers: { "User-Agent": "CodingAgent/1.0 (research tool)" },
 		});
-
-		if (!result.ok) return ctx.scraperDegrade("sec-edgar", ctx.loadFailure(result));
-
-		const company = ctx.tryParseJson<SecCompany>(result.content);
+		if (isScraperDegrade(company)) return company;
 		if (!company?.name) return ctx.scraperDegrade("sec-edgar", "unexpected response shape");
-
 		let md = `# ${company.name}\n\n`;
 
 		md += `**CIK:** ${company.cik}`;
@@ -585,44 +556,28 @@ export const secEdgarDeclaration: BusinessDeclaration = {
 			}
 		}
 
-		const keyFilings = getSecRecentFilings(company, ["10-K", "10-K/A", "10-Q", "10-Q/A", "8-K", "8-K/A"], 15);
-		if (keyFilings.length) {
-			md += `## Recent Filings (10-K, 10-Q, 8-K)\n\n`;
-			md += "| Date | Form | Description |\n";
-			md += "|------|------|-------------|\n";
-
-			for (const filing of keyFilings) {
+		const renderFilingsTable = (filings: SecFiling[], title: string) => {
+			if (!filings.length) return "";
+			let s = `## ${title}\n\n| Date | Form | Description |\n|------|------|-------------|\n`;
+			for (const filing of filings) {
 				const filingUrl = buildSecFilingUrl(cik, filing.accessionNumber, filing.primaryDocument);
 				const desc = filing.primaryDocDescription || filing.form;
-				md += `| ${filing.filingDate} | ${markdownLink(filing.form, filingUrl)} | ${escapeMarkdownTableCell(desc)} |\n`;
+				s += `| ${filing.filingDate} | ${markdownLink(filing.form, filingUrl)} | ${escapeMarkdownTableCell(desc)} |\n`;
 			}
-			md += "\n";
-		}
+			return `${s}\n`;
+		};
 
-		const allFilings = getSecRecentFilings(company, [], 20);
-		if (allFilings.length) {
-			md += `## All Recent Filings\n\n`;
-			md += "| Date | Form | Description |\n";
-			md += "|------|------|-------------|\n";
-
-			for (const filing of allFilings) {
-				const filingUrl = buildSecFilingUrl(cik, filing.accessionNumber, filing.primaryDocument);
-				const desc = filing.primaryDocDescription || filing.form;
-				md += `| ${filing.filingDate} | ${markdownLink(filing.form, filingUrl)} | ${escapeMarkdownTableCell(desc)} |\n`;
-			}
-			md += "\n";
-		}
+		md += renderFilingsTable(
+			getSecRecentFilings(company, ["10-K", "10-K/A", "10-Q", "10-Q/A", "8-K", "8-K/A"], 15),
+			"Recent Filings (10-K, 10-Q, 8-K)",
+		);
+		md += renderFilingsTable(getSecRecentFilings(company, [], 20), "All Recent Filings");
 
 		md += `## Links\n\n`;
 		md += `- ${markdownLink("SEC EDGAR Filings", `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${cik}&type=&dateb=&owner=include&count=40`)}\n`;
 		md += `- ${markdownLink("Company Search", `https://www.sec.gov/cgi-bin/browse-edgar?company=${encodeURIComponent(company.name)}&CIK=&type=&owner=include&count=40&action=getcompany`)}\n`;
 
-		return buildResult(md, {
-			url: ctx.url,
-			method: "sec-edgar",
-			fetchedAt: ctx.fetchedAt,
-			notes: ["Fetched via SEC EDGAR API"],
-		});
+		return md;
 	},
 };
 
@@ -714,16 +669,9 @@ export const searchcodeDeclaration: BusinessDeclaration = {
 		if (match.kind === "result") {
 			const id = match.id;
 			const apiUrl = `https://searchcode.com/api/result/${encodeURIComponent(id)}/`;
-			const result = await ctx.loadPage(apiUrl, {
-				timeout: ctx.timeout,
-				signal: ctx.signal,
-				headers: { Accept: "application/json" },
-			});
-			if (!result.ok) return ctx.scraperDegrade("searchcode", ctx.loadFailure(result));
-
-			const data = ctx.tryParseJson<SearchcodeResult>(result.content);
+			const data = await loadJson<SearchcodeResult>(ctx, apiUrl, "searchcode");
+			if (isScraperDegrade(data)) return data;
 			if (!data) return ctx.scraperDegrade("searchcode", "unexpected response shape");
-
 			const filename = data.filename || data.location || `Result ${id}`;
 			const lineNumbers = parseSearchcodeLineNumbers(data.lines);
 			const formattedLines = formatSearchcodeLineNumbers(lineNumbers);
@@ -734,14 +682,15 @@ export const searchcodeDeclaration: BusinessDeclaration = {
 			md += `## Description\n\n`;
 			md += "Code snippet from searchcode.com.\n\n";
 			md += `## Metadata\n\n`;
-			if (data.repo) md += `**Repository:** ${data.repo}\n`;
-			if (data.language) md += `**Language:** ${data.language}\n`;
-			if (data.filename) md += `**File:** ${data.filename}\n`;
-			if (data.location) md += `**Location:** ${data.location}\n`;
-			if (formattedLines) md += `**Lines:** ${formattedLines}\n`;
-			md += `**Result ID:** ${id}\n`;
-			md += `**URL:** ${viewUrl}\n`;
-
+			md += renderKeyValues([
+				["Repository", data.repo],
+				["Language", data.language],
+				["File", data.filename],
+				["Location", data.location],
+				["Lines", formattedLines],
+				["Result ID", id],
+				["URL", viewUrl],
+			]);
 			md += `\n## Snippet`;
 			if (snippetBlock) {
 				md += snippetBlock;
@@ -749,12 +698,7 @@ export const searchcodeDeclaration: BusinessDeclaration = {
 				md += "\n\n_No snippet available._\n";
 			}
 
-			return buildResult(md, {
-				url: ctx.url,
-				method: "searchcode",
-				fetchedAt: ctx.fetchedAt,
-				notes: ["Fetched via searchcode API"],
-			});
+			return md;
 		}
 
 		const query = match.query!;
@@ -763,16 +707,9 @@ export const searchcodeDeclaration: BusinessDeclaration = {
 		const pageNumber = pageRaw ? Number.parseInt(pageRaw, 10) : 0;
 		const page = Number.isFinite(pageNumber) && pageNumber >= 0 ? pageNumber : 0;
 		const apiUrl = `https://searchcode.com/api/codesearch_I/?q=${encodeURIComponent(query)}&p=${page}`;
-		const result = await ctx.loadPage(apiUrl, {
-			timeout: ctx.timeout,
-			signal: ctx.signal,
-			headers: { Accept: "application/json" },
-		});
-		if (!result.ok) return ctx.scraperDegrade("searchcode", ctx.loadFailure(result));
-
-		const data = ctx.tryParseJson<SearchcodeSearchResponse>(result.content);
+		const data = await loadJson<SearchcodeSearchResponse>(ctx, apiUrl, "searchcode");
+		if (isScraperDegrade(data)) return data;
 		if (!data) return ctx.scraperDegrade("searchcode", "unexpected response shape");
-
 		const results = Array.isArray(data.results) ? data.results : [];
 		const total =
 			typeof data.total === "number"
@@ -825,12 +762,7 @@ export const searchcodeDeclaration: BusinessDeclaration = {
 			}
 		}
 
-		return buildResult(md, {
-			url: ctx.url,
-			method: "searchcode",
-			fetchedAt: ctx.fetchedAt,
-			notes: ["Fetched via searchcode API"],
-		});
+		return md;
 	},
 };
 

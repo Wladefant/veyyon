@@ -24,23 +24,13 @@
  *     bun scripts/demos/render-resources-settings.ts --budget on --width 100 --height 24
  */
 import { Settings } from "../../packages/coding-agent/src/config/settings";
-import { SettingsSelectorComponent } from "../../packages/coding-agent/src/modes/terminal/components/selectors/settings-selector";
 import { renderDemo } from "./render-args";
+import { createTestSettingsSelector } from "./render-settings-helper";
 
 await renderDemo(
 	({ width, flag, theme }) => {
 		Settings.instance.set("session.writeBudgetGb", flag("budget", "off") === "on" ? 25 : 0);
-		const selector = new SettingsSelectorComponent(
-			{
-				availableThinkingLevels: [],
-				thinkingLevel: undefined,
-				availableThemes: [theme, "light"],
-				availablePersonalities: ["default"],
-				providers: ["anthropic"],
-				cwd: process.cwd(),
-			},
-			{ onChange: () => {}, onCancel: () => {} },
-		);
+		const selector = createTestSettingsSelector(theme);
 		selector.openTab("resources");
 		if (!selector.selectSetting("session.writeBudgetGb")) {
 			throw new Error("the write budget row is not on the resources tab, so this proof is not of it");

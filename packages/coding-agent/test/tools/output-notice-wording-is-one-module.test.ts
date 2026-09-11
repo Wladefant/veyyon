@@ -325,6 +325,16 @@ describe("the strippers agree with the text, byte for byte", () => {
 });
 
 describe("extractResultText", () => {
+	it("uses fallback only when no text block is present", () => {
+		for (const content of [undefined, [], [{ type: "image" }]]) {
+			expect(extractResultText(content, "No text")).toBe("No text");
+		}
+		for (const content of ["", [{ type: "text", text: "" }], [{ type: "text" }]]) {
+			expect(extractResultText(content, "No text")).toBe("");
+		}
+		expect(extractResultText("plain text", "No text")).toBe("plain text");
+	});
+
 	it("returns empty string for undefined, empty array, or non-text parts", () => {
 		expect(extractResultText(undefined)).toBe("");
 		expect(extractResultText([])).toBe("");

@@ -140,6 +140,27 @@ async function renderHNListing(ids: number[], ctx: DiscussionContext, title: str
 	return output;
 }
 
+const HN_LISTING_CONFIG: Record<string, { endpoint: string; label: string; title: string; note: string }> = {
+	top: {
+		endpoint: "topstories",
+		label: "top stories",
+		title: "Hacker News - Top Stories",
+		note: "Fetched top 20 stories from HN front page",
+	},
+	newest: {
+		endpoint: "newstories",
+		label: "new stories",
+		title: "Hacker News - New Stories",
+		note: "Fetched top 20 new stories",
+	},
+	best: {
+		endpoint: "beststories",
+		label: "best stories",
+		title: "Hacker News - Best Stories",
+		note: "Fetched top 20 best stories",
+	},
+};
+
 export const hackerNewsDeclaration: DiscussionDeclaration = {
 	site: "hackernews",
 	method: "hackernews",
@@ -174,38 +195,21 @@ export const hackerNewsDeclaration: DiscussionDeclaration = {
 
 			content = await renderHNStory(item, ctx, 0);
 			notes.push(`Fetched HN item ${match.id} with top-level comments (depth 2)`);
-		} else if (match.kind === "top") {
-			const { content: raw, ok } = await ctx.loadPage(`${HN_API_BASE}/topstories.json`, {
-				timeout: ctx.timeout,
-				signal: ctx.signal,
-			});
-			if (!ok) return ctx.scraperDegrade("hackernews", "Failed to fetch top stories");
-			const ids = ctx.tryParseJson<number[]>(raw);
-			if (!ids) return ctx.scraperDegrade("hackernews", "Failed to parse top stories");
-			content = await renderHNListing(ids, ctx, "Hacker News - Top Stories");
-			notes.push("Fetched top 20 stories from HN front page");
-		} else if (match.kind === "newest") {
-			const { content: raw, ok } = await ctx.loadPage(`${HN_API_BASE}/newstories.json`, {
-				timeout: ctx.timeout,
-				signal: ctx.signal,
-			});
-			if (!ok) return ctx.scraperDegrade("hackernews", "Failed to fetch new stories");
-			const ids = ctx.tryParseJson<number[]>(raw);
-			if (!ids) return ctx.scraperDegrade("hackernews", "Failed to parse new stories");
-			content = await renderHNListing(ids, ctx, "Hacker News - New Stories");
-			notes.push("Fetched top 20 new stories");
-		} else if (match.kind === "best") {
-			const { content: raw, ok } = await ctx.loadPage(`${HN_API_BASE}/beststories.json`, {
-				timeout: ctx.timeout,
-				signal: ctx.signal,
-			});
-			if (!ok) return ctx.scraperDegrade("hackernews", "Failed to fetch best stories");
-			const ids = ctx.tryParseJson<number[]>(raw);
-			if (!ids) return ctx.scraperDegrade("hackernews", "Failed to parse best stories");
-			content = await renderHNListing(ids, ctx, "Hacker News - Best Stories");
-			notes.push("Fetched top 20 best stories");
 		} else {
-			return null;
+			const listingCfg = HN_LISTING_CONFIG[match.kind ?? ""];
+			if (listingCfg) {
+				const { content: raw, ok } = await ctx.loadPage(`${HN_API_BASE}/${listingCfg.endpoint}.json`, {
+					timeout: ctx.timeout,
+					signal: ctx.signal,
+				});
+				if (!ok) return ctx.scraperDegrade("hackernews", `Failed to fetch ${listingCfg.label}`);
+				const ids = ctx.tryParseJson<number[]>(raw);
+				if (!ids) return ctx.scraperDegrade("hackernews", `Failed to parse ${listingCfg.label}`);
+				content = await renderHNListing(ids, ctx, listingCfg.title);
+				notes.push(listingCfg.note);
+			} else {
+				return null;
+			}
 		}
 
 		return buildResult(content, {
@@ -431,17 +435,7 @@ export const lobstersDeclaration: DiscussionDeclaration = {
 				md += `---\n\n## Comments\n\n`;
 				md += renderLobstersComments(story.comments);
 			}
-
-			return buildResult(md, {
-				url: ctx.url,
-				finalUrl: jsonUrl,
-				method: "lobsters",
-				fetchedAt: ctx.fetchedAt,
-				notes: ["Fetched via Lobste.rs JSON API"],
-			});
-		}
-
-		if (match.kind === "listing") {
+		} else if (match.kind === "listing") {
 			if (parsed.pathname === "/") {
 				jsonUrl = "https://lobste.rs/hottest.json";
 			} else if (parsed.pathname === "/newest") {
@@ -483,17 +477,17 @@ export const lobstersDeclaration: DiscussionDeclaration = {
 				}
 				md += `  https://lobste.rs/s/${story.short_id}\n\n`;
 			}
-
-			return buildResult(md, {
-				url: ctx.url,
-				finalUrl: jsonUrl,
-				method: "lobsters",
-				fetchedAt: ctx.fetchedAt,
-				notes: ["Fetched via Lobste.rs JSON API"],
-			});
+		} else {
+			return null;
 		}
 
-		return null;
+		return buildResult(md, {
+			url: ctx.url,
+			finalUrl: jsonUrl,
+			method: "lobsters",
+			fetchedAt: ctx.fetchedAt,
+			notes: ["Fetched via Lobste.rs JSON API"],
+		});
 	},
 };
 
@@ -915,6 +909,26 @@ interface DevToArticle {
 	body_html?: string;
 }
 
+function renderDevToArticleCard(article: DevToArticle, includeAuthor = true): string {
+	const tags = article.tag_list || article.tags || [];
+	const reactions = article.positive_reactions_count ?? article.public_reactions_count ?? 0;
+	const readTime = article.reading_time_minutes ? ` · ${article.reading_time_minutes} min read` : "";
+	const reactStr = reactions > 0 ? ` · ${formatNumber(reactions)} reactions` : "";
+
+	let md = `### ${article.title}\n\n`;
+	if (includeAuthor) {
+		md += `by **${article.user?.name || "Unknown"}** (@${article.user?.username || "unknown"})`;
+		md += `${readTime}${reactStr}\n`;
+	} else {
+		md += `${readTime.substring(3)}${reactStr}\n`;
+	}
+	md += `*${formatIsoDate(article.published_at || article.published_timestamp || "")}*\n`;
+	if (tags.length > 0) md += `Tags: ${tags.map(t => `#${t}`).join(", ")}\n`;
+	if (article.description) md += `\n${article.description}\n`;
+	md += `\n---\n\n`;
+	return md;
+}
+
 export const devtoDeclaration: DiscussionDeclaration = {
 	site: "devto",
 	method: "devto",
@@ -946,18 +960,7 @@ export const devtoDeclaration: DiscussionDeclaration = {
 			md += `## Recent Articles (${articles.length})\n\n`;
 
 			for (const article of articles) {
-				const tags = article.tag_list || article.tags || [];
-				const reactions = article.positive_reactions_count ?? article.public_reactions_count ?? 0;
-				const readTime = article.reading_time_minutes ? ` · ${article.reading_time_minutes} min read` : "";
-				const reactStr = reactions > 0 ? ` · ${formatNumber(reactions)} reactions` : "";
-
-				md += `### ${article.title}\n\n`;
-				md += `by **${article.user?.name || "Unknown"}** (@${article.user?.username || "unknown"})`;
-				md += `${readTime}${reactStr}\n`;
-				md += `*${formatIsoDate(article.published_at || article.published_timestamp || "")}*\n`;
-				if (tags.length > 0) md += `Tags: ${tags.map(t => `#${t}`).join(", ")}\n`;
-				if (article.description) md += `\n${article.description}\n`;
-				md += `\n---\n\n`;
+				md += renderDevToArticleCard(article, true);
 			}
 
 			notes.push("Fetched via dev.to API");
@@ -979,17 +982,7 @@ export const devtoDeclaration: DiscussionDeclaration = {
 			md += `## Recent Articles (${articles.length})\n\n`;
 
 			for (const article of articles) {
-				const tags = article.tag_list || article.tags || [];
-				const reactions = article.positive_reactions_count ?? article.public_reactions_count ?? 0;
-				const readTime = article.reading_time_minutes ? ` · ${article.reading_time_minutes} min read` : "";
-				const reactStr = reactions > 0 ? ` · ${formatNumber(reactions)} reactions` : "";
-
-				md += `### ${article.title}\n\n`;
-				md += `${readTime.substring(3)}${reactStr}\n`;
-				md += `*${formatIsoDate(article.published_at || article.published_timestamp || "")}*\n`;
-				if (tags.length > 0) md += `Tags: ${tags.map(t => `#${t}`).join(", ")}\n`;
-				if (article.description) md += `\n${article.description}\n`;
-				md += `\n---\n\n`;
+				md += renderDevToArticleCard(article, false);
 			}
 
 			notes.push("Fetched via dev.to API");

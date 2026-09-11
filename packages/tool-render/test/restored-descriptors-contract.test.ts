@@ -73,6 +73,54 @@ describe("Restored descriptors contract", () => {
 			expect(body).toContain("no errors");
 		});
 
+		it("renders write with invalid/non-string content as expected string error and missing path as invalid arg", () => {
+			// Non-string content (number or object) must report expected string error note without coercion
+			const bodyNum = renderBody("write", {
+				path: "src/new.ts",
+				content: 12345,
+			});
+			expect(bodyNum).toContain("expected string");
+			expect(bodyNum).toContain("content");
+
+			const bodyObj = renderBody("write", {
+				path: "src/new.ts",
+				content: { some: "object" },
+			});
+			expect(bodyObj).toContain("expected string");
+
+			const bodyNull = renderBody("write", {
+				path: "src/new.ts",
+				content: null,
+			});
+			expect(bodyNull).toContain("expected string");
+
+			// Missing path in write summary renders invalid path
+			const summaryNoPath = renderSummary("write", {
+				content: "data",
+			});
+			expect(summaryNoPath).toContain("path");
+
+			// Single line or empty content does not show line count badge
+			const summarySingle = renderSummary("write", {
+				path: "file.txt",
+				content: "single line",
+			});
+			expect(summarySingle).not.toContain("lines");
+
+			const summaryEmpty = renderSummary("write", {
+				path: "file.txt",
+				content: "",
+			});
+			expect(summaryEmpty).not.toContain("lines");
+
+			// CRLF content counts lines accurately without allocation
+			const summaryCrlf = renderSummary("write", {
+				path: "crlf.txt",
+				content: "a\r\nb\r\nc\r\n",
+			});
+			expect(summaryCrlf).toContain("4 lines");
+		});
+
 		it("renders edit summary with hashline headers, op counts, line additions and removals", () => {
 			const summary = renderSummary(
 				"edit",

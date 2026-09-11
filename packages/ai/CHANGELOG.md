@@ -8,9 +8,21 @@
 
 ### Changed
 
+- The NVIDIA, Xiaomi, Xiaomi Token Plan and Alibaba Coding Plan logins take the pasted key through the same `promptApiKey` as every `createApiKeyLogin` provider: the key is trimmed, an empty paste is `ApiKeyRequiredError`, an abort during the paste is `LoginCancelledError`, and a host without `onPrompt` is `OnPromptRequiredError`; no behavior change.
+- API-key and OAuth credential ranking score usage windows and block a credential at its scoped limit through one `#rankUsageResults`, an OAuth refresh reads its candidate row before and after the lease through one `readRefreshCandidate`, and the plan-filter and usage-limit rejection runs before and after a refresh through one `usageRejects`; no behavior change.
+- Tool-argument validation runs its seven pre-validation normalizations through one ordered pass table, before the first check and after every issue-driven coercion, and the two schema-agnostic value walks share one copy-on-write array step; no behavior change.
+- GitLab Duo Workflow shares fresh-workflow restart handling without changing retry limits, request ordering, or surfaced errors.
+- Streaming provider initialization shares assistant-message construction without changing emitted metadata or mutable-state isolation.
+- Provider error projection, Google request options and Hermes/Qwen3 tool-call rendering share implementations without changing wire formats.
+- Removed duplicate OpenAI Responses moderation type declarations without changing exported types or wire formats.
+- OpenAI Responses computer actions share field declarations while preserving independent public namespace augmentation.
+- Response input and output items share field declarations while retaining namespace-specific nested types and augmentation.
+- GitLab Duo and GitLab Duo Workflow share token-response decoding and PKCE types without changing login or refresh behavior.
 - API-key validators share error-body handling without changing request formats, error messages or deadlines.
 - Lazy provider streams share import-promise caching while preserving provider loading and timeout behavior.
 - API-key logins share credential prompting and validation with unchanged provider messages and cancellation behavior.
+- Credential refresh and usage requests share cancellation handling while preserving abort reasons and independent completion of shared work.
+- The GLM, Gemini, Gemma and Qwen3 in-band scanners share one outside-text step (`scanOutsideText`) and Hermes and Qwen3 share one closed-body completion (`emitClosedToolCall`), with unchanged events at every chunking of a stream.
 - Provider module declarations share one typed stream signature with unchanged runtime output.
 - Hermes and Qwen tool calls use one JSON decoder with unchanged repair and partial-stream recovery.
 - `Tool` extends `ToolSpec` from `@veyyon/tool`, which owns the schema-independent declaration and the `ToolExample` kinds; `@veyyon/ai` exports every name it exported before, so no caller changes.
@@ -22,9 +34,17 @@
 - `CONTEXTUAL_USER_PREFIXES` is exported from the codex compaction module so the retained-window rule is asserted against the real list rather than a copy of it.
 - A source-path comment and the barrel-shortcut suite name the Perplexity search provider at `tools/web/search/providers/perplexity.ts`. No behavior change.
 - Hermes and Qwen3 share truncated-call recovery with unchanged tool names, arguments and completion events.
+- The Codex responses provider parses usage through one numeric field picker, resets the websocket chain (append baseline, turn state, models etag) through one helper at every site, and the whitespace-loop, stale-response and retryable-error recoveries share one turn restart and one delayed reopen; no behavior change.
+- The Qwen3, Hermes, GLM, Kimi, pi-native, Gemma and Gemini scanners and the thinking-healing scanner stream a reasoning section through one `ThinkingSection` and close a tag-delimited one through one `scanThinkingText` step, with the same events, the same held partial close tag and the same flush at end of stream.
+- The Cursor exec channel buffers stdout and stderr through one `ShellOutputChannel` per stream, sending on a newline, past 4 KiB or 100 ms after the first byte and holding an incomplete ANSI escape until its tail arrives; no behavior change.
+- `deleteAuthCredential` and `deleteAuthCredentialsForProvider` soft-delete through one step that reports a failed statement with the credential or provider it names; no behavior change.
+- `AuthStorage` delivers its credential-disabled, credential-failover and usage-limit-withheld notices through one subscriber call that isolates a throw or a rejection and logs it against the hook, addresses a refreshed broker row through one matcher that ignores the shared refresh sentinel, and reads a report's unanimous scope account or project id through one step; no behavior change.
+- Doc comments refer to child runs and roles as agents rather than subagents; the Codex protocol header `x-openai-subagent` and its `subagent_kind` metadata key are unchanged.
+- Both streaming gateway routes (the format endpoints and the pi-native fast path) abort the upstream call on a closed client response through one SSE cancel hook; no behavior change.
 
 ### Fixed
 
+- Cursor and Devin protobuf regeneration invokes the workspace compiler, and Cursor output is written to the catalog package.
 - A user or developer message that carries prior-turn reasoning as prose declares its origin through `demotedReasoningSource`, and `transformMessages` holds it to the unsigned-thinking replay policy: a signing Anthropic endpoint drops it on same-model replay, and every `anthropic-messages` target drops it once `replayDemotedPriorReasoning` is off by catalog or learned from a `reasoning_extraction` refusal, instead of re-sending the same prose on the retry and on every later turn of the session.
 - Credential-store startup applies SQLite busy handling and WAL mode before initializing refresh leases, allowing concurrent launches to wait for database locks.
 

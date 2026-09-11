@@ -199,14 +199,60 @@ const writerRegistry = new FinalizationRegistry<number>(fd => {
 	}
 });
 
-class FileSessionStorageWriter implements SessionStorageWriter {
-	#fd: number;
+export abstract class BaseSessionStorageWriter implements SessionStorageWriter {
 	#closed = false;
 	#error: Error | undefined;
-	#onError: ((err: Error) => void) | undefined;
+	readonly #onError: ((err: Error) => void) | undefined;
+
+	constructor(options?: { onError?: (err: Error) => void }) {
+		this.#onError = options?.onError;
+	}
+
+	get isClosed(): boolean {
+		return this.#closed;
+	}
+
+	markClosed(): void {
+		this.#closed = true;
+	}
+
+	recordError(err: unknown): Error {
+		const error = toError(err);
+		if (!this.#error) this.#error = error;
+		this.#onError?.(error);
+		return error;
+	}
+
+	ensureOpen(): void {
+		if (this.#closed) throw new Error("Writer closed");
+		if (this.#error) throw this.#error;
+	}
+
+	ensureNoError(): void {
+		if (this.#error) throw this.#error;
+	}
+	abstract append(line: string): Promise<void>;
+
+	async flush(): Promise<void> {
+		this.ensureNoError();
+	}
+
+	isOpen(): boolean {
+		return !this.#closed;
+	}
+
+	abstract close(): Promise<void>;
+
+	getError(): Error | undefined {
+		return this.#error;
+	}
+}
+
+class FileSessionStorageWriter extends BaseSessionStorageWriter {
+	#fd: number;
 
 	constructor(fpath: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }) {
-		this.#onError = options?.onError;
+		super(options);
 		const flags = options?.flags ?? "a";
 		// Ensure parent directory exists
 		const dir = path.dirname(fpath);
@@ -219,16 +265,8 @@ class FileSessionStorageWriter implements SessionStorageWriter {
 		writerRegistry.register(this, this.#fd, this);
 	}
 
-	#recordError(err: unknown): Error {
-		const error = toError(err);
-		if (!this.#error) this.#error = error;
-		this.#onError?.(error);
-		return error;
-	}
-
 	async append(line: string): Promise<void> {
-		if (this.#closed) throw new Error("Writer closed");
-		if (this.#error) throw this.#error;
+		this.ensureOpen();
 		try {
 			const buf = Buffer.from(line, "utf-8");
 			let offset = 0;
@@ -240,21 +278,13 @@ class FileSessionStorageWriter implements SessionStorageWriter {
 				offset += written;
 			}
 		} catch (err) {
-			throw this.#recordError(err);
+			throw this.recordError(err);
 		}
 	}
 
-	async flush(): Promise<void> {
-		if (this.#error) throw this.#error;
-	}
-
-	isOpen(): boolean {
-		return !this.#closed;
-	}
-
 	async close(): Promise<void> {
-		if (this.#closed) return;
-		this.#closed = true;
+		if (this.isClosed) return;
+		this.markClosed();
 		// Unregister from finalization - we're closing properly
 		writerRegistry.unregister(this);
 		try {
@@ -268,16 +298,12 @@ class FileSessionStorageWriter implements SessionStorageWriter {
 			// error, so `getError()` reports it and the `onError` callback fires.
 			// Still does not throw: close runs on shutdown and teardown paths where
 			// throwing would mask the reason the session is ending.
-			const error = this.#recordError(err);
+			const error = this.recordError(err);
 			logger.warn("Could not close the session file cleanly; the transcript may be missing its last writes", {
 				error: error.message,
 				fix: "Check that the session directory is writable and not out of space. The session's earlier messages are unaffected.",
 			});
 		}
-	}
-
-	getError(): Error | undefined {
-		return this.#error;
 	}
 }
 
@@ -718,59 +744,36 @@ export function filterStorageMapKeys(
 	return matches;
 }
 
-class MemorySessionStorageWriter implements SessionStorageWriter {
+class MemorySessionStorageWriter extends BaseSessionStorageWriter {
 	#storage: MemorySessionStorage;
 	#path: string;
-	#closed = false;
-	#error: Error | undefined;
-	#onError: ((err: Error) => void) | undefined;
 
 	constructor(
 		storage: MemorySessionStorage,
 		path: string,
 		options?: { flags?: "a" | "w"; onError?: (err: Error) => void },
 	) {
+		super(options);
 		this.#storage = storage;
 		this.#path = path;
-		this.#onError = options?.onError;
 		if ((options?.flags ?? "a") === "w") {
 			this.#storage.writeTextSync(path, "");
 		}
 	}
 
-	#recordError(err: unknown): Error {
-		const error = toError(err);
-		if (!this.#error) this.#error = error;
-		this.#onError?.(error);
-		return error;
-	}
-
 	async append(line: string): Promise<void> {
-		if (this.#closed) throw new Error("Writer closed");
-		if (this.#error) throw this.#error;
+		this.ensureOpen();
 		try {
 			// O(1) append — push onto the path's indexed in-memory entry.
 			this.#storage.appendSync(this.#path, line);
 		} catch (err) {
-			throw this.#recordError(err);
+			throw this.recordError(err);
 		}
 	}
 
-	async flush(): Promise<void> {
-		if (this.#error) throw this.#error;
-	}
-
-	isOpen(): boolean {
-		return !this.#closed;
-	}
-
 	async close(): Promise<void> {
-		if (this.#closed) return;
-		this.#closed = true;
-	}
-
-	getError(): Error | undefined {
-		return this.#error;
+		if (this.isClosed) return;
+		this.markClosed();
 	}
 }
 

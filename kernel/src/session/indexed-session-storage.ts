@@ -2,6 +2,7 @@ import { enoentError, toError } from "@veyyon/utils";
 import type { PathState } from "@veyyon/utils/fs-optional";
 import { sessionFileStem } from "@veyyon/utils/session-file";
 import {
+	BaseSessionStorageWriter,
 	filterStorageMapKeys,
 	type SessionFileBody,
 	type SessionStorage,
@@ -522,12 +523,9 @@ export class IndexedSessionStorage implements SessionStorage {
 	}
 }
 
-class IndexedSessionStorageWriter implements SessionStorageWriter {
+class IndexedSessionStorageWriter extends BaseSessionStorageWriter {
 	#storage: IndexedSessionStorage;
 	#path: string;
-	#closed = false;
-	#error: Error | undefined;
-	#onError: ((err: Error) => void) | undefined;
 	#pendingChain: Promise<void> = Promise.resolve();
 
 	constructor(
@@ -535,66 +533,50 @@ class IndexedSessionStorageWriter implements SessionStorageWriter {
 		path: string,
 		options?: { flags?: "a" | "w"; onError?: (err: Error) => void },
 	) {
+		super(options);
 		this.#storage = storage;
 		this.#path = path;
-		this.#onError = options?.onError;
 		if ((options?.flags ?? "a") === "w") {
 			const mtimeMs = storage._truncateForWriter(path);
-			this.#trackPromise(storage._queueTruncate(path, mtimeMs, () => this.#error));
+			this.#trackPromise(storage._queueTruncate(path, mtimeMs, () => this.getError()));
 		}
-	}
-
-	#recordError(err: unknown): Error {
-		const error = toError(err);
-		if (!this.#error) this.#error = error;
-		this.#onError?.(error);
-		return error;
 	}
 
 	#trackPromise(promise: Promise<void>): Promise<void> {
 		const next = this.#pendingChain.then(async () => {
-			if (this.#error) throw this.#error;
+			this.ensureNoError();
 			try {
 				await promise;
 			} catch (err) {
-				throw this.#recordError(err);
+				throw this.recordError(err);
 			}
 		});
-		// The failure travels to the caller through the returned `next`, and `#recordError` also latches it in
-		// `#error` so every later call rethrows it. The chain copy must resolve, or the recorded error would be
-		// re-delivered to unrelated later writers as an unhandled rejection instead of through `#error`.
+		// The failure travels to the caller through the returned `next`, and `recordError` also latches it so
+		// every later call rethrows it via `ensureNoError`/`getError`. The chain copy must resolve, or the
+		// recorded error would be re-delivered to unrelated later writers as an unhandled rejection.
 		this.#pendingChain = next.catch(() => {});
 		return next;
 	}
 
 	async append(line: string): Promise<void> {
-		if (this.#closed) throw new Error("Writer closed");
-		if (this.#error) throw this.#error;
+		this.ensureOpen();
 		const mtimeMs = this.#storage._appendForWriter(this.#path, line);
-		await this.#trackPromise(this.#storage._queueAppend(this.#path, line, mtimeMs, () => this.#error));
+		await this.#trackPromise(this.#storage._queueAppend(this.#path, line, mtimeMs, () => this.getError()));
 	}
 
 	async flush(): Promise<void> {
-		if (this.#error) throw this.#error;
+		this.ensureNoError();
 		await this.#pendingChain;
-		if (this.#error) throw this.#error;
-	}
-
-	isOpen(): boolean {
-		return !this.#closed;
+		this.ensureNoError();
 	}
 
 	async close(): Promise<void> {
-		if (this.#closed) return;
-		this.#closed = true;
+		if (this.isClosed) return;
+		this.markClosed();
 		try {
 			await this.flush();
 		} finally {
 			this.#storage._writerClosed(this);
 		}
-	}
-
-	getError(): Error | undefined {
-		return this.#error;
 	}
 }

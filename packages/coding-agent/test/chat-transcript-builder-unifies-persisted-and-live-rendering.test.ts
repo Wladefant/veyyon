@@ -12,9 +12,10 @@ import type { ToolExecutionComponent } from "@veyyon/coding-agent/modes/terminal
 import { TranscriptContainer } from "@veyyon/coding-agent/modes/terminal/components/transcript/transcript-container";
 import { TranscriptComposer } from "@veyyon/coding-agent/modes/terminal/controllers/transcript-composer";
 import { UiHelpers, type UiHelpersContext } from "@veyyon/coding-agent/modes/terminal/utils/ui-helpers";
-import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import type { SessionContext } from "@veyyon/kernel/session/session-context";
 import { stripAnsi } from "@veyyon/utils";
+import { useTruecolorTheme } from "./helpers/theme-assertions";
 import { createToolExecution } from "./helpers/tool-execution";
 
 const containers: TranscriptContainer[] = [];
@@ -82,6 +83,7 @@ afterEach(() => {
 });
 
 describe("shared transcript replay preserves live state", () => {
+	useTruecolorTheme("titanium");
 	it("extracts submitted user text without treating assistant text as a submission", () => {
 		const { helpers } = fixture();
 		expect(helpers.getUserMessageText({ role: "user", content: "plain prompt", timestamp: 0 })).toBe("plain prompt");
@@ -96,6 +98,65 @@ describe("shared transcript replay preserves live state", () => {
 			}),
 		).toBe("first second");
 		expect(helpers.getUserMessageText(assistant([{ type: "text", text: "not a submission" }]))).toBe("");
+	});
+
+	it.each(["user", "developer"] as const)("preserves %s prompt styling through live append and replay", role => {
+		for (const synthetic of role === "user" ? [false, true] : [true]) {
+			const { ctx, helpers } = fixture();
+			const message: Extract<AgentMessage, { role: "user" | "developer" }> = {
+				role,
+				content: [
+					{ type: "text", text: "first" },
+					{ type: "text", text: " second" },
+				],
+				timestamp: 0,
+			};
+			if (message.role === "user") message.synthetic = synthetic;
+			helpers.addMessageToChat(message);
+			const live = ctx.chatContainer.render(120).join("\n");
+			const color = synthetic || role === "developer" ? "dim" : "userMessageText";
+			expect(live).toContain(theme.fg(color, "first second"));
+			helpers.renderSessionContext(context([message]));
+			expect(ctx.chatContainer.render(120).join("\n")).toBe(live);
+		}
+	});
+
+	it("preserves expanded summary details through live append and replay", () => {
+		const { ctx, helpers } = fixture();
+		ctx.toolOutputExpanded = true;
+		const messages: AgentMessage[] = [
+			{
+				role: "compactionSummary",
+				summary: "Full compaction context.",
+				shortSummary: "Index-only abbreviation.",
+				tokensBefore: 12_345,
+				compactedBy: "provider/model",
+				warning: "A repeated operation was detected.",
+				timestamp: 1,
+			},
+			{ role: "branchSummary", summary: "Branch context.", fromId: "branch-1", timestamp: 2 },
+			{
+				role: "custom",
+				customType: "handoff",
+				content: "<handoff-context>\nHandoff context body.\n</handoff-context>\nOutside document.",
+				display: true,
+				attribution: "agent",
+				timestamp: 3,
+			},
+		];
+		for (const message of messages) helpers.addMessageToChat(message);
+		const live = text(ctx.chatContainer);
+		expect(live).toContain("Compacted from 12,345 tokens");
+		expect(live).toContain("server-side by provider/model");
+		expect(live).toContain("A repeated operation was detected.");
+		expect(live).toContain("Full compaction context.");
+		expect(live).not.toContain("Index-only abbreviation.");
+		expect(live).toContain("Branch context.");
+		expect(live).toContain("Handoff context body.");
+		expect(live).not.toContain("<handoff-context>");
+		expect(live).not.toContain("Outside document.");
+		helpers.renderSessionContext(context(messages));
+		expect(text(ctx.chatContainer)).toBe(live);
 	});
 
 	it("appends only pre-tool prose live and replays the complete persisted timeline", () => {

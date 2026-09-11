@@ -37,3 +37,21 @@ export function renderReadme(readme?: string | null, title = "README"): string {
 	if (!readme) return "";
 	return `\n---\n\n## ${title}\n\n${readme}\n`;
 }
+export function renderKeyValues(
+	entries: Array<[label: string, value: string | number | boolean | undefined | null]>,
+): string {
+	let md = "";
+	for (const [label, value] of entries) {
+		if (value !== undefined && value !== null && value !== "") {
+			md += `**${label}:** ${value}\n`;
+		}
+	}
+	return md;
+}
+
+export function renderCodeBlock(code?: string | null, lang = "bash", title?: string): string {
+	if (!code || !code.trim()) return "";
+	const trimmed = code.trim();
+	if (title) return `\n## ${title}\n\n\`\`\`${lang}\n${trimmed}\n\`\`\`\n`;
+	return `\`\`\`${lang}\n${trimmed}\n\`\`\`\n\n`;
+}

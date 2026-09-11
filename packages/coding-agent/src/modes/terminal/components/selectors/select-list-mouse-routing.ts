@@ -1,8 +1,6 @@
 import { type Component, Container, type Input, type SelectList, type SettingsList, Spacer, Text } from "@veyyon/tui";
 import { matchesKey } from "@veyyon/utils/keys";
 import { routeSelectListMouse, type SgrMouseEvent } from "@veyyon/utils/mouse";
-import { truncateToWidth } from "@veyyon/utils/width";
-import { replaceTabs } from "@veyyon/utils/wrap";
 import { theme } from "../../../../theme/theme";
 import {
 	matchesSelectCancel,
@@ -13,14 +11,6 @@ import {
 } from "../../utils/keybinding-matchers";
 import { consumeModalChipHover, hitTestModalChrome, type ModalShellGeometry } from "../chrome/modal-shell";
 import type { ModalSelectListComponent } from "./modal-select-list";
-
-interface RoutableSelectList {
-	routeMouse?: (event: SgrMouseEvent, line: number, col: number) => void;
-	handleWheel(delta: -1 | 1): void;
-	hitTest(line: number): number | undefined;
-	setHoverIndex(index: number | null): void;
-	clickItem(index: number): void;
-}
 
 /**
  * Render a Container's children exactly like Container.render (plain
@@ -149,120 +139,6 @@ export abstract class MouseRoutedSubmenu extends Container {
 	}
 }
 
-export interface SubmenuChromeOptions {
-	title: string;
-	description?: string;
-	headerExtra?: Component;
-	body: Component;
-	mouseTarget?: TrackedMouseTarget;
-	errorWidth?: number;
-	footerHint?: string;
-	footerExtra?: Component;
-	handleInput?: (data: string) => boolean | void;
-}
-
-/**
- * Parameterized owner for submenu chrome.
- * Builds header, description, spacers, body, error line and footer from data.
- */
-export class DeclarativeSubmenu extends MouseRoutedSubmenu {
-	#body: Component;
-	#customMouseTarget?: TrackedMouseTarget;
-	#customHandleInput?: (data: string) => boolean | void;
-	#errorText: Text | null = null;
-	#errorWidth: number;
-
-	constructor(options: SubmenuChromeOptions) {
-		super();
-		this.#body = options.body;
-		this.#customMouseTarget = options.mouseTarget;
-		this.#customHandleInput = options.handleInput;
-		this.#errorWidth = options.errorWidth ?? 100;
-
-		this.addChild(new Text(theme.bold(theme.fg("accent", options.title)), 0, 0));
-		if (options.description) {
-			this.addChild(new Spacer(1));
-			this.addChild(new Text(theme.fg("muted", options.description), 0, 0));
-		}
-		if (options.headerExtra) {
-			this.addChild(new Spacer(1));
-			this.addChild(options.headerExtra);
-		}
-		this.addChild(new Spacer(1));
-		this.addChild(options.body);
-
-		if (options.errorWidth !== undefined) {
-			this.addChild(new Spacer(1));
-			this.#errorText = new Text("", 0, 0);
-			this.addChild(this.#errorText);
-		}
-
-		if (options.footerHint) {
-			if (options.errorWidth === undefined) {
-				this.addChild(new Spacer(1));
-			}
-			this.addChild(new Text(theme.fg("dim", options.footerHint), 0, 0));
-		}
-		if (options.footerExtra) {
-			this.addChild(new Spacer(1));
-			this.addChild(options.footerExtra);
-		}
-	}
-
-	setError(message: string): void {
-		if (this.#errorText) {
-			const sanitized = truncateToWidth(replaceTabs(message).replace(/[\r\n]+/g, " "), this.#errorWidth);
-			this.#errorText.setText(theme.fg("error", sanitized));
-		}
-	}
-
-	clearError(): void {
-		this.#errorText?.setText("");
-	}
-
-	mouseTarget(): TrackedMouseTarget | undefined {
-		if (this.#customMouseTarget !== undefined) return this.#customMouseTarget;
-		if ("routeMouse" in this.#body || "handleWheel" in this.#body) {
-			return this.#body as TrackedMouseTarget;
-		}
-		return undefined;
-	}
-
-	override handleInput(data: string): void {
-		if (this.#customHandleInput) {
-			const handled = this.#customHandleInput(data);
-			if (handled) return;
-		}
-		super.handleInput(data);
-	}
-}
-
-export function routeSelectListMouseWithTopBorder(
-	selectList: SelectList,
-	event: SgrMouseEvent,
-	line: number,
-	col: number,
-): void {
-	const localLine = line - 1;
-	const target = selectList as RoutableSelectList;
-	if (typeof target.routeMouse === "function") {
-		target.routeMouse(event, localLine, col);
-		return;
-	}
-	if (event.wheel !== null) {
-		target.handleWheel(event.wheel);
-		return;
-	}
-	const index = target.hitTest(localLine);
-	if (event.motion) {
-		target.setHoverIndex(index ?? null);
-		return;
-	}
-	if (event.leftClick && index !== undefined) {
-		target.clickItem(index);
-	}
-}
-
 export function routeSettingsListPointer(list: SettingsList, event: SgrMouseEvent, line: number, col: number): boolean {
 	if (list.hasOpenSubmenu()) {
 		list.routeSubmenuMouse(event, line, col);
@@ -286,34 +162,30 @@ export function routeSettingsListPointer(list: SettingsList, event: SgrMouseEven
 	return true;
 }
 
-export interface RouteModalCardMouseOptions {
+export interface RouteModalChromeOptions {
 	shellGeometry: ModalShellGeometry | null;
 	event: SgrMouseEvent;
 	hoveredShortcutId: string | null;
 	onHoverShortcut?: (id: string | null) => void;
+	/** The close glyph, a click outside the card, and (unless `onCloseChip` is set) the `close` chip. */
 	onCancel: () => void;
+	/** The `close` chip when it means something softer than a hard close (a cancel ladder). */
+	onCloseChip?: () => void;
 	onConfirm?: () => void;
-	onWheel?: (delta: -1 | 1) => void;
-	listRowStart?: number;
-	hitRows?: readonly (number | undefined)[];
-	onHoverRow?: (index: number | null) => void;
-	onClickRow?: (index: number) => void;
+	/** A click on the title breadcrumb; unhandled (falls through to the body) when absent. */
+	onBreadcrumb?: () => void;
+	/** Any other clickable chip, by id; answers whether it was handled. */
+	onShortcut?: (id: string) => boolean;
 }
 
-export function routeModalCardMouse(options: RouteModalCardMouseOptions): boolean {
-	const {
-		shellGeometry,
-		event,
-		hoveredShortcutId,
-		onHoverShortcut,
-		onCancel,
-		onConfirm,
-		onWheel,
-		listRowStart,
-		hitRows,
-		onHoverRow,
-		onClickRow,
-	} = options;
+/**
+ * The chrome half of a ModalShell host's mouse routing: chip hover, the close glyph, a click
+ * outside the card, the breadcrumb, and the `close`/`confirm` chips. Answers `true` when the chrome
+ * consumed the event, so the host continues into its body only on `false`. A motion event is
+ * consumed only while the pointer is on a chip, so body-row hover still reaches the host.
+ */
+export function routeModalChrome(options: RouteModalChromeOptions): boolean {
+	const { shellGeometry, event, hoveredShortcutId, onHoverShortcut, onCancel, onConfirm, onShortcut } = options;
 	const chrome = hitTestModalChrome(shellGeometry, event.row, event.col, {
 		motion: event.motion,
 		leftClick: event.leftClick,
@@ -327,15 +199,42 @@ export function routeModalCardMouse(options: RouteModalCardMouseOptions): boolea
 		return true;
 	}
 
-	if (chrome.kind === "close" || chrome.kind === "outside" || (chrome.kind === "shortcut" && chrome.id === "close")) {
+	if (chrome.kind === "close" || chrome.kind === "outside") {
 		onCancel();
 		return true;
 	}
 
-	if (chrome.kind === "shortcut" && chrome.id === "confirm") {
+	if (chrome.kind === "breadcrumb" && options.onBreadcrumb) {
+		options.onBreadcrumb();
+		return true;
+	}
+
+	if (chrome.kind !== "shortcut") return false;
+
+	if (chrome.id === "close") {
+		(options.onCloseChip ?? onCancel)();
+		return true;
+	}
+
+	if (chrome.id === "confirm") {
 		onConfirm?.();
 		return true;
 	}
+
+	return onShortcut?.(chrome.id) ?? false;
+}
+
+export interface RouteModalCardMouseOptions extends RouteModalChromeOptions {
+	onWheel?: (delta: -1 | 1) => void;
+	listRowStart?: number;
+	hitRows?: readonly (number | undefined)[];
+	onHoverRow?: (index: number | null) => void;
+	onClickRow?: (index: number) => void;
+}
+
+export function routeModalCardMouse(options: RouteModalCardMouseOptions): boolean {
+	const { event, onWheel, listRowStart, hitRows, onHoverRow, onClickRow } = options;
+	if (routeModalChrome(options)) return true;
 
 	if (event.wheel !== null && onWheel) {
 		onWheel(event.wheel);

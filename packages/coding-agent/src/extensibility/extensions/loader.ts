@@ -23,7 +23,7 @@ import {
 import { loadCapability } from "../../discovery";
 import { type ExtensionModule, extensionModuleCapability } from "../../discovery/capability/extension-module";
 import { type Hook, hookCapability } from "../../discovery/capability/hook";
-import { discoverExtensionModulePaths, getExtensionNameFromPath } from "../../discovery/helpers";
+import { discoverExtensionModulePaths, getExtensionNameFromPath, pluginsRootFor } from "../../discovery/helpers";
 import { type ExecOptions, execCommand, withSessionCpuExec } from "../../exec/exec";
 import type { CustomMessagePayload } from "../../session/messages";
 import { EventBus } from "../../utils/event-bus";
@@ -135,17 +135,11 @@ export class ExtensionRuntime implements IExtensionRuntime {
  * Registration methods write to the extension object.
  * Action methods delegate to the shared runtime.
  */
-class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
+class ConcreteExtensionAPI implements ExtensionAPI {
 	readonly logger = logger;
 	readonly typebox = TypeBox;
 	readonly arktype = Type;
 	readonly zod = zodModule;
-	readonly flagValues = new Map<string, boolean | string>();
-	readonly pendingProviderRegistrations: Array<{
-		name: string;
-		config: ProviderConfig;
-		sourceId: string;
-	}> = [];
 
 	constructor(
 		public readonly pi: CodingAgentApi,
@@ -397,7 +391,7 @@ export interface ExtensionTrustOptions {
  * THE GATE LIVES HERE, not in the callers, because this is the only function in the product
  * that imports an extension module: `loadExtension` runs top-level code and then the factory,
  * and there are five call sites reaching it (the session, the shim, `veyyon models`, the SDK's
- * `discoverExtensions`, and subagents replaying a parent's path list). A gate in front of one
+ * `discoverExtensions`, and agents replaying a parent's path list). A gate in front of one
  * of them is a gate the other four walk around, and the dangerous default — "this caller
  * forgot" — has to be a refusal rather than an execution.
  *
@@ -598,7 +592,7 @@ async function resolveExtensionEntries(dir: string): Promise<string[] | null> {
  * `.veyyon`/`.pi` extension capabilities, JS/TS hook factories, the
  * installed-plugin tree, and any configured paths.
  *
- * Subagents reuse the parent's collected paths via the SDK's
+ * Agents reuse the parent's collected paths via the SDK's
  * `preloadedExtensionPaths` option, then call {@link loadExtensions} themselves
  * so each session rebuilds Extension instances bound to its OWN
  * `ExtensionAPI` (cwd, eventBus, runtime). Forwarding the parent's
@@ -706,8 +700,7 @@ export async function discoverExtensionPaths(
 	}
 
 	// 3. Discover extension entry points from installed plugins
-	addPaths(await getAllPluginExtensionPaths(cwd));
-
+	addPaths(await getAllPluginExtensionPaths(cwd, agentDir ? pluginsRootFor(agentDir) : undefined));
 	// 4. Explicitly configured paths
 	for (const configuredPath of configuredPaths) {
 		const resolved = resolvePath(configuredPath, cwd);
@@ -751,7 +744,8 @@ export async function discoverAndLoadExtensions(
 	cwd: string,
 	eventBus?: EventBus,
 	disabledExtensionIds?: string[],
+	agentDir?: string,
 ): Promise<LoadExtensionsResult> {
-	const paths = await discoverExtensionPaths(configuredPaths, cwd, disabledExtensionIds);
-	return loadExtensions(paths, cwd, eventBus, undefined, { configuredPaths });
+	const paths = await discoverExtensionPaths(configuredPaths, cwd, disabledExtensionIds, agentDir);
+	return loadExtensions(paths, cwd, eventBus, undefined, { configuredPaths, agentDir });
 }

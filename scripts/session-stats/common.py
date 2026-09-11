@@ -14,6 +14,37 @@ from typing import Any
 
 DB_PATH = Path.home() / ".veyyon" / "stats.db"
 
+RANGE_RE = re.compile(r"^(\d+)(?:([-+])(\d+))?$")
+DEFAULT_PAGE = 500
+
+
+def parse_path_range(path: str, default_page: int = DEFAULT_PAGE) -> tuple[str, int | None, int | None, str]:
+    """Parse path selector into (base_path, start, end, kind)."""
+    if not path:
+        return path, None, None, "none"
+    tail_idx = path.rfind("/")
+    tail = path[tail_idx + 1 :]
+    colon = tail.rfind(":")
+    if colon < 0:
+        return path, None, None, "none"
+    suffix = tail[colon + 1 :]
+    base = (path[: tail_idx + 1] + tail[:colon]) if tail_idx >= 0 else tail[:colon]
+    if suffix == "raw":
+        return base, None, None, "raw"
+    if suffix == "conflicts":
+        return base, None, None, "conflicts"
+    m = RANGE_RE.match(suffix)
+    if not m:
+        return path, None, None, "none"
+    start = int(m.group(1))
+    op = m.group(2)
+    nval = m.group(3)
+    if op == "-" and nval is not None:
+        return base, start, int(nval), "range"
+    if op == "+" and nval is not None:
+        return base, start, start + int(nval) - 1, "range"
+    return base, start, start + default_page - 1, "range"
+
 
 def open_ro(db_path: Path = DB_PATH) -> sqlite3.Connection:
     if not db_path.exists():

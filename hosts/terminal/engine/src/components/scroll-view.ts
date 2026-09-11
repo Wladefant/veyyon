@@ -1,8 +1,8 @@
 import { Ellipsis } from "@veyyon/natives";
 import { clamp } from "@veyyon/utils/math";
 import { padding } from "@veyyon/utils/padding";
+import { replaceTabs } from "@veyyon/utils/tab-width";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
-import { replaceTabs } from "@veyyon/utils/wrap";
 import type { Component } from "../tui";
 import { computeThumbRange, handleStandardScrollKey } from "../utils/scroll-layout";
 

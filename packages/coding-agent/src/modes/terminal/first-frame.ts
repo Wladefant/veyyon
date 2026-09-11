@@ -174,16 +174,17 @@ export function paintFirstFrame(version: string, keybindings?: KeybindingsManage
 			? replayed
 			: undefined;
 	if (adopted) setLaunchTip(adopted.tip);
-	const { providerName, terminalGround } = readLaunchFacts();
+	const facts = readLaunchFacts();
+	const defaultRole = !facts.providerName || !facts.modelName ? settings.getModelRole("default") : undefined;
 	// The provider the recording states, and on a cold launch — no recording
 	// yet — the one the configured role names, parsed from `provider/id`. The
 	// session records the same value, so warm and cold state the same fact; the
 	// role only stands in for the machine's first launch of the model, where
 	// `· huggingface` used to grow onto the hero a second later.
-	const launchProvider = providerName || launchProviderLabel();
+	const launchProvider = facts.providerName || launchProviderLabel(defaultRole);
 	// The ground every structural color is derived from is settled below, before the first paint,
 	// out of what this terminal last reported.
-	const hero = new WelcomeComponent(version, launchModelLabel(), launchProvider);
+	const hero = new WelcomeComponent(version, launchModelLabel(facts, defaultRole), launchProvider);
 	const layout = new HomeAnchorLayout({ ui, transcriptChildCount: () => 0, hasHero: () => true });
 	// The composer, live. Dressed through the one chrome owner and sized through
 	// the one height policy, so it is the same composer the mode goes on using
@@ -267,7 +268,7 @@ export function paintFirstFrame(version: string, keybindings?: KeybindingsManage
 	// about to confirm; when it does not confirm it, the answer wins on the very next frame rather
 	// than at mount.
 	const settleGround = (): void => {
-		const ground = ui.terminal.backgroundColor ?? terminalGround ?? undefined;
+		const ground = ui.terminal.backgroundColor ?? facts.terminalGround ?? undefined;
 		setDetectedTerminalGround(ground);
 		applyGroundPaint(planPaintGround(settings.get("tui.paintGround"), theme.getGroundHex(), ground), ui.terminal);
 	};
@@ -321,8 +322,8 @@ export function paintFirstFrame(version: string, keybindings?: KeybindingsManage
 	// the facts itself and the notify has no surface left to serve.
 	const unsubscribeFacts = onLaunchFactsRecorded(() => {
 		if (!mounted) return;
-		const facts = readLaunchFacts();
-		hero.setModel(launchModelLabel(), facts.providerName || launchProviderLabel());
+		const updatedFacts = readLaunchFacts();
+		hero.setModel(launchModelLabel(updatedFacts), updatedFacts.providerName || launchProviderLabel());
 		ui.requestRender();
 	});
 

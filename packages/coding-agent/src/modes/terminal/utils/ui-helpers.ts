@@ -5,9 +5,10 @@ import { type Component, Spacer, Text, TruncatedText } from "@veyyon/tui";
 import { APP_NAME, errorMessage } from "@veyyon/utils";
 import { type SettingsSaveFailure, settings } from "../../../config/settings";
 import { getFileSnapshotStore } from "../../../edit/file-snapshot-store";
+import { userMessageText } from "../../../presentation/transcript-builder";
 import { theme } from "../../../theme/theme";
 import { replaceTabs } from "../../../tools/core/render-utils";
-import { ChatTranscriptBuilder, userMessageText } from "../components/transcript/chat-transcript-builder";
+import { ChatTranscriptBuilder } from "../components/transcript/chat-transcript-builder";
 import { TranscriptBlock } from "../components/transcript/transcript-container";
 import { materializeImageReferenceLinksSync } from "../image-references";
 import { buildSkillCommandPrompt, invokeSkillCommandFromText, isKnownSkillCommand } from "../skill-command";
@@ -90,7 +91,9 @@ export class UiHelpers {
 
 	constructor(private ctx: UiHelpersContext) {
 		this.#builder = new ChatTranscriptBuilder({
-			ui: ctx.ui,
+			get ui() {
+				return ctx.ui;
+			},
 			container: () => this.ctx.chatContainer,
 			pendingTools: () => this.ctx.pendingTools,
 			settledToolCalls: () => this.ctx.settledToolCalls,
@@ -124,6 +127,10 @@ export class UiHelpers {
 			initialExpanded: ctx.toolOutputExpanded,
 			indentFileMentions: 0,
 		});
+	}
+
+	get transcript(): ChatTranscriptBuilder {
+		return this.#builder;
 	}
 
 	/** Extract text content from a user message */

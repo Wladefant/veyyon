@@ -1,13 +1,13 @@
-import { BracketedPasteHandler, decodeReencodedPasteControls } from "@veyyon/utils/bracketed-paste";
-import { getKeybindings } from "@veyyon/utils/keybindings";
+import { BracketedPasteHandler, decodeReencodedPasteControls, type PasteSinks } from "@veyyon/utils/bracketed-paste";
+import { getKeybindings, type Keybinding } from "@veyyon/utils/keybindings";
 import { extractPrintableText, isLoneLineFeed } from "@veyyon/utils/keys";
 import { KillRing } from "@veyyon/utils/kill-ring";
 import { clampLow } from "@veyyon/utils/math";
 import type { MouseRoutable, SgrMouseEvent } from "@veyyon/utils/mouse";
 import { padding } from "@veyyon/utils/padding";
+import { replaceTabs } from "@veyyon/utils/tab-width";
 import { getSegmenter, offsetAtVisualCol, sliceWithWidth, visibleWidth } from "@veyyon/utils/width";
 import { getWordNavKind, moveWordLeft, moveWordRight } from "@veyyon/utils/word-nav";
-import { replaceTabs } from "@veyyon/utils/wrap";
 import { type Component, CURSOR_MARKER, type Focusable } from "../tui";
 import { firstGrapheme, lastGrapheme } from "../utils/text-layout";
 
@@ -85,8 +85,13 @@ export class Input implements Component, Focusable, MouseRoutable {
 	/** Focusable interface - set by TUI when focus changes */
 	focused: boolean = false;
 
-	// Bracketed paste mode buffering
+	// Bracketed paste mode buffering; the sinks are built once, and a remainder re-enters `handleInput`.
 	#pasteHandler = new BracketedPasteHandler();
+	readonly #pasteSinks: PasteSinks = {
+		keys: bytes => this.#handleKeyInput(bytes),
+		paste: content => this.#handlePaste(content),
+		reenter: rest => this.handleInput(rest),
+	};
 
 	// Kill ring for Emacs-style kill/yank operations
 	#killRing = new KillRing();
@@ -124,28 +129,31 @@ export class Input implements Component, Focusable, MouseRoutable {
 	}
 
 	handleInput(data: string): void {
-		// Handle bracketed paste mode
-		const paste = this.#pasteHandler.process(data);
-		if (paste.handled) {
-			// Bytes before the start marker are ordinary input; route them straight
-			// to key handling (never back through the paste gate, which would fold
-			// them into the active buffer).
-			if (paste.prefix !== undefined && paste.prefix.length > 0) {
-				this.#handleKeyInput(paste.prefix);
-			}
-			if (paste.pasteContent !== undefined) {
-				this.#handlePaste(paste.pasteContent);
-				// `remaining` follows a completed paste and may itself begin another
-				// paste, so it goes through the full gate.
-				if (paste.remaining.length > 0) {
-					this.handleInput(paste.remaining);
-				}
-			}
-			return;
-		}
-
+		if (this.#pasteHandler.route(data, this.#pasteSinks)) return;
 		this.#handleKeyInput(data);
 	}
+
+	/**
+	 * Every editing keybinding this field answers after escape, undo and submit, in precedence
+	 * order: the first binding the bytes match wins, so a user who binds one key to two actions
+	 * gets the earlier one. The three matched first each have a second trigger or take precedence.
+	 */
+	readonly #keyActions: ReadonlyArray<readonly [Keybinding, () => void]> = [
+		["tui.editor.deleteCharBackward", () => this.#handleBackspace()],
+		["tui.editor.deleteCharForward", () => this.#handleForwardDelete()],
+		["tui.editor.deleteWordBackward", () => this.#deleteWordBackwards()],
+		["tui.editor.deleteWordForward", () => this.#deleteWordForward()],
+		["tui.editor.deleteToLineStart", () => this.#deleteToLineStart()],
+		["tui.editor.deleteToLineEnd", () => this.#deleteToLineEnd()],
+		["tui.editor.yank", () => this.#yank()],
+		["tui.editor.yankPop", () => this.#yankPop()],
+		["tui.editor.cursorLeft", () => this.#moveCursorLeft()],
+		["tui.editor.cursorRight", () => this.#moveCursorRight()],
+		["tui.editor.cursorLineStart", () => this.#moveCursorTo(0)],
+		["tui.editor.cursorLineEnd", () => this.#moveCursorTo(this.#value.length)],
+		["tui.editor.cursorWordLeft", () => this.#moveWordBackwards()],
+		["tui.editor.cursorWordRight", () => this.#moveWordForwards()],
+	];
 
 	#handleKeyInput(data: string): void {
 		const kb = getKeybindings();
@@ -155,103 +163,47 @@ export class Input implements Component, Focusable, MouseRoutable {
 			return;
 		}
 
-		// Undo
+		// Undo precedes submit: a key bound to both undoes rather than submits.
 		if (kb.matches(data, "tui.editor.undo")) {
 			this.#undo();
 			return;
 		}
 
-		// Submit
 		if (kb.matches(data, "tui.input.submit") || isLoneLineFeed(data)) {
 			if (this.onSubmit) this.onSubmit(this.#value);
 			return;
 		}
 
-		// Deletion
-		if (kb.matches(data, "tui.editor.deleteCharBackward")) {
-			this.#handleBackspace();
-			return;
-		}
-
-		if (kb.matches(data, "tui.editor.deleteCharForward")) {
-			this.#handleForwardDelete();
-			return;
-		}
-
-		if (kb.matches(data, "tui.editor.deleteWordBackward")) {
-			this.#deleteWordBackwards();
-			return;
-		}
-
-		if (kb.matches(data, "tui.editor.deleteWordForward")) {
-			this.#deleteWordForward();
-			return;
-		}
-
-		if (kb.matches(data, "tui.editor.deleteToLineStart")) {
-			this.#deleteToLineStart();
-			return;
-		}
-
-		if (kb.matches(data, "tui.editor.deleteToLineEnd")) {
-			this.#deleteToLineEnd();
-			return;
-		}
-
-		// Kill ring actions
-		if (kb.matches(data, "tui.editor.yank")) {
-			this.#yank();
-			return;
-		}
-		if (kb.matches(data, "tui.editor.yankPop")) {
-			this.#yankPop();
-			return;
-		}
-
-		// Cursor movement
-		if (kb.matches(data, "tui.editor.cursorLeft")) {
-			this.#lastAction = null;
-			if (this.#cursor > 0) {
-				const beforeCursor = this.#value.slice(0, this.#cursor);
-				this.#cursor -= lastGrapheme(beforeCursor).length || 1;
+		for (const [binding, action] of this.#keyActions) {
+			if (kb.matches(data, binding)) {
+				action();
+				return;
 			}
-			return;
-		}
-
-		if (kb.matches(data, "tui.editor.cursorRight")) {
-			this.#lastAction = null;
-			if (this.#cursor < this.#value.length) {
-				const afterCursor = this.#value.slice(this.#cursor);
-				this.#cursor += firstGrapheme(afterCursor).length || 1;
-			}
-		}
-
-		if (kb.matches(data, "tui.editor.cursorLineStart")) {
-			this.#lastAction = null;
-			this.#cursor = 0;
-			return;
-		}
-
-		if (kb.matches(data, "tui.editor.cursorLineEnd")) {
-			this.#lastAction = null;
-			this.#cursor = this.#value.length;
-			return;
-		}
-
-		if (kb.matches(data, "tui.editor.cursorWordLeft")) {
-			this.#moveWordBackwards();
-			return;
-		}
-
-		if (kb.matches(data, "tui.editor.cursorWordRight")) {
-			this.#moveWordForwards();
-			return;
 		}
 
 		// Regular character input, including Kitty CSI-u text-producing sequences.
 		const printableText = extractPrintableText(data);
 		if (printableText) {
 			this.#insertCharacter(printableText);
+		}
+	}
+
+	#moveCursorTo(cursor: number): void {
+		this.#lastAction = null;
+		this.#cursor = cursor;
+	}
+
+	#moveCursorLeft(): void {
+		this.#lastAction = null;
+		if (this.#cursor > 0) {
+			this.#cursor -= lastGrapheme(this.#value.slice(0, this.#cursor)).length || 1;
+		}
+	}
+
+	#moveCursorRight(): void {
+		this.#lastAction = null;
+		if (this.#cursor < this.#value.length) {
+			this.#cursor += firstGrapheme(this.#value.slice(this.#cursor)).length || 1;
 		}
 	}
 

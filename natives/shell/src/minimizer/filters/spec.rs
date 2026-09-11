@@ -226,11 +226,7 @@ pub fn apply_line_spec(
 	}
 	let cleaned = primitives::strip_ansi(input);
 	let text = spec.filter(&cleaned, exit_code);
-	if text == input {
-		MinimizerOutput::passthrough(input)
-	} else {
-		MinimizerOutput::transformed(text, input.len())
-	}
+	MinimizerOutput::maybe_transformed(input, text)
 }
 pub static SPECS: &[ToolSpec] = &[
 	ToolSpec {

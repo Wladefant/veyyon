@@ -1,8 +1,8 @@
 import { stripVTControlCharacters } from "node:util";
 import { Settings } from "../../packages/coding-agent/src/config/settings";
 import { SETTING_TABS } from "../../packages/coding-agent/src/config/settings-schema";
-import { SettingsSelectorComponent } from "../../packages/coding-agent/src/modes/terminal/components/selectors/settings-selector";
 import { renderDemo } from "./render-args";
+import { createTestSettingsSelector } from "./render-settings-helper";
 
 await renderDemo(
 	async ({ theme, width, flag }) => {
@@ -13,17 +13,7 @@ await renderDemo(
 		const agentDir = flag("agent-dir", "");
 		if (agentDir.length > 0) await Settings.init({ agentDir });
 
-		const selector = new SettingsSelectorComponent(
-			{
-				availableThinkingLevels: [],
-				thinkingLevel: undefined,
-				availableThemes: [theme, "light"],
-				availablePersonalities: ["default"],
-				providers: ["anthropic"],
-				cwd: process.cwd(),
-			},
-			{ onChange: () => {}, onCancel: () => {} },
-		);
+		const selector = createTestSettingsSelector(theme);
 
 		async function settle(ready: () => boolean, attempts = 200): Promise<void> {
 			for (let attempt = 0; attempt < attempts; attempt++) {

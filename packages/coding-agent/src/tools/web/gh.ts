@@ -712,40 +712,32 @@ function toLocalBranchRef(value: string): string {
 	return `refs/heads/${value}`;
 }
 
-async function requireGitRepoRoot(cwd: string, signal?: AbortSignal): Promise<string> {
-	const repoRoot = await git.repo.root(cwd, signal);
-	if (!repoRoot) {
-		throw new ToolError("Current git repository is unavailable.");
+/** A git fact the command needs; an empty answer is a `ToolError` with the corrective action. */
+async function requireGitValue(value: Promise<string | null>, unavailable: string): Promise<string> {
+	const resolved = await value;
+	if (!resolved) {
+		throw new ToolError(unavailable);
 	}
-
-	return repoRoot;
+	return resolved;
 }
 
-async function requirePrimaryGitRepoRoot(cwd: string, signal?: AbortSignal): Promise<string> {
-	const primaryRepoRoot = await git.repo.primaryRoot(cwd, signal);
-	if (!primaryRepoRoot) {
-		throw new ToolError("Current git repository is unavailable.");
-	}
-
-	return primaryRepoRoot;
+function requireGitRepoRoot(cwd: string, signal?: AbortSignal): Promise<string> {
+	return requireGitValue(git.repo.root(cwd, signal), "Current git repository is unavailable.");
 }
 
-async function requireCurrentGitBranch(cwd: string, signal?: AbortSignal): Promise<string> {
-	const branch = await git.branch.current(cwd, signal);
-	if (!branch) {
-		throw new ToolError("Current git branch is unavailable. Pass `branch` or `run` explicitly.");
-	}
-
-	return branch;
+function requirePrimaryGitRepoRoot(cwd: string, signal?: AbortSignal): Promise<string> {
+	return requireGitValue(git.repo.primaryRoot(cwd, signal), "Current git repository is unavailable.");
 }
 
-async function requireCurrentGitHead(cwd: string, signal?: AbortSignal): Promise<string> {
-	const headSha = await git.head.sha(cwd, signal);
-	if (!headSha) {
-		throw new ToolError("Current git HEAD is unavailable. Pass `run` explicitly.");
-	}
+function requireCurrentGitBranch(cwd: string, signal?: AbortSignal): Promise<string> {
+	return requireGitValue(
+		git.branch.current(cwd, signal),
+		"Current git branch is unavailable. Pass `branch` or `run` explicitly.",
+	);
+}
 
-	return headSha;
+function requireCurrentGitHead(cwd: string, signal?: AbortSignal): Promise<string> {
+	return requireGitValue(git.head.sha(cwd, signal), "Current git HEAD is unavailable. Pass `run` explicitly.");
 }
 
 /**
@@ -2688,6 +2680,12 @@ async function executeRunWatch(
 	let settledSuccessSignature: string | undefined;
 	let everSawRuns = false;
 	const completedRunJobsCache = new Map<number, GhRunJobSnapshot[]>();
+	const reportWatching = (runs: GhRunSnapshot[], note?: string): void => {
+		onUpdate?.({
+			content: [{ type: "text", text: formatCommitRunWatchSnapshot(repo, headSha, branch, runs, pollCount, note) }],
+			details: buildCommitRunWatchDetails(repo, headSha, branch, runs, { state: "watching", pollCount, note }),
+		});
+	};
 
 	while (true) {
 		throwIfAborted(signal);
@@ -2702,33 +2700,14 @@ async function executeRunWatch(
 		}
 		consecutivePollFailures = 0;
 		if (runs.length > 0) everSawRuns = true;
-		const details = buildCommitRunWatchDetails(repo, headSha, branch, runs, {
-			state: "watching",
-			pollCount,
-		});
-		onUpdate?.({
-			content: [{ type: "text", text: formatCommitRunWatchSnapshot(repo, headSha, branch, runs, pollCount) }],
-			details,
-		});
+		reportWatching(runs);
 
 		const outcome = getRunCollectionOutcome(runs);
 		if (outcome === "failure") {
 			let failedPairs = runs.flatMap(run => run.jobs.filter(isFailedJob).map(job => ({ run, job })));
 			if (graceSeconds > 0) {
 				const note = `Failure detected. Waiting ${graceSeconds}s to capture concurrent failures before fetching logs.`;
-				onUpdate?.({
-					content: [
-						{
-							type: "text",
-							text: formatCommitRunWatchSnapshot(repo, headSha, branch, runs, pollCount, note),
-						},
-					],
-					details: buildCommitRunWatchDetails(repo, headSha, branch, runs, {
-						state: "watching",
-						pollCount,
-						note,
-					}),
-				});
+				reportWatching(runs, note);
 				await scheduler.wait(graceSeconds * 1000, { signal });
 				try {
 					const refetched = await fetchRunsForCommit(session.cwd, repo, headSha, signal, completedRunJobsCache);
@@ -2780,19 +2759,7 @@ async function executeRunWatch(
 			settledSuccessSignature = signature;
 			const confirmWaitSeconds = currentIntervalSeconds();
 			const note = `All known workflow runs completed successfully. Waiting ${confirmWaitSeconds}s to ensure no additional runs appear for this commit.`;
-			onUpdate?.({
-				content: [
-					{
-						type: "text",
-						text: formatCommitRunWatchSnapshot(repo, headSha, branch, runs, pollCount, note),
-					},
-				],
-				details: buildCommitRunWatchDetails(repo, headSha, branch, runs, {
-					state: "watching",
-					pollCount,
-					note,
-				}),
-			});
+			reportWatching(runs, note);
 			await scheduler.wait(confirmWaitSeconds * 1000, { signal });
 			continue;
 		}

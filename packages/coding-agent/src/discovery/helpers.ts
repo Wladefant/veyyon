@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type ManifestHolder, manifestFromPackageJson } from "@veyyon/kernel/loader/manifest-key";
+import { parseInstalledPluginsRegistry } from "@veyyon/kernel/loader/plugins/installed-registry";
 import { FileType, glob } from "@veyyon/natives";
 import {
 	errorMessage,
@@ -25,6 +26,7 @@ import {
 import { type ConfiguredThinkingLevel, parseConfiguredThinkingLevel } from "../thinking";
 import { normalizeToolNames, TOOL } from "../tools/core/builtin-names";
 import { registerProvider } from "./capability";
+import type { ContextFile } from "./capability/context-file";
 import type { ExtensionModule } from "./capability/extension-module";
 import { invalidate as invalidateFsCache, readDirEntries, readFile } from "./capability/fs";
 import type { Hook } from "./capability/hook";
@@ -169,6 +171,35 @@ export async function readContextFile(filePath: string): Promise<{ content: stri
 			warning: `${filePath} exists but could not be read: ${errorMessage(err)}`,
 		};
 	}
+}
+
+/**
+ * Load a single user-level context file for a provider if present.
+ */
+export async function loadUserContextFile(
+	ctx: LoadContext,
+	providerId: string,
+	source: SourceId,
+	filename: string,
+): Promise<LoadResult<ContextFile>> {
+	const items: ContextFile[] = [];
+	const warnings: string[] = [];
+
+	const filePath = getUserPath(ctx, source, filename);
+	if (filePath) {
+		const { content, warning } = await readContextFile(filePath);
+		if (warning) warnings.push(warning);
+		if (content) {
+			items.push({
+				path: filePath,
+				content,
+				level: "user",
+				_source: createSourceMeta(providerId, filePath, "user"),
+			});
+		}
+	}
+
+	return { items, warnings };
 }
 
 export function parseBoolean(value: unknown): boolean | undefined {
@@ -324,7 +355,7 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 	let tools = parseArrayOrCSV(frontmatter.tools);
 	if (tools) tools = normalizeToolNames(tools);
 
-	// Subagents with explicit tool lists always need yield
+	// Agents with explicit tool lists always need yield
 	if (tools && !tools.includes(TOOL.yield)) {
 		tools = tools.concat([TOOL.yield]);
 	}
@@ -1005,16 +1036,44 @@ export interface ClaudePluginRoot {
  * Parse Claude Code installed_plugins.json content.
  */
 export function parseClaudePluginsRegistry(content: string): ClaudePluginsRegistry | null {
-	const data = tryParseJson<ClaudePluginsRegistry>(content);
-	if (!data || typeof data !== "object") return null;
-	if (
-		typeof data.version !== "number" ||
-		!data.plugins ||
-		typeof data.plugins !== "object" ||
-		Array.isArray(data.plugins)
-	)
-		return null;
-	return data;
+	return parseInstalledPluginsRegistry(content);
+}
+
+function collectRegistryRoots(
+	registry: ClaudePluginsRegistry,
+	warnings: string[],
+	defaultScope: "user" | "project",
+	target: ClaudePluginRoot[],
+): void {
+	for (const [pluginId, entries] of Object.entries(registry.plugins)) {
+		if (!Array.isArray(entries) || entries.length === 0) continue;
+
+		const atIndex = pluginId.lastIndexOf("@");
+		if (atIndex === -1) {
+			warnings.push(`Invalid plugin ID format (missing @marketplace): ${pluginId}`);
+			continue;
+		}
+
+		const pluginName = pluginId.slice(0, atIndex);
+		const marketplace = pluginId.slice(atIndex + 1);
+
+		for (const entry of entries) {
+			if (!entry.installPath || typeof entry.installPath !== "string") {
+				warnings.push(`Plugin ${pluginId} entry has no installPath`);
+				continue;
+			}
+			if (entry.enabled === false) continue;
+
+			target.push({
+				id: pluginId,
+				marketplace,
+				plugin: pluginName,
+				version: entry.version || "unknown",
+				path: entry.installPath,
+				scope: entry.scope || defaultScope,
+			});
+		}
+	}
 }
 
 /**
@@ -1176,38 +1235,7 @@ export async function listClaudePluginRoots(
 		if (!registry) {
 			warnings.push(`Failed to parse Claude Code plugin registry: ${registryPath}`);
 		} else {
-			for (const [pluginId, entries] of Object.entries(registry.plugins)) {
-				if (!Array.isArray(entries) || entries.length === 0) continue;
-
-				// Parse plugin ID format: "plugin-name@marketplace"
-				const atIndex = pluginId.lastIndexOf("@");
-				if (atIndex === -1) {
-					warnings.push(`Invalid plugin ID format (missing @marketplace): ${pluginId}`);
-					continue;
-				}
-
-				const pluginName = pluginId.slice(0, atIndex);
-				const marketplace = pluginId.slice(atIndex + 1);
-
-				// Process all valid entries, not just the first one.
-				// This handles plugins with multiple installs (different scopes/versions).
-				for (const entry of entries) {
-					if (!entry.installPath || typeof entry.installPath !== "string") {
-						warnings.push(`Plugin ${pluginId} entry has no installPath`);
-						continue;
-					}
-					if (entry.enabled === false) continue;
-
-					roots.push({
-						id: pluginId,
-						marketplace,
-						plugin: pluginName,
-						version: entry.version || "unknown",
-						path: entry.installPath,
-						scope: entry.scope || "user",
-					});
-				}
-			}
+			collectRegistryRoots(registry, warnings, "user", roots);
 		}
 	}
 
@@ -1223,39 +1251,16 @@ export async function listClaudePluginRoots(
 	if (ompContent) {
 		const ompRegistry = parseClaudePluginsRegistry(ompContent);
 		if (ompRegistry) {
-			for (const [pluginId, entries] of Object.entries(ompRegistry.plugins)) {
-				if (!Array.isArray(entries) || entries.length === 0) continue;
+			const ompRoots: ClaudePluginRoot[] = [];
+			collectRegistryRoots(ompRegistry, warnings, "user", ompRoots);
+			const ompIds = new Set(ompRoots.map(r => r.id));
+			const filtered = roots.filter(r => !ompIds.has(r.id));
+			roots.length = 0;
+			roots.push(...filtered);
 
-				const atIndex = pluginId.lastIndexOf("@");
-				if (atIndex === -1) {
-					warnings.push(`Invalid plugin ID format (missing @marketplace): ${pluginId}`);
-					continue;
-				}
-				const pluginName = pluginId.slice(0, atIndex);
-				const marketplace = pluginId.slice(atIndex + 1);
-
-				// veyyon is authoritative: drop all Claude-sourced entries for this plugin ID
-				const filtered = roots.filter(r => r.id !== pluginId);
-				roots.length = 0;
-				roots.push(...filtered);
-
-				for (const entry of entries) {
-					if (!entry.installPath || typeof entry.installPath !== "string") {
-						warnings.push(`Plugin ${pluginId} entry has no installPath`);
-						continue;
-					}
-					if (entry.enabled === false) continue;
-					// Deduplicate by installPath within same ID
-					if (roots.some(r => r.id === pluginId && r.path === entry.installPath)) continue;
-
-					roots.push({
-						id: pluginId,
-						marketplace,
-						plugin: pluginName,
-						version: entry.version || "unknown",
-						path: entry.installPath,
-						scope: entry.scope || "user",
-					});
+			for (const root of ompRoots) {
+				if (!roots.some(r => r.id === root.id && r.path === root.path)) {
+					roots.push(root);
 				}
 			}
 		} else {
@@ -1287,31 +1292,7 @@ export async function listClaudePluginRoots(
 			if (projectContent) {
 				const projectRegistry = parseClaudePluginsRegistry(projectContent);
 				if (projectRegistry) {
-					for (const [pluginId, entries] of Object.entries(projectRegistry.plugins)) {
-						if (!Array.isArray(entries) || entries.length === 0) continue;
-						const atIndex = pluginId.lastIndexOf("@");
-						if (atIndex === -1) {
-							warnings.push(`Invalid plugin ID format (missing @marketplace): ${pluginId}`);
-							continue;
-						}
-						const pluginName = pluginId.slice(0, atIndex);
-						const marketplace = pluginId.slice(atIndex + 1);
-						for (const entry of entries) {
-							if (!entry.installPath || typeof entry.installPath !== "string") {
-								warnings.push(`Plugin ${pluginId} entry has no installPath`);
-								continue;
-							}
-							if (entry.enabled === false) continue;
-							projectRoots.push({
-								id: pluginId,
-								marketplace,
-								plugin: pluginName,
-								version: entry.version || "unknown",
-								path: entry.installPath,
-								scope: "project",
-							});
-						}
-					}
+					collectRegistryRoots(projectRegistry, warnings, "project", projectRoots);
 				} else {
 					warnings.push(`Failed to parse project plugin registry: ${resolvedProjectPath}`);
 				}

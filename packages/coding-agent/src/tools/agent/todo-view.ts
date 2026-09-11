@@ -21,7 +21,7 @@ import type {
 	ViewTone,
 } from "@veyyon/view";
 import { isTodoListDone, TODO_DONE_SUMMARY } from "@veyyon/wire";
-import { errorSection, metaLines, type ToolViewResult } from "../core/render-utils";
+import { errorSection, extractResultText, metaLines, type ToolViewResult } from "../core/render-utils";
 import {
 	boundedTodoPreviewText,
 	formatPhaseDisplayName,
@@ -201,7 +201,7 @@ function boardSections(
 
 /** The card a failed write shows, which is the failure the tool reported and nothing else. */
 function failureCard(result: TodoViewResult): FramedBlockView {
-	const text = result.content?.find(part => part.type === "text")?.text ?? "Todo operation failed";
+	const text = extractResultText(result.content, "Todo operation failed");
 	return {
 		kind: "framedBlock",
 		header: { kind: "statusRow", status: "error", title: "Todo" },
@@ -239,7 +239,7 @@ export const todoToolView: Required<ToolViewRenderer<TodoRenderArgs, TodoViewRes
 		if (isTodoListDone(phases)) return doneLine(phases);
 
 		if (phases.length === 0) {
-			const text = result.content?.find(part => part.type === "text")?.text ?? "No todos";
+			const text = extractResultText(result.content, "No todos");
 			return {
 				kind: "headedBlock",
 				header: settledRow(0),

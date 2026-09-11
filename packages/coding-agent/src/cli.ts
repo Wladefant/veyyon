@@ -3,6 +3,7 @@
 // terminal during its own evaluation, which is the only position from which it beats the ~33ms of
 // import below it. It reaches node builtins only. See ./cli/first-frame-replay.
 import "./cli/first-frame-replay-entry";
+import { CliUsageError } from "@veyyon/utils/cli-usage-error";
 // Subpath, NOT the "@veyyon/utils" barrel: the barrel re-exports ./env, which
 // eagerly parses the agent-directory .env at import time (env.ts). Pulling that
 // in here would load the .env BEFORE runCli() calls setProfile(), so
@@ -44,7 +45,6 @@ import { declareWorkerHostEntry, installWorkerInbox } from "@veyyon/utils/worker
 import { EXIT_FAILURE, EXIT_USAGE } from "./cli/exit-codes";
 import { installProfileAlias, resolveProfileAliasCommandFromProcess } from "./cli/profile-alias";
 import { extractProfileFlags } from "./cli/profile-bootstrap";
-import { CliUsageError } from "./cli/usage-error";
 import { DAEMON_BROKER_WORKER_ARG } from "./launch/protocol";
 import {
 	JS_EVAL_PROCESS_ARG,

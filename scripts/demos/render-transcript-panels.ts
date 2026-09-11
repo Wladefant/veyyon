@@ -16,37 +16,22 @@
  *       bun scripts/demos/render-proof.ts --out /tmp/panels --width 100 --scale 2
  */
 
-import type { TUI } from "../../hosts/terminal/engine/src/index";
 import {
 	COMPOSER_INSET_COLS,
+	PRISTINE_COMPOSER_ACCENT_STATE,
 	resolveComposerAccents,
 } from "../../packages/coding-agent/src/modes/terminal/components/composer/composer-chrome";
 import { BtwPanelComponent } from "../../packages/coding-agent/src/modes/terminal/components/dialogs/btw-panel";
 import { OmfgPanelComponent } from "../../packages/coding-agent/src/modes/terminal/components/dialogs/omfg-panel";
-import { theme } from "../../packages/coding-agent/src/theme/theme";
-import { renderDemo } from "./render-args";
+import { mockTui, renderDemo, renderRuler } from "./render-args";
 
 await renderDemo(({ width, hasFlag }) => {
-	const ui = { requestRender() {}, requestComponentRender() {} } as unknown as TUI;
+	const ui = mockTui();
 	const lines: string[] = [];
 	if (hasFlag("ruler")) {
-		let tens = "";
-		let units = "";
-		for (let col = 0; col < width; col++) {
-			tens += col % 10 === 0 ? String(Math.floor(col / 10) % 10) : " ";
-			units += String(col % 10);
-		}
-		lines.push(theme.fg("dim", tens), theme.fg("dim", units));
+		lines.push(...renderRuler(width));
 	}
-	const accents = resolveComposerAccents({
-		bypass: false,
-		bashMode: false,
-		pythonMode: false,
-		planMode: false,
-		focusedSubagent: false,
-		sessionAccentAnsi: undefined,
-		thinkingLevel: "off",
-	});
+	const accents = resolveComposerAccents(PRISTINE_COMPOSER_ACCENT_STATE);
 	lines.push(`${accents.promptGutter}why does the parser reject an empty focus string?`, "");
 	lines.push(
 		`${" ".repeat(COMPOSER_INSET_COLS)}It validates before it trims, so the empty case never reaches the trim.`,

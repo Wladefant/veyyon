@@ -1,5 +1,7 @@
 /**
- * Render terminal chrome surfaces for main and focused subagent interactive sessions.
+ * Render the real stack of session-scoped surfaces above the composer — the todo
+ * HUD, the agent HUD, the pinned error banner and the quiet footline with its
+ * running-agent count — for the MAIN view and for the view focused on an agent.
  *
  * Initializes an interactive mode session with mock todo phases, running subagents,
  * error banners, and composer shortcuts. Renders the combined todo container, subagent
@@ -102,7 +104,7 @@ await renderDemo(
 				status: "running",
 			});
 		}
-		mode.syncRunningSubagentBadge({ requestRender: false });
+		mode.syncRunningAgentBadge({ requestRender: false });
 
 		Object.defineProperty(mainSession, "isStreaming", { get: () => true, configurable: true });
 		Object.defineProperty(mainSession, "queuedMessageCount", { get: () => 1, configurable: true });
@@ -113,7 +115,7 @@ await renderDemo(
 			if (before) {
 				mode.setTodos(mainSession.getTodoPhases());
 				mode.showPinnedError("Provider returned 529 overloaded — the turn did not complete");
-				mode.statusLine.setSubagentCount(2);
+				mode.statusLine.setAgentCount(2);
 				mode.composerShortcuts.setShortcuts(
 					buildComposerShortcuts(mode.keybindings, {
 						busy: true,
@@ -128,7 +130,7 @@ await renderDemo(
 
 		const block = [
 			...mode.todoContainer.render(width),
-			...mode.subagentContainer.render(width),
+			...mode.agentContainer.render(width),
 			...mode.errorBannerContainer.render(width),
 			mode.statusLine.renderQuietLine(width) ?? "",
 			...mode.composerShortcuts.render(width),

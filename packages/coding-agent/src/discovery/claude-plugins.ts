@@ -192,14 +192,7 @@ async function resolvePluginDir(
 
 async function loadSkills(ctx: LoadContext): Promise<LoadResult<DiscoveredSkill>> {
 	const items: DiscoveredSkill[] = [];
-	const warnings: string[] = [];
-	const { roots, warnings: rootWarnings } = await listClaudePluginRoots(
-		ctx.home,
-		ctx.cwd,
-		pluginsRootFor(ctx.agentDir ?? getAgentDir()),
-		ctx.agentDir ?? getAgentDir(),
-	);
-	warnings.push(...rootWarnings);
+	const { roots, warnings } = await pluginRootsFor(ctx);
 	const results = await Promise.all(
 		roots.map(async root => {
 			const resolveWarnings: string[] = [];
@@ -245,15 +238,7 @@ async function loadSkills(ctx: LoadContext): Promise<LoadResult<DiscoveredSkill>
 
 async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashCommand>> {
 	const items: SlashCommand[] = [];
-	const warnings: string[] = [];
-
-	const { roots, warnings: rootWarnings } = await listClaudePluginRoots(
-		ctx.home,
-		ctx.cwd,
-		pluginsRootFor(ctx.agentDir ?? getAgentDir()),
-		ctx.agentDir ?? getAgentDir(),
-	);
-	warnings.push(...rootWarnings);
+	const { roots, warnings } = await pluginRootsFor(ctx);
 
 	const results = await Promise.all(
 		roots.map(async root => {
@@ -321,56 +306,44 @@ async function loadSlashCommands(ctx: LoadContext): Promise<LoadResult<SlashComm
 // Hooks
 // =============================================================================
 
-async function loadHooks(ctx: LoadContext): Promise<LoadResult<Hook>> {
-	const items: Hook[] = [];
-	const warnings: string[] = [];
+/**
+ * The installed plugin roots for `ctx`, and their listing warnings copied out of the shared cache
+ * entry so a loader can append its own without editing what the next loader reads.
+ */
+async function pluginRootsFor(ctx: LoadContext): Promise<{ roots: ClaudePluginRoot[]; warnings: string[] }> {
+	const agentDir = ctx.agentDir ?? getAgentDir();
+	const { roots, warnings } = await listClaudePluginRoots(ctx.home, ctx.cwd, pluginsRootFor(agentDir), agentDir);
+	return { roots, warnings: [...warnings] };
+}
 
-	const { roots, warnings: rootWarnings } = await listClaudePluginRoots(
-		ctx.home,
-		ctx.cwd,
-		pluginsRootFor(ctx.agentDir ?? getAgentDir()),
-		ctx.agentDir ?? getAgentDir(),
-	);
-	warnings.push(...rootWarnings);
-
-	const results = await Promise.all(
-		roots.map(root => scanSubdirectoryHooks(path.join(root.path, "hooks"), PROVIDER_ID, root.scope)),
-	);
-
-	for (const result of results) {
+/** Scan every plugin root in parallel and merge the items and warnings in root order. */
+async function loadFromPluginRoots<T>(
+	ctx: LoadContext,
+	scan: (root: ClaudePluginRoot) => Promise<LoadResult<T>>,
+): Promise<LoadResult<T>> {
+	const { roots, warnings } = await pluginRootsFor(ctx);
+	const items: T[] = [];
+	for (const result of await Promise.all(roots.map(scan))) {
 		items.push(...result.items);
 		if (result.warnings) warnings.push(...result.warnings);
 	}
-
 	return { items, warnings };
+}
+
+function loadHooks(ctx: LoadContext): Promise<LoadResult<Hook>> {
+	return loadFromPluginRoots(ctx, root =>
+		scanSubdirectoryHooks(path.join(root.path, "hooks"), PROVIDER_ID, root.scope),
+	);
 }
 
 // =============================================================================
 // Custom Tools
 // =============================================================================
 
-async function loadTools(ctx: LoadContext): Promise<LoadResult<DiscoveredCustomTool>> {
-	const items: DiscoveredCustomTool[] = [];
-	const warnings: string[] = [];
-
-	const { roots, warnings: rootWarnings } = await listClaudePluginRoots(
-		ctx.home,
-		ctx.cwd,
-		pluginsRootFor(ctx.agentDir ?? getAgentDir()),
-		ctx.agentDir ?? getAgentDir(),
+function loadTools(ctx: LoadContext): Promise<LoadResult<DiscoveredCustomTool>> {
+	return loadFromPluginRoots(ctx, root =>
+		scanCustomToolsFromDir(path.join(root.path, "tools"), PROVIDER_ID, root.scope),
 	);
-	warnings.push(...rootWarnings);
-
-	const results = await Promise.all(
-		roots.map(root => scanCustomToolsFromDir(path.join(root.path, "tools"), PROVIDER_ID, root.scope)),
-	);
-
-	for (const result of results) {
-		items.push(...result.items);
-		if (result.warnings) warnings.push(...result.warnings);
-	}
-
-	return { items, warnings };
 }
 
 // =============================================================================
@@ -379,15 +352,7 @@ async function loadTools(ctx: LoadContext): Promise<LoadResult<DiscoveredCustomT
 
 async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> {
 	const items: MCPServer[] = [];
-	const warnings: string[] = [];
-
-	const { roots, warnings: rootWarnings } = await listClaudePluginRoots(
-		ctx.home,
-		ctx.cwd,
-		pluginsRootFor(ctx.agentDir ?? getAgentDir()),
-		ctx.agentDir ?? getAgentDir(),
-	);
-	warnings.push(...rootWarnings);
+	const { roots, warnings } = await pluginRootsFor(ctx);
 
 	for (const root of roots) {
 		const mcpPath = path.join(root.path, ".mcp.json");

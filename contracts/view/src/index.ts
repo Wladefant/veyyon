@@ -52,7 +52,7 @@ export type ViewTone =
 	 * A card that reports work done by a model states what the work cost, and the figure is neither
 	 * good news nor bad: `success` would read as an outcome and `dim` as detail nobody scans, which
 	 * is the opposite of how a reader uses it. A terminal has carried a colour of its own for this
-	 * since before a view existed -- the status line, the agent roster and the subagent wall all
+	 * since before a view existed -- the status line, the agent roster and the agent wall all
 	 * draw the same one -- and a host with no such colour draws the figure in its body text.
 	 */
 	| "cost"
@@ -175,6 +175,13 @@ export interface ViewSpan {
 	 * editor and every terminal that follows a link expects.
 	 */
 	fileLine?: number;
+	/**
+	 * An agent id this run names, which a host that knows about subagents can navigate to.
+	 *
+	 * A browser guest opens the subagent pane or transcript for this agent id via `ToolRenderHost.openAgent`.
+	 * A host that cannot navigate to subagents draws the text and nothing else.
+	 */
+	agentId?: string;
 	/**
 	 * The language of the source this run names, which a host may badge.
 	 *

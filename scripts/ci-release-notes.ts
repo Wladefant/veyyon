@@ -108,7 +108,7 @@ export function boundReleaseNotesBody(body: string, options: ReleaseNotesBoundOp
 	const rangeUrl = options.floor
 		? `https://github.com/${REPO}/compare/v${options.floor.replace(/^v/, "")}...${tag}`
 		: `https://github.com/${REPO}/commits/${tag}`;
-	const notice = `_Release notes were shortened from ${body.length.toLocaleString("en-US")} characters to fit GitHub's 125,000-character body limit. Read the [complete package changelogs](https://github.com/${REPO}/tree/${tag}/packages) and [full commit range](${rangeUrl})._`;
+	const notice = `_Release notes were shortened from ${body.length.toLocaleString("en-US")} characters to fit GitHub's 125,000-character body limit. Read the [complete changelog](https://github.com/${REPO}/blob/${tag}/CHANGELOG.md) and [full commit range](${rangeUrl})._`;
 	const prefixBudget = maxChars - notice.length - 2;
 	if (prefixBudget <= 0)
 		throw new Error(`Release-notes maxChars ${maxChars} is too small for the ${notice.length}-character notice.`);

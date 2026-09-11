@@ -9,23 +9,13 @@
 import { DEFAULT_MODEL_SLOT } from "../../packages/coding-agent/src/config/model-roles";
 import { Settings } from "../../packages/coding-agent/src/config/settings";
 import { DEFAULT_MODEL_SETTING_ID } from "../../packages/coding-agent/src/modes/terminal/components/selectors/settings-defs";
-import { SettingsSelectorComponent } from "../../packages/coding-agent/src/modes/terminal/components/selectors/settings-selector";
 import { renderDemo } from "./render-args";
+import { createTestSettingsSelector } from "./render-settings-helper";
 
 await renderDemo(
 	({ width, flag, theme }) => {
 		const state = flag("state", "default-model");
-		const selector = new SettingsSelectorComponent(
-			{
-				availableThinkingLevels: [],
-				thinkingLevel: undefined,
-				availableThemes: [theme, "light"],
-				availablePersonalities: ["default"],
-				providers: ["anthropic", "openai"],
-				cwd: process.cwd(),
-			},
-			{ onChange: () => {}, onCancel: () => {} },
-		);
+		const selector = createTestSettingsSelector(theme, { providers: ["anthropic", "openai"] });
 		if (state === "shadowed") {
 			Settings.instance.override("contextPromotion.enabled", true);
 			selector.openTab("context");

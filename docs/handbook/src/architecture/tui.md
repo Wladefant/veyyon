@@ -77,7 +77,7 @@ Minimal pattern:
 
 ```ts
 import { truncateToWidth } from "@veyyon/utils/width";
-import { replaceTabs } from "@veyyon/utils/wrap";
+import { replaceTabs } from "@veyyon/utils/tab-width";
 
 render(width: number): readonly string[] {
   return this.lines.map(line => truncateToWidth(replaceTabs(line), width));
@@ -190,6 +190,8 @@ The `view` alternative returns host-independent `ToolView` values; see
 ## Lifecycle and cancellation
 
 - `dispose()` is optional at type level but should be implemented when you own timers, subprocesses, watchers, sockets, or overlays.
+- `Container.dispose()` and `Box.dispose()` dispose their children; `clear()` and `removeChild()` only detach them.
+- Tool cards dispose replaced renderer components and retain reused component instances. Disposing a card also stops its animation clocks and detaches its presentation subscription.
 - `done(...)` should be called exactly once from your component flow.
 - For cancellable long-running UI, pair `CancellableLoader` with `AbortSignal` and call `done(...)` from `onAbort`.
 
@@ -214,7 +216,7 @@ import type { Component } from "@veyyon/tui";
 import { SelectList } from "@veyyon/tui";
 import { matchesKey } from "@veyyon/utils/keys";
 import { truncateToWidth } from "@veyyon/utils/width";
-import { replaceTabs } from "@veyyon/utils/wrap";
+import { replaceTabs } from "@veyyon/utils/tab-width";
 import {
   getSelectListTheme,
   type ExtensionAPI,

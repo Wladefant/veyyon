@@ -4,62 +4,51 @@
  * Live `appendMessage` excludes tool mounting, which the event controller performs.
  */
 import type { AgentMessage, AgentTool } from "@veyyon/agent-core";
-import type { ImageContent, Message, Usage } from "@veyyon/ai";
+import type { ImageContent, Usage } from "@veyyon/ai";
 import { getStreamingPartialJson } from "@veyyon/ai/utils/block-symbols";
 import type { SnapshotStore } from "@veyyon/hashline";
 import type { SessionContext } from "@veyyon/kernel/session/session-context";
 import type { SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
 import { type Component, Text, type TUI } from "@veyyon/tui";
 import { formatCount } from "@veyyon/utils";
+import type { BlockId, CustomBlock, HookBlock, TranscriptBlock } from "@veyyon/wire/presentation";
 import type { ArgotSession } from "argot/session";
-import type { AdvisorMessageDetails } from "../../../../advisor";
-import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "../../../../collab/protocol";
 // The slot leaf, not the 95-module store: this file reads settings, it does not fill them.
 import type { Settings } from "../../../../config/settings";
 import { settings } from "../../../../config/settings-instance";
 import type { AssistantThinkingRenderer, MessageRenderer } from "../../../../extensibility/extensions/types";
 import {
-	BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE,
-	type CustomMessage,
-	LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE,
-	SKILL_PROMPT_MESSAGE_TYPE,
-	type SkillPromptDetails,
-} from "../../../../session/messages";
+	resolveAssistantErrorPresentation,
+	toAssistantMessageView,
+	toTranscriptBlock,
+	toUserMessageView,
+} from "../../../../presentation/transcript-builder";
+import type { CustomMessage } from "../../../../session/messages";
 import { theme } from "../../../../theme/theme";
 import { decodeStreamedToolArgs, streamingStringKeysForTool } from "../../controllers/tool-args-reveal";
 import { isLiveBackgroundTask } from "../../utils/async-tool-state";
 import {
 	assistantHasVisibleContent,
 	assistantUsageIsBilled,
-	buildAsyncResultBlock,
 	buildFileMentionBlock,
-	buildIrcMessageCard,
 	ledgerMarkerLine,
 	normalizeToolArgs,
-	resolveAssistantErrorPresentation,
 	splitAssistantMessageToolTimeline,
 } from "../../utils/transcript-render-helpers";
-import { createAdvisorMessageCard } from "./advisor-message";
 import { AssistantMessageComponent } from "./assistant-message";
-import { createBackgroundTanDispatchBlock } from "./background-tan-message";
 import { BashExecutionComponent } from "./bash-execution";
 import { detectCacheInvalidation, usesExplicitPromptCache } from "./cache-invalidation-marker";
-import { CollabPromptMessageComponent } from "./collab-prompt-message";
-import {
-	BranchSummaryMessageComponent,
-	CompactionSummaryMessageComponent,
-	createHandoffSummaryMessageComponent,
-} from "./compaction-summary-message";
-import { CustomMessageComponent } from "./custom-message";
+import { BranchSummaryMessageComponent, CompactionSummaryMessageComponent } from "./compaction-summary-message";
+import { CustomMessageComponent, createSpecializedCustomComponent } from "./custom-message";
 import { EvalExecutionComponent } from "./eval-execution";
-import { type LateDiagnosticsFile, LateDiagnosticsMessageComponent } from "./late-diagnostics-message";
+import { HookMessageComponent } from "./hook-message";
+import type { CustomRenderCapability } from "./message-frame";
 import { ReadToolGroupComponent, readArgsHaveTarget, readArgsTargetInternalUrl } from "./read-tool-group";
-import { SkillMessageComponent } from "./skill-message";
 import { ToolExecutionComponent, type ToolExecutionHandle, turnFailedToolResult } from "./tool-execution";
+import { TranscriptBlockComponent, type TranscriptBlockComponentOptions } from "./transcript-block-component";
 import { TranscriptContainer } from "./transcript-container";
 import { createUsageRowBlock } from "./usage-row";
 import { UserMessageComponent } from "./user-message";
-
 export interface ChatTranscriptBuilderDeps {
 	ui: TUI;
 	container?: TranscriptContainer | (() => TranscriptContainer);
@@ -68,6 +57,7 @@ export interface ChatTranscriptBuilderDeps {
 	getSettings?: () => Pick<Settings, "get">;
 	getTool?: (name: string) => AgentTool | undefined;
 	getMessageRenderer?: (customType: string) => MessageRenderer | undefined;
+	getCustomRenderer?: (block: CustomBlock | HookBlock) => CustomRenderCapability | undefined;
 	getThinkingRenderers?: () => AssistantThinkingRenderer[] | undefined;
 	getSnapshots?: () => SnapshotStore | undefined;
 	getArgotSession?: () => ArgotSession | undefined;
@@ -84,8 +74,19 @@ export interface ChatTranscriptBuilderDeps {
 	retryAttempt?: () => number;
 	getLastAssistantUsage?: () => Usage | undefined;
 	setLastAssistantUsage?: (usage: Usage | undefined) => void;
+	/** Group projected file-read entries; defaults to true. */
+	groupReadEntries?: boolean;
 	initialExpanded?: boolean;
 	indentFileMentions?: number;
+}
+
+function isExpandable(component: unknown): component is { setExpanded(expanded: boolean): void } {
+	return (
+		typeof component === "object" &&
+		component !== null &&
+		"setExpanded" in component &&
+		typeof (component as { setExpanded?: unknown }).setExpanded === "function"
+	);
 }
 
 function extractMessagesAndCacheMiss(
@@ -97,19 +98,14 @@ function extractMessagesAndCacheMiss(
 	return { messages: input.map(item => ("message" in item ? item.message : item)) };
 }
 
-/** Extracts the plain-text content of a user message (string or text blocks). */
-export function userMessageText(message: Extract<AgentMessage, { role: "developer" | "user" }> | Message): string {
-	if (typeof message.content === "string") return message.content;
-	return message.content
-		.filter((block): block is { type: "text"; text: string } => block.type === "text")
-		.map(block => block.text)
-		.join("");
-}
-
 export class ChatTranscriptBuilder {
 	#ownContainer: TranscriptContainer | undefined;
 	#ownPendingTools: Map<string, ToolExecutionHandle> | undefined;
 	#ownSettledToolCalls: Set<string> | undefined;
+	readonly #blocksById = new Map<
+		BlockId,
+		{ block: TranscriptBlock; component: TranscriptBlockComponent | ReadToolGroupComponent; readToolCallId?: string }
+	>();
 	readonly #readArgs = new Map<string, Record<string, unknown>>();
 	readonly #readToolCallAssistantComponents = new Map<string, AssistantMessageComponent>();
 	readonly #liveBackgroundCalls = new Set<string>();
@@ -226,13 +222,13 @@ export class ChatTranscriptBuilder {
 		return this.#expanded;
 	}
 
-	/** Tear down components (sealing pending spinners) and clear build state. */
-	reset(): void {
+	/** Discard rendered rows while retaining the session's completed-call ledger. */
+	clearTranscript(): void {
 		if (this.deps.pendingTools === undefined && this.#ownPendingTools) {
 			for (const pending of this.#ownPendingTools.values()) pending.seal();
 		}
+		this.#blocksById.clear();
 		this.#pendingTools.clear();
-		this.#settledToolCalls.clear();
 		this.#readArgs.clear();
 		this.#readToolCallAssistantComponents.clear();
 		this.#liveBackgroundCalls.clear();
@@ -245,9 +241,97 @@ export class ChatTranscriptBuilder {
 		this.#waitingPoll = null;
 		this.#todoSnapshot = null;
 		this.#expandables = [];
-		this.container.clear();
+		this.container.disposeChildren();
 	}
 
+	#getTranscriptBlockOptions(): TranscriptBlockComponentOptions {
+		return {
+			tui: this.deps.ui,
+			onRequestRender: () => this.deps.requestRender(),
+			expanded: this.#expanded,
+			cwd: this.#cwd,
+			getCustomRenderer: this.deps.getCustomRenderer,
+			getThinkingRenderers: this.deps.getThinkingRenderers,
+			hideThinkingBlock: this.deps.hideThinkingBlock,
+			proseOnlyThinking: this.deps.proseOnlyThinking,
+		};
+	}
+
+	setTranscriptBlocks(blocks: readonly TranscriptBlock[]): void {
+		this.clearTranscript();
+		for (const block of blocks) {
+			this.appendTranscriptBlock(block);
+		}
+	}
+
+	appendTranscriptBlock(block: TranscriptBlock): void {
+		if (this.#blocksById.has(block.id)) {
+			this.updateTranscriptBlock(block.id, block);
+			return;
+		}
+		if (
+			this.deps.groupReadEntries !== false &&
+			block.kind === "tool-execution" &&
+			block.display?.readEntry &&
+			!readArgsTargetInternalUrl({ path: block.display.readEntry.path })
+		) {
+			const group = this.#ensureReadGroup();
+			group.updateEntry(block.display.readEntry);
+			this.#blocksById.set(block.id, {
+				block,
+				component: group,
+				readToolCallId: block.display.readEntry.toolCallId,
+			});
+			return;
+		}
+
+		this.#readGroup?.seal();
+		this.#readGroup = null;
+		const comp = new TranscriptBlockComponent(block, this.#getTranscriptBlockOptions());
+		this.#blocksById.set(block.id, { block, component: comp });
+		this.#trackExpandable(comp);
+		this.container.addChild(comp);
+	}
+
+	updateTranscriptBlock(id: BlockId, patch: Partial<TranscriptBlock>): void {
+		const record = this.#blocksById.get(id);
+		if (!record) return;
+		const block = { ...record.block, ...patch, id } as TranscriptBlock;
+		record.block = block;
+		const existing = record.component;
+		if (existing instanceof ReadToolGroupComponent) {
+			if (block.kind === "tool-execution" && block.display?.readEntry) {
+				existing.updateEntry(block.display.readEntry);
+				return;
+			}
+		}
+		if (existing instanceof TranscriptBlockComponent) {
+			existing.set(block);
+			return;
+		}
+	}
+
+	removeTranscriptBlock(id: BlockId): boolean {
+		const entry = this.#blocksById.get(id);
+		if (!entry || !this.container.isBlockUncommitted(entry.component)) return false;
+		const comp = entry.component;
+		this.#blocksById.delete(id);
+		if (comp instanceof ReadToolGroupComponent && entry.readToolCallId !== undefined) {
+			if (comp.removeEntry(entry.readToolCallId) > 0) return true;
+		}
+		if (this.#readGroup === comp) this.#readGroup = null;
+		this.container.removeChild(comp);
+		const expandableIndex = this.#expandables.indexOf(comp);
+		if (expandableIndex !== -1) this.#expandables.splice(expandableIndex, 1);
+		comp.dispose?.();
+		return true;
+	}
+
+	/** Reset session history before rebuilding it from another transcript. */
+	reset(): void {
+		this.clearTranscript();
+		this.#settledToolCalls.clear();
+	}
 	dispose(): void {
 		this.reset();
 	}
@@ -347,18 +431,18 @@ export class ChatTranscriptBuilder {
 					this.#resolveWaitingPoll();
 					this.#resolveTodoSnapshot();
 				}
-				const textContent = userMessageText(message);
+				const userView = toUserMessageView(message);
+				const textContent = userView.text;
 				if (textContent) {
 					const ledgerMarker = ledgerMarkerLine(textContent);
 					if (ledgerMarker !== null) {
 						this.container.addChild(new Text(ledgerMarker, 0, 0));
 						return [];
 					}
-					const isSynthetic = message.role === "developer" ? true : (message.synthetic ?? false);
-					const imageLinks = options?.imageLinks ?? this.deps.resolveImageLinks?.(message);
-					const userComponent = new UserMessageComponent(textContent, isSynthetic, imageLinks);
+					userView.imageLinks = options?.imageLinks ?? this.deps.resolveImageLinks?.(message);
+					const userComponent = new UserMessageComponent(userView);
 					this.container.addChild(userComponent);
-					if (options?.populateHistory && message.role === "user" && !isSynthetic) {
+					if (options?.populateHistory && message.role === "user" && !userView.synthetic) {
 						this.deps.onPopulateHistory?.(textContent);
 					}
 				}
@@ -404,12 +488,15 @@ export class ChatTranscriptBuilder {
 		}
 	}
 
-	#createAssistantComponent(message?: Extract<AgentMessage, { role: "assistant" }>): AssistantMessageComponent {
+	#createAssistantComponent(
+		message: Extract<AgentMessage, { role: "assistant" }>,
+		retryAttempt = this.deps.retryAttempt?.() ?? 0,
+	): AssistantMessageComponent {
 		const hideThinkingBlock = this.deps.hideThinkingBlock?.() ?? false;
 		const proseOnlyThinking = this.deps.proseOnlyThinking ? this.deps.proseOnlyThinking() : true;
 		const thinkingRenderers = this.deps.getThinkingRenderers?.() ?? (this.deps.getMessageRenderer ? undefined : []);
 		const assistantComponent: AssistantMessageComponent = new AssistantMessageComponent(
-			message,
+			toAssistantMessageView(message, { retryAttempt }),
 			hideThinkingBlock,
 			() => this.deps.requestRender(),
 			thinkingRenderers,
@@ -421,8 +508,9 @@ export class ChatTranscriptBuilder {
 	}
 
 	#appendAssistantMessage(message: Extract<AgentMessage, { role: "assistant" }>, cacheMissExplained: boolean): void {
+		const retryAttempt = this.deps.retryAttempt?.() ?? 0;
 		const timeline = splitAssistantMessageToolTimeline(message);
-		const assistantComponent = this.#createAssistantComponent(timeline.beforeTools);
+		const assistantComponent = this.#createAssistantComponent(timeline.beforeTools, retryAttempt);
 		this.container.addChild(assistantComponent);
 
 		const usage = message.usage;
@@ -443,13 +531,12 @@ export class ChatTranscriptBuilder {
 			this.#readGroup = null;
 		}
 
-		const retryAttempt = this.deps.retryAttempt?.() ?? 0;
 		const errorPresentation = resolveAssistantErrorPresentation(message, retryAttempt);
 		const hasErrorStop = errorPresentation.kind === "full";
 		const errorMessage = hasErrorStop ? errorPresentation.text : null;
 		const appendAssistantSegment = (segment: Extract<AgentMessage, { role: "assistant" }> | undefined) => {
 			if (!segment || !assistantHasVisibleContent(segment)) return;
-			const component = this.#createAssistantComponent(segment);
+			const component = this.#createAssistantComponent(segment, retryAttempt);
 			this.container.addChild(component);
 		};
 
@@ -608,66 +695,42 @@ export class ChatTranscriptBuilder {
 
 	#appendCustomMessage(message: Extract<AgentMessage, { role: "custom" | "hookMessage" }>): Component[] {
 		if (!message.display) return [];
-		if (message.customType === "async-result") {
-			this.container.addChild(buildAsyncResultBlock(message));
-			return [];
+		const block = toTranscriptBlock(message, { index: this.container.children.length });
+
+		// Specialized display takes precedence over extension renderers (matching production semantics)
+		if (block.kind === "custom" || block.kind === "hook") {
+			if (block.display !== undefined) {
+				const component = createSpecializedCustomComponent(block.display, () => this.#expanded);
+				if (isExpandable(component)) {
+					this.#trackExpandable(component);
+				}
+				this.container.addChild(component);
+				if (block.display.variant === "irc") {
+					return [component];
+				}
+				return [];
+			}
 		}
-		if (message.customType === LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE) {
-			const files =
-				message.details &&
-				typeof message.details === "object" &&
-				"files" in message.details &&
-				Array.isArray(message.details.files)
-					? (message.details.files as LateDiagnosticsFile[])
-					: [];
-			const component = new LateDiagnosticsMessageComponent(files);
+
+		const rawRenderer = this.deps.getMessageRenderer?.(message.customType);
+		const renderCustom: CustomRenderCapability | undefined = rawRenderer
+			? (opts, uiTheme) => rawRenderer(message as CustomMessage<unknown>, opts, uiTheme)
+			: undefined;
+
+		if (block.kind === "hook") {
+			const component = new HookMessageComponent(block, renderCustom);
 			this.#trackExpandable(component);
 			this.container.addChild(component);
 			return [];
 		}
-		if (message.customType === COLLAB_PROMPT_MESSAGE_TYPE) {
-			this.container.addChild(new CollabPromptMessageComponent(message as CustomMessage<CollabPromptDetails>));
-			return [];
-		}
-		if (message.customType === SKILL_PROMPT_MESSAGE_TYPE) {
-			const component = new SkillMessageComponent(message as CustomMessage<SkillPromptDetails>);
+
+		if (block.kind === "custom") {
+			const component = new CustomMessageComponent(block, renderCustom);
 			this.#trackExpandable(component);
 			this.container.addChild(component);
 			return [];
 		}
-		if (
-			message.customType === "irc:incoming" ||
-			message.customType === "irc:autoreply" ||
-			message.customType === "irc:relay"
-		) {
-			const card = buildIrcMessageCard(message, () => this.#expanded);
-			this.container.addChild(card);
-			return [card];
-		}
-		if (message.customType === "advisor") {
-			const advisorDetails =
-				message.details && typeof message.details === "object"
-					? (message.details as AdvisorMessageDetails)
-					: undefined;
-			this.container.addChild(createAdvisorMessageCard(advisorDetails, () => this.#expanded, theme));
-			return [];
-		}
-		if (message.customType === BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE) {
-			this.container.addChild(createBackgroundTanDispatchBlock(message as CustomMessage<unknown>));
-			return [];
-		}
-		const handoffComponent = createHandoffSummaryMessageComponent(message as CustomMessage<unknown>, this.#expanded);
-		if (handoffComponent) {
-			this.#trackExpandable(handoffComponent);
-			this.container.addChild(handoffComponent);
-			return [];
-		}
-		const component = new CustomMessageComponent(
-			message as CustomMessage<unknown>,
-			this.deps.getMessageRenderer?.(message.customType),
-		);
-		this.#trackExpandable(component);
-		this.container.addChild(component);
+
 		return [];
 	}
 

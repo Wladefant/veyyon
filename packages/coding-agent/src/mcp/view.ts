@@ -26,7 +26,7 @@ import {
 	JSON_TREE_SCALAR_LEN_EXPANDED,
 	jsonTreeViewLines,
 } from "../tools/core/json-tree-view";
-import { formatTruncationMetaNotice, stripOutputNotice } from "../tools/core/output-notice";
+import { extractResultText, formatTruncationMetaNotice, stripOutputNotice } from "../tools/core/output-notice";
 import type { ToolViewResult } from "../tools/core/render-utils";
 import type { MCPToolDetails } from "./tool-bridge";
 
@@ -121,7 +121,7 @@ function renderResult(result: MCPViewResult, context: ToolViewContext, rawArgs?:
 		if (walked.truncated) lines.push([{ text: "…", tone: "dim" }]);
 		lines.push([]);
 	}
-	const textContent = result.content?.find(entry => entry.type === "text")?.text ?? "";
+	const textContent = extractResultText(result.content);
 	// The spill notice is written for the model, not for a reader: it appends `[Showing… artifact://N]`
 	// to the body, which would make a JSON answer unparseable and bury the recovery link in prose.
 	const body = stripOutputNotice(textContent, result.details?.meta).trimEnd();

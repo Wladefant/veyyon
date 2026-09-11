@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { ACADEMIC_PAPER_DECLARATIONS } from "../../src/scrapers/declarations/academic-papers";
-import { createAcademicPaperHandler } from "../../src/scrapers/engine/academic-paper";
+import { type AcademicPaperDeclaration, createAcademicPaperHandler } from "../../src/scrapers/engine/academic-paper";
 import type { RenderResult, SpecialHandler } from "../../src/scrapers/types";
 import * as scraperTypes from "../../src/scrapers/types";
 
@@ -571,5 +571,88 @@ RFC 9110                     HTTP Semantics                    June 2022
 		expect(result?.content).toContain(
 			"[PDF](https://arxiv.org/pdf/1512.03385.pdf) • [arXiv](https://arxiv.org/abs/1512.03385) • [DOI](https://doi.org/10.1109/CVPR.2016.90) • [PubMed](https://pubmed.ncbi.nlm.nih.gov/29876543/) • [Semantic Scholar](https://www.semanticscholar.org/paper/204e3073870fae3d05bcbc2f6a8e263c9b72e776)",
 		);
+	});
+	it("engine: preserves title-only default notes and empty-title semantics versus customMarkdown notes", async () => {
+		const titleOnlyDecl: AcademicPaperDeclaration = {
+			site: "test-title-only",
+			method: "test-method",
+			hosts: ["test-academic.org"],
+			canonicalUrls: [],
+			match: (p: URL) => ({ id: "123", parsedUrl: p }),
+			notes: ["Custom Declared Notes Should Be Bypassed"],
+			fetch: async () => ({ title: "" }),
+		};
+		const titleOnlyHandler = createAcademicPaperHandler(titleOnlyDecl);
+		const titleResult = asRender(await titleOnlyHandler("https://test-academic.org/123", 10));
+		expect(titleResult).not.toBeNull();
+		expect(titleResult?.content).toBe("");
+		expect(titleResult?.notes).toEqual(["Fetched via test-method API"]);
+
+		const customMarkdownDecl: AcademicPaperDeclaration = {
+			site: "test-custom-md",
+			method: "test-method",
+			hosts: ["test-academic.org"],
+			canonicalUrls: [],
+			match: (p: URL) => ({ id: "123", parsedUrl: p }),
+			notes: (_m, meta) => [`Notes for ${meta?.customMarkdown}`],
+			fetch: async () => ({ title: "Ignored", customMarkdown: "Custom Content" }),
+		};
+		const customHandler = createAcademicPaperHandler(customMarkdownDecl);
+		const customResult = asRender(await customHandler("https://test-academic.org/123", 10));
+		expect(customResult).not.toBeNull();
+		expect(customResult?.content).toBe("Custom Content");
+		expect(customResult?.notes).toEqual(["Notes for Custom Content"]);
+
+		const stringReturnDecl: AcademicPaperDeclaration = {
+			site: "test-string-return",
+			method: "test-method",
+			hosts: ["test-academic.org"],
+			canonicalUrls: [],
+			match: (p: URL) => ({ id: "123", parsedUrl: p }),
+			notes: ["Declared Notes for String Return"],
+			fetch: async () => "# String Content",
+		};
+		const stringHandler = createAcademicPaperHandler(stringReturnDecl);
+		const stringResult = asRender(await stringHandler("https://test-academic.org/123", 10));
+		expect(stringResult).not.toBeNull();
+		expect(stringResult?.content).toBe("# String Content");
+		expect(stringResult?.notes).toEqual(["Declared Notes for String Return"]);
+	});
+
+	it("engine: rejects foreign and invalid host URLs synchronously", async () => {
+		for (const decl of ACADEMIC_PAPER_DECLARATIONS) {
+			const handler = createAcademicPaperHandler(decl);
+			expect(await handler("https://unrelated-domain.org/paper/123", 10)).toBeNull();
+			expect(await handler("not-a-valid-url", 10)).toBeNull();
+		}
+	});
+
+	it("engine: resolves dynamic method name from match server", async () => {
+		const dynamicMethodDecl: AcademicPaperDeclaration = {
+			site: "biorxiv",
+			method: match => match.server || "biorxiv",
+			hosts: ["www.biorxiv.org", "www.medrxiv.org"],
+			canonicalUrls: ["https://www.biorxiv.org/content/10.1101/2023.01.01.522400v1"],
+			match: p => ({ id: "10.1101/2023.01.01.522400v1", server: "medrxiv", parsedUrl: p }),
+			fetch: async () => "# MedRxiv Paper\n",
+		};
+		const handler = createAcademicPaperHandler(dynamicMethodDecl);
+		const res = asRender(await handler("https://www.medrxiv.org/content/10.1101/2023.01.01.522400v1", 10));
+		expect(res).not.toBeNull();
+		expect(res?.method).toBe("medrxiv");
+	});
+
+	it("engine: propagates cancellation without swallowing into ScraperDegrade", async () => {
+		for (const decl of ACADEMIC_PAPER_DECLARATIONS) {
+			const cancellingDecl = {
+				...decl,
+				fetch: async () => {
+					throw new DOMException("The operation was aborted", "AbortError");
+				},
+			};
+			const handler = createAcademicPaperHandler(cancellingDecl);
+			const sampleUrl = decl.canonicalUrls[0];
+			await expect(handler(sampleUrl, 10)).rejects.toMatchObject({ name: "AbortError" });
+		}
 	});
 });

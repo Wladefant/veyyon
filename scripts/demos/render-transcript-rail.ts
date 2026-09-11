@@ -18,37 +18,22 @@
  * read off the image directly instead of estimated.
  */
 
-import type { TUI } from "../../hosts/terminal/engine/src/index";
 import {
 	COMPOSER_INSET_COLS,
+	PRISTINE_COMPOSER_ACCENT_STATE,
 	resolveComposerAccents,
 } from "../../packages/coding-agent/src/modes/terminal/components/composer/composer-chrome";
 import { BashExecutionComponent } from "../../packages/coding-agent/src/modes/terminal/components/transcript/bash-execution";
 import { ToolExecutionComponent } from "../../packages/coding-agent/src/modes/terminal/components/transcript/tool-execution";
-import { theme } from "../../packages/coding-agent/src/theme/theme";
-import { renderDemo } from "./render-args";
+import { mockTui, renderDemo, renderRuler } from "./render-args";
 
 await renderDemo(({ width, hasFlag }) => {
-	const ui = { requestRender() {}, requestComponentRender() {} } as unknown as TUI;
+	const ui = mockTui();
 	const lines: string[] = [];
 	if (hasFlag("ruler")) {
-		let tens = "";
-		let units = "";
-		for (let col = 0; col < width; col++) {
-			tens += col % 10 === 0 ? String(Math.floor(col / 10) % 10) : " ";
-			units += String(col % 10);
-		}
-		lines.push(theme.fg("dim", tens), theme.fg("dim", units));
+		lines.push(...renderRuler(width));
 	}
-	const accents = resolveComposerAccents({
-		bypass: false,
-		bashMode: false,
-		pythonMode: false,
-		planMode: false,
-		focusedSubagent: false,
-		sessionAccentAnsi: undefined,
-		thinkingLevel: "off",
-	});
+	const accents = resolveComposerAccents(PRISTINE_COMPOSER_ACCENT_STATE);
 	lines.push(`${accents.promptGutter}run the failing test and tell me why it fails`, "");
 	lines.push(`${" ".repeat(COMPOSER_INSET_COLS)}The parser rejects an empty focus string, so the run aborts.`, "");
 	const bash = new BashExecutionComponent("bun test test/parser.test.ts", ui);

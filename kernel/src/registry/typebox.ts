@@ -621,12 +621,8 @@ function tAny(opts?: Meta): ArkSchema {
 	);
 }
 
-function tUnknown(opts?: Meta): ArkSchema {
-	return applyMeta(
-		createArkSchema((d: unknown) => d, {}),
-		opts,
-	);
-}
+/** `Unknown` accepts every value, as `Any` does; the two names stay for callers that pick one. */
+const tUnknown = tAny;
 
 function tNever(opts?: Meta): ArkSchema {
 	return applyMeta(

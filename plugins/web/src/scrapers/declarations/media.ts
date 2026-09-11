@@ -1,7 +1,8 @@
 import { errorMessage, isCancellation } from "@veyyon/utils";
 import { markdownLink } from "../../markdown-link";
+import { loadJson } from "../engine/declarative";
 import type { MediaDeclaration } from "../engine/media";
-import { buildResult, formatMediaDuration, htmlToBasicMarkdown } from "../types";
+import { buildResult, formatMediaDuration, htmlToBasicMarkdown, isScraperDegrade } from "../types";
 
 // --- Discogs ---
 
@@ -445,7 +446,7 @@ function buildMusicBrainzRecordingMarkdown(recording: MusicBrainzRecording): str
 
 export const musicbrainzDeclaration: MediaDeclaration = {
 	site: "musicbrainz",
-	method: "musicbrainz",
+	method: "musicbrainz-api",
 	hosts: ["musicbrainz.org", "www.musicbrainz.org"],
 	canonicalUrls: [
 		"https://musicbrainz.org/release/07545b14-fb12-4217-b9e7-57352eb5b974",
@@ -485,28 +486,19 @@ export const musicbrainzDeclaration: MediaDeclaration = {
 		});
 		if (!result.ok) return ctx.scraperDegrade("musicbrainz", ctx.loadFailure(result));
 
-		let md = "";
-
 		if (match.kind === "artist") {
 			const artist = ctx.tryParseJson<MusicBrainzArtist>(result.content);
 			if (!artist?.name) return ctx.scraperDegrade("musicbrainz", "unexpected response shape");
-			md = buildMusicBrainzArtistMarkdown(artist);
-		} else if (match.kind === "release") {
+			return buildMusicBrainzArtistMarkdown(artist);
+		}
+		if (match.kind === "release") {
 			const release = ctx.tryParseJson<MusicBrainzRelease>(result.content);
 			if (!release?.title) return ctx.scraperDegrade("musicbrainz", "unexpected response shape");
-			md = buildMusicBrainzReleaseMarkdown(release);
-		} else {
-			const recording = ctx.tryParseJson<MusicBrainzRecording>(result.content);
-			if (!recording?.title) return ctx.scraperDegrade("musicbrainz", "unexpected response shape");
-			md = buildMusicBrainzRecordingMarkdown(recording);
+			return buildMusicBrainzReleaseMarkdown(release);
 		}
-
-		return buildResult(md, {
-			url: ctx.url,
-			method: "musicbrainz-api",
-			fetchedAt: ctx.fetchedAt,
-			notes: ["Fetched via MusicBrainz API"],
-		});
+		const recording = ctx.tryParseJson<MusicBrainzRecording>(result.content);
+		if (!recording?.title) return ctx.scraperDegrade("musicbrainz", "unexpected response shape");
+		return buildMusicBrainzRecordingMarkdown(recording);
 	},
 };
 
@@ -573,16 +565,9 @@ export const rawgDeclaration: MediaDeclaration = {
 	fetch: async (match, ctx) => {
 		const slug = match.id;
 		const apiUrl = `https://api.rawg.io/api/games/${encodeURIComponent(slug)}`;
-		const result = await ctx.loadPage(apiUrl, {
-			timeout: ctx.timeout,
-			signal: ctx.signal,
-			headers: { Accept: "application/json" },
-		});
-		if (!result.ok) return ctx.scraperDegrade("rawg", ctx.loadFailure(result));
-
-		const game = ctx.tryParseJson<RawgGameResponse>(result.content);
+		const game = await loadJson<RawgGameResponse>(ctx, apiUrl, "rawg");
+		if (isScraperDegrade(game)) return game;
 		if (!game) return ctx.scraperDegrade("rawg", "unexpected response shape");
-
 		if (rawgRequiresApiKey(game)) return null;
 
 		const title = game.name?.trim() || slug;
@@ -607,12 +592,7 @@ export const rawgDeclaration: MediaDeclaration = {
 			md += `## Description\n\n${description}\n`;
 		}
 
-		return buildResult(md, {
-			url: ctx.url,
-			method: "rawg",
-			fetchedAt: ctx.fetchedAt,
-			notes: ["Fetched via RAWG API"],
-		});
+		return md;
 	},
 };
 
@@ -891,13 +871,9 @@ export const vimeoDeclaration: MediaDeclaration = {
 		const videoId = match.id;
 		const canonicalUrl = `https://vimeo.com/${videoId}`;
 		const oembedUrl = `https://vimeo.com/api/oembed.json?url=${encodeURIComponent(canonicalUrl)}`;
-		const oembedResult = await ctx.loadPage(oembedUrl, { timeout: ctx.timeout, signal: ctx.signal });
-
-		if (!oembedResult.ok) return ctx.scraperDegrade("vimeo", ctx.loadFailure(oembedResult));
-
-		const oembed = ctx.tryParseJson<VimeoOEmbed>(oembedResult.content);
+		const oembed = await loadJson<VimeoOEmbed>(ctx, oembedUrl, "vimeo");
+		if (isScraperDegrade(oembed)) return oembed;
 		if (!oembed?.title) return ctx.scraperDegrade("vimeo", "unexpected response shape");
-
 		let md = `# ${oembed.title}\n\n`;
 		md += `**Author:** ${markdownLink(oembed.author_name, oembed.author_url)}\n`;
 		md += `**Duration:** ${formatMediaDuration(oembed.duration)}\n`;
@@ -932,12 +908,7 @@ export const vimeoDeclaration: MediaDeclaration = {
 			// Config fetch is optional
 		}
 
-		return buildResult(md, {
-			url: ctx.url,
-			method: "vimeo",
-			fetchedAt: ctx.fetchedAt,
-			notes: ["Fetched via Vimeo oEmbed API"],
-		});
+		return md;
 	},
 };
 

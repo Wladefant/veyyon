@@ -10,11 +10,12 @@
  *   bun scripts/demos/render-transcript-blocks.ts [--ruler] [--width 100] [--theme titanium]
  */
 
-import { type Component, Container, type TUI } from "../../hosts/terminal/engine/src/index";
+import { type Component, Container } from "../../hosts/terminal/engine/src/index";
 import type { AgentMessage } from "../../packages/agent/src/index";
 import { TinyTitleDownloadProgressComponent } from "../../packages/coding-agent/src/modes/terminal/components/chrome/tiny-title-download-progress";
 import {
 	COMPOSER_INSET_COLS,
+	PRISTINE_COMPOSER_ACCENT_STATE,
 	resolveComposerAccents,
 } from "../../packages/coding-agent/src/modes/terminal/components/composer/composer-chrome";
 import { BtwPanelComponent } from "../../packages/coding-agent/src/modes/terminal/components/dialogs/btw-panel";
@@ -23,36 +24,21 @@ import { ErrorBannerComponent } from "../../packages/coding-agent/src/modes/term
 import { showCommandMessage } from "../../packages/coding-agent/src/modes/terminal/controllers/command-controller-shared";
 import type { InteractiveModeContext } from "../../packages/coding-agent/src/modes/terminal/types";
 import { UiHelpers } from "../../packages/coding-agent/src/modes/terminal/utils/ui-helpers";
-import { theme } from "../../packages/coding-agent/src/theme/theme";
-import { renderDemo } from "./render-args";
+import { mockTui, renderDemo, renderRuler } from "./render-args";
 
 await renderDemo(({ width, hasFlag }) => {
-	const ui = { requestRender() {}, requestComponentRender() {} } as unknown as TUI;
+	const ui = mockTui();
 	const lines: string[] = [];
 
 	if (hasFlag("ruler")) {
-		let tens = "";
-		let units = "";
-		for (let col = 0; col < width; col++) {
-			tens += col % 10 === 0 ? String(Math.floor(col / 10) % 10) : " ";
-			units += String(col % 10);
-		}
-		lines.push(theme.fg("dim", tens), theme.fg("dim", units));
+		lines.push(...renderRuler(width));
 	}
 
 	function push(block: Component): void {
 		lines.push(...block.render(width), "");
 	}
 
-	const accents = resolveComposerAccents({
-		bypass: false,
-		bashMode: false,
-		pythonMode: false,
-		planMode: false,
-		focusedSubagent: false,
-		sessionAccentAnsi: undefined,
-		thinkingLevel: "off",
-	});
+	const accents = resolveComposerAccents(PRISTINE_COMPOSER_ACCENT_STATE);
 
 	lines.push(`${accents.promptGutter}why does the run abort?`, "");
 	lines.push(`${" ".repeat(COMPOSER_INSET_COLS)}The parser rejects an empty focus string, so the run aborts.`, "");

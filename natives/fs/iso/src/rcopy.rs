@@ -95,6 +95,7 @@ fn prepare_destination(merged: &Path) -> IsoResult<()> {
 	Ok(())
 }
 
+
 fn is_git_worktree(path: &Path) -> bool {
 	// A regular working tree has `.git` as a dir; a linked worktree has it
 	// as a `gitdir: …` text file. Either way, presence of `.git` is the
@@ -457,7 +458,7 @@ fn filetime_set(_path: &Path, _mtime: std::time::SystemTime) -> std::io::Result<
 	Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
 	use std::fs;
 
@@ -473,7 +474,6 @@ mod tests {
 		veyyon_test_scratch::scratch_dir("iso-rcopy")
 	}
 
-	#[cfg(unix)]
 	#[test]
 	fn git_apply_drains_stderr_while_writing_stdin() {
 		use std::os::unix::fs::PermissionsExt as _;

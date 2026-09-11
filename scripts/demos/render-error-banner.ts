@@ -15,21 +15,14 @@
 import {
 	COMPOSER_INSET_COLS,
 	ComposerHairline,
+	PRISTINE_COMPOSER_ACCENT_STATE,
 	resolveComposerAccents,
 } from "../../packages/coding-agent/src/modes/terminal/components/composer/composer-chrome";
 import { ErrorBannerComponent } from "../../packages/coding-agent/src/modes/terminal/components/transcript/error-banner";
 import { renderDemo } from "./render-args";
 
 await renderDemo(({ width }) => {
-	const accents = resolveComposerAccents({
-		bypass: false,
-		bashMode: false,
-		pythonMode: false,
-		planMode: false,
-		focusedSubagent: false,
-		sessionAccentAnsi: undefined,
-		thinkingLevel: "off",
-	});
+	const accents = resolveComposerAccents(PRISTINE_COMPOSER_ACCENT_STATE);
 	return [
 		`${" ".repeat(COMPOSER_INSET_COLS)}I could not finish that turn.`,
 		...new ErrorBannerComponent("Output blocked by content filtering policy").render(width),

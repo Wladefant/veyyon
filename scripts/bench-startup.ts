@@ -1,6 +1,4 @@
 import { execFile, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -9,7 +7,7 @@ import { Process } from "@veyyon/natives";
 import { AnsiStripper } from "@veyyon/utils";
 import { parseDocument } from "yaml";
 import { AUTONOMY_LABEL } from "../packages/coding-agent/src/tools/core/approval-modes";
-import { recordSettledStartup } from "./record-settled-startup";
+import { computeDigest, median, recordSettledStartup } from "./record-settled-startup";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "..");
 const CLI_SOURCE = path.join(REPO_ROOT, "packages", "coding-agent", "src", "cli.ts");
@@ -339,12 +337,6 @@ export async function disableBenchmarkUpdates(configPath: string): Promise<void>
 	await fs.writeFile(configPath, config.toString());
 }
 
-async function executableDigest(command: string): Promise<string> {
-	const digest = createHash("sha256");
-	for await (const chunk of createReadStream(command)) digest.update(chunk);
-	return digest.digest("hex");
-}
-
 async function hardlinkTree(from: string, to: string): Promise<void> {
 	await fs.mkdir(to, { recursive: true });
 	for (const entry of await fs.readdir(from, { withFileTypes: true })) {
@@ -384,12 +376,6 @@ export async function extractInstalledNatives(
 	return (await fs.stat(natives).catch(() => undefined))?.isDirectory() === true ? natives : undefined;
 }
 
-function median(values: number[]): number {
-	const sorted = [...values].sort((a, b) => a - b);
-	const mid = Math.floor(sorted.length / 2);
-	return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
-}
-
 function report(arm: string, samples: number[]): string {
 	if (samples.length === 0) return `${arm}: no samples`;
 	const unit = arm.endsWith("-kb") ? "kB" : "ms";
@@ -410,7 +396,7 @@ async function main(): Promise<void> {
 	await fs.mkdir(scratch, { recursive: true });
 	const command = options.bin ? path.join(scratch, path.basename(options.bin)) : launch.command;
 	if (options.bin) await fs.copyFile(path.resolve(options.bin), command);
-	const binarySha256 = options.bin ? await executableDigest(command) : undefined;
+	const binarySha256 = options.bin ? await computeDigest(command) : undefined;
 
 	const samples: Sample[] = [];
 	const push = (arm: string, ms: number): void => {
@@ -557,7 +543,7 @@ async function main(): Promise<void> {
 			}
 		}
 	}
-	if (binarySha256 !== undefined && (await executableDigest(command)) !== binarySha256) {
+	if (binarySha256 !== undefined && (await computeDigest(command)) !== binarySha256) {
 		throw new Error("Benchmark executable changed during measurement; discard these samples and rebuild the target");
 	}
 

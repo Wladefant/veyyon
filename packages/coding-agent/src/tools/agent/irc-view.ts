@@ -24,6 +24,7 @@ import type { IrcDeliveryReceipt } from "../../task/irc-bus";
 import {
 	Ellipsis,
 	errorViewLines,
+	extractResultText,
 	getPreviewLines,
 	heldBack,
 	LINE_NOUN,
@@ -89,7 +90,7 @@ function messageAge(ts: number | undefined): string {
 }
 
 function textContent(result: Pick<IrcViewResult, "content">): string {
-	return result.content.find(part => part.type === "text")?.text?.trim() ?? "";
+	return extractResultText(result.content).trim();
 }
 
 /**

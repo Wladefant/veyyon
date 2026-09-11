@@ -2,13 +2,15 @@
  * Tool renderer registry. Keys are current wire tool names; aliases keep old
  * transcript names renderable. Unknown tools fall back to the generic JSON renderer.
  */
+import { createElement } from "react";
 import { agentDescriptors } from "./descriptors/agent";
 import { fsDescriptors } from "./descriptors/fs";
 import { memoryDescriptors } from "./descriptors/memory";
 import { searchDescriptors } from "./descriptors/search";
 import { systemDescriptors } from "./descriptors/system";
 import { genericRenderer } from "./generic";
-import type { ToolDescriptor, ToolRenderer } from "./types";
+import type { ToolDescriptor, ToolRenderer, ToolRenderProps } from "./types";
+import { ToolExecutionBody, ToolExecutionSummary } from "./ViewRenderer";
 
 const ALL_DESCRIPTORS: readonly ToolDescriptor[] = [
 	...fsDescriptors,
@@ -18,9 +20,38 @@ const ALL_DESCRIPTORS: readonly ToolDescriptor[] = [
 	...memoryDescriptors,
 ];
 
-const RENDERERS: Record<string, ToolRenderer> = Object.create(null);
+function wrapDescriptor(desc: ToolDescriptor): ToolDescriptor {
+	const SpecializedSummary = desc.Summary;
+	const SpecializedBody = desc.Body;
 
-for (const desc of ALL_DESCRIPTORS) {
+	const Summary = (props: ToolRenderProps) => {
+		if (props.display) {
+			return createElement(ToolExecutionSummary, { ...props, name: props.name || desc.name });
+		}
+		return createElement(SpecializedSummary, props);
+	};
+
+	const Body = SpecializedBody
+		? (props: ToolRenderProps) => {
+				if (props.display) {
+					return createElement(ToolExecutionBody, { ...props, name: props.name || desc.name });
+				}
+				return createElement(SpecializedBody, props);
+			}
+		: undefined;
+
+	return {
+		name: desc.name,
+		aliases: desc.aliases,
+		Summary,
+		Body,
+	};
+}
+
+export const RENDERERS: Record<string, ToolRenderer> = Object.create(null);
+
+for (const rawDesc of ALL_DESCRIPTORS) {
+	const desc = wrapDescriptor(rawDesc);
 	RENDERERS[desc.name] = desc;
 	if (desc.aliases) {
 		for (const alias of desc.aliases) {
@@ -42,5 +73,5 @@ export function getRegisteredToolNames(): string[] {
  * the render (`Object.hasOwn` restricts lookups to declared own keys).
  */
 export function resolveToolRenderer(name: string): ToolRenderer {
-	return Object.hasOwn(RENDERERS, name) ? RENDERERS[name] : genericRenderer;
+	return Object.hasOwn(RENDERERS, name) ? RENDERERS[name]! : genericRenderer;
 }

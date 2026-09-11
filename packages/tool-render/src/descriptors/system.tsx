@@ -22,6 +22,7 @@ import {
 	detailsRecord,
 	display,
 	isRecord,
+	keyed,
 	normalizeWs,
 	num,
 	replaceTabs,
@@ -180,7 +181,13 @@ function SshBody({ args, result }: ToolRenderProps): ReactNode {
 		<>
 			<Badges
 				items={[
-					host !== null ? <Badge tone="accent">{host}</Badge> : <InvalidArg what="host" />,
+					host !== null ? (
+						<Badge key="host" tone="accent">
+							{host}
+						</Badge>
+					) : (
+						<InvalidArg key="host" what="host" />
+					),
 					cwd !== null && <Badge>cwd {shortenPath(cwd)}</Badge>,
 					timeout !== null && <Badge>timeout {timeout}s</Badge>,
 				]}
@@ -1162,7 +1169,7 @@ function EvalBody({ name, args, result }: ToolRenderProps): ReactNode {
 	return (
 		<>
 			<div className="tv-cells">
-				{cells.map((cell, i) => {
+				{keyed(cells, cell => `${cell.lang}\u001f${cell.code}`).map(({ key, item: cell }, i) => {
 					const dc = detailCells.find(c => c.index === i) ?? detailCells[i];
 					const titleParts: string[] = [];
 					if (cell.title) titleParts.push(cell.title);
@@ -1177,7 +1184,7 @@ function EvalBody({ name, args, result }: ToolRenderProps): ReactNode {
 							titleParts.push(dc.exitCode !== null ? `error (exit ${dc.exitCode})` : "error");
 					}
 					return (
-						<div className="tv-cell" key={`c${i}`}>
+						<div className="tv-cell" key={key}>
 							<CodeBlock code={cell.code} lang={HLJS_LANG[cell.lang] ?? null} title={titleParts.join(" · ")} />
 							{dc && dc.output !== "" && <Output text={dc.output} maxLines={12} error={dc.status === "error"} />}
 						</div>
@@ -1302,8 +1309,8 @@ function DiagnosticRows({ text, rows }: { text: string; rows: DiagRow[] }): Reac
 				</span>
 			)}
 			<div className="tv-list">
-				{shown.map((d, i) => (
-					<Row key={i} k={<Badge tone={severityTone(d.severity)}>{d.severity}</Badge>}>
+				{keyed(shown, d => `${d.file}:${d.line}:${d.col}`).map(({ key, item: d }) => (
+					<Row key={key} k={<Badge tone={severityTone(d.severity)}>{d.severity}</Badge>}>
 						<PathText path={d.file} sel={`${d.line}:${d.col}`} />
 						{d.message && <span className="tv-muted"> {truncate(d.message, 160)}</span>}
 					</Row>
@@ -1331,8 +1338,8 @@ function LocationRows({ text, rows }: { text: string; rows: LocRow[] }): ReactNo
 				</span>
 			)}
 			<div className="tv-list">
-				{shown.map((l, i) => (
-					<Row key={i}>
+				{keyed(shown, l => `${l.file}:${l.line}:${l.col}`).map(({ key, item: l }) => (
+					<Row key={key}>
 						<PathText path={l.file} sel={`${l.line}:${l.col}`} />
 					</Row>
 				))}
@@ -1638,22 +1645,23 @@ function Salient({ args }: { args: Record<string, unknown> }): ReactNode {
 	const runId = num(args.runId);
 	const workflow = str(args.workflow);
 
-	const parts: ReactNode[] = [];
-	if (fullRepo) parts.push(<span className="tv-pattern">{fullRepo}</span>);
-	if (n !== null) parts.push(<Badge>#{n}</Badge>);
-	if (runId !== null) parts.push(<Badge>run #{runId}</Badge>);
-	if (title) parts.push(<span>{truncate(normalizeWs(title), 48)}</span>);
-	if (head && base) parts.push(<span className="tv-faint">{`${head} → ${base}`}</span>);
-	else if (branch) parts.push(<span className="tv-faint">{branch}</span>);
-	if (workflow && op !== "dispatch") parts.push(<span className="tv-faint">{workflow}</span>);
+	const parts: { key: string; node: ReactNode }[] = [];
+	if (fullRepo) parts.push({ key: "repo", node: <span className="tv-pattern">{fullRepo}</span> });
+	if (n !== null) parts.push({ key: "number", node: <Badge>#{n}</Badge> });
+	if (runId !== null) parts.push({ key: "run", node: <Badge>run #{runId}</Badge> });
+	if (title) parts.push({ key: "title", node: <span>{truncate(normalizeWs(title), 48)}</span> });
+	if (head && base) parts.push({ key: "ref", node: <span className="tv-faint">{`${head} → ${base}`}</span> });
+	else if (branch) parts.push({ key: "ref", node: <span className="tv-faint">{branch}</span> });
+	if (workflow && op !== "dispatch")
+		parts.push({ key: "workflow", node: <span className="tv-faint">{workflow}</span> });
 	if (parts.length === 0) return <span className="tv-muted">{argsDigest(args)}</span>;
 
 	return (
 		<>
 			{parts.map((p, i) => (
-				<span key={i}>
+				<span key={p.key}>
 					{i > 0 && " "}
-					{p}
+					{p.node}
 				</span>
 			))}
 		</>
@@ -1783,8 +1791,10 @@ function WatchView({ watch }: { watch: Record<string, unknown> }): ReactNode {
 			{runs.map((item, index) => (
 				<RunBlock run={item} key={num(item.id) ?? index} />
 			))}
-			{failedLogs.map((entry, index) => {
-				if (!isRecord(entry)) return null;
+			{keyed(
+				failedLogs.filter(isRecord),
+				entry => `${str(entry.jobName) ?? "job"}\u001f${num(entry.runId) ?? ""}`,
+			).map(({ key, item: entry }) => {
 				const jobName = str(entry.jobName) ?? "job";
 				const workflow = str(entry.workflowName);
 				const failedRunId = num(entry.runId);
@@ -1793,12 +1803,12 @@ function WatchView({ watch }: { watch: Record<string, unknown> }): ReactNode {
 				const tail = str(entry.tail);
 				if (!tail || entry.available === false) {
 					return (
-						<Note tone="warn" key={index}>
+						<Note tone="warn" key={key}>
 							{title}: log tail unavailable
 						</Note>
 					);
 				}
-				return <Output text={tail} maxLines={12} error title={title} key={index} />;
+				return <Output text={tail} maxLines={12} error title={title} key={key} />;
 			})}
 		</>
 	);
