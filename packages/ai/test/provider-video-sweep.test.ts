@@ -60,6 +60,7 @@ describe("Provider Video Handling Sweep", () => {
 			"kimi.ts",
 
 			// Wire / schemas / helpers / auth (no standalone message content converters)
+			"initial-message.ts", // Constructs an empty assistant message; accepts no prompt content.
 			"vision-content.ts",
 			"vision-guard.ts",
 			"openai-chat-wire.ts",
