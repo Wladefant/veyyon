@@ -8,6 +8,7 @@
  * success. Each action here is asserted on the state it leaves behind: the
  * title the list shows, the entries the export carries, the session the
  * store no longer has.
+ * Active-session headers and session-list rows exercise `gui-host/session-bridge.ts`.
  *
  * Not caught: the quality of a real compaction or handoff, which needs a
  * provider; those paths are asserted only to fail loud without one.

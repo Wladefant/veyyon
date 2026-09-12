@@ -4,8 +4,8 @@
  * refinement was typed, the plan was refused with `{ accepted: false }`, and
  * the text reached nothing: the agent read "Plan refinement requested. Update
  * the plan file, then call resolve again", rewrote the plan from the same
- * information it had the first time, and resubmitted it. The operator's own
- * words were the one input that could have changed the second draft.
+ * information it had the first time, and resubmitted it. The submitted refinement
+ * text must reach `gui-host/plan-approval.ts` before the next draft is generated.
  *
  * CLASS CLOSED: an answer the desktop gathers that does not reach the tool the
  * decision was raised from. The whole path is driven: a real host, a real

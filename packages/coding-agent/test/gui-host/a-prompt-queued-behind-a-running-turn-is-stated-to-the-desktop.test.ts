@@ -10,6 +10,7 @@
  * Observable members are the QueuedPrompts snapshot section on submission,
  * the DequeueQueuedPrompt action outcome and its restored payload, the clear
  * on turn completion, and the suppression of unchanged queue signatures.
+ * These transitions exercise `gui-host/queued-prompts.ts` through the host protocol.
  *
  * NOT CAUGHT: the GPUI composer visual presentation and keybinding bindings,
  * which belong to the desktop front end crate.

@@ -28,6 +28,7 @@
  *    is what starts the project's supervisor, and an unasked re-statement
  *    would start a broker behind every workspace that supervises nothing.
  * 4. The totals re-stated are the ones the turn spent.
+ * Turn completion exercises `gui-host/workspace-republish.ts` through the live host socket.
  *
  * What it does NOT catch: whether the desktop redraws a pane it is not looking
  * at, which is the window's own state store; and a second client watching the

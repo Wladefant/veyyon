@@ -2,28 +2,14 @@
 
 ## [Unreleased]
 
-### Changed
-
-- Custom message, compaction summary and session entry content unions admit `VideoContent` alongside text and images.
-- An exported OpenTelemetry turn carries a video attachment as a `video` blob part; a video block was dropped from the export while images were kept.
-
-### Fixed
-
-- Codex remote compaction requests declare the `responses_compaction_v2` implementation, matching the route they are sent to.
-- Compaction shake keeps the image blocks in a tool result instead of discarding them with the text it replaces.
-
-## [1.3.0] - 2026-08-28
-
-### Breaking Changes
-
-- `AgentOptions.cursorRulesResolver` is removed: an agent no longer supplies a second, per-api rule channel beside its system prompt.
-
 ### Added
 
 - `AgentTool.view` takes a host-agnostic `ToolViewRenderer` from `@veyyon/view`, so a tool describes its call and result cards without receiving a theme or returning a host component; where a tool also declares `renderCall`/`renderResult`, the host-specific pair still wins.
 
 ### Changed
 
+- Custom message, compaction summary and session entry content unions admit `VideoContent` alongside text and images.
+- An exported OpenTelemetry turn carries a video attachment as a `video` blob part; a video block was dropped from the export while images were kept.
 - Legacy hook messages reuse custom-message fields without changing their public type signatures.
 - The turn loop rejects a Harmony leak through one `rejectHarmonyLeak` whether the stream ends with a `done` event or without one; no behavior change.
 - `AgentToolResult`, `AgentToolUpdateCallback`, `ToolTier`, `ToolApprovalDecision` and `ToolApproval` are defined in `@veyyon/tool` as `ToolResult`, `ToolUpdateCallback` and the same approval names; `@veyyon/agent` exports every name it exported before, so no caller changes.
@@ -37,6 +23,7 @@
 
 ### Fixed
 
+- Codex remote compaction requests declare the `responses_compaction_v2` implementation, matching the route they are sent to.
 - `AgentTool.renderResult` accepts the optional call arguments already supported by custom and extension tool renderers.
 - A history summary whose single request times out, or does not fit the summarizing model's context window, is produced in stages: the span is summarized as consecutive segments of up to 32k tokens, four at a time, and the segment summaries are merged in rounds into one summary, so a 234k-token session on a model that never begins a whole-span answer still compacts; `compact()` reports the segment count in `summaryStages` and takes `summaryStaging: "staged"` to start staged.
 - A provider's server-side compaction runs under its own ten-minute deadline instead of the three-minute remote-summarizer deadline that cut every codex compaction of a large span.

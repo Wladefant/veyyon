@@ -4,10 +4,13 @@
 
 ### Added
 
+- Model input capability support includes `"video"` for video-capable models.
 - `closeModelCache()` closes the shared model-cache database and permits reopening it at the current cache path.
 
 ### Changed
 
+- A model reference candidate declares partial pricing, which is what bundled metadata carries; every reader already treated a missing per-token price as unknown. No user-visible behavior changes.
+- Ollama Cloud wire-effort normalization and discovery restrict effort ladders for GLM-5.2 specifically rather than all subsequent GLM point releases.
 - GitLab Duo Workflow discovery reads a record's declared root namespace (`root_namespace_id`, `rootNamespaceId`, or the id or path of its `root_namespace`/`rootAncestor` record) through one `declaredRootNamespaceId` for the explicit and nested lookups; no behavior change.
 - The Antigravity, Codex, Gemini and Ollama discovery readers report a non-ok status as the `status` stage and an unparseable body as the `body` stage through one exported `readDiscoveryJson` in `discovery/failure`; no behavior change.
 - Model spec rejection checks its string, cost and limit fields from ordered tables, reporting the same field names in the same order; no behavior change.
@@ -20,13 +23,13 @@
 - The model row, thinking config, effort ladder and service-tier vocabulary are defined in `@veyyon/model`; `@veyyon/catalog/types`, `@veyyon/catalog/effort` and `@veyyon/catalog/provider-models/wire-capabilities` re-export every name they exported before, so no caller changes.
 - Typed tuple copies use spreads rather than `.concat()`, which a `as const` array does not define. No user-visible behavior changes.
 - A comment on `OPENROUTER_BASE_URL` names the Perplexity auth module at `tools/web/search/providers/perplexity-auth.ts`. No behavior change.
-- A model reference candidate declares partial pricing, which is what bundled metadata carries; every reader already treated a missing per-token price as unknown. No user-visible behavior changes.
-- Ollama Cloud wire-effort normalization and discovery restrict effort ladders for GLM-5.2 specifically rather than all subsequent GLM point releases.
 - An OpenAI-compatible listing's model name falls back to its id through the shared non-empty-string reader; discovered names are unchanged.
 
 ### Fixed
 
+- Normalized model pricing defaults at model construction and cost calculation so custom and discovery models without explicit cost fields do not throw on usage streaming.
 - Case-insensitive host classification no longer treats control characters as URL punctuation.
+
 ## [1.4.1] - 2026-09-08
 
 ### Fixed
@@ -41,26 +44,9 @@
 - An `anthropic-messages` model's compat carries `replayDemotedPriorReasoning`, which drops prior-turn reasoning on a signing endpoint instead of replaying it as demoted prose.
 - The bundled ChatGPT Codex catalog carries `gpt-6-astra` and `gpt-reserve`, each with the low-through-max effort ladder and the freeform `apply_patch` tool the endpoint declares.
 
-- Model input capability support includes `"video"` for video-capable models.
 ### Changed
 
 - The server-side compaction capability comment states the route the ChatGPT Codex backend actually serves. No behavior change.
-
-### Fixed
-
-- Normalized model pricing defaults at model construction and cost calculation so custom and discovery models without explicit cost fields do not throw on usage streaming.
-
-## [1.3.0] - 2026-08-28
-
-### Added
-
-- Export `normalizeOllamaBaseUrl` and `toOllamaNativeBaseUrl`, the single definition of how an Ollama base URL is spelled for each of its two APIs.
-- Added the Command Code provider catalog, with its documented coding flagships as the offline seed and credentialed discovery for the wider Provider API list.
-- Added the Nous Research provider catalog, whose credentialed discovery keeps tool-capable chat models and excludes embedding, media-generation and non-tool rows.
-- Added the `publishesOwnModelLimits` provider flag, which stops generation from backfilling a context window or output cap from another host's same-family model.
-- `ProviderWireCapabilities.anthropicMessages` declares how a provider serves the Anthropic Messages API — its endpoint, credential placement, rejected request features and retryable model errors — and `declaredProviders()` and `declaredCapabilityNames()` derive the declaring sets from the table.
-- Bundled model resolution persists a content-verified enriched snapshot, and a registry cache stamp moves on every row-content write, and on a row crossing the freshness window it is read under, without treating SQLite sidecar churn or a provider re-verifying models it already had as a change.
-- Added `supportsServerCompaction` capability data for ChatGPT Codex backend models on the Responses API.
 
 ### Fixed
 

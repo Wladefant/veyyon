@@ -1,8 +1,8 @@
 /**
  * WHY: persisted content search must read beyond the listing prefix, and preview
  * must not activate, rewrite or take a writer lock on a selected session.
- * Exercises real storage and the production framed host dispatcher. Does not
- * cover native pixels or real provider availability.
+ * Exercises real storage enumeration in `gui-host/actions/session-files.ts` and
+ * the production framed host dispatcher. Does not cover native pixels or provider availability.
  */
 import { afterEach, beforeEach, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";

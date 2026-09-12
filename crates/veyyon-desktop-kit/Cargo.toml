@@ -30,4 +30,4 @@ gpui_platform = { workspace = true, features = ["test-support"], optional = true
 gpui_wgpu = { workspace = true, optional = true }
 
 [dev-dependencies]
-veyyon-desktop-kit = { path = ".", features = ["headless"] }
+veyyon-desktop-kit = { workspace = true, features = ["headless"] }

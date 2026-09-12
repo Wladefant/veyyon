@@ -817,10 +817,13 @@ It requires a reachable model endpoint. The diff-review scene creates and
 replies to a thread, resolves and reopens it, restarts the application, and
 refreshes changed source to check relocated and orphaned anchors.
 
+These scenes include static inspection pauses. Set `SCENE_MOTION_FLOOR=4`
+for their recordings; use the streaming scene for animation cadence.
+
 ```sh
-PROOF_LLM_BASE_URL=<provider-url> \
+PROOF_LLM_BASE_URL=<provider-url> SCENE_MOTION_FLOOR=4 \
   proof/docker/record-native.sh proof/scenes/desktop-session-workflows.sh
-proof/docker/record-native.sh proof/scenes/desktop-diff-review.sh
+SCENE_MOTION_FLOOR=4 proof/docker/record-native.sh proof/scenes/desktop-diff-review.sh
 ```
 
 `record-native.sh` runs the window rather than a terminal: it mounts the

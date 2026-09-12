@@ -65,16 +65,16 @@ review_box "${REVIEW_X}" "${REVIEW_Y}"
 review_aim "${REVIEW_X}" "${REVIEW_Y}"
 if [ "${SCENE_ARM:-after}" = before ]; then
 	# The same real line has no comment control in the baseline executable.
-	shot review-created
 	if [ -f "${TMPDIR}/desktop-state/reviews.json" ]; then
 		abandon_take "review-before" "baseline unexpectedly wrote review state"
 	fi
-	return
+else
+	t "Check the changed total."
+	review_button post-new
+	review_state created
 fi
-t "Check the changed total."
-review_button post-new
-review_state created
 shot review-created
+if [ "${SCENE_ARM:-after}" = before ]; then return; fi
 k "Escape"
 review_open_list
 review_button reply

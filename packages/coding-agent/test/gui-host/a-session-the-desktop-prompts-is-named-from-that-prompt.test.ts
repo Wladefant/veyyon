@@ -11,6 +11,7 @@
  * Beside them: a name the operator chose, which a later prompt must not
  * replace, and a prompt that carries no task, which must leave the session for
  * the next prompt to name rather than latching a greeting onto it.
+ * Prompt handlers exercise `gui-host/session-title.ts`; assertions read persisted session titles.
  *
  * NOT CAUGHT: the local tiny-model title path (a transformers.js worker, not
  * reachable in-process here), the provider request itself, and the rail's own

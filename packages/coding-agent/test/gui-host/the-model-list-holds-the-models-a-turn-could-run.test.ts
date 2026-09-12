@@ -28,6 +28,7 @@
  *    alone.
  * 5. A provider that declares `auth: "none"` is offered though no credential is
  *    stored for it, so the filter is "could run" and not "has a stored key".
+ * The `gui-host/models-view.ts` projection is observed through the production host socket.
  *
  * What it does NOT catch: how the desktop draws an empty picker, and a
  * discovery-backed provider whose models arrive only from its own endpoint —

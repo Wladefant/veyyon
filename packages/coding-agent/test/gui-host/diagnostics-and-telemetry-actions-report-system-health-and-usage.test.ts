@@ -14,6 +14,7 @@
  * 3. ClearOutput creates a new clean session under the same workspace and emits both ActiveSession and Transcript.
  * 4. GetUsage returns real session statistics with input, output, cache tokens and cost without zero-filling.
  * 5. GetContextBreakdown calculates real token categories where total_tokens equals the category sum.
+ * The socket requests exercise `gui-host/actions/diagnostics.ts` against real session state.
  *
  * Gap left:
  * Language server LSP binary execution and external MCP process spawning are exercised by subsystem suites;

@@ -15,11 +15,9 @@ use crate::{
 
 /// What clicking an answer dispatches.
 ///
-/// Most answers are decided when the card is drawn. The two that answer with
-/// the operator's own words are not: a reply and a plan's refinement are
-/// whatever the composer holds at the click, so each is built then. A card
-/// row that answered with the text it was drawn beside would send the words
-/// the operator wrote before them.
+/// Fixed answers are constructed during rendering. Replies and plan refinements
+/// use the current composer text at click time, not the previous rendered
+/// draft.
 #[derive(Clone)]
 pub(super) enum Choice {
 	Fixed(Box<Intent>),

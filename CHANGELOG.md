@@ -63,6 +63,47 @@
 - The desktop Keybindings page rebinds an action: a row is a field holding the chords bound to it, `Enter` writes them to `keybindings.yml` and `Escape` restores what the host reports, and a field stating no readable chord is refused where it was typed rather than written as a binding no key press matches.
 - The desktop Agents page runs a background task from the field above its listing, which spawns it as a subagent of the active session.
 - The GUI host answers the desktop's `SearchContent` action with a `ContentMatches` snapshot, so the Content Search palette lists the workspace lines that carry the typed text with their file and line number.
+- A desktop agent turn ends with a footer naming the model that produced it, revealed while the pointer is over the turn or the turn cursor is on it, and clicking that name opens the session's token and cost accounting on one line in the right panel's Usage tab; the turn header still states none of the seven usage figures.
+- The desktop turn cursor (`Ctrl+Up`, `Ctrl+Down`) stops on the first and last turn instead of stepping past the end, and stepping onto the last turn keeps the transcript following new output instead of raising a "Scroll to end" pill over the end it is already showing.
+- A desktop transcript draws no row for a thinking-level or service-tier change that recorded no value, where it previously stated "thinking level not recorded" and "service tier: unset".
+- The desktop composer's primary action draws the same arrow glyph in every session state and states its action name on hover above the button, where the tag previously opened downwards behind the attention strip and past the column's clipped edge.
+- The desktop command palette lists no command whose capability the host has not declared, where `/queue` and `/terminal` were previously offered against a host that refuses them.
+- A prompt sent to the desktop while a turn runs is listed above the composer input until it runs, and `Alt+Up` takes the newest one back into the draft, where the text previously left the composer and appeared nowhere until the turn ended.
+- The desktop model picker lists each provider's models under one heading, the provider serving the model in effect first and that model first under it, and states a model's identifier only when it is not the name already drawn; a search still finds a model by its provider name or its `provider/model` identifier, and a provider's rows stay under one heading instead of being split by ranking.
+- A desktop popover anchored to a composer control is drawn 384px wide rather than at the centred palette's 576px, so the model picker and the slash-command list no longer cover the turn behind them.
+- Every desktop settings row is drawn 44px tall with its label and description on one line each, and the pointer over a row opens the whole description in a tag over the rows below it, where a description previously wrapped to five and six lines, drew rows of 100px and more, and painted past the row it belonged to.
+- The desktop command palette answers the keyboard with a model catalogue open: the row order is computed when the query, the rows or the command group change and read unchanged by each frame, where every frame re-scored all 4580 rows across five fields and left the window unable to keep up, so typing changed nothing on screen and Enter never reached the selected row.
+- A desktop transcript turn is copied by right-clicking it and pressing `Copy`, which puts the turn's prose, reasoning, notes, tool calls with their results, panes and artifact names on the system clipboard as plain text; nothing outside the composer's own editor could previously be copied out of the window.
+- A desktop session is branched at any prompt in its transcript by right-clicking that turn and pressing `Branch from here`, which forks at that turn's entry and hands its prompt to the composer of the session the fork opened; a branch previously forked only at the transcript's last prompt, whatever the operator was reading.
+- A desktop supervised process is sent any of the five signals its daemon accepts — `Interrupt`, `Terminate`, `Hang up`, `Quit` and `Kill` — by pressing `Signal` on its row and picking one, where the drawer previously offered `Stop` and `Restart` alone and a process that traps `SIGTERM` could be asked to stop and never ended.
+- Prompt attachments support video inputs alongside images, with input modality validation and desktop wire protocol integration.
+- The GUI host engine server connects desktop clients over unix domain sockets and TCP with live session streaming and capability negotiation via the veyyon gui CLI command.
+- The GUI host engine server runs prompt submissions as real turns, streaming transcript updates and assistant deltas to desktop clients while supporting aborts, session continuation, and truthful capability snapshots.
+- The GUI host serves every desktop domain from the real subsystem: session compaction, handoff, branching and export, the workspace file tree, file contents and search, git changes by scope, PTY terminals with streamed output, supervised processes through the launch daemon, model and thinking-level selection, provider authentication, MCP servers and tool calls, subagent tasks, diagnostics, usage, settings, themes and keybindings; an action that cannot be served fails with a typed error naming why.
+- The GUI host settles a prompt, steer or follow-up once the session accepts it, so the composer clears while the turn streams; a tool cancellation targets the running tool call and fails naming a stale one.
+- `startGuiHostServer` takes the credential store the host reads and writes; the default follows the profile's credential sharing as before.
+- The desktop draws every tool call and result from the `ToolView` the tool describes, so the front end carries no terminal renderer and no ANSI text; a card's disclosure state and an open-target request travel through the host as `SetToolViewExpanded` and `OpenToolTarget`.
+- A GPU front end is scaffolded in the `gui/` Cargo workspace, drawn from the presentation fixtures and gated by `gui/gate.sh`; no install builds it and the CLI does not launch it yet.
+- A GPU front end is scaffolded as a host in the `hosts/gui/` Cargo workspace, drawn from the presentation fixtures and gated by `hosts/gui/gate.sh`; no install builds it and the CLI does not launch it yet.
+- The GPU front end draws the window frame: a thread list grouped by checkout and ordered by what is waiting, a terminal panel that collapses to its tab strip, and every screen shape drawn over or instead of the transcript; `ctrl-b` and `ctrl-\`` move the two regions, and both collapse on a spring.
+- A GPU front end ships as a host in the `hosts/gui/` Cargo workspace, gated by `hosts/gui/gate.sh`; no install builds it and the CLI does not launch it yet.
+- The GPU front end shows only what it can be honest about with no engine attached: the checkout it was launched in, conversations written in the window, a composer whose draft and caret belong to its conversation, a command palette over those conversations and five commands, and settings for appearance, text size and grouping.
+- The GPU front end keeps the keyboard on the field the route draws, so the settings pages take shortcuts, a click on chrome leaves the caret in the composer, and the palette's list walks with the arrow keys.
+- The GPU front end states that nothing answers a message once, under the last line of the conversation, where a reply would be.
+- The GPU front end's command palette carries the verbs that change what the window shows: the three panels, every dock and inspector tab, both ends of the transcript, the two appearances and reduced motion, each row stating whether it is the one in force.
+- The GPU front end's command palette lists what the open conversation offers to open: a plan waiting for review, and every image the transcript holds.
+- `secondary-home` and `secondary-end` show the oldest and the newest message in the GPU front end's transcript, and the jump to the oldest stops following the tail.
+- The GPU front end draws a filter field on every surface that narrows itself by one: the agent roster, the settings pages, the model, provider, MCP and tool catalogues, and the Problems dock.
+- The GPU front end holds several conversations at once as tabs, grouped into spaces that each keep their own tab set and panel layout, and reopens the ones whose sessions still exist.
+- The GPU front end browses past sessions by date and repository, searches their content, and opens one read-only.
+- The GPU front end anchors a review comment to the lines it was written against, re-anchors it as the diff changes, and states which anchor was orphaned and why.
+- The GPU front end previews an attachment inline before it is sent, states its type and size, and refuses one the model cannot read with the reason.
+- The GPU front end's command palette, model picker and session switcher are one picker primitive with one keyboard contract.
+- The GPU front end draws a streamed reply as the shape it is becoming, so an unterminated fence, table row or inline span renders as itself rather than as its markup.
+- The GPU front end selects transcript text by dragging across it and copies what the pointer crossed.
+- The GPU front end's theme is chosen in Appearance, previewed while the pointer rests on a row, persisted on press, and drawn on the next frame.
+- The GPU front end draws every floating surface with one treatment: a face lit down its top, an edge that holds against a backdrop of any luminance, and a contact shadow under the lift, so a sheet, popover, menu, tooltip, toast or completion list reads as floating over the surface it covers at both appearances.
+- The GPU front end's interface text size steps through the sizes the Appearance page offers, from `secondary-=` and `secondary--`, the View menu and the command palette.
 - Exported `projectToolDisplay` from `presentation/web-tool-display.ts`, projecting canonical tool execution displays for collab live sessions and HTML export.
 - `tools/view-registry.ts` exports `toolViewDefinitions`, the host-agnostic `ToolViewDefinition` for every tool card the terminal drew, and `tools/renderers.ts` derives the terminal adapters from it; the set of cards and their chrome are unchanged.
 - A tool card value-imports no tool: the search card limits are `tools/search/search-card-limits.ts`, the web search provider label is `tools/web/search/types.ts`, and the launch card owns `callMeta` and `readyPendingSummary`; each name is exported from that one module only. Print mode and the HTML export load a card without the tool behind it, and no output changes.
@@ -88,25 +129,14 @@
 - `runCommitAgentSession` reports its run through a `CommitAgentReporter` instead of writing to stdout itself, and `commit/agentic/agent-render.ts` is the only module that draws it, so the commit domain names neither the terminal engine nor chalk; `veyyon commit` prints the same thinking line, markdown, tool tree and totals it printed before.
 - The `/collab` QR block draws its own leading blank row instead of being presented behind a spacer, so the slash-command registry no longer imports the terminal engine; the transcript shows the same blank row above the code and above the too-narrow hint.
 - The compaction policy vocabulary (check outcomes, the bar a pass is measured against, the truncation edge budget, the prune cache window and idle flush, and the recovery band) lives in `@veyyon/kernel/session/agent-session-compaction-policy` rather than interleaved with shutdown timeouts and credential backoffs in `agent-session.ts`, with no behavior change.
-- A desktop agent turn ends with a footer naming the model that produced it, revealed while the pointer is over the turn or the turn cursor is on it, and clicking that name opens the session's token and cost accounting on one line in the right panel's Usage tab; the turn header still states none of the seven usage figures.
-- The desktop turn cursor (`Ctrl+Up`, `Ctrl+Down`) stops on the first and last turn instead of stepping past the end, and stepping onto the last turn keeps the transcript following new output instead of raising a "Scroll to end" pill over the end it is already showing.
-- A desktop transcript draws no row for a thinking-level or service-tier change that recorded no value, where it previously stated "thinking level not recorded" and "service tier: unset".
-- The desktop composer's primary action draws the same arrow glyph in every session state and states its action name on hover above the button, where the tag previously opened downwards behind the attention strip and past the column's clipped edge.
-- The desktop command palette lists no command whose capability the host has not declared, where `/queue` and `/terminal` were previously offered against a host that refuses them.
-- A prompt sent to the desktop while a turn runs is listed above the composer input until it runs, and `Alt+Up` takes the newest one back into the draft, where the text previously left the composer and appeared nowhere until the turn ended.
-- The desktop model picker lists each provider's models under one heading, the provider serving the model in effect first and that model first under it, and states a model's identifier only when it is not the name already drawn; a search still finds a model by its provider name or its `provider/model` identifier, and a provider's rows stay under one heading instead of being split by ranking.
-- A desktop popover anchored to a composer control is drawn 384px wide rather than at the centred palette's 576px, so the model picker and the slash-command list no longer cover the turn behind them.
-- Every desktop settings row is drawn 44px tall with its label and description on one line each, and the pointer over a row opens the whole description in a tag over the rows below it, where a description previously wrapped to five and six lines, drew rows of 100px and more, and painted past the row it belonged to.
-- The desktop command palette answers the keyboard with a model catalogue open: the row order is computed when the query, the rows or the command group change and read unchanged by each frame, where every frame re-scored all 4580 rows across five fields and left the window unable to keep up, so typing changed nothing on screen and Enter never reached the selected row.
-- A desktop transcript turn is copied by right-clicking it and pressing `Copy`, which puts the turn's prose, reasoning, notes, tool calls with their results, panes and artifact names on the system clipboard as plain text; nothing outside the composer's own editor could previously be copied out of the window.
-- A desktop session is branched at any prompt in its transcript by right-clicking that turn and pressing `Branch from here`, which forks at that turn's entry and hands its prompt to the composer of the session the fork opened; a branch previously forked only at the transcript's last prompt, whatever the operator was reading.
-- A desktop supervised process is sent any of the five signals its daemon accepts — `Interrupt`, `Terminate`, `Hang up`, `Quit` and `Kill` — by pressing `Signal` on its row and picking one, where the drawer previously offered `Stop` and `Restart` alone and a process that traps `SIGTERM` could be asked to stop and never ended.
 - `resolveSlashCommand` in `slash-commands/helpers/parse` resolves a parsed invocation against a command set, joining the first argument token back onto a namespaced plugin command name.
 - `SingleResult.isolationFallback` records the requested and actual isolation backends and the reason when an explicit mode was not honoured; `isolationModeName` in `task/worktree` states a backend's setting spelling.
 - `TruncationMeta.totalLinesUnknown` states that a read's scan stopped after the shown window, so the notice omits a total it does not have.
 - `PLUGIN_MANIFEST_ENTRY_KEYS` and `PluginManifestEntryKey` in `extensibility/plugins/loader` state the four manifest entry keys a plugin contributes through.
 - `cli/stdout-drain` exports `awaitStdoutDrain` and `exitAfterStdoutDrain`, the one way a non-interactive mode exits after its last frame is written.
+- `AgentTool.view` takes a host-agnostic `ToolViewRenderer` from `@veyyon/view`, so a tool describes its call and result cards without receiving a theme or returning a host component; where a tool also declares `renderCall`/`renderResult`, the host-specific pair still wins.
 - `VideoContent` support across provider serialization and fallback placeholder handling.
+- Model input capability support includes `"video"` for video-capable models.
 - `closeModelCache()` closes the shared model-cache database and permits reopening it at the current cache path.
 - Exported `stripApplyPatchPathNoise` from `@veyyon/hashline` for shared header-path normalization across streaming and patch parsing.
 - `@veyyon/host` states what a host offers a plugin: `HostNotification` and `HostNotifier`, each capability optional and absent when the host cannot honour it. The package imports nothing.
@@ -134,6 +164,20 @@
 - `TUI.frameScrollable` states whether the last composed frame had content above the viewport, so a host can render a scroll affordance without re-deriving it from row counts it cannot see.
 - The package is `hosts/terminal/engine` in the repository, beside the other halves of the terminal host. The published package name, exports and entry points are unchanged.
 - `SUPPORTED_VIDEO_MIME_TYPES` exports the supported video MIME types (`video/mp4`, `video/webm`, `video/quicktime`).
+- `@veyyon/utils/fs-tool-args` parses a `read` or `write` tool call's arguments and result details (`parseReadArgs`, `parseReadDetails`, `parseWriteArgs`, `parseWriteDetails`, `countLines`), moved from `@veyyon/tool-render` so every host reads them without the React renderers.
+- `BracketedPasteHandler.route(data, sinks)` delivers one chunk's parts to `PasteSinks`: bytes before the start marker to `keys`, the assembled payload to `paste`, and bytes after the end marker to `reenter`; it returns `false` when the chunk held no paste sequence.
+- `@veyyon/utils/tab-width` is the one definition of `replaceTabs` and `DEFAULT_TAB_WIDTH`, a dependency-free module the browser bundles share; `@veyyon/utils/wrap` and `@veyyon/utils/tab-spacing` re-export them unchanged.
+- `@veyyon/utils/terminal-emulator` resolves terminal identity without loading the terminal renderer.
+- `@veyyon/utils/cli-usage-error` is the one `CliUsageError` class, a leaf a CLI entry catches without loading the command framework; `@veyyon/utils/cli` still exports it.
+- `@veyyon/utils/json-snapshot` atomically stores rebuildable JSON snapshots with one serialization and verifies their input fingerprint and exact payload bytes.
+- `@veyyon/utils/format` owns `formatCostTiered` and `normalizePremiumRequests`, the terminal cost and premium-request formatters the status row and the stats CLI read.
+- `@veyyon/utils/format` owns `formatContextUsage`, the `47K/200K` reading of tokens against a limit that the status-line gauge, an agent progress row and an eval cell's agent tree all state.
+- The string, escape, keyboard, mouse, motion and layout-math primitives that `@veyyon/tui` used to own are `@veyyon/utils` modules, reachable by subpath and not on the barrel, so a caller that needs the escape bytes or the fuzzy matcher no longer declares a dependency on the terminal renderer.
+- `@veyyon/utils/color-format` states whether escape sequences are written as 24-bit or 256-colour SGR; `@veyyon/tui` sets it once the terminal's capabilities resolve, which is how a utils module renders colour without reading terminal state.
+- `@veyyon/utils/ttyid` reads the controlling terminal's identity, and `@veyyon/utils/image-fallback` states the four causes a client can fail to draw a picture for, as `IMAGE_FALLBACK_REASONS` and the `ImageFallbackReason` union over it. Both moved out of `@veyyon/tui`, so a conversation engine can name a session or a cause without importing a renderer.
+- `@veyyon/utils/host-notification` states `HostNotification`, the out-of-band message a tool asks its host to deliver, and `HostNotifier`, the delivery a host installs. Neither names a terminal, so a GUI host can honour one.
+- `@veyyon/utils/sanitize-status-text` reduces text to one line a terminal draws as text, stripping escape sequences, mapping the remaining controls to spaces and collapsing space runs, so domain code that names a value in a single-line surface no longer imports the terminal host to sanitize it.
+- `@veyyon/utils/markdown-table` renders and escapes GFM tables, `@veyyon/utils/turndown` builds the Turndown instance and normalizes a `<td>`-first table, and `@veyyon/utils/html-markdown` converts HTML to markdown through both. All three are subpaths and none is on the barrel, so a document converter or a scraper reaches them without importing the coding agent.
 - `@veyyon/view` states the host-agnostic tool view model: `ToolView`, `StatusRowView`, `TextBlockView`, `ViewSpan`, `ViewTone`, `ViewStatus` and `ToolViewRenderer`. A tool returning one of these describes its output without importing a terminal component or receiving a theme, so any host can draw it. The package has no dependencies.
 - `ToolViewContext` states the disclosure state a host passes to a view renderer, so a tool can show a shorter summary collapsed and its full output expanded without naming a host.
 - `FramedBlockView` states a framed panel: a `StatusRowView` header, an optional `ViewStatus` the host reads for the rail colour, and `ViewSection`s of `ViewLine`s, so a tool describes a card without negotiating a width.
@@ -169,6 +213,8 @@
 
 ### Changed
 
+- The GUI host reports a failed action through the shared `errorMessage` helper rather than its own inline error narrowing in each handler. No user-visible behavior changes.
+- A terminal the desktop opens starts its shell in the root session tree's CPU budget group, so a shell that outlives the session it was opened beside stays capped rather than uncapped.
 - A running tool card animates one mark: the "… (streaming)" spinner row is drawn only under a header that carries no running spinner of its own, and an agent an eval cell spawned shows the task card's static accent mark instead of a second spinner.
 - The read and write cards parse their arguments and details through `@veyyon/utils/fs-tool-args`, so a terminal launch no longer evaluates `@veyyon/tool-render`; the cards draw the same rows.
 - The legacy `memories.enabled` key is no longer a declared or host-defaulted setting: a config that still holds it migrates to `memory.backend` on load, the key is dropped on the next rewrite, and the local memory pipeline is enabled by `memory.backend: local` only. The presentation module's error messages, read-target parsing and cursor clamping use the `@veyyon/utils` helpers; no behavior change.
@@ -258,7 +304,6 @@
 - Tool views share progress rows, diff statistics, disclosure metadata, and task separators without changing rendered output.
 - Extension kind labels use a shared function without changing list or sidebar text.
 - Handbook HTML and search assets are generated during documentation and website builds instead of being tracked in Git.
-- The GUI host reports a failed action through the shared `errorMessage` helper rather than its own inline error narrowing in each handler. No user-visible behavior changes.
 - Startup reads setting-change signals and terminal formatting without constructing the settings store or unrelated tool modules.
 - The terminal host constructs autoresearch screens and styled slash-command reports; headless command execution no longer imports those terminal components.
 - Subagent statistics and output sanitization are shared across the task tool's view and dashboard through host-independent presentation helpers in task/agent-stats.ts without terminal imports. No user-visible behavior changes.
@@ -355,9 +400,20 @@
 - The `/agents` dashboard uses a centered, bordered card with bracketed tabs and explicit agent status words.
 - The status row reads its truncation limits from `tools/core/render-limits`, a leaf that imports nothing, rather than `tools/core/render-utils`, which drops the tool renderers, path helpers and image resizing from the launch card's import graph; first-frame time is unchanged, because those modules only declare functions.
 - An MCP tool describes its call and result cards as a `ToolView` instead of building terminal components in `mcp/render.ts`, which is deleted; the terminal states the same arguments, structure walk, raw rows, held-back count and spill warning, indented two columns under the row that heads them and without the branch glyph the call row opened with.
-- A terminal the desktop opens starts its shell in the root session tree's CPU budget group, so a shell that outlives the session it was opened beside stays capped rather than uncapped.
+- `SETTING_KIND_HANDLERS` is typed per setting kind, so each handler receives the definition variant its key selects instead of the whole union widened to `any`. No user-visible behavior changes.
+- Subagent drive paths share abort-aware promise handling with unchanged cancellation behavior.
+- Hook and user-message selectors share search editing without per-keystroke callback or query-array allocations.
 - Custom message, compaction summary and session entry content unions admit `VideoContent` alongside text and images.
 - An exported OpenTelemetry turn carries a video attachment as a `video` blob part; a video block was dropped from the export while images were kept.
+- Legacy hook messages reuse custom-message fields without changing their public type signatures.
+- The turn loop rejects a Harmony leak through one `rejectHarmonyLeak` whether the stream ends with a `done` event or without one; no behavior change.
+- `AgentToolResult`, `AgentToolUpdateCallback`, `ToolTier`, `ToolApprovalDecision` and `ToolApproval` are defined in `@veyyon/tool` as `ToolResult`, `ToolUpdateCallback` and the same approval names; `@veyyon/agent` exports every name it exported before, so no caller changes.
+- The session-entry vocabulary (`SessionEntry` and every member), `AgentMessage` and the `CustomAgentMessages` and `CustomCompactionSessionEntries` hooks are defined in `@veyyon/session`; `@veyyon/agent-core` and `@veyyon/agent-core/compaction/entries` export every name they exported before, and an augmentation now names `@veyyon/session`.
+- A source-path comment in `thinking.ts` names the coding-agent module its reader moved to; behavior is unchanged.
+- Doc comments refer to a child run as an agent rather than a subagent. No behavior change.
+- `onSpanStart` and `onSpanEnd` run through one guarded call that reports a throw as the same `on_span_start_failed` / `on_span_end_failed` warning, with the thrown error attached; no behavior change.
+- The steering and follow-up queues drain through one step that takes the first message in `one-at-a-time` mode and every message in `all` mode; delivery order and turn count are unchanged.
+- A tool call's arguments and result serialize through one telemetry path keyed by the `contentSerializer` field, and an `onChatUsage` throw or rejection is reported as `on_chat_usage_failed` from one place on both the agent-loop and the manual-record path; no behavior change.
 - The NVIDIA, Xiaomi, Xiaomi Token Plan and Alibaba Coding Plan logins take the pasted key through the same `promptApiKey` as every `createApiKeyLogin` provider: the key is trimmed, an empty paste is `ApiKeyRequiredError`, an abort during the paste is `LoginCancelledError`, and a host without `onPrompt` is `OnPromptRequiredError`; no behavior change.
 - API-key and OAuth credential ranking score usage windows and block a credential at its scoped limit through one `#rankUsageResults`, an OAuth refresh reads its candidate row before and after the lease through one `readRefreshCandidate`, and the plan-filter and usage-limit rejection runs before and after a refresh through one `usageRejects`; no behavior change.
 - Tool-argument validation runs its seven pre-validation normalizations through one ordered pass table, before the first check and after every issue-driven coercion, and the two schema-agnostic value walks share one copy-on-write array step; no behavior change.
@@ -396,6 +452,8 @@
 - Source-path comments in `constants.ts` and `generate.ts` name the benchmark modules they cite at their new paths under `tests/evals/`; behavior is unchanged.
 - Compacted dictionary generator candidate keywords with declarative lookup tables.
 - Doc comments refer to a child stream as an agent stream rather than a subagent stream. No behavior change.
+- A model reference candidate declares partial pricing, which is what bundled metadata carries; every reader already treated a missing per-token price as unknown. No user-visible behavior changes.
+- Ollama Cloud wire-effort normalization and discovery restrict effort ladders for GLM-5.2 specifically rather than all subsequent GLM point releases.
 - GitLab Duo Workflow discovery reads a record's declared root namespace (`root_namespace_id`, `rootNamespaceId`, or the id or path of its `root_namespace`/`rootAncestor` record) through one `declaredRootNamespaceId` for the explicit and nested lookups; no behavior change.
 - The Antigravity, Codex, Gemini and Ollama discovery readers report a non-ok status as the `status` stage and an unparseable body as the `body` stage through one exported `readDiscoveryJson` in `discovery/failure`; no behavior change.
 - Model spec rejection checks its string, cost and limit fields from ordered tables, reporting the same field names in the same order; no behavior change.
@@ -407,8 +465,6 @@
 - Bundled model snapshots use the shared integrity-framed format without repeated JSON serialization or durability flushes, and obsolete snapshots rebuild on load.
 - The model row, thinking config, effort ladder and service-tier vocabulary are defined in `@veyyon/model`; `@veyyon/catalog/types`, `@veyyon/catalog/effort` and `@veyyon/catalog/provider-models/wire-capabilities` re-export every name they exported before, so no caller changes.
 - A comment on `OPENROUTER_BASE_URL` names the Perplexity auth module at `tools/web/search/providers/perplexity-auth.ts`. No behavior change.
-- A model reference candidate declares partial pricing, which is what bundled metadata carries; every reader already treated a missing per-token price as unknown. No user-visible behavior changes.
-- Ollama Cloud wire-effort normalization and discovery restrict effort ladders for GLM-5.2 specifically rather than all subsequent GLM point releases.
 - An OpenAI-compatible listing's model name falls back to its id through the shared non-empty-string reader; discovered names are unchanged.
 - The package directory is `clients/web` instead of `packages/collab-web`; the package name, the relay and the guest client are unchanged.
 - Updated collaboration client to protocol v4, carrying tool execution displays on active tool state and tool result messages.
@@ -483,6 +539,27 @@
 - `TerminalNotification` extends `HostNotification` from `@veyyon/utils/host-notification`, so a terminal is one host that can deliver a tool's notification and the two shapes cannot drift apart.
 - `visualColAtOffset` and `offsetAtVisualCol` are exported from `@veyyon/utils/width` and shared by `Editor` and `Input`.
 - Source comments refer to the spawned-agent HUD as the agent HUD. No behavior change.
+- The relaxed JSON parser's object and array loops position on the next element and consume the delimiter after it through one pair of container steps, and both atomic-write target resolvers record a symlink hop and raise `ELOOP` through one helper; no behavior change.
+- Display LaTeX splits its top-level rows and an environment body splits its `\\` rows through one depth-aware scanner; no behavior change.
+- Literal prompt templates skip variable analysis and compilation while preserving formatted output.
+- XML escaping, C1 normalization, OSC 66 alignment and tab counting share implementations without changing rendered text.
+- LaTeX rendering shares code-point counting with unchanged output, and `isNonEmptyString` provides shared session-field validation.
+- Web and terminal Markdown rendering use shared HTML entity decoding with unchanged output.
+- `getGlobalSubagentsDir` retains its public export name and definitions-directory behavior.
+- JSON snapshot parsing uses the shared JSON parser; snapshot validation is unchanged.
+- `HostNotification` and `HostNotifier` are defined in `@veyyon/host`; `@veyyon/utils/host-notification` re-exports both, so no caller changes.
+- Source-path comments in `dirs.ts` name the website changelog generator at `apps/site/tools/gen-changelog.mjs`; behavior is unchanged.
+- Root help lists subcommands from the registry summaries when those are present, and from the loaded command classes otherwise.
+- `moduleSpecifiersIn`, `typeOnlyModuleSpecifiersIn` and `dynamicImportSpecifiersIn` collect their specifiers through one capture loop; the reach they report is unchanged.
+- `getGithubCacheDbPath` and `getAuthBrokerSnapshotCachePath` resolve through one env-overridable cache-file step, and LaTeX `\overset`, `\stackrel` and `\underset` stack through one scripted step; resolved paths and rendered text are unchanged.
+- Source-path comments in `ansi.ts` and `sgr.ts` name the terminal output-block at `src/modes/terminal/draw/output-block.ts`. No user-visible behavior changes.
+- Source-path comments in `ansi.ts` and `eval-prompt-overrides.ts` name the benchmark modules they cite at their new paths under `tests/evals/`; behavior is unchanged.
+- `sanitize-text.ts` imports the escape byte from `@veyyon/utils/ansi` rather than declaring a second copy of it.
+- Source-path comments in `sanitize-text.ts`, `strip-ansi.ts`, `tab-spacing.ts` and `width.ts` name the Rust modules they cite at their new paths under `natives/`. No user-visible behavior changes.
+- The async and sync lock-directory inspectors classify a lock's `info` file (plain directory, link and size checks, opened-descriptor identity, owner record) through shared pure helpers between their own syscalls, with the same observations for every input.
+- Source-path comments in `adversarial-strings.ts`, `ansi.ts`, `tab-spacing.ts` and `width.ts` name the modules they cite at the paths those modules occupy: `visibleWidth`, `sliceWithWidth` and the ansi escape are `packages/utils` modules and their locks are `packages/utils` suites, while the adversarial-string helpers are `hosts/terminal/engine` test helpers. No user-visible behavior changes.
+- `workspaceModuleReachResolution()` resolves every workspace member declared by the root manifest, at whatever depth it sits, instead of the direct children of `packages/`, so a cross-package specifier into `@veyyon/kernel`, `@veyyon/tui`, a contract or a plugin resolves again and every module-reach ceiling built on it measures what it claims.
+- `isKeyRelease` and `isKeyRepeat` classify a Kitty event through one check of the protocol state, the paste marker and the event pattern; the answers are unchanged.
 - Doc comments refer to the spawned-agent wall as the agent wall. No behavior change.
 - `ViewSpan.symbol` names a key of `UNICODE_SYMBOLS`; a key no host has draws the span's `text`, never the key.
 - The Hugging Face handler fetches a model, dataset or space record and its README through one `loadHfResource`, and the YouTube handler downloads the manual and auto-generated subtitle tracks through one `downloadSubtitleText`; no behavior change.
@@ -500,16 +577,18 @@
 
 ### Removed
 
-- `WRITE_GUTTER_MIN_WIDTH` is no longer exported: the line-number gutter of a code card is the host's, stated once in `src/modes/terminal/draw/draw-tool-view.ts`, and no tool sets it.
 - The GUI host protocol drops the `ProcessWait` and `ProcessDescribe` actions: the supervised-process listing already carries each process's application, arguments, working directory, lifetime, status and exit code, so a describe reply replaced the pane's whole list with the one row it named and a wait held the host's request loop for the length of the process.
 - The GUI host protocol drops the `ConnectMcp`, `DisconnectMcp` and `CallMcpTool` actions and the `McpToolResult` snapshot section: `SetMcpEnabled` connects, disconnects and reconnects a server, and an MCP tool reaches a session as an ordinary tool call through the agent rather than through a host action with no editor for its arguments.
 - The GUI host protocol drops the `RefreshAuth` action, which was `RefreshProviders` under a second name: both answered with the same `Providers` snapshot from the same credential store, and the provider its payload named was discarded.
+- Removed the unused desktop SplitButton primitive and its registered scene.
+- `WRITE_GUTTER_MIN_WIDTH` is no longer exported: the line-number gutter of a code card is the host's, stated once in `src/modes/terminal/draw/draw-tool-view.ts`, and no tool sets it.
 - `resolveModelFromSettings` is removed from `config/model-resolver`; the role chain a session starts from resolves through `resolveModelRoleValue`, which reports why a role failed.
 - `ReadRenderArgs` no longer carries `offset`: the `read` schema states a line window on the path itself (`src/app.ts:50-200`), and `limit` is the directory entry cap.
 - `@veyyon/kernel/session/content-text` is gone: the session spine calls the `contentText` owner in `@veyyon/utils`, which carries the separator, image, `trimBlocks` and `trimString` options that copy held.
 
 ### Fixed
 
+- Desktop source builds fetch the pinned GPUI framework without Git authentication.
 - Desktop replies render pipe tables as grids and preserve inline Markdown formatting during streaming without flashing empty delimiters.
 - Desktop command, model, history and theme lists share keyboard selection and availability checks.
 - Copied files remain typed attachments instead of inserting filesystem paths into the desktop draft.
@@ -604,9 +683,32 @@
 - The desktop's syncing screen draws the progress it authored: a determinate bar over the fraction of snapshots received when the host declared a total, and an indeterminate indicator when it declared none, instead of a line of text alone.
 - A desktop control is offered only while the transport can carry what it would send: the composer's send button, a decision answer, a session deletion and every other action read the transport as their reason while detached, connecting, syncing or unreachable, where the capability map the host declared before the socket dropped left them drawn at rest and answering a click that reached nothing; while reconnecting, navigation over the cached queue and transcript stays enabled and only a state change is withheld.
 - A `modelOverrides` entry that states a thinking ladder is offered on a model whose upstream metadata declares no effort control, or declares a different ladder; the authored ladder replaces the declared surface instead of being discarded.
-- `SETTING_KIND_HANDLERS` is typed per setting kind, so each handler receives the definition variant its key selects instead of the whole union widened to `any`. No user-visible behavior changes.
-- Subagent drive paths share abort-aware promise handling with unchanged cancellation behavior.
-- Hook and user-message selectors share search editing without per-keystroke callback or query-array allocations.
+- A desktop pointer reaches only what it is over: a press or wheel over an open dialog, palette, menu or the anchored model catalogue no longer also selects or scrolls the queue behind it, and a press inside a dialog is no longer followed in the same pass by a background element taking the focus back. A General settings row's control draws the width of its column, so a string, record, model-chain or free-form array field shows its value and takes a click at the point the pointer landed instead of collapsing to an empty pill on the trailing edge.
+- The GPU front end's theme is the window's own preference rather than an engine request, so a detached window can be themed, and the profile theme list is read-only because a profile theme carries no palette the window could draw.
+- The desktop host states that profile theme listing is unavailable rather than describing a theme selection it never owned.
+- The desktop renderer repaints only the region a state change declares, keeps unaffected content in a retained texture, clips rounded and path-bounded subtrees, and reuses shaped text across frames; Santh GPUI is a revision-pinned Git dependency from the private canonical `santhreal/gpui` repository.
+- The native desktop composer integrates model selection and an up-arrow primary action, with secondary turn actions in slash commands and a separate stop control during active turns.
+- Native desktop palettes retain their closing transition and reverse from their current position when reopened.
+- Desktop controls reuse installed theme tokens rather than parsing bundled fallback tokens during each render.
+- Native desktop commands group Account and Settings destinations behind shared Back and Close navigation while preserving composer drafts.
+- Native desktop queue cards reveal Park and Defer on hover and place Branch and Delete in their context menu.
+- Native terminal drawers retain pointer focus over the composer and consume forwarded keystrokes without local echo.
+- Native desktop General settings renders rows on demand, preserves scroll across value updates, and fits the available window height.
+- GUI host catalogs and SDK sessions load profile models from YAML configuration while preserving legacy JSON migration.
+- Native desktop palette search matches visible subtitles, including provider/model identifiers, without duplicating rows.
+- Native desktop transcript navigation scrolls through virtualized history with measured page heights, animated transitions, and manual-scroll interruption.
+- Native desktop command search matches action descriptions, including `new session`.
+- Persisted desktop transcripts display readable session changes and omit hidden metadata without losing branch links or raw records.
+- Native desktop multiline drafts scroll within the composer to keep the caret visible during editing and resizing.
+- Native desktop transcripts distinguish annotations, structural summaries, and execution languages while preserving searchable recorded content.
+- The GUI host omits a setting whose value or schema default resolves to `undefined` from the settings snapshot instead of shipping the entry without the `value` and `default` fields, which the desktop decoder rejected as a fatal protocol error and dropped the connection; observed with `auth.broker.token` on a host with no broker token.
+- A comment in the GUI host frame decoder names the Rust file that mirrors the frame-size bound correctly. No behavior change.
+- The desktop host names one accumulating entry per streamed reply, so the desktop replaces that entry as the reply grows; while unreleased every delta carried a new name and one reply drew as a column of duplicates.
+- Native desktop drafts and attachments clear only after the matching host acknowledgment succeeds, while failed requests retain submitted content.
+- Desktop capability scenes initialize draft text so turn submission availability remains visible in rendered scenes.
+- Desktop keyboard and pointer actions notify the host observer at the shared dispatch boundary without waiting for an unrelated repaint.
+- GUI host branching uses the session lifecycle for both loaded and unloaded sessions, preserving extension cancellation and source transcripts.
+- Native desktop backdrop blur renders on surfaces without texture-copy support instead of leaving the window on its initial frame.
 - Print, JSON and RPC mode flush Bun's stdout sink before exiting, so a piped consumer receives the whole last frame instead of losing up to 1 MiB of queued output.
 - A spawned agent's card shows its resolved-model badge again on the live block, the registry path an extension wraps and the rebuilt transcript, per `agent.showResolvedModelBadge`.
 - With `VEYYON_FORCE_IMAGE_PROTOCOL=sixel` and `VEYYON_ALLOW_SIXEL_PASSTHROUGH=1`, a bash card draws an inline Sixel image row as the program wrote it instead of blanking it.
@@ -707,7 +809,6 @@
 - A turn that calls a tool and then stops with text is treated as ending in text: the todo reminder fires again as the board changes instead of falling silent after the first one, and the rewind, plan-mode, verification and code-review checks run at that stop.
 - The goal report from `/goal show` and the goal detail menu states the goal's status once: a paused goal read `Status: paused (paused)`, and a finished one `Status: complete (paused)`. Goal mode being off is now named only where the status does not already carry it, as `active (mode off)`.
 - A goal objective reaches every surface that shows it as one plain line: the `/goal show` report, the `/goal` menu title, the warning a disabled Goal Mode prints over a stored goal, the `/goal` autocomplete row and the goal tool's own card each formatted the objective raw, so an escape sequence in one styled or moved the rest of the surface, a tab opened a hole in it, and a newline split it across two fields.
-- A desktop pointer reaches only what it is over: a press or wheel over an open dialog, palette, menu or the anchored model catalogue no longer also selects or scrolls the queue behind it, and a press inside a dialog is no longer followed in the same pass by a background element taking the focus back. A General settings row's control draws the width of its column, so a string, record, model-chain or free-form array field shows its value and takes a click at the point the pointer landed instead of collapsing to an empty pill on the trailing edge.
 - `veyyon profile new` runs in the compiled binary; 1.4.1 failed with `awaitPromise is not defined` from a mis-minified dynamic import, and `--smoke-test` and the installer CI now drive the profile seed path through the artifact.
 - `--export <path>` of a missing or non-file session exits non-zero with `Session file not found` or `Not a session file` instead of writing an empty transcript and reporting success.
 - `--mode json` exits `EXIT_FAILURE` on an errored turn and `EXIT_INTERRUPTED` on an aborted one, as text mode does; print and RPC mode wait for stdout to drain before exiting so a piped consumer receives the last frame.
@@ -739,9 +840,11 @@
 - A CommonJS extension (`module.exports = …`, or a transpiled module with `exports.__esModule`) runs instead of being reported as missing its default export; the wrapper mirrors Bun's `__esModule` interop.
 - A marketplace catalog entry the parser drops is reported with the plugin name, the failing field and the reason: `veyyon plugin marketplace add`/`update` print it to stderr and a session states it on the notice channel; the entry was skipped in silence and the cached catalog persisted without it.
 - Codex remote compaction requests declare the `responses_compaction_v2` implementation, matching the route they are sent to.
-- Compaction shake keeps the image blocks in a tool result instead of discarding them with the text it replaces.
+- `AgentTool.renderResult` accepts the optional call arguments already supported by custom and extension tool renderers.
+- A history summary whose single request times out, or does not fit the summarizing model's context window, is produced in stages: the span is summarized as consecutive segments of up to 32k tokens, four at a time, and the segment summaries are merged in rounds into one summary, so a 234k-token session on a model that never begins a whole-span answer still compacts; `compact()` reports the segment count in `summaryStages` and takes `summaryStaging: "staged"` to start staged.
+- A provider's server-side compaction runs under its own ten-minute deadline instead of the three-minute remote-summarizer deadline that cut every codex compaction of a large span.
+- The staged-summary segment budget and worker count clamp through the shared `clampLow`, and the engine classifies a summary timeout through the error-flag leaf modules rather than the error barrel; no behavior change.
 - ChatGPT Codex server-side compaction posts to the codex responses route instead of the retired `/responses/compact` route, which answered 404 and turned the session over to local compaction for the rest of its life.
-- Codex remote compaction keeps at least one user turn when the retained-token budget it is handed is not a finite number, instead of replaying a window holding nothing but the compaction item.
 - A stream that stalls after its first event ("<provider> stream stalled while waiting for the next event") classifies as a timeout as well as transient, so auto-compaction moves to the next candidate model instead of re-sending the full context to the model that stalled up to `retry.maxRetries` times.
 - A Codex websocket turn that the server accepts and then leaves without progress for the idle window is retried on the websocket once and then run over SSE, instead of spending the whole websocket retry budget on stalls, which held one compaction summary for thirty minutes per attempt.
 - A codex server-side compaction cut by its deadline fails as a timeout, and one the caller cancels fails as a cancellation, instead of both reporting "stream closed before response.completed" as a backend fault.
@@ -749,6 +852,7 @@
 - Cursor and Devin protobuf regeneration invokes the workspace compiler, and Cursor output is written to the catalog package.
 - Credential-store startup applies SQLite busy handling and WAL mode before initializing refresh leases, allowing concurrent launches to wait for database locks.
 - Google's generic `RESOURCE_EXHAUSTED` 429 body ("Resource has been exhausted (e.g. check quota)") classifies as a per-minute throttle retried on the same account after 45-75 s, instead of a daily quota wall whose 30-minute wait exceeded the retry budget and ended the turn on the first 429; a body that states a quota keeps the quota classification.
+- Normalized model pricing defaults at model construction and cost calculation so custom and discovery models without explicit cost fields do not throw on usage streaming.
 - Case-insensitive host classification no longer treats control characters as URL punctuation.
 - `codingAgentDir()` resolves `packages/coding-agent` from the repository root, so the binary staleness preflight scans the coding agent's sources again after the package moved to `tests/evals`; it had resolved a sibling directory that does not exist and reported every binary current.
 - A plain `INS.POST` anchored on the trailing phantom line of a newline-terminated file appends the body as new terminated lines, like `INS.TAIL`; the rebuild emitted the phantom sentinel as an empty line and left the new last line without its newline.
@@ -776,6 +880,7 @@
 - The row shown in place of a picture names the setting that undoes the reason when there is one, instead of stating the reason alone.
 - A frame that shrinks below the committed boundary with the composer focused (an IRC card expiring, a displaced todo snapshot retracting, an agent sub-row or HUD row going, the ask dialog's inline editor collapsing) re-shows the frame tail without lowering the commit index, so the rows it re-shows are never appended to native scrollback a second time when the frame grows back; under a tall running tool card this appended the same rows on every insert/retract cycle and left thousands of copies of one status row in scrollback.
 - A frame that grows back while its window still shows rows below the commit boundary keeps sliding the window in place until it passes that boundary, with or without a focused cursor, instead of painting a window shorter than the viewport with blank rows under it.
+- `stripAnsi` removes a CSI sequence written with colon subparameters. The parameter class was `[0-9;?]`, but the spec's parameter bytes are the whole `0x30-0x3f` range, so `:` `<` `=` `>` were not matched: a true-color SGR of the form `ESC [ 38:2:255:0:0 m`, which libvte and several test runners emit, left `38:2:255:0:0m` behind as visible text in captured output. The class is now the spec's, and the three byte classes are disjoint so the pattern accepts exactly what a greedy scanner accepts. The behaviour is pinned against `tests/fixtures/ansi-strip-corpus.json`, which the Rust `strip_ansi` in the shell minimizer reads too, so the two implementations answer the same cases instead of drifting apart.
 
 ## [1.4.1] - 2026-09-08
 
@@ -827,13 +932,6 @@
 - A bare interactive launch replays the previous launch's card from a cache before the CLI's import graph is evaluated, then adopts those rows and corrects only what changed. `bun scripts/bench-startup.ts --runs 5 --bin packages/coding-agent/dist/vey` reports the card's first byte at a 34-35ms median composed and a 15ms median replayed. The recording is discarded unless the terminal size, the environment this process received and the binary's path, size and modification time all still match, and it ages out after 24 hours; a launch whose composed card disagrees with the replayed rows drops the recording so the next launch records a fresh one.
 - `bun scripts/bench-startup.ts` gains a `replay` arm and keeps the first-frame recording inside its scratch directory. The recording resolves its path from `os.homedir()`, which Bun fixes at process start, so the bench's seeded `HOME` did not reach it and a run read and overwrote the operator's own cache.
 - `VEYYON_REPLAY_DEBUG` names a file the launch appends its replay decision to. A rejected recording is otherwise indistinguishable from a slow launch, and the logger does not exist yet at that point.
-- Prompt attachments support video inputs alongside images, with input modality validation and desktop wire protocol integration.
-- The GUI host engine server connects desktop clients over unix domain sockets and TCP with live session streaming and capability negotiation via the veyyon gui CLI command.
-- The GUI host engine server runs prompt submissions as real turns, streaming transcript updates and assistant deltas to desktop clients while supporting aborts, session continuation, and truthful capability snapshots.
-- The GUI host serves every desktop domain from the real subsystem: session compaction, handoff, branching and export, the workspace file tree, file contents and search, git changes by scope, PTY terminals with streamed output, supervised processes through the launch daemon, model and thinking-level selection, provider authentication, MCP servers and tool calls, subagent tasks, diagnostics, usage, settings, themes and keybindings; an action that cannot be served fails with a typed error naming why.
-- The GUI host settles a prompt, steer or follow-up once the session accepts it, so the composer clears while the turn streams; a tool cancellation targets the running tool call and fails naming a stale one.
-- `startGuiHostServer` takes the credential store the host reads and writes; the default follows the profile's credential sharing as before.
-- The desktop draws every tool call and result from the `ToolView` the tool describes, so the front end carries no terminal renderer and no ANSI text; a card's disclosure state and an open-target request travel through the host as `SetToolViewExpanded` and `OpenToolTarget`.
 - `/rephrase` asks for the reply on screen again in plainer prose, and refuses unless the conversation is resting on a finished reply.
 - `/autoswarm` opens a setup console for the goal, breadth, attempts and certification, then runs autoresearch with breadth: each iteration builds several candidate arms, rejects the ones that are empty, out of scope, unreadable or duplicates, has the survivors cross-review each other, and keeps at most one; `/autoresearch` is unchanged and still serial.
 - The autoswarm setup console assigns a model per arm, comma separated in arm order, so one iteration compares models as well as ideas; `start_arm` switches the session to that arm's model before its first edit, the status row names the arm and the model building it, and the session returns to its own model when the arm is logged or the mode is left.
@@ -853,34 +951,12 @@
 - A file search accepts `path` as the directory its `input` globs are searched under, the way `path` scopes a text search: `{ type: "files", input: "*.ts", path: "src" }` is `src/**/*.ts`, each `input` entry keeps its own depth, and a scope that is a glob or an input that is absolute is rejected naming the spelling that works.
 - Browser tool calls batched in one turn run in the order written; `run` and `close` on the same tab used to start together and the run found its tab closed.
 - `ExtensionAPI.setModel(model, { ephemeral: true })` switches the session's model for the rest of the turn without recording it as the session's own model, so a resumed session opens on the model the operator chose.
-- A GPU front end is scaffolded in the `gui/` Cargo workspace, drawn from the presentation fixtures and gated by `gui/gate.sh`; no install builds it and the CLI does not launch it yet.
-- A GPU front end is scaffolded as a host in the `hosts/gui/` Cargo workspace, drawn from the presentation fixtures and gated by `hosts/gui/gate.sh`; no install builds it and the CLI does not launch it yet.
-- The GPU front end draws the window frame: a thread list grouped by checkout and ordered by what is waiting, a terminal panel that collapses to its tab strip, and every screen shape drawn over or instead of the transcript; `ctrl-b` and `ctrl-\`` move the two regions, and both collapse on a spring.
-- A GPU front end ships as a host in the `hosts/gui/` Cargo workspace, gated by `hosts/gui/gate.sh`; no install builds it and the CLI does not launch it yet.
-- The GPU front end shows only what it can be honest about with no engine attached: the checkout it was launched in, conversations written in the window, a composer whose draft and caret belong to its conversation, a command palette over those conversations and five commands, and settings for appearance, text size and grouping.
-- The GPU front end keeps the keyboard on the field the route draws, so the settings pages take shortcuts, a click on chrome leaves the caret in the composer, and the palette's list walks with the arrow keys.
-- The GPU front end states that nothing answers a message once, under the last line of the conversation, where a reply would be.
-- The GPU front end's command palette carries the verbs that change what the window shows: the three panels, every dock and inspector tab, both ends of the transcript, the two appearances and reduced motion, each row stating whether it is the one in force.
-- The GPU front end's command palette lists what the open conversation offers to open: a plan waiting for review, and every image the transcript holds.
-- `secondary-home` and `secondary-end` show the oldest and the newest message in the GPU front end's transcript, and the jump to the oldest stops following the tail.
-- The GPU front end draws a filter field on every surface that narrows itself by one: the agent roster, the settings pages, the model, provider, MCP and tool catalogues, and the Problems dock.
-- The GPU front end holds several conversations at once as tabs, grouped into spaces that each keep their own tab set and panel layout, and reopens the ones whose sessions still exist.
-- The GPU front end browses past sessions by date and repository, searches their content, and opens one read-only.
-- The GPU front end anchors a review comment to the lines it was written against, re-anchors it as the diff changes, and states which anchor was orphaned and why.
-- The GPU front end previews an attachment inline before it is sent, states its type and size, and refuses one the model cannot read with the reason.
-- The GPU front end's command palette, model picker and session switcher are one picker primitive with one keyboard contract.
-- The GPU front end draws a streamed reply as the shape it is becoming, so an unterminated fence, table row or inline span renders as itself rather than as its markup.
-- The GPU front end selects transcript text by dragging across it and copies what the pointer crossed.
-- The GPU front end's theme is chosen in Appearance, previewed while the pointer rests on a row, persisted on press, and drawn on the next frame.
-- The GPU front end draws every floating surface with one treatment: a face lit down its top, an edge that holds against a backdrop of any luminance, and a contact shadow under the lift, so a sheet, popover, menu, tooltip, toast or completion list reads as floating over the surface it covers at both appearances.
-- The GPU front end's interface text size steps through the sizes the Appearance page offers, from `secondary-=` and `secondary--`, the View menu and the command palette.
 - Compaction can truncate the middle of an oversized text, keeping both edges, in any message role — including the roles that store their model-visible text outside `content`, such as a shell cell's `output`, a summary's `summary` and a file mention's `files[i].content`.
 - `pruneSupersededToolResults` accepts `cacheWarmSuffixTokens`, a hard ceiling on the sent context a rewrite may sit behind; a candidate over the ceiling is never rewritten, including as part of a batch the cache math would otherwise pay for.
 - Every OpenCode request carries a `Veyyon/<version>` user agent and an `x-opencode-session` header derived from the conversation id, on the `anthropic-messages`, `openai-completions` and `openai-responses` transports and on server-side compaction, under every cache-retention setting, which the gateway requires to identify the client and route a conversation to its warm prompt cache.
 - A model's thinking config carries `prefixBinding`, set for Claude 5.1 and later, stating that its thinking blocks are bound to the conversation prefix they were produced against.
 - An `anthropic-messages` model's compat carries `replayDemotedPriorReasoning`, which drops prior-turn reasoning on a signing endpoint instead of replaying it as demoted prose.
 - The bundled ChatGPT Codex catalog carries `gpt-6-astra` and `gpt-reserve`, each with the low-through-max effort ladder and the freeform `apply_patch` tool the endpoint declares.
-- Model input capability support includes `"video"` for video-capable models.
 - `VEYYON_DEBUG_STARTUP` emits a `native:firstCall:<export>` marker naming the native call that first loads the addon, so a launch that pays extraction before its first frame states which call pulled it in.
 - `TUI.markLayoutSized(component)` marks a root child whose height the `onBeforeCompose` pass owns, so a component-scoped frame renders it instead of reusing the rows the previous frame's content called for.
 - `SelectItem.disabled` greys a row and refuses Enter and click on it, while the cursor still lands on it, so a list can show a choice that does not apply without hiding it.
@@ -974,7 +1050,6 @@
 - The `--subagent-model` launch flag, which set the model for every subagent in the session.
 - The `--project` flag on `veyyon agents unpack`, which wrote definitions to `./.veyyon/agents`; there is no project scope for subagent discovery, so those files were never loaded.
 - The tagline under the wordmark on the session welcome hero, which the launch card and the mounted hero each printed.
-- Removed the unused desktop SplitButton primitive and its registered scene.
 - The `@veyyon/stats/format` entry point. `formatCostTiered` and `normalizePremiumRequests` are now exported by `@veyyon/utils/format`.
 
 ### Fixed
@@ -1086,31 +1161,6 @@
 - The status row's dirty marker appears when `git status` answers instead of waiting for whatever redraws next, which in a resting session is the next keystroke; the row had been showing a clean branch over a tree nothing had looked at.
 - The status row keeps the dirty marker the launch card painted instead of dropping it for the width of its own `git status`, so a handover on a dirty tree no longer shows the branch change colour twice; a scan that finds the tree really did move still repaints it once.
 - A turn that ends on text after a tool call is recognized as finished even while a session subscriber is still running, so the todo reminder, the rewind pass and the session-stop hooks no longer skip a turn whose final message arrived behind a slow subscriber.
-- The GPU front end's theme is the window's own preference rather than an engine request, so a detached window can be themed, and the profile theme list is read-only because a profile theme carries no palette the window could draw.
-- The desktop host states that profile theme listing is unavailable rather than describing a theme selection it never owned.
-- The desktop renderer repaints only the region a state change declares, keeps unaffected content in a retained texture, clips rounded and path-bounded subtrees, and reuses shaped text across frames; Santh GPUI is a revision-pinned Git dependency from the private canonical `santhreal/gpui` repository.
-- The native desktop composer integrates model selection and an up-arrow primary action, with secondary turn actions in slash commands and a separate stop control during active turns.
-- Native desktop palettes retain their closing transition and reverse from their current position when reopened.
-- Desktop controls reuse installed theme tokens rather than parsing bundled fallback tokens during each render.
-- Native desktop commands group Account and Settings destinations behind shared Back and Close navigation while preserving composer drafts.
-- Native desktop queue cards reveal Park and Defer on hover and place Branch and Delete in their context menu.
-- Native terminal drawers retain pointer focus over the composer and consume forwarded keystrokes without local echo.
-- Native desktop General settings renders rows on demand, preserves scroll across value updates, and fits the available window height.
-- GUI host catalogs and SDK sessions load profile models from YAML configuration while preserving legacy JSON migration.
-- Native desktop palette search matches visible subtitles, including provider/model identifiers, without duplicating rows.
-- Native desktop transcript navigation scrolls through virtualized history with measured page heights, animated transitions, and manual-scroll interruption.
-- Native desktop command search matches action descriptions, including `new session`.
-- Persisted desktop transcripts display readable session changes and omit hidden metadata without losing branch links or raw records.
-- Native desktop multiline drafts scroll within the composer to keep the caret visible during editing and resizing.
-- Native desktop transcripts distinguish annotations, structural summaries, and execution languages while preserving searchable recorded content.
-- The GUI host omits a setting whose value or schema default resolves to `undefined` from the settings snapshot instead of shipping the entry without the `value` and `default` fields, which the desktop decoder rejected as a fatal protocol error and dropped the connection; observed with `auth.broker.token` on a host with no broker token.
-- A comment in the GUI host frame decoder names the Rust file that mirrors the frame-size bound correctly. No behavior change.
-- The desktop host names one accumulating entry per streamed reply, so the desktop replaces that entry as the reply grows; while unreleased every delta carried a new name and one reply drew as a column of duplicates.
-- Native desktop drafts and attachments clear only after the matching host acknowledgment succeeds, while failed requests retain submitted content.
-- Desktop capability scenes initialize draft text so turn submission availability remains visible in rendered scenes.
-- Desktop keyboard and pointer actions notify the host observer at the shared dispatch boundary without waiting for an unrelated repaint.
-- GUI host branching uses the session lifecycle for both loaded and unloaded sessions, preserving extension cancellation and source transcripts.
-- Native desktop backdrop blur renders on surfaces without texture-copy support instead of leaving the window on its initial frame.
 - A memory limit pins the capped subtree's swap to zero, so the cap bounds the whole anonymous footprint; while unreleased a 256 MB machine cap let a single process reach 5,520 MB by swapping.
 - The machine limit requires a parent that delegates two cgroup levels, so a host that delegates one — a container whose cgroup root holds processes — reports per-session limits held and the machine tier unheld, instead of reporting a machine cap the kernel never applies.
 - The CPU-limit probe and the limiter resolve one environment, so the probe can no longer report support for a cgroup path the limiter does not write to.
@@ -1150,7 +1200,13 @@
 - Stripping a persisted note keeps the reply the model wrote after its byte-exact copy of the tool output, instead of dropping the whole block with the reply in it.
 - Every fold of a tool result whose call is missing from the request is logged with the call id and the ids the request does carry, so the loss of a pairing can be traced from the log instead of only from its symptom.
 - A `<stale-tool-result>` note escapes the tool name and call id it reports, so a call id carrying a quote cannot close the attribute and hand the model forged markup.
-- Normalized model pricing defaults at model construction and cost calculation so custom and discovery models without explicit cost fields do not throw on usage streaming.
+- The Claude Code fingerprint version is 2.1.257, so Anthropic OAuth requests for current models are no longer rejected with `claude_code_version_too_old`.
+- ChatGPT Codex discovery identifies as Codex CLI 0.153.2, the floor `gpt-6-astra` requires, so a subscription that has the model lists it instead of receiving the pre-0.153 model set.
+- A ChatGPT Codex model's effort ladder and `apply_patch` tool type come from the `supported_reasoning_levels` and `apply_patch_tool_type` the endpoint declares for that row, so a newly listed SKU offers effort control at once instead of arriving with none until models.dev catalogs it.
+- Antigravity discovery gives `gemini-3.8-flash-tiered` the same effort surface as 3.7: the endpoint serves 3.8 Flash only under that wire id, with no bare id and no per-tier siblings, so the row arrived raw with no effort levels. It now collapses to a logical `gemini-3.8-flash` row carrying the low/medium/high ladder models.dev declares for `google/gemini-3.8-flash` on the `google-level` transport, and its wire profile pins the 65536 output cap the endpoint reports.
+- OpenCode Zen and Go discovery resolves the wire API of an id the bundle predates from live models.dev, so `muse-spark-1.3-contributor-free` and `muse-spark-1.3-contributor` route to `/responses` instead of failing with HTTP 500 on `/chat/completions`; the bundle also carries both rows.
+- OpenCode Zen and Go model discovery sends the `Veyyon/<version>` user agent the gateway requires, so a discovery request is no longer unlabeled traffic that can be filtered into an empty model picker.
+- An OpenCode Zen or Go discovery whose models.dev lookup fails falls back to the bundle without reporting a discovery failure, so a working gateway listing is no longer warned about as a provider that could not be discovered.
 - The addon loader resolves `node:child_process` and `node:zlib` when it loads an addon rather than when it is imported, so importing `@veyyon/natives` for its types or enum values costs 3ms less.
 - A compiled binary's first launch of a version extracts only the native addon variant the host loads, instead of every variant the binary carries, so a cold start writes about 135MB rather than 270MB before the first frame; the skipped variants are written on demand if the selected one fails to load.
 - A compiled binary carries one embedded archive per native addon variant instead of one archive holding all of them, so a cold launch inflates only the variant it loads; cold first paint on linux-x64 drops from 361ms to 229ms.
@@ -1194,7 +1250,6 @@
 - `/omfg` saves forged rules to the active profile's rules directory only; the project target is gone, because project `.veyyon/rules` was never discovered across sessions.
 - Settings → Stream Interrupts (TTSR) groups the profile's own rules under a leading `User created` section instead of `From native`, ahead of foreign-tool and built-in sections.
 - An opt-in `eval.pyWorkspace` experiment teaches the agent to keep large tool results and repeated repository operations inside the persistent Python kernel, reducing intermediate transcript output without changing kernel execution.
-- `AgentTool.view` takes a host-agnostic `ToolViewRenderer` from `@veyyon/view`, so a tool describes its call and result cards without receiving a theme or returning a host component; where a tool also declares `renderCall`/`renderResult`, the host-specific pair still wins.
 - A ChatGPT OAuth (Codex) session compacts server-side via the Responses compaction endpoint, preserving encrypted reasoning state.
 - `ToolCallLoopGuard` detects consecutive redundant reads of unchanged files whose requested line ranges are already fully present in recent context, steering runaway exploration loops while preserving prompt cache prefixes.
 - Added Command Code API-key login through the Studio Provider page, with validation against its Provider API, and Nous Research Portal OAuth device login with rotating refresh tokens and short-lived inference JWTs.
@@ -1233,20 +1288,6 @@
 - `MOTION.reflow` states the curve for a row that reflows its content sideways: 320ms, symmetric, where `expand` is 180ms and front-loaded.
 - `TUI.composedFrameLines` exposes the rows of the frame just composed, so a check can tell a row the layout composed blank from a row the renderer composed with content and failed to paint.
 - `Editor.discardDraft()` clears the composer and records an undo state first, so the discarded draft comes back with undo; `setText` still drops the undo history, because it loads text from elsewhere rather than editing what was typed.
-- `@veyyon/utils/fs-tool-args` parses a `read` or `write` tool call's arguments and result details (`parseReadArgs`, `parseReadDetails`, `parseWriteArgs`, `parseWriteDetails`, `countLines`), moved from `@veyyon/tool-render` so every host reads them without the React renderers.
-- `BracketedPasteHandler.route(data, sinks)` delivers one chunk's parts to `PasteSinks`: bytes before the start marker to `keys`, the assembled payload to `paste`, and bytes after the end marker to `reenter`; it returns `false` when the chunk held no paste sequence.
-- `@veyyon/utils/tab-width` is the one definition of `replaceTabs` and `DEFAULT_TAB_WIDTH`, a dependency-free module the browser bundles share; `@veyyon/utils/wrap` and `@veyyon/utils/tab-spacing` re-export them unchanged.
-- `@veyyon/utils/terminal-emulator` resolves terminal identity without loading the terminal renderer.
-- `@veyyon/utils/cli-usage-error` is the one `CliUsageError` class, a leaf a CLI entry catches without loading the command framework; `@veyyon/utils/cli` still exports it.
-- `@veyyon/utils/json-snapshot` atomically stores rebuildable JSON snapshots with one serialization and verifies their input fingerprint and exact payload bytes.
-- `@veyyon/utils/format` owns `formatCostTiered` and `normalizePremiumRequests`, the terminal cost and premium-request formatters the status row and the stats CLI read.
-- `@veyyon/utils/format` owns `formatContextUsage`, the `47K/200K` reading of tokens against a limit that the status-line gauge, an agent progress row and an eval cell's agent tree all state.
-- The string, escape, keyboard, mouse, motion and layout-math primitives that `@veyyon/tui` used to own are `@veyyon/utils` modules, reachable by subpath and not on the barrel, so a caller that needs the escape bytes or the fuzzy matcher no longer declares a dependency on the terminal renderer.
-- `@veyyon/utils/color-format` states whether escape sequences are written as 24-bit or 256-colour SGR; `@veyyon/tui` sets it once the terminal's capabilities resolve, which is how a utils module renders colour without reading terminal state.
-- `@veyyon/utils/ttyid` reads the controlling terminal's identity, and `@veyyon/utils/image-fallback` states the four causes a client can fail to draw a picture for, as `IMAGE_FALLBACK_REASONS` and the `ImageFallbackReason` union over it. Both moved out of `@veyyon/tui`, so a conversation engine can name a session or a cause without importing a renderer.
-- `@veyyon/utils/host-notification` states `HostNotification`, the out-of-band message a tool asks its host to deliver, and `HostNotifier`, the delivery a host installs. Neither names a terminal, so a GUI host can honour one.
-- `@veyyon/utils/sanitize-status-text` reduces text to one line a terminal draws as text, stripping escape sequences, mapping the remaining controls to spaces and collapsing space runs, so domain code that names a value in a single-line surface no longer imports the terminal host to sanitize it.
-- `@veyyon/utils/markdown-table` renders and escapes GFM tables, `@veyyon/utils/turndown` builds the Turndown instance and normalizes a `<td>`-first table, and `@veyyon/utils/html-markdown` converts HTML to markdown through both. All three are subpaths and none is on the barrel, so a document converter or a scraper reaches them without importing the coding agent.
 - `run()` accepts verified command summaries for root help and falls back to loading the full registry when any summary is absent.
 - `source-declarations.ts`: `exportedDeclarationsIn` and `declarersOfName` report which modules declare a name, so a one-owner gate no longer matches the declaration's own bytes; a reflowed signature, a signature quoted in a comment and a second module declaring the same name are now all answered correctly.
 
@@ -1303,16 +1344,6 @@
 - The browser tab worker and supervisor reach `bestEffort` and `optionalResult` through `@veyyon/utils/discarded-fault` rather than the package barrel; behavior is unchanged.
 - Daemon completion parsing and eval-store serialization errors use shared type guards; behavior is unchanged.
 - Broad multi-file text searches now keep only deterministic representative matches inline and save the complete formatted result behind an `artifact://` reference. The preview budget follows the turn-aware output curve from an 8 KiB search ceiling (~2 KiB early at turn 0), emitting up to two representative matches per file while preserving counts and warnings; explicit single-file and line-range searches retain their full output, and only visible representative lines are recorded as seen for anchored edits.
-- Legacy hook messages reuse custom-message fields without changing their public type signatures.
-- The turn loop rejects a Harmony leak through one `rejectHarmonyLeak` whether the stream ends with a `done` event or without one; no behavior change.
-- `AgentToolResult`, `AgentToolUpdateCallback`, `ToolTier`, `ToolApprovalDecision` and `ToolApproval` are defined in `@veyyon/tool` as `ToolResult`, `ToolUpdateCallback` and the same approval names; `@veyyon/agent` exports every name it exported before, so no caller changes.
-- The session-entry vocabulary (`SessionEntry` and every member), `AgentMessage` and the `CustomAgentMessages` and `CustomCompactionSessionEntries` hooks are defined in `@veyyon/session`; `@veyyon/agent-core` and `@veyyon/agent-core/compaction/entries` export every name they exported before, and an augmentation now names `@veyyon/session`.
-- Typed tuple and Set copies use spreads rather than `.concat()` or `.slice()`, which those types do not define. No user-visible behavior changes.
-- A source-path comment in `thinking.ts` names the coding-agent module its reader moved to; behavior is unchanged.
-- Doc comments refer to a child run as an agent rather than a subagent. No behavior change.
-- `onSpanStart` and `onSpanEnd` run through one guarded call that reports a throw as the same `on_span_start_failed` / `on_span_end_failed` warning, with the thrown error attached; no behavior change.
-- The steering and follow-up queues drain through one step that takes the first message in `one-at-a-time` mode and every message in `all` mode; delivery order and turn count are unchanged.
-- A tool call's arguments and result serialize through one telemetry path keyed by the `contentSerializer` field, and an `onChatUsage` throw or rejection is reported as `on_chat_usage_failed` from one place on both the agent-loop and the manual-record path; no behavior change.
 - Compaction imports `ProviderHttpError` from its owning module rather than the `@veyyon/ai/error` barrel, cutting 14 modules off the engine's load graph with no change in behavior.
 - Streaming `message_update` snapshots share tool-call arguments by reference instead of deep-cloning them on every delta, cutting a large structured tool call's per-delta snapshot cost from ~0.5 s to ~8 ms, while terminal messages and the authoritative tool call a `toolcall_end` carries keep the sanitizing deep clone.
 - Superseded and useless tool results are now pruned as a batch whose combined size pays for the prompt-cache rewrite it forces, instead of only when a single result sits within 8,000 tokens of the end of the conversation.
@@ -1358,27 +1389,6 @@
 - The fuzzy-match benchmark fixture now names the canonical text-search source path instead of the retired grep-tool path. No benchmark behavior changed.
 - Settings rows can open nested panels, used by Files → LSP to keep its dependent switches behind one parent row.
 - The `ui.loop-blocked` warning reports `phase` with the `phaseMs` that earns it, and names the phase only when it held at least half the block; a phase that ran for a sliver of it is reported as `unknown` with the observed label carried as `topPhase`.
-- The relaxed JSON parser's object and array loops position on the next element and consume the delimiter after it through one pair of container steps, and both atomic-write target resolvers record a symlink hop and raise `ELOOP` through one helper; no behavior change.
-- Display LaTeX splits its top-level rows and an environment body splits its `\\` rows through one depth-aware scanner; no behavior change.
-- Literal prompt templates skip variable analysis and compilation while preserving formatted output.
-- XML escaping, C1 normalization, OSC 66 alignment and tab counting share implementations without changing rendered text.
-- LaTeX rendering shares code-point counting with unchanged output, and `isNonEmptyString` provides shared session-field validation.
-- Web and terminal Markdown rendering use shared HTML entity decoding with unchanged output.
-- `getGlobalSubagentsDir` retains its public export name and definitions-directory behavior.
-- JSON snapshot parsing uses the shared JSON parser; snapshot validation is unchanged.
-- `HostNotification` and `HostNotifier` are defined in `@veyyon/host`; `@veyyon/utils/host-notification` re-exports both, so no caller changes.
-- Source-path comments in `dirs.ts` name the website changelog generator at `apps/site/tools/gen-changelog.mjs`; behavior is unchanged.
-- Root help lists subcommands from the registry summaries when those are present, and from the loaded command classes otherwise.
-- `moduleSpecifiersIn`, `typeOnlyModuleSpecifiersIn` and `dynamicImportSpecifiersIn` collect their specifiers through one capture loop; the reach they report is unchanged.
-- `getGithubCacheDbPath` and `getAuthBrokerSnapshotCachePath` resolve through one env-overridable cache-file step, and LaTeX `\overset`, `\stackrel` and `\underset` stack through one scripted step; resolved paths and rendered text are unchanged.
-- Source-path comments in `ansi.ts` and `sgr.ts` name the terminal output-block at `src/modes/terminal/draw/output-block.ts`. No user-visible behavior changes.
-- Source-path comments in `ansi.ts` and `eval-prompt-overrides.ts` name the benchmark modules they cite at their new paths under `tests/evals/`; behavior is unchanged.
-- `sanitize-text.ts` imports the escape byte from `@veyyon/utils/ansi` rather than declaring a second copy of it.
-- Source-path comments in `sanitize-text.ts`, `strip-ansi.ts`, `tab-spacing.ts` and `width.ts` name the Rust modules they cite at their new paths under `natives/`. No user-visible behavior changes.
-- The async and sync lock-directory inspectors classify a lock's `info` file (plain directory, link and size checks, opened-descriptor identity, owner record) through shared pure helpers between their own syscalls, with the same observations for every input.
-- Source-path comments in `adversarial-strings.ts`, `ansi.ts`, `tab-spacing.ts` and `width.ts` name the modules they cite at the paths those modules occupy: `visibleWidth`, `sliceWithWidth` and the ansi escape are `packages/utils` modules and their locks are `packages/utils` suites, while the adversarial-string helpers are `hosts/terminal/engine` test helpers. No user-visible behavior changes.
-- `workspaceModuleReachResolution()` resolves every workspace member declared by the root manifest, at whatever depth it sits, instead of the direct children of `packages/`, so a cross-package specifier into `@veyyon/kernel`, `@veyyon/tui`, a contract or a plugin resolves again and every module-reach ceiling built on it measures what it claims.
-- `isKeyRelease` and `isKeyRepeat` classify a Kitty event through one check of the protocol state, the paste marker and the event pattern; the answers are unchanged.
 - The prompt registry and the eval prompt-override loader read benchmark prompts from `packages/evals/src/suites/typescript-edit/adapter/prompts/`, the path the consolidated evals package holds them at. No behavior change.
 - `definePromptRows` and `definePromptRegistry` re-read `VEYYON_EVAL_PROMPTS` when it changes instead of applying it once at import, so a prompt variant set per arm reaches the model in a process that runs several arms. The evals harness's in-process backend builds a session without spawning, so every arm after the first was served the first arm's prompt text while the run reported a variant. A read while the variable is unchanged costs one string comparison and allocates nothing.
 - The `prompt-variables` documentation examples name the `search` tool, which is the workspace-search tool that now exists, instead of the retired `grep` tool. No behavior change.
@@ -1570,10 +1580,6 @@
 - Unified search no longer broadens or misroutes malformed calls: files-mode rejects a `path` owned by other modes while retaining the historical `/`-means-workspace alias, structure search rejects unsupported `ssh://` scopes without an approval prompt for work it cannot execute, immutable internal or fetched sources never receive editable hashline anchors, and the Bash interceptor no longer redirects mutating or otherwise non-equivalent `find` commands to a read-only file search.
 - The plan-mode extension example now keeps canonical `search` available both while planning and after restoring normal tools. It previously advertised retired `grep`/`find` identities, requested a nonexistent `find` tool, and dropped search when plan mode ended.
 - Memory summarization now retains canonical `search` results from session rollouts. It previously allowlisted the retired `grep` tool name but discarded every result emitted by unified search before Stage 1 summarization.
-- `AgentTool.renderResult` accepts the optional call arguments already supported by custom and extension tool renderers.
-- A history summary whose single request times out, or does not fit the summarizing model's context window, is produced in stages: the span is summarized as consecutive segments of up to 32k tokens, four at a time, and the segment summaries are merged in rounds into one summary, so a 234k-token session on a model that never begins a whole-span answer still compacts; `compact()` reports the segment count in `summaryStages` and takes `summaryStaging: "staged"` to start staged.
-- A provider's server-side compaction runs under its own ten-minute deadline instead of the three-minute remote-summarizer deadline that cut every codex compaction of a large span.
-- The staged-summary segment budget and worker count clamp through the shared `clampLow`, and the engine classifies a summary timeout through the error-flag leaf modules rather than the error barrel; no behavior change.
 - Converted message wrappers preserve reference identity across turns when inputs are unchanged, avoiding unnecessary allocations and memo invalidations.
 - Fixed tool-result supersede pruning to parse multi-target `read` calls into target sets with per-target URL scheme exemption, retiring an earlier read result when all of its targets are covered by newer reads while preserving results with partial coverage.
 - Side requests derive a stable conversation ID per oneshot kind, preventing compaction, handoff, and branch summaries from overwriting live Cursor and Devin conversation state.
@@ -1618,13 +1624,6 @@
 - A rejected API key reports the provider's own sentence from its JSON error envelope, so Command Code's plan-limit refusal reads as "Your Go plan doesn't include API access. Upgrade to Provider or higher at https://commandcode.ai/billing to use these endpoints." instead of the raw body.
 - An API-key login for a provider that declares `storeCredentialsAs` now stores the credential under that provider id, as an OAuth login already did, instead of filing it under the login mechanism's id where nothing reads it.
 - Anthropic strict-tool planning now recognizes the unified `search` tool instead of the retired `find` identity, so canonical workspace search receives strict schema enforcement without reviving a legacy tool name.
-- The Claude Code fingerprint version is 2.1.257, so Anthropic OAuth requests for current models are no longer rejected with `claude_code_version_too_old`.
-- ChatGPT Codex discovery identifies as Codex CLI 0.153.2, the floor `gpt-6-astra` requires, so a subscription that has the model lists it instead of receiving the pre-0.153 model set.
-- A ChatGPT Codex model's effort ladder and `apply_patch` tool type come from the `supported_reasoning_levels` and `apply_patch_tool_type` the endpoint declares for that row, so a newly listed SKU offers effort control at once instead of arriving with none until models.dev catalogs it.
-- Antigravity discovery gives `gemini-3.8-flash-tiered` the same effort surface as 3.7: the endpoint serves 3.8 Flash only under that wire id, with no bare id and no per-tier siblings, so the row arrived raw with no effort levels. It now collapses to a logical `gemini-3.8-flash` row carrying the low/medium/high ladder models.dev declares for `google/gemini-3.8-flash` on the `google-level` transport, and its wire profile pins the 65536 output cap the endpoint reports.
-- OpenCode Zen and Go discovery resolves the wire API of an id the bundle predates from live models.dev, so `muse-spark-1.3-contributor-free` and `muse-spark-1.3-contributor` route to `/responses` instead of failing with HTTP 500 on `/chat/completions`; the bundle also carries both rows.
-- OpenCode Zen and Go model discovery sends the `Veyyon/<version>` user agent the gateway requires, so a discovery request is no longer unlabeled traffic that can be filtered into an empty model picker.
-- An OpenCode Zen or Go discovery whose models.dev lookup fails falls back to the bundle without reporting a discovery failure, so a working gateway listing is no longer warned about as a provider that could not be discovered.
 - LM Studio discovery reports the context window the running server accepts (`loaded_context_length`) rather than the model's compiled ceiling (`max_context_length`), so a model loaded below its ceiling no longer plans a session for context the server refuses.
 - DeepSWE dry-run preflight reports missing or stale binary artifacts with their build command instead of triggering a product build.
 - `--dry-run` refuses an overlay the real run would refuse: the backend's preflight now receives the plan's variants, so a missing overlay file, an unknown setting key or a prompt id no registry holds is reported before any quota is spent instead of hours into the run.
@@ -1664,8 +1663,6 @@
 - Nested optional-argument LaTeX constructs parse in linear time without character-by-character concatenation allocations.
 - Exclude pinned footer rows from the scroll-isolation snapshot and scroll space so the composer does not duplicate inside scrolled-back history.
 - Extract LaTeX argument text by slicing the source rather than appending one character at a time, so a deeply nested optional-argument chain degrades linearly instead of quadratically.
-- Corrected comments that named a distribution channel or runtime API the project does not use; no behavior change.
-- `stripAnsi` removes a CSI sequence written with colon subparameters. The parameter class was `[0-9;?]`, but the spec's parameter bytes are the whole `0x30-0x3f` range, so `:` `<` `=` `>` were not matched: a true-color SGR of the form `ESC [ 38:2:255:0:0 m`, which libvte and several test runners emit, left `38:2:255:0:0m` behind as visible text in captured output. The class is now the spec's, and the three byte classes are disjoint so the pattern accepts exactly what a greedy scanner accepts. The behaviour is pinned against `tests/fixtures/ansi-strip-corpus.json`, which the Rust `strip_ansi` in the shell minimizer reads too, so the two implementations answer the same cases instead of drifting apart.
 - An empty `~/.veyyon/agent` beside a migrated `profiles/default` no longer refuses to start; a directory holding nothing is not a second candidate profile, so it is removed and startup continues, while one holding data still fails closed.
 - The legacy-layout migration leaves cross-profile state at the config root instead of sweeping it into `profiles/default`: `shared-auth/`, the global `AGENTS.md`, `vault.json` and `vault.key` stay where every profile reads them.
 - `extractHttpStatusFromError` reads the status line a message opens with whatever wording follows it, so `401 Your session has expired`, `403 You have run out of credits` and `503 {"type":"error",...}` report their codes again; pinning a reason phrase to its own code had also stopped a status line naming its own reason from reporting anything, and 401 is what credential rotation reads.

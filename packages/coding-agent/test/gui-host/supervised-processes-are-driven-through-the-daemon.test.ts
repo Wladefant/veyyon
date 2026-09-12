@@ -10,6 +10,8 @@
  * asserting full ProcessView fields, ProcessLogs chunk lines and cursors, follow streaming,
  * process signaling/stopping/restarting, exit reporting, and fail-closed validation
  * contracts.
+ * Requests exercise `gui-host/actions/processes.ts`; list and log projections exercise
+ * `gui-host/actions/process-session.ts`.
  *
  * The listing carries every field the daemon's own describe RPC returns, which is why the
  * protocol has no separate describe action: a single-row snapshot would replace the pane's

@@ -332,6 +332,7 @@ export const repoScriptTests = [
 	"scripts/every-workflow-pipeline-sets-pipefail.test.ts",
 	"scripts/every-workflow-runs-bun-test-in-the-sandbox.test.ts",
 	"scripts/gh-repo-context.test.ts",
+	"scripts/gpui-consumers-share-one-pinned-framework.test.ts",
 	"scripts/ci-build-native.test.ts",
 	"scripts/bun-install-action.test.ts",
 	"scripts/the-bun-pin-has-one-owner.test.ts",

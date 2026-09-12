@@ -4,11 +4,11 @@ Integrates Santh GPUI with the Veyyon desktop crates.
 
 ## Upstream and Fork Topology
 
-The canonical framework repository is the private
+The canonical framework repository is public:
 [`santhreal/gpui`](https://github.com/santhreal/gpui), derived from `zed-industries/zed`.
 The workspace manifest pins one Git revision for `gpui`, `gpui_platform`, and `gpui_wgpu`.
 Cargo resolves their dependencies from that repository; no framework source is copied here.
-Git authentication with access to the private repository is required to build.
+Cargo fetches the pinned framework revision over HTTPS without Git authentication.
 Reusable renderer changes are maintained in Santh GPUI. Veyyon surfaces and tokens remain in
 the desktop crates.
 
