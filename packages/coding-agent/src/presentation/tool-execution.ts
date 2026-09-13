@@ -1,6 +1,6 @@
 import { type AnyAgentTool, type SyntheticToolResultDetails, toolResultNeverRan } from "@veyyon/agent-core";
 import type { SnapshotStore } from "@veyyon/hashline";
-import { clampLow, getProjectDir, sanitizeText } from "@veyyon/utils";
+import { clampLow, getProjectDir, logger, sanitizeText } from "@veyyon/utils";
 import { errorMessage, isRecord } from "@veyyon/utils/type-guards";
 import type { ToolView, ToolViewContext, ToolViewRenderer } from "@veyyon/view";
 import type {
@@ -15,7 +15,12 @@ import type {
 } from "@veyyon/wire/presentation";
 import { asyncToolState } from "../modes/terminal/utils/async-tool-state";
 import { formatArgsInline } from "../tools/core/json-tree-render";
-import { DEFAULT_TERMINAL_PREVIEW_LINES, shortenEmbeddedPaths, shortenPath } from "../tools/core/render-utils";
+import {
+	DEFAULT_TERMINAL_PREVIEW_LINES,
+	shortenEmbeddedPaths,
+	shortenPath,
+	showResolvedModelDefault,
+} from "../tools/core/render-utils";
 import { isWaitingPollDetails } from "../tools/shell/job-view";
 import { type ToolViewDefinition, toolViewDefinitions } from "../tools/view-registry";
 import type { EditMode } from "../utils/edit-mode";
@@ -156,6 +161,7 @@ export function buildToolRenderContext(
 	}
 	context.hasResult = Boolean(result);
 	context.frozen = options.frozen ?? false;
+	context.showResolvedModel = showResolvedModelDefault();
 	return context;
 }
 
@@ -185,6 +191,12 @@ export interface ToolExecutionBuildParams {
 	snapshots?: SnapshotStore;
 	fuzzyThreshold?: number;
 	allowFuzzy?: boolean;
+	/**
+	 * Whether a spawned agent's card shows the model it resolved to. Omitted reads the
+	 * `agent.showResolvedModelBadge` setting when a settings store is initialised and is off
+	 * otherwise, which is the transcript export run without one.
+	 */
+	showResolvedModel?: boolean;
 }
 
 export function buildToolExecutionDisplay(params: ToolExecutionBuildParams): ToolExecutionDisplay {
@@ -261,6 +273,7 @@ export function buildToolExecutionDisplay(params: ToolExecutionBuildParams): Too
 		frame: params.frame,
 		hasResult: Boolean(renderableResult),
 		frozen: backgroundTaskFrozen,
+		showResolvedModel: params.showResolvedModel ?? showResolvedModelDefault(),
 	};
 
 	// Tool view renderer resolution (tool's own view or registry definition's view)
@@ -323,6 +336,11 @@ export function buildToolExecutionDisplay(params: ToolExecutionBuildParams): Too
 				try {
 					callView = renderer.renderCall!(callArgs, viewContext);
 				} catch (err) {
+					logger.warn("Tool view call renderer threw; showing the generic card", {
+						toolName,
+						toolCallId,
+						error: errorMessage(err),
+					});
 					failures ??= {};
 					failures.call = {
 						error: errorMessage(err),
@@ -342,6 +360,11 @@ export function buildToolExecutionDisplay(params: ToolExecutionBuildParams): Too
 						callArgs,
 					);
 				} catch (err) {
+					logger.warn("Tool view result renderer threw; showing the generic card", {
+						toolName,
+						toolCallId,
+						error: errorMessage(err),
+					});
 					const raw = getTextOutput(renderableResult);
 					failures ??= {};
 					failures.result = {
@@ -353,9 +376,10 @@ export function buildToolExecutionDisplay(params: ToolExecutionBuildParams): Too
 		}
 	}
 
-	// Generic fallback presentation if no view renderer and no custom renderer
+	// Generic fallback presentation when no renderer owns the card, and when the one that does threw:
+	// the reader gets the arguments and the output, never the exception's text.
 	let generic: ToolExecutionGenericDisplay | undefined;
-	if (!viewRenderer && !params.tool?.renderCall && !params.tool?.renderResult) {
+	if ((!viewRenderer && !params.tool?.renderCall && !params.tool?.renderResult) || failures !== undefined) {
 		const icon = isPartial
 			? params.frame !== undefined
 				? "running"

@@ -6,6 +6,13 @@
 
 ### Added
 
+- `BUILD_TAG` export in `@veyyon/utils/dirs` for build metadata and custom build identification.
+### Breaking Changes
+
+- `ParsedReadArgs` from `@veyyon/utils/fs-tool-args` carries `depth` and `limit`, the `read` schema's directory-listing arguments, in place of `from`, `to` and `rangeSuffix`: the schema has no `offset`, its `limit` is an entry cap, and the line window rides on the path's own selector, so no `:A-B` is derived from either number.
+
+### Added
+
 - `@veyyon/utils/fs-tool-args` parses a `read` or `write` tool call's arguments and result details (`parseReadArgs`, `parseReadDetails`, `parseWriteArgs`, `parseWriteDetails`, `countLines`), moved from `@veyyon/tool-render` so every host reads them without the React renderers.
 - `BracketedPasteHandler.route(data, sinks)` delivers one chunk's parts to `PasteSinks`: bytes before the start marker to `keys`, the assembled payload to `paste`, and bytes after the end marker to `reenter`; it returns `false` when the chunk held no paste sequence.
 - `@veyyon/utils/tab-width` is the one definition of `replaceTabs` and `DEFAULT_TAB_WIDTH`, a dependency-free module the browser bundles share; `@veyyon/utils/wrap` and `@veyyon/utils/tab-spacing` re-export them unchanged.

@@ -417,6 +417,7 @@ import {
 import { PENDING_PLACEHOLDER_RE } from "../secrets/placeholder";
 import {
 	parseSlashCommand,
+	resolveSlashCommand,
 	unknownSlashCommandMessage,
 	unresolvedSlashCommandName,
 } from "../slash-commands/helpers/parse";
@@ -472,6 +473,7 @@ import { assertEditableFile } from "../tools/fs/auto-generated-guard";
 import type { CheckpointState, CompletedRewindState } from "../tools/fs/checkpoint";
 import type { BashExecutionMessage, PythonExecutionMessage } from "../tools/shell/execution-messages";
 import { loadPythonExecutor } from "../tools/shell/manifest";
+
 import { parseCommandArgs } from "../utils/command-args";
 import { type EditMode, resolveEditMode } from "../utils/edit-mode";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
@@ -9381,27 +9383,31 @@ export class AgentSession {
 
 	/**
 	 * Try to execute an extension command. Returns true if command was found and executed.
+	 *
+	 * A plugin command is registered as `<plugin>:<name>`; `resolveSlashCommand` matches it from
+	 * either `/<plugin>:<name>` or `/<plugin> <name>`.
 	 */
 	async #tryExecuteExtensionCommand(text: string): Promise<boolean> {
-		if (!this.#extensionRunner) return false;
+		const runner = this.#extensionRunner;
+		if (!runner) return false;
 
 		const parsed = parseSlashCommand(text);
 		if (!parsed) return false;
-		const commandName = parsed.name;
-		const args = parsed.args;
 
-		const command = this.#extensionRunner.getCommand(commandName);
-		if (!command) return false;
+		const resolved = resolveSlashCommand(parsed, name => runner.getCommand(name));
+		if (!resolved) return false;
+		const { command, args } = resolved;
+		const commandName = command.name;
 
 		// Get command context from extension runner (includes session control methods)
-		const ctx = this.#extensionRunner.createCommandContext();
+		const ctx = runner.createCommandContext();
 
 		try {
 			await command.handler(args, ctx);
 			return true;
 		} catch (err) {
 			// Emit error via extension runner
-			this.#extensionRunner.emitError({
+			runner.emitError({
 				extensionPath: `command:${commandName}`,
 				event: "command",
 				error: errorMessage(err),
@@ -9488,20 +9494,26 @@ export class AgentSession {
 	/**
 	 * Try to execute a custom command. Returns the prompt string if found, null otherwise.
 	 * If the command returns void, returns empty string to indicate it was handled.
+	 *
+	 * A plugin command is registered as `<plugin>:<name>`; `resolveSlashCommand` matches it from
+	 * either `/<plugin>:<name>` or `/<plugin> <name>`.
 	 */
 	async #tryExecuteCustomCommand(text: string): Promise<string | null> {
 		if (this.#customCommands.length === 0 && this.#mcpPromptCommands.length === 0) return null;
 
 		const parsed = parseSlashCommand(text);
 		if (!parsed) return null;
-		const commandName = parsed.name;
-		const argsString = parsed.args;
 
 		// Find matching command
-		const loaded =
-			this.#customCommands.find(c => c.command.name === commandName) ??
-			this.#mcpPromptCommands.find(c => c.command.name === commandName);
-		if (!loaded) return null;
+		const resolved = resolveSlashCommand(
+			parsed,
+			name =>
+				this.#customCommands.find(c => c.command.name === name) ??
+				this.#mcpPromptCommands.find(c => c.command.name === name),
+		);
+		if (!resolved) return null;
+		const { command: loaded, args: argsString } = resolved;
+		const commandName = loaded.command.name;
 
 		// Get command context from extension runner (includes session control methods)
 		const baseCtx = this.#createCommandContext();
@@ -9753,12 +9765,14 @@ export class AgentSession {
 	 * Throw an error if the text is an extension command.
 	 */
 	#throwIfExtensionCommand(text: string): void {
-		if (!this.#extensionRunner) return;
+		const runner = this.#extensionRunner;
+		if (!runner) return;
 
 		const parsed = parseSlashCommand(text);
 		if (!parsed) return;
-		const commandName = parsed.name;
-		const command = this.#extensionRunner.getCommand(commandName);
+		const resolved = resolveSlashCommand(parsed, name => runner.getCommand(name));
+		const commandName = resolved?.command.name ?? parsed.name;
+		const command = resolved?.command;
 
 		if (command) {
 			throw new Error(

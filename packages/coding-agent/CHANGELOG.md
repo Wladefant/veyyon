@@ -24,6 +24,8 @@
 - `readSourceFsPath` is exported from `tools/fs/read-view` instead of `tools/fs/read` and remains available from the package root.
 - `metadataLine` is exported from `tools/core/render-utils` instead of `tools/web/search/view`.
 - Removed the unused `inheritedAgentDir` keybinding option and `ohMyPiXAIUserAgent` alias; xAI requests continue to use `veyyonXAIUserAgent`.
+- `@veyyon/coding-agent/extensibility/hooks` no longer exports `HookRunner`, `HookToolWrapper`, `discoverAndLoadHooks`, `loadHooks` and `execCommand`: the legacy hook runtime is removed, a plugin's `hooks` entry loads through the extension runner, and the subpath keeps the hook types.
+- `UNICODE_SYMBOLS` is `@veyyon/view`'s; `theme/symbols` re-exports it and keeps the terminal-only Nerd Font and ASCII presets, the spinner frames and the bar ramps.
 
 ### Added
 
@@ -57,9 +59,15 @@
 - `runCommitAgentSession` reports its run through a `CommitAgentReporter` instead of writing to stdout itself, and `commit/agentic/agent-render.ts` is the only module that draws it, so the commit domain names neither the terminal engine nor chalk; `veyyon commit` prints the same thinking line, markdown, tool tree and totals it printed before.
 - The `/collab` QR block draws its own leading blank row instead of being presented behind a spacer, so the slash-command registry no longer imports the terminal engine; the transcript shows the same blank row above the code and above the too-narrow hint.
 - The compaction policy vocabulary (check outcomes, the bar a pass is measured against, the truncation edge budget, the prune cache window and idle flush, and the recovery band) lives in `@veyyon/kernel/session/agent-session-compaction-policy` rather than interleaved with shutdown timeouts and credential backoffs in `agent-session.ts`, with no behavior change.
+- `resolveSlashCommand` in `slash-commands/helpers/parse` resolves a parsed invocation against a command set, joining the first argument token back onto a namespaced plugin command name.
+- `SingleResult.isolationFallback` records the requested and actual isolation backends and the reason when an explicit mode was not honoured; `isolationModeName` in `task/worktree` states a backend's setting spelling.
+- `TruncationMeta.totalLinesUnknown` states that a read's scan stopped after the shown window, so the notice omits a total it does not have.
+- `PLUGIN_MANIFEST_ENTRY_KEYS` and `PluginManifestEntryKey` in `extensibility/plugins/loader` state the four manifest entry keys a plugin contributes through.
+- `cli/stdout-drain` exports `awaitStdoutDrain` and `exitAfterStdoutDrain`, the one way a non-interactive mode exits after its last frame is written.
 
 ### Changed
 
+- A running tool card animates one mark: the "… (streaming)" spinner row is drawn only under a header that carries no running spinner of its own, and an agent an eval cell spawned shows the task card's static accent mark instead of a second spinner.
 - The read and write cards parse their arguments and details through `@veyyon/utils/fs-tool-args`, so a terminal launch no longer evaluates `@veyyon/tool-render`; the cards draw the same rows.
 - The legacy `memories.enabled` key is no longer a declared or host-defaulted setting: a config that still holds it migrates to `memory.backend` on load, the key is dropped on the next rewrite, and the local memory pipeline is enabled by `memory.backend: local` only. The presentation module's error messages, read-target parsing and cursor clamping use the `@veyyon/utils` helpers; no behavior change.
 - Reworded the Include Model in Prompt, Max Retry Delay, Hindsight Bank ID, Subagents and Subagent Delegation setting descriptions shown in `/settings`.
@@ -250,6 +258,16 @@
 
 ### Fixed
 
+- Print, JSON and RPC mode flush Bun's stdout sink before exiting, so a piped consumer receives the whole last frame instead of losing up to 1 MiB of queued output.
+- A spawned agent's card shows its resolved-model badge again on the live block, the registry path an extension wraps and the rebuilt transcript, per `agent.showResolvedModelBadge`.
+- With `VEYYON_FORCE_IMAGE_PROTOCOL=sixel` and `VEYYON_ALLOW_SIXEL_PASSTHROUGH=1`, a bash card draws an inline Sixel image row as the program wrote it instead of blanking it.
+- The extension graph walk reads each module file from disk once; the CommonJS check on a candidate reuses the walk's read instead of opening the file again.
+- `veyyon --help` summarises `worktree` with the profile-scoped path `~/.veyyon/profiles/<name>/wt`, matching the command's own description.
+- Legacy `hindsight.dynamicBankId` and `hindsight.agentName` written as flat keys migrate to `hindsight.scoping` and `hindsight.bankId` and are dropped on rewrite instead of surviving as dead entries.
+- Antigravity turns from a consumer Google account (`aicode-consumers`) no longer fail with `429 RESOURCE_EXHAUSTED` on every request: the backend rejects any system instruction carrying the upstream oh-my-pi conventions header, so the preamble now opens `Keywords follow RFC 2119:` instead of `RFC 2119:`.
+- A Gemini or Antigravity 429 whose body is Google's generic `Resource has been exhausted (e.g. check quota)` / `RESOURCE_EXHAUSTED` is a per-minute throttle and retries on the same account after 45–75 seconds instead of being read as a 30-minute daily quota that exceeded `retry.maxDelayMs` and ended the turn; the "exhausted your capacity … quota will reset" body still reads as the daily wall.
+- Removing the retired `providers.parallelFetch` key no longer leaves an empty `providers:` section in the rewritten config.
+- A nested legacy `task.isolation.enabled` no longer overrides an explicit `task.isolation.mode` during migration.
 - Corrected comments that named a distribution channel or runtime API the project does not use; no behavior change.
 - A subagent that inherits the session's model shows that model and effort in its Subagents row, the task widget and the `/agents` roster, and keeps the badge when a follow-up turn wakes it.
 - An inherited subagent model's badge prints the effort the session settled on, so a parent running `auto` shows the resolved level rather than `auto`.
@@ -340,6 +358,36 @@
 - A turn that calls a tool and then stops with text is treated as ending in text: the todo reminder fires again as the board changes instead of falling silent after the first one, and the rewind, plan-mode, verification and code-review checks run at that stop.
 - The goal report from `/goal show` and the goal detail menu states the goal's status once: a paused goal read `Status: paused (paused)`, and a finished one `Status: complete (paused)`. Goal mode being off is now named only where the status does not already carry it, as `active (mode off)`.
 - A goal objective reaches every surface that shows it as one plain line: the `/goal show` report, the `/goal` menu title, the warning a disabled Goal Mode prints over a stored goal, the `/goal` autocomplete row and the goal tool's own card each formatted the objective raw, so an escape sequence in one styled or moved the rest of the surface, a tab opened a hole in it, and a newline split it across two fields.
+- `veyyon profile new` runs in the compiled binary; 1.4.1 failed with `awaitPromise is not defined` from a mis-minified dynamic import, and `--smoke-test` and the installer CI now drive the profile seed path through the artifact.
+- `--export <path>` of a missing or non-file session exits non-zero with `Session file not found` or `Not a session file` instead of writing an empty transcript and reporting success.
+- `--mode json` exits `EXIT_FAILURE` on an errored turn and `EXIT_INTERRUPTED` on an aborted one, as text mode does; print and RPC mode wait for stdout to drain before exiting so a piped consumer receives the last frame.
+- RPC mode answers a malformed stdin line with the documented `parse` error frame and keeps reading; the previous chunk parser threw on the first bad line and ended the session.
+- `veyyon install` with no target exits 2 as a usage error, the same as a missing positional in every other subcommand.
+- `--help` lists every `--mode` value from the parser's own table, `acp` included; the export example and the `worktree` description state the profile paths (`~/.veyyon/profiles/<name>/…`).
+- `--no-extensions` disables discovery only: a path named with `-e` on the command line still loads, in a session and in `veyyon models`, as the flag's help text states.
+- A `--model @role` whose role is unset, unknown or cyclic is reported as that role failure; a model id no model matches is reported with the count of models with usable credentials and the nearest candidates, instead of `Model "x" not found. Run "veyyon models"`.
+- A plugin's slash command runs from `/<plugin>:<name>` and from `/<plugin> <name>`; the parser split the namespaced spelling at the colon, so an exact lookup never matched.
+- The `goal` tool is a `read`-tier tool: it prompted for approval in ask mode and was denied outright in plan mode, having no declared tier.
+- An explicit `agent.isolation.mode` the host cannot provide runs on the next backend, records `isolationFallback` on the result, opens the merge summary with a notification naming the requested and actual backends, and is logged; `auto` reports no fallback.
+- A spawned agent whose merge back into the parent tree does not land (a patch that does not apply, a branch that does not merge, a nested repository patch that fails) is reported as `merge-failed` instead of a clean completion whose work is not in the tree.
+- The task card's line and size counts describe the block the reader sees: when the child's output was empty and stderr or a placeholder stands in for it, the artifact's `0B` no longer labels that text.
+- Claude Code's `~/.claude/plugins/installed_plugins.json` is read only when `discovery.importForeignConfig` is on, and the plugin-roots cache is keyed on that setting; marketplace installs, `--plugin-dir` roots and a trusted project registry are the operator's own and load at the default, and their skills are part of the profile's skill set.
+- The `read` card states `depth` and `limit` by name after the path; `read { path: ".", limit: 3 }` drew `.:1-3`, a line range the tool never read, and the HTML export's call line did the same.
+- A ranged read of an immutable source (`archive.zip:src/a.ts:2-3`, `artifact://x:2-3`) numbers its lines whatever `readLineNumbers` is set to, so the requested lines are attributable.
+- A `read` of a file over the snapshot size cap states `Showing lines A-B (file not scanned to end)` and no `of N`: the scan stops once the window is collected, so `N` was a lower bound presented as the file's length.
+- The streaming `bash` preview reads the `env` object by walking the partial JSON, so `"env"` inside a command string is not an assignment list and a `cwd` or `timeout` after the object is not an entry.
+- No tool card text reaches the terminal with a control sequence in it: `drawToolView` strips escapes from every text field of every view kind, so a model-supplied reason, a file's contents or a generic argument carrying `\x1b[2J` or an OSC 8 link is drawn as text; a `captured` run keeps the styles the terminal replays and loses the rest.
+- A tool card whose renderer throws falls back to the generic arguments-and-output card, never to the exception's text; the `vibe` card reads a recorded session's details field by field, so a malformed record draws the generic card rather than failing the transcript.
+- The `job` card lists a queued job as queued, with its position, rather than as running.
+- A daemon the broker ran on a PTY that died to a signal reports that signal (`SIGTERM`, `SIGKILL`) instead of the shell's exit code 1; the addon recovers the signal from the wait status.
+- The launch broker's idle reaper stops `last-client-exit` daemons when the last client disconnects and a persistent sibling keeps the broker alive, and re-arms when that persistent daemon ends so the broker exits too.
+- A plugin whose `package.json` or `.claude-plugin/plugin.json` cannot be read or parsed costs that plugin and is reported through the operator channel and `veyyon plugin doctor`; it no longer aborts the session's plugin load.
+- A plugin manifest's `hooks` and `commands` entries load: hooks through the extension runner and commands as `plugin`-sourced custom commands; only `tools` and `extensions` were read before.
+- Two extensions registering the same tool or command name, and a custom tool or command that fails to load, are reported on the operator channel; the later registration wins and the earlier one was silently dropped.
+- An MCP tool that withholds arguments withholds values only; a key-only error was delivered as `undefined`.
+- An MCP server whose reconnects trip the breaker is reported on the operator channel with the server name and the suspension; the suspension was logged only.
+- A CommonJS extension (`module.exports = …`, or a transpiled module with `exports.__esModule`) runs instead of being reported as missing its default export; the wrapper mirrors Bun's `__esModule` interop.
+- A marketplace catalog entry the parser drops is reported with the plugin name, the failing field and the reason: `veyyon plugin marketplace add`/`update` print it to stderr and a session states it on the notice channel; the entry was skipped in silence and the cached catalog persisted without it.
 
 ### Removed
 
@@ -353,6 +401,8 @@
 ### Fixed
 
 - Collapsed todo boards prioritize in-progress tasks, announce row-trimmed active phases, and show canonical newly started tasks with concurrent counts even when replayed without call arguments.
+- `resolveModelFromSettings` is removed from `config/model-resolver`; the role chain a session starts from resolves through `resolveModelRoleValue`, which reports why a role failed.
+- `ReadRenderArgs` no longer carries `offset`: the `read` schema states a line window on the path itself (`src/app.ts:50-200`), and `limit` is the directory entry cap.
 
 ## [1.4.1] - 2026-09-08
 

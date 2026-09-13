@@ -164,6 +164,7 @@ import { ARGOT_HANDLES_BANNER } from "./system-prompt-builder/section-registry";
 import { delegationStrength } from "./task/agent-settings";
 import { AgentOutputManager } from "./task/output-manager";
 import { wrapStreamFnWithProviderConcurrency } from "./task/provider-concurrency";
+
 import { type ClaimedTicket, TopicReplenishmentEngine } from "./task/topic-replenishment";
 import {
 	AUTO_THINKING,
@@ -208,6 +209,7 @@ import { buildNamedToolChoice } from "./utils/tool-choice";
 import { buildWorkspaceTree, type WorkspaceTree } from "./workspace-tree";
 
 // Types
+
 
 // `DialectFormat` and `resolveDialect` moved to `config/dialect-format.ts` so
 // `system-prompt-builder/gate-inputs.ts` can ask the same question without importing this
@@ -1474,6 +1476,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 			return cwd;
 		};
+
 		// Installed by whichever host is running, through the setToolNotifier this
 		// factory returns. Nothing here knows what a host is, so a terminal, a GUI
 		// and a headless run all reach the same slot.
@@ -1873,8 +1876,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				gateSpawn,
 			),
 		);
+		// The same channel `reportExtensionLoadFailures` uses: a tool with a syntax error, a
+		// bad default export, or a name another tool already took was dropped with a line in
+		// the file log and nothing on the surface, so the tool was absent with no explanation.
 		for (const { path, error } of customToolsLoadResult.errors) {
 			logger.error("Custom tool load failed", { path, error });
+			operatorNotices.error("tools", `${path}: ${error}`);
 		}
 		if (customToolsLoadResult.tools.length > 0) {
 			customTools.push(...customToolsLoadResult.tools.map(loaded => loaded.tool));
@@ -2323,6 +2330,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		if (!options.disableExtensionDiscovery) {
 			for (const { path, error } of customCommandsResult.errors) {
 				logger.error("Failed to load custom command", { path, error });
+				operatorNotices.error("commands", `${path}: ${error}`);
 			}
 		}
 
