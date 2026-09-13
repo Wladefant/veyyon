@@ -4,16 +4,6 @@
 
 ## [Unreleased]
 
-### Added
-
-- Guard against auto-updating or replacing custom and local Veyyon binary builds.
-- Support auto-update opt-out via `startup.autoUpdate: false`, `updates.auto: false`, and `VEYYON_NO_AUTO_UPDATE=1`.
-- Record skipped automatic updates in `update-history.json`.
-- `BUILD_TAG` export in `@veyyon/utils/dirs` for build metadata and custom build identification.
-
-### Fixed
-
-- Collapsed todo boards prioritize in-progress tasks, announce row-trimmed active phases, and show canonical newly started tasks with concurrent counts even when replayed without call arguments.
 ### Breaking Changes
 
 - Agent settings use `agent.*`, `tier.agent`, `advisor.agents`, and `argot.agents`; legacy keys migrate on load, while historical runtime export names, custom-theme color tokens, session records, and RPC spellings remain unchanged.
@@ -54,6 +44,9 @@
 
 ### Added
 
+- Guard against auto-updating or replacing custom and local Veyyon binary builds.
+- Support auto-update opt-out via `startup.autoUpdate: false`, `updates.auto: false`, and `VEYYON_NO_AUTO_UPDATE=1`.
+- Record skipped automatic updates in `update-history.json`.
 - Exported `projectToolDisplay` from `presentation/web-tool-display.ts`, projecting canonical tool execution displays for collab live sessions and HTML export.
 - `tools/view-registry.ts` exports `toolViewDefinitions`, the host-agnostic `ToolViewDefinition` for every tool card the terminal drew, and `tools/renderers.ts` derives the terminal adapters from it; the set of cards and their chrome are unchanged.
 - A tool card value-imports no tool: the search card limits are `tools/search/search-card-limits.ts`, the web search provider label is `tools/web/search/types.ts`, and the launch card owns `callMeta` and `readyPendingSummary`; each name is exported from that one module only. Print mode and the HTML export load a card without the tool behind it, and no output changes.
@@ -109,6 +102,7 @@
 - Forced render requests accept `preserveViewport` to paint changed rows immediately while retaining pending full-repaint and scrollback requests.
 - `TUI.frameScrollable` states whether the last composed frame had content above the viewport, so a host can render a scroll affordance without re-deriving it from row counts it cannot see.
 - The package is `hosts/terminal/engine` in the repository, beside the other halves of the terminal host. The published package name, exports and entry points are unchanged.
+- `BUILD_TAG` export in `@veyyon/utils/dirs` for build metadata and custom build identification.
 - `@veyyon/utils/fs-tool-args` parses a `read` or `write` tool call's arguments and result details (`parseReadArgs`, `parseReadDetails`, `parseWriteArgs`, `parseWriteDetails`, `countLines`), moved from `@veyyon/tool-render` so every host reads them without the React renderers.
 - `BracketedPasteHandler.route(data, sinks)` delivers one chunk's parts to `PasteSinks`: bytes before the start marker to `keys`, the assembled payload to `paste`, and bytes after the end marker to `reenter`; it returns `false` when the chunk held no paste sequence.
 - `@veyyon/utils/tab-width` is the one definition of `replaceTabs` and `DEFAULT_TAB_WIDTH`, a dependency-free module the browser bundles share; `@veyyon/utils/wrap` and `@veyyon/utils/tab-spacing` re-export them unchanged.
@@ -521,6 +515,7 @@
 
 ### Fixed
 
+- Collapsed todo boards prioritize in-progress tasks, announce row-trimmed active phases, and show canonical newly started tasks with concurrent counts even when replayed without call arguments.
 - Print, JSON and RPC mode flush Bun's stdout sink before exiting, so a piped consumer receives the whole last frame instead of losing up to 1 MiB of queued output.
 - A spawned agent's card shows its resolved-model badge again on the live block, the registry path an extension wraps and the rebuilt transcript, per `agent.showResolvedModelBadge`.
 - With `VEYYON_FORCE_IMAGE_PROTOCOL=sixel` and `VEYYON_ALLOW_SIXEL_PASSTHROUGH=1`, a bash card draws an inline Sixel image row as the program wrote it instead of blanking it.
