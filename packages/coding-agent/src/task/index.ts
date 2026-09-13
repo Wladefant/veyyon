@@ -19,6 +19,7 @@ import path from "node:path";
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { Usage } from "@veyyon/ai";
 import { emptyCost, emptyUsage } from "@veyyon/catalog/models";
+import type { AgentSpawnRecord } from "@veyyon/kernel/session/session-entries";
 import {
 	$env,
 	directoryExists,
@@ -89,8 +90,8 @@ import { AgentOutputManager } from "./output-manager";
 import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
 import { repairTaskParams } from "./repair-args";
 import { treeSpawnSemaphore } from "./spawn-semaphore";
-import { recordNativeDispatch } from "./topic-replenishment";
 import { taskToolView } from "./task-view";
+import { recordNativeDispatch } from "./topic-replenishment";
 import { parseIsolationMode } from "./worktree";
 
 function renderAgentUserPrompt(assignment: string): string {
@@ -1838,7 +1839,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				}
 			}
 
-			const spawnRecord = {
+			const spawnRecord: AgentSpawnRecord = {
 				agentId: result.id,
 				agentName: result.agent,
 				task: result.task,
@@ -1857,7 +1858,6 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				structuredResult,
 			};
 			this.session.recordAgentSpawn?.(spawnRecord);
-			this.session.recordSubagentSpawn?.(spawnRecord);
 			await this.session.onSubagentComplete?.(spawnRecord);
 
 			return this.#buildResultPayload(result, projectAgentsDir, Date.now() - startTime, mergeSummary);

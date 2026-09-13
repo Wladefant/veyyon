@@ -36,6 +36,7 @@
 
 ### Fixed
 
+- Restored selective config reload in the shared settings store, preserving runtime overrides and existing worker snapshots, rejecting invalid or racing reloads, and keeping restart-only disk edits inactive during later saves ([#26](https://github.com/Wladefant/veyyon/issues/26)).
 - Settings queries ignore inherited object properties.
 - `Type.Pick` emits the keys it was asked for in the order they were asked for, and keeps a picked key that is own-but-non-enumerable on the validated value.
 - A session whose recorded leaf id no longer names an entry reopens on its last entry instead of on an empty conversation.

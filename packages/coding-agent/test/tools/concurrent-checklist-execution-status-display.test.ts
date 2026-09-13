@@ -1,9 +1,16 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { renderTodoBoardLines, type TodoBoardOptions } from "@veyyon/coding-agent/modes/components/todo-board";
-import { initTheme, theme } from "@veyyon/coding-agent/modes/theme/theme";
+import {
+	renderTodoBoardLines,
+	type TodoBoardOptions,
+} from "@veyyon/coding-agent/modes/terminal/components/dashboard/todo-board";
+import { viewToolRenderer } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
+import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import { type TodoPhase, TodoTool, todoToolRenderer } from "@veyyon/coding-agent/tools/todo";
+import { type TodoPhase, TodoTool } from "@veyyon/coding-agent/tools/agent/todo";
+import { todoToolView } from "@veyyon/coding-agent/tools/agent/todo-view";
+
+const todoToolRenderer = viewToolRenderer(todoToolView, { mergeCallAndResult: true });
 
 function createSession(initialPhases: TodoPhase[] = []): { session: ToolSession; phases: () => TodoPhase[] } {
 	let phases = initialPhases;

@@ -3,18 +3,18 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
 import {
 	type ClaimedTicket,
 	type SubagentCompleteEvent,
 	TopicReplenishmentEngine,
 } from "@veyyon/coding-agent/task/topic-replenishment";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 
 interface RuntimeTaskTool {
 	tool?: RuntimeTaskTool;

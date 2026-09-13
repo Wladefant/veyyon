@@ -99,7 +99,7 @@ export type AgentSettings = AgentLaneSettings;
 function validateLane(key: string, value: unknown): string | undefined {
 	const seen = new Set<object>();
 	let current = value;
-	let location = `subagent.agents.${key}`;
+	let location = `agent.agents.${key}`;
 	while (current !== undefined) {
 		if (current === null || typeof current !== "object" || Array.isArray(current)) {
 			return `${location}: expected a lane object`;
@@ -132,8 +132,8 @@ function validateLane(key: string, value: unknown): string | undefined {
 		) {
 			return `${location}.maxNestedSpawnDepth: expected -1 or a non-negative integer`;
 		}
-		current = lane.subagents;
-		location += ".subagents";
+		current = lane.agents;
+		location += ".agents";
 	}
 	return undefined;
 }
