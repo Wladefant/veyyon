@@ -5,8 +5,8 @@ settle 16
 submit "/reload-config"
 settle 3
 config=/sandbox/home/.veyyon/profiles/default/agent/config.yml
-# Preserve the recorder's seed, including any existing subagent namespace.
-bun -e 'const f = process.argv[1]; const c = Bun.YAML.parse(await Bun.file(f).text()); c.subagent = {...c.subagent, sharedModel: true, model: "openai/reload-proof"}; await Bun.write(f, Bun.YAML.stringify(c));' "$config"
+# Preserve the recorder's seed, including any existing agent namespace.
+bun -e 'const f = process.argv[1]; const c = Bun.YAML.parse(await Bun.file(f).text()); c.agent = {...c.agent, sharedModel: true, model: "openai/reload-proof"}; await Bun.write(f, Bun.YAML.stringify(c));' "$config"
 shot off
 submit "/reload-config"
 settle 4

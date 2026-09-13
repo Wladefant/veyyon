@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { resolveEffort } from "../src/config/effort-resolver";
@@ -7,11 +7,75 @@ import { InputController, type InputControllerContext } from "../src/modes/termi
 import { executeAcpBuiltinSlashCommand } from "../src/slash-commands/acp-builtins";
 import type { SlashCommandRuntime } from "../src/slash-commands/types";
 import { resolveAgentModel } from "../src/task/agent-settings";
+import { createSubagentSettingsForCwd } from "../src/task/executor";
 import { useTrackedTempDirs } from "./helpers/tracked-temp-dir";
 
 const dirs = useTrackedTempDirs("config-reload-");
 
 describe("config hot reload", () => {
+	it.each([
+		{ name: "ordinary overlap", laterModels: ["new"] },
+		{ name: "ABA overlap", laterModels: ["new", "old"] },
+		{ name: "a newer no-op reload", laterModels: ["old"] },
+	])("rejects stale routing after $name without rebinding existing workers", async ({ laterModels }) => {
+		const dir = dirs();
+		const file = path.join(dir, "config.yml");
+		const writeModel = (model: string) =>
+			fs.writeFile(file, JSON.stringify({ agent: { model: `openai/${model}`, sharedModel: true } }));
+		await writeModel("old");
+		const settings = await Settings.loadReadOnly({ agentDir: dir });
+		const existing = await createSubagentSettingsForCwd(settings, dir);
+		const entered = Promise.withResolvers<void>();
+		const resume = Promise.withResolvers<void>();
+		const realFile = Bun.file.bind(Bun);
+		let armed = true;
+		const readBarrier = spyOn(Bun, "file").mockImplementation(((target: string, options?: BlobPropertyBag) => {
+			const source = realFile(target, options);
+			if (target !== file || !armed) return source;
+			armed = false;
+			return new Proxy(source, {
+				get(source, property) {
+					if (property === "text") {
+						return async () => {
+							const text = await source.text();
+							entered.resolve();
+							await resume.promise;
+							return text;
+						};
+					}
+					const value = Reflect.get(source, property, source);
+					return typeof value === "function" ? value.bind(source) : value;
+				},
+			});
+		}) as typeof Bun.file);
+		await writeModel("stale");
+		const delayed = settings.reloadConfig().then(
+			() => undefined,
+			(error: unknown) => error,
+		);
+		try {
+			await entered.promise;
+			for (const model of laterModels) {
+				await writeModel(model);
+				await settings.reloadConfig();
+			}
+			resume.resolve();
+			const failure = await delayed;
+			const expected = `openai/${laterModels.at(-1)}`;
+			expect((await fs.readFile(file, "utf8")).includes(expected)).toBe(true);
+			expect(settings.get("agent.model")).toBe(expected);
+			const next = await createSubagentSettingsForCwd(settings, dir);
+			expect(resolveAgentModel({ settings: next, agentName: "task" }).patterns).toEqual([expected]);
+			expect(resolveAgentModel({ settings: existing, agentName: "task" }).patterns).toEqual(["openai/old"]);
+			expect(failure).toBeInstanceOf(Error);
+			expect((failure as Error).message).toContain("Settings changed during reload");
+		} finally {
+			resume.resolve();
+			await delayed;
+			readBarrier.mockRestore();
+		}
+	});
+
 	it("contains rejected reloads through the real TUI follow-up dispatcher and permits retry", async () => {
 		const dir = dirs();
 		const file = path.join(dir, "config.yml");
