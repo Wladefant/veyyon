@@ -1,6 +1,10 @@
 import * as os from "node:os";
 import { scheduler } from "node:timers/promises";
-import { CHATGPT_WEB_PROVIDER_ID, isChatGptWebLoopbackUrl } from "@veyyon/catalog/discovery/chatgpt-web";
+import {
+	CHATGPT_WEB_PROVIDER_ID,
+	describeChatGptWebFailure,
+	isChatGptWebLoopbackUrl,
+} from "@veyyon/catalog/discovery/chatgpt-web";
 import { calculateCost, discardAttemptUsage, emptyUsage, scaleUsageCost } from "@veyyon/catalog/models";
 import { toFields, toStringValue } from "@veyyon/catalog/utils";
 import {
@@ -15,6 +19,7 @@ import { $env, $flag } from "@veyyon/utils/env";
 import { structuredCloneJSON } from "@veyyon/utils/json";
 import { parseStreamingJson } from "@veyyon/utils/json-parse";
 import * as logger from "@veyyon/utils/logger";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { readSseJson } from "@veyyon/utils/stream";
 import { asRecord, errorMessage } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
@@ -2805,6 +2810,12 @@ const streamOpenAICodexResponsesOnce = (
 				} satisfies CodexStreamFailureContext);
 			try {
 				const failure = await handleCodexStreamFailure(failureContext, error);
+				if (model.provider === CHATGPT_WEB_PROVIDER_ID && !options?.signal?.aborted) {
+					failure.errorMessage = describeChatGptWebFailure(failure.errorMessage ?? error);
+				} else if (model.provider === CHATGPT_WEB_PROVIDER_ID && options?.signal?.reason?.name === "TimeoutError") {
+					failure.errorMessage = describeChatGptWebFailure(options.signal.reason);
+					failure.stopReason = "error";
+				}
 				stream.push({ type: "error", reason: failure.stopReason as "error" | "aborted", error: failure });
 			} catch (failureError) {
 				// Last resort — the failure handler itself threw (exotic error object or
@@ -2828,8 +2839,25 @@ const streamOpenAICodexResponsesOnce = (
 /**
  * Retries Codex terminal completions that contain no visible assistant output.
  */
-export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"> = (model, context, options) =>
-	withEmptyCompletionRetry(model, context, options, streamOpenAICodexResponsesOnce, { providerRetriesStalls: true });
+export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"> = (model, context, options) => {
+	if (model.provider !== CHATGPT_WEB_PROVIDER_ID) {
+		return withEmptyCompletionRetry(model, context, options, streamOpenAICodexResponsesOnce, {
+			providerRetriesStalls: true,
+		});
+	}
+	// One deadline covers connection, streaming and all retries, including a daemon
+	// which keeps sending heartbeats without ever completing its browser turn.
+	const deadline = scopedTimeoutSignal(300_000, options?.signal);
+	const stream = withEmptyCompletionRetry(
+		model,
+		context,
+		{ ...options, signal: deadline.signal, preferWebsockets: false },
+		streamOpenAICodexResponsesOnce,
+		{ providerRetriesStalls: true },
+	);
+	void stream.result().finally(() => deadline.cancel());
+	return stream;
+};
 
 export async function prewarmOpenAICodexResponses(
 	model: Model<"openai-codex-responses">,

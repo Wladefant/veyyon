@@ -58,6 +58,7 @@
  * silent second request to wherever it pointed. The daemon redirects nothing,
  * which is exactly why a redirect here means the base URL is not the daemon.
  */
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { normalizeBaseUrl } from "@veyyon/utils/url";
 import { type } from "arktype";
@@ -122,6 +123,8 @@ export interface ChatGptWebModelDiscoveryOptions {
 	providerId?: string;
 	/** Abort signal for network request cancellation. */
 	signal?: AbortSignal;
+	/** Total health + catalog deadline in milliseconds (default 120000). */
+	timeoutMs?: number;
 	/** Optional fetch implementation override for tests. */
 	fetchFn?: FetchImpl;
 	/** Reason channel for a `null` result; never called on success. */
@@ -257,72 +260,100 @@ export async function fetchChatGptWebModels(
 		return null;
 	}
 
-	const fetchFn = discoveryFetch(options.fetchFn);
-	const headers = new Headers({
-		Authorization: `Bearer ${options.accessToken}`,
-		accept: "application/json",
-	});
-
-	// Probed before the catalog so a row is never published with an
-	// unsubstantiated tool capability. A failed probe is not a discovery
-	// failure: it only means Full mode was not proven.
-	const mode = await probeDaemonMode(fetchFn, baseUrl, options.signal);
-
-	const modelsUrl = `${baseUrl}${MODELS_PATH}`;
-	let response: Response;
+	const deadline = scopedTimeoutSignal(options.timeoutMs ?? 120_000, options.signal);
 	try {
-		response = await fetchFn(modelsUrl, {
-			method: "GET",
-			headers,
-			signal: options.signal,
-			// The loopback check above is what keeps the ChatGPT bearer on this
-			// machine, and a followed redirect would walk straight out of it: the
-			// URL is re-resolved after the guard ran, so a 302 to an external host
-			// is a request this reader never validated. Containment would then rest
-			// entirely on the runtime stripping `Authorization` cross-origin, which
-			// is a WHATWG rule about a case that must not arise here at all — the
-			// daemon serves `/models` directly and redirects nothing. `"error"`
-			// makes that explicit and fails closed: the fetch rejects, the reason is
-			// reported, and discovery returns `null` instead of following the hop.
-			redirect: "error",
+		const fetchFn = discoveryFetch(options.fetchFn);
+		const headers = new Headers({
+			Authorization: `Bearer ${options.accessToken}`,
+			accept: "application/json",
 		});
-	} catch (error) {
-		report("request", modelsUrl, errorMessage(error));
-		return null;
-	}
-	if (!response.ok) {
-		report("status", modelsUrl, `HTTP ${response.status} ${response.statusText}`.trim());
-		return null;
-	}
 
-	let payload: unknown;
-	try {
-		payload = await response.json();
-	} catch (error) {
-		report("body", modelsUrl, `response is not JSON: ${errorMessage(error)}`);
-		return null;
-	}
+		// Probed before the catalog so a row is never published with an
+		// unsubstantiated tool capability. A failed probe is not a discovery
+		// failure: it only means Full mode was not proven.
+		const mode = await probeDaemonMode(fetchFn, baseUrl, deadline.signal);
 
-	const parsed = modelsResponseSchema(payload);
-	if (parsed instanceof type.errors || !Array.isArray(parsed.models)) {
-		report("payload", modelsUrl, "response holds no codex model list this reader recognizes");
-		return null;
-	}
+		const modelsUrl = `${baseUrl}${MODELS_PATH}`;
+		let response: Response;
+		try {
+			response = await fetchFn(modelsUrl, {
+				method: "GET",
+				headers,
+				signal: deadline.signal,
+				// The loopback check above is what keeps the ChatGPT bearer on this
+				// machine, and a followed redirect would walk straight out of it: the
+				// URL is re-resolved after the guard ran, so a 302 to an external host
+				// is a request this reader never validated. Containment would then rest
+				// entirely on the runtime stripping `Authorization` cross-origin, which
+				// is a WHATWG rule about a case that must not arise here at all — the
+				// daemon serves `/models` directly and redirects nothing. `"error"`
+				// makes that explicit and fails closed: the fetch rejects, the reason is
+				// reported, and discovery returns `null` instead of following the hop.
+				redirect: "error",
+			});
+		} catch (error) {
+			report("request", modelsUrl, describeChatGptWebFailure(deadline.signal.reason ?? error));
+			return null;
+		}
+		if (!response.ok) {
+			report("status", modelsUrl, describeChatGptWebFailure(`HTTP ${response.status} ${response.statusText}`));
+			return null;
+		}
 
-	const providerId = options.providerId ?? CHATGPT_WEB_PROVIDER_ID;
-	const ranked: { model: ModelSpec<"openai-codex-responses">; priority: number }[] = [];
-	for (const entry of parsed.models) {
-		const model = normalizeEntry(entry, baseUrl, providerId, mode);
-		if (model) ranked.push(model);
-	}
-	ranked.sort((left, right) => {
-		if (left.priority !== right.priority) return left.priority - right.priority;
-		return left.model.id.localeCompare(right.model.id);
-	});
+		let payload: unknown;
+		try {
+			payload = await response.json();
+		} catch (error) {
+			report(
+				"body",
+				modelsUrl,
+				describeChatGptWebFailure(deadline.signal.reason ?? `response is not JSON: ${errorMessage(error)}`),
+			);
+			return null;
+		}
 
-	return mode === undefined
-		? { models: ranked.map(item => item.model) }
-		: { models: ranked.map(item => item.model), mode };
+		const parsed = modelsResponseSchema(payload);
+		if (parsed instanceof type.errors || !Array.isArray(parsed.models)) {
+			report("payload", modelsUrl, "response holds no codex model list this reader recognizes");
+			return null;
+		}
+
+		const providerId = options.providerId ?? CHATGPT_WEB_PROVIDER_ID;
+		const ranked: { model: ModelSpec<"openai-codex-responses">; priority: number }[] = [];
+		for (const entry of parsed.models) {
+			const model = normalizeEntry(entry, baseUrl, providerId, mode);
+			if (model) ranked.push(model);
+		}
+		ranked.sort((left, right) => {
+			if (left.priority !== right.priority) return left.priority - right.priority;
+			return left.model.id.localeCompare(right.model.id);
+		});
+
+		return mode === undefined
+			? { models: ranked.map(item => item.model) }
+			: { models: ranked.map(item => item.model), mode };
+	} finally {
+		deadline.cancel();
+	}
+}
+
+/** Actionable bridge failures shared by discovery and the Responses transport. */
+export function describeChatGptWebFailure(error: unknown): string {
+	const detail = errorMessage(error);
+	if (/timeout|timed out|stalled/i.test(detail)) {
+		return `ChatGPT Web daemon timed out: ${detail}. Check the daemon/browser, wait for its active turn to finish, then retry.`;
+	}
+	if (/\b40[13]\b|unauthenticated|unauthorized|authentication|sign.?in|log.?in|session.*expired/i.test(detail)) {
+		return `ChatGPT Web authentication failed: ${detail}. Sign in again with the bridge setup command; refresh the ChatGPT/Codex OAuth bearer if model discovery is rejected.`;
+	}
+	if (
+		/\b404\b|model.*(?:not found|not available|unavailable|unsupported|unknown|not offered)|(?:unknown|unsupported).*model/i.test(
+			detail,
+		)
+	) {
+		return `ChatGPT Web model unavailable: ${detail}. Refresh the daemon model list and select one of its chatgpt-web/ rows; check this account's model access.`;
+	}
+	return `ChatGPT Web bridge request failed: ${detail}. Check that codex-chatgpt-web is running at the configured loopback URL and that its browser session is signed in.`;
 }
 
 /**

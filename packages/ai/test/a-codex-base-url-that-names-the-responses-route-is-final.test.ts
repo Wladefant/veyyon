@@ -56,11 +56,9 @@
  *
  * WHAT IT DOES NOT CATCH. The server here speaks the Responses SSE protocol; it
  * is not the bridge, and nothing here proves a browser turn produces an answer.
- * That needs an authenticated ChatGPT profile on the machine, which is a
- * separate, missing prerequisite, and no real account round trip — models,
- * turn, cancellation, or tool call — has been run by anyone. The fixture is a
- * specification of the daemon's request-side contract re-derived from its
- * source, not the daemon: it does not model the compaction route, the daemon's
+ * That needs an authenticated ChatGPT profile on the machine and separate live
+ * evidence. These HTTP fault fixtures must never be reported as successful
+ * ChatGPT account round trips. They do not model the compaction route, the daemon's
  * per-thread environment cache, or its browser side. The catalog half of the
  * boundary is covered in
  * `packages/catalog/test/the-chatgpt-web-bridge-publishes-only-what-its-daemon-reports.test.ts`.
@@ -404,7 +402,9 @@ const COMPLETED_SSE = `${[
  * abort assertion observe a hang-up on the SERVER side rather than trusting the
  * client's own bookkeeping.
  */
-async function startServer(mode: "complete" | "stall" = "complete"): Promise<TestServer> {
+async function startServer(
+	mode: "complete" | "stall" | "unauthenticated" | "unknown-model" = "complete",
+): Promise<TestServer> {
 	const requests: ObservedRequest[] = [];
 	const hangUp = Promise.withResolvers<void>();
 	const received = Promise.withResolvers<void>();
@@ -431,6 +431,20 @@ async function startServer(mode: "complete" | "stall" = "complete"): Promise<Tes
 			};
 			requests.push(observed);
 			received.resolve();
+			if (mode === "unauthenticated" || mode === "unknown-model") {
+				res.writeHead(mode === "unauthenticated" ? 401 : 404, { "content-type": "application/json" });
+				res.end(
+					JSON.stringify({
+						error: {
+							message:
+								mode === "unauthenticated"
+									? "ChatGPT browser session expired"
+									: "Requested model not available",
+						},
+					}),
+				);
+				return;
+			}
 			if (refusal !== undefined) {
 				res.writeHead(400, { "content-type": "application/json" });
 				res.end(JSON.stringify({ error: { message: refusal, type: "invalid_request_error" } }));
@@ -1187,6 +1201,85 @@ describe("a bridge-routed turn carries the trusted Codex environment a Full-mode
 		} finally {
 			await server.close();
 			tempDir.removeSync();
+		}
+	});
+});
+
+describe("bridge failures terminate with recovery instructions (HTTP fault fixtures, not live ChatGPT)", () => {
+	for (const [mode, instruction] of [
+		["unauthenticated", "Sign in again"],
+		["unknown-model", "Refresh the daemon model list"],
+	] as const) {
+		it(`explains ${mode} without retrying a rejected request`, async () => {
+			const server = await startServer(mode);
+			try {
+				const result = await streamOpenAICodexResponses(
+					bridgeModel(`${server.origin}/v1/responses`),
+					askContext(),
+					{
+						apiKey: TOKEN,
+						cwd: BRIDGE_CWD,
+					},
+				).result();
+				expect(result.stopReason).toBe("error");
+				expect(result.errorMessage).toContain(instruction);
+				expect(server.requests).toHaveLength(1);
+			} finally {
+				await server.close();
+			}
+		});
+	}
+
+	it("explains a stopped daemon instead of hanging", async () => {
+		const server = await startServer();
+		await server.close();
+		const started = performance.now();
+		const result = await streamOpenAICodexResponses(bridgeModel(`${server.origin}/v1/responses`), askContext(), {
+			apiKey: TOKEN,
+			cwd: BRIDGE_CWD,
+		}).result();
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("codex-chatgpt-web is running");
+		expect(performance.now() - started).toBeLessThan(12000);
+	}, 15000);
+
+	it("bounds a silent stream and tells the operator what to check", async () => {
+		const server = await startServer("stall");
+		try {
+			const started = performance.now();
+			const result = await streamOpenAICodexResponses(bridgeModel(`${server.origin}/v1/responses`), askContext(), {
+				apiKey: TOKEN,
+				cwd: BRIDGE_CWD,
+				streamIdleTimeoutMs: 50,
+				streamFirstEventTimeoutMs: 50,
+			}).result();
+			expect(result.stopReason).toBe("error");
+			expect(result.errorMessage).toContain("Check the daemon/browser");
+			expect(performance.now() - started).toBeLessThan(3000);
+		} finally {
+			await server.close();
+		}
+	});
+
+	it("enforces the five-minute total turn deadline even with idle watchdogs disabled", async () => {
+		const server = await startServer("stall");
+		vi.useFakeTimers();
+		try {
+			const stream = streamOpenAICodexResponses(bridgeModel(`${server.origin}/v1/responses`), askContext(), {
+				apiKey: TOKEN,
+				cwd: BRIDGE_CWD,
+				streamIdleTimeoutMs: 0,
+				streamFirstEventTimeoutMs: 0,
+			});
+			await server.received;
+			vi.advanceTimersByTime(300_000);
+			const result = await stream.result();
+			expect(result.stopReason).toBe("error");
+			expect(result.errorMessage).toContain("ChatGPT Web daemon timed out");
+			expect(server.requests).toHaveLength(1);
+		} finally {
+			vi.useRealTimers();
+			await server.close();
 		}
 	});
 });

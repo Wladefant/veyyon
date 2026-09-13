@@ -588,3 +588,45 @@ describe("the loopback guard is not undone by a redirect", () => {
 		}
 	});
 });
+
+describe("one discovery deadline covers health, headers and body (HTTP fault fixtures)", () => {
+	for (const stalledStage of ["health", "headers", "body"] as const) {
+		it(`terminates a daemon stalled at ${stalledStage} with recovery instructions`, async () => {
+			const server = http.createServer((req, res) => {
+				if (req.url === "/healthz" && stalledStage !== "health") {
+					res.setHeader("content-type", "application/json");
+					res.end(JSON.stringify({ service: "codex-chatgpt-web", mode: "browser-only" }));
+				} else if (stalledStage === "body") {
+					res.writeHead(200, { "content-type": "application/json" });
+					res.write('{"models":[');
+				}
+			});
+			const listening = Promise.withResolvers<void>();
+			server.listen(0, "127.0.0.1", listening.resolve);
+			await listening.promise;
+			const address = server.address();
+			if (!address || typeof address === "string") throw new Error("No bound test port");
+			try {
+				const { failures, onFailure } = collect();
+				const started = performance.now();
+				const result = await fetchChatGptWebModels({
+					accessToken: TOKEN,
+					baseUrl: `http://127.0.0.1:${address.port}/v1`,
+					timeoutMs: 100,
+					onFailure,
+				});
+				expect(result).toBeNull();
+				expect(failures).toHaveLength(1);
+				expect(failures[0]?.detail).toContain("timed out");
+				expect(failures[0]?.detail).toContain("Check the daemon/browser");
+				expect(performance.now() - started).toBeLessThan(2000);
+			} finally {
+				const closed = Promise.withResolvers<void>();
+				server.close(() => closed.resolve());
+				server.closeAllConnections();
+				await closed.promise;
+				expect(server.listening).toBe(false);
+			}
+		});
+	}
+});
