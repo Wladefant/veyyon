@@ -545,6 +545,7 @@
     "./thinking": {
       "types": "./src/thinking/index.ts",
       "import": "./src/thinking/index.ts"
+
     },
     "./tools": {
       "types": "./src/tools/index.ts",

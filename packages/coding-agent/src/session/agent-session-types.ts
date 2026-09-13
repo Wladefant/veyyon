@@ -307,6 +307,10 @@ export interface AgentSessionConfig {
 	 * nobody above it owns the process.
 	 */
 	isSpawned?: boolean;
+	/** Task recursion depth (for subagent sessions). Default: 0 */
+	taskDepth?: number;
+	/** Parent task ID prefix for nested artifact naming (e.g., "Extensions") */
+	parentTaskPrefix?: string;
 	/**
 	 * AsyncJobManager reachable by this session for scoped job actions.
 	 *

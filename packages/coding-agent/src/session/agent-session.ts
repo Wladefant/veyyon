@@ -656,6 +656,7 @@ function hasNonWhitespace(value: string): boolean {
 export type { ShakeMode, ShakeResult };
 
 /**
+
  * Whether `next` is the same tool set as `current` in a different order.
  *
  * Order-only differences are the case worth catching: they cost a full prefix
@@ -976,6 +977,8 @@ export class AgentSession {
 	readonly #ownedAsyncJobManager: AsyncJobManager | undefined;
 	/** Whether another session in this process spawned this one. */
 	readonly #isSpawned: boolean;
+	readonly #taskDepth: number;
+	readonly #parentTaskPrefix: string | undefined;
 	/**
 	 * AsyncJobManager scoped to this session for introspection/cancellation.
 	 *
@@ -1754,6 +1757,8 @@ export class AgentSession {
 		this.#parentEvalSessionId = config.parentEvalSessionId;
 		this.#ownedAsyncJobManager = config.ownedAsyncJobManager;
 		this.#isSpawned = config.isSpawned === true;
+		this.#taskDepth = config.taskDepth ?? 0;
+		this.#parentTaskPrefix = config.parentTaskPrefix;
 		this.#asyncJobManager = config.asyncJobManager ?? config.ownedAsyncJobManager;
 		this.#scopedModels = config.scopedModels ?? [];
 		this.#thinking = new ThinkingRuntime({
@@ -9417,6 +9422,10 @@ export class AgentSession {
 
 		return {
 			ui: noOpUIContext,
+			isSubagent: this.#isSpawned,
+			taskDepth: this.#taskDepth,
+			agentId: this.#isSpawned ? this.#agentId : undefined,
+			parentTaskPrefix: this.#parentTaskPrefix,
 			hasUI: false,
 			cwd: this.sessionManager.getCwd(),
 			sessionManager: this.sessionManager,

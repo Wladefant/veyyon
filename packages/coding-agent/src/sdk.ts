@@ -1474,11 +1474,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 			return cwd;
 		};
-		let replenishmentEngine: TopicReplenishmentEngine | null = null;
+
 		// Installed by whichever host is running, through the setToolNotifier this
 		// factory returns. Nothing here knows what a host is, so a terminal, a GUI
 		// and a headless run all reach the same slot.
 		let hostNotifier: HostNotifier | undefined;
+
+		let replenishmentEngine: TopicReplenishmentEngine | null = null;
 		const toolSession: ToolSession = {
 			get cwd() {
 				return sessionManager.getCwd();
@@ -2346,6 +2348,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			() => (hasSession ? createSessionMemoryRuntimeContext(session, agentDir, cwd) : undefined),
 			settings,
 			localProtocolOptions,
+			{
+				isSubagent: sessionIsSpawned,
+				taskDepth,
+				agentId: sessionIsSpawned ? resolvedAgentId : undefined,
+				parentTaskPrefix: options.parentTaskPrefix,
+			},
 		);
 
 		credentialDisabledTarget = extensionRunner;
@@ -3402,6 +3410,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// re-root may not move the process working directory or any other
 			// process-global project state. See `AgentSession.rescopeToCwd`.
 			isSpawned: sessionIsSpawned,
+			taskDepth,
+			parentTaskPrefix: options.parentTaskPrefix,
 			builtInToolNames: builtInRegistryToolNames,
 			transformContext,
 			transformProviderContext,

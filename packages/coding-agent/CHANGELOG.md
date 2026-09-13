@@ -40,6 +40,8 @@
 
 ### Added
 
+- ChatGPT Web integration preserves fork routing reloads and session-scoped replenishment on the extracted kernel APIs; concurrent todo previews use the host-neutral view and `/todo pending` retains its reset behavior.
+- `ExtensionContext` and `ExtensionCommandContext` expose runtime session identity fields: `isSubagent` (boolean), `taskDepth` (number), `agentId` (optional string), and `parentTaskPrefix` (optional string). Extensions can now reliably detect whether they are attached to the root interactive session or to a delegated task subagent without depending on `hasUI` or probing internal registries.
 - Exported `projectToolDisplay` from `presentation/web-tool-display.ts`, projecting canonical tool execution displays for collab live sessions and HTML export.
 - `tools/view-registry.ts` exports `toolViewDefinitions`, the host-agnostic `ToolViewDefinition` for every tool card the terminal drew, and `tools/renderers.ts` derives the terminal adapters from it; the set of cards and their chrome are unchanged.
 - A tool card value-imports no tool: the search card limits are `tools/search/search-card-limits.ts`, the web search provider label is `tools/web/search/types.ts`, and the launch card owns `callMeta` and `readyPendingSummary`; each name is exported from that one module only. Print mode and the HTML export load a card without the tool behind it, and no output changes.
@@ -398,6 +400,15 @@
 ### Removed
 
 - `WRITE_GUTTER_MIN_WIDTH` is no longer exported: the line-number gutter of a code card is the host's, stated once in `src/modes/terminal/draw/draw-tool-view.ts`, and no tool sets it.
+### Added
+
+- Guard against auto-updating or replacing custom and local Veyyon binary builds.
+- Support auto-update opt-out via `startup.autoUpdate: false`, `updates.auto: false`, and `VEYYON_NO_AUTO_UPDATE=1`.
+- Record skipped automatic updates in `update-history.json`.
+
+### Fixed
+
+- Collapsed todo boards prioritize in-progress tasks, announce row-trimmed active phases, and show canonical newly started tasks with concurrent counts even when replayed without call arguments.
 - `resolveModelFromSettings` is removed from `config/model-resolver`; the role chain a session starts from resolves through `resolveModelRoleValue`, which reports why a role failed.
 - `ReadRenderArgs` no longer carries `offset`: the `read` schema states a line window on the path itself (`src/app.ts:50-200`), and `limit` is the directory entry cap.
 

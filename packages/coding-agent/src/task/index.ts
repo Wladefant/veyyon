@@ -1825,8 +1825,8 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			// transcript, so a study/backtest tool can enumerate a session's agents without
 			// scraping tool-result prose (GRAN-2). The child transcript path is derived exactly
 			// as the executor derives it: `<artifactsDir>/<id>.jsonl` (ONE PLACE).
-			const outcome = classifyAgentOutcome(result);
 
+			const outcome = classifyAgentOutcome(result);
 			let structuredResult: Record<string, unknown> | undefined;
 			if (result.output) {
 				try {

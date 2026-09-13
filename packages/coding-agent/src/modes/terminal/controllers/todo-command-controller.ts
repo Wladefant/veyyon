@@ -301,7 +301,7 @@ export class TodoCommandController {
 	#applyTargetedOp(
 		rest: string,
 		options: {
-			op: "done" | "drop" | "rm" | "pending";
+			op: "done" | "drop" | "pending" | "rm";
 			onEmpty: (current: TodoPhase[]) => void;
 			formatTaskStatus: (taskName: string) => string;
 			formatPhaseStatus: (phaseName: string) => string;
@@ -350,26 +350,11 @@ export class TodoCommandController {
 					return;
 				}
 				this.#commit(phases, `/todo ${op} (all)`);
-				const allMsg =
-					target === "completed"
-						? "Marked all tasks completed."
-						: target === "abandoned"
-							? "Marked all tasks abandoned."
-							: "Reset all tasks to pending.";
-				this.ctx.showStatus(allMsg);
+				this.ctx.showStatus(target === "pending" ? "Reset all tasks to pending." : `Marked all tasks ${target}.`);
 			},
-			formatTaskStatus: task =>
-				target === "completed"
-					? `Marked completed: ${task}`
-					: target === "abandoned"
-						? `Marked abandoned: ${task}`
-						: `Reset to pending: ${task}`,
+			formatTaskStatus: task => (target === "pending" ? `Reset to pending: ${task}` : `Marked ${target}: ${task}`),
 			formatPhaseStatus: phase =>
-				target === "completed"
-					? `Marked phase ${phase} completed.`
-					: target === "abandoned"
-						? `Marked phase ${phase} abandoned.`
-						: `Reset phase ${phase} to pending.`,
+				target === "pending" ? `Reset phase ${phase} to pending.` : `Marked phase ${phase} ${target}.`,
 		});
 	}
 
