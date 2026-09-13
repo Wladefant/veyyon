@@ -45,11 +45,14 @@ The command rediscovers the main filename in normal startup order, then re-reads
 Malformed or unreadable files, invalid lane members (including nested lanes), and missing
 explicit overlays reject the whole reload and preserve prior routing. No file is quarantined
 or rewritten. If a settings save is in flight, wait for it to finish and retry.
+A successfully applied newer reload also supersedes older in-flight reloads, including
+when later edits restore the original values. A superseded request rejects without
+changing live routing; retry the command to read the current files.
 
-The reloadable fields are `modelRoles`, `defaultEffort`, `subagent.agents`,
-`subagent.model`, `subagent.sharedModel`, and `subagent.thinkingLevel`.
+The reloadable fields are `modelRoles`, `defaultEffort`, `agent.agents`,
+`agent.model`, `agent.sharedModel`, and `agent.thinkingLevel`.
 Runtime/CLI overrides keep their precedence. Shared model/effort settings govern spawns only
-when `subagent.sharedModel` is enabled; otherwise per-agent lanes govern them.
+when `agent.sharedModel` is enabled; otherwise per-agent lanes govern them.
 The command reports effective before/after values and notifies next-turn consumers.
 New workers use the new defaults; existing workers retain their settings snapshots.
 

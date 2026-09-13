@@ -437,6 +437,9 @@ export class SettingsStore {
 	/** Pending save (debounced) */
 	#saveTimer?: NodeJS.Timeout;
 	#savePromise?: Promise<void>;
+	/** Successful reloads supersede older reads even when effective values return to their original state. */
+	#reloadSequence = 0;
+	#appliedReloadSequence = 0;
 
 	/** Whether to persist changes */
 	#persist: boolean;
@@ -797,6 +800,7 @@ export class SettingsStore {
 		if (this.#modified.size || this.#savePromise) {
 			throw new Error("Settings are being saved; retry /reload-config after the save finishes.");
 		}
+		const sequence = ++this.#reloadSequence;
 		const original = JSON.stringify([this.#global, this.#configOverlay, this.#overrides]);
 		const candidate = this.newInstance({ cwd: this.#cwd, agentDir: this.#agentDir, readOnly: true });
 		candidate.#global = (await candidate.#loadExistingMainYaml(true)) ?? {};
@@ -826,6 +830,7 @@ export class SettingsStore {
 		}
 		candidate.rebuildMerged();
 		if (
+			sequence < this.#appliedReloadSequence ||
 			JSON.stringify([this.#global, this.#configOverlay, this.#overrides]) !== original ||
 			this.#modified.size ||
 			this.#savePromise
@@ -855,6 +860,7 @@ export class SettingsStore {
 		}
 		this.#configPath = candidate.#configPath;
 		this.rebuildMerged();
+		this.#appliedReloadSequence = sequence;
 		for (const change of changed) {
 			this.#fireEffectiveSettingChanged(change.path, this.get(change.path), change.before);
 		}
