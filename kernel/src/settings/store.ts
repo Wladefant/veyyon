@@ -437,9 +437,8 @@ export class SettingsStore {
 	/** Pending save (debounced) */
 	#saveTimer?: NodeJS.Timeout;
 	#savePromise?: Promise<void>;
-	/** Successful reloads supersede older reads even when effective values return to their original state. */
+	/** Starting a newer reload supersedes every older read, including an overlapping no-op. */
 	#reloadSequence = 0;
-	#appliedReloadSequence = 0;
 
 	/** Whether to persist changes */
 	#persist: boolean;
@@ -830,7 +829,7 @@ export class SettingsStore {
 		}
 		candidate.rebuildMerged();
 		if (
-			sequence < this.#appliedReloadSequence ||
+			sequence !== this.#reloadSequence ||
 			JSON.stringify([this.#global, this.#configOverlay, this.#overrides]) !== original ||
 			this.#modified.size ||
 			this.#savePromise
@@ -860,7 +859,6 @@ export class SettingsStore {
 		}
 		this.#configPath = candidate.#configPath;
 		this.rebuildMerged();
-		this.#appliedReloadSequence = sequence;
 		for (const change of changed) {
 			this.#fireEffectiveSettingChanged(change.path, this.get(change.path), change.before);
 		}
