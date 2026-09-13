@@ -1,6 +1,6 @@
 ## Linked Issue
-<!-- Mandatory closing keyword linking the issue, e.g. Fixes #123 or Closes Wladefant/veyyon#123 -->
-Fixes #
+<!-- Link the issue without requiring automatic closure, e.g. Tracks #123 or a full GitHub issue URL. Use a closing keyword only when closure is intended. -->
+Tracks #
 
 ## Single-Deliverable Summary
 <!-- Exactly one sentence describing the single deliverable. PRs must be small and atomic. -->
