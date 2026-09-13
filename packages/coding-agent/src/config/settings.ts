@@ -1339,6 +1339,18 @@ export class Settings extends SettingsStore {
 		return settingsOrThrow();
 	}
 
+	/** Reload routing for subsequent spawns without rebinding existing agents. */
+	reloadConfig() {
+		return this.reloadSelectedConfig([
+			"modelRoles",
+			"defaultEffort",
+			"agent.agents",
+			"agent.model",
+			"agent.sharedModel",
+			"agent.thinkingLevel",
+		]);
+	}
+
 	// ─────────────────────────────────────────────────────────────────────────
 	// Accessors
 	// ─────────────────────────────────────────────────────────────────────────

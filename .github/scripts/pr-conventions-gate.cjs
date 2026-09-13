@@ -4,7 +4,7 @@
  *
  * Consolidated single-job gate enforcing PR conventions:
  * 1. Required Labels: At least one canonical `kind:*` and one `area:*`
- * 2. Linked Issue: Closing keyword + issue reference in PR body
+ * 2. Linked Issue: issue reference in PR body (no automatic closure required)
  * 3. Milestone Assigned: Non-null milestone from repository roadmap
  * 4. Scope & Size Guard: additions + deletions <= 500 lines, unless exempt
  *
@@ -85,13 +85,13 @@ function evaluatePR(pr) {
   }
 
   // 2. Linked Issue
-  const issueRefRegex = /(?:fixes|closes|resolves|refs)\s+(?:https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/issues\/|#|[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+#)(\d+)/i;
+  const issueRefRegex = /(?:https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/issues\/|#|[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+#)(\d+)/i;
   const issueMatch = body.match(issueRefRegex);
   if (!issueMatch) {
     failures.push({
       check: 'Linked Issue',
-      message: 'PR description does not contain a valid closing keyword linking an issue.',
-      remedy: `Add an issue reference under "## Linked Issue" using format: Fixes #123 or Closes Wladefant/veyyon#123.\nExample: gh pr edit ${prNumber} --body "$(cat <<'EOF'\n## Linked Issue\nFixes #123\n\n$(gh pr view ${prNumber} --json body -q .body)\nEOF\n)"`,
+      message: 'PR description does not contain a valid issue reference.',
+      remedy: 'Link the issue under "## Linked Issue", for example Tracks #123 or a full GitHub issue URL. Use a closing keyword only when closure is intended.',
     });
   } else {
     passes.push(`Linked issue: ${issueMatch[0]}`);

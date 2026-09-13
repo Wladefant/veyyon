@@ -448,8 +448,11 @@ import { isAutoQaEnabled } from "../tools/agent/report-tool-issue";
 import { buildResolveReminderMessage, type ResolveToolDetails, runResolveInvocation } from "../tools/agent/resolve";
 import {
 	boundedTodoPreviewText,
+	createBoundedTodoPreview,
 	prioritizeTodoItems,
 	TODO_ITEM_PREVIEW_WIDTH,
+	TODO_REMINDER_PREVIEW_LIMIT,
+	TODO_TOTAL_PREVIEW_WIDTH,
 	type TodoPhase,
 	USER_TODO_EDIT_CUSTOM_TYPE,
 } from "../tools/agent/todo";
@@ -470,20 +473,6 @@ import { assertEditableFile } from "../tools/fs/auto-generated-guard";
 import type { CheckpointState, CompletedRewindState } from "../tools/fs/checkpoint";
 import type { BashExecutionMessage, PythonExecutionMessage } from "../tools/shell/execution-messages";
 import { loadPythonExecutor } from "../tools/shell/manifest";
-import { isAutoQaEnabled } from "../tools/agent/report-tool-issue";
-import { buildResolveReminderMessage, type ResolveToolDetails, runResolveInvocation } from "../tools/agent/resolve";
-import {
-	boundedTodoPreviewText,
-	createBoundedTodoPreview,
-	getLatestTodoPhasesFromEntries,
-	prioritizeTodoItems,
-	TODO_ITEM_PREVIEW_WIDTH,
-	TODO_REMINDER_PREVIEW_LIMIT,
-	TODO_TOTAL_PREVIEW_WIDTH,
-	type TodoItem,
-	type TodoPhase,
-	USER_TODO_EDIT_CUSTOM_TYPE,
-} from "../tools/agent/todo";
 import { parseCommandArgs } from "../utils/command-args";
 import { type EditMode, resolveEditMode } from "../utils/edit-mode";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";

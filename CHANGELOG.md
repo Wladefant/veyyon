@@ -515,6 +515,8 @@
 
 ### Fixed
 
+- Repaired upstream-merge regressions in `/reload-config`, agent-lane validation, task spawn recording, and todo rendering; retained concurrent todo targets through the host-neutral view and removed the duplicate legacy spawn callback ([#26](https://github.com/Wladefant/veyyon/issues/26)).
+- Updated the config-reload benchmark, handbook, and capture scene to use the current agent routing namespace ([#26](https://github.com/Wladefant/veyyon/issues/26)).
 - Collapsed todo boards prioritize in-progress tasks, announce row-trimmed active phases, and show canonical newly started tasks with concurrent counts even when replayed without call arguments.
 - Print, JSON and RPC mode flush Bun's stdout sink before exiting, so a piped consumer receives the whole last frame instead of losing up to 1 MiB of queued output.
 - A spawned agent's card shows its resolved-model badge again on the live block, the registry path an extension wraps and the rebuilt transcript, per `agent.showResolvedModelBadge`.
@@ -660,6 +662,8 @@
 - Case-insensitive host classification no longer treats control characters as URL punctuation.
 - `codingAgentDir()` resolves `packages/coding-agent` from the repository root, so the binary staleness preflight scans the coding agent's sources again after the package moved to `tests/evals`; it had resolved a sibling directory that does not exist and reported every binary current.
 - A plain `INS.POST` anchored on the trailing phantom line of a newline-terminated file appends the body as new terminated lines, like `INS.TAIL`; the rebuild emitted the phantom sentinel as an empty line and left the new last line without its newline.
+- Restored selective config reload in the shared settings store, preserving runtime overrides and existing worker snapshots, rejecting invalid or racing reloads, and keeping restart-only disk edits inactive during later saves ([#26](https://github.com/Wladefant/veyyon/issues/26)).
+- Order concurrent reloads monotonically so a stale read cannot overwrite a later successful reload, including ABA and no-op reloads ([#26](https://github.com/Wladefant/veyyon/issues/26)).
 - Settings queries ignore inherited object properties.
 - `Type.Pick` emits the keys it was asked for in the order they were asked for, and keeps a picked key that is own-but-non-enumerable on the validated value.
 - A session whose recorded leaf id no longer names an entry reopens on its last entry instead of on an empty conversation.
