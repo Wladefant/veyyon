@@ -4,9 +4,6 @@
 
 ## [Unreleased]
 
-### Added
-
-- `BUILD_TAG` export in `@veyyon/utils/dirs` for build metadata and custom build identification.
 ### Breaking Changes
 
 - `ParsedReadArgs` from `@veyyon/utils/fs-tool-args` carries `depth` and `limit`, the `read` schema's directory-listing arguments, in place of `from`, `to` and `rangeSuffix`: the schema has no `offset`, its `limit` is an entry cap, and the line window rides on the path's own selector, so no `:A-B` is derived from either number.
