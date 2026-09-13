@@ -72,20 +72,18 @@ jobs:
           git push origin "$SYNC_BRANCH"
 
           PR_TITLE="chore(sync): sync upstream changes (${BEHIND_COUNT} commits behind)"
-          PR_BODY=$(cat <<EOF
-## Upstream Drift Summary
-- **Upstream HEAD**: \`$UPSTREAM_HEAD\`
-- **Fork HEAD**: \`$FORK_HEAD\`
-- **Merge Base**: \`$MERGE_BASE\`
-- **Commits Behind Upstream**: $BEHIND_COUNT
-- **Fork-Only Commits Ahead**: $AHEAD_COUNT
-
-## Instructions
-This is an automated **DRAFT** pull request created by the Upstream Sync workflow.
-It never merges automatically and never force-pushes.
-Review conflicts, run targeted package gates, and merge via \`--no-ff\` merge commit when verified.
-EOF
-)
+          PR_BODY=$(printf '%s\n' \
+            "## Upstream Drift Summary" \
+            "- **Upstream HEAD**: \`$UPSTREAM_HEAD\`" \
+            "- **Fork HEAD**: \`$FORK_HEAD\`" \
+            "- **Merge Base**: \`$MERGE_BASE\`" \
+            "- **Commits Behind Upstream**: $BEHIND_COUNT" \
+            "- **Fork-Only Commits Ahead**: $AHEAD_COUNT" \
+            "" \
+            "## Instructions" \
+            "This is an automated **DRAFT** pull request created by the Upstream Sync workflow." \
+            "It never merges automatically and never force-pushes." \
+            "Review conflicts, run targeted package gates, and merge via \`--no-ff\` merge commit when verified.")
 
           gh pr create \
             --repo "$GITHUB_REPOSITORY" \
