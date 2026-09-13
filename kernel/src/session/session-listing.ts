@@ -926,7 +926,12 @@ async function findSessionInOtherProfiles(
 			}
 			continue;
 		}
-		const sessions = await collectSessionsFromFiles(files, storage, true);
+		// Indexed like any other directory. The index lands in the profile being
+		// scanned rather than the active one, because it describes that profile's
+		// files and is keyed by their size and mtime; it is the same user's cache,
+		// and the alternative is re-reading every one of another profile's sessions
+		// on every id that misses here.
+		const sessions = await collectSessionsFromFiles(files, storage, true, sessionsRoot);
 		const match = sessions.find(session => sessionMatchesResumeArg(session, sessionArg));
 		if (match) return match;
 	}

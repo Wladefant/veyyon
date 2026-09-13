@@ -402,6 +402,7 @@
 - The package directory is `plugins/hashline` instead of `packages/hashline`; the published package name, entry points and behavior are unchanged.
 - Seen-line and clipped-line records merge into a snapshot through one keyed step; recorded provenance is unchanged.
 - Session listing reuses a per-directory index for files whose size and mtime are unchanged instead of rescanning every file, cutting a 4,825-session `/resume` list from 6.8 s to 185 ms when a session changed and 88 ms when none did.
+- Resolving a session id that no directory in the active profile holds reads the other profiles through the same per-directory index, cutting that lookup from 2.5 s to 126 ms.
 - Settings mutations and session storage writers share implementations without changing persistence, hook ordering or error behavior.
 - Installed plugin registry readers share JSON validation while preserving numeric-version handling and malformed-file behavior.
 - Plugin runtime configuration uses the shared record validator; behavior is unchanged.
@@ -665,6 +666,7 @@
 - `MemorySessionStorage.deleteSessionWithArtifacts` deletes the session entry and its artifact files from memory instead of returning early as a no-op.
 - `walkBranchPath` terminates when traversing cyclic parent entry chains.
 - `StringEnum` options in the legacy plugin shim avoid `any`.
+- `listSessionsReadOnly` writes no session list index, so it makes no write to a directory it states it does not mutate; it still reads an existing index, which is not a mutation.
 - Restored APFS isolation compilation on macOS and stale destination preparation for Windows block-clone isolation.
 - Plain isolation diffs classify binary contents on either side of a symlink transition without dereferencing links.
 - `IsoResolveResult.reason` is set only when `fellBack` is true; a resolution that honoured the preferred backend carried the first unavailable probe's text as if it explained a fallback.
