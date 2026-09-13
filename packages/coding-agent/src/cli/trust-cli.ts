@@ -4,7 +4,7 @@
  * WHY THIS IS A COMMAND AND NOT A STARTUP PROMPT. The gate refuses first and reports what it
  * withheld, so the decision is never racing a side effect. That ordering is the safety property,
  * and it holds only because nothing asks before the refusal — an early prompt would have to run
- * before the TUI exists, from a path that also serves print mode, ACP and subagents, and the
+ * before the TUI exists, from a path that also serves print mode, ACP and agents, and the
  * caller who cannot answer is exactly the caller that must not load project code. So the answer
  * is given out of band, once, and remembered.
  *
@@ -18,14 +18,14 @@
  */
 import * as path from "node:path";
 import { pathExists } from "@veyyon/utils";
-import { clearClaudePluginRootsCache, resolveActiveProjectRegistryPath } from "../discovery/helpers";
 import {
 	canonicalProjectRoot,
 	describeProjectExecutable,
 	type ProjectExecutable,
 	ProjectTrust,
 	type ProjectTrustVerdict,
-} from "../security/project-trust";
+} from "../config/project-trust";
+import { clearClaudePluginRootsCache, resolveActiveProjectRegistryPath } from "../discovery/helpers";
 
 export type TrustAction = "approve" | "deny" | "forget" | "list";
 

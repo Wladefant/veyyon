@@ -23,18 +23,18 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { submitInteractiveInput } from "@veyyon/coding-agent/main";
-import { InteractiveMode } from "@veyyon/coding-agent/modes/interactive-mode";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
-import type { SubmittedUserInput } from "@veyyon/coding-agent/modes/types";
+import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
+import type { SubmittedUserInput } from "@veyyon/coding-agent/modes/terminal/types";
 import { requestsPrompts } from "@veyyon/coding-agent/prompts/requests/rows";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
 

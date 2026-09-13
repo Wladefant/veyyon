@@ -27,11 +27,15 @@ import {
 	type LoopSetup,
 	SAVE_FIELD,
 } from "@veyyon/coding-agent/autoresearch/console";
-import { LauncherComponent } from "@veyyon/coding-agent/autoresearch/launcher";
 import { BUILTIN_PRESETS, type LoopPreset } from "@veyyon/coding-agent/autoresearch/presets";
-import { AutoresearchScreenComponent, actionBar, footerHint } from "@veyyon/coding-agent/autoresearch/screen";
 import { createSessionRuntime } from "@veyyon/coding-agent/autoresearch/state";
 import { MAX_ATTEMPTS, MAX_BREADTH } from "@veyyon/coding-agent/autoresearch/swarm";
+import { LauncherComponent } from "@veyyon/coding-agent/modes/terminal/components/dialogs/autoresearch-launcher";
+import {
+	AutoresearchScreenComponent,
+	actionBar,
+	footerHint,
+} from "@veyyon/coding-agent/modes/terminal/components/dialogs/autoresearch-screen";
 import { stripAnsi } from "@veyyon/utils";
 import { NO_SESSION, type RecordingHost, recordingHost } from "./helpers/autoswarm-console";
 import { useTruecolorTheme } from "./helpers/theme-assertions";

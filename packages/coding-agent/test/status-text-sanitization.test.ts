@@ -26,7 +26,7 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { sanitizeStatusText, sanitizeStyledStatusText } from "@veyyon/coding-agent/modes/sanitize-status-text";
+import { sanitizeStatusText, sanitizeStyledStatusText } from "@veyyon/utils/sanitize-status-text";
 
 interface EscapeFamilyCase {
 	name: string;

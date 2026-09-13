@@ -2,19 +2,19 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import * as path from "node:path";
 import { Agent, type AgentEvent } from "@veyyon/agent-core";
 import type { Model } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
-import { GoalTool } from "@veyyon/coding-agent/goals/tools/goal-tool";
-import { InteractiveMode } from "@veyyon/coding-agent/modes/interactive-mode";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
-import type { SubmittedUserInput } from "@veyyon/coding-agent/modes/types";
+import type { DiscoverableTool } from "@veyyon/coding-agent/discovery/tool-index";
+import { GoalTool } from "@veyyon/coding-agent/goals/goal-tool";
+import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
+import type { SubmittedUserInput } from "@veyyon/coding-agent/modes/terminal/types";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
 import { normalizeCustomMessagePayload } from "@veyyon/coding-agent/session/messages";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
-import type { DiscoverableTool } from "@veyyon/coding-agent/tool-discovery/tool-index";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { createTools, type Tool, type ToolSession } from "@veyyon/coding-agent/tools";
-import type { TodoPhase } from "@veyyon/coding-agent/tools/todo";
+import type { TodoPhase } from "@veyyon/coding-agent/tools/agent/todo";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 
 function createToolSession(cwd: string, settings: Settings, overrides: Partial<ToolSession> = {}): ToolSession {
@@ -482,6 +482,28 @@ describe("InteractiveMode goal mode integration", () => {
 		expect(message?.customType).toBe("goal-mode-context");
 		expect(content).not.toContain("<todo_context>");
 		expect(content).not.toContain("Run focused checks");
+	});
+
+	it("delivers the goal and vibe contexts hidden, agent-attributed and on the requested channel", async () => {
+		await harness.mode.handleGoalModeCommand("Ship the release");
+		harness.session.setVibeModeState({ enabled: true });
+		const sendCustomMessage = vi.spyOn(harness.session, "sendCustomMessage").mockResolvedValue(false);
+
+		await harness.session.sendGoalModeContext({ deliverAs: "steer" });
+		await harness.session.sendVibeModeContext({ deliverAs: "followUp" });
+
+		expect(sendCustomMessage.mock.calls).toHaveLength(2);
+		const [goalCall, vibeCall] = sendCustomMessage.mock.calls;
+		expect(goalCall?.[0]).toMatchObject({ customType: "goal-mode-context", display: false, attribution: "agent" });
+		expect(goalCall?.[1]).toEqual({ deliverAs: "steer" });
+		expect(vibeCall?.[0]).toMatchObject({ customType: "vibe-mode-context", display: false, attribution: "agent" });
+		expect(normalizeCustomMessagePayload(vibeCall?.[0]).content).toContain("<vibe-mode>");
+		expect(vibeCall?.[1]).toEqual({ deliverAs: "followUp" });
+
+		sendCustomMessage.mockClear();
+		harness.session.setVibeModeState(undefined);
+		await harness.session.sendVibeModeContext({ deliverAs: "steer" });
+		expect(sendCustomMessage.mock.calls).toEqual([]);
 	});
 
 	it("holds a goal continuation tick while the agent is streaming", async () => {

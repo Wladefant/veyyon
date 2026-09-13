@@ -18,8 +18,9 @@ import { stripVTControlCharacters } from "node:util";
 import { AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai";
 import * as oauthUtils from "@veyyon/ai/registry/oauth";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { COMPOSER_INSET_COLS } from "@veyyon/coding-agent/modes/components/composer-chrome";
-import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/types";
+import { COMPOSER_INSET_COLS } from "@veyyon/coding-agent/modes/terminal/components/composer/composer-chrome";
+import { reportBlock } from "@veyyon/coding-agent/modes/terminal/components/transcript/transcript-block-chrome";
+import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { executeAcpBuiltinSlashCommand } from "@veyyon/coding-agent/slash-commands/acp-builtins";
 import { executeBuiltinSlashCommand } from "@veyyon/coding-agent/slash-commands/builtin-registry";
@@ -74,6 +75,13 @@ describe("/account verbs", () => {
 			present: (block: Component) =>
 				status.push(
 					block
+						.render(120)
+						.map(line => stripVTControlCharacters(line).trimEnd().slice(COMPOSER_INSET_COLS))
+						.join("\n"),
+				),
+			showReport: (title: string, body: string, footer?: string) =>
+				status.push(
+					reportBlock(title, body, footer)
 						.render(120)
 						.map(line => stripVTControlCharacters(line).trimEnd().slice(COMPOSER_INSET_COLS))
 						.join("\n"),

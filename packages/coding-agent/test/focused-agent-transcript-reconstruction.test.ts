@@ -1,11 +1,11 @@
 /**
- * WHY: Focusing a parked subagent attaches its durable transcript and reconstructs
+ * WHY: Focusing a parked agent attaches its durable transcript and reconstructs
  * all conversation history, tool calls, and tool execution results. When durable state
  * is unrevivable (missing file, deleted cwd, corrupted JSONL), focusing must fail cleanly
  * without corrupting or orphaning the driving session view.
  *
  * Closes the class of:
- * - Transcript component loss on parked subagent revival
+ * - Transcript component loss on parked agent revival
  * - Unhandled crashes / orphaned views when revived session directory or file is missing/corrupted
  * - Spurious auto-unfocus on parked state vs true termination
  */
@@ -14,27 +14,26 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
-import { InteractiveMode } from "@veyyon/coding-agent/modes/interactive-mode";
-import { initTheme, setTheme, stopThemeWatcher } from "@veyyon/coding-agent/modes/theme/theme";
+import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
-import { createPersistedSubagentReviverFactory } from "@veyyon/coding-agent/task/persisted-revive";
+import { createPersistedAgentReviverFactory } from "@veyyon/coding-agent/task/persisted-revive";
+import { initTheme, setTheme, stopThemeWatcher } from "@veyyon/coding-agent/theme/theme";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TUI } from "@veyyon/tui";
-import { VirtualTerminal } from "../../tui/test/virtual-terminal";
+import { TempDir } from "@veyyon/utils";
+import { VirtualTerminal } from "../../../hosts/terminal/engine/test/virtual-terminal";
 
 const WIDTH = 120;
-const TEST_PARENT = path.resolve(import.meta.dirname, "../../../.internal/focused-agent-transcript");
-let testRoot = "";
 
 describe("focused agent transcript reconstruction", () => {
-	let tempDir: string | undefined;
-	let subagentDir: string | undefined;
+	let tempDir: TempDir | undefined;
+	let agentDir: TempDir | undefined;
 	let authStorage: AuthStorage | undefined;
 	let mainSession: AgentSession | undefined;
 	let mode: InteractiveMode | undefined;
@@ -42,8 +41,6 @@ describe("focused agent transcript reconstruction", () => {
 	let eventBus: EventBus | undefined;
 
 	beforeAll(async () => {
-		await fs.mkdir(TEST_PARENT, { recursive: true });
-		testRoot = await fs.mkdtemp(path.join(TEST_PARENT, "run-"));
 		await initTheme();
 		await setTheme("dark");
 	});
@@ -52,18 +49,19 @@ describe("focused agent transcript reconstruction", () => {
 		resetSettingsForTest();
 		AgentRegistry.resetGlobalForTests();
 		AgentLifecycleManager.resetGlobalForTests();
-		tempDir = await fs.mkdtemp(path.join(testRoot, "main-"));
-		subagentDir = await fs.mkdtemp(path.join(testRoot, "sub-"));
-		await Settings.init({ inMemory: true, cwd: tempDir, overrides: { "startup.quiet": true } });
+		tempDir = TempDir.createSync("@pi-focused-agent-main-");
+		agentDir = TempDir.createSync("@pi-focused-agent-sub-");
+		const dir = tempDir.path();
+		await Settings.init({ inMemory: true, cwd: dir, overrides: { "startup.quiet": true } });
 
-		authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorage = await AuthStorage.create(path.join(dir, "testauth.db"));
 		const modelRegistry = new ModelRegistry(authStorage);
 		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
 
 		mainSession = new AgentSession({
 			agent: new Agent({ initialState: { model, systemPrompt: ["Main"], tools: [], messages: [] } }),
-			sessionManager: SessionManager.create(tempDir, tempDir),
+			sessionManager: SessionManager.create(dir, dir),
 			settings: Settings.isolated({ "startup.quiet": true }),
 			modelRegistry,
 		});
@@ -81,8 +79,8 @@ describe("focused agent transcript reconstruction", () => {
 		mode?.stop();
 		await mainSession?.dispose();
 		authStorage?.close();
-		if (tempDir) await fs.rm(tempDir, { recursive: true, force: true });
-		if (subagentDir) await fs.rm(subagentDir, { recursive: true, force: true });
+		tempDir?.removeSync();
+		agentDir?.removeSync();
 		mode = undefined;
 		mainSession = undefined;
 		terminal = undefined;
@@ -93,23 +91,22 @@ describe("focused agent transcript reconstruction", () => {
 		AgentLifecycleManager.resetGlobalForTests();
 	});
 
-	afterAll(async () => {
+	afterAll(() => {
 		stopThemeWatcher();
-		await fs.rm(testRoot, { recursive: true, force: true });
 	});
 
-	it("reconstructs assistant tool calls and results when focusing a parked subagent with durable session file", async () => {
-		if (!mode || !terminal || !mainSession || !subagentDir) throw new Error("not booted");
+	it("reconstructs assistant tool calls and results when focusing a parked agent with durable session file", async () => {
+		if (!mode || !terminal || !mainSession || !agentDir) throw new Error("not booted");
 
 		// Synthetic durable session: enough history to prove every visible role is rebuilt.
-		const sessionFilePath = path.join(subagentDir, "Worker.jsonl");
+		const sessionFilePath = path.join(agentDir.path(), "Worker.jsonl");
 		const sessionLines = [
 			JSON.stringify({
 				type: "session",
 				version: 3,
 				id: "focused-transcript-fixture",
 				timestamp: "2026-01-01T00:00:00.000Z",
-				cwd: subagentDir,
+				cwd: agentDir.path(),
 			}),
 			JSON.stringify({
 				type: "model_change",
@@ -131,7 +128,7 @@ describe("focused agent transcript reconstruction", () => {
 				id: "init",
 				parentId: "thinking",
 				timestamp: "2026-01-01T00:00:00.003Z",
-				systemPrompt: "Synthetic subagent fixture",
+				systemPrompt: "Synthetic agent fixture",
 				tools: ["read"],
 			}),
 			JSON.stringify({
@@ -228,7 +225,7 @@ describe("focused agent transcript reconstruction", () => {
 		];
 		await fs.writeFile(sessionFilePath, `${sessionLines.join("\n")}\n`, "utf-8");
 
-		// Register the subagent as parked with sessionFile in AgentRegistry
+		// Register the agent as parked with sessionFile in AgentRegistry
 		const registry = AgentRegistry.global();
 		registry.register({
 			id: "Worker",
@@ -242,8 +239,8 @@ describe("focused agent transcript reconstruction", () => {
 
 		// Install persisted reviver factory like in main.ts
 		const settings = Settings.isolated({ "startup.quiet": true });
-		AgentLifecycleManager.global().setPersistedSubagentReviverFactory(
-			createPersistedSubagentReviverFactory({
+		AgentLifecycleManager.global().setPersistedAgentReviverFactory(
+			createPersistedAgentReviverFactory({
 				session: mainSession,
 				authStorage: authStorage!,
 				modelRegistry: mainSession.modelRegistry,
@@ -275,10 +272,10 @@ describe("focused agent transcript reconstruction", () => {
 		expect(mode.focusedAgentId).toBe("Worker");
 	});
 
-	it("refuses to focus a parked subagent whose session file does not exist, keeping main view intact", async () => {
-		if (!mode || !terminal || !mainSession || !subagentDir) throw new Error("not booted");
+	it("refuses to focus a parked agent whose session file does not exist, keeping main view intact", async () => {
+		if (!mode || !terminal || !mainSession || !agentDir) throw new Error("not booted");
 
-		const missingFilePath = path.join(subagentDir, "NonExistent.jsonl");
+		const missingFilePath = path.join(agentDir.path(), "NonExistent.jsonl");
 		const registry = AgentRegistry.global();
 		registry.register({
 			id: "MissingAgent",
@@ -291,8 +288,8 @@ describe("focused agent transcript reconstruction", () => {
 		});
 
 		const settings = Settings.isolated({ "startup.quiet": true });
-		AgentLifecycleManager.global().setPersistedSubagentReviverFactory(
-			createPersistedSubagentReviverFactory({
+		AgentLifecycleManager.global().setPersistedAgentReviverFactory(
+			createPersistedAgentReviverFactory({
 				session: mainSession,
 				authStorage: authStorage!,
 				modelRegistry: mainSession.modelRegistry,
@@ -307,10 +304,10 @@ describe("focused agent transcript reconstruction", () => {
 		expect(mode.viewSession).toBe(mainSession);
 	});
 
-	it("refuses to focus a parked subagent whose recorded working directory was deleted", async () => {
-		if (!mode || !terminal || !mainSession || !subagentDir) throw new Error("not booted");
+	it("refuses to focus a parked agent whose recorded working directory was deleted", async () => {
+		if (!mode || !terminal || !mainSession || !agentDir) throw new Error("not booted");
 
-		const deletedSubDir = path.join(subagentDir, "deleted-worktree");
+		const deletedSubDir = path.join(agentDir.path(), "deleted-worktree");
 		await fs.mkdir(deletedSubDir, { recursive: true });
 		const sessionFilePath = path.join(deletedSubDir, "DeletedCwdAgent.jsonl");
 		const sessionLines = [
@@ -347,8 +344,8 @@ describe("focused agent transcript reconstruction", () => {
 		});
 
 		const settings = Settings.isolated({ "startup.quiet": true });
-		AgentLifecycleManager.global().setPersistedSubagentReviverFactory(
-			createPersistedSubagentReviverFactory({
+		AgentLifecycleManager.global().setPersistedAgentReviverFactory(
+			createPersistedAgentReviverFactory({
 				session: mainSession,
 				authStorage: authStorage!,
 				modelRegistry: mainSession.modelRegistry,
@@ -363,14 +360,14 @@ describe("focused agent transcript reconstruction", () => {
 		expect(mode.viewSession).toBe(mainSession);
 	});
 
-	it("refuses to focus a parked subagent with corrupted or truncated JSONL", async () => {
-		if (!mode || !terminal || !mainSession || !subagentDir) throw new Error("not booted");
+	it("refuses to focus a parked agent with corrupted or truncated JSONL", async () => {
+		if (!mode || !terminal || !mainSession || !agentDir) throw new Error("not booted");
 
-		const corruptFilePath = path.join(subagentDir, "Corrupt.jsonl");
+		const corruptFilePath = path.join(agentDir.path(), "Corrupt.jsonl");
 		// Corrupted file missing session_init contract
 		await fs.writeFile(
 			corruptFilePath,
-			`{"type":"session","version":3,"cwd":"${subagentDir}"}\n{"bad_json\n`,
+			`{"type":"session","version":3,"cwd":"${agentDir.path()}"}\n{"bad_json\n`,
 			"utf-8",
 		);
 
@@ -386,8 +383,8 @@ describe("focused agent transcript reconstruction", () => {
 		});
 
 		const settings = Settings.isolated({ "startup.quiet": true });
-		AgentLifecycleManager.global().setPersistedSubagentReviverFactory(
-			createPersistedSubagentReviverFactory({
+		AgentLifecycleManager.global().setPersistedAgentReviverFactory(
+			createPersistedAgentReviverFactory({
 				session: mainSession,
 				authStorage: authStorage!,
 				modelRegistry: mainSession.modelRegistry,
@@ -402,7 +399,7 @@ describe("focused agent transcript reconstruction", () => {
 	});
 
 	it("refuses to focus an agent belonging to a different conversation scope on the real interactive mode path", async () => {
-		if (!mode || !terminal || !mainSession || !subagentDir) throw new Error("not booted");
+		if (!mode || !terminal || !mainSession || !agentDir) throw new Error("not booted");
 
 		const registry = AgentRegistry.global();
 		const mainScope = mainSession.sessionManager.getSessionId();
@@ -428,7 +425,7 @@ describe("focused agent transcript reconstruction", () => {
 			kind: "sub",
 			parentId: "ForeignMain",
 			session: null,
-			sessionFile: path.join(subagentDir, "foreign.jsonl"),
+			sessionFile: path.join(agentDir.path(), "foreign.jsonl"),
 			status: "parked",
 			scope: "foreign-session-scope",
 		});
@@ -439,10 +436,10 @@ describe("focused agent transcript reconstruction", () => {
 	});
 
 	it("auto-unfocuses the real interactive mode to main session when the focused agent is removed from registry", async () => {
-		if (!mode || !terminal || !mainSession || !subagentDir) throw new Error("not booted");
+		if (!mode || !terminal || !mainSession || !agentDir) throw new Error("not booted");
 
-		// Create and register a live subagent session
-		const subagentSession = new AgentSession({
+		// Create and register a live agent session
+		const agentSession = new AgentSession({
 			agent: new Agent({
 				initialState: {
 					model: mainSession.modelRegistry.find("anthropic", "claude-sonnet-4-5")!,
@@ -451,7 +448,7 @@ describe("focused agent transcript reconstruction", () => {
 					messages: [],
 				},
 			}),
-			sessionManager: SessionManager.create(subagentDir, subagentDir),
+			sessionManager: SessionManager.create(agentDir.path(), agentDir.path()),
 			settings: Settings.isolated({ "startup.quiet": true }),
 			modelRegistry: mainSession.modelRegistry,
 		});
@@ -462,13 +459,13 @@ describe("focused agent transcript reconstruction", () => {
 			displayName: "LiveWorker",
 			kind: "sub",
 			parentId: MAIN_AGENT_ID,
-			session: subagentSession,
+			session: agentSession,
 			status: "running",
 		});
 
 		await mode.focusAgentSession("LiveWorker");
 		expect(mode.focusedAgentId).toBe("LiveWorker");
-		expect(mode.viewSession).toBe(subagentSession);
+		expect(mode.viewSession).toBe(agentSession);
 
 		// Remove the agent from registry (simulating close budget expiry or hard release)
 		registry.unregister("LiveWorker");
@@ -480,6 +477,6 @@ describe("focused agent transcript reconstruction", () => {
 		expect(mode.focusedAgentId).toBeUndefined();
 		expect(mode.viewSession).toBe(mainSession);
 
-		await subagentSession.dispose();
+		await agentSession.dispose();
 	});
 });

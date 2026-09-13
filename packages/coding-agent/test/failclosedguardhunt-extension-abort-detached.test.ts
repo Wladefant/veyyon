@@ -44,11 +44,11 @@ import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { LoadedCustomCommand } from "@veyyon/coding-agent/extensibility/custom-commands";
 import type { ExtensionContextActions, ExtensionUIContext } from "@veyyon/coding-agent/extensibility/extensions";
-import { ExtensionUiController } from "@veyyon/coding-agent/modes/controllers/extension-ui-controller";
-import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/types";
+import { ExtensionUiController } from "@veyyon/coding-agent/modes/terminal/controllers/extension-ui-controller";
+import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { USER_INTERRUPT_LABEL } from "@veyyon/coding-agent/session/messages";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { logger } from "@veyyon/utils";
 
 /** One captured `logger.warn` call. */
@@ -79,6 +79,7 @@ function publishedAbort(behaviour: AbortBehaviour): {
 	let captured: ExtensionContextActions | undefined;
 	const ctx = {
 		session: {
+			isStreaming: false,
 			extensionRunner: {
 				initialize: (_actions: unknown, contextActions: ExtensionContextActions) => {
 					captured = contextActions;
@@ -89,6 +90,7 @@ function publishedAbort(behaviour: AbortBehaviour): {
 				return behaviour();
 			},
 		},
+		clearWorkingLoader: () => false,
 		// Unchecked by necessity and safe by inspection: `initializeHookRunner`
 		// touches only `session.extensionRunner`, and the members it builds are
 		// lazy arrows, so the 200-odd other context members are never read. A

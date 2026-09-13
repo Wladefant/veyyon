@@ -1,5 +1,5 @@
 /**
- * WHY THIS EXISTS. `tools/shorten-path.ts` was split out of `render-utils` so the launch card's
+ * WHY THIS EXISTS. `tools/core/shorten-path.ts` was split out of `render-utils` so the launch card's
  * status row stops pulling 94 modules in for one function, and it shipped with no test naming it,
  * while every tool renderer in the product routes its paths through it. The rule it enforces is
  * narrower than "starts with the home directory": `/home/mukund-thirumalai` must not collapse
@@ -16,7 +16,7 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { shortenPath } from "@veyyon/coding-agent/tools/shorten-path";
+import { shortenPath } from "@veyyon/coding-agent/tools/core/shorten-path";
 
 const HOME = "/home/operator";
 

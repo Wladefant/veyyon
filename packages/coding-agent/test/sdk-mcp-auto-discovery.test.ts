@@ -7,7 +7,7 @@ import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { getAgentDir, removeSyncWithRetries, Snowflake, setAgentDir } from "@veyyon/utils";
 import { MANY_TOOL_COUNT } from "./fixtures/many-tools-mcp";
 import { useIsolatedAgentDir } from "./helpers/isolated-agent-dir";
@@ -229,7 +229,7 @@ describe("createAgentSession deferred MCP auto discovery", () => {
 		if (!parent.mcpManager) throw new Error("expected parent session to create an MCPManager");
 		const parentManager = parent.mcpManager;
 		try {
-			// A subagent-style session reuses the parent's manager via
+			// An agent-style session reuses the parent's manager via
 			// `mcpManager` and therefore does NOT own it.
 			const child = await createAgentSession({
 				...baseOptions(),

@@ -178,11 +178,6 @@ function successRequest() {
 	);
 }
 
-/** Every byte of the request, so reasoning cannot hide in another slot. */
-function serialized(params: unknown): string {
-	return JSON.stringify(params);
-}
-
 async function drain(stream: AsyncIterable<AssistantMessageEvent>): Promise<void> {
 	for await (const _event of stream) {
 		// The events themselves are asserted through the returned result.
@@ -195,7 +190,7 @@ function endpointThatRefusesTheProse(captured: unknown[]): { attempts: () => num
 	vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation((params: unknown) => {
 		attempts += 1;
 		captured.push(params);
-		return (serialized(params).includes(INTERRUPTED_REASONING) ? refusalRequest() : successRequest()) as never;
+		return (JSON.stringify(params).includes(INTERRUPTED_REASONING) ? refusalRequest() : successRequest()) as never;
 	});
 	return { attempts: () => attempts };
 }
@@ -219,10 +214,10 @@ describe("prior reasoning carried as prose obeys the unsigned-thinking replay po
 
 		expect(endpoint.attempts()).toBe(1);
 		expect(result.stopReason).toBe("stop");
-		expect(serialized(captured[0])).not.toContain(INTERRUPTED_REASONING);
+		expect(JSON.stringify(captured[0])).not.toContain(INTERRUPTED_REASONING);
 		// Only the continuity message went; the aborted turn and the prompts stay.
-		expect(serialized(captured[0])).toContain("[Interrupted by user]");
-		expect(serialized(captured[0])).toContain("Go on.");
+		expect(JSON.stringify(captured[0])).toContain("[Interrupted by user]");
+		expect(JSON.stringify(captured[0])).toContain("Go on.");
 	});
 
 	it("replays a cross-model run until the endpoint refuses, then the retry drops it and the session stays clean", async () => {
@@ -239,15 +234,15 @@ describe("prior reasoning carried as prose obeys the unsigned-thinking replay po
 		expect(endpoint.attempts()).toBe(2);
 		expect(firstResult.stopReason).toBe("stop");
 		expect(firstResult.errorMessage).toBeUndefined();
-		expect(serialized(captured[0])).toContain(INTERRUPTED_REASONING);
-		expect(serialized(captured[1])).not.toContain(INTERRUPTED_REASONING);
+		expect(JSON.stringify(captured[0])).toContain(INTERRUPTED_REASONING);
+		expect(JSON.stringify(captured[1])).not.toContain(INTERRUPTED_REASONING);
 
 		// The message is still in history on the next turn; the learned flag drops it before the first attempt.
 		const second = streamAnthropic(signingTarget, context, { apiKey: "sk-ant-test", providerSessionState });
 		await drain(second);
 		expect((await second.result()).stopReason).toBe("stop");
 		expect(endpoint.attempts()).toBe(3);
-		expect(serialized(captured[2])).not.toContain(INTERRUPTED_REASONING);
+		expect(JSON.stringify(captured[2])).not.toContain(INTERRUPTED_REASONING);
 	});
 
 	it("treats a run of unknown origin as cross-model: replayed until refused, then dropped", async () => {
@@ -262,7 +257,7 @@ describe("prior reasoning carried as prose obeys the unsigned-thinking replay po
 
 		expect(endpoint.attempts()).toBe(2);
 		expect((await stream.result()).stopReason).toBe("stop");
-		expect(serialized(captured[1])).not.toContain(INTERRUPTED_REASONING);
+		expect(JSON.stringify(captured[1])).not.toContain(INTERRUPTED_REASONING);
 	});
 
 	it("keeps the run for an endpoint that replays unsigned thinking natively and fronts no classifier", () => {
@@ -272,7 +267,7 @@ describe("prior reasoning carried as prose obeys the unsigned-thinking replay po
 			nativeReplayTarget,
 		);
 
-		expect(serialized(transformed)).toContain(INTERRUPTED_REASONING);
+		expect(JSON.stringify(transformed)).toContain(INTERRUPTED_REASONING);
 	});
 
 	it("keeps the run for a target that is not anthropic-messages", () => {
@@ -294,7 +289,7 @@ describe("prior reasoning carried as prose obeys the unsigned-thinking replay po
 			openaiTarget,
 		);
 
-		expect(serialized(transformed)).toContain(INTERRUPTED_REASONING);
+		expect(JSON.stringify(transformed)).toContain(INTERRUPTED_REASONING);
 	});
 
 	it("negative control: the same bytes without the tag reach the wire, and the retry cannot remove them", async () => {
@@ -314,6 +309,6 @@ describe("prior reasoning carried as prose obeys the unsigned-thinking replay po
 		expect(endpoint.attempts()).toBe(2);
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toContain("reasoning_extraction");
-		expect(serialized(captured[1])).toContain(INTERRUPTED_REASONING);
+		expect(JSON.stringify(captured[1])).toContain(INTERRUPTED_REASONING);
 	});
 });

@@ -3,15 +3,15 @@ import * as path from "node:path";
 import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
 import type { AssistantMessage, Message, ThinkingContent } from "@veyyon/ai";
 import { z } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockContent, type MockModel, type MockResponse } from "@veyyon/ai/providers/mock";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
 import { convertToLlm } from "@veyyon/coding-agent/session/messages";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import { RewindTool } from "@veyyon/coding-agent/tools/checkpoint";
+import { RewindTool } from "@veyyon/coding-agent/tools/fs/checkpoint";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 
 const checkpointSchema = z.object({ goal: z.string() });

@@ -137,7 +137,7 @@ export function normalizeAnthropicBaseUrl(baseUrl?: string): string | undefined 
 export function buildBetaHeader(baseBetas: readonly string[], extraBetas: readonly string[]): string {
 	const seen = new Set<string>();
 	const result: string[] = [];
-	for (const beta of [...baseBetas, ...extraBetas]) {
+	for (const beta of baseBetas.concat(extraBetas)) {
 		const trimmed = beta.trim();
 		if (trimmed && !seen.has(trimmed)) {
 			seen.add(trimmed);
@@ -197,7 +197,7 @@ function buildClaudeCodeBetas(
 	}
 	if (!agentRequest) return betas;
 	if (thinkingRequest) betas.push(effortBeta);
-	betas.push(...claudeCodeAgentPostEffortBetas);
+	for (let bi = 0; bi < claudeCodeAgentPostEffortBetas.length; bi++) betas.push(claudeCodeAgentPostEffortBetas[bi]!);
 	return betas;
 }
 
@@ -245,7 +245,7 @@ const reportedDroppedEnforcedHeaders = new Set<string>();
  * dropped.
  */
 function reportDroppedEnforcedHeaders(keys: string[]): void {
-	const signature = [...keys].sort().join(",");
+	const signature = Array.from(keys).sort().join(",");
 	const detail = { headers: keys };
 	if (reportedDroppedEnforcedHeaders.has(signature)) {
 		logger.debug("anthropic: still ignoring caller-supplied enforced headers", detail);
@@ -1378,7 +1378,7 @@ function resolveFoundryTlsOptions(model: Model<"anthropic-messages">): FoundryTl
 	}
 
 	const options: FoundryTlsOptions = {};
-	if (ca) options.ca = [...tls.rootCertificates, ca];
+	if (ca) options.ca = tls.rootCertificates.concat([ca]);
 	if (cert) options.cert = cert;
 	if (key) options.key = key;
 	const resolved = Object.keys(options).length > 0 ? options : undefined;
@@ -2909,11 +2909,7 @@ const streamAnthropicOnce = (
 				abortTracker: activeAbortTracker,
 				rawRequestDump: materializeDumpBody(rawRequestDump, anthropicWireBodyJson),
 			});
-			output.stopReason = result.stopReason;
-			output.errorStatus = result.status;
-
-			output.errorId = result.id;
-			output.errorMessage = maybeAddReplayUnsignedThinkingHint(model, result.message);
+			AIError.applyFinalizeResult(output, result, maybeAddReplayUnsignedThinkingHint(model, result.message));
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
@@ -3045,7 +3041,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		// features (and the catalog already forces `supportsEagerToolInputStreaming
 		// = false` for this host, so `needsFineGrainedToolStreamingBeta` is true
 		// whenever tools are present). Forward only caller-supplied betas.
-		const betaFeatures = [...extraBetas];
+		const betaFeatures = extraBetas.slice();
 		const defaultHeaders = mergeHeaders(
 			{
 				Accept: stream ? "text/event-stream" : "application/json",
@@ -3072,7 +3068,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		};
 	}
 
-	const betaFeatures = [...extraBetas];
+	const betaFeatures = extraBetas.slice();
 	if (needsFineGrainedToolStreamingBeta) {
 		betaFeatures.push(fineGrainedToolStreamingBeta);
 	}
@@ -3295,7 +3291,7 @@ function applyPromptCaching(params: MessageCreateParamsStreaming, cacheControl?:
 		}
 
 		// Veyyon's first own system block is the stable harness shared across
-		// parent and subagent prompts. Anchor it before project, assignment, and
+		// parent and agent prompts. Anchor it before project, assignment, and
 		// Argot blocks so those changing suffixes cannot invalidate the shared
 		// prefix. OAuth prepends billing and Claude Code instruction blocks, so
 		// the harness sits at index 2 there and index 0 otherwise.
@@ -4379,10 +4375,10 @@ function makeAnthropicNullableSchema(schema: unknown, budget: AnthropicStrictBud
 	if (isRecord(schema)) {
 		if (hasNullVariant(schema)) return schema;
 		if (Array.isArray(schema.anyOf)) {
-			return { ...schema, anyOf: [...schema.anyOf, { type: "null" }] };
+			return { ...schema, anyOf: schema.anyOf.concat([{ type: "null" }]) };
 		}
 		if (Array.isArray(schema.type)) {
-			return { ...schema, type: [...schema.type, "null"] };
+			return { ...schema, type: schema.type.concat(["null"]) };
 		}
 	}
 

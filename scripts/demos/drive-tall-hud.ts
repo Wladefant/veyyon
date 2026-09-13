@@ -6,7 +6,7 @@
  * an ED3 (erase native scrollback) followed by a replay of the whole
  * transcript. So this drives the shipped components — `TUI`, the virtualized
  * `TranscriptContainer`, a pinned footer — at the shape that provokes it: a
- * long session, and pinned chrome (a todo/subagent HUD plus the footer) taller
+ * long session, and pinned chrome (a todo/agent HUD plus the footer) taller
  * than the viewport, while an answer streams a row at a time.
  *
  * Run it inside a real terminal and count the bytes:
@@ -19,10 +19,10 @@
  * can be compared byte for byte.
  */
 import { setTimeout as sleep } from "node:timers/promises";
-import { TranscriptContainer } from "../../packages/coding-agent/src/modes/components/transcript-container";
-import { initTheme } from "../../packages/coding-agent/src/modes/theme/theme";
-import { type Component, CURSOR_MARKER, type Focusable, TUI } from "../../packages/tui/src/index";
-import { ProcessTerminal } from "../../packages/tui/src/terminal";
+import { type Component, CURSOR_MARKER, type Focusable, TUI } from "../../hosts/terminal/engine/src/index";
+import { ProcessTerminal } from "../../hosts/terminal/engine/src/terminal";
+import { TranscriptContainer } from "../../packages/coding-agent/src/modes/terminal/components/transcript/transcript-container";
+import { initTheme } from "../../packages/coding-agent/src/theme/theme";
 import { flag } from "./render-args";
 
 const turns = Number(flag("turns", "40"));
@@ -55,7 +55,7 @@ class LiveBlock implements Component {
 	}
 }
 
-/** The todo list / subagent roster: chrome that changes height mid-turn. */
+/** The todo list / agent roster: chrome that changes height mid-turn. */
 class Hud implements Component {
 	#rows: number;
 	constructor(rows: number) {

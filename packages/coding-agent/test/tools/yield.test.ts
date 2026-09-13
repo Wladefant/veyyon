@@ -6,7 +6,7 @@ import { validateToolArguments } from "@veyyon/ai/utils/validation";
 import { buildModel } from "@veyyon/catalog/build";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import { YieldTool } from "@veyyon/coding-agent/tools/yield";
+import { YieldTool } from "@veyyon/coding-agent/tools/agent/yield";
 import { arrayValuedLabels } from "../../src/task/yield-assembly";
 
 function createSession(overrides: Partial<ToolSession> = {}): ToolSession {
@@ -1110,7 +1110,7 @@ describe("YieldTool", () => {
 		// Regression for the GLM/explore failure mode: model invents per-file fields
 		// (`ref`, `surface`, …) instead of the schema's `path` + `description`. The
 		// in-tool validator MUST surface the mismatch with a retry directive so the
-		// subagent can fix its output before the parent runs its post-mortem check.
+		// agent can fix its output before the parent runs its post-mortem check.
 		const outputSchema = {
 			properties: {
 				summary: { type: "string" },

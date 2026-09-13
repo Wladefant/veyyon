@@ -3,14 +3,14 @@
 > Synthesize an answer over the active long-term memory backend.
 
 ## Source
-- Entry: `packages/coding-agent/src/tools/memory-reflect.ts`
+- Entry: `packages/coding-agent/src/tools/agent/memory-reflect.ts`
 - Model-facing prompt: `packages/coding-agent/src/prompts/tools/reflect.md`
 - Hindsight collaborators:
-  - `packages/coding-agent/src/hindsight/bank.ts`: best-effort first-use bank/mission setup (`ensureBankExists`).
-  - `packages/coding-agent/src/hindsight/state.ts`: session state, shared bank scope, recall/reflect config.
-  - `packages/coding-agent/src/hindsight/client.ts`: HTTP `reflect` call and error mapping.
+  - `packages/coding-agent/src/memory/hindsight/bank.ts`: best-effort first-use bank/mission setup (`ensureBankExists`).
+  - `packages/coding-agent/src/memory/hindsight/state.ts`: session state, shared bank scope, recall/reflect config.
+  - `packages/coding-agent/src/memory/hindsight/client.ts`: HTTP `reflect` call and error mapping.
 - Mnemopi collaborators:
-  - `packages/coding-agent/src/mnemopi/state.ts`: scoped local recall and context formatting.
+  - `packages/coding-agent/src/memory/mnemopi/state.ts`: scoped local recall and context formatting.
   - `docs/tools/retain.md`: shared backend, storage, scoping, and mental-model behavior.
 
 ## Inputs
@@ -91,7 +91,7 @@ Mnemopi:
 - Non-`Error` failures caught by the tool are normalized to `new Error(String(err))` before rethrow.
 
 ## Notes
-- Shared backend details are in `docs/tools/retain.md`: storage, subagent aliasing, bank scoping, seed mental models, and prompt injection.
+- Shared backend details are in `docs/tools/retain.md`: storage, agent aliasing, bank scoping, seed mental models, and prompt injection.
 - Hindsight `reflect` does not read the cached `<mental_models>` block directly. It queries the Hindsight server over the bank contents. The same session may also have separate mental-model context injected into its developer instructions.
 - Hindsight reflect mission and retain mission are bank-level server settings, not per-request payload. The tool just ensures they are present best-effort before reflecting.
 - Mnemopi `reflect` is local recall plus formatting, so its output shape differs from Hindsight's remote synthesized answer.

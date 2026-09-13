@@ -1,6 +1,6 @@
 import { describe, expect, it, spyOn } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
-import { buildSessionContext, getLatestCompactionEntry } from "@veyyon/coding-agent/session/session-context";
+import { buildSessionContext, getLatestCompactionEntry } from "@veyyon/kernel/session/session-context";
 import type {
 	BranchSummaryEntry,
 	CompactionEntry,
@@ -8,7 +8,7 @@ import type {
 	SessionEntry,
 	SessionMessageEntry,
 	ThinkingLevelChangeEntry,
-} from "@veyyon/coding-agent/session/session-entries";
+} from "@veyyon/kernel/session/session-entries";
 
 function msg(id: string, parentId: string | null, role: "user" | "assistant", text: string): SessionMessageEntry {
 	const base = { type: "message" as const, id, parentId, timestamp: "2025-01-01T00:00:00Z" };

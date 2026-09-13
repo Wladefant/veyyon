@@ -8,21 +8,21 @@
 import { APP_NAME, errorMessage, getAgentDir, isRecord, nearestNames } from "@veyyon/utils";
 import { renderHelpParagraph, renderHelpTable } from "@veyyon/utils/cli";
 import chalk from "chalk";
+import { Settings, settings, validateProviderMaxInFlightRequests } from "../config/settings";
 import {
 	getDefault,
 	getEnumValues,
 	getType,
 	getUi,
+	isSettingPath,
+	retiredBy,
+	SETTINGS_SCHEMA,
 	type SettingPath,
-	Settings,
 	type SettingValue,
-	settings,
-	validateProviderMaxInFlightRequests,
-} from "../config/settings";
-import { isSettingPath, retiredBy, SETTINGS_SCHEMA } from "../config/settings-schema";
-import { theme } from "../modes/theme/theme";
-import { initXdg } from "./commands/init-xdg";
+} from "../config/settings-schema";
+import { theme } from "../theme/theme";
 import { EXIT_USAGE } from "./exit-codes";
+import { initXdg } from "./init-xdg";
 
 // =============================================================================
 // Types

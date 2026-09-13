@@ -1,11 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Tool as AiTool } from "@veyyon/ai";
 import { toolWireSchema } from "@veyyon/ai/utils/schema";
-import { Settings } from "@veyyon/coding-agent/config/settings";
-import type { SettingPath } from "@veyyon/coding-agent/config/settings-schema";
+import { type SettingPath, Settings } from "@veyyon/coding-agent/config/settings";
 import { loadBundledAgents } from "@veyyon/coding-agent/task/agents";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import { EvalTool, getEvalToolDescription } from "@veyyon/coding-agent/tools/eval";
+import { EvalTool, getEvalToolDescription } from "@veyyon/coding-agent/tools/shell/eval";
 import { makeToolSession } from "../helpers/tool-session";
 
 /**
@@ -63,7 +62,7 @@ describe("eval tool description", () => {
 	});
 
 	it("omits agent() when the session forbids spawning", () => {
-		// Subagents with spawns: undefined (resolved to "") cannot launch tasks.
+		// Agents with spawns: undefined (resolved to "") cannot launch tasks.
 		// The prelude doc must not promise a helper that always throws.
 		const text = getEvalToolDescription({ py: true, js: true, spawns: false });
 		expect(text).not.toContain("agent(prompt");

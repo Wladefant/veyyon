@@ -72,6 +72,11 @@ const ADMITTED_ON_THE_CARD_PATH = [
 	"node:worker_threads",
 ];
 
+/** First-frame rendering imports neither legacy SQLite migration nor process-manager sleeps. */
+const ADMITTED_ON_FIRST_FRAME_PATH = ADMITTED_ON_THE_CARD_PATH.filter(
+	specifier => specifier !== "bun:sqlite" && specifier !== "node:timers/promises",
+);
+
 /** What was removed, named so a failure says which one came back rather than only that one did. */
 const REMOVED_FROM_THE_CARD_PATH = [
 	"node:assert/strict",
@@ -87,13 +92,13 @@ describe("the launch card loads no cold runtime", () => {
 	 * set equality, which an empty walk would also satisfy.
 	 */
 	it("walks a real graph and finds its platform imports", () => {
-		const reached = reachedNames("startup/launch-card.ts");
+		const reached = reachedNames("cli/launch-card.ts");
 
 		expect(reached.length).toBeGreaterThan(150);
 		expect(reached).toContain(path.join("utils", "src", "postmortem.ts"));
 		expect(reached).toContain(path.join("utils", "src", "file-lock.ts"));
-		expect(reached).toContain(path.join("natives", "native", "loader-state.js"));
-		expect(platformSpecifiersOn("startup/launch-card.ts")).toContain("node:fs");
+		expect(reached).toContain(path.join("..", "natives", "bridge", "bindings", "native", "loader-state.js"));
+		expect(platformSpecifiersOn("cli/launch-card.ts")).toContain("node:fs");
 	});
 
 	/**
@@ -102,22 +107,22 @@ describe("the launch card loads no cold runtime", () => {
 	 * nothing.
 	 */
 	it("sees a cold runtime on the path of a module that does load one", () => {
-		const onATool = platformSpecifiersOn("tools/bash.ts");
+		const onATool = platformSpecifiersOn("tools/shell/bash.ts");
 
 		expect(onATool).toContain("node:child_process");
 		expect(onATool).toContain("node:crypto");
 	});
 
-	for (const [label, entry] of [
-		["the launch card", "startup/launch-card.ts"],
-		["the first frame", "modes/first-frame.ts"],
+	for (const [label, entry, admitted] of [
+		["the launch card", "cli/launch-card.ts", ADMITTED_ON_THE_CARD_PATH],
+		["the first frame", "modes/terminal/first-frame.ts", ADMITTED_ON_FIRST_FRAME_PATH],
 	] as const) {
 		/** One case per entry, so a failure names the path that regained the runtime. */
 		it(`${label} evaluates nothing but the platform it uses`, () => {
 			const reached = platformSpecifiersOn(entry);
 
 			expect(reached.filter(specifier => REMOVED_FROM_THE_CARD_PATH.includes(specifier))).toEqual([]);
-			expect(reached).toEqual(ADMITTED_ON_THE_CARD_PATH);
+			expect(reached).toEqual(admitted);
 		});
 	}
 });

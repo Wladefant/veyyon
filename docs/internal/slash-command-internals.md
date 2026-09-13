@@ -5,18 +5,18 @@ This document describes how slash commands are discovered, deduplicated, surface
 ## Implementation files
 
 - [`src/extensibility/slash-commands.ts`](../../packages/coding-agent/src/extensibility/slash-commands.ts)
-- [`src/capability/slash-command.ts`](../../packages/coding-agent/src/capability/slash-command.ts)
+- [`src/discovery/capability/slash-command.ts`](../../packages/coding-agent/src/discovery/capability/slash-command.ts)
 - [`src/discovery/builtin.ts`](../../packages/coding-agent/src/discovery/builtin.ts)
 - [`src/discovery/claude.ts`](../../packages/coding-agent/src/discovery/claude.ts)
 - [`src/discovery/codex.ts`](../../packages/coding-agent/src/discovery/codex.ts)
 - [`src/discovery/claude-plugins.ts`](../../packages/coding-agent/src/discovery/claude-plugins.ts)
-- [`src/capability/index.ts`](../../packages/coding-agent/src/capability/index.ts)
+- [`src/discovery/capability/index.ts`](../../packages/coding-agent/src/discovery/capability/index.ts)
 - [`src/discovery/helpers.ts`](../../packages/coding-agent/src/discovery/helpers.ts)
 - [`src/session/agent-session.ts`](../../packages/coding-agent/src/session/agent-session.ts)
-- [`src/modes/interactive-mode.ts`](../../packages/coding-agent/src/modes/interactive-mode.ts)
-- [`src/modes/controllers/input-controller.ts`](../../packages/coding-agent/src/modes/controllers/input-controller.ts)
-- [`src/modes/utils/ui-helpers.ts`](../../packages/coding-agent/src/modes/utils/ui-helpers.ts)
-- [`src/modes/controllers/command-controller.ts`](../../packages/coding-agent/src/modes/controllers/command-controller.ts)
+- [`src/modes/terminal/interactive-mode.ts`](../../packages/coding-agent/src/modes/terminal/interactive-mode.ts)
+- [`src/modes/terminal/controllers/input-controller.ts`](../../packages/coding-agent/src/modes/terminal/controllers/input-controller.ts)
+- [`src/modes/terminal/utils/ui-helpers.ts`](../../packages/coding-agent/src/modes/terminal/utils/ui-helpers.ts)
+- [`src/modes/terminal/controllers/command-controller.ts`](../../packages/coding-agent/src/modes/terminal/controllers/command-controller.ts)
 - [`src/slash-commands/builtin-registry.ts`](../../packages/coding-agent/src/slash-commands/builtin-registry.ts)
 - [`src/slash-commands/builtin-declarations.ts`](../../packages/coding-agent/src/slash-commands/builtin-declarations.ts)
 - [`src/slash-commands/text-mode-builtins.ts`](../../packages/coding-agent/src/slash-commands/text-mode-builtins.ts)
@@ -172,7 +172,7 @@ Then `init()` calls `refreshSlashCommandState(...)` to load file-based commands 
 Slash command state is refreshed:
 
 - during interactive init
-- after `/move` changes working directory (`handleMoveCommand` -> `applyCwdChange`, which calls `session.rescopeToCwd(newCwd)`, whose process-global half invokes `resetCapabilities()` for non-subagent sessions, then `refreshSlashCommandState(newCwd)`)
+- after `/move` changes working directory (`handleMoveCommand` -> `applyCwdChange`, which calls `session.rescopeToCwd(newCwd)`, whose process-global half invokes `resetCapabilities()` for non-agent sessions, then `refreshSlashCommandState(newCwd)`)
 - when the editor component is swapped (`setEditorComponent` re-runs `refreshSlashCommandState()`)
 
 There is no continuous file watcher for command directories.
@@ -329,4 +329,4 @@ hidden default dressed as one.
   - non-native commands: warning + fallback key/value parse
 - Extension/custom command handler exceptions are caught and reported via extension error channel (or logger fallback for custom commands without extension runner), and treated as handled (no unintended fallback execution).
 
-*Verified against `3fa88a60` on 2026-08-05.*
+*Verified against `63ffc8131ffb8d35ccbbb1c5de69531a7016eff4` on 2026-09-06.*

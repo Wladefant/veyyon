@@ -150,7 +150,7 @@ tag, asks once, then:
 
 Every way this can stop leaves the bump commit on `main` and prints the tag
 command to finish by hand, because a half-finished cut must never need archaeology
-to complete. That covers a red gate, a wait that exceeds ninety minutes, and
+to complete. That covers a red gate, a wait that exceeds sixty minutes, and
 answering no at the prompt (which stops before the push, with the bump still
 local).
 
@@ -214,12 +214,12 @@ One owner per concern, so a change lands in one place.
 | Tag and asset policy | `scripts/release-policy.ts` |
 | Version authorities | `validateReleaseVersionAuthorities` in `scripts/release.ts` |
 | Changelog normalization | `scripts/fix-changelogs.ts` |
-| Root changelog | `renderRootChangelog` in `website/tools/gen-changelog.mjs`, written by `scripts/sync-root-changelog.ts` |
+| Root changelog | `renderRootChangelog` in `apps/site/tools/gen-changelog.mjs`, written by `scripts/sync-root-changelog.ts` |
 | Release notes body | `scripts/ci-release-notes.ts` |
 | Binary target table | `packages/coding-agent/scripts/binary-targets.ts` |
 | Binary build | `scripts/ci-release-build-binaries.ts` |
 | Publication | `release_github_publish` in `.github/workflows/ci.yml` |
-| Site and install endpoint | `website/build.mjs` and `website/deploy.mjs`, see [deployment.md](./deployment.md) |
+| Site and install endpoint | `apps/site/build.mjs` and `apps/site/deploy.mjs`, see [deployment.md](./deployment.md) |
 
 Two things that look like release steps and are not. `bun run gen:changelog`
 (`scripts/rewrite-changelog.ts`) asks a model to rewrite an `## [Unreleased]`
@@ -253,7 +253,7 @@ The native addons ship as `veyyon_natives.<platform>-<arch>[-variant].node` so a
 source install stays toolchain-free: `ensure-native.ts` fetches the addon for its
 own checkout's tag instead of requiring cargo.
 
-**The website** (`veyyon.dev`). `website/changelog.html`, regenerated from
+**The website** (`veyyon.dev`). `apps/site/changelog.html`, regenerated from
 `packages/coding-agent/CHANGELOG.md` and reconciled against the published GitHub
 releases for real dates and permalinks.
 
@@ -270,10 +270,10 @@ The website build fails when a version exists on GitHub Releases that
 version, so the changelog has to say what is in it.
 
 The gate is unconditional. `UNDOCUMENTED_RELEASE_BASELINE` in
-`website/tools/gen-changelog.mjs` is empty, so no version is exempt. Write the
+`apps/site/tools/gen-changelog.mjs` is empty, so no version is exempt. Write the
 entry when you see the failure. Do not add the version to the baseline: it is a
 shrinking record of old debt, and
-`website/tools/undocumented-release-ratchet.test.ts` pins it empty.
+`apps/site/tools/undocumented-release-ratchet.test.ts` pins it empty.
 
 The website build is the last place that can catch this, and it catches it too
 late: v1.0.38 through v1.0.46 were each tagged at a tree with no section, so each
@@ -578,4 +578,4 @@ the checked-in state. All three copies are gitignored and the assets are declare
 in `types/assets/index.d.ts`, so the generated state still type checks and cannot
 be committed by accident.
 
-*Verified against `e7a2288347` on 2026-09-05.*
+*Verified against `9c904aa2db` on 2026-09-05.*

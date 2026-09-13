@@ -33,7 +33,7 @@ git format-patch b21b42d032919de2f2e6920a76fa9a37c3920c0a..HEAD --stdout > chang
 Most runtime TypeScript sources omit `.js` in internal imports, but several current entrypoints and tool modules keep `.js` for ESM/runtime compatibility. Follow the surrounding file and package export style; do not blanket-strip or blanket-add extensions.
 
 - In `packages/coding-agent` runtime sources, prefer extensionless internal imports when the surrounding module does, but preserve existing `.js` imports in files that already require them.
-- In `packages/tui/test` and `packages/natives/bench`, keep `.js` where surrounding files already use it.
+- In `hosts/terminal/engine/test` and `natives/bridge/bindings/bench`, keep `.js` where surrounding files already use it.
 - Keep real file extensions when required by tooling or import assertions (e.g., `.json`, `.css`, `.md` text embeds).
 - Example: `import { x } from "./foo.js";` → `import { x } from "./foo";` only when that package/file convention is extensionless.
 
@@ -51,17 +51,20 @@ Upstream uses different package scopes. Replace them consistently.
 - Some upstream packages publish under the `@earendil-works/*` scope instead of `@mariozechner/*`. Map it the same way (`@earendil-works/pi-coding-agent` → `@veyyon/coding-agent`, and so on).
 - The bare `typebox` package is not an `@veyyon/*` scope; do not rewrite it as one. See the Extensions divergence in section 15 for how tool-parameter schemas map.
 
-## 4) Use Bun APIs where they improve on Node
+## 4) Runtime APIs: portable first
 
-We run on Bun, but the current source intentionally mixes Bun APIs with small Node standard-library APIs. Replace Node APIs only when Bun provides a clearer, safer, or simpler implementation; do not mechanically rewrite every Node import.
+We run on Bun, and the direction is portable: in new code reach for the language, then `node:*`,
+then POSIX tooling, then Bun, and choose a Bun API only where no reasonable portable equivalent
+exists. The root `AGENTS.md` holds the full table. Existing Bun code is correct and stays; do not
+widen a port to convert a file, and do not mechanically rewrite either direction.
 
-**Prefer replacing when porting new code:**
+**Replace when porting new code:**
 
-- Process spawning: prefer Bun Shell `$` for simple commands; use `Bun.spawn`/`Bun.spawnSync` for streaming or process control. Keep existing `child_process` only where its exact semantics are needed.
+- Process spawning: `execFile`/`spawn` from `node:child_process`. Upstream `` $`cmd` `` and `Bun.spawn` become the `node:child_process` spelling unless the port needs streaming semantics Bun already implements here.
 - HTTP clients: `node-fetch`, `axios` → native `fetch`
-- SQLite: `better-sqlite3` → `bun:sqlite`
-- Env loading: `dotenv` → Bun loads `.env` automatically
-- Runtime text/assets: prefer Bun imports such as `with { type: "text" }` or `Bun.file()` over copy steps or bundled fallback file reads.
+- SQLite: `better-sqlite3` → `bun:sqlite`, which has no portable equivalent
+- Env loading: `dotenv` → `process.env`
+- Runtime text/assets: `import … with { type: "text" }` over copy steps or bundled fallback file reads. This is the mandated spelling for prompts.
 
 **DO NOT replace (these work fine in Bun):**
 
@@ -72,12 +75,12 @@ We run on Bun, but the current source intentionally mixes Bun APIs with small No
 
 **Import style:** Use the `node:` prefix for Node standard-library imports. Namespace imports are common, but named imports are acceptable where the surrounding code already uses them.
 
-**Additional Bun conventions:**
+**Additional conventions:**
 
-- Prefer Bun Shell `$` for short, non-streaming commands; use `Bun.spawn` only when you need streaming I/O or process control.
-- Use `Bun.file()`/`Bun.write()` for simple files and `node:fs/promises` for directory-oriented operations. Existing synchronous `node:fs` calls are acceptable when the calling flow is intentionally synchronous.
-- Avoid `Bun.file().exists()` checks; use `isEnoent` handling in try/catch.
-- Prefer `Bun.sleep(ms)` over `setTimeout` wrappers.
+- `fs.readFile`/`fs.writeFile` from `node:fs/promises`, not `Bun.file()`/`Bun.write()`. Existing synchronous `node:fs` calls are acceptable when the calling flow is intentionally synchronous.
+- Avoid an existence check before a read; use `isEnoent` handling in try/catch.
+- `setTimeout` from `node:timers/promises`, not `Bun.sleep(ms)`.
+- `process.env`, not `Bun.env`. `import.meta.dirname`, not `import.meta.dir`.
 
 **Wrong:**
 
@@ -98,13 +101,13 @@ const configDir = path.join(os.homedir(), ".config", "myapp");
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "myapp-"));
 ```
 
-## 5) Prefer Bun embeds (no copying)
+## 5) Embed assets (no copying)
 
-Do not add new runtime asset copy steps. Keep assets in repo and prefer Bun embeds/imports; preserve existing explicit generation workflows such as `packages/coding-agent/src/export/html/tool-views.generated.js` (built from collab-web sources via `bun run gen:tool-views`).
+Do not add new runtime asset copy steps. Keep assets in repo and use import attributes; preserve existing explicit generation workflows such as `packages/coding-agent/src/export/html/tool-views.generated.js` (built from collab-web sources via `bun run gen:tool-views`).
 
-- If upstream copies assets into a dist folder, replace with Bun-friendly embeds.
-- Prompts are static `.md` files; use Bun text imports (`with { type: "text" }`) and Handlebars instead of inline prompt strings.
-- Use `import.meta.dir` + `Bun.file` to load adjacent non-text resources.
+- If upstream copies assets into a dist folder, replace with an embedded import.
+- Prompts are static `.md` files; use text imports (`with { type: "text" }`) and Handlebars instead of inline prompt strings.
+- Use `import.meta.dirname` + `fs.readFile` to load adjacent non-text resources. Never `import.meta.dir`.
 - Keep assets in-repo and let the bundler include them.
 - Eliminate copy scripts unless the user explicitly requests them or the package already has an intentional generation step.
 - If upstream reads a bundled fallback file at runtime, replace filesystem reads with a Bun text embed import unless the current package already uses a generated asset pipeline.
@@ -133,13 +136,13 @@ Treat `package.json` as a contract. Merge intentionally.
 - Use `Promise.withResolvers()` instead of `new Promise((resolve, reject) => ...)`.
 - Prefer ES `#` private fields for new encapsulated state. Constructor parameter properties already exist in current code and are acceptable; do not churn unrelated access modifiers while porting.
 - Prefer existing helpers and utilities over new ad-hoc code.
-  Preserve Bun-first infrastructure changes already made in this repo:
+  Preserve the runtime decisions already made in this repo:
   - Runtime is Bun (no Node entry points for the main CLI).
   - Package manager is Bun (no npm lockfiles).
-  - Heavy Node APIs should not be introduced casually; current source still uses selected Node APIs (`node:crypto`, `node:readline`, synchronous `node:fs`, and `child_process`) where they fit provider, CLI, or process-control semantics.
+  - `node:*` is the default spelling in new code. Current source uses `node:crypto`, `node:readline`, synchronous `node:fs`, and `child_process` where they fit provider, CLI, or process-control semantics.
   - Lightweight Node APIs (`os.homedir`, `os.tmpdir`, `fs.mkdtempSync`, `path.*`) are kept.
   - CLI shebangs use `bun` (not `node`, not `tsx`).
-  - TypeScript packages generally use source files directly; `@veyyon/natives` exports generated native bindings from `packages/natives/native`.
+  - TypeScript packages generally use source files directly; `@veyyon/natives` exports generated native bindings from `natives/bridge/bindings/native`.
   - CI workflows run Bun for install/check/test.
 
 ## 8) Remove old compatibility layers
@@ -278,7 +281,7 @@ packages/ai:
 - fix: add overflow detection for Bedrock, MiniMax, Kimi providers
 - fix: 429 status is rate limiting, not context overflow
 
-packages/tui:
+hosts/terminal/engine:
 - fix: refactored autocomplete state tracking
 - fix: file autocomplete should not trigger on empty text
 - fix: configurable autocomplete max visible items
@@ -305,8 +308,8 @@ Our fork has architectural decisions that differ from upstream. **Do not port th
 | Upstream                                    | Our Fork                                                  | Reason                                                                |
 | ------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------- |
 | `FooterDataProvider` class                  | `StatusLineComponent`                                     | Simpler, integrated status line                                       |
-| `ctx.ui.setHeader()` / `ctx.ui.setFooter()` | No-op stubs in current extension contexts                 | Not currently wired to replace the TUI status/header UI               |
-| `ctx.ui.setEditorComponent()`               | Wired in interactive mode; no-op stubs in ACP/RPC/headless contexts | Custom editor replacement works in the interactive TUI; non-TUI runtimes keep stubs |
+| `ctx.ui.setHeader()` / `ctx.ui.setFooter()` | Removed entirely (neither member exists on `ExtensionUIContext` / `HookUIContext`) | Every host implemented both as empty functions, so dead members were removed |
+| `ctx.ui.setEditorComponent()`               | Moved to optional `ui.terminal` capability (`ctx.ui.terminal?.setEditorComponent(...)`) in interactive mode; omitted in non-terminal contexts | Custom editor replacement requires TUI/terminal access; non-terminal hosts omit `ui.terminal` |
 | `ctx.ui.addAutocompleteProvider()`          | Wired in interactive mode; no-op stubs in ACP/RPC/headless contexts | Factory wrapping matches upstream; veyyon's editor has no custom `triggerCharacters`, so wrapped providers surface at the built-in trigger points |
 | `InteractiveModeOptions` options object     | Positional constructor args (options type still exported) | Keep constructor signature; update the type when upstream adds fields |
 
@@ -346,7 +349,7 @@ Our fork has architectural decisions that differ from upstream. **Do not port th
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
 | `createTool(cwd: string, options?)` | `createTools(session: ToolSession)` via `BUILTIN_TOOLS` registry                                              | Tool factories accept `ToolSession` and can return `null` |
 | Per-tool `*Operations` interfaces   | Only current per-tool override interfaces remain (for example `FindOperations`)                               | Used for SSH/remote overrides where present               |
-| Node.js `fs/promises` everywhere    | Bun file APIs for simple file writes/reads, `node:fs/promises` for dirs, selected sync `node:fs` where needed | Prefer Bun APIs when they simplify                        |
+| Node.js `fs/promises` everywhere    | `node:fs/promises`, with existing `Bun.file`/`Bun.write` call sites left as they are and selected sync `node:fs` where needed | New code uses the portable spelling      |
 
 ### Auth Storage
 
@@ -360,7 +363,7 @@ Our fork has architectural decisions that differ from upstream. **Do not port th
 | Upstream                                                         | Our Fork                                                                                          |
 | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | `jiti` for TypeScript loading                                    | Native Bun `import()`                                                                              |
-| `pkg.pi` manifest field                                          | `pkg.veyyon` preferred; `omp` and `pi` remain accepted as legacy keys (`MANIFEST_KEYS` in `src/extensibility/manifest-key.ts`, first defined wins) |
+| `pkg.pi` manifest field                                          | `pkg.veyyon` preferred; `omp` and `pi` remain accepted as legacy keys (`MANIFEST_KEYS` in `kernel/src/loader/manifest-key.ts`, first defined wins) |
 | `StringEnum` from `pi-ai`                                        | `Type.Enum` from the `pi.typebox` shim (or author the schema with `pi.zod`); `pi-ai` no longer exports `StringEnum` |
 | `formatSize` from `pi-coding-agent`                              | `formatBytes` from `@veyyon/utils`                                                            |
 | `DefaultResourceLoader` / `DefaultPackageManager` / `SettingsManager` / `createEventBus` | Capability-based discovery (`loadCapability(...)`) plus the `Settings` singleton and `EventBus` |
@@ -391,15 +394,17 @@ These exist in our fork but not upstream. **Never overwrite:**
 What the fork took from oh-my-pi:
 
 - The TypeScript/Bun agent loop, TUI, and mode system (`packages/coding-agent`,
-  `packages/agent`, `packages/tui`, `packages/ai`, `packages/catalog`, and
-  most of `packages/*`).
+  `packages/agent`, `packages/ai`, `packages/catalog`, and most of `packages/*`).
+  The terminal renderer moved after the fork: upstream's `packages/tui` is
+  `hosts/terminal/engine`, and the published package name `@veyyon/tui` is
+  unchanged.
 - The Rust native hot paths, including their vendored third-party dependencies
-  under `crates/vendor/`. The crates were renamed after the fork, so the paths
-  here are the current ones: search in `crates/veyyon-grep-kernel` and
-  `crates/veyyon-uu-grep`, the shell and its output minimizer in
-  `crates/veyyon-shell`, and the PTY and the rest of the N-API surface in
-  `crates/veyyon-natives`. The hashline edit engine is TypeScript, in
-  `packages/hashline`, not in a crate.
+  under `natives/vendor/`. The crates were renamed after the fork, so the paths
+  here are the current ones: search in `natives/search/grep-kernel` and
+  `natives/search/uu-grep`, the shell and its output minimizer in
+  `natives/shell`, and the PTY and the rest of the N-API surface in
+  `natives/bridge/addon`. The hashline edit engine is TypeScript, in
+  `plugins/hashline`, not in a crate.
 - The prompt/agent model, hashline edit engine, mnemopi memory system, and
   provider catalog that oh-my-pi shipped.
 
@@ -440,11 +445,11 @@ pipeline. It has two halves:
    implementation does not block an otherwise clean candidate. Fixes touching a
    diverged surface still enter semantic triage with a warning, so the
    underlying bug can be adapted to veyyon's design.
-2. veybot (`python/veybot`) watches the `upstream-port` label. It prepares each
+2. veybot (`clients/python/veybot`) watches the `upstream-port` label. It prepares each
    port in its own worktree and opens one candidate pull request that closes the
    tracking issue. The issue body is evidence only; the execution contract is in
    veybot's own prompts, starting at
-   `python/veybot/src/prompts/kickoff_port_upstream.md`. When a candidate's
+   `clients/python/veybot/src/prompts/kickoff_port_upstream.md`. When a candidate's
    checks go red veybot repairs that branch in place, at most
    `VEYBOT_CI_MAX_REPAIRS` times per head commit, and never by weakening a gate.
 
@@ -481,4 +486,4 @@ handbook pages. `neverPorted` in `scripts/upstream-port-policy.json` lists the
 paths a port has no business authoring, which is the checklist to read that diff
 against.
 
-*Verified against `d22ae362` on 2026-08-22.*
+*Verified against `504c88b39f` on 2026-09-11.*

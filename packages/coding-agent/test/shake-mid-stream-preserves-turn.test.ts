@@ -2,17 +2,17 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
-import { AssistantMessageComponent } from "@veyyon/coding-agent/modes/components/assistant-message";
-import type { ToolExecutionComponent } from "@veyyon/coding-agent/modes/components/tool-execution";
-import { InteractiveMode } from "@veyyon/coding-agent/modes/interactive-mode";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
-import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session";
+import { AssistantMessageComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/assistant-message";
+import type { ToolExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/tool-execution";
+import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { HistoryStorage } from "@veyyon/coding-agent/session/history-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import { HistoryStorage } from "@veyyon/kernel/session/history-storage";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { createToolExecution } from "./helpers/tool-execution";
 
@@ -166,7 +166,7 @@ describe("issue #3656 /shake mid-stream preserves the in-flight assistant turn",
 		expect(pendingIdx).toBeGreaterThan(streamingIdx);
 	});
 
-	it("uses the rendered view session when preserving a focused subagent stream", () => {
+	it("uses the rendered view session when preserving a focused agent stream", () => {
 		const { streamingComponent, pendingTool } = makeStreamingFixture(false);
 		Object.defineProperty(mode, "viewSession", {
 			configurable: true,

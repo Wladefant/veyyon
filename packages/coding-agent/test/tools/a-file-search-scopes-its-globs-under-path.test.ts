@@ -21,7 +21,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import { SearchTool, type SearchToolInput, scopeFilePatterns } from "@veyyon/coding-agent/tools/search";
+import { SearchTool, type SearchToolInput, scopeFilePatterns } from "@veyyon/coding-agent/tools/search/search";
 import { removeWithRetries } from "@veyyon/utils";
 
 function createTestSession(cwd: string): ToolSession {

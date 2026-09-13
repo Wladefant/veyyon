@@ -10,7 +10,7 @@ import { $ } from "bun";
  * `docs/internal/README.md` says implementation docs live under
  * `docs/internal/`, but the tree has always disagreed: `ARCHITECTURE.md`,
  * `packages/coding-agent/DEVELOPMENT.md`, `packages/coding-agent/docs/modal-shell.md`
- * and `python/veybot/docs/pr-review-handoff.md` are first-party design and
+ * and `clients/python/veybot/docs/pr-review-handoff.md` are first-party design and
  * implementation notes sitting beside code. Some of those placements are right,
  * a subsystem map belongs next to the subsystems it maps and a standalone
  * published package cannot depend on this repository's docs, so the fix was
@@ -129,7 +129,7 @@ describe("first-party prose outside docs/", () => {
 			"packages/coding-agent/src/discovery/builtin-rules/ts-no-any.md",
 			"packages/coding-agent/src/system-prompt-builder/statements/role/principles.md",
 			"packages/coding-agent/test/fixtures/skills/valid-skill/SKILL.md",
-			"packages/hashline/src/prompt.md",
+			"plugins/hashline/src/prompt.md",
 			"README.md",
 		]) {
 			expect(PAGES).not.toContain(skipped);

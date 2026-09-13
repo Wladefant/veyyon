@@ -9,10 +9,10 @@ import { Effort } from "@veyyon/catalog/effort";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
+import { TOOL_DISCOVERY_AUTO_THRESHOLD } from "@veyyon/coding-agent/discovery/mode";
 import type { CustomTool } from "@veyyon/coding-agent/extensibility/custom-tools/types";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
-import { TOOL_DISCOVERY_AUTO_THRESHOLD } from "@veyyon/coding-agent/tool-discovery/mode";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { type } from "arktype";
 
@@ -258,7 +258,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 			agentDir: tempDir,
 			modelRegistry,
 			sessionManager: SessionManager.inMemory(),
-			settings: Settings.isolated({ "tools.discoveryMode": "all", "subagent.delegation": delegation }),
+			settings: Settings.isolated({ "tools.discoveryMode": "all", "agent.delegation": delegation }),
 			model: getBundledModel("openai", "gpt-4o-mini"),
 			disableExtensionDiscovery: true,
 			skills: [],
@@ -302,7 +302,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 	 * reachable through `search_tool_bm25`, and the prompt drops the delegation gates with it.
 	 *
 	 * This test USED to omit the setting and rely on the default being `allowed`. The default is
-	 * `preferred` (`settings-domains/subagents.ts`), so it was silently a duplicate of the preferred
+	 * `preferred` (`settings-domains/agents.ts`), so it was silently a duplicate of the preferred
 	 * case and failed for the right reason: `task` was correctly present. The strength is named
 	 * explicitly here, which is the only way this test exercises the floor at all, and it stays
 	 * correct if the default moves again.

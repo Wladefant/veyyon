@@ -31,20 +31,26 @@ import { beforeAll, describe, expect, it, vi } from "bun:test";
 import * as os from "node:os";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import * as importScanModule from "@veyyon/coding-agent/discovery/import-scan";
-import { AgentsSceneController, agentsSetupScene } from "@veyyon/coding-agent/modes/setup-wizard/scenes/agents";
-import { ImportSceneController, importSetupScene } from "@veyyon/coding-agent/modes/setup-wizard/scenes/import";
-import { providersSetupScene } from "@veyyon/coding-agent/modes/setup-wizard/scenes/providers";
-import { themeSetupScene } from "@veyyon/coding-agent/modes/setup-wizard/scenes/theme";
+import {
+	AgentsSceneController,
+	agentsSetupScene,
+} from "@veyyon/coding-agent/modes/terminal/setup-wizard/scenes/agents";
+import {
+	ImportSceneController,
+	importSetupScene,
+} from "@veyyon/coding-agent/modes/terminal/setup-wizard/scenes/import";
+import { providersSetupScene } from "@veyyon/coding-agent/modes/terminal/setup-wizard/scenes/providers";
+import { themeSetupScene } from "@veyyon/coding-agent/modes/terminal/setup-wizard/scenes/theme";
 import type {
 	SetupScene,
 	SetupSceneController,
 	SetupSceneHost,
 	SetupWizardContext,
-} from "@veyyon/coding-agent/modes/setup-wizard/scenes/types";
-import { SetupWizardComponent } from "@veyyon/coding-agent/modes/setup-wizard/wizard-overlay";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
+} from "@veyyon/coding-agent/modes/terminal/setup-wizard/scenes/types";
+import { SetupWizardComponent } from "@veyyon/coding-agent/modes/terminal/setup-wizard/wizard-overlay";
 import * as discoveryModule from "@veyyon/coding-agent/task/discovery";
 import type { AgentDefinition } from "@veyyon/coding-agent/task/types";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { useTempHome } from "./helpers/temp-home";
 
 /**
@@ -304,12 +310,12 @@ describe("the progress breadcrumb names the steps", () => {
 	it("shows every step name in order, with the position", () => {
 		const component = new SetupWizardComponent(makeContext(30), [
 			labelled("a", "Providers"),
-			labelled("b", "Subagents"),
+			labelled("b", "Agents"),
 			labelled("c", "Theme"),
 		]);
 		try {
 			const frame = sceneFrame(component, 100);
-			expect(hasRow(frame, "1/3  Providers › Subagents › Theme")).toBe(true);
+			expect(hasRow(frame, "1/3  Providers › Agents › Theme")).toBe(true);
 		} finally {
 			component.dispose();
 		}
@@ -335,7 +341,7 @@ describe("the progress breadcrumb names the steps", () => {
 	it("falls back to a plain count when the names cannot fit", () => {
 		const component = new SetupWizardComponent(makeContext(30), [
 			labelled("a", "Providers"),
-			labelled("b", "Subagents"),
+			labelled("b", "Agents"),
 			labelled("c", "Glyphs"),
 			labelled("d", "Theme"),
 			labelled("e", "Import"),
@@ -343,7 +349,7 @@ describe("the progress breadcrumb names the steps", () => {
 		try {
 			const narrow = sceneFrame(component, 34);
 			expect(hasRow(narrow, "step 1 of 5")).toBe(true);
-			expect(hasRow(narrow, "Subagents")).toBe(false);
+			expect(hasRow(narrow, "Agents")).toBe(false);
 		} finally {
 			component.dispose();
 		}
@@ -374,7 +380,7 @@ describe("every real scene fits the viewport it is given", () => {
 		"sonic",
 	].map(name => ({
 		name,
-		description: `The ${name} subagent, described in one full sentence so the detail block has real text to wrap.`,
+		description: `The ${name} agent, described in one full sentence so the detail block has real text to wrap.`,
 		systemPrompt: "",
 		source: "bundled" as const,
 	}));
@@ -396,7 +402,7 @@ describe("every real scene fits the viewport it is given", () => {
 	const scenes: ReadonlyArray<readonly [string, SetupScene]> = [
 		["providers", providersSetupScene],
 		[
-			"subagents",
+			"agents",
 			{
 				...agentsSetupScene,
 				shouldRun: undefined,

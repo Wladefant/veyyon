@@ -27,11 +27,11 @@ Parse `$ARGUMENTS`.
 
 Print the resolved set before fanning out so the user can confirm scope.
 
-### 2. Fan out one subagent per PR
+### 2. Fan out one agent per PR
 
-Use **`task` with parallel subagents** — one task per PR. Pass the PR number, head ref, author, and the workflow below as the assignment. Each subagent works in isolation; they coordinate via `irc` only if a fix on PR A would obviously conflict with PR B.
+Use **`task` with parallel agents** — one task per PR. Pass the PR number, head ref, author, and the workflow below as the assignment. Each agent works in isolation; they coordinate via `irc` only if a fix on PR A would obviously conflict with PR B.
 
-Each subagent **MUST** follow this exact workflow:
+Each agent **MUST** follow this exact workflow:
 
 #### a. Read & decide
 
@@ -66,10 +66,10 @@ ln -snf "$MAIN/target"        "$WT/target"
 ln -snf "$MAIN/node_modules"  "$WT/node_modules"
 
 # Prebuilt native addon (avoids 30s+ napi-rs rebuild). Link only the .node
-# binaries — the rest of packages/natives/native/ is tracked by git, so
+# binaries — the rest of natives/bridge/bindings/native/ is tracked by git, so
 # folder-level symlinks would shadow PR-modified files and break review.
-for f in "$MAIN"/packages/natives/native/*.node; do
-  [ -e "$f" ] && ln -snf "$f" "$WT/packages/natives/native/"
+for f in "$MAIN"/natives/bridge/bindings/native/*.node; do
+  [ -e "$f" ] && ln -snf "$f" "$WT/natives/bridge/bindings/native/"
 done
 ```
 
@@ -95,7 +95,7 @@ Only fix things that **block merge**: build/test breakage, obvious bugs introduc
 For every fix:
 - Read existing patterns first; match repo conventions (see `AGENTS.md`).
 - Add or update tests for the actual behavior change.
-- Run only the targeted test file(s) for the area touched. No project-wide test runs from subagents.
+- Run only the targeted test file(s) for the area touched. No project-wide test runs from agents.
 
 Format/lint at the end with `bun fmt` over the union of files you edited.
 
@@ -114,7 +114,7 @@ Do **not** amend the PR author's commits. Do **not** push — the human merges.
 
 #### g. Report back
 
-Each subagent returns a short structured report:
+Each agent returns a short structured report:
 
 ```
 PR #<N>  <title>
@@ -127,7 +127,7 @@ Blockers: <anything the human must decide>
 
 ### 3. Aggregate
 
-After all subagents finish, print a single summary table:
+After all agents finish, print a single summary table:
 
 ```
 | PR | Title | Decision | Rebase | Fixes | Blockers |
@@ -138,9 +138,9 @@ Followed by the worktree paths grouped by decision, so the user can `cd` and mer
 
 ## Rules
 
-- **MUST** use parallel subagents — one per PR — not a serial loop.
+- **MUST** use parallel agents — one per PR — not a serial loop.
 - **MUST** use `github pr_checkout` (carries push metadata) — not raw `gh pr checkout`.
-- **MUST** symlink `target`, `node_modules`, and the native `*.node` binaries before any build/test runs in the worktree. **MUST NOT** symlink the whole `packages/natives/native/` directory that would shadow tracked PR changes.
+- **MUST** symlink `target`, `node_modules`, and the native `*.node` binaries before any build/test runs in the worktree. **MUST NOT** symlink the whole `natives/bridge/bindings/native/` directory that would shadow tracked PR changes.
 - **MUST NOT** push or merge. Human reviews and merges.
 - **MUST NOT** expand scope: fixes are limited to merge blockers on this PR's diff.
 - **MUST NOT** force-push over the PR author's history.

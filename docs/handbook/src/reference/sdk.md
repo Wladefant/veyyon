@@ -44,7 +44,11 @@ pointing at it.
 
 ## Entry points
 
-`@veyyon/coding-agent` exports the SDK APIs from the package root (and also via `@veyyon/coding-agent/sdk`).
+`@veyyon/coding-agent` exports the SDK APIs from the package root. `createAgentSession` is also at
+`@veyyon/coding-agent/sdk`; the discovery helpers, the options and result records, the system-prompt
+builder, the custom-tool surface and the MCP helpers are also at
+`@veyyon/coding-agent/session/factory-extensions`, `.../factory-options`, `.../factory-prompt`,
+`.../factory-tools` and `.../factory-mcp`.
 
 Core exports for embedders:
 
@@ -303,7 +307,7 @@ const { session } = await createAgentSession({
 
 ### Tool names have one owner
 
-Every tool name is declared once, in `packages/coding-agent/src/tools/builtin-names.ts`:
+Every tool name is declared once, in `packages/coding-agent/src/tools/core/builtin-names.ts`:
 `BUILTIN_TOOL_NAMES` for the tools offered by default, `HIDDEN_TOOL_NAMES` for the ones a caller or
 a mode turns on, and `TOOL`, a map derived from both.
 
@@ -321,7 +325,7 @@ stops compiling. A hand-written `"yield"` keeps compiling and quietly stops matc
 symptom is a tool that is no longer there.
 
 A few strings in the package share a spelling with a tool while naming something else, such as the
-`"task"` agent id, the `"write"` approval tier, and the `subagent.output: "yield"` setting value.
+`"task"` agent id, the `"write"` approval tier, and the `agent.output: "yield"` setting value.
 Those stay literals and carry a `// not-a-tool-name:` comment saying which they are. The test
 `test/tools/tool-name-literals-have-one-owner.test.ts` reads the selection sites and fails on any
 unmarked tool-name literal.
@@ -348,7 +352,9 @@ System prompt is rebuilt to reflect active tool changes.
 
 ## Discovery helpers
 
-Use these when you want partial control without recreating internal discovery logic:
+Use these when you want partial control without recreating internal discovery logic. They live in
+`packages/coding-agent/src/session/factory-extensions.ts`, and `buildSystemPrompt` in
+`factory-prompt.ts` beside it:
 
 - `discoverAuthStorage(agentDir?)`
 - `discoverExtensions(cwd?)`
@@ -360,7 +366,7 @@ Use these when you want partial control without recreating internal discovery lo
 - `discoverMCPServers(cwd?)`
 - `buildSystemPrompt(options?)`
 
-## Subagent-oriented options
+## Agent-oriented options
 
 For SDK consumers building orchestrators (similar to task executor flow):
 
@@ -396,7 +402,7 @@ Use `setToolUIContext(...)` only if your embedder provides UI capabilities that 
 
 `createAgentSession()` runs two background optimizations to overlap I/O with the rest of session setup:
 
-- **Model-host preconnect.** As soon as the model is resolved, the SDK fires a best-effort `fetch.preconnect()` call against the model host so DNS + TCP + TLS + HTTP/2 to the provider's host happens in parallel with extension/skill load, tool registry build, and system-prompt assembly. The first real `fetch(...)` then reuses the warm connection, saving 100–300 ms on transcontinental hops (e.g. residential IP → `api.anthropic.com`). Implementation lives in `preconnectModelHost()` in `packages/coding-agent/src/sdk.ts`. If Bun's `preconnect` is unavailable (non-Bun runtime) or the call throws, the optimization is silently skipped: never a hard dependency. Applies to every mode (interactive, print, RPC, ACP).
+- **Model-host preconnect.** As soon as the model is resolved, the SDK fires a best-effort `fetch.preconnect()` call against the model host so DNS + TCP + TLS + HTTP/2 to the provider's host happens in parallel with extension/skill load, tool registry build, and system-prompt assembly. The first real `fetch(...)` then reuses the warm connection, saving 100–300 ms on transcontinental hops (e.g. residential IP → `api.anthropic.com`). Implementation is in `preconnectModelHost()` in `packages/coding-agent/src/sdk.ts`. If Bun's `preconnect` is unavailable (non-Bun runtime) or the call throws, the optimization is silently skipped: never a hard dependency. Applies to every mode (interactive, print, RPC, ACP).
 - **Conditional LSP warmup.** Startup LSP servers (those returned by `discoverStartupLspServers(cwd)`) are only warmed when **all** of these hold:
   - `enableLsp !== false` on the session options, **and**
   - `options.hasUI === true` (interactive TUI), **and**

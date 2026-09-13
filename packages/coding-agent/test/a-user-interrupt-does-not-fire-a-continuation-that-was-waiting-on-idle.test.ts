@@ -16,22 +16,20 @@
 // being refused (the agent already idle) races the interrupt on its own, and a
 // continuation queued AFTER the interrupt settled is a new cycle by design.
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { Agent, AgentBusyError, type AgentMessage, type AgentPromptOptions } from "@veyyon/agent-core";
 import type { Message } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { AsyncJobManager } from "@veyyon/coding-agent/async";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
 import { convertToLlm, USER_INTERRUPT_LABEL } from "@veyyon/coding-agent/session/messages";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
-import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { TempDir } from "@veyyon/utils";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 const CONTINUATION_TYPE = "autoresearch-stall-nudge";
@@ -61,7 +59,7 @@ function messageText(message: AgentMessage | Message): string {
 describe("a user interrupt does not fire a continuation that was waiting on idle", () => {
 	let session: AgentSession;
 	let agent: Agent;
-	let tempDir: string;
+	let tempDir: TempDir;
 	let authStorage: AuthStorage;
 	/** One entry per provider call: the messages that call was given. */
 	let providerCalls: Message[][];
@@ -69,8 +67,7 @@ describe("a user interrupt does not fire a continuation that was waiting on idle
 
 	beforeEach(async () => {
 		vi.spyOn(scheduler, "wait").mockImplementation((_delayMs, options) => originalSchedulerWait(0, options));
-		tempDir = path.join(os.tmpdir(), `veyyon-idle-continuation-${Snowflake.next()}`);
-		fs.mkdirSync(tempDir, { recursive: true });
+		tempDir = await TempDir.create("veyyon-idle-continuation");
 		providerCalls = [];
 		openStream = undefined;
 
@@ -100,9 +97,9 @@ describe("a user interrupt does not fire a continuation that was waiting on idle
 			},
 		});
 
-		authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
+		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 		session = new AgentSession({
 			agent,
 			sessionManager: SessionManager.inMemory(),
@@ -114,7 +111,7 @@ describe("a user interrupt does not fire a continuation that was waiting on idle
 	afterEach(async () => {
 		await session.dispose();
 		authStorage.close();
-		if (fs.existsSync(tempDir)) removeSyncWithRetries(tempDir);
+		tempDir.removeSync();
 		vi.restoreAllMocks();
 		AsyncJobManager.resetForTests();
 	});

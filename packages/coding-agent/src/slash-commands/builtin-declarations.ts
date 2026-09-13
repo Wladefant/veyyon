@@ -26,8 +26,8 @@
  * third import that pulled in anything larger would undo the split, so weigh one before adding it.
  */
 
+import { COMPACT_MODES } from "@veyyon/kernel/session/compact-modes";
 import { PRIORITY_TIER_LABEL } from "../config/service-tier";
-import { COMPACT_MODES } from "../session/compact-modes";
 
 /** One command's declared surface. The handler side is `SlashCommandSpec` in the registry. */
 export interface BuiltinSlashCommandDeclaration {
@@ -569,7 +569,7 @@ export const BUILTIN_SLASH_COMMAND_DECLARATIONS = [
 		// command, one description, one screen.
 		name: "agents",
 		aliases: ["cockpit", "hub"],
-		description: "Subagent dashboard: live agent roster and comms stream",
+		description: "Agent dashboard: live agent roster and comms stream",
 	},
 	{
 		name: "branch",
@@ -906,7 +906,7 @@ export const BUILTIN_SLASH_COMMAND_DECLARATIONS = [
 
 	{
 		name: "pause",
-		description: "Freeze all agents (main, subagents, advisor) until resumed",
+		description: "Freeze all agents (main, spawned agents, advisor) until resumed",
 	},
 
 	{

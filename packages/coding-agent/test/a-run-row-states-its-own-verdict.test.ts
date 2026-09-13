@@ -27,7 +27,6 @@
  */
 import { describe, expect, it } from "bun:test";
 import { formatNum } from "@veyyon/coding-agent/autoresearch/helpers";
-import { renderRunDetail, runScreenRows, screenSidebarWidth } from "@veyyon/coding-agent/autoresearch/screen";
 import { createExperimentState, createSessionRuntime } from "@veyyon/coding-agent/autoresearch/state";
 import {
 	type AutoresearchRuntime,
@@ -35,8 +34,13 @@ import {
 	type ExperimentResult,
 	type ExperimentStatus,
 } from "@veyyon/coding-agent/autoresearch/types";
-import { visibleWidth } from "@veyyon/tui";
+import {
+	renderRunDetail,
+	runScreenRows,
+	screenSidebarWidth,
+} from "@veyyon/coding-agent/modes/terminal/components/dialogs/autoresearch-screen";
 import { stripAnsi } from "@veyyon/utils";
+import { visibleWidth } from "@veyyon/utils/width";
 import { useTruecolorTheme } from "./helpers/theme-assertions";
 
 /**

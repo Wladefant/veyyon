@@ -1,15 +1,19 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { Settings } from "../src/config/settings";
-import { AgentsSceneController } from "../src/modes/setup-wizard/scenes/agents";
-import { approvalsSetupScene } from "../src/modes/setup-wizard/scenes/approvals";
-import { glyphSetupScene } from "../src/modes/setup-wizard/scenes/glyph";
-import { ImportSceneController } from "../src/modes/setup-wizard/scenes/import";
-import { renderSetupOutro } from "../src/modes/setup-wizard/scenes/outro";
-import { renderSetupSplash } from "../src/modes/setup-wizard/scenes/splash";
-import { themeSetupScene } from "../src/modes/setup-wizard/scenes/theme";
-import type { SetupSceneHost, SetupSceneResult, SetupWizardContext } from "../src/modes/setup-wizard/scenes/types";
-import { WebSearchTab } from "../src/modes/setup-wizard/scenes/web-search";
-import { initTheme } from "../src/modes/theme/theme";
+import { AgentsSceneController } from "../src/modes/terminal/setup-wizard/scenes/agents";
+import { approvalsSetupScene } from "../src/modes/terminal/setup-wizard/scenes/approvals";
+import { glyphSetupScene } from "../src/modes/terminal/setup-wizard/scenes/glyph";
+import { ImportSceneController } from "../src/modes/terminal/setup-wizard/scenes/import";
+import { renderSetupOutro } from "../src/modes/terminal/setup-wizard/scenes/outro";
+import { renderSetupSplash } from "../src/modes/terminal/setup-wizard/scenes/splash";
+import { themeSetupScene } from "../src/modes/terminal/setup-wizard/scenes/theme";
+import type {
+	SetupSceneHost,
+	SetupSceneResult,
+	SetupWizardContext,
+} from "../src/modes/terminal/setup-wizard/scenes/types";
+import { WebSearchTab } from "../src/modes/terminal/setup-wizard/scenes/web-search";
+import { initTheme } from "../src/theme/theme";
 import { useTempHome } from "./helpers/temp-home";
 
 useTempHome();

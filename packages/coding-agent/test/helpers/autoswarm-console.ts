@@ -13,7 +13,7 @@ import {
 	type LoopSetup,
 } from "@veyyon/coding-agent/autoresearch/console";
 import { BUILTIN_PRESETS, type LoopPreset } from "@veyyon/coding-agent/autoresearch/presets";
-import { SetupFormComponent } from "@veyyon/coding-agent/autoresearch/setup-form";
+import { SetupFormComponent } from "@veyyon/coding-agent/modes/terminal/components/dialogs/autoresearch-setup-form";
 import { stripAnsi } from "@veyyon/utils";
 
 export const NO_SESSION: ConsoleSituation = {

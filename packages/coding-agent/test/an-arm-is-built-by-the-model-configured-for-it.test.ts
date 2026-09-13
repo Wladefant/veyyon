@@ -23,8 +23,6 @@ import * as path from "node:path";
 import type { Model } from "@veyyon/ai";
 import { closeModels, enterArm, leaveArm } from "@veyyon/coding-agent/autoresearch/arm-model";
 import { type ConsoleHost, LoopConsoleModel, parseArmModels } from "@veyyon/coding-agent/autoresearch/console";
-import { renderRunDetail } from "@veyyon/coding-agent/autoresearch/screen";
-import { SetupFormComponent } from "@veyyon/coding-agent/autoresearch/setup-form";
 import { createExperimentState, createSessionRuntime } from "@veyyon/coding-agent/autoresearch/state";
 import { AutoresearchStorage } from "@veyyon/coding-agent/autoresearch/storage";
 import { MAX_BREADTH, MIN_SWARM_BREADTH } from "@veyyon/coding-agent/autoresearch/swarm";
@@ -37,6 +35,8 @@ import type {
 	ExperimentResult,
 } from "@veyyon/coding-agent/autoresearch/types";
 import type { ExtensionAPI, ExtensionContext } from "@veyyon/coding-agent/extensibility/extensions";
+import { renderRunDetail } from "@veyyon/coding-agent/modes/terminal/components/dialogs/autoresearch-screen";
+import { SetupFormComponent } from "@veyyon/coding-agent/modes/terminal/components/dialogs/autoresearch-setup-form";
 import { stripAnsi } from "@veyyon/utils";
 import {
 	type AutoresearchHarness,

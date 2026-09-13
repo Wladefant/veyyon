@@ -30,18 +30,21 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import type { Api, Model } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { parseArgs } from "@veyyon/coding-agent/cli/args";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { GENERAL_SETTINGS } from "@veyyon/coding-agent/config/settings-domains/general";
 import { SETTINGS_SCHEMA } from "@veyyon/coding-agent/config/settings-schema";
 import { buildSessionOptions } from "@veyyon/coding-agent/main";
-import { getAllSettingDefs, invalidateSettingDefsCache } from "@veyyon/coding-agent/modes/components/settings-defs";
-import { SettingsSelectorComponent } from "@veyyon/coding-agent/modes/components/settings-selector";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
+import {
+	getAllSettingDefs,
+	invalidateSettingDefsCache,
+} from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-defs";
+import { SettingsSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-selector";
 import { executeAcpBuiltinSlashCommand } from "@veyyon/coding-agent/slash-commands/acp-builtins";
 import type { SlashCommandRuntime } from "@veyyon/coding-agent/slash-commands/types";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { TempDir } from "@veyyon/utils";
 import { stubStdoutGeometry } from "./helpers/stdout-geometry";
 

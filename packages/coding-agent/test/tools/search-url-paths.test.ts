@@ -4,8 +4,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createTools, type ToolSession } from "@veyyon/coding-agent/tools";
-import * as scrapers from "@veyyon/coding-agent/web/scrapers/types";
+import { searchSchema } from "@veyyon/coding-agent/tools/search/search";
 import { removeWithRetries } from "@veyyon/utils";
+import * as scrapers from "@veyyon/web/scrapers/types";
 
 function createSession(testDir: string): ToolSession {
 	const sessionFile = path.join(testDir, "session.jsonl");
@@ -52,6 +53,39 @@ describe("search tools with external URL paths", () => {
 	afterEach(async () => {
 		vi.restoreAllMocks();
 		await removeWithRetries(testDir);
+	});
+
+	// Disabled URL execution must not disable local reads or any search mode.
+	it("rejects disabled URL operations while local read and search remain usable", async () => {
+		const session = createSession(testDir);
+		session.settings = Settings.isolated({ "fetch.enabled": false });
+		const tools = await createTools(session);
+		const read = tools.find(tool => tool.name === "read")!;
+		const search = tools.find(tool => tool.name === "search")!;
+		const url = "https://example.com/disabled.ts";
+		for (const selector of ["", ":raw", ":2-3", ":1-2,4-5", ":raw:2-3"]) {
+			await expect(read.execute("disabled-read", { path: `${url}${selector}` })).rejects.toThrow(
+				"URL reads are disabled by settings.",
+			);
+		}
+		const nonUrlTypes = searchSchema.shape.type.options.filter(type => type === "files");
+		const urlTypes = searchSchema.shape.type.options.filter(type => type !== "files");
+		for (const type of urlTypes) {
+			await expect(search.execute("disabled-search", { type, input: "localNeedle", path: url })).rejects.toThrow(
+				"URL reads are disabled by settings.",
+			);
+		}
+		expect(nonUrlTypes).toEqual(["files"]);
+
+		const localPath = path.join(testDir, "local.ts");
+		await fs.writeFile(localPath, "export function localNeedle() { return 1; }\n");
+		expect(resultText(await read.execute("local-read", { path: localPath }))).toContain("localNeedle");
+		for (const type of searchSchema.shape.type.options) {
+			const args = type === "files" ? { type, input: "local.ts" } : { type, input: "localNeedle", path: localPath };
+			expect(resultText(await search.execute("local-search", args))).toContain(
+				type === "files" ? "local.ts" : "localNeedle",
+			);
+		}
 	});
 
 	it("search fetches a URL through the read cache and greps the rendered text", async () => {

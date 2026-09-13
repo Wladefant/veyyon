@@ -24,13 +24,12 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AFTER_EDIT_CHECKS } from "@veyyon/coding-agent/config/settings-domains/editing";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
 import {
 	CODE_REVIEW_REMINDER_TYPE,
 	isCodeFile,
@@ -38,6 +37,7 @@ import {
 	VERIFICATION_EVIDENCE_REMINDER_TYPE,
 	VerificationEvidenceLedger,
 } from "@veyyon/coding-agent/session/verification-evidence-ledger";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { logger, TempDir } from "@veyyon/utils";
 
 type AfterEditCheck = (typeof AFTER_EDIT_CHECKS)[number];
@@ -326,7 +326,7 @@ async function settleAfterEdits(options: {
 	paths: readonly string[];
 	ranCommand?: boolean;
 	callsInContext?: boolean;
-	isSubagent?: boolean;
+	isSpawned?: boolean;
 	finalText?: string;
 	settlesTwice?: boolean;
 }): Promise<SettleOutcome> {
@@ -339,7 +339,7 @@ async function settleAfterEdits(options: {
 		const agent = new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } });
 		session = new AgentSession({
 			agent,
-			sessionManager: options.isSubagent
+			sessionManager: options.isSpawned
 				? SessionManager.inMemory()
 				: SessionManager.create(tempDir.path(), tempDir.path()),
 			settings: Settings.isolated({
@@ -348,7 +348,7 @@ async function settleAfterEdits(options: {
 				...options.settings,
 			}),
 			modelRegistry: new ModelRegistry(authStorage),
-			...(options.isSubagent ? { isSubagent: true, agentKind: "sub" as const } : {}),
+			...(options.isSpawned ? { isSpawned: true, agentKind: "sub" as const } : {}),
 		});
 		const continueSpy = vi.spyOn(agent, "continue").mockResolvedValue();
 
@@ -502,14 +502,14 @@ describe("edit.afterEdit selects exactly one after-edit pass", () => {
 		expect(warnings.filter(message => message.includes("edit.afterEdit"))).toHaveLength(1);
 	});
 
-	it("exempts a subagent from every value", async () => {
+	it("exempts an agent from every value", async () => {
 		for (const value of AFTER_EDIT_CHECKS) {
 			const outcome = await settleAfterEdits({
 				settings: { "edit.afterEdit": value },
 				paths: ["/repo/src/a.ts", "/repo/src/b.ts"],
-				isSubagent: true,
+				isSpawned: true,
 			});
-			expect(outcome.continuations, `subagent on "${value}"`).toBe(0);
+			expect(outcome.continuations, `agent on "${value}"`).toBe(0);
 			expect(outcome.reminderTypes).toEqual([]);
 		}
 	});

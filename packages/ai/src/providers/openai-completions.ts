@@ -68,6 +68,7 @@ import {
 import { stopReasonForTerminallessEof } from "../utils/terminalless-eof";
 import { isForcedToolChoice, mapToOpenAICompletionsToolChoice } from "../utils/tool-choice";
 import type { CacheControlEphemeral } from "./anthropic-wire";
+import { createInitialResponsesAssistantMessage } from "./initial-message";
 import type {
 	ChatCompletionAssistantMessageParam,
 	ChatCompletionChunk,
@@ -98,7 +99,6 @@ import {
 	applyWireModelIdTransform,
 	calculateOpenAIUsageAccounting,
 	clearOpenAIStrictToolsState,
-	createInitialResponsesAssistantMessage,
 	createOpenAIStrictToolsState,
 	disableStrictToolsForScope,
 	getOpenAIPromptCacheKey,
@@ -441,7 +441,7 @@ function hasToolHistory(messages: Message[]): boolean {
  * Without this filter, every keepalive resets `iterateWithIdleTimeout`'s
  * deadline, so a provider that streams nothing but pings keeps the watchdog
  * asleep indefinitely — observed against z.ai/GLM via OpenRouter where a
- * subagent stalled for hours with no error surfaced.
+ * agent stalled for hours with no error surfaced.
  *
  * A chunk counts as progress when it carries terminal usage, a finish reason,
  * or a model-produced delta (content / tool calls / reasoning / refusal).
@@ -891,7 +891,7 @@ const streamOpenAICompletionsOnce = (
 				stream.push({ type: "toolcall_end", contentIndex, toolCall: block, partial: output });
 			};
 			const finishPendingToolCallBlocks = (): void => {
-				for (const block of [...pendingToolCallBlocks]) {
+				for (const block of pendingToolCallBlocks.slice()) {
 					finishToolCallBlock(block);
 				}
 			};
@@ -1452,10 +1452,7 @@ const streamOpenAICompletionsOnce = (
 				rawRequestDump: materializeDumpBody(rawRequestDump, wireBodyJson),
 				capturedErrorResponse,
 			});
-			output.stopReason = result.stopReason;
-			output.errorStatus = result.status;
-			output.errorId = result.id;
-			output.errorMessage = result.message;
+			AIError.applyFinalizeResult(output, result);
 			// Some providers via OpenRouter include extra details here.
 			const rawMetadata = (error as { error?: { metadata?: { raw?: string } } })?.error?.metadata?.raw;
 			if (rawMetadata) output.errorMessage += `\n${rawMetadata}`;

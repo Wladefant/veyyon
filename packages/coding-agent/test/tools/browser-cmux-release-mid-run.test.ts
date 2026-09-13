@@ -7,7 +7,7 @@
  * on the tab so `releaseTab` could signal in-flight runs. Zero consumers
  * meant that `reject(...)` surfaced as an unhandled rejection and the
  * top-level `unhandledRejection` handler tore the whole process down
- * (killing sibling tabs and subagents).
+ * (killing sibling tabs and agents).
  *
  * The fix in `runInTabWithSnapshot` makes both backends await the same
  * `promise` (so `pending.reject` always has an attached handler AND the
@@ -29,11 +29,16 @@
  */
 
 import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
-import type { CmuxKind } from "@veyyon/coding-agent/tools/browser/cmux/rpc";
-import { CmuxSocketClient } from "@veyyon/coding-agent/tools/browser/cmux/socket-client";
-import { acquireBrowser } from "@veyyon/coding-agent/tools/browser/registry";
-import { acquireTab, getTabsMapForTest, releaseTab, runInTab } from "@veyyon/coding-agent/tools/browser/tab-supervisor";
 import type { ToolSession } from "@veyyon/coding-agent/tools/index";
+import type { CmuxKind } from "@veyyon/coding-agent/tools/web/browser/cmux/rpc";
+import { CmuxSocketClient } from "@veyyon/coding-agent/tools/web/browser/cmux/socket-client";
+import { acquireBrowser } from "@veyyon/coding-agent/tools/web/browser/registry";
+import {
+	acquireTab,
+	getTabsMapForTest,
+	releaseTab,
+	runInTab,
+} from "@veyyon/coding-agent/tools/web/browser/tab-supervisor";
 import { makeToolSession } from "../helpers/tool-session";
 
 function makeKind(socketSuffix: string): CmuxKind {

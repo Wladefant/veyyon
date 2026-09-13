@@ -1,6 +1,24 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { type ManifestHolder, manifestFromPackageJson } from "@veyyon/kernel/loader/manifest-key";
+import { type GitSource, parseGitUrl } from "@veyyon/kernel/loader/plugins/git-url";
+import {
+	getInstalledPluginsRegistryPath,
+	readInstalledPluginsRegistry,
+} from "@veyyon/kernel/loader/plugins/installed-registry";
+import { extractPackageName, type ParsedPluginSpec, parsePluginSpec } from "@veyyon/kernel/loader/plugins/parser";
+import { parsePluginId } from "@veyyon/kernel/loader/plugins/plugin-id";
+import { normalizePluginRuntimeConfig } from "@veyyon/kernel/loader/plugins/runtime-config";
+import type {
+	DoctorCheck,
+	DoctorOptions,
+	InstalledPlugin,
+	InstallOptions,
+	PluginRuntimeConfig,
+	ProjectPluginOverrides,
+} from "@veyyon/kernel/loader/plugins/types";
+import type { PluginManifest, PluginSettingSchema } from "@veyyon/plugin";
 import {
 	errorMessage,
 	getPluginsDir,
@@ -16,26 +34,10 @@ import {
 	readPipeText,
 } from "@veyyon/utils";
 import { adoptIntoPrimarySessionCpuBudget } from "../../session/cpu-limit";
-import { type ManifestHolder, manifestFromPackageJson } from "../manifest-key";
 import { withExitGuard } from "../utils";
 import { refreshBunGitCache } from "./bun-git-cache";
-import { type GitSource, parseGitUrl } from "./git-url";
-import { getInstalledPluginsRegistryPath, readInstalledPluginsRegistry } from "./installed-registry";
 import { installLegacyPiSpecifierShim, loadLegacyPiModule } from "./legacy-pi-compat";
 import { resolvePluginManifestEntries } from "./loader";
-import { extractPackageName, type ParsedPluginSpec, parsePluginSpec } from "./parser";
-import { parsePluginId } from "./plugin-id";
-import { normalizePluginRuntimeConfig } from "./runtime-config";
-import type {
-	DoctorCheck,
-	DoctorOptions,
-	InstalledPlugin,
-	InstallOptions,
-	PluginManifest,
-	PluginRuntimeConfig,
-	PluginSettingSchema,
-	ProjectPluginOverrides,
-} from "./types";
 
 // =============================================================================
 // Validation
@@ -184,6 +186,14 @@ interface PluginPackageSnapshot {
 interface RuntimePackageJson {
 	name?: unknown;
 }
+
+/** Exit code and drained output of one `bun` subcommand run in the plugins directory. */
+interface BunRun {
+	readonly exitCode: number;
+	readonly stdout: string;
+	readonly stderr: string;
+}
+
 // =============================================================================
 // Plugin Manager
 // =============================================================================
@@ -302,6 +312,30 @@ export class PluginManager {
 		}
 		delete pkgJson.dependencies[name];
 		await Bun.write(pkgJsonPath, JSON.stringify(pkgJson, null, 2));
+	}
+
+	/**
+	 * Run `bun <args>` in the plugins directory and drain both pipes concurrently
+	 * with `exited`. Awaiting `exited` before reading either pipe risks a >64 KiB
+	 * OS-pipe-buffer deadlock once bun prints enough progress, and even where Bun
+	 * buffers eagerly that leaks unbounded memory. The caller interprets the exit
+	 * code, because each subcommand reports its own failure and fix.
+	 */
+	static async #runBun(args: readonly string[]): Promise<BunRun> {
+		const proc = Bun.spawn(["bun", ...args], {
+			cwd: getPluginsDir(),
+			stdin: "ignore",
+			stdout: "pipe",
+			stderr: "pipe",
+			windowsHide: true,
+		});
+		adoptIntoPrimarySessionCpuBudget(proc.pid);
+		const [exitCode, stdout, stderr] = await Promise.all([
+			proc.exited,
+			readPipeText(proc.stdout),
+			readPipeText(proc.stderr),
+		]);
+		return { exitCode, stdout, stderr };
 	}
 
 	#collectInstalledNames(deps: Record<string, string>, config: PluginRuntimeConfig): Set<string> {
@@ -553,26 +587,10 @@ export class PluginManager {
 			}
 
 			// Step 1: write the spec into plugins/package.json + node_modules.
-			const installProc = Bun.spawn(["bun", "install", packageInstallSpec], {
-				cwd: getPluginsDir(),
-				stdin: "ignore",
-				stdout: "pipe",
-				stderr: "pipe",
-				windowsHide: true,
-			});
-			adoptIntoPrimarySessionCpuBudget(installProc.pid);
-			// Drain stdout+stderr concurrently with proc.exited. Awaiting exited
-			// before reading either pipe risks a >64 KiB OS-pipe-buffer deadlock
-			// once bun install prints enough progress; even where Bun currently
-			// buffers eagerly, doing this leaks unbounded memory.
-			const [installExit, , installStderr] = await Promise.all([
-				installProc.exited,
-				readPipeText(installProc.stdout),
-				readPipeText(installProc.stderr),
-			]);
-			if (installExit !== 0) {
+			const install = await PluginManager.#runBun(["install", packageInstallSpec]);
+			if (install.exitCode !== 0) {
 				throw new Error(
-					`\`bun install\` failed in ${getPluginsDir()}, so the plugin is not installed: ${installStderr}. ` +
+					`\`bun install\` failed in ${getPluginsDir()}, so the plugin is not installed: ${install.stderr}. ` +
 						"Fix: read that output; a network failure, a version that does not exist, and a missing `bun` " +
 						"on PATH all land here.",
 				);
@@ -616,24 +634,11 @@ export class PluginManager {
 			// cache from the remote. Rollback is handled by the outer catch.
 			if (gitSource && existingActualName) {
 				await refreshBunGitCache(gitSource, getPluginsDir());
-				const updateProc = Bun.spawn(["bun", "update", actualName], {
-					cwd: getPluginsDir(),
-					stdin: "ignore",
-					stdout: "pipe",
-					stderr: "pipe",
-					windowsHide: true,
-				});
-				adoptIntoPrimarySessionCpuBudget(updateProc.pid);
-				// Same drain-concurrent-with-exit pattern as the bun install above.
-				const [updateExit, , updateStderr] = await Promise.all([
-					updateProc.exited,
-					readPipeText(updateProc.stdout),
-					readPipeText(updateProc.stderr),
-				]);
-				if (updateExit !== 0) {
+				const update = await PluginManager.#runBun(["update", actualName]);
+				if (update.exitCode !== 0) {
 					throw new Error(
 						`\`bun update ${actualName}\` failed, so the plugin stays pinned to its previous commit: ` +
-							`${updateStderr}. Fix: read that output, then run \`veyyon plugin install\` again with the ` +
+							`${update.stderr}. Fix: read that output, then run \`veyyon plugin install\` again with the ` +
 							"same source to retry.",
 					);
 				}
@@ -743,21 +748,7 @@ export class PluginManager {
 	 * therefore proves the target resolves, not that it is a veyyon plugin.
 	 */
 	async #resolveDryRun(spec: ParsedPluginSpec, packageInstallSpec: string): Promise<InstalledPlugin> {
-		const proc = Bun.spawn(["bun", "install", packageInstallSpec, "--dry-run"], {
-			cwd: getPluginsDir(),
-			stdin: "ignore",
-			stdout: "pipe",
-			stderr: "pipe",
-			windowsHide: true,
-		});
-		adoptIntoPrimarySessionCpuBudget(proc.pid);
-		// Same drain-concurrent-with-exit pattern as the real install: awaiting
-		// `exited` before reading the pipes risks a >64 KiB pipe-buffer deadlock.
-		const [exitCode, stdout, stderr] = await Promise.all([
-			proc.exited,
-			readPipeText(proc.stdout),
-			readPipeText(proc.stderr),
-		]);
+		const { exitCode, stdout, stderr } = await PluginManager.#runBun(["install", packageInstallSpec, "--dry-run"]);
 		if (exitCode !== 0) {
 			throw new Error(
 				`${spec.packageName} cannot be installed, so the dry run failed: ${stderr}. ` +
@@ -812,28 +803,13 @@ export class PluginManager {
 			return;
 		}
 
-		const proc = Bun.spawn(["bun", "uninstall", name], {
-			cwd: getPluginsDir(),
-			stdin: "ignore",
-			stdout: "pipe",
-			stderr: "pipe",
-			windowsHide: true,
-		});
-		adoptIntoPrimarySessionCpuBudget(proc.pid);
-
-		// Drain both pipes concurrently with proc.exited to avoid a pipe-buffer
-		// deadlock if bun uninstall floods stdout/stderr.
-		const [exitCode, , uninstallStderr] = await Promise.all([
-			proc.exited,
-			readPipeText(proc.stdout),
-			readPipeText(proc.stderr),
-		]);
-		if (exitCode !== 0) {
+		const removal = await PluginManager.#runBun(["uninstall", name]);
+		if (removal.exitCode !== 0) {
 			// It spawns `bun uninstall` and reported `npm uninstall failed`, naming a
 			// tool this path never runs, and it dropped the stderr it had just read.
 			throw new Error(
 				`\`bun uninstall ${name}\` failed in ${getPluginsDir()}, so the plugin is still installed` +
-					`${uninstallStderr.trim() ? `: ${uninstallStderr.trim()}` : "."} ` +
+					`${removal.stderr.trim() ? `: ${removal.stderr.trim()}` : "."} ` +
 					"Fix: read that output, then run `veyyon plugin doctor` to see the current state.",
 			);
 		}
@@ -1281,7 +1257,16 @@ export class PluginManager {
 					}
 					continue;
 				}
-				throw err;
+				// The file is there and cannot be read or parsed: the exact defect the
+				// doctor exists to report, so it is a check on this plugin, not an abort.
+				checks.push({
+					name: `plugin:${name}`,
+					status: "error",
+					message:
+						`package.json cannot be read: ${errorMessage(err)}. ` +
+						"Fix: reinstall the plugin with `veyyon plugin install`, or repair the file.",
+				});
+				continue;
 			}
 			const manifest: PluginManifest | undefined = manifestFromPackageJson(pluginPkg);
 			const hasManifest = manifest !== undefined;
@@ -1364,29 +1349,15 @@ export class PluginManager {
 	async #fixMissingPlugin(): Promise<boolean> {
 		const cwd = getPluginsDir();
 		try {
-			const proc = Bun.spawn(["bun", "install"], {
-				cwd,
-				stdin: "ignore",
-				stdout: "pipe",
-				stderr: "pipe",
-				windowsHide: true,
-			});
-			adoptIntoPrimarySessionCpuBudget(proc.pid);
-			// Drain pipes concurrently with proc.exited; otherwise a chatty
-			// bun install can block on a full OS pipe buffer.
-			const [exit, , stderr] = await Promise.all([
-				proc.exited,
-				readPipeText(proc.stdout),
-				readPipeText(proc.stderr),
-			]);
-			if (exit !== 0) {
+			const { exitCode, stderr } = await PluginManager.#runBun(["install"]);
+			if (exitCode !== 0) {
 				logger.warn("Reinstalling plugins failed; the missing plugin was not restored", {
 					cwd,
-					exitCode: exit,
+					exitCode,
 					stderr: stderr.trim().slice(-2000),
 				});
 			}
-			return exit === 0;
+			return exitCode === 0;
 		} catch (err) {
 			// `bun` is not on PATH, or the plugins directory cannot be entered. Nothing ran, so there is no
 			// exit code or output to attach; the reason lives only in this error.

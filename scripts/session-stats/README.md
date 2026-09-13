@@ -2,7 +2,7 @@
 
 Ad-hoc analyses over the local agent session corpus
 (`~/.veyyon/profiles/default/agent/sessions/`). SQLite-backed; data is synced once into the same
-`~/.veyyon/stats.db` that `packages/stats` uses, then queried by short Python
+`~/.veyyon/stats.db` that `apps/stats` uses, then queried by short Python
 scripts.
 
 ## Layout
@@ -39,7 +39,7 @@ within ~5–10% of Claude's BPE in aggregate.
 
 ## Schema
 
-All tables are prefixed `ss_` to avoid collision with `packages/stats`.
+All tables are prefixed `ss_` to avoid collision with `apps/stats`.
 
 |Table|Granularity|
 |---|---|
@@ -89,7 +89,7 @@ bun run stats:audit -- --session parser            # classify sessions matching 
 bun run stats:audit -- --no-cache                  # force fresh LLM verdicts
 ```
 
-The scan phase reports the main-vs-subagent usage split, per-folder and
+The scan phase reports the main-vs-agent usage split, per-folder and
 per-session cost, per-tool traffic (estimated arg/result tokens plus a
 *context-residency* metric: result tokens × subsequent requests), repeated
 reads of the same file, the largest single tool results, compactions, and

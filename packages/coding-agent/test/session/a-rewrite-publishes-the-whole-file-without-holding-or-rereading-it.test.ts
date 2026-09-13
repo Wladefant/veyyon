@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
-import { FileSessionStorage } from "@veyyon/coding-agent/session/session-storage";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { FileSessionStorage } from "@veyyon/kernel/session/session-storage";
 import { TempDir } from "@veyyon/utils";
 
 /**

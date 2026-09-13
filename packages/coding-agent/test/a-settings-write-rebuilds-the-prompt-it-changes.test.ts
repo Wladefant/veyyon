@@ -32,15 +32,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
 import type { Model } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
-import { type SettingPath, Settings } from "@veyyon/coding-agent/config/settings";
-import { getEnumValues, getType, SETTINGS_SCHEMA } from "@veyyon/coding-agent/config/settings-schema";
-import { AgentSession, TOOL_SHAPE_SETTING_PATHS } from "@veyyon/coding-agent/session/agent-session";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { Settings } from "@veyyon/coding-agent/config/settings";
+import { getEnumValues, getType, SETTINGS_SCHEMA, type SettingPath } from "@veyyon/coding-agent/config/settings-schema";
+import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { TOOL_SHAPE_SETTING_PATHS } from "@veyyon/coding-agent/session/agent-session-types";
 import {
 	FROZEN_PROMPT_GATE_SETTINGS,
 	LIVE_PROMPT_GATE_SETTINGS,
 	PROMPT_GATE_SETTINGS,
 } from "@veyyon/coding-agent/system-prompt-builder/gate-registry";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { type } from "arktype";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 

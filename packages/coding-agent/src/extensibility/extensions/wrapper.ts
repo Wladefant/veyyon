@@ -3,20 +3,21 @@
  */
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ImageContent, Static, TextContent, TSchema } from "@veyyon/ai";
+import { applyToolProxy } from "@veyyon/kernel/registry/tool-proxy";
 import { errorMessage, isCancellation, toError } from "@veyyon/utils";
+import type { ToolViewRenderer } from "@veyyon/view";
 import type { Settings } from "../../config/settings";
-import type { Theme } from "../../modes/theme/theme";
 import { AgentRegistry } from "../../registry/agent-registry";
+import type { Theme } from "../../theme/theme";
 import {
 	type ApprovalMode,
 	formatApprovalCard,
 	requiresApproval,
 	resolveEffectiveApprovalMode,
-} from "../../tools/approval";
-import { cwdEscapingTargets, formatCwdBoundaryReason } from "../../tools/cwd-boundary";
-import { secretUseApprovalReason } from "../../tools/secret-use-boundary";
+} from "../../tools/core/approval";
+import { cwdEscapingTargets, formatCwdBoundaryReason } from "../../tools/core/cwd-boundary";
+import { secretUseApprovalReason } from "../../tools/core/secret-use-boundary";
 import { normalizeToolEventInput, resolveToolEventInput } from "../tool-event-input";
-import { applyToolProxy } from "../tool-proxy";
 import type { ExtensionRunner } from "./runner";
 import type {
 	ExtensionUIDialogOptions,
@@ -104,6 +105,13 @@ export class RegisteredToolAdapter implements AgentTool<TSchema, unknown, unknow
 		theme: unknown,
 		args?: Static<TSchema>,
 	) => unknown;
+	/**
+	 * Forwarded in the constructor like the pair above, rather than left to `applyToolProxy`: the
+	 * field declarations on this class put `renderCall`, `renderResult` and `view` on the instance
+	 * already, and the proxy skips every key the wrapper owns. Without the assignment a definition's
+	 * view would never reach a host, and the tool would fall back to the generic card.
+	 */
+	view?: ToolViewRenderer<Static<TSchema>, AgentToolResult<unknown>>;
 
 	constructor(
 		private registeredTool: RegisteredTool,
@@ -127,6 +135,9 @@ export class RegisteredToolAdapter implements AgentTool<TSchema, unknown, unknow
 					theme as Theme,
 					args,
 				);
+		}
+		if (registeredTool.definition.view) {
+			this.view = registeredTool.definition.view;
 		}
 	}
 
@@ -300,7 +311,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 				});
 			};
 
-			// The agent this call belongs to, when it is a spawned subagent. Both
+			// The agent this call belongs to, when it is a spawned agent. Both
 			// the byline on the card and the observable waiting state below are
 			// keyed off it, and a root session has neither.
 			const requester = this.runner.agentId;
@@ -313,7 +324,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 				// headless run reports WHY it was blocked, not only that a prompt was
 				// needed.
 				//
-				// A subagent reaches here only when the ROOT session has no UI either,
+				// An agent reaches here only when the ROOT session has no UI either,
 				// because the spawner hands the root's surface down (see
 				// `resolveRootUIContext` in `task/executor.ts`). So the refusal has to
 				// read as a decision about the run's configuration rather than as a

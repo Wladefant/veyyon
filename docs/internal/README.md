@@ -17,8 +17,9 @@ New here? Read [onboarding](onboarding.md) and [testing](testing.md) first.
 - **Verification stamps.** A doc whose claims have been checked against the code ends with
   `*Verified against \`<commit-sha>\` on YYYY-MM-DD.*` as its last line. `scripts/check-doc-freshness.ts`
   (a `docs.yml` gate) fails a stamped doc edited after its stamp date, re-verify and re-stamp in the
-  same change. Stamping is earned by verifying, never backfilled blind; unstamped docs are
-  reported loudly but do not fail.
+  same change. A change confined to markdown path tokens that resolve in the tree they are read
+  against is exempt, and reported by name. Stamping is earned by verifying, never backfilled blind;
+  unstamped docs are reported loudly but do not fail.
 
 ## Getting started and process
 
@@ -26,7 +27,7 @@ New here? Read [onboarding](onboarding.md) and [testing](testing.md) first.
 | --- | --- |
 | [onboarding.md](onboarding.md) | Clone, run from source (`bun setup` / `bun dev`), and the gate. |
 | [testing.md](testing.md) | How the suites are organized and what to run. |
-| [fuzzing.md](fuzzing.md) | The cargo-fuzz suite in `fuzz/`: running it, the targets, and what to do with a finding. |
+| [fuzzing.md](fuzzing.md) | The cargo-fuzz suite in `tests/fuzz/`: running it, the targets, and what to do with a finding. |
 | [whole-product-rust-conformance.md](whole-product-rust-conformance.md) | Planned Rust conformance, fuzzing, mutation, and compiled-product test migration. |
 | [releasing.md](releasing.md) | The only release page: cut, what runs, what it produces, verify, recover, roll back. |
 | [deployment.md](deployment.md) | Website (Cloudflare Pages) and install-script deployment. |
@@ -50,7 +51,7 @@ New here? Read [onboarding](onboarding.md) and [testing](testing.md) first.
 | Doc | Covers |
 | --- | --- |
 | [natives-architecture.md](natives-architecture.md) | How the `veyyon-natives` addon is structured and loaded. |
-| [native-crates.md](native-crates.md) | The Rust crate layout under `crates/`. |
+| [native-crates.md](native-crates.md) | The Rust crate layout under `natives/`. |
 | [natives-binding-contract.md](natives-binding-contract.md) | The JS/TS ↔ native binding contract. |
 | [natives-addon-loader-runtime.md](natives-addon-loader-runtime.md) | Runtime resolution and load of the native addon. |
 | [natives-build-release-debugging.md](natives-build-release-debugging.md) | Building, releasing, and debugging the natives (incl. the robomp cache). |
@@ -79,7 +80,7 @@ New here? Read [onboarding](onboarding.md) and [testing](testing.md) first.
 | [slash-command-internals.md](slash-command-internals.md) | How slash commands are registered and dispatched. |
 | [handoff-generation-pipeline.md](handoff-generation-pipeline.md) | The `/handoff` generation pipeline. |
 | [ttsr-injection-lifecycle.md](ttsr-injection-lifecycle.md) | Time-traveling stream-rule injection lifecycle. |
-| [task-agent-discovery.md](task-agent-discovery.md) | How `task` subagents are discovered and selected. |
+| [task-agent-discovery.md](task-agent-discovery.md) | How `task` agents are discovered and selected. |
 
 ## MCP
 
@@ -157,4 +158,4 @@ Per-model tool-call wire-format notes live in [toolconv/](toolconv/) (Anthropic,
 
 Step-by-step runbooks for when something breaks live in [runbooks/](runbooks/).
 
-*Verified against `afbe182a1` on 2026-08-25.*
+*Verified against `63ffc8131ffb8d35ccbbb1c5de69531a7016eff4` on 2026-09-06.*

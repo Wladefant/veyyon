@@ -24,10 +24,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import type { ContextUsage } from "@veyyon/coding-agent/extensibility/extensions/types";
-import { StatusLineComponent } from "@veyyon/coding-agent/modes/components/status-line";
-import type { StatusLineSegmentId } from "@veyyon/coding-agent/modes/components/status-line/types";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
+import type { StatusLineSegmentId } from "@veyyon/coding-agent/modes/terminal/components/status-line/types";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import { StatusLineComponent } from "../src/modes/terminal/components/status-line/component";
+import { StatusPresentationProducer } from "../src/presentation/status-producer";
 import { statusLineSessionParts } from "./helpers/status-line-session";
 
 beforeAll(async () => {
@@ -87,7 +88,7 @@ function render(
 	segments: StatusLineSegmentId[],
 	options?: { guestUsage?: ContextUsage },
 ): string {
-	const component = new StatusLineComponent(session);
+	const component = new StatusLineComponent(new StatusPresentationProducer(session));
 	component.setAutoCompactEnabled(true);
 	if (options?.guestUsage) {
 		component.setCollabStatus({

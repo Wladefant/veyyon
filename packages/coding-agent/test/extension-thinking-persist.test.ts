@@ -18,6 +18,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { Effort } from "@veyyon/catalog/effort";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ANY_MODEL_EFFORT_KEY } from "@veyyon/coding-agent/config/effort-resolver";
@@ -27,8 +28,7 @@ import { loadExtensions } from "@veyyon/coding-agent/extensibility/extensions/lo
 import { ExtensionRunner } from "@veyyon/coding-agent/extensibility/extensions/runner";
 import { initializeExtensions } from "@veyyon/coding-agent/modes/runtime-init";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 
 describe("an extension setting a durable thinking level", () => {

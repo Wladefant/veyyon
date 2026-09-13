@@ -25,14 +25,14 @@
 
 import { describe, expect, it } from "bun:test";
 import { getBundledModel } from "@veyyon/catalog/models";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import {
 	MemorySessionStorage,
 	type SessionStorage,
 	type SessionStorageWriter,
 	type WriteTextAtomicOptions,
-} from "@veyyon/coding-agent/session/session-storage";
-import type { SessionTitleUpdate } from "@veyyon/coding-agent/session/session-title-slot";
+} from "@veyyon/kernel/session/session-storage";
+import type { SessionTitleUpdate } from "@veyyon/kernel/session/session-title-slot";
 import type { PathState } from "@veyyon/utils/fs-optional";
 
 class CloseHoldingStorage implements SessionStorage {

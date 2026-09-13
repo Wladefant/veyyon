@@ -8,9 +8,9 @@ The point of these tools is bounds. An unbounded `cat`, `find`, or `grep -r` in 
 can dump enough text to fill the whole context window. These tools apply line, byte, and
 result caps instead, and they surface truncation rather than dropping output silently. This
 page documents each tool's parameters and the limits it enforces. The implementations live
-under `packages/coding-agent/src/tools/{read,search,write}.ts`.
+under `packages/coding-agent/src/tools/` (`fs/read.ts`, `search/search.ts`, `fs/write.ts`).
 
-## The `read` tool (`tools/read.ts`)
+## The `read` tool (`tools/fs/read.ts`)
 
 `read` takes a single `path` string (no separate `offset`/`limit` arguments) and bounds every read
 to a budget:
@@ -46,6 +46,12 @@ files (PNG, JPEG, GIF, WEBP) inline for direct visual analysis. When `inspect_im
 `read` returns image metadata instead and the model inspects the image by calling `inspect_image`
 with a question.
 
+URL reads and URL-scoped text or structural searches require `fetch.enabled: true`.
+The URL reader initializes on the first URL operation, which waits for initialization before
+fetching. Local reads, local searches, and transcript previews do not initialize the URL reader.
+With `fetch.enabled: false`, URL operations fail with `URL reads are disabled by settings.`;
+local operations remain available.
+
 ## `@path` mentions (`utils/file-mentions.ts`)
 
 A `@path` token in a prompt auto-reads the file or lists the directory it names, and the result is
@@ -73,7 +79,7 @@ tokens for `packages/coding-agent/src` against 962 for its top level. A director
 entries states how many it held back and names `depth: 1` for the flat listing of all of them.
 `depth` and `limit` are honored in full when named.
 
-## The `search` tool (`tools/search.ts`)
+## The `search` tool (`tools/search/search.ts`)
 
 Workspace discovery and searching are unified in the `search` tool, covering file path lookup,
 text/regex search, and structural code search through one canonical model-facing interface. It
@@ -119,7 +125,7 @@ The tool is part of the default inventory. Text matching uses two settings:
 - `search.contextBefore`: number, default `1` (lines of context before each text match).
 - `search.contextAfter`: number, default `1` (lines of context after each text match).
 
-## The `write` tool (`tools/write.ts`)
+## The `write` tool (`tools/fs/write.ts`)
 
 `read` and `search` are the read side; `write {path, content}` creates or replaces a whole file. It
 shares infrastructure with the edit engine rather than touching the filesystem directly:
@@ -138,12 +144,12 @@ shares infrastructure with the edit engine rather than touching the filesystem d
 
 Bash/exec tool output is sanitized before it reaches the model, via `sanitizeText()`
 (`packages/utils/src/sanitize-text.ts`), used from `session/streaming-output.ts` and the interactive PTY
-capture path (`tools/bash-interactive.ts`):
+capture path (`tools/shell/bash-interactive.ts`):
 
 - **ANSI stripping is Bun-native, not a hand-rolled parser.** `sanitizeText()` calls Bun's built-in
   `Bun.stripANSI()` when an ESC byte is present, then strips C0/C1 control bytes and DEL with a single
   regex pass. The function is a TypeScript replacement for a former Rust native
-  (`crates/veyyon-natives/src/text.rs::sanitize_text`, noted in the current source comment), there is no
+  (`natives/bridge/addon/src/text.rs::sanitize_text`, noted in the current source comment), there is no
   live Rust ECMA-48 grammar walker in this path today.
 - **Keep `\n` and `\t`, drop the rest.** The control regex covers C0 (excluding tab/newline), `\r`,
   DEL, and the C1 range; `\n` and `\t` are the two explicit exclusions.

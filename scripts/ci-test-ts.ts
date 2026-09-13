@@ -200,8 +200,15 @@ export const codingAgentBucketPlans: Record<CodingAgentBucket, CodingAgentBucket
 // their short TS suites can run together. CI still downloads the Linux x64 native
 // addon before this bucket: shared utility barrels may load native-backed modules.
 export const fastWorkspacePackages = [
-	"packages/hashline",
-	"packages/wire",
+	"plugins/hashline",
+	"contracts/wire",
+	"contracts/settings",
+	"contracts/model",
+	"kernel",
+	// The graphical host draws the view contract into strings and touches neither a
+	// terminal nor a socket, so its suites belong in the fast bucket beside the
+	// contract they check.
+	"hosts/gui",
 	"packages/utils",
 	"packages/catalog",
 	"packages/ai",
@@ -213,10 +220,10 @@ export const fastWorkspacePackages = [
 	// files, a comment above claiming this covers what the fan-out covered). That is
 	// why `workspaceTestPackages` below is now checked against the tree by
 	// `scripts/workspace-test-coverage.test.ts` instead of maintained by hand alone.
-	"packages/argot",
-	"packages/stats",
+	"plugins/argot",
+	"apps/stats",
 	"packages/tool-render",
-	"packages/swarm-extension",
+	"plugins/mode-swarm",
 	// mnemopi ran in NO CI job until this entry existed. It sat in
 	// `localOnlyWorkspacePackages` below, excluded as a whole package because "its
 	// embedding suites depend on a ~270MB fastembed model absent from CI runners".
@@ -230,34 +237,37 @@ export const fastWorkspacePackages = [
 	// nowhere while the buckets reported green.
 	//
 	// The hazard was real, so it is refused at the download instead of by omitting
-	// a package: `packages/mnemopi/test/helpers/fastembed-model-tripwire.ts` is
+	// a package: `plugins/mnemopi/test/helpers/fastembed-model-tripwire.ts` is
 	// preloaded into every mnemopi test process and throws from
 	// `FlagEmbedding.init`, the call that fetches the weights. A suite that starts
 	// needing the real model fails by name, here and locally, rather than pulling
 	// 270MB into a runner and turning this bucket slow and flaky.
-	"packages/mnemopi",
+	"plugins/mnemopi",
 	// Simulations drive a real AgentSession but need no native artifact, so they
 	// stay in the fast workspace job. Their 300ms watchdogs run sequentially
 	// inside the package through `workspaceTestParallelism` below.
-	"packages/simulations",
+	"tests/simulations",
+	// The scraper suites drive their handlers against a mocked `fetch` and never open a
+	// socket, so they need neither the native addon nor the network.
+	"plugins/web",
 ];
 
 // These suites cover the native package, TUI/browser-ish behavior, local servers,
 // or coding-agent-adjacent benchmark paths. Keep them low-concurrency and in jobs
 // that have downloaded the Linux x64 native addon artifacts.
 export const nativeAndIntegrationPackages = [
-	"packages/natives",
-	"packages/tui",
+	"natives/bridge/bindings",
+	"hosts/terminal/engine",
 	// Same omission as above. These two belong in this bucket rather than the fast
 	// one for the reason the comment gives: evals starts local servers and drives
 	// agent sessions against benchmark fixtures, and collab-web is browser-ish.
-	"packages/evals",
-	"packages/collab-web",
+	"tests/evals",
+	"clients/web",
 ];
 
 // Packages the CI buckets deliberately skip but a local full run should still
 // cover. One entry, and its reason is structural rather than circumstantial:
-// veybot-web lives under python/veybot, outside every CI TS bucket.
+// veybot-web lives under clients/python/veybot, outside every CI TS bucket.
 //
 // mnemopi was the other entry, and it is the warning this list carries. A whole
 // package was skipped for something true of a handful of its suites, the reason
@@ -265,7 +275,7 @@ export const nativeAndIntegrationPackages = [
 // here costs a package its entire CI run, so it has to name a property of the
 // package. When only some suites cannot run in CI, exclude those suites by name
 // with the reason attached to them and leave the rest of the package running.
-export const localOnlyWorkspacePackages = ["python/veybot/web"];
+export const localOnlyWorkspacePackages = ["clients/python/veybot/web"];
 
 /**
  * Every package whose test suite this runner executes, across all three buckets.
@@ -305,9 +315,13 @@ export const repoScriptTests = [
 	"scripts/a-generated-doc-says-so-on-its-first-line.test.ts",
 	"scripts/a-local-action-is-called-with-everything-it-requires.test.ts",
 	"scripts/a-module-is-imported-at-the-top-of-its-file.test.ts",
+	"scripts/a-package-exports-its-public-surface.test.ts",
+	"scripts/an-export-floor-only-grows.test.ts",
+	"scripts/a-package-is-added-only-when-an-existing-one-cannot-serve.test.ts",
 	"scripts/a-shipped-module-arrives-with-a-test-that-names-it.test.ts",
 	"scripts/a-suite-is-named-for-the-behavior-it-defends.test.ts",
 	"scripts/a-test-proves-behavior-not-that-a-spy-was-called.test.ts",
+	"scripts/a-test-preload-points-at-a-file-that-exists.test.ts",
 	"scripts/a-production-site-deploy-has-one-owner.test.ts",
 	"scripts/a-third-party-action-is-pinned-in-one-place.test.ts",
 	"scripts/a-type-is-named-not-derived-from-a-function.test.ts",
@@ -346,6 +360,7 @@ export const repoScriptTests = [
 	"scripts/a-test-reads-a-module-through-its-graph-not-its-bytes.test.ts",
 	"scripts/handbook-built-pages-contain-source-contracts.test.ts",
 	"scripts/prompt-formatter-checks-current-tree.test.ts",
+	"scripts/workspace-layout.test.ts",
 	"scripts/workspace-typecheck-coverage.test.ts",
 	"scripts/workspace-test-coverage.test.ts",
 	"scripts/tool-renderer-coverage.test.ts",
@@ -394,10 +409,11 @@ export const repoScriptTests = [
 	"scripts/release-sentinel.test.ts",
 	"scripts/release-changelog.test.ts",
 	"scripts/release-bump-subject.test.ts",
-	"website/tools/gen-changelog.test.ts",
+	"apps/site/tools/gen-changelog.test.ts",
 	"scripts/tracked-but-deleted-paths.test.ts",
-	"website/tools/undocumented-release-ratchet.test.ts",
-	"website/tools/nav.test.ts",
+	"scripts/every-referenced-source-file-is-tracked.test.ts",
+	"apps/site/tools/undocumented-release-ratchet.test.ts",
+	"apps/site/tools/nav.test.ts",
 	"scripts/demos/lib/png.test.ts",
 	"scripts/demos/lib/ansi-grid.test.ts",
 	"scripts/demos/lib/ansi-raster.test.ts",
@@ -407,6 +423,15 @@ export const repoScriptTests = [
 	"scripts/a-capture-runs-on-the-bun-the-product-requires.test.ts",
 	"scripts/first-party-docs-are-indexed.test.ts",
 	"scripts/script-tests-coverage.test.ts",
+	// The startup benchmark suites (`startup-is-measured-after-the-screen-settles`,
+	// `a-startup-benchmark-keeps-its-executable-and-config-isolated`,
+	// `a-startup-benchmark-terminates-child-trees-and-honors-cwd`) import `@veyyon/natives` for a
+	// value, so they load the addon at import time. The `test_scripts` job in checks.yml runs
+	// this list without one and reported all twelve of their cases as a failed addon load;
+	// ci.yml's `test_ts_native` job, which downloads the addon, runs them by path instead, and
+	// `script-tests-coverage.test.ts` reads that step as their runner. No quoted string in
+	// this comment: the deleted-suite lock reads the array's string literals from source.
+	"scripts/a-package-script-runs-in-an-existing-directory.test.ts",
 	"scripts/stray-output-path.test.ts",
 	// The leak tracer's own contract tests. Also run by the `test-leaks` job in
 	// checks.yml and by the nightly leak sweep, but listed here too because those jobs
@@ -462,6 +487,13 @@ export const repoScriptTests = [
 	// it enforces stops being enforced the moment nobody reruns it by hand.
 	"scripts/an-off-screen-raster-never-enters-assets.test.ts",
 	"scripts/one-owner-answers-a-command-lookup.test.ts",
+	// A plugin never imports another plugin: the derived gate behind the `plugins/*`
+	// root. Unwired it enforces nothing, because the coupling it forbids is added by
+	// an ordinary import that type-checks.
+	"scripts/a-plugin-never-imports-another-plugin.test.ts",
+	// The kernel names no tool and no host. Reads the tree's import graph across members, so no
+	// package bucket covers it.
+	"scripts/the-kernel-names-no-tool-and-no-host.test.ts",
 	// The ChatGPT Codex compaction route has been broken and re-fixed 50+ times, and
 	// each break falls back to paid local compaction that busts the prompt cache. The
 	// suite hashes the file, so editing it at all fails CI until an operator records
@@ -518,11 +550,16 @@ const codingAgentNativePathPatterns = [
 const codingAgentSingletonPathPatterns = [
 	/^test\/(settings|config|fast-mode-scope|autocomplete-max-visible)[^/]*\.test\.ts$/,
 	/^test\/(?:.*\/)?[^/]*(singleton|global-state|fake-timer)[^/]*\.test\.ts$/,
+	// The converted-card differential suites install the settings singleton and the process-wide ANSI
+	// policy through `test/differential/harness.ts`, so the content scan below -- which reads each test
+	// file's own text and nothing it imports -- sees none of the markers that would place them here.
+	// Classified by path instead: the state is real whether or not it is spelled in the file.
+	/^test\/differential\//,
 ];
 
 const codingAgentUiPathPatterns = [
 	/^test\/modes\//,
-	/^test\/(interactive-mode|main-interactive|input-controller|streaming|status-line|keybindings|editor|hook|theme|setup-wizard|job-renderer|tool-args-reveal|tool-execution)[^/]*\.test\.ts$/,
+	/^test\/(interactive-mode|main-interactive|input-controller|streaming|status-line|keybindings|editor|hook|theme|setup-wizard|tool-args-reveal|tool-execution)[^/]*\.test\.ts$/,
 	/^src\/modes\/components\//,
 ];
 
@@ -609,12 +646,12 @@ function shellQuote(value: string): string {
 // the 10k deeply-nested-tree idempotence property that hit ~20s, carries its own
 // explicit 120s per-test override in the suite; this floor covers the rest.)
 const workspacePackageExtraArgs: Record<string, string[]> = {
-	"packages/hashline": ["--timeout", "20000"],
+	"plugins/hashline": ["--timeout", "20000"],
 	"packages/ai": ["--timeout", "20000"],
 };
 
 const workspacePackageParallelism: Readonly<Record<string, number>> = {
-	"packages/simulations": 1,
+	"tests/simulations": 1,
 };
 
 export function workspaceTestParallelism(pkg: string, requested: number): number {

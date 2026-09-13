@@ -20,7 +20,6 @@
  * it is the prompt's business.
  */
 import { describe, expect, it } from "bun:test";
-import { renderRunDetail } from "@veyyon/coding-agent/autoresearch/screen";
 import {
 	computeConfidence,
 	createExperimentState,
@@ -35,6 +34,7 @@ import {
 	type ExperimentStatus,
 	type MetricDirection,
 } from "@veyyon/coding-agent/autoresearch/types";
+import { renderRunDetail } from "@veyyon/coding-agent/modes/terminal/components/dialogs/autoresearch-screen";
 import { stripAnsi } from "@veyyon/utils";
 import { useTruecolorTheme } from "./helpers/theme-assertions";
 
