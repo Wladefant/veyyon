@@ -795,8 +795,8 @@ export class SettingsStore {
 		reloadable: readonly SettingPath[],
 		restartReasons: Readonly<Record<string, string>> = {},
 	): Promise<{
-		changed: { path: SettingPath; before: unknown; after: unknown }[];
-		restartRequired: SettingPath[];
+		changed: { path: string; before: unknown; after: unknown }[];
+		restartRequired: string[];
 		outcomes: { path: string; status: "applied" | "unchanged" | "restart-required"; reason?: string }[];
 	}> {
 		if (!this.#configPath) throw new Error("Cannot reload an in-memory settings store.");
@@ -840,13 +840,13 @@ export class SettingsStore {
 		) {
 			throw new Error("Settings changed during reload; retry /reload-config.");
 		}
-		const changed: { path: SettingPath; before: unknown; after: unknown }[] = [];
-		const restartRequired: SettingPath[] = [];
+		const changed: { path: string; before: unknown; after: unknown }[] = [];
+		const restartRequired: string[] = [];
 		const outcomes: { path: string; status: "applied" | "unchanged" | "restart-required"; reason?: string }[] = [];
-		const applicable: string[][] = [];
+		const applicable: (readonly string[])[] = [];
 		const events = new Map<SettingPath, unknown>();
 		const reasons = Object.entries(restartReasons);
-		const classify = (segments: string[], before: unknown, after: unknown, root?: SettingPath) => {
+		const classify = (segments: readonly string[], before: unknown, after: unknown, root?: SettingPath) => {
 			const key = segments.join(".");
 			const reason = reasons.find(([prefix]) => key === prefix || key.startsWith(`${prefix}.`))?.[1];
 			const allowed = root !== undefined && reloadable.includes(root) && !reason;
@@ -902,7 +902,7 @@ export class SettingsStore {
 		}
 		const classifyUnknown = (segments: string[]) => {
 			const key = segments.join(".");
-			if (schemaPaths.includes(key)) return;
+			if (schemaPaths.some(path => path === key)) return;
 			const before = getByPath(this.#merged, segments);
 			const after = getByPath(candidate.#merged, segments);
 			if (schemaPaths.some(path => path.startsWith(`${key}.`))) {
