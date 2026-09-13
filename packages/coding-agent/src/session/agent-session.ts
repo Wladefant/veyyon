@@ -1256,6 +1256,14 @@ export class AgentSession {
 	 * instead of paying the single request's timeout again.
 	 */
 	#stagedSummaryModels = new Set<string>();
+	/**
+	 * Tokens the last compaction's summarization payload exceeded the widest
+	 * candidate window by, or `undefined` when no candidate was skipped for size.
+	 * The dead-end rescue reduces to this, because a payload no candidate can
+	 * accept means no summary is ever attempted and cutting to the model's own
+	 * threshold bar frees too little to change that.
+	 */
+	#compactionPayloadGapTokens: number | undefined;
 	#hindsightSessionState: HindsightSessionState | undefined = undefined;
 	readonly rawSseDebugBuffer: RawSseDebugBuffer;
 
@@ -14026,10 +14034,28 @@ export class AgentSession {
 	 */
 	async #rescueCompactionDeadEnd(
 		signal: AbortSignal,
-		options: { skipElide: boolean; bar: CompactionBar },
+		options: { skipElide: boolean; bar: CompactionBar; minTokensToFree?: number },
 	): Promise<boolean> {
 		if (signal.aborted) return false;
-		const hasProgress = (): boolean => this.#compactionMeets(options.bar);
+		// Two different budgets can be unmet, and the caller states which.
+		// `bar` is the live context against THIS model's threshold. `minTokensToFree`
+		// is the summarization payload against the widest window any compaction
+		// candidate declares: when the payload does not fit, no candidate ever
+		// runs, so cutting only to the bar frees too little and the run parks with
+		// a summary that was never attempted. Both must be met before the rescue
+		// reports progress.
+		const target = options.minTokensToFree ?? 0;
+		// The reducers rewrite the session branch, so freed bytes are read from
+		// the context the session reports — the same number the bar is judged on —
+		// not from the agent's in-memory message array, which a branch rewrite
+		// does not shrink.
+		const liveTokens = (): number => this.getContextUsage()?.tokens ?? 0;
+		const startTokens = target > 0 ? liveTokens() : 0;
+		// Measured from the history itself rather than summed per tier: dropping
+		// images reports a count, not tokens, and a tier that rewrites in place
+		// frees bytes no tier return value states.
+		const hasProgress = (): boolean =>
+			this.#compactionMeets(options.bar) && (target === 0 || startTokens - liveTokens() >= target);
 		let elided = 0;
 		let elidedTokens = 0;
 		let elideSink = "placeholders";
@@ -14072,7 +14098,7 @@ export class AgentSession {
 			return true;
 		}
 		if (signal.aborted) return false;
-		const truncated = await this.#truncateOversizedTail(options.bar);
+		const truncated = await this.#truncateOversizedTail(options.bar, target);
 		if (truncated.texts > 0 && hasProgress()) {
 			const imagePart = imagesDropped > 0 ? `dropped ${formatCount("attached image", imagesDropped)} and ` : "";
 			this.emitNotice(
@@ -14100,8 +14126,14 @@ export class AgentSession {
 	 * replaces each middle says so. Returns zero counts when no single text is
 	 * large enough to cut, which is the honest dead end.
 	 */
-	async #truncateOversizedTail(bar: CompactionBar): Promise<{ texts: number; tokensFreed: number; sink: string }> {
-		const excessTokens = this.#compactionExcessTokens(bar);
+	async #truncateOversizedTail(
+		bar: CompactionBar,
+		minTokensToFree = 0,
+	): Promise<{ texts: number; tokensFreed: number; sink: string }> {
+		// The larger of the two budgets: the live context over `bar`, and what the
+		// summarization payload is over the widest candidate window. Cutting only
+		// to the bar leaves a payload no candidate can summarize.
+		const excessTokens = Math.max(this.#compactionExcessTokens(bar), minTokensToFree);
 		if (excessTokens <= 0) return { texts: 0, tokensFreed: 0, sink: "placeholders" };
 		const branchEntries = this.sessionManager.getBranch();
 		const config = this.#withPlanProtection({
@@ -14215,6 +14247,10 @@ export class AgentSession {
 			return COMPACTION_CHECK_NONE;
 		}
 		const generation = this.#promptGeneration;
+		// Per run: a gap recorded by an earlier compaction says nothing about this
+		// history, and carrying it forward would over-cut a session that already
+		// fits.
+		this.#compactionPayloadGapTokens = undefined;
 		const suppressContinuation = options.suppressContinuation === true;
 		const shouldAutoContinue =
 			!suppressContinuation && options.autoContinue !== false && compactionSettings.autoContinue !== false;
@@ -14469,6 +14505,14 @@ export class AgentSession {
 						);
 						lastError ??= new Error(
 							`Compaction failed: ${candidate.provider}/${candidate.id} holds ${candidateWindow} tokens and the summary needed ${summarizePayloadTokens}.`,
+						);
+						// What the rescue has to free for ANY candidate to summarize at
+						// all. The smallest gap across skipped candidates is the widest
+						// window on offer, so cutting to it reopens the cheapest
+						// candidate rather than the largest one.
+						this.#compactionPayloadGapTokens = Math.min(
+							this.#compactionPayloadGapTokens ?? Number.POSITIVE_INFINITY,
+							summarizePayloadTokens - candidateWindow,
 						);
 						continue;
 					}
@@ -14828,9 +14872,18 @@ export class AgentSession {
 		// The retry side only needs the rebuilt prompt to fit the window; the
 		// threshold side needs the recovery band, exactly as the success tail
 		// measures them.
+		//
+		// A payload larger than every candidate window is a third condition
+		// neither bar states: no candidate ran, so the live context can already
+		// meet its bar while no summary is possible. Meeting the bar is therefore
+		// not enough to call this rescued — the rescue must also free the gap, or
+		// the scheduled retry rebuilds the same oversized payload and parks again.
 		const bar: CompactionBar = willRetry ? "fit" : "recovery-band";
+		const gap = this.#compactionPayloadGapTokens;
+		const minTokensToFree = gap !== undefined && Number.isFinite(gap) && gap > 0 ? gap : undefined;
 		const rescued =
-			this.#compactionMeets(bar) || (await this.#rescueCompactionDeadEnd(signal, { skipElide: false, bar }));
+			(minTokensToFree === undefined && this.#compactionMeets(bar)) ||
+			(await this.#rescueCompactionDeadEnd(signal, { skipElide: false, bar, minTokensToFree }));
 		if (rescued) {
 			let continuationScheduled = false;
 			if (willRetry) {
