@@ -57,9 +57,10 @@ import { Effort } from "@veyyon/catalog/effort";
 import { CHATGPT_WEB_LOCAL_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 import { chatGptWebModelManagerOptions } from "@veyyon/catalog/provider-models/chatgpt-web";
 import type { FetchImpl } from "@veyyon/catalog/types";
+import { CODEX_CLIENT_VERSION } from "@veyyon/catalog/wire/codex";
 
 const BASE = CHATGPT_WEB_LOCAL_ENDPOINT;
-const MODELS_URL = `${BASE}/models`;
+const MODELS_URL = `${BASE}/models?client_version=${CODEX_CLIENT_VERSION}`;
 const HEALTH_URL = "http://127.0.0.1:17841/healthz";
 const TOKEN = "codex-oauth-token";
 
@@ -122,6 +123,9 @@ function daemon(options: DaemonOptions = {}): Daemon {
 				mode: health,
 				accepting_turns: true,
 			});
+		}
+		if (!new URL(url).searchParams.get("client_version")) {
+			return Response.json({ error: { message: "query.client_version is required" } }, { status: 400 });
 		}
 		if (options.refuse) throw new Error("connect ECONNREFUSED 127.0.0.1:17841");
 		if (options.rawBody !== undefined) {
@@ -561,7 +565,7 @@ describe("the loopback guard is not undone by a redirect", () => {
 			expect(pair.followedPaths).toEqual([]);
 			expect(result).toBeNull();
 			expect(failures.map(failure => failure.stage)).toEqual(["request"]);
-			expect(failures[0]?.url).toBe(`${pair.base}/models`);
+			expect(failures[0]?.url).toBe(`${pair.base}/models?client_version=${CODEX_CLIENT_VERSION}`);
 		} finally {
 			await pair.close();
 		}

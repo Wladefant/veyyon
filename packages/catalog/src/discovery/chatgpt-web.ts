@@ -66,6 +66,7 @@ import { Effort } from "../effort";
 import { CHATGPT_WEB_LOCAL_ENDPOINT } from "../provider-endpoints";
 import type { FetchImpl, ModelSpec, ThinkingConfig } from "../types";
 import { discoveryFetch } from "../utils";
+import { CODEX_CLIENT_VERSION } from "../wire/codex";
 import type { DiscoveryFailure, DiscoveryHooks } from "./failure";
 
 /** Slug prefix the daemon gives every browser-backed row (`chatgpt-web-models.ts`). */
@@ -273,7 +274,7 @@ export async function fetchChatGptWebModels(
 		// failure: it only means Full mode was not proven.
 		const mode = await probeDaemonMode(fetchFn, baseUrl, deadline.signal);
 
-		const modelsUrl = `${baseUrl}${MODELS_PATH}`;
+		const modelsUrl = `${baseUrl}${MODELS_PATH}?client_version=${CODEX_CLIENT_VERSION}`;
 		let response: Response;
 		try {
 			response = await fetchFn(modelsUrl, {
