@@ -49,6 +49,11 @@
  * turn at all, which is exactly what the catalog's `supportsTools` rows are
  * published from. So the fixture models a Full-mode daemon and demands both.
  *
+ * IMPLEMENTATIONS EXERCISED THROUGH THE WIRE. The replay and cancellation cases
+ * exercise `providers/openai-codex/chatgpt-web-turn-stamp.ts`; the trusted cwd and
+ * tool-return cases exercise `providers/openai-codex/chatgpt-web-trusted-context.ts`.
+ * Assertions below inspect the HTTP request, not either helper's return value.
+ *
  * WHAT IT DOES NOT CATCH. The server here speaks the Responses SSE protocol; it
  * is not the bridge, and nothing here proves a browser turn produces an answer.
  * That needs an authenticated ChatGPT profile on the machine, which is a
@@ -63,10 +68,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as http from "node:http";
 import * as path from "node:path";
-import {
-	convertCodexResponsesMessages,
-	streamOpenAICodexResponses,
-} from "@veyyon/ai/providers/openai-codex-responses";
+import { convertCodexResponsesMessages, streamOpenAICodexResponses } from "@veyyon/ai/providers/openai-codex-responses";
 import type { AssistantMessage, Context, FetchImpl, Model, ProviderSessionState } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
@@ -166,7 +168,8 @@ interface TestServer {
 function bridgeTurnRefusal(body: Record<string, unknown>): string | undefined {
 	const clientMetadata = asRecord(body.client_metadata);
 	const encoded = clientMetadata?.["x-codex-turn-metadata"];
-	if (typeof encoded !== "string") return "ChatGPT web requires native Codex turn_id metadata for browser-session replay";
+	if (typeof encoded !== "string")
+		return "ChatGPT web requires native Codex turn_id metadata for browser-session replay";
 	let blob: Record<string, unknown> | null = null;
 	try {
 		blob = asRecord(JSON.parse(encoded));
@@ -370,7 +373,13 @@ const COMPLETED_SSE = `${[
 	`data: ${JSON.stringify({ type: "response.output_text.delta", delta: "ok" })}`,
 	`data: ${JSON.stringify({
 		type: "response.output_item.done",
-		item: { type: "message", id: "msg_1", role: "assistant", status: "completed", content: [{ type: "output_text", text: "ok" }] },
+		item: {
+			type: "message",
+			id: "msg_1",
+			role: "assistant",
+			status: "completed",
+			content: [{ type: "output_text", text: "ok" }],
+		},
 	})}`,
 	`data: ${JSON.stringify({
 		type: "response.completed",
@@ -562,7 +571,10 @@ describe("a Codex base URL that already names the responses route is used verbat
 		const server = await startServer();
 		try {
 			const model = bridgeModel(`${server.origin}/v1/responses`);
-			const result = await streamOpenAICodexResponses(model, askContext(), { apiKey: TOKEN, cwd: BRIDGE_CWD }).result();
+			const result = await streamOpenAICodexResponses(model, askContext(), {
+				apiKey: TOKEN,
+				cwd: BRIDGE_CWD,
+			}).result();
 
 			expect(result.stopReason).toBe("stop");
 			expect(server.requests).toHaveLength(1);
@@ -649,7 +661,11 @@ describe("every turn carries the identity a Codex-compatible server keys its ses
 		const server = await startServer();
 		try {
 			const model = bridgeModel(`${server.origin}/v1/responses`);
-			await streamOpenAICodexResponses(model, askContext(), { apiKey: TOKEN, cwd: BRIDGE_CWD, sessionId: "session-a" }).result();
+			await streamOpenAICodexResponses(model, askContext(), {
+				apiKey: TOKEN,
+				cwd: BRIDGE_CWD,
+				sessionId: "session-a",
+			}).result();
 
 			const metadata = turnMetadata(server.requests[0]?.body ?? {});
 			// The bridge refuses a turn without turn_id and derives the trace it
@@ -766,7 +782,10 @@ describe("a bridge-routed turn carries the per-item turn provenance the daemon v
 		const server = await startServer();
 		try {
 			const model = bridgeModel(`${server.origin}/v1/responses`);
-			const result = await streamOpenAICodexResponses(model, askContext(), { apiKey: TOKEN, cwd: BRIDGE_CWD }).result();
+			const result = await streamOpenAICodexResponses(model, askContext(), {
+				apiKey: TOKEN,
+				cwd: BRIDGE_CWD,
+			}).result();
 
 			// Accepted: the fixture answers SSE only when the contract holds.
 			expect(result.stopReason).toBe("stop");
@@ -832,7 +851,10 @@ describe("a bridge-routed turn carries the per-item turn provenance the daemon v
 		const server = await startServer();
 		try {
 			const model = bridgeModel(`${server.origin}/v1/responses`);
-			const result = await streamOpenAICodexResponses(model, toolReturnContext(), { apiKey: TOKEN, cwd: BRIDGE_CWD }).result();
+			const result = await streamOpenAICodexResponses(model, toolReturnContext(), {
+				apiKey: TOKEN,
+				cwd: BRIDGE_CWD,
+			}).result();
 
 			expect(result.stopReason).toBe("stop");
 			const sent = server.requests[0]?.body ?? {};

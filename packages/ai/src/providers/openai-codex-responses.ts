@@ -1,9 +1,6 @@
 import * as os from "node:os";
 import { scheduler } from "node:timers/promises";
-import {
-	CHATGPT_WEB_PROVIDER_ID,
-	isChatGptWebLoopbackUrl,
-} from "@veyyon/catalog/discovery/chatgpt-web";
+import { CHATGPT_WEB_PROVIDER_ID, isChatGptWebLoopbackUrl } from "@veyyon/catalog/discovery/chatgpt-web";
 import { calculateCost, discardAttemptUsage, emptyUsage, scaleUsageCost } from "@veyyon/catalog/models";
 import { toFields, toStringValue } from "@veyyon/catalog/utils";
 import {
@@ -98,8 +95,8 @@ import {
 import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses, toolWireSchema } from "../utils/schema";
 import { notifyRawSseEvent } from "../utils/sse-debug";
 import { compactGrammarDefinition } from "./grammar";
-import { applyChatGptWebTurnContract } from "./openai-codex/chatgpt-web-trusted-context";
 import { createInitialResponsesAssistantMessage } from "./initial-message";
+import { applyChatGptWebTurnContract } from "./openai-codex/chatgpt-web-trusted-context";
 import {
 	type CodexReasoningContext,
 	type CodexRequestOptions,

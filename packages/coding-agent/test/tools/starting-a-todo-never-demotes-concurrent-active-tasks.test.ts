@@ -6,12 +6,12 @@ import {
 	todoBoardIsLive,
 	todoBoardRailTravels,
 } from "@veyyon/coding-agent/modes/terminal/components/dashboard/todo-board";
-import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import {
 	incompleteTodoItems,
 	renderTodoContinuationReminder,
 	renderTodoStatePreview,
 } from "@veyyon/coding-agent/session/todo-reminder";
+import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import {
 	getLatestTodoPhasesFromEntries,

@@ -447,8 +447,8 @@ import { isAutoQaEnabled } from "../tools/agent/report-tool-issue";
 import { buildResolveReminderMessage, type ResolveToolDetails, runResolveInvocation } from "../tools/agent/resolve";
 import {
 	boundedTodoPreviewText,
-	prioritizeTodoItems,
 	createBoundedTodoPreview,
+	prioritizeTodoItems,
 	TODO_ITEM_PREVIEW_WIDTH,
 	TODO_REMINDER_PREVIEW_LIMIT,
 	TODO_TOTAL_PREVIEW_WIDTH,

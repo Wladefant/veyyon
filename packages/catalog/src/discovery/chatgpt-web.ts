@@ -242,8 +242,8 @@ export async function fetchChatGptWebModels(
 		report(
 			"base-url",
 			baseUrl,
-			"codex-chatgpt-web discovery forwards the ChatGPT credential to this host, so it must be loopback"
-				+ " (127.0.0.0/8, localhost, or ::1); the daemon itself binds 127.0.0.1 only",
+			"codex-chatgpt-web discovery forwards the ChatGPT credential to this host, so it must be loopback" +
+				" (127.0.0.0/8, localhost, or ::1); the daemon itself binds 127.0.0.1 only",
 		);
 		return null;
 	}
@@ -251,8 +251,8 @@ export async function fetchChatGptWebModels(
 		report(
 			"status",
 			`${baseUrl}${MODELS_PATH}`,
-			"codex-chatgpt-web proxies /models to OpenAI with the incoming bearer and refuses the request"
-				+ " without one; sign in to ChatGPT/Codex first",
+			"codex-chatgpt-web proxies /models to OpenAI with the incoming bearer and refuses the request" +
+				" without one; sign in to ChatGPT/Codex first",
 		);
 		return null;
 	}
@@ -392,15 +392,15 @@ function normalizeEntry(
 	if (!slug || !slug.startsWith(CHATGPT_WEB_MODEL_ID_PREFIX)) return null;
 
 	const thinking = resolveThinking(parsed.default_reasoning_level, parsed.supported_reasoning_levels);
-	const priority = typeof parsed.priority === "number" && Number.isFinite(parsed.priority)
-		? parsed.priority
-		: Number.MAX_SAFE_INTEGER;
+	const priority =
+		typeof parsed.priority === "number" && Number.isFinite(parsed.priority)
+			? parsed.priority
+			: Number.MAX_SAFE_INTEGER;
 	const reportedWindow = parsed.context_window;
-	const contextWindow = typeof reportedWindow === "number"
-		&& Number.isSafeInteger(reportedWindow)
-		&& reportedWindow > 0
-		? reportedWindow
-		: null;
+	const contextWindow =
+		typeof reportedWindow === "number" && Number.isSafeInteger(reportedWindow) && reportedWindow > 0
+			? reportedWindow
+			: null;
 
 	return {
 		priority,

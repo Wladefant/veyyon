@@ -32,9 +32,9 @@ import {
 } from "@veyyon/utils";
 import { $ } from "bun";
 import chalk from "chalk";
-import { theme } from "../theme/theme";
 import { settingsOrNull } from "../config/settings-instance";
 import type { SettingPath } from "../config/settings-schema";
+import { theme } from "../theme/theme";
 import { isTimeoutError, withTimeoutSignal } from "../utils/fetch-timeout";
 import {
 	AUTO_UPDATE_FAILURE_COOLDOWN_MS,

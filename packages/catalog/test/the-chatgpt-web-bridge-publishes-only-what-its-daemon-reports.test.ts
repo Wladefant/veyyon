@@ -45,7 +45,6 @@ import { describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as path from "node:path";
-import type { DiscoveryFailure } from "@veyyon/catalog/discovery/failure";
 import {
 	CHATGPT_WEB_MODEL_ID_PREFIX,
 	CHATGPT_WEB_PROVIDER_ID,
@@ -53,6 +52,7 @@ import {
 	isChatGptWebLoopbackUrl,
 	normalizeChatGptWebBaseUrl,
 } from "@veyyon/catalog/discovery/chatgpt-web";
+import type { DiscoveryFailure } from "@veyyon/catalog/discovery/failure";
 import { Effort } from "@veyyon/catalog/effort";
 import { CHATGPT_WEB_LOCAL_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 import { chatGptWebModelManagerOptions } from "@veyyon/catalog/provider-models/chatgpt-web";
@@ -434,7 +434,9 @@ describe("a discovery failure says which of the four things went wrong", () => {
 		// A Codex-compatible proxy that is not this bridge: it answered, and it has
 		// nothing of ours. "Asked and told nothing" is a different fact from "could
 		// not ask", and only the second is a reason to keep a cached catalog.
-		const { fetchFn } = daemon({ payload: { models: DAEMON_PAYLOAD.models.filter(m => !m.slug.startsWith(CHATGPT_WEB_MODEL_ID_PREFIX)) } });
+		const { fetchFn } = daemon({
+			payload: { models: DAEMON_PAYLOAD.models.filter(m => !m.slug.startsWith(CHATGPT_WEB_MODEL_ID_PREFIX)) },
+		});
 		const { failures, onFailure } = collect();
 		const result = await fetchChatGptWebModels({ accessToken: TOKEN, baseUrl: BASE, fetchFn, onFailure });
 
