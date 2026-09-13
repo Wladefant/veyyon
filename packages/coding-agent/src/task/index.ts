@@ -1858,7 +1858,6 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				structuredResult,
 			};
 			this.session.recordAgentSpawn?.(spawnRecord);
-
 			await this.session.onSubagentComplete?.(spawnRecord);
 
 			return this.#buildResultPayload(result, projectAgentsDir, Date.now() - startTime, mergeSummary);

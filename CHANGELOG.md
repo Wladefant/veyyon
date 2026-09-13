@@ -49,6 +49,9 @@
 - The composer chips (`interrupt`, `background`, `dequeue`) are click targets. A left click on a chip runs the same action its keybinding runs. Hover paint stays off: the main session holds press/release tracking only, so drag-select in the terminal keeps working.
 - The `/pause` screen resumes on a click. It is a fullscreen overlay, so it already held the whole mouse-tracking set and every report reached it and was dropped: the pointer did nothing on the one screen whose only job is to let you out. A left press anywhere on the scene now resumes exactly as Esc does, motion, drag, release, wheel and the other buttons still do nothing, and both the full scene and the compact card name the click in their hint.
 - `install.sh --force` and `install.ps1 -Force` install over a file at the target path the installer cannot account for. The file is moved to `<name>.unowned.<pid>` and its new path printed; nothing is deleted, and no sweep or uninstall touches that name. Without the switch the refusal is unchanged.
+- Guard against auto-updating or replacing custom and local Veyyon binary builds.
+- Support auto-update opt-out via `startup.autoUpdate: false`, `updates.auto: false`, and `VEYYON_NO_AUTO_UPDATE=1`.
+- Record skipped automatic updates in `update-history.json`.
 - Exported `projectToolDisplay` from `presentation/web-tool-display.ts`, projecting canonical tool execution displays for collab live sessions and HTML export.
 - `tools/view-registry.ts` exports `toolViewDefinitions`, the host-agnostic `ToolViewDefinition` for every tool card the terminal drew, and `tools/renderers.ts` derives the terminal adapters from it; the set of cards and their chrome are unchanged.
 - A tool card value-imports no tool: the search card limits are `tools/search/search-card-limits.ts`, the web search provider label is `tools/web/search/types.ts`, and the launch card owns `callMeta` and `readyPendingSummary`; each name is exported from that one module only. Print mode and the HTML export load a card without the tool behind it, and no output changes.
@@ -109,6 +112,7 @@
 - Forced render requests accept `preserveViewport` to paint changed rows immediately while retaining pending full-repaint and scrollback requests.
 - `TUI.frameScrollable` states whether the last composed frame had content above the viewport, so a host can render a scroll affordance without re-deriving it from row counts it cannot see.
 - The package is `hosts/terminal/engine` in the repository, beside the other halves of the terminal host. The published package name, exports and entry points are unchanged.
+- `BUILD_TAG` export in `@veyyon/utils/dirs` for build metadata and custom build identification.
 - `@veyyon/utils/fs-tool-args` parses a `read` or `write` tool call's arguments and result details (`parseReadArgs`, `parseReadDetails`, `parseWriteArgs`, `parseWriteDetails`, `countLines`), moved from `@veyyon/tool-render` so every host reads them without the React renderers.
 - `BracketedPasteHandler.route(data, sinks)` delivers one chunk's parts to `PasteSinks`: bytes before the start marker to `keys`, the assembled payload to `paste`, and bytes after the end marker to `reenter`; it returns `false` when the chunk held no paste sequence.
 - `@veyyon/utils/tab-width` is the one definition of `replaceTabs` and `DEFAULT_TAB_WIDTH`, a dependency-free module the browser bundles share; `@veyyon/utils/wrap` and `@veyyon/utils/tab-spacing` re-export them unchanged.
@@ -521,6 +525,8 @@
 
 ### Fixed
 
+- Repaired upstream-merge regressions in `/reload-config`, agent-lane validation, task spawn recording, and todo rendering; retained concurrent todo targets through the host-neutral view and removed the duplicate legacy spawn callback ([#26](https://github.com/Wladefant/veyyon/issues/26)).
+- Collapsed todo boards prioritize in-progress tasks, announce row-trimmed active phases, and show canonical newly started tasks with concurrent counts even when replayed without call arguments.
 - Print, JSON and RPC mode flush Bun's stdout sink before exiting, so a piped consumer receives the whole last frame instead of losing up to 1 MiB of queued output.
 - A spawned agent's card shows its resolved-model badge again on the live block, the registry path an extension wraps and the rebuilt transcript, per `agent.showResolvedModelBadge`.
 - With `VEYYON_FORCE_IMAGE_PROTOCOL=sixel` and `VEYYON_ALLOW_SIXEL_PASSTHROUGH=1`, a bash card draws an inline Sixel image row as the program wrote it instead of blanking it.
@@ -685,6 +691,7 @@
 - Case-insensitive host classification no longer treats control characters as URL punctuation.
 - `codingAgentDir()` resolves `packages/coding-agent` from the repository root, so the binary staleness preflight scans the coding agent's sources again after the package moved to `tests/evals`; it had resolved a sibling directory that does not exist and reported every binary current.
 - A plain `INS.POST` anchored on the trailing phantom line of a newline-terminated file appends the body as new terminated lines, like `INS.TAIL`; the rebuild emitted the phantom sentinel as an empty line and left the new last line without its newline.
+- Restored selective config reload in the shared settings store, preserving runtime overrides and existing worker snapshots, rejecting invalid or racing reloads, and keeping restart-only disk edits inactive during later saves ([#26](https://github.com/Wladefant/veyyon/issues/26)).
 - Settings queries ignore inherited object properties.
 - `Type.Pick` emits the keys it was asked for in the order they were asked for, and keeps a picked key that is own-but-non-enumerable on the validated value.
 - A session whose recorded leaf id no longer names an entry reopens on its last entry instead of on an empty conversation.

@@ -164,7 +164,6 @@ import { ARGOT_HANDLES_BANNER } from "./system-prompt-builder/section-registry";
 import { delegationStrength } from "./task/agent-settings";
 import { AgentOutputManager } from "./task/output-manager";
 import { wrapStreamFnWithProviderConcurrency } from "./task/provider-concurrency";
-
 import { type ClaimedTicket, TopicReplenishmentEngine } from "./task/topic-replenishment";
 import {
 	AUTO_THINKING,
@@ -209,7 +208,6 @@ import { buildNamedToolChoice } from "./utils/tool-choice";
 import { buildWorkspaceTree, type WorkspaceTree } from "./workspace-tree";
 
 // Types
-
 
 // `DialectFormat` and `resolveDialect` moved to `config/dialect-format.ts` so
 // `system-prompt-builder/gate-inputs.ts` can ask the same question without importing this

@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- Guard against auto-updating or replacing custom and local Veyyon binary builds.
+- Support auto-update opt-out via `startup.autoUpdate: false`, `updates.auto: false`, and `VEYYON_NO_AUTO_UPDATE=1`.
+- Record skipped automatic updates in `update-history.json`.
+
+### Fixed
+
+- Repaired upstream-merge regressions in `/reload-config`, agent-lane validation, task spawn recording, and todo rendering; retained concurrent todo targets through the host-neutral view and removed the duplicate legacy spawn callback ([#26](https://github.com/Wladefant/veyyon/issues/26)).
+- Collapsed todo boards prioritize in-progress tasks, announce row-trimmed active phases, and show canonical newly started tasks with concurrent counts even when replayed without call arguments.
 ### Breaking Changes
 
 - Agent settings use `agent.*`, `tier.agent`, `advisor.agents`, and `argot.agents`; legacy keys migrate on load, while historical runtime export names, custom-theme color tokens, session records, and RPC spellings remain unchanged.

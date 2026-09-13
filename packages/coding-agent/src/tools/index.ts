@@ -14,8 +14,10 @@ import type { ArtifactManager } from "@veyyon/kernel/session/artifacts";
 import type { ClientBridge } from "@veyyon/kernel/session/client-bridge";
 import { registerAgentMessageKinds } from "@veyyon/kernel/session/message-kinds";
 import type { AgentSpawnRecord, UsageStatistics } from "@veyyon/kernel/session/session-entries";
+
 export type { AgentSpawnRecord };
 export type SubagentSpawnRecord = AgentSpawnRecord;
+
 import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";
 import type { ToolChoiceQueue } from "@veyyon/kernel/session/tool-choice-queue";
 import { logger } from "@veyyon/utils";
@@ -330,7 +332,6 @@ export interface ToolSession {
 	 * sessions that do not persist; a no-op there.
 	 */
 	recordAgentSpawn?: (record: AgentSpawnRecord) => void;
-
 	/**
 	 * Hook invoked when an agent completes, enabling automatic runtime topic replenishment.
 	 */

@@ -1567,4 +1567,3 @@ export function todoStrikeSplit(text: string, frame: number | undefined): TodoSt
 	if (revealCount >= chars.length) return { struck: text, plain: "" };
 	return { struck: chars.slice(0, revealCount).join(""), plain: chars.slice(revealCount).join("") };
 }
-
