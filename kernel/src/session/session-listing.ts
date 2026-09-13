@@ -18,6 +18,7 @@ import {
 	sessionBackupPrimaryName,
 	sessionFileStem,
 } from "@veyyon/utils/session-file";
+import { SessionListIndex } from "./session-list-index";
 import { computeDefaultSessionDir } from "./session-paths";
 import { FileSessionStorage, type SessionStorage } from "./session-storage";
 
@@ -469,9 +470,12 @@ async function scanSessionFile(
 	file: string,
 	storage: SessionStorage,
 	withStatus: boolean,
+	index?: SessionListIndex,
 ): Promise<SessionInfo | undefined> {
 	try {
 		const stat = storage.statSync(file);
+		const cached = index?.get(file, stat.size, stat.mtime.getTime(), withStatus);
+		if (cached) return cached;
 		const [content, suffix] = await storage.readTextSlices(
 			file,
 			SESSION_LIST_PREFIX_BYTES,
@@ -507,7 +511,7 @@ async function scanSessionFile(
 		const { parsedMessageCount, allMessages, shortSummary } = walked;
 		const firstMessage = walked.firstMessage || (extractFirstDisplayMessageFromPrefix(scanned) ?? "");
 		const messageCount = Math.max(parsedMessageCount, countMessageMarkers(scanned));
-		return {
+		const info: SessionInfo = {
 			path: file,
 			id: header.id,
 			cwd: header.cwd ?? "",
@@ -521,6 +525,8 @@ async function scanSessionFile(
 			allMessagesText: allMessages.length > 0 ? allMessages.join(" ") : firstMessage,
 			status: withStatus ? deriveSessionStatus(suffix) : undefined,
 		};
+		index?.set(info, mtime.getTime(), withStatus);
+		return info;
 	} catch (error) {
 		// Dropping the file is right — one damaged session must not take the list
 		// down with it — but dropping it SILENTLY is not (Law 10). A session that
@@ -543,34 +549,49 @@ async function collectSessionsFromFileStride(
 	startIndex: number,
 	stride: number,
 	withStatus: boolean,
+	index?: SessionListIndex,
 ): Promise<SessionInfo[]> {
 	const sessions: SessionInfo[] = [];
 
 	for (let i = startIndex; i < files.length; i += stride) {
-		const session = await scanSessionFile(files[i], storage, withStatus);
+		const session = await scanSessionFile(files[i], storage, withStatus, index);
 		if (session) sessions.push(session);
 	}
 
 	return sessions;
 }
 
+/**
+ * Scan every file, reusing the directory's index for files that have not
+ * changed since it was written.
+ *
+ * `indexDir` is the directory the index belongs to. Omitting it scans every
+ * file, which is what a caller listing an ad-hoc set of paths — one with no
+ * directory that owns them — must do.
+ */
 async function collectSessionsFromFiles(
 	files: string[],
 	storage: SessionStorage,
 	withStatus: boolean,
+	indexDir?: string,
 ): Promise<SessionInfo[]> {
+	const index = indexDir ? await SessionListIndex.open(indexDir, storage) : undefined;
 	const workerCount = getSessionListWorkerCount(files.length);
 	const sessions =
 		workerCount === 1
-			? await collectSessionsFromFileStride(files, storage, 0, 1, withStatus)
+			? await collectSessionsFromFileStride(files, storage, 0, 1, withStatus, index)
 			: (
 					await Promise.all(
 						Array.from({ length: workerCount }, (_, workerIndex) =>
-							collectSessionsFromFileStride(files, storage, workerIndex, workerCount, withStatus),
+							collectSessionsFromFileStride(files, storage, workerIndex, workerCount, withStatus, index),
 						),
 					)
 				).flat();
 
+	if (index) {
+		index.retain(files);
+		await index.save();
+	}
 	sessions.sort(compareSessionsByRecency);
 	return sessions;
 }
@@ -707,7 +728,7 @@ async function scanSessionDir(
 	try {
 		if (recoverBackups) await recoverOrphanedBackups(sessionDir, storage);
 		const files = storage.listFilesSync(sessionDir, `*${SESSION_FILE_EXTENSION}`);
-		return await collectSessionsFromFiles(files, storage, withStatus);
+		return await collectSessionsFromFiles(files, storage, withStatus, sessionDir);
 	} catch (error) {
 		// The whole-directory version of the same rule, and the worse one: this path
 		// turns "your sessions are unreadable" into "you have no sessions", which is
@@ -755,7 +776,7 @@ export async function listAllSessions(storage: SessionStorage = new FileSessionS
 		await Promise.all(Array.from(backupDirs, sessionDir => recoverOrphanedBackups(sessionDir, storage)));
 
 		const files = storage.listFilesRecursiveSync(sessionsRoot, `*${SESSION_FILE_EXTENSION}`);
-		return await collectSessionsFromFiles(files, storage, true);
+		return await collectSessionsFromFiles(files, storage, true, sessionsRoot);
 	} catch (err) {
 		if (isEnoent(err)) return [];
 		logger.warn("Sessions directory could not be scanned; no sessions can be listed or resumed from it", {

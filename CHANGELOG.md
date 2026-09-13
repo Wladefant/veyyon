@@ -401,6 +401,7 @@
 - Unified patch operation definitions into a shared declarative operation table across tokenization and execution.
 - The package directory is `plugins/hashline` instead of `packages/hashline`; the published package name, entry points and behavior are unchanged.
 - Seen-line and clipped-line records merge into a snapshot through one keyed step; recorded provenance is unchanged.
+- Session listing reuses a per-directory index for files whose size and mtime are unchanged instead of rescanning every file, cutting a 4,825-session `/resume` list from 6.8 s to 185 ms when a session changed and 88 ms when none did.
 - Settings mutations and session storage writers share implementations without changing persistence, hook ordering or error behavior.
 - Installed plugin registry readers share JSON validation while preserving numeric-version handling and malformed-file behavior.
 - Plugin runtime configuration uses the shared record validator; behavior is unchanged.
