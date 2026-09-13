@@ -517,7 +517,6 @@
 ### Fixed
 
 - `/reload-config` reports applied, unchanged and restart-only values per key, retains startup-bound model roles and default effort, and pins task/eval/vibe model and effort resolution to one dispatch snapshot ([#39](https://github.com/Wladefant/veyyon/issues/39)).
-- Order concurrent reloads monotonically so a stale read cannot overwrite a later successful reload, including ABA and no-op reloads ([#26](https://github.com/Wladefant/veyyon/issues/26)).
 - Repaired upstream-merge regressions in `/reload-config`, agent-lane validation, task spawn recording, and todo rendering; retained concurrent todo targets through the host-neutral view and removed the duplicate legacy spawn callback ([#26](https://github.com/Wladefant/veyyon/issues/26)).
 - Updated the config-reload benchmark, handbook, and capture scene to use the current agent routing namespace ([#26](https://github.com/Wladefant/veyyon/issues/26)).
 - Collapsed todo boards prioritize in-progress tasks, announce row-trimmed active phases, and show canonical newly started tasks with concurrent counts even when replayed without call arguments.
@@ -676,6 +675,8 @@
 - Case-insensitive host classification no longer treats control characters as URL punctuation.
 - `codingAgentDir()` resolves `packages/coding-agent` from the repository root, so the binary staleness preflight scans the coding agent's sources again after the package moved to `tests/evals`; it had resolved a sibling directory that does not exist and reported every binary current.
 - A plain `INS.POST` anchored on the trailing phantom line of a newline-terminated file appends the body as new terminated lines, like `INS.TAIL`; the rebuild emitted the phantom sentinel as an empty line and left the new last line without its newline.
+- Selective config reload reports per-key applicability, preserves product-declared startup-bound leaves within mixed maps, and identifies unsupported edited keys without activating them ([#39](https://github.com/Wladefant/veyyon/issues/39)).
+- Order concurrent reloads monotonically so a stale read cannot overwrite a later successful reload, including ABA and no-op reloads ([#26](https://github.com/Wladefant/veyyon/issues/26)).
 - Restored selective config reload in the shared settings store, preserving runtime overrides and existing worker snapshots, rejecting invalid or racing reloads, and keeping restart-only disk edits inactive during later saves ([#26](https://github.com/Wladefant/veyyon/issues/26)).
 - Order concurrent reloads by their start generation so a stale read cannot overwrite or invalidate a newer request, including pending, ABA and no-op reloads ([#26](https://github.com/Wladefant/veyyon/issues/26)).
 - Settings queries ignore inherited object properties.
