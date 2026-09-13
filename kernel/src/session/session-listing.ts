@@ -568,12 +568,18 @@ async function collectSessionsFromFileStride(
  * `indexDir` is the directory the index belongs to. Omitting it scans every
  * file, which is what a caller listing an ad-hoc set of paths — one with no
  * directory that owns them — must do.
+ *
+ * `persistIndex` decides whether what was scanned is written back. Reading an
+ * index never touches the directory, so a listing that promises not to mutate it
+ * still gets the reuse; writing one is a mutation and is withheld from exactly
+ * that caller, which is why this is a separate flag and not `indexDir` again.
  */
 async function collectSessionsFromFiles(
 	files: string[],
 	storage: SessionStorage,
 	withStatus: boolean,
 	indexDir?: string,
+	persistIndex = true,
 ): Promise<SessionInfo[]> {
 	const index = indexDir ? await SessionListIndex.open(indexDir, storage) : undefined;
 	const workerCount = getSessionListWorkerCount(files.length);
@@ -588,7 +594,7 @@ async function collectSessionsFromFiles(
 					)
 				).flat();
 
-	if (index) {
+	if (index && persistIndex) {
 		index.retain(files);
 		await index.save();
 	}
@@ -723,12 +729,14 @@ async function scanSessionDir(
 	sessionDir: string,
 	storage: SessionStorage,
 	withStatus: boolean,
-	recoverBackups = true,
+	// Also decides whether the list index is written back: both are writes to the
+	// directory, and `listSessionsReadOnly` promises to make neither.
+	mayMutateDir = true,
 ): Promise<SessionInfo[]> {
 	try {
-		if (recoverBackups) await recoverOrphanedBackups(sessionDir, storage);
+		if (mayMutateDir) await recoverOrphanedBackups(sessionDir, storage);
 		const files = storage.listFilesSync(sessionDir, `*${SESSION_FILE_EXTENSION}`);
-		return await collectSessionsFromFiles(files, storage, withStatus, sessionDir);
+		return await collectSessionsFromFiles(files, storage, withStatus, sessionDir, mayMutateDir);
 	} catch (error) {
 		// The whole-directory version of the same rule, and the worse one: this path
 		// turns "your sessions are unreadable" into "you have no sessions", which is

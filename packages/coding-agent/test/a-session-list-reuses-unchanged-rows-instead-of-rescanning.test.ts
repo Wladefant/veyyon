@@ -32,7 +32,7 @@
  * rescanned next open, which is a slow path, not a wrong one.
  */
 import { describe, expect, it } from "bun:test";
-import { getRecentSessions, listSessions } from "@veyyon/kernel/session/session-listing";
+import { getRecentSessions, listSessions, listSessionsReadOnly } from "@veyyon/kernel/session/session-listing";
 import { MemorySessionStorage } from "@veyyon/kernel/session/session-storage";
 
 const DIR = "/sessions/project";
@@ -159,6 +159,29 @@ describe("a session list reuses unchanged rows instead of rescanning", () => {
 
 		const [listed] = await listSessions(DIR, storage);
 		expect(listed?.firstMessage).toBe("still listable");
+	});
+
+	it("writes no index from the listing that promises not to mutate the directory", async () => {
+		const storage = new MemorySessionStorage();
+		storage.writeTextSync(`${DIR}/a.jsonl`, session("a", ["user", "hello"]));
+
+		const listed = await listSessionsReadOnly(DIR, storage);
+
+		expect(listed.map(s => s.id)).toEqual(["a"]);
+		expect(storage.readTextSync(INDEX)).toBeUndefined();
+	});
+
+	it("still reuses an existing index when it may not write one", async () => {
+		const { storage, reads } = countingStorage();
+		storage.writeTextSync(`${DIR}/a.jsonl`, session("a", ["user", "hello"]));
+		await listSessions(DIR, storage);
+		const afterScan = reads();
+
+		const listed = await listSessionsReadOnly(DIR, storage);
+
+		expect(listed.map(s => s.firstMessage)).toEqual(["hello"]);
+		// Reading the index is not a mutation, so the reuse still applies.
+		expect(reads()).toBe(afterScan);
 	});
 
 	it("does not answer a status request from a row scanned without one", async () => {
