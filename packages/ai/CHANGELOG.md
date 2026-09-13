@@ -52,6 +52,7 @@
 - Cursor and Devin protobuf regeneration invokes the workspace compiler, and Cursor output is written to the catalog package.
 - Credential-store startup applies SQLite busy handling and WAL mode before initializing refresh leases, allowing concurrent launches to wait for database locks.
 - Google's generic `RESOURCE_EXHAUSTED` 429 body ("Resource has been exhausted (e.g. check quota)") classifies as a per-minute throttle retried on the same account after 45-75 s, instead of a daily quota wall whose 30-minute wait exceeded the retry budget and ended the turn on the first 429; a body that states a quota keeps the quota classification.
+- A provider signed in again after a failed token refresh no longer reports the old failure: a disabled credential's cause is withheld once a login stored after it is serving the provider, instead of `a previous login was signed out: oauth refresh failed: … invalid_grant … press a to sign in again` persisting on an account whose requests succeed.
 
 ## [1.4.1] - 2026-09-08
 

@@ -3501,7 +3501,26 @@ export class AuthStorage {
 		// causes the user already resolved.
 		const [latest] = listDisabled(provider);
 		if (!latest?.disabledCause) return undefined;
-		return isRefreshFailureDisableCause(latest.disabledCause) ? latest.disabledCause : undefined;
+		if (!isRefreshFailureDisableCause(latest.disabledCause)) return undefined;
+		return this.#supersededByNewerLogin(provider, latest.id) ? undefined : latest.disabledCause;
+	}
+
+	/**
+	 * Whether a login stored AFTER `disabledId` is serving the provider.
+	 *
+	 * Ranking among disabled rows alone cannot see a resolution, because signing in
+	 * again writes an ACTIVE row and leaves the dead one untouched: the failure
+	 * stays newest forever among its own kind. A provider whose token had died and
+	 * was replaced then reported the original `invalid_grant` on every launch and
+	 * told someone whose requests were being served to sign in again.
+	 *
+	 * Row ids are monotonic, so an active row above the newest disabled one was
+	 * stored after that refresh failed. An active row BELOW it is a different,
+	 * older account that happens to still work, which leaves the newer death
+	 * unresolved and worth reporting.
+	 */
+	#supersededByNewerLogin(provider: string, disabledId: number): boolean {
+		return this.#store.listAuthCredentials(provider).some(row => row.disabledCause === null && row.id > disabledId);
 	}
 
 	/**
@@ -3527,9 +3546,11 @@ export class AuthStorage {
 		for (const row of listDisabled()) {
 			if (seen.has(row.provider)) continue;
 			seen.add(row.provider);
-			if (row.disabledCause && isRefreshFailureDisableCause(row.disabledCause)) {
-				failures.push({ provider: row.provider, cause: row.disabledCause });
-			}
+			if (!row.disabledCause || !isRefreshFailureDisableCause(row.disabledCause)) continue;
+			// Same supersession rule as the single-provider form: a login stored after
+			// the failure means it was already resolved by signing in again.
+			if (this.#supersededByNewerLogin(row.provider, row.id)) continue;
+			failures.push({ provider: row.provider, cause: row.disabledCause });
 		}
 		return failures;
 	}
