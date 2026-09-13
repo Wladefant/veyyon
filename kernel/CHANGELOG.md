@@ -6,6 +6,7 @@
 
 ### Added
 
+- `SettingsStore.reloadSelectedConfig` validates a fresh profile and overlays atomically, applies only the product-selected paths, preserves runtime overrides, and serializes against settings saves without activating unrelated external edits.
 - `@veyyon/kernel` is a workspace member: the loader, the contribution registry and the session spine, moved out of `@veyyon/coding-agent` unchanged. It names no tool, no host and no mode, and `scripts/the-kernel-names-no-tool-and-no-host.test.ts` fails on the first edge that does.
 - `@veyyon/kernel/session/*` publishes the session spine: entries, storage backends, persistence, migrations, listing, paths, retry policy, compaction policy, machine budget and the turn's owned resources.
 - `@veyyon/kernel/loader/*` publishes plugin discovery, manifest parsing, the installed registry, the marketplace client and load-failure reporting.

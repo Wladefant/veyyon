@@ -33,6 +33,7 @@ import type { MCPManager } from "../mcp";
 import type { HindsightSessionState } from "../memory/hindsight/state";
 import type { MnemopiSessionState } from "../memory/mnemopi/state";
 import type { AgentRegistry } from "../registry/agent-registry";
+import type { ClaimedTicket, TopicReplenishmentEngine } from "../task/topic-replenishment";
 import type { ConfiguredThinkingLevel } from "../thinking";
 import type { EventBus } from "../utils/event-bus";
 import type { WorkspaceTree } from "../workspace-tree";
@@ -296,6 +297,10 @@ export interface CreateAgentSessionOptions {
 	 * bypass is off is never granted one by its parent.
 	 */
 	parentApprovalBypassed?: () => boolean;
+	/** Topic replenishment engine instance override. */
+	replenishmentEngine?: TopicReplenishmentEngine;
+	/** Custom executor for topic replenishment. */
+	replenishmentExecutor?: (ticket: ClaimedTicket) => Promise<unknown>;
 }
 
 /**

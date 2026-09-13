@@ -39,6 +39,7 @@ const USAGE = [
 	"  /todo done   [<task|phase>]        Mark task/phase/all completed",
 	"  /todo drop   [<task|phase>]        Mark task/phase/all abandoned",
 	"  /todo rm     [<task|phase>]        Remove task/phase/all",
+	"  /todo pending [<task|phase>]        Reset task/phase/all to pending",
 	"  /todo help                         Show this help",
 ].join("\n");
 
@@ -154,6 +155,10 @@ export class TodoCommandController {
 				return;
 			case "drop":
 				this.#mutateStatus(rest, "abandoned");
+				return;
+			case "pending":
+			case "reset":
+				this.#mutateStatus(rest, "pending");
 				return;
 			case "rm":
 				this.#remove(rest);
@@ -296,7 +301,7 @@ export class TodoCommandController {
 	#applyTargetedOp(
 		rest: string,
 		options: {
-			op: "done" | "drop" | "rm";
+			op: "done" | "drop" | "pending" | "rm";
 			onEmpty: (current: TodoPhase[]) => void;
 			formatTaskStatus: (taskName: string) => string;
 			formatPhaseStatus: (phaseName: string) => string;
@@ -334,8 +339,8 @@ export class TodoCommandController {
 		this.ctx.showError(`No task or phase matched "${trimmed}".`);
 	}
 
-	#mutateStatus(rest: string, target: "completed" | "abandoned"): void {
-		const op = target === "completed" ? "done" : "drop";
+	#mutateStatus(rest: string, target: "completed" | "abandoned" | "pending"): void {
+		const op = target === "completed" ? "done" : target === "abandoned" ? "drop" : "pending";
 		this.#applyTargetedOp(rest, {
 			op,
 			onEmpty: current => {
@@ -345,10 +350,11 @@ export class TodoCommandController {
 					return;
 				}
 				this.#commit(phases, `/todo ${op} (all)`);
-				this.ctx.showStatus(`Marked all tasks ${target}.`);
+				this.ctx.showStatus(target === "pending" ? "Reset all tasks to pending." : `Marked all tasks ${target}.`);
 			},
-			formatTaskStatus: task => `Marked ${target}: ${task}`,
-			formatPhaseStatus: phase => `Marked phase ${phase} ${target}.`,
+			formatTaskStatus: task => (target === "pending" ? `Reset to pending: ${task}` : `Marked ${target}: ${task}`),
+			formatPhaseStatus: phase =>
+				target === "pending" ? `Reset phase ${phase} to pending.` : `Marked phase ${phase} ${target}.`,
 		});
 	}
 

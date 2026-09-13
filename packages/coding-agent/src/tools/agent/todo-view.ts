@@ -153,20 +153,26 @@ function collapsedRow(
 ): StatusRowView {
 	const tasks = phases.flatMap(phase => phase.tasks);
 	const completed = details?.completedTasks ?? [];
-	const active = tasks.find(task => task.status === "in_progress");
-	const moved = active ?? completed[completed.length - 1];
-	const phaseOf = phases.find(phase => phase.tasks.some(task => task.content === moved?.content));
+	const active = tasks.filter(task => task.status === "in_progress");
+	const started = details?.startedTasks?.at(-1);
+	const targetedPhase = started ? phases.find(phase => phase.name === started.phase) : undefined;
+	const targetedTask = targetedPhase?.tasks.find(task => task.content === started?.content);
+	const moved = targetedTask ?? active[0] ?? completed[completed.length - 1];
+	const phaseOf = targetedPhase ?? phases.find(phase => phase.tasks.some(task => task.content === moved?.content));
 	const meta: ViewLine[] = [
 		[{ text: formatCount("task", tasks.length) }],
 		[{ text: formatCount("done", tasks.filter(task => task.status === "completed").length), tone: "dim" }],
 	];
+	if (active.length > 1) {
+		meta.push([{ text: `${active.length} in progress`, tone: "accent" }]);
+	}
 	if (phaseOf && phases.length > 1) {
 		meta.push([{ text: boundedTodoPreviewText(phaseOf.name, TODO_ITEM_PREVIEW_WIDTH), tone: "muted" }]);
 	}
 	if (moved) {
-		const status: TodoItem["status"] = active ? "in_progress" : "completed";
+		const status: TodoItem["status"] = "status" in moved ? moved.status : "completed";
 		const closing =
-			!active &&
+			status !== "in_progress" &&
 			closedByThisWrite(details)
 				.get(phaseOf?.name ?? "")
 				?.has(moved.content) === true;

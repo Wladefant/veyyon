@@ -50,6 +50,7 @@
 
 - Corrected comments that named a distribution channel or runtime API the project does not use; no behavior change.
 - `stripAnsi` removes a CSI sequence written with colon subparameters. The parameter class was `[0-9;?]`, but the spec's parameter bytes are the whole `0x30-0x3f` range, so `:` `<` `=` `>` were not matched: a true-color SGR of the form `ESC [ 38:2:255:0:0 m`, which libvte and several test runners emit, left `38:2:255:0:0m` behind as visible text in captured output. The class is now the spec's, and the three byte classes are disjoint so the pattern accepts exactly what a greedy scanner accepts. The behaviour is pinned against `tests/fixtures/ansi-strip-corpus.json`, which the Rust `strip_ansi` in the shell minimizer reads too, so the two implementations answer the same cases instead of drifting apart.
+- `BUILD_TAG` export in `@veyyon/utils/dirs` for build metadata and custom build identification.
 
 ## [1.4.1] - 2026-09-08
 
@@ -60,6 +61,11 @@
 ### Removed
 
 - Removed `isNewerVersion` in favor of publication-order comparison and equality checks.
+
+### Fixed
+
+- Broken child-stdin writes no longer terminate the host; quiet EPIPE shutdown requires an error observed on process stdout or stderr.
+- Repeated stdout or stderr errors during shutdown no longer interrupt asynchronous session persistence.
 
 ## [1.4.0] - 2026-09-04
 

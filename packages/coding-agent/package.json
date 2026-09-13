@@ -538,6 +538,10 @@
       "types": "./src/thinking/index.ts",
       "import": "./src/thinking/index.ts"
     },
+    "./task/topic-replenishment": {
+      "types": "./src/task/topic-replenishment.ts",
+      "import": "./src/task/topic-replenishment.ts"
+    },
     "./tools": {
       "types": "./src/tools/index.ts",
       "import": "./src/tools/index.ts"
