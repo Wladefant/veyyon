@@ -49,18 +49,47 @@ Starting a newer reload supersedes older in-flight reloads, including while the 
 request is still reading or when later edits restore the original values.
 A superseded request rejects without changing live routing; retry the command to read the current files.
 
-The reloadable fields are `modelRoles`, `defaultEffort`, `agent.agents`,
-`agent.model`, `agent.sharedModel`, and `agent.thinkingLevel`.
-Runtime/CLI overrides keep their precedence. Shared model/effort settings govern spawns only
-when `agent.sharedModel` is enabled; otherwise per-agent lanes govern them.
-The command reports effective before/after values and notifies next-turn consumers.
-New workers use the new defaults; existing workers retain their settings snapshots.
+**Hot-reloadable:** non-startup `modelRoles.<role>` values, `agent.agents` lane
+settings (including nested `model` and `thinkingLevel`), `agent.model`,
+`agent.sharedModel`, and `agent.thinkingLevel`. Legacy `subagent.*` spellings
+are migrated to `agent.*` when read, so feedback uses the canonical names.
+Runtime/CLI overrides retain precedence. Shared model/effort settings govern spawns
+only when `agent.sharedModel` is enabled; otherwise per-agent lanes govern them.
+Task, eval and vibe dispatch capture one settings snapshot before resolving a model
+or effort and before asynchronous allocation. A spawn already being prepared keeps
+that snapshot; the next spawn reads the accepted routing. Existing workers are unchanged.
 
-**Running Main and existing workers are not rebound.** Use explicit session model/effort
-controls to change Main. Other settings remain startup-owned and are reported by path as
-requiring restart: tools, provider initialization, transports, lifecycle/concurrency,
-plugins, UI, and role presentation metadata. Credentials, environment variables, agent
-definitions/prompts, catalogs, and profile selection are not reloaded.
+**Restart-only:** `defaultEffort`, `modelRoles.default`, `modelRoles.advisor`, and
+all settings outside the routing set above. If the current default or advisor role
+references another role (`@role`), this narrow reload retains the entire role map
+to avoid changing a startup-bound target indirectly; direct lane settings can still apply.
+`pickInitialThinkingLevel` captures `defaultEffort` at startup and
+`resolveAgentThinkingLevel` always supplies a concrete lane, frontmatter or
+`AGENT_DEFAULT_EFFORT` value, so a reload cannot honestly change dispatched worker
+effort through `defaultEffort`. Change the applicable lane/shared `thinkingLevel`
+instead. A bare root `thinkingLevel` is not a supported setting.
+
+Every supported routing leaf is reported as `applied` (with an effective diff) or
+`unchanged`; every changed restart-only key is reported as `restart-required` with
+its reason and retains its active value. Valid mixed edits apply the supported
+keys without letting one restart-only key block an otherwise valid model change.
+Malformed/invalid edits still apply **nothing**. SDK callers receive the same
+`outcomes`, plus `changed` and `restartRequired` arrays.
+
+**Read-once versus per-use:** SDK startup resolves the default role and initial
+effort into the session's established model/thinking binding. Advisor construction
+also establishes a runtime that settings-store notifications do not rebind.
+The task/eval/vibe dispatchers instead invoke `resolveAgentModel` and
+`resolveAgentThinkingLevel` per spawn; the executor forks that same dispatch snapshot
+for the child. Reload preserves the existing latest-started generation guard for
+overlapping requests and commits the applicable leaves synchronously.
+
+**Running Main is never rebound.** Use explicit session model/effort controls to
+change Main. Settings outside this narrow routing reload—including tools, provider
+initialization, transports, lifecycle/concurrency, plugins, UI and role presentation
+metadata—retain their active values and report changed keys as requiring restart.
+Credentials, environment variables, agent definitions/prompts, catalogs and profile
+selection are not reloaded.
 `Settings.init()` is startup initialization, not a reload API. `/reload-plugins` refreshes
 plugin/project registries, not profile routing; SIGHUP tears down the session.
 

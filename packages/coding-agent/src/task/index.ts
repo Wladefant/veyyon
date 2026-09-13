@@ -1468,6 +1468,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				}
 			: agent;
 
+		// Pin one routing generation before resolving model/effort. Isolation and
+		// scheduling may await before the executor consumes defaultEffort.
+		const spawnSettings = this.session.settings.forkWithRuntimeOverrides();
 		// Resolve the model through the ONE owner, whose only scope is this agent:
 		// the lane row governing this spawn, then the definition's frontmatter, then
 		// the default model role. The parent's live model is not a layer, so a
@@ -1479,7 +1482,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const parentActiveModelPattern = this.session.getActiveModelString?.();
 		const parentThinkingLevel = this.session.getActiveThinkingLevel?.();
 		const resolvedModel = resolveAgentModel({
-			settings: this.session.settings,
+			settings: spawnSettings,
 			agentName,
 			agentModel: effectiveAgent.model,
 			fallbackModelPattern: this.session.getModelString?.(),
@@ -1501,7 +1504,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		}
 		const modelOverride = resolvedModel.patterns;
 		const thinkingLevelOverride = resolveAgentThinkingLevel({
-			settings: this.session.settings,
+			settings: spawnSettings,
 			agentName,
 			agentThinkingLevel: effectiveAgent.thinkingLevel,
 			taskDepth: taskDepth + 1,
@@ -1705,7 +1708,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				},
 				authStorage: this.session.authStorage,
 				modelRegistry: this.session.modelRegistry,
-				settings: this.session.settings,
+				settings: spawnSettings,
 				// The `/yolo` bypass lives on the session, not in settings, so it has
 				// to be handed over explicitly or the child silently drops a rung.
 				bypassAllApprovals: this.session.isApprovalBypassed?.() ?? false,

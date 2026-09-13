@@ -791,9 +791,13 @@ export class SettingsStore {
 	}
 
 	/** Reload only product-selected paths, preserving runtime overrides and live stores. */
-	async reloadSelectedConfig(reloadable: readonly SettingPath[]): Promise<{
+	async reloadSelectedConfig(
+		reloadable: readonly SettingPath[],
+		restartReasons: Readonly<Record<string, string>> = {},
+	): Promise<{
 		changed: { path: SettingPath; before: unknown; after: unknown }[];
 		restartRequired: SettingPath[];
+		outcomes: { path: string; status: "applied" | "unchanged" | "restart-required"; reason?: string }[];
 	}> {
 		if (!this.#configPath) throw new Error("Cannot reload an in-memory settings store.");
 		if (this.#modified.size || this.#savePromise) {
@@ -838,16 +842,81 @@ export class SettingsStore {
 		}
 		const changed: { path: SettingPath; before: unknown; after: unknown }[] = [];
 		const restartRequired: SettingPath[] = [];
-		for (const key of settingsSchemaPaths()) {
-			if (this.#hooks.globalBinding(key)) continue;
-			const before = this.get(key);
-			const after = candidate.get(key);
-			if (JSON.stringify(before) === JSON.stringify(after)) continue;
-			if (reloadable.includes(key)) changed.push({ path: key, before, after });
-			else restartRequired.push(key);
+		const outcomes: { path: string; status: "applied" | "unchanged" | "restart-required"; reason?: string }[] = [];
+		const applicable: string[][] = [];
+		const events = new Map<SettingPath, unknown>();
+		const reasons = Object.entries(restartReasons);
+		const classify = (segments: string[], before: unknown, after: unknown, root?: SettingPath) => {
+			const key = segments.join(".");
+			const reason = reasons.find(([prefix]) => key === prefix || key.startsWith(`${prefix}.`))?.[1];
+			const allowed = root !== undefined && reloadable.includes(root) && !reason;
+			const keys = new Set([
+				...(before && typeof before === "object" && !Array.isArray(before) ? Object.keys(before) : []),
+				...(after && typeof after === "object" && !Array.isArray(after) ? Object.keys(after) : []),
+			]);
+			// Expand routing objects so startup-only and new-spawn values in one
+			// map each get their own truthful outcome and commit.
+			if (root !== undefined && reloadable.includes(root) && keys.size) {
+				for (const child of keys) {
+					classify(
+						[...segments, child],
+						getByPath(this.#merged, [...segments, child]),
+						getByPath(candidate.#merged, [...segments, child]),
+						root,
+					);
+				}
+				return;
+			}
+			const same = JSON.stringify(before) === JSON.stringify(after);
+			if (same) {
+				if (
+					allowed ||
+					reason ||
+					[this.#global, this.#configOverlay, candidate.#global, candidate.#configOverlay].some(
+						source => getByPath(source, segments) !== undefined,
+					)
+				) {
+					outcomes.push({ path: key, status: "unchanged" });
+				}
+			} else if (allowed) {
+				changed.push({ path: key, before, after });
+				outcomes.push({ path: key, status: "applied" });
+				if (!events.has(root!)) events.set(root!, this.get(root!));
+			} else {
+				restartRequired.push(key);
+				outcomes.push({
+					path: key,
+					status: "restart-required",
+					reason:
+						reason ??
+						"This setting is outside the supported routing reload; its active value is retained. Restart to load the edited file.",
+				});
+			}
+			// Copy shadowed supported leaves too: removing a runtime override
+			// must subsequently reveal the accepted reload.
+			if (allowed) applicable.push(segments);
+		};
+		const schemaPaths = settingsSchemaPaths();
+		for (const key of schemaPaths) {
+			if (!this.#hooks.globalBinding(key)) classify(toSegments(key), this.get(key), candidate.get(key), key);
 		}
-		for (const key of reloadable) {
-			const segments = toSegments(key);
+		const classifyUnknown = (segments: string[]) => {
+			const key = segments.join(".");
+			if (schemaPaths.includes(key)) return;
+			const before = getByPath(this.#merged, segments);
+			const after = getByPath(candidate.#merged, segments);
+			if (schemaPaths.some(path => path.startsWith(`${key}.`))) {
+				for (const child of new Set([
+					...Object.keys((before ?? {}) as object),
+					...Object.keys((after ?? {}) as object),
+				]))
+					classifyUnknown([...segments, child]);
+			} else classify(segments, before, after);
+		};
+		for (const key of new Set([...Object.keys(this.#merged), ...Object.keys(candidate.#merged)])) {
+			classifyUnknown([key]);
+		}
+		for (const segments of applicable) {
 			for (const [target, source] of [
 				[this.#global, candidate.#global],
 				[this.#configOverlay, candidate.#configOverlay],
@@ -859,10 +928,10 @@ export class SettingsStore {
 		}
 		this.#configPath = candidate.#configPath;
 		this.rebuildMerged();
-		for (const change of changed) {
-			this.#fireEffectiveSettingChanged(change.path, this.get(change.path), change.before);
+		for (const [key, before] of events) {
+			this.#fireEffectiveSettingChanged(key, this.get(key), before);
 		}
-		return { changed, restartRequired };
+		return { changed, restartRequired, outcomes };
 	}
 
 	/**

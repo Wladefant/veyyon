@@ -394,6 +394,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 		const available = catalog.agents.map(candidate => candidate.name).join(", ") || "none";
 		throw new ToolError(`Cannot spawn '${agentName}'. Enabled and allowed: ${available}`);
 	}
+	const spawnSettings = options.session.settings.forkWithRuntimeOverrides();
 	const parentActiveModelPattern = options.session.getActiveModelString?.();
 	const parentThinkingLevel = options.session.getActiveThinkingLevel?.();
 	// An explicit `agent(..., { model })` call is the caller speaking for this one
@@ -403,9 +404,9 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 	// and lane rows key on that child depth — the same value the executor derives
 	// as `childDepth`.
 	const resolvedModel = parsed.model
-		? { patterns: resolveConfiguredModelPatterns(parsed.model, options.session.settings), source: "agent" as const }
+		? { patterns: resolveConfiguredModelPatterns(parsed.model, spawnSettings), source: "agent" as const }
 		: resolveAgentModel({
-				settings: options.session.settings,
+				settings: spawnSettings,
 				agentName,
 				agentModel: effectiveAgent.model,
 				fallbackModelPattern: options.session.getModelString?.(),
@@ -515,7 +516,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 		// straight through made an eval `agent()` spawn ignore this agent's own
 		// `thinkingLevel` row.
 		thinkingLevel: resolveAgentThinkingLevel({
-			settings: options.session.settings,
+			settings: spawnSettings,
 			agentName,
 			agentThinkingLevel: effectiveAgent.thinkingLevel,
 			taskDepth: (options.session.taskDepth ?? 0) + 1,
@@ -535,7 +536,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 		onProgress: progress => emitProgressStatus(options.emitStatus, progress),
 		authStorage: options.session.authStorage,
 		modelRegistry: options.session.modelRegistry,
-		settings: options.session.settings,
+		settings: spawnSettings,
 		obfuscateProviderText: options.session.obfuscateProviderText,
 		completeImpl: options.session.sideComplete,
 		// Eval `agent()` agents are never wall-clock capped: the parent

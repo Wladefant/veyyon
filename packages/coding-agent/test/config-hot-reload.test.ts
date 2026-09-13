@@ -166,16 +166,18 @@ describe("config hot reload", () => {
 				throw new Error("reload must not reload plugins");
 			},
 		};
-		await fs.writeFile(file, "agent:\n  model: openai/new\n  sharedModel: true\n");
+		await fs.writeFile(file, "agent:\n  model: openai/new\n  sharedModel: true\ndefaultEffort:\n  '*': high\n");
 		expect(resolveAgentModel({ settings, agentName: "task" }).patterns).toEqual(["openai/old"]);
 		expect(await executeAcpBuiltinSlashCommand("/reload-config", runtime)).toEqual({ consumed: true });
 		expect(resolveAgentModel({ settings, agentName: "task" }).patterns).toEqual(["openai/new"]);
-		expect(output[0]).toContain('agent.model: "openai/old" → "openai/new"');
+		expect(output[0]).toContain('agent.model: applied ("openai/old" → "openai/new")');
+		expect(output[0]).toContain("agent.sharedModel: unchanged");
+		expect(output[0]).toContain("defaultEffort: restart-required — pickInitialThinkingLevel captures it at startup");
 		await executeAcpBuiltinSlashCommand("/reload-config", runtime);
 		expect(output[1]).toContain("No effective routing changes.");
 	});
 
-	it("changes new spawn routing, preserves existing forks, and reports restart-only settings", async () => {
+	it("changes new spawn routing and preserves existing forks", async () => {
 		const dir = dirs();
 		const file = path.join(dir, "config.yml");
 		await fs.writeFile(
@@ -188,16 +190,82 @@ describe("config hot reload", () => {
 		expect(resolve(settings)).toEqual(["openai/old"]);
 		await fs.writeFile(
 			file,
-			"modelRoles:\n  worker: openai/new\nagent:\n  sharedModel: true\n  model: '@worker'\ndefaultEffort:\n  '*': high\nhideThinkingBlock: true\n",
+			"modelRoles:\n  worker: openai/new\nagent:\n  sharedModel: true\n  model: '@worker'\ndefaultEffort:\n  '*': low\n",
 		);
 		const result = await settings.reloadConfig();
 		expect(resolve(settings)).toEqual(["openai/new"]);
 		expect(resolve(existing)).toEqual(["openai/old"]);
-		expect(resolveEffort({ defaultEffort: settings.get("defaultEffort") }).level as string).toBe("high");
+		expect(resolveEffort({ defaultEffort: settings.get("defaultEffort") }).level as string).toBe("low");
 		expect(settings.get("hideThinkingBlock")).toBe(false);
-		expect(result.restartRequired).toContain("hideThinkingBlock");
-		expect(result.changed.map(row => row.path)).toEqual(expect.arrayContaining(["modelRoles", "defaultEffort"]));
+		expect(result.restartRequired).toEqual([]);
+		expect(result.changed.map(row => row.path)).toEqual(["modelRoles.worker"]);
 		expect((await settings.reloadConfig()).changed).toEqual([]);
+	});
+
+	it("reports startup effort as restart-only while applying the model change", async () => {
+		const dir = dirs();
+		const file = path.join(dir, "config.yml");
+		await fs.writeFile(file, "defaultEffort:\n  '*': low\nagent:\n  model: openai/old\n");
+		const settings = await Settings.loadReadOnly({ agentDir: dir });
+		await fs.writeFile(file, "defaultEffort:\n  '*': high\nagent:\n  model: openai/new\n");
+		const result = await settings.reloadConfig();
+		expect(settings.get("defaultEffort")).toEqual({ "*": "low" });
+		expect(settings.get("agent.model")).toBe("openai/new");
+		expect(result.outcomes).toContainEqual({
+			path: "defaultEffort",
+			status: "restart-required",
+			reason: expect.stringContaining("resolveAgentThinkingLevel always supplies a concrete"),
+		});
+	});
+
+	it.each(["default", "advisor"])(
+		"preserves startup role %s while applying a worker role in the same map",
+		async role => {
+			const dir = dirs();
+			const file = path.join(dir, "config.yml");
+			await fs.writeFile(file, JSON.stringify({ modelRoles: { [role]: "openai/old", worker: "openai/old" } }));
+			const settings = await Settings.loadReadOnly({ agentDir: dir });
+			await fs.writeFile(file, JSON.stringify({ modelRoles: { [role]: "openai/new", worker: "openai/new" } }));
+			const result = await settings.reloadConfig();
+			expect(settings.getModelRole(role)).toBe("openai/old");
+			expect(settings.getModelRole("worker")).toBe("openai/new");
+			expect(result.restartRequired).toContain(`modelRoles.${role}`);
+			expect(result.outcomes).toContainEqual({
+				path: `modelRoles.${role}`,
+				status: "restart-required",
+				reason: expect.any(String),
+			});
+			expect(result.changed).toEqual([{ path: "modelRoles.worker", before: "openai/old", after: "openai/new" }]);
+		},
+	);
+
+	it("retains alias-backed startup role targets without blocking direct lane changes", async () => {
+		const dir = dirs();
+		const file = path.join(dir, "config.yml");
+		await fs.writeFile(
+			file,
+			"modelRoles:\n  default: '@worker'\n  worker: openai/old\nagent:\n  model: openai/old\n",
+		);
+		const settings = await Settings.loadReadOnly({ agentDir: dir });
+		await fs.writeFile(
+			file,
+			"modelRoles:\n  default: '@worker'\n  worker: openai/new\nagent:\n  model: openai/new\n",
+		);
+		const result = await settings.reloadConfig();
+		expect(result.restartRequired).toContain("modelRoles.worker");
+		expect(settings.getModelRole("worker")).toBe("openai/old");
+		expect(settings.get("agent.model")).toBe("openai/new");
+	});
+
+	it("names an unrecognized root key instead of silently accepting it", async () => {
+		const dir = dirs();
+		const file = path.join(dir, "config.yml");
+		await fs.writeFile(file, "{}");
+		const settings = await Settings.loadReadOnly({ agentDir: dir });
+		await fs.writeFile(file, "thinkingLevel: high\nagent:\n  model: openai/new\n  unknownSetting: true\n");
+		const result = await settings.reloadConfig();
+		expect(result.restartRequired).toEqual(expect.arrayContaining(["thinkingLevel", "agent.unknownSetting"]));
+		expect(settings.get("agent.model")).toBe("openai/new");
 	});
 
 	it("preserves override precedence and applies removed routing fields", async () => {
@@ -310,6 +378,8 @@ describe("config hot reload", () => {
 		try {
 			await fs.writeFile(file, "hideThinkingBlock: true\nagent:\n  model: openai/new\n  sharedModel: true\n");
 			expect((await settings.reloadConfig()).restartRequired).toContain("hideThinkingBlock");
+			expect(settings.get("agent.model")).toBe("openai/new");
+			expect(notifications).toEqual(["agent.model"]);
 			expect(settings.get("hideThinkingBlock")).toBe(false);
 			for (const model of ["openai/saved", "openai/saved-again"]) {
 				settings.set("agent.model", model);
