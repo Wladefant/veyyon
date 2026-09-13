@@ -14,67 +14,87 @@ const dirs = useTrackedTempDirs("config-reload-");
 
 describe("config hot reload", () => {
 	it.each([
-		{ name: "ordinary overlap", laterModels: ["new"] },
-		{ name: "ABA overlap", laterModels: ["new", "old"] },
-		{ name: "a newer no-op reload", laterModels: ["old"] },
-	])("rejects stale routing after $name without rebinding existing workers", async ({ laterModels }) => {
-		const dir = dirs();
-		const file = path.join(dir, "config.yml");
-		const writeModel = (model: string) =>
-			fs.writeFile(file, JSON.stringify({ agent: { model: `openai/${model}`, sharedModel: true } }));
-		await writeModel("old");
-		const settings = await Settings.loadReadOnly({ agentDir: dir });
-		const existing = await createSubagentSettingsForCwd(settings, dir);
-		const entered = Promise.withResolvers<void>();
-		const resume = Promise.withResolvers<void>();
-		const realFile = Bun.file.bind(Bun);
-		let armed = true;
-		const readBarrier = spyOn(Bun, "file").mockImplementation(((target: string, options?: BlobPropertyBag) => {
-			const source = realFile(target, options);
-			if (target !== file || !armed) return source;
-			armed = false;
-			return new Proxy(source, {
-				get(source, property) {
-					if (property === "text") {
-						return async () => {
-							const text = await source.text();
-							entered.resolve();
-							await resume.promise;
-							return text;
-						};
+		{ name: "ordinary overlap", laterModels: ["new"], finishOlderFirst: false },
+		{ name: "ABA overlap", laterModels: ["new", "old"], finishOlderFirst: false },
+		{ name: "a newer no-op reload", laterModels: ["old"], finishOlderFirst: false },
+		{ name: "a newer reload still reading", laterModels: ["new"], finishOlderFirst: true },
+	])(
+		"rejects stale routing after $name without rebinding existing workers",
+		async ({ laterModels, finishOlderFirst }) => {
+			const dir = dirs();
+			const file = path.join(dir, "config.yml");
+			const writeModel = (model: string) =>
+				fs.writeFile(file, JSON.stringify({ agent: { model: `openai/${model}`, sharedModel: true } }));
+			await writeModel("old");
+			const settings = await Settings.loadReadOnly({ agentDir: dir });
+			const existing = await createSubagentSettingsForCwd(settings, dir);
+			const entered = Promise.withResolvers<void>();
+			const resume = Promise.withResolvers<void>();
+			const newerEntered = Promise.withResolvers<void>();
+			const newerResume = Promise.withResolvers<void>();
+			const realFile = Bun.file.bind(Bun);
+			let reads = 0;
+			const readBarrier = spyOn(Bun, "file").mockImplementation(((target: string, options?: BlobPropertyBag) => {
+				const source = realFile(target, options);
+				if (target !== file || reads >= (finishOlderFirst ? 2 : 1)) return source;
+				const first = reads++ === 0;
+				return new Proxy(source, {
+					get(source, property) {
+						if (property === "text") {
+							return async () => {
+								const text = await source.text();
+								(first ? entered : newerEntered).resolve();
+								await (first ? resume : newerResume).promise;
+								return text;
+							};
+						}
+						const value = Reflect.get(source, property, source);
+						return typeof value === "function" ? value.bind(source) : value;
+					},
+				});
+			}) as typeof Bun.file);
+			await writeModel("stale");
+			const delayed = settings.reloadConfig().then(
+				() => undefined,
+				(error: unknown) => error,
+			);
+			let newer: Promise<unknown> | undefined;
+			try {
+				await entered.promise;
+				for (const model of laterModels) {
+					await writeModel(model);
+					const reload = settings.reloadConfig();
+					if (finishOlderFirst) {
+						newer = reload.catch((error: unknown) => error);
+						await newerEntered.promise;
+					} else {
+						await reload;
 					}
-					const value = Reflect.get(source, property, source);
-					return typeof value === "function" ? value.bind(source) : value;
-				},
-			});
-		}) as typeof Bun.file);
-		await writeModel("stale");
-		const delayed = settings.reloadConfig().then(
-			() => undefined,
-			(error: unknown) => error,
-		);
-		try {
-			await entered.promise;
-			for (const model of laterModels) {
-				await writeModel(model);
-				await settings.reloadConfig();
+				}
+				resume.resolve();
+				const failure = await delayed;
+				if (finishOlderFirst) {
+					expect(settings.get("agent.model")).toBe("openai/old");
+					newerResume.resolve();
+					expect(await newer).not.toBeInstanceOf(Error);
+				}
+				const expected = `openai/${laterModels.at(-1)}`;
+				expect((await fs.readFile(file, "utf8")).includes(expected)).toBe(true);
+				expect(settings.get("agent.model")).toBe(expected);
+				const next = await createSubagentSettingsForCwd(settings, dir);
+				expect(resolveAgentModel({ settings: next, agentName: "task" }).patterns).toEqual([expected]);
+				expect(resolveAgentModel({ settings: existing, agentName: "task" }).patterns).toEqual(["openai/old"]);
+				expect(failure).toBeInstanceOf(Error);
+				expect((failure as Error).message).toContain("Settings changed during reload");
+			} finally {
+				resume.resolve();
+				newerResume.resolve();
+				await delayed;
+				await newer;
+				readBarrier.mockRestore();
 			}
-			resume.resolve();
-			const failure = await delayed;
-			const expected = `openai/${laterModels.at(-1)}`;
-			expect((await fs.readFile(file, "utf8")).includes(expected)).toBe(true);
-			expect(settings.get("agent.model")).toBe(expected);
-			const next = await createSubagentSettingsForCwd(settings, dir);
-			expect(resolveAgentModel({ settings: next, agentName: "task" }).patterns).toEqual([expected]);
-			expect(resolveAgentModel({ settings: existing, agentName: "task" }).patterns).toEqual(["openai/old"]);
-			expect(failure).toBeInstanceOf(Error);
-			expect((failure as Error).message).toContain("Settings changed during reload");
-		} finally {
-			resume.resolve();
-			await delayed;
-			readBarrier.mockRestore();
-		}
-	});
+		},
+	);
 
 	it("contains rejected reloads through the real TUI follow-up dispatcher and permits retry", async () => {
 		const dir = dirs();
