@@ -37,6 +37,8 @@
 
 ### Fixed
 
+- Selective config reload reports per-key applicability, preserves product-declared startup-bound leaves within mixed maps, and identifies unsupported edited keys without activating them ([#39](https://github.com/Wladefant/veyyon/issues/39)).
+- Order concurrent reloads monotonically so a stale read cannot overwrite a later successful reload, including ABA and no-op reloads ([#26](https://github.com/Wladefant/veyyon/issues/26)).
 - Restored selective config reload in the shared settings store, preserving runtime overrides and existing worker snapshots, rejecting invalid or racing reloads, and keeping restart-only disk edits inactive during later saves ([#26](https://github.com/Wladefant/veyyon/issues/26)).
 - Order concurrent reloads by their start generation so a stale read cannot overwrite or invalidate a newer request, including pending, ABA and no-op reloads ([#26](https://github.com/Wladefant/veyyon/issues/26)).
 - Settings queries ignore inherited object properties.

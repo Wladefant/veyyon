@@ -831,15 +831,18 @@ const BUILTIN_SLASH_COMMAND_HANDLERS: { [Name in BuiltinSlashCommandName]: Handl
 				const result = await runtime.settings.reloadConfig();
 				await runtime.output(
 					[
-						"Config routing defaults reloaded. Running Main and existing workers keep their model and effort bindings.",
-						...result.changed.map(
-							change =>
-								`${change.path}: ${JSON.stringify(change.before) ?? "unset"} → ${JSON.stringify(change.after) ?? "unset"}`,
-						),
-						result.changed.length ? "These defaults apply to new spawns." : "No effective routing changes.",
-						...(result.restartRequired.length
-							? [`Not reloaded (restart required): ${result.restartRequired.join(", ")}`]
-							: []),
+						"Config reload processed. Running Main and existing workers keep their model and effort bindings.",
+						...result.outcomes.map(outcome => {
+							const change = result.changed.find(row => row.path === outcome.path);
+							return `${outcome.path}: ${outcome.status}${outcome.reason ? ` — ${outcome.reason}` : ""}${
+								change
+									? ` (${JSON.stringify(change.before) ?? "unset"} → ${JSON.stringify(change.after) ?? "unset"})`
+									: ""
+							}`;
+						}),
+						result.changed.length
+							? "Applied routing values are used by new spawns."
+							: "No effective routing changes.",
 					].join("\n"),
 				);
 			} catch (error) {

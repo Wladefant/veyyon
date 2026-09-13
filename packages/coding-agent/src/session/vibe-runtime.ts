@@ -18,6 +18,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { errorMessage, logger, prompt, Snowflake } from "@veyyon/utils";
 import type { AsyncJob, AsyncJobManager } from "../async/job-manager";
+import type { Settings } from "../config/settings";
 import type { LocalProtocolOptions } from "../internal-urls";
 import { registerArtifactsDir } from "../internal-urls/registry-helpers";
 import { mcpManagerInstance } from "../mcp/manager-instance";
@@ -107,6 +108,7 @@ interface VibeRecord {
 	cli: VibeCli;
 	ownerId: string;
 	agent: AgentDefinition;
+	settings: Settings;
 	modelOverride?: string | string[];
 	/**
 	 * Effort resolved from `agent.*` when the worker started, held beside
@@ -351,8 +353,9 @@ export class VibeSessionRegistry {
 			throw new ToolError(`Cannot start vibe worker "${agentName}". Enabled and allowed agents: ${available}.`);
 		}
 
+		const spawnSettings = session.settings.forkWithRuntimeOverrides();
 		const resolvedModel = resolveAgentModel({
-			settings: session.settings,
+			settings: spawnSettings,
 			agentName,
 			agentModel: agent.model,
 			fallbackModelPattern: session.getModelString?.(),
@@ -379,9 +382,10 @@ export class VibeSessionRegistry {
 			cli: args.cli,
 			ownerId: owner,
 			agent,
+			settings: spawnSettings,
 			modelOverride,
 			thinkingLevel: resolveAgentThinkingLevel({
-				settings: session.settings,
+				settings: spawnSettings,
 				agentName,
 				agentThinkingLevel: agent.thinkingLevel,
 			}),
@@ -604,7 +608,7 @@ export class VibeSessionRegistry {
 			onProgress,
 			authStorage: session.authStorage,
 			modelRegistry: session.modelRegistry,
-			settings: session.settings,
+			settings: record.settings,
 			mcpManager: session.mcpManager ?? mcpManagerInstance(),
 			contextFiles: inheritContextFiles({
 				parentContextFiles: session.contextFiles,
