@@ -28,6 +28,7 @@
 ### Changed
 
 - The relaxed JSON parser's object and array loops position on the next element and consume the delimiter after it through one pair of container steps, and both atomic-write target resolvers record a symlink hop and raise `ELOOP` through one helper; no behavior change.
+- The workspace-manifest gate reads the files git would carry rather than walking the filesystem, so a directory git ignores under a member — a scratch copy, a vendored checkout, a local dump — no longer reports its imports as undeclared edges; no user-facing effect.
 - Display LaTeX splits its top-level rows and an environment body splits its `\\` rows through one depth-aware scanner; no behavior change.
 - Literal prompt templates skip variable analysis and compilation while preserving formatted output.
 - XML escaping, C1 normalization, OSC 66 alignment and tab counting share implementations without changing rendered text.
