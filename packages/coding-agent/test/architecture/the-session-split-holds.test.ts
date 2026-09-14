@@ -36,15 +36,16 @@ const RUNTIME = `${SESSION_DIR}/agent-session.ts`;
 const FACADE = `${SESSION_DIR}/facade.ts`;
 
 /**
- * MEASURED at 18517 lines, which is 131 above the 18386 the previous ceiling was cut to. The growth
- * is the runtime's own, arriving from the default branch rather than from a family moving back in,
- * so the ceiling is re-cut just above the measurement instead of holding a number the file already
- * exceeds. Three families have left the class since the declarations did — TTSR, the todo board and
- * the thinking level, now collaborators under `runtime/` — and the number falls again when the next
- * one leaves. It ratchets: 83 lines of slack is what it takes to not fail on the next honest edit,
- * and a ceiling left far above a shrinking file stops being a bound.
+ * MEASURED at 18604 lines. The growth over the previous 18517 is the compaction dead-end rescue —
+ * the payload gap, the staged rescue and the oversized-tail cut — which is the runtime's own work
+ * on its own state rather than a family moving back in, so the ceiling is re-cut just above the
+ * measurement instead of holding a number the file already exceeds. Three families have left the
+ * class since the declarations did — TTSR, the todo board and the thinking level, now collaborators
+ * under `runtime/` — and the number falls again when the next one leaves. It ratchets: 46 lines of
+ * slack is what it takes to not fail on the next honest edit, and a ceiling left far above a
+ * shrinking file stops being a bound.
  */
-const RUNTIME_CEILING = 18_600;
+const RUNTIME_CEILING = 18_650;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
