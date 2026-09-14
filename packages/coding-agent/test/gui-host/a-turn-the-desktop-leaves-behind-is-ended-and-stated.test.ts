@@ -42,6 +42,7 @@ import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { computeDefaultSessionDir } from "@veyyon/kernel/session/session-paths";
 import { FileSessionStorage } from "@veyyon/kernel/session/session-storage";
+import { isSessionFileName } from "@veyyon/utils/session-file";
 import { type GuiHostServer, type HostEvent, startGuiHostServer } from "../../src/gui-host";
 import { sessionsActionHandlers } from "../../src/gui-host/actions/sessions";
 import { turnActionHandlers } from "../../src/gui-host/actions/turn";
@@ -249,6 +250,9 @@ describe("a turn the desktop leaves behind is ended and stated", () => {
 	/** The messages `session` holds on disk, as `role/stopReason:text`. */
 	async function messagesOnDisk(session: string): Promise<string[]> {
 		for (const file of await fs.readdir(sessionDir)) {
+			// The directory also holds the picker's `.session-list-index.json`
+			// cache, which is not a session file and fails to open as one.
+			if (!isSessionFileName(file)) continue;
 			const sm = await SessionManager.open(path.join(sessionDir, file), undefined, undefined, {
 				suppressBreadcrumb: true,
 			});
