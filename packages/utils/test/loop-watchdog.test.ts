@@ -31,16 +31,26 @@ function spin(ms: number): void {
 function harness(options: Partial<{ intervalMs: number; thresholdMs: number }> = {}) {
 	let nowValue = 0;
 	let scheduled: (() => void) | undefined;
+	// CPU the process has consumed, in ms. It tracks the deadline clock by
+	// default, which is a process that ran for every millisecond that elapsed —
+	// the case every pre-existing assertion below was written under. A case that
+	// wants a loop which was never given the CPU freezes it with `setCpuMs`.
+	let cpuOverrideMs: number | undefined;
 	const now = () => nowValue;
 	const schedule = (cb: () => void) => {
 		scheduled = cb;
 		return {};
 	};
-	const wd = new LoopWatchdog({ now, schedule, ...options });
+	const cpuUsage = () => ({ user: (cpuOverrideMs ?? nowValue) * 1000, system: 0 });
+	const wd = new LoopWatchdog({ now, schedule, cpuUsage, ...options });
 	return {
 		wd,
 		setNow(value: number): void {
 			nowValue = value;
+		},
+		/** Freeze consumed CPU at `value` ms, however far the deadline clock runs. */
+		setCpuMs(value: number): void {
+			cpuOverrideMs = value;
 		},
 		fireTick(): void {
 			const cb = scheduled;
@@ -50,7 +60,7 @@ function harness(options: Partial<{ intervalMs: number; thresholdMs: number }> =
 	};
 }
 
-type BlockedContext = { blockedMs: number; phase: string; phaseMs: number; topPhase?: string };
+type BlockedContext = { blockedMs: number; cpuMs: number; phase: string; phaseMs: number; topPhase?: string };
 
 /**
  * The lines the watchdog logged, in order. Every case below asserts what was reported, which is
@@ -59,6 +69,15 @@ type BlockedContext = { blockedMs: number; phase: string; phaseMs: number; topPh
 function captureWarnings(): Array<{ event: string; ctx: BlockedContext }> {
 	const lines: Array<{ event: string; ctx: BlockedContext }> = [];
 	vi.spyOn(logger, "warn").mockImplementation(((event: string, ctx: BlockedContext) => {
+		lines.push({ event, ctx });
+	}) as never);
+	return lines;
+}
+
+/** Same, for the level a block the process never ran is recorded at. */
+function captureDebug(): Array<{ event: string; ctx: BlockedContext }> {
+	const lines: Array<{ event: string; ctx: BlockedContext }> = [];
+	vi.spyOn(logger, "debug").mockImplementation(((event: string, ctx: BlockedContext) => {
 		lines.push({ event, ctx });
 	}) as never);
 	return lines;
@@ -268,5 +287,95 @@ describe("LoopWatchdog", () => {
 		wd.stop();
 
 		expect(cancels).toBe(1);
+	});
+
+	/**
+	 * THE DEFECT: every late tick warned, so a loaded host descheduling an idle
+	 * process produced the same line as a hot synchronous pass. Measured over one
+	 * real 13-hour session the two were indistinguishable — p50 292ms when the
+	 * process had logged in the last 30s, p50 270ms when it had been silent for
+	 * minutes — so the warn channel carried 104 lines and no cause.
+	 *
+	 * THE CLASS: a lateness measure read as a work measure. The overshoot says
+	 * the loop did not run; only the CPU consumed says whether the process was
+	 * the reason.
+	 */
+	test("warns when the process burned the CPU the block cost", () => {
+		const warnings = captureWarnings();
+		const debugs = captureDebug();
+		const { wd, setNow, fireTick } = harness();
+
+		wd.start(); // deadline 250, CPU banked at 0
+		setNow(600); // blockedMs = 350, and CPU tracks the clock: the process ran all of it
+		fireTick();
+
+		expect(debugs).toEqual([]);
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]!.ctx.blockedMs).toBe(350);
+		expect(warnings[0]!.ctx.cpuMs).toBe(600);
+	});
+
+	test("records rather than warns when the loop was never given the CPU", () => {
+		const warnings = captureWarnings();
+		const debugs = captureDebug();
+		const { wd, setNow, setCpuMs, fireTick } = harness();
+
+		wd.start(); // deadline 250, CPU banked at 0
+		setCpuMs(2); // 600ms of wall clock elapses; the process gets 2ms of CPU
+		setNow(600);
+		fireTick();
+
+		// Still reported, with the same fields — the evidence is not suppressed,
+		// it is filed where it belongs.
+		expect(warnings).toEqual([]);
+		expect(debugs).toHaveLength(1);
+		expect(debugs[0]!.event).toBe("ui.loop-blocked");
+		expect(debugs[0]!.ctx.blockedMs).toBe(350);
+		expect(debugs[0]!.ctx.cpuMs).toBe(2);
+	});
+
+	test("counts kernel time toward the block, so a syscall-bound pass still warns", () => {
+		const warnings = captureWarnings();
+		const debugs = captureDebug();
+		let nowValue = 0;
+		let cb: (() => void) | undefined;
+		const wd = new LoopWatchdog({
+			now: () => nowValue,
+			schedule: (c: () => void) => {
+				cb = c;
+				return {};
+			},
+			// Every microsecond of it is kernel time: a pass that spends the block
+			// inside write(2) is the product's work, not the machine's jitter.
+			cpuUsage: () => ({ user: 0, system: nowValue * 1000 }),
+		});
+
+		wd.start();
+		nowValue = 600;
+		cb?.();
+
+		expect(debugs).toEqual([]);
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]!.ctx.cpuMs).toBe(600);
+	});
+
+	test("measures CPU per interval, not since the process started", () => {
+		const warnings = captureWarnings();
+		const debugs = captureDebug();
+		const { wd, setNow, setCpuMs, fireTick } = harness();
+
+		// A busy first interval banks a large absolute CPU total.
+		wd.start();
+		setNow(250); // on time, re-arms with CPU banked at 250ms
+		fireTick();
+		// The next interval is pure starvation: the clock runs, CPU does not.
+		setCpuMs(250);
+		setNow(900);
+		fireTick();
+
+		// Read as an absolute total, 250ms of earlier CPU would cover this block.
+		expect(warnings).toEqual([]);
+		expect(debugs).toHaveLength(1);
+		expect(debugs[0]!.ctx.cpuMs).toBe(0);
 	});
 });
