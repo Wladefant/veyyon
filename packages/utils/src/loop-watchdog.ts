@@ -28,6 +28,16 @@ interface LoopWatchdogTimer {
 }
 
 /**
+ * The most CPU one thread can report against the wall time it spanned.
+ *
+ * MEASURED: a single pinned thread reports at most 1.013 of elapsed wall time,
+ * the drift being clock granularity. The bound sits above that and below the
+ * 1.3 a second thread reaches running only a third of the interval, so it
+ * separates one busy thread from two without tuning.
+ */
+const SINGLE_THREAD_CPU_RATIO = 1.25;
+
+/**
  * Always-on event-loop lag probe. Each tick is scheduled `intervalMs` ahead of
  * a recorded deadline; a tick that fires `thresholdMs` past its deadline means
  * the loop did not come back on time. The overshoot is logged once on the
@@ -142,13 +152,25 @@ export class LoopWatchdog {
 				// the loop was off-CPU — descheduled by a loaded host, or parked in a
 				// blocking syscall — and that is a fact about the machine, not a
 				// defect, so it is recorded rather than warned about.
-				const ranTheBlock = cpuMs * 2 >= blockedMs;
+				//
+				// `process.cpuUsage` is the whole process, every thread of it, and
+				// this process runs threads that are not the loop: the JS eval kernel
+				// and each browser tab supervisor. One thread cannot burn more CPU
+				// than the wall time it spanned — measured, a pinned thread reports
+				// 1.013 of it — so a figure above that bound proves another thread
+				// ran, and the number then says nothing about whether the LOOP did.
+				// Attributing it anyway would warn about host jitter for as long as a
+				// worker is busy, which is the false alarm this split exists to end.
+				const elapsedMs = this.#intervalMs + blockedMs;
+				const loopThreadOnly = cpuMs <= elapsedMs * SINGLE_THREAD_CPU_RATIO;
+				const ranTheBlock = loopThreadOnly && cpuMs * 2 >= blockedMs;
 				const line = {
 					blockedMs: Math.round(blockedMs),
 					cpuMs: Math.round(cpuMs),
 					phase: attributed ? phase : "unknown",
 					phaseMs,
 					...(attributed ? {} : { topPhase: phase ?? "none" }),
+					...(loopThreadOnly ? {} : { cpuThreads: "multiple" }),
 				};
 				if (ranTheBlock) logger.warn("ui.loop-blocked", line);
 				else logger.debug("ui.loop-blocked", line);

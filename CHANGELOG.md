@@ -472,6 +472,7 @@
 - `visualColAtOffset` and `offsetAtVisualCol` are exported from `@veyyon/utils/width` and shared by `Editor` and `Input`.
 - Source comments refer to the spawned-agent HUD as the agent HUD. No behavior change.
 - The relaxed JSON parser's object and array loops position on the next element and consume the delimiter after it through one pair of container steps, and both atomic-write target resolvers record a symlink hop and raise `ELOOP` through one helper; no behavior change.
+- A blocked-loop line is a warning only when the CPU it reports could have come from the loop's own thread: `process.cpuUsage()` counts every thread, so a busy JS eval kernel or browser tab worker used to mark host scheduling jitter as work the process did. A figure above what one thread can spend in the elapsed time is recorded at debug and carries `cpuThreads: "multiple"`.
 - The workspace-manifest gate reads the files git would carry rather than walking the filesystem, so a directory git ignores under a member — a scratch copy, a vendored checkout, a local dump — no longer reports its imports as undeclared edges; no user-facing effect.
 - Display LaTeX splits its top-level rows and an environment body splits its `\\` rows through one depth-aware scanner; no behavior change.
 - Literal prompt templates skip variable analysis and compilation while preserving formatted output.

@@ -60,7 +60,14 @@ function harness(options: Partial<{ intervalMs: number; thresholdMs: number }> =
 	};
 }
 
-type BlockedContext = { blockedMs: number; cpuMs: number; phase: string; phaseMs: number; topPhase?: string };
+type BlockedContext = {
+	blockedMs: number;
+	cpuMs: number;
+	phase: string;
+	phaseMs: number;
+	topPhase?: string;
+	cpuThreads?: string;
+};
 
 /**
  * The lines the watchdog logged, in order. Every case below asserts what was reported, which is
@@ -377,5 +384,50 @@ describe("LoopWatchdog", () => {
 		expect(warnings).toEqual([]);
 		expect(debugs).toHaveLength(1);
 		expect(debugs[0]!.ctx.cpuMs).toBe(0);
+	});
+
+	/**
+	 * THE DEFECT this closes, found by review of the fix above rather than from a
+	 * report: `process.cpuUsage()` is the whole process, and this process runs
+	 * threads that are not the loop — the JS eval kernel and each browser tab
+	 * supervisor. Measured, four burning workers report 6064ms of CPU across
+	 * 1702ms of wall time while the main thread only awaits a timer. Read as the
+	 * loop's own CPU, that marks host jitter as work the process did and warns,
+	 * re-arming the false alarm the level split exists to end, for as long as a
+	 * worker is busy.
+	 */
+	test("refuses to call a block the loop's own when another thread burned the CPU", () => {
+		const warnings = captureWarnings();
+		const debugs = captureDebug();
+		const { wd, setNow, setCpuMs, fireTick } = harness();
+
+		wd.start(); // deadline armed at 250
+		// 650ms of wall time for a 250ms interval plus a 400ms overshoot, against
+		// 2400ms of CPU: nearly four thread-seconds, which one thread cannot spend.
+		setCpuMs(2400);
+		setNow(650);
+		fireTick();
+
+		expect(warnings).toEqual([]);
+		expect(debugs).toHaveLength(1);
+		expect(debugs[0]!.ctx.cpuThreads).toBe("multiple");
+		// The measurement is still reported: suppressing it would hide the one
+		// number that says why the line was not attributed.
+		expect(debugs[0]!.ctx.cpuMs).toBe(2400);
+	});
+
+	test("still warns when one thread spent the whole interval, and says nothing about threads", () => {
+		const warnings = captureWarnings();
+		const debugs = captureDebug();
+		const { wd, setNow, fireTick } = harness();
+
+		// The harness default is CPU tracking the clock exactly: one thread, pinned.
+		wd.start();
+		setNow(650);
+		fireTick();
+
+		expect(debugs).toEqual([]);
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]!.ctx.cpuThreads).toBeUndefined();
 	});
 });
