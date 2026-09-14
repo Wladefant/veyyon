@@ -292,6 +292,9 @@ describe("a decision a turn is blocked on does not outlive the stop", () => {
 	/** The messages `session` holds on disk, as `role/stopReason:content`. */
 	async function messagesOnDisk(session: string): Promise<string[]> {
 		for (const file of await fs.readdir(sessionDir)) {
+			// The directory also holds the picker's `.session-list-index.json`
+			// cache, which is not a session file and fails to open as one.
+			if (!file.endsWith(".jsonl")) continue;
 			const sm = await SessionManager.open(path.join(sessionDir, file), undefined, undefined, {
 				suppressBreadcrumb: true,
 			});
