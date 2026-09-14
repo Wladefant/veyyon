@@ -385,6 +385,7 @@
 - An MCP server whose reconnects trip the breaker is reported on the operator channel with the server name and the suspension; the suspension was logged only.
 - A CommonJS extension (`module.exports = …`, or a transpiled module with `exports.__esModule`) runs instead of being reported as missing its default export; the wrapper mirrors Bun's `__esModule` interop.
 - A marketplace catalog entry the parser drops is reported with the plugin name, the failing field and the reason: `veyyon plugin marketplace add`/`update` print it to stderr and a session states it on the notice channel; the entry was skipped in silence and the cached catalog persisted without it.
+- The account manager names the account a failed OAuth refresh signed out ("the login for user@example.com was signed out"), so a surviving account rendered beside it is no longer read as the dead one; a credential that states no account keeps the unattributed wording.
 
 ### Removed
 
