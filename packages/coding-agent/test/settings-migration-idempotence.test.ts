@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { MAX_ASK_TIMEOUT_SECONDS, Settings } from "@veyyon/coding-agent/config/settings";
+import { migrateRawSettings } from "@veyyon/coding-agent/config/settings-migrations";
 import { logger, removeWithRetries } from "@veyyon/utils";
 import * as YAML from "yaml";
 import { guardDestructivePath } from "../../utils/test/helpers/destructive-guard";
@@ -16,7 +17,7 @@ const makeSettingsMigrationDir = useTrackedTempDirs("veyyon-settings-migration-"
 /**
  * Schema migrations run on EVERY read, so each one has to be a fixed point.
  *
- * `#migrateRawSettings` is not a one-time upgrade step. It runs whenever the
+ * `migrateRawSettings` (`config/settings-migrations`) is not a one-time upgrade step. It runs whenever the
  * config is loaded, and the save path re-reads and re-migrates before writing.
  * That design is fine, and deliberately so, but it rests on a property nothing
  * checked: applying a migration to its own output must change nothing. A
@@ -300,5 +301,43 @@ describe("settings migrations are fixed points", () => {
 
 		const onDisk = YAML.parse(fs.readFileSync(path.join(agentDir, "config.yml"), "utf8")) as Record<string, unknown>;
 		expect(onDisk.somethingFromTheFuture).toEqual({ nested: [1, 2, 3] });
+	});
+
+	/**
+	 * The property asserted at the choke point every source passes through,
+	 * rather than one legacy key at a time through the loader. `migrateRawSettings`
+	 * runs on every load of every source, so a second application to its own
+	 * output must change nothing — and this fails on a NEW migration that is not a
+	 * fixed point, whichever key it renames, which a per-key case cannot do.
+	 */
+	test("applying every migration to its own output changes nothing", () => {
+		const legacy = (): Record<string, unknown> => ({
+			queueMode: "steer",
+			collapseChangelog: true,
+			lastChangelogVersion: "1.2.3",
+			serviceTier: "flex",
+			serviceTierSubagent: "openai-only",
+			cycleOrder: ["default", "plan"],
+			inlineToolDescriptors: true,
+			snapcompact: { archive: true },
+			ask: { timeout: 120_000 },
+			memories: { enabled: true },
+			codexResets: { autoRedeem: false },
+			providers: { parallelFetch: true },
+			mnemosyne: { bank: "notes" },
+			statusLine: { leftSegments: ["plan_mode"], segmentOptions: { plan_mode: { compact: true } } },
+			"argot.models": ["a"],
+			somethingFromTheFuture: { nested: [1, 2, 3] },
+		});
+		const context = { reportAskTimeoutRewrite: () => {} };
+
+		const once = migrateRawSettings(legacy() as never, context);
+		const twice = migrateRawSettings(structuredClone(once) as never, context);
+
+		expect(twice).toEqual(once);
+		// A migration that silently dropped everything would also be a fixed point.
+		expect(once.steeringMode).toBe("steer");
+		expect((once.memory as Record<string, unknown>).backend).toBe("local");
+		expect(once.somethingFromTheFuture).toEqual({ nested: [1, 2, 3] });
 	});
 });

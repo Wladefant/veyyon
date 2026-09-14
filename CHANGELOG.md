@@ -215,6 +215,8 @@
 
 - The GUI host reports a failed action through the shared `errorMessage` helper rather than its own inline error narrowing in each handler. No user-visible behavior changes.
 - A terminal the desktop opens starts its shell in the root session tree's CPU budget group, so a shell that outlives the session it was opened beside stays capped rather than uncapped.
+- The 860 lines of raw settings migrations moved out of `config/settings.ts` into `config/settings-migrations.ts`, which also drops the theme-classifier, builtin-tool-name and compaction-strategy imports from the module most of the product reaches for a setting. No setting, default, order or migration behavior changes.
+- Model target selection moved out of `session/agent-session.ts` into `session/agent-session-model-targets.ts`: role resolution, a configured target's model, the compaction candidate list and its configured thinking efforts read only the settings, a model and the available list, so they are callable without a session. No selection, ordering or fallback behavior changes.
 - A running tool card animates one mark: the "… (streaming)" spinner row is drawn only under a header that carries no running spinner of its own, and an agent an eval cell spawned shows the task card's static accent mark instead of a second spinner.
 - The read and write cards parse their arguments and details through `@veyyon/utils/fs-tool-args`, so a terminal launch no longer evaluates `@veyyon/tool-render`; the cards draw the same rows.
 - The legacy `memories.enabled` key is no longer a declared or host-defaulted setting: a config that still holds it migrates to `memory.backend` on load, the key is dropped on the next rewrite, and the local memory pipeline is enabled by `memory.backend: local` only. The presentation module's error messages, read-target parsing and cursor clamping use the `@veyyon/utils` helpers; no behavior change.
@@ -472,6 +474,8 @@
 - The package directory is `plugins/hashline` instead of `packages/hashline`; the published package name, entry points and behavior are unchanged.
 - Seen-line and clipped-line records merge into a snapshot through one keyed step; recorded provenance is unchanged.
 - A custom message payload and a stored session entry carry `VideoContent` beside text and images, so a video attachment survives `pi.sendMessage`, persistence and rehydration.
+- Session listing reuses a per-directory index for files whose size and mtime are unchanged instead of rescanning every file, cutting a 4,825-session `/resume` list from 6.8 s to 185 ms when a session changed and 88 ms when none did.
+- Resolving a session id that no directory in the active profile holds reads the other profiles through the same per-directory index, cutting that lookup from 2.5 s to 126 ms.
 - Settings mutations and session storage writers share implementations without changing persistence, hook ordering or error behavior.
 - Installed plugin registry readers share JSON validation while preserving numeric-version handling and malformed-file behavior.
 - Plugin runtime configuration uses the shared record validator; behavior is unchanged.
@@ -540,6 +544,8 @@
 - `visualColAtOffset` and `offsetAtVisualCol` are exported from `@veyyon/utils/width` and shared by `Editor` and `Input`.
 - Source comments refer to the spawned-agent HUD as the agent HUD. No behavior change.
 - The relaxed JSON parser's object and array loops position on the next element and consume the delimiter after it through one pair of container steps, and both atomic-write target resolvers record a symlink hop and raise `ELOOP` through one helper; no behavior change.
+- A blocked-loop line is a warning only when the CPU it reports could have come from the loop's own thread: `process.cpuUsage()` counts every thread, so a busy JS eval kernel or browser tab worker used to mark host scheduling jitter as work the process did. A figure above what one thread can spend in the elapsed time is recorded at debug and carries `cpuThreads: "multiple"`.
+- The workspace-manifest gate reads the files git would carry rather than walking the filesystem, so a directory git ignores under a member — a scratch copy, a vendored checkout, a local dump — no longer reports its imports as undeclared edges; no user-facing effect.
 - Display LaTeX splits its top-level rows and an environment body splits its `\\` rows through one depth-aware scanner; no behavior change.
 - Literal prompt templates skip variable analysis and compilation while preserving formatted output.
 - XML escaping, C1 normalization, OSC 66 alignment and tab counting share implementations without changing rendered text.
@@ -709,6 +715,7 @@
 - Desktop keyboard and pointer actions notify the host observer at the shared dispatch boundary without waiting for an unrelated repaint.
 - GUI host branching uses the session lifecycle for both loaded and unloaded sessions, preserving extension cancellation and source transcripts.
 - Native desktop backdrop blur renders on surfaces without texture-copy support instead of leaving the window on its initial frame.
+- Automatic maintenance cuts an oversized body until a summarization request fits a summarizer, instead of parking the session with "Compaction freed too little context to make progress" when every candidate was skipped for holding fewer tokens than the summary needed.
 - Print, JSON and RPC mode flush Bun's stdout sink before exiting, so a piped consumer receives the whole last frame instead of losing up to 1 MiB of queued output.
 - A spawned agent's card shows its resolved-model badge again on the live block, the registry path an extension wraps and the rebuilt transcript, per `agent.showResolvedModelBadge`.
 - With `VEYYON_FORCE_IMAGE_PROTOCOL=sixel` and `VEYYON_ALLOW_SIXEL_PASSTHROUGH=1`, a bash card draws an inline Sixel image row as the program wrote it instead of blanking it.
@@ -840,6 +847,8 @@
 - A CommonJS extension (`module.exports = …`, or a transpiled module with `exports.__esModule`) runs instead of being reported as missing its default export; the wrapper mirrors Bun's `__esModule` interop.
 - A marketplace catalog entry the parser drops is reported with the plugin name, the failing field and the reason: `veyyon plugin marketplace add`/`update` print it to stderr and a session states it on the notice channel; the entry was skipped in silence and the cached catalog persisted without it.
 - Codex remote compaction requests declare the `responses_compaction_v2` implementation, matching the route they are sent to.
+- The account manager names the account a failed OAuth refresh signed out ("the login for user@example.com was signed out"), so a surviving account rendered beside it is no longer read as the dead one; a credential that states no account keeps the unattributed wording.
+- A provider whose other login still serves every request states that instead of printing `press a to sign in again`, which claimed the provider was unusable on the same card that listed the account using it; a provider with nothing left serving still asks for the login.
 - `AgentTool.renderResult` accepts the optional call arguments already supported by custom and extension tool renderers.
 - A history summary whose single request times out, or does not fit the summarizing model's context window, is produced in stages: the span is summarized as consecutive segments of up to 32k tokens, four at a time, and the segment summaries are merged in rounds into one summary, so a 234k-token session on a model that never begins a whole-span answer still compacts; `compact()` reports the segment count in `summaryStages` and takes `summaryStaging: "staged"` to start staged.
 - A provider's server-side compaction runs under its own ten-minute deadline instead of the three-minute remote-summarizer deadline that cut every codex compaction of a large span.
@@ -853,6 +862,7 @@
 - Credential-store startup applies SQLite busy handling and WAL mode before initializing refresh leases, allowing concurrent launches to wait for database locks.
 - Google's generic `RESOURCE_EXHAUSTED` 429 body ("Resource has been exhausted (e.g. check quota)") classifies as a per-minute throttle retried on the same account after 45-75 s, instead of a daily quota wall whose 30-minute wait exceeded the retry budget and ended the turn on the first 429; a body that states a quota keeps the quota classification.
 - Normalized model pricing defaults at model construction and cost calculation so custom and discovery models without explicit cost fields do not throw on usage streaming.
+- `AuthStorage.disabledCredentialAccount` states which account a provider's refresh failure belongs to, so a note about a dead login can name it instead of reading as a statement about whichever account it renders beside.
 - Case-insensitive host classification no longer treats control characters as URL punctuation.
 - `codingAgentDir()` resolves `packages/coding-agent` from the repository root, so the binary staleness preflight scans the coding agent's sources again after the package moved to `tests/evals`; it had resolved a sibling directory that does not exist and reported every binary current.
 - A plain `INS.POST` anchored on the trailing phantom line of a newline-terminated file appends the body as new terminated lines, like `INS.TAIL`; the rebuild emitted the phantom sentinel as an empty line and left the new last line without its newline.
@@ -862,6 +872,7 @@
 - `MemorySessionStorage.deleteSessionWithArtifacts` deletes the session entry and its artifact files from memory instead of returning early as a no-op.
 - `walkBranchPath` terminates when traversing cyclic parent entry chains.
 - `StringEnum` options in the legacy plugin shim avoid `any`.
+- `listSessionsReadOnly` writes no session list index, so it makes no write to a directory it states it does not mutate; it still reads an existing index, which is not a mutation.
 - Restored APFS isolation compilation on macOS and stale destination preparation for Windows block-clone isolation.
 - Plain isolation diffs classify binary contents on either side of a symlink transition without dereferencing links.
 - `IsoResolveResult.reason` is set only when `fellBack` is true; a resolution that honoured the preferred backend carried the first unavailable probe's text as if it explained a fallback.
@@ -881,6 +892,7 @@
 - A frame that shrinks below the committed boundary with the composer focused (an IRC card expiring, a displaced todo snapshot retracting, an agent sub-row or HUD row going, the ask dialog's inline editor collapsing) re-shows the frame tail without lowering the commit index, so the rows it re-shows are never appended to native scrollback a second time when the frame grows back; under a tall running tool card this appended the same rows on every insert/retract cycle and left thousands of copies of one status row in scrollback.
 - A frame that grows back while its window still shows rows below the commit boundary keeps sliding the window in place until it passes that boundary, with or without a focused cursor, instead of painting a window shorter than the viewport with blank rows under it.
 - `stripAnsi` removes a CSI sequence written with colon subparameters. The parameter class was `[0-9;?]`, but the spec's parameter bytes are the whole `0x30-0x3f` range, so `:` `<` `=` `>` were not matched: a true-color SGR of the form `ESC [ 38:2:255:0:0 m`, which libvte and several test runners emit, left `38:2:255:0:0m` behind as visible text in captured output. The class is now the spec's, and the three byte classes are disjoint so the pattern accepts exactly what a greedy scanner accepts. The behaviour is pinned against `tests/fixtures/ansi-strip-corpus.json`, which the Rust `strip_ansi` in the shell minimizer reads too, so the two implementations answer the same cases instead of drifting apart.
+- `ui.loop-blocked` reports `cpuMs`, the CPU the process consumed across the interval, and warns only when the process burned at least half the overshoot; a late tick the process spent off-CPU is recorded at debug with the same fields. A tick is late whenever the loop did not run it, which a loaded host causes as readily as a synchronous pass, so every late tick warned and the channel carried blocks with no cause.
 
 ## [1.4.1] - 2026-09-08
 
