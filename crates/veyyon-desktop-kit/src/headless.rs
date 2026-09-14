@@ -129,6 +129,24 @@ static DEVICE: std::sync::LazyLock<Result<gpui_wgpu::WgpuContext, NoOffscreenRen
 fn device() -> Result<&'static gpui_wgpu::WgpuContext, NoOffscreenRenderer> {
 	DEVICE.as_ref().map_err(Clone::clone)
 }
+/// Whether the process-wide device draws on a software adapter.
+///
+/// Lavapipe and llvmpipe report `DeviceType::Cpu`; a sweep budget calibrated
+/// for hardware reads them as a regression when they are only slow. A device
+/// that failed to build reports `false`, which keeps the strict bound: the
+/// context that needs it fails first anyway.
+#[cfg(not(target_os = "macos"))]
+pub fn adapter_is_software() -> bool {
+	device()
+		.map(|context| context.adapter.get_info().device_type == gpui_wgpu::wgpu::DeviceType::Cpu)
+		.unwrap_or(false)
+}
+
+/// macOS draws through Metal, which has no software adapter to name.
+#[cfg(target_os = "macos")]
+pub fn adapter_is_software() -> bool {
+	false
+}
 
 /// A wgpu renderer over the process-wide Vulkan device, drawing to an
 /// offscreen target.

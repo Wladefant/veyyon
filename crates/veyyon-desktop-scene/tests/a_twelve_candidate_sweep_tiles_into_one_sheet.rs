@@ -21,14 +21,17 @@ use std::time::Instant;
 
 use veyyon_desktop_scene::{
 	Appearance, RenderOptions, RgbaColor, SheetCell, SheetGrid, distinct_pixel_values,
-	headless_context, render_view_with_layout, tile, write_png,
+	headless_context, render_view_with_layout, renderer_is_software, tile, write_png,
 };
 use veyyon_gpui::{
 	App, AppContext, Context, IntoElement, ParentElement, Render, Styled, Window, div, px, rgb,
 };
 
-/// The sweep budget from milestone M0.
+/// The sweep budget from milestone M0, on hardware. A software adapter gets a
+/// looser bound: lavapipe rasterizes on the CPU and cannot meet a budget tuned
+/// for a GPU, but the sweep must still terminate.
 const BUDGET_SECONDS: f32 = 5.0;
+const SOFTWARE_BUDGET_SECONDS: f32 = 60.0;
 const CANDIDATES: usize = 12;
 
 const GROUND: u32 = 0x14_14_1a;
@@ -171,9 +174,10 @@ fn twelve_gap_candidates_render_and_tile_within_the_budget() {
 		.join("../../target/scene-frames/sweep-queue-row-gap.png");
 	write_png(&sheet, &path).expect("the sheet encodes as a PNG");
 
+	let budget = if renderer_is_software() { SOFTWARE_BUDGET_SECONDS } else { BUDGET_SECONDS };
 	assert!(
-		elapsed < BUDGET_SECONDS,
-		"the twelve-candidate sweep took {elapsed:.2}s, over the {BUDGET_SECONDS:.1}s budget; past \
+		elapsed < budget,
+		"the twelve-candidate sweep took {elapsed:.2}s, over the {budget:.1}s budget; past \
 		 the budget the loop stops being used and surfaces get judged once",
 	);
 

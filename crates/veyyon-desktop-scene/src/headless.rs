@@ -235,6 +235,14 @@ pub fn headless_context() -> Result<Headless, RenderError> {
 		.map_err(|source| RenderError::NoRenderer { source })?;
 	Ok(Headless { cx, _permit: permit })
 }
+/// Whether the shared offscreen renderer draws on a software adapter.
+///
+/// A sweep budget calibrated for hardware cannot hold under lavapipe, so a
+/// timing assertion reads this once and relaxes its bound rather than
+/// reporting a software rasterizer as a regression.
+pub fn renderer_is_software() -> bool {
+	veyyon_desktop_kit::headless::adapter_is_software()
+}
 
 /// Rasterises one root view offscreen and captures the rendered frame and
 /// the layout box tree.
