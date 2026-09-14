@@ -174,11 +174,15 @@ fn twelve_gap_candidates_render_and_tile_within_the_budget() {
 		.join("../../target/scene-frames/sweep-queue-row-gap.png");
 	write_png(&sheet, &path).expect("the sheet encodes as a PNG");
 
-	let budget = if renderer_is_software() { SOFTWARE_BUDGET_SECONDS } else { BUDGET_SECONDS };
+	let budget = if renderer_is_software() {
+		SOFTWARE_BUDGET_SECONDS
+	} else {
+		BUDGET_SECONDS
+	};
 	assert!(
 		elapsed < budget,
-		"the twelve-candidate sweep took {elapsed:.2}s, over the {budget:.1}s budget; past \
-		 the budget the loop stops being used and surfaces get judged once",
+		"the twelve-candidate sweep took {elapsed:.2}s, over the {budget:.1}s budget; past the \
+		 budget the loop stops being used and surfaces get judged once",
 	);
 
 	println!("sweep of {CANDIDATES} candidates in {elapsed:.2}s -> {}", path.display());
