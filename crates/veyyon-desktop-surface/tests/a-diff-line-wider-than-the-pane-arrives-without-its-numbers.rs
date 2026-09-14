@@ -41,7 +41,7 @@ mod mono_pane;
 use mono_pane::{WINDOW_H, WINDOW_W, open_session, panel_region, rect};
 use veyyon_desktop_kit::load_bundled_tokens;
 use veyyon_desktop_model::DiffMode;
-use veyyon_desktop_scene::{BoxBounds, Captured, headless_context};
+use veyyon_desktop_scene::{BoxBounds, Captured, headless_context, renderer_is_software};
 use veyyon_desktop_surface::{
 	DiffStatus, PanelContent, PanelTab, ShellState, diff::parse_diff, fixture,
 };
@@ -240,8 +240,15 @@ fn a_unified_diff_moves_its_code_and_leaves_its_numbers_and_signs() {
 		.into_iter()
 		.map(|run| run.right)
 		.fold(f32::MIN, f32::max);
+	// Ink is measured in rasterized pixels, and a software rasterizer bleeds a
+	// glyph's ink a couple of pixels past the clip edge a hardware adapter
+	// holds it to. The contract the bound defends is that the pane stops at the
+	// widest line's end instead of travelling into blank space, which a bound
+	// of 8px still proves: an unclamped pane would leave ink hundreds of pixels
+	// past the edge.
+	let edge_tolerance = if renderer_is_software() { 8.0 } else { 2.0 };
 	assert!(
-		(ends - panel.right).abs() < 2.0,
+		(ends - panel.right).abs() < edge_tolerance,
 		"the pane stops with the widest line's end at its own edge rather than travelling into \
 		 blank space: the last ink is at {ends}px against an edge at {}px",
 		panel.right
