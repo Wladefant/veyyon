@@ -104,7 +104,9 @@ describe("a dead login names the account it belonged to", () => {
 		expect(note[0]).toContain(DEAD);
 		expect(note[0]).not.toContain(LIVE);
 		expect(note[0]).toContain("invalid_grant");
-		expect(note[1]).toBe("press a to sign in again");
+		// One account still answers every request, so the provider is not broken and the line
+		// says so instead of demanding a login.
+		expect(note[1]).toBe("1 other account still signed in; press a to sign this one back in");
 	});
 
 	test("keeps the unattributed wording when the dead credential names no account", async () => {
@@ -123,6 +125,50 @@ describe("a dead login names the account it belonged to", () => {
 		// No identity to print, so the note says a login died without claiming which.
 		expect(note[0]).toContain("the login for this provider was signed out");
 		expect(note[0]).toContain("invalid_grant");
+	});
+
+	/**
+	 * THE DEFECT (same report). Naming the account made the first line true and left the second one
+	 * incoherent: `press a to sign in again` rendered beside an account serving every request, so
+	 * one card said the provider works and that the user must act. The instruction belongs to a
+	 * provider with nothing left to serve with.
+	 */
+	test("asks for a login only when no account is left serving the provider", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+		await authStorage.set(PROVIDER, [
+			{
+				type: "oauth",
+				access: "access-dead",
+				refresh: "refresh-dead",
+				expires: Date.now() + 3_600_000,
+				email: DEAD,
+			},
+		]);
+		const id = authStorage.listStoredCredentials(PROVIDER)[0]!.id;
+		store.deleteAuthCredential(id, REFRESH_FAILURE);
+		await authStorage.reload();
+
+		const entry = buildAccountInventory(authStorage).providers.find(group => group.provider === PROVIDER);
+		const note = providerDisabledNote(entry ?? { rows: [] });
+
+		expect(entry?.rows).toEqual([]);
+		expect(note[0]).toContain(DEAD);
+		expect(note[1]).toBe("press a to sign in again");
+	});
+
+	test("counts only the accounts that are actually serving", async () => {
+		// A row whose own probe failed is not something the provider can serve with, so it does not
+		// license the "still signed in" wording that tells the user nothing is wrong.
+		const note = providerDisabledNote({
+			disabledCause: REFRESH_FAILURE,
+			disabledAccount: DEAD,
+			rows: [
+				{ id: 1, provider: PROVIDER, type: "oauth", email: LIVE, health: "failed" },
+				{ id: 2, provider: PROVIDER, type: "oauth", email: "third@example.com" },
+			] as never,
+		});
+
+		expect(note[1]).toBe("1 other account still signed in; press a to sign this one back in");
 	});
 
 	test("says nothing at all when no refresh failure tore a login down", async () => {
