@@ -70,6 +70,11 @@ describe("a session list reuses unchanged rows instead of rescanning", () => {
 			session("a", ["user", "fix the detector policy"], ["assistant", "on it"]),
 		);
 		storage.writeTextSync(`${DIR}/b.jsonl`, session("b", ["user", "ship the release"]));
+		// Explicit mtimes, because the list is ordered by recency and two writes in
+		// one millisecond leave that order undecided: the assertion below would then
+		// compare two differently-tied sorts and fail on a fast machine only.
+		storage.setMtimeSync(`${DIR}/a.jsonl`, 2_000);
+		storage.setMtimeSync(`${DIR}/b.jsonl`, 1_000);
 
 		const scanned = await listSessions(DIR, storage);
 		const reused = await listSessions(DIR, storage);
