@@ -8,12 +8,24 @@
 //! CLASS CLOSED: a theme that cannot be rendered loading anyway. Every §6.9
 //! load rule is exercised against a real file on disk, and the role set is
 //! enumerated from `ColorRole::all()` at run time, so adding a role turns this
-//! red until both bundled themes declare it.
+//! red until both bundled themes declare it and until someone either gives it
+//! a floor or records that §6.9 states none. Each text ink is swept against
+//! all five grounds at the floor its size carries — 4.5:1 at body, 3:1 at
+//! `micro` — so a role cannot clear its floor on one ground and fail on
+//! another.
 //!
-//! NOT CAUGHT: that a role is used by the right surface, which needs the kit
-//! and the surfaces. Perceptual quality of the palettes: contrast floors are a
-//! lower bound on legibility, not a judgement of whether a colour looks right.
-//! Grain (§6.5) and the glass material are unmodelled here.
+//! NOT CAUGHT: any role §6.9 states no floor for, which is `hairline`,
+//! `accent` and `focus`. They are pinned in `NO_TEXT_FLOOR` so the gap is
+//! visible and a fourth one cannot join them quietly, but nothing here
+//! measures them, and §6.9 has no rule to measure them against. A role is also
+//! measured at full strength, so a fill composited at 0.70 over a ground can
+//! clear a floor the eye does not; the kit's menu suite measures that case
+//! against the ground it draws on. Whether a role is used by the right surface
+//! needs the kit and the surfaces, so a text ink drawn on a tint fill rather
+//! than one of the five grounds is measured nowhere here. Perceptual quality
+//! of the palettes: a floor is a lower bound on legibility, not a judgement
+//! that a colour looks right. Grain (§6.5) and the glass material are
+//! unmodelled here.
 
 use std::{fs, path::PathBuf};
 
@@ -47,6 +59,21 @@ fn rewrite(path: &PathBuf, from: &str, to: &str) {
 	fs::write(path, text.replace(from, to)).expect("write scratch theme");
 }
 
+/// Removes the line declaring `role`, whatever colour it holds. Naming the
+/// value here instead couples the test to the palette, so editing a theme
+/// turns this into a no-op that passes on an unmodified file.
+fn drop_role(path: &PathBuf, role: ColorRole) {
+	let text = fs::read_to_string(path).expect("read scratch theme");
+	let key = role.as_str();
+	let total = text.lines().count();
+	let kept: Vec<&str> = text
+		.lines()
+		.filter(|line| line.split('=').next().map(str::trim) != Some(key))
+		.collect();
+	assert!(kept.len() < total, "fixture declares no {key} line; the test would assert nothing");
+	fs::write(path, format!("{}\n", kept.join("\n"))).expect("write scratch theme");
+}
+
 #[test]
 fn both_bundled_themes_load_and_declare_every_role() {
 	let themes = load_bundled_themes(&bundled_dir()).expect("bundled themes load");
@@ -75,90 +102,123 @@ fn both_bundled_themes_load_and_declare_every_role() {
 	}
 }
 
+/// Grounds an ink can be drawn on.
+const GROUNDS: [ColorRole; 5] =
+	[ColorRole::Ground, ColorRole::Rail, ColorRole::Canvas, ColorRole::Inset, ColorRole::Float];
+
+/// Text roles rendered at body size or larger, at §6.9's 4.5:1 floor.
+const BODY_INKS: [ColorRole; 2] = [ColorRole::Foreground, ColorRole::Secondary];
+
+/// Text roles rendered at `micro`, which §6.9 holds to 3:1.
+const MICRO_INKS: [ColorRole; 2] = [ColorRole::Muted, ColorRole::Placeholder];
+
+/// Roles §6.9 sets no contrast floor for, because it states floors for text
+/// and these are drawn as a shape: a separator, a focus ring, the accent fill
+/// behind a selected row. A floor is not invented for them here. A hairline is
+/// deliberately near its ground — §7 counts a boundary above 1.2:1 against the
+/// clutter ceiling — so holding one to 3:1 would trade one rule for another.
+/// What is missing is a §6.9 rule, recorded in the pull request, not a test.
+const NO_TEXT_FLOOR: [ColorRole; 3] = [ColorRole::Hairline, ColorRole::Accent, ColorRole::Focus];
+
+const TINT_PAIRS: [(ColorRole, ColorRole); 8] = [
+	(ColorRole::WorkingFill, ColorRole::WorkingInk),
+	(ColorRole::AttentionFill, ColorRole::AttentionInk),
+	(ColorRole::ApproveFill, ColorRole::ApproveInk),
+	(ColorRole::InputFill, ColorRole::InputInk),
+	(ColorRole::PlanFill, ColorRole::PlanInk),
+	(ColorRole::DueFill, ColorRole::DueInk),
+	(ColorRole::DoneFill, ColorRole::DoneInk),
+	(ColorRole::ErrorFill, ColorRole::ErrorInk),
+];
+
 /// The floors are re-asserted here rather than trusted to the loader, so a
-/// loader that stopped calling its own contrast check is caught.
+/// loader that stopped calling its own contrast check is caught. Each text ink
+/// is swept against all five grounds, because one role serves every ground and
+/// the least separated ground decides legibility.
 #[test]
 fn every_rendered_pair_clears_its_contrast_floor() {
-	let grounds =
-		[ColorRole::Ground, ColorRole::Rail, ColorRole::Canvas, ColorRole::Inset, ColorRole::Float];
+	let inks = BODY_INKS
+		.into_iter()
+		.map(|ink| (ink, 4.5_f32))
+		.chain(MICRO_INKS.into_iter().map(|ink| (ink, 3.0_f32)));
+	let mut below: Vec<String> = Vec::new();
 
 	for theme in load_bundled_themes(&bundled_dir()).expect("bundled themes load") {
 		let path = bundled_dir().join(format!("{}.toml", theme.appearance));
 		let colour = |role: ColorRole| theme.role(&path, role).expect("declared role");
+		let mut check = |ink: ColorRole, ground: ColorRole, floor: f32| {
+			let ratio = colour(ink).contrast_ratio(colour(ground));
+			if ratio < floor {
+				below.push(format!(
+					"{}: {} on {} is {ratio:.2}:1, below {floor}:1",
+					theme.appearance,
+					ink.as_str(),
+					ground.as_str()
+				));
+			}
+		};
 
-		for (inks, floor) in [
-			([ColorRole::Foreground, ColorRole::Secondary], 4.5_f32),
-			([ColorRole::Muted, ColorRole::Placeholder], 3.0_f32),
-		] {
-			for ink in inks {
-				for ground in grounds {
-					let ratio = colour(ink).contrast_ratio(colour(ground));
-					assert!(
-						ratio >= floor,
-						"{}: {} on {} is {ratio:.2}:1, below {floor}:1",
-						theme.appearance,
-						ink.as_str(),
-						ground.as_str()
-					);
-				}
+		for (ink, floor) in inks.clone() {
+			for ground in GROUNDS {
+				check(ink, ground, floor);
 			}
 		}
 
-		let accent = colour(ColorRole::AccentForeground).contrast_ratio(colour(ColorRole::Accent));
-		assert!(accent >= 4.5, "{}: accent pair is {accent:.2}:1", theme.appearance);
+		check(ColorRole::AccentForeground, ColorRole::Accent, 4.5);
 
-		for (fill, ink) in [
-			(ColorRole::WorkingFill, ColorRole::WorkingInk),
-			(ColorRole::AttentionFill, ColorRole::AttentionInk),
-			(ColorRole::ApproveFill, ColorRole::ApproveInk),
-			(ColorRole::InputFill, ColorRole::InputInk),
-			(ColorRole::PlanFill, ColorRole::PlanInk),
-			(ColorRole::DueFill, ColorRole::DueInk),
-			(ColorRole::DoneFill, ColorRole::DoneInk),
-			(ColorRole::ErrorFill, ColorRole::ErrorInk),
-		] {
-			let ratio = colour(ink).contrast_ratio(colour(fill));
-			assert!(
-				ratio >= 4.5,
-				"{}: {} on {} is {ratio:.2}:1",
-				theme.appearance,
-				ink.as_str(),
-				fill.as_str()
-			);
+		for (fill, ink) in TINT_PAIRS {
+			check(ink, fill, 4.5);
 		}
 	}
+
+	assert!(
+		below.is_empty(),
+		"{} rendered pair(s) below the §6.9 floor:\n{}",
+		below.len(),
+		below.join("\n")
+	);
 }
 
-/// Every tint pair in the enum is covered by the check above. A ninth tint
-/// added to `ColorRole` would otherwise be asserted nowhere, because that check
-/// names its pairs explicitly to keep the failure message readable.
+/// Every role the enum declares is asserted by the sweep above, is a ground the
+/// sweep draws on, or is named in `NO_TEXT_FLOOR`. A role added to `ColorRole`
+/// belongs to no category until someone puts it in one, so this fails closed
+/// rather than leaving it silently unmeasured, and the set §6.9 states no floor
+/// for is pinned by exact equality rather than left to be inferred from which
+/// pairs the sweep happens to name.
+///
+/// The previous version compared only the `_fill` tint pairs, so it proved
+/// coverage of eight roles and read as though it proved coverage of all of
+/// them.
 #[test]
-fn the_contrast_check_covers_every_tint_pair_in_the_enum() {
-	let covered = [
-		ColorRole::WorkingFill,
-		ColorRole::AttentionFill,
-		ColorRole::ApproveFill,
-		ColorRole::InputFill,
-		ColorRole::PlanFill,
-		ColorRole::DueFill,
-		ColorRole::DoneFill,
-		ColorRole::ErrorFill,
-	];
-	let declared: Vec<&str> = ColorRole::all()
+fn every_role_in_the_enum_is_covered_or_recorded_as_unfloored() {
+	let mut covered: Vec<&str> = GROUNDS
 		.into_iter()
-		.filter_map(|role| role.as_str().strip_suffix("_fill"))
+		.chain(BODY_INKS)
+		.chain(MICRO_INKS)
+		.chain([ColorRole::AccentForeground])
+		.chain(TINT_PAIRS.into_iter().flat_map(|(fill, ink)| [fill, ink]))
+		.map(|role| role.as_str())
 		.collect();
-	let asserted: Vec<&str> = covered
+	covered.sort_unstable();
+	covered.dedup();
+
+	let uncovered: Vec<&str> = ColorRole::all()
 		.into_iter()
-		.filter_map(|role| role.as_str().strip_suffix("_fill"))
+		.map(|role| role.as_str())
+		.filter(|role| !covered.contains(role))
 		.collect();
-	assert_eq!(declared, asserted, "a tint pair exists that the contrast check does not assert");
+	let unfloored: Vec<&str> = NO_TEXT_FLOOR.into_iter().map(|role| role.as_str()).collect();
+	assert_eq!(
+		uncovered, unfloored,
+		"a colour role is asserted by no contrast check: give it a floor, or record it in \
+		 NO_TEXT_FLOOR with the reason §6.9 states none"
+	);
 }
 
 #[test]
 fn a_missing_role_names_the_role() {
 	let (_tree, path) = scratch_theme("theme-missing-role");
-	rewrite(&path, "muted = \"#8b95a3\"\n", "");
+	drop_role(&path, ColorRole::Muted);
 
 	match load_theme(&path).expect_err("a theme missing a role must not load") {
 		TokenError::MissingKey { section, key, .. } => {
