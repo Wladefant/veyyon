@@ -821,10 +821,16 @@ being left off the page.
 
 ### Searching the General page
 
-The General page searches in place. A query matches a setting's key, label,
-description or group, and the matches stay under their section headers. A query
-nothing matches states `No settings matching "<query>"` and `Clear or edit the
-search query`.
+The General page searches in place, and the page opens with the keyboard in
+its search field, so the first character typed narrows it. A query matches a
+setting's key, label, description or group, and the matches stay under their
+section headers. A query nothing matches states `No settings matching
+"<query>"` and `Clear or edit the search query`.
+
+The clear control at the end of the field empties the query. `Escape` empties
+it as well, and a second `Escape` leaves the page, so a press over a query
+widens the page before it closes it. Moving to another page returns the
+keyboard to the sheet.
 
 A setting whose `ui.condition` is unmet is absent from the page rather than
 drawn inert, so an experimental feature's dependent knobs appear when its master

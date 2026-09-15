@@ -57,9 +57,22 @@ pub(super) fn overlay_layer(
 		if let Some(editor) = &editor {
 			let focus = editor.read(cx).focus_handle().clone();
 			window.focus(&focus, cx);
+		} else if view.settings_query_is_drawn() {
+			// The General page is a search over two hundred rows, so the
+			// keyboard lands in its query field: the first character an
+			// operator types narrows the page rather than reaching nothing,
+			// which is what the terminal screen does with it.
+			let focus = fields.query.read(cx).focus_handle().clone();
+			window.focus(&focus, cx);
 		} else {
 			window.focus(&dest_focus, cx);
 		}
+	}
+	// The query field is drawn on the General page alone, so a page the
+	// operator moved to takes the keyboard off it rather than leaving it
+	// typed into a field that is no longer drawn.
+	if !view.settings_query_is_drawn() && fields.query.read(cx).focus_handle().is_focused(window) {
+		window.focus(&dest_focus, cx);
 	}
 	let frame = view.palette_input.motion.sample(
 		open,

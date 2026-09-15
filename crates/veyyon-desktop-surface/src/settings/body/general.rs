@@ -7,7 +7,9 @@ use std::{
 	rc::Rc,
 };
 
-use veyyon_desktop_kit::{ColorRole, SearchField, SpacingStep, TextRamp, TokenSet, Tooltip};
+use veyyon_desktop_kit::{
+	ColorRole, EditorSlot, SearchField, SpacingStep, TextRamp, TokenSet, Tooltip,
+};
 use veyyon_desktop_model::{SettingsView, SurfaceId};
 use veyyon_desktop_tokens::SettingsSurfaceTokens;
 use veyyon_gpui::{
@@ -26,6 +28,7 @@ use crate::{
 		},
 		row::{empty_state_row, setting_row_with_secondary},
 	},
+	shell::fields::FieldSlots,
 };
 
 /// Window-local retained list state for the General settings page (§5.9).
@@ -168,6 +171,7 @@ impl GeneralSettingsListState {
 pub fn render_general_page(
 	state: &SettingsState,
 	list_state_handle: &GeneralSettingsListState,
+	fields: &FieldSlots,
 	controls: &ControlStates,
 	geometry: &SettingsSurfaceTokens,
 	tokens: &TokenSet,
@@ -177,6 +181,9 @@ pub fn render_general_page(
 	// page, which a virtualized list cannot scroll out of sight (§4.4).
 
 	if state.settings.is_empty() {
+		// There is nothing to search, so the page draws no field: a query
+		// over no schema narrows nothing and the row below states what is
+		// missing instead.
 		return div()
 			.w_full()
 			.h_full()
@@ -192,6 +199,7 @@ pub fn render_general_page(
 	}
 
 	list_state_handle.sync(&state.settings);
+	let search_bar = query_field(fields, tokens, cx);
 
 	let visible_keys: Rc<[String]> = Rc::from(list_state_handle.visible_keys());
 	if visible_keys.is_empty() {
@@ -208,12 +216,16 @@ pub fn render_general_page(
 				"Clear or edit the search query".to_string(),
 			)
 		};
+		// The field stays drawn over the row that states the empty result:
+		// the query is what emptied the page, so editing it is the way out,
+		// and a page that took its own field away leaves none.
 		return div()
 			.w_full()
 			.h_full()
 			.flex()
 			.flex_col()
 			.gap(px(geometry.row_gap))
+			.child(search_bar)
 			.child(empty_state_row(&empty_msg, &action_msg, geometry, tokens));
 	}
 
@@ -325,19 +337,6 @@ pub fn render_general_page(
 	.w_full()
 	.h_full();
 
-	let query = list_state_handle.query();
-	let weak_for_clear = cx.weak_entity();
-	let search_bar = div().w_full().mb(tokens.spacing(SpacingStep::S3)).child(
-		SearchField::new("settings-search", query)
-			.placeholder("Search settings...")
-			.on_clear(move |_win, app| {
-				let _ = weak_for_clear.update(app, |view, cx| {
-					view.general_settings_list().clear_query();
-					cx.notify();
-				});
-			}),
-	);
-
 	div()
 		.w_full()
 		.h_full()
@@ -346,4 +345,22 @@ pub fn render_general_page(
 		.overflow_hidden()
 		.child(search_bar)
 		.child(div().flex_1().min_h_0().child(list_el))
+}
+
+/// The field the page's rows are narrowed by.
+///
+/// It draws the editor the frame retained, so it takes focus and the rows
+/// narrow as it is typed into; drawing it from the query string instead draws
+/// a field nothing can be typed into.
+fn query_field(fields: &FieldSlots, tokens: &TokenSet, cx: &Context<ShellView>) -> Div {
+	let weak_for_clear = cx.weak_entity();
+	div().w_full().mb(tokens.spacing(SpacingStep::S3)).child(
+		SearchField::new("settings-search", EditorSlot::from(fields.query.clone()))
+			.placeholder("Search settings...")
+			.on_clear(move |_win, app| {
+				let _ = weak_for_clear.update(app, |view, cx| {
+					view.clear_settings_query(cx);
+				});
+			}),
+	)
 }

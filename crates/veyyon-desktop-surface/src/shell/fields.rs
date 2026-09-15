@@ -12,6 +12,7 @@
 
 mod editors;
 mod parse;
+mod query;
 mod supervisor;
 
 use serde_json::Value;
@@ -32,6 +33,7 @@ pub enum FieldKey {
 	TaskPrompt,
 	ProcessCommand,
 	ProcessInput,
+	SettingsQuery,
 }
 
 /// What a field's submit sends.
@@ -45,6 +47,7 @@ enum Commit {
 	Task,
 	ProcessStart,
 	ProcessSend,
+	SettingsQuery,
 }
 /// A retained field: its editor, and what a submit of it sends.
 pub(super) struct Field {
@@ -68,7 +71,7 @@ struct FieldSpec {
 
 /// The retained editors a settings page draws its fields from, for a page
 /// rendered from a shared `&ShellView` that cannot create one.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct FieldSlots {
 	/// The editor for the secret a provider is waiting on, when one is.
 	pub secret:      Option<Entity<Editor>>,
@@ -77,6 +80,10 @@ pub struct FieldSlots {
 	pub keybindings: Vec<(String, Entity<Editor>)>,
 	/// The editor for the task the Agents page spawns.
 	pub task:        Option<Entity<Editor>>,
+	/// The editor for the query the General page's rows are narrowed by.
+	/// Every frame that can draw the page retains one, so the field it draws
+	/// is typeable rather than a picture of the query it holds.
+	pub query:       Entity<Editor>,
 }
 
 impl FieldSlots {
@@ -164,6 +171,12 @@ impl ShellView {
 			EditorEvent::Changed => {
 				if let Some(field) = this.field_editors.get_mut(&key) {
 					field.dirty = true;
+				}
+				// A query narrows the page as it is typed: it sends nothing,
+				// so a submit is not what applies it, and the rows the list
+				// draws are read from the state this writes.
+				if key == FieldKey::SettingsQuery {
+					this.apply_settings_query(cx);
 				}
 			},
 			EditorEvent::PasteMedia(_) => {},
@@ -279,6 +292,10 @@ impl ShellView {
 			// A submit from inside the field names no row, so the process it
 			// reaches is resolved from what is running.
 			(Commit::ProcessSend, FieldKey::ProcessInput) => self.send_process_input(None, cx),
+			// A query is already applied on the frame each character landed
+			// on, so a submit of it sends nothing and leaves the page as the
+			// typing left it.
+			(Commit::SettingsQuery, FieldKey::SettingsQuery) => {},
 			_ => {},
 		}
 	}
@@ -333,6 +350,10 @@ impl ShellView {
 			FieldKey::TaskPrompt | FieldKey::ProcessCommand | FieldKey::ProcessInput => {
 				editor.update(cx, |editor, cx| editor.set_text(String::new(), cx));
 			},
+			// The window captures Escape above the editor and widens the page
+			// there, one rung per press, so this arm is what a revert from
+			// anywhere else does: empty the query and the filter behind it.
+			FieldKey::SettingsQuery => self.clear_settings_query(cx),
 		}
 		self.clear_refusal();
 	}

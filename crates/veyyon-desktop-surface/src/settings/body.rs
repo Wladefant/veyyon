@@ -46,7 +46,7 @@ pub fn render_page_body(
 
 	let body_content = match state.page {
 		SettingsPage::General => {
-			general::render_general_page(state, list_state, controls, geometry, tokens, cx)
+			general::render_general_page(state, list_state, fields, controls, geometry, tokens, cx)
 		},
 		SettingsPage::Themes => themes::render_themes_page(
 			state,

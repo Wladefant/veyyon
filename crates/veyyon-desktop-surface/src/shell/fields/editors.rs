@@ -177,11 +177,31 @@ impl ShellView {
 		)
 	}
 
+	/// The retained editor for the query the General settings page is
+	/// narrowed by. It is created empty and is the only thing that writes the
+	/// filter afterwards, so the field and the rows it narrows never
+	/// disagree; nothing the host reports replaces it, since a query is this
+	/// window's own and the host stores none.
+	pub fn settings_query_field_editor(&mut self, cx: &mut Context<Self>) -> Entity<Editor> {
+		self.field_editor(
+			FieldSpec {
+				key:         FieldKey::SettingsQuery,
+				commit:      Commit::SettingsQuery,
+				placeholder: "Search settings...".into(),
+				mask:        false,
+				multiline:   false,
+				initial:     String::new(),
+			},
+			cx,
+		)
+	}
+
 	/// The editors the settings pages draw their own fields from, created
 	/// here because a page renders from a shared view that cannot create one.
 	pub fn field_slots(&mut self, window: &Window, cx: &mut Context<Self>) -> FieldSlots {
 		let secret = self.secret_field_editor(cx);
 		let task = self.task_prompt_field_editor(cx);
+		let query = self.settings_query_field_editor(cx);
 		// The bindings are cloned out first: the editor for one is created
 		// through the same view the listing is read from.
 		let reported: Vec<(String, Vec<String>)> = self
@@ -201,7 +221,7 @@ impl ShellView {
 				(action, editor)
 			})
 			.collect();
-		FieldSlots { secret, keybindings, task: Some(task) }
+		FieldSlots { secret, keybindings, task: Some(task), query }
 	}
 
 	/// Replaces what an unfocused field draws with the value the host

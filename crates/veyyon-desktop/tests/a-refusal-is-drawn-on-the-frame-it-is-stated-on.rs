@@ -11,11 +11,13 @@
 //! `FieldKey` exhaustively, so a new field fails to compile until its answer
 //! is recorded, and `every_field_that_refuses_is_swept_here` pins the covered
 //! shapes by exact equality against `KeyShape::iter()`, so deleting a case
-//! turns this red rather than shrinking the sweep. Each case reaches the
-//! refusal through the editor the drawn surface registered and a return on it,
-//! never by calling the refusal itself, and each asserts an idle frame draws
-//! nothing first, so a window that repaints every vsync cannot pass by
-//! accident.
+//! turns this red rather than shrinking the sweep. A field that refuses
+//! nothing is named in `REFUSES_NOTHING`, which the same equality counts, so
+//! opting one out is a recorded decision rather than a missing case. Each case
+//! reaches the refusal through the editor the drawn surface registered and a
+//! return on it, never by calling the refusal itself, and each asserts an idle
+//! frame draws nothing first, so a window that repaints every vsync cannot
+//! pass by accident.
 //!
 //! WHAT IT DOES NOT CATCH:
 //! It asserts the frame after the return differs from the one before it and
@@ -65,6 +67,8 @@ enum KeyShape {
 	ProcessCommand,
 	/// [`FieldKey::ProcessInput`].
 	ProcessInput,
+	/// [`FieldKey::SettingsQuery`].
+	SettingsQuery,
 }
 
 /// The exhaustive match that makes a new `FieldKey` fail to compile here until
@@ -78,6 +82,7 @@ const fn key_shape(key: &FieldKey) -> KeyShape {
 		FieldKey::TaskPrompt => KeyShape::TaskPrompt,
 		FieldKey::ProcessCommand => KeyShape::ProcessCommand,
 		FieldKey::ProcessInput => KeyShape::ProcessInput,
+		FieldKey::SettingsQuery => KeyShape::SettingsQuery,
 	}
 }
 
@@ -207,13 +212,26 @@ fn hold(session: &mut HeadlessSession<'_, ShellView>, key: &FieldKey, text: &str
 		.expect("the field takes focus and the text it is asked to hold");
 }
 
+/// The fields that refuse nothing, so a case here would have nothing to
+/// assert. A query narrows the page it is typed on and is sent nowhere, so no
+/// value of it is rejected; what it does instead is
+/// `typing-in-the-settings-query-narrows-the-rows-the-page-draws`'s subject.
+const REFUSES_NOTHING: [KeyShape; 1] = [KeyShape::SettingsQuery];
+
 #[test]
 fn every_field_that_refuses_is_swept_here() {
 	let swept: BTreeSet<KeyShape> = cases().iter().map(|case| key_shape(&case.key)).collect();
+	let opted_out: BTreeSet<KeyShape> = REFUSES_NOTHING.into_iter().collect();
+	assert!(
+		swept.is_disjoint(&opted_out),
+		"a field recorded as refusing nothing is swept for a refusal as well"
+	);
 	let declared: BTreeSet<KeyShape> = KeyShape::iter().collect();
 	assert_eq!(
-		swept, declared,
-		"every field the registry declares is swept for a refusal that is drawn"
+		&swept | &opted_out,
+		declared,
+		"every field the registry declares is swept for a refusal that is drawn, or recorded here \
+		 as refusing nothing"
 	);
 }
 

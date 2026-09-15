@@ -75,6 +75,16 @@ pub(super) fn dismiss_topmost(
 		cx.notify();
 		return;
 	}
+	// A narrowed settings page is a rung of its own: the press that finds a
+	// query widens the page it narrowed, and the next one leaves the page. A
+	// press that closed the page over a query would discard what the operator
+	// can still see, and leave no way back to the rows it hid.
+	if view.settings_query_is_narrowing() {
+		view.clear_settings_query(cx);
+		cx.stop_propagation();
+		cx.notify();
+		return;
+	}
 	let routed = view
 		.state()
 		.overlay

@@ -106,6 +106,13 @@ pub fn render_shell(
 					let focus = editor.read(cx).focus_handle().clone();
 					window.focus(&focus, cx);
 				}
+			} else if view.settings_query_is_drawn() {
+				// The General page is searched rather than walked, so the
+				// keyboard lands in its query field and the first character
+				// typed narrows the page.
+				let editor = view.settings_query_field_editor(cx);
+				let focus = editor.read(cx).focus_handle().clone();
+				window.focus(&focus, cx);
 			} else {
 				let dest_focus = view.destination_focus_handle(cx);
 				window.focus(&dest_focus, cx);
