@@ -46,7 +46,7 @@
 
 - The desktop settings page omits a setting whose `ui.condition` is unmet, so an experimental feature's dependent knobs are absent while its master toggle is off rather than drawn inert.
 - The desktop General settings page searches its settings in place, grouping matches under their section headers and stating when a query matches nothing.
-- The desktop restores named spaces, ordered session tabs and per-session drafts with attachment bytes across restarts.
+- The desktop restores its open sessions, the selected one, and per-session drafts with attachment bytes across restarts.
 - Desktop history search opens read-only previews and resumes existing tabs without duplicating sessions or discarding drafts.
 - Repository-backed diffs support persistent local review threads, replies, resolution and context-based anchor relocation.
 - Desktop attachment cards show bounded text and binary previews with classified types, byte counts and individual removal controls.
@@ -596,6 +596,9 @@
 
 ### Fixed
 
+- A desktop session tells the model its picture reached the screen, where the GUI host installed no image-display answer and every tool result carrying an image stated that the user could not see it.
+- A setting with no value and no default — a memory database path nobody set, an agent model chain left to the session's model — reaches the desktop settings page, where 13 rows the terminal screen offers were dropped from the snapshot entirely.
+- The desktop settings page resolves a setting's `ui.condition` through the same table the terminal reads, where its own copy answered 27 of the 29 declared names and drew the auto-thinking and inline-image knobs the terminal hides.
 - A desktop queue arrow moves the rail's cursor and opens nothing, where holding it opened every session the cursor passed over and loaded each transcript; `Enter` opens the row under the cursor, and `P`, `D` and `K` move that row rather than the open session.
 - Desktop source builds fetch the pinned GPUI framework without Git authentication.
 - A desktop sheet keeps a body pinned to its lower edge inside the sheet, where the queue float drew its settings gear above the sheet's floor and left the float with no reachable control.
