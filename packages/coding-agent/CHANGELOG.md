@@ -14,6 +14,7 @@
 - Repaired upstream-merge regressions in `/reload-config`, agent-lane validation, task spawn recording, and todo rendering; retained concurrent todo targets through the host-neutral view and removed the duplicate legacy spawn callback ([#26](https://github.com/Wladefant/veyyon/issues/26)).
 - Updated the config-reload benchmark, handbook, and capture scene to use the current agent routing namespace ([#26](https://github.com/Wladefant/veyyon/issues/26)).
 - Collapsed todo boards prioritize in-progress tasks, announce row-trimmed active phases, and show canonical newly started tasks with concurrent counts even when replayed without call arguments.
+- Neutralized workstation-specific defaults, private project identifiers, and host orchestration policies in topic replenishment and native ledger bridge ([#953](https://github.com/santhreal/veyyon/issues/953)).
 ### Breaking Changes
 
 - Agent settings use `agent.*`, `tier.agent`, `advisor.agents`, and `argot.agents`; legacy keys migrate on load, while historical runtime export names, custom-theme color tokens, session records, and RPC spellings remain unchanged.

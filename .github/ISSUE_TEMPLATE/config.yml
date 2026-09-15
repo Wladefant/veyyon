@@ -1,8 +1,5 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Superboard Flight Deck
-    url: https://github.com/users/Wladefant/projects/5
-    about: Global Project 5 Flight Deck and Superboard system tracking
   - name: Model Configuration
     url: https://github.com/santhreal/veyyon/blob/main/docs/handbook/src/reference/models-yml.md
     about: How to add custom providers and models via models.yml

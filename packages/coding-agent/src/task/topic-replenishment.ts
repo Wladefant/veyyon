@@ -7,11 +7,10 @@
  * Shared runtime contract:
  * 1. On subagent completion or session recovery, reconcile actual running native workers
  *    per eligible topic. Idle, parked, prepared, or simulated daemons are strictly INACTIVE.
- * 2. Enforce worker floor (minimum 7 running useful workers when >= 7 runnable units exist,
- *    normal target 7–15, hard ceiling 20).
- * 3. Enforce pre-spawn memory admission: hard ceiling at 95% RAM, process cleanup at 85%.
+ * 2. Maintain active worker targets up to configured bounds.
+ * 3. Enforce optional pre-spawn memory admission when configured.
  *    (Pre-admission check does not guarantee runtime processes will not subsequently spike).
- * 4. Claim next ready authorized ticket atomically from durable request ledger with file locking.
+ * 4. Claim next ready authorized ticket atomically with file locking.
  * 5. Fail-closed authorization: unauthorized requests (including empty `{}` authorization),
  *    forbidden production targets, ungranted merge authorizations, and pending decision blockers
  *    never dispatch. Blocked topics stay tracked with exact reasons.
@@ -37,24 +36,11 @@ export const TOPIC_KEYWORDS_MAP: Readonly<Record<string, string>> = {
 	design: "UX/design",
 	conversion: "UX/design",
 	motion: "Motion",
-	telegram: "Telegram",
-	decision: "Decisions",
-	staging: "Staging",
-	pooler: "Staging",
 	workflow: "Workflow",
 	gate: "Workflow",
 	concurrent: "Workflow",
 	todo: "Workflow",
 	scheduler: "Workflow",
-	issue: "Preserved GitHub issue inventory",
-	migration: "Preserved GitHub issue inventory",
-	dedicated: "Preserved GitHub issue inventory",
-	inventory: "Preserved GitHub issue inventory",
-	operator: "Operator accountability",
-	accountability: "Operator accountability",
-	live: "Live operator corrections",
-	recovered: "Recovered authorized work",
-	authorized: "Recovered authorized work",
 	agent: "Agent system change",
 	replenish: "Agent system change",
 	system: "Agent system change",
@@ -64,14 +50,7 @@ export const RUNNABLE_TOPIC_NAMES: readonly string[] = [
 	"Desktop GUI",
 	"UX/design",
 	"Motion",
-	"Telegram",
-	"Decisions",
-	"Staging",
 	"Workflow",
-	"Preserved GitHub issue inventory",
-	"Operator accountability",
-	"Live operator corrections",
-	"Recovered authorized work",
 	"Agent system change",
 ] as const;
 
@@ -94,21 +73,16 @@ export const FORBIDDEN_TARGETS: readonly string[] = [
 	"master",
 	"production",
 	"prod",
-	"zaraprptkegxqpvnsubu",
-	"akamai-iad-prod",
 ] as const;
 
-export const EXPLICITLY_CANCELLED_TASKS: Readonly<Record<string, string>> = {
-	"record operator choice a for ci connectivity":
-		"Explicitly dropped per live operator clarification (example choice, not confirmed decision); preserved as historical cancellation.",
-};
+export const EXPLICITLY_CANCELLED_TASKS: Readonly<Record<string, string>> = {};
 
 export const DEFAULT_FLASH_MODEL = "google-antigravity/gemini-3.8-flash:high";
-export const DEFAULT_MIN_FLOOR = Number(process.env.VEYYON_WORKER_MIN_FLOOR) || 15;
-export const DEFAULT_TARGET_COUNT = Number(process.env.VEYYON_WORKER_TARGET) || 15;
-export const DEFAULT_MAX_CEILING = Number(process.env.VEYYON_WORKER_MAX_CEILING) || 20;
-export const HARD_RAM_CEILING_PCT = 95.0;
-export const CLEANUP_RAM_PCT = 85.0;
+export const DEFAULT_MIN_FLOOR = Number(process.env.VEYYON_WORKER_MIN_FLOOR) || 0;
+export const DEFAULT_TARGET_COUNT = Number(process.env.VEYYON_WORKER_TARGET) || 1;
+export const DEFAULT_MAX_CEILING = Number(process.env.VEYYON_WORKER_MAX_CEILING) || 4;
+export const HARD_RAM_CEILING_PCT = Number(process.env.VEYYON_HARD_RAM_CEILING_PCT) || 100.0;
+export const CLEANUP_RAM_PCT = Number(process.env.VEYYON_CLEANUP_RAM_PCT) || 100.0;
 
 // --- Interfaces ---
 
@@ -320,7 +294,7 @@ export function resolveTopicName(worker: Partial<NativeActorSnapshot>): string {
 // --- Authorization Validation Helper ---
 
 /**
- * Accept only the structured authorization written by the request ledger.
+ * Accept only complete structured authorization records.
  * Every field is required so an incidental timestamp, actor, scope, or
  * free-form string can never be mistaken for permission.
  */
@@ -446,8 +420,8 @@ export function reconcileRunningTopics(
 
 /**
  * Enforce system memory admission:
- * - Hard ceiling at >= 95% RAM: spawn no new workers / processes.
- * - Cleanup threshold at >= 85% RAM: trigger cleanup callback, then re-evaluate.
+ * - Hard ceiling (default 100%, disabled): spawn no new workers when threshold exceeded.
+ * - Cleanup threshold (default 100%, disabled): trigger cleanup callback before re-evaluation.
  *
  * NOTE: This is an advisory pre-spawn check. It guarantees pre-admission bounds,
  * but cannot guarantee that running processes will not subsequently spike memory.
@@ -1075,7 +1049,7 @@ export class TopicReplenishmentEngine {
 			status: dispatchedTickets.length > 0 ? "replenished" : "no_eligible_work",
 			reason:
 				dispatchedTickets.length > 0
-					? `Dispatched ${dispatchedTickets.length} native ticket(s) to maintain worker floor.`
+					? `Dispatched ${dispatchedTickets.length} native ticket(s) to maintain worker target.`
 					: "No further eligible authorized tickets available.",
 		};
 	}

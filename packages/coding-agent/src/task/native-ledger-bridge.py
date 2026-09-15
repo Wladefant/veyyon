@@ -3,7 +3,7 @@
 native-ledger-bridge.py - Isolated host adapter bridge for native topic replenishment.
 
 Enforces cross-process mutual exclusion via OS-level advisory locking (msvcrt on Windows,
-fcntl on POSIX) matching ~/.veyyon/workflows/ledger.py FileLock.
+fcntl on POSIX).
 
 Integrates with portable WorkerBackend (prepare_native -> record_native_dispatch -> complete_native)
 so canonical result validation governs stage progression without duplicate completion logic.
@@ -20,17 +20,18 @@ import sys
 import time
 from typing import Any, Dict, List, Optional, Sequence, Set
 
-workflows_dir = os.environ.get("VEYYON_WORKFLOWS_DIR") or os.path.expanduser("~/.veyyon/workflows")
-if os.path.isdir(workflows_dir) and workflows_dir not in sys.path:
+workflows_dir = os.environ.get("VEYYON_WORKFLOWS_DIR")
+if workflows_dir and os.path.isdir(workflows_dir) and workflows_dir not in sys.path:
     sys.path.insert(0, workflows_dir)
 
 # Import FileLock
 FileLock = None
-try:
-    from ledger import FileLock as _WorkflowsFileLock
-    FileLock = _WorkflowsFileLock
-except Exception:
-    FileLock = None
+if workflows_dir:
+    try:
+        from ledger import FileLock as _WorkflowsFileLock
+        FileLock = _WorkflowsFileLock
+    except Exception:
+        FileLock = None
 
 if FileLock is None:
     import threading
@@ -131,12 +132,7 @@ except Exception:
     WorkerRequest = None
 
 
-EXPLICITLY_CANCELLED_TASKS = {
-    "record operator choice a for ci connectivity": (
-        "Explicitly dropped per live operator clarification (example choice, not confirmed decision); "
-        "preserved as historical cancellation."
-    ),
-}
+EXPLICITLY_CANCELLED_TASKS: Dict[str, str] = {}
 
 TOPIC_KEYWORDS_MAP = {
     "gui": "Desktop GUI",
@@ -146,24 +142,11 @@ TOPIC_KEYWORDS_MAP = {
     "design": "UX/design",
     "conversion": "UX/design",
     "motion": "Motion",
-    "telegram": "Telegram",
-    "decision": "Decisions",
-    "staging": "Staging",
-    "pooler": "Staging",
     "workflow": "Workflow",
     "gate": "Workflow",
     "concurrent": "Workflow",
     "todo": "Workflow",
     "scheduler": "Workflow",
-    "issue": "Preserved GitHub issue inventory",
-    "migration": "Preserved GitHub issue inventory",
-    "dedicated": "Preserved GitHub issue inventory",
-    "inventory": "Preserved GitHub issue inventory",
-    "operator": "Operator accountability",
-    "accountability": "Operator accountability",
-    "live": "Live operator corrections",
-    "recovered": "Recovered authorized work",
-    "authorized": "Recovered authorized work",
     "agent": "Agent system change",
     "replenish": "Agent system change",
     "system": "Agent system change",
@@ -173,14 +156,7 @@ RUNNABLE_TOPIC_NAMES = [
     "Desktop GUI",
     "UX/design",
     "Motion",
-    "Telegram",
-    "Decisions",
-    "Staging",
     "Workflow",
-    "Preserved GitHub issue inventory",
-    "Operator accountability",
-    "Live operator corrections",
-    "Recovered authorized work",
     "Agent system change",
 ]
 
@@ -225,10 +201,8 @@ def is_forbidden_target(req: Dict[str, Any]) -> bool:
     """
     Structured repository and environment authorization check.
     Never inspects bare prompt words so legitimate references to agent 'Main'
-    or authorized super-board@main are never falsely blocked.
+    are never falsely blocked.
     """
-    repo = str(req.get("repo") or (req.get("github") or {}).get("repo") or "").strip().lower()
-    project = str(req.get("project") or "").strip().lower()
     target = str(req.get("target") or req.get("target_branch") or req.get("branch") or req.get("base") or "").strip().lower()
     env = str(req.get("environment") or "").strip().lower()
     prompt = str(req.get("prompt") or "").strip().lower()
@@ -242,25 +216,22 @@ def is_forbidden_target(req: Dict[str, Any]) -> bool:
             m_branch = re.search(r"\bbranch\s+(\S+)", prompt)
             if m_branch:
                 target = m_branch.group(1).lower()
-    if "super-board" in repo or "super-board" in project or "wt-portable-workflow-core" in project:
-        if env in ("production", "prod", "zaraprptkegxqpvnsubu", "akamai-iad-prod"):
-            return True
-        return False
 
-    # 2. PolySimulator production (zaraprptkegxqpvnsubu, akamai-iad-prod, main/master/production) is strictly denied
-    is_polysimulator = (
-        not repo
-        or "polysimulator" in repo
-        or "polysimulator" in project
-        or project in ("zaraprptkegxqpvnsubu", "akamai-iad-prod")
-    )
-    if is_polysimulator:
-        if target in ("main", "master", "production", "prod"):
-            return True
-        if env in ("zaraprptkegxqpvnsubu", "akamai-iad-prod", "production", "prod"):
-            return True
-        if project in ("zaraprptkegxqpvnsubu", "akamai-iad-prod"):
-            return True
+    forbidden_envs = {"production", "prod"}
+    forbidden_targets = {"main", "master", "production", "prod"}
+
+    extra_forbidden = os.environ.get("VEYYON_FORBIDDEN_TARGETS")
+    if extra_forbidden:
+        for t in extra_forbidden.split(","):
+            t = t.strip().lower()
+            if t:
+                forbidden_targets.add(t)
+                forbidden_envs.add(t)
+
+    if env in forbidden_envs:
+        return True
+    if target in forbidden_targets and env != "staging":
+        return True
 
     return False
 

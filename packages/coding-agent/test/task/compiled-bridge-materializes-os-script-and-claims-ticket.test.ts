@@ -172,7 +172,12 @@ process.exit(1);
 					"req-valid-claim-1": {
 						prompt: "Implement compiled bridge asset extraction",
 						topic: "Workflow",
-						authorization: "2026-09-06T10:00:00Z operator",
+						authorization: {
+							status: "authorized",
+							timestamp: "2026-09-06T10:00:00Z",
+							scope: "task-execution",
+							authorized_by: "operator",
+						},
 						state: "pending",
 						criteria: ["Bridge extracted cleanly", "Claim verified"],
 					},

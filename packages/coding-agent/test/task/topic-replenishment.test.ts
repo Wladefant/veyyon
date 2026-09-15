@@ -108,38 +108,32 @@ async function runTests(): Promise<void> {
 			{ id: "main:orchestrator", status: "running", role: "main" }, // Main orchestrator - excluded
 			{ id: "TopicGuiDelivery", status: "parked", role: "sub", topic: "Desktop GUI" }, // Parked - excluded
 			{ id: "TopicWorkflowGates", status: "idle", role: "sub", topic: "Workflow" }, // Idle - excluded
-			{ id: "TopicStagingRecovery", status: "parked", role: "sub", topic: "Staging" }, // Parked - excluded
-			{ id: "TopicClickableDecisions", status: "parked", role: "sub", topic: "Decisions" }, // Parked - excluded
+			{ id: "TopicMotionRecovery", status: "parked", role: "sub", topic: "Motion" }, // Parked - excluded
+			{ id: "TopicDecisionsArchive", status: "parked", role: "sub", topic: "Workflow" }, // Parked - excluded
 			{ id: "TopicInventoryCoverage", status: "parked", role: "sub", topic: "Workflow" }, // Parked - excluded
-			{ id: "TopicDedicatedIssues", status: "parked", role: "sub", topic: "Preserved GitHub issue inventory" }, // Parked - excluded
+			{ id: "TopicDedicatedIssues", status: "parked", role: "sub", topic: "Workflow" }, // Parked - excluded
 			{ id: "fake-worker-probe", status: "running", role: "sub" }, // Fake worker id - rejected
 			{ id: "simulated-daemon", status: "simulated_active", role: "sub" }, // Simulated active - rejected
 			{ id: "worker-gui-active", status: "running", role: "sub", task: "Fix DirectX GUI primitives" }, // Running -> Desktop GUI
 			{ id: "worker-motion-active", status: "running", role: "sub", task: "Spring motion curves" }, // Running -> Motion
-			{ id: "worker-telegram-active", status: "running", role: "sub", task: "Telegram notification loop" }, // Running -> Telegram
-			{ id: "worker-staging-active", status: "running", role: "sub", task: "Staging pooler integration" }, // Running -> Staging
-			{ id: "worker-decisions-active", status: "running", role: "sub", task: "Clickable decision protocol" }, // Running -> Decisions
 			{ id: "worker-workflow-active", status: "running", role: "sub", task: "Workflow gate runner" }, // Running -> Workflow
-			{ id: "worker-issue-active", status: "running", role: "sub", task: "Preserved issue inventory audit" }, // Running -> Preserved GitHub issue inventory
+			{ id: "worker-agent-active", status: "running", role: "sub", task: "Agent system change" }, // Running -> Agent system change
 		];
 
-		const res = reconcileRunningTopics(roster, { minFloor: 7, targetCount: 10 });
+		const res = reconcileRunningTopics(roster, { minFloor: 4, targetCount: 6 });
 
-		assert.equal(res.activeUsefulCount, 7, "Must recognize exactly 7 useful running workers");
+		assert.equal(res.activeUsefulCount, 4, "Must recognize exactly 4 useful running workers");
 		assert.equal(res.idleWorkers.length, 1, "Must recognize 1 idle worker");
 		assert.equal(res.parkedWorkers.length, 5, "Must recognize 5 parked workers");
 		assert.equal(res.fakeWorkersRejected.length, 2, "Must reject 2 fake/simulated workers");
-		assert.equal(res.floorDeficit, 0, "Worker floor of 7 is satisfied");
-		assert.equal(res.targetDeficit, 3, "Target deficit from 10 should be 3");
+		assert.equal(res.floorDeficit, 0, "Worker floor of 4 is satisfied");
+		assert.equal(res.targetDeficit, 2, "Target deficit from 6 should be 2");
 
 		// Verify topic classification
 		assert.ok(res.coveredTopics.includes("Desktop GUI"), "Desktop GUI must be covered");
 		assert.ok(res.coveredTopics.includes("Motion"), "Motion must be covered");
-		assert.ok(res.coveredTopics.includes("Telegram"), "Telegram must be covered");
-		assert.ok(res.coveredTopics.includes("Staging"), "Staging must be covered");
-		assert.ok(res.coveredTopics.includes("Decisions"), "Decisions must be covered");
 		assert.ok(res.coveredTopics.includes("Workflow"), "Workflow must be covered");
-		assert.ok(res.coveredTopics.includes("Preserved GitHub issue inventory"), "Preserved issues must be covered");
+		assert.ok(res.coveredTopics.includes("Agent system change"), "Agent system change must be covered");
 		assert.ok(!res.coveredTopics.includes("UX/design"), "UX/design should be uncovered");
 		assert.ok(res.uncoveredTopics.includes("UX/design"), "UX/design must be in uncoveredTopics");
 
@@ -153,7 +147,7 @@ async function runTests(): Promise<void> {
 			{ id: "TopicGuiDelivery", status: "parked", role: "sub" },
 			{ id: "TopicWorkflowGates", status: "idle", role: "sub" },
 			{ id: "worker-1", status: "running", role: "sub", task: "Desktop GUI" },
-			{ id: "worker-2", status: "running", role: "sub", task: "Staging" },
+			{ id: "worker-2", status: "running", role: "sub", task: "Workflow" },
 		];
 
 		const res = reconcileRunningTopics(roster, { minFloor: 7, targetCount: 10 });
@@ -183,8 +177,9 @@ async function runTests(): Promise<void> {
 		assert.equal(healthyCheck.totalMb, 16384);
 		assert.equal(healthyCheck.freeMb, 8192);
 
-		// Enforce ceiling at 95% with deterministic injected RAM reading (96.09% used)
+		// Enforce ceiling when maxPct is provided with deterministic injected RAM reading (96.09% used)
 		const blockedCheck = await checkMemoryAdmission({
+			maxPct: 95.0,
 			memoryProvider: () => ({ total: 16384 * 1024 * 1024, free: 640 * 1024 * 1024 }),
 		});
 		assert.equal(blockedCheck.admitted, false, "Must reject when RAM used exceeds threshold");
@@ -199,10 +194,12 @@ async function runTests(): Promise<void> {
 		assert.equal(customBlockedCheck.admitted, false, "Must reject when RAM used exceeds custom threshold");
 		assert.equal(customBlockedCheck.capacityException, true);
 
-		// Test cleanup callback invocation at 85%
+		// Test cleanup callback invocation with explicit cleanup threshold
 		let cleanedUpCalled = false;
 		let currentMem = { total: 16384 * 1024 * 1024, free: 1600 * 1024 * 1024 }; // 90.23% used (>= 85% cleanup, < 95% ceiling)
 		const cleanCheck = await checkMemoryAdmission({
+			maxPct: 95.0,
+			cleanupPct: 85.0,
 			memoryProvider: () => currentMem,
 			onCleanup: () => {
 				cleanedUpCalled = true;
@@ -217,6 +214,8 @@ async function runTests(): Promise<void> {
 		let cleanFailedCalled = false;
 		let spikingMem = { total: 16384 * 1024 * 1024, free: 1600 * 1024 * 1024 }; // 90.23% used
 		const stillBlockedCheck = await checkMemoryAdmission({
+			maxPct: 95.0,
+			cleanupPct: 85.0,
 			memoryProvider: () => spikingMem,
 			onCleanup: () => {
 				cleanFailedCalled = true;
@@ -231,7 +230,7 @@ async function runTests(): Promise<void> {
 		// Test module-level stub of measurement function
 		setSystemMemoryProviderForTesting(() => ({ total: 16384 * 1024 * 1024, free: 640 * 1024 * 1024 }));
 		try {
-			const stubbedCheck = await checkMemoryAdmission();
+			const stubbedCheck = await checkMemoryAdmission({ maxPct: 95.0 });
 			assert.equal(stubbedCheck.admitted, false, "Must reject via stubbed measurement function");
 		} finally {
 			setSystemMemoryProviderForTesting(null);
@@ -357,7 +356,7 @@ async function runTests(): Promise<void> {
 				},
 				"req-forbidden-project": {
 					prompt: "Harmless prompt text but forbidden project target",
-					project: "zaraprptkegxqpvnsubu",
+					environment: "production",
 					authorization: validAuthorization,
 					state: "pending",
 				},
@@ -367,10 +366,10 @@ async function runTests(): Promise<void> {
 					authorization: validAuthorization,
 					state: "pending",
 				},
-				"req-cancelled-choice-a": {
-					prompt: "Record operator choice A for CI connectivity",
+				"req-cancelled-task": {
+					prompt: "Explicitly cancelled maintenance task",
 					authorization: validAuthorization,
-					state: "pending",
+					state: "cancelled",
 				},
 				"req-blocked-task": {
 					prompt: "Perform staging migration",
@@ -400,10 +399,11 @@ async function runTests(): Promise<void> {
 					decision_blockers: ["staging-ci-access-403"], // human decision blocker -> BLOCKED (Finding 5)
 					state: "pending",
 				},
-				"req-superboard-main": {
-					prompt: "Update workflow engine in Superboard main branch",
-					repo: "Wladefant/super-board",
-					target: "main",
+				"req-workflow-staging": {
+					prompt: "Update workflow engine in staging branch",
+					repo: "test-org/workflow-core",
+					target: "staging",
+					environment: "staging",
 					topic: "Workflow",
 					authorization: validAuthorization,
 					state: "pending",
@@ -484,14 +484,13 @@ async function runTests(): Promise<void> {
 		assert.equal(claim3.claimed, true, "Prompt with word 'Main' must not be falsely blocked");
 		assert.equal(claim3.ticket?.id, "req-prompt-mentioning-main");
 
-		// Claim 4: Claim super-board@main ticket (proves Wladefant/super-board@main is allowed)
+		// Claim 4: Claim workflow staging ticket (proves target: staging is allowed)
 		const claim4 = await claimNextAuthorizedTicket(ledgerPath, {
-			coveredTopics: ["Motion", "Desktop GUI", "Operator accountability"],
-			workerId: "native-worker-superboard-1",
+			coveredTopics: ["Motion", "Desktop GUI"],
+			workerId: "native-worker-workflow-1",
 		});
-		assert.equal(claim4.claimed, true, "Must claim super-board@main (authorized workflow repository)");
-		assert.equal(claim4.ticket?.id, "req-superboard-main");
-		// Claim 5: No remaining eligible tickets exist (all others are blocked/forbidden/cancelled/unauthorized)
+		assert.equal(claim4.claimed, true, "Must claim workflow staging ticket");
+		assert.equal(claim4.ticket?.id, "req-workflow-staging");
 		const claim5 = await claimNextAuthorizedTicket(ledgerPath);
 		assert.equal(claim5.claimed, false, "Must not claim any unauthorized or blocked ticket");
 		assert.ok(claim5.reason?.includes("No eligible authorized tickets"), "Must report reason");
@@ -517,7 +516,7 @@ async function runTests(): Promise<void> {
 					authorization: validAuthorization,
 				},
 				"req-2": {
-					prompt: "Telegram notification formatting",
+					prompt: "Workflow notification formatting",
 					state: "pending",
 					authorization: validAuthorization,
 				},
@@ -610,7 +609,7 @@ async function runTests(): Promise<void> {
 		// Running roster currently has worker-2 and worker-3
 		const currentRoster: NativeActorSnapshot[] = [
 			{ id: "worker-1", status: "running", role: "sub", task: "UX design" },
-			{ id: "worker-2", status: "running", role: "sub", task: "Telegram" },
+			{ id: "worker-2", status: "running", role: "sub", task: "Workflow" },
 			{ id: "worker-3", status: "running", role: "sub", task: "Staging" },
 		];
 
