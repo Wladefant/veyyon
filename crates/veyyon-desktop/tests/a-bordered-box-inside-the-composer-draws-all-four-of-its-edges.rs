@@ -212,22 +212,46 @@ fn every_bordered_box_inside_the_composer_float_draws_four_edges_and_four_corner
 		.iter()
 		.filter(|spec| spec.border.is_some())
 		.collect();
-	// The float is the largest bordered box in the composer band; everything the
-	// sweep reads is a box it clips.
+	// The float is the bordered box in the composer band that clips the most
+	// other bordered boxes: the card stack it holds. Two rules that look
+	// simpler both pick the wrong box. Largest by area takes the queue rail,
+	// which is taller than the float. Largest above the window's middle takes
+	// one of the cards, because a float holding a header starts above the
+	// middle: at 800px tall this one runs 356 to 494 and the cards sit at 401.
+	// The layout tree records a box once per pass that drew it, so the same
+	// bounds arrive more than once and a count of them is deduplicated.
+	let clipped = |outer: &LayoutBox| {
+		let mut held: Vec<BoxBounds> = Vec::new();
+		for spec in &bordered {
+			if spec.bounds != outer.bounds
+				&& contains(outer.bounds, spec.bounds)
+				&& !held.iter().any(|seen| *seen == spec.bounds)
+			{
+				held.push(spec.bounds);
+			}
+		}
+		held
+	};
 	let float = bordered
 		.iter()
-		.filter(|spec| spec.bounds.top > options.height as f32 / 2.0)
-		.max_by(|a, b| area(a.bounds).total_cmp(&area(b.bounds)))
+		.filter(|spec| spec.bounds.bottom > options.height as f32 / 2.0)
+		.max_by(|a, b| {
+			clipped(a)
+				.len()
+				.cmp(&clipped(b).len())
+				.then_with(|| area(a.bounds).total_cmp(&area(b.bounds)))
+		})
 		.expect("the composer float draws a bordered box");
 
+	let held = clipped(float);
 	let inside: Vec<&&LayoutBox> = bordered
 		.iter()
-		.filter(|spec| spec.bounds != float.bounds && contains(float.bounds, spec.bounds))
+		.filter(|spec| held.iter().any(|seen| *seen == spec.bounds))
 		.collect();
 	assert!(
-		inside.len() >= 2,
+		held.len() >= 2,
 		"the scene attaches two cards, so the float clips at least two bordered boxes, found {}",
-		inside.len(),
+		held.len(),
 	);
 
 	for spec in inside {
