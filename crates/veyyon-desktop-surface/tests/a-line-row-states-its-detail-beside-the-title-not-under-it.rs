@@ -74,40 +74,53 @@ fn result_rows(captured: &Captured, row_height: f32) -> Vec<Bounds<Pixels>> {
 	rows
 }
 
-/// The text bands the row drew: the vertical spans of its runs, merged where
-/// they overlap and ordered top down, so one band is one line of text. A run
-/// counts as the row's when it starts inside the row's box, since the shell
-/// paints the session under the overlay and a run behind a palette row shares
-/// its band on a captured frame. A run that starts inside and is clipped at the
-/// row's edge — the row whose title is wider than the palette — is the row's,
-/// which is why the right edge is not tested.
-fn bands_in(captured: &Captured, row: Bounds<Pixels>) -> Vec<(f32, f32)> {
+/// The runs the row drew, top down, each with the size it was shaped at: the
+/// primitive `bands_in` merges, and what a failure reports, so an overrun names
+/// which text overran rather than only by how much.
+///
+/// A run counts as the row's when it starts inside the row's box, since the
+/// shell paints the session under the overlay and a run behind a palette row
+/// shares its band on a captured frame. A run that starts inside and is clipped
+/// at the row's edge — the row whose title is wider than the palette — is the
+/// row's, which is why the right edge is not tested.
+fn runs_in(captured: &Captured, row: Bounds<Pixels>) -> Vec<(f32, f32, f32)> {
 	let top = f32::from(row.origin.y);
 	let bottom = top + f32::from(row.size.height);
 	let left = f32::from(row.origin.x);
 	let right = left + f32::from(row.size.width);
-	let mut spans: Vec<(f32, f32)> = captured
+	let mut runs: Vec<(f32, f32, f32)> = captured
 		.text_runs
 		.iter()
 		.filter(|run| {
 			let left_edge = f32::from(run.bounds.left());
 			left_edge >= left - 0.5 && left_edge <= right
 		})
-		.map(|run| (f32::from(run.bounds.top()), f32::from(run.bounds.bottom())))
-		.filter(|(run_top, run_bottom)| {
+		.map(|run| {
+			(
+				f32::from(run.bounds.top()),
+				f32::from(run.bounds.bottom()),
+				f32::from(run.font_size),
+			)
+		})
+		.filter(|(run_top, run_bottom, _)| {
 			let centre = (run_top + run_bottom) / 2.0;
 			centre > top && centre < bottom
 		})
 		.collect();
-	spans.sort_by(|left, right| {
+	runs.sort_by(|left, right| {
 		left
 			.0
 			.partial_cmp(&right.0)
 			.expect("a top is a real number")
 	});
+	runs
+}
 
+/// The text bands the row drew: the vertical spans of its runs, merged where
+/// they overlap and ordered top down, so one band is one line of text.
+fn bands_in(captured: &Captured, row: Bounds<Pixels>) -> Vec<(f32, f32)> {
 	let mut merged: Vec<(f32, f32)> = Vec::new();
-	for (span_top, span_bottom) in spans {
+	for (span_top, span_bottom, _) in runs_in(captured, row) {
 		match merged.last_mut() {
 			Some(held) if span_top < held.1 => held.1 = held.1.max(span_bottom),
 			_ => merged.push((span_top, span_bottom)),
@@ -218,8 +231,9 @@ fn every_result_row_keeps_its_text_in_the_band_the_row_height_authors() {
 			assert!(
 				band_bottom - band_top <= band + 1.5,
 				"{name}: the row at {top}px draws a {:.1}px line of text in the {band}px band its \
-				 {row_height}px row authors",
-				band_bottom - band_top
+				 {row_height}px row authors, from runs (top, bottom, size) {:?}",
+				band_bottom - band_top,
+				runs_in(&frame, row)
 			);
 			assert!(
 				band_top >= top - 0.5 && band_bottom <= top + row_height + 0.5,
