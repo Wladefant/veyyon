@@ -160,8 +160,7 @@ fn one_line(text: &str) -> String {
 }
 
 /// Renders the settings body's empty state, stating the condition and the
-/// corrective action, with the same two-part presentation as
-/// `right_panel/empty.rs`.
+/// corrective action, with the same two-part presentation as `crate::empty`.
 ///
 /// This leaves the row grid rather than sitting on it. A row's declared height
 /// is measured for one line, and the two lines here overflow it by 4px, which

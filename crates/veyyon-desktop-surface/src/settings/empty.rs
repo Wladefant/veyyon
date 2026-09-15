@@ -7,17 +7,8 @@
 //! than holding the sentences beside its rows, which is how two of them came to
 //! state a condition and no step.
 
+pub use crate::empty::EmptyCopy;
 use crate::settings::SettingsPage;
-
-/// The two sentences an empty page draws: what is missing, and the step that
-/// puts something there.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EmptyCopy {
-	/// What the page has nothing of.
-	pub condition: &'static str,
-	/// The step that fills it, naming where it is taken.
-	pub action:    &'static str,
-}
 
 /// The host reported no settings schema at all.
 pub const GENERAL_NO_SCHEMA: EmptyCopy = EmptyCopy {

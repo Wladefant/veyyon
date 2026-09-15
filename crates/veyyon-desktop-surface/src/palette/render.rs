@@ -9,7 +9,7 @@ use veyyon_desktop_tokens::PaletteSurfaceTokens;
 use veyyon_gpui::{Context, Entity, IntoElement, ParentElement, Styled, div, px};
 
 use super::{PaletteMeta, PaletteMode, PaletteState};
-use crate::{ShellView, keymap::Keymap};
+use crate::{ShellView, keymap::Keymap, right_panel::EmptySurface};
 
 /// Renders the palette using a real editor and rows that execute their own
 /// selected item.
@@ -58,12 +58,12 @@ pub fn palette_surface(
 		);
 	}
 	if filtered.is_empty() {
-		let (primary, action) = if state.mode == PaletteMode::Models && state.items.is_empty() {
-			("No models available", "Sign in to a provider under Settings ▸ Providers")
+		let surface = if state.mode == PaletteMode::Models && state.items.is_empty() {
+			EmptySurface::PaletteNoModels
 		} else {
-			("No matching items", "Clear or edit the search query")
+			EmptySurface::PaletteNoMatch
 		};
-		body = body.child(crate::right_panel::empty_state("palette-empty", primary, action, tokens));
+		body = body.child(crate::right_panel::empty_surface(surface, tokens));
 	}
 	// A heading takes room from the same space the rows do, so a grouped list
 	// draws fewer rows rather than growing past the surface's own ceiling, and

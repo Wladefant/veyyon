@@ -22,7 +22,7 @@ use crate::{
 		diff_rows::{render_notice_row, withheld_notices},
 		diff_split::split_columns,
 		diff_toolbar::{diff_toolbar, stat_badge},
-		empty::empty_state,
+		empty::{EmptySurface, empty_surface},
 		pane_scroll::{PaneId, PaneScrolls},
 		pane_window::{RowWalk, scrolled},
 		review_controls::{ReviewCounts, review_bar, review_button},
@@ -84,20 +84,13 @@ pub fn diff_view(
 		if !cut_notices.is_empty() {
 			return container;
 		}
-		let (primary, action) = match diff_status {
-			DiffStatus::Unloaded => {
-				("Changes not requested yet", "Select working tree or staged above to inspect diffs")
-			},
-			DiffStatus::Loading => ("Loading changes...", "Inspecting working tree and index"),
-			DiffStatus::Loaded => {
-				("Working tree is clean", "No uncommitted modifications in this workspace")
-			},
-			DiffStatus::Failed => (
-				"Unable to load repository changes",
-				"Check git repository status or retry from the command palette",
-			),
+		let surface = match diff_status {
+			DiffStatus::Unloaded => EmptySurface::DiffUnloaded,
+			DiffStatus::Loading => EmptySurface::DiffLoading,
+			DiffStatus::Loaded => EmptySurface::DiffClean,
+			DiffStatus::Failed => EmptySurface::DiffFailed,
 		};
-		return container.child(empty_state("right-panel-diff-empty", primary, action, tokens));
+		return container.child(empty_surface(surface, tokens));
 	}
 	let mut walk = RowWalk::of(&scrolled(&rows, window));
 	walk.advance(geometry.chrome_row_height_px);

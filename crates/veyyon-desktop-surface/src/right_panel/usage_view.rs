@@ -12,7 +12,7 @@ use veyyon_gpui::{
 	Div, InteractiveElement, ParentElement, Stateful, StatefulInteractiveElement, Styled, div, px,
 };
 
-use crate::right_panel::empty::empty_state;
+use crate::right_panel::empty::{EmptySurface, empty_surface};
 
 /// Groups the digits of a count so two rows of figures can be compared.
 #[must_use]
@@ -81,12 +81,7 @@ pub fn usage_view(
 			.flex_1()
 			.w_full()
 			.flex()
-			.child(empty_state(
-				"right-panel-usage-empty",
-				"No accounting reported yet",
-				"Token usage and cost estimates will appear after the first turn",
-				tokens,
-			));
+			.child(empty_surface(EmptySurface::Usage, tokens));
 	};
 
 	// The row scrolls rather than shedding a field: a count that is not on

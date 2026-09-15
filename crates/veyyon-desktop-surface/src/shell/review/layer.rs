@@ -148,10 +148,8 @@ impl ShellView {
 			list = list.child(row);
 		}
 		if count == 0 {
-			list = list.child(crate::right_panel::empty_state(
-				"review-threads-empty",
-				"No local review threads",
-				"Click a line in the diff view to start a review thread",
+			list = list.child(crate::right_panel::empty_surface(
+				crate::right_panel::EmptySurface::ReviewThreads,
 				tokens,
 			));
 		}

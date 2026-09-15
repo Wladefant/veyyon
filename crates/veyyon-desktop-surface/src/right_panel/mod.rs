@@ -24,7 +24,7 @@ pub use content::{
 	DerivedFrom, DiffFile, DiffRow, DiffStatus, DiffWithheld, FileLine, FileView, HighlightSpan,
 	PanelContent, PanelFailure, PanelTab, TreeContent, TreeRowItem, TreeStatus,
 };
-pub use empty::empty_state;
+pub use empty::{EmptySurface, empty_surface, empty_unavailable};
 pub use file_view::{file_view, highlight_source};
 pub use pane_scroll::{PaneId, PaneScrolls};
 pub use tabs::tab_strip;
@@ -81,7 +81,7 @@ pub fn right_panel(
 		let reason = panel
 			.unavailable_reason
 			.as_deref()
-			.unwrap_or("No panel features available");
+			.unwrap_or_else(|| EmptySurface::PanelUnavailable.copy().condition);
 		return laid_out
 			.tracking(|index| (index == 0).then_some(Region::PanelChrome))
 			.id("right-panel")
@@ -94,12 +94,7 @@ pub fn right_panel(
 			.overflow_hidden()
 			.child(tab_strip(panel, geometry, tokens, cx))
 			.children(failure_row)
-			.child(empty_state(
-				"right-panel-unavailable",
-				reason,
-				"Attach a host that reports one of Changes, File, Tree or Usage",
-				tokens,
-			))
+			.child(empty_unavailable(reason, tokens))
 			.into_any_element();
 	}
 

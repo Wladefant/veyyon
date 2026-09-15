@@ -19,7 +19,7 @@ use crate::{
 	intent::Intent,
 	right_panel::{
 		content::{TreeContent, TreeRowItem, TreeStatus},
-		empty::empty_state,
+		empty::{EmptySurface, empty_surface},
 	},
 };
 
@@ -31,19 +31,13 @@ pub fn tree_view(
 	cx: &Context<ShellView>,
 ) -> AnyElement {
 	if tree.rows.is_empty() {
-		let (primary, action) = match tree.status {
-			TreeStatus::Unloaded => {
-				("Directory tree not loaded", "Open a workspace folder to view its directory structure")
-			},
-			TreeStatus::Loading => ("Scanning workspace...", "Building directory hierarchy"),
-			TreeStatus::Loaded => {
-				("Workspace is empty", "Create a file here, or open another workspace folder")
-			},
-			TreeStatus::Failed => {
-				("Unable to read directory tree", "Check workspace directory access permissions")
-			},
+		let surface = match tree.status {
+			TreeStatus::Unloaded => EmptySurface::TreeUnloaded,
+			TreeStatus::Loading => EmptySurface::TreeLoading,
+			TreeStatus::Loaded => EmptySurface::TreeEmpty,
+			TreeStatus::Failed => EmptySurface::TreeFailed,
 		};
-		return empty_state("right-panel-tree-empty", primary, action, tokens).into_any_element();
+		return empty_surface(surface, tokens).into_any_element();
 	}
 
 	// The builder is called once per row while the tree renders, on the same

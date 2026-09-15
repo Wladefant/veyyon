@@ -21,7 +21,7 @@ use crate::{
 	right_panel::{
 		content::{FileLine, FileView, HighlightSpan},
 		diff_rows::gutter_cell,
-		empty::empty_state,
+		empty::{EmptySurface, empty_surface},
 		mono_pane::{PaneParts, pane_cell, pane_content_px, pinned_gutter_pane},
 		pane_scroll::{PaneId, PaneScrolls},
 		pane_window::{ColumnWindow, RowWalk, scrolled, text_columns, visible_pieces},
@@ -38,13 +38,7 @@ pub fn file_view(
 	_cx: &Context<ShellView>,
 ) -> impl IntoElement {
 	let Some(file_data) = file else {
-		return empty_state(
-			"right-panel-file-empty",
-			"No file open",
-			"Select a file from the Tree tab or an artifact link to inspect contents",
-			tokens,
-		)
-		.into_any_element();
+		return empty_surface(EmptySurface::FileNone, tokens).into_any_element();
 	};
 
 	let rows = panes.handle(PaneId::FileRows);
@@ -67,12 +61,7 @@ pub fn file_view(
 
 	if file_data.binary {
 		return container
-			.child(empty_state(
-				"right-panel-file-binary",
-				"Binary file cannot be displayed",
-				"Select a UTF-8 text file from the Tree tab",
-				tokens,
-			))
+			.child(empty_surface(EmptySurface::FileBinary, tokens))
 			.into_any_element();
 	}
 

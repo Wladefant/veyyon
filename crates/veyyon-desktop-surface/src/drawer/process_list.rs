@@ -39,10 +39,8 @@ pub fn process_list(
 			.flex_1()
 			.px(tokens.spacing(SpacingStep::S3))
 			.py(tokens.spacing(SpacingStep::S2))
-			.child(crate::right_panel::empty_state(
-				"process-list-empty",
-				"No supervised processes running",
-				"Start a process using the launch tool or run a command in the terminal",
+			.child(crate::right_panel::empty_surface(
+				crate::right_panel::EmptySurface::ProcessList,
 				tokens,
 			))
 			.into_any_element();
