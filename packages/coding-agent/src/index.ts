@@ -80,6 +80,8 @@ export * from "./main";
 // Run modes for programmatic SDK usage
 export * from "./modes";
 export * from "./modes/terminal/components";
+export * from "./native-control/telegram-control-bridge";
+export * from "./native-control/telegram-control-host";
 // SDK for programmatic usage
 export * from "./sdk";
 export {
