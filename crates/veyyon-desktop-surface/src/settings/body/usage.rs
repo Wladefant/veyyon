@@ -47,6 +47,7 @@ pub fn render_usage_page(
 	let Some(totals) = &state.usage else {
 		return container.child(empty_state_row(
 			"No usage data recorded for active session.",
+			"Submit a prompt in the composer to begin session accounting",
 			geometry,
 			tokens,
 		));

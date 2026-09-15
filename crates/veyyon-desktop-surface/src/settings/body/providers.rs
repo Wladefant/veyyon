@@ -28,7 +28,13 @@ pub fn render_providers_page(
 		.gap(veyyon_gpui::px(geometry.row_gap));
 
 	if state.providers.is_empty() {
-		return container.child(empty_state_row("No model providers configured.", geometry, tokens));
+		return container.child(empty_state_row(
+			"No model providers configured.",
+			"Host capability Providers reported none; set a provider API key in the environment or \
+			 declare one in ~/.veyyon/config.yml",
+			geometry,
+			tokens,
+		));
 	}
 
 	let prov_av = controls.availability(&SurfaceId::SettingsField("providers".to_string()));

@@ -34,6 +34,8 @@ pub fn render_diagnostics_page(
 	let Some(diag_json) = &state.diagnostics else {
 		return container.child(empty_state_row(
 			"No diagnostic information available.",
+			"Host capability Diagnostics reported no telemetry; verify host connection or inspect \
+			 service health",
 			geometry,
 			tokens,
 		));

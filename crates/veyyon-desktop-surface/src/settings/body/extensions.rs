@@ -65,6 +65,7 @@ pub fn render_extensions_page(
 	if state.extensions.is_empty() {
 		return container.child(empty_state_row(
 			"No extensions or subagents registered.",
+			"Start a task using the field above, or declare an extension in ~/.veyyon/config.yml",
 			geometry,
 			tokens,
 		));

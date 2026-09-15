@@ -149,7 +149,13 @@ pub fn render_themes_page(
 		.as_ref()
 		.is_none_or(|themes| themes.themes.is_empty())
 	{
-		container = container.child(empty_state_row("No themes reported by host.", geometry, tokens));
+		container = container.child(empty_state_row(
+			"No themes reported by host.",
+			"Host capability Themes reported an empty catalog; install themes or verify host theme \
+			 discovery",
+			geometry,
+			tokens,
+		));
 	}
 	div().h_full().min_h_0().child(container)
 }

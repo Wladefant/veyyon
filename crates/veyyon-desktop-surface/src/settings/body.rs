@@ -4,6 +4,7 @@
 //! modules with capability gate availability checks.
 
 pub mod auth;
+pub mod conditions;
 pub mod context;
 pub mod diagnostics;
 pub mod extensions;
@@ -63,7 +64,7 @@ pub fn render_page_body(
 			providers::render_providers_page(state, controls, geometry, tokens, cx)
 		},
 		SettingsPage::Authentication => {
-			auth::render_auth_page(state, fields.secret.clone(), geometry, tokens, cx)
+			auth::render_auth_page(state, fields.secret.clone(), controls, geometry, tokens, cx)
 		},
 		SettingsPage::Mcp => mcp::render_mcp_page(state, controls, geometry, tokens, cx),
 		SettingsPage::Extensions => {

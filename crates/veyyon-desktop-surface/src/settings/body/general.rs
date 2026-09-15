@@ -7,7 +7,7 @@ use std::{
 	rc::Rc,
 };
 
-use veyyon_desktop_kit::{ColorRole, TextRamp, TokenSet, Tooltip};
+use veyyon_desktop_kit::{ColorRole, SearchField, SpacingStep, TextRamp, TokenSet, Tooltip};
 use veyyon_desktop_model::{SettingsView, SurfaceId};
 use veyyon_desktop_tokens::SettingsSurfaceTokens;
 use veyyon_gpui::{
@@ -20,7 +20,10 @@ use crate::{
 	controls::ControlStates,
 	settings::{
 		SettingsState,
-		body::general_control::setting_control,
+		body::{
+			conditions::{is_setting_condition_met, matches_query},
+			general_control::setting_control,
+		},
 		row::{empty_state_row, setting_row_with_secondary},
 	},
 };
@@ -33,6 +36,7 @@ struct GeneralSettingsListStateInner {
 	list_state:        ListState,
 	visible_keys:      Vec<String>,
 	text_fingerprints: Vec<u64>,
+	query:             String,
 }
 
 impl Default for GeneralSettingsListState {
@@ -50,6 +54,7 @@ impl GeneralSettingsListState {
 			list_state,
 			visible_keys: Vec::new(),
 			text_fingerprints: Vec::new(),
+			query: String::new(),
 		})))
 	}
 
@@ -90,6 +95,22 @@ impl GeneralSettingsListState {
 		}
 	}
 
+	/// Sets the active search filter query.
+	pub fn set_query(&self, query: String) {
+		self.0.borrow_mut().query = query;
+	}
+
+	/// Returns the current search filter query.
+	#[must_use]
+	pub fn query(&self) -> String {
+		self.0.borrow().query.clone()
+	}
+
+	/// Clears the search filter query.
+	pub fn clear_query(&self) {
+		self.0.borrow_mut().query.clear();
+	}
+
 	/// Synchronizes visible keys and invalidates measurements if text or
 	/// visibility changes, while preserving scroll and layout when only values
 	/// change.
@@ -97,9 +118,16 @@ impl GeneralSettingsListState {
 		let mut inner = self.0.borrow_mut();
 		let mut new_keys = Vec::new();
 		let mut new_fps = Vec::new();
+		let query = inner.query.trim().to_lowercase();
 
 		for (key, entry) in settings {
 			if entry.hidden {
+				continue;
+			}
+			if !is_setting_condition_met(key, settings) {
+				continue;
+			}
+			if !query.is_empty() && !matches_query(key, entry, &query) {
 				continue;
 			}
 			new_keys.push(key.clone());
@@ -110,9 +138,8 @@ impl GeneralSettingsListState {
 			entry.kind.hash(&mut hasher);
 			new_fps.push(hasher.finish());
 		}
-
-		let old_count = inner.visible_keys.len();
 		let new_count = new_keys.len();
+		let old_count = inner.visible_keys.len();
 
 		if new_count != old_count {
 			if new_count > old_count {
@@ -156,20 +183,38 @@ pub fn render_general_page(
 			.flex()
 			.flex_col()
 			.gap(px(geometry.row_gap))
-			.child(empty_state_row("No settings reported by host.", geometry, tokens));
+			.child(empty_state_row(
+				"No settings reported by host.",
+				"Host capability Settings reported no schema; verify host connection",
+				geometry,
+				tokens,
+			));
 	}
 
 	list_state_handle.sync(&state.settings);
 
 	let visible_keys: Rc<[String]> = Rc::from(list_state_handle.visible_keys());
 	if visible_keys.is_empty() {
+		let (empty_msg, action_msg) = if !list_state_handle.query().is_empty() {
+			(
+				format!("No settings matching \"{}\"", list_state_handle.query()),
+				"Clear or edit the search query".to_string(),
+			)
+		} else {
+			(
+				"No configurable settings available.".to_string(),
+				"Reported settings have unmet conditions or are hidden; configure settings in \
+				 ~/.veyyon/config.yml"
+					.to_string(),
+			)
+		};
 		return div()
 			.w_full()
 			.h_full()
 			.flex()
 			.flex_col()
 			.gap(px(geometry.row_gap))
-			.child(empty_state_row("No configurable settings available.", geometry, tokens));
+			.child(empty_state_row(&empty_msg, &action_msg, geometry, tokens));
 	}
 
 	let list_state = list_state_handle.list_state();
@@ -195,9 +240,9 @@ pub fn render_general_page(
 		let entry = &entry;
 		let field_id = SurfaceId::SettingsField(key.clone());
 		let av = controls_copy.availability(&field_id);
+		let is_invalid = controls_copy.error(&field_id).is_some();
 
-		let control_el = setting_control(key, entry, entity.clone(), window, app);
-
+		let control_el = setting_control(key, entry, &av, is_invalid, entity.clone(), window, app);
 		let is_modified = entry.value != entry.default;
 		let secondary_el = if is_modified {
 			let key_clone = key.clone();
@@ -218,7 +263,7 @@ pub fn render_general_page(
 			let default = entry
 				.default
 				.as_str()
-				.map_or_else(|| entry.default.to_string(), str::to_owned);
+				.map_or_else(|| entry.default.to_string(), |s| crate::settings::row::shorten_path(s));
 			Some(
 				Tooltip::new(format!("Default: {default}"), reset_btn)
 					.keyed(format!("reset-tip-{key}"))
@@ -228,29 +273,70 @@ pub fn render_general_page(
 			None
 		};
 
+		let prev_group = if item_ix > 0 {
+			visible_keys.get(item_ix - 1).and_then(|k| {
+				let view_read = entity.read(app);
+				view_read
+					.active_settings()
+					.and_then(|s| s.entry(k))
+					.and_then(|e| e.group.clone())
+			})
+		} else {
+			None
+		};
+		let show_header = if item_ix == 0 {
+			entry.group.is_some()
+		} else {
+			entry.group.is_some() && entry.group != prev_group
+		};
+		let group_header = if show_header {
+			entry.group.as_deref().map(|g| {
+				crate::settings::row::group_header_row(g, item_ix == 0, &geometry_copy, &tokens_copy)
+			})
+		} else {
+			None
+		};
+
 		let mut row_container = div()
 			.w_full()
 			.flex()
 			.flex_col()
-			.gap(px(geometry_copy.row_gap))
-			.child(setting_row_with_secondary(
-				entry.label.as_deref().unwrap_or(key),
-				entry.description.as_deref(),
-				control_el,
-				secondary_el,
-				&av,
-				&geometry_copy,
-				&tokens_copy,
-			));
+			.gap(px(geometry_copy.row_gap));
 
-		if item_ix > 0 {
-			row_container = row_container.mt(px(geometry_copy.row_gap));
+		if let Some(gh) = group_header {
+			row_container = row_container.child(gh);
 		}
 
+		row_container = row_container.child(setting_row_with_secondary(
+			entry.label.as_deref().unwrap_or(key),
+			entry.description.as_deref(),
+			control_el,
+			secondary_el,
+			&av,
+			&geometry_copy,
+			&tokens_copy,
+		));
+
+		if item_ix > 0 && !show_header {
+			row_container = row_container.mt(px(geometry_copy.row_gap));
+		}
 		row_container.into_any_element()
 	})
 	.w_full()
 	.h_full();
+
+	let query = list_state_handle.query();
+	let weak_for_clear = cx.weak_entity();
+	let search_bar = div().w_full().mb(tokens.spacing(SpacingStep::S3)).child(
+		SearchField::new("settings-search", query)
+			.placeholder("Search settings...")
+			.on_clear(move |_win, app| {
+				let _ = weak_for_clear.update(app, |view, cx| {
+					view.general_settings_list().clear_query();
+					cx.notify();
+				});
+			}),
+	);
 
 	div()
 		.w_full()
@@ -258,5 +344,6 @@ pub fn render_general_page(
 		.flex()
 		.flex_col()
 		.overflow_hidden()
+		.child(search_bar)
 		.child(div().flex_1().min_h_0().child(list_el))
 }

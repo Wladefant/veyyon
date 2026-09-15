@@ -30,7 +30,12 @@ pub fn render_mcp_page(
 		.gap(veyyon_gpui::px(geometry.row_gap));
 
 	if state.mcp.is_empty() {
-		return container.child(empty_state_row("No MCP servers configured.", geometry, tokens));
+		return container.child(empty_state_row(
+			"No MCP servers configured.",
+			"Declare a server in .veyyon/mcp.json in the project, or in the profile's agent/mcp.json",
+			geometry,
+			tokens,
+		));
 	}
 
 	let entity = cx.entity();

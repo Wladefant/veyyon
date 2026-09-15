@@ -10,7 +10,10 @@ pub mod pages;
 pub mod row;
 
 use serde_json::Value;
-use veyyon_desktop_kit::{ColorRole, RadiusStep, SpacingStep, TextRamp, TextWeight, TokenSet};
+use veyyon_desktop_kit::{
+	Button, ButtonSize, ButtonVariant, ColorRole, RadiusStep, SpacingStep, StrokeStep, TextRamp,
+	TextWeight, TokenSet,
+};
 use veyyon_desktop_model::{
 	AgentView, AuthFlowView, ContextBreakdownView, KeybindingView, McpServerView, ProviderView,
 	SettingEntry, SettingsView, SurfaceId, ThemesView, UsageTotals,
@@ -191,7 +194,7 @@ pub fn settings_surface(
 	}
 	let radius = tokens.radius(RadiusStep::Xl);
 	let bg = tokens.color(ColorRole::Float);
-	let border = tokens.color(ColorRole::Hairline);
+	let stroke_px = tokens.stroke(StrokeStep::Hairline);
 	let pad = tokens.spacing(SpacingStep::S6);
 
 	let mut dialog = div().id("settings-dialog");
@@ -204,8 +207,7 @@ pub fn settings_surface(
 		.h(px(560.0))
 		.rounded(radius)
 		.bg(bg)
-		.border_1()
-		.border_color(border)
+		.border(stroke_px)
 		.shadow_lg()
 		.flex()
 		.flex_row()
@@ -226,8 +228,7 @@ pub fn settings_surface(
 	let mut sidebar = div()
 		.w(px(200.0))
 		.h_full()
-		.border_r_1()
-		.border_color(border)
+		.border_r(stroke_px)
 		.p(tokens.spacing(SpacingStep::S4))
 		.flex()
 		.flex_col()
@@ -260,7 +261,7 @@ pub fn settings_surface(
 
 		let page_btn = div()
 			.id(("settings-tab", page as usize))
-			.h(px(32.0))
+			.h(tokens.spacing(SpacingStep::S11))
 			.px(tokens.spacing(SpacingStep::S3))
 			.rounded(tokens.radius(RadiusStep::Sm))
 			.bg(tab_bg)
@@ -305,8 +306,17 @@ pub fn settings_surface(
 		.overflow_hidden();
 
 	// Page Header.
-	let header = div()
-		.mb(px(geometry.group_gap))
+	let top_bar = div()
+		.w_full()
+		.flex()
+		.flex_row()
+		.items_center()
+		.justify_between()
+		.gap(tokens.spacing(SpacingStep::S2));
+
+	let title_block = div()
+		.flex_1()
+		.min_w_0()
 		.flex()
 		.flex_col()
 		.gap(tokens.spacing(SpacingStep::S1))
@@ -323,6 +333,32 @@ pub fn settings_surface(
 				.text_color(tokens.color(ColorRole::Muted))
 				.child(state.page.description()),
 		);
+
+	let mut action_bar = div()
+		.flex()
+		.flex_row()
+		.items_center()
+		.gap(tokens.spacing(SpacingStep::S2));
+
+	if let Some(parent) = back {
+		action_bar = action_bar.child(
+			Button::new("settings-dialog-back", "Back")
+				.size(ButtonSize::Small)
+				.variant(ButtonVariant::Ghost)
+				.on_click(cx.listener(move |view, _, _, cx| view.navigate_surface(parent, cx))),
+		);
+	}
+
+	action_bar = action_bar.child(
+		Button::new("settings-dialog-close", "Close")
+			.size(ButtonSize::Small)
+			.variant(ButtonVariant::Ghost)
+			.on_click(cx.listener(|view, _, _, cx| view.close_palette(cx))),
+	);
+
+	let header = div()
+		.mb(px(geometry.group_gap))
+		.child(top_bar.child(title_block).child(action_bar));
 	content = content.child(header);
 	content = content.children(settings_failure_row(state, tokens, cx));
 

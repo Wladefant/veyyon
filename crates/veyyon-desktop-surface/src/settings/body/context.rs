@@ -41,6 +41,8 @@ pub fn render_context_page(
 	let Some(ctx) = &state.context else {
 		return container.child(empty_state_row(
 			"No context window breakdown available.",
+			"Host capability ContextBreakdown reported no data; submit a prompt in the composer to \
+			 calculate allocation",
 			geometry,
 			tokens,
 		));

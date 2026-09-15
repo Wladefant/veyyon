@@ -12,15 +12,16 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 use veyyon_desktop_kit::{
-	Checkbox, CheckboxState, FilePicker, NumberInput, Radio, Row, Segmented, Select, Slider,
-	SpacingStep, TextArea, TextField, Toggle, input::Editor,
+	Checkbox, CheckboxState, ColorRole, FilePicker, InteractiveState, NumberInput, Radio,
+	RadiusStep, Row, Segmented, Select, Slider, SpacingStep, StrokeStep, TextArea, TextField,
+	Toggle, TokenSet, input::Editor,
 };
 use veyyon_desktop_model::{SettingEntry, SettingKind};
 use veyyon_gpui::{
 	AnyElement, App, ElementId, Entity, IntoElement, ParentElement, Styled, Window, div,
 };
 
-use crate::{Intent, ShellView};
+use crate::{Intent, ShellView, controls::Availability};
 
 /// Enum choices above this count are a select rather than a segmented
 /// control; at or below `RADIO_MAX` they are radios.
@@ -39,38 +40,69 @@ fn set_value(entity: &Entity<ShellView>, app: &mut App, key: &str, value: Value)
 pub fn setting_control(
 	key: &str,
 	entry: &SettingEntry,
+	availability: &Availability,
+	is_invalid: bool,
 	entity: Entity<ShellView>,
 	window: &mut Window,
 	app: &mut App,
 ) -> AnyElement {
-	match entry.kind {
-		SettingKind::Boolean => boolean_control(key, entry, entity),
-		SettingKind::Number => number_control(key, entry, entity),
-		SettingKind::Enum => enum_control(key, entry, entity),
-		SettingKind::Array if !entry.options.is_empty() => checkbox_control(key, entry, entity),
+	let disabled = matches!(availability, Availability::Unavailable { .. });
+	let control_el = match entry.kind {
+		SettingKind::Boolean => boolean_control(key, entry, disabled, entity),
+		SettingKind::Number => number_control(key, entry, disabled, entity),
+		SettingKind::Enum => enum_control(key, entry, disabled, entity),
+		SettingKind::Array if !entry.options.is_empty() => {
+			checkbox_control(key, entry, disabled, entity)
+		},
 		SettingKind::Record | SettingKind::ModelChain | SettingKind::Array => {
 			text_area_control(key, entry, &entity, window, app)
 		},
-		SettingKind::String if is_location_key(key) => path_control(key, entry, entity),
+		SettingKind::String if is_location_key(key) => path_control(key, entry, disabled, entity),
 		SettingKind::String => text_field_control(key, entry, &entity, window, app),
+	};
+	if is_invalid {
+		let tokens = TokenSet::for_app(app);
+		div()
+			.rounded(tokens.radius(RadiusStep::Xs))
+			.border(tokens.stroke(StrokeStep::Hairline))
+			.border_color(tokens.color(ColorRole::ErrorInk))
+			.child(control_el)
+			.into_any_element()
+	} else {
+		control_el
 	}
 }
 
-fn boolean_control(key: &str, entry: &SettingEntry, entity: Entity<ShellView>) -> AnyElement {
+fn boolean_control(
+	key: &str,
+	entry: &SettingEntry,
+	disabled: bool,
+	entity: Entity<ShellView>,
+) -> AnyElement {
 	let current = match &entry.value {
 		Value::Bool(b) => *b,
 		Value::String(s) => s == "true",
 		_ => false,
 	};
 	let key = key.to_owned();
-	Toggle::new(ElementId::Name(format!("toggle-{key}").into()), current)
-		.on_toggle(move |val, _win, app| set_value(&entity, app, &key, Value::Bool(val)))
-		.into_any_element()
+	let mut toggle = Toggle::new(ElementId::Name(format!("toggle-{key}").into()), current);
+	if disabled {
+		toggle = toggle.state(InteractiveState::Disabled);
+	} else {
+		toggle =
+			toggle.on_toggle(move |val, _win, app| set_value(&entity, app, &key, Value::Bool(val)));
+	}
+	toggle.into_any_element()
 }
 
 /// A number with both bounds is a slider for the coarse move and a number
 /// input for the exact value; without bounds the slider has no track to draw.
-fn number_control(key: &str, entry: &SettingEntry, entity: Entity<ShellView>) -> AnyElement {
+fn number_control(
+	key: &str,
+	entry: &SettingEntry,
+	disabled: bool,
+	entity: Entity<ShellView>,
+) -> AnyElement {
 	let current = entry.value.as_f64().unwrap_or(0.0);
 	let integral = entry.value.is_i64() || entry.value.is_u64();
 	let to_value = move |val: f64| -> Value {
@@ -89,30 +121,32 @@ fn number_control(key: &str, entry: &SettingEntry, entity: Entity<ShellView>) ->
 
 	let input_entity = entity.clone();
 	let input_key = key.to_owned();
-	let input =
-		NumberInput::new(ElementId::Name(format!("num-{key}").into()), current.round() as i64)
-			.range(
-				bounds.map_or(0, |(min, _)| min.round() as i64),
-				bounds.map_or(100, |(_, max)| max.round() as i64),
-			)
-			.on_change(move |val, _win, app| {
-				set_value(&input_entity, app, &input_key, to_value(val as f64));
-			});
-
+	let mut input =
+		NumberInput::new(ElementId::Name(format!("num-{key}").into()), current.round() as i64).range(
+			bounds.map_or(0, |(min, _)| min.round() as i64),
+			bounds.map_or(100, |(_, max)| max.round() as i64),
+		);
+	if !disabled {
+		input = input.on_change(move |val, _win, app| {
+			set_value(&input_entity, app, &input_key, to_value(val as f64));
+		});
+	}
 	let Some((min, max)) = bounds else {
 		return input.into_any_element();
 	};
 
 	let slider_key = key.to_owned();
-	let slider = Slider::new(
+	let mut slider = Slider::new(
 		ElementId::Name(format!("slider-{key}").into()),
 		current as f32,
 		min as f32,
 		max as f32,
-	)
-	.on_change(move |val, _win, app| {
-		set_value(&entity, app, &slider_key, to_value(f64::from(val)));
-	});
+	);
+	if !disabled {
+		slider = slider.on_change(move |val, _win, app| {
+			set_value(&entity, app, &slider_key, to_value(f64::from(val)));
+		});
+	}
 	Row::new(SpacingStep::S2)
 		.child(div().flex_1().min_w_0().child(slider))
 		.child(input)
@@ -135,7 +169,12 @@ fn choices(entry: &SettingEntry) -> (Vec<String>, Vec<String>) {
 	}
 }
 
-fn enum_control(key: &str, entry: &SettingEntry, entity: Entity<ShellView>) -> AnyElement {
+fn enum_control(
+	key: &str,
+	entry: &SettingEntry,
+	disabled: bool,
+	entity: Entity<ShellView>,
+) -> AnyElement {
 	let (labels, values) = choices(entry);
 	let current = entry.value.as_str().unwrap_or("");
 	let selected = values.iter().position(|v| v == current).unwrap_or(0);
@@ -145,26 +184,30 @@ fn enum_control(key: &str, entry: &SettingEntry, entity: Entity<ShellView>) -> A
 		for (index, (label, value)) in labels.into_iter().zip(values).enumerate() {
 			let entity = entity.clone();
 			let key = key.to_owned();
-			row = row.child(
+			let mut radio =
 				Radio::new(ElementId::Name(format!("radio-{key}-{value}").into()), index == selected)
-					.label(label)
-					.on_select(move |_win, app| {
-						set_value(&entity, app, &key, Value::String(value.clone()));
-					}),
-			);
+					.label(label);
+			if !disabled {
+				radio = radio.on_select(move |_win, app| {
+					set_value(&entity, app, &key, Value::String(value.clone()));
+				});
+			}
+			row = row.child(radio);
 		}
 		return row.into_any_element();
 	}
 
 	if labels.len() <= SEGMENTED_MAX {
 		let key = key.to_owned();
-		return Segmented::new(ElementId::Name(format!("seg-{key}").into()), labels, selected)
-			.on_change(move |idx, _win, app| {
+		let mut seg = Segmented::new(ElementId::Name(format!("seg-{key}").into()), labels, selected);
+		if !disabled {
+			seg = seg.on_change(move |idx, _win, app| {
 				if let Some(val) = values.get(idx) {
 					set_value(&entity, app, &key, Value::String(val.clone()));
 				}
-			})
-			.into_any_element();
+			});
+		}
+		return seg.into_any_element();
 	}
 
 	Select::new(ElementId::Name(format!("sel-{key}").into()), labels, selected).into_any_element()
@@ -172,7 +215,12 @@ fn enum_control(key: &str, entry: &SettingEntry, entity: Entity<ShellView>) -> A
 
 /// An array with declared choices is one checkbox per choice; a toggle adds
 /// the choice to the array or takes it out, keeping the schema's order.
-fn checkbox_control(key: &str, entry: &SettingEntry, entity: Entity<ShellView>) -> AnyElement {
+fn checkbox_control(
+	key: &str,
+	entry: &SettingEntry,
+	disabled: bool,
+	entity: Entity<ShellView>,
+) -> AnyElement {
 	let chosen: Vec<&str> = entry
 		.value
 		.as_array()
@@ -197,23 +245,24 @@ fn checkbox_control(key: &str, entry: &SettingEntry, entity: Entity<ShellView>) 
 			.filter(|v| chosen.contains(&v.as_str()) && *v != option.value)
 			.collect();
 		let order: Vec<String> = entry.options.iter().map(|o| o.value.clone()).collect();
-		row = row.child(
-			Checkbox::new(ElementId::Name(format!("check-{key}-{value}").into()), state)
-				.label(option.label.clone())
-				.on_toggle(move |next, _win, app| {
-					let mut kept = others.clone();
-					if next == CheckboxState::Checked {
-						kept.push(value.clone());
-					}
-					let array = order
-						.iter()
-						.filter(|v| kept.contains(v))
-						.cloned()
-						.map(Value::String)
-						.collect();
-					set_value(&entity, app, &key, Value::Array(array));
-				}),
-		);
+		let mut chk = Checkbox::new(ElementId::Name(format!("check-{key}-{value}").into()), state)
+			.label(option.label.clone());
+		if !disabled {
+			chk = chk.on_toggle(move |next, _win, app| {
+				let mut kept = others.clone();
+				if next == CheckboxState::Checked {
+					kept.push(value.clone());
+				}
+				let array = order
+					.iter()
+					.filter(|v| kept.contains(v))
+					.cloned()
+					.map(Value::String)
+					.collect();
+				set_value(&entity, app, &key, Value::Array(array));
+			});
+		}
+		row = row.child(chk);
 	}
 	div()
 		.w_full()
@@ -284,17 +333,26 @@ fn is_location_key(key: &str) -> bool {
 
 /// A location is picked from the platform's prompt rather than typed: the
 /// picker shows the path the setting holds and opens the chooser on click.
-fn path_control(key: &str, entry: &SettingEntry, entity: Entity<ShellView>) -> AnyElement {
+fn path_control(
+	key: &str,
+	entry: &SettingEntry,
+	disabled: bool,
+	entity: Entity<ShellView>,
+) -> AnyElement {
 	let current = entry
 		.value
 		.as_str()
 		.filter(|s| !s.is_empty())
-		.map(PathBuf::from);
+		.map(|s| PathBuf::from(crate::settings::row::shorten_path(s)));
 	let key = key.to_owned();
-	FilePicker::new(ElementId::Name(format!("path-{key}").into()), current)
-		.on_browse(move |_event, _win, app| {
+	let mut picker = FilePicker::new(ElementId::Name(format!("path-{key}").into()), current);
+	if disabled {
+		picker = picker.disabled(true);
+	} else {
+		picker = picker.on_browse(move |_event, _win, app| {
 			let key = key.clone();
 			let () = entity.update(app, |view, cx| view.pick_setting_path(key, cx));
-		})
-		.into_any_element()
+		});
+	}
+	picker.into_any_element()
 }
