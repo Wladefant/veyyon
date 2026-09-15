@@ -88,6 +88,10 @@
         "clientSecret": {
           "type": "string"
         },
+        "scopes": {
+          "type": "string",
+          "description": "Optional space-separated OAuth scopes to request during dynamic client registration and authorization, overriding discovered scopes."
+        },
         "redirectUri": {
           "type": "string"
         },
