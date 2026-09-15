@@ -26,8 +26,8 @@
  * third import that pulled in anything larger would undo the split, so weigh one before adding it.
  */
 
+import { COMPACT_MODES } from "@veyyon/kernel/session/compact-modes";
 import { PRIORITY_TIER_LABEL } from "../config/service-tier";
-import { COMPACT_MODES } from "../session/compact-modes";
 
 /** One command's declared surface. The handler side is `SlashCommandSpec` in the registry. */
 export interface BuiltinSlashCommandDeclaration {
@@ -83,11 +83,6 @@ export interface BuiltinSlashCommandDeclaration {
 }
 
 export const BUILTIN_SLASH_COMMAND_DECLARATIONS = [
-	{
-		name: "reload-config",
-		description: "Reload model and effort defaults for new subagents (keeps running agents unchanged)",
-		textMode: true,
-	},
 	{
 		name: "settings",
 		description: "Open settings menu",
@@ -491,8 +486,6 @@ export const BUILTIN_SLASH_COMMAND_DECLARATIONS = [
 			{ name: "done", description: "Mark task/phase/all completed (fuzzy-matched)", usage: "[<task|phase>]" },
 			{ name: "drop", description: "Mark task/phase/all abandoned (fuzzy-matched)", usage: "[<task|phase>]" },
 			{ name: "rm", description: "Remove task/phase/all (fuzzy-matched)", usage: "[<task|phase>]" },
-			{ name: "pending", description: "Reset task/phase/all to pending (fuzzy-matched)", usage: "[<task|phase>]" },
-			{ name: "reset", description: "Reset task/phase/all to pending (alias for pending)", usage: "[<task|phase>]" },
 		],
 		allowArgs: true,
 	},
@@ -569,7 +562,7 @@ export const BUILTIN_SLASH_COMMAND_DECLARATIONS = [
 		// command, one description, one screen.
 		name: "agents",
 		aliases: ["cockpit", "hub"],
-		description: "Subagent dashboard: live agent roster and comms stream",
+		description: "Agent dashboard: live agent roster and comms stream",
 	},
 	{
 		name: "branch",
@@ -906,7 +899,7 @@ export const BUILTIN_SLASH_COMMAND_DECLARATIONS = [
 
 	{
 		name: "pause",
-		description: "Freeze all agents (main, subagents, advisor) until resumed",
+		description: "Freeze all agents (main, spawned agents, advisor) until resumed",
 	},
 
 	{
