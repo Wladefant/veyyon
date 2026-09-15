@@ -245,6 +245,6 @@ describe("single-key providers have a real /login", () => {
 		expect(request?.url).toBe("https://api.commandcode.ai/provider/v1/chat/completions");
 		expect(new Headers(request?.init?.headers).get("Authorization")).toBe("Bearer command-secret");
 		const body = JSON.parse(String(request?.init?.body)) as { model?: unknown };
-		expect(body.model).toBe("moonshotai/Kimi-K2.7-Code");
+		expect(body.model).toBe("claude-sonnet-4-6");
 	});
 });

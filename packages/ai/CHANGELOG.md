@@ -8,6 +8,7 @@
 
 ### Changed
 
+- Command Code API-key validation calls the provider's default model, `claude-sonnet-4-6`.
 - The NVIDIA, Xiaomi, Xiaomi Token Plan and Alibaba Coding Plan logins take the pasted key through the same `promptApiKey` as every `createApiKeyLogin` provider: the key is trimmed, an empty paste is `ApiKeyRequiredError`, an abort during the paste is `LoginCancelledError`, and a host without `onPrompt` is `OnPromptRequiredError`; no behavior change.
 - API-key and OAuth credential ranking score usage windows and block a credential at its scoped limit through one `#rankUsageResults`, an OAuth refresh reads its candidate row before and after the lease through one `readRefreshCandidate`, and the plan-filter and usage-limit rejection runs before and after a refresh through one `usageRejects`; no behavior change.
 - Tool-argument validation runs its seven pre-validation normalizations through one ordered pass table, before the first check and after every issue-driven coercion, and the two schema-agnostic value walks share one copy-on-write array step; no behavior change.

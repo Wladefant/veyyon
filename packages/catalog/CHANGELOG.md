@@ -4,10 +4,12 @@
 
 ### Added
 
+- `calculateCost` bills a request at a model's `longContextCost` rates when the prompt crosses that model's threshold, so a model the upstream charges two rate cards for is no longer reported at the cheaper one.
 - `closeModelCache()` closes the shared model-cache database and permits reopening it at the current cache path.
 
 ### Changed
 
+- The `command-code` provider defaults to `claude-sonnet-4-6`, discovers models without an API key, and reads `COMMANDCODE_API_KEY` after its two existing key aliases.
 - GitLab Duo Workflow discovery reads a record's declared root namespace (`root_namespace_id`, `rootNamespaceId`, or the id or path of its `root_namespace`/`rootAncestor` record) through one `declaredRootNamespaceId` for the explicit and nested lookups; no behavior change.
 - The Antigravity, Codex, Gemini and Ollama discovery readers report a non-ok status as the `status` stage and an unparseable body as the `body` stage through one exported `readDiscoveryJson` in `discovery/failure`; no behavior change.
 - Model spec rejection checks its string, cost and limit fields from ordered tables, reporting the same field names in the same order; no behavior change.
@@ -24,6 +26,7 @@
 
 ### Fixed
 
+- Command Code models carry the provider's published prices, reasoning ladders and output ceilings instead of arriving at zero cost with no thinking control; the bundled catalog grows from 3 hand-written rows to the 69 the Provider API serves.
 - Case-insensitive host classification no longer treats control characters as URL punctuation.
 ## [1.4.1] - 2026-09-08
 

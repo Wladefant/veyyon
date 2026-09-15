@@ -111,11 +111,16 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * application behind them, are no longer on the path that decides. The input controller is not on
  * this graph and moved 1296 to 1059 on the same edge.
  *
+ * 1545 to 1546: `catalog/provider-models/command-code.ts`, the one module holding Command Code's
+ * prices, effort ladders and output ceilings, split out of `provider-models/openai-compat.ts`,
+ * which this graph already reaches. It is a leaf over modules already here, so the launch runs no
+ * new code — the same split-raises-the-count case as the line above.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1545;
+const LAUNCH_REACH_CEILING = 1546;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

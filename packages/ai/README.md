@@ -54,7 +54,7 @@ Unified LLM API with automatic model discovery, provider configuration, token an
 - **Mistral**
 - **Groq**
 - **Cerebras**
-- **Command Code** (requires `CMD_API_KEY` or `COMMAND_CODE_API_KEY`)
+- **Command Code** (requires `CMD_API_KEY`, `COMMAND_CODE_API_KEY`, or `COMMANDCODE_API_KEY`)
 - **Nous Research** (`/login nous-research` for the Portal device flow, `/login nous-research-api-key` to paste a Portal key; `NOUS_API_KEY` is available for headless setups)
 - **Together**
 - **Moonshot** (requires `MOONSHOT_API_KEY`)
@@ -967,7 +967,7 @@ In Node.js environments, you can set environment variables to avoid passing API 
 | Groq           | `GROQ_API_KEY`                                                               |
 | Cerebras       | `CEREBRAS_API_KEY`                                                           |
 | Together       | `TOGETHER_API_KEY`                                                           |
-| Command Code   | `CMD_API_KEY` or `COMMAND_CODE_API_KEY`                                      |
+| Command Code   | `CMD_API_KEY`, `COMMAND_CODE_API_KEY`, or `COMMANDCODE_API_KEY`              |
 | Nous Research  | `NOUS_API_KEY` (headless fallback; prefer `/login nous-research` or `/login nous-research-api-key`) |
 | Qianfan        | `QIANFAN_API_KEY`                                                            |
 | Hugging Face   | `HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`                                        |
