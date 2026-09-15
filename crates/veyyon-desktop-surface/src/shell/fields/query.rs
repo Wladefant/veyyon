@@ -14,7 +14,10 @@ impl ShellView {
 	/// list reads the query out of its own state, so a repaint is asked for
 	/// here: nothing is sent to the host, and no other path marks the window
 	/// dirty on the frame a character was typed on.
-	pub(super) fn apply_settings_query(&mut self, cx: &mut Context<Self>) {
+	///
+	/// The query lives in the list's own state rather than in this view, so
+	/// writing it takes a shared borrow.
+	pub(super) fn apply_settings_query(&self, cx: &mut Context<Self>) {
 		let Some(editor) = self.retained_field(&FieldKey::SettingsQuery) else {
 			return;
 		};
