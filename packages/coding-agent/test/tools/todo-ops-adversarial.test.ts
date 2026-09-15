@@ -46,7 +46,7 @@ describe("applyOpsToPhases init/start/done", () => {
 		const two = phases[0]!.tasks.find(t => t.content === "two");
 		expect(two?.status).toBe("in_progress");
 		const one = phases[0]!.tasks.find(t => t.content === "one");
-		expect(one?.status).toBe("in_progress");
+		expect(one?.status).toBe("pending");
 	});
 
 	it("done completes the in_progress or matching task", () => {

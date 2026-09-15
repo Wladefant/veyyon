@@ -483,13 +483,9 @@ export abstract class BaseKernel<TExecuteOptions extends KernelExecuteOptions = 
 		}
 
 		try {
-			// FileSink.end() may flush asynchronously. Observing its result is
-			// required: a dead runner can reject that flush with EPIPE after this
-			// stack returns, turning an ordinary kernel replacement into a global
-			// unhandled rejection that terminates the whole veyyon session.
-			await this.#stdin?.end();
+			this.#stdin?.end();
 		} catch {
-			/* writer may already be closed */
+			/* ignore */
 		}
 
 		// `result === null` means the wait TIMED OUT (process still running) and we

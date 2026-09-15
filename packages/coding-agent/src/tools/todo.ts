@@ -24,7 +24,7 @@ import { formatErrorDetail } from "./render-utils";
 
 export type { TodoStatus };
 /** Operation names accepted by the todo tool and echoed in successful result details. */
-export type TodoOperation = "init" | "start" | "done" | "rm" | "drop" | "append" | "view" | "pending";
+export type TodoOperation = "init" | "start" | "done" | "rm" | "drop" | "append" | "view";
 
 export interface TodoItem {
 	content: string;
@@ -211,7 +211,7 @@ export interface TodoOpReport {
 // Schema
 // =============================================================================
 
-const TodoOp = type('"init" | "start" | "done" | "rm" | "drop" | "append" | "view" | "pending"').describe("operation to apply");
+const TodoOp = type('"init" | "start" | "done" | "rm" | "drop" | "append" | "view"').describe("operation to apply");
 
 const InitListEntry = type({
 	"phase?": type("string").describe("phase name; omitted entries continue the previous phase"),
@@ -266,7 +266,7 @@ const todoSchema = type({
 	.narrow((params, ctx) => {
 		if (params.op !== undefined || params.todos !== undefined) return true;
 		return ctx.reject({
-			expected: 'an "op" naming the operation: init, start, done, rm, drop, append, view or pending',
+			expected: 'an "op" naming the operation: init, start, done, rm, drop, append or view',
 			actual: "no op",
 			path: ["op"],
 		});
@@ -527,8 +527,14 @@ function normalizeInProgressTask(phases: TodoPhase[]): void {
 	const orderedTasks = phases.flatMap(phase => phase.tasks);
 	if (orderedTasks.length === 0) return;
 
-	const hasInProgress = orderedTasks.some(task => task.status === "in_progress");
-	if (hasInProgress) return;
+	const inProgressTasks = orderedTasks.filter(task => task.status === "in_progress");
+	if (inProgressTasks.length > 1) {
+		for (const task of inProgressTasks.slice(1)) {
+			task.status = "pending";
+		}
+	}
+
+	if (inProgressTasks.length > 0) return;
 
 	const firstPendingTask = orderedTasks.find(task => task.status === "pending");
 	if (firstPendingTask) firstPendingTask.status = "in_progress";
@@ -826,6 +832,13 @@ function applyEntry(phases: TodoPhase[], entry: TodoOpEntryValue, report: TodoOp
 		case "start": {
 			const hit = resolveTaskOrError(phases, entry.task, report.errors);
 			if (!hit) return phases;
+			for (const phase of phases) {
+				for (const candidate of phase.tasks) {
+					if (candidate.status === "in_progress" && candidate !== hit.task) {
+						candidate.status = "pending";
+					}
+				}
+			}
 			hit.task.status = "in_progress";
 			return phases;
 		}
@@ -847,12 +860,6 @@ function applyEntry(phases: TodoPhase[], entry: TodoOpEntryValue, report: TodoOp
 			return appendItems(phases, entry, report.errors);
 		case "view":
 			return phases;
-		case "pending": {
-			for (const task of getTaskTargets(phases, entry, report.errors)) {
-				task.status = "pending";
-			}
-			return phases;
-		}
 		default:
 			// Unreachable for a validated tool call: the schema requires `op` and
 			// pins it to the seven names above. Reachable for the OTHER callers of
@@ -862,7 +869,7 @@ function applyEntry(phases: TodoPhase[], entry: TodoOpEntryValue, report: TodoOp
 			// a bad op. The board is returned untouched with the op named.
 			entry.op satisfies never;
 			report.errors.push(
-				`Unknown op ${JSON.stringify(entry.op)}; expected init, start, done, rm, drop, append, view or pending`,
+				`Unknown op ${JSON.stringify(entry.op)}; expected init, start, done, rm, drop, append or view`,
 			);
 			return phases;
 	}
@@ -980,24 +987,11 @@ export function adaptTodoWriteBatch(
 			case "cancelled":
 				ops.push({ op: "drop", task: todo.content });
 				break;
-			case "pending": {
-				// Explicit pending in whole-board writes resets targeted tasks that
-				// were previously active back to pending, without demoting omitted items.
-				// If the task was already pending (or newly appended), no op is needed.
-				if (!replace) {
-					const existing = currentPhases
-						.flatMap(phase => phase.tasks)
-						.find(t => (normalizeForTodoMatch(t.content) || t.content) === (normalizeForTodoMatch(todo.content) || todo.content));
-					if (existing && existing.status !== "pending") {
-						ops.push({ op: "pending", task: todo.content });
-					}
-				}
+			case "pending":
+				// `init`/`append` already created it pending, and no op moves a task
+				// back to pending, so a pending entry is a presence assertion only.
 				break;
-			}
 		}
-	}
-	if (replace && todos.length > 0 && !todos.some(t => t.status === "in_progress") && todos.every(t => t.status === "pending")) {
-		ops.push({ op: "pending" });
 	}
 	return { ops, notes };
 }
@@ -1005,9 +999,7 @@ export function adaptTodoWriteBatch(
 function applyParams(phases: TodoPhase[], params: TodoParams): TodoOpReport & { phases: TodoPhase[] } {
 	const report: TodoOpReport = { errors: [], notes: [] };
 	const next = applyEntry(phases, params, report);
-	if (params.op !== "pending") {
-		normalizeInProgressTask(next);
-	}
+	normalizeInProgressTask(next);
 	return { phases: next, ...report };
 }
 
@@ -1025,10 +1017,7 @@ export function applyOpsToPhases(
 	for (const op of ops) {
 		next = applyEntry(next, op, report);
 	}
-	const lastOp = ops.at(-1)?.op;
-	if (lastOp !== "pending") {
-		normalizeInProgressTask(next);
-	}
+	normalizeInProgressTask(next);
 	return { phases: next, ...report };
 }
 
@@ -1153,10 +1142,10 @@ function formatMutationSummary(phases: TodoPhase[], params: TodoParams): string 
 			changed = `Started: ${task}.`;
 			break;
 		case "done":
-			changed = task ? `Completed: ${task}.` : phase ? `Completed phase: ${phase}.` : "Completed all tasks.";
+			changed = task ? `Completed: ${task}.` : `Completed phase: ${phase}.`;
 			break;
 		case "drop":
-			changed = task ? `Dropped: ${task}.` : phase ? `Dropped phase: ${phase}.` : "Dropped all tasks.";
+			changed = task ? `Dropped: ${task}.` : `Dropped phase: ${phase}.`;
 			break;
 		case "append":
 			changed = `Added ${params.items?.length ?? 0} ${(params.items?.length ?? 0) === 1 ? "task" : "tasks"} to ${phase}.`;
@@ -1164,9 +1153,6 @@ function formatMutationSummary(phases: TodoPhase[], params: TodoParams): string 
 		case "rm":
 			if (!task && !phase) return `Todo list cleared. ${formatOverall([])}`;
 			changed = task ? `Removed: ${task}.` : `Removed phase: ${phase}.`;
-			break;
-		case "pending":
-			changed = task ? `Reset to pending: ${task}.` : phase ? `Reset phase to pending: ${phase}.` : "Reset all tasks to pending.";
 			break;
 		case "view":
 			throw new Error("view operations require the full todo summary");
@@ -1248,7 +1234,7 @@ function formatSummaryBody(phases: TodoPhase[], errors: string[], readOnly: bool
 		lines.push(
 			`Active phase ${currentIdx + 1}/${phases.length} "${boundedTodoPreviewText(current.name, TODO_ITEM_PREVIEW_WIDTH)}" (${done}/${current.tasks.length})${
 				workedAhead
-					? " — earliest phase with open tasks; the in-progress pointer auto-advances to the earliest open task when no active task remains, so it can sit behind out-of-order work (nothing was un-completed)."
+					? " — earliest phase with open tasks; the in-progress pointer auto-advances to the earliest open task on each completion, so it can sit behind out-of-order work (nothing was un-completed)."
 					: "."
 			}`,
 		);
