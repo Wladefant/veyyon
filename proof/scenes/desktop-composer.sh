@@ -331,49 +331,223 @@ TRANSCRIPT_COLUMN_W=$(( TRANSCRIPT_MAX_W < TRANSCRIPT_SURFACE_W ? TRANSCRIPT_MAX
 TRANSCRIPT_COLUMN_LEFT=$(( WIN_X + RAIL_W + (TRANSCRIPT_SURFACE_W - TRANSCRIPT_COLUMN_W) / 2 ))
 TRANSCRIPT_COLUMN_RIGHT=$(( TRANSCRIPT_COLUMN_LEFT + TRANSCRIPT_COLUMN_W ))
 
-# Where the composer card is, in root coordinates. §5.4 insets the card by one
-# spacing step on each side of the session surface and centres it at the
-# authored measure, so its own edges follow the panel rather than the window.
-COMPOSER_CARD_MAX=$(( TRANSCRIPT_SURFACE_W - 2 * GUTTER_PX ))
-COMPOSER_CARD_W=$(( COMPOSER_MAX_W < COMPOSER_CARD_MAX ? COMPOSER_MAX_W : COMPOSER_CARD_MAX ))
-COMPOSER_CARD_LEFT=$(( WIN_X + RAIL_W + GUTTER_PX + (COMPOSER_CARD_MAX - COMPOSER_CARD_W) / 2 ))
-COMPOSER_CARD_BOTTOM=$(( WIN_Y + WIN_H - CARD_FOOT_PX ))
+# WHERE THE COMPOSER CARD IS, READ OFF THE WINDOW. §5.4 gives the card two
+# restings: bottom-anchored under a transcript, and centred with the opening
+# line over it on a session that holds no turns. A derivation that measures up
+# from the window's foot is right in the first and aims at bare ground in the
+# second, and the second is the state every take starts in: the click landed
+# below the card, the editor never took focus, and the draft the preamble types
+# reached nothing. So the card is measured rather than assumed, which also
+# holds when an approval or a plan attaches over it and grows the object
+# upward.
+#
+# The reading is the lowest tall band of the card's own ground in a strip down
+# the middle of the session surface. The card is elevated ground, one flat tone
+# across its whole measure; the surface behind it is one flatter, darker tone;
+# the opening line over it is glyphs, which ink a few rows and leave the tone
+# between them at the surface's. So a row of the card is a row where most of
+# the strip sits a step above the surface tone and none of it is at a glyph's,
+# and the run bar under the card draws no ground of its own to be confused
+# with one.
+COMPOSER_CARD_PY="${TMPDIR}/composer-card.py"
+cat >"${COMPOSER_CARD_PY}" <<'PY'
+import sys
+from collections import Counter
 
-# Where the run bar's own stop is, in root coordinates. The bar is the row the
-# session column places under the card, centred at the card's measure, so its
-# right edge is the card's; the stop is the bar's trailing child, and the aim
-# is one spacing step in from that edge, which is inside the word at any
-# authored label size rather than at a width this scene decides. Vertically
-# the aim is the middle of the authored bar height, measured down from the gap
-# the column leaves above it.
-RUN_BAR_Y=$(( WIN_Y + WIN_H - CARD_FOOT_PX + (CARD_FOOT_PX - RUN_BAR_H) / 2 + RUN_BAR_H / 2 ))
-RUN_BAR_STOP_X=$(( COMPOSER_CARD_LEFT + COMPOSER_CARD_W - GUTTER_PX ))
-if (( RUN_BAR_Y <= COMPOSER_CARD_BOTTOM || RUN_BAR_Y >= WIN_Y + WIN_H )); then
-	abandon_take "the-run-bar-is-locatable" \
-		"the derived run bar aim ${RUN_BAR_Y} is not between the card's lower edge ${COMPOSER_CARD_BOTTOM} and the window's foot"
-fi
+width, height, strip_left, strip_width, surface_left, surface_width = (
+	int(argument) for argument in sys.argv[1:7]
+)
+pixels = sys.stdin.buffer.read()
+if len(pixels) < width * height:
+	raise SystemExit(f"the capture read {len(pixels)} bytes, short of {width * height}")
 
-# The model chip: the leading control of the card's footer row, which is the
-# last row inside the card. Vertically the aim is one spacing step above the
-# row's own lower edge, which is inside a row of any authored control height
-# rather than at a height this scene decides. Horizontally it is one spacing
-# step into the chip, past its rounded corner and onto the model's name.
-MODEL_CHIP_X=$(( COMPOSER_CARD_LEFT + CARD_PAD_H + GUTTER_PX ))
-MODEL_CHIP_Y=$(( COMPOSER_CARD_BOTTOM - CARD_PAD_BOTTOM - GUTTER_PX ))
 
-# Where the draft is typed, in root coordinates. The card is bottom-anchored
-# and its own height is whatever its contents came to, so the aim measures up
-# from the window's foot: past what the session column puts under the card,
-# past the card's authored resting height to a point inside it, then one
-# spacing step back down. `rest_height_px` is a minimum and the card draws
-# taller, so that point is strictly inside the card and above the footer row
-# the chip sits in, which is the editor line.
-COMPOSER_EDITOR_X=$(( COMPOSER_CARD_LEFT + CARD_PAD_H + GUTTER_PX ))
-COMPOSER_EDITOR_Y=$(( COMPOSER_CARD_BOTTOM - COMPOSER_BAND_H + CARD_FOOT_PX + GUTTER_PX ))
-if (( COMPOSER_EDITOR_Y >= MODEL_CHIP_Y || COMPOSER_EDITOR_Y <= WIN_Y )); then
-	abandon_take "the-editor-line-is-locatable" \
-		"the derived editor aim ${COMPOSER_EDITOR_Y} is not above the footer row ${MODEL_CHIP_Y} inside the window"
-fi
+def strip_of(row: int) -> bytes:
+	start = row * width + strip_left
+	return pixels[start : start + strip_width]
+
+
+# The surface's own tone, as the tone most of the strip is: ground is the
+# majority of any state's column, and a mode never lands between two tones the
+# way a mean does.
+ground = Counter(value for row in range(height) for value in strip_of(row)).most_common(1)[0][0]
+low, high = ground + 8, ground + 90
+carded = [
+	sum(1 for value in strip_of(row) if low <= value <= high) * 2 >= strip_width
+	for row in range(height)
+]
+bands: list[tuple[int, int]] = []
+start = None
+for row, lit in enumerate(carded):
+	if lit and start is None:
+		start = row
+	elif not lit and start is not None:
+		bands.append((start, row))
+		start = None
+if start is not None:
+	bands.append((start, height))
+tall = [band for band in bands if band[1] - band[0] >= 40]
+if not tall:
+	raise SystemExit(
+		f"no band of the card's ground (tone {ground} + 8..90) is 40 rows tall in the strip at +{strip_left}"
+	)
+top, bottom = tall[-1]
+
+# The card's own measure, across the row through the middle of that band.
+middle = (top + bottom) // 2
+row = pixels[middle * width + surface_left : middle * width + surface_left + surface_width]
+centre = strip_left + strip_width // 2 - surface_left
+left = centre
+while left > 0 and low <= row[left - 1] <= high:
+	left -= 1
+right = centre
+while right < surface_width - 1 and low <= row[right + 1] <= high:
+	right += 1
+print(top, bottom, surface_left + left, surface_left + right)
+PY
+
+# Sets COMPOSER_CARD_LEFT, COMPOSER_CARD_W and COMPOSER_CARD_BOTTOM from the
+# window as it stands, and every aim placed against the card with them. Called
+# once the session is on screen, and again by a scene that changed what the
+# card holds -- an attachment row, an attached approval -- before it aims at
+# the card again.
+measure_composer_card() {
+	local probe="${TMPDIR}/composer-card.png"
+	probe_frame "${probe}"
+	local strip_w=200
+	local surface_left=$(( WIN_X + RAIL_W ))
+	if (( strip_w > TRANSCRIPT_SURFACE_W / 3 )); then strip_w=$(( TRANSCRIPT_SURFACE_W / 3 )); fi
+	local strip_left=$(( surface_left + (TRANSCRIPT_SURFACE_W - strip_w) / 2 ))
+	# The capture's own dimensions, because a themed take insets the window in
+	# a larger screen and every offset below is a pixel of that screen.
+	local screen
+	screen="$(magick identify -format '%w %h' "${probe}")"
+	local reading
+	if ! reading="$(magick "${probe}" -colorspace Gray -depth 8 gray:- |
+		python3 "${COMPOSER_CARD_PY}" ${screen} \
+			"${strip_left}" "${strip_w}" "${surface_left}" "${TRANSCRIPT_SURFACE_W}")"; then
+		abandon_take "the-composer-card-is-locatable" \
+			"the composer card was not found in the window: ${reading:-the reader printed nothing}"
+	fi
+	read -r CARD_TOP COMPOSER_CARD_BOTTOM CARD_LEFT CARD_RIGHT <<<"${reading}"
+	COMPOSER_CARD_LEFT="${CARD_LEFT}"
+	COMPOSER_CARD_W=$(( CARD_RIGHT - CARD_LEFT ))
+	if (( COMPOSER_CARD_W < 200 )); then
+		abandon_take "the-composer-card-is-locatable" \
+			"the card measured ${COMPOSER_CARD_W}px across at row $(( (CARD_TOP + COMPOSER_CARD_BOTTOM) / 2 )), narrower than any authored composer"
+	fi
+	echo "scene: the composer card is ${COMPOSER_CARD_W}x$(( COMPOSER_CARD_BOTTOM - CARD_TOP ))" \
+		"at +${COMPOSER_CARD_LEFT}+${CARD_TOP}" >&2
+
+	# Where the run bar's own stop is, in root coordinates. The bar is the row
+	# the session column places under the card, centred at the card's measure,
+	# so its right edge is the card's; the stop is the bar's trailing child,
+	# and the aim is one spacing step in from that edge, which is inside the
+	# word at any authored label size rather than at a width this scene
+	# decides. Vertically it is the middle of the authored bar height, in the
+	# gap the column leaves under the card.
+	RUN_BAR_Y=$(( COMPOSER_CARD_BOTTOM + (CARD_FOOT_PX - RUN_BAR_H) / 2 + RUN_BAR_H / 2 ))
+	RUN_BAR_STOP_X=$(( COMPOSER_CARD_LEFT + COMPOSER_CARD_W - GUTTER_PX ))
+	if (( RUN_BAR_Y <= COMPOSER_CARD_BOTTOM || RUN_BAR_Y >= WIN_Y + WIN_H )); then
+		abandon_take "the-run-bar-is-locatable" \
+			"the derived run bar aim ${RUN_BAR_Y} is not between the card's lower edge ${COMPOSER_CARD_BOTTOM} and the window's foot"
+	fi
+
+	# The model chip: the leading control of the card's footer row, which is
+	# the last row inside the card. Vertically the aim is one spacing step
+	# above the card's own lower edge, which is inside a row of any authored
+	# control height; horizontally one spacing step into the chip, past its
+	# rounded corner and onto the model's name.
+	MODEL_CHIP_X=$(( COMPOSER_CARD_LEFT + CARD_PAD_H + GUTTER_PX ))
+	MODEL_CHIP_Y=$(( COMPOSER_CARD_BOTTOM - CARD_PAD_BOTTOM - GUTTER_PX ))
+
+	# Where the draft is typed: the editor line, above the footer row the chip
+	# sits in. The card's authored resting height is a minimum and it draws
+	# taller, so the aim is one spacing step below the card's own upper edge
+	# when the card has grown past that resting height.
+	COMPOSER_EDITOR_X=$(( COMPOSER_CARD_LEFT + CARD_PAD_H + GUTTER_PX ))
+	COMPOSER_EDITOR_Y=$(( COMPOSER_CARD_BOTTOM - COMPOSER_BAND_H + CARD_FOOT_PX + GUTTER_PX ))
+	if (( COMPOSER_EDITOR_Y <= CARD_TOP )); then
+		COMPOSER_EDITOR_Y=$(( CARD_TOP + GUTTER_PX ))
+	fi
+	if (( COMPOSER_EDITOR_Y >= MODEL_CHIP_Y || COMPOSER_EDITOR_Y <= WIN_Y )); then
+		abandon_take "the-editor-line-is-locatable" \
+			"the derived editor aim ${COMPOSER_EDITOR_Y} is not above the footer row ${MODEL_CHIP_Y} inside the card at +${COMPOSER_CARD_LEFT}+${CARD_TOP}"
+	fi
+}
+
+# ─── The Rectangles Every Frame Is Read Through ──────────────────────────────
+# Two, because the session list prints each row's age: the composer band a
+# draft is typed into, and the session surface above it, which is the
+# transcript together with whatever an overlay or a panel draws over it. Every
+# scene sourcing this preamble reads its own frames through them.
+#
+# The band is the card's own box together with the run bar under it, from the
+# measurement rather than from the window's foot: on a session that holds no
+# turns the card is centred (§5.4), and a band at the foot then reads the
+# ground under it, which is still whatever the draft did not change.
+SESSION_REGION_X=$(( WIN_X + RAIL_W ))
+SESSION_REGION_W=$(( WIN_W - RAIL_W ))
+composer_band_top() {
+	local top=$(( COMPOSER_CARD_BOTTOM + CARD_FOOT_PX - COMPOSER_BAND_H ))
+	if (( top > CARD_TOP )); then top="${CARD_TOP}"; fi
+	printf '%s' "${top}"
+}
+composer_band_bottom() {
+	local bottom=$(( COMPOSER_CARD_BOTTOM + CARD_FOOT_PX ))
+	if (( bottom > WIN_Y + WIN_H )); then bottom=$(( WIN_Y + WIN_H )); fi
+	printf '%s' "${bottom}"
+}
+composer_band_region() {
+	local top bottom
+	top="$(composer_band_top)"
+	bottom="$(composer_band_bottom)"
+	use_crop "${SESSION_REGION_X}" "${top}" "${SESSION_REGION_W}" "$(( bottom - top ))"
+}
+transcript_region() {
+	local top
+	top="$(composer_band_top)"
+	use_crop "${SESSION_REGION_X}" "$(( WIN_Y + TITLEBAR_H ))" \
+		"${SESSION_REGION_W}" "$(( top - WIN_Y - TITLEBAR_H ))"
+}
+
+# A per-mille floor for an overlay, since a palette is a surface rather than a
+# control, and the bound a dismissal is waited out against.
+OVERLAID_PER_MILLE=40
+
+# Wait until the transcript is the frame the overlay opened over, pressing
+# Escape while it is not.
+#
+# WHY: a fixed pause after the press publishes whatever the frame holds when it
+# elapses. An overlay still opening when the press lands keeps that press, so
+# the palette is drawn in the frame this scene names "dismissed" and the take
+# fails on the reading -- about one run in four, with the palette plainly on
+# screen in the published frame. Waiting on the pixels ends as soon as the
+# overlay is gone and states what is still drawn when it is not.
+#
+# The screen is read before each press, because Escape on a composer with
+# nothing over it reaches the draft: a dismissal that pressed unconditionally
+# would clear the prompt the next reading counts the ink of.
+#
+# Bounded: three presses, each polled for a second and a half, then the take is
+# abandoned. The reading the frames are judged on is taken afterwards and is
+# unchanged -- this decides when to shoot, never whether the claim holds.
+dismiss_over_transcript() { # <opened-over-shot> <reading-name>
+	local baseline="$1" name="$2" press poll gone=""
+	transcript_region
+	for press in 1 2 3; do
+		for poll in 1 2 3 4 5 6; do
+			gone="$(screen_differs_from_shot_per_mille "${baseline}")"
+			if [ "${gone}" -lt "$(( OVERLAID_PER_MILLE / 4 ))" ]; then
+				return 0
+			fi
+			[ "${poll}" -eq 1 ] && k "Escape"
+			pause 0.25
+		done
+	done
+	abandon_take "${name}" \
+		"the transcript is ${gone}/1000 from the frame the overlay opened over after three Escapes, so the overlay is still drawn"
+}
 
 # ─── Scene Interactions & Captures ───────────────────────────────────────────
 
@@ -383,6 +557,7 @@ if ! native_session_ready created; then
 	abandon_take "native-session-created" "native session-creation interaction produced no session within 10s"
 fi
 pause 2.0
+measure_composer_card
 COMPOSER_X="${COMPOSER_EDITOR_X}"
 COMPOSER_Y="${COMPOSER_EDITOR_Y}"
 move_px "${COMPOSER_X}" "${COMPOSER_Y}"
@@ -400,9 +575,8 @@ k "ctrl+shift+m"
 pause 0.8
 shot model-picker-open
 
-# 4. Dismiss the model picker (escape); verify the typed draft is retained.
-k "Escape"
-pause 0.8
+# 4. Dismiss the model picker; verify the typed draft is retained.
+dismiss_over_transcript typed-draft "the-model-picker-closed"
 shot model-picker-dismissed
 
 # Exercise enter, exit, and reversal continuously rather than grading idle frames as motion.
@@ -412,6 +586,10 @@ for _ in $(seq 1 24); do
 	k "Escape"
 	pause 0.2
 done
+# The last cycle's Escape is a press like any other, so the slash steps below
+# start from a transcript with nothing over it rather than from whatever the
+# loop left drawn.
+dismiss_over_transcript typed-draft "the-model-picker-closed"
 
 # 5. Clear the composer and open the slash command palette.
 # In Editor context, ctrl+a selects all, backspace deletes.
@@ -423,32 +601,9 @@ t "/"
 pause 0.8
 shot slash-palette-open
 
-# 6. Dismiss the slash palette (escape).
-k "Escape"
-pause 0.8
+# 6. Dismiss the slash palette.
+dismiss_over_transcript model-picker-dismissed "the-slash-palette-closed"
 shot slash-palette-dismissed
-
-# ─── What These Frames State ─────────────────────────────────────────────────
-# Six frames named for a draft, an overlay over it and the draft surviving the
-# overlay, and until this block every one of those claims was left to whoever
-# opened the gallery. An overlay that never opened, a draft the picker's own
-# focus swallowed, and a palette still on screen after Escape all publish a
-# frame that looks like the state it is named for.
-#
-# Two rectangles, because the session list prints each row's age: the composer
-# band a draft is typed into, and the session surface above it, which is the
-# transcript together with whatever an overlay or a panel draws over it. Every
-# scene sourcing this preamble reads its own frames through them.
-SESSION_REGION_X=$(( WIN_X + RAIL_W ))
-SESSION_REGION_W=$(( WIN_W - RAIL_W ))
-composer_band_region() {
-	use_crop "${SESSION_REGION_X}" "$(( WIN_Y + WIN_H - COMPOSER_BAND_H ))" \
-		"${SESSION_REGION_W}" "${COMPOSER_BAND_H}"
-}
-transcript_region() {
-	use_crop "${SESSION_REGION_X}" "$(( WIN_Y + TITLEBAR_H ))" \
-		"${SESSION_REGION_W}" "$(( WIN_H - TITLEBAR_H - COMPOSER_BAND_H ))"
-}
 
 # The ink the typing drew. Counted in pixels rather than per mille: a line of
 # 13px text inside a 110px band rounds to nothing.
@@ -460,15 +615,13 @@ if [ "${DRAFT_PX}" -lt 150 ]; then
 fi
 
 # An overlay is read over the transcript, which is the region a picker and a
-# slash palette both draw across. A per-mille floor, since a palette is a
-# surface rather than a control; a ceiling derived from the open reading, since
-# a dismissed overlay returns the region to the frame it opened over and an
-# empty session's transcript is otherwise still.
+# slash palette both draw across. A ceiling derived from the open reading,
+# since a dismissed overlay returns the region to the frame it opened over and
+# an empty session's transcript is otherwise still.
 #
 # Read before the band, and that order is part of the guard: a picker still on
 # screen reaches the footer row the band covers, so a band reading taken first
 # reports a moved draft for an overlay that never closed.
-OVERLAID_PER_MILLE=40
 transcript_region
 PICKER_OPEN="$(shots_differ_per_mille typed-draft model-picker-open)"
 if [ "${PICKER_OPEN}" -lt "${OVERLAID_PER_MILLE}" ]; then
