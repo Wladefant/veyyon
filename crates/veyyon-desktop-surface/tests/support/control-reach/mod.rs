@@ -131,13 +131,8 @@ pub fn expected_controls(state: &ShellState) -> usize {
 	// transcript body, which takes the focus its scope's chords ride on, and
 	// the composer box, which hands the focus back to the editor whatever the
 	// press landed on.
-	let chrome = 1
-		+ 1
-		+ 1
-		+ usize::from(!state.panel.is_empty())
-		+ usize::from(state.drawer.offered)
-		+ 4
-		+ 6;
+	let chrome =
+		1 + 1 + 1 + usize::from(!state.panel.is_empty()) + usize::from(state.drawer.offered) + 4 + 6;
 	// Each word of the menu bar answers a press of its own, counted from the
 	// sections the bar draws rather than as a literal, so a menu added to the
 	// table moves this with it.

@@ -157,7 +157,12 @@ impl Metrics {
 
 	/// The band `height` tall whose lower edge is `bottom`.
 	fn band(&self, bottom: f32, height: f32) -> BoxBounds {
-		BoxBounds { left: self.cards.left + 24.0, top: bottom - height, right: self.cards.right - 24.0, bottom }
+		BoxBounds {
+			left: self.cards.left + 24.0,
+			top: bottom - height,
+			right: self.cards.right - 24.0,
+			bottom,
+		}
 	}
 
 	/// The band of prose the pane opens with, which the fade never reaches.

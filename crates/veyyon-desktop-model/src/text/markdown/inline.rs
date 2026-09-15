@@ -1,6 +1,9 @@
 //! Repairs for inline syntax in the final arriving line.
 
-use super::{mend::{Open, OpenShape}, run_len};
+use super::{
+	mend::{Open, OpenShape},
+	run_len,
+};
 
 fn opens_emphasis(bytes: &[u8], at: usize, delimiter: u8, width: usize) -> bool {
 	bytes

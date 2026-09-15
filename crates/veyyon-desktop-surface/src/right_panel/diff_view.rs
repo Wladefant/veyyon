@@ -63,13 +63,8 @@ pub fn diff_view(
 		// scrolls, so a sideways wheel over a hunk moved the diff's rows.
 		.restrict_scroll_to_axis();
 
-	container = container.child(diff_toolbar(
-		diff_mode,
-		pending_edits_unavailable,
-		geometry,
-		tokens,
-		cx,
-	));
+	container =
+		container.child(diff_toolbar(diff_mode, pending_edits_unavailable, geometry, tokens, cx));
 	if reviews.enabled {
 		container = container.child(review_bar(reviews, geometry, tokens, cx));
 	}
