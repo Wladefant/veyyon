@@ -6971,7 +6971,7 @@ export class AgentSession {
 
 	#wrapRuntimeTool(tool: AgentTool): AgentTool {
 		const wrapped = wrapToolWithMetaNotice(tool);
-		return new ExtensionToolWrapper(wrapped, this.#extensionRunner);
+		return new ExtensionToolWrapper(wrapped, this.#extensionRunner, "session.dynamic-tools");
 	}
 
 	/**

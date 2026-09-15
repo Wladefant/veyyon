@@ -17,7 +17,8 @@ import {
 } from "../../tools/core/approval";
 import { cwdEscapingTargets, formatCwdBoundaryReason } from "../../tools/core/cwd-boundary";
 import { secretUseApprovalReason } from "../../tools/core/secret-use-boundary";
-import { checkRefusalFence, recordRefusal } from "../../tools/core/refusal-fence";
+import { recordRefusal } from "../../tools/core/refusal-fence";
+import { TOOL_EXECUTION_ENTRIES, type ToolExecutionEntryName } from "../../tools/core/execution-registry";
 import { normalizeToolEventInput, resolveToolEventInput } from "../tool-event-input";
 import type { ExtensionRunner } from "./runner";
 import type {
@@ -180,11 +181,14 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 	declare parameters: TParameters;
 	declare label: string;
 	declare strict: boolean;
+	#entry: ToolExecutionEntryName;
 
 	constructor(
 		private tool: AgentTool<TParameters, TDetails>,
 		private runner?: ExtensionRunner,
+		entry: ToolExecutionEntryName = "session.tools",
 	) {
+		this.#entry = entry;
 		applyToolProxy(tool, this);
 	}
 
@@ -204,7 +208,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		onUpdate?: AgentToolUpdateCallback<TDetails, TParameters>,
 		context?: AgentToolContext,
 	): Promise<AgentToolResult<TDetails, TParameters>> {
-		checkRefusalFence(this.tool.name, params, context);
+		context = TOOL_EXECUTION_ENTRIES[this.#entry].assert(this.tool, params, context);
 		// 1. Check approval policy (before extension handlers).
 		// CLI `--auto-approve` / `--yolo` sets approval mode to yolo.
 		// User `tools.approval.<tool>` policies are still applied in all modes.
@@ -449,7 +453,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 						callResult.reason ||
 						`An extension blocked this ${this.tool.name} call and gave no reason. Do not retry it; tell ` +
 							"the operator which extension is blocking so they can fix or remove it.";
-					recordRefusal(this.tool.name, reason, context);
+					recordRefusal(this.tool.name, reason, context, undefined, callResult.subject);
 					throw new Error(reason);
 				}
 			} catch (err) {
@@ -469,7 +473,14 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		let executionError: Error | undefined;
 
 		try {
-			result = await this.tool.execute(toolCallId, params, signal, onUpdate, context);
+			result = await TOOL_EXECUTION_ENTRIES[this.#entry].invoke(
+				this.tool,
+				toolCallId,
+				params,
+				signal,
+				onUpdate,
+				context,
+			);
 		} catch (err) {
 			// A CANCELLATION IS NOT A FAILED CALL, so it never becomes one here. The
 			// `tool_result` path below deliberately turns a thrown error into a

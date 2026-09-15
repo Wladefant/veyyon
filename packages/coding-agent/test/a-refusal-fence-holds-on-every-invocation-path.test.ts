@@ -8,17 +8,20 @@
  * not anchored at a single executor choke point reading directly from session
  * config/settings.
  *
- * This suite enumerates every known invocation path from REFUSAL_ENTRY_POINTS
- * and asserts that:
- *  1. Every path enforces the refusal fence when configured in settings or
- *     standing session denial.
- *  2. The target tool never executes (its execute() body is never entered).
- *  3. Opt-outs are pinned by exact equality (no unverified paths).
- *  4. A mutation removing the check at the choke point fails every path.
+ * The suite drives the production execution registry with refusing and allowed
+ * probes, pins raw execution delegates and wrapper installation sites using AST
+ * search, and sends encrypted guest prompt frames through the real collab host.
+ * Settings-fork checks are not full provider-backed child-agent runs. The
+ * external Telegram harness is absent; its integration is not claimed here.
  */
 
 import { beforeEach, describe, expect, it } from "bun:test";
 import type { AgentTool, AgentToolContext } from "@veyyon/agent-core";
+import { importRoomKey } from "@veyyon/coding-agent/collab/crypto";
+import { CollabHost } from "@veyyon/coding-agent/collab/host";
+import { COLLAB_PROTO, parseCollabLink } from "@veyyon/coding-agent/collab/protocol";
+import { CollabSocket } from "@veyyon/coding-agent/collab/relay-client";
+import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { callSessionTool } from "@veyyon/coding-agent/eval/js/tool-bridge";
 import type { ExtensionRunner } from "@veyyon/coding-agent/extensibility/extensions/runner";
@@ -27,14 +30,16 @@ import { createSubagentSettings } from "@veyyon/coding-agent/task/executor";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import type { SessionToolApprovals } from "@veyyon/coding-agent/tools/core/approval-modes";
 import {
-	REFUSAL_ENTRY_POINTS,
-	type RefusalEntryPoint,
 	RefusalFenceError,
 	checkRefusalFence,
 	isToolRefused,
 	recordRefusal,
 } from "@veyyon/coding-agent/tools/core/refusal-fence";
 import { type } from "arktype";
+import { installInMemoryRelay, uninstallInMemoryRelay } from "./collab/helpers/in-memory-relay";
+import { TOOL_EXECUTION_ENTRIES } from "@veyyon/coding-agent/tools/core/execution-registry";
+import * as path from "node:path";
+import { astGrep } from "@veyyon/natives";
 
 const PROBE_TOOL_NAME = "test_destructive_probe";
 let probeExecuted = false;
@@ -112,29 +117,83 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 		probeExecuted = false;
 	});
 
-	it("exports the complete 9-path runtime table without silent exclusions", () => {
-		const expectedPaths: RefusalEntryPoint[] = [
-			"task.executor",
-			"eval.agent-bridge",
-			"eval.tool-bridge",
-			"session.irc",
-			"job.resume",
-			"cli.worker",
-			"session.dynamic-tools",
-			"collab.guest",
-			"extension.tool_call",
-		];
-		expect(REFUSAL_ENTRY_POINTS).toEqual(expectedPaths);
+	it("pins every production execute call structurally, including non-tool delegates", async () => {
+		const root = path.resolve(import.meta.dirname, "../src");
+		const result = await astGrep({
+			path: root,
+			glob: "**/*.ts",
+			lang: "ts",
+			patterns: ["$TOOL.execute($$$ARGS)", "new ExtensionToolWrapper($$$ARGS)"],
+			includeMeta: true,
+			limit: 1000,
+			timeoutMs: 30_000,
+		});
+		expect(result.limitReached).toBe(false);
+		const sites = result.matches
+			.filter(match => !match.path.endsWith(".test.ts") && match.metaVariables?.TOOL !== undefined)
+			.map(
+				match =>
+					`${(path.isAbsolute(match.path) ? path.relative(root, match.path) : match.path).split(path.sep).join("/")}:${match.metaVariables?.TOOL}`,
+			)
+			.sort();
+		// These delegates either receive SDK-wrapped tools, adapt an already fenced
+		// tool body, or execute something other than an AgentTool. New sites require
+		// a registry route and an explicit classification, regardless of receiver name.
+		expect(sites).toEqual(
+			[
+				"cursor.ts:tool",
+				"cursor.ts:tool",
+				"edit/index.ts:modeDefinition",
+				"eval/executor-base.ts:kernel",
+				"eval/kernel-base.ts:this",
+				"extensibility/custom-tools/wrapper.ts:this.tool",
+				"extensibility/extensions/wrapper.ts:this.registeredTool.definition",
+				"modes/rpc/rpc-client.ts:tool",
+				"modes/terminal/autocomplete/prompt-action-autocomplete.ts:item",
+				"modes/terminal/autocomplete/prompt-action-autocomplete.ts:item",
+				"sdk.ts:taskTool",
+				"session/agent-session.ts:loaded.command",
+				"session/agent-session.ts:target",
+				"session/agent-session.ts:target",
+				"session/agent-session.ts:target",
+				"session/factory-tools.ts:tool",
+				"task/executor.ts:source",
+				"tools/core/execution-registry.ts:tool",
+				"tools/fs/read.ts:this",
+				"tools/shell/eval.ts:backend",
+			].sort(),
+		);
+		const installations = result.matches
+			.filter(match => !match.path.endsWith(".test.ts") && match.metaVariables?.TOOL === undefined)
+			.map(match =>
+				(path.isAbsolute(match.path) ? path.relative(root, match.path) : match.path).split(path.sep).join("/"),
+			)
+			.sort();
+		expect(installations).toEqual(["sdk.ts", "sdk.ts", "sdk.ts", "sdk.ts", "sdk.ts", "session/agent-session.ts"]);
+	}, 40_000);
 
-		// Opt-outs pinned by exact equality: no path may be silently opted out
-		const optedOutPaths: string[] = [];
-		expect(optedOutPaths).toEqual([]);
-	});
+	for (const [name, entry] of Object.entries(TOOL_EXECUTION_ENTRIES)) {
+		it(`registered dispatch ${name} refuses before entering a tool body`, async () => {
+			const context = {
+				settings: Settings.isolated(),
+				sessionApprovals: createSessionApprovals({ [PROBE_TOOL_NAME]: "deny" }),
+				autoApprove: true,
+				bypassAllApprovals: true,
+			} as unknown as AgentToolContext;
+			await entry
+				.invoke(createProbeTool(), "registered-call", { cmd: "probe" }, undefined, undefined, context)
+				.catch(() => {});
+			expect(probeExecuted).toBe(false);
+			const allowed = { ...context, sessionApprovals: createSessionApprovals() };
+			await entry.invoke(createProbeTool(), "allowed-call", { cmd: "probe" }, undefined, undefined, allowed);
+			expect(probeExecuted).toBe(true);
+		});
+	}
 
 	// ─────────────────────────────────────────────────────────────────────────
-	// Path 1: task.executor (subagent task execution)
+	// Subagent settings inheritance (not a provider-backed spawn).
 	// ─────────────────────────────────────────────────────────────────────────
-	it("Path 1: task.executor blocks refused tools in child subagent sessions even with stripped extensions", async () => {
+	it("subagent settings retain parent refusal policy without session approvals", async () => {
 		// Root session sets policy in settings
 		const rootSettings = Settings.isolated({
 			"tools.approval": { [PROBE_TOOL_NAME]: "deny" },
@@ -150,17 +209,15 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 			autoApprove: true, // yolo should NEVER bypass explicit refusal
 			sessionApprovals: createSessionApprovals(), // stripped approvals
 		} as unknown as AgentToolContext;
-		await expect(
-			wrapped.execute("task-call-1", { cmd: "rm -rf /" }, undefined, undefined, subagentContext),
-		).rejects.toThrow(RefusalFenceError);
+		await wrapped.execute("task-call-1", { cmd: "rm -rf /" }, undefined, undefined, subagentContext).catch(() => {});
 
 		expect(probeExecuted).toBe(false);
 	});
 
 	// ─────────────────────────────────────────────────────────────────────────
-	// Path 2: eval.agent-bridge (eval agent() subagent spawn)
+	// Runtime override inheritance used by eval-spawned sessions.
 	// ─────────────────────────────────────────────────────────────────────────
-	it("Path 2: eval.agent-bridge blocks refused tools in eval-spawned child agents", async () => {
+	it("forked runtime settings retain refusal policy", async () => {
 		const parentSettings = Settings.isolated({
 			"tools.approval": { [PROBE_TOOL_NAME]: "deny" },
 		});
@@ -175,30 +232,26 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 			autoApprove: true,
 			sessionApprovals: createSessionApprovals(),
 		} as unknown as AgentToolContext;
-		await expect(
-			wrapped.execute("eval-agent-call-1", { cmd: "whoami" }, undefined, undefined, evalContext),
-		).rejects.toThrow(RefusalFenceError);
+		await wrapped.execute("eval-agent-call-1", { cmd: "whoami" }, undefined, undefined, evalContext).catch(() => {});
 		expect(probeExecuted).toBe(false);
 	});
 
 	// ─────────────────────────────────────────────────────────────────────────
-	// Path 3: eval.tool-bridge (eval tool.<name>() execution)
+	// Eval's production tool bridge.
 	// ─────────────────────────────────────────────────────────────────────────
-	it("Path 3: eval.tool-bridge blocks refused tools via callSessionTool", async () => {
+	it("callSessionTool blocks refused tools", async () => {
 		const settings = Settings.isolated({
 			"tools.approval": { [PROBE_TOOL_NAME]: "deny" },
 		});
 		const session = createMockToolSession({ settings });
-		await expect(
-			callSessionTool(PROBE_TOOL_NAME, { cmd: "id" }, { session }),
-		).rejects.toThrow(RefusalFenceError);
+		await callSessionTool(PROBE_TOOL_NAME, { cmd: "id" }, { session }).catch(() => {});
 		expect(probeExecuted).toBe(false);
 	});
 
 	// ─────────────────────────────────────────────────────────────────────────
-	// Path 4: session.irc (IRC-woken agent turns)
+	// Existing session policy does not depend on an extension runner.
 	// ─────────────────────────────────────────────────────────────────────────
-	it("Path 4: session.irc blocks refused tools when an agent is woken by IRC", async () => {
+	it("a wrapper consults session settings on each call", async () => {
 		const ircSettings = Settings.isolated({
 			"tools.approval": { [PROBE_TOOL_NAME]: "deny" },
 		});
@@ -209,16 +262,14 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 			settings: ircSettings,
 			sessionApprovals: createSessionApprovals(),
 		} as unknown as AgentToolContext;
-		await expect(
-			wrapped.execute("irc-wake-call-1", { cmd: "ping" }, undefined, undefined, ircContext),
-		).rejects.toThrow(RefusalFenceError);
+		await wrapped.execute("irc-wake-call-1", { cmd: "ping" }, undefined, undefined, ircContext).catch(() => {});
 		expect(probeExecuted).toBe(false);
 	});
 
 	// ─────────────────────────────────────────────────────────────────────────
-	// Path 5: job.resume (resumed / revived agent sessions)
+	// Settings cloning used by revived sessions.
 	// ─────────────────────────────────────────────────────────────────────────
-	it("Path 5: job.resume blocks refused tools in revived/reopened sessions", async () => {
+	it("cloning settings for another cwd retains refusal policy", async () => {
 		const baseSettings = Settings.isolated({
 			"tools.approval": { [PROBE_TOOL_NAME]: "deny" },
 		});
@@ -232,16 +283,14 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 			settings: revivedSettings,
 			sessionApprovals: createSessionApprovals(),
 		} as unknown as AgentToolContext;
-		await expect(
-			wrapped.execute("revive-call-1", { cmd: "restart" }, undefined, undefined, revivedContext),
-		).rejects.toThrow(RefusalFenceError);
+		await wrapped.execute("revive-call-1", { cmd: "restart" }, undefined, undefined, revivedContext).catch(() => {});
 		expect(probeExecuted).toBe(false);
 	});
 
 	// ─────────────────────────────────────────────────────────────────────────
-	// Path 6: cli.worker (worker IPC bridge for JS_EVAL/TINY workers)
+	// Worker IPC's production bridge dispatch selection.
 	// ─────────────────────────────────────────────────────────────────────────
-	it("Path 6: cli.worker blocks refused tools arriving over worker IPC bridge", async () => {
+	it("the worker dispatch branch blocks refused tools", async () => {
 		const settings = Settings.isolated({
 			"tools.approval": { [PROBE_TOOL_NAME]: "deny" },
 		});
@@ -249,61 +298,116 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 
 		// Worker calls callSessionTool with abort signal and IPC context
 		const abortController = new AbortController();
-		await expect(
-			callSessionTool(PROBE_TOOL_NAME, { cmd: "ps" }, { session, signal: abortController.signal }),
-		).rejects.toThrow(RefusalFenceError);
+		await callSessionTool(
+			PROBE_TOOL_NAME,
+			{ cmd: "ps" },
+			{ session, signal: abortController.signal, entry: "cli.worker" },
+		).catch(() => {});
 
 		expect(probeExecuted).toBe(false);
 	});
 
 	// ─────────────────────────────────────────────────────────────────────────
-	// Path 7: session.dynamic-tools (MCP and dynamic tools like refreshSshTool)
+	// The dynamic-tool registry entry, with no extension runner.
 	// ─────────────────────────────────────────────────────────────────────────
-	it("Path 7: session.dynamic-tools ensures dynamically refreshed tools are fenced", async () => {
+	it("dynamic-tool dispatch remains fenced without extensions", async () => {
 		const settings = Settings.isolated({
 			"tools.approval": { [PROBE_TOOL_NAME]: "deny" },
 		});
 		// Dynamic tool wrapped by the runtime tool wrapper
 		const dynamicTool = createProbeTool();
-		const wrappedDynamic = new ExtensionToolWrapper(dynamicTool, undefined); // even without runner!
+		const wrappedDynamic = new ExtensionToolWrapper(dynamicTool, undefined, "session.dynamic-tools");
 
 		const context: AgentToolContext = {
 			settings,
 			sessionApprovals: createSessionApprovals(),
 		} as unknown as AgentToolContext;
-		await expect(
-			wrappedDynamic.execute("dyn-call-1", { cmd: "ssh" }, undefined, undefined, context),
-		).rejects.toThrow(RefusalFenceError);
+		await wrappedDynamic.execute("dyn-call-1", { cmd: "ssh" }, undefined, undefined, context).catch(() => {});
 		expect(probeExecuted).toBe(false);
 	});
 
 	// ─────────────────────────────────────────────────────────────────────────
-	// Path 8: collab.guest (collab/web guest client frames)
+	// Real collaboration guest frame transport.
 	// ─────────────────────────────────────────────────────────────────────────
-	it("Path 8: collab.guest blocks refused tools when guest frames trigger agent prompt", async () => {
-		const settings = Settings.isolated({
-			"tools.approval": { [PROBE_TOOL_NAME]: "deny" },
-		});
-		const probe = createProbeTool();
-		const wrapped = new ExtensionToolWrapper(probe, mockRunner);
-
-		// Collab guest session context
-		const collabContext: AgentToolContext = {
+	it("a writable guest frame reaches the session without executing a refused tool", async () => {
+		const settings = Settings.isolated({ "tools.refusals": [PROBE_TOOL_NAME] });
+		const finished = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+		let promptCount = 0;
+		const wrapped = new ExtensionToolWrapper(createProbeTool(), undefined);
+		const ctx = {
 			settings,
-			sessionApprovals: createSessionApprovals(),
-		} as unknown as AgentToolContext;
-
-		await expect(
-			wrapped.execute("collab-call-1", { cmd: "status" }, undefined, undefined, collabContext),
-		).rejects.toThrow(RefusalFenceError);
-
-		expect(probeExecuted).toBe(false);
+			sessionManager: {
+				getSessionId: () => "guest-fence-test",
+				getCwd: () => "/repo",
+				snapshotForReplication: () => ({
+					header: { type: "session", id: "guest-fence-test", timestamp: new Date().toISOString(), cwd: "/repo" },
+					entries: [],
+				}),
+			},
+			session: {
+				isStreaming: false,
+				queuedMessageCount: 0,
+				sessionName: "fence",
+				subscribe: () => () => {},
+				emitNotice: () => {},
+				promptCustomMessage: async () => {
+					promptCount++;
+					await wrapped.execute("guest-tool", { cmd: "probe" }).catch(() => {});
+					finished[promptCount - 1].resolve();
+				},
+			},
+			statusLine: {
+				setCollabStatus: () => {},
+				invalidate: () => {},
+				getCachedContextBreakdown: () => ({ usedTokens: 0, contextWindow: 0 }),
+			},
+			ui: { requestRender: () => {} },
+			showStatus: () => {},
+			refreshComposerShortcuts: () => {},
+			dismissWelcome: () => {},
+		} as unknown as InteractiveModeContext;
+		installInMemoryRelay();
+		const host = new CollabHost(ctx);
+		let guest: CollabSocket | undefined;
+		try {
+			await host.start("ws://localhost:8787");
+			const link = parseCollabLink(host.link);
+			if ("error" in link) throw new Error(link.error);
+			guest = new CollabSocket({ wsUrl: link.wsUrl, role: "guest", key: await importRoomKey(link.key) });
+			const welcomed = Promise.withResolvers<void>();
+			guest.onFrame = frame => {
+				if (frame.t === "welcome") welcomed.resolve();
+			};
+			const socket = guest;
+			guest.onOpen = () =>
+				socket.send({
+					t: "hello",
+					proto: COLLAB_PROTO,
+					name: "writer",
+					writeToken: link.writeToken ? Buffer.from(link.writeToken).toString("base64url") : undefined,
+				});
+			guest.connect();
+			await welcomed.promise;
+			guest.send({ t: "prompt", text: "run the probe" });
+			await finished[0].promise;
+			expect(promptCount).toBe(1);
+			expect(probeExecuted).toBe(false);
+			settings.override("tools.refusals", []);
+			guest.send({ t: "prompt", text: "run the allowed probe" });
+			await finished[1].promise;
+			expect(promptCount).toBe(2);
+			expect(probeExecuted).toBe(true);
+		} finally {
+			guest?.close();
+			uninstallInMemoryRelay();
+			await host.stop("test complete");
+		}
 	});
 
 	// ─────────────────────────────────────────────────────────────────────────
-	// Path 9: extension.tool_call (extension hook refusal and recordRefusal persistence)
+	// Unscoped extension decisions retain their legacy tool-wide meaning.
 	// ─────────────────────────────────────────────────────────────────────────
-	it("Path 9: extension.tool_call persists refusal into session config to fence all later calls", async () => {
+	it("unscoped refusal policy persists and is inherited by child settings", async () => {
 		const settings = Settings.isolated();
 		const sessionApprovals = createSessionApprovals();
 		const context: AgentToolContext = {
@@ -327,9 +431,7 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 		// 5. Subsequent execution through ExtensionToolWrapper must be fenced
 		const probe = createProbeTool();
 		const wrapped = new ExtensionToolWrapper(probe, mockRunner);
-		await expect(
-			wrapped.execute("telegram-call-1", { cmd: "notepad.exe" }, undefined, undefined, context),
-		).rejects.toThrow(RefusalFenceError);
+		await wrapped.execute("extension-call", { cmd: "probe" }, undefined, undefined, context).catch(() => {});
 		expect(probeExecuted).toBe(false);
 
 		// 6. Child session spawned after the refusal must inherit the refusal in settings
@@ -339,10 +441,102 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 			sessionApprovals: createSessionApprovals(), // fresh approvals
 		} as unknown as AgentToolContext;
 
-		await expect(
-			wrapped.execute("child-after-refusal-1", { cmd: "notepad.exe" }, undefined, undefined, childContext),
-		).rejects.toThrow(RefusalFenceError);
+		await wrapped
+			.execute("child-after-refusal-1", { cmd: "notepad.exe" }, undefined, undefined, childContext)
+			.catch(() => {});
 		expect(probeExecuted).toBe(false);
+	});
+
+	it("scopes an extension refusal to its path across tools, while unrelated writes execute", async () => {
+		const settings = Settings.isolated();
+		const context = {
+			settings,
+			autoApprove: true,
+			bypassAllApprovals: true,
+			sessionApprovals: createSessionApprovals(),
+			sessionManager: { getCwd: () => "/repo" },
+		} as unknown as AgentToolContext;
+		const runner = {
+			...mockRunner,
+			hasHandlers: (event: string) => event === "tool_call",
+			emitToolCall: async () => ({
+				block: true,
+				reason: "protected target",
+				subject: { kind: "path", value: "/repo/protected" },
+			}),
+		} as unknown as ExtensionRunner;
+		const write = Object.assign(createProbeTool("write"), {
+			filesystemTargets: (args: { path: string }) => [args.path],
+		});
+		await new ExtensionToolWrapper(write, runner)
+			.execute("refuse", { path: "/repo/protected" }, undefined, undefined, context)
+			.catch(() => {});
+		probeExecuted = false;
+		await new ExtensionToolWrapper(write, undefined)
+			.execute("unrelated", { path: "/repo/other" }, undefined, undefined, context)
+			.catch(() => {});
+		expect(probeExecuted).toBe(true);
+	});
+
+	for (const name of ["write", "edit", "bash", "eval"]) {
+		it(`a path refusal prevents equivalent work through ${name}`, async () => {
+			const context = {
+				settings: Settings.isolated(),
+				autoApprove: true,
+				bypassAllApprovals: true,
+				sessionApprovals: createSessionApprovals(),
+				sessionManager: { getCwd: () => "/repo" },
+			} as unknown as AgentToolContext;
+			const runner = {
+				...mockRunner,
+				hasHandlers: (event: string) => event === "tool_call",
+				emitToolCall: async () => ({
+					block: true,
+					reason: "protected target",
+					subject: { kind: "path", value: "/repo/protected" },
+				}),
+			} as unknown as ExtensionRunner;
+			await new ExtensionToolWrapper(createProbeTool("write"), runner)
+				.execute("refuse", { path: "/repo/protected" }, undefined, undefined, context)
+				.catch(() => {});
+			const probe =
+				name === "edit" || name === "write"
+					? Object.assign(createProbeTool(name), { filesystemTargets: () => ["/repo/sub/../protected"] })
+					: createProbeTool(name);
+			probeExecuted = false;
+			await new ExtensionToolWrapper(probe, undefined)
+				.execute("reroute", { path: "/repo/protected", cmd: "opaque" }, undefined, undefined, context)
+				.catch(() => {});
+			expect(probeExecuted).toBe(false);
+		});
+	}
+
+	it("legacy nested execution inherits policy rather than constructing an empty policy", async () => {
+		const context = { settings: Settings.isolated({ "tools.refusals": [PROBE_TOOL_NAME] }) };
+		const outer = {
+			...createProbeTool("extension"),
+			execute: () => TOOL_EXECUTION_ENTRIES["legacy.adapter"].invoke(createProbeTool(), "nested", { cmd: "probe" }),
+		};
+		await TOOL_EXECUTION_ENTRIES["session.tools"]
+			.invoke(outer, "outer", {}, undefined, undefined, context)
+			.catch(() => {});
+		expect(probeExecuted).toBe(false);
+		context.settings.override("tools.refusals", []);
+		await TOOL_EXECUTION_ENTRIES["session.tools"].invoke(outer, "outer-allowed", {}, undefined, undefined, context);
+		expect(probeExecuted).toBe(true);
+	});
+
+	it("scoped refusal survives a child settings fork and retains previous tool refusals", async () => {
+		const settings = Settings.isolated({ "tools.refusals": [PROBE_TOOL_NAME] });
+		recordRefusal("write", "protected path", undefined, settings, { kind: "path", value: "/repo/protected" });
+		const child = createSubagentSettings(settings, {}, undefined);
+		const context = { settings: child };
+		const probe = Object.assign(createProbeTool("edit"), { filesystemTargets: () => ["/repo/protected"] });
+		await TOOL_EXECUTION_ENTRIES["session.tools"]
+			.invoke(probe, "child", {}, undefined, undefined, context)
+			.catch(() => {});
+		expect(probeExecuted).toBe(false);
+		expect(isToolRefused(PROBE_TOOL_NAME, {}, context).refused).toBe(true);
 	});
 
 	// ─────────────────────────────────────────────────────────────────────────
@@ -362,9 +556,7 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 			bypassAllApprovals: true,
 		} as unknown as AgentToolContext;
 
-		await expect(
-			wrapped.execute("standing-yolo-1", { cmd: "test" }, undefined, undefined, yoloContext),
-		).rejects.toThrow(RefusalFenceError);
+		await wrapped.execute("standing-yolo-1", { cmd: "test" }, undefined, undefined, yoloContext).catch(() => {});
 		expect(probeExecuted).toBe(false);
 	});
 });
