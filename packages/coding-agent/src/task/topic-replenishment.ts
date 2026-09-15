@@ -7,15 +7,14 @@
  * Shared runtime contract:
  * 1. On subagent completion or session recovery, reconcile actual running native workers
  *    per eligible topic. Idle, parked, prepared, or simulated daemons are strictly INACTIVE.
- * 2. Enforce worker floor (minimum 7 running useful workers when >= 7 runnable units exist,
- *    normal target 7–15, hard ceiling 20).
- * 3. Enforce pre-spawn memory admission: hard ceiling at 95% RAM, process cleanup at 85%.
+ * 2. Maintain active worker targets up to configured bounds.
+ * 3. Enforce optional pre-spawn memory admission when configured.
  *    (Pre-admission check does not guarantee runtime processes will not subsequently spike).
- * 4. Claim next ready authorized ticket atomically from durable request ledger with file locking.
+ * 4. Claim next ready authorized ticket atomically with file locking.
  * 5. Fail-closed authorization: unauthorized requests (including empty `{}` authorization),
  *    forbidden production targets, ungranted merge authorizations, and pending decision blockers
  *    never dispatch. Blocked topics stay tracked with exact reasons.
- * 6. Dispatch next native task using native TaskTool/executor (Flash model role, no agent CLI).
+ * 6. Dispatch next native task using native TaskTool/executor (configured model role, no agent CLI).
  *    Missing executor fails immediately before claiming or incrementing counts.
  * 7. On worker dispatch error, claimed tickets are rolled back to pending with audit history.
  */
@@ -27,6 +26,9 @@ import * as path from "node:path";
 import { errorMessage, getAgentDir, isRecord, logger } from "@veyyon/utils";
 import { atomicWriteFileSync } from "@veyyon/utils/atomic-write";
 import nativeLedgerBridgeAssetPath from "./native-ledger-bridge.py" with { type: "file" };
+import { DEFAULT_MODEL_SLOT } from "../config/model-roles";
+import { Settings } from "../config/settings";
+import { resolveAgentModel } from "./agent-settings";
 // --- Functional Topics & Keyword Mapping ---
 
 export const TOPIC_KEYWORDS_MAP: Readonly<Record<string, string>> = {
@@ -37,24 +39,11 @@ export const TOPIC_KEYWORDS_MAP: Readonly<Record<string, string>> = {
 	design: "UX/design",
 	conversion: "UX/design",
 	motion: "Motion",
-	telegram: "Telegram",
-	decision: "Decisions",
-	staging: "Staging",
-	pooler: "Staging",
 	workflow: "Workflow",
 	gate: "Workflow",
 	concurrent: "Workflow",
 	todo: "Workflow",
 	scheduler: "Workflow",
-	issue: "Preserved GitHub issue inventory",
-	migration: "Preserved GitHub issue inventory",
-	dedicated: "Preserved GitHub issue inventory",
-	inventory: "Preserved GitHub issue inventory",
-	operator: "Operator accountability",
-	accountability: "Operator accountability",
-	live: "Live operator corrections",
-	recovered: "Recovered authorized work",
-	authorized: "Recovered authorized work",
 	agent: "Agent system change",
 	replenish: "Agent system change",
 	system: "Agent system change",
@@ -64,14 +53,7 @@ export const RUNNABLE_TOPIC_NAMES: readonly string[] = [
 	"Desktop GUI",
 	"UX/design",
 	"Motion",
-	"Telegram",
-	"Decisions",
-	"Staging",
 	"Workflow",
-	"Preserved GitHub issue inventory",
-	"Operator accountability",
-	"Live operator corrections",
-	"Recovered authorized work",
 	"Agent system change",
 ] as const;
 
@@ -89,26 +71,114 @@ export const INACTIVE_STATUSES: ReadonlySet<string> = new Set([
 	"cancelled",
 ]);
 
-export const FORBIDDEN_TARGETS: readonly string[] = [
-	"main",
-	"master",
-	"production",
-	"prod",
-	"zaraprptkegxqpvnsubu",
-	"akamai-iad-prod",
-] as const;
+export const FORBIDDEN_TARGETS: readonly string[] = (
+	process.env.VEYYON_FORBIDDEN_TARGETS
+		? process.env.VEYYON_FORBIDDEN_TARGETS.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean)
+		: []
+) as readonly string[];
 
-export const EXPLICITLY_CANCELLED_TASKS: Readonly<Record<string, string>> = {
-	"record operator choice a for ci connectivity":
-		"Explicitly dropped per live operator clarification (example choice, not confirmed decision); preserved as historical cancellation.",
-};
+export const EXPLICITLY_CANCELLED_TASKS: Readonly<Record<string, string>> = {};
 
-export const DEFAULT_FLASH_MODEL = "google-antigravity/gemini-3.8-flash:high";
-export const DEFAULT_MIN_FLOOR = Number(process.env.VEYYON_WORKER_MIN_FLOOR) || 15;
-export const DEFAULT_TARGET_COUNT = Number(process.env.VEYYON_WORKER_TARGET) || 15;
-export const DEFAULT_MAX_CEILING = Number(process.env.VEYYON_WORKER_MAX_CEILING) || 20;
-export const HARD_RAM_CEILING_PCT = 95.0;
-export const CLEANUP_RAM_PCT = 85.0;
+export function resolveTopicWorkerModel(options?: {
+	settings?: Settings;
+	agentRole?: string;
+	requestModel?: string;
+}): string {
+	if (options?.requestModel?.trim()) {
+		return options.requestModel.trim();
+	}
+	const settings = options?.settings ?? (Settings.isInitialized ? Settings.instance : undefined);
+	if (settings) {
+		const role = options?.agentRole ?? "task";
+		const agentResolved = resolveAgentModel({ settings, agentName: role });
+		if (agentResolved.patterns.length > 0) {
+			return agentResolved.patterns[0];
+		}
+		const defaultRole = settings.getModelRole(DEFAULT_MODEL_SLOT);
+		if (defaultRole?.trim()) {
+			return defaultRole.trim();
+		}
+	}
+	return process.env.VEYYON_DEFAULT_MODEL?.trim() ?? "";
+}
+
+export function isForbiddenTarget(
+	req: {
+		target?: string;
+		target_branch?: string;
+		branch?: string;
+		base?: string;
+		environment?: string;
+		prompt?: string;
+		forbidden_targets?: readonly string[] | Set<string>;
+		forbidden_environments?: readonly string[] | Set<string>;
+	},
+	configuredForbidden?: readonly string[] | Set<string>,
+): boolean {
+	const target = (req.target ?? req.target_branch ?? req.branch ?? req.base ?? "").trim().toLowerCase();
+	const env = (req.environment ?? "").trim().toLowerCase();
+	let resolvedTarget = target;
+	if (!resolvedTarget && req.prompt) {
+		const mTarget = req.prompt.match(/\btarget:\s*(\S+)/i);
+		if (mTarget) {
+			resolvedTarget = mTarget[1].toLowerCase();
+		} else {
+			const mBranch = req.prompt.match(/\bbranch\s+(\S+)/i);
+			if (mBranch) {
+				resolvedTarget = mBranch[1].toLowerCase();
+			}
+		}
+	}
+
+	const forbiddenTargets = new Set<string>();
+	const forbiddenEnvs = new Set<string>();
+
+	for (const t of FORBIDDEN_TARGETS) {
+		forbiddenTargets.add(t.toLowerCase());
+		forbiddenEnvs.add(t.toLowerCase());
+	}
+	if (process.env.VEYYON_FORBIDDEN_ENVIRONMENTS) {
+		for (const e of process.env.VEYYON_FORBIDDEN_ENVIRONMENTS.split(",")) {
+			const trimmed = e.trim().toLowerCase();
+			if (trimmed) forbiddenEnvs.add(trimmed);
+		}
+	}
+	if (configuredForbidden) {
+		for (const t of configuredForbidden) {
+			const trimmed = t.trim().toLowerCase();
+			if (trimmed) {
+				forbiddenTargets.add(trimmed);
+				forbiddenEnvs.add(trimmed);
+			}
+		}
+	}
+	if (req.forbidden_targets) {
+		for (const t of req.forbidden_targets) {
+			const trimmed = t.trim().toLowerCase();
+			if (trimmed) forbiddenTargets.add(trimmed);
+		}
+	}
+	if (req.forbidden_environments) {
+		for (const e of req.forbidden_environments) {
+			const trimmed = e.trim().toLowerCase();
+			if (trimmed) forbiddenEnvs.add(trimmed);
+		}
+	}
+
+	if (env && (forbiddenEnvs.has(env) || forbiddenTargets.has(env))) {
+		return true;
+	}
+	if (resolvedTarget && forbiddenTargets.has(resolvedTarget)) {
+		return true;
+	}
+
+	return false;
+}
+export const DEFAULT_MIN_FLOOR = Number(process.env.VEYYON_WORKER_MIN_FLOOR) || 0;
+export const DEFAULT_TARGET_COUNT = Number(process.env.VEYYON_WORKER_TARGET) || 1;
+export const DEFAULT_MAX_CEILING = Number(process.env.VEYYON_WORKER_MAX_CEILING) || 4;
+export const HARD_RAM_CEILING_PCT = Number(process.env.VEYYON_HARD_RAM_CEILING_PCT) || 100.0;
+export const CLEANUP_RAM_PCT = Number(process.env.VEYYON_CLEANUP_RAM_PCT) || 100.0;
 
 // --- Interfaces ---
 
@@ -320,7 +390,7 @@ export function resolveTopicName(worker: Partial<NativeActorSnapshot>): string {
 // --- Authorization Validation Helper ---
 
 /**
- * Accept only the structured authorization written by the request ledger.
+ * Accept only complete structured authorization records.
  * Every field is required so an incidental timestamp, actor, scope, or
  * free-form string can never be mistaken for permission.
  */
@@ -446,8 +516,8 @@ export function reconcileRunningTopics(
 
 /**
  * Enforce system memory admission:
- * - Hard ceiling at >= 95% RAM: spawn no new workers / processes.
- * - Cleanup threshold at >= 85% RAM: trigger cleanup callback, then re-evaluate.
+ * - Hard ceiling (default 100%, disabled): spawn no new workers when threshold exceeded.
+ * - Cleanup threshold (default 100%, disabled): trigger cleanup callback before re-evaluation.
  *
  * NOTE: This is an advisory pre-spawn check. It guarantees pre-admission bounds,
  * but cannot guarantee that running processes will not subsequently spike memory.
@@ -1075,7 +1145,7 @@ export class TopicReplenishmentEngine {
 			status: dispatchedTickets.length > 0 ? "replenished" : "no_eligible_work",
 			reason:
 				dispatchedTickets.length > 0
-					? `Dispatched ${dispatchedTickets.length} native ticket(s) to maintain worker floor.`
+					? `Dispatched ${dispatchedTickets.length} native ticket(s) to maintain worker target.`
 					: "No further eligible authorized tickets available.",
 		};
 	}
