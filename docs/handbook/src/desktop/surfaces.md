@@ -124,6 +124,12 @@ Each section collapses independently. Collapsed sections retain their header
 and count; empty sections are hidden. The session list scrolls between the header
 and the fixed footer.
 
+`/` in the queue opens session search over the rail's own rows. Typing narrows
+the rail as it is typed, and the query stays on the rail after the search
+closes: the header states it and the control beside it clears it. A query that
+matches no session leaves the rail stating the step out of it. Creating a
+session clears the query, so the new session is listed.
+
 Pinned holds the operator's order. Live sorts by its anchor, newest first, and
 agent activity does not reorder it. Deferred sorts by return time, soonest
 first, and a session deferred from the rail names no return time and sorts
