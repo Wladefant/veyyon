@@ -314,4 +314,123 @@ describe("Telegram extension worker registry and targeted messaging", () => {
 		expect(rendered).toContain("<b>Live Workers (0):</b>");
 		expect(rendered).not.toContain("advisor-1");
 	});
+	test("scope override attempt has no effect and excludes foreign and unscoped workers", async () => {
+		registry.register({
+			id: "worker-local",
+			displayName: "Worker Local",
+			kind: "sub",
+			status: "idle",
+			session: null,
+			scope: AUTH.sessionId,
+		});
+		registry.register({
+			id: "worker-foreign",
+			displayName: "Worker Foreign",
+			kind: "sub",
+			status: "idle",
+			session: null,
+			scope: "session-b",
+		});
+		registry.register({
+			id: "worker-unscoped",
+			displayName: "Worker Unscoped",
+			kind: "sub",
+			status: "idle",
+			session: null,
+		});
+
+		// Caller attempts to pass scope: "session-b" to renderWorkers
+		const rendered = await bridge.renderWorkers({
+			...AUTH,
+			scope: "session-b",
+		} as unknown as WorkerRosterRequest);
+		expect(rendered).toContain("<b>Live Workers (1):</b>");
+		expect(rendered).toContain("worker-local");
+		expect(rendered).not.toContain("worker-foreign");
+		expect(rendered).not.toContain("worker-unscoped");
+
+		// Direct renderWorkerRoster with scope also excludes unscoped refs
+		const scopedDirect = renderWorkerRoster(registry.list(), { scope: AUTH.sessionId });
+		expect(scopedDirect).toContain("<b>Live Workers (1):</b>");
+		expect(scopedDirect).toContain("worker-local");
+		expect(scopedDirect).not.toContain("worker-foreign");
+		expect(scopedDirect).not.toContain("worker-unscoped");
+	});
+
+	test("cross-session and unscoped target ids return failed receipt without message delivery", async () => {
+		const foreignInbox: IrcMessage[] = [];
+		const foreignSession = {
+			deliverIrcMessage: async (msg: IrcMessage) => {
+				foreignInbox.push(msg);
+				return "injected" as const;
+			},
+		} as unknown as AgentSession;
+
+		registry.register({
+			id: "worker-other-session",
+			displayName: "Worker Other Session",
+			kind: "sub",
+			status: "idle",
+			session: foreignSession,
+			scope: "session-b",
+		});
+
+		const unscopedInbox: IrcMessage[] = [];
+		const unscopedSession = {
+			deliverIrcMessage: async (msg: IrcMessage) => {
+				unscopedInbox.push(msg);
+				return "injected" as const;
+			},
+		} as unknown as AgentSession;
+
+		registry.register({
+			id: "worker-no-scope",
+			displayName: "Worker No Scope",
+			kind: "sub",
+			status: "idle",
+			session: unscopedSession,
+		});
+
+		// 1. bridge.sendMessage targeting cross-session worker
+		const sendResult = await bridge.sendMessage({
+			...AUTH,
+			to: "worker-other-session",
+			message: "cross-session probe",
+		});
+		expect(sendResult.outcome).toBe("failed");
+		expect(sendResult.error).toContain('Agent "worker-other-session" is not available in the bound session');
+		expect(sendResult.formatted).toContain("<b>Message delivery failed to <code>worker-other-session</code>.</b>");
+		expect(foreignInbox).toHaveLength(0);
+
+		// 2. bridge.handleCommand with /msg targeting cross-session worker
+		const cmdResult = await bridge.handleCommand("/msg worker-other-session hello", AUTH);
+		expect(cmdResult?.handled).toBe(true);
+		expect(cmdResult?.command).toBe("msg");
+		expect(cmdResult?.receipt?.outcome).toBe("failed");
+		expect(cmdResult?.receipt?.error).toContain('Agent "worker-other-session" is not available in the bound session');
+		expect(cmdResult?.text).toContain("<b>Message delivery failed to <code>worker-other-session</code>.</b>");
+		expect(foreignInbox).toHaveLength(0);
+
+		// 3. handleTelegramControlCommand with explicit scope targeting cross-session worker
+		const scopedCmdResult = await handleTelegramControlCommand("/msg worker-other-session scoped hello", {
+			registry,
+			bus,
+			scope: AUTH.sessionId,
+			sender: "TelegramOperator",
+		});
+		expect(scopedCmdResult?.handled).toBe(true);
+		expect(scopedCmdResult?.receipt?.outcome).toBe("failed");
+		expect(scopedCmdResult?.receipt?.error).toContain('Agent "worker-other-session" is not available in the bound session');
+		expect(foreignInbox).toHaveLength(0);
+
+		// 4. bridge.sendMessage targeting unscoped worker
+		const unscopedResult = await bridge.sendMessage({
+			...AUTH,
+			to: "worker-no-scope",
+			message: "unscoped probe",
+		});
+		expect(unscopedResult.outcome).toBe("failed");
+		expect(unscopedResult.error).toContain('Agent "worker-no-scope" is not available in the bound session');
+		expect(unscopedInbox).toHaveLength(0);
+	});
 });

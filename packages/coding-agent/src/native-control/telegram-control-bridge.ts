@@ -30,9 +30,7 @@ export interface AgentDetailRequest extends NativeControlAuth {
 	agentId: string;
 }
 
-export interface WorkerRosterRequest extends NativeControlAuth {
-	scope?: string;
-}
+export interface WorkerRosterRequest extends NativeControlAuth {}
 
 export interface SendWorkerMessageRequest extends NativeControlAuth {
 	to: string;
@@ -140,7 +138,7 @@ export function renderWorkerRoster(refs: readonly AgentRef[], options: RenderWor
 	const now = options.now ?? Date.now();
 	const workers = refs.filter(ref => {
 		if (!options.includeAdvisors && ref.kind === "advisor") return false;
-		if (options.scope && ref.scope && ref.scope !== options.scope) return false;
+		if (options.scope !== undefined && ref.scope !== options.scope) return false;
 		return true;
 	});
 
@@ -163,15 +161,44 @@ export function renderWorkerRoster(refs: readonly AgentRef[], options: RenderWor
 	return lines.join("\n");
 }
 
+export interface SendWorkerMessageOptions {
+	sender?: string;
+	registry?: AgentRegistry;
+	scope?: string;
+}
+
 export async function sendWorkerMessage(
 	bus: IrcBus,
 	to: string,
 	text: string,
-	sender = "Telegram",
+	senderOrOptions: string | SendWorkerMessageOptions = "Telegram",
+	extraOptions: { registry?: AgentRegistry; scope?: string } = {},
 ): Promise<IrcDeliveryReceipt> {
+	const sender = typeof senderOrOptions === "string" ? senderOrOptions : (senderOrOptions.sender ?? "Telegram");
+	const registry = typeof senderOrOptions === "object" ? senderOrOptions.registry : extraOptions.registry;
+	const scope = typeof senderOrOptions === "object" ? senderOrOptions.scope : extraOptions.scope;
+	const target = to.trim();
+
+	if (scope !== undefined) {
+		const reg = registry ?? AgentRegistry.global();
+		const ref = reg.get(target);
+		if (!ref || ref.scope !== scope || ref.kind === "advisor") {
+			const error = !ref
+				? `Unknown agent "${target}" — check \`irc list\` for live peers.`
+				: ref.kind === "advisor"
+					? `Agent "${target}" is a read-only advisor transcript and cannot be messaged.`
+					: `Agent "${target}" is not available in the bound session.`;
+			return {
+				to: target,
+				outcome: "failed",
+				error,
+			};
+		}
+	}
+
 	return await bus.send({
 		from: sender,
-		to: to.trim(),
+		to: target,
 		body: text.trim(),
 	});
 }
@@ -217,7 +244,11 @@ export async function handleTelegramControlCommand(
 			};
 		}
 		const bus = options.bus ?? IrcBus.global();
-		const receipt = await sendWorkerMessage(bus, targetId, body, options.sender ?? "Telegram");
+		const receipt = await sendWorkerMessage(bus, targetId, body, {
+			sender: options.sender ?? "Telegram",
+			registry: options.registry,
+			scope: options.scope,
+		});
 		const formatted = formatWorkerMessageReceipt(receipt);
 		return {
 			handled: true,
@@ -325,7 +356,7 @@ export class TelegramNativeControlBridge {
 		const refs = this.#registry.list();
 		return renderWorkerRoster(refs, {
 			now: this.#now(),
-			scope: request.scope ?? this.#binding.sessionId,
+			scope: this.#binding.sessionId,
 		});
 	}
 
@@ -335,7 +366,11 @@ export class TelegramNativeControlBridge {
 			this.#bus,
 			request.to,
 			request.message,
-			`Telegram:${this.#binding.actorId}`,
+			{
+				sender: `Telegram:${this.#binding.actorId}`,
+				registry: this.#registry,
+				scope: this.#binding.sessionId,
+			},
 		);
 		return {
 			to: receipt.to,
