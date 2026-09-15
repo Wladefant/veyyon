@@ -33,16 +33,18 @@
 # changes by nothing between them.
 #
 # Sourced by proof/docker/xsession.sh with SCENE_WINDOW, SCENE_NAME, SCENE_OUT
-# and SCENE_LIB already initialized. Record it with:
+# and SCENE_LIB already initialized. The scene holds three still inspections of
+# one band and runs no turn, so the take carries a motion floor:
 #
-#   proof/docker/record-native.sh proof/scenes/desktop-detail.sh
+#   SCENE_MOTION_FLOOR=1 \
+#     proof/docker/record-native.sh proof/scenes/desktop-detail.sh
 #
 # The change is entirely inside the executable, so the before arm holds no
 # source and takes a build of the pre-change tree:
 #
 #   SANTH_BUILD_GOVERNED=1 python3 .internal/build-commit-before.py \
 #     <commit> detail-before
-#   SCENE_ARM=before PROOF_BASE_REF=HEAD \
+#   SCENE_ARM=before PROOF_BASE_REF=HEAD SCENE_MOTION_FLOOR=1 \
 #     PROOF_NATIVE_BEFORE_BINARY=.internal/captures/detail-before/veyyon-desktop \
 #     proof/docker/record-native.sh proof/scenes/desktop-detail.sh
 set -euo pipefail
@@ -76,12 +78,16 @@ if (( BAND_X + BAND_W > WIN_X + WIN_W )); then
 	abandon_take "detail-closed" \
 		"the ${BAND_W}px band at ${BAND_X} runs past the window's right edge at $(( WIN_X + WIN_W ))"
 fi
-# The band stops at the composer card's top edge. The card is drawn on the same
-# floating ground the popover is, and it holds the draft's caret, so a
-# rectangle that reached over its top edge would report the card that was
-# always there and blink between two shots whatever the press did. What is left
-# is the ground a resting session draws nothing on at all.
-COMPOSER_CARD_TOP=$(( COMPOSER_CARD_BOTTOM - COMPOSER_BAND_H ))
+# The band stops at the composer card's own upper edge, from the measurement
+# the preamble took rather than from the card's resting height: §5.4 rests the
+# card centred on a session that holds no turns, and a top derived from the
+# window's foot then cuts the band off 200px below the card, over ground the
+# popover is drawn on. The card is drawn on the same floating ground the
+# popover is, and it holds the draft's caret, so a rectangle that reached over
+# its edge would report the card that was always there and blink between two
+# shots whatever the press did. What is left is the surface a resting session
+# draws its opening line on and nothing else.
+COMPOSER_CARD_TOP="${CARD_TOP}"
 BAND_H=$(( COMPOSER_CARD_TOP - BAND_Y ))
 if (( BAND_H < 80 )); then
 	abandon_take "detail-closed" \
@@ -108,9 +114,13 @@ QUIET_CEILING=600
 
 # Which of the shipped themes the window is drawing, and the ground that theme
 # authors for a floating surface. The appearance is read off the frame rather
-# than assumed: the resting band holds one flat colour, and the theme whose own
-# ground is that colour is the one installed. A theme that draws a floating
-# surface on the same ground as the band cannot report one, and says so.
+# than assumed: the resting band holds one flat elevation tone, and the theme
+# declaring that tone on one of its elevations is the one installed. The band
+# sits over the session surface, which is `canvas` rather than `ground`, so the
+# whole elevation ladder is searched -- a resolver that knew only `ground`
+# reported no shipped theme for a frame two themes could have drawn. A theme
+# that draws a floating surface on the tone the band holds cannot report one,
+# and says so.
 resolve_float_ground() { # <resting-shot>
 	local png="${SCENE_OUT}/${SCENE_NAME}-$1.png" hist
 	hist="$(magick "${png}" -crop "${BAND_CROP}" +repage -alpha off \
@@ -124,14 +134,19 @@ import sys
 from pathlib import Path
 import tomllib
 
+ELEVATIONS = ("ground", "rail", "canvas", "inset")
 themes, band, hist = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 rows = re.findall(r"(\d+):\s*\(\s*(\d+),\s*(\d+),\s*(\d+)", hist)
 if not rows:
     sys.exit(f"the resting band reported no histogram: {hist[:120]!r}")
-held, *channels = max(((int(n), int(r), int(g), int(b)) for n, r, g, b in rows))
-dominant = tuple(channels)
-if held < band * 0.9:
-    sys.exit(f"the resting band is not one flat colour: {dominant} holds {held} of {band}")
+counts = [(int(n), (int(r), int(g), int(b))) for n, r, g, b in rows]
+held, dominant = max(counts)
+# Antialiasing draws the opening line's halo a channel either side of the
+# surface it is drawn on, and the band holds that line on a resting session, so
+# a tone within one step of the dominant is the same surface.
+flat = sum(n for n, tone in counts if all(abs(a - b) <= 1 for a, b in zip(tone, dominant)))
+if flat < band * 0.9:
+    sys.exit(f"the resting band is not one flat surface: {dominant} and its neighbours hold {flat} of {band}")
 
 
 def rgb(value):
@@ -140,25 +155,35 @@ def rgb(value):
 
 for theme in sorted(Path(themes).glob("*.toml")):
     role = tomllib.loads(theme.read_text())["role"]
-    if rgb(role["ground"]) != dominant:
+    elevation = next((name for name in ELEVATIONS if rgb(role[name]) == dominant), None)
+    if elevation is None:
         continue
-    if role["float"] == role["ground"]:
-        sys.exit(f"{theme.stem} draws a floating surface on the ground the band holds")
+    if role["float"] == role[elevation]:
+        sys.exit(f"{theme.stem} draws a floating surface on the {elevation} the band holds")
     print(f"{theme.stem}\t{role['float']}")
     break
 else:
-    sys.exit(f"no shipped theme draws its ground as {dominant}, which the resting band holds")
+    sys.exit(f"no shipped theme draws an elevation as {dominant}, which the resting band holds")
 THEME
 }
 
-# Pixels of exactly that ground. The marker is a colour no surface in the
-# window draws, so a ground that is itself white is counted once rather than
-# folded into the pixels the second pass keeps.
+# Pixels of that ground, within a tolerance of it. A floating surface draws
+# translucent over whatever is under it, so the tone on the frame lies between
+# the theme's authored `float` and the surface it was drawn over: the card
+# above the chip reads (49, 57, 78) against an authored #374158, which an exact
+# match counts as none of it. FLOAT_FUZZ is a fifth of the distance from the
+# authored float to the session surface the band otherwise holds, so a
+# composite of either is counted and the surface itself is not.
+#
+# The marker is a colour no surface in the window draws, so a ground that is
+# itself white is counted once rather than folded into the pixels the second
+# pass keeps.
+FLOAT_FUZZ=5%
 float_ground_pixels() { # <shot> <crop>
 	local png="${SCENE_OUT}/${SCENE_NAME}-$1.png" counted
 	counted="$(magick "${png}" -crop "$2" +repage -alpha off \
-		-fuzz 0 -fill '#ff00ff' -opaque "${FLOAT_GROUND}" \
-		-fill white -opaque '#ff00ff' -fill black +opaque white \
+		-fuzz "${FLOAT_FUZZ}" -fill '#ff00ff' -opaque "${FLOAT_GROUND}" \
+		-fuzz 0 -fill white -opaque '#ff00ff' -fill black +opaque white \
 		-format '%[fx:round(mean*w*h)]' info: 2>/dev/null || true)"
 	case "${counted}" in
 		'' | *[!0-9]*)
