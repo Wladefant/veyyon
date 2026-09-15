@@ -15,10 +15,11 @@
  *     input` inverts the one economic fact every provider honors; it means a
  *     field swap in the generator (cache_read mapped from the wrong upstream
  *     key), not a real price.
- *  3. A recorded `pricing: "published"` fact always has a nonzero bucket —
- *     the field exists to distinguish "upstream published prices" from "we
- *     were never told", and a published-but-all-zero row is that record
- *     contradicting itself.
+ *  3. A recorded `pricing: "published"` fact with every bucket zero is the
+ *     encoding for "the provider gives this away", which `getModelPricing`
+ *     reads as free. Every row that carries it is enumerated below, so a row
+ *     that lands there by accident — the record contradicting itself — fails
+ *     until someone records the decision.
  *
  * Sweeps collect every offender across all bundled rows and fail with the
  * full list. `output > 0` is deliberately NOT required: embedding/image rows
@@ -65,10 +66,23 @@ describe("the bundled catalog's pricing is internally consistent", () => {
 		expect(offenders).toEqual([]);
 	});
 
-	it("no row records pricing as published while every bucket is zero", () => {
-		const offenders = allRows()
+	it("records pricing as published with every bucket zero only for a model the provider gives away", () => {
+		const zeroAndPublished = allRows()
 			.filter(r => r.pricing === "published" && !hasBillableCost(r.cost))
-			.map(r => r.label);
-		expect(offenders).toEqual([]);
+			.map(r => r.label)
+			.sort();
+
+		// `published` plus an all-zero cost is the one encoding that says "free"
+		// rather than "never told" — `getModelPricing` reads exactly this pair and
+		// answers "free", and a `:free` id suffix is the only other evidence it
+		// has. So the pair is not forbidden; it is enumerated. A row that arrives
+		// here without a decision is the record contradicting itself, which is
+		// what this always caught, and the list fails rather than a count so a
+		// swap of one row for another cannot pass.
+		expect(zeroAndPublished).toEqual([
+			"command-code/inclusionai/ling-3.0-flash-sante:free",
+			"command-code/meituan/LongCat-2.0:free",
+			"command-code/poolside/laguna-s-2.1-free",
+		]);
 	});
 });

@@ -316,12 +316,13 @@ describe("the redaction authority the rest of the app reads", () => {
 	 * `/share` uploads the session to a public URL, so it is the seam where reading the expansion
 	 * authority fails open and outward. It was passing `session.obfuscator`, which meant
 	 * `share.redactSecrets` silently did nothing once expansion had been revoked. Asserted at the
-	 * source because the alternative is performing a real upload.
+	 * source because the alternative is performing a real upload. The handler is in
+	 * `builtin-share.ts`, the domain module the share builtins moved to.
 	 */
 	it("is what the share command hands to the snapshot builder", async () => {
 		const sources = [
 			path.resolve(import.meta.dir, "../../src/modes/terminal/controllers/command-controller.ts"),
-			path.resolve(import.meta.dir, "../../src/slash-commands/builtin-registry.ts"),
+			path.resolve(import.meta.dir, "../../src/slash-commands/builtin-share.ts"),
 		];
 		for (const source of sources) {
 			const text = await fs.readFile(source, "utf8");

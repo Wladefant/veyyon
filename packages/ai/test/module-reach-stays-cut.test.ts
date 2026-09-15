@@ -158,8 +158,13 @@ const AUTH_STORAGE_CEILING = 227;
  * through `provider-models/index.ts`, took the reader from that owner instead of parsing the response
  * inline. The leaf imports `@veyyon/utils/type-guards`, which was already reached, so it adds one
  * module and no subtree.
+ *
+ * 80 since 2026-09-15, measured: `catalog/provider-models/command-code.ts`, Command Code's
+ * deployment contract, split out of `openai-compat.ts`. `provider-models/descriptors.ts` is in this
+ * closure and takes the provider's discovery mapper from that file now; every module the file
+ * imports was already reached through `openai-compat.ts`, so it adds one module and no subtree.
  */
-const ENV_API_KEY_CEILING = 79;
+const ENV_API_KEY_CEILING = 80;
 
 /** Measured 2026-07-26 at 75: the logger and nothing else. A backend import here is the regression. */
 const USAGE_REGISTRY_CEILING = 83;

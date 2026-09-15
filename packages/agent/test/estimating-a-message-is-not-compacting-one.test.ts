@@ -96,8 +96,14 @@ const PRUNING_CEILING = 195;
  * `prompts/compaction/compaction-staged-segment.md` and `prompts/compaction/compaction-staged-merge.md` --
  * the staged summarization the engine falls back to when one request times out or cannot fit. The stager
  * imports only what the engine already reached, so the growth is those three files and no subtree.
+ *
+ * RE-MEASURED 2026-09-15: engine 318, remote summarizer 220. The one new module is
+ * `catalog/provider-models/command-code.ts`, holding Command Code's prices, effort ladders and
+ * output ceilings, split out of `provider-models/openai-compat.ts`, which this closure already
+ * reached through the model metadata compaction budgets are computed from. It imports only what
+ * was already here, so the growth is that one file and no subtree.
  */
-const COMPACTION_ENGINE_CEILING = 317;
+const COMPACTION_ENGINE_CEILING = 318;
 const REMOTE_SUMMARIZER_CEILING = 221;
 
 describe("the estimator is a leaf", () => {

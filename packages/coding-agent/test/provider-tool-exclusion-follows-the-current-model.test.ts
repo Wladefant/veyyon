@@ -64,8 +64,15 @@ const ANTHROPIC_MODEL = buildModel({
 
 describe("the edit tool survives every provider and every model switch", () => {
 	const dirs: string[] = [];
+	/**
+	 * Disposed before the directories go, so the fault sink `createAgentSession` attaches does not
+	 * outlive the test that opened it. The sink registry is process-global, so a session left open
+	 * here collects faults raised by whatever suite runs next and reports them against this subject.
+	 */
+	const sessions: AgentSession[] = [];
 
-	afterEach(() => {
+	afterEach(async () => {
+		for (const session of sessions.splice(0)) await session.dispose();
 		for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 	});
 
@@ -97,6 +104,7 @@ describe("the edit tool survives every provider and every model switch", () => {
 			enableMCP: false,
 			enableLsp: false,
 		});
+		sessions.push(created.session);
 		return created.session;
 	}
 
