@@ -7,6 +7,7 @@
 - Guard against auto-updating or replacing custom and local Veyyon binary builds.
 - Support auto-update opt-out via `startup.autoUpdate: false`, `updates.auto: false`, and `VEYYON_NO_AUTO_UPDATE=1`.
 - Record skipped automatic updates in `update-history.json`.
+- Expose the live worker registry and targeted messaging over IrcBus to the Telegram control bridge ([#38](https://github.com/Wladefant/veyyon/issues/38)).
 
 ### Fixed
 
