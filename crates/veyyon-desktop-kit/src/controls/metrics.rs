@@ -28,7 +28,9 @@ pub struct ControlMetrics {
 	pub square:           Pixels,
 	/// Gap between a control's icon and its label.
 	pub gap:              Pixels,
-	/// Opacity of a disabled control.
+	/// Opacity a disabled control renders at, which is the same strength an
+	/// unavailable capability renders at: both stand for a control the
+	/// operator can see and cannot activate.
 	pub disabled_opacity: f32,
 }
 
@@ -58,6 +60,6 @@ pub fn control_metrics(size: ButtonSize, tokens: &TokenSet) -> ControlMetrics {
 		ramp,
 		square: height,
 		gap: tokens.spacing(SpacingStep::S2),
-		disabled_opacity: 0.4,
+		disabled_opacity: tokens.gate().unavailable,
 	}
 }

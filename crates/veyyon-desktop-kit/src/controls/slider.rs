@@ -139,7 +139,9 @@ impl RenderOnce for Slider {
 			.child(thumb);
 
 		if disabled {
-			return container.opacity(0.4).cursor_not_allowed();
+			return container
+				.opacity(tokens.gate().unavailable)
+				.cursor_not_allowed();
 		}
 		container = container.cursor_pointer();
 

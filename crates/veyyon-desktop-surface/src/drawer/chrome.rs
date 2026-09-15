@@ -8,19 +8,20 @@
 use veyyon_desktop_kit::{
 	ColorRole, SpacingStep, StrokeStep, TextRamp, TextWeight, TokenSet,
 	controls::{Button, ButtonVariant},
+	overlays::Tooltip,
 	state::InteractiveState,
 };
-use veyyon_desktop_model::{SessionId, SurfaceId};
+use veyyon_desktop_model::{SessionId, SurfaceId, TerminalStatus};
 use veyyon_desktop_tokens::PanelsSurfaceTokens;
 use veyyon_gpui::{
-	ClickEvent, Context, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement,
-	Styled, div, px,
+	AnyElement, ClickEvent, Context, ElementId, InteractiveElement, IntoElement, ParentElement,
+	StatefulInteractiveElement, Styled, Window, div, px,
 };
 
 use super::content::{DrawerContent, DrawerTab};
 use crate::{
 	Intent, ShellView,
-	controls::{ControlStates, availability_style},
+	controls::{Availability, ControlStates, availability_style},
 };
 /// Builds the drawer chrome header bar.
 pub fn drawer_chrome(
@@ -53,16 +54,28 @@ pub fn drawer_chrome(
 	} else {
 		for (idx, tab) in content.tabs.iter().enumerate() {
 			let is_active = idx == content.active_tab;
-			let label = match tab {
-				DrawerTab::Terminal { title, id } => {
-					if title.is_empty() {
+			let (label, is_exited, is_failed) = match tab {
+				DrawerTab::Terminal { title, id, status } => {
+					let base = if title.is_empty() {
 						format!("Terminal {id}")
 					} else {
 						title.clone()
+					};
+					match status {
+						TerminalStatus::Running => (base, false, false),
+						TerminalStatus::Exited { code } => {
+							let tag = if *code == 0 {
+								" (exited)".to_string()
+							} else {
+								format!(" (exit {code})")
+							};
+							(format!("{base}{tag}"), true, false)
+						},
+						TerminalStatus::Failed { .. } => (format!("{base} (failed)"), false, true),
 					}
 				},
-				DrawerTab::Processes => "Processes".to_string(),
-				DrawerTab::Process { name } => name.clone(),
+				DrawerTab::Processes => ("Processes".to_string(), false, false),
+				DrawerTab::Process { name } => (name.clone(), false, false),
 			};
 			// A process tab carries its name, so the click states which
 			// process's output to follow rather than a strip position the
@@ -73,7 +86,8 @@ pub fn drawer_chrome(
 				DrawerTab::Process { name } => {
 					let id =
 						SurfaceId::ProcessLogsTab(SessionId::from(session_id.to_string()), name.clone());
-					let (opacity, _, allowed) = availability_style(&controls.availability(&id), tokens);
+					let av = controls.availability(&id);
+					let (opacity, _, allowed) = availability_style(&av, tokens);
 					let intent = allowed.then(|| Intent::OpenProcessLogs(name.clone()));
 					(intent, opacity)
 				},
@@ -99,6 +113,10 @@ pub fn drawer_chrome(
 				})
 				.text_color(if is_active {
 					tokens.color(ColorRole::Foreground)
+				} else if is_failed {
+					tokens.color(ColorRole::ErrorFill)
+				} else if is_exited {
+					tokens.color(ColorRole::Muted)
 				} else {
 					tokens.color(ColorRole::Secondary)
 				})
@@ -117,6 +135,11 @@ pub fn drawer_chrome(
 					.bg(tokens.color(ColorRole::Canvas))
 					.border_b(px(2.0))
 					.border_color(tokens.color(ColorRole::Accent));
+			} else {
+				tab_el = tab_el.hover(|s| {
+					s.bg(tokens.color(ColorRole::Inset))
+						.text_color(tokens.color(ColorRole::Foreground))
+				});
 			}
 
 			tabs_strip = tabs_strip.child(tab_el);
@@ -152,17 +175,18 @@ pub fn drawer_chrome(
 		.any(|tab| matches!(tab, DrawerTab::Terminal { .. }))
 	{
 		let create_id = SurfaceId::TerminalCreateButton(SessionId::from(session_id.to_string()));
-		let (create_op, _, create_allowed) =
-			availability_style(&controls.availability(&create_id), tokens);
-		let mut new_btn = Button::new("new-terminal-btn", "New").variant(ButtonVariant::Ghost);
-		if create_allowed {
-			new_btn = new_btn.on_click(cx.listener(|view, _event: &ClickEvent, _window, cx| {
+		let create_av = controls.availability(&create_id);
+		let new_btn = action_button(
+			"new-terminal-btn",
+			"New",
+			&create_av,
+			tokens,
+			cx,
+			|view, _event, _window, cx| {
 				view.dispatch(Intent::NewTerminal, cx);
-			}));
-		} else {
-			new_btn = new_btn.state(InteractiveState::Disabled);
-		}
-		right_side = right_side.child(div().opacity(create_op).child(new_btn));
+			},
+		);
+		right_side = right_side.child(new_btn);
 	}
 
 	if let Some(DrawerTab::Terminal { id: active_term_id, .. }) =
@@ -171,62 +195,61 @@ pub fn drawer_chrome(
 		let sid = SessionId::from(session_id.to_string());
 		let clear_av = controls
 			.availability(&SurfaceId::TerminalClearButton(sid.clone(), active_term_id.clone()));
-		let (clear_op, _, clear_allowed) = availability_style(&clear_av, tokens);
-		let mut clear_btn = Button::new("clear-terminal-btn", "Clear").variant(ButtonVariant::Ghost);
-		if clear_allowed {
-			clear_btn = clear_btn.on_click(cx.listener(|view, _event: &ClickEvent, _window, cx| {
+		let clear_btn = action_button(
+			"clear-terminal-btn",
+			"Clear",
+			&clear_av,
+			tokens,
+			cx,
+			|view, _event, _window, cx| {
 				view.dispatch(Intent::ClearTerminal, cx);
-			}));
-		} else {
-			clear_btn = clear_btn.state(InteractiveState::Disabled);
-		}
+			},
+		);
 
 		let restart_av = controls
 			.availability(&SurfaceId::TerminalRestartButton(sid.clone(), active_term_id.clone()));
-		let (restart_op, _, restart_allowed) = availability_style(&restart_av, tokens);
-		let mut restart_btn =
-			Button::new("restart-terminal-btn", "Restart").variant(ButtonVariant::Ghost);
-		if restart_allowed {
-			restart_btn =
-				restart_btn.on_click(cx.listener(|view, _event: &ClickEvent, _window, cx| {
-					view.dispatch(Intent::RestartTerminal, cx);
-				}));
-		} else {
-			restart_btn = restart_btn.state(InteractiveState::Disabled);
-		}
+		let restart_btn = action_button(
+			"restart-terminal-btn",
+			"Restart",
+			&restart_av,
+			tokens,
+			cx,
+			|view, _event, _window, cx| {
+				view.dispatch(Intent::RestartTerminal, cx);
+			},
+		);
 
 		let close_av =
 			controls.availability(&SurfaceId::TerminalCloseButton(sid, active_term_id.clone()));
-		let (close_op, _, close_allowed) = availability_style(&close_av, tokens);
-		let mut close_btn = Button::new("close-terminal-btn", "Close").variant(ButtonVariant::Ghost);
-		if close_allowed {
-			close_btn = close_btn.on_click(cx.listener(|view, _event: &ClickEvent, _window, cx| {
+		let close_btn = action_button(
+			"close-terminal-btn",
+			"Close",
+			&close_av,
+			tokens,
+			cx,
+			|view, _event, _window, cx| {
 				view.dispatch(Intent::CloseTerminal, cx);
-			}));
-		} else {
-			close_btn = close_btn.state(InteractiveState::Disabled);
-		}
+			},
+		);
 
 		right_side = right_side
-			.child(div().opacity(clear_op).child(clear_btn))
-			.child(div().opacity(restart_op).child(restart_btn))
-			.child(div().opacity(close_op).child(close_btn));
+			.child(clear_btn)
+			.child(restart_btn)
+			.child(close_btn);
 	} else if matches!(content.tabs.get(content.active_tab), Some(DrawerTab::Processes)) {
 		let sid = SessionId::from(session_id.to_string());
 		let start_av = controls.availability(&SurfaceId::ProcessStartButton(sid));
-		let (start_op, _, start_allowed) = availability_style(&start_av, tokens);
-		let mut start_btn = Button::new("process-start-btn", "Start").variant(ButtonVariant::Ghost);
-		if start_allowed {
-			// The command is what the tab's field states. An empty field is
-			// refused where it was typed rather than sent as a request to run
-			// nothing, which is all the host can answer to it (§5.12).
-			start_btn = start_btn.on_click(cx.listener(|view, _event: &ClickEvent, _window, cx| {
+		let start_btn = action_button(
+			"process-start-btn",
+			"Start",
+			&start_av,
+			tokens,
+			cx,
+			|view, _event, _window, cx| {
 				view.submit_process_command(cx);
-			}));
-		} else {
-			start_btn = start_btn.state(InteractiveState::Disabled);
-		}
-		right_side = right_side.child(div().opacity(start_op).child(start_btn));
+			},
+		);
+		right_side = right_side.child(start_btn);
 	}
 
 	div()
@@ -242,4 +265,43 @@ pub fn drawer_chrome(
 		.border_color(tokens.color(ColorRole::Hairline))
 		.child(tabs_strip)
 		.child(right_side)
+}
+/// Renders an action strip button with availability-aware opacity and
+/// interaction (§4.3).
+fn action_button(
+	id: impl Into<ElementId>,
+	label: &'static str,
+	av: &Availability,
+	tokens: &TokenSet,
+	cx: &Context<ShellView>,
+	on_click: impl Fn(&mut ShellView, &ClickEvent, &mut Window, &mut Context<ShellView>) + 'static,
+) -> AnyElement {
+	let mut btn = Button::new(id, label).variant(ButtonVariant::Ghost);
+	match av {
+		Availability::Enabled | Availability::Unknown => {
+			btn = btn.on_click(cx.listener(on_click));
+			btn.into_any_element()
+		},
+		Availability::Pending => {
+			// §4.3: Pending renders in place at the authored pending strength,
+			// activation suppressed, no spinner under 400ms.
+			// InteractiveState::Disabled is not set here, because it applies
+			// the unavailable strength and would compound with this one.
+			div()
+				.opacity(tokens.gate().pending)
+				.child(btn)
+				.into_any_element()
+		},
+		Availability::Unavailable { reason } => {
+			// §4.3: Unavailable muted with the reason readable at the control.
+			// Button::state(InteractiveState::Disabled) resolves the muted
+			// strength through ControlMetrics::disabled_opacity.
+			btn = btn.state(InteractiveState::Disabled);
+			if reason.is_empty() {
+				btn.into_any_element()
+			} else {
+				Tooltip::new(reason.clone(), btn).above().into_any_element()
+			}
+		},
+	}
 }

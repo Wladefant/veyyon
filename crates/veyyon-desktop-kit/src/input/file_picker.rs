@@ -10,7 +10,7 @@ use veyyon_gpui::{App, ClickEvent, ElementId, IntoElement, RenderOnce, Window, d
 
 use crate::{
 	icons::{Icon, IconName, IconSize},
-	token_set::{ColorRole, RadiusStep, SpacingStep, TextRamp, TokenSet},
+	token_set::{ColorRole, RadiusStep, SpacingStep, StrokeStep, TextRamp, TokenSet},
 };
 
 /// File selection trigger showing current path and browse affordance.
@@ -71,12 +71,13 @@ impl RenderOnce for FilePicker {
 
 		let browse_tag = div()
 			.bg(tokens.color(ColorRole::Canvas))
-			.border_1()
+			.border(tokens.stroke(StrokeStep::Hairline))
 			.border_color(tokens.color(ColorRole::Hairline))
 			.rounded(tokens.radius(RadiusStep::Sm))
 			.px(tokens.spacing(SpacingStep::S2))
 			.py(tokens.spacing(SpacingStep::S1))
 			.text_size(tokens.font_size(TextRamp::Small))
+			.line_height(tokens.line_height(TextRamp::Small))
 			.text_color(tokens.color(ColorRole::Foreground))
 			.child("Browse");
 
@@ -85,7 +86,7 @@ impl RenderOnce for FilePicker {
 			.w_full()
 			.bg(bg)
 			.rounded(radius)
-			.border_1()
+			.border(tokens.stroke(StrokeStep::Hairline))
 			.border_color(border_color)
 			.px(pad_x)
 			.py(pad_y)
@@ -118,7 +119,7 @@ impl RenderOnce for FilePicker {
 			.child(browse_tag);
 
 		if self.disabled {
-			el = el.opacity(0.4).cursor_not_allowed();
+			el = el.opacity(tokens.gate().unavailable).cursor_not_allowed();
 		} else if let Some(handler) = self.on_browse {
 			el = el.on_click(move |event, window, cx| handler(event, window, cx));
 		}

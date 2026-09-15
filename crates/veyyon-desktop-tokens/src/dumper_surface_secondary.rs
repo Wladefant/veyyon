@@ -3,7 +3,7 @@ use std::{fmt::Write as _, path::Path};
 use crate::{
 	Tokens,
 	dumper::write_file,
-	dumper_surface_helpers::{step_radius, step_spacing, step_type_size},
+	dumper_surface_helpers::{step_radius, step_spacing, step_stroke, step_type_size},
 	error::TokenError,
 	surface::BreakpointConfig,
 };
@@ -32,33 +32,33 @@ cell_width_px = {:.1}
 cell_height_px = {:.1}
 min_columns = {}
 min_rows = {}
-process_row_height_px = {}
-process_dot_px = {}
+process_row_height_px = "{}"
+process_dot_px = "{}"
 
 [tabs]
-height_px = {}
-gap_px = {}
+height_px = "{}"
+gap_px = "{}"
 max_width_px = {}
-close_hit_px = {}
-pending_dot_px = {}
+close_hit_px = "{}"
+pending_dot_px = "{}"
 
 [chrome]
 row_height_px = {}
-resize_handle_hit_px = {}
-resize_handle_line_px = {}
+resize_handle_hit_px = "{}"
+resize_handle_line_px = "{}"
 
 [tree]
-indent_base_px = {}
-indent_step_px = {}
-row_height_px = {}
+indent_base_px = "{}"
+indent_step_px = "{}"
+row_height_px = "{}"
 font_size = "{}"
 
 [diff]
 row_height_px = {}
 font_size = "{}"
 gutter_width_px = {}
-sign_width_px = {}
-hunk_header_height_px = {}
+sign_width_px = "{}"
+hunk_header_height_px = "{}"
 added_removed_alpha = {}
 intraline_alpha = {}
 "#,
@@ -74,25 +74,25 @@ intraline_alpha = {}
 		p.terminal_cell_height_px,
 		p.terminal_min_columns,
 		p.terminal_min_rows,
-		p.process_row_height_px as i64,
-		p.process_dot_px as i64,
-		p.tabs_height_px as i64,
-		p.tabs_gap_px as i64,
+		step_spacing(s, p.process_row_height_px),
+		step_spacing(s, p.process_dot_px),
+		step_spacing(s, p.tabs_height_px),
+		step_spacing(s, p.tabs_gap_px),
 		p.tabs_max_width_px as i64,
-		p.tabs_close_hit_px as i64,
-		p.tabs_pending_dot_px as i64,
+		step_spacing(s, p.tabs_close_hit_px),
+		step_spacing(s, p.tabs_pending_dot_px),
 		p.chrome_row_height_px as i64,
-		p.chrome_resize_handle_hit_px as i64,
-		p.chrome_resize_handle_line_px as i64,
-		p.tree_indent_base_px as i64,
-		p.tree_indent_step_px as i64,
-		p.tree_row_height_px as i64,
+		step_spacing(s, p.chrome_resize_handle_hit_px),
+		step_stroke(s, p.chrome_resize_handle_line_px),
+		step_spacing(s, p.tree_indent_base_px),
+		step_spacing(s, p.tree_indent_step_px),
+		step_spacing(s, p.tree_row_height_px),
 		step_type_size(s, &p.tree_font_size),
 		p.diff_row_height_px as i64,
 		step_type_size(s, &p.diff_font_size),
 		p.diff_gutter_width_px as i64,
-		p.diff_sign_width_px as i64,
-		p.diff_hunk_header_height_px as i64,
+		step_spacing(s, p.diff_sign_width_px),
+		step_spacing(s, p.diff_hunk_header_height_px),
 		p.diff_added_removed_alpha,
 		p.diff_intraline_alpha
 	);
@@ -118,12 +118,12 @@ elevation_level = {}
 [input]
 row_height_px = {}
 inset = "{}"
-search_icon_px = {}
+search_icon_px = "{}"
 
 [results]
 row_height_px = {}
-group_header_height_px = {}
-footer_height_px = {}
+group_header_height_px = "{}"
+footer_height_px = "{}"
 key_hint_size = "{}"
 "#,
 		p.width_px as i64,
@@ -133,10 +133,10 @@ key_hint_size = "{}"
 		p.elevation_level,
 		p.input_row_height_px as i64,
 		step_spacing(s, p.input_inset),
-		p.input_search_icon_px as i64,
+		step_spacing(s, p.input_search_icon_px),
 		p.results_row_height_px as i64,
-		p.results_group_header_height_px as i64,
-		p.results_footer_height_px as i64,
+		step_spacing(s, p.results_group_header_height_px),
+		step_spacing(s, p.results_footer_height_px),
 		step_type_size(s, &p.results_key_hint_size)
 	);
 	write_file(path, &out)
@@ -229,6 +229,10 @@ inset_right_px = "{}"
 [grain]
 tile_px = {}
 opacity = {}
+
+[gate]
+pending_strength = {}
+unavailable_strength = {}
 "#,
 		sh.window_min_width_px as i64,
 		sh.window_min_height_px as i64,
@@ -238,7 +242,9 @@ opacity = {}
 		step_spacing(s, sh.titlebar_inset_left_px),
 		step_spacing(s, sh.titlebar_inset_right_px),
 		sh.grain_tile_px as i64,
-		sh.grain_opacity
+		sh.grain_opacity,
+		sh.gate_pending_strength,
+		sh.gate_unavailable_strength
 	);
 	write_file(path, &out)
 }

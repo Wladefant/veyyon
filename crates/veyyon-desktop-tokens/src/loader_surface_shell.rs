@@ -20,7 +20,7 @@ pub fn load_shell(path: &Path, scale: &ScaleTokens) -> Result<ShellSurfaceTokens
 	let text = read_file(path)?;
 	let parsed = parse_toml(path, &text)?;
 	let root = Section::root(path, &text, &parsed)?;
-	root.only(&["meta", "window", "titlebar", "grain"])?;
+	root.only(&["meta", "window", "titlebar", "grain", "gate"])?;
 	root.meta("surface_shell")?;
 
 	let window = root.sub("window")?;
@@ -38,15 +38,20 @@ pub fn load_shell(path: &Path, scale: &ScaleTokens) -> Result<ShellSurfaceTokens
 	let grain = root.sub("grain")?;
 	grain.only(&["tile_px", "opacity"])?;
 
+	let gate = root.sub("gate")?;
+	gate.only(&["pending_strength", "unavailable_strength"])?;
+
 	Ok(ShellSurfaceTokens {
-		window_min_width_px:     window.dimension("min_width_px")?,
-		window_min_height_px:    window.dimension("min_height_px")?,
-		titlebar_height_px:      titlebar.dimension("height_px")?,
-		titlebar_control_px:     titlebar.dimension("control_px")?,
-		titlebar_control_gap_px: titlebar.spacing("control_gap_px", scale)?,
-		titlebar_inset_left_px:  titlebar.spacing("inset_left_px", scale)?,
-		titlebar_inset_right_px: titlebar.spacing("inset_right_px", scale)?,
-		grain_tile_px:           grain.dimension("tile_px")?,
-		grain_opacity:           grain.ratio("opacity")?,
+		window_min_width_px:       window.dimension("min_width_px")?,
+		window_min_height_px:      window.dimension("min_height_px")?,
+		titlebar_height_px:        titlebar.dimension("height_px")?,
+		titlebar_control_px:       titlebar.dimension("control_px")?,
+		titlebar_control_gap_px:   titlebar.spacing("control_gap_px", scale)?,
+		titlebar_inset_left_px:    titlebar.spacing("inset_left_px", scale)?,
+		titlebar_inset_right_px:   titlebar.spacing("inset_right_px", scale)?,
+		grain_tile_px:             grain.dimension("tile_px")?,
+		grain_opacity:             grain.ratio("opacity")?,
+		gate_pending_strength:     gate.ratio("pending_strength")?,
+		gate_unavailable_strength: gate.ratio("unavailable_strength")?,
 	})
 }

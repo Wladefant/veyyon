@@ -28,3 +28,19 @@ inset_right_px = "s6"
 [grain]
 tile_px = 128
 opacity = 0.025
+
+# A control whose capability request is in flight renders in place at this
+# strength, with activation suppressed and no spinner under 400ms (§4.3). It is
+# declared once here because every surface that draws a pending control reads
+# the same value; a surface that picked its own produced the measured defect
+# where the terminal drawer's action strip fell to 0.104 and its labels stopped
+# being legible rather than reading as dimmed.
+[gate]
+pending_strength = 0.6
+# A control the operator can see and cannot activate renders muted at this
+# strength. That covers a capability the host reported unavailable, whose
+# reason stays readable at the control with no retry (§4.3), and a control a
+# primitive draws disabled, which resolves the same strength through
+# ControlMetrics::disabled_opacity. It sits below pending_strength so a
+# request in flight reads as in flight rather than as refused.
+unavailable_strength = 0.4

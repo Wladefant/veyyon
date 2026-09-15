@@ -56,8 +56,8 @@ impl RenderOnce for Toggle {
 		// outline never moves when it switches.
 		let stroke = tokens.stroke(StrokeStep::Hairline);
 		let track_w = px(26.0);
-		let track_h = px(16.0);
-		let knob = px(12.0);
+		let track_h = tokens.spacing(SpacingStep::S8);
+		let knob = tokens.spacing(SpacingStep::S6);
 		let radius = tokens.radius(RadiusStep::Full);
 		let inset = tokens.spacing(SpacingStep::S1) - stroke;
 
@@ -104,7 +104,7 @@ impl RenderOnce for Toggle {
 		}
 
 		if disabled {
-			track = track.opacity(0.4);
+			track = track.opacity(tokens.gate().unavailable);
 		} else if let Some(handler) = self.on_toggle {
 			let next_state = !self.checked;
 			track = track.on_click(move |_, window, cx| handler(next_state, window, cx));

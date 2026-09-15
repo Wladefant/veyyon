@@ -7,7 +7,7 @@ use veyyon_gpui::{App, ElementId, IntoElement, RenderOnce, SharedString, Window,
 use crate::{
 	icons::{Icon, IconName, IconSize},
 	state::InteractiveState,
-	token_set::{ColorRole, RadiusStep, SpacingStep, TextRamp, TokenSet},
+	token_set::{ColorRole, RadiusStep, SpacingStep, StrokeStep, TextRamp, TokenSet},
 };
 
 /// Checkbox selection state including indeterminate tri-state.
@@ -94,7 +94,7 @@ impl RenderOnce for Checkbox {
 			.size(box_size)
 			.bg(bg)
 			.rounded(radius)
-			.border_1()
+			.border(tokens.stroke(StrokeStep::Hairline))
 			.border_color(border_color)
 			.flex()
 			.items_center()
@@ -127,7 +127,7 @@ impl RenderOnce for Checkbox {
 		}
 
 		if disabled {
-			return row.opacity(0.4).cursor_not_allowed();
+			return row.opacity(tokens.gate().unavailable).cursor_not_allowed();
 		}
 		row = row.cursor_pointer();
 		if let Some(handler) = self.on_toggle {
@@ -213,7 +213,7 @@ impl RenderOnce for Radio {
 		let outer_circle = div()
 			.size(outer_size)
 			.rounded(radius)
-			.border_1()
+			.border(tokens.stroke(StrokeStep::Hairline))
 			.border_color(border_color)
 			.flex()
 			.items_center()
@@ -239,7 +239,7 @@ impl RenderOnce for Radio {
 		}
 
 		if disabled {
-			return row.opacity(0.4).cursor_not_allowed();
+			return row.opacity(tokens.gate().unavailable).cursor_not_allowed();
 		}
 		row = row.cursor_pointer();
 		if let Some(handler) = self.on_select {

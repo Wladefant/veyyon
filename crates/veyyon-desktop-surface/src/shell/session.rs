@@ -7,7 +7,7 @@
 
 use std::{cell::Cell, rc::Rc};
 
-use veyyon_desktop_kit::{Axis, Resizable, SpacingStep, TextSelection, input::Editor};
+use veyyon_desktop_kit::{Axis, ColorRole, Resizable, SpacingStep, TextSelection, input::Editor};
 use veyyon_desktop_tokens::DrawerPlacement;
 use veyyon_gpui::{
 	Context, Div, Entity, FocusHandle, InteractiveElement, MouseButton, ParentElement, Pixels,
@@ -18,7 +18,7 @@ use super::keys::bind_composer_keys;
 use crate::{
 	ShellView,
 	cards::card_stack,
-	composer::{ComposerLocal, composer, opening_line, run_bar},
+	composer::{ComposerLocal, MIN_COMPOSER_WIDTH_PX, composer, opening_line, run_bar},
 	damage::{LaidOut, Region},
 	drawer::{SupervisorFields, terminal_drawer},
 	layout::ShellWidths,
@@ -54,49 +54,42 @@ pub fn session_surface(
 	cx: &Context<ShellView>,
 ) -> Div {
 	let tokens = &installed.set;
-	let composer_width = px(widths.composer_px);
+	let is_focused = editor.is_some_and(|ed| ed.read(cx).focus_handle().is_focused(window));
+	let mut local = local;
+	local.focused = is_focused || local.focused;
+	let clamped_composer_px = widths.composer_px.max(MIN_COMPOSER_WIDTH_PX);
+	let composer_width = px(clamped_composer_px);
 	let surface = &installed.surface;
 
-	// The retained list keeps older turns reachable and preserves each
-	// session's anchor.
-	//
-	// The body tracks the focus, so a press anywhere in it hands the keyboard
-	// to the transcript: the `Transcript` context reaches a keystroke only
-	// along the focus path, and the composer beside it holds the focus until
-	// something takes it (§5.14).
-	let mut body = div()
-		.key_context("Transcript")
-		.track_focus(transcript_focus)
-		.flex()
-		.flex_col()
-		.justify_end()
-		.w_full()
-		.flex_1()
-		.overflow_hidden()
-		.px(tokens.spacing(SpacingStep::S4))
-		.pt(tokens.spacing(SpacingStep::S4));
-
-	body = if state.transcript.is_empty() {
-		body.justify_center().child(opening_line(
-			"What should this session do?",
-			&surface.composer,
-			tokens,
-		))
+	let has_transcript = !state.transcript.is_empty();
+	let body = if has_transcript {
+		div()
+			.key_context("Transcript")
+			.track_focus(transcript_focus)
+			.flex()
+			.flex_col()
+			.justify_end()
+			.w_full()
+			.flex_1()
+			.overflow_hidden()
+			.px(tokens.spacing(SpacingStep::S4))
+			.pt(tokens.spacing(SpacingStep::S4))
+			.child(transcript_viewport(
+				viewport,
+				&surface.transcript,
+				installed.user_turn_ground,
+				tokens,
+				&installed.motion,
+				reduced_motion,
+				laid_out,
+				widths.composer_px,
+				0.0,
+				selection,
+				window,
+				cx,
+			))
 	} else {
-		body.child(transcript_viewport(
-			viewport,
-			&surface.transcript,
-			installed.user_turn_ground,
-			tokens,
-			&installed.motion,
-			reduced_motion,
-			laid_out,
-			widths.composer_px,
-			0.0,
-			selection,
-			window,
-			cx,
-		))
+		div()
 	};
 
 	// An overlaid right panel dims the region it annotates: the transcript it
@@ -118,13 +111,15 @@ pub fn session_surface(
 			.child(float),
 	};
 
-	// The children below, in order, so a child's index resolves to its region.
-	let mut regions = vec![Region::Transcript];
+	let mut regions = Vec::new();
+	if has_transcript {
+		regions.push(Region::Transcript);
+	}
 	if !state.cards.is_empty() {
 		regions.push(Region::Cards);
 	}
 	regions.extend([Region::Composer, Region::RunBar]);
-	if state.drawer_open {
+	if state.drawer_open && state.drawer.offered {
 		regions.push(Region::Drawer);
 	}
 
@@ -159,17 +154,59 @@ pub fn session_surface(
 		None => div().key_context("Composer"),
 	};
 
-	let column = div()
+	let mut column = div()
 		.relative()
 		.flex()
 		.flex_col()
 		.flex_1()
 		.min_w_0()
 		.h_full()
+		.bg(tokens.color(ColorRole::Canvas))
 		.overflow_hidden()
 		.gap(tokens.spacing(SpacingStep::S3))
-		.pb(tokens.spacing(SpacingStep::S3))
-		.child(body)
+		.pb(tokens.spacing(SpacingStep::S3));
+	let session_error = if state.current_id > 0 {
+		let sid = veyyon_desktop_model::SessionId::from(state.current_id.to_string());
+		state
+			.controls
+			.error(&veyyon_desktop_model::SurfaceId::ComposerSendButton(sid.clone()))
+			.or_else(|| {
+				state
+					.controls
+					.error(&veyyon_desktop_model::SurfaceId::QueueSessionRow(sid))
+			})
+	} else {
+		None
+	};
+	if let Some(err) = session_error {
+		column = column.child(session_error_strip(err, composer_width, tokens));
+	}
+
+	if state.current_id == 0 {
+		column = column.justify_center().child(
+			div()
+				.w_full()
+				.px(tokens.spacing(SpacingStep::S4))
+				.flex()
+				.flex_row()
+				.justify_center()
+				.child(opening_line("Create a session to begin", &surface.composer, tokens)),
+		);
+	} else if has_transcript {
+		column = column.child(body);
+	} else {
+		column = column.justify_center().child(
+			div()
+				.w_full()
+				.px(tokens.spacing(SpacingStep::S4))
+				.flex()
+				.flex_row()
+				.justify_center()
+				.child(opening_line("What should this session do?", &surface.composer, tokens)),
+		);
+	}
+
+	let column = column
 		.children((!state.cards.is_empty()).then(|| {
 			// The stack shares the composer's measure and sits directly above
 			// it, so a decision and the reply to it occupy one column.
@@ -179,7 +216,7 @@ pub fn session_surface(
 				.flex()
 				.flex_row()
 				.justify_center()
-				.child(div().w(px(widths.composer_px)).child(card_stack(
+				.child(div().w(composer_width).child(card_stack(
 					&state.cards,
 					&state.card_answers,
 					&surface.attached_cards,
@@ -223,7 +260,7 @@ pub fn session_surface(
 				.px(tokens.spacing(SpacingStep::S4))
 				.child(run_bar(
 					state.run_status.clone(),
-					widths.composer_px,
+					clamped_composer_px,
 					widths.labels.run_bar,
 					state.turn.is_stoppable(),
 					state.current_id,
@@ -233,27 +270,30 @@ pub fn session_surface(
 					cx,
 				)),
 		)
-		.children((state.drawer_open && widths.drawer.placement == DrawerPlacement::Overlay).then(
-			|| {
-				div()
-					.absolute()
-					.bottom_0()
-					.left_0()
-					.right_0()
-					.child(terminal_drawer(
-						&state.drawer,
-						DrawerPlacement::Overlay,
-						widths.drawer.height_px,
-						&state.controls,
-						state.current_id,
-						supervisor,
-						&surface.panels,
-						tokens,
-						laid_out,
-						cx,
-					))
-			},
-		));
+		.children(
+			(state.drawer_open
+				&& state.drawer.offered
+				&& widths.drawer.placement == DrawerPlacement::Overlay)
+				.then(|| {
+					div()
+						.absolute()
+						.bottom_0()
+						.left_0()
+						.right_0()
+						.child(terminal_drawer(
+							&state.drawer,
+							DrawerPlacement::Overlay,
+							widths.drawer.height_px,
+							&state.controls,
+							state.current_id,
+							supervisor,
+							&surface.panels,
+							tokens,
+							laid_out,
+							cx,
+						))
+				}),
+		);
 	let column = column.children(find_bar.map(|bar| {
 		div()
 			.absolute()
@@ -262,7 +302,7 @@ pub fn session_surface(
 			.child(bar)
 	}));
 	let column = laid_out.track_children(column, move |index| regions.get(index).copied());
-	if state.drawer_open && widths.drawer.placement == DrawerPlacement::Row {
+	if state.drawer_open && state.drawer.offered && widths.drawer.placement == DrawerPlacement::Row {
 		let extent = widths.columns_px.max(1.0);
 		let maximum = extent * surface.panels.terminal_drawer_max_viewport_ratio;
 		let minimum = surface.panels.terminal_drawer_min_height_px.min(maximum);
@@ -303,4 +343,73 @@ pub fn session_surface(
 	} else {
 		column
 	}
+}
+fn session_error_strip(
+	err: &crate::controls::ControlError,
+	width: Pixels,
+	tokens: &veyyon_desktop_kit::TokenSet,
+) -> Div {
+	let font_size = tokens.font_size(veyyon_desktop_kit::TextRamp::Micro);
+	let line_h = tokens.line_height(veyyon_desktop_kit::TextRamp::Micro);
+	let ink = tokens.color(ColorRole::AttentionInk);
+	let btn = |label, fill| {
+		let b = div()
+			.px(tokens.spacing(SpacingStep::S2))
+			.py(tokens.spacing(SpacingStep::S0))
+			.rounded(tokens.radius(veyyon_desktop_kit::RadiusStep::Xs))
+			.text_size(font_size)
+			.cursor(veyyon_gpui::CursorStyle::PointingHand)
+			.child(label);
+		if fill {
+			b.bg(ink).text_color(tokens.color(ColorRole::AttentionFill))
+		} else {
+			b.border(tokens.stroke(veyyon_desktop_kit::StrokeStep::Hairline))
+				.border_color(ink)
+				.text_color(ink)
+		}
+	};
+	div()
+		.w_full()
+		.px(tokens.spacing(SpacingStep::S4))
+		.flex()
+		.justify_center()
+		.child(
+			div()
+				.w(width)
+				.flex()
+				.items_center()
+				.justify_between()
+				.px(tokens.spacing(SpacingStep::S3))
+				.py(tokens.spacing(SpacingStep::S2))
+				.rounded(tokens.radius(veyyon_desktop_kit::RadiusStep::Sm))
+				.bg(tokens.color(ColorRole::AttentionFill))
+				.border(tokens.stroke(veyyon_desktop_kit::StrokeStep::Hairline))
+				.border_color(ink)
+				.child(
+					div()
+						.flex()
+						.items_center()
+						.gap(tokens.spacing(SpacingStep::S2))
+						.min_w_0()
+						.child(div().text_size(font_size).text_color(ink).child("⚠"))
+						.child(
+							div()
+								.text_size(font_size)
+								.line_height(line_h)
+								.text_color(ink)
+								.min_w_0()
+								.truncate()
+								.child(err.message.clone()),
+						),
+				)
+				.child(
+					div()
+						.flex()
+						.items_center()
+						.gap(tokens.spacing(SpacingStep::S2))
+						.flex_shrink_0()
+						.children((err.retryable).then(|| btn("Retry", true)))
+						.child(btn("Dismiss", false)),
+				),
+		)
 }

@@ -224,13 +224,22 @@ impl ControlStates {
 
 /// Resolves visual presentation parameters (opacity, cursor,
 /// `activation_allowed`) from availability (§4.3).
+///
+/// This is the only place an availability state becomes a strength. A surface
+/// that restated the ratio produced the measured defect where the terminal
+/// drawer's action strip dimmed twice and its labels stopped being legible.
+/// `Enabled` and `Unknown` resolve identically, because an unanswered
+/// capability renders at rest and attaches on activation rather than drawing
+/// disabled.
 #[must_use]
-pub const fn availability_style(av: &Availability, _tokens: &TokenSet) -> (f32, CursorStyle, bool) {
+pub fn availability_style(av: &Availability, tokens: &TokenSet) -> (f32, CursorStyle, bool) {
+	let gate = tokens.gate();
 	match av {
-		Availability::Enabled => (1.0, CursorStyle::PointingHand, true),
-		Availability::Pending => (0.6, CursorStyle::OperationNotAllowed, false),
-		Availability::Unavailable { .. } => (0.4, CursorStyle::OperationNotAllowed, false),
-		Availability::Unknown => (1.0, CursorStyle::PointingHand, true),
+		Availability::Enabled | Availability::Unknown => (1.0, CursorStyle::PointingHand, true),
+		Availability::Pending => (gate.pending, CursorStyle::OperationNotAllowed, false),
+		Availability::Unavailable { .. } => {
+			(gate.unavailable, CursorStyle::OperationNotAllowed, false)
+		},
 	}
 }
 

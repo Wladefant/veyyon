@@ -293,15 +293,17 @@ impl BreakpointsSurfaceTokens {
 /// Window and titlebar geometry (§4.1).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ShellSurfaceTokens {
-	pub window_min_width_px:     f32,
-	pub window_min_height_px:    f32,
-	pub titlebar_height_px:      f32,
-	pub titlebar_control_px:     f32,
-	pub titlebar_control_gap_px: f32,
-	pub titlebar_inset_left_px:  f32,
-	pub titlebar_inset_right_px: f32,
-	pub grain_tile_px:           f32,
-	pub grain_opacity:           f32,
+	pub window_min_width_px:       f32,
+	pub window_min_height_px:      f32,
+	pub titlebar_height_px:        f32,
+	pub titlebar_control_px:       f32,
+	pub titlebar_control_gap_px:   f32,
+	pub titlebar_inset_left_px:    f32,
+	pub titlebar_inset_right_px:   f32,
+	pub grain_tile_px:             f32,
+	pub grain_opacity:             f32,
+	pub gate_pending_strength:     f32,
+	pub gate_unavailable_strength: f32,
 }
 
 /// All surface geometry token groups combined.

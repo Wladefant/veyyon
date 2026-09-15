@@ -10,7 +10,7 @@ pub use veyyon_desktop_tokens::{
 	ColorRole, ElevationTokens, MonoSizeStep, RadiusStep, RgbColor, ScaleTokens, SpacingStep,
 	StrokeStep, Theme, TokenError, Tokens, load_bundled_theme, load_bundled_tokens,
 };
-use veyyon_gpui::{App, FontWeight, Hsla, Pixels, SharedString, px};
+use veyyon_gpui::{App, BoxShadow, FontWeight, Hsla, Pixels, SharedString, point, px};
 
 use crate::families::{MonoMetrics, first_family, present_family};
 
@@ -32,13 +32,14 @@ impl TextRamp {
 	/// Maps typographic ramp to discrete size step index.
 	#[must_use]
 	pub const fn to_size_step(self) -> veyyon_desktop_tokens::TypeSizeStep {
+		use veyyon_desktop_tokens::TypeSizeStep as S;
 		match self {
-			Self::Micro => veyyon_desktop_tokens::TypeSizeStep::Micro,
-			Self::Small => veyyon_desktop_tokens::TypeSizeStep::Small,
-			Self::Body => veyyon_desktop_tokens::TypeSizeStep::Body,
-			Self::Read => veyyon_desktop_tokens::TypeSizeStep::Read,
-			Self::Head => veyyon_desktop_tokens::TypeSizeStep::Head,
-			Self::Lead => veyyon_desktop_tokens::TypeSizeStep::Lead,
+			Self::Micro => S::Micro,
+			Self::Small => S::Small,
+			Self::Body => S::Body,
+			Self::Read => S::Read,
+			Self::Head => S::Head,
+			Self::Lead => S::Lead,
 		}
 	}
 }
@@ -56,10 +57,11 @@ impl TextWeight {
 	/// Maps typographic weight to discrete weight step index.
 	#[must_use]
 	pub const fn to_weight_step(self) -> veyyon_desktop_tokens::TypeWeightStep {
+		use veyyon_desktop_tokens::TypeWeightStep as W;
 		match self {
-			Self::Regular => veyyon_desktop_tokens::TypeWeightStep::Regular,
-			Self::Medium => veyyon_desktop_tokens::TypeWeightStep::Medium,
-			Self::Semibold => veyyon_desktop_tokens::TypeWeightStep::Semibold,
+			Self::Regular => W::Regular,
+			Self::Medium => W::Medium,
+			Self::Semibold => W::Semibold,
 		}
 	}
 }
@@ -86,34 +88,44 @@ pub struct TintPair {
 
 /// Converts linear RGB color to GPUI HSLA representation.
 fn rgb_to_hsla(rgb: RgbColor) -> Hsla {
-	let red = rgb.r;
-	let green = rgb.g;
-	let blue = rgb.b;
-	let min = red.min(green.min(blue));
-	let max = red.max(green.max(blue));
+	let (r, g, b) = (rgb.r, rgb.g, rgb.b);
+	let (min, max) = (r.min(g.min(b)), r.max(g.max(b)));
 	let delta = max - min;
-	let luminance = f32::midpoint(max, min);
-	let saturation = if delta == 0.0 {
+	let l = f32::midpoint(max, min);
+	let s = if delta == 0.0 {
 		0.0
-	} else if luminance < 0.5 {
+	} else if l < 0.5 {
 		delta / (max + min)
 	} else {
 		delta / (2.0 - max - min)
 	};
-	let hue = if delta == 0.0 {
+	let h = if delta == 0.0 {
 		0.0
-	} else if (max - red).abs() < f32::EPSILON {
-		let mut computed_hue = (green - blue) / delta;
-		if computed_hue < 0.0 {
-			computed_hue += 6.0;
+	} else if (max - r).abs() < f32::EPSILON {
+		let mut h = (g - b) / delta;
+		if h < 0.0 {
+			h += 6.0;
 		}
-		computed_hue / 6.0
-	} else if (max - green).abs() < f32::EPSILON {
-		((blue - red) / delta + 2.0) / 6.0
+		h / 6.0
+	} else if (max - g).abs() < f32::EPSILON {
+		((b - r) / delta + 2.0) / 6.0
 	} else {
-		((red - green) / delta + 4.0) / 6.0
+		((r - g) / delta + 4.0) / 6.0
 	};
-	Hsla { h: hue, s: saturation, l: luminance, a: rgb.a }
+	Hsla { h, s, l, a: rgb.a }
+}
+
+/// Interactive strength an availability state renders at, authored in
+/// `surface/shell.toml` under `[gate]` (§4.3).
+///
+/// These are resolved once at construction so a primitive reads a strength
+/// from the installed token set rather than restating the ratio at each
+/// control, which is how two controls drift to different dimming for the same
+/// state.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GateStrengths {
+	pub pending:     f32,
+	pub unavailable: f32,
 }
 
 /// Resolved design token set stored in GPUI context.
@@ -128,6 +140,7 @@ pub struct TokenSet {
 	elevation:    Option<ElevationTokens>,
 	mono_family:  SharedString,
 	ui_family:    SharedString,
+	gate:         GateStrengths,
 }
 
 impl Default for TokenSet {
@@ -173,7 +186,7 @@ impl TokenSet {
 		let mut row_hover = hairline;
 		row_hover.a = 0.50;
 		let mut row_selected = hairline;
-		row_selected.a = 0.70;
+		row_selected.a = 0.60;
 		let mut row_active = hairline;
 		row_active.a = 0.80;
 		// An overlay's scrim is the window's own ground at partial opacity, so
@@ -196,7 +209,17 @@ impl TokenSet {
 			elevation: Some(tokens.elevation.clone()),
 			mono_family: SharedString::from(mono_family),
 			ui_family: SharedString::from(ui_family),
+			gate: GateStrengths {
+				pending:     tokens.surface.shell.gate_pending_strength,
+				unavailable: tokens.surface.shell.gate_unavailable_strength,
+			},
 		})
+	}
+
+	/// Returns the authored strengths for each gated availability state.
+	#[must_use]
+	pub const fn gate(&self) -> GateStrengths {
+		self.gate
 	}
 
 	/// Selects the monospace family from the authored chain, given the families
@@ -270,7 +293,6 @@ impl TokenSet {
 		self.scrim
 	}
 
-	/// Resolves tint pair for a semantic tint role.
 	#[must_use]
 	pub fn tint(&self, role: TintRole) -> TintPair {
 		let (fill_role, ink_role) = match role {
@@ -320,16 +342,13 @@ impl TokenSet {
 		MonoMetrics { size: px(size.size), line_height: px(size.line_height) }
 	}
 
-	/// The family monospace text is set in (§6.3), chosen from the authored
-	/// chain by `resolve_mono_family` against the families this machine has.
+	/// The family monospace text is set in (§6.3).
 	#[must_use]
 	pub fn mono_family(&self) -> SharedString {
 		self.mono_family.clone()
 	}
 
-	/// The family every other text run is set in (§6.3), chosen from the
-	/// authored chain by `resolve_ui_family` against the families this machine
-	/// has.
+	/// The family proportional text is set in (§6.3).
 	#[must_use]
 	pub fn ui_family(&self) -> SharedString {
 		self.ui_family.clone()
@@ -349,6 +368,141 @@ impl TokenSet {
 	#[must_use]
 	pub fn stroke(&self, step: StrokeStep) -> Pixels {
 		px(self.scale.stroke(step))
+	}
+
+	/// Resolves background color for float elevation (level 4) with token
+	/// opacity.
+	#[must_use]
+	pub fn float_ground(&self) -> Hsla {
+		let mut bg = self.color(ColorRole::Float);
+		let op = self
+			.elevation
+			.as_ref()
+			.and_then(|e| e.float().ground_opacity)
+			.unwrap_or(0.82);
+		bg.a = op;
+		bg
+	}
+
+	/// Resolves backdrop blur radius in pixels for floating surfaces.
+	#[must_use]
+	pub fn float_blur(&self) -> Pixels {
+		self
+			.elevation
+			.as_ref()
+			.map_or(px(20.0), |e| px(e.float().blur_px))
+	}
+
+	/// Resolves backdrop blur radius for menu and dialog frosted overlays
+	/// (§2.1).
+	#[must_use]
+	pub fn overlay_blur(&self) -> Pixels {
+		px(44.0)
+	}
+
+	/// Resolves backdrop saturation factor for floating surfaces.
+	#[must_use]
+	pub fn float_saturation(&self) -> f32 {
+		self
+			.elevation
+			.as_ref()
+			.and_then(|e| e.float().saturation)
+			.unwrap_or(1.06)
+	}
+
+	/// Resolves top inner highlight color for lit top edges (§6.5).
+	#[must_use]
+	pub fn inner_highlight(&self) -> Hsla {
+		let is_dark = self.color(ColorRole::Ground).l < 0.5;
+		if is_dark {
+			Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.12 }
+		} else {
+			Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.85 }
+		}
+	}
+
+	/// Resolves whether grain is enabled on level 0 (shell ground) (§6.5).
+	#[must_use]
+	pub fn grain_enabled(&self) -> bool {
+		self
+			.elevation
+			.as_ref()
+			.map_or(true, |e| e.shell_ground().grain_enabled)
+	}
+
+	/// Resolves grain opacity for level 0 (shell ground) (§6.5).
+	#[must_use]
+	pub fn grain_opacity(&self) -> f32 {
+		self
+			.elevation
+			.as_ref()
+			.and_then(|e| e.shell_ground().grain_opacity)
+			.unwrap_or(0.025)
+	}
+
+	/// Resolves grain texture name for level 0 (§6.5).
+	#[must_use]
+	pub fn grain_texture(&self) -> Option<&str> {
+		self
+			.elevation
+			.as_ref()
+			.and_then(|e| e.shell_ground().grain_texture.as_deref())
+	}
+
+	/// Resolves physically plausible layered shadows for a float at a given rise
+	/// (§6.5).
+	#[must_use]
+	pub fn float_shadows_elevation(&self, rise_px: f32) -> Vec<BoxShadow> {
+		let is_dark = self.color(ColorRole::Ground).l < 0.5;
+		let base_op = self
+			.elevation
+			.as_ref()
+			.and_then(|e| e.float().shadow_opacity)
+			.unwrap_or(0.45);
+		let key_y = (rise_px * 0.20).clamp(1.0, 8.0);
+		let key_blur = (rise_px * 0.40).clamp(2.0, 16.0);
+		let key_spread = (-rise_px * 0.08).clamp(-4.0, 0.0);
+		let amb_y = (rise_px * 0.65).clamp(4.0, 24.0);
+		let amb_blur = (rise_px * 1.50).clamp(12.0, 48.0);
+		let amb_spread = (-rise_px * 0.75).clamp(-20.0, -2.0);
+		let (mut key_c, mut amb_c) = if is_dark {
+			(self.color(ColorRole::Ground), self.color(ColorRole::Ground))
+		} else {
+			(self.color(ColorRole::Foreground), self.color(ColorRole::Foreground))
+		};
+		let (k_mul, a_mul) = if is_dark { (0.55, 0.45) } else { (0.22, 0.18) };
+		key_c.a = base_op * k_mul;
+		amb_c.a = base_op * a_mul;
+		vec![
+			BoxShadow {
+				color:         amb_c,
+				offset:        point(px(0.0), px(amb_y)),
+				blur_radius:   px(amb_blur),
+				spread_radius: px(amb_spread),
+				inset:         false,
+			},
+			BoxShadow {
+				color:         key_c,
+				offset:        point(px(0.0), px(key_y)),
+				blur_radius:   px(key_blur),
+				spread_radius: px(key_spread),
+				inset:         false,
+			},
+			BoxShadow {
+				color:         self.inner_highlight(),
+				offset:        point(px(0.0), px(1.0)),
+				blur_radius:   px(0.0),
+				spread_radius: px(0.0),
+				inset:         true,
+			},
+		]
+	}
+
+	/// Resolves default level 4 box shadow set (outer drop shadows + inner top
+	/// highlight).
+	#[must_use]
+	pub fn float_shadows(&self) -> Vec<BoxShadow> {
+		self.float_shadows_elevation(24.0)
 	}
 }
 
