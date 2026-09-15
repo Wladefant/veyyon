@@ -1012,7 +1012,7 @@ Provider endpoint defaults for the current OpenAI-compatible integrations:
 - NVIDIA: `https://integrate.api.nvidia.com/v1`
 - NanoGPT: `https://nano-gpt.com/api/v1`
 - Novita: `https://api.novita.ai/openai/v1`
-- Command Code: `https://api.commandcode.ai/provider/v1` (keys: `https://commandcode.ai/studio/provider`; default model: `moonshotai/Kimi-K2.7-Code`)
+- Command Code: `https://api.commandcode.ai/provider/v1` (keys: `https://commandcode.ai/studio/provider`; default model: `claude-sonnet-4-6`)
 - Nous Research: `https://inference-api.nousresearch.com/v1` (device-flow login `/login nous-research`, pasted-key login `/login nous-research-api-key`; default model: `anthropic/claude-sonnet-4.6`)
 - Hugging Face Inference: `https://router.huggingface.co/v1`
 - Venice: `https://api.venice.ai/api/v1`
