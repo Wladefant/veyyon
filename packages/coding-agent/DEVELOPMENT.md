@@ -242,6 +242,16 @@ Center dashboard's.
 - [natives-text-search-pipeline.md](../../docs/internal/natives-text-search-pipeline.md), [natives-shell-pty-process.md](../../docs/internal/natives-shell-pty-process.md), [natives-media-system-utils.md](../../docs/internal/natives-media-system-utils.md)
 - [natives-build-release-debugging.md](../../docs/internal/natives-build-release-debugging.md), [natives-rust-task-cancellation.md](../../docs/internal/natives-rust-task-cancellation.md), [porting-to-natives.md](../../docs/internal/porting-to-natives.md)
 
+### Native desktop (`crates/veyyon-desktop*`, `crates/veyyon-gpui`)
+- Front end binary (`crates/veyyon-desktop`): [index.md](../../docs/handbook/src/desktop/index.md)
+- Surfaces (`crates/veyyon-desktop-surface`): [surfaces.md](../../docs/handbook/src/desktop/surfaces.md)
+- UI primitive kit (`crates/veyyon-desktop-kit`): [surfaces.md](../../docs/handbook/src/desktop/surfaces.md)
+- Protocol model (`crates/veyyon-desktop-model`): [index.md](../../docs/handbook/src/desktop/index.md)
+- Motion subsystem (`crates/veyyon-desktop-motion`): [motion.md](../../docs/handbook/src/desktop/motion.md)
+- Design tokens (`crates/veyyon-desktop-tokens`): [tokens.md](../../docs/handbook/src/desktop/tokens.md)
+- Scene evaluation (`crates/veyyon-desktop-scene`): [index.md](../../docs/handbook/src/desktop/index.md)
+- GPUI integration (`crates/veyyon-gpui`): [index.md](../../docs/handbook/src/desktop/index.md), [`crates/veyyon-gpui/README.md`](../../crates/veyyon-gpui/README.md)
+
 ### Build, release, and porting
 - [releasing.md](../../docs/internal/releasing.md) — cut a release (versioning, `release.ts`, CI)
 - [deployment.md](../../docs/internal/deployment.md) — ship the website + binaries; install endpoints

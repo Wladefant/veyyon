@@ -80,20 +80,17 @@ stays up with no window and the dock icon opens one again, in the placement,
 appearance and session the closed window left; everywhere else a process with
 no window has no way in, so it ends with the window.
 
-## Tabs and spaces
+## Sessions and drafts
 
-The session-tab row is below the space row. Select a tab to open its session;
-drag a tab to reorder it. A session already open in the space selects its
-existing tab rather than creating a duplicate.
+The queue rail lists every session by partition. Select a row to open its
+session. The titlebar states the open session's name; edit it to rename the
+session.
 
-**New space** creates a separate tab layout. Edit the space name and press
-`Enter` to rename it. Switching spaces restores the selected session, queue
-layout and workspace panels. Space order remains stable when selection changes.
+`Primary-W` closes the active right-panel tab. With one tab or none it parks
+the open session instead.
 
-Unsent text and attachments remain associated with their session. Closing a tab
-with an unsent draft requires confirmation. **Cancel** retains the tab;
-**Close tab** closes it without deleting the saved draft. Closing and reopening
-the application restores the selected space, tabs and draft attachments.
+Unsent text and attachments remain associated with their session. Closing and
+reopening the application restores the open session and its draft attachments.
 
 ## History
 
@@ -466,6 +463,29 @@ prompt out of the queue and put its text back in the draft. The queue releases
 prompts newest first, so there is no per-prompt removal control. The strip is
 absent while the queue is empty.
 
+## Run bar
+
+The run bar appears directly below the composer while a turn is active. It is
+28 pixels tall and spans the width of the composer.
+
+The bar displays three elements:
+
+1. **Status badge**: A chip indicating turn state (`Working`, `Approval`,
+   `Input`, `Plan`, or `Watching`) using the role tint defined in the active theme.
+2. **Detail line**: Text beside the badge describing active operations. This
+   line reports the running tool, the waiting tool command, the question text,
+   the first line of a pending plan, or the names of supervised processes. The
+   text truncates when it exceeds available bar width.
+3. **Stop action**: An abort control displayed when the turn is stoppable.
+   At window widths above 560 pixels, the control displays the text label `Stop`.
+   Below 560 pixels, the text label is replaced by a stop icon.
+
+When turn control is unavailable from the host, the stop control is drawn muted
+with reduced opacity, and pointer interaction is disabled. When turn control
+is available, hovering the control applies a background fill, and selecting it
+sends an abort request to the host. When no turn is active or stoppable, the
+stop control is omitted.
+
 ## Attached decisions
 
 A decision the agent is waiting on attaches directly above the composer, in the
@@ -689,6 +709,21 @@ column stays where it is. A vertical gesture scrolls the file under both
 columns. A sideways gesture scrolls the code alone. Each pane draws the rows
 and the columns inside its own box, so a file of any length costs a frame the
 size of the panel.
+
+A diff's file header states the file's status as a badge beside its path. A
+modified file has no badge; it is the ordinary case:
+
+| Badge | Status |
+| --- | --- |
+| none | Modified |
+| `new` | Added |
+| `deleted` | Deleted |
+| `renamed` | Renamed. The header states `old → new` |
+| `conflict` | In an unresolved merge conflict |
+| `untracked` | Present in the working tree and not in the index |
+
+The set is exhaustive: every status the host sends draws its badge, or is the
+modified case.
 
 The panel docks as a resizable column beside the transcript. Below 980px it
 floats at the trailing edge over the transcript, behind a blurred scrim. A
