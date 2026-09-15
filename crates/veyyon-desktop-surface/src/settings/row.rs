@@ -66,7 +66,7 @@ pub fn setting_row_with_secondary(
 		.whitespace_nowrap()
 		.truncate()
 		.text_size(tokens.font_size(TextRamp::Read))
-		.line_height(px(20.0))
+		.line_height(tokens.spacing(SpacingStep::S9))
 		.font_weight(tokens.font_weight(TextWeight::Medium))
 		.text_color(label_color)
 		.child(one_line(label));
@@ -83,7 +83,7 @@ pub fn setting_row_with_secondary(
 			.whitespace_nowrap()
 			.truncate()
 			.text_size(tokens.font_size(TextRamp::Small))
-			.line_height(px(16.0))
+			.line_height(tokens.spacing(SpacingStep::S8))
 			.text_color(tokens.color(ColorRole::Muted))
 			.child(one_line(desc))
 	});
@@ -159,18 +159,103 @@ fn one_line(text: &str) -> String {
 	text.split_whitespace().collect::<Vec<&str>>().join(" ")
 }
 
-/// Renders an empty-state message row spanning the full row width with muted
-/// typography.
-pub fn empty_state_row(message: &str, geometry: &SettingsSurfaceTokens, tokens: &TokenSet) -> Div {
+/// Renders the settings body's empty state, stating the condition and the
+/// corrective action, with the same two-part presentation as
+/// `right_panel/empty.rs`.
+///
+/// This leaves the row grid rather than sitting on it. A row's declared height
+/// is measured for one line, and the two lines here overflow it by 4px, which
+/// clips the descenders of the action. An empty state is the whole body when
+/// the list is empty, not a row among rows, so it takes its height from its
+/// content and centres in the space the rows would have filled.
+pub fn empty_state_row(
+	condition: &str,
+	action: &str,
+	geometry: &SettingsSurfaceTokens,
+	tokens: &TokenSet,
+) -> Div {
 	div()
-		.h(px(geometry.row_height_px))
-		.flex_shrink_0()
 		.w_full()
+		.flex_shrink_0()
+		.flex()
+		.flex_col()
+		.items_center()
+		.justify_center()
+		.gap(tokens.spacing(SpacingStep::S1))
+		.py(px(geometry.row_height_px))
+		.child(
+			div()
+				.text_size(tokens.font_size(TextRamp::Small))
+				.line_height(tokens.line_height(TextRamp::Small))
+				.font_weight(tokens.font_weight(TextWeight::Medium))
+				.text_color(tokens.color(ColorRole::Foreground))
+				.child(condition.to_string()),
+		)
+		.child(
+			div()
+				.text_size(tokens.font_size(TextRamp::Micro))
+				.line_height(tokens.line_height(TextRamp::Micro))
+				.text_color(tokens.color(ColorRole::Muted))
+				.child(action.to_string()),
+		)
+}
+
+/// Shortens a filesystem path for display: collapses home directory to `~`
+/// and intermediate directories if the path is long, matching `shortenPath`.
+#[must_use]
+pub fn shorten_path(raw: &str) -> String {
+	let path = raw.replace('\\', "/");
+	let shortened = if let Ok(home) = std::env::var("HOME") {
+		let home_norm = home.replace('\\', "/");
+		if path.starts_with(&home_norm) {
+			format!("~{}", &path[home_norm.len()..])
+		} else {
+			path
+		}
+	} else if let Some(stripped) = path.strip_prefix("/home/").or_else(|| path.strip_prefix("/Users/")) {
+		if let Some(pos) = stripped.find('/') {
+			format!("~{}", &stripped[pos..])
+		} else {
+			path
+		}
+	} else {
+		path
+	};
+
+	if shortened.len() > 36 {
+		let parts: Vec<&str> = shortened.split('/').filter(|p| !p.is_empty()).collect();
+		if parts.len() > 2 {
+			let first = parts[0];
+			let last = parts[parts.len() - 1];
+			format!("{first}/…/{last}")
+		} else {
+			shortened
+		}
+	} else {
+		shortened
+	}
+}
+
+/// Renders a settings group header row (§5.9, §6.4).
+pub fn group_header_row(
+	title: &str,
+	is_first: bool,
+	geometry: &SettingsSurfaceTokens,
+	tokens: &TokenSet,
+) -> Div {
+	let pt = if is_first {
+		px(0.0)
+	} else {
+		px(geometry.group_gap)
+	};
+	div()
+		.h(tokens.spacing(SpacingStep::S9))
+		.pt(pt)
+		.pb(tokens.spacing(SpacingStep::S2))
 		.flex()
 		.items_center()
-		.justify_start()
-		.text_size(tokens.font_size(TextRamp::Read))
-		.line_height(px(20.0))
+		.text_size(tokens.font_size(TextRamp::Small))
+		.font_weight(tokens.font_weight(TextWeight::Semibold))
 		.text_color(tokens.color(ColorRole::Muted))
-		.child(message.to_string())
+		.child(title.to_uppercase())
 }
