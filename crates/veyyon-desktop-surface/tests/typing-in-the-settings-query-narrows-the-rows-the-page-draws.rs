@@ -20,21 +20,19 @@
 //! list, which `the-general-settings-list-virtualizes-and-preserves-scroll`
 //! owns.
 
-use std::path::Path;
+mod support;
 
 use serde_json::Value;
-use veyyon_desktop_kit::{load_bundled_theme, load_bundled_tokens};
 use veyyon_desktop_model::{SettingEntry, SettingKind, SettingsView};
 use veyyon_desktop_scene::{
 	HeadlessSession,
-	headless::{Headless, RenderOptions, headless_context},
+	headless::{Headless, headless_context},
 };
 use veyyon_desktop_surface::{
-	ConnectionPhase, FieldKey, Overlay, SettingsPage, SettingsState, ShellState, ShellView,
-	install_tokens, navigation::SurfaceRoute,
+	FieldKey, Overlay, SettingsPage, SettingsState, ShellView, navigation::SurfaceRoute,
 };
-use veyyon_desktop_tokens::MotionModel;
-use veyyon_gpui::{App, AppContext};
+
+use support::general_settings_list::open_general_settings_session;
 
 /// The keys the page is given. One carries the query's text in its key, one in
 /// its description, and the rest match nothing it is typed.
@@ -79,31 +77,7 @@ fn settings_view() -> SettingsView {
 /// The window with the General page open, sized wide enough that the sheet
 /// draws its field and its rows rather than shedding either.
 fn open_general(cx: &mut Headless) -> HeadlessSession<'_, ShellView> {
-	let mut tokens = load_bundled_tokens().expect("bundled tokens load");
-	let MotionModel::SpringFade(float) = &mut tokens.motion.float.model else {
-		panic!("the float role must use its spring-fade model");
-	};
-	float.rise_px = 0.0;
-	float.fade_duration_ms = 0;
-	let theme = load_bundled_theme("dark").expect("bundled theme loads");
-
-	let mut settings = SettingsState::new(SettingsPage::General);
-	settings.route = Some(SurfaceRoute::Page(SettingsPage::General));
-	settings.settings = settings_view();
-
-	let options =
-		RenderOptions { width: 1180, height: 800, scale_factor: 1.0, ..RenderOptions::default() };
-	HeadlessSession::open(cx, &options, move |_window, app: &mut App| {
-		let installed =
-			install_tokens(app, &tokens, &theme, Path::new("surface")).expect("tokens install");
-		let state = ShellState {
-			connection: ConnectionPhase::Attached,
-			overlay: Some(Overlay::Settings(Box::new(settings))),
-			..ShellState::default()
-		};
-		app.new(|_| ShellView::new(installed, state))
-	})
-	.expect("the settings window opens")
+	open_general_settings_session(cx, settings_view(), true)
 }
 
 /// Focuses the query field the frame retained and types `text` into it,
