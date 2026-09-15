@@ -1548,3 +1548,10 @@ export interface ExtensionError {
 	error: string;
 	stack?: string;
 }
+
+export interface ExtensionReloadResult {
+	path: string;
+	status: "reloaded" | "failed";
+	hookCount?: number;
+	error?: string;
+}

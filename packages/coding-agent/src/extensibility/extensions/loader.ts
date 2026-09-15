@@ -297,7 +297,7 @@ function createExtension(extensionPath: string, resolvedPath: string): LoadedExt
 	};
 }
 
-async function loadExtension(
+export async function loadExtension(
 	extensionPath: string,
 	cwd: string,
 	eventBus: EventBus,

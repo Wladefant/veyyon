@@ -36,6 +36,7 @@ import {
 	resolveConfiguredModelPatterns,
 	resolveModelFromString,
 } from "../config/model-resolver";
+import type { ExtensionReloadResult } from "../extensibility/extensions/types";
 import { PRIORITY_TIER_COMMAND_LABEL, PRIORITY_TIER_LABEL } from "../config/service-tier";
 // The slot leaf, not the 95-module store: this file reads settings, it does not fill them.
 import type { Settings } from "../config/settings";
@@ -829,8 +830,40 @@ const BUILTIN_SLASH_COMMAND_HANDLERS: { [Name in BuiltinSlashCommandName]: Handl
 		handle: async (_command, runtime) => {
 			try {
 				const result = await runtime.settings.reloadConfig();
+				let extensionRunner: { reloadExtensions: () => Promise<ExtensionReloadResult[]> } | undefined;
+				try {
+					extensionRunner = runtime.session?.extensionRunner;
+				} catch {
+					extensionRunner = undefined;
+				}
+
+				const extensionLines: string[] = [];
+				if (extensionRunner) {
+					const reloadResults = await extensionRunner.reloadExtensions();
+					if (reloadResults.length === 0) {
+						extensionLines.push("extensions: none");
+					} else {
+						for (const res of reloadResults) {
+							if (res.status === "reloaded") {
+								extensionLines.push(`extension ${res.path}: reloaded (${res.hookCount ?? 0} hooks)`);
+							} else {
+								extensionLines.push(`extension ${res.path}: reload failed: ${res.error}`);
+							}
+						}
+						try {
+							await runtime.refreshCommands();
+						} catch {
+							// Best-effort command refresh
+						}
+					}
+				} else {
+					extensionLines.push("extensions: none");
+				}
+
+				const configStatus = result.changed.length ? "reloaded" : "unchanged";
 				await runtime.output(
 					[
+						`config: ${configStatus}`,
 						"Config reload processed. Running Main and existing workers keep their model and effort bindings.",
 						...result.outcomes.map(outcome => {
 							const change = result.changed.find(row => row.path === outcome.path);
@@ -843,6 +876,7 @@ const BUILTIN_SLASH_COMMAND_HANDLERS: { [Name in BuiltinSlashCommandName]: Handl
 						result.changed.length
 							? "Applied routing values are used by new spawns."
 							: "No effective routing changes.",
+						...extensionLines,
 					].join("\n"),
 				);
 			} catch (error) {
