@@ -34,8 +34,10 @@ pub struct KeymapState {
 	/// Whether a turn focus change is pending consumption by the viewport.
 	pub pending_turn_focus:      bool,
 	pub focused_block_collapsed: bool,
-	/// Last applied queue selection delta.
-	pub selection_delta:         i32,
+	/// The row the rail's selection cursor is on, which is `None` until an
+	/// arrow moves it off the open session (§5.14). Moving it opens nothing:
+	/// `Enter` is what opens the row it is on.
+	pub queue_cursor:            Option<u64>,
 	/// Last session id pinned via keyboard.
 	pub pinned_session:          Option<u64>,
 	/// Last session id deferred via keyboard.

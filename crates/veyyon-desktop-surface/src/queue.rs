@@ -54,10 +54,16 @@ pub enum QueueListItem {
 /// Neither measure is the rail's own: §5.7 sheds the rail from 256 to 208 and
 /// then to nothing as the window narrows, and the height is the columns row's,
 /// which is what decides how many rows there is room to answer a click on.
+///
+/// `current` is the session the host has open and `cursor` is the row the
+/// arrows have moved to (§5.14). They are the same row until an arrow moves,
+/// and the rail draws and scrolls to the cursor while the open row keeps the
+/// active ground, so moving the selection never claims a session was opened.
 pub fn queue_rail(
 	sections: &[(Section, Vec<Row>)],
 	filter_query: Option<&str>,
 	current: u64,
+	cursor: u64,
 	width: f32,
 	_height: f32,
 	controls: &ControlStates,
@@ -70,8 +76,8 @@ pub fn queue_rail(
 	cx: &Context<ShellView>,
 ) -> impl IntoElement {
 	let now = cx.background_executor().now();
-	motion.record_selected_id(current);
-	motion.ensure_visible(current, sections, geometry.parked_initial_page_size, now);
+	motion.record_selected_id(cursor);
+	motion.ensure_visible(cursor, sections, geometry.parked_initial_page_size, now);
 	let parked_limit = motion.parked_limit(geometry.parked_initial_page_size);
 	let filtered_storage;
 	let active_sections: &[(Section, Vec<Row>)] = if let Some(q) = filter_query {
@@ -137,7 +143,7 @@ pub fn queue_rail(
 			for row in rows.iter().take(drawn_count) {
 				positions.insert(row.id, current_y);
 				current_y += row_h;
-				let selected = row.id == current;
+				let selected = row.id == cursor;
 				if selected {
 					selected_item_ix = Some(items.len());
 				}
@@ -145,7 +151,7 @@ pub fn queue_rail(
 					row: row.clone(),
 					section: *section,
 					selected,
-					is_open: selected,
+					is_open: row.id == current,
 				});
 			}
 

@@ -265,6 +265,11 @@ pub enum Intent {
 
 impl Intent {
 	/// Navigation needs the outgoing draft recorded before its transition.
+	///
+	/// A queue arrow is NOT navigation: §5.14 gives it the rail's cursor and
+	/// nothing else, so it asks no host for a transcript and is refused by no
+	/// pending one. Listing it here left the rail unwalkable while a session
+	/// was opening.
 	pub const fn changes_navigation(&self) -> bool {
 		matches!(
 			self,
@@ -276,7 +281,6 @@ impl Intent {
 				| Self::RenameSpace { .. }
 				| Self::SwitchSpace(_)
 				| Self::ResumeHistory(_)
-				| Self::MoveQueueSelection(_)
 				| Self::NewSession
 				| Self::BranchSession(_)
 				| Self::BranchTurn(_)
@@ -321,6 +325,7 @@ impl Intent {
 				| Self::PaletteMove(_)
 				| Self::PaletteQuery(_)
 				| Self::FilterQueue(_)
+				| Self::MoveQueueSelection(_)
 				| Self::ScrollTranscript(_)
 				| Self::CopyText(_)
 				| Self::FindInTranscript

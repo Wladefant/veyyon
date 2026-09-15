@@ -1,6 +1,6 @@
 //! Local intent application and pending host dispatch.
 
-use super::{Intent, Intents, apply};
+use super::{Intent, Intents};
 use crate::{model::ShellState, palette::PaletteState};
 
 impl Intents {
@@ -21,12 +21,6 @@ impl Intents {
 			},
 			_ => false,
 		} {
-			return;
-		}
-		if let Intent::MoveQueueSelection(delta) = intent {
-			if let Some(row) = apply::selection_target(state, delta) {
-				self.dispatch(Intent::SelectSession(row), state);
-			}
 			return;
 		}
 

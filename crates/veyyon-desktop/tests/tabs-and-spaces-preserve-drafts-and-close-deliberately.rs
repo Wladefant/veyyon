@@ -138,7 +138,12 @@ fn pending_submission_blocks_navigation_without_consuming_draft() {
 					Intent::BranchSession(1),
 					Intent::BranchTurn(0),
 					Intent::LoadTranscript(None),
-					Intent::MoveQueueSelection(1),
+					// The queue's arrow is not here: §5.14 leaves it the cursor
+					// and no host traffic, so a pending submission has nothing
+					// to hold back. `Enter` on the rail is the open, and that
+					// is `SelectSession`, refused on the verb before the row it
+					// names is read.
+					Intent::SelectSession(2),
 				] {
 					view.dispatch(intent, cx);
 					assert!(view.drain_intents().is_empty());

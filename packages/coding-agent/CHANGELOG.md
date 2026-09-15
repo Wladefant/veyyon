@@ -319,6 +319,7 @@
 
 ### Fixed
 
+- A desktop queue arrow moves the rail's cursor and opens nothing, where holding it opened every session the cursor passed over and loaded each transcript; `Enter` opens the row under the cursor, and `P`, `D` and `K` move that row rather than the open session.
 - Desktop source builds fetch the pinned GPUI framework without Git authentication.
 - A desktop sheet keeps a body pinned to its lower edge inside the sheet, where the queue float drew its settings gear above the sheet's floor and left the float with no reachable control.
 - A desktop session draws the transcript it holds, where an attached session replaying turns before it was assigned an id drew the first-run line instead and left the transcript with no scroll viewport.

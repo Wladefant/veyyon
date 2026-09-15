@@ -13,8 +13,11 @@ use crate::{Intent, Overlay, Section, ShellView};
 /// in, because a row holding a draft draws under `Unsent`, which is no
 /// partition to come back out of. Returns `None` when no session is selected,
 /// and for a partition no chord names, since there is nothing to move.
+///
+/// The subject is the cursor, not the open session: the arrows move the cursor
+/// without opening, so a chord acts on the row the operator is looking at.
 pub(super) fn partition_toggle(view: &ShellView, into: Section) -> Option<Intent> {
-	let current = view.state().current_id;
+	let current = view.state().selected_row();
 	if current == 0 {
 		return None;
 	}

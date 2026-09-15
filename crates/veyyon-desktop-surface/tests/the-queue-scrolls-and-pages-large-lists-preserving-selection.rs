@@ -284,7 +284,10 @@ fn keyboard_selection_navigates_filtered_results_and_clamps_properly() {
 		acknowledged.title = format!("Live {current}");
 		let mut intents = veyyon_desktop_surface::intent::Intents::new();
 		intents.dispatch(Intent::MoveQueueSelection(delta), &mut acknowledged);
-		assert_eq!(intents.pending(), &[Intent::SelectSession(target)]);
+		// A movement clamps inside the filtered list and reports nothing: the
+		// arrows carry the cursor and `Enter` carries the open (§5.14).
+		assert_eq!(acknowledged.selected_row(), target);
+		assert!(intents.pending().is_empty());
 		assert_eq!(acknowledged.current_id, current);
 		assert_eq!(acknowledged.title, format!("Live {current}"));
 	}

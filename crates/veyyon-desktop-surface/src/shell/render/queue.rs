@@ -52,6 +52,7 @@ pub fn queue_column(
 		&view.state.sections,
 		view.state.keymap.queue_filter.as_deref(),
 		view.state.current_id,
+		view.state.selected_row(),
 		// The declared measure is the rail's outer width in either
 		// placement, so a floated rail hands the sheet's own frame back
 		// and lands its rows in the same 208px the docked one draws in.

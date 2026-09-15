@@ -178,9 +178,13 @@ pub fn bind_global_keys(root: Div, cx: &Context<ShellView>) -> Div {
 			view.dispatch(Intent::MoveQueueSelection(action.delta), cx);
 		}))
 		.on_action(cx.listener(|view, _: &OpenSelectedSession, _window, cx| {
-			let current = view.state().current_id;
-			if current != 0 {
-				view.dispatch(Intent::SelectSession(current), cx);
+			// The arrows move the cursor and open nothing, so this is the
+			// press that opens (§5.14). A cursor still on the open session
+			// has nothing to open, which is the only case that reaches no
+			// host.
+			let target = view.state().selected_row();
+			if target != 0 && target != view.state().current_id {
+				view.dispatch(Intent::SelectSession(target), cx);
 			}
 		}))
 		.on_action(cx.listener(|view, _: &TogglePinSelected, _window, cx| {

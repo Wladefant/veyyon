@@ -99,6 +99,47 @@ impl ShellState {
 			.find(|row| row.id == id)
 	}
 
+	/// The rows the rail lists, in rail order, with the queue filter applied.
+	///
+	/// The row an arrow steps to and the row the cursor is allowed to sit on
+	/// are read from here, so the two cannot disagree about what is listed.
+	pub fn listed_rows(&self) -> impl Iterator<Item = &Row> {
+		let needle = self
+			.keymap
+			.queue_filter
+			.as_ref()
+			.map(|filter| filter.trim().to_lowercase())
+			.filter(|needle| !needle.is_empty());
+		self
+			.sections
+			.iter()
+			.flat_map(|(_, rows)| rows.iter())
+			.filter(move |row| {
+				needle.as_ref().is_none_or(|needle| {
+					row.title.to_lowercase().contains(needle)
+						|| row.subtitle.to_lowercase().contains(needle)
+				})
+			})
+	}
+
+	/// The row the rail's selection cursor is on (§5.14).
+	///
+	/// The cursor starts on the open session and moves under the arrows
+	/// without opening anything, so this is what `Enter`, `P`, `D` and `K`
+	/// act on and what the rail scrolls to. It is `current_id` while no arrow
+	/// has moved it, and `0` when no session is open and none is listed.
+	///
+	/// A cursor the rail no longer lists — a row a filter hid, a session the
+	/// host removed — falls back to the open session, so a press cannot act
+	/// on a row that is not drawn.
+	pub fn selected_row(&self) -> u64 {
+		self
+			.keymap
+			.queue_cursor
+			.filter(|&id| self.listed_rows().any(|row| row.id == id))
+			.unwrap_or(self.current_id)
+	}
+
 	/// The mutable row with this id, in whatever section holds it.
 	pub fn row_mut(&mut self, id: u64) -> Option<&mut Row> {
 		self

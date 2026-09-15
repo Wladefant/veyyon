@@ -89,12 +89,29 @@ fn every_queue_chord_reaches_the_rail_the_pointer_focused() {
 	let mut unreachable: Vec<String> = Vec::new();
 	for chord in &queue_chords {
 		// The pointer establishes the rail's scope, exactly as it does for the
-		// transcript, and each chord starts from that same state.
+		// transcript, and the cursor is seeded on a row with a listed row on
+		// either side of it and with the open session somewhere else. That is
+		// the one arrangement where every queue verb has work: §5.14 leaves an
+		// arrow nothing to do at the end of the rail and leaves `Enter`
+		// nothing to do while the cursor is on the session already open.
 		session
 			.click(center_of(row))
 			.expect("pointer focuses the rail");
 		let before = session
 			.update(|view, _window, _cx| {
+				let listed: Vec<u64> = view.state().listed_rows().map(|row| row.id).collect();
+				assert!(
+					listed.len() >= 3,
+					"the fixture lists {} rows, and the cursor needs one on either side of it",
+					listed.len()
+				);
+				let anchor = listed[listed.len() / 2];
+				assert_ne!(
+					anchor,
+					view.state().current_id,
+					"the seeded cursor is the open session, so Enter has nothing to open"
+				);
+				view.state_mut().keymap.queue_cursor = Some(anchor);
 				let _ = view.drain_intents();
 				view.state().clone()
 			})

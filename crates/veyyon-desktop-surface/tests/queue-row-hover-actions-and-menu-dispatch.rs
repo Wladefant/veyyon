@@ -300,7 +300,11 @@ fn selection_requests_cross_partition_boundaries_without_switching_before_acknow
 			acknowledged.title.clone_from(&from.title);
 			let mut intents = veyyon_desktop_surface::intent::Intents::new();
 			intents.dispatch(Intent::MoveQueueSelection(step), &mut acknowledged);
-			assert_eq!(intents.pending(), &[Intent::SelectSession(to.id)]);
+			// The cursor crosses the boundary and the open session stays where
+			// it was: §5.14 gives the movement the cursor and `Enter` the open,
+			// so nothing here is reported and nothing waits on a host.
+			assert_eq!(acknowledged.selected_row(), to.id);
+			assert!(intents.pending().is_empty());
 			assert_eq!(acknowledged.current_id, from.id);
 			assert_eq!(acknowledged.title, from.title);
 		}

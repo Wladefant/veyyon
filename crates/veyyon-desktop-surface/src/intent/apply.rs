@@ -2,7 +2,6 @@
 
 mod panel;
 mod queue;
-pub(super) use queue::selection_target;
 
 use crate::{
 	attach::ConnectionPhase, composer::TurnPhase, controls::Availability, intent::Intent,
@@ -12,9 +11,17 @@ use crate::{
 /// Applies the part of an intent that the local shell owns.
 pub fn apply_intent(intent: &Intent, state: &mut ShellState) {
 	match intent {
-		// A rejected load leaves the displayed title, focus and draft on the confirmed session.
-		Intent::SelectSession(_)
-		| Intent::OpenSession(_)
+		// A rejected load leaves the displayed title, focus and draft on the
+		// confirmed session, so the open is the host's to acknowledge. The
+		// cursor is dropped rather than moved to the requested row: it then
+		// reads as the open session, which is the row the host has answered
+		// for, and the arrows continue from whatever the acknowledgement
+		// opened. Moving it here instead revealed the requested row while the
+		// load was pending, which expands the partition holding it.
+		Intent::SelectSession(_) => {
+			state.keymap.queue_cursor = None;
+		},
+		Intent::OpenSession(_)
 		| Intent::CloseSessionTab(_)
 		| Intent::ReorderSessionTab { .. }
 		| Intent::CreateSpace(_)
@@ -300,7 +307,7 @@ pub fn apply_intent(intent: &Intent, state: &mut ShellState) {
 			state.keymap.queue_filter = None;
 		},
 		Intent::CloseTabOrPark => queue::close_tab_or_park(state),
-		Intent::MoveQueueSelection(_) => {},
+		Intent::MoveQueueSelection(delta) => queue::move_selection(state, *delta),
 		Intent::ScrollTranscript(by) => {
 			state.keymap.transcript_scroll = Some(*by);
 		},
