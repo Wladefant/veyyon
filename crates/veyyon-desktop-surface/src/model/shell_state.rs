@@ -26,8 +26,6 @@ pub struct ShellState {
 	pub navigation_pending: bool,
 	/// Tab labels and draft markers projected without changing host identity.
 	pub session_tabs:       Vec<(veyyon_desktop_model::SessionId, String, bool)>,
-	/// A dirty close awaits explicit confirmation; no draft is deleted.
-	pub close_tab_prompt:   Option<veyyon_desktop_model::SessionId>,
 	/// The queue's sections and their rows.
 	pub sections:           Vec<(Section, Vec<Row>)>,
 	/// The open session's transcript.
@@ -171,7 +169,6 @@ impl Default for ShellState {
 			navigation:         veyyon_desktop_model::persistence::NavigationStore::default(),
 			navigation_pending: false,
 			session_tabs:       Vec::new(),
-			close_tab_prompt:   None,
 			sections:           Vec::new(),
 			transcript:         Vec::new(),
 			turn_anchors:       Vec::new(),

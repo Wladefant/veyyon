@@ -33,7 +33,7 @@ pub fn load_attached_cards(
 
 	Ok(AttachedCardsSurfaceTokens {
 		stack_max_visible: stack.count("max_visible")?,
-		stack_overflow_collapsed_height_px: stack.number("overflow_collapsed_height_px")?,
+		stack_overflow_collapsed_height_px: stack.spacing("overflow_collapsed_height_px", scale)?,
 		approval_padding: approval.spacing("padding", scale)?,
 		approval_tool_name_size: approval.type_size("tool_name_size", scale)?,
 		approval_tool_name_weight: approval.weight("tool_name_weight", scale)?,
@@ -43,6 +43,6 @@ pub fn load_attached_cards(
 		question_option_row_height_px: question.number("option_row_height_px")?,
 		plan_padding: plan.spacing("padding", scale)?,
 		plan_max_markdown_height_px: plan.number("max_markdown_height_px")?,
-		plan_fade_height_px: plan.number("fade_height_px")?,
+		plan_fade_height_px: plan.spacing("fade_height_px", scale)?,
 	})
 }

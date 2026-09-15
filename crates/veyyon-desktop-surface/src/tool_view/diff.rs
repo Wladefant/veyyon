@@ -78,7 +78,7 @@ pub fn render_diff_lines(
 		// Marker column (+, -, ~, ' ')
 		row = row.child(
 			div()
-				.w(px(14.0))
+				.w(tokens.spacing(SpacingStep::S7))
 				.flex_shrink_0()
 				.text_color(text_color)
 				.child(marker),

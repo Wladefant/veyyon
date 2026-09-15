@@ -9,8 +9,9 @@ use super::ShellView;
 
 #[derive(Default)]
 pub(super) struct SplitMotions {
-	panel:  Option<PanelMotion>,
-	drawer: Option<PanelMotion>,
+	panel:         Option<PanelMotion>,
+	drawer:        Option<PanelMotion>,
+	drawer_target: Option<f32>,
 }
 
 impl SplitMotions {
@@ -71,6 +72,7 @@ impl ShellView {
 	}
 
 	pub(super) fn drag_drawer(&mut self, height: f32, min: f32, max: f32, cx: &Context<Self>) {
+		self.split_motion.drawer_target = Some(height);
 		let motion = self.split_motion.drawer.get_or_insert_with(|| {
 			PanelMotion::with_bounds(SurfaceId::TerminalDrawer, 0, height, min, max)
 		});
@@ -84,6 +86,7 @@ impl ShellView {
 	/// height to what this window can hold on the next frame, and a later drag
 	/// replaces the bounds with the ones that drag allows.
 	pub(super) fn restore_drawer_height(&mut self, height: f32) {
+		self.split_motion.drawer_target = Some(height);
 		self.split_motion.drawer =
 			Some(PanelMotion::with_bounds(SurfaceId::TerminalDrawer, 0, height, 0.0, height));
 	}
@@ -95,5 +98,40 @@ impl ShellView {
 			self.rail_motion.is_reduced_motion(),
 			cx.background_executor().now(),
 		);
+	}
+
+	/// Drives the drawer height spring when toggled open or closed (§7.1).
+	pub(super) fn toggle_drawer(&mut self, open: bool, cx: &Context<Self>) {
+		let now = cx.background_executor().now();
+		let reduced = self.rail_motion.is_reduced_motion();
+		if open {
+			let target_height = if let Some(target) = self.split_motion.drawer_target {
+				target
+			} else if let Some(width) = self
+				.split_motion
+				.drawer
+				.as_ref()
+				.map(PanelMotion::current_width)
+				.filter(|&w| w > 0.0)
+			{
+				width
+			} else {
+				self.installed.surface.panels.terminal_drawer_min_height_px
+			};
+			self.split_motion.drawer_target = Some(target_height);
+			let motion = self.split_motion.drawer.get_or_insert_with(|| {
+				PanelMotion::with_bounds(SurfaceId::TerminalDrawer, 0, 0.0, 0.0, target_height)
+			});
+			motion.set_bounds(0.0, target_height);
+			motion.release_to_snap(target_height, &self.installed.motion, reduced, now);
+		} else if let Some(motion) = &mut self.split_motion.drawer {
+			if motion.current_width() > 0.0 {
+				self.split_motion.drawer_target = Some(motion.current_width());
+			}
+			let current = motion.current_width();
+			let max = motion.bounds().map_or(current, |(_, max)| max).max(current);
+			motion.set_bounds(0.0, max);
+			motion.release_to_snap(0.0, &self.installed.motion, reduced, now);
+		}
 	}
 }

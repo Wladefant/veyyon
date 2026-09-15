@@ -29,12 +29,18 @@ use veyyon_desktop_surface::{DrawerTab, ShellState};
 
 /// Whether a capability in this state fills a tab.
 ///
+/// §4.3 resolves `Unknown` to "at rest, activation attaches then acts", which
+/// is how `Available` draws, so silence from the host offers the tab and the
+/// press attaches. Only the refusal of §5.13 takes a tab away, and a tab
+/// withheld until the attach lands is the mid-attach reflow the gate exists
+/// to avoid.
+///
 /// Exhaustive over `CapabilityStatus`: a fourth status fails to compile here
 /// until somebody decides whether the surface it fills is offered.
 const fn offers(status: &CapabilityStatus) -> bool {
 	match status {
-		CapabilityStatus::Available => true,
-		CapabilityStatus::Unavailable { .. } | CapabilityStatus::UnknownUntilAttached => false,
+		CapabilityStatus::Available | CapabilityStatus::UnknownUntilAttached => true,
+		CapabilityStatus::Unavailable { .. } => false,
 	}
 }
 

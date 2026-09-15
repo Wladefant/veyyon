@@ -29,10 +29,10 @@ veyyon-desktop-surface.workspace = true
 veyyon-desktop-scene.workspace = true
 sha2.workspace = true
 libc.workspace = true
+veyyon-desktop-kit.workspace = true
 
 [dev-dependencies]
 veyyon-test-scratch.workspace = true
-veyyon-desktop-kit.workspace = true
 
 [[bin]]
 name = "veyyon-desktop"

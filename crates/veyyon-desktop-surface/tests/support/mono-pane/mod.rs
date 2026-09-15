@@ -5,27 +5,34 @@
 //! the numbers it pins and the code it scrolls.
 //!
 //! Several test binaries include this module and each uses a subset of it, so
-//! each `mod` site carries its own `allow(dead_code)`.
+//! each `mod` site carries its own `allow(dead_code)` and the run helpers are
+//! re-exported under `allow(unused_imports)`: a test binary has no consumer
+//! outside itself, so a `pub use` it does not reach counts as unused.
 
 #[path = "../queue-scroll/mod.rs"]
 #[allow(dead_code, reason = "this module uses a subset of the shared session helpers")]
 mod queue_scroll;
+mod runs;
 
 use std::path::Path;
 
 pub use queue_scroll::open_session;
+#[allow(unused_imports, reason = "each binary reads a subset of the run helpers")]
+pub use runs::{
+	code_edge, code_runs, gutter_numbers, gutter_runs, is_number, lefts, over_code, pane_top,
+	row_runs, tops, widest_row,
+};
 use veyyon_desktop_kit::{ColorRole, Tokens, load_bundled_theme};
 use veyyon_desktop_model::{ChangeStatus, DiffMode};
 use veyyon_desktop_scene::{
-	BoxBounds, Captured, HeadlessSession,
+	BoxBounds, HeadlessSession,
 	headless::{Headless, RenderOptions},
 };
 use veyyon_desktop_surface::{
 	DiffFile, DiffRow, FileLine, FileView, HighlightSpan, PanelTab, ShellState, ShellView,
 	damage::Region, fixture, install_tokens,
 };
-use veyyon_desktop_tokens::PanelsSurfaceTokens;
-use veyyon_gpui::{App, AppContext, Bounds, Pixels, Point};
+use veyyon_gpui::{App, AppContext, Bounds, Pixels};
 
 /// Opens the shell on a token set the caller has edited, so a suite can prove
 /// a metric follows its token rather than the value it happens to equal.
@@ -199,117 +206,6 @@ pub fn panel_region(session: &mut HeadlessSession<'_, ShellView>) -> BoxBounds {
 		.expect("the window updates")
 		.expect("an open panel lays its region out");
 	rect(bounds)
-}
-
-/// The top edge of the pane's rows: under the tab strip and under the file
-/// header, both of which draw runs of their own that are not rows.
-pub fn pane_top(panel: BoxBounds, panels: &PanelsSurfaceTokens) -> f32 {
-	panel.top + panels.tabs_height_px + panels.chrome_row_height_px
-}
-
-/// Every text run the pane's rows drew, with the run's own font size.
-pub fn row_runs(
-	captured: &Captured,
-	panel: BoxBounds,
-	panels: &PanelsSurfaceTokens,
-) -> Vec<(BoxBounds, f32)> {
-	captured
-		.text_runs
-		.iter()
-		.map(|run| (rect(run.bounds), f32::from(run.font_size)))
-		.filter(|(bounds, _)| {
-			bounds.top >= pane_top(panel, panels) - 0.5
-				&& bounds.right > panel.left
-				&& bounds.left < panel.right
-		})
-		.collect()
-}
-
-/// The left edge of the code column: the gutter's own width in from the
-/// panel's left edge.
-pub fn code_edge(panel: BoxBounds, panels: &PanelsSurfaceTokens) -> f32 {
-	panel.left + panels.diff_gutter_width_px
-}
-
-/// Whether a row run is one of the gutter's numbers: it sits wholly inside the
-/// band the gutter pins, left of the code column's edge.
-///
-/// Reading the two columns apart by their left edges instead would have been
-/// circular, since the code column's left edge is what the gesture moves. The
-/// band is fixed, and no code line of this file fits inside it — every line
-/// here is wider than the gutter, which
-/// `every_row_of_the_pane_is_the_size_and_the_line_its_tokens_author` asserts
-/// rather than assumes.
-pub fn is_number(run: BoxBounds, panel: BoxBounds, panels: &PanelsSurfaceTokens) -> bool {
-	run.left >= panel.left - 0.5 && run.right <= code_edge(panel, panels) + 0.5
-}
-
-/// The pane's code runs: every row run that is not one of the gutter's
-/// numbers.
-pub fn code_runs(
-	captured: &Captured,
-	panel: BoxBounds,
-	panels: &PanelsSurfaceTokens,
-) -> Vec<BoxBounds> {
-	row_runs(captured, panel, panels)
-		.into_iter()
-		.filter(|(bounds, _)| !is_number(*bounds, panel, panels))
-		.map(|(bounds, _)| bounds)
-		.collect()
-}
-
-/// The pane's gutter runs: the line numbers.
-pub fn gutter_runs(
-	captured: &Captured,
-	panel: BoxBounds,
-	panels: &PanelsSurfaceTokens,
-) -> Vec<BoxBounds> {
-	row_runs(captured, panel, panels)
-		.into_iter()
-		.filter(|(bounds, _)| is_number(*bounds, panel, panels))
-		.map(|(bounds, _)| bounds)
-		.collect()
-}
-
-pub fn lefts(runs: &[BoxBounds]) -> Vec<f32> {
-	runs.iter().map(|run| run.left).collect()
-}
-
-pub fn tops(runs: &[BoxBounds]) -> Vec<f32> {
-	runs.iter().map(|run| run.top).collect()
-}
-
-/// Somewhere inside the code column, for the wheel to arrive at.
-pub fn over_code(panel: BoxBounds, panels: &PanelsSurfaceTokens) -> Point<Pixels> {
-	Point {
-		x: Pixels::from(f32::midpoint(panel.left + panels.diff_gutter_width_px, panel.right)),
-		y: Pixels::from(pane_top(panel, panels) + panels.diff_row_height_px),
-	}
-}
-
-/// How wide the pane's widest row is, measured across the pieces one line
-/// arrives in.
-///
-/// A line's own width is its spans' together. Reading the widest run instead
-/// would have measured one piece of a highlighted line and called it the line.
-pub fn widest_row(runs: &[BoxBounds]) -> f32 {
-	let mut rows: Vec<(f32, f32, f32)> = Vec::new();
-	for run in runs {
-		match rows
-			.iter_mut()
-			.find(|(top, ..)| (*top - run.top).abs() < 0.5)
-		{
-			Some((_, left, right)) => {
-				*left = left.min(run.left);
-				*right = right.max(run.right);
-			},
-			None => rows.push((run.top, run.left, run.right)),
-		}
-	}
-	rows
-		.into_iter()
-		.map(|(_, left, right)| right - left)
-		.fold(0.0, f32::max)
 }
 
 /// The diff tenant, whose rows are the other half of the class: a hunk header

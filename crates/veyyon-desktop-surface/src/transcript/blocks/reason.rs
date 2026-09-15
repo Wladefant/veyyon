@@ -7,8 +7,6 @@
 //! prose is drawn through the same settled/arriving split: an unterminated
 //! shape reads as what it is becoming rather than as its own markers.
 
-use std::time::Instant;
-
 use veyyon_desktop_kit::{
 	ColorRole, Icon, IconName, IconSize, SelectableProse, SpacingStep, TextRamp, TokenSet,
 	controls::button::{Button, ButtonSize},
@@ -65,7 +63,7 @@ pub fn render_reason_block(
 				block_ix,
 				&motion_tokens_toggle,
 				reduced_motion,
-				Instant::now(),
+				cx.background_executor().now(),
 			);
 			if let Some(v) = &view_toggle {
 				let _ = v.update(cx, |_view, cx| cx.notify());
@@ -98,22 +96,19 @@ pub fn render_reason_block(
 		.flex()
 		.flex_col()
 		.w_full()
-		.mt(px(4.0))
-		.p(tokens.spacing(SpacingStep::S3))
-		.bg(tokens.color(ColorRole::Canvas))
-		.rounded_md()
-		.border_l_2()
-		.border_color(tokens.color(ColorRole::Accent))
+		.mt(tokens.spacing(SpacingStep::S2))
+		.pl(tokens.spacing(SpacingStep::S4))
 		.gap(tokens.spacing(SpacingStep::S2))
 		.child(
 			div()
 				.italic()
 				.text_color(tokens.color(ColorRole::Secondary))
+				.opacity(0.8)
 				.child(streaming_document(
 					summary,
 					is_streaming,
-					px(geometry.assistant_turn_type_size.size * 0.95),
-					px(geometry.assistant_turn_type_size.line_height * 0.95),
+					tokens.font_size(TextRamp::Body),
+					tokens.line_height(TextRamp::Body),
 					selection,
 				)),
 		)
@@ -131,7 +126,7 @@ pub fn render_reason_block(
 						false,
 						&motion_tokens_collapse,
 						reduced_motion,
-						Instant::now(),
+						cx.background_executor().now(),
 					);
 					if let Some(v) = &view_collapse {
 						let _ = v.update(cx, |_view, cx| cx.notify());

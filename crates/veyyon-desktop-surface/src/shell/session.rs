@@ -14,7 +14,7 @@ use veyyon_gpui::{
 	Point, Styled, Window, div, point, px,
 };
 
-use super::keys::bind_composer_keys;
+use super::{keys::bind_composer_keys, session_error::session_error_strip};
 use crate::{
 	ShellView,
 	cards::card_stack,
@@ -111,17 +111,15 @@ pub fn session_surface(
 			.child(float),
 	};
 
-	let mut regions = Vec::new();
-	if has_transcript {
-		regions.push(Region::Transcript);
-	}
-	if !state.cards.is_empty() {
-		regions.push(Region::Cards);
-	}
-	regions.extend([Region::Composer, Region::RunBar]);
-	if state.drawer_open && state.drawer.offered {
-		regions.push(Region::Drawer);
-	}
+	// The name of every child this column takes, in the order the children are
+	// appended, so a box is read back by position. A child is recorded where it
+	// is added, and `None` marks one no region names -- the error strip, an
+	// empty-state line, the find bar. A name pushed under a condition that
+	// does not match the child's shifts every name after it: the transcript's
+	// box is then read as the cards', the cards' as the composer's, and a
+	// press, a float and a scroll all resolve against a surface that is
+	// somewhere else.
+	let mut regions: Vec<Option<Region>> = Vec::new();
 
 	// A press inside the composer's box that missed the editor's own text area
 	// — the padding around it, the row of controls under it, the button that
@@ -180,9 +178,19 @@ pub fn session_surface(
 	};
 	if let Some(err) = session_error {
 		column = column.child(session_error_strip(err, composer_width, tokens));
+		regions.push(None);
 	}
 
-	if state.current_id == 0 {
+	// A transcript that holds turns is the content this region exists to draw,
+	// whether or not a session id has been assigned yet: an attached surface
+	// replaying turns has something to show, so the first-run line would hide
+	// it. The empty states below are reached only when there is no transcript,
+	// which keeps `regions` -- which records `Region::Transcript` for exactly
+	// this child -- naming the box that was actually drawn.
+	if has_transcript {
+		column = column.child(body);
+		regions.push(Some(Region::Transcript));
+	} else if state.current_id == 0 {
 		column = column.justify_center().child(
 			div()
 				.w_full()
@@ -192,8 +200,7 @@ pub fn session_surface(
 				.justify_center()
 				.child(opening_line("Create a session to begin", &surface.composer, tokens)),
 		);
-	} else if has_transcript {
-		column = column.child(body);
+		regions.push(None);
 	} else {
 		column = column.justify_center().child(
 			div()
@@ -204,12 +211,13 @@ pub fn session_surface(
 				.justify_center()
 				.child(opening_line("What should this session do?", &surface.composer, tokens)),
 		);
+		regions.push(None);
 	}
 
-	let column = column
-		.children((!state.cards.is_empty()).then(|| {
-			// The stack shares the composer's measure and sits directly above
-			// it, so a decision and the reply to it occupy one column.
+	if !state.cards.is_empty() {
+		// The stack shares the composer's measure and sits directly above it,
+		// so a decision and the reply to it occupy one column.
+		column = column.child(
 			div()
 				.w_full()
 				.px(tokens.spacing(SpacingStep::S4))
@@ -224,84 +232,100 @@ pub fn session_surface(
 					cards_focus,
 					cards_expanded,
 					cx,
-				)))
-		}))
-		.child(bind_composer_keys(
-			composer_input
-				.w_full()
-				.px(tokens.spacing(SpacingStep::S4))
-				.on_children_prepainted(move |children, _window, _cx| {
-					if let Some(bounds) = children.first() {
-						palette_anchor.set(point(
-							bounds.origin.x + (bounds.size.width - composer_width) / 2.0,
-							bounds.origin.y,
-						));
-					}
-				})
-				.child(composer(
-					editor,
-					&state.turn,
-					&state.composer,
-					local,
-					has_text,
-					state.current_id,
-					widths.composer_px,
-					widths.labels.footer,
-					&state.controls,
-					&surface.composer,
-					tokens,
-					cx,
-				)),
-			cx,
-		))
-		.child(
-			div()
-				.w_full()
-				.px(tokens.spacing(SpacingStep::S4))
-				.child(run_bar(
-					state.run_status.clone(),
-					clamped_composer_px,
-					widths.labels.run_bar,
-					state.turn.is_stoppable(),
-					state.current_id,
-					&state.controls,
-					&surface.composer,
-					tokens,
-					cx,
-				)),
-		)
-		.children(
-			(state.drawer_open
-				&& state.drawer.offered
-				&& widths.drawer.placement == DrawerPlacement::Overlay)
-				.then(|| {
-					div()
-						.absolute()
-						.bottom_0()
-						.left_0()
-						.right_0()
-						.child(terminal_drawer(
-							&state.drawer,
-							DrawerPlacement::Overlay,
-							widths.drawer.height_px,
-							&state.controls,
-							state.current_id,
-							supervisor,
-							&surface.panels,
-							tokens,
-							laid_out,
-							cx,
-						))
-				}),
+				))),
 		);
-	let column = column.children(find_bar.map(|bar| {
+		regions.push(Some(Region::Cards));
+	}
+
+	column = column.child(bind_composer_keys(
+		composer_input
+			.w_full()
+			.px(tokens.spacing(SpacingStep::S4))
+			.on_children_prepainted(move |children, _window, _cx| {
+				if let Some(bounds) = children.first() {
+					palette_anchor.set(point(
+						bounds.origin.x + (bounds.size.width - composer_width) / 2.0,
+						bounds.origin.y,
+					));
+				}
+			})
+			.child(composer(
+				editor,
+				&state.turn,
+				&state.composer,
+				local,
+				has_text,
+				state.current_id,
+				widths.composer_px,
+				widths.labels.footer,
+				&state.controls,
+				&surface.composer,
+				tokens,
+				cx,
+			)),
+		cx,
+	));
+	regions.push(Some(Region::Composer));
+
+	column = column.child(
 		div()
-			.absolute()
-			.top(tokens.spacing(SpacingStep::S4))
-			.right(tokens.spacing(SpacingStep::S4))
-			.child(bar)
-	}));
-	let column = laid_out.track_children(column, move |index| regions.get(index).copied());
+			.w_full()
+			.px(tokens.spacing(SpacingStep::S4))
+			.child(run_bar(
+				state.run_status.clone(),
+				clamped_composer_px,
+				widths.labels.run_bar,
+				state.turn.is_stoppable(),
+				state.current_id,
+				&state.controls,
+				&surface.composer,
+				tokens,
+				cx,
+			)),
+	);
+	regions.push(Some(Region::RunBar));
+
+	// The drawer is a child here only where it is drawn over the session. In
+	// the row placement it is the column's sibling below, tracked from there,
+	// so nothing is recorded for it in this list.
+	if state.drawer_open
+		&& state.drawer.offered
+		&& widths.drawer.placement == DrawerPlacement::Overlay
+	{
+		column = column.child(
+			div()
+				.absolute()
+				.bottom_0()
+				.left_0()
+				.right_0()
+				.child(terminal_drawer(
+					&state.drawer,
+					DrawerPlacement::Overlay,
+					widths.drawer.height_px,
+					&state.controls,
+					state.current_id,
+					supervisor,
+					&surface.panels,
+					tokens,
+					laid_out,
+					cx,
+				)),
+		);
+		regions.push(Some(Region::Drawer));
+	}
+
+	if let Some(bar) = find_bar {
+		column = column.child(
+			div()
+				.absolute()
+				.top(tokens.spacing(SpacingStep::S4))
+				.right(tokens.spacing(SpacingStep::S4))
+				.child(bar),
+		);
+		regions.push(None);
+	}
+
+	let column = laid_out.track_children(column, move |index| regions.get(index).copied().flatten());
 	if state.drawer_open && state.drawer.offered && widths.drawer.placement == DrawerPlacement::Row {
 		let extent = widths.columns_px.max(1.0);
 		let maximum = extent * surface.panels.terminal_drawer_max_viewport_ratio;
@@ -343,73 +367,4 @@ pub fn session_surface(
 	} else {
 		column
 	}
-}
-fn session_error_strip(
-	err: &crate::controls::ControlError,
-	width: Pixels,
-	tokens: &veyyon_desktop_kit::TokenSet,
-) -> Div {
-	let font_size = tokens.font_size(veyyon_desktop_kit::TextRamp::Micro);
-	let line_h = tokens.line_height(veyyon_desktop_kit::TextRamp::Micro);
-	let ink = tokens.color(ColorRole::AttentionInk);
-	let btn = |label, fill| {
-		let b = div()
-			.px(tokens.spacing(SpacingStep::S2))
-			.py(tokens.spacing(SpacingStep::S0))
-			.rounded(tokens.radius(veyyon_desktop_kit::RadiusStep::Xs))
-			.text_size(font_size)
-			.cursor(veyyon_gpui::CursorStyle::PointingHand)
-			.child(label);
-		if fill {
-			b.bg(ink).text_color(tokens.color(ColorRole::AttentionFill))
-		} else {
-			b.border(tokens.stroke(veyyon_desktop_kit::StrokeStep::Hairline))
-				.border_color(ink)
-				.text_color(ink)
-		}
-	};
-	div()
-		.w_full()
-		.px(tokens.spacing(SpacingStep::S4))
-		.flex()
-		.justify_center()
-		.child(
-			div()
-				.w(width)
-				.flex()
-				.items_center()
-				.justify_between()
-				.px(tokens.spacing(SpacingStep::S3))
-				.py(tokens.spacing(SpacingStep::S2))
-				.rounded(tokens.radius(veyyon_desktop_kit::RadiusStep::Sm))
-				.bg(tokens.color(ColorRole::AttentionFill))
-				.border(tokens.stroke(veyyon_desktop_kit::StrokeStep::Hairline))
-				.border_color(ink)
-				.child(
-					div()
-						.flex()
-						.items_center()
-						.gap(tokens.spacing(SpacingStep::S2))
-						.min_w_0()
-						.child(div().text_size(font_size).text_color(ink).child("⚠"))
-						.child(
-							div()
-								.text_size(font_size)
-								.line_height(line_h)
-								.text_color(ink)
-								.min_w_0()
-								.truncate()
-								.child(err.message.clone()),
-						),
-				)
-				.child(
-					div()
-						.flex()
-						.items_center()
-						.gap(tokens.spacing(SpacingStep::S2))
-						.flex_shrink_0()
-						.children((err.retryable).then(|| btn("Retry", true)))
-						.child(btn("Dismiss", false)),
-				),
-		)
 }

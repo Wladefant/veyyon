@@ -3,8 +3,8 @@
 use std::time::{Duration, Instant};
 
 use veyyon_desktop_motion::{
-	CaretMotion, FloatMotion, MotionTokens, PanelMotion, RevealMotion, ScrollMotion, SurfaceId,
-	TintMotion,
+	CaretMotion, FloatMotion, MotionTokens, PanelMotion, RevealMotion, ScrollMotion, ShiftMotion,
+	SurfaceId, TintMotion,
 };
 
 #[test]
@@ -255,4 +255,43 @@ fn float_motion_drives_entrance_exit_and_interruption() {
 	let settled_frame = float.sample(false, t_settle, &tokens, false);
 	assert_eq!(settled_frame.opacity, 0.0);
 	assert!(settled_frame.settled);
+}
+
+#[test]
+fn shift_motion_drives_flip_translation_and_respects_reduced_motion() {
+	let tokens = MotionTokens::reference();
+	let mut shift = ShiftMotion::new(SurfaceId::Queue, 42);
+
+	let t0 = Instant::now();
+	assert_eq!(shift.current_offset(), 0.0);
+	assert!(shift.is_settled());
+
+	// Record a shift from previous_pos 100.0 to current_pos 150.0 (delta = -50.0)
+	shift.record_shift(100.0, 150.0, &tokens, false, t0);
+	assert!(!shift.is_settled());
+
+	// At t0, offset is delta (-50.0)
+	let (off_0, set_0) = shift.sample(t0);
+	assert_eq!(off_0, -50.0);
+	assert!(!set_0);
+
+	// Mid-way through 200ms
+	let t_mid = t0 + Duration::from_millis(100);
+	let (off_mid, set_mid) = shift.sample(t_mid);
+	assert!(!set_mid);
+	assert!(off_mid > -50.0 && off_mid < 0.0);
+
+	// Settle after 200ms
+	let t_end = t0 + Duration::from_millis(220);
+	let (off_end, set_end) = shift.sample(t_end);
+	assert!(set_end);
+	assert_eq!(off_end, 0.0);
+	assert!(shift.is_settled());
+
+	// Reduced motion: immediate 0.0 offset, settled
+	shift.record_shift(100.0, 200.0, &tokens, true, t_end);
+	let (off_red, set_red) = shift.sample(t_end);
+	assert!(set_red);
+	assert_eq!(off_red, 0.0);
+	assert!(shift.is_settled());
 }

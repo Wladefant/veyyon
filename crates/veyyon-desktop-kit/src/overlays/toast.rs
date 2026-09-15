@@ -17,8 +17,11 @@ use veyyon_gpui::{
 	prelude::*, px,
 };
 
-use crate::token_set::{
-	ColorRole, RadiusStep, SpacingStep, TextRamp, TextWeight, TintRole, TokenSet,
+use crate::{
+	indicators::dot::Dot,
+	token_set::{
+		ColorRole, RadiusStep, SpacingStep, StrokeStep, TextRamp, TextWeight, TintRole, TokenSet,
+	},
 };
 
 /// How wide a toast is drawn, in pixels of the window it is stacked in.
@@ -28,12 +31,6 @@ use crate::token_set::{
 /// glance without reflowing into four lines.
 pub const TOAST_WIDTH_PX: f32 = 320.0;
 
-/// How many lines of the announcement's own line a card draws.
-///
-/// The host writes the sentence and can write a long one: a value it rejected
-/// is quoted back in full, and a path arrives whole. Unbounded, a card grew
-/// past its own border and down over the surface it was announcing about.
-const TITLE_LINES: usize = 3;
 /// How many lines of the detail under it a card draws.
 const DETAIL_LINES: usize = 2;
 
@@ -45,6 +42,7 @@ pub struct Toast {
 	detail:     Option<SharedString>,
 	tint:       TintRole,
 	entrance:   Option<FloatFrame>,
+	exit:       Option<FloatFrame>,
 	on_dismiss: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
 }
 
@@ -58,6 +56,7 @@ impl Toast {
 			detail:     None,
 			tint:       TintRole::Attention,
 			entrance:   None,
+			exit:       None,
 			on_dismiss: None,
 		}
 	}
@@ -83,6 +82,13 @@ impl Toast {
 		self
 	}
 
+	/// Applies the exit frame the stack's motion driver sampled.
+	#[must_use]
+	pub const fn exit(mut self, frame: FloatFrame) -> Self {
+		self.exit = Some(frame);
+		self
+	}
+
 	/// Answers a press on the card by dismissing the announcement.
 	#[must_use]
 	pub fn on_dismiss(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
@@ -95,18 +101,19 @@ impl RenderOnce for Toast {
 	fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
 		let resolved = TokenSet::for_app(cx);
 		let tokens: &TokenSet = &resolved;
-		let tint = tokens.tint(self.tint);
 
 		let mut card = div()
 			.id(self.id)
 			.occlude()
 			.w(px(TOAST_WIDTH_PX))
-			.bg(tint.fill)
-			.rounded(tokens.radius(RadiusStep::Lg))
-			.border_1()
+			.bg(tokens.float_ground())
+			.backdrop_blur(tokens.float_blur())
+			.backdrop_saturation(tokens.float_saturation())
+			.rounded(tokens.radius(RadiusStep::Xl))
+			.border(tokens.stroke(StrokeStep::Hairline))
 			.border_color(tokens.color(ColorRole::Hairline))
-			.p(tokens.spacing(SpacingStep::S3))
-			.shadow_lg()
+			.p(tokens.spacing(SpacingStep::S4))
+			.shadow(tokens.float_shadows())
 			.cursor_pointer()
 			.overflow_hidden()
 			.flex()
@@ -114,15 +121,50 @@ impl RenderOnce for Toast {
 			.gap(tokens.spacing(SpacingStep::S1))
 			.child(
 				div()
+					.flex()
+					.flex_row()
+					// The row spans the card's content box and may shrink
+					// inside it: the title is a flex child here rather than a
+					// child of the card's column, so it takes its width from
+					// this row rather than from the card. A row sized to its
+					// own content instead measures the title at the full
+					// sentence, which the card then masks at its edge -- the
+					// line is drawn whole and cut mid-glyph with nothing to
+					// say it was cut.
+					.w_full()
 					.min_w_0()
-					.overflow_hidden()
-					.text_size(tokens.font_size(TextRamp::Body))
-					.line_height(tokens.line_height(TextRamp::Body))
-					.font_weight(tokens.font_weight(TextWeight::Medium))
-					.text_color(tint.ink)
-					.text_ellipsis()
-					.line_clamp(TITLE_LINES)
-					.child(self.title),
+					.items_center()
+					.gap(tokens.spacing(SpacingStep::S2))
+					.child(Dot::new(self.tint))
+					.child(
+						div()
+							// The title is held to one row and cut with an
+							// ellipsis the shaper writes into the line. The
+							// host writes the sentence and can write a long
+							// one: a value it rejected is quoted back in full,
+							// and a path arrives whole. Wrapped to a few rows
+							// instead, the card grows with the sentence, a
+							// full stack of them reaches the composer, and the
+							// cut lands between rows where nothing states it,
+							// because a clamp cuts the last row it drew rather
+							// than the text it shaped.
+							//
+							// The row's free space is what it is shaped
+							// against: a basis of `auto` measures the sentence
+							// whole and shrinks the box without reshaping the
+							// text to it, leaving the line drawn at full
+							// length and masked at the card's edge.
+							.flex_1()
+							.min_w_0()
+							.overflow_hidden()
+							.text_size(tokens.font_size(TextRamp::Body))
+							.line_height(tokens.line_height(TextRamp::Body))
+							.font_weight(tokens.font_weight(TextWeight::Medium))
+							.text_color(tokens.color(ColorRole::Foreground))
+							.whitespace_nowrap()
+							.truncate()
+							.child(self.title),
+					),
 			);
 		if let Some(detail) = self.detail {
 			card = card.child(
@@ -131,13 +173,15 @@ impl RenderOnce for Toast {
 					.overflow_hidden()
 					.text_size(tokens.font_size(TextRamp::Micro))
 					.line_height(tokens.line_height(TextRamp::Micro))
-					.text_color(tint.ink)
+					.text_color(tokens.color(ColorRole::Secondary))
 					.text_ellipsis()
 					.line_clamp(DETAIL_LINES)
 					.child(detail),
 			);
 		}
-		if let Some(frame) = self.entrance {
+		if let Some(frame) = self.exit {
+			card = card.opacity(frame.opacity).translate_y(px(frame.offset_y));
+		} else if let Some(frame) = self.entrance {
 			card = card.opacity(frame.opacity).translate_y(px(frame.offset_y));
 		}
 		if let Some(handler) = self.on_dismiss {

@@ -12,22 +12,22 @@ outer_edge_stroke = "hairline"
 
 [geometry.insets]
 content_inset = "s4"
-row_inset = "s5"
+row_inset = "s4"
 
 [geometry.row_heights]
 card_px = 78
 line_px = 36
-section_header_px = 20
+section_header_px = "s9"
 
 [geometry.card_layout]
 padding_top = "s4"
 padding_bottom = "s4"
-padding_horizontal = "s5"
+padding_horizontal = "s4"
 header_gap = "s1"
 body_gap = "s2"
-badge_height_px = 20
-title_height_px = 20
-subtitle_height_px = 16
+badge_height_px = "s9"
+title_height_px = "s9"
+subtitle_height_px = "s8"
 
 [geometry.section_layout]
 gap_above = "s6"
@@ -36,7 +36,7 @@ gap_below = "s2"
 [geometry.footer]
 height_px = 36
 inset = "s4"
-gear_size_px = 16
+gear_size_px = "s8"
 
 [geometry.limits]
 max_hover_actions = 2

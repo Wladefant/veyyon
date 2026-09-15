@@ -80,17 +80,19 @@ impl RenderOnce for Divider {
 		match self.orientation {
 			Orientation::Horizontal => div()
 				.w_full()
-				.min_w(tokens.spacing(SpacingStep::S13))
+				.min_w_0()
 				.h(stroke_px)
 				.min_h(stroke_px)
+				.max_h(stroke_px)
 				.flex_shrink_0()
 				.bg(line_color)
 				.my(margin_px),
 			Orientation::Vertical => div()
 				.h_full()
-				.min_h(tokens.spacing(SpacingStep::S13))
+				.min_h_0()
 				.w(stroke_px)
 				.min_w(stroke_px)
+				.max_w(stroke_px)
 				.flex_shrink_0()
 				.bg(line_color)
 				.mx(margin_px),

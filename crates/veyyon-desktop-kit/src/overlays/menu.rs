@@ -6,9 +6,9 @@ use veyyon_gpui::{App, ClickEvent, ElementId, IntoElement, RenderOnce, Window, d
 
 use crate::{
 	Picker, PickerEvent, SelectionState,
-	icons::{Icon, IconSize},
+	icons::{Icon, IconName, IconSize},
 	state::{MenuItem, MenuRowTone},
-	token_set::{ColorRole, RadiusStep, SpacingStep, TextRamp, TokenSet},
+	token_set::{ColorRole, RadiusStep, SpacingStep, StrokeStep, TextRamp, TokenSet},
 };
 
 /// Context and dropdown menu popup container.
@@ -44,22 +44,23 @@ impl RenderOnce for Menu {
 
 		let bg = tokens.color(ColorRole::Float);
 		let border_color = tokens.color(ColorRole::Hairline);
-		let radius = tokens.radius(RadiusStep::Md);
-		let pad = tokens.spacing(SpacingStep::S1);
+		let radius = tokens.radius(RadiusStep::Lg);
+		let pad = tokens.spacing(SpacingStep::S2);
 		let item_pad_x = tokens.spacing(SpacingStep::S3);
 		let item_pad_y = tokens.spacing(SpacingStep::S2);
 		let font_size = tokens.font_size(TextRamp::Body);
 
 		let mut container = div()
 			.bg(bg)
+			.backdrop_blur(tokens.float_blur())
+			.backdrop_saturation(tokens.float_saturation())
 			.rounded(radius)
-			.border_1()
+			.border(tokens.stroke(StrokeStep::Hairline))
 			.border_color(border_color)
+			.shadow(tokens.float_shadows())
 			.p(pad)
-			.shadow_lg()
 			.flex()
 			.flex_col();
-
 		// A menu whose rows carry icons keeps the gutter for the ones that do
 		// not, so every label starts on the same column (§8.25).
 		let icon_gutter = self.items.iter().any(|item| item.icon.is_some());
@@ -71,18 +72,30 @@ impl RenderOnce for Menu {
 		let picker = Picker::new(&self.items, selected);
 
 		for (idx, item) in self.items.iter().enumerate() {
+			if item.is_section {
+				let section = div()
+					.px(item_pad_x)
+					.pt(tokens.spacing(SpacingStep::S2))
+					.pb(tokens.spacing(SpacingStep::S1))
+					.text_size(tokens.font_size(TextRamp::Micro))
+					.line_height(tokens.line_height(TextRamp::Micro))
+					.text_color(tokens.color(ColorRole::Muted))
+					.child(item.label.clone());
+				container = container.child(section);
+				continue;
+			}
+
 			if item.is_separator {
 				let sep = div()
 					.w_full()
-					.h(tokens.spacing(SpacingStep::S1))
+					.h(tokens.stroke(StrokeStep::Hairline))
 					.bg(tokens.color(ColorRole::Hairline))
 					.my(tokens.spacing(SpacingStep::S1));
 				container = container.child(sep);
 				continue;
 			}
-
 			let fg = match item.tone() {
-				MenuRowTone::Refused => tokens.color(ColorRole::Muted),
+				MenuRowTone::Refused => tokens.color(ColorRole::Secondary),
 				MenuRowTone::Destructive => tokens.color(ColorRole::ErrorInk),
 				MenuRowTone::Offered => tokens.color(ColorRole::Foreground),
 			};
@@ -126,8 +139,13 @@ impl RenderOnce for Menu {
 						.text_color(tokens.color(ColorRole::Muted))
 						.child(shortcut.clone()),
 				);
+			} else if item.submenu.is_some() {
+				row = row.child(
+					Icon::new(IconName::ChevronRight)
+						.size(IconSize::Size12)
+						.color(tokens.color(ColorRole::Muted)),
+				);
 			}
-
 			// A row that answers a click is hit-tested, lights under the pointer
 			// and takes the pointing cursor; a row that answers none takes
 			// neither, so a menu never states that a refused row is pressable.

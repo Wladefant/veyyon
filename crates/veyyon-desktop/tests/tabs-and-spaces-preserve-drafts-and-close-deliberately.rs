@@ -19,35 +19,6 @@ use veyyon_desktop_surface::{
 };
 
 #[test]
-fn escape_restores_the_saved_space_name_without_submitting_a_rename() {
-	driven(seeded(), |session| {
-		session.frame().unwrap();
-		let (editor, saved) = session
-			.update(|view, window, cx| {
-				let space = view.state().navigation.active();
-				let id = space.id;
-				let saved = space.name.clone();
-				let editor = view.space_name_field_editor(id, &saved, window, cx);
-				editor.update(cx, |editor, cx| editor.set_text("abandoned space name", cx));
-				let focus = editor.read(cx).focus_handle().clone();
-				window.focus(&focus, cx);
-				view.drain_intents();
-				(editor, saved)
-			})
-			.unwrap();
-		session.frame().unwrap();
-		assert!(session.keystroke("escape").unwrap());
-		session
-			.update(|view, _, cx| {
-				assert_eq!(editor.read(cx).text(), saved);
-				assert_eq!(view.state().navigation.active().name, saved);
-				assert!(view.drain_intents().is_empty());
-			})
-			.unwrap();
-	});
-}
-
-#[test]
 fn switching_spaces_keeps_layout_separate_and_draft_bytes_session_scoped() {
 	let (_tree, dir) = state_dir("space-draft-preservation");
 	let loaded = driven(seeded(), |session| {
@@ -112,8 +83,14 @@ fn switching_spaces_keeps_layout_separate_and_draft_bytes_session_scoped() {
 	assert_eq!(std::fs::read(&saved_paths[0]).unwrap(), b"clipboard payload");
 }
 
+/// Closing membership is not deleting work: `Cmd/Ctrl W` closes the active
+/// panel tab, else parks the session (the keymap's `CloseTabOrPark`), and a
+/// session whose membership goes keeps the draft it never sent. The dirty
+/// close confirmation this once asserted is gone with the tab strip that drew
+/// it (§4.1): nothing painted the prompt, so the state it set only refused
+/// navigation and suppressed the menu with nothing on screen to answer.
 #[test]
-fn dirty_close_cancel_restores_focus_and_confirmation_only_removes_membership() {
+fn closing_membership_keeps_the_draft_it_never_sent() {
 	let (_tree, dir) = state_dir("tab-close-confirmation");
 	driven(seeded(), |session| {
 		let mut store = store_on(FIRST);
@@ -122,19 +99,8 @@ fn dirty_close_cancel_restores_focus_and_confirmation_only_removes_membership() 
 			.update(|view, window, cx| {
 				keeper.sync(view, &mut store, window, 0, cx);
 				view.set_composed("not sent", cx);
-				let focus = view.ensure_composer(cx).read(cx).focus_handle().clone();
-				window.focus(&focus, cx);
 				view.drain_intents();
-				view.request_close_tab(FIRST.into(), window, cx);
-				assert_eq!(view.state().close_tab_prompt, Some(FIRST.into()));
-				assert!(view.drain_intents().is_empty());
-				view.answer_close_tab(false, window, cx);
-				assert_eq!(window.focused(cx), Some(focus));
-				assert_eq!(view.composer_text(), "not sent");
-				assert_eq!(view.state().navigation.active().selected, Some(FIRST.into()));
-				assert!(view.drain_intents().is_empty());
-				view.request_close_tab(FIRST.into(), window, cx);
-				view.answer_close_tab(true, window, cx);
+				view.dispatch(Intent::CloseSessionTab(FIRST.into()), cx);
 				let intents = view.drain_intents();
 				assert_eq!(intents, [Intent::CloseSessionTab(FIRST.into())]);
 				keeper.sync(view, &mut store, window, 1, cx);

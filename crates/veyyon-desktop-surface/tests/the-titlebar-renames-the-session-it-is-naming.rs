@@ -49,7 +49,6 @@ const fn proven_by(key: &FieldKey) -> &'static str {
 		FieldKey::AuthSecret => "a-field-sends-what-the-operator-typed-into-it",
 		FieldKey::Setting(_) => "a-setting-row-sends-the-value-its-field-holds",
 		FieldKey::SessionRename(_) => "the-titlebar-renames-the-session-it-is-naming",
-		FieldKey::SpaceRename(_) => "tabs-and-spaces-preserve-drafts-and-close-deliberately",
 		FieldKey::Keybinding(_) => "a-keybinding-override-that-shadows-nothing-is-reported",
 		FieldKey::TaskPrompt => "contextual-surfaces-intent-and-interaction-contracts",
 		FieldKey::ProcessCommand => "the-supervisor-starts-the-command-its-field-states",

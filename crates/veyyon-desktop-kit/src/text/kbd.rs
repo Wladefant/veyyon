@@ -5,7 +5,7 @@ use veyyon_gpui::{App, IntoElement, RenderOnce, SharedString, Window, div, prelu
 use crate::{
 	families::MonoText,
 	state::KeyChord,
-	token_set::{ColorRole, MonoSizeStep, RadiusStep, SpacingStep, TokenSet},
+	token_set::{ColorRole, MonoSizeStep, RadiusStep, SpacingStep, StrokeStep, TokenSet},
 };
 
 /// Keyboard shortcut indicator element rendering chords and modifier keys.
@@ -46,7 +46,7 @@ impl RenderOnce for Kbd {
 			for modifier in chord.modifiers() {
 				let chip = div()
 					.bg(bg)
-					.border_1()
+					.border(tokens.stroke(StrokeStep::Hairline))
 					.border_color(border_color)
 					.rounded(radius)
 					.px(pad_x)
@@ -58,7 +58,7 @@ impl RenderOnce for Kbd {
 
 			let key_chip = div()
 				.bg(bg)
-				.border_1()
+				.border(tokens.stroke(StrokeStep::Hairline))
 				.border_color(border_color)
 				.rounded(radius)
 				.px(pad_x)

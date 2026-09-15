@@ -10,18 +10,19 @@ use veyyon_desktop_kit::{
 use veyyon_desktop_model::DiffMode;
 use veyyon_desktop_tokens::PanelsSurfaceTokens;
 use veyyon_gpui::{
-	Context, ElementId, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement,
-	Styled, Window, div, px,
+	Context, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
+	Window, div, px,
 };
 
 use crate::{
 	ShellView,
-	intent::Intent,
 	right_panel::{
 		content::{DiffFile, DiffStatus, DiffWithheld},
 		diff_columns::unified_columns,
 		diff_rows::{render_notice_row, withheld_notices},
 		diff_split::split_columns,
+		diff_toolbar::{diff_toolbar, stat_badge},
+		empty::empty_state,
 		pane_scroll::{PaneId, PaneScrolls},
 		pane_window::{RowWalk, scrolled},
 		review_controls::{ReviewCounts, review_bar, review_button},
@@ -38,6 +39,7 @@ pub fn diff_view(
 	diff_status: DiffStatus,
 	withheld: DiffWithheld,
 	diff_mode: DiffMode,
+	pending_edits_unavailable: Option<&str>,
 	reviews: &ReviewCounts,
 	panes: &PaneScrolls,
 	geometry: &PanelsSurfaceTokens,
@@ -61,7 +63,13 @@ pub fn diff_view(
 		// scrolls, so a sideways wheel over a hunk moved the diff's rows.
 		.restrict_scroll_to_axis();
 
-	container = container.child(diff_toolbar(diff_mode, geometry, tokens, cx));
+	container = container.child(diff_toolbar(
+		diff_mode,
+		pending_edits_unavailable,
+		geometry,
+		tokens,
+		cx,
+	));
 	if reviews.enabled {
 		container = container.child(review_bar(reviews, geometry, tokens, cx));
 	}
@@ -81,25 +89,20 @@ pub fn diff_view(
 		if !cut_notices.is_empty() {
 			return container;
 		}
-		let message = match diff_status {
-			DiffStatus::Unloaded => "Open changes",
-			DiffStatus::Loading => "Loading changes...",
-			DiffStatus::Loaded => "No uncommitted changes",
-			DiffStatus::Failed => "Failed to load changes",
+		let (primary, action) = match diff_status {
+			DiffStatus::Unloaded => {
+				("Changes not requested yet", "Select working tree or staged above to inspect diffs")
+			},
+			DiffStatus::Loading => ("Loading changes...", "Inspecting working tree and index"),
+			DiffStatus::Loaded => {
+				("Working tree is clean", "No uncommitted modifications in this workspace")
+			},
+			DiffStatus::Failed => (
+				"Unable to load repository changes",
+				"Check git repository status or retry from the command palette",
+			),
 		};
-		return container.child(
-			div()
-				.id("right-panel-diff-empty")
-				.flex_1()
-				.w_full()
-				.flex()
-				.items_center()
-				.justify_center()
-				.py(tokens.spacing(SpacingStep::S4))
-				.text_size(tokens.font_size(TextRamp::Small))
-				.text_color(tokens.color(ColorRole::Muted))
-				.child(message),
-		);
+		return container.child(empty_state("right-panel-diff-empty", primary, action, tokens));
 	}
 	let mut walk = RowWalk::of(&scrolled(&rows, window));
 	walk.advance(geometry.chrome_row_height_px);
@@ -119,7 +122,7 @@ pub fn diff_view(
 			container = container.child(Divider::horizontal());
 			walk.advance(hairline_px);
 		}
-		container = container.child(file_header(file, effective_mode, reviews, geometry, tokens, cx));
+		container = container.child(file_header(file, reviews, geometry, tokens, cx));
 		walk.advance(geometry.chrome_row_height_px);
 		container = container.child(file_body(
 			file_idx,
@@ -140,28 +143,44 @@ pub fn diff_view(
 
 fn file_header(
 	file: &DiffFile,
-	diff_mode: DiffMode,
 	reviews: &ReviewCounts,
 	geometry: &PanelsSurfaceTokens,
 	tokens: &TokenSet,
 	cx: &Context<ShellView>,
 ) -> impl IntoElement {
-	let next_mode = match diff_mode {
-		DiffMode::Unified => DiffMode::Split,
-		DiffMode::Split => DiffMode::Unified,
-	};
-	let mode_label = match diff_mode {
-		DiffMode::Unified => "Unified",
-		DiffMode::Split => "Split",
-	};
-
 	let review = reviews.enabled.then(|| {
-		review_button(
-			Some(file.path.clone()),
-			reviews.files.get(&file.path).copied().unwrap_or(0),
-			tokens,
-			cx,
-		)
+		let fc = reviews.files.get(&file.path).copied().unwrap_or_default();
+		review_button(Some(file.path.clone()), fc.unresolved, fc.resolved, tokens, cx)
+	});
+	let display_path = file
+		.old_path
+		.as_deref()
+		.map_or_else(|| file.path.clone(), |old| format!("{old} → {}", file.path));
+	let status_badge = match file.status {
+		veyyon_desktop_model::ChangeStatus::Renamed => {
+			Some(("renamed", tokens.color(ColorRole::Secondary)))
+		},
+		veyyon_desktop_model::ChangeStatus::Added => Some(("new", tokens.tint(TintRole::Done).ink)),
+		veyyon_desktop_model::ChangeStatus::Deleted => {
+			Some(("deleted", tokens.tint(TintRole::Error).ink))
+		},
+		veyyon_desktop_model::ChangeStatus::Conflicted => {
+			Some(("conflict", tokens.tint(TintRole::Error).ink))
+		},
+		veyyon_desktop_model::ChangeStatus::Untracked => {
+			Some(("untracked", tokens.color(ColorRole::Muted)))
+		},
+		veyyon_desktop_model::ChangeStatus::Modified => None,
+	};
+	let status_el = status_badge.map(|(label, color)| {
+		div()
+			.flex_shrink_0()
+			.px(tokens.spacing(SpacingStep::S1))
+			.rounded(tokens.radius(RadiusStep::Xs))
+			.bg(tokens.color(ColorRole::Rail))
+			.text_size(tokens.font_size(TextRamp::Micro))
+			.text_color(color)
+			.child(label)
 	});
 	div()
 		.h(px(geometry.chrome_row_height_px))
@@ -193,41 +212,21 @@ fn file_header(
 						.font_weight(tokens.font_weight(TextWeight::Medium))
 						.text_color(tokens.color(ColorRole::Foreground))
 						.truncate()
-						.child(file.path.clone()),
+						.child(display_path),
 				)
-				.child(
-					div()
-						.flex_shrink_0()
-						.text_size(tokens.font_size(TextRamp::Micro))
-						.text_color(tokens.tint(TintRole::Done).fill)
-						.child(format!("+{}", file.additions)),
-				)
-				.child(
-					div()
-						.flex_shrink_0()
-						.text_size(tokens.font_size(TextRamp::Micro))
-						.text_color(tokens.tint(TintRole::Error).fill)
-						.child(format!("-{}", file.deletions)),
-				),
+				.children(status_el)
+				.child(stat_badge(
+					format!("+{}", file.additions),
+					tokens.tint(TintRole::Done).ink,
+					tokens,
+				))
+				.child(stat_badge(
+					format!("-{}", file.deletions),
+					tokens.tint(TintRole::Error).ink,
+					tokens,
+				)),
 		)
 		.children(review)
-		.child(
-			div()
-				.id(ElementId::Name(format!("toggle-diff-mode-{}", file.path).into()))
-				.flex_shrink_0()
-				.on_click(cx.listener(move |view, _event, _window, cx| {
-					view.dispatch(Intent::SetDiffMode(next_mode), cx);
-				}))
-				.px(tokens.spacing(SpacingStep::S2))
-				.py(px(2.0))
-				.rounded(tokens.radius(RadiusStep::Sm))
-				.border(tokens.stroke(StrokeStep::Hairline))
-				.border_color(tokens.color(ColorRole::Hairline))
-				.hover(|s| s.bg(tokens.row_hover()))
-				.text_size(tokens.font_size(TextRamp::Micro))
-				.text_color(tokens.color(ColorRole::Secondary))
-				.child(mode_label),
-		)
 }
 
 /// Draws one file's rows: one pane in unified mode, two in split mode, each
@@ -301,90 +300,4 @@ fn file_body(
 				)
 		},
 	}
-}
-
-fn diff_toolbar(
-	diff_mode: DiffMode,
-	geometry: &PanelsSurfaceTokens,
-	tokens: &TokenSet,
-	cx: &Context<ShellView>,
-) -> impl IntoElement {
-	let next_mode = match diff_mode {
-		DiffMode::Unified => DiffMode::Split,
-		DiffMode::Split => DiffMode::Unified,
-	};
-	let mode_label = match diff_mode {
-		DiffMode::Unified => "Unified",
-		DiffMode::Split => "Split",
-	};
-
-	div()
-		.h(px(geometry.chrome_row_height_px))
-		.w_full()
-		.flex_shrink_0()
-		.flex()
-		.flex_row()
-		.items_center()
-		.justify_between()
-		.px(tokens.spacing(SpacingStep::S3))
-		.bg(tokens.color(ColorRole::Inset))
-		.border_b(px(geometry.chrome_resize_handle_line_px))
-		.border_color(tokens.color(ColorRole::Hairline))
-		.child(
-			div()
-				.flex()
-				.flex_row()
-				.items_center()
-				.gap(tokens.spacing(SpacingStep::S2))
-				.child(
-					div()
-						.id("diff-scope-working-tree")
-						.on_click(cx.listener(|view, _event, _window, cx| {
-							view.dispatch(
-								Intent::SelectChangeScope(veyyon_desktop_model::ChangeScope::WorkingTree),
-								cx,
-							);
-						}))
-						.px(tokens.spacing(SpacingStep::S2))
-						.py(px(2.0))
-						.rounded(tokens.radius(RadiusStep::Sm))
-						.hover(|s| s.bg(tokens.row_hover()))
-						.text_size(tokens.font_size(TextRamp::Micro))
-						.text_color(tokens.color(ColorRole::Foreground))
-						.child("Working tree"),
-				)
-				.child(
-					div()
-						.id("diff-scope-staged")
-						.on_click(cx.listener(|view, _event, _window, cx| {
-							view.dispatch(
-								Intent::SelectChangeScope(veyyon_desktop_model::ChangeScope::Staged),
-								cx,
-							);
-						}))
-						.px(tokens.spacing(SpacingStep::S2))
-						.py(px(2.0))
-						.rounded(tokens.radius(RadiusStep::Sm))
-						.hover(|s| s.bg(tokens.row_hover()))
-						.text_size(tokens.font_size(TextRamp::Micro))
-						.text_color(tokens.color(ColorRole::Secondary))
-						.child("Staged"),
-				),
-		)
-		.child(
-			div()
-				.id("diff-toolbar-toggle-mode")
-				.on_click(cx.listener(move |view, _event, _window, cx| {
-					view.dispatch(Intent::SetDiffMode(next_mode), cx);
-				}))
-				.px(tokens.spacing(SpacingStep::S2))
-				.py(px(2.0))
-				.rounded(tokens.radius(RadiusStep::Sm))
-				.border(tokens.stroke(StrokeStep::Hairline))
-				.border_color(tokens.color(ColorRole::Hairline))
-				.hover(|s| s.bg(tokens.row_hover()))
-				.text_size(tokens.font_size(TextRamp::Micro))
-				.text_color(tokens.color(ColorRole::Secondary))
-				.child(mode_label),
-		)
 }

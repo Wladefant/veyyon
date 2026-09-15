@@ -16,6 +16,7 @@ use veyyon_desktop_model::PersistedState;
 use veyyon_desktop_surface::{
 	AppearanceChoice, ShellState, ShellView, ThemeLibrary, install_appearances,
 };
+use veyyon_desktop_tokens::SpacingStep;
 use veyyon_gpui::{
 	App, AppContext, Bounds, Pixels, Size, TitlebarOptions, WindowBounds, WindowHandle,
 	WindowOptions, point, px,
@@ -114,7 +115,10 @@ pub fn open_shell_window(bundle: &StartupBundle, cx: &mut App) -> Option<Opened>
 	let titlebar = cfg!(target_os = "macos").then(|| TitlebarOptions {
 		title:                  None,
 		appears_transparent:    true,
-		traffic_light_position: Some(point(px(12.0), px(20.0))),
+		traffic_light_position: Some(point(
+			px(bundle.tokens.scale.spacing(SpacingStep::S6)),
+			px(bundle.tokens.scale.spacing(SpacingStep::S9)),
+		)),
 	});
 	let window_options = WindowOptions {
 		window_bounds: Some(window_bounds),

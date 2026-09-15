@@ -9,10 +9,7 @@ use std::time::Instant;
 use crate::{
 	curves::EasingCurve,
 	registry::{AnimatorKey, AnimatorRegistry, SurfaceId},
-	role::{
-		DirectThenSpringModel, DurationModel, MotionModel, MotionRole, ResolvedMotion, resolve_motion,
-	},
-	spring::SpringModel,
+	role::{DurationModel, MotionModel, MotionRole, ResolvedMotion, resolve_motion},
 	tokens::MotionTokens,
 };
 
@@ -39,9 +36,7 @@ impl PanelMotion {
 	pub fn new(surface_id: SurfaceId, slot: u64, initial_width: f32) -> Self {
 		let mut registry = AnimatorRegistry::new();
 		let key = AnimatorKey::new(surface_id, MotionRole::Panel, slot);
-		let model = MotionModel::DirectThenSpring(DirectThenSpringModel {
-			snap_spring: SpringModel { stiffness: 180.0, damping: 22.0, mass: 1.0 },
-		});
+		let model = MotionModel::DirectThenSpring(MotionTokens::reference().panel);
 		registry.get_or_create_with_initial(key, initial_width, initial_width, model, Instant::now());
 		Self {
 			surface_id,

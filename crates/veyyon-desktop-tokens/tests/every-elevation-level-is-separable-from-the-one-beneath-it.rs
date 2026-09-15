@@ -136,12 +136,14 @@ fn no_two_levels_resolve_to_the_same_ground_in_any_appearance() {
 			for upper in &levels[i + 1..] {
 				let lower_role = role_named(&lower.ground_role).expect("declared role");
 				let upper_role = role_named(&upper.ground_role).expect("declared role");
-				if lower_role == upper_role {
-					panic!(
-						"{}: level {} and level {} both declare ground role {:?}",
-						theme.appearance, lower.index, upper.index, lower.ground_role
-					);
-				}
+				assert!(
+					lower_role != upper_role,
+					"{}: level {} and level {} both declare ground role {:?}",
+					theme.appearance,
+					lower.index,
+					upper.index,
+					lower.ground_role
+				);
 				let lower_colour = theme.role(&path, lower_role).expect("declared");
 				let upper_colour = theme.role(&path, upper_role).expect("declared");
 				assert_ne!(

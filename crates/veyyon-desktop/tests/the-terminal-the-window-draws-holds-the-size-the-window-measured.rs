@@ -176,7 +176,11 @@ fn the_measure_reaches_every_terminal_the_window_holds() {
 fn the_drawn_grid_is_the_measured_width_on_the_frame_that_measured_it() {
 	let mut attached = Attached::new();
 	attached.hold("t1", b"output written before anything was resized");
-	attached.open_tab(&DrawerTab::Terminal { id: "t1".to_owned(), title: "/bin/sh".to_owned() });
+	attached.open_tab(&DrawerTab::Terminal {
+		id:     "t1".to_owned(),
+		title:  "/bin/sh".to_owned(),
+		status: TerminalStatus::Running,
+	});
 	assert_eq!(attached.drawn_width(), 80, "the drawer opens at the size it was built at");
 
 	attached.frame_raised(&[Intent::ResizeTerminal { cols: 140, rows: 30 }]);
@@ -191,7 +195,11 @@ fn output_the_window_replays_itself_is_broken_at_the_measured_width() {
 	let mut attached = Attached::new();
 	attached.chunk("t1", b"a terminal whose output arrived before it was opened");
 	attached.frame_raised(&[Intent::ResizeTerminal { cols: 120, rows: 14 }]);
-	attached.open_tab(&DrawerTab::Terminal { id: "t1".to_owned(), title: "/bin/sh".to_owned() });
+	attached.open_tab(&DrawerTab::Terminal {
+		id:     "t1".to_owned(),
+		title:  "/bin/sh".to_owned(),
+		status: TerminalStatus::Running,
+	});
 
 	assert_eq!(attached.drawn_width(), 120, "the replay grid is the measured width");
 	assert_eq!(attached.state.drawer.grid_rows.len(), 14, "and the measured height");

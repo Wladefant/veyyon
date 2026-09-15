@@ -5,8 +5,9 @@
 //! state; the line states what the state is about, and says nothing when the
 //! state is all there is to report.
 
+use veyyon_desktop_kit::text::markdown::plain_line;
 use veyyon_desktop_model::{SessionBadge, SessionId, Store};
-use veyyon_desktop_surface::{Badge, plain_line};
+use veyyon_desktop_surface::Badge;
 
 use super::queue::badge;
 

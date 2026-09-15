@@ -13,8 +13,6 @@
 //! a chord bound above the popover on the focus path, `Escape` among them,
 //! still resolves at the shell, which is where every float is dismissed.
 
-use std::time::Instant;
-
 use veyyon_desktop_motion::SurfaceId;
 use veyyon_gpui::{AnyElement, Context, FocusHandle, IntoElement, Size, Window, px};
 
@@ -100,7 +98,7 @@ pub(super) fn detail_float(
 	view.detail_retained.as_ref()?;
 	let frame = view.detail_motion.sample(
 		open,
-		Instant::now(),
+		cx.background_executor().now(),
 		&view.installed.motion,
 		view.rail_motion.is_reduced_motion(),
 	);

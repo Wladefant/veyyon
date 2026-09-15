@@ -1,6 +1,7 @@
 //! The decisions attached above the composer, and the answer each one sends.
 
 use serde_json::{Value, json};
+use veyyon_desktop_kit::text::markdown::plain_line;
 use veyyon_desktop_model::{InteractionId, PendingDecisions};
 use veyyon_desktop_surface::{Card, Intent, plain_lines};
 
@@ -27,7 +28,7 @@ pub(super) fn cards(pending: &PendingDecisions) -> Vec<Card> {
 		// the blank the heading was parted from is not drawn as an empty row.
 		let lines = plain_lines(&p.markdown_plan);
 		let named = lines.iter().position(|line| !line.trim().is_empty());
-		let title = named.map_or_else(String::new, |at| lines[at].trim().to_owned());
+		let title = plain_line(&p.markdown_plan);
 		let rest = named.map_or(&[][..], |at| &lines[at + 1..]);
 		let start = rest
 			.iter()

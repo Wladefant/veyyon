@@ -91,6 +91,26 @@ impl Badge {
 	pub const fn blocks_on_operator(self) -> bool {
 		matches!(self, Self::Approval | Self::Input | Self::Plan | Self::Due)
 	}
+
+	/// Urgency precedence rank (1 = highest urgency, §0).
+	pub const fn precedence(self) -> u8 {
+		match self {
+			Self::Approval => 1,
+			Self::Input => 2,
+			Self::Plan => 3,
+			Self::Failed => 4,
+			Self::Due => 5,
+			Self::Done => 6,
+			Self::Working => 7,
+			Self::Watching => 8,
+		}
+	}
+
+	/// Resolves the highest precedence badge among candidates.
+	#[must_use]
+	pub fn resolve(candidates: &[Self]) -> Option<Self> {
+		candidates.iter().copied().min_by_key(|b| b.precedence())
+	}
 }
 
 /// A queue section (§5.1), in the order the queue lists them.
@@ -276,6 +296,13 @@ pub enum Card {
 		/// The plan's body.
 		body:  Vec<String>,
 	},
+	/// The agent or host refused an action or request.
+	Refusal {
+		/// What was refused.
+		title:  String,
+		/// The refusal explanation or lines.
+		detail: Vec<String>,
+	},
 }
 
 impl Card {
@@ -291,6 +318,7 @@ impl Card {
 		match self {
 			Self::Approval { .. } => 4,
 			Self::Plan { .. } => 2,
+			Self::Refusal { .. } => 1,
 			Self::Question { options, .. } => match options.len() {
 				0 => 1,
 				offered => offered,
@@ -324,6 +352,7 @@ impl CardAnswers {
 			Card::Approval { .. } => &self.approvals,
 			Card::Question { .. } => &self.questions,
 			Card::Plan { .. } => &self.plans,
+			Card::Refusal { .. } => &Availability::Enabled,
 		}
 	}
 }

@@ -13,7 +13,7 @@
 #[path = "../text-selection/mod.rs"]
 mod text_selection;
 
-use std::{path::Path, thread::sleep, time::Duration};
+use std::{path::Path, time::Duration};
 
 #[allow(unused_imports, reason = "each including binary re-uses a subset of these")]
 pub use text_selection::{along, changed_pixels, run_labelled};
@@ -140,7 +140,7 @@ pub const SETTLE: Duration = Duration::from_millis(250);
 /// The frame left behind once a transition has finished. The second frame is
 /// the one read: the first carries the repaint the settled sample asked for.
 pub fn settled_frame(session: &mut HeadlessSession<'_, ShellView>) -> Captured {
-	sleep(SETTLE);
+	session.advance(SETTLE);
 	session
 		.frame()
 		.expect("the window repaints after the transition");

@@ -320,17 +320,21 @@ fn panel_placement(
 	if !panel_open {
 		return RightPanelPlacement::Absent;
 	}
-
 	let panels = &surface.panels;
-	// The viewport share bounds both placements: a panel wider than its share
-	// of a narrow window covers the surface it is annotating.
 	let share = viewport_px * panels.right_panel_max_viewport_ratio;
-	let overlay = RightPanelPlacement::Overlay {
-		width_px: panels
+	let overlay_width = match breakpoint.right_panel_mode {
+		RightPanelMode::Overlay => panels
+			.right_panel_min_width_px
+			.min(viewport_px - queue_px)
+			.max(panels.right_panel_min_width_px.min(viewport_px)),
+		RightPanelMode::Inline { .. } => panels
 			.right_panel_default_width_px
 			.min(share)
 			.max(panels.right_panel_min_width_px.min(viewport_px)),
 	};
+	let overlay_width =
+		((overlay_width / 4.0).round() * 4.0).max(panels.right_panel_min_width_px.min(viewport_px));
+	let overlay = RightPanelPlacement::Overlay { width_px: overlay_width };
 
 	match breakpoint.right_panel_mode {
 		RightPanelMode::Overlay => overlay,
@@ -345,8 +349,7 @@ fn panel_placement(
 			// takes the upper row's panel out of the lower row's transcript,
 			// which is how the surface being read reaches zero width.
 			let ceiling = viewport_px - queue_px - panels.right_panel_container_margin_px;
-			let width = asked.min(share).min(ceiling);
-
+			let width = ((asked.min(share).min(ceiling)) / 4.0).floor() * 4.0;
 			// Below the panel's own minimum there is no inline column to draw:
 			// it overlays instead, so it stays reachable at its real measure
 			// rather than becoming a sliver of a tree.

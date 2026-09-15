@@ -39,7 +39,7 @@ pub mod tool_view;
 pub mod transcript;
 pub use composer::{
 	Attachment, AttachmentSource, MediaKind, MediaType, ModelChoice, Payload, PrimaryAction,
-	QueueMode, SecondaryAction, ThinkingLevel, TurnPhase,
+	QueueMode, ThinkingLevel, TurnPhase,
 };
 pub use detail::{Detail, DetailFacts, DetailKind, DetailRow, DetailSource, detail_facts};
 pub use drawer::{
@@ -57,7 +57,7 @@ pub use shell::{
 	HostShape, ScrollAnchor, SessionShape, ShellView,
 	fields::{FieldKey, FieldSlots},
 };
-pub use text::{plain_line, plain_lines};
+pub use text::plain_lines;
 pub use tokens::{
 	InstalledTokens, ThemeLibrary, apply_appearance, install_appearances, install_tokens,
 	reload_tokens,

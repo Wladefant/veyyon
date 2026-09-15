@@ -144,7 +144,7 @@ fn push_change_chunk(
 			Some((number, text, intraline)) => Line {
 				number: Some(*number),
 				sign: "-",
-				sign_role: ColorRole::Foreground,
+				sign_role: ColorRole::ErrorInk,
 				text,
 				intraline,
 				tint: Some(TintRole::Error),
@@ -167,7 +167,7 @@ fn push_change_chunk(
 			Some((number, text, intraline)) => Line {
 				number: Some(*number),
 				sign: "+",
-				sign_role: ColorRole::Foreground,
+				sign_role: ColorRole::DoneInk,
 				text,
 				intraline,
 				tint: Some(TintRole::Done),

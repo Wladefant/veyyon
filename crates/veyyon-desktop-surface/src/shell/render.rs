@@ -8,7 +8,7 @@
 mod panel;
 mod queue;
 
-use veyyon_desktop_kit::{ColorRole, SpacingStep};
+use veyyon_desktop_kit::{ColorRole, SpacingStep, TextRamp};
 use veyyon_desktop_model::SurfaceId;
 use veyyon_desktop_tokens::QueueMode;
 use veyyon_gpui::{Context, InteractiveElement, IntoElement, ParentElement, Styled, Window, div};
@@ -49,7 +49,6 @@ pub fn render_shell(
 	let now = cx.background_executor().now();
 	view.sync_transcript_viewport(transcript_height, now);
 	let chrome_px = view.installed().surface.shell.titlebar_height_px
-		+ view.navigation_height()
 		+ if view.has_notice() {
 			attention_strip_height(&view.installed().set)
 		} else {
@@ -124,7 +123,9 @@ pub fn render_shell(
 	let rename_editor = if view.state().current_id > 0 {
 		let current_id = view.state().current_id;
 		let title = view.state().title.clone();
-		Some(view.session_rename_field_editor(current_id, &title, window, cx))
+		let editor = view.session_rename_field_editor(current_id, &title, window, cx);
+		let is_focused = editor.read(cx).focus_handle().is_focused(window);
+		if is_focused { Some(editor) } else { None }
 	} else {
 		None
 	};
@@ -142,6 +143,8 @@ pub fn render_shell(
 		// text system cannot resolve, and an unresolvable family costs a
 		// ten-deep fallback walk and a constructed error per run per frame.
 		.font_family(tokens.ui_family())
+		.text_size(tokens.font_size(TextRamp::Body))
+		.line_height(tokens.line_height(TextRamp::Body))
 		.overflow_hidden()
 		.child(titlebar(
 			TitlebarState {
@@ -167,7 +170,6 @@ pub fn render_shell(
 		.laid_out()
 		.track_children(root, |index| (index == 0).then_some(Region::Titlebar));
 	let mut root = bind_global_keys(root, cx);
-	root = root.child(view.navigation_strip(window, cx));
 
 	if let Some(banner) = connection_banner(
 		&view.state().connection,

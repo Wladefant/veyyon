@@ -23,13 +23,13 @@ type_size = "read"
 type_size = "read"
 
 [chrome.collapsed]
-height_px = 24
-event_line_height_px = 12
+height_px = "s10"
+event_line_height_px = "s6"
 
 [chrome.caps]
 invoke_mono_pane_max_height_px = 240
 code_fence_max_height_px = 320
 image_max_height_px = 400
 plan_body_max_height_px = 400
-plan_fade_height_px = 64
+plan_fade_height_px = "s13"
 table_row_height_px = 18

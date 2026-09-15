@@ -57,34 +57,7 @@ fn the_shell_draws_its_regions_where_the_tokens_put_them() {
 			)
 		})
 		.expect("column origin");
-	assert_eq!(
-		columns_top,
-		titlebar * 3.0,
-		"titlebar and both navigation rows use their token height"
-	);
-	for close_prompt in [Some("session-first".into()), None] {
-		let rows = if close_prompt.is_some() { 4.0 } else { 3.0 };
-		session
-			.update(|view, _, cx| {
-				view.state_mut().close_tab_prompt = close_prompt;
-				cx.notify();
-			})
-			.expect("change close confirmation");
-		session.frame().expect("navigation rows lay out");
-		let top = session
-			.update(|view, _, _| {
-				f32::from(
-					view
-						.laid_out()
-						.drawn_bounds(veyyon_desktop_surface::damage::Region::Queue)
-						.expect("queue bounds")
-						.origin
-						.y,
-				)
-			})
-			.expect("updated column origin");
-		assert_eq!(top, titlebar * rows, "navigation rows do not shrink when confirmation changes");
-	}
+	assert_eq!(columns_top, titlebar, "titlebar uses its token height");
 	let frame = captured.frame;
 
 	// Written so the surface can be judged by looking at it, which is the only

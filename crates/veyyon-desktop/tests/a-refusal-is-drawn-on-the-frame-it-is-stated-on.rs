@@ -57,7 +57,6 @@ enum KeyShape {
 	Setting,
 	/// [`FieldKey::SessionRename`].
 	SessionRename,
-	SpaceRename,
 	/// [`FieldKey::Keybinding`].
 	Keybinding,
 	/// [`FieldKey::TaskPrompt`].
@@ -75,7 +74,6 @@ const fn key_shape(key: &FieldKey) -> KeyShape {
 		FieldKey::AuthSecret => KeyShape::AuthSecret,
 		FieldKey::Setting(_) => KeyShape::Setting,
 		FieldKey::SessionRename(_) => KeyShape::SessionRename,
-		FieldKey::SpaceRename(_) => KeyShape::SpaceRename,
 		FieldKey::Keybinding(_) => KeyShape::Keybinding,
 		FieldKey::TaskPrompt => KeyShape::TaskPrompt,
 		FieldKey::ProcessCommand => KeyShape::ProcessCommand,
@@ -104,8 +102,6 @@ struct Case {
 
 /// Every field that refuses, each seeded in a shell that draws it.
 fn cases() -> Vec<Case> {
-	let mut spaces = fixture::populated();
-	spaces.navigation.create("Research");
 	vec![
 		Case {
 			key:   FieldKey::AuthSecret,
@@ -127,20 +123,6 @@ fn cases() -> Vec<Case> {
 			text:  "",
 			says:  "A session name cannot be empty",
 			takes: "A name the operator typed",
-		},
-		Case {
-			key:   FieldKey::SpaceRename(1),
-			state: spaces.clone(),
-			text:  "",
-			says:  "Choose a nonempty, unique space name",
-			takes: "Reading",
-		},
-		Case {
-			key:   FieldKey::SpaceRename(1),
-			state: spaces,
-			text:  "Research",
-			says:  "Choose a nonempty, unique space name",
-			takes: "Reading",
 		},
 		Case {
 			key:   FieldKey::Keybinding(BOUND_ACTION.to_owned()),
@@ -215,9 +197,9 @@ fn hold(session: &mut HeadlessSession<'_, ShellView>, key: &FieldKey, text: &str
 	let text = text.to_owned();
 	session
 		.update(move |view, window, cx| {
-			let editor = view
-				.retained_field(&key)
-				.expect("the drawn surface registered an editor under the field it holds");
+			let editor = view.retained_field(&key).unwrap_or_else(|| {
+				panic!("the drawn surface registered no editor under {key:?}, which it holds")
+			});
 			let focus = editor.read(cx).focus_handle().clone();
 			window.focus(&focus, cx);
 			editor.update(cx, |editor, cx| editor.set_text(text, cx));

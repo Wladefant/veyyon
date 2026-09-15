@@ -130,7 +130,11 @@ fn the_terminal_the_drawer_asked_for_is_the_tab_it_draws() {
 	host.project();
 	assert_eq!(
 		host.active(),
-		&DrawerTab::Terminal { id: "term-1".to_owned(), title: "/bin/sh".to_owned() },
+		&DrawerTab::Terminal {
+			id:     "term-1".to_owned(),
+			title:  "/bin/sh".to_owned(),
+			status: TerminalStatus::Running,
+		},
 		"the terminal the drawer asked for is the tab it draws: {:?}",
 		host.state.drawer.tabs
 	);
@@ -146,7 +150,11 @@ fn every_tab_the_operator_can_choose_is_kept_when_a_terminal_arrives() {
 	assert_eq!(
 		strip,
 		vec![
-			DrawerTab::Terminal { id: "term-1".to_owned(), title: "/bin/sh".to_owned() },
+			DrawerTab::Terminal {
+				id:     "term-1".to_owned(),
+				title:  "/bin/sh".to_owned(),
+				status: TerminalStatus::Running,
+			},
 			DrawerTab::Processes,
 			DrawerTab::Process { name: "web".to_owned() },
 		],
@@ -192,7 +200,11 @@ fn a_drawer_nothing_chose_follows_the_newest_running_terminal() {
 	host.project();
 	assert_eq!(
 		host.active(),
-		&DrawerTab::Terminal { id: "term-2".to_owned(), title: "/bin/sh".to_owned() },
+		&DrawerTab::Terminal {
+			id:     "term-2".to_owned(),
+			title:  "/bin/sh".to_owned(),
+			status: TerminalStatus::Running,
+		},
 		"an unchosen drawer draws the newest running terminal: {:?}",
 		host.state.drawer.tabs
 	);
@@ -209,7 +221,11 @@ fn a_chosen_terminal_that_left_the_list_gives_way_to_a_running_one() {
 	host.apply(&Intent::SelectDrawerTab(0));
 	assert_eq!(
 		host.active(),
-		&DrawerTab::Terminal { id: "term-1".to_owned(), title: "/bin/sh".to_owned() },
+		&DrawerTab::Terminal {
+			id:     "term-1".to_owned(),
+			title:  "/bin/sh".to_owned(),
+			status: TerminalStatus::Running,
+		},
 		"the chosen terminal is the one the drawer draws"
 	);
 
@@ -217,7 +233,11 @@ fn a_chosen_terminal_that_left_the_list_gives_way_to_a_running_one() {
 	host.project();
 	assert_eq!(
 		host.active(),
-		&DrawerTab::Terminal { id: "term-2".to_owned(), title: "/bin/sh".to_owned() },
+		&DrawerTab::Terminal {
+			id:     "term-2".to_owned(),
+			title:  "/bin/sh".to_owned(),
+			status: TerminalStatus::Running,
+		},
 		"a chosen tab that is gone gives way to the running terminal: {:?}",
 		host.state.drawer.tabs
 	);

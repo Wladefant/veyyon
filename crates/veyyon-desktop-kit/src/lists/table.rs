@@ -6,7 +6,7 @@ use veyyon_gpui::{
 	AnyElement, App, IntoElement, RenderOnce, SharedString, Window, div, prelude::*,
 };
 
-use crate::token_set::{ColorRole, SpacingStep, TextRamp, TokenSet};
+use crate::token_set::{ColorRole, SpacingStep, StrokeStep, TextRamp, TokenSet};
 
 /// Column descriptor for table grid primitive.
 #[derive(Debug, Clone)]
@@ -59,6 +59,7 @@ impl RenderOnce for Table {
 
 		let header_bg = tokens.color(ColorRole::Inset);
 		let border_color = tokens.color(ColorRole::Hairline);
+		let hairline = tokens.stroke(StrokeStep::Hairline);
 		let header_fg = tokens.color(ColorRole::Secondary);
 		let pad_x = tokens.spacing(SpacingStep::S3);
 		let pad_y = tokens.spacing(SpacingStep::S2);
@@ -68,7 +69,7 @@ impl RenderOnce for Table {
 
 		let mut header_row = div()
 			.bg(header_bg)
-			.border_b_1()
+			.border_b(hairline)
 			.border_color(border_color)
 			.flex()
 			.items_center();
@@ -90,7 +91,7 @@ impl RenderOnce for Table {
 		for row_idx in 0..self.row_count {
 			let mut row_el = div()
 				.w_full()
-				.border_b_1()
+				.border_b(hairline)
 				.border_color(border_color)
 				.flex()
 				.items_center();

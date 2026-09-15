@@ -33,6 +33,7 @@ mod queue_search;
 mod render;
 mod review;
 mod session;
+mod session_error;
 mod split;
 pub mod titlebar;
 mod toasts;
@@ -188,7 +189,6 @@ pub struct ShellView {
 	menu_return:           Option<FocusHandle>,
 	general_settings_list: GeneralSettingsListState,
 	review:                review::ReviewState,
-	navigation_ui:         navigation::NavigationUi,
 	now_ms:                u64,
 	subscriptions:         Vec<Subscription>,
 }
@@ -257,7 +257,6 @@ impl ShellView {
 			menu_return: None,
 			general_settings_list: GeneralSettingsListState::new(),
 			review: review::ReviewState::default(),
-			navigation_ui: navigation::NavigationUi::default(),
 			now_ms: 0,
 			subscriptions: Vec::new(),
 		}

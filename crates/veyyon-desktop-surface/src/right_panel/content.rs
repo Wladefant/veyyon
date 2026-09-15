@@ -132,31 +132,34 @@ pub struct PanelFailure {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PanelContent {
 	/// Available tabs in the panel strip.
-	pub tabs:               Vec<PanelTab>,
+	pub tabs: Vec<PanelTab>,
 	/// Currently selected active tab.
-	pub active_tab:         PanelTab,
+	pub active_tab: PanelTab,
 	/// Parsed diff files and hunks for the Changes tab.
-	pub diff:               Vec<DiffFile>,
+	pub diff: Vec<DiffFile>,
 	/// Repository root and scope of the host's current diff snapshot.
-	pub review_repository:  Option<(String, ChangeScope)>,
+	pub review_repository: Option<(String, ChangeScope)>,
 	/// Loading status of the diff.
-	pub diff_status:        DiffStatus,
+	pub diff_status: DiffStatus,
 	/// Active file snapshot for the File tab.
-	pub file:               Option<FileView>,
+	pub file: Option<FileView>,
 	/// Filesystem directory tree for the Tree tab.
-	pub tree:               TreeContent,
+	pub tree: TreeContent,
 	/// Layout mode for diff rendering (unified vs split).
-	pub diff_mode:          DiffMode,
+	pub diff_mode: DiffMode,
 	/// The session's accounting totals for the Usage tab.
-	pub usage:              Option<UsageTotals>,
+	pub usage: Option<UsageTotals>,
 	/// Reason if the panel is unavailable.
 	pub unavailable_reason: Option<String>,
+	/// Reason if pending edits are unavailable from the host (§1.2 item 1,
+	/// §4.3).
+	pub pending_edits_unavailable: Option<String>,
 	/// The answers `diff` and `file` were derived from.
-	pub derived_from:       DerivedFrom,
+	pub derived_from: DerivedFrom,
 	/// What the host cut from the snapshot `diff` was parsed from.
-	pub withheld:           DiffWithheld,
+	pub withheld: DiffWithheld,
 	/// The host's failure for the active tab, restated every projection.
-	pub failure:            Option<PanelFailure>,
+	pub failure: Option<PanelFailure>,
 }
 
 impl PanelContent {

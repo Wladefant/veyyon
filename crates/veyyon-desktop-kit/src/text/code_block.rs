@@ -14,7 +14,7 @@ use crate::{
 		selectable::selectable_line,
 		span_selection::{SelectableProse, SpanId},
 	},
-	token_set::{ColorRole, MonoSizeStep, RadiusStep, SpacingStep, TextRamp, TokenSet},
+	token_set::{ColorRole, MonoSizeStep, RadiusStep, SpacingStep, StrokeStep, TextRamp, TokenSet},
 };
 
 /// A captioned, height-capped pane of monospace lines.
@@ -98,19 +98,14 @@ impl RenderOnce for CodeBlock {
 		let number_ink = tokens.color(ColorRole::Muted);
 		let width = self.lines.len().to_string().len();
 
-		let mut body = div()
+		let mut content = div()
 			.w_full()
-			.overflow_hidden()
-			.bg(tokens.color(ColorRole::Inset))
-			.rounded(tokens.radius(RadiusStep::Sm))
 			.p(tokens.spacing(SpacingStep::S2))
 			.flex()
-			.flex_col()
-			.mono_text(tokens, self.size);
+			.flex_col();
 		if let Some(max_height) = self.max_height {
-			body = body.max_h(max_height);
+			content = content.max_h(max_height).overflow_hidden();
 		}
-
 		for (index, line) in self.lines.into_iter().enumerate() {
 			let mut row = div().w_full().min_w_0().flex().flex_row();
 			if self.line_numbers {
@@ -131,7 +126,7 @@ impl RenderOnce for CodeBlock {
 				),
 				None => line.into_any_element(),
 			};
-			body = body.child(
+			content = content.child(
 				row.child(
 					div()
 						.flex_1()
@@ -145,25 +140,32 @@ impl RenderOnce for CodeBlock {
 			);
 		}
 
-		let mut pane = div()
+		let mut body = div()
 			.w_full()
+			.overflow_hidden()
+			.bg(tokens.color(ColorRole::Inset))
+			.rounded(tokens.radius(RadiusStep::Sm))
+			.border(tokens.stroke(StrokeStep::Hairline))
+			.border_color(tokens.color(ColorRole::Hairline))
 			.flex()
 			.flex_col()
-			.gap(tokens.spacing(SpacingStep::S1));
+			.mono_text(tokens, self.size);
+
 		if let Some(caption) = self.caption {
-			pane = pane.child(
+			body = body.child(
 				div()
 					.w_full()
 					.min_w_0()
-					.overflow_hidden()
-					.whitespace_nowrap()
-					.truncate()
+					.px(tokens.spacing(SpacingStep::S2))
+					.py(tokens.spacing(SpacingStep::S1))
+					.border_b(tokens.stroke(StrokeStep::Hairline))
+					.border_color(tokens.color(ColorRole::Hairline))
 					.text_size(tokens.font_size(TextRamp::Micro))
 					.line_height(tokens.line_height(TextRamp::Micro))
 					.text_color(number_ink)
 					.child(caption),
 			);
 		}
-		pane.child(body)
+		body.child(content)
 	}
 }

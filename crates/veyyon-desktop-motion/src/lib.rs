@@ -15,7 +15,8 @@ pub mod tokens;
 
 pub use curves::{CubicBezier, EasingCurve};
 pub use drivers::{
-	CaretMotion, FloatFrame, FloatMotion, PanelMotion, RevealMotion, ScrollMotion, TintMotion,
+	CaretMotion, FloatFrame, FloatMotion, PanelMotion, RevealMotion, ScrollMotion, ShiftMotion,
+	TintMotion,
 };
 pub use error::MotionError;
 pub use registry::{ActiveAnimation, AnimatorKey, AnimatorRegistry, SurfaceId};

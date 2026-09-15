@@ -70,18 +70,32 @@ pub fn run_len(bytes: &[u8], at: usize, delimiter: u8) -> usize {
 		.count()
 }
 
-/// The first block that has text on it, with every marker off, for a surface
-/// that draws one unstyled line of a document: a status line, a card's title.
-/// Empty when the document has no text.
+/// The first block that has text on it, for a surface that draws one unstyled
+/// line of a document: a status line, a card's title. Empty when the document
+/// has no text.
+///
+/// Every block marker comes off except an ordered one, which is the step's
+/// number: a plan whose first line is `1. Measure` states the step it is on,
+/// and a run bar reading `Measure` has dropped content rather than a marker.
+/// An unordered bullet is a glyph standing in for a list, and one line is no
+/// list, so it comes off.
 #[must_use]
 pub fn plain_line(source: &str) -> String {
 	blocks(source)
 		.iter()
 		.find_map(|block| {
 			let text = match block {
-				MdBlock::Heading { text, .. }
-				| MdBlock::Paragraph(text)
-				| MdBlock::Bullet { text, .. } => crate::text::inline::plain(text),
+				MdBlock::Heading { text, .. } | MdBlock::Paragraph(text) => {
+					crate::text::inline::plain(text)
+				},
+				MdBlock::Bullet { marker, text, .. } => {
+					let text = crate::text::inline::plain(text);
+					if marker.ends_with('.') && !text.trim().is_empty() {
+						format!("{marker} {}", text.trim_start())
+					} else {
+						text
+					}
+				},
 				MdBlock::Quote(text) => {
 					let mut body = text.as_str();
 					while let Some(rest) = body.strip_prefix('>') {

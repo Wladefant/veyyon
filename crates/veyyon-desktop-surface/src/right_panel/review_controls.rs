@@ -16,20 +16,37 @@ use super::{
 };
 use crate::ShellView;
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FileReviewCounts {
+	pub total:      usize,
+	pub unresolved: usize,
+	pub resolved:   usize,
+}
+
+#[derive(Default, Clone, Debug, PartialEq, Eq)]
 pub struct ReviewCounts {
-	pub enabled: bool,
-	pub total:   usize,
-	pub files:   BTreeMap<String, usize>,
+	pub enabled:    bool,
+	pub total:      usize,
+	pub unresolved: usize,
+	pub resolved:   usize,
+	pub files:      BTreeMap<String, FileReviewCounts>,
 }
 
 impl ReviewCounts {
 	pub fn of(panel: &PanelContent, reviews: &ReviewsStore) -> Self {
 		let mut counts = Self { enabled: panel.review_repository.is_some(), ..Self::default() };
 		for thread in &reviews.threads {
-			if in_repository(panel, thread) && unresolved(thread) {
+			if in_repository(panel, thread) {
 				counts.total += 1;
-				*counts.files.entry(thread.anchor.file.clone()).or_default() += 1;
+				let file_counts = counts.files.entry(thread.anchor.file.clone()).or_default();
+				file_counts.total += 1;
+				if unresolved(thread) {
+					counts.unresolved += 1;
+					file_counts.unresolved += 1;
+				} else {
+					counts.resolved += 1;
+					file_counts.resolved += 1;
+				}
 			}
 		}
 		counts
@@ -38,11 +55,27 @@ impl ReviewCounts {
 
 pub fn review_button(
 	path: Option<String>,
-	count: usize,
+	unresolved: usize,
+	resolved: usize,
 	tokens: &TokenSet,
 	cx: &Context<ShellView>,
 ) -> impl IntoElement {
 	let id = format!("review-threads-{}", path.as_deref().unwrap_or("all"));
+	let label = if path.is_some() {
+		if unresolved > 0 {
+			format!("{unresolved} unresolved")
+		} else {
+			format!("{resolved} resolved")
+		}
+	} else if unresolved > 0 && resolved > 0 {
+		format!("Reviews · {unresolved} open, {resolved} resolved")
+	} else if unresolved > 0 {
+		format!("Reviews · {unresolved} unresolved")
+	} else if resolved > 0 {
+		format!("Reviews · {resolved} resolved")
+	} else {
+		"Reviews".to_string()
+	};
 	div()
 		.id(ElementId::Name(id.into()))
 		.flex_shrink_0()
@@ -55,10 +88,16 @@ pub fn review_button(
 			}),
 		)
 		.px(tokens.spacing(SpacingStep::S2))
+		.py(tokens.spacing(SpacingStep::S1))
+		.rounded(tokens.radius(veyyon_desktop_kit::RadiusStep::Sm))
 		.hover(|style| style.bg(tokens.row_hover()))
 		.text_size(tokens.font_size(TextRamp::Micro))
-		.text_color(tokens.color(ColorRole::Secondary))
-		.child(format!("Reviews · {count} unresolved"))
+		.text_color(tokens.color(if unresolved > 0 {
+			ColorRole::Foreground
+		} else {
+			ColorRole::Secondary
+		}))
+		.child(label)
 }
 
 pub fn review_bar(
@@ -75,7 +114,7 @@ pub fn review_bar(
 		.flex()
 		.items_center()
 		.gap(tokens.spacing(SpacingStep::S2))
-		.child(review_button(None, counts.total, tokens, cx))
+		.child(review_button(None, counts.unresolved, counts.resolved, tokens, cx))
 		.child(
 			div()
 				.min_w_0()

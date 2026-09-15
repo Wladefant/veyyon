@@ -21,7 +21,7 @@ pub fn render_note_block(
 	if boundary {
 		block = block
 			.border_t(tokens.stroke(StrokeStep::Hairline))
-			.border_color(tokens.color(ColorRole::Muted))
+			.border_color(tokens.color(ColorRole::Hairline))
 			.pt(tokens.spacing(SpacingStep::S2));
 	}
 	// The row is one span: the label and the text as one line, which is what

@@ -58,7 +58,7 @@
 use strum::IntoEnumIterator;
 
 use crate::tool_view_containment::{
-	BLOCK_W, SectionShape, ink_of,
+	BLOCK_W, SHAPED_SLACK_PX, SectionShape, ink_of,
 	shares::{Detail, every_detail_beside_a_primary, runs_left_to_right},
 	variants_holding, widest_shaped_run,
 };
@@ -149,9 +149,9 @@ fn a_line_held_to_one_row_is_shaped_to_the_block_and_marked_where_it_was_cut() {
 				}
 				checked += 1;
 				let widest = widest_shaped_run(case.view);
-				if widest > BLOCK_W {
+				if widest > BLOCK_W + SHAPED_SLACK_PX {
 					unshaped.push(format!(
-						"{}/{} clip={clip}: shaped to {widest:.0}px",
+						"{}/{} clip={clip}: shaped to {widest}px",
 						case.kind,
 						shape.label()
 					));

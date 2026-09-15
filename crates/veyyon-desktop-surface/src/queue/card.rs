@@ -4,7 +4,7 @@
 //! actions.
 
 use veyyon_desktop_kit::{
-	Badge as BadgeChip, ColorRole, RadiusStep, SpacingStep, TextRamp, TextWeight, TokenSet,
+	ColorRole, RadiusStep, SpacingStep, StrokeStep, TextRamp, TextWeight, TokenSet,
 	controls::{IconButton, IconButtonVariant},
 	icons::{IconName, IconSize},
 };
@@ -42,8 +42,15 @@ pub fn card_row(
 	};
 
 	let in_flight = matches!(row.badge, Some(Badge::Working | Badge::Watching));
-	let row_opacity = if in_flight { 0.70 } else { 1.00 };
-
+	let row_opacity = if is_open {
+		1.00
+	} else if selected {
+		if in_flight { 0.85 } else { 1.00 }
+	} else if in_flight {
+		0.70
+	} else {
+		1.00
+	};
 	let has_attention_strip = row.badge.is_some_and(Badge::blocks_on_operator)
 		|| matches!(row.badge, Some(Badge::Done | Badge::Failed));
 
@@ -56,8 +63,19 @@ pub fn card_row(
 		.gap(tokens.spacing(SpacingStep::S2));
 
 	let badge_element = row.badge.map(|badge| {
-		let label = badge.label();
-		BadgeChip::new(label, badge.tint())
+		let tint = tokens.tint(badge.tint());
+		div()
+			.bg(tint.fill)
+			.text_color(tint.ink)
+			.rounded(tokens.radius(RadiusStep::Sm))
+			.px(tokens.spacing(SpacingStep::S2))
+			.line_height(tokens.line_height(TextRamp::Small))
+			.font_weight(tokens.font_weight(TextWeight::Medium))
+			.max_w_full()
+			.overflow_hidden()
+			.whitespace_nowrap()
+			.truncate()
+			.child(badge.label())
 	});
 
 	let badge_slot = div()
@@ -175,6 +193,14 @@ pub fn card_row(
 		.pb(px(geometry.card_padding_bottom))
 		.px(px(geometry.card_padding_horizontal))
 		.rounded(tokens.radius(RadiusStep::Md))
+		.border(tokens.stroke(StrokeStep::Hairline))
+		.border_color(if is_open {
+			tokens.color(ColorRole::Focus).opacity(0.55)
+		} else if selected {
+			tokens.color(ColorRole::Focus).opacity(0.40)
+		} else {
+			tokens.color(ColorRole::Hairline).opacity(0.45)
+		})
 		.bg(ground)
 		.opacity(row_opacity)
 		.flex()
@@ -198,7 +224,11 @@ pub fn card_row(
 						.text_size(tokens.font_size(TextRamp::Read))
 						.line_height(tokens.line_height(TextRamp::Read))
 						.font_weight(tokens.font_weight(TextWeight::Medium))
-						.text_color(tokens.color(ColorRole::Foreground))
+						.text_color(if in_flight && !is_open && !selected {
+							tokens.color(ColorRole::Foreground).opacity(0.70)
+						} else {
+							tokens.color(ColorRole::Foreground)
+						})
 						.child(row.title.clone()),
 				)
 				.child(
@@ -212,23 +242,23 @@ pub fn card_row(
 						.text_size(tokens.font_size(TextRamp::Small))
 						.line_height(tokens.line_height(TextRamp::Small))
 						.font_weight(tokens.font_weight(TextWeight::Regular))
-						.text_color(tokens.color(ColorRole::Secondary))
+						.text_color(tokens.color(ColorRole::Muted))
 						.child(row.subtitle.clone()),
 				),
 		);
 
 	if has_attention_strip {
-		let tint_fill = row
+		let tint_ink = row
 			.badge
-			.map_or_else(|| tokens.transparent(), |b| tokens.tint(b.tint()).fill);
+			.map_or_else(|| tokens.transparent(), |b| tokens.tint(b.tint()).ink);
 		card = card.child(
 			div()
 				.absolute()
 				.left_0()
 				.top_0()
 				.bottom_0()
-				.w(px(1.0))
-				.bg(tint_fill),
+				.w(tokens.stroke(StrokeStep::Hairline))
+				.bg(tint_ink),
 		);
 	}
 

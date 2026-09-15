@@ -21,6 +21,7 @@ use crate::{
 	right_panel::{
 		content::{FileLine, FileView, HighlightSpan},
 		diff_rows::gutter_cell,
+		empty::empty_state,
 		mono_pane::{PaneParts, pane_cell, pane_content_px, pinned_gutter_pane},
 		pane_scroll::{PaneId, PaneScrolls},
 		pane_window::{ColumnWindow, RowWalk, scrolled, text_columns, visible_pieces},
@@ -37,16 +38,13 @@ pub fn file_view(
 	_cx: &Context<ShellView>,
 ) -> impl IntoElement {
 	let Some(file_data) = file else {
-		return div()
-			.id("right-panel-file-empty")
-			.flex_1()
-			.w_full()
-			.flex()
-			.items_center()
-			.justify_center()
-			.text_size(tokens.font_size(TextRamp::Small))
-			.text_color(tokens.color(ColorRole::Muted))
-			.child("No file open");
+		return empty_state(
+			"right-panel-file-empty",
+			"No file open",
+			"Select a file from the Tree tab or an artifact link to inspect contents",
+			tokens,
+		)
+		.into_any_element();
 	};
 
 	let rows = panes.handle(PaneId::FileRows);
@@ -68,7 +66,14 @@ pub fn file_view(
 	container = container.child(path_header(file_data, geometry, tokens));
 
 	if file_data.binary {
-		return container.child(notice_row("Binary file cannot be displayed", geometry, tokens));
+		return container
+			.child(empty_state(
+				"right-panel-file-binary",
+				"Binary file cannot be displayed",
+				"Select a UTF-8 text file from the Tree tab",
+				tokens,
+			))
+			.into_any_element();
 	}
 
 	// The header is inside the scrolled content, so the rows begin that far
@@ -114,7 +119,7 @@ pub fn file_view(
 			container.child(notice_row("File truncated due to size limits", geometry, tokens));
 	}
 
-	container
+	container.into_any_element()
 }
 
 /// The row that states which file is open and how long it is.

@@ -3,8 +3,6 @@
 //! Provides dynamic height measurement via GPUI `on_children_prepainted` and
 //! animated height clipping and opacity fading driven by `RevealMotion`.
 
-use std::time::Instant;
-
 use veyyon_gpui::{Div, ParentElement, Styled, WeakEntity, div, px};
 
 use crate::{ShellView, transcript::state::TranscriptViewportState};
@@ -29,7 +27,7 @@ pub fn render_reveal_container(
 	view: Option<&WeakEntity<ShellView>>,
 	content: Div,
 ) -> Option<Div> {
-	let (progress, natural_height) = viewport_state.reveal_frame(turn_ix, block_ix, Instant::now());
+	let (progress, natural_height) = viewport_state.current_reveal_frame(turn_ix, block_ix);
 	let is_revealing = is_expanded || progress > 0.0;
 
 	if !is_revealing {

@@ -25,53 +25,32 @@ use crate::{Intent, ShellView, attach::ConnectionPhase};
 /// Which field an editor belongs to.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum FieldKey {
-	/// The secret the provider named by the flow in progress is waiting on.
-	/// One editor serves the attach dialog and the Accounts page, because one
-	/// authentication flow runs at a time.
 	AuthSecret,
-	/// The value of the setting this key names.
 	Setting(String),
-	/// The in-place name editor for the session with this row id.
 	SessionRename(u64),
-	SpaceRename(u64),
-	/// The alternatives bound to the keymap action this name states.
 	Keybinding(String),
-	/// The description of the task the Agents page spawns.
 	TaskPrompt,
-	/// The command line the drawer's process supervisor starts.
 	ProcessCommand,
-	/// The line the drawer's process supervisor writes to the input of a
-	/// process that is already running.
 	ProcessInput,
 }
 
 /// What a field's submit sends.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Commit {
-	/// The text is the secret the waiting provider asked for.
 	Secret,
-	/// The text is the setting's value.
 	SettingText,
-	/// The text is JSON, and the setting's value is what it parses to.
 	SettingJson,
-	/// The text is the new session title.
 	SessionRename(u64),
-	SpaceRename(u64),
-	/// The text is the comma-separated alternatives bound to the keymap
-	/// action the field's key names.
 	Keybinding,
-	/// The text is the task a background subagent is given.
 	Task,
-	/// The text is the command line a supervised process is started from.
 	ProcessStart,
-	/// The text is a line written to a running supervised process's input.
 	ProcessSend,
 }
-
 /// A retained field: its editor, and what a submit of it sends.
-pub struct Field {
-	editor: Entity<Editor>,
-	commit: Commit,
+pub(super) struct Field {
+	pub(super) editor: Entity<Editor>,
+	commit:            Commit,
+	pub(super) dirty:  bool,
 }
 
 /// How a field's editor is created on first use.
@@ -182,12 +161,19 @@ impl ShellView {
 		let sub = cx.subscribe(&editor, move |this, _editor, event: &EditorEvent, cx| match event {
 			EditorEvent::Submit => this.commit_field(&key, cx),
 			EditorEvent::Escape => this.revert_field(&key, cx),
-			EditorEvent::Changed | EditorEvent::PasteMedia(_) => {},
+			EditorEvent::Changed => {
+				if let Some(field) = this.field_editors.get_mut(&key) {
+					field.dirty = true;
+				}
+			},
+			EditorEvent::PasteMedia(_) => {},
 		});
 		self.subscriptions.push(sub);
-		self
-			.field_editors
-			.insert(spec.key, Field { editor: editor.clone(), commit: spec.commit });
+		self.field_editors.insert(spec.key, Field {
+			editor: editor.clone(),
+			commit: spec.commit,
+			dirty:  false,
+		});
 		if spec.commit == Commit::Secret {
 			self.field_focus = Some(editor.clone());
 		}
@@ -202,6 +188,9 @@ impl ShellView {
 		};
 		let commit = field.commit;
 		let editor = field.editor.clone();
+		if let Some(field) = self.field_editors.get_mut(key) {
+			field.dirty = false;
+		}
 		match (commit, key) {
 			(Commit::Secret, _) => {
 				let Some(provider) = self.pending_secret_provider() else {
@@ -245,21 +234,6 @@ impl ShellView {
 				}
 				self.clear_refusal();
 				self.dispatch(Intent::RenameSession { session: id, title }, cx);
-			},
-			(Commit::SpaceRename(id), FieldKey::SpaceRename(_)) => {
-				let name = editor.read(cx).text().trim().to_owned();
-				if name.is_empty()
-					|| self
-						.state
-						.navigation
-						.spaces()
-						.any(|space| space.id != id && space.name == name)
-				{
-					self.refuse_field(cx, "Choose a nonempty, unique space name");
-					return;
-				}
-				self.clear_refusal();
-				self.dispatch(Intent::RenameSpace { id, name }, cx);
 			},
 			(Commit::Keybinding, FieldKey::Keybinding(action)) => {
 				let text = editor.read(cx).text().to_owned();
@@ -316,30 +290,31 @@ impl ShellView {
 			return;
 		};
 		let editor = field.editor.clone();
+		if let Some(field) = self.field_editors.get_mut(key) {
+			field.dirty = false;
+		}
 		match key {
 			FieldKey::AuthSecret => {
 				editor.update(cx, |editor, cx| editor.set_text(String::new(), cx));
 				self.field_editors.remove(key);
 				self.dispatch(Intent::CancelAuthFlow, cx);
 			},
-			FieldKey::Setting(_) => {
-				editor.update(cx, |editor, cx| editor.set_text(String::new(), cx));
+			FieldKey::Setting(k) => {
+				let initial = self
+					.active_settings()
+					.and_then(|s| s.entry(k))
+					.map(|e| match &e.value {
+						Value::String(s) => s.clone(),
+						other => other.to_string(),
+					})
+					.unwrap_or_default();
+				editor.update(cx, |editor, cx| editor.set_text(initial, cx));
 			},
 			FieldKey::SessionRename(id) => {
 				let initial = self
 					.state
 					.row(*id)
 					.map_or_else(|| self.state.title.clone(), |r| r.title.clone());
-				editor.update(cx, |editor, cx| editor.set_text(initial, cx));
-			},
-			FieldKey::SpaceRename(id) => {
-				let initial = self
-					.state
-					.navigation
-					.spaces()
-					.find(|space| space.id == *id)
-					.map(|space| space.name.clone())
-					.unwrap_or_default();
 				editor.update(cx, |editor, cx| editor.set_text(initial, cx));
 			},
 			FieldKey::Keybinding(action) => {

@@ -75,6 +75,46 @@ impl ShellView {
 		cx.notify();
 	}
 
+	/// Opens the thinking effort selector without changing the draft.
+	pub fn open_thinking_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+		let id =
+			SurfaceId::ComposerThinkingSelector(SessionId::from(self.state.current_id.to_string()));
+		let availability = self.state.controls.availability(&id);
+		if !availability_style(&availability, &self.installed.set).2 {
+			return;
+		}
+		let mut state = PaletteState::new(PaletteMode::Commands);
+		if let Some(thinking) = &self.state.composer.thinking {
+			state.set_items(
+				thinking
+					.levels
+					.iter()
+					.enumerate()
+					.map(|(i, level)| {
+						crate::palette::PaletteItem::command(
+							i as u64 + 1,
+							level.clone(),
+							Intent::SetThinking(crate::composer::ThinkingLevel::new(level.clone())),
+							None,
+						)
+					})
+					.collect(),
+			);
+			if let Some(idx) = thinking.levels.iter().position(|l| *l == thinking.level) {
+				state.selected = idx;
+			}
+		}
+		self.palette_input.anchored = true;
+		self.palette_input.slash = false;
+		self.palette_input.restore_focus = false;
+		self.dispatch(Intent::OpenOverlay(Box::new(Overlay::Palette(state))), cx);
+		let editor = self.ensure_palette_editor(cx);
+		editor.update(cx, |editor, cx| editor.set_text(String::new(), cx));
+		let focus = editor.read(cx).focus_handle().clone();
+		window.focus(&focus, cx);
+		cx.notify();
+	}
+
 	/// Opens the global command surface with the same input and selection
 	/// implementation.
 	pub fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {

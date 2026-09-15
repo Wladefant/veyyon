@@ -149,8 +149,8 @@ type Row = (String, String, bool, String, bool);
 /// Reads one row off the real phase.
 fn row_for(discriminant: TurnPhaseDiscriminant) -> Row {
 	let (state, _) = build_state_for_phase(discriminant);
-	let (with_draft, _) = primary_action(&state.turn, true);
-	let (on_empty, _) = primary_action(&state.turn, false);
+	let with_draft = primary_action(&state.turn, true);
+	let on_empty = primary_action(&state.turn, false);
 	(
 		format!("{discriminant:?}"),
 		format!("{with_draft:?}"),

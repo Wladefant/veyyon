@@ -24,10 +24,7 @@ impl ScrollMotion {
 	pub fn new(surface_id: SurfaceId, slot: u64, initial_offset: f32) -> Self {
 		let mut registry = AnimatorRegistry::new();
 		let key = AnimatorKey::new(surface_id, MotionRole::Scroll, slot);
-		let model = MotionModel::Duration(DurationModel {
-			duration_ms: 240,
-			curve:       EasingCurve::EaseInOut,
-		});
+		let model = MotionModel::Duration(MotionTokens::reference().scroll);
 		registry.get_or_create_with_initial(
 			key,
 			initial_offset,

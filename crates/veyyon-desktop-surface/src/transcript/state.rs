@@ -27,6 +27,7 @@ struct TranscriptViewportStateInner {
 	caret_motion:           CaretMotion,
 	reveal_motions:         HashMap<BlockKey, RevealMotion>,
 	reveal_heights:         HashMap<BlockKey, f32>,
+	reveal_progress:        HashMap<BlockKey, f32>,
 	pending_remeasure:      HashSet<usize>,
 	scroll_expected_px:     Option<f32>,
 	scroll_follow_end:      bool,
@@ -66,6 +67,7 @@ impl TranscriptViewportState {
 			caret_motion: CaretMotion::new(SurfaceId::Transcript, 0),
 			reveal_motions: HashMap::new(),
 			reveal_heights: HashMap::new(),
+			reveal_progress: HashMap::new(),
 			pending_remeasure: HashSet::new(),
 			scroll_expected_px: None,
 			scroll_follow_end: false,
@@ -102,6 +104,7 @@ impl TranscriptViewportState {
 		inner.last_focused_turn = None;
 		inner.reveal_motions.clear();
 		inner.reveal_heights.clear();
+		inner.reveal_progress.clear();
 		inner.pending_remeasure.clear();
 		inner.scroll_expected_px = None;
 		inner.scroll_follow_end = false;
@@ -205,6 +208,8 @@ impl TranscriptViewportState {
 			.entry(key)
 			.or_insert_with(|| RevealMotion::new(SurfaceId::Transcript, slot, is_currently_expanded));
 		reveal.set_expanded(next_expanded, tokens, reduced, now);
+		let (progress, _) = reveal.sample(now);
+		inner.reveal_progress.insert(key, progress);
 
 		inner.list_state.remeasure_items(turn_ix..turn_ix + 1);
 		next_expanded
@@ -240,6 +245,8 @@ impl TranscriptViewportState {
 			.entry(key)
 			.or_insert_with(|| RevealMotion::new(SurfaceId::Transcript, slot, is_currently_expanded));
 		reveal.set_expanded(expanded, tokens, reduced, now);
+		let (progress, _) = reveal.sample(now);
+		inner.reveal_progress.insert(key, progress);
 
 		inner.list_state.remeasure_items(turn_ix..turn_ix + 1);
 	}

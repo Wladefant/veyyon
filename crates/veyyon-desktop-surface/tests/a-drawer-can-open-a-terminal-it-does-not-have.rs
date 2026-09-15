@@ -57,7 +57,11 @@ const ROW_TOLERANCE_PX: f32 = 6.0;
 
 /// A terminal tab carrying `title`.
 fn terminal(title: &str) -> DrawerTab {
-	DrawerTab::Terminal { title: title.to_owned(), id: "t-1".to_owned() }
+	DrawerTab::Terminal {
+		title:  title.to_owned(),
+		id:     "t-1".to_owned(),
+		status: veyyon_desktop_model::TerminalStatus::Running,
+	}
 }
 
 /// One running row, so the supervisor tab has a list to draw.

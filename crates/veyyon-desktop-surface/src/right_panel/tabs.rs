@@ -60,8 +60,7 @@ pub fn tab_strip(
 				view.dispatch(Intent::SelectTab(tab), cx);
 			}))
 			.hover(move |style| style.bg(hover))
-			.max_w(px(geometry.tabs_max_width_px))
-			.min_w_0()
+			.h(px(geometry.tabs_height_px))
 			.px(tokens.spacing(SpacingStep::S2))
 			.rounded(tokens.radius(RadiusStep::Sm))
 			.bg(ground)
@@ -69,9 +68,6 @@ pub fn tab_strip(
 			.flex_row()
 			.items_center()
 			.gap(tokens.spacing(SpacingStep::S1))
-			.overflow_hidden()
-			.whitespace_nowrap()
-			.truncate()
 			.text_size(tokens.font_size(TextRamp::Micro))
 			.line_height(tokens.line_height(TextRamp::Micro))
 			.font_weight(tokens.font_weight(weight))
@@ -86,13 +82,13 @@ pub fn tab_strip(
 					.child(
 						div()
 							.flex_shrink_0()
-							.text_color(tokens.tint(TintRole::Done).fill)
+							.text_color(tokens.tint(TintRole::Done).ink)
 							.child(format!("+{additions}")),
 					)
 					.child(
 						div()
 							.flex_shrink_0()
-							.text_color(tokens.tint(TintRole::Error).fill)
+							.text_color(tokens.tint(TintRole::Error).ink)
 							.child(format!("-{deletions}")),
 					);
 			}

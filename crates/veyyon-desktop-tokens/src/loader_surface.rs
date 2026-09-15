@@ -93,6 +93,28 @@ pub fn resolve_radius(
 	scale: &ScaleTokens,
 ) -> Result<f32, TokenError> {
 	match val {
+		Value::Integer(i) => {
+			let (line, column) = find_key_line_col(text, section, key);
+			Err(TokenError::NumericLiteralDisallowed {
+				path: path.to_path_buf(),
+				line,
+				column,
+				key: key.to_string(),
+				literal: i.to_string(),
+				example: "xl".to_string(),
+			})
+		},
+		Value::Float(f) => {
+			let (line, column) = find_key_line_col(text, section, key);
+			Err(TokenError::NumericLiteralDisallowed {
+				path: path.to_path_buf(),
+				line,
+				column,
+				key: key.to_string(),
+				literal: f.to_string(),
+				example: "xl".to_string(),
+			})
+		},
 		Value::String(s) => {
 			if let Some(step) = RadiusStep::from_token(s) {
 				Ok(scale.radius(step))
@@ -107,17 +129,6 @@ pub fn resolve_radius(
 					source_file: "scale.toml",
 				})
 			}
-		},
-		Value::Integer(i) => {
-			let (line, column) = find_key_line_col(text, section, key);
-			Err(TokenError::NumericLiteralDisallowed {
-				path: path.to_path_buf(),
-				line,
-				column,
-				key: key.to_string(),
-				literal: i.to_string(),
-				example: "xl".to_string(),
-			})
 		},
 		_ => {
 			let (line, column) = find_key_line_col(text, section, key);
@@ -142,29 +153,55 @@ pub fn resolve_type_size(
 	val: &Value,
 	scale: &ScaleTokens,
 ) -> Result<TypeSize, TokenError> {
-	let s = val.as_str().ok_or_else(|| {
-		let (line, column) = find_key_line_col(text, section, key);
-		TokenError::UnresolvedReference {
-			path: path.to_path_buf(),
-			line,
-			column,
-			key: key.to_string(),
-			reference: format!("{val:?}"),
-			source_file: "scale.toml",
-		}
-	})?;
-	if let Some(step) = TypeSizeStep::from_token(s) {
-		Ok(*scale.type_size(step))
-	} else {
-		let (line, column) = find_key_line_col(text, section, key);
-		Err(TokenError::UnresolvedReference {
-			path: path.to_path_buf(),
-			line,
-			column,
-			key: key.to_string(),
-			reference: s.to_string(),
-			source_file: "scale.toml",
-		})
+	match val {
+		Value::Integer(i) => {
+			let (line, column) = find_key_line_col(text, section, key);
+			Err(TokenError::NumericLiteralDisallowed {
+				path: path.to_path_buf(),
+				line,
+				column,
+				key: key.to_string(),
+				literal: i.to_string(),
+				example: "body".to_string(),
+			})
+		},
+		Value::Float(f) => {
+			let (line, column) = find_key_line_col(text, section, key);
+			Err(TokenError::NumericLiteralDisallowed {
+				path: path.to_path_buf(),
+				line,
+				column,
+				key: key.to_string(),
+				literal: f.to_string(),
+				example: "body".to_string(),
+			})
+		},
+		Value::String(s) => {
+			if let Some(step) = TypeSizeStep::from_token(s) {
+				Ok(*scale.type_size(step))
+			} else {
+				let (line, column) = find_key_line_col(text, section, key);
+				Err(TokenError::UnresolvedReference {
+					path: path.to_path_buf(),
+					line,
+					column,
+					key: key.to_string(),
+					reference: s.clone(),
+					source_file: "scale.toml",
+				})
+			}
+		},
+		_ => {
+			let (line, column) = find_key_line_col(text, section, key);
+			Err(TokenError::UnresolvedReference {
+				path: path.to_path_buf(),
+				line,
+				column,
+				key: key.to_string(),
+				reference: format!("{val:?}"),
+				source_file: "scale.toml",
+			})
+		},
 	}
 }
 
@@ -177,29 +214,55 @@ pub fn resolve_stroke(
 	val: &Value,
 	scale: &ScaleTokens,
 ) -> Result<f32, TokenError> {
-	let s = val.as_str().ok_or_else(|| {
-		let (line, column) = find_key_line_col(text, section, key);
-		TokenError::UnresolvedReference {
-			path: path.to_path_buf(),
-			line,
-			column,
-			key: key.to_string(),
-			reference: format!("{val:?}"),
-			source_file: "scale.toml",
-		}
-	})?;
-	if let Some(step) = StrokeStep::from_token(s) {
-		Ok(scale.stroke(step))
-	} else {
-		let (line, column) = find_key_line_col(text, section, key);
-		Err(TokenError::UnresolvedReference {
-			path: path.to_path_buf(),
-			line,
-			column,
-			key: key.to_string(),
-			reference: s.to_string(),
-			source_file: "scale.toml",
-		})
+	match val {
+		Value::Integer(i) => {
+			let (line, column) = find_key_line_col(text, section, key);
+			Err(TokenError::NumericLiteralDisallowed {
+				path: path.to_path_buf(),
+				line,
+				column,
+				key: key.to_string(),
+				literal: i.to_string(),
+				example: "hairline".to_string(),
+			})
+		},
+		Value::Float(f) => {
+			let (line, column) = find_key_line_col(text, section, key);
+			Err(TokenError::NumericLiteralDisallowed {
+				path: path.to_path_buf(),
+				line,
+				column,
+				key: key.to_string(),
+				literal: f.to_string(),
+				example: "hairline".to_string(),
+			})
+		},
+		Value::String(s) => {
+			if let Some(step) = StrokeStep::from_token(s) {
+				Ok(scale.stroke(step))
+			} else {
+				let (line, column) = find_key_line_col(text, section, key);
+				Err(TokenError::UnresolvedReference {
+					path: path.to_path_buf(),
+					line,
+					column,
+					key: key.to_string(),
+					reference: s.clone(),
+					source_file: "scale.toml",
+				})
+			}
+		},
+		_ => {
+			let (line, column) = find_key_line_col(text, section, key);
+			Err(TokenError::UnresolvedReference {
+				path: path.to_path_buf(),
+				line,
+				column,
+				key: key.to_string(),
+				reference: format!("{val:?}"),
+				source_file: "scale.toml",
+			})
+		},
 	}
 }
 

@@ -32,12 +32,12 @@ full = 9999
 
 # Typographic scale: 6 sizes, 3 weights (§6.3). Hard ceiling: 6 sizes, 3 weights.
 [type.size]
-micro = { size = 11, line_height = 16, tracking_em = 0.04 }
+micro = { size = 11, line_height = 16, tracking_em = 0.05 }
 small = { size = 12, line_height = 16, tracking_em = 0.00 }
 body  = { size = 13, line_height = 18, tracking_em = 0.00 }
 read  = { size = 14, line_height = 22, tracking_em = 0.00 }
-head  = { size = 18, line_height = 24, tracking_em = -0.01 }
-lead  = { size = 26, line_height = 32, tracking_em = -0.02 }
+head  = { size = 18, line_height = 24, tracking_em = -0.015 }
+lead  = { size = 26, line_height = 32, tracking_em = -0.025 }
 
 [type.weight]
 regular  = 400

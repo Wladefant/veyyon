@@ -34,8 +34,8 @@
 mod mono_pane;
 
 use mono_pane::{
-	WINDOW_H, WINDOW_W, code_runs, diff_state, gutter_runs, lefts, open_session, over_code,
-	panel_region, state_with_wide_lines, tops,
+	WINDOW_H, WINDOW_W, code_runs, diff_state, gutter_numbers, gutter_runs, lefts, open_session,
+	over_code, panel_region, state_with_wide_lines, tops,
 };
 use veyyon_desktop_kit::load_bundled_tokens;
 use veyyon_desktop_model::DiffMode;
@@ -147,10 +147,10 @@ fn a_sideways_wheel_over_the_code_leaves_the_file_where_it_was() {
 			.expect("the wheel reaches the pane");
 	}
 	let down = session.frame().expect("the shell renders down the file");
-	let rows_before = ladder(&gutter_runs(&down, panel, panels));
+	let rows_before = gutter_numbers(&down, panel, panels);
 	assert_ne!(
 		rows_before,
-		ladder(&gutter_runs(&rest, panel, panels)),
+		gutter_numbers(&rest, panel, panels),
 		"the vertical wheel moved the file, for the sideways one to be measured against"
 	);
 
@@ -165,7 +165,7 @@ fn a_sideways_wheel_over_the_code_leaves_the_file_where_it_was() {
 		"the sideways wheel reached the code column at all"
 	);
 	assert_eq!(
-		ladder(&gutter_runs(&across, panel, panels)),
+		gutter_numbers(&across, panel, panels),
 		rows_before,
 		"and the file stayed where it was: a sideways delta belongs to the region under the \
 		 pointer, so a vertical region that maps it onto its own axis scrolls the file under a \

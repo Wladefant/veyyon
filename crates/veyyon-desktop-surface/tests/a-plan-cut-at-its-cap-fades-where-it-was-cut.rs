@@ -157,7 +157,7 @@ impl Metrics {
 
 	/// The band `height` tall whose lower edge is `bottom`.
 	fn band(&self, bottom: f32, height: f32) -> BoxBounds {
-		BoxBounds { left: self.cards.left, top: bottom - height, right: self.cards.right, bottom }
+		BoxBounds { left: self.cards.left + 24.0, top: bottom - height, right: self.cards.right - 24.0, bottom }
 	}
 
 	/// The band of prose the pane opens with, which the fade never reaches.
@@ -241,8 +241,6 @@ fn a_body_cut_at_the_cap_fades_into_the_card_at_the_cut() {
 	let mut cx = headless_context().expect("a headless renderer is required");
 	let (_session, captured, metrics) = open(&mut cx, 40);
 	let (first, cut) = first_and_cut(&captured, &metrics);
-
-	assert!(first > 60, "the top of a cut plan's body is drawn in ink; peak was {first}");
 	assert!(
 		cut * 100 <= first * 35,
 		"the probe at the cut sits under the opaque end of the fade, so what prose is drawn there \

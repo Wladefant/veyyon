@@ -33,7 +33,7 @@ pub fn footer_row(
 	cx: &Context<ShellView>,
 ) -> impl IntoElement {
 	let session = SessionId::from(session_id.to_string());
-	let availability = states.availability(&SurfaceId::ComposerModelSelector(session));
+	let availability = states.availability(&SurfaceId::ComposerModelSelector(session.clone()));
 	let (opacity, cursor, allowed) = availability_style(&availability, tokens);
 	let metrics = control_metrics(ButtonSize::Medium, tokens);
 	let label = composer
@@ -87,6 +87,64 @@ pub fn footer_row(
 		.mode
 		.as_ref()
 		.map(|mode| Badge::new(mode.label().to_owned(), TintRole::Plan));
+
+	let thinking_control = composer.thinking.as_ref().map(|thinking| {
+		let id = SurfaceId::ComposerThinkingSelector(session.clone());
+		let avail = states.availability(&id);
+		let (t_opacity, t_cursor, t_allowed) = availability_style(&avail, tokens);
+		let t_label = format!("Thinking: {}", thinking.level);
+		let mut btn = div()
+			.id("composer-footer-thinking")
+			.aria_label(t_label.clone())
+			.h(metrics.height)
+			.min_w_0()
+			.px(tokens.spacing(SpacingStep::S2))
+			.rounded(metrics.radius)
+			.flex()
+			.items_center()
+			.gap(metrics.gap)
+			.opacity(t_opacity)
+			.cursor(t_cursor)
+			.child(
+				div()
+					.min_w_0()
+					.truncate()
+					.text_size(tokens.font_size(metrics.ramp))
+					.line_height(tokens.line_height(metrics.ramp))
+					.text_color(tokens.color(ColorRole::Secondary))
+					.child(format!("Thinking: {}", thinking.level)),
+			);
+		if t_allowed {
+			let hover = tokens.row_hover();
+			btn = btn
+				.child(Icon::new(IconName::ChevronDown).size(IconSize::Size12))
+				.hover(move |style| style.bg(hover))
+				.on_click(cx.listener(|view, _: &ClickEvent, window, cx| {
+					view.open_thinking_picker(window, cx);
+				}));
+		}
+		Tooltip::new(avail.reason().unwrap_or(&t_label).to_owned(), btn).above()
+	});
+
+	let context_meter = composer.context.as_ref().map(|meter| {
+		let label = match meter.limit_tokens {
+			Some(limit) => format!(
+				"{} / {}",
+				super::state::thousands(meter.used_tokens),
+				super::state::thousands(limit)
+			),
+			None => super::state::thousands(meter.used_tokens),
+		};
+		div()
+			.id("composer-footer-context")
+			.min_w_0()
+			.truncate()
+			.text_size(tokens.font_size(metrics.ramp))
+			.line_height(tokens.line_height(metrics.ramp))
+			.text_color(tokens.color(ColorRole::Muted))
+			.child(label)
+	});
+
 	div()
 		.id("composer-footer")
 		.w_full()
@@ -101,7 +159,9 @@ pub fn footer_row(
 				.items_center()
 				.gap(tokens.spacing(SpacingStep::S2))
 				.children(mode)
-				.child(Tooltip::new(availability.reason().unwrap_or(label).to_owned(), model).above()),
+				.child(Tooltip::new(availability.reason().unwrap_or(label).to_owned(), model).above())
+				.children(thinking_control)
+				.children(context_meter),
 		)
 		.child(turn_action_controls(turn, has_text, session_id, states, tokens, cx))
 }

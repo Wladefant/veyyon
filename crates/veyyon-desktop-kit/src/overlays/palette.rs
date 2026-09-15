@@ -8,7 +8,7 @@ use veyyon_gpui::{
 	AnyElement, App, ElementId, IntoElement, Pixels, RenderOnce, Window, div, prelude::*,
 };
 
-use crate::token_set::{ColorRole, RadiusStep, TokenSet};
+use crate::token_set::{ColorRole, RadiusStep, StrokeStep, TokenSet};
 
 /// Command palette floating modal container with search header and results
 /// list.
@@ -70,18 +70,20 @@ impl RenderOnce for Palette {
 		let resolved_tokens = TokenSet::for_app(cx);
 		let tokens: &TokenSet = &resolved_tokens;
 
-		let bg = tokens.color(ColorRole::Float);
+		let bg = tokens.float_ground();
 		let border_color = tokens.color(ColorRole::Hairline);
+		let stroke = tokens.stroke(StrokeStep::Hairline);
 		let radius = tokens.radius(RadiusStep::Xl);
-
 		let mut el = div()
 			.max_w_full()
 			.overflow_hidden()
 			.bg(bg)
+			.backdrop_blur(tokens.float_blur())
+			.backdrop_saturation(tokens.float_saturation())
 			.rounded(radius)
-			.border_1()
+			.border(tokens.stroke(StrokeStep::Hairline))
 			.border_color(border_color)
-			.shadow_lg()
+			.shadow(tokens.float_shadows())
 			.flex()
 			.flex_col();
 		el = match self.width {
@@ -99,7 +101,7 @@ impl RenderOnce for Palette {
 					.min_w_0()
 					.flex_shrink_0()
 					.overflow_hidden()
-					.border_b_1()
+					.border_b(stroke)
 					.border_color(border_color)
 					.child(self.search),
 			)
@@ -118,7 +120,7 @@ impl RenderOnce for Palette {
 					.min_w_0()
 					.flex_shrink_0()
 					.overflow_hidden()
-					.border_t_1()
+					.border_t(stroke)
 					.border_color(border_color)
 					.child(footer),
 			);

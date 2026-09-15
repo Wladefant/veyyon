@@ -54,15 +54,11 @@ const BASELINE: &str = "queue-card/rest";
 
 /// Capabilities whose gate has no control on the frame their scene renders,
 /// so `Unavailable` and `Pending` draw the same bytes as `Enabled`. Ledger row
-/// A7. Shrink-only.
-///
-/// `PendingEdits` is here because nothing in the window reads it: no domain
-/// carries a pending edit, no host action fetches one, and the diff tab is
-/// filled by `Changes`. It drew a gate only while the tab required both
-/// capabilities, which withdrew the whole diff surface from a host that
-/// inspects no edit buffer -- every host this product ships with. A window
-/// that grows a pending-edit surface takes this row back out.
-const GATES_STILL_INVISIBLE: &[Capability] = &[Capability::PendingEdits];
+/// A7. Shrink-only, and empty: every capability the window draws states its
+/// own withdrawal. `PendingEdits` was the last row here, and the diff
+/// toolbar's `diff-pending-edits` notice took it out by carrying the host's
+/// verbatim reason on the frame the diff scene renders.
+const GATES_STILL_INVISIBLE: &[Capability] = &[];
 
 /// Scopes whose `request: None` fallback target draws no hairline, so the
 /// error scene is the baseline. Shrink-only.
@@ -169,22 +165,16 @@ fn every_scene_shows_the_state_it_names() {
 	let (frames, error_baselines, unprojected) = render_all();
 	let gated = gated_capabilities();
 
-	// A tab is the one surface an unknown capability withholds (§5.13): the
-	// panel's Files and Changes tabs and the drawer's supervisor tab arrive
-	// once the host has declared them, and every other control draws at rest
-	// and reports the refusal on the press.
+	// §4.3 resolves `Unknown` to "at rest, activation attaches then acts",
+	// which is how `Enabled` draws, so an unanswered capability is
+	// byte-identical to an answered one for every capability without
+	// exception. §5.13's "when absent" column withholds a surface for a
+	// capability the host has refused, which is `Unavailable` and not silence.
 	let mut invisible = Vec::new();
 	for capability in Capability::iter() {
 		let enabled = &frames[&gate_scene(capability, GateVariant::Enabled)];
 		let unknown = &frames[&gate_scene(capability, GateVariant::Unknown)];
-		if matches!(
-			capability,
-			Capability::Files | Capability::Changes | Capability::ProcessSupervisor
-		) {
-			assert!(unknown != enabled, "{capability:?}: unknown capability exposed its tab");
-		} else {
-			assert!(unknown == enabled, "{capability:?}: Unknown must draw at rest");
-		}
+		assert!(unknown == enabled, "{capability:?}: Unknown must draw at rest (§4.3)");
 		let mut visible = &frames[&gate_scene(capability, GateVariant::Unavailable)] != enabled;
 		if gated.contains(&capability) {
 			visible &= &frames[&gate_scene(capability, GateVariant::Pending)] != enabled;

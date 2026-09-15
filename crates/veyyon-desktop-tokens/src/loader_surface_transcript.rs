@@ -58,13 +58,13 @@ pub fn load_transcript(
 		user_turn_radius_trailing: user_turn.radius("radius_trailing", scale)?,
 		user_turn_type_size: user_turn.type_size("type_size", scale)?,
 		assistant_turn_type_size: assistant_turn.type_size("type_size", scale)?,
-		chrome_collapsed_height_px: collapsed.number("height_px")?,
-		chrome_event_line_height_px: collapsed.number("event_line_height_px")?,
+		chrome_collapsed_height_px: collapsed.spacing("height_px", scale)?,
+		chrome_event_line_height_px: collapsed.spacing("event_line_height_px", scale)?,
 		chrome_invoke_mono_pane_max_height_px: caps.number("invoke_mono_pane_max_height_px")?,
 		chrome_code_fence_max_height_px: caps.number("code_fence_max_height_px")?,
 		chrome_image_max_height_px: caps.number("image_max_height_px")?,
 		chrome_plan_body_max_height_px: caps.number("plan_body_max_height_px")?,
-		chrome_plan_fade_height_px: caps.number("plan_fade_height_px")?,
+		chrome_plan_fade_height_px: caps.spacing("plan_fade_height_px", scale)?,
 		chrome_table_row_height_px: caps.number("table_row_height_px")?,
 	})
 }

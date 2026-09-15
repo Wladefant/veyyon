@@ -18,6 +18,7 @@ mod answers;
 mod approval;
 mod plan;
 mod question;
+mod refusal;
 
 use veyyon_desktop_kit::{
 	ColorRole, RadiusStep, SpacingStep, StrokeStep, TextRamp, TintRole, TokenSet,
@@ -28,7 +29,7 @@ use veyyon_gpui::{
 	StatefulInteractiveElement, Styled, div, px,
 };
 
-use self::{approval::approval, plan::plan, question::question};
+use self::{approval::approval, plan::plan, question::question, refusal::refusal};
 use crate::{
 	ShellView,
 	model::{Card, CardAnswers},
@@ -70,6 +71,9 @@ pub fn card_stack(
 			},
 			Card::Plan { title, body } => {
 				plan(index, title, body, answer, geometry, tokens, cx).into_any_element()
+			},
+			Card::Refusal { title, detail } => {
+				refusal(index, title, detail, answer, geometry, tokens, cx).into_any_element()
 			},
 		};
 
@@ -157,6 +161,7 @@ fn waiting_line(card: &Card) -> String {
 		Card::Approval { tool, .. } => format!("Approval: {tool}"),
 		Card::Question { prompt, .. } => format!("Question: {prompt}"),
 		Card::Plan { title, .. } => format!("Plan: {title}"),
+		Card::Refusal { title, .. } => format!("Refusal: {title}"),
 	}
 }
 
@@ -166,10 +171,13 @@ fn shell(tint: TintRole, padding: f32, tokens: &TokenSet) -> Div {
 	div()
 		.w_full()
 		.p(px(padding))
-		.rounded(tokens.radius(RadiusStep::Md))
-		.bg(tokens.color(ColorRole::Float))
+		.rounded(tokens.radius(RadiusStep::Xxl))
+		.bg(tokens.float_ground())
+		.backdrop_blur(tokens.float_blur())
+		.backdrop_saturation(tokens.float_saturation())
 		.border(tokens.stroke(StrokeStep::Hairline))
-		.border_color(tokens.tint(tint).fill)
+		.border_color(tokens.tint(tint).ink)
+		.shadow(tokens.float_shadows())
 		.overflow_hidden()
 		.flex()
 		.flex_col()

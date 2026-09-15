@@ -20,20 +20,20 @@ version = 1
 
 [role]
 # Elevation 0 through 4, §6.5.
-ground = "#f6f7f9"
-rail = "#eef0f3"
-canvas = "#ffffff"
-inset = "#f2f4f7"
+ground = "#abb9cc"
+rail = "#c4d2e4"
+canvas = "#e1e7f1"
+inset = "#b8c5d6"
 float = "#ffffff"
-hairline = "#d7dce3"
+hairline = "#9eaec3"
 
-foreground = "#161a20"
-secondary = "#3d4652"
-muted = "#5c6675"
-placeholder = "#6b7480"
+foreground = "#101318"
+secondary = "#2c3442"
+muted = "#485363"
+placeholder = "#566274"
 
 accent = "#f0862e"
-accent_foreground = "#161a20"
+accent_foreground = "#12151b"
 focus = "#d4711f"
 
 [tint.working]

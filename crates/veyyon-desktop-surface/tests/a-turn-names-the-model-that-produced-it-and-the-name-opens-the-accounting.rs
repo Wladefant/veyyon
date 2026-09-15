@@ -81,6 +81,7 @@ fn state_with(turn: Turn) -> ShellState {
 		transcript: vec![turn],
 		connection: ConnectionPhase::Attached,
 		panel: PanelContent::default(),
+		current_id: 1,
 		..ShellState::default()
 	}
 }

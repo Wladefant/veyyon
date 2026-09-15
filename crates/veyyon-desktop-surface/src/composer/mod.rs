@@ -20,8 +20,8 @@ pub mod state;
 pub mod turn;
 
 use veyyon_desktop_kit::{
-	Badge as BadgeChip, ColorRole, Icon, IconName, IconSize, SpacingStep, TextRamp, TokenSet,
-	input::Editor,
+	Badge as BadgeChip, ColorRole, Icon, IconName, IconSize, SpacingStep, StrokeStep, TextRamp,
+	TokenSet, input::Editor,
 };
 use veyyon_desktop_model::{SessionId, SurfaceId};
 use veyyon_desktop_tokens::ComposerSurfaceTokens;
@@ -44,11 +44,14 @@ use crate::{
 pub struct ComposerLocal<'a> {
 	/// Files from outside the window are over the composer's float.
 	pub dropping: bool,
+	/// The editor currently holds input focus.
+	pub focused:  bool,
 	/// The refusal the tray shows under the cards, until the next attachment.
 	pub notice:   Option<&'a str>,
 }
-
-/// Builds the composer.
+/// Hard minimum width floor below which the composer clamps rather than
+/// degrading into an unreadable sliver (§5.4).
+pub const MIN_COMPOSER_WIDTH_PX: f32 = 320.0;
 pub fn composer(
 	editor: Option<&Entity<Editor>>,
 	turn: &TurnPhase,
@@ -63,12 +66,9 @@ pub fn composer(
 	tokens: &TokenSet,
 	cx: &Context<ShellView>,
 ) -> impl IntoElement {
+	let width = width.max(MIN_COMPOSER_WIDTH_PX);
 	let mut ground = tokens.color(ColorRole::Float);
 	ground.a = geometry.ground_opacity;
-
-	let mut shadow_colour = tokens.color(ColorRole::Ground);
-	shadow_colour.a = geometry.shadow_opacity;
-
 	let session = SessionId::from(session_id.to_string());
 	let primary_id = turn.primary_surface(has_text, &session);
 	let request_ids = [
@@ -98,8 +98,8 @@ pub fn composer(
 		.w_full()
 		.flex_1()
 		.overflow_hidden()
-		.text_size(tokens.font_size(TextRamp::Body))
-		.line_height(tokens.line_height(TextRamp::Body));
+		.text_size(tokens.font_size(TextRamp::Read))
+		.line_height(tokens.line_height(TextRamp::Read));
 	let editor_content = if let Some(ed) = editor {
 		editor_wrap.child(ed.clone())
 	} else {
@@ -117,6 +117,23 @@ pub fn composer(
 	// takes the accent while they are over it, the target layer names what
 	// may be dropped, and a drop attaches what the operator let go of.
 	let accent = tokens.color(ColorRole::Accent);
+	let border_color = if local.focused {
+		tokens.color(ColorRole::Focus)
+	} else {
+		tokens.color(ColorRole::Hairline)
+	};
+	let mut shadows = tokens.float_shadows();
+	if local.focused {
+		let mut focus_glow = tokens.color(ColorRole::Focus);
+		focus_glow.a = 0.28;
+		shadows.push(BoxShadow {
+			color:         focus_glow,
+			offset:        point(px(0.0), px(0.0)),
+			blur_radius:   px(4.0),
+			spread_radius: px(1.0),
+			inset:         false,
+		});
+	}
 	div()
 		.id("composer-root")
 		.flex()
@@ -127,7 +144,9 @@ pub fn composer(
 			div()
 				.id("composer-float")
 				.relative()
+				.flex_shrink_0()
 				.w(px(width))
+				.min_w(px(MIN_COMPOSER_WIDTH_PX))
 				.min_h(px(geometry.rest_height_px))
 				.max_h(px(geometry.growth_cap_px))
 				.bg(ground)
@@ -135,14 +154,8 @@ pub fn composer(
 				.backdrop_saturation(geometry.saturation)
 				.rounded(px(geometry.radius_outer))
 				.border(px(geometry.hairline_stroke))
-				.border_color(tokens.color(ColorRole::Hairline))
-				.shadow(vec![BoxShadow {
-					color:         shadow_colour,
-					offset:        point(px(geometry.shadow_x), px(geometry.shadow_y)),
-					blur_radius:   px(geometry.shadow_blur),
-					spread_radius: px(geometry.shadow_spread),
-					inset:         false,
-				}])
+				.border_color(border_color)
+				.shadow(shadows)
 				.pt(px(geometry.padding_top))
 				.pb(px(geometry.padding_bottom))
 				.px(px(geometry.padding_horizontal))
@@ -164,6 +177,16 @@ pub fn composer(
 					view.set_dropping(false);
 					view.attach_paths(paths.paths().to_vec(), cx);
 				}))
+				.child(
+					div()
+						.absolute()
+						.top_0()
+						.left_0()
+						.right_0()
+						.h(tokens.stroke(StrokeStep::Hairline))
+						.rounded_t(px(geometry.radius_outer))
+						.bg(tokens.inner_highlight()),
+				)
 				.children(
 					(!composer.queued.is_empty())
 						.then(|| queued_strip(composer, session_id, controls, tokens, cx)),
@@ -287,7 +310,7 @@ pub fn opening_line(
 			.text_size(px(geometry.opening_line_type_size.size))
 			.line_height(px(geometry.opening_line_type_size.line_height))
 			.font_weight(veyyon_gpui::FontWeight(f32::from(geometry.opening_line_weight)))
-			.text_color(tokens.color(ColorRole::Secondary))
+			.text_color(tokens.color(ColorRole::Foreground))
 			.child(text.to_owned()),
 	)
 }

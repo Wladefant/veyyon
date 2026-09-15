@@ -8,7 +8,7 @@ use veyyon_gpui::{
 use crate::{
 	controls::button::Button,
 	state::DialogButtonSpec,
-	token_set::{ColorRole, RadiusStep, SpacingStep, TextRamp, TokenSet},
+	token_set::{ColorRole, RadiusStep, SpacingStep, StrokeStep, TextRamp, TokenSet},
 };
 
 /// The click handler an action button dispatches through.
@@ -48,6 +48,15 @@ impl Dialog {
 		self
 	}
 
+	/// Appends a destructive action button.
+	#[must_use]
+	pub fn destructive_action(mut self, label: impl Into<SharedString>) -> Self {
+		self
+			.actions
+			.push((DialogButtonSpec::new(label, crate::ButtonVariant::Danger), None));
+		self
+	}
+
 	/// Appends an action button with the click it dispatches.
 	#[must_use]
 	pub fn action_on_click(
@@ -65,12 +74,11 @@ impl RenderOnce for Dialog {
 		let resolved_tokens = TokenSet::for_app(cx);
 		let tokens: &TokenSet = &resolved_tokens;
 
-		let bg = tokens.color(ColorRole::Float);
+		let bg = tokens.float_ground();
 		let border_color = tokens.color(ColorRole::Hairline);
-		let radius = tokens.radius(RadiusStep::Xl);
+		let radius = tokens.radius(RadiusStep::Xxl);
 		let pad = tokens.spacing(SpacingStep::S6);
 		let gap = tokens.spacing(SpacingStep::S4);
-
 		let header = div()
 			.w_full()
 			.min_w_0()
@@ -106,11 +114,13 @@ impl RenderOnce for Dialog {
 			.max_w_full()
 			.overflow_hidden()
 			.bg(bg)
+			.backdrop_blur(tokens.float_blur())
+			.backdrop_saturation(tokens.float_saturation())
 			.rounded(radius)
-			.border_1()
+			.border(tokens.stroke(StrokeStep::Hairline))
 			.border_color(border_color)
+			.shadow(tokens.float_shadows())
 			.p(pad)
-			.shadow_lg()
 			.flex()
 			.flex_col()
 			.gap(gap)

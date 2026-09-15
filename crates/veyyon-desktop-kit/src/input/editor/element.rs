@@ -10,7 +10,7 @@ use veyyon_gpui::{
 };
 
 use super::{Editor, EditorMode, layout::EditorLayoutState};
-use crate::token_set::{ColorRole, TokenSet};
+use crate::token_set::{ColorRole, StrokeStep, TokenSet};
 
 /// Renderable element for the editor text canvas.
 pub struct EditorElement {
@@ -221,9 +221,13 @@ impl Element for EditorElement {
 		let is_empty = editor.is_empty();
 		let scroll_top = editor.scroll_top;
 
-		let (selection_color, caret_color) = {
+		let (selection_color, caret_color, caret_width) = {
 			let tokens = TokenSet::for_app(cx);
-			(tokens.row_selected(), tokens.color(ColorRole::Accent))
+			(
+				tokens.row_selected(),
+				tokens.color(ColorRole::Accent),
+				tokens.stroke(StrokeStep::Hairline),
+			)
 		};
 
 		// Register input handler for IME and platform text events
@@ -253,7 +257,7 @@ impl Element for EditorElement {
 
 						let sel_rect = Bounds::new(
 							point(bounds.left() + x1, line_y),
-							size((x2 - x1).max(px(1.0)), layout.line_height),
+							size((x2 - x1).max(caret_width), layout.line_height),
 						);
 						window.paint_quad(fill(sel_rect, selection_color));
 					}
@@ -276,11 +280,14 @@ impl Element for EditorElement {
 			let _ = line.paint(origin, layout.line_height, TextAlign::Left, Some(bounds), window, cx);
 		}
 
-		// Paint 1px caret
+		// The caret is a hairline rule, so it is the stroke scale's hairline
+		// rather than a width this element restates.
 		if is_focused && cursor_visible {
 			if is_empty {
-				let caret_rect =
-					Bounds::new(point(bounds.left(), bounds.top()), size(px(1.0), layout.line_height));
+				let caret_rect = Bounds::new(
+					point(bounds.left(), bounds.top()),
+					size(caret_width, layout.line_height),
+				);
 				window.paint_quad(fill(caret_rect, caret_color));
 			} else {
 				let head = selection.head;
@@ -295,7 +302,7 @@ impl Element for EditorElement {
 
 					let caret_rect = Bounds::new(
 						point(bounds.left() + caret_x, caret_y),
-						size(px(1.0), layout.line_height),
+						size(caret_width, layout.line_height),
 					);
 					window.paint_quad(fill(caret_rect, caret_color));
 				}

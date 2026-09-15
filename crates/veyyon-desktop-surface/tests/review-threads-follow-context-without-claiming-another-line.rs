@@ -67,7 +67,13 @@ fn moved_lines_preserve_both_source_sides_and_comments_across_relaunch() {
 		let restored = relaunch(reviews);
 		assert_eq!(placement(&moved, &restored.threads[0]), ReviewPlacement::Attached(42));
 		assert_eq!(restored.threads[0].comments, ["Check this change"]);
-		assert_eq!(ReviewCounts::of(&moved, &restored).files.get("src/app.rs"), Some(&1));
+		assert_eq!(
+			ReviewCounts::of(&moved, &restored)
+				.files
+				.get("src/app.rs")
+				.map(|file| file.total),
+			Some(1)
+		);
 	}
 }
 
@@ -110,11 +116,15 @@ fn replies_resolution_and_reopen_survive_the_same_document() {
 	assert!(!reviews.reply(id, "  \n "));
 	assert!(reviews.reply(id, "Addressed in the next change"));
 	assert!(reviews.set_resolved(id, true));
-	assert_eq!(ReviewCounts::of(&current, &reviews).total, 0);
+	assert_eq!(ReviewCounts::of(&current, &reviews).unresolved, 0);
+	assert_eq!(ReviewCounts::of(&current, &reviews).resolved, 1);
+	assert_eq!(ReviewCounts::of(&current, &reviews).total, 1);
 	let mut restored = relaunch(reviews);
 	assert!(restored.threads[0].resolved);
 	assert_eq!(restored.threads[0].comments, ["Check this change", "Addressed in the next change"]);
 	assert!(restored.set_resolved(id, false));
+	assert_eq!(ReviewCounts::of(&current, &restored).unresolved, 1);
+	assert_eq!(ReviewCounts::of(&current, &restored).resolved, 0);
 	assert_eq!(ReviewCounts::of(&current, &restored).total, 1);
 	assert!(!restored.set_resolved(id + 1, true));
 }
@@ -137,7 +147,7 @@ fn repository_file_and_scope_are_isolated_and_missing_files_remain_listed_in_tot
 	assert_eq!(placement(&other_file, &reviews.threads[0]), ReviewPlacement::Missing);
 	let counts = ReviewCounts::of(&other_file, &reviews);
 	assert_eq!(counts.total, 1);
-	assert_eq!(counts.files.get("src/app.rs"), Some(&1));
+	assert_eq!(counts.files.get("src/app.rs").map(|file| file.total), Some(1));
 	assert_eq!(counts.files.get("src/other.rs"), None);
 }
 

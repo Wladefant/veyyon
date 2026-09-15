@@ -200,7 +200,7 @@ pub fn transcript_viewport(
 						state_scroll.scroll_to_end_animated(
 							&motion_scroll,
 							reduced_motion,
-							std::time::Instant::now(),
+							cx.background_executor().now(),
 						);
 						let _ = view_scroll.update(cx, |_view, cx| cx.notify());
 					}),

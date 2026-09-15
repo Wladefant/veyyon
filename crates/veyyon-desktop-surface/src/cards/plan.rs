@@ -4,7 +4,7 @@
 use veyyon_desktop_kit::{ColorRole, SpacingStep, TextRamp, TextWeight, TintRole, TokenSet};
 use veyyon_desktop_tokens::AttachedCardsSurfaceTokens;
 use veyyon_gpui::{
-	Context, Div, ParentElement, Styled, div, linear_color_stop, linear_gradient, prelude::*, px,
+	Context, Div, ParentElement, Styled, div, linear_color_stop, linear_gradient, px,
 };
 
 use super::{
@@ -48,29 +48,29 @@ pub(super) fn plan(
 	let lines_high = body.len() as f32 * f32::from(tokens.line_height(TextRamp::Small));
 	let gaps_high = body.len().saturating_sub(1) as f32 * f32::from(tokens.spacing(SpacingStep::S1));
 	let stacked = lines_high + gaps_high;
-	let ground = tokens.color(ColorRole::Float);
-	let markdown = div()
-		.relative()
+	let ground = tokens.float_ground();
+	let markdown_pane = div()
 		.w_full()
 		.max_h(px(geometry.plan_max_markdown_height_px))
 		.overflow_hidden()
-		.child(lines)
-		.when(stacked > geometry.plan_max_markdown_height_px, |pane| {
-			pane.child(
-				div()
-					.absolute()
-					.bottom_0()
-					.left_0()
-					.right_0()
-					.h(px(geometry.plan_fade_height_px))
-					.bg(linear_gradient(
-						180.0,
-						linear_color_stop(ground.opacity(0.0), 0.0),
-						linear_color_stop(ground, 1.0),
-					)),
-			)
-		});
+		.child(lines);
 
+	let mut markdown = div().relative().w_full().child(markdown_pane);
+	if stacked > geometry.plan_max_markdown_height_px {
+		markdown = markdown.child(
+			div()
+				.absolute()
+				.bottom_0()
+				.left_0()
+				.right_0()
+				.h(px(geometry.plan_fade_height_px))
+				.bg(linear_gradient(
+					180.0,
+					linear_color_stop(ground.opacity(0.0), 0.0),
+					linear_color_stop(ground.opacity(1.0), 0.7),
+				)),
+		);
+	}
 	shell(TintRole::Plan, geometry.plan_padding, tokens)
 		.child(
 			div()

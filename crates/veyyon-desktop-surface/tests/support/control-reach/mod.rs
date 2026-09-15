@@ -101,7 +101,7 @@ pub fn expected_controls(state: &ShellState) -> usize {
 	};
 	let tenant = match state.panel.active_tab {
 		veyyon_desktop_surface::PanelTab::Diff if !state.panel.is_empty() => {
-			4 + state.panel.diff.len() * (1 + panes) + hunk_headers + reviews
+			4 + state.panel.diff.len() * panes + hunk_headers + reviews
 		},
 		veyyon_desktop_surface::PanelTab::File => usize::from(state.panel.file.is_some()),
 		_ => 0,
@@ -122,8 +122,8 @@ pub fn expected_controls(state: &ShellState) -> usize {
 		.sum::<usize>()
 		+ usize::from(state.cards.len() > visible_cards);
 
-	// Root, titlebar drag strip and toggles, rail settings, composer drop
-	// target/editor, and the two tooltip-wrapped footer controls. A tooltip
+	// Root, titlebar drag strip and toggles, composer drop
+	// target/editor, and the footer controls. A tooltip
 	// answers one rect, its anchor's: the tag is drawn on the deferred layer
 	// and is hit-tested for nothing.
 	//
@@ -131,18 +131,20 @@ pub fn expected_controls(state: &ShellState) -> usize {
 	// transcript body, which takes the focus its scope's chords ride on, and
 	// the composer box, which hands the focus back to the editor whatever the
 	// press landed on.
+	let chrome = 1
+		+ 1
+		+ 1
+		+ usize::from(!state.panel.is_empty())
+		+ usize::from(state.drawer.offered)
+		+ 4
+		+ 6;
 	// Each word of the menu bar answers a press of its own, counted from the
 	// sections the bar draws rather than as a literal, so a menu added to the
 	// table moves this with it.
 	let menu_bar = MenuSectionId::iter().count();
-	let chrome = 1
-		+ 3 + 1
-		+ 6 + 2
-		+ usize::from(state.connection.is_attached())
-		+ usize::from(state.current_id > 0) * 2;
 	// A span the frame drew answers the pointer too, and a body behind a
 	// disclosure row draws none until open: prose registers one per paragraph.
-	let transcript = usize::from(!state.transcript.is_empty()) * 2
+	let transcript = usize::from(!state.transcript.is_empty()) * 3
 		+ state
 			.transcript
 			.iter()

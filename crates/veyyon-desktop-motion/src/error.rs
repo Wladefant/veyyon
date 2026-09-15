@@ -35,8 +35,9 @@ pub enum MotionError {
 
 	/// Failed to parse motion token definition.
 	#[error(
-		"failed to parse motion token configuration: {0}; verify motion.toml format against §8.20 \
-		 schema"
+		"failed to parse motion token configuration: {0}; correct the reported location in \
+		 motion.toml, where each [role.NAME] declares model and reduced_motion, a duration model \
+		 declares duration_ms and curve, and a spring model declares stiffness, damping and mass"
 	)]
 	ParseError(String),
 

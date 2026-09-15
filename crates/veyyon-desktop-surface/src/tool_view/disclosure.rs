@@ -8,9 +8,7 @@
 use veyyon_desktop_kit::{
 	ColorRole, Icon, IconName, IconSize, RadiusStep, SpacingStep, TextRamp, TextWeight, TokenSet,
 };
-use veyyon_gpui::{
-	CursorStyle, Div, InteractiveElement, MouseButton, ParentElement, Styled, div, px,
-};
+use veyyon_gpui::{CursorStyle, Div, InteractiveElement, MouseButton, ParentElement, Styled, div};
 
 use super::{ToolViewCallbacks, fit::FitsTheRow};
 
@@ -38,6 +36,7 @@ pub fn render_disclosure(
 				div()
 					.fit_primary()
 					.text_size(tokens.font_size(TextRamp::Micro))
+					.line_height(tokens.line_height(TextRamp::Micro))
 					.text_color(tokens.color(ColorRole::Muted))
 					.child(format!("({label})")),
 			);
@@ -52,7 +51,7 @@ pub fn render_disclosure(
 		.gap(tokens.spacing(SpacingStep::S1))
 		.mt(tokens.spacing(SpacingStep::S1))
 		.px(tokens.spacing(SpacingStep::S2))
-		.py(px(2.0))
+		.py(tokens.spacing(SpacingStep::S1))
 		.rounded(tokens.radius(RadiusStep::Sm))
 		.bg(tokens.color(ColorRole::Inset))
 		.cursor(CursorStyle::PointingHand)
@@ -69,6 +68,7 @@ pub fn render_disclosure(
 			div()
 				.fit_primary()
 				.text_size(tokens.font_size(TextRamp::Small))
+				.line_height(tokens.line_height(TextRamp::Small))
 				.text_color(tokens.color(ColorRole::Accent))
 				.font_weight(tokens.font_weight(TextWeight::Medium))
 				.child(label.to_string()),

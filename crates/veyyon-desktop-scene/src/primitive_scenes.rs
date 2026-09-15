@@ -221,29 +221,43 @@ pub fn render_primitive(kind: PrimitiveKind, _window: &mut Window, cx: &mut App)
 		},
 
 		PrimitiveKind::Popover => Popover::new(
-			Point::new(tokens.spacing(SpacingStep::S2), tokens.spacing(SpacingStep::S2)),
-			AnchorCorner::TopLeft,
+			Point::new(tokens.spacing(SpacingStep::S13), tokens.spacing(SpacingStep::S2)),
+			AnchorCorner::TopRight,
 			Text::new(FixtureText::MESSAGE_TYPICAL),
 		)
 		.into_any_element(),
 
 		PrimitiveKind::Menu => Menu::new([
-			MenuItem::new(FixtureText::PROJECT_TYPICAL).icon(IconName::Settings),
-			MenuItem::new(FixtureText::CJK).shortcut("⌘K"),
+			MenuItem::section("Repository"),
+			MenuItem::new(FixtureText::PROJECT_TYPICAL)
+				.icon(IconName::Settings)
+				.shortcut("⌘,"),
+			MenuItem::separator(),
+			MenuItem::new(FixtureText::CJK)
+				.icon(IconName::Folder)
+				.submenu([MenuItem::new("Sub-item 1"), MenuItem::new("Sub-item 2")]),
+			MenuItem::separator(),
+			MenuItem::new("Delete Repository")
+				.icon(IconName::Close)
+				.danger(true)
+				.shortcut("⌫"),
 		])
 		.into_any_element(),
 
 		PrimitiveKind::Dialog => {
 			Dialog::new("dialog", FixtureText::TITLE_TYPICAL, Text::new(FixtureText::MESSAGE_TYPICAL))
-				.action(DialogButtonSpec::new("Confirm", ButtonVariant::Primary))
+				.action(DialogButtonSpec::new("Cancel", ButtonVariant::Default))
+				.action(DialogButtonSpec::new("Delete Repository", ButtonVariant::Danger))
 				.into_any_element()
 		},
 
-		PrimitiveKind::Tooltip => {
-			Tooltip::new(FixtureText::BRANCH_EXTREME_90, Button::new("inspect", "Inspect Target"))
-				.into_any_element()
-		},
-
+		PrimitiveKind::Tooltip => Stack::horizontal(SpacingStep::S4)
+			.child(
+				Tooltip::new(FixtureText::BRANCH_EXTREME_90, Button::new("inspect", "Inspect Target"))
+					.above(),
+			)
+			.child(Tooltip::new("Edge Flip", Button::new("flip", "Near Right Edge")).right())
+			.into_any_element(),
 		PrimitiveKind::Palette => Palette::new(
 			SearchField::new("palette-search", "").placeholder("Command palette..."),
 			List::new(2, |i, _, _| Text::new(format!("Command {i}")).into_any_element()),

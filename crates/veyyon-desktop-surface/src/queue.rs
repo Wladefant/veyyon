@@ -8,12 +8,15 @@
 //! literal, so a density change is a token edit and the hot-reload loop shows
 //! it without a rebuild.
 
-use std::{collections::HashMap, time::Instant};
+use std::collections::HashMap;
 
-use veyyon_desktop_kit::{ColorRole, TokenSet};
+use veyyon_desktop_kit::{
+	Button, ButtonSize, ButtonVariant, ColorRole, SpacingStep, TextRamp, TextWeight, TokenSet,
+};
 use veyyon_desktop_tokens::QueueSurfaceTokens;
 use veyyon_gpui::{
-	Context, FocusHandle, InteractiveElement, IntoElement, ParentElement, Styled, Window, div, px,
+	ClickEvent, Context, FocusHandle, InteractiveElement, IntoElement, ParentElement, Styled,
+	Window, div, px,
 };
 pub mod card;
 pub mod fill;
@@ -33,7 +36,7 @@ pub use rows::{card_row, line_row};
 use veyyon_desktop_model::{SessionId, SurfaceId};
 
 use crate::{
-	ShellView,
+	Intent, ShellView,
 	controls::{ControlStates, availability_style, hairline_for_weak},
 	damage::{LaidOut, Region},
 	model::{Row, Section},
@@ -66,7 +69,7 @@ pub fn queue_rail(
 	window: &mut Window,
 	cx: &Context<ShellView>,
 ) -> impl IntoElement {
-	let now = Instant::now();
+	let now = cx.background_executor().now();
 	motion.record_selected_id(current);
 	motion.ensure_visible(current, sections, geometry.parked_initial_page_size, now);
 	let parked_limit = motion.parked_limit(geometry.parked_initial_page_size);
@@ -180,6 +183,7 @@ pub fn queue_rail(
 		}
 	}
 	let shift_offsets: std::rc::Rc<HashMap<u64, f32>> = std::rc::Rc::new(shift_map);
+	let items_is_empty = items.is_empty();
 	let items_snapshot: std::rc::Rc<[QueueListItem]> = std::rc::Rc::from(items);
 	let list_state = motion.list_state().clone();
 	let geometry_copy = geometry.clone();
@@ -271,13 +275,96 @@ pub fn queue_rail(
 	.w_full()
 	.h_full();
 
-	let list_container = div()
-		.id("queue-scroll-container")
-		.flex_1()
-		.w_full()
-		.h_full()
-		.overflow_hidden()
-		.child(list_el);
+	let list_container = if items_is_empty {
+		let empty_view = if let Some(q) = filter_query.filter(|s| !s.trim().is_empty()) {
+			div()
+				.id("queue-empty-after-filter")
+				.flex_1()
+				.w_full()
+				.flex()
+				.flex_col()
+				.items_center()
+				.justify_center()
+				.px(tokens.spacing(SpacingStep::S4))
+				.py(tokens.spacing(SpacingStep::S6))
+				.gap(tokens.spacing(SpacingStep::S2))
+				.child(
+					div()
+						.text_size(tokens.font_size(TextRamp::Small))
+						.line_height(tokens.line_height(TextRamp::Small))
+						.font_weight(tokens.font_weight(TextWeight::Medium))
+						.text_color(tokens.color(ColorRole::Foreground))
+						.child("No matching sessions"),
+				)
+				.child(
+					div()
+						.text_size(tokens.font_size(TextRamp::Micro))
+						.line_height(tokens.line_height(TextRamp::Micro))
+						.text_color(tokens.color(ColorRole::Muted))
+						.text_center()
+						.child(format!("No sessions match \"{q}\"")),
+				)
+				.child(
+					Button::new("clear-filter-btn", "Clear filter")
+						.variant(ButtonVariant::Ghost)
+						.size(ButtonSize::Small)
+						.on_click(cx.listener(|view, _event: &ClickEvent, _window, cx| {
+							view.dispatch(Intent::FindSessions(String::new()), cx);
+						})),
+				)
+		} else {
+			div()
+				.id("queue-truly-empty")
+				.flex_1()
+				.w_full()
+				.flex()
+				.flex_col()
+				.items_center()
+				.justify_center()
+				.px(tokens.spacing(SpacingStep::S4))
+				.py(tokens.spacing(SpacingStep::S6))
+				.gap(tokens.spacing(SpacingStep::S2))
+				.child(
+					div()
+						.text_size(tokens.font_size(TextRamp::Small))
+						.line_height(tokens.line_height(TextRamp::Small))
+						.font_weight(tokens.font_weight(TextWeight::Medium))
+						.text_color(tokens.color(ColorRole::Foreground))
+						.child("No sessions yet"),
+				)
+				.child(
+					div()
+						.text_size(tokens.font_size(TextRamp::Micro))
+						.line_height(tokens.line_height(TextRamp::Micro))
+						.text_color(tokens.color(ColorRole::Muted))
+						.text_center()
+						.child("Start your first task or conversation"),
+				)
+				.child(
+					Button::new("new-session-btn", "New Session")
+						.variant(ButtonVariant::Primary)
+						.size(ButtonSize::Small)
+						.on_click(cx.listener(|view, _event: &ClickEvent, _window, cx| {
+							view.dispatch(Intent::NewSession, cx);
+						})),
+				)
+		};
+		div()
+			.id("queue-scroll-container")
+			.flex_1()
+			.min_h_0()
+			.w_full()
+			.overflow_hidden()
+			.child(empty_view)
+	} else {
+		div()
+			.id("queue-scroll-container")
+			.flex_1()
+			.min_h_0()
+			.w_full()
+			.overflow_hidden()
+			.child(list_el)
+	};
 
 	// The rail tracks the focus, so a press anywhere in it -- a row, a header,
 	// the footer -- hands the keyboard to the rail and the `Queue` context

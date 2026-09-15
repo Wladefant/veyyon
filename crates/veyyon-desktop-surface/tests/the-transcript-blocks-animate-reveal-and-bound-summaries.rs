@@ -1,6 +1,9 @@
 //! WHY: Expansion must preserve natural height and interruption continuity;
 //! collapsed tool headers must not expose later output lines or historical
-//! running status. These tests exercise retained state and isolated GPUI
+//! running status. Retained reveal and layout motions enforce one clock, taken
+//! from the executor, whether the sample happens on a frame or on an event,
+//! ensuring deterministic frame rasterization and no spring mutation during
+//! element construction. These tests exercise retained state and isolated GPUI
 //! blocks. They do not prove the live host transport or native-display frame
 //! cadence.
 
@@ -20,7 +23,7 @@ use veyyon_desktop_surface::{
 	model::{Block, Turn},
 	transcript::{
 		TranscriptViewportState,
-		blocks::{render_invoke_block, render_reason_block},
+		blocks::{render_invoke_block, render_pane_block, render_reason_block},
 	},
 };
 use veyyon_desktop_tokens::TranscriptSurfaceTokens;
@@ -216,4 +219,115 @@ fn expanded_content_reports_its_natural_height_from_real_prepaint() {
 		observed.reveal_frame(0, 0, Instant::now()).1 > 0.0,
 		"the clipped child must retain its natural height"
 	);
+}
+
+struct PureReasonView {
+	state:    TranscriptViewportState,
+	geometry: TranscriptSurfaceTokens,
+	tokens:   TokenSet,
+	motion:   MotionTokens,
+}
+
+impl Render for PureReasonView {
+	fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+		render_reason_block(
+			0,
+			0,
+			"Reasoning details on a measured line",
+			true,
+			false,
+			&self.geometry,
+			&self.tokens,
+			&self.motion,
+			false,
+			&self.state,
+			None,
+			None,
+		)
+	}
+}
+
+#[test]
+fn element_construction_mutates_no_springs_and_produces_identical_frames() {
+	let tokens = load_bundled_tokens().expect("bundled tokens");
+	let theme = load_bundled_theme("dark").expect("bundled theme");
+	let state = TranscriptViewportState::new();
+	state.sync_turns(
+		&[Turn::Agent { blocks: vec![Block::Reason("Details".into())], model: None }],
+		false,
+	);
+	let motion = MotionTokens::reference();
+	let t0 = Instant::now();
+	assert!(state.record_reveal_height(0, 0, 180.0));
+	state.set_block_expanded(0, 0, true, &motion, false, t0);
+
+	let t1 = t0 + Duration::from_millis(80);
+	assert!(state.is_animating(t1, &motion, false));
+
+	let first_eval = state.current_reveal_frame(0, 0);
+	assert!(first_eval.0 > 0.0 && first_eval.0 < 1.0);
+	assert_eq!(first_eval.1, 180.0);
+
+	let mut cx = headless_context().expect("headless renderer");
+	let state_for_view = state.clone();
+	let mut session = HeadlessSession::open(
+		&mut cx,
+		&RenderOptions { width: 768, height: 400, scale_factor: 1.0, ..RenderOptions::default() },
+		move |_, app: &mut App| {
+			let installed =
+				install_tokens(app, &tokens, &theme, Path::new("surface")).expect("installed tokens");
+			app.new(|_| PureReasonView {
+				state:    state_for_view,
+				geometry: tokens.surface.transcript,
+				tokens:   installed.set,
+				motion:   installed.motion,
+			})
+		},
+	)
+	.expect("headless session");
+
+	let frame1 = session.frame().expect("frame 1");
+	assert_eq!(state.current_reveal_frame(0, 0).0, first_eval.0);
+
+	// Element builders must NOT mutate the spring or advance progress:
+	session
+		.update(|view, _window, _cx| {
+			let _reason_el = render_reason_block(
+				0,
+				0,
+				"Reasoning details on a measured line",
+				true,
+				false,
+				&view.geometry,
+				&view.tokens,
+				&view.motion,
+				false,
+				&view.state,
+				None,
+				None,
+			);
+			assert_eq!(view.state.current_reveal_frame(0, 0).0, first_eval.0);
+
+			let lines = vec!["line 1".to_string(), "line 2".to_string()];
+			let _pane_el = render_pane_block(
+				0,
+				0,
+				"Code output",
+				&lines,
+				true,
+				false,
+				&view.geometry,
+				&view.tokens,
+				&view.motion,
+				false,
+				&view.state,
+				None,
+				None,
+			);
+			assert_eq!(view.state.current_reveal_frame(0, 0).0, first_eval.0);
+		})
+		.expect("builder contract verified");
+
+	let frame2 = session.frame().expect("frame 2");
+	assert_eq!(frame1.frame.as_bytes(), frame2.frame.as_bytes());
 }

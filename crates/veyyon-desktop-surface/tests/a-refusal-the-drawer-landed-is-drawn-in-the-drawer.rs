@@ -92,7 +92,11 @@ fn drawer_state(failure: Option<DrawerFailure>) -> ShellState {
 	state.drawer = DrawerContent {
 		offered: true,
 		tabs: vec![
-			DrawerTab::Terminal { title: "bash".to_owned(), id: "t-1".to_owned() },
+			DrawerTab::Terminal {
+				title:  "bash".to_owned(),
+				id:     "t-1".to_owned(),
+				status: veyyon_desktop_model::TerminalStatus::Running,
+			},
 			DrawerTab::Processes,
 		],
 		active_tab: 0,

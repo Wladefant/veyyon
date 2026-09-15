@@ -6,7 +6,6 @@ use crate::{
 	curves::EasingCurve,
 	registry::{AnimatorKey, AnimatorRegistry, SurfaceId},
 	role::{DurationModel, MotionModel, MotionRole, ResolvedMotion, resolve_motion},
-	spring::SpringModel,
 	tokens::MotionTokens,
 };
 
@@ -27,8 +26,7 @@ impl RevealMotion {
 		let mut registry = AnimatorRegistry::new();
 		let target = if initially_expanded { 1.0 } else { 0.0 };
 		let key = AnimatorKey::new(surface_id, MotionRole::Reveal, slot);
-		let model =
-			MotionModel::Spring(SpringModel { stiffness: 220.0, damping: 26.0, mass: 1.0 });
+		let model = MotionModel::Spring(MotionTokens::reference().reveal);
 		registry.get_or_create_with_initial(key, target, target, model, Instant::now());
 		Self { surface_id, slot, registry, expanded: initially_expanded, fade_only: false }
 	}

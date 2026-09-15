@@ -4,7 +4,7 @@ use veyyon_gpui::{App, IntoElement, RenderOnce, SharedString, Window, div, prelu
 
 use crate::{
 	state::ImageSource,
-	token_set::{ColorRole, RadiusStep, SpacingStep, TextRamp, TokenSet},
+	token_set::{ColorRole, RadiusStep, SpacingStep, StrokeStep, TextRamp, TokenSet},
 };
 
 /// Size ramp for avatar circular frames.
@@ -87,12 +87,13 @@ impl RenderOnce for Avatar {
 			.size(dimension)
 			.rounded(radius)
 			.bg(bg)
-			.border_1()
+			.border(tokens.stroke(StrokeStep::Hairline))
 			.border_color(border_color)
 			.flex()
 			.items_center()
 			.justify_center()
 			.text_size(tokens.font_size(font_ramp))
+			.line_height(tokens.line_height(font_ramp))
 			.text_color(fg)
 			.child(label)
 	}

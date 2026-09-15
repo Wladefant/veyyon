@@ -111,7 +111,6 @@ impl RenderOnce for SearchField {
 			.h(self.height.unwrap_or(metrics.height))
 			.w_full()
 			.min_w_0()
-			.overflow_hidden()
 			.px(metrics.inset)
 			.flex()
 			.items_center()
@@ -136,7 +135,7 @@ impl RenderOnce for SearchField {
 			EditorSlot::Entity(entity) => {
 				container = container
 					.cursor_text()
-					.child(div().flex_1().min_w_0().child(entity));
+					.child(div().flex_1().min_w_0().overflow_hidden().child(entity));
 			},
 			EditorSlot::Static(val) => {
 				let (text, text_color) = if has_value {

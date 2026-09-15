@@ -14,6 +14,30 @@ pub use attachments_builder::composer_attachments;
 #[path = "error_scope.rs"]
 mod error_scope_builder;
 pub use error_scope_builder::{error_scope, error_scope_baseline};
+#[path = "whole_window.rs"]
+mod whole_window_builder;
+pub use whole_window_builder::{
+	whole_window_both_open, whole_window_dialog_up, whole_window_disconnected,
+	whole_window_drawer_open, whole_window_first_run, whole_window_mid_approval,
+	whole_window_panel_docked, whole_window_populated, whole_window_rest, whole_window_streaming,
+	whole_window_toast,
+};
+#[path = "composer_scenes.rs"]
+mod composer_scenes;
+pub use composer_scenes::{
+	composer_aborting, composer_disconnected, composer_error, composer_max_height,
+	composer_model_selector, composer_multiline, composer_steering, composer_thinking_selector,
+	composer_typing,
+};
+#[path = "drawer.rs"]
+mod drawer_builder;
+pub use drawer_builder::drawer_scene;
+#[path = "palette_scenes.rs"]
+mod palette_scenes;
+pub use palette_scenes::{
+	palette_mode_browse, palette_mode_files, palette_mode_models, palette_mode_sessions,
+	palette_no_results, palette_results, palette_searching,
+};
 use strum::IntoEnumIterator as _;
 use veyyon_desktop_model::{
 	AuthFlowState, AuthFlowView, BadgeKind, BlockKind, ConnectionState, ConnectionStateKind,
@@ -162,6 +186,15 @@ fn custom(name: &str, surface: &str, state: &str) -> Result<SceneRoot, SceneBuil
 		("composer", "footer") => composer_footer(),
 		("composer", "attachments") => composer_attachments(),
 		("composer", "queued") => composer_queued(),
+		("composer", "typing") => composer_typing(),
+		("composer", "multiline") => composer_multiline(),
+		("composer", "max-height") => composer_max_height(),
+		("composer", "steering") => composer_steering(),
+		("composer", "aborting") => composer_aborting(),
+		("composer", "disconnected") => composer_disconnected(),
+		("composer", "error") => composer_error(),
+		("composer", "model-selector") => composer_model_selector(),
+		("composer", "thinking-selector") => composer_thinking_selector(),
 		("run-bar", "rest") => {
 			let mut seed = Seed::attached();
 			let session = seed.badged_session(QueuePartition::Live, BadgeKind::Working);
@@ -177,12 +210,31 @@ fn custom(name: &str, surface: &str, state: &str) -> Result<SceneRoot, SceneBuil
 			seed.state.overlay = Some(Overlay::Palette(PaletteState::default()));
 			seed.finish()
 		},
+		("palette", "searching") => palette_searching(),
+		("palette", "results") => palette_results(),
+		("palette", "no-results") => palette_no_results(),
+		("palette", "mode-sessions") => palette_mode_sessions(),
+		("palette", "mode-files") => palette_mode_files(),
 		("palette", "content-search") => content_search(),
+		("palette", "mode-browse") => palette_mode_browse(),
+		("palette", "mode-models") => palette_mode_models(),
 		("settings-row", "rest") => settings_row(),
 		("shell", "auth-needs-secret") => auth(AuthFlowState::AwaitingSecret, None),
 		("shell", "auth-awaiting-external-url") => {
 			auth(AuthFlowState::AwaitingBrowser, Some("https://auth.example.test/oauth"))
 		},
+		("whole-window", "rest") => whole_window_rest(),
+		("whole-window", "populated") => whole_window_populated(),
+		("whole-window", "streaming") => whole_window_streaming(),
+		("whole-window", "panel-docked") => whole_window_panel_docked(),
+		("whole-window", "drawer-open") => whole_window_drawer_open(),
+		("whole-window", "both-open") => whole_window_both_open(),
+		("whole-window", "dialog-up") => whole_window_dialog_up(),
+		("whole-window", "toast") => whole_window_toast(),
+		("whole-window", "mid-approval") => whole_window_mid_approval(),
+		("whole-window", "disconnected") => whole_window_disconnected(),
+		("whole-window", "first-run") => whole_window_first_run(),
+		("drawer", state) => drawer_scene(state)?,
 		_ => return Err(SceneBuildError::Unbuilt(name.to_string())),
 	};
 	Ok(SceneRoot::Shell(Box::new(built)))

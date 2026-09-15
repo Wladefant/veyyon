@@ -12,10 +12,10 @@ elevation_level = 4
 [input]
 row_height_px = 40
 inset = "s8"
-search_icon_px = 16
+search_icon_px = "s8"
 
 [results]
 row_height_px = 36
-group_header_height_px = 20
-footer_height_px = 32
+group_header_height_px = "s9"
+footer_height_px = "s11"
 key_hint_size = "micro"

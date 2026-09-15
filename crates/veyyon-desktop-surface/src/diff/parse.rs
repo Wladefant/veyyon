@@ -31,9 +31,19 @@ pub fn parse_diff(text: &str) -> Vec<DiffFile> {
 				files.push(builder.finish());
 			}
 			current_file = Some(FileBuilder::from_git_header(line));
+		} else if line.starts_with("diff --cc ") || line.starts_with("diff --combined ") {
+			if let Some(builder) = current_file.take() {
+				files.push(builder.finish());
+			}
+			current_file = Some(FileBuilder::from_conflict_header(line));
+		} else if line.starts_with("diff --untracked ") {
+			if let Some(builder) = current_file.take() {
+				files.push(builder.finish());
+			}
+			current_file = Some(FileBuilder::from_untracked_header(line));
 		} else if let Some(builder) = &mut current_file {
 			builder.feed_line(line);
-		} else if line.starts_with("--- ") || line.starts_with("@@ ") {
+		} else if line.starts_with("--- ") || line.starts_with("@@ ") || line.starts_with("@@@ ") {
 			// Bare diff without `diff --git` header
 			let mut builder = FileBuilder::default();
 			builder.feed_line(line);
@@ -82,6 +92,28 @@ impl FileBuilder {
 		Self { path, old_path, ..Self::default() }
 	}
 
+	fn from_conflict_header(line: &str) -> Self {
+		let parts: Vec<&str> = line.split_whitespace().collect();
+		let path = if parts.len() >= 3 {
+			let p = parts[2].strip_prefix("b/").unwrap_or(parts[2]);
+			p.strip_prefix("a/").unwrap_or(p).to_string()
+		} else {
+			String::new()
+		};
+		Self { path, status: Some(ChangeStatus::Conflicted), ..Self::default() }
+	}
+
+	fn from_untracked_header(line: &str) -> Self {
+		let parts: Vec<&str> = line.split_whitespace().collect();
+		let path = if parts.len() >= 3 {
+			let p = parts[2].strip_prefix("b/").unwrap_or(parts[2]);
+			p.strip_prefix("a/").unwrap_or(p).to_string()
+		} else {
+			String::new()
+		};
+		Self { path, status: Some(ChangeStatus::Untracked), ..Self::default() }
+	}
+
 	fn feed_line(&mut self, line: &str) {
 		if self.truncated {
 			if line.starts_with('+') && !line.starts_with("+++") {
@@ -96,6 +128,8 @@ impl FileBuilder {
 
 		if line.starts_with("new file mode") {
 			self.status = Some(ChangeStatus::Added);
+		} else if line.starts_with("untracked file mode") || line.starts_with("untracked file") {
+			self.status = Some(ChangeStatus::Untracked);
 		} else if line.starts_with("deleted file mode") {
 			self.status = Some(ChangeStatus::Deleted);
 		} else if line.starts_with("rename from ") {
@@ -109,7 +143,9 @@ impl FileBuilder {
 		} else if line.starts_with("--- ") {
 			let p = line.trim_start_matches("--- ").trim();
 			if p == "/dev/null" {
-				self.status = Some(ChangeStatus::Added);
+				if self.status != Some(ChangeStatus::Untracked) {
+					self.status = Some(ChangeStatus::Added);
+				}
 			} else if self.path.is_empty() {
 				self.path = p.strip_prefix("a/").unwrap_or(p).to_string();
 			}
@@ -125,7 +161,7 @@ impl FileBuilder {
 			self
 				.rows
 				.push(DiffRow::Binary { message: line.to_string() });
-		} else if line.starts_with("@@ ") {
+		} else if line.starts_with("@@ ") || line.starts_with("@@@ ") {
 			self.flush_pending();
 			self.parse_hunk_header(line);
 		} else if let Some(stripped) = line.strip_prefix('+') {
@@ -171,9 +207,49 @@ impl FileBuilder {
 		} else if line.starts_with(r"\ No newline") {
 			// Meta note, ignore
 		}
+
+		if line.starts_with("<<<<<<<")
+			|| line.starts_with("+<<<<<<<")
+			|| line.starts_with("++<<<<<<<")
+			|| line.starts_with("=======")
+			|| line.starts_with("+=======")
+			|| line.starts_with("++=======")
+			|| line.starts_with(">>>>>>>")
+			|| line.starts_with("+>>>>>>>")
+			|| line.starts_with("++>>>>>>>")
+		{
+			self.status = Some(ChangeStatus::Conflicted);
+		}
 	}
 
 	fn parse_hunk_header(&mut self, line: &str) {
+		if let Some(after_at) = line.strip_prefix("@@@ ") {
+			self.status = Some(ChangeStatus::Conflicted);
+			if let Some((spec, rest)) = after_at.split_once(" @@@") {
+				let symbol = rest.trim();
+				let symbol = (!symbol.is_empty()).then(|| symbol.to_string());
+				let parts: Vec<&str> = spec.split_whitespace().collect();
+				let old_part = parts.iter().find(|p| p.starts_with('-'));
+				let new_part = parts.iter().find(|p| p.starts_with('+'));
+				let (old_start, old_count) = old_part
+					.and_then(|p| p.strip_prefix('-'))
+					.map_or((1, 1), parse_range);
+				let (new_start, new_count) = new_part
+					.and_then(|p| p.strip_prefix('+'))
+					.map_or((1, 1), parse_range);
+				self.current_old_line = old_start;
+				self.current_new_line = new_start;
+				self.rows.push(DiffRow::HunkHeader {
+					old_start,
+					old_count,
+					new_start,
+					new_count,
+					symbol,
+				});
+				return;
+			}
+		}
+
 		// @@ -old_start,old_count +new_start,new_count @@ symbol
 		let Some(after_first) = line.strip_prefix("@@ -") else {
 			return;
@@ -245,15 +321,15 @@ impl FileBuilder {
 			self.rows.push(DiffRow::Truncated { remaining });
 		}
 
-		let status = self.status.unwrap_or({
-			if self.additions > 0 && self.deletions == 0 {
+		let status = self
+			.status
+			.unwrap_or(if self.additions > 0 && self.deletions == 0 {
 				ChangeStatus::Added
 			} else if self.deletions > 0 && self.additions == 0 {
 				ChangeStatus::Deleted
 			} else {
 				ChangeStatus::Modified
-			}
-		});
+			});
 
 		DiffFile {
 			path: self.path,

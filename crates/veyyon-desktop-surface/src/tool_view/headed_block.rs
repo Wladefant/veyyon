@@ -2,9 +2,7 @@
 
 use veyyon_desktop_kit::{ColorRole, SpacingStep, TextRamp, TokenSet};
 use veyyon_desktop_model::tool_view::HeadedBlockView;
-use veyyon_gpui::{
-	CursorStyle, Div, InteractiveElement, MouseButton, ParentElement, Styled, div, px,
-};
+use veyyon_gpui::{CursorStyle, Div, InteractiveElement, MouseButton, ParentElement, Styled, div};
 
 use super::{
 	ToolViewCallbacks, disclosure::render_disclosure, fit::FitsTheRow,
@@ -80,8 +78,9 @@ pub fn render_headed_block(
 	if omitted_front > 0 {
 		let mut front_el = div()
 			.fit_primary()
-			.py(px(2.0))
+			.py(tokens.spacing(SpacingStep::S1))
 			.text_size(tokens.font_size(TextRamp::Micro))
+			.line_height(tokens.line_height(TextRamp::Micro))
 			.text_color(tokens.color(ColorRole::Muted));
 
 		if let Some(on_disclose) = &callbacks.on_disclose {

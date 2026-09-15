@@ -4,7 +4,7 @@
 //! hover actions.
 
 use veyyon_desktop_kit::{
-	ColorRole, Dot, RadiusStep, SpacingStep, Text, TextRamp, TokenSet, Truncate,
+	ColorRole, Dot, RadiusStep, SpacingStep, StrokeStep, Text, TextRamp, TokenSet, Truncate,
 	controls::{IconButton, IconButtonVariant},
 	icons::{IconName, IconSize},
 };
@@ -40,9 +40,17 @@ pub fn line_row(
 	} else {
 		tokens.transparent()
 	};
-
+	let in_flight = matches!(row.badge, Some(Badge::Working | Badge::Watching));
+	let row_opacity = if is_open {
+		1.00
+	} else if selected {
+		if in_flight { 0.85 } else { 1.00 }
+	} else if in_flight {
+		0.70
+	} else {
+		1.00
+	};
 	let hover_bg = tokens.row_hover();
-
 	let has_attention_strip = row.badge.is_some_and(Badge::blocks_on_operator)
 		|| matches!(row.badge, Some(Badge::Done | Badge::Failed));
 
@@ -135,6 +143,7 @@ pub fn line_row(
 		.px(px(geometry.card_padding_horizontal))
 		.rounded(tokens.radius(RadiusStep::Sm))
 		.bg(ground)
+		.opacity(row_opacity)
 		.flex()
 		.flex_row()
 		.items_center()
@@ -145,7 +154,11 @@ pub fn line_row(
 			div()
 				.flex_1()
 				.min_w_0()
-				.child(Truncate::new(row.title.clone()).color(ColorRole::Secondary)),
+				.child(Truncate::new(row.title.clone()).color(if is_open || selected {
+					ColorRole::Foreground
+				} else {
+					ColorRole::Secondary
+				})),
 		);
 
 	if let Some(meta) = &row.meta {
@@ -161,17 +174,17 @@ pub fn line_row(
 	line = line.child(actions);
 
 	if has_attention_strip {
-		let tint_fill = row
+		let tint_ink = row
 			.badge
-			.map_or_else(|| tokens.transparent(), |b| tokens.tint(b.tint()).fill);
+			.map_or_else(|| tokens.transparent(), |b| tokens.tint(b.tint()).ink);
 		line = line.child(
 			div()
 				.absolute()
 				.left_0()
 				.top_0()
 				.bottom_0()
-				.w(px(1.0))
-				.bg(tint_fill),
+				.w(tokens.stroke(StrokeStep::Hairline))
+				.bg(tint_ink),
 		);
 	}
 

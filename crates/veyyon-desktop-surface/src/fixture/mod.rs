@@ -11,7 +11,7 @@
 //! the layout survives the easy case.
 
 use veyyon_desktop_model::{
-	InputModality,
+	InputModality, TerminalStatus,
 	text::terminal::{Cell, CellStyle, Ink},
 };
 
@@ -319,8 +319,9 @@ pub fn with_drawer() -> ShellState {
 	ShellState {
 		drawer: DrawerContent {
 			tabs: vec![DrawerTab::Terminal {
-				id:    "term-1".to_string(),
-				title: "Terminal".to_string(),
+				id:     "term-1".to_string(),
+				title:  "Terminal".to_string(),
+				status: TerminalStatus::Running,
 			}],
 			active_tab: 0,
 			tab_chosen: true,
@@ -329,6 +330,7 @@ pub fn with_drawer() -> ShellState {
 			cursor_col: 0,
 			cursor_row: 4,
 			cursor_visible: true,
+			cursor_shape: crate::drawer::CursorShape::Block,
 			title: "Terminal".to_string(),
 			scroll_offset: 0,
 			processes: Vec::new(),

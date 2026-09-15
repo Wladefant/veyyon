@@ -5,17 +5,31 @@
 //! and selection highlights.
 
 use veyyon_desktop_model::{
-	SurfaceId,
+	SurfaceId, TerminalStatus,
 	text::terminal::{Cell, TerminalSelection},
 };
+
+/// Visual shape of the terminal cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CursorShape {
+	/// Solid filled block covering the entire cell.
+	#[default]
+	Block,
+	/// Vertical bar or beam at the left edge of the cell.
+	Bar,
+	/// Horizontal underline at the bottom of the cell.
+	Underline,
+	/// Hollow outline block for unfocused state.
+	HollowBlock,
+}
 
 use crate::controls::ControlError;
 
 /// A tab in the drawer tab strip.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DrawerTab {
-	/// Managed terminal with identifier and title.
-	Terminal { id: String, title: String },
+	/// Managed terminal with identifier, title, and operational status.
+	Terminal { id: String, title: String, status: TerminalStatus },
 	/// Supervised background processes.
 	Processes,
 	/// One supervised process's output, on the terminal surface (§5.12).
@@ -23,6 +37,22 @@ pub enum DrawerTab {
 }
 
 impl DrawerTab {
+	/// Creates a running terminal tab.
+	#[must_use]
+	pub fn terminal(id: impl Into<String>, title: impl Into<String>) -> Self {
+		Self::Terminal { id: id.into(), title: title.into(), status: TerminalStatus::Running }
+	}
+
+	/// Creates an exited terminal tab with an optional exit code.
+	#[must_use]
+	pub fn terminal_exited(id: impl Into<String>, title: impl Into<String>, code: i32) -> Self {
+		Self::Terminal {
+			id:     id.into(),
+			title:  title.into(),
+			status: TerminalStatus::Exited { code },
+		}
+	}
+
 	/// The name the tab is written under in what the window remembers (§8.10).
 	///
 	/// A tenant's identity, not its position: the drawer's tabs are the
@@ -122,6 +152,8 @@ pub struct DrawerContent {
 	pub cursor_row:     usize,
 	/// Cursor visibility (DECTCEM).
 	pub cursor_visible: bool,
+	/// Cursor visual shape (block, bar, underline, hollow).
+	pub cursor_shape:   CursorShape,
 	/// Title of the active terminal session.
 	pub title:          String,
 	/// Vertical scrollback offset in rows.
@@ -155,6 +187,7 @@ impl Default for DrawerContent {
 			cursor_col:     0,
 			cursor_row:     0,
 			cursor_visible: true,
+			cursor_shape:   CursorShape::Block,
 			title:          String::new(),
 			scroll_offset:  0,
 			processes:      Vec::new(),
@@ -174,6 +207,25 @@ impl DrawerContent {
 			Some(DrawerTab::Terminal { id, .. }) => Some(id),
 			_ => None,
 		}
+	}
+
+	/// Returns the operational status of the active terminal tab if one is
+	/// selected.
+	#[must_use]
+	pub fn active_terminal_status(&self) -> Option<&TerminalStatus> {
+		match self.tabs.get(self.active_tab) {
+			Some(DrawerTab::Terminal { status, .. }) => Some(status),
+			_ => None,
+		}
+	}
+
+	/// Returns true if the active terminal has exited or failed.
+	#[must_use]
+	pub fn is_active_terminal_exited(&self) -> bool {
+		matches!(
+			self.active_terminal_status(),
+			Some(TerminalStatus::Exited { .. } | TerminalStatus::Failed { .. })
+		)
 	}
 
 	/// Returns true if the processes tab is active.

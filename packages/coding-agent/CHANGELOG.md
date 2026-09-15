@@ -320,7 +320,9 @@
 ### Fixed
 
 - Desktop source builds fetch the pinned GPUI framework without Git authentication.
-
+- A desktop sheet keeps a body pinned to its lower edge inside the sheet, where the queue float drew its settings gear above the sheet's floor and left the float with no reachable control.
+- A desktop session draws the transcript it holds, where an attached session replaying turns before it was assigned an id drew the first-run line instead and left the transcript with no scroll viewport.
+- A desktop announcement cuts the line it was given, where a card whose title is set beside its tint dot measured the title at the full sentence and drew it whole, cut mid-glyph at the card's edge.
 - Desktop replies render pipe tables as grids and preserve inline Markdown formatting during streaming without flashing empty delimiters.
 - A desktop settings page states what to do about an empty section and fits the sentence it draws, where a two-line message was clipped by a row fixed at 44px and several sections named a `~/.veyyon/settings.json` that does not exist instead of `~/.veyyon/config.yml` or `.veyyon/mcp.json`.
 - Desktop command, model, history and theme lists share keyboard selection and availability checks.

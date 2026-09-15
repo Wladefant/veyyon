@@ -1,7 +1,7 @@
 //! Native GPUI renderer for `NoticeView` (§contracts/view).
 
 use veyyon_desktop_kit::{
-	Icon, IconSize, RadiusStep, SpacingStep, TextRamp, TextWeight, TokenSet,
+	Icon, IconSize, RadiusStep, SpacingStep, StrokeStep, TextRamp, TextWeight, TokenSet,
 	indicators::badge::Badge,
 };
 use veyyon_desktop_model::tool_view::NoticeView;
@@ -31,7 +31,7 @@ pub fn render_notice(view: &NoticeView, tokens: &TokenSet, callbacks: &ToolViewC
 		.w_full()
 		.min_w_0()
 		.bg(bg_color)
-		.border_1()
+		.border(tokens.stroke(StrokeStep::Hairline))
 		.border_color(status_color)
 		.rounded(tokens.radius(RadiusStep::Sm))
 		.p(tokens.spacing(SpacingStep::S2))
@@ -71,6 +71,7 @@ pub fn render_notice(view: &NoticeView, tokens: &TokenSet, callbacks: &ToolViewC
 		.gap(tokens.spacing(SpacingStep::S1))
 		.font_weight(tokens.font_weight(TextWeight::Semibold))
 		.text_size(tokens.font_size(TextRamp::Small))
+		.line_height(tokens.line_height(TextRamp::Small))
 		.text_color(status_color);
 
 	for span in &view.headline {

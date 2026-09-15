@@ -39,14 +39,12 @@ pub fn process_list(
 			.flex_1()
 			.px(tokens.spacing(SpacingStep::S3))
 			.py(tokens.spacing(SpacingStep::S2))
-			.child(
-				div()
-					.p(tokens.spacing(SpacingStep::S3))
-					.text_size(tokens.font_size(TextRamp::Micro))
-					.line_height(tokens.line_height(TextRamp::Micro))
-					.text_color(tokens.color(ColorRole::Muted))
-					.child("No supervised processes running"),
-			)
+			.child(crate::right_panel::empty_state(
+				"process-list-empty",
+				"No supervised processes running",
+				"Start a process using the launch tool or run a command in the terminal",
+				tokens,
+			))
 			.into_any_element();
 	}
 

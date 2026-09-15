@@ -15,7 +15,7 @@ use veyyon_gpui::{
 	Window, anchored, div, point, prelude::*, px,
 };
 
-use crate::token_set::{ColorRole, RadiusStep, SpacingStep, TextRamp, TokenSet};
+use crate::token_set::{ColorRole, RadiusStep, SpacingStep, StrokeStep, TextRamp, TokenSet};
 
 /// The deferred layer the tag draws on. Above the surface that owns the anchor
 /// and below a modal overlay, which opens its own layer.
@@ -32,10 +32,12 @@ pub enum TooltipSide {
 	/// Below the anchor, which is the room a row or a header has.
 	#[default]
 	Below,
-	/// Above the anchor. A control at the bottom edge of the window has
-	/// nothing below it: the composer's own row is the last thing drawn there,
-	/// and a tag opening downwards lands under the attention strip.
+	/// Above the anchor.
 	Above,
+	/// To the left of the anchor.
+	Left,
+	/// To the right of the anchor.
+	Right,
 }
 
 /// Which edge of the anchor the tag is aligned to.
@@ -100,6 +102,27 @@ impl Tooltip {
 		self
 	}
 
+	/// Opens the tag below the anchor.
+	#[must_use]
+	pub const fn below(mut self) -> Self {
+		self.side = TooltipSide::Below;
+		self
+	}
+
+	/// Opens the tag to the left of the anchor.
+	#[must_use]
+	pub const fn left(mut self) -> Self {
+		self.side = TooltipSide::Left;
+		self
+	}
+
+	/// Opens the tag to the right of the anchor.
+	#[must_use]
+	pub const fn right(mut self) -> Self {
+		self.side = TooltipSide::Right;
+		self
+	}
+
 	/// Aligns the tag's right edge to the anchor's right edge.
 	#[must_use]
 	pub const fn aligned_end(mut self) -> Self {
@@ -110,15 +133,17 @@ impl Tooltip {
 	/// Builds the tag itself: a floating card carrying the text.
 	fn tag(&self, tokens: &TokenSet) -> AnyElement {
 		let tag = div()
-			.bg(tokens.color(ColorRole::Float))
+			.bg(tokens.float_ground())
+			.backdrop_blur(tokens.float_blur())
+			.backdrop_saturation(tokens.float_saturation())
 			.rounded(tokens.radius(RadiusStep::Sm))
-			.border_1()
+			.border(tokens.stroke(StrokeStep::Hairline))
 			.border_color(tokens.color(ColorRole::Hairline))
+			.shadow(tokens.float_shadows())
 			.px(tokens.spacing(SpacingStep::S2))
 			.py(tokens.spacing(SpacingStep::S1))
 			.text_size(tokens.font_size(TextRamp::Small))
-			.text_color(tokens.color(ColorRole::Foreground))
-			.shadow_md();
+			.text_color(tokens.color(ColorRole::Foreground));
 		let tag = match self.wrap {
 			Some(max_width) => tag.w(max_width),
 			None => tag.whitespace_nowrap(),
@@ -127,14 +152,59 @@ impl Tooltip {
 	}
 
 	/// The window point the tag hangs from, and the corner of the tag that
-	/// meets it. A tag that would leave the window switches corners rather
-	/// than being clipped, which is the anchored element's own fit mode.
+	/// meets it. If near an edge, the side flips to the opposite edge.
 	fn placement(
 		&self,
 		bounds: Bounds<Pixels>,
+		viewport: veyyon_gpui::Size<Pixels>,
 		gap: Pixels,
+		margin: Pixels,
 	) -> (veyyon_gpui::Point<Pixels>, Anchor) {
-		match (self.side, self.align) {
+		let estimated_w = self
+			.wrap
+			.unwrap_or_else(|| px(self.text.len() as f32 * 7.5 + 16.0));
+		let estimated_h = px(24.0);
+
+		let side = match self.side {
+			TooltipSide::Below => {
+				if bounds.bottom() + gap + estimated_h > viewport.height - margin
+					&& bounds.top() - gap - estimated_h >= margin
+				{
+					TooltipSide::Above
+				} else {
+					TooltipSide::Below
+				}
+			},
+			TooltipSide::Above => {
+				if bounds.top() - gap - estimated_h < margin
+					&& bounds.bottom() + gap + estimated_h <= viewport.height - margin
+				{
+					TooltipSide::Below
+				} else {
+					TooltipSide::Above
+				}
+			},
+			TooltipSide::Right => {
+				if bounds.right() + gap + estimated_w > viewport.width - margin
+					&& bounds.left() - gap - estimated_w >= margin
+				{
+					TooltipSide::Left
+				} else {
+					TooltipSide::Right
+				}
+			},
+			TooltipSide::Left => {
+				if bounds.left() - gap - estimated_w < margin
+					&& bounds.right() + gap + estimated_w <= viewport.width - margin
+				{
+					TooltipSide::Right
+				} else {
+					TooltipSide::Left
+				}
+			},
+		};
+
+		match (side, self.align) {
 			(TooltipSide::Below, TooltipAlign::Start) => {
 				(point(bounds.left(), bounds.bottom() + gap), Anchor::TopLeft)
 			},
@@ -147,6 +217,8 @@ impl Tooltip {
 			(TooltipSide::Above, TooltipAlign::End) => {
 				(point(bounds.right(), bounds.top() - gap), Anchor::BottomRight)
 			},
+			(TooltipSide::Right, _) => (point(bounds.right() + gap, bounds.top()), Anchor::TopLeft),
+			(TooltipSide::Left, _) => (point(bounds.left() - gap, bounds.top()), Anchor::TopRight),
 		}
 	}
 }
@@ -200,7 +272,12 @@ impl Element for Tooltip {
 		}
 
 		let tokens = TokenSet::for_app(cx);
-		let (position, corner) = self.placement(bounds, tokens.spacing(SpacingStep::S1));
+		let (position, corner) = self.placement(
+			bounds,
+			window.viewport_size(),
+			tokens.spacing(SpacingStep::S1),
+			tokens.spacing(SpacingStep::S2),
+		);
 		let mut tag = anchored()
 			.position(position)
 			.anchor(corner)

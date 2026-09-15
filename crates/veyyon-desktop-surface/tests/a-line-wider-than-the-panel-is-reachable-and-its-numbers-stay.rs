@@ -52,9 +52,9 @@
 mod mono_pane;
 
 use mono_pane::{
-	WINDOW_H, WINDOW_W, code_runs, gutter_runs, lefts, open_session, open_session_on_tokens,
-	over_code, panel_region, row_runs, state_with_a_file_of, state_with_a_long_file,
-	state_with_long_line, tops, widest_row,
+	WINDOW_H, WINDOW_W, code_runs, gutter_numbers, gutter_runs, lefts, open_session,
+	open_session_on_tokens, over_code, panel_region, row_runs, state_with_a_file_of,
+	state_with_a_long_file, state_with_long_line, tops, widest_row,
 };
 use veyyon_desktop_kit::load_bundled_tokens;
 use veyyon_desktop_scene::headless_context;
@@ -170,9 +170,14 @@ fn a_vertical_wheel_over_the_code_scrolls_the_file_and_not_the_line() {
 	let scrolled = session.frame().expect("the shell renders scrolled");
 	let moved = code_runs(&scrolled, panel, panels);
 
+	// The pane virtualizes its rows, so a row's top is where the region draws
+	// it and not which line it holds: after a scroll the built rows paint from
+	// the top of the region again, at the same tops, holding later lines. The
+	// numbers state which lines those are, so they are what a vertical scroll
+	// is read from.
 	assert_ne!(
-		tops(&moved),
-		tops(&at_rest),
+		gutter_numbers(&scrolled, panel, panels),
+		gutter_numbers(&rest, panel, panels),
 		"a vertical wheel over the code scrolls the file: the pane's own vertical scroll answers it \
 		 rather than being blocked by the horizontal region inside it"
 	);

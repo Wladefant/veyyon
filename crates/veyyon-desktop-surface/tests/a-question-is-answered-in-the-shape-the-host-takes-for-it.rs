@@ -274,6 +274,7 @@ fn answer_label(card: &Card) -> String {
 			.first()
 			.map_or_else(|| REPLY_ROW.to_owned(), |first| format!("1. {first}")),
 		Card::Plan { .. } => "Accept".to_owned(),
+		Card::Refusal { .. } => "Dismiss".to_owned(),
 	}
 }
 

@@ -33,7 +33,7 @@ pub fn render_status_row(
 		.items_center()
 		.w_full()
 		.min_w_0()
-		.h(px(24.0))
+		.h(tokens.spacing(SpacingStep::S10))
 		.gap(tokens.spacing(SpacingStep::S2))
 		.overflow_hidden();
 
@@ -67,6 +67,7 @@ pub fn render_status_row(
 				div()
 					.fit_chrome()
 					.text_size(tokens.font_size(TextRamp::Micro))
+					.line_height(tokens.line_height(TextRamp::Micro))
 					.text_color(tokens.color(ColorRole::Muted))
 					.child(format!("[{clean_emblem}]")),
 			)

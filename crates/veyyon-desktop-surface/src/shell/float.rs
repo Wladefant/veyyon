@@ -1,8 +1,6 @@
 //! Overlay placement and retained exit frames through the fork's transform
 //! path.
 
-use std::time::Instant;
-
 use veyyon_desktop_kit::SpacingStep;
 use veyyon_gpui::{
 	Anchor, AnyElement, Context, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
@@ -65,7 +63,7 @@ pub(super) fn overlay_layer(
 	}
 	let frame = view.palette_input.motion.sample(
 		open,
-		Instant::now(),
+		cx.background_executor().now(),
 		&view.installed.motion,
 		view.rail_motion.is_reduced_motion(),
 	);

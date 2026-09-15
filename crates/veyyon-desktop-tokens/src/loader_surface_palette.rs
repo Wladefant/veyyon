@@ -53,10 +53,10 @@ pub fn load_palette(path: &Path, scale: &ScaleTokens) -> Result<PaletteSurfaceTo
 		elevation_level,
 		input_row_height_px: input.number("row_height_px")?,
 		input_inset: input.spacing("inset", scale)?,
-		input_search_icon_px: input.number("search_icon_px")?,
+		input_search_icon_px: input.spacing("search_icon_px", scale)?,
 		results_row_height_px: results.number("row_height_px")?,
-		results_group_header_height_px: results.number("group_header_height_px")?,
-		results_footer_height_px: results.number("footer_height_px")?,
+		results_group_header_height_px: results.spacing("group_header_height_px", scale)?,
+		results_footer_height_px: results.spacing("footer_height_px", scale)?,
 		results_key_hint_size: results.type_size("key_hint_size", scale)?,
 	})
 }

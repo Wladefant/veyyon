@@ -6,9 +6,7 @@ use veyyon_desktop_kit::{
 	indicators::badge::Badge, text::inline::inline_prose,
 };
 use veyyon_desktop_model::tool_view::{TextBlockView, ViewLine, ViewSpan};
-use veyyon_gpui::{
-	CursorStyle, Div, InteractiveElement, MouseButton, ParentElement, Styled, div, px,
-};
+use veyyon_gpui::{CursorStyle, Div, InteractiveElement, MouseButton, ParentElement, Styled, div};
 
 use super::{
 	ToolViewCallbacks, ToolViewTarget,
@@ -259,7 +257,7 @@ pub fn render_text_block(
 					.gap(tokens.spacing(SpacingStep::S1))
 					.mt(tokens.spacing(SpacingStep::S1))
 					.px(tokens.spacing(SpacingStep::S2))
-					.py(px(2.0))
+					.py(tokens.spacing(SpacingStep::S1))
 					.rounded(tokens.radius(RadiusStep::Sm))
 					.bg(tokens.color(ColorRole::Inset))
 					.cursor(CursorStyle::PointingHand)
@@ -275,6 +273,7 @@ pub fn render_text_block(
 					.child(
 						div()
 							.text_size(tokens.font_size(TextRamp::Small))
+							.line_height(tokens.line_height(TextRamp::Small))
 							.text_color(tokens.color(ColorRole::Accent))
 							.font_weight(tokens.font_weight(TextWeight::Medium))
 							.child(label),
@@ -284,6 +283,7 @@ pub fn render_text_block(
 			container = container.child(
 				div()
 					.text_size(tokens.font_size(TextRamp::Micro))
+					.line_height(tokens.line_height(TextRamp::Micro))
 					.text_color(tokens.color(ColorRole::Muted))
 					.child(format!("... ({label} omitted)")),
 			);

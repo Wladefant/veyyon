@@ -4,8 +4,6 @@
 //! target and result details with animated height reveal and width-bounded
 //! summaries.
 
-use std::time::Instant;
-
 use veyyon_desktop_kit::{
 	CodeBlock, ColorRole, Icon, IconName, IconSize, MonoSizeStep, MonoText, SelectableProse,
 	SpacingStep, TextRamp, TextWeight, TokenSet, Truncate,
@@ -56,7 +54,7 @@ fn view_callbacks(
 				true,
 				&disclose_motion,
 				reduced_motion,
-				Instant::now(),
+				cx.background_executor().now(),
 			);
 			dispatch_to_shell(
 				disclose_view.as_ref(),
@@ -142,7 +140,7 @@ pub fn render_invoke_block(
 				block_ix,
 				&motion_tokens_toggle,
 				reduced_motion,
-				Instant::now(),
+				cx.background_executor().now(),
 			);
 			if toggles_host_view {
 				dispatch_to_shell(
@@ -218,12 +216,7 @@ pub fn render_invoke_block(
 		.flex()
 		.flex_col()
 		.w_full()
-		.mt(px(4.0))
-		.p(tokens.spacing(SpacingStep::S2))
-		.bg(tokens.color(ColorRole::Canvas))
-		.rounded_md()
-		.border_1()
-		.border_color(tokens.color(ColorRole::Hairline))
+		.mt(tokens.spacing(SpacingStep::S2))
 		.gap(tokens.spacing(SpacingStep::S2));
 
 	if let (Some(presentation), Some(callbacks)) = (presentation, callbacks.as_ref()) {
@@ -274,7 +267,7 @@ pub fn render_invoke_block(
 					false,
 					&motion_tokens_collapse,
 					reduced_motion,
-					Instant::now(),
+					cx.background_executor().now(),
 				);
 				if toggles_host_view {
 					dispatch_to_shell(

@@ -27,7 +27,7 @@ use veyyon_desktop_model::{
 	FileKind, FileNode, FileTreeView, HostEvent, QueuePartition, SessionId, SnapshotSection, Store,
 	TerminalOutputChunk, TerminalStatus, reduce,
 };
-use veyyon_desktop_surface::{Badge, DiffStatus, Section, ShellState, TreeStatus};
+use veyyon_desktop_surface::{Badge, DiffStatus, DrawerTab, Section, ShellState, TreeStatus};
 
 /// One tree row as the assertions read it: depth, name, line counts.
 type TreeCell<'a> = (usize, &'a str, Option<(u32, u32)>);
@@ -139,10 +139,18 @@ fn a_projection_leaves_what_the_window_owns_alone() {
 		.capabilities
 		.set(Capability::Files, CapabilityStatus::Available);
 	// The drawer is a surface the host offers (§5.13), and this claim is about
-	// what the window owns once it is offered.
+	// what the window owns once it is offered. The supervisor is refused
+	// outright, because §4.3 draws an unanswered capability at rest and the
+	// claim here is about the host-owned fields rather than which tabs a
+	// silent host offers.
 	store
 		.capabilities
 		.set(Capability::Terminals, CapabilityStatus::Available);
+	store
+		.capabilities
+		.set(Capability::ProcessSupervisor, CapabilityStatus::Unavailable {
+			reason: "the host supervises no process".to_owned(),
+		});
 	let mut state = ShellState {
 		drawer_open: true,
 		panel: veyyon_desktop_surface::PanelContent {
@@ -332,7 +340,16 @@ fn the_drawer_shows_the_last_running_terminal_as_plain_text_from_the_end() {
 			.all(|line| !line.contains('\u{1b}') && !line.contains('\r')),
 		"control sequences never reach the drawer"
 	);
-	assert_eq!(state.drawer.tabs.len(), 3, "drawer projects 3 terminal tabs");
+	assert_eq!(
+		state
+			.drawer
+			.tabs
+			.iter()
+			.filter(|tab| matches!(tab, DrawerTab::Terminal { .. }))
+			.count(),
+		3,
+		"drawer projects one tab per terminal the host listed"
+	);
 	assert_eq!(state.drawer.title, "title", "drawer projects title from OSC");
 	reduce(
 		&mut store,

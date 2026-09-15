@@ -18,23 +18,21 @@ appearance = "dark"
 version = 1
 
 [role]
-# Elevation 0 through 4, §6.5. Each step is lighter than the one below it.
-ground = "#000000"
-rail = "#0a0c0f"
-canvas = "#101318"
-inset = "#171b21"
-float = "#1e232a"
-hairline = "#2c323b"
+# Elevation 0 through 4, §6.5. Each step is visibly distinct and lighter than the one below it.
+ground = "#020204"
+rail = "#12151e"
+canvas = "#1e2432"
+inset = "#2b3346"
+float = "#374158"
+hairline = "#3d465c"
 
 foreground = "#fafafa"
 secondary = "#c6cbd4"
-muted = "#8b95a3"
-placeholder = "#79838f"
-
+muted = "#96a0b0"
+placeholder = "#8894a6"
 accent = "#f0862e"
 accent_foreground = "#000000"
 focus = "#f5a15c"
-
 [tint.working]
 fill = "#3d2510"
 ink = "#f0a66b"

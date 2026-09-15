@@ -217,8 +217,10 @@ pub fn regions_changed(last: &ShellState, next: &ShellState) -> Invalidation {
 		title,
 		navigation,
 		navigation_pending,
-		session_tabs,
-		close_tab_prompt,
+		// The tab labels and draft markers reach no element since the tab
+		// strip went (§4.1): the projection is carried for the host's
+		// membership, so a change to it alone repaints nothing.
+		session_tabs: _,
 		sections,
 		transcript,
 		// The entry ids beside the turns draw nothing: they are read when the
@@ -261,8 +263,6 @@ pub fn regions_changed(last: &ShellState, next: &ShellState) -> Invalidation {
 	if current_id != &last.current_id
 		|| navigation != &last.navigation
 		|| navigation_pending != &last.navigation_pending
-		|| session_tabs != &last.session_tabs
-		|| close_tab_prompt != &last.close_tab_prompt
 		|| drawer_open != &last.drawer_open
 		|| panel.is_empty() != last.panel.is_empty()
 		|| cards.is_empty() != last.cards.is_empty()

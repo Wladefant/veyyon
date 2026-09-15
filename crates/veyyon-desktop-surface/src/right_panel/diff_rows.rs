@@ -143,15 +143,15 @@ pub fn content_cell(
 		.flex()
 		.flex_row()
 		.items_center()
-		.overflow_hidden()
 		.whitespace_nowrap()
 		.text_color(tokens.color(ColorRole::Foreground));
 
-	if intraline.is_empty() || highlight_bg.is_none() {
+	let Some(hl) = highlight_bg else {
+		return container.child(text.to_string());
+	};
+	if intraline.is_empty() {
 		return container.child(text.to_string());
 	}
-
-	let hl = highlight_bg.expect("checked above");
 	let mut cursor = 0;
 
 	for span in intraline {

@@ -116,12 +116,17 @@ pub fn project_panel(
 	// The tab draws what `Changes` answers. `PendingEdits` is a separate
 	// capability with no content here, so a host that reports repository
 	// changes and no edit buffer still offers the tab.
-	if matches!(capabilities.get(Capability::Changes), CapabilityStatus::Available) {
+	//
+	// §4.3: a capability the host has not answered for renders at rest, so an
+	// unanswered `Changes` offers the tab and the operator's click attaches
+	// and then acts. Only an explicit `Unavailable` takes the tab away, which
+	// keeps the tab strip from reflowing the moment the attach lands.
+	if !matches!(capabilities.get(Capability::Changes), CapabilityStatus::Unavailable { .. }) {
 		tabs.push(PanelTab::Diff);
 	}
 	// An export is a session action, not a file one, so its view is reachable
 	// on a host that offers no file browsing.
-	if matches!(capabilities.get(Capability::Files), CapabilityStatus::Available) {
+	if !matches!(capabilities.get(Capability::Files), CapabilityStatus::Unavailable { .. }) {
 		tabs.push(PanelTab::File);
 		tabs.push(PanelTab::Tree);
 	} else if file.is_some() {
@@ -136,19 +141,16 @@ pub fn project_panel(
 			Some(reason.clone())
 		} else if let CapabilityStatus::Unavailable { reason } = capabilities.get(Capability::Files) {
 			Some(reason.clone())
-		} else if matches!(
-			capabilities.get(Capability::Changes),
-			CapabilityStatus::UnknownUntilAttached
-		) || matches!(
-			capabilities.get(Capability::Files),
-			CapabilityStatus::UnknownUntilAttached
-		) {
-			Some("Connecting to host...".to_string())
 		} else {
 			Some("Panel features unavailable".to_string())
 		}
 	} else {
 		None
+	};
+
+	let pending_edits_unavailable = match capabilities.get(Capability::PendingEdits) {
+		CapabilityStatus::Unavailable { reason } => Some(reason.clone()),
+		_ => None,
 	};
 
 	let active_tab = if tabs.contains(&previous.active_tab) {
@@ -173,6 +175,7 @@ pub fn project_panel(
 		diff_mode: previous.diff_mode,
 		usage,
 		unavailable_reason,
+		pending_edits_unavailable,
 		derived_from,
 		withheld,
 		// The failure the active tab states is resolved from the controls

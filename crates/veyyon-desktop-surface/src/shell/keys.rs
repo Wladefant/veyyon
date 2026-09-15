@@ -171,10 +171,8 @@ pub fn bind_global_keys(root: Div, cx: &Context<ShellView>) -> Div {
 		.on_action(cx.listener(|view, _: &NextSession, _window, cx| {
 			view.dispatch(Intent::MoveQueueSelection(1), cx);
 		}))
-		.on_action(cx.listener(|view, _: &CloseTabOrPark, window, cx| {
-			if let Some(session) = view.state().navigation.active().selected.clone() {
-				view.request_close_tab(session, window, cx);
-			}
+		.on_action(cx.listener(|view, _: &CloseTabOrPark, _window, cx| {
+			view.dispatch(Intent::CloseTabOrPark, cx);
 		}))
 		.on_action(cx.listener(|view, action: &MoveSelection, _window, cx| {
 			view.dispatch(Intent::MoveQueueSelection(action.delta), cx);

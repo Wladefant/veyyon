@@ -15,7 +15,7 @@
 //! seam, and the scroll region carries the whole file rather than one line, so
 //! every line moves by the same offset and the columns stay aligned.
 
-use veyyon_desktop_kit::{MonoText, TokenSet, mono_advance};
+use veyyon_desktop_kit::{ColorRole, MonoText, RadiusStep, SpacingStep, TokenSet, mono_advance};
 use veyyon_desktop_tokens::PanelsSurfaceTokens;
 use veyyon_gpui::{
 	Div, ElementId, InteractiveElement, ParentElement, ScrollHandle, StatefulInteractiveElement,
@@ -46,27 +46,67 @@ pub fn pinned_gutter_pane(
 	tokens: &TokenSet,
 ) -> Div {
 	let (lead_px, tail_px) = pane.padding;
+	let has_overflow = pane.content_width_px > 280.0;
+
+	let code_scroll_area = div()
+		.id(pane.id)
+		.track_scroll(pane.columns)
+		.flex_1()
+		.min_w_0()
+		.overflow_x_scroll()
+		.restrict_scroll_to_axis()
+		.child(
+			column(pane.code, lead_px, tail_px)
+				.flex_none()
+				.w(px(pane.content_width_px))
+				.min_w(relative(1.0)),
+		);
+
+	let right_edge_fade = has_overflow.then(|| {
+		div()
+			.absolute()
+			.top_0()
+			.bottom_0()
+			.right_0()
+			.w(tokens.spacing(SpacingStep::S8))
+			.bg(tokens.color(ColorRole::Rail).opacity(0.85))
+	});
+
+	let scroll_affordance = has_overflow.then(|| {
+		div()
+			.w_full()
+			.h(tokens.spacing(SpacingStep::S2))
+			.bg(tokens.color(ColorRole::Hairline).opacity(0.3))
+			.child(
+				div()
+					.h_full()
+					.w(relative(0.35))
+					.rounded(tokens.radius(RadiusStep::Full))
+					.bg(tokens.color(ColorRole::Muted).opacity(0.6)),
+			)
+	});
+
+	let code_container = div()
+		.relative()
+		.flex_1()
+		.min_w_0()
+		.child(code_scroll_area)
+		.children(right_edge_fade);
+
 	div()
 		.flex()
-		.flex_row()
-		.items_start()
-		.mono_type(tokens, &geometry.diff_font_size)
-		.child(column(pane.gutter, lead_px, tail_px).flex_shrink_0())
+		.flex_col()
+		.w_full()
 		.child(
 			div()
-				.id(pane.id)
-				.track_scroll(pane.columns)
-				.flex_1()
-				.min_w_0()
-				.overflow_x_scroll()
-				.restrict_scroll_to_axis()
-				.child(
-					column(pane.code, lead_px, tail_px)
-						.flex_none()
-						.w(px(pane.content_width_px))
-						.min_w(relative(1.0)),
-				),
+				.flex()
+				.flex_row()
+				.items_start()
+				.mono_type(tokens, &geometry.diff_font_size)
+				.child(column(pane.gutter, lead_px, tail_px).flex_shrink_0())
+				.child(code_container),
 		)
+		.children(scroll_affordance)
 }
 
 /// What a pane is composed from: the columns, the region that scrolls them,

@@ -6,19 +6,21 @@
 //! that scrolls.
 
 use veyyon_desktop_kit::{
-	ColorRole, IconName, SpacingStep, TintRole, TokenSet, Tree, TreeNodeMetrics, TreeRow,
+	IconName, SpacingStep, TintRole, TokenSet, Tree, TreeNodeMetrics, TreeRow,
 };
 use veyyon_desktop_tokens::PanelsSurfaceTokens;
 use veyyon_gpui::{
-	AnyElement, Context, InteractiveElement, IntoElement, MouseDownEvent, ParentElement, Styled,
-	div, px,
+	AnyElement, Context, IntoElement, MouseDownEvent, ParentElement, Styled, div, px,
 };
 
 use crate::{
 	ShellView,
 	detail::{Detail, DetailKind},
 	intent::Intent,
-	right_panel::content::{TreeContent, TreeRowItem, TreeStatus},
+	right_panel::{
+		content::{TreeContent, TreeRowItem, TreeStatus},
+		empty::empty_state,
+	},
 };
 
 /// Renders the Tree tenant in the right panel.
@@ -29,23 +31,19 @@ pub fn tree_view(
 	cx: &Context<ShellView>,
 ) -> AnyElement {
 	if tree.rows.is_empty() {
-		let message = match tree.status {
-			TreeStatus::Unloaded => "Open the file tree",
-			TreeStatus::Loading => "Loading file tree...",
-			TreeStatus::Loaded => "No files in workspace",
-			TreeStatus::Failed => "Failed to load file tree",
+		let (primary, action) = match tree.status {
+			TreeStatus::Unloaded => {
+				("Directory tree not loaded", "Open a workspace folder to view its directory structure")
+			},
+			TreeStatus::Loading => ("Scanning workspace...", "Building directory hierarchy"),
+			TreeStatus::Loaded => {
+				("Workspace is empty", "Create a file here, or open another workspace folder")
+			},
+			TreeStatus::Failed => {
+				("Unable to read directory tree", "Check workspace directory access permissions")
+			},
 		};
-		return div()
-			.id("right-panel-tree-empty")
-			.flex_1()
-			.w_full()
-			.flex()
-			.items_center()
-			.justify_center()
-			.text_size(tokens.font_size(veyyon_desktop_kit::TextRamp::Small))
-			.text_color(tokens.color(ColorRole::Muted))
-			.child(message)
-			.into_any_element();
+		return empty_state("right-panel-tree-empty", primary, action, tokens).into_any_element();
 	}
 
 	// The builder is called once per row while the tree renders, on the same
@@ -137,12 +135,12 @@ fn render_tree_row(
 				.line_height(px(geometry.diff_font_size.line_height))
 				.child(
 					div()
-						.text_color(tokens.tint(TintRole::Done).fill)
+						.text_color(tokens.tint(TintRole::Done).ink)
 						.child(format!("+{added}")),
 				)
 				.child(
 					div()
-						.text_color(tokens.tint(TintRole::Error).fill)
+						.text_color(tokens.tint(TintRole::Error).ink)
 						.child(format!("-{removed}")),
 				),
 		);

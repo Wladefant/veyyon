@@ -195,17 +195,17 @@ pub fn render_general_page(
 
 	let visible_keys: Rc<[String]> = Rc::from(list_state_handle.visible_keys());
 	if visible_keys.is_empty() {
-		let (empty_msg, action_msg) = if !list_state_handle.query().is_empty() {
-			(
-				format!("No settings matching \"{}\"", list_state_handle.query()),
-				"Clear or edit the search query".to_string(),
-			)
-		} else {
+		let (empty_msg, action_msg) = if list_state_handle.query().is_empty() {
 			(
 				"No configurable settings available.".to_string(),
 				"Reported settings have unmet conditions or are hidden; configure settings in \
 				 ~/.veyyon/config.yml"
 					.to_string(),
+			)
+		} else {
+			(
+				format!("No settings matching \"{}\"", list_state_handle.query()),
+				"Clear or edit the search query".to_string(),
 			)
 		};
 		return div()
@@ -263,7 +263,7 @@ pub fn render_general_page(
 			let default = entry
 				.default
 				.as_str()
-				.map_or_else(|| entry.default.to_string(), |s| crate::settings::row::shorten_path(s));
+				.map_or_else(|| entry.default.to_string(), crate::settings::row::shorten_path);
 			Some(
 				Tooltip::new(format!("Default: {default}"), reset_btn)
 					.keyed(format!("reset-tip-{key}"))

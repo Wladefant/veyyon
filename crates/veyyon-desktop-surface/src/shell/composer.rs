@@ -118,7 +118,7 @@ impl ShellView {
 		}
 		let text = self.composer_cache.clone();
 		let has_text = !text.trim().is_empty();
-		let (primary, _) = primary_action(&self.state.turn, has_text);
+		let primary = primary_action(&self.state.turn, has_text);
 		if matches!(primary, PrimaryAction::Send)
 			&& let Some(reason) = self.state.composer.submission_rejection()
 		{

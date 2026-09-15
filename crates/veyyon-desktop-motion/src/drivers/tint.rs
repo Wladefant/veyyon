@@ -26,10 +26,7 @@ impl TintMotion {
 	pub fn new(surface_id: SurfaceId, slot: u64, initial_value: f32) -> Self {
 		let mut registry = AnimatorRegistry::new();
 		let key = AnimatorKey::new(surface_id, MotionRole::Tint, slot);
-		let model = MotionModel::Duration(DurationModel {
-			duration_ms: 120,
-			curve:       EasingCurve::EaseOut,
-		});
+		let model = MotionModel::Duration(MotionTokens::reference().tint);
 		registry.get_or_create_with_initial(key, initial_value, initial_value, model, Instant::now());
 		Self { surface_id, slot, registry, current_value: initial_value }
 	}

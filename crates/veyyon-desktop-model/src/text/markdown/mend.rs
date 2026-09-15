@@ -10,7 +10,7 @@
 //! only once its target closes. A prefix is mended so it reads as the shape
 //! it is becoming, never so it reads as a shape nobody wrote.
 
-use super::inline::inline_open;
+use super::{inline::inline_open, is_fence};
 
 /// A markdown shape a prefix of a document left open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -62,12 +62,6 @@ impl OpenShape {
 pub(super) struct Open {
 	pub(super) shape:  OpenShape,
 	pub(super) closer: String,
-}
-
-/// Whether a line opens or closes a fence.
-fn is_fence(line: &str) -> bool {
-	let body = line.trim_start();
-	body.starts_with("```") || body.starts_with("~~~")
 }
 
 /// Whether a line could be a row of a table: it opens with a pipe and states

@@ -1,13 +1,6 @@
 //! Repairs for inline syntax in the final arriving line.
 
-use super::mend::{Open, OpenShape};
-
-fn run_len(bytes: &[u8], at: usize, delimiter: u8) -> usize {
-	bytes[at..]
-		.iter()
-		.take_while(|byte| **byte == delimiter)
-		.count()
-}
+use super::{mend::{Open, OpenShape}, run_len};
 
 fn opens_emphasis(bytes: &[u8], at: usize, delimiter: u8, width: usize) -> bool {
 	bytes

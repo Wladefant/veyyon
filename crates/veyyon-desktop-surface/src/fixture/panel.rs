@@ -15,19 +15,20 @@ use crate::right_panel::{
 )]
 pub(super) fn fixture_panel() -> PanelContent {
 	PanelContent {
-		tabs:               vec![PanelTab::Diff, PanelTab::File, PanelTab::Tree, PanelTab::Usage],
-		active_tab:         PanelTab::Diff,
-		diff_status:        DiffStatus::Loaded,
-		review_repository:  None,
+		tabs: vec![PanelTab::Diff, PanelTab::File, PanelTab::Tree, PanelTab::Usage],
+		active_tab: PanelTab::Diff,
+		diff_status: DiffStatus::Loaded,
+		review_repository: None,
 		unavailable_reason: None,
+		pending_edits_unavailable: None,
 		// One answer for each domain the fixture states, as a host that sent
 		// this panel once would leave it.
-		derived_from:       DerivedFrom { changes: 1, file_content: 1, export: 0 },
+		derived_from: DerivedFrom { changes: 1, file_content: 1, export: 0 },
 		// The fixture's host sent the working tree whole.
-		withheld:           DiffWithheld::default(),
+		withheld: DiffWithheld::default(),
 		// The fixture's host answered every request it was sent.
-		failure:            None,
-		diff:               vec![DiffFile {
+		failure: None,
+		diff: vec![DiffFile {
 			path:      "crates/veyyon-desktop-surface/src/panel.rs".to_string(),
 			old_path:  None,
 			status:    veyyon_desktop_model::ChangeStatus::Modified,
@@ -59,8 +60,8 @@ pub(super) fn fixture_panel() -> PanelContent {
 				DiffRow::Context { old_line: 3, new_line: 3, text: "}".to_string() },
 			],
 		}],
-		file:               None,
-		tree:               TreeContent {
+		file: None,
+		tree: TreeContent {
 			rows:           vec![
 				TreeRowItem {
 					path:        "crates".to_string(),
@@ -91,8 +92,8 @@ pub(super) fn fixture_panel() -> PanelContent {
 			expanded_paths: std::collections::BTreeSet::new(),
 			status:         TreeStatus::Loaded,
 		},
-		diff_mode:          veyyon_desktop_model::DiffMode::Unified,
-		usage:              Some(veyyon_desktop_model::UsageTotals {
+		diff_mode: veyyon_desktop_model::DiffMode::Unified,
+		usage: Some(veyyon_desktop_model::UsageTotals {
 			input_tokens:         184_213,
 			output_tokens:        12_940,
 			cache_read_tokens:    1_402_887,

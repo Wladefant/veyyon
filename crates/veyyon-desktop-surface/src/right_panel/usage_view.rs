@@ -12,6 +12,8 @@ use veyyon_gpui::{
 	Div, InteractiveElement, ParentElement, Stateful, StatefulInteractiveElement, Styled, div, px,
 };
 
+use crate::right_panel::empty::empty_state;
+
 /// Groups the digits of a count so two rows of figures can be compared.
 #[must_use]
 fn grouped(count: u64) -> String {
@@ -74,13 +76,17 @@ pub fn usage_view(
 		.whitespace_nowrap();
 
 	let Some(totals) = totals else {
-		return row.child(
-			div()
-				.text_size(tokens.font_size(TextRamp::Small))
-				.line_height(tokens.line_height(TextRamp::Small))
-				.text_color(tokens.color(ColorRole::Muted))
-				.child("No accounting reported for this session yet."),
-		);
+		return div()
+			.id("panel-usage-empty")
+			.flex_1()
+			.w_full()
+			.flex()
+			.child(empty_state(
+				"right-panel-usage-empty",
+				"No accounting reported yet",
+				"Token usage and cost estimates will appear after the first turn",
+				tokens,
+			));
 	};
 
 	// The row scrolls rather than shedding a field: a count that is not on

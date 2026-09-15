@@ -120,9 +120,7 @@ fn hover_the_primary(discriminant: TurnPhaseDiscriminant) -> Hover {
 	render_session(state, seed_text, WIDTH, HEIGHT, |session| {
 		let label = session
 			.update(|view, _window, _cx| {
-				primary_action(&view.state().turn, view.has_composer_text())
-					.0
-					.label()
+				primary_action(&view.state().turn, view.has_composer_text()).label()
 			})
 			.expect("primary action resolves");
 		let (_left, _top, right, bottom) = composer_float_bounds(session, WIDTH, HEIGHT);

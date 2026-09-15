@@ -122,7 +122,7 @@ pub fn find_menu_items(frame: &Captured, origin: Point<Pixels>) -> Vec<Bounds<Pi
 		.iter()
 		.filter(|r| {
 			r.origin.x >= origin.x
-				&& r.origin.x <= origin.x + px(12.0)
+				&& r.origin.x <= origin.x + px(24.0)
 				&& r.origin.y >= origin.y
 				&& r.origin.y < origin.y + px(350.0)
 				&& r.size.width >= px(50.0)

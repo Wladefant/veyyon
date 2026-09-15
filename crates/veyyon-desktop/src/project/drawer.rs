@@ -54,14 +54,23 @@ pub fn project_drawer<S: std::hash::BuildHasher>(
 					term.shell.clone()
 				}
 			});
-		tabs.push(DrawerTab::Terminal { id: term.id.clone(), title });
+		tabs.push(DrawerTab::Terminal { id: term.id.clone(), title, status: term.status.clone() });
 	}
 
 	// §5.12: the supervisor's tab is offered on the capability, not on the
 	// list. A tab that appears only once something is running cannot be the
 	// tab the first process is started from, and the list states its own
 	// emptiness.
-	if matches!(capabilities.get(Capability::ProcessSupervisor), CapabilityStatus::Available) {
+	//
+	// §4.3: a capability the host has not answered for renders at rest, so an
+	// unanswered `ProcessSupervisor` offers the tab and the operator's click
+	// attaches and then acts. Only an explicit `Unavailable` takes the tab
+	// away, which keeps the tab strip from reflowing the moment the attach
+	// lands.
+	if !matches!(
+		capabilities.get(Capability::ProcessSupervisor),
+		CapabilityStatus::Unavailable { .. }
+	) {
 		tabs.push(DrawerTab::Processes);
 	}
 

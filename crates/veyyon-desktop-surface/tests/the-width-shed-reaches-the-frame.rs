@@ -178,9 +178,9 @@ fn at_the_window_floor_the_panel_overlays_instead_of_taking_the_transcript() {
 	// session surface, which is a different colour or the overlay is not where
 	// the shed put it.
 	let edge = width - drawn as u32;
-	let inside = ground_at(&frame, edge + 8, band.0, band.1);
-	let outside = ground_at(&frame, edge.saturating_sub(8), band.0, band.1);
-	let far_right = ground_at(&frame, width - 4, band.0, band.1);
+	let inside = ground_at(&frame, edge + 24, band.0, band.1);
+	let outside = ground_at(&frame, edge.saturating_sub(24), band.0, band.1);
+	let far_right = ground_at(&frame, width - 24, band.0, band.1);
 
 	assert_eq!(inside, far_right, "the overlaid panel is not one ground across its own width");
 	assert_ne!(

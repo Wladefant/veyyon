@@ -1,7 +1,7 @@
 //! Read-only history preview through the regular transcript renderer.
 
 use veyyon_desktop_kit::{
-	Button, ButtonSize, ButtonVariant, ColorRole, SpacingStep, TextRamp, TokenSet,
+	Button, ButtonSize, ButtonVariant, ColorRole, SpacingStep, TextRamp, TextWeight, TokenSet,
 };
 use veyyon_desktop_motion::MotionTokens;
 use veyyon_desktop_tokens::TranscriptSurfaceTokens;
@@ -50,6 +50,8 @@ pub fn history_surface(
 			div()
 				.flex_1()
 				.text_size(tokens.font_size(TextRamp::Head))
+				.line_height(tokens.line_height(TextRamp::Head))
+				.font_weight(tokens.font_weight(TextWeight::Semibold))
 				.child("History · Read only"),
 		)
 		.child(
@@ -79,19 +81,41 @@ pub fn history_surface(
 		.id("history-transcript")
 		.flex_1()
 		.min_h(px(0.0))
+		.text_size(tokens.font_size(TextRamp::Body))
+		.line_height(tokens.line_height(TextRamp::Body))
 		.overflow_y_scroll();
 	if let Some(error) = &state.error {
-		body = body.child(div().child(error.clone())).child(
-			Button::new("history-retry", "Retry loading")
-				.size(ButtonSize::Small)
-				.on_click(cx.listener(move |view, _, _, cx| {
-					view.dispatch(Intent::PreviewSession(retry.clone()), cx);
-				})),
-		);
+		body = body
+			.child(
+				div()
+					.text_size(tokens.font_size(TextRamp::Small))
+					.line_height(tokens.line_height(TextRamp::Small))
+					.text_color(tokens.color(ColorRole::ErrorInk))
+					.child(error.clone()),
+			)
+			.child(
+				Button::new("history-retry", "Retry loading")
+					.size(ButtonSize::Small)
+					.on_click(cx.listener(move |view, _, _, cx| {
+						view.dispatch(Intent::PreviewSession(retry.clone()), cx);
+					})),
+			);
 	} else if state.loading {
-		body = body.child("Loading transcript…");
+		body = body.child(
+			div()
+				.text_size(tokens.font_size(TextRamp::Body))
+				.line_height(tokens.line_height(TextRamp::Body))
+				.text_color(tokens.color(ColorRole::Muted))
+				.child("Loading transcript…"),
+		);
 	} else if state.turns.is_empty() {
-		body = body.child("This session has no messages");
+		body = body.child(
+			div()
+				.text_size(tokens.font_size(TextRamp::Body))
+				.line_height(tokens.line_height(TextRamp::Body))
+				.text_color(tokens.color(ColorRole::Muted))
+				.child("This session has no messages"),
+		);
 	} else {
 		body = body.child(transcript_column(
 			&state.turns,

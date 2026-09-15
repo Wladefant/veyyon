@@ -22,7 +22,7 @@ use veyyon_gpui::{
 
 use crate::{
 	geometry::{AnchorCorner, flip_corner},
-	token_set::{ColorRole, RadiusStep, SpacingStep, TokenSet},
+	token_set::{ColorRole, RadiusStep, SpacingStep, StrokeStep, TokenSet},
 };
 
 /// Maps a kit anchor corner onto the renderer's anchor.
@@ -122,7 +122,7 @@ impl RenderOnce for Popover {
 		let resolved_tokens = TokenSet::for_app(cx);
 		let tokens: &TokenSet = &resolved_tokens;
 
-		let bg = tokens.color(ColorRole::Float);
+		let bg = tokens.float_ground();
 		let border_color = tokens.color(ColorRole::Hairline);
 		let radius = tokens.radius(RadiusStep::Xl);
 		let pad = tokens.spacing(SpacingStep::S4);
@@ -133,19 +133,29 @@ impl RenderOnce for Popover {
 		// is inside the margin already, so the slide under it is the backstop
 		// for the one case the flip cannot answer, a card too large for either
 		// side of its origin.
-		let anchor = self.size.map_or(self.anchor, |size| {
-			flip_corner(self.anchor, self.origin, size, window.viewport_size(), margin)
-		});
+		let check_size = self
+			.size
+			.unwrap_or(veyyon_gpui::Size { width: px(240.0), height: px(160.0) });
+		let anchor =
+			flip_corner(self.anchor, self.origin, check_size, window.viewport_size(), margin);
 
 		let mut card = div()
 			.occlude()
 			.bg(bg)
+			.backdrop_blur(tokens.float_blur())
+			.backdrop_saturation(tokens.float_saturation())
 			.rounded(radius)
-			.border_1()
+			.border(tokens.stroke(StrokeStep::Hairline))
 			.border_color(border_color)
+			.shadow(tokens.float_shadows())
 			.p(pad)
-			.shadow_lg()
-			.child(div().min_w_0().overflow_hidden().child(self.child));
+			.child(
+				div()
+					.min_w_0()
+					.overflow_hidden()
+					.rounded(tokens.radius(RadiusStep::Sm))
+					.child(self.child),
+			);
 		if let Some(size) = self.size {
 			card = card.max_w(size.width).max_h(size.height);
 		}

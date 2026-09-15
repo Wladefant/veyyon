@@ -46,11 +46,11 @@ fn dump_scale(tokens: &Tokens, path: &Path) -> Result<(), TokenError> {
 		 = 9999\n",
 	);
 	out.push_str(
-		"\n[type.size]\nmicro = { size = 11, line_height = 16, tracking_em = 0.04 }\nsmall = { size \
+		"\n[type.size]\nmicro = { size = 11, line_height = 16, tracking_em = 0.05 }\nsmall = { size \
 		 = 12, line_height = 16, tracking_em = 0.00 }\nbody  = { size = 13, line_height = 18, \
 		 tracking_em = 0.00 }\nread  = { size = 14, line_height = 22, tracking_em = 0.00 }\nhead  = \
-		 { size = 18, line_height = 24, tracking_em = -0.01 }\nlead  = { size = 26, line_height = \
-		 32, tracking_em = -0.02 }\n",
+		 { size = 18, line_height = 24, tracking_em = -0.015 }\nlead  = { size = 26, line_height = \
+		 32, tracking_em = -0.025 }\n",
 	);
 	out.push_str("\n[type.weight]\nregular  = 400\nmedium   = 500\nsemibold = 600\n");
 	out.push_str(

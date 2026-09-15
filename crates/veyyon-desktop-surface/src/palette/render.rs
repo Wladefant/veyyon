@@ -1,7 +1,8 @@
 //! Search input and selectable rows shared by command and model surfaces.
 
 use veyyon_desktop_kit::{
-	ColorRole, Dot, Kbd, KeyChord, Palette, Picker, SearchField, SpacingStep, TextRamp, TokenSet,
+	ColorRole, Dot, Kbd, KeyChord, Palette, Picker, SearchField, SpacingStep, StrokeStep, TextRamp,
+	TokenSet,
 	input::{Editor, editor::slot::EditorSlot},
 };
 use veyyon_desktop_tokens::PaletteSurfaceTokens;
@@ -51,27 +52,18 @@ pub fn palette_surface(
 				.py(tokens.spacing(SpacingStep::S2))
 				.text_size(tokens.font_size(TextRamp::Micro))
 				.text_color(tokens.color(ColorRole::Muted))
-				.border_b(px(1.0))
+				.border_b(tokens.stroke(StrokeStep::Hairline))
 				.border_color(tokens.color(ColorRole::Hairline))
 				.child(notice.clone()),
 		);
 	}
 	if filtered.is_empty() {
-		body = body.child(
-			div()
-				.px(inset)
-				.py(tokens.spacing(SpacingStep::S3))
-				.text_size(tokens.font_size(TextRamp::Small))
-				.text_color(tokens.color(ColorRole::Muted))
-				.child(if state.mode == PaletteMode::Models && state.items.is_empty() {
-					// The list holds the models a turn could run, so an empty one
-					// states no provider is signed in rather than that the host
-					// answered nothing.
-					"No models available — sign in to a provider under Settings ▸ Providers"
-				} else {
-					"No matching items"
-				}),
-		);
+		let (primary, action) = if state.mode == PaletteMode::Models && state.items.is_empty() {
+			("No models available", "Sign in to a provider under Settings ▸ Providers")
+		} else {
+			("No matching items", "Clear or edit the search query")
+		};
+		body = body.child(crate::right_panel::empty_state("palette-empty", primary, action, tokens));
 	}
 	// A heading takes room from the same space the rows do, so a grouped list
 	// draws fewer rows rather than growing past the surface's own ceiling, and
@@ -160,6 +152,7 @@ pub fn palette_surface(
 		.items_center()
 		.justify_between()
 		.text_size(tokens.font_size(TextRamp::Micro))
+		.line_height(tokens.line_height(TextRamp::Micro))
 		.text_color(tokens.color(ColorRole::Muted))
 		.child("↑↓ Select · Enter Confirm")
 		.child(if back.is_some() {

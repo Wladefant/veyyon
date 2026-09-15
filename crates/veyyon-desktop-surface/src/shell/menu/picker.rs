@@ -12,10 +12,7 @@ pub enum MenuAction {
 
 impl ShellView {
 	pub(crate) const fn picker_is_occluded(&self) -> bool {
-		self.active_menu_source().is_some()
-			|| self.detail().is_some()
-			|| self.review_is_open()
-			|| self.state.close_tab_prompt.is_some()
+		self.active_menu_source().is_some() || self.detail().is_some() || self.review_is_open()
 	}
 
 	#[must_use]
@@ -111,7 +108,7 @@ impl ShellView {
 		window: &mut Window,
 		cx: &mut Context<Self>,
 	) -> bool {
-		if self.detail().is_some() || self.review_is_open() || self.state.close_tab_prompt.is_some() {
+		if self.detail().is_some() || self.review_is_open() {
 			return false;
 		}
 		let Some(source) = self.active_menu_source() else {

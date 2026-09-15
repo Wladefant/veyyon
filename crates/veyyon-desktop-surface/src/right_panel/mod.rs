@@ -7,7 +7,9 @@ pub mod diff_columns;
 pub mod diff_extent;
 pub mod diff_rows;
 pub mod diff_split;
+pub mod diff_toolbar;
 pub mod diff_view;
+pub mod empty;
 pub mod file_view;
 pub mod mono_pane;
 pub mod pane_scroll;
@@ -22,12 +24,13 @@ pub use content::{
 	DerivedFrom, DiffFile, DiffRow, DiffStatus, DiffWithheld, FileLine, FileView, HighlightSpan,
 	PanelContent, PanelFailure, PanelTab, TreeContent, TreeRowItem, TreeStatus,
 };
+pub use empty::empty_state;
 pub use file_view::{file_view, highlight_source};
 pub use pane_scroll::{PaneId, PaneScrolls};
 pub use tabs::tab_strip;
 pub use tree_view::tree_view;
 pub use usage_view::usage_view;
-use veyyon_desktop_kit::{ColorRole, SpacingStep, TextRamp, TokenSet};
+use veyyon_desktop_kit::{ColorRole, SpacingStep, TokenSet};
 use veyyon_desktop_tokens::PanelsSurfaceTokens;
 use veyyon_gpui::{
 	Context, FocusHandle, InteractiveElement, IntoElement, ParentElement, Styled, Window, div, px,
@@ -91,29 +94,28 @@ pub fn right_panel(
 			.overflow_hidden()
 			.child(tab_strip(panel, geometry, tokens, cx))
 			.children(failure_row)
-			.child(
-				div()
-					.id("right-panel-unavailable")
-					.flex_1()
-					.w_full()
-					.flex()
-					.items_center()
-					.justify_center()
-					.px(tokens.spacing(SpacingStep::S4))
-					.text_size(tokens.font_size(TextRamp::Small))
-					.text_color(tokens.color(ColorRole::Muted))
-					.child(reason.to_string()),
-			)
+			.child(empty_state(
+				"right-panel-unavailable",
+				reason,
+				"Attach a host that reports one of Changes, File, Tree or Usage",
+				tokens,
+			))
 			.into_any_element();
 	}
 
 	let review_counts = review_controls::ReviewCounts::of(panel, reviews);
-	let active_content = match panel.active_tab {
+	let effective_tab = if panel.tabs.contains(&panel.active_tab) {
+		panel.active_tab
+	} else {
+		panel.tabs.first().copied().unwrap_or(PanelTab::Diff)
+	};
+	let active_content = match effective_tab {
 		PanelTab::Diff => diff_view::diff_view(
 			&panel.diff,
 			panel.diff_status,
 			panel.withheld,
 			panel.diff_mode,
+			panel.pending_edits_unavailable.as_deref(),
 			&review_counts,
 			panes,
 			geometry,

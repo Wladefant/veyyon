@@ -1,7 +1,5 @@
 //! Collapsed transcript output with animated, height-bounded disclosure.
 
-use std::time::Instant;
-
 use veyyon_desktop_kit::{
 	CodeBlock, ColorRole, Icon, IconName, IconSize, MonoSizeStep, SelectableProse, SpacingStep,
 	TextRamp, TokenSet, Truncate,
@@ -51,7 +49,7 @@ pub fn render_pane_block(
 				block_ix,
 				&motion,
 				reduced_motion,
-				Instant::now(),
+				cx.background_executor().now(),
 			);
 			if let Some(view) = &view_toggle {
 				let _ = view.update(cx, |_view, cx| cx.notify());
@@ -85,7 +83,7 @@ pub fn render_pane_block(
 				.child(format!("{} lines", lines.len())),
 		);
 	let container = div().flex().flex_col().w_full().child(header);
-	let (progress, _) = viewport_state.reveal_frame(turn_ix, block_ix, Instant::now());
+	let (progress, _) = viewport_state.current_reveal_frame(turn_ix, block_ix);
 	if !is_expanded && progress <= 0.0 {
 		return container;
 	}

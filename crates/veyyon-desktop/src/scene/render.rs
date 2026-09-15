@@ -144,6 +144,7 @@ impl<'cx> SceneWindow<'cx> {
 						// draws, the same field a settings snapshot fills.
 						let mut state = built.state;
 						state.reduced_motion = true;
+						state.appearance.choose(&installed.appearance);
 						let mut view = ShellView::new(installed, state).with_notice(built.notice);
 						view.set_clock_ms(SCENE_CLOCK_MS);
 						if let Some(menu) = built.row_menu {
@@ -165,6 +166,14 @@ impl<'cx> SceneWindow<'cx> {
 			})
 		});
 		self.cx.run_until_parked();
+		// One window renders every scene and focus outlives a root swap, so a
+		// scene that took focus would leave the next one drawing a ring it
+		// never asked for. Dropping focus here makes every scene re-derive the
+		// default the render claims for the surface it draws.
+		self
+			.window
+			.update(self.cx, |_root, window, cx| window.blur(cx))
+			.map_err(|error| RenderError::NoFrame { message: format!("{error:?}") })?;
 		// `render_to_frame` reads the last drawn frame; the draw itself is the
 		// vsync this delivers, which the notify above left the window dirty for.
 		for _ in 0..8 {

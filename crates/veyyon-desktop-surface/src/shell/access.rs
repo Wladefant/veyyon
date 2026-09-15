@@ -304,7 +304,11 @@ impl ShellView {
 		{
 			cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
 		}
+		let prior_drawer_open = self.state.drawer_open;
 		self.intents.dispatch(intent, &mut self.state);
+		if self.state.drawer_open != prior_drawer_open {
+			self.toggle_drawer(self.state.drawer_open, cx);
+		}
 		self.sync_appearance(cx);
 		cx.notify();
 	}

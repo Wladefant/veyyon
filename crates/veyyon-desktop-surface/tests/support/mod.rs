@@ -18,7 +18,7 @@ use veyyon_desktop_surface::{
 	Attachment, Badge, Card, DiffFile, DiffRow, DiffStatus, DiffWithheld, Intent, PanelContent,
 	PanelTab, Row, Section, ShellState, TreeContent, TreeRowItem, TreeStatus,
 	composer::{MediaType, TurnPhase, payload_for},
-	drawer::{DrawerContent, DrawerTab, ProcessRow},
+	drawer::{CursorShape, DrawerContent, DrawerTab, ProcessRow},
 };
 
 /// A decodable PNG under a fixed name for reducers and submission checks.
@@ -90,12 +90,12 @@ pub fn state() -> ShellState {
 		turn: TurnPhase::Idle,
 		run_status: None,
 		panel: PanelContent {
-			tabs:               vec![PanelTab::Diff, PanelTab::File, PanelTab::Tree],
-			active_tab:         PanelTab::Diff,
-			withheld:           DiffWithheld::default(),
+			tabs: vec![PanelTab::Diff, PanelTab::File, PanelTab::Tree],
+			active_tab: PanelTab::Diff,
+			withheld: DiffWithheld::default(),
 			// A host that answered every request the panel sent.
-			failure:            None,
-			diff:               vec![DiffFile {
+			failure: None,
+			diff: vec![DiffFile {
 				path:      "src/main.rs".to_string(),
 				old_path:  None,
 				status:    ChangeStatus::Modified,
@@ -103,14 +103,11 @@ pub fn state() -> ShellState {
 				deletions: 1,
 				rows:      vec![DiffRow::Collapsed { hidden: 10, before_line: 0, after_line: 0 }],
 			}],
-			diff_status:        DiffStatus::Loaded,
-			review_repository:  None,
-			derived_from:       veyyon_desktop_surface::DerivedFrom {
-				changes: 1,
-				..Default::default()
-			},
-			file:               None,
-			tree:               TreeContent {
+			diff_status: DiffStatus::Loaded,
+			review_repository: None,
+			derived_from: veyyon_desktop_surface::DerivedFrom { changes: 1, ..Default::default() },
+			file: None,
+			tree: TreeContent {
 				rows:           vec![TreeRowItem {
 					path:        "src".to_string(),
 					name:        "src".to_string(),
@@ -123,9 +120,10 @@ pub fn state() -> ShellState {
 				expanded_paths: BTreeSet::new(),
 				status:         TreeStatus::Loaded,
 			},
-			diff_mode:          DiffMode::Unified,
-			usage:              None,
+			diff_mode: DiffMode::Unified,
+			usage: None,
 			unavailable_reason: None,
+			pending_edits_unavailable: None,
 		},
 		cards: vec![
 			Card::Approval { tool: "bash".to_owned(), detail: vec!["rm -rf build".to_owned()] },
@@ -137,8 +135,16 @@ pub fn state() -> ShellState {
 		],
 		drawer: DrawerContent {
 			tabs:           vec![
-				DrawerTab::Terminal { id: "t1".to_owned(), title: "Terminal 1".to_owned() },
-				DrawerTab::Terminal { id: "t2".to_owned(), title: "Terminal 2".to_owned() },
+				DrawerTab::Terminal {
+					id:     "t1".to_owned(),
+					title:  "Terminal 1".to_owned(),
+					status: veyyon_desktop_model::TerminalStatus::Running,
+				},
+				DrawerTab::Terminal {
+					id:     "t2".to_owned(),
+					title:  "Terminal 2".to_owned(),
+					status: veyyon_desktop_model::TerminalStatus::Running,
+				},
 			],
 			active_tab:     0,
 			tab_chosen:     true,
@@ -147,6 +153,7 @@ pub fn state() -> ShellState {
 			cursor_col:     0,
 			cursor_row:     0,
 			cursor_visible: true,
+			cursor_shape:   CursorShape::Block,
 			title:          "term".to_owned(),
 			scroll_offset:  1,
 			processes:      vec![ProcessRow {

@@ -9,7 +9,7 @@ use veyyon_gpui::{App, ElementId, Entity, IntoElement, RenderOnce, Window, div, 
 use super::editor::Editor;
 use crate::{
 	state::InteractiveState,
-	token_set::{ColorRole, RadiusStep, SpacingStep, TextRamp, TokenSet},
+	token_set::{ColorRole, RadiusStep, SpacingStep, StrokeStep, TextRamp, TokenSet},
 };
 
 /// Multiline text input area primitive element.
@@ -86,15 +86,14 @@ impl RenderOnce for TextArea {
 			.w_full()
 			.bg(bg)
 			.rounded(radius)
-			.border_1()
+			.border(tokens.stroke(StrokeStep::Hairline))
 			.border_color(border_color)
 			.px(pad_x)
 			.py(pad_y)
 			.text_size(font_size)
 			.line_height(line_h)
-			.text_color(fg)
-			.overflow_hidden();
+			.text_color(fg);
 
-		container.child(self.editor)
+		container.child(div().w_full().overflow_hidden().child(self.editor))
 	}
 }

@@ -1,12 +1,10 @@
 //! Native GPUI renderer for `ViewSection` (§contracts/view).
 
 use veyyon_desktop_kit::{
-	ColorRole, SpacingStep, TextRamp, TextWeight, TokenSet, text::markdown::Markdown,
+	ColorRole, SpacingStep, StrokeStep, TextRamp, TextWeight, TokenSet, text::markdown::Markdown,
 };
 use veyyon_desktop_model::tool_view::{ViewLine, ViewSection};
-use veyyon_gpui::{
-	CursorStyle, Div, InteractiveElement, MouseButton, ParentElement, Styled, div, px,
-};
+use veyyon_gpui::{CursorStyle, Div, InteractiveElement, MouseButton, ParentElement, Styled, div};
 
 use super::{
 	ToolViewCallbacks, code::render_code_lines, diff::render_diff_lines,
@@ -31,7 +29,7 @@ pub fn render_section(
 	if section.separator && !is_first {
 		container = container
 			.pt(tokens.spacing(SpacingStep::S2))
-			.border_t_1()
+			.border_t(tokens.stroke(StrokeStep::Hairline))
 			.border_color(tokens.color(ColorRole::Hairline))
 			.mt(tokens.spacing(SpacingStep::S2));
 	} else if !is_first {
@@ -97,7 +95,7 @@ pub fn render_section(
 		// No width role: this states a count in text this renderer authors,
 		// not host text, so it cannot outgrow the row it sits alone on.
 		let mut front_el = div()
-			.py(px(2.0))
+			.py(tokens.spacing(SpacingStep::S1))
 			.text_size(tokens.font_size(TextRamp::Micro))
 			.text_color(tokens.color(ColorRole::Muted));
 
@@ -206,6 +204,7 @@ fn render_list_lines(
 				div()
 					.flex_shrink_0()
 					.text_size(tokens.font_size(TextRamp::Small))
+					.line_height(tokens.line_height(TextRamp::Small))
 					.text_color(tokens.color(ColorRole::Muted))
 					.child("•"),
 			)

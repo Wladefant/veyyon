@@ -15,7 +15,7 @@ pub fn resolve_tone_color(tone: ViewTone, tokens: &TokenSet) -> Hsla {
 		ViewTone::Muted => tokens.color(ColorRole::Muted),
 		ViewTone::Dim => {
 			let mut c = tokens.color(ColorRole::Muted);
-			c.a *= 0.65;
+			c.a *= 0.75;
 			c
 		},
 		ViewTone::DiffAdded => tokens.color(ColorRole::DoneInk),

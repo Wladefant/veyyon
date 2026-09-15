@@ -14,29 +14,6 @@ use super::{Commit, FieldKey, FieldSlots, FieldSpec};
 use crate::ShellView;
 
 impl ShellView {
-	/// Retains the name being edited while host frames arrive.
-	pub fn space_name_field_editor(
-		&mut self,
-		id: u64,
-		current: &str,
-		window: &Window,
-		cx: &mut Context<Self>,
-	) -> Entity<Editor> {
-		let editor = self.field_editor(
-			FieldSpec {
-				key:         FieldKey::SpaceRename(id),
-				commit:      Commit::SpaceRename(id),
-				placeholder: "Space name".into(),
-				mask:        false,
-				multiline:   false,
-				initial:     current.to_owned(),
-			},
-			cx,
-		);
-		Self::adopt_reported_value(&editor, current, window, cx);
-		editor
-	}
-
 	/// The retained editor for the secret a provider is waiting on: created
 	/// when a flow asks for one, dropped when no flow does, so the next flow
 	/// starts from an empty field.
@@ -90,7 +67,8 @@ impl ShellView {
 			},
 			cx,
 		);
-		Self::adopt_reported_value(&editor, current, window, cx);
+		let key_entry = FieldKey::Setting(key.to_owned());
+		self.adopt_reported_value(&key_entry, &editor, current, window, cx);
 		editor
 	}
 
@@ -114,7 +92,8 @@ impl ShellView {
 			},
 			cx,
 		);
-		Self::adopt_reported_value(&editor, current, window, cx);
+		let key_entry = FieldKey::SessionRename(session_id);
+		self.adopt_reported_value(&key_entry, &editor, current, window, cx);
 		editor
 	}
 
@@ -141,7 +120,8 @@ impl ShellView {
 			},
 			cx,
 		);
-		Self::adopt_reported_value(&editor, &current, window, cx);
+		let key_entry = FieldKey::Keybinding(action.to_owned());
+		self.adopt_reported_value(&key_entry, &editor, &current, window, cx);
 		editor
 	}
 
@@ -225,16 +205,19 @@ impl ShellView {
 	}
 
 	/// Replaces what an unfocused field draws with the value the host
-	/// reports, and leaves a focused one alone so a snapshot never eats a
-	/// keystroke.
+	/// reports, and leaves a focused or dirty one alone so a snapshot never eats
+	/// a keystroke or uncommitted draft.
 	fn adopt_reported_value(
+		&self,
+		key: &FieldKey,
 		editor: &Entity<Editor>,
 		current: &str,
 		window: &Window,
 		cx: &mut Context<Self>,
 	) {
+		let is_dirty = self.field_editors.get(key).is_some_and(|f| f.dirty);
 		let focused = editor.read(cx).focus_handle().is_focused(window);
-		if !focused && editor.read(cx).text() != current {
+		if !focused && !is_dirty && editor.read(cx).text() != current {
 			let current = current.to_owned();
 			editor.update(cx, |editor, cx| editor.set_text(current, cx));
 		}

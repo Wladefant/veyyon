@@ -144,50 +144,20 @@ impl PrimaryAction {
 	}
 }
 
-/// Secondary actions paired with the primary action.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum SecondaryAction {
-	/// Steer action offered on the secondary split button when in queue mode.
-	Steer,
-	/// Queue action offered on the secondary split button when in steer mode.
-	Queue,
-	/// Option selection shortcut triggers for questions.
-	OptionKeys {
-		/// Number of discrete options.
-		count: usize,
-	},
-	/// Decline and Always Allow choices for approvals.
-	ApprovalChoices,
-	/// Fork and accept the proposed plan in a new session.
-	AcceptInNewSession,
-}
-
-/// Resolves the primary action and optional secondary action from turn phase
-/// and text state.
+/// Resolves the primary action from turn phase and text state.
 #[must_use]
-pub const fn primary_action(
-	turn: &TurnPhase,
-	has_text: bool,
-) -> (PrimaryAction, Option<SecondaryAction>) {
+pub const fn primary_action(turn: &TurnPhase, has_text: bool) -> PrimaryAction {
 	match turn {
-		TurnPhase::Idle => (PrimaryAction::Send, None),
-		TurnPhase::Running { queue_mode: QueueMode::Steer } => {
-			(PrimaryAction::Steer, Some(SecondaryAction::Queue))
-		},
-		TurnPhase::Running { queue_mode: QueueMode::Queue } => {
-			(PrimaryAction::Queue, Some(SecondaryAction::Steer))
-		},
-		TurnPhase::QuestionPending { options, .. } => {
-			(PrimaryAction::Answer, Some(SecondaryAction::OptionKeys { count: *options }))
-		},
-		TurnPhase::ApprovalPending { .. } => {
-			(PrimaryAction::Approve, Some(SecondaryAction::ApprovalChoices))
-		},
+		TurnPhase::Idle => PrimaryAction::Send,
+		TurnPhase::Running { queue_mode: QueueMode::Steer } => PrimaryAction::Steer,
+		TurnPhase::Running { queue_mode: QueueMode::Queue } => PrimaryAction::Queue,
+		TurnPhase::QuestionPending { .. } => PrimaryAction::Answer,
+		TurnPhase::ApprovalPending { .. } => PrimaryAction::Approve,
 		TurnPhase::PlanPending { .. } => {
 			if has_text {
-				(PrimaryAction::Refine, None)
+				PrimaryAction::Refine
 			} else {
-				(PrimaryAction::Accept, Some(SecondaryAction::AcceptInNewSession))
+				PrimaryAction::Accept
 			}
 		},
 	}

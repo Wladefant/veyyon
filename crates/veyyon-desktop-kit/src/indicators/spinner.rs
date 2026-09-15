@@ -2,7 +2,7 @@
 
 use veyyon_gpui::{App, IntoElement, Pixels, RenderOnce, Window, div, prelude::*};
 
-use crate::token_set::{ColorRole, RadiusStep, SpacingStep, TokenSet};
+use crate::token_set::{ColorRole, RadiusStep, SpacingStep, StrokeStep, TokenSet};
 
 /// Size ramp for spinner indicators.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -64,7 +64,7 @@ impl RenderOnce for Spinner {
 		div()
 			.size(size)
 			.rounded(radius)
-			.border_2()
+			.border(tokens.stroke(StrokeStep::Heavy))
 			.border_color(color)
 			.opacity(0.85)
 	}

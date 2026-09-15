@@ -62,7 +62,6 @@ impl RenderOnce for TextField {
 			.h(metrics.height)
 			.w_full()
 			.min_w_0()
-			.overflow_hidden()
 			.rounded(metrics.radius)
 			.border(tokens.stroke(StrokeStep::Hairline))
 			.border_color(edge)
@@ -80,6 +79,12 @@ impl RenderOnce for TextField {
 			container = container.cursor_text();
 		}
 
-		container.child(div().flex_1().min_w_0().child(self.editor))
+		container.child(
+			div()
+				.flex_1()
+				.min_w_0()
+				.overflow_hidden()
+				.child(self.editor),
+		)
 	}
 }

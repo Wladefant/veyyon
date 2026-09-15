@@ -6,19 +6,23 @@
 //! CLASS CLOSED: Ledger row A7. Capabilities whose Unavailable or Pending gate
 //! states draw identical bytes to Enabled; capabilities registering in-flight
 //! requests against incorrect global surfaces rather than point of use;
-//! hardcoded capability opt-outs that mask missing surface projections. One
-//! opt-out is recorded rather than hardcoded: `PendingEdits`, which nothing in
-//! the window reads, pinned by exact equality so a second one turns the sweep
-//! red.
+//! hardcoded capability opt-outs that mask missing surface projections. The
+//! Unknown sweep carries no opt-out at all: §4.3 resolves every capability to
+//! at rest. One Unavailable opt-out is recorded rather than hardcoded:
+//! `PendingEdits`, which nothing in the window reads, pinned by exact equality
+//! so a second one turns the sweep red.
 //!
 //! NOT CAUGHT: Live socket network transport latency; theme font rasterization
 //! platform variance.
 //!
 //! MUTATION PROOF:
-//! - Setting Unavailable status to Available causes
-//!   `test_unavailable_renders_distinct_from_enabled` to fail.
+//! - Setting an Unavailable status back to Available causes
+//!   `test_every_capability_the_window_draws_renders_distinct_unavailable_bytes`
+//!   to fail.
 //! - Omitting Pending request registration causes
-//!   `test_pending_renders_distinct_from_enabled` to fail.
+//!   `test_all_gated_capabilities_render_distinct_pending_bytes` to fail.
+//! - Withholding a tab while its capability is Unknown causes
+//!   `test_unknown_draws_at_rest_for_every_capability` to fail.
 //! - Mapping an actionless capability to a dummy action causes
 //!   `test_action_of_exhaustively_matches_model_mapping` to fail.
 
@@ -122,8 +126,15 @@ fn test_all_capability_scenes_build_cleanly() {
 	}
 }
 
+/// §4.3 resolves `Unknown` to "at rest, activation attaches then acts; never
+/// drawn disabled", which is how `Enabled` draws, so an unanswered capability
+/// is byte-identical to an answered one for every capability without
+/// exception. §5.13's "when absent" column withholds a surface for a
+/// capability the host has refused, which is `Unavailable` and not silence.
+/// Withholding a tab until the attach lands is also what makes a tab arrive
+/// mid-attach, which is the reflow the gate exists to avoid.
 #[test]
-fn test_unknown_draws_at_rest_except_the_tabs_a_capability_offers() {
+fn test_unknown_draws_at_rest_for_every_capability() {
 	let mut cx = headless_context().expect("headless context available on GPU host");
 	let bundle = startup_assets();
 	let assets = Assets {
@@ -144,25 +155,10 @@ fn test_unknown_draws_at_rest_except_the_tabs_a_capability_offers() {
 		let enabled = render_scene_bytes(&mut window, &assets, capability, GateVariant::Enabled);
 		let unknown = render_scene_bytes(&mut window, &assets, capability, GateVariant::Unknown);
 
-		// A tab is the one surface an unknown capability withholds: §5.13
-		// states that a tab arriving mid-attach is a surface nobody asked
-		// for, so the panel's Files and Changes tabs and the drawer's
-		// supervisor tab appear once the host has declared them. Every other
-		// control draws at rest and reports the refusal on the press.
-		if matches!(
-			capability,
-			Capability::Files | Capability::Changes | Capability::ProcessSupervisor
-		) {
-			assert!(
-				unknown != enabled,
-				"{capability:?}: UnknownUntilAttached must withhold its tab (differ from Enabled)"
-			);
-		} else {
-			assert_eq!(
-				unknown, enabled,
-				"{capability:?}: UnknownUntilAttached must draw at rest identically to Enabled"
-			);
-		}
+		assert_eq!(
+			unknown, enabled,
+			"{capability:?}: UnknownUntilAttached must draw at rest identically to Enabled (§4.3)"
+		);
 	}
 }
 
@@ -194,14 +190,14 @@ fn test_every_capability_the_window_draws_renders_distinct_unavailable_bytes() {
 			invisible.push(capability);
 		}
 	}
-	// `PendingEdits` is the one capability nothing in the window reads: no
-	// domain carries a pending edit, no action fetches one, and the diff tab is
-	// filled by `Changes` alone. A host that cannot inspect an edit buffer
-	// therefore changes no pixel, which is truthful. The set is pinned by exact
-	// equality, so a second capability losing its surface turns this red.
+	// Every capability the window draws now states its own withdrawal:
+	// `PendingEdits` was the last one that changed no pixel, and the diff
+	// toolbar's `diff-pending-edits` notice gave it a surface that carries the
+	// host's verbatim reason. The set is pinned empty by exact equality, so a
+	// capability that loses its surface turns this red.
 	assert_eq!(
 		invisible,
-		vec![Capability::PendingEdits],
+		Vec::<Capability>::new(),
 		"every capability the window draws must render distinct bytes when Unavailable"
 	);
 }

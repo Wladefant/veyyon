@@ -53,8 +53,7 @@ impl ShellView {
 	/// A slot's driver is kept for the life of the window. The stack is
 	/// bounded, so the number of drivers is bounded by the same constant, and
 	/// a card leaving its slot hands that track to whichever card takes it.
-	fn sample_notice_motion(&mut self, count: usize) -> Vec<FloatFrame> {
-		let now = Instant::now();
+	fn sample_notice_motion(&mut self, count: usize, now: Instant) -> Vec<FloatFrame> {
 		let reduced = self.rail_motion.is_reduced_motion();
 		let mut frames = Vec::with_capacity(count);
 		for slot in 0..count {
@@ -87,7 +86,7 @@ pub(super) fn toast_stack(
 	if count == 0 {
 		return None;
 	}
-	let frames = view.sample_notice_motion(count);
+	let frames = view.sample_notice_motion(count, cx.background_executor().now());
 	// A card mid-entrance asks for the next frame, the way every other float
 	// in this window does: the transition is driven by the clock, not by the
 	// events that raised the announcement.

@@ -164,7 +164,7 @@ impl Seed {
 	}
 
 	/// Raises one decision on a session.
-	fn decide(&mut self, id: &SessionId, raise: impl FnOnce(&mut PendingDecisions)) {
+	pub fn decide(&mut self, id: &SessionId, raise: impl FnOnce(&mut PendingDecisions)) {
 		let pending = self.store.interactions.entry(id.clone()).or_default();
 		raise(pending);
 	}
@@ -235,7 +235,7 @@ impl Seed {
 		let error = BackendError {
 			scope,
 			code: Some(format!("E_{}", scope.as_str().to_ascii_uppercase())),
-			message: format!("{} request failed: fixture failure", scope.as_str()),
+			message: scope_error_message(scope).to_string(),
 			retryable: is_scope_retryable(scope),
 			request: None,
 			occurred_at_ms: SCENE_CLOCK_MS - 1000,
@@ -269,5 +269,43 @@ impl Seed {
 			composer_text: String::new(),
 			row_menu:      self.row_menu,
 		}
+	}
+}
+/// Detailed contextual failure message for each error scope naming the specific
+/// component that failed.
+#[must_use]
+pub const fn scope_error_message(scope: ErrorScope) -> &'static str {
+	match scope {
+		ErrorScope::Connection => {
+			"Connection dropped: host socket 127.0.0.1:47000 closed unexpectedly"
+		},
+		ErrorScope::Authentication => {
+			"Authentication required: API key expired or revoked for anthropic"
+		},
+		ErrorScope::Provider => {
+			"Provider rate limit reached: anthropic/claude-sonnet-4.5 capacity exceeded"
+		},
+		ErrorScope::Settings => {
+			"Setting validation failed: ui.theme 'custom-dark' not found in catalogue"
+		},
+		ErrorScope::Mcp => "MCP server disconnected: git-mcp failed handshake on stdio",
+		ErrorScope::Extension => "Extension runtime error: python-lsp crashed during initialize",
+		ErrorScope::Diagnostic => "Diagnostic probe failed: system metrics collector unavailable",
+		ErrorScope::Usage => "Usage calculation failed: upstream billing endpoint returned 503",
+		ErrorScope::Lifecycle => "Host engine shutting down: supervisor received SIGTERM",
+		ErrorScope::Session => {
+			"Session state sync failed: manifest for session 1 could not be loaded"
+		},
+		ErrorScope::Transcript => "Transcript read failed: corrupted turn block at entry 1",
+		ErrorScope::Tool => {
+			"Tool execution refused: git push requires explicit operator confirmation"
+		},
+		ErrorScope::Interaction => "Message submission failed: host buffer temporarily full",
+		ErrorScope::Plan => "Plan generation rejected: model declined proposed steps",
+		ErrorScope::File => "File read failed: permission denied accessing src/main.rs",
+		ErrorScope::Change => "Working tree diff failed: git status exited with error 128",
+		ErrorScope::Terminal => "Terminal process crashed: /bin/bash exited with SIGTERM",
+		ErrorScope::Agent => "Agent loop interrupted: turn stalled waiting on external process",
+		ErrorScope::Task => "Background subtask failed: cargo test returned exit code 1",
 	}
 }

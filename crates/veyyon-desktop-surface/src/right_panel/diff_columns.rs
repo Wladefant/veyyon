@@ -140,7 +140,7 @@ fn tint_fills(
 	};
 	let mut ground = tokens.tint(role).fill;
 	ground.a = geometry.diff_added_removed_alpha;
-	let mut highlight = tokens.tint(role).fill;
+	let mut highlight = tokens.tint(role).ink;
 	highlight.a = geometry.diff_intraline_alpha;
 	(Some(ground), Some(highlight))
 }
@@ -263,7 +263,7 @@ pub fn unified_columns(
 			DiffRow::Added { new_line, text, intraline } => Line {
 				number: Some(*new_line),
 				sign: "+",
-				sign_role: ColorRole::Foreground,
+				sign_role: ColorRole::DoneInk,
 				text,
 				intraline,
 				tint: Some(TintRole::Done),
@@ -271,7 +271,7 @@ pub fn unified_columns(
 			DiffRow::Removed { old_line, text, intraline } => Line {
 				number: Some(*old_line),
 				sign: "-",
-				sign_role: ColorRole::Foreground,
+				sign_role: ColorRole::ErrorInk,
 				text,
 				intraline,
 				tint: Some(TintRole::Error),

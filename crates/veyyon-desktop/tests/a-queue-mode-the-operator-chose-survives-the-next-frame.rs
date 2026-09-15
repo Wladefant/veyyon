@@ -117,12 +117,12 @@ fn the_chord_flips_the_mode_and_the_next_frame_leaves_it_alone() {
 	assert_eq!(after_chord.composer.queue_mode, QueueMode::Queue);
 	assert_eq!(after_chord.turn, TurnPhase::Running { queue_mode: QueueMode::Queue });
 	assert_eq!(
-		primary_action(&after_chord.turn, false).0,
+		primary_action(&after_chord.turn, false),
 		PrimaryAction::Queue,
 		"the primary action follows the mode"
 	);
 	assert_eq!(
-		primary_action(&after_chord.turn, false).0.label(),
+		primary_action(&after_chord.turn, false).label(),
 		"Queue message",
 		"and the control is called what pressing it now does (§5.4)"
 	);
@@ -220,7 +220,7 @@ fn the_chord_is_refused_where_the_toggle_itself_is() {
 	);
 	assert_eq!(after_chord.turn, TurnPhase::Running { queue_mode: QueueMode::Steer });
 	assert_eq!(
-		primary_action(&after_chord.turn, false).0.label(),
+		primary_action(&after_chord.turn, false).label(),
 		"Steer turn",
 		"and the name still states the only action the transport carries"
 	);

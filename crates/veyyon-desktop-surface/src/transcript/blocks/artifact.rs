@@ -9,8 +9,6 @@ mod decoder;
 mod details;
 mod facts;
 
-use std::time::Instant;
-
 pub use decoder::*;
 pub use details::*;
 pub use facts::*;
@@ -78,7 +76,7 @@ pub fn render_artifact_block(
 				block_ix,
 				&motion_tokens_toggle,
 				reduced_motion,
-				Instant::now(),
+				cx.background_executor().now(),
 			);
 			if let Some(v) = &view_toggle {
 				let _ = v.update(cx, |_view, cx| cx.notify());
@@ -127,7 +125,7 @@ pub fn render_artifact_block(
 
 	let mut container = div().flex().flex_col().w_full().child(header);
 
-	let (progress, _) = viewport_state.reveal_frame(turn_ix, block_ix, Instant::now());
+	let (progress, _) = viewport_state.current_reveal_frame(turn_ix, block_ix);
 	let is_revealing = is_expanded || progress > 0.0;
 
 	if is_revealing {

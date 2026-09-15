@@ -4,10 +4,12 @@
 //! highlighting — was therefore unreachable in the shipped product while the
 //! host answered `Changes` perfectly well.
 //!
-//! CLASS CLOSED: a panel tab hidden by a capability that fills no part of it.
-//! The sweep reads `Capability::ALL` and `PanelTab::all()` at run time, so a
-//! capability added to the protocol, or a tab added to the panel, is covered
-//! without an edit here, and a tab that grows a second gate turns this red.
+//! CLASS CLOSED: a panel tab hidden by a capability that fills no part of it,
+//! and a tab hidden by silence rather than by a refusal — §4.3 renders
+//! `Unknown` at rest. The sweep reads `Capability::ALL` and `PanelTab::all()`
+//! at run time, so a capability added to the protocol, or a tab added to the
+//! panel, is covered without an edit here, and a tab that grows a second gate
+//! turns this red.
 //!
 //! NOT CAUGHT: what a tab draws once it is offered (the diff row suites own
 //! that), the host action a tab opening requests
@@ -142,13 +144,17 @@ fn the_snapshot_the_engine_host_sends_offers_the_changes_tab() {
 	);
 }
 
+/// §4.3 renders `Unknown` at rest: "activation attaches then acts; never drawn
+/// disabled". A host that has not answered for `Changes` yet therefore keeps
+/// the tab, and the strip does not reflow the moment the attach lands. Only an
+/// explicit refusal takes a tab away.
 #[test]
-fn the_changes_tab_waits_for_the_capability_that_fills_it() {
+fn the_changes_tab_is_taken_away_by_a_refusal_and_not_by_silence() {
 	let mut unknown = all_available();
 	unknown.set(Capability::Changes, CapabilityStatus::UnknownUntilAttached);
 	assert!(
-		!tabs_for(&unknown).contains(&PanelTab::Diff),
-		"a host that has not answered Changes yet offers no diff tab"
+		tabs_for(&unknown).contains(&PanelTab::Diff),
+		"a host that has not answered Changes yet renders the tab at rest (§4.3)"
 	);
 
 	let refused = without(Capability::Changes);

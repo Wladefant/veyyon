@@ -10,11 +10,7 @@
 //! The boundary only ever moves forward as text arrives, which is what makes
 //! it usable: text that settled stays settled, at the same offset.
 
-/// Whether a line opens or closes a fence.
-fn is_fence(line: &str) -> bool {
-	let body = line.trim_start();
-	body.starts_with("```") || body.starts_with("~~~")
-}
+use super::is_fence;
 
 /// Whether a line is a block that one line finishes: a heading, a quote or a
 /// list item cannot grow by another line arriving, so it settles as soon as

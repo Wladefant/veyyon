@@ -54,18 +54,19 @@ impl RenderOnce for Sheet {
 		let resolved_tokens = TokenSet::for_app(cx);
 		let tokens: &TokenSet = &resolved_tokens;
 
-		let bg = tokens.color(ColorRole::Float);
+		let bg = tokens.float_ground();
 		let border_color = tokens.color(ColorRole::Hairline);
 		let radius = tokens.radius(RadiusStep::Xl);
 		let pad = tokens.spacing(SpacingStep::S4);
 
 		let mut el = div()
 			.bg(bg)
+			.backdrop_blur(tokens.float_blur())
+			.backdrop_saturation(tokens.float_saturation())
 			.p(pad)
 			.border(tokens.stroke(StrokeStep::Hairline))
 			.border_color(border_color)
-			.shadow_lg();
-
+			.shadow(tokens.float_shadows());
 		match self.anchor {
 			SheetAnchor::Bottom => {
 				el = el.w_full().rounded_t(radius);
@@ -81,6 +82,19 @@ impl RenderOnce for Sheet {
 			},
 		}
 
-		el.child(self.child)
+		// The clip is a wrapper, so it fills the axis the sheet itself fills:
+		// without it a child asking for the sheet's height measures the
+		// wrapper's own content instead, and a body pinned to the lower edge
+		// draws above the sheet's floor.
+		let clip = div()
+			.min_w_0()
+			.min_h_0()
+			.overflow_hidden()
+			.rounded(tokens.radius(RadiusStep::Sm));
+		let clip = match self.anchor {
+			SheetAnchor::Bottom | SheetAnchor::Top => clip.w_full(),
+			SheetAnchor::Left | SheetAnchor::Right => clip.h_full(),
+		};
+		el.child(clip.child(self.child))
 	}
 }

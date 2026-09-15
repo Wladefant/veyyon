@@ -7,14 +7,14 @@
 //! manager's own decorations sit above the bar.
 
 use veyyon_desktop_kit::{
-	ColorRole, Dot, IconButton, IconButtonVariant, IconName, IconSize, SpacingStep, Spinner,
-	SpinnerSize, StrokeStep, TextRamp, TextWeight, TokenSet,
+	ColorRole, Dot, IconButton, IconButtonVariant, IconName, IconSize, RadiusStep, SpacingStep,
+	Spinner, SpinnerSize, StrokeStep, TextRamp, TextWeight, TokenSet,
 	input::{Editor, TextField},
 };
 use veyyon_desktop_tokens::ShellSurfaceTokens;
 use veyyon_gpui::{
-	AnyElement, ClickEvent, Context, Div, Entity, InteractiveElement, IntoElement, MouseMoveEvent,
-	ParentElement, StatefulInteractiveElement, Styled, div, px,
+	AnyElement, ClickEvent, Context, CursorStyle, Div, ElementId, Entity, InteractiveElement,
+	IntoElement, MouseMoveEvent, ParentElement, StatefulInteractiveElement, Styled, div, px,
 };
 
 use crate::{
@@ -45,9 +45,7 @@ pub struct TitlebarState<'a> {
 	/// Whether there is a drawer to show; the control is hidden without one.
 	pub drawer_available: bool,
 	pub drawer_open:      bool,
-	/// Which menu of the bar is open, which is what lights its word.
 	pub menu:             &'a MenuState,
-	/// Where the bar's words are recorded for the float under them.
 	pub menu_anchors:     MenuAnchors,
 }
 
@@ -80,7 +78,6 @@ pub fn titlebar(
 			},
 		))
 		.child(menu_bar(state.menu, state.menu_anchors, tokens, cx));
-
 	let mut trailing = div()
 		.flex()
 		.flex_row()
@@ -112,29 +109,33 @@ pub fn titlebar(
 			},
 		));
 	}
-
-	let center = if let Some(editor) = state.rename_editor {
-		div()
-			.id("titlebar-title-edit")
-			.flex_1()
-			.min_w_0()
-			.max_w(px(320.0))
-			.child(TextField::new("session-rename-field", editor))
-	} else {
-		div()
-			.id("titlebar-title")
-			.flex_1()
-			.min_w_0()
-			.overflow_hidden()
-			.whitespace_nowrap()
-			.truncate()
-			.text_center()
-			.text_size(tokens.font_size(TextRamp::Small))
-			.line_height(tokens.line_height(TextRamp::Small))
-			.font_weight(tokens.font_weight(TextWeight::Medium))
-			.text_color(tokens.color(ColorRole::Secondary))
-			.child(state.title.to_owned())
-	};
+	let center = div()
+		.flex_1()
+		.min_w_0()
+		.flex()
+		.flex_row()
+		.justify_center()
+		.items_center()
+		.child(if let Some(editor) = state.rename_editor {
+			div()
+				.id("titlebar-title-edit")
+				.w_full()
+				.max_w(px(320.0))
+				.child(TextField::new("session-rename-field", editor))
+		} else {
+			div()
+				.id("titlebar-title")
+				.w_full()
+				.overflow_hidden()
+				.whitespace_nowrap()
+				.truncate()
+				.text_center()
+				.text_size(tokens.font_size(TextRamp::Small))
+				.line_height(tokens.line_height(TextRamp::Small))
+				.font_weight(tokens.font_weight(TextWeight::Medium))
+				.text_color(tokens.color(ColorRole::Secondary))
+				.child(state.title.to_owned())
+		});
 
 	div()
 		.id("titlebar")
@@ -241,15 +242,121 @@ pub fn attention_strip_height(tokens: &TokenSet) -> f32 {
 	)
 }
 
-/// The attention strip: one line, above everything, that something is wrong.
+/// Sanitizes notice text by shortening home directory paths and redacting
+/// sensitive credentials.
+fn sanitize_notice(text: &str) -> String {
+	let mut sanitized = text.to_string();
+	if let Some(idx) = sanitized.find("sk-") {
+		let end = sanitized[idx..]
+			.find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',' || c == ')')
+			.map_or(sanitized.len(), |e| idx + e);
+		if end - idx > 6 {
+			sanitized.replace_range(idx..end, "sk-***");
+		}
+	}
+	if let Some(idx) = sanitized.find("/home/")
+		&& let Some(slash_after_user) = sanitized[idx + 6..].find('/')
+	{
+		sanitized.replace_range(idx..idx + 6 + slash_after_user, "~");
+	} else if let Some(idx) = sanitized.find("/Users/")
+		&& let Some(slash_after_user) = sanitized[idx + 7..].find('/')
+	{
+		sanitized.replace_range(idx..idx + 7 + slash_after_user, "~");
+	}
+	sanitized
+}
+
+/// The attention strip: one line, above everything, stating what happened and
+/// the corrective action.
 pub fn attention_strip(notice: &str, tokens: &TokenSet) -> Div {
+	let sanitized = sanitize_notice(notice);
+	let (primary_action, secondary_action) = if notice.contains("Authentication")
+		|| notice.contains("API key")
+		|| notice.contains("credentials")
+	{
+		(Some("Accounts"), "Dismiss")
+	} else if notice.contains("Provider")
+		|| notice.contains("rate limit")
+		|| notice.contains("capacity")
+	{
+		(Some("Select Model"), "Dismiss")
+	} else if notice.contains("Connection")
+		|| notice.contains("socket")
+		|| notice.contains("reconnect")
+	{
+		(Some("Retry"), "Dismiss")
+	} else if notice.contains("Setting") || notice.contains("theme") || notice.contains("config") {
+		(Some("Settings"), "Dismiss")
+	} else if notice.contains("failed") || notice.contains("error") {
+		(Some("Retry"), "Dismiss")
+	} else {
+		(None, "Dismiss")
+	};
+
+	let mut action_row = div()
+		.flex()
+		.flex_row()
+		.items_center()
+		.gap(tokens.spacing(SpacingStep::S2))
+		.flex_shrink_0();
+
+	if let Some(action) = primary_action {
+		action_row = action_row.child(
+			div()
+				.id(ElementId::Name(
+					format!("attention-action-{}", action.to_lowercase().replace(' ', "-")).into(),
+				))
+				.px(tokens.spacing(SpacingStep::S2))
+				.py(tokens.spacing(SpacingStep::S0))
+				.rounded(tokens.radius(RadiusStep::Xs))
+				.bg(tokens.color(ColorRole::AttentionInk))
+				.text_color(tokens.color(ColorRole::AttentionFill))
+				.text_size(tokens.font_size(TextRamp::Micro))
+				.line_height(tokens.line_height(TextRamp::Micro))
+				.font_weight(tokens.font_weight(TextWeight::Medium))
+				.cursor(CursorStyle::PointingHand)
+				.child(action),
+		);
+	}
+
+	action_row = action_row.child(
+		div()
+			.id(ElementId::Name("attention-dismiss".into()))
+			.px(tokens.spacing(SpacingStep::S2))
+			.py(tokens.spacing(SpacingStep::S0))
+			.rounded(tokens.radius(RadiusStep::Xs))
+			.border(tokens.stroke(StrokeStep::Hairline))
+			.border_color(tokens.color(ColorRole::AttentionInk))
+			.text_color(tokens.color(ColorRole::AttentionInk))
+			.text_size(tokens.font_size(TextRamp::Micro))
+			.line_height(tokens.line_height(TextRamp::Micro))
+			.font_weight(tokens.font_weight(TextWeight::Medium))
+			.cursor(CursorStyle::PointingHand)
+			.child(secondary_action),
+	);
+
+	let left_content = div()
+		.flex()
+		.flex_row()
+		.items_center()
+		.gap(tokens.spacing(SpacingStep::S2))
+		.min_w_0()
+		.child(
+			div()
+				.text_size(tokens.font_size(TextRamp::Micro))
+				.text_color(tokens.color(ColorRole::AttentionInk))
+				.child("⚠"),
+		)
+		.child(div().min_w_0().truncate().child(sanitized));
+
 	div()
+		.h(px(attention_strip_height(tokens)))
+		.overflow_hidden()
 		.w_full()
 		.flex()
 		.flex_row()
 		.items_center()
-		.justify_center()
-		.py(tokens.spacing(SpacingStep::S2))
+		.justify_between()
 		.px(tokens.spacing(SpacingStep::S4))
 		.bg(tokens.color(ColorRole::AttentionFill))
 		.border_b(tokens.stroke(StrokeStep::Hairline))
@@ -258,12 +365,6 @@ pub fn attention_strip(notice: &str, tokens: &TokenSet) -> Div {
 		.line_height(tokens.line_height(TextRamp::Micro))
 		.font_weight(tokens.font_weight(TextWeight::Medium))
 		.text_color(tokens.color(ColorRole::AttentionInk))
-		.child(
-			// The strip is one line and the window takes
-			// `attention_strip_height` off the top for it, so a notice longer
-			// than the window is wide has to end rather than wrap: wrapped, it
-			// drew over the surface under a strip that had reserved room for
-			// one line of it.
-			div().min_w_0().truncate().child(notice.to_owned()),
-		)
+		.child(left_content)
+		.child(action_row)
 }

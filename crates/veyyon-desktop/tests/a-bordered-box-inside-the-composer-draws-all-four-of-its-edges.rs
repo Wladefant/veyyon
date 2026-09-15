@@ -225,7 +225,7 @@ fn every_bordered_box_inside_the_composer_float_draws_four_edges_and_four_corner
 		for spec in &bordered {
 			if spec.bounds != outer.bounds
 				&& contains(outer.bounds, spec.bounds)
-				&& !held.iter().any(|seen| *seen == spec.bounds)
+				&& !held.contains(&spec.bounds)
 			{
 				held.push(spec.bounds);
 			}
@@ -246,7 +246,7 @@ fn every_bordered_box_inside_the_composer_float_draws_four_edges_and_four_corner
 	let held = clipped(float);
 	let inside: Vec<&&LayoutBox> = bordered
 		.iter()
-		.filter(|spec| held.iter().any(|seen| *seen == spec.bounds))
+		.filter(|spec| held.contains(&spec.bounds))
 		.collect();
 	assert!(
 		held.len() >= 2,

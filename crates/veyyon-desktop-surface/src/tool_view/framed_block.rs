@@ -1,6 +1,6 @@
 //! Native GPUI renderer for `FramedBlockView` (§contracts/view).
 
-use veyyon_desktop_kit::{ColorRole, RadiusStep, SpacingStep, TokenSet};
+use veyyon_desktop_kit::{ColorRole, RadiusStep, SpacingStep, StrokeStep, TokenSet};
 use veyyon_desktop_model::tool_view::{FramedBlockView, ViewContentsKind, ViewStatus};
 use veyyon_gpui::{Div, ParentElement, Styled, div};
 
@@ -39,6 +39,7 @@ pub fn render_framed_block(
 	};
 
 	let pad_y = tokens.spacing(SpacingStep::S2);
+	let stroke_px = tokens.stroke(StrokeStep::Hairline);
 
 	let mut container = div()
 		.flex()
@@ -46,7 +47,7 @@ pub fn render_framed_block(
 		.w_full()
 		.min_w_0()
 		.bg(bg_color)
-		.border_1()
+		.border(stroke_px)
 		.border_color(border_color)
 		.rounded(tokens.radius(RadiusStep::Md))
 		.px(pad_x)
@@ -60,7 +61,7 @@ pub fn render_framed_block(
 				div()
 					.w_full()
 					.my(tokens.spacing(SpacingStep::S2))
-					.border_b_1()
+					.border_b(stroke_px)
 					.border_color(tokens.color(ColorRole::Hairline)),
 			);
 		}

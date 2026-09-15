@@ -232,7 +232,7 @@ impl ControlStates {
 /// capability renders at rest and attaches on activation rather than drawing
 /// disabled.
 #[must_use]
-pub fn availability_style(av: &Availability, tokens: &TokenSet) -> (f32, CursorStyle, bool) {
+pub const fn availability_style(av: &Availability, tokens: &TokenSet) -> (f32, CursorStyle, bool) {
 	let gate = tokens.gate();
 	match av {
 		Availability::Enabled | Availability::Unknown => (1.0, CursorStyle::PointingHand, true),

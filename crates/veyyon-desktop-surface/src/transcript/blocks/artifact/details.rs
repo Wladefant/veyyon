@@ -4,10 +4,8 @@
 //! the actions on it. Which facts those are is decided in `facts`, so a frame
 //! never restates the row that opened it.
 
-use std::time::Instant;
-
 use veyyon_desktop_kit::{
-	ColorRole, Icon, IconName, IconSize, RadiusStep, SpacingStep, StrokeStep, TextRamp, TokenSet,
+	ColorRole, Icon, IconName, IconSize, RadiusStep, SpacingStep, TextRamp, TokenSet,
 	controls::button::{Button, ButtonSize},
 	state::InteractiveState,
 };
@@ -60,7 +58,7 @@ pub fn render_artifact_details(
 	reduced_motion: bool,
 	viewport_state: &TranscriptViewportState,
 	view: Option<&WeakEntity<ShellView>>,
-	has_error: bool,
+	_has_error: bool,
 ) -> Div {
 	let state_collapse = viewport_state.clone();
 	let motion_tokens_collapse = motion_tokens.clone();
@@ -72,14 +70,8 @@ pub fn render_artifact_details(
 		.w_full()
 		.mt(tokens.spacing(SpacingStep::S2))
 		.p(tokens.spacing(SpacingStep::S3))
-		.bg(tokens.color(ColorRole::Canvas))
+		.bg(tokens.color(ColorRole::Inset))
 		.rounded(tokens.radius(RadiusStep::Md))
-		.border(tokens.stroke(StrokeStep::Hairline))
-		.border_color(if has_error {
-			tokens.color(ColorRole::ErrorFill)
-		} else {
-			tokens.color(ColorRole::Hairline)
-		})
 		.gap(tokens.spacing(SpacingStep::S2));
 
 	let image_status = artifact_image_status(artifact);
@@ -145,7 +137,7 @@ pub fn render_artifact_details(
 					false,
 					&motion_tokens_collapse,
 					reduced_motion,
-					Instant::now(),
+					cx.background_executor().now(),
 				);
 				if let Some(v) = &view_collapse {
 					let _ = v.update(cx, |_view, cx| cx.notify());

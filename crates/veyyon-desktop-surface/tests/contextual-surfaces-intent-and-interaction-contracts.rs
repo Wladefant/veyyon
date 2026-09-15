@@ -19,11 +19,11 @@
 //! - Remote host daemon communication failure outside the surface layer.
 
 use veyyon_desktop_model::{
-	Capability, CapabilityMap, CapabilityStatus, ChangeScope, DiffMode,
+	ChangeScope, ChangeStatus, DiffMode,
 	text::terminal::{SelectionKind, TerminalSelection},
 };
 use veyyon_desktop_surface::{
-	Card, DiffStatus, Intent, PanelContent, PanelTab, ShellState, TreeContent, TreeStatus,
+	Card, DiffStatus, Intent, PanelContent, ShellState, TreeContent, TreeStatus, diff::parse_diff,
 	drawer::keystroke_to_terminal_bytes,
 };
 
@@ -210,36 +210,62 @@ fn panel_content_truthful_empty_and_unavailable_reason() {
 }
 
 #[test]
-fn panel_tabs_derived_strictly_from_host_capabilities() {
-	let mut caps = CapabilityMap::new();
+fn diff_parser_emits_conflicted_and_untracked_statuses() {
+	let conflict_diff = "\
+diff --cc conflict.rs
+index 1234567,7654321..0000000
+--- a/conflict.rs
++++ b/conflict.rs
+@@@ -1,1 -1,1 +1,5 @@@
+++<<<<<<< HEAD
+ +local
+++=======
++ remote
+++>>>>>>> branch
+";
+	let files = parse_diff(conflict_diff);
+	assert_eq!(files.len(), 1);
+	assert_eq!(files[0].path, "conflict.rs");
+	assert_eq!(files[0].status, ChangeStatus::Conflicted);
 
-	// Initial: all unavailable -> no tabs
-	let diff_avail = matches!(caps.get(Capability::Changes), CapabilityStatus::Available);
-	let files_avail = matches!(caps.get(Capability::Files), CapabilityStatus::Available);
-	assert!(!diff_avail);
-	assert!(!files_avail);
+	let marker_conflict = "\
+diff --git a/foo.rs b/foo.rs
+--- a/foo.rs
++++ b/foo.rs
+@@ -1,1 +1,5 @@
++<<<<<<< HEAD
++local
++=======
++remote
++>>>>>>> branch
+";
+	let files = parse_diff(marker_conflict);
+	assert_eq!(files.len(), 1);
+	assert_eq!(files[0].path, "foo.rs");
+	assert_eq!(files[0].status, ChangeStatus::Conflicted);
 
-	// Changes available -> only Diff tab
-	caps.set(Capability::Changes, CapabilityStatus::Available);
-	let mut tabs = Vec::new();
-	if matches!(caps.get(Capability::Changes), CapabilityStatus::Available) {
-		tabs.push(PanelTab::Diff);
-	}
-	if matches!(caps.get(Capability::Files), CapabilityStatus::Available) {
-		tabs.push(PanelTab::File);
-		tabs.push(PanelTab::Tree);
-	}
-	assert_eq!(tabs, vec![PanelTab::Diff]);
+	let untracked_diff = "\
+diff --git a/new_untracked.rs b/new_untracked.rs
+untracked file mode 100644
+--- /dev/null
++++ b/new_untracked.rs
+@@ -0,0 +1,2 @@
++fn untracked() {}
+";
+	let files = parse_diff(untracked_diff);
+	assert_eq!(files.len(), 1);
+	assert_eq!(files[0].path, "new_untracked.rs");
+	assert_eq!(files[0].status, ChangeStatus::Untracked);
 
-	// Files also available -> Diff, File, Tree
-	caps.set(Capability::Files, CapabilityStatus::Available);
-	let mut tabs = Vec::new();
-	if matches!(caps.get(Capability::Changes), CapabilityStatus::Available) {
-		tabs.push(PanelTab::Diff);
-	}
-	if matches!(caps.get(Capability::Files), CapabilityStatus::Available) {
-		tabs.push(PanelTab::File);
-		tabs.push(PanelTab::Tree);
-	}
-	assert_eq!(tabs, vec![PanelTab::Diff, PanelTab::File, PanelTab::Tree]);
+	let untracked_header_diff = "\
+diff --untracked a/script.sh
+--- /dev/null
++++ b/script.sh
+@@ -0,0 +1,1 @@
++echo untracked
+";
+	let files = parse_diff(untracked_header_diff);
+	assert_eq!(files.len(), 1);
+	assert_eq!(files[0].path, "script.sh");
+	assert_eq!(files[0].status, ChangeStatus::Untracked);
 }

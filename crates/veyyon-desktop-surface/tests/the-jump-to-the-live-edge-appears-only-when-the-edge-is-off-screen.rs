@@ -38,7 +38,7 @@ const WIDTH: u32 = 1280;
 const HEIGHT: u32 = 800;
 
 /// Enough turns that the transcript column overflows the window.
-const OVERFLOWING: usize = 24;
+const OVERFLOWING: usize = 64;
 
 /// A third of the window: the pill is a small button, and anything wider than
 /// this is a row or a panel that changed with the scroll rather than the pill.
@@ -60,6 +60,7 @@ fn state(count: usize) -> ShellState {
 	ShellState {
 		title: "live edge".to_owned(),
 		transcript: turns(count),
+		current_id: 1,
 		connection: ConnectionPhase::Attached,
 		..ShellState::default()
 	}

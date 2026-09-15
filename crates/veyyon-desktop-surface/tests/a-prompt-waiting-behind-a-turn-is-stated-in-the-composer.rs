@@ -81,7 +81,9 @@ fn rows_at(captured: &Captured, size: f32) -> usize {
 	let mut tops: Vec<f32> = captured
 		.text_runs
 		.iter()
-		.filter(|run| (f32::from(run.font_size) - size).abs() < 0.5)
+		.filter(|run| {
+			(f32::from(run.font_size) - size).abs() < 0.5 && f32::from(run.bounds.origin.x) >= 300.0
+		})
 		.map(|run| f32::from(run.bounds.origin.y))
 		.collect();
 	tops.sort_by(f32::total_cmp);
@@ -95,7 +97,9 @@ fn runs_at(captured: &Captured, size: f32) -> usize {
 	captured
 		.text_runs
 		.iter()
-		.filter(|run| (f32::from(run.font_size) - size).abs() < 0.5)
+		.filter(|run| {
+			(f32::from(run.font_size) - size).abs() < 0.5 && f32::from(run.bounds.origin.x) >= 300.0
+		})
 		.count()
 }
 

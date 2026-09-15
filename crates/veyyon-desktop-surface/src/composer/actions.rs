@@ -48,7 +48,7 @@ pub fn turn_action_controls(
 	cx: &Context<ShellView>,
 ) -> impl IntoElement {
 	let sid = SessionId::from(session_id.to_string());
-	let (primary, _) = primary_action(turn, has_text);
+	let primary = primary_action(turn, has_text);
 	let primary_id = turn.primary_surface(has_text, &sid);
 	let av = controls.availability(&primary_id);
 	let (opacity, cursor, allowed) = availability_style(&av, tokens);

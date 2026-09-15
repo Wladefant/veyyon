@@ -4,7 +4,7 @@ use veyyon_gpui::{App, IntoElement, RenderOnce, SharedString, Window, div, prelu
 
 use crate::{
 	state::BadgeVariant,
-	token_set::{RadiusStep, SpacingStep, TextRamp, TintRole, TokenSet},
+	token_set::{RadiusStep, SpacingStep, StrokeStep, TextRamp, TintRole, TokenSet},
 };
 
 /// Status chip badge indicator with semantic tint styling.
@@ -46,24 +46,24 @@ impl RenderOnce for Badge {
 		let pad_x = tokens.spacing(SpacingStep::S2);
 		let pad_y = tokens.spacing(SpacingStep::S1);
 		let font_size = tokens.font_size(TextRamp::Micro);
+		let line_h = tokens.line_height(TextRamp::Micro);
+		let stroke = tokens.stroke(StrokeStep::Hairline);
+		let border_color = border.unwrap_or_else(|| tokens.transparent());
 
-		let mut el = div()
+		div()
 			.bg(bg)
 			.rounded(radius)
+			.border(stroke)
+			.border_color(border_color)
 			.px(pad_x)
 			.py(pad_y)
 			.text_size(font_size)
+			.line_height(line_h)
 			.text_color(fg)
 			.max_w_full()
 			.overflow_hidden()
 			.whitespace_nowrap()
 			.truncate()
-			.child(self.label);
-
-		if let Some(b) = border {
-			el = el.border_1().border_color(b);
-		}
-
-		el
+			.child(self.label)
 	}
 }

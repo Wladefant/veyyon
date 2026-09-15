@@ -76,7 +76,7 @@ fn test_load_shipped_tokens() {
 	assert_eq!(tokens.surface.queue.card_px, 78.0);
 	assert_eq!(tokens.surface.queue.line_px, 36.0);
 	assert_eq!(tokens.surface.queue.content_inset, 8.0); // "s4" -> 8
-	assert_eq!(tokens.surface.queue.row_inset, 10.0); // "s5" -> 10
+	assert_eq!(tokens.surface.queue.row_inset, 8.0); // "s4" -> 8
 	assert_eq!(tokens.surface.queue.footer_height_px, 36.0);
 	assert_eq!(tokens.surface.queue.footer_inset, 8.0); // "s4" -> 8
 	assert_eq!(tokens.surface.queue.gear_size_px, 16.0);

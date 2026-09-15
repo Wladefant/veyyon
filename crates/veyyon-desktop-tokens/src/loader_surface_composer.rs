@@ -92,7 +92,7 @@ pub fn load_composer(
 		opening_line_max_width_px: opening.number("max_width_px")?,
 		opening_line_type_size: opening.type_size("type_size", scale)?,
 		opening_line_weight: opening.weight("weight", scale)?,
-		attachment_card_height_px: attachments.number("card_height_px")?,
+		attachment_card_height_px: attachments.spacing("card_height_px", scale)?,
 		attachment_card_max_width_px: attachments.number("card_max_width_px")?,
 		attachment_card_radius: attachments.radius("card_radius", scale)?,
 	})

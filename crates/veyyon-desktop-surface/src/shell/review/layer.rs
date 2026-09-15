@@ -1,8 +1,6 @@
 //! Review thread popover composed from the shared editor, buttons and float
 //! primitive.
 
-use std::time::Instant;
-
 use veyyon_desktop_kit::{
 	AnchorCorner, Button, ButtonSize, ColorRole, Popover, SpacingStep, TextField, TextRamp,
 };
@@ -33,7 +31,7 @@ impl ShellView {
 		}
 		let frame = self.review.motion.sample(
 			self.review.open,
-			Instant::now(),
+			cx.background_executor().now(),
 			&self.installed.motion,
 			self.rail_motion.is_reduced_motion(),
 		);
@@ -47,7 +45,7 @@ impl ShellView {
 		let tokens = &self.installed.set;
 		let palette = &self.installed.surface.palette;
 		let margin = tokens.spacing(SpacingStep::S2);
-		let inset = tokens.spacing(SpacingStep::S4) * 2.0 + px(2.0);
+		let inset = tokens.spacing(SpacingStep::S4) * 2.0 + tokens.spacing(SpacingStep::S1);
 		let viewport = window.viewport_size();
 		let size = Size {
 			width:  px(palette.anchored_width_px).min(viewport.width - margin * 2.0),
@@ -150,7 +148,12 @@ impl ShellView {
 			list = list.child(row);
 		}
 		if count == 0 {
-			list = list.child("No local review threads");
+			list = list.child(crate::right_panel::empty_state(
+				"review-threads-empty",
+				"No local review threads",
+				"Click a line in the diff view to start a review thread",
+				tokens,
+			));
 		}
 		let mut body = div()
 			.w(size.width - inset)

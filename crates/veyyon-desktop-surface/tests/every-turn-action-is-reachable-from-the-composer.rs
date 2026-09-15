@@ -29,7 +29,7 @@ use veyyon_desktop_kit::load_bundled_tokens;
 use veyyon_desktop_model::QueueMode;
 use veyyon_desktop_surface::{
 	Intent, Overlay, PaletteMode,
-	composer::{PrimaryAction, SecondaryAction, TurnPhase, primary_action},
+	composer::{PrimaryAction, TurnPhase, primary_action},
 	fixture,
 };
 use veyyon_gpui::{Pixels, Point};
@@ -45,22 +45,19 @@ fn every_turn_action_is_reachable_and_dispatches_expected_intent() {
 		};
 
 		render_session(state, seed_text, 1440, 900, |session| {
-			let (primary, secondary) = session
+			let primary = session
 				.update(|view, _win, _cx| primary_action(&view.state().turn, view.has_composer_text()))
 				.expect("primary action resolves");
 
 			match phase_kind {
 				TurnPhaseDiscriminant::Idle => {
 					assert_eq!(primary, PrimaryAction::Send);
-					assert_eq!(secondary, None);
 				},
 				TurnPhaseDiscriminant::RunningSteer => {
 					assert_eq!(primary, PrimaryAction::Steer);
-					assert_eq!(secondary, Some(SecondaryAction::Queue));
 				},
 				TurnPhaseDiscriminant::RunningQueue => {
 					assert_eq!(primary, PrimaryAction::Queue);
-					assert_eq!(secondary, Some(SecondaryAction::Steer));
 				},
 				TurnPhaseDiscriminant::QuestionPendingChoice
 				| TurnPhaseDiscriminant::QuestionPendingFreeText => {
@@ -68,15 +65,12 @@ fn every_turn_action_is_reachable_and_dispatches_expected_intent() {
 				},
 				TurnPhaseDiscriminant::ApprovalPending => {
 					assert_eq!(primary, PrimaryAction::Approve);
-					assert_eq!(secondary, Some(SecondaryAction::ApprovalChoices));
 				},
 				TurnPhaseDiscriminant::PlanPendingEmpty => {
 					assert_eq!(primary, PrimaryAction::Accept);
-					assert_eq!(secondary, Some(SecondaryAction::AcceptInNewSession));
 				},
 				TurnPhaseDiscriminant::PlanPendingWithText => {
 					assert_eq!(primary, PrimaryAction::Refine);
-					assert_eq!(secondary, None);
 				},
 			}
 
@@ -158,12 +152,10 @@ fn set_queue_mode_round_trips_and_moves_primary_slot() {
 
 	render_session(state, Some("payload"), 1440, 900, |session| {
 		// Initial state: Steer is primary
-		let (p1, s1) = session
+		let p1 = session
 			.update(|view, _win, _cx| primary_action(&view.state().turn, view.has_composer_text()))
 			.expect("action resolves");
 		assert_eq!(p1, PrimaryAction::Steer);
-		assert_eq!(s1, Some(SecondaryAction::Queue));
-
 		// Dispatch SetQueueMode(Queue)
 		session
 			.update(|view, _win, cx| {
@@ -171,12 +163,10 @@ fn set_queue_mode_round_trips_and_moves_primary_slot() {
 			})
 			.expect("set queue mode dispatches");
 
-		let (p2, s2) = session
+		let p2 = session
 			.update(|view, _win, _cx| primary_action(&view.state().turn, view.has_composer_text()))
 			.expect("action resolves");
 		assert_eq!(p2, PrimaryAction::Queue);
-		assert_eq!(s2, Some(SecondaryAction::Steer));
-
 		// Dispatch SetQueueMode(Steer)
 		session
 			.update(|view, _win, cx| {
@@ -184,11 +174,10 @@ fn set_queue_mode_round_trips_and_moves_primary_slot() {
 			})
 			.expect("set queue mode dispatches");
 
-		let (p3, s3) = session
+		let p3 = session
 			.update(|view, _win, _cx| primary_action(&view.state().turn, view.has_composer_text()))
 			.expect("action resolves");
 		assert_eq!(p3, PrimaryAction::Steer);
-		assert_eq!(s3, Some(SecondaryAction::Queue));
 	});
 }
 
@@ -373,5 +362,34 @@ fn composer_height_respects_rest_height_and_growth_cap() {
 			exp_layout_h <= growth_cap + 1.0,
 			"expanded layout height {exp_layout_h} must not exceed growth cap {growth_cap}"
 		);
+	});
+}
+#[test]
+fn secondary_actions_are_reachable_through_channels() {
+	let mut state = fixture::populated();
+	state.turn = TurnPhase::Running { queue_mode: QueueMode::Steer };
+	state.composer.queue_mode = QueueMode::Steer;
+
+	render_session(state, Some("test instructions"), 1440, 900, |session| {
+		// 1. Alternate mode submission (Cmd/Ctrl Enter) while in Steer mode queues
+		session
+			.update(|view, _win, cx| view.submit_alternate_turn_action(cx))
+			.expect("alternate turn action submits");
+		let pending = session
+			.update(|view, _win, _cx| view.pending().to_vec())
+			.expect("pending intents read");
+		assert!(matches!(pending.first(), Some(Intent::Queue(t)) if t == "test instructions"));
+
+		// 2. Alternate mode submission while in Queue mode steers
+		session
+			.update(|view, _win, cx| {
+				view.dispatch(Intent::SetQueueMode(QueueMode::Queue), cx);
+				view.submit_alternate_turn_action(cx);
+			})
+			.expect("alternate turn action submits");
+		let pending2 = session
+			.update(|view, _win, _cx| view.pending().to_vec())
+			.expect("pending intents read");
+		assert!(matches!(pending2.last(), Some(Intent::Steer(t)) if t == "test instructions"));
 	});
 }

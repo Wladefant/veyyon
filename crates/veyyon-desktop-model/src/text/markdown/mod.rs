@@ -24,7 +24,38 @@ mod inline;
 mod mend;
 mod veil;
 
+/// A fence opening or closing a code block, which is a delimiter and no text.
+#[must_use]
+pub fn is_fence(line: &str) -> bool {
+	let body = line.trim_start();
+	body.starts_with("```") || body.starts_with("~~~")
+}
+
+/// The count of contiguous bytes of `delimiter` starting at `at`.
+#[must_use]
+pub fn run_len(bytes: &[u8], at: usize, delimiter: u8) -> usize {
+	bytes[at..]
+		.iter()
+		.take_while(|byte| **byte == delimiter)
+		.count()
+}
+
 pub use self::{
 	mend::{OpenShape, mend, open_shapes},
 	veil::settled_prefix_len,
 };
+
+#[cfg(test)]
+mod tests {
+	use super::{is_fence, run_len};
+
+	#[test]
+	fn fence_and_run_len_behave_consistently() {
+		assert!(is_fence("```rust"));
+		assert!(is_fence("   ~~~sh"));
+		assert!(!is_fence("not a fence"));
+		assert_eq!(run_len(b"```code", 0, b'`'), 3);
+		assert_eq!(run_len(b"__bold__", 0, b'_'), 2);
+		assert_eq!(run_len(b"no delimiter", 0, b'`'), 0);
+	}
+}

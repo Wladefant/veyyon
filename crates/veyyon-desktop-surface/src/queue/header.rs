@@ -6,7 +6,7 @@
 
 use veyyon_desktop_kit::{
 	ColorRole, RadiusStep, SpacingStep, TextRamp, TextWeight, TokenSet,
-	controls::{ButtonSize, IconButton, IconButtonVariant, control_metrics},
+	controls::{IconButton, IconButtonVariant},
 	icons::{Icon, IconName, IconSize},
 	state::InteractiveState,
 };
@@ -46,7 +46,7 @@ pub fn queue_nav_header(
 			.flex_row()
 			.items_center()
 			.justify_between()
-			.gap(tokens.spacing(SpacingStep::S1))
+			.gap(tokens.spacing(SpacingStep::S2))
 			.child(
 				div()
 					.flex_1()
@@ -54,7 +54,7 @@ pub fn queue_nav_header(
 					.flex()
 					.flex_row()
 					.items_center()
-					.gap(tokens.spacing(SpacingStep::S1))
+					.gap(tokens.spacing(SpacingStep::S2))
 					.child(
 						IconButton::new("queue-search-active-icon", IconName::Search)
 							.size(IconSize::Size12)
@@ -136,14 +136,14 @@ pub fn queue_nav_header(
 	div()
 		.id("queue-nav-header")
 		.flex_shrink_0()
-		.h(px(32.0))
+		.h(tokens.spacing(SpacingStep::S11))
 		.mx(px(geometry.row_inset))
 		.mb(px(geometry.section_gap_below))
 		.flex()
 		.flex_row()
 		.items_center()
 		.justify_between()
-		.gap(tokens.spacing(SpacingStep::S1))
+		.gap(tokens.spacing(SpacingStep::S2))
 		.child(search_content)
 		.child(new_btn_el)
 }
@@ -174,10 +174,9 @@ pub fn section_header(
 	} else {
 		IconName::ChevronDown
 	};
-	let chevron_size = control_metrics(ButtonSize::Small, tokens).square;
 	let chevron = div()
-		.w(chevron_size)
-		.h(chevron_size)
+		.w(tokens.spacing(SpacingStep::S7))
+		.h(tokens.spacing(SpacingStep::S7))
 		.flex_shrink_0()
 		.flex()
 		.items_center()
@@ -185,7 +184,7 @@ pub fn section_header(
 		.child(
 			Icon::new(chevron_icon)
 				.size(IconSize::Size12)
-				.color(tokens.color(ColorRole::Secondary)),
+				.color(tokens.color(ColorRole::Muted)),
 		);
 
 	if let Some(weak) = view {
@@ -195,7 +194,7 @@ pub fn section_header(
 				let _ = weak.update(app, |view, cx| {
 					view
 						.rail_motion_mut()
-						.toggle_collapsed(section, std::time::Instant::now());
+						.toggle_collapsed(section, cx.background_executor().now());
 					cx.notify();
 				});
 			});
@@ -216,6 +215,7 @@ pub fn section_header(
 			div()
 				.text_size(tokens.font_size(TextRamp::Micro))
 				.line_height(tokens.line_height(TextRamp::Micro))
+				.font_weight(tokens.font_weight(TextWeight::Regular))
 				.text_color(tokens.color(ColorRole::Placeholder))
 				.child(count.to_string()),
 		)

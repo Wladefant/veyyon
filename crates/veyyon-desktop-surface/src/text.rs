@@ -19,6 +19,7 @@
 //! own byte and stays.
 
 use veyyon_desktop_kit::text::inline;
+use veyyon_desktop_model::text::markdown::is_fence;
 
 /// The markdown's lines, flattened.
 ///
@@ -32,23 +33,6 @@ pub fn plain_lines(markdown: &str) -> Vec<String> {
 		.filter(|line| !is_fence(line))
 		.map(plain)
 		.collect()
-}
-
-/// The first line with text on it, flattened, or empty when there is none.
-#[must_use]
-pub fn plain_line(markdown: &str) -> String {
-	markdown
-		.lines()
-		.filter(|line| !is_fence(line))
-		.map(plain)
-		.find(|line| !line.trim().is_empty())
-		.unwrap_or_default()
-}
-
-/// A fence opening or closing a code block, which is a delimiter and no text.
-fn is_fence(line: &str) -> bool {
-	let trimmed = line.trim_start();
-	trimmed.starts_with("```") || trimmed.starts_with("~~~")
 }
 
 /// One line, with the block markers off its front and the inline markers out

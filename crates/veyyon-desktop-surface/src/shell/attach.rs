@@ -53,7 +53,11 @@ impl ShellView {
 	/// The composer's window-owned state, for the render.
 	#[must_use]
 	pub fn composer_local(&self) -> ComposerLocal<'_> {
-		ComposerLocal { dropping: self.attach.dropping, notice: self.attach.notice.as_deref() }
+		ComposerLocal {
+			dropping: self.attach.dropping,
+			focused:  false,
+			notice:   self.attach.notice.as_deref(),
+		}
 	}
 
 	/// Records whether files are over the composer; `true` when that changed.

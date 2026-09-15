@@ -190,17 +190,36 @@ impl TranscriptViewportState {
 		let mut inner = self.0.borrow_mut();
 		let key = (turn, block);
 		if let Some(motion) = inner.reveal_motions.get_mut(&key) {
-			motion.sample(now)
+			let (progress, settled) = motion.sample(now);
+			inner.reveal_progress.insert(key, progress);
+			(progress, settled)
 		} else {
-			(
-				if inner.expanded_blocks.contains(&key) {
-					1.0
-				} else {
-					0.0
-				},
-				true,
-			)
+			let progress = if inner.expanded_blocks.contains(&key) {
+				1.0
+			} else {
+				0.0
+			};
+			inner.reveal_progress.insert(key, progress);
+			(progress, true)
 		}
+	}
+
+	/// Returns the clip fraction and measured natural height of reveal content
+	/// using evaluated progress, without sampling or mutating motion during
+	/// render.
+	#[must_use]
+	pub fn current_reveal_frame(&self, turn: usize, block: usize) -> (f32, f32) {
+		let inner = self.0.borrow();
+		let key = (turn, block);
+		let progress = if let Some(&p) = inner.reveal_progress.get(&key) {
+			p
+		} else if inner.expanded_blocks.contains(&key) {
+			1.0
+		} else {
+			0.0
+		};
+		let height = inner.reveal_heights.get(&key).copied().unwrap_or(0.0);
+		(progress.clamp(0.0, 1.0), height)
 	}
 
 	/// Returns the clip fraction and measured natural height of reveal content.
@@ -259,14 +278,17 @@ impl TranscriptViewportState {
 		for turn in inner.pending_remeasure.drain() {
 			list.remeasure_items(turn..turn + 1);
 		}
-		for ((turn, _), motion) in &mut inner.reveal_motions {
+		let mut sampled_progress = Vec::with_capacity(inner.reveal_motions.len());
+		for ((turn, block), motion) in &mut inner.reveal_motions {
 			let was_active = !motion.is_settled();
-			let settled = motion.sample(now).1;
+			let (progress, settled) = motion.sample(now);
+			sampled_progress.push(((*turn, *block), progress));
 			if was_active || !settled {
 				list.remeasure_items(*turn..*turn + 1);
 			}
 			active |= !settled;
 		}
+		inner.reveal_progress.extend(sampled_progress);
 		active
 	}
 }

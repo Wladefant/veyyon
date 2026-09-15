@@ -42,11 +42,6 @@ pub(super) fn dismiss_topmost(
 	window: &mut Window,
 	cx: &mut Context<ShellView>,
 ) {
-	if view.state.close_tab_prompt.is_some() {
-		view.answer_close_tab(false, window, cx);
-		cx.stop_propagation();
-		return;
-	}
 	if view.review_is_open() {
 		view.close_review(window, cx);
 		cx.stop_propagation();

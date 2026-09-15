@@ -31,7 +31,7 @@ row_inset = "{}"
 [geometry.row_heights]
 card_px = {}
 line_px = {}
-section_header_px = {}
+section_header_px = "{}"
 
 [geometry.card_layout]
 padding_top = "{}"
@@ -39,9 +39,9 @@ padding_bottom = "{}"
 padding_horizontal = "{}"
 header_gap = "{}"
 body_gap = "{}"
-badge_height_px = {}
-title_height_px = {}
-subtitle_height_px = {}
+badge_height_px = "{}"
+title_height_px = "{}"
+subtitle_height_px = "{}"
 
 [geometry.section_layout]
 gap_above = "{}"
@@ -50,7 +50,7 @@ gap_below = "{}"
 [geometry.footer]
 height_px = {}
 inset = "{}"
-gear_size_px = {}
+gear_size_px = "{}"
 
 [geometry.limits]
 max_hover_actions = {}
@@ -66,20 +66,20 @@ parked_initial_page_size = {}
 		step_spacing(s, q.row_inset),
 		q.card_px as i64,
 		q.line_px as i64,
-		q.section_header_px as i64,
+		step_spacing(s, q.section_header_px),
 		step_spacing(s, q.card_padding_top),
 		step_spacing(s, q.card_padding_bottom),
 		step_spacing(s, q.card_padding_horizontal),
 		step_spacing(s, q.card_header_gap),
 		step_spacing(s, q.card_body_gap),
-		q.card_badge_height as i64,
-		q.card_title_height as i64,
-		q.card_subtitle_height as i64,
+		step_spacing(s, q.card_badge_height),
+		step_spacing(s, q.card_title_height),
+		step_spacing(s, q.card_subtitle_height),
 		step_spacing(s, q.section_gap_above),
 		step_spacing(s, q.section_gap_below),
 		q.footer_height_px as i64,
 		step_spacing(s, q.footer_inset),
-		q.gear_size_px as i64,
+		step_spacing(s, q.gear_size_px),
 		q.max_hover_actions,
 		q.parked_initial_page_size
 	);
@@ -116,15 +116,15 @@ type_size = "{}"
 type_size = "{}"
 
 [chrome.collapsed]
-height_px = {}
-event_line_height_px = {}
+height_px = "{}"
+event_line_height_px = "{}"
 
 [chrome.caps]
 invoke_mono_pane_max_height_px = {}
 code_fence_max_height_px = {}
 image_max_height_px = {}
 plan_body_max_height_px = {}
-plan_fade_height_px = {}
+plan_fade_height_px = "{}"
 table_row_height_px = {}
 "#,
 		t.column_width_px as i64,
@@ -139,13 +139,13 @@ table_row_height_px = {}
 		step_radius(s, t.user_turn_radius_trailing),
 		step_type_size(s, &t.user_turn_type_size),
 		step_type_size(s, &t.assistant_turn_type_size),
-		t.chrome_collapsed_height_px as i64,
-		t.chrome_event_line_height_px as i64,
+		step_spacing(s, t.chrome_collapsed_height_px),
+		step_spacing(s, t.chrome_event_line_height_px),
 		t.chrome_invoke_mono_pane_max_height_px as i64,
 		t.chrome_code_fence_max_height_px as i64,
 		t.chrome_image_max_height_px as i64,
 		t.chrome_plan_body_max_height_px as i64,
-		t.chrome_plan_fade_height_px as i64,
+		step_spacing(s, t.chrome_plan_fade_height_px),
 		t.chrome_table_row_height_px as i64
 	);
 	write_file(path, &out)
@@ -198,7 +198,7 @@ type_size = "{}"
 weight = "{}"
 
 [attachments]
-card_height_px = {}
+card_height_px = "{}"
 card_max_width_px = {}
 card_radius = "{}"
 "#,
@@ -229,7 +229,7 @@ card_radius = "{}"
 		c.opening_line_max_width_px as i64,
 		step_type_size(s, &c.opening_line_type_size),
 		weight_str(c.opening_line_weight),
-		c.attachment_card_height_px as i64,
+		step_spacing(s, c.attachment_card_height_px),
 		c.attachment_card_max_width_px as i64,
 		step_radius(s, c.attachment_card_radius)
 	);
@@ -247,7 +247,7 @@ name = "surface_attached_cards"
 
 [stack]
 max_visible = {}
-overflow_collapsed_height_px = {}
+overflow_collapsed_height_px = "{}"
 
 [approval]
 padding = "{}"
@@ -263,10 +263,10 @@ option_row_height_px = {}
 [plan]
 padding = "{}"
 max_markdown_height_px = {}
-fade_height_px = {}
+fade_height_px = "{}"
 "#,
 		a.stack_max_visible,
-		a.stack_overflow_collapsed_height_px as i64,
+		step_spacing(s, a.stack_overflow_collapsed_height_px),
 		step_spacing(s, a.approval_padding),
 		step_type_size(s, &a.approval_tool_name_size),
 		weight_str(a.approval_tool_name_weight),
@@ -276,7 +276,7 @@ fade_height_px = {}
 		a.question_option_row_height_px as i64,
 		step_spacing(s, a.plan_padding),
 		a.plan_max_markdown_height_px as i64,
-		a.plan_fade_height_px as i64
+		step_spacing(s, a.plan_fade_height_px)
 	);
 	write_file(path, &out)
 }

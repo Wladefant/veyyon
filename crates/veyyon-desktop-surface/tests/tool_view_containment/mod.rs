@@ -42,6 +42,21 @@ const MARGIN: f32 = 260.0;
 /// that is the edge being drawn, not text escaping it.
 const EDGE_AA_PX: u32 = 2;
 
+/// The scale the block is captured at, which the bound below is a fraction of.
+const CAPTURE_SCALE: f32 = 2.0;
+
+/// Logical pixels a shaped run may exceed the block by before it counts as
+/// having escaped it, the shaped-width counterpart of `EDGE_AA_PX` above.
+///
+/// A line fitted to the block reports the width the shaper measured for it,
+/// which lands within half a device pixel of the box it was fitted to: at
+/// `CAPTURE_SCALE` the runs here come back 0.248px over a 520px block, 0.496
+/// of one device pixel, which cannot put a glyph outside it -- the raster
+/// sweep reads the painted pixels at device resolution and finds the margin
+/// clean. A line masked at the block's edge instead of truncated, which is
+/// what this bound is for, overshoots by whole glyphs and stays red.
+pub const SHAPED_SLACK_PX: f32 = 0.5 / CAPTURE_SCALE;
+
 /// Ground is sampled here, in device pixels in from the window's right and top
 /// edges: far from the block, so it is the window's own canvas.
 const GROUND_PROBE_PX: u32 = 4;
@@ -301,7 +316,12 @@ fn capture(view: ToolView) -> Captured {
 	let state = TranscriptViewportState::new();
 	render_view_captured(
 		&mut cx,
-		&RenderOptions { width: (BLOCK_W + MARGIN) as u32, height: 900, ..RenderOptions::default() },
+		&RenderOptions {
+			width: (BLOCK_W + MARGIN) as u32,
+			height: 900,
+			scale_factor: CAPTURE_SCALE,
+			..RenderOptions::default()
+		},
 		move |_window, app: &mut App| {
 			let installed = install_tokens(app, &bundled, &theme, Path::new("surface"))
 				.expect("the bundled tokens and theme install");
