@@ -9,7 +9,7 @@
 
 import type { AnyUiMetadata, SettingTab, SubmenuOption } from "@veyyon/settings";
 import { TERMINAL } from "@veyyon/tui";
-import { resolveEffort, withLegacyDefaultEffort } from "../../../../config/effort-resolver";
+import { bindSettingConditions } from "../../../../config/setting-conditions";
 import { Settings } from "../../../../config/settings";
 import {
 	getDefault,
@@ -17,12 +17,10 @@ import {
 	getPathsForTab,
 	getType,
 	getUi,
-	type SettingValue as SchemaSettingValue,
 	SETTING_TABS,
 	type SettingPath,
 	TAB_GROUPS,
 } from "../../../../config/settings-schema";
-import { AUTO_THINKING } from "../../../../thinking";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // UI Definition Types
@@ -233,74 +231,21 @@ export const ADVISOR_MODEL_SLOT = "advisor" as const;
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * Read a settings-backed visibility condition, treating an unreachable Settings singleton as "off".
+ * The visibility predicates, by the name a setting's `ui.condition` gives.
  *
- * Every condition below asks the live settings whether a feature is on, and `Settings.instance` throws
- * when there is no initialized settings context (a bare library caller, a unit test that renders a
- * definition without booting a session). Each condition used to carry its own `try`/`catch` returning
- * false, seven byte-identical copies of the same decision, so the reason lived nowhere and a change of
- * mind would have had to be made seven times.
- *
- * False means the conditional row is not shown, which is the same thing an off setting means. That is
- * safe here because it can only happen before settings exist, when there is no `/settings` screen to
- * show a row on; it is not a fallback for a setting that failed to read at runtime.
+ * Every settings-backed name is defined once in `config/setting-conditions.ts`,
+ * which the desktop settings page reads as well; a condition added for one
+ * front end used to leave the other drawing a knob whose feature is off. Bound
+ * here against `Settings.instance`, which throws when no settings context
+ * exists (a bare library caller, a unit test that renders a definition without
+ * booting a session); the shared predicate reads that as off, and there is no
+ * `/settings` screen to draw a row on before settings exist.
  */
-function whenSettingsSay(read: () => boolean): boolean {
-	try {
-		return read();
-	} catch {
-		return false;
-	}
-}
-
-const settingFlag = (path: SettingPath) => () => whenSettingsSay(() => Settings.instance.get(path) === true);
-const settingValue =
-	<P extends SettingPath>(path: P, check: (val: SchemaSettingValue<P>) => boolean) =>
-	() =>
-		whenSettingsSay(() => check(Settings.instance.get(path)));
-
 const CONDITIONS: Record<string, () => boolean> = {
+	// The one condition settings cannot answer: what this terminal resolved for
+	// its own graphics protocol. Every other name is the shared vocabulary.
 	hasImageProtocol: () => !!TERMINAL.imageProtocol,
-	advisorEnabled: settingFlag("advisor.enabled"),
-	argotEnabled: settingFlag("argot.enabled"),
-	autoQaEnabled: settingFlag("dev.autoqa"),
-	statusLineEnabled: settingFlag("statusLine.enabled"),
-	cpuLimitEnabled: settingValue("session.cpuLimitCores", v => v > 0),
-	writeBudgetEnabled: settingValue("session.writeBudgetGb", v => v > 0),
-	cacheRejectionReported: settingFlag("cache.reportRejection"),
-	agentPruneEnabled: settingFlag("agent.prune.enabled"),
-	agentSharedModel: settingFlag("agent.sharedModel"),
-	agentIsolationEnabled: settingValue("agent.isolation.mode", v => v !== "none"),
-	agentSoftRequestBudgetEnabled: settingValue("agent.softRequestBudget", v => (v ?? 0) > 0),
-	bashAutoBackgroundEnabled: settingFlag("bash.autoBackground.enabled"),
-	bashStallDetectionEnabled: settingFlag("bash.stallDetection.enabled"),
-	hindsightActive: settingValue("memory.backend", v => v === "hindsight"),
-	mnemopiActive: settingValue("memory.backend", v => v === "mnemopi"),
-	autolearnActive: settingFlag("autolearn.enabled"),
-	autoThinkingActive: () =>
-		whenSettingsSay(
-			() =>
-				resolveEffort({
-					defaultEffort: withLegacyDefaultEffort(
-						Settings.instance.isConfigured("defaultEffort") ? Settings.instance.get("defaultEffort") : undefined,
-						Settings.instance.get("defaultThinkingLevel"),
-					),
-				}).level === AUTO_THINKING,
-		),
-	planModeEnabled: settingValue("plan.enabled", Boolean),
-	speechEnabled: settingFlag("speech.enabled"),
-	sttEnabled: settingFlag("stt.enabled"),
-	unexpectedStopDetection: settingFlag("features.unexpectedStopDetection"),
-	lspEnabled: settingFlag("lsp.enabled"),
-	browserEnabled: settingFlag("browser.enabled"),
-	githubEnabled: settingFlag("github.enabled"),
-	launchEnabled: settingFlag("launch.enabled"),
-	githubCacheEnabled: settingValue(
-		"github.enabled",
-		v => v === true && Settings.instance.get("github.cache.enabled") === true,
-	),
-	secretsEnabled: settingFlag("secrets.enabled"),
-	prewalkEnabled: settingFlag("prewalk.enabled"),
+	...bindSettingConditions(() => Settings.instance),
 };
 
 // ═══════════════════════════════════════════════════════════════════════════

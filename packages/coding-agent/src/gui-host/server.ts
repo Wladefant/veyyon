@@ -4,6 +4,7 @@ import * as path from "node:path";
 import type { AuthStorage } from "@veyyon/ai";
 import { errorMessage, getAgentDir, logger } from "@veyyon/utils";
 import { discoverAuthStorage } from "../session/auth-broker-config";
+import { currentImageDisplayProbe, setImageDisplayProbe } from "../session/image-visibility";
 import { allActionHandlers } from "./actions";
 import { activeCwd, writeSessionList } from "./actions/active-session";
 import type { ActionContext, ReplyHelper } from "./actions/types";
@@ -113,6 +114,13 @@ export class GuiHostServer {
 	#authStorage: Promise<AuthStorage> | null;
 	#closeCall?: Promise<void>;
 	#pendingDisposals = new Set<Promise<void>>();
+	/**
+	 * What answered the image-display probe before this server installed its
+	 * own, so closing a server inside a process that also runs a terminal
+	 * front end hands the answer back rather than leaving none.
+	 */
+	#priorImageProbe: (() => boolean) | undefined;
+	#installedImageProbe = false;
 
 	constructor(options: GuiHostServerOptions = {}) {
 		this.#cwd = options.cwd ?? process.cwd();
@@ -175,6 +183,15 @@ export class GuiHostServer {
 		}
 
 		await promise;
+
+		// A tool result carrying a picture states to the model whether the user
+		// saw it, and the client decides that. The desktop decodes the payload
+		// and draws it in the window, so this host answers yes; an uninstalled
+		// probe means no, which told every desktop session's model that a
+		// screenshot it had just taken never reached the screen.
+		this.#priorImageProbe = currentImageDisplayProbe();
+		this.#installedImageProbe = true;
+		setImageDisplayProbe(() => true);
 	}
 
 	async #prepareUnixSocket(socketPath: string): Promise<void> {
@@ -413,6 +430,12 @@ export class GuiHostServer {
 			client.destroy();
 		}
 		this.#clients.clear();
+
+		if (this.#installedImageProbe) {
+			setImageDisplayProbe(this.#priorImageProbe);
+			this.#priorImageProbe = undefined;
+			this.#installedImageProbe = false;
+		}
 
 		if (this.#server) {
 			const { promise, resolve } = Promise.withResolvers<void>();

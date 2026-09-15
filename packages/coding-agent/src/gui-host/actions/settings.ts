@@ -5,6 +5,7 @@ import { atomicWriteFileSync } from "@veyyon/utils/atomic-write";
 import { syncYamlTextToSettings } from "@veyyon/utils/yaml-sync";
 import { YAML } from "bun";
 import { KEYBINDINGS, KeybindingsManager } from "../../config/keybindings";
+import { SETTING_CONDITIONS, type SettingCondition } from "../../config/setting-conditions";
 import { Settings } from "../../config/settings";
 import {
 	describeSettingTypeMismatch,
@@ -16,6 +17,22 @@ import {
 import { getAvailableThemes, isLightTheme } from "../../theme/theme";
 import type { KeybindingView, SettingEntryView, ThemesView, ThemeView } from "../wire";
 import type { ActionHandler, ActionHandlersMap } from "./types";
+
+/**
+ * The predicates the desktop resolves a setting's `ui.condition` through.
+ *
+ * The settings-backed names are the shared vocabulary, so a condition declared
+ * for the terminal reaches the desktop page as well. Only a capability a store
+ * cannot answer is stated here.
+ */
+export const DESKTOP_SETTING_CONDITIONS: Record<string, SettingCondition> = {
+	...SETTING_CONDITIONS,
+	// A terminal answers this from its graphics protocol. The desktop window
+	// decodes and draws the picture itself, so the answer is yes, and the row
+	// stays on the page: `terminal.showImages` still decides whether the
+	// picture is drawn and what the model is told about it.
+	hasImageProtocol: () => true,
+};
 
 /**
  * Every setting with its effective value, its provenance and the schema it is
@@ -32,15 +49,17 @@ export function dumpSettings(settings: Settings): Record<string, SettingEntryVie
 		try {
 			const value = settings.get(key as never);
 			const defaultValue = getDefault(key as never);
-			// JSON.stringify drops undefined fields, so an entry emitted with one
-			// arrives at the desktop missing value or default and fails to
-			// decode; treat an unresolvable pair as an unresolvable setting.
-			if (value === undefined || defaultValue === undefined) {
-				continue;
-			}
+			// A setting with no value and no default — a memory database path
+			// nobody set, an agent model chain left to the session's model —
+			// crosses as null rather than being dropped. `JSON.stringify` drops
+			// an undefined field, and an entry arriving without `value` or
+			// `default` fails to decode, so the pair used to cost the whole row:
+			// 13 settings the terminal screen offers had no row on the desktop
+			// page at all. Null decodes as `Value::Null`, which every control
+			// draws as empty.
 			dumped[key] = {
-				value,
-				default: defaultValue,
+				value: value ?? null,
+				default: defaultValue ?? null,
 				source: settings.getSource(key),
 				type: def.type,
 				label: ui?.label ?? null,
@@ -57,7 +76,10 @@ export function dumpSettings(settings: Settings): Record<string, SettingEntryVie
 				max: ui?.max ?? null,
 				global: ui?.scope === "global",
 				advanced: ui?.advanced === true,
-				hidden: ui?.hidden === true || "retiredBy" in def,
+				hidden:
+					ui?.hidden === true ||
+					"retiredBy" in def ||
+					(ui?.condition ? DESKTOP_SETTING_CONDITIONS[ui.condition]?.(settings) === false : false),
 			};
 		} catch {
 			// Ignore unresolvable settings
