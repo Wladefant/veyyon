@@ -825,7 +825,9 @@ The General page searches in place, and the page opens with the keyboard in
 its search field, so the first character typed narrows it. A query matches a
 setting's key, label, description or group, and the matches stay under their
 section headers. A query nothing matches states `No settings matching
-"<query>"` and `Clear or edit the search query`.
+"<query>"` and `Clear or edit the search query`, with the field still drawn
+above that row, so the query is edited rather than retyped from a page that
+took its own field away.
 
 The clear control at the end of the field empties the query. `Escape` empties
 it as well, and a second `Escape` leaves the page, so a press over a query
@@ -1009,6 +1011,13 @@ Use `proof/scenes/desktop-settings-field.sh` to type into a real General
 settings row and count the lit pixels of its value column at rest, while a new
 value is typed, and after the host has stored it. Record its other arm with
 `PROOF_BASE_REF=HEAD`, since the change is inside the executable alone.
+
+Use `proof/scenes/desktop-settings-query.sh` to type a query into the General
+page's search field and count the controls the body draws at rest, for a query
+matching one row, for one character more matching nothing, after a backspace
+over the empty page, and after the `Escape` that widens it. Record its other
+arm against a build whose query field is drawn from the query string, with
+`PROOF_BASE_REF=HEAD` and `PROOF_NATIVE_BEFORE_BINARY`.
 
 Use `proof/scenes/desktop-settings-column.sh` to press the leading third of a
 settings row's control column and then a queue card the open dialog covers. It

@@ -40,6 +40,10 @@ struct GeneralSettingsListStateInner {
 	visible_keys:      Vec<String>,
 	text_fingerprints: Vec<u64>,
 	query:             String,
+	/// True from a changed query until the sync that lists its rows, which
+	/// is where the offset is put back: the splice that lists them moves
+	/// whatever offset stood before it.
+	query_changed:     bool,
 }
 
 impl Default for GeneralSettingsListState {
@@ -58,6 +62,7 @@ impl GeneralSettingsListState {
 			visible_keys: Vec::new(),
 			text_fingerprints: Vec::new(),
 			query: String::new(),
+			query_changed: false,
 		})))
 	}
 
@@ -98,9 +103,22 @@ impl GeneralSettingsListState {
 		}
 	}
 
-	/// Sets the active search filter query.
+	/// Sets the active search filter query, and records that the next sync
+	/// puts the list back at its first row.
+	///
+	/// The rows a query leaves are a different set, so the offset the
+	/// operator scrolled to in the set before it anchors an item that is no
+	/// longer at that index: a page widened by a query that emptied it drew
+	/// rows from the middle of the schema rather than the ones it opened
+	/// with. The offset is set in `sync` rather than here, because the splice
+	/// that lists the new rows moves whatever offset stood before it.
 	pub fn set_query(&self, query: String) {
-		self.0.borrow_mut().query = query;
+		let mut inner = self.0.borrow_mut();
+		if inner.query == query {
+			return;
+		}
+		inner.query = query;
+		inner.query_changed = true;
 	}
 
 	/// Returns the current search filter query.
@@ -109,9 +127,10 @@ impl GeneralSettingsListState {
 		self.0.borrow().query.clone()
 	}
 
-	/// Clears the search filter query.
+	/// Clears the search filter query, putting the list back at its first
+	/// row the way any other change of the query does.
 	pub fn clear_query(&self) {
-		self.0.borrow_mut().query.clear();
+		self.set_query(String::new());
 	}
 
 	/// Synchronizes visible keys and invalidates measurements if text or
@@ -160,6 +179,13 @@ impl GeneralSettingsListState {
 			if key_changed || fp_changed {
 				inner.list_state.remeasure_items(ix..ix + 1);
 			}
+		}
+
+		if inner.query_changed {
+			inner.query_changed = false;
+			inner
+				.list_state
+				.scroll_to(ListOffset { item_ix: 0, offset_in_item: px(0.0) });
 		}
 
 		inner.visible_keys = new_keys;
@@ -351,16 +377,18 @@ pub fn render_general_page(
 ///
 /// It draws the editor the frame retained, so it takes focus and the rows
 /// narrow as it is typed into; drawing it from the query string instead draws
-/// a field nothing can be typed into.
+/// a field nothing can be typed into. The prompt an empty field states is the
+/// editor's own, set where the editor is created, because a field drawn from
+/// an editor draws that editor and not a placeholder passed beside it.
 fn query_field(fields: &FieldSlots, tokens: &TokenSet, cx: &Context<ShellView>) -> Div {
 	let weak_for_clear = cx.weak_entity();
 	div().w_full().mb(tokens.spacing(SpacingStep::S3)).child(
-		SearchField::new("settings-search", EditorSlot::from(fields.query.clone()))
-			.placeholder("Search settings...")
-			.on_clear(move |_win, app| {
+		SearchField::new("settings-search", EditorSlot::from(fields.query.clone())).on_clear(
+			move |_win, app| {
 				let _ = weak_for_clear.update(app, |view, cx| {
 					view.clear_settings_query(cx);
 				});
-			}),
+			},
+		),
 	)
 }

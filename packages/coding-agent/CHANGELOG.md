@@ -30,7 +30,7 @@
 ### Added
 
 - The desktop settings page omits a setting whose `ui.condition` is unmet, so an experimental feature's dependent knobs are absent while its master toggle is off rather than drawn inert.
-- The desktop General settings page searches its settings in place, grouping matches under their section headers and stating when a query matches nothing.
+- The desktop General settings page searches its settings in place: the search field takes the keyboard as the page opens and narrows the rows on the frame each character lands on, groups matches under their section headers, states a query that matches nothing while keeping the field drawn over that row, draws every query's rows from the first of them, and widens a narrowed page on the first `Escape` before leaving on the next.
 - The desktop restores its open sessions, the selected one, and per-session drafts with attachment bytes across restarts.
 - Desktop history search opens read-only previews and resumes existing tabs without duplicating sessions or discarding drafts.
 - Repository-backed diffs support persistent local review threads, replies, resolution and context-based anchor relocation.
