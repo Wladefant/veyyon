@@ -27,8 +27,12 @@
 //! two-line shape the primitive still offers is asserted in
 //! `veyyon-desktop-kit/tests/
 //! a-row-given-a-height-sets-its-detail-on-the-line-not-under-it.rs`.
-//! A run drawn behind the palette that starts inside a row's box would be
-//! counted as the row's; the session under the overlay is emptied so none is.
+//! A run the shell draws behind the palette that starts inside a row's box
+//! would be counted as the row's; the palette is painted over the session, so
+//! only the trailing group of the frame's runs is measured. Emptying the
+//! session does not clear the ground — the column then draws prose of its own
+//! in the band the rows occupy, which is the defect this suite once reported
+//! as a stacked row.
 
 use veyyon_desktop_kit::load_bundled_tokens;
 use veyyon_desktop_scene::headless::{Captured, headless_context};
@@ -74,49 +78,83 @@ fn result_rows(captured: &Captured, row_height: f32) -> Vec<Bounds<Pixels>> {
 	rows
 }
 
+/// The runs the palette drew, each as `(top, bottom, font size)` with the left
+/// edge it started at.
+///
+/// The shell paints the session under the overlay, and a captured run carries
+/// its box and its size but not the element that drew it. A row's box cannot
+/// separate the two: with no transcript the session column draws prose in the
+/// same band the palette's rows occupy, and one of its runs starts inside a
+/// row. Paint order can. A run is recorded when it is shaped, an overlay is
+/// shaped over what it covers, so the palette's runs are the trailing group of
+/// the frame's — walked back from the end while a run starts inside the
+/// palette's own horizontal span, which the row boxes give.
+fn palette_runs(captured: &Captured, rows: &[Bounds<Pixels>]) -> Vec<(f32, f32, f32, f32)> {
+	let left = rows
+		.iter()
+		.map(|row| f32::from(row.origin.x))
+		.fold(f32::INFINITY, f32::min);
+	let right = rows
+		.iter()
+		.map(|row| f32::from(row.origin.x) + f32::from(row.size.width))
+		.fold(f32::NEG_INFINITY, f32::max);
+	let held = captured
+		.text_runs
+		.iter()
+		.rposition(|run| {
+			let edge = f32::from(run.bounds.left());
+			edge < left - 0.5 || edge > right
+		})
+		.map_or(0, |last| last + 1);
+	captured.text_runs[held..]
+		.iter()
+		.map(|run| {
+			(
+				f32::from(run.bounds.left()),
+				f32::from(run.bounds.top()),
+				f32::from(run.bounds.bottom()),
+				f32::from(run.font_size),
+			)
+		})
+		.collect()
+}
+
 /// The runs the row drew, top down, each with the size it was shaped at: the
 /// primitive `bands_in` merges, and what a failure reports, so an overrun names
 /// which text overran rather than only by how much.
 ///
-/// A run counts as the row's when it starts inside the row's box, since the
-/// shell paints the session under the overlay and a run behind a palette row
-/// shares its band on a captured frame. A run that starts inside and is clipped
-/// at the row's edge — the row whose title is wider than the palette — is the
-/// row's, which is why the right edge is not tested.
-fn runs_in(captured: &Captured, row: Bounds<Pixels>) -> Vec<(f32, f32, f32)> {
+/// A run counts as the row's when it starts inside the row's box. A run that
+/// starts inside and is clipped at the row's edge — the row whose title is
+/// wider than the palette — is the row's, which is why the right edge is not
+/// tested.
+fn runs_in(runs: &[(f32, f32, f32, f32)], row: Bounds<Pixels>) -> Vec<(f32, f32, f32)> {
 	let top = f32::from(row.origin.y);
 	let bottom = top + f32::from(row.size.height);
 	let left = f32::from(row.origin.x);
 	let right = left + f32::from(row.size.width);
-	let mut runs: Vec<(f32, f32, f32)> = captured
-		.text_runs
+	let mut held: Vec<(f32, f32, f32)> = runs
 		.iter()
-		.filter(|run| {
-			let left_edge = f32::from(run.bounds.left());
-			left_edge >= left - 0.5 && left_edge <= right
-		})
-		.map(|run| {
-			(f32::from(run.bounds.top()), f32::from(run.bounds.bottom()), f32::from(run.font_size))
-		})
+		.filter(|(edge, ..)| *edge >= left - 0.5 && *edge <= right)
+		.map(|&(_, run_top, run_bottom, size)| (run_top, run_bottom, size))
 		.filter(|(run_top, run_bottom, _)| {
 			let centre = (run_top + run_bottom) / 2.0;
 			centre > top && centre < bottom
 		})
 		.collect();
-	runs.sort_by(|left, right| {
+	held.sort_by(|left, right| {
 		left
 			.0
 			.partial_cmp(&right.0)
 			.expect("a top is a real number")
 	});
-	runs
+	held
 }
 
 /// The text bands the row drew: the vertical spans of its runs, merged where
 /// they overlap and ordered top down, so one band is one line of text.
-fn bands_in(captured: &Captured, row: Bounds<Pixels>) -> Vec<(f32, f32)> {
+fn bands_in(runs: &[(f32, f32, f32, f32)], row: Bounds<Pixels>) -> Vec<(f32, f32)> {
 	let mut merged: Vec<(f32, f32)> = Vec::new();
-	for (span_top, span_bottom, _) in runs_in(captured, row) {
+	for (span_top, span_bottom, _) in runs_in(runs, row) {
 		match merged.last_mut() {
 			Some(held) if span_top < held.1 => held.1 = held.1.max(span_bottom),
 			_ => merged.push((span_top, span_bottom)),
@@ -212,10 +250,18 @@ fn every_result_row_keeps_its_text_in_the_band_the_row_height_authors() {
 			"{name}: the frame offers {} result rows for {detailed} rows carrying detail",
 			rows.len()
 		);
+		let runs = palette_runs(&frame, &rows);
+		assert!(
+			runs.len() >= rows.len(),
+			"{name}: the palette's {} rows drew {} runs, so the trailing group the overlay paints is \
+			 not the palette's and this suite is measuring the session behind it",
+			rows.len(),
+			runs.len()
+		);
 
 		for row in rows {
 			let top = f32::from(row.origin.y);
-			let bands = bands_in(&frame, row);
+			let bands = bands_in(&runs, row);
 			assert_eq!(
 				bands.len(),
 				1,
@@ -229,7 +275,7 @@ fn every_result_row_keeps_its_text_in_the_band_the_row_height_authors() {
 				"{name}: the row at {top}px draws a {:.1}px line of text in the {band}px band its \
 				 {row_height}px row authors, from runs (top, bottom, size) {:?}",
 				band_bottom - band_top,
-				runs_in(&frame, row)
+				runs_in(&runs, row)
 			);
 			assert!(
 				band_top >= top - 0.5 && band_bottom <= top + row_height + 0.5,

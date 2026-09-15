@@ -38,10 +38,12 @@ pub fn captured(cx: &mut HeadlessAppContext, palette: PaletteState) -> Captured 
 }
 
 /// Captures the shell with `palette` open over an empty session: no queue rows,
-/// no transcript and no cards, so every row the frame drew belongs to the
-/// palette. A suite measuring a row's own text bands needs that — the shell
-/// paints the transcript under the overlay, and a run behind a palette row is
-/// indistinguishable from one inside it on a captured frame.
+/// no transcript and no cards, so every *row* the frame drew belongs to the
+/// palette. Its text runs do not: the session column draws prose of its own
+/// once it holds no transcript, in the same band the palette's rows occupy, and
+/// a captured run carries its box rather than the element that drew it. A suite
+/// measuring a row's own text separates the two by paint order, since the
+/// overlay is shaped over what it covers.
 pub fn captured_over_nothing(cx: &mut HeadlessAppContext, palette: PaletteState) -> Captured {
 	let tokens = load_bundled_tokens().expect("the bundled tokens load");
 	let theme = load_bundled_theme("dark").expect("the bundled dark theme loads");
