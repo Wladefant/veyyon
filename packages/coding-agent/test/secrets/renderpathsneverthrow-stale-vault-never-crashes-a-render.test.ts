@@ -21,15 +21,16 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import { attachSecretsNoticeSink } from "@veyyon/coding-agent/secrets/notices";
 import { MAX_SECRET_VALUE_BYTES, SecretObfuscator } from "@veyyon/coding-agent/secrets/obfuscator";
 import { SecretVault, type VaultLocations, vaultPathFor } from "@veyyon/coding-agent/secrets/vault";
-import type { AgentSession, SecretRuntimeLease } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { SecretRuntimeLease } from "@veyyon/coding-agent/session/agent-session-types";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { useIsolatedConfigRoot } from "../helpers/isolated-agent-dir";
 
@@ -150,15 +151,19 @@ async function enableSecrets(fixture: RenderFixture): Promise<string> {
 
 /**
  * Change the vault the way a second veyyon window or a rotation script does: a real content
- * write, then a file write this process did not make through the vault writer, which is what the
- * revision fingerprint is built to notice. Asserts the fingerprint actually moved, so a test can
+ * write, then a publication this process did not make through the vault writer, which is what the
+ * revision fingerprint is built to notice. The bytes land at a new inode because an in-place
+ * rewrite in the same kernel tick as the add carries the same mtime and ctime on a coarse-timestamp
+ * kernel and the fingerprint sees nothing. Asserts the fingerprint actually moved, so a test can
  * never quietly pass against a session that was still fresh.
  */
 async function mutateVaultAsAnotherProcess(fixture: RenderFixture): Promise<void> {
 	const captured = fixture.vault.revision();
 	await fixture.vault.add({ name: "SECOND_TOKEN", value: SECOND_VALUE, scope: "project" });
 	const vaultPath = vaultPathFor(fixture.locations, "project");
-	await fs.writeFile(vaultPath, await fs.readFile(vaultPath));
+	const staging = `${vaultPath}.external`;
+	await fs.writeFile(staging, await fs.readFile(vaultPath), { mode: 0o600 });
+	await fs.rename(staging, vaultPath);
 	expect(fixture.vault.revision()).not.toBe(captured);
 }
 

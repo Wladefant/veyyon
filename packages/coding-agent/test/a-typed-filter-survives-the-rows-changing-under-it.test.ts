@@ -21,10 +21,13 @@
 import { describe, expect, it } from "bun:test";
 import { type ConsoleHost, LoopConsoleModel, type LoopSetup } from "@veyyon/coding-agent/autoresearch/console";
 import { BUILTIN_PRESETS } from "@veyyon/coding-agent/autoresearch/presets";
-import { AutoresearchScreenComponent, runScreenRows } from "@veyyon/coding-agent/autoresearch/screen";
 import { createExperimentState, createSessionRuntime } from "@veyyon/coding-agent/autoresearch/state";
 import type { AutoresearchRuntime, ExperimentResult } from "@veyyon/coding-agent/autoresearch/types";
-import { getSelectListTheme } from "@veyyon/coding-agent/modes/theme/theme";
+import {
+	AutoresearchScreenComponent,
+	runScreenRows,
+} from "@veyyon/coding-agent/modes/terminal/components/dialogs/autoresearch-screen";
+import { getSelectListTheme } from "@veyyon/coding-agent/theme/theme";
 import { type SelectItem, SelectList } from "@veyyon/tui";
 import { stripAnsi } from "@veyyon/utils";
 import { useTruecolorTheme } from "./helpers/theme-assertions";

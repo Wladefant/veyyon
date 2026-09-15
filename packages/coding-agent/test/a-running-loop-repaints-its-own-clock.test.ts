@@ -22,7 +22,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import { setTimeout as sleep } from "node:timers/promises";
-import { createDashboardController } from "@veyyon/coding-agent/autoresearch/dashboard";
+import { type AutoresearchUiDelegate, createDashboardController } from "@veyyon/coding-agent/autoresearch/dashboard";
 import { createSessionRuntime } from "@veyyon/coding-agent/autoresearch/state";
 import type { AutoresearchRuntime } from "@veyyon/coding-agent/autoresearch/types";
 import type { ExtensionContext } from "@veyyon/coding-agent/extensibility/extensions";
@@ -116,5 +116,82 @@ describe("a running loop repaints its own clock", () => {
 		// over, and a clock still running behind it keeps writing that row.
 		expect(rows.at(-1)).toBeUndefined();
 		expect(rows.length).toBe(cleared);
+	});
+
+	it("ticks the screen's render callback while the screen is open and stands down on close", async () => {
+		let renderCount = 0;
+		let closeDialog!: () => void;
+		const delegate: AutoresearchUiDelegate = {
+			async showScreen(_ctx, _runtime, _model, options) {
+				options.onMount({
+					requestRender: () => {
+						renderCount++;
+					},
+				});
+				await new Promise<void>(resolve => {
+					closeDialog = () => {
+						options.onDispose();
+						resolve();
+					};
+				});
+			},
+			async showLauncher() {},
+		};
+
+		const dashboard = createDashboardController(delegate);
+		const runtime = createSessionRuntime();
+		const rows: Array<string | undefined> = [];
+		const ctx = ctxWriting(rows);
+
+		const screenPromise = dashboard.showScreen(ctx, runtime, null);
+		await sleep(ONE_TICK_MS);
+
+		expect(renderCount).toBeGreaterThanOrEqual(1);
+		const countBeforeClose = renderCount;
+
+		closeDialog();
+		await screenPromise;
+
+		await sleep(ONE_TICK_MS);
+		expect(renderCount).toBe(countBeforeClose);
+	});
+
+	it("delegates dashboard.requestRender() to the mounted screen handle without recursion", async () => {
+		let renderCount = 0;
+		let closeDialog!: () => void;
+		const delegate: AutoresearchUiDelegate = {
+			async showScreen(_ctx, _runtime, _model, options) {
+				options.onMount({
+					requestRender: () => {
+						renderCount++;
+					},
+				});
+				await new Promise<void>(resolve => {
+					closeDialog = () => {
+						options.onDispose();
+						resolve();
+					};
+				});
+			},
+			async showLauncher() {},
+		};
+
+		const dashboard = createDashboardController(delegate);
+		const runtime = createSessionRuntime();
+		const rows: Array<string | undefined> = [];
+		const ctx = ctxWriting(rows);
+
+		const screenPromise = dashboard.showScreen(ctx, runtime, null);
+		dashboard.requestRender();
+		expect(renderCount).toBe(1);
+
+		dashboard.requestRender();
+		expect(renderCount).toBe(2);
+
+		closeDialog();
+		await screenPromise;
+
+		dashboard.requestRender();
+		expect(renderCount).toBe(2);
 	});
 });

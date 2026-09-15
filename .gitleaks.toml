@@ -34,7 +34,7 @@ paths = [
   # Generated mdbook output. Every finding here is a rendered copy of a docs
   # example already scanned at its source under docs/handbook/src/.
   '''^docs/handbook/book/''',
-  '''^website/docs/''',
+  '''^apps/site/docs/''',
   # Test fixtures. A suite that proves a token is redacted, refused, or never
   # persisted has to contain a token, so these files are where fabricated
   # credentials live on purpose. This is the broadest entry here and the one that
@@ -57,6 +57,12 @@ paths = [
   # Argot dictionaries are substitution tables built from other repositories'
   # prose. A high-entropy string here is a compressed handle, not a credential.
   '''\.AGENTS\.dict$''',
+  # The move-equivalence ledgers under scripts/fixtures/ record a sha256 token-stream
+  # digest per source file, keyed by that file's path. A row whose path ends in
+  # `env-api-key.ts` or `coding-agent-api.ts` reads as a key name beside 64 hex
+  # characters of entropy; the value is a hash of the file's tokens, and the gate that
+  # regenerates these ledgers would fail if one were replaced by anything else.
+  '''^scripts/fixtures/(token|move)-equivalence\.json$''',
 ]
 regexes = [
   # Public OAuth client identifiers. A client id is published by construction: it

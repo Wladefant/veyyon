@@ -5,13 +5,13 @@ import {
 	type TodoBoardOptions,
 	todoBoardIsLive,
 	todoBoardRailTravels,
-} from "@veyyon/coding-agent/modes/components/todo-board";
-import { initTheme, theme } from "@veyyon/coding-agent/modes/theme/theme";
+} from "@veyyon/coding-agent/modes/terminal/components/dashboard/todo-board";
 import {
 	incompleteTodoItems,
 	renderTodoContinuationReminder,
 	renderTodoStatePreview,
 } from "@veyyon/coding-agent/session/todo-reminder";
+import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import {
 	getLatestTodoPhasesFromEntries,
@@ -23,7 +23,7 @@ import {
 	type TodoPhase,
 	TodoTool,
 	USER_TODO_EDIT_CUSTOM_TYPE,
-} from "@veyyon/coding-agent/tools/todo";
+} from "@veyyon/coding-agent/tools/agent/todo";
 
 function createSession(initialPhases: TodoPhase[] = []): { session: ToolSession; phases: () => TodoPhase[] } {
 	let phases = initialPhases;

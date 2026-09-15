@@ -1,7 +1,7 @@
 /**
  * Nothing the launch card draws needs a database, so nothing on its path may load one.
  *
- * WHY THIS SUITE EXISTS. `commands/launch.ts` paints the card before it imports the runtime, and
+ * WHY THIS SUITE EXISTS. `cli/launch-card.ts` paints the card before it imports the runtime, and
  * everything that paint reaches is evaluated first, on every interactive launch, while the terminal
  * is still blank. `config/settings.ts` sat on that path and imported `session/agent-storage.ts` for
  * a handle it cached and a legacy table it read once on a first run, which put `bun:sqlite` and
@@ -32,18 +32,19 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { moduleSpecifiersIn } from "@veyyon/utils/module-reach";
+import { typeScriptMembers } from "../../../../scripts/workspace-layout";
 import { PACKAGES, reach, reachedNames } from "../helpers/module-reach-gate";
 
-/** Every `.ts` file under a workspace package's `src/`, as a path relative to `packages/`. */
+/** Every workspace member's source, relative to the same root as reachedNames. */
 function workspaceSources(): string[] {
 	const found: string[] = [];
-	for (const member of fs.readdirSync(PACKAGES, { withFileTypes: true })) {
-		if (!member.isDirectory()) continue;
-		const src = path.join(PACKAGES, member.name, "src");
+	const repoRoot = path.dirname(PACKAGES);
+	for (const member of typeScriptMembers()) {
+		const src = path.join(repoRoot, member, "src");
 		if (!fs.existsSync(src)) continue;
 		for (const file of fs.readdirSync(src, { recursive: true, encoding: "utf8" })) {
 			if (!file.endsWith(".ts") || file.endsWith(".d.ts")) continue;
-			found.push(path.join(member.name, "src", file));
+			found.push(path.relative(PACKAGES, path.join(src, file)));
 		}
 	}
 	return found.sort();
@@ -73,6 +74,14 @@ const DATABASE_OWNERS = workspaceSources().filter(relative => {
 const ADMITTED_ON_THE_CARD_PATH = [path.join("coding-agent", "src", "config", "legacy-agent-db-settings.ts")];
 
 /**
+ * The first frame reaches the settings SLOT (`config/settings-instance.ts`) and never the store that
+ * fills it: the composer paints from the launch-facts cache and the keybindings table, and the
+ * store, with the migration leaf above, loads in the deferred initialization after the frame is
+ * on screen. Pinned empty so a frame that starts reading the store again turns this red.
+ */
+const ADMITTED_ON_THE_FIRST_FRAME: readonly string[] = [];
+
+/**
  * What the card costs, measured 2026-08-31 with the workspace resolved to source, down from 311 when
  * the settings store still carried a storage handle, and up from 290 when the card stopped
  * hand-writing its own `path · git` row and started rendering the real status row through
@@ -85,10 +94,18 @@ const ADMITTED_ON_THE_CARD_PATH = [path.join("coding-agent", "src", "config", "l
  * leaf over `@veyyon/utils` entry points the card already reached — dirs, atomic-write, fs-error,
  * logger and type-guards — so it costs itself and nothing under it.
  *
+ * 304 rather than 293 is a file count, not more work: the terminal engine's `tui.ts` became ten
+ * modules under `core/` (`renderer`, `container`, `overlay`, `scroll`, `cursor`, `mouse-routing`,
+ * `component-types`, `terminal-session`, `image-budget`, `tui`), and the string, layout and colour
+ * helpers it carried moved to `@veyyon/utils` subpaths (`width`, `wrap`, `padding`, `sgr`, `bar`,
+ * `color-format`, `tight-mode`, `word-nav`). The card reaches 20 engine modules where it reached 30,
+ * and no subsystem joined the path — which is what the reachability assertions below, not this
+ * number, are the proof of.
+ *
  * The floor is what stops a resolution table that stopped resolving from satisfying the ceiling with
  * a handful of modules while measuring nothing.
  */
-const LAUNCH_CARD_CEILING = 293;
+const LAUNCH_CARD_CEILING = 304;
 const LAUNCH_CARD_FLOOR = 150;
 
 describe("the launch card opens no database", () => {
@@ -98,10 +115,11 @@ describe("the launch card opens no database", () => {
 	 * list return.
 	 */
 	it("finds the workspace's SQLite owners and walks a real graph", () => {
-		expect(DATABASE_OWNERS).toContain(path.join("coding-agent", "src", "session", "agent-storage.ts"));
+		expect(DATABASE_OWNERS).toContain(path.join("..", "kernel", "src", "session", "agent-storage.ts"));
 		expect(DATABASE_OWNERS).toContain(path.join("ai", "src", "auth-storage-sqlite.ts"));
 		expect(DATABASE_OWNERS).toContain(ADMITTED_ON_THE_CARD_PATH[0]);
-		expect(reach("startup/launch-card.ts")).toBeGreaterThan(LAUNCH_CARD_FLOOR);
+		expect(DATABASE_OWNERS).toContain(path.join("..", "plugins", "mnemopi", "src", "db.ts"));
+		expect(reach("cli/launch-card.ts")).toBeGreaterThan(LAUNCH_CARD_FLOOR);
 	});
 
 	/**
@@ -109,17 +127,19 @@ describe("the launch card opens no database", () => {
 	 * handle reaches the SQLite credential store, so the intersections below are real tests.
 	 */
 	it("sees a database on the path of a module that does open one", () => {
-		const reached = new Set(reachedNames("session/agent-storage.ts"));
+		const reached = new Set(
+			reachedNames(path.join("..", "..", "..", "kernel", "src", "session", "agent-storage.ts")),
+		);
 
 		expect(DATABASE_OWNERS.filter(owner => reached.has(owner))).toContain(
 			path.join("ai", "src", "auth-storage-sqlite.ts"),
 		);
 	});
 
-	for (const [label, entry] of [
-		["the launch card", "startup/launch-card.ts"],
-		["the first frame", "modes/first-frame.ts"],
-		["the settings store", "config/settings.ts"],
+	for (const [label, entry, admitted] of [
+		["the launch card", "cli/launch-card.ts", ADMITTED_ON_THE_CARD_PATH],
+		["the first frame", "modes/terminal/first-frame.ts", ADMITTED_ON_THE_FIRST_FRAME],
+		["the settings store", "config/settings.ts", ADMITTED_ON_THE_CARD_PATH],
 	] as const) {
 		/**
 		 * One case per entry so a failure names which path regained the database, and the message
@@ -129,12 +149,12 @@ describe("the launch card opens no database", () => {
 		it(`${label} reaches no store`, () => {
 			const reached = new Set(reachedNames(entry));
 
-			expect(DATABASE_OWNERS.filter(owner => reached.has(owner))).toEqual(ADMITTED_ON_THE_CARD_PATH);
+			expect(DATABASE_OWNERS.filter(owner => reached.has(owner))).toEqual([...admitted]);
 		});
 	}
 
 	/** The ordinary way the cost comes back: not a database, just a hundred more modules. */
 	it("does not grow the launch card's graph", () => {
-		expect(reach("startup/launch-card.ts")).toBeLessThanOrEqual(LAUNCH_CARD_CEILING);
+		expect(reach("cli/launch-card.ts")).toBeLessThanOrEqual(LAUNCH_CARD_CEILING);
 	});
 });

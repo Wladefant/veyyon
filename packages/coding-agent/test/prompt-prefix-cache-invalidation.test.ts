@@ -24,16 +24,16 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
 import type { Model } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createArgotSession } from "@veyyon/coding-agent/argot-cache";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { formatModelString } from "@veyyon/coding-agent/config/model-resolver";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
 import { usesCodexTaskPrompt } from "@veyyon/coding-agent/task/prompt-policy";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import { ArgotUnloadTool } from "@veyyon/coding-agent/tools/argot";
+import { ArgotUnloadTool } from "@veyyon/coding-agent/tools/agent/argot";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries } from "@veyyon/utils";
 import type { Vocabulary } from "argot";
 import { useTrackedTempDirs } from "./helpers/tracked-temp-dir";
@@ -260,7 +260,7 @@ describe("argot tools", () => {
 		const root = makeArgotDir();
 		fs.writeFileSync(path.join(root, ".argot"), "");
 
-		const argot = createArgotSession({ enabled: true, isSubagent: false, subagentMode: "off" });
+		const argot = createArgotSession({ enabled: true, isSpawned: false, agentMode: "off" });
 		if (argot === undefined) throw new Error("expected a codec for an enabled top-level session");
 		argot.load(root, vocabulary());
 

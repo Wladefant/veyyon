@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
 // FIRST, and it has to stay first: this import writes the previous bare launch's card to the
 // terminal during its own evaluation, which is the only position from which it beats the ~33ms of
-// import below it. It reaches node builtins only. See ./startup/first-frame-replay.
-import "./startup/first-frame-replay-entry";
+// import below it. It reaches node builtins only. See ./cli/first-frame-replay.
+import "./cli/first-frame-replay-entry";
+import { CliUsageError } from "@veyyon/utils/cli-usage-error";
 // Subpath, NOT the "@veyyon/utils" barrel: the barrel re-exports ./env, which
 // eagerly parses the agent-directory .env at import time (env.ts). Pulling that
 // in here would load the .env BEFORE runCli() calls setProfile(), so
@@ -45,7 +46,6 @@ import { declareWorkerHostEntry, installWorkerInbox } from "@veyyon/utils/worker
 import { EXIT_FAILURE, EXIT_USAGE } from "./cli/exit-codes";
 import { installProfileAlias, resolveProfileAliasCommandFromProcess } from "./cli/profile-alias";
 import { extractProfileFlags } from "./cli/profile-bootstrap";
-import { CliUsageError } from "./cli/usage-error";
 import { DAEMON_BROKER_WORKER_ARG } from "./launch/protocol";
 import {
 	JS_EVAL_PROCESS_ARG,
@@ -101,11 +101,11 @@ async function showHelp(config: CliConfig): Promise<void> {
  * Smoke-test entry. Spawns bundled workers, pings everything, then exits.
  *
  * Purpose: catch the silent worker-load and bundled-asset regressions that hit
- * compiled binaries and the npm CLI bundle. Version/help paths do not spawn
+ * compiled binaries and standalone bundles. Version/help paths do not spawn
  * worker modules or serve dashboard assets on a fresh install, so this probe is
  * the minimal end-to-end test that proves those distribution-only paths work.
- * Wired into `scripts/install-tests/run-ci.sh` so binary / source-link /
- * tarball installs all exercise it on every CI run.
+ * Wired into `scripts/install-tests/run-ci.sh` so binary and source-link
+ * installs all exercise it on every CI run.
  */
 async function runSmokeTest(): Promise<void> {
 	// Force the core `@veyyon/natives` addon to actually LOAD and RUN first. The
@@ -127,12 +127,13 @@ async function runSmokeTest(): Promise<void> {
 
 	const { smokeTestSyncWorker, startServer } = await import("@veyyon/stats");
 	const { smokeTestTinyTitleWorker } = await import("./tiny/title-client");
-	const { smokeTestSttWorker } = await import("./stt/asr-client");
-	const { smokeTestTtsWorker } = await import("./tts/tts-client");
-	const { smokeTestMnemopiEmbedWorker } = await import("./mnemopi/embed-client");
+	const { smokeTestSttWorker } = await import("./speech/stt/asr-client");
+	const { smokeTestTtsWorker } = await import("./speech/tts/tts-client");
+	const { smokeTestMnemopiEmbedWorker } = await import("./memory/mnemopi/embed-client");
 	const { smokeTestJsEvalWorker } = await import("./eval/js/context-manager");
 	// Smoke dependencies stay lazy so normal CLI startup does not load worker clients.
 	const { smokeTestDaemonBroker } = await import("./launch/client");
+	const { smokeTestProfileSeed } = await import("./cli/profile-seed-smoke");
 	await smokeTestSyncWorker();
 
 	const statsServer = await startServer(0);
@@ -153,6 +154,10 @@ async function runSmokeTest(): Promise<void> {
 	await smokeTestTtsWorker();
 	await smokeTestMnemopiEmbedWorker();
 	await smokeTestDaemonBroker();
+	// Re-enters this binary as `profile new` against a scratch config root: the
+	// profile chunk is loaded by no other probe, and a bundler regression confined
+	// to it (a mis-minified dynamic import) shipped in 1.4.1 past every check above.
+	await smokeTestProfileSeed();
 	process.stdout.write("smoke-test: ok\n");
 }
 
@@ -170,7 +175,7 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 	// module binds the real handler once loaded.
 	if (arg === TAB_WORKER_ARG) {
 		if (parentPort) installWorkerInbox(parentPort);
-		await import("./tools/browser/tab-worker-entry");
+		await import("./tools/web/browser/tab-worker-entry");
 		return true;
 	}
 	if (arg === JS_EVAL_WORKER_ARG) {
@@ -187,17 +192,17 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 		return true;
 	}
 	if (arg === STT_WORKER_ARG) {
-		const { startSttWorker } = await import("./stt/asr-worker");
+		const { startSttWorker } = await import("./speech/stt/asr-worker");
 		await runIpcSubprocessWorker(startSttWorker);
 		return true;
 	}
 	if (arg === TTS_WORKER_ARG) {
-		const { startTtsWorker } = await import("./tts/tts-worker");
+		const { startTtsWorker } = await import("./speech/tts/tts-worker");
 		await runIpcSubprocessWorker(startTtsWorker);
 		return true;
 	}
 	if (arg === MNEMOPI_EMBED_WORKER_ARG) {
-		const { startMnemopiEmbedWorker } = await import("./mnemopi/embed-worker");
+		const { startMnemopiEmbedWorker } = await import("./memory/mnemopi/embed-worker");
 		await runIpcSubprocessWorker(startMnemopiEmbedWorker);
 		return true;
 	}

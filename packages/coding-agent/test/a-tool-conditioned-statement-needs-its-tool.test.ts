@@ -34,7 +34,7 @@
 import { describe, expect, it } from "bun:test";
 import { buildSystemPrompt } from "@veyyon/coding-agent/system-prompt";
 import { PROMPT_STATEMENTS } from "@veyyon/coding-agent/system-prompt-builder/statement-registry";
-import { BUILTIN_TOOL_NAMES, HIDDEN_TOOL_NAMES } from "@veyyon/coding-agent/tools/builtin-names";
+import { BUILTIN_TOOL_NAMES, HIDDEN_TOOL_NAMES } from "@veyyon/coding-agent/tools/core/builtin-names";
 
 const EMPTY_TREE = {
 	rootPath: "/tmp",
@@ -125,6 +125,7 @@ describe("a statement conditioned on a tool needs that tool", () => {
 			"execution-workflow/implement-no-destructive",
 			"tool-policy/ast",
 			"tool-policy/delegation",
+			"tool-policy/delegation-agent-value",
 			"tool-policy/delegation-allowed",
 			"tool-policy/delegation-codex-eager",
 			"tool-policy/delegation-codex-off",
@@ -133,7 +134,6 @@ describe("a statement conditioned on a tool needs that tool", () => {
 			"tool-policy/delegation-no-shrinking",
 			"tool-policy/delegation-preferred",
 			"tool-policy/delegation-required",
-			"tool-policy/delegation-subagent-value",
 			"tool-policy/inspect-image",
 		]);
 

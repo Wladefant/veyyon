@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { makeBench } from "@veyyon/utils/bench-harness";
 import { Settings } from "../src/config/settings";
-import { resolveSubagentModel } from "../src/task/subagent-settings";
+import { resolveAgentModel } from "../src/task/agent-settings";
 
 // Identical deterministic corpus in both arms; off is the pre-reload snapshot.
 const names = Array.from({ length: 32 }, (_, i) => `worker-${i}`);
@@ -13,12 +13,12 @@ try {
 	const file = path.join(dir, "config.yml");
 	const config = (generation: string) =>
 		JSON.stringify({
-			subagent: { agents: Object.fromEntries(names.map(name => [name, { model: `openai/${generation}-${name}` }])) },
+			agent: { agents: Object.fromEntries(names.map(name => [name, { model: `openai/${generation}-${name}` }])) },
 		});
 	await fs.writeFile(file, config("old"));
 	const off = await Settings.loadReadOnly({ agentDir: dir });
 	const on = await Settings.loadReadOnly({ agentDir: dir });
-	const route = (settings: Settings) => names.map(agentName => resolveSubagentModel({ settings, agentName }).patterns);
+	const route = (settings: Settings) => names.map(agentName => resolveAgentModel({ settings, agentName }).patterns);
 	const baseline = names.map(name => [`openai/old-${name}`]);
 	assert.deepEqual(route(off), baseline);
 	assert.deepEqual(route(on), baseline);

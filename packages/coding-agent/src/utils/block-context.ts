@@ -43,6 +43,12 @@ interface StackEntry {
 
 type ScannerMode = "code" | "single" | "double" | "template" | "blockComment";
 
+const QUOTE_TO_MODE: Record<string, ScannerMode> = {
+	"'": "single",
+	'"': "double",
+	"`": "template",
+};
+
 function normalizeLineSpans(spans: readonly LineSpan[], totalLines: number): LineSpan[] {
 	if (totalLines <= 0) return [];
 	const normalized: LineSpan[] = [];
@@ -82,7 +88,7 @@ function hasEveryLineVisible(visible: ReadonlySet<number>, totalLines: number): 
 
 /**
  * Ceiling on the source a boundary lookup will scan, in bytes. It mirrors
- * `MAX_CACHED_BYTES` in `crates/veyyon-ast/src/parse_cache.rs`: below it the
+ * `MAX_CACHED_BYTES` in `natives/code/ast/src/parse_cache.rs`: below it the
  * parse cache retains the tree (and serves a source one edit away by editing
  * it), so a second lookup on the same file is nearly free; above it nothing is
  * retained and every lookup pays a whole-file parse. A streamed edit preview
@@ -133,7 +139,7 @@ export function exceedsBlockContextScanCeiling(text: string): boolean {
 
 /** Collapse a set of visible line numbers into sorted, merged inclusive spans. */
 function visibleSetToSpans(visible: ReadonlySet<number>): LineSpan[] {
-	const sorted = [...visible].sort((left, right) => left - right);
+	const sorted = Array.from(visible).sort((left, right) => left - right);
 	const spans: LineSpan[] = [];
 	for (const line of sorted) {
 		const previous = spans[spans.length - 1];
@@ -258,20 +264,9 @@ function lexicalBracketContext(fullLines: readonly string[], visible: ReadonlySe
 				continue;
 			}
 			if (isHashCommentStart(line, index)) break;
-			if (ch === "'") {
-				mode = "single";
-				escaped = false;
-				index++;
-				continue;
-			}
-			if (ch === '"') {
-				mode = "double";
-				escaped = false;
-				index++;
-				continue;
-			}
-			if (ch === "`") {
-				mode = "template";
+			const quoteMode = QUOTE_TO_MODE[ch];
+			if (quoteMode) {
+				mode = quoteMode;
 				escaped = false;
 				index++;
 				continue;
@@ -348,7 +343,7 @@ export function buildLineEntriesWithBlockContext(
 	const allLines = new Set<number>(visible);
 	for (const lineNumber of context.keys()) allLines.add(lineNumber);
 
-	const sorted = [...allLines].sort((left, right) => left - right);
+	const sorted = Array.from(allLines).sort((left, right) => left - right);
 	const entries: LineEntry[] = [];
 	let previousLine: number | undefined;
 	for (const lineNumber of sorted) {

@@ -26,13 +26,13 @@ import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { Agent } from "@veyyon/agent-core";
 import * as compactionModule from "@veyyon/agent-core/compaction";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { compactionDeadEndWarning } from "@veyyon/coding-agent/session/compaction-policy";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { compactionDeadEndWarning } from "@veyyon/kernel/session/agent-session-compaction-policy";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 
 const NOTICE_SOURCE = "compaction";

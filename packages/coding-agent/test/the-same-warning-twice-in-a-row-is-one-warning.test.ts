@@ -8,9 +8,9 @@
 // `AgentSession`, which is a session-level concern the transcript never sees.
 import { beforeAll, describe, expect, test, vi } from "bun:test";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
-import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/types";
-import { UiHelpers } from "@veyyon/coding-agent/modes/utils/ui-helpers";
+import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
+import { UiHelpers } from "@veyyon/coding-agent/modes/terminal/utils/ui-helpers";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { type Component, Container } from "@veyyon/tui";
 
 const DEAD_END =

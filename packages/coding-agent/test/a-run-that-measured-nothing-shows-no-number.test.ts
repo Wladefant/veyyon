@@ -27,7 +27,6 @@
  * nullable end to end would make this test's subject disappear rather than fail.
  */
 import { describe, expect, it } from "bun:test";
-import { renderRunDetail, runScreenRows } from "@veyyon/coding-agent/autoresearch/screen";
 import { createExperimentState, createSessionRuntime, metricLabel } from "@veyyon/coding-agent/autoresearch/state";
 import {
 	type AutoresearchRuntime,
@@ -35,6 +34,10 @@ import {
 	type ExperimentResult,
 	type ExperimentStatus,
 } from "@veyyon/coding-agent/autoresearch/types";
+import {
+	renderRunDetail,
+	runScreenRows,
+} from "@veyyon/coding-agent/modes/terminal/components/dialogs/autoresearch-screen";
 import { useTruecolorTheme } from "./helpers/theme-assertions";
 
 /**

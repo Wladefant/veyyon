@@ -1,5 +1,4 @@
 import { describe, expect, it } from "bun:test";
-import { UNSET_NUMBER_OPTION_VALUE } from "@veyyon/coding-agent/config/optional-number";
 import {
 	getDefault,
 	getEnumValues,
@@ -7,7 +6,8 @@ import {
 	isUnsetNumberPath,
 	type SettingPath,
 } from "@veyyon/coding-agent/config/settings-schema";
-import { getAllSettingDefs } from "@veyyon/coding-agent/modes/components/settings-defs";
+import { getAllSettingDefs } from "@veyyon/coding-agent/modes/terminal/components/selectors/settings-defs";
+import { UNSET_NUMBER_OPTION_VALUE } from "@veyyon/kernel/settings/optional-number";
 
 /**
  * HSL-2: every `ui.options[].value` string a user can pick in `/settings` must

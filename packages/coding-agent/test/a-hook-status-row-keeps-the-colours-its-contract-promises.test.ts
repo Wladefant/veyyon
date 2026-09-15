@@ -26,11 +26,11 @@ import { renderStatusRow } from "@veyyon/coding-agent/autoresearch/dashboard";
 import { createExperimentState, createSessionRuntime } from "@veyyon/coding-agent/autoresearch/state";
 import type { AutoresearchRuntime, ExperimentResult } from "@veyyon/coding-agent/autoresearch/types";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { StatusLineComponent } from "@veyyon/coding-agent/modes/components/status-line";
-import { theme } from "@veyyon/coding-agent/modes/theme/theme";
+import { StatusLineComponent } from "@veyyon/coding-agent/modes/terminal/components/status-line/component";
+import { theme } from "@veyyon/coding-agent/theme/theme";
 import { removeSyncWithRetries, setProjectDir, stripAnsi } from "@veyyon/utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
-import { makeStatusLineSession } from "./helpers/status-line-session";
+import { makeStatusLineProducer } from "./helpers/status-line-session";
 import { useTruecolorTheme } from "./helpers/theme-assertions";
 
 let settingsState: SettingsTestState | undefined;
@@ -94,7 +94,7 @@ function paintedRuntime(): AutoresearchRuntime {
 
 function footer(): StatusLineComponent {
 	const component = new StatusLineComponent(
-		makeStatusLineSession({
+		makeStatusLineProducer({
 			modelId: "test-model",
 			modelName: "Test Model",
 			contextWindow: 100_000,

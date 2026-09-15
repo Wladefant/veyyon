@@ -21,6 +21,8 @@ import { describe, expect, it } from "bun:test";
 import { homedir } from "node:os";
 import { type ConsoleHost, LoopConsoleModel } from "@veyyon/coding-agent/autoresearch/console";
 import { BUILTIN_PRESETS } from "@veyyon/coding-agent/autoresearch/presets";
+import { createExperimentState, createSessionRuntime } from "@veyyon/coding-agent/autoresearch/state";
+import type { AutoresearchRuntime, ExperimentResult } from "@veyyon/coding-agent/autoresearch/types";
 import {
 	AutoresearchScreenComponent,
 	footerHint,
@@ -30,11 +32,9 @@ import {
 	screenSidebarWidth,
 	screenStacks,
 	screenTitle,
-} from "@veyyon/coding-agent/autoresearch/screen";
-import { createExperimentState, createSessionRuntime } from "@veyyon/coding-agent/autoresearch/state";
-import type { AutoresearchRuntime, ExperimentResult } from "@veyyon/coding-agent/autoresearch/types";
-import { visibleWidth } from "@veyyon/tui";
+} from "@veyyon/coding-agent/modes/terminal/components/dialogs/autoresearch-screen";
 import { stripAnsi } from "@veyyon/utils";
+import { visibleWidth } from "@veyyon/utils/width";
 import { useTruecolorTheme } from "./helpers/theme-assertions";
 
 function result(overrides: Partial<ExperimentResult> = {}): ExperimentResult {

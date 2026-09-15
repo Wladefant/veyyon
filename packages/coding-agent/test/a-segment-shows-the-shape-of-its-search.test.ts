@@ -19,11 +19,14 @@
  * block per value would fail on any change to the ramp without a defect.
  */
 import { describe, expect, it } from "bun:test";
-import { renderRunDetail, screenSidebarWidth } from "@veyyon/coding-agent/autoresearch/screen";
 import { createExperimentState, createSessionRuntime } from "@veyyon/coding-agent/autoresearch/state";
 import type { AutoresearchRuntime, ExperimentResult } from "@veyyon/coding-agent/autoresearch/types";
-import { visibleWidth } from "@veyyon/tui";
+import {
+	renderRunDetail,
+	screenSidebarWidth,
+} from "@veyyon/coding-agent/modes/terminal/components/dialogs/autoresearch-screen";
 import { stripAnsi } from "@veyyon/utils";
+import { visibleWidth } from "@veyyon/utils/width";
 import { useTruecolorTheme } from "./helpers/theme-assertions";
 
 /** Every block the trend row can draw, plus the gap it draws for an unmeasured run. */

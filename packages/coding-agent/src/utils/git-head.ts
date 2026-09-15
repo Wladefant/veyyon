@@ -195,7 +195,7 @@ export async function getEntryType(gitEntryPath: string): Promise<EntryType | nu
 }
 
 export async function readOptionalText(filePath: string): Promise<string | null> {
-	return retryOnEintr(async () => await fs.promises.readFile(filePath, "utf8"));
+	return retryOnEintr(() => fs.promises.readFile(filePath, "utf8"));
 }
 
 async function resolveGitDir(gitEntryPath: string, entryType: EntryType): Promise<string | null> {
@@ -281,8 +281,8 @@ export async function primaryRootFromRepository(repository: GitRepository): Prom
  * Resolves purely via on-disk `.git`/`commondir` walking — no subprocess —
  * so the status line may call it on every render.
  */
-export function linkedWorktreeSync(cwd: string): { root: string; primaryRoot: string } | null {
-	const repository = resolveRepositorySync(cwd);
+export function linkedWorktreeSync(target: GitRepository | string): { root: string; primaryRoot: string } | null {
+	const repository = typeof target === "string" ? resolveRepositorySync(target) : target;
 	if (!repository || !isLinkedWorktree(repository)) return null;
 	return { root: repository.repoRoot, primaryRoot: primaryRootFromRepositorySync(repository) };
 }
@@ -494,8 +494,8 @@ export function headBranchForLookup(state: GitHeadState, operation: GitInProgres
  * spawn — it has no branch to show — and `git.ts` re-asks the reftable case
  * through the binary for callers that can afford to.
  */
-export function resolveHeadStateFromFiles(cwd: string): GitHeadState | null {
-	const repository = resolveRepositorySync(cwd);
+export function resolveHeadStateFromFiles(target: GitRepository | string): GitHeadState | null {
+	const repository = typeof target === "string" ? resolveRepositorySync(target) : target;
 	if (!repository) return null;
 	if (isReftableRepoSync(repository)) return null;
 	const content = readOptionalTextSync(repository.headPath);
@@ -510,8 +510,8 @@ export function resolveHeadStateFromFiles(cwd: string): GitHeadState | null {
  * HEAD is detached with no operation to recover a name from — a row shows
  * nothing rather than the word "detached" it cannot act on.
  */
-export function branchLabelFromFiles(cwd: string): string | null {
-	const state = resolveHeadStateFromFiles(cwd);
+export function branchLabelFromFiles(target: GitRepository | string): string | null {
+	const state = resolveHeadStateFromFiles(target);
 	if (!state) return null;
 	const operation = resolveInProgressOperation(state);
 	const label = headLabel(state, operation);

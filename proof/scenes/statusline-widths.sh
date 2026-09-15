@@ -3,7 +3,7 @@
 # model turn.
 #
 # WHY THIS SCENE. `location` (the working directory and the git branch) and the right
-# group (model identity, approval rung, subagent count, context gauge) share one line.
+# group (model identity, approval rung, agent count, context gauge) share one line.
 # When location is wide the right group is shed from its end, and which member goes first
 # is a ranking, not a width. Every other fixture under proof/docker/seed-demo.sh sits
 # directly in the demo project on `main` -- eleven columns of location, which never reaches
@@ -24,7 +24,7 @@
 #
 # WHAT THIS TAKE DOES NOT CATCH, and why neither is reachable from a slash command:
 #
-#   `subagents`, rank 5 in `RIGHT_PART_SHED_RANK`. Its text is empty until a subagent is
+#   `agents`, rank 5 in `RIGHT_PART_SHED_RANK`. Its text is empty until an agent is
 #   actually running, so it holds no columns in any frame here.
 #
 #   `prewalk`, second in `BASE_MODE_STATES`. `armPrewalk` needs a resolvable fast/cheap
@@ -79,7 +79,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# THE RUNGS. `AUTONOMY_LABEL` in tools/approval-modes.ts is the whole set, and
+# THE RUNGS. `AUTONOMY_LABEL` in tools/core/approval-modes.ts is the whole set, and
 # `/permissions <rung>` is the only way to reach one without restarting. They are shot
 # before any mode is enabled, because `mode` renders bypass, base mode and rung through one
 # `joinStates` call and a base label would put two variables in the frame at once.

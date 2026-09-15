@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync } from "node:fs";
 import * as path from "node:path";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { convertAnthropicMessages } from "@veyyon/ai/providers/anthropic";
 import { convertMessages } from "@veyyon/ai/providers/openai-completions";
 import { transformMessages } from "@veyyon/ai/providers/transform-messages";
@@ -14,15 +15,14 @@ import type { ResolvedOpenAICompat } from "@veyyon/catalog/types";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
+import { convertToLlm } from "@veyyon/coding-agent/session/messages";
 import {
 	allocateCanonicalToolCallId,
 	canonicalizeToolCallIds,
 	resolveCanonicalToolCallId,
 	type ToolCallIdMap,
-} from "@veyyon/coding-agent/session/canonicalize-tool-call-ids";
-import { convertToLlm } from "@veyyon/coding-agent/session/messages";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+} from "@veyyon/kernel/session/canonicalize-tool-call-ids";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { getProjectDir, setProjectDir, TempDir } from "@veyyon/utils";
 import { type } from "arktype";
 

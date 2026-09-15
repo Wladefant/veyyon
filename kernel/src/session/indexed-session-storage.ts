@@ -1,0 +1,582 @@
+import { enoentError, toError } from "@veyyon/utils";
+import type { PathState } from "@veyyon/utils/fs-optional";
+import { sessionFileStem } from "@veyyon/utils/session-file";
+import {
+	BaseSessionStorageWriter,
+	filterStorageMapKeys,
+	type SessionFileBody,
+	type SessionStorage,
+	type SessionStorageStat,
+	type SessionStorageWriter,
+	sessionBodyToString,
+	type WriteTextAtomicOptions,
+} from "./session-storage";
+import {
+	overlayTitleSlotContent,
+	overlayTitleSlotPrefix,
+	parseTitleSlotFromContent,
+	type SessionTitleUpdate,
+	titleUpdateFromSlot,
+} from "./session-title-slot";
+
+export interface SessionStorageIndexEntry {
+	path: string;
+	size: number;
+	mtimeMs: number;
+	title?: string;
+	titleSource?: SessionTitleUpdate["source"];
+	titleUpdatedAt?: string;
+}
+
+export interface SessionStorageBackend {
+	init(): Promise<void>;
+	loadIndex(): Promise<Iterable<SessionStorageIndexEntry>>;
+	readFull(path: string): Promise<string | null>;
+	readSlices(path: string, prefixBytes: number, suffixBytes: number): Promise<[string, string]>;
+	writeFull(path: string, content: string, mtimeMs: number, title?: SessionTitleUpdate): Promise<void>;
+	append(path: string, line: string, mtimeMs: number): Promise<void>;
+	updateSessionTitle(path: string, title: SessionTitleUpdate, mtimeMs: number): Promise<void>;
+	truncate(path: string, mtimeMs: number): Promise<void>;
+	remove(paths: string[]): Promise<void>;
+	move(src: string, dst: string, mtimeMs: number): Promise<void>;
+}
+
+interface IndexEntry {
+	size: number;
+	mtimeMs: number;
+	title?: string;
+	titleSource?: SessionTitleUpdate["source"];
+	titleUpdatedAt?: string;
+}
+
+interface EnqueueOptions {
+	trackDrain: boolean;
+}
+
+const RESOLVED = Promise.resolve();
+
+function byteLength(text: string): number {
+	return Buffer.byteLength(text, "utf-8");
+}
+
+function normalizeByteLimit(maxBytes: number): number {
+	if (!(maxBytes > 0)) return 0;
+	return Math.trunc(maxBytes);
+}
+
+function uniquePaths(paths: readonly string[]): string[] {
+	return Array.from(new Set(paths));
+}
+function titleUpdateForIndex(entry: IndexEntry): SessionTitleUpdate | undefined {
+	if (!entry.titleUpdatedAt) return undefined;
+	return { title: entry.title, source: entry.titleSource, updatedAt: entry.titleUpdatedAt };
+}
+
+export class IndexedSessionStorage implements SessionStorage {
+	readonly #backend: SessionStorageBackend;
+	readonly #index = new Map<string, IndexEntry>();
+	readonly #writers = new Set<IndexedSessionStorageWriter>();
+	readonly #pathTails = new Map<string, Promise<void>>();
+	readonly #pathPending = new Map<string, Promise<void>>();
+	readonly #drainPending = new Set<Promise<void>>();
+	#nextMtimeMs = 0;
+	#firstDrainError: Error | undefined;
+
+	constructor(backend: SessionStorageBackend) {
+		this.#backend = backend;
+	}
+
+	async initialize(): Promise<void> {
+		await this.#backend.init();
+		await this.refresh();
+	}
+
+	async refresh(): Promise<void> {
+		await this.drain();
+		const rows = await this.#backend.loadIndex();
+		this.#index.clear();
+		for (const row of rows) {
+			const title = row.titleUpdatedAt
+				? { title: row.title, source: row.titleSource, updatedAt: row.titleUpdatedAt }
+				: null;
+			this.#setIndex(row.path, row.size, row.mtimeMs, title);
+		}
+	}
+
+	async drain(): Promise<void> {
+		while (this.#drainPending.size > 0) {
+			await Promise.allSettled(this.#drainPending);
+		}
+		const error = this.#firstDrainError;
+		this.#firstDrainError = undefined;
+		if (error) throw error;
+	}
+
+	ensureDirSync(_dir: string): void {
+		// Indexed backends are flat: directories are derived from key prefixes.
+	}
+
+	existsSync(path: string): boolean {
+		return this.#index.has(path);
+	}
+
+	/**
+	 * Two answers, for the same reason as the in-memory backend: an index cannot be unreachable.
+	 *
+	 * The third state exists for the filesystem, where a path can be present and unreadable at once. Here
+	 * the index either holds the path or it does not, and a synthesized `unreadable` would be a claim about
+	 * a failure this backend cannot have.
+	 */
+	existsStateSync(path: string): PathState {
+		return this.#index.has(path) ? "present" : "absent";
+	}
+
+	writeTextSync(path: string, body: SessionFileBody): void {
+		const content = sessionBodyToString(body);
+		const mtimeMs = this.#allocMtimeMs();
+		const title = titleUpdateFromSlot(parseTitleSlotFromContent(content));
+		this.#setIndex(path, byteLength(content), mtimeMs, title ?? null);
+		this.#enqueuePath(path, () => this.#backend.writeFull(path, content, mtimeMs, title), { trackDrain: true });
+	}
+
+	async updateSessionTitle(path: string, title: SessionTitleUpdate): Promise<void> {
+		await this.#awaitPath(path);
+		const previous = this.#index.get(path);
+		if (!previous) throw enoentError(path);
+		const mtimeMs = this.#allocMtimeMs();
+		const next = {
+			...previous,
+			title: title.title,
+			titleSource: title.source,
+			titleUpdatedAt: title.updatedAt,
+			mtimeMs,
+		};
+		this.#index.set(path, next);
+		try {
+			await this.#enqueuePath(path, () => this.#backend.updateSessionTitle(path, title, mtimeMs), {
+				trackDrain: false,
+			});
+		} catch (err) {
+			const current = this.#index.get(path);
+			if (
+				current?.mtimeMs === next.mtimeMs &&
+				current.title === next.title &&
+				current.titleSource === next.titleSource &&
+				current.titleUpdatedAt === next.titleUpdatedAt
+			) {
+				this.#index.set(path, previous);
+			}
+			throw toError(err);
+		}
+	}
+
+	statSync(path: string): SessionStorageStat {
+		const entry = this.#index.get(path);
+		if (!entry) throw enoentError(path);
+		return {
+			size: entry.size,
+			mtimeMs: entry.mtimeMs,
+			mtime: new Date(entry.mtimeMs),
+		};
+	}
+
+	listFilesSync(dir: string, pattern: string): string[] {
+		return filterStorageMapKeys(this.#index.keys(), dir, pattern, false);
+	}
+
+	listFilesRecursiveSync(dir: string, pattern: string): string[] {
+		return filterStorageMapKeys(this.#index.keys(), dir, pattern, true);
+	}
+
+	exists(path: string): Promise<boolean> {
+		return Promise.resolve(this.existsSync(path));
+	}
+
+	async readText(path: string): Promise<string> {
+		const entry = this.#index.get(path);
+		if (!entry) throw enoentError(path);
+		await this.#awaitPath(path);
+		const content = await this.#backend.readFull(path);
+		if (content === null) throw enoentError(path);
+		const title = titleUpdateForIndex(entry);
+		return title ? overlayTitleSlotContent(content, title) : content;
+	}
+
+	async readTextSlices(path: string, prefixBytes: number, suffixBytes: number): Promise<[string, string]> {
+		const entry = this.#index.get(path);
+		if (!entry) throw enoentError(path);
+		const prefixLimit = normalizeByteLimit(prefixBytes);
+		const suffixLimit = normalizeByteLimit(suffixBytes);
+		if (prefixLimit === 0 && suffixLimit === 0) return ["", ""];
+		await this.#awaitPath(path);
+		const [prefix, suffix] = await this.#backend.readSlices(path, prefixLimit, suffixLimit);
+		const title = titleUpdateForIndex(entry);
+		return [title ? overlayTitleSlotPrefix(prefix, prefixLimit, title) : prefix, suffix];
+	}
+
+	async writeText(path: string, content: string): Promise<void> {
+		await this.#awaitPath(path);
+		const previous = this.#index.get(path);
+		const mtimeMs = this.#allocMtimeMs();
+		const title = titleUpdateFromSlot(parseTitleSlotFromContent(content));
+		this.#setIndex(path, byteLength(content), mtimeMs, title ?? null);
+		try {
+			await this.#enqueuePath(path, () => this.#backend.writeFull(path, content, mtimeMs, title), {
+				trackDrain: false,
+			});
+		} catch (err) {
+			this.#restoreIndex(path, previous);
+			throw toError(err);
+		}
+	}
+
+	async writeTextAtomic(path: string, body: SessionFileBody, options?: WriteTextAtomicOptions): Promise<void> {
+		const commitGuard = options?.commitGuard;
+		if (commitGuard && !commitGuard()) return;
+		await this.#awaitPath(path);
+		// A concurrent flushSync (writeTextSync) may have taken over during the
+		// awaitPath yield and bumped the epoch. Re-check before touching the
+		// index or enqueueing the backend publish.
+		if (commitGuard && !commitGuard()) return;
+		// Only now: this backend keeps the whole text (it indexes the byte length and
+		// the title slot), but an abandoned write should not pay to build it.
+		const content = sessionBodyToString(body);
+		const previous = this.#index.get(path);
+		const mtimeMs = this.#allocMtimeMs();
+		const title = titleUpdateFromSlot(parseTitleSlotFromContent(content));
+		this.#setIndex(path, byteLength(content), mtimeMs, title ?? null);
+		try {
+			await this.#enqueuePath(
+				path,
+				async () => {
+					// Final guard immediately before the backend actually publishes.
+					// If a concurrent writer has advanced the index past our
+					// optimistic entry, leave that newer state alone; otherwise
+					// restore the pre-write snapshot so readers do not observe a
+					// body we never wrote.
+					if (commitGuard && !commitGuard()) {
+						const current = this.#index.get(path);
+						if (current?.mtimeMs === mtimeMs) this.#restoreIndex(path, previous);
+						return;
+					}
+					await this.#backend.writeFull(path, content, mtimeMs, title);
+				},
+				{ trackDrain: false },
+			);
+		} catch (err) {
+			this.#restoreIndex(path, previous);
+			throw toError(err);
+		}
+	}
+
+	async rename(src: string, dst: string): Promise<void> {
+		await this.#awaitPath(src);
+		await this.#awaitPath(dst);
+		const entry = this.#index.get(src);
+		if (!entry) throw enoentError(src);
+		const dstPrevious = this.#index.get(dst);
+		this.#index.delete(src);
+		this.#index.set(dst, { ...entry });
+		try {
+			await this.#enqueuePaths([src, dst], () => this.#backend.move(src, dst, entry.mtimeMs), { trackDrain: false });
+		} catch (err) {
+			this.#index.delete(dst);
+			this.#restoreIndex(dst, dstPrevious);
+			this.#index.set(src, entry);
+			throw toError(err);
+		}
+	}
+
+	async moveSessionWithArtifacts(src: string, dst: string): Promise<void> {
+		const sourceArtifacts = sessionFileStem(src);
+		const targetArtifacts = sessionFileStem(dst);
+		const artifactPrefix = `${sourceArtifacts}/`;
+		const moves: Array<{ src: string; dst: string; entry: IndexEntry }> = [];
+		for (const [filePath, entry] of this.#index) {
+			if (filePath === src) {
+				if (src !== dst) moves.push({ src: filePath, dst, entry });
+			} else if (filePath.startsWith(artifactPrefix)) {
+				const target = `${targetArtifacts}/${filePath.slice(artifactPrefix.length)}`;
+				if (filePath !== target) moves.push({ src: filePath, dst: target, entry });
+			}
+		}
+		if (moves.length === 0) return;
+
+		const allPaths = moves.flatMap(move => [move.src, move.dst]);
+		for (const filePath of allPaths) await this.#awaitPath(filePath);
+		const previous = new Map<string, IndexEntry | undefined>();
+		for (const filePath of allPaths) previous.set(filePath, this.#index.get(filePath));
+		for (const move of moves) this.#index.delete(move.src);
+		for (const move of moves) this.#index.set(move.dst, { ...move.entry });
+
+		try {
+			await this.#enqueuePaths(
+				allPaths,
+				async () => {
+					const completed: typeof moves = [];
+					try {
+						for (const move of moves) {
+							await this.#backend.move(move.src, move.dst, move.entry.mtimeMs);
+							completed.push(move);
+						}
+					} catch (error) {
+						const rollbackErrors: Error[] = [];
+						for (let index = completed.length - 1; index >= 0; index--) {
+							const move = completed[index];
+							try {
+								await this.#backend.move(move.dst, move.src, move.entry.mtimeMs);
+							} catch (rollbackError) {
+								rollbackErrors.push(toError(rollbackError));
+							}
+						}
+						if (rollbackErrors.length > 0) {
+							throw new AggregateError(
+								[toError(error), ...rollbackErrors],
+								"Indexed session relocation rollback failed",
+							);
+						}
+						throw error;
+					}
+				},
+				{ trackDrain: false },
+			);
+		} catch (error) {
+			for (const filePath of allPaths) {
+				this.#restoreIndex(filePath, previous.get(filePath));
+			}
+			throw toError(error);
+		}
+	}
+
+	async unlink(path: string): Promise<void> {
+		await this.#awaitPath(path);
+		const previous = this.#index.get(path);
+		if (!previous) throw enoentError(path);
+		this.#index.delete(path);
+		try {
+			await this.#enqueuePath(path, () => this.#backend.remove([path]), { trackDrain: false });
+		} catch (err) {
+			this.#index.set(path, previous);
+			throw toError(err);
+		}
+	}
+
+	async deleteSessionWithArtifacts(sessionPath: string): Promise<void> {
+		await this.#awaitPath(sessionPath);
+		const sessionEntry = this.#index.get(sessionPath);
+		if (!sessionEntry) throw enoentError(sessionPath);
+
+		const artifactsDir = sessionPath.slice(0, -6);
+		const prefix = artifactsDir.endsWith("/") ? artifactsDir : `${artifactsDir}/`;
+		const paths = [sessionPath];
+		for (const key of this.#index.keys()) {
+			if (key.startsWith(prefix)) paths.push(key);
+		}
+
+		for (const path of paths) await this.#awaitPath(path);
+
+		const previous = new Map<string, IndexEntry>();
+		for (const path of paths) {
+			const entry = this.#index.get(path);
+			if (entry) previous.set(path, entry);
+			this.#index.delete(path);
+		}
+
+		try {
+			await this.#enqueuePaths(paths, () => this.#backend.remove(paths), { trackDrain: false });
+		} catch (err) {
+			for (const [path, entry] of previous) this.#index.set(path, entry);
+			throw toError(err);
+		}
+	}
+
+	openWriter(path: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }): SessionStorageWriter {
+		const writer = new IndexedSessionStorageWriter(this, path, options);
+		this.#writers.add(writer);
+		return writer;
+	}
+
+	_writerClosed(writer: IndexedSessionStorageWriter): void {
+		this.#writers.delete(writer);
+	}
+
+	_truncateForWriter(path: string): number {
+		const mtimeMs = this.#allocMtimeMs();
+		this.#setIndex(path, 0, mtimeMs, null);
+		return mtimeMs;
+	}
+
+	_queueTruncate(path: string, mtimeMs: number, getError?: () => Error | undefined): Promise<void> {
+		return this.#enqueuePath(
+			path,
+			async () => {
+				const error = getError?.();
+				if (error) throw error;
+				await this.#backend.truncate(path, mtimeMs);
+			},
+			{ trackDrain: true },
+		);
+	}
+
+	_appendForWriter(path: string, line: string): number {
+		const mtimeMs = this.#allocMtimeMs();
+		const existing = this.#index.get(path);
+		const size = (existing?.size ?? 0) + byteLength(line);
+		this.#setIndex(path, size, mtimeMs);
+		return mtimeMs;
+	}
+
+	_queueAppend(path: string, line: string, mtimeMs: number, getError?: () => Error | undefined): Promise<void> {
+		return this.#enqueuePath(
+			path,
+			async () => {
+				const error = getError?.();
+				if (error) throw error;
+				await this.#backend.append(path, line, mtimeMs);
+			},
+			{ trackDrain: true },
+		);
+	}
+
+	#restoreIndex(path: string, entry: IndexEntry | undefined): void {
+		if (entry) {
+			this.#index.set(path, entry);
+		} else {
+			this.#index.delete(path);
+		}
+	}
+
+	#setIndex(
+		path: string,
+		size: number,
+		mtimeMs: number,
+		title: SessionTitleUpdate | null | undefined = undefined,
+	): void {
+		const current = title === undefined ? this.#index.get(path) : undefined;
+		this.#index.set(path, {
+			size,
+			mtimeMs,
+			title: title === undefined ? current?.title : (title?.title ?? undefined),
+			titleSource: title === undefined ? current?.titleSource : (title?.source ?? undefined),
+			titleUpdatedAt: title === undefined ? current?.titleUpdatedAt : (title?.updatedAt ?? undefined),
+		});
+		if (mtimeMs > this.#nextMtimeMs) this.#nextMtimeMs = mtimeMs;
+	}
+
+	#allocMtimeMs(): number {
+		const now = Date.now();
+		const next = now > this.#nextMtimeMs ? now : this.#nextMtimeMs + 1;
+		this.#nextMtimeMs = next;
+		return next;
+	}
+
+	#enqueuePath(path: string, task: () => Promise<void>, options: EnqueueOptions): Promise<void> {
+		return this.#enqueuePaths([path], task, options);
+	}
+
+	#enqueuePaths(paths: readonly string[], task: () => Promise<void>, options: EnqueueOptions): Promise<void> {
+		const unique = uniquePaths(paths);
+		const previous = unique.map(path => this.#pathTails.get(path) ?? RESOLVED);
+		const operation = Promise.all(previous).then(task);
+		const tracked = operation.catch(err => {
+			const error = toError(err);
+			if (options.trackDrain && !this.#firstDrainError) this.#firstDrainError = error;
+			throw error;
+		});
+		// `tracked` is what the caller awaits, so the error is delivered there and is NOT swallowed here.
+		// The three guards below exist only to keep the bookkeeping copies of that promise from becoming
+		// unhandled rejections: `tail` is the chain the NEXT write on this path waits on, and it must
+		// resolve so one failed write does not reject every later write to the same file.
+		const tail = tracked.catch(() => {});
+		for (const path of unique) {
+			this.#pathTails.set(path, tail);
+			this.#pathPending.set(path, tracked);
+		}
+		tail.finally(() => {
+			for (const path of unique) {
+				if (this.#pathTails.get(path) === tail) this.#pathTails.delete(path);
+			}
+		});
+		tracked
+			.finally(() => {
+				for (const path of unique) {
+					if (this.#pathPending.get(path) === tracked) this.#pathPending.delete(path);
+				}
+			})
+			.catch(() => {});
+		// A caller that ignores the returned promise (fire-and-forget append) still reaches `#firstDrainError`
+		// above and surfaces at the next drain, so this marks the rejection handled rather than dropping it.
+		tracked.catch(() => {});
+		if (options.trackDrain) {
+			this.#drainPending.add(tracked);
+			tracked
+				.finally(() => {
+					this.#drainPending.delete(tracked);
+				})
+				.catch(() => {});
+		}
+		return tracked;
+	}
+
+	#awaitPath(path: string): Promise<void> {
+		return this.#pathPending.get(path) ?? RESOLVED;
+	}
+}
+
+class IndexedSessionStorageWriter extends BaseSessionStorageWriter {
+	#storage: IndexedSessionStorage;
+	#path: string;
+	#pendingChain: Promise<void> = Promise.resolve();
+
+	constructor(
+		storage: IndexedSessionStorage,
+		path: string,
+		options?: { flags?: "a" | "w"; onError?: (err: Error) => void },
+	) {
+		super(options);
+		this.#storage = storage;
+		this.#path = path;
+		if ((options?.flags ?? "a") === "w") {
+			const mtimeMs = storage._truncateForWriter(path);
+			this.#trackPromise(storage._queueTruncate(path, mtimeMs, () => this.getError()));
+		}
+	}
+
+	#trackPromise(promise: Promise<void>): Promise<void> {
+		const next = this.#pendingChain.then(async () => {
+			this.ensureNoError();
+			try {
+				await promise;
+			} catch (err) {
+				throw this.recordError(err);
+			}
+		});
+		// The failure travels to the caller through the returned `next`, and `recordError` also latches it so
+		// every later call rethrows it via `ensureNoError`/`getError`. The chain copy must resolve, or the
+		// recorded error would be re-delivered to unrelated later writers as an unhandled rejection.
+		this.#pendingChain = next.catch(() => {});
+		return next;
+	}
+
+	async append(line: string): Promise<void> {
+		this.ensureOpen();
+		const mtimeMs = this.#storage._appendForWriter(this.#path, line);
+		await this.#trackPromise(this.#storage._queueAppend(this.#path, line, mtimeMs, () => this.getError()));
+	}
+
+	async flush(): Promise<void> {
+		this.ensureNoError();
+		await this.#pendingChain;
+		this.ensureNoError();
+	}
+
+	async close(): Promise<void> {
+		if (this.isClosed) return;
+		this.markClosed();
+		try {
+			await this.flush();
+		} finally {
+			this.#storage._writerClosed(this);
+		}
+	}
+}

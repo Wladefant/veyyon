@@ -34,6 +34,7 @@
   },
   "dependencies": {
     "@bufbuild/protobuf": "catalog:",
+    "@veyyon/model": "catalog:",
     "@veyyon/utils": "catalog:",
     "arktype": "catalog:",
     "zod": "catalog:"
@@ -42,6 +43,7 @@
     "@veyyon/ai": "catalog:",
     "@veyyon/coding-agent": "catalog:",
     "@veyyon/mnemopi": "catalog:",
+    "@veyyon/web": "catalog:",
     "@types/bun": "catalog:"
   },
   "engines": {

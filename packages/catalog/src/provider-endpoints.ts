@@ -148,10 +148,21 @@ export const CURSOR_API_ENDPOINT = "https://api2.cursor.sh";
  *
  * Four modules spelled it: `mnemopi/config.ts` as `DEFAULT_EMBEDDING_API_URL`, `mnemopi/core/embeddings.ts`
  * and `mnemopi/core/extraction/client.ts` inline inside an env-variable fallback chain, and
- * `coding-agent/web/search/providers/perplexity-auth.ts` as `OPENROUTER_BASE_URL`. That last name is also the
+ * `coding-agent/tools/web/search/providers/perplexity-auth.ts` as `OPENROUTER_BASE_URL`. That last name is also the
  * name of the ENVIRONMENT VARIABLE those chains read, so a reader could not tell from the name whether they
  * were looking at the configured value or the default it falls back to.
  *
  * The `/v1` segment is part of the value, since every consumer appends a path to it.
  */
 export const OPENROUTER_API_ENDPOINT = "https://openrouter.ai/api/v1";
+
+/**
+ * The `codex-chatgpt-web` bridge's loopback Responses base, the default when no
+ * endpoint is configured for the `chatgpt-web` provider.
+ *
+ * The daemon refuses to bind anything but `127.0.0.1` and installs itself into
+ * a Codex config as `openai_base_url = "http://127.0.0.1:17841/v1"`, so both
+ * the host and the `/v1` segment are part of the value: every consumer appends
+ * a route (`/models`, `/responses`) to it.
+ */
+export const CHATGPT_WEB_LOCAL_ENDPOINT = "http://127.0.0.1:17841/v1";

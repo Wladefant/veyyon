@@ -1,23 +1,23 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AssistantMessage } from "@veyyon/ai";
 import { Editor } from "@veyyon/tui";
 import { makeBench } from "@veyyon/utils/bench-harness";
+import type { AssistantMessageView } from "@veyyon/wire/presentation";
 import { Settings } from "../src/config/settings";
-import { AssistantMessageComponent } from "../src/modes/components/assistant-message";
-import { TranscriptContainer } from "../src/modes/components/transcript-container";
-import { truncateToVisualLines } from "../src/modes/components/visual-truncate";
-import { WelcomeComponent } from "../src/modes/components/welcome";
+import { WelcomeComponent } from "../src/modes/terminal/components/dialogs/welcome";
+import { AssistantMessageComponent } from "../src/modes/terminal/components/transcript/assistant-message";
+import { TranscriptContainer } from "../src/modes/terminal/components/transcript/transcript-container";
+import { truncateToVisualLines } from "../src/modes/terminal/components/transcript/visual-truncate";
 import {
 	BlockUnitCounter,
 	buildDisplayMessage,
 	nextStep,
 	visibleUnits,
-} from "../src/modes/controllers/streaming-reveal";
-import { getEditorTheme, initTheme } from "../src/modes/theme/theme";
+} from "../src/modes/terminal/controllers/streaming-reveal";
+import { getEditorTheme, initTheme } from "../src/theme/theme";
 import type { ToolSession } from "../src/tools";
-import { ReadTool } from "../src/tools/read";
+import { ReadTool } from "../src/tools/fs/read";
 
 const ITERATIONS = 500;
 const WIDTH = 100;
@@ -78,22 +78,11 @@ function makeMarkdownCorpus(targetGraphemes: number): string {
 	return out.slice(0, targetGraphemes);
 }
 
-function makeTextMessage(text: string): AssistantMessage {
+function makeTextMessage(text: string): AssistantMessageView {
 	return {
-		role: "assistant",
-		content: [{ type: "text", text }],
-		api: "anthropic-messages",
-		provider: "anthropic",
+		segments: [{ kind: "text", text }],
 		model: "bench",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		stopReason: "stop",
+		stopReason: "complete",
 		timestamp: 0,
 	};
 }
@@ -160,13 +149,15 @@ try {
 // Multi-block variant: a finalized thinking block (stable) precedes the growing
 // text block — the shape C2 targets. Current code re-lexes BOTH every tick;
 // after C2 the finalized thinking block stays L1-cached and only the tail re-lexes.
-function makeThinkingPlusText(thinking: string, text: string): AssistantMessage {
+function makeThinkingPlusText(thinking: string, text: string): AssistantMessageView {
 	return {
-		...makeTextMessage(text),
-		content: [
-			{ type: "thinking", thinking },
-			{ type: "text", text },
+		segments: [
+			{ kind: "thinking", text: thinking, redacted: false },
+			{ kind: "text", text },
 		],
+		model: "bench",
+		stopReason: "complete",
+		timestamp: 0,
 	};
 }
 console.log("\nstreamingRevealMultiBlock (C2: finalized thinking block + growing text):");

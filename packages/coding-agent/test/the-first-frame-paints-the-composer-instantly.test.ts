@@ -1,9 +1,11 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, setSystemTime, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { settings } from "@veyyon/coding-agent/config/settings-instance";
+import { resetLaunchFactsForTest } from "@veyyon/coding-agent/modes/launch-facts";
 import {
 	applyComposerChrome,
 	COMPOSER_INSET_COLS,
@@ -14,22 +16,23 @@ import {
 	mountLaunchComposer,
 	PRISTINE_COMPOSER_ACCENT_STATE,
 	resolveComposerAccents,
-} from "@veyyon/coding-agent/modes/components/composer-chrome";
-import { CustomEditor } from "@veyyon/coding-agent/modes/components/custom-editor";
-import { renderBranch } from "@veyyon/coding-agent/modes/components/status-line/branch";
-import { renderLocation, resolveLocationOptions } from "@veyyon/coding-agent/modes/components/status-line/location";
-import { segmentSeparator } from "@veyyon/coding-agent/modes/components/status-line/state-grammar";
-import { InteractiveMode } from "@veyyon/coding-agent/modes/interactive-mode";
-import { resetLaunchFactsForTest } from "@veyyon/coding-agent/modes/launch-facts";
-import { getEditorTheme, initTheme } from "@veyyon/coding-agent/modes/theme/theme";
+} from "@veyyon/coding-agent/modes/terminal/components/composer/composer-chrome";
+import { CustomEditor } from "@veyyon/coding-agent/modes/terminal/components/composer/custom-editor";
+import { renderBranch } from "@veyyon/coding-agent/modes/terminal/components/status-line/branch";
+import {
+	renderLocation,
+	resolveLocationOptions,
+} from "@veyyon/coding-agent/modes/terminal/components/status-line/location";
+import { segmentSeparator } from "@veyyon/coding-agent/modes/terminal/components/status-line/state-grammar";
+import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
-import { resolveActiveRepoContextSync, resolveWorktreeContext } from "@veyyon/coding-agent/utils/active-repo-context";
+import { getEditorTheme, initTheme } from "@veyyon/coding-agent/theme/theme";
+
 import { branchLabelFromFiles } from "@veyyon/coding-agent/utils/git-head";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import type { Component } from "@veyyon/tui";
-import { visibleWidth } from "@veyyon/tui/utils";
 import { getProjectDir, TempDir } from "@veyyon/utils";
+import { visibleWidth } from "@veyyon/utils/width";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../utils/test/helpers/isolated-config-root";
 import { useFixtureCheckout } from "./helpers/fixture-checkout";
 
@@ -95,7 +98,7 @@ function launchComposer(): Component[] {
 	applyComposerChrome(editor, resolveComposerAccents(PRISTINE_COMPOSER_ACCENT_STATE));
 	editor.setMaxHeight(computeEditorMaxHeight(30));
 	const mounted: Component[] = [];
-	mountLaunchComposer({ addChild: child => mounted.push(child) }, editor);
+	mountLaunchComposer({ addChild: child => mounted.push(child) }, editor, () => editor.getText());
 	return mounted;
 }
 
@@ -104,22 +107,9 @@ function launchRows(width: number): string[] {
 	return launchComposer().flatMap(child => child.render(width));
 }
 
-/** The worktree context the card resolves, the same way the live row does at its first paint. */
-function launchWorktree() {
-	const projectDir = getProjectDir();
-	const activeRepo = resolveActiveRepoContextSync(projectDir);
-	const effectiveGitCwd = activeRepo?.repoRoot ?? projectDir;
-	return activeRepo ? null : resolveWorktreeContext(effectiveGitCwd);
-}
-
 /** The location segment at the budget the preset sets for it, before any row competes for width. */
 function budgetedLocation(): string {
-	return renderLocation({
-		projectDir: getProjectDir(),
-		worktree: launchWorktree(),
-		branch: branchLabelFromFiles(getProjectDir()),
-		options: resolveLocationOptions(),
-	}).content;
+	return renderLocation({ projectDir: getProjectDir(), options: resolveLocationOptions() }).content;
 }
 
 /**
@@ -144,7 +134,6 @@ function widthThatFitsTheLocation(): number {
 	}
 	throw new Error("the launch row carried the budgeted location at no width between 40 and 400 columns");
 }
-
 /**
  * The checkout the card describes, so the branch and the path are this file's facts rather than
  * the directory the run started in. Nested deep enough that the rendered location is shorter than
@@ -217,6 +206,11 @@ describe("the launch composer", () => {
 	 * at the directory the operator is in, only shorter. A card that shed the location instead would
 	 * paint a row with nothing where the live row says where you are, and would grow one at the
 	 * handover.
+	 *
+	 * Driven from a stated deep checkout, not the ambient one. A CI job checks out `/srv/veyyon`,
+	 * whose whole path is shorter than the budget, so there is nothing to refit and the shortened
+	 * row is the same bytes as the budgeted one — the cell read green on a workstation's deep
+	 * worktree and red on the runner, and neither reading was about the card.
 	 */
 	it("shortens the path rather than dropping it when the row cannot afford the budget", () => {
 		const fits = widthThatFitsTheLocation();
@@ -263,19 +257,14 @@ describe("the launch composer", () => {
 	it("honors a path budget the session overrides the preset with", () => {
 		settings.set("statusLine.segmentOptions", { path: { maxLength: 12 } });
 		try {
-			const rendered = renderLocation({
-				projectDir: getProjectDir(),
-				worktree: launchWorktree(),
-				branch: branchLabelFromFiles(getProjectDir()),
-				options: resolveLocationOptions(),
-			});
-			// The budget governs the path text; the segment icon rides beside it, so the
-			// row-wide bound is the budget plus the cells the icon spends.
-			expect(visibleWidth(rendered.content)).toBeLessThanOrEqual(12 + rendered.pin);
-			const located = rendered.content;
-			const row = launchRows(100).find(candidate => candidate.includes(located));
+			const located = renderLocation({ projectDir: getProjectDir(), options: resolveLocationOptions() });
+			// `pin` is the icon and the space after it, which the clamp never counted: the budget
+			// governs the path, and a directory the row marks with an icon must not read as one
+			// that blew the budget by the width of that icon.
+			expect(visibleWidth(located.content) - located.pin).toBeLessThanOrEqual(12);
+			const row = launchRows(100).find(candidate => candidate.includes(located.content));
 			expect(row).toBeDefined();
-			expect(row).toStartWith(`${" ".repeat(COMPOSER_INSET_COLS)}${located}`);
+			expect(row).toStartWith(`${" ".repeat(COMPOSER_INSET_COLS)}${located.content}`);
 		} finally {
 			settings.set("statusLine.segmentOptions", {});
 		}
@@ -298,8 +287,8 @@ describe("the launch composer", () => {
 	it("leaves the branch off the card when the row will not show one", () => {
 		settings.set("git.enabled", false);
 		try {
-			const located = budgetedLocation();
-			const row = launchRows(widthThatFitsTheLocation()).find(candidate => candidate.includes(located));
+			const located = renderLocation({ projectDir: getProjectDir(), options: resolveLocationOptions() }).content;
+			const row = launchRows(100).find(candidate => candidate.includes(located));
 			expect(row).toStartWith(`${" ".repeat(COMPOSER_INSET_COLS)}${located}`);
 			// Nothing after the location is a branch: no separator-then-label, and
 			// no bare label anywhere else on the row.
@@ -316,10 +305,9 @@ describe("the launch composer", () => {
 		// `the-launch-card-states-what-the-last-launch-knew.test.ts`; the config root is isolated
 		// above so that file's recordings cannot answer for this one.
 		const label = branchLabelFromFiles(getProjectDir());
-		expect(label).toBe(CHECKOUT.branch);
-		const branch = renderBranch(label, false);
-		const row = launchRows(widthThatFitsTheLocation()).find(candidate => candidate.includes(branch));
+		const row = launchRows(100).find(candidate => candidate.includes(CHECKOUT.branch));
 		expect(row).toBeDefined();
+		expect(row).toContain(renderBranch(label, false));
 		expect(row).not.toContain("*");
 	});
 });

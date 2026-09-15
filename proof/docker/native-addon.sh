@@ -23,9 +23,10 @@ require_native_addon() {
 		echo "recorder: PROOF_NATIVE_ADDON=${PROOF_NATIVE_ADDON} does not exist" >&2
 		return 1
 	fi
+	compgen -G "${repo}/natives/bridge/bindings/native/veyyon_natives.linux-x64*.node" >/dev/null && return 0
 	compgen -G "${repo}/packages/natives/native/veyyon_natives.linux-x64*.node" >/dev/null && return 0
-	echo "recorder: no linux-x64 napi addon in packages/natives/native" >&2
+	echo "recorder: no linux-x64 napi addon in natives/bridge/bindings/native" >&2
 	echo "recorder: the product would exit before it drew a frame. Provision it with:" >&2
-	echo "  bun --cwd=packages/natives run ensure" >&2
+	echo "  bun --cwd=natives/bridge/bindings run ensure" >&2
 	return 1
 }

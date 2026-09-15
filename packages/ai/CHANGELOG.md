@@ -2,6 +2,68 @@
 
 ## [Unreleased]
 
+### Added
+
+- A `chatgpt-web` provider definition for the local `codex-chatgpt-web` Responses bridge. It carries no `login` and no `refreshToken`: the bridge authenticates its own browser side through a Chrome profile the operator signs in to once with the daemon's `setup` command, and its catalog bearer comes from the environment (`CODEX_CHATGPT_WEB_OAUTH_TOKEN`, then `OPENAI_CODEX_OAUTH_TOKEN`). The official `openai-codex` provider keeps its own flow, credentials and host unchanged.
+
+### Fixed
+
+- ChatGPT Web turns now have a five-minute total deadline across transport attempts, force the daemon's SSE transport, and report actionable connection, timeout, authentication and unavailable-model failures. Caller cancellation remains cancellation.
+- A Codex base URL that already names the Responses route is now used verbatim instead of having `/codex/responses` appended to it. OpenAI serves the route at `{base}/codex/responses`, but a Codex-compatible server need not: the local `codex-chatgpt-web` bridge installs itself into a Codex config as `openai_base_url = "http://127.0.0.1:17841/v1"` and serves `POST /v1/responses`, so every turn against it built `…/v1/responses/codex/responses` and 404'd — indistinguishable at the call site from a daemon that is not running. The existing `/backend-api`, `/backend-api/codex` and `/backend-api/codex/responses` shapes resolve exactly as before.
+- A bridge-routed Codex turn now carries the per-item turn provenance the local `codex-chatgpt-web` daemon validates. The daemon derives an execution key for every turn through `extractChatGptTurnUserRevision`, which accepts a current-turn user item only when it declares `type: "message"` AND carries `internal_chat_message_metadata_passthrough.turn_id` equal to the `turn_id` in `client_metadata["x-codex-turn-metadata"]` — the alternative it also accepts, a server-owned item `id`, is stripped from every input item by the Codex request transformer by design. The message converter emitted `{ role, content }`, so the daemon threw "ChatGPT web requires a current-turn user message for browser-session replay" and every turn ended in `response.failed`. The stamp is applied once, at the final request boundary where the turn id and the finished input array meet, so continuation and tool-return requests are covered by the same rule; it is gated on the `chatgpt-web` provider reached over a loopback base URL, so OpenAI's host and every other Codex-compatible server on loopback are sent byte-identical bodies.
+- Bridge-routed Codex requests now carry an explicit host-owned environment envelope for ordinary Full-mode `codex-chatgpt-web` turns, including text-only turns. The envelope is stamped with the current turn id and placed immediately before its user item, rather than relying on daemon instruction or thread-cache fallbacks. It names the caller's absolute session working directory and declares `permission_profile type="disabled"` with `file_system type="unrestricted"`: Veyyon provides no filesystem sandbox, and tool execution still goes through Veyyon's own gated tool layer. Missing or relative cwd produces a warning and no invented envelope; the daemon may refuse or use its other trusted context. Compaction disables local tools and does not require the envelope; sending it preserves the compaction source key, though its execution key can change. The existing provider/loopback gate leaves official OpenAI and other Codex-compatible request bodies unchanged. Real-account models, turn, cancellation and tool-call smoke remain unverified.
+
+### Breaking Changes
+
+- Provider-specific test override setters are replaced by `setProviderModuleOverrideForTest(api, module)`.
+
+### Changed
+
+- The NVIDIA, Xiaomi, Xiaomi Token Plan and Alibaba Coding Plan logins take the pasted key through the same `promptApiKey` as every `createApiKeyLogin` provider: the key is trimmed, an empty paste is `ApiKeyRequiredError`, an abort during the paste is `LoginCancelledError`, and a host without `onPrompt` is `OnPromptRequiredError`; no behavior change.
+- API-key and OAuth credential ranking score usage windows and block a credential at its scoped limit through one `#rankUsageResults`, an OAuth refresh reads its candidate row before and after the lease through one `readRefreshCandidate`, and the plan-filter and usage-limit rejection runs before and after a refresh through one `usageRejects`; no behavior change.
+- Tool-argument validation runs its seven pre-validation normalizations through one ordered pass table, before the first check and after every issue-driven coercion, and the two schema-agnostic value walks share one copy-on-write array step; no behavior change.
+- GitLab Duo Workflow shares fresh-workflow restart handling without changing retry limits, request ordering, or surfaced errors.
+- Streaming provider initialization shares assistant-message construction without changing emitted metadata or mutable-state isolation.
+- Provider error projection, Google request options and Hermes/Qwen3 tool-call rendering share implementations without changing wire formats.
+- Removed duplicate OpenAI Responses moderation type declarations without changing exported types or wire formats.
+- OpenAI Responses computer actions share field declarations while preserving independent public namespace augmentation.
+- Response input and output items share field declarations while retaining namespace-specific nested types and augmentation.
+- GitLab Duo and GitLab Duo Workflow share token-response decoding and PKCE types without changing login or refresh behavior.
+- API-key validators share error-body handling without changing request formats, error messages or deadlines.
+- Lazy provider streams share import-promise caching while preserving provider loading and timeout behavior.
+- API-key logins share credential prompting and validation with unchanged provider messages and cancellation behavior.
+- Credential refresh and usage requests share cancellation handling while preserving abort reasons and independent completion of shared work.
+- The GLM, Gemini, Gemma and Qwen3 in-band scanners share one outside-text step (`scanOutsideText`) and Hermes and Qwen3 share one closed-body completion (`emitClosedToolCall`), with unchanged events at every chunking of a stream.
+- Provider module declarations share one typed stream signature with unchanged runtime output.
+- Hermes and Qwen tool calls use one JSON decoder with unchanged repair and partial-stream recovery.
+- `Tool` extends `ToolSpec` from `@veyyon/tool`, which owns the schema-independent declaration and the `ToolExample` kinds; `@veyyon/ai` exports every name it exported before, so no caller changes.
+- The message envelope, content blocks, `AssistantMessageEvent`, `StopDetails`, the turn and tool-call study records and the streaming partial-JSON symbol are defined in `@veyyon/model`; `@veyyon/ai` re-exports every name it exported before, so no caller changes.
+- A source comment in the OAuth callback page names the shared sun source at `apps/site/sun-field.js`; behavior is unchanged.
+- Typed tuple copies use spreads rather than `.concat()`, which a `as const` array does not define. No user-visible behavior changes.
+- A source-path comment in `register-builtins.ts` names the benchmark module it cites at its new path under `tests/evals/`; behavior is unchanged.
+- A source-path comment in `message-text.ts` names the coding-agent module its caller moved to; behavior is unchanged.
+- `CONTEXTUAL_USER_PREFIXES` is exported from the codex compaction module so the retained-window rule is asserted against the real list rather than a copy of it.
+- A source-path comment and the barrel-shortcut suite name the Perplexity search provider at `tools/web/search/providers/perplexity.ts`. No behavior change.
+- Hermes and Qwen3 share truncated-call recovery with unchanged tool names, arguments and completion events.
+- The Codex responses provider parses usage through one numeric field picker, resets the websocket chain (append baseline, turn state, models etag) through one helper at every site, and the whitespace-loop, stale-response and retryable-error recoveries share one turn restart and one delayed reopen; no behavior change.
+- The Qwen3, Hermes, GLM, Kimi, pi-native, Gemma and Gemini scanners and the thinking-healing scanner stream a reasoning section through one `ThinkingSection` and close a tag-delimited one through one `scanThinkingText` step, with the same events, the same held partial close tag and the same flush at end of stream.
+- The Cursor exec channel buffers stdout and stderr through one `ShellOutputChannel` per stream, sending on a newline, past 4 KiB or 100 ms after the first byte and holding an incomplete ANSI escape until its tail arrives; no behavior change.
+- `deleteAuthCredential` and `deleteAuthCredentialsForProvider` soft-delete through one step that reports a failed statement with the credential or provider it names; no behavior change.
+- `AuthStorage` delivers its credential-disabled, credential-failover and usage-limit-withheld notices through one subscriber call that isolates a throw or a rejection and logs it against the hook, addresses a refreshed broker row through one matcher that ignores the shared refresh sentinel, and reads a report's unanimous scope account or project id through one step; no behavior change.
+- Doc comments refer to child runs and roles as agents rather than subagents; the Codex protocol header `x-openai-subagent` and its `subagent_kind` metadata key are unchanged.
+- Both streaming gateway routes (the format endpoints and the pi-native fast path) abort the upstream call on a closed client response through one SSE cancel hook; no behavior change.
+
+### Fixed
+
+- Corrected comments that named a distribution channel or runtime API the project does not use; no behavior change.
+- A stream that stalls after its first event ("<provider> stream stalled while waiting for the next event") classifies as a timeout as well as transient, so auto-compaction moves to the next candidate model instead of re-sending the full context to the model that stalled up to `retry.maxRetries` times.
+- A Codex websocket turn that the server accepts and then leaves without progress for the idle window is retried on the websocket once and then run over SSE, instead of spending the whole websocket retry budget on stalls, which held one compaction summary for thirty minutes per attempt.
+- A codex server-side compaction cut by its deadline fails as a timeout, and one the caller cancels fails as a cancellation, instead of both reporting "stream closed before response.completed" as a backend fault.
+- The codex websocket watchdog message reports the time since the last progress as of the moment it fires, instead of a value computed before the wait.
+- Cursor and Devin protobuf regeneration invokes the workspace compiler, and Cursor output is written to the catalog package.
+- Credential-store startup applies SQLite busy handling and WAL mode before initializing refresh leases, allowing concurrent launches to wait for database locks.
+- Google's generic `RESOURCE_EXHAUSTED` 429 body ("Resource has been exhausted (e.g. check quota)") classifies as a per-minute throttle retried on the same account after 45-75 s, instead of a daily quota wall whose 30-minute wait exceeded the retry budget and ended the turn on the first 429; a body that states a quota keeps the quota classification.
+
 ## [1.4.1] - 2026-09-08
 
 ### Fixed

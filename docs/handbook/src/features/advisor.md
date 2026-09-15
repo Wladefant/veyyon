@@ -89,7 +89,7 @@ Every advisor has the `advise` tool for surfacing notes into the primary transcr
 - `read`
 - `search`
 
-A `WATCHDOG.yml` roster entry may broaden this with `tools: [...]`, selecting any subset of the built-in pool the session actually built (a factory that returned `null`, e.g. `lsp` with no matching servers, is absent). Grantable tools include mutating ones: `edit`, `write`, `bash`, `eval`, `browser`, `debug`, `ast_edit`, `task`, `job`, and the memory tools. Tool names outside [`BUILTIN_TOOL_NAMES`](../../../../packages/coding-agent/src/tools/builtin-names.ts) are dropped with a warning.
+A `WATCHDOG.yml` roster entry may broaden this with `tools: [...]`, selecting any subset of the built-in pool the session actually built (a factory that returned `null`, e.g. `lsp` with no matching servers, is absent). Grantable tools include mutating ones: `edit`, `write`, `bash`, `eval`, `browser`, `debug`, `ast_edit`, `task`, `job`, and the memory tools. Tool names outside [`BUILTIN_TOOL_NAMES`](../../../../packages/coding-agent/src/tools/core/builtin-names.ts) are dropped with a warning.
 
 Advisor grants are not routed through the primary agent's approval wrapper. The advisor pool is built from the built-in tool factories against its own `-advisor` `ToolSession` and then filtered by `WATCHDOG.yml`; it is not the primary `toolRegistry` wrapped with `ExtensionToolWrapper`. Granting write- or exec-tier tools therefore lets the advisor invoke those tools directly, subject to the tool's own runtime guards but not to `tools.approvalMode` / `tools.approval.<tool>` prompts. Keep mutating grants narrow and trusted.
 
@@ -109,7 +109,7 @@ note text
 </advisory>
 ```
 
-When you deliberately interrupt the agent (Esc, or a cancel from collab, ACP, RPC, the SDK, or an extension), the advisor stops auto-resuming it. An interrupting `concern`/`blocker` raised while the run is stopped is recorded as a visible advisor card instead of restarting the turn, and a concern already in flight when you interrupt is preserved the same way rather than driving a surprise resume. The advice re-enters context the next time you resume, a new message, the `.`/`c` continue shortcut, or a steer/follow-up. A normal yield is unaffected: the advisor can still steer and resume a run the agent ended on its own.
+When you interrupt the agent (Esc, or a cancel from collab, ACP, RPC, the SDK, or an extension), the advisor stops auto-resuming it. An interrupting `concern`/`blocker` raised while the run is stopped is recorded as a visible advisor card instead of restarting the turn, and a concern already in flight when you interrupt is preserved the same way rather than driving a surprise resume. The advice re-enters context the next time you resume, a new message, the `.`/`c` continue shortcut, or a steer/follow-up. A normal yield is unaffected: the advisor can still steer and resume a run the agent ended on its own.
 
 `advisor.immuneTurns` limits interruption frequency. After the advisor successfully delivers a `concern` or `blocker` through the steering channel, later concerns/blockers are routed as non-interrupting asides until the configured number of primary turns has completed. The default is `3`. `nit` notes are unchanged, and advice raised while user-interrupt auto-resume suppression is active is still preserved instead of restarting a stopped run.
 
@@ -242,21 +242,21 @@ Fields:
 - `instructions` (top level): shared prompt prepended to every advisor's system prompt alongside `WATCHDOG.md`. Concatenated across all discovered `WATCHDOG.yml` files.
 - `advisors[].name`: human label; slugified for the session id and the `<session>/__advisor.jsonl` filename. Duplicate slugs across files are resolved by the same specificity rule as `WATCHDOG.md` discovery (project leaf > project ancestor > user).
 - `advisors[].model`: optional model selector with optional `:level` thinking suffix (e.g. `x-ai/grok-code-fast:high`). Omitted → the advisor uses `modelRoles.advisor`.
-- `advisors[].tools`: optional list of built-in tool names to grant. Omitted or empty → the default `read`/`search` subset. Any name in [`BUILTIN_TOOL_NAMES`](../../../../packages/coding-agent/src/tools/builtin-names.ts) is accepted, including mutating tools (`edit`, `write`, `bash`, `eval`, `browser`, `debug`, `ast_edit`, `task`, `job`, and the memory tools). Unknown names are dropped with a warning. See [Tools and isolation](#tools-and-isolation) for the safety implications of granting mutating tools.
+- `advisors[].tools`: optional list of built-in tool names to grant. Omitted or empty → the default `read`/`search` subset. Any name in [`BUILTIN_TOOL_NAMES`](../../../../packages/coding-agent/src/tools/core/builtin-names.ts) is accepted, including mutating tools (`edit`, `write`, `bash`, `eval`, `browser`, `debug`, `ast_edit`, `task`, `job`, and the memory tools). Unknown names are dropped with a warning. See [Tools and isolation](#tools-and-isolation) for the safety implications of granting mutating tools.
 - `advisors[].instructions`: this advisor's specialization, appended after the shared baseline. Both instruction fields expand `@path` imports like `WATCHDOG.md`.
 
 ### Discovery locations
 
 `WATCHDOG.yml`/`WATCHDOG.yaml` share the same user + project search path as `WATCHDOG.md`: the user-level `<active agent dir>/WATCHDOG.yml` plus every `WATCHDOG.yml`/`.veyyon/WATCHDOG.yml` encountered while walking from `cwd` up to the repository root (or the home directory when no repo root is found). All discovered files are loaded together; a more-specific file (project leaf > project ancestor > user) replaces an earlier entry with the same advisor slug.
 
-## Subagents
+## Agents
 
-`advisor.subagents` controls whether spawned task/eval subagents also get an advisor runtime.
+`advisor.agents` controls whether spawned task/eval agents also get an advisor runtime.
 
 - `false` (default): only the main session can run an advisor.
-- `true`: eligible subagent sessions build their own advisor with the same settings/model-role resolution, then rerun `WATCHDOG.md` discovery for that subagent session's `cwd` and agent directory.
+- `true`: eligible agent sessions build their own advisor with the same settings/model-role resolution, then rerun `WATCHDOG.md` discovery for that agent session's `cwd` and agent directory.
 
-Subagent advisors remain isolated from the subagent's primary tool session in the same way the main advisor is isolated from the main agent.
+Agent advisors remain isolated from the agent's primary tool session in the same way the main advisor is isolated from the main agent.
 
 ## Cost and context behavior
 
@@ -272,18 +272,18 @@ The advisor's live context is in-memory and append-only; it is retained while th
 
 ## Transcript persistence and observability
 
-The advisor is a passive reviewer with its own model usage, so, like a task subagent, every finalized advisor turn is appended to a JSONL inside the owning session's artifacts dir:
+The advisor is a passive reviewer with its own model usage, so, like a task agent, every finalized advisor turn is appended to a JSONL inside the owning session's artifacts dir:
 
 - main session: `<session>/__advisor.jsonl`
-- subagent advisor (`advisor.subagents: true`): `<session>/<SubId>/__advisor.jsonl`
+- agent advisor (`advisor.agents: true`): `<session>/<SubId>/__advisor.jsonl`
 
-The path is derived from the session file (not the artifacts dir, which subagents share with their parent), so each advisor writes a distinct file. The reserved `__advisor` stem cannot collide with a task subagent's `<id>.jsonl` (task id allocation reserves it).
+The path is derived from the session file (not the artifacts dir, which agents share with their parent), so each advisor writes a distinct file. The reserved `__advisor` stem cannot collide with a task agent's `<id>.jsonl` (task id allocation reserves it).
 
 Why a file:
 
-- **Usage attribution.** `veyyon stats` scans each session folder recursively, so advisor assistant turns (with their usage/cost) are attributed to the same project/session like any other subagent. Advisor "session update" prompts are persisted as `synthetic`, agent-attributed user messages so they never inflate user-message metrics.
-- **Observability.** The subagent dashboard discovers `__advisor.jsonl` on open and shows it as a read-only `advisor`-kind transcript under its owning session. Opening it there shows the transcript rather than handing the main view over, because an advisor is not a session you can talk to.
+- **Usage attribution.** `veyyon stats` scans each session folder recursively, so advisor assistant turns (with their usage/cost) are attributed to the same project/session like any other agent. Advisor "session update" prompts are persisted as `synthetic`, agent-attributed user messages so they never inflate user-message metrics.
+- **Observability.** The agent dashboard discovers `__advisor.jsonl` on open and shows it as a read-only `advisor`-kind transcript under its owning session. Opening it there shows the transcript rather than handing the main view over, because an advisor is not a session you can talk to.
 
 The file follows session switches: on `/new`, resume/switch, and branch the recorder reopens at the new session's path on the next advisor turn; before a `/drop` deletes the old artifacts dir the recorder feed is detached and drained so a queued write cannot recreate the deleted file. The on-disk log is append-only and independent of the in-memory context, re-primes and compaction never truncate it.
 
-The advisor is never a peer. The `advisor`-kind registry ref is excluded from every agent-facing surface, the `irc` peer roster and broadcast targets, the subagent peer prompt, and the `history://` index/lookup/completions, and cannot be messaged (`irc send` and collab chat reject it) or revived/killed from the subagent dashboard or collab. It is not addressable as a peer, regardless of what tools it has been granted.
+The advisor is never a peer. The `advisor`-kind registry ref is excluded from every agent-facing surface, the `irc` peer roster and broadcast targets, the agent peer prompt, and the `history://` index/lookup/completions, and cannot be messaged (`irc send` and collab chat reject it) or revived/killed from the agent dashboard or collab. It is not addressable as a peer, regardless of what tools it has been granted.

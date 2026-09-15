@@ -3,7 +3,7 @@
  *
  * A supervised process's completion record (its exit code, termination owner, reason,
  * timestamps, and output tail) must survive the daemon leaving the active list and
- * survive broker restarts. In high-concurrency scenarios (multiple subagents or batch
+ * survive broker restarts. In high-concurrency scenarios (multiple agents or batch
  * jobs terminating simultaneously), concurrent read-modify-write passes over the
  * completion store could interleave and drop records unless strictly serialized through
  * `#completionsQueue`. Furthermore, large output logs must be bounded to prevent
@@ -29,6 +29,7 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
@@ -42,7 +43,7 @@ import {
 import { DAEMON_TERMINATION_OWNERS, type DaemonCompletionRecord, type DaemonSpec } from "../../src/launch/protocol";
 
 let isolatedConfigRoot: IsolatedConfigRoot | undefined;
-const TEST_PARENT = path.resolve(import.meta.dirname, "../../../../.internal/launch-completions-bounds");
+const TEST_PARENT = path.join(os.tmpdir(), "veyyon-launch-completions-bounds");
 let testRoot = "";
 
 beforeAll(async () => {

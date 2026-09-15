@@ -18,8 +18,8 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { ExtensionUiController } from "@veyyon/coding-agent/modes/controllers/extension-ui-controller";
-import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/types";
+import { ExtensionUiController } from "@veyyon/coding-agent/modes/terminal/controllers/extension-ui-controller";
+import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import { useTruecolorTheme } from "./helpers/theme-assertions";
 
 useTruecolorTheme("dark");

@@ -10,10 +10,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AgentMessage } from "@veyyon/agent-core";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
-import { hindsightBackend, reloadMentalModelsForSession } from "@veyyon/coding-agent/hindsight/backend";
-import { HindsightApi } from "@veyyon/coding-agent/hindsight/client";
-import type { HindsightSessionState } from "@veyyon/coding-agent/hindsight/state";
-import type { AgentSessionEventListener } from "@veyyon/coding-agent/session/agent-session";
+import { hindsightBackend, reloadMentalModelsForSession } from "@veyyon/coding-agent/memory/hindsight/backend";
+import { HindsightApi } from "@veyyon/coding-agent/memory/hindsight/client";
+import type { HindsightSessionState } from "@veyyon/coding-agent/memory/hindsight/state";
+import type { AgentSessionEventListener } from "@veyyon/coding-agent/session/agent-session-types";
 
 interface FakeSessionDeps {
 	sessionId: string | null;
@@ -201,7 +201,7 @@ describe("hindsightBackend.start", () => {
 		expect(retainSpy.mock.calls[0]?.[2]?.timestamp).toBeInstanceOf(Date);
 	});
 
-	it("aliases parent state on subagent runs (taskDepth > 0) so tools share the parent bank", async () => {
+	it("aliases parent state on agent runs (taskDepth > 0) so tools share the parent bank", async () => {
 		const settings = Settings.isolated({
 			"memory.backend": "hindsight",
 			"hindsight.apiUrl": "http://localhost:8888",
@@ -219,7 +219,7 @@ describe("hindsightBackend.start", () => {
 		const parentState = parentSession.getHindsightSessionState();
 		expect(parentState).toBeDefined();
 
-		// Subagent runs with taskDepth > 0 should alias the parent.
+		// Agent runs with taskDepth > 0 should alias the parent.
 		const subSession = makeFakeSession({ sessionId: "sub" });
 		await hindsightBackend.start({
 			session: subSession as never,
@@ -241,7 +241,7 @@ describe("hindsightBackend.start", () => {
 		expect(subState?.hasRecalledForFirstTurn).toBe(true);
 	});
 
-	it("returns silently for subagent runs when no primary state has been registered", async () => {
+	it("returns silently for agent runs when no primary state has been registered", async () => {
 		const settings = Settings.isolated({
 			"memory.backend": "hindsight",
 			"hindsight.apiUrl": "http://localhost:8888",
@@ -489,7 +489,7 @@ describe("hindsightBackend first-turn injection", () => {
 		expect(session.refreshBaseSystemPrompt.mock.calls.length).toBe(refreshCallsBefore);
 	});
 
-	it("reloadMentalModelsForSession returns false on subagent aliases", async () => {
+	it("reloadMentalModelsForSession returns false on agent aliases", async () => {
 		// Aliases delegate to the parent; reloads on an alias must no-op so
 		// the parent's cache is the single source of truth.
 		const settings = Settings.isolated({

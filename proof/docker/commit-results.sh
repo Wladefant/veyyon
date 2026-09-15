@@ -49,7 +49,7 @@ if [[ "${1:-}" == "--one" ]]; then
 		while IFS= read -r f; do
 			[[ -z "${f}" ]] && continue
 			case "${f}" in
-			*.test.ts | packages/simulations/src/*.ts | packages/simulations/src/*/*.ts | scripts/demos/*.ts | proof/scenes/*.sh) ;;
+			*.test.ts | tests/simulations/src/*.ts | tests/simulations/src/*/*.ts | scripts/demos/*.ts | proof/scenes/*.sh) ;;
 			*) continue ;;
 			esac
 			mkdir -p "${TREE}/$(dirname "${f}")"
@@ -63,8 +63,8 @@ if [[ "${1:-}" == "--one" ]]; then
 	docker run --rm \
 		--mount "type=bind,src=${TREE},dst=/repo" \
 		--mount "type=bind,src=${REPO_ROOT}/node_modules,dst=/repo/node_modules,readonly" \
-		--mount "type=bind,src=${REPO_ROOT}/packages/natives/native/veyyon_natives.linux-x64-modern.node,dst=/repo/packages/natives/native/veyyon_natives.linux-x64-modern.node,readonly" \
-		--mount "type=bind,src=${REPO_ROOT}/packages/natives/native/veyyon_natives.linux-x64-baseline.node,dst=/repo/packages/natives/native/veyyon_natives.linux-x64-baseline.node,readonly" \
+		--mount "type=bind,src=${REPO_ROOT}/natives/bridge/bindings/native/veyyon_natives.linux-x64-modern.node,dst=/repo/natives/bridge/bindings/native/veyyon_natives.linux-x64-modern.node,readonly" \
+		--mount "type=bind,src=${REPO_ROOT}/natives/bridge/bindings/native/veyyon_natives.linux-x64-baseline.node,dst=/repo/natives/bridge/bindings/native/veyyon_natives.linux-x64-baseline.node,readonly" \
 		--mount "type=bind,src=${REPO_ROOT}/packages/coding-agent/src/export/html/tool-views.generated.js,dst=/repo/packages/coding-agent/src/export/html/tool-views.generated.js,readonly" \
 		--tmpfs /sandbox/home:exec,size=512m \
 		--tmpfs /tmp:exec,size=1g \

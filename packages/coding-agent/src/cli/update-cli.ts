@@ -34,7 +34,7 @@ import { $ } from "bun";
 import chalk from "chalk";
 import { settingsOrNull } from "../config/settings-instance";
 import type { SettingPath } from "../config/settings-schema";
-import { theme } from "../modes/theme/theme";
+import { theme } from "../theme/theme";
 import { isTimeoutError, withTimeoutSignal } from "../utils/fetch-timeout";
 import {
 	AUTO_UPDATE_FAILURE_COOLDOWN_MS,
@@ -544,7 +544,6 @@ export async function getAllReleases(timeoutMs: number = RELEASE_METADATA_TIMEOU
 	sortReleasesByPublicationDate(releases);
 	return releases;
 }
-
 /**
  * Sort releases by publication date descending.
  *
@@ -1721,12 +1720,12 @@ export async function updateViaSourceAt(
 		{ label: "Installing dependencies", command: ["bun", "install"], cwd: checkoutRoot },
 		{
 			label: "Regenerating build artifacts",
-			command: ["bun", "--cwd=packages/collab-web", "run", "gen:tool-views"],
+			command: ["bun", "--cwd=clients/web", "run", "gen:tool-views"],
 			cwd: checkoutRoot,
 		},
 		{
 			label: "Ensuring native addon",
-			command: ["bun", "--cwd=packages/natives", "run", "ensure"],
+			command: ["bun", "--cwd=natives/bridge/bindings", "run", "ensure"],
 			cwd: checkoutRoot,
 		},
 	];
@@ -1739,12 +1738,12 @@ export async function updateViaSourceAt(
 		{ label: "Restoring dependencies", command: ["bun", "install"], cwd: checkoutRoot },
 		{
 			label: "Restoring build artifacts",
-			command: ["bun", "--cwd=packages/collab-web", "run", "gen:tool-views"],
+			command: ["bun", "--cwd=clients/web", "run", "gen:tool-views"],
 			cwd: checkoutRoot,
 		},
 		{
 			label: "Restoring native addon",
-			command: ["bun", "--cwd=packages/natives", "run", "ensure"],
+			command: ["bun", "--cwd=natives/bridge/bindings", "run", "ensure"],
 			cwd: checkoutRoot,
 		},
 	];

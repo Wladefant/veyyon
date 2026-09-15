@@ -7,10 +7,10 @@ import { Snowflake } from "@veyyon/utils/snowflake";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { $which } from "@veyyon/utils/which";
 import type { Subprocess } from "bun";
-import { parseDiffFileHunks, parseFileDiffs, parseFileHunks, parseNumstat } from "../commit/git/diff";
+import { parseDiffFileHunks, parseFileDiffs, parseFileHunks, parseNumstat } from "../commit/git-diff";
 import type { FileDiff, FileHunks, NumstatEntry } from "../commit/types";
 import { adoptIntoPrimarySessionCpuBudget } from "../session/cpu-limit";
-import { ToolAbortError, ToolError, throwIfAborted } from "../tools/tool-errors";
+import { ToolAbortError, ToolError, throwIfAborted } from "../tools/core/tool-errors";
 import type { GitHeadState, GitInProgressOperation, GitRepository } from "./git-head";
 import {
 	getRefLookupDirs,
@@ -179,7 +179,7 @@ export class GitCommandError extends Error {
 	constructor(args: readonly string[], result: GitCommandResult) {
 		super(formatCommandFailure(args, result));
 		this.name = "GitCommandError";
-		this.args = [...args];
+		this.args = args.slice();
 		this.result = result;
 	}
 }
@@ -423,7 +423,7 @@ function formatCommandFailure(
 }
 
 async function git(cwd: string, args: readonly string[], options: CommandOptions = {}): Promise<GitCommandResult> {
-	const commandArgs = withShortLivedGitConfig(options.readOnly ? withNoOptionalLocks(args) : [...args]);
+	const commandArgs = withShortLivedGitConfig(options.readOnly ? withNoOptionalLocks(args) : args.slice());
 	const child = Bun.spawn(["git", ...commandArgs], {
 		cwd,
 		env: buildGitEnv(options.env),
@@ -439,8 +439,8 @@ async function git(cwd: string, args: readonly string[], options: CommandOptions
 }
 
 function withNoOptionalLocks(args: readonly string[]): string[] {
-	if (args.includes(NO_OPTIONAL_LOCKS)) return [...args];
-	return [NO_OPTIONAL_LOCKS, ...args];
+	if (args.includes(NO_OPTIONAL_LOCKS)) return args.slice();
+	return [NO_OPTIONAL_LOCKS].concat(args);
 }
 
 function withShortLivedGitConfig(args: readonly string[]): string[] {
@@ -449,7 +449,7 @@ function withShortLivedGitConfig(args: readonly string[]): string[] {
 		if (hasGitConfig(args, key, value)) continue;
 		prefix.push("-c", `${key}=${value}`);
 	}
-	return [...prefix, ...args];
+	return prefix.concat(args);
 }
 
 function hasGitConfig(args: readonly string[], key: string, value: string): boolean {
@@ -608,24 +608,27 @@ async function isReftableRepo(repository: GitRepository): Promise<boolean> {
 	return repository.isReftable;
 }
 
+/**
+ * A read-only git query whose failure is a `null` answer: a missing ref, a repository git rejects.
+ * An abort is not an answer and is rethrown.
+ */
+async function queryGitOrNull(
+	repoRoot: string,
+	args: readonly string[],
+	signal: AbortSignal | undefined,
+): Promise<GitCommandResult | null> {
+	throwIfAborted(signal);
+	return git(repoRoot, args, { readOnly: true, signal }).catch(err => {
+		if (signal?.aborted || isAbortError(err)) {
+			throw err;
+		}
+		return null;
+	});
+}
+
 async function resolveHeadStateReftable(repository: GitRepository, signal?: AbortSignal): Promise<GitHeadState | null> {
-	throwIfAborted(signal);
-	const symResult = await git(repository.repoRoot, ["symbolic-ref", "HEAD"], { readOnly: true, signal }).catch(err => {
-		if (signal?.aborted || isAbortError(err)) {
-			throw err;
-		}
-		return null;
-	});
-	throwIfAborted(signal);
-	const revResult = await git(repository.repoRoot, ["rev-parse", "--verify", "HEAD"], {
-		readOnly: true,
-		signal,
-	}).catch(err => {
-		if (signal?.aborted || isAbortError(err)) {
-			throw err;
-		}
-		return null;
-	});
+	const symResult = await queryGitOrNull(repository.repoRoot, ["symbolic-ref", "HEAD"], signal);
+	const revResult = await queryGitOrNull(repository.repoRoot, ["rev-parse", "--verify", "HEAD"], signal);
 	const commit = revResult && revResult.exitCode === 0 ? revResult.stdout.trim() || null : null;
 
 	if (symResult && symResult.exitCode === 0) {
@@ -693,28 +696,11 @@ function resolveHeadStateReftableSync(repository: GitRepository): GitHeadState |
 
 async function readRef(repository: GitRepository, targetRef: string, signal?: AbortSignal): Promise<string | null> {
 	if (await isReftableRepo(repository)) {
-		throwIfAborted(signal);
-		const symResult = await git(repository.repoRoot, ["symbolic-ref", targetRef], { readOnly: true, signal }).catch(
-			err => {
-				if (signal?.aborted || isAbortError(err)) {
-					throw err;
-				}
-				return null;
-			},
-		);
+		const symResult = await queryGitOrNull(repository.repoRoot, ["symbolic-ref", targetRef], signal);
 		if (symResult && symResult.exitCode === 0) {
 			return `${HEAD_REF_PREFIX} ${symResult.stdout.trim()}`;
 		}
-		throwIfAborted(signal);
-		const revResult = await git(repository.repoRoot, ["rev-parse", "--verify", targetRef], {
-			readOnly: true,
-			signal,
-		}).catch(err => {
-			if (signal?.aborted || isAbortError(err)) {
-				throw err;
-			}
-			return null;
-		});
+		const revResult = await queryGitOrNull(repository.repoRoot, ["rev-parse", "--verify", targetRef], signal);
 		if (revResult && revResult.exitCode === 0) {
 			return revResult.stdout.trim() || null;
 		}

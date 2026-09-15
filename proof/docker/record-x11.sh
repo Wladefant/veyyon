@@ -125,5 +125,11 @@ docker run --rm \
 				>> /sandbox/home/.veyyon/profiles/default/agent/config.yml
 		fi
 		bash /repo/proof/docker/seed-demo.sh /sandbox/home/demo "/repo/'"${SCENE}"'"
+		# An advisor scene photographs a roster editor, which opens on the project
+		# WATCHDOG.yml. With no file the overlay lists nothing, so the frame shows an
+		# empty pane instead of the surface.
+		if [ "${SCENE_SEED_ADVISORS}" != 0 ]; then
+			cp /repo/proof/docker/seed-watchdog.yml /sandbox/home/demo/WATCHDOG.yml
+		fi
 		exec /repo/proof/docker/xsession.sh "/repo/'"${SCENE}"'"
 	'

@@ -239,12 +239,12 @@ describe("AutoresearchStorage round-trip", () => {
 			secondaryMetrics: [],
 		});
 		expect(session.currentSegment).toBe(0);
-		expect(storage.bumpSegment(session.id).currentSegment).toBe(1);
-		expect(storage.bumpSegment(session.id).currentSegment).toBe(2);
+		expect(storage.bumpSessionSegment(session.id).currentSegment).toBe(1);
+		expect(storage.bumpSessionSegment(session.id).currentSegment).toBe(2);
 		storage.close();
 	});
 
-	it("abandonPendingRuns marks pending rows abandoned and returns the count", () => {
+	it("abandonIncompleteRuns marks pending rows abandoned and returns the count", () => {
 		const storage = openStorage();
 		const session = storage.openSession({
 			name: "x",
@@ -277,12 +277,12 @@ describe("AutoresearchStorage round-trip", () => {
 			preRunDirtyPaths: [],
 			startedAt: 2,
 		});
-		expect(storage.abandonPendingRuns(session.id)).toBe(2);
+		expect(storage.abandonIncompleteRuns(session.id)).toBe(2);
 		expect(storage.getPendingRun(session.id)).toBeNull();
 		expect(storage.getRunById(a.id)?.abandonedAt).not.toBeNull();
 		expect(storage.getRunById(b.id)?.abandonedAt).not.toBeNull();
 		// Idempotent — running again finds nothing pending
-		expect(storage.abandonPendingRuns(session.id)).toBe(0);
+		expect(storage.abandonIncompleteRuns(session.id)).toBe(0);
 		storage.close();
 	});
 
@@ -569,7 +569,9 @@ function createCommandHarness(
 		navigateTree: async () => ({ cancelled: false }),
 		ui: {
 			confirm: async () => false,
-			custom: async () => undefined,
+			terminal: {
+				custom: async () => undefined,
+			},
 			input: async () => undefined,
 			notify(message: string, type?: "info" | "warning" | "error"): void {
 				notifications.push({ message, type });

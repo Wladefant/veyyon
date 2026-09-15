@@ -31,14 +31,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { createAutoresearchExtension } from "@veyyon/coding-agent/autoresearch";
+import { registerAutoresearchUi } from "@veyyon/coding-agent/autoresearch/dashboard";
 import { closeAllAutoresearchStorages, openAutoresearchStorage } from "@veyyon/coding-agent/autoresearch/storage";
 import type { ExtensionAPI, ExtensionContext } from "@veyyon/coding-agent/extensibility/extensions";
-import { theme } from "@veyyon/coding-agent/modes/theme/theme";
+import { terminalAutoresearchUi } from "@veyyon/coding-agent/modes/terminal/controllers/extension-ui-controller";
+import { theme } from "@veyyon/coding-agent/theme/theme";
 import * as git from "@veyyon/coding-agent/utils/git";
-import type { AutocompleteItem } from "@veyyon/tui";
+import "@veyyon/coding-agent/modes/terminal/controllers/extension-ui-controller";
 import { stripAnsi, TempDir } from "@veyyon/utils";
+import type { AutocompleteItem } from "@veyyon/utils/autocomplete";
 import { $ } from "bun";
 import { useTruecolorTheme } from "./helpers/theme-assertions";
+
+// The run screen and the launcher reach the terminal through the delegate the terminal host
+// registers when it loads; this suite drives the command without booting the host, so it
+// installs the same delegate by name, which is what routes the surfaces into `ui.terminal.custom`.
+registerAutoresearchUi(terminalAutoresearchUi);
 
 interface CommandSpec {
 	description: string;
@@ -147,31 +155,33 @@ function makeCtx(cwd: string, harness: Harness, surface: Surface): ExtensionCont
 				surface.confirms.push({ title, message });
 				return surface.answer;
 			},
-			custom: async <T>(
-				factory: (
-					tui: unknown,
-					theme: unknown,
-					keybindings: unknown,
-					done: (result: T) => void,
-				) => { render: (width: number) => readonly string[]; handleInput: (data: string) => void },
-			): Promise<T> => {
-				const settled: Array<{ value: T }> = [];
-				// The real theme the suite installed: the setup console paints through
-				// `theme.fg`, so a bare object closes the console on a TypeError. The
-				// run screen sizes itself from the terminal minus the pinned composer.
-				const tui = { requestRender: (): void => {}, terminal: { rows: 40, columns: 100 }, pinnedFooterRows: 5 };
-				const component = factory(tui, theme, {}, (result: T) => {
-					if (settled.length === 0) settled.push({ value: result });
-				});
-				surface.screens.push([...component.render(100)]);
-				const keysToRun = surface.keys.length > 0 ? [...surface.keys] : ["\x1b"];
-				for (const key of keysToRun) {
-					if (settled.length > 0) break;
-					component.handleInput(key);
-				}
-				const outcome = settled[0];
-				if (!outcome) throw new Error("the run screen never closed on escape");
-				return outcome.value;
+			terminal: {
+				custom: async <T>(
+					factory: (
+						tui: unknown,
+						theme: unknown,
+						keybindings: unknown,
+						done: (result: T) => void,
+					) => { render: (width: number) => readonly string[]; handleInput: (data: string) => void },
+				): Promise<T> => {
+					const settled: Array<{ value: T }> = [];
+					// The real theme the suite installed: the setup console paints through
+					// `theme.fg`, so a bare object closes the console on a TypeError. The
+					// run screen sizes itself from the terminal minus the pinned composer.
+					const tui = { requestRender: (): void => {}, terminal: { rows: 40, columns: 100 }, pinnedFooterRows: 5 };
+					const component = factory(tui, theme, {}, (result: T) => {
+						if (settled.length === 0) settled.push({ value: result });
+					});
+					surface.screens.push([...component.render(100)]);
+					const keysToRun = surface.keys.length > 0 ? [...surface.keys] : ["\x1b"];
+					for (const key of keysToRun) {
+						if (settled.length > 0) break;
+						component.handleInput(key);
+					}
+					const outcome = settled[0];
+					if (!outcome) throw new Error("the run screen never closed on escape");
+					return outcome.value;
+				},
 			},
 		},
 		sessionManager: {

@@ -1,4 +1,5 @@
 import { parseArgs as nodeParseArgs } from "node:util";
+import { CliUsageError } from "./cli-usage-error";
 import { clampLow } from "./math";
 import { startupMarker } from "./startup-marker";
 import { errorMessage } from "./type-guards";
@@ -86,19 +87,11 @@ function maskNegativeNumbers(argv: readonly string[]): {
 export const CLI_EXIT_USAGE = 2;
 
 /**
- * A user-facing argument/flag validation failure. Thrown by {@link Command.parse}
- * for missing/invalid positionals and flags. The top-level {@link run} handler
- * prints its message plus the command usage line to stderr and exits
- * {@link CLI_EXIT_USAGE}, instead of letting it bubble to the process-level catch,
- * which would dump a minified `dist/cli.js` code frame over a plain argument
- * mistake (issue #5369).
+ * {@link Command.parse} throws a {@link CliUsageError} for a missing or invalid positional or
+ * flag; the top-level {@link run} handler exits {@link CLI_EXIT_USAGE} on one. The class is
+ * `./cli-usage-error`, a leaf a CLI entry catches without loading this module.
  */
-export class CliUsageError extends Error {
-	constructor(message: string) {
-		super(message);
-		this.name = "CliUsageError";
-	}
-}
+export { CliUsageError } from "./cli-usage-error";
 
 // ---------------------------------------------------------------------------
 // Flag & Arg descriptors
@@ -366,7 +359,7 @@ export abstract class Command {
 				if (val !== undefined && desc.options && !Array.isArray(val)) {
 					if (!desc.options.includes(val as string)) {
 						throw new CliUsageError(
-							`Expected --${name} to be one of: ${[...desc.options].join(", ")}; got "${val}"`,
+							`Expected --${name} to be one of: ${desc.options.slice().join(", ")}; got "${val}"`,
 						);
 					}
 				}
@@ -400,7 +393,7 @@ export abstract class Command {
 			if (argVal !== undefined && desc.options && typeof argVal === "string") {
 				if (!desc.options.includes(argVal)) {
 					throw new CliUsageError(
-						`Expected ${argName} to be one of: ${[...desc.options].join(", ")}; got "${argVal}"`,
+						`Expected ${argName} to be one of: ${desc.options.slice().join(", ")}; got "${argVal}"`,
 					);
 				}
 			}
@@ -687,7 +680,7 @@ function renderCommandBody(lines: string[], Cmd: CommandCtor): void {
 		for (const [index, [, desc]] of argEntries.entries()) {
 			const parts: string[] = [];
 			if (desc.description) parts.push(desc.description);
-			if (desc.options) parts.push(`(${[...desc.options].join("|")})`);
+			if (desc.options) parts.push(`(${desc.options.slice().join("|")})`);
 			pushWrapped(lines, lefts[index] ?? "", parts.join(" "), column, width);
 		}
 		lines.push("");
@@ -710,7 +703,7 @@ function renderCommandBody(lines: string[], Cmd: CommandCtor): void {
 				desc.kind === "boolean"
 					? ""
 					: desc.options
-						? `=<${[...desc.options].join("|")}>`
+						? `=<${desc.options.slice().join("|")}>`
 						: desc.kind === "integer"
 							? "=<int>"
 							: "=<value>";

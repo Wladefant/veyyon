@@ -51,6 +51,17 @@ export interface CodexRequestOptions {
 	responsesLite?: boolean;
 }
 
+/**
+ * Per-item Codex turn provenance (`internal_chat_message_metadata_passthrough`).
+ * Only the local `codex-chatgpt-web` bridge reads it, and only
+ * `chatgpt-web-turn-stamp.ts` writes it; the field is declared here because this
+ * is where the outgoing input-item shape is owned.
+ */
+export interface CodexItemMetadataPassthrough {
+	turn_id?: string;
+	[key: string]: unknown;
+}
+
 export interface InputItem {
 	id?: string | null;
 	type?: string | null;
@@ -62,6 +73,7 @@ export interface InputItem {
 	arguments?: unknown;
 	/** `additional_tools` developer item payload (Responses Lite). */
 	tools?: unknown;
+	internal_chat_message_metadata_passthrough?: CodexItemMetadataPassthrough;
 }
 
 export interface RequestBody {
@@ -350,7 +362,7 @@ export function applyCodexResponsesLiteShape(body: CodexLiteShapedBody): void {
 			content: [{ type: "input_text", text: body.instructions }],
 		});
 	}
-	body.input = [...prefix, ...input];
+	body.input = prefix.concat(input);
 	delete body.instructions;
 	delete body.tools;
 }
@@ -378,7 +390,7 @@ export async function transformRequestBody(
 			content: [{ type: "input_text", text }],
 		}));
 		const input = Array.isArray(body.input) ? body.input : [];
-		body.input = [...developerMessages, ...input];
+		body.input = developerMessages.concat(input);
 	}
 
 	let finalInstruction = prompt?.developerMessages.findLast(text => text.trim().length > 0);
@@ -481,7 +493,7 @@ export async function transformRequestBody(
 		verbosity: options.textVerbosity || "medium",
 	};
 
-	const include = Array.isArray(options.include) ? [...options.include] : [];
+	const include = Array.isArray(options.include) ? options.include.slice() : [];
 	include.push("reasoning.encrypted_content");
 	body.include = Array.from(new Set(include));
 

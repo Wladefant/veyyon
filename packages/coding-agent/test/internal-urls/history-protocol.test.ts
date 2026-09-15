@@ -20,7 +20,7 @@ import {
 } from "@veyyon/coding-agent/internal-urls/registry-helpers";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { CURRENT_SESSION_VERSION } from "@veyyon/coding-agent/session/session-entries";
+import { CURRENT_SESSION_VERSION } from "@veyyon/kernel/session/session-entries";
 import { removeWithRetries } from "@veyyon/utils";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
@@ -223,7 +223,7 @@ describe("history:// protocol", () => {
 			status: "parked",
 		});
 
-		// Index lists the subagent but never the advisor.
+		// Index lists the agent but never the advisor.
 		const index = await InternalUrlRouter.instance().resolve("history://");
 		expect(index.content).toContain("HubAgent");
 		expect(index.content).not.toContain("advisor");
@@ -263,7 +263,7 @@ describe("history:// protocol", () => {
 		expect(values).not.toContain("AdvisorProbe");
 	});
 
-	it("history://<id> serves an unregistered subagent's transcript from disk", async () => {
+	it("history://<id> serves an unregistered agent's transcript from disk", async () => {
 		await withTempDir(async dir => {
 			const sessionFile = path.join(dir, "session.jsonl");
 			const artifactsDir = sessionFile.slice(0, -6);

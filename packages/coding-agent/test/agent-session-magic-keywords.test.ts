@@ -3,15 +3,15 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { Effort } from "@veyyon/catalog/effort";
 import { getBundledModel } from "@veyyon/catalog/models";
-import * as autoThinkingClassifier from "@veyyon/coding-agent/auto-thinking/classifier";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
 import { AUTO_THINKING } from "@veyyon/coding-agent/thinking";
+import * as autoThinkingClassifier from "@veyyon/coding-agent/thinking/auto-classifier";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeWithRetries } from "@veyyon/utils";
 import { type } from "arktype";
 
@@ -127,7 +127,7 @@ describe("AgentSession magic keyword settings", () => {
 	/**
 	 * THE regression, through the real session: the ordinary verb attaches
 	 * nothing. It used to attach the orchestration contract, which tells the model
-	 * to fan the work out to parallel subagents and to override any tendency to do
+	 * to fan the work out to parallel agents and to override any tendency to do
 	 * it inline, so this sentence ran as something other than what it says.
 	 */
 	it("attaches nothing for the ordinary verb the keyword was built from", async () => {
@@ -146,14 +146,14 @@ describe("AgentSession magic keyword settings", () => {
 		const created = await createMagicKeywordSession(root);
 		session = created.session;
 		authStorage = created.authStorage;
-		created.settings.set("subagent.batch", false);
+		created.settings.set("agent.batch", false);
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 
 		await session.prompt("please workflowz this");
 
 		const promptMessages = promptSpy.mock.calls[0]![0] as unknown as Array<{ content?: string; customType?: string }>;
 		const notice = promptMessages.find(message => message.customType === "workflow-notice")?.content ?? "";
-		expect(notice).toContain("once per independent subagent");
+		expect(notice).toContain("once per independent spawned agent");
 		expect(notice).toContain("Do not pass `context` or `tasks[]`");
 		expect(notice).not.toContain("Call `task` once per independent fan-out batch");
 	});

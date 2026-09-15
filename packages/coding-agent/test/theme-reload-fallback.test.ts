@@ -7,13 +7,14 @@ import {
 	getCurrentThemeName,
 	getThemeByName,
 	isThemeWatcherActive,
+	onThemeChange,
 	setColorBlindMode,
 	setSymbolPreset,
 	setTheme,
 	setThemeInstance,
 	stopThemeWatcher,
 	type Theme,
-} from "@veyyon/coding-agent/modes/theme/theme";
+} from "@veyyon/coding-agent/theme/theme";
 import { getCustomThemesDir, setAgentDir } from "@veyyon/utils";
 import { captureDirOverrides, type DirOverridesSnapshot, restoreDirOverrides } from "@veyyon/utils/dirs";
 
@@ -33,7 +34,7 @@ import { captureDirOverrides, type DirOverridesSnapshot, restoreDirOverrides } f
  * The schema requires a complete colors object, so hand-writing a stub here
  * would silently be an *invalid* theme and every setup step would fall back.
  */
-const VALID_THEME = fs.readFileSync(path.join(import.meta.dir, "../src/modes/theme/dark.json"), "utf8");
+const VALID_THEME = fs.readFileSync(path.join(import.meta.dir, "../src/theme/dark.json"), "utf8");
 const INVALID_THEME = "{ this is not valid json";
 
 /** A shipped built-in outside the `dark`/`light` pair the old watcher check named. */
@@ -138,6 +139,21 @@ describe("theme reload — fallback is reported, never silent", () => {
 		expect(result.success).toBe(true);
 		expect(result.fellBack).toBeUndefined();
 		expect(result.error).toBeUndefined();
+	});
+
+	it("re-renders a preset or colour-blind change as an ephemeral repaint of the committed theme", async () => {
+		writeCustomTheme("mytheme", VALID_THEME);
+		await setTheme("mytheme");
+		const events: { ephemeral?: boolean }[] = [];
+		const unsubscribe = onThemeChange(event => events.push(event));
+		try {
+			expect((await setSymbolPreset("ascii")).success).toBe(true);
+			expect((await setColorBlindMode(true)).success).toBe(true);
+		} finally {
+			unsubscribe();
+		}
+		expect(events).toEqual([{ ephemeral: true }, { ephemeral: true }]);
+		expect(getCurrentThemeName()).toBe("mytheme");
 	});
 });
 

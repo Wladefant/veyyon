@@ -34,6 +34,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockResponse } from "@veyyon/ai/providers/mock";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { createArgotSession } from "@veyyon/coding-agent/argot-cache";
@@ -41,12 +42,11 @@ import { expandToolArguments } from "@veyyon/coding-agent/argot-wire";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
 import { convertToLlm } from "@veyyon/coding-agent/session/messages";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import { ArgotLoadTool, ArgotUnloadTool } from "@veyyon/coding-agent/tools/argot";
-import { BashTool } from "@veyyon/coding-agent/tools/bash";
+import { ArgotLoadTool, ArgotUnloadTool } from "@veyyon/coding-agent/tools/agent/argot";
+import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import {
 	__resetDirsFromEnvForTests,
 	APP_NAME,
@@ -160,7 +160,7 @@ describe("argot agent-driven adoption loop (e2e)", () => {
 		const settings = Settings.isolated({
 			"argot.enabled": true,
 			"argot.encode.models": [MODEL_ID],
-			"argot.subagents": "off",
+			"argot.agents": "off",
 			"compaction.enabled": false,
 			"todo.enabled": false,
 			"async.enabled": false,
@@ -171,7 +171,7 @@ describe("argot agent-driven adoption loop (e2e)", () => {
 		// The REAL session factory: enabled, top-level, so it returns a codec that
 		// has NEVER been armed — agent-driven loading means nothing is loaded until
 		// the model calls argot_load.
-		const codec = createArgotSession({ enabled: true, isSubagent: false, subagentMode: "off" });
+		const codec = createArgotSession({ enabled: true, isSpawned: false, agentMode: "off" });
 		if (codec === undefined) throw new Error("expected a codec for an enabled top-level session");
 		argot = codec;
 

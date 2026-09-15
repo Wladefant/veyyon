@@ -1,4 +1,4 @@
-import type { SessionEntry } from "../session/session-entries";
+import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import { formatNum, inferMetricUnitFromName, isBetter } from "./helpers";
 import type { RunRow, SessionRow } from "./storage";
 import type {
@@ -230,6 +230,7 @@ export function computeConfidence(
 	let bestKept: number | null = null;
 	for (const { result, metric } of current) {
 		if (result.status !== "keep") continue;
+
 		if (bestKept === null || isBetter(metric, bestKept, direction)) {
 			bestKept = metric;
 		}

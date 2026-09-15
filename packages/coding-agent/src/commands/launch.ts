@@ -6,6 +6,7 @@ import { Args, Command, Flags } from "@veyyon/utils/cli";
 import { APP_NAME } from "@veyyon/utils/dirs";
 import * as logger from "@veyyon/utils/logger";
 import { type Args as ParsedArgs, parseArgs, reportCliUsageError } from "../cli/args";
+import { MODE_VALUES } from "../cli/flag-tables";
 import { CLI_THINKING_LEVELS } from "../thinking";
 
 export default class Index extends Command {
@@ -78,8 +79,10 @@ export default class Index extends Command {
 			description: "Directory to start in (overrides the launch cwd)",
 		}),
 		mode: Flags.string({
-			description: "Output mode: text (default), json, rpc, or rpc-ui",
-			options: ["text", "json", "rpc", "acp", "rpc-ui"],
+			// Both derived from the parser's own table so the help can never list a
+			// subset of what `--mode` accepts (it omitted `acp` for a release).
+			description: `Output mode: ${MODE_VALUES.map(mode => (mode === "text" ? "text (default)" : mode)).join(", ")}`,
+			options: [...MODE_VALUES],
 		}),
 		config: Flags.string({
 			description: "Load an extra config.yml-style overlay for this run (repeatable)",
@@ -130,7 +133,7 @@ export default class Index extends Command {
 		}),
 		thinking: Flags.string({
 			description: `Set thinking level: ${CLI_THINKING_LEVELS.join(", ")}`,
-			options: [...CLI_THINKING_LEVELS],
+			options: CLI_THINKING_LEVELS.slice(),
 		}),
 		"hide-thinking": Flags.boolean({
 			description: "Hide thinking blocks in TUI output (display only, does not disable model thinking)",
@@ -210,20 +213,20 @@ export default class Index extends Command {
 		`# Create a shell shortcut for a work profile\n  ${APP_NAME} --profile work --alias ${APP_NAME}-work`,
 		`# Use different model (fuzzy matching)\n  ${APP_NAME} --model opus "Help me refactor this code"`,
 		`# Limit model cycling to specific models\n  ${APP_NAME} --models claude-sonnet,claude-haiku,gpt-4o`,
-		`# Export a session file to HTML\n  ${APP_NAME} --export ~/.veyyon/agent/sessions/--path--/session.jsonl`,
+		`# Export a session file to HTML\n  ${APP_NAME} --export ~/.veyyon/profiles/default/agent/sessions/--path--/session.jsonl`,
 	];
 
 	static strict = false;
 
 	async run(): Promise<void> {
-		// Loaded HERE, not at module scope: this module's flag table is the only
-		// thing root help needs, and `../main` pulls the entire runtime graph
-		// (~0.7s of module load) that `veyyon --help` must not pay for.
-		const { prepareAcpTerminalAuthArgs } = await logger.time(
-			"import:acp-terminal-auth",
-			() => import("../modes/acp/terminal-auth"),
-		);
-		const { args } = prepareAcpTerminalAuthArgs(this.argv);
+		let args = this.argv;
+		if (args.includes("--acp-terminal-auth")) {
+			const { prepareAcpTerminalAuthArgs } = await logger.time(
+				"import:acp-terminal-auth",
+				() => import("../modes/acp/terminal-auth"),
+			);
+			args = prepareAcpTerminalAuthArgs(args).args;
+		}
 		let parsed: ParsedArgs;
 		try {
 			parsed = logger.time("parseArgs", parseArgs, args);
@@ -249,7 +252,7 @@ export default class Index extends Command {
 		// below regardless, making this module load noise against that.
 		const { runStartupPrologue, shouldPrepaintLaunchCard } = await logger.time(
 			"import:launch-card",
-			() => import("../startup/launch-card"),
+			() => import("../cli/launch-card"),
 		);
 		if (shouldPrepaintLaunchCard(parsed)) {
 			await logger.time("runStartupPrologue", runStartupPrologue, parsed);
@@ -257,7 +260,7 @@ export default class Index extends Command {
 			// graph is loaded in stages that hand the loop back between subtrees.
 			// Without it the next line blocks for the whole evaluation and a
 			// keystroke typed during it is not echoed until the composer mounts.
-			const { warmRuntimeGraph } = await import("../startup/runtime-warmup");
+			const { warmRuntimeGraph } = await import("../cli/runtime-warmup");
 			await logger.time("warmRuntimeGraph", warmRuntimeGraph);
 		}
 		const { runRootCommand } = await logger.time("import:main", () => import("../main"));

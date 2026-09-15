@@ -1,0 +1,905 @@
+import * as os from "node:os";
+import * as path from "node:path";
+import type { Message } from "@veyyon/ai";
+import {
+	DAY_MS,
+	getAgentDir as getDefaultAgentDir,
+	HOUR_MS,
+	isEnoent,
+	listProfiles,
+	logger,
+	parseJsonlLenient,
+	toError,
+} from "@veyyon/utils";
+import { contentText } from "@veyyon/utils/content-text";
+import {
+	SESSION_BACKUP_EXTENSION,
+	SESSION_FILE_EXTENSION,
+	sessionBackupPrimaryName,
+	sessionFileStem,
+} from "@veyyon/utils/session-file";
+import { computeDefaultSessionDir } from "./session-paths";
+import { FileSessionStorage, type SessionStorage } from "./session-storage";
+
+/**
+ * Coarse lifecycle status of a session, derived from its last persisted message.
+ *
+ * - `complete` — the last assistant turn ended with no unanswered tool calls, i.e.
+ *   the agent yielded control back to the user.
+ * - `interrupted` — work was cut off mid-flight: a trailing assistant turn with
+ *   pending tool calls, a trailing tool result the agent never continued from, or
+ *   a length-truncated turn.
+ * - `aborted` — the last assistant turn was cancelled by the user.
+ * - `error` — the last assistant turn ended in an error.
+ * - `pending` — a trailing user message with no assistant reply persisted after it.
+ * - `unknown` — status could not be determined (empty/header-only session, or the
+ *   final message was larger than the tail window that was read).
+ */
+export type SessionStatus = "complete" | "interrupted" | "aborted" | "error" | "pending" | "unknown";
+
+export interface SessionInfo {
+	path: string;
+	id: string;
+	/** Working directory where the session was started. Empty string for old sessions. */
+	cwd: string;
+	title?: string;
+	/** Path to the parent session (if this session was forked). */
+	parentSessionPath?: string;
+	created: Date;
+	modified: Date;
+	messageCount: number;
+	/** File size in bytes on disk; used for compact list rendering. */
+	size: number;
+	firstMessage: string;
+	allMessagesText: string;
+	/**
+	 * Coarse lifecycle status from the session's last persisted message. Optional:
+	 * synthesized {@link SessionInfo}s (cross-project stubs, tests) leave it unset.
+	 */
+	status?: SessionStatus;
+}
+
+export interface ResolvedSessionMatch {
+	session: SessionInfo;
+	scope: "local" | "global";
+}
+
+/** Lightweight metadata for a recent session, used in welcome/picker UI. */
+export interface RecentSessionInfo {
+	path: string;
+	name: string;
+	timeAgo: string;
+}
+
+const SESSION_LIST_PREFIX_BYTES = 4096;
+/**
+ * Escalated prefix for files whose 4 KB prefix contains no user message even
+ * though the file is clearly larger. A big pre-message entry (system-prompt
+ * snapshot, extension payload — ~100 KB observed live) pushes the first user
+ * message far past the small prefix, and every such session listed as
+ * "(no messages)" in /resume despite being a full conversation. Paid only by
+ * files that actually hit the degenerate case.
+ */
+const SESSION_LIST_ESCALATED_PREFIX_BYTES = 1_048_576;
+/**
+ * Tail window read to derive {@link SessionStatus}. Large enough to capture a
+ * typical final assistant turn (thinking + text); when the final message exceeds
+ * it the status falls back to `unknown` rather than misreporting.
+ */
+const SESSION_LIST_SUFFIX_BYTES = 32_768;
+const SESSION_LIST_PARALLEL_THRESHOLD = 64;
+const SESSION_LIST_MAX_WORKERS = 16;
+
+function sanitizeSessionName(value: string | undefined): string | undefined {
+	if (!value) return undefined;
+	const firstLine = value.split(/\r?\n/)[0] ?? "";
+	const stripped = firstLine.replace(/[\x00-\x1F\x7F]/g, "");
+	const trimmed = stripped.trim();
+	return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/** Format a time difference as a human-readable string */
+function formatTimeAgo(date: Date): string {
+	const now = Date.now();
+	const diffMs = now - date.getTime();
+	const diffMins = Math.floor(diffMs / 60000);
+	const diffHours = Math.floor(diffMs / HOUR_MS);
+	const diffDays = Math.floor(diffMs / DAY_MS);
+
+	if (diffMins < 1) return "just now";
+	if (diffMins < 60) return `${diffMins}m ago`;
+	if (diffHours < 24) return `${diffHours}h ago`;
+	if (diffDays < 7) return `${diffDays}d ago`;
+	return date.toLocaleDateString();
+}
+
+/**
+ * Friendly display name for a session: explicit title, then first user prompt,
+ * then a timestamp-based label. The raw UUID `id` is intentionally never used —
+ * it is unfriendly and indistinguishable from neighboring sessions in the UI.
+ */
+function sessionDisplayName(info: SessionInfo): string {
+	const title = sanitizeSessionName(info.title);
+	if (title) return title;
+	const first =
+		info.firstMessage && info.firstMessage !== "(no messages)" ? sanitizeSessionName(info.firstMessage) : undefined;
+	if (first) return first;
+	const created = info.created.getTime();
+	const ts = Number.isFinite(created) ? created : info.modified.getTime();
+	const date = new Date(ts);
+	const time = date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+	return `Untitled · ${time}`;
+}
+
+/**
+ * Derive a {@link SessionStatus} from a tail window of a session file. Entries are
+ * newline-terminated on write, so within the window only the first line can be a
+ * partial fragment — it simply fails to parse and is skipped. We walk backwards to
+ * the last `message` entry and classify by its role / stop reason.
+ */
+function deriveSessionStatus(suffix: string): SessionStatus {
+	if (!suffix) return "unknown";
+	const lines = suffix.split("\n");
+	for (let i = lines.length - 1; i >= 0; i--) {
+		const line = lines[i];
+		// Every persisted entry is `JSON.stringify(obj)` → starts with `{`. This
+		// cheaply rejects blank lines and the leading partial fragment without
+		// attempting to parse a multi-KB tail of a truncated line.
+		if (line.charCodeAt(0) !== 123) continue;
+		let entry: { type?: string; message?: TailMessage };
+		try {
+			entry = JSON.parse(line);
+		} catch {
+			continue;
+		}
+		if (entry.type === "message" && entry.message) {
+			return statusFromTailMessage(entry.message);
+		}
+	}
+	return "unknown";
+}
+
+interface TailMessage {
+	role?: string;
+	stopReason?: string;
+	content?: unknown;
+}
+
+function isToolCallBlock(block: unknown): boolean {
+	return typeof block === "object" && block !== null && "type" in block && block.type === "toolCall";
+}
+
+function statusFromTailMessage(message: TailMessage): SessionStatus {
+	switch (message.role) {
+		case "assistant": {
+			switch (message.stopReason) {
+				case "error":
+					return "error";
+				case "aborted":
+					return "aborted";
+				case "length":
+					return "interrupted";
+			}
+			// A turn that ends without unanswered tool calls means the agent yielded
+			// control back to the user — complete. Trailing tool calls (no tool
+			// results after) mean the loop was cut off before running them.
+			const content = message.content;
+			if (Array.isArray(content) && content.some(isToolCallBlock)) return "interrupted";
+			return "complete";
+		}
+		case "toolResult":
+			// Tools ran but the agent never produced the following assistant turn.
+			return "interrupted";
+		case "user":
+			// User message with no assistant reply persisted after it.
+			return "pending";
+		default:
+			return "unknown";
+	}
+}
+
+function decodeJsonStringFragment(value: string): string {
+	const safeValue = value.endsWith("\\") ? value.slice(0, -1) : value;
+	try {
+		return JSON.parse(`"${safeValue}"`) as string;
+	} catch {
+		return safeValue
+			.replace(/\\n/g, "\n")
+			.replace(/\\r/g, "\r")
+			.replace(/\\t/g, "\t")
+			.replace(/\\"/g, '"')
+			.replace(/\\\\/g, "\\");
+	}
+}
+
+function extractStringProperty(source: string, name: string, startIndex = 0): string | undefined {
+	const propertyIndex = source.indexOf(`"${name}"`, startIndex);
+	if (propertyIndex === -1) return undefined;
+
+	const colonIndex = source.indexOf(":", propertyIndex + name.length + 2);
+	if (colonIndex === -1) return undefined;
+
+	let valueIndex = colonIndex + 1;
+	while (valueIndex < source.length) {
+		const char = source.charCodeAt(valueIndex);
+		if (char !== 32 && char !== 9 && char !== 10 && char !== 13) break;
+		valueIndex++;
+	}
+	if (source.charCodeAt(valueIndex) !== 34) return undefined;
+
+	const valueStart = valueIndex + 1;
+	let escaped = false;
+	for (let i = valueStart; i < source.length; i++) {
+		const char = source.charCodeAt(i);
+		if (escaped) {
+			escaped = false;
+			continue;
+		}
+		if (char === 92) {
+			escaped = true;
+			continue;
+		}
+		if (char === 34) {
+			return decodeJsonStringFragment(source.slice(valueStart, i));
+		}
+	}
+
+	return decodeJsonStringFragment(source.slice(valueStart));
+}
+
+function countMessageMarkers(content: string): number {
+	let count = 0;
+	let index = 0;
+	while (index < content.length) {
+		const typeIndex = content.indexOf('"type"', index);
+		if (typeIndex === -1) break;
+		const colonIndex = content.indexOf(":", typeIndex + 6);
+		if (colonIndex === -1) break;
+		const type = extractStringProperty(content, "type", typeIndex);
+		if (type === "message") count++;
+		index = colonIndex + 1;
+	}
+	return count;
+}
+
+function extractFirstDisplayMessageFromPrefix(content: string): string | undefined {
+	let fallback: string | undefined;
+	let index = content.indexOf('"role"');
+
+	while (index !== -1) {
+		const role = extractStringProperty(content, "role", index);
+		const text = extractStringProperty(content, "content", index) ?? extractStringProperty(content, "text", index);
+		if (text) {
+			if (role === "user") return text;
+			if (!fallback && (role === "developer" || role === "assistant")) fallback = text;
+		}
+		index = content.indexOf('"role"', index + 6);
+	}
+
+	return fallback;
+}
+
+interface SessionListHeader {
+	type: "session";
+	id: string;
+	cwd?: string;
+	title?: string;
+	parentSession?: string;
+	timestamp?: string;
+}
+
+function normalizeTitleOverride(title: string | undefined): string | null | undefined {
+	if (title === undefined) return undefined;
+	return title.trim() ? title : null;
+}
+
+function sessionListHeaderFromRecord(
+	record: Record<string, unknown> | undefined,
+	titleOverride?: string | null,
+): SessionListHeader | undefined {
+	if (record?.type !== "session" || typeof record.id !== "string") return undefined;
+	return {
+		type: "session",
+		id: record.id,
+		cwd: typeof record.cwd === "string" ? record.cwd : undefined,
+		title:
+			titleOverride === null
+				? undefined
+				: (titleOverride ?? (typeof record.title === "string" ? record.title : undefined)),
+		parentSession: typeof record.parentSession === "string" ? record.parentSession : undefined,
+		timestamp: typeof record.timestamp === "string" ? record.timestamp : undefined,
+	};
+}
+
+function parseSessionListHeaderLine(line: string, titleOverride?: string | null): SessionListHeader | undefined {
+	if (extractStringProperty(line, "type") !== "session") return undefined;
+	const id = extractStringProperty(line, "id");
+	if (!id) return undefined;
+	return {
+		type: "session",
+		id,
+		cwd: extractStringProperty(line, "cwd"),
+		title: titleOverride === null ? undefined : (titleOverride ?? extractStringProperty(line, "title")),
+		parentSession: extractStringProperty(line, "parentSession"),
+		timestamp: extractStringProperty(line, "timestamp"),
+	};
+}
+
+function parseSessionListHeader(
+	content: string,
+	entries: Array<Record<string, unknown>>,
+): SessionListHeader | undefined {
+	const firstEntry = entries[0];
+	const parsedSlotTitle = normalizeTitleOverride(
+		firstEntry?.type === "title" && typeof firstEntry.title === "string" ? firstEntry.title : undefined,
+	);
+	const parsedHeader = sessionListHeaderFromRecord(entries[firstEntry?.type === "title" ? 1 : 0], parsedSlotTitle);
+	if (parsedHeader) return parsedHeader;
+
+	let slotTitle: string | null | undefined;
+	let firstNonEmpty = true;
+	for (const rawLine of content.split(/\r?\n/)) {
+		const line = rawLine.trim();
+		if (!line) continue;
+		if (firstNonEmpty && extractStringProperty(line, "type") === "title") {
+			slotTitle = normalizeTitleOverride(extractStringProperty(line, "title"));
+			firstNonEmpty = false;
+			continue;
+		}
+		return parseSessionListHeaderLine(line, slotTitle);
+	}
+	return undefined;
+}
+
+function getSessionListWorkerCount(fileCount: number): number {
+	if (fileCount <= SESSION_LIST_PARALLEL_THRESHOLD) return 1;
+	return Math.min(
+		SESSION_LIST_MAX_WORKERS,
+		os.availableParallelism(),
+		Math.ceil(fileCount / SESSION_LIST_PARALLEL_THRESHOLD),
+	);
+}
+
+/**
+ * Walk parsed list entries for the display fields: first user message, all
+ * message text, parsed count, and the latest compaction summary. ONE owner —
+ * the normal 4 KB prefix pass and the escalated wide pass run the same walk.
+ */
+function walkListEntries(entries: Record<string, unknown>[]): {
+	parsedMessageCount: number;
+	firstMessage: string;
+	allMessages: string[];
+	shortSummary: string | undefined;
+} {
+	let parsedMessageCount = 0;
+	let firstMessage = "";
+	const allMessages: string[] = [];
+	let shortSummary: string | undefined;
+	for (let i = 1; i < entries.length; i++) {
+		const entry = entries[i] as { type?: string; message?: Message; shortSummary?: string };
+		if (entry.type === "compaction" && typeof entry.shortSummary === "string") {
+			shortSummary = entry.shortSummary;
+		}
+		if (entry.type === "message" && entry.message) {
+			parsedMessageCount++;
+			if (entry.message.role === "user" || entry.message.role === "assistant") {
+				const textContent = contentText(entry.message.content, { separator: " " });
+				if (textContent) {
+					allMessages.push(textContent);
+					if (!firstMessage && entry.message.role === "user") {
+						firstMessage = textContent;
+					}
+				}
+			}
+		}
+	}
+	return { parsedMessageCount, firstMessage, allMessages, shortSummary };
+}
+
+/**
+ * A session file, or a whole session directory, that could not be read during
+ * the last listing.
+ *
+ * WHY THIS EXISTS. Listing is deliberately fail-soft: one damaged file must not
+ * hide every other session, and a listing that throws would break `/resume` and
+ * the welcome shortlist for someone whose only route to fixing it is the tool
+ * that no longer starts. But fail-soft was implemented as fail-SILENT, and the
+ * two are very different products. A session that disappears with no message is
+ * indistinguishable from one the user never created, so the damage presents as
+ * their own faulty memory rather than as a file to go and look at.
+ *
+ * So the drop is recorded. `logger.warn` fires for whoever reads a session log
+ * afterwards, and the list below is for a surface that can put it in front of
+ * the person whose session it was — the same split the settings quarantine path
+ * arrived at, for the same reason: the log alone is not somewhere anyone looks.
+ */
+export interface UnreadableSession {
+	/** The session file, or the directory when the whole scan failed. */
+	readonly path: string;
+	/** What went wrong, from the underlying error. */
+	readonly reason: string;
+	/** `file` when one session was skipped, `directory` when the scan failed. */
+	readonly kind: "file" | "directory";
+}
+
+let unreadableSessions: UnreadableSession[] = [];
+
+function recordUnreadableSession(file: string, reason: string): void {
+	unreadableSessions.push({ path: file, reason, kind: "file" });
+	logger.warn("Session file could not be read and was left out of the list", { sessionFile: file, error: reason });
+}
+
+function recordUnreadableSessionDir(sessionDir: string, reason: string): void {
+	unreadableSessions.push({ path: sessionDir, reason, kind: "directory" });
+	logger.warn("Session directory could not be scanned; the list is EMPTY, not empty of sessions", {
+		sessionDir,
+		error: reason,
+	});
+}
+
+/**
+ * What the last listing could not read. Empty in the normal case.
+ *
+ * Deduplicated by path, because a directory is rescanned on every `/resume` and
+ * an ever-growing list of the same broken file is noise, not information.
+ */
+export function getUnreadableSessions(): readonly UnreadableSession[] {
+	const seen = new Set<string>();
+	return unreadableSessions.filter(entry => {
+		if (seen.has(entry.path)) return false;
+		seen.add(entry.path);
+		return true;
+	});
+}
+
+/** Clear the record. Used between tests, and by a surface that has reported it. */
+export function clearUnreadableSessions(): void {
+	unreadableSessions = [];
+}
+
+/**
+ * Scan a single session file into a {@link SessionInfo}. Always reads the 4 KB
+ * header/first-message prefix; only reads the 32 KB tail window (and derives
+ * {@link SessionStatus}) when `withStatus` is set — the recent/most-recent
+ * lookups skip it. When the prefix holds no user message but the file is
+ * larger than the prefix, one bounded escalated read recovers the display
+ * fields (see {@link SESSION_LIST_ESCALATED_PREFIX_BYTES}).
+ */
+async function scanSessionFile(
+	file: string,
+	storage: SessionStorage,
+	withStatus: boolean,
+): Promise<SessionInfo | undefined> {
+	try {
+		const stat = storage.statSync(file);
+		const [content, suffix] = await storage.readTextSlices(
+			file,
+			SESSION_LIST_PREFIX_BYTES,
+			withStatus ? SESSION_LIST_SUFFIX_BYTES : 0,
+		);
+		const { size, mtime } = stat;
+		const entries = parseJsonlLenient<Record<string, unknown>>(content);
+		const header = parseSessionListHeader(content, entries);
+		if (!header) {
+			// The COMMON corruption, and the one the catch below never sees: the JSONL
+			// parse is lenient, so a mangled file does not throw, it just yields no
+			// readable header. Listing it would put a row in `/resume` with no id and
+			// nothing to resume, so it is still left out — but a `.jsonl` sitting in
+			// the sessions directory with no header is damage (or a foreign file), and
+			// either is worth the one line that says so.
+			recordUnreadableSession(
+				file,
+				"no readable session header (file is empty, truncated at the start, or corrupt)",
+			);
+			return undefined;
+		}
+
+		let walked = walkListEntries(entries);
+		let scanned = content;
+		if (!walked.firstMessage && !extractFirstDisplayMessageFromPrefix(content) && size > SESSION_LIST_PREFIX_BYTES) {
+			// Degenerate prefix: a large pre-message entry hides the first user
+			// message past the 4 KB window. Escalate ONCE to a bounded wide read —
+			// only these files pay for it.
+			const [wide] = await storage.readTextSlices(file, Math.min(size, SESSION_LIST_ESCALATED_PREFIX_BYTES), 0);
+			scanned = wide;
+			walked = walkListEntries(parseJsonlLenient<Record<string, unknown>>(wide));
+		}
+		const { parsedMessageCount, allMessages, shortSummary } = walked;
+		const firstMessage = walked.firstMessage || (extractFirstDisplayMessageFromPrefix(scanned) ?? "");
+		const messageCount = Math.max(parsedMessageCount, countMessageMarkers(scanned));
+		return {
+			path: file,
+			id: header.id,
+			cwd: header.cwd ?? "",
+			title: header.title ?? shortSummary,
+			parentSessionPath: header.parentSession,
+			created: new Date(header.timestamp ?? ""),
+			modified: mtime,
+			messageCount,
+			size,
+			firstMessage: firstMessage || "(no messages)",
+			allMessagesText: allMessages.length > 0 ? allMessages.join(" ") : firstMessage,
+			status: withStatus ? deriveSessionStatus(suffix) : undefined,
+		};
+	} catch (error) {
+		// Dropping the file is right — one damaged session must not take the list
+		// down with it — but dropping it SILENTLY is not (Law 10). A session that
+		// vanishes from `/resume` with no message is indistinguishable from one the
+		// user never created, so the damage reads as their own faulty memory.
+		//
+		// ENOENT is excluded deliberately: a file listed and then removed between
+		// the scan and the read is a race, not damage, and warning about it every
+		// time would train people to ignore this line.
+		if (!isEnoent(error)) {
+			recordUnreadableSession(file, toError(error).message);
+		}
+		return undefined;
+	}
+}
+
+async function collectSessionsFromFileStride(
+	files: string[],
+	storage: SessionStorage,
+	startIndex: number,
+	stride: number,
+	withStatus: boolean,
+): Promise<SessionInfo[]> {
+	const sessions: SessionInfo[] = [];
+
+	for (let i = startIndex; i < files.length; i += stride) {
+		const session = await scanSessionFile(files[i], storage, withStatus);
+		if (session) sessions.push(session);
+	}
+
+	return sessions;
+}
+
+async function collectSessionsFromFiles(
+	files: string[],
+	storage: SessionStorage,
+	withStatus: boolean,
+): Promise<SessionInfo[]> {
+	const workerCount = getSessionListWorkerCount(files.length);
+	const sessions =
+		workerCount === 1
+			? await collectSessionsFromFileStride(files, storage, 0, 1, withStatus)
+			: (
+					await Promise.all(
+						Array.from({ length: workerCount }, (_, workerIndex) =>
+							collectSessionsFromFileStride(files, storage, workerIndex, workerCount, withStatus),
+						),
+					)
+				).flat();
+
+	sessions.sort(compareSessionsByRecency);
+	return sessions;
+}
+
+/**
+ * Finite epoch-ms for a Date, or `fallback` when the Date is invalid (an absent
+ * or unparseable header timestamp yields `new Date("")` → NaN, and a NaN in a
+ * sort comparator silently degrades the sort to an unstable, order-dependent
+ * result).
+ */
+function finiteTime(date: Date, fallback: number): number {
+	const ms = date.getTime();
+	return Number.isFinite(ms) ? ms : fallback;
+}
+
+/**
+ * Recency order for the session list: newest first by file mtime. mtime is the
+ * production last-activity signal and is distinct per file on a real disk.
+ *
+ * When mtimes COLLIDE — several sessions written within the same millisecond,
+ * which is routine under the in-memory storage used by tests and possible on
+ * coarse-resolution filesystems — a bare mtime compare returns 0 and the final
+ * order becomes nondeterministic (it once flipped a shortlist to
+ * ["third task", "first task"] on CI while passing locally). Break the tie
+ * deterministically by the session's own content start timestamp (newest
+ * first), then by path, so the total order is stable everywhere.
+ */
+function compareSessionsByRecency(a: SessionInfo, b: SessionInfo): number {
+	const byModified = finiteTime(b.modified, 0) - finiteTime(a.modified, 0);
+	if (byModified !== 0) return byModified;
+	const byCreated = finiteTime(b.created, 0) - finiteTime(a.created, 0);
+	if (byCreated !== 0) return byCreated;
+	if (a.path < b.path) return -1;
+	if (a.path > b.path) return 1;
+	return 0;
+}
+
+/**
+ * Promote orphaned `<basename>.jsonl.<snowflake>.bak` backups created by the
+ * EPERM-rewrite path back to their primary path when the primary is missing.
+ * This runs once per session-dir scan, before the main `*.jsonl` glob, so a
+ * crash between the two renames in the EPERM-rewrite path does not leave the
+ * user's last good state stranded outside the loader's view.
+ *
+ * "MISSING" HERE MEANS ABSENT, NOT UNANSWERABLE, and the distinction is the
+ * difference between recovering a session and destroying one. `rename`
+ * overwrites its destination without asking, so the probe that decides whether
+ * to promote a backup is one whose false branch is destructive: answer "no
+ * primary" about a primary that is merely unreachable and this replaces a live
+ * session with a stale copy of it. `existsStateSync` separates the two, and
+ * anything other than a definite `absent` leaves the primary alone and says so.
+ *
+ * Exported for testing.
+ */
+export async function recoverOrphanedBackups(sessionDir: string, storage: SessionStorage): Promise<void> {
+	let backups: string[];
+	try {
+		backups = storage.listFilesSync(sessionDir, `*${SESSION_BACKUP_EXTENSION}`);
+	} catch (error) {
+		// A genuinely absent directory is the ordinary first-run case. Any other
+		// enumeration failure means backups may be stranded outside the primary
+		// `*.jsonl` listing, so expose it through the directory-scan reporting
+		// owner while still allowing safe primary files to be listed.
+		if (!isEnoent(error)) {
+			recordUnreadableSessionDir(sessionDir, toError(error).message);
+		}
+		return;
+	}
+	if (backups.length === 0) return;
+	// For each primary path, pick the newest backup (highest mtime) as the recovery source.
+	const candidates = new Map<string, { backup: string; mtimeMs: number }>();
+	for (const backup of backups) {
+		const name = path.basename(backup);
+		// `<primary>.<snowflake>.bak`, read back through the inverse of the function that writes it. This
+		// parse used to be hand-rolled here, one file away from the template in `session-storage.ts`.
+		const primaryName = sessionBackupPrimaryName(name);
+		if (!primaryName) continue;
+		const primaryPath = path.join(sessionDir, primaryName);
+		let mtimeMs = 0;
+		try {
+			mtimeMs = storage.statSync(backup).mtimeMs;
+		} catch (err) {
+			// A backup we cannot measure is still a backup. Dropping it here used to mean that the one
+			// copy of a session stayed stranded as a `.bak` and nothing said why, so the operator saw a
+			// session that had simply disappeared. It competes at mtime 0 instead: a backup with a
+			// readable mtime always wins the pick, and if this is the only candidate the promotion is
+			// still attempted and its own failure is reported below. ENOENT is the exception and stays
+			// quiet, because a backup that raced away between the glob and the stat is genuinely gone.
+			if (isEnoent(err)) continue;
+			recordUnreadableSession(backup, `session backup could not be measured: ${toError(err).message}`);
+		}
+		const existing = candidates.get(primaryPath);
+		if (!existing || mtimeMs > existing.mtimeMs) {
+			candidates.set(primaryPath, { backup, mtimeMs });
+		}
+	}
+	for (const [primaryPath, { backup }] of candidates) {
+		const primaryState = storage.existsStateSync(primaryPath);
+		if (primaryState === "present") continue;
+		if (primaryState === "unreadable") {
+			// REFUSE, because the destructive direction is the one we cannot take back. The primary is
+			// there as far as the filesystem is concerned and we just cannot reach it, so promoting the
+			// backup would `rename` over a session that may hold the operator's whole conversation. The
+			// backup keeps its `.bak` name and stays recoverable on the next scan, once whatever made the
+			// path unreachable is fixed.
+			recordUnreadableSession(
+				primaryPath,
+				"a session backup was left in place because the session it would replace could not be reached",
+			);
+			continue;
+		}
+		try {
+			await storage.rename(backup, primaryPath);
+			logger.warn("Recovered orphaned session backup", {
+				sessionFile: primaryPath,
+				backupPath: backup,
+			});
+		} catch (err) {
+			logger.warn("Failed to recover orphaned session backup", {
+				sessionFile: primaryPath,
+				backupPath: backup,
+				error: toError(err).message,
+			});
+		}
+	}
+}
+
+async function scanSessionDir(
+	sessionDir: string,
+	storage: SessionStorage,
+	withStatus: boolean,
+	recoverBackups = true,
+): Promise<SessionInfo[]> {
+	try {
+		if (recoverBackups) await recoverOrphanedBackups(sessionDir, storage);
+		const files = storage.listFilesSync(sessionDir, `*${SESSION_FILE_EXTENSION}`);
+		return await collectSessionsFromFiles(files, storage, withStatus);
+	} catch (error) {
+		// The whole-directory version of the same rule, and the worse one: this path
+		// turns "your sessions are unreadable" into "you have no sessions", which is
+		// a plausible, calm, completely wrong answer. A missing directory really does
+		// mean no sessions yet (first run), so only that stays quiet.
+		if (!isEnoent(error)) {
+			recordUnreadableSessionDir(sessionDir, toError(error).message);
+		}
+		return [];
+	}
+}
+
+/**
+ * List sessions in a resolved session directory (newest first), reading each
+ * file's lifecycle {@link SessionStatus}.
+ */
+export function listSessions(sessionDir: string, storage: SessionStorage): Promise<SessionInfo[]> {
+	return scanSessionDir(sessionDir, storage, true, true);
+}
+
+/**
+ * List sessions without repairing orphaned backups or mutating the directory.
+ */
+export function listSessionsReadOnly(sessionDir: string, storage: SessionStorage): Promise<SessionInfo[]> {
+	return scanSessionDir(sessionDir, storage, true, false);
+}
+
+/**
+ * List all sessions across all project directories (newest first).
+ *
+ * An absent sessions root is an empty list and nothing more: that is what a fresh install looks
+ * like. Any other failure to scan it is REPORTED, because this list is what the session picker and
+ * `--resume` show, so an unreadable root presented as "you have no sessions" and the work looked
+ * gone. The empty list is still returned, since a picker that cannot list is more useful empty than
+ * crashed, and the log is what tells you the difference.
+ */
+export async function listAllSessions(storage: SessionStorage = new FileSessionStorage()): Promise<SessionInfo[]> {
+	const sessionsRoot = path.join(getDefaultAgentDir(), "sessions");
+	try {
+		// Backups are indexed records too. Recover every project bucket before
+		// enumerating primaries, so a crash during an indexed/backend rewrite is
+		// globally resumable even when no local filesystem mirror exists.
+		const backups = storage.listFilesRecursiveSync(sessionsRoot, `*${SESSION_BACKUP_EXTENSION}`);
+		const backupDirs = new Set(backups.map(backup => path.dirname(backup)));
+		await Promise.all(Array.from(backupDirs, sessionDir => recoverOrphanedBackups(sessionDir, storage)));
+
+		const files = storage.listFilesRecursiveSync(sessionsRoot, `*${SESSION_FILE_EXTENSION}`);
+		return await collectSessionsFromFiles(files, storage, true);
+	} catch (err) {
+		if (isEnoent(err)) return [];
+		logger.warn("Sessions directory could not be scanned; no sessions can be listed or resumed from it", {
+			path: sessionsRoot,
+			error: toError(err).message,
+		});
+		return [];
+	}
+}
+
+/** Exported for testing */
+export async function findMostRecentSession(
+	sessionDir: string,
+	storage: SessionStorage = new FileSessionStorage(),
+): Promise<string | null> {
+	const sessions = await scanSessionDir(sessionDir, storage, false);
+	return sessions[0]?.path ?? null;
+}
+
+/** True when a session has neither a title nor any user message — nothing a
+ * human could recognize or want to continue. Every launch creates one such
+ * empty file, so without this filter the welcome hero's "continue where you
+ * left off" line pointed at the CURRENT launch's own blank session
+ * ("Untitled · 11:48 AM · just now"), which is self-referential noise. */
+function isBlankSession(info: SessionInfo): boolean {
+	return !sanitizeSessionName(info.title) && (!info.firstMessage || info.firstMessage === "(no messages)");
+}
+
+/** Get recent sessions for display in the welcome screen. Blank sessions
+ * (see {@link isBlankSession}) are skipped — `/resume`'s full list still
+ * shows everything; this is only the hero's recognizable shortlist. */
+export async function getRecentSessions(
+	sessionDir: string,
+	limit = 4,
+	storage: SessionStorage = new FileSessionStorage(),
+): Promise<RecentSessionInfo[]> {
+	const sessions = await scanSessionDir(sessionDir, storage, false);
+	const recent: RecentSessionInfo[] = [];
+	for (const info of sessions) {
+		if (recent.length >= limit) break;
+		if (isBlankSession(info)) continue;
+		recent.push({ path: info.path, name: sessionDisplayName(info), timeAgo: formatTimeAgo(info.modified) });
+	}
+	return recent;
+}
+
+function sessionMatchesResumeArg(session: SessionInfo, sessionArg: string): boolean {
+	const normalizedArg = sessionArg.toLowerCase();
+	const normalizedId = session.id.toLowerCase();
+	if (normalizedId.startsWith(normalizedArg)) {
+		return true;
+	}
+
+	const fileName = sessionFileStem(path.basename(session.path)).toLowerCase();
+	if (fileName.startsWith(normalizedArg)) {
+		return true;
+	}
+
+	const separator = fileName.lastIndexOf("_");
+	if (separator < 0) {
+		return false;
+	}
+
+	const fileSessionId = fileName.slice(separator + 1);
+	return fileSessionId.startsWith(normalizedArg);
+}
+
+/** Controls cross-directory fallback for resumable session lookup. */
+export interface ResolveResumableSessionOptions {
+	/** Search default global session buckets after the active/custom session directory misses. */
+	allowGlobalFallback?: boolean;
+}
+
+function isSessionStorage(value: SessionStorage | ResolveResumableSessionOptions): value is SessionStorage {
+	return "listFilesSync" in value;
+}
+
+export async function resolveResumableSession(
+	sessionArg: string,
+	cwd: string,
+	sessionDir?: string,
+	storageOrOptions: SessionStorage | ResolveResumableSessionOptions = new FileSessionStorage(),
+	options: ResolveResumableSessionOptions = {},
+): Promise<ResolvedSessionMatch | undefined> {
+	const storage = isSessionStorage(storageOrOptions) ? storageOrOptions : new FileSessionStorage();
+	const resolvedOptions = isSessionStorage(storageOrOptions) ? options : storageOrOptions;
+	const localSessionDir = sessionDir ?? computeDefaultSessionDir(cwd, storage);
+	const localSessions = await listSessions(localSessionDir, storage);
+	const localMatch = localSessions.find(session => sessionMatchesResumeArg(session, sessionArg));
+	if (localMatch) {
+		return { session: localMatch, scope: "local" };
+	}
+
+	if (sessionDir && resolvedOptions.allowGlobalFallback !== true) {
+		return undefined;
+	}
+
+	const globalSessions = await listAllSessions(storage);
+	const globalMatch = globalSessions.find(session => sessionMatchesResumeArg(session, sessionArg));
+	if (globalMatch) {
+		return { session: globalMatch, scope: "global" };
+	}
+
+	const foreignMatch = await findSessionInOtherProfiles(sessionArg, storage);
+	return foreignMatch ? { session: foreignMatch, scope: "global" } : undefined;
+}
+
+/**
+ * The session an id names in a profile other than the active one.
+ *
+ * A session id is globally unique, and the line printed on the way out —
+ * `veyyon --resume <id>` — carries nothing about which profile wrote it. Every
+ * lookup above stops at the active profile's own sessions root, so that line
+ * resolved only when the operator happened to relaunch under the same profile
+ * and otherwise reported the session as not found, with the file sitting on disk
+ * one directory over. The session is resumed where it lives; only the settings
+ * come from the profile that is running.
+ *
+ * Reached only after the active profile has missed on an explicit id, so the
+ * cost of scanning every profile is paid on the path that would otherwise fail.
+ */
+async function findSessionInOtherProfiles(
+	sessionArg: string,
+	storage: SessionStorage,
+): Promise<SessionInfo | undefined> {
+	const activeRoot = path.resolve(path.join(getDefaultAgentDir(), "sessions"));
+	for (const profile of listProfiles()) {
+		const sessionsRoot = path.resolve(path.join(profile.agentDir, "sessions"));
+		if (sessionsRoot === activeRoot) continue;
+		let files: string[];
+		try {
+			files = storage.listFilesRecursiveSync(sessionsRoot, `*${SESSION_FILE_EXTENSION}`);
+		} catch (err) {
+			if (!isEnoent(err)) {
+				logger.warn("A profile's sessions directory could not be scanned while resolving a session id", {
+					path: sessionsRoot,
+					error: toError(err).message,
+				});
+			}
+			continue;
+		}
+		const sessions = await collectSessionsFromFiles(files, storage, true);
+		const match = sessions.find(session => sessionMatchesResumeArg(session, sessionArg));
+		if (match) return match;
+	}
+	return undefined;
+}

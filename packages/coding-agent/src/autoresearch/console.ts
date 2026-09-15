@@ -13,8 +13,9 @@
  * {@link ./index} performs what an action asks for. Neither surface is needed
  * to test a rule here.
  */
-import { type FormField, sanitizeSingleLine } from "@veyyon/tui";
+import type { FormField } from "@veyyon/tui";
 import { clamp } from "@veyyon/utils";
+import { sanitizeSingleLine } from "@veyyon/utils/wrap";
 import { type LoopPreset, presetMatches } from "./presets";
 import { certifierFor, MAX_ATTEMPTS, MAX_BREADTH, MIN_ATTEMPTS, MIN_SWARM_BREADTH } from "./swarm";
 import type { SwarmSetup } from "./types";

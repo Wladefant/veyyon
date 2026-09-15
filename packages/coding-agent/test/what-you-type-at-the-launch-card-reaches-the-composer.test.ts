@@ -32,10 +32,10 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { setTerminalHeadless, TempDir } from "@veyyon/utils";
 import { Settings } from "../src/config/settings";
-import { type FirstFrame, paintFirstFrame, takeFirstFrame } from "../src/modes/first-frame";
-import { resetGroundTintsForTest } from "../src/modes/theme/ground-tints";
-import { initTheme } from "../src/modes/theme/theme";
-import * as ttyInputFlush from "../src/modes/tty-input-flush";
+import { type FirstFrame, paintFirstFrame, takeFirstFrame } from "../src/modes/terminal/first-frame";
+import * as ttyInputFlush from "../src/modes/terminal/tty-input-flush";
+import { resetGroundTintsForTest } from "../src/theme/ground-tints";
+import { initTheme } from "../src/theme/theme";
 
 let tempDir: TempDir;
 beforeAll(async () => {
@@ -317,6 +317,15 @@ describe("what you type at the launch card reaches the composer", () => {
 			});
 			expect(await frame.settleQueuedInput()).toBe(true);
 			expect(draft()).toBe("hello");
+		});
+
+		it("releases capture wrapper on terminal writes when input is collected", async () => {
+			const { frame } = card();
+			const originalWrite = Object.getPrototypeOf(frame.ui.terminal).write;
+			setImmediate(() => send("input"));
+			expect(await frame.settleQueuedInput()).toBe(true);
+			// Capture wrapper is stopped and terminal.write restored so subsequent session output is not captured
+			expect(frame.ui.terminal.write).toBe(originalWrite);
 		});
 
 		it("reports nothing to draw, and returns, when the operator typed nothing", async () => {

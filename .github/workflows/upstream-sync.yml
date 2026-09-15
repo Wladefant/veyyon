@@ -1,0 +1,96 @@
+name: Upstream Sync Check
+
+on:
+  schedule:
+    # Run weekly on Monday at 04:00 UTC
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check-and-open-sync-pr:
+    name: Check upstream drift and open draft sync PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+
+      - name: Check upstream divergence and open draft PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPSTREAM_REPO: "https://github.com/santhreal/veyyon.git"
+          UPSTREAM_BRANCH: "main"
+          TARGET_BRANCH: "main"
+        run: |
+          set -euo pipefail
+
+          # Add upstream remote and fetch
+          git remote add upstream "$UPSTREAM_REPO"
+          git fetch upstream "$UPSTREAM_BRANCH"
+
+          # Compute merge-base and commit counts
+          UPSTREAM_HEAD=$(git rev-parse upstream/"$UPSTREAM_BRANCH")
+          FORK_HEAD=$(git rev-parse origin/"$TARGET_BRANCH")
+          MERGE_BASE=$(git merge-base "$FORK_HEAD" "$UPSTREAM_HEAD")
+
+          BEHIND_COUNT=$(git rev-list --count "$FORK_HEAD..$UPSTREAM_HEAD")
+          AHEAD_COUNT=$(git rev-list --count "$UPSTREAM_HEAD..$FORK_HEAD")
+
+          echo "Fork head: $FORK_HEAD"
+          echo "Upstream head: $UPSTREAM_HEAD"
+          echo "Merge base: $MERGE_BASE"
+          echo "Behind upstream by: $BEHIND_COUNT commits"
+          echo "Ahead of upstream by: $AHEAD_COUNT commits"
+
+          if [ "$BEHIND_COUNT" -eq 0 ]; then
+            echo "Fork is up to date with upstream ($BEHIND_COUNT commits behind). Nothing to do."
+            exit 0
+          fi
+
+          # Check if an upstream sync PR is already open
+          EXISTING_PR=$(gh pr list --repo "$GITHUB_REPOSITORY" --base "$TARGET_BRANCH" --state open --json number,title,headRefName \
+            --jq '.[] | select(.headRefName | startswith("sync/upstream-")) | .number' | head -n 1)
+
+          if [ -n "$EXISTING_PR" ]; then
+            echo "An upstream sync PR is already open (#$EXISTING_PR). Skipping duplicate PR creation."
+            exit 0
+          fi
+
+          DATE_STAMP=$(date -u +'%Y-%m-%d')
+          SYNC_BRANCH="sync/upstream-${DATE_STAMP}"
+
+          echo "Creating draft sync PR for branch $SYNC_BRANCH with $BEHIND_COUNT commits behind..."
+
+          # Create sync branch from upstream head
+          git checkout -b "$SYNC_BRANCH" upstream/"$UPSTREAM_BRANCH"
+          git push origin "$SYNC_BRANCH"
+
+          PR_TITLE="chore(sync): sync upstream changes (${BEHIND_COUNT} commits behind)"
+          PR_BODY=$(printf '%s\n' \
+            "## Upstream Drift Summary" \
+            "- **Upstream HEAD**: \`$UPSTREAM_HEAD\`" \
+            "- **Fork HEAD**: \`$FORK_HEAD\`" \
+            "- **Merge Base**: \`$MERGE_BASE\`" \
+            "- **Commits Behind Upstream**: $BEHIND_COUNT" \
+            "- **Fork-Only Commits Ahead**: $AHEAD_COUNT" \
+            "" \
+            "## Instructions" \
+            "This is an automated **DRAFT** pull request created by the Upstream Sync workflow." \
+            "It never merges automatically and never force-pushes." \
+            "Review conflicts, run targeted package gates, and merge via \`--no-ff\` merge commit when verified.")
+
+          gh pr create \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --base "$TARGET_BRANCH" \
+            --head "$SYNC_BRANCH" \
+            --title "$PR_TITLE" \
+            --body "$PR_BODY"
+
+          echo "Draft PR opened successfully."

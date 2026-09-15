@@ -1,0 +1,577 @@
+import type { AgentMessage } from "@veyyon/agent-core";
+// The reader that owns "which entry does a compaction's keep marker name": it is the
+// only place the keep-nothing sentinel, an ordinary id and an id that resolves to
+// nothing are told apart, and the prune and shake passes already read the field
+// through it. `entries.ts` is a leaf beside the two above.
+import { KEEP_NOTHING_ENTRY_ID, resolveCompactionBoundaryIndex } from "@veyyon/agent-core/compaction/entries";
+// Same reasoning as the line above: the zero-import leaf that owns the predicate,
+// not the compaction barrel. `legacy-provider-native.ts` imports nothing, so this
+// edge adds exactly one module to every graph this file is on.
+import { hasLegacyProviderNativeCompaction } from "@veyyon/agent-core/compaction/legacy-provider-native";
+// The owner, not the `compaction` subpath barrel. That barrel re-exports the compaction ENGINE, which
+// imports the `@veyyon/ai` barrel to summarize a conversation; this module is a self-contained reader for a
+// retired archive format and imports nothing at all. The edge cost 238 modules, and it was on the graph of
+// `internal-urls/index.ts` (the URL router) and `tools/fs/read.ts` through `session/session-loader.ts`.
+import { legacyArchiveSourceText } from "@veyyon/agent-core/compaction/legacy-snapcompact-archive";
+import {
+	createBranchSummaryMessage,
+	createCompactionSummaryMessage,
+	createCustomMessage,
+} from "@veyyon/agent-core/compaction/messages";
+// The remote-compaction entry reader is a leaf beside the legacy one: it turns a
+// server-side compaction's stored window back into the provider payload the
+// Responses-family request builder replays, and names who compacted for display.
+import {
+	getRemoteCompactionPreserveData,
+	remoteCompactionAttribution,
+	remoteCompactionProviderPayload,
+} from "@veyyon/agent-core/compaction/remote-compaction-entry";
+import type { TextContent } from "@veyyon/ai";
+// From the module that DEFINES the coercion, not the barrel that re-exports it.
+// `@veyyon/ai/types` is 5 modules against the barrel's 346, and this file is on
+// `session/session-manager.ts`'s path, which ~200 test files import.
+import { coerceServiceTierByFamily, type ServiceTierByFamily } from "@veyyon/ai/types";
+// The owner, not the `@veyyon/utils` barrel: 2 modules against 74, and this file is on
+// the graph of the URL router and the read tool.
+import * as logger from "@veyyon/utils/logger";
+import { isCustomMessageContent, normalizeCustomMessagePayload } from "./custom-message-payload";
+import { type CompactionEntry, EPHEMERAL_MODEL_CHANGE_ROLE, type SessionEntry } from "./session-entries";
+
+export interface SessionContext {
+	messages: AgentMessage[];
+	thinkingLevel?: string;
+	/** Configured thinking selector (`"auto"` or a concrete level) from the latest change. */
+	configuredThinkingLevel?: string;
+	serviceTier?: ServiceTierByFamily;
+	/** Model roles: { default: "provider/modelId", small: "provider/modelId", ... } */
+	models: Record<string, string>;
+	/** Names of TTSR rules that have been injected this session */
+	injectedTtsrRules: string[];
+	/** MCP tool names selected through discovery for this session branch. */
+	selectedMCPToolNames: string[];
+	/** Whether this branch contains an explicit persisted MCP selection entry. */
+	hasPersistedMCPToolSelection: boolean;
+	/** Active mode (e.g. "plan") or "none" if no special mode is active */
+	mode: string;
+	/** Mode-specific data from the last mode_change entry */
+	modeData?: Record<string, unknown>;
+	/**
+	 * Array parallel to messages, indicating which assistant turns should
+	 * have their prompt-cache misses suppressed/explained (because a model,
+	 * compaction, or plan-mode transition directly preceded them).
+	 * Only populated in transcript mode.
+	 */
+	cacheMissExplainedAt?: boolean[];
+}
+
+/** Lists session model strings to try when restoring, in fallback order. */
+export function getRestorableSessionModels(
+	models: Readonly<Record<string, string>>,
+	lastModelChangeRole: string | undefined,
+): string[] {
+	const defaultModel = models.default;
+	if (
+		!lastModelChangeRole ||
+		lastModelChangeRole === "default" ||
+		lastModelChangeRole === EPHEMERAL_MODEL_CHANGE_ROLE
+	) {
+		return defaultModel ? [defaultModel] : [];
+	}
+
+	const roleModel = models[lastModelChangeRole];
+	if (!roleModel) return defaultModel ? [defaultModel] : [];
+	if (!defaultModel || roleModel === defaultModel) return [roleModel];
+	return [roleModel, defaultModel];
+}
+
+export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEntry | null {
+	for (let i = entries.length - 1; i >= 0; i--) {
+		if (entries[i].type === "compaction") {
+			return entries[i] as CompactionEntry;
+		}
+	}
+	return null;
+}
+
+export interface BuildSessionContextOptions {
+	/**
+	 * Build the display transcript instead of the LLM context. By default this
+	 * preserves every path entry with compactions inline; set
+	 * `collapseCompactedHistory` for the live TUI surface to render only the
+	 * latest compacted tail.
+	 */
+	transcript?: boolean;
+	/** In transcript mode, elide entries replaced by the latest compaction. */
+	collapseCompactedHistory?: boolean;
+	/**
+	 * Transcript mode only: keep `toolCall` blocks that have no matching
+	 * `toolResult` on the path instead of stripping them. Pass this when the
+	 * session is mid-turn (a tool is still executing, its result not yet
+	 * persisted) so the rebuilt transcript renders the in-flight call as
+	 * pending; without it a focus/unfocus or overlay-close rebuild silently
+	 * hides the call the agent is still waiting on.
+	 */
+	keepDanglingToolCalls?: boolean;
+}
+
+/**
+ * Display-only marker set on transcript assistant messages whose dangling
+ * `toolCall` blocks were stripped (no paired result on the resolved path —
+ * failed/retried turns, results on sibling branches). The TUI renders a
+ * placeholder row from it so the turn's activity never silently vanishes.
+ */
+export interface StrippedToolCallsMarker {
+	strippedToolCalls?: number;
+}
+
+/**
+ * Build the session context from entries using tree traversal.
+ * If leafId is provided, walks from that entry to root.
+ * Handles compaction and branch summaries along the path.
+ */
+/**
+ * Re-attach the plaintext source of a legacy image-archive compaction as a
+ * single text block, so an old session whose compaction persisted a frame
+ * archive keeps showing its archived history after every context rebuild. The
+ * removed engine also stored the full source under `archive.text`; the frames
+ * were only an image duplicate of it, so recovering the text is lossless. New
+ * sessions never write such an archive, so this returns `undefined` for them.
+ */
+function legacyArchiveBlocksForContext(
+	preserveData: Record<string, unknown> | undefined,
+	options: BuildSessionContextOptions | undefined,
+): TextContent[] | undefined {
+	if (options?.transcript && options.collapseCompactedHistory) return undefined;
+	const text = legacyArchiveSourceText(preserveData);
+	if (!text) return undefined;
+	return [{ type: "text", text: `Recovered archived history from a prior compaction:\n\n${text}` }];
+}
+
+function emptySessionContext(): SessionContext {
+	return {
+		messages: [],
+		thinkingLevel: "off",
+		serviceTier: undefined,
+		models: {},
+		injectedTtsrRules: [],
+		selectedMCPToolNames: [],
+		hasPersistedMCPToolSelection: false,
+		mode: "none",
+	};
+}
+
+export function walkBranchPath(byId: Map<string, SessionEntry>, leaf?: SessionEntry): SessionEntry[] {
+	const path: SessionEntry[] = [];
+	const seen = new Set<string>();
+	let current = leaf;
+	while (current && !seen.has(current.id)) {
+		seen.add(current.id);
+		path.push(current);
+		current = current.parentId ? byId.get(current.parentId) : undefined;
+	}
+	path.reverse();
+	return path;
+}
+
+export function buildSessionContext(
+	entries: SessionEntry[],
+	leafId?: string | null,
+	byId?: Map<string, SessionEntry>,
+	options?: BuildSessionContextOptions,
+): SessionContext {
+	if (leafId === null) return emptySessionContext();
+
+	// Build uuid index if not available
+	if (!byId) {
+		byId = new Map<string, SessionEntry>();
+		for (const entry of entries) {
+			byId.set(entry.id, entry);
+		}
+	}
+
+	// A named leaf that resolves to nothing falls back to the tail, the same as an
+	// absent one: an id can outlive the entry it named once a prune or a compaction
+	// rewrites the file, and a resumed session must reopen on its last entry rather
+	// than on an empty conversation. `leafId === null` is the explicit "before the
+	// first entry" position and returned above, so it never reaches this fallback.
+	const leaf = (leafId ? byId.get(leafId) : undefined) ?? entries[entries.length - 1];
+	if (!leaf) return emptySessionContext();
+
+	// Walk from leaf to root, collecting path
+	const path = walkBranchPath(byId, leaf);
+	// Extract settings and find compaction
+	let thinkingLevel: string | undefined = "off";
+	let configuredThinkingLevel: string | undefined;
+	let serviceTier: ServiceTierByFamily | undefined;
+	const models: Record<string, string> = {};
+	let compaction: CompactionEntry | null = null;
+	const injectedTtsrRulesSet = new Set<string>();
+	let selectedMCPToolNames: string[] = [];
+	let hasPersistedMCPToolSelection = false;
+	let mode = "none";
+	let modeData: Record<string, unknown> | undefined;
+	// Track whether an explicit `model_change` with role="default" has been
+	// seen on this path. Once a user (or the agent itself) records an
+	// explicit default, later assistant-message inference must NOT overwrite
+	// it: temporary fallbacks (retry fallback, context promotion) and
+	// server-side model downgrades both produce assistant messages tagged
+	// with the wrong model id, which previously clobbered the user's pick on
+	// resume (issue #849).
+	let hasExplicitDefaultModel = false;
+
+	for (const entry of path) {
+		if (entry.type === "thinking_level_change") {
+			thinkingLevel = entry.thinkingLevel ?? "off";
+			configuredThinkingLevel = entry.configured ?? entry.thinkingLevel ?? undefined;
+		} else if (entry.type === "model_change") {
+			// New format: { model: "provider/id", role?: string }
+			if (entry.model) {
+				const role = entry.role ?? "default";
+				models[role] = entry.model;
+				if (role === "default") {
+					hasExplicitDefaultModel = true;
+				}
+			}
+		} else if (entry.type === "service_tier_change") {
+			serviceTier = coerceServiceTierByFamily(entry.serviceTier);
+		} else if (entry.type === "message" && entry.message.role === "assistant") {
+			// Legacy fallback: infer default model from assistant messages only
+			// when no explicit `model_change` (role=default) entry has been
+			// recorded yet. Newer sessions always record an explicit default
+			// model_change at the start of the conversation, so this branch is
+			// only used to keep pre-model_change sessions working.
+			if (!hasExplicitDefaultModel) {
+				models.default = `${entry.message.provider}/${entry.message.model}`;
+			}
+		} else if (entry.type === "compaction" && !hasLegacyProviderNativeCompaction(entry.preserveData)) {
+			// A compaction written by the removed provider-native remote path is
+			// NOT an effective compaction for this rebuild. Its `summary` is the
+			// fixed placeholder "Remote compaction preserved provider-native
+			// history for this session." and carries no task content: the real
+			// history lived in the opaque `preserveData` blob, which only the
+			// provider could read and which is deliberately never replayed. Honor
+			// its `firstKeptEntryId` and every entry before the cut is dropped
+			// from context and replaced by that sentence, so the operator loses
+			// the pre-cut conversation on every rebuild, resume and fork.
+			//
+			// The raw entries are still on the branch, so skipping the entry
+			// re-emits them verbatim: nothing is lost, and the next compaction
+			// summarizes them locally. This is the same ruling `hasReusableSummary`
+			// makes in `prepareCompaction`, which re-expands the messages behind
+			// exactly these entries. An earlier real compaction on the branch, if
+			// any, still wins and still applies its own cut.
+			compaction = entry;
+		} else if (entry.type === "ttsr_injection") {
+			// Collect injected TTSR rule names
+			for (const ruleName of entry.injectedRules) {
+				injectedTtsrRulesSet.add(ruleName);
+			}
+		} else if (entry.type === "mcp_tool_selection") {
+			selectedMCPToolNames = entry.selectedToolNames.slice();
+			hasPersistedMCPToolSelection = true;
+		} else if (entry.type === "mode_change") {
+			mode = entry.mode;
+			modeData = entry.data;
+		}
+	}
+
+	const injectedTtsrRules = Array.from(injectedTtsrRulesSet);
+
+	// Build messages and collect corresponding entries
+	// When there's a compaction, we need to:
+	// 1. Emit summary first (entry = compaction)
+	// 2. Emit kept messages (from firstKeptEntryId up to compaction)
+	// 3. Emit messages after compaction
+	const messages: AgentMessage[] = [];
+	const cacheMissExplainedAt: boolean[] = [];
+	let pendingReset = false;
+	let currentMode = "none";
+	let lastAssistantModel: string | undefined;
+
+	const handleEntryResetTracking = (entry: SessionEntry) => {
+		if (entry.type === "compaction") {
+			pendingReset = true;
+		} else if (entry.type === "model_change") {
+			pendingReset = true;
+		} else if (entry.type === "mode_change") {
+			const isPlanTransition = (entry.mode === "plan") !== (currentMode === "plan");
+			if (isPlanTransition) {
+				pendingReset = true;
+			}
+			currentMode = entry.mode;
+		}
+	};
+
+	const pushMessage = (msg: AgentMessage) => {
+		messages.push(msg);
+		if (!options?.transcript) return;
+		if (msg.role === "assistant") {
+			const currentModel = `${msg.provider}/${msg.model}`;
+			const modelChanged = lastAssistantModel !== undefined && lastAssistantModel !== currentModel;
+			lastAssistantModel = currentModel;
+			cacheMissExplainedAt.push(pendingReset || modelChanged);
+			pendingReset = false;
+		} else {
+			cacheMissExplainedAt.push(false);
+		}
+	};
+
+	// A recovered assistant turn is dropped from the model's context below, and the tool
+	// results paired to it have to go with it. A retried transport death pairs every call
+	// it never ran with a placeholder result, and those placeholders outlive the turn on
+	// disk: replaying them alone handed a resumed session tool results whose `tool_use` is
+	// no longer in the context, one of them carrying the batch ledger that asks the model
+	// to reissue calls the retry had already reissued and run. Re-running a migration
+	// because the transcript was reopened is the cost of that.
+	//
+	// Only the run of results IMMEDIATELY after the dropped turn goes with it. The retried
+	// turn can reissue the same call ids, so a set held for the rest of the walk would take
+	// the replay's real results as well and hand the model a `tool_use` with no answer.
+	let orphanedCallIds: Set<string> | undefined;
+
+	const appendMessage = (entry: SessionEntry) => {
+		handleEntryResetTracking(entry);
+		if (entry.type === "message") {
+			const message = entry.message;
+			if (!options?.transcript && message.role === "assistant" && message.retryRecovery?.status === "recovered") {
+				orphanedCallIds = new Set<string>();
+				for (const block of message.content) {
+					if (block.type === "toolCall") orphanedCallIds.add(block.id);
+				}
+				return;
+			}
+			if (orphanedCallIds !== undefined) {
+				if (message.role === "toolResult" && orphanedCallIds.delete(message.toolCallId)) return;
+				orphanedCallIds = undefined;
+			}
+			pushMessage(message);
+		} else if (entry.type === "custom_message") {
+			if (!isCustomMessageContent(entry.content)) return;
+			const normalized = normalizeCustomMessagePayload(entry);
+			const attribution = entry.attribution === undefined ? undefined : normalized.attribution;
+			pushMessage(
+				createCustomMessage(
+					normalized.customType,
+					normalized.content,
+					normalized.display,
+					normalized.details,
+					entry.timestamp,
+					attribution,
+				),
+			);
+		} else if (entry.type === "branch_summary" && entry.summary) {
+			pushMessage(createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp));
+		}
+	};
+
+	if (options?.transcript && !options.collapseCompactedHistory) {
+		// Display transcript: every entry in chronological order. Compactions do
+		// not erase prior history here — each renders inline (as a divider in the
+		// TUI) at the point it fired, with any legacy archived history re-attached
+		// as text so the component can report it.
+		for (const entry of path) {
+			handleEntryResetTracking(entry);
+			if (entry.type === "compaction") {
+				pushMessage(
+					createCompactionSummaryMessage(
+						entry.summary,
+						entry.tokensBefore,
+						entry.timestamp,
+						entry.shortSummary,
+						remoteCompactionProviderPayload(entry.preserveData),
+						undefined,
+						legacyArchiveBlocksForContext(entry.preserveData, options),
+						entry.warning,
+						remoteCompactionAttribution(entry.preserveData),
+					),
+				);
+			} else {
+				appendMessage(entry);
+			}
+		}
+	} else if (compaction) {
+		// A remote compaction entry carries the provider's window and NO readable
+		// summary: the window is the compacted context, and billing a second model
+		// to paraphrase the same span is the cost that path used to pay (see
+		// remote-compaction.ts). Legacy provider-native entries are the same shape
+		// for a worse reason: their summary is a placeholder.
+		//
+		// So an entry is only usable as a compaction when it can actually stand in
+		// for the span it hid: either a provider that can replay its window, or
+		// real summary text. When it is neither, treating it as a compaction would
+		// drop the span from context entirely while its messages sit on disk
+		// untouched. Re-expanding them costs context on a provider switch and
+		// nothing on the normal path, and the next compaction on the new provider
+		// summarizes them locally (see hasReusableSummary in compaction.ts).
+		//
+		// "Can replay" is provider identity, not merely the presence of a window.
+		// The window's `compaction` item is an opaque blob only its minting host
+		// can decrypt, so a session that switched to another provider holds a
+		// payload the encoder will drop. Counting that as usable would emit an
+		// empty summary and silently hide the span, which is the exact loss this
+		// gate exists to prevent. `models.default` is resolved by the walk above,
+		// so the active provider is known here.
+		const remotePayload = remoteCompactionProviderPayload(compaction.preserveData);
+		const remoteData = getRemoteCompactionPreserveData(compaction.preserveData);
+		const activeProvider = models.default?.split("/")[0];
+		const replayable =
+			remotePayload !== undefined &&
+			remoteData !== undefined &&
+			(activeProvider === undefined || activeProvider === remoteData.provider);
+		const usableCompaction = replayable || compaction.summary.trim().length > 0;
+
+		// Re-attach any legacy archived history as text so the model can keep
+		// reading it after every context rebuild (old sessions only).
+		const compactionSummaryMsg = createCompactionSummaryMessage(
+			compaction.summary,
+			compaction.tokensBefore,
+			compaction.timestamp,
+			compaction.shortSummary,
+			remotePayload,
+			undefined,
+			legacyArchiveBlocksForContext(compaction.preserveData, options),
+			compaction.warning,
+			remoteCompactionAttribution(compaction.preserveData),
+		);
+		// Agent context (non-transcript): summary first so the LLM sees the
+		// compacted context before recent messages.
+		if (!options?.transcript && usableCompaction) {
+			pushMessage(compactionSummaryMsg);
+		}
+
+		// Find compaction index in path
+		const compactionIdx = path.findIndex(e => e.type === "compaction" && e.id === compaction.id);
+
+		// Emit the kept pre-compaction entries, starting at the compaction's keep marker.
+		//
+		// The marker names the first pre-compaction entry the compaction kept verbatim, and
+		// it is resolved through the reader every other pass uses rather than by a private
+		// walk. There are three cases and this loop used to collapse them into one. An
+		// ordinary id keeps from that entry. `KEEP_NOTHING_ENTRY_ID` deliberately names no
+		// entry at all, which is how a compaction of one unbreakable oversized turn says it
+		// kept nothing. An id that named a real entry which is no longer on the path is
+		// damage: the loader drops a record it cannot parse rather than refusing the
+		// session, and the v1 migration left the field unset whenever the old numeric index
+		// pointed at the header. A walk that only asks "have I seen the id yet" answers
+		// "keep nothing" to all three, so one unreadable line silently removed every kept
+		// turn from the model's context and from the transcript while the summary made the
+		// session look whole. The prune and shake passes read the same field through the
+		// shared reader, which treats an id that resolves to nothing as "the whole branch is
+		// live", so they were rewriting entries this rebuild had already refused to send.
+		// Damage now costs only the record that was lost: the span is re-expanded, which
+		// overlaps the summary by a few turns and loses nothing.
+		const keptFrom = usableCompaction ? resolveCompactionBoundaryIndex(path, compaction.firstKeptEntryId) : 0;
+		if (
+			usableCompaction &&
+			compaction.firstKeptEntryId !== KEEP_NOTHING_ENTRY_ID &&
+			keptFrom === 0 &&
+			path[0]?.id !== compaction.firstKeptEntryId
+		) {
+			logger.warn("Compaction keep marker names no entry on the branch; re-expanding the pre-compaction span", {
+				compactionId: compaction.id,
+				firstKeptEntryId: compaction.firstKeptEntryId,
+			});
+		}
+		for (let i = keptFrom; i < compactionIdx; i++) {
+			appendMessage(path[i]);
+		}
+
+		// Display transcript: emit the summary at the chronological compaction
+		// point (after kept messages, before post-compaction) so it stays in
+		// the live region where Ctrl+O can expand it. Reset tracking fires
+		// here so the first post-compaction assistant turn — not a kept
+		// pre-compaction one — is marked as a cache miss.
+		if (options?.transcript) handleEntryResetTracking(compaction);
+		if (options?.transcript) {
+			pushMessage(compactionSummaryMsg);
+		}
+
+		// Emit messages after compaction
+		for (let i = compactionIdx + 1; i < path.length; i++) {
+			const entry = path[i];
+			appendMessage(entry);
+		}
+	} else {
+		// No compaction - emit all messages, handle branch summaries and custom messages
+		for (const entry of path) {
+			appendMessage(entry);
+		}
+	}
+
+	// Strip dangling tool_use blocks — a tool_use with no matching tool_result on the
+	// resolved leaf→root path — from ANY assistant turn, not just the trailing one.
+	// This happens whenever the leaf (or a branch point) lands such that an assistant
+	// turn's tool results are off the selected path: its result children live on a
+	// sibling branch, or it is the leaf itself (results are children below it). Left
+	// in place, `transformMessages` fabricates one synthetic "aborted"/"No result
+	// provided" result per dangling call, which render as phantom failed calls and
+	// re-inject the failed batch into the model's
+	// context — the rewind/restore loop.
+	//
+	// Stripping is necessary but not sufficient: a *modified* assistant turn that still
+	// carries signed `thinking`/`redacted_thinking` is rejected by Anthropic — "thinking
+	// blocks in the latest assistant message cannot be modified", and signed thinking
+	// replayed out of its original turn shape can also fail signature validation (this
+	// bites the handoff/branch-summary request). So when we rewrite a turn we also
+	// neutralize its protected reasoning: drop `redactedThinking` (encrypted, no
+	// plaintext to keep) and clear `thinking` signatures so the provider encoder
+	// downgrades them to plain text (verified accepted by the live API), preserving the
+	// visible reasoning while removing the immutability/invalid-signature hazard. Drop a
+	// turn left with no content. (Live turns only qualify mid-turn: a transcript rebuild
+	// while the tool still executes sees the persisted assistant turn without its result.
+	// Those callers pass `keepDanglingToolCalls` so the in-flight call stays visible as
+	// a pending block instead of vanishing from the chat.)
+	const keepDangling = options?.transcript === true && options.keepDanglingToolCalls === true;
+	if (!keepDangling) {
+		const pairedToolResultIds = new Set<string>();
+		for (const message of messages) {
+			if (message.role === "toolResult") pairedToolResultIds.add(message.toolCallId);
+		}
+		for (let i = messages.length - 1; i >= 0; i--) {
+			const message = messages[i];
+			if (message.role !== "assistant") continue;
+			let strippedToolCalls = 0;
+			for (const block of message.content) {
+				if (block.type === "toolCall" && !pairedToolResultIds.has(block.id)) strippedToolCalls++;
+			}
+			if (strippedToolCalls === 0) continue;
+			const normalized = message.content
+				.filter(
+					block =>
+						!(block.type === "toolCall" && !pairedToolResultIds.has(block.id)) &&
+						block.type !== "redactedThinking",
+				)
+				.map(block =>
+					block.type === "thinking" && block.thinkingSignature
+						? { ...block, thinkingSignature: undefined }
+						: block,
+				);
+			if (normalized.length === 0 && !options?.transcript) {
+				messages.splice(i, 1);
+			} else {
+				const rewritten = { ...message, content: normalized };
+				if (options?.transcript) {
+					// Display transcript: keep the turn (even content-less) and mark
+					// how many calls were dropped so the TUI renders a placeholder
+					// row instead of silently erasing the turn's activity.
+					(rewritten as AgentMessage & StrippedToolCallsMarker).strippedToolCalls = strippedToolCalls;
+				}
+				messages[i] = rewritten;
+			}
+		}
+	}
+
+	return {
+		messages,
+		cacheMissExplainedAt: options?.transcript ? cacheMissExplainedAt : undefined,
+		thinkingLevel,
+		configuredThinkingLevel,
+		serviceTier,
+		models,
+		injectedTtsrRules,
+		selectedMCPToolNames,
+		hasPersistedMCPToolSelection,
+		mode,
+		modeData,
+	};
+}

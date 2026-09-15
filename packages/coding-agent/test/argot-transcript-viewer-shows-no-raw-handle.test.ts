@@ -1,8 +1,8 @@
 /**
- * WHY: the subagent dashboard's read-only transcript viewer was the one
+ * WHY: the agent dashboard's read-only transcript viewer was the one
  * display in the product that showed the model's raw `§handle` text. Every
  * other human-facing surface goes through `argot-wire.ts`, but this viewer
- * parses a subagent's or advisor's persisted `.jsonl` itself — precisely
+ * parses an agent's or advisor's persisted `.jsonl` itself — precisely
  * because those are the two agents with no live session to hand the view over
  * to — and the persisted file deliberately keeps the cheap handles, which is
  * what makes replay cheap. So the viewer rendered exactly what was on disk.
@@ -35,10 +35,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { expandSessionMessageEntries } from "@veyyon/coding-agent/argot-wire";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
-import { AgentTranscriptViewer } from "@veyyon/coding-agent/modes/components/agent-transcript-viewer";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
+import { AgentTranscriptViewer } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-transcript-viewer";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
-import { CURRENT_SESSION_VERSION, type SessionMessageEntry } from "@veyyon/coding-agent/session/session-entries";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import { CURRENT_SESSION_VERSION, type SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
 import { removeSyncWithRetries } from "@veyyon/utils";
 import { ArgotSession, type Vocabulary } from "argot";
 

@@ -9,7 +9,7 @@ import {
 } from "@veyyon/coding-agent/cli/gallery-cli";
 import type { GalleryFixture } from "@veyyon/coding-agent/cli/gallery-fixtures";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { getAvailableThemes, initTheme, theme } from "@veyyon/coding-agent/modes/theme/theme";
+import { getAvailableThemes, initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import { toolRenderers } from "@veyyon/coding-agent/tools/renderers";
 import { hermeticSpawnEnv } from "./helpers/hermetic-spawn-env";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
@@ -110,7 +110,7 @@ describe("gallery harness", () => {
 		const cases = [
 			["irc_inbox", "IRC inbox failed: message store unavailable.", "IRC inbox empty"],
 			["irc_list", "IRC list failed: the agent registry is unavailable.", "no other agents"],
-			["job", "Subagent exited 1: Redis connection string is missing.", "cancelled"],
+			["job", "Agent exited 1: Redis connection string is missing.", "cancelled"],
 		] as const;
 
 		for (const [name, expected, forbidden] of cases) {

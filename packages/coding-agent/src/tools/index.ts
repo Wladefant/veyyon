@@ -6,51 +6,58 @@ import type {
 	ToolCallContext,
 } from "@veyyon/agent-core";
 import type { FetchImpl, ImageContent, Model, ServiceTierByFamily, ToolChoice } from "@veyyon/ai";
+import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import type { InMemorySnapshotStore } from "@veyyon/hashline";
+import type { HostNotifier } from "@veyyon/host";
+import type { ToolDomainManifest } from "@veyyon/kernel/registry/tool-domain";
+import type { ArtifactManager } from "@veyyon/kernel/session/artifacts";
+import type { ClientBridge } from "@veyyon/kernel/session/client-bridge";
+import { registerAgentMessageKinds } from "@veyyon/kernel/session/message-kinds";
+import type { AgentSpawnRecord, UsageStatistics } from "@veyyon/kernel/session/session-entries";
+
+export type { AgentSpawnRecord };
+export type SubagentSpawnRecord = AgentSpawnRecord;
+
+import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";
+import type { ToolChoiceQueue } from "@veyyon/kernel/session/tool-choice-queue";
 import { logger } from "@veyyon/utils";
-import { ARGOT_LOAD_TOOL, ARGOT_UNLOAD_TOOL } from "argot/constants";
 import type { ArgotSession } from "argot/session";
 import type { AsyncJobManager } from "../async/job-manager";
-import type { ContextFile } from "../capability/context-file";
-import type { Rule } from "../capability/rule";
 import type { ModelRegistry } from "../config/model-registry";
 import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
+import type { ContextFile } from "../discovery/capability/context-file";
+import type { Rule } from "../discovery/capability/rule";
+import { resolveEffectiveToolDiscoveryMode } from "../discovery/mode";
+import type { DiscoverableTool, DiscoverableToolSearchIndex, DiscoverableToolSource } from "../discovery/tool-index";
 import type { NoopLoopGuard } from "../edit/hashline/noop-loop-guard";
 import type { ToolPathWithSource } from "../extensibility/custom-tools";
 import type { Skill } from "../extensibility/skills";
 import type { GoalModeState, GoalRuntime } from "../goals";
-import type { HindsightSessionState } from "../hindsight/state";
 import type { LocalProtocolOptions } from "../internal-urls";
 import type { DiagnosticsLedger } from "../lsp/diagnostics-ledger";
 import type { MCPManager } from "../mcp";
-import type { MnemopiSessionState } from "../mnemopi/state";
+import type { HindsightSessionState } from "../memory/hindsight/state";
+import type { MnemopiSessionState } from "../memory/mnemopi/state";
 import type { PlanModeState } from "../plan-mode/state";
 import type { AgentRegistry } from "../registry/agent-registry";
-import type { ArtifactManager } from "../session/artifacts";
-import type { AuthStorage } from "../session/auth-storage";
-import type { ClientBridge } from "../session/client-bridge";
 import type { CustomMessage } from "../session/messages";
-import type { SubagentSpawnRecord, UsageStatistics } from "../session/session-entries";
-import type { SideCompleteImpl } from "../session/side-complete";
-import type { ToolChoiceQueue } from "../session/tool-choice-queue";
+import { agentsEnabled, resolveSessionMaxNestedSpawnDepth } from "../task/agent-settings";
 import type { AgentOutputManager } from "../task/output-manager";
-import { delegationEnabled, resolveSessionMaxNestedSpawnDepth } from "../task/subagent-settings";
 import { canSpawnAtDepth } from "../task/types";
 import type { ConfiguredThinkingLevel } from "../thinking";
-import { resolveEffectiveToolDiscoveryMode } from "../tool-discovery/mode";
-import type {
-	DiscoverableTool,
-	DiscoverableToolSearchIndex,
-	DiscoverableToolSource,
-} from "../tool-discovery/tool-index";
 import type { EventBus } from "../utils/event-bus";
 import type { WorkspaceTree } from "../workspace-tree";
-import { type BuiltinToolName, type HiddenToolName, normalizeToolNames, TOOL } from "./builtin-names";
-import type { CheckpointState, CompletedRewindState } from "./checkpoint";
-import type { ConflictHistory } from "./conflict-detect";
-import { resolveEvalBackends } from "./eval-backends";
-import { isIrcEnabled } from "./irc-enabled";
+import { isIrcEnabled } from "./agent/irc-enabled";
+import { agentDomain } from "./agent/manifest";
+import type { TodoPhase } from "./agent/todo";
+import {
+	BUILTIN_TOOL_NAMES,
+	type BuiltinToolName,
+	type HiddenToolName,
+	normalizeToolNames,
+	TOOL,
+} from "./core/builtin-names";
 import {
 	augmentRequestedToolNames,
 	type BuiltinToolPermissionInputs,
@@ -60,25 +67,31 @@ import {
 	resolveEvalToolAvailability,
 	selectBaseToolNames,
 	withYieldToolAppended,
-} from "./loading";
-import { wrapToolWithMetaNotice } from "./output-meta";
-import { RerootDetector, wrapToolWithRerootHint } from "./reroot-hint";
-import type { TodoPhase } from "./todo";
+} from "./core/loading";
+import { wrapToolWithMetaNotice } from "./core/output-meta";
+import type { CheckpointState, CompletedRewindState } from "./fs/checkpoint";
+import type { ConflictHistory } from "./fs/conflict-detect";
+import { fsDomain } from "./fs/manifest";
+import { RerootDetector, wrapToolWithRerootHint } from "./fs/reroot-hint";
+import { searchDomain } from "./search/manifest";
+import { resolveEvalBackends } from "./shell/eval-backends";
+import { shellDomain } from "./shell/manifest";
+import { webDomain } from "./web/manifest";
 
 // Builtin implementation modules remain lazy so the CLI boot path does not
 // parse tools this session never activates.
 export type { LspStartupServerInfo } from "../lsp";
-export type { BashToolDetails, BashToolInput } from "./bash";
 // Tool-loading rules now live in `./loading`. Re-exported here because `@veyyon/coding-agent/tools`
 // is the documented import path for them and the SDK plus several suites use it.
 export {
 	type BuiltinToolLoadMode,
 	DEFAULT_ESSENTIAL_TOOL_NAMES,
 	filterInitialToolsForDiscoveryAll,
-} from "./loading";
-export type { ReadToolDetails, ReadToolInput } from "./read";
-export type { SearchToolDetails, SearchToolInput } from "./search";
-export type { WriteToolInput } from "./write";
+} from "./core/loading";
+export type { ReadToolDetails, ReadToolInput } from "./fs/read";
+export type { WriteToolInput } from "./fs/write";
+export type { SearchToolDetails, SearchToolInput } from "./search/search";
+export type { BashToolDetails, BashToolInput } from "./shell/bash";
 
 /** Tool type (AgentTool from pi-ai) */
 export type Tool = AgentTool<any, any, any>;
@@ -109,7 +122,7 @@ export type {
 	DiscoverableToolSearchIndex,
 	DiscoverableToolSearchResult,
 	DiscoverableToolSource,
-} from "../tool-discovery/tool-index";
+} from "../discovery/tool-index";
 
 /**
  * A late LSP diagnostics result that arrived after the edit/write tool already
@@ -151,11 +164,17 @@ export interface ToolSession {
 	obfuscateProviderText?: (text: string) => string;
 	/**
 	 * The session's side-request transport, handed to a request a tool makes on
-	 * the session's behalf (today the tiny-model label for a spawned subagent).
+	 * the session's behalf (today the tiny-model label for a spawned agent).
 	 * Carries the stream watchdogs, the in-flight cap and the per-provider
 	 * concurrency bracket, so a fan-out of labels cannot outrun them.
 	 */
 	sideComplete?: SideCompleteImpl;
+	/**
+	 * Deliver an out-of-band notification to the operator, when a host installed
+	 * one. Absent means nothing on this host can reach an operator who is looking
+	 * elsewhere, so a caller skips the work rather than calling into a no-op.
+	 */
+	notify?: HostNotifier;
 	/** Whether UI is available */
 	hasUI: boolean;
 	/** Effective concrete effort currently applied to the parent session. */
@@ -173,16 +192,16 @@ export interface ToolSession {
 	skipPythonPreflight?: boolean;
 	/** Pre-loaded context files (AGENTS.md, etc) */
 	contextFiles?: ContextFileEntry[];
-	/** Pre-loaded workspace tree (forwarded to subagents to skip re-scanning) */
+	/** Pre-loaded workspace tree (forwarded to agents to skip re-scanning) */
 	workspaceTree?: WorkspaceTree;
 	/** Pre-loaded skills */
 	skills?: Skill[];
 	/** Pre-loaded prompt templates */
 	promptTemplates?: PromptTemplate[];
-	/** Pre-loaded rules (forwarded to subagents to skip re-discovery). */
+	/** Pre-loaded rules (forwarded to agents to skip re-discovery). */
 	rules?: Rule[];
 	/**
-	 * Pre-discovered extension source paths. Forwarded to subagents so they
+	 * Pre-discovered extension source paths. Forwarded to agents so they
 	 * skip the FS scan but still re-bind extensions to their own session-scoped
 	 * `ExtensionAPI` (cwd, eventBus, runtime). Inline extension factories
 	 * (`<inline-N>`) are NOT included — those are session-local.
@@ -194,13 +213,13 @@ export interface ToolSession {
 	 *
 	 * Forwarded beside the path list because the project-trust gate has to tell the two apart: a
 	 * discovered project extension needs a per-file decision, and a named one is the operator's own
-	 * choice. Without this a subagent re-gated its parent's `--extension ./dev/tool.ts` and ran
+	 * choice. Without this an agent re-gated its parent's `--extension ./dev/tool.ts` and ran
 	 * without it, while a repository extension the parent withheld stayed withheld either way.
 	 */
 	namedExtensionPaths?: string[];
 	/**
 	 * Pre-discovered custom-tool source paths from `.veyyon/tools/`, `.claude/tools/`,
-	 * plugins, etc. Forwarded to subagents so they skip the FS scan but still
+	 * plugins, etc. Forwarded to agents so they skip the FS scan but still
 	 * re-bind tools to their own session-scoped `CustomToolAPI`.
 	 */
 	customToolPaths?: ToolPathWithSource[];
@@ -210,7 +229,7 @@ export interface ToolSession {
 	hasEditTool?: boolean;
 	/** Event bus for tool/extension communication */
 	eventBus?: EventBus;
-	/** Output schema for structured completion (subagents) */
+	/** Output schema for structured completion (agents) */
 	outputSchema?: unknown;
 	/** Whether to include the yield tool by default */
 	requireYieldTool?: boolean;
@@ -218,7 +237,7 @@ export interface ToolSession {
 	taskDepth?: number;
 	/** Resolved absolute spawn-depth cap for this session's agent type. */
 	maxNestedSpawnDepth?: number;
-	/** Get shared eval executor session ID. Subagents inherit this to share JS/Python/Ruby/Julia state. */
+	/** Get shared eval executor session ID. Agents inherit this to share JS/Python/Ruby/Julia state. */
 	getEvalSessionId?: () => string | null;
 	/** Get session file */
 	getSessionFile: () => string | null;
@@ -233,7 +252,7 @@ export interface ToolSession {
 	/**
 	 * Whether a `/` command has granted this agent type for the turn in flight.
 	 *
-	 * `subagent.agents.<name>.enabled` governs THE MODEL: enabled means the model
+	 * `agent.agents.<name>.enabled` governs THE MODEL: enabled means the model
 	 * may pick that agent on its own initiative, disabled means it may not. It does
 	 * not govern the person typing. `/review` names `reviewer` outright, and a user
 	 * running `/review` is asking for a review, not asking the model to decide
@@ -260,12 +279,12 @@ export interface ToolSession {
 	getTurnIndex?: () => number;
 	/** Get Hindsight runtime state for this agent session. */
 	getHindsightSessionState?: () => HindsightSessionState | undefined;
-	/** Get this session's Argot codec, forked into subagents under `argot.subagents: inherit`. */
+	/** Get this session's Argot codec, forked into agents under `argot.agents: inherit`. */
 	getArgotSession?: () => ArgotSession | undefined;
 	/**
 	 * Rebuild the base system prompt after prompt-visible session state changed
 	 * (e.g. the argot teach set), so the next turn teaches the new state.
-	 * Optional: lighter tool sessions (tests, subagents) may omit it.
+	 * Optional: lighter tool sessions (tests, agents) may omit it.
 	 *
 	 * `reason` is REQUIRED, mirroring `AgentSession.refreshBaseSystemPrompt`. A
 	 * rebuild here lands MID-TURN, with the whole conversation already behind the
@@ -308,16 +327,16 @@ export interface ToolSession {
 	/** Get artifacts directory for artifact:// URLs */
 	getArtifactsDir?: () => string | null;
 	/**
-	 * Record a structured parent->child index entry for one subagent this session
-	 * spawned (the task tool calls this once per settled subagent). Absent on
+	 * Record a structured parent->child index entry for one agent this session
+	 * spawned (the task tool calls this once per settled agent). Absent on
 	 * sessions that do not persist; a no-op there.
 	 */
-	recordSubagentSpawn?: (record: SubagentSpawnRecord) => void;
+	recordAgentSpawn?: (record: AgentSpawnRecord) => void;
 	/**
-	 * Hook invoked when a subagent completes, enabling automatic runtime topic replenishment.
+	 * Hook invoked when an agent completes, enabling automatic runtime topic replenishment.
 	 */
-	onSubagentComplete?: (record: SubagentSpawnRecord) => void | Promise<void>;
-	/** Get the ArtifactManager backing this session (shared across parent + subagents). */
+	onSubagentComplete?: (record: AgentSpawnRecord) => void | Promise<void>;
+	/** Get the ArtifactManager backing this session (shared across parent + agents). */
 	getArtifactManager?: () => ArtifactManager | null;
 	/** Allocate a new artifact path and ID for session-scoped truncated output. */
 	allocateOutputArtifact?: (toolType: string) => Promise<{ id?: string; path?: string }>;
@@ -327,15 +346,15 @@ export interface ToolSession {
 	getModelString?: () => string | undefined;
 	/** Get the current session model string, regardless of how it was chosen */
 	getActiveModelString?: () => string | undefined;
-	/** Get the current session's configured effort (`auto` remains `auto`) for subagent inheritance. */
+	/** Get the current session's configured effort (`auto` remains `auto`) for agent inheritance. */
 	getActiveThinkingLevel?: () => ConfiguredThinkingLevel | undefined;
 	/** Get the current session model object (provider/api capabilities), regardless of how it was chosen. */
 	getActiveModel?: () => Model | undefined;
-	/** Get the session's live per-family service tiers (undefined = none). Source of truth for subagent `tier.subagent: inherit`. */
+	/** Get the session's live per-family service tiers (undefined = none). Source of truth for agent `tier.agent: inherit`. */
 	getServiceTierByFamily?: () => ServiceTierByFamily | undefined;
-	/** Auth storage for passing to subagents (avoids re-discovery) */
+	/** Auth storage for passing to agents (avoids re-discovery) */
 	authStorage?: AuthStorage;
-	/** Model registry for passing to subagents (avoids re-discovery) */
+	/** Model registry for passing to agents (avoids re-discovery) */
 	modelRegistry?: ModelRegistry;
 	/** Agent output manager for unique agent:// IDs across task invocations */
 	agentOutputManager?: AgentOutputManager;
@@ -343,7 +362,7 @@ export interface ToolSession {
 	 * Async job manager scoped to this session.
 	 *
 	 * - Top-level session that constructed one: its own manager.
-	 * - Subagent (`parentTaskPrefix` set): the parent's manager, so background
+	 * - Agent (`parentTaskPrefix` set): the parent's manager, so background
 	 *   bash/task work and `onJobComplete` deliveries flow into the conversation
 	 *   that spawned it.
 	 * - Secondary in-process top-level session that found a singleton already
@@ -354,11 +373,11 @@ export interface ToolSession {
 	 * session never borrows the owning session's manager by accident.
 	 */
 	asyncJobManager?: AsyncJobManager;
-	/** MCP manager visible to subagents without relying on the process-global singleton. */
+	/** MCP manager visible to agents without relying on the process-global singleton. */
 	mcpManager?: MCPManager;
-	/** Local protocol root to propagate to nested subagents and eval-created agents. */
+	/** Local protocol root to propagate to nested agents and eval-created agents. */
 	localProtocolOptions?: LocalProtocolOptions;
-	/** Settings instance for passing to subagents */
+	/** Settings instance for passing to agents */
 	settings: Settings;
 	/** Plan mode state (if active) */
 	getPlanModeState?: () => PlanModeState | undefined;
@@ -372,8 +391,8 @@ export interface ToolSession {
 	getUsageStatistics?: () => UsageStatistics;
 	/** Current per-turn token budget {total, spent, hard} for the eval `budget` helper. */
 	getTurnBudget?: () => { total: number | null; spent: number; hard: boolean };
-	/** Record output tokens consumed by an eval-spawned subagent toward the current turn budget. */
-	recordEvalSubagentUsage?: (output: number) => void;
+	/** Record output tokens consumed by an eval-spawned agent toward the current turn budget. */
+	recordEvalAgentUsage?: (output: number) => void;
 	/** Bridge to the connected client (e.g. ACP editor host). Tools should route fs/terminal/permission requests through this when available. */
 	getClientBridge?: () => ClientBridge | undefined;
 	/** Get cached todo phases for this session. */
@@ -443,7 +462,7 @@ export interface ToolSession {
 	/** Per-session ledger of consecutive byte-identical no-op edits, keyed by
 	 *  canonical file path. The hashline executor escalates a soft no-op hint
 	 *  to a thrown error once the same payload no-ops `NOOP_HARD_LIMIT` times,
-	 *  breaking subagent loops that ignore the textual hint (issue #2081).
+	 *  breaking agent loops that ignore the textual hint (issue #2081).
 	 *  Lazily initialized by `getNoopLoopGuard`. */
 	noopLoopGuard?: NoopLoopGuard;
 
@@ -458,8 +477,8 @@ export interface ToolSession {
 	bumpFileMutationVersion?(path: string): number;
 	/** Read the current session-global mutation counter for `path` (0 if never mutated). */
 	getFileMutationVersion?(path: string): number;
-	/** Get the active OpenTelemetry config so subagent dispatch can forward
-	 *  the parent's tracer/hooks with the subagent's own identity stamped. */
+	/** Get the active OpenTelemetry config so agent dispatch can forward
+	 *  the parent's tracer/hooks with the agent's own identity stamped. */
 	getTelemetry?: () => AgentTelemetryConfig | undefined;
 	/** Return image attachments visible to tools for resolving labels such as `Image #1`. */
 	getImageAttachments?: () => ImageAttachmentEntry[];
@@ -472,7 +491,7 @@ export type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool |
  *
  * Settings adapter for {@link resolveEssentialToolNames}; the rule lives in `./loading/policy`
  * with the rest of the tool-loading decisions. Kept at this name and signature because the SDK
- * and `test/tool-discovery/initial-tools.test.ts` both call it.
+ * and `test/discovery/initial-tools.test.ts` both call it.
  */
 export function computeEssentialBuiltinNames(settings: Settings): string[] {
 	return resolveEssentialToolNames({
@@ -482,63 +501,77 @@ export function computeEssentialBuiltinNames(settings: Settings): string[] {
 }
 
 /**
+ * Every tool domain this package ships, in the order their rows enter {@link BUILTIN_TOOLS}.
+ *
+ * A host that wants one subject reads the manifest it wants instead of the union: the keys are
+ * readable without constructing a tool, and each factory pulls its implementation in on first use.
+ * The terminal takes the union below because it advertises every tool it is allowed to.
+ */
+export const BUILTIN_TOOL_DOMAINS: readonly ToolDomainManifest<ToolFactory>[] = [
+	fsDomain,
+	searchDomain,
+	shellDomain,
+	webDomain,
+	agentDomain,
+];
+
+// The roles the domains record are registered where the domains are assembled, so a transcript
+// holding a `!` command converts wherever this table loads — the terminal, the SDK, a resume — and
+// nowhere a domain's own module has to be imported first.
+for (const domain of BUILTIN_TOOL_DOMAINS) {
+	registerAgentMessageKinds(domain.messageKinds ?? []);
+}
+
+/**
+ * Every domain's rows, plus the four whose implementation lives outside `tools/`.
+ *
+ * Typed rather than cast, so the completeness check the hand-written literal used to carry is
+ * still here: a name added to `BuiltinToolName` with no domain claiming it fails on this
+ * annotation, and a domain claiming a name that is not one fails in its own manifest.
+ */
+const DOMAIN_TOOL_FACTORIES: Record<BuiltinToolName, ToolFactory> = {
+	...fsDomain.tools,
+	...searchDomain.tools,
+	...shellDomain.tools,
+	...webDomain.tools,
+	...agentDomain.tools,
+	// The four whose implementation is not a tool directory: the edit tool is the hashline
+	// executor, `lsp` and `task` are subsystems of their own, and `web_search` is the provider
+	// search client under `./web/search`.
+	edit: async s => new (await import("../edit")).EditTool(s),
+	lsp: async s => (await import("../lsp")).LspTool.createIf(s),
+	task: async s => (await import("../task")).TaskTool.create(s),
+	web_search: async s => new (await import("./web/search")).WebSearchTool(s),
+};
+
+/**
  * Public callable factory map. External callers may invoke `BUILTIN_TOOLS.read(session)` or
  * `BUILTIN_TOOLS[name](session)` to construct a tool directly.
+ *
+ * The rows come from the domain manifests rather than being listed here. This map WAS the list, and
+ * it was the one place a tool's own directory could not answer for itself: `tools/fs` could be read
+ * end to end without learning that it contributes `read`, and a host that wanted the filesystem
+ * tools and nothing else had to import a table naming all thirty-three. Each domain now declares its
+ * own manifest next to the tools it constructs, {@link BUILTIN_TOOL_DOMAINS} is the list of them,
+ * and {@link DOMAIN_TOOL_FACTORIES} is their union.
+ *
+ * KEYED IN DECLARATION ORDER, which is `BUILTIN_TOOL_NAMES` and not the order the domains happen to
+ * be spread in. `createTools` offers the tools in this map's key order, so key order is prompt order
+ * and prompt order is prompt-cache identity: assembling the union by domain reshuffled seven names
+ * and invalidated every cached prefix while changing nothing about which tools a session has.
+ * `test/tools/tool-loading-differential.test.ts` holds the captured order this reproduces.
  */
-export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
-	read: async s => new (await import("./read")).ReadTool(s),
-	bash: async s => new (await import("./bash")).BashTool(s),
-	launch: async s => new (await import("./launch")).LaunchTool(s),
-	edit: async s => new (await import("../edit")).EditTool(s),
-	search: async s => new (await import("./search")).SearchTool(s),
-	ast_edit: async s => new (await import("./ast-edit")).AstEditTool(s),
-	ask: async s => (await import("./ask")).AskTool.createIf(s),
-	debug: async s => (await import("./debug")).DebugTool.createIf(s),
-	eval: async s => (await import("./eval")).EvalTool.create(s),
-	ssh: async s => (await import("./ssh")).loadSshTool(s),
-	github: async s => (await import("./gh")).GithubTool.createIf(s),
-	lsp: async s => (await import("../lsp")).LspTool.createIf(s),
-	inspect_image: async s => new (await import("./inspect-image")).InspectImageTool(s),
-	browser: async s => new (await import("./browser")).BrowserTool(s),
-	checkpoint: async s => (await import("./checkpoint")).CheckpointTool.createIf(s),
-	rewind: async s => (await import("./checkpoint")).RewindTool.createIf(s),
-	task: async s => (await import("../task")).TaskTool.create(s),
-	job: async s => new (await import("./job")).JobTool(s),
-	irc: async s => (await import("./irc")).IrcTool.createIf(s),
-	todo: async s => new (await import("./todo")).TodoTool(s),
-	web_search: async s => new (await import("../web/search")).WebSearchTool(s),
-	search_tool_bm25: async s => (await import("./search-tool-bm25")).SearchToolBm25Tool.createIf(s),
-	set_cwd: async s => new (await import("./set-cwd")).SetCwdTool(s),
-	write: async s => new (await import("./write")).WriteTool(s),
-	memory_edit: async s => (await import("./memory-edit")).MemoryEditTool.createIf(s),
-	retain: async s => (await import("./memory-retain")).MemoryRetainTool.createIf(s),
-	recall: async s => (await import("./memory-recall")).MemoryRecallTool.createIf(s),
-	reflect: async s => (await import("./memory-reflect")).MemoryReflectTool.createIf(s),
-	learn: async s => (await import("./learn")).LearnTool.createIf(s),
-	manage_skill: async s => (await import("./manage-skill")).ManageSkillTool.createIf(s),
-	// The two Argot folder tools exist only when the session holds a codec; with
-	// the feature off, or for a subagent under `argot.subagents: off`, there is no
-	// session to load into, so the factory returns null and the tool is absent.
-	[ARGOT_LOAD_TOOL]: async s =>
-		s.settings.get("argot.enabled") && s.getArgotSession?.() !== undefined
-			? new (await import("./argot")).ArgotLoadTool(s)
-			: null,
-	[ARGOT_UNLOAD_TOOL]: async s =>
-		s.settings.get("argot.enabled") && s.getArgotSession?.() !== undefined
-			? new (await import("./argot")).ArgotUnloadTool(s)
-			: null,
-};
+export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = Object.fromEntries(
+	BUILTIN_TOOL_NAMES.map(name => [name, DOMAIN_TOOL_FACTORIES[name]] as const),
+) as Record<BuiltinToolName, ToolFactory>;
 
 // Keyed by `HiddenToolName` rather than `string` for the same reason `BUILTIN_TOOLS` is keyed by
 // `BuiltinToolName`: the registry is a declaration site, so the key set is what the compiler checks
 // a rename against. Typed as `string` it accepted any key, and a hidden tool renamed in one place
 // stayed registered under the old name with nothing to say so.
 export const HIDDEN_TOOLS: Record<HiddenToolName, ToolFactory> = {
-	yield: async s => new (await import("./yield")).YieldTool(s),
-	report_finding: async () => (await import("./review")).reportFindingTool,
-	report_tool_issue: async s => (await import("./report-tool-issue")).createReportToolIssueTool(s),
-	resolve: async s => new (await import("./resolve")).ResolveTool(s),
-	goal: async s => new (await import("../goals/tools/goal-tool")).GoalTool(s),
+	...agentDomain.hidden,
+	goal: async s => new (await import("../goals/goal-tool")).GoalTool(s),
 };
 
 export type ToolName = BuiltinToolName;
@@ -660,7 +693,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		memoryBackend,
 		autolearnEnabled: session.settings.get("autolearn.enabled"),
 		isTopLevelSession: taskDepth === 0,
-		delegationEnabled: delegationEnabled(session.settings),
+		delegationEnabled: agentsEnabled(session.settings),
 		canSpawnAtDepth: canSpawnAtDepth(
 			resolveSessionMaxNestedSpawnDepth(session.settings, session.maxNestedSpawnDepth),
 			taskDepth,
@@ -689,7 +722,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	}
 
 	// One detector per session, so out-of-cwd activity is counted across the whole
-	// session rather than per tool, and a subagent starts from zero.
+	// session rather than per tool, and a spawned agent starts from zero.
 	const rerootDetector = new RerootDetector();
 	const wrap = (tool: Tool): Tool => wrapToolWithRerootHint(wrapToolWithMetaNotice(tool), rerootDetector, session);
 
@@ -709,7 +742,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 
 	// Auto-inject report_tool_issue when autoqa is enabled (env or setting).
 	// Injected unconditionally into every agent, regardless of requested tool list.
-	const { createReportToolIssueTool, isAutoQaEnabled } = await import("./report-tool-issue");
+	const { createReportToolIssueTool, isAutoQaEnabled } = await import("./agent/report-tool-issue");
 	const autoQA = isAutoQaEnabled(session.settings);
 	if (autoQA && !tools.some(t => t.name === TOOL.report_tool_issue)) {
 		// Build the enum from tools we just constructed via BUILTIN_TOOLS / HIDDEN_TOOLS.

@@ -2,6 +2,37 @@
 
 ## [Unreleased]
 
+### Added
+
+- A `chatgpt-web` provider for the local `codex-chatgpt-web` Responses bridge, whose catalog is read live from the daemon's own `GET {base}/models` (`discovery/chatgpt-web.ts`, `provider-models/chatgpt-web.ts`). Nothing about it is declared locally: the bundle carries no `chatgpt-web` rows, the model set comes from the daemon's own account gating (a Luna-only account gets one row; a non-Pro account gets no `extra-high`/`pro`), each row's effort ladder is the single `supported_reasoning_levels` entry the daemon publishes for it rather than a ladder derived from the model id, the context window is copied verbatim, `maxTokens` stays `null` because no output cap is published, and pricing records `unknown` rather than free. `supportsTools` is `false` unless `GET /healthz` proves the daemon is in `full` mode, so a browser-only install never offers a tool surface the turn cannot deliver. `preferWebsockets` is pinned off: the routed rows are clones of a native Codex template and inherit `prefer_websockets`, while the bridge answers `GET /v1/responses` with HTTP 426. A non-loopback base URL is refused before any request is made, because discovery forwards the ChatGPT/Codex bearer the daemon needs to proxy `/models` upstream, and a dead daemon resolves to no rows rather than to slugs that would fail at request time.
+
+### Fixed
+
+- ChatGPT Web discovery now bounds the combined health probe, model request and response body to two minutes (overridable with `timeoutMs`) and reports recovery instructions for unreachable daemons, expired authentication and timeouts.
+- ChatGPT Web model discovery supplies the shared Codex `client_version` query parameter. The live daemon forwards the catalog request to the Codex backend, which rejects a missing version with HTTP 400 before any browser models can be listed.
+- `codex-chatgpt-web` discovery and model-manager configuration now normalizes base URLs that omit the `/v1` route prefix (such as port-only `http://127.0.0.1:17841`) or already include `/responses` (`http://127.0.0.1:17841/v1/responses`), ensuring `/v1/models` and `/v1/responses` resolve against the daemon's actual API routes while preserving strict loopback verification.
+- `codex-chatgpt-web` discovery now refuses a redirect instead of following one, so the loopback check that keeps the ChatGPT credential on this machine cannot be undone after it has run. Both requests set `redirect: "error"`: a 302 on `GET {base}/models` is reported as a request failure and discovery returns `null` rather than re-issuing the bearer-carrying request against whatever the redirect named, and a 302 on `GET {base}/healthz` leaves Full mode unproven — so `supportsTools` stays `false` — rather than letting something that is not the daemon authorize publishing tool support. The daemon redirects nothing, which is why a redirect here means the base URL is not the daemon.
+- `closeModelCache()` closes the shared model-cache database and permits reopening it at the current cache path.
+
+### Changed
+
+- GitLab Duo Workflow discovery reads a record's declared root namespace (`root_namespace_id`, `rootNamespaceId`, or the id or path of its `root_namespace`/`rootAncestor` record) through one `declaredRootNamespaceId` for the explicit and nested lookups; no behavior change.
+- The Antigravity, Codex, Gemini and Ollama discovery readers report a non-ok status as the `status` stage and an unparseable body as the `body` stage through one exported `readDiscoveryJson` in `discovery/failure`; no behavior change.
+- Model spec rejection checks its string, cost and limit fields from ordered tables, reporting the same field names in the same order; no behavior change.
+- The canonical-id generator runs its multi-candidate expanders from one ordered table; no behavior change.
+- Canonical model normalization shares ordered transformation dispatch without changing identity resolution or cache precedence.
+- `Effort`, `ThinkingConfig` and the model and message types are re-exported from `@veyyon/model`, which is their single definition; the exported names and values are unchanged.
+- Bundled models resolve on demand per provider while explicitly installed full-registry snapshot stores remain supported.
+- Provider cache namespaces resolve without constructing discovery options; persisted cache keys are unchanged.
+- Bundled model snapshots use the shared integrity-framed format without repeated JSON serialization or durability flushes, and obsolete snapshots rebuild on load.
+- The model row, thinking config, effort ladder and service-tier vocabulary are defined in `@veyyon/model`; `@veyyon/catalog/types`, `@veyyon/catalog/effort` and `@veyyon/catalog/provider-models/wire-capabilities` re-export every name they exported before, so no caller changes.
+- Typed tuple copies use spreads rather than `.concat()`, which a `as const` array does not define. No user-visible behavior changes.
+- A comment on `OPENROUTER_BASE_URL` names the Perplexity auth module at `tools/web/search/providers/perplexity-auth.ts`. No behavior change.
+- An OpenAI-compatible listing's model name falls back to its id through the shared non-empty-string reader; discovered names are unchanged.
+
+### Fixed
+
+- Case-insensitive host classification no longer treats control characters as URL punctuation.
 ## [1.4.1] - 2026-09-08
 
 ### Fixed

@@ -1,0 +1,159 @@
+#!/usr/bin/env node
+/**
+ * Build the deployable apps/site/ tree for Cloudflare Pages.
+ *
+ *   node apps/site/build.mjs
+ *
+ *  1. Regenerate changelog.html from the real CHANGELOG (single source of truth).
+ *  2. Stage the install scripts at the site root so `veyyon.dev/install.sh` and
+ *     `veyyon.dev/install.ps1` resolve. Source of truth stays in scripts/; the
+ *     copies here are gitignored build artifacts.
+ *  3. Regenerate models-data.json from the bundled model catalog so the models
+ *     page reflects every provider and model veyyon currently supports.
+ * The handbook at apps/site/docs is a symlink to docs/handbook/book.
+ * mdBook v0.5.2 must be on PATH; every site build rebuilds the handbook and
+ * fails if mdBook is missing or the handbook build fails.
+ */
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { renderNav } from "./tools/nav.mjs";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const REPO = join(HERE, "..", "..");
+
+// 0. Navigation. The hand-authored pages each carry two header navs (desktop plus
+// the mobile disclosure) and a footer nav, which used to be nine hand-copied
+// blocks that drifted: 404.html lost a link and nobody noticed. The links
+// now live in tools/nav.mjs and get written into each page's <!--NAV:START--> /
+// <!--NAV:END--> region here, so adding a link is a one-line change and no page
+// can fall behind. `current` marks aria-current="page" for that page's own link.
+// A page whose markers are missing is a hard error: silently skipping it is how
+// the drift happened in the first place.
+const NAV_PAGES = [
+	{ file: "index.html", current: undefined },
+	{ file: "features.html", current: "features" },
+	{ file: "models.html", current: "models" },
+	{ file: "install.html", current: "install" },
+	{ file: "changelog.html", current: "changelog" },
+	{ file: "404.html", current: undefined },
+];
+for (const { file, current } of NAV_PAGES) {
+	const path = join(HERE, file);
+	const html = readFileSync(path, "utf8");
+	let regions = 0;
+	const next = html.replace(
+		/([ \t]*)<!--NAV:START-->[\s\S]*?<!--NAV:END-->/g,
+		(_match, indent, offset, whole) => {
+			regions++;
+			// The footer nav carries no Get-started button; the two header navs do.
+			// The footer is the last region on the page, inside <footer class="site">.
+			const cta = !whole.slice(0, offset).includes('<footer class="site">');
+			const body = renderNav({ prefix: "./", current, cta, indent: `${indent}  ` });
+			return `${indent}<!--NAV:START-->\n${body}\n${indent}<!--NAV:END-->`;
+		},
+	);
+	if (regions !== 3) {
+		console.error(
+			`${file}: expected 3 <!--NAV:START-->/<!--NAV:END--> regions (desktop, mobile, footer), found ${regions}`,
+		);
+		process.exit(1);
+	}
+	if (next !== html) writeFileSync(path, next);
+}
+console.log(`nav: wrote ${NAV_PAGES.length * 3} nav region(s) from tools/nav.mjs`);
+
+// 1. Changelog.
+execFileSync(process.execPath, [join(HERE, "tools", "gen-changelog.mjs")], { stdio: "inherit" });
+
+// 2. Install scripts → site root (build artifacts; real source lives in scripts/).
+for (const name of ["install.sh", "install.ps1"]) {
+	const src = join(REPO, "scripts", name);
+	const dst = join(HERE, name);
+	copyFileSync(src, dst);
+	console.log(`staged ${name}`);
+}
+
+// 3. Models catalog → models-data.json (read by models.html client-side). The
+// generator states that a site build regenerates this file, and models.html and
+// the changelog both describe the page as auto-synced from the bundled catalog;
+// the call was missing, so the committed copy only moved when somebody ran the
+// tool by hand.
+execFileSync(process.execPath, [join(HERE, "tools", "gen-models.mjs")], { stdio: "inherit" });
+
+// 3a. The hero clip has ONE source: `assets/demo-hd.webp`, the file the recorder
+// publishes and the README links. The site held a second copy that nothing but a
+// human remembering to copy it could update, and the drift that kind of copy
+// invites had already happened to the text beside it: the alt attribute described
+// a session two takes old. Staging the clip here means the site cannot serve one
+// the repo does not have, and a dirty `apps/site/demo-hd.webp` after a build is the
+// signal that the committed copy is behind.
+{
+	const src = join(REPO, "assets", "demo-hd.webp");
+	copyFileSync(src, join(HERE, "demo-hd.webp"));
+	console.log("staged demo-hd.webp");
+	const cockpitSrc = join(REPO, "assets", "agents-cockpit.webp");
+	if (existsSync(cockpitSrc)) {
+		copyFileSync(cockpitSrc, join(HERE, "agents-cockpit.webp"));
+		console.log("staged agents-cockpit.webp");
+	}
+}
+// 3b. get.veyyon.dev is the `curl -fsSL https://get.veyyon.dev | sh` endpoint. It
+// deploys to a SEPARATE Pages project (veyyon-get) from a SEPARATE tree so its
+// root can serve install.sh while veyyon.dev's root serves the marketing site.
+// They cannot share one tree: Cloudflare Pages _redirects has no hostname
+// matching, so a `/  /install.sh 200` rewrite in the shared apps/site/ tree would
+// also hijack veyyon.dev's homepage. This tree holds the two install scripts,
+// their explicit cache/content metadata, and a plain root rewrite, so there is
+// no index.html to serve at the root and no way to pipe HTML into sh. It is a
+// gitignored build artifact deployed to the veyyon-get project.
+const GET = join(REPO, "website-get");
+mkdirSync(GET, { recursive: true });
+for (const name of ["install.sh", "install.ps1"]) {
+	copyFileSync(join(REPO, "scripts", name), join(GET, name));
+}
+writeFileSync(join(GET, "_redirects"), "/  /install.sh  200\n");
+writeFileSync(
+	join(GET, "_headers"),
+	`# Root installer endpoint: correct content type, never cache stale installers.\n/\n  Content-Type: application/x-sh; charset=utf-8\n  Cache-Control: no-cache, must-revalidate\n${readFileSync(join(HERE, "_headers"), "utf8")}`,
+);
+console.log("staged website-get/ (get.veyyon.dev root -> install.sh)");
+
+// 3c. Handbook. The handbook at apps/site/docs is a symlink to docs/handbook/book.
+// A site build requires a successful mdbook build so the deployed site serves
+// freshly built documentation.
+try {
+	execFileSync("mdbook", ["build", join(REPO, "docs", "handbook")], { stdio: "inherit" });
+	console.log("built handbook (docs/handbook/book)");
+} catch (error) {
+	if (error?.code === "ENOENT") {
+		console.error(
+			"site build FAILED: 'mdbook' is not on PATH.\n" +
+				"Install mdbook v0.5.2 (pinned in docs.yml and site.yml) before building apps/site:\n" +
+				"  curl -fsSL https://github.com/rust-lang/mdBook/releases/download/v0.5.2/mdbook-v0.5.2-x86_64-unknown-linux-musl.tar.gz | tar -xz -C ~/.local/bin",
+		);
+		process.exit(1);
+	}
+	throw error;
+}
+if (!existsSync(join(REPO, "docs", "handbook", "book", "index.html"))) {
+	console.error("site build FAILED: mdbook build did not generate docs/handbook/book/index.html");
+	process.exit(1);
+}
+
+// Sanity: the pages must not leak the old product name (only the MIT oh-my-pi
+// attribution and clearly-marked OMP_ legacy env aliases are allowed).
+const OFFENDERS = /\bomp[ -]|omp\.exe|%LOCALAPPDATA%\\omp\b/i;
+const pages = ["index.html", "features.html", "models.html", "install.html", "changelog.html"];
+for (const page of pages) {
+	const html = readFileSync(join(HERE, page), "utf8");
+	const bad = html.split("\n").filter(l => OFFENDERS.test(l) && !/oh-my-pi/.test(l));
+	if (bad.length) {
+		console.error(`brand check FAILED in ${page}:\n  ${bad[0].trim().slice(0, 120)}`);
+		process.exit(1);
+	}
+}
+// install.sh/.ps1 are veyyon-branded already; no rewrite needed.
+writeFileSync(join(HERE, ".buildinfo"), "built\n");
+console.log("website build OK");

@@ -5,7 +5,7 @@ import { parseKnownModel, semverEqual } from "../identity/classify";
 import type { ModelReasoningOptions, ModelSpec } from "../types";
 import { discoveryFetch, toArray, toBoolean, toFields, toFiniteNumber, toNonEmptyString } from "../utils";
 import { CODEX_BASE_URL, CODEX_CLIENT_VERSION, OPENAI_HEADER_VALUES, OPENAI_HEADERS } from "../wire/codex";
-import type { DiscoveryFailure, DiscoveryHooks } from "./failure";
+import { type DiscoveryFailure, type DiscoveryHooks, readDiscoveryJson } from "./failure";
 
 const DEFAULT_MODEL_LIST_PATHS = ["/codex/models", "/models"] as const;
 /**
@@ -124,18 +124,8 @@ export async function fetchCodexModels(options: CodexModelDiscoveryOptions): Pro
 			continue;
 		}
 
-		if (!response.ok) {
-			report("status", `HTTP ${response.status} ${response.statusText}`.trim());
-			continue;
-		}
-
-		let payload: unknown;
-		try {
-			payload = await response.json();
-		} catch (error) {
-			report("body", `response is not JSON: ${errorMessage(error)}`);
-			continue;
-		}
+		const payload = await readDiscoveryJson(response, report);
+		if (payload === undefined) continue;
 
 		const models = normalizeCodexModels(payload, baseUrl);
 		if (models === null) {
@@ -151,13 +141,13 @@ export async function fetchCodexModels(options: CodexModelDiscoveryOptions): Pro
 
 function normalizePaths(paths: readonly string[] | undefined): string[] {
 	if (!paths || paths.length === 0) {
-		return [...DEFAULT_MODEL_LIST_PATHS];
+		return DEFAULT_MODEL_LIST_PATHS.slice();
 	}
 	const normalized = paths
 		.map(path => path.trim())
 		.filter(path => path.length > 0)
 		.map(path => (path.startsWith("/") ? path : `/${path}`));
-	return normalized.length > 0 ? normalized : [...DEFAULT_MODEL_LIST_PATHS];
+	return normalized.length > 0 ? normalized : DEFAULT_MODEL_LIST_PATHS.slice();
 }
 
 function buildModelsUrl(baseUrl: string, path: string, clientVersion: string | undefined): string {
@@ -257,10 +247,11 @@ function normalizeCodexModelEntry(entry: unknown, baseUrl: string): NormalizedCo
 	const maxTokens = Math.min(CODEX_DEFAULT_MAX_TOKENS, contextWindow);
 	const reasoning = supportsReasoning(payload.default_reasoning_level, payload.supported_reasoning_levels);
 	const reasoningOptions = reasoning ? declaredReasoningOptions(payload.supported_reasoning_levels) : undefined;
-	const applyPatchToolType = toNonEmptyString(payload.apply_patch_tool_type)?.toLowerCase();
+
 	const input = normalizeInputModalities(payload.input_modalities);
 	const preferWebsockets = toBoolean(payload.prefer_websockets) === true;
 	const useResponsesLite = toBoolean(payload.use_responses_lite) === true;
+	const applyPatchToolType = toNonEmptyString(payload.apply_patch_tool_type)?.toLowerCase();
 	const priority = toFiniteNumber(payload.priority) ?? Number.MAX_SAFE_INTEGER;
 
 	return {

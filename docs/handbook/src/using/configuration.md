@@ -45,19 +45,51 @@ The command rediscovers the main filename in normal startup order, then re-reads
 Malformed or unreadable files, invalid lane members (including nested lanes), and missing
 explicit overlays reject the whole reload and preserve prior routing. No file is quarantined
 or rewritten. If a settings save is in flight, wait for it to finish and retry.
+Starting a newer reload supersedes older in-flight reloads, including while the newer
+request is still reading or when later edits restore the original values.
+A superseded request rejects without changing live routing; retry the command to read the current files.
 
-The reloadable fields are `modelRoles`, `defaultEffort`, `subagent.agents`,
-`subagent.model`, `subagent.sharedModel`, and `subagent.thinkingLevel`.
-Runtime/CLI overrides keep their precedence. Shared model/effort settings govern spawns only
-when `subagent.sharedModel` is enabled; otherwise per-agent lanes govern them.
-The command reports effective before/after values and notifies next-turn consumers.
-New workers use the new defaults; existing workers retain their settings snapshots.
+**Hot-reloadable:** non-startup `modelRoles.<role>` values, `agent.agents` lane
+settings (including nested `model` and `thinkingLevel`), `agent.model`,
+`agent.sharedModel`, and `agent.thinkingLevel`. Legacy `subagent.*` spellings
+are migrated to `agent.*` when read, so feedback uses the canonical names.
+Runtime/CLI overrides retain precedence. Shared model/effort settings govern spawns
+only when `agent.sharedModel` is enabled; otherwise per-agent lanes govern them.
+Task, eval and vibe dispatch capture one settings snapshot before resolving a model
+or effort and before asynchronous allocation. A spawn already being prepared keeps
+that snapshot; the next spawn reads the accepted routing. Existing workers are unchanged.
 
-**Running Main and existing workers are not rebound.** Use explicit session model/effort
-controls to change Main. Other settings remain startup-owned and are reported by path as
-requiring restart: tools, provider initialization, transports, lifecycle/concurrency,
-plugins, UI, and role presentation metadata. Credentials, environment variables, agent
-definitions/prompts, catalogs, and profile selection are not reloaded.
+**Restart-only:** `defaultEffort`, `modelRoles.default`, `modelRoles.advisor`, and
+all settings outside the routing set above. If the current default or advisor role
+references another role (`@role`), this narrow reload retains the entire role map
+to avoid changing a startup-bound target indirectly; direct lane settings can still apply.
+`pickInitialThinkingLevel` captures `defaultEffort` at startup and
+`resolveAgentThinkingLevel` always supplies a concrete lane, frontmatter or
+`AGENT_DEFAULT_EFFORT` value, so a reload cannot honestly change dispatched worker
+effort through `defaultEffort`. Change the applicable lane/shared `thinkingLevel`
+instead. A bare root `thinkingLevel` is not a supported setting.
+
+Every supported routing leaf is reported as `applied` (with an effective diff) or
+`unchanged`; every changed restart-only key is reported as `restart-required` with
+its reason and retains its active value. Valid mixed edits apply the supported
+keys without letting one restart-only key block an otherwise valid model change.
+Malformed/invalid edits still apply **nothing**. SDK callers receive the same
+`outcomes`, plus `changed` and `restartRequired` arrays.
+
+**Read-once versus per-use:** SDK startup resolves the default role and initial
+effort into the session's established model/thinking binding. Advisor construction
+also establishes a runtime that settings-store notifications do not rebind.
+The task/eval/vibe dispatchers instead invoke `resolveAgentModel` and
+`resolveAgentThinkingLevel` per spawn; the executor forks that same dispatch snapshot
+for the child. Reload preserves the existing latest-started generation guard for
+overlapping requests and commits the applicable leaves synchronously.
+
+**Running Main is never rebound.** Use explicit session model/effort controls to
+change Main. Settings outside this narrow routing reload—including tools, provider
+initialization, transports, lifecycle/concurrency, plugins, UI and role presentation
+metadata—retain their active values and report changed keys as requiring restart.
+Credentials, environment variables, agent definitions/prompts, catalogs and profile
+selection are not reloaded.
 `Settings.init()` is startup initialization, not a reload API. `/reload-plugins` refreshes
 plugin/project registries, not profile routing; SIGHUP tears down the session.
 
@@ -187,13 +219,13 @@ and change the setting again, and nothing further is reported.
 
 ## Pick models and providers
 
-Configure the interactive model, subagent policy, compaction model, and optional roles separately:
+Configure the interactive model, agent policy, compaction model, and optional roles separately:
 
 | Goal | What to set |
 | --- | --- |
 | Choose the model you talk to | `--model` / `/model` (persisted as `modelRoles.default`) |
-| Run every subagent on one model and effort | `subagent.sharedModel`, then `subagent.model` and `subagent.thinkingLevel` |
-| Customize one subagent | `subagent.agents.<name>` or Settings → Subagents → Agents |
+| Run every agent on one model and effort | `agent.sharedModel`, then `agent.model` and `agent.thinkingLevel` |
+| Customize one agent | `agent.agents.<name>` or Settings → Agents → Agents |
 | Choose the model for context compaction | `compaction.model` |
 | Add named model assignments | `modelRoles`, per profile (Settings → Model → Roles) |
 | Add a local or BYOK provider | a `providers:` entry in `models.yml` (see [Models](../reference/models-yml.md)) |
@@ -203,7 +235,7 @@ Configure the interactive model, subagent policy, compaction model, and optional
 modelRoles:
   default: openai/gpt-5           # interactive model (persisted default)
   smol: openai/gpt-4.1-mini
-subagent:
+agent:
   model: deepseek/deepseek-chat
   thinkingLevel: high
   agents:
@@ -370,7 +402,7 @@ leaves a raw handle behind.
 The two settings under `encode` are the two that decide whether a model is taught
 to write shorthand: this list, and the context cutoff described below. Everything
 else about Argot sits directly under `argot`, because it sets whether the
-feature runs, when a dictionary is built, how large it is, and what a subagent
+feature runs, when a dictionary is built, how large it is, and what an agent
 starts with. The split is there to make one thing obvious: nothing under `encode`
 affects reading. A handle already in the conversation expands whatever these hold.
 
@@ -451,10 +483,10 @@ Handles written earlier still expand losslessly, because the cutoff stops only
 the teaching, never the expansion. The default is `-1`, which never stops on
 size.
 
-### Choose how subagents start
+### Choose how agents start
 
-A subagent (a child veyyon spawns for a task) can start with its own shorthand,
-or none. Set that with `argot.subagents`:
+An agent (a child veyyon spawns for a task) can start with its own shorthand,
+or none. Set that with `argot.agents`:
 
 ```yaml
 argot:
@@ -462,24 +494,24 @@ argot:
   encode:
     models:
       - anthropic/claude-opus-4
-  subagents: fresh
+  agents: fresh
 ```
 
 The three values are:
 
-- `off` (the default): a subagent gets no shorthand. It reads full text and
+- `off` (the default): an agent gets no shorthand. It reads full text and
   writes full text.
-- `fresh`: a subagent gets its own shorthand session and loads the project of
+- `fresh`: an agent gets its own shorthand session and loads the project of
   its own task through `argot_load`, independent of the parent. Use this when a
-  subagent works a different project than its parent, for example a parent in a
+  agent works a different project than its parent, for example a parent in a
   monorepo and a child scoped to one crate.
-- `inherit`: a subagent starts from a copy of the parent's loaded shorthand, so it
+- `inherit`: an agent starts from a copy of the parent's loaded shorthand, so it
   writes the parent's handles from its first turn.
 
 This setting only trades tokens; it never changes what the agents agree on. Every
 agent expands its own output before it reaches a tool, the saved transcript, a
 prompt it hands to a child, or the result it returns to a parent, so a handle
-never crosses between a parent and a child in either direction. A subagent that
+never crosses between a parent and a child in either direction. An agent that
 starts with no shorthand is already correct: it simply writes in full. That is why
 `off` is a safe default and the other two are optimizations.
 

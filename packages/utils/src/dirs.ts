@@ -68,7 +68,7 @@ export const CHANGELOG_URL: string = "https://veyyon.dev/changelog";
  * release tooling that names a version. They must agree, so the anchor format
  * lives here rather than being rebuilt at each call site.
  *
- * The format is the one `website/tools/gen-changelog.mjs` emits: it writes
+ * The format is the one `apps/site/tools/gen-changelog.mjs` emits: it writes
  * `<h2 id="v1-2-3">` for version `1.2.3`, replacing every dot with a dash
  * because a dot in a fragment id is legal but awkward to select in CSS. A
  * leading `v` in the argument is tolerated, since callers hold versions both
@@ -88,7 +88,7 @@ export const CONFIG_DIR_NAME: string = ".veyyon";
 export const MAIN_CONFIG_FILENAMES = ["config.yml", "config.yaml"] as const;
 
 /**
- * Basename of the cross-profile directory holding user-authored subagent
+ * Basename of the cross-profile directory holding user-authored agent
  * definitions ({@link getGlobalSubagentsDir}).
  *
  * `subagents`, not `agents`: the config root already holds `profiles/`, whose
@@ -1079,13 +1079,13 @@ export function getSharedAuthDir(): string {
 }
 
 /**
- * Directory holding user-authored subagent definitions (`<name>.md`, YAML
+ * Directory holding user-authored agent definitions (`<name>.md`, YAML
  * frontmatter + prompt body), read by every profile.
  *
  * DISCOVERY IS GLOBAL, ENABLING IS PER-PROFILE. A definition is authored
  * content, so it lives once at the base config root beside the global
  * `config.yml`; whether a profile may spawn it is that profile's
- * `subagent.agents.<name>.enabled`. Keeping the file inside a profile's agent
+ * `agent.agents.<name>.enabled`. Keeping the file inside a profile's agent
  * dir meant re-authoring the same agent for every profile, and it read as
  * profile state rather than as something the operator wrote.
  *
@@ -2057,7 +2057,7 @@ export function getPluginsDir(home?: string): string {
 	return dirs.rootSubdir("plugins", "data");
 }
 
-/** Where npm installs packages (profile plugins dir / node_modules). */
+/** Where plugin packages are installed (profile plugins dir / node_modules). */
 export function getPluginsNodeModules(home?: string): string {
 	return path.join(getPluginsDir(home), "node_modules");
 }
@@ -2197,26 +2197,22 @@ export function getLaunchFactsCachePath(): string {
 	return dirs.rootSubdir(path.join("cache", "launch-facts.json"), "cache");
 }
 
-/**
- * Get the GitHub view cache database path (profile `cache/github-cache.db`).
- * Honors the `VEYYON_GITHUB_CACHE_DB` env var when set so tests can isolate the
- * cache file without touching the rest of the config root.
- */
+/** A profile `cache/<file>` path, or the value of `envVar` when it is set so a test or operator can relocate it. */
+function cacheFilePath(envVar: string, file: string): string {
+	return pickProcessEnv(envVar) || dirs.rootSubdir(path.join("cache", file), "cache");
+}
+
+/** Get the GitHub view cache database path (profile `cache/github-cache.db`, `VEYYON_GITHUB_CACHE_DB` overrides). */
 export function getGithubCacheDbPath(): string {
-	const override = pickProcessEnv("VEYYON_GITHUB_CACHE_DB");
-	if (override) return override;
-	return dirs.rootSubdir(path.join("cache", "github-cache.db"), "cache");
+	return cacheFilePath("VEYYON_GITHUB_CACHE_DB", "github-cache.db");
 }
 
 /**
- * Get the encrypted auth-broker snapshot cache path (profile `cache/auth-broker-snapshot.enc`).
- * Honors the `VEYYON_AUTH_BROKER_SNAPSHOT_CACHE` env var when set so tests and
- * operators can isolate or relocate the cache file.
+ * Get the encrypted auth-broker snapshot cache path (profile `cache/auth-broker-snapshot.enc`,
+ * `VEYYON_AUTH_BROKER_SNAPSHOT_CACHE` overrides).
  */
 export function getAuthBrokerSnapshotCachePath(): string {
-	const override = pickProcessEnv("VEYYON_AUTH_BROKER_SNAPSHOT_CACHE");
-	if (override) return override;
-	return dirs.rootSubdir(path.join("cache", "auth-broker-snapshot.enc"), "cache");
+	return cacheFilePath("VEYYON_AUTH_BROKER_SNAPSHOT_CACHE", "auth-broker-snapshot.enc");
 }
 
 /** Get the local FastEmbed model cache directory (profile `cache/fastembed`). */

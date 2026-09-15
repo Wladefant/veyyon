@@ -1,10 +1,10 @@
 import * as path from "node:path";
-import { Text } from "@veyyon/tui";
 import { clamp, errorMessage, formatCount, logger } from "@veyyon/utils";
+import { replaceTabs } from "@veyyon/utils/tab-width";
+import { truncateToWidth } from "@veyyon/utils/width";
+import type { TextBlockView } from "@veyyon/view";
 import { type } from "arktype";
 import type { ToolDefinition } from "../../extensibility/extensions";
-import type { Theme } from "../../modes/theme/theme";
-import { replaceTabs, truncateToWidth } from "../../tools/render-utils";
 import * as git from "../../utils/git";
 import { parseWorkDirDirtyPaths, tryReadHeadSha } from "../git";
 import { dedupeStrings, gitStatusPorcelain, gitWorkDirPrefix, normalizePathSpec } from "../helpers";
@@ -163,15 +163,16 @@ export function createInitExperimentTool(
 					secondaryMetrics,
 					breadth,
 					attempts,
-					maxParallel: breadth,
 					certify,
 					armModels,
 				});
 				createdSession = true;
-			} else {
-				abandonedRuns = storage.abandonPendingRuns(existing.id);
-				const updates: Parameters<typeof storage.updateSession>[1] = {
+			} else if (isNewSegmentInit) {
+				abandonedRuns = storage.abandonIncompleteRuns(existing.id);
+				storage.bumpSessionSegment(existing.id, baselineCommit);
+				session = storage.updateSession(existing.id, {
 					goal,
+					preferredCommand: DEFAULT_HARNESS_COMMAND,
 					maxIterations,
 					scopePaths,
 					offLimits,
@@ -181,21 +182,31 @@ export function createInitExperimentTool(
 					metricUnit,
 					direction,
 					branch,
+					baselineCommit,
 					breadth,
 					attempts,
-					maxParallel: breadth,
 					certify,
 					armModels,
-				};
-				if (isNewSegmentInit) {
-					updates.baselineCommit = baselineCommit;
-				}
-				let updated = storage.updateSession(existing.id, updates);
-				if (isNewSegmentInit) {
-					updated = storage.bumpSegment(existing.id);
-					bumpedSegment = true;
-				}
-				session = updated;
+				});
+				bumpedSegment = true;
+			} else {
+				session = storage.updateSession(existing.id, {
+					goal: goal ?? existing.goal,
+					maxIterations: maxIterations ?? existing.maxIterations,
+					scopePaths: params.scope_paths !== undefined ? scopePaths : existing.scopePaths,
+					offLimits: params.off_limits !== undefined ? offLimits : existing.offLimits,
+					constraints: params.constraints !== undefined ? constraints : existing.constraints,
+					secondaryMetrics: params.secondary_metrics !== undefined ? secondaryMetrics : existing.secondaryMetrics,
+					primaryMetric: params.primary_metric,
+					metricUnit,
+					direction,
+					branch: branch ?? existing.branch,
+					baselineCommit: baselineCommit ?? existing.baselineCommit,
+					breadth,
+					attempts,
+					certify,
+					armModels,
+				});
 			}
 
 			const loggedRuns = storage.listLoggedRuns(session.id);
@@ -210,6 +221,10 @@ export function createInitExperimentTool(
 			runtime.lastRunArtifactDir = null;
 			runtime.lastRunNumber = null;
 			runtime.lastRunSummary = null;
+
+			options.dashboard.update(ctx, runtime);
+			options.dashboard.requestRender();
+
 			// The stored session is the first place the real breadth exists, so this
 			// is where a swarm gains `certify_arms` and a serial session loses it.
 			// The command path armed the set before the breadth was known.
@@ -218,33 +233,44 @@ export function createInitExperimentTool(
 			if (activeToolsChanged(activeTools, nextActiveTools)) {
 				await options.pi.setActiveTools(nextActiveTools);
 			}
-			options.dashboard.update(ctx, runtime);
-			options.dashboard.requestRender();
 
 			const lines: string[] = [];
-			if (abandonedRuns > 0) {
-				lines.push(`Abandoned ${formatCount("pending run", abandonedRuns)} before reconfiguring.`);
-			}
-			if (harnessCommitted && session.baselineCommit) {
-				lines.push(`Committed harness setup at ${session.baselineCommit.slice(0, 12)}.`);
-			}
-			if (commitWarning) {
-				lines.push(commitWarning);
-			}
 			if (createdSession) {
-				lines.push(`Started session #${session.id}: ${session.name}`);
+				lines.push(
+					`Initialized autoresearch session "${session.name}" (ID ${session.id}) for segment ${session.currentSegment}.`,
+				);
 			} else if (bumpedSegment) {
-				lines.push(`Bumped segment to ${session.currentSegment} for session #${session.id}: ${session.name}`);
+				lines.push(
+					`Started new segment ${session.currentSegment} for session "${session.name}" (ID ${session.id}).`,
+				);
+				if (abandonedRuns > 0) {
+					lines.push(`Abandoned ${abandonedRuns} incomplete run(s) from prior segment.`);
+				}
 			} else {
-				lines.push(`Updated session #${session.id} (segment ${session.currentSegment}): ${session.name}`);
+				lines.push(
+					`Reconfigured autoresearch session "${session.name}" (ID ${session.id}) on segment ${session.currentSegment}.`,
+				);
 			}
-			lines.push(
-				`Metric: ${session.primaryMetric} (${session.metricUnit || "unitless"}, ${session.direction} is better)`,
-			);
-			lines.push(`Benchmark entrypoint: ${DEFAULT_HARNESS_COMMAND}`);
+
+			if (harnessCommitted) {
+				lines.push(`Auto-committed harness setup (${HARNESS_COMMIT_TITLE}).`);
+			} else if (commitWarning) {
+				lines.push(`Warning: ${commitWarning}`);
+			}
+
+			if (session.goal) {
+				lines.push(`Goal: ${session.goal}`);
+			}
+			lines.push(`Primary metric: ${session.primaryMetric} (direction: ${session.direction})`);
+			if (session.metricUnit) {
+				lines.push(`Metric unit: ${session.metricUnit}`);
+			}
+			if (session.secondaryMetrics.length > 0) {
+				lines.push(`Secondary metrics: ${session.secondaryMetrics.join(", ")}`);
+			}
 			lines.push(
 				session.breadth > 1
-					? `Breadth: ${formatCount("arm", session.breadth)} per iteration, ${formatCount("attempt", session.attempts)} each, certification ${session.certify ? "on" : "off"}. Start every arm with \`start_arm\` and measure it with \`run_experiment\`.`
+					? `Breadth: ${formatCount("arm", session.breadth)} per iteration, ${formatCount("attempt", session.attempts)} each, certification ${session.certify ? "on" : "off"}.`
 					: "Breadth: 1 (serial, no arms).",
 			);
 			if (overriddenByConsole) {
@@ -292,18 +318,33 @@ export function createInitExperimentTool(
 				},
 			};
 		},
-		renderCall(args, _options, theme): Text {
-			return new Text(renderInitCall(args.name, theme), 0, 0);
-		},
-		renderResult(result): Text {
-			const text = replaceTabs(result.content.find(part => part.type === "text")?.text ?? "");
-			return new Text(text, 0, 0);
+		view: {
+			renderCall: args => initExperimentCallView(args.name),
+			renderResult: result => ({
+				kind: "textBlock",
+				spans: [{ text: replaceTabs(result.content.find(part => part.type === "text")?.text ?? "") }],
+			}),
 		},
 	};
 }
 
-function renderInitCall(name: string, theme: Theme): string {
-	return `${theme.fg("toolTitle", theme.bold("init_experiment"))} ${theme.fg("accent", truncateToWidth(replaceTabs(name), 100))}`;
+/**
+ * The card for a call: the tool's name, then the experiment being started.
+ *
+ * `truncateToWidth` takes an explicit length here because the call is shown in the
+ * transcript and on the status row, and a 200-character name wraps and pushes the
+ * result off the visible screen. `replaceTabs` is the second sanitization rule: a
+ * tab character is a hole in differential terminal rendering.
+ */
+function initExperimentCallView(name: string): TextBlockView {
+	return {
+		kind: "textBlock",
+		spans: [
+			{ text: "init_experiment", tone: "title", bold: true },
+			{ text: " " },
+			{ text: truncateToWidth(replaceTabs(name), 100), tone: "accent" },
+		],
+	};
 }
 
 /**

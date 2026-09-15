@@ -21,8 +21,8 @@ import type {
 	BranchSummaryEntry,
 	CustomMessageEntry,
 	SessionMessageEntry,
-} from "@veyyon/coding-agent/session/session-entries";
-import { parseSessionEntries } from "@veyyon/coding-agent/session/session-loader";
+} from "@veyyon/kernel/session/session-entries";
+import { parseSessionEntries } from "@veyyon/kernel/session/session-loader";
 
 function extractText(message: AgentMessage): string {
 	if (message.role !== "assistant") return "";

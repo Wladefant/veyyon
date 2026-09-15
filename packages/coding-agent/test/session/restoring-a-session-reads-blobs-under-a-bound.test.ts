@@ -6,9 +6,9 @@ import {
 	externalizeTextSync,
 	isBlobRef,
 	isTextBlobRef,
-} from "@veyyon/coding-agent/session/blob-store";
-import type { FileEntry } from "@veyyon/coding-agent/session/session-entries";
-import { resolveBlobRefsInEntries } from "@veyyon/coding-agent/session/session-loader";
+} from "@veyyon/kernel/session/blob-store";
+import type { FileEntry } from "@veyyon/kernel/session/session-entries";
+import { resolveBlobRefsInEntries } from "@veyyon/kernel/session/session-loader";
 import { TempDir } from "@veyyon/utils";
 
 /**

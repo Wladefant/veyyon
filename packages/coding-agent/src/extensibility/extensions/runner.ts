@@ -3,14 +3,14 @@
  */
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { CredentialDisabledEvent, ImageContent, Model, ProviderResponseMetadata } from "@veyyon/ai";
-import type { KeyId } from "@veyyon/tui";
-import { errorMessage, logger } from "@veyyon/utils";
+import type { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { errorMessage, logger, reportFault } from "@veyyon/utils";
+import type { KeyId } from "@veyyon/utils/keys";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { Settings } from "../../config/settings";
 import type { LocalProtocolOptions } from "../../internal-urls/local-protocol";
-import type { MemoryRuntimeContext } from "../../memory-backend";
-import { type Theme, theme } from "../../modes/theme/theme";
-import type { SessionManager } from "../../session/session-manager";
+import type { MemoryRuntimeContext } from "../../memory/backend";
+import { type Theme, theme } from "../../theme/theme";
 import type { BranchHandler, NavigateTreeHandler, NewSessionHandler } from "../session-handler-types";
 import { createExtensionModelQuery } from "./model-api";
 import type {
@@ -200,16 +200,12 @@ const noOpUIContext: ExtensionUIContext = {
 	setStatus: () => {},
 	setWorkingMessage: () => {},
 	setWidget: () => {},
-	setFooter: () => {},
-	setHeader: () => {},
 	setTitle: () => {},
-	custom: async () => undefined as never,
 	setEditorText: () => {},
 	pasteToEditor: () => {},
 	getEditorText: () => "",
 	editor: async () => undefined,
 	addAutocompleteProvider: () => {},
-	setEditorComponent: () => {},
 	get theme() {
 		return theme;
 	},
@@ -220,13 +216,20 @@ const noOpUIContext: ExtensionUIContext = {
 	setToolsExpanded: () => {},
 };
 
+export interface ExtensionRunnerIdentityOptions {
+	isSubagent?: boolean;
+	taskDepth?: number;
+	agentId?: string;
+	parentTaskPrefix?: string;
+}
+
 export class ExtensionRunner {
 	#uiContext: ExtensionUIContext;
 	/**
-	 * Registry id of the agent this runner drives, when it is a spawned subagent.
+	 * Registry id of the agent this runner drives, when it is a spawned agent.
 	 *
 	 * Undefined for a root session, which needs no attribution: its prompts are
-	 * self-evidently its own. A subagent's are not. The operator answers ONE
+	 * self-evidently its own. An agent's are not. The operator answers ONE
 	 * queue at the root, so two children asking at the same moment are two
 	 * identical cards unless each says who is asking, and an anonymous prompt is
 	 * nearly as bad as no prompt: it can be answered, but not answered correctly.
@@ -236,6 +239,9 @@ export class ExtensionRunner {
 	 * would all have to pass undefined.
 	 */
 	#agentId: string | undefined;
+	#isSubagent = false;
+	#taskDepth = 0;
+	#parentTaskPrefix: string | undefined;
 
 	#errorListeners: Set<ExtensionErrorListener> = new Set();
 	#getModel: () => Model | undefined = () => undefined;
@@ -254,7 +260,7 @@ export class ExtensionRunner {
 	#reloadHandler: () => Promise<void> = async () => {};
 	#shutdownHandler: ShutdownHandler = () => {};
 	#getMemoryFn?: () => MemoryRuntimeContext | undefined;
-	#commandDiagnostics: Array<{ type: string; message: string; path: string }> = [];
+	#reportedCommandFaults = new Set<string>();
 	#initialized = false;
 	/**
 	 * Buffer for `credential_disabled` events received via {@link emitCredentialDisabled}
@@ -274,11 +280,17 @@ export class ExtensionRunner {
 		getMemory?: () => MemoryRuntimeContext | undefined,
 		private readonly settings?: Settings,
 		private readonly localProtocolOptions?: LocalProtocolOptions,
+		identity?: ExtensionRunnerIdentityOptions,
 	) {
 		this.#uiContext = noOpUIContext;
 		this.#getMemoryFn = getMemory;
+		if (identity) {
+			this.#taskDepth = identity.taskDepth ?? 0;
+			this.#parentTaskPrefix = identity.parentTaskPrefix;
+			this.#isSubagent = Boolean(identity.isSubagent || this.#taskDepth > 0 || this.#parentTaskPrefix);
+			this.#agentId = this.#isSubagent ? identity.agentId : undefined;
+		}
 	}
-
 	/** See {@link ExtensionRunner.agentId}. Called by the spawner before `initialize`. */
 	setAgentId(agentId: string): void {
 		this.#agentId = agentId;
@@ -286,7 +298,19 @@ export class ExtensionRunner {
 
 	/** Registry id of the spawned agent this runner drives; undefined at a root session. */
 	get agentId(): string | undefined {
-		return this.#agentId;
+		return this.#isSubagent ? this.#agentId : undefined;
+	}
+
+	get isSubagent(): boolean {
+		return this.#isSubagent;
+	}
+
+	get taskDepth(): number {
+		return this.#taskDepth;
+	}
+
+	get parentTaskPrefix(): string | undefined {
+		return this.#parentTaskPrefix;
 	}
 
 	initialize(
@@ -355,7 +379,7 @@ export class ExtensionRunner {
 	 *
 	 * If {@link initialize} has not yet run, the event is buffered and replayed once
 	 * initialize wires the runtime/UI context. This matters because mode controllers
-	 * (interactive, RPC, ACP, print, subagent) call `initialize()` AFTER `createAgentSession`
+	 * (interactive, RPC, ACP, print, agent) call `initialize()` AFTER `createAgentSession`
 	 * returns, but `AuthStorage` can fire `credential_disabled` during startup model probes
 	 * inside `createAgentSession()`. Without deferral, extension handlers would observe
 	 * `hasUI=false`, an unset model, and no-op runtime actions on exactly the headline
@@ -524,31 +548,45 @@ export class ExtensionRunner {
 	}
 
 	getRegisteredCommands(reserved?: ReadonlySet<string>): RegisteredCommand[] {
-		this.#commandDiagnostics = [];
-
-		const commands = new Map<string, RegisteredCommand>();
+		const commands = new Map<string, { command: RegisteredCommand; path: string }>();
 		for (const ext of this.extensions) {
 			for (const command of ext.commands.values()) {
 				if (reserved?.has(command.name)) {
-					const message =
+					this.#reportCommandFault(
 						`The extension at ${ext.path} registers the command "/${command.name}", which is a built-in, ` +
-						`so the extension's version is not active and "/${command.name}" still runs the built-in. ` +
-						"Fix: rename it in that extension's source.";
-					this.#commandDiagnostics.push({ type: "warning", message, path: ext.path });
-					if (!this.hasUI()) {
-						logger.warn(message);
-					}
+							`so the extension's version is not active and "/${command.name}" still runs the built-in. ` +
+							"Fix: rename it in that extension's source.",
+						{ path: ext.path, command: command.name },
+					);
 					continue;
 				}
 
-				commands.set(command.name, command);
+				// Last registration wins, the same order `getCommand` resolves, so the
+				// extension already in the map is the one whose command never runs.
+				const shadowed = commands.get(command.name);
+				if (shadowed && shadowed.path !== ext.path) {
+					this.#reportCommandFault(
+						`The extension at ${shadowed.path} registers the command "/${command.name}", which the extension at ` +
+							`${ext.path} also registers, so only the latter's version runs. ` +
+							"Fix: rename it in one extension's source, or drop the extension you do not want.",
+						{ path: shadowed.path, shadowedBy: ext.path, command: command.name },
+					);
+				}
+				commands.set(command.name, { command, path: ext.path });
 			}
 		}
-		return [...commands.values()];
+		return [...commands.values()].map(entry => entry.command);
 	}
 
-	getCommandDiagnostics(): Array<{ type: string; message: string; path: string }> {
-		return this.#commandDiagnostics;
+	/**
+	 * A command-name collision is reported once per session, not once per listing:
+	 * this runs every time the command palette is drawn, and the collision does not
+	 * change between draws.
+	 */
+	#reportCommandFault(text: string, context: Record<string, unknown>): void {
+		if (this.#reportedCommandFaults.has(text)) return;
+		this.#reportedCommandFaults.add(text);
+		reportFault({ source: "extensions", text, context });
 	}
 
 	getCommand(name: string): RegisteredCommand | undefined {
@@ -565,6 +603,10 @@ export class ExtensionRunner {
 		const getModel = this.#getModel;
 		return {
 			ui: this.#uiContext,
+			isSubagent: this.#isSubagent,
+			taskDepth: this.#taskDepth,
+			agentId: this.#isSubagent ? this.#agentId : undefined,
+			parentTaskPrefix: this.#parentTaskPrefix,
 			getContextUsage: () => this.#getContextUsageFn(),
 			compact: instructionsOrOptions => this.#compactFn(instructionsOrOptions),
 			hasUI: this.hasUI(),
@@ -913,13 +955,16 @@ export class ExtensionRunner {
 				const result = handlerResult as ResourcesDiscoverResult | undefined;
 
 				if (result?.skillPaths?.length) {
-					skillPaths.push(...result.skillPaths.map(path => ({ path, extensionPath: ext.path })));
+					const sp = result.skillPaths.map(path => ({ path, extensionPath: ext.path }));
+					for (let si = 0; si < sp.length; si++) skillPaths.push(sp[si]!);
 				}
 				if (result?.promptPaths?.length) {
-					promptPaths.push(...result.promptPaths.map(path => ({ path, extensionPath: ext.path })));
+					const pp = result.promptPaths.map(path => ({ path, extensionPath: ext.path }));
+					for (let pi = 0; pi < pp.length; pi++) promptPaths.push(pp[pi]!);
 				}
 				if (result?.themePaths?.length) {
-					themePaths.push(...result.themePaths.map(path => ({ path, extensionPath: ext.path })));
+					const tp = result.themePaths.map(path => ({ path, extensionPath: ext.path }));
+					for (let ti = 0; ti < tp.length; ti++) themePaths.push(tp[ti]!);
 				}
 			}
 		}

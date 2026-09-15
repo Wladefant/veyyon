@@ -1,11 +1,11 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import type { Api, Model } from "@veyyon/ai";
-import * as ai from "@veyyon/ai";
+import * as ai from "@veyyon/ai/stream";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { isSubcommand } from "@veyyon/coding-agent/cli-commands";
 import { getDefault, getEnumValues, getUi } from "@veyyon/coding-agent/config/settings-schema";
-import { TinyTitleDownloadProgressComponent } from "@veyyon/coding-agent/modes/components/tiny-title-download-progress";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
+import { TinyTitleDownloadProgressComponent } from "@veyyon/coding-agent/modes/terminal/components/chrome/tiny-title-download-progress";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import {
 	TINY_MODEL_DEVICE_DEFAULT,
 	TINY_MODEL_DEVICE_SETTING_OPTIONS,
