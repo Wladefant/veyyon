@@ -29,7 +29,7 @@ import { INFO_HANDLERS } from "./builtin-info";
 import { MODEL_HANDLERS } from "./builtin-model";
 import { MODES_HANDLERS } from "./builtin-modes";
 import { SESSION_HANDLERS } from "./builtin-session";
-import { SETUP_HANDLERS } from "./builtin-setup";
+import { looksLikeOAuthCallback, SETUP_HANDLERS } from "./builtin-setup";
 import { SHARE_HANDLERS } from "./builtin-share";
 import { WORKSPACE_HANDLERS } from "./builtin-workspace";
 import type { BuiltinSlashCommandHandlers, BuiltinSlashCommandRuntime, TuiBuiltinSlashCommand } from "./handler-types";
@@ -189,7 +189,11 @@ export async function executeBuiltinSlashCommand(
 	const command = BUILTIN_SLASH_COMMAND_LOOKUP.get(parsed.name);
 	if (!command) return false;
 	if (parsed.args.length > 0 && !command.allowArgs) {
-		return text.includes("://") || text.includes("code=") || text.startsWith("?");
+		// A pasted OAuth redirect is swallowed rather than sent to the model: it carries a code, and
+		// `?code=...` reaching a provider as a prompt is the one case where passing the text through
+		// is worse than dropping it. Anything else with unexpected arguments is ordinary prose that
+		// happens to start with a slash, so it goes on as a prompt.
+		return looksLikeOAuthCallback(text);
 	}
 	// Collab guests run a read-mostly replica: session-mutating builtins are
 	// host-only; the allowlist covers purely local/read-only commands.
