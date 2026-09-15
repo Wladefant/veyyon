@@ -1860,8 +1860,8 @@ async function runRootCommandInner(parsed: Args, rawArgs: string[], deps: RunRoo
 			preloadedExtensions: extensionsResult,
 		});
 		// Publish the in-process native capability before interactive commands can
-		// activate a Telegram adapter. This starts no poller or socket; only the
-		// lease-owning extension can bind actor/chat credentials to this session.
+		// activate an external adapter. This starts no poller or socket; an
+		// authorized extension can bind actor/chat credentials to this session.
 		installTelegramNativeControlHost(() => session.sessionManager.getSessionId());
 
 		// Cold-revive support: a `parked` subagent ref restored from disk (the persisted-subagent

@@ -1,10 +1,6 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { AgentRegistry } from "../../src/registry/agent-registry";
 import type { AgentSession } from "../../src/session/agent-session";
-import { FileSessionStorage } from "../../src/session/session-storage";
 import {
 	NativeControlDeniedError,
 	TelegramNativeControlBridge,
@@ -23,28 +19,15 @@ const AUTH: NativeControlAuth = {
 	sessionId: "session-a",
 };
 
-let scratch = "";
-let workspace = "";
-let sessionDir = "";
 let registry: AgentRegistry;
 let bridge: TelegramNativeControlBridge;
 
-beforeEach(async () => {
-	scratch = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-native-control-"));
-	workspace = path.join(scratch, "allowed", "project");
-	sessionDir = path.join(scratch, "sessions");
-	await fs.mkdir(workspace, { recursive: true });
+beforeEach(() => {
 	registry = new AgentRegistry();
 	bridge = new TelegramNativeControlBridge({
-		binding: { ...AUTH, workspaceRoots: [path.join(scratch, "allowed")] },
+		binding: { ...AUTH },
 		registry,
-		storage: new FileSessionStorage(),
-		sessionDirFor: () => sessionDir,
 	});
-});
-
-afterEach(async () => {
-	await fs.rm(scratch, { recursive: true, force: true });
 });
 
 describe("TelegramNativeControlBridge authenticated reads", () => {
@@ -98,55 +81,16 @@ describe("TelegramNativeControlBridge authenticated reads", () => {
 	});
 });
 
-describe("TelegramNativeControlBridge safe session creation", () => {
-	test("creates a persisted session without replacing Main and deduplicates an exact replay", async () => {
-		registry.register({
-			id: "main:session-a",
-			displayName: "Main",
-			kind: "main",
-			session: null,
-			scope: AUTH.sessionId,
-			status: "running",
-		});
-		const mainBefore = registry.get("main:session-a");
-		const request = { ...AUTH, requestId: "callback-001", workspace, title: "Telegram work" };
-
-		const first = await bridge.createSession(request);
-		const replay = await bridge.createSession(request);
-
-		expect(replay).toEqual(first);
-		expect(registry.get("main:session-a")).toBe(mainBefore);
-		expect(first.workspace).toBe(await fs.realpath(workspace));
-		expect(first.title).toBe("Telegram work");
-		expect((await fs.readdir(sessionDir)).filter(name => name.endsWith(".jsonl"))).toHaveLength(1);
-		await expect(
-			bridge.createSession({ ...request, workspace: path.join(scratch, "allowed") }),
-		).rejects.toMatchObject({ code: "REPLAY_MISMATCH" });
-	});
-
-	test("denies a workspace outside the configured realpath allowlist", async () => {
-		const outside = path.join(scratch, "outside");
-		await fs.mkdir(outside);
-		await expect(
-			bridge.createSession({ ...AUTH, requestId: "callback-002", workspace: outside }),
-		).rejects.toMatchObject({ code: "WORKSPACE_DENIED" });
-		expect(await fs.readdir(sessionDir).catch(() => [])).toHaveLength(0);
-	});
-});
-
 describe("Telegram native control host wiring", () => {
 	test("publishes a bindable in-process host and invalidates it on session switch", async () => {
 		let activeSessionId = AUTH.sessionId;
 		const installed = installTelegramNativeControlHost(() => activeSessionId, {
 			registry,
-			storage: new FileSessionStorage(),
-			sessionDirFor: () => sessionDir,
 		});
 		expect(getTelegramNativeControlHost()).toBe(installed);
 
 		const client = installed.bind({
 			...AUTH,
-			workspaceRoots: [path.join(scratch, "allowed")],
 		});
 		expect(client.getSessionIdentity(AUTH)).toEqual({
 			id: AUTH.sessionId,
@@ -162,7 +106,6 @@ describe("Telegram native control host wiring", () => {
 		expect(() =>
 			installed.bind({
 				...AUTH,
-				workspaceRoots: [path.join(scratch, "allowed")],
 			}),
 		).toThrow(
 			expect.objectContaining({ code: "SESSION_NOT_ACTIVE" }),

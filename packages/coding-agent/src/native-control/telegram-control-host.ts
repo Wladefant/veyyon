@@ -1,10 +1,7 @@
 import type { AgentRegistry } from "../registry/agent-registry";
-import type { SessionStorage } from "../session/session-storage";
 import {
 	type AgentDetailRequest,
 	type AgentListRequest,
-	type CreateSessionRequest,
-	type CreatedNativeSession,
 	type NativeAgentDetail,
 	type NativeAgentSummary,
 	type NativeControlAuth,
@@ -19,7 +16,6 @@ export interface TelegramNativeControlClient {
 	getSessionIdentity(auth: NativeControlAuth): { id: string; actorId: string; chatId: string };
 	listAgents(request: AgentListRequest): Promise<{ items: NativeAgentSummary[]; nextCursor?: string }>;
 	getAgentDetail(request: AgentDetailRequest): Promise<NativeAgentDetail>;
-	createSession(request: CreateSessionRequest): Promise<CreatedNativeSession>;
 }
 
 export interface TelegramNativeControlHost {
@@ -29,8 +25,6 @@ export interface TelegramNativeControlHost {
 
 export interface InstallTelegramNativeControlHostOptions {
 	registry?: AgentRegistry;
-	storage?: SessionStorage;
-	sessionDirFor?: (workspace: string) => string | undefined;
 }
 
 interface TelegramNativeControlGlobal {
@@ -59,11 +53,6 @@ class ActiveSessionClient implements TelegramNativeControlClient {
 		return await this.bridge.getAgentDetail(request);
 	}
 
-	async createSession(request: CreateSessionRequest): Promise<CreatedNativeSession> {
-		this.assertActive();
-		return await this.bridge.createSession(request);
-	}
-
 	private assertActive(): void {
 		if (this.currentSessionId() !== this.boundSessionId) {
 			throw new NativeControlDeniedError("SESSION_NOT_ACTIVE", "The bound native session is no longer active");
@@ -73,9 +62,9 @@ class ActiveSessionClient implements TelegramNativeControlClient {
 
 /**
  * Publishes the native control capability inside this Veyyon process. The host
- * owns no Telegram transport or credential store: the one active Telegram
- * extension supplies its authenticated actor/chat binding after it owns the
- * poller lease. A session switch invalidates every previously bound client.
+ * owns no external transport or credential store; an authorized extension
+ * supplies its authenticated binding. A session switch invalidates every
+ * previously bound client.
  */
 export function installTelegramNativeControlHost(
 	currentSessionId: () => string,
@@ -90,8 +79,6 @@ export function installTelegramNativeControlHost(
 			const bridge = new TelegramNativeControlBridge({
 				binding,
 				...(options.registry ? { registry: options.registry } : {}),
-				...(options.storage ? { storage: options.storage } : {}),
-				...(options.sessionDirFor ? { sessionDirFor: options.sessionDirFor } : {}),
 			});
 			return new ActiveSessionClient(bridge, binding.sessionId, currentSessionId);
 		},
