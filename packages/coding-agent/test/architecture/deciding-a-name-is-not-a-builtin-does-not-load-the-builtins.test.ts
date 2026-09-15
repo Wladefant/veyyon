@@ -24,9 +24,9 @@
  * something that itself imports the registry, the named absence below goes red, but a caller that is
  * not named here can pay the cost unobserved.
  */
-import { describe, expect, it, vi } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
-import { BUILTIN_SLASH_COMMAND_CATEGORIES } from "@veyyon/coding-agent/slash-commands/categories";
+import { BUILTIN_SLASH_COMMAND_CATEGORIES } from "@veyyon/coding-agent/slash-commands/builtin-categories";
 import { dispatchBuiltinSlashCommand } from "@veyyon/coding-agent/slash-commands/dispatch";
 import { reachedNames } from "../helpers/module-reach-gate";
 
@@ -39,16 +39,28 @@ function domainModules(): string[] {
 		.sort();
 }
 
+/**
+ * A host context that RECORDS what the command did to it.
+ *
+ * The values are what the assertions read, rather than whether a function was called: `/btw` is
+ * correct when the question that reaches the host is the text after the command, and wrong when it
+ * is the whole line or a truncation of it, which a call-count cannot tell apart.
+ */
 function createRuntime() {
-	const handleBtwCommand = vi.fn(async () => {});
-	const setText = vi.fn();
+	const observed: { question?: string; editorText?: string } = {};
 	return {
-		handleBtwCommand,
-		setText,
+		observed,
 		runtime: {
 			ctx: {
-				editor: { setText, addToHistory: vi.fn() } as unknown as InteractiveModeContext["editor"],
-				handleBtwCommand,
+				editor: {
+					setText: (text: string) => {
+						observed.editorText = text;
+					},
+					addToHistory: () => {},
+				} as unknown as InteractiveModeContext["editor"],
+				handleBtwCommand: async (question: string) => {
+					observed.question = question;
+				},
 			} as unknown as InteractiveModeContext,
 		},
 	};
@@ -126,7 +138,7 @@ describe("deciding a name is not a builtin does not load the builtins", () => {
 
 		expect(await dispatchBuiltinSlashCommand("/definitely-not-a-builtin", harness.runtime)).toBe(false);
 		expect(await dispatchBuiltinSlashCommand("not a slash command at all", harness.runtime)).toBe(false);
-		expect(harness.setText).not.toHaveBeenCalled();
+		expect(harness.observed.editorText).toBeUndefined();
 	});
 
 	it("still runs a name that is one, loading the handlers on the way", async () => {
@@ -135,6 +147,6 @@ describe("deciding a name is not a builtin does not load the builtins", () => {
 		const handled = await dispatchBuiltinSlashCommand("/btw why is it doing that?", harness.runtime);
 
 		expect(handled).toBe(true);
-		expect(harness.handleBtwCommand).toHaveBeenCalledWith("why is it doing that?");
+		expect(harness.observed.question).toBe("why is it doing that?");
 	});
 });

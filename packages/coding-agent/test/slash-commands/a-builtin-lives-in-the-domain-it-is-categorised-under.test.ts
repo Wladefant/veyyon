@@ -1,7 +1,7 @@
 /**
  * WHY THIS EXISTS. The builtin handlers were one 1,806-line object literal holding every command in
  * the product. They are now eight domain modules, and the domain a command belongs to is stated in
- * `categories.ts`, which existed before the split and drove it. That creates a way for the two to
+ * `builtin-categories.ts`, which existed before the split and drove it. That creates a way for the two to
  * disagree: a command can be categorised as `session` and have its handler written into
  * `builtin-share.ts`, and nothing at run time would care, because the registry spreads all eight
  * maps together and the result is the same object either way. The taxonomy would rot into a comment.
@@ -13,10 +13,11 @@
  * name in a module that is not declared. A ninth category, a renamed domain, a command whose handler
  * moves file, or a command declared and never implemented each turn this red without an edit here.
  *
- * WHAT IT DOES NOT CATCH. Whether a domain is the RIGHT one for a command. `categories.ts` is the
+ * WHAT IT DOES NOT CATCH. Whether a domain is the RIGHT one for a command. `builtin-categories.ts` is the
  * authority, and if a command is filed under the wrong heading there, this suite agrees with it.
  */
 import { describe, expect, it } from "bun:test";
+import { BUILTIN_SLASH_COMMAND_CATEGORIES } from "@veyyon/coding-agent/slash-commands/builtin-categories";
 import { CONTEXT_HANDLERS } from "@veyyon/coding-agent/slash-commands/builtin-context";
 import { BUILTIN_SLASH_COMMAND_DECLARATIONS } from "@veyyon/coding-agent/slash-commands/builtin-declarations";
 import { INFO_HANDLERS } from "@veyyon/coding-agent/slash-commands/builtin-info";
@@ -26,7 +27,6 @@ import { SESSION_HANDLERS } from "@veyyon/coding-agent/slash-commands/builtin-se
 import { SETUP_HANDLERS } from "@veyyon/coding-agent/slash-commands/builtin-setup";
 import { SHARE_HANDLERS } from "@veyyon/coding-agent/slash-commands/builtin-share";
 import { WORKSPACE_HANDLERS } from "@veyyon/coding-agent/slash-commands/builtin-workspace";
-import { BUILTIN_SLASH_COMMAND_CATEGORIES } from "@veyyon/coding-agent/slash-commands/categories";
 import type { BuiltinSlashCommandHandlers } from "@veyyon/coding-agent/slash-commands/handler-types";
 
 /** The eight domain modules, keyed by the category name each one answers for. */

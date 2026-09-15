@@ -3,7 +3,7 @@
  *
  * Split out of `builtin-registry.ts`, which is now the composition root: it imports the eight
  * domain maps and assembles them. The domain a command belongs to is decided in one place,
- * `categories.ts`, and `test/slash-commands/a-builtin-lives-in-the-domain-it-is-categorised-under.test.ts`
+ * `builtin-categories.ts`, and `test/slash-commands/a-builtin-lives-in-the-domain-it-is-categorised-under.test.ts`
  * fails when this file and that map disagree, so the two cannot drift.
  */
 import * as path from "node:path";

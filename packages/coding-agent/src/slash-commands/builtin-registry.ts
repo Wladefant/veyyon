@@ -2,13 +2,14 @@
  * The builtin slash commands, assembled.
  *
  * This module owns no handler body. Each domain declares its own in `builtin-<domain>.ts`, and the
- * domain a command belongs to is stated once, in `categories.ts`. What is left here is the
+ * domain a command belongs to is stated once, in `builtin-categories.ts`. What is left here is the
  * assembly and the lookups built from it, so adding a command touches its domain file and the
  * declarations, not a two-thousand-line object every command in the product shares.
  */
 import { COLLAB_GUEST_ALLOWED_COMMANDS } from "../collab/guest-commands";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../discovery/helpers.js";
 import { bareInvocationShowsSubcommands } from "./bare-subcommand";
+import { BUILTIN_SLASH_COMMAND_CATEGORIES } from "./builtin-categories";
 import {
 	buildArgumentCompletions,
 	buildDirectoryArgumentCompletions,
@@ -31,7 +32,6 @@ import { SESSION_HANDLERS } from "./builtin-session";
 import { SETUP_HANDLERS } from "./builtin-setup";
 import { SHARE_HANDLERS } from "./builtin-share";
 import { WORKSPACE_HANDLERS } from "./builtin-workspace";
-import { BUILTIN_SLASH_COMMAND_CATEGORIES } from "./categories";
 import type { BuiltinSlashCommandHandlers, BuiltinSlashCommandRuntime, TuiBuiltinSlashCommand } from "./handler-types";
 import { parseSlashCommand } from "./helpers/parse";
 import type {
@@ -43,7 +43,7 @@ import type {
 	TuiSlashCommandRuntime,
 } from "./types";
 
-export { BUILTIN_SLASH_COMMAND_CATEGORIES } from "./categories";
+export { BUILTIN_SLASH_COMMAND_CATEGORIES } from "./builtin-categories";
 export type { BuiltinSlashCommandRuntime, TuiBuiltinSlashCommand } from "./handler-types";
 export type { BuiltinSlashCommand, SubcommandDef } from "./types";
 

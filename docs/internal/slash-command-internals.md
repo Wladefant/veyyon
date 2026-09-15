@@ -22,7 +22,7 @@ This document describes how slash commands are discovered, deduplicated, surface
 - [`src/slash-commands/text-mode-builtins.ts`](../../packages/coding-agent/src/slash-commands/text-mode-builtins.ts)
 - [`src/slash-commands/acp-builtins.ts`](../../packages/coding-agent/src/slash-commands/acp-builtins.ts)
 - [`src/slash-commands/dispatch.ts`](../../packages/coding-agent/src/slash-commands/dispatch.ts)
-- [`src/slash-commands/categories.ts`](../../packages/coding-agent/src/slash-commands/categories.ts)
+- [`src/slash-commands/builtin-categories.ts`](../../packages/coding-agent/src/slash-commands/builtin-categories.ts)
 - [`src/slash-commands/handler-types.ts`](../../packages/coding-agent/src/slash-commands/handler-types.ts)
 - `src/slash-commands/builtin-<domain>.ts`, one per category: `setup`, `modes`, `session`, `context`, `share`, `workspace`, `model`, `info`
 
@@ -43,7 +43,7 @@ The builtins are split by what a caller needs, because the handlers are expensiv
 The registry owns no handler body. Each command's handler is in the domain module its category
 names, `builtin-<domain>.ts`, and the registry spreads the eight maps into one record keyed by every
 declared name, so a handler for a command that does not exist and a command with no handler are both
-compile errors. `categories.ts` states a command's domain once;
+compile errors. `builtin-categories.ts` states a command's domain once;
 `test/slash-commands/a-builtin-lives-in-the-domain-it-is-categorised-under.test.ts` fails when a
 handler sits in a module the category map does not name.
 
@@ -345,4 +345,4 @@ hidden default dressed as one.
   - non-native commands: warning + fallback key/value parse
 - Extension/custom command handler exceptions are caught and reported via extension error channel (or logger fallback for custom commands without extension runner), and treated as handled (no unintended fallback execution).
 
-*Verified against `63ffc8131ffb8d35ccbbb1c5de69531a7016eff4` on 2026-09-06.*
+*Verified against `ffec02b67f670d22fded4ad2be9eac0345b75b94` on 2026-09-15.*
