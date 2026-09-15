@@ -17,7 +17,7 @@
 //!    sheet is drawn in -- the whole dialog, and one page a command routed to
 //!    -- so a page that declares copy and never renders it fails here.
 //! 4. A page with something on it draws neither sentence, so the empty state is
-//!    a condition rather than a fixture the page always carries.
+//!    a condition rather than a fixture the page always draws.
 //! 5. The one opt-out, Keybindings, draws the shipped default bindings instead,
 //!    and is checked to draw them rather than to draw nothing.
 //!
@@ -141,7 +141,7 @@ fn every_page_declares_an_empty_condition_and_a_step_or_is_a_recorded_opt_out() 
 		);
 		assert!(
 			action.split_whitespace().count() >= 4,
-			"{page:?} states {action:?} as its step, which names no action to take"
+			"{page:?} states {action:?} as its step, which is too short to state an action"
 		);
 	}
 	assert_eq!(

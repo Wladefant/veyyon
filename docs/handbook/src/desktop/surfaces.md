@@ -820,8 +820,8 @@ A setting with no value and no default draws its control empty rather than
 being left off the page.
 
 A page the host reported nothing for states what is missing and the step that
-fills it: an empty theme catalogue names theme discovery, MCP names the file a
-server is declared in, Usage names the prompt that starts session accounting.
+fills it: an empty theme catalogue states where themes are discovered, MCP the
+file a server is declared in, Usage the prompt that starts session accounting.
 Keybindings is the exception. A host that reports no bindings leaves the
 shipped defaults listed read-only, because those are the chords a press
 matches.

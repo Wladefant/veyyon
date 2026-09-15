@@ -62,7 +62,7 @@ fn a_query_that_empties_the_page_leaves_the_widened_list_at_its_first_row() {
 
 	// A query nothing matches empties the list, which is the offset a widened
 	// page is drawn from: the empty page anchors no item, so the offset it was
-	// left at names a row in the middle of the schema once every row is back.
+	// left at is a row in the middle of the schema once every row is back.
 	narrow_to(&mut session, "no-setting-carries-this");
 	session
 		.update(|view, _, _| {
