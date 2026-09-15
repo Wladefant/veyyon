@@ -26,6 +26,7 @@ use crate::{
 			conditions::{is_setting_condition_met, matches_query},
 			general_control::setting_control,
 		},
+		empty,
 		row::{empty_state_row, setting_row_with_secondary},
 	},
 	shell::fields::FieldSlots,
@@ -217,8 +218,8 @@ pub fn render_general_page(
 			.flex_col()
 			.gap(px(geometry.row_gap))
 			.child(empty_state_row(
-				"No settings reported by host.",
-				"Host capability Settings reported no schema; verify host connection",
+				empty::GENERAL_NO_SCHEMA.condition,
+				empty::GENERAL_NO_SCHEMA.action,
 				geometry,
 				tokens,
 			));
@@ -231,15 +232,13 @@ pub fn render_general_page(
 	if visible_keys.is_empty() {
 		let (empty_msg, action_msg) = if list_state_handle.query().is_empty() {
 			(
-				"No configurable settings available.".to_string(),
-				"Reported settings have unmet conditions or are hidden; configure settings in \
-				 ~/.veyyon/config.yml"
-					.to_string(),
+				empty::GENERAL_ALL_HIDDEN.condition.to_string(),
+				empty::GENERAL_ALL_HIDDEN.action.to_string(),
 			)
 		} else {
 			(
 				format!("No settings matching \"{}\"", list_state_handle.query()),
-				"Clear or edit the search query".to_string(),
+				empty::GENERAL_QUERY_ACTION.to_string(),
 			)
 		};
 		// The field stays drawn over the row that states the empty result:

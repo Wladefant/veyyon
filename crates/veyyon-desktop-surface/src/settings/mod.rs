@@ -5,6 +5,7 @@
 //! Diagnostics, Usage, and `ContextBreakdown`.
 
 pub mod body;
+pub mod empty;
 mod focused;
 pub mod pages;
 pub mod row;

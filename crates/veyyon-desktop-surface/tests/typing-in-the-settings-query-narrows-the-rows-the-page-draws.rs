@@ -23,6 +23,7 @@
 mod support;
 
 use serde_json::Value;
+use support::general_settings_list::open_general_settings_session;
 use veyyon_desktop_model::{SettingEntry, SettingKind, SettingsView};
 use veyyon_desktop_scene::{
 	HeadlessSession,
@@ -31,8 +32,6 @@ use veyyon_desktop_scene::{
 use veyyon_desktop_surface::{
 	FieldKey, Overlay, SettingsPage, SettingsState, ShellView, navigation::SurfaceRoute,
 };
-
-use support::general_settings_list::open_general_settings_session;
 
 /// The keys the page is given. One carries the query's text in its key, one in
 /// its description, and the rest match nothing it is typed.

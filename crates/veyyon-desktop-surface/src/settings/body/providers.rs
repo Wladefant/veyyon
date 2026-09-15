@@ -9,7 +9,7 @@ use crate::{
 	Intent, ShellView,
 	controls::{Availability, ControlStates},
 	settings::{
-		SettingsState,
+		SettingsState, empty,
 		row::{empty_state_row, setting_row},
 	},
 };
@@ -29,9 +29,8 @@ pub fn render_providers_page(
 
 	if state.providers.is_empty() {
 		return container.child(empty_state_row(
-			"No model providers configured.",
-			"Host capability Providers reported none; set a provider API key in the environment or \
-			 declare one in ~/.veyyon/config.yml",
+			empty::PROVIDERS.condition,
+			empty::PROVIDERS.action,
 			geometry,
 			tokens,
 		));

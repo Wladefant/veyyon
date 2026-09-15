@@ -11,7 +11,7 @@ use crate::{
 	Intent, ShellView,
 	controls::ControlStates,
 	settings::{
-		SettingsState,
+		SettingsState, empty,
 		row::{empty_state_row, setting_row},
 	},
 };
@@ -46,8 +46,8 @@ pub fn render_usage_page(
 
 	let Some(totals) = &state.usage else {
 		return container.child(empty_state_row(
-			"No usage data recorded for active session.",
-			"Submit a prompt in the composer to begin session accounting",
+			empty::USAGE.condition,
+			empty::USAGE.action,
 			geometry,
 			tokens,
 		));

@@ -9,7 +9,7 @@ use crate::{
 	Intent, ShellView,
 	controls::ControlStates,
 	settings::{
-		SettingsState,
+		SettingsState, empty,
 		row::{empty_state_row, setting_row_with_secondary},
 	},
 };
@@ -31,8 +31,8 @@ pub fn render_mcp_page(
 
 	if state.mcp.is_empty() {
 		return container.child(empty_state_row(
-			"No MCP servers configured.",
-			"Declare a server in .veyyon/mcp.json in the project, or in the profile's agent/mcp.json",
+			empty::MCP.condition,
+			empty::MCP.action,
 			geometry,
 			tokens,
 		));

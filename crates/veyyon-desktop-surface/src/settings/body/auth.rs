@@ -12,7 +12,7 @@ use crate::{
 	Intent, ShellView,
 	controls::{Availability, ControlStates, availability_style},
 	settings::{
-		SettingsState,
+		SettingsState, empty,
 		row::{empty_state_row, setting_row, setting_row_with_secondary},
 	},
 };
@@ -49,8 +49,8 @@ pub fn render_auth_page(
 
 	let Some(flow) = &state.auth_flow else {
 		return container.child(empty_state_row(
-			"No active authentication flow.",
-			"Select Sign in on a provider under Settings ▸ Providers to begin authentication",
+			empty::AUTHENTICATION.condition,
+			empty::AUTHENTICATION.action,
 			geometry,
 			tokens,
 		));

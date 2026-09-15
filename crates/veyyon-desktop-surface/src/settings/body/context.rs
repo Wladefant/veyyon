@@ -8,7 +8,7 @@ use veyyon_gpui::{Div, ParentElement, Styled, div};
 use crate::{
 	controls::ControlStates,
 	settings::{
-		SettingsState,
+		SettingsState, empty,
 		row::{empty_state_row, setting_row},
 	},
 };
@@ -40,9 +40,8 @@ pub fn render_context_page(
 
 	let Some(ctx) = &state.context else {
 		return container.child(empty_state_row(
-			"No context window breakdown available.",
-			"Host capability ContextBreakdown reported no data; submit a prompt in the composer to \
-			 calculate allocation",
+			empty::CONTEXT_BREAKDOWN.condition,
+			empty::CONTEXT_BREAKDOWN.action,
 			geometry,
 			tokens,
 		));

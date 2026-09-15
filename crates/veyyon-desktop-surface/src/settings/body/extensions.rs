@@ -12,7 +12,7 @@ use crate::{
 	Intent, ShellView,
 	controls::{ControlStates, availability_style},
 	settings::{
-		SettingsState,
+		SettingsState, empty,
 		row::{empty_state_row, setting_row},
 	},
 	shell::fields::FieldSlots,
@@ -64,8 +64,8 @@ pub fn render_extensions_page(
 
 	if state.extensions.is_empty() {
 		return container.child(empty_state_row(
-			"No extensions or subagents registered.",
-			"Start a task using the field above, or declare an extension in ~/.veyyon/config.yml",
+			empty::EXTENSIONS.condition,
+			empty::EXTENSIONS.action,
 			geometry,
 			tokens,
 		));

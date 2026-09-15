@@ -13,7 +13,7 @@ use crate::{
 	controls::{Availability, ControlStates},
 	model::AppearanceChoice,
 	settings::{
-		SettingsState,
+		SettingsState, empty,
 		row::{empty_state_row, setting_row},
 	},
 	tokens::ThemeLibrary,
@@ -150,9 +150,8 @@ pub fn render_themes_page(
 		.is_none_or(|themes| themes.themes.is_empty())
 	{
 		container = container.child(empty_state_row(
-			"No themes reported by host.",
-			"Host capability Themes reported an empty catalog; install themes or verify host theme \
-			 discovery",
+			empty::THEMES.condition,
+			empty::THEMES.action,
 			geometry,
 			tokens,
 		));

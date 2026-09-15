@@ -10,7 +10,7 @@ use crate::{
 	Intent, ShellView,
 	controls::ControlStates,
 	settings::{
-		SettingsState,
+		SettingsState, empty,
 		row::{empty_state_row, setting_row, setting_row_with_secondary},
 	},
 };
@@ -33,9 +33,8 @@ pub fn render_diagnostics_page(
 
 	let Some(diag_json) = &state.diagnostics else {
 		return container.child(empty_state_row(
-			"No diagnostic information available.",
-			"Host capability Diagnostics reported no telemetry; verify host connection or inspect \
-			 service health",
+			empty::DIAGNOSTICS.condition,
+			empty::DIAGNOSTICS.action,
 			geometry,
 			tokens,
 		));
