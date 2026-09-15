@@ -7,6 +7,7 @@
  * declarations, not a two-thousand-line object every command in the product shares.
  */
 import { COLLAB_GUEST_ALLOWED_COMMANDS } from "../collab/guest-commands";
+
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../discovery/helpers.js";
 import { bareInvocationShowsSubcommands } from "./bare-subcommand";
 import { BUILTIN_SLASH_COMMAND_CATEGORIES } from "./builtin-categories";

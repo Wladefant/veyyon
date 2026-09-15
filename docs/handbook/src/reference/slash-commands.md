@@ -137,7 +137,7 @@ act on a bare invocation: `/yolo`, `/fast`, and `/browser` flip a switch, `/goal
 | `/account switch <provider>` | Open the manager focused on one provider, to move that provider to another of your accounts |
 | `/statusline` | Settings UI, jumped to Status Line (preset/segments/separator) |
 | `/reload-plugins` | Reload extensions |
-| `/reload-config` | Reload model and effort defaults for new subagents (keeps running agents unchanged) |
+| `/reload-config`, `/reload` | Reload model and effort defaults for new subagents and reload loaded extensions |
 | `/trust` | Decide whether this project's code may run; `approve`, `deny`, `forget`, or a path ([Project trust](./project-trust.md)) |
 | `/force <tool> [prompt]` (`/force:`) | Force the next turn to use a specific tool |
 

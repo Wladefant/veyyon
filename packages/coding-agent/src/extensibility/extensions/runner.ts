@@ -13,6 +13,8 @@ import type { MemoryRuntimeContext } from "../../memory/backend";
 import { type Theme, theme } from "../../theme/theme";
 import type { BranchHandler, NavigateTreeHandler, NewSessionHandler } from "../session-handler-types";
 import { createExtensionModelQuery } from "./model-api";
+import { EventBus } from "../../utils/event-bus";
+import { loadExtension } from "./loader";
 import type {
 	AfterProviderResponseEvent,
 	AssistantThinkingRenderer,
@@ -30,6 +32,7 @@ import type {
 	ExtensionContext,
 	ExtensionContextActions,
 	ExtensionError,
+	ExtensionReloadResult,
 	ExtensionEvent,
 	ExtensionFlag,
 	ExtensionRuntime,
@@ -270,6 +273,9 @@ export class ExtensionRunner {
 	 * {@link MAX_PENDING_CREDENTIAL_DISABLED}; oldest entries are dropped under pressure.
 	 */
 	#pendingCredentialDisabled: CredentialDisabledEvent[] = [];
+	#eventBus: EventBus;
+	#adoptSpawnedPid?: (pid: number) => void;
+	#gateSpawn?: (what: string) => Promise<void>;
 
 	constructor(
 		private readonly extensions: LoadedExtension[],
@@ -281,9 +287,15 @@ export class ExtensionRunner {
 		private readonly settings?: Settings,
 		private readonly localProtocolOptions?: LocalProtocolOptions,
 		identity?: ExtensionRunnerIdentityOptions,
+		eventBus?: EventBus,
+		adoptSpawnedPid?: (pid: number) => void,
+		gateSpawn?: (what: string) => Promise<void>,
 	) {
 		this.#uiContext = noOpUIContext;
 		this.#getMemoryFn = getMemory;
+		this.#eventBus = eventBus ?? new EventBus();
+		this.#adoptSpawnedPid = adoptSpawnedPid;
+		this.#gateSpawn = gateSpawn;
 		if (identity) {
 			this.#taskDepth = identity.taskDepth ?? 0;
 			this.#parentTaskPrefix = identity.parentTaskPrefix;
@@ -413,6 +425,108 @@ export class ExtensionRunner {
 
 	getExtensionPaths(): string[] {
 		return this.extensions.map(e => e.path);
+	}
+
+	/**
+	 * Hot-reloads file-based extensions:
+	 * 1. For each loaded extension, emit session_shutdown to its hooks.
+	 * 2. Re-import extension module with cache-busting and re-load extension.
+	 * 3. On failure: retain existing hooks and report failure.
+	 * 4. On success: replace old extension, emit session_start with live session context,
+	 *    register any new providers, and report success with hook count.
+	 */
+	async reloadExtensions(
+		customLoader?: (path: string) => Promise<{ extension: LoadedExtension | null; error: string | null }>,
+	): Promise<ExtensionReloadResult[]> {
+		const results: ExtensionReloadResult[] = [];
+		const targetExtensions = this.extensions.filter(ext => !ext.path.startsWith("<inline"));
+
+		for (const ext of targetExtensions) {
+			// 1. Emit session_shutdown to that extension's hooks
+			const shutdownHandlers = ext.handlers.get("session_shutdown");
+			if (shutdownHandlers && shutdownHandlers.length > 0) {
+				const ctx = this.createContext();
+				const timeoutMs = handlerTimeoutForEvent("session_shutdown");
+				await Promise.all(
+					shutdownHandlers.map(handler =>
+						this.#runHandlerWithTimeout(handler, { type: "session_shutdown" }, ctx, ext, timeoutMs),
+					),
+				);
+			}
+
+			// 2. Re-import with cache-bust & load new extension
+			let loadedResult: { extension: LoadedExtension | null; error: string | null };
+			try {
+				if (customLoader) {
+					loadedResult = await customLoader(ext.path);
+				} else {
+					loadedResult = await loadExtension(
+						ext.path,
+						this.cwd,
+						this.#eventBus,
+						this.runtime,
+						this.#adoptSpawnedPid,
+						this.#gateSpawn,
+					);
+				}
+			} catch (err) {
+				loadedResult = { extension: null, error: errorMessage(err) };
+			}
+
+			// 3. Handle failure: keep old hooks, do not crash or abort others
+			if (!loadedResult.extension || loadedResult.error) {
+				results.push({
+					path: ext.path,
+					status: "failed",
+					error: loadedResult.error ?? "Failed to load extension",
+				});
+				continue;
+			}
+
+			const newExtension = loadedResult.extension;
+
+			// 4. Success: replace old extension registrations with new extension registrations
+			const index = this.extensions.indexOf(ext);
+			if (index !== -1) {
+				this.extensions[index] = newExtension;
+			} else {
+				this.extensions.push(newExtension);
+			}
+
+			// 5. Emit session_start to new extension's hooks with live session context
+			const startHandlers = newExtension.handlers.get("session_start");
+			if (startHandlers && startHandlers.length > 0) {
+				const ctx = this.createContext();
+				const timeoutMs = handlerTimeoutForEvent("session_start");
+				await Promise.all(
+					startHandlers.map(handler =>
+						this.#runHandlerWithTimeout(handler, { type: "session_start" }, ctx, newExtension, timeoutMs),
+					),
+				);
+			}
+
+			// 6. Register any new providers
+			if (this.runtime.pendingProviderRegistrations.length > 0) {
+				for (const { name, config, sourceId } of this.runtime.pendingProviderRegistrations) {
+					this.modelRegistry.registerProvider(name, config, sourceId);
+				}
+				this.runtime.pendingProviderRegistrations = [];
+			}
+
+			// 7. Count hooks in newExtension
+			let hookCount = 0;
+			for (const list of newExtension.handlers.values()) {
+				hookCount += list.length;
+			}
+
+			results.push({
+				path: ext.path,
+				status: "reloaded",
+				hookCount,
+			});
+		}
+
+		return results;
 	}
 
 	/** Get all registered tools from all extensions. */

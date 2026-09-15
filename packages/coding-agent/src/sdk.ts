@@ -2354,6 +2354,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				agentId: sessionIsSpawned ? resolvedAgentId : undefined,
 				parentTaskPrefix: options.parentTaskPrefix,
 			},
+			eventBus,
+			adoptSpawnedPid,
+			gateSpawn,
 		);
 
 		credentialDisabledTarget = extensionRunner;
