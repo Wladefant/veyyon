@@ -10,7 +10,7 @@ pub enum ChangeScope {
 }
 
 /// Status classification for a modified path within a git repository.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum::EnumIter)]
 pub enum ChangeStatus {
 	/// Newly added file.
 	Added,

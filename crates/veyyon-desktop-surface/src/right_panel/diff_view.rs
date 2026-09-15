@@ -7,11 +7,11 @@ use veyyon_desktop_kit::{
 	ColorRole, Divider, RadiusStep, SpacingStep, StrokeStep, TextRamp, TextWeight, TintRole,
 	TokenSet,
 };
-use veyyon_desktop_model::DiffMode;
+use veyyon_desktop_model::{ChangeStatus, DiffMode};
 use veyyon_desktop_tokens::PanelsSurfaceTokens;
 use veyyon_gpui::{
-	Context, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
-	Window, div, px,
+	Context, Hsla, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement,
+	Styled, Window, div, px,
 };
 
 use crate::{
@@ -136,6 +136,24 @@ pub fn diff_view(
 	container
 }
 
+/// The badge a changed file's status draws beside its path, and the colour it
+/// draws in (§5.11).
+///
+/// An ordinary modification draws none: the added and deleted counts on the
+/// same row already state what happened to it, so a badge reading `modified`
+/// would repeat them. Every other status is a thing the counts cannot state.
+#[must_use]
+pub fn status_badge(status: ChangeStatus, tokens: &TokenSet) -> Option<(&'static str, Hsla)> {
+	match status {
+		ChangeStatus::Added => Some(("new", tokens.tint(TintRole::Done).ink)),
+		ChangeStatus::Deleted => Some(("deleted", tokens.tint(TintRole::Error).ink)),
+		ChangeStatus::Renamed => Some(("renamed", tokens.color(ColorRole::Secondary))),
+		ChangeStatus::Conflicted => Some(("conflict", tokens.tint(TintRole::Error).ink)),
+		ChangeStatus::Untracked => Some(("untracked", tokens.color(ColorRole::Muted))),
+		ChangeStatus::Modified => None,
+	}
+}
+
 fn file_header(
 	file: &DiffFile,
 	reviews: &ReviewCounts,
@@ -151,23 +169,7 @@ fn file_header(
 		.old_path
 		.as_deref()
 		.map_or_else(|| file.path.clone(), |old| format!("{old} → {}", file.path));
-	let status_badge = match file.status {
-		veyyon_desktop_model::ChangeStatus::Renamed => {
-			Some(("renamed", tokens.color(ColorRole::Secondary)))
-		},
-		veyyon_desktop_model::ChangeStatus::Added => Some(("new", tokens.tint(TintRole::Done).ink)),
-		veyyon_desktop_model::ChangeStatus::Deleted => {
-			Some(("deleted", tokens.tint(TintRole::Error).ink))
-		},
-		veyyon_desktop_model::ChangeStatus::Conflicted => {
-			Some(("conflict", tokens.tint(TintRole::Error).ink))
-		},
-		veyyon_desktop_model::ChangeStatus::Untracked => {
-			Some(("untracked", tokens.color(ColorRole::Muted)))
-		},
-		veyyon_desktop_model::ChangeStatus::Modified => None,
-	};
-	let status_el = status_badge.map(|(label, color)| {
+	let status_el = status_badge(file.status, tokens).map(|(label, color)| {
 		div()
 			.flex_shrink_0()
 			.px(tokens.spacing(SpacingStep::S1))
