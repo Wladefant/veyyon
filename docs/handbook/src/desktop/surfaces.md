@@ -787,6 +787,56 @@ row that left the last snapshot, a model the host withdrew, and a row index
 that is not a hunk header each close it rather than drawing a card with no
 facts under it.
 
+## Settings
+
+`Primary-,` opens the settings dialog, as do the command palette's `settings`
+row and the gear on the rail footer. It holds ten pages: General, Themes,
+Keybindings, Providers, Authentication, MCP Servers, Extensions, Diagnostics,
+Usage & Costs, and Context Breakdown.
+
+Every page draws one row shape: a 44px row with a 14/20 label, one 16px line of
+description truncated to the row's width, and a 240px control column at the
+trailing edge. The rest of a truncated description opens under the pointer or
+the keyboard. A row the session cannot change is drawn at reduced opacity and
+takes no press, stating the reason; a row whose request is in flight blocks a
+second submission until the host answers.
+
+The control is the setting's type:
+
+| Type | Control |
+| --- | --- |
+| Boolean | Toggle |
+| Number with declared bounds | Slider, with the exact value beside it |
+| Number without bounds | Number input |
+| Enum of two choices | Radio pair |
+| Enum of three to five choices | Segmented control |
+| Enum of six or more choices | Select |
+| Array with declared choices | One checkbox per choice |
+| Record, model chain, or free-form array | Text area |
+| String naming a filesystem location | Path field with a file picker |
+| Any other string | Text field |
+
+A setting with no value and no default draws its control empty rather than
+being left off the page.
+
+### Searching the General page
+
+The General page searches in place. A query matches a setting's key, label,
+description or group, and the matches stay under their section headers. A query
+nothing matches states `No settings matching "<query>"` and `Clear or edit the
+search query`.
+
+A setting whose `ui.condition` is unmet is absent from the page rather than
+drawn inert, so an experimental feature's dependent knobs appear when its master
+toggle is on and not before. When the host reports settings but every one of
+them is conditioned away, the page states `No configurable settings available.`
+and where the file that configures them is.
+
+A value the host rejects is stated in one row above the page, which the list
+cannot scroll out of sight, and the control that sent it is marked invalid
+while it holds what was typed. A refusal whose row is out of view is announced
+on the card stack.
+
 ## Announcements
 
 Three things happen where the window draws nothing: a request the host
