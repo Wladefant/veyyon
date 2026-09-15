@@ -204,15 +204,13 @@ codex-chatgpt-web setup --browser-only --acknowledge-unofficial
 
 ## 7. Failure Modes & Resolutions
 
-### 7.1 Host Memory Pressure and Bridge Native Process Deadlines
+### 7.1 Host Resource Pressure and Bridge Native Process Deadlines
 - **Reference**: [Issue #31](https://github.com/Wladefant/veyyon/issues/31)
-- **Symptom**: During high system RAM usage (peak > 85–88%), `browser-process` or native process supervisors fail with `Missing native helper pids.json` or `Owned browser process did not exit after forced termination` due to OS scheduling starvation.
+- **Symptom**: Under heavy host memory pressure or concurrent process load, `browser-process` or native process supervisors may fail with `Missing native helper pids.json` or `Owned browser process did not exit after forced termination` due to process scheduling latency and supervisor startup deadlines.
 - **Resolution**:
-  1. Check host RAM before launching native supervisors or full suites: ensure available memory > 15% (RAM < 85%).
-  2. Terminate orphaned Chrome instances and dev servers before execution.
-  3. Arbitrate native supervisor compilation via the exclusive build slot protocol:
-     `python C:/Users/wkiri/.veyyon/workflows/build_slot.py acquire <name> --timeout 900`
-     and release immediately after completion.
+  1. Ensure sufficient free system memory and CPU headroom are available before launching native supervisors or full suites.
+  2. Terminate orphaned Chrome or browser instances and stale background dev servers before execution.
+  3. Avoid running concurrent heavy compilation or test jobs that compete for native process deadlines; run resource-intensive workloads sequentially.
 
 ### 7.2 Windows Packaging Missing Node Distribution LICENSE
 - **Reference**: [Issue #33](https://github.com/Wladefant/veyyon/issues/33)
@@ -265,13 +263,13 @@ The following live, interactive, and external account operations were not execut
 
 ## 9. Offline Verification Evidence
 
-Executed in `C:/Users/wkiri/development/codex-chatgpt-web`:
+Executed in `<repo-dir>/codex-chatgpt-web`:
 
 ### 9.1 Bridge Diagnostics (`bun run doctor`)
 ```console
 $ bun run doctor
 $ bun run src/cli.ts doctor
-✓ Configuration is valid (C:\Users\wkiri\.codex-chatgpt-web\config.json)
+✓ Configuration is valid (<profile-dir>/config.json)
 ✓ Chrome executable found: C:\Program Files\Google\Chrome\Application\chrome.exe
 ✓ ChatGPT login state has authenticated browser evidence
 ✗ Codex model route is not installed
