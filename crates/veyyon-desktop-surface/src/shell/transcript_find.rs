@@ -1,13 +1,11 @@
 //! In-transcript find floating toolbar and `ShellView` lifecycle (§5.2, §5.3,
 //! §5.14).
 
-use std::time::Instant;
-
 use veyyon_desktop_kit::{
 	controls::{IconButton, IconButtonVariant},
 	icons::{Icon, IconName, IconSize},
 	input::{Editor, EditorEvent, EditorMode},
-	token_set::{ColorRole, RadiusStep, SpacingStep, TextRamp, TokenSet},
+	token_set::{ColorRole, RadiusStep, SpacingStep, StrokeStep, TextRamp, TokenSet},
 };
 use veyyon_gpui::{
 	Context, Entity, InteractiveElement, IntoElement, ParentElement, Styled, Window, div, prelude::*,
@@ -35,11 +33,11 @@ impl ShellView {
 						&view.transcript_viewport,
 						&view.installed.motion,
 						reduced,
-						Instant::now(),
+						cx.background_executor().now(),
 					);
 				},
 				EditorEvent::Submit => {
-					view.transcript_find_next();
+					view.transcript_find_next(cx);
 				},
 				EditorEvent::Escape => {
 					view.dismiss_transcript_find(cx);
@@ -95,24 +93,24 @@ impl ShellView {
 	}
 
 	/// Advances to the next matching hit in the transcript.
-	pub fn transcript_find_next(&mut self) {
+	pub fn transcript_find_next(&mut self, cx: &mut Context<Self>) {
 		let reduced = self.rail_motion.is_reduced_motion();
 		self.find_state.next_match(
 			&self.transcript_viewport,
 			&self.installed.motion,
 			reduced,
-			Instant::now(),
+			cx.background_executor().now(),
 		);
 	}
 
 	/// Jumps to the previous matching hit in the transcript.
-	pub fn transcript_find_prev(&mut self) {
+	pub fn transcript_find_prev(&mut self, cx: &mut Context<Self>) {
 		let reduced = self.rail_motion.is_reduced_motion();
 		self.find_state.prev_match(
 			&self.transcript_viewport,
 			&self.installed.motion,
 			reduced,
-			Instant::now(),
+			cx.background_executor().now(),
 		);
 	}
 
@@ -153,7 +151,7 @@ impl ShellView {
 			.px(s2)
 			.py(s2 * 0.5)
 			.bg(tokens.color(ColorRole::Float))
-			.border_1()
+			.border(tokens.stroke(StrokeStep::Hairline))
 			.border_color(tokens.color(ColorRole::Hairline))
 			.rounded(r_med)
 			.child(
@@ -177,7 +175,7 @@ impl ShellView {
 					.on_click(move |_, _, cx| {
 						if let Some(view) = weak_prev.upgrade() {
 							view.update(cx, |this, cx| {
-								this.transcript_find_prev();
+								this.transcript_find_prev(cx);
 								cx.notify();
 							});
 						}
@@ -190,7 +188,7 @@ impl ShellView {
 					.on_click(move |_, _, cx| {
 						if let Some(view) = weak_next.upgrade() {
 							view.update(cx, |this, cx| {
-								this.transcript_find_next();
+								this.transcript_find_next(cx);
 								cx.notify();
 							});
 						}
