@@ -55,6 +55,21 @@ impl Markdown {
 	}
 }
 
+/// The count of contiguous bytes of `delimiter` starting at `at`, which is how
+/// a run of inline markers is measured.
+///
+/// `veyyon-desktop-model` states the same count for the streaming parser that
+/// mends an unterminated shape. The two are separate on purpose: §8.2 admits no
+/// edge from the kit to the model, so a primitive both layers read is defined
+/// in each rather than reached across. Change one and change the other.
+#[must_use]
+pub fn run_len(bytes: &[u8], at: usize, delimiter: u8) -> usize {
+	bytes[at..]
+		.iter()
+		.take_while(|byte| **byte == delimiter)
+		.count()
+}
+
 /// The first block that has text on it, with every marker off, for a surface
 /// that draws one unstyled line of a document: a status line, a card's title.
 /// Empty when the document has no text.
@@ -65,10 +80,20 @@ pub fn plain_line(source: &str) -> String {
 		.find_map(|block| {
 			let text = match block {
 				MdBlock::Heading { text, .. }
-				| MdBlock::Quote(text)
 				| MdBlock::Paragraph(text)
 				| MdBlock::Bullet { text, .. } => crate::text::inline::plain(text),
-				MdBlock::Code { lines, .. } => lines.first().cloned().unwrap_or_default(),
+				MdBlock::Quote(text) => {
+					let mut body = text.as_str();
+					while let Some(rest) = body.strip_prefix('>') {
+						body = rest.trim_start();
+					}
+					crate::text::inline::plain(body)
+				},
+				MdBlock::Code { lines, .. } => lines
+					.iter()
+					.find(|line| !line.trim().is_empty())
+					.cloned()
+					.unwrap_or_default(),
 				// A table's first line is its header, which states what the rows are
 				// of rather than what any one row holds.
 				MdBlock::Table { head, .. } => crate::text::inline::plain(&head.join(" ")),
@@ -203,5 +228,8 @@ mod tests {
 		assert_eq!(plain_line("```sh\ncargo test\n```"), "cargo test");
 		assert_eq!(plain_line(""), "");
 		assert_eq!(plain_line("\n \n"), "");
+		assert_eq!(plain_line("| Col 1 | Col 2 |\n|---|---|\n| a | b |"), "Col 1 Col 2");
+		assert_eq!(plain_line("```sh\n\n  cargo test\n```"), "cargo test");
+		assert_eq!(plain_line(">>> nested quote"), "nested quote");
 	}
 }

@@ -16,10 +16,11 @@ use std::ops::Range;
 
 use veyyon_gpui::{
 	AnyElement, FontStyle, FontWeight, HighlightStyle, IntoElement, Pixels, SharedString,
-	StyledText, UnderlineStyle, div, prelude::*, px,
+	StyledText, UnderlineStyle, div, prelude::*,
 };
 
-use crate::token_set::{ColorRole, TokenSet};
+use super::markdown::run_len;
+use crate::token_set::{ColorRole, StrokeStep, TokenSet};
 
 /// What one span of prose is set in. A span carries every emphasis enclosing
 /// it, so the `b` of `**a _b_**` is both strong and italic.
@@ -180,8 +181,11 @@ pub fn span_style(emphasis: Emphasis, tokens: &TokenSet) -> HighlightStyle {
 	if emphasis.link {
 		let accent = tokens.color(ColorRole::Accent);
 		style.color = Some(accent);
-		style.underline =
-			Some(UnderlineStyle { thickness: px(1.0), color: Some(accent), wavy: false });
+		style.underline = Some(UnderlineStyle {
+			thickness: tokens.stroke(StrokeStep::Hairline),
+			color:     Some(accent),
+			wavy:      false,
+		});
 	}
 	if emphasis.muted {
 		style.color = Some(tokens.color(ColorRole::Muted));
@@ -267,11 +271,6 @@ fn closer(bytes: &[u8], fate: &[Fate], from: usize, delimiter: u8, width: usize)
 		at += 1;
 	}
 	None
-}
-
-/// The bytes of one run of `delimiter` starting at `at`.
-fn run_len(bytes: &[u8], at: usize, delimiter: u8) -> usize {
-	bytes[at..].iter().take_while(|b| **b == delimiter).count()
 }
 
 /// A `[text](target)` link: the brackets go, the closing one leaving the space
