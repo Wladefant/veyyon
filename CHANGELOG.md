@@ -598,6 +598,8 @@
 
 - The desktop General settings search field takes the keyboard and narrows the page as it is typed, where it drew the query as static text and discarded every keystroke; `Escape` widens a narrowed page before it leaves it.
 - A desktop surface with nothing on it states a step an operator can take: the Usage tenant states the prompt that starts accounting, and a clean working tree the edit or the staged scope, where one predicted what would appear and the other restated its own condition.
+- The desktop session rail states a step over an empty list instead of its own condition twice: a filter that matched nothing states how to clear it, and a rail with no session states how to start one.
+- Six desktop settings pages open their empty-page step on the action to take rather than on the host capability that reported nothing, and a settings condition is punctuated like the surfaces beside it.
 - A desktop session tells the model its picture reached the screen, where the GUI host installed no image-display answer and every tool result carrying an image stated that the user could not see it.
 - A setting with no value and no default — a memory database path nobody set, an agent model chain left to the session's model — reaches the desktop settings page, where 13 rows the terminal screen offers were dropped from the snapshot entirely.
 - The desktop settings page resolves a setting's `ui.condition` through the same table the terminal reads, where its own copy answered 27 of the 29 declared names and drew the auto-thinking and inline-image knobs the terminal hides.

@@ -1,22 +1,24 @@
 //! WHY: the empty states outside the settings sheet were literals beside the
 //! branch that drew them, one pair per view. The Usage tenant predicted what
-//! would appear instead of stating a step, and the clean working tree restated
-//! its own condition where the step belongs. Nothing compared the sentences of
-//! one tenant with another's, so a tenant added to the panel drew whatever its
-//! author remembered.
+//! would appear instead of stating a step, the clean working tree restated its
+//! own condition where the step belongs, and the rail's narrowed state restated
+//! its condition and left the step to a button label. Nothing compared the
+//! sentences of one surface with another's, so a surface added to the shell
+//! drew whatever its author remembered.
 //!
-//! CLASS CLOSED: every empty state the panel, the drawer, the palette and the
-//! review popover draw is one definition, `right_panel::empty::EmptySurface`,
-//! and the sweep here is over `EmptySurface::iter()`:
+//! CLASS CLOSED: every empty state the panel, the rail, the drawer, the palette
+//! and the review popover draw is one definition, `empty::EmptySurface`, and
+//! the sweep here is over `EmptySurface::iter()`:
 //! 1. Every variant states a condition and a step, and the step is distinct
 //!    from the condition.
-//! 2. A step is a step rather than a prediction or the condition again: no
-//!    variant states what will appear, is shown, or is displayed, which is the
-//!    defect the Usage tenant shipped, and every step opens on a verb from a
-//!    recorded list, which is what the clean working tree's second copy of its
-//!    own condition failed. A new step whose verb is not on the list turns this
-//!    red, as does a third variant reporting progress instead of a step: the
-//!    two loading panes are pinned by exact equality.
+//! 2. A step is a step rather than a prediction or the condition again, judged
+//!    by `support::empty_prose`, the one vocabulary the settings sheet's sweep
+//!    reads as well: no variant states what will appear, is shown, or is
+//!    displayed, which is the defect the Usage tenant shipped, and every step
+//!    opens on a verb recorded there, which is what the clean working tree's
+//!    second copy of its own condition failed. A new step whose verb is not
+//!    recorded turns this red, as does a third variant reporting progress
+//!    instead of a step: the two loading panes are pinned by exact equality.
 //! 3. Every variant is drawn by the surface it belongs to. The state each one
 //!    needs comes from an exhaustive match, so a variant added to the enum does
 //!    not compile until a reachable state is stated for it, and a variant whose
@@ -24,15 +26,19 @@
 //! 4. A surface with rows draws neither sentence, so the empty state is a
 //!    condition rather than a fixture the surface always draws.
 //!
-//! NOT CAUGHT: the wording of a sentence, which no test can judge; the settings
-//! sheet's own empty states, which
+//! NOT CAUGHT: the wording of a sentence, which no test can judge; the label on
+//! the button the rail offers beside its step, which is the kit's copy rather
+//! than an empty state's; the settings sheet's own empty states, which
 //! `a-settings-page-with-nothing-on-it-states-the-condition-and-the-step.rs`
 //! sweeps; and where on the surface the two lines sit, which the surface
 //! ceiling suites measure.
 
+mod support;
+
 use std::path::Path;
 
 use strum::IntoEnumIterator;
+use support::empty_prose::{Prose, judge, squeezed};
 use veyyon_desktop_kit::{load_bundled_theme, load_bundled_tokens};
 use veyyon_desktop_model::ChangeScope;
 use veyyon_desktop_scene::{
@@ -41,11 +47,11 @@ use veyyon_desktop_scene::{
 };
 use veyyon_desktop_surface::{
 	ConnectionPhase, DiffStatus, DrawerContent, DrawerTab, Keymap, Overlay, PanelContent, PanelTab,
-	ShellState, ShellView, TreeContent, TreeStatus,
-	empty::EmptyCopy,
+	Row, Section, ShellState, ShellView, TreeContent, TreeStatus,
+	empty::{EmptyCopy, EmptySurface},
 	install_tokens,
 	palette::{PaletteMode, PaletteState},
-	right_panel::{EmptySurface, highlight_source},
+	right_panel::highlight_source,
 };
 use veyyon_gpui::{App, AppContext, Point, px};
 
@@ -90,6 +96,23 @@ fn palette_state(mut palette: PaletteState, query: &str) -> ShellState {
 		overlay: Some(Overlay::Palette(palette)),
 		..ShellState::default()
 	}
+}
+
+/// One session for the rail to hold, which a filter then narrows away.
+fn rail_row() -> Row {
+	Row {
+		id:        7,
+		title:     "first".to_owned(),
+		subtitle:  String::new(),
+		badge:     None,
+		meta:      None,
+		placement: Section::Live,
+	}
+}
+
+/// The shell with `sections` in its rail and nothing open.
+fn rail_state(sections: Vec<(Section, Vec<Row>)>) -> ShellState {
+	ShellState { connection: ConnectionPhase::Attached, sections, ..ShellState::default() }
 }
 
 /// A state each variant's surface is drawn from, with nothing in it.
@@ -150,6 +173,15 @@ fn state_for(surface: EmptySurface) -> ShellState {
 			},
 			..ShellState::default()
 		},
+		// The rail is drawn at every width this suite renders at, so a state
+		// with no row in it reaches the empty view. A filter that matches
+		// nothing narrows a rail that does have a row.
+		EmptySurface::QueueFiltered => {
+			let mut state = rail_state(vec![(Section::Live, vec![rail_row()])]);
+			state.keymap.queue_filter = Some("no-session-carries-this".to_owned());
+			state
+		},
+		EmptySurface::QueueEmpty => rail_state(Vec::new()),
 	}
 }
 
@@ -192,75 +224,20 @@ fn drawn_text(captured: &Captured) -> String {
 		.collect()
 }
 
-/// `sentence` without its whitespace, which is how it is looked for.
-fn squeezed(sentence: &str) -> String {
-	sentence.chars().filter(|c| !c.is_whitespace()).collect()
-}
-
 #[test]
 fn every_surface_states_a_condition_and_a_step_distinct_from_it() {
-	let progress = states_progress();
-	for surface in EmptySurface::iter() {
-		let EmptyCopy { condition, action } = surface.copy();
-		assert!(!condition.trim().is_empty(), "{surface:?} states an empty condition");
-		assert!(!action.trim().is_empty(), "{surface:?} states an empty step");
-		assert_ne!(
-			squeezed(condition).to_lowercase(),
-			squeezed(action).to_lowercase(),
-			"{surface:?} restates its condition where the step belongs"
-		);
-		// A step states what to do and where, which takes four words. A pane
-		// reporting a read in flight states the read, which is shorter; the
-		// recorded set of those is pinned in the test below.
-		if !progress.contains(&surface) {
-			assert!(
-				action.split_whitespace().count() >= 4,
-				"{surface:?} states {action:?} as its step, which is too short to state an action"
-			);
-		}
-	}
-}
-
-#[test]
-fn a_step_opens_with_something_to_do_rather_than_a_prediction_or_a_restatement() {
 	// The Usage tenant shipped "will appear after the first turn", which an
 	// operator can do nothing with, and the clean working tree shipped "No
 	// uncommitted modifications in this workspace", which is the condition
-	// again in other words. Both classes are looked for here rather than the
-	// two sentences they were written in: a prediction by the phrasings that
-	// carry one, and a restatement by the word the step opens with, since a
-	// sentence that opens on a noun or a negation is describing rather than
-	// asking for anything.
-	const PREDICTIONS: [&str; 6] =
-		["will appear", "will be", "appears here", "is shown", "is displayed", "once available"];
-	/// The verbs a step opens with, which is the record of what counts as one.
-	/// A surface whose step opens on anything else turns this red until its
-	/// verb is written down here.
-	const STEP_VERBS: [&str; 11] = [
-		"attach", "check", "clear", "click", "create", "edit", "open", "select", "send", "sign",
-		"start",
-	];
-	/// The openers that report a read in flight instead of a step.
-	const PROGRESS_VERBS: [&str; 4] = ["building", "inspecting", "loading", "scanning"];
+	// again in other words. `support::empty_prose` looks for both classes
+	// rather than the two sentences they were written in, and the settings
+	// sheet's sweep judges its pages against the same vocabulary.
 	let mut progress: Vec<EmptySurface> = Vec::new();
 	for surface in EmptySurface::iter() {
-		let action = surface.copy().action.to_lowercase();
-		for prediction in PREDICTIONS {
-			assert!(
-				!action.contains(prediction),
-				"{surface:?} predicts {prediction:?} instead of stating a step"
-			);
-		}
-		let opener = action.split_whitespace().next().unwrap_or_default();
-		if PROGRESS_VERBS.contains(&opener) {
+		let EmptyCopy { condition, action } = surface.copy();
+		if judge(&format!("{surface:?}"), condition, action) == Prose::Progress {
 			progress.push(surface);
-			continue;
 		}
-		assert!(
-			STEP_VERBS.contains(&opener),
-			"{surface:?} opens its step on {opener:?}, which is neither a step to take nor a \
-			 recorded verb"
-		);
 	}
 	assert_eq!(
 		progress,

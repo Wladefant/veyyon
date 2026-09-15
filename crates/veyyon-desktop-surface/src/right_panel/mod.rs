@@ -9,7 +9,6 @@ pub mod diff_rows;
 pub mod diff_split;
 pub mod diff_toolbar;
 pub mod diff_view;
-pub mod empty;
 pub mod file_view;
 pub mod mono_pane;
 pub mod pane_scroll;
@@ -24,7 +23,6 @@ pub use content::{
 	DerivedFrom, DiffFile, DiffRow, DiffStatus, DiffWithheld, FileLine, FileView, HighlightSpan,
 	PanelContent, PanelFailure, PanelTab, TreeContent, TreeRowItem, TreeStatus,
 };
-pub use empty::{EmptySurface, empty_surface, empty_unavailable};
 pub use file_view::{file_view, highlight_source};
 pub use pane_scroll::{PaneId, PaneScrolls};
 pub use tabs::tab_strip;
@@ -40,6 +38,7 @@ use crate::{
 	ShellView,
 	controls::error_hairline,
 	damage::{LaidOut, Region},
+	empty::{EmptySurface, empty_unavailable},
 	intent::Intent,
 	keymap::actions::{NextTab, PreviousTab, ToggleDiffMode},
 };

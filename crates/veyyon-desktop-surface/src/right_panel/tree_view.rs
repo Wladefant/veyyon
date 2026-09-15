@@ -16,11 +16,9 @@ use veyyon_gpui::{
 use crate::{
 	ShellView,
 	detail::{Detail, DetailKind},
+	empty::{EmptySurface, empty_surface},
 	intent::Intent,
-	right_panel::{
-		content::{TreeContent, TreeRowItem, TreeStatus},
-		empty::{EmptySurface, empty_surface},
-	},
+	right_panel::content::{TreeContent, TreeRowItem, TreeStatus},
 };
 
 /// Renders the Tree tenant in the right panel.

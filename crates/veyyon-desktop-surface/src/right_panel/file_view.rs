@@ -18,10 +18,10 @@ use veyyon_gpui::{
 
 use crate::{
 	ShellView,
+	empty::{EmptySurface, empty_surface},
 	right_panel::{
 		content::{FileLine, FileView, HighlightSpan},
 		diff_rows::gutter_cell,
-		empty::{EmptySurface, empty_surface},
 		mono_pane::{PaneParts, pane_cell, pane_content_px, pinned_gutter_pane},
 		pane_scroll::{PaneId, PaneScrolls},
 		pane_window::{ColumnWindow, RowWalk, scrolled, text_columns, visible_pieces},

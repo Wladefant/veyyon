@@ -148,10 +148,8 @@ impl ShellView {
 			list = list.child(row);
 		}
 		if count == 0 {
-			list = list.child(crate::right_panel::empty_surface(
-				crate::right_panel::EmptySurface::ReviewThreads,
-				tokens,
-			));
+			list = list
+				.child(crate::empty::empty_surface(crate::empty::EmptySurface::ReviewThreads, tokens));
 		}
 		let mut body = div()
 			.w(size.width - inset)

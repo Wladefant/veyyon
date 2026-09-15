@@ -729,8 +729,10 @@ A tab with nothing to draw states the condition it is in and the step out of
 it, and the step follows the reason: a diff nobody requested states the scope
 to select, a clean working tree the edit or the staged scope to inspect, a
 failed read the check to make. A read in flight states what is underway
-instead, because it ends on its own. The terminal drawer's process list, the
-command palette and the review list state a step the same way.
+instead, because it ends on its own. The session rail, the terminal drawer's
+process list, the command palette and the review list state a step the same
+way, and the rail also draws it as a button: Clear filter over a filter that
+matched nothing, New Session over a rail with no session in it.
 
 The panel docks as a resizable column beside the transcript. Below 980px it
 floats at the trailing edge over the transcript, behind a blurred scrim. A

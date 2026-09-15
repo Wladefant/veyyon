@@ -39,10 +39,7 @@ pub fn process_list(
 			.flex_1()
 			.px(tokens.spacing(SpacingStep::S3))
 			.py(tokens.spacing(SpacingStep::S2))
-			.child(crate::right_panel::empty_surface(
-				crate::right_panel::EmptySurface::ProcessList,
-				tokens,
-			))
+			.child(crate::empty::empty_surface(crate::empty::EmptySurface::ProcessList, tokens))
 			.into_any_element();
 	}
 

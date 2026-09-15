@@ -16,13 +16,13 @@ use veyyon_gpui::{
 
 use crate::{
 	ShellView,
+	empty::{EmptySurface, empty_surface},
 	right_panel::{
 		content::{DiffFile, DiffStatus, DiffWithheld},
 		diff_columns::unified_columns,
 		diff_rows::{render_notice_row, withheld_notices},
 		diff_split::split_columns,
 		diff_toolbar::{diff_toolbar, stat_badge},
-		empty::{EmptySurface, empty_surface},
 		pane_scroll::{PaneId, PaneScrolls},
 		pane_window::{RowWalk, scrolled},
 		review_controls::{ReviewCounts, review_bar, review_button},

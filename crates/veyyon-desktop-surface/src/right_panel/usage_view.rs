@@ -12,7 +12,7 @@ use veyyon_gpui::{
 	Div, InteractiveElement, ParentElement, Stateful, StatefulInteractiveElement, Styled, div, px,
 };
 
-use crate::right_panel::empty::{EmptySurface, empty_surface};
+use crate::empty::{EmptySurface, empty_surface};
 
 /// Groups the digits of a count so two rows of figures can be compared.
 #[must_use]

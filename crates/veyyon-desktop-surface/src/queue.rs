@@ -10,9 +10,7 @@
 
 use std::collections::HashMap;
 
-use veyyon_desktop_kit::{
-	Button, ButtonSize, ButtonVariant, ColorRole, SpacingStep, TextRamp, TextWeight, TokenSet,
-};
+use veyyon_desktop_kit::{Button, ButtonSize, ButtonVariant, ColorRole, TokenSet};
 use veyyon_desktop_tokens::QueueSurfaceTokens;
 use veyyon_gpui::{
 	ClickEvent, Context, FocusHandle, InteractiveElement, IntoElement, ParentElement, Styled,
@@ -39,6 +37,7 @@ use crate::{
 	Intent, ShellView,
 	controls::{ControlStates, availability_style, hairline_for_weak},
 	damage::{LaidOut, Region},
+	empty::{EmptyCopy, EmptySurface, empty_state},
 	model::{Row, Section},
 };
 
@@ -282,78 +281,34 @@ pub fn queue_rail(
 	.h_full();
 
 	let list_container = if items_is_empty {
-		let empty_view = if let Some(q) = filter_query.filter(|s| !s.trim().is_empty()) {
-			div()
-				.id("queue-empty-after-filter")
-				.flex_1()
-				.w_full()
-				.flex()
-				.flex_col()
-				.items_center()
-				.justify_center()
-				.px(tokens.spacing(SpacingStep::S4))
-				.py(tokens.spacing(SpacingStep::S6))
-				.gap(tokens.spacing(SpacingStep::S2))
-				.child(
-					div()
-						.text_size(tokens.font_size(TextRamp::Small))
-						.line_height(tokens.line_height(TextRamp::Small))
-						.font_weight(tokens.font_weight(TextWeight::Medium))
-						.text_color(tokens.color(ColorRole::Foreground))
-						.child("No matching sessions"),
-				)
-				.child(
-					div()
-						.text_size(tokens.font_size(TextRamp::Micro))
-						.line_height(tokens.line_height(TextRamp::Micro))
-						.text_color(tokens.color(ColorRole::Muted))
-						.text_center()
-						.child(format!("No sessions match \"{q}\"")),
-				)
-				.child(
-					Button::new("clear-filter-btn", "Clear filter")
-						.variant(ButtonVariant::Ghost)
-						.size(ButtonSize::Small)
-						.on_click(cx.listener(|view, _event: &ClickEvent, _window, cx| {
-							view.dispatch(Intent::FindSessions(String::new()), cx);
-						})),
-				)
+		// The rail states the same two lines the panel and the sheet state, and
+		// offers the step as a button as well, because the rail is where a
+		// session is started and where a filter is cleared.
+		let filtered = filter_query.is_some_and(|q| !q.trim().is_empty());
+		let surface = if filtered {
+			EmptySurface::QueueFiltered
 		} else {
-			div()
-				.id("queue-truly-empty")
-				.flex_1()
-				.w_full()
-				.flex()
-				.flex_col()
-				.items_center()
-				.justify_center()
-				.px(tokens.spacing(SpacingStep::S4))
-				.py(tokens.spacing(SpacingStep::S6))
-				.gap(tokens.spacing(SpacingStep::S2))
-				.child(
-					div()
-						.text_size(tokens.font_size(TextRamp::Small))
-						.line_height(tokens.line_height(TextRamp::Small))
-						.font_weight(tokens.font_weight(TextWeight::Medium))
-						.text_color(tokens.color(ColorRole::Foreground))
-						.child("No sessions yet"),
-				)
-				.child(
-					div()
-						.text_size(tokens.font_size(TextRamp::Micro))
-						.line_height(tokens.line_height(TextRamp::Micro))
-						.text_color(tokens.color(ColorRole::Muted))
-						.text_center()
-						.child("Start your first task or conversation"),
-				)
-				.child(
-					Button::new("new-session-btn", "New Session")
-						.variant(ButtonVariant::Primary)
-						.size(ButtonSize::Small)
-						.on_click(cx.listener(|view, _event: &ClickEvent, _window, cx| {
-							view.dispatch(Intent::NewSession, cx);
-						})),
-				)
+			EmptySurface::QueueEmpty
+		};
+		let EmptyCopy { condition, action } = surface.copy();
+		let empty_view = if filtered {
+			empty_state(surface.id(), condition, action, tokens).child(
+				Button::new("clear-filter-btn", "Clear filter")
+					.variant(ButtonVariant::Ghost)
+					.size(ButtonSize::Small)
+					.on_click(cx.listener(|view, _event: &ClickEvent, _window, cx| {
+						view.dispatch(Intent::FindSessions(String::new()), cx);
+					})),
+			)
+		} else {
+			empty_state(surface.id(), condition, action, tokens).child(
+				Button::new("new-session-btn", "New Session")
+					.variant(ButtonVariant::Primary)
+					.size(ButtonSize::Small)
+					.on_click(cx.listener(|view, _event: &ClickEvent, _window, cx| {
+						view.dispatch(Intent::NewSession, cx);
+					})),
+			)
 		};
 		div()
 			.id("queue-scroll-container")

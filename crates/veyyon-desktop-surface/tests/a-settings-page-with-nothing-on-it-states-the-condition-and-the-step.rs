@@ -11,8 +11,10 @@
 //!    opt-out pinned by exact equality. A page added to the enum does not
 //!    compile until it declares one, and a page that opts out turns this red
 //!    until the decision is written down.
-//! 2. The step is a step: present, distinct from the condition, and more than a
-//!    restatement of it.
+//! 2. The step is a step, judged by `support::empty_prose` -- the one
+//!    vocabulary the panel's tenants are judged against as well: present,
+//!    distinct from the condition, opening on a recorded verb, and neither a
+//!    prediction of what arrives nor the condition in other words.
 //! 3. The page draws both sentences when it has nothing, in both shapes the
 //!    sheet is drawn in -- the whole dialog, and one page a command routed to
 //!    -- so a page that declares copy and never renders it fails here.
@@ -22,7 +24,8 @@
 //!    and is checked to draw them rather than to draw nothing.
 //!
 //! NOT CAUGHT: the wording of a sentence, which no test can judge; the
-//! right-hand panel's own empty states, which `right_panel/empty.rs` owns;
+//! surfaces outside the sheet, whose empty states `empty.rs` owns and
+//! `a-surface-with-nothing-on-it-states-the-condition-and-the-step.rs` sweeps;
 //! and where on the page the two lines sit, which
 //! `a-settings-row-is-the-height-it-declares-whatever-it-says.rs` measures.
 
@@ -31,7 +34,10 @@ mod support;
 use std::path::Path;
 
 use strum::IntoEnumIterator;
-use support::settings_seed::seed_state_for_page;
+use support::{
+	empty_prose::{Prose, judge, squeezed},
+	settings_seed::seed_state_for_page,
+};
 use veyyon_desktop_kit::{load_bundled_theme, load_bundled_tokens};
 use veyyon_desktop_scene::{
 	headless::{Captured, RenderOptions, headless_context},
@@ -41,7 +47,7 @@ use veyyon_desktop_surface::{
 	ConnectionPhase, Keymap, Overlay, SettingsPage, SettingsState, ShellState, ShellView,
 	install_tokens,
 	navigation::SurfaceRoute,
-	settings::empty::{EmptyCopy, empty_copy},
+	settings::empty::{EmptyCopy, GENERAL_QUERY_ACTION, empty_copy},
 };
 use veyyon_gpui::{App, AppContext};
 
@@ -115,11 +121,6 @@ fn drawn_text(captured: &Captured) -> String {
 		.collect()
 }
 
-/// `sentence` without its whitespace, which is how it is looked for.
-fn squeezed(sentence: &str) -> String {
-	sentence.chars().filter(|c| !c.is_whitespace()).collect()
-}
-
 #[test]
 fn every_page_declares_an_empty_condition_and_a_step_or_is_a_recorded_opt_out() {
 	let mut without: Vec<SettingsPage> = Vec::new();
@@ -128,22 +129,17 @@ fn every_page_declares_an_empty_condition_and_a_step_or_is_a_recorded_opt_out() 
 			without.push(page);
 			continue;
 		};
-		assert!(!condition.trim().is_empty(), "{page:?} declares an empty condition for {page:?}");
-		assert!(
-			condition.trim_end().ends_with('.'),
-			"{page:?} states its condition as a sentence, stated {condition:?}"
-		);
-		assert!(!action.trim().is_empty(), "{page:?} states no step out of its empty page");
-		assert_ne!(
-			squeezed(action),
-			squeezed(condition),
-			"{page:?} restates its condition where the step belongs"
-		);
-		assert!(
-			action.split_whitespace().count() >= 4,
-			"{page:?} states {action:?} as its step, which is too short to state an action"
+		// The same judgment the panel's tenants pass, so a page cannot state a
+		// prediction, a restatement or a full stop a panel tenant would be
+		// turned red for. No page reports a read in flight: the sheet draws
+		// rows as they arrive rather than a loading pane.
+		assert_eq!(
+			judge(&format!("{page:?}"), condition, action),
+			Prose::Step,
+			"{page:?} reports progress where a step belongs"
 		);
 	}
+	judge("the narrowed General page", "No settings matching \"x\"", GENERAL_QUERY_ACTION);
 	assert_eq!(
 		without,
 		opted_out(),

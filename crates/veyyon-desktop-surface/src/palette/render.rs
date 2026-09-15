@@ -9,7 +9,7 @@ use veyyon_desktop_tokens::PaletteSurfaceTokens;
 use veyyon_gpui::{Context, Entity, IntoElement, ParentElement, Styled, div, px};
 
 use super::{PaletteMeta, PaletteMode, PaletteState};
-use crate::{ShellView, keymap::Keymap, right_panel::EmptySurface};
+use crate::{ShellView, empty::EmptySurface, keymap::Keymap};
 
 /// Renders the palette using a real editor and rows that execute their own
 /// selected item.
@@ -63,7 +63,7 @@ pub fn palette_surface(
 		} else {
 			EmptySurface::PaletteNoMatch
 		};
-		body = body.child(crate::right_panel::empty_surface(surface, tokens));
+		body = body.child(crate::empty::empty_surface(surface, tokens));
 	}
 	// A heading takes room from the same space the rows do, so a grouped list
 	// draws fewer rows rather than growing past the surface's own ceiling, and
