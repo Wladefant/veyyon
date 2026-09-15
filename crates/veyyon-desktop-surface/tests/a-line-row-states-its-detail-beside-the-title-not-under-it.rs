@@ -96,11 +96,7 @@ fn runs_in(captured: &Captured, row: Bounds<Pixels>) -> Vec<(f32, f32, f32)> {
 			left_edge >= left - 0.5 && left_edge <= right
 		})
 		.map(|run| {
-			(
-				f32::from(run.bounds.top()),
-				f32::from(run.bounds.bottom()),
-				f32::from(run.font_size),
-			)
+			(f32::from(run.bounds.top()), f32::from(run.bounds.bottom()), f32::from(run.font_size))
 		})
 		.filter(|(run_top, run_bottom, _)| {
 			let centre = (run_top + run_bottom) / 2.0;

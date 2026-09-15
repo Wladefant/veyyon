@@ -207,7 +207,10 @@ fn every_role_in_the_enum_is_covered_or_recorded_as_unfloored() {
 		.map(|role| role.as_str())
 		.filter(|role| !covered.contains(role))
 		.collect();
-	let unfloored: Vec<&str> = NO_TEXT_FLOOR.into_iter().map(|role| role.as_str()).collect();
+	let unfloored: Vec<&str> = NO_TEXT_FLOOR
+		.into_iter()
+		.map(|role| role.as_str())
+		.collect();
 	assert_eq!(
 		uncovered, unfloored,
 		"a colour role is asserted by no contrast check: give it a floor, or record it in \

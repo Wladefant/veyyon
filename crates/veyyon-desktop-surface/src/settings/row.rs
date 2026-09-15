@@ -212,7 +212,10 @@ pub fn shorten_path(raw: &str) -> String {
 		} else {
 			path
 		}
-	} else if let Some(stripped) = path.strip_prefix("/home/").or_else(|| path.strip_prefix("/Users/")) {
+	} else if let Some(stripped) = path
+		.strip_prefix("/home/")
+		.or_else(|| path.strip_prefix("/Users/"))
+	{
 		if let Some(pos) = stripped.find('/') {
 			format!("~{}", &stripped[pos..])
 		} else {
