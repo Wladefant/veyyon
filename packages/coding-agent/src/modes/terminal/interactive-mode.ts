@@ -114,10 +114,8 @@ import {
 } from "../../session/background-sessions";
 import { setImageDisplayProbe } from "../../session/image-visibility";
 import { VibeSessionRegistry } from "../../session/vibe-runtime";
-import {
-	BUILTIN_SLASH_COMMAND_RESERVED_NAMES,
-	buildTuiBuiltinSlashCommands,
-} from "../../slash-commands/builtin-registry";
+import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES } from "../../slash-commands/builtin-declarations";
+import { buildTuiBuiltinSlashCommands } from "../../slash-commands/builtin-registry";
 import type { SubcommandDef } from "../../slash-commands/types";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "../../system-prompt";
 import { applyGroundPaint, getDetectedTerminalGround, setDetectedTerminalGround } from "../../theme/ground-tints";

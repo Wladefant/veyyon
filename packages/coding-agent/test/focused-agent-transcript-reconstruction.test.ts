@@ -87,6 +87,10 @@ describe("focused agent transcript reconstruction", () => {
 		eventBus = undefined;
 		vi.restoreAllMocks();
 		resetSettingsForTest();
+		// A focused revive builds a real agent session, and `createAgentSession` attaches a fault sink
+		// to a process-global registry that only `dispose()` detaches. Resetting the registry drops the
+		// ref without disposing, so the sink would outlive this file and collect the next suite's faults.
+		for (const ref of AgentRegistry.global().list()) await ref.session?.dispose();
 		AgentRegistry.resetGlobalForTests();
 		AgentLifecycleManager.resetGlobalForTests();
 	});

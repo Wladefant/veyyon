@@ -294,7 +294,6 @@ const NAMED_BY_NO_TEST: readonly string[] = [
 	"packages/catalog/src/discovery/devin-gen/exa/prompt_pb/prompt_pb.ts",
 	"packages/catalog/src/discovery/devin-gen/exa/reactive_component_pb/reactive_component_pb.ts",
 	"packages/catalog/src/discovery/devin-gen/exa/trust_pb/trust_pb.ts",
-	"packages/catalog/src/provider-models/bundled-references.ts",
 	"packages/coding-agent/src/cli/auth-gateway-cli.ts",
 	"packages/coding-agent/src/cli/gallery-fixtures/agentic.ts",
 	"packages/coding-agent/src/cli/gallery-fixtures/codeintel.ts",
