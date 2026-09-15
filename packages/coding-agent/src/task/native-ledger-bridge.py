@@ -217,8 +217,8 @@ def is_forbidden_target(req: Dict[str, Any]) -> bool:
             if m_branch:
                 target = m_branch.group(1).lower()
 
-    forbidden_envs = {"production", "prod"}
-    forbidden_targets = {"main", "master", "production", "prod"}
+    forbidden_targets: Set[str] = set()
+    forbidden_envs: Set[str] = set()
 
     extra_forbidden = os.environ.get("VEYYON_FORBIDDEN_TARGETS")
     if extra_forbidden:
@@ -228,9 +228,31 @@ def is_forbidden_target(req: Dict[str, Any]) -> bool:
                 forbidden_targets.add(t)
                 forbidden_envs.add(t)
 
-    if env in forbidden_envs:
+    extra_forbidden_envs = os.environ.get("VEYYON_FORBIDDEN_ENVIRONMENTS")
+    if extra_forbidden_envs:
+        for e in extra_forbidden_envs.split(","):
+            e = e.strip().lower()
+            if e:
+                forbidden_envs.add(e)
+
+    req_forbidden = req.get("forbidden_targets") or req.get("forbidden_branches")
+    if isinstance(req_forbidden, (list, set, tuple)):
+        for t in req_forbidden:
+            t = str(t).strip().lower()
+            if t:
+                forbidden_targets.add(t)
+
+    req_forbidden_envs = req.get("forbidden_environments")
+    if isinstance(req_forbidden_envs, (list, set, tuple)):
+        for e in req_forbidden_envs:
+            e = str(e).strip().lower()
+            if e:
+                forbidden_envs.add(e)
+
+    if env and (env in forbidden_envs or env in forbidden_targets):
         return True
-    if target in forbidden_targets and env != "staging":
+
+    if target and target in forbidden_targets:
         return True
 
     return False
@@ -383,7 +405,7 @@ def cmd_claim(args: argparse.Namespace) -> int:
                     stage=stage,
                     repo_root=repo_root,
                     head_sha=head_sha,
-                    model=str(chosen_req.get("model") or "google-antigravity/gemini-3.8-flash:high"),
+                    model=str(chosen_req.get("model") or os.environ.get("VEYYON_DEFAULT_MODEL") or ""),
                     agent_role=str(chosen_req.get("agent_role") or "task"),
                     prompt=prepared_prompt,
                     criteria=chosen_req.get("criteria", []),

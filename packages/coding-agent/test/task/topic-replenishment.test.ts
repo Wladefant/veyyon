@@ -12,6 +12,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { resetSettingsForTest, Settings } from "../../src/config/settings";
 import * as topicReplenishmentModule from "../../src/task/topic-replenishment";
 import {
 	checkMemoryAdmission,
@@ -30,7 +31,11 @@ import {
 	TopicReplenishmentEngine,
 } from "../../src/task/topic-replenishment";
 
-const scratchHead = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+const gitCmd = process.platform === "win32" ? "git.exe" : "git";
+let scratchHead = "0".repeat(40);
+try {
+	scratchHead = execFileSync(gitCmd, ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+} catch {}
 
 function prepareScratchLedger(ledger: LedgerFileShape): void {
 	for (const request of Object.values(ledger.requests)) {
@@ -351,18 +356,21 @@ async function runTests(): Promise<void> {
 				"req-forbidden-prod": {
 					prompt: "Deploy directly to target: production and branch main",
 					target: "production",
+					forbidden_targets: ["production"],
 					authorization: validAuthorization,
 					state: "pending",
 				},
 				"req-forbidden-project": {
 					prompt: "Harmless prompt text but forbidden project target",
 					environment: "production",
+					forbidden_environments: ["production"],
 					authorization: validAuthorization,
 					state: "pending",
 				},
 				"req-forbidden-target": {
 					prompt: "Harmless prompt text but forbidden target field",
 					target: "production",
+					forbidden_targets: ["production"],
 					authorization: validAuthorization,
 					state: "pending",
 				},
@@ -1190,8 +1198,109 @@ async function runTests(): Promise<void> {
 
 	assert.ok(recoverOrphanedClaims, "Recovery bridge must be exported");
 
+	// =========================================================================
+	// Test 13: Neutral authorization semantics in TS and Python bridge
+	// =========================================================================
+	console.log("Test 13: neutral authorization semantics in TypeScript and Python bridge");
+	{
+		// TypeScript: unconfigured -> no target or environment is forbidden by default
+		assert.equal(topicReplenishmentModule.isForbiddenTarget({ repo: "example/library", target: "main" }), false, "main must be allowed by default");
+		assert.equal(topicReplenishmentModule.isForbiddenTarget({ target: "master" }), false, "master must be allowed by default");
+		assert.equal(topicReplenishmentModule.isForbiddenTarget({ target: "production" }), false, "production must be allowed when unconfigured");
+		assert.equal(topicReplenishmentModule.isForbiddenTarget({ environment: "production" }), false, "production environment must be allowed when unconfigured");
+		assert.equal(topicReplenishmentModule.isForbiddenTarget({ target: "production", environment: "staging" }), false, "unconfigured targets are allowed");
+
+		// TypeScript: configured -> forbidden targets are blocked and NEVER bypassed by environment=staging
+		const configured = ["production", "main", "restricted"];
+		assert.equal(topicReplenishmentModule.isForbiddenTarget({ target: "main" }, configured), true, "configured main is blocked");
+		assert.equal(topicReplenishmentModule.isForbiddenTarget({ target: "main", environment: "staging" }, configured), true, "explicit forbidden main is NEVER bypassed by environment=staging");
+		assert.equal(topicReplenishmentModule.isForbiddenTarget({ target: "production", environment: "staging" }, configured), true, "explicit forbidden production is NEVER bypassed by environment=staging");
+		assert.equal(topicReplenishmentModule.isForbiddenTarget({ target: "restricted", environment: "staging" }, configured), true, "restricted target is blocked even when environment is staging");
+		assert.equal(topicReplenishmentModule.isForbiddenTarget({ environment: "production" }, configured), true, "configured forbidden environment is blocked");
+		assert.equal(topicReplenishmentModule.isForbiddenTarget({ target: "feature-branch", environment: "staging" }, configured), false, "unforbidden target in staging is allowed");
+		assert.equal(topicReplenishmentModule.isForbiddenTarget({ target: "req-blocked", forbidden_targets: ["req-blocked"], environment: "staging" }), true, "request-level forbidden target is blocked even if staging");
+
+		// Python bridge contract: exercise is_forbidden_target in native-ledger-bridge.py directly
+		if (detectedPython) {
+			const bridgePyPath = path.resolve(import.meta.dirname, "../../src/task/native-ledger-bridge.py");
+			const pyCode = `
+import sys, os, importlib.util
+spec = importlib.util.spec_from_file_location("native_ledger_bridge", ${JSON.stringify(bridgePyPath)})
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+# 1. Unconfigured: main, master, production are not forbidden by default
+assert not mod.is_forbidden_target({"repo": "example/library", "target": "main"}), "main must be allowed by default"
+assert not mod.is_forbidden_target({"target": "master"}), "master must be allowed by default"
+assert not mod.is_forbidden_target({"target": "production"}), "production must be allowed when unconfigured"
+assert not mod.is_forbidden_target({"environment": "production"}), "env production must be allowed when unconfigured"
+
+# 2. Configured forbidden targets via request: never bypassed by staging
+assert mod.is_forbidden_target({"target": "main", "environment": "staging", "forbidden_targets": ["main"]}), "staging must NOT bypass configured forbidden target main"
+assert mod.is_forbidden_target({"target": "production", "environment": "staging", "forbidden_targets": ["production"]}), "staging must NOT bypass configured forbidden target production"
+assert mod.is_forbidden_target({"target": "restricted", "environment": "staging", "forbidden_targets": ["restricted"]}), "staging must NOT bypass configured forbidden target restricted"
+assert not mod.is_forbidden_target({"target": "feature-123", "environment": "staging", "forbidden_targets": ["main"]}), "non-forbidden target in staging must be allowed"
+
+# 3. Configured forbidden targets via VEYYON_FORBIDDEN_TARGETS env
+os.environ["VEYYON_FORBIDDEN_TARGETS"] = "main,production,restricted"
+assert mod.is_forbidden_target({"target": "main"}), "env-configured main must be blocked"
+assert mod.is_forbidden_target({"target": "main", "environment": "staging"}), "env-configured main must be blocked even if staging"
+assert mod.is_forbidden_target({"target": "production", "environment": "staging"}), "env-configured production must be blocked even if staging"
+assert mod.is_forbidden_target({"target": "restricted", "environment": "staging"}), "env-configured restricted must be blocked even if staging"
+assert not mod.is_forbidden_target({"repo": "example/library", "target": "feature-123"}), "unforbidden target must be allowed"
+print("PYTHON_BRIDGE_AUTH_OK")
+`;
+			const pyRun = spawnSync(detectedPython, ["-c", pyCode], { encoding: "utf8" });
+			assert.equal(pyRun.status, 0, `Python bridge authorization check failed:\n${pyRun.stderr}\n${pyRun.stdout}`);
+			assert.ok(pyRun.stdout.includes("PYTHON_BRIDGE_AUTH_OK"), "Python bridge verification succeeded");
+		}
+		console.log("  [PASS] neutral authorization semantics verified in TS and Python bridge\n");
+	}
+
+	// =========================================================================
+	// Test 14: Model policy and resolution via Config API
+	// =========================================================================
+	console.log("Test 14: model policy and resolution via Config API");
+	{
+		assert.equal("DEFAULT_FLASH_MODEL" in topicReplenishmentModule, false, "DEFAULT_FLASH_MODEL must not be exported");
+
+		resetSettingsForTest();
+		const settings = await Settings.init({ inMemory: true });
+
+		const stockRoles = settings.getModelRoles();
+		for (const [role, model] of Object.entries(stockRoles)) {
+			assert.ok(!/fable|sol|astra|spark|flash/i.test(model), `Stock role ${role} contains operator-specific model: ${model}`);
+		}
+
+		const defaultResolved = topicReplenishmentModule.resolveTopicWorkerModel({ settings });
+		assert.ok(!/fable|sol|astra|spark|flash/i.test(defaultResolved), `Resolved default model contains operator-specific model: ${defaultResolved}`);
+
+		assert.equal(
+			topicReplenishmentModule.resolveTopicWorkerModel({ settings, requestModel: "custom-provider/test-model:medium" }),
+			"custom-provider/test-model:medium",
+			"Must respect explicit request model",
+		);
+
+		settings.setModelRole("default", "custom-provider/configured-default");
+		assert.equal(
+			topicReplenishmentModule.resolveTopicWorkerModel({ settings }),
+			"custom-provider/configured-default",
+			"Must resolve configured default model role via config API",
+		);
+
+		settings.set("agent.agents", { task: { model: "custom-provider/configured-task-worker" } });
+		assert.equal(
+			topicReplenishmentModule.resolveTopicWorkerModel({ settings, agentRole: "task" }),
+			"custom-provider/configured-task-worker",
+			"Must resolve configured task agent model via config API",
+		);
+
+		resetSettingsForTest();
+		console.log("  [PASS] model policy and resolution via Config API verified\n");
+	}
+
 	console.log("=================================================");
-	console.log("ALL 12 TOPIC REPLENISHMENT TESTS PASSED!");
+	console.log("ALL 14 TOPIC REPLENISHMENT TESTS PASSED!");
 	console.log("=================================================");
 }
 

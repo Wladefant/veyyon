@@ -14,7 +14,7 @@
  * 5. Fail-closed authorization: unauthorized requests (including empty `{}` authorization),
  *    forbidden production targets, ungranted merge authorizations, and pending decision blockers
  *    never dispatch. Blocked topics stay tracked with exact reasons.
- * 6. Dispatch next native task using native TaskTool/executor (Flash model role, no agent CLI).
+ * 6. Dispatch next native task using native TaskTool/executor (configured model role, no agent CLI).
  *    Missing executor fails immediately before claiming or incrementing counts.
  * 7. On worker dispatch error, claimed tickets are rolled back to pending with audit history.
  */
@@ -26,6 +26,9 @@ import * as path from "node:path";
 import { errorMessage, getAgentDir, isRecord, logger } from "@veyyon/utils";
 import { atomicWriteFileSync } from "@veyyon/utils/atomic-write";
 import nativeLedgerBridgeAssetPath from "./native-ledger-bridge.py" with { type: "file" };
+import { DEFAULT_MODEL_SLOT } from "../config/model-roles";
+import { Settings } from "../config/settings";
+import { resolveAgentModel } from "./agent-settings";
 // --- Functional Topics & Keyword Mapping ---
 
 export const TOPIC_KEYWORDS_MAP: Readonly<Record<string, string>> = {
@@ -68,16 +71,109 @@ export const INACTIVE_STATUSES: ReadonlySet<string> = new Set([
 	"cancelled",
 ]);
 
-export const FORBIDDEN_TARGETS: readonly string[] = [
-	"main",
-	"master",
-	"production",
-	"prod",
-] as const;
+export const FORBIDDEN_TARGETS: readonly string[] = (
+	process.env.VEYYON_FORBIDDEN_TARGETS
+		? process.env.VEYYON_FORBIDDEN_TARGETS.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean)
+		: []
+) as readonly string[];
 
 export const EXPLICITLY_CANCELLED_TASKS: Readonly<Record<string, string>> = {};
 
-export const DEFAULT_FLASH_MODEL = "google-antigravity/gemini-3.8-flash:high";
+export function resolveTopicWorkerModel(options?: {
+	settings?: Settings;
+	agentRole?: string;
+	requestModel?: string;
+}): string {
+	if (options?.requestModel?.trim()) {
+		return options.requestModel.trim();
+	}
+	const settings = options?.settings ?? (Settings.isInitialized ? Settings.instance : undefined);
+	if (settings) {
+		const role = options?.agentRole ?? "task";
+		const agentResolved = resolveAgentModel({ settings, agentName: role });
+		if (agentResolved.patterns.length > 0) {
+			return agentResolved.patterns[0];
+		}
+		const defaultRole = settings.getModelRole(DEFAULT_MODEL_SLOT);
+		if (defaultRole?.trim()) {
+			return defaultRole.trim();
+		}
+	}
+	return process.env.VEYYON_DEFAULT_MODEL?.trim() ?? "";
+}
+
+export function isForbiddenTarget(
+	req: {
+		target?: string;
+		target_branch?: string;
+		branch?: string;
+		base?: string;
+		environment?: string;
+		prompt?: string;
+		forbidden_targets?: readonly string[] | Set<string>;
+		forbidden_environments?: readonly string[] | Set<string>;
+	},
+	configuredForbidden?: readonly string[] | Set<string>,
+): boolean {
+	const target = (req.target ?? req.target_branch ?? req.branch ?? req.base ?? "").trim().toLowerCase();
+	const env = (req.environment ?? "").trim().toLowerCase();
+	let resolvedTarget = target;
+	if (!resolvedTarget && req.prompt) {
+		const mTarget = req.prompt.match(/\btarget:\s*(\S+)/i);
+		if (mTarget) {
+			resolvedTarget = mTarget[1].toLowerCase();
+		} else {
+			const mBranch = req.prompt.match(/\bbranch\s+(\S+)/i);
+			if (mBranch) {
+				resolvedTarget = mBranch[1].toLowerCase();
+			}
+		}
+	}
+
+	const forbiddenTargets = new Set<string>();
+	const forbiddenEnvs = new Set<string>();
+
+	for (const t of FORBIDDEN_TARGETS) {
+		forbiddenTargets.add(t.toLowerCase());
+		forbiddenEnvs.add(t.toLowerCase());
+	}
+	if (process.env.VEYYON_FORBIDDEN_ENVIRONMENTS) {
+		for (const e of process.env.VEYYON_FORBIDDEN_ENVIRONMENTS.split(",")) {
+			const trimmed = e.trim().toLowerCase();
+			if (trimmed) forbiddenEnvs.add(trimmed);
+		}
+	}
+	if (configuredForbidden) {
+		for (const t of configuredForbidden) {
+			const trimmed = t.trim().toLowerCase();
+			if (trimmed) {
+				forbiddenTargets.add(trimmed);
+				forbiddenEnvs.add(trimmed);
+			}
+		}
+	}
+	if (req.forbidden_targets) {
+		for (const t of req.forbidden_targets) {
+			const trimmed = t.trim().toLowerCase();
+			if (trimmed) forbiddenTargets.add(trimmed);
+		}
+	}
+	if (req.forbidden_environments) {
+		for (const e of req.forbidden_environments) {
+			const trimmed = e.trim().toLowerCase();
+			if (trimmed) forbiddenEnvs.add(trimmed);
+		}
+	}
+
+	if (env && (forbiddenEnvs.has(env) || forbiddenTargets.has(env))) {
+		return true;
+	}
+	if (resolvedTarget && forbiddenTargets.has(resolvedTarget)) {
+		return true;
+	}
+
+	return false;
+}
 export const DEFAULT_MIN_FLOOR = Number(process.env.VEYYON_WORKER_MIN_FLOOR) || 0;
 export const DEFAULT_TARGET_COUNT = Number(process.env.VEYYON_WORKER_TARGET) || 1;
 export const DEFAULT_MAX_CEILING = Number(process.env.VEYYON_WORKER_MAX_CEILING) || 4;
