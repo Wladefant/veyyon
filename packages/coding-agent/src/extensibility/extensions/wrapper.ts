@@ -17,6 +17,7 @@ import {
 } from "../../tools/core/approval";
 import { cwdEscapingTargets, formatCwdBoundaryReason } from "../../tools/core/cwd-boundary";
 import { secretUseApprovalReason } from "../../tools/core/secret-use-boundary";
+import { checkRefusalFence, recordRefusal } from "../../tools/core/refusal-fence";
 import { normalizeToolEventInput, resolveToolEventInput } from "../tool-event-input";
 import type { ExtensionRunner } from "./runner";
 import type {
@@ -182,7 +183,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 
 	constructor(
 		private tool: AgentTool<TParameters, TDetails>,
-		private runner: ExtensionRunner,
+		private runner?: ExtensionRunner,
 	) {
 		applyToolProxy(tool, this);
 	}
@@ -203,6 +204,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		onUpdate?: AgentToolUpdateCallback<TDetails, TParameters>,
 		context?: AgentToolContext,
 	): Promise<AgentToolResult<TDetails, TParameters>> {
+		checkRefusalFence(this.tool.name, params, context);
 		// 1. Check approval policy (before extension handlers).
 		// CLI `--auto-approve` / `--yolo` sets approval mode to yolo.
 		// User `tools.approval.<tool>` policies are still applied in all modes.
@@ -286,9 +288,9 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 
 		if (approvalRequired && !(standing === "allow" && grantMayApply)) {
 			const hasApprovalHandlers =
-				this.runner.hasHandlers("tool_approval_requested") || this.runner.hasHandlers("tool_approval_resolved");
+				this.runner?.hasHandlers("tool_approval_requested") || this.runner?.hasHandlers("tool_approval_resolved");
 			const sessionId = context?.sessionManager?.getSessionId() ?? "";
-			if (hasApprovalHandlers) {
+			if (hasApprovalHandlers && this.runner) {
 				await this.runner.emit({
 					type: "tool_approval_requested",
 					sessionId,
@@ -300,7 +302,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			}
 
 			const resolveApproval = async (approved: boolean, reason?: string) => {
-				if (!hasApprovalHandlers) return;
+				if (!hasApprovalHandlers || !this.runner) return;
 				await this.runner.emit({
 					type: "tool_approval_resolved",
 					sessionId,
@@ -430,7 +432,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		}
 
 		// 2. Emit tool_call event - extensions can block execution
-		if (this.runner.hasHandlers("tool_call")) {
+		if (this.runner?.hasHandlers("tool_call")) {
 			try {
 				const callResult = (await this.runner.emitToolCall({
 					type: "tool_call",
@@ -447,6 +449,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 						callResult.reason ||
 						`An extension blocked this ${this.tool.name} call and gave no reason. Do not retry it; tell ` +
 							"the operator which extension is blocking so they can fix or remove it.";
+					recordRefusal(this.tool.name, reason, context);
 					throw new Error(reason);
 				}
 			} catch (err) {
@@ -488,7 +491,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		}
 
 		// Emit tool_result event - extensions can modify the result and error status
-		if (this.runner.hasHandlers("tool_result")) {
+		if (this.runner?.hasHandlers("tool_result")) {
 			const resultResult = await this.runner.emitToolResult({
 				type: "tool_result",
 				toolName: this.tool.name,

@@ -4,6 +4,7 @@ import { errorMessage, isRecord } from "@veyyon/utils";
 import { INTENT_FIELD } from "@veyyon/wire";
 import type { ToolSession } from "../../tools";
 import { ToolError } from "../../tools/core/tool-errors";
+import { checkRefusalFence } from "../../tools/core/refusal-fence";
 import { EVAL_AGENT_BRIDGE_NAME } from "../agent-bridge-name";
 import { EVAL_BUDGET_BRIDGE_NAME, type EvalBudgetResult, runEvalBudget } from "../budget-bridge";
 import { EVAL_COMPLETION_BRIDGE_NAME, runEvalCompletion } from "../completion-bridge";
@@ -164,6 +165,10 @@ export async function callSessionTool(name: string, args: unknown, options: Tool
 	if (name === EVAL_CONCURRENCY_BRIDGE_NAME) {
 		return runEvalConcurrency(args, options);
 	}
+	// Worker IPC bridge entry point: worker threads / subprocesses (e.g. JS_EVAL_WORKER, JS_EVAL_PROCESS)
+	// execute tools via IPC calls to callSessionTool. Enforce the refusal fence at entry in case the
+	// target session tool was unwrapped or context was omitted.
+	checkRefusalFence(name, args, options.session.getToolContext?.(), options.session.settings);
 	const tool = getTool(options.session, name);
 	const normalizedArgs = normalizeArgs(args);
 	const toolCallId = `js-${name}-${crypto.randomUUID()}`;
