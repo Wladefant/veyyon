@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the daemon broker client and broker startup exiting 0 silently mid-read: `Bun.file().text()`/`.json()` does not ref the event loop, so a process that reached the token, lease, presence, or metadata read with nothing else pending could drain and exit before the read settled; the reads now use `fs.readFile`.
+
 ## [1.5.0] - 2026-09-18
 
 ### Breaking Changes
