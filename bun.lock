@@ -140,6 +140,7 @@
       "version": "1.4.1",
       "dependencies": {
         "@veyyon/model": "catalog:",
+        "@veyyon/view": "catalog:",
       },
       "devDependencies": {
         "@types/bun": "catalog:",
@@ -235,7 +236,6 @@
         "fast-check": "catalog:",
       },
     },
-
     "packages/catalog": {
       "name": "@veyyon/catalog",
       "version": "1.4.1",
@@ -500,7 +500,6 @@
         "arktype": "catalog:",
       },
     },
-
   },
   "patchedDependencies": {
     "puppeteer-core@25.3.0": "patches/puppeteer-core@25.3.0.patch",
