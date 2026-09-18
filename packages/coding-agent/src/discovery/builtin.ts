@@ -196,6 +196,7 @@ async function loadMCPServers(ctx: LoadContext): Promise<LoadResult<MCPServer>> 
 					| {
 							clientId?: string;
 							clientSecret?: string;
+							scopes?: string;
 							redirectUri?: string;
 							callbackPort?: number;
 							callbackPath?: string;

@@ -8,7 +8,6 @@
  * 3. Milestone Assigned: Non-null milestone from repository roadmap
  * 4. Scope & Size Guard: additions + deletions <= 500 lines, unless exempt
  *
- * Reference: Superboard Issue #111 & #113
  */
 
 const fs = require('fs');

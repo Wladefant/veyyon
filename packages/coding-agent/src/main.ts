@@ -81,6 +81,7 @@ import type * as firstFrameModule from "./modes/terminal/first-frame";
 import type * as interactiveModeModule from "./modes/terminal/interactive-mode";
 import type { InteractiveMode } from "./modes/terminal/interactive-mode";
 import type { SubmittedUserInput } from "./modes/terminal/types";
+import { installTelegramNativeControlHost } from "./native-control/telegram-control-host";
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
 import { createAgentSession, discoverAuthStorage } from "./sdk";
 import type { AgentSession } from "./session/agent-session";
@@ -1872,6 +1873,10 @@ async function runRootCommandInner(parsed: Args, rawArgs: string[], deps: RunRoo
 				},
 				isInteractive,
 			);
+		// Publish the in-process native capability before interactive commands can
+		// activate an external adapter. This starts no poller or socket; an
+		// authorized extension can bind actor/chat credentials to this session.
+		installTelegramNativeControlHost(() => session.sessionManager.getSessionId());
 
 		// Cold-revive support: a `parked` agent ref restored from disk (the persisted-agent
 		// scan, collab mirror, resumed process) has a sessionFile but no in-memory

@@ -47,6 +47,7 @@
 - Guard against auto-updating or replacing custom and local Veyyon binary builds.
 - Support auto-update opt-out via `startup.autoUpdate: false`, `updates.auto: false`, and `VEYYON_NO_AUTO_UPDATE=1`.
 - Record skipped automatic updates in `update-history.json`.
+- Expose the live worker registry and targeted messaging over IrcBus to the Telegram control bridge ([#38](https://github.com/Wladefant/veyyon/issues/38)).
 - ChatGPT Web integration preserves fork routing reloads and session-scoped replenishment on the extracted kernel APIs; concurrent todo previews use the host-neutral view and `/todo pending` retains its reset behavior.
 - `ExtensionContext` and `ExtensionCommandContext` expose runtime session identity fields: `isSubagent` (boolean), `taskDepth` (number), `agentId` (optional string), and `parentTaskPrefix` (optional string). Extensions can now reliably detect whether they are attached to the root interactive session or to a delegated task subagent without depending on `hasUI` or probing internal registries.
 - Exported `projectToolDisplay` from `presentation/web-tool-display.ts`, projecting canonical tool execution displays for collab live sessions and HTML export.
@@ -516,10 +517,13 @@
 
 ### Fixed
 
+- Scope Telegram worker registry rendering and targeted messaging to the authenticated session, rejecting cross-session target IDs and caller-supplied scope overrides ([#38](https://github.com/Wladefant/veyyon/issues/38)).
+- HTTP/SSE MCP OAuth honors configured scopes, unions challenge-required and explicit provider scopes, and uses supported-scope metadata only as a fallback.
 - `/reload-config` reports applied, unchanged and restart-only values per key, retains startup-bound model roles and default effort, and pins task/eval/vibe model and effort resolution to one dispatch snapshot ([#39](https://github.com/Wladefant/veyyon/issues/39)).
 - Repaired upstream-merge regressions in `/reload-config`, agent-lane validation, task spawn recording, and todo rendering; retained concurrent todo targets through the host-neutral view and removed the duplicate legacy spawn callback ([#26](https://github.com/Wladefant/veyyon/issues/26)).
 - Updated the config-reload benchmark, handbook, and capture scene to use the current agent routing namespace ([#26](https://github.com/Wladefant/veyyon/issues/26)).
 - Collapsed todo boards prioritize in-progress tasks, announce row-trimmed active phases, and show canonical newly started tasks with concurrent counts even when replayed without call arguments.
+- Neutralized workstation-specific defaults, private project identifiers, and host orchestration policies in topic replenishment and native ledger bridge, restoring neutral authorization semantics where no target is forbidden by default and forbidden targets are strictly configuration-driven, and resolving topic worker models via config/catalog APIs without baked-in model defaults ([#953](https://github.com/santhreal/veyyon/issues/953)).
 - Print, JSON and RPC mode flush Bun's stdout sink before exiting, so a piped consumer receives the whole last frame instead of losing up to 1 MiB of queued output.
 - A spawned agent's card shows its resolved-model badge again on the live block, the registry path an extension wraps and the rebuilt transcript, per `agent.showResolvedModelBadge`.
 - With `VEYYON_FORCE_IMAGE_PROTOCOL=sixel` and `VEYYON_ALLOW_SIXEL_PASSTHROUGH=1`, a bash card draws an inline Sixel image row as the program wrote it instead of blanking it.
