@@ -497,6 +497,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 				signal,
 				onUpdate,
 				context,
+				this.#sessionPolicy,
 			);
 		} catch (err) {
 			// A CANCELLATION IS NOT A FAILED CALL, so it never becomes one here. The
