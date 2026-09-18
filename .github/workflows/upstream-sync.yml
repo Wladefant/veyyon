@@ -125,6 +125,39 @@ jobs:
                 --jq '[.[] | select(.title | test("upstream sync|fork synchronization"; "i")) | .number] | first // ""')
             fi
 
+            # Probe the real repository setting instead of asserting a value.
+            # GH_TOKEN is the job's GITHUB_TOKEN, which may not be allowed to read this endpoint.
+            PERM_STATUS=0
+            PERM_OUTPUT=$(gh api "repos/$GITHUB_REPOSITORY/actions/permissions/workflow" 2>&1) || PERM_STATUS=$?
+
+            if [ "$PERM_STATUS" -eq 0 ]; then
+              PERM_APPROVE=$(printf '%s' "$PERM_OUTPUT" | jq -r '.can_approve_pull_request_reviews | tostring' 2>/dev/null || echo "unknown")
+              PERM_DEFAULT=$(printf '%s' "$PERM_OUTPUT" | jq -r '.default_workflow_permissions // "unknown"' 2>/dev/null || echo "unknown")
+              echo "Observed repos/$GITHUB_REPOSITORY/actions/permissions/workflow:"
+              echo "  can_approve_pull_request_reviews: $PERM_APPROVE"
+              echo "  default_workflow_permissions: $PERM_DEFAULT"
+              PERM_REPORT=$(printf '%s\n' \
+                "\`gh api repos/${GITHUB_REPOSITORY}/actions/permissions/workflow\` observed:" \
+                "" \
+                "- \`can_approve_pull_request_reviews\`: \`${PERM_APPROVE}\`" \
+                "- \`default_workflow_permissions\`: \`${PERM_DEFAULT}\`")
+            elif [[ "$PERM_OUTPUT" == *"HTTP 403"* || "$PERM_OUTPUT" == *"Resource not accessible"* ]]; then
+              echo "::warning::This workflow's GITHUB_TOKEN cannot read repos/$GITHUB_REPOSITORY/actions/permissions/workflow (HTTP 403), so the current setting was not observed."
+              echo "An operator must enable: Settings -> Actions -> General -> Workflow permissions -> 'Allow GitHub Actions to create and approve pull requests'."
+              PERM_REPORT=$(printf '%s\n' \
+                "\`gh api repos/${GITHUB_REPOSITORY}/actions/permissions/workflow\` returned **HTTP 403**: this workflow's \`GITHUB_TOKEN\` cannot read the repository Actions permission setting, so \`can_approve_pull_request_reviews\` and \`default_workflow_permissions\` were not observed." \
+                "" \
+                "An operator must enable **Settings → Actions → General → Workflow permissions → Allow GitHub Actions to create and approve pull requests** (the steps below).")
+            else
+              echo "::warning::Reading repos/$GITHUB_REPOSITORY/actions/permissions/workflow failed with exit status $PERM_STATUS; the current setting was not observed."
+              echo "$PERM_OUTPUT"
+              PERM_REPORT=$(printf '%s\n' \
+                "\`gh api repos/${GITHUB_REPOSITORY}/actions/permissions/workflow\` failed with exit status ${PERM_STATUS}, so \`can_approve_pull_request_reviews\` and \`default_workflow_permissions\` were not observed:" \
+                "\`\`\`" \
+                "${PERM_OUTPUT}" \
+                "\`\`\`")
+            fi
+
             COMMENT_BODY=$(printf '%s\n' \
               "<!-- upstream-sync-comment -->" \
               "## ⚠️ Upstream Sync: Automated PR Creation Blocked by Repository Settings" \
@@ -147,11 +180,8 @@ jobs:
               "${CREATE_OUTPUT}" \
               "\`\`\`" \
               "" \
-              "The repository's GitHub Actions workflow permissions currently disallow GitHub Actions from creating or approving pull requests." \
-              "\`gh api repos/${GITHUB_REPOSITORY}/actions/permissions/workflow\` returned:" \
-              "\`\`\`json" \
-              "{\"default_workflow_permissions\":\"read\",\"can_approve_pull_request_reviews\":false}" \
-              "\`\`\`" \
+              "The \`gh pr create\` denial above is the observed evidence that GitHub Actions is not permitted to create pull requests in this repository." \
+              "${PERM_REPORT}" \
               "" \
               "**To allow GitHub Actions to automatically open draft sync pull requests, an operator must perform the following step:**" \
               "1. Navigate to repository **Settings** → **Actions** → **General**" \
