@@ -212,10 +212,16 @@ function hasFreeMarker(modelId: string): boolean {
  * `cost.input === 0` itself, because that test cannot tell the two apart.
  */
 export function getModelPricing<TApi extends Api>(
-	model: Pick<Model<TApi>, "id"> & { cost?: Model<TApi>["cost"]; pricing?: "published" | "unknown" },
+	model: Pick<Model<TApi>, "id"> & {
+		cost?: Partial<Model<TApi>["cost"]>;
+		pricing?: "published" | "unknown";
+	},
 ): ModelPricing {
 	const cost = model.cost;
-	if (cost && (cost.input > 0 || cost.output > 0)) return "priced";
+	// A per-token field the upstream omitted is not a zero: it is the absence of
+	// a price, so it falls through to the recorded `pricing` fact below rather
+	// than reading as free.
+	if (cost && ((cost.input ?? 0) > 0 || (cost.output ?? 0) > 0)) return "priced";
 
 	// A recorded fact beats a guess. Discovery marks `pricing: "unknown"` when the
 	// upstream published nothing, and a model we were never told the price of is

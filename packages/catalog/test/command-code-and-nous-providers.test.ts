@@ -68,7 +68,7 @@ describe("Command Code provider", () => {
 			expect(cost).toBeDefined();
 			expect(cost?.input).toBeGreaterThan(0);
 			const bundled = getBundledModel("command-code", model.id);
-			expect(bundled?.cost).toEqual(cost);
+			expect(cost).toEqual(bundled?.cost);
 			expect(bundled?.maxTokens).toBe(model.maxTokens);
 		}
 	});
