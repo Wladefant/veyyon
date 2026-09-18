@@ -4,10 +4,6 @@
 
 ## [Unreleased]
 
-### Fixed
-
-- Fixed the daemon broker client and broker startup exiting 0 silently mid-read: `Bun.file().text()`/`.json()` does not ref the event loop, so a process that reached the token, lease, presence, or metadata read with nothing else pending could drain and exit before the read settled; the reads now use `fs.readFile`.
-
 ## [1.5.0] - 2026-09-18
 
 ### Breaking Changes
@@ -530,6 +526,7 @@
 
 ### Fixed
 
+- Fixed the daemon broker client and broker startup exiting 0 silently mid-read: `Bun.file().text()`/`.json()` does not ref the event loop, so a process that reached the token, lease, presence, or metadata read with nothing else pending could drain and exit before the read settled; the reads now use `fs.readFile`.
 - A pasted OAuth callback typed after a slash command that takes no arguments is consumed instead of being sent to the model as a prompt.
 - Automatic maintenance cuts an oversized body until a summarization request fits a summarizer, instead of parking the session with "Compaction freed too little context to make progress" when every candidate was skipped for holding fewer tokens than the summary needed.
 - Print, JSON and RPC mode flush Bun's stdout sink before exiting, so a piped consumer receives the whole last frame instead of losing up to 1 MiB of queued output.
