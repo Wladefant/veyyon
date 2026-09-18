@@ -25,6 +25,7 @@ import {
 	reconcileRunningTopics,
 	recordNativeDispatch,
 	recoverOrphanedClaims,
+	resolvePythonExecutable,
 	rollbackClaimedTicket,
 	type SubagentCompleteEvent,
 	setSystemMemoryProviderForTesting,
@@ -43,35 +44,28 @@ function prepareScratchLedger(ledger: LedgerFileShape): void {
 		request.repo_root ??= process.cwd();
 	}
 }
+/**
+ * Resolve the interpreter through the production resolver, then prove it runs.
+ * Nothing is written to `process.env`: the resolver finds `python3` on hosts that
+ * ship no bare `python`, so the suite no longer has to plant an override for the
+ * code under test and leave it behind for every suite that follows.
+ */
 function detectPython(): string | null {
-	const override = process.env.PYTHON_EXECUTABLE || process.env.PYTHON;
-	if (override) {
-		try {
-			const probe = spawnSync(override, ["--version"], { stdio: "ignore" });
-			if (probe.status === 0) return override;
-		} catch {}
+	let resolved: string;
+	try {
+		resolved = resolvePythonExecutable();
+	} catch {
+		return null;
 	}
-	const lookupCmd = process.platform === "win32" ? "where" : "which";
-	for (const candidate of ["python", "python3"]) {
-		try {
-			const probe = spawnSync(lookupCmd, [candidate], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-			if (probe.status === 0 && probe.stdout?.trim()) {
-				const resolved = probe.stdout.trim().split(/\r?\n/)[0].trim();
-				if (resolved) {
-					const verify = spawnSync(resolved, ["--version"], { stdio: "ignore" });
-					if (verify.status === 0) return resolved;
-				}
-			}
-		} catch {}
+	try {
+		const probe = spawnSync(resolved, ["--version"], { stdio: "ignore" });
+		return probe.status === 0 ? resolved : null;
+	} catch {
+		return null;
 	}
-	return null;
 }
 
 const detectedPython = detectPython();
-if (detectedPython) {
-	process.env.PYTHON_EXECUTABLE = detectedPython;
-	process.env.PYTHON = detectedPython;
-}
 
 async function runTests(): Promise<void> {
 	console.log("Starting topic-replenishment verification suite...\n");
@@ -1299,8 +1293,50 @@ print("PYTHON_BRIDGE_AUTH_OK")
 		console.log("  [PASS] model policy and resolution via Config API verified\n");
 	}
 
+	// =========================================================================
+	// Test 15: Python interpreter resolution
+	// =========================================================================
+	console.log("Test 15: the ledger bridge interpreter resolves to a runnable executable");
+	{
+		const previousExecutable = process.env.PYTHON_EXECUTABLE;
+		const previousPython = process.env.PYTHON;
+		delete process.env.PYTHON_EXECUTABLE;
+		delete process.env.PYTHON;
+		try {
+			const resolved = resolvePythonExecutable();
+			// The bug this defends: the fallback used to be the bare name "python", which
+			// CreateProcess/execvp cannot find on a host that ships only python3, so every
+			// bridge call died with `Executable not found in $PATH: "python"`.
+			assert.ok(
+				path.isAbsolute(resolved),
+				`Resolution without an override must yield a located executable, got ${resolved}`,
+			);
+			assert.equal(
+				spawnSync(resolved, ["--version"], { stdio: "ignore" }).status,
+				0,
+				`Resolved interpreter must run: ${resolved}`,
+			);
+
+			process.env.PYTHON = "env-python-wins";
+			assert.equal(resolvePythonExecutable(), "env-python-wins", "PYTHON must override PATH lookup");
+			process.env.PYTHON_EXECUTABLE = "env-executable-wins";
+			assert.equal(resolvePythonExecutable(), "env-executable-wins", "PYTHON_EXECUTABLE must outrank PYTHON");
+			assert.equal(
+				resolvePythonExecutable("call-site-wins"),
+				"call-site-wins",
+				"An explicit call-site path must outrank both environment overrides",
+			);
+		} finally {
+			if (previousExecutable === undefined) delete process.env.PYTHON_EXECUTABLE;
+			else process.env.PYTHON_EXECUTABLE = previousExecutable;
+			if (previousPython === undefined) delete process.env.PYTHON;
+			else process.env.PYTHON = previousPython;
+		}
+		console.log("  [PASS] interpreter resolution prefers overrides and locates a runnable python\n");
+	}
+
 	console.log("=================================================");
-	console.log("ALL 14 TOPIC REPLENISHMENT TESTS PASSED!");
+	console.log("ALL 15 TOPIC REPLENISHMENT TESTS PASSED!");
 	console.log("=================================================");
 }
 

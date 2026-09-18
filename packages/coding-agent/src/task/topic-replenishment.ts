@@ -23,7 +23,7 @@ import { once } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { errorMessage, getAgentDir, isRecord, logger } from "@veyyon/utils";
+import { $which, errorMessage, getAgentDir, isRecord, logger } from "@veyyon/utils";
 import { atomicWriteFileSync } from "@veyyon/utils/atomic-write";
 import nativeLedgerBridgeAssetPath from "./native-ledger-bridge.py" with { type: "file" };
 import { DEFAULT_MODEL_SLOT } from "../config/model-roles";
@@ -640,6 +640,33 @@ function isVirtualBunfsPath(filePath: string): boolean {
 }
 
 /**
+ * Interpreter candidates tried in PATH order when no explicit override is given.
+ * Windows ships `python`/`py`; most Linux and macOS images ship only `python3`,
+ * so a bare `"python"` is not a usable default on a CI runner.
+ */
+const PYTHON_CANDIDATES: readonly string[] =
+	process.platform === "win32" ? ["python", "python3", "py"] : ["python3", "python"];
+
+/**
+ * Resolve the Python interpreter that runs the native ledger bridge.
+ *
+ * Explicit overrides win in order: call-site path, `PYTHON_EXECUTABLE`, `PYTHON`.
+ * Otherwise the candidates above are looked up on PATH, so a host with only
+ * `python3` resolves instead of failing with `Executable not found in $PATH: "python"`.
+ */
+export function resolvePythonExecutable(pythonPath?: string): string {
+	const override = pythonPath || process.env.PYTHON_EXECUTABLE || process.env.PYTHON;
+	if (override) return override;
+	for (const candidate of PYTHON_CANDIDATES) {
+		const resolved = $which(candidate);
+		if (resolved) return resolved;
+	}
+	throw new Error(
+		`No Python interpreter found: none of ${PYTHON_CANDIDATES.join(", ")} is on PATH. Set PYTHON_EXECUTABLE to one.`,
+	);
+}
+
+/**
  * Safely resolve and materialize the native ledger bridge script path.
  *
  * In a development checkout, the script is a normal on-disk source file that external
@@ -696,7 +723,7 @@ export async function runLedgerBridge<T = unknown>(
 	args: string[],
 	options?: { timeoutMs?: number; pythonPath?: string; cwd?: string },
 ): Promise<T> {
-	const python = options?.pythonPath || process.env.PYTHON_EXECUTABLE || process.env.PYTHON || "python";
+	const python = resolvePythonExecutable(options?.pythonPath);
 	const bridgeScript = resolveBridgeScriptPath();
 	const timeout = options?.timeoutMs ?? 30000;
 
@@ -730,7 +757,7 @@ export class FileLock {
 
 	async acquire(timeoutMs = 15000): Promise<void> {
 		const timeoutSec = (timeoutMs / 1000).toFixed(1);
-		const python = process.env.PYTHON_EXECUTABLE || process.env.PYTHON || "python";
+		const python = resolvePythonExecutable();
 		const bridgeScript = resolveBridgeScriptPath();
 
 		const { promise, resolve, reject } = Promise.withResolvers<void>();
