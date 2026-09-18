@@ -184,6 +184,7 @@ veyyon config get compaction.threshold
 |---|---|---|---|---|
 | `tools.approval` | Tool Approval Policies | record | `{}` | Per-tool approval policies. Set to 'allow' to auto-approve, 'prompt' to require confirmation, or 'deny' to block. Overrides are honored in every approval mode. Any other value denies that tool and is reported at startup. |
 | `tools.protectedPaths` | Extra Protected Paths | array | `[]` | Additional absolute paths (a leading ~ is expanded) that a recursive delete must never target without approval. Adds to the built-in set; it cannot remove from it. |
+| `tools.refusals` | Standing Refusals | array | `[]` | Operations refused by an extension and fenced for this profile. Recorded automatically; clear an entry to allow the operation to be re-evaluated. |
 | `tools.approvalMode` | Tool Approval | enum | `auto` | How much the agent may do without asking. Defaults to Auto: every tier runs, with the per-tool policies, working-directory boundary, credential and critical-call guards still asking. This is the persisted default; override it for one session with /permissions. Values: `plan`, `ask`, `ask-command`, `auto`, `yolo`, `always-ask`, `write`, `auto-edit`. |
 
 ### Notifications
@@ -237,6 +238,7 @@ veyyon config get compaction.threshold
 | `startup.checkUpdate` | Check for Updates | boolean | `true` | Check for Veyyon updates on startup. |
 | `marketplace.autoUpdate` | Marketplace Auto-Update | enum | `notify` | Check for plugin updates on startup. Values: `off`, `notify`, `auto`. |
 | `startup.autoUpdate` | Automatic Updates | boolean | `true` | Install a newer version in the background; off means updates only when you run `veyyon update`. |
+| `updates.auto` | Automatic Updates (updates.auto) | boolean | `true` | Install a newer version in the background; off means updates only when you run `veyyon update`. |
 | `startup.updateNotice` | Update Notice | boolean | `true` | Show a one-line notice on the first launch after an update. |
 
 ### Profile
@@ -899,4 +901,4 @@ These keys are not in `/settings`. Some are state veyyon writes for itself (a sc
 | `tui.maxInlineImageRows` | number | `20` |  |
 | `tui.maxInlineImages` | number | `8` |  |
 
-353 settings in /settings, 120 configuration-file keys, 473 in all.
+355 settings in /settings, 120 configuration-file keys, 475 in all.
