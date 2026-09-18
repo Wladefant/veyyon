@@ -8,6 +8,7 @@ import { commitAgenticPrompts } from "../../../prompts/commit-agentic/rows";
 import { TaskTool } from "../../../task";
 import type { TaskParams } from "../../../task/types";
 import type { ToolSession } from "../../../tools";
+import { TOOL_EXECUTION_ENTRIES } from "../../../tools/core/execution-registry";
 import type { NumstatEntry } from "../../types";
 import type { CommitAgentState } from "../state";
 import { getFilePriority } from "./git-file-diff";
@@ -94,7 +95,14 @@ export function createAnalyzeFileTool(options: {
 						agent: options.analysisAgent,
 						task: assignment,
 					};
-					return taskTool.execute(`${toolCallId}-${index + 1}`, taskParams, signal);
+					return TOOL_EXECUTION_ENTRIES["commit.analysis"].invoke(
+						taskTool,
+						`${toolCallId}-${index + 1}`,
+						taskParams,
+						signal,
+						undefined,
+						{ settings: options.settings },
+					);
 				}),
 			);
 			const results = analyses.flatMap(analysis => analysis.details?.results ?? []);

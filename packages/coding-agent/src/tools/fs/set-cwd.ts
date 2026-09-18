@@ -14,6 +14,7 @@ import { errorMessage, prompt } from "@veyyon/utils";
 import { type } from "arktype";
 import { toolsPrompts } from "../../prompts/tools/rows";
 import type { ToolSession } from "..";
+import type { ToolEffectScope } from "../core/effect-scope";
 import { resolveToCwd } from "../core/path-utils";
 import { ToolError, toolFailure } from "../core/tool-errors";
 import { SET_CWD_TOOL_NAME } from "./reroot-hint";
@@ -134,6 +135,8 @@ export class SetCwdTool implements AgentTool<typeof setCwdSchema, SetCwdToolDeta
 	readonly loadMode = "discoverable";
 	readonly summary = "Change the session's working directory for the rest of the session";
 	readonly filesystemTargets = (args: unknown): string[] => setCwdFilesystemTargets(args);
+	// The declared directory is the only path this call touches.
+	readonly effectScope: ToolEffectScope = "declared-targets";
 	readonly view = setCwdToolView;
 	readonly #session: ToolSession;
 

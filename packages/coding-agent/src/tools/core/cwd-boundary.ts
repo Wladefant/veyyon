@@ -98,6 +98,14 @@ export interface CwdBoundedTool {
 	 * be included; the boundary skips them.
 	 */
 	filesystemTargets(args: unknown, cwd: string): string[];
+
+	// NOT a completeness claim. `bash` declares this method and reports only the
+	// credential paths under a secrets directory, which is right for the cwd
+	// boundary (it asks "does this call escape?", and a narrower answer simply
+	// prompts less) and wrong for anything that asks "can this call reach a
+	// refused path?". That second question is answered by the tool's declared
+	// `effectScope` (`tools/core/effect-scope.ts`), never by this method's
+	// presence.
 }
 
 /** True when `tool` declares filesystem targets, so the cwd boundary applies. */

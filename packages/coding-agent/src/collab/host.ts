@@ -13,6 +13,7 @@ import { timingSafeEqual } from "node:crypto";
 import * as fs from "node:fs/promises";
 import type { ImageContent, TextContent } from "@veyyon/ai";
 import { errorMessage, logger } from "@veyyon/utils";
+import { TOOL_EXECUTION_ENTRIES } from "../tools/core/execution-registry";
 import type {
 	BusChannel,
 	CollabUiRequest,
@@ -538,16 +539,18 @@ export class CollabHost {
 			this.#ctx.ui.requestRender();
 			this.#scheduleStateBroadcast();
 		}
-		this.#ctx.session
-			.promptCustomMessage(
-				{
-					customType: COLLAB_PROMPT_MESSAGE_TYPE,
-					content,
-					display: true,
-					details,
-					attribution: "user",
-				},
-				{ streamingBehavior: "steer", queueChipText: text },
+		TOOL_EXECUTION_ENTRIES["collab.guest"]
+			.forward({ settings: this.#ctx.settings, sessionManager: this.#ctx.sessionManager }, () =>
+				this.#ctx.session.promptCustomMessage(
+					{
+						customType: COLLAB_PROMPT_MESSAGE_TYPE,
+						content,
+						display: true,
+						details,
+						attribution: "user",
+					},
+					{ streamingBehavior: "steer", queueChipText: text },
+				),
 			)
 			.catch(err => {
 				logger.warn("collab guest prompt failed", { error: errorMessage(err) });
