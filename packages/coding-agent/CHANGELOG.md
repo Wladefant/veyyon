@@ -8,6 +8,7 @@
 - Support auto-update opt-out via `startup.autoUpdate: false`, `updates.auto: false`, and `VEYYON_NO_AUTO_UPDATE=1`.
 - Record skipped automatic updates in `update-history.json`.
 - Expose the live worker registry and targeted messaging over IrcBus to the Telegram control bridge ([#38](https://github.com/Wladefant/veyyon/issues/38)).
+- The eight `crates/veyyon-*` native desktop crates and the GUI host surface that serves them are present on the fork, so a desktop change targets the default branch instead of a candidate branch ([#49](https://github.com/Wladefant/veyyon/issues/49)).
 
 ### Fixed
 
