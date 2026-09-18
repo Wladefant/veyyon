@@ -237,6 +237,7 @@ veyyon config get compaction.threshold
 | `startup.checkUpdate` | Check for Updates | boolean | `true` | Check for Veyyon updates on startup. |
 | `marketplace.autoUpdate` | Marketplace Auto-Update | enum | `notify` | Check for plugin updates on startup. Values: `off`, `notify`, `auto`. |
 | `startup.autoUpdate` | Automatic Updates | boolean | `true` | Install a newer version in the background; off means updates only when you run `veyyon update`. |
+| `updates.auto` | Automatic Updates (updates.auto) | boolean | `true` | Install a newer version in the background; off means updates only when you run `veyyon update`. |
 | `startup.updateNotice` | Update Notice | boolean | `true` | Show a one-line notice on the first launch after an update. |
 
 ### Profile
@@ -899,4 +900,4 @@ These keys are not in `/settings`. Some are state veyyon writes for itself (a sc
 | `tui.maxInlineImageRows` | number | `20` |  |
 | `tui.maxInlineImages` | number | `8` |  |
 
-353 settings in /settings, 120 configuration-file keys, 473 in all.
+354 settings in /settings, 120 configuration-file keys, 474 in all.
