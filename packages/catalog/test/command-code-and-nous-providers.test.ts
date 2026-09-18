@@ -64,9 +64,11 @@ describe("Command Code provider", () => {
 			expect(model.baseUrl).toBe("https://api.commandcode.ai/provider/v1");
 			expect(model.provider).toBe("command-code");
 			expect(model.pricing).toBe("published");
-			expect(model.cost.input).toBeGreaterThan(0);
+			const cost = model.cost;
+			expect(cost).toBeDefined();
+			expect(cost?.input).toBeGreaterThan(0);
 			const bundled = getBundledModel("command-code", model.id);
-			expect(bundled?.cost).toEqual(model.cost);
+			expect(cost).toEqual(bundled?.cost);
 			expect(bundled?.maxTokens).toBe(model.maxTokens);
 		}
 	});

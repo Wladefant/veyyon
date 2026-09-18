@@ -247,7 +247,12 @@ describe("the modules that were repointed stay cut", () => {
 		// Removing the descriptor edge and the `provider-models/index.ts` re-export drops this reach
 		// to exactly upstream's 208, and `@veyyon/utils/scoped-timeout` — the reader's third module —
 		// was already on this closure, which is why it costs two here and three on `env-api-key.ts`.
-		["coding-agent/src/commit/shared-llm.ts", 210],
+		// Re-measured 211 when the desktop foundation merged: `ai/src/providers/vision-content.ts`,
+		// which partitions video input and imports only types, is on that branch and not on this
+		// fork's 210. The two `chatgpt-web` files above are on both sides, so they are already inside
+		// the 210 and are not counted twice. Measured with `moduleReachCount`, not assumed from
+		// either side's pin.
+		["coding-agent/src/commit/shared-llm.ts", 211],
 		// The agent's hot loop and the `Agent` class. Both STREAM, so both reach the engine whatever
 		// specifier they use; the ceilings are what the other ten names cost when taken from the entry
 		// point. 378 -> 321 and 380 -> 323.

@@ -3,6 +3,7 @@ import { buildModel } from "./build";
 import type { ModelReferenceCandidate } from "./identity/reference";
 import modelsSourceJson from "./models.json" with { type: "text" };
 import type { Api, Model, ModelSpec, Usage } from "./types";
+import { ZERO_MODEL_COST } from "./utils";
 
 /**
  * Static bundled model registry loaded from `models.json`.
@@ -36,7 +37,7 @@ const modelsSource = modelsSourceJson as unknown as string;
  * Bump this version whenever the resolved record's contract changes, the same
  * way `CACHE_SCHEMA_VERSION` is bumped in `model-cache.ts` for cached specs.
  */
-const ENRICHED_REGISTRY_FORMAT_VERSION = 4;
+const ENRICHED_REGISTRY_FORMAT_VERSION = 5;
 let fullRegistry: Map<string, Map<string, Model<Api>>> | undefined;
 const lazyProviderModels: Map<string, Map<string, Model<Api>>> = new Map();
 let parsedModels: BundledModelsJson | undefined;
@@ -211,10 +212,16 @@ function hasFreeMarker(modelId: string): boolean {
  * `cost.input === 0` itself, because that test cannot tell the two apart.
  */
 export function getModelPricing<TApi extends Api>(
-	model: Pick<Model<TApi>, "id" | "cost"> & { pricing?: "published" | "unknown" },
+	model: Pick<Model<TApi>, "id"> & {
+		cost?: Partial<Model<TApi>["cost"]>;
+		pricing?: "published" | "unknown";
+	},
 ): ModelPricing {
 	const cost = model.cost;
-	if (cost && (cost.input > 0 || cost.output > 0)) return "priced";
+	// A per-token field the upstream omitted is not a zero: it is the absence of
+	// a price, so it falls through to the recorded `pricing` fact below rather
+	// than reading as free.
+	if (cost && ((cost.input ?? 0) > 0 || (cost.output ?? 0) > 0)) return "priced";
 
 	// A recorded fact beats a guess. Discovery marks `pricing: "unknown"` when the
 	// upstream published nothing, and a model we were never told the price of is
@@ -248,7 +255,7 @@ export function resolveRequestCost<TApi extends Api>(model: Model<TApi>, usage: 
 
 export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Usage["cost"] {
 	const orchestration = usage.orchestration;
-	const cost = resolveRequestCost(model, usage);
+	const cost = resolveRequestCost(model, usage) ?? ZERO_MODEL_COST;
 	usage.cost.input = (cost.input / 1000000) * (usage.input + (orchestration?.input ?? 0));
 	usage.cost.output = (cost.output / 1000000) * (usage.output + (orchestration?.output ?? 0));
 	usage.cost.cacheRead = (cost.cacheRead / 1000000) * (usage.cacheRead + (orchestration?.cacheRead ?? 0));
@@ -384,13 +391,18 @@ export function emptyCost(): Usage["cost"] {
  * its extra `total`, and the stats row shape all pass. It had a copy in `catalog`'s generator and
  * another in `stats`, spelled identically down to the bucket order.
  */
-export function hasBillableCost(cost: {
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-}): boolean {
-	return cost.input !== 0 || cost.output !== 0 || cost.cacheRead !== 0 || cost.cacheWrite !== 0;
+export function hasBillableCost(
+	cost?: Partial<{
+		input: number;
+		output: number;
+		cacheRead: number;
+		cacheWrite: number;
+	}>,
+): boolean {
+	if (!cost) return false;
+	return (
+		(cost.input ?? 0) !== 0 || (cost.output ?? 0) !== 0 || (cost.cacheRead ?? 0) !== 0 || (cost.cacheWrite ?? 0) !== 0
+	);
 }
 
 /**
