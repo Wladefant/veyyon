@@ -15,33 +15,37 @@
  * external Telegram harness is absent; its integration is not claimed here.
  */
 
-import { beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { AgentTool, AgentToolContext } from "@veyyon/agent-core";
 import { importRoomKey } from "@veyyon/coding-agent/collab/crypto";
 import { CollabHost } from "@veyyon/coding-agent/collab/host";
 import { COLLAB_PROTO, parseCollabLink } from "@veyyon/coding-agent/collab/protocol";
 import { CollabSocket } from "@veyyon/coding-agent/collab/relay-client";
-import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { callSessionTool } from "@veyyon/coding-agent/eval/js/tool-bridge";
 import type { ExtensionRunner } from "@veyyon/coding-agent/extensibility/extensions/runner";
 import { ExtensionToolWrapper } from "@veyyon/coding-agent/extensibility/extensions/wrapper";
+import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import { createSubagentSettings } from "@veyyon/coding-agent/task/executor";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
+import { BUILTIN_TOOLS, HIDDEN_TOOLS, type Tool } from "@veyyon/coding-agent/tools";
 import type { SessionToolApprovals } from "@veyyon/coding-agent/tools/core/approval-modes";
+import { declaresEffectScope } from "@veyyon/coding-agent/tools/core/effect-scope";
+import { TOOL_EXECUTION_ENTRIES } from "@veyyon/coding-agent/tools/core/execution-registry";
 import {
-	RefusalFenceError,
 	checkRefusalFence,
 	isToolRefused,
+	RefusalFenceError,
 	recordRefusal,
 } from "@veyyon/coding-agent/tools/core/refusal-fence";
-import { type } from "arktype";
-import { installInMemoryRelay, uninstallInMemoryRelay } from "./collab/helpers/in-memory-relay";
-import { TOOL_EXECUTION_ENTRIES } from "@veyyon/coding-agent/tools/core/execution-registry";
-import * as path from "node:path";
-import { astGrep } from "@veyyon/natives";
 import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
+import { astGrep } from "@veyyon/natives";
+import { type } from "arktype";
 import { typeScriptMembersOf } from "../../../scripts/workspace-layout";
+import { installInMemoryRelay, uninstallInMemoryRelay } from "./collab/helpers/in-memory-relay";
 
 const PROBE_TOOL_NAME = "test_destructive_probe";
 let probeExecuted = false;
@@ -87,11 +91,13 @@ function createMockToolSession(options: {
 	sessionApprovals?: SessionToolApprovals;
 	tool?: AgentTool;
 	wrapTool?: boolean;
+	cwd?: string;
 }): ToolSession {
 	const tool = options.tool ?? createProbeTool();
 	const wrapped = options.wrapTool !== false ? new ExtensionToolWrapper(tool, mockRunner) : tool;
 	const settings = options.settings ?? Settings.isolated();
 	const sessionApprovals = options.sessionApprovals ?? createSessionApprovals();
+	const cwd = options.cwd ?? "/mock/cwd";
 
 	const toolContext: AgentToolContext = {
 		settings,
@@ -99,12 +105,12 @@ function createMockToolSession(options: {
 		autoApprove: false,
 		sessionManager: {
 			getSessionId: () => "mock-session-id",
-			getCwd: () => "/mock/cwd",
+			getCwd: () => cwd,
 		} as unknown as AgentToolContext["sessionManager"],
 	} as unknown as AgentToolContext;
 
 	return {
-		cwd: "/mock/cwd",
+		cwd,
 		hasUI: false,
 		getSessionFile: () => null,
 		getSessionSpawns: () => null,
@@ -114,9 +120,88 @@ function createMockToolSession(options: {
 	};
 }
 
+/**
+ * Every tool this build ships, constructed through the production factory table
+ * a session builds from, keyed by the name the model calls.
+ *
+ * A factory decides for itself whether it applies to a session, so the result is
+ * a partition rather than a list: constructed, `absent` (the factory declined),
+ * and `threw`. Absent is returned rather than skipped, because a tool that
+ * quietly stops constructing would be a silent hole in every sweep built on it.
+ */
+async function constructEveryProductionTool(
+	session: ToolSession,
+): Promise<{ byName: Map<string, Tool>; absent: string[]; threw: string[] }> {
+	const byName = new Map<string, Tool>();
+	const absent: string[] = [];
+	const threw: string[] = [];
+	for (const [name, factory] of [...Object.entries(BUILTIN_TOOLS), ...Object.entries(HIDDEN_TOOLS)]) {
+		try {
+			const tool = await factory(session);
+			if (tool) byName.set(name, tool);
+			else absent.push(name);
+		} catch (error) {
+			threw.push(`${name}: ${(error as Error).message.split("\n")[0]}`);
+		}
+	}
+	return { byName, absent, threw };
+}
+
+/** Directories `createSweepSession` made, removed after each test. */
+const sweepDirs: string[] = [];
+
+/**
+ * A session whose discovery inputs are one empty directory.
+ *
+ * `ssh` reads `ssh.json` out of the profile, and the skill, agent and dictionary
+ * factories read the cwd, so on a developer machine those factories answer
+ * differently than on a runner. Pointing both at an empty directory makes the
+ * partition above a function of the settings alone.
+ */
+function createSweepSession(settings: Settings): ToolSession {
+	const empty = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-effect-scope-"));
+	sweepDirs.push(empty);
+	spyOn(settings, "getAgentDir").mockReturnValue(empty);
+	return createMockToolSession({ settings, cwd: empty });
+}
+
+/** What `tool` claims about the paths it can reach, with the undeclared case named. */
+function declaredScope(tool: Tool): string {
+	return declaresEffectScope(tool) ? tool.effectScope : "undeclared";
+}
+
+function toolsDeclaring(byName: Map<string, Tool>, scope: string): string[] {
+	return [...byName]
+		.filter(([, tool]) => declaredScope(tool) === scope)
+		.map(([name]) => name)
+		.sort();
+}
+
+/** The names in `pool` the production fence let through, given `settings`. */
+function escapedTheFence(pool: Iterable<[string, Tool]>, settings: Settings): string[] {
+	return [...pool]
+		.filter(([, tool]) => {
+			try {
+				TOOL_EXECUTION_ENTRIES["session.tools"].assert(
+					tool,
+					{ command: "echo unrelated", path: "/tmp/elsewhere" },
+					{ settings },
+				);
+				return true;
+			} catch (error) {
+				return !(error instanceof RefusalFenceError);
+			}
+		})
+		.map(([name]) => name);
+}
+
 describe("Universal Refusal Fence on Every Invocation Path", () => {
 	beforeEach(() => {
 		probeExecuted = false;
+	});
+
+	afterEach(() => {
+		for (const dir of sweepDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 	});
 
 	it("pins every production execute call structurally, including non-tool delegates", async () => {
@@ -179,12 +264,15 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 				"tools/core/execution-registry.ts:tool",
 				"tools/fs/read.ts:this",
 				"tools/shell/eval.ts:backend",
-			].map(site => `packages/coding-agent/src/${site}`).concat([
-				"packages/agent/src/agent-loop.ts:tool",
-				"packages/coding-agent/bench/rendering.ts:rt",
-				"packages/coding-agent/bench/rendering.ts:rt",
-				"packages/coding-agent/bench/rendering.ts:new ReadTool(mkSession())",
-			]).sort(),
+			]
+				.map(site => `packages/coding-agent/src/${site}`)
+				.concat([
+					"packages/agent/src/agent-loop.ts:tool",
+					"packages/coding-agent/bench/rendering.ts:rt",
+					"packages/coding-agent/bench/rendering.ts:rt",
+					"packages/coding-agent/bench/rendering.ts:new ReadTool(mkSession())",
+				])
+				.sort(),
 		);
 		const installations = matches
 			.filter(match => match.metaVariables?.TOOL === undefined)
@@ -193,8 +281,9 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 			)
 			.sort();
 		expect(installations).toEqual(
-			["sdk.ts", "sdk.ts", "sdk.ts", "sdk.ts", "sdk.ts", "session/agent-session.ts"]
-				.map(site => `packages/coding-agent/src/${site}`),
+			["sdk.ts", "sdk.ts", "sdk.ts", "sdk.ts", "sdk.ts", "session/agent-session.ts"].map(
+				site => `packages/coding-agent/src/${site}`,
+			),
 		);
 	}, 300_000);
 
@@ -519,11 +608,133 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 				value: kind === "path" ? "/repo/protected" : command,
 			});
 			expect(bash.filesystemTargets({ command })).toEqual([]);
-			expect(() =>
-				TOOL_EXECUTION_ENTRIES["session.tools"].assert(bash, { command }, { settings }),
-			).toThrow(RefusalFenceError);
+			expect(() => TOOL_EXECUTION_ENTRIES["session.tools"].assert(bash, { command }, { settings })).toThrow(
+				RefusalFenceError,
+			);
 		});
 	}
+
+	// ─────────────────────────────────────────────────────────────────────────
+	// The declaration table, swept from the production factories.
+	//
+	// WHY THESE EXIST. The cases above drive probe objects, and a probe declares
+	// whatever the test says it declares — so they proved the fence's shape
+	// without proving anything about the tools that ship. These construct every
+	// shipped tool the way a session does, and judge it by what it claims.
+	//
+	// WHAT THEY DO NOT CATCH. A tool whose factory declines here is unexercised
+	// (the `absent` set below names all of them), and a tool that declares
+	// `declared-targets` truthfully while its `filesystemTargets` under-reports
+	// its own writes is invisible to any check at this layer.
+	// ─────────────────────────────────────────────────────────────────────────
+
+	it("pins what every shipped tool declares about the paths it can reach", async () => {
+		const { byName, absent, threw } = await constructEveryProductionTool(createSweepSession(Settings.isolated()));
+		expect(threw).toEqual([]);
+		// Exact equality, so a new tool — or a tool that changes its claim —
+		// fails here until someone records the decision. `unbounded` is the set
+		// that must never lose a member by accident: `bash` sits in it because
+		// its `filesystemTargets` reports credential paths only, which is the
+		// inversion issue #37 was reported for.
+		expect(toolsDeclaring(byName, "declared-targets")).toEqual([
+			"ast_edit",
+			"edit",
+			"inspect_image",
+			"read",
+			"search",
+			"set_cwd",
+			"write",
+		]);
+		expect(toolsDeclaring(byName, "unbounded")).toEqual(["bash", "browser", "debug", "eval", "launch", "task"]);
+		// `github` constructs only where the `gh` CLI is installed
+		// (`GithubTool.createIf` consults `git.github.available()`), so which
+		// partition it lands in is a fact about the host rather than about the
+		// fence: present on a developer machine, absent in the test sandbox. Its
+		// claim is pinned separately below, which is the part that matters.
+		const hostDependent = new Set(["github"]);
+		const stable = (names: string[]) => names.filter(name => !hostDependent.has(name));
+		// The fail-closed floor, with its cost stated rather than hidden: while a
+		// path refusal stands these are fenced too, session-state tools among
+		// them. Nothing becomes bounded by forgetting to declare, which is the
+		// direction to be wrong in.
+		expect(stable(toolsDeclaring(byName, "undeclared"))).toEqual([
+			"checkpoint",
+			"goal",
+			"job",
+			"report_finding",
+			"report_tool_issue",
+			"resolve",
+			"rewind",
+			"todo",
+			"web_search",
+			"yield",
+		]);
+		// Wherever it constructed, `github` drives the `gh` CLI, so it can reach
+		// any path and must never claim to be bounded.
+		const github = byName.get("github");
+		if (github) expect(declaredScope(github)).toBe("undeclared");
+		// Every tool this sweep could not build, named rather than left to be
+		// discovered by the next person who trusts the sweep.
+		expect(stable(absent.sort())).toEqual([
+			"argot_load",
+			"argot_unload",
+			"ask",
+			"irc",
+			"learn",
+			"lsp",
+			"manage_skill",
+			"memory_edit",
+			"recall",
+			"reflect",
+			"retain",
+			"search_tool_bm25",
+			"ssh",
+		]);
+	}, 30_000);
+
+	for (const kind of ["path", "command"] as const) {
+		it(`a standing ${kind} refusal fences every shipped tool that cannot bound itself`, async () => {
+			const settings = Settings.isolated();
+			const { byName } = await constructEveryProductionTool(createSweepSession(settings));
+			recordRefusal("write", "protected target", undefined, settings, {
+				kind,
+				value: kind === "path" ? "/repo/protected" : "echo x > /repo/protected",
+			});
+			// Arguments naming neither the refused path nor the refused command:
+			// an unbounded tool is fenced for every call while the refusal
+			// stands, because nothing in its arguments bounds it.
+			const unbounded = [...byName].filter(([, tool]) => declaredScope(tool) === "unbounded");
+			expect(unbounded.length).toBeGreaterThanOrEqual(6);
+			expect(escapedTheFence(unbounded, settings)).toEqual([]);
+			const undeclared = [...byName].filter(([, tool]) => declaredScope(tool) === "undeclared");
+			expect(undeclared.length).toBeGreaterThanOrEqual(6);
+			expect(escapedTheFence(undeclared, settings)).toEqual([]);
+		}, 30_000);
+	}
+
+	it("keeps path scoping for a shipped tool whose declared targets are its whole effect set", async () => {
+		const settings = Settings.isolated();
+		const { byName } = await constructEveryProductionTool(createSweepSession(settings));
+		recordRefusal("write", "protected target", undefined, settings, { kind: "path", value: "/repo/protected" });
+		const cases = [
+			{ tool: "write", args: { path: "/repo/protected" }, refused: true },
+			// Non-normalized, and it must still land on the refused path.
+			{ tool: "write", args: { path: "/repo/sub/../protected" }, refused: true },
+			{ tool: "write", args: { path: "/repo/other" }, refused: false },
+			{ tool: "read", args: { path: "/repo/protected/inner.txt" }, refused: true },
+			{ tool: "read", args: { path: "/repo/elsewhere.txt" }, refused: false },
+			{ tool: "search", args: { type: "text", input: "x", path: "/repo/protected" }, refused: true },
+			{ tool: "search", args: { type: "text", input: "x", path: "/repo/other" }, refused: false },
+			// The candidate is a DIRECTORY holding the refused path. Containment
+			// has to run both ways, or a sweep rooted at `/repo` reads it.
+			{ tool: "search", args: { type: "text", input: "x", path: "/repo" }, refused: true },
+		];
+		const observed = cases.map(item => ({
+			...item,
+			refused: isToolRefused(item.tool, item.args, { settings }, undefined, byName.get(item.tool)).refused,
+		}));
+		expect(observed).toEqual(cases);
+	}, 30_000);
 
 	for (const name of ["write", "edit", "bash", "eval"]) {
 		it(`a path refusal prevents equivalent work through ${name}`, async () => {

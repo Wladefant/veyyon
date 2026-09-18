@@ -26,8 +26,8 @@ import { statementById } from "../../system-prompt-builder/statement-registry";
 // The owner, not the local `../tui` barrel, which re-exports `./file-list` and through it the theme engine.
 import type { ToolSession } from "..";
 import { truncateForPrompt } from "../core/approval";
-import { invalidateGithubCacheForBashCommand } from "../core/gh-cache-invalidation";
 import type { ToolEffectScope } from "../core/effect-scope";
+import { invalidateGithubCacheForBashCommand } from "../core/gh-cache-invalidation";
 import { inlineBudgetFor, inlineOutputPricing, saveOutputArtifact } from "../core/output-artifact";
 import { foldToolOutputBookkeeping } from "../core/output-fold";
 import type { OutputMeta } from "../core/output-meta";

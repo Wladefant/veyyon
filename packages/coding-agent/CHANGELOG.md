@@ -19,6 +19,7 @@
 - Updated the config-reload benchmark, handbook, and capture scene to use the current agent routing namespace ([#26](https://github.com/Wladefant/veyyon/issues/26)).
 - Collapsed todo boards prioritize in-progress tasks, announce row-trimmed active phases, and show canonical newly started tasks with concurrent counts even when replayed without call arguments.
 - Neutralized workstation-specific defaults, private project identifiers, and host orchestration policies in topic replenishment and native ledger bridge, restoring neutral authorization semantics where no target is forbidden by default and forbidden targets are strictly configuration-driven, and resolving topic worker models via config/catalog APIs without baked-in model defaults ([#953](https://github.com/santhreal/veyyon/issues/953)).
+- Every tool declares the scope of its effects, so a tool whose targets the fence cannot read is refused while a standing refusal is in force instead of being waved through ([#37](https://github.com/Wladefant/veyyon/issues/37)).
 ### Breaking Changes
 
 - Agent settings use `agent.*`, `tier.agent`, `advisor.agents`, and `argot.agents`; legacy keys migrate on load, while historical runtime export names, custom-theme color tokens, session records, and RPC spellings remain unchanged.
