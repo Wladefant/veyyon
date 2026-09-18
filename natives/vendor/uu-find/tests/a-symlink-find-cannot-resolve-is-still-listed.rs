@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 // WHY: `find -L` diagnosed a symlink it could not resolve and then dropped it
 // from the listing. The walker reports resolving the link as an error and does
 // not deliver the entry, and the error callback only wrote to stderr, so

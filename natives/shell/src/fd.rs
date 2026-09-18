@@ -513,12 +513,26 @@ struct SizeFilter {
 }
 
 #[derive(Clone, Copy)]
+#[cfg_attr(
+	not(unix),
+	expect(
+		dead_code,
+		reason = "owner matching is unix-only; the variants are constructed by the shared parser"
+	)
+)]
 enum OwnerSide {
 	Include(u32),
 	Exclude(u32),
 }
 
 #[derive(Clone, Copy)]
+#[cfg_attr(
+	not(unix),
+	expect(
+		dead_code,
+		reason = "owner matching is unix-only; the fields are constructed by the shared parser"
+	)
+)]
 struct OwnerMatcher {
 	user:  Option<OwnerSide>,
 	group: Option<OwnerSide>,
@@ -1202,10 +1216,11 @@ fn matches_owner_filters(filters: &[OwnerMatcher], metadata: Option<&Metadata>) 
 }
 
 #[cfg(not(unix))]
-fn matches_owner_filters(filters: &[OwnerMatcher], _metadata: Option<&Metadata>) -> bool {
+const fn matches_owner_filters(filters: &[OwnerMatcher], _metadata: Option<&Metadata>) -> bool {
 	filters.is_empty()
 }
 
+#[cfg(unix)]
 const fn owner_side_matches(side: OwnerSide, actual: u32) -> bool {
 	match side {
 		OwnerSide::Include(expected) => actual == expected,

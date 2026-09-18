@@ -66,6 +66,10 @@ const CONFIG_DIR_ENV_KEYS: [&str; 1] = ["VEYYON_CONFIG_DIR"];
 
 /// Env key that overrides the agent dir, mirroring `AGENT_DIR_ENV_KEYS` in
 /// `packages/utils/src/dirs.ts`.
+#[cfg_attr(
+	not(any(target_os = "linux", target_os = "macos")),
+	allow(dead_code, reason = "read only by the xdg-state path, which is linux/macos")
+)]
 const AGENT_DIR_ENV_KEYS: [&str; 1] = ["VEYYON_CODING_AGENT_DIR"];
 
 /// First env var that is *present* among `keys` (an empty value counts as

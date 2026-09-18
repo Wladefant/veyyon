@@ -33,10 +33,11 @@
 //! Inline `#[cfg(test)]` modules are excluded from planning. A mutant inside a
 //! test mutates the oracle, and a suite that kills it has proved nothing.
 
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::{
 	collections::BTreeSet,
 	env, fs,
-	os::unix::process::CommandExt,
 	path::{Path, PathBuf},
 	process::{Child, Command, ExitStatus, Stdio},
 	thread,
@@ -325,16 +326,20 @@ fn verdict(root: &Path, package: &str, cap: Duration) -> Outcome {
 	let Ok(errors) = sink.try_clone() else {
 		return Outcome::NotViable;
 	};
-	let spawned = Command::new("cargo")
-		.args(["test", "-p", package, "--lib", "-q"])
-		.env("CARGO_INCREMENTAL", "1")
-		.current_dir(root)
-		.stdout(Stdio::from(sink))
-		.stderr(Stdio::from(errors))
+	let spawned = {
+		let mut command = Command::new("cargo");
+		command
+			.args(["test", "-p", package, "--lib", "-q"])
+			.env("CARGO_INCREMENTAL", "1")
+			.current_dir(root)
+			.stdout(Stdio::from(sink))
+			.stderr(Stdio::from(errors));
 		// Its own process group, so the kill below reaches the test binary and
 		// not only the cargo that spawned it.
-		.process_group(0)
-		.spawn();
+		#[cfg(unix)]
+		command.process_group(0);
+		command.spawn()
+	};
 	let Ok(mut child) = spawned else {
 		return Outcome::NotViable;
 	};
@@ -654,12 +659,11 @@ fn main() {
 // than a stall.
 //
 // WHAT IT DOES NOT CATCH. A machine that dies between the write of the source
-// and the write of the record — the window is one syscall and the record is
 // written first, so the surviving state is a record whose file is already
 // original, which the second case below proves is dropped without a write. It
 // also cannot see two runners mutating at once; the ledger is single-writer by
 // construction and nothing here makes it safe to share.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
 	use std::{
 		os::unix::process::CommandExt,
