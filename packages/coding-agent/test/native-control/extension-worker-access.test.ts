@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, test } from "bun:test";
+import type { SessionManager } from "@veyyon/kernel/session/session-manager";
+import type { ModelRegistry } from "../../src/config/model-registry";
 import { ExtensionRuntime } from "../../src/extensibility/extensions/loader";
+import { ExtensionRunner } from "../../src/extensibility/extensions/runner";
+import type {
+	ExtensionActions,
+	ExtensionContextActions,
+	ExtensionRuntime as IExtensionRuntime,
+} from "../../src/extensibility/extensions/types";
 import { type SessionWorkerAccess, sessionWorkerAccess } from "../../src/native-control/telegram-control-bridge";
 import { AgentRegistry } from "../../src/registry/agent-registry";
 import type { AgentSession } from "../../src/session/agent-session";
@@ -217,5 +225,70 @@ describe("extension worker access", () => {
 
 		expect(() => uninitialized.listWorkers()).toThrow(/cannot be called from the factory body/);
 		expect(() => uninitialized.steerWorker()).toThrow(/cannot be called from the factory body/);
+	});
+});
+
+/**
+ * `ExtensionRunner.initialize` installs the host's actions onto the shared
+ * runtime one member at a time, and the throwing stub it replaces satisfies the
+ * same interface — so an action the copy forgets type-checks clean and throws
+ * "cannot be called from the factory body" at an extension that did everything
+ * right. That is how these two shipped dead the first time.
+ */
+describe("extension worker actions survive runner initialization", () => {
+	test("an initialized runtime answers with the roster instead of the uninitialized stub", async () => {
+		registry.register({
+			id: "Worker",
+			displayName: "Worker",
+			kind: "sub",
+			status: "running",
+			session: fakeWorkerSession("Worker"),
+			scope: OWN_SCOPE,
+		});
+		const runtime = new ExtensionRuntime();
+		const runner = new ExtensionRunner(
+			[],
+			runtime,
+			"/tmp",
+			{} as unknown as SessionManager,
+			{} as unknown as ModelRegistry,
+		);
+		const noop = () => {};
+		const actions: ExtensionActions = {
+			sendMessage: noop,
+			sendUserMessage: noop,
+			appendEntry: noop,
+			setLabel: noop,
+			getActiveTools: () => [],
+			getAllTools: () => [],
+			setActiveTools: async () => {},
+			getCommands: () => [],
+			setModel: async () => true,
+			getThinkingLevel: () => undefined,
+			setThinkingLevel: noop,
+			getSessionName: () => undefined,
+			setSessionName: async () => {},
+			...access(OWN_SCOPE, "TelegramOperator"),
+		};
+		const contextActions: ExtensionContextActions = {
+			getModel: () => undefined,
+			isIdle: () => true,
+			abort: noop,
+			hasPendingMessages: () => false,
+			shutdown: noop,
+			getContextUsage: () => undefined,
+			compact: async () => {},
+			getSystemPrompt: () => [],
+		};
+
+		runner.initialize(actions, contextActions);
+
+		// The class declares its uninitialized stubs zero-arg, as every other
+		// action does, so calls go through the contract the extension API holds.
+		const initialized: IExtensionRuntime = runtime;
+		expect(initialized.listWorkers().map(worker => worker.id)).toEqual(["Worker"]);
+		const receipt = await initialized.steerWorker("Worker", "rerun the suite");
+		expect(receipt.outcome).not.toBe("failed");
+		expect(inboxes.get("Worker")).toMatchObject([{ from: "TelegramOperator", body: "rerun the suite" }]);
 	});
 });

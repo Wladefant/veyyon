@@ -344,6 +344,8 @@ export class ExtensionRunner {
 		this.runtime.setThinkingLevel = actions.setThinkingLevel;
 		this.runtime.getSessionName = actions.getSessionName;
 		this.runtime.setSessionName = actions.setSessionName;
+		this.runtime.listWorkers = actions.listWorkers;
+		this.runtime.steerWorker = actions.steerWorker;
 
 		// Context actions (required)
 		this.#getModel = contextActions.getModel;
