@@ -49,7 +49,9 @@ import type { ExecOptions, ExecResult } from "../../exec/exec";
 import type * as PiCodingAgent from "../../index";
 import type { LocalProtocolOptions } from "../../internal-urls/local-protocol";
 import type { MemoryRuntimeContext } from "../../memory/backend";
+import type { WorkerSummary } from "../../native-control/telegram-control-bridge";
 import type { CustomMessage, CustomMessagePayload } from "../../session/messages";
+import type { IrcDeliveryReceipt } from "../../task/irc-bus";
 import type { Theme } from "../../theme/theme";
 import type {
 	BashToolDetails,
@@ -1267,6 +1269,33 @@ export interface ExtensionAPI {
 	setSessionName(name: string): Promise<void>;
 
 	// =========================================================================
+	// Live Workers
+	// =========================================================================
+
+	/**
+	 * The live workers of THIS session, newest activity first.
+	 *
+	 * Scoped to the conversation the extension is loaded in, so a host running
+	 * several sessions in one process (ACP, cmux, the SDK) does not hand one
+	 * extension another session's roster. A worker that has been parked or
+	 * aborted still appears, with `live: false`, because an extension reporting
+	 * a roster has to be able to say a lane exited rather than silently drop it.
+	 */
+	listWorkers(options?: ListWorkersOptions): WorkerSummary[];
+
+	/**
+	 * Deliver `message` to one worker's inbox and report what happened.
+	 *
+	 * Targeted: the message reaches the named worker or the receipt says it did
+	 * not. There is no fallback to another worker and no redirect to the root
+	 * session, since a steer that silently lands somewhere else reads to an
+	 * operator as a delivered instruction that the addressee never saw.
+	 * `outcome: "failed"` carries the reason in `error` — unknown id, an advisor
+	 * transcript, or a worker outside this session.
+	 */
+	steerWorker(workerId: string, message: string): Promise<IrcDeliveryReceipt>;
+
+	// =========================================================================
 	// Provider Registration
 	// =========================================================================
 
@@ -1446,6 +1475,19 @@ export type GetThinkingLevelHandler = () => ThinkingLevel | undefined;
 
 export type SetThinkingLevelHandler = (level: ThinkingLevel, persist?: boolean) => void;
 
+export interface ListWorkersOptions {
+	/**
+	 * Include read-only advisor transcripts, which are listed but cannot be
+	 * steered. Off by default so a roster never offers a target that
+	 * `steerWorker` is going to refuse.
+	 */
+	includeAdvisors?: boolean;
+}
+
+export type ListWorkersHandler = (options?: ListWorkersOptions) => WorkerSummary[];
+
+export type SteerWorkerHandler = (workerId: string, message: string) => Promise<IrcDeliveryReceipt>;
+
 /** Shared state created by loader, used during registration and runtime. */
 export interface ExtensionRuntimeState {
 	flagValues: Map<string, boolean | string>;
@@ -1468,6 +1510,8 @@ export interface ExtensionActions {
 	setThinkingLevel: SetThinkingLevelHandler;
 	getSessionName: () => string | undefined;
 	setSessionName: (name: string) => Promise<void>;
+	listWorkers: ListWorkersHandler;
+	steerWorker: SteerWorkerHandler;
 }
 
 /** Actions for ExtensionContext (ctx.* in event handlers). */

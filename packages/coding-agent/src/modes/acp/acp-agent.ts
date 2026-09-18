@@ -65,6 +65,7 @@ import { loadSlashCommands } from "../../extensibility/slash-commands";
 import { listLocalPlanFileUrls } from "../../internal-urls/local-protocol";
 import { MCPManager } from "../../mcp/manager";
 import type { MCPServerConfig } from "../../mcp/types";
+import { sessionWorkerAccess } from "../../native-control/telegram-control-bridge";
 import { type PlanApprovalDetails, resolveApprovedPlan } from "../../plan-mode/approved-plan";
 import { DEFAULT_PLAN_FILE_URL } from "../../plan-mode/plan-file-url";
 import { resolvePlanFilePath } from "../../plan-mode/plan-path";
@@ -2307,6 +2308,7 @@ export class AcpAgent implements Agent {
 				setSessionName: async name => {
 					await record.session.sessionManager.setSessionName(name, "user");
 				},
+				...sessionWorkerAccess(() => record.session.sessionManager.getSessionId()),
 			},
 			{
 				getModel: () => record.session.model,
