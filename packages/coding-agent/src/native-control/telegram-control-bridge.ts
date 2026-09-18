@@ -514,16 +514,11 @@ export class TelegramNativeControlBridge {
 
 	async sendMessage(request: SendWorkerMessageRequest): Promise<WorkerMessageReceipt> {
 		this.#authorize(request);
-		const receipt = await sendWorkerMessage(
-			this.#bus,
-			request.to,
-			request.message,
-			{
-				sender: `Telegram:${this.#binding.actorId}`,
-				registry: this.#registry,
-				scope: this.#binding.sessionId,
-			},
-		);
+		const receipt = await sendWorkerMessage(this.#bus, request.to, request.message, {
+			sender: `Telegram:${this.#binding.actorId}`,
+			registry: this.#registry,
+			scope: this.#binding.sessionId,
+		});
 		return {
 			to: receipt.to,
 			outcome: receipt.outcome,
