@@ -6971,7 +6971,14 @@ export class AgentSession {
 
 	#wrapRuntimeTool(tool: AgentTool): AgentTool {
 		const wrapped = wrapToolWithMetaNotice(tool);
-		return new ExtensionToolWrapper(wrapped, this.#extensionRunner, "session.dynamic-tools");
+		// The policy this session stands for, for a caller that reaches the tool
+		// with no context: a dynamic tool is fenced by the same standing refusals
+		// as a built-in one. See `ExtensionToolWrapper`'s constructor.
+		return new ExtensionToolWrapper(wrapped, this.#extensionRunner, "session.dynamic-tools", () => ({
+			settings: this.settings,
+			sessionManager: this.sessionManager,
+			sessionApprovals: this.sessionToolApprovals(),
+		}));
 	}
 
 	/**

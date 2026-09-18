@@ -41,6 +41,35 @@ class ToolExecutionEntry {
 	}
 
 	/**
+	 * Fence a call whose caller may have established no context at all, against
+	 * the policy the tool's OWNER stands for.
+	 *
+	 * A tool taken off a session registry is invoked directly — the cursor
+	 * bridge, an eval snippet, a browser page, `session.getToolByName(...)` — and
+	 * those call sites thread a context through only when they happen to have
+	 * one. The session's standing refusals apply to that call either way, so a
+	 * missing context reads the owner's policy instead of refusing the work for
+	 * want of one.
+	 *
+	 * Returns the context the tool may be handed: the supplied frame, or the
+	 * ambient one when the caller omitted it, and NEVER the owner policy. That
+	 * frame answers the fence and stops there, because a caller that established
+	 * no context established no session for the tool — or for the approval gate —
+	 * to read.
+	 */
+	fence(
+		tool: { name: string },
+		params: unknown,
+		context?: ToolPolicyFrame,
+		ownerPolicy?: () => ToolPolicyFrame | undefined,
+	): AgentToolContext | undefined {
+		const established = context ?? executionContext.getStore();
+		if (established) return this.assertContext(tool, params, established);
+		this.assert(tool, params, ownerPolicy?.());
+		return undefined;
+	}
+
+	/**
 	 * Keyed on the tool's DETAILS type only, the way `wrapToolWithMetaNotice` is.
 	 * A concrete tool types `execute`'s `params` concretely without exposing a
 	 * schema this can infer from, so pinning the schema resolves it to `TSchema`,
