@@ -6,5 +6,6 @@
 
 ### Added
 
+- `Model.longContextCost` declares the second rate card a model bills at once its prompt crosses `inputThreshold` tokens.
 - `@veyyon/model` states the model and message vocabulary: the `Model` row with its thinking config and the `Effort` ladder, the `Message` envelope with its content blocks and the streamed `AssistantMessageEvent` union, the `ToolCallMetrics` and `AssistantTurnMetrics` study records, and the service-tier vocabulary. A provider implements a stream and a host reads a turn without importing the catalog that resolves the model or the client that drives it. The package has no dependencies.
 - `KNOWN_APIS` is the runtime spelling of the `KnownApi` union, so a sweep over every api a row may carry reads the union instead of restating it.

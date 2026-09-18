@@ -1204,7 +1204,7 @@ async function runTests(): Promise<void> {
 	console.log("Test 13: neutral authorization semantics in TypeScript and Python bridge");
 	{
 		// TypeScript: unconfigured -> no target or environment is forbidden by default
-		assert.equal(topicReplenishmentModule.isForbiddenTarget({ repo: "example/library", target: "main" }), false, "main must be allowed by default");
+		assert.equal(topicReplenishmentModule.isForbiddenTarget({ target: "main" }), false, "main must be allowed by default");
 		assert.equal(topicReplenishmentModule.isForbiddenTarget({ target: "master" }), false, "master must be allowed by default");
 		assert.equal(topicReplenishmentModule.isForbiddenTarget({ target: "production" }), false, "production must be allowed when unconfigured");
 		assert.equal(topicReplenishmentModule.isForbiddenTarget({ environment: "production" }), false, "production environment must be allowed when unconfigured");
@@ -1269,7 +1269,7 @@ print("PYTHON_BRIDGE_AUTH_OK")
 
 		const stockRoles = settings.getModelRoles();
 		for (const [role, model] of Object.entries(stockRoles)) {
-			assert.ok(!/fable|sol|astra|spark|flash/i.test(model), `Stock role ${role} contains operator-specific model: ${model}`);
+			assert.ok(!/fable|sol|astra|spark|flash/i.test(model ?? ""), `Stock role ${role} contains operator-specific model: ${model}`);
 		}
 
 		const defaultResolved = topicReplenishmentModule.resolveTopicWorkerModel({ settings });

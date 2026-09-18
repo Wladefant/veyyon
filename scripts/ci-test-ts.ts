@@ -312,6 +312,7 @@ export const workspaceTestPackages = [
 // silently ignores unmatched filters when at least one other filter matches, so a
 // typo'd path in this array is invisible rather than fatal. Check the file exists.)
 export const repoScriptTests = [
+	"scripts/a-documented-provider-default-is-the-descriptor-default.test.ts",
 	"scripts/a-generated-doc-says-so-on-its-first-line.test.ts",
 	"scripts/a-local-action-is-called-with-everything-it-requires.test.ts",
 	"scripts/a-module-is-imported-at-the-top-of-its-file.test.ts",
