@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { SESSION_LIST_INDEX_FILE } from "@veyyon/kernel/session/session-list-index";
 import { listSessions } from "@veyyon/kernel/session/session-listing";
 import { FileSessionStorage } from "@veyyon/kernel/session/session-storage";
 import { removeWithRetries } from "@veyyon/utils";
@@ -155,10 +156,16 @@ describe("a session survives its process being killed mid-write", () => {
 		// orphan-recovery pass first, so by the time the user sees the directory it
 		// must be clean. Debris that accumulates every crash eventually looks like
 		// corruption to anyone who opens the folder.
+		//
+		// The list index is not debris: listing writes one deliberate, versioned,
+		// self-healing file per directory, and it is named here rather than
+		// pattern-matched so a second unexplained file still fails.
 		const { file } = await killAfterCommits(3);
 		await listSessions(sessionDir, storage);
 
-		const leftovers = fs.readdirSync(sessionDir).filter(name => !name.endsWith(".jsonl"));
+		const leftovers = fs
+			.readdirSync(sessionDir)
+			.filter(name => !name.endsWith(".jsonl") && name !== SESSION_LIST_INDEX_FILE);
 		expect(leftovers).toEqual([]);
 		expect(fs.existsSync(file)).toBe(true);
 	});

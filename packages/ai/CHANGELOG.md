@@ -17,6 +17,10 @@
 
 - Provider-specific test override setters are replaced by `setProviderModuleOverrideForTest(api, module)`.
 
+### Added
+
+- `VideoContent` support across provider serialization and fallback placeholder handling.
+
 ### Changed
 
 - The NVIDIA, Xiaomi, Xiaomi Token Plan and Alibaba Coding Plan logins take the pasted key through the same `promptApiKey` as every `createApiKeyLogin` provider: the key is trimmed, an empty paste is `ApiKeyRequiredError`, an abort during the paste is `LoginCancelledError`, and a host without `onPrompt` is `OnPromptRequiredError`; no behavior change.
@@ -55,6 +59,8 @@
 
 ### Fixed
 
+- ChatGPT Codex server-side compaction posts to the codex responses route instead of the retired `/responses/compact` route, which answered 404 and turned the session over to local compaction for the rest of its life.
+
 - Corrected comments that named a distribution channel or runtime API the project does not use; no behavior change.
 - A stream that stalls after its first event ("<provider> stream stalled while waiting for the next event") classifies as a timeout as well as transient, so auto-compaction moves to the next candidate model instead of re-sending the full context to the model that stalled up to `retry.maxRetries` times.
 - A Codex websocket turn that the server accepts and then leaves without progress for the idle window is retried on the websocket once and then run over SSE, instead of spending the whole websocket retry budget on stalls, which held one compaction summary for thirty minutes per attempt.
@@ -63,6 +69,7 @@
 - Cursor and Devin protobuf regeneration invokes the workspace compiler, and Cursor output is written to the catalog package.
 - Credential-store startup applies SQLite busy handling and WAL mode before initializing refresh leases, allowing concurrent launches to wait for database locks.
 - Google's generic `RESOURCE_EXHAUSTED` 429 body ("Resource has been exhausted (e.g. check quota)") classifies as a per-minute throttle retried on the same account after 45-75 s, instead of a daily quota wall whose 30-minute wait exceeded the retry budget and ended the turn on the first 429; a body that states a quota keeps the quota classification.
+- `AuthStorage.disabledCredentialAccount` states which account a provider's refresh failure belongs to, so a note about a dead login can name it instead of reading as a statement about whichever account it renders beside.
 
 ## [1.4.1] - 2026-09-08
 

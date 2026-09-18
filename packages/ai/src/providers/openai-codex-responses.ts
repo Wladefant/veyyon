@@ -50,6 +50,7 @@ import type {
 	CodexCompactionRequestContext,
 	Context,
 	FetchImpl,
+	ImageContent,
 	Model,
 	ProviderSessionState,
 	RawSseEvent,
@@ -62,6 +63,7 @@ import type {
 	ToolCall,
 	ToolChoice,
 	Usage,
+	VideoContent,
 } from "../types";
 import {
 	createOpenAIResponsesHistoryPayload,
@@ -4349,7 +4351,7 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 
 function normalizeInputMessageContent(
 	model: Model<"openai-codex-responses">,
-	content: string | Array<{ type: "text"; text: string } | { type: "image"; mimeType: string; data: string }>,
+	content: string | Array<TextContent | ImageContent | VideoContent>,
 ): ResponseInputContent[] {
 	if (typeof content === "string") {
 		if (!content || content.trim() === "") return [];
