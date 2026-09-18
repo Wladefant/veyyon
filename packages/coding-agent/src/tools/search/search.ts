@@ -12,6 +12,7 @@ import { toolsPrompts } from "../../prompts/tools/rows";
 import { resolveFileDisplayMode } from "../../utils/file-display-mode";
 import type { ToolSession } from "..";
 import { searchPathFilesystemTargets } from "../core/cwd-boundary";
+import type { ToolEffectScope } from "../core/effect-scope";
 import type { OutputMeta } from "../core/output-meta";
 import {
 	expandDelimitedPathEntriesSync,
@@ -23,7 +24,6 @@ import {
 } from "../core/path-utils";
 import { ToolError } from "../core/tool-errors";
 import { executeFileSearch, type FileSearchDetails } from "./file-search";
-
 import { executeStructureSearch, type StructureSearchDetails } from "./structure-search";
 import { executeTextSearch, type TextSearchDetails, textSearchApproval } from "./text-search";
 
@@ -230,6 +230,8 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 	readonly strict = true;
 	readonly description: string;
 	readonly filesystemTargets = (args: unknown, cwd = this.session.cwd): string[] => searchFilesystemTargets(args, cwd);
+	// Every file this call can reach lives under a declared search root.
+	readonly effectScope: ToolEffectScope = "declared-targets";
 	readonly examples: readonly ToolExample<SearchToolInput>[] = [
 		{
 			caption: "Find TypeScript files",
