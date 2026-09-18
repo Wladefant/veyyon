@@ -15,6 +15,8 @@ import * as path from "node:path";
  */
 import { isReleaseTag, isReleaseVersion, RELEASE_VERSION_BODY } from "@veyyon/utils/semver";
 import { $, Glob, JSONC } from "bun";
+// @ts-expect-error — plain .mjs module, no types; imported for its exports.
+import { FORK_POINT_VERSION } from "../apps/site/tools/gen-changelog.mjs";
 import { hasVersionHeading, unreleasedEntries } from "./changelog-unreleased";
 import { runChangelogFixer } from "./fix-changelogs";
 import {
@@ -138,7 +140,13 @@ function removeEmptyVersionEntries(content: string): string {
  */
 export function applyReleaseToChangelog(content: string, version: string, date: string): string {
 	if (unreleasedEntries(content).length > 0) {
-		if (content.includes(`## [${version}]`)) {
+		// Only the veyyon-owned region may hold the duplicate: every heading at
+		// the fork point and below is inherited upstream history, whose versions
+		// (`## [1.5.0]` in hosts/terminal/engine) can equal a version veyyon has
+		// not released yet. A whole-file match refuses that cut forever.
+		const forkPoint = content.indexOf(`## [${FORK_POINT_VERSION}]`);
+		const veyyonOwned = forkPoint === -1 ? content : content.slice(0, forkPoint);
+		if (hasVersionHeading(veyyonOwned, version)) {
 			throw new Error(
 				`This changelog already has a "## [${version}]" section and [Unreleased] is not empty. ` +
 					`Rolling again would document ${version} twice. Move the [Unreleased] entries into the ` +
