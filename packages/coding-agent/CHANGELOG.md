@@ -11,6 +11,7 @@
 
 ### Fixed
 
+- Topic replenishment reads the live settings instance again. `resolveTopicWorkerModel` probed `Settings.isInitialized`, a member neither this fork nor upstream ever declared, so the expression was always `undefined`: an initialized session was treated as uninitialized, the configured agent lane and `modelRoles` default were never consulted, and every unconfigured caller fell through to `VEYYON_DEFAULT_MODEL`. It calls the exported `isSettingsInitialized()` instead ([#25](https://github.com/Wladefant/veyyon/issues/25)).
 - Scope Telegram worker registry rendering and targeted messaging to the authenticated session, rejecting cross-session target IDs and caller-supplied scope overrides ([#38](https://github.com/Wladefant/veyyon/issues/38)).
 - HTTP/SSE MCP OAuth honors configured scopes, unions challenge-required and explicit provider scopes, and uses supported-scope metadata only as a fallback.
 - `/reload-config` reports applied, unchanged and restart-only values per key, retains startup-bound model roles and default effort, and pins task/eval/vibe model and effort resolution to one dispatch snapshot ([#39](https://github.com/Wladefant/veyyon/issues/39)).

@@ -163,8 +163,17 @@ const AUTH_STORAGE_CEILING = 227;
  * deployment contract, split out of `openai-compat.ts`. `provider-models/descriptors.ts` is in this
  * closure and takes the provider's discovery mapper from that file now; every module the file
  * imports was already reached through `openai-compat.ts`, so it adds one module and no subtree.
+ *
+ * 83 since 2026-09-18, measured on this fork and not upstream: the local `codex-chatgpt-web` bridge
+ * provider. `provider-models/descriptors.ts` names `provider-models/chatgpt-web.ts`, that file names
+ * `discovery/chatgpt-web.ts`, and the discovery reader bounds its loopback request with
+ * `@veyyon/utils/scoped-timeout` — the one leaf in the three this closure had no other path to
+ * (`shared-llm.ts` already reaches it, which is why the same provider costs it two and not three).
+ * Measured by removing the descriptor edge and the `provider-models/index.ts` re-export: the closure
+ * drops to exactly upstream's 80. Three files, no subtree, and the number moves back the moment the
+ * bridge provider leaves.
  */
-const ENV_API_KEY_CEILING = 80;
+const ENV_API_KEY_CEILING = 83;
 
 /** Measured 2026-07-26 at 75: the logger and nothing else. A backend import here is the regression. */
 const USAGE_REGISTRY_CEILING = 83;

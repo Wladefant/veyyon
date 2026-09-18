@@ -8,7 +8,7 @@
  * What this file closes: the registry is read at run time and split on `login`. Every provider that
  * lacks one must appear in `NO_LOGIN_EXCEPTIONS` with a non-empty recorded reason, so adding a new
  * provider with no login turns this suite red until someone writes that reason down. The exception
- * set itself is pinned to the three providers that genuinely cannot be one pasted key, and each
+ * set itself is pinned to the providers that genuinely cannot be one pasted key, and each
  * exception is cross-checked against the registry so a stale entry (provider deleted, or provider
  * that has since grown a login) also goes red. For every enumerated single-key provider the login is
  * driven end to end through a fake controller: the pasted key comes back trimmed, `onAuth` receives
@@ -35,6 +35,8 @@ const NO_LOGIN_EXCEPTIONS: Readonly<Record<string, string>> = {
 	azure: "needs a per-resource endpoint plus a deployment name alongside the key, not a key alone",
 	"google-vertex": "needs a GCP project and location plus Application Default Credentials, not a pasted key",
 	"amazon-bedrock": "needs AWS credentials (access key id, secret, region, optional session token), not a pasted key",
+	"chatgpt-web":
+		"the local bridge daemon authenticates its own signed-in Chrome profile through its `setup` command; there is no credential Veyyon could paste, and declaring one would mint OFFICIAL openai-codex credentials from a second /login row",
 };
 
 /** Registry ids that lack a login and have no recorded reason. Empty means every case was decided. */
@@ -175,8 +177,13 @@ describe("single-key providers have a real /login", () => {
 		expect(unexplainedMissingLogin(PROVIDER_REGISTRY, blanked)).toEqual(["azure"]);
 	});
 
-	test("the exception set is exactly the three providers a pasted key cannot authenticate", () => {
-		expect(Object.keys(NO_LOGIN_EXCEPTIONS).sort()).toEqual(["amazon-bedrock", "azure", "google-vertex"]);
+	test("the exception set is exactly the providers a pasted key cannot authenticate", () => {
+		expect(Object.keys(NO_LOGIN_EXCEPTIONS).sort()).toEqual([
+			"amazon-bedrock",
+			"azure",
+			"chatgpt-web",
+			"google-vertex",
+		]);
 		for (const [id, reason] of Object.entries(NO_LOGIN_EXCEPTIONS)) {
 			expect(providerById(id).login).toBeUndefined();
 			expect(reason.trim().length).toBeGreaterThan(0);
