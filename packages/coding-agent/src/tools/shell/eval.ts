@@ -25,6 +25,7 @@ import { webpExclusionForModel } from "../../utils/image-loading";
 import { formatDimensionNote, resizeImage } from "../../utils/image-resize";
 import type { ToolSession } from "..";
 import { truncateForPrompt } from "../core/approval";
+import type { ToolEffectScope } from "../core/effect-scope";
 import { inlineBudgetFor } from "../core/output-artifact";
 import { foldToolOutputBookkeeping } from "../core/output-fold";
 import { resolveOutputMaxColumns, resolveOutputSinkHeadBytes } from "../core/output-meta";
@@ -363,6 +364,10 @@ function formatEvalInputLanguage(value: string): string {
 
 export class EvalTool implements AgentTool<typeof evalSchema, EvalToolDetails> {
 	readonly name = "eval";
+	// Eval runs model-authored code in a persistent kernel with full runtime
+	// access, so no argument bounds the paths it can touch. The refusal fence
+	// fences every call while a path or command refusal stands.
+	readonly effectScope: ToolEffectScope = "unbounded";
 	readonly approval = "exec" as const;
 	readonly view = evalToolView;
 	readonly formatApprovalDetails = (args: unknown): string[] => {

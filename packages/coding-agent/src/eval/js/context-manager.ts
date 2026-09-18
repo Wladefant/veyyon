@@ -484,6 +484,7 @@ async function handleToolCall(
 	try {
 		const value = await callSessionTool(msg.name, msg.args, {
 			session: pending.toolSession,
+			entry: "cli.worker",
 			signal: ctrl.signal,
 			emitStatus: (event: JsStatusEvent) => pending.runState.onDisplay?.({ type: "status", event }),
 		});

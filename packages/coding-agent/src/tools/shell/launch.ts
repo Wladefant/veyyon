@@ -23,6 +23,7 @@ import { toolsPrompts } from "../../prompts/tools/rows";
 import { sessionBudgetLimits, sessionCpuAdoption, sessionCpuLimit } from "../../session/cpu-limit";
 import type { Theme } from "../../theme/theme";
 import type { ToolSession } from "..";
+import type { ToolEffectScope } from "../core/effect-scope";
 import { foldToolOutputBookkeeping } from "../core/output-fold";
 import { resolveToCwd } from "../core/path-utils";
 import { formatDuration, previewLine, replaceTabs, shortenPath, TRUNCATE_LENGTHS } from "../core/render-utils";
@@ -385,6 +386,9 @@ function approvalFor(params: unknown): ToolApprovalDecision {
 /** Project-scoped launch tool for supervising processes in every coding-agent session. */
 export class LaunchTool implements AgentTool<typeof launchSchema, LaunchToolDetails, Theme> {
 	readonly name = "launch";
+	// Launch supervises a spawned process, whose effects are whatever the
+	// application does; the argv does not bound them.
+	readonly effectScope: ToolEffectScope = "unbounded";
 	readonly label = "Launch";
 	readonly loadMode = "essential";
 	readonly summary = "Supervise a shared project process that does not end on its own";

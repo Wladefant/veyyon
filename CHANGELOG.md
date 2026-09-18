@@ -603,6 +603,7 @@
 
 ### Fixed
 
+- Scope extension refusals to declared subjects, fail closed for opaque execution under a path refusal, and enforce session policy through registered tool dispatch boundaries ([#37](https://github.com/Wladefant/veyyon/issues/37)).
 - Scope Telegram worker registry rendering and targeted messaging to the authenticated session, rejecting cross-session target IDs and caller-supplied scope overrides ([#38](https://github.com/Wladefant/veyyon/issues/38)).
 - HTTP/SSE MCP OAuth honors configured scopes, unions challenge-required and explicit provider scopes, and uses supported-scope metadata only as a fallback.
 - `/reload-config` reports applied, unchanged and restart-only values per key, retains startup-bound model roles and default effort, and pins task/eval/vibe model and effort resolution to one dispatch snapshot ([#39](https://github.com/Wladefant/veyyon/issues/39)).
@@ -753,6 +754,7 @@
 - GUI host branching uses the session lifecycle for both loaded and unloaded sessions, preserving extension cancellation and source transcripts.
 - Native desktop backdrop blur renders on surfaces without texture-copy support instead of leaving the window on its initial frame.
 - Automatic maintenance cuts an oversized body until a summarization request fits a summarizer, instead of parking the session with "Compaction freed too little context to make progress" when every candidate was skipped for holding fewer tokens than the summary needed.
+- Every tool declares the scope of its effects, so a tool whose targets the fence cannot read is refused while a standing refusal is in force instead of being waved through ([#37](https://github.com/Wladefant/veyyon/issues/37)).
 - Print, JSON and RPC mode flush Bun's stdout sink before exiting, so a piped consumer receives the whole last frame instead of losing up to 1 MiB of queued output.
 - A spawned agent's card shows its resolved-model badge again on the live block, the registry path an extension wraps and the rebuilt transcript, per `agent.showResolvedModelBadge`.
 - With `VEYYON_FORCE_IMAGE_PROTOCOL=sixel` and `VEYYON_ALLOW_SIXEL_PASSTHROUGH=1`, a bash card draws an inline Sixel image row as the program wrote it instead of blanking it.

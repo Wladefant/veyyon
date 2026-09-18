@@ -4,6 +4,7 @@ import { errorMessage, isRecord } from "@veyyon/utils";
 import { INTENT_FIELD } from "@veyyon/wire";
 import type { ToolSession } from "../../tools";
 import { ToolError } from "../../tools/core/tool-errors";
+import { TOOL_EXECUTION_ENTRIES } from "../../tools/core/execution-registry";
 import { EVAL_AGENT_BRIDGE_NAME } from "../agent-bridge-name";
 import { EVAL_BUDGET_BRIDGE_NAME, type EvalBudgetResult, runEvalBudget } from "../budget-bridge";
 import { EVAL_COMPLETION_BRIDGE_NAME, runEvalCompletion } from "../completion-bridge";
@@ -13,7 +14,9 @@ import type { JsStatusEvent } from "./shared/types";
 
 export type { JsStatusEvent } from "./shared/types";
 
-interface ToolBridgeOptions extends EvalBridgeOptions {}
+interface ToolBridgeOptions extends EvalBridgeOptions {
+	entry?: "eval.tool-bridge" | "cli.worker";
+}
 
 type ToolValue =
 	| string
@@ -164,7 +167,13 @@ export async function callSessionTool(name: string, args: unknown, options: Tool
 	if (name === EVAL_CONCURRENCY_BRIDGE_NAME) {
 		return runEvalConcurrency(args, options);
 	}
+	// Worker IPC bridge entry point: worker threads / subprocesses (e.g. JS_EVAL_WORKER, JS_EVAL_PROCESS)
+	// execute tools via IPC calls to callSessionTool. Enforce the refusal fence at entry in case the
+	// target session tool was unwrapped or context was omitted.
 	const tool = getTool(options.session, name);
+	const entry = TOOL_EXECUTION_ENTRIES[options.entry ?? "eval.tool-bridge"];
+	const context = options.session.getToolContext?.() ?? { settings: options.session.settings };
+	entry.assert(tool, args, context);
 	const normalizedArgs = normalizeArgs(args);
 	const toolCallId = `js-${name}-${crypto.randomUUID()}`;
 	try {
@@ -175,13 +184,7 @@ export async function callSessionTool(name: string, args: unknown, options: Tool
 		// denial. An eval snippet is model-authored text, which is exactly the
 		// caller those controls exist for.
 		const executionArgs = validateEvalToolArguments(tool, name, toolCallId, normalizedArgs);
-		const result = await tool.execute(
-			toolCallId,
-			executionArgs,
-			options.signal,
-			undefined,
-			options.session.getToolContext?.(),
-		);
+		const result = await entry.invoke(tool, toolCallId, executionArgs, options.signal, undefined, context);
 		const textBlocks = result.content.filter(
 			(content): content is { type: "text"; text: string } =>
 				content.type === "text" && typeof content.text === "string",

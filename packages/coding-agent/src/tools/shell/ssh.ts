@@ -13,6 +13,7 @@ import { ensureHostInfo, getCachedHostInfoSync } from "../../ssh/connection-mana
 import { executeSSH } from "../../ssh/ssh-executor";
 import type { ToolSession } from "..";
 import { truncateForPrompt } from "../core/approval";
+import type { ToolEffectScope } from "../core/effect-scope";
 import { inlineBudgetFor } from "../core/output-artifact";
 import type { OutputMeta } from "../core/output-meta";
 import { ToolError } from "../core/tool-errors";
@@ -132,6 +133,9 @@ type SshToolParams = typeof sshSchema.infer;
 
 export class SshTool implements AgentTool<typeof sshSchema, SSHToolDetails> {
 	readonly name = "ssh";
+	// SSH runs a command on another host and moves files across, so nothing in
+	// the arguments bounds the local or remote paths it reaches.
+	readonly effectScope: ToolEffectScope = "unbounded";
 	readonly approval = "exec" as const;
 	readonly formatApprovalDetails = (args: unknown): string[] => {
 		const params = args as Partial<SshToolParams>;
