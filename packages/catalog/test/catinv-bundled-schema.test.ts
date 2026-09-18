@@ -72,6 +72,7 @@ const SPEC_KEYS: Record<string, true> = {
 	cursorMaxMode: true,
 	cost: true,
 	pricing: true,
+	longContextCost: true,
 	premiumMultiplier: true,
 	contextWindow: true,
 	maxTokens: true,

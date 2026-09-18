@@ -106,6 +106,23 @@ describe("early first-frame actions are retained and executed", () => {
 		}
 	}
 
+	/**
+	 * Let the handover's fire-and-forget submissions finish.
+	 *
+	 * `InputController.drainEarlySubmissions` starts each retained submission with `void` and returns,
+	 * because an early PROMPT runs a whole model turn and `init()` cannot block on one. So `init()`
+	 * resolving means the submissions were STARTED, never that they finished, and a slash command
+	 * reaches its handler some microtasks later — one more of them since the builtins are loaded
+	 * through `slash-commands/dispatch.ts`. Draining microtasks here asserts the effect the command
+	 * has rather than the number of ticks it takes to have it. Bounded, so a submission that never
+	 * completes fails the assertion below instead of hanging.
+	 */
+	async function settleEarlyHandover(): Promise<void> {
+		for (let tick = 0; tick < 100; tick += 1) {
+			await Promise.resolve();
+		}
+	}
+
 	function actionShortcutInput(action: DeferredEditorAction): string {
 		const defaultKey = [KEYBINDINGS[action].defaultKeys].flat()[0];
 		if (defaultKey.startsWith("alt+")) {
@@ -436,6 +453,7 @@ describe("early first-frame actions are retained and executed", () => {
 		};
 
 		await mode.init();
+		await settleEarlyHandover();
 
 		expect(settingsOpened).toBe(true);
 		expect(mode.editor.getText()).toBe("draft after early settings");
@@ -650,6 +668,7 @@ describe("early first-frame actions are retained and executed", () => {
 		const { session: sess1 } = createControlledSession();
 		const mode1 = createMode(sess1);
 		await mode1.init();
+		await settleEarlyHandover();
 
 		expect(sess1.settings.get("tools.approvalMode")).toBe("auto");
 		expect(mode1.editor.getText()).toBe("");
@@ -671,6 +690,7 @@ describe("early first-frame actions are retained and executed", () => {
 			settingsOpened = true;
 		};
 		await mode2.init();
+		await settleEarlyHandover();
 
 		expect(settingsOpened).toBe(true);
 		expect(mode2.editor.getText()).toBe("");

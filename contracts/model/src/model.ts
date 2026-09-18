@@ -41,6 +41,27 @@ export const THINKING_CONTROL_MODES = [
 	"anthropic-budget-effort",
 ] as const;
 
+/**
+ * The second rate card of a model that bills by prompt size.
+ *
+ * Every rate is $/million tokens, on the same terms as `Model.cost`, and the
+ * whole request bills at these rates once it qualifies — not the tokens above
+ * the threshold. That is how the upstreams that have this tier price it.
+ */
+export interface LongContextCost {
+	/**
+	 * Prompt tokens above which this card applies, counted across new input,
+	 * cache reads and cache writes together. Counting new input alone would put
+	 * a 300K-token cached conversation in the cheap tier, which is the
+	 * under-report this card exists to stop.
+	 */
+	inputThreshold: number;
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+}
+
 /** Canonical thinking transport used by a model. */
 export type ThinkingControlMode = (typeof THINKING_CONTROL_MODES)[number];
 
@@ -867,6 +888,17 @@ export interface Model<TApi extends Api = Api> {
 	 * `:free` id marker is the only evidence available for those.
 	 */
 	pricing?: "published" | "unknown";
+	/**
+	 * Rates that replace {@link cost} for the whole request once its prompt
+	 * crosses {@link LongContextCost.inputThreshold} tokens.
+	 *
+	 * Several upstreams bill one model at two rate cards and switch on prompt
+	 * size: Qwen's 32K and 256K steps, xAI's 2x tier above 200K. {@link cost}
+	 * can hold only one of the two, so a flat row under-reports every long
+	 * request against a model that has a tier, and the error grows with the
+	 * session. Absent means the upstream bills one rate at every prompt size.
+	 */
+	longContextCost?: LongContextCost;
 	/** Premium Copilot requests charged per user-initiated request (defaults to 1). */
 	premiumMultiplier?: number;
 	contextWindow: number | null;

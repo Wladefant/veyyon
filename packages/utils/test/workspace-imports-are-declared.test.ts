@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { dynamicImportSpecifiersIn, moduleSpecifiersIn } from "../src/module-reach";
@@ -68,16 +69,46 @@ function readWorkspacePackages(): WorkspacePackage[] {
 	return packages;
 }
 
-function sourceFilesUnder(dir: string, found: string[] = []): string[] {
-	for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-		if (entry.isDirectory()) {
-			if (SKIP_DIRS[entry.name]) continue;
-			sourceFilesUnder(path.join(dir, entry.name), found);
-		} else if (/\.(ts|tsx|mts|cts|js|mjs|cjs)$/.test(entry.name)) {
-			found.push(path.join(dir, entry.name));
-		}
+/**
+ * Every source file in the repository that git would carry, memoized.
+ *
+ * THE WALK THIS REPLACED read the filesystem, so anything git ignores was parsed as if it were a
+ * member's source: a local scratch directory, a vendored checkout, a profile dump, build output
+ * under any name `SKIP_DIRS` does not list. A second copy of a package sitting untracked under a
+ * member reported every import in it as an undeclared edge, and the gate went red over files that
+ * can never reach the graph it describes.
+ *
+ * The domain is what a contributor could commit: tracked files, plus untracked ones git does not
+ * ignore, so a brand-new file carrying a bad import is still caught before it lands.
+ * `SKIP_DIRS` still applies, so a committed build artifact is read no more than it was before.
+ */
+let repoSourceFiles: string[] | undefined;
+
+function allRepoSourceFiles(): string[] {
+	if (repoSourceFiles) return repoSourceFiles;
+	const listing = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
+		cwd: REPO_ROOT,
+		encoding: "utf8",
+		maxBuffer: 256 * 1024 * 1024,
+	});
+	const files: string[] = [];
+	for (const relative of listing.split("\0")) {
+		if (!relative || !/\.(ts|tsx|mts|cts|js|mjs|cjs)$/.test(relative)) continue;
+		if (relative.split("/").some(segment => SKIP_DIRS[segment])) continue;
+		files.push(path.join(REPO_ROOT, relative));
 	}
-	return found;
+	repoSourceFiles = files;
+	return files;
+}
+
+/** Drop the memo, for a case that changes what is on disk. */
+function resetRepoSourceFiles(): void {
+	repoSourceFiles = undefined;
+}
+
+function sourceFilesUnder(dir: string): string[] {
+	const prefix = dir.endsWith(path.sep) ? dir : `${dir}${path.sep}`;
+	return allRepoSourceFiles().filter(file => file.startsWith(prefix));
 }
 
 /** The workspace package a specifier names, or `undefined` for anything outside the workspace. */
@@ -117,6 +148,47 @@ describe("workspace manifests describe the graph the code actually has", () => {
 		expect(workspacePackages.map(pkg => pkg.name)).toContain("@veyyon/wire");
 		expect([...roots].sort()).toEqual([...MEMBER_ROOTS].sort());
 	});
+
+	// Non-vacuity for the listing itself: a `git ls-files` that returned nothing would report no
+	// undeclared edge anywhere, which reads exactly like a workspace with none.
+	it("lists the source a member actually holds", () => {
+		const utilsDir = path.join(REPO_ROOT, "packages", "utils");
+		const files = sourceFilesUnder(utilsDir);
+
+		expect(files.length).toBeGreaterThan(100);
+		expect(files).toContain(path.join(utilsDir, "src", "loop-watchdog.ts"));
+	});
+
+	/**
+	 * THE DEFECT: the enumerator read the filesystem, so a directory git ignores was parsed as a
+	 * member's source. A scratch copy of another package under a member turned this gate red with
+	 * dozens of undeclared edges from files that are not in the repository at all.
+	 *
+	 * THE CLASS: a repo gate whose domain is "what is on disk" rather than "what is committable".
+	 * The probe is written under an ignored path INSIDE a member, which is the shape that broke it,
+	 * and it carries an import that would be reported if the file were read.
+	 */
+	it("reads nothing git ignores, so a scratch copy under a member cannot fail the gate", () => {
+		const utilsDir = path.join(REPO_ROOT, "packages", "utils");
+		// `.scratch/` is ignored repo-wide, so this is a real ignored path and not a contrived one.
+		const scratchDir = path.join(utilsDir, ".scratch", `gate-probe-${process.pid}`);
+		const probe = path.join(scratchDir, "undeclared-import.ts");
+		try {
+			fs.mkdirSync(scratchDir, { recursive: true });
+			fs.writeFileSync(probe, 'import { runRootCommand } from "@veyyon/coding-agent";\nrunRootCommand();\n');
+			resetRepoSourceFiles();
+
+			expect(sourceFilesUnder(utilsDir)).not.toContain(probe);
+			const targets = runtimeEdgesOf(
+				workspacePackages.find(pkg => pkg.name === "@veyyon/utils")!,
+				workspaceNames,
+			).map(edge => edge.target);
+			expect(targets).not.toContain("@veyyon/coding-agent");
+		} finally {
+			fs.rmSync(path.join(utilsDir, ".scratch"), { recursive: true, force: true });
+			resetRepoSourceFiles();
+		}
+	}, 30_000);
 
 	it("declares every workspace package it imports at runtime", () => {
 		const undeclared: string[] = [];

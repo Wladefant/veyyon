@@ -419,14 +419,29 @@ describe("the specific edges that closed the two cycles stay gone", () => {
 	 * JSON modules for one boolean. A substring test failed the moment that leaf was named, reporting
 	 * the cycle was back when the opposite had happened. The same collision existed in
 	 * `test/config/settings-theme-decoupling.test.ts` and is fixed the same way there.
+	 *
+	 * Asserted over the settings LAYER — `config/settings.ts` plus the sibling `config/settings-*`
+	 * modules it imports — not over one file. The layer was one file when this was written;
+	 * extracting the raw-settings migrations moved the classifier edge to the new module and this
+	 * assertion, which named the file, reported the edge gone. Deriving the layer from source keeps
+	 * the property on the thing that has it.
 	 */
 	it("keeps config/settings out of the theme barrel", () => {
-		const imports = staticImports("config/settings.ts");
+		const entry = "config/settings.ts";
+		const layer = [
+			entry,
+			...staticImports(entry)
+				.filter(specifier => specifier.startsWith("./settings-"))
+				.map(specifier => `config/${specifier.slice(2)}.ts`)
+				.filter(relative => fs.existsSync(path.join(SRC, relative))),
+		];
+		const imports = layer.flatMap(staticImports);
 
 		expect(imports).not.toContain("../theme/theme");
 		expect(imports).not.toContain("../theme/shimmer");
 		expect(imports).not.toContain("../theme/theme-class");
-		// And the leaf it does import, so this is not satisfied by settings dropping the classifier.
+		// And the leaf the layer does import, so this is not satisfied by settings dropping the
+		// classifier.
 		expect(imports).toContain("../theme/theme-luminance");
 	});
 
