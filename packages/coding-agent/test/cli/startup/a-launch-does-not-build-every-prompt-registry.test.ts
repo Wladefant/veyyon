@@ -126,11 +126,16 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * `task/native-ledger-bridge.py`, which the walker counts as a file the module reads). None of them is
  * new code on this branch — the merge lowered the ceiling, not the graph.
  *
+ * 1555 to 1558: the refusal fence arrived on `main` — `tools/core/{refusal-fence,effect-scope,execution-registry}.ts`,
+ * the choke point every tool invocation passes through and the effect-scope and registry tables it reads.
+ * The launch path reaches them because it builds the tool table, so this is new code on the graph rather
+ * than a split, and it is the case this ratchet exists to make someone write down.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1555;
+const LAUNCH_REACH_CEILING = 1558;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
