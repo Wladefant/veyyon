@@ -11,10 +11,10 @@ import type { Settings } from "../../config/settings";
 import type { LocalProtocolOptions } from "../../internal-urls/local-protocol";
 import type { MemoryRuntimeContext } from "../../memory/backend";
 import { type Theme, theme } from "../../theme/theme";
-import type { BranchHandler, NavigateTreeHandler, NewSessionHandler } from "../session-handler-types";
-import { createExtensionModelQuery } from "./model-api";
 import { EventBus } from "../../utils/event-bus";
+import type { BranchHandler, NavigateTreeHandler, NewSessionHandler } from "../session-handler-types";
 import { loadExtension } from "./loader";
+import { createExtensionModelQuery } from "./model-api";
 import type {
 	AfterProviderResponseEvent,
 	AssistantThinkingRenderer,
@@ -32,9 +32,9 @@ import type {
 	ExtensionContext,
 	ExtensionContextActions,
 	ExtensionError,
-	ExtensionReloadResult,
 	ExtensionEvent,
 	ExtensionFlag,
+	ExtensionReloadResult,
 	ExtensionRuntime,
 	ExtensionShortcut,
 	ExtensionUIContext,
@@ -344,6 +344,8 @@ export class ExtensionRunner {
 		this.runtime.setThinkingLevel = actions.setThinkingLevel;
 		this.runtime.getSessionName = actions.getSessionName;
 		this.runtime.setSessionName = actions.setSessionName;
+		this.runtime.listWorkers = actions.listWorkers;
+		this.runtime.steerWorker = actions.steerWorker;
 
 		// Context actions (required)
 		this.#getModel = contextActions.getModel;

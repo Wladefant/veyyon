@@ -421,7 +421,9 @@ describe("Telegram extension worker registry and targeted messaging", () => {
 		});
 		expect(scopedCmdResult?.handled).toBe(true);
 		expect(scopedCmdResult?.receipt?.outcome).toBe("failed");
-		expect(scopedCmdResult?.receipt?.error).toContain('Agent "worker-other-session" is not available in the bound session');
+		expect(scopedCmdResult?.receipt?.error).toContain(
+			'Agent "worker-other-session" is not available in the bound session',
+		);
 		expect(foreignInbox).toHaveLength(0);
 
 		// 4. bridge.sendMessage targeting unscoped worker
