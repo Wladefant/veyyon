@@ -3505,6 +3505,30 @@ export class AuthStorage {
 	}
 
 	/**
+	 * WHICH account {@link AuthStorage.disabledCredentialCause} is about.
+	 *
+	 * The cause alone says a login for this provider died; it does not say whose.
+	 * A provider with several accounts renders the note beside the accounts that
+	 * still work, so an unattributed "a previous login was signed out … press a to
+	 * sign in again" reads as a statement about the account it sits next to, and a
+	 * working login is reported as needing a fresh sign-in. Live: the dead grant
+	 * belonged to one Google account and the note rendered against a different one
+	 * that was serving every request.
+	 *
+	 * Undefined when the credential carries nothing that names an account, which is
+	 * the API-key case and the reason the note keeps its unattributed wording.
+	 */
+	disabledCredentialAccount(provider: string): string | undefined {
+		const listDisabled = this.#store.listDisabledAuthCredentials?.bind(this.#store);
+		if (!listDisabled) return undefined;
+		const [latest] = listDisabled(provider);
+		if (!latest?.disabledCause || !isRefreshFailureDisableCause(latest.disabledCause)) return undefined;
+		const credential = latest.credential;
+		if (credential.type !== "oauth") return undefined;
+		return credential.email || credential.accountId || undefined;
+	}
+
+	/**
 	 * Every provider whose latest credential was torn down by a FAILED REFRESH, with the cause.
 	 *
 	 * The per-provider {@link AuthStorage.disabledCredentialCause} can only answer for a provider you

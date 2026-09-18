@@ -15,7 +15,7 @@ import { resolveLocalRoot } from "../../../internal-urls/local-protocol";
 import { toAssistantMessageView } from "../../../presentation/transcript-builder";
 import { turnControlPrompts } from "../../../prompts/turn-control/rows";
 import { USER_INTERRUPT_LABEL } from "../../../session/messages";
-import { executeBuiltinSlashCommand } from "../../../slash-commands/builtin-registry";
+import { dispatchBuiltinSlashCommand } from "../../../slash-commands/dispatch";
 import { isSensitiveSlashCommand, normalizeSubmittedPrompt } from "../../../slash-commands/helpers/parse";
 import type { TuiSlashCommandHostContext } from "../../../slash-commands/types";
 import { vocalizer } from "../../../speech/tts/vocalizer";
@@ -161,7 +161,7 @@ const DOUBLE_ESCAPE_WINDOW_MS = 500;
 /**
  * The slice of `InteractiveModeContext` the input controller reads (H1-77). It
  * composes the two surfaces it forwards `ctx` to whole — the TUI slash-command
- * host (`executeBuiltinSlashCommand`) and the skill-command host
+ * host (`dispatchBuiltinSlashCommand`) and the skill-command host
  * (`isKnownSkillCommand` / `invokeSkillCommandFromText`) — plus the 41 members
  * it reads directly (bash/python/btw/omfg key handling, thinking-block
  * visibility, submission gating, welcome/goal-detail, and the escape/tap
@@ -826,7 +826,7 @@ export class InputController {
 
 		// Collab guest: prompts execute on the host; local slash/skill/bash/
 		// python execution is host-only (builtins are gated inside
-		// executeBuiltinSlashCommand, which already consumed allowed ones).
+		// dispatchBuiltinSlashCommand, which already consumed allowed ones).
 		if (this.ctx.collabGuest) {
 			if (text.startsWith("/")) {
 				this.ctx.showStatus(`${text.split(/\s+/, 1)[0]} is host-only during a collab session`);
@@ -1406,7 +1406,7 @@ export class InputController {
 	 */
 	async #consumeBuiltinSlashCommand(text: string): Promise<string | undefined> {
 		if (!text) return text;
-		const slashResult = await executeBuiltinSlashCommand(text, { ctx: this.ctx });
+		const slashResult = await dispatchBuiltinSlashCommand(text, { ctx: this.ctx });
 		if (slashResult === true) {
 			if (!shouldSkipHistory(text)) this.ctx.editor.addToHistory(text);
 			return undefined;

@@ -89,7 +89,7 @@ import type { InteractiveSessionFactory } from "./session/background-sessions";
 import { rootBudgetGroupOwnerId, sessionCpuExecHooks } from "./session/cpu-limit";
 import { loadSessionExtensions } from "./session/factory-extensions";
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "./session/factory-options";
-import { executeBuiltinSlashCommand } from "./slash-commands/builtin-registry";
+import { dispatchBuiltinSlashCommand } from "./slash-commands/dispatch";
 import { shouldShowStartupSplash } from "./startup-splash";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "./system-prompt";
 import { resolveAgentIdleTtlMs, resolveAgentPruneBudget } from "./task/agent-settings";
@@ -711,7 +711,7 @@ async function runInteractiveMode(
 	// `veyyon join <link>`: dispatch through the same builtin path as a typed
 	// `/join` so collab guards and error rendering stay in one place.
 	if (joinLink !== undefined) {
-		await executeBuiltinSlashCommand(`/join ${joinLink}`, { ctx: mode });
+		await dispatchBuiltinSlashCommand(`/join ${joinLink}`, { ctx: mode });
 	}
 
 	if (initialMessage !== undefined) {

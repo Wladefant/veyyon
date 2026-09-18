@@ -164,6 +164,14 @@ export interface ProviderAccounts {
 	 * duplicate stays silent because they already know.
 	 */
 	disabledCause?: string;
+	/**
+	 * The account {@link ProviderAccounts.disabledCause} belongs to, when the dead
+	 * credential names one.
+	 *
+	 * Without it the note is unattributed and renders beside the accounts that
+	 * still work, so it reads as a statement about one of them.
+	 */
+	disabledAccount?: string;
 }
 
 export interface AccountInventory {
@@ -326,7 +334,11 @@ export function buildAccountInventory(
 		.map(([provider, rows]) => {
 			const entry: ProviderAccounts = { provider, label: formatProviderName(provider), rows };
 			const disabledCause = failedRefreshes.get(provider) ?? authStorage.disabledCredentialCause(provider);
-			if (disabledCause) entry.disabledCause = disabledCause;
+			if (disabledCause) {
+				entry.disabledCause = disabledCause;
+				const account = authStorage.disabledCredentialAccount(provider);
+				if (account) entry.disabledAccount = account;
+			}
 			return entry;
 		})
 		.sort((left, right) => left.label.localeCompare(right.label));

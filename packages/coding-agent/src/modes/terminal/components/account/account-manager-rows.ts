@@ -137,12 +137,37 @@ export function sidebarSummaryLine(inventory: AccountInventory): string {
  * Prints the upstream cause verbatim, like a failed row does: `invalid_grant: The provided
  * authorization grant is invalid` is what tells a user the grant died on the provider's side and a
  * fresh login is the remedy, where "signed out" would leave them re-running the same broken flow.
+ *
+ * NAMES the account when the dead credential carries one. A provider with several accounts prints
+ * this note beside the ones that still work, so the unattributed wording read as a statement about
+ * the account next to it: a Google login that served every request was labelled signed out because
+ * a different account's grant had died. The name is what separates "this account needs a fresh
+ * login" from "that one does".
+ *
+ * The second line is an instruction only when the provider has nothing left to serve with. A
+ * provider whose other login still answers every request is not broken, and `press a to sign in
+ * again` beside a working account reads as one: the same card said the provider works and that the
+ * user must act. With an account still standing the line states that instead, and offers the
+ * signed-out one back as a choice.
  */
-export function providerDisabledNote(entry: { disabledCause?: string; rows: readonly AccountRow[] }): string[] {
+export function providerDisabledNote(entry: {
+	disabledCause?: string;
+	disabledAccount?: string;
+	rows: readonly AccountRow[];
+}): string[] {
 	if (!entry.disabledCause) return [];
-	const lead =
-		entry.rows.length === 0 ? "the login for this provider was signed out" : "a previous login was signed out";
-	return [`${lead}: ${sanitizeAccountText(entry.disabledCause)}`, "press a to sign in again"];
+	const account = entry.disabledAccount ? sanitizeAccountText(entry.disabledAccount) : undefined;
+	const lead = account
+		? `the login for ${account} was signed out`
+		: entry.rows.length === 0
+			? "the login for this provider was signed out"
+			: "a previous login was signed out";
+	const serving = entry.rows.filter(row => row.health !== "failed").length;
+	const action =
+		serving === 0
+			? "press a to sign in again"
+			: `${serving} other ${serving === 1 ? "account" : "accounts"} still signed in; press a to sign this one back in`;
+	return [`${lead}: ${sanitizeAccountText(entry.disabledCause)}`, action];
 }
 
 /** The body pane's title line: `Anthropic · 3 accounts · 1 needs attention`. */

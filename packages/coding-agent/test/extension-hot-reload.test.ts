@@ -5,9 +5,10 @@ import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
 import { loadCodingAgentApi } from "../src/extensibility/coding-agent-api";
-import { loadExtension } from "../src/extensibility/extensions/loader";
+import { ExtensionRuntime, loadExtension } from "../src/extensibility/extensions/loader";
 import { ExtensionRunner } from "../src/extensibility/extensions/runner";
-import type { ExtensionRuntime, LoadedExtension } from "../src/extensibility/extensions/types";
+import type { LoadedExtension } from "../src/extensibility/extensions/types";
+import type { TurnEndEvent } from "../src/extensibility/shared-events";
 import { EventBus } from "../src/utils/event-bus";
 import { executeAcpBuiltinSlashCommand } from "../src/slash-commands/acp-builtins";
 import type { ParsedSlashCommand, SlashCommandRuntime } from "../src/slash-commands/types";
@@ -19,17 +20,34 @@ declare global {
 	var __testHookMarker: string | undefined;
 }
 
-function createMockExtensionRuntime(): ExtensionRuntime {
-	return {
-		pendingProviderRegistrations: [],
-		providers: new Map(),
-		notifySettingChanged: () => {},
-	};
-}
 
 const dummyParsedCommand: ParsedSlashCommand = {
 	name: "reload-config",
 	args: "",
+	text: "/reload-config",
+};
+
+const dummyTurnEnd: TurnEndEvent = {
+	type: "turn_end",
+	turnIndex: 0,
+	message: {
+		role: "assistant",
+		api: "openai",
+		provider: "openai",
+		model: "gpt-4o",
+		timestamp: 0,
+		content: [{ type: "text", text: "" }],
+		stopReason: "stop",
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+	},
+	toolResults: [],
 };
 
 describe("Extension hot reload", () => {
@@ -74,7 +92,7 @@ describe("Extension hot reload", () => {
 		);
 
 		const eventBus = new EventBus();
-		const runtime = createMockExtensionRuntime();
+		const runtime = new ExtensionRuntime();
 		const loaded = await loadExtension(extFile, tempDir.path(), eventBus, runtime);
 		expect(loaded.extension).not.toBeNull();
 
@@ -93,7 +111,7 @@ describe("Extension hot reload", () => {
 
 		// Emit turn_end and verify v1 hook fired
 		globalThis.__testHookMarker = "unset";
-		await runner.emit({ type: "turn_end" });
+		await runner.emit(dummyTurnEnd);
 		expect(globalThis.__testHookMarker).toBe("v1");
 
 		// Write v2 of extension with turn_end and turn_start hooks
@@ -120,7 +138,7 @@ describe("Extension hot reload", () => {
 
 		// Emit turn_end and verify v2 hook fired (v1 hook is replaced, not duplicated)
 		globalThis.__testHookMarker = "unset";
-		await runner.emit({ type: "turn_end" });
+		await runner.emit(dummyTurnEnd);
 		expect(globalThis.__testHookMarker).toBe("v2");
 	}, 60000);
 
@@ -138,7 +156,7 @@ describe("Extension hot reload", () => {
 		);
 
 		const eventBus = new EventBus();
-		const runtime = createMockExtensionRuntime();
+		const runtime = new ExtensionRuntime();
 		const loaded = await loadExtension(extFile, tempDir.path(), eventBus, runtime);
 		expect(loaded.extension).not.toBeNull();
 
@@ -166,7 +184,7 @@ describe("Extension hot reload", () => {
 
 		// Old v1 hook must still be active and callable
 		globalThis.__testHookMarker = "unset";
-		await runner.emit({ type: "turn_end" });
+		await runner.emit(dummyTurnEnd);
 		expect(globalThis.__testHookMarker).toBe("v1-active");
 	}, 60000);
 
@@ -217,7 +235,7 @@ describe("Extension hot reload", () => {
 
 		const runner = new ExtensionRunner(
 			[mockOldExtension],
-			createMockExtensionRuntime(),
+			new ExtensionRuntime(),
 			tempDir.path(),
 			sessionManager,
 			modelRegistry,

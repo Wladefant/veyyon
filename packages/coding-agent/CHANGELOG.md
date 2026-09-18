@@ -80,6 +80,10 @@
 
 ### Changed
 
+- Typing a line that does not name a builtin slash command no longer loads the builtin implementations: `slash-commands/dispatch.ts` answers that from the declarations and loads the handlers only once a name matches, taking the launch graph from 1,642 modules to 1,545 and the interactive input controller from 1,296 to 1,059. No command, argument or completion behavior changes.
+- The 1,806-line builtin handler object moved out of `slash-commands/builtin-registry.ts` into one module per command category (`builtin-setup.ts`, `builtin-modes.ts`, `builtin-session.ts`, `builtin-context.ts`, `builtin-share.ts`, `builtin-workspace.ts`, `builtin-model.ts`, `builtin-info.ts`), with the autocomplete builders in `builtin-completions.ts` and the category map in `builtin-categories.ts`; the registry assembles the eight maps and still exports every name it carried.
+- The 860 lines of raw settings migrations moved out of `config/settings.ts` into `config/settings-migrations.ts`, which also drops the theme-classifier, builtin-tool-name and compaction-strategy imports from the module most of the product reaches for a setting. No setting, default, order or migration behavior changes.
+- Model target selection moved out of `session/agent-session.ts` into `session/agent-session-model-targets.ts`: role resolution, a configured target's model, the compaction candidate list and its configured thinking efforts read only the settings, a model and the available list, so they are callable without a session. No selection, ordering or fallback behavior changes.
 - A running tool card animates one mark: the "… (streaming)" spinner row is drawn only under a header that carries no running spinner of its own, and an agent an eval cell spawned shows the task card's static accent mark instead of a second spinner.
 - The read and write cards parse their arguments and details through `@veyyon/utils/fs-tool-args`, so a terminal launch no longer evaluates `@veyyon/tool-render`; the cards draw the same rows.
 - The legacy `memories.enabled` key is no longer a declared or host-defaulted setting: a config that still holds it migrates to `memory.backend` on load, the key is dropped on the next rewrite, and the local memory pipeline is enabled by `memory.backend: local` only. The presentation module's error messages, read-target parsing and cursor clamping use the `@veyyon/utils` helpers; no behavior change.
@@ -271,6 +275,9 @@
 
 ### Fixed
 
+- A pasted OAuth callback typed after a slash command that takes no arguments is consumed instead of being sent to the model as a prompt.
+
+- Automatic maintenance cuts an oversized body until a summarization request fits a summarizer, instead of parking the session with "Compaction freed too little context to make progress" when every candidate was skipped for holding fewer tokens than the summary needed.
 - Print, JSON and RPC mode flush Bun's stdout sink before exiting, so a piped consumer receives the whole last frame instead of losing up to 1 MiB of queued output.
 - A spawned agent's card shows its resolved-model badge again on the live block, the registry path an extension wraps and the rebuilt transcript, per `agent.showResolvedModelBadge`.
 - With `VEYYON_FORCE_IMAGE_PROTOCOL=sixel` and `VEYYON_ALLOW_SIXEL_PASSTHROUGH=1`, a bash card draws an inline Sixel image row as the program wrote it instead of blanking it.
@@ -401,6 +408,8 @@
 - An MCP server whose reconnects trip the breaker is reported on the operator channel with the server name and the suspension; the suspension was logged only.
 - A CommonJS extension (`module.exports = …`, or a transpiled module with `exports.__esModule`) runs instead of being reported as missing its default export; the wrapper mirrors Bun's `__esModule` interop.
 - A marketplace catalog entry the parser drops is reported with the plugin name, the failing field and the reason: `veyyon plugin marketplace add`/`update` print it to stderr and a session states it on the notice channel; the entry was skipped in silence and the cached catalog persisted without it.
+- The account manager names the account a failed OAuth refresh signed out ("the login for user@example.com was signed out"), so a surviving account rendered beside it is no longer read as the dead one; a credential that states no account keeps the unattributed wording.
+- A provider whose other login still serves every request states that instead of printing `press a to sign in again`, which claimed the provider was unusable on the same card that listed the account using it; a provider with nothing left serving still asks for the login.
 
 ### Removed
 

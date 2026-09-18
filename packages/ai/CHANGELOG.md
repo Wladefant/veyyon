@@ -19,6 +19,7 @@
 
 ### Changed
 
+- Command Code API-key validation calls the provider's default model, `claude-sonnet-4-6`.
 - The NVIDIA, Xiaomi, Xiaomi Token Plan and Alibaba Coding Plan logins take the pasted key through the same `promptApiKey` as every `createApiKeyLogin` provider: the key is trimmed, an empty paste is `ApiKeyRequiredError`, an abort during the paste is `LoginCancelledError`, and a host without `onPrompt` is `OnPromptRequiredError`; no behavior change.
 - API-key and OAuth credential ranking score usage windows and block a credential at its scoped limit through one `#rankUsageResults`, an OAuth refresh reads its candidate row before and after the lease through one `readRefreshCandidate`, and the plan-filter and usage-limit rejection runs before and after a refresh through one `usageRejects`; no behavior change.
 - Tool-argument validation runs its seven pre-validation normalizations through one ordered pass table, before the first check and after every issue-driven coercion, and the two schema-agnostic value walks share one copy-on-write array step; no behavior change.
@@ -63,6 +64,7 @@
 - Cursor and Devin protobuf regeneration invokes the workspace compiler, and Cursor output is written to the catalog package.
 - Credential-store startup applies SQLite busy handling and WAL mode before initializing refresh leases, allowing concurrent launches to wait for database locks.
 - Google's generic `RESOURCE_EXHAUSTED` 429 body ("Resource has been exhausted (e.g. check quota)") classifies as a per-minute throttle retried on the same account after 45-75 s, instead of a daily quota wall whose 30-minute wait exceeded the retry budget and ended the turn on the first 429; a body that states a quota keeps the quota classification.
+- `AuthStorage.disabledCredentialAccount` states which account a provider's refresh failure belongs to, so a note about a dead login can name it instead of reading as a statement about whichever account it renders beside.
 
 ## [1.4.1] - 2026-09-08
 

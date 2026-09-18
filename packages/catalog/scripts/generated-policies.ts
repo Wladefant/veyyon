@@ -18,6 +18,7 @@ import { isMimoModelIdOrName } from "../src/identity/family";
 import { getLongestModelLikeIdSegment } from "../src/identity/id";
 import { buildModelReferenceIndex, resolveModelReference } from "../src/identity/reference";
 import { resolveModelThinking } from "../src/model-thinking";
+import { applyCommandCodeContract } from "../src/provider-models/command-code";
 import { PROVIDERS_PUBLISHING_OWN_MODEL_LIMITS } from "../src/provider-models/descriptors";
 import { resolveWaferServerlessThinkingFormat } from "../src/provider-models/openai-compat";
 import type { Api, Model, ModelSpec } from "../src/types";
@@ -81,12 +82,23 @@ export function applyGeneratedModelPolicies(models: ModelSpec<Api>[]): void {
  * generator is the authority that produces the trusted values. Collapsed
  * effort-tier variants are exempt — their collapse table authored the
  * routing/off-suppression metadata and the deriver cannot reproduce it.
+ *
+ * A ladder a deployment contract authored is kept for the same reason. Command
+ * Code's endpoint publishes no reasoning metadata at all, so clearing the
+ * ladder first leaves the deriver nothing to work from and the rebake deletes
+ * the only record of which of its models take an effort. Passing the spec
+ * through with its ladder intact still runs the whole resolution — the wire
+ * defaults and effort map are filled here, not in the contract.
  */
 export function rebakeModelThinking(model: ModelSpec<Api>): void {
 	if (isVariantCollapsedSpec(model)) return;
 	const requiresProviderAuthoredEffort =
 		model.provider === "umans" && (model.thinking?.requiresEffort === true || model.id === "umans-kimi-k2.7");
-	const thinking = resolveModelThinking({ ...model, thinking: undefined }, buildCompat(model));
+	const deploymentAuthored = model.provider === "command-code" && model.thinking !== undefined;
+	const thinking = resolveModelThinking(
+		deploymentAuthored ? model : { ...model, thinking: undefined },
+		buildCompat(model),
+	);
 	if (thinking) {
 		model.thinking = requiresProviderAuthoredEffort ? { ...thinking, requiresEffort: true } : thinking;
 	} else {
@@ -217,8 +229,10 @@ function applyGeneratedModelPolicy(model: ModelSpec<Api>): void {
 	}
 	if (model.provider === "command-code") {
 		// Cross-provider metadata may have filled a same-family output cap before
-		// this pass. The Provider API does not publish or promise one.
-		model.maxTokens = null;
+		// this pass, and the Provider API publishes none of its own. The
+		// deployment contract states what the upstream CLI actually requests, so
+		// it wins over whatever another host's same-named model happened to say.
+		applyCommandCodeContract(model as ModelSpec<"openai-completions">);
 	}
 
 	if (model.provider === "ollama-cloud") {
