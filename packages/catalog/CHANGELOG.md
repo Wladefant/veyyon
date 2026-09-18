@@ -12,10 +12,13 @@
 - ChatGPT Web model discovery supplies the shared Codex `client_version` query parameter. The live daemon forwards the catalog request to the Codex backend, which rejects a missing version with HTTP 400 before any browser models can be listed.
 - `codex-chatgpt-web` discovery and model-manager configuration now normalizes base URLs that omit the `/v1` route prefix (such as port-only `http://127.0.0.1:17841`) or already include `/responses` (`http://127.0.0.1:17841/v1/responses`), ensuring `/v1/models` and `/v1/responses` resolve against the daemon's actual API routes while preserving strict loopback verification.
 - `codex-chatgpt-web` discovery now refuses a redirect instead of following one, so the loopback check that keeps the ChatGPT credential on this machine cannot be undone after it has run. Both requests set `redirect: "error"`: a 302 on `GET {base}/models` is reported as a request failure and discovery returns `null` rather than re-issuing the bearer-carrying request against whatever the redirect named, and a 302 on `GET {base}/healthz` leaves Full mode unproven — so `supportsTools` stays `false` — rather than letting something that is not the daemon authorize publishing tool support. The daemon redirects nothing, which is why a redirect here means the base URL is not the daemon.
+- Model input capability support includes `"video"` for video-capable models.
 - `closeModelCache()` closes the shared model-cache database and permits reopening it at the current cache path.
 
 ### Changed
 
+- A model reference candidate declares partial pricing, which is what bundled metadata carries; every reader already treated a missing per-token price as unknown. No user-visible behavior changes.
+- Ollama Cloud wire-effort normalization and discovery restrict effort ladders for GLM-5.2 specifically rather than all subsequent GLM point releases.
 - GitLab Duo Workflow discovery reads a record's declared root namespace (`root_namespace_id`, `rootNamespaceId`, or the id or path of its `root_namespace`/`rootAncestor` record) through one `declaredRootNamespaceId` for the explicit and nested lookups; no behavior change.
 - The Antigravity, Codex, Gemini and Ollama discovery readers report a non-ok status as the `status` stage and an unparseable body as the `body` stage through one exported `readDiscoveryJson` in `discovery/failure`; no behavior change.
 - Model spec rejection checks its string, cost and limit fields from ordered tables, reporting the same field names in the same order; no behavior change.
@@ -32,7 +35,9 @@
 
 ### Fixed
 
+- Normalized model pricing defaults at model construction and cost calculation so custom and discovery models without explicit cost fields do not throw on usage streaming.
 - Case-insensitive host classification no longer treats control characters as URL punctuation.
+
 ## [1.4.1] - 2026-09-08
 
 ### Fixed

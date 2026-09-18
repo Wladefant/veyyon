@@ -94,11 +94,21 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * so the walker now counts `contracts/view/src/index.ts` and `contracts/view/src/symbols.ts`,
  * which it skipped while the package was reached by type only.
  *
+ * RE-MEASURED 2026-09-14 at 1642, up from 1639: three modules arrived and none left.
+ * `kernel/session/session-list-index.ts` is the only one that is new code — the size-and-mtime
+ * reuse index that took `listAllSessions` from 6,796ms to 89ms over 4,825 real sessions, and it
+ * is on the launch graph because the session manager is. The other two are splits of bytes the
+ * launch already carried, so they raise the count without adding anything for the launch to run:
+ * `config/settings-migrations.ts` left `config/settings.ts` (1253 lines to 743), and
+ * `session/agent-session-model-targets.ts` left `session/agent-session.ts` (18604 to 18446). That
+ * is the case the paragraph above describes — the number is modules, so a split raises it while
+ * the code the launch runs is the same.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1639;
+const LAUNCH_REACH_CEILING = 1642;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

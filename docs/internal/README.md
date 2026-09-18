@@ -62,6 +62,19 @@ New here? Read [onboarding](onboarding.md) and [testing](testing.md) first.
 | [porting-to-natives.md](porting-to-natives.md) | Field notes on moving code into the N-API layer. |
 | [fs-scan-cache-architecture.md](fs-scan-cache-architecture.md) | The filesystem scan-cache contract. |
 
+## Desktop front end (Rust / GPUI)
+
+| Doc | Covers |
+| --- | --- |
+| [../handbook/src/desktop/index.md](../handbook/src/desktop/index.md) | The operator manual for the desktop front end: starting it, attaching to a host, and what an unavailable capability draws. |
+| [../handbook/src/desktop/surfaces.md](../handbook/src/desktop/surfaces.md) | The surfaces: queue, session transcript, composer, run bar, right panel, terminal drawer. |
+| [../handbook/src/desktop/tokens.md](../handbook/src/desktop/tokens.md) | The token files under `crates/veyyon-desktop-tokens/tokens/`: what each controls, which values are named scale steps, and hot reload. |
+| [../handbook/src/desktop/motion.md](../handbook/src/desktop/motion.md) | The motion roles, the spring integrator, and how reduced motion resolves. |
+
+The crate layout is in the package table in [`AGENTS.md`](../../AGENTS.md), and
+[`packages/coding-agent/DEVELOPMENT.md`](../../packages/coding-agent/DEVELOPMENT.md) maps each crate
+to the document that owns it.
+
 ## TUI
 
 | Doc | Covers |
@@ -158,4 +171,4 @@ Per-model tool-call wire-format notes live in [toolconv/](toolconv/) (Anthropic,
 
 Step-by-step runbooks for when something breaks live in [runbooks/](runbooks/).
 
-*Verified against `63ffc8131ffb8d35ccbbb1c5de69531a7016eff4` on 2026-09-06.*
+*Verified against `7c97cfd303c8d56c930fdf9fdb52622d536a4878` on 2026-09-14.*

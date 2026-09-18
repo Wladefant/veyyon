@@ -33,6 +33,14 @@ export function setImageDisplayProbe(probe: (() => boolean) | undefined): void {
 	clientDrawsImages = probe;
 }
 
+/**
+ * The installed answer, so a front end that installs its own for the life of a
+ * server can hand the previous one back when it closes.
+ */
+export function currentImageDisplayProbe(): (() => boolean) | undefined {
+	return clientDrawsImages;
+}
+
 /** What the user's terminal does with an image right now. */
 export interface ImageDisplayState {
 	/** True when a picture reaches the screen rather than a placeholder row. */

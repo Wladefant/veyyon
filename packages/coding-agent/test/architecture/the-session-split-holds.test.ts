@@ -36,15 +36,22 @@ const RUNTIME = `${SESSION_DIR}/agent-session.ts`;
 const FACADE = `${SESSION_DIR}/facade.ts`;
 
 /**
- * MEASURED at 18517 lines, which is 131 above the 18386 the previous ceiling was cut to. The growth
- * is the runtime's own, arriving from the default branch rather than from a family moving back in,
- * so the ceiling is re-cut just above the measurement instead of holding a number the file already
- * exceeds. Three families have left the class since the declarations did — TTSR, the todo board and
- * the thinking level, now collaborators under `runtime/` — and the number falls again when the next
- * one leaves. It ratchets: 83 lines of slack is what it takes to not fail on the next honest edit,
- * and a ceiling left far above a shrinking file stops being a bound.
+ * MEASURED at 18524 lines, up from 18446. The GUI host's dispose path grew: the
+ * session now tracks and awaits every client it served and every session-file
+ * persistence it started, so a host that closes mid-write cannot leave a turn
+ * half-persisted, and `UnsupportedModelInputError` arrived with the video-input
+ * guard. Model target selection had left before it — the role resolver, the
+ * configured-target reader, the compaction candidate walk and its effort map —
+ * and it left because not one of those members read or wrote a field of the
+ * runtime: every input was `settings`, a model and the available list, so they
+ * sat in the class only because of where they were typed. Four families have
+ * left since the declarations did: TTSR, the todo board and the thinking level
+ * as collaborators under `runtime/`, and that one as a sibling. The number
+ * falls again when the next one leaves. It ratchets: 26 lines of slack is what
+ * it takes to not fail on the next honest edit, and a ceiling left far above a
+ * shrinking file stops being a bound.
  */
-const RUNTIME_CEILING = 18_600;
+const RUNTIME_CEILING = 18_550;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -67,13 +74,14 @@ const FACADE_CEILING = 500;
 
 /**
  * The concerns that left the runtime and still sit beside it, pinned by exact
- * equality. A sixth sibling, or one renamed, fails here before it fails anywhere
- * useful. The compaction policy was the sixth and is no longer here: it moved to
+ * equality. A seventh sibling, or one renamed, fails here before it fails anywhere
+ * useful. The compaction policy was one of them and is no longer here: it moved to
  * `@veyyon/kernel/session/agent-session-compaction-policy` with the session spine,
  * so a copy reappearing under `src/session/` is a drift this cell reports.
  */
 const SIBLINGS = [
 	"agent-session-message-shapes.ts",
+	"agent-session-model-targets.ts",
 	"agent-session-permissions.ts",
 	"agent-session-queue.ts",
 	"agent-session-retry-fallback.ts",
