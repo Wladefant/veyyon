@@ -94,11 +94,48 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * so the walker now counts `contracts/view/src/index.ts` and `contracts/view/src/symbols.ts`,
  * which it skipped while the package was reached by type only.
  *
+ * RE-MEASURED 2026-09-14 at 1642, up from 1639: three modules arrived and none left.
+ * `kernel/session/session-list-index.ts` is the only one that is new code — the size-and-mtime
+ * reuse index that took `listAllSessions` from 6,796ms to 89ms over 4,825 real sessions, and it
+ * is on the launch graph because the session manager is. The other two are splits of bytes the
+ * launch already carried, so they raise the count without adding anything for the launch to run:
+ * `config/settings-migrations.ts` left `config/settings.ts` (1253 lines to 743), and
+ * `session/agent-session-model-targets.ts` left `session/agent-session.ts` (18604 to 18446). That
+ * is the case the paragraph above describes — the number is modules, so a split raises it while
+ * the code the launch runs is the same.
+ *
+ * 1642 to 1545: the two hot callers of the builtin slash commands stopped importing the registry.
+ * `main.ts` and the TUI input controller reach them through `slash-commands/dispatch.ts`, which
+ * answers "does this name a builtin" from the declarations and loads the handlers only once a name
+ * has matched. Most input that reaches that check is not a builtin, so the handlers, and the
+ * application behind them, are no longer on the path that decides. The input controller is not on
+ * this graph and moved 1296 to 1059 on the same edge.
+ *
+ * 1545 to 1546: `catalog/provider-models/command-code.ts`, the one module holding Command Code's
+ * prices, effort ladders and output ceilings, split out of `provider-models/openai-compat.ts`,
+ * which this graph already reaches. It is a leaf over modules already here, so the launch runs no
+ * new code — the same split-raises-the-count case as the line above.
+ *
+ * 1546 to 1555 on this fork: nine modules the fork carries and upstream does not sit on this graph, so
+ * upstream's pin, measured on a tree without them, is nine short here. Five are the ChatGPT-web provider
+ * (`ai/providers/openai-codex/{chatgpt-web-trusted-context,chatgpt-web-turn-stamp}.ts`,
+ * `ai/registry/chatgpt-web.ts`, `catalog/{discovery,provider-models}/chatgpt-web.ts`), reached through the
+ * provider registry the launch already builds; two are the native control host
+ * (`native-control/{telegram-control-bridge,telegram-control-host}.ts`); and two are the task lane's
+ * replenishment and the bridge script it materializes (`task/topic-replenishment.ts`,
+ * `task/native-ledger-bridge.py`, which the walker counts as a file the module reads). None of them is
+ * new code on this branch — the merge lowered the ceiling, not the graph.
+ *
+ * 1555 to 1558: the refusal fence arrived on `main` — `tools/core/{refusal-fence,effect-scope,execution-registry}.ts`,
+ * the choke point every tool invocation passes through and the effect-scope and registry tables it reads.
+ * The launch path reaches them because it builds the tool table, so this is new code on the graph rather
+ * than a split, and it is the case this ratchet exists to make someone write down.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1639;
+const LAUNCH_REACH_CEILING = 1558;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

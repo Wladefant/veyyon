@@ -230,12 +230,29 @@ export function getModelPricing<TApi extends Api>(
 	return hasFreeMarker(model.id) ? "free" : "unpriced";
 }
 
+/**
+ * The rate card this request bills at.
+ *
+ * A model with a {@link Model.longContextCost} tier has two, and which one
+ * applies is a property of the request, not of the model, so it is resolved
+ * here rather than baked into the spec.
+ */
+export function resolveRequestCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Model<TApi>["cost"] {
+	const tier = model.longContextCost;
+	if (!tier) return model.cost;
+	const orchestration = usage.orchestration;
+	const promptTokens =
+		usage.input + usage.cacheRead + usage.cacheWrite + (orchestration?.input ?? 0) + (orchestration?.cacheRead ?? 0);
+	return promptTokens > tier.inputThreshold ? tier : model.cost;
+}
+
 export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Usage["cost"] {
 	const orchestration = usage.orchestration;
-	usage.cost.input = (model.cost.input / 1000000) * (usage.input + (orchestration?.input ?? 0));
-	usage.cost.output = (model.cost.output / 1000000) * (usage.output + (orchestration?.output ?? 0));
-	usage.cost.cacheRead = (model.cost.cacheRead / 1000000) * (usage.cacheRead + (orchestration?.cacheRead ?? 0));
-	usage.cost.cacheWrite = (model.cost.cacheWrite / 1000000) * usage.cacheWrite;
+	const cost = resolveRequestCost(model, usage);
+	usage.cost.input = (cost.input / 1000000) * (usage.input + (orchestration?.input ?? 0));
+	usage.cost.output = (cost.output / 1000000) * (usage.output + (orchestration?.output ?? 0));
+	usage.cost.cacheRead = (cost.cacheRead / 1000000) * (usage.cacheRead + (orchestration?.cacheRead ?? 0));
+	usage.cost.cacheWrite = (cost.cacheWrite / 1000000) * usage.cacheWrite;
 	recomputeCostTotal(usage);
 	return usage.cost;
 }

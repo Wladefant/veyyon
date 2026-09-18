@@ -1,7 +1,7 @@
 /**
  * WHY: Command Code was introduced as an API-key provider requiring validation
  * against its chat completions endpoint (https://api.commandcode.ai/provider/v1/chat/completions)
- * with model moonshotai/Kimi-K2.7-Code.
+ * with model claude-sonnet-4-6.
  *
  * This suite defends:
  * 1. The validation request contract (URL, method, headers, model payload).
@@ -76,7 +76,7 @@ describe("Command Code API key validation and error mapping", () => {
 		db = null;
 	});
 
-	it("validates key with POST to chat/completions carrying moonshotai/Kimi-K2.7-Code", async () => {
+	it("validates key with POST to chat/completions carrying claude-sonnet-4-6", async () => {
 		const { fetch, requests } = createFetchStub(() =>
 			Response.json({
 				id: "chatcmpl-test",
@@ -124,7 +124,7 @@ describe("Command Code API key validation and error mapping", () => {
 			max_tokens?: number;
 			temperature?: number;
 		};
-		expect(parsedBody.model).toBe("moonshotai/Kimi-K2.7-Code");
+		expect(parsedBody.model).toBe("claude-sonnet-4-6");
 		expect(parsedBody.messages).toEqual([{ role: "user", content: "ping" }]);
 		expect(parsedBody.max_tokens).toBe(1);
 		expect(parsedBody.temperature).toBe(0);
@@ -163,12 +163,12 @@ describe("Command Code API key validation and error mapping", () => {
 				name: "404 model_not_found",
 				body: {
 					error: {
-						message: "The model 'moonshotai/Kimi-K2.7-Code' does not exist or you do not have access to it.",
+						message: "The model 'claude-sonnet-4-6' does not exist or you do not have access to it.",
 						type: "invalid_request_error",
 						code: "model_not_found",
 					},
 				},
-				expectedSubstrings: ["(404)", "The model 'moonshotai/Kimi-K2.7-Code' does not exist"],
+				expectedSubstrings: ["(404)", "The model 'claude-sonnet-4-6' does not exist"],
 			},
 			{
 				status: 429,

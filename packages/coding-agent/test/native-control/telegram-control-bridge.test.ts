@@ -7,6 +7,7 @@ import {
 	renderWorkerRoster,
 	type TelegramExtensionPort,
 	TelegramNativeControlBridge,
+	type WorkerRosterRequest,
 } from "../../src/native-control/telegram-control-bridge";
 import {
 	getTelegramNativeControlHost,

@@ -11,7 +11,7 @@ export const loginCommandCode = createApiKeyLogin({
 		kind: "chat-completions",
 		provider: "command-code",
 		baseUrl: "https://api.commandcode.ai/provider/v1",
-		model: "moonshotai/Kimi-K2.7-Code",
+		model: "claude-sonnet-4-6",
 	},
 });
 
