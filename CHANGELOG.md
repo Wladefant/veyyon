@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-18
+
 ### Breaking Changes
 
 - Agent settings use `agent.*`, `tier.agent`, `advisor.agents`, and `argot.agents`; legacy keys migrate on load, while historical runtime export names, custom-theme color tokens, session records, and RPC spellings remain unchanged.
@@ -101,6 +103,7 @@
 - Forced render requests accept `preserveViewport` to paint changed rows immediately while retaining pending full-repaint and scrollback requests.
 - `TUI.frameScrollable` states whether the last composed frame had content above the viewport, so a host can render a scroll affordance without re-deriving it from row counts it cannot see.
 - The package is `hosts/terminal/engine` in the repository, beside the other halves of the terminal host. The published package name, exports and entry points are unchanged.
+- Added `getText()` method to Text component for retrieving current text content
 - `@veyyon/utils/fs-tool-args` parses a `read` or `write` tool call's arguments and result details (`parseReadArgs`, `parseReadDetails`, `parseWriteArgs`, `parseWriteDetails`, `countLines`), moved from `@veyyon/tool-render` so every host reads them without the React renderers.
 - `BracketedPasteHandler.route(data, sinks)` delivers one chunk's parts to `PasteSinks`: bytes before the start marker to `keys`, the assembled payload to `paste`, and bytes after the end marker to `reenter`; it returns `false` when the chunk held no paste sequence.
 - `@veyyon/utils/tab-width` is the one definition of `replaceTabs` and `DEFAULT_TAB_WIDTH`, a dependency-free module the browser bundles share; `@veyyon/utils/wrap` and `@veyyon/utils/tab-spacing` re-export them unchanged.

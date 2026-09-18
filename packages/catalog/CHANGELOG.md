@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-18
+
 ### Added
 
 - `calculateCost` bills a request at a model's `longContextCost` rates when the prompt crosses that model's threshold, so a model the upstream charges two rate cards for is no longer reported at the cheaper one.
@@ -28,6 +30,7 @@
 
 - Command Code models carry the provider's published prices, reasoning ladders and output ceilings instead of arriving at zero cost with no thinking control; the bundled catalog grows from 3 hand-written rows to the 69 the Provider API serves.
 - Case-insensitive host classification no longer treats control characters as URL punctuation.
+
 ## [1.4.1] - 2026-09-08
 
 ### Fixed

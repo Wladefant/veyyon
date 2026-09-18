@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-18
+
 ### Breaking Changes
 
 - Provider-specific test override setters are replaced by `setProviderModuleOverrideForTest(api, module)`.

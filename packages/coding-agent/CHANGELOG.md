@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-18
+
 ### Breaking Changes
 
 - Agent settings use `agent.*`, `tier.agent`, `advisor.agents`, and `argot.agents`; legacy keys migrate on load, while historical runtime export names, custom-theme color tokens, session records, and RPC spellings remain unchanged.
@@ -258,7 +260,6 @@
 ### Fixed
 
 - A pasted OAuth callback typed after a slash command that takes no arguments is consumed instead of being sent to the model as a prompt.
-
 - Automatic maintenance cuts an oversized body until a summarization request fits a summarizer, instead of parking the session with "Compaction freed too little context to make progress" when every candidate was skipped for holding fewer tokens than the summary needed.
 - Print, JSON and RPC mode flush Bun's stdout sink before exiting, so a piped consumer receives the whole last frame instead of losing up to 1 MiB of queued output.
 - A spawned agent's card shows its resolved-model badge again on the live block, the registry path an extension wraps and the rebuilt transcript, per `agent.showResolvedModelBadge`.
