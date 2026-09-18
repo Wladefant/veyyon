@@ -27,6 +27,7 @@ import { statementById } from "../../system-prompt-builder/statement-registry";
 import type { ToolSession } from "..";
 import { truncateForPrompt } from "../core/approval";
 import { invalidateGithubCacheForBashCommand } from "../core/gh-cache-invalidation";
+import type { ToolEffectScope } from "../core/effect-scope";
 import { inlineBudgetFor, inlineOutputPricing, saveOutputArtifact } from "../core/output-artifact";
 import { foldToolOutputBookkeeping } from "../core/output-fold";
 import type { OutputMeta } from "../core/output-meta";
@@ -479,6 +480,12 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 	// `bashCredentialTargets` for why this is not the whole command's path set.
 	readonly filesystemTargets = (args: unknown): string[] =>
 		bashCredentialTargets(String((args as Partial<BashToolInput>).command ?? ""), bashJudgementEnv(args));
+	// A shell command runs a process, so the paths above are a credential HINT and
+	// never the call's effect set: `echo x > /repo/protected` touches a file this
+	// list does not mention. The refusal fence reads the declaration below, not
+	// the presence of the method, and fences every bash call while a path or
+	// command refusal stands (https://github.com/Wladefant/veyyon/issues/37).
+	readonly effectScope: ToolEffectScope = "unbounded";
 	readonly label = "Bash";
 	readonly loadMode = "essential";
 	get description(): string {

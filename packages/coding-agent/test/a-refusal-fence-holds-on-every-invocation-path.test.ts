@@ -40,6 +40,8 @@ import { installInMemoryRelay, uninstallInMemoryRelay } from "./collab/helpers/i
 import { TOOL_EXECUTION_ENTRIES } from "@veyyon/coding-agent/tools/core/execution-registry";
 import * as path from "node:path";
 import { astGrep } from "@veyyon/natives";
+import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
+import { typeScriptMembersOf } from "../../../scripts/workspace-layout";
 
 const PROBE_TOOL_NAME = "test_destructive_probe";
 let probeExecuted = false;
@@ -118,19 +120,35 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 	});
 
 	it("pins every production execute call structurally, including non-tool delegates", async () => {
-		const root = path.resolve(import.meta.dirname, "../src");
-		const result = await astGrep({
-			path: root,
-			glob: "**/*.ts",
-			lang: "ts",
-			patterns: ["$TOOL.execute($$$ARGS)", "new ExtensionToolWrapper($$$ARGS)"],
-			includeMeta: true,
-			limit: 1000,
-			timeoutMs: 30_000,
-		});
-		expect(result.limitReached).toBe(false);
-		const sites = result.matches
-			.filter(match => !match.path.endsWith(".test.ts") && match.metaVariables?.TOOL !== undefined)
+		const root = path.resolve(import.meta.dirname, "../../..");
+		const members = typeScriptMembersOf(root);
+		expect(members.length).toBeGreaterThan(0);
+		const matches = [];
+		for (const member of members) {
+			const directory = path.join(root, member);
+			const result = await astGrep({
+				path: directory,
+				glob: "**/*.ts",
+				lang: "ts",
+				patterns: ["$TOOL.execute($$$ARGS)", "new ExtensionToolWrapper($$$ARGS)"],
+				includeMeta: true,
+				// Test files are collected here and filtered out below, so the cap has
+				// to clear every `execute` call in the tree, suites included.
+				limit: 20_000,
+				// The scan walks every workspace member, so the deadline has to cover
+				// the whole tree rather than a single package's worth of files.
+				timeoutMs: 120_000,
+			});
+			expect(result.limitReached).toBe(false);
+			for (const match of result.matches) {
+				const filename = path.isAbsolute(match.path) ? match.path : path.join(directory, match.path);
+				const relative = path.relative(root, filename).split(path.sep).join("/");
+				if (relative.endsWith(".test.ts") || /(^|\/)(test|tests|__tests__)\//.test(relative)) continue;
+				matches.push({ ...match, path: relative });
+			}
+		}
+		const sites = matches
+			.filter(match => match.metaVariables?.TOOL !== undefined)
 			.map(
 				match =>
 					`${(path.isAbsolute(match.path) ? path.relative(root, match.path) : match.path).split(path.sep).join("/")}:${match.metaVariables?.TOOL}`,
@@ -161,16 +179,24 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 				"tools/core/execution-registry.ts:tool",
 				"tools/fs/read.ts:this",
 				"tools/shell/eval.ts:backend",
-			].sort(),
+			].map(site => `packages/coding-agent/src/${site}`).concat([
+				"packages/agent/src/agent-loop.ts:tool",
+				"packages/coding-agent/bench/rendering.ts:rt",
+				"packages/coding-agent/bench/rendering.ts:rt",
+				"packages/coding-agent/bench/rendering.ts:new ReadTool(mkSession())",
+			]).sort(),
 		);
-		const installations = result.matches
-			.filter(match => !match.path.endsWith(".test.ts") && match.metaVariables?.TOOL === undefined)
+		const installations = matches
+			.filter(match => match.metaVariables?.TOOL === undefined)
 			.map(match =>
 				(path.isAbsolute(match.path) ? path.relative(root, match.path) : match.path).split(path.sep).join("/"),
 			)
 			.sort();
-		expect(installations).toEqual(["sdk.ts", "sdk.ts", "sdk.ts", "sdk.ts", "sdk.ts", "session/agent-session.ts"]);
-	}, 40_000);
+		expect(installations).toEqual(
+			["sdk.ts", "sdk.ts", "sdk.ts", "sdk.ts", "sdk.ts", "session/agent-session.ts"]
+				.map(site => `packages/coding-agent/src/${site}`),
+		);
+	}, 300_000);
 
 	for (const [name, entry] of Object.entries(TOOL_EXECUTION_ENTRIES)) {
 		it(`registered dispatch ${name} refuses before entering a tool body`, async () => {
@@ -465,8 +491,12 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 				subject: { kind: "path", value: "/repo/protected" },
 			}),
 		} as unknown as ExtensionRunner;
+		// Bounded like the real `write`: it declares its targets AND that the list
+		// is the call's complete effect set, which is what earns a tool the
+		// path-scoped treatment instead of the opaque default.
 		const write = Object.assign(createProbeTool("write"), {
 			filesystemTargets: (args: { path: string }) => [args.path],
+			effectScope: "declared-targets" as const,
 		});
 		await new ExtensionToolWrapper(write, runner)
 			.execute("refuse", { path: "/repo/protected" }, undefined, undefined, context)
@@ -477,6 +507,23 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 			.catch(() => {});
 		expect(probeExecuted).toBe(true);
 	});
+
+	for (const kind of ["path", "command"] as const) {
+		it(`real BashTool cannot bypass a ${kind} refusal with credential-only targets`, () => {
+			const settings = Settings.isolated();
+			const session = createMockToolSession({ settings });
+			const bash = new BashTool(session);
+			const command = "echo x > /repo/protected";
+			recordRefusal("write", "protected target", undefined, settings, {
+				kind,
+				value: kind === "path" ? "/repo/protected" : command,
+			});
+			expect(bash.filesystemTargets({ command })).toEqual([]);
+			expect(() =>
+				TOOL_EXECUTION_ENTRIES["session.tools"].assert(bash, { command }, { settings }),
+			).toThrow(RefusalFenceError);
+		});
+	}
 
 	for (const name of ["write", "edit", "bash", "eval"]) {
 		it(`a path refusal prevents equivalent work through ${name}`, async () => {
@@ -499,9 +546,16 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 			await new ExtensionToolWrapper(createProbeTool("write"), runner)
 				.execute("refuse", { path: "/repo/protected" }, undefined, undefined, context)
 				.catch(() => {});
+			// `write`/`edit` declare a complete target set, so they are fenced by
+			// the path OVERLAP check rather than by the opaque default — the
+			// non-normalized `/repo/sub/../protected` must still resolve onto the
+			// refused path. `bash`/`eval` stay opaque and are fenced as such.
 			const probe =
 				name === "edit" || name === "write"
-					? Object.assign(createProbeTool(name), { filesystemTargets: () => ["/repo/sub/../protected"] })
+					? Object.assign(createProbeTool(name), {
+							filesystemTargets: () => ["/repo/sub/../protected"],
+							effectScope: "declared-targets" as const,
+						})
 					: createProbeTool(name);
 			probeExecuted = false;
 			await new ExtensionToolWrapper(probe, undefined)
@@ -510,6 +564,16 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 			expect(probeExecuted).toBe(false);
 		});
 	}
+
+	it("legacy dispatch reports a typed refusal when session policy context is missing", async () => {
+		await expect(
+			TOOL_EXECUTION_ENTRIES["legacy.adapter"].invoke(createProbeTool(), "missing-context", {}),
+		).rejects.toBeInstanceOf(RefusalFenceError);
+		await expect(
+			TOOL_EXECUTION_ENTRIES["legacy.adapter"].invoke(createProbeTool(), "missing-context", {}),
+		).rejects.toThrow("missing session policy context");
+		expect(probeExecuted).toBe(false);
+	});
 
 	it("legacy nested execution inherits policy rather than constructing an empty policy", async () => {
 		const context = { settings: Settings.isolated({ "tools.refusals": [PROBE_TOOL_NAME] }) };

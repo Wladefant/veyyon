@@ -12,6 +12,7 @@ import { resolveFileDisplayMode } from "../../utils/file-display-mode";
 import type { ToolSession } from "..";
 import { queueResolveHandler } from "../agent/resolve";
 import { truncateForPrompt } from "../core/approval";
+import type { ToolEffectScope } from "../core/effect-scope";
 import { createFileRecorder, formatResultPath } from "../core/file-recorder";
 import { formatGroupedFiles } from "../core/grouped-file-output";
 import type { OutputMeta } from "../core/output-meta";
@@ -187,6 +188,8 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 	// schemes are filtered by the boundary. See cwd-boundary.ts.
 	readonly filesystemTargets = (args: unknown, cwd = this.session.cwd): string[] =>
 		astEditFilesystemTargets(args, cwd);
+	// Every file this call can rewrite is a declared target or lives under one.
+	readonly effectScope: ToolEffectScope = "declared-targets";
 	readonly formatApprovalDetails = (args: unknown): string[] => {
 		const params = args as Partial<AstEditSchemaInfer>;
 		const lines: string[] = [];

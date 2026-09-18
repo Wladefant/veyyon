@@ -208,7 +208,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		onUpdate?: AgentToolUpdateCallback<TDetails, TParameters>,
 		context?: AgentToolContext,
 	): Promise<AgentToolResult<TDetails, TParameters>> {
-		context = TOOL_EXECUTION_ENTRIES[this.#entry].assert(this.tool, params, context);
+		context = TOOL_EXECUTION_ENTRIES[this.#entry].assertContext(this.tool, params, context);
 		// 1. Check approval policy (before extension handlers).
 		// CLI `--auto-approve` / `--yolo` sets approval mode to yolo.
 		// User `tools.approval.<tool>` policies are still applied in all modes.
@@ -320,10 +320,13 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			// The agent this call belongs to, when it is a spawned agent. Both
 			// the byline on the card and the observable waiting state below are
 			// keyed off it, and a root session has neither.
-			const requester = this.runner.agentId;
+			const requester = this.runner?.agentId;
 
-			// Check if UI is available
-			if (!this.runner.hasUI()) {
+			// Check if UI is available. A wrapper built without a runner at all —
+			// a tool reached through a boundary that has no extension surface,
+			// which is exactly the stripped-child case the fence exists for — has
+			// no UI by construction and takes this same path.
+			if (!this.runner?.hasUI()) {
 				const reason = "no interactive UI available";
 				await resolveApproval(false, reason);
 				// Lead with the specific reason (e.g. the cwd-boundary path) so a

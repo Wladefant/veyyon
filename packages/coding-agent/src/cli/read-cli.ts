@@ -39,6 +39,8 @@ export async function runReadCommand(cmd: ReadCommandArgs): Promise<void> {
 	const tool = wrapToolWithMetaNotice(new ReadTool(session));
 
 	try {
+		// `veyyon read` has no session, so the call carries a policy-only frame:
+		// the settings holding the standing refusals and nothing else.
 		const result = await TOOL_EXECUTION_ENTRIES["cli.read"].invoke(
 			tool,
 			"veyyon-read",
