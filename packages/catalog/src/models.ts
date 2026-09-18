@@ -212,7 +212,7 @@ function hasFreeMarker(modelId: string): boolean {
  * `cost.input === 0` itself, because that test cannot tell the two apart.
  */
 export function getModelPricing<TApi extends Api>(
-	model: Pick<Model<TApi>, "id" | "cost"> & { pricing?: "published" | "unknown" },
+	model: Pick<Model<TApi>, "id"> & { cost?: Model<TApi>["cost"]; pricing?: "published" | "unknown" },
 ): ModelPricing {
 	const cost = model.cost;
 	if (cost && (cost.input > 0 || cost.output > 0)) return "priced";
