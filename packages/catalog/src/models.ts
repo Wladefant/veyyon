@@ -209,12 +209,17 @@ function hasFreeMarker(modelId: string): boolean {
  * This is the one owner of the "is it free or do we just not know" question.
  * Anything rendering or reasoning about price asks here rather than testing
  * `cost.input === 0` itself, because that test cannot tell the two apart.
+ *
+ * The parameter is the sparse spec shape, not the resolved one: discovery
+ * classifies a row before `buildModel` fills its defaults in, so a cost that
+ * is absent, or present with only some of its rates, is an ordinary input
+ * here rather than a caller error.
  */
 export function getModelPricing<TApi extends Api>(
-	model: Pick<Model<TApi>, "id" | "cost"> & { pricing?: "published" | "unknown" },
+	model: Pick<ModelSpec<TApi>, "id" | "cost"> & { pricing?: "published" | "unknown" },
 ): ModelPricing {
 	const cost = model.cost;
-	if (cost && (cost.input > 0 || cost.output > 0)) return "priced";
+	if (cost && ((cost.input ?? 0) > 0 || (cost.output ?? 0) > 0)) return "priced";
 
 	// A recorded fact beats a guess. Discovery marks `pricing: "unknown"` when the
 	// upstream published nothing, and a model we were never told the price of is
