@@ -45,7 +45,7 @@ describe("AsyncJobManager", () => {
 			"task",
 			"agent task",
 			async ({ reportProgress }) => {
-				await reportProgress("subagent started");
+				await reportProgress("agent started");
 				return "task done";
 			},
 			{
@@ -252,6 +252,133 @@ describe("AsyncJobManager", () => {
 		await Bun.sleep(700);
 		expect(attempts).toBe(attemptsAfterAck);
 	});
+	test("retentionMs: 0 retains job metadata across retried deliveries and evicts only after delivery completes", async () => {
+		const receivedJobs: Array<{ attempt: number; jobDefined: boolean; toolCallId?: string }> = [];
+		let attemptCount = 0;
+		const manager = new AsyncJobManager({
+			retentionMs: 0,
+			onJobComplete: async (_jobId, _text, job) => {
+				attemptCount += 1;
+				receivedJobs.push({
+					attempt: attemptCount,
+					jobDefined: job !== undefined,
+					toolCallId: job?.toolCallId,
+				});
+				if (attemptCount === 1) {
+					throw new Error("transient delivery failure");
+				}
+			},
+		});
+
+		const jobId = manager.register("bash", "retry-zero-retention", async () => "retry result", {
+			toolCallId: "call_retry_0",
+		});
+		await manager.waitForAll();
+
+		// Wait for retry attempt
+		const drained = await manager.drainDeliveries({ timeoutMs: 3_000 });
+		expect(drained).toBe(true);
+		expect(attemptCount).toBe(2);
+		expect(receivedJobs).toEqual([
+			{ attempt: 1, jobDefined: true, toolCallId: "call_retry_0" },
+			{ attempt: 2, jobDefined: true, toolCallId: "call_retry_0" },
+		]);
+		// Once delivery completes, zero-retention job is evicted
+		expect(manager.getJob(jobId)).toBeUndefined();
+	});
+
+	test("retentionMs: 0 retains settled job during watch and passes job metadata on unwatch", async () => {
+		const delivered: Array<{ jobId: string; toolCallId?: string }> = [];
+		const manager = new AsyncJobManager({
+			retentionMs: 0,
+			onJobComplete: async (jobId, _text, job) => {
+				delivered.push({ jobId, toolCallId: job?.toolCallId });
+			},
+		});
+
+		const watchedId = "watched_job_0";
+		manager.watchJobs([watchedId]);
+
+		manager.register("task", "watched task", async () => "watched result", {
+			id: watchedId,
+			toolCallId: "call_watched_0",
+		});
+		await manager.waitForAll();
+
+		// While watched, delivery is suppressed and job must not be evicted
+		expect(delivered).toHaveLength(0);
+
+		// Unwatch re-enqueues delivery
+		manager.unwatchJobs([watchedId]);
+		const drained = await manager.drainDeliveries({ timeoutMs: 2_000 });
+		expect(drained).toBe(true);
+
+		expect(delivered).toEqual([{ jobId: watchedId, toolCallId: "call_watched_0" }]);
+		// After unwatch delivery finishes, zero-retention evicts the job
+		expect(manager.getJob(watchedId)).toBeUndefined();
+	});
+	test("retentionMs: 0 evicts a settled result when its foreground consumer acknowledges it", async () => {
+		const manager = new AsyncJobManager({
+			retentionMs: 0,
+			onJobComplete: async () => {},
+		});
+		const jobId = manager.register("bash", "foreground result", async () => "done");
+		manager.acknowledgeDeliveries([jobId]);
+		await manager.waitForAll();
+
+		expect(manager.getJob(jobId)?.status).toBe("completed");
+		manager.acknowledgeDeliveries([jobId]);
+		expect(manager.getJob(jobId)).toBeUndefined();
+	});
+
+	test("retentionMs: 0 tracks acknowledged running job through settlement and resume without ID reuse or metadata loss", async () => {
+		const delivered: Array<{ jobId: string; toolCallId?: string; text: string }> = [];
+		const manager = new AsyncJobManager({
+			retentionMs: 0,
+			onJobComplete: async (jobId, text, job) => {
+				delivered.push({ jobId, toolCallId: job?.toolCallId, text });
+			},
+		});
+
+		const { promise: jobPromise, resolve: finishJob } = Promise.withResolvers<string>();
+		const runningId = manager.register("bash", "running bash command", async () => jobPromise, {
+			toolCallId: "call_bash_running_0",
+		});
+
+		// Acknowledge deliveries while the job is still running (e.g. bash foreground wait)
+		const removed = manager.acknowledgeDeliveries([runningId]);
+		expect(removed).toBe(0);
+
+		// The running job MUST remain tracked and not evicted or overwritten
+		expect(manager.getJob(runningId)).toBeDefined();
+		expect(manager.getJob(runningId)?.status).toBe("running");
+
+		// Registering another job must not reuse the running job's ID
+		const secondId = manager.register("bash", "second job", async () => "second result");
+		expect(secondId).not.toBe(runningId);
+
+		// Settle the job while still suppressed
+		finishJob("command output");
+		await manager.waitForAll();
+
+		// Settle while suppressed does not deliver runningId immediately
+		expect(delivered.filter(d => d.jobId === runningId)).toHaveLength(0);
+		// But job object remains tracked for resume
+		expect(manager.getJob(runningId)).toBeDefined();
+		expect(manager.getJob(runningId)?.status).toBe("completed");
+
+		// Resume delivery
+		manager.resumeDeliveries([runningId]);
+		const drained = await manager.drainDeliveries({ timeoutMs: 2_000 });
+		expect(drained).toBe(true);
+
+		// Delivered with full metadata and toolCallId
+		expect(delivered.filter(d => d.jobId === runningId)).toEqual([
+			{ jobId: runningId, toolCallId: "call_bash_running_0", text: "command output" },
+		]);
+		// Evicted after resume delivery completes
+		expect(manager.getJob(runningId)).toBeUndefined();
+	});
 
 	test("dispose clears jobs and pending deliveries", async () => {
 		const manager = new AsyncJobManager({
@@ -302,7 +429,7 @@ describe("AsyncJobManager", () => {
 		const mainDeliveryReleased = new Promise<void>(resolve => {
 			releaseMainDelivery = resolve;
 		});
-		const subagentCompletions: Array<{ jobId: string; text: string }> = [];
+		const agentCompletions: Array<{ jobId: string; text: string }> = [];
 		const manager = new AsyncJobManager({
 			retentionMs: 0,
 			onJobComplete: async (jobId, text) => {
@@ -311,12 +438,12 @@ describe("AsyncJobManager", () => {
 					await mainDeliveryReleased;
 					return;
 				}
-				subagentCompletions.push({ jobId, text });
+				agentCompletions.push({ jobId, text });
 			},
 		});
 
 		mainJobId = manager.register("task", "main job", async () => "main result", { ownerId: "0-Main" });
-		const targetJobId = manager.register("task", "subagent job", async () => "subagent result", {
+		const targetJobId = manager.register("task", "agent job", async () => "agent result", {
 			ownerId: "3-AuthLoader",
 		});
 		await manager.waitForAll();
@@ -326,7 +453,7 @@ describe("AsyncJobManager", () => {
 		const drained = await manager.drainDeliveries({ timeoutMs: 50, filter: { ownerId: "3-AuthLoader" } });
 
 		expect(drained).toBe(true);
-		expect(subagentCompletions).toEqual([{ jobId: targetJobId, text: "subagent result" }]);
+		expect(agentCompletions).toEqual([{ jobId: targetJobId, text: "agent result" }]);
 		expect(manager.hasPendingDeliveries({ ownerId: "3-AuthLoader" })).toBe(false);
 
 		expect(manager.acknowledgeDeliveries([mainJobId])).toBe(0);
@@ -371,7 +498,7 @@ describe("AsyncJobManager", () => {
 		});
 
 		mainJobId = manager.register("task", "main job", async () => "main result", { ownerId: "0-Main" });
-		targetJobId = manager.register("task", "subagent job", async () => "subagent result", {
+		targetJobId = manager.register("task", "agent job", async () => "agent result", {
 			ownerId: "3-AuthLoader",
 		});
 		await manager.waitForAll();
@@ -412,12 +539,12 @@ describe("AsyncJobManager", () => {
 			},
 			{ ownerId: "0-Main" },
 		);
-		const subagentJobId = manager.register(
+		const agentJobId = manager.register(
 			"bash",
-			"subagent-job",
+			"agent-job",
 			async ({ signal }) => {
 				await hold(signal);
-				return "subagent-cancelled";
+				return "agent-cancelled";
 			},
 			{ ownerId: "3-AuthLoader" },
 		);
@@ -425,7 +552,7 @@ describe("AsyncJobManager", () => {
 		manager.cancelAll({ ownerId: "3-AuthLoader" });
 
 		expect(manager.getJob(parentJobId)?.status).toBe("running");
-		expect(manager.getJob(subagentJobId)?.status).toBe("cancelled");
+		expect(manager.getJob(agentJobId)?.status).toBe("cancelled");
 
 		// Filtered query mirrors filtered cancel.
 		expect(manager.getRunningJobs({ ownerId: "0-Main" }).map(j => j.id)).toEqual([parentJobId]);
@@ -507,7 +634,7 @@ describe("AsyncJobManager watch windows", () => {
 	 * inside the window had no delivery anywhere. `unwatchJobs` only forgot the
 	 * watch, and `resumeDeliveries` could not see one, so the child's report existed
 	 * only inside the return value of whatever installed the watch. Any path that
-	 * dropped that value dropped the subagent's entire output, permanently, with
+	 * dropped that value dropped the agent's entire output, permanently, with
 	 * nothing left to recover it from.
 	 *
 	 * If this regresses: `completions` stays empty and the queue stays at 0.

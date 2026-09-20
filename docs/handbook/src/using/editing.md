@@ -1,8 +1,8 @@
 # Editing and repair
 
-Editing reliably is the core of a coding agent, so it is worth understanding how Veyyon does it. The default edit surface is hashline. In practice that means three things work together: numbered lines that come back from `read` and `grep`, snapshot tags that identify a known state of a file, and the `edit` tool with its `SWAP`, `DEL`, and `INS` operations.
+Editing reliably is the core of a coding agent, so it is worth understanding how Veyyon does it. The default edit surface is hashline. In practice that means three things work together: numbered lines that come back from `read` and `search`, snapshot tags that identify a known state of a file, and the `edit` tool with its `SWAP`, `DEL`, and `INS` operations.
 
-For the design behind the edit and repair path, see [Edit path and tool arguments](../benefits/first-attempt-edits.md) and [The hashline edit engine](../edit/engine.md).
+For the design behind the edit and repair path, see [The hashline edit engine](../edit/engine.md).
 
 ## Failure modes
 
@@ -34,7 +34,7 @@ You set `edit.mode` to `hashline`, `apply_patch`, `patch`, or `replace` in `conf
 
 The loop is short:
 
-1. `read` (or `grep`) returns `[relative/path#TAG]` and `LINE:text` rows.
+1. `read` (or `search`) returns `[relative/path#TAG]` and `LINE:text` rows.
 2. The model calls `edit`, anchoring each section on the same `TAG`.
 3. On success, the output includes a fresh `[path#NEW_TAG]` and a compact diff.
 
@@ -53,6 +53,6 @@ and confirm that it matches the command or browser scenario that ran.
 
 ## Safety
 
-Edits honor the approval mode, just as `bash` does. A `tools.approval.<tool>: deny` policy keeps the tool in the model's list but refuses every call at dispatch with an error naming the policy. Tools leave the model's list via `<tool>.enabled: false`, harness-profile allowlists, `tools.discoveryMode` (BM25 hiding), extension or agent tool-set overrides, or agent definitions. Plan mode keeps the list and blocks mutations at approval time.
+Edits honor the approval mode, just as `bash` does. A `tools.approval.<tool>: deny` policy keeps the tool in the model's list but rejects every call at dispatch with an error stating the policy. Tools leave the model's list via `<tool>.enabled: false`, harness-profile allowlists, `tools.discoveryMode` (BM25 hiding), extension or agent tool-set overrides, or agent definitions. Plan mode keeps the list and blocks mutations at approval time.
 
 Hashline is the primary write path, and `apply_patch` is a compatibility mode. There is no single V4A applier that routes every mutation through a `make_update_patch` envelope.

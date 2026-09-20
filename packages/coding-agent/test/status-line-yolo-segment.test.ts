@@ -1,29 +1,36 @@
 import { beforeAll, describe, expect, it } from "bun:test";
-import type { SegmentContext } from "@veyyon/coding-agent/modes/components/status-line/segments";
-import { renderSegment } from "@veyyon/coding-agent/modes/components/status-line/segments";
-import { initTheme, theme } from "@veyyon/coding-agent/modes/theme/theme";
-import { normalizeApprovalMode } from "@veyyon/coding-agent/tools/approval";
-import { AUTONOMY_LABEL, DEFAULT_APPROVAL_MODE } from "@veyyon/coding-agent/tools/approval-modes";
+import type { SegmentContext } from "@veyyon/coding-agent/modes/terminal/components/status-line/segments";
+import { renderSegment } from "@veyyon/coding-agent/modes/terminal/components/status-line/segments";
+import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
+import { normalizeApprovalMode } from "@veyyon/coding-agent/tools/core/approval";
+import { AUTONOMY_LABEL, DEFAULT_APPROVAL_MODE } from "@veyyon/coding-agent/tools/core/approval-modes";
+import { NO_SESSION_FACTS } from "../src/modes/terminal/components/status-line/session-facts";
 
 beforeAll(async () => {
 	await initTheme();
 });
 
 /**
- * Minimal SegmentContext for the mode segment. `bypassed` drives
- * `session.isApprovalBypassed()`; `goalMode` optionally exercises the compose
- * path where YOLO prefixes an active mode instead of replacing it.
+ * Minimal SegmentContext for the mode segment. `bypassed` drives the `/yolo`
+ * fact; `goalMode` optionally exercises the compose path where YOLO prefixes an
+ * active mode instead of replacing it.
  */
 function createModeContext(opts: {
 	bypassed: boolean;
 	goalMode?: { enabled: boolean; paused: boolean };
 }): SegmentContext {
 	return {
-		session: {
-			isApprovalBypassed: () => opts.bypassed,
-			getGoalModeState: () => (opts.goalMode ? { goal: { status: "active", tokensUsed: 0 } } : undefined),
-			settings: { get: () => false },
-		} as unknown as SegmentContext["session"],
+		facts: {
+			...NO_SESSION_FACTS,
+			approvalBypassed: opts.bypassed,
+			goal: opts.goalMode
+				? {
+						objective: "o",
+						status: "active",
+						tokensUsed: 0,
+					}
+				: null,
+		},
 		width: 120,
 		compactThinkingLevel: false,
 		options: {},
@@ -47,12 +54,12 @@ function createModeContext(opts: {
 			tokensPerSecond: null,
 		},
 		contextPercent: 0,
-		contextTokens: 0,
 		contextWindow: 0,
 		contextLimit: 0,
 		contextLimitKind: "window" as const,
 		autoCompactEnabled: false,
-		subagentCount: 0,
+		agentCount: 0,
+		backgroundSessionCount: 0,
 		activeMs: 0,
 		activeRepo: null,
 		worktree: null,

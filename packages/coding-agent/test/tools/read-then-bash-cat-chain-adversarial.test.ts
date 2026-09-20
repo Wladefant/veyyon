@@ -3,9 +3,9 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { BashTool } from "@veyyon/coding-agent/tools/bash";
-import { ReadTool } from "@veyyon/coding-agent/tools/read";
-import { WriteTool } from "@veyyon/coding-agent/tools/write";
+import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
+import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
+import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import { removeWithRetries } from "@veyyon/utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 import { makeToolSession } from "../helpers/tool-session";
@@ -38,10 +38,9 @@ function bashSession(cwd: string, settings: Settings) {
 				if (key === "bash.autoBackground.enabled") return false;
 				if (key === "bash.autoBackground.thresholdMs") return 60_000;
 				if (key === "bashInterceptor.enabled") return false;
-				if (key === "astGrep.enabled") return false;
+
 				if (key === "astEdit.enabled") return false;
-				if (key === "grep.enabled") return false;
-				if (key === "glob.enabled") return false;
+
 				return settings.get(key as never);
 			},
 			getBashInterceptorRules() {

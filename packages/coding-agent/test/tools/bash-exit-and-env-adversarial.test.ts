@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { BashTool } from "@veyyon/coding-agent/tools/bash";
+import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import { removeWithRetries } from "@veyyon/utils";
 import { useIsolatedGlobalSettings } from "../helpers/isolated-global-settings";
 import { makeToolSession } from "../helpers/tool-session";
@@ -32,10 +32,9 @@ function bashSession(cwd: string) {
 				if (key === "bash.autoBackground.enabled") return false;
 				if (key === "bash.autoBackground.thresholdMs") return 60_000;
 				if (key === "bashInterceptor.enabled") return false;
-				if (key === "astGrep.enabled") return false;
+
 				if (key === "astEdit.enabled") return false;
-				if (key === "grep.enabled") return false;
-				if (key === "glob.enabled") return false;
+
 				return undefined;
 			},
 			getBashInterceptorRules() {

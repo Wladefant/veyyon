@@ -3,7 +3,7 @@ import { getLogsDir } from "@veyyon/utils/dirs";
 import { isBunTestRuntime } from "@veyyon/utils/env";
 import { asRecord, errorMessage, getNonBlankStringProperty, isRecord } from "@veyyon/utils/type-guards";
 import * as AIError from "../error/flags";
-import { isCopilotTransientModelError } from "./retry.js";
+import { redactDiagnosticHeaders } from "./request-debug.js";
 import { formatErrorMessageWithRetryAfter } from "./retry-after.js";
 
 export type RawHttpRequestDump = {
@@ -15,6 +15,28 @@ export type RawHttpRequestDump = {
 	headers?: Record<string, string>;
 	body?: unknown;
 };
+
+/**
+ * Attach the request body to a dump at error time. Providers retain only the
+ * exact sent bytes for the life of a stream — holding the parsed object pinned
+ * a full context-sized clone on every in-flight request just to serve a
+ * hypothetical 400/413 dump. This parses those bytes back into `body` once,
+ * when a dump is actually being built; bytes that never parse (never sent, or
+ * truncated by an abort) leave `body` unset rather than fabricating one.
+ */
+export function materializeDumpBody(
+	dump: RawHttpRequestDump | undefined,
+	wireBodyJson: string | undefined,
+): RawHttpRequestDump | undefined {
+	if (!dump || wireBodyJson === undefined) return dump;
+	if (dump.body !== undefined) return dump;
+	try {
+		dump.body = JSON.parse(wireBodyJson) as unknown;
+	} catch {
+		// Unparseable body: the dump still carries method/url/headers.
+	}
+	return dump;
+}
 
 export type CapturedHttpErrorResponse = {
 	status: number;
@@ -48,8 +70,6 @@ export async function captureHttpErrorResponse(response: Response): Promise<Capt
 	}
 	return { status: response.status, headers: response.headers, bodyText, bodyJson };
 }
-
-const SENSITIVE_HEADERS = ["authorization", "x-api-key", "api-key", "cookie", "set-cookie", "proxy-authorization"];
 
 /**
  * Build the JSON persisted for a rejected request. Request fields stay at the
@@ -139,7 +159,7 @@ export function rewriteCopilotError(errorMessage: string, error: unknown, provid
 	if (status === 403) {
 		return `GitHub Copilot access denied (HTTP 403). Your account may not have access to this model or feature. Check your Copilot plan or model policy settings.`;
 	}
-	if (isCopilotTransientModelError(error)) {
+	if (AIError.isCopilotTransientModelError(error)) {
 		return `GitHub Copilot rejected this model (HTTP 400 model_not_supported) after retries. This is a known intermittent rollout gap for preview models on OAuth clients other than VS Code. Try again in a few seconds, switch to a GA model (gpt-5-mini, gpt-5.2), or run this model from VS Code.`;
 	}
 	return errorMessage;
@@ -156,16 +176,7 @@ function redactHeaders(headers: Record<string, string> | undefined): Record<stri
 	if (!headers) {
 		return undefined;
 	}
-
-	const redacted: Record<string, string> = {};
-	for (const [key, value] of Object.entries(headers)) {
-		if (SENSITIVE_HEADERS.includes(key.toLowerCase())) {
-			redacted[key] = "[redacted]";
-			continue;
-		}
-		redacted[key] = value;
-	}
-	return redacted;
+	return redactDiagnosticHeaders(Object.entries(headers));
 }
 
 function formatCapturedHttpError(captured: CapturedHttpErrorResponse | undefined): string | undefined {

@@ -2,10 +2,11 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { SegmentContext } from "@veyyon/coding-agent/modes/components/status-line/segments";
-import { renderSegment } from "@veyyon/coding-agent/modes/components/status-line/segments";
-import { initTheme, theme } from "@veyyon/coding-agent/modes/theme/theme";
+import type { SegmentContext } from "@veyyon/coding-agent/modes/terminal/components/status-line/segments";
+import { renderSegment } from "@veyyon/coding-agent/modes/terminal/components/status-line/segments";
+import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import { getProjectDir, removeSyncWithRetries, setProjectDir } from "@veyyon/utils";
+import { NO_SESSION_FACTS } from "../src/modes/terminal/components/status-line/session-facts";
 
 const originalProjectDir = getProjectDir();
 beforeAll(async () => {
@@ -26,12 +27,7 @@ function expectIconMarker(content: string, expected: string, absent: string): vo
 
 function createPathContext(): SegmentContext {
 	return {
-		session: {
-			state: {},
-			isFastModeEnabled: () => false,
-			modelRegistry: { isUsingOAuth: () => false },
-			sessionManager: undefined,
-		} as unknown as SegmentContext["session"],
+		facts: NO_SESSION_FACTS,
 		width: 120,
 		compactThinkingLevel: false,
 		options: {
@@ -61,12 +57,12 @@ function createPathContext(): SegmentContext {
 			tokensPerSecond: null,
 		},
 		contextPercent: 0,
-		contextTokens: 0,
 		contextWindow: 0,
 		contextLimit: 0,
 		contextLimitKind: "window" as const,
 		autoCompactEnabled: false,
-		subagentCount: 0,
+		agentCount: 0,
+		backgroundSessionCount: 0,
 		activeMs: 0,
 		activeRepo: null,
 		worktree: null,
@@ -304,8 +300,13 @@ describe("status line path segment in a linked worktree", () => {
 		const ctx = worktreeContext({ projectName: "very-long-project-name", worktreeName: "feature" }, "other");
 		ctx.options.path = { ...ctx.options.path, maxLength: 10 };
 		const label = Bun.stripANSI(renderSegment("path", ctx).content).slice(theme.icon.worktree.length + 1);
+		// CLIPPED FROM THE HEAD, the same direction the component's width-driven shortening
+		// cuts. Two clippers disagreeing put an ellipsis on both ends of one label, so the
+		// clipped text named neither end of it. The worktree name is the identifying end here,
+		// exactly as the last path segment is for a directory, so it is what survives.
 		expect(label.length).toBeLessThanOrEqual(10);
 		expect(label.startsWith("…")).toBe(true);
+		expect(label.lastIndexOf("…")).toBe(0);
 		expect(label.endsWith("feature")).toBe(true);
 	});
 });

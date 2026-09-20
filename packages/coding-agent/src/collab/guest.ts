@@ -5,9 +5,9 @@
  * drives it through the normal `/resume` machinery, then applies live frames:
  * entries → SessionManager + agent.replaceMessages, events →
  * EventController.handleEvent, state → status-line overrides plus real
- * model/thinking state applied to the replica agent. The host's subagent
+ * model/thinking state applied to the replica agent. The host's agent
  * ecosystem is mirrored too: agent snapshots populate a local AgentRegistry
- * (the Agent Control Center), EventBus traffic (observer HUD) is republished, and hub
+ * (the agent dashboard), EventBus traffic (observer HUD) is republished, and hub
  * actions (chat/kill/revive/transcript reads) round-trip over the wire.
  * Host ask dialogs (`ui-request` select/editor) present through the same
  * hook selector/editor seam and answer with `ui-response`; `ui-request-end`
@@ -18,13 +18,16 @@
 import * as path from "node:path";
 import type { ThinkingLevel } from "@veyyon/agent-core";
 import type { ImageContent } from "@veyyon/ai";
+import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import { getConfigRootDir, logger } from "@veyyon/utils";
 import { SNAPSHOT_PROGRESS_TIMEOUT_MS, TRANSCRIPT_TIMEOUT_MS, WELCOME_TIMEOUT_MS } from "@veyyon/wire";
-import type { AgentTranscriptRemote, AgentTranscriptRemoteRead } from "../modes/components/agent-transcript-viewer";
-import type { InteractiveModeContext } from "../modes/types";
+import type {
+	AgentTranscriptRemote,
+	AgentTranscriptRemoteRead,
+} from "../modes/terminal/components/dashboard/agent-transcript-viewer";
+import type { InteractiveModeContext } from "../modes/terminal/types";
 import { AgentRegistry } from "../registry/agent-registry";
-import type { AgentSessionEvent } from "../session/agent-session";
-import type { SessionEntry } from "../session/session-entries";
+import type { AgentSessionEvent } from "../session/agent-session-types";
 import { shouldDisableReasoning, toReasoningEffort } from "../thinking";
 import { setSessionTerminalTitle } from "../utils/title-generator";
 import { importRoomKey } from "./crypto";
@@ -42,20 +45,6 @@ import {
 } from "./protocol";
 import { CollabSocket } from "./relay-client";
 
-/** Commands a guest may run locally; everything else is host-only. */
-export const COLLAB_GUEST_ALLOWED_COMMANDS: Record<string, true> = {
-	dump: true,
-	export: true,
-	copy: true,
-	help: true,
-	hotkeys: true,
-	theme: true,
-	settings: true,
-	leave: true,
-	collab: true,
-	exit: true,
-	quit: true,
-};
 // The three join budgets are protocol-level and shared with every other guest
 // implementation; see @veyyon/wire, which documents each one and owns its value.
 
@@ -144,7 +133,7 @@ export type CollabGuestContext = Pick<
 	| "statusLine"
 	| "streamingComponent"
 	| "streamingMessage"
-	| "syncRunningSubagentBadge"
+	| "syncRunningAgentBadge"
 	| "ui"
 	| "updateEditorBorderColor"
 >;
@@ -359,7 +348,7 @@ export class CollabGuestLink {
 		}
 
 		this.#ctx.collabGuest = this;
-		this.#ctx.syncRunningSubagentBadge();
+		this.#ctx.syncRunningAgentBadge();
 	}
 
 	/** User-initiated leave (or post-disconnect cleanup): restore the previous session. */
@@ -411,7 +400,7 @@ export class CollabGuestLink {
 			logger.debug("collab guest dropping orphan snapshot-chunk");
 			return false;
 		}
-		pending.entries.push(...frame.entries.map(fromWireSessionEntry));
+		for (let ei = 0; ei < frame.entries.length; ei++) pending.entries.push(fromWireSessionEntry(frame.entries[ei]!));
 		const complete = frame.final || pending.entries.length >= pending.entryCount;
 		if (complete) {
 			this.#clearSnapshotProgressTimer();
@@ -442,7 +431,7 @@ export class CollabGuestLink {
 		this.#applyHostState(pending.state);
 		this.#ctx.resetObserverRegistry();
 		this.#applyAgentSnapshots(pending.agents);
-		this.#ctx.syncRunningSubagentBadge();
+		this.#ctx.syncRunningAgentBadge();
 		this.#assistantStreamSynced = false;
 		setSessionTerminalTitle(pending.state.sessionName ?? pending.header.title, pending.state.cwd);
 		this.#ctx.chatContainer.clear();
@@ -498,7 +487,7 @@ export class CollabGuestLink {
 				const entry = fromWireSessionEntry(frame.entry);
 				this.#ctx.sessionManager.ingestReplicatedEntry(entry);
 				if (entry.type === "message") {
-					this.#ctx.session.agent.replaceMessages([...this.#ctx.session.messages, entry.message]);
+					this.#ctx.session.agent.replaceMessages(this.#ctx.session.messages.concat([entry.message]));
 				}
 				break;
 			}
@@ -516,13 +505,13 @@ export class CollabGuestLink {
 				break;
 			}
 			case "bus":
-				// Mirrored host EventBus traffic (task subagent lifecycle/progress)
-				// feeding the observer HUD and the Agent Control Center's activity column.
+				// Mirrored host EventBus traffic (task agent lifecycle/progress)
+				// feeding the observer HUD and the agent dashboard's activity column.
 				this.#ctx.eventBus?.emit(frame.channel, frame.data);
 				break;
 			case "agents":
 				this.#applyAgentSnapshots(frame.agents);
-				this.#ctx.syncRunningSubagentBadge();
+				this.#ctx.syncRunningAgentBadge();
 				break;
 			case "ui-request":
 				this.#presentUiRequest(frame.request);
@@ -603,7 +592,7 @@ export class CollabGuestLink {
 		}
 		for (const snap of agents) {
 			if (this.agentRegistry.get(snap.id)) {
-				this.agentRegistry.setStatus(snap.id, snap.status);
+				this.agentRegistry.mirrorStatus(snap.id, snap.status);
 			} else {
 				this.agentRegistry.register({
 					id: snap.id,
@@ -703,7 +692,7 @@ export class CollabGuestLink {
 	 */
 	#clearUiRequests(): void {
 		if (this.#pendingUiRequests.size === 0) return;
-		const aborts = [...this.#pendingUiRequests.values()];
+		const aborts = Array.from(this.#pendingUiRequests.values());
 		this.#pendingUiRequests.clear();
 		for (const abort of aborts.reverse()) abort.abort();
 	}
@@ -727,7 +716,7 @@ export class CollabGuestLink {
 		this.#ctx.statusLine.setCollabStatus(null);
 		this.#flushPendingTranscripts();
 		this.#clearAgentMirror();
-		this.#ctx.syncRunningSubagentBadge();
+		this.#ctx.syncRunningAgentBadge();
 		this.#ctx.resetObserverRegistry();
 		this.#clearTransientUi();
 		// Replica file stays on disk: it is a valid session file outside the

@@ -1,9 +1,10 @@
 import { describe, expect, it } from "bun:test";
+import { isAbortError } from "@veyyon/utils/abortable";
+import * as fetchRetry from "@veyyon/utils/fetch-retry";
 import {
 	extractHttpStatusFromError,
 	extractRetryHint,
 	fetchWithRetry,
-	isRetryableError,
 	isRetryableStatus,
 	isUnexpectedSocketCloseMessage,
 	RESET_EPOCH_MS_MIN,
@@ -68,6 +69,70 @@ describe("fetchWithRetry", () => {
 		expect(response.status).toBe(500);
 		expect(await response.text()).toBe("deterministic provider failure");
 		expect(attempt).toBe(1);
+	});
+
+	/**
+	 * WHY: the transient set was the GATE in front of the verdict, so a caller that knew its API
+	 * documents 409 as retryable, or that reads a decision out of a 400's body, never got asked. The
+	 * set is the default for a caller with no verdict; it is not a veto over one.
+	 */
+	it.each([409, 400, 401])("asks the caller's verdict about a %s", async status => {
+		let attempts = 0;
+		const customFetch = async () => {
+			attempts += 1;
+			return attempts === 1 ? new Response("try again", { status }) : new Response("ok", { status: 200 });
+		};
+
+		const response = await fetchWithRetry("https://example.invalid/verdict", {
+			fetch: customFetch,
+			defaultDelayMs: 1,
+			maxAttempts: 3,
+			shouldRetryResponse: (_response, bodyText) => bodyText === "try again",
+		});
+
+		expect(response.status).toBe(200);
+		expect(attempts).toBe(2);
+	});
+
+	it("never reads the body of a success, and never asks about one", async () => {
+		// A 2xx may be a live stream: `clone().text()` on one buffers the whole response, so the loop
+		// returns before it can. A verdict that would retry everything must not see it.
+		let asked = 0;
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new TextEncoder().encode("first chunk"));
+			},
+		});
+
+		const response = await fetchWithRetry("https://example.invalid/stream", {
+			fetch: async () => new Response(stream, { status: 200 }),
+			defaultDelayMs: 1,
+			maxAttempts: 3,
+			shouldRetryResponse: () => {
+				asked += 1;
+				return true;
+			},
+		});
+
+		expect(asked).toBe(0);
+		expect(response.bodyUsed).toBe(false);
+	});
+
+	it("falls back to the transient set when no verdict is passed", async () => {
+		let attempts = 0;
+		const customFetch = async () => {
+			attempts += 1;
+			return new Response("gone", { status: 404 });
+		};
+
+		const response = await fetchWithRetry("https://example.invalid/default", {
+			fetch: customFetch,
+			defaultDelayMs: 1,
+			maxAttempts: 3,
+		});
+
+		expect(response.status).toBe(404);
+		expect(attempts).toBe(1);
 	});
 
 	it("returns retryable responses immediately when retry hints exceed the delay cap", async () => {
@@ -137,7 +202,56 @@ describe("fetchWithRetry", () => {
 		expect(attempts).toBe(3);
 	});
 
-	it("throws 'Request was aborted' for a pre-aborted signal without fetching", async () => {
+	/**
+	 * THE NAME IS THE CONTRACT, and this module mints three cancellations. A bare
+	 * `new Error("Request was aborted")` is a cancellation only to a human: `isAbortError` reads
+	 * `name`, so the auth gateway classified such an error as a server fault rather than a client
+	 * that closed the request, and the provider retry ladder could recognise it only by matching the
+	 * word `aborted` in the sentence — which retried what the caller had just cancelled. Each row is
+	 * one mint site, and the message is asserted byte-exact because it is the documented one.
+	 */
+	it.each([
+		[
+			"a pre-aborted signal, without fetching",
+			(controller: AbortController) => {
+				controller.abort();
+				return async () => new Response("");
+			},
+		],
+		[
+			"a signal that aborts mid-flight",
+			(controller: AbortController) => async () => {
+				controller.abort();
+				throw new Error("socket closed");
+			},
+		],
+		[
+			"a transport that reports the abort itself",
+			() => async () => {
+				throw Object.assign(new Error("This operation was aborted"), { name: "AbortError" });
+			},
+		],
+	])("throws a named cancellation for %s", async (_label, arrange) => {
+		const controller = new AbortController();
+		const fetch = arrange(controller);
+		let thrown: unknown;
+
+		try {
+			await fetchWithRetry("https://example.invalid/aborted", {
+				signal: controller.signal,
+				fetch,
+				defaultDelayMs: 1,
+				maxAttempts: 2,
+			});
+		} catch (error) {
+			thrown = error;
+		}
+
+		expect(isAbortError(thrown)).toBe(true);
+		expect((thrown as Error).message).toBe("Request was aborted");
+	});
+
+	it("does not fetch at all for a pre-aborted signal", async () => {
 		const controller = new AbortController();
 		controller.abort();
 		let fetched = false;
@@ -165,6 +279,31 @@ describe("extractRetryHint", () => {
 
 	it("treats small x-ratelimit-reset-ms values as delta milliseconds", () => {
 		expect(extractRetryHint(headerResponse({ "x-ratelimit-reset-ms": "1500" }))).toBe(1500);
+	});
+
+	// The epoch arm of the `-ms` header had no coverage at all: a mutation that
+	// returned the absolute instant instead of the wait left every test green.
+	it("treats a large x-ratelimit-reset-ms value as the epoch it is", () => {
+		const inThirtySeconds = Date.now() + 30_000;
+		const hint = extractRetryHint(headerResponse({ "x-ratelimit-reset-ms": String(inThirtySeconds) }));
+		expect(hint).toBeGreaterThan(28_000);
+		expect(hint).toBeLessThanOrEqual(30_000);
+	});
+
+	// `x-ratelimit-reset` conflates three shapes, and this branch read every one
+	// of them as a Unix epoch in seconds. A gateway sending the common delta form
+	// `60` produced `60000 - Date.now()`, a large negative, so the server's own
+	// wait was discarded and the caller fell back to its default backoff.
+	it("treats a small x-ratelimit-reset value as a delta in seconds", () => {
+		expect(extractRetryHint(headerResponse({ "x-ratelimit-reset": "60" }))).toBe(60_000);
+		expect(extractRetryHint(headerResponse({ "x-ratelimit-reset": "1" }))).toBe(1_000);
+	});
+
+	it("treats a large x-ratelimit-reset value as the epoch it is", () => {
+		const inThirtySeconds = Math.floor(Date.now() / 1000) + 30;
+		const hint = extractRetryHint(headerResponse({ "x-ratelimit-reset": String(inThirtySeconds) }));
+		expect(hint).toBeGreaterThan(28_000);
+		expect(hint).toBeLessThanOrEqual(30_000);
 	});
 
 	it("accepts a bare Headers object and returns undefined with no signal", () => {
@@ -255,6 +394,59 @@ describe("extractHttpStatusFromError", () => {
 		expect(extractHttpStatusFromError({ status: 999 })).toBeUndefined();
 		expect(extractHttpStatusFromError("not an object")).toBeUndefined();
 	});
+
+	/**
+	 * WHY: the loosest pattern read any three-digit number followed by
+	 * capitalised words as a status line, so `Processed 200 Total Records` came
+	 * back as a success and `gave up after 401 Failed Attempts` came back as an
+	 * expired credential — and 401 is what `isAuthError` rotates credentials on.
+	 * A reason phrase is now evidence only when it is the phrase that belongs to
+	 * the code beside it, which `node:http` owns.
+	 *
+	 * Not caught: a non-standard phrase a gateway invents for a standard code,
+	 * which is now read as no status rather than as the wrong one.
+	 */
+	it("reads a reason phrase only when it is the phrase for that code", () => {
+		expect(extractHttpStatusFromError(new Error("429 Too Many Requests"))).toBe(429);
+		expect(extractHttpStatusFromError(new Error("upstream said 502 Bad Gateway, giving up"))).toBe(502);
+		expect(extractHttpStatusFromError(new Error("503 Service Unavailable"))).toBe(503);
+		// A phrase belonging to a different code is not that code's status line.
+		expect(extractHttpStatusFromError(new Error("Processed 200 Total Records"))).toBeUndefined();
+		expect(extractHttpStatusFromError(new Error("gave up after 401 Failed Attempts"))).toBeUndefined();
+		expect(extractHttpStatusFromError(new Error("Read 503 Bytes Total"))).toBeUndefined();
+		// The phrase has to end on a word boundary. Mid-sentence, so position cannot answer for it.
+		expect(extractHttpStatusFromError(new Error("upstream said 503 Service Unavailableish"))).toBeUndefined();
+	});
+
+	/**
+	 * WHY: the pattern that read `Processed 200 Total Records` as a status accepted a code anywhere
+	 * in a sentence. Removing it took the true positives with the false ones, and every one of those
+	 * was a status line: `401 Your session has expired` stopped reporting 401, which is the number
+	 * `isAuthError` rotates a credential on, so a dead grant stopped being recognised as one.
+	 *
+	 * POSITION is the evidence. A status line opens the message; a sentence that counts something
+	 * does not open with the count. The phrase after the code is not consulted, which is the whole
+	 * point — a gateway inventing its own wording for a standard code still reports the code.
+	 *
+	 * Not caught: a message that genuinely opens with a three-digit quantity. No provider error in
+	 * this workspace is written that way, and the callers are all handed failures.
+	 */
+	it("reads a status line the message opens with, whatever wording follows it", () => {
+		expect(extractHttpStatusFromError(new Error("401 Your session has expired"))).toBe(401);
+		expect(extractHttpStatusFromError(new Error("403 You have run out of credits"))).toBe(403);
+		expect(extractHttpStatusFromError(new Error("429 Rate limit exceeded. Please try again later."))).toBe(429);
+		expect(extractHttpStatusFromError(new Error('503 {"type":"error","error":{"type":"overloaded_error"}}'))).toBe(
+			503,
+		);
+		expect(extractHttpStatusFromError(new Error("503 Service Unavailableish"))).toBe(503);
+		// Still not a status: the number is inside the sentence, not opening it.
+		expect(extractHttpStatusFromError(new Error("Processed 200 Total Records"))).toBeUndefined();
+		expect(extractHttpStatusFromError(new Error("gave up after 401 Failed Attempts"))).toBeUndefined();
+	});
+
+	it("prefers an explicitly labelled status over a reason phrase later in the message", () => {
+		expect(extractHttpStatusFromError(new Error("status: 418, body said 503 Service Unavailable"))).toBe(418);
+	});
 });
 
 describe("retryability predicates", () => {
@@ -272,17 +464,14 @@ describe("retryability predicates", () => {
 		expect(isUnexpectedSocketCloseMessage("connection reset by peer")).toBe(false);
 	});
 
-	it("isRetryableError: aborts/timeouts and transient phrases retry", () => {
-		expect(isRetryableError(Object.assign(new Error("x"), { name: "AbortError" }))).toBe(true);
-		expect(isRetryableError(new Error("request timed out"))).toBe(true);
-		expect(isRetryableError(new Error("model is overloaded"))).toBe(true);
-		expect(isRetryableError(new Error("fetch failed"))).toBe(true);
-	});
-
-	it("isRetryableError: non-408/429 4xx and validation shapes fail fast", () => {
-		expect(isRetryableError({ status: 401, message: "unauthorized" })).toBe(false);
-		expect(isRetryableError({ status: 429, message: "rate limited" })).toBe(true);
-		expect(isRetryableError(new Error("schema validation failed"))).toBe(false);
-		expect(isRetryableError(new Error("completely unknown"))).toBe(false);
+	/**
+	 * The composite retry decision moved to `@veyyon/ai/error`'s registry, and the four cases that used
+	 * to be asserted here (an abort, a timeout, transient wording, a validation shape) moved with it to
+	 * `packages/ai/test/one-predicate-decides-whether-a-provider-failure-is-retried.test.ts`. What is
+	 * left in this module is what a transport states about itself, which is what the two assertions
+	 * above cover. This one refuses the return of a second opinion.
+	 */
+	it("states transport facts and no retry decision", () => {
+		expect("isRetryableError" in fetchRetry).toBe(false);
 	});
 });

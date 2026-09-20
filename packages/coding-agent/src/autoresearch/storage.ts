@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { errorMessage, getAutoresearchDbPath, getAutoresearchProjectDir, logger, tryParseJson } from "@veyyon/utils";
 import * as git from "../utils/git";
 import type { ASIData, ExperimentStatus, MetricDirection, NumericMetricMap } from "./types";
+import { EXPERIMENT_STATUSES } from "./types";
 
 /**
  * Encode an absolute project path into a single filesystem-safe segment.
@@ -35,6 +36,19 @@ export interface SessionRow {
 	constraints: string[];
 	secondaryMetrics: string[];
 	notes: string;
+	/** Candidate implementations per segment. 1 is the serial loop. */
+	breadth: number;
+	/** Implementations per hypothesis. */
+	attempts: number;
+	/** Concurrent arms. Ignored when breadth is 1. */
+	maxParallel: number;
+	/** Whether surviving arms certify each other. Skipped when breadth is 1. */
+	certify: boolean;
+	/**
+	 * Model chain per arm index, `a0` first. An entry that is empty, and any arm
+	 * past the end of the list, runs on whatever model the session is on.
+	 */
+	armModels: string[];
 	createdAt: number;
 	closedAt: number | null;
 }
@@ -66,6 +80,19 @@ export interface RunRow {
 	justification: string | null;
 	flagged: boolean;
 	flaggedReason: string | null;
+	/** Arm identity within a segment. Null for a serial run. */
+	arm: string | null;
+	/** Which arm certified this one, when a ring reviewed it. */
+	certifiedBy: string | null;
+	/**
+	 * The model the session was on when this run was logged, as
+	 * `provider/id`. Null on a run logged before the column existed.
+	 *
+	 * The arm above is what the loop says the run belongs to; this is what
+	 * built it. A configured arm model that never took effect is only visible
+	 * as the difference between the two.
+	 */
+	model: string | null;
 	loggedAt: number | null;
 	abandonedAt: number | null;
 }
@@ -84,6 +111,11 @@ export interface OpenSessionParams {
 	offLimits: string[];
 	constraints: string[];
 	secondaryMetrics: string[];
+	breadth?: number;
+	attempts?: number;
+	maxParallel?: number;
+	certify?: boolean;
+	armModels?: string[];
 }
 
 export interface UpdateSessionParams {
@@ -100,6 +132,11 @@ export interface UpdateSessionParams {
 	branch?: string | null;
 	baselineCommit?: string | null;
 	notes?: string;
+	breadth?: number;
+	attempts?: number;
+	maxParallel?: number;
+	certify?: boolean;
+	armModels?: string[];
 }
 
 export interface InsertRunParams {
@@ -109,6 +146,14 @@ export interface InsertRunParams {
 	logPath: string;
 	preRunDirtyPaths: string[];
 	startedAt: number;
+	arm?: string | null;
+	/**
+	 * The model in force when the measurement was taken, as `provider/id`. It is
+	 * written here rather than at log time because a certified round logs its
+	 * winner after every arm has been built, when the session is on the last
+	 * arm's model.
+	 */
+	model?: string | null;
 }
 
 export interface MarkRunCompletedParams {
@@ -135,6 +180,13 @@ export interface MarkRunLoggedParams {
 	scopeDeviations: string[];
 	justification: string | null;
 	loggedAt: number;
+	/**
+	 * Arm and reviewer the loop attributes this result to. Either left undefined
+	 * keeps whatever the run already recorded, so a serial log never erases the
+	 * arm `run_experiment` stamped on the measurement.
+	 */
+	arm?: string | null;
+	certifiedBy?: string | null;
 }
 
 type SessionDbRow = {
@@ -154,6 +206,11 @@ type SessionDbRow = {
 	constraints_json: string;
 	secondary_metrics_json: string;
 	notes: string;
+	breadth: number;
+	attempts: number;
+	max_parallel: number;
+	certify: number;
+	arm_models_json: string | null;
 	created_at: number;
 	closed_at: number | null;
 };
@@ -185,11 +242,14 @@ type RunDbRow = {
 	justification: string | null;
 	flagged: number;
 	flagged_reason: string | null;
+	arm: string | null;
+	certified_by: string | null;
+	model: string | null;
 	logged_at: number | null;
 	abandoned_at: number | null;
 };
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 4;
 
 const SCHEMA_SQL = `
 PRAGMA journal_mode=WAL;
@@ -213,6 +273,11 @@ CREATE TABLE IF NOT EXISTS sessions (
 	constraints_json TEXT NOT NULL DEFAULT '[]',
 	secondary_metrics_json TEXT NOT NULL DEFAULT '[]',
 	notes TEXT NOT NULL DEFAULT '',
+	breadth INTEGER NOT NULL DEFAULT 1,
+	attempts INTEGER NOT NULL DEFAULT 1,
+	max_parallel INTEGER NOT NULL DEFAULT 8,
+	certify INTEGER NOT NULL DEFAULT 1,
+	arm_models_json TEXT NOT NULL DEFAULT '[]',
 	created_at INTEGER NOT NULL,
 	closed_at INTEGER
 );
@@ -244,6 +309,9 @@ CREATE TABLE IF NOT EXISTS runs (
 	justification TEXT,
 	flagged INTEGER NOT NULL DEFAULT 0,
 	flagged_reason TEXT,
+	arm TEXT,
+	certified_by TEXT,
+	model TEXT,
 	logged_at INTEGER,
 	abandoned_at INTEGER
 );
@@ -251,6 +319,37 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE INDEX IF NOT EXISTS runs_session_segment_idx ON runs(session_id, segment);
 CREATE INDEX IF NOT EXISTS runs_pending_idx ON runs(session_id, status, abandoned_at);
 `;
+
+/**
+ * Bring an existing database up to SCHEMA_VERSION.
+ *
+ * `CREATE TABLE IF NOT EXISTS` leaves an already-created table alone, so a
+ * database opened before a column existed never gains it from SCHEMA_SQL. Each
+ * added column is nullable or carries a default that reproduces the behaviour
+ * from before it existed, so a migrated session keeps running serially.
+ */
+function migrateSchema(db: Database, from: number): void {
+	if (from < 2) {
+		addColumnIfMissing(db, "sessions", "breadth", "INTEGER NOT NULL DEFAULT 1");
+		addColumnIfMissing(db, "sessions", "attempts", "INTEGER NOT NULL DEFAULT 1");
+		addColumnIfMissing(db, "sessions", "max_parallel", "INTEGER NOT NULL DEFAULT 8");
+		addColumnIfMissing(db, "sessions", "certify", "INTEGER NOT NULL DEFAULT 1");
+		addColumnIfMissing(db, "runs", "arm", "TEXT");
+		addColumnIfMissing(db, "runs", "certified_by", "TEXT");
+	}
+	if (from < 3) {
+		addColumnIfMissing(db, "sessions", "arm_models_json", "TEXT NOT NULL DEFAULT '[]'");
+	}
+	if (from < 4) {
+		addColumnIfMissing(db, "runs", "model", "TEXT");
+	}
+}
+
+function addColumnIfMissing(db: Database, table: string, column: string, definition: string): void {
+	const columns = db.query(`PRAGMA table_info(${table})`).all() as { name: string }[];
+	if (columns.some(entry => entry.name === column)) return;
+	db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
 
 export class AutoresearchStorage {
 	#db: Database;
@@ -268,6 +367,7 @@ export class AutoresearchStorage {
 		const versionRow = this.#db.query("PRAGMA user_version").get() as { user_version: number } | null;
 		const currentVersion = versionRow?.user_version ?? 0;
 		if (currentVersion < SCHEMA_VERSION) {
+			migrateSchema(this.#db, currentVersion);
 			this.#db.run(`PRAGMA user_version = ${SCHEMA_VERSION}`);
 		}
 	}
@@ -322,8 +422,9 @@ export class AutoresearchStorage {
 				name, goal, primary_metric, metric_unit, direction,
 				preferred_command, branch, baseline_commit, max_iterations,
 				scope_paths_json, off_limits_json, constraints_json, secondary_metrics_json,
+				breadth, attempts, max_parallel, certify, arm_models_json,
 				created_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
 		);
 		const row = stmt.get(
 			params.name,
@@ -339,6 +440,11 @@ export class AutoresearchStorage {
 			JSON.stringify(params.offLimits),
 			JSON.stringify(params.constraints),
 			JSON.stringify(params.secondaryMetrics),
+			params.breadth ?? 1,
+			params.attempts ?? 1,
+			params.maxParallel ?? 8,
+			(params.certify ?? true) ? 1 : 0,
+			JSON.stringify(params.armModels ?? []),
 			Date.now(),
 		);
 		if (!row) throw new Error("Failed to insert autoresearch session");
@@ -350,58 +456,29 @@ export class AutoresearchStorage {
 	updateSession(sessionId: number, updates: UpdateSessionParams): SessionRow {
 		const setClauses: string[] = [];
 		const values: SQLQueryBindings[] = [];
-		if (updates.goal !== undefined) {
-			setClauses.push("goal = ?");
-			values.push(updates.goal);
-		}
-		if (updates.preferredCommand !== undefined) {
-			setClauses.push("preferred_command = ?");
-			values.push(updates.preferredCommand);
-		}
-		if (updates.maxIterations !== undefined) {
-			setClauses.push("max_iterations = ?");
-			values.push(updates.maxIterations);
-		}
-		if (updates.scopePaths !== undefined) {
-			setClauses.push("scope_paths_json = ?");
-			values.push(JSON.stringify(updates.scopePaths));
-		}
-		if (updates.offLimits !== undefined) {
-			setClauses.push("off_limits_json = ?");
-			values.push(JSON.stringify(updates.offLimits));
-		}
-		if (updates.constraints !== undefined) {
-			setClauses.push("constraints_json = ?");
-			values.push(JSON.stringify(updates.constraints));
-		}
-		if (updates.secondaryMetrics !== undefined) {
-			setClauses.push("secondary_metrics_json = ?");
-			values.push(JSON.stringify(updates.secondaryMetrics));
-		}
-		if (updates.primaryMetric !== undefined) {
-			setClauses.push("primary_metric = ?");
-			values.push(updates.primaryMetric);
-		}
-		if (updates.metricUnit !== undefined) {
-			setClauses.push("metric_unit = ?");
-			values.push(updates.metricUnit);
-		}
-		if (updates.direction !== undefined) {
-			setClauses.push("direction = ?");
-			values.push(updates.direction);
-		}
-		if (updates.branch !== undefined) {
-			setClauses.push("branch = ?");
-			values.push(updates.branch);
-		}
-		if (updates.baselineCommit !== undefined) {
-			setClauses.push("baseline_commit = ?");
-			values.push(updates.baselineCommit);
-		}
-		if (updates.notes !== undefined) {
-			setClauses.push("notes = ?");
-			values.push(updates.notes);
-		}
+		appendOptionalColumn(setClauses, values, "goal = ?", updates.goal);
+		appendOptionalColumn(setClauses, values, "preferred_command = ?", updates.preferredCommand);
+		appendOptionalColumn(setClauses, values, "max_iterations = ?", updates.maxIterations);
+		appendOptionalColumn(setClauses, values, "scope_paths_json = ?", updates.scopePaths, JSON.stringify);
+		appendOptionalColumn(setClauses, values, "off_limits_json = ?", updates.offLimits, JSON.stringify);
+		appendOptionalColumn(setClauses, values, "constraints_json = ?", updates.constraints, JSON.stringify);
+		appendOptionalColumn(setClauses, values, "secondary_metrics_json = ?", updates.secondaryMetrics, JSON.stringify);
+		appendOptionalColumn(setClauses, values, "primary_metric = ?", updates.primaryMetric);
+		appendOptionalColumn(setClauses, values, "metric_unit = ?", updates.metricUnit);
+		appendOptionalColumn(setClauses, values, "direction = ?", updates.direction);
+		appendOptionalColumn(setClauses, values, "branch = ?", updates.branch);
+		appendOptionalColumn(setClauses, values, "baseline_commit = ?", updates.baselineCommit);
+		appendOptionalColumn(setClauses, values, "notes = ?", updates.notes);
+		appendOptionalColumn(setClauses, values, "breadth = ?", updates.breadth);
+		appendOptionalColumn(setClauses, values, "attempts = ?", updates.attempts);
+		appendOptionalColumn(setClauses, values, "max_parallel = ?", updates.maxParallel);
+		appendOptionalColumn(
+			setClauses,
+			values,
+			"certify = ?",
+			updates.certify !== undefined ? (updates.certify ? 1 : 0) : undefined,
+		);
+		appendOptionalColumn(setClauses, values, "arm_models_json = ?", updates.armModels, JSON.stringify);
 		if (setClauses.length > 0) {
 			values.push(sessionId);
 			this.#db.prepare(`UPDATE sessions SET ${setClauses.join(", ")} WHERE id = ?`).run(...(values as never[]));
@@ -411,8 +488,14 @@ export class AutoresearchStorage {
 		return session;
 	}
 
-	bumpSegment(sessionId: number): SessionRow {
-		this.#db.prepare("UPDATE sessions SET current_segment = current_segment + 1 WHERE id = ?").run(sessionId);
+	bumpSessionSegment(sessionId: number, baselineCommit?: string | null): SessionRow {
+		if (baselineCommit !== undefined) {
+			this.#db
+				.prepare("UPDATE sessions SET current_segment = current_segment + 1, baseline_commit = ? WHERE id = ?")
+				.run(baselineCommit, sessionId);
+		} else {
+			this.#db.prepare("UPDATE sessions SET current_segment = current_segment + 1 WHERE id = ?").run(sessionId);
+		}
 		const session = this.getSessionById(sessionId);
 		if (!session) throw new Error(`Session ${sessionId} not found after bumping segment`);
 		return session;
@@ -425,8 +508,8 @@ export class AutoresearchStorage {
 	insertRun(params: InsertRunParams): RunRow {
 		const stmt = this.#db.prepare<{ id: number }, SQLQueryBindings[]>(
 			`INSERT INTO runs (
-				session_id, segment, command, started_at, log_path, pre_run_dirty_paths_json
-			) VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
+				session_id, segment, command, started_at, log_path, pre_run_dirty_paths_json, arm, model
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
 		);
 		const row = stmt.get(
 			params.sessionId,
@@ -435,9 +518,27 @@ export class AutoresearchStorage {
 			params.startedAt,
 			params.logPath,
 			JSON.stringify(params.preRunDirtyPaths),
+			params.arm ?? null,
+			params.model ?? null,
 		);
 		if (!row) throw new Error("Failed to insert run");
 		return this.getRunByIdRequired(row.id);
+	}
+
+	/** Every run recorded for one segment, oldest first. A round of arms. */
+	listRunsForSegment(sessionId: number, segment: number): RunRow[] {
+		const stmt = this.#db.prepare<RunDbRow, [number, number]>(
+			"SELECT * FROM runs WHERE session_id = ? AND segment = ? ORDER BY id ASC",
+		);
+		return stmt.all(sessionId, segment).map(rowToRun);
+	}
+
+	/** Record a certification verdict against one arm's run. */
+	markRunCertified(runId: number, certifiedBy: string, flagged: boolean, reason: string | null): RunRow {
+		this.#db
+			.prepare("UPDATE runs SET certified_by = ?, flagged = ?, flagged_reason = ? WHERE id = ?")
+			.run(certifiedBy, flagged ? 1 : 0, reason, runId);
+		return this.getRunByIdRequired(runId);
 	}
 
 	updateRunLogPath(runId: number, logPath: string): RunRow {
@@ -451,12 +552,19 @@ export class AutoresearchStorage {
 	}
 
 	markRunCompleted(params: MarkRunCompletedParams): RunRow {
+		const run = this.getRunByIdRequired(params.runId);
+		if (run.status !== null) {
+			throw new Error(`Cannot complete run ${params.runId}: run is already logged with status "${run.status}"`);
+		}
+		if (run.abandonedAt !== null) {
+			throw new Error(`Cannot complete run ${params.runId}: run was abandoned`);
+		}
 		this.#db
 			.prepare(
 				`UPDATE runs SET
 					completed_at = ?, duration_ms = ?, exit_code = ?, timed_out = ?,
 					parsed_primary = ?, parsed_metrics_json = ?, parsed_asi_json = ?
-				WHERE id = ?`,
+				WHERE id = ? AND status IS NULL AND abandoned_at IS NULL`,
 			)
 			.run(
 				params.completedAt,
@@ -472,13 +580,21 @@ export class AutoresearchStorage {
 	}
 
 	markRunLogged(params: MarkRunLoggedParams): RunRow {
+		const run = this.getRunByIdRequired(params.runId);
+		if (run.status !== null) {
+			throw new Error(`Cannot log run ${params.runId}: run is already logged with status "${run.status}"`);
+		}
+		if (run.abandonedAt !== null) {
+			throw new Error(`Cannot log run ${params.runId}: run was abandoned`);
+		}
 		this.#db
 			.prepare(
 				`UPDATE runs SET
 					status = ?, description = ?, metric = ?, metrics_json = ?, asi_json = ?,
 					commit_hash = ?, confidence = ?, modified_paths_json = ?, scope_deviations_json = ?,
-					justification = ?, logged_at = ?
-				WHERE id = ?`,
+					justification = ?, logged_at = ?,
+					arm = COALESCE(?, arm), certified_by = COALESCE(?, certified_by)
+				WHERE id = ? AND status IS NULL AND abandoned_at IS NULL`,
 			)
 			.run(
 				params.status,
@@ -492,6 +608,8 @@ export class AutoresearchStorage {
 				JSON.stringify(params.scopeDeviations),
 				params.justification,
 				params.loggedAt,
+				params.arm ?? null,
+				params.certifiedBy ?? null,
 				params.runId,
 			);
 		return this.getRunByIdRequired(params.runId);
@@ -502,7 +620,7 @@ export class AutoresearchStorage {
 		return this.getRunByIdRequired(runId);
 	}
 
-	abandonPendingRuns(sessionId: number): number {
+	abandonIncompleteRuns(sessionId: number): number {
 		const beforeRow = this.#db
 			.prepare<{ n: number }, [number]>(
 				"SELECT COUNT(*) AS n FROM runs WHERE session_id = ? AND status IS NULL AND abandoned_at IS NULL",
@@ -536,7 +654,7 @@ export class AutoresearchStorage {
 		return run;
 	}
 
-	listRuns(sessionId: number): RunRow[] {
+	getRunsForSession(sessionId: number): RunRow[] {
 		const stmt = this.#db.prepare<RunDbRow, [number]>("SELECT * FROM runs WHERE session_id = ? ORDER BY id ASC");
 		return stmt.all(sessionId).map(rowToRun);
 	}
@@ -571,9 +689,22 @@ export async function openAutoresearchStorageIfExists(cwd: string): Promise<Auto
 	return storage;
 }
 
+async function primaryRootOrNull(cwd: string): Promise<string | null> {
+	try {
+		return await git.repo.primaryRoot(cwd);
+	} catch {
+		return null;
+	}
+}
+
 async function resolveAutoresearchPaths(cwd: string): Promise<{ dbPath: string; projectDir: string }> {
 	const override = process.env.VEYYON_AUTORESEARCH_DB_DIR;
-	const repoRoot = (await git.repo.root(cwd)) ?? cwd;
+	// The primary checkout, never the linked worktree: `rev-parse --show-toplevel`
+	// returns the worktree's own root, which would give every arm of a swarm its
+	// own database and hide its runs from the session that started them. Outside
+	// a repository this throws rather than returning null, and autoresearch still
+	// has to open a database keyed on the plain directory.
+	const repoRoot = (await primaryRootOrNull(cwd)) ?? cwd;
 	const encoded = encodeProjectKey(repoRoot);
 	if (override) {
 		return {
@@ -601,6 +732,31 @@ export function closeAllAutoresearchStorages(): void {
 	storageCache.clear();
 }
 
+function appendOptionalColumn(
+	clauses: string[],
+	values: SQLQueryBindings[],
+	clause: string,
+	value: SQLQueryBindings | undefined,
+): void;
+function appendOptionalColumn<T>(
+	clauses: string[],
+	values: SQLQueryBindings[],
+	clause: string,
+	value: T | undefined,
+	encode: (val: T) => SQLQueryBindings,
+): void;
+function appendOptionalColumn<T>(
+	clauses: string[],
+	values: SQLQueryBindings[],
+	clause: string,
+	value: T | undefined,
+	encode?: (val: T) => SQLQueryBindings,
+): void {
+	if (value === undefined) return;
+	clauses.push(clause);
+	values.push(encode ? encode(value) : (value as unknown as SQLQueryBindings));
+}
+
 function rowToSession(row: SessionDbRow): SessionRow {
 	return {
 		id: row.id,
@@ -619,6 +775,11 @@ function rowToSession(row: SessionDbRow): SessionRow {
 		constraints: parseStringArray(row.constraints_json),
 		secondaryMetrics: parseStringArray(row.secondary_metrics_json),
 		notes: row.notes,
+		breadth: row.breadth ?? 1,
+		attempts: row.attempts ?? 1,
+		maxParallel: row.max_parallel ?? 8,
+		certify: (row.certify ?? 1) !== 0,
+		armModels: parseStringArray(row.arm_models_json ?? "[]"),
 		createdAt: row.created_at,
 		closedAt: row.closed_at,
 	};
@@ -652,14 +813,16 @@ function rowToRun(row: RunDbRow): RunRow {
 		justification: row.justification,
 		flagged: row.flagged !== 0,
 		flaggedReason: row.flagged_reason,
+		arm: row.arm ?? null,
+		certifiedBy: row.certified_by ?? null,
+		model: row.model ?? null,
 		loggedAt: row.logged_at,
 		abandonedAt: row.abandoned_at,
 	};
 }
 
 function parseStatus(value: string | null): ExperimentStatus | null {
-	if (value === "keep" || value === "discard" || value === "crash" || value === "checks_failed") return value;
-	return null;
+	return EXPERIMENT_STATUSES.find(status => status === value) ?? null;
 }
 
 /**

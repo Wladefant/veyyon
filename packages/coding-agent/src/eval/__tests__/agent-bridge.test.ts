@@ -12,6 +12,7 @@ import type { MCPManager } from "../../mcp";
 import type { PlanModeState } from "../../plan-mode/state";
 import { AgentRegistry } from "../../registry/agent-registry";
 import type { AgentSession } from "../../session/agent-session";
+import { AGENT_DEFAULT_EFFORT } from "../../task/agent-settings";
 import * as taskDiscovery from "../../task/discovery";
 import type { ExecutorOptions } from "../../task/executor";
 import * as taskExecutor from "../../task/executor";
@@ -77,15 +78,15 @@ interface SessionOptions {
 /**
  * The bundled specialists this suite spawns, enabled.
  *
- * Only the general-purpose `task` delegate ships enabled (`subagentEnabledByDefault`,
+ * Only the general-purpose `task` delegate ships enabled (`agentEnabledByDefault`,
  * `DEFAULT_ENABLED_BUNDLED_AGENT`), and `runEvalAgent` refuses a disabled agent by name before it
- * spawns anything: `Agent "reviewer" is disabled (subagent.agents.reviewer.enabled is false)`. Two
+ * spawns anything: `Agent "reviewer" is disabled (agent.agents.reviewer.enabled is false)`. Two
  * tests here name `reviewer`, so without this row they fail on enablement rather than on the
  * routing they are about. Enabled the way an operator does rather than by making the fixture agent
  * user-authored, which would be enabled by default and would stop reproducing a bundled specialist.
  */
 const SPECIALISTS_ENABLED = {
-	"subagent.agents": { reviewer: { enabled: true } },
+	"agent.agents": { reviewer: { enabled: true } },
 } as const;
 
 function makeSession(options: SessionOptions = {}): ToolSession {
@@ -93,8 +94,8 @@ function makeSession(options: SessionOptions = {}): ToolSession {
 		options.settings ??
 		Settings.isolated({
 			"async.enabled": false,
-			"subagent.isolation.mode": "none",
-			"subagent.enableLsp": true,
+			"agent.isolation.mode": "none",
+			"agent.enableLsp": true,
 			...SPECIALISTS_ENABLED,
 		});
 	const artifactsDir = options.artifactsDir ?? null;
@@ -228,7 +229,7 @@ describe("runEvalAgent", () => {
 	 * `sdk.ts` gates discovery on PRESENCE, not on length: `if (options.skills !== undefined)`
 	 * skips `discoverSkills` entirely, empty arrays included. So `[]` from a parent that had not
 	 * resolved its own layers yet does not mean "the child will also find nothing", it means "the
-	 * child must not look", and every eval-spawned subagent silently ran with no skills, no prompt
+	 * child must not look", and every eval-spawned agent silently ran with no skills, no prompt
 	 * templates, and no `AGENTS.md`, with green tests and no warning.
 	 *
 	 * IF THIS REGRESSES: an `agent()` spawn from an eval cell loses the operator's whole
@@ -347,8 +348,8 @@ describe("runEvalAgent", () => {
 		const session = makeSession({
 			settings: Settings.isolated({
 				"async.enabled": false,
-				"subagent.isolation.mode": "none",
-				"subagent.agents": { deep: { enabled: false }, scout: { enabled: true } },
+				"agent.isolation.mode": "none",
+				"agent.agents": { deep: { enabled: false }, scout: { enabled: true } },
 			}),
 		});
 
@@ -375,8 +376,8 @@ describe("runEvalAgent", () => {
 		const session = makeSession({
 			settings: Settings.isolated({
 				"async.enabled": false,
-				"subagent.isolation.mode": "none",
-				"subagent.agents": { deep: { enabled: false }, scout: { enabled: true } },
+				"agent.isolation.mode": "none",
+				"agent.agents": { deep: { enabled: false }, scout: { enabled: true } },
 			}),
 		});
 
@@ -395,8 +396,8 @@ describe("runEvalAgent", () => {
 		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
 		const settings = Settings.isolated({
 			"async.enabled": false,
-			"subagent.isolation.mode": "none",
-			"subagent.maxNestedSpawnDepth": 0,
+			"agent.isolation.mode": "none",
+			"agent.maxNestedSpawnDepth": 0,
 		});
 
 		await expect(
@@ -418,13 +419,13 @@ describe("runEvalAgent", () => {
 		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
 		const blanketLeaf = Settings.isolated({
 			"async.enabled": false,
-			"subagent.isolation.mode": "none",
-			"subagent.maxNestedSpawnDepth": 0,
+			"agent.isolation.mode": "none",
+			"agent.maxNestedSpawnDepth": 0,
 		});
 		const blanketUnlimited = Settings.isolated({
 			"async.enabled": false,
-			"subagent.isolation.mode": "none",
-			"subagent.maxNestedSpawnDepth": -1,
+			"agent.isolation.mode": "none",
+			"agent.maxNestedSpawnDepth": -1,
 		});
 
 		await expect(
@@ -464,11 +465,11 @@ describe("runEvalAgent", () => {
 			modelString: "p/fallback",
 			settings: Settings.isolated({
 				"async.enabled": false,
-				"subagent.isolation.mode": "none",
-				"subagent.enableLsp": true,
+				"agent.isolation.mode": "none",
+				"agent.enableLsp": true,
 				// Depth 2 is outside the default cap of 0; unlimited keeps this test focused on
 				// forwarding the parent execution metadata while the eval hard ceiling still applies.
-				"subagent.maxNestedSpawnDepth": -1,
+				"agent.maxNestedSpawnDepth": -1,
 			}),
 		});
 
@@ -493,20 +494,26 @@ describe("runEvalAgent", () => {
 		expect(secondOptions.outputSchemaOverridesAgent).toBeUndefined();
 	});
 
-	it("ignores a retired per-agent effort row and takes the blanket setting instead", async () => {
-		// `subagent.agents.<name>.thinkingLevel` is retired: effort is decided in one
-		// place, either the `subagent.thinkingLevel` setting or the agent's own
-		// `thinking-level` frontmatter. A retired row is reported and skipped, never
-		// honoured, so a spawn under it inherits the session effort — asserting the
-		// old row still worked is what let the retirement look complete while the
-		// bridge quietly read a setting nothing else does.
+	it("takes a per-agent lane effort over the shared setting, and the call's model over the lane's", async () => {
+		// `agent.agents.<name>.thinkingLevel` is a LANE field and the highest
+		// layer there is: it names the agent, and the page that shows it is the page
+		// that edits it. So a lane row beats `agent.thinkingLevel`, and a spawn
+		// under a lane must not quietly run at the shared effort — that is the
+		// regression this arm catches, since both values are plausible and only one
+		// is the one the operator set on that agent. `agent.thinkingLevel` is the
+		// SHARED effort and answers only while `agent.sharedModel` is on, so the
+		// second arm turns that switch on; the third proves it is inert without it.
+		// The model is the other half: the explicit `model` on the call outranks the
+		// lane's own `model`, so a caller naming a model is never overridden by
+		// settings.
 		mockAgents([taskAgent]);
 		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
-		const retiredRow = makeSession({
+		const laneRow = makeSession({
 			settings: Settings.isolated({
 				"async.enabled": false,
-				"subagent.isolation.mode": "none",
-				"subagent.agents": {
+				"agent.isolation.mode": "none",
+				"agent.thinkingLevel": "low",
+				"agent.agents": {
 					task: { model: "p/profile", thinkingLevel: "high" },
 				},
 			}),
@@ -514,29 +521,49 @@ describe("runEvalAgent", () => {
 		const blanket = makeSession({
 			settings: Settings.isolated({
 				"async.enabled": false,
-				"subagent.isolation.mode": "none",
-				"subagent.thinkingLevel": "high",
+				"agent.isolation.mode": "none",
+				// `agent.thinkingLevel` is the SHARED effort, live only while
+				// `agent.sharedModel` is on. Seeded without the toggle it reaches no spawn,
+				// and this arm would assert the blanket value by asserting nothing at all.
+				"agent.sharedModel": true,
+				"agent.thinkingLevel": "high",
+			}),
+		});
+		const unshared = makeSession({
+			settings: Settings.isolated({
+				"async.enabled": false,
+				"agent.isolation.mode": "none",
+				"agent.thinkingLevel": "high",
 			}),
 		});
 
-		await runEvalAgent({ prompt: "retired row", model: "p/call" }, { session: retiredRow });
+		await runEvalAgent({ prompt: "lane row", model: "p/call" }, { session: laneRow });
 		await runEvalAgent({ prompt: "blanket setting", model: "p/call:max" }, { session: blanket });
+		await runEvalAgent({ prompt: "shared switch off", model: "p/call" }, { session: unshared });
 
-		const ignored = runSpy.mock.calls[0]?.[0];
+		const lane = runSpy.mock.calls[0]?.[0];
 		const applied = runSpy.mock.calls[1]?.[0];
-		if (!ignored || !applied) throw new Error("runSubprocess was not called twice");
-		expect(ignored.modelOverride).toEqual(["p/call"]);
-		expect(ignored.thinkingLevel).toBeUndefined();
-		expect(ignored.parentThinkingLevel).toBeUndefined();
+		const inert = runSpy.mock.calls[2]?.[0];
+		if (!lane || !applied || !inert) throw new Error("runSubprocess was not called three times");
+		expect(lane.modelOverride).toEqual(["p/call"]);
+		expect(lane.thinkingLevel).toBe(ThinkingLevel.High);
+		expect(lane.parentThinkingLevel).toBeUndefined();
 		// The `:max` suffix rides on the model pattern: only the executor knows a
-		// suffix was present, so the resolved effort stays the blanket value here.
+		// suffix was present, so the resolved effort stays the shared value here.
 		expect(applied.modelOverride).toEqual(["p/call:max"]);
 		expect(applied.thinkingLevel).toBe(ThinkingLevel.High);
 		expect(applied.parentThinkingLevel).toBeUndefined();
+		// Shared off: the shared value is not a layer of the per-agent chain at all, so it reaches no
+		// spawn. Nothing else decides here either — no lane row, no frontmatter level — so the spawn
+		// runs at the documented default, which is what a resolver that returns a level rather than an
+		// absence states. The regression this pins is the shared "high" arriving anyway.
+		expect(inert.modelOverride).toEqual(["p/call"]);
+		expect(inert.thinkingLevel).toBe(AGENT_DEFAULT_EFFORT);
+		expect(inert.thinkingLevel).not.toBe(ThinkingLevel.High);
 	});
 
 	it("forwards session-scoped MCP, local protocol options, and the parent agent id", async () => {
-		// A bridge subagent must run inside the parent's MCP surface and local-protocol
+		// A bridge agent must run inside the parent's MCP surface and local-protocol
 		// (artifacts/session) scope, and carry the parent agent id, so its own tool calls
 		// and agent:// URLs resolve against the same session. A regression that dropped any
 		// of these would silently sandbox the child away from the parent's resources.
@@ -558,7 +585,7 @@ describe("runEvalAgent", () => {
 		expect(options?.parentAgentId).toBe("BridgeParent");
 	});
 
-	it("forces LSP off for bridge subagents even when task.enableLsp is on", async () => {
+	it("forces LSP off for bridge agents even when task.enableLsp is on", async () => {
 		mockAgents();
 		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
 		// makeSession() defaults to enableLsp: true and task.enableLsp: true.
@@ -587,7 +614,7 @@ describe("runEvalAgent", () => {
 		expect(resource.content).toBe("recoverable output");
 	});
 
-	it("unregisters eval subagents through the bridge cleanup path", async () => {
+	it("unregisters eval agents through the bridge cleanup path", async () => {
 		AgentRegistry.resetGlobalForTests();
 		mockAgents();
 		let disposed = false;
@@ -627,7 +654,7 @@ describe("runEvalAgent", () => {
 		).not.toContain("Cleanup");
 	});
 
-	it("maps successful and failed subagent results", async () => {
+	it("maps successful and failed agent results", async () => {
 		mockAgents();
 		const runSpy = vi.spyOn(taskExecutor, "runSubprocess");
 		runSpy.mockImplementationOnce(async options =>
@@ -655,7 +682,7 @@ describe("runEvalAgent", () => {
 	});
 
 	// Regression: a runtime-limit abort returns exitCode=1, stderr="", error=undefined,
-	// aborted=true, abortReason="Subagent runtime limit exceeded (...)". The previous
+	// aborted=true, abortReason="Agent runtime limit exceeded (...)". The previous
 	// failure-message coalesce stopped at the empty `stderr` (since `??` only skips
 	// nullish values) and shipped an empty error through the bridge — Python then
 	// surfaced the generic `bridge call '__agent__' failed`. See #2006.
@@ -669,7 +696,7 @@ describe("runEvalAgent", () => {
 				stderr: "",
 				error: undefined,
 				aborted: true,
-				abortReason: "Subagent runtime limit exceeded (task.maxRuntimeMs=900000)",
+				abortReason: "Agent runtime limit exceeded (task.maxRuntimeMs=900000)",
 			}),
 		);
 		runSpy.mockImplementationOnce(async options =>
@@ -692,7 +719,7 @@ describe("runEvalAgent", () => {
 		);
 
 		await expect(runEvalAgent({ prompt: "slow" }, { session: makeSession() })).rejects.toThrow(
-			"Subagent runtime limit exceeded (task.maxRuntimeMs=900000)",
+			"Agent runtime limit exceeded (task.maxRuntimeMs=900000)",
 		);
 		// Whitespace-only stderr/error must not mask abortReason either.
 		await expect(runEvalAgent({ prompt: "cancelled" }, { session: makeSession() })).rejects.toThrow(
@@ -701,7 +728,7 @@ describe("runEvalAgent", () => {
 		// Last resort: still produce a non-empty message even when nothing useful is set,
 		// so Python never falls back to `bridge call '__agent__' failed`.
 		await expect(runEvalAgent({ prompt: "blank" }, { session: makeSession() })).rejects.toThrow(
-			"agent() subagent 'task' failed.",
+			"agent() spawn 'task' failed.",
 		);
 	});
 });
@@ -744,13 +771,13 @@ describe("agent() through eval runtimes", () => {
 		expect(JSON.parse(result.output.trim())).toEqual(["hello from agent", { ok: true, n: 3 }]);
 	});
 
-	it("bounds JavaScript parallel() by the subagent.maxConcurrency setting while preserving order", async () => {
+	it("bounds JavaScript parallel() by the agent.maxConcurrency setting while preserving order", async () => {
 		using tempDir = TempDir.createSync("@veyyon-eval-agent-js-parallel-");
 		const settings = Settings.isolated({
 			"async.enabled": false,
-			"subagent.isolation.mode": "none",
-			"subagent.enableLsp": true,
-			"subagent.maxConcurrency": 2,
+			"agent.isolation.mode": "none",
+			"agent.enableLsp": true,
+			"agent.maxConcurrency": 2,
 		});
 		const { session, sessionFile } = makeEvalSession(tempDir, "js-agent-parallel", settings);
 		mockAgents();
@@ -813,13 +840,13 @@ describe("agent() through eval runtimes", () => {
 		expect(result.output.trim()).toBe("hello from python");
 	});
 
-	it("bounds Python parallel() by the subagent.maxConcurrency setting while preserving order", async () => {
+	it("bounds Python parallel() by the agent.maxConcurrency setting while preserving order", async () => {
 		using tempDir = TempDir.createSync("@veyyon-eval-agent-py-parallel-");
 		const settings = Settings.isolated({
 			"async.enabled": false,
-			"subagent.isolation.mode": "none",
-			"subagent.enableLsp": true,
-			"subagent.maxConcurrency": 2,
+			"agent.isolation.mode": "none",
+			"agent.enableLsp": true,
+			"agent.maxConcurrency": 2,
 		});
 		const { session, sessionFile, sessionId } = makeEvalSession(tempDir, "py-agent-parallel", settings);
 		mockAgents();
@@ -844,9 +871,9 @@ describe("agent() through eval runtimes", () => {
 		using tempDir = TempDir.createSync("@veyyon-eval-agent-py-interrupt-");
 		const settings = Settings.isolated({
 			"async.enabled": false,
-			"subagent.isolation.mode": "none",
-			"subagent.enableLsp": true,
-			"subagent.maxConcurrency": 6,
+			"agent.isolation.mode": "none",
+			"agent.enableLsp": true,
+			"agent.maxConcurrency": 6,
 		});
 		const { session, sessionFile, sessionId } = makeEvalSession(tempDir, "py-agent-interrupt", settings);
 		mockAgents();
@@ -862,7 +889,7 @@ describe("agent() through eval runtimes", () => {
 		});
 		const releaseAgents = Promise.withResolvers<void>();
 		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => {
-			// subagent.maxConcurrency=6 → six bridge calls block at once; signal then.
+			// agent.maxConcurrency=6 → six bridge calls block at once; signal then.
 			if (++inFlight >= 6) markSaturated?.();
 			await releaseAgents.promise;
 			completed++;
@@ -1163,8 +1190,8 @@ describe("runEvalAgent isolation", () => {
 		return makeSession({
 			settings: Settings.isolated({
 				"async.enabled": false,
-				"subagent.isolation.mode": "auto",
-				"subagent.isolation.merge": "patch",
+				"agent.isolation.mode": "auto",
+				"agent.isolation.merge": "patch",
 				...overrides,
 			}),
 		});
@@ -1182,7 +1209,7 @@ describe("runEvalAgent isolation", () => {
 		return { repoRoot };
 	}
 
-	it("rejects isolated=true when subagent.isolation.mode is 'none'", async () => {
+	it("rejects isolated=true when agent.isolation.mode is 'none'", async () => {
 		mockAgents();
 		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));
 		const prepSpy = vi.spyOn(isolationRunner, "prepareIsolationContext");
@@ -1196,7 +1223,7 @@ describe("runEvalAgent isolation", () => {
 		expect(runSpy).not.toHaveBeenCalled();
 	});
 
-	it("stays non-isolated by default even when subagent.isolation.mode is set; isolated=true opts in", async () => {
+	it("stays non-isolated by default even when agent.isolation.mode is set; isolated=true opts in", async () => {
 		mockAgents();
 		mockIsolationContext();
 		const isolatedSpy = vi
@@ -1258,7 +1285,7 @@ describe("runEvalAgent isolation", () => {
 		});
 
 		// Branch is the configured merge mode, but `merge: false` must demote to patch.
-		const session = isolatedSession({ "subagent.isolation.merge": "branch" });
+		const session = isolatedSession({ "agent.isolation.merge": "branch" });
 		const result = await runEvalAgent({ prompt: "migration", isolated: true, merge: false }, { session });
 
 		expect(isolatedSpy).toHaveBeenCalledTimes(1);
@@ -1436,7 +1463,7 @@ describe("runEvalAgent isolation", () => {
 		);
 		const mergeSpy = vi.spyOn(isolationRunner, "mergeIsolatedChanges");
 
-		const session = isolatedSession({ "subagent.isolation.merge": "branch" });
+		const session = isolatedSession({ "agent.isolation.merge": "branch" });
 		await expect(runEvalAgent({ prompt: "scout", isolated: true }, { session })).rejects.toThrow(
 			/Merge failed.*garbage at end of loose object.*Captured patch preserved at \/artifacts\//s,
 		);
@@ -1460,7 +1487,7 @@ describe("runEvalAgent isolation", () => {
 			mergedBranchForNestedPatches: false,
 		});
 
-		const session = isolatedSession({ "subagent.isolation.merge": "branch" });
+		const session = isolatedSession({ "agent.isolation.merge": "branch" });
 		await expect(runEvalAgent({ prompt: "scout", isolated: true }, { session })).rejects.toThrow(
 			/isolated apply failed.*Branch merge failed.*Captured branch preserved as veyyon\/task\//s,
 		);
@@ -1574,7 +1601,7 @@ describe("runEvalAgent isolation", () => {
 		);
 		const mergeSpy = vi.spyOn(isolationRunner, "mergeIsolatedChanges");
 
-		const session = isolatedSession({ "subagent.isolation.merge": "branch" });
+		const session = isolatedSession({ "agent.isolation.merge": "branch" });
 		const result = await runEvalAgent({ prompt: "scout", isolated: true, apply: false }, { session });
 
 		expect(mergeSpy).not.toHaveBeenCalled();
@@ -1594,7 +1621,7 @@ describe("runEvalAgent isolation", () => {
 		);
 		const mergeSpy = vi.spyOn(isolationRunner, "mergeIsolatedChanges");
 
-		const session = isolatedSession({ "subagent.isolation.merge": "branch" });
+		const session = isolatedSession({ "agent.isolation.merge": "branch" });
 		const result = await runEvalAgent({ prompt: "scout", isolated: true, apply: false }, { session });
 
 		expect(mergeSpy).not.toHaveBeenCalled();

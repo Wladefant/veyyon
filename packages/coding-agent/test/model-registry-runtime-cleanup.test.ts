@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type AssistantMessageEventStream, clearCustomApis, getCustomApi } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry, type ProviderConfigInput } from "@veyyon/coding-agent/config/model-registry";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 
 describe("ModelRegistry runtime source cleanup", () => {
@@ -45,7 +45,9 @@ describe("ModelRegistry runtime source cleanup", () => {
 		const registry = new ModelRegistry(authStorage, modelsJsonPath);
 		const config: ProviderConfigInput = {
 			baseUrl: "https://runtime.example.com/v1",
-			apiKey: "RUNTIME_KEY",
+			// `literal:` because this is the key itself: a bare environment-name shape is
+			// read as a variable reference and installs nothing when it is unset.
+			apiKey: "literal:RUNTIME_KEY",
 			api: "custom-runtime-cleanup-api",
 			streamSimple,
 			models: [baseModel],

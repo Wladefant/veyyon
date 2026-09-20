@@ -14,6 +14,7 @@
  */
 import {
 	type Api,
+	type AssistantMessage,
 	type CompletionProbe,
 	type CompletionProbeInput,
 	type CredentialCompletionResult,
@@ -26,7 +27,12 @@ import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { type GeneratedProvider, getBundledModels, getBundledProviders } from "@veyyon/catalog/models";
 import { errorMessage, formatCount, VERSION } from "@veyyon/utils";
 import chalk from "chalk";
-import { type AuthBrokerClientConfig, resolveAuthBrokerConfig } from "../session/auth-broker-config";
+import { Settings } from "../config/settings";
+import {
+	type AuthBrokerClientConfig,
+	accountLoadBalancingSetting,
+	resolveAuthBrokerConfig,
+} from "../session/auth-broker-config";
 import { scopedTimeoutSignal } from "../utils/fetch-timeout";
 import { AuthTokenFile, printToken } from "./auth-token-file";
 
@@ -71,6 +77,10 @@ async function fetchBrokerSnapshot(client: AuthBrokerClient): Promise<SnapshotRe
 }
 
 async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
+	// The gateway selects an account per request through `getApiKey`, so it is held to the same
+	// `accounts.loadBalancing` the interactive session is. The setting is read from the operator's
+	// config here; without this init the resolver below sees no settings and answers the default.
+	await Settings.init();
 	const brokerConfig = await resolveAuthBrokerConfig();
 	if (!brokerConfig) {
 		throw new Error(
@@ -82,6 +92,10 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 
 	// Build a broker-backed AuthStorage — same pattern as discoverAuthStorage()
 	// in sdk.ts. The gateway never touches local SQLite.
+	// The gateway selects an account per request through `getApiKey`, so it is held to the same
+	// `accounts.loadBalancing` the interactive session is. The setting is read from the operator's
+	// config here; without this init the resolver below sees no settings and answers the default.
+	await Settings.init();
 	const client = createBrokerClient(brokerConfig);
 	const initialSnapshot = await fetchBrokerSnapshot(client);
 	const store = new RemoteAuthCredentialStore({ client, initialSnapshot });
@@ -91,6 +105,7 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	// gateway only needs to construct the store and pass it in.
 	const storage = new AuthStorage(store, {
 		sourceLabel: `broker ${brokerConfig.url}`,
+		loadBalancing: accountLoadBalancingSetting,
 	});
 	await storage.reload();
 
@@ -358,7 +373,7 @@ async function probeOneModel(
 	// are required" without it). `disableReasoning` is intentionally NOT set:
 	// providers like Fireworks reject the "none" effort it maps to, and we'd
 	// rather burn 16 reasoning tokens than misdiagnose a healthy credential.
-	let response: Awaited<ReturnType<typeof completeSimple>>;
+	let response: AssistantMessage;
 	try {
 		response = await completeSimple(
 			model,
@@ -479,7 +494,7 @@ async function runCheck(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 				list.push(row);
 				grouped.set(row.provider, list);
 			}
-			const providers = [...grouped.keys()].sort();
+			const providers = Array.from(grouped.keys()).sort();
 			process.stdout.write(`broker: ${brokerConfig.url}${flags.strict ? chalk.dim(" [strict]") : ""}\n`);
 			for (const provider of providers) {
 				const rows = grouped.get(provider) ?? [];

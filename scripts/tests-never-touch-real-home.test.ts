@@ -91,6 +91,7 @@ import { type Dirent, readdirSync, readFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { TEMP_HOME } from "../packages/utils/test/helpers/sandbox-home";
+import { typeScriptMembers, typeScriptMemberTopLevels } from "./workspace-layout";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "..");
 
@@ -171,6 +172,12 @@ export const ALLOWLIST: ReadonlyArray<AllowlistEntry> = [
 	// is what the target actually holds at runtime. Two of them genuinely execute a file NAMED
 	// `veyyon`, which is exactly why the rule stops here and asks rather than guessing.
 	{
+		file: "packages/coding-agent/src/eval/py/__tests__/prelude.test.ts",
+		rule: "unresolved-spawn-target",
+		reason:
+			'`pythonPath` is `Bun.env.PYTHON ?? "python3"`, resolved through PATH, and the spawn is `-c` on the eval prelude with a stubbed display hook. The prelude IS a python source file, so its behaviour can only be asserted by a python interpreter; the child writes nothing outside the temp cwd it is given and reads no config root. This suite sits beside its subject in `src/`, which is why it went unread until the walk crossed whole members rather than each `test/` directory.',
+	},
+	{
 		file: "packages/coding-agent/test/update-while-running.test.ts",
 		rule: "unresolved-spawn-target",
 		reason:
@@ -193,12 +200,6 @@ export const ALLOWLIST: ReadonlyArray<AllowlistEntry> = [
 		rule: "unresolved-spawn-target",
 		reason:
 			"`realBash` is `REAL_BASH`, which is `Bun.env.SHELL` when it names bash and otherwise the literal `/bin/bash`, guarded by an `existsSync` that returns early. It runs the operator's bash with `--noprofile --norc` against a snapshot file the test wrote, which is the point: a snapshot of a login shell cannot be taken with a fake shell.",
-	},
-	{
-		file: "packages/coding-agent/test/tools.test.ts",
-		rule: "unresolved-spawn-target",
-		reason:
-			'`mkfifoPath` is the result of `$which("mkfifo")` and the test returns early when it is absent. It creates a FIFO under the test\'s own temp directory so the special-file path can be exercised on a real named pipe, which no stub can provide.',
 	},
 	{
 		file: "packages/coding-agent/test/tools/browser-tab-evaluate.test.ts",
@@ -340,43 +341,39 @@ function spawnCallRegex(source: string): RegExp {
 }
 
 /**
- * Every `const NAME = "literal"` and `const NAME = ["literal", ...]` in the file, so a
- * command spelled through a variable can still be read.
- * `const bin = "veyyon"; spawnSync(bin, ["auth", "list"])` scanned clean before this
- * existed, and unlike a redirected WRITE, which the real-data tripwire refuses at runtime
- * whatever the path was called, a spawn of the installed binary has no runtime backstop at
- * all: it reaches the operator's real profile, credentials and model spend on the first
- * call and nothing reports it.
+ * Every command binding whose values can be read from source.
  *
- * THE ARRAY FORM IS NOT A CONVENIENCE. `const emit = ["sh", "-c", "..."]` followed by
- * three `spawn(emit)` calls is the single most natural way to write a test that runs one
- * command several ways, and it used to produce three `unresolved-spawn-target` violations
- * whose only honest resolution was an allowlist entry -- an excuse recorded against a file
- * whose command is `sh`, sitting in plain sight one line above the call. Every allowlist
- * entry is a place the gate has stopped looking, so paying one for a target the gate could
- * simply read is the worst trade available: it buys nothing and permanently blinds the
- * rule for that whole file, including the veyyon spawn somebody adds to it next year.
- * Binding the array's HEAD is exactly right, because the head is the command and the tail
- * is its arguments.
- *
- * A name bound more than once resolves to nothing rather than to its first value, and an
- * interpolated template is not a constant. Both then fall through to the unresolvable
- * case, which is a violation, so being unable to read a name never reads as safe.
+ * Literal strings and argv heads cover direct aliases. `$which("a") ?? $which("b")`
+ * covers a platform tool selected from known alternatives; all alternatives remain
+ * visible so one safe option cannot hide an installed `veyyon` fallback. A name bound
+ * more than once and an interpolated value resolve to nothing and fail closed.
  */
 const STRING_BINDING = /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(["'`])((?:\\.|(?!\2)[^\\\n])*)\2/g;
 const ARRAY_HEAD_BINDING =
 	/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=\n]+)?=\s*\[\s*(["'`])((?:\\.|(?!\2)[^\\\n])*)\2/g;
+const WHICH_BINDING =
+	/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=\n]+)?=\s*((?:\$which\(\s*["'`][^"'`\n]+["'`]\s*\)\s*(?:\?\?\s*)?)+)/g;
+const WHICH_LITERAL = /\$which\(\s*(["'`])([^"'`\n]+)\1\s*\)/g;
 const AMBIGUOUS = Symbol("bound more than once");
+type CommandBinding = readonly string[] | typeof AMBIGUOUS;
 
-function stringBindings(source: string): Map<string, string | typeof AMBIGUOUS> {
-	const bindings = new Map<string, string | typeof AMBIGUOUS>();
+function bindCommand(bindings: Map<string, CommandBinding>, name: string, values: readonly string[]): void {
+	const unreadable = values.some(value => value.includes("${"));
+	bindings.set(name, bindings.has(name) || unreadable ? AMBIGUOUS : values);
+}
+
+function stringBindings(source: string): Map<string, CommandBinding> {
+	const bindings = new Map<string, CommandBinding>();
 	for (const pattern of [STRING_BINDING, ARRAY_HEAD_BINDING]) {
 		pattern.lastIndex = 0;
 		for (let match = pattern.exec(source); match; match = pattern.exec(source)) {
-			const name = match[1] as string;
-			const value = match[3] as string;
-			bindings.set(name, bindings.has(name) || value.includes("${") ? AMBIGUOUS : value);
+			bindCommand(bindings, match[1] as string, [match[3] as string]);
 		}
+	}
+	WHICH_BINDING.lastIndex = 0;
+	for (let match = WHICH_BINDING.exec(source); match; match = WHICH_BINDING.exec(source)) {
+		const values = Array.from((match[2] as string).matchAll(WHICH_LITERAL), value => value[2] as string);
+		bindCommand(bindings, match[1] as string, values);
 	}
 	return bindings;
 }
@@ -681,6 +678,10 @@ const NOT_NEWLINE = /[^\n]/g;
  * still points at the real one. String and template literals are walked so that a `//`
  * inside a URL does not swallow the rest of the line.
  *
+ * `@veyyon/utils/module-reach` exports this name for a regex that blanks whole-line comments
+ * only. This one preserves offsets and skips a `//` inside a literal, which the reported line
+ * numbers below depend on.
+ *
  * The scan keeps one chunk per span rather than a per-character array. The state machine is
  * the same one, byte for byte in its output; what changed is that a 40 KB file now costs a
  * handful of slices instead of 40,000 single-character strings and a 40,000-element join.
@@ -772,7 +773,7 @@ const MACHINE_SCANS: ReadonlyArray<{ what: string; triggers: RegExp; requires: R
 	{
 		what: "a setup-wizard scene's shouldRun, which walks the real home for foreign config",
 		triggers: /\.shouldRun\s*\??\.?\s*\(|selectSetupScenes\s*\(/,
-		requires: /modes\/setup-wizard\/scenes\/(?!types)/,
+		requires: /modes\/terminal\/setup-wizard\/scenes\/(?!types)/,
 		neutralized:
 			/mock\.module\(\s*["'`][^"'`]*discovery\/import-scan|spyOn\(\s*[\w.]+\s*,\s*["'`](?:scanForeignConfig|discoverAgents)["'`]/,
 	},
@@ -812,17 +813,21 @@ function spawnViolations(file: string, source: string): Violation[] {
 		// A quoted command that got past the two checks above is a literal naming something
 		// other than veyyon, and the runner's own executable is Bun rather than the install.
 		if (/^["'`]/.test(target) || RUNNER_EXECUTABLE.test(target)) continue;
-		const resolved = /^[A-Za-z_$][\w$]*$/.test(target) ? bindings.get(target) : undefined;
-		if (typeof resolved === "string") {
-			// Re-ask the same two questions of the value the name stands for, so a command
-			// spelled through a variable is judged exactly as the literal would have been.
-			const asWritten = `("${resolved}",`;
-			if (INSTALLED_BINARY_PATH.test(asWritten) || VEYYON_IN_COMMAND_POSITION.test(asWritten)) {
+		const bindingName = /^([A-Za-z_$][\w$]*)!?$/.exec(target)?.[1];
+		const resolved = bindingName ? bindings.get(bindingName) : undefined;
+		if (Array.isArray(resolved)) {
+			// Re-ask the same two questions of every value the name can hold, so
+			// `$which("git") ?? $which("veyyon")` cannot hide its unsafe fallback.
+			const installed = resolved.find(value => {
+				const asWritten = `("${value}",`;
+				return INSTALLED_BINARY_PATH.test(asWritten) || VEYYON_IN_COMMAND_POSITION.test(asWritten);
+			});
+			if (installed) {
 				found.push({
 					file,
 					line,
 					rule: "installed-binary-spawn",
-					evidence: `${evidenceOf(text)}  <- ${target} = "${resolved}"`,
+					evidence: `${evidenceOf(text)}  <- ${target} can resolve to "${installed}"`,
 				});
 			}
 			continue;
@@ -937,18 +942,30 @@ export function analyzeSource(file: string, rawSource: string): Violation[] {
 }
 
 /**
- * Every TypeScript module under `packages/*​/test`, repo-relative and sorted.
+ * Every test module of every declared TypeScript workspace member, repo-relative and sorted.
  *
  * Not only `*.test.ts`. A shared setup module or a helper is a test file that happens to
  * export instead of declaring cases, it runs inside the same process with the same reach,
- * and it is where a mistake is worst rather than mildest: `packages/mnemopi/test/setup.ts`
+ * and it is where a mistake is worst rather than mildest: `plugins/mnemopi/test/setup.ts`
  * decides the config root for all 106 mnemopi suites at once. The walk used to stop at the
  * `.test.ts` suffix, so the one file that could leak on behalf of a whole package was the
  * one file nothing read.
+ *
+ * And not only `<member>/test`. That was the second half of the same blind spot: a suite that sits
+ * beside the module it tests was read by nothing, and two of them do -- `tests/simulations` places
+ * its scenarios beside their harness, and `clients/python/veybot/web` places both of its suites in `src`.
+ * The walk now crosses each member's whole tree and keeps a file that is a test or sits under a
+ * `test` directory inside the member. Production modules stay out: `os.homedir()` in shipped code
+ * is how the product finds its config, and a rule about test isolation has nothing to say about it.
+ * The directory segments are read below the member's root, so the `tests/` workspace root that
+ * holds `tests/evals` and `tests/simulations` does not turn a runner or a backend into a test file.
  */
 export function testSources(): string[] {
 	const found: string[] = [];
-	const walk = (dir: string): void => {
+	const isTestModule = (memberRelPath: string): boolean =>
+		/\.test\.tsx?$/.test(memberRelPath) ||
+		memberRelPath.split("/").some(segment => segment === "test" || segment === "tests");
+	const walk = (dir: string, memberRoot: string): void => {
 		let entries: Dirent[];
 		try {
 			entries = readdirSync(dir, { withFileTypes: true });
@@ -958,13 +975,18 @@ export function testSources(): string[] {
 		for (const entry of entries) {
 			if (SKIP_DIRS.has(entry.name)) continue;
 			const full = path.join(dir, entry.name);
-			if (entry.isDirectory()) walk(full);
-			else if (/\.tsx?$/.test(entry.name)) found.push(path.relative(REPO_ROOT, full));
+			if (entry.isDirectory()) {
+				walk(full, memberRoot);
+				continue;
+			}
+			if (!/\.tsx?$/.test(entry.name)) continue;
+			if (!isTestModule(path.relative(memberRoot, full).replaceAll(path.sep, "/"))) continue;
+			found.push(path.relative(REPO_ROOT, full).replaceAll(path.sep, "/"));
 		}
 	};
-	for (const pkg of readdirSync(path.join(REPO_ROOT, "packages"), { withFileTypes: true })) {
-		if (!pkg.isDirectory()) continue;
-		walk(path.join(REPO_ROOT, "packages", pkg.name, "test"));
+	for (const member of typeScriptMembers()) {
+		const memberRoot = path.join(REPO_ROOT, member);
+		walk(memberRoot, memberRoot);
 	}
 	return found.sort();
 }
@@ -979,6 +1001,30 @@ describe("no test reaches outside its sandbox", () => {
 
 	it("finds test files to check, so a broken walk cannot read as a clean tree", () => {
 		expect(files.length).toBeGreaterThan(100);
+
+		// And the walk reaches every root the workspace declares. A root it never opened contributes
+		// no file, so its suites are excused by absence and the rule below still reports nothing.
+		//
+		// A root may hold no test module at all, which is indistinguishable from a root the walk
+		// missed, so the silent ones are named by exact equality. None is silent today: `kernel` was,
+		// while its suites stayed with the host that drives them under `packages/coding-agent/test`,
+		// and it stopped being silent when the settings registry landed with its own unit suite. A
+		// new silent root turns this red until someone records the reason.
+		const roots = new Set(files.map(file => file.split("/")[0]));
+		const declared = typeScriptMemberTopLevels();
+		expect(declared.filter(root => !roots.has(root))).toEqual([]);
+		expect([...roots].every(root => declared.includes(root))).toBe(true);
+		expect(files).toContain("contracts/wire/test/seal.test.ts");
+		expect(files).toContain("kernel/test/a-settings-query-answers-from-the-registered-tables-or-fails-loud.test.ts");
+		// The two shapes a `<member>/test` walk could not see: a suite beside its subject in `src`, and
+		// a member three levels down that no root glob reaches.
+		expect(files).toContain("clients/python/veybot/web/src/work-items.contract.test.ts");
+		// A member under the `tests/` workspace root is not thereby a tree of test files: its runners
+		// and backends spawn docker and the eval binary by design, and reading them as suites reported
+		// eight of them as sandbox escapes the day the root arrived. The `.test.ts` files there still count.
+		expect(files).not.toContain("tests/evals/api/runner.ts");
+		expect(files.some(file => file.startsWith("tests/evals/") && file.endsWith(".test.ts"))).toBe(true);
+		expect(files.some(file => file.startsWith("natives/bridge/bindings/test/"))).toBe(true);
 	});
 
 	it("has no test that writes to, scans, or fakes isolation from the real home, or spawns the installed binary", () => {
@@ -991,8 +1037,9 @@ describe("no test reaches outside its sandbox", () => {
 		const report = violations.map(v => `${v.file}:${v.line}  [${v.rule}]  ${v.evidence}`);
 		expect(report).toEqual([]);
 		// 20s, declared rather than inherited, and lowered from the 60s that stood while the
-		// analyzer was expensive. This case reads and analyses every `.ts` file under
-		// `packages/<pkg>/test`, 4,575 of them, so its cost grows with the suite, and it measured
+		// analyzer was expensive. This case reads and analyses every test module of every workspace
+		// member -- 4,575 of them when the walk was `packages/<pkg>/test`, more now that it crosses each
+		// member's tree -- so its cost grows with the suite, and it measured
 		// 14.4s against the 5,000ms default. A timeout is not a violation, but it fails
 		// identically to one, and a gate that goes red on timing is a gate people learn to
 		// re-run, which is how they come to re-run it on the day it is telling the truth.
@@ -1051,8 +1098,15 @@ describe("the allowlist", () => {
  * So there are two checks. The first observes the redirect from inside a real test process,
  * which is the only place the answer is honest. The second forbids the specific import that
  * broke it, across the whole preload graph, so the next module added to that graph cannot
- * reintroduce it.
+ * reintroduce it. A type-only import is not that import: the transpiler erases the whole
+ * declaration, so no namespace is loaded and nothing freezes.
  */
+
+/** True when `source` loads the `node:os` namespace at run time, which freezes it. */
+function freezesNodeOsNamespace(source: string): boolean {
+	return /^\s*import\s+(?!type\s)[^;]*from\s*["']node:os["']/m.test(withoutComments(source));
+}
+
 describe("the home redirect", () => {
 	it("has moved os.homedir() into a temp sandbox for this very process", () => {
 		const sandbox = TEMP_HOME;
@@ -1082,7 +1136,7 @@ describe("the home redirect", () => {
 			} catch {
 				return;
 			}
-			if (/^\s*import\s[^;]*from\s*["']node:os["']/m.test(withoutComments(source))) {
+			if (freezesNodeOsNamespace(source)) {
 				offenders.push(path.relative(REPO_ROOT, file));
 			}
 			for (const match of source.matchAll(/^\s*import\s[^;]*from\s*["'](\.[^"']+)["']/gm)) {
@@ -1094,6 +1148,13 @@ describe("the home redirect", () => {
 		// The walk has to have gone somewhere; an empty graph would pass vacuously.
 		expect(seen.size).toBeGreaterThan(3);
 		expect(offenders).toEqual([]);
+	});
+
+	it("reads a run-time import of node:os as a freeze and an erased one as harmless", () => {
+		expect(freezesNodeOsNamespace(`import * as os from "node:os";`)).toBe(true);
+		expect(freezesNodeOsNamespace(`import { homedir } from "node:os";`)).toBe(true);
+		expect(freezesNodeOsNamespace(`import type * as os from "node:os";`)).toBe(false);
+		expect(freezesNodeOsNamespace(`import type { CpuInfo } from "node:os";`)).toBe(false);
 	});
 });
 
@@ -1212,7 +1273,7 @@ describe("the detectors", () => {
 	 */
 	it("catches a setup-wizard scene's shouldRun in a file that imports the real scenes", () => {
 		const source = [
-			`import { importSetupScene } from "@veyyon/coding-agent/modes/setup-wizard/scenes/import";`,
+			`import { importSetupScene } from "@veyyon/coding-agent/modes/terminal/setup-wizard/scenes/import";`,
 			`await scene.shouldRun?.(ctx);`,
 		].join("\n");
 		expect(rulesFor(source)).toEqual(["real-home-scan"]);
@@ -1220,7 +1281,7 @@ describe("the detectors", () => {
 
 	it("does NOT flag a shouldRun call in a file that only holds the scene TYPES", () => {
 		const source = [
-			`import type { SetupScene } from "@veyyon/coding-agent/modes/setup-wizard/scenes/types";`,
+			`import type { SetupScene } from "@veyyon/coding-agent/modes/terminal/setup-wizard/scenes/types";`,
 			`await scene.shouldRun?.(ctx);`,
 		].join("\n");
 		expect(rulesFor(source)).toEqual([]);
@@ -1228,13 +1289,13 @@ describe("the detectors", () => {
 
 	it("does NOT flag a shouldRun call once the scan it reaches is stubbed out", () => {
 		const mocked = [
-			`import { importSetupScene } from "@veyyon/coding-agent/modes/setup-wizard/scenes/import";`,
+			`import { importSetupScene } from "@veyyon/coding-agent/modes/terminal/setup-wizard/scenes/import";`,
 			`mock.module("@veyyon/coding-agent/discovery/import-scan", () => ({ scanForeignConfig: async () => [] }));`,
 			`await selectSetupScenes(0, ALL_SCENES, ctx, { isTTY: true });`,
 		].join("\n");
 		expect(rulesFor(mocked)).toEqual([]);
 		const spied = [
-			`import { agentsSetupScene } from "@veyyon/coding-agent/modes/setup-wizard/scenes/agents";`,
+			`import { agentsSetupScene } from "@veyyon/coding-agent/modes/terminal/setup-wizard/scenes/agents";`,
 			`vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents, projectAgentsDir: null });`,
 			`await agentsSetupScene.shouldRun?.(ctx);`,
 		].join("\n");
@@ -1243,7 +1304,7 @@ describe("the detectors", () => {
 
 	it("does NOT flag a shouldRun call in a file whose home is already a temp tree", () => {
 		const source = [
-			`import { importSetupScene } from "@veyyon/coding-agent/modes/setup-wizard/scenes/import";`,
+			`import { importSetupScene } from "@veyyon/coding-agent/modes/terminal/setup-wizard/scenes/import";`,
 			`useTempHome();`,
 			`await scene.shouldRun?.(ctx);`,
 		].join("\n");
@@ -1275,7 +1336,7 @@ describe("the detectors", () => {
 	/** Same reasoning for the scan: the trees it walks are `~/.claude` and `~/.codex`. */
 	it("STILL flags a machine scan when only the config root moved", () => {
 		const source = [
-			`import { importSetupScene } from "@veyyon/coding-agent/modes/setup-wizard/scenes/import";`,
+			`import { importSetupScene } from "@veyyon/coding-agent/modes/terminal/setup-wizard/scenes/import";`,
 			`const isolated = enterIsolatedConfigRoot("suite");`,
 			`await scene.shouldRun?.(ctx);`,
 		].join("\n");
@@ -1317,6 +1378,16 @@ describe("the detectors", () => {
 	it("does NOT flag a command resolved through a variable to something harmless", () => {
 		const source = [`const tool = "git";`, `spawnSync(tool, ["status"]);`].join("\n");
 		expect(rulesFor(source)).toEqual([]);
+	});
+
+	it("reads every command in a $which fallback chain", () => {
+		const safe = [`const tool = $which("magick") ?? $which("convert");`, `execFileSync(tool!, ["--version"]);`].join(
+			"\n",
+		);
+		expect(rulesFor(safe)).toEqual([]);
+
+		const unsafe = [`const tool = $which("git") ?? $which("veyyon");`, `spawnSync(tool!, ["--version"]);`].join("\n");
+		expect(rulesFor(unsafe)).toEqual(["installed-binary-spawn", "installed-binary-spawn"]);
 	});
 
 	/**

@@ -198,7 +198,7 @@ fi
 # ramp, then the name letterspaced in silver, which is the same order the setup
 # splash uses — the eye lands on the sun, the name second.
 #
-# `packages/coding-agent/src/modes/components/sun.ts` is the OWNER of the brand
+# `packages/coding-agent/src/modes/terminal/components/chrome/sun.ts` is the OWNER of the brand
 # ember and of the glyph ramp; the values below are bands 2, 4, 6 and 7 of its
 # `EMBER` array and glyphs from its `GLYPH` ramp, quoted rather than reinvented.
 # `scripts/installer-brand-parity.test.ts` reads both files and fails if they
@@ -935,6 +935,16 @@ artifact_has_legacy_owner_receipt() {
     [ -f "$_legacy_receipt" ] && grep -Fqx 'veyyon-installer-v1' "$_legacy_receipt" 2>/dev/null
 }
 
+# Whether this installer has EVER recorded an install at `$1`, in either receipt
+# format, regardless of whether the file there still matches what was recorded.
+#
+# This is the "is this path ours" question, as against `binary_artifact_is_ours`,
+# which asks "is this FILE the one we wrote". They differ exactly when an install
+# drifted, and that gap is the difference between a repair and a stranger's file.
+artifact_has_owner_history() {
+    owner_receipt_identity "$1" >/dev/null 2>&1 || artifact_has_legacy_owner_receipt "$1"
+}
+
 # Writing a receipt REQUIRES the identity. A receipt that recorded no identity
 # would be a v1 receipt under a v2 name, and would reopen the hole for that
 # artifact permanently. Callers already treat a failure here as fatal for the
@@ -1188,7 +1198,7 @@ resolved_dir_for() {
 }
 
 # Report whether `$1` on PATH is the copy we just installed into $2.
-# A stale copy earlier on PATH (an old `bun add -g` global, a distro package, a
+# A stale copy earlier on PATH (an old binary download in another directory, a
 # previous manual install) silently wins every future invocation, so this is
 # checked and reported LOUDLY rather than assumed from mere presence on PATH.
 check_not_shadowed() {
@@ -1215,6 +1225,26 @@ version_from_output() {
         esac
     done
     return 1
+}
+
+# Whether the binary already at the target path reports exactly release `$1`.
+#
+# Answers the VERSION question only. Whether that file is one this installer
+# wrote is a separate question with a separate remedy, so the caller asks
+# `binary_path_is_replaceable` for that rather than conflating the two here: a
+# machine can be on the right version with somebody else's build at the path,
+# and that is still nothing to download.
+#
+# Every failure to establish a version answers "no": an absent file, one that is
+# not executable, one whose `--version` exits non-zero, and one whose output
+# carries no version. None of them prove the target is current, and guessing
+# "yes" would skip an install the machine needs.
+installed_version_is() {
+    _iv_bin="$(install_dir)/$BIN_NAME"
+    [ -x "$_iv_bin" ] || return 1
+    _iv_out=$("$_iv_bin" --version 2>/dev/null) || return 1
+    _iv_got=$(version_from_output "$_iv_out") || return 1
+    [ "$_iv_got" = "${1#v}" ]
 }
 
 # Require a staged release binary to identify as the release being installed.
@@ -1495,18 +1525,42 @@ finalize_binary() {
             return 0
         fi
         if ! binary_artifact_is_ours "$dest"; then
-            if [ "$FORCE" != 1 ]; then
+            # Three situations reach here, and two of them are somebody else's file.
+            #
+            # A path this installer has NEVER recorded holds a `veyyon` it did not
+            # put there. Taking that name is the user's call, so it refuses.
+            #
+            # A path whose only record is a v1 receipt. That format vouches for the
+            # path alone and says nothing about what is there now, so it cannot tell
+            # a drifted install from a user who deleted the binary and took the name
+            # back — the orphaned-receipt hazard v2 exists to close. Treating it as
+            # a record here would hand that hazard a way to displace the user's file,
+            # so it refuses too.
+            #
+            # A path with a v2 receipt holds a binary whose bytes have since drifted:
+            # a local build copied over the install, a replacement by hand, a write
+            # interrupted between the binary and its receipt. The recorded identity
+            # proves this installer wrote what used to be there, so this is its own
+            # install location in a state only it can repair, and refusing left the
+            # machine stuck on an old version with the remedy spelled as a flag the
+            # user had to discover from an error. Displace and continue, which is
+            # what --force already did, because nothing is deleted either way.
+            #
+            # Replacement is a rename, so a session running the old binary keeps
+            # its own inode and is untouched by both the move and the swap.
+            if [ "$FORCE" != 1 ] &&
+                { ! artifact_has_owner_history "$dest" || artifact_has_legacy_owner_receipt "$dest"; }; then
                 rm -f "$tmp"
                 die "refusing to replace $dest because $(binary_refusal_reason "$dest").
 The ownership record consulted is $(owner_marker_for "$dest").
 Move $dest aside and re-run, or re-run with --force to have the installer move it aside for you (nothing is deleted)."
             fi
-            # --force displaces, it does not destroy. The file goes to a name no
-            # sweep and no uninstall touches, and that name is printed, because
-            # taking a filename away from a file the installer cannot account for
-            # is the user's decision and they have to be able to undo it.
+            # Displacement does not destroy. The file goes to a name no sweep and
+            # no uninstall touches, and that name is printed, because taking a
+            # filename away from a file the installer cannot account for is the
+            # user's decision and they have to be able to undo it.
             _finalize_unowned="$dest.unowned.$$"
-            warn "--force: $dest $(binary_refusal_reason "$dest")"
+            warn "$dest $(binary_refusal_reason "$dest")"
             mv -f "$dest" "$_finalize_unowned" || die "could not move $dest aside to $_finalize_unowned"
             warn "moved it aside to $_finalize_unowned (nothing was deleted)"
         fi
@@ -1527,7 +1581,7 @@ Move $dest aside and re-run, or re-run with --force to have the installer move i
 # digest, printing nothing when the body holds no digest.
 #
 # Strict on purpose, and deliberately identical to the TypeScript owner in
-# packages/natives/src/sha256-sidecar.ts: a token that is not exactly 64 hex
+# natives/bridge/bindings/src/sha256-sidecar.ts: a token that is not exactly 64 hex
 # characters means the response is not a checksum at all (an HTML error page, a
 # rate-limit body, a sidecar truncated by a dropped connection). Passing that
 # token through would compare the real digest against "<!doctype" and report a
@@ -1844,7 +1898,7 @@ do_uninstall() {
     done
     # Remove the per-version native addon cache a binary install stages there
     # (~150MB per version). The path shape is owned by getNativesDir() in
-    # packages/natives/native/loader-state.js — mirror it EXACTLY: honor
+    # natives/bridge/bindings/native/loader-state.js — mirror it EXACTLY: honor
     # $XDG_DATA_HOME/veyyon/natives only when $XDG_DATA_HOME/veyyon already
     # exists (the loader's condition), otherwise ~/.veyyon/natives. Only the
     # `natives` cache subdir is removed; the user's auth/config/sessions under
@@ -1998,11 +2052,9 @@ install_local() {
     finalize_binary "$tmpbin" "$(install_dir)/$BIN_NAME" "rebuild it with 'bun scripts/build-binary.ts' in packages/coding-agent"
     trap - EXIT INT TERM
     ok "installed $BIN_NAME to $(install_dir)/$BIN_NAME"
-    link_alias "$(install_dir)"
-    install_completions "$(install_dir)/$BIN_NAME"
-    ensure_on_path "$(install_dir)"
-    doctor "$(install_dir)/$BIN_NAME"
-    print_next_steps
+    # No tag: a local build is whatever the checkout produced, so there is no
+    # release version for the self-check to hold it to.
+    finish_install
 }
 
 # Which C library this userland uses: "musl", "glibc", or "unknown".
@@ -2083,6 +2135,27 @@ install_binary() {
     fi
     step "version: $LATEST"
 
+    # Nothing to fetch when the file already at the target IS this release.
+    # The download is the only slow part of an install, and every check that
+    # follows it judges the REPLACEMENT: a machine already on this version paid
+    # for the whole transfer and then, if the file there was not the one this
+    # installer wrote, refused at the last step having changed nothing. Ask the
+    # binary its version first, which costs one exec.
+    _cur_bin="$(install_dir)/$BIN_NAME"
+    if [ "$FORCE" -ne 1 ] && installed_version_is "$LATEST"; then
+        if binary_path_is_replaceable "$_cur_bin"; then
+            ok "$BIN_NAME is already at $LATEST — nothing to download"
+        else
+            # Same version, different file. There is still nothing to install,
+            # so this is not a failure: say whose file it is and move on. The
+            # refusal only has to stop a REPLACEMENT, and none is happening.
+            ok "$BIN_NAME at $_cur_bin already reports $LATEST — nothing to download"
+            warn "left it alone: $(binary_refusal_reason "$_cur_bin"). Re-run with --force to replace it with the released build (nothing is deleted)."
+        fi
+        finish_install "$LATEST"
+        return 0
+    fi
+
     mkdir -p "$(install_dir)"
     sweep_stale_staging
     BINARY_URL="https://github.com/${REPO}/releases/download/${LATEST}/${BINARY}"
@@ -2125,10 +2198,20 @@ install_binary() {
     finalize_binary "$tmpbin" "$(install_dir)/$BIN_NAME" "the download did not complete — retry"
     trap - EXIT INT TERM
     ok "installed $BIN_NAME to $(install_dir)/$BIN_NAME"
+    finish_install "$LATEST"
+}
+
+# Everything after the binary is in place: the alias, completions, PATH and the
+# self-check. One owner, because the already-current path below skips only the
+# download and must still do all of it — a re-run is how a broken alias or a
+# missing PATH line gets repaired.
+finish_install() {
     link_alias "$(install_dir)"
     install_completions "$(install_dir)/$BIN_NAME"
     ensure_on_path "$(install_dir)"
-    doctor "$(install_dir)/$BIN_NAME" "$LATEST"
+    # `doctor` reads its tag as "${2:-}", so an absent tag and an empty one are
+    # the same question: run the self-check without holding it to a version.
+    doctor "$(install_dir)/$BIN_NAME" "${1:-}"
     print_next_steps
 }
 

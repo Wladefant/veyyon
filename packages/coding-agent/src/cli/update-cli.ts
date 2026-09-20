@@ -13,15 +13,14 @@ import {
 	$which,
 	APP_ALIAS,
 	APP_NAME,
+	BUILD_TAG,
 	bareVersion,
 	changelogUrlForVersion,
-	compareSemver,
 	errorMessage,
 	getAutoUpdateStatePath,
 	getUpdateHistoryPath,
 	isCompiledBinary,
 	isEnoent,
-	isNewerVersion,
 	isValidSemver,
 	logger,
 	readPipeText,
@@ -33,7 +32,9 @@ import {
 } from "@veyyon/utils";
 import { $ } from "bun";
 import chalk from "chalk";
-import { theme } from "../modes/theme/theme";
+import { settingsOrNull } from "../config/settings-instance";
+import type { SettingPath } from "../config/settings-schema";
+import { theme } from "../theme/theme";
 import { isTimeoutError, withTimeoutSignal } from "../utils/fetch-timeout";
 import {
 	AUTO_UPDATE_FAILURE_COOLDOWN_MS,
@@ -135,6 +136,85 @@ export interface BinaryReplacementOptions {
 	 * wrote correct?" (see {@link verifyBinaryVersion}).
 	 */
 	verifyInstalledVersion: (expectedVersion: string) => Promise<InstalledVersionVerification>;
+	/** Allow replacing custom or local builds when force is set. */
+	force?: boolean;
+}
+
+/**
+ * Detect if the currently running process was compiled as a local or custom build.
+ */
+export function isCurrentProcessLocalOrCustom(): boolean {
+	if (BUILD_TAG) {
+		const tag = BUILD_TAG.toLowerCase();
+		if (tag.includes("local") || tag.includes("custom") || tag.length > 0) {
+			return true;
+		}
+	}
+	if (process.env.VEYYON_BUILD_LOCAL === "true") return true;
+	if (process.env.VEYYON_BUILD_TAG) {
+		const tag = process.env.VEYYON_BUILD_TAG.toLowerCase();
+		if (tag.includes("local") || tag.includes("custom") || tag.length > 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * Probe whether a target binary at `binPath` is a local or custom build.
+ */
+export async function isBinaryLocalOrCustom(binPath: string): Promise<boolean> {
+	if (isCurrentProcessLocalOrCustom()) {
+		try {
+			const realTarget = await fs.promises.realpath(binPath);
+			const realSelf = await fs.promises.realpath(process.execPath);
+			if (realTarget.toLowerCase() === realSelf.toLowerCase()) {
+				return true;
+			}
+		} catch {
+			// fallback
+		}
+	}
+	try {
+		const result = await $`${binPath} --version`.quiet().nothrow();
+		if (result.exitCode === 0) {
+			const output = result.text().toLowerCase();
+			if (output.includes("local") || output.includes("custom")) {
+				return true;
+			}
+		}
+	} catch {
+		// ignore
+	}
+	return false;
+}
+
+/**
+ * Determine if background automatic update is disabled via environment variables or configuration.
+ */
+export function isAutoUpdateDisabled(customSettings?: { get: (path: SettingPath) => unknown }): boolean {
+	const envNo = process.env.VEYYON_NO_AUTO_UPDATE?.trim().toLowerCase();
+	if (envNo === "1" || envNo === "true" || envNo === "yes" || envNo === "on") {
+		return true;
+	}
+	const envAuto = process.env.VEYYON_AUTO_UPDATE?.trim().toLowerCase();
+	if (envAuto === "0" || envAuto === "false" || envAuto === "no" || envAuto === "off") {
+		return true;
+	}
+	const s = customSettings ?? settingsOrNull();
+	if (s) {
+		try {
+			if (s.get("startup.autoUpdate") === false) return true;
+		} catch {
+			// ignore missing key
+		}
+		try {
+			if (s.get("updates.auto") === false) return true;
+		} catch {
+			// ignore missing key
+		}
+	}
+	return false;
 }
 
 /**
@@ -416,7 +496,7 @@ const RELEASES_PAGE_SIZE = 100;
 const RELEASES_MAX_PAGES = 10;
 
 /**
- * Every published release, newest first.
+ * Every published release, newest first by publication date.
  *
  * Rollback needs the catalog, not just its newest entry, and this is the only
  * place that asks for it. It is also the only thing left in this file that calls
@@ -461,8 +541,37 @@ export async function getAllReleases(timeoutMs: number = RELEASE_METADATA_TIMEOU
 		);
 	}
 
-	releases.sort((a, b) => compareSemver(b.version, a.version));
+	sortReleasesByPublicationDate(releases);
 	return releases;
+}
+/**
+ * Sort releases by publication date descending.
+ *
+ * Releases with a valid `publishedAt` timestamp are sorted newest first.
+ * Undated entries and entries with unparseable timestamps keep their original
+ * API positions, so only dated entries are reordered against each other.
+ */
+function sortReleasesByPublicationDate(releases: ReleaseListing[]): void {
+	const datedIndices: number[] = [];
+	const datedEntries: ReleaseListing[] = [];
+
+	for (let i = 0; i < releases.length; i++) {
+		const entry = releases[i]!;
+		if (entry.publishedAt && !Number.isNaN(Date.parse(entry.publishedAt))) {
+			datedIndices.push(i);
+			datedEntries.push(entry);
+		}
+	}
+
+	datedEntries.sort((a, b) => {
+		const timeA = Date.parse(a.publishedAt!);
+		const timeB = Date.parse(b.publishedAt!);
+		return timeB - timeA;
+	});
+
+	for (let i = 0; i < datedIndices.length; i++) {
+		releases[datedIndices[i]!] = datedEntries[i]!;
+	}
 }
 
 /** One raw GitHub page plus its filtered installable releases. */
@@ -761,7 +870,7 @@ export async function verifyBinaryVersion(
 		// The spawn itself failed, which is where ENOEXEC (wrong architecture) and
 		// EACCES (no execute bit, or a `noexec` mount) land. There is no exit code
 		// because no process ever started.
-		return { ok: false, path: binPath, reason: describeUnrunnableBinary(binPath, undefined, String(err)) };
+		return { ok: false, path: binPath, reason: describeUnrunnableBinary(binPath, undefined, errorMessage(err)) };
 	}
 }
 
@@ -1153,6 +1262,12 @@ export async function replaceBinaryForUpdate(options: BinaryReplacementOptions):
 					`replace the symlink with a real binary first (rm ${options.targetPath}) and re-run the update.`,
 			);
 		}
+		if (!options.force && (await isBinaryLocalOrCustom(options.targetPath))) {
+			throw new Error(
+				`Refusing to replace ${options.targetPath}: it is a custom or local build. ` +
+					`Re-run with --force to overwrite it anyway.`,
+			);
+		}
 
 		// Hashed while it is still staged, which is the only moment the bytes are
 		// certainly readable at a pathname nothing else is competing for. The same
@@ -1254,6 +1369,7 @@ export async function updateViaBinaryAt(
 	targetPath: string,
 	expectedVersion: string,
 	report: UpdateReporter,
+	force: boolean = false,
 ): Promise<InstallReleaseResult> {
 	const binaryName = getBinaryName();
 	const tag = `v${expectedVersion}`;
@@ -1352,6 +1468,7 @@ export async function updateViaBinaryAt(
 					expectedVersion,
 					// Verify the file this update just wrote, not whatever PATH resolves now.
 					verifyInstalledVersion: version => verifyBinaryUsable(targetPath, version),
+					force,
 				});
 				// The completion scripts on disk describe the version we just replaced, so
 				// every subcommand and flag this release adds would be missing from tab
@@ -1603,12 +1720,12 @@ export async function updateViaSourceAt(
 		{ label: "Installing dependencies", command: ["bun", "install"], cwd: checkoutRoot },
 		{
 			label: "Regenerating build artifacts",
-			command: ["bun", "--cwd=packages/collab-web", "run", "gen:tool-views"],
+			command: ["bun", "--cwd=clients/web", "run", "gen:tool-views"],
 			cwd: checkoutRoot,
 		},
 		{
 			label: "Ensuring native addon",
-			command: ["bun", "--cwd=packages/natives", "run", "ensure"],
+			command: ["bun", "--cwd=natives/bridge/bindings", "run", "ensure"],
 			cwd: checkoutRoot,
 		},
 	];
@@ -1621,12 +1738,12 @@ export async function updateViaSourceAt(
 		{ label: "Restoring dependencies", command: ["bun", "install"], cwd: checkoutRoot },
 		{
 			label: "Restoring build artifacts",
-			command: ["bun", "--cwd=packages/collab-web", "run", "gen:tool-views"],
+			command: ["bun", "--cwd=clients/web", "run", "gen:tool-views"],
 			cwd: checkoutRoot,
 		},
 		{
 			label: "Restoring native addon",
-			command: ["bun", "--cwd=packages/natives", "run", "ensure"],
+			command: ["bun", "--cwd=natives/bridge/bindings", "run", "ensure"],
 			cwd: checkoutRoot,
 		},
 	];
@@ -1740,12 +1857,11 @@ export async function installRelease(
 	currentVersion: string = VERSION,
 	historyPath: string = getUpdateHistoryPath(),
 ): Promise<InstallReleaseResult> {
-	void force;
 	const target = await resolveUpdateTarget();
 	const result =
 		target.method === "source"
 			? await updateViaSourceAt(target.path, version, report)
-			: await updateViaBinaryAt(target.path, version, report);
+			: await updateViaBinaryAt(target.path, version, report, force);
 	if (version !== currentVersion) {
 		await recordVersionMove({ from: currentVersion, to: version, at: new Date().toISOString() }, historyPath);
 	}
@@ -1803,6 +1919,27 @@ export interface UpdateHistoryEntry {
 	to: string;
 	/** ISO 8601, so the record is readable without knowing the writer's locale. */
 	at: string;
+	status?: "updated" | "skipped";
+	reason?: string;
+}
+
+/**
+ * Append a skipped update event to the history file.
+ */
+export async function recordVersionSkip(
+	skip: { from: string; to: string; reason: string },
+	historyPath: string = getUpdateHistoryPath(),
+): Promise<void> {
+	await recordVersionMove(
+		{
+			from: skip.from,
+			to: skip.to,
+			at: new Date().toISOString(),
+			status: "skipped",
+			reason: skip.reason,
+		},
+		historyPath,
+	);
 }
 
 /**
@@ -1915,7 +2052,12 @@ export type AutoUpdateOutcome =
  * not a binary swap — attempting one would overwrite its launcher, so the
  * background updater leaves it alone instead of fail-looping.
  */
-export type AutoUpdateSkipReason = "another-process" | "recent-failure" | "source-install";
+export type AutoUpdateSkipReason =
+	| "another-process"
+	| "recent-failure"
+	| "source-install"
+	| "disabled"
+	| "custom-build";
 
 /**
  * Update to the latest release without printing anything or exiting.
@@ -1948,6 +2090,9 @@ export async function runAutoUpdate(
 		version: string,
 		reporter: typeof SILENT_UPDATE_REPORTER,
 	) => Promise<void> | Promise<InstallReleaseResult> = (version, reporter) => installRelease(version, false, reporter),
+	historyPath: string = getUpdateHistoryPath(),
+	settingsOverride?: { get: (path: SettingPath) => unknown },
+	isCustomBuildOverride?: () => boolean | Promise<boolean>,
 ): Promise<AutoUpdateOutcome> {
 	let release: ReleaseInfo;
 	if (knownRelease) {
@@ -1961,8 +2106,34 @@ export async function runAutoUpdate(
 			return { status: "failed", error: errorMessage(err) };
 		}
 	}
-	if (!isNewerVersion(release.version, currentVersion)) {
+	if (release.version === currentVersion) {
 		return { status: "up-to-date" };
+	}
+	if (isAutoUpdateDisabled(settingsOverride)) {
+		logger.info("Skipping automatic update: automatic updates are disabled", {
+			version: release.version,
+		});
+		await recordVersionSkip({ from: currentVersion, to: release.version, reason: "disabled" }, historyPath);
+		return { status: "skipped", version: release.version, reason: "disabled" };
+	}
+
+	let targetPath: string | undefined;
+	try {
+		targetPath = resolveVeyyonPath();
+	} catch {
+		// ignore
+	}
+
+	const isCustom = isCustomBuildOverride
+		? await isCustomBuildOverride()
+		: isCurrentProcessLocalOrCustom() || (targetPath ? await isBinaryLocalOrCustom(targetPath) : false);
+
+	if (isCustom) {
+		logger.info("Skipping automatic update: veyyon is a custom or local build", {
+			version: release.version,
+		});
+		await recordVersionSkip({ from: currentVersion, to: release.version, reason: "custom-build" }, historyPath);
+		return { status: "skipped", version: release.version, reason: "custom-build" };
 	}
 
 	// A source install updates via `git pull`, not a binary swap: a background
@@ -1973,6 +2144,7 @@ export async function runAutoUpdate(
 		logger.info("Skipping automatic update: veyyon is installed from source (update with git pull)", {
 			version: release.version,
 		});
+		await recordVersionSkip({ from: currentVersion, to: release.version, reason: "source-install" }, historyPath);
 		return { status: "skipped", version: release.version, reason: "source-install" };
 	}
 
@@ -2053,14 +2225,14 @@ export async function runUpdateCommand(
 		process.exit(1);
 	}
 
-	const comparison = compareSemver(release.version, VERSION);
+	const isDifferent = release.version !== VERSION;
 
-	if (comparison <= 0 && !opts.force) {
+	if (!isDifferent && !opts.force) {
 		console.log(chalk.green(`${typeof theme === "undefined" ? "✓" : theme.status.success} Already up to date`));
 		return;
 	}
 
-	if (comparison > 0) {
+	if (isDifferent) {
 		console.log(chalk.cyan(`New version available: ${release.version}`));
 	} else if (opts.check) {
 		// Up to date, but --force was passed alongside --check. Check mode installs

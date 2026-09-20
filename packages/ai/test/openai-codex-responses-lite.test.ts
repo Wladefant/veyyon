@@ -13,6 +13,7 @@ import {
 import { isOpenAIResponsesProgressEvent } from "@veyyon/ai/providers/openai-shared";
 import type { CodexCompactionRequestContext, Context, FetchImpl, ProviderSessionState } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { CODEX_CLIENT_VERSION } from "@veyyon/catalog/wire/codex";
 import * as piUtils from "@veyyon/utils";
 import { isRecord } from "@veyyon/utils";
 import { createCodexModel } from "./helpers";
@@ -258,7 +259,7 @@ describe("openai-codex reasoning.summary", () => {
 
 describe("openai-codex Responses Lite input shaping", () => {
 	it("strips image detail and keeps lite when the input contains images", async () => {
-		const model = createCodexModel("gpt-5.1-codex");
+		const model = createCodexModel("gpt-5.6-terra");
 		const makeInput = (): InputItem[] => [
 			{
 				type: "message",
@@ -358,7 +359,7 @@ describe("openai-codex Responses Lite input shaping", () => {
 	});
 
 	it("forces parallel_tool_calls off and moves tools into input under lite", async () => {
-		const model = createCodexModel("gpt-5.1-codex");
+		const model = createCodexModel("gpt-5.6-terra");
 		const tools = [{ type: "function", name: "shot", parameters: { type: "object" } }];
 
 		const lite = await transformRequestBody({ model: model.id, tools, parallel_tool_calls: true }, model, {
@@ -473,7 +474,7 @@ describe("openai-codex fresh execution input shaping", () => {
 
 describe("openai-codex Responses Lite and client metadata wire format", () => {
 	it("sends canonical Codex metadata and protects reserved fields over SSE", async () => {
-		const model = createCodexModel("gpt-5.1-codex");
+		const model = createCodexModel("gpt-5.6-terra");
 		const context = createCodexTestContext();
 		const clientMetadata = {
 			workspace_kind: "repo",
@@ -699,7 +700,7 @@ describe("openai-codex Responses Lite and client metadata wire format", () => {
 		expect(result.stopReason).toBe("stop");
 		expect(captured).toBeDefined();
 		expect(captured!.headers.get("x-openai-internal-codex-responses-lite")).toBe("true");
-		expect(captured!.headers.get("version")).toBe("0.144.1");
+		expect(captured!.headers.get("version")).toBe(CODEX_CLIENT_VERSION);
 		const body = captured!.body;
 		expect(body.reasoning).toEqual({ context: "all_turns" });
 		expect(body.instructions).toBeUndefined();

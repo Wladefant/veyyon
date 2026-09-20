@@ -17,8 +17,10 @@
  */
 import { emptyUsage } from "@veyyon/catalog/models";
 import { readSseJson } from "@veyyon/utils/stream";
+import { errorMessage } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import * as AIError from "../error";
+import { AUTH_EVIDENCE_LOCAL } from "../error/auth-classify";
 import type {
 	Api,
 	AssistantMessage,
@@ -54,11 +56,25 @@ const NON_WIRE_KEYS = new Set<keyof SimpleStreamOptions>([
 const VEYYON_NATIVE_STREAM_IDLE_TIMEOUT_ERROR = "pi-native stream stalled while waiting for the next event";
 const VEYYON_NATIVE_STREAM_FIRST_EVENT_TIMEOUT_ERROR = "pi-native stream timed out while waiting for the first event";
 
+/**
+ * A rejection from the caller's `onPayload` hook, reported with the reason it gave.
+ *
+ * Payload sanitization is a local policy decision, not an upstream authentication failure, and it
+ * used to buy that distinction by discarding the rejection: the operator saw "pi-native onPayload
+ * hook rejected" and nothing else, which names the seam and not the failure. The reason was dropped
+ * because `isAuthRetryableError` reads a 401 out of the message, so a hook that rejected with one
+ * would have rotated a credential over a decision made here.
+ *
+ * The marker settles that instead of silence: the classifier is told the text is local, so the text
+ * can be the rejection's own.
+ */
 class PiNativePayloadHookError extends Error {
 	readonly rejection: unknown;
+	readonly [AUTH_EVIDENCE_LOCAL] = true;
 
 	constructor(rejection: unknown) {
-		super("pi-native onPayload hook rejected");
+		const detail = errorMessage(rejection);
+		super(detail ? `pi-native onPayload hook rejected: ${detail}` : "pi-native onPayload hook rejected");
 		this.name = "PiNativePayloadHookError";
 		this.rejection = rejection;
 	}
@@ -82,13 +98,16 @@ function buildWireOptions(options: SimpleStreamOptions | undefined): Record<stri
 
 async function decodeGatewayError(response: Response): Promise<AIError.AuthGatewayError> {
 	const status = response.status;
-	let body: unknown;
+	// One bounded read, then a parse of what it returned. `response.json()` decodes the
+	// whole body before anything can cap it, and the case that matters here is a gateway
+	// in front of the gateway answering an HTML page instead of an envelope. The STATUS is
+	// the failure; an unreadable body degrades to empty rather than replacing it.
+	const read = await AIError.readProviderErrorBody(response);
+	let body: unknown = read.text;
 	try {
-		body = await response.json();
+		body = JSON.parse(read.text);
 	} catch {
-		// The STATUS is the failure; the body is the detail attached to it. An unreadable body degrades to
-		// empty rather than replacing the status with a read error.
-		body = await response.text().catch(() => "");
+		// Not an envelope. `body` stays the sanitized text.
 	}
 	if (typeof body === "object" && body !== null && "error" in body) {
 		const err = (body as { error: unknown }).error;
@@ -96,14 +115,14 @@ async function decodeGatewayError(response: Response): Promise<AIError.AuthGatew
 			const message = (err as { message?: unknown }).message;
 			const type = (err as { type?: unknown }).type;
 			return new AIError.AuthGatewayError(
-				typeof message === "string" ? message : `auth-gateway ${status}`,
+				typeof message === "string" ? AIError.boundProviderErrorDetail(message) : `auth-gateway ${status}`,
 				status,
 				response.headers,
 				typeof type === "string" ? type : undefined,
 			);
 		}
 	}
-	const text = typeof body === "string" ? body : JSON.stringify(body);
+	const text = typeof body === "string" ? read.detail : AIError.boundProviderErrorDetail(JSON.stringify(body));
 	return new AIError.AuthGatewayError(
 		`auth-gateway ${status}: ${text || response.statusText}`,
 		status,
@@ -194,25 +213,31 @@ export function streamPiNative<TApi extends Api>(
 				options: buildWireOptions(options),
 				stream: true,
 			};
-			try {
-				const onPayload = options?.onPayload;
-				if (onPayload) {
-					// The hook is a JSON seam: a host's secret redactor walks the payload
-					// rewriting every string and refuses any value JSON cannot express.
-					// `context` carries live arktype schemas in `tools[].parameters`,
-					// which are function objects, so the raw object is never that shape.
-					// The wire form is JSON by construction (the body is stringified
-					// below), so the hook sees exactly the wire shape.
-					const wirePayload: unknown = JSON.parse(JSON.stringify(bodyPayload));
-					const replacementPayload = await onPayload(wirePayload, model as Model<Api>);
-					if (replacementPayload !== undefined) bodyPayload = replacementPayload;
+			const onPayload = options?.onPayload;
+			// The hook is a JSON seam: a host's secret redactor walks the payload
+			// rewriting every string and refuses any value JSON cannot express.
+			// `context` carries live arktype schemas in `tools[].parameters`,
+			// which are function objects, so the raw object is never that shape.
+			// Serialize once up front; the hook gets an isolated parse of those
+			// bytes, and when it leaves the payload alone the wire reuses them —
+			// a full-context body is never serialized twice.
+			let body = JSON.stringify(bodyPayload);
+			if (onPayload) {
+				const wirePayload: unknown = JSON.parse(body);
+				let replacementPayload: unknown;
+				try {
+					replacementPayload = await onPayload(wirePayload, model as Model<Api>);
+				} catch (error) {
+					// Payload sanitization is a local policy decision, not an upstream
+					// authentication failure. Keep the rejection out of the
+					// auth-retry classifier even when its original error resembles a 401.
+					throw new PiNativePayloadHookError(error);
 				}
-			} catch (error) {
-				// Payload sanitization is a local policy decision, not an upstream authentication failure. Keep
-				// the rejection out of the auth-retry classifier even when its original error resembles a 401.
-				throw new PiNativePayloadHookError(error);
+				if (replacementPayload !== undefined) {
+					bodyPayload = replacementPayload;
+					body = JSON.stringify(bodyPayload);
+				}
 			}
-			const body = JSON.stringify(bodyPayload);
 
 			response = await fetchImpl(url, { method: "POST", headers, body, signal: abortTracker.requestSignal });
 			if (!response.ok) {

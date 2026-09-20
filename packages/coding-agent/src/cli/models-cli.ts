@@ -75,7 +75,7 @@ interface ModelJson {
 	reasoning: boolean;
 	/** Supported thinking efforts when the model thinks, otherwise null. */
 	thinking: readonly Effort[] | null;
-	input: ("text" | "image")[];
+	input: ("text" | "image" | "video")[];
 	cost: Model<Api>["cost"];
 }
 
@@ -307,9 +307,13 @@ export async function runModelsListing(options: RunModelsListingOptions): Promis
 
 	const eventBus = new EventBus();
 	const extensionsResult = disableExtensionDiscovery
-		? await loadExtensions(additionalExtensionPaths, cwd, eventBus)
+		? // The paths came from `--extension`, so they are the operator's own even when they
+			// live inside the project; the gate exempts them exactly as a session's do.
+			await loadExtensions(additionalExtensionPaths, cwd, eventBus, undefined, {
+				configuredPaths: additionalExtensionPaths,
+			})
 		: await discoverAndLoadExtensions(
-				[...additionalExtensionPaths, ...settingsExtensions],
+				additionalExtensionPaths.concat(settingsExtensions),
 				cwd,
 				eventBus,
 				disabledExtensionIds,
@@ -373,7 +377,8 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 			await modelRegistry.refresh(action === "refresh" ? "online" : "online-if-uncached");
 		}
 
-		const cliExtensionPaths = command.flags.noExtensions ? [] : (command.flags.extensions ?? []);
+		// `--no-extensions` skips discovery only; explicit `--extension` paths still load.
+		const cliExtensionPaths = command.flags.extensions ?? [];
 		await runModelsListing({
 			modelRegistry,
 			cwd,

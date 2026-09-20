@@ -7,6 +7,7 @@
  * here.
  */
 
+import type { SemVer } from "./classify";
 import {
 	bareModelId,
 	isAnthropicAdaptiveGenAtLeast,
@@ -15,6 +16,7 @@ import {
 	parseGlmModel,
 	parseKnownModel,
 	parseOpenAIModel,
+	semverEqual,
 	semverGte,
 } from "./classify";
 
@@ -192,6 +194,19 @@ export const supportsOpenAIPromptCacheBreakpoints = memo((modelId: string): bool
 export const supportsAllTurnsReasoningContext = isOpenAIWireGen54Plus;
 
 /**
+ * Whether an id states an OpenAI wire generation at all.
+ *
+ * Every version floor above answers false for two different situations: a model
+ * below the floor, and a model whose id carries no version to read. A codename
+ * (`gpt-daybreak-blue-latest`, `codex-auto-review`) is the second, and a caller
+ * that has other evidence about such a model — a catalog transport flag, say —
+ * needs to tell the two apart before it trusts a floor's refusal.
+ */
+export const statesOpenAIWireGeneration = memo((modelId: string): boolean => {
+	return parseOpenAIModel(bareModelId(modelId)) !== null;
+});
+
+/**
  * OpenAI Codex models that accept `reasoning.summary`. Shares the gpt-5.4 wire
  * floor with {@link supportsAllTurnsReasoningContext}: earlier Codex ids
  * (`gpt-5.1-codex`, `gpt-5.3-codex`, `gpt-5.3-codex-spark`) reject the field
@@ -202,33 +217,42 @@ export const supportsAllTurnsReasoningContext = isOpenAIWireGen54Plus;
 export const supportsCodexReasoningSummary = isOpenAIWireGen54Plus;
 
 /**
- * Reasoning-capable GLM coding SKUs: glm-4.5 and up on the base / `-air` /
- * `-turbo` lines. Excludes the vision (`…v`) shape, the non-reasoning
- * `-flash`/`-flashx`/`-preview` variants, and pre-4.5 ids. Matching the family
- * keeps newly-bumped integers (`glm-5.3`, `glm-6`, …) covered without a per-id
+ * The version of a GLM coding SKU: the base / `-air` / `-turbo` lines.
+ * `undefined` for a non-GLM id, the vision (`…v`) shape and the non-reasoning
+ * `-flash`/`-flashx`/`-preview` variants. Matching the family keeps
+ * newly-bumped integers (`glm-5.3`, `glm-6`, …) covered without a per-id
  * allowlist.
  */
-export const isReasoningGlmModelId = memo((modelId: string): boolean => {
+function glmCodingVersion(modelId: string): SemVer | undefined {
 	const glm = parseGlmModel(bareModelId(modelId));
 	if (!glm || glm.vision) {
-		return false;
+		return undefined;
 	}
 	if (glm.variant !== "base" && glm.variant !== "air" && glm.variant !== "turbo") {
-		return false;
+		return undefined;
 	}
-	return semverGte(glm.version, "4.5");
+	return glm.version;
+}
+
+/** Reasoning-capable GLM coding SKUs: glm-4.5 and up. */
+export const isReasoningGlmModelId = memo((modelId: string): boolean => {
+	const version = glmCodingVersion(modelId);
+	return version !== undefined && semverGte(version, "4.5");
 });
 
 /** GLM-5.2+ coding SKUs accept `reasoning_effort` in addition to binary thinking. */
 export const isGlm52ReasoningEffortModelId = memo((modelId: string): boolean => {
-	const glm = parseGlmModel(bareModelId(modelId));
-	if (!glm || glm.vision) {
-		return false;
-	}
-	if (glm.variant !== "base" && glm.variant !== "air" && glm.variant !== "turbo") {
-		return false;
-	}
-	return semverGte(glm.version, "5.2");
+	const version = glmCodingVersion(modelId);
+	return version !== undefined && semverGte(version, "5.2");
+});
+
+/**
+ * GLM-5.2 coding SKUs exactly. Ollama Cloud's 5.2 endpoint answers 400 for
+ * every effort but high and max; 5.3 onwards accepts the declared ladder.
+ */
+export const isGlm52ModelId = memo((modelId: string): boolean => {
+	const version = glmCodingVersion(modelId);
+	return version !== undefined && semverEqual(version, "5.2");
 });
 
 /** GLM vision SKUs — the `v` that attaches to the version (`glm-4v`, `glm-4.5v`). */
@@ -273,6 +297,19 @@ export const modelFamilyToken = memo((modelId: string): string => {
 export const supportsAdaptiveThinkingDisplay = memo((modelId: string): boolean => {
 	const parsed = parseAnthropicModel(bareModelId(modelId));
 	return parsed !== null && isAnthropicAdaptiveGenAtLeast(parsed, "4.7");
+});
+
+/**
+ * The API verifies each thinking block's signature against the bytes that
+ * preceded it — system prompt, tool set, and every earlier message — and
+ * rejects a block whose prefix the client rewrote. Enforced from Claude Fable
+ * 5.1; every later Anthropic generation inherits it, so the floor is a version
+ * compare rather than a fixed id list.
+ * @see https://platform.claude.com/docs/en/build-with-claude/preserved-thinking
+ */
+export const enforcesThinkingPrefixBinding = memo((modelId: string): boolean => {
+	const parsed = parseAnthropicModel(bareModelId(modelId));
+	return parsed !== null && semverGte(parsed.version, "5.1");
 });
 
 /**

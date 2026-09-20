@@ -7,7 +7,7 @@
  * shaped `{id, header, options}` reached the header renderer and threw
  * `TypeError: undefined is not an object (evaluating 'text.replaceAll')` from
  * inside a render pass. A throw there is not a tool error and not a notice: it is
- * an uncaught exception, so the session died and took every live subagent with it.
+ * an uncaught exception, so the session died and took every live agent with it.
  *
  * WHAT CLASS THIS CLOSES. Not "the reported question shape" and not "the dialog
  * component in isolation": every producer that can carry a question into the
@@ -43,15 +43,15 @@ import type {
 	ExtensionAskDialogQuestion,
 	ExtensionUIContext,
 } from "@veyyon/coding-agent/extensibility/extensions/types";
-import { AskDialogComponent } from "@veyyon/coding-agent/modes/components/ask-dialog";
-import type { ExtensionUiControllerContext } from "@veyyon/coding-agent/modes/controllers/extension-ui-controller";
-import { ExtensionUiController } from "@veyyon/coding-agent/modes/controllers/extension-ui-controller";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/modes/theme/theme";
+import { AskDialogComponent } from "@veyyon/coding-agent/modes/terminal/components/dialogs/ask-dialog";
+import type { ExtensionUiControllerContext } from "@veyyon/coding-agent/modes/terminal/controllers/extension-ui-controller";
+import { ExtensionUiController } from "@veyyon/coding-agent/modes/terminal/controllers/extension-ui-controller";
+import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import { BUILTIN_TOOLS, HIDDEN_TOOLS, type ToolSession } from "@veyyon/coding-agent/tools";
-import { AskTool, type AskToolInput } from "@veyyon/coding-agent/tools/ask";
+import { AskTool, type AskToolInput } from "@veyyon/coding-agent/tools/agent/ask";
 import type { Component, OverlayHandle } from "@veyyon/tui";
-import { setKeybindings } from "@veyyon/tui";
 import { isRecord } from "@veyyon/utils";
+import { setKeybindings } from "@veyyon/utils/keybindings";
 import { makeToolSession } from "../helpers/tool-session";
 
 /** The shape that killed the session: everything but the text that gets rendered. */
@@ -132,7 +132,14 @@ function createHarness(collabHost?: unknown): ControllerHarness {
 		collabHost,
 		focusActiveEditorArea: (): void => {},
 		setToolUIContext: (): void => {},
-		session: {},
+		// Offered because the controller installs it during initHooksAndCustomTools;
+		// this suite is about which ask surfaces refuse an unrenderable question, not
+		// about what a notification carries.
+		setToolNotifier: (): void => {},
+		clearWorkingLoader: (): boolean => false,
+		session: {
+			isStreaming: false,
+		},
 	} as unknown as ExtensionUiControllerContext;
 	return { ctx, controller: new ExtensionUiController(ctx), overlays, focused };
 }

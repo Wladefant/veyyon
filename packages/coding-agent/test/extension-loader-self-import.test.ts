@@ -5,7 +5,6 @@ import * as PiCodingAgent from "@veyyon/coding-agent";
 import { loadCustomCommands } from "@veyyon/coding-agent/extensibility/custom-commands/loader";
 import { loadCustomTools } from "@veyyon/coding-agent/extensibility/custom-tools/loader";
 import { loadExtensions } from "@veyyon/coding-agent/extensibility/extensions/loader";
-import { loadHooks } from "@veyyon/coding-agent/extensibility/hooks/loader";
 import { TempDir } from "@veyyon/utils";
 
 declare global {
@@ -85,17 +84,10 @@ describe("extension loader host runtime binding", () => {
 				}
 			`,
 		);
-		const hookPath = writeModule(
-			"hook.ts",
-			`
-				export default function(api) {
-					${identityGuard}
-					api.on("identity:event", async () => "ok");
-				}
-			`,
-		);
 
-		const extensionResult = await loadExtensions([extensionPath], cwd);
+		const extensionResult = await loadExtensions([extensionPath], cwd, undefined, undefined, {
+			configuredPaths: [extensionPath],
+		});
 		expect(extensionResult.errors).toEqual([]);
 		expect(extensionResult.extensions).toHaveLength(1);
 		expect(extensionResult.extensions[0].commands.has("identity_extension")).toBe(true);
@@ -107,10 +99,5 @@ describe("extension loader host runtime binding", () => {
 		const commandResult = await loadCustomCommands({ cwd, agentDir });
 		expect(commandResult.errors.filter(error => error.path === commandPath)).toEqual([]);
 		expect(commandResult.commands.some(command => command.command.name === "identity_command")).toBe(true);
-
-		const hookResult = await loadHooks([hookPath], cwd);
-		expect(hookResult.errors).toEqual([]);
-		expect(hookResult.hooks).toHaveLength(1);
-		expect(hookResult.hooks[0].handlers.has("identity:event")).toBe(true);
 	});
 });

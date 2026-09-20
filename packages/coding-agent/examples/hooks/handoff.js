@@ -13,7 +13,7 @@
  */
 import { serializeConversation } from "@veyyon/agent-core";
 import { complete } from "@veyyon/ai";
-import { BorderedLoader, convertToLlm } from "@veyyon/coding-agent";
+import { ComposerLoader, convertToLlm } from "@veyyon/coding-agent";
 import { mapJsonStrings } from "@veyyon/coding-agent/secrets/obfuscator";
 const SYSTEM_PROMPT = `You are a context transfer assistant. Given a conversation history and the user's goal for a new thread, generate a focused prompt that:
 
@@ -65,9 +65,15 @@ export default function (pi) {
             // Keep raw branch messages until the provider attempt; serialization happens only
             // after every complete structured string has passed through the live transform.
             const currentSessionFile = ctx.sessionManager.getSessionFile();
+            // The loader takes over the screen, so it needs a host that offers one.
+            const terminal = ctx.ui.terminal;
+            if (!terminal) {
+                ctx.ui.notify("Handoff needs an interactive terminal.", "warning");
+                return;
+            }
             // Generate the handoff prompt with loader UI
-            const result = await ctx.ui.custom((tui, theme, done) => {
-                const loader = new BorderedLoader(tui, theme, `Generating handoff prompt...`);
+            const result = await terminal.custom((tui, theme, done) => {
+                const loader = new ComposerLoader(tui, theme, `Generating handoff prompt...`);
                 loader.onAbort = () => done(null);
                 const doGenerate = async () => {
                     const apiKey = await ctx.modelRegistry.getApiKey(ctx.model);

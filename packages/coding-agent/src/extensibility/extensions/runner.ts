@@ -3,15 +3,17 @@
  */
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { CredentialDisabledEvent, ImageContent, Model, ProviderResponseMetadata } from "@veyyon/ai";
-import type { KeyId } from "@veyyon/tui";
-import { errorMessage, logger } from "@veyyon/utils";
+import type { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { errorMessage, logger, reportFault } from "@veyyon/utils";
+import type { KeyId } from "@veyyon/utils/keys";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { Settings } from "../../config/settings";
 import type { LocalProtocolOptions } from "../../internal-urls/local-protocol";
-import type { MemoryRuntimeContext } from "../../memory-backend";
-import { type Theme, theme } from "../../modes/theme/theme";
-import type { SessionManager } from "../../session/session-manager";
+import type { MemoryRuntimeContext } from "../../memory/backend";
+import { type Theme, theme } from "../../theme/theme";
+import { EventBus } from "../../utils/event-bus";
 import type { BranchHandler, NavigateTreeHandler, NewSessionHandler } from "../session-handler-types";
+import { loadExtension } from "./loader";
 import { createExtensionModelQuery } from "./model-api";
 import type {
 	AfterProviderResponseEvent,
@@ -32,6 +34,7 @@ import type {
 	ExtensionError,
 	ExtensionEvent,
 	ExtensionFlag,
+	ExtensionReloadResult,
 	ExtensionRuntime,
 	ExtensionShortcut,
 	ExtensionUIContext,
@@ -163,7 +166,7 @@ type RunnerEmitResult<TEvent extends RunnerEmitEvent> = TEvent extends { type: "
 			? SessionBeforeCompactResult | undefined
 			: TEvent extends { type: "session_before_tree" }
 				? SessionBeforeTreeResult | undefined
-				: TEvent extends { type: "session.compacting" }
+				: TEvent extends { type: "session_compacting" }
 					? SessionCompactingResult | undefined
 					: TEvent extends { type: "session_stop" }
 						? SessionStopEventResult | undefined
@@ -200,16 +203,12 @@ const noOpUIContext: ExtensionUIContext = {
 	setStatus: () => {},
 	setWorkingMessage: () => {},
 	setWidget: () => {},
-	setFooter: () => {},
-	setHeader: () => {},
 	setTitle: () => {},
-	custom: async () => undefined as never,
 	setEditorText: () => {},
 	pasteToEditor: () => {},
 	getEditorText: () => "",
 	editor: async () => undefined,
 	addAutocompleteProvider: () => {},
-	setEditorComponent: () => {},
 	get theme() {
 		return theme;
 	},
@@ -230,10 +229,10 @@ export interface ExtensionRunnerIdentityOptions {
 export class ExtensionRunner {
 	#uiContext: ExtensionUIContext;
 	/**
-	 * Registry id of the agent this runner drives, when it is a spawned subagent.
+	 * Registry id of the agent this runner drives, when it is a spawned agent.
 	 *
 	 * Undefined for a root session, which needs no attribution: its prompts are
-	 * self-evidently its own. A subagent's are not. The operator answers ONE
+	 * self-evidently its own. An agent's are not. The operator answers ONE
 	 * queue at the root, so two children asking at the same moment are two
 	 * identical cards unless each says who is asking, and an anonymous prompt is
 	 * nearly as bad as no prompt: it can be answered, but not answered correctly.
@@ -264,7 +263,7 @@ export class ExtensionRunner {
 	#reloadHandler: () => Promise<void> = async () => {};
 	#shutdownHandler: ShutdownHandler = () => {};
 	#getMemoryFn?: () => MemoryRuntimeContext | undefined;
-	#commandDiagnostics: Array<{ type: string; message: string; path: string }> = [];
+	#reportedCommandFaults = new Set<string>();
 	#initialized = false;
 	/**
 	 * Buffer for `credential_disabled` events received via {@link emitCredentialDisabled}
@@ -274,6 +273,9 @@ export class ExtensionRunner {
 	 * {@link MAX_PENDING_CREDENTIAL_DISABLED}; oldest entries are dropped under pressure.
 	 */
 	#pendingCredentialDisabled: CredentialDisabledEvent[] = [];
+	#eventBus: EventBus;
+	#adoptSpawnedPid?: (pid: number) => void;
+	#gateSpawn?: (what: string) => Promise<void>;
 
 	constructor(
 		private readonly extensions: LoadedExtension[],
@@ -285,9 +287,15 @@ export class ExtensionRunner {
 		private readonly settings?: Settings,
 		private readonly localProtocolOptions?: LocalProtocolOptions,
 		identity?: ExtensionRunnerIdentityOptions,
+		eventBus?: EventBus,
+		adoptSpawnedPid?: (pid: number) => void,
+		gateSpawn?: (what: string) => Promise<void>,
 	) {
 		this.#uiContext = noOpUIContext;
 		this.#getMemoryFn = getMemory;
+		this.#eventBus = eventBus ?? new EventBus();
+		this.#adoptSpawnedPid = adoptSpawnedPid;
+		this.#gateSpawn = gateSpawn;
 		if (identity) {
 			this.#taskDepth = identity.taskDepth ?? 0;
 			this.#parentTaskPrefix = identity.parentTaskPrefix;
@@ -336,6 +344,8 @@ export class ExtensionRunner {
 		this.runtime.setThinkingLevel = actions.setThinkingLevel;
 		this.runtime.getSessionName = actions.getSessionName;
 		this.runtime.setSessionName = actions.setSessionName;
+		this.runtime.listWorkers = actions.listWorkers;
+		this.runtime.steerWorker = actions.steerWorker;
 
 		// Context actions (required)
 		this.#getModel = contextActions.getModel;
@@ -383,7 +393,7 @@ export class ExtensionRunner {
 	 *
 	 * If {@link initialize} has not yet run, the event is buffered and replayed once
 	 * initialize wires the runtime/UI context. This matters because mode controllers
-	 * (interactive, RPC, ACP, print, subagent) call `initialize()` AFTER `createAgentSession`
+	 * (interactive, RPC, ACP, print, agent) call `initialize()` AFTER `createAgentSession`
 	 * returns, but `AuthStorage` can fire `credential_disabled` during startup model probes
 	 * inside `createAgentSession()`. Without deferral, extension handlers would observe
 	 * `hasUI=false`, an unset model, and no-op runtime actions on exactly the headline
@@ -417,6 +427,108 @@ export class ExtensionRunner {
 
 	getExtensionPaths(): string[] {
 		return this.extensions.map(e => e.path);
+	}
+
+	/**
+	 * Hot-reloads file-based extensions:
+	 * 1. For each loaded extension, emit session_shutdown to its hooks.
+	 * 2. Re-import extension module with cache-busting and re-load extension.
+	 * 3. On failure: retain existing hooks and report failure.
+	 * 4. On success: replace old extension, emit session_start with live session context,
+	 *    register any new providers, and report success with hook count.
+	 */
+	async reloadExtensions(
+		customLoader?: (path: string) => Promise<{ extension: LoadedExtension | null; error: string | null }>,
+	): Promise<ExtensionReloadResult[]> {
+		const results: ExtensionReloadResult[] = [];
+		const targetExtensions = this.extensions.filter(ext => !ext.path.startsWith("<inline"));
+
+		for (const ext of targetExtensions) {
+			// 1. Emit session_shutdown to that extension's hooks
+			const shutdownHandlers = ext.handlers.get("session_shutdown");
+			if (shutdownHandlers && shutdownHandlers.length > 0) {
+				const ctx = this.createContext();
+				const timeoutMs = handlerTimeoutForEvent("session_shutdown");
+				await Promise.all(
+					shutdownHandlers.map(handler =>
+						this.#runHandlerWithTimeout(handler, { type: "session_shutdown" }, ctx, ext, timeoutMs),
+					),
+				);
+			}
+
+			// 2. Re-import with cache-bust & load new extension
+			let loadedResult: { extension: LoadedExtension | null; error: string | null };
+			try {
+				if (customLoader) {
+					loadedResult = await customLoader(ext.path);
+				} else {
+					loadedResult = await loadExtension(
+						ext.path,
+						this.cwd,
+						this.#eventBus,
+						this.runtime,
+						this.#adoptSpawnedPid,
+						this.#gateSpawn,
+					);
+				}
+			} catch (err) {
+				loadedResult = { extension: null, error: errorMessage(err) };
+			}
+
+			// 3. Handle failure: keep old hooks, do not crash or abort others
+			if (!loadedResult.extension || loadedResult.error) {
+				results.push({
+					path: ext.path,
+					status: "failed",
+					error: loadedResult.error ?? "Failed to load extension",
+				});
+				continue;
+			}
+
+			const newExtension = loadedResult.extension;
+
+			// 4. Success: replace old extension registrations with new extension registrations
+			const index = this.extensions.indexOf(ext);
+			if (index !== -1) {
+				this.extensions[index] = newExtension;
+			} else {
+				this.extensions.push(newExtension);
+			}
+
+			// 5. Emit session_start to new extension's hooks with live session context
+			const startHandlers = newExtension.handlers.get("session_start");
+			if (startHandlers && startHandlers.length > 0) {
+				const ctx = this.createContext();
+				const timeoutMs = handlerTimeoutForEvent("session_start");
+				await Promise.all(
+					startHandlers.map(handler =>
+						this.#runHandlerWithTimeout(handler, { type: "session_start" }, ctx, newExtension, timeoutMs),
+					),
+				);
+			}
+
+			// 6. Register any new providers
+			if (this.runtime.pendingProviderRegistrations.length > 0) {
+				for (const { name, config, sourceId } of this.runtime.pendingProviderRegistrations) {
+					this.modelRegistry.registerProvider(name, config, sourceId);
+				}
+				this.runtime.pendingProviderRegistrations = [];
+			}
+
+			// 7. Count hooks in newExtension
+			let hookCount = 0;
+			for (const list of newExtension.handlers.values()) {
+				hookCount += list.length;
+			}
+
+			results.push({
+				path: ext.path,
+				status: "reloaded",
+				hookCount,
+			});
+		}
+
+		return results;
 	}
 
 	/** Get all registered tools from all extensions. */
@@ -552,31 +664,45 @@ export class ExtensionRunner {
 	}
 
 	getRegisteredCommands(reserved?: ReadonlySet<string>): RegisteredCommand[] {
-		this.#commandDiagnostics = [];
-
-		const commands = new Map<string, RegisteredCommand>();
+		const commands = new Map<string, { command: RegisteredCommand; path: string }>();
 		for (const ext of this.extensions) {
 			for (const command of ext.commands.values()) {
 				if (reserved?.has(command.name)) {
-					const message =
+					this.#reportCommandFault(
 						`The extension at ${ext.path} registers the command "/${command.name}", which is a built-in, ` +
-						`so the extension's version is not active and "/${command.name}" still runs the built-in. ` +
-						"Fix: rename it in that extension's source.";
-					this.#commandDiagnostics.push({ type: "warning", message, path: ext.path });
-					if (!this.hasUI()) {
-						logger.warn(message);
-					}
+							`so the extension's version is not active and "/${command.name}" still runs the built-in. ` +
+							"Fix: rename it in that extension's source.",
+						{ path: ext.path, command: command.name },
+					);
 					continue;
 				}
 
-				commands.set(command.name, command);
+				// Last registration wins, the same order `getCommand` resolves, so the
+				// extension already in the map is the one whose command never runs.
+				const shadowed = commands.get(command.name);
+				if (shadowed && shadowed.path !== ext.path) {
+					this.#reportCommandFault(
+						`The extension at ${shadowed.path} registers the command "/${command.name}", which the extension at ` +
+							`${ext.path} also registers, so only the latter's version runs. ` +
+							"Fix: rename it in one extension's source, or drop the extension you do not want.",
+						{ path: shadowed.path, shadowedBy: ext.path, command: command.name },
+					);
+				}
+				commands.set(command.name, { command, path: ext.path });
 			}
 		}
-		return [...commands.values()];
+		return [...commands.values()].map(entry => entry.command);
 	}
 
-	getCommandDiagnostics(): Array<{ type: string; message: string; path: string }> {
-		return this.#commandDiagnostics;
+	/**
+	 * A command-name collision is reported once per session, not once per listing:
+	 * this runs every time the command palette is drawn, and the collision does not
+	 * change between draws.
+	 */
+	#reportCommandFault(text: string, context: Record<string, unknown>): void {
+		if (this.#reportedCommandFaults.has(text)) return;
+		this.#reportedCommandFaults.add(text);
+		reportFault({ source: "extensions", text, context });
 	}
 
 	getCommand(name: string): RegisteredCommand | undefined {
@@ -734,7 +860,7 @@ export class ExtensionRunner {
 					}
 				}
 
-				if (event.type === "session.compacting" && handlerResult) {
+				if (event.type === "session_compacting" && handlerResult) {
 					result = handlerResult as SessionCompactingResult;
 				}
 
@@ -945,13 +1071,16 @@ export class ExtensionRunner {
 				const result = handlerResult as ResourcesDiscoverResult | undefined;
 
 				if (result?.skillPaths?.length) {
-					skillPaths.push(...result.skillPaths.map(path => ({ path, extensionPath: ext.path })));
+					const sp = result.skillPaths.map(path => ({ path, extensionPath: ext.path }));
+					for (let si = 0; si < sp.length; si++) skillPaths.push(sp[si]!);
 				}
 				if (result?.promptPaths?.length) {
-					promptPaths.push(...result.promptPaths.map(path => ({ path, extensionPath: ext.path })));
+					const pp = result.promptPaths.map(path => ({ path, extensionPath: ext.path }));
+					for (let pi = 0; pi < pp.length; pi++) promptPaths.push(pp[pi]!);
 				}
 				if (result?.themePaths?.length) {
-					themePaths.push(...result.themePaths.map(path => ({ path, extensionPath: ext.path })));
+					const tp = result.themePaths.map(path => ({ path, extensionPath: ext.path }));
+					for (let ti = 0; ti < tp.length; ti++) themePaths.push(tp[ti]!);
 				}
 			}
 		}

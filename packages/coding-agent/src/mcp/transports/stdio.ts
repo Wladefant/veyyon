@@ -11,6 +11,8 @@ import { errorMessage, getProjectDir, isThenable, logger, readJsonl, Snowflake, 
 import { RingBuffer } from "@veyyon/utils/ring";
 import type { Subprocess } from "bun";
 import { hostHasInheritableConsole } from "../../eval/py/spawn-options";
+import { buildMcpChildEnv } from "../child-environment";
+import { isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "../timeout";
 import type {
 	JsonRpcError,
 	JsonRpcMessage,
@@ -19,10 +21,10 @@ import type {
 	MCPRequestOptions,
 	MCPStdioServerConfig,
 	MCPTransport,
-} from "../../mcp/types";
-import { toJsonRpcError } from "../../mcp/types";
-import { isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "../timeout";
+} from "../types";
+import { toJsonRpcError } from "../types";
 import { describeJsonRpcError, isUnattributableError, rejectAllPending } from "../unattributable-error";
+import { terminateMcpServerTree } from "./process-tree";
 import { mcpNotConnectedMessage, mcpTimeoutMessage } from "./transport-failure";
 
 /** Subprocess argv and platform-derived spawn flags for an MCP stdio server. */
@@ -247,7 +249,7 @@ function buildCmdExeCommand(command: string, args: readonly string[]): string {
  * Resolve the subprocess argv used to launch an MCP stdio server.
  *
  * On Windows, our PATH/PATHEXT walk may return `null` for a bare command
- * (e.g. `npx`) — `Bun.env.PATH` empty under a restricted parent process,
+ * (e.g. `npx`) — `process.env.PATH` empty under a restricted parent process,
  * UNC/network mounts that reject `fs.access`, locked-down shells. The
  * legacy fallback handed `Bun.spawn` the bare name, but `CreateProcess`
  * only appends `.exe` for extensionless names — `.cmd`/`.bat` are never
@@ -398,6 +400,12 @@ export class StdioTransport implements MCPTransport {
 	onRequest?: (method: string, params: unknown) => Promise<unknown>;
 	/** Session CPU budget hook: the freshly spawned server pid is handed here so it joins the session's budget group. */
 	onSpawnPid?: (pid: number) => void;
+	/**
+	 * Called before the stdio subprocess is created. A session CPU budget
+	 * passes the spawn gate here so a saturated or uncreated group refuses
+	 * the server instead of launching it and adopting afterwards.
+	 */
+	beforeSpawn?: () => Promise<void>;
 
 	constructor(private config: MCPStdioServerConfig) {}
 
@@ -411,10 +419,18 @@ export class StdioTransport implements MCPTransport {
 	async connect(): Promise<void> {
 		if (this.#connected) return;
 
-		const env = {
-			...Bun.env,
-			...this.config.env,
-		};
+		// A server sees what a program needs in order to run, plus what the operator named. The
+		// whole ambient environment used to be handed over, which made every credential on the
+		// machine readable by a subprocess nobody reads. `mcp/child-environment.ts` owns the rule.
+		const { env, withheld, inherited } = buildMcpChildEnv(this.config, Bun.env, process.platform);
+		if (inherited) {
+			logger.warn("MCP server spawned with the whole environment", {
+				command: this.config.command,
+				reason: "inheritEnv is set for this server, so every ambient credential is readable by it",
+			});
+		} else if (withheld.length > 0) {
+			logger.debug("MCP server environment bounded", { command: this.config.command, withheld });
+		}
 		const cwd = this.config.cwd ?? getProjectDir();
 		const spawnCommand = await resolveStdioSpawnCommand(this.config, {
 			cwd,
@@ -433,6 +449,7 @@ export class StdioTransport implements MCPTransport {
 		// triggers macOS Apple Events TCC prompts uses the same shape; the
 		// one-object `{ cmd }` overload timed out before prompting for `mcpbridge`
 		// even with `detached: false` (#5085).
+		await this.beforeSpawn?.();
 		this.#process = Bun.spawn(spawnCommand.cmd, {
 			cwd,
 			env,
@@ -804,8 +821,21 @@ export class StdioTransport implements MCPTransport {
 		}
 
 		if (this.#process) {
-			this.#process.kill();
+			const child = this.#process;
+			// Cleared before the await so a concurrent or repeat close is a no-op rather
+			// than a second teardown of the same tree.
 			this.#process = null;
+			// A wrapper (`npx`, `uvx`, `docker run`, a shell script) is what veyyon
+			// spawned; the server itself is usually its grandchild. `child.kill()` alone
+			// left that grandchild running with the environment it was handed.
+			const reaped = await terminateMcpServerTree(child.pid);
+			if (!reaped) {
+				child.kill();
+				logger.debug("MCP server tree was not confirmed gone; signalled the child directly", {
+					server: this.config.command,
+					pid: child.pid,
+				});
+			}
 		}
 
 		if (this.#readLoop) {

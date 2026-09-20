@@ -2,7 +2,7 @@
 
 You choose an endpoint and a model id. Veyyon then calls that provider's API directly with your credentials. The endpoint can be a local server, a hosted API, or any OpenAI-compatible gateway.
 
-- Contract (what the harness owns vs the provider): [Model contract](../concepts/model-contract.md)
+- Contract (harness responsibilities vs provider responsibilities): [Model contract](../concepts/model-contract.md)
 - Copy-paste provider setups: [Configuring providers](./configuring-providers.md)
 - Built-in provider stack internals: [Provider stack and BYOK](../models/providers.md)
 
@@ -14,7 +14,7 @@ Set the key one of three ways:
 
 - The provider's environment variable (see [Providers](../models/providers.md) for the full map), or
 - `/login` inside the TUI, which stores the credential in the auth store, or
-- A `models.yml` `apiKey` on a custom provider (env-var name or literal).
+- A `models.yml` `apiKey` on a custom provider (an env-var name, or `literal:<text>`).
 
 See [Signing in](./authentication.md) for storage modes and [Configuring providers](./configuring-providers.md)
 for full `models.yml` examples.
@@ -48,7 +48,7 @@ selectable when it is not in `disabledProviders` **and** it is keyless or has re
 
 | Provider id | Notes |
 | --- | --- |
-| `anthropic`, `openai`, `google`, `groq`, … | Cloud providers; set the env var. Some (for example `anthropic`) also support `/login <id>`; see [providers](../../../providers.md). |
+| `anthropic`, `openai`, `google`, `groq`, … | Cloud providers; set the env var. Some (for example `anthropic`) also support `/login <id>`; see [providers](../reference/providers.md). |
 | `amazon-bedrock` | Uses the AWS credential chain (`AWS_PROFILE`, instance role, …). |
 | `ollama`, `lm-studio`, `llama.cpp` | Local engines, discovered automatically and keyless by default. |
 
@@ -79,9 +79,9 @@ explicit `models.yml` entry for one of these ids replaces its built-in discovery
 
 | Action | What it changes | What it does **not** change |
 | --- | --- | --- |
-| `/model` (or restart with `--model`) | The **interactive** model for subsequent turns | The subagent and compaction models |
+| `/model` (or restart with `--model`) | The **interactive** model for subsequent turns | The agent and compaction models |
 
-Switching the interactive model mid-session never blends through a fallback chain into the subagent or
+Switching the interactive model mid-session never blends through a fallback chain into the agent or
 compaction model. `/model` shows the current interactive model; `/session info` shows session stats.
 `veyyon plugin doctor` checks plugin installation health.
 
@@ -98,7 +98,7 @@ $ veyyon --model openai/gpt-5
 | --- | --- | --- |
 | **Interactive model** | Main conversation | `/model`, `--model`; persisted as `modelRoles.default` |
 | **Roles** | Named assignments (`smol`, `slow`, `plan`, `advisor`, …) | `modelRoles` / Settings → Model → Roles |
-| **Subagent policy** | Blanket and per-agent model and effort choices | `subagent.model`, `subagent.thinkingLevel`, and `subagent.agents` |
+| **Agent policy** | Per-agent choices, or one pair for the whole roster | `agent.agents`, or `agent.sharedModel` with `agent.model` and `agent.thinkingLevel` |
 | **Compaction override** | Compaction / handoff | `compaction.model` (else inherit interactive) |
 
 ```yaml
@@ -108,7 +108,7 @@ modelRoles:
   smol: openai/gpt-4.1-mini
   slow: anthropic/claude-opus-4-5:high
   plan: anthropic/claude-sonnet-5
-subagent:
+agent:
   model: deepseek/deepseek-chat:high
   agents:
     reviewer:
@@ -136,7 +136,7 @@ harness:
   profiles:
     "openai/gpt-4.1":
       repair: true
-      tools: ["read", "edit", "grep", "bash", "write"]
+      tools: ["read", "edit", "search", "bash", "write"]
       promptSectionOrder: ["tool-policy", "delivery-contract"]
 ```
 
@@ -145,7 +145,7 @@ harness:
 profiles:
   "openai/gpt-4.1":
     repair: true
-    tools: ["read", "edit", "grep", "bash", "write"]
+    tools: ["read", "edit", "search", "bash", "write"]
     promptSectionOrder: ["tool-policy", "delivery-contract"]
 ```
 
@@ -165,7 +165,7 @@ $ veyyon --model openrouter/anthropic/claude-sonnet-4
 | Constraint | Typical choice |
 | --- | --- |
 | Tool-heavy refactors | Hosted model with tool calling |
-| Long sessions / subagents | Choose cheaper models under `subagent` and `compaction.model` |
+| Long sessions / agents | Choose cheaper models under `agent` and `compaction.model` |
 | Low latency | Local or flash-tier cloud |
 | Offline / private code | Ollama, LM Studio, llama.cpp |
 | CI | Pin exact `provider/id` with `--model` |

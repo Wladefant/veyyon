@@ -3,17 +3,18 @@ import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { Agent } from "@veyyon/agent-core";
 import type { ApiKeyResolveContext, AssistantMessage, AssistantRetryRecovery, Usage } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import * as aiStream from "@veyyon/ai/stream";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { resolveAssistantErrorPresentation } from "@veyyon/coding-agent/modes/utils/transcript-render-helpers";
-import { AgentSession, type AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
+import { resolveAssistantErrorPresentation } from "@veyyon/coding-agent/presentation/transcript-builder";
+import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 import { SILENT_ABORT_MARKER } from "@veyyon/coding-agent/session/messages";
-import type { SessionMessageEntry } from "@veyyon/coding-agent/session/session-entries";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import type { SessionMessageEntry } from "@veyyon/kernel/session/session-entries";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 
 type AutoRetryEndEvent = Extract<AgentSessionEvent, { type: "auto_retry_end" }>;
@@ -151,6 +152,14 @@ describe("AgentSession retry recovery", () => {
 			throw new Error("Expected bundled Anthropic test model to exist");
 		}
 
+		// This run is ABOUT moving between two credentials of one provider, which is
+		// `accounts.loadBalancing`, and that ships OFF: the account selected is the account that
+		// spends. So the movement is opted into explicitly, on a storage rebuilt for it, rather than
+		// inherited from a default this suite neither sets nor controls.
+		authStorage.close();
+		authStorage = await AuthStorage.create(path.join(tempDir.path(), "balanced-auth.db"), { loadBalancing: true });
+		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+
 		authStorage.removeRuntimeApiKey("anthropic");
 		await authStorage.set("anthropic", [
 			{ type: "api_key", key: "anthropic-key-1" },
@@ -248,7 +257,8 @@ describe("AgentSession retry recovery", () => {
 		expect(Date.parse(recoveredEntry.message.retryRecovery?.recoveredAt ?? "")).not.toBeNaN();
 
 		const modelContext = sessionManager.buildSessionContext();
-		expect(modelContext.messages.map(message => message.role)).toEqual(["user", "assistant"]);
+		// See the reload case below for why a `custom` message leads the turn.
+		expect(modelContext.messages.map(message => message.role)).toEqual(["custom", "user", "assistant"]);
 		expect(
 			modelContext.messages.some(message => message.role === "assistant" && message.stopReason === "error"),
 		).toBe(false);
@@ -258,7 +268,12 @@ describe("AgentSession retry recovery", () => {
 		});
 
 		const transcriptContext = sessionManager.buildSessionContext({ transcript: true });
-		expect(transcriptContext.messages.map(message => message.role)).toEqual(["user", "assistant", "assistant"]);
+		expect(transcriptContext.messages.map(message => message.role)).toEqual([
+			"custom",
+			"user",
+			"assistant",
+			"assistant",
+		]);
 		expect(
 			transcriptContext.messages.some(
 				message => message.role === "assistant" && message.retryRecovery?.status === "recovered",
@@ -390,7 +405,12 @@ describe("AgentSession retry recovery", () => {
 		});
 
 		const modelContext = reloadedManager.buildSessionContext();
-		expect(modelContext.messages.map(message => message.role)).toEqual(["user", "assistant"]);
+		// The leading `custom` message is the per-turn session-state line (date and
+		// working directory). It became part of the conversation when the working
+		// directory left the cached prompt prefix, so the model context of any real
+		// turn carries one ahead of the question. What this case is about is the
+		// recovered error assistant, which is still absent.
+		expect(modelContext.messages.map(message => message.role)).toEqual(["custom", "user", "assistant"]);
 		expect(
 			modelContext.messages.some(message => message.role === "assistant" && message.stopReason === "error"),
 		).toBe(false);

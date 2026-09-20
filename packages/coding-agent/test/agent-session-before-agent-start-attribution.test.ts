@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent, type AgentMessage } from "@veyyon/agent-core";
 import type { Message } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { inferCopilotInitiator } from "@veyyon/ai/providers/github-copilot-headers";
 import { createMockModel } from "@veyyon/ai/providers/mock";
 import { getBundledModel } from "@veyyon/catalog/models";
@@ -9,9 +10,8 @@ import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ExtensionRunner } from "@veyyon/coding-agent/extensibility/extensions";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
 import { convertToLlm } from "@veyyon/coding-agent/session/messages";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 
 describe("AgentSession before_agent_start attribution fallback", () => {

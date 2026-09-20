@@ -17,10 +17,13 @@
  * behavior on each axis rather than the average one.
  */
 
+// @ts-expect-error — plain .mjs module, no types; imported for its exports.
+import { FORK_POINT_VERSION } from "../apps/site/tools/gen-changelog.mjs";
 // By relative path, not "@veyyon/utils/semver". `checks.yml::changelog` and
 // `ci.yml::release_notes_dryrun` run the scripts that reach this file without a
 // `bun install`, so `node_modules/@veyyon/utils` does not exist there and the
 // package specifier fails to resolve. `semver.ts` imports nothing of its own.
+// Both stay relative for that reason.
 import { RELEASE_VERSION_BODY } from "../packages/utils/src/semver";
 
 /** The heading, anchored to a line. */
@@ -137,4 +140,33 @@ export function versionHeadings(md: string): Array<{ version: string; line: numb
  */
 export function hasVersionHeading(md: string, version: string): boolean {
 	return versionHeadings(md).some(heading => heading.version === version);
+}
+
+/**
+ * The fork-point heading's index and 1-based line, or null when the changelog
+ * carries no inherited history.
+ *
+ * Veyyon's version line restarted at 1.0.0 while every package kept the
+ * upstream sections it shipped under oh-my-pi and, before that, pi-mono. A
+ * number veyyon releases can therefore equal one an upstream package already
+ * released: `hosts/terminal/engine/CHANGELOG.md` carries `## [1.5.0] -
+ * 2026-01-03` from pi-mono, and veyyon cut its own 1.5.0 on 2026-09-18. Every
+ * rule about a veyyon release reads the region above this heading; at and below
+ * it the file is immutable upstream history under someone else's numbering.
+ */
+export function forkPoint(md: string): { index: number; line: number } | null {
+	// Through `versionHeadings`, not a substring search: `## [16.5.2]` occurs
+	// inside `### [16.5.2]` and inside prose that names the version, and either
+	// one would move the boundary to a line that is not a release heading.
+	const heading = versionHeadings(md).find(found => found.version === FORK_POINT_VERSION);
+	if (heading === undefined) return null;
+	const lines = md.split("\n");
+	const index = lines.slice(0, heading.line - 1).reduce((offset, text) => offset + text.length + 1, 0);
+	return { index, line: heading.line };
+}
+
+/** The span of a changelog veyyon released: everything above the fork point. */
+export function veyyonOwnedRegion(md: string): string {
+	const fork = forkPoint(md);
+	return fork === null ? md : md.slice(0, fork.index);
 }

@@ -9,21 +9,22 @@
  * for a credential without showing it, and that difference is one injected function
  * ({@link SecretCommandPort.promptForValue}) rather than a second copy of the logic.
  */
-import { DEFAULT_MASK_CHAR } from "@veyyon/tui";
+
+import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { errorMessage, getAgentDir, getGlobalConfigRootDir, logger } from "@veyyon/utils";
 import type { Settings } from "../../config/settings";
-import type { InteractiveModeContext } from "../../modes/types";
+import type { InteractiveModeContext } from "../../modes/terminal/types";
 import { SecretAuditLog, secretAuditPath } from "../../secrets/audit";
 import {
 	needsValuePrompt,
 	parseSecretCommand,
 	resolveDefaultTtl,
 	runSecretCommand,
+	SECRET_ENTRY_COMMANDS,
 	type SecretCommandResult,
 } from "../../secrets/secret-command";
 import { normaliseSecretName, resolveVaultLocations, SecretVault, type VaultLocations } from "../../secrets/vault";
 import type { AgentSession } from "../../session/agent-session";
-import type { SessionManager } from "../../session/session-manager";
 import { copyToClipboard } from "../../utils/clipboard";
 
 /** What `/secret` needs from whichever surface invoked it. */
@@ -41,10 +42,10 @@ export interface SecretCommandPort {
 	 *
 	 * A surface that cannot mask must NOT substitute an unmasked prompt: that would put the value
 	 * in the scrollback while looking like the safe path. Absent means "tell them to use
-	 * `--from-env`", which is what {@link runSecretCommand} does.
+	 * `from-env`", which is what {@link runSecretCommand} does.
 	 *
-	 * Takes no name, because there is never one to take: the field is what a bare `/secret` opens,
-	 * and the name is asked after the value is in hand.
+	 * Takes no name, because there is never one to take: the field is what a valueless `/secret add`
+	 * opens, and the name is asked after the value is in hand.
 	 */
 	promptForValue?: () => Promise<string | undefined>;
 	/**
@@ -95,16 +96,20 @@ export async function runSecretCommandForSurface(args: string, port: SecretComma
 	const surface = port.promptForValue === undefined ? "noninteractive" : "tui";
 	const request = parseSecretCommand(args, surface);
 	if (request.name !== undefined) request.name = normaliseSecretName(request.name);
-	// BOTH VERBS THAT CARRY A CREDENTIAL. `value` replaces one, so an inline value on this surface
-	// would be retained in exactly the same command history for exactly the same reason.
+	// A GUARD, NOT GRAMMAR. `parseSecretCommand` refuses an inline credential on this surface before
+	// it can reach here, for both verbs that carry one: `add` takes no words at all on a client, and
+	// `value` reads a name and a `from-env` pair and nothing else. This stays because the function is
+	// exported and a caller may hand it a hand-built request, and because the thing it fails closed on
+	// is a credential in a request log -- the one class of mistake that is invisible until it is spent.
 	if (
 		(request.subcommand === "add" || request.subcommand === "value") &&
 		request.value !== undefined &&
 		port.promptForValue === undefined
 	) {
 		throw new Error(
-			`This non-interactive client refuses inline credentials because they would be retained in command history. ` +
-				`Use /secret ${request.subcommand} ${request.name ?? "<name>"} --from-env MY_TOKEN instead.`,
+			`This client refuses an inline credential, because the line carrying it is retained in the client's ` +
+				`own request history. Nothing was stored. Read the value out of the environment instead: ` +
+				`/secret from-env MY_TOKEN ${request.name ?? "<name>"}.`,
 		);
 	}
 	const needsDefaultTtl =
@@ -120,9 +125,9 @@ export async function runSecretCommandForSurface(args: string, port: SecretComma
 		: undefined;
 
 	if (needsValuePrompt(request) && port.promptForValue !== undefined) {
-		// The masked field is the whole of a bare `/secret`: there is no name yet and nothing else
-		// to ask first. Its title has to carry the distinction on its own, which is why
-		// `maskedPromptTitle` says "value, not a name" rather than anything shorter.
+		// The masked field is the whole of `/secret add` with nothing after it: there is no name yet
+		// and nothing else to ask first. Its title has to carry the distinction on its own, which is
+		// why `maskedPromptTitle` says "value, not a name" rather than anything shorter.
 		const typed = await port.promptForValue();
 		if (typed === undefined) return { message: "Cancelled. Nothing was stored.", cancelled: true };
 		if (typed.length === 0) return { message: "Nothing was typed, so nothing was stored.", cancelled: true };
@@ -164,6 +169,10 @@ export async function runSecretCommandForSurface(args: string, port: SecretComma
 		now: Date.now(),
 		auditLog,
 		surface,
+		// ONE COUNTER, ON THE OBFUSCATOR. `list` reads `maskedInventory()` off the same obfuscator
+		// that masks the session, so what it names is what would be redacted; a count derived
+		// anywhere else is the defect being fixed, not a fix.
+		masked: port.session.obfuscator?.maskedInventory(),
 	});
 
 	// THE CLIPBOARD BELONGS TO THE SURFACE. The command layer decides what is worth copying and
@@ -188,8 +197,16 @@ export async function runSecretCommandForSurface(args: string, port: SecretComma
 	// it can do is hide more. It is announced in the confirmation rather than done quietly,
 	// because it changes what happens to environment variables and `secrets.yml` too, and a
 	// setting that changes itself without saying so is its own bug.
+	//
+	// EVERY COMMAND THAT STORES ONE, from `SECRET_ENTRY_COMMANDS` rather than a name written here: this
+	// read `request.subcommand === "add"` while `from-env` was a modifier on `add`, and kept reading it
+	// after `from-env` became a command of its own, so a client's first credential -- which can only
+	// arrive through `from-env`, since a client cannot take a value inline -- was stored with protection
+	// left off.
 	const enabledByThisCommand =
-		result.changed && request.subcommand === "add" && port.settings.get("secrets.enabled") !== true;
+		result.changed &&
+		SECRET_ENTRY_COMMANDS.includes(request.subcommand) &&
+		port.settings.get("secrets.enabled") !== true;
 	/**
 	 * WHY THIS FLUSHES RATHER THAN TRUSTING `set`. `Settings.set` only QUEUES a debounced write,
 	 * and nothing on this path called `flush`, so any short-lived surface exited before the timer
@@ -207,7 +224,10 @@ export async function runSecretCommandForSurface(args: string, port: SecretComma
 			await port.settings.flush();
 		} catch (error) {
 			enableSaveFailure = errorMessage(error);
-			logger.warn("secrets: could not persist secrets.enabled after /secret add", { error: enableSaveFailure });
+			logger.warn("secrets: could not persist secrets.enabled after storing a credential", {
+				command: request.subcommand,
+				error: enableSaveFailure,
+			});
 		}
 	}
 
@@ -318,8 +338,8 @@ export function namePromptHint(): string {
 /**
  * Prompt title for the masked field: the imperative, and the promise that the name comes later.
  *
- * TWO SENTENCES, BECAUSE IT IS THE FIRST THING `/secret` DOES. The field is what a bare `/secret`
- * opens, before any name exists, so the only two things worth saying are what to put in it and
+ * TWO SENTENCES, BECAUSE IT IS THE FIRST THING `/secret add` DOES. The field is what a valueless
+ * `/secret add` opens, before any name exists, so the only two things worth saying are what to put in it and
  * that a label is still coming. Without the second sentence an operator who wants to name the
  * secret has no reason to believe they will get the chance, and the pressure to answer a MASKED
  * field with a name comes straight back. This carried four clauses in one accent colour once (the
@@ -372,8 +392,7 @@ export function interactiveSecretPort(ctx: SecretPortHost): SecretCommandPort {
 		cwd: ctx.sessionManager.getCwd(),
 		globalConfigRoot: getGlobalConfigRootDir(),
 		agentDir: getAgentDir(),
-		promptForValue: () =>
-			ctx.showHookInput(maskedPromptTitle(), undefined, { mask: DEFAULT_MASK_CHAR, hint: maskedPromptHint() }),
+		promptForValue: () => ctx.showHookInput(maskedPromptTitle(), undefined, { mask: true, hint: maskedPromptHint() }),
 		// Deliberately unmasked: a name is not a credential, and the operator seeing this field echo
 		// after the hidden one is what distinguishes the two questions.
 		promptForName: () => ctx.showHookInput(namePromptTitle(), undefined, { hint: namePromptHint() }),

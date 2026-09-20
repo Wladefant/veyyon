@@ -393,13 +393,15 @@ describe("the files the remote rung puts back after honouring .gitignore", () =>
 	/**
 	 * The safety rail on the fix. `git ls-files --others --ignored` collapses a wholly
 	 * ignored directory into one entry and disregards the pathspec when it does, so
-	 * the unfiltered answer offers to re-include `packages/deepswe-bench/repo-cache`:
+	 * the unfiltered answer offers to re-include `tests/evals/datasets/repo-cache`:
 	 * thousands of cloned repositories, tens of gigabytes, on every test run over the
 	 * LAN. Nothing that is not a regular file under a package's own src is put back.
 	 */
 	it("puts back nothing but regular files under a package's own src", () => {
 		for (const line of includeLines()) {
-			expect(line).toMatch(/^\+ \/packages\/[^/]+\/src\/[^\n]*[^/]$/);
+			expect(line).toMatch(
+				/^\+ \/((packages|contracts|hosts|apps|clients|plugins|natives)\/[^/]+|kernel)\/src\/[^\n]*[^/]$/,
+			);
 		}
 	});
 });

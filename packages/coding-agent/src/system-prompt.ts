@@ -17,24 +17,26 @@ import {
 	looksLikeFilePath,
 	prompt,
 } from "@veyyon/utils";
-import { contextFileCapability } from "./capability/context-file";
 import { findConfigFile } from "./config";
-import type { SkillsSettings } from "./config/settings";
-import { type ContextFile, loadCapability } from "./discovery";
-import { ensureManagedAgentsFilesOnStartup, getGlobalAgentsPath } from "./discovery/agents-guidance";
-import { expandAtImports } from "./discovery/at-imports";
-import { loadSkills, type Skill } from "./extensibility/skills";
-import { hasObsidian } from "./internal-urls/vault-protocol";
 import {
 	BUILTIN_PERSONALITIES,
 	DEFAULT_PERSONALITY_NAME,
 	type ResolvedPersonality,
 	resolvePersonality,
-} from "./personality/resolver";
+} from "./config/personality-resolver";
+import type { SkillsSettings } from "./config/settings";
+import { type ContextFile, loadCapability } from "./discovery";
+import { ensureManagedAgentsFilesOnStartup, getGlobalAgentsPath } from "./discovery/agents-guidance";
+import { expandAtImports } from "./discovery/at-imports";
+import { contextFileCapability } from "./discovery/capability/context-file";
+import { loadSkills, type Skill } from "./extensibility/skills";
+import { hasObsidian } from "./internal-urls/vault-protocol";
+import { assertEvalPromptOverrideIdsExist } from "./prompts/eval-overrides";
 import { sessionPrompts } from "./prompts/session/rows";
 import {
 	assembleDefaultTemplate,
 	assembleStatementSections,
+	type DefaultTemplateSections,
 	parseSectionOverridesJson,
 } from "./system-prompt-builder/default-template";
 import { type GateInputs, OMITTED_GATE_DEFAULTS } from "./system-prompt-builder/gate-inputs";
@@ -63,11 +65,10 @@ import {
 import { normalizeConcurrencyLimit } from "./task/parallel";
 import { usesCodexTaskPrompt } from "./task/prompt-policy";
 import type { ContextFileEntry } from "./tools";
-import { shortenPath } from "./tools/render-utils";
-import { isNonProjectRoot, NON_PROJECT_REASON_TEXT, type NonProjectReason } from "./tools/reroot-hint";
+import { shortenPath } from "./tools/core/render-utils";
+import { isNonProjectRoot, NON_PROJECT_REASON_TEXT, type NonProjectReason } from "./tools/fs/reroot-hint";
 import { type ActiveRepoContext, resolveActiveRepoContext } from "./utils/active-repo-context";
 import { getCachedGpu, getCpuModel, getEnvironmentInfo } from "./utils/host-environment";
-import { formatLocalCalendarDate } from "./utils/local-date";
 import { normalizePromptPath } from "./utils/prompt-path";
 import { AGENTS_MD_LIMIT, buildWorkspaceTree, type WorkspaceTree } from "./workspace-tree";
 
@@ -360,7 +361,7 @@ export async function loadProjectContextFilesWithWarnings(
 		cwd: resolvedCwd,
 		agentDir: resolvedAgentDir,
 	});
-	const warnings = [...result.warnings];
+	const warnings = result.warnings.slice();
 
 	// Materialize ContextFile items, expanding any `@path/to/file` includes
 	// in their content. The expansion uses the file's own directory as the
@@ -389,7 +390,7 @@ export async function loadProjectContextFilesWithWarnings(
 	//
 	// This used to rank global FIRST, which is the WEAKEST recency position, putting every
 	// project file above it. The operator hit the consequence: a repository's AGENTS.md saying
-	// "do not use subagents for this repository" was obeyed over their own global rules AND over
+	// "do not use agents for this repository" was obeyed over their own global rules AND over
 	// a live instruction to use them. The prose in `prompts/session/context-file-authority.md`
 	// ranked global highest while this sort put it lowest, and position won.
 	//
@@ -522,7 +523,7 @@ export interface BuildSystemPromptOptions extends Partial<GateInputs> {
 	 *
 	 * So `contextFiles: someArray` at a call site is never harmless data passing. Handing this a
 	 * list that a filter reduced to `[]` disables every scope the operator wrote, which is how
-	 * three spawn sites silently stripped every `AGENTS.md` from every subagent. A caller that
+	 * three spawn sites silently stripped every `AGENTS.md` from every agent. A caller that
 	 * cannot resolve its own list passes `undefined`, never `[]`; see
 	 * `task/context-inheritance.ts`, which returns `undefined` for exactly this reason. Taking the
 	 * empty branch is logged, so an accidental `[]` is visible in the operator's log instead of
@@ -624,7 +625,7 @@ export interface BuildSystemPromptResult {
  * `config.yml` — on a developer's machine or in production — could silently
  * swap a section of the system prompt, which is exactly the contamination this
  * must never allow. It is therefore reachable ONLY through
- * `VEYYON_EVAL_SYSTEM_PROMPT_SECTIONS`, an env var the deepswe-bench harness
+ * `VEYYON_EVAL_SYSTEM_PROMPT_SECTIONS`, an env var the eval harness
  * sets around a single arm and nothing else sets. There is no config key, no
  * CLI flag, and no `BuildSystemPromptOptions` field — so a normal run cannot
  * reach this path at all.
@@ -636,7 +637,7 @@ export interface BuildSystemPromptResult {
  * rather than silently reverting to production, which would invalidate the eval
  * while looking like it succeeded.
  */
-function resolveEvalSectionOverrides(): ReturnType<typeof parseSectionOverridesJson> {
+function resolveEvalSectionOverrides(): Partial<DefaultTemplateSections> {
 	const raw = $env.VEYYON_EVAL_SYSTEM_PROMPT_SECTIONS;
 	const overrides = parseSectionOverridesJson(raw);
 	const keys = Object.keys(overrides);
@@ -720,7 +721,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		taskBatch = OMITTED_GATE_DEFAULTS.taskBatch,
 		taskMaxConcurrency = OMITTED_GATE_DEFAULTS.taskMaxConcurrency,
 		taskIrcEnabled = OMITTED_GATE_DEFAULTS.taskIrcEnabled,
-		subagentNames = OMITTED_GATE_DEFAULTS.subagentNames,
+		agentNames = OMITTED_GATE_DEFAULTS.agentNames,
 		secretsEnabled = false,
 		// `argotPreamble`, `argotHandles` and `secretInventory` are deliberately NOT
 		// destructured here. They are option-backed runtime sections, so the assembler
@@ -941,15 +942,13 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		}
 	}
 
-	const date = formatLocalCalendarDate();
-	const dateTime = date;
 	const promptCwd = shortenPath(normalizePromptPath(resolvedCwd));
 
 	// Build tool metadata for system prompt rendering.
 	// Priority: explicit list > tools map > conservative SDK fallback.
 	let toolNames = providedToolNames;
 	if (!toolNames) {
-		toolNames = tools ? Array.from(tools.keys()) : [...DEFAULT_SYSTEM_PROMPT_TOOL_NAMES];
+		toolNames = tools ? Array.from(tools.keys()) : DEFAULT_SYSTEM_PROMPT_TOOL_NAMES.slice();
 	}
 
 	// Build tool descriptions for system prompt rendering.
@@ -1022,8 +1021,6 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		skills: filteredSkills,
 		rules: rules ?? [],
 		alwaysApplyRules: injectedAlwaysApplyRules,
-		date,
-		dateTime,
 		cwd: promptCwd,
 		model: includeModelInPrompt ? (model ?? "") : "",
 		useCodexTaskPrompt: usesCodexTaskPrompt(model),
@@ -1038,23 +1035,28 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		taskBatch,
 		MAX_CONCURRENCY: normalizeConcurrencyLimit(taskMaxConcurrency),
 		taskIrcEnabled,
-		subagentNames,
+		agentNames,
 		// Whether ANYTHING can be spawned, which gates the delegation guidance as a whole.
 		//
-		// The task tool is built whenever `subagent.enabled` is on, and it stays built with every agent
+		// The task tool is built whenever `agent.enabled` is on, and it stays built with every agent
 		// row disabled ON PURPOSE, because an ephemeral `/` command that names an agent is the operator
 		// asking directly and is granted per turn. The model-facing PROSE is a different matter: with
 		// nothing the model may choose, "fan the work out" is an instruction it can only fail, and the
 		// agent-typing bullet interpolated an empty list and read "Only one agent type is enabled here
 		// (``)" while telling the model to delegate for parallelism. `resolveDelegation` has always
 		// computed this state and named it `blockedBy: "no-enabled-agents"`; nothing consumed it.
-		hasSpawnableSubagent: subagentNames.length > 0,
+		hasSpawnableAgent: agentNames.length > 0,
 		secretsEnabled,
 		hasMemoryRoot: memoryRootEnabled,
 		hasObsidian: hasObsidian(),
 		includeWorkspaceTree,
 		renderMermaid,
 	};
+	// A `VEYYON_EVAL_PROMPTS` id this build does not have is refused here, against the
+	// generated id space of every registry. Assembly is before the first model call, so a
+	// typo costs one hard error instead of an arm's worth of trials that quietly ran the
+	// shipped prompt under a treatment's name.
+	assertEvalPromptOverrideIdsExist();
 	const evalSectionOverrides = resolveEvalSectionOverrides();
 	const evalStatementOverrides = resolveEvalStatementOverrides();
 	const overriddenStatementIds = Object.keys(evalStatementOverrides);
@@ -1091,7 +1093,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		? TEMPLATE_SECTIONS.filter(section => Object.hasOwn(evalSectionOverrides, kebabToCamel(section.id))).map(
 				section => section.id,
 			)
-		: [...new Set(sectionOverrideFiles.filter(file => file.mode === "replace").map(file => file.id))];
+		: Array.from(new Set(sectionOverrideFiles.filter(file => file.mode === "replace").map(file => file.id)));
 	const overriddenStatementSections = new Set(overriddenStatementIds.map(id => id.slice(0, id.indexOf("/"))));
 	const overlappingSections = replacedStatementSections.filter(section => overriddenStatementSections.has(section));
 	if (overlappingSections.length > 0) {

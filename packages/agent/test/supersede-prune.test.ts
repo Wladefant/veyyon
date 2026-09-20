@@ -107,7 +107,7 @@ const BIG_TEXT = "const value = computeSomething(12345);\n".repeat(500);
 
 describe("readToolSupersedeKey", () => {
 	test("bare path keys on itself; non-read and non-string paths are exempt", () => {
-		expect(readToolSupersedeKey("read", { path: "src/foo.ts" })).toBe("src/foo.ts");
+		expect(readToolSupersedeKey("read", { path: "src/foo.ts" })).toEqual(["src/foo.ts"]);
 		expect(readToolSupersedeKey("bash", { path: "src/foo.ts" })).toBeUndefined();
 		expect(readToolSupersedeKey("read", { path: 42 })).toBeUndefined();
 		expect(readToolSupersedeKey("read", {})).toBeUndefined();
@@ -119,17 +119,25 @@ describe("readToolSupersedeKey", () => {
 	});
 
 	test("strips trailing selectors into a \\u0000-separated key", () => {
-		expect(readToolSupersedeKey("read", { path: "src/foo.ts:50-200" })).toBe("src/foo.ts\u000050-200");
-		expect(readToolSupersedeKey("read", { path: "src/foo.ts:raw" })).toBe("src/foo.ts\u0000raw");
-		expect(readToolSupersedeKey("read", { path: "src/foo.ts:conflicts" })).toBe("src/foo.ts\u0000conflicts");
-		expect(readToolSupersedeKey("read", { path: "src/foo.ts:2-4:raw" })).toBe("src/foo.ts\u00002-4:raw");
-		expect(readToolSupersedeKey("read", { path: "src/foo.ts:5-16,960-973" })).toBe("src/foo.ts\u00005-16,960-973");
-		expect(readToolSupersedeKey("read", { path: "src/foo.ts:50+150" })).toBe("src/foo.ts\u000050+150");
+		expect(readToolSupersedeKey("read", { path: "src/foo.ts:50-200" })).toEqual(["src/foo.ts\u000050-200"]);
+		expect(readToolSupersedeKey("read", { path: "src/foo.ts:raw" })).toEqual(["src/foo.ts\u0000raw"]);
+		expect(readToolSupersedeKey("read", { path: "src/foo.ts:conflicts" })).toEqual(["src/foo.ts\u0000conflicts"]);
+		expect(readToolSupersedeKey("read", { path: "src/foo.ts:2-4:raw" })).toEqual(["src/foo.ts\u00002-4:raw"]);
+		expect(readToolSupersedeKey("read", { path: "src/foo.ts:5-16,960-973" })).toEqual([
+			"src/foo.ts\u00005-16,960-973",
+		]);
+		expect(readToolSupersedeKey("read", { path: "src/foo.ts:50+150" })).toEqual(["src/foo.ts\u000050+150"]);
+	});
+
+	test("splits multi-target paths and exempts URL schemes per target", () => {
+		expect(
+			readToolSupersedeKey("read", { path: "src/foo.ts:50-200; skill://beta:raw; C:\\src\\main.ts:1-5" }),
+		).toEqual(["src/foo.ts\u000050-200", "C:\\src\\main.ts\u00001-5"]);
 	});
 
 	test("does not strip non-selector colon segments", () => {
-		expect(readToolSupersedeKey("read", { path: "db.sqlite:users" })).toBe("db.sqlite:users");
-		expect(readToolSupersedeKey("read", { path: "db.sqlite:users:42" })).toBe("db.sqlite:users\u000042");
+		expect(readToolSupersedeKey("read", { path: "db.sqlite:users" })).toEqual(["db.sqlite:users"]);
+		expect(readToolSupersedeKey("read", { path: "db.sqlite:users:42" })).toEqual(["db.sqlite:users\u000042"]);
 	});
 });
 
@@ -245,6 +253,55 @@ describe("pruneSupersededToolResults — selectors", () => {
 		expect(result.prunedCount).toBe(0);
 		expect(resultText(resultFull)).toBe(FILE_CONTENT);
 		expect(resultText(resultRange)).toBe(FILE_CONTENT);
+	});
+});
+
+/** A read that reached the tool and failed: `isError`, no file content. */
+function failedReadPair(path: string, timestamp: number): [SessionMessageEntry, SessionMessageEntry] {
+	const [call, result] = readPair(path, "EACCES: permission denied", timestamp);
+	resultMessage(result).isError = true;
+	return [call, result];
+}
+
+/**
+ * WHY: `collectSupersededResults` accepted every tool result that reached the
+ * tool as both a supersede candidate and a superseder. A result that produced no
+ * file content is neither. The unguarded member was a read that ran and FAILED:
+ * walking newest first, it registered its path as freshly read, so the earlier
+ * SUCCESSFUL read of that path was blanked to the supersede notice while the
+ * failed result carried only its error string. The file's content left the
+ * context entirely, replaced by a pointer to a read that returned nothing.
+ *
+ * Class closed for the `isError` member in both orders. Its sibling, the call
+ * that never reached the tool, has its own block below and shares the guard
+ * line. Not covered: a read that SUCCEEDED and returned an empty body, which is
+ * a real answer about the file and supersedes deliberately.
+ */
+describe("pruneSupersededToolResults — a result that produced no content", () => {
+	test("a failed read does not supersede the earlier successful read of the same path", () => {
+		const [call1, result1] = readPair("src/foo.ts", FILE_CONTENT, T0);
+		const [call2, result2] = failedReadPair("src/foo.ts", T0 + 1_000);
+		const entries: SessionEntry[] = [call1, result1, call2, result2];
+
+		const result = pruneSupersededToolResults(entries, cfg({ now: T0 + 1_000 }));
+
+		expect(result.prunedCount).toBe(0);
+		expect(resultText(result1)).toBe(FILE_CONTENT);
+		expect(resultMessage(result1).prunedAt).toBeUndefined();
+		expect(resultText(result2)).toBe("EACCES: permission denied");
+	});
+
+	test("a failed read is not blanked by a newer successful read of the same path", () => {
+		const [call1, result1] = failedReadPair("src/foo.ts", T0);
+		const [call2, result2] = readPair("src/foo.ts", FILE_CONTENT, T0 + 1_000);
+		const entries: SessionEntry[] = [call1, result1, call2, result2];
+
+		const result = pruneSupersededToolResults(entries, cfg({ now: T0 + 1_000 }));
+
+		expect(result.prunedCount).toBe(0);
+		expect(resultText(result1)).toBe("EACCES: permission denied");
+		expect(resultMessage(result1).prunedAt).toBeUndefined();
+		expect(resultText(result2)).toBe(FILE_CONTENT);
 	});
 });
 

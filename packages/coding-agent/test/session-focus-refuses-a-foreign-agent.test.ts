@@ -14,8 +14,8 @@
  * caller that arrives with an id from anywhere else.
  */
 import { describe, expect, it, vi } from "bun:test";
-import { SessionFocusController } from "@veyyon/coding-agent/modes/controllers/session-focus-controller";
-import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/types";
+import { SessionFocusController } from "@veyyon/coding-agent/modes/terminal/controllers/session-focus-controller";
+import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import type { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -33,8 +33,9 @@ function harness(): { controller: SessionFocusController; registry: AgentRegistr
 	const ctx = {
 		session: main,
 		unsubscribe: () => {},
-		eventController: { handleEvent: async () => {}, resetTranscriptAnchors: () => {} },
-		statusLine: { setSession: () => {}, invalidate() {} },
+		eventController: { handleEvent: async () => {}, attachTo: () => {}, resetTranscriptAnchors: () => {} },
+		statusProducer: { setSession: () => {} },
+		statusLine: { setSession: () => {}, setSource: () => {}, invalidate() {} },
 		clearTransientSessionUi: () => {},
 		renderInitialMessages: () => {},
 		updateEditorBorderColor() {},
@@ -48,13 +49,14 @@ function harness(): { controller: SessionFocusController; registry: AgentRegistr
 	const registry = new AgentRegistry();
 	const revivals: string[] = [];
 	const spied = {
+		pin: () => () => {},
 		ensureLive: async (id: string) => {
 			revivals.push(id);
 			return registry.get(id)?.session ?? sessionStub();
 		},
 	} as unknown as AgentLifecycleManager;
 
-	// The driving agent of conversation A, plus a subagent of each conversation.
+	// The driving agent of conversation A, plus an agent of each conversation.
 	registry.register({ id: MAIN_AGENT_ID, displayName: "main", kind: "main", session: main, scope: "session-a" });
 	registry.register({
 		id: "Scout-A",

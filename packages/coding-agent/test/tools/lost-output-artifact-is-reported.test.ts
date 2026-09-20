@@ -24,8 +24,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { logger } from "@veyyon/utils";
+import { reportLostOutputArtifact, saveOutputArtifact } from "../../src/tools/core/output-artifact";
 import type { ToolSession } from "../../src/tools/index";
-import { reportLostOutputArtifact, saveOutputArtifact } from "../../src/tools/output-artifact";
 import { makeToolSession } from "../helpers/tool-session";
 
 /** Captured `logger.warn` calls: the message and its structured fields. */
@@ -100,21 +100,21 @@ describe("a session with no artifact store", () => {
 		expect(
 			await saveOutputArtifact(
 				sessionWith(async () => ({})),
-				"grep",
+				"search",
 				"x",
 			),
 		).toBeUndefined();
 		expect(
 			await saveOutputArtifact(
 				sessionWith(async () => ({ id: "only-id" })),
-				"grep",
+				"search",
 				"x",
 			),
 		).toBeUndefined();
 		expect(
 			await saveOutputArtifact(
 				sessionWith(async () => ({ path: "/only/path" })),
-				"grep",
+				"search",
 				"x",
 			),
 		).toBeUndefined();
@@ -148,7 +148,7 @@ describe("an allocation that throws", () => {
 			sessionWith(async () => {
 				throw new Error("boom");
 			}),
-			"grep",
+			"search",
 			"x",
 		);
 
@@ -214,7 +214,7 @@ describe("the reporter itself", () => {
 
 	/** A thrown non-Error still has to produce a usable reason rather than "[object Object]". */
 	it("reports a thrown string", () => {
-		reportLostOutputArtifact("grep", "EROFS: read-only file system");
+		reportLostOutputArtifact("search", "EROFS: read-only file system");
 
 		expect(String(lossReports()[0]?.meta.error)).toContain("read-only file system");
 	});

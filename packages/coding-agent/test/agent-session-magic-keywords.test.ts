@@ -3,15 +3,15 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Agent, type AgentTool } from "@veyyon/agent-core";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { Effort } from "@veyyon/catalog/effort";
 import { getBundledModel } from "@veyyon/catalog/models";
-import * as autoThinkingClassifier from "@veyyon/coding-agent/auto-thinking/classifier";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
 import { AUTO_THINKING } from "@veyyon/coding-agent/thinking";
+import * as autoThinkingClassifier from "@veyyon/coding-agent/thinking/auto-classifier";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeWithRetries } from "@veyyon/utils";
 import { type } from "arktype";
 
@@ -55,6 +55,18 @@ async function createMagicKeywordSession(
 	return { session, settings, authStorage };
 }
 
+/**
+ * Custom types of the keyword notices attached to a turn. `session-state` is dropped:
+ * every turn carries that one row (the date and the working directory) whether or not a
+ * keyword matched, so counting it here would state that a notice was attached when none
+ * was.
+ */
+function noticeTypes(messages: Array<{ customType?: string }>): string[] {
+	return messages
+		.map(message => message.customType)
+		.filter((customType): customType is string => Boolean(customType) && customType !== "session-state");
+}
+
 describe("AgentSession magic keyword settings", () => {
 	let root: string;
 	let session: AgentSession | undefined;
@@ -83,7 +95,7 @@ describe("AgentSession magic keyword settings", () => {
 		await session.prompt("please workflowz this and ultrathink through it");
 
 		const promptMessages = promptSpy.mock.calls[0]![0] as unknown as Array<{ customType?: string }>;
-		expect(promptMessages.map(message => message.customType).filter(Boolean)).toEqual([]);
+		expect(noticeTypes(promptMessages)).toEqual([]);
 	});
 
 	it("honors non-ultrathink per-keyword notice toggles", async () => {
@@ -97,7 +109,7 @@ describe("AgentSession magic keyword settings", () => {
 		await session.prompt("please orchestratez and workflowz this");
 
 		const promptMessages = promptSpy.mock.calls[0]![0] as unknown as Array<{ customType?: string }>;
-		expect(promptMessages.map(message => message.customType).filter(Boolean)).toEqual([]);
+		expect(noticeTypes(promptMessages)).toEqual([]);
 	});
 
 	it("still appends enabled non-ultrathink notices", async () => {
@@ -109,16 +121,13 @@ describe("AgentSession magic keyword settings", () => {
 		await session.prompt("please orchestratez and workflowz this");
 
 		const promptMessages = promptSpy.mock.calls[0]![0] as unknown as Array<{ customType?: string }>;
-		expect(promptMessages.map(message => message.customType).filter(Boolean)).toEqual([
-			"orchestrate-notice",
-			"workflow-notice",
-		]);
+		expect(noticeTypes(promptMessages)).toEqual(["orchestrate-notice", "workflow-notice"]);
 	});
 
 	/**
 	 * THE regression, through the real session: the ordinary verb attaches
 	 * nothing. It used to attach the orchestration contract, which tells the model
-	 * to fan the work out to parallel subagents and to override any tendency to do
+	 * to fan the work out to parallel agents and to override any tendency to do
 	 * it inline, so this sentence ran as something other than what it says.
 	 */
 	it("attaches nothing for the ordinary verb the keyword was built from", async () => {
@@ -130,21 +139,21 @@ describe("AgentSession magic keyword settings", () => {
 		await session.prompt("please orchestrate this migration yourself, inline");
 
 		const promptMessages = promptSpy.mock.calls[0]![0] as unknown as Array<{ customType?: string }>;
-		expect(promptMessages.map(message => message.customType).filter(Boolean)).toEqual([]);
+		expect(noticeTypes(promptMessages)).toEqual([]);
 	});
 
 	it("renders workflowz notice for the active task schema", async () => {
 		const created = await createMagicKeywordSession(root);
 		session = created.session;
 		authStorage = created.authStorage;
-		created.settings.set("subagent.batch", false);
+		created.settings.set("agent.batch", false);
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 
 		await session.prompt("please workflowz this");
 
 		const promptMessages = promptSpy.mock.calls[0]![0] as unknown as Array<{ content?: string; customType?: string }>;
 		const notice = promptMessages.find(message => message.customType === "workflow-notice")?.content ?? "";
-		expect(notice).toContain("once per independent subagent");
+		expect(notice).toContain("once per independent spawned agent");
 		expect(notice).toContain("Do not pass `context` or `tasks[]`");
 		expect(notice).not.toContain("Call `task` once per independent fan-out batch");
 	});
@@ -158,7 +167,7 @@ describe("AgentSession magic keyword settings", () => {
 		await session.prompt("please workflowz this");
 
 		const promptMessages = promptSpy.mock.calls[0]![0] as unknown as Array<{ customType?: string }>;
-		expect(promptMessages.map(message => message.customType).filter(Boolean)).toEqual([]);
+		expect(noticeTypes(promptMessages)).toEqual([]);
 	});
 
 	it("does not use a disabled ultrathink keyword to force auto thinking", async () => {

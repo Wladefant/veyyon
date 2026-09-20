@@ -1,15 +1,15 @@
-// Regression coverage for providers that deliver a terminal SSE frame but
-// never send `[DONE]` nor close the connection. Before the client-side
-// terminal break (mirroring the Codex websocket loop), the consumer parked on
-// `iterator.next()` until the idle watchdog (120s) converted the
-// already-successful turn into a timeout error.
-//
-// 1. openai-completions: `finish_reason` + trailing usage chunk → break
-//    immediately, well before the post-finish grace window.
-// 2. openai-completions: `finish_reason` with no usage chunk ever → end
-//    cleanly when the grace window elapses instead of erroring.
-// 3. openai-responses: `response.completed` → `processResponsesStream`
-//    breaks immediately; no grace window involved.
+/**
+ * WHY: OpenAI-compatible providers do not all emit `finish_reason` or `[DONE]`.
+ * A clean HTTP body EOF after self-contained output is a successful terminal
+ * signal, while an empty body, malformed SSE, or an incomplete tool call still
+ * indicates truncation.
+ *
+ * This suite drives raw SSE bytes through the production decoder and keeps that
+ * boundary closed in both directions: visible text and complete tool batches
+ * settle at clean EOF; incomplete structured calls remain retryable even when
+ * accompanying text exists. It also covers providers that deliver a real
+ * terminal frame but never close the connection.
+ */
 import { describe, expect, it } from "bun:test";
 import * as AIError from "@veyyon/ai/error";
 import { streamOpenAICompletions } from "@veyyon/ai/providers/openai-completions";
@@ -122,19 +122,53 @@ describe("openai-completions terminal finish reason", () => {
 	});
 
 	/**
-	 * Text received before EOF remains attached to the error for diagnostics,
-	 * but cannot become a successful truncated assistant response.
+	 * Visible text is self-contained at a clean body EOF. Requiring a redundant
+	 * finish frame here strands complete answers from compatible providers.
 	 */
-	it("rejects EOF after a partial text delta and preserves the text", async () => {
+	it("accepts clean EOF after visible text", async () => {
 		const { events, result } = await collectClosingCompletion([
-			completionChunk({ choices: [{ index: 0, delta: { role: "assistant", content: "Partial answer" } }] }),
+			completionChunk({ choices: [{ index: 0, delta: { role: "assistant", content: "Complete answer" } }] }),
 		]);
 
-		expect(events.at(-1)?.type).toBe("error");
-		expect(events.some(event => event.type === "done")).toBe(false);
-		expect(result.stopReason).toBe("error");
-		expect(result.content).toEqual([{ type: "text", text: "Partial answer" }]);
-		expect(result.errorMessage).toContain("closed before a terminal finish reason");
+		expect(events.at(-1)?.type).toBe("done");
+		expect(events.some(event => event.type === "error")).toBe(false);
+		expect(result.stopReason).toBe("stop");
+		expect(result.content).toEqual([{ type: "text", text: "Complete answer" }]);
+	});
+
+	it("accepts clean EOF after reasoning followed by visible text", async () => {
+		const { events, result } = await collectClosingCompletion([
+			completionChunk({
+				choices: [{ index: 0, delta: { reasoning_content: "Check the premise. ", content: "Confirmed." } }],
+			}),
+		]);
+
+		expect(events.at(-1)?.type).toBe("done");
+		expect(events.some(event => event.type === "error")).toBe(false);
+		expect(result.stopReason).toBe("stop");
+		expect(result.content).toEqual([
+			{ type: "thinking", thinking: "Check the premise. ", thinkingSignature: "reasoning_content" },
+			{ type: "text", text: "Confirmed." },
+		]);
+	});
+
+	it("classifies clean EOF after reasoning-only output as incomplete for recovery", async () => {
+		const { events, result } = await collectClosingCompletion([
+			completionChunk({
+				choices: [{ index: 0, delta: { reasoning_content: "The analysis has not reached an answer." } }],
+			}),
+		]);
+
+		expect(events.at(-1)?.type).toBe("done");
+		expect(events.some(event => event.type === "error")).toBe(false);
+		expect(result.stopReason).toBe("length");
+		expect(result.content).toEqual([
+			{
+				type: "thinking",
+				thinking: "The analysis has not reached an answer.",
+				thinkingSignature: "reasoning_content",
+			},
+		]);
 	});
 
 	/**
@@ -150,6 +184,7 @@ describe("openai-completions terminal finish reason", () => {
 						index: 0,
 						delta: {
 							role: "assistant",
+							content: "I will check.",
 							tool_calls: [
 								{
 									index: 0,
@@ -168,8 +203,8 @@ describe("openai-completions terminal finish reason", () => {
 		expect(events.some(event => event.type === "done")).toBe(false);
 		expect(events.some(event => event.type === "toolcall_delta" && event.delta === partialArguments)).toBe(true);
 		expect(result.stopReason).toBe("error");
-		expect(result.content).toHaveLength(1);
-		expect(result.content[0]).toEqual(
+		expect(result.content).toHaveLength(2);
+		expect(result.content).toContainEqual(
 			expect.objectContaining({
 				type: "toolCall",
 				id: "call_weather",
@@ -177,7 +212,142 @@ describe("openai-completions terminal finish reason", () => {
 				arguments: { city: "Par" },
 			}),
 		);
+		expect(result.content).toContainEqual({ type: "text", text: "I will check." });
 		expect(result.errorMessage).toContain("closed before a terminal finish reason");
+	});
+
+	it("accepts trailing usage as terminal for a structurally complete tool batch", async () => {
+		const { events, result } = await collectClosingCompletion([
+			completionChunk({
+				choices: [
+					{
+						index: 0,
+						delta: {
+							tool_calls: [
+								{
+									index: 0,
+									id: "call_inspect",
+									type: "function",
+									function: { name: "inspect", arguments: "" },
+								},
+							],
+						},
+						finish_reason: null,
+					},
+				],
+			}),
+			completionChunk({
+				choices: [
+					{
+						index: 0,
+						delta: { tool_calls: [{ index: 0, function: { arguments: '{"path":"package.json"}' } }] },
+						finish_reason: null,
+					},
+				],
+			}),
+			completionChunk({
+				choices: [],
+				usage: { prompt_tokens: 541, completion_tokens: 91, total_tokens: 632 },
+			}),
+		]);
+
+		expect(events.at(-1)?.type).toBe("done");
+		expect(events.some(event => event.type === "error")).toBe(false);
+		expect(result.stopReason).toBe("toolUse");
+		expect(result.content).toEqual([
+			expect.objectContaining({
+				type: "toolCall",
+				id: "call_inspect",
+				name: "inspect",
+				arguments: { path: "package.json" },
+			}),
+		]);
+		expect(result.usage.input).toBe(541);
+		expect(result.usage.output).toBe(91);
+	});
+
+	it("accepts clean EOF after a structurally complete tool batch without usage", async () => {
+		const { events, result } = await collectClosingCompletion([
+			completionChunk({
+				choices: [
+					{
+						index: 0,
+						delta: {
+							tool_calls: [
+								{
+									index: 0,
+									id: "call_inspect",
+									type: "function",
+									function: { name: "inspect", arguments: '{"path":"package.json"}' },
+								},
+							],
+						},
+						finish_reason: null,
+					},
+				],
+			}),
+		]);
+
+		expect(events.at(-1)?.type).toBe("done");
+		expect(events.some(event => event.type === "error")).toBe(false);
+		expect(result.stopReason).toBe("toolUse");
+		expect(result.content).toEqual([
+			expect.objectContaining({
+				type: "toolCall",
+				id: "call_inspect",
+				name: "inspect",
+				arguments: { path: "package.json" },
+			}),
+		]);
+	});
+
+	it("rejects trailing usage when tool arguments are incomplete", async () => {
+		const { events, result } = await collectClosingCompletion([
+			completionChunk({
+				choices: [
+					{
+						index: 0,
+						delta: {
+							tool_calls: [
+								{
+									index: 0,
+									id: "call_inspect",
+									type: "function",
+									function: { name: "inspect", arguments: '{"path":"package' },
+								},
+							],
+						},
+						finish_reason: null,
+					},
+				],
+			}),
+			completionChunk({
+				choices: [],
+				usage: { prompt_tokens: 541, completion_tokens: 91, total_tokens: 632 },
+			}),
+		]);
+
+		expect(events.at(-1)?.type).toBe("error");
+		expect(events.some(event => event.type === "done")).toBe(false);
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("closed before a terminal finish reason");
+	});
+
+	it("accepts trailing usage after text without a finish reason", async () => {
+		const { events, result } = await collectClosingCompletion([
+			completionChunk({
+				choices: [{ index: 0, delta: { content: "Complete answer" }, finish_reason: null }],
+			}),
+			completionChunk({
+				choices: [],
+				usage: { prompt_tokens: 12, completion_tokens: 3, total_tokens: 15 },
+			}),
+		]);
+
+		expect(events.at(-1)?.type).toBe("done");
+		expect(events.some(event => event.type === "error")).toBe(false);
+		expect(result.stopReason).toBe("stop");
+		expect(result.content).toEqual([{ type: "text", text: "Complete answer" }]);
 	});
 
 	/**

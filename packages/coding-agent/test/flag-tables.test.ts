@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { CliUsageError } from "@veyyon/utils/cli-usage-error";
 import { type Args, parseArgs } from "../src/cli/args";
 import {
 	flagConsumesValue,
@@ -7,10 +8,9 @@ import {
 	OPTIONAL_VALUE_FLAGS,
 	STRING_VALUE_FLAGS,
 } from "../src/cli/flag-tables";
-import { CliUsageError } from "../src/cli/usage-error";
 import { CLI_THINKING_LEVELS } from "../src/thinking";
-import { APPROVAL_MODE_VALUES } from "../src/tools/approval-modes";
-import { BUILTIN_TOOL_NAMES } from "../src/tools/builtin-names";
+import { APPROVAL_MODE_VALUES } from "../src/tools/core/approval-modes";
+import { BUILTIN_TOOL_NAMES } from "../src/tools/core/builtin-names";
 
 /**
  * Catches the set → args.ts direction of drift between
@@ -65,11 +65,11 @@ describe("OPTIONAL_VALUE_FLAGS table is honored by args.ts parseArgs", () => {
 	}
 });
 
-describe("--tools legacy aliases", () => {
-	it("maps search and find to grep and glob", () => {
-		const result = parseArgs(["--tools", "search,find,grep"]);
+describe("--tools argument parsing", () => {
+	it("accepts canonical tool names", () => {
+		const result = parseArgs(["--tools", "search,read"]);
 
-		expect(result.tools).toEqual(["grep", "glob"]);
+		expect(result.tools).toEqual(["search", "read"]);
 	});
 });
 

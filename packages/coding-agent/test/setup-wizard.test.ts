@@ -13,15 +13,15 @@ import {
 	type SetupSceneController,
 	type SetupSceneHost,
 	selectSetupScenes,
-} from "@veyyon/coding-agent/modes/setup-wizard";
-import { providersSetupScene } from "@veyyon/coding-agent/modes/setup-wizard/scenes/providers";
-import { themeSetupScene } from "@veyyon/coding-agent/modes/setup-wizard/scenes/theme";
-import type { SetupKeyHint } from "@veyyon/coding-agent/modes/setup-wizard/scenes/types";
-import { WebSearchTab } from "@veyyon/coding-agent/modes/setup-wizard/scenes/web-search";
-import { SetupWizardComponent } from "@veyyon/coding-agent/modes/setup-wizard/wizard-overlay";
-import { initTheme, theme } from "@veyyon/coding-agent/modes/theme/theme";
-import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/types";
-import { SEARCH_PROVIDER_OPTIONS, SEARCH_PROVIDER_PREFERENCES } from "@veyyon/coding-agent/web/search/types";
+} from "@veyyon/coding-agent/modes/terminal/setup-wizard";
+import { providersSetupScene } from "@veyyon/coding-agent/modes/terminal/setup-wizard/scenes/providers";
+import { themeSetupScene } from "@veyyon/coding-agent/modes/terminal/setup-wizard/scenes/theme";
+import type { SetupKeyHint } from "@veyyon/coding-agent/modes/terminal/setup-wizard/scenes/types";
+import { WebSearchTab } from "@veyyon/coding-agent/modes/terminal/setup-wizard/scenes/web-search";
+import { SetupWizardComponent } from "@veyyon/coding-agent/modes/terminal/setup-wizard/wizard-overlay";
+import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
+import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
+import { SEARCH_PROVIDER_OPTIONS, SEARCH_PROVIDER_PREFERENCES } from "@veyyon/coding-agent/tools/web/search/types";
 
 function fakeContextWithConfiguredModel(): InteractiveModeContext {
 	return {
@@ -219,7 +219,6 @@ describe("setup wizard persistence", () => {
 		const hideOverlay = mock(() => {});
 		const setFocus = mock((_component: unknown) => {});
 		const requestRender = mock(() => {});
-		const playWelcomeIntro = mock(() => {});
 		let component: SetupWizardComponent | undefined;
 		const scene: SetupScene = {
 			id: "providers",
@@ -234,7 +233,6 @@ describe("setup wizard persistence", () => {
 		};
 		const ctx = {
 			settings,
-			playWelcomeIntro,
 			ui: {
 				terminal: { rows: 24 },
 				showOverlay: (nextComponent: SetupWizardComponent) => {
@@ -252,7 +250,7 @@ describe("setup wizard persistence", () => {
 			dismissWelcome: vi.fn(),
 		} as unknown as InteractiveModeContext;
 
-		const pending = runSetupWizard(ctx, [scene], { markComplete: false, playWelcomeIntro: false });
+		const pending = runSetupWizard(ctx, [scene], { markComplete: false });
 		component?.handleInput?.("\n");
 		component?.handleInput?.("\n");
 		await pending;
@@ -260,7 +258,6 @@ describe("setup wizard persistence", () => {
 		// `markComplete: false` means a targeted re-run (the provider-only flow) must
 		// not claim the machine has been onboarded, even though the overlay went up.
 		expect(settings.get("onboardingVersion")).toBe(0);
-		expect(playWelcomeIntro).not.toHaveBeenCalled();
 		expect(hideOverlay).toHaveBeenCalledTimes(1);
 		expect(setFocus).toHaveBeenCalled();
 	});
@@ -533,9 +530,16 @@ describe("setup wizard scene footer copy", () => {
 		expect(footer).not.toContain("ctrl+c");
 	});
 
+	/**
+	 * The wrap belongs to the shared chip packer now, the same one every card
+	 * footer uses, and it borrows backwards rather than leaving one chip alone
+	 * under a full row: `→ skip` moves down to keep `esc leave setup` company.
+	 * That is the contract change, and it is the wrap this pins — the exit is
+	 * still on screen, and no row ends on a bare key.
+	 */
 	it("the real Providers scene, the one users could not get out of, names Tab first", async () => {
 		expect(await footerOf([providersSetupScene])).toBe(
-			"tab switch panel  ·  ↑↓ select  ·  enter confirm  ·  → skip\nesc leave setup",
+			"tab switch panel  ·  ↑↓ select  ·  enter confirm\n→ skip  ·  esc leave setup",
 		);
 	});
 
@@ -680,7 +684,7 @@ describe("setup wizard theme previews", () => {
 	 * their glyphs back. Nothing else covers it. The test this replaced asserted
 	 * the same restore against an "ANSI-safe" ROW that ended the step, which is
 	 * the design the toggles removed; see
-	 * `test/modes/setup-wizard/theme-scene-modifiers-compose.test.ts`.
+	 * `test/modes/terminal/setup-wizard/theme-scene-modifiers-compose.test.ts`.
 	 *
 	 * THE EXIT IS `onUnmount`, NOT AN ESCAPE KEYSTROKE. This case used to send
 	 * `\x1b` straight to the controller, which reached the list's cancel ladder

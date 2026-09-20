@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { Api, ApiKeyResolver, Model } from "@veyyon/ai";
-import * as ai from "@veyyon/ai";
+import * as ai from "@veyyon/ai/stream";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { SecretObfuscator } from "@veyyon/coding-agent/secrets/obfuscator";
 import { generateTaskLabel } from "@veyyon/coding-agent/task/label";
@@ -27,9 +27,6 @@ describe("task label provider boundary", () => {
 			},
 			getModelRole(role: string) {
 				return role === "smol" ? `${model.provider}/${model.id}` : undefined;
-			},
-			getStorage() {
-				return undefined;
 			},
 		} as never;
 		const registry = {

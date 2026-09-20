@@ -7,13 +7,13 @@ This document covers the current Time Traveling Stream Rules (TTSR) runtime path
 - [`../src/sdk.ts`](../../packages/coding-agent/src/sdk.ts)
 - [`../src/export/ttsr.ts`](../../packages/coding-agent/src/export/ttsr.ts)
 - [`../src/session/agent-session.ts`](../../packages/coding-agent/src/session/agent-session.ts)
-- [`../src/session/session-manager.ts`](../../packages/coding-agent/src/session/session-manager.ts)
+- [`kernel/src/session/session-manager.ts`](../../kernel/src/session/session-manager.ts)
 - [`../src/prompts/rules/ttsr-interrupt.md`](../../packages/coding-agent/src/prompts/rules/ttsr-interrupt.md)
-- [`../src/capability/index.ts`](../../packages/coding-agent/src/capability/index.ts)
+- [`../src/discovery/capability/index.ts`](../../packages/coding-agent/src/discovery/capability/index.ts)
 - [`../src/extensibility/extensions/types.ts`](../../packages/coding-agent/src/extensibility/extensions/types.ts)
 - [`../src/extensibility/hooks/types.ts`](../../packages/coding-agent/src/extensibility/hooks/types.ts)
 - [`../src/extensibility/custom-tools/types.ts`](../../packages/coding-agent/src/extensibility/custom-tools/types.ts)
-- [`../src/modes/controllers/event-controller.ts`](../../packages/coding-agent/src/modes/controllers/event-controller.ts)
+- [`../src/modes/terminal/controllers/event-controller.ts`](../../packages/coding-agent/src/modes/terminal/controllers/event-controller.ts)
 
 ## 1. Discovery feed and rule registration
 
@@ -266,4 +266,4 @@ During the timer window, state can change (user interruption, mode actions, addi
 - `warmupMatches` (default 1) keeps a rule silent until it has matched in that many distinct streams; a released claim restores the count, a delivered one starts it over.
 - An experimental rule (one shipping in `builtin-rules/experimental/`) is dropped before registration unless named in `ttsr.experimentalRules`, and naming it in `ttsr.disabledRules` as well keeps it off.
 
-*Verified against `e80e0a0b` on 2026-08-13.*
+*Verified against `946d75b873` on 2026-09-04.*

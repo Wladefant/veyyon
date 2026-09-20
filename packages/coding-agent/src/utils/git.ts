@@ -2,16 +2,45 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isAbortError } from "@veyyon/utils/abortable";
-import { hasFsCode, isEisdir, isEnoent, isEnotdir } from "@veyyon/utils/fs-error";
 import { Snowflake } from "@veyyon/utils/snowflake";
 // Owners, not the `@veyyon/utils` barrel: 5 modules against 74.
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { $which } from "@veyyon/utils/which";
 import type { Subprocess } from "bun";
-import { parseDiffFileHunks, parseFileDiffs, parseFileHunks, parseNumstat } from "../commit/git/diff";
+import { parseDiffFileHunks, parseFileDiffs, parseFileHunks, parseNumstat } from "../commit/git-diff";
 import type { FileDiff, FileHunks, NumstatEntry } from "../commit/types";
 import { adoptIntoPrimarySessionCpuBudget } from "../session/cpu-limit";
-import { ToolAbortError, ToolError, throwIfAborted } from "../tools/tool-errors";
+import { ToolAbortError, ToolError, throwIfAborted } from "../tools/core/tool-errors";
+import type { GitHeadState, GitInProgressOperation, GitRepository } from "./git-head";
+import {
+	getRefLookupDirs,
+	HEAD_REF_PREFIX,
+	headBranchForLookup,
+	headLabel,
+	isReftableRepoSync,
+	LOCAL_BRANCH_PREFIX,
+	linkedWorktreeSync,
+	normalizeRefValue,
+	parseGitConfigHasReftable,
+	parseHeadStateFromFiles,
+	parsePackedRefs,
+	primaryRootFromRepository,
+	primaryRootFromRepositorySync,
+	readOptionalText,
+	readOptionalTextSync,
+	resolveInProgressOperation,
+	resolveRepository,
+	resolveRepositorySync,
+} from "./git-head";
+
+export type {
+	GitDetachedHead,
+	GitHeadState,
+	GitInProgressOperation,
+	GitOperationKind,
+	GitRefHead,
+	GitRepository,
+} from "./git-head";
 
 // ════════════════════════════════════════════════════════════════════════════
 // Types
@@ -21,15 +50,6 @@ export interface GitCommandResult {
 	exitCode: number;
 	stdout: string;
 	stderr: string;
-}
-
-export interface GitRepository {
-	commonDir: string;
-	gitDir: string;
-	gitEntryPath: string;
-	headPath: string;
-	repoRoot: string;
-	isReftable?: boolean;
 }
 
 export interface GitStatusSummary {
@@ -141,48 +161,6 @@ export interface CloneOptions {
 	readonly timeoutMs?: number;
 }
 
-interface GitHeadBase extends GitRepository {
-	headContent: string;
-}
-
-export interface GitRefHead extends GitHeadBase {
-	branchName: string | null;
-	commit: string | null;
-	kind: "ref";
-	ref: string;
-}
-
-export interface GitDetachedHead extends GitHeadBase {
-	commit: string | null;
-	kind: "detached";
-}
-
-export type GitHeadState = GitRefHead | GitDetachedHead;
-
-/**
- * A multi-step git operation that is part-way through.
- *
- * These matter because HEAD alone does not describe them. A conflicted merge
- * leaves HEAD on its branch, so the repository looks ordinary while every
- * command behaves differently. A rebase is worse: it detaches HEAD, so the
- * branch you are rebasing disappears from view and the only honest thing HEAD
- * can say is "detached".
- */
-export type GitOperationKind = "am" | "bisect" | "cherry-pick" | "merge" | "rebase" | "revert";
-
-export interface GitInProgressOperation {
-	kind: GitOperationKind;
-	/**
-	 * The branch the operation will return to, when git records one.
-	 *
-	 * A rebase writes the original branch to `head-name`, which is the only way
-	 * to recover it while HEAD is detached. `null` when git records nothing,
-	 * which includes rebasing a detached HEAD, and callers must handle it rather
-	 * than assume a name is always available.
-	 */
-	branch: string | null;
-}
-
 export interface GitWorktreeEntry {
 	branch?: string;
 	detached: boolean;
@@ -201,7 +179,7 @@ export class GitCommandError extends Error {
 	constructor(args: readonly string[], result: GitCommandResult) {
 		super(formatCommandFailure(args, result));
 		this.name = "GitCommandError";
-		this.args = [...args];
+		this.args = args.slice();
 		this.result = result;
 	}
 }
@@ -211,8 +189,6 @@ export class GitCommandError extends Error {
 // ════════════════════════════════════════════════════════════════════════════
 
 const NO_OPTIONAL_LOCKS = "--no-optional-locks";
-const HEAD_REF_PREFIX = "ref:";
-const LOCAL_BRANCH_PREFIX = "refs/heads/";
 const DEFAULT_BRANCH_REFS = ["refs/remotes/origin/HEAD", "refs/remotes/upstream/HEAD"] as const;
 const SHORT_LIVED_GIT_CONFIG: readonly (readonly [key: string, value: string])[] = [
 	["core.fsmonitor", "false"],
@@ -447,7 +423,7 @@ function formatCommandFailure(
 }
 
 async function git(cwd: string, args: readonly string[], options: CommandOptions = {}): Promise<GitCommandResult> {
-	const commandArgs = withShortLivedGitConfig(options.readOnly ? withNoOptionalLocks(args) : [...args]);
+	const commandArgs = withShortLivedGitConfig(options.readOnly ? withNoOptionalLocks(args) : args.slice());
 	const child = Bun.spawn(["git", ...commandArgs], {
 		cwd,
 		env: buildGitEnv(options.env),
@@ -463,8 +439,8 @@ async function git(cwd: string, args: readonly string[], options: CommandOptions
 }
 
 function withNoOptionalLocks(args: readonly string[]): string[] {
-	if (args.includes(NO_OPTIONAL_LOCKS)) return [...args];
-	return [NO_OPTIONAL_LOCKS, ...args];
+	if (args.includes(NO_OPTIONAL_LOCKS)) return args.slice();
+	return [NO_OPTIONAL_LOCKS].concat(args);
 }
 
 function withShortLivedGitConfig(args: readonly string[]): string[] {
@@ -473,7 +449,7 @@ function withShortLivedGitConfig(args: readonly string[]): string[] {
 		if (hasGitConfig(args, key, value)) continue;
 		prefix.push("-c", `${key}=${value}`);
 	}
-	return [...prefix, ...args];
+	return prefix.concat(args);
 }
 
 function hasGitConfig(args: readonly string[], key: string, value: string): boolean {
@@ -616,274 +592,13 @@ async function writeTempPatch(content: string): Promise<string> {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Internal: Repository resolution
-// ════════════════════════════════════════════════════════════════════════════
-
-type EntryType = "directory" | "file";
-
-function shouldRetry(err: unknown, n: number) {
-	if (isEnoent(err) || isEisdir(err) || isEnotdir(err) || hasFsCode(err, "ENFILE") || hasFsCode(err, "EMFILE"))
-		return false;
-	if (hasFsCode(err, "EINTR")) return n < EINTR_MAX_RETRIES;
-	if (n > EINTR_MAX_RETRIES) throw err;
-	throw err;
-}
-
-/**
- * Bounded retry for synchronous I/O against `EINTR`. POSIX permits short syscalls
- * to be interrupted by signals; when that happens libc traditionally retries.
- * Node's sync wrappers surface the raw `EINTR` so we replicate the retry locally.
- * Any other error (and persistent EINTR after `EINTR_MAX_RETRIES`) is rethrown
- * for the caller's normal "optional metadata" classifier to handle.
- */
-const EINTR_MAX_RETRIES = 3;
-function retryOnEintrSync<T>(op: () => T): T | null {
-	for (let attempt = 0; attempt <= EINTR_MAX_RETRIES; attempt += 1) {
-		try {
-			return op();
-		} catch (err) {
-			if (shouldRetry(err, attempt)) continue;
-			return null;
-		}
-	}
-	throw new Error("retryOnEintrSync: exhausted without resolution");
-}
-async function retryOnEintr<T>(op: () => Promise<T>): Promise<T | null> {
-	for (let attempt = 0; attempt <= EINTR_MAX_RETRIES; attempt += 1) {
-		try {
-			return await op();
-		} catch (err) {
-			if (shouldRetry(err, attempt)) continue;
-			return null;
-		}
-	}
-	throw new Error("retryOnEintr: exhausted without resolution");
-}
-
-function getEntryTypeSync(gitEntryPath: string): EntryType | null {
-	return retryOnEintrSync(() => {
-		const stat = fs.statSync(gitEntryPath);
-		if (stat.isDirectory()) return "directory";
-		if (stat.isFile()) return "file";
-		return null;
-	});
-}
-
-async function getEntryType(gitEntryPath: string): Promise<EntryType | null> {
-	return retryOnEintr(async () => {
-		const stat = await fs.promises.stat(gitEntryPath);
-		if (stat.isDirectory()) return "directory";
-		if (stat.isFile()) return "file";
-		return null;
-	});
-}
-
-function readOptionalTextSync(filePath: string): string | null {
-	return retryOnEintrSync(() => fs.readFileSync(filePath, "utf8"));
-}
-
-async function readOptionalText(filePath: string): Promise<string | null> {
-	return retryOnEintr(async () => await Bun.file(filePath).text());
-}
-
-function parseGitDirPointer(content: string): string | null {
-	const match = /^gitdir:\s*(.+)\s*$/iu.exec(content.trim());
-	return match?.[1] ?? null;
-}
-
-function resolveGitDirSync(gitEntryPath: string, entryType: EntryType): string | null {
-	if (entryType === "directory") return gitEntryPath;
-	const content = readOptionalTextSync(gitEntryPath);
-	if (content === null) return null;
-	const parsed = parseGitDirPointer(content);
-	if (!parsed) return null;
-	const gitDir = path.resolve(path.dirname(gitEntryPath), parsed);
-	return getEntryTypeSync(gitDir) === "directory" ? gitDir : null;
-}
-
-async function resolveGitDir(gitEntryPath: string, entryType: EntryType): Promise<string | null> {
-	if (entryType === "directory") return gitEntryPath;
-	const content = await readOptionalText(gitEntryPath);
-	if (content === null) return null;
-	const parsed = parseGitDirPointer(content);
-	if (!parsed) return null;
-	const gitDir = path.resolve(path.dirname(gitEntryPath), parsed);
-	return (await getEntryType(gitDir)) === "directory" ? gitDir : null;
-}
-
-function resolveCommonDirSync(gitDir: string): string {
-	const content = readOptionalTextSync(path.join(gitDir, "commondir"));
-	const relative = content?.trim();
-	if (!relative) return gitDir;
-	return path.resolve(gitDir, relative);
-}
-
-async function resolveCommonDir(gitDir: string): Promise<string> {
-	const content = await readOptionalText(path.join(gitDir, "commondir"));
-	const relative = content?.trim();
-	if (!relative) return gitDir;
-	return path.resolve(gitDir, relative);
-}
-function isLinkedWorktree(repository: GitRepository): boolean {
-	return (
-		repository.gitDir !== repository.commonDir &&
-		getEntryTypeSync(path.join(repository.gitDir, "commondir")) === "file"
-	);
-}
-
-async function isLinkedWorktreeAsync(repository: GitRepository): Promise<boolean> {
-	return (
-		repository.gitDir !== repository.commonDir &&
-		(await getEntryType(path.join(repository.gitDir, "commondir"))) === "file"
-	);
-}
-
-function primaryRootFromRepositorySync(repository: GitRepository): string {
-	if (path.basename(repository.commonDir) === ".git") return path.dirname(repository.commonDir);
-	if (isLinkedWorktree(repository)) return repository.commonDir;
-	return repository.repoRoot;
-}
-
-async function primaryRootFromRepository(repository: GitRepository): Promise<string> {
-	if (path.basename(repository.commonDir) === ".git") return path.dirname(repository.commonDir);
-	if (await isLinkedWorktreeAsync(repository)) return repository.commonDir;
-	return repository.repoRoot;
-}
-
-function resolveRepoFromEntrySync(repoRoot: string, gitEntryPath: string, entryType: EntryType): GitRepository | null {
-	const gitDir = resolveGitDirSync(gitEntryPath, entryType);
-	if (!gitDir) return null;
-	return {
-		commonDir: resolveCommonDirSync(gitDir),
-		gitDir,
-		gitEntryPath,
-		headPath: path.join(gitDir, "HEAD"),
-		repoRoot,
-	};
-}
-
-async function resolveRepoFromEntry(
-	repoRoot: string,
-	gitEntryPath: string,
-	entryType: EntryType,
-): Promise<GitRepository | null> {
-	const gitDir = await resolveGitDir(gitEntryPath, entryType);
-	if (!gitDir) return null;
-	return {
-		commonDir: await resolveCommonDir(gitDir),
-		gitDir,
-		gitEntryPath,
-		headPath: path.join(gitDir, "HEAD"),
-		repoRoot,
-	};
-}
-
-function resolveRepositorySync(startDir: string): GitRepository | null {
-	let current = path.resolve(startDir);
-	while (true) {
-		const gitEntryPath = path.join(current, ".git");
-		const entryType = getEntryTypeSync(gitEntryPath);
-		if (entryType) {
-			const repository = resolveRepoFromEntrySync(current, gitEntryPath, entryType);
-			if (repository) return repository;
-		}
-		const parent = path.dirname(current);
-		if (parent === current) return null;
-		current = parent;
-	}
-}
-
-async function resolveRepository(startDir: string): Promise<GitRepository | null> {
-	let current = path.resolve(startDir);
-	while (true) {
-		const gitEntryPath = path.join(current, ".git");
-		const entryType = await getEntryType(gitEntryPath);
-		if (entryType) {
-			const repository = await resolveRepoFromEntry(current, gitEntryPath, entryType);
-			if (repository) return repository;
-		}
-		const parent = path.dirname(current);
-		if (parent === current) return null;
-		current = parent;
-	}
-}
-
+// The repository walk and the worktree resolution moved to `git-head.ts`,
+// beside the rest of the from-files answer: a caller that must not reach this
+// module's process layer imports them there. This module composes them with
+// the subprocess half.
 // ════════════════════════════════════════════════════════════════════════════
 // Internal: Ref resolution
 // ════════════════════════════════════════════════════════════════════════════
-
-function getRefLookupDirs(repository: GitRepository): string[] {
-	if (repository.gitDir === repository.commonDir) return [repository.gitDir];
-	return [repository.gitDir, repository.commonDir];
-}
-
-function normalizeRefValue(content: string | null): string | null {
-	const trimmed = content?.trim() ?? "";
-	return trimmed || null;
-}
-
-function parsePackedRefs(content: string | null, targetRef: string): string | null {
-	if (!content) return null;
-	for (const line of content.split("\n")) {
-		const trimmed = line.trim();
-		if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("^")) continue;
-		const [sha, refName] = trimmed.split(" ", 2);
-		if (refName === targetRef && sha) return sha;
-	}
-	return null;
-}
-
-function stripGitConfigComments(line: string): string {
-	let clean = "";
-	let inQuotes = false;
-	for (let i = 0; i < line.length; i++) {
-		const char = line[i];
-		if (char === '"') {
-			inQuotes = !inQuotes;
-			clean += char;
-		} else if (!inQuotes && (char === ";" || char === "#")) {
-			break;
-		} else {
-			clean += char;
-		}
-	}
-	return clean.trim();
-}
-
-function parseGitConfigHasReftable(content: string): boolean {
-	let inExtensions = false;
-	for (const line of content.split("\n")) {
-		const trimmed = stripGitConfigComments(line);
-		if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-			const section = trimmed.slice(1, -1).trim().toLowerCase();
-			inExtensions = section === "extensions";
-		} else if (inExtensions) {
-			const eqIndex = trimmed.indexOf("=");
-			if (eqIndex !== -1) {
-				const key = trimmed.slice(0, eqIndex).trim().toLowerCase();
-				let value = trimmed.slice(eqIndex + 1).trim();
-				if (key === "refstorage") {
-					if (value.startsWith('"') && value.endsWith('"')) {
-						value = value.slice(1, -1).trim();
-					}
-					const lowerValue = value.toLowerCase();
-					if (lowerValue === "reftable" || lowerValue.startsWith("reftable:")) {
-						return true;
-					}
-				}
-			}
-		}
-	}
-	return false;
-}
-
-function isReftableRepoSync(repository: GitRepository): boolean {
-	if (repository.isReftable !== undefined) return repository.isReftable;
-	const configPath = path.join(repository.commonDir, "config");
-	const content = readOptionalTextSync(configPath);
-	repository.isReftable = content ? parseGitConfigHasReftable(content) : false;
-	return repository.isReftable;
-}
 
 async function isReftableRepo(repository: GitRepository): Promise<boolean> {
 	if (repository.isReftable !== undefined) return repository.isReftable;
@@ -893,24 +608,27 @@ async function isReftableRepo(repository: GitRepository): Promise<boolean> {
 	return repository.isReftable;
 }
 
+/**
+ * A read-only git query whose failure is a `null` answer: a missing ref, a repository git rejects.
+ * An abort is not an answer and is rethrown.
+ */
+async function queryGitOrNull(
+	repoRoot: string,
+	args: readonly string[],
+	signal: AbortSignal | undefined,
+): Promise<GitCommandResult | null> {
+	throwIfAborted(signal);
+	return git(repoRoot, args, { readOnly: true, signal }).catch(err => {
+		if (signal?.aborted || isAbortError(err)) {
+			throw err;
+		}
+		return null;
+	});
+}
+
 async function resolveHeadStateReftable(repository: GitRepository, signal?: AbortSignal): Promise<GitHeadState | null> {
-	throwIfAborted(signal);
-	const symResult = await git(repository.repoRoot, ["symbolic-ref", "HEAD"], { readOnly: true, signal }).catch(err => {
-		if (signal?.aborted || isAbortError(err)) {
-			throw err;
-		}
-		return null;
-	});
-	throwIfAborted(signal);
-	const revResult = await git(repository.repoRoot, ["rev-parse", "--verify", "HEAD"], {
-		readOnly: true,
-		signal,
-	}).catch(err => {
-		if (signal?.aborted || isAbortError(err)) {
-			throw err;
-		}
-		return null;
-	});
+	const symResult = await queryGitOrNull(repository.repoRoot, ["symbolic-ref", "HEAD"], signal);
+	const revResult = await queryGitOrNull(repository.repoRoot, ["rev-parse", "--verify", "HEAD"], signal);
 	const commit = revResult && revResult.exitCode === 0 ? revResult.stdout.trim() || null : null;
 
 	if (symResult && symResult.exitCode === 0) {
@@ -976,70 +694,13 @@ function resolveHeadStateReftableSync(repository: GitRepository): GitHeadState |
 	};
 }
 
-function readRefSync(repository: GitRepository, targetRef: string): string | null {
-	if (isReftableRepoSync(repository)) {
-		ensureAvailable();
-		const symArgs = withShortLivedGitConfig(withNoOptionalLocks(["symbolic-ref", targetRef]));
-		const symResult = Bun.spawnSync(["git", ...symArgs], {
-			cwd: repository.repoRoot,
-			env: buildGitEnv(),
-			stdout: "pipe",
-			stderr: "pipe",
-			windowsHide: true,
-		});
-		if (symResult.exitCode === 0) {
-			const stdoutText = new TextDecoder().decode(symResult.stdout).trim();
-			return `${HEAD_REF_PREFIX} ${stdoutText}`;
-		}
-		const revArgs = withShortLivedGitConfig(withNoOptionalLocks(["rev-parse", "--verify", targetRef]));
-		const revResult = Bun.spawnSync(["git", ...revArgs], {
-			cwd: repository.repoRoot,
-			env: buildGitEnv(),
-			stdout: "pipe",
-			stderr: "pipe",
-			windowsHide: true,
-		});
-		if (revResult.exitCode === 0) {
-			return new TextDecoder().decode(revResult.stdout).trim() || null;
-		}
-		return null;
-	}
-
-	for (const dir of getRefLookupDirs(repository)) {
-		const value = normalizeRefValue(readOptionalTextSync(path.join(dir, targetRef)));
-		if (value) return value;
-	}
-	for (const dir of getRefLookupDirs(repository)) {
-		const value = parsePackedRefs(readOptionalTextSync(path.join(dir, "packed-refs")), targetRef);
-		if (value) return value;
-	}
-	return null;
-}
-
 async function readRef(repository: GitRepository, targetRef: string, signal?: AbortSignal): Promise<string | null> {
 	if (await isReftableRepo(repository)) {
-		throwIfAborted(signal);
-		const symResult = await git(repository.repoRoot, ["symbolic-ref", targetRef], { readOnly: true, signal }).catch(
-			err => {
-				if (signal?.aborted || isAbortError(err)) {
-					throw err;
-				}
-				return null;
-			},
-		);
+		const symResult = await queryGitOrNull(repository.repoRoot, ["symbolic-ref", targetRef], signal);
 		if (symResult && symResult.exitCode === 0) {
 			return `${HEAD_REF_PREFIX} ${symResult.stdout.trim()}`;
 		}
-		throwIfAborted(signal);
-		const revResult = await git(repository.repoRoot, ["rev-parse", "--verify", targetRef], {
-			readOnly: true,
-			signal,
-		}).catch(err => {
-			if (signal?.aborted || isAbortError(err)) {
-				throw err;
-			}
-			return null;
-		});
+		const revResult = await queryGitOrNull(repository.repoRoot, ["rev-parse", "--verify", targetRef], signal);
 		if (revResult && revResult.exitCode === 0) {
 			return revResult.stdout.trim() || null;
 		}
@@ -1060,75 +721,6 @@ async function readRef(repository: GitRepository, targetRef: string, signal?: Ab
 // ════════════════════════════════════════════════════════════════════════════
 // Internal: Head state parsing
 // ════════════════════════════════════════════════════════════════════════════
-
-/**
- * Read the branch a rebase or am recorded, as a bare branch name.
- *
- * git writes the full ref (`refs/heads/topic`) and occasionally the literal
- * `detached HEAD` when there was no branch to begin with, which must come back
- * as `null` rather than being shown to a user as if it were a branch called
- * "detached HEAD".
- */
-function readOperationHeadName(directory: string): string | null {
-	const raw = readOptionalTextSync(path.join(directory, "head-name"))?.trim();
-	if (!raw?.startsWith(LOCAL_BRANCH_PREFIX)) return null;
-	return raw.slice(LOCAL_BRANCH_PREFIX.length) || null;
-}
-
-/**
- * Which multi-step operation, if any, is part-way through in this repository.
- *
- * Detection is by the marker files git itself uses, and the ORDER is load
- * bearing rather than arbitrary. A conflicted rebase leaves both its own state
- * directory and, while a conflict is being resolved, marker files that a bare
- * merge or cherry-pick would also write, so the enclosing operation has to be
- * reported or the status line would announce a merge in the middle of a rebase.
- * `git`'s own status output resolves the same ambiguity the same way.
- *
- * `rebase-apply` is shared between `git rebase` and `git am`, which are told
- * apart by the `applying` marker that only am writes. Reporting an am as a
- * rebase would send a user to `git rebase --abort`, which does not apply.
- *
- * Cost is bounded and small, a handful of stats against the git directory, with
- * no subprocess: this runs on the status line's synchronous path, where
- * spawning `git` per render is exactly what must not happen.
- */
-function resolveInProgressOperation(repository: GitRepository): GitInProgressOperation | null {
-	const gitDir = repository.gitDir;
-	const rebaseMerge = path.join(gitDir, "rebase-merge");
-	if (fs.existsSync(rebaseMerge)) {
-		return { branch: readOperationHeadName(rebaseMerge), kind: "rebase" };
-	}
-	const rebaseApply = path.join(gitDir, "rebase-apply");
-	if (fs.existsSync(rebaseApply)) {
-		const isAm = fs.existsSync(path.join(rebaseApply, "applying"));
-		return { branch: readOperationHeadName(rebaseApply), kind: isAm ? "am" : "rebase" };
-	}
-	// These leave HEAD alone, so the branch is whatever HEAD already says and
-	// there is nothing to recover.
-	if (fs.existsSync(path.join(gitDir, "MERGE_HEAD"))) return { branch: null, kind: "merge" };
-	if (fs.existsSync(path.join(gitDir, "CHERRY_PICK_HEAD"))) return { branch: null, kind: "cherry-pick" };
-	if (fs.existsSync(path.join(gitDir, "REVERT_HEAD"))) return { branch: null, kind: "revert" };
-	if (fs.existsSync(path.join(gitDir, "BISECT_LOG"))) return { branch: null, kind: "bisect" };
-	return null;
-}
-
-function parseHeadStateSync(repository: GitRepository, headContent: string): GitHeadState {
-	const trimmed = headContent.trim();
-	if (!trimmed?.startsWith(HEAD_REF_PREFIX)) {
-		return { ...repository, commit: trimmed || null, headContent, kind: "detached" };
-	}
-	const refValue = trimmed.slice(HEAD_REF_PREFIX.length).trim();
-	const branchName = refValue.startsWith(LOCAL_BRANCH_PREFIX) ? refValue.slice(LOCAL_BRANCH_PREFIX.length) : null;
-	return {
-		...repository,
-		branchName,
-		commit: readRefSync(repository, refValue),
-		headContent,
-		kind: "ref",
-		ref: refValue,
-	};
-}
 
 async function parseHeadState(repository: GitRepository, headContent: string): Promise<GitHeadState> {
 	const trimmed = headContent.trim();
@@ -2120,47 +1712,14 @@ export const head = {
 		return resolveInProgressOperation(repository);
 	},
 
-	/**
-	 * How to name this checkout in one short label.
-	 *
-	 * The ONE owner of that phrasing. It was previously written inline at the
-	 * status line as `branchName ?? ref`, falling back to the bare string
-	 * "detached", which is wrong in the case that matters most: a rebase detaches
-	 * HEAD, so a user mid-rebase saw "detached" with neither the branch they were
-	 * rebasing nor any hint that a rebase was running. Recovering the branch from
-	 * the operation's own record and appending the operation is what git's status
-	 * output does, and what a reader already expects from a prompt.
-	 *
-	 * Shape is `branch|OPERATION`, e.g. `topic|REBASE`, and just `branch` when
-	 * nothing is in progress. A detached HEAD with no operation stays `detached`.
-	 */
+	/** How to name this checkout in one short label. See {@link headLabel}. */
 	label(state: GitHeadState, operation: GitInProgressOperation | null): string {
-		const fromHead = state.kind === "ref" ? (state.branchName ?? state.ref) : null;
-		// The operation's recorded branch wins ONLY when HEAD cannot supply one,
-		// which is the detached-during-rebase case. When HEAD is on a branch it is
-		// the truth and the recorded name is at best a duplicate.
-		const branch = fromHead ?? operation?.branch ?? "detached";
-		return operation ? `${branch}|${operation.kind.toUpperCase()}` : branch;
+		return headLabel(state, operation);
 	},
 
-	/**
-	 * The branch name to look things up BY, or `null` when there is not one.
-	 *
-	 * Deliberately separate from {@link label}. A label is for a human to read
-	 * and is decorated (`topic|REBASE`); handing that same string to a pull
-	 * request lookup would query a branch that does not exist. The two were one
-	 * value before, which worked only because the sole decoration was the literal
-	 * "detached" and the lookup special-cased that exact word.
-	 *
-	 * Returns `null` while an operation is in progress even though a branch name
-	 * may be recoverable: mid-rebase the branch does not yet point where it will,
-	 * so a pull request looked up against it describes a state that is about to
-	 * change.
-	 */
+	/** The branch name to look things up BY, or `null`. See {@link headBranchForLookup}. */
 	branchForLookup(state: GitHeadState, operation: GitInProgressOperation | null): string | null {
-		if (operation) return null;
-		if (state.kind !== "ref") return null;
-		return state.branchName;
+		return headBranchForLookup(state, operation);
 	},
 
 	/** Full HEAD state (branch, commit, repo info). */
@@ -2184,7 +1743,7 @@ export const head = {
 		}
 		const content = readOptionalTextSync(repository.headPath);
 		if (content === null) return null;
-		return parseHeadStateSync(repository, content);
+		return parseHeadStateFromFiles(repository, content);
 	},
 
 	/** Current HEAD commit SHA. */
@@ -2280,9 +1839,7 @@ export const repo = {
 	 * so the status line may call it on every render.
 	 */
 	linkedWorktreeSync(cwd: string): { root: string; primaryRoot: string } | null {
-		const repository = resolveRepositorySync(cwd);
-		if (!repository || !isLinkedWorktree(repository)) return null;
-		return { root: repository.repoRoot, primaryRoot: primaryRootFromRepositorySync(repository) };
+		return linkedWorktreeSync(cwd);
 	},
 
 	/** Full GitRepository metadata (sync). */

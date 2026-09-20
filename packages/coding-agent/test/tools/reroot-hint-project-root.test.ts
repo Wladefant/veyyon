@@ -30,7 +30,7 @@ import {
 	PROJECT_ROOT_MARKERS,
 	RerootDetector,
 	resolveProjectRoot,
-} from "@veyyon/coding-agent/tools/reroot-hint";
+} from "@veyyon/coding-agent/tools/fs/reroot-hint";
 
 let tempRoot = "";
 
@@ -196,7 +196,7 @@ describe("resolveProjectRoot", () => {
  *
  * WHAT DOES NOT SEPARATE THEM, AND THIS IS THE PART WORTH REMEMBERING: counting nested
  * repositories. That was the first rule written here and it is wrong. The project in question
- * carries a benchmark corpus of forty-odd checkouts under `packages/deepswe-bench/repo-cache/`, so
+ * carries a benchmark corpus of forty-odd checkouts under `tests/evals/datasets/repo-cache/`, so
  * a count calls it a container, which is exactly backwards. Manifests and child count separate them
  * no better: both trees carry `AGENTS.md` and `Cargo.toml` at their roots, and they have 59 and 47
  * direct children.
@@ -246,11 +246,11 @@ describe("isRepositoryContainer", () => {
 	 * correct destination.
 	 */
 	it("is false for a project whose many nested repositories are all ignored", async () => {
-		initRepo("veyyon", ["packages/deepswe-bench/repo-cache/", "packages/deepswe-bench/deep-swe/"]);
+		initRepo("veyyon", ["tests/evals/datasets/repo-cache/", "tests/evals/datasets/deep-swe/corpus/"]);
 		for (const name of ["alpha", "beta", "gamma"]) {
-			initRepo(`veyyon/packages/deepswe-bench/repo-cache/${name}`);
+			initRepo(`veyyon/tests/evals/datasets/repo-cache/${name}`);
 		}
-		initRepo("veyyon/packages/deepswe-bench/deep-swe");
+		initRepo("veyyon/tests/evals/datasets/deep-swe/corpus");
 
 		expect(await isRepositoryContainer(path.join(tempRoot, "veyyon"))).toBe(false);
 	});
@@ -321,6 +321,21 @@ describe("isRepositoryContainer", () => {
 		mark("broken/thing", ".git");
 
 		expect(await isRepositoryContainer(path.join(tempRoot, "broken"))).toBe(true);
+	});
+
+	/**
+	 * The scan reads one round of directories per depth rather than one directory at a time, so
+	 * the sample cap is applied when a depth completes rather than mid-frontier. A tree far past
+	 * the cap must still answer, and answer the same way twice: the walk is what bounds the work,
+	 * and a bound that depends on which read returned first is not a bound.
+	 */
+	it("answers a tree far past its sample cap, and answers it the same way twice", async () => {
+		initRepo("huge");
+		for (let i = 0; i < 80; i++) initRepo(`huge/p${String(i).padStart(3, "0")}`);
+
+		const target = path.join(tempRoot, "huge");
+		expect(await isRepositoryContainer(target)).toBe(true);
+		expect(await isRepositoryContainer(target)).toBe(true);
 	});
 });
 

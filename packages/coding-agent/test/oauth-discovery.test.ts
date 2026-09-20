@@ -45,7 +45,7 @@ describe("mcp oauth discovery", () => {
 			fetch: fetchImpl,
 		});
 
-		expect(oauth).toEqual({
+		expect(oauth).toMatchObject({
 			authorizationUrl: "https://www.figma.com/oauth",
 			tokenUrl: "https://api.figma.com/v1/oauth/token",
 			clientId: "figma-client-id",
@@ -84,7 +84,7 @@ describe("path-prefixed auth servers", () => {
 			fetch: fetchImpl,
 		});
 
-		expect(oauth).toEqual({
+		expect(oauth).toMatchObject({
 			authorizationUrl: "https://gateway.example.com/my-service/oauth/authorize",
 			tokenUrl: "https://gateway.example.com/my-service/oauth/token",
 		});
@@ -120,7 +120,7 @@ describe("path-prefixed auth servers", () => {
 			fetch: fetchImpl,
 		});
 
-		expect(oauth).toEqual({
+		expect(oauth).toMatchObject({
 			authorizationUrl: "https://gateway.example.com/my-service/oauth/authorize",
 			tokenUrl: "https://gateway.example.com/my-service/oauth/token",
 		});
@@ -152,7 +152,7 @@ describe("path-prefixed auth servers", () => {
 			fetch: fetchImpl,
 		});
 
-		expect(oauth).toEqual({
+		expect(oauth).toMatchObject({
 			authorizationUrl: "https://gateway.example.com/my-service/oauth",
 			tokenUrl: "https://gateway.example.com/my-service/token",
 			registrationUrl: "https://gateway.example.com/my-service/register",
@@ -183,7 +183,7 @@ describe("path-prefixed auth servers", () => {
 			fetch: fetchImpl,
 		});
 
-		expect(oauth).toEqual({
+		expect(oauth).toMatchObject({
 			authorizationUrl: "https://auth.example.com/oauth",
 			tokenUrl: "https://auth.example.com/token",
 		});
@@ -317,12 +317,173 @@ describe("resource_metadata chain", () => {
 			{ fetch: fetchImpl },
 		);
 
-		expect(oauth).toEqual({
+		expect(oauth).toMatchObject({
 			authorizationUrl: "https://sso.example.com/oauth/auth",
 			tokenUrl: "https://sso.example.com/oauth/token",
 			scopes: "k8s.logging-mcp-server k8s.annotations",
 			resource: "https://gateway.example.com",
 		});
+	});
+
+	it("prioritizes PRM scopes over authorization-server scopes (RFC 9728)", async () => {
+		const fetchImpl = mockFetch((input: FetchInput) => {
+			const url = String(input);
+
+			if (url === "https://mcp.supabase.com/.well-known/oauth-protected-resource/mcp") {
+				return new Response(
+					JSON.stringify({
+						authorization_servers: ["https://api.supabase.com"],
+						resource: "https://mcp.supabase.com/mcp",
+						scopes_supported: ["organizations:read", "projects:read", "database:write"],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+
+			if (url === "https://api.supabase.com/.well-known/oauth-authorization-server") {
+				return new Response(
+					JSON.stringify({
+						issuer: "https://api.supabase.com",
+						authorization_endpoint: "https://api.supabase.com/platform/oauth/authorize",
+						token_endpoint: "https://api.supabase.com/platform/oauth/token",
+						registration_endpoint: "https://api.supabase.com/platform/oauth/apps/register",
+						scopes_supported: [
+							"all",
+							"organizations:read",
+							"projects:read",
+							"database:write",
+							"unsupported:scope",
+						],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+
+			return new Response("not found", { status: 404 });
+		});
+
+		const oauth = await discoverOAuthEndpoints(
+			"https://mcp.supabase.com/mcp",
+			undefined,
+			"https://mcp.supabase.com/.well-known/oauth-protected-resource/mcp",
+			{ fetch: fetchImpl },
+		);
+
+		expect(oauth).toMatchObject({
+			authorizationUrl: "https://api.supabase.com/platform/oauth/authorize",
+			tokenUrl: "https://api.supabase.com/platform/oauth/token",
+			registrationUrl: "https://api.supabase.com/platform/oauth/apps/register",
+			scopes: "organizations:read projects:read database:write",
+			resource: "https://mcp.supabase.com/mcp",
+		});
+	});
+
+	it("falls back to authorization-server scopes when PRM omits scopes_supported", async () => {
+		const fetchImpl = mockFetch((input: FetchInput) => {
+			const url = String(input);
+
+			if (url === "https://gateway.example.com/api/.well-known/oauth-protected-resource") {
+				return new Response(
+					JSON.stringify({
+						authorization_servers: ["https://sso.example.com"],
+						resource: "https://gateway.example.com",
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+
+			if (url === "https://sso.example.com/.well-known/oauth-authorization-server") {
+				return new Response(
+					JSON.stringify({
+						issuer: "https://sso.example.com",
+						authorization_endpoint: "https://sso.example.com/oauth/auth",
+						token_endpoint: "https://sso.example.com/oauth/token",
+						scopes_supported: ["openid", "profile", "email"],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+
+			return new Response("not found", { status: 404 });
+		});
+
+		const oauth = await discoverOAuthEndpoints(
+			"https://gateway.example.com/api/mcp",
+			undefined,
+			"https://gateway.example.com/api/.well-known/oauth-protected-resource",
+			{ fetch: fetchImpl },
+		);
+
+		expect(oauth).toMatchObject({
+			authorizationUrl: "https://sso.example.com/oauth/auth",
+			tokenUrl: "https://sso.example.com/oauth/token",
+			scopes: "openid profile email",
+			resource: "https://gateway.example.com",
+		});
+	});
+
+	it("prioritizes configured oauth.scopes over both PRM and authorization-server scopes", async () => {
+		const fetchImpl = mockFetch((input: FetchInput) => {
+			const url = String(input);
+
+			if (url === "https://mcp.supabase.com/.well-known/oauth-protected-resource/mcp") {
+				return new Response(
+					JSON.stringify({
+						authorization_servers: ["https://api.supabase.com"],
+						resource: "https://mcp.supabase.com/mcp",
+						scopes_supported: ["organizations:read", "projects:read"],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+
+			if (url === "https://api.supabase.com/.well-known/oauth-authorization-server") {
+				return new Response(
+					JSON.stringify({
+						issuer: "https://api.supabase.com",
+						authorization_endpoint: "https://api.supabase.com/platform/oauth/authorize",
+						token_endpoint: "https://api.supabase.com/platform/oauth/token",
+						scopes_supported: ["all", "admin"],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				);
+			}
+
+			return new Response("not found", { status: 404 });
+		});
+
+		const oauth = await discoverOAuthEndpoints(
+			"https://mcp.supabase.com/mcp",
+			undefined,
+			"https://mcp.supabase.com/.well-known/oauth-protected-resource/mcp",
+			{ fetch: fetchImpl, scopes: "custom:scope1 custom:scope2" },
+		);
+
+		expect(oauth).toMatchObject({
+			authorizationUrl: "https://api.supabase.com/platform/oauth/authorize",
+			tokenUrl: "https://api.supabase.com/platform/oauth/token",
+			scopes: "custom:scope1 custom:scope2",
+			resource: "https://mcp.supabase.com/mcp",
+		});
+	});
+
+	it("prioritizes top-level resource scopes over nested authorization-server endpoints in error body", () => {
+		const error = new Error(
+			"HTTP 403: " +
+				JSON.stringify({
+					error: "insufficient_scope",
+					scopes_supported: ["resource:read", "resource:write"],
+					oauth: {
+						authorization_url: "https://auth.example.com/oauth/auth",
+						token_url: "https://auth.example.com/oauth/token",
+						scopes_supported: ["all", "admin", "resource:read", "resource:write"],
+					},
+				}),
+		);
+
+		const auth = analyzeAuthError(error);
+		expect(auth.scopes).toBe("resource:read resource:write");
+		expect(auth.oauth?.scopes).toBe("resource:read resource:write");
 	});
 
 	it("threads challenge-derived scopes into endpoints discovered via resource metadata", async () => {
@@ -409,7 +570,7 @@ describe("resource_metadata chain", () => {
 			{ fetch: fetchImpl },
 		);
 
-		expect(oauth).toEqual({
+		expect(oauth).toMatchObject({
 			authorizationUrl: "https://gateway.example.com/my-service/oauth",
 			tokenUrl: "https://gateway.example.com/my-service/token",
 			resource: "https://gateway.example.com/my-service/mcp",
@@ -459,7 +620,7 @@ describe("resource_metadata chain", () => {
 			fetch: fetchImpl,
 		});
 
-		expect(oauth).toEqual({
+		expect(oauth).toMatchObject({
 			authorizationUrl: "https://auth.example.com/my-service/oauth",
 			tokenUrl: "https://auth.example.com/my-service/token",
 			resource: "https://gateway.example.com/my-service/custom-resource",
@@ -508,7 +669,7 @@ describe("RFC 8414 §3.3 issuer validation", () => {
 			fetch: fetchImpl,
 		});
 
-		expect(oauth).toEqual({
+		expect(oauth).toMatchObject({
 			authorizationUrl: "https://mcp.atlassian.com/v1/authorize",
 			tokenUrl: "https://cf.mcp.atlassian.com/v1/token",
 			registrationUrl: "https://cf.mcp.atlassian.com/v1/register",
@@ -575,7 +736,7 @@ describe("RFC 8414 §3.3 issuer validation", () => {
 			{ fetch: fetchImpl },
 		);
 
-		expect(oauth).toEqual({
+		expect(oauth).toMatchObject({
 			authorizationUrl: "https://mcp.plane.so/http/authorize",
 			tokenUrl: "https://mcp.plane.so/http/token",
 			registrationUrl: "https://mcp.plane.so/http/register",
@@ -608,7 +769,7 @@ describe("RFC 8414 §3.3 issuer validation", () => {
 			fetch: fetchImpl,
 		});
 
-		expect(oauth).toEqual({
+		expect(oauth).toMatchObject({
 			authorizationUrl: "https://auth.example.com/oauth/authorize",
 			tokenUrl: "https://auth.example.com/oauth/token",
 		});
@@ -635,7 +796,7 @@ describe("RFC 8414 §3.3 issuer validation", () => {
 			fetch: fetchImpl,
 		});
 
-		expect(oauth).toEqual({
+		expect(oauth).toMatchObject({
 			authorizationUrl: "https://auth.example.com/oauth",
 			tokenUrl: "https://auth.example.com/token",
 		});

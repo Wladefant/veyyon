@@ -57,8 +57,8 @@ one. If no boundary is available at all, the suite does not run. Read
 
 | Mode | Contents |
 | --- | --- |
-| `workspace` | Fast packages (hashline, wire, utils, catalog, ai, agent, argot, stats, tool-render, swarm-extension, deepswe-bench, mnemopi). Packages only: the script gates are their own bucket. |
-| `native` | natives, tui, typescript-edit-benchmark, metaharness, collab-web |
+| `workspace` | Fast packages (hashline, wire, utils, catalog, ai, agent, argot, stats, tool-render, mode-swarm, mnemopi, simulations). Packages only: the script gates are their own bucket. |
+| `native` | natives/bridge/bindings, hosts/terminal/engine, evals, collab-web |
 | `coding-agent-singleton` | Settings / global-state suites (one process; do not chunk) |
 | `coding-agent-ui` | TUI/interactive suites (chunk size 5; ghostty GC ceiling) |
 | `coding-agent-runtime` | Session, RPC, SDK, MCP, extensions |
@@ -443,10 +443,10 @@ three because each one has a blind spot the next covers:
   root for a whole package at once and was invisible to the walk while the leak was live.
 - A package whose setup enters a root asserts the home is unchanged when it leaves, which
   is the only check that survives someone finding a fourth way to spell the mistake. See
-  `useMnemopiTestEnv()` and `packages/mnemopi/test/the-config-root-never-lands-in-the-home.test.ts`.
+  `useMnemopiTestEnv()` and `plugins/mnemopi/test/the-config-root-never-lands-in-the-home.test.ts`.
 
 To give a whole package one convention, export a hook from its shared test setup and
-call it in every suite, the way `useMnemopiTestEnv()` in `packages/mnemopi/test/setup.ts`
+call it in every suite, the way `useMnemopiTestEnv()` in `plugins/mnemopi/test/setup.ts`
 does. Export a FUNCTION; do not register `beforeEach`/`beforeAll` at the setup module's
 top level. A shared setup module is imported once per test process, so hooks registered
 at its module scope belong only to the suite that imported it FIRST. Every other file
@@ -786,7 +786,7 @@ carried a hand-written list of workspace packages, and two of them listed `@veyy
 not the name of any package here: the directory is `packages/agent` and the package is
 `@veyyon/agent-core`. Every one of the 569 imports of it resolved to nothing, and so did
 `@veyyon/mnemopi`, `@veyyon/stats`, `@veyyon/natives` and `@veyyon/tool-render`.
-`packages/coding-agent/src/thinking.ts` was pinned at 12 modules with a comment calling it "nearly a
+`packages/coding-agent/src/thinking/index.ts` was pinned at 12 modules with a comment calling it "nearly a
 leaf"; it was 407, because it named the `@veyyon/agent-core` barrel.
 
 So do not write that list. `workspaceModuleReachResolution(repoRoot)` from
@@ -826,10 +826,10 @@ narrative comment.
 | `packages/coding-agent/test/helpers/corpus-loader.ts` | Load/validate corpus (rejects missing expect / weak contract text) |
 | `packages/<pkg>/test/fixtures/` | Local JSON/JSONL/TOML tables for one package |
 | `packages/coding-agent/test/helpers/integration-workspace.ts` | Multi-file trees for edit/grep/glob/hashline: a REAL temp workspace driven through the real agent loop, not a checked-in tree |
-| `packages/coding-agent/test/helpers/subagent-session.ts` | The fake `AgentSession` a `runSubprocess` test spawns, plus the message and yield-event builders |
-| `packages/hashline/test/*` | Model for pure contract + adversarial multi-file suites |
+| `packages/coding-agent/test/helpers/agent-session.ts` | The fake `AgentSession` a `runSubprocess` test spawns, plus the message and yield-event builders |
+| `plugins/hashline/test/*` | Model for pure contract + adversarial multi-file suites |
 | `packages/coding-agent/test/rpc-command-contracts.test.ts` | RPC frame id/parse/background contracts (no provider keys) |
-| `crates/*/tests/fixtures/` | Shared inputs for native crate tests |
+| `natives/**/tests/fixtures/` | Shared inputs for native crate tests |
 
 Corpus row requirements: non-empty `id`, a real one-sentence `contract`, a `surface`
 the runner knows, and exact `expect`. Shape-only rows fail at load time.
@@ -837,7 +837,7 @@ the runner knows, and exact `expect`. Shape-only rows fail at load time.
 Name files and ids for the **behavior** (`list-limit-equals-ceiling`,
 `rpc-unknown-command-drops-id`), never for an implementation strategy or port.
 
-### Testing a subagent run
+### Testing an agent run
 
 `runSubprocess` runs an agent in-process. It calls `createAgentSession`, prompts the
 session, and reads the session's EVENTS to decide what happened, so a test drives it by
@@ -845,7 +845,7 @@ deciding what the child emits. Use the shared fake rather than writing another s
 literal:
 
 ```ts
-import { createMockSession, createSessionResult, yieldSuccessEvent } from "../helpers/subagent-session";
+import { createMockSession, createSessionResult, yieldSuccessEvent } from "../helpers/agent-session";
 
 const session = createMockSession(({ emit }) => {
 	emit(yieldSuccessEvent({ ok: true }));
@@ -876,7 +876,7 @@ missing `yield` handler once surfaced as seventeen unrelated-looking failures.
 
 | Domain | Primary home |
 | --- | --- |
-| Hashline parse/apply/recovery | `packages/hashline/test/` |
+| Hashline parse/apply/recovery | `plugins/hashline/test/` |
 | Agent loop / compaction | `packages/agent/test/` |
 | Provider streams / codecs | `packages/ai/test/` |
 | Catalog identity | `packages/catalog/test/` |
@@ -884,24 +884,24 @@ missing `yield` handler once surfaced as seventeen unrelated-looking failures.
 | Tools | `packages/coding-agent/test/tools/`, `test/core/` |
 | RPC / SDK | `packages/coding-agent/test/rpc*.ts`, `sdk-*.test.ts` |
 | Settings | `packages/coding-agent/test/settings*.test.ts` + helper |
-| TUI | `packages/tui/test/`, `coding-agent/test/modes/` |
-| Natives | `packages/natives/test/`, `crates/veyyon-*/` |
+| TUI | `hosts/terminal/engine/test/`, `coding-agent/test/modes/` |
+| Natives | `natives/bridge/bindings/test/`, `natives/` |
 | Install / binary smoke | `scripts/install-tests/`, `veyyon --smoke-test` |
 | Install per environment | `scripts/installer-environment-matrix.test.ts` + `scripts/install-tests/environments.toml` |
 | Update per environment | `scripts/update-environment-matrix.test.ts` (same TOML, shared harness) |
 | Regression corpus | `packages/coding-agent/test/corpus/regressions/` |
 | Docs and handbook | `scripts/check-doc-*.test.ts`, `scripts/handbook-built-pages-contain-source-contracts.test.ts` |
-| Symbol presets and glyph contracts | `coding-agent/test/modes/theme/every-unicode-glyph-*.test.ts`, `an-empty-icon-leaves-no-gap.test.ts` |
+| Symbol presets and glyph contracts | `coding-agent/test/theme/every-unicode-glyph-*.test.ts`, `an-empty-icon-leaves-no-gap.test.ts` |
 | Module reach and boot cost | `coding-agent/test/architecture/`, via `test/helpers/module-reach-gate.ts` |
 | Keybinding ids reach a reader | `coding-agent/test/config/every-keybinding-id-is-read-by-something.test.ts` |
 | Keybinding docs quote real chords | `coding-agent/test/config/the-reference-page-quotes-the-real-default-keys.test.ts` |
-| `/hotkeys` follows a remap | `coding-agent/test/modes/utils/hotkeys-follows-a-remap.test.ts` |
-| No surface spells a hint by hand | `coding-agent/test/modes/utils/no-surface-writes-a-hint-out-by-hand.test.ts` |
+| `/hotkeys` follows a remap | `coding-agent/test/modes/terminal/utils/hotkeys-follows-a-remap.test.ts` |
+| No surface spells a hint by hand | `coding-agent/test/modes/terminal/utils/no-surface-writes-a-hint-out-by-hand.test.ts` |
 | The more-lines phrase has one owner | `packages/utils/test/more-lines-has-one-owner.test.ts` |
 | One owner for the default chords | `coding-agent/test/config/the-keybinding-defaults-have-one-owner.test.ts` |
 | Session does not import the UI | `coding-agent/test/architecture/session-does-not-import-the-ui.test.ts` |
 | Tools import the UI only to draw | `coding-agent/test/architecture/tools-reach-the-ui-only-to-draw.test.ts` |
-| OSC 66 spans measure the same in both width oracles | `packages/tui/test/visible-width-osc66-spans.test.ts` |
+| OSC 66 spans measure the same in both width oracles | `packages/utils/test/visible-width-osc66-spans.test.ts` |
 | The utils barrel re-exports and defines nothing | `packages/utils/test/the-barrel-owns-nothing.test.ts` |
 | A temp dir is not made in the repository | `packages/utils/test/a-temp-dir-is-not-made-in-the-repository.test.ts` |
 | Byte and well-formedness measurements | `packages/utils/test/string-byte-and-form-measurements.test.ts` |
@@ -1101,7 +1101,7 @@ A suite that drives a real `TUI` against a `VirtualTerminal` has to wait for the
 frame before it asserts on the screen. Ask the engine, do not guess:
 
 ```ts
-import { settleFrames } from "../../tui/test/helpers/settle-frames";
+import { settleFrames } from "../../../hosts/terminal/engine/test/helpers/settle-frames";
 
 rows.setLines(["status-after"]);
 tui.requestRender();
@@ -1137,17 +1137,18 @@ glyph the terminal font does not have, a count that contradicts the list under
 it, a card with eighteen empty rows: each of those renders as a perfectly valid
 string, and each is obvious the moment you look at a picture of the frame.
 
-**Never judge a visual change from a `tmux capture-pane` dump.** tmux renders on
-a pure-black default ground, `capture-pane` strips and distorts styling, and the
-whole class of background-fill and contrast bugs is invisible in it. A dump that
-looks fine there has shipped black slabs onto a grey terminal.
+**The evidence is a capture taken through the official config**, which is
+[verification.md](../handbook/src/foundations/verification.md): the single definition of
+the capture path, of the artifact class each kind of change proves with, and of what does
+not count as evidence at all. There are no fallbacks, here or anywhere else.
 
-The evidence is a RENDERED IMAGE of the real component, on both a grey
-(`#1e2127`-class) and a black ground, looked at by a human or by whoever is doing
-the work. There is one tool for this, `scripts/demos/render-proof.ts`: it reads a
-render's ANSI on stdin and writes `<out>-grey.png` and `<out>-black.png`. The
-components render off-screen without a terminal, so producing the pair takes two
-steps and no display:
+`scripts/demos/render-proof.ts` is a debugging aid, not a capture. It reads a render's
+ANSI on stdin and writes `<out>-grey.png` and `<out>-black.png`: no display, deterministic,
+and it answers "does this fill reach the edge" in seconds WHILE YOU WORK. It draws a
+fixture you wrote at a width you chose, so it shows nothing about whether the surface is
+reachable, the state real, or the block positioned, sized and clipped the way a session
+draws it. Use it to debug; capture to prove. Producing a grey/black pair takes two steps
+and no display:
 
 1. Write a small renderer under `scripts/demos/` that builds the REAL component the
    way its suite does (`stubStdoutGeometry`, `initTheme`, a registry seeded with the
@@ -1180,7 +1181,7 @@ Two things to get right, because both produce convincing lies:
   what you are proving, instead of reading the placeholder box as a rendering fault.
 
 This is how the `⟳` in the running-agent status was found. It is U+27F3, no plain
-monospace face carries it, and every busy row in the Agent Control Center drew a
+monospace face carries it, and every busy row in the agent dashboard drew a
 tofu box on a machine without a Nerd Font. Three hundred passing assertions on
 that component said nothing, because the string was correct the whole time.
 
@@ -1218,4 +1219,4 @@ Wiring you can't exercise in-process (worker spawn, install flow) is covered by 
 runtime smoke probe (`veyyon --smoke-test`) and the install-test scripts, not by a
 source grep.
 
-*Verified against `dfc80d5fe` on 2026-08-09.*
+*Verified against `63ffc8131ffb8d35ccbbb1c5de69531a7016eff4` on 2026-09-06.*

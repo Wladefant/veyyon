@@ -20,14 +20,14 @@ These are genuinely good patterns. Refactors must preserve behavior.
    Compaction summarizes in place. Explicit `/handoff` transfers continuity to a
    new session. Engineering detail:
    [`docs/internal/handoff-generation-pipeline.md`](./handoff-generation-pipeline.md).
-2. **Subagent spawn model**: `packages/coding-agent/src/task/executor.ts` (spawn, soft
+2. **Agent spawn model**: `packages/coding-agent/src/task/executor.ts` (spawn, soft
    request-budget steering notice, background output capture) plus the session-wide spawn
-   concurrency semaphore in `packages/coding-agent/src/task/index.ts` (`subagent.maxConcurrency`,
+   concurrency semaphore in `packages/coding-agent/src/task/index.ts` (`agent.maxConcurrency`,
    resized in place before every acquire), `packages/coding-agent/src/task/agents.ts` (bundled
-   subagent definitions) and the `task` tool registered in
+   agent definitions) and the `task` tool registered in
    `packages/coding-agent/src/tools/index.ts`.
-3. **Addressed inter-agent messaging**: the `irc` tool (`packages/coding-agent/src/tools/irc.ts`,
-   bus in `packages/coding-agent/src/irc/bus.ts`): `send`/`wait`/`inbox`/`list` ops, delivery receipts,
+3. **Addressed inter-agent messaging**: the `irc` tool (`packages/coding-agent/src/tools/agent/irc.ts`,
+   bus in `packages/coding-agent/src/task/irc-bus.ts`): `send`/`wait`/`inbox`/`list` ops, delivery receipts,
    reply-to threading. This is the shipped equivalent of the old point-to-point
    `InterAgentCommunication`/`send_message`/`wait` model, `send` wakes an idle recipient with a real
    turn, revives a parked one via the lifecycle manager, or injects a non-interrupting aside into a
@@ -35,11 +35,11 @@ These are genuinely good patterns. Refactors must preserve behavior.
    steering-hint prompt text lives in
    `packages/coding-agent/src/prompts/steering/{parent-irc,user-interjection}.md`. A richer IRC-style,
    full multi-agent **dashboard** (channels, not just the message bus) remains **Spec, not shipped**
-   (BACKLOG `U4-10`), beyond the single `/agents` Agent Control Center card that `/cockpit` and
+   beyond the single `/agents` agent dashboard card that `/cockpit` and
    `/hub` are aliases of. The messaging primitive itself is built; the dashboard UI around it is not.
-4. **Subagent + todo-list interaction model**: the `todo` tool
-   (`packages/coding-agent/src/tools/todo.ts`) plus plan-mode guardrails
-   (`packages/coding-agent/src/tools/plan-mode-guard.ts`). Agents maintain a checklist across
+4. **Agent + todo-list interaction model**: the `todo` tool
+   (`packages/coding-agent/src/tools/agent/todo.ts`) plus plan-mode guardrails
+   (`packages/coding-agent/src/tools/core/plan-mode-guard.ts`). Agents maintain a checklist across
    multi-step work; this model is frozen and any TUI presentation work extends it without replacing it.
 5. **Prompt Cache Stability Law (System & Workstation Prompt Caching)**: Prefix prompt caching hashes
    from line 1 of the system prompt downwards. Never mutate or re-render system prompt templates or
@@ -52,11 +52,11 @@ These are **not** keepers. Do not preserve them when condensing settings; they w
 the shipped model-slots-plus-3-knob-compaction design (see [Compaction & project memory](../handbook/src/context/compaction-memory.md)).
 
 1. **Role-based model-selection matrix and per-role popups.** Superseded by the shipped design: the
-   interactive model via `/model`, plain `subagent.model` and `compaction.model` fields in settings.
+   interactive model via `/model`, plain `agent.model` and `compaction.model` fields in settings.
    `default` is not a model or a role, see `packages/coding-agent/src/config/model-roles.ts` and
    `packages/coding-agent/src/config/model-resolver.ts`.
 2. **Silent per-role heuristic routing.** The primary model drives everything unless the plain
-   subagent/compaction fields say otherwise; there is no hidden per-role auto-pick behind the scenes.
+   agent/compaction fields say otherwise; there is no hidden per-role auto-pick behind the scenes.
 3. **Overlapping compaction settings UX.** Condensed to threshold, the fixed
    `summary` strategy, and an ordered model chain. See
    `packages/coding-agent/src/config/compaction-strategy.ts` and the `compaction.*`
@@ -69,16 +69,16 @@ the shipped model-slots-plus-3-knob-compaction design (see [Compaction & project
 | Layer | KEEP or CUT | Where it lives |
 | --- | --- | --- |
 | How agents are spawned and report back | **KEEP** | `task/executor.ts`, `task` tool |
-| How agents message each other directly (send/wait/inbox) | **KEEP** | `tools/irc.ts`, `irc/bus.ts` |
-| How agents track work (todo/checklist discipline) | **KEEP** | `tools/todo.ts` + prompt guidance |
+| How agents message each other directly (send/wait/inbox) | **KEEP** | `tools/agent/irc.ts`, `task/irc-bus.ts` |
+| How agents track work (todo/checklist discipline) | **KEEP** | `tools/agent/todo.ts` + prompt guidance |
 | How compaction hands off context | **KEEP** | `packages/agent/src/compaction/compaction.ts` |
-| Which model runs for which role (matrix + popups) | **CUT** | Replaced by plain `subagent.model` / `compaction.model` fields |
+| Which model runs for which role (matrix + popups) | **CUT** | Replaced by plain `agent.model` / `compaction.model` fields |
 | Forced role reassignment on model change | **CUT** | `/model` only changes the interactive model |
-| Compaction/subagent model popups | **CUT** | Plain settings fields (model tab) |
-| Full IRC-style multi-agent dashboard (channels) | **Spec, not shipped** | Tracked as BACKLOG `U4-10`; the messaging tool itself is built |
+| Compaction/agent model popups | **CUT** | Plain settings fields (model tab) |
+| Full IRC-style multi-agent dashboard (channels) | **Spec, not shipped** | The messaging tool itself is built |
 
-**Rule for future refactors:** if a change touches subagent spawning, `irc` messaging, or the compaction
+**Rule for future refactors:** if a change touches agent spawning, `irc` messaging, or the compaction
 handoff prompt, preserve behavior. If it touches model-routing *settings knobs*, follow the shipped
 model-slots design above, do not resurrect a role→model matrix because an old fork had one.
 
-*Verified against `7e4c6374` on 2026-08-06.*
+*Verified against `63ffc8131ffb8d35ccbbb1c5de69531a7016eff4` on 2026-09-06.*

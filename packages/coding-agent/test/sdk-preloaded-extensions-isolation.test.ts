@@ -8,20 +8,20 @@
  * MUST clone the caller's `extensions` array before mutating it — otherwise
  * the caller's array accumulates session-local wrappers it never authored.
  *
- * Subagent forwarding is a separate path (`preloadedExtensionPaths`) which
+ * Agent forwarding is a separate path (`preloadedExtensionPaths`) which
  * reloads extensions per session so each session's `ExtensionAPI` is its own.
  */
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AsyncJobManager } from "@veyyon/coding-agent/async/job-manager";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { LoadExtensionsResult } from "@veyyon/coding-agent/extensibility/extensions/types";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries } from "@veyyon/utils";
 
 describe("createAgentSession preloadedExtensions isolation (issue #2190)", () => {
@@ -44,6 +44,7 @@ describe("createAgentSession preloadedExtensions isolation (issue #2190)", () =>
 		const preloaded: LoadExtensionsResult = {
 			extensions: [],
 			errors: [],
+			withheld: [],
 			runtime: {
 				flagValues: new Map(),
 				pendingProviderRegistrations: [],

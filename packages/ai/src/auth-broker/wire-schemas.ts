@@ -16,8 +16,29 @@
  * ArkType types costs ~18ms, which only broker request/response paths ever
  * need — the boot path must not pay it.
  */
-import { type } from "arktype";
+import { type Type, type } from "arktype";
 import { REMOTE_REFRESH_SENTINEL } from "../auth-storage";
+import { usageWireSchemas } from "../usage/report-wire";
+import type {
+	CredentialBlockRequest,
+	CredentialBlockResponse,
+	CredentialBlocksDeleteResponse,
+	CredentialDisableRequest,
+	CredentialDisableResponse,
+	CredentialRefreshResponse,
+	CredentialUploadRequest,
+	CredentialUploadResponse,
+	HealthzResponse,
+	RefresherSchedule,
+	SnapshotEntry,
+	SnapshotResponse,
+	SnapshotStreamEntryEvent,
+	SnapshotStreamEvent,
+	SnapshotStreamRemovedEvent,
+	SnapshotStreamSnapshotEvent,
+	UsageResponse,
+	UsageStaleResponse,
+} from "./types";
 
 function buildWireSchemas() {
 	// ─── Credential payloads ─────────────────────────────────────────────────
@@ -54,12 +75,17 @@ function buildWireSchemas() {
 		"accountId?": "string",
 		"orgId?": "string",
 		"orgName?": "string",
+		"source?": "'login'",
 	});
 
+	// `source` records that the key came from an interactive `/login` rather than a
+	// pasted value. `exportSnapshot` spreads the stored credential, so an OAuth row
+	// that carries `source` reaches the wire, and both schemas must accept it.
 	const apiKeyCredentialSchema = type({
 		"+": "reject",
 		type: "'api_key'",
 		key: type("string").atLeastLength(1),
+		"source?": "'login'",
 	});
 
 	/** Discriminated union accepted on POST /v1/credential (writes). */
@@ -161,66 +187,10 @@ function buildWireSchemas() {
 
 	// ─── Usage ───────────────────────────────────────────────────────────────
 
-	const usageUnitSchema = type("'percent' | 'tokens' | 'requests' | 'usd' | 'minutes' | 'bytes' | 'unknown'");
-	const usageStatusSchema = type("'ok' | 'warning' | 'exhausted' | 'unknown'");
-
-	const usageWindowSchema = type({
-		id: "string",
-		label: "string",
-		"durationMs?": "number",
-		"resetsAt?": "number",
-	});
-
-	const usageAmountSchema = type({
-		"used?": "number",
-		"limit?": "number",
-		"remaining?": "number",
-		"usedFraction?": "number",
-		"remainingFraction?": "number",
-		unit: usageUnitSchema,
-	});
-
-	const usageScopeSchema = type({
-		provider: "string",
-		"accountId?": "string",
-		"projectId?": "string",
-		"orgId?": "string",
-		"modelId?": "string",
-		"tier?": "string",
-		"windowId?": "string",
-		"shared?": "boolean",
-	});
-
-	const usageLimitSchema = type({
-		id: "string",
-		label: "string",
-		scope: usageScopeSchema,
-		"window?": usageWindowSchema,
-		amount: usageAmountSchema,
-		"status?": usageStatusSchema,
-		"notes?": "string[]",
-	});
-
-	const usageResetCreditDetailSchema = type({
-		"grantedAt?": "string",
-		"expiresAt?": "string",
-		"status?": "string",
-	});
-
-	const usageResetCreditsSchema = type({
-		availableCount: "number",
-		"credits?": usageResetCreditDetailSchema.array(),
-	});
-
-	const arkUsageReportSchema = type({
-		provider: "string",
-		fetchedAt: "number",
-		limits: usageLimitSchema.array(),
-		"resetCredits?": usageResetCreditsSchema,
-		"notes?": "string[]",
-		"metadata?": { "[string]": "unknown" },
-		"raw?": "unknown",
-	});
+	// The report vocabulary has one owner. This file restated all nine schemas, identically,
+	// beside the copy `usage.ts` declared at module scope: the broker's response embeds a
+	// report, it is not a second definition of what a report is.
+	const usage = usageWireSchemas();
 
 	/**
 	 * Broker `/v1/usage` response. Reports are full UsageReports minus the
@@ -231,7 +201,7 @@ function buildWireSchemas() {
 	const usageResponseSchema = type({
 		"+": "reject",
 		generatedAt: "number",
-		reports: arkUsageReportSchema.array(),
+		reports: usage.report.array(),
 	});
 
 	// ─── Refresh ─────────────────────────────────────────────────────────────
@@ -285,7 +255,7 @@ function buildWireSchemas() {
 		entries: credentialSnapshotEntrySchema.array(),
 	});
 
-	return {
+	const schemas: WireSchemas = {
 		oauthCredentialSchema,
 		remoteOauthCredentialSchema,
 		apiKeyCredentialSchema,
@@ -312,12 +282,38 @@ function buildWireSchemas() {
 		credentialUploadRequestSchema,
 		credentialUploadResponseSchema,
 	};
+	return schemas;
 }
 
-type WireSchemas = ReturnType<typeof buildWireSchemas>;
+export interface WireSchemas {
+	oauthCredentialSchema: Type;
+	remoteOauthCredentialSchema: Type;
+	apiKeyCredentialSchema: Type;
+	writableAuthCredentialSchema: Type;
+	snapshotCredentialSchema: Type;
+	credentialSnapshotEntrySchema: Type;
+	credentialBlockSnapshotSchema: Type;
+	snapshotEntrySchema: Type<SnapshotEntry>;
+	refresherScheduleSchema: Type<RefresherSchedule>;
+	snapshotResponseSchema: Type<SnapshotResponse>;
+	snapshotStreamSnapshotEventSchema: Type<SnapshotStreamSnapshotEvent>;
+	snapshotStreamEntryEventSchema: Type<SnapshotStreamEntryEvent>;
+	snapshotStreamRemovedEventSchema: Type<SnapshotStreamRemovedEvent>;
+	snapshotStreamEventSchema: Type<SnapshotStreamEvent>;
+	healthzResponseSchema: Type<HealthzResponse>;
+	usageResponseSchema: Type<UsageResponse>;
+	credentialRefreshResponseSchema: Type<CredentialRefreshResponse>;
+	credentialDisableRequestSchema: Type<CredentialDisableRequest>;
+	credentialDisableResponseSchema: Type<CredentialDisableResponse>;
+	credentialBlockRequestSchema: Type<CredentialBlockRequest>;
+	credentialBlockResponseSchema: Type<CredentialBlockResponse>;
+	credentialBlocksDeleteResponseSchema: Type<CredentialBlocksDeleteResponse>;
+	usageStaleResponseSchema: Type<UsageStaleResponse>;
+	credentialUploadRequestSchema: Type<CredentialUploadRequest>;
+	credentialUploadResponseSchema: Type<CredentialUploadResponse>;
+}
 
 let schemasCache: WireSchemas | undefined;
-
 /** All auth-broker wire schemas, constructed on first use. */
 export function wireSchemas(): WireSchemas {
 	schemasCache ??= buildWireSchemas();

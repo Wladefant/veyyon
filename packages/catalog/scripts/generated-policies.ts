@@ -18,8 +18,11 @@ import { isMimoModelIdOrName } from "../src/identity/family";
 import { getLongestModelLikeIdSegment } from "../src/identity/id";
 import { buildModelReferenceIndex, resolveModelReference } from "../src/identity/reference";
 import { resolveModelThinking } from "../src/model-thinking";
+import { applyCommandCodeContract } from "../src/provider-models/command-code";
+import { PROVIDERS_PUBLISHING_OWN_MODEL_LIMITS } from "../src/provider-models/descriptors";
 import { resolveWaferServerlessThinkingFormat } from "../src/provider-models/openai-compat";
 import type { Api, Model, ModelSpec } from "../src/types";
+import { normalizeModelCost } from "../src/utils";
 import { isVariantCollapsedSpec } from "../src/variant-collapse";
 import { buildCanonicalModelIndex, buildCanonicalReferenceData } from "./equivalence";
 
@@ -80,12 +83,23 @@ export function applyGeneratedModelPolicies(models: ModelSpec<Api>[]): void {
  * generator is the authority that produces the trusted values. Collapsed
  * effort-tier variants are exempt — their collapse table authored the
  * routing/off-suppression metadata and the deriver cannot reproduce it.
+ *
+ * A ladder a deployment contract authored is kept for the same reason. Command
+ * Code's endpoint publishes no reasoning metadata at all, so clearing the
+ * ladder first leaves the deriver nothing to work from and the rebake deletes
+ * the only record of which of its models take an effort. Passing the spec
+ * through with its ladder intact still runs the whole resolution — the wire
+ * defaults and effort map are filled here, not in the contract.
  */
 export function rebakeModelThinking(model: ModelSpec<Api>): void {
 	if (isVariantCollapsedSpec(model)) return;
 	const requiresProviderAuthoredEffort =
 		model.provider === "umans" && (model.thinking?.requiresEffort === true || model.id === "umans-kimi-k2.7");
-	const thinking = resolveModelThinking({ ...model, thinking: undefined }, buildCompat(model));
+	const deploymentAuthored = model.provider === "command-code" && model.thinking !== undefined;
+	const thinking = resolveModelThinking(
+		deploymentAuthored ? model : { ...model, thinking: undefined },
+		buildCompat(model),
+	);
 	if (thinking) {
 		model.thinking = requiresProviderAuthoredEffort ? { ...thinking, requiresEffort: true } : thinking;
 	} else {
@@ -161,7 +175,8 @@ export function linkOpenAIPromotionTargets(models: ModelSpec<Api>[]): void {
  * backfills any field it leaves null.
  *
  * Only `null` fields are filled; provider-specific limits that discovery
- * returned explicitly are never overwritten.
+ * returned explicitly are never overwritten. Routers that explicitly leave
+ * completion ceilings unknown may opt out of this fallback.
  */
 export function applyCanonicalLimitFallback(models: ModelSpec<Api>[]): void {
 	if (!models.some(model => model.contextWindow === null || model.maxTokens === null)) {
@@ -176,6 +191,11 @@ export function applyCanonicalLimitFallback(models: ModelSpec<Api>[]): void {
 	const referenceIndex = buildModelReferenceIndex(catalog);
 
 	for (const model of models) {
+		if (PROVIDERS_PUBLISHING_OWN_MODEL_LIMITS.has(model.provider)) {
+			// The endpoint owns its limits; a cross-provider same-family
+			// reference must not invent one it never published.
+			continue;
+		}
 		if (model.contextWindow !== null && model.maxTokens !== null) {
 			continue;
 		}
@@ -207,6 +227,13 @@ function applyGeneratedModelPolicy(model: ModelSpec<Api>): void {
 	if (copilotLimits) {
 		model.contextWindow = copilotLimits.contextWindow;
 		model.maxTokens = copilotLimits.maxTokens;
+	}
+	if (model.provider === "command-code") {
+		// Cross-provider metadata may have filled a same-family output cap before
+		// this pass, and the Provider API publishes none of its own. The
+		// deployment contract states what the upstream CLI actually requests, so
+		// it wins over whatever another host's same-named model happened to say.
+		applyCommandCodeContract(model as ModelSpec<"openai-completions">);
 	}
 
 	if (model.provider === "ollama-cloud") {
@@ -284,11 +311,22 @@ function applyGeneratedModelPolicy(model: ModelSpec<Api>): void {
 		};
 	}
 	const parsedModel = parseKnownModel(model.id);
-	const applyPatchToolType = inferGeneratedApplyPatchToolType(model, parsedModel);
-	if (applyPatchToolType) {
-		model.applyPatchToolType = applyPatchToolType;
-	} else {
-		delete model.applyPatchToolType;
+	// Codex discovery declares `apply_patch_tool_type` per SKU, and on that
+	// transport the declaration outranks the version-derived default, which
+	// stops at GPT-5 and would strip GPT-6 Astra of the freeform patch tool the
+	// endpoint states it takes. Every other transport keeps the inferred value
+	// only, so a stale flag copied onto a completions row is still removed.
+	const declaredOnCodex =
+		model.provider === "openai-codex" &&
+		model.api === "openai-codex-responses" &&
+		model.applyPatchToolType !== undefined;
+	if (!declaredOnCodex) {
+		const applyPatchToolType = inferGeneratedApplyPatchToolType(model, parsedModel);
+		if (applyPatchToolType) {
+			model.applyPatchToolType = applyPatchToolType;
+		} else {
+			delete model.applyPatchToolType;
+		}
 	}
 	if (parsedModel.family === "anthropic") {
 		applyAnthropicCatalogPolicy(model, parsedModel);
@@ -301,14 +339,12 @@ function applyGeneratedModelPolicy(model: ModelSpec<Api>): void {
 function applyAnthropicCatalogPolicy(model: ModelSpec<Api>, parsedModel: AnthropicModel): void {
 	// Claude Opus 4.5: models.dev reports 3x the correct cache pricing.
 	if (model.provider === "anthropic" && parsedModel.kind === "opus" && semverEqual(parsedModel.version, "4.5")) {
-		model.cost.cacheRead = 0.5;
-		model.cost.cacheWrite = 6.25;
+		model.cost = { ...normalizeModelCost(model.cost), cacheRead: 0.5, cacheWrite: 6.25 };
 	}
 
 	// Bedrock Opus 4.6: upstream metadata is stale for cache pricing and context.
 	if (model.provider === "amazon-bedrock" && parsedModel.kind === "opus" && semverEqual(parsedModel.version, "4.6")) {
-		model.cost.cacheRead = 0.5;
-		model.cost.cacheWrite = 6.25;
+		model.cost = { ...normalizeModelCost(model.cost), cacheRead: 0.5, cacheWrite: 6.25 };
 		model.contextWindow = 1000000;
 		model.maxTokens = 128000;
 	}
@@ -320,10 +356,13 @@ function applyAnthropicCatalogPolicy(model: ModelSpec<Api>, parsedModel: Anthrop
 	if (model.provider === "anthropic" && isFableOrMythos(parsedModel.kind)) {
 		model.contextWindow = 1_000_000;
 		model.maxTokens = 128_000;
-		model.cost.input = 10;
-		model.cost.output = 50;
-		model.cost.cacheRead = 1;
-		model.cost.cacheWrite = 12.5;
+		model.cost = {
+			...normalizeModelCost(model.cost),
+			input: 10,
+			output: 50,
+			cacheRead: 1,
+			cacheWrite: 12.5,
+		};
 	}
 }
 

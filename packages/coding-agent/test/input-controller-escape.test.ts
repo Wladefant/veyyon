@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
 import type { ImageContent } from "@veyyon/ai";
-import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
-import { InputController } from "@veyyon/coding-agent/modes/controllers/input-controller";
-import type { InteractiveModeContext, SubmittedUserInput } from "@veyyon/coding-agent/modes/types";
+import { resetSettingsForTest, Settings, settings } from "@veyyon/coding-agent/config/settings";
+import { InputController } from "@veyyon/coding-agent/modes/terminal/controllers/input-controller";
+import type { InteractiveModeContext, SubmittedUserInput } from "@veyyon/coding-agent/modes/terminal/types";
 import { USER_INTERRUPT_LABEL } from "@veyyon/coding-agent/session/messages";
-import { vocalizer } from "@veyyon/coding-agent/tts/vocalizer";
+import { vocalizer } from "@veyyon/coding-agent/speech/tts/vocalizer";
 import * as logger from "@veyyon/utils/logger";
 
 type Spy = Mock<(...args: unknown[]) => unknown>;
@@ -30,6 +30,7 @@ type FakeEditor = {
 	onDequeue?: () => void;
 	onChange?: (text: string) => void;
 	setText(text: string): void;
+	discardDraft(): void;
 	getText(): string;
 	addToHistory(text: string): void;
 	setActionKeys(action: string, keys: string[]): void;
@@ -83,9 +84,11 @@ function createContext(): {
 		updatePendingMessagesDisplay: Spy;
 	};
 	inputListeners: Array<(data: string) => { consume?: boolean; data?: string } | undefined>;
+	discardedDrafts: string[];
 	sessionListeners: Array<(event: { type: string }) => void>;
 } {
 	let editorText = "";
+	const discardedDrafts: string[] = [];
 	const abort = vi.fn();
 	const abortBash = vi.fn();
 	const abortEval = vi.fn();
@@ -119,6 +122,10 @@ function createContext(): {
 		},
 		getText() {
 			return editorText;
+		},
+		discardDraft() {
+			discardedDrafts.push(editorText);
+			editorText = "";
 		},
 		addToHistory: vi.fn(),
 		setActionKeys: vi.fn(),
@@ -258,6 +265,7 @@ function createContext(): {
 			updatePendingMessagesDisplay,
 		},
 		inputListeners,
+		discardedDrafts,
 		sessionListeners,
 	};
 }
@@ -517,7 +525,7 @@ describe("InputController escape behavior", () => {
 		expect(spies.showStatus).not.toHaveBeenCalledWith("Press Esc again within 2s to cancel streaming.");
 	});
 
-	it("returns focused subagent view to main on Esc instead of aborting", () => {
+	it("returns focused agent view to main on Esc instead of aborting", () => {
 		const { ctx, editor, spies } = createContext();
 		Object.defineProperty(ctx, "focusedAgentId", { value: "Worker", configurable: true });
 		const controller = new InputController(ctx);
@@ -529,7 +537,7 @@ describe("InputController escape behavior", () => {
 		expect(spies.abort).not.toHaveBeenCalled();
 	});
 
-	it("returns focused subagent view to main on Esc without aborting its active maintenance (#2819)", () => {
+	it("returns focused agent view to main on Esc without aborting its active maintenance (#2819)", () => {
 		const { ctx, editor, spies } = createContext();
 		Object.defineProperty(ctx, "focusedAgentId", { value: "Worker", configurable: true });
 		(ctx.viewSession as { isCompacting: boolean }).isCompacting = true;
@@ -770,7 +778,7 @@ describe("InputController double-tap ← gesture", () => {
 		};
 	}
 
-	it("opens the Agent Control Center on a deliberate double-tap", () => {
+	it("opens the agent dashboard on a deliberate double-tap", () => {
 		const now = vi.spyOn(Date, "now");
 		const { showAgentsDashboard, tap } = setup();
 		now.mockReturnValue(1_000);
@@ -779,7 +787,7 @@ describe("InputController double-tap ← gesture", () => {
 		tap();
 		expect(showAgentsDashboard).toHaveBeenCalledTimes(1);
 		// Gated: the gesture is not a deliberate command, so it must stay inert
-		// until there is a subagent to look at. Dropping this argument would pop a
+		// until there is an agent to look at. Dropping this argument would pop a
 		// card saying "Nothing running" every time a user backspaces past the start
 		// of a line.
 		expect(showAgentsDashboard).toHaveBeenCalledWith({ requireContent: true });
@@ -805,7 +813,7 @@ describe("InputController double-tap ← gesture", () => {
 		expect(showAgentsDashboard).not.toHaveBeenCalled();
 	});
 
-	it("returns a focused subagent view to the main session on a deliberate double-tap", () => {
+	it("returns a focused agent view to the main session on a deliberate double-tap", () => {
 		const now = vi.spyOn(Date, "now");
 		const { showAgentsDashboard, unfocusSession, tap } = setup("Agent1");
 		now.mockReturnValue(1_000);
@@ -814,5 +822,136 @@ describe("InputController double-tap ← gesture", () => {
 		tap();
 		expect(unfocusSession).toHaveBeenCalledTimes(1);
 		expect(showAgentsDashboard).not.toHaveBeenCalled();
+	});
+});
+
+/**
+ * Two Escapes over a composer holding text discard the draft.
+ *
+ * WHY THIS SUITE EXISTS. A single Esc must never destroy a draft — that is why the
+ * escape handler used to do nothing at all over a non-empty composer, leaving no way
+ * to abandon a long prompt but to select it and delete it. The second press inside the
+ * window is the deliberate gesture that discards it.
+ *
+ * The class this closes is the two Esc gestures being confused for each other. They
+ * share a window and a key, and they are told apart only by whether the composer holds
+ * text at the moment of each press — which can change BETWEEN the two presses. So the
+ * arming state is per-gesture, and the interleavings below are the members: arm with a
+ * draft then press with none, and arm with none then press with a draft. Neither may
+ * complete.
+ *
+ * WHAT IT DOES NOT CATCH: that the discarded draft is recoverable. `discardDraft` is a
+ * fake here; the real editor's undo contract is pinned in
+ * `hosts/terminal/engine/test/discarding-a-draft-leaves-it-on-the-undo-stack.test.ts`.
+ */
+describe("InputController Esc-Esc discards the draft", () => {
+	function setup() {
+		const { ctx, editor, discardedDrafts } = createContext();
+		const controller = new InputController(ctx);
+		controller.setupKeyHandlers();
+		// The tree openings are recorded rather than left to the spy protocol: what this suite
+		// claims is that the gesture opened nothing, and a list of what it opened says that.
+		const treeOpens: string[] = [];
+		(ctx.showTreeSelector as Spy).mockImplementation(() => {
+			treeOpens.push(editor.getText());
+		});
+		return {
+			ctx,
+			editor,
+			discardedDrafts,
+			treeOpens,
+			pressEscape: () => editor.onEscape?.(),
+		};
+	}
+
+	it("leaves the draft alone on one press", () => {
+		const now = vi.spyOn(Date, "now");
+		const { editor, pressEscape, discardedDrafts } = setup();
+		editor.setText("a prompt worth keeping");
+		now.mockReturnValue(1_000);
+		pressEscape();
+		expect(editor.getText()).toBe("a prompt worth keeping");
+		expect(discardedDrafts).toEqual([]);
+	});
+
+	it("discards it on the second press inside the window", () => {
+		const now = vi.spyOn(Date, "now");
+		const { editor, pressEscape, discardedDrafts } = setup();
+		editor.setText("a prompt worth abandoning");
+		now.mockReturnValue(1_000);
+		pressEscape();
+		now.mockReturnValue(1_300);
+		pressEscape();
+		expect(editor.getText()).toBe("");
+		// Through `discardDraft`, not `setText("")`: only the former leaves it undoable.
+		expect(discardedDrafts).toEqual(["a prompt worth abandoning"]);
+	});
+
+	/** The bound, so a press now and a press a minute later is not one gesture. */
+	it("keeps the draft when the second press is outside the window", () => {
+		const now = vi.spyOn(Date, "now");
+		const { editor, pressEscape, discardedDrafts } = setup();
+		editor.setText("a prompt worth keeping");
+		now.mockReturnValue(1_000);
+		pressEscape();
+		now.mockReturnValue(1_500); // exactly the window, which is already too late
+		pressEscape();
+		expect(editor.getText()).toBe("a prompt worth keeping");
+		expect(discardedDrafts).toEqual([]);
+		// Still armed by the second press, so a third inside ITS window discards.
+		now.mockReturnValue(1_600);
+		pressEscape();
+		expect(discardedDrafts).toEqual(["a prompt worth keeping"]);
+	});
+
+	/** Arming over a draft must not complete the empty-composer gesture. */
+	it("does not open the tree when the draft is cleared between the two presses", () => {
+		const now = vi.spyOn(Date, "now");
+		const { editor, pressEscape, treeOpens } = setup();
+		settings.set("doubleEscapeAction", "tree");
+		editor.setText("armed with a draft");
+		now.mockReturnValue(1_000);
+		pressEscape();
+		editor.setText("");
+		now.mockReturnValue(1_100);
+		pressEscape();
+		expect(treeOpens).toEqual([]);
+	});
+
+	/** And arming over an empty composer must not discard a draft typed after it. */
+	it("does not discard a draft typed between the two presses", () => {
+		const now = vi.spyOn(Date, "now");
+		const { editor, pressEscape, discardedDrafts } = setup();
+		settings.set("doubleEscapeAction", "tree");
+		now.mockReturnValue(1_000);
+		pressEscape();
+		editor.setText("typed after the first press");
+		now.mockReturnValue(1_100);
+		pressEscape();
+		expect(editor.getText()).toBe("typed after the first press");
+		expect(discardedDrafts).toEqual([]);
+	});
+
+	/**
+	 * The arming does not survive an Esc that landed on an empty composer.
+	 *
+	 * Without the disarm, an Esc pressed over an abandoned draft stays armed across the
+	 * press that followed it, and the FIRST Esc over the next draft — an unrelated
+	 * gesture, minutes later by the operator's reckoning — discards it.
+	 */
+	it("does not carry an arming across an Esc on an empty composer", () => {
+		const now = vi.spyOn(Date, "now");
+		const { editor, pressEscape, discardedDrafts } = setup();
+		editor.setText("a draft the first press armed");
+		now.mockReturnValue(1_000);
+		pressEscape();
+		editor.setText("");
+		now.mockReturnValue(1_100);
+		pressEscape();
+		editor.setText("an unrelated draft");
+		now.mockReturnValue(1_200);
+		pressEscape();
+		expect(editor.getText()).toBe("an unrelated draft");
+		expect(discardedDrafts).toEqual([]);
 	});
 });

@@ -9,9 +9,10 @@ import { getProjectDir } from "@veyyon/utils";
 import chalk from "chalk";
 import { Settings } from "../config/settings";
 import type { ToolSession } from "../tools";
-import { wrapToolWithMetaNotice } from "../tools/output-meta";
-import { ReadTool } from "../tools/read";
-import { renderError } from "../tools/tool-errors";
+import { wrapToolWithMetaNotice } from "../tools/core/output-meta";
+import { TOOL_EXECUTION_ENTRIES } from "../tools/core/execution-registry";
+import { renderError } from "../tools/core/tool-errors";
+import { ReadTool } from "../tools/fs/read";
 import { EXIT_USAGE } from "./exit-codes";
 
 export interface ReadCommandArgs {
@@ -38,7 +39,16 @@ export async function runReadCommand(cmd: ReadCommandArgs): Promise<void> {
 	const tool = wrapToolWithMetaNotice(new ReadTool(session));
 
 	try {
-		const result = await tool.execute("veyyon-read", { path: cmd.path });
+		// `veyyon read` has no session, so the call carries a policy-only frame:
+		// the settings holding the standing refusals and nothing else.
+		const result = await TOOL_EXECUTION_ENTRIES["cli.read"].invoke(
+			tool,
+			"veyyon-read",
+			{ path: cmd.path },
+			undefined,
+			undefined,
+			{ settings },
+		);
 
 		for (const block of result.content) {
 			if (block.type === "text") {

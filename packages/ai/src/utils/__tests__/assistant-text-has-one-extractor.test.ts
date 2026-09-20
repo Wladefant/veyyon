@@ -5,8 +5,8 @@
  * are text: thinking blocks, tool calls and tool results sit in the same list. Pulling the
  * text out means knowing which blocks count, and three modules knew it independently.
  * `@veyyon/ai/utils/message-text` had `assistantTextBlocks` for content already typed as
- * `AssistantMessage["content"]`, while `coding-agent/src/mnemopi/state.ts` and
- * `typescript-edit-benchmark/src/argot-bench.ts` each hand-rolled the same walk for
+ * `AssistantMessage["content"]`, while `coding-agent/src/memory/mnemopi/state.ts` and
+ * `evals/src/suites/typescript-edit/argot-bench.ts` each hand-rolled the same walk for
  * content arriving as `unknown` from a session log or a benchmark transcript.
  *
  * WHAT DRIFT WOULD HAVE COST. Nothing throws when a copy falls behind. A new content-block

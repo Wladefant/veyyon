@@ -6,20 +6,23 @@
  */
 import * as path from "node:path";
 import type { AgentToolResult } from "@veyyon/agent-core";
+import {
+	factoryExportMissingMessage,
+	moduleImportFailedMessage,
+	nameConflictMessage,
+} from "@veyyon/kernel/loader/load-failure";
+import * as typebox from "@veyyon/kernel/registry/typebox";
 import { errorMessage, logger } from "@veyyon/utils";
 import { type } from "arktype";
 import * as zodModule from "zod/v4";
-import { toolCapability } from "../../capability/tool";
 import { type DiscoveredCustomTool, loadCapability } from "../../discovery";
+import { toolCapability } from "../../discovery/capability/tool";
 import { pluginsRootFor } from "../../discovery/helpers";
-import type { ExecOptions } from "../../exec/exec";
-import { execCommand } from "../../exec/exec";
-import type { HookUIContext } from "../../extensibility/hooks/types";
-import { getAllPluginToolPaths } from "../../extensibility/plugins/loader";
+import { type ExecOptions, execCommand, withSessionCpuExec } from "../../exec/exec";
 // Runtime self-reference: dereference this namespace only inside loader functions to keep the index.ts cycle safe.
 import { type CodingAgentApi, loadCodingAgentApi } from "../coding-agent-api";
-import { factoryExportMissingMessage, moduleImportFailedMessage, nameConflictMessage } from "../load-failure";
-import * as typebox from "../typebox";
+import type { HookUIContext } from "../hooks/types";
+import { getAllPluginToolPaths } from "../plugins/loader";
 import { createNoOpUIContext, resolvePath, withExitGuard } from "../utils";
 import type { CustomToolAPI, CustomToolFactory, LoadedCustomTool, ToolLoadError } from "./types";
 
@@ -124,7 +127,7 @@ async function loadTool(
 }
 
 /** Tool path with optional source metadata, suitable for forwarding from a
- * parent session to a subagent so the subagent can re-bind tools to its own
+ * parent session to an agent so the agent can re-bind tools to its own
  * `CustomToolAPI` without redoing the filesystem scan. */
 export interface ToolPathWithSource {
 	path: string;
@@ -158,6 +161,7 @@ export class CustomToolLoader {
 			reject?(reason: string): Promise<AgentToolResult<unknown> | undefined>;
 		}) => void,
 		adoptSpawnedPid?: (pid: number) => void,
+		gateSpawn?: (what: string) => Promise<void>,
 	) {
 		this.#sharedApi = {
 			cwd,
@@ -166,7 +170,7 @@ export class CustomToolLoader {
 					command,
 					args,
 					options?.cwd ?? cwd,
-					adoptSpawnedPid ? { ...options, adoptPid: adoptSpawnedPid } : options,
+					withSessionCpuExec(options, adoptSpawnedPid, gateSpawn, "a custom tool command"),
 				),
 			ui: createNoOpUIContext(),
 			hasUI: false,
@@ -194,7 +198,7 @@ export class CustomToolLoader {
 	async load(pathsWithSources: ToolPathWithSource[]): Promise<void> {
 		for (const { path: toolPath, source } of pathsWithSources) {
 			const { tools: loadedTools, errors } = await loadTool(toolPath, this.#sharedApi.cwd, this.#sharedApi, source);
-			this.errors.push(...errors);
+			for (let ei = 0; ei < errors.length; ei++) this.errors.push(errors[ei]!);
 
 			for (const loadedTool of loadedTools) {
 				// Check for name conflicts
@@ -242,6 +246,7 @@ export async function loadCustomTools(
 		reject?(reason: string): Promise<AgentToolResult<unknown> | undefined>;
 	}) => void,
 	adoptSpawnedPid?: (pid: number) => void,
+	gateSpawn?: (what: string) => Promise<void>,
 ) {
 	// No paths means no author code will ever see the API object, and building one costs the whole
 	// package barrel (see `../coding-agent-api`). Every launch calls this from `createAgentSession`,
@@ -258,6 +263,7 @@ export async function loadCustomTools(
 		builtInToolNames,
 		pushPendingAction,
 		adoptSpawnedPid,
+		gateSpawn,
 	);
 	await loader.load(pathsWithSources);
 	return {
@@ -274,7 +280,7 @@ export async function loadCustomTools(
  * binding factories. Hot path on session startup — the scan walks
  * `.veyyon/tools/`, `.claude/tools/`, the plugin tree, and any configured paths.
  *
- * Subagents reuse the parent's collected paths via the SDK's
+ * Agents reuse the parent's collected paths via the SDK's
  * `preloadedCustomToolPaths` option, then call `loadCustomTools` themselves
  * so each session re-binds factories with its own session-scoped
  * `CustomToolAPI` (cwd, exec, pushPendingAction, UI).
@@ -337,7 +343,7 @@ export async function discoverCustomToolPaths(
  * 3. Explicitly configured paths from settings or CLI
  *
  * Composed of {@link discoverCustomToolPaths} (FS scan) + {@link loadCustomTools}
- * (per-session binding). Subagents skip the first step and just call
+ * (per-session binding). Agents skip the first step and just call
  * `loadCustomTools` against the parent's collected paths.
  *
  * @param configuredPaths - Explicit paths from settings.json and CLI --tool flags

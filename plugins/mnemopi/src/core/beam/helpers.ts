@@ -1,0 +1,405 @@
+import type { Database } from "bun:sqlite";
+import * as logger from "@veyyon/utils/logger";
+import { clamp01 } from "@veyyon/utils/math";
+import { generateId as generateTimedId, sha256Hex16, stableMemoryId } from "../../util/ids";
+import {
+	cjkFtsTerms,
+	containsSpacelessCjk,
+	FACT_MATCH_STOPWORDS,
+	factMatchTokens,
+	ftsQueryTerms,
+	isCjkChar,
+	RECALL_SYNONYMS,
+	recallTokens,
+	unicodeWordTokens,
+} from "../../util/regex";
+import { tableExists } from "../../util/sqlite";
+import { currentEmbeddingModel, embed } from "../embeddings";
+import { getMnemopiRuntimeOptions, mnemopiDebugEnabled, withMnemopiRuntimeOptions } from "../runtime-options";
+import { buildExactVectorIndex, searchExactVectorIndex } from "../vector-index";
+import { decodeEmbeddingJson, encodeEmbeddingJson } from "../vector-math";
+import type { BeamMemoryState, JsonValue, Metadata } from "./types";
+
+// `HybridWeights` is declared in `../../config`, next to the weights it describes.
+export type { HybridWeights } from "../../config";
+
+export interface VectorDistanceResult {
+	rowid: number;
+	distance: number;
+}
+
+export interface WorkingVectorResult {
+	id: string;
+	sim: number;
+}
+
+const SPLIT_TOKEN_RE = /[_:/.-]+/g;
+
+function rowValue<T>(row: unknown, key: string): T | undefined {
+	if (row && typeof row === "object" && key in row) return (row as Record<string, T>)[key];
+	return undefined;
+}
+
+export function generateId(content: string, now: Date = new Date()): string {
+	return generateTimedId(content, now);
+}
+
+export function generateStableId(content: string, source = ""): string {
+	return stableMemoryId(content, source);
+}
+
+export function normalizeImportance(importance: number | null | undefined, fallback = 0.5): number {
+	return clamp01(importance ?? fallback);
+}
+
+// The temporal-scoring family (parseIsoDateTimeUtc, parseQueryTime, recencyDecay,
+// temporalBoost, and the timestamp cache) lives in util/datetime.ts, the single
+// owner. Recall scoring reaches it through recall.ts; this module keeps no fork.
+
+export function lexicalRelevance(queryTokens: readonly string[], content: string, queryLower = ""): number {
+	const contentLower = content.toLowerCase();
+	const queryCjk = new Set(Array.from(queryLower).filter(isCjkChar));
+	if (queryTokens.length === 0 && queryCjk.size === 0) return 0;
+
+	const contentTokens = new Set(recallTokens(contentLower));
+	for (const token of Array.from(contentTokens)) {
+		for (const part of token.split(SPLIT_TOKEN_RE)) {
+			if (part.length >= 3 && !FACT_MATCH_STOPWORDS.has(part) && !/^\d+$/.test(part)) contentTokens.add(part);
+		}
+	}
+	if (contentTokens.size === 0 && queryCjk.size === 0) return 0;
+
+	let exact = 0;
+	let partial = 0;
+	for (const token of queryTokens) {
+		if (contentTokens.has(token)) {
+			exact += 1;
+			continue;
+		}
+		const synonyms = RECALL_SYNONYMS[token] ?? [];
+		if (synonyms.some(syn => contentTokens.has(syn))) {
+			partial += 0.75;
+			continue;
+		}
+		if (
+			token.length >= 4 &&
+			Array.from(contentTokens).some(
+				contentToken => contentToken.length >= 4 && (token.includes(contentToken) || contentToken.includes(token)),
+			)
+		) {
+			partial += 0.4;
+		}
+	}
+
+	const fullMatch = queryLower !== "" && contentLower.includes(queryLower) ? 1 : 0;
+	let score = (exact + partial + fullMatch) / Math.max(queryTokens.length, 1);
+	if (score === 0 && queryCjk.size > 0) {
+		const contentCjk = new Set(Array.from(contentLower).filter(isCjkChar));
+		let overlap = 0;
+		for (const ch of queryCjk) if (contentCjk.has(ch)) overlap += 1;
+		score = overlap / queryCjk.size;
+	}
+	return Math.min(score, 1);
+}
+
+export function strictFactMatches(query: string, factText: string): boolean {
+	const queryLower = query.toLowerCase().trim();
+	const factLower = factText.toLowerCase().trim();
+	if (!queryLower || !factLower) return false;
+	if (factLower.includes(queryLower)) return true;
+	const queryTokens = factMatchTokens(queryLower);
+	const factTokens = factMatchTokens(factLower);
+	if (queryTokens.size === 0 || factTokens.size === 0) return false;
+	const overlap = Array.from(queryTokens).filter(token => factTokens.has(token));
+	if (overlap.length >= 2) return true;
+	const token = overlap[0];
+	if (token === undefined) return false;
+	if (token.length >= 8 && /[./:_-]/.test(token)) return true;
+	return token.length >= 5;
+}
+
+export function buildFtsQuery(query: string): string {
+	return ftsQueryTerms(query).join(" OR ");
+}
+
+export function encodeVector(embedding: readonly number[]): string {
+	return encodeEmbeddingJson(embedding);
+}
+
+/**
+ * The decoded embedding, or null when the column held no usable JSON.
+ *
+ * Spelled `number[]` rather than through a local `Vector` alias, which is what this module
+ * used to export: a third `Vector` in this package, meaning a third thing (a plain array,
+ * against `types.ts`'s wide union and `core/embeddings.ts`'s dense `Float32Array`). The
+ * alias was imported by nothing and bought nothing over the concrete type it stood for,
+ * and `decodeEmbeddingJson` already returns exactly this.
+ */
+export function decodeVector(value: string | null | undefined): number[] | null {
+	return decodeEmbeddingJson(value);
+}
+
+export function vecAvailable(db: Database): boolean {
+	return tableExists(db, "vec_episodes");
+}
+
+export function effectiveVecType(db: Database): "float32" | "int8" | "bit" {
+	if (!vecAvailable(db)) return "float32";
+	const row = db.query("SELECT sql FROM sqlite_master WHERE type='table' AND name='vec_episodes'").get() as {
+		sql?: string;
+	} | null;
+	const sql = row?.sql ?? "";
+	if (sql.includes("int8")) return "int8";
+	if (sql.includes("bit")) return "bit";
+	return "float32";
+}
+
+export function vecInsert(db: Database, rowid: number, embedding: readonly number[]): void {
+	const vecType = effectiveVecType(db);
+	const embJson = encodeVector(embedding);
+	if (vecType === "bit") {
+		db.query("INSERT INTO vec_episodes(rowid, embedding) VALUES (?, vec_quantize_binary(?))").run(rowid, embJson);
+	} else if (vecType === "int8") {
+		db.query("INSERT INTO vec_episodes(rowid, embedding) VALUES (?, vec_quantize_int8(?, 'unit'))").run(
+			rowid,
+			embJson,
+		);
+	} else {
+		db.query("INSERT INTO vec_episodes(rowid, embedding) VALUES (?, ?)").run(rowid, embJson);
+	}
+}
+
+export function vecSearch(db: Database, embedding: readonly number[], k = 20): VectorDistanceResult[] {
+	if (!vecAvailable(db)) return [];
+	const vecType = effectiveVecType(db);
+	const embJson = encodeVector(embedding);
+	const limit = Math.max(0, Math.trunc(k));
+	let rows: Record<string, unknown>[];
+	if (vecType === "bit") {
+		rows = db
+			.query(
+				`SELECT rowid, distance FROM vec_episodes WHERE embedding MATCH vec_quantize_binary(?) ORDER BY distance LIMIT ${limit}`,
+			)
+			.all(embJson) as Record<string, unknown>[];
+	} else if (vecType === "int8") {
+		rows = db
+			.query(
+				`SELECT rowid, distance FROM vec_episodes WHERE embedding MATCH vec_quantize_int8(?, "unit") AND k=${limit} ORDER BY distance`,
+			)
+			.all(embJson) as Record<string, unknown>[];
+	} else {
+		rows = db
+			.query(`SELECT rowid, distance FROM vec_episodes WHERE embedding MATCH ? ORDER BY distance LIMIT ${limit}`)
+			.all(embJson) as Record<string, unknown>[];
+	}
+	return rows.map(row => ({ rowid: Number(row.rowid), distance: Number(row.distance) }));
+}
+
+export function inMemoryVecSearch(db: Database, queryEmbedding: readonly number[], k = 20): VectorDistanceResult[] {
+	if (queryEmbedding.length === 0 || !tableExists(db, "memory_embeddings")) return [];
+	const rows = db
+		.query(`
+			SELECT em.rowid, me.memory_id, me.embedding_json
+			FROM memory_embeddings me
+			JOIN episodic_memory em ON me.memory_id = em.id
+			LIMIT 10000
+		`)
+		.all() as Record<string, unknown>[];
+	const index = buildExactVectorIndex(
+		rows.map(row => ({ id: Number(row.rowid), vector: decodeVector(String(row.embedding_json ?? "")) })),
+	);
+	return searchExactVectorIndex(index, queryEmbedding, k).map(hit => ({ rowid: hit.id, distance: 1 - hit.score }));
+}
+
+export function workingMemoryVecSearch(
+	db: Database,
+	queryEmbedding: readonly number[],
+	k = 20,
+	now: Date = new Date(),
+): WorkingVectorResult[] {
+	if (queryEmbedding.length === 0 || !tableExists(db, "memory_embeddings")) return [];
+	const limit = process.env.MNEMOPI_BEAM_MODE ? 500_000 : 50_000;
+	const rows = db
+		.query(`
+			SELECT wm.id, me.embedding_json
+			FROM memory_embeddings me
+			JOIN working_memory wm ON me.memory_id = wm.id
+			WHERE wm.superseded_by IS NULL
+			  AND (wm.valid_until IS NULL OR wm.valid_until > ?)
+			LIMIT ?
+		`)
+		.all(now.toISOString(), limit) as Record<string, unknown>[];
+	const index = buildExactVectorIndex(
+		rows.map(row => ({ id: String(row.id), vector: decodeVector(String(row.embedding_json ?? "")) })),
+	);
+	return searchExactVectorIndex(index, queryEmbedding, k).map(hit => ({ id: hit.id, sim: hit.score }));
+}
+
+export function normalizeMetadata(input: unknown): Metadata {
+	if (input == null) return {};
+	if (typeof input === "string") {
+		try {
+			return normalizeMetadata(JSON.parse(input) as unknown);
+		} catch {
+			// Metadata that is not JSON has no fields to normalize, and an empty record is what a memory stored
+			// without metadata gives. The memory itself is still returned; only its annotations are absent.
+			return {};
+		}
+	}
+	if (typeof input !== "object" || Array.isArray(input)) return {};
+	const out: Metadata = {};
+	for (const key in input) {
+		const normalized = normalizeJsonValue((input as Record<string, unknown>)[key]);
+		if (normalized !== undefined) out[key] = normalized;
+	}
+	return out;
+}
+
+function normalizeJsonValue(value: unknown): JsonValue | undefined {
+	if (value == null || typeof value === "string" || typeof value === "boolean") return value;
+	if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+	if (Array.isArray(value)) {
+		const out: JsonValue[] = [];
+		for (const item of value) {
+			const normalized = normalizeJsonValue(item);
+			if (normalized !== undefined) out.push(normalized);
+		}
+		return out;
+	}
+	if (typeof value === "object") {
+		const out: Record<string, JsonValue> = {};
+		for (const key in value) {
+			const normalized = normalizeJsonValue((value as Record<string, unknown>)[key]);
+			if (normalized !== undefined) out[key] = normalized;
+		}
+		return out;
+	}
+	return undefined;
+}
+
+export function metadataJson(input: unknown): string {
+	return JSON.stringify(normalizeMetadata(input));
+}
+
+const RU_MARKERS = new Set(
+	"я ты он она оно мы вы они не на в с по для что как это так но да нет уже ещё мой твой наш ваш этот тот".split(" "),
+);
+const GERMAN_MARKERS = new Set(
+	"ich du wir ist nicht für und der die das ein eine kein keine mein meine dann auch immer nie niemals mag will möchte kann kannst können habe hast hat haben bin bist sind seid einen einer eines dem den beim zum zur nach mit von bei aus auf vor aber oder weil denn dass sehr schon noch mal man nur wenn wie als doch gerne gern lieber einfach eigentlich vielleicht natürlich genau bereits eben".split(
+		" ",
+	),
+);
+const SPANISH_MARKERS = new Set(
+	"y de por con para que qué como el la lo los las un una del este esta esto ese esa eso aquel mi mis tu tus su sus es está son hay tiene puede más no también si ya nunca he se me te le a yo ante bajo contra desde en entre hacia hasta según sin sobre tras todo toda cada muy pero siempre usa hacer antes recuerda evita".split(
+		" ",
+	),
+);
+const ITALIAN_MARKERS = new Set(
+	"e il la i le di che non un una per è in sono mi ha ma lo se su con da come questo quello anche o ho ci si perché perche quando chi dove molto del della delle dei degli nel nella sul sulla sui sulle al alla agli alle".split(
+		" ",
+	),
+);
+
+export function detectLanguage(text: string): string {
+	if (!text) return "en";
+	const lower = text.toLowerCase();
+	const cyrillic = "абвгдеёжзийклмнопрстуфхцчшщъыьэюя";
+	let russianChars = 0;
+	for (const ch of lower) if (cyrillic.includes(ch)) russianChars += 1;
+	if (russianChars >= 5) return "ru";
+	if (russianChars >= 2 && intersectionCount(words(lower), RU_MARKERS) >= 2) return "ru";
+	if (["ä", "ö", "ü", "ß"].some(ch => lower.includes(ch))) return "de";
+	const textWords = words(lower);
+	if (intersectionCount(textWords, GERMAN_MARKERS) >= 2) return "de";
+	if (["ñ", "á", "é", "í", "ó", "ú", "ü", "¿", "¡"].some(ch => lower.includes(ch))) return "es";
+	if (intersectionCount(textWords, SPANISH_MARKERS) >= 2) return "es";
+	if (
+		["à", "è", "é", "ì", "ò", "ù"].some(ch => lower.includes(ch)) &&
+		intersectionCount(textWords, ITALIAN_MARKERS) >= 2
+	) {
+		return "it";
+	}
+	return "en";
+}
+
+function words(text: string): Set<string> {
+	return new Set(unicodeWordTokens(text));
+}
+
+function intersectionCount(left: ReadonlySet<string>, right: ReadonlySet<string>): number {
+	let count = 0;
+	for (const item of left) if (right.has(item)) count += 1;
+	return count;
+}
+
+export function memoryRowMetadata(row: unknown): Metadata {
+	return normalizeMetadata(rowValue<unknown>(row, "metadata_json") ?? rowValue<unknown>(row, "metadata"));
+}
+export {
+	cosineSimilarity,
+	hammingDistance,
+	informationTheoreticScore,
+	maximallyInformativeBinarization,
+	quantizeInt8,
+} from "../binary-vectors";
+export { cjkFtsTerms, containsSpacelessCjk, ftsQueryTerms, recallTokens, sha256Hex16 };
+
+/** Identifies one freshly stored memory whose embedding still needs to be derived. */
+export interface EmbedItem {
+	readonly memoryId: string;
+	readonly content: string;
+}
+
+async function runEmbedding(beam: BeamMemoryState, items: readonly EmbedItem[]): Promise<void> {
+	try {
+		const matrix = await embed(items.map(item => item.content));
+		if (matrix === null) return;
+		const model = currentEmbeddingModel();
+		const insertEmbedding = beam.db.prepare(
+			"INSERT OR REPLACE INTO memory_embeddings(memory_id, embedding_json, model) VALUES (?, ?, ?)",
+		);
+		const insertMany = beam.db.transaction((rows: readonly EmbedItem[]) => {
+			for (let i = 0; i < rows.length; i += 1) {
+				const vector = matrix[i];
+				const item = rows[i];
+				if (vector === undefined || item === undefined) continue;
+				insertEmbedding.run(item.memoryId, JSON.stringify(Array.from(vector)), model);
+			}
+		});
+		insertMany(items);
+	} catch (error) {
+		// Background embedding generation is best-effort: a failing provider, a closed DB
+		// during shutdown, or a transient API error must never disrupt the synchronous
+		// remember()/consolidate() that scheduled it. Production recall silently degrades
+		// to FTS-only for the affected rows, which is the same shape as a misconfigured
+		// provider. Log so the failure is diagnosable (#2322).
+		const logEmbedFailure = mnemopiDebugEnabled() ? logger.warn : logger.debug;
+		logEmbedFailure("mnemopi: background embedding failed", {
+			itemCount: items.length,
+			error: String(error),
+		});
+	}
+}
+
+/**
+ * Schedule background embedding generation for one or more freshly stored memories.
+ *
+ * Mirrors the `scheduleFactExtraction` pattern in `beam/store.ts`: `remember()`,
+ * `rememberBatch()`, and `consolidateToEpisodic()` are synchronous, but `embed()` is
+ * async (it may hit an HTTP provider), so the task is fired-and-forgotten and tracked
+ * on `beam.pendingExtractions` so tests and graceful shutdown can drain it via
+ * `flushExtractions()`. The active runtime options (provider, model, API URL/key) are
+ * captured here and re-entered inside the task because the `AsyncLocalStorage` scope
+ * set by `Mnemopi.#withRuntimeOptions` has already exited by the time the task runs.
+ */
+export function scheduleEmbedding(beam: BeamMemoryState, items: readonly EmbedItem[]): void {
+	const cleaned = items.filter(item => item.content.trim() !== "");
+	if (cleaned.length === 0) return;
+	const runtimeOptions = getMnemopiRuntimeOptions();
+	const task = withMnemopiRuntimeOptions(runtimeOptions, () => runEmbedding(beam, cleaned));
+	const pending = beam.pendingExtractions;
+	if (pending !== undefined) {
+		pending.add(task);
+		void task.finally(() => pending.delete(task));
+	}
+}

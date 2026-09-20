@@ -3,15 +3,15 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { Agent } from "@veyyon/agent-core";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { loadExtensions } from "@veyyon/coding-agent/extensibility/extensions/loader";
 import { ExtensionRunner } from "@veyyon/coding-agent/extensibility/extensions/runner";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
 import * as unexpectedStopClassifier from "@veyyon/coding-agent/session/unexpected-stop-classifier";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { getProjectAgentDir, TempDir, withTimeout } from "@veyyon/utils";
 import * as logger from "@veyyon/utils/logger";
 
@@ -88,7 +88,9 @@ describe("AgentSession auto-compaction queue resume", () => {
 		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
 		getRuntimeSignals().length = 0;
 
-		const extensionsResult = await loadExtensions([extensionPath], tempDir.path());
+		const extensionsResult = await loadExtensions([extensionPath], tempDir.path(), undefined, undefined, {
+			configuredPaths: [extensionPath],
+		});
 		const extensionRunner = new ExtensionRunner(
 			extensionsResult.extensions,
 			extensionsResult.runtime,
@@ -510,7 +512,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 		const bigCallId = "call-big-useless";
 		sessionManager.appendMessage({
 			role: "assistant",
-			content: [{ type: "toolCall", id: bigCallId, name: "grep", arguments: { pattern: "TODO" } }],
+			content: [{ type: "toolCall", id: bigCallId, name: "search", arguments: { type: "text", input: "TODO" } }],
 			api: "anthropic-messages",
 			provider: "anthropic",
 			model: "claude-sonnet-4-5",
@@ -528,7 +530,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 		sessionManager.appendMessage({
 			role: "toolResult",
 			toolCallId: bigCallId,
-			toolName: "grep",
+			toolName: "search",
 			content: [{ type: "text", text: "match line\n".repeat(20000) }], // ~40k+ tokens
 			isError: false,
 			useless: true,

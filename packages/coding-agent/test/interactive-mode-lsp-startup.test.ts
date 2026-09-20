@@ -1,17 +1,18 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "@veyyon/coding-agent/lsp/startup-events";
-import { InteractiveMode } from "@veyyon/coding-agent/modes/interactive-mode";
-import { initTheme, theme } from "@veyyon/coding-agent/modes/theme/theme";
+import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
 import { lookupBuiltinSlashCommand } from "@veyyon/coding-agent/slash-commands/builtin-registry";
+import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import type { LspStartupServerInfo } from "@veyyon/coding-agent/tools";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import type { Component } from "@veyyon/tui";
 import { TempDir } from "@veyyon/utils";
 
 describe("InteractiveMode LSP startup welcome banner", () => {
@@ -74,7 +75,7 @@ describe("InteractiveMode LSP startup welcome banner", () => {
 		// Starting a real fs.watch on the repo HEAD in a parallel Bun worker is
 		// enough to trigger a Bun SIGTRAP in unrelated workers during the
 		// 4-worker suite reproducer, so keep the watcher out of this contract.
-		vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
+		vi.spyOn(mode.statusLine, "watchGitState").mockImplementation(() => {});
 	});
 
 	afterEach(async () => {
@@ -100,6 +101,12 @@ describe("InteractiveMode LSP startup welcome banner", () => {
 				editor: { setText: () => {} },
 				showStatus: (text: string) => {
 					outputs.push(text);
+				},
+				showReport: (title: string, body: string) => {
+					outputs.push(`${title}\n${body}`);
+				},
+				present: (block: Component) => {
+					outputs.push(block.render(100).join("\n"));
 				},
 			},
 		} as unknown as Parameters<NonNullable<typeof lspCommand.handleTui>>[1];

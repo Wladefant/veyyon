@@ -8,8 +8,8 @@ Example hooks for the veyyon coding agent.
 # Load a hook with --hook flag
 veyyon --hook examples/hooks/permission-gate.ts
 
-# Or copy to hooks directory for auto-discovery
-cp permission-gate.ts ~/.veyyon/agent/hooks/
+# Or copy to the profile's hooks directory for auto-discovery, under pre/ or post/
+cp permission-gate.ts ~/.veyyon/profiles/<profile>/agent/hooks/pre/
 ```
 
 ## Examples
@@ -31,7 +31,7 @@ cp permission-gate.ts ~/.veyyon/agent/hooks/
 
 ## Writing Hooks
 
-See [docs/hooks.md](../../../../docs/hooks.md) for full documentation.
+See [docs/handbook/src/reference/hooks.md](../../../../docs/handbook/src/reference/hooks.md) for full documentation.
 
 ```typescript
 import type { HookAPI } from "@veyyon/coding-agent";

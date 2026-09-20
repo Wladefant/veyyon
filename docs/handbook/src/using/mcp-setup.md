@@ -1,11 +1,11 @@
 # MCP server setup
 
 Veyyon can connect to third-party Model Context Protocol (MCP) servers so external tools and data
-sources become available to the agent. This guide explains how to register those servers, choose a
+sources become available to the agent. Register a server, choose a
 transport, authenticate, and fix the most common connection problems.
 
 For an overview of what MCP does in Veyyon, see [MCP](../features/mcp.md). Engineering reference:
-[`docs/mcp-config.md`](../../../mcp-config.md).
+[`docs/handbook/src/reference/mcp-config.md`](../reference/mcp-config.md).
 
 ## Where servers are configured
 
@@ -16,7 +16,9 @@ MCP servers are configured as **JSON** in `mcp.json`, not in `config.yml`:
 | User | `~/.veyyon/profiles/default/agent/mcp.json` (profile: `~/.veyyon/profiles/<name>/agent/mcp.json`) |
 
 There is no project scope: a repository's own `mcp.json`, `.mcp.json`, or `.veyyon/mcp.json` is not
-read, because a checked-in file must not name a server the agent connects to.
+read, because a checked-in file must not name a server the agent connects to. No `/mcp` subcommand
+takes a scope, and writing `project` or `user` as an argument is rejected with that reason rather than
+accepted, in a terminal and in a client alike.
 
 Veyyon also discovers MCP entries from other tools' user-level configs (Claude, Cursor, Codex,
 Gemini, OpenCode, Windsurf). The easiest way to add a server is `/mcp add` in the TUI, which writes
@@ -84,6 +86,39 @@ Local stdio servers often need environment variables:
 }
 ```
 
+A stdio server does not inherit the shell environment. It receives a baseline of variables a
+program needs in order to run — `PATH`, `HOME`, temp and locale settings, certificate and proxy
+settings, and the directories version managers use to resolve a command — plus whatever `env`
+sets. Every other ambient variable, including provider keys and CI tokens, is withheld. On
+Windows the baseline also carries `PATHEXT`, `SystemRoot`, `ComSpec` and the `ProgramFiles`
+variants, and names match without regard to case.
+
+To forward an ambient variable, name it:
+
+```json
+{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "envPassthrough": ["GITHUB_TOKEN"]
+    }
+  }
+}
+```
+
+`inheritEnv: true` hands one server the whole environment, including every credential in it. Use
+it when a server needs a variable you cannot name in advance. It is set per server, and each
+spawn logs a warning stating the command.
+
+```json
+{
+  "mcpServers": {
+    "legacy": { "command": "/opt/legacy/mcp", "inheritEnv": true }
+  }
+}
+```
+
 For HTTP servers, pass credentials or account ids as headers:
 
 ```json
@@ -119,11 +154,16 @@ TUI with `/mcp reauth <name>`:
     "crm": {
       "type": "http",
       "url": "https://crm.example.com/mcp",
-      "oauth": { "clientId": "veyyon-crm-client" }
+      "oauth": {
+        "clientId": "veyyon-crm-client",
+        "scopes": "read write"
+      }
     }
   }
 }
 ```
+
+To override discovered scopes during dynamic client registration and authorization, set `scopes` to a space-separated string.
 
 ## Approve tools
 
@@ -145,11 +185,23 @@ To turn a server off entirely, add its name to `disabledServers` in `mcp.json`.
 | Command | Purpose |
 | --- | --- |
 | `/mcp` | List servers, connection/auth status, and exposed tools |
-| `/mcp add` | Add a server (writes `mcp.json`) |
+| `/mcp add` | Add a server through the interactive wizard (writes `mcp.json`) |
+| `/mcp add <name> [http\|sse] [url <url>] [token <token>] [run <command...>]` | Add a server without the wizard |
 | `/mcp list` | List configured servers |
 | `/mcp remove <name>` | Remove a server |
 | `/mcp test <name>` | Test connectivity |
 | `/mcp reauth <name>` | Refresh OAuth |
+| `/mcp unauth <name>` | Remove the stored OAuth credential |
+| `/mcp enable <name>` / `/mcp disable <name>` | Turn a server on or off |
+| `/mcp reconnect <name>` | Reconnect one server, including one whose automatic reconnects were suspended after repeated exits |
+| `/mcp reload` | Reload `mcp.json` and rediscover tools |
+| `/mcp resources` / `/mcp prompts` | List the resources and prompts connected servers expose |
+| `/mcp notifications` | Show notification capabilities and subscription state |
+| `/mcp smithery-search <keyword...>` | Search the Smithery registry and deploy from the picker |
+
+`/mcp add` stores manually entered credentials in `env` for stdio servers and in `headers` for
+HTTP and SSE servers. After OAuth failure or cancellation, choose **Retry** to restart authorization
+or **Edit OAuth settings** to change the authorization URL, token URL, client ID, client secret or scopes.
 
 Run `/mcp list` to see exactly which tools, resources, and templates Veyyon registered.
 

@@ -1,20 +1,28 @@
 import * as path from "node:path";
-import { Text } from "@veyyon/tui";
-import { errorMessage, formatCount, logger } from "@veyyon/utils";
+import { clamp, errorMessage, formatCount, logger } from "@veyyon/utils";
+import { replaceTabs } from "@veyyon/utils/tab-width";
+import { truncateToWidth } from "@veyyon/utils/width";
+import type { TextBlockView } from "@veyyon/view";
 import { type } from "arktype";
 import type { ToolDefinition } from "../../extensibility/extensions";
-import type { Theme } from "../../modes/theme/theme";
-import { replaceTabs, truncateToWidth } from "../../tools/render-utils";
 import * as git from "../../utils/git";
 import { parseWorkDirDirtyPaths, tryReadHeadSha } from "../git";
 import { dedupeStrings, gitStatusPorcelain, gitWorkDirPrefix, normalizePathSpec } from "../helpers";
 import { buildExperimentState } from "../state";
 import { openAutoresearchStorage, type SessionRow } from "../storage";
+import { MAX_ATTEMPTS, MAX_BREADTH } from "../swarm";
 import type { AutoresearchToolFactoryOptions, ExperimentState } from "../types";
+import { activeToolsChanged, activeToolsFor } from ".";
 
 export const HARNESS_FILENAME = "autoresearch.sh";
 export const DEFAULT_HARNESS_COMMAND = `bash ${HARNESS_FILENAME}`;
 const HARNESS_COMMIT_TITLE = "autoresearch: harness setup";
+
+/** Undefined leaves the setting alone; a nonsense number is clamped, never rejected. */
+function clampCount(value: number | undefined, max: number): number | null {
+	if (value === undefined || !Number.isFinite(value)) return null;
+	return clamp(Math.floor(value), 1, max);
+}
 
 const initExperimentSchema = type({
 	name: type("string").describe("experiment name"),
@@ -28,6 +36,9 @@ const initExperimentSchema = type({
 	"constraints?": type("string[]").describe("free-form constraints"),
 	"max_iterations?": type("number").describe("soft iteration cap per segment"),
 	"new_segment?": type("boolean").describe("bump to a new segment in existing session"),
+	"breadth?": type("number").describe("candidate arms explored per iteration (1 = serial, max 8)"),
+	"attempts?": type("number").describe("retries an arm may make before it is abandoned"),
+	"certify?": type("boolean").describe("have arms cross-review each other before a winner is kept"),
 });
 
 interface InitExperimentDetails {
@@ -54,13 +65,16 @@ export function createInitExperimentTool(
 			const runtime = options.getRuntime(ctx);
 
 			const direction = params.direction ?? "lower";
-			const metricUnit = params.metric_unit ?? "";
+			// `metric_unit: "comparisons"` beside `primary_metric: "comparisons"` is
+			// the name twice, and printed as `1,596,000comparisons` on every surface.
+			const unitArg = params.metric_unit?.trim() ?? "";
+			const metricUnit = unitArg.toLowerCase() === params.primary_metric.trim().toLowerCase() ? "" : unitArg;
 			const scopePaths = dedupeStrings((params.scope_paths ?? []).map(normalizePathSpec));
 			const offLimits = dedupeStrings((params.off_limits ?? []).map(normalizePathSpec));
 			const constraints = dedupeStrings(params.constraints ?? []);
 			const secondaryMetrics = dedupeStrings(params.secondary_metrics ?? []);
 			const goal = params.goal?.trim() || null;
-			const maxIterations =
+			const argIterations =
 				params.max_iterations !== undefined && Number.isFinite(params.max_iterations) && params.max_iterations > 0
 					? Math.floor(params.max_iterations)
 					: null;
@@ -70,6 +84,30 @@ export function createInitExperimentTool(
 			const existing = storage.getActiveSessionForBranch(branch);
 			const isNewSegmentInit = existing !== null && params.new_segment === true;
 			const requiresHarness = !existing || isNewSegmentInit;
+			// An unset value keeps whatever the session already has, so a plain
+			// reconfigure never silently collapses a swarm back to serial.
+			// The console parks the operator's answers before a session
+			// exists, and they outrank the tool's arguments on the init that
+			// consumes them: the model never saw the console, so an argument it
+			// passes here is a guess, and a guess of 1 turned a configured swarm
+			// into a serial loop with nothing on screen saying so. A later init,
+			// with nothing parked, may still reconfigure from what the harness
+			// turned out to be.
+			const parked = runtime.pendingSwarm;
+			const maxIterations = parked?.maxIterations ?? argIterations;
+			const breadth = parked?.breadth ?? clampCount(params.breadth, MAX_BREADTH) ?? existing?.breadth ?? 1;
+			const attempts = parked?.attempts ?? clampCount(params.attempts, MAX_ATTEMPTS) ?? existing?.attempts ?? 1;
+			const certify = parked?.certify ?? params.certify ?? existing?.certify ?? true;
+			const overriddenByConsole =
+				parked !== null &&
+				((params.breadth !== undefined && clampCount(params.breadth, MAX_BREADTH) !== parked.breadth) ||
+					(params.attempts !== undefined && clampCount(params.attempts, MAX_ATTEMPTS) !== parked.attempts) ||
+					(params.certify !== undefined && params.certify !== parked.certify));
+			// Per-arm models are the user's choice in the console, never the
+			// model's: this tool takes no argument for them, and a breadth that
+			// lands back at 1 drops them, since there are no arms to spread.
+			const armModels = breadth > 1 ? (parked?.armModels ?? existing?.armModels ?? []).slice(0, breadth) : [];
+			runtime.pendingSwarm = null;
 
 			if (requiresHarness) {
 				const harnessExists = await Bun.file(path.join(ctx.cwd, HARNESS_FILENAME)).exists();
@@ -123,12 +161,18 @@ export function createInitExperimentTool(
 					offLimits,
 					constraints,
 					secondaryMetrics,
+					breadth,
+					attempts,
+					certify,
+					armModels,
 				});
 				createdSession = true;
-			} else {
-				abandonedRuns = storage.abandonPendingRuns(existing.id);
-				const updates: Parameters<typeof storage.updateSession>[1] = {
+			} else if (isNewSegmentInit) {
+				abandonedRuns = storage.abandonIncompleteRuns(existing.id);
+				storage.bumpSessionSegment(existing.id, baselineCommit);
+				session = storage.updateSession(existing.id, {
 					goal,
+					preferredCommand: DEFAULT_HARNESS_COMMAND,
 					maxIterations,
 					scopePaths,
 					offLimits,
@@ -138,16 +182,31 @@ export function createInitExperimentTool(
 					metricUnit,
 					direction,
 					branch,
-				};
-				if (isNewSegmentInit) {
-					updates.baselineCommit = baselineCommit;
-				}
-				let updated = storage.updateSession(existing.id, updates);
-				if (isNewSegmentInit) {
-					updated = storage.bumpSegment(existing.id);
-					bumpedSegment = true;
-				}
-				session = updated;
+					baselineCommit,
+					breadth,
+					attempts,
+					certify,
+					armModels,
+				});
+				bumpedSegment = true;
+			} else {
+				session = storage.updateSession(existing.id, {
+					goal: goal ?? existing.goal,
+					maxIterations: maxIterations ?? existing.maxIterations,
+					scopePaths: params.scope_paths !== undefined ? scopePaths : existing.scopePaths,
+					offLimits: params.off_limits !== undefined ? offLimits : existing.offLimits,
+					constraints: params.constraints !== undefined ? constraints : existing.constraints,
+					secondaryMetrics: params.secondary_metrics !== undefined ? secondaryMetrics : existing.secondaryMetrics,
+					primaryMetric: params.primary_metric,
+					metricUnit,
+					direction,
+					branch: branch ?? existing.branch,
+					baselineCommit: baselineCommit ?? existing.baselineCommit,
+					breadth,
+					attempts,
+					certify,
+					armModels,
+				});
 			}
 
 			const loggedRuns = storage.listLoggedRuns(session.id);
@@ -162,30 +221,63 @@ export function createInitExperimentTool(
 			runtime.lastRunArtifactDir = null;
 			runtime.lastRunNumber = null;
 			runtime.lastRunSummary = null;
-			options.dashboard.updateWidget(ctx, runtime);
+
+			options.dashboard.update(ctx, runtime);
 			options.dashboard.requestRender();
 
+			// The stored session is the first place the real breadth exists, so this
+			// is where a swarm gains `certify_arms` and a serial session loses it.
+			// The command path armed the set before the breadth was known.
+			const activeTools = options.pi.getActiveTools();
+			const nextActiveTools = activeToolsFor(activeTools, true, state.breadth);
+			if (activeToolsChanged(activeTools, nextActiveTools)) {
+				await options.pi.setActiveTools(nextActiveTools);
+			}
+
 			const lines: string[] = [];
-			if (abandonedRuns > 0) {
-				lines.push(`Abandoned ${formatCount("pending run", abandonedRuns)} before reconfiguring.`);
-			}
-			if (harnessCommitted && session.baselineCommit) {
-				lines.push(`Committed harness setup at ${session.baselineCommit.slice(0, 12)}.`);
-			}
-			if (commitWarning) {
-				lines.push(commitWarning);
-			}
 			if (createdSession) {
-				lines.push(`Started session #${session.id}: ${session.name}`);
+				lines.push(
+					`Initialized autoresearch session "${session.name}" (ID ${session.id}) for segment ${session.currentSegment}.`,
+				);
 			} else if (bumpedSegment) {
-				lines.push(`Bumped segment to ${session.currentSegment} for session #${session.id}: ${session.name}`);
+				lines.push(
+					`Started new segment ${session.currentSegment} for session "${session.name}" (ID ${session.id}).`,
+				);
+				if (abandonedRuns > 0) {
+					lines.push(`Abandoned ${abandonedRuns} incomplete run(s) from prior segment.`);
+				}
 			} else {
-				lines.push(`Updated session #${session.id} (segment ${session.currentSegment}): ${session.name}`);
+				lines.push(
+					`Reconfigured autoresearch session "${session.name}" (ID ${session.id}) on segment ${session.currentSegment}.`,
+				);
+			}
+
+			if (harnessCommitted) {
+				lines.push(`Auto-committed harness setup (${HARNESS_COMMIT_TITLE}).`);
+			} else if (commitWarning) {
+				lines.push(`Warning: ${commitWarning}`);
+			}
+
+			if (session.goal) {
+				lines.push(`Goal: ${session.goal}`);
+			}
+			lines.push(`Primary metric: ${session.primaryMetric} (direction: ${session.direction})`);
+			if (session.metricUnit) {
+				lines.push(`Metric unit: ${session.metricUnit}`);
+			}
+			if (session.secondaryMetrics.length > 0) {
+				lines.push(`Secondary metrics: ${session.secondaryMetrics.join(", ")}`);
 			}
 			lines.push(
-				`Metric: ${session.primaryMetric} (${session.metricUnit || "unitless"}, ${session.direction} is better)`,
+				session.breadth > 1
+					? `Breadth: ${formatCount("arm", session.breadth)} per iteration, ${formatCount("attempt", session.attempts)} each, certification ${session.certify ? "on" : "off"}.`
+					: "Breadth: 1 (serial, no arms).",
 			);
-			lines.push(`Benchmark entrypoint: ${DEFAULT_HARNESS_COMMAND}`);
+			if (overriddenByConsole) {
+				lines.push(
+					"The breadth, attempts and certification arguments were ignored: the console the user configured this run in decides them.",
+				);
+			}
 			if (session.scopePaths.length > 0) {
 				lines.push(`Files in scope: ${session.scopePaths.join(", ")}`);
 			}
@@ -226,18 +318,33 @@ export function createInitExperimentTool(
 				},
 			};
 		},
-		renderCall(args, _options, theme): Text {
-			return new Text(renderInitCall(args.name, theme), 0, 0);
-		},
-		renderResult(result): Text {
-			const text = replaceTabs(result.content.find(part => part.type === "text")?.text ?? "");
-			return new Text(text, 0, 0);
+		view: {
+			renderCall: args => initExperimentCallView(args.name),
+			renderResult: result => ({
+				kind: "textBlock",
+				spans: [{ text: replaceTabs(result.content.find(part => part.type === "text")?.text ?? "") }],
+			}),
 		},
 	};
 }
 
-function renderInitCall(name: string, theme: Theme): string {
-	return `${theme.fg("toolTitle", theme.bold("init_experiment"))} ${theme.fg("accent", truncateToWidth(replaceTabs(name), 100))}`;
+/**
+ * The card for a call: the tool's name, then the experiment being started.
+ *
+ * `truncateToWidth` takes an explicit length here because the call is shown in the
+ * transcript and on the status row, and a 200-character name wraps and pushes the
+ * result off the visible screen. `replaceTabs` is the second sanitization rule: a
+ * tab character is a hole in differential terminal rendering.
+ */
+function initExperimentCallView(name: string): TextBlockView {
+	return {
+		kind: "textBlock",
+		spans: [
+			{ text: "init_experiment", tone: "title", bold: true },
+			{ text: " " },
+			{ text: truncateToWidth(replaceTabs(name), 100), tone: "accent" },
+		],
+	};
 }
 
 /**

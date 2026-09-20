@@ -3,7 +3,7 @@
  * Why: plan mode must not silently allow destructive tools.
  */
 import { describe, expect, it } from "bun:test";
-import { requiresApproval, resolveEffectiveApprovalMode } from "../src/tools/approval";
+import { requiresApproval, resolveEffectiveApprovalMode } from "../src/tools/core/approval";
 
 describe("requiresApproval plan mode matrix", () => {
 	it("effective plan when planModeActive", () => {
@@ -11,7 +11,7 @@ describe("requiresApproval plan mode matrix", () => {
 		expect(resolveEffectiveApprovalMode("ask", { planModeActive: true })).toBe("plan");
 	});
 
-	const tools = ["bash", "write", "edit", "read", "grep"];
+	const tools = ["bash", "write", "edit", "read", "search"];
 	for (const name of tools) {
 		it(`plan mode decision for ${name} is object`, () => {
 			const mode = resolveEffectiveApprovalMode("yolo", { planModeActive: true });

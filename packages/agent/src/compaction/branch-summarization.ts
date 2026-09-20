@@ -6,8 +6,9 @@
  */
 
 import type { Api, ApiKey, AssistantMessage, Context, Model, ServiceTier, SimpleStreamOptions } from "@veyyon/ai";
+import { detectDegenerateRepetition } from "@veyyon/ai/utils/thinking-loop";
 import { preferredDialect } from "@veyyon/catalog/identity";
-import { prompt } from "@veyyon/utils";
+import { logger, prompt } from "@veyyon/utils";
 import { instrumentedCompleteSimple } from "../instrumented-complete";
 import { AGENT_PROMPTS } from "../prompts/registry";
 import type { AgentTelemetry } from "../telemetry";
@@ -116,6 +117,12 @@ export interface GenerateBranchSummaryOptions {
 	 * model's provider family (same contract as {@link SummaryOptions.serviceTier}).
 	 */
 	serviceTier?: ServiceTier;
+	/** Session routing key for remote transports and side-request conversation derivation. */
+	sessionId?: string;
+	/** Explicit conversation ID override for the side completion. */
+	conversationId?: string;
+	/** Prompt-cache key for transports that support provider prefix caching. */
+	promptCacheKey?: string;
 }
 
 // ============================================================================
@@ -595,9 +602,19 @@ export async function generateBranchSummary(
 ): Promise<BranchSummaryResult> {
 	const { model, apiKey, signal, reserveTokens = 16384, metadata } = options;
 
-	// Token budget = context window minus reserved space for prompt + response
+	// Token budget = context window minus reserved space for prompt + response.
+	//
+	// A reserve at or above the window leaves a non-positive budget, and a
+	// non-positive budget means "no limit" to prepareBranchEntriesForProvider,
+	// which enforces a budget only when it is `> 0`. An over-large reserve would
+	// therefore send the WHOLE branch — the exact opposite of what the knob asks
+	// for, and an overflow on the small-window models that need the reserve most.
+	// Such a reserve is unsatisfiable, so it falls back to the same 15%
+	// proportional reserve the rest of the compaction code uses for a reserve the
+	// window cannot hold, leaving 85% of the window as the budget.
 	const contextWindow = model.contextWindow || 128000;
-	const tokenBudget = contextWindow - reserveTokens;
+	const configuredBudget = contextWindow - reserveTokens;
+	const tokenBudget = configuredBudget > 0 ? configuredBudget : Math.max(1, Math.floor(contextWindow * 0.85));
 
 	// Preserve the existing empty-branch fast path without retaining this raw,
 	// potentially lossy projection for a provider attempt. Every actual attempt
@@ -659,7 +676,17 @@ export async function generateBranchSummary(
 	const response = await instrumentedCompleteSimple(
 		model,
 		context,
-		{ apiKey: attemptApiKey, signal, maxTokens: 2048, metadata, onPayload, serviceTier: options.serviceTier },
+		{
+			apiKey: attemptApiKey,
+			signal,
+			maxTokens: 2048,
+			metadata,
+			serviceTier: options.serviceTier,
+			sessionId: options.sessionId,
+			conversationId: options.conversationId,
+			promptCacheKey: options.promptCacheKey,
+			onPayload,
+		},
 		{ telemetry: options.telemetry, oneshotKind: "branch_summary", completeImpl: options.completeImpl },
 	);
 
@@ -678,8 +705,22 @@ export async function generateBranchSummary(
 
 	// A provider can successfully stop without emitting text. Treat whitespace
 	// the same way and do not let the non-empty preamble mask the fallback.
+	//
+	// A generation that repeats one unit until the budget runs out is treated as
+	// no generation for the same reason: it describes nothing about the branch it
+	// stands for, and storing it would make the branch read as that repeat. The
+	// fallback keeps the file lists, which are computed here rather than generated,
+	// so the entry stays useful; a throw would instead block the branch switch on
+	// a provider hiccup, which is why the empty case does not throw either. It is
+	// reported rather than swallowed.
+	const degeneracy = detectDegenerateRepetition(generatedSummary);
+	if (degeneracy) {
+		logger.warn("Branch summary discarded as degenerate", { model: model.id, degeneracy });
+	}
 	let summary =
-		generatedSummary.trim().length > 0 ? BRANCH_SUMMARY_PREAMBLE + generatedSummary : "No summary generated";
+		generatedSummary.trim().length > 0 && !degeneracy
+			? BRANCH_SUMMARY_PREAMBLE + generatedSummary
+			: "No summary generated";
 
 	// Compute file lists and append to summary
 	const { readFiles, modifiedFiles } = computeFileLists(fileOps);

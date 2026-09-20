@@ -5,6 +5,8 @@
  * half (env keys, OAuth login/refresh) stays in the pi-ai registry, which
  * type-checks itself against `KnownProvider` from this table.
  */
+import { chatGptWebModelManagerOptions } from "./chatgpt-web";
+import { commandCodeModelManagerOptions } from "./command-code";
 import type { ModelManagerConfig, ProviderCatalogEntry, ProviderDescriptor } from "./descriptor-types";
 import { googleModelManagerOptions, googleVertexModelManagerOptions } from "./google";
 import { ollamaCloudModelManagerOptions } from "./ollama";
@@ -29,6 +31,7 @@ import {
 	mistralModelManagerOptions,
 	moonshotModelManagerOptions,
 	nanoGptModelManagerOptions,
+	nousResearchModelManagerOptions,
 	novitaModelManagerOptions,
 	nvidiaModelManagerOptions,
 	ollamaModelManagerOptions,
@@ -38,6 +41,11 @@ import {
 	openrouterModelManagerOptions,
 	qianfanModelManagerOptions,
 	qwenPortalModelManagerOptions,
+	resolveLitellmCacheProviderId,
+	resolveOpencodeGoCacheProviderId,
+	resolveOpencodeZenCacheProviderId,
+	resolveOpenrouterCacheProviderId,
+	resolveVllmCacheProviderId,
 	sakanaModelManagerOptions,
 	syntheticModelManagerOptions,
 	togetherModelManagerOptions,
@@ -56,6 +64,8 @@ import {
 	cursorModelManagerOptions,
 	devinModelManagerOptions,
 	gitLabDuoWorkflowModelManagerOptions,
+	resolveCursorCacheProviderId,
+	resolveGitLabDuoWorkflowCacheProviderId,
 	zaiModelManagerOptions,
 } from "./special";
 
@@ -107,6 +117,25 @@ export const CATALOG_PROVIDERS = [
 		catalogDiscovery: { label: "Cerebras" },
 	},
 	{
+		id: "chatgpt-web",
+		// The daemon's own default when a Sol account sends no effort
+		// (`resolveChatGptWebModelMode`: `reasoning ?? "high"`).
+		defaultModel: "chatgpt-web/high",
+		// The same ChatGPT/Codex OAuth token the official `openai-codex` provider
+		// uses, read from the environment rather than shared out of that
+		// provider's credential store: the bridge proxies `/models` to OpenAI with
+		// the incoming bearer, so discovery has no other way to answer. The
+		// bridge-specific name is consulted first so an operator can point the
+		// bridge at a different account without touching the official provider.
+		envVars: ["CODEX_CHATGPT_WEB_OAUTH_TOKEN", "OPENAI_CODEX_OAUTH_TOKEN"],
+		createModelManagerOptions: (config: ModelManagerConfig) => chatGptWebModelManagerOptions(config),
+		// Every row is live: nothing is bundled and a cached row must not outlive
+		// the account capability that produced it.
+		dynamicModelsAuthoritative: true,
+		// No `catalogDiscovery`: generation runs on machines with no daemon on
+		// 17841, exactly as for `lm-studio` and `ollama`.
+	},
+	{
 		id: "cloudflare-ai-gateway",
 		defaultModel: "anthropic/claude-opus-4-8",
 		envVars: ["CLOUDFLARE_AI_GATEWAY_API_KEY"],
@@ -114,10 +143,22 @@ export const CATALOG_PROVIDERS = [
 		catalogDiscovery: { label: "Cloudflare AI Gateway" },
 	},
 	{
+		id: "command-code",
+		defaultModel: "claude-sonnet-4-6",
+		envVars: ["CMD_API_KEY", "COMMAND_CODE_API_KEY", "COMMANDCODE_API_KEY"],
+		createModelManagerOptions: (config: ModelManagerConfig) => commandCodeModelManagerOptions(config),
+		publishesOwnModelLimits: true,
+		dynamicModelsAuthoritative: true,
+		// The Provider API answers `/models` without a key, so a fresh install
+		// and a generation pass both see the served set rather than the seed.
+		catalogDiscovery: { label: "Command Code", allowUnauthenticated: true },
+	},
+	{
 		id: "cursor",
 		defaultModel: "claude-4.6-opus-high",
 		envVars: ["CURSOR_ACCESS_TOKEN"],
 		createModelManagerOptions: (config: ModelManagerConfig) => cursorModelManagerOptions(config),
+		resolveCacheProviderId: resolveCursorCacheProviderId,
 		catalogDiscovery: { label: "Cursor", envVars: ["CURSOR_API_KEY"], oauthProvider: "cursor" },
 	},
 	{
@@ -164,6 +205,7 @@ export const CATALOG_PROVIDERS = [
 		defaultModel: "claude_sonnet_4_6_vertex",
 		envVars: ["GITLAB_TOKEN"],
 		createModelManagerOptions: (config: ModelManagerConfig) => gitLabDuoWorkflowModelManagerOptions(config),
+		resolveCacheProviderId: resolveGitLabDuoWorkflowCacheProviderId,
 		dynamicModelsAuthoritative: true,
 	},
 	{
@@ -219,6 +261,7 @@ export const CATALOG_PROVIDERS = [
 		defaultModel: "claude-opus-4-8",
 		envVars: ["LITELLM_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => litellmModelManagerOptions(config),
+		resolveCacheProviderId: resolveLitellmCacheProviderId,
 		catalogDiscovery: { label: "LiteLLM", allowUnauthenticated: true },
 	},
 	{
@@ -266,6 +309,15 @@ export const CATALOG_PROVIDERS = [
 		catalogDiscovery: { label: "NanoGPT" },
 	},
 	{
+		id: "nous-research",
+		defaultModel: "anthropic/claude-sonnet-4.6",
+		envVars: ["NOUS_API_KEY"],
+		createModelManagerOptions: (config: ModelManagerConfig) => nousResearchModelManagerOptions(config),
+		dynamicModelsAuthoritative: true,
+		publishesOwnModelLimits: true,
+		catalogDiscovery: { label: "Nous Research", oauthProvider: "nous-research" },
+	},
+	{
 		id: "nvidia",
 		defaultModel: "nvidia/llama-3.1-nemotron-70b-instruct",
 		envVars: ["NVIDIA_API_KEY"],
@@ -311,6 +363,7 @@ export const CATALOG_PROVIDERS = [
 		defaultModel: "kimi-k2.7-code",
 		envVars: ["OPENCODE_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => opencodeGoModelManagerOptions(config),
+		resolveCacheProviderId: resolveOpencodeGoCacheProviderId,
 		dynamicModelsAuthoritative: true,
 	},
 	{
@@ -318,6 +371,7 @@ export const CATALOG_PROVIDERS = [
 		defaultModel: "claude-opus-4-8",
 		envVars: ["OPENCODE_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => opencodeZenModelManagerOptions(config),
+		resolveCacheProviderId: resolveOpencodeZenCacheProviderId,
 		dynamicModelsAuthoritative: true,
 	},
 	{
@@ -325,6 +379,7 @@ export const CATALOG_PROVIDERS = [
 		defaultModel: "openai/gpt-5.5",
 		envVars: ["OPENROUTER_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => openrouterModelManagerOptions(config),
+		resolveCacheProviderId: resolveOpenrouterCacheProviderId,
 		catalogDiscovery: { label: "OpenRouter", allowUnauthenticated: true },
 	},
 	{
@@ -398,6 +453,7 @@ export const CATALOG_PROVIDERS = [
 		defaultModel: "gpt-oss-20b",
 		envVars: ["VLLM_API_KEY"],
 		createModelManagerOptions: (config: ModelManagerConfig) => vllmModelManagerOptions(config),
+		resolveCacheProviderId: resolveVllmCacheProviderId,
 		catalogDiscovery: { label: "vLLM", allowUnauthenticated: true },
 	},
 	{
@@ -506,6 +562,7 @@ export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = CATALOG_ENTRY
 			providerId: provider.id,
 			defaultModel: provider.defaultModel,
 			createModelManagerOptions: provider.createModelManagerOptions,
+			resolveCacheProviderId: provider.resolveCacheProviderId,
 			allowUnauthenticated: provider.allowUnauthenticated,
 			dynamicModelsAuthoritative: provider.dynamicModelsAuthoritative,
 			catalogDiscovery: provider.catalogDiscovery
@@ -514,6 +571,16 @@ export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = CATALOG_ENTRY
 		},
 	];
 });
+
+/**
+ * Providers whose own endpoint is the sole authority for context windows and
+ * output caps, derived from the catalog table so a generation pass cannot skip
+ * a member. Every pass that would backfill a limit from another host reads this
+ * set instead of naming providers.
+ */
+export const PROVIDERS_PUBLISHING_OWN_MODEL_LIMITS: ReadonlySet<string> = new Set(
+	CATALOG_ENTRY_LIST.filter(provider => provider.publishesOwnModelLimits).map(provider => provider.id),
+);
 
 /** Default model IDs for all known providers, derived from the catalog table. */
 export const DEFAULT_MODEL_PER_PROVIDER: Record<KnownProvider, string> = Object.fromEntries(

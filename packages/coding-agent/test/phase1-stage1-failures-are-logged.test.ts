@@ -13,10 +13,10 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { Model } from "@veyyon/ai";
-import * as ai from "@veyyon/ai";
+import * as ai from "@veyyon/ai/stream";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { startMemoryStartupTask } from "@veyyon/coding-agent/memories";
-import * as memoryStorage from "@veyyon/coding-agent/memories/storage";
+import { startMemoryStartupTask } from "@veyyon/coding-agent/memory/local";
+import * as memoryStorage from "@veyyon/coding-agent/memory/storage";
 import { getAgentDbPath, logger, Snowflake, TempDir } from "@veyyon/utils";
 
 interface SessionLike {
@@ -96,7 +96,7 @@ describe("issue #846: phase1 stage1 failures must be logged", () => {
 		await fs.writeFile(sessionFile, `${JSON.stringify({ type: "session", id: "current-thread", cwd: agentDir })}\n`);
 
 		const settings = Settings.isolated({
-			"memories.enabled": true,
+			"memory.backend": "local",
 			"memories.minRolloutIdleHours": 0,
 			"memories.maxRolloutsPerStartup": 4,
 			"memories.threadScanLimit": 64,

@@ -18,10 +18,10 @@ import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
 import { createArgotSession } from "@veyyon/coding-agent/argot-cache";
 import { expandAssistantContent, expandSessionContext, expandToolArguments } from "@veyyon/coding-agent/argot-wire";
-import type { SessionContext } from "@veyyon/coding-agent/session/session-context";
 import { buildSystemPrompt } from "@veyyon/coding-agent/system-prompt";
 import { RUNTIME_SECTIONS, withSectionBanner } from "@veyyon/coding-agent/system-prompt-builder/section-registry";
-import { ArgotLoadTool, ArgotUnloadTool } from "@veyyon/coding-agent/tools/argot";
+import { ArgotLoadTool, ArgotUnloadTool } from "@veyyon/coding-agent/tools/agent/argot";
+import type { SessionContext } from "@veyyon/kernel/session/session-context";
 import { ArgotParseError, ArgotSession, DICT_FILENAME, parseDict, renderPreamble } from "argot";
 import { useTempHome } from "./helpers/temp-home";
 import { makeToolSession } from "./helpers/tool-session";
@@ -377,8 +377,8 @@ describe("createArgotSession starts unarmed (agent-driven loading)", () => {
 		// decodes wrong and nothing leaks.
 		const session = createArgotSession({
 			enabled: true,
-			isSubagent: false,
-			subagentMode: "off",
+			isSpawned: false,
+			agentMode: "off",
 		});
 		expect(session).toBeDefined();
 		expect(session!.loaded).toBe(false);

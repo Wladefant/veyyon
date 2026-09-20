@@ -1,7 +1,9 @@
 import { describe, expect, it } from "bun:test";
+import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import * as path from "node:path";
 import { $ } from "bun";
+import { typeScriptMembers, typeScriptMemberTopLevels } from "./workspace-layout";
 
 /**
  * Every script under `scripts/` is either called by something automated, or says
@@ -61,17 +63,26 @@ async function scriptFiles(): Promise<string[]> {
 	return found.sort();
 }
 
+/**
+ * Every manifest that could name a script, under every workspace member the root manifest declares.
+ * Reading `packages/` alone left a script named only by a member under another root reading as
+ * owned by nobody. The root view was in turn blind to literal paths (`natives/bridge/bindings`,
+ * `clients/python/veybot/web`), which `typeScriptMembers()` now reaches.
+ */
+async function callerManifests(): Promise<string[]> {
+	const manifests = [path.join(REPO_ROOT, "package.json")];
+	for (const member of typeScriptMembers()) {
+		const manifest = path.join(REPO_ROOT, member, "package.json");
+		if (existsSync(manifest)) manifests.push(manifest);
+	}
+	return manifests;
+}
+
 /** Text of every manifest and workflow that could name a script. */
 async function callerText(): Promise<string> {
 	const parts: string[] = [];
-	parts.push(await readFile(path.join(REPO_ROOT, "package.json"), "utf8"));
-
-	const packages = await readdir(path.join(REPO_ROOT, "packages"), { withFileTypes: true }).catch(() => []);
-	for (const pkg of packages) {
-		if (!pkg.isDirectory()) continue;
-		const manifest = path.join(REPO_ROOT, "packages", pkg.name, "package.json");
-		const text = await readFile(manifest, "utf8").catch(() => undefined);
-		if (text !== undefined) parts.push(text);
+	for (const manifest of await callerManifests()) {
+		parts.push(await readFile(manifest, "utf8"));
 	}
 
 	const workflowDir = path.join(REPO_ROOT, ".github", "workflows");
@@ -82,19 +93,23 @@ async function callerText(): Promise<string> {
 	return parts.join("\n");
 }
 
-/** Text of every script and script suite, for "another script runs this one". */
-async function peerText(exclude: string): Promise<string> {
-	const parts: string[] = [];
-	for (const sub of SCANNED_SUBDIRS) {
-		const dir = sub === "" ? SCRIPTS_DIR : path.join(SCRIPTS_DIR, sub);
-		for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
-			if (!entry.isFile()) continue;
-			const rel = path.relative(REPO_ROOT, path.join(dir, entry.name));
-			if (rel === exclude) continue;
-			parts.push(await readFile(path.join(dir, entry.name), "utf8").catch(() => ""));
-		}
+/** Text of every script and script suite, cached once. */
+const PEER_TEXTS = new Map<string, string>();
+for (const sub of SCANNED_SUBDIRS) {
+	const dir = sub === "" ? SCRIPTS_DIR : path.join(SCRIPTS_DIR, sub);
+	for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
+		if (!entry.isFile()) continue;
+		const rel = path.relative(REPO_ROOT, path.join(dir, entry.name));
+		PEER_TEXTS.set(rel, await readFile(path.join(dir, entry.name), "utf8").catch(() => ""));
 	}
-	return parts.join("\n");
+}
+
+function hasPeerReference(file: string, base: string): boolean {
+	for (const [peerFile, text] of PEER_TEXTS) {
+		if (peerFile === file) continue;
+		if (text.includes(file) || text.includes(base)) return true;
+	}
+	return false;
 }
 
 const SCRIPTS = await scriptFiles();
@@ -161,8 +176,7 @@ async function hasAutomatedCaller(file: string): Promise<boolean> {
 	// Matched by path AND by bare filename: workflows spell the full path, while a
 	// sibling script usually spells only the name it sits next to.
 	if (CALLERS.includes(file) || CALLERS.includes(base)) return true;
-	const peers = await peerText(file);
-	if (peers.includes(file) || peers.includes(base)) return true;
+	if (hasPeerReference(file, base)) return true;
 
 	// The extensionless stem, as an import specifier ends in it. A file naming
 	// itself is not a caller.
@@ -236,6 +250,20 @@ describe("every script under scripts/ has an owner", () => {
 	});
 
 	/**
+	 * Guard on the guard, part one-and-a-half: the OWNER side reads every root.
+	 *
+	 * A manifest the sweep never opened cannot name anything, so a script wired only by a member
+	 * under an unread root reads as unowned and the rule below reports a finding that is not real.
+	 */
+	it("reads a manifest under every root the workspace declares", async () => {
+		const manifests = (await callerManifests()).map(file => path.relative(REPO_ROOT, file).replaceAll(path.sep, "/"));
+		const roots = new Set(manifests.filter(file => file !== "package.json").map(file => file.split("/")[0]));
+
+		expect([...roots].sort()).toEqual(typeScriptMemberTopLevels());
+		expect(manifests).toContain("contracts/wire/package.json");
+	});
+
+	/**
 	 * Guard on the guard, part two: the OWNERSHIP resolver still resolves.
 	 *
 	 * This is the assertion that keeps the gate honest. If `hasAutomatedCaller`
@@ -271,8 +299,8 @@ describe("every script under scripts/ has an owner", () => {
 			SOURCES.get("scripts/check-spoofed-versions.ts") ?? "",
 		);
 		expect(typescript).toContain("spoofed external tool versions");
-		const shell = headerOf("scripts/demos/launch.sh", SOURCES.get("scripts/demos/launch.sh") ?? "");
-		expect(shell).toContain("demo recording");
+		const shell = headerOf("scripts/demos/record-hd-demo.sh", SOURCES.get("scripts/demos/record-hd-demo.sh") ?? "");
+		expect(shell).toContain("landing-page demo");
 	});
 
 	/**

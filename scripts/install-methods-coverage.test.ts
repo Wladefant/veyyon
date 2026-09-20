@@ -1,7 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { existingOnly, readIfPresent } from "./check-doc-links";
+import { listTrackedFiles } from "./git-baseline";
+import { existingOnly, readIfPresent } from "./workspace-layout";
 
 /**
  * Locks the release gate to the install methods veyyon actually ships, and locks
@@ -45,8 +46,8 @@ const removedNpmMachinery = [
 	"scripts/fix-dts-extensions.ts",
 	"scripts/fix-dts-extensions.test.ts",
 	"scripts/install-tests/tarball.dockerfile",
-	"packages/natives/scripts/gen-npm-packages.ts",
-	"packages/natives/test/npm-packages.test.ts",
+	"natives/bridge/bindings/scripts/gen-npm-packages.ts",
+	"natives/bridge/bindings/test/npm-packages.test.ts",
 ];
 
 /**
@@ -55,20 +56,7 @@ const removedNpmMachinery = [
  * check pass or fail by accident.
  */
 function markdownFiles(root: string): string[] {
-	const out = Bun.spawnSync(["git", "ls-files", "*.md"], { cwd: root });
-	expect(out.exitCode, "git ls-files must succeed").toBe(0);
-	// `existingOnly`: git lists the INDEX, which still contains a doc deleted in
-	// the working tree but not yet committed. Reading one killed this test with a
-	// raw ENOENT naming that file — an error about tree state, in a test about
-	// install instructions. A deleted doc also cannot tell a user to install
-	// anything, so skipping it is the correct answer and not a workaround.
-	return existingOnly(
-		root,
-		new TextDecoder()
-			.decode(out.stdout)
-			.split("\n")
-			.filter(line => line.length > 0),
-	);
+	return existingOnly(root, listTrackedFiles(root, ["*.md"]));
 }
 
 describe("the release gate covers both shipped install channels", () => {
@@ -93,7 +81,7 @@ describe("the release gate covers both shipped install channels", () => {
 
 	it("runs the installer helper unit tests before the build-heavy smokes", () => {
 		const helpers = runCi.indexOf("functions.test.sh");
-		const build = runCi.indexOf("bun --cwd=packages/natives run build");
+		const build = runCi.indexOf("bun --cwd=natives/bridge/bindings run build");
 		expect(helpers).toBeGreaterThan(-1);
 		expect(build).toBeGreaterThan(helpers);
 	});
@@ -173,7 +161,7 @@ describe("the npm/tarball topology stays deleted", () => {
 
 	it("no manifest still offers an npm-packaging script", () => {
 		const natives = JSON.parse(
-			fs.readFileSync(path.join(repoRoot, "packages", "natives", "package.json"), "utf8"),
+			fs.readFileSync(path.join(repoRoot, "natives", "bridge", "bindings", "package.json"), "utf8"),
 		) as { scripts?: Record<string, string> };
 		expect(natives.scripts?.["gen:npm"]).toBeUndefined();
 	});
@@ -214,7 +202,7 @@ describe("the npm/tarball topology stays deleted", () => {
 	it("the SDK guide documents the checkout path that does work", () => {
 		// Removing the false instruction is only half the fix; the reader still
 		// needs a working one, and it lives in exactly one place.
-		const sdk = fs.readFileSync(path.join(repoRoot, "docs", "sdk.md"), "utf8");
+		const sdk = fs.readFileSync(path.join(repoRoot, "docs", "handbook", "src", "reference", "sdk.md"), "utf8");
 		expect(sdk).toContain("bun --cwd=packages/coding-agent link");
 		expect(sdk).toContain("bun link @veyyon/coding-agent");
 		expect(sdk).toContain("are not on npm");

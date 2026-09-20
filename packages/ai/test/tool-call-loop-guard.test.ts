@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import type { AssistantMessage } from "@veyyon/ai";
-import { ToolCallLoopGuard } from "@veyyon/ai/utils/tool-call-loop-guard";
 import { INTENT_FIELD } from "@veyyon/wire";
+import type { AssistantMessage } from "../src/types";
+import { ToolCallLoopGuard } from "../src/utils/tool-call-loop-guard";
 
 const zeroUsage = {
 	input: 0,
@@ -302,5 +302,649 @@ describe("ToolCallLoopGuard", () => {
 				],
 			}),
 		).toBeNull();
+	});
+	test("detects consecutive subsumed read calls on unchanged files at threshold of 2", () => {
+		const guard = new ToolCallLoopGuard({ threshold: 5, exemptTools: [], readSubsumptionThreshold: 2 });
+
+		// 1. Initial read of file range 1-200
+		expect(
+			guard.recordTurn({
+				message: {
+					role: "assistant",
+					content: [
+						{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "src/segments.ts:1-200" } },
+					],
+					api: "openai-responses",
+					provider: "openai",
+					model: "test-model",
+					usage: zeroUsage,
+					stopReason: "toolUse",
+					timestamp: Date.now(),
+				},
+				toolResults: [
+					{
+						role: "toolResult",
+						toolCallId: "read-1",
+						toolName: "read",
+						content: [{ type: "text", text: "[src/segments.ts#1A2B]\n1: line 1\n200: line 200\n" }],
+						isError: false,
+						timestamp: Date.now(),
+					},
+				],
+			}),
+		).toBeNull();
+
+		// 2. Subsumed read #1 (lines 50-100 are within 1-200) -> count = 1
+		expect(
+			guard.recordTurn({
+				message: {
+					role: "assistant",
+					content: [
+						{ type: "toolCall", id: "read-2", name: "read", arguments: { path: "src/segments.ts:50-100" } },
+					],
+					api: "openai-responses",
+					provider: "openai",
+					model: "test-model",
+					usage: zeroUsage,
+					stopReason: "toolUse",
+					timestamp: Date.now(),
+				},
+				toolResults: [
+					{
+						role: "toolResult",
+						toolCallId: "read-2",
+						toolName: "read",
+						content: [{ type: "text", text: "[src/segments.ts#1A2B]\n50: line 50\n100: line 100\n" }],
+						isError: false,
+						timestamp: Date.now(),
+					},
+				],
+			}),
+		).toBeNull();
+
+		// 3. Subsumed read #2 (lines 80-120 are within 1-200) -> count = 2 -> TRIGGERS!
+		const detection = guard.recordTurn({
+			message: {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "read-3", name: "read", arguments: { path: "src/segments.ts:80-120" } }],
+				api: "openai-responses",
+				provider: "openai",
+				model: "test-model",
+				usage: zeroUsage,
+				stopReason: "toolUse",
+				timestamp: Date.now(),
+			},
+			toolResults: [
+				{
+					role: "toolResult",
+					toolCallId: "read-3",
+					toolName: "read",
+					content: [{ type: "text", text: "[src/segments.ts#1A2B]\n80: line 80\n120: line 120\n" }],
+					isError: false,
+					timestamp: Date.now(),
+				},
+			],
+		});
+
+		expect(detection).not.toBeNull();
+		expect(detection).toMatchObject({
+			kind: "repeated_tool_call",
+			toolName: "read",
+			count: 2,
+			resultSummary: "Requested lines are already present in previous turn context",
+		});
+
+		// 4. Still subsumed, but the steer already went out. A redirect repeated on
+		// every further read is noise the model pays for on each request.
+		expect(
+			guard.recordTurn({
+				message: {
+					role: "assistant",
+					content: [
+						{ type: "toolCall", id: "read-4", name: "read", arguments: { path: "src/segments.ts:85-115" } },
+					],
+					api: "openai-responses",
+					provider: "openai",
+					model: "test-model",
+					usage: zeroUsage,
+					stopReason: "toolUse",
+					timestamp: Date.now(),
+				},
+				toolResults: [
+					{
+						role: "toolResult",
+						toolCallId: "read-4",
+						toolName: "read",
+						content: [{ type: "text", text: "[src/segments.ts#1A2B]\n85: line 85\n115: line 115\n" }],
+						isError: false,
+						timestamp: Date.now(),
+					},
+				],
+			}),
+		).toBeNull();
+	});
+
+	test("allows legitimate overlapping context expansion without triggering loop guard", () => {
+		const guard = new ToolCallLoopGuard({ threshold: 5, exemptTools: [], readSubsumptionThreshold: 2 });
+
+		// 1. Initial read 1-50
+		expect(
+			guard.recordTurn({
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "src/segments.ts:1-50" } }],
+					api: "openai-responses",
+					provider: "openai",
+					model: "test-model",
+					usage: zeroUsage,
+					stopReason: "toolUse",
+					timestamp: Date.now(),
+				},
+				toolResults: [
+					{
+						role: "toolResult",
+						toolCallId: "read-1",
+						toolName: "read",
+						content: [{ type: "text", text: "[src/segments.ts#1A2B]\n1: line 1\n50: line 50\n" }],
+						isError: false,
+						timestamp: Date.now(),
+					},
+				],
+			}),
+		).toBeNull();
+
+		// 2. Overlapping scroll: reads 40-100 (adds new lines 51-100) -> NOT subsumed!
+		expect(
+			guard.recordTurn({
+				message: {
+					role: "assistant",
+					content: [
+						{ type: "toolCall", id: "read-2", name: "read", arguments: { path: "src/segments.ts:40-100" } },
+					],
+					api: "openai-responses",
+					provider: "openai",
+					model: "test-model",
+					usage: zeroUsage,
+					stopReason: "toolUse",
+					timestamp: Date.now(),
+				},
+				toolResults: [
+					{
+						role: "toolResult",
+						toolCallId: "read-2",
+						toolName: "read",
+						content: [{ type: "text", text: "[src/segments.ts#1A2B]\n40: line 40\n100: line 100\n" }],
+						isError: false,
+						timestamp: Date.now(),
+					},
+				],
+			}),
+		).toBeNull();
+
+		// 3. Overlapping scroll: reads 90-150 (adds new lines 101-150) -> NOT subsumed!
+		expect(
+			guard.recordTurn({
+				message: {
+					role: "assistant",
+					content: [
+						{ type: "toolCall", id: "read-3", name: "read", arguments: { path: "src/segments.ts:90-150" } },
+					],
+					api: "openai-responses",
+					provider: "openai",
+					model: "test-model",
+					usage: zeroUsage,
+					stopReason: "toolUse",
+					timestamp: Date.now(),
+				},
+				toolResults: [
+					{
+						role: "toolResult",
+						toolCallId: "read-3",
+						toolName: "read",
+						content: [{ type: "text", text: "[src/segments.ts#1A2B]\n90: line 90\n150: line 150\n" }],
+						isError: false,
+						timestamp: Date.now(),
+					},
+				],
+			}),
+		).toBeNull();
+	});
+
+	test("allows summary drill-down without triggering loop guard", () => {
+		const guard = new ToolCallLoopGuard({ threshold: 5, exemptTools: [], readSubsumptionThreshold: 2 });
+
+		// 1. Initial whole-file read of a large file (> 200 chars, summary declarations at top)
+		const summaryText =
+			"[src/segments.ts#1A2B]\n" +
+			"1: export class SegmentController {\n" +
+			"2:   init() { … }\n" +
+			"3:   process() { … }\n" +
+			"4:   validate() { … }\n" +
+			"5:   transform() { … }\n" +
+			"6:   render() { … }\n" +
+			"7:   cleanup() { … }\n" +
+			"8:   destroy() { … }\n" +
+			"}\n" +
+			"// 250 declarations omitted. Re-issue with range selector.\n";
+
+		expect(
+			guard.recordTurn({
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "src/segments.ts" } }],
+					api: "openai-responses",
+					provider: "openai",
+					model: "test-model",
+					usage: zeroUsage,
+					stopReason: "toolUse",
+					timestamp: Date.now(),
+				},
+				toolResults: [
+					{
+						role: "toolResult",
+						toolCallId: "read-1",
+						toolName: "read",
+						content: [{ type: "text", text: summaryText }],
+						isError: false,
+						timestamp: Date.now(),
+					},
+				],
+			}),
+		).toBeNull();
+
+		// 2. First range read (lines 140-240) -> must NOT be subsumed by whole-file summary
+		expect(
+			guard.recordTurn({
+				message: {
+					role: "assistant",
+					content: [
+						{ type: "toolCall", id: "read-2", name: "read", arguments: { path: "src/segments.ts:140-240" } },
+					],
+					api: "openai-responses",
+					provider: "openai",
+					model: "test-model",
+					usage: zeroUsage,
+					stopReason: "toolUse",
+					timestamp: Date.now(),
+				},
+				toolResults: [
+					{
+						role: "toolResult",
+						toolCallId: "read-2",
+						toolName: "read",
+						content: [{ type: "text", text: "[src/segments.ts#1A2B]\n140: function a() {\n240: }\n" }],
+						isError: false,
+						timestamp: Date.now(),
+					},
+				],
+			}),
+		).toBeNull();
+
+		// 3. Second range read (lines 250-350) -> must NOT be subsumed or blocked
+		expect(
+			guard.recordTurn({
+				message: {
+					role: "assistant",
+					content: [
+						{ type: "toolCall", id: "read-3", name: "read", arguments: { path: "src/segments.ts:250-350" } },
+					],
+					api: "openai-responses",
+					provider: "openai",
+					model: "test-model",
+					usage: zeroUsage,
+					stopReason: "toolUse",
+					timestamp: Date.now(),
+				},
+				toolResults: [
+					{
+						role: "toolResult",
+						toolCallId: "read-3",
+						toolName: "read",
+						content: [{ type: "text", text: "[src/segments.ts#1A2B]\n250: function b() {\n350: }\n" }],
+						isError: false,
+						timestamp: Date.now(),
+					},
+				],
+			}),
+		).toBeNull();
+	});
+	test("two distinct line ranges of the same file do not subsume each other", () => {
+		const guard = new ToolCallLoopGuard({ threshold: 5, exemptTools: [], readSubsumptionThreshold: 2 });
+
+		expect(
+			guard.recordTurn({
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", id: "r1", name: "read", arguments: { path: "src/segments.ts:1-50" } }],
+					api: "openai-responses",
+					provider: "openai",
+					model: "test-model",
+					usage: zeroUsage,
+					stopReason: "toolUse",
+					timestamp: Date.now(),
+				},
+				toolResults: [
+					{
+						role: "toolResult",
+						toolCallId: "r1",
+						toolName: "read",
+						content: [{ type: "text", text: "[src/segments.ts#1A2B]\n1: a\n50: b\n" }],
+						isError: false,
+						timestamp: Date.now(),
+					},
+				],
+			}),
+		).toBeNull();
+
+		expect(
+			guard.recordTurn({
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", id: "r2", name: "read", arguments: { path: "src/segments.ts:100-150" } }],
+					api: "openai-responses",
+					provider: "openai",
+					model: "test-model",
+					usage: zeroUsage,
+					stopReason: "toolUse",
+					timestamp: Date.now(),
+				},
+				toolResults: [
+					{
+						role: "toolResult",
+						toolCallId: "r2",
+						toolName: "read",
+						content: [{ type: "text", text: "[src/segments.ts#1A2B]\n100: c\n150: d\n" }],
+						isError: false,
+						timestamp: Date.now(),
+					},
+				],
+			}),
+		).toBeNull();
+
+		expect(
+			guard.recordTurn({
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", id: "r3", name: "read", arguments: { path: "src/segments.ts:200-250" } }],
+					api: "openai-responses",
+					provider: "openai",
+					model: "test-model",
+					usage: zeroUsage,
+					stopReason: "toolUse",
+					timestamp: Date.now(),
+				},
+				toolResults: [
+					{
+						role: "toolResult",
+						toolCallId: "r3",
+						toolName: "read",
+						content: [{ type: "text", text: "[src/segments.ts#1A2B]\n200: e\n250: f\n" }],
+						isError: false,
+						timestamp: Date.now(),
+					},
+				],
+			}),
+		).toBeNull();
+	});
+
+	test("detects exact repeat of selector-free read after previous selector-free read", () => {
+		const guard = new ToolCallLoopGuard({ threshold: 5, exemptTools: [], readSubsumptionThreshold: 2 });
+
+		// 1. Initial read
+		expect(
+			guard.recordTurn({
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", id: "r1", name: "read", arguments: { path: "src/segments.ts" } }],
+					api: "openai-responses",
+					provider: "openai",
+					model: "test-model",
+					usage: zeroUsage,
+					stopReason: "toolUse",
+					timestamp: Date.now(),
+				},
+				toolResults: [
+					{
+						role: "toolResult",
+						toolCallId: "r1",
+						toolName: "read",
+						content: [{ type: "text", text: "[src/segments.ts#1A2B]\nsome file content\n" }],
+						isError: false,
+						timestamp: Date.now(),
+					},
+				],
+			}),
+		).toBeNull();
+
+		// 2. Subsumed read #1 of exact same selector-free target -> count = 1
+		expect(
+			guard.recordTurn({
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", id: "r2", name: "read", arguments: { path: "src/segments.ts" } }],
+					api: "openai-responses",
+					provider: "openai",
+					model: "test-model",
+					usage: zeroUsage,
+					stopReason: "toolUse",
+					timestamp: Date.now(),
+				},
+				toolResults: [
+					{
+						role: "toolResult",
+						toolCallId: "r2",
+						toolName: "read",
+						content: [{ type: "text", text: "[src/segments.ts#1A2B]\nsome file content\n" }],
+						isError: false,
+						timestamp: Date.now(),
+					},
+				],
+			}),
+		).toBeNull();
+
+		// 3. Subsumed read #2 of exact same selector-free target -> count = 2 -> TRIGGERS!
+		const detection = guard.recordTurn({
+			message: {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "r3", name: "read", arguments: { path: "src/segments.ts" } }],
+				api: "openai-responses",
+				provider: "openai",
+				model: "test-model",
+				usage: zeroUsage,
+				stopReason: "toolUse",
+				timestamp: Date.now(),
+			},
+			toolResults: [
+				{
+					role: "toolResult",
+					toolCallId: "r3",
+					toolName: "read",
+					content: [{ type: "text", text: "[src/segments.ts#1A2B]\nsome file content\n" }],
+					isError: false,
+					timestamp: Date.now(),
+				},
+			],
+		});
+
+		expect(detection).not.toBeNull();
+		expect(detection).toMatchObject({
+			kind: "repeated_tool_call",
+			toolName: "read",
+			count: 2,
+		});
+	});
+
+	test("resets read history on mutating tools like edit or write", () => {
+		const guard = new ToolCallLoopGuard({ threshold: 5, exemptTools: [], readSubsumptionThreshold: 2 });
+
+		// 1. Initial read 1-200
+		guard.recordTurn({
+			message: {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "src/segments.ts:1-200" } }],
+				api: "openai-responses",
+				provider: "openai",
+				model: "test-model",
+				usage: zeroUsage,
+				stopReason: "toolUse",
+				timestamp: Date.now(),
+			},
+			toolResults: [
+				{
+					role: "toolResult",
+					toolCallId: "read-1",
+					toolName: "read",
+					content: [{ type: "text", text: "[src/segments.ts#1A2B]\n1: line 1\n200: line 200\n" }],
+					isError: false,
+					timestamp: Date.now(),
+				},
+			],
+		});
+
+		// 2. Subsumed read #1 -> count = 1
+		guard.recordTurn({
+			message: {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "read-2", name: "read", arguments: { path: "src/segments.ts:50-100" } }],
+				api: "openai-responses",
+				provider: "openai",
+				model: "test-model",
+				usage: zeroUsage,
+				stopReason: "toolUse",
+				timestamp: Date.now(),
+			},
+			toolResults: [
+				{
+					role: "toolResult",
+					toolCallId: "read-2",
+					toolName: "read",
+					content: [{ type: "text", text: "[src/segments.ts#1A2B]\n50: line 50\n100: line 100\n" }],
+					isError: false,
+					timestamp: Date.now(),
+				},
+			],
+		});
+
+		// 3. Edit tool runs on the file! -> resets read history
+		guard.recordTurn({
+			message: {
+				role: "assistant",
+				content: [
+					{
+						type: "toolCall",
+						id: "edit-1",
+						name: "edit",
+						arguments: { input: "[src/segments.ts#1A2B]\nSWAP 50.=50:\n+new line" },
+					},
+				],
+				api: "openai-responses",
+				provider: "openai",
+				model: "test-model",
+				usage: zeroUsage,
+				stopReason: "toolUse",
+				timestamp: Date.now(),
+			},
+			toolResults: [
+				{
+					role: "toolResult",
+					toolCallId: "edit-1",
+					toolName: "edit",
+					content: [{ type: "text", text: "applied edit" }],
+					isError: false,
+					timestamp: Date.now(),
+				},
+			],
+		});
+
+		// 4. Fresh read after edit -> NOT subsumed because edit reset the history!
+		expect(
+			guard.recordTurn({
+				message: {
+					role: "assistant",
+					content: [
+						{ type: "toolCall", id: "read-3", name: "read", arguments: { path: "src/segments.ts:50-100" } },
+					],
+					api: "openai-responses",
+					provider: "openai",
+					model: "test-model",
+					usage: zeroUsage,
+					stopReason: "toolUse",
+					timestamp: Date.now(),
+				},
+				toolResults: [
+					{
+						role: "toolResult",
+						toolCallId: "read-3",
+						toolName: "read",
+						content: [{ type: "text", text: "[src/segments.ts#9F2C]\n50: new line\n100: line 100\n" }],
+						isError: false,
+						timestamp: Date.now(),
+					},
+				],
+			}),
+		).toBeNull();
+	});
+
+	test("detects exact repeat of identical ranged read via generic argument hash detector", () => {
+		const guard = new ToolCallLoopGuard({ threshold: 2, exemptTools: [] });
+
+		// 1. Initial ranged read of lines 50-200
+		expect(
+			guard.recordTurn({
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", id: "r1", name: "read", arguments: { path: "src/foo.ts:50-200" } }],
+					api: "openai-responses",
+					provider: "openai",
+					model: "test-model",
+					usage: zeroUsage,
+					stopReason: "toolUse",
+					timestamp: Date.now(),
+				},
+				toolResults: [
+					{
+						role: "toolResult",
+						toolCallId: "r1",
+						toolName: "read",
+						content: [{ type: "text", text: "[src/foo.ts#1A2B]\n50: line 50\n200: line 200\n" }],
+						isError: false,
+						timestamp: Date.now(),
+					},
+				],
+			}),
+		).toBeNull();
+
+		// 2. Exact same ranged read in the next turn -> caught by generic argument hash detector
+		const detection = guard.recordTurn({
+			message: {
+				role: "assistant",
+				content: [{ type: "toolCall", id: "r2", name: "read", arguments: { path: "src/foo.ts:50-200" } }],
+				api: "openai-responses",
+				provider: "openai",
+				model: "test-model",
+				usage: zeroUsage,
+				stopReason: "toolUse",
+				timestamp: Date.now(),
+			},
+			toolResults: [
+				{
+					role: "toolResult",
+					toolCallId: "r2",
+					toolName: "read",
+					content: [{ type: "text", text: "[src/foo.ts#1A2B]\n50: line 50\n200: line 200\n" }],
+					isError: false,
+					timestamp: Date.now(),
+				},
+			],
+		});
+
+		expect(detection).not.toBeNull();
+		expect(detection).toEqual({
+			kind: "repeated_tool_call",
+			toolName: "read",
+			count: 2,
+			resultSummary: "[src/foo.ts#1A2B] 50: line 50 200: line 200",
+			argumentsSummary: '{"path":"src/foo.ts:50-200"}',
+		});
 	});
 });

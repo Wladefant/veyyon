@@ -52,6 +52,30 @@
 	},
 	"files": {
 		"includes": [
+			"apps/*/src/**/*.ts",
+			"apps/*/src/**/*.tsx",
+			"apps/*/test/**/*.ts",
+			"apps/*/scripts/**/*.ts",
+			"apps/*/*.ts",
+			"clients/*/src/**/*.ts",
+			"clients/*/src/**/*.tsx",
+			"clients/*/test/**/*.ts",
+			"clients/*/scripts/**/*.ts",
+			"clients/*/*.ts",
+			"contracts/*/src/**/*.ts",
+			"contracts/*/test/**/*.ts",
+			"hosts/terminal/engine/src/**/*.ts",
+			"hosts/terminal/engine/test/**/*.ts",
+			"hosts/terminal/engine/bench/**/*.ts",
+			"hosts/terminal/engine/scripts/**/*.ts",
+			"hosts/gui/src/**/*.ts",
+			"hosts/gui/test/**/*.ts",
+			"kernel/src/**/*.ts",
+			"kernel/test/**/*.ts",
+			"natives/bridge/bindings/src/**/*.ts",
+			"natives/bridge/bindings/test/**/*.ts",
+			"natives/bridge/bindings/bench/**/*.ts",
+			"natives/bridge/bindings/scripts/**/*.ts",
 			"packages/*/src/**/*.ts",
 			"packages/*/src/**/*.tsx",
 			"packages/*/test/**/*.ts",
@@ -59,9 +83,19 @@
 			"packages/*/examples/**/*.ts",
 			"packages/*/scripts/**/*.ts",
 			"packages/*/*.ts",
+			"plugins/*/src/**/*.ts",
+			"plugins/*/test/**/*.ts",
+			"plugins/*/bench/**/*.ts",
+			"plugins/*/scripts/**/*.ts",
+			"plugins/*/*.ts",
+			"tests/conformance/src/**/*.ts",
+			"tests/*/src/**/*.ts",
+			"tests/*/test/**/*.ts",
+			"tests/*/scripts/**/*.ts",
+			"tests/*/*.ts",
 			"scripts/**/*.ts",
-			"!packages/natives/native/index.d.ts",
-			"!packages/tui/bench/_jskey.ts",
+			"!natives/bridge/bindings/native/index.d.ts",
+			"!hosts/terminal/engine/bench/_jskey.ts",
 			"!**/vendor/**/*",
 			"!**/node_modules/**/*",
 			"!**/test-sessions.ts",
@@ -69,13 +103,37 @@
 			"!**/devin-gen/**/*",
 			"!.worktrees/**/*",
 			"!.wt/**/*",
-			"!packages/deepswe-bench/repo-cache/**/*",
-			"!packages/deepswe-bench/runs/**/*",
+			"!tests/evals/datasets/repo-cache/**/*",
+			"!tests/evals/.cache/**/*",
+			"!tests/evals/runs/**/*",
 			"!runs/**/*",
-			"!packages/deepswe-bench/deep-swe/**/*",
-			"!packages/deepswe-bench/assets/**/*"
+			"!tests/evals/datasets/deep-swe/corpus/**/*",
+			"!tests/evals/assets/**/*"
 		]
 	},
+	"overrides": [
+		{
+			"includes": ["tests/evals/src/core/**", "tests/evals/src/harnesses/**"],
+			"linter": {
+				"rules": {
+					"style": {
+						"noRestrictedImports": {
+							"level": "error",
+							"options": {
+								"paths": {},
+								"patterns": [
+									{
+										"group": ["**/suites/**", "**/backends/**", "**/manager/**", "**/server/**"],
+										"message": "The eval package's layering is one-way: a core contract or a harness adapter is imported by a suite, a backend and the manager, never the other way round. Declare what this module needs in core/types.ts and let the caller supply it."
+									}
+								]
+							}
+						}
+					}
+				}
+			}
+		}
+	],
 	"assist": {
 		"actions": {
 			"source": {

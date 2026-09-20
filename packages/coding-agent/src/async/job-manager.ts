@@ -32,7 +32,7 @@ interface PollEscalationState {
 
 /**
  * What produced a background job: a backgrounded `bash` command, a `task`
- * subagent, or a supervised process from `launch` whose exit is reported when
+ * agent, or a supervised process from `launch` whose exit is reported when
  * it happens.
  */
 export type AsyncJobType = "bash" | "task" | "launch";
@@ -49,17 +49,23 @@ export interface AsyncJob {
 	errorText?: string;
 	/**
 	 * Registry id of the agent that registered the job (e.g. "Main",
-	 * "AuthLoader"). Used by scoped cancel/list APIs so a subagent's teardown
+	 * "AuthLoader"). Used by scoped cancel/list APIs so an agent's teardown
 	 * does not cancel its parent's jobs. Undefined for callers that don't
 	 * supply an id (e.g. legacy tests, SDK consumers without an agent context).
 	 */
 	ownerId?: string;
 	/**
-	 * Registry id of the subagent this job runs (task/tan/vibe jobs). Lets
+	 * Registry id of the agent this job runs (task/tan/vibe jobs). Lets
 	 * job-view code link a job row to its AgentRegistry ref even when the job
 	 * id differs from the agent id (vibe turn jobs, tan clones).
 	 */
 	agentId?: string;
+	/**
+	 * Tool call that started this job, when the registering tool supplied one.
+	 * Lets a late completion attach to its original call when that call is
+	 * still pending in the resumed session instead of forcing a new turn.
+	 */
+	toolCallId?: string;
 	/**
 	 * Job is registered but parked behind a caller-managed gate (e.g. a task
 	 * batch semaphore). Queued jobs do not count toward the running-job limit
@@ -95,8 +101,10 @@ export interface AsyncJobRegisterOptions {
 	id?: string;
 	/** Registry id of the agent that owns this job; used to scope cancelAll. */
 	ownerId?: string;
-	/** Registry id of the subagent this job runs; see {@link AsyncJob.agentId}. */
+	/** Registry id of the agent this job runs; see {@link AsyncJob.agentId}. */
 	agentId?: string;
+	/** Tool call that started this job; see {@link AsyncJob.toolCallId}. */
+	toolCallId?: string;
 	onProgress?: (text: string, details?: Record<string, unknown>) => void | Promise<void>;
 	/** Register the job in queued state; see {@link AsyncJob.queued}. */
 	queued?: boolean;
@@ -211,6 +219,7 @@ export class AsyncJobManager {
 			promise: Promise.resolve(),
 			ownerId: options?.ownerId,
 			agentId: options?.agentId,
+			toolCallId: options?.toolCallId,
 			queued: options?.queued === true,
 		};
 
@@ -243,7 +252,9 @@ export class AsyncJobManager {
 				job.status = "completed";
 				job.resultText = text;
 				this.#enqueueDelivery(id, text);
-				this.#scheduleEviction(id);
+				if (!this.isDeliverySuppressed(id) || this.#retentionMs > 0) {
+					this.#scheduleEviction(id);
+				}
 			} catch (error) {
 				if (job.status === "cancelled") {
 					job.errorText = errorMessage(error);
@@ -254,7 +265,9 @@ export class AsyncJobManager {
 				job.status = "failed";
 				job.errorText = errorText;
 				this.#enqueueDelivery(id, errorText);
-				this.#scheduleEviction(id);
+				if (!this.isDeliverySuppressed(id) || this.#retentionMs > 0) {
+					this.#scheduleEviction(id);
+				}
 			}
 		})();
 
@@ -334,7 +347,7 @@ export class AsyncJobManager {
 	 * in-flight, not retained for later. Before this, lifting the watch simply
 	 * forgot about it, and the child's report survived only inside the return value
 	 * of whatever call installed the watch. Any path that dropped that return value
-	 * dropped the subagent's entire output, permanently and silently, and nothing
+	 * dropped the agent's entire output, permanently and silently, and nothing
 	 * could recover it: `resumeDeliveries` lifts `#suppressedDeliveries` and has
 	 * never been able to see a watch.
 	 *
@@ -350,6 +363,9 @@ export class AsyncJobManager {
 			if (!this.#watchedJobs.delete(jobId)) continue;
 			removed += 1;
 			this.#requeueSettledDelivery(jobId);
+			if (this.#retentionMs <= 0) {
+				this.#scheduleEviction(jobId);
+			}
 		}
 		return removed;
 	}
@@ -413,6 +429,14 @@ export class AsyncJobManager {
 			this.#deliveries.length,
 			...this.#deliveries.filter(delivery => !this.isDeliverySuppressed(delivery.jobId)),
 		);
+		if (this.#retentionMs <= 0) {
+			for (const jobId of uniqueJobIds) {
+				const job = this.#jobs.get(jobId);
+				if (job && job.status !== "running" && !this.#watchedJobs.has(jobId)) {
+					this.#scheduleEviction(jobId);
+				}
+			}
+		}
 		return before - this.#deliveries.length;
 	}
 
@@ -427,6 +451,9 @@ export class AsyncJobManager {
 			if (!jobId) continue;
 			if (!this.#suppressedDeliveries.delete(jobId)) continue;
 			this.#requeueSettledDelivery(jobId);
+			if (this.#retentionMs <= 0) {
+				this.#scheduleEviction(jobId);
+			}
 		}
 	}
 
@@ -555,23 +582,31 @@ export class AsyncJobManager {
 		return candidate;
 	}
 
+	#purgeJob(jobId: string): void {
+		this.#jobs.delete(jobId);
+		this.#suppressedDeliveries.delete(jobId);
+		this.#watchedJobs.delete(jobId);
+	}
+
 	#scheduleEviction(jobId: string): void {
 		if (this.#disposed) return;
+		const job = this.#jobs.get(jobId);
+		if (job?.status === "running") return;
 		if (this.#retentionMs <= 0) {
-			this.#jobs.delete(jobId);
-			this.#suppressedDeliveries.delete(jobId);
-			this.#watchedJobs.delete(jobId);
+			if (
+				this.#watchedJobs.has(jobId) ||
+				this.#deliveries.some(delivery => delivery.jobId === jobId) ||
+				this.#inFlightDeliveries.some(delivery => delivery.jobId === jobId)
+			) {
+				return;
+			}
+			this.#purgeJob(jobId);
 			return;
 		}
-		const existing = this.#evictionTimers.get(jobId);
-		if (existing) {
-			clearTimeout(existing);
-		}
+		clearTimeout(this.#evictionTimers.get(jobId));
 		const timer = setTimeout(() => {
 			this.#evictionTimers.delete(jobId);
-			this.#jobs.delete(jobId);
-			this.#suppressedDeliveries.delete(jobId);
-			this.#watchedJobs.delete(jobId);
+			this.#purgeJob(jobId);
 		}, this.#retentionMs);
 		timer.unref();
 		this.#evictionTimers.set(jobId, timer);
@@ -585,18 +620,18 @@ export class AsyncJobManager {
 	}
 
 	#filterDeliveries(filter?: AsyncJobFilter): AsyncJobDelivery[] {
-		const ownerId = filter?.ownerId;
-		if (!ownerId) return this.#deliveries.filter(delivery => !this.isDeliverySuppressed(delivery.jobId));
-		return this.#deliveries.filter(
-			delivery => delivery.ownerId === ownerId && !this.isDeliverySuppressed(delivery.jobId),
-		);
+		return this.#unsuppressedDeliveries(this.#deliveries, filter);
 	}
 
 	#filterInFlightDeliveries(filter?: AsyncJobFilter): AsyncJobDelivery[] {
+		return this.#unsuppressedDeliveries(this.#inFlightDeliveries, filter);
+	}
+
+	/** The deliveries in `list` that are not suppressed, narrowed to `filter.ownerId` when one is given. */
+	#unsuppressedDeliveries(list: readonly AsyncJobDelivery[], filter?: AsyncJobFilter): AsyncJobDelivery[] {
 		const ownerId = filter?.ownerId;
-		if (!ownerId) return this.#inFlightDeliveries.filter(delivery => !this.isDeliverySuppressed(delivery.jobId));
-		return this.#inFlightDeliveries.filter(
-			delivery => delivery.ownerId === ownerId && !this.isDeliverySuppressed(delivery.jobId),
+		return list.filter(
+			delivery => (!ownerId || delivery.ownerId === ownerId) && !this.isDeliverySuppressed(delivery.jobId),
 		);
 	}
 
@@ -714,6 +749,9 @@ export class AsyncJobManager {
 			} finally {
 				const index = this.#inFlightDeliveries.indexOf(delivery);
 				if (index !== -1) this.#inFlightDeliveries.splice(index, 1);
+				if (this.#retentionMs <= 0) {
+					this.#scheduleEviction(delivery.jobId);
+				}
 				if (this.#deliveries.length > 0) this.#ensureDeliveryLoop();
 			}
 		})();

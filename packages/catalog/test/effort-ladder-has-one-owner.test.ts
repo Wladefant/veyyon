@@ -1,12 +1,14 @@
 import { describe, expect, it } from "bun:test";
 import { readFile } from "node:fs/promises";
 import * as path from "node:path";
-import { collectPackageSourceFiles, PACKAGES_DIR } from "../../utils/test/support/package-sources";
+import { collectPackageSourceFiles, memberRelative, PACKAGES_DIR } from "../../utils/test/support/package-sources";
 import { canonicalizeEfforts, Effort, isEffort, THINKING_EFFORTS } from "../src/effort";
 
 /**
  * The thinking-effort ladder: its exact values, its exact order, and the rule
- * that `packages/catalog/src/effort.ts` is the only place any of it is written.
+ * that `contracts/model/src/effort.ts` is the only place any of it is written.
+ * `packages/catalog/src/effort.ts` re-exports it, so the catalog subpath every
+ * caller reads is unchanged and is still not a second declaration.
  *
  * Two separate contracts live here because they fail in opposite directions and
  * each is useless alone. The VALUES are a wire contract: `Effort.XHigh` is the
@@ -41,8 +43,9 @@ const TEXTS = new Map<string, string>(
 	await Promise.all(SOURCES.map(async file => [file, await readFile(file, "utf8")] as const)),
 );
 
+/** The key an allow-list is written in, from the one owner of that mapping. */
 function relative(file: string): string {
-	return path.relative(PACKAGES_DIR, file);
+	return memberRelative(file);
 }
 
 /** Files whose text matches `pattern`, as paths relative to `packages/`. */
@@ -178,17 +181,17 @@ describe("the ladder has exactly one declaration", () => {
 	 */
 	it("scans the tree it claims to scan", () => {
 		expect(SOURCES.length).toBeGreaterThan(500);
-		expect(filesMatching(/export const THINKING_EFFORTS/)).toEqual(["catalog/src/effort.ts"]);
+		expect(filesMatching(/export const THINKING_EFFORTS/)).toEqual(["contracts/model/src/effort.ts"]);
 	});
 
 	/** One enum declaration. A second would make `Effort.High` mean two types that happen to agree today. */
-	it("declares the Effort enum in the catalog and nowhere else", () => {
-		expect(filesMatching(/^\s*export const enum Effort\b/m)).toEqual(["catalog/src/effort.ts"]);
+	it("declares the Effort enum in the model contract and nowhere else", () => {
+		expect(filesMatching(/^\s*export const enum Effort\b/m)).toEqual(["contracts/model/src/effort.ts"]);
 	});
 
 	/** One canonicalizer, because two would disagree the first time a level is inserted mid-ladder. */
-	it("declares canonicalizeEfforts in the catalog and nowhere else", () => {
-		expect(filesMatching(/^\s*export function canonicalizeEfforts\b/m)).toEqual(["catalog/src/effort.ts"]);
+	it("declares canonicalizeEfforts in the model contract and nowhere else", () => {
+		expect(filesMatching(/^\s*export function canonicalizeEfforts\b/m)).toEqual(["contracts/model/src/effort.ts"]);
 	});
 
 	/**

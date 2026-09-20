@@ -64,6 +64,18 @@ function commit(root: string, file: string, content: string, dateIso: string): s
 	return spawnSync("git", ["rev-parse", "--short", "HEAD"], { cwd: root, encoding: "utf-8" }).stdout.trim();
 }
 
+/** Delete a tracked file in its own commit, so the fixture's tree really loses the old path. */
+function remove(root: string, file: string, dateIso: string): void {
+	const env = { ...process.env, GIT_AUTHOR_DATE: `${dateIso}T12:00:00`, GIT_COMMITTER_DATE: `${dateIso}T12:00:00` };
+	for (const args of [
+		["rm", "-q", file],
+		["commit", "-q", "-m", `remove ${file}`],
+	]) {
+		const result = spawnSync("git", args, { cwd: root, encoding: "utf-8", env });
+		if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
+	}
+}
+
 describe("checkFreshness", () => {
 	it("counts unstamped docs without failing them", () => {
 		const root = makeRepo();
@@ -187,6 +199,314 @@ describe("checkFreshness", () => {
 		const result = checkFreshness(root, ["docs/internal/d.md"]);
 		expect(result.issues).toHaveLength(1);
 		expect(result.issues[0].reason).toContain("does not exist");
+	});
+
+	/**
+	 * WHY: a docs reorganization rewrote the paths inside 8 stamped internal docs
+	 * and the gate demanded all 8 be re-verified, for an edit that changed nothing
+	 * a verification covers. These cases fix the boundary: path tokens are exempt,
+	 * anything else is not. What they do not catch is a rename that also changes
+	 * meaning (a link retargeted at a different page keeps its shape here), which
+	 * is why the exemption is reported by name rather than applied in silence.
+	 */
+	it("keeps the stamp when the only change since it was written is markdown path tokens", () => {
+		const root = makeRepo();
+		const sha = commit(root, "docs/internal/e.md", "# E\n\nSee `docs/models.md` for the registry.\n", "2026-01-10");
+		commit(
+			root,
+			"docs/internal/e.md",
+			`# E\n\nSee \`docs/models.md\` for the registry.\n\n*Verified against \`${sha}\` on 2026-01-10.*\n`,
+			"2026-01-10",
+		);
+		commit(
+			root,
+			"docs/internal/e.md",
+			`# E\n\nSee \`docs/handbook/src/reference/models-yml.md\` for the registry.\n\n*Verified against \`${sha}\` on 2026-01-10.*\n`,
+			"2026-03-01",
+		);
+
+		const result = checkFreshness(root, ["docs/internal/e.md"]);
+
+		expect(result.issues).toEqual([]);
+		expect(result.pathRenamedOnly).toEqual(["docs/internal/e.md"]);
+	});
+
+	it("still fails when a path rename travels with a prose change", () => {
+		const root = makeRepo();
+		const sha = commit(root, "docs/internal/f.md", "# F\n\nSee `docs/models.md`.\n", "2026-01-10");
+		commit(
+			root,
+			"docs/internal/f.md",
+			`# F\n\nSee \`docs/models.md\`.\n\n*Verified against \`${sha}\` on 2026-01-10.*\n`,
+			"2026-01-10",
+		);
+		commit(
+			root,
+			"docs/internal/f.md",
+			`# F\n\nSee \`docs/handbook/src/reference/models-yml.md\`. Discovery now runs at startup.\n\n*Verified against \`${sha}\` on 2026-01-10.*\n`,
+			"2026-03-01",
+		);
+
+		const result = checkFreshness(root, ["docs/internal/f.md"]);
+
+		expect(result.pathRenamedOnly).toEqual([]);
+		expect(result.issues).toHaveLength(1);
+		expect(result.issues[0].reason).toContain("after its 2026-01-10 verification stamp");
+	});
+
+	/** Deleting the path is not renaming it: the sentence that cited a page and the
+	 *  sentence that cites nothing make different claims, so the token is replaced
+	 *  by a placeholder rather than stripped. The path here is bare rather than in a
+	 *  code span, because backticks left behind would mask a stripping normalizer. */
+	it("still fails when a path reference is dropped rather than renamed", () => {
+		const root = makeRepo();
+		const sha = commit(root, "docs/internal/g.md", "# G\n\nSee docs/models.md for the registry.\n", "2026-01-10");
+		commit(
+			root,
+			"docs/internal/g.md",
+			`# G\n\nSee docs/models.md for the registry.\n\n*Verified against \`${sha}\` on 2026-01-10.*\n`,
+			"2026-01-10",
+		);
+		commit(
+			root,
+			"docs/internal/g.md",
+			`# G\n\nSee  for the registry.\n\n*Verified against \`${sha}\` on 2026-01-10.*\n`,
+			"2026-03-01",
+		);
+
+		const result = checkFreshness(root, ["docs/internal/g.md"]);
+
+		expect(result.pathRenamedOnly).toEqual([]);
+		expect(result.issues).toHaveLength(1);
+	});
+
+	/** The baseline is the commit that WROTE the stamp, not the commit the stamp
+	 *  names. Here the page was rewritten wholesale in the stamping commit, so
+	 *  comparing against the stamped code commit would call a later path rename a
+	 *  prose change and fail a doc nobody edited. */
+	it("compares against the stamping commit, not the commit the stamp names", () => {
+		const root = makeRepo();
+		const sha = commit(root, "docs/internal/h.md", "# H\n\nThe old page, entirely different.\n", "2026-01-10");
+		commit(
+			root,
+			"docs/internal/h.md",
+			`# H\n\nRewritten from scratch, citing \`docs/models.md\`.\n\n*Verified against \`${sha}\` on 2026-01-10.*\n`,
+			"2026-01-10",
+		);
+		commit(
+			root,
+			"docs/internal/h.md",
+			`# H\n\nRewritten from scratch, citing \`docs/handbook/src/reference/models-yml.md\`.\n\n*Verified against \`${sha}\` on 2026-01-10.*\n`,
+			"2026-03-01",
+		);
+
+		const result = checkFreshness(root, ["docs/internal/h.md"]);
+
+		expect(result.issues).toEqual([]);
+		expect(result.pathRenamedOnly).toEqual(["docs/internal/h.md"]);
+	});
+
+	/** A stamp that was never committed certifies nothing: there is no snapshot to
+	 *  compare against, so the exemption cannot be claimed and the gate fails. */
+	it("fails a stale doc whose current stamp line exists only in the working tree", () => {
+		const root = makeRepo();
+		const sha = commit(root, "docs/internal/i.md", "# I\n\nBody.\n", "2026-01-10");
+		commit(
+			root,
+			"docs/internal/i.md",
+			`# I\n\nBody.\n\n*Verified against \`${sha}\` on 2026-01-10.*\n`,
+			"2026-03-01",
+		);
+		fs.writeFileSync(
+			path.join(root, "docs/internal/i.md"),
+			`# I\n\nBody.\n\n*Verified against \`${sha}\` on 2026-01-11.*\n`,
+		);
+
+		const result = checkFreshness(root, ["docs/internal/i.md"]);
+
+		expect(result.pathRenamedOnly).toEqual([]);
+		expect(result.issues).toHaveLength(1);
+		expect(result.issues[0].reason).toContain("after its 2026-01-11 verification stamp");
+	});
+
+	/** A stamp dated before the commit that wrote it certifies nothing it can be
+	 *  compared against: the exemption would check the backdating edit against
+	 *  itself. Path-only or not, it fails. */
+	it("refuses the exemption when the stamping commit postdates the stamp date", () => {
+		const root = makeRepo();
+		const sha = commit(root, "docs/internal/j.md", "# J\n\nSee `docs/models.md`.\n", "2026-01-10");
+		commit(
+			root,
+			"docs/internal/j.md",
+			`# J\n\nSee \`docs/models.md\`.\n\n*Verified against \`${sha}\` on 2026-01-10.*\n`,
+			"2026-02-01",
+		);
+		commit(
+			root,
+			"docs/internal/j.md",
+			`# J\n\nSee \`docs/handbook/src/reference/models-yml.md\`.\n\n*Verified against \`${sha}\` on 2026-01-10.*\n`,
+			"2026-03-01",
+		);
+
+		const result = checkFreshness(root, ["docs/internal/j.md"]);
+
+		expect(result.pathRenamedOnly).toEqual([]);
+		expect(result.issues).toHaveLength(1);
+	});
+
+	/**
+	 * WHY: the doc-path exemption above covers a docs reorganization and left a package move —
+	 * the same mechanical rewrite over source paths — failing every stamped page that pointed at
+	 * the moved tree. These cases fix that boundary: a token that names something in the tree it
+	 * is read against folds, a token that names nothing does not, and prose never folds.
+	 */
+	it("keeps the stamp when a source path moved and the new path exists", () => {
+		const root = makeRepo();
+		const sha = commit(root, "packages/tui/src/renderer.ts", "export const draw = () => {};\n", "2026-01-10");
+		commit(
+			root,
+			"docs/internal/k.md",
+			`# K\n\nThe renderer is \`packages/tui/src/renderer.ts\`.\n\n*Verified against \`${sha}\` on 2026-01-10.*\n`,
+			"2026-01-10",
+		);
+		commit(root, "hosts/terminal/engine/src/renderer.ts", "export const draw = () => {};\n", "2026-03-01");
+		remove(root, "packages/tui/src/renderer.ts", "2026-03-01");
+		commit(
+			root,
+			"docs/internal/k.md",
+			`# K\n\nThe renderer is \`hosts/terminal/engine/src/renderer.ts\`.\n\n*Verified against \`${sha}\` on 2026-01-10.*\n`,
+			"2026-03-01",
+		);
+
+		const result = checkFreshness(root, ["docs/internal/k.md"]);
+
+		expect(result.issues).toEqual([]);
+		expect(result.pathRenamedOnly).toEqual(["docs/internal/k.md"]);
+	});
+
+	/**
+	 * The fold is granted by the TREE, not by the token's shape. A rewrite to a path that exists
+	 * in neither tree is a claim nobody checked, and the exemption would certify it.
+	 */
+	it("still fails when the rewritten source path names nothing in either tree", () => {
+		const root = makeRepo();
+		const sha = commit(root, "packages/tui/src/renderer.ts", "export const draw = () => {};\n", "2026-01-10");
+		commit(
+			root,
+			"docs/internal/l.md",
+			`# L\n\nThe renderer is \`packages/tui/src/renderer.ts\`.\n\n*Verified against \`${sha}\` on 2026-01-10.*\n`,
+			"2026-01-10",
+		);
+		commit(
+			root,
+			"docs/internal/l.md",
+			`# L\n\nThe renderer is \`hosts/terminal/engine/src/renderer.ts\`.\n\n*Verified against \`${sha}\` on 2026-01-10.*\n`,
+			"2026-03-01",
+		);
+
+		const result = checkFreshness(root, ["docs/internal/l.md"]);
+
+		expect(result.pathRenamedOnly).toEqual([]);
+		expect(result.issues).toHaveLength(1);
+	});
+
+	/** A bare directory prefix (`crates/` becoming `natives/`) and a glob over its children are the
+	 *  same statement about where code lives, so both fold once the directory is real. */
+	it("keeps the stamp when a bare directory prefix and a glob over it moved", () => {
+		const root = makeRepo();
+		const sha = commit(root, "crates/veyyon-keys/src/lib.rs", "pub fn parse() {}\n", "2026-01-10");
+		commit(
+			root,
+			"docs/internal/m.md",
+			`# M\n\nThe crates live under \`crates/\`, one per concern (\`crates/veyyon-*/\`).\n\n*Verified against \`${sha}\` on 2026-01-10.*\n`,
+			"2026-01-10",
+		);
+		commit(root, "natives/text/keys/src/lib.rs", "pub fn parse() {}\n", "2026-03-01");
+		remove(root, "crates/veyyon-keys/src/lib.rs", "2026-03-01");
+		commit(
+			root,
+			"docs/internal/m.md",
+			`# M\n\nThe crates live under \`natives/\`, one per concern (\`natives/text/*/\`).\n\n*Verified against \`${sha}\` on 2026-01-10.*\n`,
+			"2026-03-01",
+		);
+
+		const result = checkFreshness(root, ["docs/internal/m.md"]);
+
+		expect(result.issues).toEqual([]);
+		expect(result.pathRenamedOnly).toEqual(["docs/internal/m.md"]);
+	});
+
+	/** A markdown link's target is written relative to the doc, so it names a path in the tree only
+	 *  when read from the doc's directory. A move that rewrites the target is the same statement
+	 *  about where code lives as one that rewrites a root-relative token. */
+	it("keeps the stamp when a relative link target moved to a path that exists", () => {
+		const root = makeRepo();
+		const sha = commit(root, "fixtures/corpus.json", "[]\n", "2026-01-10");
+		commit(
+			root,
+			"docs/internal/o.md",
+			`# O\n\nThe cases are in [\`@\`](../../fixtures/corpus.json).\n\n*Verified against \`${sha}\` on 2026-01-10.*\n`,
+			"2026-01-10",
+		);
+		commit(root, "tests/fixtures/corpus.json", "[]\n", "2026-03-01");
+		remove(root, "fixtures/corpus.json", "2026-03-01");
+		commit(
+			root,
+			"docs/internal/o.md",
+			`# O\n\nThe cases are in [\`@\`](../../tests/fixtures/corpus.json).\n\n*Verified against \`${sha}\` on 2026-01-10.*\n`,
+			"2026-03-01",
+		);
+
+		const result = checkFreshness(root, ["docs/internal/o.md"]);
+
+		expect(result.issues).toEqual([]);
+		expect(result.pathRenamedOnly).toEqual(["docs/internal/o.md"]);
+	});
+
+	it("still fails when a relative link target is rewritten to a path that does not exist", () => {
+		const root = makeRepo();
+		const sha = commit(root, "fixtures/corpus.json", "[]\n", "2026-01-10");
+		commit(
+			root,
+			"docs/internal/p.md",
+			`# P\n\nThe cases are in [\`@\`](../../fixtures/corpus.json).\n\n*Verified against \`${sha}\` on 2026-01-10.*\n`,
+			"2026-01-10",
+		);
+		commit(
+			root,
+			"docs/internal/p.md",
+			`# P\n\nThe cases are in [\`@\`](../../tests/fixtures/corpus.json).\n\n*Verified against \`${sha}\` on 2026-01-10.*\n`,
+			"2026-03-01",
+		);
+
+		const result = checkFreshness(root, ["docs/internal/p.md"]);
+
+		expect(result.pathRenamedOnly).toEqual([]);
+		expect(result.issues).toHaveLength(1);
+	});
+
+	it("still fails when a source path move travels with a prose change", () => {
+		const root = makeRepo();
+		const sha = commit(root, "packages/tui/src/renderer.ts", "export const draw = () => {};\n", "2026-01-10");
+		commit(
+			root,
+			"docs/internal/n.md",
+			`# N\n\nThe renderer is \`packages/tui/src/renderer.ts\`.\n\n*Verified against \`${sha}\` on 2026-01-10.*\n`,
+			"2026-01-10",
+		);
+		commit(root, "hosts/terminal/engine/src/renderer.ts", "export const draw = () => {};\n", "2026-03-01");
+		remove(root, "packages/tui/src/renderer.ts", "2026-03-01");
+		commit(
+			root,
+			"docs/internal/n.md",
+			`# N\n\nThe renderer is \`hosts/terminal/engine/src/renderer.ts\`, and it now double-buffers.\n\n*Verified against \`${sha}\` on 2026-01-10.*\n`,
+			"2026-03-01",
+		);
+
+		const result = checkFreshness(root, ["docs/internal/n.md"]);
+
+		expect(result.pathRenamedOnly).toEqual([]);
+		expect(result.issues).toHaveLength(1);
 	});
 });
 

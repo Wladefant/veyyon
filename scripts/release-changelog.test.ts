@@ -1,9 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyReleaseToChangelog } from "./release.ts";
+import { applyReleaseToChangelog, loadPackageChangelogs } from "./release";
 import {
 	assertPreparedReleaseChangelogs,
 	assertReleaseIsDocumented,
@@ -11,14 +11,15 @@ import {
 	preparedReleaseChangelogFailures,
 	RELEASE_NOTES_CHANGELOG,
 	undocumentedReleaseFailures,
-} from "./release-policy.ts";
+} from "./release-policy";
+import { typeScriptMembers } from "./workspace-layout";
 
 /**
  * Pins the changelog-roll contract: turning `## [Unreleased]` into a dated
  * `## [version]` entry when a release cuts.
  *
  * Why this suite exists: the previous roll inserted a fresh `## [Unreleased]`
- * anchored to the `# Changelog\n\n` title. In `packages/hashline/CHANGELOG.md`
+ * anchored to the `# Changelog\n\n` title. In `plugins/hashline/CHANGELOG.md`
  * the `## [Unreleased]` section lives BELOW a fork-notice blockquote, so the
  * title-anchored insert put a second `[Unreleased]` ABOVE the fork notice and
  * renamed the real (below-notice) one to the version — stranding the actual
@@ -162,6 +163,84 @@ describe("applyReleaseToChangelog", () => {
 		const before = ["# Changelog", "", "## [1.0.0] - 2026-01-01", "", "- First.", ""].join("\n");
 		expect(applyReleaseToChangelog(before, "1.0.1", DATE)).toBe(before);
 	});
+
+	/**
+	 * WHY. The v1.3.0 cut ran twice. The second run found `packages/utils`'s
+	 * `[Unreleased]` refilled and appended a SECOND `## [1.3.0]` heading above
+	 * `## [1.2.0]`, so one package documented one release twice and the bullet it
+	 * carried was already published verbatim in the immutable `## [1.2.0]`. That
+	 * turned `changelog-version-headings-are-unique` and the root renderer's
+	 * distinct-entry gate red on a tagged commit and cost a retracted tag.
+	 *
+	 * This closes the class: rolling into a version the changelog already
+	 * documents is refused, whatever the version and wherever the section sits.
+	 * It does NOT catch two DIFFERENT packages minting the same version, which is
+	 * correct and expected, nor a duplicate written by hand.
+	 */
+	it("refuses to add a second section for a version the changelog already documents", () => {
+		const alreadyCut = [
+			"# Changelog",
+			"",
+			"## [Unreleased]",
+			"",
+			"### Added",
+			"",
+			"- Something that landed after the first cut.",
+			"",
+			"## [1.3.0] - 2026-08-28",
+			"",
+			"### Added",
+			"",
+			"- Rolled by the first cut.",
+			"",
+		].join("\n");
+
+		expect(() => applyReleaseToChangelog(alreadyCut, "1.3.0", DATE)).toThrow(
+			/already has a "## \[1\.3\.0\]" section/,
+		);
+	});
+
+	it("still rolls into a version the changelog does not document yet", () => {
+		const alreadyCut = [
+			"# Changelog",
+			"",
+			"## [Unreleased]",
+			"",
+			"### Added",
+			"",
+			"- Something new.",
+			"",
+			"## [1.3.0] - 2026-08-28",
+			"",
+			"### Added",
+			"",
+			"- Rolled by the first cut.",
+			"",
+		].join("\n");
+
+		const after = applyReleaseToChangelog(alreadyCut, "1.4.0", DATE);
+
+		expect(after.match(/## \[1\.3\.0\]/g)).toHaveLength(1);
+		expect(after.match(/## \[1\.4\.0\]/g)).toHaveLength(1);
+		expect(after.indexOf("## [1.4.0]")).toBeLessThan(after.indexOf("## [1.3.0]"));
+	});
+
+	it("leaves a re-cut alone when the first cut drained [Unreleased]", () => {
+		const drained = [
+			"# Changelog",
+			"",
+			"## [Unreleased]",
+			"",
+			"## [1.3.0] - 2026-08-28",
+			"",
+			"### Added",
+			"",
+			"- Rolled by the first cut.",
+			"",
+		].join("\n");
+
+		expect(applyReleaseToChangelog(drained, "1.3.0", DATE)).toBe(drained);
+	});
 });
 
 /**
@@ -171,7 +250,7 @@ describe("applyReleaseToChangelog", () => {
  * the roll above wrote no version section for v1.0.44, v1.0.45 or v1.0.46: three consecutive releases
  * were tagged and published with no changelog entry at all, while six (v1.0.40 through v1.0.45) sat
  * as unpublished drafts. Nothing in the cut noticed. The failure surfaced in the website build
- * (`reportUndocumentedReleases` in `website/tools/gen-changelog.mjs`, which reconciles published
+ * (`reportUndocumentedReleases` in `apps/site/tools/gen-changelog.mjs`, which reconciles published
  * releases against `packages/coding-agent/CHANGELOG.md`), which is to say it surfaced only after
  * v1.0.46 was already public and no longer fixable by not shipping it.
  *
@@ -202,6 +281,54 @@ describe("the release changelog gate", () => {
 	it("gates on the changelog the release notes and the changelog page are built from", async () => {
 		expect(RELEASE_NOTES_CHANGELOG).toBe("packages/coding-agent/CHANGELOG.md");
 		expect(await Bun.file(join(REPO_ROOT, RELEASE_NOTES_CHANGELOG)).exists()).toBe(true);
+	});
+
+	/**
+	 * And the cut sees every publishable member, wherever the workspace declares it.
+	 *
+	 * `loadPackageChangelogs` fed on `new Glob("packages/*​/CHANGELOG.md")`. A member under any other
+	 * root was invisible to the cut: its version was never bumped, its `[Unreleased]` was never
+	 * rolled, and the gate above reported nothing to fix, because a changelog nobody read holds no
+	 * offender. Moving `wire` to `contracts/` created exactly that member, and `natives/bridge/bindings`
+	 * is a literal member three levels down that no root glob reaches either.
+	 *
+	 * The comparison is the full path set, not the set of top-level trees: a tree comparison passes
+	 * while one member of a covered tree goes unread, which is the same silent skip one directory in.
+	 * A member with no `CHANGELOG.md` has to be private, so "no changelog" can never be how a
+	 * publishable package leaves the cut.
+	 */
+	it("reads the changelog of every member that ships one, and every member without one is private", async () => {
+		const changelogs = await loadPackageChangelogs();
+		const members = typeScriptMembers();
+		const withChangelog = members.filter(member => existsSync(join(REPO_ROOT, member, "CHANGELOG.md")));
+		const publishableWithout = members
+			.filter(member => !withChangelog.includes(member))
+			.filter(member => {
+				const manifest = JSON.parse(readFileSync(join(REPO_ROOT, member, "package.json"), "utf8")) as {
+					private?: boolean;
+				};
+				return manifest.private !== true;
+			});
+
+		expect(changelogs.map(changelog => changelog.path).sort()).toEqual(
+			withChangelog.map(member => `${member}/CHANGELOG.md`).sort(),
+		);
+		expect(publishableWithout, "a publishable member with no CHANGELOG.md is invisible to the cut").toEqual([]);
+		// The recorded decision about which trees hold changelogs at all. `clients/python/veybot/web` is
+		// private and ships none; a new tree that starts publishing turns this red until someone says so.
+		expect([...new Set(withChangelog.map(member => member.split("/")[0]))].sort()).toEqual([
+			"apps",
+			"clients",
+			"contracts",
+			"hosts",
+			"kernel",
+			"natives",
+			"packages",
+			"plugins",
+			"tests",
+		]);
+		expect(changelogs.map(changelog => changelog.path)).toContain("contracts/wire/CHANGELOG.md");
+		expect(changelogs.find(changelog => changelog.path === "contracts/wire/CHANGELOG.md")?.name).toBe("@veyyon/wire");
 	});
 
 	/** The v1.0.44/45/46 state exactly: an empty [Unreleased] and no section for the version. */
@@ -265,13 +392,13 @@ describe("the release changelog gate", () => {
 		expect(preparedReleaseChangelogFailures(NEXT, [notes(after)])).toEqual([]);
 	});
 
-	/** Most packages ship nothing in a given release, and packages like `metaharness` own no
+	/** Most packages ship nothing in a given release, and packages like `simulations` own no
 	 * changelog at all. Neither may block a cut: the gate is about the version being documented
 	 * somewhere a reader will find it, not about every package having something to say. */
 	it("passes a release where only the release-notes changelog has an entry", () => {
 		const documented = ["# Changelog", "", "## [Unreleased]", "", "- A real change.", ""].join("\n");
 		const quiet: PackageChangelog = {
-			path: "packages/hashline/CHANGELOG.md",
+			path: "plugins/hashline/CHANGELOG.md",
 			name: "@veyyon/hashline",
 			content: ["# Changelog", "", "## [Unreleased]", "", "## [1.0.40] - 2026-07-28", "", "- Old."].join("\n"),
 		};
@@ -295,7 +422,7 @@ describe("the release changelog gate", () => {
 	 * fork-notice bug) would ship inside the version while still reading as unreleased. */
 	it("refuses a prepared tree that left bullets stranded under [Unreleased]", () => {
 		const stranded: PackageChangelog = {
-			path: "packages/hashline/CHANGELOG.md",
+			path: "plugins/hashline/CHANGELOG.md",
 			name: "@veyyon/hashline",
 			content: ["# Changelog", "", "## [Unreleased]", "", "- Never promoted.", "", `## [${NEXT}] - 2026-08-02`].join(
 				"\n",
@@ -306,7 +433,7 @@ describe("the release changelog gate", () => {
 		);
 
 		expect(preparedReleaseChangelogFailures(NEXT, [documented, stranded])).toEqual([
-			'@veyyon/hashline (packages/hashline/CHANGELOG.md) still has 1 bullet(s) under "## [Unreleased]" after ' +
+			'@veyyon/hashline (plugins/hashline/CHANGELOG.md) still has 1 bullet(s) under "## [Unreleased]" after ' +
 				"the changelog roll, so they would ship inside 1.0.47 undocumented.",
 		]);
 		expect(() => assertPreparedReleaseChangelogs(NEXT, [documented, stranded])).toThrow(

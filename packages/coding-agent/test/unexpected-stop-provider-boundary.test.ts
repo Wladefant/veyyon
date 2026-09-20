@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage, Context, Model } from "@veyyon/ai";
-import * as ai from "@veyyon/ai";
+import * as ai from "@veyyon/ai/stream";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { SecretObfuscator } from "@veyyon/coding-agent/secrets";
 import { classifyUnexpectedStop } from "@veyyon/coding-agent/session/unexpected-stop-classifier";
@@ -22,9 +22,6 @@ function settingsFor(backend: string, model = onlineModel()) {
 		},
 		getModelRole(role: string) {
 			return role === "smol" ? `${model.provider}/${model.id}` : undefined;
-		},
-		getStorage() {
-			return undefined;
 		},
 	} as never;
 }

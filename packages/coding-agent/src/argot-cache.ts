@@ -13,16 +13,28 @@
 // content-addressed. See argot's project-vocab.ts for the full lifecycle.
 
 import { errorMessage, getArgotCacheDir, logger } from "@veyyon/utils";
-import {
-	ARGOT_LOAD_TOOL,
-	ArgotSession,
-	type ProjectVocabIO,
-	type ProjectVocabNotice,
-	type ResolvedProjectVocab,
-	resolveProjectRoot,
-	resolveProjectVocab,
-} from "argot";
+import { ARGOT_LOAD_TOOL } from "argot/constants";
+import { resolveProjectRoot } from "argot/project";
+import type * as ProjectVocabNs from "argot/project-vocab";
+import type { ProjectVocabIO, ProjectVocabNotice, ResolvedProjectVocab } from "argot/project-vocab";
+import { ArgotSession } from "argot/session";
 import { head, ls } from "./utils/git";
+
+/**
+ * `argot/project-vocab` (corpus gathering, cache keying, dictionary generation)
+ * loads on the first resolve, not at import.
+ *
+ * Everything above it — the codec, the session, the gate — is needed
+ * synchronously by a session whether or not Argot is on, but this subtree is
+ * reached only when a dictionary is actually resolved, which happens when the
+ * feature is enabled and a project is armed or loaded.
+ */
+let projectVocabModule: typeof ProjectVocabNs | undefined;
+
+async function loadProjectVocab(): Promise<typeof ProjectVocabNs> {
+	projectVocabModule ??= await import("argot/project-vocab");
+	return projectVocabModule;
+}
 
 /**
  * The one capability argot cannot supply itself: git access. `git rev-parse HEAD`
@@ -57,11 +69,12 @@ function logArgotNotice(notice: ProjectVocabNotice): void {
  * they resolve, key, and generate identically — and identically to every other
  * harness, because the logic is argot's, not veyyon's.
  */
-function resolveFolderVocab(
+async function resolveFolderVocab(
 	folder: string,
 	tokenBudget: number | undefined,
 	signal?: AbortSignal,
 ): Promise<ResolvedProjectVocab | undefined> {
+	const { resolveProjectVocab } = await loadProjectVocab();
 	return resolveProjectVocab({
 		folder,
 		cacheDir: getArgotCacheDir(),
@@ -72,23 +85,23 @@ function resolveFolderVocab(
 	});
 }
 
-/** How a subagent starts with Argot shorthand. Mirrors the `argot.subagents` setting. */
-export type ArgotSubagentMode = "off" | "fresh" | "inherit";
+/** How a spawned agent starts with Argot shorthand. Mirrors the `argot.agents` setting. */
+export type ArgotAgentMode = "off" | "fresh" | "inherit";
 
-/** Inputs to {@link createArgotSession}: whether the feature is on, and the subagent policy. */
+/** Inputs to {@link createArgotSession}: whether the feature is on, and the spawned agent policy. */
 export interface ArgotSessionInit {
 	/** Whether Argot is enabled at all (`argot.enabled`). When false, no session is built. */
 	enabled: boolean;
-	/** Whether this is a subagent session (a task-spawned child), which selects the subagent policy. */
-	isSubagent: boolean;
-	/** How a subagent starts (`argot.subagents`). Ignored for a top-level session. */
-	subagentMode: ArgotSubagentMode;
+	/** Whether this is a spawned agent session (a task-spawned child), which selects the spawned agent policy. */
+	isSpawned: boolean;
+	/** How a spawned agent starts (`argot.agents`). Ignored for a top-level session. */
+	agentMode: ArgotAgentMode;
 	/** The parent session's codec, for `inherit`. Absent for a top-level session or a parent with Argot off. */
 	parentArgot?: ArgotSession;
 }
 
 /**
- * Build the {@link ArgotSession} for a session, applying the subagent policy.
+ * Build the {@link ArgotSession} for a session, applying the spawned agent policy.
  *
  * Loading is agent-driven (the canonical flow in argot's SPEC): every session
  * starts UNARMED and the model loads the project it intends to work in through
@@ -99,30 +112,30 @@ export interface ArgotSessionInit {
  *
  * - A top-level session starts as an empty {@link ArgotSession} (the feature off
  *   returns no codec at all).
- * - A subagent follows {@link ArgotSessionInit.subagentMode}: `off` gets no codec,
+ * - A spawned agent follows {@link ArgotSessionInit.agentMode}: `off` gets no codec,
  *   `fresh` gets its own empty session and loads its task's project itself, and
  *   `inherit` starts as a detached {@link ArgotSession.fork} of the parent's
  *   loaded shorthand.
  *
- * `inherit` with no parent codec to fork (a revived subagent with no live parent,
+ * `inherit` with no parent codec to fork (a revived spawned agent with no live parent,
  * or a parent that had Argot off) is not a silent failure: it starts unarmed
  * instead, which is a fully correct path, and says so loudly in the log rather
- * than leaving the subagent silently without shorthand.
+ * than leaving the spawned agent silently without shorthand.
  */
 export function createArgotSession(init: ArgotSessionInit): ArgotSession | undefined {
 	if (!init.enabled) {
 		return undefined;
 	}
 
-	if (init.isSubagent) {
-		if (init.subagentMode === "off") {
+	if (init.isSpawned) {
+		if (init.agentMode === "off") {
 			return undefined;
 		}
-		if (init.subagentMode === "inherit") {
+		if (init.agentMode === "inherit") {
 			if (init.parentArgot !== undefined) {
 				return init.parentArgot.fork();
 			}
-			logger.info("argot: subagent set to inherit but no parent codec was available; starting unarmed instead");
+			logger.info("argot: spawned agent set to inherit but no parent codec was available; starting unarmed instead");
 			// fall through to fresh
 		}
 	}
@@ -178,7 +191,7 @@ export function collectArgotLoadedRoots(
 			roots.add(root);
 		}
 	}
-	return [...roots];
+	return Array.from(roots);
 }
 
 /**
@@ -226,12 +239,22 @@ export async function rearmArgotForDecode(
  * Never throws for a missing project: that is a normal "nothing to load" answer,
  * surfaced to the caller as `undefined`, not an error.
  */
+export interface ArgotLoadResult {
+	root: string;
+	handles: number;
+}
+
+export interface ArgotUnloadResult {
+	root: string;
+	changed: boolean;
+}
+
 export async function loadArgotFolder(
 	argot: ArgotSession,
 	folder: string,
 	signal?: AbortSignal,
 	tokenBudget?: number,
-): Promise<{ root: string; handles: number } | undefined> {
+): Promise<ArgotLoadResult | undefined> {
 	const resolved = await resolveFolderVocab(folder, tokenBudget, signal);
 	if (resolved === undefined) {
 		return undefined;
@@ -250,7 +273,7 @@ export async function loadArgotFolder(
  * was never loaded or was already not taught), or `undefined` when `folder` has no
  * project marker to resolve.
  */
-export function unloadArgotFolder(argot: ArgotSession, folder: string): { root: string; changed: boolean } | undefined {
+export function unloadArgotFolder(argot: ArgotSession, folder: string): ArgotUnloadResult | undefined {
 	const root = resolveProjectRoot(folder);
 	if (root === undefined) {
 		return undefined;
@@ -270,7 +293,7 @@ export function unloadArgotFolder(argot: ArgotSession, folder: string): { root: 
  * with the vocabulary the dictionary produced — INCLUDING an empty one. That empty
  * case is the whole point: a repo with no repeated-token mass generates an empty
  * dictionary, so the model has nothing to encode and the prompt is never refreshed
- * (the size gate below). Downstream instruments (the deepswe-bench argot telemetry)
+ * (the size gate below). Downstream instruments (the DeepSWE argot telemetry)
  * need to see it to tell "the corpus had nothing to compress" apart from "the model
  * ignored available handles"; without it, a null encode result is uninterpretable.
  *

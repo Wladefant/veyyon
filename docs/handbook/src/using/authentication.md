@@ -39,10 +39,15 @@ arrow down past your last account to land on it, and press `enter` there to star
 mouse works on the card as well. Click an account to select it, click that last row to start the
 login, and click any key chip in the footer to run what it names.
 
+The provider list filters. Press `ctrl+s`, type part of a provider's name or id, and the sidebar
+keeps the providers that match; the arrows move within them and `enter` still switches to the
+selected account. Press `esc` to leave the filter and get the full list back, and `esc` again to
+close the card.
+
 Switching is **per provider**. Choosing another Anthropic account changes Anthropic and nothing else,
-because several providers serve one session at the same time: your main model, your subagent roles,
+because several providers serve one session at the same time: your main model, your agent roles,
 and web search can each be a different provider. Moving between providers is a model choice, so it
-lives in `/models`.
+is in `/models`.
 
 ## Naming an account
 
@@ -68,7 +73,7 @@ and that account's remaining quota. A provider you hold credentials for but have
 session is not listed.
 
 If your chosen account hits its rate limit, Veyyon moves to another one so your work continues, and
-says so:
+reports it:
 
 ```text
 Anthropic          personal                    main model  (opus-5)
@@ -93,8 +98,8 @@ Kimi Code · 1 account
   press a to sign in again
 ```
 
-If that provider had only one login, it now has none, and the card says so rather than showing the
-provider as one you never signed into. `/account` names it too, so you do not have to open the card
+If that provider had only one login, it now has none, and the card states that rather than showing the
+provider as one you never signed into. `/account` shows it too, so you do not have to open the card
 to find out:
 
 ```text
@@ -114,7 +119,7 @@ $ veyyon auth-broker list
 $ veyyon auth-broker logout
 ```
 
-`import` and `migrate` are also available. See [Providers](../models/providers.md) and `docs/secrets.md`
+`import` and `migrate` are also available. See [Providers](../models/providers.md) and `docs/handbook/src/architecture/secrets.md`
 for the broker model.
 
 ## Using an environment variable instead
@@ -135,7 +140,7 @@ a `.env` file) is used without an interactive sign-in. OAuth-only providers (for
 | `groq` | `GROQ_API_KEY` |
 | `mistral` | `MISTRAL_API_KEY` |
 
-The full provider → variable map lives in [Providers](../models/providers.md). `.env` files are loaded
+The full provider → variable map is documented in [Providers](../models/providers.md). `.env` files are loaded
 from `<cwd>/.env`, `~/.veyyon/profiles/default/agent/.env`, `~/.veyyon/.env`, and `~/.env`, with earlier sources winning.
 
 ## How keys are resolved
@@ -159,6 +164,9 @@ By default every profile reads one machine-wide set of provider logins, so signi
 The first time a profile opens the shared store, any login already saved in that profile is promoted into it,
 so turning sharing on never signs you out.
 
+Concurrent launches wait for temporary database locks during credential-store initialization.
+If the database remains locked after the bounded retries, startup reports the database path and SQLite error.
+
 To give a profile its own private credentials instead, turn sharing off in the global config
 `~/.veyyon/config.yml`:
 
@@ -176,6 +184,6 @@ setting.
 Provider identity (display name, env var, OAuth parameters) and endpoints (base URL, API kind) come
 from the bundled model catalog plus your `~/.veyyon/profiles/default/agent/models.yml`. A new BYOK provider becomes
 selectable by adding a `providers:` entry, not by changing code. See
-[Configuring providers](./configuring-providers.md) and `docs/providers.md`.
+[Configuring providers](./configuring-providers.md) and `docs/handbook/src/reference/providers.md`.
 
-See also: [Models and providers](./models.md) and the [CLI reference](../reference/cli.md).
+See also: [Models and providers](../reference/models-yml.md) and the [CLI reference](../reference/cli.md).

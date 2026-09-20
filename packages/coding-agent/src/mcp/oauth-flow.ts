@@ -5,13 +5,16 @@
  * by providing authorization URL, token URL, and client credentials.
  */
 
-import type { OAuthCallbackFlowOptions } from "@veyyon/ai/oauth/callback-server";
-import { DEFAULT_CALLBACK_PATH, OAuthCallbackFlow } from "@veyyon/ai/oauth/callback-server";
+import type { OAuthCredential } from "@veyyon/ai/auth-storage";
+import {
+	DEFAULT_CALLBACK_PATH,
+	OAuthCallbackFlow,
+	type OAuthCallbackFlowOptions,
+} from "@veyyon/ai/oauth/callback-server";
 import type { OAuthController, OAuthCredentials } from "@veyyon/ai/oauth/types";
 import type { FetchImpl } from "@veyyon/ai/types";
 import { truncate } from "@veyyon/utils";
 import { getActiveProfile } from "@veyyon/utils/dirs";
-import type { OAuthCredential } from "../session/auth-storage";
 
 /** Credential-id prefix for veyyon-managed MCP OAuth credentials keyed by profile and server URL. */
 const MCP_OAUTH_URL_CREDENTIAL_PREFIX = "mcp_oauth:";
@@ -410,8 +413,8 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 		if (this.#resolvedClientId && !existingClientId) {
 			params.set("client_id", this.#resolvedClientId);
 		}
-		if (this.config.scopes && !params.get("scope")) {
-			params.set("scope", this.config.scopes);
+		if (this.config.scopes?.trim()) {
+			params.set("scope", this.config.scopes.trim());
 		}
 		const prompt = this.config.prompt ?? (hasOAuthScope(params.get("scope"), "offline_access") ? "consent" : "");
 		if (prompt && !params.get("prompt")) {

@@ -1,6 +1,6 @@
 # TUI runtime internals
 
-This document maps the non-theme runtime path from terminal input to rendered output in interactive mode. It focuses on behavior in `packages/tui` and its integration from `packages/coding-agent` controllers.
+This document maps the non-theme runtime path from terminal input to rendered output in interactive mode. It focuses on behavior in `hosts/terminal/engine` and its integration from `packages/coding-agent` controllers.
 
 > **Editing the rendering engine itself?** Read
 > [`tui-core-renderer.md`](./tui-core-renderer.md) first: it documents the
@@ -10,37 +10,37 @@ This document maps the non-theme runtime path from terminal input to rendered ou
 
 ## Runtime layers and ownership
 
-- **`packages/tui` engine**: terminal lifecycle, stdin normalization, focus routing, render scheduling, differential painting, overlay composition, hardware cursor placement.
+- **`hosts/terminal/engine` engine**: terminal lifecycle, stdin normalization, focus routing, render scheduling, differential painting, overlay composition, hardware cursor placement.
 - **`packages/coding-agent` interactive mode**: builds component tree, binds editor callbacks and keymaps, reacts to agent/session events, and translates domain state (streaming, tool execution, retries, plan mode) into UI components.
 
 Boundary rule: the TUI engine is message-agnostic. It only knows `Component.render(width)`, `handleInput(data)`, focus, and overlays. Agent semantics stay in interactive controllers.
 
 ## Implementation files
 
-- [`packages/coding-agent/src/modes/interactive-mode.ts`](../../packages/coding-agent/src/modes/interactive-mode.ts)
-- [`packages/coding-agent/src/modes/controllers/event-controller.ts`](../../packages/coding-agent/src/modes/controllers/event-controller.ts)
-- [`packages/coding-agent/src/modes/controllers/input-controller.ts`](../../packages/coding-agent/src/modes/controllers/input-controller.ts)
-- [`packages/coding-agent/src/modes/components/custom-editor.ts`](../../packages/coding-agent/src/modes/components/custom-editor.ts)
-- [`packages/tui/src/tui.ts`](../../packages/tui/src/tui.ts)
-- [`packages/tui/src/terminal.ts`](../../packages/tui/src/terminal.ts)
-- [`packages/tui/src/editor-component.ts`](../../packages/tui/src/editor-component.ts)
-- [`packages/tui/src/stdin-buffer.ts`](../../packages/tui/src/stdin-buffer.ts)
-- [`packages/tui/src/components/loader.ts`](../../packages/tui/src/components/loader.ts)
+- [`packages/coding-agent/src/modes/terminal/interactive-mode.ts`](../../packages/coding-agent/src/modes/terminal/interactive-mode.ts)
+- [`packages/coding-agent/src/modes/terminal/controllers/event-controller.ts`](../../packages/coding-agent/src/modes/terminal/controllers/event-controller.ts)
+- [`packages/coding-agent/src/modes/terminal/controllers/input-controller.ts`](../../packages/coding-agent/src/modes/terminal/controllers/input-controller.ts)
+- [`packages/coding-agent/src/modes/terminal/components/composer/custom-editor.ts`](../../packages/coding-agent/src/modes/terminal/components/composer/custom-editor.ts)
+- [`hosts/terminal/engine/src/tui.ts`](../../hosts/terminal/engine/src/tui.ts)
+- [`hosts/terminal/engine/src/terminal.ts`](../../hosts/terminal/engine/src/terminal.ts)
+- [`hosts/terminal/engine/src/components/editor-component.ts`](../../hosts/terminal/engine/src/components/editor-component.ts)
+- [`hosts/terminal/engine/src/stdin-buffer.ts`](../../hosts/terminal/engine/src/stdin-buffer.ts)
+- [`hosts/terminal/engine/src/components/loader.ts`](../../hosts/terminal/engine/src/components/loader.ts)
 
 ## Boot and component tree assembly
 
-`InteractiveMode` constructs `TUI(new ProcessTerminal(), settings.get("showHardwareCursor"))`, applies `tui.maxInlineImages` and Kitty text-sizing settings, then creates persistent containers:
+`InteractiveMode` adopts the pre-painted `FirstFrame` (reusing `ui`, `hero`, `editor`, `editorContainer`, and `keybindings`) when available, or constructs `TUI(new ProcessTerminal(), settings.get("showHardwareCursor"))` and applies `tui.maxInlineImages` and Kitty text-sizing settings. It then creates persistent containers:
 
 - `chatContainer` (a `TranscriptContainer`)
 - `pendingMessagesContainer`
 - `todoContainer`
-- `subagentContainer`
+- `agentContainer`
 - `btwContainer`
 - `omfgContainer`
 - `errorBannerContainer`
 - `modelCycleContainer` (ctrl+p model-role cycle chip track)
 - a bottom-anchor fill spacer (sinks the status + composer block to the viewport bottom on the home screen)
-- `statusContainer` (transient loaders; sits below the sticky todo/subagent HUDs, above the editor)
+- `statusContainer` (transient loaders; sits below the sticky todo/agent HUDs, above the editor)
 - `statusLine` (hook statuses only; quiet status renders around the composer)
 - `hookWidgetContainerAbove`
 - the location line and composer hairline
@@ -50,6 +50,42 @@ Boundary rule: the TUI engine is message-agnostic. It only knows `Component.rend
 
 (All live containers except `chatContainer` and the plain hook/editor `Container`s are `AnchoredLiveContainer`s.) `init()` wires the tree in that order after any startup warnings/welcome/changelog, focuses the editor, registers input handlers via `InputController`, starts TUI, pushes terminal title state, updates the editor border, and requests a forced render.
 A forced render (`requestRender(true)`) queues a viewport repaint or explicit session replacement; it does **not** throw away previous-line history by default.
+
+### Presentation access
+
+`InteractiveMode.presentation` implements `PresentationContext` on the existing TUI,
+editor, transcript builder and status component. Transcript patches retain fields
+omitted from the patch. Removing a block already committed to native scrollback has
+no effect.
+
+`clearTranscript()` and `setTranscriptBlocks()` dispose removed components without
+clearing completed-call history. A session-history rebuild resets that history.
+A read group detached by a reset is not reused.
+
+An explicit tool display replaces the card's local producer subscription. Expansion
+and sealing retain that display. A subsequent raw tool update initializes a producer
+for expanded output.
+
+Standalone drivers render individual read cards through `ChatTranscriptBuilder`
+with `groupReadEntries: false`; adopted interactive surfaces render grouped reads.
+
+An adopted `TerminalPresentationDriver` attaches input notifications with `start()`
+and detaches them with `stop()`; the interactive mode starts and stops the engine.
+Stopping a standalone driver releases its card animation clocks even when the
+engine is not running.
+Standalone drivers start and stop their own engine. Adopted drivers leave interrupt,
+exit and scroll gestures to the interactive controller, except cancellation of a
+driver-created dialog.
+
+Input notifications use a subscription snapshot in registration order. A subscriber
+exception is logged without interrupting delivery to the remaining subscribers;
+subscription changes take effect on the next event.
+
+`setEditorComponent()` synchronizes the presentation callbacks after replacing the
+editor. Engine and editor access uses the current host objects. `setStatusLine()`
+updates the displayed snapshot without replacing the local status capabilities or
+activity clock. `StatusLineComponent.setSource()` resumes reads from the selected
+source.
 
 ## Terminal lifecycle and stdin normalization
 
@@ -100,18 +136,20 @@ Routing details:
 - slash-command and selector hotkeys
 - follow-up/dequeue toggles and expansion toggles
 
-This keeps key parsing/editor mechanics in `packages/tui` and mode semantics in coding-agent controllers.
+This keeps key parsing/editor mechanics in `hosts/terminal/engine` and mode semantics in coding-agent controllers.
 
 ## Render loop and the append-only contract
 
 `TUI.requestRender()` coalesces render requests and rate-limits ordinary frames:
 
-- forced renders (`requestRender(true, ...)`) schedule an immediate frame and force a full window rewrite; with `clearScrollback`, they trigger a destructive full paint (ED3 outside multiplexers)
+- forced renders (`requestRender(true, ...)`) schedule an immediate frame and force a full window rewrite; with `clearScrollback`, they trigger a destructive full paint (ED3 outside multiplexers); `resetDisplay()` invalidates all components and forces a full replay, which explicit expansion uses to surface updated layout across history
 - ordinary renders schedule through `#scheduleRender()` and respect `TUI.#MIN_RENDER_INTERVAL_MS` (30fps)
 - repeated requests while a render is pending collapse into the same scheduled frame
 - the cadence is adaptive, not fixed. `#scheduleRender()` takes the largest of three delays: the 30fps cadence, twice the cost of the LAST frame, and any input grace window still open. The second one exists because the plain cadence collapses to zero as soon as a frame takes longer than the interval, which busy-loops the CPU through a run of slow frames; it is capped at `#MAX_ADAPTIVE_RENDER_MS` (200ms, about 5fps), below which the UI reads as dead and no further saving is worth it.
 - `Ctrl+C` and `Escape` open a one-frame grace window (`#INPUT_RENDER_GRACE_MS`) before the next ordinary repaint, so a double-press gesture can drain its queued input first. Only those two keys: delaying every key would put a frame of latency on ordinary navigation.
 - `requestComponentRender(component)` requests on behalf of a single self-contained change (spinner frame, blink): when every request in the coalesced frame is component-scoped and the frame is quiet (no resize, overlays, inline images, forced repaint, or root-list change), compose re-renders only the root subtrees containing the requesting components and reuses every other root child's previous rows and seam report; any unsafe condition or concurrent full request downgrades to a full compose
+- `markLayoutSized(component)` exempts a root child from that reuse. Its height is a function of its siblings' heights, so the `onBeforeCompose` pass at the top of the frame resizes it while nothing has requested it; reusing its previous rows composes the frame at the height the previous frame's content called for. The home anchor's two fills are registered this way, which is what keeps a streamed chunk — a component-scoped frame — from composing one row past the viewport per row of the answer.
+- `onBeforeCompose` runs before the compose loop and is where a layout-sized child's height is decided, so it measures the children the frame is about to render. That measurement is a read and nothing more: a root child the engine drives with the native-scrollback protocol (`TranscriptContainer`) hands its committed prefix to the terminal inside `render()` and reports the rows it dropped, and the engine authorizes one such drop per frame — count fed, child rendered, report read back, count republished after the emit. A sizing pass that called `render()` would spend that authorization, and the compose render would drop a second prefix against the same count, leaving the frame shorter than the screenful a shrink is repaired from. `HomeAnchorLayout` measures such a child through `renderViewportTail`, which is state-isolated by contract and bounded by the rows the viewport has left.
 
 `#doRender()` pipeline:
 
@@ -120,7 +158,7 @@ This keeps key parsing/editor mechanics in `packages/tui` and mode semantics in 
 3. Extract and strip `CURSOR_MARKER`, normalize lines, slice the visible window, composite overlays into the window slice (screen coordinates; overlays freeze commits).
 4. Emit one of: gesture-driven full paint (initial / session replace / resize), scroll-append (chunk rows only), in-window row diff, or seam rewrite (chunk + full window).
 
-Native scrollback always equals the committed frame prefix, rows enter history exactly once, in order, when the seam says they are final. There are no viewport probes and no deferred reconciliation; see [`tui-core-renderer.md`](./tui-core-renderer.md).
+Native scrollback always equals the committed frame prefix, rows enter history exactly once, in order, when the seam says they are final. Divergence repair rebuilds scrollback only when authorized by a segment at the resync row declaring `NativeScrollbackLiveRegion` or `NativeScrollbackReplay` (plain components preserve committed history); there are no viewport probes and no deferred reconciliation; see [`tui-core-renderer.md`](./tui-core-renderer.md).
 
 Render writes use synchronized output mode (`CSI ? 2026 h/l`) when enabled; capability detection, DECRQM, or `VEYYON_NO_SYNC_OUTPUT` can disable the wrappers while leaving autowrap discipline on.
 
@@ -230,4 +268,4 @@ Throttled/debounced paths:
 
 The runtime therefore mixes event-driven state transitions with bounded render cadence to keep interactivity responsive without repaint storms.
 
-*Verified against `ad7ede4a` on 2026-07-28.*
+*Verified against `504c88b39f` on 2026-09-11.*

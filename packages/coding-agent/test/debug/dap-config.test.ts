@@ -11,8 +11,8 @@ import {
 	resolveLaunchOverrides,
 	selectAttachAdapter,
 	selectLaunchAdapter,
-} from "../../src/dap/config";
-import type { DapResolvedAdapter } from "../../src/dap/types";
+} from "../../src/debug/dap/config";
+import type { DapResolvedAdapter } from "../../src/debug/dap/types";
 import { injectPluginDirRoots } from "../../src/discovery/helpers";
 
 const tempDirs: string[] = [];
@@ -120,7 +120,8 @@ describe("DAP adapter configuration", () => {
 		);
 
 		const config = getAdapterConfigs(cwd).debugpy;
-		expect(config.command).toBe("python");
+		expect(config.command).toBe("python3");
+		expect(config.commandFallbacks).toEqual(["python"]);
 		expect(config.args).toEqual(["-m", "debugpy.adapter", "--log-dir", ".debugpy-logs"]);
 		expect(config.fileTypes).toContain(".py");
 		expect(config.launchDefaults).toMatchObject({ request: "launch", justMyCode: false });
@@ -183,6 +184,42 @@ describe("DAP adapter configuration", () => {
 		expect(adapter?.resolvedCommand).toBe(command);
 	});
 
+	// WHY: `normalizeCommandForCwd` decides one thing — which spellings of an adapter command are
+	// paths relative to the debug cwd rather than PATH lookups — and it decides it by exact prefix.
+	// A mechanical path rewrite once widened `"./"` to `"."`, which is invisible in review and turns
+	// every dot-directory command (`.venv/bin/python`, `.tools/dbg`) into a cwd-relative one, so an
+	// adapter that should have been reported missing resolves to a file the operator never named.
+	// The table below is the whole vocabulary the function is asked about on this platform: a
+	// relative spelling resolves, and no other dotted spelling does. It does not cover the Windows
+	// backslash spellings on POSIX, where `path.resolve` cannot produce a real path from them.
+	it("resolves an adapter command against the debug cwd only when it is spelled relative", async () => {
+		const cwd = await makeTempDir("veyyon-dap-config-dot-command-");
+		const extension = process.platform === "win32" ? ".cmd" : "";
+		const probe = `veyyon-dot-probe${extension}`;
+		const cases = [
+			{ name: "relative-dir", file: path.join("tools", probe), resolves: true },
+			{ name: "dot-dir", file: path.join(".tools", probe), resolves: false },
+			{ name: "dot-name", file: `.${probe}`, resolves: false },
+			{ name: "bare-name", file: probe, resolves: false },
+		];
+		const adapters: Record<string, { command: string; fileTypes: string[] }> = {};
+		for (const entry of cases) {
+			await writeExecutable(path.join(cwd, entry.file));
+			const spelling = entry.resolves ? `.${path.sep}${entry.file}` : entry.file;
+			adapters[entry.name] = { command: spelling, fileTypes: [`.${entry.name}`] };
+		}
+		await fs.writeFile(path.join(cwd, "dap.json"), JSON.stringify({ adapters }));
+
+		for (const entry of cases) {
+			const adapter = resolveAdapter(entry.name, cwd);
+			if (entry.resolves) {
+				expect(adapter?.resolvedCommand).toBe(path.join(cwd, entry.file));
+			} else {
+				expect(adapter).toBeNull();
+			}
+		}
+	});
+
 	it("loads plugin DAP adapters from plugin config files", async () => {
 		const cwd = await makeTempDir("veyyon-dap-config-plugin-");
 		const pluginRoot = path.join(cwd, "plugins", "acme-debug");
@@ -206,6 +243,52 @@ describe("DAP adapter configuration", () => {
 		await injectPluginDirRoots(cwd, [pluginRoot], cwd);
 
 		expect(getAdapterConfigs(cwd)["acme-ruby"]?.command).toBe("ruby-debug-adapter");
+	});
+
+	it("honors source precedence: project root overrides project config dir which overrides plugin root", async () => {
+		const cwd = await makeTempDir("veyyon-dap-config-precedence-");
+		const pluginRoot = path.join(cwd, "plugins", "priority-debug");
+		await fs.mkdir(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
+		await fs.mkdir(path.join(cwd, ".veyyon"), { recursive: true });
+
+		await fs.writeFile(
+			path.join(pluginRoot, ".claude-plugin", "plugin.json"),
+			JSON.stringify({ name: "priority-debug" }),
+		);
+		await fs.writeFile(
+			path.join(pluginRoot, "dap.json"),
+			JSON.stringify({
+				adapters: {
+					"tier-adapter": { command: "plugin-cmd", fileTypes: [".tier"] },
+					"plugin-only": { command: "plugin-only-cmd", fileTypes: [".po"] },
+				},
+			}),
+		);
+		await injectPluginDirRoots(cwd, [pluginRoot], cwd);
+
+		await fs.writeFile(
+			path.join(cwd, ".veyyon", "dap.json"),
+			JSON.stringify({
+				adapters: {
+					"tier-adapter": { command: "project-dir-cmd", fileTypes: [".tier"] },
+					"dir-only": { command: "dir-only-cmd", fileTypes: [".do"] },
+				},
+			}),
+		);
+
+		await fs.writeFile(
+			path.join(cwd, "dap.json"),
+			JSON.stringify({
+				adapters: {
+					"tier-adapter": { command: "project-root-cmd", fileTypes: [".tier"] },
+				},
+			}),
+		);
+
+		const configs = getAdapterConfigs(cwd);
+		expect(configs["tier-adapter"]?.command).toBe("project-root-cmd");
+		expect(configs["dir-only"]?.command).toBe("dir-only-cmd");
+		expect(configs["plugin-only"]?.command).toBe("plugin-only-cmd");
 	});
 
 	it("ignores invalid custom adapters without discarding valid configs", async () => {

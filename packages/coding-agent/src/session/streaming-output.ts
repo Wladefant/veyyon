@@ -2,12 +2,12 @@ import type { AgentToolUpdateCallback } from "@veyyon/agent-core";
 // Owners, not the `@veyyon/utils` barrel: 3 modules against 74.
 import { capTextBytes, truncateHeadBytes, truncateTailBytes } from "@veyyon/utils/byte-truncate";
 import { clampLow } from "@veyyon/utils/math";
-import { sanitizeText } from "@veyyon/utils/sanitize-text";
+import { sanitizeText, splitTrailingPartialEscape } from "@veyyon/utils/sanitize-text";
 
 export { type ByteTruncationResult, truncateHeadBytes, truncateTailBytes } from "@veyyon/utils/byte-truncate";
 
 import { DEFAULT_INLINE_FLOOR_FRACTION, DEFAULT_INLINE_OUTPUT_MAX_BYTES } from "../config/settings-domains/shared";
-import { formatBytes } from "../tools/render-utils";
+import { formatBytes } from "../tools/core/render-utils";
 import { sanitizeWithOptionalSixelPassthrough } from "../utils/sixel";
 
 // =============================================================================
@@ -195,6 +195,42 @@ export function noTruncResult(content: string, totalLines?: number, totalBytes?:
 	return { content, totalLines, totalBytes };
 }
 
+/** Head truncation where the first line alone exceeds the byte budget: nothing is kept. */
+function firstLineExceedsLimitResult(totalLines: number, totalBytes: number): TruncationResult {
+	return {
+		content: "",
+		truncated: true,
+		truncatedBy: "bytes",
+		totalLines,
+		totalBytes,
+		outputLines: 0,
+		outputBytes: 0,
+		lastLinePartial: false,
+		firstLineExceedsLimit: true,
+	};
+}
+
+/** Tail truncation where the last line alone exceeds the byte budget: its last `maxBytes` are kept. */
+function partialLastLineResult(
+	line: string,
+	maxBytes: number,
+	totalLines: number,
+	totalBytes: number,
+): TruncationResult {
+	const tail = truncateTailBytes(line, maxBytes);
+	return {
+		content: tail.text,
+		truncated: true,
+		truncatedBy: "bytes",
+		totalLines,
+		totalBytes,
+		outputLines: 1,
+		outputBytes: tail.bytes,
+		lastLinePartial: true,
+		firstLineExceedsLimit: false,
+	};
+}
+
 /**
  * Truncate content from the head (keep first N lines/bytes).
  * Never returns partial lines. If the first line exceeds the byte limit,
@@ -239,19 +275,7 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
 		const lineCodeUnits = lineEnd - cursor;
 		if (lineCodeUnits > remaining) {
 			truncatedBy = "bytes";
-			if (includedLines === 0) {
-				return {
-					content: "",
-					truncated: true,
-					truncatedBy: "bytes",
-					totalLines,
-					totalBytes,
-					outputLines: 0,
-					outputBytes: 0,
-					lastLinePartial: false,
-					firstLineExceedsLimit: true,
-				};
-			}
+			if (includedLines === 0) return firstLineExceedsLimitResult(totalLines, totalBytes);
 			break;
 		}
 
@@ -261,19 +285,7 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
 
 		if (lineBytes > remaining) {
 			truncatedBy = "bytes";
-			if (includedLines === 0) {
-				return {
-					content: "",
-					truncated: true,
-					truncatedBy: "bytes",
-					totalLines,
-					totalBytes,
-					outputLines: 0,
-					outputBytes: 0,
-					lastLinePartial: false,
-					firstLineExceedsLimit: true,
-				};
-			}
+			if (includedLines === 0) return firstLineExceedsLimitResult(totalLines, totalBytes);
 			break;
 		}
 
@@ -345,19 +357,7 @@ export function truncateTail(content: string, options: TruncationOptions = {}): 
 			if (includedLines === 0) {
 				// Window the line substring to avoid materializing a giant string.
 				const windowStart = Math.max(lineStart, end - maxBytes);
-				const window = content.substring(windowStart, end);
-				const tail = truncateTailBytes(window, maxBytes);
-				return {
-					content: tail.text,
-					truncated: true,
-					truncatedBy: "bytes",
-					totalLines,
-					totalBytes,
-					outputLines: 1,
-					outputBytes: tail.bytes,
-					lastLinePartial: true,
-					firstLineExceedsLimit: false,
-				};
+				return partialLastLineResult(content.substring(windowStart, end), maxBytes, totalLines, totalBytes);
 			}
 			break;
 		}
@@ -367,20 +367,7 @@ export function truncateTail(content: string, options: TruncationOptions = {}): 
 
 		if (lineBytes > remaining) {
 			truncatedBy = "bytes";
-			if (includedLines === 0) {
-				const tail = truncateTailBytes(lineText, maxBytes);
-				return {
-					content: tail.text,
-					truncated: true,
-					truncatedBy: "bytes",
-					totalLines,
-					totalBytes,
-					outputLines: 1,
-					outputBytes: tail.bytes,
-					lastLinePartial: true,
-					firstLineExceedsLimit: false,
-				};
-			}
+			if (includedLines === 0) return partialLastLineResult(lineText, maxBytes, totalLines, totalBytes);
 			break;
 		}
 
@@ -759,6 +746,13 @@ export class OutputSink {
 	#lastChunkTime = 0;
 	#pendingChunk = "";
 	#pendingChunkTimer: Timer | undefined;
+	/**
+	 * A trailing escape sequence the last chunk ended inside, held until the
+	 * chunk that finishes it. Sanitizing half a sequence leaks its tail as text,
+	 * and where a pipe splits is not ours to choose. Dropped by `dump()` and
+	 * `replace()`: a sequence that never completed is not text.
+	 */
+	#partialEscape = "";
 
 	// Per-line column cap streaming state (persists across `push` calls so a
 	// long line split across chunks still trips the same trigger).
@@ -828,7 +822,10 @@ export class OutputSink {
 	 * synchronously. File sink writes are deferred and serialized internally.
 	 */
 	push(chunk: string): void {
-		chunk = sanitizeWithOptionalSixelPassthrough(chunk, sanitizeText);
+		const { head, partial } = splitTrailingPartialEscape(this.#partialEscape + chunk);
+		this.#partialEscape = partial;
+		if (head.length === 0) return;
+		chunk = sanitizeWithOptionalSixelPassthrough(head, sanitizeText);
 
 		// Throttled onChunk: coalesce chunks arriving inside the throttle window.
 		// A timer flushes quiet tails at the throttle boundary; dump() catches a
@@ -1159,6 +1156,7 @@ export class OutputSink {
 		this.#columnDroppedBytes = 0;
 		this.#columnTruncatedLines = 0;
 		this.#pendingChunk = "";
+		this.#partialEscape = "";
 	}
 
 	#clearPendingChunkTimer(): void {
@@ -1235,6 +1233,9 @@ export class OutputSink {
 		// Flush any chunk still held back by the throttle so the live preview
 		// ends with the complete stream.
 		this.#flushPendingChunk();
+		// A sequence the stream ended inside never completed, so it is not text:
+		// drop it rather than emitting the fragment the reader happened to see.
+		this.#partialEscape = "";
 		const totalLines = this.#sawData ? this.#totalLines + 1 : 0;
 
 		if (this.#file) {

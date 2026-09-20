@@ -3,7 +3,8 @@
 // that must not happen before profile bootstrap. `test/.../process-entry-import.test.ts`
 // fails if this becomes a barrel import again.
 import { isAbortError } from "@veyyon/utils/abortable";
-import { ToolError } from "../../tools/tool-errors";
+import { errorMessage } from "@veyyon/utils/type-guards";
+import { ToolError } from "../../tools/core/tool-errors";
 import { JsRuntime, type RuntimeHooks } from "./shared/runtime";
 import type {
 	EvalRunErrorPayload,
@@ -69,7 +70,7 @@ function errorPayload(error: unknown): EvalRunErrorPayload {
 			isToolError: error.name === "ToolError" || error instanceof ToolError,
 		};
 	}
-	return { message: String(error) };
+	return { message: errorMessage(error) };
 }
 
 function errorFromPayload(payload: EvalRunErrorPayload): Error {
@@ -251,6 +252,7 @@ export class WorkerCore {
 			initialCwd: snapshot.cwd,
 			sessionId: snapshot.sessionId,
 			localRoots: snapshot.localRoots,
+			artifactsDir: snapshot.artifactsDir,
 		});
 		return this.#runtime;
 	}

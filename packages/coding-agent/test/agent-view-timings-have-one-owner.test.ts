@@ -1,9 +1,9 @@
 /**
  * ONE-PLACE lock for the timings the agent surfaces share.
  *
- * Why this suite exists: all three were declared in both the Agent Hub overlay and the Subagent Inbox with the
+ * Why this suite exists: all three were declared in both the Agent Hub overlay and the Agent Inbox with the
  * same values, and the inbox's own comment on the gesture window read "matching the hub", which names the
- * coupling without doing anything about it. Both views were replaced by the Agent Control Center, and the
+ * coupling without doing anything about it. Both views were replaced by the agent dashboard, and the
  * coupling outlived them: the card owns the age tick and the coalesce window, and the input controller owns the
  * double-tap window for the gesture that opens the card. That is still more than one file agreeing on the same
  * three numbers, which is exactly the condition under which a copy drifts, and a drifted copy is felt rather
@@ -20,26 +20,27 @@ import {
 	AGENT_VIEW_AGE_TICK_MS,
 	AGENT_VIEW_DATA_CHANGE_COALESCE_MS,
 	AGENT_VIEW_LEFT_TAP_WINDOW_MS,
-} from "@veyyon/coding-agent/modes/components/agent-view-timings";
+} from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-view-timings";
 import { moduleSpecifiersIn, namedImportsFrom } from "@veyyon/utils/module-reach";
 
 const SRC_DIR = path.resolve(import.meta.dir, "../src");
-const COMPONENTS_DIR = path.join(SRC_DIR, "modes/components");
-const OWNER = path.join(COMPONENTS_DIR, "agent-view-timings.ts");
+const COMPONENTS_DIR = path.join(SRC_DIR, "modes/terminal/components");
+const DASHBOARD_DIR = path.join(COMPONENTS_DIR, "dashboard");
+const OWNER = path.join(DASHBOARD_DIR, "agent-view-timings.ts");
 
 /** Every file that consumes a shared timing, and the names it must take from the owner. */
 const CONSUMERS = [
 	{
-		file: path.join(COMPONENTS_DIR, "agent-dashboard.ts"),
+		file: path.join(DASHBOARD_DIR, "agent-dashboard.ts"),
 		proves: "class AgentDashboard",
 		names: ["AGENT_VIEW_AGE_TICK_MS", "AGENT_VIEW_DATA_CHANGE_COALESCE_MS"],
 		specifier: "./agent-view-timings",
 	},
 	{
-		file: path.join(SRC_DIR, "modes/controllers/input-controller.ts"),
+		file: path.join(SRC_DIR, "modes/terminal/controllers/input-controller.ts"),
 		proves: "class InputController",
 		names: ["AGENT_VIEW_LEFT_TAP_WINDOW_MS"],
-		specifier: "../../modes/components/agent-view-timings",
+		specifier: "../components/dashboard/agent-view-timings",
 	},
 ] as const;
 
@@ -66,7 +67,7 @@ describe("the shared agent-view timings", () => {
 	});
 
 	/**
-	 * The burst-coalescing window. A subagent starting emits several events in quick succession, and
+	 * The burst-coalescing window. An agent starting emits several events in quick succession, and
 	 * repainting per event flickers the table.
 	 */
 	it("coalesces a change burst into one repaint after 100ms", () => {
@@ -178,7 +179,7 @@ describe("timing ownership", () => {
 		// The PARSED specifier list, not the characters: the scan this replaced also went red on a doc
 		// comment containing `from "..."`, and on a free `import type`, which costs nothing at runtime.
 		expect(moduleSpecifiersIn(owner)).toEqual([]);
-		const statusDisplay = await Bun.file(path.join(COMPONENTS_DIR, "agent-status-display.ts")).text();
+		const statusDisplay = await Bun.file(path.join(DASHBOARD_DIR, "agent-status-display.ts")).text();
 		expect(namedImportsFrom(statusDisplay, "./agent-view-timings")).toEqual([]);
 	});
 });

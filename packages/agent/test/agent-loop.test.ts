@@ -15,6 +15,7 @@ import type {
 	ToolCallContext,
 } from "@veyyon/agent-core/types";
 import type { AssistantMessage, AssistantMessageEvent, Message, ToolResultMessage } from "@veyyon/ai";
+import { Flag, is, recover } from "@veyyon/ai/error";
 import { createMockModel, type MockResponse } from "@veyyon/ai/providers/mock";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { parseJsonWithRepair } from "@veyyon/utils/json-parse";
@@ -22,7 +23,7 @@ import { INTENT_FIELD } from "@veyyon/wire";
 import { type } from "arktype";
 import { createAssistantMessage, createUserMessage } from "./helpers";
 
-declare module "@veyyon/agent-core/types" {
+declare module "@veyyon/session" {
 	interface CustomAgentMessages {
 		advisor: {
 			role: "custom";
@@ -200,6 +201,9 @@ describe("agentLoop with AgentMessage", () => {
 		if (final.role !== "assistant") throw new Error("expected assistant message");
 		expect(final.content).toEqual([{ type: "text", text: "clean retry response" }]);
 		expect(JSON.stringify(messages)).not.toContain("to=functions.");
+		// The leaked partial was discarded before the retry, so the retry request
+		// carried the user prompt alone rather than the leaked assistant text.
+		expect(mock.calls[1].context.messages.map(m => m.role)).toEqual(["user"]);
 	});
 
 	it("does not hard-abort a codex tool call whose argument legitimately carries the marker", async () => {
@@ -333,6 +337,12 @@ describe("agentLoop with AgentMessage", () => {
 		// The reason rides AbortController.abort(reason) onto the message verbatim,
 		// instead of the generic "Request was aborted" default.
 		expect(finalMessage.errorMessage).toBe("Interrupted by user");
+		// AND IT IS STILL AN ABORT. The flag used to be attached only when the text matched the
+		// generic sentinel byte for byte, so a cancellation carrying a reason produced an `aborted`
+		// message whose id classified as nothing — and every reader of the id (recovery, the retry
+		// decision, the renderer) saw an unclassified failure instead of a stop somebody asked for.
+		expect(is(finalMessage.errorId, Flag.Abort)).toBe(true);
+		expect(recover(finalMessage.errorId, "turn").action).toBe("abort");
 	});
 
 	it("should handle custom message types via convertToLlm", async () => {
@@ -3024,7 +3034,15 @@ describe("agentLoopContinue with AgentMessage", () => {
 });
 
 describe("agentLoop streaming snapshots", () => {
-	it("deep-clones tool-call arguments into message_update snapshots, copying only own enumerable properties", async () => {
+	it("keeps pushed message_update snapshots stable while the provider keeps mutating its blocks", async () => {
+		// WHY: message_update subscribers get an immutable view of the streaming
+		// partial. Providers mutate their live blocks in place AND replace
+		// `arguments` wholesale between deltas, so a snapshot taken at delta N
+		// must still show delta N's state afterwards — this closes the class
+		// "a pushed streaming snapshot changes under later provider activity".
+		// Delta snapshots share the current `arguments` object by reference,
+		// which stays immutable because every arguments write across packages/ai
+		// replaces the value instead of mutating it.
 		const context: AgentContext = {
 			systemPrompt: ["You are helpful."],
 			messages: [],
@@ -3035,11 +3053,98 @@ describe("agentLoop streaming snapshots", () => {
 			convertToLlm: identityConverter,
 		};
 
-		// Arguments carry a nested object, a nested array, primitives, and an
-		// INHERITED enumerable property. The snapshot must deep-clone the own
-		// nested structures (fresh references), pass primitives through by value,
-		// and carry only OWN enumerable data — the inherited key must never leak
-		// into the immutable view subscribers receive.
+		const firstArguments = { input: "first" };
+		const secondArguments = { input: "second" };
+		const toolCall = {
+			type: "toolCall" as const,
+			id: "tc-stable",
+			name: "noop",
+			arguments: firstArguments as Record<string, unknown>,
+		};
+
+		let turn = 0;
+		// Providers mutate their live blocks between network chunks, i.e. after
+		// the loop has consumed an earlier delta. Gate the mutation on the
+		// loop's own per-event callback so delta 1 is snapshotted first.
+		const { promise: firstDeltaProcessed, resolve: resolveFirstDelta } = Promise.withResolvers<void>();
+		let seenDeltas = 0;
+		const streamFn = () => {
+			const stream = new AssistantMessageEventStream();
+			if (turn++ === 0) {
+				const partial = createAssistantMessage([toolCall], "toolUse");
+				void (async () => {
+					stream.push({ type: "start", partial });
+					stream.push({ type: "toolcall_start", contentIndex: 0, partial });
+					stream.push({ type: "toolcall_delta", contentIndex: 0, delta: "{}", partial });
+					await firstDeltaProcessed;
+					// Provider activity before the next chunk: replace `arguments`
+					// wholesale and mutate a block field in place, exactly what
+					// openai-completions and friends do while a call streams.
+					toolCall.arguments = secondArguments;
+					toolCall.name = "renamed";
+					stream.push({ type: "toolcall_delta", contentIndex: 0, delta: "{}", partial });
+					stream.push({ type: "toolcall_end", contentIndex: 0, toolCall: { ...toolCall }, partial });
+					stream.push({ type: "done", reason: "toolUse", message: partial });
+				})();
+			} else {
+				const partial = createAssistantMessage([{ type: "text", text: "done" }], "stop");
+				stream.push({ type: "start", partial });
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "done", partial });
+				stream.push({ type: "done", reason: "stop", message: partial });
+			}
+			return stream;
+		};
+		config.onAssistantMessageEvent = (_message, event) => {
+			if (event.type !== "toolcall_delta") return;
+			seenDeltas += 1;
+			if (seenDeltas === 1) resolveFirstDelta();
+		};
+
+		const updates: Array<Extract<AgentEvent, { type: "message_update" }>> = [];
+		const stream = agentLoop([createUserMessage("call noop")], context, config, undefined, streamFn);
+		for await (const event of stream) {
+			if (event.type === "message_update") updates.push(event);
+		}
+
+		expect(updates.length).toBeGreaterThanOrEqual(2);
+		const firstAssistant = updates[0]!.message;
+		if (firstAssistant.role !== "assistant") throw new Error("expected assistant update");
+		const firstBlock = firstAssistant.content.find(c => c.type === "toolCall");
+		if (firstBlock?.type !== "toolCall") throw new Error("missing tool-call block in first update");
+		// Block-level copy: the later in-place rename must not reach the first snapshot.
+		expect(firstBlock.name).toBe("noop");
+		// Delta snapshots share the live arguments object by reference: every
+		// provider write replaces the value wholesale, so identity is safe and
+		// keeps per-delta cost flat instead of scaling with argument size.
+		expect(firstBlock.arguments).toBe(firstArguments);
+		const toolUpdates = updates.filter(
+			u => u.message.role === "assistant" && u.message.content.some(c => c.type === "toolCall"),
+		);
+		const lastUpdate = toolUpdates.at(-1);
+		if (lastUpdate === undefined || lastUpdate.message.role !== "assistant") {
+			throw new Error("no tool-call-bearing assistant update");
+		}
+		const lastBlock = lastUpdate.message.content.find(c => c.type === "toolCall");
+		if (lastBlock?.type !== "toolCall") throw new Error("missing tool-call block in last update");
+		expect(lastBlock.arguments).toEqual({ input: "second" });
+		// Each update carries its own message object.
+		expect(firstAssistant).not.toBe(lastUpdate.message);
+	});
+
+	it("deep-clones tool-call arguments into terminal messages, copying only own enumerable properties", async () => {
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [],
+		};
+		const config: AgentLoopConfig = {
+			model: createMockModel().model,
+			convertToLlm: identityConverter,
+		};
+
+		// Terminal views are authoritative, so they keep the sanitizing clone:
+		// fresh references for own nested structures, primitives by value, and
+		// only OWN enumerable data — an inherited key never reaches them.
 		const inheritedProto = { inheritedKey: "from-prototype" };
 		const innerArray = [2, 3];
 		const base: Record<string, unknown> = Object.create(inheritedProto);
@@ -3053,9 +3158,6 @@ describe("agentLoop streaming snapshots", () => {
 		});
 		const toolCall = { type: "toolCall" as const, id: "tc-clone", name: "noop", arguments: sourceArgs };
 
-		// Turn 0 streams the tool call; the unknown tool produces an error result
-		// and the loop calls the model again — turn 1 returns plain text so the
-		// loop terminates instead of spinning forever.
 		let turn = 0;
 		const streamFn = () => {
 			const stream = new AssistantMessageEventStream();
@@ -3081,15 +3183,12 @@ describe("agentLoop streaming snapshots", () => {
 			events.push(event);
 		}
 
-		const toolUpdate = events.find(
-			(e): e is Extract<AgentEvent, { type: "message_update" }> =>
-				e.type === "message_update" &&
-				e.message.role === "assistant" &&
-				e.message.content.some(c => c.type === "toolCall"),
-		);
-		expect(toolUpdate).toBeDefined();
-		if (toolUpdate?.message.role !== "assistant") throw new Error("missing tool-call update");
-		const block = toolUpdate.message.content.find(c => c.type === "toolCall");
+		const terminal = events.find(e => e.type === "message_end" && e.message.role === "assistant");
+		expect(terminal).toBeDefined();
+		if (terminal?.type !== "message_end" || terminal.message.role !== "assistant") {
+			throw new Error("missing terminal assistant message");
+		}
+		const block = terminal.message.content.find(c => c.type === "toolCall");
 		if (block?.type !== "toolCall") throw new Error("missing tool-call block");
 		const cloned: Record<string, unknown> = block.arguments;
 
@@ -3111,6 +3210,72 @@ describe("agentLoop streaming snapshots", () => {
 		expect(cloned.str).toBe("hi");
 		expect(cloned.flag).toBe(true);
 		expect(cloned.nul).toBeNull();
+	});
+
+	it("sanitizes the authoritative tool call a toolcall_end carries, whatever the provider does next", async () => {
+		// WHY: `toolcall_end` is the one streaming event whose payload is a
+		// decision rather than a preview — a consumer executes that tool call. It
+		// therefore keeps the full clone the partial no longer pays for, and the
+		// clone has to survive the provider reusing the same block afterwards.
+		// Mutation that proves this case exists: switch the `toolcall_end` arm of
+		// `snapshotAssistantMessageEvent` to delta mode and this test goes red
+		// while every other snapshot test stays green.
+		const context: AgentContext = {
+			systemPrompt: ["You are helpful."],
+			messages: [],
+			tools: [],
+		};
+		const config: AgentLoopConfig = {
+			model: createMockModel().model,
+			convertToLlm: identityConverter,
+		};
+
+		const inheritedProto = { inheritedKey: "from-prototype" };
+		const liveArguments: Record<string, unknown> = Object.assign(Object.create(inheritedProto), {
+			nested: { path: "one" },
+		});
+		const toolCall = {
+			type: "toolCall" as const,
+			id: "tc-end",
+			name: "noop",
+			arguments: liveArguments as Record<string, unknown>,
+		};
+
+		let turn = 0;
+		const streamFn = () => {
+			const stream = new AssistantMessageEventStream();
+			if (turn++ === 0) {
+				const partial = createAssistantMessage([toolCall], "toolUse");
+				stream.push({ type: "start", partial });
+				stream.push({ type: "toolcall_start", contentIndex: 0, partial });
+				stream.push({ type: "toolcall_end", contentIndex: 0, toolCall, partial });
+				stream.push({ type: "done", reason: "toolUse", message: partial });
+			} else {
+				const partial = createAssistantMessage([{ type: "text", text: "done" }], "stop");
+				stream.push({ type: "start", partial });
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "done", partial });
+				stream.push({ type: "done", reason: "stop", message: partial });
+			}
+			return stream;
+		};
+
+		const ends: AssistantMessageEvent[] = [];
+		const stream = agentLoop([createUserMessage("call noop")], context, config, undefined, streamFn);
+		for await (const event of stream) {
+			if (event.type !== "message_update") continue;
+			if (event.assistantMessageEvent.type === "toolcall_end") ends.push(event.assistantMessageEvent);
+		}
+
+		expect(ends.length).toBe(1);
+		const pushed = ends[0];
+		if (pushed?.type !== "toolcall_end") throw new Error("missing toolcall_end");
+		// A provider that keeps its block and writes into the object it already
+		// handed out. The pushed tool call must not follow it, at any depth.
+		(liveArguments.nested as Record<string, unknown>).path = "two";
+		toolCall.arguments = { nested: { path: "three" } };
+		expect(pushed.toolCall.arguments).not.toBe(liveArguments);
+		expect(Object.hasOwn(pushed.toolCall.arguments as Record<string, unknown>, "inheritedKey")).toBe(false);
+		expect(pushed.toolCall.arguments).toEqual({ nested: { path: "one" } });
 	});
 
 	it("shares one immutable snapshot between message and assistantMessageEvent.partial on message_update", async () => {

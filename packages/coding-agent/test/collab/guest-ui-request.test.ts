@@ -28,8 +28,11 @@ import type {
 	ExtensionUIDialogOptions,
 	ExtensionUISelectItem,
 } from "@veyyon/coding-agent/extensibility/extensions/types";
-import { ExtensionUiController } from "@veyyon/coding-agent/modes/controllers/extension-ui-controller";
-import type { InteractiveModeContext, InteractiveSelectorDialogOptions } from "@veyyon/coding-agent/modes/types";
+import { ExtensionUiController } from "@veyyon/coding-agent/modes/terminal/controllers/extension-ui-controller";
+import type {
+	InteractiveModeContext,
+	InteractiveSelectorDialogOptions,
+} from "@veyyon/coding-agent/modes/terminal/types";
 import { installInMemoryRelay, uninstallInMemoryRelay } from "./helpers/in-memory-relay";
 
 // In-memory transport: shared FakeWebSocket + InMemoryRelay harness (see
@@ -247,7 +250,7 @@ async function makeHarness(opts?: { readOnly?: boolean }): Promise<GuestUiHarnes
 		},
 		updateEditorBorderColor: () => {},
 		eventController: { handleEvent: () => Promise.resolve() },
-		syncRunningSubagentBadge: () => {},
+		syncRunningAgentBadge: () => {},
 		showHookSelector: (
 			title: string,
 			options: ExtensionUISelectItem[],
@@ -486,6 +489,7 @@ function makeHostContext(): InteractiveModeContext {
 		ui: { requestRender: () => {} },
 		showStatus: () => {},
 		collabHost: undefined,
+		clearWorkingLoader: () => false,
 		// Required members of the context. Omitting them used to be tolerated by
 		// `?.()` calls in the controller, which meant production silently skipped
 		// the composer refresh and the welcome dismissal whenever either was
@@ -557,7 +561,7 @@ describe("collab proto handshake (#4049)", () => {
 		}
 	});
 
-	it("welcomes a current-proto guest at v3 and round-trips a ui-request", async () => {
+	it("welcomes a current-proto guest at v4 and round-trips a ui-request", async () => {
 		const host = new CollabHost(makeHostContext());
 		await host.start("ws://localhost:8787");
 		const guest = await joinRawGuest(host.link, COLLAB_PROTO);
@@ -565,7 +569,7 @@ describe("collab proto handshake (#4049)", () => {
 			const welcome = await guest.nextFrame();
 			if (welcome.t !== "welcome") throw new Error(`expected welcome, got ${welcome.t}`);
 			expect(welcome.proto).toBe(COLLAB_PROTO);
-			expect(welcome.proto).toBe(3);
+			expect(welcome.proto).toBe(4);
 
 			const pending = host.requestGuestUi({ kind: "select", title: "Continue?", options: ["Yes"] });
 			if (!pending) throw new Error("expected writable guest UI request");
@@ -807,6 +811,7 @@ function makeAskHostContext(): InteractiveModeContext {
 		editorContainer: { clear: () => {}, addChild: () => {} },
 		editor: { getText: () => "", setText: () => {} },
 		focusActiveEditorArea: () => {},
+		clearWorkingLoader: () => false,
 		ui: {
 			requestRender: () => {},
 			setFocus: () => {},

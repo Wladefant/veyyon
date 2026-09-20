@@ -28,7 +28,7 @@ import type {
 } from "@veyyon/ai";
 import { OAUTH_REFRESH_FAILURE_DISABLE_PREFIX } from "@veyyon/ai/auth-credential-rows";
 import { limitMatchesActiveAccount } from "../slash-commands/helpers/active-oauth-account";
-import { formatDurationCoarse, formatProviderName } from "../slash-commands/helpers/format";
+import { formatDurationCoarse, formatProviderName } from "./account-format";
 
 /** One usage window as an account row shows it. */
 export interface AccountUsageWindow {
@@ -164,6 +164,14 @@ export interface ProviderAccounts {
 	 * duplicate stays silent because they already know.
 	 */
 	disabledCause?: string;
+	/**
+	 * The account {@link ProviderAccounts.disabledCause} belongs to, when the dead
+	 * credential names one.
+	 *
+	 * Without it the note is unattributed and renders beside the accounts that
+	 * still work, so it reads as a statement about one of them.
+	 */
+	disabledAccount?: string;
 }
 
 export interface AccountInventory {
@@ -322,11 +330,15 @@ export function buildAccountInventory(
 		if (!byProvider.has(provider)) byProvider.set(provider, []);
 	}
 
-	const providers = [...byProvider.entries()]
+	const providers = Array.from(byProvider.entries())
 		.map(([provider, rows]) => {
 			const entry: ProviderAccounts = { provider, label: formatProviderName(provider), rows };
 			const disabledCause = failedRefreshes.get(provider) ?? authStorage.disabledCredentialCause(provider);
-			if (disabledCause) entry.disabledCause = disabledCause;
+			if (disabledCause) {
+				entry.disabledCause = disabledCause;
+				const account = authStorage.disabledCredentialAccount(provider);
+				if (account) entry.disabledAccount = account;
+			}
 			return entry;
 		})
 		.sort((left, right) => left.label.localeCompare(right.label));
@@ -555,7 +567,7 @@ function orderUsageWindows(
 		if (prior && prior.fetchedAt >= entry.fetchedAt) continue;
 		freshest.set(entry.window.label, { ...entry, position: prior?.position ?? freshest.size });
 	}
-	return [...freshest.values()]
+	return Array.from(freshest.values())
 		.sort((left, right) => {
 			const leftMs = left.window.durationMs;
 			const rightMs = right.window.durationMs;
@@ -618,7 +630,7 @@ export function applyUsageReports(inventory: AccountInventory, reports: readonly
 				// windows per account and a Team seat can carry both a shared and a personal pool,
 				// so two different tiers on one account means the label would have to pick a winner,
 				// and a plan badge that picked wrong is worse than a row with no badge.
-				if (tiers.size === 1) next.planTier = [...tiers][0];
+				if (tiers.size === 1) next.planTier = Array.from(tiers)[0];
 				return next;
 			}),
 		};
@@ -636,7 +648,7 @@ export function accountsForProvider(inventory: AccountInventory, provider: strin
  * Every provider actively routed for a session, which is what `/account` reports.
  *
  * A provider with credentials the session has never used is NOT in use: several providers
- * serve one session at once (main model, subagent roles, web search), so the honest answer
+ * serve one session at once (main model, agent roles, web search), so the honest answer
  * to "which account am I on" is one row per provider that has actually routed, not a list of
  * everything configured.
  *

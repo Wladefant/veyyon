@@ -14,8 +14,9 @@
  * One table, two importers, no drift. `config/keybindings.ts` re-exports
  * everything here, so nothing that already imported from there has to change.
  */
-import type { KeybindingDefinitions, KeyId } from "@veyyon/tui";
-import { TUI_KEYBINDINGS } from "@veyyon/tui";
+import { type KeybindingDefinitions, TUI_KEYBINDINGS } from "@veyyon/utils/keybindings";
+
+import type { KeyId } from "@veyyon/utils/keys";
 
 /**
  * Application-level keybindings (coding agent specific).
@@ -56,7 +57,7 @@ interface AppKeybindings {
 
 export type AppKeybinding = keyof AppKeybindings;
 
-declare module "@veyyon/tui" {
+declare module "@veyyon/utils/keybindings" {
 	interface Keybindings extends AppKeybindings {}
 }
 
@@ -179,14 +180,14 @@ export const KEYBINDINGS = {
 	},
 	"app.agents.hub": {
 		defaultKeys: "alt+a",
-		description: "Open the Agent Control Center",
+		description: "Open the agent dashboard",
 	},
 	// Two chords, one screen. `app.session.observe` was bound to a separate
 	// observation view; it opens the same card, and both close it again, so the
 	// key you opened it with is the key that dismisses it.
 	"app.session.observe": {
 		defaultKeys: "ctrl+s",
-		description: "Open the Agent Control Center",
+		description: "Open the agent dashboard",
 	},
 	// SEVEN IDS USED TO SIT HERE AND NOTHING READ ANY OF THEM. `app.session.rename`,
 	// `togglePath`, `toggleSort` and `deleteNoninvasive` named actions the session
@@ -196,7 +197,7 @@ export const KEYBINDINGS = {
 	// binding, so remapping it did nothing. A dead entry here is not inert: every id
 	// is advertised to the user by `/hotkeys` and by the generated `keybindings.yml`,
 	// so `toggleSort` told them ctrl+s sorts the session list when ctrl+s opens the
-	// Agent Control Center (`app.session.observe`, same default key, right below).
+	// agent dashboard (`app.session.observe`, same default key, right below).
 	// `every-keybinding-id-is-read-by-something.test.ts` fails if another one appears.
 	"app.plan.toggle": {
 		defaultKeys: "alt+shift+p",

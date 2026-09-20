@@ -29,6 +29,7 @@
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { getBundledModel } from "@veyyon/catalog/models";
 import {
 	BUILTIN_SLASH_COMMAND_DECLARATIONS,
 	type BuiltinSlashCommandDeclaration,
@@ -40,6 +41,7 @@ import {
 	isAcpBuiltinShadowedName,
 	TEXT_MODE_BUILTIN_DECLARATIONS,
 } from "@veyyon/coding-agent/slash-commands/text-mode-builtins";
+import { configuredThinkingLevelsForModel } from "@veyyon/coding-agent/thinking";
 import {
 	createModuleReachCache,
 	type ModuleReachResolution,
@@ -157,20 +159,25 @@ describe("the text-mode view is a leaf", () => {
 		// A command shape with no such builtin: the registry IS loaded, and says no.
 		expect(await executeAcpBuiltinSlashCommand("/definitely-not-a-command", runtime)).toBe(false);
 		// A real text-mode builtin: loaded and run. `/thinking` with no argument reports the current
-		// level and the choices, which is the smallest handler that needs nothing but the two session
-		// reads stubbed below, so the assertion is about dispatch rather than about a command's state.
+		// level and the choices, which is the smallest handler that needs nothing but the session's
+		// model and its configured level, so the assertion is about dispatch rather than about a
+		// command's state. The choices come from the MODEL's catalog row rather than from a session
+		// method: no model means no levels, so the stub carries a real reasoning row instead of a
+		// list it makes up.
+		const model = getBundledModel("anthropic", "claude-opus-4-1");
+		if (!model) throw new Error("Expected a bundled reasoning model to exist");
 		const withSession = {
 			output: (text: string) => lines.push(text),
 			session: {
+				model,
 				configuredThinkingLevel: () => "high",
-				getAvailableThinkingLevels: () => ["low", "medium", "high"],
 			},
 		} as never;
 		const result = await executeAcpBuiltinSlashCommand("/thinking", withSession);
 
 		expect(result).toEqual({ consumed: true });
 		expect(lines.join("\n")).toContain("Effort: high");
-		expect(lines.join("\n")).toContain("low, medium, high");
+		expect(lines.join("\n")).toContain(configuredThinkingLevelsForModel(model).join(", "));
 	});
 });
 
@@ -227,10 +234,29 @@ describe("the declared flag and the handler table agree", () => {
 	 * `/cpu-limit` moved both by one, and is text-drivable for the same reason `/permissions` is: a
 	 * headless client whose profile caps CPU has commands refused with an error naming a budget, and
 	 * no way to lift it for the run without editing the profile it shares with every other session.
+	 *
+	 * `/stats` moved both by one, and is text-drivable because the dashboard is a URL: the handler
+	 * prints the address it started on, which a headless client can open itself. It was declared at
+	 * all only after its parser and launcher were found exported, fully tested, and called by
+	 * nothing.
+	 *
+	 * `/trust` moved both by one, and is text-drivable for the same reason `/permissions` is: project
+	 * code is withheld until a decision exists, and a headless client that cannot answer the refusal
+	 * has no route to the extensions, hooks, tools, commands or MCP servers the project ships.
+	 *
+	 * `/advisor` moved both by one, and is text-drivable because its report and its switch are text:
+	 * a headless client can be running an advisor that spends a second model on every turn, and
+	 * without this it can neither find that out nor stop it. `configure` is the one verb that needs a
+	 * terminal, and it says so rather than opening nothing.
+	 *
+	 * `/rephrase` moved the total by one and the text-drivable count by none. It submits a user turn
+	 * through the composer, and a text client already has that: it can send the instruction itself,
+	 * in whatever words it wants. What the command adds is a fixed wording and a refusal when there
+	 * is no reply to work from, and neither is worth an ACP verb.
 	 */
-	it("33 of the 71 builtins are text-drivable", () => {
-		expect(DECLARATIONS.length).toBe(71);
-		expect(TEXT_MODE_BUILTIN_DECLARATIONS.length).toBe(33);
+	it("36 of the 75 builtins are text-drivable", () => {
+		expect(DECLARATIONS.length).toBe(75);
+		expect(TEXT_MODE_BUILTIN_DECLARATIONS.length).toBe(36);
 	});
 
 	/**

@@ -1,8 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import { getExtraHelpText } from "@veyyon/coding-agent/cli/args";
-import { OPTIONAL_VALUE_FLAGS, STRING_VALUE_FLAGS, VALUELESS_FLAGS } from "@veyyon/coding-agent/cli/flag-tables";
+import {
+	MODE_VALUES,
+	OPTIONAL_VALUE_FLAGS,
+	STRING_VALUE_FLAGS,
+	VALUELESS_FLAGS,
+} from "@veyyon/coding-agent/cli/flag-tables";
 import LaunchCommand from "@veyyon/coding-agent/commands/launch";
-import { BUILTIN_TOOL_NAMES, isKnownToolName } from "@veyyon/coding-agent/tools/builtin-names";
+import { BUILTIN_TOOL_NAMES, isKnownToolName } from "@veyyon/coding-agent/tools/core/builtin-names";
 import type { FlagDescriptor } from "@veyyon/utils/cli";
 import { stripAnsi } from "@veyyon/utils/strip-ansi";
 
@@ -22,8 +27,11 @@ import { stripAnsi } from "@veyyon/utils/strip-ansi";
  * Two tables, no compiler relationship, so they drift the moment someone adds a
  * setter without adding a descriptor. When this suite was written they had, and
  * seven working flags were invisible in help: `--fork`, `--session`,
- * `--subagent-model`, `--compaction-model`, `--plugin-dir`,
- * `--provider-session-id`, and `--prompt-cache-key`. An undocumented flag is not
+ * `--agent-model`, `--compaction-model`, `--plugin-dir`,
+ * `--provider-session-id`, and `--prompt-cache-key`. `--agent-model` has
+ * since been removed, because a model chosen once for every agent is exactly
+ * the cross-agent control this product no longer has; the other six are asserted
+ * below. An undocumented flag is not
  * a cosmetic problem. Nobody can use a capability they cannot discover, and
  * `--fork` in particular is the only non-destructive way to branch a session:
  * without it in help, the reachable answer is `--resume`, which writes into the
@@ -118,14 +126,13 @@ describe("the launch parser and its help agree on the flag list", () => {
 
 describe("the flags that were missing are named in help", () => {
 	/**
-	 * Each of the seven is asserted by name with a real description, not merely
+	 * Each of the six is asserted by name with a real description, not merely
 	 * by presence in the set. A descriptor added with an empty description would
 	 * satisfy the reconciliation above while still telling a reader nothing.
 	 */
 	it.each([
 		["fork", "branching a session without writing to the original"],
 		["session", "the alias of --resume"],
-		["subagent-model", "the model subagents run on"],
 		["compaction-model", "the model that summarizes on compaction"],
 		["plugin-dir", "an extra plugin discovery root"],
 		["provider-session-id", "reusing a provider-side session"],
@@ -176,6 +183,21 @@ describe("every documented flag carries a usable description", () => {
 
 		expect(flags.mode?.options?.length ?? 0).toBeGreaterThan(1);
 		expect(flags.thinking?.options?.length ?? 0).toBeGreaterThan(1);
+	});
+
+	/**
+	 * The description is the only place `veyyon --help` prints the accepted modes,
+	 * and it was hand-written: it read `text|json|rpc|rpc-ui` for a release in
+	 * which `--mode acp` was accepted. Every value the parser accepts appears in
+	 * the sentence a user reads, and the two come from the same table.
+	 */
+	it("names every accepted --mode value in the flag description", () => {
+		const mode = launchFlags().mode;
+		if (!mode) throw new Error("launch declares no --mode flag");
+		expect(mode.options).toEqual([...MODE_VALUES]);
+		for (const value of MODE_VALUES) {
+			expect(mode.description).toContain(value);
+		}
 	});
 });
 

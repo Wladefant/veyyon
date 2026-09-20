@@ -26,14 +26,22 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { promisify } from "node:util";
+import { existingOnly } from "./workspace-layout";
 
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = path.resolve(import.meta.dirname, "..");
 
-/** Every text file git tracks, so a new file is scanned the moment it is added. */
+/**
+ * Every text file git tracks, so a new file is scanned the moment it is added. `existingOnly`
+ * because the index still lists a file deleted in the working tree, and reading one killed this
+ * gate with an ENOENT naming the deleted path; see its doc in check-doc-links.ts.
+ */
 async function trackedFiles(): Promise<string[]> {
 	const { stdout } = await execFileAsync("git", ["ls-files", "-z"], { cwd: REPO_ROOT, maxBuffer: 64 * 1024 * 1024 });
-	return stdout.split("\0").filter(entry => entry.length > 0);
+	return existingOnly(
+		REPO_ROOT,
+		stdout.split("\0").filter(entry => entry.length > 0),
+	);
 }
 
 /**
@@ -42,9 +50,9 @@ async function trackedFiles(): Promise<string[]> {
  * address the reader deliberately; the product's own prompts tell a model about "the user" and must.
  */
 const EXEMPT_DIRS = [
-	"crates/vendor/",
+	"natives/vendor/",
 	"docs/handbook/book/",
-	"website/",
+	"apps/site/",
 	"packages/coding-agent/src/export/html/vendor/",
 	"packages/catalog/src/discovery/cursor-gen/",
 ];
@@ -92,7 +100,6 @@ const EXTENSION_POLICY: Readonly<Record<string, ExtensionDecision>> = {
 	".proto": "scan",
 	".lark": "scan",
 	".sublime-syntax": "scan",
-	".tape": "scan",
 	".dockerfile": "scan",
 	".dockerignore": "scan",
 	".veybot": "scan",
@@ -109,17 +116,18 @@ const EXTENSION_POLICY: Readonly<Record<string, ExtensionDecision>> = {
 	".exit": RECORDED_OUTPUT,
 	".cmd": RECORDED_OUTPUT,
 	".patch": RECORDED_OUTPUT,
+	".jsonl": NO_COMMENT_SYNTAX,
+	".recorder": "scan", // A Dockerfile named by its stage: `#` comments
 	".typed": { skip: "empty marker file" },
 	".LICENSE": LEGAL_TEXT,
 	".png": BINARY_ASSET,
 	".jpg": BINARY_ASSET,
 	".webp": BINARY_ASSET,
-	".gif": BINARY_ASSET,
 	".ico": BINARY_ASSET,
-	".mp4": BINARY_ASSET,
 	".pdf": BINARY_ASSET,
 	".ttf": BINARY_ASSET,
 	".gz": BINARY_ASSET,
+	".mp4": BINARY_ASSET,
 	".svg": { skip: "vector art, not prose" },
 };
 
@@ -215,16 +223,50 @@ const BANNED: ReadonlyArray<{ readonly name: string; readonly pattern: RegExp }>
 	},
 	{
 		// Every rule above keys off the words "operator" and "user", so naming the person outright
-		// walked straight past all of them: `reported by @santhreal`, `per Mukund's screenshot`.
+		// walked straight past all of them: `reported by @santhreal`, `per a named person's screenshot`.
 		// A handle or a capitalised name after a credit verb is a person; the ordinary technical
 		// senses put a lowercase common noun there (`reported by the provider`, `requested by the
-		// caller`) and stay legal. The identity list is this repository's own accounts, so a URL
-		// like github.com/santhreal/veyyon does not match: it needs a credit noun behind it.
+		// caller`) and stay legal. The identity list is this repository's own account handles, so a
+		// URL like github.com/santhreal/veyyon does not match: it needs a credit noun behind it.
 		name: "attributing a change to a named person",
 		pattern:
-			/\b(?:reported|requested|approved|reviewed|verified|confirmed|screenshotted)\s+by\s+@[\w-]+|\b(?:mukund|santhreal|santhsecurity|anionicsanth)(?:'s)?\s+(?:report|reports|screenshot|screenshots|review|reviews|request|requests|ask|asks|words|verdict|complaint)\b/i,
+			/\b(?:reported|requested|approved|reviewed|verified|confirmed|screenshotted)\s+by\s+@[\w-]+|\b(?:santhreal|santhsecurity|anionicsanth)(?:'s)?\s+(?:report|reports|screenshot|screenshots|review|reviews|request|requests|ask|asks|words|verdict|complaint)\b/i,
 	},
 ];
+
+/**
+ * Everything on one line that is NOT inside an HTML preformatted block, plus the depth to carry
+ * into the next line.
+ *
+ * `<pre>` is a document's code block, exactly as a ``` fence is, and the fence rule below already
+ * says a code block in a document is code. The proof pages display captured `git show` output
+ * inside `pre.difftext`, and `.diff` is RECORDED_OUTPUT in the policy table above — so the same
+ * captured bytes were exempt as a file and prose as a figure, which is the only reason a phrase
+ * this suite had already driven out of the source comments still failed it from a rendered diff.
+ *
+ * Returns the OUTSIDE text rather than skipping the whole line, so prose sharing a line with a
+ * closing tag is still scanned and the exemption cannot be widened by writing `</pre>` in front
+ * of an attribution.
+ */
+function outsidePreformatted(line: string, depth: number): { readonly kept: string; readonly depth: number } {
+	const tag = /<pre\b|<\/pre\s*>/gi;
+	let kept = "";
+	let cursor = 0;
+	let open = depth;
+	let match = tag.exec(line);
+	while (match !== null) {
+		if (match[0].startsWith("</")) {
+			if (open > 0) open -= 1;
+		} else {
+			if (open === 0) kept += line.slice(cursor, match.index);
+			open += 1;
+		}
+		cursor = match.index + match[0].length;
+		match = tag.exec(line);
+	}
+	if (open === 0) kept += line.slice(cursor);
+	return { kept, depth: open };
+}
 
 /**
  * Comment and prose lines only: a string literal that is test DATA is not prose about a person.
@@ -243,15 +285,21 @@ function proseLines(
 	source: string,
 ): ReadonlyArray<{ readonly line: number; readonly text: string; readonly window: string }> {
 	// Markup carries its prose outside any comment marker, so every line is prose. The fence rule
-	// still applies: a code block in a document is code.
-	const markdown = MARKUP_EXTENSIONS.has(path.extname(file));
+	// still applies: a code block in a document is code, whether it is fenced or in a `<pre>`.
+	const markup = MARKUP_EXTENSIONS.has(path.extname(file));
 	const raw: { line: number; text: string }[] = [];
 	let inFence = false;
+	let preformatted = 0;
 	source.split("\n").forEach((line, index) => {
 		const trimmed = line.trim();
-		if (markdown) {
-			if (trimmed.startsWith("```")) inFence = !inFence;
-			else if (!inFence && trimmed.length > 0) raw.push({ line: index + 1, text: line });
+		if (markup) {
+			if (trimmed.startsWith("```")) {
+				inFence = !inFence;
+				return;
+			}
+			const { kept, depth } = outsidePreformatted(line, preformatted);
+			preformatted = depth;
+			if (!inFence && kept.trim().length > 0) raw.push({ line: index + 1, text: kept });
 			return;
 		}
 		const isComment =
@@ -350,7 +398,7 @@ describe("no comment or internal doc attributes a change to a person", () => {
 			// Present tense describes what someone MAY type, which is product behavior, not a record
 			// of anyone having typed it.
 			' * how the model learns WHERE to write when the operator says "remember this".',
-			// A provenance label that is itself quoted: the quotation opens before the verb, so it
+			// An origin label that is itself quoted: the quotation opens before the verb, so it
 			// names a category of origin rather than reproducing anything anybody said.
 			' * alone does not separate "the operator wrote this" from "the binary shipped this".',
 			// What somebody typed at the CLI is product behavior, and the quote inside it belongs to
@@ -399,6 +447,48 @@ describe("no comment or internal doc attributes a change to a person", () => {
 	});
 
 	/**
+	 * A rendered diff is a recording, not prose about a person — and the exemption stops at the
+	 * closing tag.
+	 *
+	 * `.diff` and `.patch` are RECORDED_OUTPUT in the policy table, so a captured `git show`
+	 * carrying a phrase from an old comment is exempt as a file. The proof pages display those
+	 * same captures inside `pre.difftext`, and `.html` is markup, where every line outside a ```
+	 * fence was prose: the identical bytes were exempt as a file and a violation as a figure. The
+	 * source comments in that capture had already been rewritten to carry no attribution, so the
+	 * only thing failing was the historical record of having fixed it, which no edit to the tree
+	 * can change.
+	 *
+	 * The three cases below are the whole contract, and the last two are why this is not simply a
+	 * hole: a caption is still prose, and a line that closes the block and then keeps writing is
+	 * still prose, so `</pre>` in front of an attribution silences nothing.
+	 */
+	it("exempts a rendered diff but not the prose around it", () => {
+		const attribution = "the operator's verdict on this build was that the animations are barely noticeable";
+		const source = [
+			"<h2>Selection band</h2>",
+			'<pre class="difftext">',
+			`<span class="green">+</span><span class="green">// ${attribution}</span>`,
+			"</pre>",
+			`<p class="cap">${attribution}</p>`,
+			// A blank line, so the two prose cases are not CONSECUTIVE scanned lines. The window
+			// above joins each entry with the next one, and with the caption and the split line
+			// adjacent, blanking either one left the other's text inside the survivor's window and
+			// both negative controls below stayed green while proving nothing.
+			"",
+			`<pre class="difftext">inside</pre><p>${attribution}</p>`,
+		].join("\n");
+
+		const caught = proseLines("proof/page.html", source).filter(entry =>
+			BANNED.some(rule => rule.pattern.test(entry.window)),
+		);
+
+		// Line 3 is inside the block and exempt; line 5 is a caption and line 7 is prose sharing a
+		// line with the block that closed before it. Exact equality, so widening the exemption to
+		// the rest of a closing line, or to the whole document, fails here.
+		expect(caught.map(entry => entry.line)).toEqual([5, 7]);
+	});
+
+	/**
 	 * The quoting rule is a list of speech verbs, and a list is only as good as the day it was
 	 * written: the first draft held `said` alone, so `the operator wrote "…"` and
 	 * `the user called it "…"` were the same leak wearing a different verb and landed green. The
@@ -414,9 +504,9 @@ describe("no comment or internal doc attributes a change to a person", () => {
 	 */
 	it("pins every exemption, so scope cannot be widened quietly", () => {
 		expect(EXEMPT_DIRS).toEqual([
-			"crates/vendor/",
+			"natives/vendor/",
 			"docs/handbook/book/",
-			"website/",
+			"apps/site/",
 			"packages/coding-agent/src/export/html/vendor/",
 			"packages/catalog/src/discovery/cursor-gen/",
 		]);
@@ -426,7 +516,7 @@ describe("no comment or internal doc attributes a change to a person", () => {
 		// prefixes are exempt and an ordinary document is not.
 		expect(isProductMarkdown("packages/coding-agent/src/prompts/system.md")).toBe(true);
 		expect(isProductMarkdown("agents/deep.md")).toBe(true);
-		expect(isProductMarkdown(".veyyon/skills/record-demo/SKILL.md")).toBe(true);
+		expect(isProductMarkdown(".veyyon/commands/triage.md")).toBe(true);
 		expect(isProductMarkdown("docs/internal/releasing.md")).toBe(false);
 		expect(isProductMarkdown("packages/coding-agent/src/eval/prelude.py")).toBe(false);
 	});
@@ -481,8 +571,8 @@ describe("no comment or internal doc attributes a change to a person", () => {
 			".proto": line => `// ${line}`,
 			".lark": line => `// ${line}`,
 			".sublime-syntax": line => `# ${line}`,
-			".tape": line => `# ${line}`,
 			".dockerfile": line => `# ${line}`,
+			".recorder": line => `# ${line}`,
 			".dockerignore": line => `# ${line}`,
 			".veybot": line => `# ${line}`,
 			".example": line => `# ${line}`,

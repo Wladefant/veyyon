@@ -41,13 +41,13 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { unregisterCustomApis } from "@veyyon/ai/api-registry";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, registerMockApi } from "@veyyon/ai/providers/mock";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import { resolveVaultLocations, SecretVault } from "@veyyon/coding-agent/secrets/vault";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
 import { makeScopeUnreadable } from "./stalevaultneverrefuses-corrupt-vault-fixture";
@@ -207,7 +207,7 @@ describe("a tool call spending a placeholder while a vault scope cannot be read"
 		// The repair has to be COPY-PASTEABLE, so the scope is interpolated rather than left as a
 		// placeholder for the operator to substitute. `discard` moves the file aside and does not
 		// re-add anything, so naming it alone would leave the operator halfway.
-		expect(refusal).toContain("/secret discard --scope profile");
+		expect(refusal).toContain("/secret discard profile");
 		expect(refusal).toContain("store the secrets it held again");
 		// The refusal cannot know which surface prints it, so every command it names has to run on all
 		// of them. `discard` does, and a screen does not exist to name instead.

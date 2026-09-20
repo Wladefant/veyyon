@@ -134,9 +134,46 @@ const AUTH_STORAGE_CEILING = 227;
  * field meant importing every login flow, transport and model list in the package. `src/provider-env-keys.ts`
  * owns those rules now, at 23 modules, and `registry/types.ts` no longer declares the field, so there is one
  * place to write a rule and one module that reads it. Downstream: `web/parallel.ts` 164 -> 72,
- * `tools/fetch.ts` 368 -> 282, `tools/read.ts` 542 -> 468.
+ * `tools/web/fetch.ts` 368 -> 282, `tools/fs/read.ts` 542 -> 468.
+ *
+ * 73 since 2026-08-22: `compat/markup-leaks.ts`, one file in the catalog holding the provider and
+ * model-id vocabulary for the markup a host leaks into visible content. `compat/openai.ts` is already
+ * in this closure and now reads that vocabulary instead of restating it, so the edge is one leaf module
+ * deeper on a path that was already here.
+ *
+ * 77 since 2026-08-23, measured: `provider-models/wire-capabilities.ts`, the leaf table declaring what
+ * each provider realizes on the wire, read by `compat/openai.ts` for strict tool schemas and for the
+ * local-inference and forwarding-proxy answers it used to hold as two provider sets. Every import in
+ * that table is type-only, so it adds one module and no subtree; the readers that need model identity
+ * are in `provider-models/service-tier.ts`, which this closure does not reach. The remaining growth is
+ * file count, not dependency weight: the catalog's compat healer was split into per-concern modules.
+ *
+ * 78 since 2026-09-04, measured: the effort ladder and the service-tier vocabulary are declared in
+ * `contracts/model/src/{effort,service-tier}.ts` and `catalog/effort.ts` and
+ * `catalog/provider-models/wire-capabilities.ts` re-export them. A contract imports nothing in this
+ * repository, so the two leaves add file count and no subtree.
+ *
+ * 79 since 2026-09-11, measured: `catalog/discovery/failure.ts`, the discovery-failure vocabulary and
+ * the one `readDiscoveryJson` reader over it. `provider-models/ollama.ts`, already in this closure
+ * through `provider-models/index.ts`, took the reader from that owner instead of parsing the response
+ * inline. The leaf imports `@veyyon/utils/type-guards`, which was already reached, so it adds one
+ * module and no subtree.
+ *
+ * 80 since 2026-09-15, measured: `catalog/provider-models/command-code.ts`, Command Code's
+ * deployment contract, split out of `openai-compat.ts`. `provider-models/descriptors.ts` is in this
+ * closure and takes the provider's discovery mapper from that file now; every module the file
+ * imports was already reached through `openai-compat.ts`, so it adds one module and no subtree.
+ *
+ * 83 since 2026-09-18, measured on this fork and not upstream: the local `codex-chatgpt-web` bridge
+ * provider. `provider-models/descriptors.ts` names `provider-models/chatgpt-web.ts`, that file names
+ * `discovery/chatgpt-web.ts`, and the discovery reader bounds its loopback request with
+ * `@veyyon/utils/scoped-timeout` — the one leaf in the three this closure had no other path to
+ * (`shared-llm.ts` already reaches it, which is why the same provider costs it two and not three).
+ * Measured by removing the descriptor edge and the `provider-models/index.ts` re-export: the closure
+ * drops to exactly upstream's 80. Three files, no subtree, and the number moves back the moment the
+ * bridge provider leaves.
  */
-const ENV_API_KEY_CEILING = 72;
+const ENV_API_KEY_CEILING = 83;
 
 /** Measured 2026-07-26 at 75: the logger and nothing else. A backend import here is the regression. */
 const USAGE_REGISTRY_CEILING = 83;

@@ -5,11 +5,11 @@
 > **Notice:** Do not shell out to `python -c`/`python -e`, `bun -e`, or `node -e` via the `bash` tool for ad-hoc code execution. Use this tool instead: it gives you persistent state across calls, structured `display()` output, image/JSON capture, and proper cancellation/timeout handling that one-shot `-e`/`-c` invocations cannot provide.
 
 ## Source
-- Entry: `packages/coding-agent/src/tools/eval.ts`
+- Entry: `packages/coding-agent/src/tools/shell/eval.ts`
 - Model-facing prompt: `packages/coding-agent/src/prompts/tools/eval.md`
 - Key collaborators:
   - `packages/coding-agent/src/eval/backend.ts`: backend execution contract
-  - `packages/coding-agent/src/eval/agent-bridge.ts`: host-side `agent()` bridge into the subagent executor
+  - `packages/coding-agent/src/eval/agent-bridge.ts`: host-side `agent()` bridge into the agent executor
   - `packages/coding-agent/src/eval/js/executor.ts`: JS backend adapter
   - `packages/coding-agent/src/eval/js/worker-core.ts`: JS execution, VM context, display/log capture
   - `packages/coding-agent/src/eval/js/shared/prelude.txt`: JS global helper installer
@@ -19,18 +19,18 @@
   - `packages/coding-agent/src/eval/py/kernel.ts`: subprocess NDJSON runner protocol, display capture
   - `packages/coding-agent/src/eval/py/prelude.py`: Python helper functions and status events
   - `packages/coding-agent/src/session/streaming-output.ts`: truncation, artifacts, streamed chunks
-  - `docs/python-repl.md`: Python kernel/runner internals
+  - `docs/handbook/src/features/python-repl.md`: Python kernel/runner internals
 
 ## Inputs
 
-One call runs one cell. The parameters are a single cell object, validated by the arktype `evalSchema` in `packages/coding-agent/src/tools/eval.ts` (`EvalCellInput` is a type alias for the inferred params). There is no `*** Cell` header parsing, no language sniffing, and no cell array. State persists within each language across separate calls, so you build a session by making several calls in sequence: later calls reuse what earlier ones defined.
+One call runs one cell. The parameters are a single cell object, validated by the arktype `evalSchema` in `packages/coding-agent/src/tools/shell/eval.ts` (`EvalCellInput` is a type alias for the inferred params). There is no `*** Cell` header parsing, no language sniffing, and no cell array. State persists within each language across separate calls, so you build a session by making several calls in sequence: later calls reuse what earlier ones defined.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `language` | `"py" \| "js" \| "rb" \| "jl"` | Yes | Backend selector. `"py"` maps to the IPython-style subprocess kernel (`python` backend), `"js"` to the persistent JavaScript VM, `"rb"` to the Ruby kernel, `"jl"` to the Julia kernel. `"rb"` and `"jl"` are opt-in: they are gated on the `eval.rb` and `eval.jl` settings, which default to `false`, and the per-session wire schema narrows the enum so disabled backends are never advertised to the model. |
 | `code` | `string` | Yes | Cell body, verbatim. JSON-encoded, embed newlines, quotes, and indentation directly; no fences, no headers. |
 | `title` | `string` | No | Short label shown in the transcript (e.g. `"imports"`, `"load config"`). |
-| `timeout` | `number` | No | Cell timeout in seconds. Defaults to 30 when omitted, `0` disables the deadline entirely, and any other value is clamped to `1..3600` at runtime (see `TOOL_TIMEOUTS.eval` in `packages/coding-agent/src/tools/tool-timeouts.ts`). |
+| `timeout` | `number` | No | Cell timeout in seconds. Defaults to 30 when omitted, `0` disables the deadline entirely, and any other value is clamped to `1..3600` at runtime (see `TOOL_TIMEOUTS.eval` in `packages/coding-agent/src/tools/core/tool-timeouts.ts`). |
 | `reset` | `boolean` | No | Wipe this language's kernel before running. Reset is per-language: resetting `py` does not touch the JS VM, and vice versa. Defaults to `false`. |
 
 A typical session is a chain of single-cell calls. First call, set up once:
@@ -68,7 +68,7 @@ Returned shape:
   - `meta`: truncation metadata
   - `isError`: set on cell failure or cancellation
 
-Renderer behavior in `packages/coding-agent/src/tools/eval.ts`:
+Renderer behavior in `packages/coding-agent/src/tools/shell/eval.ts`:
 
 - call preview renders the cell's `code` with syntax highlighting based on its declared `language`
 - result view renders the cell with its status, duration, and output
@@ -117,7 +117,7 @@ full, so the transcript still shows you every line.
 
 ## Flow
 
-1. `EvalTool.execute()` in `packages/coding-agent/src/tools/eval.ts` receives `params` already validated by the arktype schema (`evalSchema`, or the session-scoped copy from `buildEvalSchema()`): no string parsing step, and exactly one cell per call.
+1. `EvalTool.execute()` in `packages/coding-agent/src/tools/shell/eval.ts` receives `params` already validated by the arktype schema (`evalSchema`, or the session-scoped copy from `buildEvalSchema()`): no string parsing step, and exactly one cell per call.
 2. `execute()` maps `params.language` to an `EvalLanguage` (`"py"` → `"python"`, `"js"` → `"js"`, `"rb"` → `"ruby"`, `"jl"` → `"julia"`) and calls `resolveBackend(session, language)`:
    - `python` is gated on `resolveEvalBackends(session).python` (the `eval.py` setting, overridden by the `VEYYON_PY` env flag) and `pythonBackend.isAvailable(session)`.
    - `js` is gated on `resolveEvalBackends(session).js` (the `eval.js` setting, overridden by the `VEYYON_JS` env flag).
@@ -125,7 +125,7 @@ full, so the transcript still shows you every line.
    - `julia` is gated on `resolveEvalBackends(session).julia` (the `eval.jl` setting, default `false`, overridden by `VEYYON_JL`) and `juliaBackend.isAvailable(session)`.
    - A disabled or unavailable requested backend throws `ToolError`; there is no auto-fallback or sniffing. When other backends are enabled, the error message names them as alternatives.
 3. The tool builds the single `ResolvedEvalCell`, computes the `notice` line (`detailsNotice()` merges the backend's own notice with the timeout-clamp notice), allocates an `OutputSink`, a `TailBuffer`, one cell result object, and a `sessionAbortController`. `session.trackEvalExecution?.(...)` can wrap the whole run for external cancellation tracking.
-4. It resolves the executor session id from `session.getEvalSessionId?.()`, falling back to `defaultEvalSessionId(session)`. Subagents inherit the parent's id so both sides share the same JS VM and Python kernel for each backend.
+4. It resolves the executor session id from `session.getEvalSessionId?.()`, falling back to `defaultEvalSessionId(session)`. Agents inherit the parent's id so both sides share the same JS VM and Python kernel for each backend.
 5. The cell runs. `execute()`:
    - resolves the timeout as `params.timeout ?? 30` seconds. `0` disables the deadline entirely; any other value passes through `clampTimeout("eval", ...)`, which clamps to `1..3600` and honors the `tools.maxTimeout` global ceiling
    - wraps the clamped budget in an `IdleTimeout` and combines its signal with the tool signal and the session abort controller (`AbortSignal.any`). The timeout is a runtime-work budget, not a wall clock: `EVAL_TIMEOUT_PAUSE_OP`/`EVAL_TIMEOUT_RESUME_OP` status events pause and resume the idle timer so host-side `agent()`/`parallel()`/`completion()` calls do not spend it
@@ -168,7 +168,7 @@ Implemented in `packages/coding-agent/src/eval/js/worker-core.ts`, `packages/cod
   - `read`, `write`, `env`, `output`
   - `tool.<name>(args)` proxy for arbitrary session tool calls
   - `completion(prompt, opts?)` for oneshot, stateless model calls (see _Oneshot completion helper_ below)
-  - `agent(prompt, opts?)` for a single subagent call, plus `parallel()` / `pipeline()` bounded-pool helpers (see _Subagent helper_ below)
+  - `agent(prompt, opts?)` for a single agent call, plus `parallel()` / `pipeline()` bounded-pool helpers (see _Agent helper_ below)
   - `log(message)`, `phase(title)`, and `budget` (live token-budget view via async `budget.total()` / `budget.spent()` / `budget.remaining()` / `budget.hard()`)
 - JS host/runtime helpers (`read`, `write`, `output`) are async and `await`able; `env` returns synchronously.
 - JS helper options may be passed either positionally in the Python order or as a trailing options object. `null` and `undefined` skip positional slots:
@@ -185,7 +185,7 @@ Implemented in `packages/coding-agent/src/eval/js/worker-core.ts`, `packages/cod
 
 ### Python runtime
 
-Implemented in `packages/coding-agent/src/eval/py/executor.ts`, `packages/coding-agent/src/eval/py/kernel.ts`, and `packages/coding-agent/src/eval/py/prelude.py`. See `docs/python-repl.md` for kernel and runner details.
+Implemented in `packages/coding-agent/src/eval/py/executor.ts`, `packages/coding-agent/src/eval/py/kernel.ts`, and `packages/coding-agent/src/eval/py/prelude.py`. See `docs/handbook/src/features/python-repl.md` for kernel and runner details.
 
 - Default mode is retained `session` kernels keyed by `python:${sessionId}` plus normalized cwd and interpreter
 - Optional `python.kernelMode = "per-call"` creates a fresh kernel for each cell and shuts it down afterward
@@ -198,6 +198,7 @@ Implemented in `packages/coding-agent/src/eval/py/executor.ts`, `packages/coding
   - execute `PYTHON_PRELUDE`
 - Python cells run in the runner's persistent asyncio event loop, so top-level `await` works; the prompt warns not to use `asyncio.run(...)`
 - The Python prelude defines helpers with the same surface as JS where practical, including `tool.<name>(args)`, `completion(...)`, and `agent(...)` through a per-run loopback bridge
+- `eval.pyWorkspace` defaults to `false`. When enabled, the tool description tells the model to keep large `tool.*` results and reusable repository helpers in Python state and emit compact conclusions. The setting adds guidance, not runtime APIs.
 - Synchronous statement blocks run in the default executor with ContextVar state copied in; the GIL still serializes bytecode execution, but awaited regions can interleave with sibling cells
 - Kernel `display` / `result` frames map to:
   - `application/x-veyyon-status` → status event
@@ -227,9 +228,9 @@ The JS and Python runtimes expose `completion()`, a single stateless completion 
 - `schema` (optional) is a plain JSON-Schema object. When present, the model is forced to call a single synthetic `respond` tool with that schema (loose, non-strict), and the helper returns the parsed object. When absent, the helper returns the completion string.
 - Errors surface as exceptions: unresolved tier, missing API key, an `error`/`aborted` stop reason, or empty output each raise.
 
-### Subagent helper (`agent`)
+### Agent helper (`agent`)
 
-The JS and Python runtimes expose `agent()`, a single subagent invocation routed through `packages/coding-agent/src/eval/agent-bridge.ts` into the same `runSubprocess(...)` path used by the `task` tool. It uses the current eval session's spawn policy and inherits the parent eval executor id, so parent and subagent code share JS/Python runtime state.
+The JS and Python runtimes expose `agent()`, a single agent invocation routed through `packages/coding-agent/src/eval/agent-bridge.ts` into the same `runSubprocess(...)` path used by the `task` tool. It uses the current eval session's spawn policy and inherits the parent eval executor id, so parent and agent code share JS/Python runtime state.
 
 - Signatures:
   - JS: `await agent(prompt, agent?, model?, label?, schema?)` or `await agent(prompt, { agent?, model?, label?, schema?, handle? })`
@@ -238,11 +239,11 @@ The JS and Python runtimes expose `agent()`, a single subagent invocation routed
 - `model` overrides the selected agent's model for this call. A per-agent profile model applies next, followed by the profile default, agent frontmatter, and the live parent model.
 - Effort resolves independently. An explicit suffix on `model` wins, followed by the per-agent effort, profile default effort, agent frontmatter, and the live parent effort. A bare call model therefore keeps the configured per-agent effort.
 - Shared background is passed via files: write a `local://` file and reference it in the prompt. `label` controls the `agent://<id>` output label prefix.
-- `schema` passes a JSON Schema to the subagent structured-output path. When present, the helper parses the final JSON text and returns an object.
+- `schema` passes a JSON Schema to the agent structured-output path. When present, the helper parses the final JSON text and returns an object.
 - `handle` (default off) returns a DAG node dict, `{ text, output, handle: "agent://<id>", id, agent }`, plus a parsed `data` field when `schema` is set, instead of the bare output, so a downstream stage can reference the transcript by handle.
-- Spawn restrictions use `session.getSessionSpawns()` exactly like the `task` tool. Eval-driven subagent recursion is capped at depth 3.
-- JS and Python both expose `parallel(thunks)` and `pipeline(items, ...stages)`; both use a bounded async/threaded pool whose width tracks the `subagent.maxConcurrency` setting (the same ceiling the `task` tool uses; `0` = run every item at once), preserve item order, and propagate rejections. The width is fetched live from the host via the `__concurrency__` bridge, so the helpers no longer take a `concurrency` argument.
-- Errors surface as exceptions: unknown or disabled agent, disallowed spawn, recursion cap, subagent failure, or invalid structured output all fail the eval cell.
+- Spawn restrictions use `session.getSessionSpawns()` exactly like the `task` tool. Eval-driven agent recursion is capped at depth 3.
+- JS and Python both expose `parallel(thunks)` and `pipeline(items, ...stages)`; both use a bounded async/threaded pool whose width tracks the `agent.maxConcurrency` setting (the same ceiling the `task` tool uses; `0` = run every item at once), preserve item order, and propagate rejections. The width is fetched live from the host via the `__concurrency__` bridge, so the helpers no longer take a `concurrency` argument.
+- Errors surface as exceptions: unknown or disabled agent, disallowed spawn, recursion cap, agent failure, or invalid structured output all fail the eval cell.
 
 ### Working across languages
 
@@ -263,8 +264,8 @@ One call runs one cell in one language. You mix languages by making separate cal
   - JS runtime exposes `fetch` and `tool.<name>()`; those tools may perform additional network I/O.
 - Subprocesses / native bindings
   - Python availability check runs `<python> -c ...`.
-  - Python backend spawns one `python -u runner.py` subprocess per kernel; cancellation sends `SIGINT`. Details in `docs/python-repl.md`.
-  - `agent()` runs one in-process subagent via the task executor; that subagent may use its configured tools.
+  - Python backend spawns one `python -u runner.py` subprocess per kernel; cancellation sends `SIGINT`. Details in `docs/handbook/src/features/python-repl.md`.
+  - `agent()` runs one in-process agent via the task executor; that agent may use its configured tools.
 - Session state
   - `session.assertEvalExecutionAllowed?.()` can block execution.
   - `session.trackEvalExecution?.(...)` can register cancellable eval work.
@@ -280,14 +281,14 @@ One call runs one cell in one language. You mix languages by making separate cal
 
 ## Limits & Caps
 
-- Timeout default: 30s (applied when `timeout` is omitted in `EvalTool.execute()`; `TOOL_TIMEOUTS.eval` in `packages/coding-agent/src/tools/tool-timeouts.ts`)
+- Timeout default: 30s (applied when `timeout` is omitted in `EvalTool.execute()`; `TOOL_TIMEOUTS.eval` in `packages/coding-agent/src/tools/core/tool-timeouts.ts`)
 - Timeout `0`: disables the deadline entirely (no idle timer is armed)
-- Timeout clamp at runtime: 1s minimum, 3600s maximum, plus the `tools.maxTimeout` global ceiling when configured (`TOOL_TIMEOUTS.eval` in `packages/coding-agent/src/tools/tool-timeouts.ts`). A clamped request is reported through `details.notice`, not silently adjusted.
-- Transcript code/output preview: 10 lines by default (`EVAL_DEFAULT_PREVIEW_LINES` in `packages/coding-agent/src/tools/eval-render.ts`, re-exported from `eval.ts`)
+- Timeout clamp at runtime: 1s minimum, 3600s maximum, plus the `tools.maxTimeout` global ceiling when configured (`TOOL_TIMEOUTS.eval` in `packages/coding-agent/src/tools/core/tool-timeouts.ts`). A clamped request is reported through `details.notice`, not silently adjusted.
+- Transcript code/output preview: 10 lines by default (`EVAL_DEFAULT_PREVIEW_LINES` in `packages/coding-agent/src/tools/shell/eval-view.ts`)
 - Output truncation window: 50KB default, set by `tools.artifactSpillThreshold`
 - Output line cap inside truncation helpers: 3000 lines (`DEFAULT_MAX_LINES` in `packages/coding-agent/src/session/streaming-output.ts`)
-- Streaming tail buffer for live updates: `DEFAULT_MAX_BYTES * 2` = 100KB (`packages/coding-agent/src/tools/eval.ts`)
-- JS/Python `parallel()` / `pipeline()` helper pool width: the `subagent.maxConcurrency` setting (default 32; `0` = unbounded), resolved live via the `__concurrency__` bridge (`packages/coding-agent/src/eval/concurrency-bridge.ts`)
+- Streaming tail buffer for live updates: `DEFAULT_MAX_BYTES * 2` = 100KB (`packages/coding-agent/src/tools/shell/eval.ts`)
+- JS/Python `parallel()` / `pipeline()` helper pool width: the `agent.maxConcurrency` setting (default 32; `0` = unbounded), resolved live via the `__concurrency__` bridge (`packages/coding-agent/src/eval/concurrency-bridge.ts`)
 - Eval-driven `agent()` recursion cap: task depth 3 (`EVAL_AGENT_MAX_DEPTH`)
 - Python kernel startup wait: 10s (`STARTUP_TIMEOUT_MS` in `packages/coding-agent/src/eval/py/kernel.ts`)
 - Python kernel shutdown grace per escalation step (`exit` request → `SIGTERM` → `SIGKILL`): 1000ms (`SHUTDOWN_GRACE_MS` in `packages/coding-agent/src/eval/py/kernel.ts`)
@@ -312,7 +313,7 @@ One call runs one cell in one language. You mix languages by making separate cal
 
 ## Shared executor trade-offs
 
-- Parent agents and subagents share eval state bidirectionally when a subagent inherits the parent's executor id. Mutations in either direction are visible to the other participant.
+- Parent agents and agents share eval state bidirectionally when an agent inherits the parent's executor id. Mutations in either direction are visible to the other participant.
 - Async regions of concurrent runs can interleave. Synchronous JS still blocks the VM event loop; synchronous Python still contends on the GIL.
 - Cancelling one run is destructive to the shared backend executor. This is intentional: JS worker termination and Python SIGINT/subprocess shutdown are the only reliable way to interrupt arbitrary user code.
 - `reset: true` is destructive for every live run on that backend session id. Concurrent Python resets coalesce: a reset already in flight is awaited rather than duplicated, and runs queued behind it proceed on the freshly-restarted kernel.
@@ -326,5 +327,5 @@ One call runs one cell in one language. You mix languages by making separate cal
 - Python helper `output(...)` depends on `VEYYON_ARTIFACTS_DIR` or `VEYYON_SESSION_FILE`; it fails outside a session-backed run.
 - `display()` can produce text and structured outputs from the same value; the renderer prefers markdown over `text/plain` when both exist.
 - JS static imports are rewritten only at top level. Nested imports stay invalid and surface normal JS syntax/runtime errors.
-- `EvalTool` is `concurrency = "exclusive"` within one agent session, but parent and subagent sessions can run eval concurrently when they share an inherited executor id.
+- `EvalTool` is `concurrency = "exclusive"` within one agent session, but parent and agent sessions can run eval concurrently when they share an inherited executor id.
 - The tool description shown to the model is templated by backend availability (`getEvalToolDescription()`); if Python is unavailable, the prompt omits Python-specific instructions.

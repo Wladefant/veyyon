@@ -7,10 +7,19 @@
 import { describe, expect, it } from "bun:test";
 import type { DaemonSnapshot } from "@veyyon/coding-agent/launch/protocol";
 import { renderTerminalOutput } from "@veyyon/coding-agent/launch/terminal-output";
-import { getThemeByName } from "@veyyon/coding-agent/modes/theme/theme";
-import { type LaunchToolDetails, launchToolRenderer } from "@veyyon/coding-agent/tools/launch";
+import { getThemeByName } from "@veyyon/coding-agent/theme/theme";
 import { toolRenderers } from "@veyyon/coding-agent/tools/renderers";
+import type { LaunchToolDetails } from "@veyyon/coding-agent/tools/shell/launch";
 import { sanitizeText } from "@veyyon/utils";
+
+/**
+ * The card the registry draws for `launch`, which is the one a rebuilt transcript reaches.
+ *
+ * The tool describes a `ToolView` now, so the drawing under test is the terminal's mapping of that
+ * view rather than a renderer the tool owns: taking the entry rather than importing a module keeps
+ * this suite on the path a card actually takes.
+ */
+const launchToolRenderer = toolRenderers.launch;
 
 async function theme() {
 	const t = await getThemeByName("dark");
@@ -37,8 +46,9 @@ const daemon = (overrides: Partial<DaemonSnapshot>): DaemonSnapshot => ({
 
 describe("launchToolRenderer", () => {
 	it("is registered with merged call/result so the pending header is replaced, not stacked", () => {
-		expect(Object.is(toolRenderers.launch.renderResult, launchToolRenderer.renderResult)).toBe(true);
 		expect(toolRenderers.launch.mergeCallAndResult).toBe(true);
+		expect(typeof toolRenderers.launch.renderCall).toBe("function");
+		expect(typeof toolRenderers.launch.renderResult).toBe("function");
 	});
 
 	it("folds a stop result into one header with op, name, and exit state", async () => {
@@ -79,9 +89,13 @@ describe("launchToolRenderer", () => {
 		);
 		expect(rendered[0]).toContain("Launch logs");
 		expect(rendered[0]).toContain("cursor 2210");
-		expect(rendered[0]).toContain("┌");
+		// A block hangs every row on one rail, the title row included, so the block
+		// has a single left edge from its first row to its last. The box glyphs this
+		// used to assert are a shape the product no longer draws.
+		expect(rendered[0]).not.toContain("┌");
+		expect(rendered.at(-1)).not.toContain("└");
+		expect(rendered[0]!.trimStart().startsWith(uiTheme.symbol("block.rail"))).toBe(true);
 		expect(rendered[1]).toContain("Output");
-		expect(rendered.at(-1)).toContain("└");
 
 		// The log body, in order and complete. Two `some(...)` checks asserted the
 		// lines existed somewhere and a third asserted the `[web: running; ...]`
@@ -89,9 +103,12 @@ describe("launchToolRenderer", () => {
 		// order, which is the one thing a log tail has to get right. Reading the
 		// body out as an array proves the ordering and the suffix stripping at
 		// once: a line that survived would have to appear here.
+		const rail = uiTheme.symbol("block.rail");
 		const body = rendered
-			.filter(line => line.startsWith("│"))
-			.map(line => line.replace(/^│\s?/, "").replace(/\s*│$/, "").trimEnd());
+			.slice(1)
+			.filter(line => line.trimStart().startsWith(rail))
+			.map(line => line.trimStart().slice(rail.length).trim())
+			.filter(line => line.length > 0 && line !== "Output");
 
 		expect(body).toEqual(["line one", "line two"]);
 	});
@@ -152,8 +169,10 @@ describe("launchToolRenderer", () => {
 		// a renderer that kept svc-3 through svc-10 and dropped the first three
 		// satisfied every one of them, and so did one that put the more-row first.
 		// Each row's uptime is derived from the clock, so the row IDENTITY is read
-		// out rather than the whole line.
-		const rows = rendered.slice(1).map(line => line.split(" ")[0]);
+		// out rather than the whole line, and the leading indent is dropped first:
+		// the terminal sets a headed block's lines two columns in under the row that
+		// names them, where the hand-written renderer left them in column zero.
+		const rows = rendered.slice(1).map(line => line.trim().split(" ")[0]);
 
 		expect(rows).toEqual(["svc-0", "svc-1", "svc-2", "svc-3", "svc-4", "svc-5", "svc-6", "svc-7", "…"]);
 		expect(rendered.at(-1)).toContain("3 more processes");
@@ -211,5 +230,53 @@ describe("launchToolRenderer", () => {
 		expect(rendered.some(line => line.includes("port 3100 on 127.0.0.1 never accepted connections"))).toBe(true);
 		// The old render labeled the log match a bare "ready:" while also saying readiness timed out.
 		expect(rendered.some(line => line.includes("ready: Local:"))).toBe(false);
+	});
+
+	/**
+	 * WHY: the pending header interpolated `args.name ?? command` straight into
+	 * the status description, and a failure pushed one row per line of whatever
+	 * the process printed. A `launch start` of a long command line therefore
+	 * drew a header wider than any terminal, and a daemon that died with a
+	 * hundred-line trace filled the transcript with it before anyone asked to
+	 * see it. Both bounds are the display contract every other tool follows.
+	 *
+	 * Not caught: the expanded error view is deliberately unbounded, because an
+	 * operator who expands a failure is asking for the whole trace.
+	 */
+	it("truncates a long launch target in the pending header", async () => {
+		const uiTheme = await theme();
+		const command = `bunx ${"--define=SOME_VERY_LONG_FLAG_NAME=1 ".repeat(20)}vite`;
+		const [header] = lines(
+			launchToolRenderer.renderCall(
+				{ op: "start", application: command },
+				{ expanded: false, isPartial: false },
+				uiTheme,
+			),
+		);
+		expect(header!.length).toBeLessThan(command.length);
+		expect(header).toContain("…");
+	});
+
+	it("collapses a long failure to a few lines with a count of the rest", async () => {
+		const uiTheme = await theme();
+		const trace = Array.from({ length: 40 }, (_, i) => `    at frame ${i}`).join("\n");
+		const render = (expanded: boolean) =>
+			lines(
+				launchToolRenderer.renderResult(
+					{ content: [{ type: "text", text: trace }], isError: true, details: { op: "start" } },
+					{ expanded, isPartial: false },
+					uiTheme,
+					{ op: "start", name: "web" },
+				),
+			);
+
+		const collapsed = render(false);
+		expect(collapsed.length).toBeLessThan(10);
+		expect(collapsed.some(line => line.includes("more line"))).toBe(true);
+		expect(collapsed.some(line => line.includes("at frame 39"))).toBe(false);
+
+		// Expanding is the request for the whole trace, so nothing is withheld.
+		const expanded = render(true);
+		expect(expanded.some(line => line.includes("at frame 39"))).toBe(true);
 	});
 });

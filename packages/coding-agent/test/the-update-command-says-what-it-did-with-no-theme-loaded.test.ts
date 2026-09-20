@@ -3,11 +3,12 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { VERSION } from "@veyyon/utils";
 
 /**
  * Every line `veyyon update` prints must print with no theme loaded.
  *
- * THE DEFECT. `theme` is `export var theme: Theme` in `modes/theme/theme-binding.ts`
+ * THE DEFECT. `theme` is `export var theme: Theme` in `theme/theme-binding.ts`
  * and holds `undefined` until `initTheme()` assigns it. The update path formatted
  * two of its messages straight off it — the success line after a completed swap and
  * "Already up to date" — so a caller that drives the update flow without loading a
@@ -38,7 +39,7 @@ import * as path from "node:path";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "../../..");
 const UPDATE_CLI = path.join(REPO_ROOT, "packages/coding-agent/src/cli/update-cli.ts");
-const THEME_BINDING = path.join(REPO_ROOT, "packages/coding-agent/src/modes/theme/theme-binding.ts");
+const THEME_BINDING = path.join(REPO_ROOT, "packages/coding-agent/src/theme/theme-binding.ts");
 
 /**
  * A stand-in release binary answering the three questions `verifyBinaryUsable`
@@ -138,21 +139,21 @@ await updateViaBinaryAt(${JSON.stringify(target)}, "2.0.0", line => console.log(
 	const branches: { name: string; version: string; opts: string; expect: string }[] = [
 		{
 			name: "already up to date",
-			version: "0.0.1",
+			version: VERSION,
 			opts: "{ force: false, check: false }",
 			expect: "✓ Already up to date",
 		},
 		{
 			name: "up to date, --check with --force",
-			version: "0.0.1",
+			version: VERSION,
 			opts: "{ force: true, check: true }",
-			expect: "Up to date at 0.0.1; --force would reinstall it",
+			expect: `Up to date at ${VERSION}; --force would reinstall it`,
 		},
 		{
 			name: "up to date, --force reinstalls",
-			version: "0.0.1",
+			version: VERSION,
 			opts: "{ force: true, check: false }",
-			expect: "Forcing reinstall of 0.0.1",
+			expect: `Forcing reinstall of ${VERSION}`,
 		},
 		{
 			name: "a newer release is available",

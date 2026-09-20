@@ -2,6 +2,9 @@ import { EDIT_MODES } from "../../utils/edit-mode";
 import { DEFAULT_BASH_INTERCEPTOR_RULES } from "../bash-interceptor-rules";
 import { EMPTY_STRING_ARRAY, EMPTY_STRING_RECORD } from "./shared";
 
+/** What one turn that changed files owes before it may finish. */
+export const AFTER_EDIT_CHECKS = ["verify", "review", "off"] as const;
+
 /** Editing domain slice of SETTINGS_SCHEMA — composed in ../settings-schema.ts. */
 export const EDITING_SETTINGS = {
 	// ────────────────────────────────────────────────────────────────────────
@@ -26,12 +29,12 @@ export const EDITING_SETTINGS = {
 	// outranking `edit.mode` for any model whose id contains the pattern.
 	//
 	// Declared here and not only read: it is an operator-facing knob that
-	// production consults on every edit and that docs/environment-variables.md
+	// production consults on every edit and that docs/handbook/src/reference/environment-complete.md
 	// tells operators outranks `edit.mode`, yet it was absent from the schema,
 	// so it had no type, no validated shape, no default, and no row in the
 	// generated reference. No `ui` block, because a pattern-to-mode table is not
 	// something the settings selector can edit; it lives in the
-	// configuration-file section of docs/settings-reference.md.
+	// configuration-file section of docs/handbook/src/reference/settings-reference.md.
 	"edit.modelVariants": { type: "record", default: EMPTY_STRING_RECORD },
 
 	"edit.fuzzyMatch": {
@@ -84,6 +87,22 @@ export const EDITING_SETTINGS = {
 		},
 	},
 
+	// One pass at most, never both: the verification reminder asks for execution
+	// evidence the review reminder already subsumes, and running them in turn
+	// spent two forced continuations on one turn.
+	"edit.afterEdit": {
+		type: "enum",
+		values: AFTER_EDIT_CHECKS,
+		default: "verify",
+		ui: {
+			tab: "files",
+			group: "Editing",
+			label: "After an Edit",
+			description:
+				"What happens when a turn ends having changed files: verify runs one check when none followed the last edit, review reads back every file the turn changed and judges correctness, maintainability and cross-file contracts, off ends the turn where the model ends it",
+		},
+	},
+
 	readLineNumbers: {
 		type: "boolean",
 		default: false,
@@ -102,7 +121,8 @@ export const EDITING_SETTINGS = {
 			tab: "files",
 			group: "Reading",
 			label: "Default Read Limit",
-			description: "Default number of lines returned when agent calls read without a limit",
+			description:
+				"Line count returned when read is called without one. The window also stops at the tool output budget, so a file of long lines returns fewer lines than this",
 			options: [
 				{ value: "200", label: "200 lines" },
 				{ value: "300", label: "300 lines" },
@@ -193,7 +213,7 @@ export const EDITING_SETTINGS = {
 			group: "Read Summaries",
 			label: "Read Summary Unfold Ceiling",
 			description:
-				"Hard ceiling on summary size while BFS-unfolding. An unfold whose revealed lines would exceed this is skipped (that span stays folded) and unfolding continues with the remaining spans.",
+				"Maximum number of lines a structural summary may grow to while folded spans are revealed. A span whose lines would exceed it stays folded and the next span is tried.",
 		},
 	},
 
@@ -218,22 +238,38 @@ export const EDITING_SETTINGS = {
 		ui: {
 			tab: "files",
 			group: "LSP",
-			label: "Enable LSP",
-			description: "Enable the lsp tool for code intelligence (definitions, references, diagnostics, rename)",
+			label: "Language Servers",
+			keywords: ["lsp", "tool", "diagnostics", "inject", "format", "enter"],
+			description:
+				"Start language servers. Files → LSP is the row you enter; this switch and the others on that page (agent tool, diagnostics after write, diagnostics after edit, format after write) are independent once servers are running.",
 		},
 	},
 
-	// The five knobs below only mean something while a language server runs, so
-	// each is conditioned on the master above. `lsp.enabled` ships off, and the
-	// five rendered anyway: a Files tab offering "Format on Write" and three
-	// diagnostics rules to a session with no server at all.
+	// Every row below only means something while a language server runs, so each
+	// is conditioned on the master above. `lsp.enabled` ships off; without that
+	// condition these would still render: a Files tab offering format-on-write
+	// and diagnostics injection to a session with no server at all.
+	"lsp.tool": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "files",
+			group: "LSP",
+			label: "Agent Tool",
+			condition: "lspEnabled",
+			keywords: ["lsp tool", "definitions", "rename"],
+			description:
+				"Give the agent the lsp tool (definitions, references, rename, query diagnostics). Off keeps servers for format and injected diagnostics only.",
+		},
+	},
+
 	"lsp.lazy": {
 		type: "boolean",
 		default: true,
 		ui: {
 			tab: "files",
 			group: "LSP",
-			label: "Lazy LSP Startup",
+			label: "Lazy Startup",
 			condition: "lspEnabled",
 			description:
 				"Start language servers on first use (lsp tool or editing a matching file type) instead of at session startup",
@@ -246,9 +282,10 @@ export const EDITING_SETTINGS = {
 		ui: {
 			tab: "files",
 			group: "LSP",
-			label: "Format on Write",
+			label: "Format after Write",
 			condition: "lspEnabled",
-			description: "Automatically format code files using LSP after writing",
+			description:
+				"Format the file with the language server after the write tool saves it. Independent of the agent tool and of diagnostics.",
 		},
 	},
 
@@ -258,9 +295,11 @@ export const EDITING_SETTINGS = {
 		ui: {
 			tab: "files",
 			group: "LSP",
-			label: "Diagnostics on Write",
+			label: "Diagnostics after Write",
 			condition: "lspEnabled",
-			description: "Return LSP diagnostics after writing code files",
+			keywords: ["inject", "late diagnostics"],
+			description:
+				"After the write tool saves a file, inject language-server diagnostics into the session. Independent of the agent tool.",
 		},
 	},
 
@@ -270,9 +309,11 @@ export const EDITING_SETTINGS = {
 		ui: {
 			tab: "files",
 			group: "LSP",
-			label: "Diagnostics on Edit",
+			label: "Diagnostics after Edit",
 			condition: "lspEnabled",
-			description: "Return LSP diagnostics after editing code files",
+			keywords: ["inject", "late diagnostics"],
+			description:
+				"After the edit tool saves a file, inject language-server diagnostics into the session. Independent of the agent tool.",
 		},
 	},
 

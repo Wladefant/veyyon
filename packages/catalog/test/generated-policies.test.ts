@@ -74,11 +74,11 @@ describe("generated model policies", () => {
 		// Nothing declared on these rows: the stale baked ladder is dropped,
 		// not replaced with an identity-derived one.
 		expect(models[0]?.thinking).toBeUndefined();
-		expect(models[0]?.cost.cacheRead).toBe(0.5);
-		expect(models[0]?.cost.cacheWrite).toBe(6.25);
+		expect(models[0]?.cost?.cacheRead).toBe(0.5);
+		expect(models[0]?.cost?.cacheWrite).toBe(6.25);
 		expect(models[1]?.thinking).toBeUndefined();
-		expect(models[1]?.cost.cacheRead).toBe(0.5);
-		expect(models[1]?.cost.cacheWrite).toBe(6.25);
+		expect(models[1]?.cost?.cacheRead).toBe(0.5);
+		expect(models[1]?.cost?.cacheWrite).toBe(6.25);
 		expect(models[1]?.contextWindow).toBe(1000000);
 		expect(models[2]?.contextWindow).toBe(272000);
 		expect(models[3]?.contextWindow).toBe(272000);
@@ -363,6 +363,15 @@ describe("generated model policies", () => {
 				provider: "litellm",
 				applyPatchToolType: "freeform",
 			}),
+			// Codex discovery declared it for a GPT-6 SKU the version rule does not reach.
+			createSpec({
+				id: "gpt-6-astra",
+				api: "openai-codex-responses",
+				provider: "openai-codex",
+				applyPatchToolType: "freeform",
+			}),
+			// Undeclared GPT-6 on Codex: the version rule still says nothing.
+			createSpec({ id: "gpt-6-astra", api: "openai-codex-responses", provider: "openai-codex" }),
 		];
 
 		applyGeneratedModelPolicies(models);
@@ -371,5 +380,7 @@ describe("generated model policies", () => {
 		expect(models[1]?.applyPatchToolType).toBe("freeform");
 		expect(models[2]?.applyPatchToolType).toBeUndefined();
 		expect(models[3]?.applyPatchToolType).toBeUndefined();
+		expect(models[4]?.applyPatchToolType).toBe("freeform");
+		expect(models[5]?.applyPatchToolType).toBeUndefined();
 	});
 });

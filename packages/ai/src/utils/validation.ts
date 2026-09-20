@@ -24,7 +24,7 @@
  */
 import { structuredCloneJSON } from "@veyyon/utils/json";
 import { isRecord } from "@veyyon/utils/type-guards";
-import { type Type, type } from "arktype";
+import type { Type } from "arktype";
 import type { ZodType } from "zod/v4";
 import type { $ZodIssue as ZodIssue } from "zod/v4/core";
 import { ARG_KEY_CLOSE, ARG_KEY_OPEN, ARG_VALUE_CLOSE, ARG_VALUE_OPEN, TOOL_CALL_CLOSE } from "../dialect/wire-tags";
@@ -37,7 +37,7 @@ import {
 	validateJsonSchemaValue,
 } from "./schema/json-schema-validator";
 import { stamp } from "./schema/stamps";
-import { arkToWireSchema, isArkSchema, isZodSchema, zodToWireSchema } from "./schema/wire";
+import { arkToWireSchema, isArkErrors, isArkSchema, isZodSchema, zodToWireSchema } from "./schema/wire";
 
 // ============================================================================
 // Type Coercion Utilities
@@ -776,7 +776,7 @@ function normalizeOptionalNullsForSchema(
 			const normalized = normalizeOptionalNullsForSchema(itemSchema, value[i], false);
 			if (!normalized.changed) continue;
 			if (!changed) {
-				nextValue = [...value];
+				nextValue = value.slice();
 				changed = true;
 			}
 			nextValue[i] = normalized.value;
@@ -909,7 +909,9 @@ function normalizeEnumStringWhitespace(
 		if (refs.has(ref)) return { value, changed: false };
 		const resolved = resolveLocalJsonSchemaRef(root, ref);
 		if (resolved === undefined) return { value, changed: false };
-		return normalizeEnumStringWhitespace(resolved, value, root, new Set([...refs, ref]));
+		const nextRefs = new Set(refs);
+		nextRefs.add(ref);
+		return normalizeEnumStringWhitespace(resolved, value, root, nextRefs);
 	}
 
 	const branchMatches = (branch: unknown, candidate: unknown): boolean => {
@@ -979,7 +981,7 @@ function normalizeEnumStringWhitespace(
 				const normalized = normalizeEnumStringWhitespace(itemSchema, value[i], root, refs);
 				if (!normalized.changed) continue;
 				if (!changed) {
-					nextValue = [...value];
+					nextValue = value.slice();
 					changed = true;
 				}
 				nextValue[i] = normalized.value;
@@ -993,7 +995,7 @@ function normalizeEnumStringWhitespace(
 				const normalized = normalizeEnumStringWhitespace(itemSchema, nextValue[i], root, refs);
 				if (!normalized.changed) continue;
 				if (!changed) {
-					nextValue = [...value];
+					nextValue = value.slice();
 					changed = true;
 				}
 				nextValue[i] = normalized.value;
@@ -1100,6 +1102,28 @@ function trimIdentifierStringLeaf(input: unknown): unknown {
  */
 const MAX_VALUE_WALK_DEPTH = 64;
 
+type ValueWalk = (value: unknown, depth: number) => { value: unknown; changed: boolean };
+
+/**
+ * Applies `walk` to every element of `value` one level deeper, copying the
+ * array only once the first element changes so an untouched array is returned
+ * by identity. Shared by the two schema-agnostic walks below.
+ */
+function walkArrayElements(value: unknown[], depth: number, walk: ValueWalk): { value: unknown; changed: boolean } {
+	let changed = false;
+	let next = value;
+	for (let i = 0; i < value.length; i += 1) {
+		const normalized = walk(value[i], depth + 1);
+		if (!normalized.changed) continue;
+		if (!changed) {
+			next = value.slice();
+			changed = true;
+		}
+		next[i] = normalized.value;
+	}
+	return { value: changed ? next : value, changed };
+}
+
 /**
  * Recursively strip trailing line terminators from string values whose property
  * key matches {@link IDENTIFIER_STRING_KEYS}. Runs by property name only
@@ -1108,20 +1132,7 @@ const MAX_VALUE_WALK_DEPTH = 64;
  */
 function normalizeIdentifierStringWhitespace(value: unknown, depth = 0): { value: unknown; changed: boolean } {
 	if (depth >= MAX_VALUE_WALK_DEPTH) return { value, changed: false };
-	if (Array.isArray(value)) {
-		let changed = false;
-		let next = value;
-		for (let i = 0; i < value.length; i += 1) {
-			const normalized = normalizeIdentifierStringWhitespace(value[i], depth + 1);
-			if (!normalized.changed) continue;
-			if (!changed) {
-				next = [...value];
-				changed = true;
-			}
-			next[i] = normalized.value;
-		}
-		return { value: changed ? next : value, changed };
-	}
+	if (Array.isArray(value)) return walkArrayElements(value, depth, normalizeIdentifierStringWhitespace);
 
 	if (value === null || typeof value !== "object") return { value, changed: false };
 
@@ -1198,20 +1209,7 @@ function decodeDoubleEncodedKey(key: string): string | null {
  */
 function normalizeDoubleEncodedKeys(value: unknown, depth = 0): { value: unknown; changed: boolean } {
 	if (depth >= MAX_VALUE_WALK_DEPTH) return { value, changed: false };
-	if (Array.isArray(value)) {
-		let changed = false;
-		let next = value;
-		for (let i = 0; i < value.length; i += 1) {
-			const normalized = normalizeDoubleEncodedKeys(value[i], depth + 1);
-			if (!normalized.changed) continue;
-			if (!changed) {
-				next = [...value];
-				changed = true;
-			}
-			next[i] = normalized.value;
-		}
-		return { value: changed ? next : value, changed };
-	}
+	if (Array.isArray(value)) return walkArrayElements(value, depth, normalizeDoubleEncodedKeys);
 
 	if (value === null || typeof value !== "object") return { value, changed: false };
 
@@ -1361,7 +1359,7 @@ function normalizeStringEncodedArrayUnions(schema: unknown, value: unknown): { v
 			const normalized = normalizeStringEncodedArrayUnions(itemSchema, value[i]);
 			if (!normalized.changed) continue;
 			if (!changed) {
-				nextValue = [...value];
+				nextValue = value.slice();
 				changed = true;
 			}
 			nextValue[i] = normalized.value;
@@ -1485,7 +1483,7 @@ function mapZodExpectedToJsonSchemaType(expected: unknown): string | null {
 function flattenIssues(issues: ReadonlyArray<ZodIssue>): FlatIssue[] {
 	const out: FlatIssue[] = [];
 	const walk = (issue: ZodIssue, prefix: ReadonlyArray<PropertyKey>, unionBranch: boolean): void => {
-		const fullPath = prefix.length === 0 ? issue.path : [...prefix, ...issue.path];
+		const fullPath = prefix.length === 0 ? issue.path : prefix.concat(issue.path);
 		if (issue.code === "invalid_type") {
 			const mapped = mapZodExpectedToJsonSchemaType((issue as { expected?: unknown }).expected);
 			if (mapped) {
@@ -1498,7 +1496,7 @@ function flattenIssues(issues: ReadonlyArray<ZodIssue>): FlatIssue[] {
 			for (const key of keys) {
 				out.push({
 					keyword: "unrecognized",
-					instancePath: pathToPointer([...fullPath, key]),
+					instancePath: pathToPointer(fullPath.concat([key])),
 					expectedTypes: [],
 					unionBranch,
 				});
@@ -1684,7 +1682,7 @@ function validateContext(ctx: ValidationContext, value: unknown): ContextValidat
 
 	if (ctx.kind === "arktype") {
 		const out = ctx.ark(value);
-		if (!(out instanceof type.errors)) {
+		if (!isArkErrors(out)) {
 			return { success: true, value: preserveUnknownRootFields(value, out) };
 		}
 		// A `.narrow()`/cross-field failure can have ArkType reject while the wire
@@ -1855,7 +1853,7 @@ function healInbandArgSpill(value: unknown): { value: unknown; changed: boolean 
 		const split = splitSpilledValue(entry);
 		if (!split) continue;
 		out[key] = split.head;
-		recovered.push(...split.pairs);
+		for (let pi = 0; pi < split.pairs.length; pi++) recovered.push(split.pairs[pi]!);
 		changed = true;
 	}
 	if (!changed) return { value, changed: false };
@@ -1994,7 +1992,7 @@ function schemaLiteralValues(node: unknown, depth = 0): string[] | undefined {
 		// A branch with no literals (a bare `string`) means the field is not a
 		// closed set, so naming a partial list would mislead.
 		if (!values) return undefined;
-		collected.push(...values);
+		for (let vi = 0; vi < values.length; vi++) collected.push(values[vi]!);
 	}
 	return collected.length > 0 ? collected : undefined;
 }
@@ -2042,9 +2040,65 @@ function annotateIssuesWithAcceptedValues(json: unknown, messages: readonly stri
 	// so a wide rejection spent the whole budget on generic "is required" lines
 	// and cut the one line that names a legal value. The set-naming lines are
 	// the actionable ones; they lead, stably.
-	return [...annotated.filter(line => line.namesTheSet), ...annotated.filter(line => !line.namesTheSet)].map(
-		line => line.message,
-	);
+	return annotated
+		.filter(line => line.namesTheSet)
+		.concat(annotated.filter(line => !line.namesTheSet))
+		.map(line => line.message);
+}
+
+type SchemaNormalizationPass = (json: Record<string, unknown>, value: unknown) => { value: unknown; changed: boolean };
+
+/**
+ * The schema-directed normalizations that precede every validation attempt,
+ * in the order they run.
+ */
+const SCHEMA_NORMALIZATION_PASSES: readonly SchemaNormalizationPass[] = [
+	// Unwrap accidentally double-JSON-encoded object keys before any schema
+	// pass. LLMs sometimes emit `{ "\"op\"": "done" }`, so the property name
+	// arrives quote-wrapped; left alone it reads as an unrecognized key, gets
+	// dropped by the coercion repair, and re-surfaces as a missing-required
+	// error. Running first means every later pass sees the corrected names.
+	(_json, value) => normalizeDoubleEncodedKeys(value),
+	// Strip null/string "null" from optional fields, strip optional empty
+	// strings only when their property schema rejects the explicit value, and
+	// substitute defaults. Handles LLM outputting placeholders for "no value"
+	// even when validation would otherwise pass.
+	normalizeOptionalNullsForSchema,
+	normalizeEnumStringWhitespace,
+	// Strip trailing whitespace from string values on well-known
+	// identifier-like property names (paths, URLs, titles). Some models tack
+	// a newline onto a short-identifier arg from stream artifacts; downstream
+	// tools then either fail to stat the target or annotate a "corrected
+	// from" hint the model misreads as tool corruption.
+	(_json, value) => normalizeIdentifierStringWhitespace(value),
+	// Then re-shape JSON-stringified arrays whose schema accepts both string
+	// and array (e.g. `paths: string | string[]`). Without this, zod accepts
+	// the literal `'["a","b"]'` as a string and downstream tools treat it as
+	// a single path with embedded glob brackets — silent zero results.
+	normalizeStringEncodedArrayUnions,
+	// The unwrapped arrays can hold identifier strings of their own.
+	(_json, value) => normalizeIdentifierStringWhitespace(value),
+	// Single-argument tools (e.g. `edit`): if the model put the lone required
+	// string under a different key, adopt the first string field as that key.
+	normalizeSingleStringField,
+];
+
+/**
+ * Runs {@link SCHEMA_NORMALIZATION_PASSES} over `args`. `validateToolArguments`
+ * runs it once before the first validation; `runCoercionPasses` runs it again
+ * after every issue-driven coercion, because a coercion may unwrap a
+ * JSON-string container and expose fields the earlier run could not reach.
+ */
+function normalizeArgsForSchema(json: Record<string, unknown>, args: unknown): { value: unknown; changed: boolean } {
+	let value = args;
+	let changed = false;
+	for (const pass of SCHEMA_NORMALIZATION_PASSES) {
+		const step = pass(json, value);
+		if (!step.changed) continue;
+		value = step.value;
+		changed = true;
+	}
+	return { value, changed };
 }
 
 /**
@@ -2070,70 +2124,9 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): ToolCall[
 	const ctx = getValidationContext(tool);
 	const { json } = ctx;
 
-	// Always normalize first — strip null/string "null" from optional fields,
-	// strip optional empty strings only when their property schema rejects the
-	// explicit value, and substitute defaults. Handles LLM outputting
-	// placeholders for "no value" even when validation would otherwise pass.
-	let normalizedArgs: unknown = originalArgs;
-	let changed = false;
-
-	// Unwrap accidentally double-JSON-encoded object keys before any schema
-	// pass. LLMs sometimes emit `{ "\"op\"": "done" }`, so the property name
-	// arrives quote-wrapped; left alone it reads as an unrecognized key, gets
-	// dropped by the coercion repair, and re-surfaces as a missing-required
-	// error. Running first means every later pass sees the corrected names.
-	const keyNormalization = normalizeDoubleEncodedKeys(normalizedArgs);
-	if (keyNormalization.changed) {
-		normalizedArgs = keyNormalization.value;
-		changed = true;
-	}
-
-	const initialNormalization = normalizeOptionalNullsForSchema(json, normalizedArgs);
-	if (initialNormalization.changed) {
-		normalizedArgs = initialNormalization.value;
-		changed = true;
-	}
-
-	const enumStringNormalization = normalizeEnumStringWhitespace(json, normalizedArgs);
-	if (enumStringNormalization.changed) {
-		normalizedArgs = enumStringNormalization.value;
-		changed = true;
-	}
-
-	// Strip trailing whitespace from string values on well-known
-	// identifier-like property names (paths, URLs, titles). Some models tack
-	// a newline onto a short-identifier arg from stream artifacts; downstream
-	// tools then either fail to stat the target or annotate a "corrected
-	// from" hint the model misreads as tool corruption.
-	const identifierStringNormalization = normalizeIdentifierStringWhitespace(normalizedArgs);
-	if (identifierStringNormalization.changed) {
-		normalizedArgs = identifierStringNormalization.value;
-		changed = true;
-	}
-
-	// Then re-shape JSON-stringified arrays whose schema accepts both string
-	// and array (e.g. `paths: string | string[]`). Without this, zod accepts
-	// the literal `'["a","b"]'` as a string and downstream tools treat it as
-	// a single path with embedded glob brackets — silent zero results.
-	const stringEncodedArrayNorm = normalizeStringEncodedArrayUnions(json, normalizedArgs);
-	if (stringEncodedArrayNorm.changed) {
-		normalizedArgs = stringEncodedArrayNorm.value;
-		changed = true;
-	}
-
-	const identifierStringNormalizationAfterArray = normalizeIdentifierStringWhitespace(normalizedArgs);
-	if (identifierStringNormalizationAfterArray.changed) {
-		normalizedArgs = identifierStringNormalizationAfterArray.value;
-		changed = true;
-	}
-
-	// Single-argument tools (e.g. `edit`): if the model put the lone required
-	// string under a different key, adopt the first string field as that key.
-	const singleStringNorm = normalizeSingleStringField(json, normalizedArgs);
-	if (singleStringNorm.changed) {
-		normalizedArgs = singleStringNorm.value;
-		changed = true;
-	}
+	const normalization = normalizeArgsForSchema(json, originalArgs);
+	let normalizedArgs: unknown = normalization.value;
+	let changed = normalization.changed;
 
 	let result = validateContext(ctx, normalizedArgs);
 	if (result.success) return result.value as ToolCall["arguments"];
@@ -2218,50 +2211,11 @@ function runCoercionPasses(
 		changed = true;
 
 		// `coerceArgsFromIssues` may have just parsed a JSON-string container at
-		// the root or a nested field, exposing double-encoded keys the initial
-		// pass could not reach. Re-unwrap before the unrecognized-key repair on
-		// the next validation pass would delete them.
-		const keyNormalizationPass = normalizeDoubleEncodedKeys(normalizedArgs);
-		if (keyNormalizationPass.changed) {
-			normalizedArgs = keyNormalizationPass.value;
-		}
-
-		const nullNormalization = normalizeOptionalNullsForSchema(json, normalizedArgs);
-		if (nullNormalization.changed) {
-			normalizedArgs = nullNormalization.value;
-		}
-
-		const enumStringNormalizationPass = normalizeEnumStringWhitespace(json, normalizedArgs);
-		if (enumStringNormalizationPass.changed) {
-			normalizedArgs = enumStringNormalizationPass.value;
-		}
-
-		const identifierStringNormalizationPass = normalizeIdentifierStringWhitespace(normalizedArgs);
-		if (identifierStringNormalizationPass.changed) {
-			normalizedArgs = identifierStringNormalizationPass.value;
-		}
-
-		// Re-run the union-string coercion because `coerceArgsFromIssues` may
-		// have just unwrapped a JSON-stringified object at the root or inside a
-		// nested field — exposing `string | string[]` descendants the initial
-		// pre-validation pass could not reach.
-		const stringEncodedArrayNormPass = normalizeStringEncodedArrayUnions(json, normalizedArgs);
-		if (stringEncodedArrayNormPass.changed) {
-			normalizedArgs = stringEncodedArrayNormPass.value;
-		}
-
-		const identifierStringNormalizationAfterArrayPass = normalizeIdentifierStringWhitespace(normalizedArgs);
-		if (identifierStringNormalizationAfterArrayPass.changed) {
-			normalizedArgs = identifierStringNormalizationAfterArrayPass.value;
-		}
-
-		// Re-run single-string remap: `coerceArgsFromIssues` may have just
-		// unwrapped a JSON-stringified root object, exposing a mislabelled lone
-		// string field the initial pre-pass could not see.
-		const singleStringNormPass = normalizeSingleStringField(json, normalizedArgs);
-		if (singleStringNormPass.changed) {
-			normalizedArgs = singleStringNormPass.value;
-		}
+		// the root or a nested field, exposing double-encoded keys, `string |
+		// string[]` descendants and a mislabelled lone string field the initial
+		// run could not reach. Re-run before the unrecognized-key repair on the
+		// next validation pass would delete them.
+		normalizedArgs = normalizeArgsForSchema(json, normalizedArgs).value;
 
 		result = validateContext(ctx, normalizedArgs);
 	}

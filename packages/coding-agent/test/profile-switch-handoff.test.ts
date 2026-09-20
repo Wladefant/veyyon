@@ -29,18 +29,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createProfile } from "@veyyon/coding-agent/cli/profile-cli";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
-import { InteractiveMode } from "@veyyon/coding-agent/modes/interactive-mode";
-import { initTheme, setTheme, stopThemeWatcher } from "@veyyon/coding-agent/modes/theme/theme";
+import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
 import { executeBuiltinSlashCommand } from "@veyyon/coding-agent/slash-commands/builtin-registry";
+import { initTheme, setTheme, stopThemeWatcher } from "@veyyon/coding-agent/theme/theme";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TUI } from "@veyyon/tui";
 import { postmortem, setProfile, TempDir } from "@veyyon/utils";
-import { VirtualTerminal } from "../../tui/test/virtual-terminal";
+import { VirtualTerminal } from "../../../hosts/terminal/engine/test/virtual-terminal";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../utils/test/helpers/isolated-config-root";
 
 interface SpawnRecord {
@@ -131,7 +131,7 @@ describe("profile switch handoff (atomic teardown + relaunch)", () => {
 			writes.push(data);
 			realWrite(data);
 		});
-		vi.spyOn(createdMode.statusLine, "watchBranch").mockImplementation(() => {});
+		vi.spyOn(createdMode.statusLine, "watchGitState").mockImplementation(() => {});
 
 		// Event timeline: a monotonic sequence stamped on spawn and ui.stop so
 		// the test can assert the child is spawned only after the terminal is
@@ -196,7 +196,7 @@ describe("profile switch handoff (atomic teardown + relaunch)", () => {
 			return realDispose(disposeOptions as never);
 		});
 
-		await createdMode.init({ suppressWelcomeIntro: true });
+		await createdMode.init();
 		await terminal.waitForRender();
 
 		const harness: HandoffHarness = {

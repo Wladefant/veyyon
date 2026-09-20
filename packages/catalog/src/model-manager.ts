@@ -378,7 +378,7 @@ function prepareCacheModelsForStaticMismatch<TApi extends Api>(
 		return [];
 	}
 	if (cacheFingerprintMatches) {
-		return [...models];
+		return models.slice();
 	}
 
 	const droppedIds = ids && ids.length > 0 ? new Set(ids) : undefined;
@@ -400,8 +400,8 @@ function mergeDynamicModels<TApi extends Api>(
 	// Empty-side fast paths: `mergeDynamicModels(base, [])` is the common shape
 	// after we've already merged the first pair, and `(...)` with no base
 	// happens for providers without static catalogs.
-	if (dynamicModels.length === 0) return baseModels.length === 0 ? [] : [...baseModels];
-	if (baseModels.length === 0) return [...dynamicModels];
+	if (dynamicModels.length === 0) return baseModels.length === 0 ? [] : baseModels.slice();
+	if (baseModels.length === 0) return dynamicModels.slice();
 	const merged = new Map<string, Model<TApi>>(baseModels.map(model => [model.id, model]));
 	for (const dynamicModel of dynamicModels) {
 		if (!dynamicModel?.id) {
@@ -465,6 +465,12 @@ function mergeDynamicModel<TApi extends Api>(existingModel: Model<TApi>, dynamic
 	const supportsImage = dynamicInputAuthoritative
 		? dynamicModel.input.includes("image")
 		: existingModel.input.includes("image") || dynamicModel.input.includes("image");
+	const supportsVideo = dynamicInputAuthoritative
+		? dynamicModel.input.includes("video")
+		: existingModel.input.includes("video") || dynamicModel.input.includes("video");
+	const input: ("text" | "image" | "video")[] = ["text"];
+	if (supportsImage) input.push("image");
+	if (supportsVideo) input.push("video");
 	// Re-build from spec stage: sparse compat comes from `compatConfig` (the
 	// verbatim override vocabulary), never the resolved `compat` record.
 	return buildModel({
@@ -481,7 +487,7 @@ function mergeDynamicModel<TApi extends Api>(existingModel: Model<TApi>, dynamic
 				: (dynamicModel.thinking ?? existingModel.thinking),
 		name: preferDiscoveryName(dynamicModel.name, existingModel.name, dynamicModel.id),
 		reasoning: existingModel.reasoning || dynamicModel.reasoning,
-		input: supportsImage ? ["text", "image"] : ["text"],
+		input,
 		cost: {
 			input: preferDiscoveryCost(dynamicModel.cost.input, existingModel.cost.input),
 			output: preferDiscoveryCost(dynamicModel.cost.output, existingModel.cost.output),
@@ -555,6 +561,15 @@ function normalizeModelList<TApi extends Api>(
 	return models;
 }
 
+/** Spec fields that must be non-empty strings, in the order a rejection reports them. */
+const MODEL_SPEC_STRING_FIELDS = ["id", "name", "api", "provider", "baseUrl"] as const;
+
+/** Spec limits that are `null` or a finite positive number, in the order a rejection reports them. */
+const MODEL_SPEC_LIMIT_FIELDS = ["contextWindow", "maxTokens"] as const;
+
+/** Cost fields that must be finite numbers, in the order a rejection reports them. */
+const MODEL_COST_FIELDS = ["input", "output", "cacheRead", "cacheWrite"] as const;
+
 /**
  * The first field that disqualifies `value` as a {@link ModelSpec}, as a dotted path, or `null` if it is one.
  *
@@ -579,20 +594,11 @@ function modelSpecRejection(value: unknown): string | null {
 		contextWindow?: unknown;
 		maxTokens?: unknown;
 	};
-	if (typeof v.id !== "string" || v.id.length === 0) {
-		return "id";
-	}
-	if (typeof v.name !== "string" || v.name.length === 0) {
-		return "name";
-	}
-	if (typeof v.api !== "string" || v.api.length === 0) {
-		return "api";
-	}
-	if (typeof v.provider !== "string" || v.provider.length === 0) {
-		return "provider";
-	}
-	if (typeof v.baseUrl !== "string" || v.baseUrl.length === 0) {
-		return "baseUrl";
+	for (const field of MODEL_SPEC_STRING_FIELDS) {
+		const s = v[field];
+		if (typeof s !== "string" || s.length === 0) {
+			return field;
+		}
 	}
 	if (typeof v.reasoning !== "boolean") {
 		return "reasoning";
@@ -604,25 +610,23 @@ function modelSpecRejection(value: unknown): string | null {
 	if (costField !== null) {
 		return costField;
 	}
-	// Finite positive: NaN > 0 is false, +Infinity < Infinity is false.
-	const cw = v.contextWindow;
-	if (cw !== null && (typeof cw !== "number" || !(cw > 0 && cw < Infinity))) {
-		return "contextWindow";
-	}
-	const mt = v.maxTokens;
-	if (mt !== null && (typeof mt !== "number" || !(mt > 0 && mt < Infinity))) {
-		return "maxTokens";
+	for (const field of MODEL_SPEC_LIMIT_FIELDS) {
+		// Finite positive: NaN > 0 is false, +Infinity < Infinity is false.
+		const n = v[field];
+		if (n !== null && (typeof n !== "number" || !(n > 0 && n < Infinity))) {
+			return field;
+		}
 	}
 	return null;
 }
 
-function isModelInputArray(value: unknown): value is ("text" | "image")[] {
+function isModelInputArray(value: unknown): value is ("text" | "image" | "video")[] {
 	if (!Array.isArray(value) || value.length === 0) {
 		return false;
 	}
 	for (let i = 0; i < value.length; i++) {
 		const item = value[i];
-		if (item !== "text" && item !== "image") {
+		if (item !== "text" && item !== "image" && item !== "video") {
 			return false;
 		}
 	}
@@ -640,23 +644,13 @@ function modelCostRejection(value: unknown): string | null {
 		cacheRead?: unknown;
 		cacheWrite?: unknown;
 	};
-	// Finite (NaN-safe): -Infinity < x < Infinity rejects NaN and both infinities.
-	// Preserves original behavior: 0 and negatives remain valid.
-	const ci = c.input;
-	if (typeof ci !== "number" || !(ci > -Infinity && ci < Infinity)) {
-		return "cost.input";
-	}
-	const co = c.output;
-	if (typeof co !== "number" || !(co > -Infinity && co < Infinity)) {
-		return "cost.output";
-	}
-	const cr = c.cacheRead;
-	if (typeof cr !== "number" || !(cr > -Infinity && cr < Infinity)) {
-		return "cost.cacheRead";
-	}
-	const cw = c.cacheWrite;
-	if (typeof cw !== "number" || !(cw > -Infinity && cw < Infinity)) {
-		return "cost.cacheWrite";
+	for (const field of MODEL_COST_FIELDS) {
+		// Finite (NaN-safe): -Infinity < x < Infinity rejects NaN and both infinities.
+		// Preserves original behavior: 0 and negatives remain valid.
+		const n = c[field];
+		if (typeof n !== "number" || !(n > -Infinity && n < Infinity)) {
+			return `cost.${field}`;
+		}
 	}
 	return null;
 }

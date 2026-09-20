@@ -4,7 +4,7 @@
 // Usage:
 //   bun scripts/test-sandbox/find-test-leaks.ts packages/coding-agent/test        # a directory
 //   bun scripts/test-sandbox/find-test-leaks.ts packages/utils/test/profiles.test.ts
-//   bun scripts/test-sandbox/find-test-leaks.ts --json packages/tui/test
+//   bun scripts/test-sandbox/find-test-leaks.ts --json hosts/terminal/engine/test
 //
 // Why this exists: a full `bun test` run showed roughly twenty failures that
 // vanished when the same files ran alone, and the count moved between runs
@@ -43,7 +43,7 @@ const SKIP_DIRS = new Set(["node_modules", "fixtures"]);
 /**
  * True when git ignores the path, so it is not ours to check.
  *
- * This matters at the top of a tree: `packages/deepswe-bench/repo-cache` is a gitignored
+ * This matters at the top of a tree: `tests/evals/datasets/repo-cache` is a gitignored
  * cache of CLONED EXTERNAL REPOSITORIES and it holds 3,332 `.test.ts` files — more than
  * twice the whole veyyon suite. Walking it would spend hours running other projects'
  * tests and report their leaks as ours. Asking git rather than growing a name list means

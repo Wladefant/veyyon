@@ -18,17 +18,19 @@ import {
 } from "../../lsp";
 import { FileChangeType, notifyWorkspaceWatchedFiles } from "../../lsp/client";
 import type { ToolSession } from "../../tools";
-import { routeWriteThroughBridge } from "../../tools/acp-bridge";
-import { assertEditableFile } from "../../tools/auto-generated-guard";
+import { routeWriteThroughBridge } from "../../tools/core/acp-bridge";
 import {
 	invalidateFsScanAfterDelete,
 	invalidateFsScanAfterRename,
 	invalidateFsScanAfterWrite,
-} from "../../tools/fs-cache-invalidation";
-import { outputMeta } from "../../tools/output-meta";
-import { resolveToCwd } from "../../tools/path-utils";
-import { enforcePlanModeWrite, resolvePlanPath } from "../../tools/plan-mode-guard";
-import { ToolError } from "../../tools/tool-errors";
+} from "../../tools/core/fs-cache-invalidation";
+import { outputMeta } from "../../tools/core/output-meta";
+import { resolveToCwd } from "../../tools/core/path-utils";
+import { enforcePlanModeWrite, resolvePlanPath } from "../../tools/core/plan-mode-guard";
+import type { LspBatchRequest } from "../../tools/core/render-utils";
+import { ToolError } from "../../tools/core/tool-errors";
+import { assertEditableFile } from "../../tools/fs/auto-generated-guard";
+import type { EditToolDetails } from "../details";
 import {
 	ApplyPatchError,
 	type DiffHunk,
@@ -58,7 +60,6 @@ import {
 	stripBom,
 } from "../normalize";
 import { readEditFileText, serializeEditFileText } from "../read-file";
-import type { EditToolDetails, LspBatchRequest } from "../renderer";
 import { pruneOversizedEditSnapshots } from "../snapshot-details";
 
 export type Operation = "create" | "delete" | "update";
@@ -336,7 +337,7 @@ function adjustLinesIndentation(patternLines: string[], actualLines: string[], n
 			} else {
 				// Two+ levels: solve via any two distinct pairs
 				// spaces = tabs * width + offset  =>  width = (s2 - s1) / (t2 - t1)
-				const entries = [...samples.entries()];
+				const entries = Array.from(samples.entries());
 				const [t1, s1] = entries[0];
 				const [t2, s2] = entries[1];
 				if (t1 !== t2) {
@@ -502,7 +503,7 @@ function collapseRepeatedBlocks(oldLines: string[], newLines: string[]): HunkVar
 	const newSet = new Set(newLines);
 	const shared = new Set(oldLines.filter(line => newSet.has(line)));
 	const collapse = (lines: string[]): string[] => {
-		const output = [...lines];
+		const output = lines.slice();
 		let changed = false;
 		let i = 0;
 		while (i < output.length) {
@@ -743,30 +744,8 @@ function findHierarchicalContext(
 		const outer = spaceParts.slice(0, -1).join(" ");
 		const inner = spaceParts[spaceParts.length - 1];
 		const outerResult = findContextLine(lines, outer, startFrom, { allowFuzzy });
-		if (outerResult.matchCount !== undefined && outerResult.matchCount > 1) {
-			return {
-				index: undefined,
-				confidence: outerResult.confidence,
-				matchCount: outerResult.matchCount,
-				matchIndices: outerResult.matchIndices,
-				strategy: outerResult.strategy,
-			};
-		}
-		if (outerResult.index !== undefined) {
-			const innerResult = findContextLine(lines, inner, outerResult.index + 1, { allowFuzzy });
-			if (innerResult.index !== undefined) {
-				return innerResult.matchCount && innerResult.matchCount > 1
-					? { ...innerResult, matchCount: 1, matchIndices: [innerResult.index] }
-					: innerResult;
-			}
-			if (innerResult.matchCount !== undefined && innerResult.matchCount > 1) {
-				return {
-					...innerResult,
-					matchCount: 1,
-					matchIndices: innerResult.index !== undefined ? [innerResult.index] : innerResult.matchIndices,
-				};
-			}
-		}
+		const resolved = resolveInnerAfterOuter(lines, inner, outerResult, allowFuzzy);
+		if (resolved) return resolved;
 	}
 
 	const result = findContextLine(lines, context, startFrom, { allowFuzzy });
@@ -805,37 +784,55 @@ function findHierarchicalContext(
 		const outer = spaceParts.slice(0, -1).join(" ");
 		const inner = spaceParts[spaceParts.length - 1];
 		const outerResult = findContextLine(lines, outer, startFrom, { allowFuzzy });
-
-		if (outerResult.matchCount !== undefined && outerResult.matchCount > 1) {
-			return {
-				index: undefined,
-				confidence: outerResult.confidence,
-				matchCount: outerResult.matchCount,
-				matchIndices: outerResult.matchIndices,
-				strategy: outerResult.strategy,
-			};
-		}
+		const resolved = resolveInnerAfterOuter(lines, inner, outerResult, allowFuzzy);
+		if (resolved) return resolved;
 
 		if (outerResult.index === undefined) {
 			return { index: undefined, confidence: outerResult.confidence };
 		}
-
-		const innerResult = findContextLine(lines, inner, outerResult.index + 1, { allowFuzzy });
-		if (innerResult.index !== undefined) {
-			return innerResult.matchCount && innerResult.matchCount > 1
-				? { ...innerResult, matchCount: 1, matchIndices: [innerResult.index] }
-				: innerResult;
-		}
-		if (innerResult.matchCount !== undefined && innerResult.matchCount > 1) {
-			return {
-				...innerResult,
-				matchCount: 1,
-				matchIndices: innerResult.index !== undefined ? [innerResult.index] : innerResult.matchIndices,
-			};
-		}
 	}
 
 	return result;
+}
+
+/**
+ * The second level of a space-separated hierarchical context: `inner` is
+ * searched after the line `outerResult` matched. Returns the ambiguity of the
+ * outer match, the inner match, or the inner match's ambiguity pinned to its
+ * first index; undefined when the outer line did not match once or the inner
+ * line matched nothing, which the caller falls back from.
+ */
+function resolveInnerAfterOuter(
+	lines: string[],
+	inner: string,
+	outerResult: ContextLineResult,
+	allowFuzzy: boolean,
+): ContextLineResult | undefined {
+	if (outerResult.matchCount !== undefined && outerResult.matchCount > 1) {
+		return {
+			index: undefined,
+			confidence: outerResult.confidence,
+			matchCount: outerResult.matchCount,
+			matchIndices: outerResult.matchIndices,
+			strategy: outerResult.strategy,
+		};
+	}
+	if (outerResult.index === undefined) return undefined;
+
+	const innerResult = findContextLine(lines, inner, outerResult.index + 1, { allowFuzzy });
+	if (innerResult.index !== undefined) {
+		return innerResult.matchCount && innerResult.matchCount > 1
+			? { ...innerResult, matchCount: 1, matchIndices: [innerResult.index] }
+			: innerResult;
+	}
+	if (innerResult.matchCount !== undefined && innerResult.matchCount > 1) {
+		return {
+			...innerResult,
+			matchCount: 1,
+			matchIndices: innerResult.index !== undefined ? [innerResult.index] : innerResult.matchIndices,
+		};
+	}
+	return undefined;
 }
 
 /** Find sequence with optional hint position, returning full search result */
@@ -1181,12 +1178,12 @@ function computeReplacements(
 				}
 			}
 
-			replacements.push({ startIndex: insertionIdx, oldLen: 0, newLines: [...hunk.newLines] });
+			replacements.push({ startIndex: insertionIdx, oldLen: 0, newLines: hunk.newLines.slice() });
 			continue;
 		}
 
 		// Try to find the old lines in the file
-		let pattern = [...hunk.oldLines];
+		let pattern = hunk.oldLines.slice();
 		const matchHint = getHunkHintIndex(hunk, lineIndex);
 		let searchResult = findSequenceWithHint(
 			originalLines,
@@ -1196,7 +1193,7 @@ function computeReplacements(
 			hunk.isEndOfFile,
 			allowFuzzy,
 		);
-		let newSlice = [...hunk.newLines];
+		let newSlice = hunk.newLines.slice();
 
 		// Retry without trailing empty line if present
 		if (searchResult.index === undefined && pattern.length > 0 && pattern[pattern.length - 1] === "") {
@@ -1414,7 +1411,7 @@ function computeReplacements(
  * Apply replacements to lines, returning the modified content.
  */
 function applyReplacements(lines: string[], replacements: Replacement[]): string[] {
-	const result = [...lines];
+	const result = lines.slice();
 
 	// Apply in reverse order to maintain indices
 	for (let i = replacements.length - 1; i >= 0; i--) {
@@ -1761,7 +1758,7 @@ class LspFileSystem implements FileSystem {
 
 	async delete(path: string): Promise<void> {
 		await this.#getFile(path).unlink();
-		if (this.session.enableLsp ?? true) {
+		if ((this.session.enableLsp ?? true) && this.session.settings.get("lsp.enabled")) {
 			await notifyWorkspaceWatchedFiles(
 				this.session.cwd,
 				[{ filePath: path, type: FileChangeType.Deleted }],
@@ -1795,7 +1792,7 @@ function mergeDiagnosticsWithWarnings(
 	}
 	return {
 		...diagnostics,
-		messages: [...warningMessages, ...diagnostics.messages],
+		messages: warningMessages.concat(diagnostics.messages),
 		summary: `${diagnostics.summary}; Patch warnings: ${warnings.length}`,
 	};
 }

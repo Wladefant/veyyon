@@ -164,6 +164,12 @@ describe("EDIT_MODE_STRATEGIES.matcherEntries", () => {
 		expect(EDIT_MODE_STRATEGIES.hashline.matcherEntries({ input: "" })).toBeUndefined();
 		expect(EDIT_MODE_STRATEGIES.apply_patch.matcherEntries({ input: "*** Begin Patch\n" })).toBeUndefined();
 		expect(EDIT_MODE_STRATEGIES.replace.matcherEntries({})).toBeUndefined();
+		// A path with no digest yet, and a digest with no path, both fall back.
+		expect(EDIT_MODE_STRATEGIES.replace.matcherEntries({ path: "src/foo.ts", edits: [] })).toBeUndefined();
+		expect(
+			EDIT_MODE_STRATEGIES.patch.matcherEntries({ path: "", edits: [{ op: "update", diff: "@@\n+y" }] }),
+		).toBeUndefined();
+		expect(EDIT_MODE_STRATEGIES.hashline.matcherEntries({ input: "SWAP 1.=1:\n+x" })).toBeUndefined();
 	});
 });
 
@@ -174,9 +180,13 @@ describe("EDIT_MODE_STRATEGIES.matcherEntries", () => {
  * outputs feed `TtsrManager.checkSnapshot` the same way `AgentSession`'s
  * TTSR pipeline does after the fix.
  */
-import { getCapability } from "@veyyon/coding-agent/capability";
-import { BUILTIN_DEFAULTS_PROVIDER_ID, type Rule, ruleCapability } from "@veyyon/coding-agent/capability/rule";
-import type { LoadContext } from "@veyyon/coding-agent/capability/types";
+import { getCapability } from "@veyyon/coding-agent/discovery/capability";
+import {
+	BUILTIN_DEFAULTS_PROVIDER_ID,
+	type Rule,
+	ruleCapability,
+} from "@veyyon/coding-agent/discovery/capability/rule";
+import type { LoadContext } from "@veyyon/coding-agent/discovery/capability/types";
 // Register all discovery providers as a side effect.
 import "@veyyon/coding-agent/discovery";
 import { TtsrManager } from "@veyyon/coding-agent/export/ttsr";

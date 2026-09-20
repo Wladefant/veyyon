@@ -5,6 +5,7 @@ import type {
 	ProviderPayload,
 	TextContent,
 	ToolResultMessage,
+	VideoContent,
 } from "@veyyon/ai";
 import * as prompt from "@veyyon/utils/prompt";
 import { AGENT_PROMPTS } from "../prompts/registry";
@@ -40,7 +41,7 @@ function withoutSummaryPresentationTags(summary: string): string {
 export interface CustomMessage<T = unknown> {
 	role: "custom";
 	customType: string;
-	content: string | (TextContent | ImageContent)[];
+	content: string | (TextContent | ImageContent | VideoContent)[];
 	display: boolean;
 	details?: T;
 	/** Who initiated this message for billing/attribution semantics. */
@@ -49,15 +50,8 @@ export interface CustomMessage<T = unknown> {
 }
 
 /** Legacy hook message type (pre-extensions). Kept for session migration. */
-export interface HookMessage<T = unknown> {
+export interface HookMessage<T = unknown> extends Omit<CustomMessage<T>, "role"> {
 	role: "hookMessage";
-	customType: string;
-	content: string | (TextContent | ImageContent)[];
-	display: boolean;
-	details?: T;
-	/** Who initiated this message for billing/attribution semantics. */
-	attribution?: MessageAttribution;
-	timestamp: number;
 }
 
 export interface BranchSummaryMessage {
@@ -83,7 +77,7 @@ export interface CompactionSummaryMessage {
 	/** Legacy runtime-only archive blocks from the removed image-archive engine:
 	 *  old text region, imaged middle, then new text region. Never written by new
 	 *  sessions; retained so old persisted summaries still deserialize and count. */
-	blocks?: (TextContent | ImageContent)[];
+	blocks?: (TextContent | ImageContent | VideoContent)[];
 	/** Legacy image-archive blocks, kept for display counts / old-session consumers. */
 	images?: ImageContent[];
 	/** Post-pass dead-end warning attached to this compaction (progress guard). */
@@ -93,7 +87,7 @@ export interface CompactionSummaryMessage {
 
 export type CoreCompactionMessage = CustomMessage | HookMessage | BranchSummaryMessage | CompactionSummaryMessage;
 
-declare module "../types" {
+declare module "@veyyon/session" {
 	interface CustomAgentMessages {
 		custom: CustomMessage;
 		hookMessage: HookMessage;
@@ -103,7 +97,7 @@ declare module "../types" {
 }
 export type ConvertToLlm = (messages: AgentMessage[]) => Message[];
 
-function getPrunedToolResultContent(message: ToolResultMessage): (TextContent | ImageContent)[] {
+function getPrunedToolResultContent(message: ToolResultMessage): (TextContent | ImageContent | VideoContent)[] {
 	if (message.prunedAt === undefined) {
 		return message.content;
 	}
@@ -136,7 +130,7 @@ export function createCompactionSummaryMessage(
 	shortSummary?: string,
 	providerPayload?: ProviderPayload,
 	images?: ImageContent[],
-	blocks?: (TextContent | ImageContent)[],
+	blocks?: (TextContent | ImageContent | VideoContent)[],
 	warning?: string,
 	compactedBy?: string,
 ): CompactionSummaryMessage {
@@ -159,7 +153,7 @@ export function createCompactionSummaryMessage(
 
 export function createCustomMessage(
 	customType: string,
-	content: string | (TextContent | ImageContent)[],
+	content: string | (TextContent | ImageContent | VideoContent)[],
 	display: boolean,
 	details: unknown | undefined,
 	timestamp: string,
@@ -185,6 +179,62 @@ function isCoreCompactionMessage(message: AgentMessage): message is AgentMessage
 	);
 }
 
+interface CachedConvertedUserMessage {
+	role: "user";
+	converted: Message;
+	attribution: MessageAttribution | undefined;
+	content: unknown;
+}
+
+interface CachedConvertedDeveloperMessage {
+	role: "developer";
+	converted: Message;
+	attribution: MessageAttribution | undefined;
+	content: unknown;
+}
+
+interface CachedConvertedToolResultMessage {
+	role: "toolResult";
+	converted: Message;
+	attribution: MessageAttribution | undefined;
+	content: unknown;
+	prunedAt: number | undefined;
+	isError: boolean | undefined;
+	toolCallId: string;
+}
+
+interface CachedConvertedCustomMessage {
+	role: "custom" | "hookMessage";
+	converted: Message;
+	attribution: MessageAttribution | undefined;
+	content: unknown;
+}
+
+interface CachedConvertedBranchSummaryMessage {
+	role: "branchSummary";
+	converted: Message;
+	summary: string;
+}
+
+interface CachedConvertedCompactionSummaryMessage {
+	role: "compactionSummary";
+	converted: Message;
+	summary: string;
+	blocks: unknown;
+	images: unknown;
+	providerPayload: unknown;
+}
+
+type CachedConvertedMessage =
+	| CachedConvertedUserMessage
+	| CachedConvertedDeveloperMessage
+	| CachedConvertedToolResultMessage
+	| CachedConvertedCustomMessage
+	| CachedConvertedBranchSummaryMessage
+	| CachedConvertedCompactionSummaryMessage;
+
+const convertedMessageCache = new WeakMap<AgentMessage, CachedConvertedMessage>();
+
 /**
  * Transform a single core-domain agent message to its LLM form; `undefined`
  * drops it from the provider request.
@@ -200,19 +250,38 @@ export function convertMessageToLlm(message: AgentMessage): Message | undefined 
 		switch (message.role) {
 			case "custom":
 			case "hookMessage": {
+				const cached = convertedMessageCache.get(message);
+				if (
+					cached?.role === message.role &&
+					cached.attribution === message.attribution &&
+					cached.content === message.content
+				) {
+					return cached.converted;
+				}
 				const content =
 					typeof message.content === "string"
 						? [{ type: "text" as const, text: message.content }]
 						: message.content;
-				return {
+				const converted: Message = {
 					role: "developer",
 					content,
 					attribution: message.attribution,
 					timestamp: message.timestamp,
 				};
+				convertedMessageCache.set(message, {
+					role: message.role,
+					converted,
+					attribution: message.attribution,
+					content: message.content,
+				});
+				return converted;
 			}
-			case "branchSummary":
-				return {
+			case "branchSummary": {
+				const cached = convertedMessageCache.get(message);
+				if (cached?.role === "branchSummary" && cached.summary === message.summary) {
+					return cached.converted;
+				}
+				const converted: Message = {
 					role: "developer",
 					content: [
 						{
@@ -221,10 +290,28 @@ export function convertMessageToLlm(message: AgentMessage): Message | undefined 
 						},
 					],
 					attribution: "agent",
+					historyRewriteAt: message.timestamp,
 					timestamp: message.timestamp,
 				};
-			case "compactionSummary":
-				return {
+				convertedMessageCache.set(message, {
+					role: "branchSummary",
+					converted,
+					summary: message.summary,
+				});
+				return converted;
+			}
+			case "compactionSummary": {
+				const cached = convertedMessageCache.get(message);
+				if (
+					cached?.role === "compactionSummary" &&
+					cached.summary === message.summary &&
+					cached.blocks === message.blocks &&
+					cached.images === message.images &&
+					cached.providerPayload === message.providerPayload
+				) {
+					return cached.converted;
+				}
+				const converted: Message = {
 					role: "user",
 					content:
 						message.blocks !== undefined
@@ -247,25 +334,91 @@ export function convertMessageToLlm(message: AgentMessage): Message | undefined 
 									...(message.images ?? []),
 								],
 					attribution: "agent",
+					historyRewriteAt: message.timestamp,
 					providerPayload: message.providerPayload,
 					timestamp: message.timestamp,
 				};
+				convertedMessageCache.set(message, {
+					role: "compactionSummary",
+					converted,
+					summary: message.summary,
+					blocks: message.blocks,
+					images: message.images,
+					providerPayload: message.providerPayload,
+				});
+				return converted;
+			}
 		}
 	}
 
 	switch (message.role) {
-		case "user":
-			return { ...message, attribution: message.attribution ?? "user" };
-		case "developer":
-			return { ...message, attribution: message.attribution ?? "agent" };
+		case "user": {
+			const cached = convertedMessageCache.get(message);
+			if (
+				cached?.role === "user" &&
+				cached.attribution === message.attribution &&
+				cached.content === message.content
+			) {
+				return cached.converted;
+			}
+			const converted: Message = { ...message, attribution: message.attribution ?? "user" };
+			convertedMessageCache.set(message, {
+				role: "user",
+				converted,
+				attribution: message.attribution,
+				content: message.content,
+			});
+			return converted;
+		}
+		case "developer": {
+			const cached = convertedMessageCache.get(message);
+			if (
+				cached?.role === "developer" &&
+				cached.attribution === message.attribution &&
+				cached.content === message.content
+			) {
+				return cached.converted;
+			}
+			const converted: Message = { ...message, attribution: message.attribution ?? "agent" };
+			convertedMessageCache.set(message, {
+				role: "developer",
+				converted,
+				attribution: message.attribution,
+				content: message.content,
+			});
+			return converted;
+		}
 		case "assistant":
 			return message;
-		case "toolResult":
-			return {
-				...message,
-				content: getPrunedToolResultContent(message as ToolResultMessage),
-				attribution: message.attribution ?? "agent",
+		case "toolResult": {
+			const tr = message as ToolResultMessage;
+			const cached = convertedMessageCache.get(message);
+			if (
+				cached?.role === "toolResult" &&
+				cached.attribution === tr.attribution &&
+				cached.content === tr.content &&
+				cached.prunedAt === tr.prunedAt &&
+				cached.isError === tr.isError &&
+				cached.toolCallId === tr.toolCallId
+			) {
+				return cached.converted;
+			}
+			const converted: Message = {
+				...tr,
+				content: getPrunedToolResultContent(tr),
+				attribution: tr.attribution ?? "agent",
 			};
+			convertedMessageCache.set(message, {
+				role: "toolResult",
+				converted,
+				attribution: tr.attribution,
+				content: tr.content,
+				prunedAt: tr.prunedAt,
+				isError: tr.isError,
+				toolCallId: tr.toolCallId,
+			});
+			return converted;
+		}
 		default:
 			return undefined;
 	}

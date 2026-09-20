@@ -163,6 +163,13 @@ remote_tree() { printf '%s/%s' "${REMOTE_HOME}" "${REMOTE_TREE_REL}"; }
 # protected from --delete, and without that the stamp the install step writes is
 # deleted by the next sync and every run reinstalls the world.
 #
+# NO REPOSITORY TRAVELS WITH THE TREE. The sync carries working-tree files, so a
+# suite that asks git anything -- HEAD, a committed blob -- sees a directory that is
+# not a repository on this rung. The local rungs bind the git directory (including a
+# linked worktree's, see SANDBOX_GITDIR in run.sh); shipping one here would mean
+# sending the whole object store over the LAN, which costs more than the handful of
+# suites is worth. Run those on a local rung.
+#
 # GENERATED SOURCES ARE PUT BACK. Honouring .gitignore is right for build output
 # and wrong for the handful of generated files that live INSIDE a package's src
 # tree and are imported at runtime: tool-views.generated.js and the three embedded
@@ -175,12 +182,12 @@ remote_tree() { printf '%s/%s' "${REMOTE_HOME}" "${REMOTE_TREE_REL}"; }
 # The grep is the safety rail, not tidiness. `git ls-files --others --ignored`
 # reports a wholly ignored directory as one collapsed entry and ignores the
 # pathspec when it does, so an unfiltered list offers to re-include
-# packages/deepswe-bench/repo-cache, which is thousands of cloned repositories. Only
+# tests/evals/datasets/repo-cache, which is thousands of cloned repositories. Only
 # a regular file directly under some packages/<one>/src/ is ever put back.
 remote_generated_sources_filter() {
 	local out
-	out="$(cd "${REPO_ROOT}" && git ls-files --others --ignored --exclude-standard 2>/dev/null)" || return 0
-	printf '%s\n' "$out" | grep -E '^packages/[^/]+/src/.*[^/]$' | sed 's|^|+ /|'
+	out="$(cd "${REPO_ROOT}" && git ls-files --others --ignored --exclude-standard packages/ contracts/ kernel/ hosts/ apps/ clients/ plugins/ natives/ 2>/dev/null)" || return 0
+	printf '%s\n' "$out" | grep -E '^((packages|contracts|hosts|apps|clients|plugins|natives)/[^/]+|kernel)/src/.*[^/]$' | sed 's|^|+ /|'
 	return 0
 }
 

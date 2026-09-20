@@ -1,7 +1,7 @@
 Run one step of code in a persistent kernel.
 
 <instruction>
-**One eval call = one cell = one logical step.** State persists per language across eval calls, tool calls, and `task` subagents, so imports go in one call, definitions in the next, then the test, then the use, each its own call. Parallelize *within* a cell with `parallel(thunks)`, never by batching steps.
+**One eval call = one cell = one logical step.** State persists per language across eval calls, tool calls, and `task` agents, so imports go in one call, definitions in the next, then the test, then the use, each its own call. Parallelize *within* a cell with `parallel(thunks)`, never by batching steps.
 
 Fields:
 
@@ -28,9 +28,13 @@ print(value, ...) → None
 read(path, offset?=1, limit?=None) → str
     File/resource text; offset/limit = 1-indexed lines. `local://…` works everywhere; Python/JS also accept top-level `read` URI schemes.
 write(path, content) → str
-    Write file (creates parents) → resolved path. `local://…` persists across turns/subagents.
+    Write file (creates parents) → resolved path. `local://…` persists across turns/agents.
 env(key?=None, value?=None) → str | None | dict
     No args → full env dict; one → value of `key`; two → set `key=value`, return value.
+kv.get(key, default?=None) / kv.set(key, value) / kv.delete(key) / kv.list()
+    Session store on disk that OUTLIVES the kernel: values survive `reset`, crashes, and continuations, shared across languages. Values move by name only (never echoed to status/output) and must be JSON-serializable; store handles and tokens here, payloads in files.
+defs() → list[str]
+    Names this kernel already defines (user code only, with shapes). Check before re-sending a definition.
 output(*ids, format?="raw", query?=None, offset?=None, limit?=None) → str | dict | list[dict]
     Task/agent output by id; one → text/dict, multiple → list.
 tool.<name>(args) → unknown
@@ -39,8 +43,8 @@ completion(prompt, model?="default", system?=None, schema?=None) → str | dict
     Oneshot, stateless (no history/tools). `model`: "smol" | "default" | "slow". `schema` (JSON-Schema) → parsed structured output.
 {{#if spawns}}
 {{#if hasSpawnDefaultAgent}}agent(prompt, agent?="{{spawnDefaultAgent}}", model?=None, label?=None, schema?=None, handle?=False) → str | dict
-    Run a subagent → final output. `agent` picks another enabled agent; omit it to use `{{spawnDefaultAgent}}`.{{else}}agent(prompt, agent, model?=None, label?=None, schema?=None, handle?=False) → str | dict
-    Run a subagent → final output. `agent` must name an enabled agent.{{/if}}{{#if spawnAllowedAgentsText}} {{spawnAgentListLabel}}: {{spawnAllowedAgentsText}}.{{/if}} `schema` as in completion(). Background via `local://` files named in the prompt. `handle` → DAG node dict { text, output, handle: "agent://<id>", id, agent } (parsed under `data` when `schema` set).
+    Run an agent → final output. `agent` picks another enabled agent; omit it to use `{{spawnDefaultAgent}}`.{{else}}agent(prompt, agent, model?=None, label?=None, schema?=None, handle?=False) → str | dict
+    Run an agent → final output. `agent` must name an enabled agent.{{/if}}{{#if spawnAllowedAgentsText}} {{spawnAgentListLabel}}: {{spawnAllowedAgentsText}}.{{/if}} `schema` as in completion(). Background via `local://` files named in the prompt. `handle` → DAG node dict { text, output, handle: "agent://<id>", id, agent } (parsed under `data` when `schema` set).
 {{#if js}}    JS: options are ONE trailing object — agent(prompt, { agent, schema, handle }).
 {{/if}}
 {{/if}}
@@ -65,6 +69,15 @@ Pipe handles through stage helpers to build an acyclic dependency graph:
 - **Isolate failure.** A raising node re-raises the lowest-index error and aborts its wave; wrap risky nodes so a failure degrades only its dependent subtree.
 - **Acyclic only.** A node never waits on its own descendant.
 </dag>
+{{/if}}
+{{#if pyWorkspace}}
+<workspace>
+Use the persistent Python kernel as your working data environment:
+- **Retain large results in variables.** Store raw `tool.*` outputs (large file reads, command outputs, search results) in top-level variables rather than dumping raw payloads to display.
+- **Inspect and transform in-kernel.** Slice, filter, search, regex-match, and parse data with Python expressions and standard library modules directly.
+- **Define reusable helpers.** Write helper functions for repeated repository queries, multi-file transformations, or batch checks, and reuse them across subsequent cells.
+- **Display only compact conclusions.** Print or `display()` structured summaries, diffs, or exact answers; keep intermediate bulk data inside kernel memory.
+</workspace>
 {{/if}}
 
 <critical>

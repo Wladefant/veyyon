@@ -3,19 +3,19 @@ import { validateToolArguments } from "@veyyon/ai/utils/validation";
 import { errorMessage, isRecord } from "@veyyon/utils";
 import { INTENT_FIELD } from "@veyyon/wire";
 import type { ToolSession } from "../../tools";
-import { ToolError } from "../../tools/tool-errors";
+import { ToolError } from "../../tools/core/tool-errors";
+import { TOOL_EXECUTION_ENTRIES } from "../../tools/core/execution-registry";
 import { EVAL_AGENT_BRIDGE_NAME } from "../agent-bridge-name";
 import { EVAL_BUDGET_BRIDGE_NAME, type EvalBudgetResult, runEvalBudget } from "../budget-bridge";
 import { EVAL_COMPLETION_BRIDGE_NAME, runEvalCompletion } from "../completion-bridge";
 import { EVAL_CONCURRENCY_BRIDGE_NAME, type EvalConcurrencyResult, runEvalConcurrency } from "../concurrency-bridge";
+import type { EvalBridgeOptions } from "../types";
 import type { JsStatusEvent } from "./shared/types";
 
 export type { JsStatusEvent } from "./shared/types";
 
-interface ToolBridgeOptions {
-	session: ToolSession;
-	signal?: AbortSignal;
-	emitStatus?: (event: JsStatusEvent) => void;
+interface ToolBridgeOptions extends EvalBridgeOptions {
+	entry?: "eval.tool-bridge" | "cli.worker";
 }
 
 type ToolValue =
@@ -67,7 +67,7 @@ function normalizeArgs(args: unknown): unknown {
  * hand a tool a shape its schema rejects. `tool.ask({ questions: [{ id,
  * options }] })` reached the ask dialog with no question text, and the render
  * pass threw an uncaught `TypeError` that killed the session and every
- * subagent under it. Cell code is model-authored text with the same failure
+ * spawned agent under it. Cell code is model-authored text with the same failure
  * modes as a tool call, so it gets the same gate, and the same repairs, so a
  * numeric string for a number argument keeps working.
  *
@@ -127,20 +127,16 @@ function summarizeToolResult(
 				path: record.path,
 				chars: typeof record.content === "string" ? record.content.length : 0,
 			});
-		case "grep":
+		case "search": {
+			const searchDetails = isRecord(details.result) ? details.result : {};
 			return withError({
-				op: "grep",
-				pattern: record.pattern,
+				op: "search",
+				pattern: record.input,
 				path: record.path,
-				count: details.matchCount ?? undefined,
+				count: searchDetails.matchCount ?? searchDetails.fileCount,
+				matches: Array.isArray(searchDetails.files) ? searchDetails.files.slice(0, 20) : undefined,
 			});
-		case "glob":
-			return withError({
-				op: "glob",
-				pattern: record.pattern,
-				count: details.fileCount ?? undefined,
-				matches: Array.isArray(details.files) ? details.files.slice(0, 20) : undefined,
-			});
+		}
 		case "bash":
 			return withError({
 				op: "run",
@@ -158,7 +154,7 @@ export async function callSessionTool(name: string, args: unknown, options: Tool
 		return await runEvalCompletion(args, options);
 	}
 	if (name === EVAL_AGENT_BRIDGE_NAME) {
-		// Loaded on demand. `agent-bridge` runs a real subagent and pulls the MCP manager, task
+		// Loaded on demand. `agent-bridge` runs a real spawned agent and pulls the MCP manager, task
 		// discovery and the prompt registry with it; an eval that never calls `agent()` should not
 		// pay for any of that. This branch already awaited, so deferring costs nothing, and a
 		// failure to load throws here exactly as a missing symbol would have.
@@ -171,7 +167,13 @@ export async function callSessionTool(name: string, args: unknown, options: Tool
 	if (name === EVAL_CONCURRENCY_BRIDGE_NAME) {
 		return runEvalConcurrency(args, options);
 	}
+	// Worker IPC bridge entry point: worker threads / subprocesses (e.g. JS_EVAL_WORKER, JS_EVAL_PROCESS)
+	// execute tools via IPC calls to callSessionTool. Enforce the refusal fence at entry in case the
+	// target session tool was unwrapped or context was omitted.
 	const tool = getTool(options.session, name);
+	const entry = TOOL_EXECUTION_ENTRIES[options.entry ?? "eval.tool-bridge"];
+	const context = options.session.getToolContext?.() ?? { settings: options.session.settings };
+	entry.assert(tool, args, context);
 	const normalizedArgs = normalizeArgs(args);
 	const toolCallId = `js-${name}-${crypto.randomUUID()}`;
 	try {
@@ -182,13 +184,7 @@ export async function callSessionTool(name: string, args: unknown, options: Tool
 		// denial. An eval snippet is model-authored text, which is exactly the
 		// caller those controls exist for.
 		const executionArgs = validateEvalToolArguments(tool, name, toolCallId, normalizedArgs);
-		const result = await tool.execute(
-			toolCallId,
-			executionArgs,
-			options.signal,
-			undefined,
-			options.session.getToolContext?.(),
-		);
+		const result = await entry.invoke(tool, toolCallId, executionArgs, options.signal, undefined, context);
 		const textBlocks = result.content.filter(
 			(content): content is { type: "text"; text: string } =>
 				content.type === "text" && typeof content.text === "string",

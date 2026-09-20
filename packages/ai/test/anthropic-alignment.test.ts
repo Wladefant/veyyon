@@ -3,7 +3,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as tls from "node:tls";
-import { Effort } from "@veyyon/ai";
 import {
 	applyClaudeToolPrefix,
 	buildAnthropicClientOptions,
@@ -24,6 +23,7 @@ import {
 import { getEnvApiKey, streamSimple } from "@veyyon/ai/stream";
 import type { AssistantMessage, Context, Model, ModelSpec, TJsonSchema, TokenTaskBudget, Tool } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { Effort } from "@veyyon/catalog/effort";
 import { removeSyncWithRetries } from "@veyyon/utils";
 import { type as arkType } from "arktype";
 import { withEnv } from "./helpers";
@@ -1315,7 +1315,7 @@ describe("Anthropic request fingerprint alignment", () => {
 
 	it("marks only the Anthropic strict allowlist strict", async () => {
 		const tools: Tool[] = [
-			...(["bash", "python", "edit", "find"] as const).map(name => ({
+			...(["bash", "python", "edit", "search"] as const).map(name => ({
 				name,
 				description: `${name} tool`,
 				strict: true,
@@ -1325,7 +1325,7 @@ describe("Anthropic request fingerprint alignment", () => {
 					required: ["requiredValue"],
 				} as TJsonSchema,
 			})),
-			...(["write", "grep", "read", "task", "todo", "web_search", "ast_grep"] as const).map(name => ({
+			...(["write", "find", "grep", "read", "task", "todo", "web_search", "ast_grep"] as const).map(name => ({
 				name,
 				description: `${name} tool`,
 				strict: true,
@@ -1351,7 +1351,7 @@ describe("Anthropic request fingerprint alignment", () => {
 
 		const strictNames = (payload.tools ?? []).filter(tool => tool.strict === true).map(tool => tool.name);
 
-		expect(strictNames).toEqual(["bash", "python", "edit", "find"]);
+		expect(strictNames).toEqual(["bash", "python", "edit", "search"]);
 		expect(payload.tools?.find(tool => tool.name === "bash")?.input_schema?.required).toEqual(["requiredValue"]);
 	});
 
@@ -1525,12 +1525,12 @@ describe("Anthropic request fingerprint alignment", () => {
 				} as TJsonSchema,
 			},
 			{
-				name: "find",
-				description: "find tool",
+				name: "search",
+				description: "search tool",
 				parameters: {
 					type: "object",
-					properties: { pattern: { type: "string" } },
-					required: ["pattern"],
+					properties: { type: { type: "string" }, input: { type: "string" } },
+					required: ["type", "input"],
 				} as TJsonSchema,
 			},
 		];
@@ -1548,7 +1548,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		// patternProperties contradicts the injected additionalProperties:false;
 		// such tools must stay non-strict while clean allowlisted tools keep it.
 		const strictNames = (payload.tools ?? []).filter(tool => tool.strict === true).map(tool => tool.name);
-		expect(strictNames).toEqual(["find"]);
+		expect(strictNames).toEqual(["search"]);
 	});
 
 	it("keeps the interleaved-thinking beta for dated Opus 4.0 ids", () => {

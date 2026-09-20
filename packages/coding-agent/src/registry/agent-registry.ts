@@ -1,6 +1,6 @@
 /**
  * AgentRegistry - Process-global registry of agents (the main session plus
- * every subagent), keyed by stable id.
+ * every spawned agent), keyed by stable id.
  *
  * Tracks each agent's status and (when live) its AgentSession so peers can be
  * addressed by id (`irc`, `task resume`, `history://`). Sessions are
@@ -10,7 +10,7 @@
  */
 
 // Owner subpaths, not the "@veyyon/utils" barrel. This module is the SOLE path by which
-// `tools/read.ts` reaches that barrel, and the barrel brings 23 modules onto the file-read
+// `tools/fs/read.ts` reaches that barrel, and the barrel brings 23 modules onto the file-read
 // closure that nothing there asks for. See the barrel absence in
 // `test/architecture/leveraged-imports-stay-cut.test.ts`.
 import * as logger from "@veyyon/utils/logger";
@@ -18,7 +18,34 @@ import { errorMessage } from "@veyyon/utils/type-guards";
 import type { AgentSession } from "../session/agent-session";
 import { oneLineLabel } from "../task/types";
 
+/**
+ * The name a driving agent answers to INSIDE its own conversation, and the name
+ * the model is told to address. Not a key: a process holds several
+ * conversations at once and each has its own driving agent, so resolving this
+ * name requires knowing which conversation is asking. Use
+ * {@link AgentRegistry.resolveId}.
+ *
+ * It was a key, and that is the bug. Every interactive top-level session
+ * registered under this exact string while `#refs` is keyed by id, so `/new`
+ * handing a streaming conversation to the background and attaching the screen
+ * to a fresh one EVICTED the running conversation from the registry. Worse than
+ * invisible: the evicted session went on reporting under the same name, so its
+ * `agent_end` flipped the foreground row to idle mid-turn and its `noteTurn`
+ * refreshed the wrong row's clock.
+ */
 export const MAIN_AGENT_ID = "Main";
+
+/**
+ * The registry id for a driving agent, derived from the conversation it starts.
+ *
+ * Every other host already names its own — an ACP root registers as
+ * `acp:<sessionId>` and an SDK host states one — so the interactive default was
+ * the only top-level id that could collide with another top-level id. This
+ * makes it behave like the rest.
+ */
+export function mainAgentIdFor(sessionId: string): string {
+	return `main:${sessionId}`;
+}
 
 /**
  * - `running`: a turn is in flight.
@@ -27,10 +54,44 @@ export const MAIN_AGENT_ID = "Main";
  * - `parked`: session disposed; AgentRef + sessionFile retained, revivable.
  * - `aborted`: hard-killed, terminal.
  */
-export type AgentStatus = "running" | "idle" | "parked" | "aborted";
+export const AGENT_STATUSES = ["running", "idle", "parked", "aborted"] as const;
+export type AgentStatus = (typeof AGENT_STATUSES)[number];
+
 /**
- * - `main`/`sub`: the user-facing agent tree (driving agent + task subagents).
- * - `advisor`: a passive review transcript persisted like a subagent for usage
+ * The status transitions a live process may perform, keyed by the current status.
+ *
+ * - `running → idle`: the turn drained. `running → parked`: the run finished with
+ *   no session to keep (isolated run, tan clone). `running → aborted`: killed.
+ * - `idle → running`: a follow-up turn started. `idle → parked`: the idle TTL
+ *   elapsed. `idle → aborted`: killed.
+ * - `parked → idle`: revived. `parked → aborted`: killed while parked.
+ * - `aborted` is terminal.
+ *
+ * `parked → running` is absent because a parked ref has no session to run a turn
+ * on: a revive attaches the session and reports `idle` first, and the turn's own
+ * `agent_start` then reports `running`.
+ */
+export const AGENT_TRANSITIONS: Readonly<Record<AgentStatus, readonly AgentStatus[]>> = {
+	running: ["idle", "parked", "aborted"],
+	idle: ["running", "parked", "aborted"],
+	parked: ["idle", "aborted"],
+	aborted: [],
+};
+
+/** Thrown by {@link AgentRegistry.setStatus} for a transition {@link AGENT_TRANSITIONS} does not list. */
+export class AgentTransitionError extends Error {
+	constructor(
+		readonly id: string,
+		readonly from: AgentStatus,
+		readonly to: AgentStatus,
+	) {
+		super(`Agent "${id}" is ${from} and cannot become ${to}`);
+		this.name = "AgentTransitionError";
+	}
+}
+/**
+ * - `main`/`sub`: the user-facing agent tree (driving agent + spawned task agents).
+ * - `advisor`: a passive review transcript persisted like a spawned agent for usage
  *   attribution and Control Center observability, but never a peer — hidden from
  *   agent-facing rosters (`irc`, `history://`) and not messageable/revivable.
  */
@@ -44,7 +105,7 @@ export type AgentKind = "main" | "sub" | "advisor";
  * person" from "quiet", and each of them gets it wrong otherwise:
  *
  *   - the runtime budget, which must not spend an operator's reading time
- *     (`subagent.maxRuntimeMs` would otherwise abort an agent whose card is
+ *     (`agent.maxRuntimeMs` would otherwise abort an agent whose card is
  *     still on screen, which is abandonment with the prompt still visible),
  *   - the agent dashboard and rosters, which cannot today tell a blocked agent
  *     from a working one, so a stuck spawn looks like a busy spawn,
@@ -72,28 +133,21 @@ export interface AgentRef {
 	createdAt: number;
 	lastActivity: number;
 	/**
-	 * The conversation this agent belongs to: the SessionManager session id of
-	 * the root `main` session it was spawned under.
+	 * The conversation this agent belongs to: the SessionManager session id of the root `main`
+	 * session it was spawned under.
 	 *
-	 * The session id rather than the transcript path, because the two disagree in
-	 * both directions. A brand-new session has an id before it has ever been
-	 * written to disk, so a path-keyed scope would be undefined for exactly the
-	 * window in which the first subagents spawn; and `/move` rewrites the path of
-	 * a conversation that never ended, which a path-keyed scope would read as a
-	 * new one.
+	 * The session id rather than the transcript path, because the two disagree in both directions. A
+	 * new session has an id before it is ever written to disk, so a path-keyed scope is undefined for
+	 * exactly the window in which the first spawned agents spawn, and `/move` rewrites the path of a
+	 * conversation that never ended, which a path-keyed scope reads as a new one.
 	 *
-	 * The registry is process-global, but an agent roster is not. One process
-	 * holds several conversations at once — `/new` and `/resume` re-root the
-	 * driving session, ACP and cmux hosts register one `main` per client
-	 * session, and the SDK embeds more — and without this every one of them
-	 * listed every other one's subagents. Two rosters that disagree about what
-	 * exists is the mild version; messaging an agent that belongs to a
-	 * conversation you closed an hour ago is the real one.
+	 * The registry is process-global but a roster is not: `/new` and `/resume` re-root the driving
+	 * session, ACP and cmux hosts register one `main` per client session, and the SDK embeds more.
+	 * Without a scope, each of those lists every other one's spawned agents.
 	 *
-	 * Undefined means "not attributable to a conversation" (a collab guest
-	 * mirror, a hand-built ref in a test). Scoping treats an unknown scope on
-	 * EITHER side as visible, so the filter can only ever hide an agent both
-	 * sides positively agree belongs somewhere else.
+	 * Undefined means not attributable to a conversation, such as a collab guest mirror or a
+	 * hand-built ref in a test. Scoping treats an unknown scope on either side as visible, so the
+	 * filter can only hide an agent both sides positively agree belongs elsewhere.
 	 */
 	scope?: string;
 	/** Short gist of what the agent is currently doing (latest intent or tool), for the work-aware roster. Display-only. */
@@ -152,6 +206,20 @@ export interface RegisterInput {
 	status?: AgentStatus;
 	/** Model the agent runs on, as a `provider/id` string. */
 	model?: string;
+	/**
+	 * When this agent first existed and when it last did something, for a ref
+	 * being RESTORED rather than started. Both default to now.
+	 *
+	 * An agent read back from disk has a history, and stamping it with the
+	 * moment of the scan threw that history away: every agent from every previous
+	 * run reported "just now" in the roster for as long as the process lived, so
+	 * the column that exists to separate this minute's work from yesterday's said
+	 * the same thing about all of it. The age also decides when the close budget
+	 * drops the ref, so a restored agent that had been quiet for a day was given a
+	 * full budget from the scan.
+	 */
+	createdAt?: number;
+	lastActivity?: number;
 }
 
 export class AgentRegistry {
@@ -176,7 +244,7 @@ export class AgentRegistry {
 	 * Register an agent, deriving its conversation {@link AgentRef.scope} when the
 	 * caller does not state one.
 	 *
-	 * Derivation is by LINEAGE, not by the agent's own transcript: a subagent
+	 * Derivation is by LINEAGE, not by the agent's own transcript: a spawned agent
 	 * writes its session file inside its parent's directory, so its own path
 	 * names a different string for the same conversation. Taking the parent's
 	 * scope makes a whole spawn tree one scope, however deep it nests.
@@ -191,11 +259,28 @@ export class AgentRegistry {
 			status: input.status ?? "running",
 			session: input.session,
 			sessionFile: input.sessionFile ?? null,
-			createdAt: now,
-			lastActivity: now,
+			createdAt: input.createdAt ?? now,
+			lastActivity: input.lastActivity ?? now,
 			model: input.model,
 			scope: input.scope ?? this.#deriveScope(input),
 		};
+		// An id is the key, so registering one twice REPLACES the earlier agent.
+		// That is legitimate when the same agent re-registers (a revive re-attaches
+		// its own row), and it is data loss when two different agents claim one id:
+		// the displaced one stays alive, spends, and reports through a row that is
+		// no longer its own, which is how a conversation handed to the background
+		// went on flipping the foreground row's status. Reported rather than
+		// refused, because dropping the new ref would leave the live agent with no
+		// row at all, and a roster missing a running agent is the worse of the two.
+		const displaced = this.#refs.get(ref.id);
+		if (displaced && displaced.sessionFile !== ref.sessionFile) {
+			logger.error("Agent registry id reused by a different agent; the displaced agent loses its row", {
+				id: ref.id,
+				displacedSessionFile: displaced.sessionFile,
+				displacedStatus: displaced.status,
+				sessionFile: ref.sessionFile,
+			});
+		}
 		this.#refs.set(ref.id, ref);
 		this.#emit({ type: "registered", ref });
 		return ref;
@@ -205,15 +290,41 @@ export class AgentRegistry {
 		if (input.parentId) return this.#refs.get(input.parentId)?.scope;
 		// A root session names its own conversation, and its caller states the id.
 		// The transcript path is the fallback for a caller that has no id to give.
-		// A parentless SUBAGENT is left unattributed on purpose: it is an orphan
+		// A parentless spawned agent is left unattributed on purpose: it is an orphan
 		// nobody claimed, and inventing a scope from its own path would produce a
 		// name nothing else shares, hiding it from the roster that should show it.
 		return input.kind === "main" ? (input.sessionFile ?? undefined) : undefined;
 	}
 
+	/**
+	 * Move an agent to `status`. The only writer of {@link AgentRef.status}: the
+	 * lifecycle manager, the task executor, the tan controller and a revived
+	 * session's event sync all call this, so the transition table is checked once,
+	 * here. A same-status write is a no-op. A transition {@link AGENT_TRANSITIONS}
+	 * does not list throws {@link AgentTransitionError} and changes nothing.
+	 */
 	setStatus(id: string, status: AgentStatus): void {
 		const ref = this.#refs.get(id);
 		if (!ref || ref.status === status) return;
+		if (!AGENT_TRANSITIONS[ref.status].includes(status)) {
+			throw new AgentTransitionError(id, ref.status, status);
+		}
+		this.#applyStatus(ref, status);
+	}
+
+	/**
+	 * Copy a status reported by another process, without the transition check. A
+	 * collab guest mirrors the host's roster from snapshots that may skip states
+	 * (a host that went `running → idle → parked` between two snapshots reports
+	 * `parked`), and the host is the authority on its own agents.
+	 */
+	mirrorStatus(id: string, status: AgentStatus): void {
+		const ref = this.#refs.get(id);
+		if (!ref || ref.status === status) return;
+		this.#applyStatus(ref, status);
+	}
+
+	#applyStatus(ref: AgentRef, status: AgentStatus): void {
 		ref.status = status;
 		// Activity describes current work; it is meaningless once the agent
 		// leaves `running`, so drop it to avoid showing stale work in rosters.
@@ -244,6 +355,23 @@ export class AgentRegistry {
 		ref.lastActivity = Date.now();
 		if (ref.activity === gist) return;
 		ref.activity = gist;
+	}
+
+	/**
+	 * Record that this agent did something, without changing its status.
+	 *
+	 * {@link setActivity} is the spawned agent heartbeat and carries a gist; the
+	 * driving session has no gist to report and must not acquire one, but its
+	 * `lastActivity` still has to move or the roster prints the age of the
+	 * process. Nothing wired the main agent to the registry at all, so its row
+	 * read "1d ago" while it was mid-turn. Emits nothing: this is a timestamp,
+	 * not a state change, and a per-turn event on the listener path would repaint
+	 * every roster for no visible difference.
+	 */
+	noteTurn(id: string): void {
+		const ref = this.#refs.get(id);
+		if (!ref) return;
+		ref.lastActivity = Date.now();
 	}
 
 	/**
@@ -358,6 +486,14 @@ export class AgentRegistry {
 		const ref = this.#refs.get(id);
 		if (!ref || ref.scope === scope) return;
 		ref.scope = scope;
+		// The clock belongs to the conversation that just ended. Carrying it over
+		// is the cross-session leak in its quietest form: `/new` after a day of
+		// work opened the roster on a `Main` that had just begun and was labelled
+		// "1d ago". Both stamps move, because `createdAt` orders the roster and
+		// `lastActivity` is what prints in it.
+		const now = Date.now();
+		ref.createdAt = now;
+		ref.lastActivity = now;
 		this.#emit({ type: "status_changed", ref });
 	}
 
@@ -385,21 +521,16 @@ export class AgentRegistry {
 	}
 
 	/**
-	 * THE conversation-boundary decision, for every caller that has two agent ids
-	 * and needs to know whether one may reach the other. `irc send`, `irc list`,
-	 * `irc wait`'s liveness watch and the job tool's roster all route through this
-	 * or through the two list methods below, which are themselves defined in terms
-	 * of it.
+	 * The conversation-boundary decision, for every caller holding two agent ids that needs to know
+	 * whether one may reach the other. `irc send`, `irc list`, `irc wait`'s liveness watch and the
+	 * job tool's roster route through this, or through the two list methods below, which are defined
+	 * in terms of it.
 	 *
-	 * ONE owner on purpose. Those four surfaces each carried their own spelling of
-	 * the same rule, and a rule expressed four times is a rule that gets fixed
-	 * three times: the version that drifts is the one nobody remembers exists, and
-	 * it is the one that keeps the leak open. There is now nothing left to keep in
-	 * sync, and a change to the boundary is a change to this method.
+	 * One owner on purpose: the same rule spelled at four call sites drifts at whichever one nobody
+	 * remembers, and that is the one that keeps the leak open.
 	 *
-	 * Advisors are excluded here rather than at each call site for the same
-	 * reason. They are read-only observability transcripts, never peers, and every
-	 * caller that forgot the check exposed one.
+	 * Advisors are excluded here rather than at each call site, for the same reason. They are
+	 * read-only observability transcripts, never peers.
 	 */
 	canAddress(senderId: string, targetId: string): boolean {
 		if (senderId === targetId) return false;
@@ -435,16 +566,54 @@ export class AgentRegistry {
 		return this.list().filter(ref => this.canAddress(id, ref.id) && ref.status !== "aborted");
 	}
 
+	/**
+	 * The driving agent of `scope`, or undefined when that conversation has none.
+	 *
+	 * A conversation has exactly one. Where two somehow match — a stale ref a
+	 * teardown failed to release — the most recently registered wins, because a
+	 * roster that resolves `Main` to a dead predecessor is worse than one that
+	 * resolves it to the live session.
+	 */
+	mainInScope(scope: string | undefined): AgentRef | undefined {
+		let found: AgentRef | undefined;
+		for (const ref of this.#refs.values()) {
+			if (ref.kind !== "main") continue;
+			if (!AgentRegistry.sameScope(ref.scope, scope)) continue;
+			if (!found || ref.createdAt >= found.createdAt) found = ref;
+		}
+		return found;
+	}
+
+	/**
+	 * Turn a name an agent WROTE into the ref it meant, from the point of view of
+	 * the conversation `senderScope` names.
+	 *
+	 * The model addresses the driving agent as {@link MAIN_AGENT_ID}, which is a
+	 * role rather than a key: two conversations in one process both have one.
+	 * Resolving it against the sender's own scope is what stops a message written
+	 * in one conversation from landing in another's driving session.
+	 *
+	 * An exact id always wins, so a real agent that happens to be called `Main`
+	 * — a host that names its root that, which is still legal — resolves to
+	 * itself rather than being re-routed.
+	 */
+	resolveId(name: string, senderScope: string | undefined): AgentRef | undefined {
+		const exact = this.#refs.get(name);
+		if (exact) return exact;
+		if (name !== MAIN_AGENT_ID) return undefined;
+		return this.mainInScope(senderScope);
+	}
+
 	get(id: string): AgentRef | undefined {
 		return this.#refs.get(id);
 	}
 
 	list(): AgentRef[] {
-		return [...this.#refs.values()];
+		return Array.from(this.#refs.values());
 	}
 
 	/**
-	 * Number of task subagents with a turn currently executing in `scope`, and,
+	 * Number of spawned task agents with a turn currently executing in `scope`, and,
 	 * when `under` is given, below that agent in the spawn tree.
 	 *
 	 * Scoped because the number is a badge an operator reads as "how much work is
@@ -456,9 +625,9 @@ export class AgentRegistry {
 	 *
 	 * `under` is the same argument one level down: while the view is focused on
 	 * an agent, "mine" is that agent's subtree, and the surfaces beside the badge
-	 * (the subagent HUD) already scope themselves that way.
+	 * (the agent HUD) already scope themselves that way.
 	 */
-	runningSubagentCount(scope?: string, under?: string): number {
+	runningAgentCount(scope?: string, under?: string): number {
 		const subtree = under === undefined ? undefined : new Set(this.descendantsOf(under));
 		let count = 0;
 		for (const ref of this.#refs.values()) {

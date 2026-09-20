@@ -3,13 +3,6 @@
 # deployed here, and the served install scripts are then compared byte for byte
 # against `scripts/` so "deployed" and "current" cannot drift apart silently.
 #
-# This is how a technical report becomes a blog post. You write it as Markdown in
-# `website/blog/<slug>.md` (readable on GitHub as-is), open a pull request, and
-# this workflow builds the site on the PR so a malformed report fails review
-# instead of production. On merge it builds again and deploys the Cloudflare Pages
-# project, so the post is live at `veyyon.dev/blog/<slug>` with no manual step and
-# no second copy of the text anywhere.
-#
 # ci.yml's release_site job redeploys only after GitHub publication. Both
 # production deployers use the same never-cancel concurrency group so an older
 # pre-publication main deploy must finish before the release deploy and can never
@@ -20,8 +13,8 @@ on:
    push:
       branches: [main]
       paths:
-         - "website/**"
-         - "docs/handbook/book/**"
+         - "apps/site/**"
+         - "docs/handbook/**"
          - "packages/coding-agent/CHANGELOG.md"
          - "scripts/install.sh"
          - "scripts/install.ps1"
@@ -29,8 +22,8 @@ on:
    pull_request:
       branches: [main]
       paths:
-         - "website/**"
-         - "docs/handbook/book/**"
+         - "apps/site/**"
+         - "docs/handbook/**"
          - "packages/coding-agent/CHANGELOG.md"
          - "scripts/install.sh"
          - "scripts/install.ps1"
@@ -58,20 +51,23 @@ jobs:
       steps:
          - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
          - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-         # The blog generator throws on a report with a duplicate slug, a
-         # non-URL-safe slug, or a published post missing its date or summary, and
-         # the brand check throws on a leaked old product name. Running it here is
-         # the gate: a broken report can never reach the deploy step below.
-         - name: Build site (blog + changelog + brand check)
-           run: node website/build.mjs
-         - name: Assert every published post rendered and is in the sitemap
-           run: bun website/tools/check-blog-publish.ts
-         - name: Deploy to Cloudflare Pages (project veyyon → veyyon.dev)
-           if: ${{ env.IS_MAIN == 'true' && env.HAS_CF_TOKEN == 'true' }}
+         - name: Install mdbook
+           shell: bash
+           run: |
+              mkdir -p "$HOME/.local/bin"
+              curl -fsSL https://github.com/rust-lang/mdBook/releases/download/v0.5.2/mdbook-v0.5.2-x86_64-unknown-linux-musl.tar.gz \
+                | tar -xz -C "$HOME/.local/bin"
+              echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+         - name: Build handbook
+           run: mdbook build docs/handbook
+         # The brand check throws on a leaked old product name. Running it here is
+         # the gate: a broken build can never reach the deploy step below.
+         - name: Build site (changelog + models + brand check)
+           # Authenticated: unauthenticated, the releases API call shares the
+           # runner's 60/hour IP budget and gen-changelog fails closed on the 403.
            env:
-              CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-              CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-           run: node website/deploy.mjs --skip-build
+              GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+           run: node apps/site/build.mjs
          # get.veyyon.dev is a SEPARATE Pages project fed by a separate tree
          # (website-get/: the two install scripts and a root rewrite), staged by
          # the build step above. This workflow already triggers on
@@ -81,16 +77,12 @@ jobs:
          # That is how get.veyyon.dev came to serve a script hundreds of lines
          # behind main. Both trees deploy together now; ci.yml still redeploys both
          # on a release, and the two overlap harmlessly.
-         - name: Deploy to Cloudflare Pages (project veyyon-get → get.veyyon.dev)
+         - name: Deploy both Pages projects and verify the served installers
            if: ${{ env.IS_MAIN == 'true' && env.HAS_CF_TOKEN == 'true' }}
-           env:
-              CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-              CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-              VEYYON_PAGES_PROJECT: veyyon-get
-           run: node website/deploy.mjs --skip-build
-         - name: Verify get.veyyon.dev serves THIS repository's install scripts
-           if: ${{ env.IS_MAIN == 'true' && env.HAS_CF_TOKEN == 'true' }}
-           run: bun scripts/verify-deployed-installers.ts
+           uses: ./.github/actions/deploy-cloudflare-site
+           with:
+              cf-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+              cf-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
          # A missing token must never look like a successful publish: say so loudly
          # so the fix is "add the secret", not "wonder why the post never appeared".
          - name: Warn when the deploy was skipped for a missing token

@@ -22,7 +22,7 @@
 #     FROM ${VEYYON_BASE} AS base
 ###############################################################################
 
-ARG BUN_VERSION=1.3.14
+ARG BUN_VERSION=1.4.0
 
 ############################
 # 1) natives-builder — Rust + Bun → veyyon_natives.linux-<arch>.node
@@ -45,7 +45,7 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
 WORKDIR /veyyon
 
 # Layer 1 — manifests + lockfiles only. Source edits under packages/*/src and
-# crates/*/src won't bust `bun install` below. `--parents` preserves the
+# natives/**/src and tests/**/src won't bust `bun install` below. `--parents` preserves the
 # matched path under /veyyon/ (requires syntax 1.7-labs).
 COPY --parents \
     package.json bun.lock bunfig.toml \
@@ -53,9 +53,13 @@ COPY --parents \
     tsconfig.base.json tsconfig.json \
     Cargo.toml Cargo.lock rust-toolchain.toml \
     packages/*/package.json \
+    contracts/*/package.json \
+    natives/bridge/bindings/package.json \
     packages/tsconfig.workspace.json \
-    python/veybot/web/package.json \
-    crates/*/Cargo.toml \
+    clients/python/veybot/web/package.json \
+    natives/*/Cargo.toml \
+    natives/*/*/Cargo.toml \
+    tests/*/Cargo.toml \
     /veyyon/
 
 # Layer 2 — hydrate node_modules from the manifests above.
@@ -74,9 +78,9 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/veyyon/target \
     set -eux; \
     rustup show; \
-    bun --cwd=packages/natives run build; \
+    bun --cwd=natives/bridge/bindings run build; \
     mkdir -p /out; \
-    cp packages/natives/native/veyyon_natives.linux-*.node /out/
+    cp natives/bridge/bindings/native/veyyon_natives.linux-*.node /out/
 
 ############################
 # 2) wheel-builder — veyyon-rpc wheel
@@ -90,7 +94,7 @@ RUN apt-get update \
 RUN pip install --upgrade pip build
 
 WORKDIR /src
-COPY python/veyyon-rpc /src
+COPY clients/python/veyyon-rpc /src
 RUN python -m build --wheel --outdir /out
 
 ############################
@@ -173,8 +177,10 @@ COPY --parents \
     patches/*.patch \
     tsconfig.base.json tsconfig.json \
     packages/*/package.json \
+    contracts/*/package.json \
+    natives/bridge/bindings/package.json \
     packages/tsconfig.workspace.json \
-    python/veybot/web/package.json \
+    clients/python/veybot/web/package.json \
     /veyyon/
 
 RUN bun install --frozen-lockfile --ignore-scripts

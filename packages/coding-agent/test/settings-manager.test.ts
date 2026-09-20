@@ -7,7 +7,7 @@ import {
 	initializeWithSettings,
 	type RegistrySnapshot,
 	restoreRegistryForTests,
-} from "@veyyon/coding-agent/capability";
+} from "@veyyon/coding-agent/discovery/capability";
 import "@veyyon/coding-agent/discovery";
 import { clearCustomApis } from "@veyyon/ai/api-registry";
 import { createMockModel, registerMockApi } from "@veyyon/ai/providers/mock";
@@ -16,13 +16,16 @@ import type { Context } from "@veyyon/ai/types";
 import {
 	getDefault,
 	getEnumValues,
-	onAppendOnlyModeChanged,
-	onStatusLineSessionAccentChanged,
 	resetSettingsForTest,
 	type SettingPath,
 	Settings,
 } from "@veyyon/coding-agent/config/settings";
-import { AgentStorage } from "@veyyon/coding-agent/session/agent-storage";
+import {
+	onAppendOnlyModeChanged,
+	onAutoThemeMappingChanged,
+	onStatusLineSessionAccentChanged,
+} from "@veyyon/coding-agent/config/settings-signals";
+import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
 import { getProjectAgentDir, logger, TempDir } from "@veyyon/utils";
 import { YAML } from "bun";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
@@ -644,6 +647,27 @@ describe("Settings", () => {
 		});
 	});
 
+	describe("theme.dark / theme.light hooks", () => {
+		it("republishes each slot's mapping under its own slot name", () => {
+			const isolated = Settings.isolated();
+			const received: Array<[slot: "dark" | "light", themeName: string]> = [];
+			const unsubscribe = onAutoThemeMappingChanged((slot, themeName) => {
+				received.push([slot, themeName]);
+			});
+
+			try {
+				isolated.set("theme.dark", "anthracite");
+				isolated.set("theme.light", "titanium");
+				expect(received).toEqual([
+					["dark", "anthracite"],
+					["light", "titanium"],
+				]);
+			} finally {
+				unsubscribe();
+			}
+		});
+	});
+
 	// Tests that SettingsManager merges with DB state on save rather than blindly overwriting.
 	// This ensures external edits (via AgentStorage directly) aren't lost when the app saves.
 	describe("preserves externally added settings", () => {
@@ -965,9 +989,9 @@ describe("Settings", () => {
 			const settings = await Settings.init({ cwd: projectDir, agentDir });
 
 			// `true` reproduced the previous "on" behavior. For delegation that is now
-			// `required` on subagent.delegation, whose scale added `off` below the old
+			// `required` on agent.delegation, whose scale added `off` below the old
 			// three values; todo.eager keeps its own enum.
-			expect(settings.get("subagent.delegation")).toBe("required");
+			expect(settings.get("agent.delegation")).toBe("required");
 			expect(settings.get("todo.eager")).toBe("always");
 		});
 
@@ -983,7 +1007,7 @@ describe("Settings", () => {
 			// task tool was still offered. It must land on `allowed`, never `off`, or
 			// this migration would silently take the task tool away from every config
 			// that had turned the old nudge off.
-			expect(settings.get("subagent.delegation")).toBe("allowed");
+			expect(settings.get("agent.delegation")).toBe("allowed");
 			expect(settings.get("todo.eager")).toBe("default");
 		});
 
@@ -1012,7 +1036,7 @@ describe("Settings", () => {
 			expect(fs.readFileSync(path.join(agentDir, "last-changelog-version"), "utf8")).toBe("0.41.0");
 		});
 
-		it("migrates legacy find and search settings to glob and grep", async () => {
+		it("keeps unified context values while dropping a stale enable key", async () => {
 			await writeSettings({
 				find: { enabled: false },
 				search: {
@@ -1024,13 +1048,15 @@ describe("Settings", () => {
 
 			const settings = await Settings.init({ cwd: projectDir, agentDir });
 
-			expect(settings.get("glob.enabled")).toBe(false);
-			expect(settings.get("grep.enabled")).toBe(false);
-			expect(settings.get("grep.contextBefore")).toBe(2);
-			expect(settings.get("grep.contextAfter")).toBe(5);
+			expect(settings.get("search.contextBefore")).toBe(2);
+			expect(settings.get("search.contextAfter")).toBe(5);
+			settings.set("display.showTokenUsage", true);
+			await settings.flush();
+			const onDisk = await readSettings();
+			expect(onDisk.search).toEqual({ contextBefore: 2, contextAfter: 5 });
 		});
 
-		it("migrates flat legacy find and search settings keys to nested glob and grep", async () => {
+		it("expands flat unified context settings into the canonical nested surface", async () => {
 			await writeSettings({
 				"find.enabled": false,
 				"search.enabled": false,
@@ -1040,13 +1066,11 @@ describe("Settings", () => {
 
 			const settings = await Settings.init({ cwd: projectDir, agentDir });
 
-			expect(settings.get("glob.enabled")).toBe(false);
-			expect(settings.get("grep.enabled")).toBe(false);
-			expect(settings.get("grep.contextBefore")).toBe(2);
-			expect(settings.get("grep.contextAfter")).toBe(5);
+			expect(settings.get("search.contextBefore")).toBe(2);
+			expect(settings.get("search.contextAfter")).toBe(5);
 		});
 
-		it("does not clobber existing glob/grep settings when migrating legacy find/search ones", async () => {
+		it("drops every retired per-engine and unified enable setting", async () => {
 			await writeSettings({
 				find: { enabled: false },
 				glob: { enabled: true },
@@ -1059,9 +1083,14 @@ describe("Settings", () => {
 			});
 
 			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			settings.set("display.showTokenUsage", true);
+			await settings.flush();
+			const onDisk = await readSettings();
 
-			expect(settings.get("glob.enabled")).toBe(true);
-			expect(settings.get("grep.enabled")).toBe(true);
+			expect("find" in onDisk).toBe(false);
+			expect("glob" in onDisk).toBe(false);
+			expect("grep" in onDisk).toBe(false);
+			expect("search" in onDisk).toBe(false);
 		});
 
 		it("migrates legacy tool names in persisted essential overrides", async () => {
@@ -1072,7 +1101,7 @@ describe("Settings", () => {
 
 			const settings = await Settings.init({ cwd: projectDir, agentDir });
 
-			expect(settings.get("tools.essentialOverride")).toEqual(["read", "glob", "grep"]);
+			expect(settings.get("tools.essentialOverride")).toEqual(["read", "search"]);
 		});
 
 		it("migrates from settings.json containing comments", async () => {

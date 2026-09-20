@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import { create, fromJson, type JsonValue } from "@bufbuild/protobuf";
 import {
 	type BlockState,
@@ -11,10 +11,14 @@ import {
 	streamCursor,
 	type ToolCallState,
 } from "@veyyon/ai/providers/cursor";
-import { streamCursor as lazyStreamCursor, setCursorProviderModule } from "@veyyon/ai/providers/register-builtins";
+import {
+	streamCursor as lazyStreamCursor,
+	setProviderModuleOverrideForTest,
+} from "@veyyon/ai/providers/register-builtins";
 import type { AssistantMessage, Context, CursorExecHandlers, Model, ToolResultMessage } from "@veyyon/ai/types";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { buildModel } from "@veyyon/catalog/build";
+
 import {
 	type AgentRunRequest,
 	AgentRunRequestSchema,
@@ -22,6 +26,13 @@ import {
 	ExecServerMessageSchema,
 	ReadArgsSchema,
 } from "@veyyon/catalog/discovery/cursor-gen/agent_pb";
+
+// Two tests here install a process-wide Cursor override. Left behind, one answers every later test
+// file in the bucket; `packages/ai/test/helpers/provider-override-tripwire.ts` fails the test that
+// forgets, which is how these two were found.
+afterEach(() => {
+	setProviderModuleOverrideForTest("cursor-agent");
+});
 
 const cursorModel: Model<"cursor-agent"> = buildModel({
 	id: "cursor-composer-2.5",
@@ -160,15 +171,11 @@ describe("Cursor resolveExecHandler execHandlers binding", () => {
 });
 
 describe("Cursor system prompt encoding", () => {
-	it("emits one Cursor system blob per ordered prompt", () => {
-		const jsons = buildCursorSystemPromptJsons(["Primary instructions.", "Developer constraints."]);
-		expect(jsons).toHaveLength(2);
-		expect(JSON.parse(jsons[0])).toEqual({ role: "system", content: "Primary instructions." });
-		expect(JSON.parse(jsons[1])).toEqual({ role: "system", content: "Developer constraints." });
-	});
-
-	it("falls back to a single default system message when all entries are empty", () => {
-		const jsons = buildCursorSystemPromptJsons(["", ""]);
+	it("emits one placeholder head blob and never the caller's prompt", () => {
+		// The caller's prompt is NOT uploaded here: this server discards the head and rebuilds
+		// it, so a copy placed in a blob is duplicate traffic. The single copy rides on the
+		// active user turn.
+		const jsons = buildCursorSystemPromptJsons();
 		expect(jsons).toHaveLength(1);
 		expect(JSON.parse(jsons[0])).toEqual({ role: "system", content: "You are a helpful assistant." });
 	});
@@ -376,7 +383,7 @@ describe("Cursor grepArgs empty-pattern guard (issue #4574)", () => {
 		expect(emptyGrepPatternRejection("foo", "**/*.ts")).toBeNull();
 		// Whitespace-only patterns count as valid: leading/trailing whitespace is
 		// meaningful in regexes (indentation anchors), matching the coding-agent
-		// grep tool's own contract at packages/coding-agent/src/tools/grep.ts.
+		// text-search engine's contract at packages/coding-agent/src/tools/search/text-search.ts.
 		expect(emptyGrepPatternRejection(" \tfoo ", undefined)).toBeNull();
 	});
 
@@ -455,6 +462,7 @@ function newBlockState(output: AssistantMessage): BlockState {
 			toolCall = t;
 		},
 		setFirstTokenTime: () => {},
+		execDispatchedToolCalls: new Set<string>(),
 	};
 }
 
@@ -509,7 +517,6 @@ describe("Cursor exec local-work tracking (issue #4593)", () => {
 			execHandlers,
 			undefined,
 			[],
-			[],
 		);
 
 		// The exec round-trip is in flight: the stream must advertise local
@@ -539,8 +546,8 @@ describe("Cursor exec local-work tracking (issue #4593)", () => {
 		}
 		const source = new ProbedStream();
 		let providerSignal: AbortSignal | undefined;
-		setCursorProviderModule({
-			streamCursor: (_model, _context, options) => {
+		setProviderModuleOverrideForTest("cursor-agent", {
+			stream: (_model, _context, options) => {
 				providerSignal = options.signal;
 				void (async () => {
 					const partial = cursorAssistantMessage();
@@ -579,8 +586,8 @@ describe("Cursor exec local-work tracking (issue #4593)", () => {
 				await stalled.promise;
 			},
 		} as unknown as AssistantMessageEventStream;
-		setCursorProviderModule({
-			streamCursor: (_model, _context, options) => {
+		setProviderModuleOverrideForTest("cursor-agent", {
+			stream: (_model, _context, options) => {
 				providerSignal = options.signal;
 				return source;
 			},

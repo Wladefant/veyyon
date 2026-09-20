@@ -94,6 +94,21 @@ export function buildNamePlaceholder(name: string): string {
 	return `#${name}#`;
 }
 
+/**
+ * The name inside a placeholder, or nothing when it carries none.
+ *
+ * The inverse of {@link buildNamePlaceholder}, and the ONE place that decides whether a live
+ * placeholder is a named credential or an opaque value form. Two callers ask -- the inventory the
+ * model is shown and the count the footer prints -- and they were each slicing the token and
+ * testing the body themselves, which is how the footer came to count auto-detected environment
+ * values under the same word as stored credentials while the list could name only the stored ones.
+ */
+export function placeholderSecretName(placeholder: string): string | undefined {
+	if (!placeholder.startsWith("#") || !placeholder.endsWith("#")) return undefined;
+	const body = placeholder.slice(1, -1);
+	return isValidSecretName(body) ? body : undefined;
+}
+
 /** Whether a string is a usable vault name. */
 export function isValidSecretName(name: string): boolean {
 	if (!NAME_RE.test(name)) return false;
@@ -134,4 +149,44 @@ export function assertNameRuleCoversValueForm(): void {
 	if (MAX_SECRET_NAME_LENGTH < MIN_SECRET_NAME_LENGTH) {
 		throw new Error("MAX_SECRET_NAME_LENGTH is below MIN_SECRET_NAME_LENGTH, so no name can be valid.");
 	}
+}
+
+const PLACEHOLDER_SHIELD_START = 0xe100;
+const PLACEHOLDER_SHIELD_END = 0xf8ff;
+
+/**
+ * Run lossy text preprocessing while treating every real secret placeholder
+ * as one indivisible token. Same-width padding preserves the truncation budget;
+ * any half retained around an elision is removed, while the one-character
+ * marker expands back only as a complete placeholder.
+ */
+export function withAtomicSecretPlaceholders(text: string, transform: (value: string) => string): string {
+	const unavailable = new Set(text);
+	let nextCodePoint = PLACEHOLDER_SHIELD_START;
+	const allocateShield = (): string => {
+		while (nextCodePoint <= PLACEHOLDER_SHIELD_END) {
+			const candidate = String.fromCharCode(nextCodePoint++);
+			if (!unavailable.has(candidate)) {
+				unavailable.add(candidate);
+				return candidate;
+			}
+		}
+		throw new Error("Too many distinct secret placeholders to preprocess safely.");
+	};
+	const padding = allocateShield();
+	const shields = new Map<string, string>();
+	const shielded = text.replace(PLACEHOLDER_RE, candidate => {
+		if (!isSecretPlaceholder(candidate)) return candidate;
+		let shield = shields.get(candidate);
+		if (!shield) {
+			shield = allocateShield();
+			shields.set(candidate, shield);
+		}
+		return shield + padding.repeat(candidate.length - 1);
+	});
+	let transformed = transform(shielded).split(padding).join("");
+	for (const [placeholder, shield] of shields) {
+		transformed = transformed.split(shield).join(placeholder);
+	}
+	return transformed;
 }

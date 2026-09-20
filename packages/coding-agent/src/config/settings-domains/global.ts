@@ -15,20 +15,33 @@
  * block says `hidden: true`, not because it is a number without options: that used to
  * hide it as a side effect of the UI adapter dropping optionless numbers, and those
  * render now.
+ *
+ * MACHINE LIMITS. The `machine.*` rows are the first group on the tab. They cap
+ * what every veyyon process on this machine may consume TOGETHER — every
+ * session, every profile, every concurrently running veyyon — and they are here
+ * rather than beside their per-session counterparts on Resources because the
+ * scope is the thing that differs: Resources writes the active profile, these
+ * write ~/.veyyon/config.yml. Held per profile a machine limit would be a limit
+ * each copy applied to itself, and the machine would get the sum. The Resources
+ * tab opens with a row pointing here, and settings search spans tabs.
  */
 
+import type { GlobalSettingBinding } from "@veyyon/kernel/settings/store";
 // Owners, not the `@veyyon/utils` barrel: 1 module against 74.
 import {
 	DEFAULT_PROFILE_DIR_NAME,
+	GLOBAL_RESOURCE_LIMITS,
 	readGlobalAuthBrokerSafe,
 	readGlobalDefaultProfileSafe,
 	readGlobalOnboardingVersionSafe,
 	readGlobalProfileSharingSafe,
+	readGlobalResourceLimitSafe,
 	writeGlobalAuthBrokerToken,
 	writeGlobalAuthBrokerUrl,
 	writeGlobalDefaultProfile,
 	writeGlobalOnboardingVersion,
 	writeGlobalProfileSharing,
+	writeGlobalResourceLimit,
 } from "@veyyon/utils/dirs";
 
 /**
@@ -40,6 +53,99 @@ import {
 export const AUTH_BROKER_TOKEN_MASK = "********";
 
 export const GLOBAL_SETTINGS = {
+	"machine.cpuLimitCores": {
+		type: "number",
+		default: 0,
+		ui: {
+			tab: "global",
+			scope: "global",
+			group: "Machine Limits",
+			label: "Machine CPU Limit",
+			description:
+				"Maximum CPU all veyyon sessions on this machine may use together, in cores. Off: no limit. Stored in ~/.veyyon/config.yml and bounds the sum across profiles.",
+			keywords: ["cpu", "global", "machine", "limit", "quota", "cgroup", "cores", "budget", "all"],
+			options: [
+				{ value: "0", label: "Off", description: "Default" },
+				{ value: "1", label: "1 core" },
+				{ value: "2", label: "2 cores" },
+				{ value: "4", label: "4 cores" },
+				{ value: "8", label: "8 cores" },
+				{ value: "16", label: "16 cores" },
+				{ value: "32", label: "32 cores" },
+			],
+		},
+	},
+
+	"machine.memoryLimitGb": {
+		type: "number",
+		default: 0,
+		ui: {
+			tab: "global",
+			scope: "global",
+			group: "Machine Limits",
+			label: "Machine Memory Limit",
+			description:
+				"Maximum resident memory all veyyon sessions on this machine may use together, in gigabytes. Off: no limit. Stored in ~/.veyyon/config.yml and bounds the sum across profiles.",
+			keywords: ["memory", "ram", "global", "machine", "limit", "oom", "cgroup", "gb", "all"],
+			options: [
+				{ value: "0", label: "Off", description: "Default" },
+				{ value: "2", label: "2 GB" },
+				{ value: "4", label: "4 GB" },
+				{ value: "8", label: "8 GB" },
+				{ value: "16", label: "16 GB" },
+				{ value: "32", label: "32 GB" },
+				{ value: "64", label: "64 GB" },
+				{ value: "128", label: "128 GB" },
+			],
+		},
+	},
+
+	"machine.writeBudgetGb": {
+		type: "number",
+		default: 0,
+		ui: {
+			tab: "global",
+			scope: "global",
+			group: "Machine Limits",
+			label: "Machine Write Budget",
+			description:
+				"Cumulative disk writes permitted for all veyyon sessions on this machine, in gigabytes. Off: no limit. Stored in ~/.veyyon/config.yml and bounds the sum across profiles.",
+			keywords: ["disk", "write", "global", "machine", "budget", "gb", "io", "quota", "all"],
+			options: [
+				{ value: "0", label: "Off", description: "Default" },
+				{ value: "5", label: "5 GB" },
+				{ value: "10", label: "10 GB" },
+				{ value: "25", label: "25 GB" },
+				{ value: "50", label: "50 GB" },
+				{ value: "100", label: "100 GB" },
+				{ value: "250", label: "250 GB" },
+			],
+		},
+	},
+
+	"machine.maxProcesses": {
+		type: "number",
+		default: 0,
+		ui: {
+			tab: "global",
+			scope: "global",
+			group: "Machine Limits",
+			label: "Machine Max Processes",
+			description:
+				"Maximum concurrent processes that all veyyon sessions on this machine may run together. Off: no limit. Stored in ~/.veyyon/config.yml and bounds the sum across profiles.",
+			keywords: ["processes", "pids", "fork", "global", "machine", "limit", "cap", "bomb", "all"],
+			options: [
+				{ value: "0", label: "Off", description: "Default" },
+				{ value: "64", label: "64 processes" },
+				{ value: "128", label: "128 processes" },
+				{ value: "256", label: "256 processes" },
+				{ value: "512", label: "512 processes" },
+				{ value: "1024", label: "1024 processes" },
+				{ value: "2048", label: "2048 processes" },
+			],
+		},
+	},
+
 	defaultProfile: {
 		type: "string",
 		default: DEFAULT_PROFILE_DIR_NAME,
@@ -49,7 +155,7 @@ export const GLOBAL_SETTINGS = {
 			group: "Profiles",
 			label: "Default Profile",
 			description:
-				"Profile used when no --profile flag or VEYYON_PROFILE is set. Stored in ~/.veyyon/config.yml. Use the profile name (`default` clears the override).",
+				"Profile used when no --profile flag or VEYYON_PROFILE environment variable is set. Stored in ~/.veyyon/config.yml. Setting to default clears the override.",
 		},
 	},
 
@@ -62,7 +168,7 @@ export const GLOBAL_SETTINGS = {
 			group: "Credentials",
 			label: "Share Credentials Across Profiles",
 			description:
-				"When on (the default), every profile reads one machine-wide set of provider logins. Turn off to give each profile its own private credential store. Changing this setting shuts down the active session; restart is required before any further model dispatch.",
+				"Share provider logins between profiles. On: every profile reads one machine-wide credential store. Off: each profile has its own. Changing it shuts down the active session; restart before the next model request.",
 		},
 	},
 
@@ -87,8 +193,7 @@ export const GLOBAL_SETTINGS = {
 			// key someone finds in ~/.veyyon/config.yml.
 			hidden: true,
 			label: "Onboarding Version",
-			description:
-				"Setup generation this machine has already completed. Stored in ~/.veyyon/config.yml, so switching profile or working directory never re-runs onboarding.",
+			description: "Setup version completed on this machine. Stored in ~/.veyyon/config.yml.",
 		},
 	},
 
@@ -101,7 +206,7 @@ export const GLOBAL_SETTINGS = {
 			group: "Auth Broker",
 			label: "Auth Broker URL",
 			description:
-				"Base URL of the auth broker that mints provider credentials for this machine. Stored in ~/.veyyon/config.yml under auth.broker.url; empty disables broker discovery via config.",
+				"Base URL of the auth broker providing credentials for this machine. Stored in ~/.veyyon/config.yml. Leave empty to disable broker discovery.",
 		},
 	},
 
@@ -119,20 +224,34 @@ export const GLOBAL_SETTINGS = {
 	},
 } as const;
 
-/** Read/write handlers for a `scope: "global"` setting path. */
-export interface GlobalSettingBinding {
-	read(): unknown;
-	/** Persist a new value. May throw on invalid input; the caller surfaces the error. */
-	write(value: unknown): void;
-}
-
 /**
  * Maps each global-scoped setting path to the canonical `@veyyon/utils`
  * reader/writer for that value. The Settings singleton consults this instead of
  * the profile store for these paths, so there is one source of truth per value.
  * Keyed by string (not SettingPath) to avoid a type cycle with SETTINGS_SCHEMA.
+ *
+ * A global-scoped setting need not be declared in this file: what makes a path
+ * global is `scope: "global"` plus an entry here, not which domain file it was
+ * written in. Every one of them is declared here today.
  */
 export const GLOBAL_SETTING_BINDINGS: Record<string, GlobalSettingBinding> = {
+	// Derived from the limit list rather than written out four times: a new
+	// resource adds one entry there and is bound here without another edit.
+	...Object.fromEntries(
+		GLOBAL_RESOURCE_LIMITS.map((limit): [string, GlobalSettingBinding] => [
+			`machine.${limit}`,
+			{
+				read: () => readGlobalResourceLimitSafe(limit),
+				write: value => {
+					const parsed = typeof value === "number" ? value : Number(value);
+					if (!Number.isFinite(parsed) || parsed < 0) {
+						throw new Error(`machine.${limit} must be a non-negative number of units, or 0 for no limit.`);
+					}
+					writeGlobalResourceLimit(limit, parsed);
+				},
+			},
+		]),
+	),
 	defaultProfile: {
 		read: () => readGlobalDefaultProfileSafe() ?? DEFAULT_PROFILE_DIR_NAME,
 		write: value => {

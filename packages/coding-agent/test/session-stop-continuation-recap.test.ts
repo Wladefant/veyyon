@@ -12,15 +12,15 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage, Context, Model, SimpleStreamOptions, StopReason } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ExtensionRunner } from "@veyyon/coding-agent/extensibility/extensions";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
 import { convertToLlm } from "@veyyon/coding-agent/session/messages";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { Snowflake } from "@veyyon/utils";
 
 // Mirrors the reporter's block-reason shape: multi-line prose with U+2717

@@ -18,7 +18,7 @@
  * other survived here for as long as it did.
  */
 
-import { ProviderHttpError } from "@veyyon/ai/error";
+import { ProviderHttpError } from "@veyyon/ai/error/classes";
 import { parseAzureDeploymentNameMap } from "@veyyon/ai/providers/openai-shared";
 import type { FetchImpl, Model } from "@veyyon/ai/types";
 import { $env, logger, scopedTimeoutSignal, stringifyJson } from "@veyyon/utils";
@@ -38,12 +38,24 @@ export * from "./legacy-provider-native";
 export const REMOTE_COMPACTION_TIMEOUT_MS = 180_000;
 
 /**
+ * Hard ceiling on a provider's server-side compaction of the session's own
+ * history. It is a separate number from {@link REMOTE_COMPACTION_TIMEOUT_MS}
+ * because the work is not comparable: a remote summarizer answers a prompt the
+ * operator sized, while a server-side compaction re-reads the whole window.
+ * Measured 2026-09-09 on a 234k-token `openai-codex` span: every server
+ * compaction was cut at the 180 s summarizer deadline, and the local summary
+ * of the same span that then ran completed in four minutes. Ten minutes covers
+ * that span with the same margin the summarizer deadline gives its prompt.
+ */
+export const SERVER_COMPACTION_TIMEOUT_MS = 600_000;
+
+/**
  * Bound the non-2xx body written into the log line below.
  *
  * `compaction.remoteEndpoint` points at whatever the operator configured, and a
  * misconfigured one is the common case: a corporate proxy, a captive portal, or
  * a plain web server in front of the intended summarizer answers with a whole
- * HTML page. Uncapped, that page was written to `~/.veyyon/logs` in full on
+ * HTML page. Uncapped, that page was written to `~/.veyyon/profiles/<name>/logs` in full on
  * every compaction attempt of every turn. Matches the 4096-char cap the Google
  * provider path uses for the same hazard.
  */

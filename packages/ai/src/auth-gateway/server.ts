@@ -19,14 +19,13 @@
  */
 
 import { Effort } from "@veyyon/catalog/effort";
-import { extractHttpStatusFromError, extractRetryHint } from "@veyyon/utils/fetch-retry";
+import { extractRetryHint } from "@veyyon/utils/fetch-retry";
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import type { ApiKeyResolver } from "../auth-retry";
 import type { AuthStorage } from "../auth-storage";
 import * as AIError from "../error";
 import { classifyGatewayError } from "../error/gateway";
-import { isUsageLimitOutcome } from "../error/rate-limit";
 import * as anthropicMessages from "../providers/anthropic-messages-server";
 import * as openaiChat from "../providers/openai-chat-server";
 import * as openaiResponses from "../providers/openai-responses-server";
@@ -143,7 +142,7 @@ const reportedDroppedTypedOptions = new Set<string>();
  * `user` and `logitBias` carry caller data.
  */
 function reportDroppedTypedOptions(api: Api, names: string[]): void {
-	const signature = `${api}:${[...names].sort().join(",")}`;
+	const signature = `${api}:${Array.from(names).sort().join(",")}`;
 	const detail = { api, dropped: names };
 	if (reportedDroppedTypedOptions.has(signature)) {
 		logger.debug("auth-gateway still dropping unsupported typed options", detail);
@@ -275,8 +274,7 @@ async function refreshGatewayApiKeyAfterAuthError(
 	peer: string,
 ): Promise<string | undefined> {
 	const message = errorMessage(error);
-	const status = extractHttpStatusFromError(error);
-	if (AIError.isUsageLimit(error) || isUsageLimitOutcome(status, message)) {
+	if (AIError.isUsageLimit(error)) {
 		const retryAfterMs = extractRetryHint(undefined, message);
 		const { switched, retryAtMs } = await storage.markUsageLimitReached(provider, sessionId, {
 			retryAfterMs,
@@ -373,6 +371,15 @@ function mirrorRequestAbort(req: Request): AbortController {
 		req.signal.addEventListener("abort", () => controller.abort(req.signal.reason), { once: true });
 	}
 	return controller;
+}
+
+/** The SSE encoder's cancel hook: a client that closes the response aborts the upstream call once. */
+function abortOnClientClose(controller: AbortController): (reason?: unknown) => void {
+	return reason => {
+		if (!controller.signal.aborted) {
+			controller.abort(reason instanceof Error ? reason : new Error("client closed request"));
+		}
+	};
 }
 
 // (handlePassthrough removed — see note above.)
@@ -540,11 +547,7 @@ async function handleFormatEndpoint(
 
 	const sseStream = route.module.encodeStream(events, parsed.modelId, parsed.options, {
 		signal: controller.signal,
-		onCancel: reason => {
-			if (!controller.signal.aborted) {
-				controller.abort(reason instanceof Error ? reason : new Error("client closed request"));
-			}
-		},
+		onCancel: abortOnClientClose(controller),
 	});
 	return new Response(sseStream, {
 		status: 200,
@@ -715,11 +718,7 @@ async function handlePiNative(bootOpts: AuthGatewayBootOptions, req: Request, pe
 
 	const sseStream = piNative.encodeStream(events, parsed.modelId, parsed.options, {
 		signal: controller.signal,
-		onCancel: reason => {
-			if (!controller.signal.aborted) {
-				controller.abort(reason instanceof Error ? reason : new Error("client closed request"));
-			}
-		},
+		onCancel: abortOnClientClose(controller),
 	});
 	return new Response(sseStream, {
 		status: 200,

@@ -1,15 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { Agent } from "@veyyon/agent-core";
-import { Settings } from "@veyyon/coding-agent/config/settings";
-import type { SettingPath } from "@veyyon/coding-agent/config/settings-schema";
-import { IrcBus, type IrcMessage } from "@veyyon/coding-agent/irc/bus";
+import { type SettingPath, Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
-import { AgentSession, type AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session";
+import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 import type { CustomMessage } from "@veyyon/coding-agent/session/messages";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { IrcBus, type IrcMessage } from "@veyyon/coding-agent/task/irc-bus";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import { IrcTool } from "@veyyon/coding-agent/tools/irc";
+import { IrcTool } from "@veyyon/coding-agent/tools/agent/irc";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 
 interface FakeSession {
 	session: AgentSession;
@@ -132,7 +132,7 @@ describe("IRC", () => {
 			expect(bus.unreadCount("0-Sub")).toBe(0);
 		});
 
-		it("relays only subagent-to-subagent traffic to the main UI", async () => {
+		it("relays only agent-to-agent traffic to the main UI", async () => {
 			const main = makeFakeSession();
 			registry.register({ id: "Main", displayName: "main", kind: "main", session: main.session });
 			const a = makeFakeSession();
@@ -406,7 +406,7 @@ describe("IRC", () => {
 				getAgentId: () => "0-Main",
 			};
 			// Without delegation the root cannot create a peer, regardless of capacity.
-			session.settings.set("subagent.enabled", false);
+			session.settings.set("agent.enabled", false);
 			expect(IrcTool.createIf(session)).toBeNull();
 		});
 
@@ -421,14 +421,17 @@ describe("IRC", () => {
 				getAgentId: () => "0-Main",
 			};
 			// Cap zero lets the depth-zero root spawn direct children, which become peers.
-			session.settings.set("subagent.maxNestedSpawnDepth", 0);
+			session.settings.set("agent.maxNestedSpawnDepth", 0);
 			const tool = IrcTool.createIf(session);
 			expect(tool).toBeInstanceOf(IrcTool);
-			expect(tool?.interruptible).toBe(true);
+			// A wait blocks, so it observes an interrupt; a fire-and-forget send
+			// returns at once and must keep its own result.
+			expect(tool?.interruptible({ op: "wait" })).toBe(true);
+			expect(tool?.interruptible({ op: "send", to: "0-Leaf", message: "hi" })).toBe(false);
 		});
 
-		it("createIf enables irc for a depth-one leaf subagent", () => {
-			// WHY: a subagent that cannot spawn children is not a subagent without
+		it("createIf enables irc for a depth-one leaf agent", () => {
+			// WHY: an agent that cannot spawn children is not an agent without
 			// peers. Its parent and its siblings are peers, so irc for a depth>0
 			// session must not be gated on that session's own spawn budget, and must
 			// not be gated on delegation either: a leaf still has to answer the agent
@@ -446,13 +449,14 @@ describe("IRC", () => {
 
 			// Cap zero makes this child a leaf, but its parent and siblings remain peers.
 			const capped = makeLeaf();
-			capped.settings.set("subagent.maxNestedSpawnDepth", 0);
+			capped.settings.set("agent.maxNestedSpawnDepth", 0);
 			const cappedTool = IrcTool.createIf(capped);
 			expect(cappedTool).toBeInstanceOf(IrcTool);
-			expect(cappedTool?.interruptible).toBe(true);
+			expect(cappedTool?.interruptible({ op: "wait" })).toBe(true);
+			expect(cappedTool?.interruptible({ op: "send", to: "0-Main", message: "hi", await: true })).toBe(true);
 
 			const noDelegation = makeLeaf();
-			noDelegation.settings.set("subagent.enabled", false);
+			noDelegation.settings.set("agent.enabled", false);
 			expect(IrcTool.createIf(noDelegation)).toBeInstanceOf(IrcTool);
 		});
 
@@ -841,7 +845,7 @@ describe("IRC", () => {
 			expect(await session.agent.hasIrcInterrupts?.()).toBe(true);
 		});
 
-		it("queues parent IRC as steering while a subagent turn is streaming", async () => {
+		it("queues parent IRC as steering while an agent turn is streaming", async () => {
 			const { session } = createRealSession();
 			sessions.push(session);
 			const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);

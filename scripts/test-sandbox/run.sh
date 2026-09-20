@@ -101,15 +101,21 @@
 # runner keeps the original local-first order because it is already a disposable
 # machine and has no LAN route to the remote host.
 #
-# MACOS CI
-# --------
-# macos-14 GitHub runners have no KVM, no Linux container runtime that can run a
-# Linux guest without a VM of its own, and nested virtualisation is not offered.
-# There is no rung on that runner that is as hard as the Linux ones. This script
-# therefore REFUSES on darwin (exit 3) instead of degrading to the bare runner.
-# The macOS job's job is to build and typecheck; the TypeScript suites run on the
-# ubuntu runner inside the docker rung. That is stated here so nobody later
-# mistakes the absence of a macOS test run for an oversight.
+# MACOS
+# -----
+# Every rung here is a Linux boundary, so a Darwin host has none of its own. It may
+# still reach one through a Linux VM whose kernel runs the container -- colima,
+# Docker Desktop, Rancher -- and the docker rung's probe answers that by asking the
+# daemon rather than the host kernel. A macos-14 GitHub runner has no such daemon,
+# no KVM and no nested virtualisation, so it takes the refusal below (exit 3)
+# instead of degrading to the bare runner: the macOS job builds and typechecks, and
+# the TypeScript suites run on the ubuntu runner inside the docker rung. That is
+# stated here so nobody later mistakes the absence of a macOS test run for an
+# oversight.
+#
+# Nothing is taken on trust either way. The guest still has to prove
+# VEYYON_TEST_HOST_HOME unreadable from inside, so a VM that mounted the operator's
+# home back into the container fails that gate rather than passing quietly.
 #
 # WHERE ARTIFACTS LAND
 # --------------------
@@ -145,7 +151,7 @@ BUILD_DIR="${GUEST_DIR}/.build"
 # when the file is not there, and the default on the next line is the whole point
 # of reading the manifest optionally.
 BUN_VERSION="$(sed -n 's/.*"packageManager"[[:space:]]*:[[:space:]]*"bun@\([^"]*\)".*/\1/p' "${REPO_ROOT}/package.json" 2>/dev/null | head -n1 || true)"
-: "${BUN_VERSION:=1.3.14}"
+: "${BUN_VERSION:=1.4.0}"
 GUEST_IMAGE="veyyon-test-guest:${BUN_VERSION}"
 
 # The host home this sandbox removes from the guest's view. Taken from the passwd
@@ -184,8 +190,8 @@ skip() { printf '[test-sandbox] rung %-8s unavailable: %s\n' "$1" "$2" >&2; }
 # under /repo it labelled everything "repo").
 #
 # But mirroring is wrong when the checkout lives UNDER the home being hidden, which
-# is exactly the CI case: a GitHub runner checks out to /home/runner/work/<repo>,
-# so binding that path verbatim recreates /home/runner inside the sandbox and the
+# is exactly the CI case: a GitHub runner checks out beneath its home directory,
+# so binding that path verbatim recreates the hidden home inside the sandbox and the
 # gate correctly refuses, because a directory named as removed is readable again.
 # In that case the repo goes somewhere outside every home instead. /srv is chosen
 # because it is not a home root, not /tmp, and not short enough to collide.
@@ -198,6 +204,41 @@ case "${REPO_ROOT}/" in
 		GUEST_REPO="${REPO_ROOT}"
 		;;
 esac
+
+# The git directory, when the checkout is a linked WORKTREE and therefore does not
+# contain one.
+#
+# A worktree's `.git` is a file reading `gitdir: <abs path>`, and that path lives
+# under the primary checkout's `.git`, outside the repo bind. Without it every
+# `git` call inside the sandbox fails: a suite that reads HEAD saw a directory that
+# is not a repository, and one that reads a committed blob saw exit 128, both from a
+# tree that is a perfectly good checkout on the host. Binding the primary `.git` at
+# its own host path is what makes the pointer resolve, since the pointer is absolute
+# and `commondir` is relative to it.
+#
+# Read-only, and skipped entirely when that path is inside the home being hidden:
+# the whole contract of this sandbox is that the home is unreachable, and no
+# convenience is worth handing part of it back. A git-dependent suite then behaves
+# as it did before this bind existed.
+SANDBOX_GITDIR=""
+if [ -f "${REPO_ROOT}/.git" ]; then
+	worktree_gitdir="$(sed -n 's/^gitdir: *//p' "${REPO_ROOT}/.git" | head -n1)"
+	case "${worktree_gitdir}" in
+		/*/.git/worktrees/*) primary_gitdir="${worktree_gitdir%/worktrees/*}" ;;
+		/*) primary_gitdir="${worktree_gitdir}" ;;
+		*) primary_gitdir="" ;;
+	esac
+	if [ -n "${primary_gitdir}" ] && [ -d "${primary_gitdir}" ]; then
+		case "${primary_gitdir}/" in
+			"${HOST_HOME}"/*)
+				log "the git directory ${primary_gitdir} is inside ${HOST_HOME}, so it stays out of the sandbox: git-dependent suites will see a tree that is not a repository"
+				;;
+			*)
+				SANDBOX_GITDIR="${primary_gitdir}"
+				;;
+		esac
+	fi
+fi
 
 # Exit status a runner uses to say "the sandbox could not be established and NO
 # guest command ran". It is the ONLY status that lets the driver descend the
@@ -378,8 +419,17 @@ main() {
 		log "already inside the '${VEYYON_TEST_SANDBOX}' sandbox; running directly"
 		exec "${cmd[@]}"
 	fi
+	# A non-Linux host refuses only when no rung answers, which is what the message
+	# says. The probes are asked here rather than assumed from `uname`, because a
+	# Linux VM's daemon is a rung this host reaches and the kernel name cannot see it.
+	# See the MACOS note above for why a macOS runner still lands here.
 	if [ "$(uname -s)" != "Linux" ]; then
-		die "no kernel-level isolation rung exists on $(uname -s). This script refuses to run the suite on the bare host. On macOS CI the TypeScript suites are expected to run on the ubuntu runner; see the MACOS CI note in this file." 3
+		local reachable=0 candidate
+		for candidate in "${RUNGS[@]}"; do
+			"probe_${candidate}" >/dev/null 2>&1 && { reachable=1; break; }
+		done
+		[ "$reachable" = 1 ] ||
+			die "no kernel-level isolation rung exists on $(uname -s). This script refuses to run the suite on the bare host. On macOS CI the TypeScript suites are expected to run on the ubuntu runner; see the MACOS note in this file." 3
 	fi
 
 	local r status

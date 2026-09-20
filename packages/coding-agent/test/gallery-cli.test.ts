@@ -6,11 +6,10 @@ import {
 	renderGalleryForThemes,
 	renderGalleryState,
 	resolveFixture,
-	themedOutPath,
 } from "@veyyon/coding-agent/cli/gallery-cli";
 import type { GalleryFixture } from "@veyyon/coding-agent/cli/gallery-fixtures";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { getAvailableThemes, initTheme, theme } from "@veyyon/coding-agent/modes/theme/theme";
+import { getAvailableThemes, initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import { toolRenderers } from "@veyyon/coding-agent/tools/renderers";
 import { hermeticSpawnEnv } from "./helpers/hermetic-spawn-env";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
@@ -89,14 +88,20 @@ describe("gallery harness", () => {
 	it("routes customRendered tools (task) through the custom-tool branch", async () => {
 		// `task` attaches its renderer on the real AgentTool, so the gallery must
 		// reproduce that path. With a result present and mergeCallAndResult, the
-		// custom branch must NOT emit a redundant tool-name line above the result box
+		// custom branch must NOT emit a redundant tool-name line above the result block
 		// (regression guard for tool-execution's custom-branch fallback label).
 		const task = resolveFixture("task");
 		expect(task.customRendered).toBe(true);
 		const lines = await renderGalleryState("task", task, "error", 100);
 		const stripped = lines.map(line => Bun.stripANSI(line).trim());
-		// The framed result header carries the label inside the box border...
-		expect(stripped.some(line => line.startsWith(theme.boxSharp.topLeft) && line.includes("Task"))).toBe(true);
+		const rail = theme.symbol("block.rail");
+		// The block's title row carries the label on the rail, and the output hangs on
+		// the same rail under it: the label is the block's own title and not a line of
+		// its body...
+		const titleIndex = stripped.findIndex(line => line.includes("Task"));
+		expect(titleIndex).toBeGreaterThanOrEqual(0);
+		expect(stripped[titleIndex]).toStartWith(rail);
+		expect(stripped.slice(titleIndex + 1).some(line => line.startsWith(rail))).toBe(true);
 		// ...but no standalone "Task" label line precedes it.
 		expect(stripped).not.toContain("Task");
 	});
@@ -105,7 +110,7 @@ describe("gallery harness", () => {
 		const cases = [
 			["irc_inbox", "IRC inbox failed: message store unavailable.", "IRC inbox empty"],
 			["irc_list", "IRC list failed: the agent registry is unavailable.", "no other agents"],
-			["job", "Subagent exited 1: Redis connection string is missing.", "cancelled"],
+			["job", "Agent exited 1: Redis connection string is missing.", "cancelled"],
 		] as const;
 
 		for (const [name, expected, forbidden] of cases) {
@@ -243,18 +248,6 @@ describe("gallery --theme matrix (GALLERY-THEME-FLAG)", () => {
 		await renderGalleryForThemes(["titanium", "light"], ["bash"], ["success"], 100, false);
 		expect(settings.get("theme.dark")).toBe(beforeDark);
 		expect(settings.get("theme.light")).toBe(beforeLight);
-	});
-
-	it("suffixes the output path per theme so matrix files never collide", () => {
-		// Extension preserved, tag inserted before it.
-		expect(themedOutPath("shot.png", "light")).toBe("shot-light.png");
-		expect(themedOutPath("out/dir/shot.png", "titanium")).toBe("out/dir/shot-titanium.png");
-		// Only the final extension is treated as the extension.
-		expect(themedOutPath("a.b.png", "light")).toBe("a.b-light.png");
-		// No extension: append.
-		expect(themedOutPath("shot", "light")).toBe("shot-light");
-		// A theme name with path-hostile characters is slugified, never a separator.
-		expect(themedOutPath("shot.png", "my/weird theme")).toBe("shot-my-weird-theme.png");
 	});
 
 	it("wires --theme through the CLI: a repeated flag prints one labeled block per theme", async () => {

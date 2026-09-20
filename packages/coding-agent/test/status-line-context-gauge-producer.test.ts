@@ -24,10 +24,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import type { ContextUsage } from "@veyyon/coding-agent/extensibility/extensions/types";
-import { StatusLineComponent } from "@veyyon/coding-agent/modes/components/status-line";
-import type { StatusLineSegmentId } from "@veyyon/coding-agent/modes/components/status-line/types";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
+import type { StatusLineSegmentId } from "@veyyon/coding-agent/modes/terminal/components/status-line/types";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import { StatusLineComponent } from "../src/modes/terminal/components/status-line/component";
+import { StatusPresentationProducer } from "../src/presentation/status-producer";
+import { statusLineSessionParts } from "./helpers/status-line-session";
 
 beforeAll(async () => {
 	resetSettingsForTest();
@@ -64,35 +66,19 @@ function makeSession(options: SessionOptions): AgentSession {
 		...options.compaction,
 	};
 	return {
-		messages: [{ role: "user", content: "hi" }],
-		systemPrompt: ["You are a helpful assistant."],
-		agent: { state: { tools: [] } },
-		skills: [],
-		model: { id: "test-model", contextWindow },
-		state: { messages: [{ role: "user", content: "hi" }], model: { contextWindow } },
-		sessionManager: {
-			getUsageStatistics: () => ({
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				orchestrationInput: 0,
-				orchestrationOutput: 0,
-				orchestrationCacheRead: 0,
-				premiumRequests: 0,
-				cost: 0,
-			}),
-			getSessionName: () => "test",
-		},
-		getAsyncJobSnapshot: () => ({ running: [] }),
-		settings: { getGroup: () => compaction },
-		getContextUsage: (): ContextUsage => ({
-			tokens: options.usedTokens,
+		...statusLineSessionParts({
+			messages: [{ role: "user", content: "hi" }],
 			contextWindow,
-			percent: (options.usedTokens / contextWindow) * 100,
+			contextUsage: {
+				tokens: options.usedTokens,
+				contextWindow,
+				percent: (options.usedTokens / contextWindow) * 100,
+			} as ContextUsage,
 		}),
-		contextUsageRevision: 0,
+		systemPrompt: ["You are a helpful assistant."],
+		// The one fact these cases vary: compaction is ON, so the gauge denominates
+		// against the compaction threshold rather than the raw window.
+		settings: { getGroup: () => compaction, get: () => undefined },
 	} as unknown as AgentSession;
 }
 
@@ -102,7 +88,7 @@ function render(
 	segments: StatusLineSegmentId[],
 	options?: { guestUsage?: ContextUsage },
 ): string {
-	const component = new StatusLineComponent(session);
+	const component = new StatusLineComponent(new StatusPresentationProducer(session));
 	component.setAutoCompactEnabled(true);
 	if (options?.guestUsage) {
 		component.setCollabStatus({
@@ -221,6 +207,19 @@ describe("a collab guest's gauge", () => {
 		});
 
 		expect(plain).toContain("30% left");
+	});
+
+	it("says the count is unknown when the host says it does not know", () => {
+		// `ContextUsage` is nullable on the wire so a host with no anchor -- right after a
+		// compaction, before the next response -- can say so. A guest that fell back to a
+		// locally computed number here would paint `100% left` from an accounting it does
+		// not do, which is the same lie the host stopped telling.
+		const plain = render(makeSession({ usedTokens: 0 }), ["context_pct"], {
+			guestUsage: { tokens: null, contextWindow: 300_000, percent: null } as unknown as ContextUsage,
+		});
+
+		expect(plain).toContain("? left");
+		expect(plain).not.toContain("100% left");
 	});
 });
 

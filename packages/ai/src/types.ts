@@ -19,15 +19,23 @@ import type {
 	WriteResult,
 } from "@veyyon/catalog/discovery/cursor-gen/agent_pb";
 import type { Effort } from "@veyyon/catalog/effort";
-import { isOpenAIModelId } from "@veyyon/catalog/identity/family";
-import type { Api, FetchImpl, KnownApi, Model, Provider, ThinkingBudgets, Usage } from "@veyyon/catalog/types";
+import type { ServiceTier } from "@veyyon/catalog/provider-models/wire-capabilities";
+import type { Api, FetchImpl, KnownApi, Model, ThinkingBudgets } from "@veyyon/catalog/types";
+import type {
+	CacheEnforcement,
+	CacheRetention,
+	Message,
+	MessageAttribution,
+	ToolChoice,
+	ToolResultMessage,
+} from "@veyyon/model/message";
+import type { ToolSpec } from "@veyyon/tool";
 import type { Type } from "arktype";
 import type { ZodType, z } from "zod/v4";
 import type { ApiKey } from "./auth-retry";
-import type { AssistantTurnMetrics, AssistantTurnRequest, ToolCallMetrics } from "./instrumentation";
 import type { BedrockOptions } from "./providers/amazon-bedrock";
 import type { AnthropicOptions } from "./providers/anthropic";
-import type { FallbackParam, StopDetails } from "./providers/anthropic-wire";
+import type { FallbackParam } from "./providers/anthropic-wire";
 import type { AzureOpenAIResponsesOptions } from "./providers/azure-openai-responses";
 import type { CursorOptions } from "./providers/cursor";
 import type { DevinOptions } from "./providers/devin";
@@ -39,10 +47,10 @@ import type { OllamaChatOptions } from "./providers/ollama";
 import type { OpenAICodexResponsesOptions } from "./providers/openai-codex-responses";
 import type { OpenAICompletionsOptions } from "./providers/openai-completions";
 import type { OpenAIResponsesOptions } from "./providers/openai-responses";
-import type { kStreamingPartialJson } from "./utils/block-symbols";
 import type { AssistantMessageEventStream } from "./utils/event-stream";
 
-export type { StopDetails } from "./providers/anthropic-wire";
+export * from "@veyyon/model/message";
+
 export type { AssistantMessageEventStream } from "./utils/event-stream";
 
 /**
@@ -92,243 +100,34 @@ export interface TokenTaskBudget {
 	remaining?: number;
 }
 
-export type MessageAttribution = "user" | "agent";
-
-export type ToolChoice =
-	| "auto"
-	| "none"
-	| "any"
-	| "required"
-	| { type: "function"; name: string }
-	| { type: "function"; function: { name: string } }
-	| { type: "tool"; name: string };
-
 // Base options all providers share
-export type CacheRetention = "none" | "short" | "long";
 
 /**
- * What to do when a request's prompt-cache markers demonstrably did not take
- * effect. Declared here beside {@link CacheRetention} rather than in
- * `cache/policy.ts`, which needs `CacheRetention` from this module and would
- * otherwise form an import cycle with it.
+ * The service-tier vocabulary, and the per-provider capability that decides what
+ * a tier does on the wire, live in
+ * `@veyyon/catalog/provider-models/wire-capabilities` beside the provider table
+ * they describe. They are re-exported here because the tier is part of the
+ * request shape this module declares and every consumer reaches it through here.
  */
-export type CacheEnforcement = "off" | "warn" | "error";
-
-/**
- * Service tier hint for processing priority / cost control. These are the
- * values providers consume on the wire:
- *
- * - OpenAI / OpenAI-Codex: sent verbatim as the `service_tier` field
- *   (`flex`/`scale`/`priority`).
- * - Google (Gemini API + Vertex AI): sent as the top-level `serviceTier`
- *   field (`flex`/`priority`).
- * - OpenRouter: passed through as `service_tier`; OpenRouter realizes it for
- *   the OpenAI- and Google-family upstreams it supports and ignores it
- *   otherwise.
- * - Direct Anthropic: `"priority"` is translated into `speed: "fast"` plus the
- *   fast-mode beta on supported Opus models. Other tiers are ignored.
- *
- * Per-family scoping is expressed by {@link ServiceTierByFamily}, not by
- * scoped sentinel values — see {@link serviceTierFamily}.
- */
-export const SERVICE_TIERS = ["auto", "default", "flex", "scale", "priority"] as const;
-
-export type ServiceTier = (typeof SERVICE_TIERS)[number];
-
-/**
- * Is this a service tier?
- *
- * The type is derived from {@link SERVICE_TIERS} rather than declared beside it, so
- * the values exist exactly once and this guard cannot fall behind them. Both
- * OpenAI-compatible servers used to spell the five values again in a comparison
- * chain, which meant a new tier was accepted by the type system and silently
- * dropped from an incoming request.
- */
-export function isServiceTier(value: unknown): value is ServiceTier {
-	return typeof value === "string" && (SERVICE_TIERS as readonly string[]).includes(value);
-}
-
-/** Provider families that expose an independent service-tier knob. */
-export type ServiceTierFamily = "openai" | "anthropic" | "google";
-
-/**
- * Per-family service-tier selection. A request consults only the entry for the
- * family its model belongs to (see {@link resolveModelServiceTier}), so a user
- * can opt one family into priority without affecting the others when switching
- * models mid-session.
- */
-export type ServiceTierByFamily = Partial<Record<ServiceTierFamily, ServiceTier>>;
-
-type ServiceTierModel = Pick<Model, "provider" | "api" | "id">;
-
-function isOpenAIServiceTierApi(api: Api | undefined): boolean {
-	return api === "openai-completions" || api === "openai-responses" || api === "openai-codex-responses";
-}
-
-function hasDedicatedServiceTierControl(provider: Provider | undefined): boolean {
-	return provider === "fireworks";
-}
-
-function isOpenAIServiceTierModel(model: ServiceTierModel): boolean {
-	return (
-		!hasDedicatedServiceTierControl(model.provider) && isOpenAIServiceTierApi(model.api) && isOpenAIModelId(model.id)
-	);
-}
-
-/**
- * Classify a model into the service-tier family whose knob governs it, or
- * `undefined` when the model exposes no serving-priority control.
- *
- * OpenRouter models are classified by id namespace (`anthropic/`, `google/`,
- * `openai/`); Claude on Bedrock/Vertex (api `anthropic-messages`) is the
- * anthropic family even though its provider is `amazon-bedrock`/`google-vertex`.
- * Custom OpenAI-compatible relays that serve OpenAI model ids are OpenAI family
- * too unless that provider owns a separate tier control such as Fireworks.
- */
-export function serviceTierFamily(model: ServiceTierModel): ServiceTierFamily | undefined {
-	const provider = model.provider;
-	if (provider === "openrouter") {
-		const id = model.id.toLowerCase();
-		if (id.startsWith("anthropic/")) return "anthropic";
-		if (id.startsWith("google/")) return "google";
-		if (id.startsWith("openai/")) return "openai";
-		return undefined;
-	}
-	if (provider === "openai" || provider === "openai-codex") return "openai";
-	if (model.api === "anthropic-messages") return "anthropic";
-	if (provider === "google" || provider === "google-vertex") return "google";
-	if (isOpenAIServiceTierModel(model)) return "openai";
-	return undefined;
-}
-
-/**
- * Reduce a per-family tier map to the single wire tier for `model` — the entry
- * for the model's family, or `undefined` when the model has no family.
- */
-export function resolveModelServiceTier(
-	tiers: ServiceTierByFamily | null | undefined,
-	model: Pick<Model, "provider" | "api" | "id">,
-): ServiceTier | undefined {
-	if (!tiers) return undefined;
-	const family = serviceTierFamily(model);
-	return family ? tiers[family] : undefined;
-}
-
-/**
- * True when the tier should be sent on the wire as the provider's service-tier
- * request field. OpenAI / OpenAI-Codex accept `flex`/`scale`/`priority`; Google
- * (Gemini API + Vertex) and OpenRouter accept `flex`/`priority`; Fireworks
- * Serverless realizes only its Priority serving path. Anthropic is absent — it
- * realizes `priority` via `speed: "fast"`, not a service-tier field.
- */
-export function shouldSendServiceTier(
-	serviceTier: ServiceTier | null | undefined,
-	target: Provider | ServiceTierModel | undefined,
-): boolean {
-	if (!serviceTier) return false;
-	const provider = typeof target === "string" ? target : target?.provider;
-	if (provider === "openai" || provider === "openai-codex" || provider === "openrouter") {
-		return serviceTier === "flex" || serviceTier === "scale" || serviceTier === "priority";
-	}
-	if (typeof target !== "string" && target && isOpenAIServiceTierModel(target)) {
-		return serviceTier === "flex" || serviceTier === "scale" || serviceTier === "priority";
-	}
-	if (provider === "google") {
-		return serviceTier === "flex" || serviceTier === "priority";
-	}
-	// Vertex realizes only priority (via header); flex has no documented control.
-	if (provider === "google-vertex" || provider === "fireworks") {
-		return serviceTier === "priority";
-	}
-	return false;
-}
-
-/**
- * True when `priority` will actually be realized on the wire for `model`.
- * Direct Anthropic realizes fast mode; OpenAI/Google/Fireworks emit the
- * service-tier field; OpenRouter realizes it only for its OpenAI- and
- * Google-family upstreams. Bedrock/Vertex Claude and OpenRouter Anthropic
- * models do not realize priority and return `false`.
- */
-export function realizesPriorityServiceTier(
-	serviceTier: ServiceTier | null | undefined,
-	model: Pick<Model, "provider" | "api" | "id">,
-): boolean {
-	if (serviceTier !== "priority") return false;
-	if (model.provider === "anthropic") return true;
-	if (model.provider === "openrouter") {
-		const family = serviceTierFamily(model);
-		return family === "openai" || family === "google";
-	}
-	if (model.api === "anthropic-messages") return false;
-	return shouldSendServiceTier(serviceTier, model);
-}
-
-/**
- * Premium-request weight contributed by a priority request to a provider that
- * realizes it and bills extra. Mirrors GitHub Copilot's `premiumRequests`
- * accounting so the "premium requests" stat aggregates priority traffic across
- * the OpenAI family, direct Anthropic fast mode, and Google priority.
- *
- * Returns 1 only when priority is actually realized on the wire for `model`
- * (see {@link realizesPriorityServiceTier}) and the provider bills it as a
- * premium request. OpenRouter is excluded — it bills per its own pricing, not
- * Copilot-premium semantics — as are Bedrock/Vertex Claude, where priority is
- * silently dropped.
- */
-export function getPriorityPremiumRequests(
-	serviceTier: ServiceTier | null | undefined,
-	model: Pick<Model, "provider" | "api" | "id">,
-): number {
-	if (!realizesPriorityServiceTier(serviceTier, model)) return 0;
-	const provider = model.provider;
-	return provider === "openai" ||
-		provider === "openai-codex" ||
-		provider === "anthropic" ||
-		provider === "google" ||
-		provider === "google-vertex"
-		? 1
-		: 0;
-}
-
-/**
- * Coerce a persisted service-tier value to a {@link ServiceTierByFamily}. Newer
- * sessions store the family map directly; legacy sessions stored a single
- * scalar — `"priority"` applied everywhere, `"openai-only"`/`"claude-only"`
- * scoped to one family, and the remaining values were OpenAI-only semantics.
- */
-export function coerceServiceTierByFamily(value: unknown): ServiceTierByFamily | undefined {
-	if (value === null || value === undefined) return undefined;
-	if (typeof value === "object") {
-		const src = value as Record<string, unknown>;
-		const out: ServiceTierByFamily = {};
-		for (const family of ["openai", "anthropic", "google"] as const) {
-			const tier = src[family];
-			if (tier === "auto" || tier === "default" || tier === "flex" || tier === "scale" || tier === "priority") {
-				out[family] = tier;
-			}
-		}
-		return Object.keys(out).length > 0 ? out : undefined;
-	}
-	switch (value) {
-		case "priority":
-			return { openai: "priority", anthropic: "priority", google: "priority" };
-		case "openai-only":
-			return { openai: "priority" };
-		case "claude-only":
-			return { anthropic: "priority" };
-		case "auto":
-			return { openai: "auto" };
-		case "default":
-			return { openai: "default" };
-		case "flex":
-			return { openai: "flex" };
-		case "scale":
-			return { openai: "scale" };
-		default:
-			return undefined;
-	}
-}
+export {
+	getPriorityPremiumRequests,
+	realizesPriorityServiceTier,
+	resolveModelServiceTier,
+	serviceTierFamily,
+	shouldSendServiceTier,
+} from "@veyyon/catalog/provider-models/service-tier";
+export type {
+	ProviderServiceTierCapability,
+	ProviderWireCapabilities,
+	ServiceTier,
+	ServiceTierByFamily,
+	ServiceTierFamily,
+} from "@veyyon/catalog/provider-models/wire-capabilities";
+export {
+	coerceServiceTierByFamily,
+	isServiceTier,
+	SERVICE_TIERS,
+} from "@veyyon/catalog/provider-models/wire-capabilities";
 
 export interface ProviderSessionState {
 	close(): void;
@@ -444,6 +243,18 @@ export interface StreamOptions {
 	 * as the prompt-cache key when `promptCacheKey` is not set.
 	 */
 	sessionId?: string;
+	/**
+	 * Conversation identity for a stateful agent API. `cursor-agent` and
+	 * `devin-agent` thread turns server-side by this id and key their cached
+	 * conversation state on it, falling back to {@link sessionId}.
+	 *
+	 * A SIDE request is not part of the conversation it reads: a compaction
+	 * summary, a branch summary, a title, a critique. Reusing the live id sends
+	 * the server a one-message conversation under the live conversation's
+	 * identity, and overwrites the cached state the next live turn resumes from,
+	 * so every side request passes an id of its own.
+	 */
+	conversationId?: string;
 	/**
 	 * Optional prompt-cache identity. OpenAI-family providers use this for
 	 * `prompt_cache_key` payloads and cache-affinity headers such as
@@ -566,14 +377,6 @@ export interface SimpleStreamOptions extends Omit<StreamOptions, "apiKey"> {
 	thinkingBudgets?: ThinkingBudgets;
 	/** Cursor exec handlers for local tool execution */
 	cursorExecHandlers?: CursorExecHandlers;
-	/**
-	 * Operator-owned instruction units delivered through Cursor's `requestContext.rules`
-	 * channel (cursor-agent only): the operator's global and profile context files, one
-	 * unit per file. The provider adds the session system prompt itself; this channel is
-	 * for file-backed units only, and repository content must never appear in it (see
-	 * {@link CursorRuleInput}).
-	 */
-	cursorRules?: CursorRuleInput[];
 	/** Hook to handle tool results from Cursor exec */
 	cursorOnToolResult?: CursorToolResultHandler;
 	/** Optional tool choice override for compatible providers */
@@ -614,318 +417,6 @@ export type StreamFunction<TApi extends Api> = (
 	options: OptionsForApi<TApi>,
 ) => AssistantMessageEventStream;
 
-export interface TextSignatureV1 {
-	v: 1;
-	id: string;
-	phase?: "commentary" | "final_answer";
-}
-
-export interface TextContent {
-	type: "text";
-	text: string;
-	textSignature?: string; // e.g., for OpenAI responses, message metadata (legacy id string or TextSignatureV1 JSON)
-}
-
-export interface ThinkingContent {
-	type: "thinking";
-	thinking: string;
-	thinkingSignature?: string; // e.g., for OpenAI responses, the reasoning item ID
-	itemId?: string; // item.id from output_item.added, used to match output_item.done
-}
-
-export interface RedactedThinkingContent {
-	type: "redactedThinking";
-	data: string;
-}
-
-/**
- * Anthropic server-side-fallback boundary marker persisted on assistant
- * turns whose provider request opted into
- * `AnthropicOptions.fallbacks`. Consumers other than the Anthropic
- * provider MUST ignore it — `transformMessages` strips the block on any
- * cross-provider hop and on non-official Anthropic replays, so downstream
- * converters never see it.
- */
-export interface AnthropicFallbackContent {
-	type: "fallback";
-	from: { model: string };
-	to: { model: string };
-}
-
-export interface ImageContent {
-	type: "image";
-	data: string; // base64 encoded image data
-	mimeType: string; // e.g., "image/jpeg", "image/png"
-	/**
-	 * OpenAI-only resolution hint. `"original"` preserves native resolution
-	 * (useful for dense text-in-image content whose glyphs do not survive
-	 * the default `auto` downscale). Providers without a detail knob ignore it.
-	 */
-	detail?: "auto" | "low" | "high" | "original";
-}
-
-export interface ToolCall {
-	type: "toolCall";
-	id: string;
-	name: string;
-	arguments: Record<string, unknown>;
-	[kStreamingPartialJson]?: string;
-	thoughtSignature?: string; // Google-specific: opaque signature for reusing thought context
-	intent?: string; // Harness-level intent metadata extracted from traced tool arguments
-	/**
-	 * Verbatim in-band syntax block that produced this synthetic `ptc_*` call.
-	 * Present only for owned prompt/tool-call formats; provider-native calls omit it.
-	 */
-	rawBlock?: string;
-	/**
-	 * Original wire-level name when the tool was invoked via OpenAI's custom-tool
-	 * mechanism (e.g., `apply_patch`). Set by `openai-responses` on receive so
-	 * the history-replay path can re-emit the call as `custom_tool_call` with
-	 * its paired tool-result as `custom_tool_call_output`. Absent for regular
-	 * JSON function tools.
-	 */
-	customWireName?: string;
-}
-
-export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
-
-export interface OpenAIResponsesHistoryPayload {
-	type: "openaiResponsesHistory";
-	provider?: string;
-	dt?: boolean;
-	items: Array<Record<string, unknown>>;
-}
-
-export type ProviderPayload = OpenAIResponsesHistoryPayload;
-
-export interface UserMessage {
-	role: "user";
-	content: string | (TextContent | ImageContent)[];
-	/** True if the message was injected by the system (e.g., auto-continue). */
-	synthetic?: boolean;
-	/** True when injected mid-turn as a steer; consumed by the agent's pre-LLM transform to wrap it for emphasis. Never rendered. */
-	steering?: boolean;
-	/** Who initiated this message for billing/attribution semantics. */
-	attribution?: MessageAttribution;
-	/** Provider-specific opaque payload used to reconstruct transport-native history. */
-	providerPayload?: ProviderPayload;
-	timestamp: number; // Unix timestamp in milliseconds
-}
-
-export interface DeveloperMessage {
-	role: "developer";
-	content: string | (TextContent | ImageContent)[];
-	/** Who initiated this message for billing/attribution semantics. */
-	attribution?: MessageAttribution;
-	/** Provider-specific opaque payload used to reconstruct transport-native history. */
-	providerPayload?: ProviderPayload;
-	timestamp: number; // Unix timestamp in milliseconds
-}
-
-export type AssistantRetryRecoveryKind = "credential" | "model" | "wait" | "plain";
-
-export interface AssistantRetryRecovery {
-	kind: "auto-retry";
-	status: "recovered";
-	attempt: number;
-	recoveredAt: string;
-	recovery: AssistantRetryRecoveryKind;
-	note: string;
-	supersededBy?: {
-		timestamp: number;
-		responseId?: string;
-		provider: string;
-		model: string;
-	};
-}
-
-export interface ContextSnapshot {
-	promptTokens: number; // authoritative provider prompt/input tokens
-	nonMessageTokens: number; // estimated non-message total at send time
-	/** Estimated stored conversation messages included in the request. Rich session telemetry only. */
-	storedMessagesTokens?: number;
-	/** Estimated not-yet-stored request tail included alongside the stored conversation. Rich telemetry only. */
-	tailTokens?: number;
-	/** Whether the prompt total came from provider usage or a local preflight estimate. */
-	promptTokensSource?: "provider" | "estimate";
-	nonMessageTokensEstimated?: boolean;
-	storedMessagesTokensEstimated?: boolean;
-	tailTokensEstimated?: boolean;
-	/** Latest compaction entry governing this request, when recorded at ultra detail. */
-	compactionEntryId?: string;
-	lastMessageTimestamp?: number;
-}
-
-/**
- * Identity of a tool call whose arguments never finished streaming.
- *
- * Both fields arrive with the provider's tool-call block header, before any
- * argument delta, so they are complete even when the arguments are not.
- */
-export interface IncompleteToolCall {
-	id: string;
-	name: string;
-}
-
-/**
- * One bucket of a provider-reported context composition. See
- * {@link AssistantMessage.providerContextComposition}.
- */
-export interface ProviderContextBucket {
-	/** Stable provider identifier to branch on (`"tools"`, `"rules"`, `"skills"`, ...). */
-	key: string;
-	/** The provider's own display string for the bucket. */
-	label: string;
-	tokens: number;
-	/** Characters the provider measured, or 0 when it reports tokens only. */
-	chars: number;
-}
-
-export interface AssistantMessage {
-	role: "assistant";
-	content: (TextContent | ThinkingContent | RedactedThinkingContent | AnthropicFallbackContent | ToolCall)[];
-	api: Api;
-	provider: Provider;
-	model: string;
-	contextSnapshot?: ContextSnapshot;
-	retryRecovery?: AssistantRetryRecovery;
-	responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
-	/**
-	 * Name of the upstream provider an aggregator routed this request to, as
-	 * reported in the response (e.g. OpenRouter's top-level `provider` field:
-	 * `"OpenAI"`, `"Anthropic"`, `"Together"`). Distinct from `provider`, which
-	 * is the configured gateway we called (`"openrouter"`). Undefined for direct
-	 * providers that expose no such field.
-	 */
-	upstreamProvider?: string;
-	/**
-	 * Context window the PROVIDER reported for this conversation on the wire.
-	 *
-	 * Most APIs never say: the window is static model metadata and the catalog
-	 * carries it. A few agent gateways report it per turn alongside the tokens
-	 * used, and for those the catalog entry is a guess — a model the gateway
-	 * added after the catalog was generated falls back to a default window that
-	 * has nothing to do with the real one. Divide the gateway's own used-token
-	 * count by that default and the context gauge pins at empty on a
-	 * conversation the gateway considers barely started, which is what Cursor's
-	 * `ConversationTokenDetails` did (`max_tokens` was on the wire every turn
-	 * and thrown away while `used_tokens` was believed).
-	 *
-	 * Set it only from a value the provider actually sent. Undefined means the
-	 * provider said nothing, NOT that the catalog window is wrong.
-	 */
-	providerContextWindow?: number;
-	/**
-	 * How the PROVIDER says its own reported context is composed, when it says.
-	 *
-	 * Only a gateway that assembles the prompt for us can measure this: it knows
-	 * what the tool schemas, the rules and the skills actually cost after its own
-	 * serialization, where we can only estimate them from what we sent. Cursor
-	 * reports it per turn and the buckets sum to its `used_tokens` exactly, which
-	 * is what makes it worth carrying: one real sample puts tool definitions at
-	 * 8,326 of 14,483 tokens, and no local estimate would have found that.
-	 *
-	 * Undefined means the provider said nothing. An empty bucket the provider did
-	 * measure is present with `tokens: 0`, so an absent key is "not measured"
-	 * rather than "nothing there".
-	 */
-	providerContextComposition?: ProviderContextBucket[];
-	usage: Usage;
-	stopReason: StopReason;
-	stopDetails?: StopDetails | null;
-	errorMessage?: string;
-	/** Per-tool abort messages used when an aborted assistant turn needs different placeholder results per tool call. */
-	toolCallAbortMessages?: Record<string, string>;
-	/**
-	 * Tool calls the model began emitting whose arguments were still streaming
-	 * when the turn was cut off (a provider stream reset or an abort). Their
-	 * `toolCall` blocks are removed from {@link content}, because incomplete
-	 * arguments are unsafe to run and an unpaired `tool_use` block breaks the
-	 * provider's tool_use/tool_result pairing on replay. The identity survives
-	 * here so the harness can still tell the model the call was attempted and
-	 * never ran: without it the call vanishes with no trace anywhere, and the
-	 * model reads the turn as if it had never asked for that tool.
-	 *
-	 * Populated only on `error`/`aborted` turns that dropped at least one block.
-	 */
-	incompleteToolCalls?: IncompleteToolCall[];
-	/** HTTP status surfaced by the provider when the request failed. Populated by every provider's catch block alongside `errorMessage` so consumers (auth retry, telemetry, UI) can branch without regex-scraping the message. */
-	errorStatus?: number;
-	/** Structured machine-readable error classifier; see `utils/error-id.ts` for bit layout and helpers. */
-	errorId?: number;
-	/**
-	 * Stable identifiers for request features the provider silently dropped
-	 * during this turn (e.g. `"priority"`). Set when a server-side rejection
-	 * triggered an in-provider fallback retry that succeeded without the
-	 * feature. Callers can use this to sync user-facing toggles back to the
-	 * server's actual state.
-	 */
-	disabledFeatures?: string[];
-	/** Provider-specific opaque payload used to reconstruct transport-native history. */
-	providerPayload?: ProviderPayload;
-	timestamp: number; // Unix timestamp in milliseconds
-	duration?: number; // Request duration in milliseconds
-	ttft?: number; // Time to first token in milliseconds
-	/**
-	 * Dense per-turn study record (request-start wall-clock, ttft, throughput),
-	 * present when session instrumentation is on. The graded, single-owner form of
-	 * the loose `duration`/`ttft` scalars above; its detail scales with the
-	 * configured {@link InstrumentationLevel} (absent at `off` and on turns
-	 * recorded before it existed). See {@link captureAssistantTurnMetrics}.
-	 */
-	turnMetrics?: AssistantTurnMetrics;
-	/**
-	 * Exact sampling/reasoning/tool-choice parameters AS SENT for this turn,
-	 * present when session instrumentation is on. The replay-fidelity companion to
-	 * {@link turnMetrics}: it records what the turn was asked for, so a backtest can
-	 * reproduce the request. Absent at `off`, on all-default turns, and on turns
-	 * recorded before it existed. See {@link captureAssistantTurnRequest}.
-	 */
-	request?: AssistantTurnRequest;
-}
-
-/**
- * What an errored tool result says when the tool produced no output of its own.
- *
- * A user reads this line. It was declared twice, in `@veyyon/agent`'s loop (which
- * fills it in at the boundary where an untyped tool result enters) and in
- * `@veyyon/ai`'s Anthropic provider (which fills it in on the way to the wire,
- * because the API rejects an empty content array). The two are the same sentence
- * about the same event, so an edit to one produced a transcript where the same
- * failure was worded two ways depending on which layer noticed it first. It lives
- * here because this module owns {@link ToolResultMessage}, the shape being filled.
- */
-export const EMPTY_ERROR_TOOL_RESULT_TEXT = "Tool failed with no output.";
-
-export interface ToolResultMessage<TDetails = unknown> {
-	role: "toolResult";
-	toolCallId: string;
-	toolName: string;
-	content: (TextContent | ImageContent)[]; // Supports text and images
-	details?: TDetails;
-	isError: boolean;
-	/** Who initiated this message for billing/attribution semantics. */
-	attribution?: MessageAttribution;
-	/** Timestamp when output was pruned (ms since epoch). Undefined if unpruned. */
-	prunedAt?: number;
-	/**
-	 * Tool-declared: this result carried no information worth retaining once
-	 * consumed (zero matches, elapsed wait). Compaction passes may elide it.
-	 * Never set together with isError.
-	 */
-	useless?: boolean;
-	/**
-	 * Dense study record for this call (timing, output weight, args fingerprint),
-	 * present when session instrumentation is on. Its detail scales with the
-	 * configured {@link InstrumentationLevel}; absent at `off` and on messages
-	 * recorded before instrumentation existed. See {@link captureToolCallMetrics}.
-	 */
-	metrics?: ToolCallMetrics;
-	timestamp: number; // Unix timestamp in milliseconds
-}
-
-export type Message = UserMessage | DeveloperMessage | AssistantMessage | ToolResultMessage;
-
 export type CursorExecHandlerResult<T> = { result: T; toolResult?: ToolResultMessage } | T | ToolResultMessage;
 
 export type CursorToolResultHandler = (
@@ -944,28 +435,6 @@ export interface CursorMcpCall {
 export interface CursorShellStreamCallbacks {
 	onStdout(data: string): void;
 	onStderr(data: string): void;
-}
-
-/**
- * One instruction unit for Cursor's `requestContext.rules` channel, the only channel
- * Cursor's server honors for client-supplied instructions (the system-prompt blobs at
- * the `rootPromptMessagesJson` head are requested and then replaced server-side).
- *
- * The provider maps each unit to one `CursorRule` verbatim: it does not read the
- * filesystem and does not classify provenance. The caller owns both, and the contract
- * is that only OPERATOR-OWNED units arrive here (the compiled system prompt, the
- * operator's global and profile context files). Repository content — `.cursor/rules/*.mdc`,
- * a checked-in AGENTS.md — may not configure the agent and must never be passed in.
- */
-export interface CursorRuleInput {
-	/**
-	 * Absolute path of the file the content came from. cursor-agent sends AGENTS.md
-	 * the same way (one rule per file, real path). Compiled (non-file) content uses a
-	 * stable synthetic path owned by the caller.
-	 */
-	fullPath: string;
-	/** The instruction body, in full. cursor-agent applies no client-side size cap. */
-	content: string;
 }
 
 export interface CursorExecHandlers {
@@ -1007,56 +476,10 @@ export type Static<S> = S extends ZodType
 			? T
 			: unknown;
 
-export interface ToolCallExample<TArgs = Record<string, unknown>> {
-	caption?: string;
-	call: TArgs;
-}
-export interface ToolCompareExample<TArgs = Record<string, unknown>> {
-	caption?: string;
-	bad: TArgs;
-	good: TArgs;
-}
-export interface ToolNoteExample {
-	caption: string;
-	note?: string;
-}
-export type ToolExample<TArgs = Record<string, unknown>> =
-	| ToolCallExample<TArgs>
-	| ToolCompareExample<TArgs>
-	| ToolNoteExample;
+export type { ToolCallExample, ToolCompareExample, ToolExample, ToolNoteExample, ToolSpec } from "@veyyon/tool";
 
-export interface Tool<TParameters extends TSchema = TSchema> {
-	name: string;
-	description: string;
+export interface Tool<TParameters extends TSchema = TSchema> extends ToolSpec {
 	parameters: TParameters;
-	/** If true, tool is strictly typed and validated against the parameters schema before execution */
-	strict?: boolean;
-	/**
-	 * Optional grammar constraint for OpenAI custom-tool emission.
-	 * When set, providers that support grammar-constrained tools (currently only
-	 * `openai-responses` against models with the right capability flag) may emit
-	 * this tool as `{type: "custom", format: {type: "grammar", …}}` instead of a
-	 * JSON function tool. Other providers ignore the field.
-	 */
-	customFormat?: { syntax: "lark" | "regex"; definition: string };
-	/**
-	 * Optional wire-level name used when this tool is emitted as a custom tool
-	 * (e.g. OpenAI's `{type: "custom"}` shape). Models trained on specific tool
-	 * names — like GPT-5 on `apply_patch` — need to see that exact name on the
-	 * wire, but it may differ from the harness-internal `name`. The agent-loop
-	 * dispatcher matches both `name` and `customWireName` so returned tool
-	 * calls route correctly. Absent for regular JSON function tools.
-	 */
-	customWireName?: string;
-	/**
-	 * Illustrative calls/notes; the AI layer renders them into an `<examples>`
-	 * block in the model's native tool-call syntax and appends to the wire
-	 * description. Author `call`/`bad`/`good` as plain argument objects WITHOUT
-	 * `i` — when intent tracing injects `i` into the schema, the renderer adds
-	 * a placeholder `i` automatically. Type each tool's `examples` against its
-	 * own schema (e.g. `readonly ToolExample<typeof schema["type"]>[]`).
-	 */
-	examples?: readonly ToolExample[];
 }
 
 export interface Context {
@@ -1101,27 +524,3 @@ export interface Context {
 	 */
 	thinkingRetention?: number;
 }
-
-export type AssistantMessageEvent =
-	| { type: "start"; contentIndex?: undefined; partial: AssistantMessage }
-	| { type: "text_start"; contentIndex: number; partial: AssistantMessage }
-	| { type: "text_delta"; contentIndex: number; delta: string; partial: AssistantMessage }
-	| { type: "text_end"; contentIndex: number; content: string; partial: AssistantMessage }
-	| { type: "thinking_start"; contentIndex: number; partial: AssistantMessage }
-	| { type: "thinking_delta"; contentIndex: number; delta: string; partial: AssistantMessage }
-	| { type: "thinking_end"; contentIndex: number; content: string; partial: AssistantMessage }
-	| { type: "toolcall_start"; contentIndex: number; partial: AssistantMessage }
-	| { type: "toolcall_delta"; contentIndex: number; delta: string; partial: AssistantMessage }
-	| { type: "toolcall_end"; contentIndex: number; toolCall: ToolCall; partial: AssistantMessage }
-	| {
-			type: "done";
-			contentIndex?: undefined;
-			reason: Extract<StopReason, "stop" | "length" | "toolUse">;
-			message: AssistantMessage;
-	  }
-	| {
-			type: "error";
-			contentIndex?: undefined;
-			reason: Extract<StopReason, "aborted" | "error">;
-			error: AssistantMessage;
-	  };

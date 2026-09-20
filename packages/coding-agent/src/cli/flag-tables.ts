@@ -19,23 +19,24 @@
  * setter/config entry in this file; both `args.ts` and the bootstrap pick it
  * up automatically, so the two cannot drift out of sync.
  *
- * IMPORT RULE: this module MUST NOT import any runtime value from
- * `@veyyon/utils` (or anything that transitively does). That package's
- * `env.ts` eagerly loads `.env` files from `getAgentDir()` during module
+ * IMPORT RULE: this module MUST NOT import any runtime value from the
+ * `@veyyon/utils` barrel (or anything that transitively reaches its `env.ts`).
+ * That module eagerly loads `.env` files from `getAgentDir()` during module
  * initialization, which would race the profile bootstrap. Type-only imports
- * are erased at runtime and are therefore safe.
+ * are erased at runtime and are therefore safe, and so is a subpath whose
+ * module imports nothing: `@veyyon/utils/cli-usage-error` is one class.
  *
  * If a setter needs runtime dependencies (logging, validators, lookup
  * tables), they're passed in through {@link ParseDeps} and `args.ts` wires the
  * real implementations at the dispatch site.
  */
 
+import { CliUsageError } from "@veyyon/utils/cli-usage-error";
 import type { ConfiguredThinkingLevel } from "../thinking";
 // approval-modes.ts is intentionally free of runtime deps (no @veyyon/utils), so
 // importing it here does not violate the bootstrap-race IMPORT RULE above.
-import { APPROVAL_MODE_VALUES, isKnownApprovalMode } from "../tools/approval-modes";
+import { APPROVAL_MODE_VALUES, isKnownApprovalMode } from "../tools/core/approval-modes";
 import type { Args, Mode } from "./args";
-import { CliUsageError } from "./usage-error";
 
 /**
  * Runtime dependencies injected into setters that need to validate input.
@@ -113,7 +114,7 @@ function parseMaxTimeSeconds(value: string): number {
 
 /**
  * Accepted `--mode` values, with the guard that gates them. Mirrors the
- * `isKnownApprovalMode` shape in `../tools/approval-modes` so both enum-valued
+ * `isKnownApprovalMode` shape in `../tools/core/approval-modes` so both enum-valued
  * flags reject a bad value the same way.
  *
  * Keyed by `Mode` rather than written as a bare array so the compiler forces
@@ -179,9 +180,6 @@ export const STRING_SETTERS: Record<string, StringSetter> = {
 	},
 	"--plan": (result, value) => {
 		result.plan = value;
-	},
-	"--subagent-model": (result, value) => {
-		result.subagentModel = value;
 	},
 	"--compaction-model": (result, value) => {
 		result.compactionModel = value;

@@ -1,9 +1,11 @@
 import * as logger from "@veyyon/utils/logger";
 import type { OAuthAccess } from "./auth-storage";
-import * as AIError from "./error";
+// The owners, not the barrel: this module throws two error classes, and reaching
+// them through `./error` pulled the whole registry and every domain behind it.
+import { RequestAbortError } from "./error/abort";
+import { MissingApiKeyError } from "./error/auth";
 import { isAuthRetryableError } from "./error/auth-classify";
 import { isUsageLimit } from "./error/flags";
-import { isUsageLimitOutcome } from "./error/rate-limit";
 
 /**
  * Context passed to an {@link ApiKeyResolver} on each resolution attempt.
@@ -50,7 +52,7 @@ export function isApiKeyResolver(key: ApiKey | undefined): key is ApiKeyResolver
 
 function throwIfAuthRetryAborted(signal: AbortSignal | undefined): void {
 	if (signal?.aborted) {
-		throw signal.reason ?? new AIError.RequestAbortError("Authentication retry aborted by caller");
+		throw signal.reason ?? new RequestAbortError("Authentication retry aborted by caller");
 	}
 }
 
@@ -114,13 +116,6 @@ export const AUTH_RETRY_STEPS: readonly boolean[] = [false, true];
 
 export const AUTH_RETRY_MAX_ATTEMPTS = 64;
 
-function isDirectCredentialRotationError(error: unknown): boolean {
-	if (isUsageLimit(error)) return true;
-	const status = AIError.status(error);
-	const message = error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
-	return isUsageLimitOutcome(status, message);
-}
-
 /** Resolve a single retry step, swallowing resolver failures into `undefined`. */
 export async function resolveRetryKey(
 	resolver: ApiKeyResolver,
@@ -131,7 +126,7 @@ export async function resolveRetryKey(
 ): Promise<string | undefined> {
 	if (signal?.aborted) return undefined;
 	try {
-		const rotateSibling = lastChance || (!lastChance && isDirectCredentialRotationError(error));
+		const rotateSibling = lastChance || (!lastChance && isUsageLimit(error));
 		const resolved = (await resolver({ lastChance: rotateSibling, error, signal, previousKey })) || undefined;
 		if (signal?.aborted) return undefined;
 		return resolved;
@@ -190,7 +185,7 @@ export async function resolveNextAuthRetryKey(
 ): Promise<string | undefined> {
 	if (signal?.aborted) return undefined;
 	if (state.attempts >= AUTH_RETRY_MAX_ATTEMPTS) return undefined;
-	const directRotation = isDirectCredentialRotationError(error);
+	const directRotation = isUsageLimit(error);
 	if (!directRotation) {
 		if (state.legacyAuthSwitchUsed) return undefined;
 		if (!state.refreshedCurrent) {
@@ -250,7 +245,7 @@ export async function withAuth<T>(
 	opts?: { isAuthError?: (error: unknown) => boolean; signal?: AbortSignal; missingKeyMessage?: string },
 ): Promise<T> {
 	const isAuthError = opts?.isAuthError ?? isAuthRetryableError;
-	const missingKey = (): Error => new AIError.MissingApiKeyError(undefined, opts?.missingKeyMessage);
+	const missingKey = (): Error => new MissingApiKeyError(undefined, opts?.missingKeyMessage);
 	const signal = opts?.signal;
 	throwIfAuthRetryAborted(signal);
 
@@ -360,7 +355,7 @@ export async function withOAuthAccess<T>(
 		throwIfAuthRetryAborted(signal);
 	}
 	if (!lastAccess) {
-		throw new AIError.MissingApiKeyError(
+		throw new MissingApiKeyError(
 			provider,
 			opts?.missingAccessMessage ?? `No OAuth credential available for provider: ${provider}`,
 		);
@@ -380,7 +375,7 @@ export async function withOAuthAccess<T>(
 		let next: OAuthAccess | undefined;
 		throwIfAuthRetryAborted(signal);
 		if (attemptCount >= AUTH_RETRY_MAX_ATTEMPTS) break;
-		const directRotation = isDirectCredentialRotationError(lastError);
+		const directRotation = isUsageLimit(lastError);
 		if (!directRotation) {
 			if (legacyAuthSwitchUsed) break;
 			if (!refreshedCurrent) {

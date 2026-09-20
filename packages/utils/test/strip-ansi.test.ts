@@ -6,14 +6,14 @@
  *
  * The repo cannot have a single implementation: this one runs in the TUI and in
  * a browser bundle that may not import Node built-ins, and `strip_ansi` in
- * `crates/veyyon-shell/src/minimizer/primitives.rs` runs inside the shell's
+ * `natives/shell/src/minimizer/primitives.rs` runs inside the shell's
  * output minimizer. Two implementations of one contract is fine. Two
  * implementations of two contracts is what was there, so the cases now live
- * outside both languages in `fixtures/ansi-strip-corpus.json` and both suites
- * read them; the Rust half is `crates/veyyon-shell/tests/ansi_strip_contract.rs`.
+ * outside both languages in `tests/fixtures/ansi-strip-corpus.json` and both suites
+ * read them; the Rust half is `natives/shell/tests/ansi_strip_contract.rs`.
  */
 import { describe, expect, it } from "bun:test";
-import { stripAnsi } from "@veyyon/utils/strip-ansi";
+import { stripAnsi, stripAnsiExceptSgr } from "@veyyon/utils/strip-ansi";
 import { collectPackageSources } from "./support/package-sources";
 
 describe("stripAnsi", () => {
@@ -56,11 +56,49 @@ describe("stripAnsi", () => {
 	 * Also wrong before: the escape stayed as text, which is not a fixed point.
 	 * The text after it has always been the part that matters, since that is what
 	 * a capture cut at a buffer boundary looks like.
+	 *
+	 * `a\x1bb` used to be the example here and is now the OPPOSITE case: `ESC b`
+	 * is EMI, an Fs control, so both bytes go. What is left are the runs that open
+	 * nothing at all — an escape at the end of the input, an escape before a
+	 * control byte, and a truncated introducer.
 	 */
 	it("drops a stray escape and keeps the text after it", () => {
-		expect(stripAnsi("a\x1bb")).toBe("ab");
+		expect(stripAnsi("a\x1b")).toBe("a");
+		expect(stripAnsi("a\x1b\nb")).toBe("a\nb");
 		expect(stripAnsi("error: \x1b[3")).toBe("error: [3");
 		expect(stripAnsi("\x1b]8;;https://example.com")).toBe("]8;;https://example.com");
+	});
+
+	/**
+	 * The four grammars, one row each, because a capture holds all of them and the
+	 * two short classes are the ones a strip written for CSI and OSC misses.
+	 * `ESC 7`/`ESC 8` park and reclaim the cursor for a progress bar, `ESC ( B`
+	 * selects the ASCII charset on the way out of an editor, and `ESC P … ST`
+	 * carries a sixel image or tmux passthrough whose payload used to arrive as
+	 * visible text.
+	 */
+	it("strips the short and string sequence classes, not just CSI and OSC", () => {
+		expect(stripAnsi("\x1b7done\x1b8")).toBe("done");
+		expect(stripAnsi("\x1b=menu\x1b>")).toBe("menu");
+		expect(stripAnsi("\x1b(Btext")).toBe("text");
+		expect(stripAnsi("\x1bPtmux;\x1b\\after")).toBe("after");
+		expect(stripAnsi("\x1b_Ga=T,f=100;PAYLOAD\x1b\\after")).toBe("after");
+		// The introducers stay with their own grammars: a two-byte match on `[` or
+		// `]` would eat the introducer and publish the parameters as text.
+		expect(stripAnsi("\x1b[1m\x1b]0;title\x07bold")).toBe("bold");
+	});
+
+	/**
+	 * 8-bit C1 control sequences (0x90-0x9f) canonicalize to their 7-bit ESC equivalents.
+	 * 0x9b (CSI) carries colors and styles; 0x90 (DCS), 0x9e (PM), 0x9f (APC), 0x9d (OSC)
+	 * and 0x9c (ST) frame strings; non-introducer C1 bytes remain for caller handling.
+	 */
+	it("canonicalizes and strips 8-bit C1 escape sequences while preserving non-introducers", () => {
+		expect(stripAnsi("\x9b31mred\x9b0m")).toBe("red");
+		expect(stripAnsi("\x90tmux;\x9cafter")).toBe("after");
+		expect(stripAnsi("\x9fGa=T,f=100;PAYLOAD\x9cafter")).toBe("after");
+		expect(stripAnsi("before\x9cafter")).toBe("beforeafter");
+		expect(stripAnsi("before\x95after")).toBe("before\x95after");
 	});
 
 	/**
@@ -85,6 +123,46 @@ describe("stripAnsi", () => {
 });
 
 /**
+ * Styled stripping canonicalizes C1 while preserving only SGR. Exercise the
+ * entire C1 range, including non-introducers, rather than only colored CSI.
+ * This checks string processing, not terminal decoding or streaming fragments.
+ */
+describe("styled ANSI stripping", () => {
+	it("normalizes every C1 introducer without removing surrounding styles", () => {
+		const style = "\x1b[31m";
+		const reset = "\x1b[0m";
+		for (let code = 0x80; code <= 0x9f; code++) {
+			const control = String.fromCharCode(code);
+			const stringIntroducer = code === 0x90 || code === 0x98 || code === 0x9d || code === 0x9e || code === 0x9f;
+			for (const terminator of ["\x07", "\x1b\\", "\x9c"]) {
+				const sequence = stringIntroducer
+					? `${control}payload${terminator}`
+					: code === 0x9b
+						? `${control}1m`
+						: control;
+				const expected = stringIntroducer || code === 0x9c ? "" : code === 0x9b ? "\x1b[1m" : control;
+				expect(stripAnsiExceptSgr(`${style}before${sequence}after${reset}`)).toBe(
+					`${style}before${expected}after${reset}`,
+				);
+			}
+		}
+	});
+
+	it("preserves SGR but removes cursor and intermediate-byte CSI in both encodings", () => {
+		for (const introducer of ["\x1b[", "\x9b"]) {
+			for (const parameters of ["", "31", "38:2:255:0:0"]) {
+				expect(stripAnsiExceptSgr(`${introducer}${parameters}mtext${introducer}0m`)).toBe(
+					`\x1b[${parameters}mtext\x1b[0m`,
+				);
+			}
+			for (const command of ["2K", "?25l", "1 q", "31 m"]) {
+				expect(stripAnsiExceptSgr(`${introducer}${command}text`)).toBe("text");
+			}
+		}
+	});
+});
+
+/**
  * The corpus shared with the Rust implementation.
  *
  * Read from disk rather than restated here, because a case restated is a case
@@ -95,7 +173,7 @@ describe("stripAnsi against the shared cross-language corpus", () => {
 	type Case = { name: string; why: string; input: string; expected: string };
 
 	async function corpus(): Promise<Case[]> {
-		const url = new URL("../../../fixtures/ansi-strip-corpus.json", import.meta.url);
+		const url = new URL("../../../tests/fixtures/ansi-strip-corpus.json", import.meta.url);
 		const parsed = (await Bun.file(url).json()) as { cases: Case[] };
 		return parsed.cases;
 	}

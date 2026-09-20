@@ -7,7 +7,7 @@ import {
 	phaseRomanNumeral,
 	phasesToMarkdown,
 	todoMatchesAnyDescription,
-} from "@veyyon/coding-agent/tools/todo";
+} from "@veyyon/coding-agent/tools/agent/todo";
 
 /**
  * Pure todo state ops: init/start/done/rm, markdown round-trip, roman labels.
@@ -46,7 +46,7 @@ describe("applyOpsToPhases init/start/done", () => {
 		const two = phases[0]!.tasks.find(t => t.content === "two");
 		expect(two?.status).toBe("in_progress");
 		const one = phases[0]!.tasks.find(t => t.content === "one");
-		expect(one?.status).toBe("pending");
+		expect(one?.status).toBe("in_progress");
 	});
 
 	it("done completes the in_progress or matching task", () => {

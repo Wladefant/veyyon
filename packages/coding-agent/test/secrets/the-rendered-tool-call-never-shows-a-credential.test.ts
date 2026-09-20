@@ -21,7 +21,7 @@
  * vault on disk, `createAgentSession`, a scripted model issuing one tool call and a registered tool
  * that reports what actually arrived. The central assertion sweeps EVERY event the session emits
  * rather than naming the two a UI happens to read today: a card, a JSON line, an HTML export and a
- * subagent HUD all reconcile from this stream, so proving the value is absent from all of it covers
+ * agent HUD all reconcile from this stream, so proving the value is absent from all of it covers
  * the sinks that exist and the ones added later.
  *
  * Run in yolo mode deliberately. The secret-use boundary is skipped there by design, so this is the
@@ -32,13 +32,13 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { unregisterCustomApis } from "@veyyon/ai/api-registry";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, registerMockApi } from "@veyyon/ai/providers/mock";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import { resolveVaultLocations, SecretVault } from "@veyyon/coding-agent/secrets/vault";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
 

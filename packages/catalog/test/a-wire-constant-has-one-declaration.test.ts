@@ -81,11 +81,21 @@ const SOURCES = await workspaceSources();
  * DECLARATIONS, not mentions. A re-export (`export { X } from "..."`) and an import
  * both keep one owner and must not count; a second `const X =` is the finding.
  */
+const fileContents = new Map<string, string>();
+async function getSource(file: string): Promise<string> {
+	let content = fileContents.get(file);
+	if (content === undefined) {
+		content = await readFile(file, "utf8");
+		fileContents.set(file, content);
+	}
+	return content;
+}
+
 async function declarersOf(name: string): Promise<string[]> {
 	const declaration = new RegExp(`^\\s*(?:export )?const ${name}\\s*=`, "m");
 	const out: string[] = [];
 	for (const file of SOURCES) {
-		if (declaration.test(await readFile(file, "utf8"))) out.push(path.relative(PACKAGES, file));
+		if (declaration.test(await getSource(file))) out.push(path.relative(PACKAGES, file));
 	}
 	return out.sort();
 }
@@ -173,7 +183,7 @@ describe("the Codex base URL", () => {
 	/** Including the web-search provider that used to hold the second copy. */
 	it("is imported by the web-search provider", async () => {
 		const provider = await readFile(
-			path.join(PACKAGES, "coding-agent", "src", "web", "search", "providers", "codex.ts"),
+			path.join(PACKAGES, "coding-agent", "src", "tools", "web", "search", "providers", "codex.ts"),
 			"utf8",
 		);
 

@@ -2,7 +2,7 @@
  * A tmpdir standing in for a cgroup v2 mount, for suites that drive the REAL
  * native Linux budget backend without root and without delegation.
  *
- * The native backend (`crates/veyyon-shell/src/cpu_budget/linux.rs`) only ever
+ * The native backend (`natives/shell/src/cpu_budget/linux.rs`) only ever
  * does ordinary filesystem work: `mkdir` the group, write `cpu.max`, write a
  * pid into `cgroup.procs`, read `cpu.stat`. A plain directory with the two
  * marker files the probe looks for is therefore indistinguishable from a real
@@ -19,7 +19,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { CpuLimitCommandResult, CpuLimitEnvironment } from "../../src/session/cpu-limit";
+import type { CpuLimitCommandResult, CpuLimitEnvironment } from "@veyyon/kernel/session/cgroup-host";
 
 /** Every root handed out by {@link makeCgroupRoot}, for teardown. */
 const roots: string[] = [];
@@ -33,10 +33,12 @@ export async function makeCgroupRoot(): Promise<string> {
 }
 
 /** The delegated user tree the direct backend prefers, with `cpu` available. */
-export async function makeDelegatedParent(root: string): Promise<string> {
+export async function makeDelegatedParent(root: string, options: { controllers?: string } = {}): Promise<string> {
 	const parent = path.join(root, "user.slice", "user-1000.slice", "user@1000.service", "app.slice");
 	await fs.mkdir(parent, { recursive: true });
-	await fs.writeFile(path.join(parent, "cgroup.controllers"), "cpu io memory pids\n");
+	// A parent delegating nothing is the container case: the directory exists,
+	// the group is created inside it, and every control write is refused.
+	await fs.writeFile(path.join(parent, "cgroup.controllers"), `${options.controllers ?? "cpu io memory pids"}\n`);
 	await fs.writeFile(path.join(parent, "cgroup.subtree_control"), "");
 	await fs.writeFile(path.join(parent, "cgroup.procs"), "");
 	return parent;

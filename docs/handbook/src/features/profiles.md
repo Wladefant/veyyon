@@ -35,7 +35,7 @@ Resolution order for every `veyyon` / `vey` invocation:
    `veyyon profile default [name]`, or edit it on the **Global** tab of `/settings`.
 4. `default`.
 
-## What a profile owns (shipped)
+## Profile configuration scope (shipped)
 
 When a profile `<name>` is active, native Veyyon paths resolve under:
 
@@ -47,11 +47,11 @@ That resolution is uniform across settings, sessions, blobs, slash commands, sti
 
 **Provider credentials are the one exception:** by default they live in a machine-wide store (`~/.veyyon/shared-auth/agent.db`) that every profile reads, so you sign in once. Set `profileSharing: false` in the global `~/.veyyon/config.yml` (or toggle it on the **Global** tab of `/settings`) to give each profile its own private credential store instead. See [Signing in › Credentials are shared across profiles](../using/authentication.md#credentials-are-shared-across-profiles).
 
-**Keybindings:** each profile owns `agent/keybindings.*`. New profiles seeded with `veyyon profile new --from default` copy the default profile's keybindings once. On first launch of an older named profile that has no keybindings file, Veyyon performs the same one-time seed and logs it. There is no live merge from the default profile after that.
+**Keybindings:** each profile defines `agent/keybindings.*`. New profiles seeded with `veyyon profile new --from default` copy the default profile's keybindings once. On first launch of an older named profile that has no keybindings file, Veyyon performs the same one-time seed and logs it. There is no live merge from the default profile after that.
 
 Project-level dirs (`<cwd>/.veyyon`, `.claude`, etc.) are **not** profile-scoped; they follow the working directory.
 
-**Other tools' config** (skills and `CLAUDE.md`/`AGENTS.md` written for Claude, Codex, and similar) is **off by default** and controlled per profile by `discovery.importForeignConfig`, so each profile decides on its own whether to ambiently read foreign files or run native-only. Another tool's own global dir (`~/.claude/skills`, …) cannot be relocated into a profile, see [Skills › Profiles isolate skills](./skills.md#profiles-isolate-skills).
+**Other tools' config** (skills and `CLAUDE.md`/`AGENTS.md` written for Claude, Codex, and similar) is **off by default** and controlled per profile by `discovery.importForeignConfig`, allowing each profile to configure whether to ambiently read foreign files or run native-only. Another tool's own global dir (`~/.claude/skills`, …) cannot be relocated into a profile, see [Skills › Profiles isolate skills](../reference/skills.md#discovery-pipeline).
 
 ## Activating a profile
 
@@ -75,7 +75,7 @@ You can also type any verb directly:
 | `/profile new <name>`, `/profile create <name>` | Create `<name>`, then open the copy-items picker. |
 | `/profile rename <old> to <new>` | Set the display name of `<old>` to `<new>`. |
 | `/profile rename to <new>` | Rename the active profile. |
-| `/profile rm <name>`, `/profile delete <name>` | Delete `<name>` after a confirmation. Refuses the active and default profiles. |
+| `/profile rm <name>`, `/profile delete <name>` | Delete `<name>` after a confirmation. Rejects the active and default profiles. |
 
 Choosing **Create new profile** or **Rename** in the picker prefills the composer with the matching command (`/profile new ` or `/profile <name> rename to `) so you finish by typing the name and pressing Enter. Name entry always flows through the same typed command, so there is one place that creates and renames.
 
@@ -86,7 +86,7 @@ A profile's directory name (`~/.veyyon/profiles/<name>`) is its stable identity 
 - **Settings:** `/settings` › Interaction › Profile › Profile Name.
 - **TUI:** `/profile rename to <new>` renames the active profile; `/profile <name> rename to <new>` (or `/profile rename <name> to <new>`) renames another one. The default profile is renamable too. The profile picker's **Rename** action prefills this command for you.
 
-`/profile list` shows `name (Display Name)` when they differ, and `/profile <input>` resolves a directory name first, then a unique display name. A copied settings file never carries the source's display name, `profile new` clears it so two profiles cannot answer to one name.
+`/profile list` shows `name (Display Name)` when they differ, and `/profile <input>` resolves a directory name first, then a unique display name. A copied settings file never contains the source's display name, `profile new` clears it so two profiles cannot answer to one name.
 
 Because directory names resolve first, a rename warns you when the display name you chose will not switch back to this profile: when it matches another profile's directory name (that directory wins), or when it duplicates another profile's display name (the switch becomes ambiguous). The rename still applies, so use a distinct name if you want to switch by it.
 
@@ -104,8 +104,8 @@ $ veyyon profile default work
 - `new` creates `~/.veyyon/profiles/<name>/agent/` with the expected identity dirs (`skills/`, `commands/`, …).
 - `--from default` (default) seeds `config.yml`, keybindings, MCP, skills, and other identity files from the default profile. Sessions, blobs, and databases are **not** copied.
 - `--from blank` creates an empty agent tree.
-- `--from dev` seeds a blank tree, then enables the study features. It sets `session.instrumentation` to `ultra` and enables Argot, the experimental token-shorthand codec. Use this profile when you want to run `veyyon session stats` or backtest a stored session. Instrumentation records structured, redacted session data: lifecycle and checkpoints, task transitions, tool and model timing, context attribution, agent-message delivery, and analysis rollups. `basic` keeps the elementary timing and state records, `rich` adds context and communication weight, and `ultra` adds fingerprints, links, routes, and provider provenance. See [Studying a session](../reference/cli.md#studying-a-session) for the complete level behavior.
-- `rm` refuses the default profile, the active profile, and destructive deletes without `--yes`. If you remove the profile that is set as the launch default, its `defaultProfile` pointer is cleared at the same time, so the next launch falls back to the default profile instead of a directory that no longer exists.
+- `--from dev` seeds a blank tree, then enables the study features. It sets `session.instrumentation` to `ultra` and enables Argot, the experimental token-shorthand codec. Use this profile when you want to run `veyyon session stats` or backtest a stored session. Instrumentation records structured, redacted session data: lifecycle and checkpoints, task transitions, tool and model timing, context attribution, agent-message delivery, and analysis rollups. `basic` keeps the elementary timing and state record; `rich` adds context and communication detail; `ultra` adds fingerprints, abort state, links, routes, cache and reasoning detail, and upstream-provider details.
+- `rm` rejects the default profile, the active profile, and destructive deletes without `--yes`. If you remove the profile that is set as the launch default, its `defaultProfile` pointer is cleared at the same time, so the next launch falls back to the default profile instead of a directory that no longer exists.
 - `default [name]` shows or sets the global `defaultProfile` (which profile a bare `vey` launches); `default --clear` removes it.
 
 ### Reading the size in `profile list --json`
@@ -124,11 +124,11 @@ $ veyyon profile list --json
 ]
 ```
 
-`bytes` is the total size of every file under `rootDir`. `bytesComplete` tells you whether that total is the whole story. The walk skips anything it cannot read rather than failing the listing, so a directory with no read permission would otherwise make a large profile look small. When a path is skipped, `bytesComplete` is `false`, `bytes` becomes a lower bound, and the skipped paths are written to the profile's log with the message `Profile size is incomplete; some paths could not be read`. Check that log when you need to know which path to fix.
+`bytes` is the total size of every file under `rootDir`. `bytesComplete` reports whether that total is the whole story. The walk skips anything it cannot read rather than failing the listing, so a directory with no read permission would otherwise make a large profile look small. When a path is skipped, `bytesComplete` is `false`, `bytes` becomes a lower bound, and the skipped paths are written to the profile's log with the message `Profile size is incomplete; some paths could not be read`. Check that log when you need to know which path to fix.
 
 A profile whose directory does not exist yet reports `"bytes": 0` with `"bytesComplete": true`: there is nothing there, which is a measurement rather than a failure.
 
-In the TUI, `/profile new <name>` (or `/profile create <name>`) opens a picker listing every carry-over item (AGENTS.md, settings, MCP servers, SSH targets, skills, commands, tools, prompts, themes, extensions, keybindings), each individually toggleable (all selected by default). The new profile is seeded from the **active** profile with exactly the chosen items. Deleting is available too: `/profile rm <name>` (or the picker's **Delete** action) removes a profile after a confirmation, and refuses the active and default profiles. See [TUI profile commands](#tui-profile-commands) for the full verb list.
+In the TUI, `/profile new <name>` (or `/profile create <name>`) opens a picker listing every carry-over item (AGENTS.md, settings, MCP servers, SSH targets, skills, commands, tools, prompts, themes, extensions, keybindings), each individually toggleable (all selected by default). The new profile is seeded from the **active** profile with exactly the chosen items. Deleting is available too: `/profile rm <name>` (or the picker's **Delete** action) removes a profile after a confirmation, and rejects the active and default profiles. See [TUI profile commands](#tui-profile-commands) for the full verb list.
 
 The instruction row copies only `AGENTS.md`. A profile switch never carries `RULES.md`; change it through settings or copy it manually when that is your intent.
 
@@ -142,15 +142,15 @@ Do not document inline `[profiles.<name>]` tables or standalone `<name>.config.y
 
 ## Model policies and roles (per profile)
 
-Each profile's `config.yml` owns its interactive default, optional roles, subagent policy, and compaction policy:
+Each profile's `config.yml` defines its interactive default, optional roles, agent policy, and compaction policy:
 
 ```yaml
 modelRoles:
   default: openai/gpt-5             # interactive (also set live with /model)
   plan: openai/o3
   smol: deepseek/deepseek-chat
-subagent:
-  model: deepseek/deepseek-chat     # blanket model chain for subagents
+agent:
+  model: deepseek/deepseek-chat     # blanket model chain for agents
   thinkingLevel: high
   agents:
     scout:
@@ -163,7 +163,7 @@ compaction:
   threshold: "80%"
 ```
 
-Unset roles and model chains inherit the live main model at use time, so switching with `/model` changes them immediately. Per-agent subagent settings override the blanket subagent model and effort; an unset per-agent value falls back to that blanket policy. Only an explicit assignment pins a different model. Switching profiles switches all of these assignments with the profile.
+Unset roles and model chains inherit the live main model at use time, so switching with `/model` changes them immediately. Per-agent settings override the blanket agent model and effort; an unset per-agent value falls back to that blanket policy. Only an explicit assignment pins a different model. Switching profiles switches all of these assignments with the profile.
 
 ## See also
 

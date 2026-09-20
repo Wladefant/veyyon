@@ -21,7 +21,7 @@
  * THE DISTINCTION THAT MAKES THIS WORK is between the two ways a template can
  * name a variable:
  *
- *   - INTERPOLATED, as in `{{toolRefs.grep}}`. The name's value is written into
+ *   - INTERPOLATED, as in `{{toolRefs.search}}`. The name's value is written into
  *     the output. If it is absent the output has a hole in it, and that is
  *     ALWAYS a bug — there is no reading of `Regex search -> ``` where the
  *     empty backticks were intended.
@@ -52,7 +52,7 @@ export interface TemplateVariable {
 	/** The root name looked up on the context object, e.g. `toolRefs`. */
 	readonly name: string;
 	readonly use: TemplateVariableUse;
-	/** Every full dotted path seen for this root, e.g. `toolRefs.grep`. */
+	/** Every full dotted path seen for this root, e.g. `toolRefs.search`. */
 	readonly paths: readonly string[];
 	/**
 	 * Conditions under which the name is actually printed, as sets of other
@@ -234,7 +234,7 @@ export function analyzeTemplate(template: string, options: AnalyzeOptions = {}):
 			}
 		};
 		collect(node);
-		return new Set([...frame.guarded, ...roots]);
+		return new Set(Array.from(frame.guarded).concat(Array.from(roots)));
 	}
 
 	function visit(nodes: readonly Node[], frame: Frame): void {
@@ -280,8 +280,8 @@ export function analyzeTemplate(template: string, options: AnalyzeOptions = {}):
 
 	const required: TemplateVariable[] = [];
 	const optional: TemplateVariable[] = [];
-	for (const [name, list] of [...sightings].sort(([a], [b]) => a.localeCompare(b))) {
-		const paths = [...new Set(list.map(s => s.path))].sort();
+	for (const [name, list] of Array.from(sightings).sort(([a], [b]) => a.localeCompare(b))) {
+		const paths = Array.from(new Set(list.map(s => s.path))).sort();
 		const printed = list.filter(s => s.use === "interpolated");
 		const requiredWhen = dedupeGuardSets(printed.map(s => s.guards));
 		if (printed.length > 0) required.push({ name, use: "interpolated", paths, requiredWhen });
@@ -292,7 +292,7 @@ export function analyzeTemplate(template: string, options: AnalyzeOptions = {}):
 
 /** Collapse guard sets to the distinct ones, dropping any that a weaker one subsumes. */
 function dedupeGuardSets(sets: readonly (readonly string[])[]): readonly (readonly string[])[] {
-	const normalized = sets.map(set => [...new Set(set)].sort());
+	const normalized = sets.map(set => Array.from(new Set(set)).sort());
 	// An unguarded sighting makes every guarded one redundant: the name prints
 	// no matter what, so there is nothing left to condition on.
 	if (normalized.some(set => set.length === 0)) return [[]];

@@ -13,11 +13,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as AIError from "@veyyon/ai/error";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
-import { AgentTranscriptViewer } from "@veyyon/coding-agent/modes/components/agent-transcript-viewer";
-import type { ObservableSession } from "@veyyon/coding-agent/modes/session-observer-registry";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
+import { AgentTranscriptViewer } from "@veyyon/coding-agent/modes/terminal/components/dashboard/agent-transcript-viewer";
+import type {
+	ObservableSession,
+	SessionObserverRegistry,
+} from "@veyyon/coding-agent/modes/terminal/session-observer-registry";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import { SILENT_ABORT_MARKER } from "@veyyon/coding-agent/session/messages";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import type { TUI } from "@veyyon/tui";
 import { removeSyncWithRetries } from "@veyyon/utils";
 
@@ -30,13 +33,13 @@ function makeJsonlSessionFile(dirPath: string, entries: object[]): string {
 	return filePath;
 }
 
-function makeSubagentRegistry(sessions: ObservableSession[]) {
+function makeAgentRegistry(sessions: ObservableSession[]) {
 	return {
 		getSessions: () => sessions,
 		onChange: () => () => {},
 		setMainSession: () => {},
-		getActiveSubagentCount: () => sessions.filter(s => s.status === "active").length,
-	} as unknown as import("@veyyon/coding-agent/modes/session-observer-registry").SessionObserverRegistry;
+		getActiveAgentCount: () => sessions.filter(s => s.status === "active").length,
+	} as unknown as SessionObserverRegistry;
 }
 
 function makeViewer(sessionFile: string, observed: ObservableSession[]): AgentTranscriptViewer {
@@ -54,7 +57,7 @@ function makeViewer(sessionFile: string, observed: ObservableSession[]): AgentTr
 	return new AgentTranscriptViewer({
 		agentId: SESSION_ID,
 		registry: agents,
-		observers: makeSubagentRegistry(observed),
+		observers: makeAgentRegistry(observed),
 		ui,
 		cwd: path.dirname(sessionFile),
 		expandKeys: ["ctrl+o"],
@@ -122,8 +125,8 @@ describe("Agent hub silent-abort regression", () => {
 		const viewer = makeViewer(sessionFile, [
 			{
 				id: SESSION_ID,
-				kind: "subagent",
-				label: "Test Subagent",
+				kind: "spawn",
+				label: "Test Agent",
 				status: "active",
 				sessionFile,
 				lastUpdate: Date.now(),
@@ -179,8 +182,8 @@ describe("Agent hub silent-abort regression", () => {
 		const viewer = makeViewer(sessionFile, [
 			{
 				id: SESSION_ID,
-				kind: "subagent",
-				label: "Test Subagent",
+				kind: "spawn",
+				label: "Test Agent",
 				status: "active",
 				sessionFile,
 				lastUpdate: Date.now(),
@@ -231,8 +234,8 @@ describe("Agent hub silent-abort regression", () => {
 		const viewer = makeViewer(sessionFile, [
 			{
 				id: SESSION_ID,
-				kind: "subagent",
-				label: "Test Subagent",
+				kind: "spawn",
+				label: "Test Agent",
 				status: "failed",
 				sessionFile,
 				lastUpdate: Date.now(),

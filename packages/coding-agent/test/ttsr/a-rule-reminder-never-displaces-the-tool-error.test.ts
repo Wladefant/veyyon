@@ -46,18 +46,18 @@ import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { Agent, type AgentMessage, type AgentTool, type AgentToolResult } from "@veyyon/agent-core";
 import type { AssistantMessage, ToolCall } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { AsyncJobManager } from "@veyyon/coding-agent/async";
-import type { Rule } from "@veyyon/coding-agent/capability/rule";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings, type TtsrSettings } from "@veyyon/coding-agent/config/settings";
 import { SETTINGS_SCHEMA } from "@veyyon/coding-agent/config/settings-schema";
+import type { Rule } from "@veyyon/coding-agent/discovery/capability/rule";
 import { TtsrManager } from "@veyyon/coding-agent/export/ttsr";
 import { rulesPrompts } from "@veyyon/coding-agent/prompts/rules/rows";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { type } from "arktype";
 
@@ -167,6 +167,20 @@ function toolResultText(agent: Agent): string {
 
 function ttsrInjections(agent: Agent): AgentMessage[] {
 	return agent.state.messages.filter(m => m.role === "custom" && m.customType === "ttsr-injection");
+}
+
+/**
+ * One entry per message, with the field that says which delivery path ran. A zero-injection
+ * failure that does not reproduce is only diagnosable from the transcript that produced it.
+ */
+function describeTranscript(agent: Agent): string {
+	return agent.state.messages
+		.map(message => {
+			if (message.role === "assistant") return `assistant(${message.stopReason})`;
+			if (message.role === "custom") return `custom(${message.customType})`;
+			return message.role;
+		})
+		.join(" | ");
 }
 
 /**
@@ -420,9 +434,14 @@ describe("a TTSR rule that matches a tool call", () => {
 			});
 
 			it(`still reaches the model on a hidden channel in mode "${mode}"`, async () => {
-				const { agent } = await runTurn({ outcome: "throws", interruptMode: mode });
+				const { agent, streamCalls } = await runTurn({ outcome: "throws", interruptMode: mode });
 				const injections = ttsrInjections(agent);
 
+				if (injections.length === 0) {
+					throw new Error(
+						`no TTSR injection in mode "${mode}" after ${streamCalls()} stream call(s); transcript: ${describeTranscript(agent)}`,
+					);
+				}
 				expect(injections.length).toBeGreaterThanOrEqual(1);
 				for (const injection of injections) {
 					expect(injection.role === "custom" ? injection.display : undefined).toBe(false);

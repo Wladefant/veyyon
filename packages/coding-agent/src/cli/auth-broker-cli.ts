@@ -21,6 +21,7 @@ import {
 	type AuthCredential,
 	type CredentialDisabledEvent,
 	getEnvApiKey,
+	getLoginCredential,
 	getOAuthProviders,
 	listProvidersWithEnvKey,
 	type OAuthCredential,
@@ -86,7 +87,7 @@ const TOKEN_FILE = new AuthTokenFile("auth-broker.token");
 async function runServe(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 	// The broker is a long-running headless service: route structured logs to
 	// stdout so a process supervisor (pm2, journald, k8s) captures them, and
-	// skip the rotating ~/.veyyon/logs/ file the TUI default would have used.
+	// skip the rotating ~/.veyyon/profiles/<name>/logs/ file the TUI default would have used.
 	setLoggerTransports({ console: true, file: false });
 
 	const bind = flags.bind ?? DEFAULT_AUTH_BROKER_BIND;
@@ -166,9 +167,13 @@ async function runLocalLogin(provider: OAuthProvider): Promise<void> {
 		// `AuthStorage.login` independently refuses to synthesize the default prompt
 		// for non-paste-code providers, so this is defense-in-depth on the same gate.
 		const usesManualInput = PASTE_CODE_LOGIN_PROVIDERS.has(provider);
+		// An API-key login's URL is where a key is obtained; the flow is not waiting on it.
+		const credential = getLoginCredential(provider);
 		await storage.login(provider, {
 			onAuth({ url, launchUrl, instructions }) {
-				process.stdout.write("\nOpen this URL in your browser:\n");
+				process.stdout.write(
+					credential === "api-key" ? "\nGet an API key at:\n" : "\nOpen this URL in your browser:\n",
+				);
 				// Full URL first so the CLI works from any machine, including SSH
 				// sessions where a `launchUrl` (loopback `/launch` on the veyyon
 				// host) would resolve against the caller's browser and fail.
@@ -453,7 +458,7 @@ async function loadImportPlan(
 		try {
 			json = (await Bun.file(file).json()) as CliProxyCredentialJson;
 		} catch (err) {
-			skipped.push({ file, reason: `unreadable JSON: ${String(err)}` });
+			skipped.push({ file, reason: `unreadable JSON: ${errorMessage(err)}` });
 			continue;
 		}
 		if (json.disabled === true && !includeDisabled) {

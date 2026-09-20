@@ -13,14 +13,14 @@ import { getBundledModel } from "@veyyon/catalog/models";
 import { type SettingPath, Settings } from "@veyyon/coding-agent/config/settings";
 import { EditTool } from "@veyyon/coding-agent/edit";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { convertToLlm } from "@veyyon/coding-agent/session/messages";
+import type { ToolSession } from "@veyyon/coding-agent/tools";
 import type {
 	ClientBridge,
 	ClientBridgePermissionOutcome,
 	ClientBridgePermissionToolCall,
-} from "@veyyon/coding-agent/session/client-bridge";
-import { convertToLlm } from "@veyyon/coding-agent/session/messages";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
-import type { ToolSession } from "@veyyon/coding-agent/tools";
+} from "@veyyon/kernel/session/client-bridge";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
 import { makeToolSession } from "./helpers/tool-session";
@@ -787,12 +787,11 @@ it("read tool: requestPermission is never called for non-gated tools", async () 
 	expect(readTool.executeCalls).toBe(1);
 });
 
-it("setActiveToolsByName normalizes legacy tool names", async () => {
-	const grepTool = makeFakeTool("grep");
-	const globTool = makeFakeTool("glob");
-	session = await createSession([grepTool, globTool]);
+it("setActiveToolsByName normalizes and deduplicates canonical tool names", async () => {
+	const searchTool = makeFakeTool("search");
+	session = await createSession([searchTool]);
 
-	await session.setActiveToolsByName(["Search", "find", "grep"]);
+	await session.setActiveToolsByName(["Search", "search"]);
 
-	expect(session.getActiveToolNames()).toEqual(["grep", "glob"]);
+	expect(session.getActiveToolNames()).toEqual(["search"]);
 });

@@ -4,13 +4,15 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { StatusLineComponent, type StatusLineSettings } from "@veyyon/coding-agent/modes/components/status-line";
-import { STATUS_LINE_PRESETS } from "@veyyon/coding-agent/modes/components/status-line/presets";
-import { withIcon } from "@veyyon/coding-agent/modes/theme/icon-label";
-import { initTheme, theme } from "@veyyon/coding-agent/modes/theme/theme";
+import type { StatusLineSettings } from "@veyyon/coding-agent/modes/terminal/components/status-line/index";
+import { STATUS_LINE_PRESETS } from "@veyyon/coding-agent/modes/terminal/components/status-line/presets";
+import { withIcon } from "@veyyon/coding-agent/theme/icon-label";
+import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import * as git from "@veyyon/coding-agent/utils/git";
 import { removeSyncWithRetries, setProjectDir } from "@veyyon/utils";
+import { StatusLineComponent } from "../src/modes/terminal/components/status-line/component";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
+import { makeStatusLineProducer } from "./helpers/status-line-session";
 
 let settingsState: SettingsTestState | undefined;
 let projectDir = "";
@@ -33,42 +35,13 @@ afterEach(() => {
 });
 
 function makeSession(sessionName = "Cache Session") {
-	const messages: unknown[] = [];
-	const model = { id: "test-model", name: "Test Model", contextWindow: 100_000 };
-	return {
-		state: { messages, model },
-		messages,
-		model,
-		systemPrompt: [],
-		agent: { state: { tools: [] } },
-		skills: [],
-		isStreaming: false,
-		isAutoThinking: false,
-		autoResolvedThinkingLevel: () => undefined,
-		isFastModeActive: () => false,
-		isAdvisorActive: () => false,
-		isApprovalBypassed: () => false,
-		getGoalModeState: () => null,
-		getAsyncJobSnapshot: () => ({ running: [] }),
-		settings: { get: () => false, getGroup: () => ({ enabled: false }) },
-		modelRegistry: { isUsingOAuth: () => false },
-		sessionManager: {
-			getSessionName: () => sessionName,
-			getUsageStatistics: () => ({
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				orchestrationInput: 0,
-				orchestrationOutput: 0,
-				orchestrationCacheRead: 0,
-				premiumRequests: 0,
-				cost: 0,
-			}),
-		},
-		getContextUsage: () => undefined,
-	} as unknown as ConstructorParameters<typeof StatusLineComponent>[0];
+	return makeStatusLineProducer({
+		modelId: "test-model",
+		modelName: "Test Model",
+		contextWindow: 100_000,
+		contextUsage: undefined,
+		sessionName,
+	});
 }
 
 function makeComponent(statusLineSettings: StatusLineSettings): StatusLineComponent {
@@ -161,10 +134,10 @@ describe("StatusLineComponent effective settings cache", () => {
 		);
 	});
 
-	it("surfaces active subagents even when custom segments omit subagents", () => {
+	it("surfaces active agents even when custom segments omit agents", () => {
 		const component = makeComponent({ preset: "custom", leftSegments: [], rightSegments: [] });
 
-		component.setSubagentCount(2);
+		component.setAgentCount(2);
 
 		const content = stripVTControlCharacters(component.renderQuietLine(120) ?? "");
 		expect(content).toContain(withIcon(theme.icon.agents, "2"));
@@ -185,6 +158,14 @@ describe("StatusLineComponent effective settings cache", () => {
 		component.setHookStatus("hook", "hook done");
 		expect(component.render(80)).toEqual(["hook done"]);
 		expect(component.getEffectiveSettingsForTest()).toBe(effective);
+	});
+
+	it("joins hook statuses sorted by key with one space each, an empty one included", () => {
+		const component = makeComponent({ preset: "default", showHookStatus: true });
+		component.setHookStatus("b-lint", "lint running");
+		component.setHookStatus("a-empty", "");
+		component.setHookStatus("c-test", "tests green");
+		expect(component.render(80)).toEqual([" lint running tests green"]);
 	});
 
 	it("does not mutate shared preset segment options during narrow renders", () => {
@@ -230,7 +211,7 @@ describe("StatusLineComponent effective settings cache", () => {
 				sessionAccent: false,
 			});
 
-			component.watchBranch(() => {
+			component.watchGitState(() => {
 				throw new Error("git watcher should not fire while git integration is disabled");
 			});
 			component.renderQuietLine(100);
@@ -263,7 +244,7 @@ describe("StatusLineComponent effective settings cache", () => {
 				sessionAccent: false,
 			});
 
-			component.watchBranch(() => {
+			component.watchGitState(() => {
 				throw new Error("git watcher should not fire when no git-backed segment is visible");
 			});
 			component.renderQuietLine(100);

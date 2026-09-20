@@ -23,6 +23,8 @@ export interface CatalogDiscoveryConfig {
 export interface ProviderDescriptor {
 	providerId: string;
 	createModelManagerOptions(config: ModelManagerConfig): ModelManagerOptions<Api>;
+	/** Lightweight cache-ID resolver. When omitted, defaults to `providerId`. */
+	resolveCacheProviderId?(config: ModelManagerConfig): string;
 	/** Preferred model ID when no explicit selection is made. */
 	defaultModel: string;
 	/** When true, the runtime creates a model manager even without a valid API key (e.g. ollama). */
@@ -65,10 +67,18 @@ export interface ProviderCatalogEntry {
 	readonly envVars?: readonly string[];
 	/** Runtime model-manager factory. Omitted for catalog-only providers. */
 	readonly createModelManagerOptions?: (config: ModelManagerConfig) => ModelManagerOptions<Api>;
+	/** Lightweight cache-ID resolver. When omitted, defaults to `id`. */
+	readonly resolveCacheProviderId?: (config: ModelManagerConfig) => string;
 	/** When true, the runtime creates a model manager even without a valid API key. */
 	readonly allowUnauthenticated?: boolean;
 	/** When true, successful runtime discovery replaces bundled provider models. */
 	readonly dynamicModelsAuthoritative?: boolean;
+	/**
+	 * When true, the provider's own endpoint is the sole authority for context
+	 * windows and output caps: generation leaves an unpublished limit null
+	 * instead of backfilling it from another host's same-family model.
+	 */
+	readonly publishesOwnModelLimits?: boolean;
 	/** Catalog discovery configuration for generate-models.ts. */
 	readonly catalogDiscovery?: CatalogDiscoveryConfig;
 	/**

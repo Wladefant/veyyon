@@ -2,9 +2,9 @@ import { beforeAll, describe, expect, it } from "bun:test";
 import * as os from "node:os";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import { GrepTool } from "@veyyon/coding-agent/tools/grep";
-import { ReadTool } from "@veyyon/coding-agent/tools/read";
-import { WriteTool } from "@veyyon/coding-agent/tools/write";
+import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
+import { WriteTool } from "@veyyon/coding-agent/tools/fs/write";
+import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
 
 // Minimal ToolSession stub (block-images.test.ts shape). Approval functions are
 // pure over their args, and the write-execute selector reject throws before any
@@ -39,14 +39,13 @@ describe("ssh:// tools require exec-tier approval", () => {
 		expect(callApproval(tool, {})).toBe("read");
 	});
 
-	it("grep: an ssh:// entry flattened into a delimited path still trips exec", () => {
-		const tool = new GrepTool(createTestToolSession(os.tmpdir()));
+	it("search (text): an ssh:// entry flattened into a delimited path still trips exec", () => {
+		const tool = new SearchTool(createTestToolSession(os.tmpdir()));
 		// The delimited string is one entry at approval time (expansion happens
 		// later), so an anchored check would miss it — the substring scan must not.
-		expect(callApproval(tool, { paths: "src,ssh://icaro/etc/hosts" })).toBe("exec");
-		expect(callApproval(tool, { paths: ["src", "ssh://icaro/etc/hosts"] })).toBe("exec");
-		expect(callApproval(tool, { paths: ["src", "lib"] })).toBe("read");
-		expect(callApproval(tool, { paths: "src" })).toBe("read");
+		expect(callApproval(tool, { type: "text", path: "src,ssh://icaro/etc/hosts" })).toBe("exec");
+		expect(callApproval(tool, { type: "text", path: "src" })).toBe("read");
+		expect(callApproval(tool, { type: "files", input: "src" })).toBe("read");
 		expect(callApproval(tool, {})).toBe("read");
 	});
 

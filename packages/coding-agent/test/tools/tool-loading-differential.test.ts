@@ -1,6 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
-import { TOOL_LOAD_CASES, type ToolLoadOutcome, ToolLoadRunner } from "./tool-loading-differential.harness";
+import {
+	AT_THRESHOLD_BULK,
+	TOOL_LOAD_CASES,
+	type ToolLoadOutcome,
+	ToolLoadRunner,
+} from "./tool-loading-differential.harness";
 
 // `createAgentSession` opens `AgentStorage`, which resolves under the ACTIVE PROFILE's agent
 // dir. Without this the suite writes into the developer's real `~/.veyyon` tree.
@@ -12,7 +17,7 @@ useIsolatedAgentDir();
  * WHAT THIS IS. Every literal below was CAPTURED from the pre-consolidation code by booting a
  * real `createAgentSession` for each matrix cell and recording two things: the exact ordered
  * list of active tool names, and the contents of the discoverable index. The consolidation in
- * `src/tools/loading/` then had to reproduce them byte for byte. That is the entire safety
+ * `src/tools/core/loading/` then had to reproduce them byte for byte. That is the entire safety
  * argument for a refactor that touches the code path deciding whether the agent has `read`,
  * `bash` and `edit` at all.
  *
@@ -36,12 +41,10 @@ const FROZEN_OUTCOMES: Record<string, ToolLoadOutcome> = {
 			"bash",
 			"launch",
 			"edit",
-			"ast_grep",
+			"search",
 			"ast_edit",
 			"debug",
 			"eval",
-			"glob",
-			"grep",
 			"task",
 			"job",
 			"irc",
@@ -49,6 +52,7 @@ const FROZEN_OUTCOMES: Record<string, ToolLoadOutcome> = {
 			"web_search",
 			"set_cwd",
 			"write",
+			"goal",
 			"resolve",
 		],
 		discoverable: [],
@@ -59,12 +63,32 @@ const FROZEN_OUTCOMES: Record<string, ToolLoadOutcome> = {
 			"bash",
 			"launch",
 			"edit",
-			"ast_grep",
+			"search",
 			"ast_edit",
 			"debug",
 			"eval",
-			"glob",
-			"grep",
+			"task",
+			"job",
+			"irc",
+			"todo",
+			"web_search",
+			"set_cwd",
+			"write",
+			"goal",
+			"resolve",
+		],
+		discoverable: [],
+	},
+	"goal-disabled": {
+		active: [
+			"read",
+			"bash",
+			"launch",
+			"edit",
+			"search",
+			"ast_edit",
+			"debug",
+			"eval",
 			"task",
 			"job",
 			"irc",
@@ -82,12 +106,10 @@ const FROZEN_OUTCOMES: Record<string, ToolLoadOutcome> = {
 			"bash",
 			"launch",
 			"edit",
-			"ast_grep",
+			"search",
 			"ast_edit",
 			"debug",
 			"eval",
-			"glob",
-			"grep",
 			"task",
 			"job",
 			"irc",
@@ -96,17 +118,28 @@ const FROZEN_OUTCOMES: Record<string, ToolLoadOutcome> = {
 			"search_tool_bm25",
 			"set_cwd",
 			"write",
+			"goal",
 			"resolve",
 		],
 		discoverable: [],
 	},
 	"discovery-all": {
-		active: ["read", "bash", "launch", "edit", "eval", "glob", "task", "search_tool_bm25", "write", "resolve"],
+		active: [
+			"read",
+			"bash",
+			"launch",
+			"edit",
+			"search",
+			"eval",
+			"task",
+			"search_tool_bm25",
+			"write",
+			"goal",
+			"resolve",
+		],
 		discoverable: [
-			"builtin:ast_grep",
 			"builtin:ast_edit",
 			"builtin:debug",
-			"builtin:grep",
 			"builtin:job",
 			"builtin:irc",
 			"builtin:todo",
@@ -120,18 +153,17 @@ const FROZEN_OUTCOMES: Record<string, ToolLoadOutcome> = {
 			"bash",
 			"launch",
 			"edit",
+			"search",
+			"debug",
 			"eval",
-			"glob",
-			"grep",
 			"task",
 			"search_tool_bm25",
 			"write",
+			"goal",
 			"resolve",
 		],
 		discoverable: [
-			"builtin:ast_grep",
 			"builtin:ast_edit",
-			"builtin:debug",
 			"builtin:job",
 			"builtin:irc",
 			"builtin:todo",
@@ -145,12 +177,10 @@ const FROZEN_OUTCOMES: Record<string, ToolLoadOutcome> = {
 			"bash",
 			"launch",
 			"edit",
-			"ast_grep",
+			"search",
 			"ast_edit",
 			"debug",
 			"eval",
-			"glob",
-			"grep",
 			"task",
 			"job",
 			"irc",
@@ -158,17 +188,28 @@ const FROZEN_OUTCOMES: Record<string, ToolLoadOutcome> = {
 			"web_search",
 			"set_cwd",
 			"write",
+			"goal",
 			"resolve",
 		],
 		discoverable: [],
 	},
 	"browser-disabled-discovery-all": {
-		active: ["read", "bash", "launch", "edit", "eval", "glob", "task", "search_tool_bm25", "write", "resolve"],
+		active: [
+			"read",
+			"bash",
+			"launch",
+			"edit",
+			"search",
+			"eval",
+			"task",
+			"search_tool_bm25",
+			"write",
+			"goal",
+			"resolve",
+		],
 		discoverable: [
-			"builtin:ast_grep",
 			"builtin:ast_edit",
 			"builtin:debug",
-			"builtin:grep",
 			"builtin:job",
 			"builtin:irc",
 			"builtin:todo",
@@ -177,12 +218,12 @@ const FROZEN_OUTCOMES: Record<string, ToolLoadOutcome> = {
 		],
 	},
 	"explicit-tool-names": {
-		active: ["read", "grep", "glob"],
+		active: ["read", "search", "goal"],
 		discoverable: [],
 	},
 	"explicit-tool-names-discovery-all": {
-		active: ["read", "grep", "glob"],
-		discoverable: ["builtin:ast_grep"],
+		active: ["read", "search", "goal"],
+		discoverable: [],
 	},
 	"eval-backends-disabled": {
 		active: [
@@ -190,11 +231,9 @@ const FROZEN_OUTCOMES: Record<string, ToolLoadOutcome> = {
 			"bash",
 			"launch",
 			"edit",
-			"ast_grep",
+			"search",
 			"ast_edit",
 			"debug",
-			"glob",
-			"grep",
 			"task",
 			"job",
 			"irc",
@@ -202,12 +241,13 @@ const FROZEN_OUTCOMES: Record<string, ToolLoadOutcome> = {
 			"web_search",
 			"set_cwd",
 			"write",
+			"goal",
 			"resolve",
 		],
 		discoverable: [],
 	},
 	"harness-profile-tool-allowlist": {
-		active: ["read", "grep", "todo"],
+		active: ["read", "search", "todo"],
 		discoverable: [],
 	},
 	"restored-selection-discovery-all": {
@@ -216,19 +256,18 @@ const FROZEN_OUTCOMES: Record<string, ToolLoadOutcome> = {
 			"bash",
 			"launch",
 			"edit",
+			"search",
 			"eval",
-			"glob",
 			"task",
 			"todo",
 			"search_tool_bm25",
 			"write",
+			"goal",
 			"resolve",
 		],
 		discoverable: [
-			"builtin:ast_grep",
 			"builtin:ast_edit",
 			"builtin:debug",
-			"builtin:grep",
 			"builtin:job",
 			"builtin:irc",
 			"builtin:web_search",
@@ -241,19 +280,18 @@ const FROZEN_OUTCOMES: Record<string, ToolLoadOutcome> = {
 			"bash",
 			"launch",
 			"edit",
+			"search",
 			"eval",
-			"glob",
 			"task",
 			"todo",
 			"search_tool_bm25",
 			"write",
+			"goal",
 			"resolve",
 		],
 		discoverable: [
-			"builtin:ast_grep",
 			"builtin:ast_edit",
 			"builtin:debug",
-			"builtin:grep",
 			"builtin:job",
 			"builtin:irc",
 			"builtin:web_search",
@@ -261,100 +299,41 @@ const FROZEN_OUTCOMES: Record<string, ToolLoadOutcome> = {
 		],
 	},
 	"delegation-off-discovery-all": {
-		active: ["read", "bash", "launch", "edit", "eval", "glob", "search_tool_bm25", "write", "resolve"],
+		active: ["read", "bash", "launch", "edit", "search", "eval", "search_tool_bm25", "write", "goal", "resolve"],
 		discoverable: [
-			"builtin:ast_grep",
 			"builtin:ast_edit",
 			"builtin:debug",
-			"builtin:grep",
 			"builtin:job",
 			"builtin:todo",
 			"builtin:web_search",
 			"builtin:set_cwd",
 		],
 	},
-	"auto-at-threshold": {
-		active: [
-			"read",
-			"bash",
-			"launch",
-			"edit",
-			"ast_grep",
-			"ast_edit",
-			"debug",
-			"eval",
-			"glob",
-			"grep",
-			"task",
-			"job",
-			"irc",
-			"todo",
-			"web_search",
-			"set_cwd",
-			"write",
-			"resolve",
-			"bulk_0",
-			"bulk_1",
-			"bulk_2",
-			"bulk_3",
-			"bulk_4",
-			"bulk_5",
-			"bulk_6",
-			"bulk_7",
-			"bulk_8",
-			"bulk_9",
-			"bulk_10",
-			"bulk_11",
-			"bulk_12",
-			"bulk_13",
-			"bulk_14",
-			"bulk_15",
-			"bulk_16",
-		],
-		discoverable: [],
-	},
-	"auto-over-threshold": {
-		active: [
-			"read",
-			"bash",
-			"launch",
-			"edit",
-			"ast_grep",
-			"ast_edit",
-			"debug",
-			"eval",
-			"glob",
-			"grep",
-			"task",
-			"job",
-			"irc",
-			"todo",
-			"web_search",
-			"set_cwd",
-			"write",
-			"resolve",
-			"bulk_0",
-			"bulk_1",
-			"bulk_2",
-			"bulk_3",
-			"bulk_4",
-			"bulk_5",
-			"bulk_6",
-			"bulk_7",
-			"bulk_8",
-			"bulk_9",
-			"bulk_10",
-			"bulk_11",
-			"bulk_12",
-			"bulk_13",
-			"bulk_14",
-			"bulk_15",
-			"bulk_16",
-			"bulk_17",
-			"search_tool_bm25",
-		],
-		discoverable: [],
-	},
+};
+
+/**
+ * The two boundary cells, derived rather than written out.
+ *
+ * Each active list is the `auto` boot's built-ins plus the bulk tools its case registers,
+ * and the over-threshold one adds the discovery tool the flip introduces. Writing those
+ * names again would be a second copy of the same catalog going stale on its own schedule,
+ * which is how the pair broke before. A new built-in still turns the suite red — in
+ * `discovery-auto-under-threshold`, once, which is where the decision belongs.
+ */
+const BULK_NAMES = (count: number): string[] => Array.from({ length: count }, (_, index) => `bulk_${index}`);
+
+FROZEN_OUTCOMES["auto-at-threshold"] = {
+	active: [...FROZEN_OUTCOMES["discovery-auto-under-threshold"]!.active, ...BULK_NAMES(AT_THRESHOLD_BULK)],
+	discoverable: [],
+};
+
+FROZEN_OUTCOMES["auto-over-threshold"] = {
+	active: [
+		...FROZEN_OUTCOMES["discovery-auto-under-threshold"]!.active,
+		...BULK_NAMES(AT_THRESHOLD_BULK + 1),
+		"search_tool_bm25",
+	],
+	discoverable: [],
 };
 
 describe("tool loading resolves to identical outcomes after consolidation", () => {
@@ -431,7 +410,7 @@ describe("tool loading resolves to identical outcomes after consolidation", () =
 	 *
 	 * LOCKS OUT: a regression in `filterInitialToolsForDiscoveryAll`. Exactly the tools with
 	 * `loadMode: "essential"` survive, plus `task` (force-active because
-	 * `subagent.delegation` defaults to `preferred`), `search_tool_bm25`, and the
+	 * `agent.delegation` defaults to `preferred`), `search_tool_bm25`, and the
 	 * unconditionally-appended `resolve`. Every hidden tool must reappear in the
 	 * discoverable index — hidden-and-unfindable is the failure mode this guards.
 	 */
@@ -440,12 +419,12 @@ describe("tool loading resolves to identical outcomes after consolidation", () =
 	});
 
 	/**
-	 * `tools.essentialOverride: ["read", "grep"]` under discovery-all.
+	 * `tools.essentialOverride: ["read", "debug"]` under discovery-all.
 	 *
 	 * LOCKS OUT: the override being read as a REPLACEMENT for per-tool `loadMode`. It is
-	 * additive: `bash`, `launch`, `edit`, `eval`, `glob` and `write` stay active through
+	 * additive: `bash`, `launch`, `edit`, `search`, `eval`, and `write` stay active through
 	 * their declared `loadMode: "essential"` even though the override does not name them,
-	 * and `grep` is rescued from hiding by the override alone.
+	 * and `debug` is rescued from hiding by the override alone.
 	 */
 	it("discovery-all-essential-override", async () => {
 		await expectFrozenOutcome("discovery-all-essential-override");
@@ -547,7 +526,7 @@ describe("tool loading resolves to identical outcomes after consolidation", () =
 	});
 
 	/**
-	 * `subagent.delegation: "off"` under discovery-all.
+	 * `agent.delegation: "off"` under discovery-all.
 	 *
 	 * LOCKS OUT: a session that cannot delegate still shipping the delegation surface.
 	 * `task` loses its force-active exemption AND its permission, so it is neither active
@@ -559,24 +538,30 @@ describe("tool loading resolves to identical outcomes after consolidation", () =
 	});
 
 	/**
-	 * Exactly `TOOL_DISCOVERY_AUTO_THRESHOLD` tools under `auto`.
+	 * The two boots that straddle `TOOL_DISCOVERY_AUTO_THRESHOLD` under `auto`.
 	 *
-	 * LOCKS OUT: an off-by-one at the boundary. The comparison is strictly greater-than, so
-	 * a registry of exactly 40 non-`search_tool_bm25` tools stays `off` and no discovery
-	 * tool is registered.
+	 * LOCKS OUT: the threshold never reaching the real boot path, the off-by-one at it, and
+	 * the ordering dependency behind it. Going over flips `auto` to `mcp-only`, which
+	 * registers `search_tool_bm25` at the END of the list (it is appended after the registry
+	 * is complete, not woven into built-in order). Local tools stay active because
+	 * `mcp-only` never hides them. Sitting exactly ON the threshold must NOT flip, which is
+	 * the half a single over-the-line cell cannot show.
+	 *
+	 * It cannot police the constant's VALUE: both cells size themselves from
+	 * `TOOL_DISCOVERY_AUTO_THRESHOLD`, so raising 40 to 4000 moves them with it and this
+	 * suite stays green (verified by mutation). That is pinned by
+	 * `discovery/tool-discovery-mode-resolves-from-tools-and-mcp-settings.test.ts`, which passes the count to `resolveEffectiveMode`
+	 * directly; changing `>` to `>=` turns that suite red.
+	 *
+	 * Both counts and both expected lists are derived. The pair previously wrote out 40 and
+	 * 41 tool names against a registry size restated in a comment, so adding one built-in
+	 * slid the "at threshold" cell over the line, where it asserted the opposite of its name
+	 * and failed for a reason unrelated to the rule it guards.
 	 */
 	it("auto-at-threshold", async () => {
 		await expectFrozenOutcome("auto-at-threshold");
 	});
 
-	/**
-	 * One tool past `TOOL_DISCOVERY_AUTO_THRESHOLD` under `auto`.
-	 *
-	 * LOCKS OUT: the other side of the same off-by-one, and the ordering dependency behind
-	 * it. 41 tools flips `auto` to `mcp-only`, which registers `search_tool_bm25` at the
-	 * END of the list (it is appended after the registry is complete, not woven into
-	 * built-in order). Local tools stay active because `mcp-only` never hides them.
-	 */
 	it("auto-over-threshold", async () => {
 		await expectFrozenOutcome("auto-over-threshold");
 	});

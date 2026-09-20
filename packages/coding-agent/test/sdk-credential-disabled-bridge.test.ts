@@ -9,10 +9,11 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ExtensionError, ExtensionFactory, LoadedExtension } from "@veyyon/coding-agent/extensibility/extensions";
 import { ExtensionRunner } from "@veyyon/coding-agent/extensibility/extensions";
 import { ExtensionRuntime } from "@veyyon/coding-agent/extensibility/extensions/loader";
+import { sessionWorkerAccess } from "@veyyon/coding-agent/native-control/telegram-control-bridge";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import { SecretAuditLog } from "@veyyon/coding-agent/secrets/audit";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { postmortem, removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { useIsolatedConfigRoot } from "./helpers/isolated-agent-dir";
 
@@ -46,7 +47,7 @@ const failOAuthRefresh = (): void => {
 
 /**
  * Drives `ExtensionRunner.initialize` with no-op stubs so credential_disabled events flush
- * out of the runner's pre-init buffer. Mode controllers (interactive/RPC/ACP/print/subagent)
+ * out of the runner's pre-init buffer. Mode controllers (interactive/RPC/ACP/print/agent)
  * normally do this with mode-specific actions; tests just need any initialize call to flip
  * the runner's `#initialized` flag and drain the buffer.
  */
@@ -67,6 +68,7 @@ const initializeRunnerForTest = (runner: ExtensionRunner | undefined): void => {
 			setThinkingLevel: () => {},
 			getSessionName: () => undefined,
 			setSessionName: async () => {},
+			...sessionWorkerAccess(() => undefined),
 		},
 		{
 			getModel: () => undefined,
@@ -534,6 +536,7 @@ describe("createAgentSession credential_disabled subscription", () => {
 					setThinkingLevel: () => {},
 					getSessionName: () => undefined,
 					setSessionName: async () => {},
+					...sessionWorkerAccess(() => undefined),
 				},
 				{
 					getModel: () => undefined,

@@ -16,13 +16,19 @@ import { AstMatchStrictness, astMatch, FileType, type GlobMatch, glob } from "@v
 import { collapseWhitespace, errorMessage, escapeRegExp, logger, truncate } from "@veyyon/utils";
 import { getProjectDir } from "@veyyon/utils/dirs";
 import chalk from "chalk";
-import { type Rule, ruleCapability } from "../capability/rule";
-import { type BucketRulesOptions, bucketRules, resolveRuleLevers, ruleIsEnabled } from "../capability/rule-buckets";
 import { Settings } from "../config/settings";
 import type { TtsrSettings } from "../config/settings-schema";
 import { initializeWithSettings, loadCapability } from "../discovery";
+import { type Rule, ruleCapability } from "../discovery/capability/rule";
+import {
+	type BucketRulesOptions,
+	bucketRules,
+	resolveRuleLevers,
+	ruleIsEnabled,
+} from "../discovery/capability/rule-buckets";
 import { buildRuleFromMarkdown, createSourceMeta } from "../discovery/helpers";
 import type { TtsrManager } from "../export/ttsr";
+import { EXIT_USAGE } from "./exit-codes";
 
 export type TtsrAction = "test" | "list" | "scan";
 
@@ -216,7 +222,7 @@ async function evaluate(
 		context.source === "tool" && context.filePaths && context.filePaths.length > 0
 			? await manager.checkAstSnapshot(snippet, context)
 			: [];
-	const hitNames = new Set<string>([...regexHit, ...astHit].map(r => r.name));
+	const hitNames = new Set<string>(regexHit.concat(astHit).map(r => r.name));
 
 	const lang = deriveLang(context.filePaths);
 	const astEligible = context.source === "tool" && !!lang;
@@ -647,7 +653,8 @@ async function scanRulePlanMatchesContent(
 	let astHit = false;
 	if ((includeDetails || !regexHit) && lang && plan.astConditions.length > 0) {
 		if (includeDetails) {
-			matchedAst.push(...(await astMatches(plan.rule, fileContent, lang)));
+			const astMatchesResult = await astMatches(plan.rule, fileContent, lang);
+			for (let ai = 0; ai < astMatchesResult.length; ai++) matchedAst.push(astMatchesResult[ai]!);
 			astHit = matchedAst.length > 0;
 		} else {
 			try {
@@ -978,7 +985,8 @@ export async function runTtsrCommand(cmd: TtsrCommandArgs): Promise<void> {
 	if (cmd.action === "test") {
 		if (!cmd.test) {
 			process.stderr.write(`${chalk.red("error: `ttsr test` requires a snippet, --file, or piped stdin")}\n`);
-			process.exit(1);
+			process.exit(EXIT_USAGE);
+			return;
 		}
 		await runTest(cmd.test, cmd.json ?? false, cwd);
 		return;
@@ -990,11 +998,12 @@ export async function runTtsrCommand(cmd: TtsrCommandArgs): Promise<void> {
 	if (cmd.action === "scan") {
 		if (!cmd.scan) {
 			process.stderr.write(`${chalk.red("error: scan arguments missing")}\n`);
-			process.exit(1);
+			process.exit(EXIT_USAGE);
+			return;
 		}
 		await runScan(cmd.scan, cmd.json ?? false, cwd);
 		return;
 	}
 	process.stderr.write(`${chalk.red(`error: unknown ttsr action: ${cmd.action}`)}\n`);
-	process.exit(1);
+	process.exit(EXIT_USAGE);
 }

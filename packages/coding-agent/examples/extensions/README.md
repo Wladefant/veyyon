@@ -6,10 +6,10 @@ Example extensions for `@veyyon/coding-agent`.
 
 ```bash
 # Load an extension with --extension flag
-pi --extension examples/extensions/permission-gate.ts
+veyyon --extension examples/extensions/permission-gate.ts
 
-# Or copy to extensions directory for auto-discovery
-cp permission-gate.ts ~/.veyyon/agent/extensions/
+# Or copy to the profile's extensions directory for auto-discovery
+cp permission-gate.ts ~/.veyyon/profiles/<profile>/agent/extensions/
 ```
 
 ## Examples
@@ -30,7 +30,7 @@ cp permission-gate.ts ~/.veyyon/agent/extensions/
 | `todo.ts`     | Todo list tool + `/todos` command with custom rendering and state persistence |
 | `hello.ts`    | Minimal custom tool example                                                   |
 | `question.ts` | Demonstrates `ctx.ui.select()` for asking the user questions                  |
-| `subagent/`   | Delegate tasks to specialized subagents with isolated context windows         |
+| `agent/`   | Delegate tasks to specialized agents with isolated context windows         |
 
 ### Commands & UI
 
@@ -68,7 +68,7 @@ cp permission-gate.ts ~/.veyyon/agent/extensions/
 
 ## Writing Extensions
 
-See [docs/extensions.md](../../../../docs/extensions.md) for full documentation.
+See [docs/handbook/src/features/extensions.md](../../../../docs/handbook/src/features/extensions.md) for full documentation.
 
 ```typescript
 import type { ExtensionAPI } from "@veyyon/coding-agent";

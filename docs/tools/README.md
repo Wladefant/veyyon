@@ -24,9 +24,7 @@ these pages:
 | `read` | [read.md](read.md) |
 | `write` | [write.md](write.md) |
 | `edit` | [edit.md](edit.md) |
-| `glob` | [glob.md](glob.md) |
-| `grep` | [grep.md](grep.md) |
-| `ast_grep` | [ast-grep.md](ast-grep.md) |
+| `search` | [search.md](search.md) |
 | `ast_edit` | [ast-edit.md](ast-edit.md) |
 | `resolve` | [resolve.md](resolve.md) (hidden: merge-conflict resolution) |
 
@@ -86,8 +84,8 @@ Each of these requires its subsystem to be configured; the page says which setti
 
 ## Argot
 
-Present only when `argot.enabled` is on and the session holds a codec, which a subagent
-under `argot.subagents: off` does not.
+Present only when `argot.enabled` is on and the session holds a codec, which an agent
+under `argot.agents: off` does not.
 
 | Tool | Page |
 | --- | --- |
@@ -98,6 +96,6 @@ under `argot.subagents: off` does not.
 
 `yield`, `goal`, `report_finding` and `report_tool_issue` are hidden tools with no page in
 this directory. `yield` is described where it matters, in [task.md](task.md), since a
-subagent's contract is to finish through it. Goal Mode, which the `goal` tool serves, is
+agent's contract is to finish through it. Goal Mode, which the `goal` tool serves, is
 in [the handbook](../handbook/src/context/goal-state.md). `report_finding` is part of the
 review flow, in [the handbook's review page](../handbook/src/features/review.md).

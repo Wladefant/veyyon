@@ -2,15 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent, type AgentTool, type AsideMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, TextContent, ToolCall } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { AgentSession, type AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
+import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 import type { CustomMessage } from "@veyyon/coding-agent/session/messages";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import { TodoTool } from "@veyyon/coding-agent/tools/todo";
+import { TodoTool } from "@veyyon/coding-agent/tools/agent/todo";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 
 /**
@@ -20,7 +21,7 @@ import { TempDir } from "@veyyon/utils";
  * stop-time reminder ladder. The contract this defends:
  *
  *   1. Only SUCCESSFUL MUTATING tool results (bash/eval/edit/write/ast_edit)
- *      tick the counter. Read-only exploration (grep/read/glob/lsp) and
+ *      tick the counter. Read-only exploration (search/read/lsp) and
  *      errored results never do.
  *   2. At {@link MID_RUN_TODO_NUDGE_MUTATION_THRESHOLD} mutations without a
  *      `todo` call, the aside provider injects a hidden custom message
@@ -221,7 +222,7 @@ describe("AgentSession mid-run todo reconciliation nudge", () => {
 	});
 
 	it("read-only exploration never ticks the counter, no matter how long", async () => {
-		for (let i = 0; i < THRESHOLD * 3; i++) emitToolResult(i % 2 === 0 ? "grep" : "read");
+		for (let i = 0; i < THRESHOLD * 3; i++) emitToolResult(i % 2 === 0 ? "search" : "read");
 
 		await settle();
 		expect(await drainNudges()).toEqual([]);
@@ -313,7 +314,7 @@ describe("AgentSession mid-run todo reconciliation nudge", () => {
 		// An explicit active-tool list (or discovery-mode filtering) can drop
 		// `todo` from the slate while the setting flag stays true. Asking the
 		// model to call a tool that is not in its schema would produce
-		// fabricated/unknown tool calls. Mirror {@link #createEagerTodoPrelude}.
+		// fabricated/unknown tool calls. Mirror {@link TodoRuntime.eagerPrelude}.
 		await session.setActiveToolsByName([]);
 		expect(session.getActiveToolNames()).not.toContain("todo");
 

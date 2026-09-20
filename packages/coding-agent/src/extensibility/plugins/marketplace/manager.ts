@@ -9,13 +9,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-
-import { DAY_MS, errorMessage, isEnoent, logger, pathIsWithin, removeTempPath } from "@veyyon/utils";
-import { normalizePluginRuntimeConfig } from "../runtime-config";
-import type { PluginRuntimeConfig } from "../types";
-
-import { cachePlugin } from "./cache";
-import { classifySource, fetchMarketplace, parseMarketplaceCatalog, promoteCloneToCache } from "./fetcher";
+import { cachePlugin } from "@veyyon/kernel/loader/plugins/marketplace/cache";
 import {
 	addInstalledPlugin,
 	addMarketplaceEntry,
@@ -28,17 +22,22 @@ import {
 	removeMarketplaceEntry,
 	writeInstalledPluginsRegistry,
 	writeMarketplacesRegistry,
-} from "./registry";
+} from "@veyyon/kernel/loader/plugins/marketplace/registry";
+import {
+	buildPluginId,
+	type InstalledPluginEntry,
+	type InstalledPluginSummary,
+	type InstalledPluginsRegistry,
+	type MarketplaceCatalog,
+	type MarketplacePluginEntry,
+	type MarketplaceRegistryEntry,
+	parsePluginId,
+} from "@veyyon/kernel/loader/plugins/marketplace/types";
+import { normalizePluginRuntimeConfig } from "@veyyon/kernel/loader/plugins/runtime-config";
+import type { PluginRuntimeConfig } from "@veyyon/kernel/loader/plugins/types";
+import { DAY_MS, errorMessage, isEnoent, logger, pathIsWithin, removeTempPath } from "@veyyon/utils";
+import { classifySource, fetchMarketplace, parseMarketplaceCatalog, promoteCloneToCache } from "./fetcher";
 import { resolvePluginSource } from "./source-resolver";
-import type {
-	InstalledPluginEntry,
-	InstalledPluginSummary,
-	InstalledPluginsRegistry,
-	MarketplaceCatalog,
-	MarketplacePluginEntry,
-	MarketplaceRegistryEntry,
-} from "./types";
-import { buildPluginId, parsePluginId } from "./types";
 
 const RUNTIME_PACKAGE_NAME_RE = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/;
 const MAX_RUNTIME_PACKAGE_NAME_LENGTH = 214;
@@ -85,6 +84,18 @@ export interface MarketplaceManagerOptions {
 	 *  Receives any additional file paths that should also be invalidated from the fs cache.
 	 */
 	clearPluginRootsCache?: (extraPaths?: readonly string[]) => void;
+}
+
+/** Both installed-plugin registries and the entries one plugin id has in each. */
+interface InstalledLocation {
+	readonly userEntries: InstalledPluginEntry[] | undefined;
+	readonly projectEntries: InstalledPluginEntry[] | undefined;
+	readonly userReg: InstalledPluginsRegistry;
+	readonly projectReg: InstalledPluginsRegistry;
+	/** `userEntries` holds at least one entry. */
+	readonly inUser: boolean;
+	/** `projectEntries` holds at least one entry. */
+	readonly inProject: boolean;
 }
 
 // ── Manager ──────────────────────────────────────────────────────────────────
@@ -246,7 +257,7 @@ export class MarketplaceManager {
 		const all: MarketplacePluginEntry[] = [];
 		for (const entry of reg.marketplaces) {
 			const catalog = await this.#readCatalog(entry);
-			all.push(...catalog.plugins);
+			for (let pi = 0; pi < catalog.plugins.length; pi++) all.push(catalog.plugins[pi]!);
 		}
 		return all;
 	}
@@ -474,38 +485,11 @@ export class MarketplaceManager {
 			throw new Error(`Invalid plugin ID format: "${pluginId}". Expected "name@marketplace".`);
 		}
 
-		const { userEntries, projectEntries, userReg, projectReg } = await this.#findInBothRegistries(pluginId);
+		const location = await this.#findInstalled(pluginId);
+		const targetScope = MarketplaceManager.#scopeFor(pluginId, location, scope, "remove");
 
-		const inUser = userEntries && userEntries.length > 0;
-		const inProject = projectEntries && projectEntries.length > 0;
-
-		if (!inUser && !inProject) {
-			throw new Error(`Plugin "${pluginId}" is not installed`);
-		}
-
-		// Disambiguation: if installed in both scopes and no explicit scope, require one.
-		let targetScope: "user" | "project";
-		if (inUser && inProject) {
-			if (!scope) {
-				throw new Error(
-					`Plugin "${pluginId}" is installed in both user and project scope. Use --scope user or --scope project to specify which to remove.`,
-				);
-			}
-			targetScope = scope;
-		} else if (inProject) {
-			if (scope === "user") {
-				throw new Error(`Plugin "${pluginId}" is not installed in user scope`);
-			}
-			targetScope = "project";
-		} else {
-			if (scope === "project") {
-				throw new Error(`Plugin "${pluginId}" is not installed in project scope`);
-			}
-			targetScope = "user";
-		}
-
-		const targetEntries = targetScope === "project" ? projectEntries! : userEntries!;
-		const targetReg = targetScope === "project" ? projectReg : userReg;
+		const targetEntries = targetScope === "project" ? location.projectEntries! : location.userEntries!;
+		const targetReg = targetScope === "project" ? location.projectReg : location.userReg;
 		const registryPath = this.#registryPath(targetScope);
 		const packageNames = await this.#resolveInstalledPackageNames(targetEntries, parsed.name);
 
@@ -574,38 +558,11 @@ export class MarketplaceManager {
 	}
 
 	async setPluginEnabled(pluginId: string, enabled: boolean, scope?: "user" | "project"): Promise<void> {
-		const { userEntries, projectEntries, userReg, projectReg } = await this.#findInBothRegistries(pluginId);
+		const location = await this.#findInstalled(pluginId);
+		const targetScope = MarketplaceManager.#scopeFor(pluginId, location, scope, "modify");
 
-		const inUser = userEntries && userEntries.length > 0;
-		const inProject = projectEntries && projectEntries.length > 0;
-
-		if (!inUser && !inProject) {
-			throw new Error(`Plugin "${pluginId}" is not installed`);
-		}
-
-		// Disambiguation: if installed in both scopes and no explicit scope, require one.
-		let targetScope: "user" | "project";
-		if (inUser && inProject) {
-			if (!scope) {
-				throw new Error(
-					`Plugin "${pluginId}" is installed in both user and project scope. Use --scope user or --scope project to specify which to modify.`,
-				);
-			}
-			targetScope = scope;
-		} else if (inProject) {
-			if (scope === "user") {
-				throw new Error(`Plugin "${pluginId}" is not installed in user scope`);
-			}
-			targetScope = "project";
-		} else {
-			if (scope === "project") {
-				throw new Error(`Plugin "${pluginId}" is not installed in project scope`);
-			}
-			targetScope = "user";
-		}
-
-		const reg = targetScope === "project" ? projectReg : userReg;
-		const entries = targetScope === "project" ? projectEntries! : userEntries!;
+		const reg = targetScope === "project" ? location.projectReg : location.userReg;
+		const entries = targetScope === "project" ? location.projectEntries! : location.userEntries!;
 		const registryPath = this.#registryPath(targetScope);
 
 		const updated = {
@@ -715,30 +672,8 @@ export class MarketplaceManager {
 			throw new Error(`Invalid plugin ID: "${pluginId}". Expected "name@marketplace".`);
 		}
 
-		const { userEntries, projectEntries } = await this.#findInBothRegistries(pluginId);
-
-		const inUser = userEntries && userEntries.length > 0;
-		const inProject = projectEntries && projectEntries.length > 0;
-
-		if (!inUser && !inProject) {
-			throw new Error(`Plugin "${pluginId}" is not installed`);
-		}
-
-		let resolvedScope: "user" | "project";
-		if (inUser && inProject) {
-			if (!scope) {
-				throw new Error(
-					`Plugin "${pluginId}" is installed in both user and project scope. Use --scope user or --scope project to specify which to upgrade.`,
-				);
-			}
-			resolvedScope = scope;
-		} else if (inProject) {
-			if (scope === "user") throw new Error(`Plugin "${pluginId}" is not installed in user scope`);
-			resolvedScope = "project";
-		} else {
-			if (scope === "project") throw new Error(`Plugin "${pluginId}" is not installed in project scope`);
-			resolvedScope = "user";
-		}
+		const location = await this.#findInstalled(pluginId);
+		const resolvedScope = MarketplaceManager.#scopeFor(pluginId, location, scope, "upgrade");
 
 		return this.installPlugin(parsed.name, parsed.marketplace, { force: true, scope: resolvedScope });
 	}
@@ -751,14 +686,7 @@ export class MarketplaceManager {
 			throw new Error(`Invalid plugin ID: "${pluginId}". Expected "name@marketplace".`);
 		}
 
-		const { userEntries, projectEntries } = await this.#findInBothRegistries(pluginId);
-
-		const inUser = userEntries && userEntries.length > 0;
-		const inProject = projectEntries && projectEntries.length > 0;
-
-		if (!inUser && !inProject) {
-			throw new Error(`Plugin "${pluginId}" is not installed`);
-		}
+		const { inUser, inProject } = await this.#findInstalled(pluginId);
 
 		const results: InstalledPluginEntry[] = [];
 
@@ -827,11 +755,11 @@ export class MarketplaceManager {
 			if (isEnoent(err)) return normalizePluginRuntimeConfig({});
 			logger.warn(
 				`The marketplace plugin runtime config at ${this.#runtimeLockPath(scope)} could not be read ` +
-					`(${String(err)}), so every marketplace plugin is treated as freshly installed with default ` +
+					`(${errorMessage(err)}), so every marketplace plugin is treated as freshly installed with default ` +
 					"settings. Fix: check that file's permissions, or delete it to have it rebuilt.",
 				{
 					path: this.#runtimeLockPath(scope),
-					error: String(err),
+					error: errorMessage(err),
 				},
 			);
 			return normalizePluginRuntimeConfig({});
@@ -924,24 +852,52 @@ export class MarketplaceManager {
 		return this.#opts.installedRegistryPath;
 	}
 
-	async #findInBothRegistries(pluginId: string): Promise<{
-		userEntries: InstalledPluginEntry[] | undefined;
-		projectEntries: InstalledPluginEntry[] | undefined;
-		userReg: InstalledPluginsRegistry;
-		projectReg: InstalledPluginsRegistry;
-	}> {
+	/**
+	 * Both registries and where `pluginId` is installed in them. Throws when it
+	 * is installed in neither scope, so every scoped verb reports the same absence.
+	 */
+	async #findInstalled(pluginId: string): Promise<InstalledLocation> {
 		const [userReg, projectReg] = await Promise.all([
 			readInstalledPluginsRegistry(this.#opts.installedRegistryPath),
 			this.#opts.projectInstalledRegistryPath
 				? readInstalledPluginsRegistry(this.#opts.projectInstalledRegistryPath)
 				: Promise.resolve({ version: 2 as const, plugins: {} as Record<string, InstalledPluginEntry[]> }),
 		]);
-		return {
-			userEntries: getInstalledPlugin(userReg, pluginId),
-			projectEntries: getInstalledPlugin(projectReg, pluginId),
-			userReg,
-			projectReg,
-		};
+		const userEntries = getInstalledPlugin(userReg, pluginId);
+		const projectEntries = getInstalledPlugin(projectReg, pluginId);
+		const inUser = userEntries !== undefined && userEntries.length > 0;
+		const inProject = projectEntries !== undefined && projectEntries.length > 0;
+		if (!inUser && !inProject) {
+			throw new Error(`Plugin "${pluginId}" is not installed`);
+		}
+		return { userEntries, projectEntries, userReg, projectReg, inUser, inProject };
+	}
+
+	/**
+	 * The one scope `verb` applies to. A plugin installed in both scopes needs an
+	 * explicit `scope`; a plugin in one scope rejects a `scope` naming the other.
+	 */
+	static #scopeFor(
+		pluginId: string,
+		location: InstalledLocation,
+		scope: "user" | "project" | undefined,
+		verb: string,
+	): "user" | "project" {
+		if (location.inUser && location.inProject) {
+			if (!scope) {
+				throw new Error(
+					`Plugin "${pluginId}" is installed in both user and project scope. ` +
+						`Use --scope user or --scope project to specify which to ${verb}.`,
+				);
+			}
+			return scope;
+		}
+		if (location.inProject) {
+			if (scope === "user") throw new Error(`Plugin "${pluginId}" is not installed in user scope`);
+			return "project";
+		}
+		if (scope === "project") throw new Error(`Plugin "${pluginId}" is not installed in project scope`);
+		return "user";
 	}
 
 	async #readCatalog(entry: MarketplaceRegistryEntry): Promise<MarketplaceCatalog> {

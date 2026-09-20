@@ -1,10 +1,24 @@
 [workspace]
-members = ["crates/veyyon-*", "crates/vendor/*"]
-exclude = ["crates/vendor/brush-core", "crates/vendor/brush-builtins"]
+members = [
+	"crates/veyyon-*",
+	"natives/bridge/addon",
+	"natives/code/*",
+	"natives/diff/*",
+	"natives/fs/*",
+	"natives/search/*",
+	"natives/shell",
+	"natives/testing/*",
+	"natives/text/*",
+	"natives/vendor/*",
+	"tests/conformance",
+]
+# `tests/fuzz` is its own cargo workspace: cargo-fuzz builds it with nightly and
+# a sanitizer profile the root workspace never uses.
+exclude = ["natives/vendor/brush-core", "natives/vendor/brush-builtins", "tests/fuzz"]
 resolver = "3"
 
 [workspace.package]
-version = "1.0.49"
+version = "1.5.0"
 edition = "2024"
 license = "MIT"
 authors = ["santhreal"]
@@ -12,8 +26,16 @@ homepage = "https://veyyon.dev/"
 repository = "https://github.com/santhreal/veyyon"
 
 [patch.crates-io]
-brush-core = { path = "crates/vendor/brush-core" }
-brush-builtins = { path = "crates/vendor/brush-builtins" }
+brush-core = { path = "natives/vendor/brush-core" }
+brush-builtins = { path = "natives/vendor/brush-builtins" }
+# async-task: smol executor tasks used by gpui, gpui_macos, and scheduler
+async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }
+# async-process: async process spawning used transitively by gpui_linux via smol
+async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
+# calloop: event loop used by gpui_linux
+calloop = { git = "https://github.com/zed-industries/calloop" }
+# windows-capture: screen capture backend used transitively by gpui_windows and gpui via scap
+windows-capture = { git = "https://github.com/zed-industries/windows-capture.git", rev = "f0d6c1b6691db75461b732f6d5ff56eed002eeb9" }
 
 [profile.release]
 opt-level = 3
@@ -23,7 +45,7 @@ strip = true
 # Unwind (not abort) so panics inside vendored code and native tasks stay
 # recoverable at the appropriate boundary: the uutils boundary
 # (veyyon-shell coreutils) turns a panic into a failed command, and the
-# `task::blocking` wrapper in `crates/veyyon-natives/src/task.rs` catches unwinds
+# `task::blocking` wrapper in `natives/bridge/addon/src/task.rs` catches unwinds
 # inside `Blocking::compute` before they cross napi-rs's async-work
 # `extern "C"` callback (napi `src/async_work.rs:109`) so they surface as
 # rejected JS Promises instead of forced process aborts under Rust's C-unwind
@@ -31,7 +53,7 @@ strip = true
 # per-call `catch_unwind` on the `Task`/`AsyncTask` path; the tokio-future
 # path (`env.spawn_future`) is guarded upstream. Recoverable uutils panics
 # are kept out of the crash report by the crash hook
-# (see crates/veyyon-natives/src/crash_handler.rs).
+# (see natives/bridge/addon/src/crash_handler.rs).
 panic = "unwind"
 
 [profile.ci]
@@ -175,21 +197,29 @@ too_many_lines = "allow"     # Arbitrary limits don't account for necessary comp
 # ──────────────────────────────────────────────────────────────────────────────
 # Internal Libraries
 # ──────────────────────────────────────────────────────────────────────────────
-veyyon-ast = { path = "crates/veyyon-ast" }
-veyyon-iso = { path = "crates/veyyon-iso" }
-veyyon-diff-kernel = { path = "crates/veyyon-diff-kernel" }
-veyyon-glob = { path = "crates/veyyon-glob" }
-veyyon-grep-kernel = { path = "crates/veyyon-grep-kernel" }
-veyyon-keys = { path = "crates/veyyon-keys" }
-veyyon-shell = { path = "crates/veyyon-shell" }
-veyyon-test-scratch = { path = "crates/veyyon-test-scratch" }
-veyyon-text = { path = "crates/veyyon-text" }
-veyyon-uu-diff = { path = "crates/veyyon-uu-diff" }
-veyyon-uu-grep = { path = "crates/veyyon-uu-grep" }
-veyyon-uutils-ctx = { path = "crates/veyyon-uutils-ctx" }
-veyyon-walker = { path = "crates/veyyon-walker" }
-brush-core = { path = "crates/vendor/brush-core" }
-brush-builtins = { path = "crates/vendor/brush-builtins" }
+veyyon-ast = { path = "natives/code/ast" }
+veyyon-iso = { path = "natives/fs/iso" }
+veyyon-diff-kernel = { path = "natives/diff/kernel" }
+veyyon-glob = { path = "natives/search/glob" }
+veyyon-grep-kernel = { path = "natives/search/grep-kernel" }
+veyyon-keys = { path = "natives/text/keys" }
+veyyon-shell = { path = "natives/shell" }
+veyyon-test-scratch = { path = "natives/testing/scratch" }
+veyyon-text = { path = "natives/text/measure" }
+veyyon-uu-diff = { path = "natives/diff/uu-diff" }
+veyyon-uu-grep = { path = "natives/search/uu-grep" }
+veyyon-uutils-ctx = { path = "natives/fs/uutils-ctx" }
+veyyon-walker = { path = "natives/search/walker" }
+brush-core = { path = "natives/vendor/brush-core" }
+brush-builtins = { path = "natives/vendor/brush-builtins" }
+veyyon-desktop-model = { path = "crates/veyyon-desktop-model" }
+veyyon-desktop-motion = { path = "crates/veyyon-desktop-motion" }
+veyyon-desktop-tokens = { path = "crates/veyyon-desktop-tokens" }
+veyyon-desktop-kit = { path = "crates/veyyon-desktop-kit" }
+veyyon-desktop-surface = { path = "crates/veyyon-desktop-surface" }
+veyyon-desktop = { path = "crates/veyyon-desktop" }
+veyyon-gpui = { path = "crates/veyyon-gpui" }
+veyyon-desktop-scene = { path = "crates/veyyon-desktop-scene" }
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Async Runtime & Concurrency
@@ -209,12 +239,21 @@ base64 = "0.22"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 toml = "1.1"
+# Variant iteration for the desktop protocol enums. Every scene gate and capability sweep
+# enumerates a union at run time, and a hand-written `ALL` array goes stale in silence when
+# someone adds a variant. `EnumIter` and `EnumDiscriminants` derive the space from the enum,
+# so a new variant turns a sweep red instead of being skipped. Already in the lock at this
+# version through the vendored brush crates.
+strum = { version = "0.28", features = ["derive"] }
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Error Handling
 # ──────────────────────────────────────────────────────────────────────────────
 anyhow = "1.0"
 bytes = "1"
+# Named error types for the desktop crates. A library API returns a variant a caller can
+# match, so `anyhow` stays at the binary boundary where the context string is the product.
+thiserror = "2"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # CLI & Configuration
@@ -259,6 +298,34 @@ smallvec = { version = "1.15.1", features = [
 # Hashing
 # ──────────────────────────────────────────────────────────────────────────────
 xxhash-rust = { version = "0.8", features = ["xxh64"] }
+# BLAKE3 is the corpus's identity function, not a speed choice: a conformance
+# case is named by the digest of its own semantics, so the digest has to be
+# stable across platforms and cheap enough to compute for 250,000 rows on every
+# materialization. xxh64 above is a non-cryptographic bucket hash and cannot
+# carry an identity that a committed corpus is keyed by.
+blake3 = "1"
+# SHA-256 names the GUI host's fallback socket after the profile directory it
+# serves. The digest crosses a language boundary — the desktop window and the
+# TypeScript host derive the same path from it — so it has to be a construction
+# `node:crypto` also offers, which the BLAKE3 above is not.
+sha2 = "0.10"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Wire Protocols
+# ──────────────────────────────────────────────────────────────────────────────
+# The Cursor provider does not speak HTTP/1.1. It calls `http2.connect()` on a
+# plain `http:` URL, which is h2c with prior knowledge: a client preface and a
+# SETTINGS exchange before any request. A mock that only parses request lines
+# cannot answer it, so every Cursor case would be unverifiable, including the
+# GOAWAY and RST_STREAM paths that `http2RetryVerdict` in packages/ai maps to
+# retry decisions and that nothing currently exercises against a real h2 peer.
+# `h2` is the framing layer under hyper, needs no TLS for h2c, and is used only
+# by the conformance harness, which is `publish = false`.
+h2 = "0.4"
+# `h2` speaks in `http` types and re-exports none of them, so a server that sets
+# a status or a header name has to name `http::Response`, `HeaderName` and
+# `HeaderValue` itself. It is already in the lock file under `h2`.
+http = "1"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -304,6 +371,11 @@ grep-pcre2 = "0.1"
 grep-regex = "0.1"
 grep-searcher = "0.1"
 ignore = "0.4"
+memchr = "2.8"
+# The token watcher in veyyon-desktop-tokens. Hot reload is the mechanism the whole
+# iteration engine rests on, so the watch is a real filesystem notification rather than a
+# poll: a sweep re-renders on save, and a poll interval is a lower bound on every pass.
+notify = "8"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Image Processing & Syntax Highlighting
@@ -401,6 +473,16 @@ tree-sitter-vue = { version = "0.1.0", package = "tree-sitter-vue-next" }
 tree-sitter-xml = "0.7"
 tree-sitter-yaml = "0.7"
 tree-sitter-zig = "1.1"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# GUI & Renderer
+# ──────────────────────────────────────────────────────────────────────────────
+# Santh GPUI is shared with other native applications through one pinned repository.
+gpui = { git = "https://github.com/santhreal/gpui.git", rev = "ee35ff2e13f37ed75038d6c8a88fe4e1b737832e" }
+# The headless offscreen path needs the platform crate, which builds the renderer for the current
+# OS, and the wgpu crate, which supplies the text system.
+gpui_platform = { git = "https://github.com/santhreal/gpui.git", rev = "ee35ff2e13f37ed75038d6c8a88fe4e1b737832e" }
+gpui_wgpu = { git = "https://github.com/santhreal/gpui.git", rev = "ee35ff2e13f37ed75038d6c8a88fe4e1b737832e" }
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Unsorted (added by `cargo add` - move into a section above)

@@ -9,7 +9,7 @@ import {
 	parseFrontmatter,
 	prompt,
 } from "@veyyon/utils";
-import { jtdToTypeScript, jtdToTypeScriptParts } from "../tools/jtd-to-typescript";
+import { jtdToTypeScript, jtdToTypeScriptParts } from "../tools/core/jtd-to-typescript";
 import { parseCommandArgs, substituteArgs } from "../utils/command-args";
 
 /**
@@ -31,7 +31,7 @@ export interface PromptTemplate {
  * has nothing to pattern-match on, returns an arbitrary shape, and fails output
  * validation over and over. That is precisely the failure `renderYieldSchema`
  * exists to prevent, so reintroducing it silently while the operator watches a
- * subagent loop is the worst case (Law 10).
+ * spawned agent loop is the worst case (Law 10).
  *
  * A self-referential schema is NOT this case: the renderer expands it into a
  * named interface. What reaches here is a schema nested past the renderer's
@@ -40,10 +40,13 @@ export interface PromptTemplate {
  * than a failure, so it correctly reports nothing.
  */
 function reportUnrenderableSchema(error: unknown): void {
-	logger.warn("A subagent output schema could not be rendered, so the model is not being told what shape to return", {
-		error: errorMessage(error),
-		fix: "Flatten the schema, or describe the deeply nested part as a string. Until then the subagent will keep failing output validation.",
-	});
+	logger.warn(
+		"A spawned agent output schema could not be rendered, so the model is not being told what shape to return",
+		{
+			error: errorMessage(error),
+			fix: "Flatten the schema, or describe the deeply nested part as a string. Until then the spawned agent will keep failing output validation.",
+		},
+	);
 }
 
 prompt.registerHelper("jtdToTypeScript", (schema: unknown): string => {
@@ -56,7 +59,7 @@ prompt.registerHelper("jtdToTypeScript", (schema: unknown): string => {
 });
 
 /**
- * Render a subagent output schema wrapped in the `yield` tool's
+ * Render a spawned agent output schema wrapped in the `yield` tool's
  * `result: { data: … }` envelope so the model sees the shape it must
  * actually submit, not just the user-facing payload. Without this the LLM
  * pattern-matches on the bare interface and puts strings/objects directly
@@ -203,11 +206,13 @@ export async function loadPromptTemplates(options: LoadPromptTemplatesOptions = 
 	// 1. Load global templates from agentDir/prompts/
 	// Note: if agentDir is provided, it should be the agent dir, not the prompts dir
 	const globalPromptsDir = options.agentDir ? path.join(options.agentDir, "prompts") : resolvedAgentDir;
-	templates.push(...(await loadTemplatesFromDir(globalPromptsDir, "user")));
+	const globalTemplates = await loadTemplatesFromDir(globalPromptsDir, "user");
+	for (let ti = 0; ti < globalTemplates.length; ti++) templates.push(globalTemplates[ti]!);
 
 	// 2. Load project templates from cwd/.veyyon/prompts/
 	const projectPromptsDir = getProjectPromptsDir(resolvedCwd);
-	templates.push(...(await loadTemplatesFromDir(projectPromptsDir, "project")));
+	const projectTemplates = await loadTemplatesFromDir(projectPromptsDir, "project");
+	for (let ti = 0; ti < projectTemplates.length; ti++) templates.push(projectTemplates[ti]!);
 
 	return templates;
 }

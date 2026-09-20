@@ -29,7 +29,9 @@ import {
 	semverGte,
 } from "./identity/classify";
 import {
+	enforcesThinkingPrefixBinding,
 	findThinkingVariantToken,
+	isGlm52ModelId,
 	isGlm52ReasoningEffortModelId,
 	isMimoModelIdOrName,
 	isMinimaxM2FamilyModelId,
@@ -116,7 +118,7 @@ function normalizeOllamaWireEfforts<TApi extends Api>(
 ): readonly Effort[] {
 	if (spec.provider !== "ollama" && spec.provider !== "ollama-cloud") return efforts;
 	// Ollama Cloud's GLM-5.2 endpoint 400s on every level except high/max.
-	if (spec.provider === "ollama-cloud" && isGlm52ReasoningEffortModelId(spec.id)) {
+	if (spec.provider === "ollama-cloud" && isGlm52ModelId(spec.id)) {
 		return OLLAMA_CLOUD_GLM_52_WIRE_EFFORTS;
 	}
 	if (efforts.includes(Effort.Minimal) || efforts.includes(Effort.XHigh)) {
@@ -230,8 +232,9 @@ function fillThinkingWireDefaults<TApi extends Api>(
 		thinking.supportsDisplay === undefined &&
 		(spec.api === "anthropic-messages" || spec.api === "bedrock-converse-stream") &&
 		supportsAdaptiveThinkingDisplay(spec.id);
+	const needsPrefixBinding = thinking.prefixBinding === undefined && enforcesThinkingPrefixBinding(spec.id);
 	const needsRequiresEffort = thinking.requiresEffort === undefined && impliesMandatoryReasoning(parsed, spec.id);
-	if (!effortsChanged && !shouldReplaceEffortMap && !needsDisplay && !needsRequiresEffort) {
+	if (!effortsChanged && !shouldReplaceEffortMap && !needsDisplay && !needsPrefixBinding && !needsRequiresEffort) {
 		return thinking;
 	}
 	const filled: ThinkingConfig = { ...thinking };
@@ -247,6 +250,9 @@ function fillThinkingWireDefaults<TApi extends Api>(
 	}
 	if (needsDisplay) {
 		filled.supportsDisplay = true;
+	}
+	if (needsPrefixBinding) {
+		filled.prefixBinding = true;
 	}
 	if (needsRequiresEffort) {
 		filled.requiresEffort = true;
@@ -278,6 +284,9 @@ function thinkingConfigFromEfforts<TApi extends Api>(
 		supportsAdaptiveThinkingDisplay(spec.id)
 	) {
 		config.supportsDisplay = true;
+	}
+	if (enforcesThinkingPrefixBinding(spec.id)) {
+		config.prefixBinding = true;
 	}
 	if (impliesMandatoryReasoning(parsed, spec.id)) {
 		config.requiresEffort = true;

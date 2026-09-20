@@ -23,7 +23,7 @@
 
 import { describe, expect, it } from "bun:test";
 import { fromWireAgentEvent, toWireAgentEvent, WIRE_API_UNREPORTED } from "@veyyon/coding-agent/collab/protocol";
-import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session";
+import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 
 /** Keys a projected event may have, so a leak is named rather than counted. */
 function keysOf(value: unknown): string[] {
@@ -157,13 +157,14 @@ describe("the tool execution arms", () => {
 			isError: false,
 		} as unknown as AgentSessionEvent);
 
-		expect(wire).toEqual({
+		expect(wire).toMatchObject({
 			type: "tool_execution_end",
 			toolCallId: "call_1",
 			toolName: "read",
 			result: { output: "file contents", metrics: { bytes: 4096 } },
 			isError: false,
 		});
+		expect(wire && "display" in wire ? wire.display : undefined).toBeDefined();
 	});
 
 	/** The start arm keeps `intent`, which is the one-line description a guest shows while it runs. */
@@ -176,13 +177,14 @@ describe("the tool execution arms", () => {
 			intent: "list the directory",
 		} as unknown as AgentSessionEvent);
 
-		expect(wire).toEqual({
+		expect(wire).toMatchObject({
 			type: "tool_execution_start",
 			toolCallId: "call_2",
 			toolName: "bash",
 			args: { command: "ls" },
 			intent: "list the directory",
 		});
+		expect(wire && "display" in wire ? wire.display : undefined).toBeDefined();
 	});
 });
 

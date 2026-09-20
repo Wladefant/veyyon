@@ -6,7 +6,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { atomicWriteFile, isEnoent, withFileLock } from "@veyyon/utils";
-import { invalidate as invalidateFsCache } from "../capability/fs";
+import { invalidate as invalidateFsCache } from "../discovery/capability/fs";
 import { MCP_CONFIG_SCHEMA_URL, type MCPConfigFile, type MCPServerConfig } from "./types";
 import { validateServerConfig } from "./validate";
 
@@ -126,7 +126,7 @@ export async function addMCPServer(filePath: string, name: string, config: MCPSe
 		if (existing.mcpServers?.[name]) {
 			throw new Error(
 				// Keep the words "already exists": `#handleWizardComplete` in
-				// `modes/controllers/mcp-command-controller.ts` matches that phrase to
+				// `modes/terminal/controllers/mcp-command-controller.ts` matches that phrase to
 				// decide which tip to append, so rewording it silently drops the tip.
 				`MCP server "${name}" already exists in ${filePath}, and adding it again would silently replace a working entry. Fix: pick a different name, or run \`/mcp remove ${name}\` first, or edit ${filePath} directly to change the existing entry.`,
 			);
@@ -239,14 +239,16 @@ export async function readDisabledServers(filePath: string): Promise<string[]> {
 	return Array.isArray(config.disabledServers) ? config.disabledServers : [];
 }
 
-/**
- * Add or remove a server name from the disabled servers list.
- */
-export async function setServerDisabled(filePath: string, name: string, disabled: boolean): Promise<void> {
+async function mutateServerToggleList(
+	filePath: string,
+	key: "disabledServers" | "enabledServers",
+	name: string,
+	present: boolean,
+): Promise<void> {
 	await mutateMCPConfigFile(filePath, config => {
-		const current = new Set(config.disabledServers ?? []);
+		const current = new Set(config[key] ?? []);
 
-		if (disabled) {
+		if (present) {
 			current.add(name);
 		} else {
 			current.delete(name);
@@ -254,15 +256,22 @@ export async function setServerDisabled(filePath: string, name: string, disabled
 
 		const updated: MCPConfigFile = {
 			...config,
-			disabledServers: current.size > 0 ? Array.from(current).sort() : undefined,
+			[key]: current.size > 0 ? Array.from(current).sort() : undefined,
 		};
 
-		if (!updated.disabledServers) {
-			delete updated.disabledServers;
+		if (!updated[key]) {
+			delete updated[key];
 		}
 
 		return updated;
 	});
+}
+
+/**
+ * Add or remove a server name from the disabled servers list.
+ */
+export async function setServerDisabled(filePath: string, name: string, disabled: boolean): Promise<void> {
+	return mutateServerToggleList(filePath, "disabledServers", name, disabled);
 }
 
 /**
@@ -280,26 +289,7 @@ export async function readEnabledServers(filePath: string): Promise<string[]> {
  * NOT override the `disabledServers` denylist.
  */
 export async function setServerForceEnabled(filePath: string, name: string, force: boolean): Promise<void> {
-	await mutateMCPConfigFile(filePath, config => {
-		const current = new Set(config.enabledServers ?? []);
-
-		if (force) {
-			current.add(name);
-		} else {
-			current.delete(name);
-		}
-
-		const updated: MCPConfigFile = {
-			...config,
-			enabledServers: current.size > 0 ? Array.from(current).sort() : undefined,
-		};
-
-		if (!updated.enabledServers) {
-			delete updated.enabledServers;
-		}
-
-		return updated;
-	});
+	return mutateServerToggleList(filePath, "enabledServers", name, force);
 }
 
 /** Paths and target state for toggling one MCP server across known config files. */
@@ -341,7 +331,7 @@ export interface SetMcpServerEnabledOptions {
  */
 export async function setMcpServerEnabled(options: SetMcpServerEnabledOptions): Promise<void> {
 	const { userPath, projectPath, sourcePath, name, enabled } = options;
-	const candidatePaths = [...new Set([sourcePath, projectPath, userPath].filter(path => path !== undefined))];
+	const candidatePaths = Array.from(new Set([sourcePath, projectPath, userPath].filter(path => path !== undefined)));
 	let updatedInConfig = false;
 
 	for (const filePath of candidatePaths) {

@@ -5,12 +5,13 @@
 // `.env` AT IMPORT TIME. This module is in `cli.ts`'s static graph, so pulling the barrel here would load the
 // DEFAULT profile's `.env` before `--profile` has even been parsed (pinned by profile-cli.test.ts).
 import { renderHelpParagraph, renderHelpTable } from "@veyyon/utils/cli";
+import { CliUsageError } from "@veyyon/utils/cli-usage-error";
 import { APP_NAME, CONFIG_DIR_NAME } from "@veyyon/utils/dirs";
 import { pluralize } from "@veyyon/utils/format";
 import { nearestNames } from "@veyyon/utils/levenshtein";
 import chalk from "chalk";
 import { CLI_THINKING_LEVELS, type ConfiguredThinkingLevel, parseCliThinkingLevel } from "../thinking";
-import { BUILTIN_TOOL_NAMES, type BuiltinToolName, normalizeToolNames } from "../tools/builtin-names";
+import { BUILTIN_TOOL_NAMES, type BuiltinToolName, normalizeToolNames } from "../tools/core/builtin-names";
 import {
 	OPTIONAL_FLAGS,
 	OPTIONAL_VALUE_FLAGS,
@@ -20,7 +21,6 @@ import {
 	STRING_VALUE_FLAGS,
 	VALUELESS_FLAGS,
 } from "./flag-tables";
-import { CliUsageError } from "./usage-error";
 
 export type Mode = "text" | "json" | "rpc" | "acp" | "rpc-ui";
 
@@ -35,7 +35,6 @@ export interface Args {
 	smol?: string;
 	slow?: string;
 	plan?: string;
-	subagentModel?: string;
 	compactionModel?: string;
 	prewalk?: boolean;
 	noPrewalk?: boolean;
@@ -145,7 +144,7 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 	// into the array, and callers reuse the same argv (the post-extension
 	// reparse in `runRootCommand` parses it a second time). Mutating the input
 	// would corrupt that later parse, so never touch the caller's array.
-	const args = [...inputArgs];
+	const args = inputArgs.slice();
 	const result: Args = {
 		messages: [],
 		fileArgs: [],
@@ -422,7 +421,6 @@ const BUILTIN_TOOL_HELP: Record<BuiltinToolName, string> = {
 	argot_unload: "Stop being taught a folder's Argot shorthand",
 	ask: "Ask the user a clarifying question",
 	ast_edit: "Perform AST-aware code edits (structural refactoring)",
-	ast_grep: "Search code with AST patterns (structural grep)",
 	bash: "Run a shell command",
 	browser: "Control a headless browser to navigate and interact with web pages",
 	checkpoint: "Create a git-based checkpoint to save and restore session state",
@@ -430,8 +428,7 @@ const BUILTIN_TOOL_HELP: Record<BuiltinToolName, string> = {
 	edit: "Apply line-anchored patches to existing files",
 	eval: `Run code in a persistent Python or JavaScript kernel (Python needs: ${APP_NAME} setup python)`,
 	github: "Interact with GitHub issues, pull requests, and repositories",
-	glob: "Find files by glob pattern",
-	grep: "Grep file contents using ripgrep (fast regex search)",
+	search: "Search workspace files, text, and code structure",
 	inspect_image: "Describe or analyze an image file",
 	irc: "Send and receive messages between agents",
 	job: "Manage long-running background jobs",
@@ -440,7 +437,7 @@ const BUILTIN_TOOL_HELP: Record<BuiltinToolName, string> = {
 	lsp: "Query LSP (language server) for diagnostics, hover info, and references",
 	manage_skill: "Create, update, or delete an isolated managed skill",
 	memory_edit: "Update, forget, or invalidate Mnemopi memories",
-	read: "Read files, directories, archives, documents, images, and URLs",
+	read: "Read files, directories (optionally bounded by depth/limit), archives, documents, images, and URLs",
 	recall: "Search memory for relevant prior context",
 	reflect: "Synthesize an answer from long-term memory",
 	retain: "Store important facts in long-term memory",
@@ -448,7 +445,7 @@ const BUILTIN_TOOL_HELP: Record<BuiltinToolName, string> = {
 	search_tool_bm25: "Search the descriptions of tools that have not been loaded yet",
 	set_cwd: "Change the session's working directory for the rest of the session",
 	ssh: "Execute a command on a remote host over SSH",
-	task: "Spawn subagents to complete delegated tasks",
+	task: "Spawn agents to complete delegated tasks",
 	todo: "Write a structured todo list to track progress within a session",
 	web_search: "Search the web",
 	write: "Write files (creates/overwrites)",
@@ -552,11 +549,8 @@ export function getExtraHelpText(): string {
 		chalk.bold("USEFUL COMMANDS"),
 		...renderHelpTable(
 			[
-				[
-					"veyyon agents unpack",
-					`Export bundled subagents to the active profile's agent dir, ~/${CONFIG_DIR_NAME}/profiles/<name>/agent/agents (default)`,
-				],
-				["veyyon agents unpack --project", "Export bundled subagents to ./.veyyon/agents"],
+				["veyyon agents unpack", `Export bundled agents to ~/${CONFIG_DIR_NAME}/agents, which every profile reads`],
+				["veyyon agents unpack --dir <path>", "Export bundled agents to a directory of your own"],
 			],
 			{ indent: "  " },
 		),

@@ -1,14 +1,16 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { Text } from "@veyyon/tui";
 import { errorMessage, formatBytes } from "@veyyon/utils";
+import { replaceTabs } from "@veyyon/utils/tab-width";
+import type { ViewSpan } from "@veyyon/view";
 import { type } from "arktype";
 import { executeBash } from "../../exec/bash-executor";
 import type { ToolDefinition } from "../../extensibility/extensions";
-import type { Theme } from "../../modes/theme/theme";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TailBuffer, truncateTail } from "../../session/streaming-output";
-import { replaceTabs, shortenPath } from "../../tools/render-utils";
-import * as git from "../../utils/git";
+// `shortenPath` is defined here and nowhere else: it collapses the real home directory, which the
+// browser-side owner in `@veyyon/tool-render` cannot do. The module binds no runtime value from
+// `@veyyon/tui`, so taking a string helper from it leaves this tool host-agnostic.
+import { shortenPath } from "../../tools/core/render-utils";
 import { parseWorkDirDirtyPaths } from "../git";
 import {
 	EXPERIMENT_MAX_BYTES,
@@ -19,14 +21,20 @@ import {
 	gitWorkDirPrefix,
 	parseAsiLines,
 	parseMetricLines,
+	resolveActiveBranchSession,
 } from "../helpers";
 import { buildExperimentState } from "../state";
-import { openAutoresearchStorageIfExists } from "../storage";
-import type { AutoresearchToolFactoryOptions, RunDetails, RunExperimentProgressDetails } from "../types";
+import type {
+	AutoresearchToolFactoryOptions,
+	RunDetails,
+	RunExperimentProgressDetails,
+	RunningExperiment,
+} from "../types";
 import { DEFAULT_HARNESS_COMMAND } from "./init-experiment";
 
 const runExperimentSchema = type({
 	"timeout_seconds?": type("number").describe("timeout in seconds (default 600)"),
+	"arm?": type("string").describe("candidate arm this measurement belongs to, when breadth > 1"),
 });
 
 interface ProcessExecutionResult {
@@ -55,26 +63,16 @@ export function createRunExperimentTool(
 		parameters: runExperimentSchema,
 		defaultInactive: true,
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
-			const storage = await openAutoresearchStorageIfExists(ctx.cwd);
-			const currentBranch = (await git.branch.current(ctx.cwd)) ?? null;
-			const session = storage?.getActiveSessionForBranch(currentBranch) ?? null;
-			if (!storage || !session) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: "Error: no active autoresearch session for the current branch. Call init_experiment first.",
-						},
-					],
-				};
-			}
+			const sessionResult = await resolveActiveBranchSession(ctx.cwd);
+			if (!sessionResult.ok) return sessionResult.result;
+			const { storage, session } = sessionResult;
 
 			const runtime = options.getRuntime(ctx);
 
 			const abandonedPriorRun = (() => {
 				const pending = storage.getPendingRun(session.id);
 				if (!pending) return null;
-				storage.abandonPendingRuns(session.id);
+				storage.abandonIncompleteRuns(session.id);
 				return pending.id;
 			})();
 
@@ -100,6 +98,13 @@ export function createRunExperimentTool(
 			}
 
 			const startedAt = Date.now();
+			// What actually built and measured this arm. `start_arm` has already put
+			// the session on the arm's model by now, so the model in force here is
+			// the one that wrote the diff being measured. It is recorded on the row
+			// rather than at log time, when a certified round has moved on to the
+			// last arm's model.
+			const currentModel = ctx.models?.current();
+			const measuredArm = params.arm?.trim() || undefined;
 			const insertedRun = storage.insertRun({
 				sessionId: session.id,
 				segment: session.currentSegment,
@@ -107,6 +112,8 @@ export function createRunExperimentTool(
 				logPath: "", // patched after we know the run id
 				preRunDirtyPaths,
 				startedAt,
+				arm: measuredArm,
+				model: currentModel ? `${currentModel.provider}/${currentModel.id}` : null,
 			});
 
 			const runDirectory = path.join(storage.projectDir, "runs", String(insertedRun.id).padStart(4, "0"));
@@ -119,13 +126,15 @@ export function createRunExperimentTool(
 			runtime.lastRunArtifactDir = runDirectory;
 			runtime.lastRunNumber = insertedRun.id;
 			runtime.lastRunSummary = null;
-			runtime.runningExperiment = {
+			const running: RunningExperiment = {
 				startedAt,
 				command: resolvedCommand,
 				runDirectory,
 				runNumber: insertedRun.id,
+				tail: "",
 			};
-			options.dashboard.updateWidget(ctx, runtime);
+			runtime.runningExperiment = running;
+			options.dashboard.update(ctx, runtime);
 			options.dashboard.requestRender();
 
 			const timeoutMs = Math.max(0, Math.floor((params.timeout_seconds ?? 600) * 1000));
@@ -139,6 +148,9 @@ export function createRunExperimentTool(
 					cpuSessionId: ctx.sessionManager.getSessionId(),
 					signal,
 					onProgress: details => {
+						// The screen's clock repaints the pane once a second; this is
+						// what it repaints from.
+						running.tail = details.tailOutput;
 						onUpdate?.({
 							content: [{ type: "text", text: details.tailOutput }],
 							details: {
@@ -153,7 +165,7 @@ export function createRunExperimentTool(
 				});
 			} finally {
 				runtime.runningExperiment = null;
-				options.dashboard.updateWidget(ctx, runtime);
+				options.dashboard.update(ctx, runtime);
 				options.dashboard.requestRender();
 			}
 
@@ -212,35 +224,50 @@ export function createRunExperimentTool(
 			};
 
 			runtime.lastRunSummary = {
+				runNumber: insertedRun.id,
+				runDirectory,
 				command: resolvedCommand,
 				durationSeconds,
-				parsedAsi,
-				parsedMetrics,
-				parsedPrimary,
 				passed,
-				preRunDirtyPaths,
-				runDirectory,
-				runNumber: insertedRun.id,
 				exitCode: execution.exitCode,
 				timedOut: execution.killed,
+				parsedPrimary,
+				parsedMetrics,
+				parsedAsi,
+				preRunDirtyPaths,
 			};
-			runtime.autoResumeArmed = true;
-			runtime.lastAutoResumePendingRunNumber = null;
 
 			// Refresh state to reflect any prior abandonment changes (logged set unchanged).
 			const refreshedSession = storage.getSessionById(session.id);
 			if (refreshedSession) {
 				runtime.state = buildExperimentState(refreshedSession, storage.listLoggedRuns(session.id));
 			}
-			options.dashboard.updateWidget(ctx, runtime);
+			options.dashboard.update(ctx, runtime);
 			options.dashboard.requestRender();
 
 			const headerLines: string[] = [];
 			if (abandonedPriorRun !== null) {
 				headerLines.push(`Note: abandoned prior pending run #${abandonedPriorRun} before starting this run.`);
 			}
+			// A per-arm model only takes effect through `start_arm`. Measuring an arm
+			// that was never started, or measuring one arm while another is in
+			// flight, means the diff was written by the wrong model, and the row
+			// records which one. Silence here would leave the comparison looking
+			// like a contest between models it never ran on.
+			if (measuredArm !== undefined && session.armModels.some(spec => spec.length > 0)) {
+				const inFlight = runtime.activeArm?.arm;
+				const builtOn = currentModel ? `${currentModel.provider}/${currentModel.id}` : "the session model";
+				if (inFlight === undefined) {
+					headerLines.push(
+						`Warning: measured as ${measuredArm} with no arm in flight, so it was built on ${builtOn} rather than the model configured for ${measuredArm}. Call start_arm before the first edit of an arm.`,
+					);
+				} else if (inFlight !== measuredArm) {
+					headerLines.push(
+						`Warning: measured as ${measuredArm} while ${inFlight} was in flight, so it was built on ${builtOn}, which is ${inFlight}'s model.`,
+					);
+				}
+			}
 			const warningPrefix = headerLines.length > 0 ? `${headerLines.join("\n")}\n\n` : "";
-
 			return {
 				content: [
 					{
@@ -251,38 +278,53 @@ export function createRunExperimentTool(
 				details: resultDetails,
 			};
 		},
-		renderCall(_args, _options, theme): Text {
-			return new Text(
-				`${theme.fg("toolTitle", theme.bold("run_experiment"))} ${theme.fg("muted", DEFAULT_HARNESS_COMMAND)}`,
-				0,
-				0,
-			);
-		},
-		renderResult(result, options, theme): Text {
-			if (isProgressDetails(result.details)) {
-				const header = theme.fg("warning", `Running ${result.details.elapsed}...`);
-				const preview = replaceTabs(result.content.find(part => part.type === "text")?.text ?? "");
-				return new Text(preview ? `${header}\n${theme.fg("dim", preview)}` : header, 0, 0);
-			}
-			const details = result.details;
-			if (!details || !isRunDetails(details)) {
-				return new Text(replaceTabs(result.content.find(part => part.type === "text")?.text ?? ""), 0, 0);
-			}
-			const statusText = renderStatus(details, theme);
-			if (!options.expanded && details.tailOutput.trim().length === 0) {
-				return new Text(statusText, 0, 0);
-			}
-			const preview = replaceTabs(
-				options.expanded ? details.tailOutput : details.tailOutput.split("\n").slice(-5).join("\n"),
-			);
-			const suffix =
-				options.expanded && details.truncation && details.fullOutputPath
-					? `\n${theme.fg("warning", `Full output: ${shortenPath(details.fullOutputPath)}`)}`
-					: "";
-			return new Text(preview ? `${statusText}\n${theme.fg("dim", preview)}${suffix}` : statusText, 0, 0);
+		view: {
+			renderCall: () => ({
+				kind: "textBlock",
+				spans: [
+					{ text: "run_experiment", tone: "title", bold: true },
+					{ text: " " },
+					{ text: DEFAULT_HARNESS_COMMAND, tone: "muted" },
+				],
+			}),
+			renderResult: (result, context) => {
+				const details = result.details;
+				if (isProgressDetails(details)) {
+					const header = `Running ${details.elapsed}...`;
+					const preview = replaceTabs(result.content.find(part => part.type === "text")?.text ?? "");
+					const spans: ViewSpan[] = [{ text: header, tone: "warning" }];
+					if (preview) {
+						spans.push({ text: "\n" }, { text: preview, tone: "dim" });
+					}
+					return { kind: "textBlock", spans };
+				}
+				if (!isRunDetails(details)) {
+					const text = replaceTabs(result.content.find(part => part.type === "text")?.text ?? "");
+					return { kind: "textBlock", spans: [{ text }] };
+				}
+				const statusText = renderStatusText(details);
+				if (!context.expanded && details.tailOutput.trim().length === 0) {
+					return { kind: "textBlock", spans: [{ text: statusText, tone: statusTone(details) }] };
+				}
+				const preview = replaceTabs(
+					context.expanded ? details.tailOutput : details.tailOutput.split("\n").slice(-5).join("\n"),
+				);
+				const spans: ViewSpan[] = [{ text: statusText, tone: statusTone(details) }];
+				if (preview) {
+					spans.push({ text: "\n" }, { text: preview, tone: "dim" });
+				}
+				if (preview && context.expanded && details.truncation && details.fullOutputPath) {
+					spans.push(
+						{ text: "\n" },
+						{ text: `Full output: ${shortenPath(details.fullOutputPath)}`, tone: "warning" },
+					);
+				}
+				return { kind: "textBlock", spans };
+			},
 		},
 	};
 }
+
 async function executeProcess(opts: {
 	command: string;
 	cwd: string;
@@ -350,7 +392,7 @@ async function executeProcess(opts: {
 			output,
 		};
 	} finally {
-		if (progressTimer) clearInterval(progressTimer);
+		clearInterval(progressTimer);
 		if (!logSinkClosed) {
 			try {
 				await closeLogSink();
@@ -360,7 +402,6 @@ async function executeProcess(opts: {
 		}
 	}
 }
-
 function buildRunText(details: RunDetails, outputPreview: string, bestMetric: number | null): string {
 	const lines: string[] = [];
 	lines.push(`Run #${details.runNumber} directory: ${details.runDirectory}`);
@@ -402,18 +443,25 @@ function buildRunText(details: RunDetails, outputPreview: string, bestMetric: nu
 	return lines.join("\n").trimEnd();
 }
 
-function renderStatus(details: RunDetails, theme: Theme): string {
+function renderStatusText(details: RunDetails): string {
 	if (details.timedOut) {
-		return theme.fg("error", `TIMEOUT ${details.durationSeconds.toFixed(1)}s`);
+		return `TIMEOUT ${details.durationSeconds.toFixed(1)}s`;
 	}
 	if (details.exitCode !== 0) {
-		return theme.fg("error", `FAIL exit=${details.exitCode} ${details.durationSeconds.toFixed(1)}s`);
+		return `FAIL exit=${details.exitCode} ${details.durationSeconds.toFixed(1)}s`;
 	}
 	const metric =
 		details.parsedPrimary !== null
 			? ` ${details.metricName}=${formatNum(details.parsedPrimary, details.metricUnit)}`
 			: "";
-	return theme.fg("success", `PASS ${details.durationSeconds.toFixed(1)}s${metric}`);
+	return `PASS ${details.durationSeconds.toFixed(1)}s${metric}`;
+}
+
+function statusTone(details: RunDetails): ViewSpan["tone"] {
+	if (details.timedOut || details.exitCode !== 0) {
+		return "error";
+	}
+	return "success";
 }
 
 function isRunDetails(value: unknown): value is RunDetails {
@@ -423,5 +471,5 @@ function isRunDetails(value: unknown): value is RunDetails {
 
 function isProgressDetails(value: unknown): value is RunExperimentProgressDetails {
 	if (typeof value !== "object" || value === null) return false;
-	return "phase" in value && (value as { phase: unknown }).phase === "running";
+	return "phase" in value && value.phase === "running";
 }

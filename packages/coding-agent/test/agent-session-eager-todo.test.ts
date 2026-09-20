@@ -2,17 +2,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent, type AgentMessage, type AgentTool } from "@veyyon/agent-core";
 import type { AssistantMessage, Context, TextContent, ToolCall } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { PROMPTS } from "@veyyon/coding-agent/prompts/registry";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
 import { convertToLlm } from "@veyyon/coding-agent/session/messages";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import { TodoTool } from "@veyyon/coding-agent/tools/todo";
+import { TodoTool } from "@veyyon/coding-agent/tools/agent/todo";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { type } from "arktype";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
@@ -24,7 +24,16 @@ type ObservedPromptCall = {
 	messageTexts: string[];
 	lastMessageRole: AgentMessage["role"];
 	lastMessageText: string;
+	/**
+	 * Whether the turn carried the session-state block (the date and the working
+	 * directory). It rides ahead of every other message and is unrelated to the eager
+	 * prelude, so the composition fields above exclude it and this states its presence
+	 * instead of leaving it to widen each expected message list.
+	 */
+	sessionState: boolean;
 };
+
+const SESSION_STATE_PREFIX = "<session-state>";
 
 function isTextContentBlock(value: unknown): value is TextContent {
 	if (!value || typeof value !== "object") return false;
@@ -143,6 +152,8 @@ describe("AgentSession eager todo enforcement", () => {
 			getSessionFile: () => sessionManager.getSessionFile() ?? null,
 			getSessionSpawns: () => "*",
 			settings,
+			getTodoPhases: () => session?.getTodoPhases() ?? [],
+			setTodoPhases: phases => session?.setTodoPhases(phases),
 		};
 		const todoTool = new TodoTool(toolSession);
 		const mockBashTool: AgentTool = {
@@ -169,13 +180,17 @@ describe("AgentSession eager todo enforcement", () => {
 				if (!lastMessage) {
 					throw new Error("Expected prompt context to include a message");
 				}
+				const turnMessages = context.messages.filter(
+					message => !getMessageText(message).startsWith(SESSION_STATE_PREFIX),
+				);
 				observedCalls.push({
 					toolChoice: getToolChoiceName(options?.toolChoice),
 					toolNames: (context.tools ?? []).map(tool => tool.name),
-					messageRoles: context.messages.map(message => message.role),
-					messageTexts: context.messages.map(message => getMessageText(message)),
+					messageRoles: turnMessages.map(message => message.role),
+					messageTexts: turnMessages.map(message => getMessageText(message)),
 					lastMessageRole: lastMessage.role,
 					lastMessageText: getMessageText(lastMessage),
+					sessionState: turnMessages.length !== context.messages.length,
 				});
 				const response = scriptedResponses.shift() ?? createAssistantMessage("done");
 				const stream = new AssistantMessageEventStream();
@@ -275,6 +290,7 @@ describe("AgentSession eager todo enforcement", () => {
 			messageTexts: [expect.any(String), "list all work trees"],
 			lastMessageRole: "user",
 			lastMessageText: "list all work trees",
+			sessionState: true,
 		});
 		expect(observedCalls[0]?.messageTexts.filter(text => text.includes("list all work trees"))).toHaveLength(1);
 		expect(observedCalls[0]?.messageTexts[0]).not.toContain("list all work trees");
@@ -303,6 +319,7 @@ describe("AgentSession eager todo enforcement", () => {
 			messageTexts: [expect.any(String), "list all work trees"],
 			lastMessageRole: "user",
 			lastMessageText: "list all work trees",
+			sessionState: true,
 		});
 		expect(observedCalls[1]?.toolChoice).toBeUndefined();
 		expect(observedCalls[1]?.lastMessageRole).toBe("toolResult");
@@ -425,6 +442,7 @@ describe("AgentSession eager todo enforcement", () => {
 			messageTexts: ["list all work trees?"],
 			lastMessageRole: "user",
 			lastMessageText: "list all work trees?",
+			sessionState: true,
 		});
 	});
 
@@ -439,6 +457,7 @@ describe("AgentSession eager todo enforcement", () => {
 			messageTexts: ["list all work trees!"],
 			lastMessageRole: "user",
 			lastMessageText: "list all work trees!",
+			sessionState: true,
 		});
 	});
 
@@ -459,6 +478,7 @@ describe("AgentSession eager todo enforcement", () => {
 			messageTexts: expect.arrayContaining(["actually skip that, just fix the typo"]),
 			lastMessageRole: "user",
 			lastMessageText: "actually skip that, just fix the typo",
+			sessionState: true,
 		});
 	});
 

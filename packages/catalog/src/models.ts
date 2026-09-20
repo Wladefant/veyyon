@@ -1,6 +1,9 @@
+import { createHash } from "node:crypto";
 import { buildModel } from "./build";
-import MODELS from "./models.json" with { type: "json" };
+import type { ModelReferenceCandidate } from "./identity/reference";
+import modelsSourceJson from "./models.json" with { type: "text" };
 import type { Api, Model, ModelSpec, Usage } from "./types";
+import { ZERO_MODEL_COST } from "./utils";
 
 /**
  * Static bundled model registry loaded from `models.json`.
@@ -10,37 +13,172 @@ import type { Api, Model, ModelSpec, Usage } from "./types";
  *
  * For runtime-aware resolution, use `createModelManager()` / `resolveProviderModels()`.
  */
-let modelRegistry: Map<string, Map<string, Model<Api>>> | undefined;
 
-/** Build (once) and return the enriched bundled-model registry. Lazy: enrichment of ~12K models is deferred off module load. */
-function getModelRegistry(): Map<string, Map<string, Model<Api>>> {
-	if (modelRegistry === undefined) {
-		modelRegistry = new Map();
-		for (const [provider, models] of Object.entries(MODELS)) {
-			const providerModels = new Map<string, Model<Api>>();
-			for (const [id, model] of Object.entries(models)) {
-				providerModels.set(id, buildModel(model as ModelSpec<Api>));
-			}
-			modelRegistry.set(provider, providerModels);
-		}
-	}
-	return modelRegistry;
+/**
+ * Shape of the generated `models.json`, declared independently of the import:
+ * the source arrives as text so its bytes can feed the snapshot fingerprint,
+ * and parsing waits until a consumer actually builds the registry (a snapshot
+ * hit never parses the catalog at all).
+ */
+type BundledProviderModels = { readonly [modelId: string]: ModelSpec<Api> };
+type BundledModelsJson = { readonly [provider: string]: BundledProviderModels };
+
+export type GeneratedProvider = Extract<keyof BundledModelsJson, string>;
+
+// The json import resolves through the file itself rather than a sibling
+// declaration, so its value arrives typed as the literal document; one cast
+// pins it to the text this module treats it as.
+const modelsSource = modelsSourceJson as unknown as string;
+
+/**
+ * Persisted enriched-registry snapshot format. The snapshot stores RESOLVED
+ * records (`buildModel` output), so a change to what `buildModel` produces
+ * makes an old snapshot lie about capabilities the request builders rely on.
+ * Bump this version whenever the resolved record's contract changes, the same
+ * way `CACHE_SCHEMA_VERSION` is bumped in `model-cache.ts` for cached specs.
+ */
+const ENRICHED_REGISTRY_FORMAT_VERSION = 5;
+let fullRegistry: Map<string, Map<string, Model<Api>>> | undefined;
+const lazyProviderModels: Map<string, Map<string, Model<Api>>> = new Map();
+let parsedModels: BundledModelsJson | undefined;
+let catalogDigest: string | undefined;
+
+/**
+ * Optional persistence for the enriched bundled registry, installed by callers
+ * that explicitly opt in to disk snapshot caching. When omitted (the production
+ * default), models are resolved on demand per provider without disk I/O.
+ */
+export interface EnrichedRegistrySnapshotStore {
+	read(fingerprint: string): Map<string, Map<string, Model<Api>>> | null;
+	write(registry: Map<string, Map<string, Model<Api>>>, fingerprint: string): void;
 }
 
-export type GeneratedProvider = keyof typeof MODELS;
+let snapshotStore: EnrichedRegistrySnapshotStore | undefined;
+
+export function setEnrichedRegistrySnapshotStore(store: EnrichedRegistrySnapshotStore | undefined): void {
+	if (snapshotStore === store) return;
+	snapshotStore = store;
+	fullRegistry = undefined;
+}
+
+/**
+ * Stable content digest of the bundled catalog text. Registry-level snapshots
+ * (for example the coding-agent model registry's persisted static stage) fold
+ * it into their fingerprints so a catalog regeneration invalidates them.
+ */
+export function bundledCatalogDigest(): string {
+	catalogDigest ??= createHash("sha256").update(modelsSource).digest("hex");
+	return catalogDigest;
+}
+
+/** Content hash of the bundled catalog plus the snapshot format version. */
+export function enrichedRegistryFingerprint(): string {
+	return `v${ENRICHED_REGISTRY_FORMAT_VERSION}:${bundledCatalogDigest()}`;
+}
+
+function getParsedModels(): BundledModelsJson {
+	parsedModels ??= JSON.parse(modelsSource) as BundledModelsJson;
+	return parsedModels;
+}
+
+function restoreFullRegistryFromSnapshotIfAvailable(): Map<string, Map<string, Model<Api>>> | null {
+	if (fullRegistry !== undefined) return fullRegistry;
+	if (!snapshotStore) return null;
+	const fingerprint = enrichedRegistryFingerprint();
+	const restored = snapshotStore.read(fingerprint);
+	if (restored) {
+		for (const [provider, existingModels] of lazyProviderModels) {
+			restored.set(provider, existingModels);
+		}
+		fullRegistry = restored;
+		for (const [provider, models] of fullRegistry) {
+			lazyProviderModels.set(provider, models);
+		}
+		return fullRegistry;
+	}
+
+	const parsed = getParsedModels();
+	const newFullRegistry = new Map<string, Map<string, Model<Api>>>();
+	for (const [p, specs] of Object.entries(parsed)) {
+		let providerModels = lazyProviderModels.get(p);
+		if (!providerModels) {
+			providerModels = new Map<string, Model<Api>>();
+			for (const [id, model] of Object.entries(specs)) {
+				providerModels.set(id, buildModel(model));
+			}
+			lazyProviderModels.set(p, providerModels);
+		}
+		newFullRegistry.set(p, providerModels);
+	}
+	fullRegistry = newFullRegistry;
+	snapshotStore.write(fullRegistry, fingerprint);
+	return fullRegistry;
+}
+
+function getProviderModelMap(provider: GeneratedProvider): Map<string, Model<Api>> | undefined {
+	if (snapshotStore) {
+		const full = restoreFullRegistryFromSnapshotIfAvailable();
+		if (full) {
+			return full.get(provider);
+		}
+	}
+	let providerModels = lazyProviderModels.get(provider);
+	if (providerModels !== undefined) {
+		return providerModels;
+	}
+	const parsed = getParsedModels();
+	const providerSpecs = parsed[provider];
+	if (!providerSpecs) return undefined;
+	providerModels = new Map<string, Model<Api>>();
+	for (const [id, model] of Object.entries(providerSpecs)) {
+		providerModels.set(id, buildModel(model));
+	}
+	lazyProviderModels.set(provider, providerModels);
+	return providerModels;
+}
 
 export function getBundledModel<TApi extends Api = Api>(provider: GeneratedProvider, modelId: string): Model<TApi> {
-	const providerModels = getModelRegistry().get(provider);
+	const providerModels = getProviderModelMap(provider);
 	return providerModels?.get(modelId) as Model<TApi>;
 }
 
 export function getBundledProviders(): GeneratedProvider[] {
-	return Object.keys(MODELS) as GeneratedProvider[];
+	if (snapshotStore) {
+		const full = restoreFullRegistryFromSnapshotIfAvailable();
+		if (full) {
+			return Array.from(full.keys()) as GeneratedProvider[];
+		}
+	}
+	return Object.keys(getParsedModels()) as GeneratedProvider[];
 }
 
 export function getBundledModels(provider: GeneratedProvider): Model<Api>[] {
-	const models = getModelRegistry().get(provider);
+	const models = getProviderModelMap(provider);
 	return models ? (Array.from(models.values()) as Model<Api>[]) : [];
+}
+
+/**
+ * Iterate reference metadata without enriching providers in the default registry.
+ * An explicitly installed snapshot store retains its full-registry restoration behavior.
+ */
+export function* iterateBundledModelMetadata(): IterableIterator<ModelReferenceCandidate> {
+	if (snapshotStore) {
+		const full = restoreFullRegistryFromSnapshotIfAvailable();
+		if (full) {
+			for (const providerModels of full.values()) {
+				for (const model of providerModels.values()) {
+					yield model;
+				}
+			}
+			return;
+		}
+	}
+	const parsed = getParsedModels();
+	for (const providerSpecs of Object.values(parsed)) {
+		for (const spec of Object.values(providerSpecs)) {
+			yield spec;
+		}
+	}
 }
 
 /**
@@ -72,12 +210,17 @@ function hasFreeMarker(modelId: string): boolean {
  * This is the one owner of the "is it free or do we just not know" question.
  * Anything rendering or reasoning about price asks here rather than testing
  * `cost.input === 0` itself, because that test cannot tell the two apart.
+ *
+ * The parameter is the sparse spec shape, not the resolved one: discovery
+ * classifies a row before `buildModel` fills its defaults in, so a cost that
+ * is absent, or present with only some of its rates, is an ordinary input
+ * here rather than a caller error.
  */
 export function getModelPricing<TApi extends Api>(
-	model: Pick<Model<TApi>, "id" | "cost"> & { pricing?: "published" | "unknown" },
+	model: Pick<ModelSpec<TApi>, "id" | "cost"> & { pricing?: "published" | "unknown" },
 ): ModelPricing {
 	const cost = model.cost;
-	if (cost && (cost.input > 0 || cost.output > 0)) return "priced";
+	if (cost && ((cost.input ?? 0) > 0 || (cost.output ?? 0) > 0)) return "priced";
 
 	// A recorded fact beats a guess. Discovery marks `pricing: "unknown"` when the
 	// upstream published nothing, and a model we were never told the price of is
@@ -93,12 +236,30 @@ export function getModelPricing<TApi extends Api>(
 	return hasFreeMarker(model.id) ? "free" : "unpriced";
 }
 
-export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Usage["cost"] {
+/**
+ * The rate card this request bills at.
+ *
+ * A model with a {@link Model.longContextCost} tier has two, and which one
+ * applies is a property of the request, not of the model, so it is resolved
+ * here rather than baked into the spec.
+ */
+export function resolveRequestCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Model<TApi>["cost"] {
+	const tier = model.longContextCost;
+	if (!tier) return model.cost;
 	const orchestration = usage.orchestration;
-	usage.cost.input = (model.cost.input / 1000000) * (usage.input + (orchestration?.input ?? 0));
-	usage.cost.output = (model.cost.output / 1000000) * (usage.output + (orchestration?.output ?? 0));
-	usage.cost.cacheRead = (model.cost.cacheRead / 1000000) * (usage.cacheRead + (orchestration?.cacheRead ?? 0));
-	usage.cost.cacheWrite = (model.cost.cacheWrite / 1000000) * usage.cacheWrite;
+	const promptTokens =
+		usage.input + usage.cacheRead + usage.cacheWrite + (orchestration?.input ?? 0) + (orchestration?.cacheRead ?? 0);
+	return promptTokens > tier.inputThreshold ? tier : model.cost;
+}
+
+export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Usage["cost"] {
+	const cost = resolveRequestCost(model, usage);
+	const orchestration = usage.orchestration;
+
+	usage.cost.input = (cost.input / 1000000) * (usage.input + (orchestration?.input ?? 0));
+	usage.cost.output = (cost.output / 1000000) * (usage.output + (orchestration?.output ?? 0));
+	usage.cost.cacheRead = (cost.cacheRead / 1000000) * (usage.cacheRead + (orchestration?.cacheRead ?? 0));
+	usage.cost.cacheWrite = (cost.cacheWrite / 1000000) * usage.cacheWrite;
 	recomputeCostTotal(usage);
 	return usage.cost;
 }
@@ -230,13 +391,18 @@ export function emptyCost(): Usage["cost"] {
  * its extra `total`, and the stats row shape all pass. It had a copy in `catalog`'s generator and
  * another in `stats`, spelled identically down to the bucket order.
  */
-export function hasBillableCost(cost: {
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-}): boolean {
-	return cost.input !== 0 || cost.output !== 0 || cost.cacheRead !== 0 || cost.cacheWrite !== 0;
+export function hasBillableCost(
+	cost?: Partial<{
+		input: number;
+		output: number;
+		cacheRead: number;
+		cacheWrite: number;
+	}>,
+): boolean {
+	if (!cost) return false;
+	return (
+		(cost.input ?? 0) !== 0 || (cost.output ?? 0) !== 0 || (cost.cacheRead ?? 0) !== 0 || (cost.cacheWrite ?? 0) !== 0
+	);
 }
 
 /**

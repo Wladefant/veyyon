@@ -281,6 +281,7 @@ describe("every pipeline in .github runs with pipefail", () => {
 		expect(piping.map(step => `${step.file}::${step.job}::${step.name}`).sort()).toEqual([
 			"actions/bun-install::runs::Install bun when absent",
 			"actions/ensure-rust-toolchain::runs::(unnamed)",
+			"actions/setup-system-deps::runs::Install system deps (skip when already present)",
 			"checks.yml::secrets::Install gitleaks",
 			"ci.yml::native_artifact_lookup::Compute native source hash",
 			"ci.yml::native_artifact_lookup::Find prior main build with matching native artifacts",
@@ -288,8 +289,12 @@ describe("every pipeline in .github runs with pipefail", () => {
 			"ci.yml::release_github_publish::Publish the exact verified draft",
 			"ci.yml::release_github_verify_windows::Launch the published windows-x64 binary (forces native-addon load)",
 			"ci.yml::release_metadata::Detect release tag at HEAD",
+			"ci.yml::release_site::Install mdbook",
+			"ci.yml::release_site_finalize::Install mdbook",
 			"ci.yml::release_train_alert::File or clear the pinned release-train issue",
 			"docs.yml::book-staleness::Install mdbook",
+			"docs.yml::book-staleness::Verify handbook assets and search index",
+			"site.yml::build_and_deploy::Install mdbook",
 		]);
 	});
 

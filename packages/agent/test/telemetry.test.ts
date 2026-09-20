@@ -43,7 +43,7 @@ import {
 	startExecuteToolSpan,
 	startInvokeAgentSpan,
 } from "@veyyon/agent-core/telemetry";
-import type { AssistantMessage, Message, Model, ToolResultMessage, Usage } from "@veyyon/ai";
+import type { AssistantMessage, Message, Model, ToolResultMessage, Usage, UserMessage } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
 
 const MODEL: Model = buildModel({
@@ -97,6 +97,11 @@ function makeUsage(over: Partial<Usage> = {}): Usage {
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		...over,
 	};
+}
+
+function collector(): { warnings: AgentTelemetryWarning[]; onTelemetryWarning: (w: AgentTelemetryWarning) => void } {
+	const warnings: AgentTelemetryWarning[] = [];
+	return { warnings, onTelemetryWarning: w => warnings.push(w) };
 }
 
 function assistant(content: AssistantMessage["content"], over: Partial<AssistantMessage> = {}): AssistantMessage {
@@ -237,6 +242,95 @@ describe("full content capture serialization", () => {
 			{ type: "blob", modality: "image", mime_type: "image/png", content: "AAAA" },
 		]);
 		expect(input[1].parts).toEqual([{ type: "reasoning", content: "REDACTED" }]);
+	});
+});
+
+/**
+ * WHY: a video attachment reached an exported turn as nothing at all. The OTEL
+ * part conversion switched over the block kinds its author had in mind and let
+ * `default` drop the rest, so a prompt read back from a trace showed the text
+ * with no sign that a clip was sent with it. The fixture maps are typed by the
+ * content unions themselves, so a new block kind fails `check:types` until it
+ * is given a part here or recorded in the dropped set.
+ *
+ * Not covered: what a provider does with the block on the wire, and the
+ * capture modes other than `full`.
+ */
+type UserBlock = Exclude<UserMessage["content"], string>[number];
+type AssistantBlock = AssistantMessage["content"][number];
+
+const USER_BLOCKS: { [K in UserBlock["type"]]: Extract<UserBlock, { type: K }> } = {
+	text: { type: "text", text: "look" },
+	image: { type: "image", data: "SU1H", mimeType: "image/png" },
+	video: { type: "video", data: "VklE", mimeType: "video/mp4" },
+};
+
+const USER_PARTS: { [K in UserBlock["type"]]: OtelPartShape[] } = {
+	text: [{ type: "text", content: "look" }],
+	image: [{ type: "blob", modality: "image", mime_type: "image/png", content: "SU1H" }],
+	video: [{ type: "blob", modality: "video", mime_type: "video/mp4", content: "VklE" }],
+};
+
+const ASSISTANT_BLOCKS: { [K in AssistantBlock["type"]]: Extract<AssistantBlock, { type: K }> } = {
+	text: { type: "text", text: "done" },
+	thinking: { type: "thinking", thinking: "reasoned" },
+	redactedThinking: { type: "redactedThinking", data: "REDACTED" },
+	fallback: { type: "fallback", from: { model: "sonnet" }, to: { model: "haiku" } },
+	toolCall: { type: "toolCall", id: "call-7", name: "write", arguments: { path: "/b" } },
+};
+
+const ASSISTANT_PARTS: { [K in AssistantBlock["type"]]: OtelPartShape[] } = {
+	text: [{ type: "text", content: "done" }],
+	thinking: [{ type: "reasoning", content: "reasoned" }],
+	redactedThinking: [{ type: "reasoning", content: "REDACTED" }],
+	// The fallback marker is an Anthropic routing boundary, not content a
+	// reader of the turn can act on, and it carries no text to export.
+	fallback: [],
+	toolCall: [{ type: "tool_call", id: "call-7", name: "write", arguments: { path: "/b" } }],
+};
+
+interface OtelPartShape {
+	readonly type: string;
+	readonly [key: string]: unknown;
+}
+
+describe("every content block kind reaches an exported turn or is a recorded omission", () => {
+	function exportedParts(message: Message): OtelPartShape[] {
+		exporter.reset();
+		const telemetry = telemetryFor({ captureMessageContent: "full" });
+		const span = startChatSpan(telemetry, MODEL, { stepNumber: 1, request: { messages: [message] } });
+		span?.end();
+		const input = JSON.parse(onlySpan().attributes[GenAIAttr.InputMessages] as string);
+		return input[0].parts as OtelPartShape[];
+	}
+
+	it("exports every user block kind with its own part", () => {
+		const exported = Object.fromEntries(
+			Object.entries(USER_BLOCKS).map(([kind, block]) => [
+				kind,
+				exportedParts({ role: "user", content: [block], timestamp: 1 }),
+			]),
+		);
+		expect(exported).toEqual(USER_PARTS);
+	});
+
+	it("exports every assistant block kind with its own part", () => {
+		const exported = Object.fromEntries(
+			Object.entries(ASSISTANT_BLOCKS).map(([kind, block]) => [kind, exportedParts(assistant([block]))]),
+		);
+		expect(exported).toEqual(ASSISTANT_PARTS);
+	});
+
+	it("drops only the block kinds recorded as carrying nothing to export", () => {
+		const dropped = [
+			...Object.entries(USER_BLOCKS).map(([kind, block]) =>
+				exportedParts({ role: "user", content: [block], timestamp: 1 }).length === 0 ? `user:${kind}` : undefined,
+			),
+			...Object.entries(ASSISTANT_BLOCKS).map(([kind, block]) =>
+				exportedParts(assistant([block])).length === 0 ? `assistant:${kind}` : undefined,
+			),
+		].filter((kind): kind is string => kind !== undefined);
+		expect(dropped).toEqual(["assistant:fallback"]);
 	});
 });
 
@@ -386,11 +480,6 @@ describe("failChatSpan", () => {
 });
 
 describe("non-fatal warning hooks", () => {
-	function collector(): { warnings: AgentTelemetryWarning[]; onTelemetryWarning: (w: AgentTelemetryWarning) => void } {
-		const warnings: AgentTelemetryWarning[] = [];
-		return { warnings, onTelemetryWarning: w => warnings.push(w) };
-	}
-
 	it("surfaces a resolveAttributes throw without failing the span", () => {
 		const { warnings, onTelemetryWarning } = collector();
 		const telemetry = telemetryFor({
@@ -446,9 +535,9 @@ describe("non-fatal warning hooks", () => {
 		});
 		const span = startChatSpan(telemetry, MODEL, { stepNumber: 0, request: {} });
 		await finishChatSpan(telemetry, span, assistant([{ type: "text", text: "ok" }]), { stepNumber: 0 });
-		const codes = warnings.map(w => w.code);
-		expect(codes).toContain("on_span_start_failed");
-		expect(codes).toContain("on_span_end_failed");
+		const byCode = new Map(warnings.map(w => [w.code, w]));
+		expect(byCode.get("on_span_start_failed")?.error).toMatchObject({ message: "start boom" });
+		expect(byCode.get("on_span_end_failed")?.error).toMatchObject({ message: "end boom" });
 	});
 
 	it("surfaces an onChatUsage rejection", async () => {
@@ -546,6 +635,25 @@ describe("recordManualChatTelemetry", () => {
 		expect(cancelled.attributes[GenAIAttr.ErrorType]).toBe("aborted");
 		expect(cancelled.status.code).toBe(SpanStatusCode.ERROR);
 		expect(cancelled.status.message).toBe("aborted");
+	});
+
+	it("reports a rejecting onChatUsage on the manual path and still ends the span", async () => {
+		const { warnings, onTelemetryWarning } = collector();
+		const telemetry = telemetryFor({
+			onTelemetryWarning,
+			onChatUsage: async () => {
+				throw new Error("manual usage boom");
+			},
+		});
+		await recordManualChatTelemetry(telemetry, {
+			model: MODEL,
+			stepNumber: 3,
+			usage: makeUsage(),
+			finishReason: "stop",
+		});
+		const warning = warnings.find(w => w.code === "on_chat_usage_failed");
+		expect(warning?.error).toMatchObject({ message: "manual usage boom" });
+		expect(onlySpan().attributes[PiGenAIAttr.AgentStepNumber]).toBe(3);
 	});
 });
 

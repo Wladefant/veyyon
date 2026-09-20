@@ -6,20 +6,22 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { errorMessage, getAgentDir, getProjectDir, isEnoent, readdirIfPresent, reportFault } from "@veyyon/utils";
-import * as arktype from "arktype";
-import * as zodModule from "zod/v4";
-import { getConfigDirs } from "../../config";
-import { execCommand } from "../../exec/exec";
-// Runtime self-reference: dereference this namespace only inside loader functions to keep the index.ts cycle safe.
-import { loadCodingAgentApi } from "../coding-agent-api";
 import {
 	factoryExportMissingMessage,
 	invalidArtifactFieldMessage,
 	moduleImportFailedMessage,
 	nameConflictMessage,
-} from "../load-failure";
-import * as typebox from "../typebox";
+} from "@veyyon/kernel/loader/load-failure";
+import * as typebox from "@veyyon/kernel/registry/typebox";
+import { errorMessage, getAgentDir, getProjectDir, isEnoent, readdirIfPresent, reportFault } from "@veyyon/utils";
+import * as arktype from "arktype";
+import * as zodModule from "zod/v4";
+import { getConfigDirs } from "../../config";
+import { pluginsRootFor } from "../../discovery/helpers";
+import { execCommand, withSessionCpuExec } from "../../exec/exec";
+// Runtime self-reference: dereference this namespace only inside loader functions to keep the index.ts cycle safe.
+import { loadCodingAgentApi } from "../coding-agent-api";
+import { getAllPluginCommandPaths } from "../plugins/loader";
 import { GreenCommand } from "./bundled/ci-green";
 import { ReviewCommand } from "./bundled/review";
 import type {
@@ -212,6 +214,14 @@ export async function discoverCustomCommands(
 		}
 	}
 
+	// A plugin manifest `commands` entry resolves straight to a module file
+	// (`resolvePluginCommandPaths` accepts a file or a directory holding an
+	// index), so it joins the list as-is rather than going through the
+	// `<commandsDir>/<name>/index.*` scan above.
+	for (const commandPath of await getAllPluginCommandPaths(cwd, agentDir ? pluginsRootFor(agentDir) : undefined)) {
+		addPath(commandPath, "plugin");
+	}
+
 	return { paths };
 }
 
@@ -222,6 +232,8 @@ export interface LoadCustomCommandsOptions {
 	agentDir?: string;
 	/** Session CPU budget hook: processes a command's `exec` spawns join the session's budget group. */
 	adoptSpawnedPid?: (pid: number) => void;
+	/** Session CPU budget gate: refuse `exec` while the group is saturated or uncreated. */
+	gateSpawn?: (what: string) => Promise<void>;
 }
 
 /**
@@ -273,7 +285,7 @@ export async function loadCustomCommands(options: LoadCustomCommandsOptions = {}
 				command,
 				args,
 				execOptions?.cwd ?? cwd,
-				options.adoptSpawnedPid ? { ...execOptions, adoptPid: options.adoptSpawnedPid } : execOptions,
+				withSessionCpuExec(execOptions, options.adoptSpawnedPid, options.gateSpawn, "a custom command"),
 			),
 		typebox,
 		arktype,

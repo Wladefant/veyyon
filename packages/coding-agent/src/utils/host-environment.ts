@@ -246,22 +246,89 @@ async function saveGpuCache(info: GpuCache): Promise<void> {
 }
 
 /**
- * The GPU name, from the on-disk cache when it has one and from a probe when it does not.
+ * How this process answered the GPU question, once. A miss answers `undefined` for the whole
+ * process life even after the background probe lands, because the GPU name sits in the cached
+ * prompt prefix: a value that appeared mid-session would re-anchor that prefix for one line of
+ * hardware trivia, and the prefix is worth more than the line.
+ */
+let processGpu: { value: string | undefined } | undefined;
+/** The probe filling the cache for the NEXT launch, while it runs. */
+let gpuProbe: Promise<void> | undefined;
+/** The CPU line, read once. The hardware cannot change under a running process. */
+let processCpuModel: { value: string | undefined } | undefined;
+
+/**
+ * The GPU name from the on-disk cache, or nothing while the cache is cold.
  *
- * `budgetMs` is the CALLER'S deadline for the whole lookup, not the probe's timeout:
- * the probe is given less by {@link GPU_PROBE_MARGIN_MS} so that a probe which times
- * out still reaches the null-cache write and the next launch does not probe again.
+ * A cache miss does NOT wait for the probe. `lspci` and `nvidia-smi` cost 224-557ms on the machine
+ * this was measured on (see docs/internal/startup-budget.md), the lookup runs inside the system
+ * prompt build, and the system prompt build runs before the first frame — so install day paid half
+ * a second of blank terminal for a prompt line no frame displays. The probe now runs unwaited and
+ * writes the cache, so the second launch on a machine has the name and every launch after it too.
+ *
+ * `budgetMs` is the deadline for the probe itself, which is given less by
+ * {@link GPU_PROBE_MARGIN_MS} so a probe that times out still reaches the null-cache write and the
+ * next launch does not probe again.
  */
 export async function getCachedGpu(budgetMs: number): Promise<string | undefined> {
+	if (processGpu) return processGpu.value;
 	const cached = await logger.time("getCachedGpu:loadGpuCache", loadGpuCache);
-	if (cached) return cached.gpu ?? undefined;
-	const gpu = await logger.time("getCachedGpu:getGpuModel", () => getGpuModel(budgetMs));
-	await logger.time("getCachedGpu:saveGpuCache", saveGpuCache, { gpu });
-	return gpu ?? undefined;
+	if (cached) {
+		processGpu = { value: cached.gpu ?? undefined };
+		return processGpu.value;
+	}
+	processGpu = { value: undefined };
+	gpuProbe ??= probeGpuInBackground(budgetMs);
+	return undefined;
+}
+
+/** Probe once, cache the answer, and never let either failure reach a caller that has moved on. */
+async function probeGpuInBackground(budgetMs: number): Promise<void> {
+	try {
+		const gpu = await getGpuModel(budgetMs);
+		await saveGpuCache({ gpu });
+	} catch (err) {
+		logger.warn("GPU probe failed; the GPU will be probed again on the next launch", {
+			error: errorMessage(err),
+		});
+	}
+}
+
+/**
+ * Resolves when the background probe has finished writing the cache, or immediately when none is
+ * running. A caller that needs the answer ON DISK rather than in this prompt — a diagnostic, a
+ * scenario driving the real read-probe-write path — awaits this; the prompt build never does.
+ */
+export async function awaitGpuProbe(): Promise<void> {
+	await gpuProbe;
+}
+
+/** Forget this process's answer, so one test file can act as several launches. */
+export function __resetGpuStateForTests(): void {
+	processGpu = undefined;
+	gpuProbe = undefined;
+}
+
+/**
+ * Forget this process's CPU answer, the way `__resetGpuStateForTests` forgets the GPU one.
+ *
+ * The cache below is keyed on nothing, because the hardware cannot change under a running process.
+ * A test that fakes `process.platform` changes the answer anyway, and without this it reads whatever
+ * the first `buildSystemPrompt` in the bucket cached — so the darwin branch was never entered when
+ * an earlier file in the same process had already resolved the real host.
+ */
+export function __resetCpuStateForTests(): void {
+	processCpuModel = undefined;
 }
 
 /**
  * The CPU line of the environment section, or nothing when it cannot be had.
+ *
+ * Answered from a process-level cache after the first call, the way the GPU
+ * lookup beside it already is. The prompt is rebuilt whenever the active tool
+ * set changes, and MCP tools land mid-startup, so this ran twice before the
+ * composer mounted and spent about 30ms of that window re-reading a file whose
+ * contents cannot change.
  *
  * A missing `/proc/cpuinfo` is not a failure: the file is Linux-only and absent in
  * some containers, and the prompt simply omits the CPU line. Anything else means the
@@ -271,11 +338,15 @@ export async function getCachedGpu(budgetMs: number): Promise<string | undefined
  * silent for the CPU. One volume for one class of failure.
  */
 export async function getCpuModel(): Promise<string | undefined> {
-	if (process.platform !== "linux") return os.cpus()[0]?.model;
+	if (processCpuModel) return processCpuModel.value;
+	if (process.platform !== "linux") {
+		processCpuModel = { value: os.cpus()[0]?.model };
+		return processCpuModel.value;
+	}
 	try {
 		const cpuInfo = await Bun.file("/proc/cpuinfo").text();
 		const match = /^model name\s*:\s*(.+)$/m.exec(cpuInfo);
-		return match?.[1]?.trim() || undefined;
+		processCpuModel = { value: match?.[1]?.trim() || undefined };
 	} catch (error) {
 		if (!isEnoent(error)) {
 			logger.warn("CPU model could not be read; the prompt's environment section will omit it", {
@@ -283,8 +354,9 @@ export async function getCpuModel(): Promise<string | undefined> {
 				error: errorMessage(error),
 			});
 		}
-		return undefined;
+		processCpuModel = { value: undefined };
 	}
+	return processCpuModel.value;
 }
 
 /**

@@ -3,9 +3,9 @@
  * Parses SwiftLint's JSON reporter output into LSP Diagnostic format.
  */
 
-import { readPipeText } from "@veyyon/utils";
-import type { Diagnostic, DiagnosticSeverity, LinterClient, ServerConfig } from "../../lsp/types";
+import { errorMessage, readPipeText } from "@veyyon/utils";
 import { adoptIntoPrimarySessionCpuBudget } from "../../session/cpu-limit";
+import type { Diagnostic, DiagnosticSeverity, LinterClient, ServerConfig } from "../types";
 
 /** Shape of a single violation from `swiftlint lint --reporter json`. */
 interface SwiftLintViolation {
@@ -51,7 +51,7 @@ async function runSwiftLint(
 		// swiftlint exits non-zero when violations found — that's not a failure
 		return { stdout, stderr, success: stdout.length > 0 };
 	} catch (err) {
-		return { stdout: "", stderr: String(err), success: false };
+		return { stdout: "", stderr: errorMessage(err), success: false };
 	}
 }
 

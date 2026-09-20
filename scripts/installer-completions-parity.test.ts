@@ -70,8 +70,12 @@ describe("every installer installs completions for the shells its platform has",
 	});
 
 	it("install.sh installs completions on both surviving install paths", () => {
-		expect(shFn("install_binary")).toContain('install_completions "$(install_dir)/$BIN_NAME"');
-		expect(shFn("install_local")).toContain('install_completions "$(install_dir)/$BIN_NAME"');
+		// Both paths reach completions through one owner: `finish_install` does the alias, the
+		// completions, the PATH line and the self-check, so the already-current path can skip the
+		// download and still repair all four. Assert the chain, not a call inside each path.
+		expect(shFn("install_binary")).toContain("finish_install");
+		expect(shFn("install_local")).toContain("finish_install");
+		expect(shFn("finish_install")).toContain('install_completions "$(install_dir)/$BIN_NAME"');
 	});
 
 	it("neither installer still has a source-install path to install them on", () => {
@@ -210,7 +214,7 @@ describe("a failed profile or rc rewrite leaves the user a way back", () => {
  * The `.sha256` sidecar is the only thing standing between a user and a binary
  * someone else served, and four separate readers of it exist: install.sh,
  * install.ps1, the self-updater, and the native-addon provisioning. The two
- * TypeScript ones share a single owner (packages/natives/src/sha256-sidecar.ts);
+ * TypeScript ones share a single owner (natives/bridge/bindings/src/sha256-sidecar.ts);
  * the two shell ones cannot import it, so they are held to the same contract
  * here and behaviorally in each installer's own suite.
  *
@@ -269,8 +273,8 @@ describe("every sidecar reader agrees on what a digest is", () => {
 	it("both point at the one TypeScript owner rather than describing their own rule", () => {
 		// A reader that explains the contract in its own words is a reader that
 		// drifts from it.
-		expect(installSh).toContain("packages/natives/src/sha256-sidecar.ts");
-		expect(installPs1).toContain("packages/natives/src/sha256-sidecar.ts");
+		expect(installSh).toContain("natives/bridge/bindings/src/sha256-sidecar.ts");
+		expect(installPs1).toContain("natives/bridge/bindings/src/sha256-sidecar.ts");
 	});
 
 	it("neither installer still parses a sidecar with a bare first-token grab", () => {

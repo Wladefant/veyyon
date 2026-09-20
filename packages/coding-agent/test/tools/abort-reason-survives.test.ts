@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { ToolAbortError, throwIfAborted } from "@veyyon/coding-agent/tools/tool-errors";
+import { ToolAbortError, throwIfAborted } from "@veyyon/coding-agent/tools/core/tool-errors";
 
 /**
  * When work is cancelled, the reason has to reach the person who cancelled it.
@@ -94,7 +94,7 @@ describe("the reason reaches the message", () => {
 	 * not say what hit the deadline, and the tool knows.
 	 */
 	it("prefixes the reason with the operation name when both are present", () => {
-		expect(() => throwIfAborted(abortedWith("deadline exceeded"), "grep")).toThrow("grep: deadline exceeded");
+		expect(() => throwIfAborted(abortedWith("deadline exceeded"), "search")).toThrow("search: deadline exceeded");
 	});
 });
 

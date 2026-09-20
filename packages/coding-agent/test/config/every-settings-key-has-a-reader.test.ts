@@ -2,7 +2,7 @@
  * Every declared setting is read by something that is not a test.
  *
  * WHY THIS EXISTS. A setting is a promise to the operator: it appears in the settings UI
- * and in `docs/settings-reference.md`, so turning it on is supposed to change what the
+ * and in `docs/handbook/src/reference/settings-reference.md`, so turning it on is supposed to change what the
  * agent does. A key that nothing reads is a control wired to nothing, and it fails in the
  * worst way: silently, and only for the person who trusted it. There is no compiler error
  * for a key whose reader was deleted or renamed, because the schema and the reader are
@@ -34,11 +34,15 @@ import { describe, expect, it } from "bun:test";
 import type { Dirent } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import * as path from "node:path";
+import {
+	MEMBER_ROOTS,
+	MEMBERS,
+	memberRelative,
+	memberRootOf,
+	REPO_ROOT,
+} from "../../../utils/test/support/package-sources";
 import { GLOBAL_SETTING_BINDINGS } from "../../src/config/settings-domains/global";
 import { SETTINGS_SCHEMA } from "../../src/config/settings-schema";
-
-const PACKAGE_DIR = path.join(import.meta.dir, "..", "..");
-const PACKAGES_DIR = path.join(PACKAGE_DIR, "..");
 
 /**
  * Keys assembled at runtime rather than written as literals, with the site that builds
@@ -50,6 +54,23 @@ const ASSEMBLED_AT_RUNTIME: Readonly<Record<string, string>> = {
 	"magicKeywords.ultrathink": "session/agent-session.ts",
 	"magicKeywords.orchestrate": "session/agent-session.ts",
 	"magicKeywords.workflow": "session/agent-session.ts",
+	// `eval/backend-helpers.ts`: readSetting(session, `${settingPrefix}.kernelMode`)
+	"ruby.kernelMode": "eval/backend-helpers.ts",
+	"julia.kernelMode": "eval/backend-helpers.ts",
+};
+
+/**
+ * Keys the Rust desktop reads off the `Settings` snapshot section, with the file that
+ * reads them. The walk above covers TypeScript only; a setting the desktop honours is
+ * read by `store.domains.settings.get(key)` in a `.rs` file, which no pattern here can
+ * see. Listing one is a deliberate act with a place to justify it, and the staleness
+ * check below verifies the named file still contains the literal.
+ */
+const READ_BY_THE_DESKTOP: Readonly<Record<string, string>> = {
+	// `crates/veyyon-desktop/src/notify/mod.rs`: turned_on(store, SOUND_SETTING)
+	"notify.sound": "crates/veyyon-desktop/src/notify/mod.rs",
+	// `crates/veyyon-desktop/src/notify/mod.rs`: turned_on(store, SYSTEM_SETTING)
+	"notify.system": "crates/veyyon-desktop/src/notify/mod.rs",
 };
 
 /** Every `.ts` file under a directory, skipping dependencies and build output. */
@@ -72,16 +93,16 @@ async function typescriptFiles(dir: string, out: string[] = []): Promise<string[
 	return out;
 }
 
-/** All non-test source across every workspace package, excluding the schema itself. */
+/** All non-test source across every workspace member, excluding the schema itself. */
 async function productionFiles(): Promise<Array<{ file: string; text: string }>> {
-	const packages = await readdir(PACKAGES_DIR, { withFileTypes: true });
 	const out: Array<{ file: string; text: string }> = [];
-	for (const pkg of packages) {
-		if (!pkg.isDirectory()) continue;
-		for (const file of await typescriptFiles(path.join(PACKAGES_DIR, pkg.name, "src"))) {
+	// Every workspace member, not `packages/` alone: a reader of a setting could live under another
+	// root or at depth, and a key nothing appeared to read reads exactly like a dead flag.
+	for (const member of MEMBERS) {
+		for (const file of await typescriptFiles(path.join(REPO_ROOT, member, "src"))) {
 			if (file.includes(`${path.sep}settings-domains${path.sep}`)) continue;
 			if (file.includes(`${path.sep}__tests__${path.sep}`) || file.endsWith(".test.ts")) continue;
-			out.push({ file: path.relative(PACKAGES_DIR, file), text: await readFile(file, "utf8") });
+			out.push({ file: memberRelative(file), text: await readFile(file, "utf8") });
 		}
 	}
 	return out;
@@ -127,10 +148,11 @@ const GROUPS_READ = new Set(Array.from(SOURCE.matchAll(/getGroup\("([a-zA-Z0-9._
  * and `authBrokerToken` are wired exactly this way, and were invisible to the walk until the
  * key list started coming from the schema.
  */
-function readerOf(key: string): "literal" | "group" | "assembled" | "binding" | null {
+function readerOf(key: string): "literal" | "group" | "assembled" | "binding" | "desktop" | null {
 	if (SOURCE.includes(`"${key}"`) || SOURCE.includes(`'${key}'`)) return "literal";
 	if (key in GLOBAL_SETTING_BINDINGS) return "binding";
 	if (key in ASSEMBLED_AT_RUNTIME) return "assembled";
+	if (key in READ_BY_THE_DESKTOP) return "desktop";
 	const separator = key.lastIndexOf(".");
 	if (separator > 0) {
 		const group = key.slice(0, separator);
@@ -264,6 +286,11 @@ describe("the walk this lock depends on", () => {
 		expect(SOURCE.length).toBeGreaterThan(1_000_000);
 		expect(GROUPS_READ.size).toBeGreaterThan(5);
 		expect(FILES.length).toBeGreaterThan(1_000);
+
+		// And the corpus spans every root the workspace declares. A root nobody walked contributes no
+		// reader, so a key read only from there reads exactly like a dead flag.
+		const roots = new Set(FILES.map(entry => memberRootOf(entry.file)));
+		expect([...roots].sort()).toEqual([...MEMBER_ROOTS].sort());
 	});
 
 	/**
@@ -341,6 +368,21 @@ describe("every settings key", () => {
 		for (const [key, site] of Object.entries(ASSEMBLED_AT_RUNTIME)) {
 			expect(declared.has(key), `${key} is exempted but no longer declared`).toBe(true);
 			expect(SOURCE.includes(`"${key}"`), `${key} is exempted but now has a literal reader (${site})`).toBe(false);
+		}
+	});
+
+	/**
+	 * The desktop list stays honest in both directions. An entry for a key that has
+	 * since gained a TypeScript reader, that no longer exists, or whose named Rust
+	 * file no longer contains the literal is a standing exemption nobody is checking.
+	 */
+	it("does not carry a stale desktop exemption", async () => {
+		const declared = new Set(KEYS);
+		for (const [key, file] of Object.entries(READ_BY_THE_DESKTOP)) {
+			expect(declared.has(key), `${key} is exempted but no longer declared`).toBe(true);
+			expect(SOURCE.includes(`"${key}"`), `${key} is exempted but now has a literal reader`).toBe(false);
+			const rust = await readFile(path.join(REPO_ROOT, file), "utf8");
+			expect(rust.includes(`"${key}"`), `${key} is exempted but ${file} no longer reads it`).toBe(true);
 		}
 	});
 

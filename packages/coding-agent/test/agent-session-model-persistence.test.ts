@@ -2,17 +2,18 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import type { Api, AssistantMessage, Model } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { Effort } from "@veyyon/catalog/effort";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { type CreateAgentSessionResult, createAgentSession } from "@veyyon/coding-agent/sdk";
+import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { getRestorableSessionModels } from "@veyyon/coding-agent/session/session-context";
-import { EPHEMERAL_MODEL_CHANGE_ROLE } from "@veyyon/coding-agent/session/session-entries";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import type { CreateAgentSessionResult } from "@veyyon/coding-agent/session/factory-options";
 import { AUTO_THINKING } from "@veyyon/coding-agent/thinking";
+import { getRestorableSessionModels } from "@veyyon/kernel/session/session-context";
+import { EPHEMERAL_MODEL_CHANGE_ROLE } from "@veyyon/kernel/session/session-entries";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 
 describe("AgentSession model persistence", () => {

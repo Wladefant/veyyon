@@ -1,15 +1,15 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import {
-	type Keybinding,
-	type KeybindingsConfig,
-	type KeyId,
-	setKeybindings,
-	KeybindingsManager as TuiKeybindingsManager,
-} from "@veyyon/tui";
 import { atomicWriteFileSync } from "@veyyon/utils/atomic-write";
 import { getActiveProfile, getAgentDir, getProfileRootDir } from "@veyyon/utils/dirs";
 import { isEnoent } from "@veyyon/utils/fs-error";
+import {
+	type Keybinding,
+	type KeybindingsConfig,
+	setKeybindings,
+	KeybindingsManager as TuiKeybindingsManager,
+} from "@veyyon/utils/keybindings";
+import type { KeyId } from "@veyyon/utils/keys";
 // Owners, not the `@veyyon/utils` barrel: 6 modules against 74.
 import * as logger from "@veyyon/utils/logger";
 import { quarantineUnparseableFileSync } from "@veyyon/utils/quarantine-file";
@@ -26,8 +26,7 @@ import { JSONC, YAML } from "bun";
  */
 export { type AppKeybinding, getDefaultPasteImageKeys, KEYBINDINGS } from "./keybinding-defs";
 
-import type { AppKeybinding } from "./keybinding-defs";
-import { KEYBINDINGS } from "./keybinding-defs";
+import { type AppKeybinding, KEYBINDINGS } from "./keybinding-defs";
 
 /**
  * Migration map from old keybinding names to new namespaced IDs.
@@ -175,12 +174,11 @@ const LEGACY_KEYBINDINGS_JSON = "keybindings.json";
 interface KeybindingsConfigPaths {
 	readPath: string;
 	writeBackPath: string;
+	exists: boolean;
 }
 
-/** Controls inherited keybinding lookup when creating a manager for a named profile. */
+/** Controls default-profile keybinding seeding when creating a manager. */
 export interface KeybindingsCreateOptions {
-	/** @deprecated Live merge removed; seed keybindings at profile creation instead. */
-	inheritedAgentDir?: string;
 	/** When false, skip the one-time default-profile keybindings seed (tests). */
 	seedFromDefault?: boolean;
 }
@@ -276,27 +274,24 @@ function writeKeybindingsConfig(filePath: string, config: KeybindingsConfig): bo
 function resolveKeybindingsConfigPaths(agentDir: string): KeybindingsConfigPaths {
 	const ymlPath = path.join(agentDir, KEYBINDINGS_YML);
 	if (fs.existsSync(ymlPath)) {
-		return { readPath: ymlPath, writeBackPath: ymlPath };
+		return { readPath: ymlPath, writeBackPath: ymlPath, exists: true };
 	}
 
 	const yamlPath = path.join(agentDir, KEYBINDINGS_YAML);
 	if (fs.existsSync(yamlPath)) {
-		return { readPath: yamlPath, writeBackPath: yamlPath };
+		return { readPath: yamlPath, writeBackPath: yamlPath, exists: true };
 	}
 
 	const jsonPath = path.join(agentDir, LEGACY_KEYBINDINGS_JSON);
 	if (fs.existsSync(jsonPath)) {
-		return { readPath: jsonPath, writeBackPath: ymlPath };
+		return { readPath: jsonPath, writeBackPath: ymlPath, exists: true };
 	}
 
-	return { readPath: ymlPath, writeBackPath: ymlPath };
+	return { readPath: ymlPath, writeBackPath: ymlPath, exists: false };
 }
 
 export function profileHasKeybindingsFile(agentDir: string): boolean {
-	for (const filename of [KEYBINDINGS_YML, KEYBINDINGS_YAML, LEGACY_KEYBINDINGS_JSON]) {
-		if (fs.existsSync(path.join(agentDir, filename))) return true;
-	}
-	return false;
+	return resolveKeybindingsConfigPaths(agentDir).exists;
 }
 
 /**
@@ -337,6 +332,9 @@ function loadProfileKeybindingsConfig(agentDir: string): {
 	profilePath: string;
 } {
 	const profilePaths = resolveKeybindingsConfigPaths(agentDir);
+	if (!profilePaths.exists) {
+		return { config: {}, profilePath: profilePaths.readPath };
+	}
 	const profile = loadKeybindingsConfig(profilePaths.readPath, profilePaths.writeBackPath);
 	return { config: profile.config, profilePath: profile.persistedPath };
 }
@@ -403,7 +401,7 @@ function keyConfigValue(keys: KeyId[]): KeyId | KeyId[] {
 		const key = keys[0];
 		if (key !== undefined) return key;
 	}
-	return [...keys];
+	return keys.slice();
 }
 
 /**

@@ -1,6 +1,13 @@
 import { escapeXmlText, prompt, Snowflake } from "@veyyon/utils";
 import { goalsPrompts } from "../prompts/goals/rows";
-import type { Goal, GoalBudgetSteering, GoalModeState, GoalRuntimeEvent, GoalTokenUsage } from "./state";
+import type {
+	Goal,
+	GoalAbortReason,
+	GoalBudgetSteering,
+	GoalModeState,
+	GoalRuntimeEvent,
+	GoalTokenUsage,
+} from "./state";
 
 export interface GoalRuntimeHost {
 	getState(): GoalModeState | undefined;
@@ -120,6 +127,7 @@ export class GoalRuntime {
 	#wallClock: GoalWallClockSnapshot;
 	#budgetReportedFor: string | undefined;
 	#accountingTail: Promise<void> = Promise.resolve();
+	#finalTokenReconciliation: { goalId: string; baselineUsage: GoalTokenUsage } | undefined;
 
 	constructor(host: GoalRuntimeHost) {
 		this.#host = host;
@@ -201,6 +209,7 @@ export class GoalRuntime {
 		this.#turnSnapshot = undefined;
 		this.#clearActiveAccounting();
 		this.#budgetReportedFor = undefined;
+		this.#finalTokenReconciliation = undefined;
 	}
 
 	onTurnStart(turnId: string, baselineUsage: GoalTokenUsage): void {
@@ -226,6 +235,7 @@ export class GoalRuntime {
 	}
 
 	async onAgentEnd(options?: { turnCompleted?: boolean; currentUsage?: GoalTokenUsage }): Promise<void> {
+		await this.#reconcileCompletedGoalTokens(options?.currentUsage);
 		if (!this.#hasAccountingState()) {
 			this.#turnSnapshot = undefined;
 			return;
@@ -253,11 +263,39 @@ export class GoalRuntime {
 		});
 	}
 
-	async onTaskAborted(options?: { reason?: "interrupted" | "internal" }): Promise<void> {
+	/**
+	 * A goal stops counting the moment the `goal` tool completes it, which is the
+	 * middle of a turn rather than the end of one. Every token the rest of that
+	 * turn spends — the results of the sibling tool calls in the same batch, a
+	 * agent among them, and the closing message the model writes once they
+	 * return — is spent on the goal and lands after it stopped counting, so the
+	 * total reported for a completed goal omits the work that finished it.
+	 * Reconcile once at the end of that turn against the usage recorded when the
+	 * goal completed. Only the total moves: a completed goal has no budget left
+	 * to exceed, no steering to send, and no further turns to count.
+	 */
+	async #reconcileCompletedGoalTokens(currentUsage?: GoalTokenUsage): Promise<void> {
+		const pending = this.#finalTokenReconciliation;
+		if (!pending) return;
+		this.#finalTokenReconciliation = undefined;
+		await this.#withAccounting(async () => {
+			const state = this.#getStateClone();
+			if (state?.goal.id !== pending.goalId || state.goal.status !== "complete") return;
+			const tokenDelta = goalTokenDelta(currentUsage ?? this.#host.getCurrentUsage(), pending.baselineUsage);
+			if (tokenDelta <= 0) return;
+			state.goal.tokensUsed += tokenDelta;
+			state.goal.updatedAt = this.#now();
+			await this.#commitState(state, { persist: "goal" });
+		});
+	}
+
+	async onTaskAborted(options?: { reason?: GoalAbortReason }): Promise<void> {
+		await this.#reconcileCompletedGoalTokens();
 		const state = this.#host.getState();
-		const needsAccounting = state?.enabled && isAccountingStatus(state.goal);
-		const needsPause = options?.reason === "interrupted" && state?.enabled && state.goal.status === "active";
-		if (!needsAccounting && !needsPause) {
+		// An active goal is always an accounting goal (`isAccountingStatus` covers active and
+		// budget-limited), so this one question gates both the usage flush and the pause. Which
+		// reason actually pauses is decided in one place, below.
+		if (!state?.enabled || !isAccountingStatus(state.goal)) {
 			this.#turnSnapshot = undefined;
 			return;
 		}
@@ -520,6 +558,14 @@ export class GoalRuntime {
 			state.goal.updatedAt = this.#now();
 			state.mode = "exiting";
 			state.reason = "completed";
+			// The flush above brought the goal up to this instant and rebased the snapshot on it,
+			// so that same usage is the baseline for whatever the rest of this turn spends.
+			if (this.#turnSnapshot?.activeGoalId === state.goal.id) {
+				this.#finalTokenReconciliation = {
+					goalId: state.goal.id,
+					baselineUsage: { ...this.#turnSnapshot.baselineUsage },
+				};
+			}
 			this.#clearActiveAccounting();
 			this.#budgetReportedFor = undefined;
 			await this.#commitState(state, { persist: "goal" });

@@ -1,13 +1,13 @@
 /**
  * Contracts: an advisor-kind registry ref is observability-only — present for the
- * Agent Control Center, hidden from every agent-facing surface, and never messageable.
+ * agent dashboard, hidden from every agent-facing surface, and never messageable.
  *
  * - `AgentRegistry.listVisibleTo` (irc roster / broadcast targets) excludes advisors.
  * - `IrcBus.send` to an advisor ref fails as non-messageable, without reviving it.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { IrcBus } from "@veyyon/coding-agent/irc/bus";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
+import { IrcBus } from "@veyyon/coding-agent/task/irc-bus";
 
 describe("advisor registry visibility", () => {
 	beforeEach(() => {

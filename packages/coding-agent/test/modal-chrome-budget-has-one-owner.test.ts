@@ -35,6 +35,7 @@ import { stripVTControlCharacters } from "node:util";
 import type { Model } from "@veyyon/ai";
 import { buildModel } from "@veyyon/catalog/build";
 import type { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import { MODEL_ROLES, SELECTABLE_MODEL_ROLE_IDS } from "@veyyon/coding-agent/config/model-roles";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import {
 	computeModalDims,
@@ -43,11 +44,11 @@ import {
 	planModalChrome,
 	renderModalShell,
 	sizingForArea,
-} from "@veyyon/coding-agent/modes/components/modal-shell";
-import { ModelHubComponent } from "@veyyon/coding-agent/modes/components/model-hub";
-import { SessionSelectorComponent } from "@veyyon/coding-agent/modes/components/session-selector";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/modes/theme/theme";
-import type { SessionInfo } from "@veyyon/coding-agent/session/session-listing";
+} from "@veyyon/coding-agent/modes/terminal/components/chrome/modal-shell";
+import { ModelHubComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/model-hub";
+import { SessionSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/session-selector";
+import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
+import type { SessionInfo } from "@veyyon/kernel/session/session-listing";
 import type { TUI } from "@veyyon/tui";
 
 const UP = "\x1b[A";
@@ -154,8 +155,8 @@ describe("no component restates the chrome arithmetic", () => {
 	 * that a correct number was computed the wrong way, and the number is correct
 	 * right up until someone changes `vPad` or `footerLines`.
 	 */
-	const componentsDir = path.join(import.meta.dir, "..", "src", "modes", "components");
-	const OWNER = path.join(componentsDir, "modal-shell.ts");
+	const componentsDir = path.join(import.meta.dir, "..", "src", "modes", "terminal", "components");
+	const OWNER = path.join(componentsDir, "chrome", "modal-shell.ts");
 
 	function sourceFiles(dir: string): string[] {
 		const out: string[] = [];
@@ -516,9 +517,23 @@ describe("ModelHub roles list windowing", () => {
 		return Array.from({ length: CHAIN_COUNT }, (_, i) => makeModel("test", `model-${i}`));
 	}
 
-	/** The rows the roles view draws, top to bottom, for {@link chainSettings}. */
+	/**
+	 * The rows the roles view draws, top to bottom, for {@link chainSettings}.
+	 *
+	 * The role tags come from `SELECTABLE_MODEL_ROLE_IDS`, which is the list the view itself draws
+	 * from. A copy of the tags here went stale the moment `advisor` left the table — the window
+	 * cases then failed for a missing row rather than for a windowing defect, and a role ADDED to
+	 * the table would have gone unwindowed with every case still green.
+	 */
 	function chainRowLabels(): string[] {
-		const rows = ["SMOL", "SLOW", "VISION", "PLAN", "DESIGNER", "COMMIT", "TINY", "ADVISOR", "+ New role…"];
+		const rows = SELECTABLE_MODEL_ROLE_IDS.map(role => {
+			// A selectable role with no tag has no bytes to find its row by, which would silently
+			// drop it from the sweep. Fail instead: the sweep is the reason this list is derived.
+			const tag = MODEL_ROLES[role].tag;
+			if (tag === undefined) throw new Error(`selectable role ${role} carries no tag`);
+			return tag;
+		});
+		rows.push("+ New role…");
 		for (let i = 0; i < CHAIN_COUNT; i++) rows.push(`test/pattern-${i}`, `↳ test/model-${i}`);
 		rows.push("+ New fallback…");
 		return rows;
