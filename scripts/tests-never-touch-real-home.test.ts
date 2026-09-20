@@ -223,7 +223,7 @@ export const ALLOWLIST: ReadonlyArray<AllowlistEntry> = [
 		file: "packages/coding-agent/test/task/an-orphaned-topic-claim-is-rolled-back-and-the-lane-replenished.test.ts",
 		rule: "unresolved-spawn-target",
 		reason:
-			'Six targets, all discovery rather than execution of anything installed: `gitCmd` is the literal `git`/`git.exe` chosen by platform for one `rev-parse HEAD`; `lookupCmd` is the literal `which`/`where` chosen the same way; `override`, `resolved` and `detectedPython` are the interpreter that lookup returned, probed with `--version` only to decide whether to skip; and `python` runs the ledger bridge script that ships in `src/task/` against a lock file the test made. A python contract cannot be asserted without asking a python, and which python exists is exactly what the host has to answer.',
+			"Six targets, all discovery rather than execution of anything installed: `gitCmd` is the literal `git`/`git.exe` chosen by platform for one `rev-parse HEAD`; `lookupCmd` is the literal `which`/`where` chosen the same way; `override`, `resolved` and `detectedPython` are the interpreter that lookup returned, probed with `--version` only to decide whether to skip; and `python` runs the ledger bridge script that ships in `src/task/` against a lock file the test made. A python contract cannot be asserted without asking a python, and which python exists is exactly what the host has to answer.",
 	},
 	// The four below are all `bare-config-dir-name`, and they have one shape between them:
 	// the config-dir NAME is the SUBJECT, not the isolation. Each one assigns a name, asks a
