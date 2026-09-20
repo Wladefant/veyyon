@@ -6,6 +6,7 @@ import { anthropicProvider } from "./anthropic";
 import { azureProvider } from "./azure";
 import { basetenProvider } from "./baseten";
 import { cerebrasProvider } from "./cerebras";
+import { chatgptWebProvider } from "./chatgpt-web";
 import { cloudflareAiGatewayProvider } from "./cloudflare-ai-gateway";
 import { commandCodeProvider } from "./command-code";
 import { coreWeaveProvider } from "./coreweave";
@@ -139,6 +140,7 @@ const ALL = [
 	lmStudioProvider,
 	llamaCppProvider,
 	vllmProvider,
+	chatgptWebProvider,
 	openaiProvider,
 	googleProvider,
 	googleVertexProvider,

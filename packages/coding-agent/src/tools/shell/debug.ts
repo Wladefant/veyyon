@@ -41,6 +41,7 @@ import { toolsPrompts } from "../../prompts/tools/rows";
 import { scopedTimeoutSignal } from "../../utils/fetch-timeout";
 import type { ToolSession } from "..";
 import { truncateForPrompt } from "../core/approval";
+import type { ToolEffectScope } from "../core/effect-scope";
 import type { OutputMeta } from "../core/output-meta";
 import { formatPathRelativeToCwd, resolveToCwd } from "../core/path-utils";
 import { replaceTabs, shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "../core/render-utils";
@@ -539,6 +540,9 @@ function resolveDisassemblyReference(memoryReference: string | undefined): strin
 
 export class DebugTool implements AgentTool<typeof debugSchema, DebugToolDetails> {
 	readonly name = "debug";
+	// Debug launches or attaches a debug adapter and evaluates expressions in
+	// the debuggee, so the process under it can reach any path.
+	readonly effectScope: ToolEffectScope = "unbounded";
 	readonly approval = (args: unknown): ToolApprovalDecision => {
 		const rawAction = (args as Partial<DebugParams>).action;
 		const action = typeof rawAction === "string" ? rawAction.toLowerCase() : "";

@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs/promises";
 import { ThinkingLevel } from "@veyyon/agent-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
+import { runEvalAgent } from "@veyyon/coding-agent/eval/agent-bridge";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import { TaskTool } from "@veyyon/coding-agent/task";
 import { AGENT_DEFAULT_EFFORT } from "@veyyon/coding-agent/task/agent-settings";
 import * as discoveryModule from "@veyyon/coding-agent/task/discovery";
 import * as executorModule from "@veyyon/coding-agent/task/executor";
+import { AgentOutputManager } from "@veyyon/coding-agent/task/output-manager";
 import type { AgentDefinition, SingleResult } from "@veyyon/coding-agent/task/types";
 import { AUTO_THINKING } from "@veyyon/coding-agent/thinking";
 import { TempDir } from "@veyyon/utils";
@@ -53,6 +56,124 @@ describe("task agent effort inheritance", () => {
 		AgentRegistry.resetGlobalForTests();
 		tempDir[Symbol.dispose]();
 	});
+
+	it("pins model, lane effort and child routing across a reload during dispatch", async () => {
+		const file = tempDir.join("config.yml");
+		const writeRouting = (model: string, effort: string) =>
+			fs.writeFile(
+				file,
+				JSON.stringify({
+					agent: { agents: { task: { model, thinkingLevel: effort } } },
+					modelRoles: { worker: model },
+				}),
+			);
+		await writeRouting("openai/old", "low");
+		const settings = await Settings.loadReadOnly({
+			agentDir: tempDir.path(),
+			overrides: { "async.enabled": false, "agent.batch": true, "agent.isolation.mode": "none" },
+		});
+		const entered = Promise.withResolvers<void>();
+		const resume = Promise.withResolvers<void>();
+		const bindings: unknown[] = [];
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			if (!bindings.length) {
+				entered.resolve();
+				await resume.promise;
+			}
+			// This is the real executor's destination-settings fork, after the
+			// deterministic barrier where a reload can land.
+			const child = await executorModule.createSubagentSettingsForCwd(options.settings!, tempDir.path());
+			bindings.push([options.modelOverride, options.thinkingLevel, child.getModelRole("worker")]);
+			return result(options);
+		});
+		const tool = await TaskTool.create(
+			makeToolSession({
+				cwd: tempDir.path(),
+				hasUI: false,
+				settings,
+				getSessionFile: () => tempDir.join("parent.jsonl"),
+				getSessionSpawns: () => "*",
+				getModelString: () => MODEL,
+			}),
+		);
+		const first = tool.execute("reload-first", {
+			context: "Verify config reload generation isolation.",
+			tasks: [{ name: "OldGeneration", task: "Inspect the requested behavior." }],
+		});
+		try {
+			await Promise.race([
+				entered.promise,
+				first.then(output => {
+					throw new Error(`No spawn: ${JSON.stringify(output.content)}`);
+				}),
+			]);
+			await writeRouting("openai/new", "high");
+			await settings.reloadConfig();
+		} finally {
+			resume.resolve();
+			await first;
+		}
+		await tool.execute("reload-second", {
+			context: "Verify config reload generation isolation.",
+			tasks: [{ name: "NewGeneration", task: "Inspect the requested behavior." }],
+		});
+		expect(bindings).toEqual([
+			[["openai/old"], "low", "openai/old"],
+			[["openai/new"], "high", "openai/new"],
+		]);
+	}, 30000);
+
+	it("pins eval model and effort before asynchronous output allocation", async () => {
+		const file = tempDir.join("config.yml");
+		await fs.writeFile(file, "agent:\n  agents:\n    task:\n      model: openai/old\n      thinkingLevel: low\n");
+		const settings = await Settings.loadReadOnly({ agentDir: tempDir.path() });
+		const manager = new AgentOutputManager(() => tempDir.path());
+		const entered = Promise.withResolvers<void>();
+		const resume = Promise.withResolvers<void>();
+		const allocate = manager.allocate.bind(manager);
+		let firstAllocation = true;
+		vi.spyOn(manager, "allocate").mockImplementation(async name => {
+			if (firstAllocation) {
+				firstAllocation = false;
+				entered.resolve();
+				await resume.promise;
+			}
+			return allocate(name);
+		});
+		const bindings: unknown[] = [];
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			bindings.push([options.modelOverride, options.thinkingLevel]);
+			return result(options);
+		});
+		const session = makeToolSession({
+			cwd: tempDir.path(),
+			hasUI: false,
+			settings,
+			agentOutputManager: manager,
+			getSessionFile: () => tempDir.join("parent.jsonl"),
+			getArtifactsDir: () => tempDir.path(),
+			getSessionSpawns: () => "*",
+		});
+		const first = runEvalAgent({ agent: "task", prompt: "Inspect the requested behavior." }, { session });
+		try {
+			await Promise.race([
+				entered.promise,
+				first.then(() => {
+					throw new Error("No eval allocation");
+				}),
+			]);
+			await fs.writeFile(file, "agent:\n  agents:\n    task:\n      model: openai/new\n      thinkingLevel: high\n");
+			await settings.reloadConfig();
+		} finally {
+			resume.resolve();
+			await first;
+		}
+		await runEvalAgent({ agent: "task", prompt: "Inspect the requested behavior." }, { session });
+		expect(bindings).toEqual([
+			[["openai/old"], "low"],
+			[["openai/new"], "high"],
+		]);
+	}, 30000);
 
 	async function dispatch(agentSettings: Record<string, { thinkingLevel?: string }> = {}) {
 		const run = vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => result(options));

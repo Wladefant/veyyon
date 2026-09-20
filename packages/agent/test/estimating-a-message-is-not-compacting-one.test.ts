@@ -102,8 +102,16 @@ const PRUNING_CEILING = 195;
  * output ceilings, split out of `provider-models/openai-compat.ts`, which this closure already
  * reached through the model metadata compaction budgets are computed from. It imports only what
  * was already here, so the growth is that one file and no subtree.
+ *
+ * RE-MEASURED 2026-09-18 on this fork and not upstream: engine 322. The four new modules are the
+ * local `codex-chatgpt-web` bridge provider, and the closure reaches them by two independent routes
+ * rather than one: `catalog/provider-models/chatgpt-web.ts` through the descriptor table the
+ * compaction budgets read model metadata from, and `catalog/discovery/chatgpt-web.ts` plus
+ * `ai/providers/openai-codex/{chatgpt-web-trusted-context,chatgpt-web-turn-stamp}.ts` through the
+ * Codex Responses provider itself. Every module they import -- `@veyyon/utils/scoped-timeout`
+ * included -- was already on this closure, so the growth is those four files and no subtree.
  */
-const COMPACTION_ENGINE_CEILING = 318;
+const COMPACTION_ENGINE_CEILING = 322;
 const REMOTE_SUMMARIZER_CEILING = 221;
 
 describe("the estimator is a leaf", () => {

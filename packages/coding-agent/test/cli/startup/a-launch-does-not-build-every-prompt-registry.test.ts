@@ -116,11 +116,26 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * which this graph already reaches. It is a leaf over modules already here, so the launch runs no
  * new code — the same split-raises-the-count case as the line above.
  *
+ * 1546 to 1555 on this fork: nine modules the fork carries and upstream does not sit on this graph, so
+ * upstream's pin, measured on a tree without them, is nine short here. Five are the ChatGPT-web provider
+ * (`ai/providers/openai-codex/{chatgpt-web-trusted-context,chatgpt-web-turn-stamp}.ts`,
+ * `ai/registry/chatgpt-web.ts`, `catalog/{discovery,provider-models}/chatgpt-web.ts`), reached through the
+ * provider registry the launch already builds; two are the native control host
+ * (`native-control/{telegram-control-bridge,telegram-control-host}.ts`); and two are the task lane's
+ * replenishment and the bridge script it materializes (`task/topic-replenishment.ts`,
+ * `task/native-ledger-bridge.py`, which the walker counts as a file the module reads). None of them is
+ * new code on this branch — the merge lowered the ceiling, not the graph.
+ *
+ * 1555 to 1558: the refusal fence arrived on `main` — `tools/core/{refusal-fence,effect-scope,execution-registry}.ts`,
+ * the choke point every tool invocation passes through and the effect-scope and registry tables it reads.
+ * The launch path reaches them because it builds the tool table, so this is new code on the graph rather
+ * than a split, and it is the case this ratchet exists to make someone write down.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1546;
+const LAUNCH_REACH_CEILING = 1558;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

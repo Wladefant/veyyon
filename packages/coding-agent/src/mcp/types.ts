@@ -88,6 +88,8 @@ interface MCPServerConfigBase {
 	oauth?: {
 		clientId?: string;
 		clientSecret?: string;
+		/** Optional space-separated OAuth scopes overriding discovered scopes for DCR and authorization */
+		scopes?: string;
 		redirectUri?: string;
 		callbackPort?: number;
 		callbackPath?: string;

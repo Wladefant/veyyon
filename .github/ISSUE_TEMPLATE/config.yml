@@ -1,4 +1,4 @@
-blank_issues_enabled: true
+blank_issues_enabled: false
 contact_links:
   - name: Model Configuration
     url: https://github.com/santhreal/veyyon/blob/main/docs/handbook/src/reference/models-yml.md

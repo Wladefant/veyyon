@@ -7,6 +7,7 @@
  * declarations, not a two-thousand-line object every command in the product shares.
  */
 import { COLLAB_GUEST_ALLOWED_COMMANDS } from "../collab/guest-commands";
+
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../discovery/helpers.js";
 import { bareInvocationShowsSubcommands } from "./bare-subcommand";
 import { BUILTIN_SLASH_COMMAND_CATEGORIES } from "./builtin-categories";
@@ -254,9 +255,15 @@ export async function executeBuiltinSlashCommand(
 				await ctx.session.refreshSshTool({ activateIfAvailable: true });
 			},
 		};
-		const result = await command.handle(parsed, adapted);
-		ctx.editor.setText("");
-		if (result && typeof result === "object" && "prompt" in result) return result.prompt;
+		try {
+			const result = await command.handle(parsed, adapted);
+			ctx.editor.setText("");
+			if (result && typeof result === "object" && "prompt" in result) return result.prompt;
+		} catch (error) {
+			// Text transports must observe rejection, but the TUI owns the
+			// diagnostic: follow-up and picker callbacks do not await dispatch.
+			ctx.showError(error instanceof Error ? error.message : String(error));
+		}
 		return true;
 	}
 	return false;

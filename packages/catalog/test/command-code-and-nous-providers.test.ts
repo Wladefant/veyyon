@@ -64,9 +64,12 @@ describe("Command Code provider", () => {
 			expect(model.baseUrl).toBe("https://api.commandcode.ai/provider/v1");
 			expect(model.provider).toBe("command-code");
 			expect(model.pricing).toBe("published");
-			expect(model.cost.input).toBeGreaterThan(0);
+			// The seed is a spec, so its cost is sparse by type. A row seeded
+			// without one fails here rather than reading as a zero rate.
+			const cost = model.cost;
+			expect(cost?.input ?? 0).toBeGreaterThan(0);
 			const bundled = getBundledModel("command-code", model.id);
-			expect(bundled?.cost).toEqual(model.cost);
+			expect(cost).toEqual(bundled?.cost);
 			expect(bundled?.maxTokens).toBe(model.maxTokens);
 		}
 	});

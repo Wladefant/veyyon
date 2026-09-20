@@ -164,6 +164,7 @@ import { ARGOT_HANDLES_BANNER } from "./system-prompt-builder/section-registry";
 import { delegationStrength } from "./task/agent-settings";
 import { AgentOutputManager } from "./task/output-manager";
 import { wrapStreamFnWithProviderConcurrency } from "./task/provider-concurrency";
+import { type ClaimedTicket, TopicReplenishmentEngine } from "./task/topic-replenishment";
 import {
 	AUTO_THINKING,
 	type ConfiguredThinkingLevel,
@@ -371,7 +372,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// / session would silently miss credential_disabled events.
 	const modelRegistry =
 		options.modelRegistry ??
-		new ModelRegistry(options.authStorage ?? (await logger.time("discoverModels", discoverAuthStorage, agentDir)));
+		new ModelRegistry(
+			options.authStorage ?? (await logger.time("discoverModels", discoverAuthStorage, agentDir)),
+			path.join(agentDir, "models.yml"),
+		);
 	// Track whether we internally created the authStorage so we can close it
 	// if construction fails before the session takes ownership.
 	const ownsAuthStorage = !options.authStorage && !options.modelRegistry;
@@ -1473,11 +1477,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 			return cwd;
 		};
+
 		// Installed by whichever host is running, through the setToolNotifier this
 		// factory returns. Nothing here knows what a host is, so a terminal, a GUI
 		// and a headless run all reach the same slot.
 		let hostNotifier: HostNotifier | undefined;
 
+		let replenishmentEngine: TopicReplenishmentEngine | null = null;
 		const toolSession: ToolSession = {
 			get cwd() {
 				return sessionManager.getCwd();
@@ -1602,6 +1608,34 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			},
 			getArtifactManager: () => sessionManager.getArtifactManager(),
 			recordAgentSpawn: record => sessionManager.appendAgentSpawn(record),
+			onSubagentComplete: async record => {
+				const engine = replenishmentEngine;
+				if (engine) {
+					const activeRoster = AgentRegistry.global()
+						.list()
+						.map(ref => ({
+							id: ref.id,
+							status: ref.status,
+							role: ref.kind,
+							task: ref.activity,
+						}));
+					await engine.onWorkerComplete(
+						{
+							agentId: record.agentId,
+							agentName: record.agentName,
+							task: record.task,
+							status: record.status,
+							exitCode: record.exitCode,
+							durationMs: record.durationMs,
+							error: record.error,
+							ticketId: record.ticketId,
+							runId: record.runId,
+							structuredResult: record.structuredResult,
+						},
+						activeRoster,
+					);
+				}
+			},
 			settings,
 			authStorage,
 			modelRegistry,
@@ -2317,6 +2351,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			() => (hasSession ? createSessionMemoryRuntimeContext(session, agentDir, cwd) : undefined),
 			settings,
 			localProtocolOptions,
+			{
+				isSubagent: sessionIsSpawned,
+				taskDepth,
+				agentId: sessionIsSpawned ? resolvedAgentId : undefined,
+				parentTaskPrefix: options.parentTaskPrefix,
+			},
+			eventBus,
+			adoptSpawnedPid,
+			gateSpawn,
 		);
 
 		credentialDisabledTarget = extensionRunner;
@@ -2402,8 +2445,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// Wrap every tool with `ExtensionToolWrapper` so the per-tool approval gate runs on every
 		// call site, regardless of whether any user extensions are loaded. See the runner-construction
 		// comment above for the safety invariant this enforces.
+		//
+		// `sessionPolicy` is the standing refusal policy of THIS session, read by the
+		// refusal fence when a caller reaches one of these tools with no context of
+		// its own — `session.getToolByName(...)`, the cursor bridge, an eval snippet.
+		// Those calls carry the session's refusals either way; without it the fence
+		// has no policy to judge them against.
+		const sessionPolicy = () => toolContextStore.getContext();
 		for (const tool of toolRegistry.values()) {
-			toolRegistry.set(tool.name, new ExtensionToolWrapper(tool, extensionRunner));
+			toolRegistry.set(tool.name, new ExtensionToolWrapper(tool, extensionRunner, "session.tools", sessionPolicy));
 		}
 
 		// `resolve` is hidden but must stay in the registry whenever any code path can invoke it:
@@ -2420,7 +2470,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		} else if (!toolRegistry.has(TOOL.resolve)) {
 			const resolveTool = await logger.time("createTools:resolve:session", HIDDEN_TOOLS.resolve, toolSession);
 			if (resolveTool) {
-				toolRegistry.set(resolveTool.name, wrapToolWithMetaNotice(resolveTool));
+				toolRegistry.set(
+					resolveTool.name,
+					new ExtensionToolWrapper(
+						wrapToolWithMetaNotice(resolveTool),
+						extensionRunner,
+						"session.tools",
+						sessionPolicy,
+					),
+				);
 				builtInRegistryToolNames.add(resolveTool.name);
 			}
 		}
@@ -2436,7 +2494,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const searchTool: Tool = new SearchToolBm25Tool(toolSession);
 			toolRegistry.set(
 				searchTool.name,
-				new ExtensionToolWrapper(wrapToolWithMetaNotice(searchTool), extensionRunner) as Tool,
+				new ExtensionToolWrapper(
+					wrapToolWithMetaNotice(searchTool),
+					extensionRunner,
+					"session.tools",
+					sessionPolicy,
+				) as Tool,
 			);
 			builtInRegistryToolNames.add(searchTool.name);
 		}
@@ -2461,7 +2524,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				const searchTool: Tool = new SearchToolBm25Tool(toolSession);
 				toolRegistry.set(
 					searchTool.name,
-					new ExtensionToolWrapper(wrapToolWithMetaNotice(searchTool), extensionRunner) as Tool,
+					new ExtensionToolWrapper(
+						wrapToolWithMetaNotice(searchTool),
+						extensionRunner,
+						"session.tools",
+						sessionPolicy,
+					) as Tool,
 				);
 			}
 			if (!liveSession.getActiveToolNames().includes(TOOL.search_tool_bm25)) {
@@ -2479,7 +2547,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			})) as unknown as AgentTool | null;
 			if (!sshTool) return null;
 			const wrapped = wrapToolWithMetaNotice(sshTool);
-			return new ExtensionToolWrapper(wrapped, extensionRunner) as AgentTool;
+			return new ExtensionToolWrapper(wrapped, extensionRunner, "session.tools", sessionPolicy) as AgentTool;
 		};
 
 		let cursorEventEmitter: ((event: AgentEvent) => void) | undefined;
@@ -3373,6 +3441,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// re-root may not move the process working directory or any other
 			// process-global project state. See `AgentSession.rescopeToCwd`.
 			isSpawned: sessionIsSpawned,
+			taskDepth,
+			parentTaskPrefix: options.parentTaskPrefix,
 			builtInToolNames: builtInRegistryToolNames,
 			transformContext,
 			transformProviderContext,
@@ -3448,6 +3518,59 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			atRestUsage?.tokens == null ? null : atRestLimit > 0 ? (atRestUsage.tokens / atRestLimit) * 100 : null,
 			atRestLimit,
 		);
+		if (!isInProcessChildSession(options) && !isSubagentSession(options)) {
+			const taskTool = toolRegistry.get("task");
+			const productionExecutor =
+				options.replenishmentExecutor ??
+				(taskTool
+					? async (ticket: ClaimedTicket) => {
+							const toolCallId = `replenish-${ticket.id}-${Date.now().toString(36)}`;
+							const result = await taskTool.execute(
+								toolCallId,
+								{
+									task: ticket.prompt,
+									ticketId: ticket.id,
+									runId: ticket.runId,
+									ledgerPath: ticket.ledgerPath,
+								},
+								undefined,
+								undefined,
+								toolContextStore.getContext(),
+							);
+							const spawned =
+								(result.details?.progress?.length ?? 0) > 0 || (result.details?.results?.length ?? 0) > 0;
+							if (result.isError || !spawned) {
+								const message = result.content
+									.filter(part => part.type === "text")
+									.map(part => part.text)
+									.join("\n");
+								throw new Error(message || `Native replenishment did not spawn a worker for ${ticket.id}`);
+							}
+							return result;
+						}
+					: undefined);
+
+			const engine =
+				options.replenishmentEngine ??
+				new TopicReplenishmentEngine({
+					executor: productionExecutor,
+				});
+			replenishmentEngine = engine;
+
+			const activeRoster = AgentRegistry.global()
+				.list()
+				.map(ref => ({
+					id: ref.id,
+					status: ref.status,
+					role: ref.kind,
+					task: ref.activity,
+				}));
+			void engine.onSessionRecovery(activeRoster).catch(err => {
+				logger.warn("TopicReplenishmentEngine: session recovery failed", {
+					error: errorMessage(err),
+				});
+			});
+		}
 
 		if (
 			shouldAutoloadArgotAtStartup({

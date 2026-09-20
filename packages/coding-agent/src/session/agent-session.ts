@@ -121,6 +121,7 @@ import type {
 	ToolResultMessage,
 	Usage,
 	UsageReport,
+	VideoContent,
 } from "@veyyon/ai";
 import * as AIError from "@veyyon/ai/error";
 import { calculateRateLimitBackoffMs, parseRateLimitReason } from "@veyyon/ai/error/rate-limit";
@@ -440,8 +441,11 @@ import { isAutoQaEnabled } from "../tools/agent/report-tool-issue";
 import { buildResolveReminderMessage, type ResolveToolDetails, runResolveInvocation } from "../tools/agent/resolve";
 import {
 	boundedTodoPreviewText,
+	createBoundedTodoPreview,
 	prioritizeTodoItems,
 	TODO_ITEM_PREVIEW_WIDTH,
+	TODO_REMINDER_PREVIEW_LIMIT,
+	TODO_TOTAL_PREVIEW_WIDTH,
 	type TodoPhase,
 	USER_TODO_EDIT_CUSTOM_TYPE,
 } from "../tools/agent/todo";
@@ -625,6 +629,18 @@ import type { VibeModeState } from "./vibe-runtime";
  *  discarded assistant turn only; never reaches the model. */
 const GEMINI_HEADER_INTERRUPT_REASON = "Interrupted: emit a tool call instead of more planning";
 
+export class UnsupportedModelInputError extends Error {
+	readonly modality: "video";
+	readonly modelId: string;
+
+	constructor(modelId: string, modality: "video" = "video") {
+		super(`Model "${modelId}" does not support ${modality} input.`);
+		this.name = "UnsupportedModelInputError";
+		this.modality = modality;
+		this.modelId = modelId;
+	}
+}
+
 // A side-channel assistant response is signed for the hidden prompt/history that
 // produced it. If we persist that response under a different user turn, native
 // replay anchors become invalid; keep only visible, non-cryptographic content.
@@ -652,6 +668,7 @@ function hasNonWhitespace(value: string): boolean {
 export type { ShakeMode, ShakeResult };
 
 /**
+
  * Whether `next` is the same tool set as `current` in a different order.
  *
  * Order-only differences are the case worth catching: they cost a full prefix
@@ -972,6 +989,8 @@ export class AgentSession {
 	readonly #ownedAsyncJobManager: AsyncJobManager | undefined;
 	/** Whether another session in this process spawned this one. */
 	readonly #isSpawned: boolean;
+	readonly #taskDepth: number;
+	readonly #parentTaskPrefix: string | undefined;
 	/**
 	 * AsyncJobManager scoped to this session for introspection/cancellation.
 	 *
@@ -1758,6 +1777,8 @@ export class AgentSession {
 		this.#parentEvalSessionId = config.parentEvalSessionId;
 		this.#ownedAsyncJobManager = config.ownedAsyncJobManager;
 		this.#isSpawned = config.isSpawned === true;
+		this.#taskDepth = config.taskDepth ?? 0;
+		this.#parentTaskPrefix = config.parentTaskPrefix;
 		this.#asyncJobManager = config.asyncJobManager ?? config.ownedAsyncJobManager;
 		this.#scopedModels = config.scopedModels ?? [];
 		this.#thinking = new ThinkingRuntime({
@@ -6622,64 +6643,77 @@ export class AgentSession {
 		// Clean up an empty session created by this session's /move so it doesn't accumulate.
 		await cleanupEmptyMoveSession(this.sessionManager, this.#movedFromEmptySessionFile);
 		this.#movedFromEmptySessionFile = undefined;
-		await this.sessionManager.close();
-		// beginDispose() stopped the advisor and captured its recorder close; await
-		// it so the final advisor turn is flushed before the process may exit.
-		await this.#advisorRecorderClosed;
-		this.#closeAllProviderSessions("dispose");
-		// Disconnect the MCP manager this session OWNS so its stdio servers are
-		// not orphaned at exit. Best-effort: a failure here must never throw out
-		// of dispose. Only owning (top-level) sessions provide this callback;
-		// spawned agents reuse a parent's manager and must not tear it down. Idempotent
-		// with the deferred-discovery disconnect in `createAgentSession`.
-		//
-		// BOUNDED: an owned manager may hold an HTTP/SSE server whose session-
-		// termination DELETE blocks up to the MCP request timeout (30s default,
-		// unbounded when VEYYON_MCP_TIMEOUT_MS=0), so awaiting `disconnectAll()`
-		// unbounded would stall /exit and print-mode shutdown on a broken remote
-		// endpoint. Race it against a short deadline — stdio close (the subprocess
-		// reap this targets) completes well within the bound; a slow transport
-		// close is left to finish detached. Mirrors the bounded async-job teardown.
-		if (this.#disconnectOwnedMcpManager) {
-			try {
-				await withTimeout(
-					this.#disconnectOwnedMcpManager(),
-					3_000,
-					"Timed out disconnecting owned MCP manager during dispose",
-				);
-			} catch (error) {
-				logger.warn("Failed to disconnect owned MCP manager during dispose", { error: errorMessage(error) });
+		let persistenceFailed = false;
+		let persistenceError: unknown;
+		try {
+			await this.sessionManager.close();
+		} catch (error) {
+			persistenceFailed = true;
+			persistenceError = error;
+		}
+		try {
+			// beginDispose() stopped the advisor and captured its recorder close; await
+			// it so the final advisor turn is flushed before the process may exit.
+			await this.#advisorRecorderClosed;
+			this.#closeAllProviderSessions("dispose");
+			// Disconnect the MCP manager this session OWNS so its stdio servers are
+			// not orphaned at exit. Best-effort: a failure here must never throw out
+			// of dispose. Only owning (top-level) sessions provide this callback;
+			// subagents reuse a parent's manager and must not tear it down. Idempotent
+			// with the deferred-discovery disconnect in `createAgentSession`.
+			//
+			// BOUNDED: an owned manager may hold an HTTP/SSE server whose session-
+			// termination DELETE blocks up to the MCP request timeout (30s default,
+			// unbounded when VEYYON_MCP_TIMEOUT_MS=0), so awaiting `disconnectAll()`
+			// unbounded would stall /exit and print-mode shutdown on a broken remote
+			// endpoint. Race it against a short deadline — stdio close (the subprocess
+			// reap this targets) completes well within the bound; a slow transport
+			// close is left to finish detached. Mirrors the bounded async-job teardown.
+			if (this.#disconnectOwnedMcpManager) {
+				try {
+					await withTimeout(
+						this.#disconnectOwnedMcpManager(),
+						3_000,
+						"Timed out disconnecting owned MCP manager during dispose",
+					);
+				} catch (error) {
+					logger.warn("Failed to disconnect owned MCP manager during dispose", { error: errorMessage(error) });
+				}
 			}
+			// Flush the retain queue BEFORE clearing the session's pointer so
+			// `HindsightRetainQueue.#doFlush` still sees `session.getHindsightSessionState() === state`.
+			// Reversed, the spliced batch survives just long enough to fail the
+			// identity check and get dropped with a `session vanished` warning.
+			const hindsightState = this.getHindsightSessionState();
+			await hindsightState?.flushRetainQueue();
+			this.setHindsightSessionState(undefined);
+			hindsightState?.dispose();
+			const mnemopiState = setMnemopiSessionState(this, undefined);
+			await mnemopiState?.dispose({ timeoutMs: options.mnemopiConsolidateTimeoutMs });
+			// Tear down the embeddings subprocess AFTER mnemopi state.dispose:
+			// consolidate-on-dispose may still call `embed()` to store the final
+			// memories, and that round-trips through the worker we are about to
+			// hard-kill (issue #3031).
+			await shutdownMnemopiEmbedClient();
+			this.#disconnectFromAgent();
+			if (this.#unsubscribeAppendOnly) {
+				this.#unsubscribeAppendOnly();
+				this.#unsubscribeAppendOnly = undefined;
+			}
+			if (this.#unsubscribeModelRoles) {
+				this.#unsubscribeModelRoles();
+				this.#unsubscribeModelRoles = undefined;
+			}
+			if (this.#unsubscribePromptSettings) {
+				this.#unsubscribePromptSettings();
+				this.#unsubscribePromptSettings = undefined;
+			}
+			this.#eventListeners = [];
+		} catch (error) {
+			if (!persistenceFailed) throw error;
 		}
-		// Flush the retain queue BEFORE clearing the session's pointer so
-		// `HindsightRetainQueue.#doFlush` still sees `session.getHindsightSessionState() === state`.
-		// Reversed, the spliced batch survives just long enough to fail the
-		// identity check and get dropped with a `session vanished` warning.
-		const hindsightState = this.getHindsightSessionState();
-		await hindsightState?.flushRetainQueue();
-		this.setHindsightSessionState(undefined);
-		hindsightState?.dispose();
-		const mnemopiState = setMnemopiSessionState(this, undefined);
-		await mnemopiState?.dispose({ timeoutMs: options.mnemopiConsolidateTimeoutMs });
-		// Tear down the embeddings subprocess AFTER mnemopi state.dispose:
-		// consolidate-on-dispose may still call `embed()` to store the final
-		// memories, and that round-trips through the worker we are about to
-		// hard-kill (issue #3031).
-		await shutdownMnemopiEmbedClient();
-		this.#disconnectFromAgent();
-		if (this.#unsubscribeAppendOnly) {
-			this.#unsubscribeAppendOnly();
-			this.#unsubscribeAppendOnly = undefined;
-		}
-		if (this.#unsubscribeModelRoles) {
-			this.#unsubscribeModelRoles();
-			this.#unsubscribeModelRoles = undefined;
-		}
-		if (this.#unsubscribePromptSettings) {
-			this.#unsubscribePromptSettings();
-			this.#unsubscribePromptSettings = undefined;
-		}
-		this.#eventListeners = [];
+		// Preserve the original persistence rejection after resource cleanup.
+		if (persistenceFailed) throw persistenceError;
 	}
 
 	#closeAllProviderSessions(reason: string): void {
@@ -6970,7 +7004,14 @@ export class AgentSession {
 
 	#wrapRuntimeTool(tool: AgentTool): AgentTool {
 		const wrapped = wrapToolWithMetaNotice(tool);
-		return this.#extensionRunner ? new ExtensionToolWrapper(wrapped, this.#extensionRunner) : wrapped;
+		// The policy this session stands for, for a caller that reaches the tool
+		// with no context: a dynamic tool is fenced by the same standing refusals
+		// as a built-in one. See `ExtensionToolWrapper`'s constructor.
+		return new ExtensionToolWrapper(wrapped, this.#extensionRunner, "session.dynamic-tools", () => ({
+			settings: this.settings,
+			sessionManager: this.sessionManager,
+			sessionApprovals: this.sessionToolApprovals(),
+		}));
 	}
 
 	/**
@@ -7518,7 +7559,7 @@ export class AgentSession {
 		const sshAllowed = this.#requestedToolNames === undefined || this.#requestedToolNames.has(TOOL.ssh);
 		const refreshedTool = await this.#reloadSshTool();
 		if (refreshedTool) {
-			this.#toolRegistry.set(refreshedTool.name, refreshedTool);
+			this.#toolRegistry.set(refreshedTool.name, this.#wrapRuntimeTool(refreshedTool));
 		} else {
 			this.#toolRegistry.delete(TOOL.ssh);
 			this.#selectedDiscoveredToolNames.delete(TOOL.ssh);
@@ -7886,10 +7927,8 @@ export class AgentSession {
 		});
 
 		for (const customTool of mcpTools) {
-			const wrapped = wrapToolWithMetaNotice(CustomToolAdapter.wrap(customTool, getCustomToolContext) as AgentTool);
-			const finalTool = (
-				this.#extensionRunner ? new ExtensionToolWrapper(wrapped, this.#extensionRunner) : wrapped
-			) as AgentTool;
+			const wrapped = CustomToolAdapter.wrap(customTool, getCustomToolContext) as AgentTool;
+			const finalTool = this.#wrapRuntimeTool(wrapped);
 			this.#toolRegistry.set(finalTool.name, finalTool);
 		}
 
@@ -7946,10 +7985,7 @@ export class AgentSession {
 		this.#rpcHostToolNames.clear();
 
 		for (const tool of rpcTools) {
-			const metaWrapped = wrapToolWithMetaNotice(tool);
-			const finalTool = (
-				this.#extensionRunner ? new ExtensionToolWrapper(metaWrapped, this.#extensionRunner) : metaWrapped
-			) as AgentTool;
+			const finalTool = this.#wrapRuntimeTool(tool);
 			this.#toolRegistry.set(finalTool.name, finalTool);
 			this.#rpcHostToolNames.add(finalTool.name);
 		}
@@ -8698,6 +8734,19 @@ export class AgentSession {
 		const tasks = phases.flatMap(phase => phase.tasks);
 		const closed = tasks.filter(task => task.status === "completed" || task.status === "abandoned").length;
 		const openItems = prioritizeTodoItems(incompleteTodoItems(phases));
+		const inProgress = openItems.filter(item => item.status === "in_progress");
+		const preview = createBoundedTodoPreview(TODO_TOTAL_PREVIEW_WIDTH, TODO_ITEM_PREVIEW_WIDTH);
+		let shown = 0;
+		for (const item of inProgress) {
+			if (shown >= TODO_REMINDER_PREVIEW_LIMIT) break;
+			if (!preview.push("- [in_progress] ", `${item.content} (${item.phase})`)) break;
+			shown++;
+		}
+		const inProgressItems = preview.lines.map(line => ({
+			status: "in_progress" as const,
+			text: this.#sanitizeGoalTodoText(line.slice("- [in_progress] ".length)),
+		}));
+		const hiddenActiveCount = inProgress.length - shown;
 		const next = openItems[0];
 		const nextItem = next
 			? {
@@ -8712,7 +8761,10 @@ export class AgentSession {
 			canCallTodoTool,
 			canActivateTodoTool,
 			closed: String(closed),
-			nextItem,
+			activeItems: inProgress.length > 1 ? inProgressItems : undefined,
+			totalActive: inProgress.length > 1 ? String(inProgress.length) : undefined,
+			hiddenActiveCount: inProgress.length > 1 && hiddenActiveCount > 0 ? String(hiddenActiveCount) : undefined,
+			nextItem: inProgress.length <= 1 ? nextItem : undefined,
 			open: String(openItems.length),
 			total: String(tasks.length),
 		});
@@ -8908,6 +8960,12 @@ export class AgentSession {
 			}
 		}
 
+		if (options?.videos?.length) {
+			if (!this.model?.input.includes("video")) {
+				throw new UnsupportedModelInputError(this.model?.id ?? "unknown", "video");
+			}
+		}
+
 		// Expand file-based prompt templates if requested
 		const expandedText = expandPromptTemplates ? expandPromptTemplate(text, [...this.#promptTemplates]) : text;
 
@@ -8954,9 +9012,9 @@ export class AgentSession {
 				await this.sendCustomMessage(notice, { deliverAs: options.streamingBehavior });
 			}
 			if (options.streamingBehavior === "followUp") {
-				await this.#queueUserMessage(expandedText, options?.images, "followUp");
+				await this.#queueUserMessage(expandedText, options?.images, options?.videos, "followUp");
 			} else {
-				await this.#queueUserMessage(expandedText, options?.images, "steer");
+				await this.#queueUserMessage(expandedText, options?.images, options?.videos, "steer");
 			}
 			return true;
 		}
@@ -8969,9 +9027,12 @@ export class AgentSession {
 			!options?.synthetic && !hasPendingUserDirective ? this.#createEagerTaskPrelude(expandedText) : undefined;
 		const normalizedImages = await this.#normalizeImagesForModel(options?.images);
 
-		const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: expandedText }];
+		const userContent: (TextContent | ImageContent | VideoContent)[] = [{ type: "text", text: expandedText }];
 		if (normalizedImages?.length) {
 			userContent.push(...normalizedImages);
+		}
+		if (options?.videos?.length) {
+			userContent.push(...options.videos);
 		}
 		// Text-only model + image attachment: describe via a vision model and inject the
 		// description as a hidden companion (the image stays in the visible user message).
@@ -9405,6 +9466,10 @@ export class AgentSession {
 
 		return {
 			ui: noOpUIContext,
+			isSubagent: this.#isSpawned,
+			taskDepth: this.#taskDepth,
+			agentId: this.#isSpawned ? this.#agentId : undefined,
+			parentTaskPrefix: this.#parentTaskPrefix,
 			hasUI: false,
 			cwd: this.sessionManager.getCwd(),
 			sessionManager: this.sessionManager,
@@ -9534,13 +9599,16 @@ export class AgentSession {
 	/**
 	 * Queue a steering message to interrupt the agent mid-run.
 	 */
-	async steer(text: string, images?: ImageContent[]): Promise<void> {
+	async steer(text: string, images?: ImageContent[], videos?: VideoContent[]): Promise<void> {
 		if (text.startsWith("/")) {
 			this.#throwIfExtensionCommand(text);
 		}
+		if (videos?.length && !this.model?.input.includes("video")) {
+			throw new UnsupportedModelInputError(this.model?.id ?? "unknown", "video");
+		}
 
 		const expandedText = expandPromptTemplate(text, [...this.#promptTemplates]);
-		await this.#queueUserMessage(expandedText, images, "steer");
+		await this.#queueUserMessage(expandedText, images, videos, "steer");
 	}
 
 	/**
@@ -9550,15 +9618,35 @@ export class AgentSession {
 	 * uses this to land its execution directive behind a queued user turn without
 	 * flipping advisor auto-resume.
 	 */
-	async followUp(text: string, images?: ImageContent[], options?: FollowUpOptions): Promise<void> {
+	async followUp(
+		text: string,
+		images?: ImageContent[],
+		videosOrOptions?: VideoContent[] | FollowUpOptions,
+		options?: FollowUpOptions,
+	): Promise<void> {
 		if (text.startsWith("/")) {
 			this.#throwIfExtensionCommand(text);
 		}
 
+		let videos: VideoContent[] | undefined;
+		let opts: FollowUpOptions | undefined;
+		if (Array.isArray(videosOrOptions)) {
+			videos = videosOrOptions;
+			opts = options;
+		} else if (videosOrOptions && typeof videosOrOptions === "object") {
+			opts = videosOrOptions;
+		} else {
+			opts = options;
+		}
+
+		if (videos?.length && !this.model?.input.includes("video")) {
+			throw new UnsupportedModelInputError(this.model?.id ?? "unknown", "video");
+		}
+
 		const expandedText =
-			options?.expandPromptTemplates === false ? text : expandPromptTemplate(text, [...this.#promptTemplates]);
-		if (!options?.synthetic) {
-			await this.#queueUserMessage(expandedText, images, "followUp");
+			opts?.expandPromptTemplates === false ? text : expandPromptTemplate(text, [...this.#promptTemplates]);
+		if (!opts?.synthetic) {
+			await this.#queueUserMessage(expandedText, images, videos, "followUp");
 			return;
 		}
 		// Synthetic branch: agent-initiated hidden developer message. Bypass
@@ -9566,9 +9654,12 @@ export class AgentSession {
 		// enqueues as a user-attributed message) and place the developer message
 		// directly on the follow-up queue.
 		const normalizedImages = await this.#normalizeImagesForModel(images);
-		const content: (TextContent | ImageContent)[] = [{ type: "text", text: expandedText }];
+		const content: (TextContent | ImageContent | VideoContent)[] = [{ type: "text", text: expandedText }];
 		if (normalizedImages?.length) {
 			content.push(...normalizedImages);
+		}
+		if (videos?.length) {
+			content.push(...videos);
 		}
 		const imageDescriptionNotice = normalizedImages?.length
 			? await this.#buildImageDescriptionNotice(normalizedImages)
@@ -9577,7 +9668,7 @@ export class AgentSession {
 		this.agent.followUp({
 			role: "developer",
 			content,
-			attribution: options.attribution ?? "agent",
+			attribution: opts.attribution ?? "agent",
 			timestamp: Date.now(),
 		});
 		this.#scheduleIdleQueueDrain();
@@ -9586,18 +9677,24 @@ export class AgentSession {
 	async #queueUserMessage(
 		text: string,
 		images: ImageContent[] | undefined,
+		videos: VideoContent[] | undefined,
 		mode: "steer" | "followUp",
 	): Promise<void> {
+		if (videos?.length && !this.model?.input.includes("video")) {
+			throw new UnsupportedModelInputError(this.model?.id ?? "unknown", "video");
+		}
 		// A queued user message (RPC/SDK/collab steer or follow-up, or a typed message
 		// while streaming) is a deliberate resume; re-enable advisor auto-resume that
 		// a user interrupt suppressed.
 		this.#advisorAutoResumeSuppressed = false;
 		const normalizedImages = await this.#normalizeImagesForModel(images);
-		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
+		const content: (TextContent | ImageContent | VideoContent)[] = [{ type: "text", text }];
 		if (normalizedImages?.length) {
 			content.push(...normalizedImages);
 		}
-		// Text-only model + image attachment: describe via a vision model and enqueue the
+		if (videos?.length) {
+			content.push(...videos);
+		}
 		// description as a hidden companion immediately before the user message.
 		const imageDescriptionNotice = normalizedImages?.length
 			? await this.#buildImageDescriptionNotice(normalizedImages)
@@ -9921,35 +10018,44 @@ export class AgentSession {
 	 * Explicit `deliverAs` queues without starting a turn in either state.
 	 */
 	async sendUserMessage(
-		content: string | (TextContent | ImageContent)[],
+		content: string | (TextContent | ImageContent | VideoContent)[],
 		options?: { deliverAs?: "steer" | "followUp" },
 	): Promise<void> {
-		// Normalize content to text string + optional images
+		// Normalize content to text string + optional images and videos
 		let text: string;
 		let images: ImageContent[] | undefined;
+		let videos: VideoContent[] | undefined;
 
 		if (typeof content === "string") {
 			text = content;
 		} else {
 			const textParts: string[] = [];
 			images = [];
+			videos = [];
 			for (const part of content) {
 				if (part.type === "text") {
 					textParts.push(part.text);
-				} else {
+				} else if (part.type === "image") {
 					images.push(part);
+				} else if (part.type === "video") {
+					videos.push(part);
 				}
 			}
 			text = textParts.join("\n");
 			if (images.length === 0) images = undefined;
+			if (videos.length === 0) videos = undefined;
+		}
+
+		if (videos?.length && !this.model?.input.includes("video")) {
+			throw new UnsupportedModelInputError(this.model?.id ?? "unknown", "video");
 		}
 
 		if (options?.deliverAs === "followUp") {
-			await this.#queueUserMessage(text, images, "followUp");
+			await this.#queueUserMessage(text, images, videos, "followUp");
 			return;
 		}
 		if (options?.deliverAs === "steer") {
-			await this.#queueUserMessage(text, images, "steer");
+			await this.#queueUserMessage(text, images, videos, "steer");
 			return;
 		}
 
@@ -9959,6 +10065,7 @@ export class AgentSession {
 		await this.prompt(text, {
 			expandPromptTemplates: false,
 			images,
+			videos,
 			streamingBehavior: "steer",
 		});
 	}

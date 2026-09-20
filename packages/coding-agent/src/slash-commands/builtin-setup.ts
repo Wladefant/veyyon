@@ -11,6 +11,7 @@ import {
 } from "../config/model-resolver";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../discovery/helpers.js";
 import { PluginManager } from "../extensibility/plugins";
+import type { ExtensionReloadResult } from "../extensibility/extensions/types";
 import { formatProviderName } from "../session/account-format";
 import {
 	type AccountRow,
@@ -867,6 +868,66 @@ export const SETUP_HANDLERS = {
 			await runtime.ctx.session.refreshSshTool({ activateIfAvailable: true });
 			runtime.ctx.showStatus("Plugins reloaded.");
 			runtime.ctx.editor.setText("");
+		},
+	},
+	"reload-config": {
+		handle: async (_command, runtime) => {
+			try {
+				const result = await runtime.settings.reloadConfig();
+				let extensionRunner: { reloadExtensions: () => Promise<ExtensionReloadResult[]> } | undefined;
+				try {
+					extensionRunner = runtime.session?.extensionRunner;
+				} catch {
+					extensionRunner = undefined;
+				}
+
+				const extensionLines: string[] = [];
+				if (extensionRunner) {
+					const reloadResults = await extensionRunner.reloadExtensions();
+					if (reloadResults.length === 0) {
+						extensionLines.push("extensions: none");
+					} else {
+						for (const res of reloadResults) {
+							if (res.status === "reloaded") {
+								extensionLines.push(`extension ${res.path}: reloaded (${res.hookCount ?? 0} hooks)`);
+							} else {
+								extensionLines.push(`extension ${res.path}: reload failed: ${res.error}`);
+							}
+						}
+						try {
+							await runtime.refreshCommands();
+						} catch {
+							// Best-effort command refresh
+						}
+					}
+				} else {
+					extensionLines.push("extensions: none");
+				}
+
+				const configStatus = result.changed.length ? "reloaded" : "unchanged";
+				await runtime.output(
+					[
+						`config: ${configStatus}`,
+						"Config reload processed. Running Main and existing workers keep their model and effort bindings.",
+						...result.outcomes.map(outcome => {
+							const change = result.changed.find(row => row.path === outcome.path);
+							return `${outcome.path}: ${outcome.status}${outcome.reason ? ` — ${outcome.reason}` : ""}${
+								change
+									? ` (${JSON.stringify(change.before) ?? "unset"} → ${JSON.stringify(change.after) ?? "unset"})`
+									: ""
+							}`;
+						}),
+						result.changed.length
+							? "Applied routing values are used by new spawns."
+							: "No effective routing changes.",
+						...extensionLines,
+					].join("\n"),
+				);
+				return commandConsumed();
+			} catch (error) {
+				await runtime.output(`Config reload failed: ${error instanceof Error ? error.message : String(error)}`);
+				throw error;
+			}
 		},
 	},
 	trust: {

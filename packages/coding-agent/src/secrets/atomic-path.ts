@@ -41,7 +41,7 @@ function readErrno(location: Pointer | bigint | null, symbol: string): number {
 			`Secure atomic path publication could not read errno: ${symbol}() returned no location, so the failure cannot be classified.`,
 		);
 	}
-	return read.i32(location);
+	return read.i32(location as Pointer);
 }
 
 function cString(value: string): Buffer {

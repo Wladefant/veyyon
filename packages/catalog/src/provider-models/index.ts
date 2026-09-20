@@ -1,3 +1,4 @@
+export * from "./chatgpt-web";
 export * from "./command-code";
 export * from "./descriptor-types";
 export * from "./descriptors";

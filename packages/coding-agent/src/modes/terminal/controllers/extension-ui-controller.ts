@@ -36,6 +36,7 @@ import { runExtensionSetModel } from "../../../extensibility/extensions/compact-
 import { getSessionSlashCommands } from "../../../extensibility/extensions/get-commands-handler";
 import { createExtensionModelQuery } from "../../../extensibility/extensions/model-api";
 import type { TerminalWidgetContent } from "../../../extensibility/terminal-capability";
+import { sessionWorkerAccess } from "../../../native-control/telegram-control-bridge";
 import { toConfirmDialog, toPromptDialog, toSelectDialog } from "../../../presentation/overlay-builder";
 import { normalizeCustomMessagePayload, USER_INTERRUPT_LABEL } from "../../../session/messages";
 import { getAvailableThemesWithPaths, getThemeByName, setTheme, type Theme, theme } from "../../../theme/theme";
@@ -318,6 +319,7 @@ export class ExtensionUiController {
 			getCommands: () => getSessionSlashCommands(this.ctx.session),
 			getSessionName: () => this.ctx.sessionManager.getSessionName(),
 			setSessionName: name => this.#updateSessionName(name),
+			...sessionWorkerAccess(() => this.ctx.sessionManager.getSessionId()),
 		};
 		const contextActions: ExtensionContextActions = {
 			getModel: () => this.ctx.session.model,

@@ -19,6 +19,7 @@ import path from "node:path";
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { Usage } from "@veyyon/ai";
 import { emptyCost, emptyUsage } from "@veyyon/catalog/models";
+import type { AgentSpawnRecord } from "@veyyon/kernel/session/session-entries";
 import {
 	$env,
 	directoryExists,
@@ -74,6 +75,7 @@ import type { LocalProtocolOptions } from "../internal-urls";
 import { loadOverallPlanReference } from "../plan-mode/plan-handoff";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { TOOL } from "../tools/core/builtin-names";
+import type { ToolEffectScope } from "../tools/core/effect-scope";
 import { type DiscoveryResult, discoverAgents, getAgent } from "./discovery";
 import { runSubprocess } from "./executor";
 import {
@@ -90,6 +92,7 @@ import { mapWithConcurrencyLimit, Semaphore } from "./parallel";
 import { repairTaskParams } from "./repair-args";
 import { treeSpawnSemaphore } from "./spawn-semaphore";
 import { taskToolView } from "./task-view";
+import { recordNativeDispatch } from "./topic-replenishment";
 import { parseIsolationMode } from "./worktree";
 
 function renderAgentUserPrompt(assignment: string): string {
@@ -371,6 +374,10 @@ function spawnParamsFor(params: TaskParams, item: TaskItem, defaultAgent: string
 	} else if (params.cwd !== undefined) {
 		spawn.cwd = params.cwd;
 	}
+	if (params.ticketId !== undefined) spawn.ticketId = params.ticketId;
+	if (params.runId !== undefined) spawn.runId = params.runId;
+	if (params.ledgerPath !== undefined) spawn.ledgerPath = params.ledgerPath;
+	if (params.nativeDispatchBound !== undefined) spawn.nativeDispatchBound = params.nativeDispatchBound;
 	return spawn;
 }
 
@@ -562,6 +569,10 @@ function discoverAgentsForCreate(cwd: string): Promise<DiscoveryResult> {
  */
 export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetails, Theme>, EnabledAgentSource {
 	readonly name = "task";
+	// A delegated agent runs its own tool loop, so the parent cannot bound what
+	// this call touches. A refusal the parent is under must fence the delegation
+	// too, or the refused work simply moves one level down.
+	readonly effectScope: ToolEffectScope = "unbounded";
 	readonly approval = "exec" as const;
 	readonly formatApprovalDetails = (args: unknown): string[] => {
 		const params = args as Partial<TaskParams>;
@@ -900,10 +911,20 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const failedSchedules: string[] = [];
 		for (const spawn of asyncSpawns) {
 			try {
+				const spawnParams = spawnParamsFor(params, spawn.item, defaultAgent);
+				if (spawnParams.runId) {
+					await recordNativeDispatch(
+						spawnParams.runId,
+						`agent://${spawn.agentId}`,
+						spawnParams.ledgerPath ?? "",
+						spawnParams.ticketId,
+					);
+					spawnParams.nativeDispatchBound = true;
+				}
 				const jobId = this.#registerSpawnJob({
 					manager,
 					toolCallId,
-					spawnParams: spawnParamsFor(params, spawn.item, defaultAgent),
+					spawnParams,
 					agentId: spawn.agentId,
 					progress: spawn.progress,
 					ircEnabled,
@@ -1389,6 +1410,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const startTime = Date.now();
 		const { agents, projectAgentsDir } = await discoverAgents(this.session.cwd);
 		const agentName = params.agent ?? "";
+		const runId = params.runId;
 		const sharedContext = this.#isBatchEnabled() ? params.context?.trim() || undefined : undefined;
 		const assignment = (params.task ?? "").trim();
 		const isolationMode = this.session.settings.get("agent.isolation.mode");
@@ -1451,6 +1473,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				}
 			: agent;
 
+		// Pin one routing generation before resolving model/effort. Isolation and
+		// scheduling may await before the executor consumes defaultEffort.
+		const spawnSettings = this.session.settings.forkWithRuntimeOverrides();
 		// Resolve the model through the ONE owner, whose only scope is this agent:
 		// the lane row governing this spawn, then the definition's frontmatter, then
 		// the default model role. The parent's live model is not a layer, so a
@@ -1462,7 +1487,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const parentActiveModelPattern = this.session.getActiveModelString?.();
 		const parentThinkingLevel = this.session.getActiveThinkingLevel?.();
 		const resolvedModel = resolveAgentModel({
-			settings: this.session.settings,
+			settings: spawnSettings,
 			agentName,
 			agentModel: effectiveAgent.model,
 			fallbackModelPattern: this.session.getModelString?.(),
@@ -1484,7 +1509,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		}
 		const modelOverride = resolvedModel.patterns;
 		const thinkingLevelOverride = resolveAgentThinkingLevel({
-			settings: this.session.settings,
+			settings: spawnSettings,
 			agentName,
 			agentThinkingLevel: effectiveAgent.thinkingLevel,
 			taskDepth: taskDepth + 1,
@@ -1601,6 +1626,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					details: { projectAgentsDir, results: [], totalDurationMs: Date.now() - startTime },
 				};
 			}
+			if (params.runId && !params.nativeDispatchBound) {
+				await recordNativeDispatch(params.runId, `agent://${agentId}`, params.ledgerPath ?? "", params.ticketId);
+			}
 
 			// Resolved here, not before `spawnCwd`: whether the child inherits the
 			// parent's layers or loads its own depends on where it will run.
@@ -1685,7 +1713,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				},
 				authStorage: this.session.authStorage,
 				modelRegistry: this.session.modelRegistry,
-				settings: this.session.settings,
+				settings: spawnSettings,
 				// The `/yolo` bypass lives on the session, not in settings, so it has
 				// to be handed over explicitly or the child silently drops a rung.
 				bypassAllApprovals: this.session.isApprovalBypassed?.() ?? false,
@@ -1805,8 +1833,21 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			// transcript, so a study/backtest tool can enumerate a session's agents without
 			// scraping tool-result prose (GRAN-2). The child transcript path is derived exactly
 			// as the executor derives it: `<artifactsDir>/<id>.jsonl` (ONE PLACE).
+
 			const outcome = classifyAgentOutcome(result);
-			this.session.recordAgentSpawn?.({
+			let structuredResult: Record<string, unknown> | undefined;
+			if (result.output) {
+				try {
+					const trimmed = result.output.trim();
+					if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+						structuredResult = JSON.parse(trimmed) as Record<string, unknown>;
+					}
+				} catch {
+					// Output not JSON
+				}
+			}
+
+			const spawnRecord: AgentSpawnRecord = {
 				agentId: result.id,
 				agentName: result.agent,
 				task: result.task,
@@ -1817,7 +1858,15 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				durationMs: result.durationMs,
 				usage: result.usage,
 				error: result.error,
-			});
+				ticketId:
+					params && typeof params === "object" && "ticketId" in params && typeof params.ticketId === "string"
+						? params.ticketId
+						: undefined,
+				runId,
+				structuredResult,
+			};
+			this.session.recordAgentSpawn?.(spawnRecord);
+			await this.session.onSubagentComplete?.(spawnRecord);
 
 			return this.#buildResultPayload(result, projectAgentsDir, Date.now() - startTime, mergeSummary);
 		} catch (err) {
@@ -1895,3 +1944,4 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		};
 	}
 }
+export * from "./topic-replenishment";

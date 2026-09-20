@@ -137,6 +137,7 @@ act on a bare invocation: `/yolo`, `/fast`, and `/browser` flip a switch, `/goal
 | `/account switch <provider>` | Open the manager focused on one provider, to move that provider to another of your accounts |
 | `/statusline` | Settings UI, jumped to Status Line (preset/segments/separator) |
 | `/reload-plugins` | Reload extensions |
+| `/reload-config`, `/reload` | Reload model and effort defaults for new subagents and reload loaded extensions |
 | `/trust` | Decide whether this project's code may run; `approve`, `deny`, `forget`, or a path ([Project trust](./project-trust.md)) |
 | `/force <tool> [prompt]` (`/force:`) | Force the next turn to use a specific tool |
 
@@ -213,7 +214,7 @@ own page; typing the bare command lists them with their descriptions.
 | `/secret` | `add`, `from-env`, `list`, `rm`, `clear`, `rename`, `value`, `scope`, `copy`, `extend`, `log`, `discard`, `help` |
 | `/collab` | `start`, `view`, `status`, `stop` |
 | `/browser` | `headless`, `visible` |
-| `/todo` | `edit`, `copy`, `export`, `import`, `append`, `start`, `done`, `drop`, `rm` |
+| `/todo` | `edit`, `copy`, `export`, `import`, `append`, `start`, `done`, `drop`, `rm`, `pending`, `reset` |
 | `/session` | `info`, `delete` |
 | `/usage` | `show`, `reset` |
 | `/mcp` | `add`, `list`, `remove`, `test`, `reauth`, `unauth`, `enable`, `disable`, `smithery-search`, `smithery-login`, `smithery-logout`, `reconnect`, `reload`, `resources`, `prompts`, `notifications`, `help` |

@@ -1,5 +1,10 @@
 import * as os from "node:os";
 import { scheduler } from "node:timers/promises";
+import {
+	CHATGPT_WEB_PROVIDER_ID,
+	describeChatGptWebFailure,
+	isChatGptWebLoopbackUrl,
+} from "@veyyon/catalog/discovery/chatgpt-web";
 import { calculateCost, discardAttemptUsage, emptyUsage, scaleUsageCost } from "@veyyon/catalog/models";
 import { toFields, toStringValue } from "@veyyon/catalog/utils";
 import {
@@ -14,6 +19,7 @@ import { $env, $flag } from "@veyyon/utils/env";
 import { structuredCloneJSON } from "@veyyon/utils/json";
 import { parseStreamingJson } from "@veyyon/utils/json-parse";
 import * as logger from "@veyyon/utils/logger";
+import { scopedTimeoutSignal } from "@veyyon/utils/scoped-timeout";
 import { readSseJson } from "@veyyon/utils/stream";
 import { asRecord, errorMessage } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
@@ -44,6 +50,7 @@ import type {
 	CodexCompactionRequestContext,
 	Context,
 	FetchImpl,
+	ImageContent,
 	Model,
 	ProviderSessionState,
 	RawSseEvent,
@@ -56,6 +63,7 @@ import type {
 	ToolCall,
 	ToolChoice,
 	Usage,
+	VideoContent,
 } from "../types";
 import {
 	createOpenAIResponsesHistoryPayload,
@@ -95,6 +103,7 @@ import { adaptSchemaForStrict, NO_STRICT, sanitizeSchemaForOpenAIResponses, tool
 import { notifyRawSseEvent } from "../utils/sse-debug";
 import { compactGrammarDefinition } from "./grammar";
 import { createInitialResponsesAssistantMessage } from "./initial-message";
+import { applyChatGptWebTurnContract } from "./openai-codex/chatgpt-web-trusted-context";
 import {
 	type CodexReasoningContext,
 	type CodexRequestOptions,
@@ -1436,6 +1445,37 @@ async function buildCodexRequestContext(
 		compaction,
 	});
 	transformedBody.client_metadata = requestMetadata.clientMetadata;
+	// The last place every half of the bridge's turn contract is final and still
+	// on one object: the turn id was minted two statements ago, the input array
+	// has been through `transformRequestBody`, and every transport below (SSE,
+	// the websocket `response.create` frame, and both reopen paths) reads this
+	// same `transformedBody`. Applying it earlier would miss the turn id;
+	// applying it per transport would need it in four places. `options.cwd` is
+	// the host's own session directory (the agent re-reads it per call from its
+	// session manager), which is the only trustworthy source for the daemon's
+	// trusted-environment envelope.
+	//
+	// Both clauses are load-bearing. `chatgpt-web` is the only provider whose
+	// catalog comes from the daemon, so it can never be the official Codex
+	// provider; and a `chatgpt-web` row pointed anywhere but loopback is not the
+	// daemon (it binds 127.0.0.1 only, and discovery refuses to hand it the
+	// ChatGPT bearer off loopback), so it must not receive daemon-specific
+	// fields either. Every other Codex-family request — OpenAI's host, and any
+	// other Codex-compatible server on loopback — goes out byte-identical.
+	if (model.provider === CHATGPT_WEB_PROVIDER_ID && isChatGptWebLoopbackUrl(baseUrl)) {
+		const outcome = applyChatGptWebTurnContract(transformedBody, requestMetadata.turnId, options?.cwd);
+		if (outcome !== "sent") {
+			// Not cosmetic and not rate-limited: a Full-mode daemon refuses EVERY
+			// turn in this state, so the operator needs the missing prerequisite
+			// named on the request that fails rather than a generic
+			// `response.failed` carrying the daemon's error.
+			logger.warn("chatgpt-web bridge turn is missing its trusted Codex context", {
+				outcome,
+				model: model.id,
+				hasCwd: typeof options?.cwd === "string" && options.cwd.length > 0,
+			});
+		}
+	}
 	return {
 		apiKey,
 		accountId,
@@ -2772,6 +2812,12 @@ const streamOpenAICodexResponsesOnce = (
 				} satisfies CodexStreamFailureContext);
 			try {
 				const failure = await handleCodexStreamFailure(failureContext, error);
+				if (model.provider === CHATGPT_WEB_PROVIDER_ID && !options?.signal?.aborted) {
+					failure.errorMessage = describeChatGptWebFailure(failure.errorMessage ?? error);
+				} else if (model.provider === CHATGPT_WEB_PROVIDER_ID && options?.signal?.reason?.name === "TimeoutError") {
+					failure.errorMessage = describeChatGptWebFailure(options.signal.reason);
+					failure.stopReason = "error";
+				}
 				stream.push({ type: "error", reason: failure.stopReason as "error" | "aborted", error: failure });
 			} catch (failureError) {
 				// Last resort — the failure handler itself threw (exotic error object or
@@ -2795,8 +2841,25 @@ const streamOpenAICodexResponsesOnce = (
 /**
  * Retries Codex terminal completions that contain no visible assistant output.
  */
-export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"> = (model, context, options) =>
-	withEmptyCompletionRetry(model, context, options, streamOpenAICodexResponsesOnce, { providerRetriesStalls: true });
+export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"> = (model, context, options) => {
+	if (model.provider !== CHATGPT_WEB_PROVIDER_ID) {
+		return withEmptyCompletionRetry(model, context, options, streamOpenAICodexResponsesOnce, {
+			providerRetriesStalls: true,
+		});
+	}
+	// One deadline covers connection, streaming and all retries, including a daemon
+	// which keeps sending heartbeats without ever completing its browser turn.
+	const deadline = scopedTimeoutSignal(300_000, options?.signal);
+	const stream = withEmptyCompletionRetry(
+		model,
+		context,
+		{ ...options, signal: deadline.signal, preferWebsockets: false },
+		streamOpenAICodexResponsesOnce,
+		{ providerRetriesStalls: true },
+	);
+	void stream.result().finally(() => deadline.cancel());
+	return stream;
+};
 
 export async function prewarmOpenAICodexResponses(
 	model: Model<"openai-codex-responses">,
@@ -4127,10 +4190,24 @@ function redactHeaders(headers: Headers): Record<string, string> {
 	return redactDiagnosticHeaders(headers.entries(), isCodexIdentityHeader);
 }
 
+/**
+ * Resolve the Responses route from a Codex base URL.
+ *
+ * OpenAI serves it at `{base}/codex/responses`, so a base that names neither
+ * segment gets both appended. Two other shapes exist and must be left alone:
+ * a base that already ends in the full route, and one that ends at `/codex`.
+ *
+ * The `/responses` case is the general form of the first: a local Codex-
+ * compatible bridge serves `POST {base}/responses` with no `/codex` segment
+ * (the `codex-chatgpt-web` daemon installs itself into a Codex config as
+ * `openai_base_url = "http://127.0.0.1:17841/v1"` and answers `/v1/responses`),
+ * so a base URL that already names the route is final wherever it came from.
+ * Appending `/codex/responses` to it would 404 the whole session.
+ */
 function resolveCodexResponsesUrl(baseUrl: string | undefined): string {
 	const raw = baseUrl && baseUrl.trim().length > 0 ? baseUrl : CODEX_BASE_URL;
 	const normalized = trimTrailingSlashes(raw);
-	if (normalized.endsWith("/codex/responses")) return normalized;
+	if (normalized.endsWith("/responses")) return normalized;
 	if (normalized.endsWith("/codex")) return `${normalized}/responses`;
 	return `${normalized}/codex/responses`;
 }
@@ -4274,7 +4351,7 @@ function convertMessages(model: Model<"openai-codex-responses">, context: Contex
 
 function normalizeInputMessageContent(
 	model: Model<"openai-codex-responses">,
-	content: string | Array<{ type: "text"; text: string } | { type: "image"; mimeType: string; data: string }>,
+	content: string | Array<TextContent | ImageContent | VideoContent>,
 ): ResponseInputContent[] {
 	if (typeof content === "string") {
 		if (!content || content.trim() === "") return [];

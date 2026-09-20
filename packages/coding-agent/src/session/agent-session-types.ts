@@ -19,6 +19,7 @@ import type {
 	ServiceTierByFamily,
 	SimpleStreamOptions,
 	ToolChoice,
+	VideoContent,
 } from "@veyyon/ai";
 import type { SessionTelemetryDetail } from "@veyyon/ai/instrumentation";
 import type { Effort } from "@veyyon/catalog/effort";
@@ -307,6 +308,10 @@ export interface AgentSessionConfig {
 	 * nobody above it owns the process.
 	 */
 	isSpawned?: boolean;
+	/** Task recursion depth (for subagent sessions). Default: 0 */
+	taskDepth?: number;
+	/** Parent task ID prefix for nested artifact naming (e.g., "Extensions") */
+	parentTaskPrefix?: string;
 	/**
 	 * AsyncJobManager reachable by this session for scoped job actions.
 	 *
@@ -384,6 +389,8 @@ export interface PromptOptions {
 	expandPromptTemplates?: boolean;
 	/** Image attachments */
 	images?: ImageContent[];
+	/** Video attachments */
+	videos?: VideoContent[];
 	/** When streaming, how to queue the message: "steer" (interrupt) or "followUp" (wait). */
 	streamingBehavior?: "steer" | "followUp";
 	/** Optional tool choice override for the next LLM call. */

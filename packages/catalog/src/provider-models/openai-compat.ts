@@ -175,12 +175,20 @@ function toModelName(value: unknown, fallback: string): string {
 	return toNonEmptyString(value) ?? fallback;
 }
 
-function toInputCapabilities(value: unknown): ("text" | "image")[] {
+export function toInputCapabilities(value: unknown): ("text" | "image" | "video")[] {
 	if (!Array.isArray(value)) {
 		return ["text"];
 	}
 	const supportsImage = value.some(item => item === "image");
-	return supportsImage ? ["text", "image"] : ["text"];
+	const supportsVideo = value.some(item => item === "video");
+	const result: ("text" | "image" | "video")[] = ["text"];
+	if (supportsImage) {
+		result.push("image");
+	}
+	if (supportsVideo) {
+		result.push("video");
+	}
+	return result;
 }
 
 /**
@@ -2823,8 +2831,12 @@ export function kimiCodeModelManagerOptions(
 							reasoning: entry.supports_reasoning === true || model.reasoning,
 							input:
 								entry.supports_image_in === true || model.input.includes("image")
-									? ["text", "image"]
-									: ["text"],
+									? model.input.includes("video") || entry.supports_video_in === true
+										? ["text", "image", "video"]
+										: ["text", "image"]
+									: model.input.includes("video") || entry.supports_video_in === true
+										? ["text", "video"]
+										: ["text"],
 							contextWindow:
 								typeof entry.context_length === "number"
 									? entry.context_length
@@ -3039,7 +3051,14 @@ export function syntheticModelManagerOptions(
 							...(reference ? { ...reference, id: defaults.id, baseUrl } : defaults),
 							name: toModelName(entry.name, reference?.name ?? defaults.name),
 							reasoning: entry.supports_reasoning === true || (reference?.reasoning ?? false),
-							input: entry.supports_vision === true || referenceSupportsImage ? ["text", "image"] : ["text"],
+							input:
+								entry.supports_vision === true || referenceSupportsImage
+									? (reference?.input.includes("video") ?? false)
+										? ["text", "image", "video"]
+										: ["text", "image"]
+									: (reference?.input.includes("video") ?? false)
+										? ["text", "video"]
+										: ["text"],
 							contextWindow: toPositiveNumber(
 								entry.context_length,
 								reference?.contextWindow ?? defaults.contextWindow,
@@ -3168,7 +3187,13 @@ export function basetenModelManagerOptions(
 						return {
 							...baseModel,
 							reasoning,
-							input: vision ? ["text", "image"] : ["text"],
+							input: vision
+								? modalities.includes("video") || (reference?.input.includes("video") ?? false)
+									? ["text", "image", "video"]
+									: ["text", "image"]
+								: modalities.includes("video") || (reference?.input.includes("video") ?? false)
+									? ["text", "video"]
+									: ["text"],
 							cost,
 							contextWindow,
 							maxTokens,
@@ -3289,8 +3314,12 @@ function mapNousResearchModel(
 		: [];
 	const inputModalities = Array.isArray(architecture.input_modalities)
 		? architecture.input_modalities
-		: typeof architecture.modality === "string" && architecture.modality.includes("image")
-			? ["text", "image"]
+		: typeof architecture.modality === "string"
+			? [
+					"text",
+					...(architecture.modality.includes("image") ? ["image"] : []),
+					...(architecture.modality.includes("video") ? ["video"] : []),
+				]
 			: ["text"];
 
 	return {
@@ -4360,7 +4389,7 @@ function createCopilotLongContextVariant(
 		contextWindow: variantWindow,
 		// Long-context tier has its own token prices (Gemini/GPT bill ~2x above
 		// the default boundary). cacheWrite is not reported per tier; inherit.
-		...(longCost && { cost: { ...longCost, cacheWrite: base.cost.cacheWrite } }),
+		...(longCost && { cost: { ...longCost, cacheWrite: base.cost?.cacheWrite ?? 0 } }),
 		contextPromotionTarget: undefined,
 	};
 }

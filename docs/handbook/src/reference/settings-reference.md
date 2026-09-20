@@ -184,6 +184,7 @@ veyyon config get compaction.threshold
 |---|---|---|---|---|
 | `tools.approval` | Tool Approval Policies | record | `{}` | Per-tool approval policies. Set to 'allow' to auto-approve, 'prompt' to require confirmation, or 'deny' to block. Overrides are honored in every approval mode. Any other value denies that tool and is reported at startup. |
 | `tools.protectedPaths` | Extra Protected Paths | array | `[]` | Additional absolute paths (a leading ~ is expanded) that a recursive delete must never target without approval. Adds to the built-in set; it cannot remove from it. |
+| `tools.refusals` | Standing Refusals | array | `[]` | Operations refused by an extension and fenced for this profile. Recorded automatically; clear an entry to allow the operation to be re-evaluated. |
 | `tools.approvalMode` | Tool Approval | enum | `auto` | How much the agent may do without asking. Defaults to Auto: every tier runs, with the per-tool policies, working-directory boundary, credential and critical-call guards still asking. This is the persisted default; override it for one session with /permissions. Values: `plan`, `ask`, `ask-command`, `auto`, `yolo`, `always-ask`, `write`, `auto-edit`. |
 
 ### Notifications
@@ -193,6 +194,8 @@ veyyon config get compaction.threshold
 | `completion.notify` | Completion Notification | enum | `off` | Notify when the agent finishes a turn. Values: `on`, `off`. |
 | `ask.timeout` | Ask Timeout | number | `0` | Auto-select the recommended ask option after this many seconds (0 disables). |
 | `ask.notify` | Ask Notification | enum | `on` | Notify when the agent is blocked on a question you have not answered. Values: `on`, `off`. |
+| `notify.sound` | Announcement Sound | enum | `off` | Play the desktop alert sound when the window announces something. Values: `on`, `off`. |
+| `notify.system` | System Notification | enum | `off` | Post an announcement to the desktop notification service as well as the window. Values: `on`, `off`. |
 | `recap.enabled` | Idle Recap | boolean | `true` | Generate a brief LLM recap of where things stand after the terminal has been idle. |
 | `recap.idleSeconds` | Idle Recap Delay | number | `240` | Seconds to wait while idle before showing the recap. |
 
@@ -237,6 +240,7 @@ veyyon config get compaction.threshold
 | `startup.checkUpdate` | Check for Updates | boolean | `true` | Check for Veyyon updates on startup. |
 | `marketplace.autoUpdate` | Marketplace Auto-Update | enum | `notify` | Check for plugin updates on startup. Values: `off`, `notify`, `auto`. |
 | `startup.autoUpdate` | Automatic Updates | boolean | `true` | Install a newer version in the background; off means updates only when you run `veyyon update`. |
+| `updates.auto` | Automatic Updates (updates.auto) | boolean | `true` | Install a newer version in the background; off means updates only when you run `veyyon update`. |
 | `startup.updateNotice` | Update Notice | boolean | `true` | Show a one-line notice on the first launch after an update. |
 
 ### Profile
@@ -900,4 +904,4 @@ These keys are not in `/settings`. Some are state veyyon writes for itself (a sc
 | `tui.maxInlineImageRows` | number | `20` |  |
 | `tui.maxInlineImages` | number | `8` |  |
 
-354 settings in /settings, 120 configuration-file keys, 474 in all.
+356 settings in /settings, 120 configuration-file keys, 476 in all.

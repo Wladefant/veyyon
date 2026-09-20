@@ -22,6 +22,7 @@ export const BUILTIN_SLASH_COMMAND_CATEGORIES: Readonly<Record<string, string>> 
 	extensions: "setup",
 	plugins: "setup",
 	"reload-plugins": "setup",
+	"reload-config": "setup",
 	trust: "setup",
 	plan: "modes",
 	"plan-review": "modes",

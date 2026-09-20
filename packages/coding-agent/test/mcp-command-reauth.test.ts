@@ -173,6 +173,163 @@ describe("/mcp auth commands", () => {
 		expect(savedServer?.auth).toBeUndefined();
 	});
 
+	// WHY: drive real reauth discovery, DCR and authorize construction for both managed transports.
+	// Only network and browser callback boundaries are replaced; live provider consent is not covered.
+	for (const transport of ["http", "sse"] as const) {
+		for (const scenario of [
+			{ name: "configured scopes", configured: "read", expected: "read" },
+			{ name: "embedded scope", endpoint: "?scope=read", expected: "read" },
+			{ name: "explicit scope", scope: "read", expected: "read" },
+			{ name: "explicit scopes", scopes: "read", expected: "read" },
+			{ name: "PRM fallback", expected: "read profile" },
+			{ name: "JSON explicit scope", direct: true, scope: "read", expected: "read" },
+			{ name: "JSON embedded scope", direct: true, endpoint: "?scope=read", expected: "read" },
+			{ name: "JSON PRM fallback", direct: true, expected: "read profile" },
+			{ name: "JSON configured scopes", direct: true, configured: "read", expected: "read" },
+			{
+				name: "challenge and embedded scope",
+				challenge: "required",
+				endpoint: "?scope=default",
+				expected: "required default",
+			},
+			{
+				name: "challenge and explicit scope",
+				challenge: "required",
+				scope: "default",
+				expected: "required default",
+			},
+			{
+				name: "challenge deduplication",
+				challenge: "required default",
+				endpoint: "?scope=default",
+				expected: "required default",
+			},
+			{
+				name: "nested challenge and embedded scope",
+				nested: true,
+				challenge: "required",
+				endpoint: "?scope=default",
+				expected: "required default",
+			},
+			{
+				name: "JSON challenge and embedded scope",
+				direct: true,
+				challenge: "required",
+				endpoint: "?scope=default",
+				expected: "required default",
+			},
+			{
+				name: "configured override of both requests",
+				configured: "read",
+				challenge: "required",
+				endpoint: "?scope=default",
+				expected: "read",
+			},
+			{
+				name: "recursive challenge and embedded scope",
+				recursive: true,
+				challenge: "required",
+				endpoint: "?scope=default",
+				expected: "required default",
+			},
+			{
+				name: "recursive embedded scope without widening",
+				recursive: true,
+				endpoint: "?scope=default",
+				expected: "default",
+			},
+			{ name: "challenge without supported-set widening", challenge: "required", expected: "required" },
+			{
+				name: "header challenge and embedded scope",
+				header: true,
+				challenge: "required",
+				endpoint: "?scope=default",
+				expected: "required default",
+			},
+		]) {
+			test(`${transport} reauth preserves ${scenario.name} through DCR and authorization`, async () => {
+				const authStorage = freshAuthStorage();
+				await authStorage.reload();
+				const credentialId = oauthFlow.mcpOAuthCredentialId(EXPANDED_SERVER_URL);
+				const previous = { type: "oauth" as const, access: "old-access", refresh: "old-refresh", expires: 12345 };
+				await authStorage.set(credentialId, previous);
+				await fs.writeFile(
+					configPath,
+					JSON.stringify({
+						mcpServers: {
+							envserver: {
+								type: transport,
+								url: RAW_SERVER_URL,
+								oauth: { scopes: scenario.configured },
+							},
+						},
+					}),
+				);
+				const resourceMetadataUrl = "https://mcp.example.com/resource-metadata";
+				const metadata = {
+					authorization_endpoint: `https://auth.example.com/authorize${scenario.endpoint ?? ""}`,
+					token_endpoint: "https://auth.example.com/token",
+					registration_endpoint: "https://auth.example.com/register",
+					scopes_supported: ["read", "profile", "admin"],
+					scope: scenario.scope,
+					scopes: scenario.scopes,
+				};
+				const discoveryMetadata = scenario.nested
+					? {
+							oauth: {
+								...metadata,
+								authorization_url: metadata.authorization_endpoint,
+								token_url: metadata.token_endpoint,
+							},
+						}
+					: metadata;
+				vi.spyOn(mcpClient, "connectToServer").mockRejectedValue(
+					new Error(
+						`HTTP 401: Bearer${scenario.recursive ? "" : ` resource_metadata="${resourceMetadataUrl}"`}${scenario.challenge ? ` scope="${scenario.challenge}"` : ""}${scenario.direct ? ` ${JSON.stringify(discoveryMetadata)}` : ""}${scenario.header ? ` authorization_uri="${metadata.authorization_endpoint}" token_uri="${metadata.token_endpoint}" registration_endpoint="${metadata.registration_endpoint}"` : ""}`,
+					),
+				);
+				const registeredScopes: unknown[] = [];
+				vi.spyOn(globalThis, "fetch").mockImplementation(
+					Object.assign(
+						async (input: string | URL | Request, init?: RequestInit | BunFetchRequestInit) => {
+							const url = String(input);
+							if (
+								url === resourceMetadataUrl ||
+								url === "https://mcp.example.com/.well-known/oauth-protected-resource"
+							)
+								return Response.json({
+									authorization_servers: ["https://auth.example.com"],
+									scopes_supported: ["read", "profile"],
+								});
+							if (url === "https://auth.example.com/.well-known/oauth-authorization-server")
+								return Response.json(discoveryMetadata);
+							if (url === "https://auth.example.com/register") {
+								registeredScopes.push(JSON.parse(String(init?.body)).scope);
+								return Response.json({ client_id: "scope-client" }, { status: 201 });
+							}
+							return new Response("not found", { status: 404 });
+						},
+						{ preconnect: globalThis.fetch.preconnect },
+					),
+				);
+				const authorizationScopes: (string | null)[] = [];
+				vi.spyOn(oauthFlow.MCPOAuthFlow.prototype, "login").mockImplementation(async function (
+					this: oauthFlow.MCPOAuthFlow,
+				) {
+					const { url } = await this.generateAuthUrl("state", "http://127.0.0.1:53192/callback");
+					authorizationScopes.push(new URL(url).searchParams.get("scope"));
+					throw new Error("Consent cancelled");
+				});
+				const { controller, showError } = createController(authStorage);
+				await controller.handle("/mcp reauth envserver");
+				expect(authorizationScopes).toEqual([scenario.expected]);
+				expect(registeredScopes).toEqual([scenario.expected]);
+				expect(showError.mock.calls.flat().join("\n")).toContain("Consent cancelled");
+				expect(authStorage.get(credentialId)).toEqual(previous);
+			});
+		}
+	}
+
 	test("uses the registration endpoint discovered from a pathful issuer", async () => {
 		const authStorage = freshAuthStorage();
 		await authStorage.reload();

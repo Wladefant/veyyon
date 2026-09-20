@@ -16,6 +16,9 @@ import {
 	resolveEffectiveApprovalMode,
 } from "../../tools/core/approval";
 import { cwdEscapingTargets, formatCwdBoundaryReason } from "../../tools/core/cwd-boundary";
+import { ToolAbortError } from "../../tools/core/tool-errors";
+import { TOOL_EXECUTION_ENTRIES, type ToolExecutionEntryName } from "../../tools/core/execution-registry";
+import { recordRefusal, type ToolPolicyFrame } from "../../tools/core/refusal-fence";
 import { secretUseApprovalReason } from "../../tools/core/secret-use-boundary";
 import { normalizeToolEventInput, resolveToolEventInput } from "../tool-event-input";
 import type { ExtensionRunner } from "./runner";
@@ -70,6 +73,14 @@ export const APPROVAL_SELECT_OPTIONS: ExtensionUISelectOption[] = [
 		description: "Refuse this and every later call to this tool, until you exit.",
 	},
 ];
+/**
+ * The presentation of the approval card. Every host draws it the same way, so
+ * it is stated once.
+ *
+ * It carries no `signal`: the signal belongs to one call, and `execute` adds
+ * the turn's own before it raises the card. Sharing one options object across
+ * calls is why it cannot live here.
+ */
 export const APPROVAL_DIALOG_OPTIONS: ExtensionUIDialogOptions = {
 	selectionMarker: "radio",
 	helpText: "↑/↓ navigate  enter confirm  esc cancel",
@@ -179,11 +190,28 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 	declare parameters: TParameters;
 	declare label: string;
 	declare strict: boolean;
+	#entry: ToolExecutionEntryName;
+	#sessionPolicy: (() => ToolPolicyFrame | undefined) | undefined;
 
+	/**
+	 * @param sessionPolicy The policy the OWNING session stands for, read when a
+	 * caller invokes this tool with no context of its own. A tool taken off a
+	 * session registry — `session.getToolByName("eval").execute(...)`, the cursor
+	 * bridge, a browser page — carries the session's standing refusals whether or
+	 * not the caller remembered to thread a context through, which is the point of
+	 * the fence. Without it those calls are refused for want of a policy rather
+	 * than judged against the one the session actually has. Fencing only: the
+	 * frame is never handed to the tool or to the approval gate, so a contextless
+	 * caller keeps the approval surface it had before the fence existed.
+	 */
 	constructor(
 		private tool: AgentTool<TParameters, TDetails>,
-		private runner: ExtensionRunner,
+		private runner?: ExtensionRunner,
+		entry: ToolExecutionEntryName = "session.tools",
+		sessionPolicy?: () => ToolPolicyFrame | undefined,
 	) {
+		this.#entry = entry;
+		this.#sessionPolicy = sessionPolicy;
 		applyToolProxy(tool, this);
 	}
 
@@ -203,6 +231,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		onUpdate?: AgentToolUpdateCallback<TDetails, TParameters>,
 		context?: AgentToolContext,
 	): Promise<AgentToolResult<TDetails, TParameters>> {
+		context = TOOL_EXECUTION_ENTRIES[this.#entry].fence(this.tool, params, context, this.#sessionPolicy);
 		// 1. Check approval policy (before extension handlers).
 		// CLI `--auto-approve` / `--yolo` sets approval mode to yolo.
 		// User `tools.approval.<tool>` policies are still applied in all modes.
@@ -286,9 +315,9 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 
 		if (approvalRequired && !(standing === "allow" && grantMayApply)) {
 			const hasApprovalHandlers =
-				this.runner.hasHandlers("tool_approval_requested") || this.runner.hasHandlers("tool_approval_resolved");
+				this.runner?.hasHandlers("tool_approval_requested") || this.runner?.hasHandlers("tool_approval_resolved");
 			const sessionId = context?.sessionManager?.getSessionId() ?? "";
-			if (hasApprovalHandlers) {
+			if (hasApprovalHandlers && this.runner) {
 				await this.runner.emit({
 					type: "tool_approval_requested",
 					sessionId,
@@ -300,7 +329,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			}
 
 			const resolveApproval = async (approved: boolean, reason?: string) => {
-				if (!hasApprovalHandlers) return;
+				if (!hasApprovalHandlers || !this.runner) return;
 				await this.runner.emit({
 					type: "tool_approval_resolved",
 					sessionId,
@@ -314,10 +343,13 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			// The agent this call belongs to, when it is a spawned agent. Both
 			// the byline on the card and the observable waiting state below are
 			// keyed off it, and a root session has neither.
-			const requester = this.runner.agentId;
+			const requester = this.runner?.agentId;
 
-			// Check if UI is available
-			if (!this.runner.hasUI()) {
+			// Check if UI is available. A wrapper built without a runner at all —
+			// a tool reached through a boundary that has no extension surface,
+			// which is exactly the stripped-child case the fence exists for — has
+			// no UI by construction and takes this same path.
+			if (!this.runner?.hasUI()) {
 				const reason = "no interactive UI available";
 				await resolveApproval(false, reason);
 				// Lead with the specific reason (e.g. the cwd-boundary path) so a
@@ -365,10 +397,9 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			// host presents one at a time and queues the rest. The standing grant was
 			// read once, above, BEFORE this call queued, so an answer of "Approve for
 			// session" given at the first card could never dismiss the cards already
-			// waiting behind it. Those cards are also built without a signal, so
-			// neither an abort nor the end of the turn drops them: they surface
-			// whenever the surface frees up, which is how an operator who answered
-			// once gets asked again for the same tool after the work is finished.
+			// waiting behind it: they surface whenever the surface frees up, which is
+			// how an operator who answered once gets asked again for the same tool
+			// after the work is finished.
 			//
 			// Waiting on the in-flight prompt instead of queueing a second card is
 			// what closes that window. The answer is re-read after the wait, so a
@@ -395,10 +426,18 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 				const { promise: promptSettled, resolve: releaseWaiters } = Promise.withResolvers<void>();
 				if (inFlightKey) IN_FLIGHT_APPROVALS.set(inFlightKey, promptSettled);
 				try {
+					// The turn's own signal, so stopping the turn takes the card with
+					// it. Without it the card outlived every stop: `abort()` aborts
+					// the tool signal and then awaits `waitForIdle()`, which waits on
+					// the prompt, which waits on this select, which nothing could
+					// settle -- so the stop control never answered, and neither did
+					// the actions that end a running turn before leaving a session.
+					// Measured on the desktop: `AbortTurn` and `OpenSession` both sent
+					// no reply at all while a `read` approval was up.
 					choice = await uiContext.select(
 						formatApprovalCard(this.tool, params, approvalReason, requester),
 						APPROVAL_SELECT_OPTIONS,
-						APPROVAL_DIALOG_OPTIONS,
+						signal ? { ...APPROVAL_DIALOG_OPTIONS, signal } : APPROVAL_DIALOG_OPTIONS,
 					);
 				} catch (err) {
 					await resolveApproval(false, err instanceof Error ? err.message : "approval aborted");
@@ -419,6 +458,17 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 					if (inFlightKey) IN_FLIGHT_APPROVALS.delete(inFlightKey);
 					releaseWaiters();
 				}
+				// A card the stop took away is not a refusal. Both resolve `choice`
+				// to `undefined`, and the difference decides what the agent loop
+				// does next: `isCancellation` is what stops the loop from reading a
+				// stopped call as a retryable failure and re-issuing the work the
+				// operator just cancelled, while "denied by user" is a decision the
+				// model is told about and reasons around. The operator answered
+				// nothing here, so nothing is recorded and no grant is inferred.
+				if (signal?.aborted) {
+					await resolveApproval(false, "the turn was stopped before this call was answered");
+					throw new ToolAbortError(`Tool call stopped before approval: ${this.tool.name}`);
+				}
 				const approved = choice === APPROVAL_CHOICE.approveOnce || choice === APPROVAL_CHOICE.approveSession;
 				await resolveApproval(approved, approved ? undefined : "denied by user");
 				if (!approved) {
@@ -430,7 +480,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		}
 
 		// 2. Emit tool_call event - extensions can block execution
-		if (this.runner.hasHandlers("tool_call")) {
+		if (this.runner?.hasHandlers("tool_call")) {
 			try {
 				const callResult = (await this.runner.emitToolCall({
 					type: "tool_call",
@@ -447,6 +497,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 						callResult.reason ||
 						`An extension blocked this ${this.tool.name} call and gave no reason. Do not retry it; tell ` +
 							"the operator which extension is blocking so they can fix or remove it.";
+					recordRefusal(this.tool.name, reason, context, undefined, callResult.subject);
 					throw new Error(reason);
 				}
 			} catch (err) {
@@ -466,7 +517,15 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		let executionError: Error | undefined;
 
 		try {
-			result = await this.tool.execute(toolCallId, params, signal, onUpdate, context);
+			result = await TOOL_EXECUTION_ENTRIES[this.#entry].invoke(
+				this.tool,
+				toolCallId,
+				params,
+				signal,
+				onUpdate,
+				context,
+				this.#sessionPolicy,
+			);
 		} catch (err) {
 			// A CANCELLATION IS NOT A FAILED CALL, so it never becomes one here. The
 			// `tool_result` path below deliberately turns a thrown error into a
@@ -488,7 +547,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		}
 
 		// Emit tool_result event - extensions can modify the result and error status
-		if (this.runner.hasHandlers("tool_result")) {
+		if (this.runner?.hasHandlers("tool_result")) {
 			const resultResult = await this.runner.emitToolResult({
 				type: "tool_result",
 				toolName: this.tool.name,

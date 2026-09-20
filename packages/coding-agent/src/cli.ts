@@ -33,6 +33,7 @@ import { parentPort } from "node:worker_threads";
 import type { CliConfig } from "@veyyon/utils/cli";
 import {
 	APP_NAME,
+	BUILD_TAG,
 	getActiveProfile,
 	MIN_BUN_VERSION,
 	migrateLegacyDefaultProfileLayout,
@@ -463,7 +464,7 @@ export async function runCli(argv: string[]): Promise<void> {
 	}
 	return logger.time("cliRun", run, {
 		bin: APP_NAME,
-		version: VERSION,
+		version: BUILD_TAG ? `${VERSION} (${BUILD_TAG})` : VERSION,
 		argv: resolved.argv,
 		commands,
 		help: showHelp,

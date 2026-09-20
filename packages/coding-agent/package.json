@@ -526,6 +526,14 @@
       "types": "./src/task/*.ts",
       "import": "./src/task/*.ts"
     },
+    "./task/topic-replenishment": {
+      "types": "./src/task/topic-replenishment.ts",
+      "import": "./src/task/topic-replenishment.ts"
+    },
+    "./tool-discovery/*": {
+      "types": "./src/tool-discovery/*.ts",
+      "import": "./src/tool-discovery/*.ts"
+    },
     "./theme/*": {
       "types": "./src/theme/*.ts",
       "import": "./src/theme/*.ts"
@@ -537,6 +545,7 @@
     "./thinking": {
       "types": "./src/thinking/index.ts",
       "import": "./src/thinking/index.ts"
+
     },
     "./tools": {
       "types": "./src/tools/index.ts",

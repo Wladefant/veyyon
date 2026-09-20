@@ -19,6 +19,7 @@ import { resolveResumableSession, type SessionInfo } from "@veyyon/kernel/sessio
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import {
 	$env,
+	BUILD_TAG,
 	directoryExists,
 	errorMessage,
 	getLogPath,
@@ -80,6 +81,7 @@ import type * as firstFrameModule from "./modes/terminal/first-frame";
 import type * as interactiveModeModule from "./modes/terminal/interactive-mode";
 import type { InteractiveMode } from "./modes/terminal/interactive-mode";
 import type { SubmittedUserInput } from "./modes/terminal/types";
+import { installTelegramNativeControlHost } from "./native-control/telegram-control-host";
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
 import { createAgentSession, discoverAuthStorage } from "./sdk";
 import type { AgentSession } from "./session/agent-session";
@@ -647,17 +649,12 @@ async function runInteractiveMode(
 	versionCheckPromise
 		.then(async release => {
 			if (!release) return;
-			// With automatic updates off, all we do is say a version exists and let
-			// the user run `veyyon update` themselves.
-			if (!settings.get("startup.autoUpdate")) {
-				mode.showNewVersionNotification(release.version);
-				return;
-			}
 			// Install in the background, reusing the release the check already
-			// resolved so the launch makes one registry round trip, not two. The
-			// running process keeps the old version either way, so both outcomes
-			// tell the user what to do next.
-			const outcome = await runAutoUpdate(VERSION, release);
+			// resolved so the launch makes one registry round trip, not two.
+			// `runAutoUpdate` enforces the opt-out settings (`startup.autoUpdate`,
+			// `updates.auto`, `VEYYON_NO_AUTO_UPDATE`) and refuses to replace custom
+			// or local builds, recording any skip in update-history.
+			const outcome = await runAutoUpdate(VERSION, release, undefined, undefined, undefined, undefined, settings);
 			if (outcome.status === "updated") {
 				mode.showUpdateReadyNotification(outcome.version, outcome.warnings);
 			} else if (outcome.status === "failed") {
@@ -1345,7 +1342,8 @@ async function runRootCommandInner(parsed: Args, rawArgs: string[], deps: RunRoo
 	});
 	modelRegistryPromise.catch(() => {});
 	if (parsedArgs.version) {
-		writeStartupNotice(parsedArgs, `${VERSION}\n`);
+		const displayVersion = BUILD_TAG ? `${VERSION} (${BUILD_TAG})` : VERSION;
+		writeStartupNotice(parsedArgs, `${displayVersion}\n`);
 		process.exit(EXIT_OK);
 	}
 
@@ -1875,6 +1873,10 @@ async function runRootCommandInner(parsed: Args, rawArgs: string[], deps: RunRoo
 				},
 				isInteractive,
 			);
+		// Publish the in-process native capability before interactive commands can
+		// activate an external adapter. This starts no poller or socket; an
+		// authorized extension can bind actor/chat credentials to this session.
+		installTelegramNativeControlHost(() => session.sessionManager.getSessionId());
 
 		// Cold-revive support: a `parked` agent ref restored from disk (the persisted-agent
 		// scan, collab mirror, resumed process) has a sessionFile but no in-memory

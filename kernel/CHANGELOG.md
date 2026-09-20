@@ -8,6 +8,7 @@
 
 ### Added
 
+- `SettingsStore.reloadSelectedConfig` validates a fresh profile and overlays atomically, applies only the product-selected paths, preserves runtime overrides, and serializes against settings saves without activating unrelated external edits.
 - `@veyyon/kernel` is a workspace member: the loader, the contribution registry and the session spine, moved out of `@veyyon/coding-agent` unchanged. It names no tool, no host and no mode, and `scripts/the-kernel-names-no-tool-and-no-host.test.ts` fails on the first edge that does.
 - `@veyyon/kernel/session/*` publishes the session spine: entries, storage backends, persistence, migrations, listing, paths, retry policy, compaction policy, machine budget and the turn's owned resources.
 - `@veyyon/kernel/loader/*` publishes plugin discovery, manifest parsing, the installed registry, the marketplace client and load-failure reporting.
@@ -21,6 +22,7 @@
 
 ### Changed
 
+- A custom message payload and a stored session entry carry `VideoContent` beside text and images, so a video attachment survives `pi.sendMessage`, persistence and rehydration.
 - Session listing reuses a per-directory index for files whose size and mtime are unchanged instead of rescanning every file, cutting a 4,825-session `/resume` list from 6.8 s to 185 ms when a session changed and 88 ms when none did.
 - Resolving a session id that no directory in the active profile holds reads the other profiles through the same per-directory index, cutting that lookup from 2.5 s to 126 ms.
 - Settings mutations and session storage writers share implementations without changing persistence, hook ordering or error behavior.
@@ -40,6 +42,10 @@
 
 ### Fixed
 
+- Selective config reload reports per-key applicability, preserves product-declared startup-bound leaves within mixed maps, and identifies unsupported edited keys without activating them ([#39](https://github.com/Wladefant/veyyon/issues/39)).
+- Order concurrent reloads monotonically so a stale read cannot overwrite a later successful reload, including ABA and no-op reloads ([#26](https://github.com/Wladefant/veyyon/issues/26)).
+- Restored selective config reload in the shared settings store, preserving runtime overrides and existing worker snapshots, rejecting invalid or racing reloads, and keeping restart-only disk edits inactive during later saves ([#26](https://github.com/Wladefant/veyyon/issues/26)).
+- Order concurrent reloads by their start generation so a stale read cannot overwrite or invalidate a newer request, including pending, ABA and no-op reloads ([#26](https://github.com/Wladefant/veyyon/issues/26)).
 - Settings queries ignore inherited object properties.
 - `Type.Pick` emits the keys it was asked for in the order they were asked for, and keeps a picked key that is own-but-non-enumerable on the validated value.
 - A session whose recorded leaf id no longer names an entry reopens on its last entry instead of on an empty conversation.

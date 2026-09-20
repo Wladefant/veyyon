@@ -240,6 +240,17 @@ export const INTERACTION_SETTINGS = {
 		},
 	},
 
+	"updates.auto": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			group: "Startup & Updates",
+			label: "Automatic Updates (updates.auto)",
+			description: "Install a newer version in the background; off means updates only when you run `veyyon update`",
+		},
+	},
+
 	"startup.updateNotice": {
 		type: "boolean",
 		default: true,
@@ -356,6 +367,35 @@ export const INTERACTION_SETTINGS = {
 			group: "Notifications",
 			label: "Ask Notification",
 			description: "Notify when the agent is blocked on a question you have not answered",
+		},
+	},
+
+	// The desktop window announces a refusal or a waiting decision on its own
+	// stack, which is silent and inside the window. These two say what else
+	// that announcement does: a sound, and a notification the desktop itself
+	// draws. Both default off, because an announcement the operator is
+	// already looking at needs neither.
+	"notify.sound": {
+		type: "enum",
+		values: ["on", "off"] as const,
+		default: "off",
+		ui: {
+			tab: "interaction",
+			group: "Notifications",
+			label: "Announcement Sound",
+			description: "Play the desktop alert sound when the window announces something",
+		},
+	},
+
+	"notify.system": {
+		type: "enum",
+		values: ["on", "off"] as const,
+		default: "off",
+		ui: {
+			tab: "interaction",
+			group: "Notifications",
+			label: "System Notification",
+			description: "Post an announcement to the desktop notification service as well as the window",
 		},
 	},
 

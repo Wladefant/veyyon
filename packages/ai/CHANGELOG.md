@@ -2,11 +2,25 @@
 
 ## [Unreleased]
 
+### Added
+
+- A `chatgpt-web` provider definition for the local `codex-chatgpt-web` Responses bridge. It carries no `login` and no `refreshToken`: the bridge authenticates its own browser side through a Chrome profile the operator signs in to once with the daemon's `setup` command, and its catalog bearer comes from the environment (`CODEX_CHATGPT_WEB_OAUTH_TOKEN`, then `OPENAI_CODEX_OAUTH_TOKEN`). The official `openai-codex` provider keeps its own flow, credentials and host unchanged.
+
+### Fixed
+
+- ChatGPT Web turns now have a five-minute total deadline across transport attempts, force the daemon's SSE transport, and report actionable connection, timeout, authentication and unavailable-model failures. Caller cancellation remains cancellation.
+- A Codex base URL that already names the Responses route is now used verbatim instead of having `/codex/responses` appended to it. OpenAI serves the route at `{base}/codex/responses`, but a Codex-compatible server need not: the local `codex-chatgpt-web` bridge installs itself into a Codex config as `openai_base_url = "http://127.0.0.1:17841/v1"` and serves `POST /v1/responses`, so every turn against it built `…/v1/responses/codex/responses` and 404'd — indistinguishable at the call site from a daemon that is not running. The existing `/backend-api`, `/backend-api/codex` and `/backend-api/codex/responses` shapes resolve exactly as before.
+- A bridge-routed Codex turn now carries the per-item turn provenance the local `codex-chatgpt-web` daemon validates. The daemon derives an execution key for every turn through `extractChatGptTurnUserRevision`, which accepts a current-turn user item only when it declares `type: "message"` AND carries `internal_chat_message_metadata_passthrough.turn_id` equal to the `turn_id` in `client_metadata["x-codex-turn-metadata"]` — the alternative it also accepts, a server-owned item `id`, is stripped from every input item by the Codex request transformer by design. The message converter emitted `{ role, content }`, so the daemon threw "ChatGPT web requires a current-turn user message for browser-session replay" and every turn ended in `response.failed`. The stamp is applied once, at the final request boundary where the turn id and the finished input array meet, so continuation and tool-return requests are covered by the same rule; it is gated on the `chatgpt-web` provider reached over a loopback base URL, so OpenAI's host and every other Codex-compatible server on loopback are sent byte-identical bodies.
+- Bridge-routed Codex requests now carry an explicit host-owned environment envelope for ordinary Full-mode `codex-chatgpt-web` turns, including text-only turns. The envelope is stamped with the current turn id and placed immediately before its user item, rather than relying on daemon instruction or thread-cache fallbacks. It names the caller's absolute session working directory and declares `permission_profile type="disabled"` with `file_system type="unrestricted"`: Veyyon provides no filesystem sandbox, and tool execution still goes through Veyyon's own gated tool layer. Missing or relative cwd produces a warning and no invented envelope; the daemon may refuse or use its other trusted context. Compaction disables local tools and does not require the envelope; sending it preserves the compaction source key, though its execution key can change. The existing provider/loopback gate leaves official OpenAI and other Codex-compatible request bodies unchanged. Real-account models, turn, cancellation and tool-call smoke remain unverified.
 ## [1.5.0] - 2026-09-18
 
 ### Breaking Changes
 
 - Provider-specific test override setters are replaced by `setProviderModuleOverrideForTest(api, module)`.
+
+### Added
+
+- `VideoContent` support across provider serialization and fallback placeholder handling.
 
 ### Changed
 
@@ -46,6 +60,8 @@
 - Both streaming gateway routes (the format endpoints and the pi-native fast path) abort the upstream call on a closed client response through one SSE cancel hook; no behavior change.
 
 ### Fixed
+
+- ChatGPT Codex server-side compaction posts to the codex responses route instead of the retired `/responses/compact` route, which answered 404 and turned the session over to local compaction for the rest of its life.
 
 - Corrected comments that named a distribution channel or runtime API the project does not use; no behavior change.
 - A stream that stalls after its first event ("<provider> stream stalled while waiting for the next event") classifies as a timeout as well as transient, so auto-compaction moves to the next candidate model instead of re-sending the full context to the model that stalled up to `retry.maxRetries` times.
