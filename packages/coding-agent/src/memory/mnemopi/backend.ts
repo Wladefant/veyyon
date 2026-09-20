@@ -30,6 +30,7 @@ import {
 	type MnemopiProviderOptions,
 	truncateApproxTokens,
 } from "./config";
+import { mnemopiEmbedClient } from "./embed-client";
 import {
 	getMnemopiScopedBanks,
 	getMnemopiScopedDbPaths,
@@ -92,6 +93,9 @@ export const mnemopiBackend: MemoryBackend = {
 
 		try {
 			const config = await loadMnemopiConfigWithProviders(settings, agentDir, modelRegistry, session, sessionId);
+			// The embeddings subprocess is a process-wide singleton, so the window
+			// is applied to the client rather than carried per session state.
+			mnemopiEmbedClient.setIdleUnloadMs(config.embedIdleUnloadMs);
 			await Promise.all([loadMnemopi(), loadMnemopiCore()]);
 			const state = new MnemopiSessionState({ sessionId, config, session });
 			const previous = setMnemopiSessionState(session, state);

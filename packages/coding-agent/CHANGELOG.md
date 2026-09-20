@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Terminate the mnemopi embedding worker subprocess after a configurable idle period (`mnemopi.embedIdleUnloadMs`, default 5 minutes) and lazily relaunch it on the next embed request, releasing the loaded ONNX model's ~1.25 GB commit charge during idle periods ([#54](https://github.com/Wladefant/veyyon/issues/54)).
+
 ## [1.5.0] - 2026-09-18
 
 ### Breaking Changes

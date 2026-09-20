@@ -4,6 +4,7 @@ import * as path from "node:path";
 import type { MnemopiOptions } from "@veyyon/mnemopi";
 import { getMemoriesDir, logger } from "@veyyon/utils";
 import type { Settings } from "../../config/settings";
+import { parseEmbedIdleUnloadMs } from "./embed-client";
 
 export type MnemopiLlmMode = "none" | "smol" | "remote";
 
@@ -50,6 +51,13 @@ export interface MnemopiBackendConfig {
 	recallContextTurns: number;
 	recallMaxQueryChars: number;
 	injectionTokenLimit: number;
+	/**
+	 * Idle window, in milliseconds, after which the embeddings subprocess is
+	 * unloaded; `0` keeps it for the session. Validated here rather than at the
+	 * client so a bad `mnemopi.embedIdleUnloadMs` is rejected where the config
+	 * is read.
+	 */
+	embedIdleUnloadMs: number;
 	debug: boolean;
 	providerOptions: MnemopiProviderOptions;
 	/** What the operator asked for. The client itself is resolved elsewhere; see {@link MnemopiLlmRequest}. */
@@ -94,6 +102,7 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 		recallContextTurns: Math.max(1, Math.floor(settings.get("mnemopi.recallContextTurns"))),
 		recallMaxQueryChars: Math.max(256, Math.floor(settings.get("mnemopi.recallMaxQueryChars"))),
 		injectionTokenLimit: Math.max(256, Math.floor(settings.get("mnemopi.injectionTokenLimit"))),
+		embedIdleUnloadMs: parseEmbedIdleUnloadMs(settings.get("mnemopi.embedIdleUnloadMs")),
 		debug: settings.get("mnemopi.debug"),
 		providerOptions: {
 			noEmbeddings: settings.get("mnemopi.noEmbeddings"),

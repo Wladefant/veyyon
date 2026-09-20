@@ -5,7 +5,7 @@ import { AUTO_COMPACTION_THRESHOLD } from "@veyyon/agent-core/compaction/thresho
 import { INSTRUMENTATION_LEVELS } from "@veyyon/ai/instrumentation";
 import { unsetNumberOption } from "@veyyon/kernel/settings/optional-number";
 import { DEFAULT_TOKEN_BUDGET } from "argot/constants";
-import { EMPTY_STRING_ARRAY, HINDSIGHT_RECALL_TYPES_DEFAULT } from "./shared";
+import { DEFAULT_EMBED_IDLE_UNLOAD_MS, EMPTY_STRING_ARRAY, HINDSIGHT_RECALL_TYPES_DEFAULT } from "./shared";
 
 /** Context domain slice of SETTINGS_SCHEMA — composed in ../settings-schema.ts. */
 export const CONTEXT_SETTINGS = {
@@ -810,6 +810,20 @@ export const CONTEXT_SETTINGS = {
 			label: "Mnemopi Disable Embeddings",
 			description: "Force deterministic FTS-only recall instead of vector embeddings",
 			condition: "mnemopiActive",
+		},
+	},
+	"mnemopi.embedIdleUnloadMs": {
+		type: "number",
+		default: DEFAULT_EMBED_IDLE_UNLOAD_MS,
+		ui: {
+			tab: "memory",
+			group: "Mnemopi",
+			label: "Embedding Worker Idle Unload",
+			description:
+				"Milliseconds the local embedding subprocess may sit idle before it is unloaded; it respawns on the next recall or retain. 0 keeps it loaded for the whole session.",
+			condition: "mnemopiActive",
+			keywords: ["memory", "ram", "embeddings", "worker", "unload", "idle"],
+			min: 0,
 		},
 	},
 	"mnemopi.embeddingModel": {

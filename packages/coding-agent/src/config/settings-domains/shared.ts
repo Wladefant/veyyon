@@ -47,3 +47,19 @@ export const DEFAULT_ARTIFACT_SPILL_THRESHOLD_KB = 50;
  * this value under the name its callers and the tool docs already use.
  */
 export const DEFAULT_INLINE_OUTPUT_MAX_BYTES = DEFAULT_ARTIFACT_SPILL_THRESHOLD_KB * 1024;
+
+/**
+ * Default for `mnemopi.embedIdleUnloadMs`, and the window `MnemopiEmbedClient`
+ * runs on before anything configures it.
+ *
+ * It lives here for the same reason as {@link DEFAULT_INLINE_FLOOR_FRACTION}:
+ * the client is in `memory/mnemopi`, which a settings domain must not import,
+ * and writing 120000 down twice lets the schema default and the compiled
+ * default drift the first time either is tuned.
+ *
+ * Five minutes: the embeddings subprocess pins ~1.25 GB of commit charge for the
+ * loaded ONNX model and does nothing between a `retain` and the next `recall`
+ * (issue #54), so a conversational burst of memory writes reuses one worker
+ * while an idle session stops paying for the model.
+ */
+export const DEFAULT_EMBED_IDLE_UNLOAD_MS = 300_000;

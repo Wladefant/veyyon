@@ -1,6 +1,7 @@
 // Owners, not the `@veyyon/utils` barrel: 2 modules against 74.
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage } from "@veyyon/utils/type-guards";
+import { DEFAULT_EMBED_IDLE_UNLOAD_MS } from "../../config/settings-domains/shared";
 import {
 	createUnavailableWorker,
 	createWorkerHandle,
@@ -30,6 +31,22 @@ export type MnemopiEmbedWorkerHandle = WorkerHandle<MnemopiEmbedWorkerInbound, M
 type PendingRequest =
 	| { kind: "init"; model: MnemopiEmbedModelId; resolve: (ok: boolean) => void }
 	| { kind: "embed"; model: MnemopiEmbedModelId; resolve: (vectors: number[][] | Error) => void };
+
+/**
+ * Validate an idle-unload window, in milliseconds. `0` disables unloading and
+ * keeps the worker for the whole session; anything else must be a finite,
+ * non-negative integer.
+ *
+ * Loud rather than clamped: a mistyped `mnemopi.embedIdleUnloadMs` that we
+ * silently rounded would leave the operator with a worker that never unloads
+ * (the very defect this setting exists to fix) and no way to see why.
+ */
+export function parseEmbedIdleUnloadMs(value: unknown): number {
+	if (typeof value === "number" && Number.isInteger(value) && value >= 0) return value;
+	throw new Error(
+		`mnemopi.embedIdleUnloadMs must be 0 (never unload) or a positive whole number of milliseconds; received ${String(value)}`,
+	);
+}
 
 /**
  * Hidden subcommand on the main CLI that boots the mnemopi embeddings worker
@@ -88,9 +105,34 @@ export class MnemopiEmbedClient {
 	#pending = new Map<string, PendingRequest>();
 	#nextRequestId = 0;
 	#spawnWorker: () => MnemopiEmbedWorkerHandle;
+	#idleUnloadMs: number;
+	#idleTimer: NodeJS.Timeout | undefined;
+	/** The kill a request arriving mid-unload waits out before it spawns a replacement. */
+	#teardown: Promise<void> | null = null;
 
-	constructor(spawnWorker: () => MnemopiEmbedWorkerHandle = spawnMnemopiEmbedWorker) {
+	constructor(
+		spawnWorker: () => MnemopiEmbedWorkerHandle = spawnMnemopiEmbedWorker,
+		idleUnloadMs: number = DEFAULT_EMBED_IDLE_UNLOAD_MS,
+	) {
 		this.#spawnWorker = spawnWorker;
+		this.#idleUnloadMs = parseEmbedIdleUnloadMs(idleUnloadMs);
+	}
+
+	/**
+	 * Re-point the idle window at a configured value. Throws on anything
+	 * {@link parseEmbedIdleUnloadMs} rejects, and takes effect immediately: a
+	 * worker already sitting idle is re-armed against the new window, and `0`
+	 * disarms the timer so the worker lives for the rest of the session.
+	 */
+	setIdleUnloadMs(value: unknown): void {
+		this.#idleUnloadMs = parseEmbedIdleUnloadMs(value);
+		this.#cancelIdleTimer();
+		this.#armIdleTimer();
+	}
+
+	/** The idle window currently in force, in milliseconds. `0` means never unload. */
+	get idleUnloadMs(): number {
+		return this.#idleUnloadMs;
 	}
 
 	/**
@@ -106,7 +148,7 @@ export class MnemopiEmbedClient {
 		cacheDir: string | undefined,
 	): Promise<MnemopiSubprocessEmbeddingModel | null> {
 		try {
-			const worker = this.#ensureWorker();
+			const worker = await this.#acquireWorker();
 			const id = String(++this.#nextRequestId);
 			const { promise, resolve } = Promise.withResolvers<boolean>();
 			this.#pending.set(id, { kind: "init", model, resolve });
@@ -116,6 +158,7 @@ export class MnemopiEmbedClient {
 				if (!ok) return null;
 			} finally {
 				this.#pending.delete(id);
+				this.#armIdleTimer();
 			}
 		} catch (error) {
 			logger.warn("mnemopi-embed: init failed; local embeddings unavailable for this model", {
@@ -128,6 +171,7 @@ export class MnemopiEmbedClient {
 	}
 
 	async terminate(): Promise<void> {
+		this.#cancelIdleTimer();
 		const worker = this.#worker;
 		this.#worker = null;
 		this.#unsubscribeMessage?.();
@@ -139,10 +183,22 @@ export class MnemopiEmbedClient {
 			else pending.resolve(new Error("mnemopi embed worker terminated"));
 		}
 		this.#pending.clear();
+		if (!worker) return;
+		// Publish the kill BEFORE awaiting it: `#acquireWorker` waits on this
+		// promise, so an embed that lands while the subprocess is dying joins the
+		// respawn instead of racing a second child into existence.
+		const teardown = (async () => {
+			try {
+				await worker.terminate();
+			} catch {
+				// Already gone.
+			}
+		})();
+		this.#teardown = teardown;
 		try {
-			await worker?.terminate();
-		} catch {
-			// Already gone.
+			await teardown;
+		} finally {
+			if (this.#teardown === teardown) this.#teardown = null;
 		}
 	}
 
@@ -152,7 +208,7 @@ export class MnemopiEmbedClient {
 		texts: string[],
 		batchSize: number | undefined,
 	): Promise<number[][]> {
-		const worker = this.#ensureWorker();
+		const worker = await this.#acquireWorker();
 		const id = String(++this.#nextRequestId);
 		const { promise, resolve } = Promise.withResolvers<number[][] | Error>();
 		this.#pending.set(id, { kind: "embed", model, resolve });
@@ -168,6 +224,7 @@ export class MnemopiEmbedClient {
 			return result;
 		} finally {
 			this.#pending.delete(id);
+			this.#armIdleTimer();
 		}
 	}
 
@@ -185,13 +242,57 @@ export class MnemopiEmbedClient {
 		yield vectors;
 	}
 
-	#ensureWorker(): MnemopiEmbedWorkerHandle {
+	/**
+	 * The live worker, spawning one when there is none.
+	 *
+	 * Async because of the unload race: {@link terminate} nulls `#worker`
+	 * synchronously and then awaits the kill, so a request landing in that
+	 * window would otherwise spawn a second subprocess beside a dying one. It
+	 * waits out the teardown in flight and comes back to a clean slot instead.
+	 */
+	async #acquireWorker(): Promise<MnemopiEmbedWorkerHandle> {
+		// Disarm first: a request in flight must never be killed under itself,
+		// and the `finally` of every request re-arms once the map drains.
+		this.#cancelIdleTimer();
+		const teardown = this.#teardown;
+		if (teardown) await teardown;
 		if (this.#worker) return this.#worker;
 		const worker = this.#spawnWorker();
 		this.#worker = worker;
 		this.#unsubscribeMessage = worker.onMessage(message => this.#handleMessage(message));
 		this.#unsubscribeError = worker.onError(error => this.#handleWorkerError(error));
 		return worker;
+	}
+
+	/**
+	 * Start the unload countdown once nothing is in flight.
+	 *
+	 * Armed from the `finally` of every request rather than from a periodic
+	 * sweep, so the window is measured from the last completed round-trip. A
+	 * non-empty pending map means a request is still awaiting its reply, and
+	 * killing the worker there would reject it — the timer waits for the map to
+	 * drain instead.
+	 */
+	#armIdleTimer(): void {
+		this.#cancelIdleTimer();
+		if (this.#idleUnloadMs === 0) return;
+		if (!this.#worker || this.#pending.size > 0) return;
+		const timer = setTimeout(() => {
+			this.#idleTimer = undefined;
+			if (!this.#worker || this.#pending.size > 0) return;
+			logger.debug("mnemopi-embed: unloading idle worker", { idleUnloadMs: this.#idleUnloadMs });
+			void this.terminate();
+		}, this.#idleUnloadMs);
+		// The unload is an optimisation; it must never be the reason the agent
+		// process stays alive at exit.
+		timer.unref?.();
+		this.#idleTimer = timer;
+	}
+
+	#cancelIdleTimer(): void {
+		if (!this.#idleTimer) return;
+		clearTimeout(this.#idleTimer);
+		this.#idleTimer = undefined;
 	}
 
 	#handleMessage(message: MnemopiEmbedWorkerOutbound): void {
