@@ -32,15 +32,6 @@ class ToolExecutionEntry {
 	}
 
 	/**
-	 * Fence the call, then hand back a context that can be forwarded to a tool:
-	 * the supplied one, or the ambient one when the caller omitted it. A
-	 * policy-only frame yields `undefined`, because it is not a tool context.
-	 */
-	assertContext(tool: { name: string }, params: unknown, context?: ToolPolicyFrame): AgentToolContext | undefined {
-		return asToolContext(this.assert(tool, params, context));
-	}
-
-	/**
 	 * The frame that answers the fence, and the frame a tool may be handed.
 	 *
 	 * A tool taken off a session registry is invoked directly — the cursor
