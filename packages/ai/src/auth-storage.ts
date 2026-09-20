@@ -3567,6 +3567,7 @@ export class AuthStorage {
 		if (this.#configOverrides.has(provider)) return true;
 		if (this.#getCredentialsForProvider(provider).length > 0) return true;
 		if (getEnvApiKey(provider)) return true;
+		if (this.#chatgptWebOAuthFallback(provider)) return true;
 		if (this.#fallbackResolver?.(provider)) return true;
 		return false;
 	}
@@ -3612,11 +3613,26 @@ export class AuthStorage {
 		return undefined;
 	}
 
+	/** Reuse Codex OAuth only when ChatGPT Web has no credential source of its own. */
+	#chatgptWebOAuthFallback(provider: string): boolean {
+		return (
+			provider === "chatgpt-web" &&
+			!this.#runtimeOverrides.has(provider) &&
+			!this.#configOverrides.has(provider) &&
+			this.#getCredentialsForProvider(provider).length === 0 &&
+			!getEnvApiKey(provider) &&
+			this.#getCredentialsForProvider("openai-codex").some(credential => credential.type === "oauth")
+		);
+	}
+
 	/**
 	 * Check if OAuth credentials are configured for a provider.
 	 */
 	hasOAuth(provider: string): boolean {
-		return this.#getCredentialsForProvider(provider).some(credential => credential.type === "oauth");
+		return (
+			this.#getCredentialsForProvider(provider).some(credential => credential.type === "oauth") ||
+			this.#chatgptWebOAuthFallback(provider)
+		);
 	}
 
 	/**
@@ -6295,6 +6311,13 @@ export class AuthStorage {
 			return this.#configValueResolver(apiKeySelection.credential.key);
 		}
 
+		if (this.#chatgptWebOAuthFallback(provider)) {
+			const selection = this.#selectCredentialByType("openai-codex", "oauth");
+			if (selection && Number.isFinite(selection.credential.expires) && selection.credential.expires > Date.now()) {
+				return selection.credential.access;
+			}
+		}
+
 		return this.#fallbackResolver?.(provider) ?? undefined;
 	}
 
@@ -6359,6 +6382,11 @@ export class AuthStorage {
 		if (apiKeySelection) {
 			this.#recordSessionCredential(provider, sessionId, "api_key", apiKeySelection.index);
 			return this.#configValueResolver(apiKeySelection.credential.key);
+		}
+
+		if (this.#chatgptWebOAuthFallback(provider)) {
+			const resolved = await this.#resolveOAuthSelection("openai-codex", sessionId, options);
+			if (resolved) return resolved.apiKey;
 		}
 
 		// Fall back to custom resolver (e.g., models.json custom providers)
