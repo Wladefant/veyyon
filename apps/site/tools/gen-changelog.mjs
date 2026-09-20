@@ -193,6 +193,27 @@ export function normalizeVersion(v) {
 }
 
 /**
+ * Is this git tag a product release veyyon cut?
+ *
+ * `scripts/release.ts verify-tag` refuses any ref that is not `vX.Y.Z`, so that
+ * shape is the whole set of tags a release can carry, and every one of them has
+ * a `## [X.Y.Z]` section because `scripts/release.ts` finalizes it in the bump
+ * commit. Anything else on the tag list was pushed for some other purpose and
+ * describes no version: this repository carries `gui-repair-evidence-33a7dbbc`
+ * and `gui-settings-evidence-95b2ea57`, which are GitHub Releases used to host
+ * proof images for a pull request, `v0.0.0-gui-assets`, which hosts seven
+ * interaction assets, and `pre-upstream-1.5.0-merge`, a history marker.
+ *
+ * Those three published releases have no CHANGELOG entry and never will, so
+ * reconciling them as versions made the site build fail asking for entries that
+ * would be lies. The leading-`v` test alone is not enough — `v0.0.0-gui-assets`
+ * passes it — so the match is anchored at both ends.
+ */
+export function isProductReleaseTag(tag) {
+	return /^v\d+\.\d+\.\d+$/.test(String(tag).trim());
+}
+
+/**
  * Fetch published GitHub Releases for `owner/repo`. Public repos need no auth.
  * Returns the raw release objects (tag_name, published_at, html_url, draft,
  * prerelease) and throws on network, HTTP, or payload failure.
@@ -253,6 +274,9 @@ export function reconcile(releases, ghReleases) {
 	const publishedByVersion = new Map();
 	for (const gh of ghReleases) {
 		if (!gh || gh.draft || !gh.published_at || !gh.tag_name) continue;
+		// A tag that is not `vX.Y.Z` names no version, so it can neither annotate a
+		// CHANGELOG entry nor be missing one.
+		if (!isProductReleaseTag(gh.tag_name)) continue;
 		publishedByVersion.set(normalizeVersion(gh.tag_name), {
 			publishedDate: String(gh.published_at).slice(0, 10),
 			publishedAt: gh.published_at,
