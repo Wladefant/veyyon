@@ -25,7 +25,9 @@ import { type ExtensionModule, extensionModuleCapability } from "../../discovery
 import { type Hook, hookCapability } from "../../discovery/capability/hook";
 import { discoverExtensionModulePaths, getExtensionNameFromPath, pluginsRootFor } from "../../discovery/helpers";
 import { type ExecOptions, execCommand, withSessionCpuExec } from "../../exec/exec";
+import type { WorkerSummary } from "../../native-control/telegram-control-bridge";
 import type { CustomMessagePayload } from "../../session/messages";
+import type { IrcDeliveryReceipt } from "../../task/irc-bus";
 import { EventBus } from "../../utils/event-bus";
 // Runtime self-reference: dereference this namespace only inside loader functions to keep the index.ts cycle safe.
 import { type CodingAgentApi, loadCodingAgentApi } from "../coding-agent-api";
@@ -38,6 +40,7 @@ import type {
 	ExtensionContext,
 	ExtensionFactory,
 	ExtensionRuntime as IExtensionRuntime,
+	ListWorkersOptions,
 	LoadExtensionsResult,
 	LoadedExtension,
 	MessageRenderer,
@@ -126,6 +129,14 @@ export class ExtensionRuntime implements IExtensionRuntime {
 	}
 
 	setSessionName(): Promise<void> {
+		throw new ExtensionRuntimeNotInitializedError();
+	}
+
+	listWorkers(): WorkerSummary[] {
+		throw new ExtensionRuntimeNotInitializedError();
+	}
+
+	steerWorker(): Promise<IrcDeliveryReceipt> {
 		throw new ExtensionRuntimeNotInitializedError();
 	}
 }
@@ -273,6 +284,14 @@ class ConcreteExtensionAPI implements ExtensionAPI {
 
 	setSessionName(name: string): Promise<void> {
 		return this.runtime.setSessionName(name);
+	}
+
+	listWorkers(options?: ListWorkersOptions): WorkerSummary[] {
+		return this.runtime.listWorkers(options);
+	}
+
+	steerWorker(workerId: string, message: string): Promise<IrcDeliveryReceipt> {
+		return this.runtime.steerWorker(workerId, message);
 	}
 
 	registerProvider(name: string, config: ProviderConfig): void {

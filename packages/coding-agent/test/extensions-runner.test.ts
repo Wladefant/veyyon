@@ -16,6 +16,7 @@ import {
 	testSetExtensionHandlerTimeoutMs,
 } from "@veyyon/coding-agent/extensibility/extensions/runner";
 import { APPROVAL_SELECT_OPTIONS, ExtensionToolWrapper } from "@veyyon/coding-agent/extensibility/extensions/wrapper";
+import { sessionWorkerAccess } from "@veyyon/coding-agent/native-control/telegram-control-bridge";
 import { Type } from "@veyyon/kernel/registry/typebox";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { attachFaultSink, type Fault, getProjectAgentDir, logger, TempDir } from "@veyyon/utils";
@@ -137,6 +138,7 @@ describe("ExtensionRunner", () => {
 				setThinkingLevel: () => {},
 				getSessionName: () => undefined,
 				setSessionName: async () => {},
+				...sessionWorkerAccess(() => undefined),
 			},
 			{
 				getModel: () => undefined,
@@ -1263,6 +1265,7 @@ describe("ExtensionRunner", () => {
 					setThinkingLevel: () => {},
 					getSessionName: () => undefined,
 					setSessionName: async () => {},
+					...sessionWorkerAccess(() => undefined),
 				},
 				{
 					getModel: () => undefined,
@@ -1327,6 +1330,7 @@ describe("ExtensionRunner", () => {
 					setSessionName: async name => {
 						await sessionManager.setSessionName(name);
 					},
+					...sessionWorkerAccess(() => undefined),
 				},
 				{
 					getModel: () => undefined,
@@ -1385,6 +1389,7 @@ describe("ExtensionRunner", () => {
 					setThinkingLevel: () => {},
 					getSessionName: () => undefined,
 					setSessionName: async () => {},
+					...sessionWorkerAccess(() => undefined),
 				},
 				{
 					getModel: () => undefined,
@@ -2080,6 +2085,7 @@ describe("ExtensionRunner", () => {
 					setThinkingLevel: () => {},
 					getSessionName: () => sessionManager.getSessionName(),
 					setSessionName: async () => {},
+					...sessionWorkerAccess(() => undefined),
 				},
 				{
 					getModel: () => undefined,

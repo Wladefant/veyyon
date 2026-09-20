@@ -1,5 +1,5 @@
 import * as crypto from "node:crypto";
-import { type AgentRef, AgentRegistry } from "../registry/agent-registry";
+import { type AgentKind, type AgentRef, AgentRegistry, type AgentStatus } from "../registry/agent-registry";
 import { IrcBus, type IrcDeliveryReceipt } from "../task/irc-bus";
 
 const DEFAULT_PAGE_SIZE = 20;
@@ -134,13 +134,21 @@ export interface RenderWorkerOptions {
 	includeAdvisors?: boolean;
 }
 
+/**
+ * The one predicate deciding whether a ref is a worker this caller may see.
+ *
+ * Shared by the rendered roster and the structured one so the two can never
+ * disagree about who is in the session.
+ */
+function isVisibleWorker(ref: AgentRef, options: { scope?: string; includeAdvisors?: boolean }): boolean {
+	if (!options.includeAdvisors && ref.kind === "advisor") return false;
+	if (options.scope !== undefined && ref.scope !== options.scope) return false;
+	return true;
+}
+
 export function renderWorkerRoster(refs: readonly AgentRef[], options: RenderWorkerOptions = {}): string {
 	const now = options.now ?? Date.now();
-	const workers = refs.filter(ref => {
-		if (!options.includeAdvisors && ref.kind === "advisor") return false;
-		if (options.scope !== undefined && ref.scope !== options.scope) return false;
-		return true;
-	});
+	const workers = refs.filter(ref => isVisibleWorker(ref, options));
 
 	if (workers.length === 0) {
 		return "<b>Live Workers (0):</b>\n<i>No active workers registered.</i>";
@@ -159,6 +167,73 @@ export function renderWorkerRoster(refs: readonly AgentRef[], options: RenderWor
 		);
 	}
 	return lines.join("\n");
+}
+
+/**
+ * A live worker as an extension sees it: structured, not rendered.
+ *
+ * `renderWorkerRoster` answers the Telegram case by emitting HTML, and an
+ * extension that wants its own presentation (a different chat surface, a status
+ * line, a filter) cannot un-render that string. So the same filter is exposed
+ * once more as data, and both go through {@link workersInScope} rather than
+ * repeating the predicate, because a worker that appears in one and is missing
+ * from the other is the bug this shape exists to prevent.
+ */
+export interface WorkerSummary {
+	id: string;
+	name: string;
+	kind: AgentKind;
+	status: AgentStatus;
+	model?: string;
+	/** Display-only gist of current work, present only while running. */
+	activity?: string;
+	createdAt: number;
+	lastActivity: number;
+	/** False exactly when the worker holds no live session (parked or aborted). */
+	live: boolean;
+}
+
+export interface WorkersInScopeOptions {
+	scope?: string;
+	includeAdvisors?: boolean;
+	registry?: AgentRegistry;
+}
+
+/**
+ * The workers a caller bound to `scope` may see, newest activity first.
+ *
+ * Advisors are excluded by default because they are read-only transcripts that
+ * cannot be messaged: listing one invites a steer that `sendWorkerMessage` then
+ * refuses. An undefined `scope` means "every conversation in this process" and
+ * is for a caller that has no session of its own; a session-bound caller passes
+ * its scope or it lists every other conversation's workers as if they were its.
+ */
+export function workersInScope(options: WorkersInScopeOptions = {}): AgentRef[] {
+	const registry = options.registry ?? AgentRegistry.global();
+	return registry
+		.list()
+		.filter(ref => isVisibleWorker(ref, options))
+		.sort((a, b) => b.lastActivity - a.lastActivity || a.id.localeCompare(b.id));
+}
+
+export function toWorkerSummary(ref: AgentRef): WorkerSummary {
+	const activity = sanitized(ref.activity, MAX_SUMMARY_CHARS);
+	return {
+		id: ref.id,
+		name: sanitized(ref.displayName, MAX_SUMMARY_CHARS) ?? ref.id,
+		kind: ref.kind,
+		status: ref.status,
+		...(ref.model ? { model: ref.model } : {}),
+		...(activity ? { activity } : {}),
+		createdAt: ref.createdAt,
+		lastActivity: ref.lastActivity,
+		live: ref.session !== null,
+	};
+}
+
+/** Structured roster for a caller bound to `scope`. */
+export function listWorkersInScope(options: WorkersInScopeOptions = {}): WorkerSummary[] {
+	return workersInScope(options).map(toWorkerSummary);
 }
 
 export interface SendWorkerMessageOptions {
@@ -201,6 +276,83 @@ export async function sendWorkerMessage(
 		to: target,
 		body: text.trim(),
 	});
+}
+
+/**
+ * The conversation an agent belongs to, or undefined when nothing claims it.
+ *
+ * A subagent's scope is its root conversation, not its own session id, so a
+ * host wiring extension actions for a spawned agent resolves it through the
+ * registry instead of reading the session it happens to be driving.
+ */
+export function scopeOfAgent(agentId: string, registry?: AgentRegistry): string | undefined {
+	return (registry ?? AgentRegistry.global()).get(agentId)?.scope;
+}
+
+/**
+ * Session-scoped worker reads and steers, for a host wiring extension actions.
+ *
+ * The scope is read through a callback rather than captured, because `/new`,
+ * `/resume` and `/move` re-root the driving conversation while the same
+ * extension stays loaded: a captured id would keep answering for the session
+ * the extension was loaded in, which is how a roster outlives its conversation.
+ */
+export interface SessionWorkerAccess {
+	listWorkers(options?: { includeAdvisors?: boolean }): WorkerSummary[];
+	steerWorker(workerId: string, message: string): Promise<IrcDeliveryReceipt>;
+}
+
+export interface SessionWorkerAccessOptions {
+	/** Origin recorded on a steer, so a worker can tell who moved it. */
+	sender?: string;
+	registry?: AgentRegistry;
+	bus?: IrcBus;
+}
+
+export function sessionWorkerAccess(
+	currentScope: () => string | undefined,
+	options: SessionWorkerAccessOptions = {},
+): SessionWorkerAccess {
+	return {
+		listWorkers: (listOptions = {}) => {
+			const scope = currentScope();
+			// An unresolved scope lists NOTHING, where `listWorkersInScope`
+			// would read undefined as "every conversation in this process". The
+			// difference matters on a host holding several conversations: the
+			// permissive reading hands one extension another operator's roster.
+			if (scope === undefined) return [];
+			return listWorkersInScope({
+				scope,
+				...(listOptions.includeAdvisors ? { includeAdvisors: true } : {}),
+				...(options.registry ? { registry: options.registry } : {}),
+			});
+		},
+		steerWorker: async (workerId, message) => {
+			// Refused here rather than sent, because an empty body reaches the
+			// worker as a turn with nothing in it: it pays for a turn, reads no
+			// instruction, and the receipt would have said "delivered".
+			if (!message.trim()) {
+				return {
+					to: workerId.trim(),
+					outcome: "failed",
+					error: "Refusing to steer with an empty message.",
+				};
+			}
+			const scope = currentScope();
+			if (scope === undefined) {
+				return {
+					to: workerId.trim(),
+					outcome: "failed",
+					error: "This session has no registered conversation, so its workers cannot be addressed.",
+				};
+			}
+			return await sendWorkerMessage(options.bus ?? IrcBus.global(), workerId, message, {
+				sender: options.sender ?? "Extension",
+				...(options.registry ? { registry: options.registry } : {}),
+				scope,
+			});
+		},
+	};
 }
 
 export function formatWorkerMessageReceipt(receipt: IrcDeliveryReceipt): string {
@@ -362,16 +514,11 @@ export class TelegramNativeControlBridge {
 
 	async sendMessage(request: SendWorkerMessageRequest): Promise<WorkerMessageReceipt> {
 		this.#authorize(request);
-		const receipt = await sendWorkerMessage(
-			this.#bus,
-			request.to,
-			request.message,
-			{
-				sender: `Telegram:${this.#binding.actorId}`,
-				registry: this.#registry,
-				scope: this.#binding.sessionId,
-			},
-		);
+		const receipt = await sendWorkerMessage(this.#bus, request.to, request.message, {
+			sender: `Telegram:${this.#binding.actorId}`,
+			registry: this.#registry,
+			scope: this.#binding.sessionId,
+		});
 		return {
 			to: receipt.to,
 			outcome: receipt.outcome,
