@@ -2445,8 +2445,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// Wrap every tool with `ExtensionToolWrapper` so the per-tool approval gate runs on every
 		// call site, regardless of whether any user extensions are loaded. See the runner-construction
 		// comment above for the safety invariant this enforces.
+		//
+		// `sessionPolicy` is the standing refusal policy of THIS session, read by the
+		// refusal fence when a caller reaches one of these tools with no context of
+		// its own — `session.getToolByName(...)`, the cursor bridge, an eval snippet.
+		// Those calls carry the session's refusals either way; without it the fence
+		// has no policy to judge them against.
+		const sessionPolicy = () => toolContextStore.getContext();
 		for (const tool of toolRegistry.values()) {
-			toolRegistry.set(tool.name, new ExtensionToolWrapper(tool, extensionRunner));
+			toolRegistry.set(tool.name, new ExtensionToolWrapper(tool, extensionRunner, "session.tools", sessionPolicy));
 		}
 
 		// `resolve` is hidden but must stay in the registry whenever any code path can invoke it:
@@ -2465,7 +2472,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			if (resolveTool) {
 				toolRegistry.set(
 					resolveTool.name,
-					new ExtensionToolWrapper(wrapToolWithMetaNotice(resolveTool), extensionRunner),
+					new ExtensionToolWrapper(
+						wrapToolWithMetaNotice(resolveTool),
+						extensionRunner,
+						"session.tools",
+						sessionPolicy,
+					),
 				);
 				builtInRegistryToolNames.add(resolveTool.name);
 			}
@@ -2482,7 +2494,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const searchTool: Tool = new SearchToolBm25Tool(toolSession);
 			toolRegistry.set(
 				searchTool.name,
-				new ExtensionToolWrapper(wrapToolWithMetaNotice(searchTool), extensionRunner) as Tool,
+				new ExtensionToolWrapper(
+					wrapToolWithMetaNotice(searchTool),
+					extensionRunner,
+					"session.tools",
+					sessionPolicy,
+				) as Tool,
 			);
 			builtInRegistryToolNames.add(searchTool.name);
 		}
@@ -2507,7 +2524,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				const searchTool: Tool = new SearchToolBm25Tool(toolSession);
 				toolRegistry.set(
 					searchTool.name,
-					new ExtensionToolWrapper(wrapToolWithMetaNotice(searchTool), extensionRunner) as Tool,
+					new ExtensionToolWrapper(
+						wrapToolWithMetaNotice(searchTool),
+						extensionRunner,
+						"session.tools",
+						sessionPolicy,
+					) as Tool,
 				);
 			}
 			if (!liveSession.getActiveToolNames().includes(TOOL.search_tool_bm25)) {
@@ -2525,7 +2547,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			})) as unknown as AgentTool | null;
 			if (!sshTool) return null;
 			const wrapped = wrapToolWithMetaNotice(sshTool);
-			return new ExtensionToolWrapper(wrapped, extensionRunner) as AgentTool;
+			return new ExtensionToolWrapper(wrapped, extensionRunner, "session.tools", sessionPolicy) as AgentTool;
 		};
 
 		let cursorEventEmitter: ((event: AgentEvent) => void) | undefined;

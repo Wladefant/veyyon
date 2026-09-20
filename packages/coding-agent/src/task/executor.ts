@@ -57,6 +57,7 @@ import type { LocalProtocolOptions } from "../internal-urls";
 import type { MCPManager } from "../mcp/manager";
 import type { HindsightSessionState } from "../memory/hindsight/state";
 import type { MnemopiSessionState } from "../memory/mnemopi/state";
+import { scopeOfAgent, sessionWorkerAccess } from "../native-control/telegram-control-bridge";
 import { agentPrompts } from "../prompts/agent/rows";
 import { AgentLifecycleManager, syncStatusWithTurns } from "../registry/agent-lifecycle";
 import { AgentRegistry } from "../registry/agent-registry";
@@ -3324,6 +3325,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						setSessionName: async name => {
 							await session.sessionManager.setSessionName(name, "user");
 						},
+						// A spawned agent's roster is its ROOT conversation, which is
+						// not the session it drives, so the scope comes from its own
+						// registry ref rather than `getSessionId()`.
+						...sessionWorkerAccess(() => scopeOfAgent(id), { sender: id }),
 					},
 					{
 						getModel: () => session.model,

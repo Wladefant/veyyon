@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-18
+
 ### Breaking Changes
 
 - `@veyyon/tui` exports rendering only. The string, escape, keyboard, mouse, motion and layout-math primitives it also carried are now `@veyyon/utils` modules, imported by subpath: `@veyyon/utils/{ansi,autocomplete,bar,bracketed-paste,deccara,fuzzy,keybindings,keys,kill-ring,kitty-graphics,latex-block,latex-unicode,loop-watchdog,motion,mouse,padding,paint-columns,paint-ground,paint-surface,sgr,symbols,tab-width,text-sizing,tight-mode,tmux,width,word-nav,wrap}`. The barrel re-exports none of them.

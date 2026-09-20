@@ -9,6 +9,7 @@
 import { runExtensionCompact, runExtensionSetModel } from "../extensibility/extensions/compact-handler";
 import { getSessionSlashCommands } from "../extensibility/extensions/get-commands-handler";
 import type { ExtensionError, ExtensionUIContext } from "../extensibility/extensions/types";
+import { sessionWorkerAccess } from "../native-control/telegram-control-bridge";
 import type { AgentSession } from "../session/agent-session";
 import { USER_INTERRUPT_LABEL } from "../session/messages";
 
@@ -94,6 +95,7 @@ export async function initializeExtensions(session: AgentSession, options: Initi
 			setSessionName: async name => {
 				await session.sessionManager.setSessionName(name, "user");
 			},
+			...sessionWorkerAccess(() => session.sessionManager.getSessionId()),
 		},
 		// ExtensionContextActions
 		{

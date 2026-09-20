@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-18
+
 ### Breaking Changes
 
 - `countLines`, `parseReadArgs`, `parseReadDetails`, `parseWriteArgs` and `parseWriteDetails` are `@veyyon/utils/fs-tool-args`; the package no longer exports them.

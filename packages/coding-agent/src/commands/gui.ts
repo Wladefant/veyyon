@@ -3,6 +3,7 @@
  */
 import { Args, Command, Flags } from "@veyyon/utils/cli";
 import { startGuiHostServer } from "../gui-host";
+import { publishGuiHostEndpoint, withdrawGuiHostEndpoint } from "../gui-host/endpoint-file";
 
 export default class Gui extends Command {
 	static description = "Start the GUI engine host server for desktop clients";
@@ -36,10 +37,16 @@ export default class Gui extends Command {
 			cwd: process.cwd(),
 		});
 
+		// A client that was not handed the endpoint reads it from here; see
+		// gui-host/endpoint-file.ts for why stdout alone was not enough.
+		const published = publishGuiHostEndpoint(server.endpoint);
+
 		process.stdout.write(`GUI engine host listening at ${server.endpoint}\n`);
+		process.stdout.write(`Endpoint published at ${published}\n`);
 		process.stdout.write(`export VEYYON_GUI_ENDPOINT="${server.endpoint}"\n`);
 
 		const shutdown = (): void => {
+			withdrawGuiHostEndpoint(server.endpoint);
 			void server.close().then(() => {
 				process.exit(0);
 			});

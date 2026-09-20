@@ -59,10 +59,12 @@ export interface DaemonBrokerClient {
 async function readOrCreateToken(runtimeDir: string): Promise<string> {
 	await fs.mkdir(runtimeDir, { recursive: true, mode: 0o700 });
 	const tokenPath = daemonBrokerTokenPath(runtimeDir);
-	const tokenFile = Bun.file(tokenPath);
 	for (let attempt = 0; attempt < 100; attempt++) {
 		try {
-			const token = (await tokenFile.text()).trim();
+			// fs.readFile, not Bun.file().text(): a Bun.file read does not ref the
+			// event loop, so a client that reaches this await with nothing else
+			// pending can exit 0 mid-read instead of settling the ENOENT retry.
+			const token = (await fs.readFile(tokenPath, "utf8")).trim();
 			if (token.length > 0) return token;
 		} catch (error) {
 			if (!isEnoent(error)) throw error;

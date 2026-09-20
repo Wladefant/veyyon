@@ -16,9 +16,9 @@ import {
 	resolveEffectiveApprovalMode,
 } from "../../tools/core/approval";
 import { cwdEscapingTargets, formatCwdBoundaryReason } from "../../tools/core/cwd-boundary";
-import { secretUseApprovalReason } from "../../tools/core/secret-use-boundary";
-import { recordRefusal } from "../../tools/core/refusal-fence";
 import { TOOL_EXECUTION_ENTRIES, type ToolExecutionEntryName } from "../../tools/core/execution-registry";
+import { recordRefusal, type ToolPolicyFrame } from "../../tools/core/refusal-fence";
+import { secretUseApprovalReason } from "../../tools/core/secret-use-boundary";
 import { ToolAbortError } from "../../tools/core/tool-errors";
 import { normalizeToolEventInput, resolveToolEventInput } from "../tool-event-input";
 import type { ExtensionRunner } from "./runner";
@@ -191,13 +191,27 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 	declare label: string;
 	declare strict: boolean;
 	#entry: ToolExecutionEntryName;
+	#sessionPolicy: (() => ToolPolicyFrame | undefined) | undefined;
 
+	/**
+	 * @param sessionPolicy The policy the OWNING session stands for, read when a
+	 * caller invokes this tool with no context of its own. A tool taken off a
+	 * session registry — `session.getToolByName("eval").execute(...)`, the cursor
+	 * bridge, a browser page — carries the session's standing refusals whether or
+	 * not the caller remembered to thread a context through, which is the point of
+	 * the fence. Without it those calls are refused for want of a policy rather
+	 * than judged against the one the session actually has. Fencing only: the
+	 * frame is never handed to the tool or to the approval gate, so a contextless
+	 * caller keeps the approval surface it had before the fence existed.
+	 */
 	constructor(
 		private tool: AgentTool<TParameters, TDetails>,
 		private runner?: ExtensionRunner,
 		entry: ToolExecutionEntryName = "session.tools",
+		sessionPolicy?: () => ToolPolicyFrame | undefined,
 	) {
 		this.#entry = entry;
+		this.#sessionPolicy = sessionPolicy;
 		applyToolProxy(tool, this);
 	}
 
@@ -217,7 +231,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		onUpdate?: AgentToolUpdateCallback<TDetails, TParameters>,
 		context?: AgentToolContext,
 	): Promise<AgentToolResult<TDetails, TParameters>> {
-		context = TOOL_EXECUTION_ENTRIES[this.#entry].assertContext(this.tool, params, context);
+		context = TOOL_EXECUTION_ENTRIES[this.#entry].fence(this.tool, params, context, this.#sessionPolicy);
 		// 1. Check approval policy (before extension handlers).
 		// CLI `--auto-approve` / `--yolo` sets approval mode to yolo.
 		// User `tools.approval.<tool>` policies are still applied in all modes.
@@ -510,6 +524,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 				signal,
 				onUpdate,
 				context,
+				this.#sessionPolicy,
 			);
 		} catch (err) {
 			// A CANCELLATION IS NOT A FAILED CALL, so it never becomes one here. The

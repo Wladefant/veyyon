@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-18
+
 ### Added
 
 - `@veyyon/plugin` states the plugin manifest vocabulary: `PluginManifest`, `PluginFeature`, `PluginSettingSchema` with its four setting kinds and `PluginSettingType`. A package declares what its `package.json` `veyyon` field contributes without importing the loader that installs it or the host that draws its settings. The package has no dependencies.

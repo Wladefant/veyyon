@@ -4,10 +4,11 @@ All notable changes to `@veyyon/evals` will be documented in this file.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-18
+
 ### Fixed
 
 - `codingAgentDir()` resolves `packages/coding-agent` from the repository root, so the binary staleness preflight scans the coding agent's sources again after the package moved to `tests/evals`; it had resolved a sibling directory that does not exist and reported every binary current.
-
 
 ## [1.3.0] - 2026-08-28
 

@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-18
+
 ### Added
 
 - `SettingsStore.reloadSelectedConfig` validates a fresh profile and overlays atomically, applies only the product-selected paths, preserves runtime overrides, and serializes against settings saves without activating unrelated external edits.
