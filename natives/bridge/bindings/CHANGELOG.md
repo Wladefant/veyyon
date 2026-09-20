@@ -2,15 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Merged upstream v1.5.0.
+
+## [1.5.0] - 2026-09-18
+
 ### Added
 
 - `PtyRunResult.signal` names the signal (`SIGTERM`, `SIGKILL`) that ended a PTY-run command, recovered from the wait status; a signal death also reports `exitCode` 1, so a consumer that attributes the death reads `signal` first.
-
-### Fixed
-
-- Restored APFS isolation compilation on macOS and stale destination preparation for Windows block-clone isolation.
-- Plain isolation diffs classify binary contents on either side of a symlink transition without dereferencing links.
-- `IsoResolveResult.reason` is set only when `fellBack` is true; a resolution that honoured the preferred backend carried the first unavailable probe's text as if it explained a fallback.
 
 ### Changed
 
@@ -23,6 +23,11 @@
 - The loader's diagnostic comment names the addon crate at `natives/bridge/addon/src/lib.rs`, the path it moved to. No user-visible behavior changes.
 - The rebuild instruction in the stale-addon refusal reads `bun --cwd=natives/bridge/bindings run build`, the package's path after it moved out of `packages/`. The package name `@veyyon/natives` and every import specifier are unchanged.
 
+### Fixed
+
+- Restored APFS isolation compilation on macOS and stale destination preparation for Windows block-clone isolation.
+- Plain isolation diffs classify binary contents on either side of a symlink transition without dereferencing links.
+- `IsoResolveResult.reason` is set only when `fellBack` is true; a resolution that honoured the preferred backend carried the first unavailable probe's text as if it explained a fallback.
 
 ## [1.4.0] - 2026-09-04
 

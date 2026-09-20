@@ -3,9 +3,9 @@
 //! job's threads once they spend their cycle budget for an interval, which is
 //! the same enforcement of last resort a cgroup quota gives on Linux.
 //!
-//! `CpuRate` counts cycles per 10_000 cycles of TOTAL machine capacity (every
+//! `CpuRate` counts cycles per `10_000` cycles of TOTAL machine capacity (every
 //! logical processor), so the rate for N cores on an M-core machine is
-//! N / M * 10_000. Members join by `AssignProcessToJobObject`, and processes
+//! N / M * `10_000`. Members join by `AssignProcessToJobObject`, and processes
 //! a member spawns join the job by default, so adopting the direct child caps
 //! the tree below it.
 
@@ -37,7 +37,7 @@ use super::windows_rate::cpu_rate_control;
 ///
 /// `available_parallelism` follows the process affinity mask. Inside a
 /// container or a parent job that granted 2 of 16 processors, that is 2, and
-/// a 2-core budget becomes `CpuRate` 10_000 = 100% of the host. Job `CpuRate`
+/// a 2-core budget becomes `CpuRate` `10_000` = 100% of the host. Job `CpuRate`
 /// is defined against every processor in the system, so the denominator has
 /// to be that count.
 fn host_logical_processors() -> f64 {
@@ -85,7 +85,7 @@ impl JobBudget {
 		Ok(budget)
 	}
 
-	fn handle(&self) -> HANDLE {
+	const fn handle(&self) -> HANDLE {
 		self.job.0 as HANDLE
 	}
 
@@ -131,6 +131,8 @@ impl JobBudget {
 		if process.is_null() {
 			return;
 		}
+		// SAFETY: `process` is a live handle owned by this scope; both calls take
+		// handles by value and touch no caller memory.
 		unsafe {
 			let assigned = AssignProcessToJobObject(self.handle(), process);
 			CloseHandle(process);
@@ -149,6 +151,7 @@ impl JobBudget {
 	pub fn usage_usec(&self) -> Option<u64> {
 		// SAFETY: `info` is a live, correctly sized accounting struct.
 		let mut info = JOBOBJECT_BASIC_AND_IO_ACCOUNTING_INFORMATION::default();
+		// SAFETY: `info` outlives the call and is fully written on success.
 		let ok = unsafe {
 			QueryInformationJobObject(
 				self.handle(),
@@ -199,6 +202,8 @@ impl JobBudget {
 				pid_capacity = list.NumberOfAssignedProcesses as usize;
 				continue;
 			}
+			// SAFETY: `list` borrows `buf`, which outlives the map; the range is
+			// bounded by the count the API reported initialized.
 			return unsafe {
 				(0..list.NumberOfProcessIdsInList as usize)
 					.map(|i| *list.ProcessIdList.as_ptr().add(i) as i32)
@@ -257,9 +262,8 @@ mod tests {
 		let large_kernel: u64 = 500_000_000_000; // 50,000s
 		assert_eq!((large_user + large_kernel) / 10, 150_000_000_000);
 	}
-
 	/// WHY: In `JobBudget::members`, when the buffer is too small,
-	/// `pid_capacity` doubles from 64 up to 65_536 before terminating and
+	/// `pid_capacity` doubles from 64 up to `65_536` before terminating and
 	/// returning an empty list. We verify that this exponential search
 	/// terminates in a bounded number of iterations and never loops
 	/// indefinitely.

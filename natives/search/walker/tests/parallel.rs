@@ -15,9 +15,11 @@ use std::{
 };
 
 use veyyon_test_scratch::{TempTree, scratch_dir};
+#[cfg(unix)]
+use veyyon_walker::FollowLinks;
 use veyyon_walker::{
-	CompiledWalkGlob, Entry, EntryVisitor, FollowLinks, ParallelWalkControl, WalkControl, WalkError,
-	WalkFilter, WalkOptions, WalkOrder, WalkRequest, WalkStatus, walk_entries,
+	CompiledWalkGlob, Entry, EntryVisitor, ParallelWalkControl, WalkControl, WalkError, WalkFilter,
+	WalkOptions, WalkOrder, WalkRequest, WalkStatus, walk_entries,
 };
 
 /// A scratch tree for one case.

@@ -132,8 +132,8 @@ impl TrackedBudget {
 
 	/// Lower (or, at level 0, restore) member scheduling priority. Unix
 	/// only; on Windows this backend never runs, so the lever is a no-op.
+	#[cfg(unix)]
 	pub fn renice(&self, level: i32) {
-		#[cfg(unix)]
 		for pid in self.members() {
 			// SAFETY: setpriority with PRIO_PROCESS targets exactly the pid
 			// given; a dead pid fails with ESRCH and changes nothing.
@@ -141,7 +141,16 @@ impl TrackedBudget {
 				libc::setpriority(libc::PRIO_PROCESS, pid as u32, level);
 			}
 		}
-		#[cfg(not(unix))]
+	}
+
+	/// Lower (or, at level 0, restore) member scheduling priority. Unix
+	/// only; on Windows this backend never runs, so the lever is a no-op.
+	#[cfg(not(unix))]
+	#[expect(
+		clippy::unused_self,
+		reason = "the unix body reads self.members(); the windows body is a no-op by design"
+	)]
+	pub const fn renice(&self, level: i32) {
 		let _ = level;
 	}
 
