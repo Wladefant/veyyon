@@ -98,6 +98,17 @@ describe("resolvePublishedFloorFromList", () => {
 		expect(floor).toBeNull();
 		expect(versionsInRange).toEqual(["0.0.1"]);
 	});
+
+	it("ignores non-semver evidence releases like gui-repair-evidence-*", () => {
+		const releases = [
+			{ tagName: "gui-repair-evidence-33a7dbbc", publishedAt: "2026-09-07T23:56:56Z" },
+			{ tagName: "v15.13.0", publishedAt: "2026-06-14T12:00:00Z" },
+			{ tagName: "v15.12.6", publishedAt: "2026-06-14T06:00:00Z" },
+		];
+		const { floor, versionsInRange } = resolvePublishedFloorFromList(releases, "15.13.0");
+		expect(floor).toBe("15.12.6");
+		expect(versionsInRange).toEqual(["15.13.0"]);
+	});
 });
 
 describe("enumerateChangelogVersions", () => {
