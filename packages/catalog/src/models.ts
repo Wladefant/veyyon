@@ -3,7 +3,6 @@ import { buildModel } from "./build";
 import type { ModelReferenceCandidate } from "./identity/reference";
 import modelsSourceJson from "./models.json" with { type: "text" };
 import type { Api, Model, ModelSpec, Usage } from "./types";
-import { ZERO_MODEL_COST } from "./utils";
 
 /**
  * Static bundled model registry loaded from `models.json`.

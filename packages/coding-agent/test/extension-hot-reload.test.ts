@@ -11,7 +11,7 @@ import type { LoadedExtension } from "../src/extensibility/extensions/types";
 import type { TurnEndEvent } from "../src/extensibility/shared-events";
 import { EventBus } from "../src/utils/event-bus";
 import { executeAcpBuiltinSlashCommand } from "../src/slash-commands/acp-builtins";
-import type { ParsedSlashCommand, SlashCommandRuntime } from "../src/slash-commands/types";
+import type { SlashCommandRuntime } from "../src/slash-commands/types";
 import type { AgentSession } from "../src/session/agent-session";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
@@ -19,13 +19,6 @@ import { TempDir } from "@veyyon/utils";
 declare global {
 	var __testHookMarker: string | undefined;
 }
-
-
-const dummyParsedCommand: ParsedSlashCommand = {
-	name: "reload-config",
-	args: "",
-	text: "/reload-config",
-};
 
 const dummyTurnEnd: TurnEndEvent = {
 	type: "turn_end",

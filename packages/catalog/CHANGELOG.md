@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Removed
+
+- `models.ts` no longer imports `ZERO_MODEL_COST`, which it stopped using; no user-visible change.
+
 ## [1.5.0] - 2026-09-18
 
 ### Added
