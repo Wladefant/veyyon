@@ -151,7 +151,9 @@ describe("a login torn down by a failed refresh is visible", () => {
 			}),
 		).toEqual([
 			"a previous login was signed out: oauth refresh failed: invalid_grant: the grant is invalid",
-			"press a to sign in again",
+			// The sibling serves every request, so the provider is not broken. Asking for a login
+			// here said it was, on the same card that listed the working account.
+			"1 other account still signed in; press a to sign this one back in",
 		]);
 	});
 

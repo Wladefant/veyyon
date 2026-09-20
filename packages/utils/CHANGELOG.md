@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-18
+
 ### Breaking Changes
 
 - `ParsedReadArgs` from `@veyyon/utils/fs-tool-args` carries `depth` and `limit`, the `read` schema's directory-listing arguments, in place of `from`, `to` and `rangeSuffix`: the schema has no `offset`, its `limit` is an entry cap, and the line window rides on the path's own selector, so no `:A-B` is derived from either number.
@@ -28,6 +30,8 @@
 ### Changed
 
 - The relaxed JSON parser's object and array loops position on the next element and consume the delimiter after it through one pair of container steps, and both atomic-write target resolvers record a symlink hop and raise `ELOOP` through one helper; no behavior change.
+- A blocked-loop line is a warning only when the CPU it reports could have come from the loop's own thread: `process.cpuUsage()` counts every thread, so a busy JS eval kernel or browser tab worker used to mark host scheduling jitter as work the process did. A figure above what one thread can spend in the elapsed time is recorded at debug and carries `cpuThreads: "multiple"`.
+- The workspace-manifest gate reads the files git would carry rather than walking the filesystem, so a directory git ignores under a member — a scratch copy, a vendored checkout, a local dump — no longer reports its imports as undeclared edges; no user-facing effect.
 - Display LaTeX splits its top-level rows and an environment body splits its `\\` rows through one depth-aware scanner; no behavior change.
 - Literal prompt templates skip variable analysis and compilation while preserving formatted output.
 - XML escaping, C1 normalization, OSC 66 alignment and tab counting share implementations without changing rendered text.
@@ -55,6 +59,7 @@
 - Corrected comments that named a distribution channel or runtime API the project does not use; no behavior change.
 - `stripAnsi` removes a CSI sequence written with colon subparameters. The parameter class was `[0-9;?]`, but the spec's parameter bytes are the whole `0x30-0x3f` range, so `:` `<` `=` `>` were not matched: a true-color SGR of the form `ESC [ 38:2:255:0:0 m`, which libvte and several test runners emit, left `38:2:255:0:0m` behind as visible text in captured output. The class is now the spec's, and the three byte classes are disjoint so the pattern accepts exactly what a greedy scanner accepts. The behaviour is pinned against `tests/fixtures/ansi-strip-corpus.json`, which the Rust `strip_ansi` in the shell minimizer reads too, so the two implementations answer the same cases instead of drifting apart.
 - `BUILD_TAG` export in `@veyyon/utils/dirs` for build metadata and custom build identification.
+- `ui.loop-blocked` reports `cpuMs`, the CPU the process consumed across the interval, and warns only when the process burned at least half the overshoot; a late tick the process spent off-CPU is recorded at debug with the same fields. A tick is late whenever the loop did not run it, which a loaded host causes as readily as a synchronous pass, so every late tick warned and the channel carried blocks with no cause.
 
 ## [1.4.1] - 2026-09-08
 

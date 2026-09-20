@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-18
+
 ### Changed
 
 - Gist participants and fact sources are read from their stored JSON columns through one `parseStoredStringList` in `util/sqlite`; a null, empty, non-JSON or non-array value still reads as no entries.

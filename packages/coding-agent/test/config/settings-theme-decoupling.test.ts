@@ -99,6 +99,31 @@ function staticImportTargets(file: string): string[] {
 		.map(specifier => path.relative(SRC, path.resolve(path.dirname(file), specifier)));
 }
 
+/**
+ * Every module of the raw-settings layer: `config/settings.ts` and the sibling
+ * `config/settings-*` modules it statically imports.
+ *
+ * The layer was one file, and these assertions named that file. Extracting the
+ * raw-settings migrations made it two, and the pin followed the FILE rather than
+ * the property: the classifier edge moved to the new module and the suite
+ * reported it gone. The property was never about one file — no module of the
+ * settings layer reaches the theme engine, and the layer as a whole still
+ * reaches the classifier leaf. Derived from source at run time so a third
+ * settings module arrives covered instead of unguarded.
+ */
+function settingsLayer(): string[] {
+	const local = staticImports(SETTINGS)
+		.filter(specifier => specifier.startsWith("./settings-"))
+		.map(specifier => path.join(SRC, "config", `${specifier.slice(2)}.ts`))
+		.filter(file => fs.existsSync(file));
+	return [SETTINGS, ...local];
+}
+
+/** Every specifier the settings layer statically imports, across its modules. */
+function settingsLayerImports(): string[] {
+	return settingsLayer().flatMap(staticImports);
+}
+
 describe("config/settings stays out of the theme engine", () => {
 	/**
 	 * THE HEADLINE REGRESSION. A static import of the theme barrel from settings is
@@ -106,11 +131,13 @@ describe("config/settings stays out of the theme engine", () => {
 	 * import graph is asserted directly rather than inferred from behaviour.
 	 */
 	it("does not statically import the theme barrel or anything else in the cycle", () => {
-		const imports = staticImports(SETTINGS);
-
-		expect(imports.filter(specifier => (FORBIDDEN_FROM_SETTINGS as readonly string[]).includes(specifier))).toEqual(
-			[],
+		const offenders = settingsLayer().flatMap(file =>
+			staticImports(file)
+				.filter(specifier => (FORBIDDEN_FROM_SETTINGS as readonly string[]).includes(specifier))
+				.map(specifier => `${path.relative(SRC, file)} -> ${specifier}`),
 		);
+
+		expect(offenders).toEqual([]);
 	});
 
 	/**
@@ -126,7 +153,7 @@ describe("config/settings stays out of the theme engine", () => {
 	 * `theme-luminance` answers the same question from a table.
 	 */
 	it("reaches the light/dark classifier through the classifier leaf, not the JSON one", () => {
-		const imports = staticImports(SETTINGS);
+		const imports = settingsLayerImports();
 
 		expect(imports).toContain("../theme/theme-luminance");
 		expect(imports).not.toContain("../theme/builtin-themes");
@@ -139,9 +166,9 @@ describe("config/settings stays out of the theme engine", () => {
 	 * the strongest form of the same property.
 	 */
 	it("does not statically import the discovery registry", () => {
-		const imports = staticImports(SETTINGS);
+		const offenders = settingsLayerImports().filter(specifier => specifier.startsWith("../discovery"));
 
-		expect(imports.filter(specifier => specifier.startsWith("../discovery"))).toEqual([]);
+		expect(offenders).toEqual([]);
 	});
 
 	/**
@@ -214,13 +241,13 @@ describe("config/settings stays out of the theme engine", () => {
 	 * than two unrelated facts.
 	 */
 	it("points the dependency from the UI at the configuration, not the reverse", () => {
-		const settingsImports = staticImports(SETTINGS);
+		const layerImports = settingsLayerImports();
 
 		expect(staticImportTargets(THEME)).toContain("config/settings-signals");
 		// Exact specifiers, for the reason `FORBIDDEN_FROM_SETTINGS` documents: a substring test for
 		// "theme/theme" also matches `theme-luminance`, the leaf settings is SUPPOSED to import.
 		expect(
-			settingsImports.filter(specifier => (FORBIDDEN_FROM_SETTINGS as readonly string[]).includes(specifier)),
+			layerImports.filter(specifier => (FORBIDDEN_FROM_SETTINGS as readonly string[]).includes(specifier)),
 		).toEqual([]);
 	});
 });

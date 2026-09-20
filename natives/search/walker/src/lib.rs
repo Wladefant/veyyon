@@ -2193,7 +2193,7 @@ pub fn root_device_id(path: &Path, follow_links: FollowLinks) -> Option<u64> {
 ///
 /// Non-Unix platforms return `None`, making same-filesystem filtering a no-op.
 #[cfg(not(unix))]
-pub fn root_device_id(_path: &Path, _follow_links: FollowLinks) -> Option<u64> {
+pub const fn root_device_id(_path: &Path, _follow_links: FollowLinks) -> Option<u64> {
 	None
 }
 
@@ -2224,7 +2224,7 @@ pub fn is_path_on_root_file_system(
 /// When `root_device` is `None`, this returns true. On non-Unix platforms this
 /// is always true, matching the existing no-op same-filesystem behavior there.
 #[cfg(not(unix))]
-pub fn is_path_on_root_file_system(
+pub const fn is_path_on_root_file_system(
 	_path: &Path,
 	_depth: usize,
 	_follow_links: FollowLinks,
@@ -2254,7 +2254,7 @@ fn is_effective_path_on_root_file_system(
 }
 
 #[cfg(not(unix))]
-fn is_effective_path_on_root_file_system(
+const fn is_effective_path_on_root_file_system(
 	_path: &Path,
 	_depth: usize,
 	_follow_links: FollowLinks,
@@ -2595,7 +2595,17 @@ impl<E> EntryVisitor for CollectVisitor<E> {
 	}
 }
 
+#[cfg(unix)]
 fn root_device_for_options(root: &Path, options: WalkOptions) -> Option<u64> {
+	if options.same_file_system {
+		root_device_id(root, options.follow_links)
+	} else {
+		None
+	}
+}
+
+#[cfg(not(unix))]
+const fn root_device_for_options(root: &Path, options: WalkOptions) -> Option<u64> {
 	if options.same_file_system {
 		root_device_id(root, options.follow_links)
 	} else {
@@ -2690,6 +2700,11 @@ impl DirScratch {
 	}
 
 	#[cfg(not(unix))]
+	#[expect(
+		clippy::unused_self,
+		reason = "the unix variant reads self.name_bytes; the windows variant reads the entry \
+		          alone, and the signatures must match"
+	)]
 	fn name<'a>(&'a self, entry: &'a DirEntryRecord) -> &'a OsStr {
 		&entry.name
 	}
@@ -4580,7 +4595,7 @@ mod platform {
 				};
 				let name_offset = offset + std::mem::offset_of!(FILE_ID_FULL_DIR_INFORMATION, FileName);
 				let name_len = info.FileNameLength as usize;
-				if name_len % 2 != 0 || name_offset + name_len > buffer.len() {
+				if !name_len.is_multiple_of(2) || name_offset + name_len > buffer.len() {
 					return Err(invalid_data("invalid NtQueryDirectoryFile name length").into());
 				}
 				let name_units: Vec<u16> = buffer[name_offset..name_offset + name_len]
@@ -4588,7 +4603,8 @@ mod platform {
 					.map(|chunk| u16::from_ne_bytes([chunk[0], chunk[1]]))
 					.collect();
 				let name = OsString::from_wide(&name_units);
-				if let Some(file_type) = file_type_from_attributes(info.FileAttributes) {
+				{
+					let file_type = file_type_from_attributes(info.FileAttributes);
 					let size = if detail == WalkDetail::Full && file_type == FileType::File {
 						Some(info.EndOfFile.max(0) as f64)
 					} else {
@@ -4636,13 +4652,13 @@ mod platform {
 		}
 	}
 
-	fn file_type_from_attributes(attributes: u32) -> Option<FileType> {
+	const fn file_type_from_attributes(attributes: u32) -> FileType {
 		if attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-			Some(FileType::Symlink)
+			FileType::Symlink
 		} else if attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
-			Some(FileType::Dir)
+			FileType::Dir
 		} else {
-			Some(FileType::File)
+			FileType::File
 		}
 	}
 

@@ -96,8 +96,22 @@ const PRUNING_CEILING = 195;
  * `prompts/compaction/compaction-staged-segment.md` and `prompts/compaction/compaction-staged-merge.md` --
  * the staged summarization the engine falls back to when one request times out or cannot fit. The stager
  * imports only what the engine already reached, so the growth is those three files and no subtree.
+ *
+ * RE-MEASURED 2026-09-15: engine 318, remote summarizer 220. The one new module is
+ * `catalog/provider-models/command-code.ts`, holding Command Code's prices, effort ladders and
+ * output ceilings, split out of `provider-models/openai-compat.ts`, which this closure already
+ * reached through the model metadata compaction budgets are computed from. It imports only what
+ * was already here, so the growth is that one file and no subtree.
+ *
+ * RE-MEASURED 2026-09-18 on this fork and not upstream: engine 322. The four new modules are the
+ * local `codex-chatgpt-web` bridge provider, and the closure reaches them by two independent routes
+ * rather than one: `catalog/provider-models/chatgpt-web.ts` through the descriptor table the
+ * compaction budgets read model metadata from, and `catalog/discovery/chatgpt-web.ts` plus
+ * `ai/providers/openai-codex/{chatgpt-web-trusted-context,chatgpt-web-turn-stamp}.ts` through the
+ * Codex Responses provider itself. Every module they import -- `@veyyon/utils/scoped-timeout`
+ * included -- was already on this closure, so the growth is those four files and no subtree.
  */
-const COMPACTION_ENGINE_CEILING = 317;
+const COMPACTION_ENGINE_CEILING = 322;
 const REMOTE_SUMMARIZER_CEILING = 221;
 
 describe("the estimator is a leaf", () => {

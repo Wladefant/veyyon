@@ -64,7 +64,10 @@ packages/coding-agent/src/modes/terminal/setup-wizard/lazy.ts
 packages/coding-agent/src/sdk.ts
 packages/coding-agent/src/session/agent-session.ts
 packages/coding-agent/src/slash-commands/acp-builtins.ts
-packages/coding-agent/src/slash-commands/builtin-registry.ts
+packages/coding-agent/src/slash-commands/builtin-completions.ts
+packages/coding-agent/src/slash-commands/builtin-setup.ts
+packages/coding-agent/src/slash-commands/builtin-share.ts
+packages/coding-agent/src/slash-commands/dispatch.ts
 packages/coding-agent/src/slash-commands/helpers/stats-dashboard.ts
 packages/coding-agent/src/system-prompt-builder/section-overrides.ts
 packages/coding-agent/src/task/persisted-revive.ts

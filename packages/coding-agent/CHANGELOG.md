@@ -4,23 +4,27 @@
 
 ### Added
 
-- Guard against auto-updating or replacing custom and local Veyyon binary builds.
-- Support auto-update opt-out via `startup.autoUpdate: false`, `updates.auto: false`, and `VEYYON_NO_AUTO_UPDATE=1`.
-- Record skipped automatic updates in `update-history.json`.
 - Expose the live worker registry and targeted messaging over IrcBus to the Telegram control bridge ([#38](https://github.com/Wladefant/veyyon/issues/38)).
 - `api.listWorkers()` and `api.steerWorker()` expose an extension's own live workers and targeted steering, scoped to the conversation the extension is loaded in ([#38](https://github.com/Wladefant/veyyon/issues/38)).
 
 ### Fixed
 
+- Topic replenishment reads the live settings instance again. `resolveTopicWorkerModel` probed `Settings.isInitialized`, a member neither this fork nor upstream ever declared, so the expression was always `undefined`: an initialized session was treated as uninitialized, the configured agent lane and `modelRoles` default were never consulted, and every unconfigured caller fell through to `VEYYON_DEFAULT_MODEL`. It calls the exported `isSettingsInitialized()` instead ([#25](https://github.com/Wladefant/veyyon/issues/25)).
 - Scope extension refusals to declared subjects, fail closed for opaque execution under a path refusal, and enforce session policy through registered tool dispatch boundaries ([#37](https://github.com/Wladefant/veyyon/issues/37)).
 - Scope Telegram worker registry rendering and targeted messaging to the authenticated session, rejecting cross-session target IDs and caller-supplied scope overrides ([#38](https://github.com/Wladefant/veyyon/issues/38)).
 - HTTP/SSE MCP OAuth honors configured scopes, unions challenge-required and explicit provider scopes, and uses supported-scope metadata only as a fallback.
 - `/reload-config` reports applied, unchanged and restart-only values per key, retains startup-bound model roles and default effort, and pins task/eval/vibe model and effort resolution to one dispatch snapshot ([#39](https://github.com/Wladefant/veyyon/issues/39)).
 - Repaired upstream-merge regressions in `/reload-config`, agent-lane validation, task spawn recording, and todo rendering; retained concurrent todo targets through the host-neutral view and removed the duplicate legacy spawn callback ([#26](https://github.com/Wladefant/veyyon/issues/26)).
 - Updated the config-reload benchmark, handbook, and capture scene to use the current agent routing namespace ([#26](https://github.com/Wladefant/veyyon/issues/26)).
-- Collapsed todo boards prioritize in-progress tasks, announce row-trimmed active phases, and show canonical newly started tasks with concurrent counts even when replayed without call arguments.
 - Neutralized workstation-specific defaults, private project identifiers, and host orchestration policies in topic replenishment and native ledger bridge, restoring neutral authorization semantics where no target is forbidden by default and forbidden targets are strictly configuration-driven, and resolving topic worker models via config/catalog APIs without baked-in model defaults ([#953](https://github.com/santhreal/veyyon/issues/953)).
 - Every tool declares the scope of its effects, so a tool whose targets the fence cannot read is refused while a standing refusal is in force instead of being waved through ([#37](https://github.com/Wladefant/veyyon/issues/37)).
+
+### Changed
+
+- Merged upstream v1.5.0.
+
+## [1.5.0] - 2026-09-18
+
 ### Breaking Changes
 
 - Agent settings use `agent.*`, `tier.agent`, `advisor.agents`, and `argot.agents`; legacy keys migrate on load, while historical runtime export names, custom-theme color tokens, session records, and RPC spellings remain unchanged.
@@ -83,6 +87,10 @@
 
 ### Changed
 
+- Typing a line that does not name a builtin slash command no longer loads the builtin implementations: `slash-commands/dispatch.ts` answers that from the declarations and loads the handlers only once a name matches, taking the launch graph from 1,642 modules to 1,545 and the interactive input controller from 1,296 to 1,059. No command, argument or completion behavior changes.
+- The 1,806-line builtin handler object moved out of `slash-commands/builtin-registry.ts` into one module per command category (`builtin-setup.ts`, `builtin-modes.ts`, `builtin-session.ts`, `builtin-context.ts`, `builtin-share.ts`, `builtin-workspace.ts`, `builtin-model.ts`, `builtin-info.ts`), with the autocomplete builders in `builtin-completions.ts` and the category map in `builtin-categories.ts`; the registry assembles the eight maps and still exports every name it carried.
+- The 860 lines of raw settings migrations moved out of `config/settings.ts` into `config/settings-migrations.ts`, which also drops the theme-classifier, builtin-tool-name and compaction-strategy imports from the module most of the product reaches for a setting. No setting, default, order or migration behavior changes.
+- Model target selection moved out of `session/agent-session.ts` into `session/agent-session-model-targets.ts`: role resolution, a configured target's model, the compaction candidate list and its configured thinking efforts read only the settings, a model and the available list, so they are callable without a session. No selection, ordering or fallback behavior changes.
 - A running tool card animates one mark: the "… (streaming)" spinner row is drawn only under a header that carries no running spinner of its own, and an agent an eval cell spawned shows the task card's static accent mark instead of a second spinner.
 - The read and write cards parse their arguments and details through `@veyyon/utils/fs-tool-args`, so a terminal launch no longer evaluates `@veyyon/tool-render`; the cards draw the same rows.
 - The legacy `memories.enabled` key is no longer a declared or host-defaulted setting: a config that still holds it migrates to `memory.backend` on load, the key is dropped on the next rewrite, and the local memory pipeline is enabled by `memory.backend: local` only. The presentation module's error messages, read-target parsing and cursor clamping use the `@veyyon/utils` helpers; no behavior change.
@@ -274,6 +282,9 @@
 
 ### Fixed
 
+- Fixed the daemon broker client and broker startup exiting 0 silently mid-read: `Bun.file().text()`/`.json()` does not ref the event loop, so a process that reached the token, lease, presence, or metadata read with nothing else pending could drain and exit before the read settled; the reads now use `fs.readFile`.
+- A pasted OAuth callback typed after a slash command that takes no arguments is consumed instead of being sent to the model as a prompt.
+- Automatic maintenance cuts an oversized body until a summarization request fits a summarizer, instead of parking the session with "Compaction freed too little context to make progress" when every candidate was skipped for holding fewer tokens than the summary needed.
 - Print, JSON and RPC mode flush Bun's stdout sink before exiting, so a piped consumer receives the whole last frame instead of losing up to 1 MiB of queued output.
 - A spawned agent's card shows its resolved-model badge again on the live block, the registry path an extension wraps and the rebuilt transcript, per `agent.showResolvedModelBadge`.
 - With `VEYYON_FORCE_IMAGE_PROTOCOL=sixel` and `VEYYON_ALLOW_SIXEL_PASSTHROUGH=1`, a bash card draws an inline Sixel image row as the program wrote it instead of blanking it.
@@ -404,6 +415,8 @@
 - An MCP server whose reconnects trip the breaker is reported on the operator channel with the server name and the suspension; the suspension was logged only.
 - A CommonJS extension (`module.exports = …`, or a transpiled module with `exports.__esModule`) runs instead of being reported as missing its default export; the wrapper mirrors Bun's `__esModule` interop.
 - A marketplace catalog entry the parser drops is reported with the plugin name, the failing field and the reason: `veyyon plugin marketplace add`/`update` print it to stderr and a session states it on the notice channel; the entry was skipped in silence and the cached catalog persisted without it.
+- The account manager names the account a failed OAuth refresh signed out ("the login for user@example.com was signed out"), so a surviving account rendered beside it is no longer read as the dead one; a credential that states no account keeps the unattributed wording.
+- A provider whose other login still serves every request states that instead of printing `press a to sign in again`, which claimed the provider was unusable on the same card that listed the account using it; a provider with nothing left serving still asks for the login.
 
 ### Removed
 

@@ -27,7 +27,7 @@ import { errorMessage, getAgentDir, isRecord, logger } from "@veyyon/utils";
 import { atomicWriteFileSync } from "@veyyon/utils/atomic-write";
 import nativeLedgerBridgeAssetPath from "./native-ledger-bridge.py" with { type: "file" };
 import { DEFAULT_MODEL_SLOT } from "../config/model-roles";
-import { Settings } from "../config/settings";
+import { isSettingsInitialized, Settings } from "../config/settings";
 import { resolveAgentModel } from "./agent-settings";
 // --- Functional Topics & Keyword Mapping ---
 
@@ -87,7 +87,7 @@ export function resolveTopicWorkerModel(options?: {
 	if (options?.requestModel?.trim()) {
 		return options.requestModel.trim();
 	}
-	const settings = options?.settings ?? (Settings.isInitialized ? Settings.instance : undefined);
+	const settings = options?.settings ?? (isSettingsInitialized() ? Settings.instance : undefined);
 	if (settings) {
 		const role = options?.agentRole ?? "task";
 		const agentResolved = resolveAgentModel({ settings, agentName: role });

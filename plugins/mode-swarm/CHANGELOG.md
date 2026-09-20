@@ -4,12 +4,13 @@
 
 ## [Unreleased]
 
-### Changed
-- Array copies that allocated with a spread now use `.slice()`, `.concat()` or `Array.from()`. No user-visible behavior changes.
+## [1.5.0] - 2026-09-18
 
+### Changed
+
+- Array copies that allocated with a spread now use `.slice()`, `.concat()` or `Array.from()`. No user-visible behavior changes.
 - The package directory is `plugins/mode-swarm` instead of `packages/swarm-extension`; the published package name, entry points and behavior are unchanged.
 - Doc comments refer to the runtime a swarm agent runs on as the agent infrastructure. No behavior change.
-
 
 ## [16.3.7] - 2026-07-05
 

@@ -4707,6 +4707,7 @@ mod tests {
 			let root = unique_tree("grep-io-reason-permission");
 			let path = root.join("secret.txt");
 			std::fs::write(&path, "alpha hit\n").expect("the fixture");
+			#[cfg_attr(not(unix), allow(unused_mut))]
 			let mut permissions = std::fs::metadata(&path).expect("metadata").permissions();
 			#[cfg(unix)]
 			{

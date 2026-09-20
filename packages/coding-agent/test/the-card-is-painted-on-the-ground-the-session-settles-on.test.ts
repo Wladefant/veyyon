@@ -104,6 +104,16 @@ beforeAll(async () => {
 	if (TINT[REPORTED] === TINT[STALE]) throw new Error("the two grounds derive one tint, so no test here can fail");
 });
 
+/**
+ * The `isTTY` descriptors this file replaces, restored in `afterEach`.
+ *
+ * A bare `{ value }` descriptor is NON-WRITABLE, so leaving one installed makes `process.stdout.isTTY = x`
+ * throw `Attempted to assign to readonly property` under ESM strict mode for every suite that runs after
+ * this one in the same process.
+ */
+let stdinIsTTY: PropertyDescriptor | undefined;
+let stdoutIsTTY: PropertyDescriptor | undefined;
+
 beforeEach(async () => {
 	writes = [];
 	// The real `ProcessTerminal` writes to the developer's own terminal otherwise, and the card here
@@ -118,8 +128,10 @@ beforeEach(async () => {
 	if (typeof process.stdin.setRawMode === "function") {
 		vi.spyOn(process.stdin, "setRawMode").mockReturnValue(process.stdin);
 	}
-	Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
-	Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+	stdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+	stdoutIsTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+	Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true, writable: true });
+	Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true, writable: true });
 
 	previousHeadless = setTerminalHeadless(false);
 	isolated = enterIsolatedConfigRoot("card-ground", { defaultProfile: true });
@@ -135,6 +147,10 @@ afterEach(async () => {
 	opened.length = 0;
 	takeFirstFrame()?.ui.stop();
 	vi.restoreAllMocks();
+	if (stdinIsTTY) Object.defineProperty(process.stdin, "isTTY", stdinIsTTY);
+	else delete (process.stdin as { isTTY?: boolean }).isTTY;
+	if (stdoutIsTTY) Object.defineProperty(process.stdout, "isTTY", stdoutIsTTY);
+	else delete (process.stdout as { isTTY?: boolean }).isTTY;
 	resetGroundTintsForTest();
 	resetSettingsForTest();
 	resetLaunchFactsForTest();

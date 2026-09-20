@@ -116,8 +116,11 @@ async function runSmokeTest(): Promise<void> {
 	// stale or version-mismatched `.node` throws right here, at the same point the
 	// interactive launch would have crashed, so release verification
 	// (`--smoke-test` on the PUBLISHED binary) fails instead of a user's terminal.
+	process.stderr.write("[smoke] importing natives\n");
 	const natives = await import("@veyyon/natives");
+	process.stderr.write("[smoke] natives imported\n");
 	const width = natives.visibleWidth("veyyon", 4);
+	process.stderr.write(`[smoke] visibleWidth=${width}\n`);
 	if (width !== 6) {
 		throw new Error(
 			`native smoke failed: @veyyon/natives visibleWidth("veyyon") returned ${width}, expected 6 — ` +
@@ -125,7 +128,9 @@ async function runSmokeTest(): Promise<void> {
 		);
 	}
 
+	process.stderr.write("[smoke] importing stats\n");
 	const { smokeTestSyncWorker, startServer } = await import("@veyyon/stats");
+	process.stderr.write("[smoke] stats imported\n");
 	const { smokeTestTinyTitleWorker } = await import("./tiny/title-client");
 	const { smokeTestSttWorker } = await import("./speech/stt/asr-client");
 	const { smokeTestTtsWorker } = await import("./speech/tts/tts-client");
@@ -134,11 +139,17 @@ async function runSmokeTest(): Promise<void> {
 	// Smoke dependencies stay lazy so normal CLI startup does not load worker clients.
 	const { smokeTestDaemonBroker } = await import("./launch/client");
 	const { smokeTestProfileSeed } = await import("./cli/profile-seed-smoke");
+	process.stderr.write("[smoke] sync worker start\n");
 	await smokeTestSyncWorker();
+	process.stderr.write("[smoke] sync worker done\n");
 
+	process.stderr.write("[smoke] starting stats server\n");
 	const statsServer = await startServer(0);
+	process.stderr.write(`[smoke] stats server up on ${statsServer.port}\n`);
 	try {
+		process.stderr.write("[smoke] fetching dashboard\n");
 		const response = await fetch(`http://127.0.0.1:${statsServer.port}/`);
+		process.stderr.write(`[smoke] fetch status ${response.status}\n`);
 		if (!response.ok) throw new Error(`stats dashboard smoke failed: HTTP ${response.status}`);
 		const html = await response.text();
 		if (!html.includes('<div id="root"></div>') || !html.includes("index.js")) {
@@ -147,13 +158,26 @@ async function runSmokeTest(): Promise<void> {
 	} finally {
 		statsServer.stop();
 	}
+	process.stderr.write("[smoke] stats server done\n");
 
+	process.stderr.write("[smoke] tiny title worker start\n");
 	await smokeTestTinyTitleWorker();
+	process.stderr.write("[smoke] tiny title worker done\n");
+	process.stderr.write("[smoke] stt worker start\n");
 	await smokeTestSttWorker();
+	process.stderr.write("[smoke] stt worker done\n");
+	process.stderr.write("[smoke] js eval worker start\n");
 	await smokeTestJsEvalWorker();
+	process.stderr.write("[smoke] js eval worker done\n");
+	process.stderr.write("[smoke] tts worker start\n");
 	await smokeTestTtsWorker();
+	process.stderr.write("[smoke] tts worker done\n");
+	process.stderr.write("[smoke] mnemopi worker start\n");
 	await smokeTestMnemopiEmbedWorker();
+	process.stderr.write("[smoke] mnemopi worker done\n");
+	process.stderr.write("[smoke] daemon broker start\n");
 	await smokeTestDaemonBroker();
+	process.stderr.write("[smoke] daemon broker done\n");
 	// Re-enters this binary as `profile new` against a scratch config root: the
 	// profile chunk is loaded by no other probe, and a bundler regression confined
 	// to it (a mis-minified dynamic import) shipped in 1.4.1 past every check above.

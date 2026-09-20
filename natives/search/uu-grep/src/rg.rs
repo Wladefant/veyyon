@@ -2701,6 +2701,7 @@ mod tests {
 		}
 
 		/// Mark a file executable, which a preprocessor has to be.
+		#[cfg_attr(not(unix), allow(unused_variables))]
 		fn executable(path: &Path) {
 			#[cfg(unix)]
 			{
