@@ -11,13 +11,15 @@
  * sessions cost N x 1.25 GB for a feature that runs for a few hundred
  * milliseconds per `retain` / `recall`.
  *
- * THE CLASS THIS CLOSES. Not "the timer exists" but the four ways an unload can
+ * THE CLASS THIS CLOSES. Not "the timer exists" but the five ways an unload can
  * be wrong: it fires too early (a request in flight is killed under itself), it
  * never fires (the window is ignored or re-armed forever), it fires and nothing
  * comes back (a respawn that cannot self-init, or a second child racing the
- * dying one), and it is configured out of range without anybody noticing. Each
- * has a test below, driving the real `MnemopiEmbedClient` through its injected
- * `spawnWorker` seam on a fake clock.
+ * dying one), it outlives the shutdown that was supposed to reap it (a request
+ * parked on the kill spawns a replacement into an emptied slot), and it is
+ * configured out of range without anybody noticing. Each has a test below,
+ * driving the real `MnemopiEmbedClient` through its injected `spawnWorker`
+ * seam on a fake clock.
  *
  * WHAT IT DOES NOT CATCH. That the real subprocess frees its memory when
  * SIGKILLed — that is the OS, and `mnemopi-embedding-worker-subprocess-isolation`
@@ -25,7 +27,10 @@
  * it pins the validator that `loadMnemopiConfig` applies, not the YAML read.
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { DEFAULT_EMBED_IDLE_UNLOAD_MS } from "@veyyon/coding-agent/config/settings-domains/shared";
+import {
+	DEFAULT_EMBED_IDLE_UNLOAD_MS,
+	MAX_EMBED_IDLE_UNLOAD_MS,
+} from "@veyyon/coding-agent/config/settings-domains/shared";
 import {
 	MnemopiEmbedClient,
 	type MnemopiEmbedWorkerHandle,
@@ -35,6 +40,11 @@ import type {
 	MnemopiEmbedWorkerInbound,
 	MnemopiEmbedWorkerOutbound,
 } from "@veyyon/coding-agent/memory/mnemopi/embed-protocol";
+import {
+	createUnavailableWorker,
+	createWorkerHandle,
+	createWorkerSubprocess,
+} from "@veyyon/coding-agent/subprocess/worker-client";
 
 const MODEL = "fast-bge-base-en-v1.5";
 const CACHE_DIR = "/cache/fastembed";
@@ -126,6 +136,24 @@ async function drain(vectors: AsyncIterable<number[][]>): Promise<number[][]> {
 	const batches: number[][][] = [];
 	for await (const batch of vectors) batches.push(batch);
 	return batches.flat();
+}
+
+/**
+ * `"settled"` iff `work` completes ahead of the next macrotask, i.e. it awaited
+ * nothing but microtasks — no process exit, no I/O, no timer.
+ *
+ * The `setTimeout` is a macrotask BOUNDARY, not a wall-clock wait: it is never
+ * waited out, it is only the loser of a race a microtask chain always wins, so
+ * the verdict is ordering rather than duration and adds no delay to the suite.
+ * A faked clock cannot express it — the loser would never be scheduled at all,
+ * and every `work` would "win" vacuously — so this one probe runs on the real
+ * clock and asserts no elapsed time.
+ */
+async function beforeNextMacrotask(work: Promise<unknown>): Promise<"settled" | "blocked"> {
+	const macrotask = new Promise<"blocked">(resolve => {
+		setTimeout(() => resolve("blocked"), 0);
+	});
+	return await Promise.race([work.then(() => "settled" as const), macrotask]);
 }
 
 describe("an idle embed worker is unloaded and relaunched on demand", () => {
@@ -287,12 +315,95 @@ describe("an idle embed worker is unloaded and relaunched on demand", () => {
 		// racing a second 1.25 GB child alongside the dying one.
 		expect(workers.length).toBe(1);
 
+		// And the wait is the kill and nothing else: once the handle's terminate
+		// settles, the parked request comes back without a further macrotask.
+		vi.useRealTimers();
 		releaseKill?.();
+		expect(await beforeNextMacrotask(pending)).toBe("settled");
 		expect(await pending).toEqual(vectorsFor(["during-teardown"]));
 		expect(workers.length).toBe(2);
 
 		await client.terminate();
 	});
+
+	it("leaves no worker behind when a request lands mid-shutdown", async () => {
+		// No clock: with a `0` window nothing arms a timer, and the race this
+		// closes is between a shutdown and a request, not between two instants.
+		const { workers, spawn } = createFleet();
+		let releaseKill: (() => void) | undefined;
+		const client = new MnemopiEmbedClient(() => {
+			const handle = spawn();
+			const worker = workers[workers.length - 1];
+			// Only the first child's kill is held open. A replacement spawned
+			// into the shutdown would be killed instantly by nothing at all, so
+			// the live count below measures the leak rather than the delay.
+			const slowKill = async (): Promise<void> => {
+				if (workers.length === 1 && !releaseKill) {
+					const { promise, resolve } = Promise.withResolvers<void>();
+					releaseKill = resolve;
+					await promise;
+				}
+				worker.terminated = true;
+			};
+			return { ...handle, terminate: slowKill };
+		}, 0);
+		const model = await client.initialize(MODEL, CACHE_DIR);
+		expect(workers.length).toBe(1);
+
+		// ONE dispose — two overlapping ones are not needed to reach this.
+		const shutdown = client.terminate();
+		// A `recall` / `retain` lands while the kill is in flight: the ~1
+		// microtask window a real session dispose has, since the production
+		// handle SIGKILLs synchronously.
+		const parked = drain(model!.embed(["mid-shutdown"])).then(
+			() => "resolved",
+			(error: unknown) => `rejected: ${error instanceof Error ? error.message : String(error)}`,
+		);
+		await settle();
+
+		releaseKill?.();
+		await shutdown;
+
+		// THE CONTRACT. When `terminate()` returns, nothing of this client is
+		// running. Before the shutdown guard the parked request resumed inside
+		// that await and spawned its replacement, so the reap resolved with a
+		// fresh ~1.25 GB child in the slot and the session leaked it.
+		expect(workers.filter(worker => !worker.terminated).length).toBe(0);
+		// It is never spawned in the first place, rather than spawned and reaped.
+		expect(workers.length).toBe(1);
+		// And the request is settled loudly, not dropped: a promise nobody ever
+		// resolves is the other way to satisfy the line above.
+		expect(await parked).toBe("rejected: mnemopi embed client is shutting down");
+	});
+
+	it("never blocks a request longer than the worker handle's own kill", async () => {
+		// The `#acquireWorker` comment claims the teardown wait cannot hang,
+		// and the whole claim rests on one unpinned invariant: a teardown
+		// settles exactly when `worker.terminate()` does, and both handles
+		// `spawnMnemopiEmbedWorker` can return kill without awaiting the child.
+		// Make `createWorkerHandle.terminate()` await `proc.exited` tomorrow and
+		// every mnemopi recall parks behind a process reap; this is what fails.
+		const spawned = createWorkerSubprocess<MnemopiEmbedWorkerOutbound>({
+			// A child that sleeps until it is killed, so the kill is observed
+			// against a live process rather than an already-dead one.
+			spawnCommand: {
+				cmd: [process.execPath, "-e", "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60000);"],
+			},
+			env: {},
+			exitLabel: "mnemopi embed subprocess",
+		});
+		const handle = createWorkerHandle<MnemopiEmbedWorkerInbound, MnemopiEmbedWorkerOutbound>(spawned, () => {});
+		expect(await beforeNextMacrotask(handle.terminate())).toBe("settled");
+		// Reap the child and its stderr drain before leaving, so the kill this
+		// test just proved cannot land as a stray error in a later file.
+		await spawned.proc.exited;
+		await spawned.stderrDrained;
+
+		const unavailable = createUnavailableWorker<MnemopiEmbedWorkerInbound, MnemopiEmbedWorkerOutbound>(
+			new Error("spawn failed"),
+		);
+		expect(await beforeNextMacrotask(unavailable.terminate())).toBe("settled");
+	}, 15_000);
 
 	it("keeps the worker for the whole session when the window is 0", async () => {
 		vi.useFakeTimers();
@@ -321,12 +432,26 @@ describe("an idle embed worker is unloaded and relaunched on demand", () => {
 			expect(parseEmbedIdleUnloadMs(nonPositive)).toBe(0);
 		}
 
+		// THE BOUNDARY THAT INVERTS THE FEATURE. `setTimeout` holds its delay in
+		// a signed 32-bit integer and rewrites anything larger to `1` ms, so an
+		// unclamped `2147483648` unloads after every single request and reloads
+		// the 1.25 GB model on the next one — the worst case of what this exists
+		// to fix, from a value the settings screen accepts. It clamps DOWN to
+		// the ceiling, never through it.
+		expect(parseEmbedIdleUnloadMs(MAX_EMBED_IDLE_UNLOAD_MS)).toBe(MAX_EMBED_IDLE_UNLOAD_MS);
+		expect(parseEmbedIdleUnloadMs(MAX_EMBED_IDLE_UNLOAD_MS + 1)).toBe(MAX_EMBED_IDLE_UNLOAD_MS);
+		expect(parseEmbedIdleUnloadMs(2 ** 31)).toBe(MAX_EMBED_IDLE_UNLOAD_MS);
+		expect(parseEmbedIdleUnloadMs(Number.MAX_SAFE_INTEGER)).toBe(MAX_EMBED_IDLE_UNLOAD_MS);
+		expect(parseEmbedIdleUnloadMs("2147483648")).toBe(MAX_EMBED_IDLE_UNLOAD_MS);
+
 		const { spawn } = createFleet();
 		const client = new MnemopiEmbedClient(spawn, IDLE_MS);
 		client.setIdleUnloadMs(-1);
 		expect(client.idleUnloadMs).toBe(0);
 		client.setIdleUnloadMs(1.9);
 		expect(client.idleUnloadMs).toBe(1);
+		client.setIdleUnloadMs(2 ** 31);
+		expect(client.idleUnloadMs).toBe(MAX_EMBED_IDLE_UNLOAD_MS);
 	});
 
 	it("ships a default window that unloads", () => {

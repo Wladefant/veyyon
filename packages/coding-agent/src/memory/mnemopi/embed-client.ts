@@ -1,7 +1,7 @@
 // Owners, not the `@veyyon/utils` barrel: 2 modules against 74.
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage } from "@veyyon/utils/type-guards";
-import { DEFAULT_EMBED_IDLE_UNLOAD_MS } from "../../config/settings-domains/shared";
+import { DEFAULT_EMBED_IDLE_UNLOAD_MS, MAX_EMBED_IDLE_UNLOAD_MS } from "../../config/settings-domains/shared";
 import {
 	createUnavailableWorker,
 	createWorkerHandle,
@@ -39,11 +39,16 @@ type PendingRequest =
  * Clamped to match the sibling numeric settings in `loadMnemopiConfig`:
  * non-finite, negative, or invalid values clamp to 0 (disabling idle unload),
  * and fractional values are rounded down with `Math.floor`.
+ *
+ * The upper clamp is {@link MAX_EMBED_IDLE_UNLOAD_MS}, because `setTimeout`
+ * rewrites a delay it cannot hold in a signed 32-bit integer to `1` ms: an
+ * unclamped `2147483648` would unload the worker after every single request
+ * and reload the ONNX model on the next one.
  */
 export function parseEmbedIdleUnloadMs(value: unknown): number {
 	const num = typeof value === "number" ? value : Number(value);
 	if (!Number.isFinite(num)) return 0;
-	return Math.max(0, Math.floor(num));
+	return Math.min(MAX_EMBED_IDLE_UNLOAD_MS, Math.max(0, Math.floor(num)));
 }
 
 /**
@@ -107,6 +112,17 @@ export class MnemopiEmbedClient {
 	#idleTimer: NodeJS.Timeout | undefined;
 	/** The kill a request arriving mid-unload waits out before it spawns a replacement. */
 	#teardown: Promise<void> | null = null;
+	/**
+	 * How many public {@link terminate} calls are in flight.
+	 *
+	 * A counter rather than a flag because two disposes overlap: the first to
+	 * finish must not clear the guard while the second is still awaiting the
+	 * same kill. Deliberately NOT set by the idle-unload or crash paths, which
+	 * reap through `#reap()` instead — a request parked on those
+	 * kills is supposed to get a replacement worker, and a request parked on a
+	 * shutdown is not.
+	 */
+	#shutdowns = 0;
 
 	constructor(
 		spawnWorker: () => MnemopiEmbedWorkerHandle = spawnMnemopiEmbedWorker,
@@ -169,7 +185,34 @@ export class MnemopiEmbedClient {
 		return { embed: (texts, batchSize) => this.#streamEmbed(model, cacheDir, texts, batchSize) };
 	}
 
+	/**
+	 * Shut the client down: kill the worker and leave the slot empty.
+	 *
+	 * The guarantee callers depend on — session dispose, `shutdownMnemopiEmbedClient`
+	 * — is that nothing survives this call. A request that parked on the kill
+	 * inside `#acquireWorker` resumes *before* the await below settles (it
+	 * registered on the same promise first) and would otherwise spawn its
+	 * ~1.25 GB replacement into the slot we just emptied. `#shutdowns` holds the
+	 * door shut for the whole call, so that request rejects instead.
+	 */
 	async terminate(): Promise<void> {
+		this.#shutdowns++;
+		try {
+			await this.#reap();
+		} finally {
+			this.#shutdowns--;
+		}
+	}
+
+	/**
+	 * Kill the live worker and settle everything waiting on it, leaving the
+	 * client reusable.
+	 *
+	 * The idle timer and the crash handler reap here rather than through
+	 * {@link terminate}: an embed arriving mid-unload must get a fresh worker,
+	 * which is the whole point of unloading an idle one.
+	 */
+	async #reap(): Promise<void> {
 		this.#cancelIdleTimer();
 		const worker = this.#worker;
 		this.#worker = null;
@@ -247,15 +290,17 @@ export class MnemopiEmbedClient {
 	/**
 	 * The live worker, spawning one when there is none.
 	 *
-	 * Async because of the unload race: {@link terminate} nulls `#worker`
-	 * synchronously and then awaits the kill, so a request landing in that
-	 * window would otherwise spawn a second subprocess beside a dying one. It
-	 * waits out the teardown in flight and comes back to a clean slot instead.
+	 * Async because of the unload race: a reap nulls `#worker` synchronously
+	 * and then awaits the kill, so a request landing in that window would
+	 * otherwise spawn a second subprocess beside a dying one. It waits out the
+	 * teardown in flight and comes back to a clean slot instead.
 	 *
 	 * The wait is finite: worker-client termination semantics (`createWorkerHandle`
 	 * in `subprocess/worker-client.ts`) issue a synchronous SIGKILL without
 	 * awaiting process exit, settling on the next microtask. Teardown never
-	 * awaits child cooperation or external I/O, so the wait cannot hang.
+	 * awaits child cooperation or external I/O, so the wait cannot hang. That
+	 * invariant is load-bearing and pinned by "never blocks a request longer
+	 * than the worker handle's own kill" in the idle-unload suite.
 	 */
 	async #acquireWorker(): Promise<MnemopiEmbedWorkerHandle> {
 		// Disarm first: a request in flight must never be killed under itself,
@@ -263,6 +308,12 @@ export class MnemopiEmbedClient {
 		this.#cancelIdleTimer();
 		const teardown = this.#teardown;
 		if (teardown) await teardown;
+		// Re-checked here, AFTER the await, and not only on entry: a request
+		// parked on a shutdown's kill resumes inside `terminate()`'s own await,
+		// and spawning a replacement there is what left a live ~1.25 GB child
+		// behind a completed shutdown. Rejecting settles the request loudly
+		// instead; an idle-unload teardown sets no such flag and still respawns.
+		if (this.#shutdowns > 0) throw new Error("mnemopi embed client is shutting down");
 		if (this.#worker) return this.#worker;
 		const worker = this.#spawnWorker();
 		this.#worker = worker;
@@ -288,7 +339,9 @@ export class MnemopiEmbedClient {
 			this.#idleTimer = undefined;
 			if (!this.#worker || this.#pending.size > 0) return;
 			logger.debug("mnemopi-embed: unloading idle worker", { idleUnloadMs: this.#idleUnloadMs });
-			void this.terminate();
+			// `#reap`, not `terminate()`: this is an unload, not a shutdown, so a
+			// request that lands on the kill still gets its replacement worker.
+			void this.#reap();
 		}, this.#idleUnloadMs);
 		// The unload is an optimisation; it must never be the reason the agent
 		// process stays alive at exit.
@@ -332,7 +385,8 @@ export class MnemopiEmbedClient {
 			else pending.resolve(error);
 		}
 		this.#pending.clear();
-		void this.terminate();
+		// A crashed child is reaped, not shut down: the next request respawns.
+		void this.#reap();
 	}
 }
 

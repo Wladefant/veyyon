@@ -63,3 +63,17 @@ export const DEFAULT_INLINE_OUTPUT_MAX_BYTES = DEFAULT_ARTIFACT_SPILL_THRESHOLD_
  * while an idle session stops paying for the model.
  */
 export const DEFAULT_EMBED_IDLE_UNLOAD_MS = 300_000;
+
+/**
+ * Ceiling for `mnemopi.embedIdleUnloadMs`, and the clamp
+ * `parseEmbedIdleUnloadMs` applies.
+ *
+ * `setTimeout` stores its delay in a signed 32-bit integer: a larger window is
+ * silently rewritten to `1` ms (`TimeoutOverflowWarning`), which turns "never
+ * unload" into "unload after every single request" — the worst case of the
+ * thing the idle unload exists to avoid, reached from a value the settings
+ * screen would otherwise accept. Clamping to the largest delay a timer can
+ * actually hold keeps a too-large window meaning "effectively never" (24.8
+ * days) instead of "immediately".
+ */
+export const MAX_EMBED_IDLE_UNLOAD_MS = 2_147_483_647;

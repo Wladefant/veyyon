@@ -5,7 +5,12 @@ import { AUTO_COMPACTION_THRESHOLD } from "@veyyon/agent-core/compaction/thresho
 import { INSTRUMENTATION_LEVELS } from "@veyyon/ai/instrumentation";
 import { unsetNumberOption } from "@veyyon/kernel/settings/optional-number";
 import { DEFAULT_TOKEN_BUDGET } from "argot/constants";
-import { DEFAULT_EMBED_IDLE_UNLOAD_MS, EMPTY_STRING_ARRAY, HINDSIGHT_RECALL_TYPES_DEFAULT } from "./shared";
+import {
+	DEFAULT_EMBED_IDLE_UNLOAD_MS,
+	EMPTY_STRING_ARRAY,
+	HINDSIGHT_RECALL_TYPES_DEFAULT,
+	MAX_EMBED_IDLE_UNLOAD_MS,
+} from "./shared";
 
 /** Context domain slice of SETTINGS_SCHEMA — composed in ../settings-schema.ts. */
 export const CONTEXT_SETTINGS = {
@@ -824,6 +829,10 @@ export const CONTEXT_SETTINGS = {
 			condition: "mnemopiActive",
 			keywords: ["memory", "ram", "embeddings", "worker", "unload", "idle"],
 			min: 0,
+			// `setTimeout` holds its delay in a signed 32-bit integer; anything
+			// larger collapses to a 1 ms window, so the ceiling is the largest
+			// window a timer can honour rather than an arbitrary limit.
+			max: MAX_EMBED_IDLE_UNLOAD_MS,
 		},
 	},
 	"mnemopi.embeddingModel": {

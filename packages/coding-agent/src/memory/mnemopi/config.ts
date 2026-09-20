@@ -53,9 +53,15 @@ export interface MnemopiBackendConfig {
 	injectionTokenLimit: number;
 	/**
 	 * Idle window, in milliseconds, after which the embeddings subprocess is
-	 * unloaded; `0` keeps it for the session. Validated here rather than at the
-	 * client so a bad `mnemopi.embedIdleUnloadMs` is rejected where the config
-	 * is read.
+	 * unloaded; `0` keeps it for the session.
+	 *
+	 * Always a usable window: `parseEmbedIdleUnloadMs` — the client's own
+	 * validator, applied here so every reader of this config sees the same
+	 * number the client runs on — clamps anything unusable rather than
+	 * throwing. A non-finite, negative or unparseable value becomes `0`
+	 * (unloading off), a fraction is floored, and a value past the signed
+	 * 32-bit `setTimeout` ceiling becomes that ceiling. `loadMnemopiConfig` has
+	 * five call sites that treat it as total, so it stays total.
 	 */
 	embedIdleUnloadMs: number;
 	debug: boolean;
