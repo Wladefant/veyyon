@@ -175,12 +175,20 @@ function toModelName(value: unknown, fallback: string): string {
 	return toNonEmptyString(value) ?? fallback;
 }
 
-function toInputCapabilities(value: unknown): ("text" | "image")[] {
+export function toInputCapabilities(value: unknown): ("text" | "image" | "video")[] {
 	if (!Array.isArray(value)) {
 		return ["text"];
 	}
 	const supportsImage = value.some(item => item === "image");
-	return supportsImage ? ["text", "image"] : ["text"];
+	const supportsVideo = value.some(item => item === "video");
+	const result: ("text" | "image" | "video")[] = ["text"];
+	if (supportsImage) {
+		result.push("image");
+	}
+	if (supportsVideo) {
+		result.push("video");
+	}
+	return result;
 }
 
 /**
@@ -2823,8 +2831,12 @@ export function kimiCodeModelManagerOptions(
 							reasoning: entry.supports_reasoning === true || model.reasoning,
 							input:
 								entry.supports_image_in === true || model.input.includes("image")
-									? ["text", "image"]
-									: ["text"],
+									? model.input.includes("video") || entry.supports_video_in === true
+										? ["text", "image", "video"]
+										: ["text", "image"]
+									: model.input.includes("video") || entry.supports_video_in === true
+										? ["text", "video"]
+										: ["text"],
 							contextWindow:
 								typeof entry.context_length === "number"
 									? entry.context_length
@@ -3039,7 +3051,14 @@ export function syntheticModelManagerOptions(
 							...(reference ? { ...reference, id: defaults.id, baseUrl } : defaults),
 							name: toModelName(entry.name, reference?.name ?? defaults.name),
 							reasoning: entry.supports_reasoning === true || (reference?.reasoning ?? false),
-							input: entry.supports_vision === true || referenceSupportsImage ? ["text", "image"] : ["text"],
+							input:
+								entry.supports_vision === true || referenceSupportsImage
+									? (reference?.input.includes("video") ?? false)
+										? ["text", "image", "video"]
+										: ["text", "image"]
+									: (reference?.input.includes("video") ?? false)
+										? ["text", "video"]
+										: ["text"],
 							contextWindow: toPositiveNumber(
 								entry.context_length,
 								reference?.contextWindow ?? defaults.contextWindow,
@@ -3168,7 +3187,13 @@ export function basetenModelManagerOptions(
 						return {
 							...baseModel,
 							reasoning,
-							input: vision ? ["text", "image"] : ["text"],
+							input: vision
+								? modalities.includes("video") || (reference?.input.includes("video") ?? false)
+									? ["text", "image", "video"]
+									: ["text", "image"]
+								: modalities.includes("video") || (reference?.input.includes("video") ?? false)
+									? ["text", "video"]
+									: ["text"],
 							cost,
 							contextWindow,
 							maxTokens,
@@ -3215,6 +3240,82 @@ export function coreWeaveModelManagerOptions(
 		...config,
 		headers: () => coreWeaveProjectHeaders(Bun.env),
 	});
+}
+
+// ---------------------------------------------------------------------------
+// 15.6 Command Code
+// ---------------------------------------------------------------------------
+
+/**
+ * The Command Code models the provider documents with fixed rates and context
+ * windows (the coding flagships of its open-model catalog). Its Provider API
+ * lists every hosted model publicly, so live discovery with a key widens the
+ * list at runtime; the seed keeps the provider usable when generation has no
+ * key. Output ceilings are left unset: the endpoint is an OpenAI-compatible
+ * proxy and does not document a per-model completion cap.
+ */
+// Vendor docs for video input:
+// - Moonshot Kimi: https://platform.moonshot.cn/docs/guide/vision
+// - MiniMax M3: https://platform.minimaxi.com/document/ChatCompletion-v2
+export const COMMAND_CODE_STATIC_MODELS: readonly ModelSpec<"openai-completions">[] = [
+	{
+		id: "moonshotai/Kimi-K2.7-Code",
+		name: "Kimi K2.7 Code",
+		api: "openai-completions",
+		provider: "command-code",
+		baseUrl: "https://api.commandcode.ai/provider/v1",
+		reasoning: false,
+		input: ["text", "image", "video"],
+		cost: { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 },
+		contextWindow: 256000,
+		maxTokens: null,
+	},
+	{
+		id: "zai-org/GLM-5.3",
+		name: "GLM-5.3",
+		api: "openai-completions",
+		provider: "command-code",
+		baseUrl: "https://api.commandcode.ai/provider/v1",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
+		contextWindow: 1000000,
+		maxTokens: null,
+	},
+	{
+		id: "MiniMaxAI/MiniMax-M3",
+		name: "MiniMax M3",
+		api: "openai-completions",
+		provider: "command-code",
+		baseUrl: "https://api.commandcode.ai/provider/v1",
+		reasoning: false,
+		input: ["text", "image", "video"],
+		cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0 },
+		contextWindow: 1000000,
+		maxTokens: null,
+	},
+];
+
+export interface CommandCodeModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+export function commandCodeModelManagerOptions(
+	config?: CommandCodeModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	return createSimpleOpenAICompletionsOptions(
+		"command-code",
+		"https://api.commandcode.ai/provider/v1",
+		config,
+		(entry, model) => ({
+			...model,
+			contextWindow: toPositiveNumber(entry.context_length, model.contextWindow),
+			// The Provider API publishes context_length but no output ceiling.
+			maxTokens: null,
+		}),
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -3289,8 +3390,12 @@ function mapNousResearchModel(
 		: [];
 	const inputModalities = Array.isArray(architecture.input_modalities)
 		? architecture.input_modalities
-		: typeof architecture.modality === "string" && architecture.modality.includes("image")
-			? ["text", "image"]
+		: typeof architecture.modality === "string"
+			? [
+					"text",
+					...(architecture.modality.includes("image") ? ["image"] : []),
+					...(architecture.modality.includes("video") ? ["video"] : []),
+				]
 			: ["text"];
 
 	return {
@@ -4360,7 +4465,7 @@ function createCopilotLongContextVariant(
 		contextWindow: variantWindow,
 		// Long-context tier has its own token prices (Gemini/GPT bill ~2x above
 		// the default boundary). cacheWrite is not reported per tier; inherit.
-		...(longCost && { cost: { ...longCost, cacheWrite: base.cost.cacheWrite } }),
+		...(longCost && { cost: { ...longCost, cacheWrite: base.cost?.cacheWrite ?? 0 } }),
 		contextPromotionTarget: undefined,
 	};
 }
