@@ -16,10 +16,10 @@ import {
 	resolveEffectiveApprovalMode,
 } from "../../tools/core/approval";
 import { cwdEscapingTargets, formatCwdBoundaryReason } from "../../tools/core/cwd-boundary";
-import { ToolAbortError } from "../../tools/core/tool-errors";
 import { TOOL_EXECUTION_ENTRIES, type ToolExecutionEntryName } from "../../tools/core/execution-registry";
 import { recordRefusal, type ToolPolicyFrame } from "../../tools/core/refusal-fence";
 import { secretUseApprovalReason } from "../../tools/core/secret-use-boundary";
+import { ToolAbortError } from "../../tools/core/tool-errors";
 import { normalizeToolEventInput, resolveToolEventInput } from "../tool-event-input";
 import type { ExtensionRunner } from "./runner";
 import type {
