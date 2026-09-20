@@ -187,25 +187,72 @@ describe("an idle embed worker is unloaded and relaunched on demand", () => {
 		const model = await client.initialize(MODEL, CACHE_DIR);
 
 		workers[0].hold = true;
-		const inFlight = drain(model!.embed(["slow"]));
+		const slow = drain(model!.embed(["slow"]));
 		await settle();
 
-		// Four windows pass while the child is still computing. A timer armed
-		// before the request, or one that ignores the pending map, kills the
-		// worker here and rejects the promise.
+		// A sibling request arrives and completes while `slow` is still in flight.
+		// Its `finally` block calls `#armIdleTimer()`, which must NOT arm or fire
+		// an unload timer because `slow` is still pending in the map.
+		workers[0].hold = false;
+		const fast = drain(model!.embed(["fast"]));
+		await settle();
+		expect(await fast).toEqual(vectorsFor(["fast"]));
+		expect(workers[0].terminated).toBe(false);
+
+		// Four windows pass while the child is still computing `slow`. If the
+		// pending guard is missing, the timer armed by `fast`'s completion fires
+		// here, killing the worker and rejecting `slow`.
 		await advance(IDLE_MS * 4);
 		expect(workers[0].terminated).toBe(false);
 
-		workers[0].hold = false;
+		// The pending request completes cleanly; the worker was not killed under it.
 		workers[0].answerAll();
-		expect(await inFlight).toEqual(vectorsFor(["slow"]));
+		expect(await slow).toEqual(vectorsFor(["slow"]));
 		expect(workers.length).toBe(1);
+		expect(workers[0].terminated).toBe(false);
 
 		// And the window is measured from the reply, not from the request: the
 		// worker survives one tick short of it and dies on it.
 		await advance(IDLE_MS - 1);
 		expect(workers[0].terminated).toBe(false);
 		await advance(1);
+		expect(workers[0].terminated).toBe(true);
+
+		await client.terminate();
+	});
+
+	it("awaits an in-flight teardown when terminate is called concurrently", async () => {
+		vi.useFakeTimers();
+		const { workers, spawn } = createFleet();
+		let releaseKill: (() => void) | undefined;
+		const client = new MnemopiEmbedClient(() => {
+			const handle = spawn();
+			const worker = workers[workers.length - 1];
+			const slowKill = async (): Promise<void> => {
+				const { promise, resolve } = Promise.withResolvers<void>();
+				releaseKill = resolve;
+				await promise;
+				worker.terminated = true;
+			};
+			return { ...handle, terminate: slowKill };
+		}, 0);
+		await client.initialize(MODEL, CACHE_DIR);
+		expect(workers.length).toBe(1);
+
+		const firstTerminate = client.terminate();
+		let secondFinished = false;
+		const secondTerminate = client.terminate().then(() => {
+			secondFinished = true;
+		});
+
+		await settle();
+		// The second terminate must not return while teardown is in flight.
+		expect(secondFinished).toBe(false);
+		expect(workers[0].terminated).toBe(false);
+
+		releaseKill?.();
+		await Promise.all([firstTerminate, secondTerminate]);
+		expect(secondFinished).toBe(true);
 		expect(workers[0].terminated).toBe(true);
 	});
 
@@ -265,22 +312,21 @@ describe("an idle embed worker is unloaded and relaunched on demand", () => {
 		expect(workers[0].terminated).toBe(true);
 	});
 
-	it("refuses an idle window that is not a whole number of milliseconds", () => {
+	it("clamps an idle window to match sibling numeric settings", () => {
 		expect(parseEmbedIdleUnloadMs(0)).toBe(0);
 		expect(parseEmbedIdleUnloadMs(DEFAULT_EMBED_IDLE_UNLOAD_MS)).toBe(DEFAULT_EMBED_IDLE_UNLOAD_MS);
+		expect(parseEmbedIdleUnloadMs(1.5)).toBe(1);
 
-		for (const bad of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, "120000", null, undefined]) {
-			expect(() => parseEmbedIdleUnloadMs(bad), `${String(bad)} must be rejected`).toThrow(
-				/mnemopi\.embedIdleUnloadMs must be 0/,
-			);
+		for (const nonPositive of [-1, -500, Number.NaN, Number.POSITIVE_INFINITY, "5m", null, undefined]) {
+			expect(parseEmbedIdleUnloadMs(nonPositive)).toBe(0);
 		}
 
 		const { spawn } = createFleet();
 		const client = new MnemopiEmbedClient(spawn, IDLE_MS);
-		expect(() => client.setIdleUnloadMs(-1)).toThrow(/mnemopi\.embedIdleUnloadMs must be 0/);
-		// A rejected value leaves the previous window in force rather than
-		// silently disabling the unload.
-		expect(client.idleUnloadMs).toBe(IDLE_MS);
+		client.setIdleUnloadMs(-1);
+		expect(client.idleUnloadMs).toBe(0);
+		client.setIdleUnloadMs(1.9);
+		expect(client.idleUnloadMs).toBe(1);
 	});
 
 	it("ships a default window that unloads", () => {

@@ -33,19 +33,17 @@ type PendingRequest =
 	| { kind: "embed"; model: MnemopiEmbedModelId; resolve: (vectors: number[][] | Error) => void };
 
 /**
- * Validate an idle-unload window, in milliseconds. `0` disables unloading and
- * keeps the worker for the whole session; anything else must be a finite,
- * non-negative integer.
+ * Validate and normalize an idle-unload window, in milliseconds. `0` disables
+ * unloading and keeps the worker for the whole session.
  *
- * Loud rather than clamped: a mistyped `mnemopi.embedIdleUnloadMs` that we
- * silently rounded would leave the operator with a worker that never unloads
- * (the very defect this setting exists to fix) and no way to see why.
+ * Clamped to match the sibling numeric settings in `loadMnemopiConfig`:
+ * non-finite, negative, or invalid values clamp to 0 (disabling idle unload),
+ * and fractional values are rounded down with `Math.floor`.
  */
 export function parseEmbedIdleUnloadMs(value: unknown): number {
-	if (typeof value === "number" && Number.isInteger(value) && value >= 0) return value;
-	throw new Error(
-		`mnemopi.embedIdleUnloadMs must be 0 (never unload) or a positive whole number of milliseconds; received ${String(value)}`,
-	);
+	const num = typeof value === "number" ? value : Number(value);
+	if (!Number.isFinite(num)) return 0;
+	return Math.max(0, Math.floor(num));
 }
 
 /**
@@ -119,10 +117,11 @@ export class MnemopiEmbedClient {
 	}
 
 	/**
-	 * Re-point the idle window at a configured value. Throws on anything
-	 * {@link parseEmbedIdleUnloadMs} rejects, and takes effect immediately: a
-	 * worker already sitting idle is re-armed against the new window, and `0`
-	 * disarms the timer so the worker lives for the rest of the session.
+	 * Re-point the idle window at a configured value. Non-finite or negative
+	 * values clamp to 0 (disabling idle unload), matching sibling numeric
+	 * settings in `loadMnemopiConfig`. Takes effect immediately: a worker
+	 * already sitting idle is re-armed against the new window, and `0` disarms
+	 * the timer so the worker lives for the rest of the session.
 	 */
 	setIdleUnloadMs(value: unknown): void {
 		this.#idleUnloadMs = parseEmbedIdleUnloadMs(value);
@@ -183,7 +182,10 @@ export class MnemopiEmbedClient {
 			else pending.resolve(new Error("mnemopi embed worker terminated"));
 		}
 		this.#pending.clear();
-		if (!worker) return;
+		if (!worker) {
+			await this.#teardown;
+			return;
+		}
 		// Publish the kill BEFORE awaiting it: `#acquireWorker` waits on this
 		// promise, so an embed that lands while the subprocess is dying joins the
 		// respawn instead of racing a second child into existence.
@@ -249,6 +251,11 @@ export class MnemopiEmbedClient {
 	 * synchronously and then awaits the kill, so a request landing in that
 	 * window would otherwise spawn a second subprocess beside a dying one. It
 	 * waits out the teardown in flight and comes back to a clean slot instead.
+	 *
+	 * The wait is finite: worker-client termination semantics (`createWorkerHandle`
+	 * in `subprocess/worker-client.ts`) issue a synchronous SIGKILL without
+	 * awaiting process exit, settling on the next microtask. Teardown never
+	 * awaits child cooperation or external I/O, so the wait cannot hang.
 	 */
 	async #acquireWorker(): Promise<MnemopiEmbedWorkerHandle> {
 		// Disarm first: a request in flight must never be killed under itself,

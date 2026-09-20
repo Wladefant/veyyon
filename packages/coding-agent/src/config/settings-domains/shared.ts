@@ -54,7 +54,7 @@ export const DEFAULT_INLINE_OUTPUT_MAX_BYTES = DEFAULT_ARTIFACT_SPILL_THRESHOLD_
  *
  * It lives here for the same reason as {@link DEFAULT_INLINE_FLOOR_FRACTION}:
  * the client is in `memory/mnemopi`, which a settings domain must not import,
- * and writing 120000 down twice lets the schema default and the compiled
+ * and writing 300000 down twice lets the schema default and the compiled
  * default drift the first time either is tuned.
  *
  * Five minutes: the embeddings subprocess pins ~1.25 GB of commit charge for the
