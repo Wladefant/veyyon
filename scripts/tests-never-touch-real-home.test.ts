@@ -213,6 +213,18 @@ export const ALLOWLIST: ReadonlyArray<AllowlistEntry> = [
 		reason:
 			'`runtime.pythonPath` is the interpreter the setup path discovered, either the system python or the managed environment\'s. The spawn is `-c "import matplotlib"`, a capability probe against that specific interpreter, which is the one thing a hardcoded path would answer wrongly.',
 	},
+	{
+		file: "packages/coding-agent/test/task/compiled-bridge-materializes-os-script-and-claims-ticket.test.ts",
+		rule: "unresolved-spawn-target",
+		reason:
+			'`compiledExe` is `path.join(scratchDir, "runner"` (`runner.exe` on Windows), the output of a `bun build --compile` the suite runs itself from a source file it wrote into the same scratch directory. The subject is what a COMPILED bridge does with an embedded script, which a literal path cannot name because the file does not exist until the test builds it. Every spawn passes `HOME` and `USERPROFILE` pointing at `scratchHome` inside that same directory, so the child resolves no real config root.',
+	},
+	{
+		file: "packages/coding-agent/test/task/an-orphaned-topic-claim-is-rolled-back-and-the-lane-replenished.test.ts",
+		rule: "unresolved-spawn-target",
+		reason:
+			'Six targets, all discovery rather than execution of anything installed: `gitCmd` is the literal `git`/`git.exe` chosen by platform for one `rev-parse HEAD`; `lookupCmd` is the literal `which`/`where` chosen the same way; `override`, `resolved` and `detectedPython` are the interpreter that lookup returned, probed with `--version` only to decide whether to skip; and `python` runs the ledger bridge script that ships in `src/task/` against a lock file the test made. A python contract cannot be asserted without asking a python, and which python exists is exactly what the host has to answer.',
+	},
 	// The four below are all `bare-config-dir-name`, and they have one shape between them:
 	// the config-dir NAME is the SUBJECT, not the isolation. Each one assigns a name, asks a
 	// resolver or a helper what it does with it, and asserts on the STRING that comes back.

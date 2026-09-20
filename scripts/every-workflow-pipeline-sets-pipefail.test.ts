@@ -295,6 +295,7 @@ describe("every pipeline in .github runs with pipefail", () => {
 			"docs.yml::book-staleness::Install mdbook",
 			"docs.yml::book-staleness::Verify handbook assets and search index",
 			"site.yml::build_and_deploy::Install mdbook",
+			"upstream-sync.yml::check-and-open-sync-pr::Check upstream divergence and open draft PR",
 		]);
 	});
 
