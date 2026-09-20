@@ -75,9 +75,9 @@ function replyTo(message: MnemopiEmbedWorkerInbound): MnemopiEmbedWorkerOutbound
  * A fleet of fake workers behind one `spawnWorker`, so a test can count
  * respawns and watch each child's kill independently.
  */
-function createFleet(): { workers: FakeWorker[]; spawn: () => MnemopiEmbedWorkerHandle } {
+function createFleet(): { workers: FakeWorker[]; spawnWorker: () => MnemopiEmbedWorkerHandle } {
 	const workers: FakeWorker[] = [];
-	const spawn = (): MnemopiEmbedWorkerHandle => {
+	const spawnWorker = (): MnemopiEmbedWorkerHandle => {
 		let onMessage: ((message: MnemopiEmbedWorkerOutbound) => void) | undefined;
 		const unanswered: MnemopiEmbedWorkerInbound[] = [];
 		const worker: FakeWorker = {
@@ -118,7 +118,7 @@ function createFleet(): { workers: FakeWorker[]; spawn: () => MnemopiEmbedWorker
 		workers.push(worker);
 		return worker.handle;
 	};
-	return { workers, spawn };
+	return { workers, spawnWorker };
 }
 
 /** Let queued IPC replies and the client's own await chain settle. */
@@ -164,8 +164,8 @@ describe("an idle embed worker is unloaded and relaunched on demand", () => {
 
 	it("kills the worker once the idle window elapses, and not one tick before", async () => {
 		vi.useFakeTimers();
-		const { workers, spawn } = createFleet();
-		const client = new MnemopiEmbedClient(spawn, IDLE_MS);
+		const { workers, spawnWorker } = createFleet();
+		const client = new MnemopiEmbedClient(spawnWorker, IDLE_MS);
 		const model = await client.initialize(MODEL, CACHE_DIR);
 		expect(model).not.toBeNull();
 
@@ -184,8 +184,8 @@ describe("an idle embed worker is unloaded and relaunched on demand", () => {
 
 	it("respawns exactly one worker on the next embed and answers identically", async () => {
 		vi.useFakeTimers();
-		const { workers, spawn } = createFleet();
-		const client = new MnemopiEmbedClient(spawn, IDLE_MS);
+		const { workers, spawnWorker } = createFleet();
+		const client = new MnemopiEmbedClient(spawnWorker, IDLE_MS);
 		const model = await client.initialize(MODEL, CACHE_DIR);
 		const before = await drain(model!.embed(["hello"]));
 
@@ -210,8 +210,8 @@ describe("an idle embed worker is unloaded and relaunched on demand", () => {
 
 	it("never unloads under an in-flight request, and re-arms once it lands", async () => {
 		vi.useFakeTimers();
-		const { workers, spawn } = createFleet();
-		const client = new MnemopiEmbedClient(spawn, IDLE_MS);
+		const { workers, spawnWorker } = createFleet();
+		const client = new MnemopiEmbedClient(spawnWorker, IDLE_MS);
 		const model = await client.initialize(MODEL, CACHE_DIR);
 
 		workers[0].hold = true;
@@ -251,10 +251,10 @@ describe("an idle embed worker is unloaded and relaunched on demand", () => {
 
 	it("awaits an in-flight teardown when terminate is called concurrently", async () => {
 		vi.useFakeTimers();
-		const { workers, spawn } = createFleet();
+		const { workers, spawnWorker } = createFleet();
 		let releaseKill: (() => void) | undefined;
 		const client = new MnemopiEmbedClient(() => {
-			const handle = spawn();
+			const handle = spawnWorker();
 			const worker = workers[workers.length - 1];
 			const slowKill = async (): Promise<void> => {
 				const { promise, resolve } = Promise.withResolvers<void>();
@@ -286,10 +286,10 @@ describe("an idle embed worker is unloaded and relaunched on demand", () => {
 
 	it("serves an embed that arrives while the unloaded worker is still dying", async () => {
 		vi.useFakeTimers();
-		const { workers, spawn } = createFleet();
+		const { workers, spawnWorker } = createFleet();
 		let releaseKill: (() => void) | undefined;
 		const client = new MnemopiEmbedClient(() => {
-			const handle = spawn();
+			const handle = spawnWorker();
 			const worker = workers[workers.length - 1];
 			// A kill that does not complete until the test says so, which is the
 			// window a second child could be spawned into.
@@ -329,10 +329,10 @@ describe("an idle embed worker is unloaded and relaunched on demand", () => {
 	it("leaves no worker behind when a request lands mid-shutdown", async () => {
 		// No clock: with a `0` window nothing arms a timer, and the race this
 		// closes is between a shutdown and a request, not between two instants.
-		const { workers, spawn } = createFleet();
+		const { workers, spawnWorker } = createFleet();
 		let releaseKill: (() => void) | undefined;
 		const client = new MnemopiEmbedClient(() => {
-			const handle = spawn();
+			const handle = spawnWorker();
 			const worker = workers[workers.length - 1];
 			// Only the first child's kill is held open. A replacement spawned
 			// into the shutdown would be killed instantly by nothing at all, so
@@ -407,8 +407,8 @@ describe("an idle embed worker is unloaded and relaunched on demand", () => {
 
 	it("keeps the worker for the whole session when the window is 0", async () => {
 		vi.useFakeTimers();
-		const { workers, spawn } = createFleet();
-		const client = new MnemopiEmbedClient(spawn, 0);
+		const { workers, spawnWorker } = createFleet();
+		const client = new MnemopiEmbedClient(spawnWorker, 0);
 		await client.initialize(MODEL, CACHE_DIR);
 
 		await advance(DEFAULT_EMBED_IDLE_UNLOAD_MS * 10);
@@ -444,8 +444,8 @@ describe("an idle embed worker is unloaded and relaunched on demand", () => {
 		expect(parseEmbedIdleUnloadMs(Number.MAX_SAFE_INTEGER)).toBe(MAX_EMBED_IDLE_UNLOAD_MS);
 		expect(parseEmbedIdleUnloadMs("2147483648")).toBe(MAX_EMBED_IDLE_UNLOAD_MS);
 
-		const { spawn } = createFleet();
-		const client = new MnemopiEmbedClient(spawn, IDLE_MS);
+		const { spawnWorker } = createFleet();
+		const client = new MnemopiEmbedClient(spawnWorker, IDLE_MS);
 		client.setIdleUnloadMs(-1);
 		expect(client.idleUnloadMs).toBe(0);
 		client.setIdleUnloadMs(1.9);
@@ -457,7 +457,7 @@ describe("an idle embed worker is unloaded and relaunched on demand", () => {
 	it("ships a default window that unloads", () => {
 		expect(Number.isInteger(DEFAULT_EMBED_IDLE_UNLOAD_MS)).toBe(true);
 		expect(DEFAULT_EMBED_IDLE_UNLOAD_MS).toBeGreaterThan(0);
-		const { spawn } = createFleet();
-		expect(new MnemopiEmbedClient(spawn).idleUnloadMs).toBe(DEFAULT_EMBED_IDLE_UNLOAD_MS);
+		const { spawnWorker } = createFleet();
+		expect(new MnemopiEmbedClient(spawnWorker).idleUnloadMs).toBe(DEFAULT_EMBED_IDLE_UNLOAD_MS);
 	});
 });
