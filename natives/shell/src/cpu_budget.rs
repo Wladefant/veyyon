@@ -167,6 +167,13 @@ impl BudgetGroup {
 	/// The watcher uses an increasing count to tell "the budget is too small"
 	/// from "the budget is merely fully used".
 	#[must_use]
+	#[cfg_attr(
+		not(target_os = "linux"),
+		expect(
+			clippy::missing_const_for_fn,
+			reason = "the linux arm calls a non-const backend method; the shared signature cannot be"
+		)
+	)]
 	pub fn throttled_periods(&self) -> Option<u64> {
 		match &self.backend {
 			#[cfg(target_os = "linux")]
@@ -204,6 +211,13 @@ impl BudgetGroup {
 	/// The degraded-mode lever: lower the scheduling priority of every member.
 	/// Meaningful only where no quota exists; `level` 0 restores. Quota
 	/// backends ignore it because the quota is already the lever.
+	#[cfg_attr(
+		not(unix),
+		expect(
+			clippy::missing_const_for_fn,
+			reason = "the unix body calls a non-const backend method; the shared signature cannot be"
+		)
+	)]
 	pub fn renice(&self, level: i32) {
 		if let Backend::Tracked(budget) = &self.backend {
 			budget.renice(level);

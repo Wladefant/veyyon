@@ -2,15 +2,17 @@
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-18
+
 ### Added
 
 - The site scrapers behind the `fetch` tool are their own package: 79 site handlers, the shared page loader and the Parallel extraction client, moved out of `@veyyon/coding-agent` unchanged.
 - A scraper states the host capabilities it needs through `ScrapeServices` — the credential store, document conversion, external-tool resolution, the session spawn hook and the fetch-provider preference — instead of importing the agent's settings, storage and process modules.
 
 ### Changed
+
 - Array copies that allocated with a spread now use `.slice()`, `.concat()` or `Array.from()`. No user-visible behavior changes.
 - The Hugging Face handler fetches a model, dataset or space record and its README through one `loadHfResource`, and the YouTube handler downloads the manual and auto-generated subtitle tracks through one `downloadSubtitleText`; no behavior change.
-
 - Consolidated specialized web scraper site handlers into parameterized domain engines and declarative site definitions.
 - The Discourse handler trims its base path with `trimTrailingSlashes` from `@veyyon/utils/url` rather than its own inline strip. No user-visible behavior changes.
 - Business, media, documentation, discussion and security-advisory handlers share dispatch without changing host matching or scrape results.

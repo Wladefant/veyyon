@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-18
+
 ### Breaking Changes
 
 - Agent settings use `agent.*`, `tier.agent`, `advisor.agents`, and `argot.agents`; legacy keys migrate on load, while historical runtime export names, custom-theme color tokens, session records, and RPC spellings remain unchanged.
@@ -108,6 +110,7 @@
 - Forced render requests accept `preserveViewport` to paint changed rows immediately while retaining pending full-repaint and scrollback requests.
 - `TUI.frameScrollable` states whether the last composed frame had content above the viewport, so a host can render a scroll affordance without re-deriving it from row counts it cannot see.
 - The package is `hosts/terminal/engine` in the repository, beside the other halves of the terminal host. The published package name, exports and entry points are unchanged.
+- Added `getText()` method to Text component for retrieving current text content
 - `@veyyon/utils/fs-tool-args` parses a `read` or `write` tool call's arguments and result details (`parseReadArgs`, `parseReadDetails`, `parseWriteArgs`, `parseWriteDetails`, `countLines`), moved from `@veyyon/tool-render` so every host reads them without the React renderers.
 - `BracketedPasteHandler.route(data, sinks)` delivers one chunk's parts to `PasteSinks`: bytes before the start marker to `keys`, the assembled payload to `paste`, and bytes after the end marker to `reenter`; it returns `false` when the chunk held no paste sequence.
 - `@veyyon/utils/tab-width` is the one definition of `replaceTabs` and `DEFAULT_TAB_WIDTH`, a dependency-free module the browser bundles share; `@veyyon/utils/wrap` and `@veyyon/utils/tab-spacing` re-export them unchanged.
@@ -538,6 +541,7 @@
 - Collapsed todo boards prioritize in-progress tasks, announce row-trimmed active phases, and show canonical newly started tasks with concurrent counts even when replayed without call arguments.
 - Neutralized workstation-specific defaults, private project identifiers, and host orchestration policies in topic replenishment and native ledger bridge, restoring neutral authorization semantics where no target is forbidden by default and forbidden targets are strictly configuration-driven, and resolving topic worker models via config/catalog APIs without baked-in model defaults ([#953](https://github.com/santhreal/veyyon/issues/953)).
 - Every tool declares the scope of its effects, so a tool whose targets the fence cannot read is refused while a standing refusal is in force instead of being waved through ([#37](https://github.com/Wladefant/veyyon/issues/37)).
+- Fixed the daemon broker client and broker startup exiting 0 silently mid-read: `Bun.file().text()`/`.json()` does not ref the event loop, so a process that reached the token, lease, presence, or metadata read with nothing else pending could drain and exit before the read settled; the reads now use `fs.readFile`.
 - A pasted OAuth callback typed after a slash command that takes no arguments is consumed instead of being sent to the model as a prompt.
 - Automatic maintenance cuts an oversized body until a summarization request fits a summarizer, instead of parking the session with "Compaction freed too little context to make progress" when every candidate was skipped for holding fewer tokens than the summary needed.
 - Print, JSON and RPC mode flush Bun's stdout sink before exiting, so a piped consumer receives the whole last frame instead of losing up to 1 MiB of queued output.

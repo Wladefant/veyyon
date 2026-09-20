@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { existsSync } from "node:fs";
 import { $ } from "bun";
-import { versionHeadings } from "./changelog-unreleased";
+import { forkPoint, versionHeadings } from "./changelog-unreleased";
 import { typeScriptMembersOf } from "./workspace-layout";
 
 function memberChangelogPaths(): string[] {
@@ -37,9 +37,31 @@ export function enumerateChangelogVersions(content: string): ChangelogVersionSpa
 	return spans;
 }
 
+/**
+ * One span per version, preferring the one veyyon released.
+ *
+ * A number can occur twice in a changelog: veyyon restarted at 1.0.0 over history that
+ * runs on upstream numbering, so `hosts/terminal/engine/CHANGELOG.md` carries pi-mono's
+ * `## [1.5.0] - 2026-01-03` below the fork point and veyyon's own `## [1.5.0] -
+ * 2026-09-18` above it. Keyed by version alone, the last span won and the v1.5.0 notes
+ * for `@veyyon/tui` were one inherited bullet about `getText()` in place of the 51-line
+ * section veyyon actually cut. A version present only below the fork point still
+ * resolves, because early veyyon sections sit inside the inherited history in that file.
+ */
+function selectVersionSpans(content: string): Map<string, ChangelogVersionSpan> {
+	const fork = forkPoint(content);
+	const isOwned = (span: ChangelogVersionSpan): boolean => fork === null || span.start < fork.line - 1;
+	const selected = new Map<string, ChangelogVersionSpan>();
+	for (const span of enumerateChangelogVersions(content)) {
+		const held = selected.get(span.version);
+		if (held === undefined || (isOwned(span) && !isOwned(held))) selected.set(span.version, span);
+	}
+	return selected;
+}
+
 export function mergePackageSection(content: string, versionsInRange: readonly string[]): string {
 	if (versionsInRange.length === 0) return "";
-	const spansByVersion = new Map(enumerateChangelogVersions(content).map(s => [s.version, s]));
+	const spansByVersion = selectVersionSpans(content);
 	const selectedSpans = versionsInRange
 		.map(v => spansByVersion.get(v.replace(/^v/, "").trim()))
 		.filter((s): s is ChangelogVersionSpan => s !== undefined);
