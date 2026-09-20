@@ -1204,21 +1204,73 @@ async function runTests(): Promise<void> {
 	console.log("Test 13: neutral authorization semantics in TypeScript and Python bridge");
 	{
 		// TypeScript: unconfigured -> no target or environment is forbidden by default
-		assert.equal(topicReplenishmentModule.isForbiddenTarget({ target: "main" }), false, "main must be allowed by default");
-		assert.equal(topicReplenishmentModule.isForbiddenTarget({ target: "master" }), false, "master must be allowed by default");
-		assert.equal(topicReplenishmentModule.isForbiddenTarget({ target: "production" }), false, "production must be allowed when unconfigured");
-		assert.equal(topicReplenishmentModule.isForbiddenTarget({ environment: "production" }), false, "production environment must be allowed when unconfigured");
-		assert.equal(topicReplenishmentModule.isForbiddenTarget({ target: "production", environment: "staging" }), false, "unconfigured targets are allowed");
+		assert.equal(
+			topicReplenishmentModule.isForbiddenTarget({ target: "main" }),
+			false,
+			"main must be allowed by default",
+		);
+		assert.equal(
+			topicReplenishmentModule.isForbiddenTarget({ target: "master" }),
+			false,
+			"master must be allowed by default",
+		);
+		assert.equal(
+			topicReplenishmentModule.isForbiddenTarget({ target: "production" }),
+			false,
+			"production must be allowed when unconfigured",
+		);
+		assert.equal(
+			topicReplenishmentModule.isForbiddenTarget({ environment: "production" }),
+			false,
+			"production environment must be allowed when unconfigured",
+		);
+		assert.equal(
+			topicReplenishmentModule.isForbiddenTarget({ target: "production", environment: "staging" }),
+			false,
+			"unconfigured targets are allowed",
+		);
 
 		// TypeScript: configured -> forbidden targets are blocked and NEVER bypassed by environment=staging
 		const configured = ["production", "main", "restricted"];
-		assert.equal(topicReplenishmentModule.isForbiddenTarget({ target: "main" }, configured), true, "configured main is blocked");
-		assert.equal(topicReplenishmentModule.isForbiddenTarget({ target: "main", environment: "staging" }, configured), true, "explicit forbidden main is NEVER bypassed by environment=staging");
-		assert.equal(topicReplenishmentModule.isForbiddenTarget({ target: "production", environment: "staging" }, configured), true, "explicit forbidden production is NEVER bypassed by environment=staging");
-		assert.equal(topicReplenishmentModule.isForbiddenTarget({ target: "restricted", environment: "staging" }, configured), true, "restricted target is blocked even when environment is staging");
-		assert.equal(topicReplenishmentModule.isForbiddenTarget({ environment: "production" }, configured), true, "configured forbidden environment is blocked");
-		assert.equal(topicReplenishmentModule.isForbiddenTarget({ target: "feature-branch", environment: "staging" }, configured), false, "unforbidden target in staging is allowed");
-		assert.equal(topicReplenishmentModule.isForbiddenTarget({ target: "req-blocked", forbidden_targets: ["req-blocked"], environment: "staging" }), true, "request-level forbidden target is blocked even if staging");
+		assert.equal(
+			topicReplenishmentModule.isForbiddenTarget({ target: "main" }, configured),
+			true,
+			"configured main is blocked",
+		);
+		assert.equal(
+			topicReplenishmentModule.isForbiddenTarget({ target: "main", environment: "staging" }, configured),
+			true,
+			"explicit forbidden main is NEVER bypassed by environment=staging",
+		);
+		assert.equal(
+			topicReplenishmentModule.isForbiddenTarget({ target: "production", environment: "staging" }, configured),
+			true,
+			"explicit forbidden production is NEVER bypassed by environment=staging",
+		);
+		assert.equal(
+			topicReplenishmentModule.isForbiddenTarget({ target: "restricted", environment: "staging" }, configured),
+			true,
+			"restricted target is blocked even when environment is staging",
+		);
+		assert.equal(
+			topicReplenishmentModule.isForbiddenTarget({ environment: "production" }, configured),
+			true,
+			"configured forbidden environment is blocked",
+		);
+		assert.equal(
+			topicReplenishmentModule.isForbiddenTarget({ target: "feature-branch", environment: "staging" }, configured),
+			false,
+			"unforbidden target in staging is allowed",
+		);
+		assert.equal(
+			topicReplenishmentModule.isForbiddenTarget({
+				target: "req-blocked",
+				forbidden_targets: ["req-blocked"],
+				environment: "staging",
+			}),
+			true,
+			"request-level forbidden target is blocked even if staging",
+		);
 
 		// Python bridge contract: exercise is_forbidden_target in native-ledger-bridge.py directly
 		if (detectedPython) {
@@ -1262,21 +1314,34 @@ print("PYTHON_BRIDGE_AUTH_OK")
 	// =========================================================================
 	console.log("Test 14: model policy and resolution via Config API");
 	{
-		assert.equal("DEFAULT_FLASH_MODEL" in topicReplenishmentModule, false, "DEFAULT_FLASH_MODEL must not be exported");
+		assert.equal(
+			"DEFAULT_FLASH_MODEL" in topicReplenishmentModule,
+			false,
+			"DEFAULT_FLASH_MODEL must not be exported",
+		);
 
 		resetSettingsForTest();
 		const settings = await Settings.init({ inMemory: true });
 
 		const stockRoles = settings.getModelRoles();
 		for (const [role, model] of Object.entries(stockRoles)) {
-			assert.ok(!/fable|sol|astra|spark|flash/i.test(model ?? ""), `Stock role ${role} contains operator-specific model: ${model}`);
+			assert.ok(
+				!/fable|sol|astra|spark|flash/i.test(model ?? ""),
+				`Stock role ${role} contains operator-specific model: ${model}`,
+			);
 		}
 
 		const defaultResolved = topicReplenishmentModule.resolveTopicWorkerModel({ settings });
-		assert.ok(!/fable|sol|astra|spark|flash/i.test(defaultResolved), `Resolved default model contains operator-specific model: ${defaultResolved}`);
+		assert.ok(
+			!/fable|sol|astra|spark|flash/i.test(defaultResolved),
+			`Resolved default model contains operator-specific model: ${defaultResolved}`,
+		);
 
 		assert.equal(
-			topicReplenishmentModule.resolveTopicWorkerModel({ settings, requestModel: "custom-provider/test-model:medium" }),
+			topicReplenishmentModule.resolveTopicWorkerModel({
+				settings,
+				requestModel: "custom-provider/test-model:medium",
+			}),
 			"custom-provider/test-model:medium",
 			"Must respect explicit request model",
 		);

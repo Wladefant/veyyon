@@ -10,8 +10,8 @@ import {
 	resolveModelFromString,
 } from "../config/model-resolver";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../discovery/helpers.js";
-import { PluginManager } from "../extensibility/plugins";
 import type { ExtensionReloadResult } from "../extensibility/extensions/types";
+import { PluginManager } from "../extensibility/plugins";
 import { formatProviderName } from "../session/account-format";
 import {
 	type AccountRow,

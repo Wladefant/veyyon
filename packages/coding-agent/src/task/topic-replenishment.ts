@@ -25,10 +25,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { errorMessage, getAgentDir, isRecord, logger } from "@veyyon/utils";
 import { atomicWriteFileSync } from "@veyyon/utils/atomic-write";
-import nativeLedgerBridgeAssetPath from "./native-ledger-bridge.py" with { type: "file" };
 import { DEFAULT_MODEL_SLOT } from "../config/model-roles";
 import { isSettingsInitialized, Settings } from "../config/settings";
 import { resolveAgentModel } from "./agent-settings";
+import nativeLedgerBridgeAssetPath from "./native-ledger-bridge.py" with { type: "file" };
 // --- Functional Topics & Keyword Mapping ---
 
 export const TOPIC_KEYWORDS_MAP: Readonly<Record<string, string>> = {
@@ -73,7 +73,9 @@ export const INACTIVE_STATUSES: ReadonlySet<string> = new Set([
 
 export const FORBIDDEN_TARGETS: readonly string[] = (
 	process.env.VEYYON_FORBIDDEN_TARGETS
-		? process.env.VEYYON_FORBIDDEN_TARGETS.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean)
+		? process.env.VEYYON_FORBIDDEN_TARGETS.split(",")
+				.map(t => t.trim().toLowerCase())
+				.filter(Boolean)
 		: []
 ) as readonly string[];
 

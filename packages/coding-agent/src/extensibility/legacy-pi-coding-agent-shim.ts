@@ -29,7 +29,6 @@ import {
 import type { PromptTemplate } from "../config/prompt-templates";
 import { type SettingPath, Settings } from "../config/settings";
 import { EditTool } from "../edit";
-import { TOOL_EXECUTION_ENTRIES } from "../tools/core/execution-registry";
 import { formatExitCodeNotice } from "../exec/exit-notice";
 import { type LoadExtensionsResult, createAgentSession as ompCreateAgentSession } from "../sdk";
 import {
@@ -47,6 +46,7 @@ import {
 	truncateTail,
 } from "../session/streaming-output";
 import type { Tool, ToolSession } from "../tools";
+import { TOOL_EXECUTION_ENTRIES } from "../tools/core/execution-registry";
 import { formatBytes } from "../tools/core/render-utils";
 import { ReadTool } from "../tools/fs/read";
 import { WriteTool } from "../tools/fs/write";

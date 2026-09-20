@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Removed
+
+- `models.ts` no longer imports `ZERO_MODEL_COST`, which it stopped using; no user-visible change.
 ### Fixed
 
 - The Command Code catalog is declared in one module: `provider-models/openai-compat` no longer re-declares `COMMAND_CODE_STATIC_MODELS`, `CommandCodeModelManagerConfig` and `commandCodeModelManagerOptions` beside `provider-models/command-code`, whose contract-applying versions are the ones every consumer already imports.

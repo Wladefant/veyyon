@@ -129,9 +129,9 @@ jobs:
            shell: bash
            run: |
               set -euo pipefail
-              tag=$(gh release list --repo "${{ github.repository }}" --limit 1 \
+              tag=$(gh release list --repo "${{ github.repository }}" --limit 30 \
                     --exclude-drafts --exclude-pre-releases --json tagName \
-                    --jq '.[0].tagName // ""')
+                    --jq 'map(select(.tagName | test("^v[0-9]"))) | (.[0] // {}).tagName // ""')
               if [ -z "$tag" ]; then
                 echo "No published release yet; nothing to dry-run. (First release generates notes for the first time on its own tag.)"
                 exit 0

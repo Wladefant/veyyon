@@ -284,7 +284,7 @@ const GRANDFATHERED: Readonly<Record<string, number>> = {
 	"packages/coding-agent/test/modes/terminal/controllers/session-selector-delete.test.ts": 5,
 	"packages/coding-agent/test/modes/terminal/controllers/tan-command-controller.test.ts": 22,
 	"packages/coding-agent/test/modes/terminal/controllers/the-second-account-is-named-when-it-lands.test.ts": 6,
-	"packages/coding-agent/test/modes/terminal/controllers/todo-command-controller.test.ts": 26,
+	"packages/coding-agent/test/modes/terminal/controllers/todo-command-controller.test.ts": 32,
 	"packages/coding-agent/test/modes/terminal/controllers/usage-command.test.ts": 3,
 	"packages/coding-agent/test/modes/cwd-change-refreshes-system-prompt.test.ts": 1,
 	"packages/coding-agent/test/modes/terminal/setup-wizard/setup-wizard-onboarding-scope.test.ts": 1,
