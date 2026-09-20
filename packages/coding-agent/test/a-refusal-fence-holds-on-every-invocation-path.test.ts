@@ -786,6 +786,50 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 		expect(probeExecuted).toBe(false);
 	});
 
+	// WHY: a tool taken off a session registry is invoked with no context of its
+	// own (`session.getToolByName("eval").execute(...)`, the cursor bridge, an
+	// eval snippet). Refusing those for want of a policy breaks live work, and
+	// reading the session's policy is what keeps the fence honest — so this pins
+	// both directions plus the bound: the frame decides the verdict and is never
+	// promoted to a tool context. It does not cover a boundary that owns no
+	// session policy at all; that case is the typed refusal above.
+	it("a session tool reached with no context is fenced against the session's own policy", async () => {
+		const settings = Settings.isolated({ "tools.refusals": [PROBE_TOOL_NAME] });
+		let handedContext: unknown = "never executed";
+		const probe = {
+			...createProbeTool(),
+			execute: async (_id: string, _params: unknown, _signal?: AbortSignal, _onUpdate?: unknown, ctx?: unknown) => {
+				probeExecuted = true;
+				handedContext = ctx;
+				return { content: [{ type: "text", text: "PROBE_RAN" }] };
+			},
+		} as unknown as AgentTool;
+		const wrapped = new ExtensionToolWrapper(probe, mockRunner, "session.tools", () => ({
+			settings,
+			sessionApprovals: createSessionApprovals(),
+		}));
+
+		await expect(wrapped.execute("no-context-refused", { cmd: "probe" })).rejects.toBeInstanceOf(RefusalFenceError);
+		expect(probeExecuted).toBe(false);
+
+		settings.override("tools.refusals", []);
+		await wrapped.execute("no-context-allowed", { cmd: "probe" });
+		expect(probeExecuted).toBe(true);
+		// Fencing only. Promoting the session frame to a tool context would hand a
+		// contextless caller an approval surface and a session manager it never
+		// established, which is a different change from enforcing a refusal.
+		expect(handedContext).toBeUndefined();
+	});
+
+	it("a standing session denial reaches a session tool called with no context", async () => {
+		const wrapped = new ExtensionToolWrapper(createProbeTool(), mockRunner, "session.tools", () => ({
+			settings: Settings.isolated(),
+			sessionApprovals: createSessionApprovals({ [PROBE_TOOL_NAME]: "deny" }),
+		}));
+		await expect(wrapped.execute("standing-no-context", { cmd: "probe" })).rejects.toBeInstanceOf(RefusalFenceError);
+		expect(probeExecuted).toBe(false);
+	});
+
 	it("legacy nested execution inherits policy rather than constructing an empty policy", async () => {
 		const context = { settings: Settings.isolated({ "tools.refusals": [PROBE_TOOL_NAME] }) };
 		const outer = {
