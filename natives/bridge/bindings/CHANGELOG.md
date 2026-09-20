@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Merged upstream v1.5.0.
+
 ## [1.5.0] - 2026-09-18
 
 ### Added
