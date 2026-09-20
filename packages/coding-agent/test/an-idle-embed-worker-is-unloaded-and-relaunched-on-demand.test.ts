@@ -142,12 +142,12 @@ async function drain(vectors: AsyncIterable<number[][]>): Promise<number[][]> {
  * `"settled"` iff `work` completes ahead of the next macrotask, i.e. it awaited
  * nothing but microtasks — no process exit, no I/O, no timer.
  *
- * The `setTimeout` is a macrotask BOUNDARY, not a wall-clock wait: it is never
- * waited out, it is only the loser of a race a microtask chain always wins, so
- * the verdict is ordering rather than duration and adds no delay to the suite.
- * A faked clock cannot express it — the loser would never be scheduled at all,
- * and every `work` would "win" vacuously — so this one probe runs on the real
- * clock and asserts no elapsed time.
+ * Real-timer exception (ts-no-test-timers): the `setTimeout` is a macrotask
+ * BOUNDARY, not a wall-clock wait. It is never waited out — it is only the
+ * loser of a race a microtask chain always wins — so the verdict is ordering
+ * rather than duration and adds no delay to the suite. A faked clock cannot
+ * express it: the loser would never be scheduled at all and every `work` would
+ * "win" vacuously.
  */
 async function beforeNextMacrotask(work: Promise<unknown>): Promise<"settled" | "blocked"> {
 	const macrotask = new Promise<"blocked">(resolve => {
