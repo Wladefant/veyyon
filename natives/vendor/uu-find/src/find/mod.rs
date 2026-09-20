@@ -208,7 +208,7 @@ fn walker_follow_links(follow: Follow) -> veyyon_walker::FollowLinks {
 }
 
 /// Whether an I/O error is a symlink loop.
-fn is_loop(error: &io::Error) -> bool {
+fn is_loop(#[cfg_attr(not(unix), allow(unused_variables))] error: &io::Error) -> bool {
 	#[cfg(unix)]
 	return error.raw_os_error() == Some(uucore::libc::ELOOP);
 

@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-18
+
 ### Added
 
 - `Model.longContextCost` declares the second rate card a model bills at once its prompt crosses `inputThreshold` tokens.

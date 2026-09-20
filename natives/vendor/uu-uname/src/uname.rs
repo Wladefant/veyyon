@@ -315,7 +315,7 @@ mod tests {
 		#[cfg(target_os = "linux")]
 		assert_eq!(stdout, "Linux\n");
 		#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-		assert!(stdout.trim_end().len() > 0);
+		assert!(!stdout.trim_end().is_empty());
 	}
 
 	#[test]

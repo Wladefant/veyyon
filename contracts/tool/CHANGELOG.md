@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-18
+
 ### Added
 
 - `@veyyon/tool` states what a tool declares and returns: `ToolSpec` with its examples, the `ToolTier` and `ToolApproval` vocabulary, `ToolResult` and `ToolUpdateCallback`. A tool declares itself without importing the loop that schedules it or the host that prompts for approval. The package imports the message content blocks from `@veyyon/model`, type-only, and nothing else.

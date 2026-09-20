@@ -493,8 +493,10 @@ pub fn invalidate_all() {
 #[cfg(test)]
 mod tests {
 	#[cfg(unix)]
+	use std::path::Path;
+	#[cfg(unix)]
 	use std::{ffi::CString, os::unix::ffi::OsStrExt};
-	use std::{fs, path::Path, time::Duration};
+	use std::{fs, time::Duration};
 
 	use veyyon_test_scratch::TempTree;
 

@@ -8,7 +8,7 @@
  * it. They are the reason the two were merged rather than left alone.
  */
 import { describe, expect, it } from "bun:test";
-import { unreleasedEntries } from "./changelog-unreleased";
+import { forkPoint, unreleasedEntries, versionHeadings, veyyonOwnedRegion } from "./changelog-unreleased";
 
 describe("unreleasedEntries", () => {
 	it("collects only entries under Unreleased, stopping at the next release heading", () => {
@@ -143,5 +143,59 @@ describe("unreleasedEntries", () => {
 		].join("\n");
 
 		expect(unreleasedEntries(md)).toEqual(["the real entry"]);
+	});
+});
+
+/**
+ * The fork point is the boundary between what veyyon released and the history it
+ * inherited. Veyyon restarted at 1.0.0, so the two regions reuse numbers: every rule
+ * about a veyyon release has to read one region, and reading the whole file refuses a
+ * legitimate cut.
+ */
+describe("forkPoint", () => {
+	const md = [
+		"# Changelog",
+		"",
+		"## [Unreleased]",
+		"",
+		"## [1.5.0] - 2026-09-18",
+		"",
+		"## [16.5.2] - 2026-07-14",
+		"",
+		"## [1.5.0] - 2026-01-03",
+		"",
+	].join("\n");
+
+	it("reports the line the inherited history starts on", () => {
+		expect(forkPoint(md)?.line).toBe(7);
+	});
+
+	it("indexes the fork heading itself, so the owned region ends before it", () => {
+		expect(md.slice(forkPoint(md)?.index ?? 0)).toStartWith("## [16.5.2] - 2026-07-14");
+	});
+
+	it("is null for a changelog that inherited nothing", () => {
+		expect(forkPoint("## [1.5.0] - 2026-09-18\n")).toBeNull();
+	});
+
+	it("does not match the fork version written as prose or as a deeper heading", () => {
+		expect(forkPoint("Everything below 16.5.2 is upstream.\n")).toBeNull();
+		expect(forkPoint("### [16.5.2] - 2026-07-14\n")).toBeNull();
+	});
+});
+
+describe("veyyonOwnedRegion", () => {
+	it("keeps the headings above the fork point and drops the inherited ones", () => {
+		const md = ["## [1.5.0] - 2026-09-18", "", "## [16.5.2] - 2026-07-14", "", "## [1.5.0] - 2026-01-03", ""].join(
+			"\n",
+		);
+
+		expect(versionHeadings(veyyonOwnedRegion(md))).toEqual([{ version: "1.5.0", line: 1 }]);
+	});
+
+	it("is the whole file when there is no inherited history to cut off", () => {
+		const md = "## [1.5.0] - 2026-09-18\n";
+
+		expect(veyyonOwnedRegion(md)).toBe(md);
 	});
 });
