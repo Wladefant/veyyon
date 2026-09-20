@@ -2,6 +2,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { TempDir } from "@veyyon/utils";
 import { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
 import { loadCodingAgentApi } from "../src/extensibility/coding-agent-api";
@@ -9,23 +11,14 @@ import { ExtensionRuntime, loadExtension } from "../src/extensibility/extensions
 import { ExtensionRunner } from "../src/extensibility/extensions/runner";
 import type { LoadedExtension } from "../src/extensibility/extensions/types";
 import type { TurnEndEvent } from "../src/extensibility/shared-events";
-import { EventBus } from "../src/utils/event-bus";
-import { executeAcpBuiltinSlashCommand } from "../src/slash-commands/acp-builtins";
-import type { ParsedSlashCommand, SlashCommandRuntime } from "../src/slash-commands/types";
 import type { AgentSession } from "../src/session/agent-session";
-import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { TempDir } from "@veyyon/utils";
+import { executeAcpBuiltinSlashCommand } from "../src/slash-commands/acp-builtins";
+import type { SlashCommandRuntime } from "../src/slash-commands/types";
+import { EventBus } from "../src/utils/event-bus";
 
 declare global {
 	var __testHookMarker: string | undefined;
 }
-
-
-const dummyParsedCommand: ParsedSlashCommand = {
-	name: "reload-config",
-	args: "",
-	text: "/reload-config",
-};
 
 const dummyTurnEnd: TurnEndEvent = {
 	type: "turn_end",
@@ -290,9 +283,7 @@ describe("Extension hot reload", () => {
 			cwd: tempDir.path(),
 			session: {
 				extensionRunner: {
-					reloadExtensions: async () => [
-						{ path: "/path/to/my-ext.ts", status: "reloaded", hookCount: 3 },
-					],
+					reloadExtensions: async () => [{ path: "/path/to/my-ext.ts", status: "reloaded", hookCount: 3 }],
 				},
 			} as unknown as AgentSession,
 			sessionManager,

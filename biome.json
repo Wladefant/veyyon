@@ -96,6 +96,8 @@
 			"scripts/**/*.ts",
 			"!natives/bridge/bindings/native/index.d.ts",
 			"!hosts/terminal/engine/bench/_jskey.ts",
+			"!apps/site/docs",
+			"!apps/site/docs/**/*",
 			"!**/vendor/**/*",
 			"!**/node_modules/**/*",
 			"!**/test-sessions.ts",

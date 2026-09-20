@@ -13,7 +13,6 @@ import { timingSafeEqual } from "node:crypto";
 import * as fs from "node:fs/promises";
 import type { ImageContent, TextContent } from "@veyyon/ai";
 import { errorMessage, logger } from "@veyyon/utils";
-import { TOOL_EXECUTION_ENTRIES } from "../tools/core/execution-registry";
 import type {
 	BusChannel,
 	CollabUiRequest,
@@ -35,6 +34,7 @@ import { type AgentRef, AgentRegistry } from "../registry/agent-registry";
 import type { AgentSessionEvent } from "../session/agent-session-types";
 import { stripImagesFromMessage, USER_INTERRUPT_LABEL } from "../session/messages";
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } from "../task/types";
+import { TOOL_EXECUTION_ENTRIES } from "../tools/core/execution-registry";
 import { generateRoomKey, generateWriteToken, importRoomKey } from "./crypto";
 import { collabDisplayName } from "./display-name";
 import {
