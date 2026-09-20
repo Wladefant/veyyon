@@ -9817,7 +9817,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "veyyon-ast"
-version = "1.4.1"
+version = "1.5.0"
 dependencies = [
  "anyhow",
  "ast-grep-core",
@@ -9887,7 +9887,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-conformance"
-version = "1.4.1"
+version = "1.5.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -9904,7 +9904,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-desktop"
-version = "1.4.1"
+version = "1.5.0"
 dependencies = [
  "bytes",
  "clap",
@@ -9930,7 +9930,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-desktop-kit"
-version = "1.4.1"
+version = "1.5.0"
 dependencies = [
  "anyhow",
  "gpui_platform",
@@ -9948,7 +9948,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-desktop-model"
-version = "1.4.1"
+version = "1.5.0"
 dependencies = [
  "base64",
  "serde",
@@ -9961,7 +9961,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-desktop-motion"
-version = "1.4.1"
+version = "1.5.0"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -9971,7 +9971,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-desktop-scene"
-version = "1.4.1"
+version = "1.5.0"
 dependencies = [
  "image",
  "png 0.18.1",
@@ -9990,7 +9990,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-desktop-surface"
-version = "1.4.1"
+version = "1.5.0"
 dependencies = [
  "image",
  "serde",
@@ -10014,7 +10014,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-desktop-tokens"
-version = "1.4.1"
+version = "1.5.0"
 dependencies = [
  "flume 0.11.1",
  "notify",
@@ -10028,21 +10028,21 @@ dependencies = [
 
 [[package]]
 name = "veyyon-diff-kernel"
-version = "1.4.1"
+version = "1.5.0"
 dependencies = [
  "similar 3.2.0",
 ]
 
 [[package]]
 name = "veyyon-glob"
-version = "1.4.1"
+version = "1.5.0"
 dependencies = [
  "globset",
 ]
 
 [[package]]
 name = "veyyon-gpui"
-version = "1.4.1"
+version = "1.5.0"
 dependencies = [
  "gpui",
  "gpui_platform",
@@ -10052,7 +10052,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-grep-kernel"
-version = "1.4.1"
+version = "1.5.0"
 dependencies = [
  "clap",
  "clap_complete",
@@ -10074,7 +10074,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-iso"
-version = "1.4.1"
+version = "1.5.0"
 dependencies = [
  "async-trait",
  "libc",
@@ -10087,14 +10087,14 @@ dependencies = [
 
 [[package]]
 name = "veyyon-keys"
-version = "1.4.1"
+version = "1.5.0"
 dependencies = [
  "phf 0.13.1",
 ]
 
 [[package]]
 name = "veyyon-natives"
-version = "1.4.1"
+version = "1.5.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -10151,7 +10151,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-shell"
-version = "1.4.1"
+version = "1.5.0"
 dependencies = [
  "anyhow",
  "brush-builtins",
@@ -10229,11 +10229,11 @@ dependencies = [
 
 [[package]]
 name = "veyyon-test-scratch"
-version = "1.4.1"
+version = "1.5.0"
 
 [[package]]
 name = "veyyon-text"
-version = "1.4.1"
+version = "1.5.0"
 dependencies = [
  "smallvec",
  "unicode-segmentation",
@@ -10242,7 +10242,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-uu-diff"
-version = "1.4.1"
+version = "1.5.0"
 dependencies = [
  "clap",
  "parking_lot",
@@ -10253,7 +10253,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-uu-grep"
-version = "1.4.1"
+version = "1.5.0"
 dependencies = [
  "clap",
  "clap_complete",
@@ -10277,7 +10277,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-uutils-ctx"
-version = "1.4.1"
+version = "1.5.0"
 dependencies = [
  "libc",
  "veyyon-test-scratch",
@@ -10285,7 +10285,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-walker"
-version = "1.4.1"
+version = "1.5.0"
 dependencies = [
  "dashmap",
  "globset",

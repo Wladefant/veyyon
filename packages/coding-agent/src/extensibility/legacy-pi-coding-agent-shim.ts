@@ -29,6 +29,7 @@ import {
 import type { PromptTemplate } from "../config/prompt-templates";
 import { type SettingPath, Settings } from "../config/settings";
 import { EditTool } from "../edit";
+import { TOOL_EXECUTION_ENTRIES } from "../tools/core/execution-registry";
 import { formatExitCodeNotice } from "../exec/exit-notice";
 import { type LoadExtensionsResult, createAgentSession as ompCreateAgentSession } from "../sdk";
 import {
@@ -216,7 +217,7 @@ async function executeBuiltinTool(
 	onUpdate: AgentToolUpdateCallback | undefined,
 ) {
 	const tool = createRegistryTool(cwd, name);
-	return tool.execute(toolCallId, params, signal, onUpdate);
+	return TOOL_EXECUTION_ENTRIES["legacy.adapter"].invoke(tool, toolCallId, params, signal, onUpdate);
 }
 
 function legacyBuiltinTool(cwd: string, name: LegacyCodingToolName): ToolDefinition {
@@ -423,7 +424,13 @@ export function createReadToolDefinition(cwd: string, options?: ReadToolOptions)
 		execute: (toolCallId, params, signal, onUpdate) => {
 			const readPath = stringField(params, "path") ?? "";
 			const pathWithRange = lineRangePath(readPath, numberField(params, "offset"), numberField(params, "limit"));
-			return tool.execute(toolCallId, { path: pathWithRange }, signal, onUpdate);
+			return TOOL_EXECUTION_ENTRIES["legacy.adapter"].invoke(
+				tool,
+				toolCallId,
+				{ path: pathWithRange },
+				signal,
+				onUpdate,
+			);
 		},
 	});
 }
@@ -458,7 +465,8 @@ export function createBashToolDefinition(cwd: string, options?: BashToolOptions)
 					onUpdate,
 				);
 			}
-			return tool.execute(
+			return TOOL_EXECUTION_ENTRIES["legacy.adapter"].invoke(
+				tool,
 				toolCallId,
 				{
 					command: spawn?.command ?? command,
@@ -515,7 +523,8 @@ export function createGrepToolDefinition(cwd: string, options?: GrepToolOptions)
 							"search.contextBefore": Math.max(0, Math.floor(context)),
 							"search.contextAfter": Math.max(0, Math.floor(context)),
 						});
-			return searchTool.execute(
+			return TOOL_EXECUTION_ENTRIES["legacy.adapter"].invoke(
+				searchTool,
 				toolCallId,
 				{
 					type: "text",
@@ -574,7 +583,8 @@ export function createFindToolDefinition(cwd: string, options?: FindToolOptions)
 					details: truncation.truncated ? { truncation } : undefined,
 				};
 			}
-			return tool.execute(
+			return TOOL_EXECUTION_ENTRIES["legacy.adapter"].invoke(
+				tool,
 				toolCallId,
 				{ type: "files", input: joinLegacyGlob(searchPath, pattern), hidden: true, gitignore: true, limit },
 				signal,

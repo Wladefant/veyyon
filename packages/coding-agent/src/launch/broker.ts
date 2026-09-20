@@ -167,11 +167,18 @@ function syncReadyPending(record: ManagedDaemon): void {
 async function fileTextSlice(filePath: string, head: boolean): Promise<string> {
 	try {
 		const stat = await fs.stat(filePath);
-		const file = Bun.file(filePath);
-		if (stat.size <= LOG_READ_BYTES) return await file.text();
-		return head
-			? await file.slice(0, LOG_READ_BYTES).text()
-			: await file.slice(Math.max(0, stat.size - LOG_READ_BYTES)).text();
+		// fs.readFile, not Bun.file().text(): a Bun.file read does not ref the
+		// event loop, so a broker that reaches this await with nothing else
+		// pending can exit 0 mid-read instead of settling.
+		if (stat.size <= LOG_READ_BYTES) return await fs.readFile(filePath, "utf8");
+		const handle = await fs.open(filePath, "r");
+		try {
+			const offset = head ? 0 : Math.max(0, stat.size - LOG_READ_BYTES);
+			const { bytesRead, buffer } = await handle.read(Buffer.allocUnsafe(LOG_READ_BYTES), 0, LOG_READ_BYTES, offset);
+			return buffer.toString("utf8", 0, bytesRead);
+		} finally {
+			await handle.close();
+		}
 	} catch (error) {
 		if (isEnoent(error)) return "";
 		throw error;
@@ -289,7 +296,10 @@ async function acquireBrokerLease(runtimeDir: string): Promise<BrokerLease | nul
 		} catch (error) {
 			if (!isEexist(error)) throw error;
 			try {
-				const raw: unknown = await Bun.file(pidPath).json();
+				// fs.readFile, not Bun.file().json(): a Bun.file read does not ref
+				// the event loop, so a broker that reaches this await with nothing
+				// else pending can exit 0 mid-read instead of settling the retry.
+				const raw: unknown = JSON.parse(await fs.readFile(pidPath, "utf8"));
 				if (typeof raw === "object" && raw !== null && "pid" in raw && typeof raw.pid === "number") {
 					// A live owner keeps its claim. Anything else leaves a stale PID
 					// file that the next loop iteration claims.
@@ -306,7 +316,7 @@ async function acquireBrokerLease(runtimeDir: string): Promise<BrokerLease | nul
 
 async function releaseBrokerLease(lease: BrokerLease): Promise<void> {
 	try {
-		const raw: unknown = await Bun.file(lease.path).json();
+		const raw: unknown = JSON.parse(await fs.readFile(lease.path, "utf8"));
 		if (typeof raw === "object" && raw !== null && "instanceId" in raw && raw.instanceId === lease.instanceId) {
 			await fs.rm(lease.path, { force: true });
 		}
@@ -669,10 +679,9 @@ class DaemonBroker {
 		if (process.platform === "win32") return;
 		const pidPath = managedDaemonProcessLeasePath(record.dir);
 		const deadline = Date.now() + 5_000;
-		const pidFile = Bun.file(pidPath);
 		while (Date.now() < deadline && generation === record.generation) {
 			try {
-				const pid = Number.parseInt((await pidFile.text()).trim(), 10);
+				const pid = Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10);
 				if (Number.isSafeInteger(pid) && pid > 0) {
 					record.snapshot.pid = pid;
 					this.#persist(record);
@@ -765,12 +774,22 @@ class DaemonBroker {
 		}
 		if (size < record.outputOffset) record.outputOffset = 0;
 		if (size === record.outputOffset) return;
-		const file = Bun.file(logPath);
-		const raw = await file.slice(record.outputOffset, size).text();
-		if (generation !== record.generation) return;
-		record.outputOffset = size;
-		record.snapshot.outputBytes = size;
-		this.#trackOutput(record, generation, sanitizeText(raw));
+		const handle = await fs.open(logPath, "r");
+		try {
+			const { bytesRead, buffer } = await handle.read(
+				Buffer.allocUnsafe(size - record.outputOffset),
+				0,
+				size - record.outputOffset,
+				record.outputOffset,
+			);
+			const raw = buffer.toString("utf8", 0, bytesRead);
+			if (generation !== record.generation) return;
+			record.outputOffset = size;
+			record.snapshot.outputBytes = size;
+			this.#trackOutput(record, generation, sanitizeText(raw));
+		} finally {
+			await handle.close();
+		}
 	}
 
 	#trackOutput(record: ManagedDaemon, generation: number, text: string): void {
@@ -1236,7 +1255,7 @@ class DaemonBroker {
 			if (!entry.isDirectory()) continue;
 			const dir = path.join(root, entry.name);
 			try {
-				const decoded: unknown = await Bun.file(managedDaemonMetaPath(dir)).json();
+				const decoded: unknown = JSON.parse(await fs.readFile(managedDaemonMetaPath(dir), "utf8"));
 				if (typeof decoded !== "object" || decoded === null || !("daemon" in decoded) || !("spec" in decoded)) {
 					continue;
 				}
@@ -1376,7 +1395,7 @@ export async function startDaemonBrokerFromEnvironment(): Promise<void> {
 	const lease = await acquireBrokerLease(runtimeDir);
 	if (!lease) return;
 	process.title = "veyyon daemon broker";
-	const token = (await Bun.file(daemonBrokerTokenPath(runtimeDir)).text()).trim();
+	const token = (await fs.readFile(daemonBrokerTokenPath(runtimeDir), "utf8")).trim();
 	if (!token) throw new Error("Daemon broker token is empty");
 	const broker = new DaemonBroker(projectDir, runtimeDir, token, idleGraceMs, cleanupWaitMs);
 	const cancelCleanup = postmortem.register("daemon-broker", () => broker.shutdown());

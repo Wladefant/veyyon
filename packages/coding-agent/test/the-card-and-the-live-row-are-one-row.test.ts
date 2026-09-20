@@ -39,7 +39,18 @@
  * budget rather than what the fitter did with it.
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, spyOn } from "bun:test";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	type Mock,
+	setSystemTime,
+	spyOn,
+} from "bun:test";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { settings } from "@veyyon/coding-agent/config/settings-instance";
 import {
@@ -210,7 +221,19 @@ afterAll(() => {
 /** The one thing this suite mocks, restored per test. */
 let profileSpy: Mock<() => string> | null = null;
 
+/**
+ * The instant every render in this suite reads.
+ *
+ * The `time` segment calls `new Date()` per render, and the sweep renders twice — once through the
+ * card, once through the gatherer it compares against. A minute that rolled between the two calls
+ * made `time` read `0:16` on one row and `0:17` on the other, so the nerd case failed in CI on a
+ * card that was rendering the segment correctly. Both renders now read one instant, which is the
+ * only way a clock-reading segment can be compared across two renders at all.
+ */
+const FROZEN_NOW = new Date("2026-09-18T12:34:56Z");
+
 beforeEach(() => {
+	setSystemTime(FROZEN_NOW);
 	// Per test, restored below: a file-wide override of the profile resolver would follow this
 	// suite into every later file in the bucket.
 	profileSpy = spyOn(utils, "getActiveProfileOrDefault").mockReturnValue(ACTIVE_PROFILE);
@@ -220,6 +243,8 @@ afterEach(() => {
 	settings.set("statusLine.preset", "default");
 	profileSpy?.mockRestore();
 	profileSpy = null;
+	// A frozen clock is process-wide; every later file in the bucket would inherit it.
+	setSystemTime();
 });
 
 describe("the card and the live row are one row", () => {

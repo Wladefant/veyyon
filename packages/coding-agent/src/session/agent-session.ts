@@ -7004,7 +7004,7 @@ export class AgentSession {
 
 	#wrapRuntimeTool(tool: AgentTool): AgentTool {
 		const wrapped = wrapToolWithMetaNotice(tool);
-		return this.#extensionRunner ? new ExtensionToolWrapper(wrapped, this.#extensionRunner) : wrapped;
+		return new ExtensionToolWrapper(wrapped, this.#extensionRunner, "session.dynamic-tools");
 	}
 
 	/**
@@ -7552,7 +7552,7 @@ export class AgentSession {
 		const sshAllowed = this.#requestedToolNames === undefined || this.#requestedToolNames.has(TOOL.ssh);
 		const refreshedTool = await this.#reloadSshTool();
 		if (refreshedTool) {
-			this.#toolRegistry.set(refreshedTool.name, refreshedTool);
+			this.#toolRegistry.set(refreshedTool.name, this.#wrapRuntimeTool(refreshedTool));
 		} else {
 			this.#toolRegistry.delete(TOOL.ssh);
 			this.#selectedDiscoveredToolNames.delete(TOOL.ssh);
@@ -7920,10 +7920,8 @@ export class AgentSession {
 		});
 
 		for (const customTool of mcpTools) {
-			const wrapped = wrapToolWithMetaNotice(CustomToolAdapter.wrap(customTool, getCustomToolContext) as AgentTool);
-			const finalTool = (
-				this.#extensionRunner ? new ExtensionToolWrapper(wrapped, this.#extensionRunner) : wrapped
-			) as AgentTool;
+			const wrapped = CustomToolAdapter.wrap(customTool, getCustomToolContext) as AgentTool;
+			const finalTool = this.#wrapRuntimeTool(wrapped);
 			this.#toolRegistry.set(finalTool.name, finalTool);
 		}
 
@@ -7980,10 +7978,7 @@ export class AgentSession {
 		this.#rpcHostToolNames.clear();
 
 		for (const tool of rpcTools) {
-			const metaWrapped = wrapToolWithMetaNotice(tool);
-			const finalTool = (
-				this.#extensionRunner ? new ExtensionToolWrapper(metaWrapped, this.#extensionRunner) : metaWrapped
-			) as AgentTool;
+			const finalTool = this.#wrapRuntimeTool(tool);
 			this.#toolRegistry.set(finalTool.name, finalTool);
 			this.#rpcHostToolNames.add(finalTool.name);
 		}

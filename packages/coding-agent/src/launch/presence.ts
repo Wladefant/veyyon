@@ -46,7 +46,7 @@ export async function hasLiveDaemonProjectPresence(runtimeDir: string): Promise<
 	for (const entry of entries) {
 		const presencePath = path.join(clientsDir, entry);
 		try {
-			const decoded: unknown = await Bun.file(presencePath).json();
+			const decoded: unknown = JSON.parse(await fs.readFile(presencePath, "utf8"));
 			if (
 				typeof decoded !== "object" ||
 				decoded === null ||

@@ -211,6 +211,16 @@ describe("the modules that were repointed stay cut", () => {
 	 * reader, taken by `provider-models/ollama.ts`; imports only `@veyyon/utils/type-guards`). No
 	 * consumer gained an edge to a subsystem it did not already reach.
 	 */
+	/**
+	 * Re-measured 2026-09-15: `shared-llm.ts` 207 -> 208 by one module,
+	 * `catalog/provider-models/command-code.ts`. It holds Command Code's
+	 * deployment contract — the prices, effort ladders and output ceilings the
+	 * Provider API does not publish — split out of `openai-compat.ts`, which is
+	 * already on this reach, and its own imports (`discovery/openai-compatible`,
+	 * `model-manager`, `provider-models/bundled-references`, `effort`, `utils`)
+	 * were already reached through that file. No consumer gained an edge to a
+	 * subsystem it did not already reach.
+	 */
 	it.each([
 		["agent/src/proxy.ts", 145],
 		["apps/stats/src/parser.ts", 120],
@@ -227,9 +237,17 @@ describe("the modules that were repointed stay cut", () => {
 		// used to spell `"\x1b"` inline and now takes `ESC` from that owner. The leaf adds no edge of
 		// its own, so nothing outside this closure was gained.
 		["coding-agent/src/config/api-key-resolver.ts", 56],
-		// The 207-module graph above also includes `ai/src/providers/vision-content.ts`
-		// for video partitioning. That module imports only types; the combined reach is 208.
-		["coding-agent/src/commit/shared-llm.ts", 208],
+		// Re-measured 2026-09-11 at 207, from 205: the two leaves named above. 205 was the three
+		// `@veyyon/model` leaves of 2026-09-04; 202 was one module from the catalog OpenCode discovery
+		// header leaf; 184 was the 2026-07-27 engine-call remeasure; 325 before that was the leak. The
+		// file still takes no name from the barrel.
+		// Re-measured 2026-09-18 at 210, from 208, on this fork and not upstream: the local
+		// `codex-chatgpt-web` bridge provider, two files under `provider-models/descriptors.ts`
+		// (`provider-models/chatgpt-web.ts` and the `discovery/chatgpt-web.ts` reader it names).
+		// Removing the descriptor edge and the `provider-models/index.ts` re-export drops this reach
+		// to exactly upstream's 208, and `@veyyon/utils/scoped-timeout` — the reader's third module —
+		// was already on this closure, which is why it costs two here and three on `env-api-key.ts`.
+		["coding-agent/src/commit/shared-llm.ts", 210],
 		// The agent's hot loop and the `Agent` class. Both STREAM, so both reach the engine whatever
 		// specifier they use; the ceilings are what the other ten names cost when taken from the entry
 		// point. 378 -> 321 and 380 -> 323.

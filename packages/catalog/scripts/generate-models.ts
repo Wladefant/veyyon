@@ -24,6 +24,7 @@ import { createModelManager } from "../src/model-manager";
 import { hasBillableCost } from "../src/models";
 import prevModelsJson from "../src/models.json" with { type: "json" };
 import { toModelSpec } from "../src/provider-models/bundled-references";
+import { COMMAND_CODE_STATIC_MODELS } from "../src/provider-models/command-code";
 import {
 	allowsUnauthenticatedCatalogDiscovery,
 	type CatalogDiscoveryConfig,
@@ -35,7 +36,6 @@ import {
 	ANTHROPIC_CURATED_FALLBACK_MODELS,
 	buildFireworksFastSeed,
 	buildXaiOAuthStaticSeed,
-	COMMAND_CODE_STATIC_MODELS,
 	clampFireworksKimiMaxTokens,
 	clampKimiK27CodeMaxTokens,
 	isFireworksKimiK2ModelId,

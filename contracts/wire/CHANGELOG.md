@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-18
+
 ### Breaking Changes
 
 - Bumped `COLLAB_PROTO` to `4`: tool execution display projections (`ToolExecutionDisplay`) are carried on tool calls, tool results, and live execution events. Old guests speaking proto v3 or below are rejected with the protocol-mismatch error.

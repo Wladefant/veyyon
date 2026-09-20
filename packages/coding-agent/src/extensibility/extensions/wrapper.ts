@@ -18,6 +18,8 @@ import {
 import { cwdEscapingTargets, formatCwdBoundaryReason } from "../../tools/core/cwd-boundary";
 import { secretUseApprovalReason } from "../../tools/core/secret-use-boundary";
 import { ToolAbortError } from "../../tools/core/tool-errors";
+import { recordRefusal } from "../../tools/core/refusal-fence";
+import { TOOL_EXECUTION_ENTRIES, type ToolExecutionEntryName } from "../../tools/core/execution-registry";
 import { normalizeToolEventInput, resolveToolEventInput } from "../tool-event-input";
 import type { ExtensionRunner } from "./runner";
 import type {
@@ -188,11 +190,14 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 	declare parameters: TParameters;
 	declare label: string;
 	declare strict: boolean;
+	#entry: ToolExecutionEntryName;
 
 	constructor(
 		private tool: AgentTool<TParameters, TDetails>,
-		private runner: ExtensionRunner,
+		private runner?: ExtensionRunner,
+		entry: ToolExecutionEntryName = "session.tools",
 	) {
+		this.#entry = entry;
 		applyToolProxy(tool, this);
 	}
 
@@ -212,6 +217,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		onUpdate?: AgentToolUpdateCallback<TDetails, TParameters>,
 		context?: AgentToolContext,
 	): Promise<AgentToolResult<TDetails, TParameters>> {
+		context = TOOL_EXECUTION_ENTRIES[this.#entry].assertContext(this.tool, params, context);
 		// 1. Check approval policy (before extension handlers).
 		// CLI `--auto-approve` / `--yolo` sets approval mode to yolo.
 		// User `tools.approval.<tool>` policies are still applied in all modes.
@@ -295,9 +301,9 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 
 		if (approvalRequired && !(standing === "allow" && grantMayApply)) {
 			const hasApprovalHandlers =
-				this.runner.hasHandlers("tool_approval_requested") || this.runner.hasHandlers("tool_approval_resolved");
+				this.runner?.hasHandlers("tool_approval_requested") || this.runner?.hasHandlers("tool_approval_resolved");
 			const sessionId = context?.sessionManager?.getSessionId() ?? "";
-			if (hasApprovalHandlers) {
+			if (hasApprovalHandlers && this.runner) {
 				await this.runner.emit({
 					type: "tool_approval_requested",
 					sessionId,
@@ -309,7 +315,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			}
 
 			const resolveApproval = async (approved: boolean, reason?: string) => {
-				if (!hasApprovalHandlers) return;
+				if (!hasApprovalHandlers || !this.runner) return;
 				await this.runner.emit({
 					type: "tool_approval_resolved",
 					sessionId,
@@ -323,10 +329,13 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			// The agent this call belongs to, when it is a spawned agent. Both
 			// the byline on the card and the observable waiting state below are
 			// keyed off it, and a root session has neither.
-			const requester = this.runner.agentId;
+			const requester = this.runner?.agentId;
 
-			// Check if UI is available
-			if (!this.runner.hasUI()) {
+			// Check if UI is available. A wrapper built without a runner at all —
+			// a tool reached through a boundary that has no extension surface,
+			// which is exactly the stripped-child case the fence exists for — has
+			// no UI by construction and takes this same path.
+			if (!this.runner?.hasUI()) {
 				const reason = "no interactive UI available";
 				await resolveApproval(false, reason);
 				// Lead with the specific reason (e.g. the cwd-boundary path) so a
@@ -457,7 +466,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		}
 
 		// 2. Emit tool_call event - extensions can block execution
-		if (this.runner.hasHandlers("tool_call")) {
+		if (this.runner?.hasHandlers("tool_call")) {
 			try {
 				const callResult = (await this.runner.emitToolCall({
 					type: "tool_call",
@@ -474,6 +483,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 						callResult.reason ||
 						`An extension blocked this ${this.tool.name} call and gave no reason. Do not retry it; tell ` +
 							"the operator which extension is blocking so they can fix or remove it.";
+					recordRefusal(this.tool.name, reason, context, undefined, callResult.subject);
 					throw new Error(reason);
 				}
 			} catch (err) {
@@ -493,7 +503,14 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		let executionError: Error | undefined;
 
 		try {
-			result = await this.tool.execute(toolCallId, params, signal, onUpdate, context);
+			result = await TOOL_EXECUTION_ENTRIES[this.#entry].invoke(
+				this.tool,
+				toolCallId,
+				params,
+				signal,
+				onUpdate,
+				context,
+			);
 		} catch (err) {
 			// A CANCELLATION IS NOT A FAILED CALL, so it never becomes one here. The
 			// `tool_result` path below deliberately turns a thrown error into a
@@ -515,7 +532,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		}
 
 		// Emit tool_result event - extensions can modify the result and error status
-		if (this.runner.hasHandlers("tool_result")) {
+		if (this.runner?.hasHandlers("tool_result")) {
 			const resultResult = await this.runner.emitToolResult({
 				type: "tool_result",
 				toolName: this.tool.name,

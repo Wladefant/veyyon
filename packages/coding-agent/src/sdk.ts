@@ -2463,7 +2463,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		} else if (!toolRegistry.has(TOOL.resolve)) {
 			const resolveTool = await logger.time("createTools:resolve:session", HIDDEN_TOOLS.resolve, toolSession);
 			if (resolveTool) {
-				toolRegistry.set(resolveTool.name, wrapToolWithMetaNotice(resolveTool));
+				toolRegistry.set(
+					resolveTool.name,
+					new ExtensionToolWrapper(wrapToolWithMetaNotice(resolveTool), extensionRunner),
+				);
 				builtInRegistryToolNames.add(resolveTool.name);
 			}
 		}

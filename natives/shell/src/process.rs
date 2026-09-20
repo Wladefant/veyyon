@@ -1790,6 +1790,13 @@ fn prune_exited(spawned: &mut Vec<SpawnedProcess>) {
 /// signal; `EPERM` means the group exists but is not ours to signal, which
 /// still counts as alive.
 #[must_use]
+#[cfg_attr(
+	not(unix),
+	expect(
+		clippy::missing_const_for_fn,
+		reason = "the unix body calls libc::kill, which is not const; the shared signature cannot be"
+	)
+)]
 fn process_group_alive(pgid: i32) -> bool {
 	if pgid <= 0 {
 		return false;
@@ -1811,7 +1818,7 @@ const fn platform_process_group_alive(_pgid: i32) -> bool {
 	false
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
 	use super::*;
 

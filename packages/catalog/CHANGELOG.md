@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-18
+
 ### Added
 
 - A `chatgpt-web` provider for the local `codex-chatgpt-web` Responses bridge, whose catalog is read live from the daemon's own `GET {base}/models` (`discovery/chatgpt-web.ts`, `provider-models/chatgpt-web.ts`). Nothing about it is declared locally: the bundle carries no `chatgpt-web` rows, the model set comes from the daemon's own account gating (a Luna-only account gets one row; a non-Pro account gets no `extra-high`/`pro`), each row's effort ladder is the single `supported_reasoning_levels` entry the daemon publishes for it rather than a ladder derived from the model id, the context window is copied verbatim, `maxTokens` stays `null` because no output cap is published, and pricing records `unknown` rather than free. `supportsTools` is `false` unless `GET /healthz` proves the daemon is in `full` mode, so a browser-only install never offers a tool surface the turn cannot deliver. `preferWebsockets` is pinned off: the routed rows are clones of a native Codex template and inherit `prefer_websockets`, while the bridge answers `GET /v1/responses` with HTTP 426. A non-loopback base URL is refused before any request is made, because discovery forwards the ChatGPT/Codex bearer the daemon needs to proxy `/models` upstream, and a dead daemon resolves to no rows rather than to slugs that would fail at request time.
@@ -13,12 +15,14 @@
 - `codex-chatgpt-web` discovery and model-manager configuration now normalizes base URLs that omit the `/v1` route prefix (such as port-only `http://127.0.0.1:17841`) or already include `/responses` (`http://127.0.0.1:17841/v1/responses`), ensuring `/v1/models` and `/v1/responses` resolve against the daemon's actual API routes while preserving strict loopback verification.
 - `codex-chatgpt-web` discovery now refuses a redirect instead of following one, so the loopback check that keeps the ChatGPT credential on this machine cannot be undone after it has run. Both requests set `redirect: "error"`: a 302 on `GET {base}/models` is reported as a request failure and discovery returns `null` rather than re-issuing the bearer-carrying request against whatever the redirect named, and a 302 on `GET {base}/healthz` leaves Full mode unproven — so `supportsTools` stays `false` — rather than letting something that is not the daemon authorize publishing tool support. The daemon redirects nothing, which is why a redirect here means the base URL is not the daemon.
 - Model input capability support includes `"video"` for video-capable models.
+- `calculateCost` bills a request at a model's `longContextCost` rates when the prompt crosses that model's threshold, so a model the upstream charges two rate cards for is no longer reported at the cheaper one.
 - `closeModelCache()` closes the shared model-cache database and permits reopening it at the current cache path.
 
 ### Changed
 
 - A model reference candidate declares partial pricing, which is what bundled metadata carries; every reader already treated a missing per-token price as unknown. No user-visible behavior changes.
 - Ollama Cloud wire-effort normalization and discovery restrict effort ladders for GLM-5.2 specifically rather than all subsequent GLM point releases.
+- The `command-code` provider defaults to `claude-sonnet-4-6`, discovers models without an API key, and reads `COMMANDCODE_API_KEY` after its two existing key aliases.
 - GitLab Duo Workflow discovery reads a record's declared root namespace (`root_namespace_id`, `rootNamespaceId`, or the id or path of its `root_namespace`/`rootAncestor` record) through one `declaredRootNamespaceId` for the explicit and nested lookups; no behavior change.
 - The Antigravity, Codex, Gemini and Ollama discovery readers report a non-ok status as the `status` stage and an unparseable body as the `body` stage through one exported `readDiscoveryJson` in `discovery/failure`; no behavior change.
 - Model spec rejection checks its string, cost and limit fields from ordered tables, reporting the same field names in the same order; no behavior change.
@@ -36,6 +40,7 @@
 ### Fixed
 
 - Normalized model pricing defaults at model construction and cost calculation so custom and discovery models without explicit cost fields do not throw on usage streaming.
+- Command Code models carry the provider's published prices, reasoning ladders and output ceilings instead of arriving at zero cost with no thinking control; the bundled catalog grows from 3 hand-written rows to the 69 the Provider API serves.
 - Case-insensitive host classification no longer treats control characters as URL punctuation.
 
 ## [1.4.1] - 2026-09-08

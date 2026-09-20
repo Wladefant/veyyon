@@ -195,6 +195,68 @@ describe("mergePackageSection", () => {
 		const merged = mergePackageSection(FIXTURE, SILENT_WINDOW);
 		expect(merged).not.toMatch(/### Fixed\s*\n\s*(### |$)/);
 	});
+
+	it("takes the section veyyon released when an inherited section carries the same number", () => {
+		// `hosts/terminal/engine/CHANGELOG.md`: veyyon cut 1.5.0 on 2026-09-18 and the file
+		// still carries pi-mono's 1.5.0 from 2026-01-03, below the `## [16.5.2]` fork point.
+		// Keyed by version alone the inherited copy won, and v1.5.0's notes for
+		// `@veyyon/tui` were one bullet about `getText()`.
+		const changelog = [
+			"# Changelog",
+			"",
+			"## [Unreleased]",
+			"",
+			"## [1.5.0] - 2026-09-18",
+			"",
+			"### Added",
+			"",
+			"- Components can provide `measureHeight(width)` for layout measurement.",
+			"",
+			"## [16.5.2] - 2026-07-14",
+			"",
+			"### Fixed",
+			"",
+			"- The last upstream release before the fork.",
+			"",
+			"## [1.5.0] - 2026-01-03",
+			"",
+			"### Added",
+			"",
+			"- Added `getText()` method to Text component.",
+			"",
+		].join("\n");
+
+		const merged = mergePackageSection(changelog, ["1.5.0"]);
+		expect(merged).toContain("- Components can provide `measureHeight(width)` for layout measurement.");
+		expect(merged).not.toContain("getText()");
+	});
+
+	it("still finds a veyyon section that sits inside the inherited history", () => {
+		// Early veyyon cuts landed below the fork point in the engine changelog, so a
+		// version present only there must still resolve rather than produce empty notes.
+		const changelog = [
+			"# Changelog",
+			"",
+			"## [Unreleased]",
+			"",
+			"## [16.5.2] - 2026-07-14",
+			"",
+			"### Fixed",
+			"",
+			"- The last upstream release before the fork.",
+			"",
+			"## [1.3.0] - 2026-08-28",
+			"",
+			"### Added",
+			"",
+			"- `TUI.onBeforeCompose` runs at the top of every frame.",
+			"",
+		].join("\n");
+
+		expect(mergePackageSection(changelog, ["1.3.0"])).toContain(
+			"- `TUI.onBeforeCompose` runs at the top of every frame.",
+		);
+	});
 });
 
 describe("ci-release-notes.ts must run without a workspace install", () => {
