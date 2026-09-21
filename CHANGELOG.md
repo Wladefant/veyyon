@@ -44,6 +44,7 @@
 - A ChatGPT Web turn served by a borrowed `openai-codex` OAuth row now rotates and blocks that Codex account: a 401 moves the session to an eligible sibling Codex account and a usage-limit event blocks the account that served, instead of acting on a `chatgpt-web` identity that has no stored row. A dedicated ChatGPT Web credential keeps taking precedence and keeps rotating and blocking on its own row.
 - The Command Code catalog is declared in one module: `provider-models/openai-compat` no longer re-declares `COMMAND_CODE_STATIC_MODELS`, `CommandCodeModelManagerConfig` and `commandCodeModelManagerOptions` beside `provider-models/command-code`, whose contract-applying versions are the ones every consumer already imports.
 - `getModelPricing` accepts the sparse `ModelSpec` cost it is already given by discovery, and reads an absent rate as zero rather than rejecting the row at the type level.
+- No shipped behavior changed; the global EPIPE routing suite pointed at `packages/tui/src/terminal.ts`, a path the terminal host left on 2026-08-30, so its three "finishes TUI persistence before exit" cases failed on a module-resolution exit rather than on ordering ([#64](https://github.com/Wladefant/veyyon/issues/64)).
 
 ## [1.5.0] - 2026-09-18
 
