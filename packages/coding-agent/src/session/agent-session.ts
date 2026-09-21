@@ -884,6 +884,8 @@ export class AgentSession {
 	#unsubscribeAgent?: () => void;
 	#cancelExitRecorder?: () => void;
 	#exitRecorded = false;
+	/** Session ids can change on fork/compaction; cleanup must use the id recorded at start. */
+	#toolMarkerSessions = new Map<string, string>();
 	#unsubscribeAppendOnly?: () => void;
 	#unsubscribeModelRoles?: () => void;
 	#unsubscribePromptSettings?: () => void;
@@ -3650,10 +3652,12 @@ export class AgentSession {
 		// The session entry above survives only an exit that reaches JavaScript.
 		// The marker survives one that does not, which is the whole of what a
 		// postmortem gets when the process is terminated below the runtime.
+		const markerSessionId = this.sessionManager.getSessionId();
+		this.#toolMarkerSessions.set(event.toolCallId, markerSessionId);
 		markToolCallInFlight({
 			toolCallId: event.toolCallId,
 			toolName: event.toolName,
-			sessionId: this.sessionManager.getSessionId(),
+			sessionId: markerSessionId,
 		});
 	}
 
@@ -3663,7 +3667,10 @@ export class AgentSession {
 		// This exit reached JavaScript, so the log will carry an account of it
 		// either way. Leaving the marker behind would report the next launch a
 		// crash that did not happen.
-		clearToolCallInFlight(this.sessionManager.getSessionId());
+		for (const [toolCallId, sessionId] of this.#toolMarkerSessions) {
+			clearToolCallInFlight(sessionId, toolCallId);
+		}
+		this.#toolMarkerSessions.clear();
 		const pendingToolCalls = collectPendingToolCalls(this.sessionManager.getBranch());
 		if (
 			pendingToolCalls.length === 0 &&
@@ -4615,7 +4622,11 @@ export class AgentSession {
 		// otherwise leave this process looking like it died inside a call that
 		// had already returned.
 		if (event.type === "tool_execution_end") {
-			clearToolCallInFlight(this.sessionManager.getSessionId(), event.toolCallId);
+			const markerSessionId = this.#toolMarkerSessions.get(event.toolCallId);
+			if (markerSessionId !== undefined) {
+				clearToolCallInFlight(markerSessionId, event.toolCallId);
+				this.#toolMarkerSessions.delete(event.toolCallId);
+			}
 		}
 
 		// Apply state-bearing tool results before the first awaited subscriber.

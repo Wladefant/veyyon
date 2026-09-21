@@ -126,7 +126,13 @@ async function run(): Promise<void> {
 		await Promise.resolve();
 	}
 
-	if (mode === "complete") {
+	if (mode === "change-id-complete" || mode === "change-id-dispose") {
+		const previousId = sessionManager.getSessionId();
+		await sessionManager.newSession();
+		if (sessionManager.getSessionId() === previousId) throw new Error("Expected a new session identity");
+	}
+
+	if (mode === "complete" || mode === "change-id-complete") {
 		agent.emitExternalEvent({
 			type: "tool_execution_end",
 			toolCallId: "toolu_inflight",
@@ -136,7 +142,7 @@ async function run(): Promise<void> {
 		await Promise.resolve();
 	}
 
-	if (mode === "clean-exit") {
+	if (mode === "clean-exit" || mode === "change-id-dispose") {
 		await session.dispose();
 		process.stdout.write("done\n");
 		return;

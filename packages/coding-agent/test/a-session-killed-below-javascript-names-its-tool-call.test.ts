@@ -190,24 +190,32 @@ describe("a tool call that a dead process never finished", () => {
 		60_000,
 	);
 
-	it("is not reported when the call had already returned before the kill", async () => {
-		const arena = createArena();
-		await killFixtureAtReady(arena, "complete");
+	it.each(["complete", "change-id-complete"])(
+		"does not report a returned call after %s",
+		async mode => {
+			const arena = createArena();
+			await killFixtureAtReady(arena, mode);
 
-		expect(markerFiles(arena)).toEqual([]);
-		await runFixture(arena, "report");
-		expect(logEntries(arena).filter(entry => entry.message === ABANDONED_MESSAGE)).toEqual([]);
-	}, 60_000);
+			expect(markerFiles(arena)).toEqual([]);
+			await runFixture(arena, "report");
+			expect(logEntries(arena).filter(entry => entry.message === ABANDONED_MESSAGE)).toEqual([]);
+		},
+		60_000,
+	);
 
-	it("is not reported when the session exited normally mid-call", async () => {
-		const arena = createArena();
-		// Disposing inside the call is the ordinary shutdown the exit record
-		// already accounts for. Reporting it as a crash would put a false death
-		// in the log on every clean quit that happened to be mid-tool.
-		expect(await runFixture(arena, "clean-exit")).toContain("done");
+	it.each(["clean-exit", "change-id-dispose"])(
+		"does not report a normally disposed session after %s",
+		async mode => {
+			const arena = createArena();
+			// Disposing inside the call is the ordinary shutdown the exit record
+			// already accounts for. Reporting it as a crash would put a false death
+			// in the log on every clean quit that happened to be mid-tool.
+			expect(await runFixture(arena, mode)).toContain("done");
 
-		expect(markerFiles(arena)).toEqual([]);
-		await runFixture(arena, "report");
-		expect(logEntries(arena).filter(entry => entry.message === ABANDONED_MESSAGE)).toEqual([]);
-	}, 60_000);
+			expect(markerFiles(arena)).toEqual([]);
+			await runFixture(arena, "report");
+			expect(logEntries(arena).filter(entry => entry.message === ABANDONED_MESSAGE)).toEqual([]);
+		},
+		60_000,
+	);
 });
