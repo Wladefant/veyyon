@@ -267,3 +267,29 @@ export function isProcessInstanceAlive(
 	const actualIdentity = getProcessStartIdentity(pid, dependencies);
 	return actualIdentity === null || actualIdentity === expectedIdentity;
 }
+
+/** Parse field 3 without mistaking spaces or closing parentheses in comm for fields. */
+export function linuxProcessState(pid: number, stat: string): string | null {
+	if (!stat.startsWith(`${pid} (`)) return null;
+	const commandEnd = stat.lastIndexOf(")");
+	if (commandEnd < `${pid} (`.length || stat[commandEnd + 1] !== " ") return null;
+	const state = stat.slice(commandEnd + 2).split(/\s+/, 1)[0];
+	return state && /^[A-Za-z]$/.test(state) ? state : null;
+}
+
+/** Diagnostic markers can report zombies; lock ownership predicates must not. */
+export function isToolCallProcessAlive(
+	pid: number,
+	expectedIdentity: string | null,
+	dependencies: ProcessIdentityDependencies = DEFAULT_PROCESS_IDENTITY_DEPENDENCIES,
+): boolean {
+	if (!isProcessInstanceAlive(pid, expectedIdentity, dependencies)) return false;
+	if (dependencies.platform !== "linux") return true;
+	try {
+		const stat = dependencies.readBoundedTextFile(`/proc/${pid}/stat`);
+		const state = stat === null ? null : linuxProcessState(pid, stat);
+		return state !== "Z" && state !== "X";
+	} catch {
+		return true;
+	}
+}

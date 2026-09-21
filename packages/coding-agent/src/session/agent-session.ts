@@ -240,6 +240,7 @@ import {
 	withTimeout,
 } from "@veyyon/utils";
 import { contentText } from "@veyyon/utils/content-text";
+import { clearToolCallInFlight, markToolCallInFlight, reportAbandonedToolCalls } from "@veyyon/utils/inflight-marker";
 import { startupMarker } from "@veyyon/utils/startup-marker";
 import type { ArgotSession } from "argot";
 import {
@@ -883,6 +884,8 @@ export class AgentSession {
 	#unsubscribeAgent?: () => void;
 	#cancelExitRecorder?: () => void;
 	#exitRecorded = false;
+	/** Session ids can change on fork/compaction; cleanup must use the id recorded at start. */
+	#toolMarkerSessions = new Map<string, string>();
 	#unsubscribeAppendOnly?: () => void;
 	#unsubscribeModelRoles?: () => void;
 	#unsubscribePromptSettings?: () => void;
@@ -2184,6 +2187,11 @@ export class AgentSession {
 				);
 			},
 		});
+		// The counterpart of the exit recorder below: a death that never reached
+		// JavaScript wrote no `session_exit` entry and no error line, so the only
+		// account of it is the in-flight marker its process left behind. Sweep
+		// those into the log before this session starts writing its own.
+		reportAbandonedToolCalls();
 		this.#cancelExitRecorder = postmortem.register(`agent-session:${this.sessionManager.getSessionId()}`, reason => {
 			this.#recordSessionExit(reason);
 		});
@@ -3641,11 +3649,28 @@ export class AgentSession {
 		if (args) data.args = args;
 		if (event.intent) data.intent = redact(event.intent);
 		this.sessionManager.appendCustomEntry(TOOL_EXECUTION_START_CUSTOM_TYPE, data);
+		// The session entry above survives only an exit that reaches JavaScript.
+		// The marker survives one that does not, which is the whole of what a
+		// postmortem gets when the process is terminated below the runtime.
+		const markerSessionId = this.sessionManager.getSessionId();
+		this.#toolMarkerSessions.set(event.toolCallId, markerSessionId);
+		markToolCallInFlight({
+			toolCallId: event.toolCallId,
+			toolName: event.toolName,
+			sessionId: markerSessionId,
+		});
 	}
 
 	#recordSessionExit(reason: postmortem.Reason | "dispose"): void {
 		if (this.#exitRecorded) return;
 		this.#exitRecorded = true;
+		// This exit reached JavaScript, so the log will carry an account of it
+		// either way. Leaving the marker behind would report the next launch a
+		// crash that did not happen.
+		for (const [toolCallId, sessionId] of this.#toolMarkerSessions) {
+			clearToolCallInFlight(sessionId, toolCallId);
+		}
+		this.#toolMarkerSessions.clear();
 		const pendingToolCalls = collectPendingToolCalls(this.sessionManager.getBranch());
 		if (
 			pendingToolCalls.length === 0 &&
@@ -4589,6 +4614,19 @@ export class AgentSession {
 
 		if (event.type === "tool_execution_start") {
 			this.#recordToolExecutionStart(event);
+		}
+
+		// Paired with the mark in `#recordToolExecutionStart`, and placed here
+		// rather than beside the other `tool_execution_end` work below because
+		// that runs after the awaited subscribers: a listener that throws would
+		// otherwise leave this process looking like it died inside a call that
+		// had already returned.
+		if (event.type === "tool_execution_end") {
+			const markerSessionId = this.#toolMarkerSessions.get(event.toolCallId);
+			if (markerSessionId !== undefined) {
+				clearToolCallInFlight(markerSessionId, event.toolCallId);
+				this.#toolMarkerSessions.delete(event.toolCallId);
+			}
 		}
 
 		// Apply state-bearing tool results before the first awaited subscriber.

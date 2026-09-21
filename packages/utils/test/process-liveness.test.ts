@@ -4,9 +4,28 @@ import {
 	getProcessStartIdentity,
 	isProcessAlive,
 	isProcessInstanceAlive,
+	isToolCallProcessAlive,
+	linuxProcessState,
 	type ProcessIdentityDependencies,
 } from "../src/process-liveness";
 import { scanShippedSourceLines } from "./support/scan-shipped-source";
+
+describe("diagnostic marker process state", () => {
+	test.each(["Z", "X", "S", "R"])("parses %s after comm and preserves lock liveness", state => {
+		const stat = `${process.pid} (worker ) with spaces) ${state} 1 2 3`;
+		const dependencies: ProcessIdentityDependencies = {
+			platform: "linux",
+			readBoundedTextFile: () => stat,
+			querySystem: () => null,
+			queryDarwinProcessStart: () => null,
+			queryWindowsProcessStart: () => null,
+		};
+		expect(linuxProcessState(process.pid, stat)).toBe(state);
+		expect(isToolCallProcessAlive(process.pid, null, dependencies)).toBe(state !== "Z" && state !== "X");
+		expect(isProcessInstanceAlive(process.pid, null, dependencies)).toBe(true);
+		expect(isToolCallProcessAlive(process.pid, null, { ...dependencies, platform: "win32" })).toBe(true);
+	});
+});
 
 describe("isProcessAlive", () => {
 	test("reports this process as alive", () => {

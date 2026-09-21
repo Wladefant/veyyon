@@ -11,6 +11,7 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { isPromise } from "node:util/types";
 import type * as winston from "winston";
 import type DailyRotateFile from "winston-daily-rotate-file";
@@ -123,13 +124,15 @@ let fileTransportFollowsDirs = false;
  */
 let failedRebindTarget: string | undefined;
 
+const LOG_FILENAME = "veyyon.%DATE%.log";
+
 /** Build a rotating file transport, materializing the target directory lazily. */
 function makeFileTransport(dir?: string): winston.transport {
 	fileTransportFollowsDirs = dir === undefined;
 	fileTransportDir = ensureDir(dir ?? getLogsDir());
 	const transport = new (rotateFileCtor())({
 		dirname: fileTransportDir,
-		filename: "veyyon.%DATE%.log",
+		filename: LOG_FILENAME,
 		datePattern: "YYYY-MM-DD",
 		maxSize: "10m",
 		maxFiles: 5,
@@ -308,6 +311,30 @@ export function error(message: string, context?: Record<string, unknown>): void 
 	} catch {
 		// Silently ignore logging failures
 	}
+}
+
+/**
+ * Commit a recovery record before its source evidence is removed.
+ * The base dated file remains part of the normal log surface even when the
+ * async transport has advanced to a size-rotation suffix.
+ * Throws on failure so the caller keeps the original evidence for another launch.
+ */
+export function errorSync(message: string, context?: Record<string, unknown>): void {
+	const now = new Date();
+	const date = [
+		now.getFullYear(),
+		String(now.getMonth() + 1).padStart(2, "0"),
+		String(now.getDate()).padStart(2, "0"),
+	].join("-");
+	const format = getLogFormat();
+	const formatted = format.transform({ ...context, level: "error", message }, format.options);
+	const line = typeof formatted === "object" && formatted[Symbol.for("message")];
+	if (typeof line !== "string") throw new Error("Recovery log formatter produced no record");
+	const dir = ensureDir(typeof transportOpts.file === "string" ? transportOpts.file : getLogsDir());
+	fs.appendFileSync(path.join(dir, LOG_FILENAME.replace("%DATE%", date)), `${line}\n`, {
+		encoding: "utf8",
+		flush: true,
+	});
 }
 
 /**
