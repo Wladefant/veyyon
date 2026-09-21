@@ -816,7 +816,7 @@ export class SettingsStore {
 				for (let depth = 1; depth < segments.length; depth++) {
 					const namespace = getByPath(source, segments.slice(0, depth));
 					if (namespace === undefined) break;
-					if (namespace === null || typeof namespace !== "object" || Array.isArray(namespace)) {
+					if (!isRecord(namespace)) {
 						throw new Error(`Invalid config namespace ${segments.slice(0, depth).join(".")}; reload rejected.`);
 					}
 				}
@@ -851,8 +851,8 @@ export class SettingsStore {
 			const reason = reasons.find(([prefix]) => key === prefix || key.startsWith(`${prefix}.`))?.[1];
 			const allowed = root !== undefined && reloadable.includes(root) && !reason;
 			const keys = new Set([
-				...(before && typeof before === "object" && !Array.isArray(before) ? Object.keys(before) : []),
-				...(after && typeof after === "object" && !Array.isArray(after) ? Object.keys(after) : []),
+				...(isRecord(before) ? Object.keys(before) : []),
+				...(isRecord(after) ? Object.keys(after) : []),
 			]);
 			// Expand routing objects so startup-only and new-spawn values in one
 			// map each get their own truthful outcome and commit.

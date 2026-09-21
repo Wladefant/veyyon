@@ -14,6 +14,7 @@ import {
 	OPENAI_HEADER_VALUES,
 	OPENAI_HEADERS,
 } from "@veyyon/catalog/wire/codex";
+import { isTimeoutError } from "@veyyon/utils/abortable";
 import { getInstallId } from "@veyyon/utils/dirs";
 import { $env, $flag } from "@veyyon/utils/env";
 import { structuredCloneJSON } from "@veyyon/utils/json";
@@ -2812,10 +2813,11 @@ const streamOpenAICodexResponsesOnce = (
 				} satisfies CodexStreamFailureContext);
 			try {
 				const failure = await handleCodexStreamFailure(failureContext, error);
+				const abortReason: unknown = options?.signal?.reason;
 				if (model.provider === CHATGPT_WEB_PROVIDER_ID && !options?.signal?.aborted) {
 					failure.errorMessage = describeChatGptWebFailure(failure.errorMessage ?? error);
-				} else if (model.provider === CHATGPT_WEB_PROVIDER_ID && options?.signal?.reason?.name === "TimeoutError") {
-					failure.errorMessage = describeChatGptWebFailure(options.signal.reason);
+				} else if (model.provider === CHATGPT_WEB_PROVIDER_ID && isTimeoutError(abortReason)) {
+					failure.errorMessage = describeChatGptWebFailure(abortReason);
 					failure.stopReason = "error";
 				}
 				stream.push({ type: "error", reason: failure.stopReason as "error" | "aborted", error: failure });

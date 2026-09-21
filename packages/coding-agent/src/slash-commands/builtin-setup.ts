@@ -925,7 +925,7 @@ export const SETUP_HANDLERS = {
 				);
 				return commandConsumed();
 			} catch (error) {
-				await runtime.output(`Config reload failed: ${error instanceof Error ? error.message : String(error)}`);
+				await runtime.output(`Config reload failed: ${errorMessage(error)}`);
 				throw error;
 			}
 		},

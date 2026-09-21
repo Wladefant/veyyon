@@ -6,6 +6,7 @@
  * assembly and the lookups built from it, so adding a command touches its domain file and the
  * declarations, not a two-thousand-line object every command in the product shares.
  */
+import { errorMessage } from "@veyyon/utils/type-guards";
 import { COLLAB_GUEST_ALLOWED_COMMANDS } from "../collab/guest-commands";
 
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../discovery/helpers.js";
@@ -262,7 +263,7 @@ export async function executeBuiltinSlashCommand(
 		} catch (error) {
 			// Text transports must observe rejection, but the TUI owns the
 			// diagnostic: follow-up and picker callbacks do not await dispatch.
-			ctx.showError(error instanceof Error ? error.message : String(error));
+			ctx.showError(errorMessage(error));
 		}
 		return true;
 	}
