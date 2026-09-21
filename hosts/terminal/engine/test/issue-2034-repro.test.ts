@@ -1,5 +1,5 @@
 import "./warm-natives"; // load the native addon under the real platform before any process.platform mock
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { chunkForConPTY, ProcessTerminal } from "@veyyon/tui/terminal";
 import { setTerminalHeadless } from "@veyyon/utils";
 
@@ -21,6 +21,35 @@ import { setTerminalHeadless } from "@veyyon/utils";
 // The cap is on encoded UTF-8 bytes, not JS code units: `process.stdout.write`
 // UTF-8-encodes before `WriteFile`, so a code-unit cap would let CJK rows
 // expand past the threshold (3 bytes per BMP char) and reintroduce the bug.
+
+// Every `"error"` listener already on `process.stdout` when this file loads
+// belongs to somebody else: importing `@veyyon/utils` installs the process-wide
+// postmortem owner, which answers a stdio EPIPE by running cleanup and calling
+// `process.exit(0)`. `ProcessTerminal` adds exactly one listener of its own,
+// lazily, on its first non-headless write.
+//
+// The EPIPE/EIO cases below therefore deliver a synthesized write failure to the
+// engine's own listener rather than `process.stdout.emit("error", …)`, which
+// would hand the event to that owner too. `emit()` used to end the worker in the
+// middle of this file: the process left with code 0 and no verdict, and the rest
+// of the `hosts/terminal/engine` bucket never ran (veyyon#64). Exiting quietly on
+// a closed stdout pipe is right in production, so the defect is the test reaching
+// for a process-global event to exercise one object's routing.
+const foreignStdoutErrorListeners = new Set(process.stdout.listeners("error"));
+
+// Makes the failure mode above loud if it ever returns by another route: a worker
+// that leaves before the last case reports is a silent green, so re-exit nonzero
+// with the reason on stderr. Bun honours `process.exitCode` set from an `exit`
+// listener even after an explicit `process.exit(0)`.
+let everyCaseReported = false;
+process.on("exit", code => {
+	if (everyCaseReported) return;
+	process.stderr.write(
+		`\n[issue-2034-repro] the test worker exited with code ${code} before every case reported a verdict — ` +
+			"something in this file ended the process instead of failing (see veyyon#64)\n",
+	);
+	process.exitCode = 1;
+});
 
 const ESC = "\x1b";
 
@@ -202,6 +231,22 @@ describe("issue #2034: chunk large terminal writes on Windows ConPTY", () => {
 			return writes;
 		}
 
+		/**
+		 * The `"error"` listener `ProcessTerminal` registered on `process.stdout`,
+		 * which is where a real write failure reaches the engine. Resolving it by
+		 * difference proves the subscription is on the real stream; asserting it
+		 * sits first proves the prepend in `registerStdoutErrorHandler`, which is
+		 * load-bearing — a terminal must be marked dead before the process-wide
+		 * postmortem owner begins its synchronous restore.
+		 */
+		function engineStdoutErrorListener(): (err: Error) => void {
+			const listeners = process.stdout.listeners("error");
+			const own = listeners.filter(listener => !foreignStdoutErrorListeners.has(listener));
+			expect(own).toHaveLength(1);
+			expect(listeners[0]).toBe(own[0]);
+			return own[0] as (err: Error) => void;
+		}
+
 		it("splits >16 KiB writes into chunks on win32 so ConPTY can track the viewport", () => {
 			Object.defineProperty(process, "platform", { value: "win32", configurable: true });
 			const writes = captureStdoutWrites();
@@ -281,26 +326,11 @@ describe("issue #2034: chunk large terminal writes on Windows ConPTY", () => {
 			expect(conptyChunks.join("")).toBe(payload);
 		});
 
-		it("marks the terminal dead when stdout emits EPIPE after a write (#2284)", () => {
-			const writes = captureStdoutWrites();
-			const terminal = new ProcessTerminal();
-			const err = Object.assign(new Error("EPIPE: broken pipe, write"), {
-				code: "EPIPE",
-				fd: 5,
-				syscall: "write",
-				errno: -32,
-			});
-
-			try {
-				terminal.write("first frame");
-				process.stdout.emit("error", err);
-				terminal.write("second frame");
-
-				expect(writes).toEqual(["first frame"]);
-			} finally {
-				terminal.stop();
-			}
-		});
+		// The three cases below are ordered, and the order is a contract, not a
+		// convenience: a fatal code latches `stdoutDead` for the whole process,
+		// which is right — stdout is one shared pipe — but one-way. Everything
+		// that needs a writable stdout runs before the EPIPE case, which asserts
+		// the latch itself and therefore goes last.
 
 		it("keeps rendering after a transient EIO: the terminal is not bricked by one hiccup", () => {
 			// Since 7fdf44fa a single transient write failure (EAGAIN/EIO/EINTR)
@@ -318,7 +348,7 @@ describe("issue #2034: chunk large terminal writes on Windows ConPTY", () => {
 
 			try {
 				terminal.write("first frame");
-				process.stdout.emit("error", err);
+				engineStdoutErrorListener()(err);
 				terminal.write("second frame");
 
 				expect(writes).toEqual(["first frame", "second frame"]);
@@ -328,7 +358,7 @@ describe("issue #2034: chunk large terminal writes on Windows ConPTY", () => {
 		});
 
 		it("keeps stdout error events handled after stop for delayed write failures (#2284)", () => {
-			captureStdoutWrites();
+			const writes = captureStdoutWrites();
 			const terminal = new ProcessTerminal();
 			const err = Object.assign(new Error("EIO: i/o error, write"), {
 				code: "EIO",
@@ -338,9 +368,47 @@ describe("issue #2034: chunk large terminal writes on Windows ConPTY", () => {
 			});
 
 			terminal.write("restore frame");
+			const listener = engineStdoutErrorListener();
 			terminal.stop();
 
-			expect(() => process.stdout.emit("error", err)).not.toThrow();
+			// stop() drops this terminal from the fan-out, but the listener stays
+			// on the stream: a write failure that lands after teardown would
+			// otherwise be an `"error"` event with nobody subscribed, which
+			// EventEmitter turns into a throw that kills the process (#2284).
+			expect(process.stdout.listeners("error")).toContain(listener);
+			writes.length = 0;
+			listener(err);
+			expect(writes).toEqual([]);
 		});
+
+		it("latches every terminal in the process dead when stdout reports a fatal EPIPE (#2284)", () => {
+			const writes = captureStdoutWrites();
+			const terminal = new ProcessTerminal();
+			const err = Object.assign(new Error("EPIPE: broken pipe, write"), {
+				code: "EPIPE",
+				fd: 5,
+				syscall: "write",
+				errno: -32,
+			});
+
+			try {
+				terminal.write("first frame");
+				engineStdoutErrorListener()(err);
+				terminal.write("second frame");
+
+				expect(writes).toEqual(["first frame"]);
+				// stdout is one pipe for the whole process, so a peer closing it
+				// disables a terminal built afterwards too — not only the instance
+				// that happened to be subscribed when the error arrived.
+				new ProcessTerminal().write("third frame");
+				expect(writes).toEqual(["first frame"]);
+			} finally {
+				terminal.stop();
+			}
+		});
+	});
+
+	afterAll(() => {
+		everyCaseReported = true;
 	});
 });
