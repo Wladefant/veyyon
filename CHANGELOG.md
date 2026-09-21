@@ -17,6 +17,7 @@
 
 ### Removed
 
+- Removed the `./tool-discovery/*` subpath from the `@veyyon/coding-agent` exports map; its source directory was folded into `discovery/` and the key resolved to no module, so no user-facing effect ([#64](https://github.com/Wladefant/veyyon/issues/64)).
 - `models.ts` no longer imports `ZERO_MODEL_COST`, which it stopped using; no user-visible change.
 
 ### Fixed
