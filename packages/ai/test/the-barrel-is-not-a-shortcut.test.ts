@@ -247,7 +247,11 @@ describe("the modules that were repointed stay cut", () => {
 		// Removing the descriptor edge and the `provider-models/index.ts` re-export drops this reach
 		// to exactly upstream's 208, and `@veyyon/utils/scoped-timeout` — the reader's third module —
 		// was already on this closure, which is why it costs two here and three on `env-api-key.ts`.
-		["coding-agent/src/commit/shared-llm.ts", 210],
+		// Re-measured 2026-09-21 at 211, from 210, by one module: `ai/src/providers/vision-content.ts`
+		// (added by `df69e53f9`), the video/image placeholder constants and the vision partition that
+		// nine provider files share, named here by `providers/gitlab-duo-workflow.ts`, which was
+		// already on this closure. It imports its three types only, so it adds no edge of its own.
+		["coding-agent/src/commit/shared-llm.ts", 211],
 		// The agent's hot loop and the `Agent` class. Both STREAM, so both reach the engine whatever
 		// specifier they use; the ceilings are what the other ten names cost when taken from the entry
 		// point. 378 -> 321 and 380 -> 323.
