@@ -303,6 +303,12 @@ export interface ToolCallEventResult {
 	reason?: string;
 	/** The rejected operation's subject; absent subjects retain a tool-wide denial. */
 	subject?: ToolRefusalSubject;
+	/**
+	 * An approval gate waiting on an exact operation is not a user refusal.
+	 * Execution is still blocked, and the handler must re-evaluate every retry.
+	 * Omitted (including legacy handlers) retains the persistent refusal policy.
+	 */
+	disposition?: "approval-required" | "refused";
 }
 
 /**

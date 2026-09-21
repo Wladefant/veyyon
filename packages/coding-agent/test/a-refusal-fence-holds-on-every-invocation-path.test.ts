@@ -523,6 +523,44 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 	// ─────────────────────────────────────────────────────────────────────────
 	// Unscoped extension decisions retain their legacy tool-wide meaning.
 	// ─────────────────────────────────────────────────────────────────────────
+	it("pending approval blocks now without poisoning a later exact one-shot retry", async () => {
+		const settings = Settings.isolated();
+		const context = { settings, sessionApprovals: createSessionApprovals(), sessionManager: { getCwd: () => "/repo" } } as unknown as AgentToolContext;
+		let approved = false;
+		const runner = {
+			...mockRunner,
+			hasHandlers: (event: string) => event === "tool_call",
+			emitToolCall: async (event: { input: { cmd?: string } }) => {
+				if (approved && event.input.cmd === "probe") {
+					approved = false;
+					return undefined;
+				}
+				return { block: true, disposition: "approval-required", reason: "Await exact approval" };
+			},
+		} as unknown as ExtensionRunner;
+		const wrapped = new ExtensionToolWrapper(createProbeTool(), runner);
+		await expect(wrapped.execute("pending", { cmd: "probe" }, undefined, undefined, context)).rejects.toThrow("Await exact approval");
+		expect(isToolRefused(PROBE_TOOL_NAME, {}, context).refused).toBe(false);
+		approved = true;
+		await expect(wrapped.execute("changed", { cmd: "different" }, undefined, undefined, context)).rejects.toThrow("Await exact approval");
+		await wrapped.execute("approved", { cmd: "probe" }, undefined, undefined, context);
+		expect(probeExecuted).toBe(true);
+		await expect(wrapped.execute("replay", { cmd: "probe" }, undefined, undefined, context)).rejects.toThrow("Await exact approval");
+	});
+
+	it("explicit extension refusal remains persistent", async () => {
+		const settings = Settings.isolated();
+		const context = { settings, sessionApprovals: createSessionApprovals(), sessionManager: { getCwd: () => "/repo" } } as unknown as AgentToolContext;
+		const runner = {
+			...mockRunner,
+			hasHandlers: (event: string) => event === "tool_call",
+			emitToolCall: async () => ({ block: true, disposition: "refused", reason: "Operator denied" }),
+		} as unknown as ExtensionRunner;
+		const wrapped = new ExtensionToolWrapper(createProbeTool(), runner);
+		await expect(wrapped.execute("denied", { cmd: "probe" }, undefined, undefined, context)).rejects.toThrow("Operator denied");
+		expect(isToolRefused(PROBE_TOOL_NAME, {}, context).refused).toBe(true);
+	});
+
 	it("unscoped refusal policy persists and is inherited by child settings", async () => {
 		const settings = Settings.isolated();
 		const sessionApprovals = createSessionApprovals();

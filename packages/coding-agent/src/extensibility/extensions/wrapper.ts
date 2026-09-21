@@ -497,7 +497,9 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 						callResult.reason ||
 						`An extension blocked this ${this.tool.name} call and gave no reason. Do not retry it; tell ` +
 							"the operator which extension is blocking so they can fix or remove it.";
-					recordRefusal(this.tool.name, reason, context, undefined, callResult.subject);
+					if (callResult.disposition !== "approval-required") {
+						recordRefusal(this.tool.name, reason, context, undefined, callResult.subject);
+					}
 					throw new Error(reason);
 				}
 			} catch (err) {

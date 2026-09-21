@@ -11,6 +11,7 @@
 
 ### Fixed
 
+- Extension approval-required blocks stop the current call without persisting a user refusal; explicit and legacy refusals retain their existing fence ([#88](https://github.com/Wladefant/veyyon/issues/88)).
 - Telegram control can deliver to and observe the authenticated live terminal owner without reopening its transcript in a GUI host ([#88](https://github.com/Wladefant/veyyon/issues/88)).
 
 - Agent-lane validation and the two slash-command error paths call `isRecord` and `errorMessage` from `@veyyon/utils` instead of hand-writing them, so an `Error` with an empty message now reports its constructor name rather than an empty string ([#64](https://github.com/Wladefant/veyyon/issues/64)).
