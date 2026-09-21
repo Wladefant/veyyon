@@ -195,4 +195,25 @@ describe("stderr guard", () => {
 		expect(stderr).toContain("native-after-restore");
 		expect(redirect).not.toContain("native-after-restore");
 	});
+	it("allows rotation to rename and unlink the active capture", async () => {
+		const { report, stderr, redirect } = await runProbe([
+			`const gateResult = suppressTerminalStderr();`,
+			`const forced = suppressTerminalStderr({ force: true, redirectPath });`,
+			`const secondSuppress = forced;`,
+			`const suppressedWhileActive = isTerminalStderrSuppressed();`,
+			`if (!forced) throw new Error("native capture unavailable");`,
+			`nativeStderrWrite("before-rotation\\n");`,
+			`fs.renameSync(redirectPath, redirectPath + ".rotated");`,
+			`nativeStderrWrite("after-rename\\n");`,
+			`const captured = fs.readFileSync(redirectPath + ".rotated", "utf8");`,
+			`fs.unlinkSync(redirectPath + ".rotated");`,
+			`nativeStderrWrite("after-unlink\\n");`,
+			`restoreTerminalStderr();`,
+			`fs.writeFileSync(redirectPath, captured);`,
+			...REPORT_LINE,
+		]);
+		expect(report.suppressedAfterRestore).toBe(false);
+		expect(redirect).toBe("before-rotation\nafter-rename\n");
+		expect(stderr).toBe("");
+	});
 });

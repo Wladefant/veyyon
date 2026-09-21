@@ -107,7 +107,8 @@ const STD_ERROR_HANDLE = 0xfffffff4;
 /** `INVALID_HANDLE_VALUE`, which `CreateFileW` returns on failure. */
 const INVALID_HANDLE_VALUE = 0xffffffffffffffffn;
 const FILE_APPEND_DATA = 0x0004;
-const FILE_SHARE_READ_WRITE = 0x0003;
+// FILE_SHARE_DELETE lets file-stream-rotator rename/unlink while capture remains open.
+const FILE_SHARE_READ_WRITE_DELETE = 0x0007;
 const OPEN_ALWAYS = 4;
 const FILE_ATTRIBUTE_NORMAL = 0x0080;
 
@@ -182,7 +183,7 @@ function captureWin32StandardError(redirectPath: string): boolean {
 	const redirect = ops.CreateFileW(
 		widePath,
 		FILE_APPEND_DATA,
-		FILE_SHARE_READ_WRITE,
+		FILE_SHARE_READ_WRITE_DELETE,
 		0n,
 		OPEN_ALWAYS,
 		FILE_ATTRIBUTE_NORMAL,
