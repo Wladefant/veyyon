@@ -105,7 +105,9 @@ const ADMITTED_ON_THE_FIRST_FRAME: readonly string[] = [];
  * MEASURED at 308 modules on fork main (up from 304 ceiling).
  * The primary architectural invariants below (`the launch card reaches no store`,
  * `the first frame reaches no store`, `the settings store reaches no store`) are completely
- * green: the card reaches zero SQLite/database modules, opening no store at launch.
+ * green: the card reaches no database owners beyond the admitted setting declaration leaf
+ * (`coding-agent/src/config/legacy-agent-db-settings.ts`), opening no SQLite database and
+ * loading no store runtime at launch.
  * The +4 module delta is non-database leaf and contract restructuring across the workspace:
  * terminal engine utility extractions under `hosts/terminal/engine/src/utils/` (`hover-controller.ts`,
  * `search-filter.ts`, `scroll-layout.ts`, `text-layout.ts`), workspace contract interfaces
@@ -132,7 +134,7 @@ describe("the launch card opens no database", () => {
 		expect(DATABASE_OWNERS).toContain(ADMITTED_ON_THE_CARD_PATH[0]);
 		expect(DATABASE_OWNERS).toContain(path.join("..", "plugins", "mnemopi", "src", "db.ts"));
 		expect(reach("cli/launch-card.ts")).toBeGreaterThan(LAUNCH_CARD_FLOOR);
-	}, 30_000);
+	});
 
 	/**
 	 * And the detector is not blind to the thing it is looking for: the module that owns the run's
