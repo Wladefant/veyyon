@@ -25,6 +25,10 @@
 
 - Merged upstream v1.5.0.
 
+### Removed
+
+- Removed the `./tool-discovery/*` subpath from the `@veyyon/coding-agent` exports map; its source directory was folded into `discovery/` and the key resolved to no module, so no user-facing effect ([#64](https://github.com/Wladefant/veyyon/issues/64)).
+
 ## [1.5.0] - 2026-09-18
 
 ### Breaking Changes
