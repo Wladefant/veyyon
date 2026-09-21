@@ -6,7 +6,7 @@
 
 ### Added
 
-- `markToolCallInFlight`, `clearToolCallInFlight` and `reportAbandonedToolCalls` record the tool call a process is inside in a per-pid marker file, so a session terminated below JavaScript is reported at the next launch naming the tool, call id and session id it died in ([#73](https://github.com/Wladefant/veyyon/issues/73)).
+- `@veyyon/utils/inflight-marker` atomically records each concurrent tool call independently and durably reports abandoned calls in the normal dated log before removing their markers, including Linux zombies ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 
 ### Changed
 

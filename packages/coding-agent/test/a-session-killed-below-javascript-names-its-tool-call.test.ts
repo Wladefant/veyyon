@@ -142,6 +142,26 @@ afterEach(() => {
 	for (const arena of arenas.splice(0)) arena.dispose();
 });
 
+it("keeps crash evidence when the recovery log cannot be written", async () => {
+	const arena = createArena();
+	await killFixtureAtReady(arena, "abandon");
+	const now = new Date();
+	const date = [
+		now.getFullYear(),
+		String(now.getMonth() + 1).padStart(2, "0"),
+		String(now.getDate()).padStart(2, "0"),
+	].join("-");
+	const blockedLog = path.join(arena.root, "profiles", "default", "logs", `veyyon.${date}.log`);
+	fs.rmSync(blockedLog, { force: true });
+	fs.mkdirSync(blockedLog);
+	await runFixture(arena, "report");
+	expect(markerFiles(arena)).toHaveLength(1);
+	fs.rmdirSync(blockedLog);
+	await runFixture(arena, "report");
+	expect(logEntries(arena).filter(entry => entry.message === ABANDONED_MESSAGE)).toHaveLength(1);
+	expect(markerFiles(arena)).toEqual([]);
+}, 60_000);
+
 describe("a tool call that a dead process never finished", () => {
 	it.each(["abandon", "concurrent"])(
 		"names the unfinished call after %s in the next launch's log",

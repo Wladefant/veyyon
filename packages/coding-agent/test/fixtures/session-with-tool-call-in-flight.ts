@@ -72,8 +72,8 @@ async function run(): Promise<void> {
 	if (mode === "report") {
 		await session.dispose();
 		process.stdout.write("done\n");
-		// Let the file transport drain; process.exit discards queued log writes.
-		return;
+		// Recovery must already be on disk even when no event-loop turn can drain the logger.
+		process.exit(0);
 	}
 
 	agent.emitExternalEvent({ type: "message_end", message: pendingAssistant });

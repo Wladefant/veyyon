@@ -164,17 +164,22 @@ export function reportAbandonedToolCalls(): InFlightToolCall[] {
 		const marker = readMarker(file);
 		if (marker && isToolCallProcessAlive(marker.pid, marker.startIdentity)) continue;
 		if (marker) {
+			try {
+				logger.errorSync("Previous session died with a tool call in flight", {
+					pid: marker.pid,
+					toolName: marker.toolName,
+					toolCallId: marker.toolCallId,
+					sessionId: marker.sessionId,
+					startedAt: marker.startedAt,
+				});
+			} catch (error) {
+				logger.debug("Could not persist abandoned tool call report", { error: errorMessage(error) });
+				continue;
+			}
 			abandoned.push({
 				toolCallId: marker.toolCallId,
 				toolName: marker.toolName,
 				sessionId: marker.sessionId,
-			});
-			logger.error("Previous session died with a tool call in flight", {
-				pid: marker.pid,
-				toolName: marker.toolName,
-				toolCallId: marker.toolCallId,
-				sessionId: marker.sessionId,
-				startedAt: marker.startedAt,
 			});
 		}
 		try {
