@@ -11,6 +11,8 @@
 
 ### Fixed
 
+- Telegram control can deliver to and observe the authenticated live terminal owner without reopening its transcript in a GUI host ([#88](https://github.com/Wladefant/veyyon/issues/88)).
+
 - Agent-lane validation and the two slash-command error paths call `isRecord` and `errorMessage` from `@veyyon/utils` instead of hand-writing them, so an `Error` with an empty message now reports its constructor name rather than an empty string ([#64](https://github.com/Wladefant/veyyon/issues/64)).
 - Topic replenishment reads the live settings instance again. `resolveTopicWorkerModel` probed `Settings.isInitialized`, a member neither this fork nor upstream ever declared, so the expression was always `undefined`: an initialized session was treated as uninitialized, the configured agent lane and `modelRoles` default were never consulted, and every unconfigured caller fell through to `VEYYON_DEFAULT_MODEL`. It calls the exported `isSettingsInitialized()` instead ([#25](https://github.com/Wladefant/veyyon/issues/25)).
 - Scope extension refusals to declared subjects, fail closed for opaque execution under a path refusal, and enforce session policy through registered tool dispatch boundaries ([#37](https://github.com/Wladefant/veyyon/issues/37)).
