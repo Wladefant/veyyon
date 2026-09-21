@@ -208,9 +208,19 @@ export function normalizeVersion(v) {
  * reconciling them as versions made the site build fail asking for entries that
  * would be lies. The leading-`v` test alone is not enough — `v0.0.0-gui-assets`
  * passes it — so the match is anchored at both ends.
+ *
+ * The version body mirrors `RELEASE_VERSION_BODY` in `packages/utils/src/semver.ts`
+ * character for character, including the `(0|[1-9]\d*)` that forbids a leading
+ * zero. A looser `\d+` would admit `v01.2.3`, which `releaseTagRefusal` rejects
+ * and no release can therefore carry, and a published tag of that shape would
+ * land in `unmatchedPublished` and fail the site build for the same reason the
+ * three evidence releases did. The module is plain `.mjs` that `node` loads
+ * during the site build, so it cannot import the workspace TypeScript that owns
+ * the grammar; `apps/site/tools/undocumented-release-ratchet.test.ts` pins the
+ * boundary instead.
  */
 export function isProductReleaseTag(tag) {
-	return /^v\d+\.\d+\.\d+$/.test(String(tag).trim());
+	return /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(String(tag).trim());
 }
 
 /**

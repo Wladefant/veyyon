@@ -154,6 +154,16 @@ describe("a tag that names no version", () => {
 		// names its releases in tags like `pre-upstream-1.5.0-merge`.
 		expect(isProductReleaseTag("pre-v1.5.0")).toBe(false);
 		expect(isProductReleaseTag("upstream-v16.5.2")).toBe(false);
+		// The same grammar `releaseTagRefusal` enforces, leading zeros and all: a
+		// `\d+` body admits `v01.2.3`, which no release can carry because
+		// `RELEASE_VERSION_BODY` is `(0|[1-9]\d*)`, and a published tag of that
+		// shape would fail the site build exactly as the evidence releases did.
+		expect(isProductReleaseTag("v01.2.3")).toBe(false);
+		expect(isProductReleaseTag("v1.02.3")).toBe(false);
+		expect(isProductReleaseTag("v1.2.03")).toBe(false);
+		// A zero component is legal; only a zero PREFIX is not.
+		expect(isProductReleaseTag("v0.1.0")).toBe(true);
+		expect(isProductReleaseTag("v1.0.0")).toBe(true);
 	});
 
 	it("reports no gap for the three evidence releases this repository publishes", () => {
