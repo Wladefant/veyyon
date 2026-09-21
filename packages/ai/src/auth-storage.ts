@@ -3613,7 +3613,17 @@ export class AuthStorage {
 		return undefined;
 	}
 
-	/** Reuse Codex OAuth only when ChatGPT Web has no credential source of its own. */
+	/**
+	 * Reuse Codex OAuth only when ChatGPT Web has no credential source of its own.
+	 *
+	 * The predicate is also the identity of the row that serves: `getApiKey` resolves the fallback
+	 * leg against `openai-codex`, which is where the session sticky and the bearer fingerprint get
+	 * recorded. So every caller that acts on the credential which served a turn — `getApiKey`,
+	 * `peekApiKey`, `rotateSessionCredential`, `markUsageLimitReached` — reads this predicate and
+	 * substitutes `openai-codex` for the requested name. It is false whenever ChatGPT Web has a
+	 * credential of its own, which is how a dedicated credential keeps precedence, and it names no
+	 * provider but ChatGPT Web, so nothing else gains an effective-provider indirection.
+	 */
 	#chatgptWebOAuthFallback(provider: string): boolean {
 		return (
 			provider === "chatgpt-web" &&
@@ -5004,9 +5014,13 @@ export class AuthStorage {
 	 * Returns whether a sibling credential is available now; when none is, also
 	 * reports the earliest time a blocked sibling becomes available again so
 	 * callers can wait for the sibling instead of the provider's full window.
+	 *
+	 * Acts on the provider whose row actually served the turn: a ChatGPT Web turn that borrowed a
+	 * stored Codex OAuth row (see {@link AuthStorage.#chatgptWebOAuthFallback}) blocks that Codex
+	 * account, because `chatgpt-web` has no row of its own to block.
 	 */
 	async markUsageLimitReached(
-		provider: string,
+		requestedProvider: string,
 		sessionId: string | undefined,
 		options?: {
 			retryAfterMs?: number;
@@ -5017,6 +5031,7 @@ export class AuthStorage {
 			signal?: AbortSignal;
 		},
 	): Promise<UsageLimitMarkResult> {
+		const provider = this.#chatgptWebOAuthFallback(requestedProvider) ? "openai-codex" : requestedProvider;
 		let sessionCredential = await this.#resolveCredentialTarget(provider, sessionId, {
 			credentialId: options?.credentialId,
 			apiKey: options?.apiKey,
@@ -6969,12 +6984,17 @@ export class AuthStorage {
 	 *   sticky state.
 	 *
 	 * Returns whether another usable credential of the same type remains.
+	 *
+	 * Rotation acts on the provider whose row actually served the turn: a ChatGPT Web turn that
+	 * borrowed a stored Codex OAuth row (see {@link AuthStorage.#chatgptWebOAuthFallback}) rotates
+	 * among the Codex accounts, because `chatgpt-web` has no row of its own to rotate away from.
 	 */
 	async rotateSessionCredential(
-		provider: string,
+		requestedProvider: string,
 		sessionId: string | undefined,
 		options?: { error?: unknown; modelId?: string; apiKey?: string; credentialId?: number; signal?: AbortSignal },
 	): Promise<boolean> {
+		const provider = this.#chatgptWebOAuthFallback(requestedProvider) ? "openai-codex" : requestedProvider;
 		const error = options?.error;
 		if (AIError.isUsageLimit(error)) {
 			return (
