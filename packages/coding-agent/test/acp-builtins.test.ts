@@ -10,6 +10,7 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import * as mcpConfigWriter from "@veyyon/coding-agent/mcp/config-writer";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { executeAcpBuiltinSlashCommand } from "@veyyon/coding-agent/slash-commands/acp-builtins";
+import { TODO_VERBS } from "@veyyon/coding-agent/slash-commands/helpers/todo";
 import * as sshConfigWriter from "@veyyon/coding-agent/ssh/config-writer";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeWithRetries } from "@veyyon/utils";
@@ -746,25 +747,38 @@ describe("wave 3 commands", () => {
 
 	/**
 	 * Locks out the disagreement where the "Unknown /todo subcommand" message listed
-	 * append/start/done/drop/rm/copy/export/import but omitted `edit` and `help`,
-	 * both of which the dispatcher accepts. Omitting `help` was self-defeating: the
-	 * one verb that prints the full usage was absent from the message telling the
-	 * user what is valid. Asserts the exact bytes, then proves every verb the
-	 * message names is really accepted.
+	 * append/start/done/drop/rm/copy/export/import but omitted `edit` and `help`, both of which
+	 * the dispatcher accepts. Omitting `help` was self-defeating: the one verb that prints the
+	 * full usage was absent from the message telling the user what is valid.
+	 *
+	 * The byte-for-byte expectation this case used to carry could not close that class. It broke
+	 * when the MESSAGE changed and stayed green when the DISPATCHER did: `24e3b7efe`
+	 * ("fix(todo): honor explicit pending, render concurrent phases collapsed, and update active
+	 * steering") added the `pending` and `reset` verbs and named them in the message, and the
+	 * frozen copy here went red for naming them rather than for any defect. The message is now
+	 * rendered from the verb table the dispatcher looks up, and this case sweeps that table: the
+	 * message must name it exactly, and every named verb is dispatched for real. A verb added to
+	 * the table joins the sweep on its own.
+	 *
+	 * Not caught: a verb the TUI controller accepts and the text dispatcher does not. The two keep
+	 * separate tables and this suite drives only the text one.
 	 */
 	it("/todo unknown: names every accepted verb, and every named verb is accepted", async () => {
 		const { output, runtime } = createRuntime();
 		const result = await executeAcpBuiltinSlashCommand("/todo halp", runtime);
 		expect(result).toEqual({ consumed: true });
-		expect(output[0]).toBe(
-			"Unknown /todo subcommand.\nUse append, start, done, drop, rm, copy, export, import, edit, or help.",
-		);
 
-		const named = ["append", "start", "done", "drop", "rm", "copy", "export", "import", "edit", "help"];
-		for (const verb of named) {
+		const [heading, listing, ...rest] = (output[0] ?? "").split("\n");
+		expect(heading).toBe("Unknown /todo subcommand.");
+		expect(rest).toEqual([]);
+		const named = (listing ?? "").replace(/^Use /, "").replace(/\.$/, "").replace(", or ", ", ").split(", ");
+		expect(named).toEqual([...TODO_VERBS]);
+
+		// `?` is the punctuation spelling of `help`: accepted, deliberately unnamed.
+		for (const verb of [...named, "?"]) {
 			const probe = createRuntime();
 			await executeAcpBuiltinSlashCommand(`/todo ${verb}`, probe.runtime);
-			expect(probe.output[0] ?? "").not.toContain("Unknown /todo subcommand");
+			expect(probe.output[0] ?? "", `/todo ${verb} is accepted nowhere`).not.toContain("Unknown /todo subcommand");
 		}
 	});
 
