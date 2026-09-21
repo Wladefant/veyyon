@@ -363,6 +363,7 @@ veyyon config get compaction.threshold
 | `mnemopi.enhancedRecall` | Mnemopi Enhanced Recall | boolean | `false` | Enable the tiered query result cache for repeated and similar recall queries. |
 | `mnemopi.proactiveLinking` | Mnemopi Proactive Linking | boolean | `false` | Ingest new memories into the episodic graph as they are stored, linking them to related entities and memories. |
 | `mnemopi.noEmbeddings` | Mnemopi Disable Embeddings | boolean | `false` | Force deterministic FTS-only recall instead of vector embeddings. |
+| `mnemopi.embedIdleUnloadMs` | Embedding Worker Idle Unload | number | `300000` | Milliseconds the local embedding subprocess may sit idle before it is unloaded; it respawns on the next recall or retain. 0 keeps it loaded for the whole session. |
 | `mnemopi.embeddingModel` | Mnemopi Embedding Model | string | _(unset)_ | Advanced: explicit embedding model id that overrides the variant. Leave empty to use mnemopi.embeddingVariant. |
 | `mnemopi.embeddingApiUrl` | Mnemopi Embedding API URL | string | _(unset)_ | Optional OpenAI-compatible embedding endpoint passed to Mnemopi. |
 | `mnemopi.embeddingApiKey` | Mnemopi Embedding API Key | string | _(unset)_ | Optional embedding API key passed to Mnemopi. |
@@ -903,4 +904,4 @@ These keys are not in `/settings`. Some are state veyyon writes for itself (a sc
 | `tui.maxInlineImageRows` | number | `20` |  |
 | `tui.maxInlineImages` | number | `8` |  |
 
-357 settings in /settings, 120 configuration-file keys, 477 in all.
+358 settings in /settings, 120 configuration-file keys, 478 in all.

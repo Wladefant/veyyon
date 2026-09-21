@@ -1,6 +1,7 @@
 // Owners, not the `@veyyon/utils` barrel: 2 modules against 74.
 import * as logger from "@veyyon/utils/logger";
 import { errorMessage } from "@veyyon/utils/type-guards";
+import { DEFAULT_EMBED_IDLE_UNLOAD_MS, MAX_EMBED_IDLE_UNLOAD_MS } from "../../config/settings-domains/shared";
 import {
 	createUnavailableWorker,
 	createWorkerHandle,
@@ -30,6 +31,25 @@ export type MnemopiEmbedWorkerHandle = WorkerHandle<MnemopiEmbedWorkerInbound, M
 type PendingRequest =
 	| { kind: "init"; model: MnemopiEmbedModelId; resolve: (ok: boolean) => void }
 	| { kind: "embed"; model: MnemopiEmbedModelId; resolve: (vectors: number[][] | Error) => void };
+
+/**
+ * Validate and normalize an idle-unload window, in milliseconds. `0` disables
+ * unloading and keeps the worker for the whole session.
+ *
+ * Clamped to match the sibling numeric settings in `loadMnemopiConfig`:
+ * non-finite, negative, or invalid values clamp to 0 (disabling idle unload),
+ * and fractional values are rounded down with `Math.floor`.
+ *
+ * The upper clamp is {@link MAX_EMBED_IDLE_UNLOAD_MS}, because `setTimeout`
+ * rewrites a delay it cannot hold in a signed 32-bit integer to `1` ms: an
+ * unclamped `2147483648` would unload the worker after every single request
+ * and reload the ONNX model on the next one.
+ */
+export function parseEmbedIdleUnloadMs(value: unknown): number {
+	const num = typeof value === "number" ? value : Number(value);
+	if (!Number.isFinite(num)) return 0;
+	return Math.min(MAX_EMBED_IDLE_UNLOAD_MS, Math.max(0, Math.floor(num)));
+}
 
 /**
  * Hidden subcommand on the main CLI that boots the mnemopi embeddings worker
@@ -88,9 +108,46 @@ export class MnemopiEmbedClient {
 	#pending = new Map<string, PendingRequest>();
 	#nextRequestId = 0;
 	#spawnWorker: () => MnemopiEmbedWorkerHandle;
+	#idleUnloadMs: number;
+	#idleTimer: NodeJS.Timeout | undefined;
+	/** The kill a request arriving mid-unload waits out before it spawns a replacement. */
+	#teardown: Promise<void> | null = null;
+	/**
+	 * How many public {@link terminate} calls are in flight.
+	 *
+	 * A counter rather than a flag because two disposes overlap: the first to
+	 * finish must not clear the guard while the second is still awaiting the
+	 * same kill. Deliberately NOT set by the idle-unload or crash paths, which
+	 * reap through `#reap()` instead — a request parked on those
+	 * kills is supposed to get a replacement worker, and a request parked on a
+	 * shutdown is not.
+	 */
+	#shutdowns = 0;
 
-	constructor(spawnWorker: () => MnemopiEmbedWorkerHandle = spawnMnemopiEmbedWorker) {
+	constructor(
+		spawnWorker: () => MnemopiEmbedWorkerHandle = spawnMnemopiEmbedWorker,
+		idleUnloadMs: number = DEFAULT_EMBED_IDLE_UNLOAD_MS,
+	) {
 		this.#spawnWorker = spawnWorker;
+		this.#idleUnloadMs = parseEmbedIdleUnloadMs(idleUnloadMs);
+	}
+
+	/**
+	 * Re-point the idle window at a configured value. Non-finite or negative
+	 * values clamp to 0 (disabling idle unload), matching sibling numeric
+	 * settings in `loadMnemopiConfig`. Takes effect immediately: a worker
+	 * already sitting idle is re-armed against the new window, and `0` disarms
+	 * the timer so the worker lives for the rest of the session.
+	 */
+	setIdleUnloadMs(value: unknown): void {
+		this.#idleUnloadMs = parseEmbedIdleUnloadMs(value);
+		this.#cancelIdleTimer();
+		this.#armIdleTimer();
+	}
+
+	/** The idle window currently in force, in milliseconds. `0` means never unload. */
+	get idleUnloadMs(): number {
+		return this.#idleUnloadMs;
 	}
 
 	/**
@@ -106,7 +163,7 @@ export class MnemopiEmbedClient {
 		cacheDir: string | undefined,
 	): Promise<MnemopiSubprocessEmbeddingModel | null> {
 		try {
-			const worker = this.#ensureWorker();
+			const worker = await this.#acquireWorker();
 			const id = String(++this.#nextRequestId);
 			const { promise, resolve } = Promise.withResolvers<boolean>();
 			this.#pending.set(id, { kind: "init", model, resolve });
@@ -116,6 +173,7 @@ export class MnemopiEmbedClient {
 				if (!ok) return null;
 			} finally {
 				this.#pending.delete(id);
+				this.#armIdleTimer();
 			}
 		} catch (error) {
 			logger.warn("mnemopi-embed: init failed; local embeddings unavailable for this model", {
@@ -127,7 +185,35 @@ export class MnemopiEmbedClient {
 		return { embed: (texts, batchSize) => this.#streamEmbed(model, cacheDir, texts, batchSize) };
 	}
 
+	/**
+	 * Shut the client down: kill the worker and leave the slot empty.
+	 *
+	 * The guarantee callers depend on — session dispose, `shutdownMnemopiEmbedClient`
+	 * — is that nothing survives this call. A request that parked on the kill
+	 * inside `#acquireWorker` resumes *before* the await below settles (it
+	 * registered on the same promise first) and would otherwise spawn its
+	 * ~1.25 GB replacement into the slot we just emptied. `#shutdowns` holds the
+	 * door shut for the whole call, so that request rejects instead.
+	 */
 	async terminate(): Promise<void> {
+		this.#shutdowns++;
+		try {
+			await this.#reap();
+		} finally {
+			this.#shutdowns--;
+		}
+	}
+
+	/**
+	 * Kill the live worker and settle everything waiting on it, leaving the
+	 * client reusable.
+	 *
+	 * The idle timer and the crash handler reap here rather than through
+	 * {@link terminate}: an embed arriving mid-unload must get a fresh worker,
+	 * which is the whole point of unloading an idle one.
+	 */
+	async #reap(): Promise<void> {
+		this.#cancelIdleTimer();
 		const worker = this.#worker;
 		this.#worker = null;
 		this.#unsubscribeMessage?.();
@@ -139,10 +225,25 @@ export class MnemopiEmbedClient {
 			else pending.resolve(new Error("mnemopi embed worker terminated"));
 		}
 		this.#pending.clear();
+		if (!worker) {
+			await this.#teardown;
+			return;
+		}
+		// Publish the kill BEFORE awaiting it: `#acquireWorker` waits on this
+		// promise, so an embed that lands while the subprocess is dying joins the
+		// respawn instead of racing a second child into existence.
+		const teardown = (async () => {
+			try {
+				await worker.terminate();
+			} catch {
+				// Already gone.
+			}
+		})();
+		this.#teardown = teardown;
 		try {
-			await worker?.terminate();
-		} catch {
-			// Already gone.
+			await teardown;
+		} finally {
+			if (this.#teardown === teardown) this.#teardown = null;
 		}
 	}
 
@@ -152,7 +253,7 @@ export class MnemopiEmbedClient {
 		texts: string[],
 		batchSize: number | undefined,
 	): Promise<number[][]> {
-		const worker = this.#ensureWorker();
+		const worker = await this.#acquireWorker();
 		const id = String(++this.#nextRequestId);
 		const { promise, resolve } = Promise.withResolvers<number[][] | Error>();
 		this.#pending.set(id, { kind: "embed", model, resolve });
@@ -168,6 +269,7 @@ export class MnemopiEmbedClient {
 			return result;
 		} finally {
 			this.#pending.delete(id);
+			this.#armIdleTimer();
 		}
 	}
 
@@ -185,13 +287,72 @@ export class MnemopiEmbedClient {
 		yield vectors;
 	}
 
-	#ensureWorker(): MnemopiEmbedWorkerHandle {
+	/**
+	 * The live worker, spawning one when there is none.
+	 *
+	 * Async because of the unload race: a reap nulls `#worker` synchronously
+	 * and then awaits the kill, so a request landing in that window would
+	 * otherwise spawn a second subprocess beside a dying one. It waits out the
+	 * teardown in flight and comes back to a clean slot instead.
+	 *
+	 * The wait is finite: worker-client termination semantics (`createWorkerHandle`
+	 * in `subprocess/worker-client.ts`) issue a synchronous SIGKILL without
+	 * awaiting process exit, settling on the next microtask. Teardown never
+	 * awaits child cooperation or external I/O, so the wait cannot hang. That
+	 * invariant is load-bearing and pinned by "never blocks a request longer
+	 * than the worker handle's own kill" in the idle-unload suite.
+	 */
+	async #acquireWorker(): Promise<MnemopiEmbedWorkerHandle> {
+		// Disarm first: a request in flight must never be killed under itself,
+		// and the `finally` of every request re-arms once the map drains.
+		this.#cancelIdleTimer();
+		const teardown = this.#teardown;
+		if (teardown) await teardown;
+		// Re-checked here, AFTER the await, and not only on entry: a request
+		// parked on a shutdown's kill resumes inside `terminate()`'s own await,
+		// and spawning a replacement there is what left a live ~1.25 GB child
+		// behind a completed shutdown. Rejecting settles the request loudly
+		// instead; an idle-unload teardown sets no such flag and still respawns.
+		if (this.#shutdowns > 0) throw new Error("mnemopi embed client is shutting down");
 		if (this.#worker) return this.#worker;
 		const worker = this.#spawnWorker();
 		this.#worker = worker;
 		this.#unsubscribeMessage = worker.onMessage(message => this.#handleMessage(message));
 		this.#unsubscribeError = worker.onError(error => this.#handleWorkerError(error));
 		return worker;
+	}
+
+	/**
+	 * Start the unload countdown once nothing is in flight.
+	 *
+	 * Armed from the `finally` of every request rather than from a periodic
+	 * sweep, so the window is measured from the last completed round-trip. A
+	 * non-empty pending map means a request is still awaiting its reply, and
+	 * killing the worker there would reject it — the timer waits for the map to
+	 * drain instead.
+	 */
+	#armIdleTimer(): void {
+		this.#cancelIdleTimer();
+		if (this.#idleUnloadMs === 0) return;
+		if (!this.#worker || this.#pending.size > 0) return;
+		const timer = setTimeout(() => {
+			this.#idleTimer = undefined;
+			if (!this.#worker || this.#pending.size > 0) return;
+			logger.debug("mnemopi-embed: unloading idle worker", { idleUnloadMs: this.#idleUnloadMs });
+			// `#reap`, not `terminate()`: this is an unload, not a shutdown, so a
+			// request that lands on the kill still gets its replacement worker.
+			void this.#reap();
+		}, this.#idleUnloadMs);
+		// The unload is an optimisation; it must never be the reason the agent
+		// process stays alive at exit.
+		timer.unref?.();
+		this.#idleTimer = timer;
+	}
+
+	#cancelIdleTimer(): void {
+		if (!this.#idleTimer) return;
+		clearTimeout(this.#idleTimer);
+		this.#idleTimer = undefined;
 	}
 
 	#handleMessage(message: MnemopiEmbedWorkerOutbound): void {
@@ -224,7 +385,8 @@ export class MnemopiEmbedClient {
 			else pending.resolve(error);
 		}
 		this.#pending.clear();
-		void this.terminate();
+		// A crashed child is reaped, not shut down: the next request respawns.
+		void this.#reap();
 	}
 }
 

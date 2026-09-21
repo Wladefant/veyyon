@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
+import { DEFAULT_EMBED_IDLE_UNLOAD_MS } from "@veyyon/coding-agent/config/settings-domains/shared";
 import { HindsightApi } from "@veyyon/coding-agent/memory/hindsight/client";
 import type { HindsightConfig } from "@veyyon/coding-agent/memory/hindsight/config";
 import {
@@ -147,6 +148,7 @@ function makeMnemopiConfig(
 		recallContextTurns: 1,
 		recallMaxQueryChars: 800,
 		injectionTokenLimit: 1024,
+		embedIdleUnloadMs: DEFAULT_EMBED_IDLE_UNLOAD_MS,
 		debug: false,
 		providerOptions: {
 			noEmbeddings: true,

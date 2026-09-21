@@ -47,3 +47,33 @@ export const DEFAULT_ARTIFACT_SPILL_THRESHOLD_KB = 50;
  * this value under the name its callers and the tool docs already use.
  */
 export const DEFAULT_INLINE_OUTPUT_MAX_BYTES = DEFAULT_ARTIFACT_SPILL_THRESHOLD_KB * 1024;
+
+/**
+ * Default for `mnemopi.embedIdleUnloadMs`, and the window `MnemopiEmbedClient`
+ * runs on before anything configures it.
+ *
+ * It lives here for the same reason as {@link DEFAULT_INLINE_FLOOR_FRACTION}:
+ * the client is in `memory/mnemopi`, which a settings domain must not import,
+ * and writing 300000 down twice lets the schema default and the compiled
+ * default drift the first time either is tuned.
+ *
+ * Five minutes: the embeddings subprocess pins ~1.25 GB of commit charge for the
+ * loaded ONNX model and does nothing between a `retain` and the next `recall`
+ * (issue #54), so a conversational burst of memory writes reuses one worker
+ * while an idle session stops paying for the model.
+ */
+export const DEFAULT_EMBED_IDLE_UNLOAD_MS = 300_000;
+
+/**
+ * Ceiling for `mnemopi.embedIdleUnloadMs`, and the clamp
+ * `parseEmbedIdleUnloadMs` applies.
+ *
+ * `setTimeout` stores its delay in a signed 32-bit integer: a larger window is
+ * silently rewritten to `1` ms (`TimeoutOverflowWarning`), which turns "never
+ * unload" into "unload after every single request" — the worst case of the
+ * thing the idle unload exists to avoid, reached from a value the settings
+ * screen would otherwise accept. Clamping to the largest delay a timer can
+ * actually hold keeps a too-large window meaning "effectively never" (24.8
+ * days) instead of "immediately".
+ */
+export const MAX_EMBED_IDLE_UNLOAD_MS = 2_147_483_647;
