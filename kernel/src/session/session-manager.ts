@@ -24,6 +24,7 @@ import {
 } from "@veyyon/utils";
 import { pathStateSync } from "@veyyon/utils/fs-optional";
 import { sessionFileName, sessionFileStem } from "@veyyon/utils/session-file";
+import { assertNotTerminalOwned } from "./terminal-ownership";
 import { ArtifactManager } from "./artifacts";
 import { type BlobPutOptions, type BlobPutResult, BlobStore } from "./blob-store";
 import {
@@ -1555,6 +1556,7 @@ export class SessionManager {
 	/** Switch to a different session file (resume / branch). */
 	async setSessionFile(sessionFile: string): Promise<void> {
 		const resolvedSessionFile = path.resolve(sessionFile);
+		await assertNotTerminalOwned(resolvedSessionFile);
 		const titleSlot = await readTitleSlotFromFile(resolvedSessionFile, this.#storage);
 		const fileEntries = await loadEntriesFromFile(resolvedSessionFile, this.#storage, {
 			operatorNotices: this.#operatorNotices,
@@ -2888,6 +2890,7 @@ export class SessionManager {
 			instrumentation?: InstrumentationLevel;
 		},
 	): Promise<SessionManager> {
+		await assertNotTerminalOwned(filePath);
 		const loaded = await loadEntriesFromFile(filePath, storage, { operatorNotices: options?.operatorNotices });
 		const header = loaded.find(entry => entry.type === "session") as SessionHeader | undefined;
 		// Resume into the session's recorded cwd only when that directory still
