@@ -163,14 +163,14 @@ it("keeps crash evidence when the recovery log cannot be written", async () => {
 }, 60_000);
 
 describe("a tool call that a dead process never finished", () => {
-	it.each(["abandon", "concurrent"])(
+	it.each(["abandon", "concurrent", "cross-session"])(
 		"names the unfinished call after %s in the next launch's log",
 		async mode => {
 			const arena = createArena();
 			const { pid, sessionId } = await killFixtureAtReady(arena, mode);
 
 			// The dead process left exactly one marker, and left it behind.
-			expect(markerFiles(arena)).toEqual([`${pid}-746f6f6c755f696e666c69676874.json`]);
+			expect(markerFiles(arena)).toEqual([expect.stringMatching(new RegExp(`^${pid}-[A-Za-z0-9_-]{43}\\.json$`))]);
 			expect(logEntries(arena).some(entry => entry.message === ABANDONED_MESSAGE)).toBe(false);
 
 			await runFixture(arena, "report");

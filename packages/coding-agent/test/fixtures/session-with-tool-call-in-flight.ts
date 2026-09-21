@@ -86,6 +86,29 @@ async function run(): Promise<void> {
 	});
 	await Promise.resolve();
 
+	if (mode === "cross-session") {
+		const otherAgent = new Agent({
+			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
+			convertToLlm,
+		});
+		const otherSession = new AgentSession({
+			agent: otherAgent,
+			sessionManager: SessionManager.inMemory(stateDir),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry: new ModelRegistry(authStorage),
+		});
+		otherAgent.emitExternalEvent({ type: "message_end", message: pendingAssistant });
+		await Promise.resolve();
+		otherAgent.emitExternalEvent({
+			type: "tool_execution_start",
+			toolCallId: "toolu_inflight",
+			toolName: "bash",
+			args: {},
+		});
+		await Promise.resolve();
+		await otherSession.dispose();
+	}
+
 	if (mode === "concurrent") {
 		agent.emitExternalEvent({
 			type: "tool_execution_start",

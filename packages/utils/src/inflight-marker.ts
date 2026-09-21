@@ -21,6 +21,7 @@
  * entry does not apply here.
  */
 
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { atomicWriteFileSync } from "./atomic-write";
@@ -61,12 +62,15 @@ function markerDir(): string {
 	return path.join(getLogsDir(), "inflight");
 }
 
-/** Hex encoding keeps provider call ids out of filesystem path syntax. */
-function markerPath(pid: number, toolCallId: string): string {
-	return path.join(markerDir(), `${pid}-${Buffer.from(toolCallId).toString("hex")}.json`);
+/** Bound Windows path length and exclude provider identifiers from path syntax. */
+function markerPath(pid: number, sessionId: string, toolCallId: string): string {
+	const key = createHash("sha256")
+		.update(JSON.stringify([sessionId, toolCallId]))
+		.digest("base64url");
+	return path.join(markerDir(), `${pid}-${key}.json`);
 }
 
-const currentToolCallIds = new Set<string>();
+const currentToolCallIds = new Map<string, Set<string>>();
 
 /**
  * Record each concurrent call independently, so completing one cannot erase another.
@@ -83,8 +87,13 @@ export function markToolCallInFlight(call: InFlightToolCall): void {
 	};
 	try {
 		fs.mkdirSync(markerDir(), { recursive: true });
-		atomicWriteFileSync(markerPath(process.pid, call.toolCallId), `${JSON.stringify(marker)}\n`);
-		currentToolCallIds.add(call.toolCallId);
+		atomicWriteFileSync(markerPath(process.pid, call.sessionId, call.toolCallId), `${JSON.stringify(marker)}\n`);
+		let ids = currentToolCallIds.get(call.sessionId);
+		if (!ids) {
+			ids = new Set();
+			currentToolCallIds.set(call.sessionId, ids);
+		}
+		ids.add(call.toolCallId);
 	} catch (error) {
 		// A marker that cannot be written costs a future postmortem its attribution and
 		// nothing else. Failing the tool call over it would turn a diagnostic aid into a
@@ -94,18 +103,21 @@ export function markToolCallInFlight(call: InFlightToolCall): void {
 }
 
 /**
- * Drop only the completed call's marker. With no id, clear all calls on recorded exit.
+ * Drop only the completed call's marker, or this session's calls on recorded exit.
  */
-export function clearToolCallInFlight(toolCallId?: string): void {
-	const ids = toolCallId === undefined ? [...currentToolCallIds] : [toolCallId];
+export function clearToolCallInFlight(sessionId: string, toolCallId?: string): void {
+	const pending = currentToolCallIds.get(sessionId);
+	if (!pending) return;
+	const ids = toolCallId === undefined ? pending : [toolCallId];
 	for (const id of ids) {
 		try {
-			fs.rmSync(markerPath(process.pid, id), { force: true });
-			currentToolCallIds.delete(id);
+			fs.rmSync(markerPath(process.pid, sessionId, id), { force: true });
+			pending.delete(id);
 		} catch (error) {
 			logger.debug("Could not clear in-flight tool call marker", { error: errorMessage(error) });
 		}
 	}
+	if (pending.size === 0) currentToolCallIds.delete(sessionId);
 }
 
 function readMarker(file: string): InFlightMarker | undefined {

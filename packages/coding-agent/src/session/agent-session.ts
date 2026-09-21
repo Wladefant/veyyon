@@ -3663,7 +3663,7 @@ export class AgentSession {
 		// This exit reached JavaScript, so the log will carry an account of it
 		// either way. Leaving the marker behind would report the next launch a
 		// crash that did not happen.
-		clearToolCallInFlight();
+		clearToolCallInFlight(this.sessionManager.getSessionId());
 		const pendingToolCalls = collectPendingToolCalls(this.sessionManager.getBranch());
 		if (
 			pendingToolCalls.length === 0 &&
@@ -4615,7 +4615,7 @@ export class AgentSession {
 		// otherwise leave this process looking like it died inside a call that
 		// had already returned.
 		if (event.type === "tool_execution_end") {
-			clearToolCallInFlight(event.toolCallId);
+			clearToolCallInFlight(this.sessionManager.getSessionId(), event.toolCallId);
 		}
 
 		// Apply state-bearing tool results before the first awaited subscriber.
