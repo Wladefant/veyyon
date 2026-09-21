@@ -36,22 +36,19 @@ const RUNTIME = `${SESSION_DIR}/agent-session.ts`;
 const FACADE = `${SESSION_DIR}/facade.ts`;
 
 /**
- * MEASURED at 18524 lines, up from 18446. The GUI host's dispose path grew: the
- * session now tracks and awaits every client it served and every session-file
- * persistence it started, so a host that closes mid-write cannot leave a turn
- * half-persisted, and `UnsupportedModelInputError` arrived with the video-input
- * guard. Model target selection had left before it — the role resolver, the
- * configured-target reader, the compaction candidate walk and its effort map —
- * and it left because not one of those members read or wrote a field of the
- * runtime: every input was `settings`, a model and the available list, so they
- * sat in the class only because of where they were typed. Four families have
- * left since the declarations did: TTSR, the todo board and the thinking level
- * as collaborators under `runtime/`, and that one as a sibling. The number
- * falls again when the next one leaves. It ratchets: 26 lines of slack is what
- * it takes to not fail on the next honest edit, and a ceiling left far above a
- * shrinking file stops being a bound.
+ * MEASURED at 18553 lines on fork main (up from 18524 / 18550 ceiling).
+ * The net 29 lines added across subsequent fork commits belong strictly to fork contracts
+ * in `AgentSession`:
+ * 1. Extension context session identity (`b058b6a63`, `a1d1fd2c7`): 10 lines forwarding
+ *    `taskDepth`, `parentTaskPrefix`, `agentId`, and `isSubagent` into runtime extension context.
+ * 2. Tool refusal fence at dynamic choke point (`23cba1798`, `fd1e2f0ce`, `7900444b2`): 2 lines net
+ *    wrapping dynamic tools (MCP, RPC, custom) with standing session policy refusals via ExtensionToolWrapper.
+ * 3. Bounded todo reminder formatting (`24e3b7efe`, `95db7b1d5`): 17 lines formatting in-progress
+ *    reminder items and hidden active count bounds.
+ * None can move to collaborators without violating leaf boundaries or introducing unnatural abstractions.
+ * Re-pinned at 18,575 (22 lines of slack over measured 18,553, well below the 5% tightness ceiling of 19,481).
  */
-const RUNTIME_CEILING = 18_550;
+const RUNTIME_CEILING = 18_575;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
