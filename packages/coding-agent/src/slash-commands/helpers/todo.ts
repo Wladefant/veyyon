@@ -219,6 +219,42 @@ async function handleTodoMutationCommand(
 	return usage(`No task or phase matched "${trimmedArg}".`, runtime);
 }
 
+type TodoVerbHandler = (restArgs: string, runtime: SlashCommandRuntime) => Promise<SlashCommandResult>;
+
+/**
+ * Every verb `/todo` accepts, in the order the unknown-verb message names them. The dispatcher
+ * looks a verb up here instead of switching on it, so a verb cannot be accepted without being
+ * named and cannot be named without being accepted: the table is both the dispatch and the
+ * message. `?` is the punctuation spelling of `help`; it dispatches through the alias below and is
+ * deliberately not named in prose.
+ */
+const TODO_VERB_HANDLERS: Record<string, TodoVerbHandler> = {
+	append: handleTodoAppendCommand,
+	start: handleTodoStartCommand,
+	done: (restArgs, runtime) => handleTodoMutationCommand("done", restArgs, runtime),
+	drop: (restArgs, runtime) => handleTodoMutationCommand("drop", restArgs, runtime),
+	rm: (restArgs, runtime) => handleTodoMutationCommand("rm", restArgs, runtime),
+	pending: (restArgs, runtime) => handleTodoMutationCommand("pending", restArgs, runtime),
+	reset: (restArgs, runtime) => handleTodoMutationCommand("pending", restArgs, runtime),
+	copy: (_restArgs, runtime) => handleTodoCopyCommand(runtime),
+	export: handleTodoExportCommand,
+	import: handleTodoImportCommand,
+	edit: (_restArgs, runtime) =>
+		usage(
+			"/todo edit requires the TUI editor; use /todo export then /todo import for non-interactive edits.",
+			runtime,
+		),
+	help: async (_restArgs, runtime) => {
+		await runtime.output(TODO_HELP_TEXT);
+		return commandConsumed();
+	},
+};
+
+/** The verbs `/todo` dispatches on, in the order the unknown-verb message names them. */
+export const TODO_VERBS: readonly string[] = Object.keys(TODO_VERB_HANDLERS);
+
+const UNKNOWN_TODO_VERB_MESSAGE = `Unknown /todo subcommand.\nUse ${TODO_VERBS.slice(0, -1).join(", ")}, or ${TODO_VERBS[TODO_VERBS.length - 1]}.`;
+
 /** ACP/text-mode `/todo` handler. Shared by both dispatchers via the spec. */
 export async function handleTodoAcp(
 	command: ParsedSlashCommand,
@@ -234,36 +270,8 @@ export async function handleTodoAcp(
 	}
 
 	const { verb, rest } = parseSubcommand(trimmed);
-	switch (verb) {
-		case "copy":
-			return await handleTodoCopyCommand(runtime);
-		case "export":
-			return await handleTodoExportCommand(rest, runtime);
-		case "import":
-			return await handleTodoImportCommand(rest, runtime);
-		case "append":
-			return await handleTodoAppendCommand(rest, runtime);
-		case "start":
-			return await handleTodoStartCommand(rest, runtime);
-		case "done":
-		case "drop":
-		case "rm":
-		case "pending":
-		case "reset":
-			return await handleTodoMutationCommand(verb === "reset" ? "pending" : verb, rest, runtime);
-		case "edit":
-			return usage(
-				"/todo edit requires the TUI editor; use /todo export then /todo import for non-interactive edits.",
-				runtime,
-			);
-		case "help":
-		case "?":
-			await runtime.output(TODO_HELP_TEXT);
-			return commandConsumed();
-		default:
-			return usage(
-				"Unknown /todo subcommand.\nUse append, start, done, drop, rm, pending, reset, copy, export, import, edit, or help.",
-				runtime,
-			);
-	}
+	const name = verb === "?" ? "help" : verb;
+	const handler = Object.hasOwn(TODO_VERB_HANDLERS, name) ? TODO_VERB_HANDLERS[name] : undefined;
+	if (!handler) return usage(UNKNOWN_TODO_VERB_MESSAGE, runtime);
+	return await handler(rest, runtime);
 }

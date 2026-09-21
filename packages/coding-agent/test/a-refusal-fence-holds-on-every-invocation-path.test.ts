@@ -251,6 +251,7 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 				"eval/kernel-base.ts:this",
 				"extensibility/custom-tools/wrapper.ts:this.tool",
 				"extensibility/extensions/wrapper.ts:this.registeredTool.definition",
+				"gui-host/actions/agents.ts:taskTool",
 				"modes/rpc/rpc-client.ts:tool",
 				"modes/terminal/autocomplete/prompt-action-autocomplete.ts:item",
 				"modes/terminal/autocomplete/prompt-action-autocomplete.ts:item",

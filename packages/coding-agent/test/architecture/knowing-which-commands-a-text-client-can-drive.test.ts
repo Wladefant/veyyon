@@ -253,10 +253,18 @@ describe("the declared flag and the handler table agree", () => {
 	 * through the composer, and a text client already has that: it can send the instruction itself,
 	 * in whatever words it wants. What the command adds is a fixed wording and a refusal when there
 	 * is no reply to work from, and neither is worth an ACP verb.
+	 *
+	 * `/reload-config` moved both by one, and is text-drivable because it is text end to end: the
+	 * handler re-reads the routing defaults and the loaded extensions and prints what changed, with
+	 * no TUI handler beside it. A headless client is exactly where it earns its keep, because the
+	 * alternative to rebinding the routing defaults in place is restarting the session. It was
+	 * declared by `00258cd5b` ("feat(config): reload routing defaults without restarting sessions")
+	 * and the follow-up `050fe7caa` moved only the sibling suite's total from 75 to 76, leaving
+	 * both numbers here naming a command set that no longer existed.
 	 */
-	it("36 of the 75 builtins are text-drivable", () => {
-		expect(DECLARATIONS.length).toBe(75);
-		expect(TEXT_MODE_BUILTIN_DECLARATIONS.length).toBe(36);
+	it("37 of the 76 builtins are text-drivable", () => {
+		expect(DECLARATIONS.length).toBe(76);
+		expect(TEXT_MODE_BUILTIN_DECLARATIONS.length).toBe(37);
 	});
 
 	/**
