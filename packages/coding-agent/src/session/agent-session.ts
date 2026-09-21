@@ -219,6 +219,7 @@ import { ToolChoiceQueue } from "@veyyon/kernel/session/tool-choice-queue";
 import { YieldQueue } from "@veyyon/kernel/session/yield-queue";
 import { MacOSPowerAssertion } from "@veyyon/natives";
 import {
+	clearToolCallInFlight,
 	errorMessage,
 	escapeXmlText,
 	extractRetryHint,
@@ -232,8 +233,10 @@ import {
 	isEnoent,
 	isRecord,
 	logger,
+	markToolCallInFlight,
 	postmortem,
 	prompt,
+	reportAbandonedToolCalls,
 	Snowflake,
 	setProjectDir,
 	withScopedTimeoutSignal,
@@ -2184,6 +2187,11 @@ export class AgentSession {
 				);
 			},
 		});
+		// The counterpart of the exit recorder below: a death that never reached
+		// JavaScript wrote no `session_exit` entry and no error line, so the only
+		// account of it is the in-flight marker its process left behind. Sweep
+		// those into the log before this session starts writing its own.
+		reportAbandonedToolCalls();
 		this.#cancelExitRecorder = postmortem.register(`agent-session:${this.sessionManager.getSessionId()}`, reason => {
 			this.#recordSessionExit(reason);
 		});
@@ -3641,11 +3649,23 @@ export class AgentSession {
 		if (args) data.args = args;
 		if (event.intent) data.intent = redact(event.intent);
 		this.sessionManager.appendCustomEntry(TOOL_EXECUTION_START_CUSTOM_TYPE, data);
+		// The session entry above survives only an exit that reaches JavaScript.
+		// The marker survives one that does not, which is the whole of what a
+		// postmortem gets when the process is terminated below the runtime.
+		markToolCallInFlight({
+			toolCallId: event.toolCallId,
+			toolName: event.toolName,
+			sessionId: this.sessionManager.getSessionId(),
+		});
 	}
 
 	#recordSessionExit(reason: postmortem.Reason | "dispose"): void {
 		if (this.#exitRecorded) return;
 		this.#exitRecorded = true;
+		// This exit reached JavaScript, so the log will carry an account of it
+		// either way. Leaving the marker behind would report the next launch a
+		// crash that did not happen.
+		clearToolCallInFlight();
 		const pendingToolCalls = collectPendingToolCalls(this.sessionManager.getBranch());
 		if (
 			pendingToolCalls.length === 0 &&
@@ -4589,6 +4609,15 @@ export class AgentSession {
 
 		if (event.type === "tool_execution_start") {
 			this.#recordToolExecutionStart(event);
+		}
+
+		// Paired with the mark in `#recordToolExecutionStart`, and placed here
+		// rather than beside the other `tool_execution_end` work below because
+		// that runs after the awaited subscribers: a listener that throws would
+		// otherwise leave this process looking like it died inside a call that
+		// had already returned.
+		if (event.type === "tool_execution_end") {
+			clearToolCallInFlight(event.toolCallId);
 		}
 
 		// Apply state-bearing tool results before the first awaited subscriber.

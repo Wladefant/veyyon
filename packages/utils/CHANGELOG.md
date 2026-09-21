@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- `markToolCallInFlight`, `clearToolCallInFlight` and `reportAbandonedToolCalls` record the tool call a process is inside in a per-pid marker file, so a session terminated below JavaScript is reported at the next launch naming the tool, call id and session id it died in ([#73](https://github.com/Wladefant/veyyon/issues/73)).
+
+### Changed
+
+- The terminal stderr guard now covers Windows, re-pointing the process standard-error handle at the day's log so a native abort trace survives the console window closing, while leaving file descriptor 2 and every JavaScript write on the terminal ([#73](https://github.com/Wladefant/veyyon/issues/73)).
+
 ## [1.5.0] - 2026-09-18
 
 ### Breaking Changes

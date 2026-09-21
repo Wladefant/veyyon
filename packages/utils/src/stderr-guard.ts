@@ -17,7 +17,23 @@
  * /dev/null — so the diagnostics stay greppable and Bun native-crash reports
  * (which abort before any JS cleanup can restore fd 2) are preserved.
  *
- * Only dup/dup2 go through bun:ffi. fcntl is deliberately avoided: it is
+ * WINDOWS TAKES THE OTHER HALF OF THAT SENTENCE. There is no libmalloc noise to
+ * suppress, but the crash-report half matters more here than anywhere: a Bun
+ * panic prints and the console window closes with it, so the report is gone and
+ * the log holds nothing (issue #73). fd 2 cannot carry the fix — `ucrtbase`
+ * exports `_dup`/`_dup2`, but Bun's fds are not that CRT's fds, and dup2'ing
+ * over fd 2 killed the process on the next write with no output at all
+ * (measured). What the panic printer actually resolves through is the process
+ * standard-handle table, so the win32 branch re-points STD_ERROR_HANDLE at the
+ * log and leaves fd 2 alone: JS writes keep reaching the terminal, and the
+ * native abort trace lands in the day's log. Spawned children are unaffected —
+ * Bun's `inherit` stdio carries its own captured handle, not this one
+ * (measured).
+ *
+ * Only dup/dup2 and the four standard-handle calls go through bun:ffi; there is
+ * no portable equivalent for either. `node:fs` has no dup/dup2, and it hands out
+ * file descriptors with no way to obtain the Win32 HANDLE behind one or to write
+ * the process standard-handle table. fcntl is deliberately avoided: it is
  * variadic, and the arm64-darwin ABI passes variadic arguments on the stack,
  * so a fixed-arity FFI signature would read garbage for the third argument.
  */
@@ -67,6 +83,13 @@ function libcFdOps(): LibcFdOps | null {
  */
 function stderrSharesStdoutTerminal(): boolean {
 	if (!process.stdout.isTTY || !process.stderr.isTTY) return false;
+	// Windows answers the device question with `isTTY` alone. The two standard
+	// handles of ONE console are distinct HANDLE values, and `fstat` reports the
+	// raw handle as `ino` (measured), so the identity check below would refuse
+	// every real console. There is also nothing for it to catch: a `2>file`
+	// stderr is not a character device and has already failed `isTTY`, and a
+	// second console to redirect the first into is not a thing Windows has.
+	if (process.platform === "win32") return true;
 	try {
 		const stdoutStat = fs.fstatSync(STDOUT_FILENO);
 		const stderrStat = fs.fstatSync(STDERR_FILENO);
@@ -79,30 +102,147 @@ function stderrSharesStdoutTerminal(): boolean {
 	}
 }
 
+/** `(DWORD)-12`: the standard-error slot of the process handle table. */
+const STD_ERROR_HANDLE = 0xfffffff4;
+/** `INVALID_HANDLE_VALUE`, which `CreateFileW` returns on failure. */
+const INVALID_HANDLE_VALUE = 0xffffffffffffffffn;
+const FILE_APPEND_DATA = 0x0004;
+const FILE_SHARE_READ_WRITE = 0x0003;
+const OPEN_ALWAYS = 4;
+const FILE_ATTRIBUTE_NORMAL = 0x0080;
+
+/**
+ * The four kernel32 calls the win32 branch needs. HANDLE is 64 bits on the only
+ * Windows target Bun builds for, so it crosses the boundary as `u64` and arrives
+ * as a bigint — which is also how `INVALID_HANDLE_VALUE` stays comparable
+ * instead of collapsing into an imprecise double.
+ */
+interface Win32StdHandleOps {
+	GetStdHandle(slot: number): bigint;
+	SetStdHandle(slot: number, handle: bigint): number;
+	CreateFileW(
+		name: Uint8Array,
+		access: number,
+		share: number,
+		security: bigint,
+		disposition: number,
+		flags: number,
+		template: bigint,
+	): bigint;
+	CloseHandle(handle: bigint): number;
+}
+
+let win32StdHandleOpsCache: Win32StdHandleOps | null | undefined;
+
+function win32StdHandleOps(): Win32StdHandleOps | null {
+	if (win32StdHandleOpsCache !== undefined) return win32StdHandleOpsCache;
+	win32StdHandleOpsCache = null;
+	if (process.platform !== "win32") return null;
+	try {
+		const kernel32 = dlopen("kernel32.dll", {
+			GetStdHandle: { args: [FFIType.u32], returns: FFIType.u64 },
+			SetStdHandle: { args: [FFIType.u32, FFIType.u64], returns: FFIType.i32 },
+			CreateFileW: {
+				args: [FFIType.ptr, FFIType.u32, FFIType.u32, FFIType.u64, FFIType.u32, FFIType.u32, FFIType.u64],
+				returns: FFIType.u64,
+			},
+			CloseHandle: { args: [FFIType.u64], returns: FFIType.i32 },
+		});
+		win32StdHandleOpsCache = kernel32.symbols;
+		return win32StdHandleOpsCache;
+	} catch {
+		// bun:ffi unavailable; the guard stays inert.
+		return win32StdHandleOpsCache;
+	}
+}
+
+/** The standard-error handle displaced by the win32 capture, else null. */
+let win32Capture: { ops: Win32StdHandleOps; original: bigint; redirect: bigint } | null = null;
+
+/**
+ * Point the process standard-error handle at `redirectPath`, so a native abort
+ * that prints through it lands in the log instead of in a console window that is
+ * about to close. fd 2 is untouched, so every JS write still reaches the
+ * terminal. Returns false when the handle table cannot be reached or the target
+ * cannot be opened.
+ */
+function captureWin32StandardError(redirectPath: string): boolean {
+	const ops = win32StdHandleOps();
+	if (!ops) return false;
+	try {
+		// getLogsDir() only computes the path; the logger creates it lazily, so
+		// on a fresh profile the logs directory may not exist yet.
+		fs.mkdirSync(path.dirname(redirectPath), { recursive: true });
+	} catch {
+		// A target directory that cannot be created is a target that cannot be
+		// opened; CreateFileW below reports it and the guard stays out.
+	}
+	// UTF-16LE with the terminating NUL, which is what the W entry point reads.
+	const widePath = Buffer.from(`${redirectPath}\0`, "utf16le");
+	const redirect = ops.CreateFileW(
+		widePath,
+		FILE_APPEND_DATA,
+		FILE_SHARE_READ_WRITE,
+		0n,
+		OPEN_ALWAYS,
+		FILE_ATTRIBUTE_NORMAL,
+		0n,
+	);
+	if (redirect === INVALID_HANDLE_VALUE) return false;
+	const original = ops.GetStdHandle(STD_ERROR_HANDLE);
+	if (ops.SetStdHandle(STD_ERROR_HANDLE, redirect) === 0) {
+		ops.CloseHandle(redirect);
+		return false;
+	}
+	win32Capture = { ops, original, redirect };
+	return true;
+}
+
+/** Undo {@link captureWin32StandardError}. True when a capture was active. */
+function releaseWin32StandardError(): boolean {
+	if (win32Capture === null) return false;
+	const { ops, original, redirect } = win32Capture;
+	win32Capture = null;
+	ops.SetStdHandle(STD_ERROR_HANDLE, original);
+	ops.CloseHandle(redirect);
+	return true;
+}
+
 /** Saved dup of the real stderr while suppression is active, else null. */
 let savedStderrFd: number | null = null;
 
 export interface SuppressTerminalStderrOptions {
 	/** Redirect target path; defaults to today's veyyon log file, then /dev/null. */
 	redirectPath?: string;
-	/** Bypass the macOS + same-terminal gate. Tests only. */
+	/** Bypass the platform + same-terminal gate. Tests only. */
 	force?: boolean;
 }
 
 /**
- * Redirect fd 2 away from the terminal while the TUI owns the viewport.
- * Returns true when suppression is (already) active. No-op — returning
- * false — off macOS, when stderr does not target the stdout terminal, or
- * when the libc fd ops are unavailable.
+ * Point the process's crash-time stderr at the veyyon log while the TUI owns
+ * the viewport, so a diagnostic written below the renderer is greppable
+ * afterwards instead of painted over the frame or lost with the window.
+ *
+ * WHICH STDERR MOVES DEPENDS ON THE PLATFORM, and the module header says why.
+ * macOS redirects fd 2, so stray libmalloc writes stop reaching the viewport.
+ * Windows redirects the standard-error handle the Bun panic printer resolves
+ * through and leaves fd 2 alone, so JS writes keep reaching the terminal.
+ *
+ * Returns true when the guard is (already) installed. No-op — returning false —
+ * on Linux, when stderr does not target the stdout terminal, or when the
+ * platform calls it needs are unavailable.
  */
 export function suppressTerminalStderr(options?: SuppressTerminalStderrOptions): boolean {
-	if (savedStderrFd !== null) return true;
-	if (!options?.force && (process.platform !== "darwin" || !stderrSharesStdoutTerminal())) {
+	if (savedStderrFd !== null || win32Capture !== null) return true;
+	const platformWantsGuard = process.platform === "darwin" || process.platform === "win32";
+	if (!options?.force && (!platformWantsGuard || !stderrSharesStdoutTerminal())) {
 		return false;
+	}
+	if (process.platform === "win32") {
+		return captureWin32StandardError(options?.redirectPath ?? getLogPath());
 	}
 	const libc = libcFdOps();
 	if (!libc) return false;
-
 	let redirectFd: number;
 	try {
 		const redirectPath = options?.redirectPath ?? getLogPath();
@@ -138,12 +278,13 @@ export function suppressTerminalStderr(options?: SuppressTerminalStderrOptions):
 }
 
 /**
- * Re-point fd 2 at the saved terminal stderr. Safe to call unconditionally:
- * no-op when suppression is not active. Called at every terminal-ownership
- * release and by the postmortem fatal handlers before they print, so crash
- * reports reach the real terminal.
+ * Re-point the process's stderr at the terminal it came from. Safe to call
+ * unconditionally: no-op when the guard is not installed. Called at every
+ * terminal-ownership release and by the postmortem fatal handlers before they
+ * print, so crash reports reach the real terminal.
  */
 export function restoreTerminalStderr(): void {
+	if (releaseWin32StandardError()) return;
 	if (savedStderrFd === null) return;
 	const saved = savedStderrFd;
 	savedStderrFd = null;
@@ -155,7 +296,11 @@ export function restoreTerminalStderr(): void {
 	}
 }
 
-/** Whether fd 2 is currently redirected away from the terminal. */
+/**
+ * Whether the guard currently holds the process's stderr pointed at the
+ * redirect target. On win32 that is the standard-error handle rather than fd 2,
+ * so JS writes still reach the terminal while this reads true.
+ */
 export function isTerminalStderrSuppressed(): boolean {
-	return savedStderrFd !== null;
+	return savedStderrFd !== null || win32Capture !== null;
 }

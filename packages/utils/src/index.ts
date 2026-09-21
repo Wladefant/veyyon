@@ -22,6 +22,7 @@ export * from "./frontmatter";
 export * from "./fs-error";
 export * from "./fs-optional";
 export * from "./glob";
+export * from "./inflight-marker";
 export * from "./json";
 export * from "./json-parse";
 export * from "./jsonl-bytes";
