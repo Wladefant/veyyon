@@ -52,72 +52,77 @@ const pendingAssistant: AssistantMessage = {
 	timestamp: Date.now(),
 };
 
-const authStorage = await AuthStorage.create(path.join(stateDir, "auth.db"));
-authStorage.setRuntimeApiKey("anthropic", "test-key");
-const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-if (!model) throw new Error("Expected built-in anthropic model to exist");
-const sessionManager = SessionManager.inMemory(stateDir);
-const agent = new Agent({
-	initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
-	convertToLlm,
-});
-const session = new AgentSession({
-	agent,
-	sessionManager,
-	settings: Settings.isolated({ "compaction.enabled": false }),
-	modelRegistry: new ModelRegistry(authStorage),
-});
+async function run(): Promise<void> {
+	const authStorage = await AuthStorage.create(path.join(stateDir, "auth.db"));
+	authStorage.setRuntimeApiKey("anthropic", "test-key");
+	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+	if (!model) throw new Error("Expected built-in anthropic model to exist");
+	const sessionManager = SessionManager.inMemory(stateDir);
+	const agent = new Agent({
+		initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
+		convertToLlm,
+	});
+	const session = new AgentSession({
+		agent,
+		sessionManager,
+		settings: Settings.isolated({ "compaction.enabled": false }),
+		modelRegistry: new ModelRegistry(authStorage),
+	});
 
-if (mode === "report") {
-	await session.dispose();
-	process.stdout.write("done\n");
-	process.exit(0);
-}
+	if (mode === "report") {
+		await session.dispose();
+		process.stdout.write("done\n");
+		// Let the file transport drain; process.exit discards queued log writes.
+		return;
+	}
 
-agent.emitExternalEvent({ type: "message_end", message: pendingAssistant });
-await Promise.resolve();
-agent.emitExternalEvent({
-	type: "tool_execution_start",
-	toolCallId: "toolu_inflight",
-	toolName: "bash",
-	args: { command: "ssh host true" },
-});
-await Promise.resolve();
-
-if (mode === "concurrent") {
+	agent.emitExternalEvent({ type: "message_end", message: pendingAssistant });
+	await Promise.resolve();
 	agent.emitExternalEvent({
 		type: "tool_execution_start",
-		toolCallId: "toolu_short",
-		toolName: "read",
-		args: {},
-	});
-	await Promise.resolve();
-	agent.emitExternalEvent({
-		type: "tool_execution_end",
-		toolCallId: "toolu_short",
-		toolName: "read",
-		result: { content: [{ type: "text", text: "" }] },
-	});
-	await Promise.resolve();
-}
-
-if (mode === "complete") {
-	agent.emitExternalEvent({
-		type: "tool_execution_end",
 		toolCallId: "toolu_inflight",
 		toolName: "bash",
-		result: { content: [{ type: "text", text: "" }] },
+		args: { command: "ssh host true" },
 	});
 	await Promise.resolve();
+
+	if (mode === "concurrent") {
+		agent.emitExternalEvent({
+			type: "tool_execution_start",
+			toolCallId: "toolu_short",
+			toolName: "read",
+			args: {},
+		});
+		await Promise.resolve();
+		agent.emitExternalEvent({
+			type: "tool_execution_end",
+			toolCallId: "toolu_short",
+			toolName: "read",
+			result: { content: [{ type: "text", text: "" }] },
+		});
+		await Promise.resolve();
+	}
+
+	if (mode === "complete") {
+		agent.emitExternalEvent({
+			type: "tool_execution_end",
+			toolCallId: "toolu_inflight",
+			toolName: "bash",
+			result: { content: [{ type: "text", text: "" }] },
+		});
+		await Promise.resolve();
+	}
+
+	if (mode === "clean-exit") {
+		await session.dispose();
+		process.stdout.write("done\n");
+		return;
+	}
+
+	process.stdout.write(`ready ${sessionManager.getSessionId()}\n`);
+	// Hold the process open for the parent's kill. An interval rather than a long
+	// timer so the event loop has work on every platform's scheduler.
+	setInterval(() => {}, 1000);
 }
 
-if (mode === "clean-exit") {
-	await session.dispose();
-	process.stdout.write("done\n");
-	process.exit(0);
-}
-
-process.stdout.write(`ready ${sessionManager.getSessionId()}\n`);
-// Hold the process open for the parent's kill. An interval rather than a long
-// timer so the event loop has work on every platform's scheduler.
-setInterval(() => {}, 1000);
+await run();
