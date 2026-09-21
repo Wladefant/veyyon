@@ -219,7 +219,6 @@ import { ToolChoiceQueue } from "@veyyon/kernel/session/tool-choice-queue";
 import { YieldQueue } from "@veyyon/kernel/session/yield-queue";
 import { MacOSPowerAssertion } from "@veyyon/natives";
 import {
-	clearToolCallInFlight,
 	errorMessage,
 	escapeXmlText,
 	extractRetryHint,
@@ -233,16 +232,15 @@ import {
 	isEnoent,
 	isRecord,
 	logger,
-	markToolCallInFlight,
 	postmortem,
 	prompt,
-	reportAbandonedToolCalls,
 	Snowflake,
 	setProjectDir,
 	withScopedTimeoutSignal,
 	withTimeout,
 } from "@veyyon/utils";
 import { contentText } from "@veyyon/utils/content-text";
+import { clearToolCallInFlight, markToolCallInFlight, reportAbandonedToolCalls } from "@veyyon/utils/inflight-marker";
 import { startupMarker } from "@veyyon/utils/startup-marker";
 import type { ArgotSession } from "argot";
 import {
