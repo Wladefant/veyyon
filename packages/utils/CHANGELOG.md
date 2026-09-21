@@ -11,6 +11,9 @@
 ### Changed
 
 - The terminal stderr guard now covers Windows, re-pointing the process standard-error handle at the day's log so a native abort trace survives the console window closing, while leaving file descriptor 2 and every JavaScript write on the terminal ([#73](https://github.com/Wladefant/veyyon/issues/73)).
+### Fixed
+
+- No shipped behavior changed; the global EPIPE routing suite pointed at `packages/tui/src/terminal.ts`, a path the terminal host left on 2026-08-30, so its three "finishes TUI persistence before exit" cases failed on a module-resolution exit rather than on ordering ([#64](https://github.com/Wladefant/veyyon/issues/64)).
 
 ## [1.5.0] - 2026-09-18
 

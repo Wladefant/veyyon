@@ -14,13 +14,16 @@
 ### Changed
 
 - Merged upstream v1.5.0.
+- The settings store calls `isRecord` from `@veyyon/utils` for the reload namespace check and the routing-key expansion instead of hand-writing the same three-term predicate ([#64](https://github.com/Wladefant/veyyon/issues/64)).
 
 ### Removed
 
+- Removed the `./tool-discovery/*` subpath from the `@veyyon/coding-agent` exports map; its source directory was folded into `discovery/` and the key resolved to no module, so no user-facing effect ([#64](https://github.com/Wladefant/veyyon/issues/64)).
 - `models.ts` no longer imports `ZERO_MODEL_COST`, which it stopped using; no user-visible change.
 
 ### Fixed
 
+- Agent-lane validation and the two slash-command error paths call `isRecord` and `errorMessage` from `@veyyon/utils` instead of hand-writing them, so an `Error` with an empty message now reports its constructor name rather than an empty string ([#64](https://github.com/Wladefant/veyyon/issues/64)).
 - Topic replenishment reads the live settings instance again. `resolveTopicWorkerModel` probed `Settings.isInitialized`, a member neither this fork nor upstream ever declared, so the expression was always `undefined`: an initialized session was treated as uninitialized, the configured agent lane and `modelRoles` default were never consulted, and every unconfigured caller fell through to `VEYYON_DEFAULT_MODEL`. It calls the exported `isSettingsInitialized()` instead ([#25](https://github.com/Wladefant/veyyon/issues/25)).
 - Scope extension refusals to declared subjects, fail closed for opaque execution under a path refusal, and enforce session policy through registered tool dispatch boundaries ([#37](https://github.com/Wladefant/veyyon/issues/37)).
 - Scope Telegram worker registry rendering and targeted messaging to the authenticated session, rejecting cross-session target IDs and caller-supplied scope overrides ([#38](https://github.com/Wladefant/veyyon/issues/38)).
@@ -31,6 +34,8 @@
 - Neutralized workstation-specific defaults, private project identifiers, and host orchestration policies in topic replenishment and native ledger bridge, restoring neutral authorization semantics where no target is forbidden by default and forbidden targets are strictly configuration-driven, and resolving topic worker models via config/catalog APIs without baked-in model defaults ([#953](https://github.com/santhreal/veyyon/issues/953)).
 - Every tool declares the scope of its effects, so a tool whose targets the fence cannot read is refused while a standing refusal is in force instead of being waved through ([#37](https://github.com/Wladefant/veyyon/issues/37)).
 - A tool reached with no context of its own — `session.getToolByName(...)`, the cursor bridge, an eval snippet — is judged against the owning session's standing refusals instead of being refused for want of a policy ([#37](https://github.com/Wladefant/veyyon/issues/37)).
+- `/todo` renders its unknown-verb error from the same table the dispatcher looks a verb up in, so the message can no longer omit a verb the command accepts nor name one it refuses ([#64](https://github.com/Wladefant/veyyon/issues/64)).
+- The ChatGPT Web stream-failure path asks `isTimeoutError` from `@veyyon/utils` whether the abort reason was a deadline, instead of comparing `reason.name` against `"TimeoutError"` itself ([#64](https://github.com/Wladefant/veyyon/issues/64)).
 - ChatGPT Web now falls back to stored `openai-codex` OAuth when it has no dedicated credential or environment token. Auth discovery and token peeking recognize the fallback, and requests refresh the original Codex row without copying credentials.
 - ChatGPT Web turns now have a five-minute total deadline across transport attempts, force the daemon's SSE transport, and report actionable connection, timeout, authentication and unavailable-model failures. Caller cancellation remains cancellation.
 - A Codex base URL that already names the Responses route is now used verbatim instead of having `/codex/responses` appended to it. OpenAI serves the route at `{base}/codex/responses`, but a Codex-compatible server need not: the local `codex-chatgpt-web` bridge installs itself into a Codex config as `openai_base_url = "http://127.0.0.1:17841/v1"` and serves `POST /v1/responses`, so every turn against it built `…/v1/responses/codex/responses` and 404'd — indistinguishable at the call site from a daemon that is not running. The existing `/backend-api`, `/backend-api/codex` and `/backend-api/codex/responses` shapes resolve exactly as before.
@@ -39,6 +44,7 @@
 - A ChatGPT Web turn served by a borrowed `openai-codex` OAuth row now rotates and blocks that Codex account: a 401 moves the session to an eligible sibling Codex account and a usage-limit event blocks the account that served, instead of acting on a `chatgpt-web` identity that has no stored row. A dedicated ChatGPT Web credential keeps taking precedence and keeps rotating and blocking on its own row.
 - The Command Code catalog is declared in one module: `provider-models/openai-compat` no longer re-declares `COMMAND_CODE_STATIC_MODELS`, `CommandCodeModelManagerConfig` and `commandCodeModelManagerOptions` beside `provider-models/command-code`, whose contract-applying versions are the ones every consumer already imports.
 - `getModelPricing` accepts the sparse `ModelSpec` cost it is already given by discovery, and reads an absent rate as zero rather than rejecting the row at the type level.
+- No shipped behavior changed; the global EPIPE routing suite pointed at `packages/tui/src/terminal.ts`, a path the terminal host left on 2026-08-30, so its three "finishes TUI persistence before exit" cases failed on a module-resolution exit rather than on ordering ([#64](https://github.com/Wladefant/veyyon/issues/64)).
 
 ## [1.5.0] - 2026-09-18
 
