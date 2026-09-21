@@ -28,6 +28,7 @@
  *     when named", and nobody could tell what the switch did.
  */
 
+import { isRecord } from "@veyyon/utils/type-guards";
 import { parseConfiguredThinkingLevel } from "../../thinking";
 
 /**
@@ -101,12 +102,12 @@ function validateLane(key: string, value: unknown): string | undefined {
 	let current = value;
 	let location = `agent.agents.${key}`;
 	while (current !== undefined) {
-		if (current === null || typeof current !== "object" || Array.isArray(current)) {
+		if (!isRecord(current)) {
 			return `${location}: expected a lane object`;
 		}
 		if (seen.has(current)) return `${location}: cyclic lane`;
 		seen.add(current);
-		const lane = current as Record<string, unknown>;
+		const lane = current;
 		if (lane.enabled !== undefined && typeof lane.enabled !== "boolean") {
 			return `${location}.enabled: expected a boolean`;
 		}
