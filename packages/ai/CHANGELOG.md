@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- The ChatGPT Web stream-failure path asks `isTimeoutError` from `@veyyon/utils` whether the abort reason was a deadline, instead of comparing `reason.name` against `"TimeoutError"` itself ([#64](https://github.com/Wladefant/veyyon/issues/64)).
 - ChatGPT Web now falls back to stored `openai-codex` OAuth when it has no dedicated credential or environment token. Auth discovery and token peeking recognize the fallback, and requests refresh the original Codex row without copying credentials.
 
 - ChatGPT Web turns now have a five-minute total deadline across transport attempts, force the daemon's SSE transport, and report actionable connection, timeout, authentication and unavailable-model failures. Caller cancellation remains cancellation.
