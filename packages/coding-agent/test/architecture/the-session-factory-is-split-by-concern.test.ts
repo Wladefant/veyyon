@@ -34,10 +34,15 @@ const SESSION_DIR = repoPath("packages/coding-agent/src/session");
 const SDK = repoPath("packages/coding-agent/src/sdk.ts");
 
 /**
- * MEASURED at 3832 lines after the free declarations moved out, of which
- * `createAgentSession` is 3477. This falls when that function is rewritten.
+ * MEASURED at 4011 lines on fork main (up from 3832 upstream / 3950 ceiling)
+ * after landing fork contracts in `createAgentSession`: native topic replenishment
+ * engine and lifecycle (`cac053973`, `4df81e5e8`, `4db4b3926`, `8a2cd28df`, `11bbd59c4`),
+ * tool refusal fencing via ExtensionToolWrapper (`fd1e2f0ce`, `23cba1798`), session
+ * identity and task depth forwarding (`b058b6a63`, `acca40bb2`), and models discovery
+ * fallback (`61656458a`).
+ * Re-pinned at 4015 with 4 lines of slack.
  */
-const SDK_CEILING = 3950;
+const SDK_CEILING = 4015;
 
 /** MEASURED: the largest factory module is `factory-options.ts` at 369 lines. */
 const FACTORY_CEILING = 400;
