@@ -84,6 +84,23 @@ agent.emitExternalEvent({
 });
 await Promise.resolve();
 
+if (mode === "concurrent") {
+	agent.emitExternalEvent({
+		type: "tool_execution_start",
+		toolCallId: "toolu_short",
+		toolName: "read",
+		args: {},
+	});
+	await Promise.resolve();
+	agent.emitExternalEvent({
+		type: "tool_execution_end",
+		toolCallId: "toolu_short",
+		toolName: "read",
+		result: { content: [{ type: "text", text: "" }] },
+	});
+	await Promise.resolve();
+}
+
 if (mode === "complete") {
 	agent.emitExternalEvent({
 		type: "tool_execution_end",

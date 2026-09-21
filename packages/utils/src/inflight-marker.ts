@@ -9,7 +9,7 @@
  * (veyyon#73, where two of three deaths left no exit record at all).
  *
  * This module closes that gap with the one thing a dead process leaves behind:
- * a file. Each tool call overwrites a small marker naming itself; finishing the
+ * a file. Each tool call owns a small marker naming itself; finishing the
  * call, and recording a session exit, remove it. A marker still on disk whose
  * process is gone therefore means exactly one thing — that process died inside
  * that tool call without reaching JavaScript exit — and {@link
@@ -23,10 +23,11 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { atomicWriteFileSync } from "./atomic-write";
 import { getLogsDir } from "./dirs";
 import { isMissingPath } from "./fs-error";
 import * as logger from "./logger";
-import { getProcessStartIdentity, isProcessInstanceAlive } from "./process-liveness";
+import { getProcessStartIdentity, isToolCallProcessAlive } from "./process-liveness";
 import { errorMessage } from "./type-guards";
 
 /** What a marker records about the call a process is inside. */
@@ -45,7 +46,7 @@ interface InFlightMarker extends InFlightToolCall {
 	 * Boot + start identity of the marking process, so a pid the operating
 	 * system has since handed to somebody else is not mistaken for the session
 	 * that wrote this. `null` on a platform that cannot prove incarnation, which
-	 * {@link isProcessInstanceAlive} reads as live.
+	 * {@link isToolCallProcessAlive} reads as live unless death is proven.
 	 */
 	startIdentity: string | null;
 	startedAt: string;
@@ -60,18 +61,15 @@ function markerDir(): string {
 	return path.join(getLogsDir(), "inflight");
 }
 
-/** The marker path for one process. One file per pid, overwritten per call. */
-function markerPath(pid: number): string {
-	return path.join(markerDir(), `${pid}.json`);
+/** Hex encoding keeps provider call ids out of filesystem path syntax. */
+function markerPath(pid: number, toolCallId: string): string {
+	return path.join(markerDir(), `${pid}-${Buffer.from(toolCallId).toString("hex")}.json`);
 }
 
-/** The call this process most recently marked, so clearing can match on it. */
-let currentToolCallId: string | null = null;
+const currentToolCallIds = new Set<string>();
 
 /**
- * Record that this process has entered `call`. Overwrites any previous marker:
- * a process is inside at most one tool call at a time as far as a postmortem
- * cares, and the newest one is the one a native abort happened under.
+ * Record each concurrent call independently, so completing one cannot erase another.
  *
  * Best-effort and synchronous. Synchronous because the failure this exists for
  * gives no later turn of the event loop in which a queued write could land.
@@ -85,8 +83,8 @@ export function markToolCallInFlight(call: InFlightToolCall): void {
 	};
 	try {
 		fs.mkdirSync(markerDir(), { recursive: true });
-		fs.writeFileSync(markerPath(process.pid), `${JSON.stringify(marker)}\n`, "utf8");
-		currentToolCallId = call.toolCallId;
+		atomicWriteFileSync(markerPath(process.pid, call.toolCallId), `${JSON.stringify(marker)}\n`);
+		currentToolCallIds.add(call.toolCallId);
 	} catch (error) {
 		// A marker that cannot be written costs a future postmortem its attribution and
 		// nothing else. Failing the tool call over it would turn a diagnostic aid into a
@@ -96,20 +94,15 @@ export function markToolCallInFlight(call: InFlightToolCall): void {
 }
 
 /**
- * Drop this process's marker once `toolCallId` has finished.
- *
- * Scoped to the call that wrote the marker so an overlapping completion cannot
- * clear a newer call's marker and leave the process looking idle while it is
- * still inside one. Pass no id to clear unconditionally, which is what a
- * recorded session exit does.
+ * Drop only the completed call's marker. With no id, clear all calls on recorded exit.
  */
 export function clearToolCallInFlight(toolCallId?: string): void {
-	if (toolCallId !== undefined && toolCallId !== currentToolCallId) return;
-	currentToolCallId = null;
-	try {
-		fs.rmSync(markerPath(process.pid));
-	} catch (error) {
-		if (!isMissingPath(error)) {
+	const ids = toolCallId === undefined ? [...currentToolCallIds] : [toolCallId];
+	for (const id of ids) {
+		try {
+			fs.rmSync(markerPath(process.pid, id), { force: true });
+			currentToolCallIds.delete(id);
+		} catch (error) {
 			logger.debug("Could not clear in-flight tool call marker", { error: errorMessage(error) });
 		}
 	}
@@ -138,9 +131,7 @@ function readMarker(file: string): InFlightMarker | undefined {
 		if (typeof marker.startIdentity !== "string") marker.startIdentity = null;
 		return marker as InFlightMarker;
 	} catch {
-		// A marker written by a process that died mid-write is truncated JSON. It
-		// still proves a death, but it cannot name the call, so it is swept rather
-		// than reported: a report with no tool name is noise a reader cannot act on.
+		// Invalid legacy markers cannot name a call; atomic publication prevents partial new markers.
 		return undefined;
 	}
 }
@@ -171,7 +162,7 @@ export function reportAbandonedToolCalls(): InFlightToolCall[] {
 	for (const name of files) {
 		const file = path.join(markerDir(), name);
 		const marker = readMarker(file);
-		if (marker && isProcessInstanceAlive(marker.pid, marker.startIdentity)) continue;
+		if (marker && isToolCallProcessAlive(marker.pid, marker.startIdentity)) continue;
 		if (marker) {
 			abandoned.push({
 				toolCallId: marker.toolCallId,

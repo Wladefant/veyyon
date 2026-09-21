@@ -143,28 +143,32 @@ afterEach(() => {
 });
 
 describe("a tool call that a dead process never finished", () => {
-	it("is named in the next launch's log, with the session that was running it", async () => {
-		const arena = createArena();
-		const { pid, sessionId } = await killFixtureAtReady(arena, "abandon");
+	it.each(["abandon", "concurrent"])(
+		"names the unfinished call after %s in the next launch's log",
+		async mode => {
+			const arena = createArena();
+			const { pid, sessionId } = await killFixtureAtReady(arena, mode);
 
-		// The dead process left exactly one marker, and left it behind.
-		expect(markerFiles(arena)).toEqual([`${pid}.json`]);
-		expect(logEntries(arena).some(entry => entry.message === ABANDONED_MESSAGE)).toBe(false);
+			// The dead process left exactly one marker, and left it behind.
+			expect(markerFiles(arena)).toEqual([`${pid}-746f6f6c755f696e666c69676874.json`]);
+			expect(logEntries(arena).some(entry => entry.message === ABANDONED_MESSAGE)).toBe(false);
 
-		await runFixture(arena, "report");
+			await runFixture(arena, "report");
 
-		const reported = logEntries(arena).filter(entry => entry.message === ABANDONED_MESSAGE);
-		expect(reported).toHaveLength(1);
-		expect(reported[0].level).toBe("error");
-		expect(reported[0].toolName).toBe("bash");
-		expect(reported[0].toolCallId).toBe("toolu_inflight");
-		expect(reported[0].sessionId).toBe(sessionId);
-		expect(reported[0].pid).toBe(pid);
-		// Dated, so a reader can line the death up against the log around it.
-		expect(Date.parse(reported[0].startedAt ?? "")).toBeGreaterThan(0);
-		// Swept, so the same death is not re-reported on every later launch.
-		expect(markerFiles(arena)).toEqual([]);
-	}, 60_000);
+			const reported = logEntries(arena).filter(entry => entry.message === ABANDONED_MESSAGE);
+			expect(reported).toHaveLength(1);
+			expect(reported[0].level).toBe("error");
+			expect(reported[0].toolName).toBe("bash");
+			expect(reported[0].toolCallId).toBe("toolu_inflight");
+			expect(reported[0].sessionId).toBe(sessionId);
+			expect(reported[0].pid).toBe(pid);
+			// Dated, so a reader can line the death up against the log around it.
+			expect(Date.parse(reported[0].startedAt ?? "")).toBeGreaterThan(0);
+			// Swept, so the same death is not re-reported on every later launch.
+			expect(markerFiles(arena)).toEqual([]);
+		},
+		60_000,
+	);
 
 	it("is not reported when the call had already returned before the kill", async () => {
 		const arena = createArena();
