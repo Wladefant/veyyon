@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import * as postmortem from "../src/postmortem";
 
@@ -59,7 +60,13 @@ describe("postmortem.isStdioWriteEpipe", () => {
 
 const modulePath = fileURLToPath(new URL("../src/postmortem.ts", import.meta.url));
 const prelude = `import { register } from ${JSON.stringify(modulePath)};`;
-const terminalPath = fileURLToPath(new URL("../../tui/src/terminal.ts", import.meta.url));
+// `@veyyon/tui` moved from `packages/tui` to `hosts/terminal/engine` in 5a925e6f1 / 9abfc0abb
+// (2026-08-30). The old path resolved to nothing, so every child below died on a module-resolution
+// error and exited 1 — the same exit code a premature `process.exit` produces, which is why the
+// three ordering cases read as broken ordering rather than a broken import. `existsSync` makes the
+// next move say so instead.
+const terminalPath = fileURLToPath(new URL("../../../hosts/terminal/engine/src/terminal.ts", import.meta.url));
+if (!existsSync(terminalPath)) throw new Error(`terminal host moved; update this path: ${terminalPath}`);
 
 describe("global EPIPE routing", () => {
 	for (const secondEvent of ["error", "uncaughtException", "unhandledRejection"]) {
