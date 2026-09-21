@@ -904,4 +904,4 @@ These keys are not in `/settings`. Some are state veyyon writes for itself (a sc
 | `tui.maxInlineImageRows` | number | `20` |  |
 | `tui.maxInlineImages` | number | `8` |  |
 
-356 settings in /settings, 120 configuration-file keys, 476 in all.
+358 settings in /settings, 120 configuration-file keys, 478 in all.
