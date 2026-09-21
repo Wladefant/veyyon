@@ -148,6 +148,12 @@ describe("a tag that names no version", () => {
 		expect(isProductReleaseTag("v1.0.0-rc.1")).toBe(false);
 		expect(isProductReleaseTag("1.0.36")).toBe(false);
 		expect(isProductReleaseTag("v1.0")).toBe(false);
+		// Anchored at the HEAD too, which the cases above cannot see: every one of
+		// them also fails a tail-only `/v\d+\.\d+\.\d+$/`. A marker that ends in a
+		// version is the shape that slips through one, and this repository already
+		// names its releases in tags like `pre-upstream-1.5.0-merge`.
+		expect(isProductReleaseTag("pre-v1.5.0")).toBe(false);
+		expect(isProductReleaseTag("upstream-v16.5.2")).toBe(false);
 	});
 
 	it("reports no gap for the three evidence releases this repository publishes", () => {
