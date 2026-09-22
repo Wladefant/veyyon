@@ -14918,9 +14918,12 @@ export class AgentSession {
 	 * Without this the operator's session stopped dead in the middle of a batch
 	 * (a reported turn: 75 calls, 0 ran, 21 interrupted, 54 never ran) on a
 	 * failure the classifier itself calls transient, and the only way forward was
-	 * to notice and type something. The bar is deliberately narrow: the failure
-	 * would have been retried but for replay safety, at least one call genuinely
-	 * never ran, and the attempts run on their own allowance, sized by the same
+	 * to notice and type something. The same happened when the stream died after
+	 * the whole batch ran: Cursor's exec channel runs every call inside the
+	 * stream, so a reset after the last result left a fully answered batch that
+	 * was neither replayable nor continued. The bar is narrow: the failure would
+	 * have been retried but for replay safety, the batch is continuable (see
+	 * {@link #batchCanContinue}), and the attempts run on their own allowance, sized by the same
 	 * `retry.maxRetries`, so a provider dying on every attempt cannot loop. Its
 	 * own counter rather than the retry ladder's: the two answer different
 	 * questions and one turn can legitimately reach both, so a turn that already
@@ -14937,13 +14940,13 @@ export class AgentSession {
 		if (!AIError.retriable(id, { replayUnsafe: false })) return false;
 		if (AIError.retriable(id, { replayUnsafe: true })) return false;
 		if (!this.#hasReplayUnsafeToolOutput(message)) return false;
-		if (!this.#hasNeverRanToolResult(message)) return false;
+		if (!this.#batchCanContinue(message)) return false;
 		const policy = this.#resolveRetryPolicy(retrySettings);
 		if (this.#unreplayableBatchContinues >= policy.maxRetries) return false;
 		this.#unreplayableBatchContinues += 1;
 		this.#operatorNotices.warn(
 			"unreplayable-batch",
-			"The provider stream failed partway through a tool batch that cannot be replayed. Continuing with the calls that never ran.",
+			"The provider stream failed partway through a tool batch that cannot be replayed. Continuing the turn from the results already in context.",
 		);
 		// A continuation borrows the retry ladder's budget, so it borrows the same
 		// backoff: the transport just died, and re-requesting the largest context
@@ -15003,15 +15006,22 @@ export class AgentSession {
 	}
 
 	/**
-	 * Whether any call in this turn is left with no answer at all.
+	 * Whether sending the turn now in context moves the work forward, asked per CALL.
 	 *
-	 * The question is per CALL, not per batch. A cut-short batch is normally
-	 * mixed (the reported one: 21 interrupted, 54 never ran), and the interrupted
-	 * calls carry real results, so "the batch holds a placeholder somewhere" is
-	 * the right answer for the wrong reason. Asked per id it also refuses the one
-	 * case where continuing would be wrong: a call that already has a real result
-	 * is answered, and a placeholder sitting beside that result does not make it
-	 * unanswered again.
+	 * Two shapes continue. A call left with no answer at all: its never-ran
+	 * placeholder and the ledger tell the model to reissue it. And a batch whose
+	 * every call carries a real result: the batch finished and only the model's
+	 * next step is missing, which is exactly the request an ordinary tool turn
+	 * sends after its results land. Cursor's exec channel produces the second
+	 * shape whenever the stream dies after the last call returned.
+	 *
+	 * One shape does not: an exec-channel call whose result has not arrived yet.
+	 * It ran or is running out of band, and a request sent now would answer it
+	 * with nothing while its real result is still on its way.
+	 *
+	 * A mixed batch is normal (the reported one: 21 interrupted, 54 never ran).
+	 * A call that already has a real result is answered, and a placeholder sitting
+	 * beside that result does not make it unanswered again.
 	 *
 	 * A call whose arguments never finished streaming is outstanding by
 	 * construction and is counted without looking for a result. `retainCompleted-
@@ -15021,7 +15031,7 @@ export class AgentSession {
 	 * on `incompleteToolCalls` and the ledger tells the model to reconstruct the
 	 * arguments, which is work only a further request can do.
 	 */
-	#hasNeverRanToolResult(message: AssistantMessage): boolean {
+	#batchCanContinue(message: AssistantMessage): boolean {
 		if ((message.incompleteToolCalls?.length ?? 0) > 0) return true;
 		const toolCallIds = new Set<string>();
 		for (const block of message.content) {
@@ -15040,7 +15050,11 @@ export class AgentSession {
 		for (const id of unanswered) {
 			if (!answered.has(id)) return true;
 		}
-		return false;
+		// Nothing never ran, so continue only when nothing is still in flight either.
+		for (const id of toolCallIds) {
+			if (!answered.has(id)) return false;
+		}
+		return true;
 	}
 
 	#isClassifierRefusal(message: AssistantMessage): boolean {
@@ -17838,7 +17852,7 @@ export class AgentSession {
 	}
 
 	/**
-	 * Redeem one saved Codex rate-limit reset for a specific account, injecting
+	 * Redeem one saved rate-limit reset (OpenAI Codex or Anthropic) for a specific account, injecting
 	 * the provider base URL like {@link AgentSession.fetchUsageReports}. Powers
 	 * the `/usage reset` command and auto-redeem. Never throws for business
 	 * outcomes — inspect the returned `code`.
@@ -17852,8 +17866,8 @@ export class AgentSession {
 	}
 
 	/**
-	 * List saved Codex rate-limit resets per stored account, fetched live from
-	 * the dedicated credits endpoint (bypasses the usage cache). Powers the
+	 * List saved rate-limit resets per stored OpenAI Codex and Anthropic account, fetched live
+	 * from each provider's reset route (bypasses the usage cache). Powers the
 	 * `/usage reset` account selector.
 	 */
 	async listResetCredits(signal?: AbortSignal): Promise<ResetCreditAccountStatus[]> {

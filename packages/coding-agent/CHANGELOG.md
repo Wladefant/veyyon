@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- `/usage reset` and its selector list and redeem usage-limit reset credits for Anthropic Claude accounts beside OpenAI Codex accounts, and accept a provider prefix such as `/usage reset anthropic active`.
+
+### Fixed
+
+- A turn whose provider stream died after every in-stream tool call of a batch that cannot be replayed (a Cursor exec-channel batch) continues from the results in context instead of stopping.
+
 ## [1.5.1] - 2026-09-22
 
 ### Changed
