@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- A quiet `cursor-agent` turn is no longer aborted with "Provider stream stalled while waiting for the next event": the stream is governed by HTTP/2 PING liveness, with a 30-minute ceiling on unbroken server silence and `VEYYON_STREAM_IDLE_TIMEOUT_MS` still honored as that ceiling.
+
 ## [1.5.0] - 2026-09-18
 
 ### Breaking Changes

@@ -149,6 +149,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream";
 import { connectProxiedSocket, getProxyForProvider, shouldBypassProxy } from "../utils/proxy";
 import { createRequestDebugSession, isRequestDebugEnabled, type RequestDebugResponseLog } from "../utils/request-debug";
 import { toolWireSchema } from "../utils/schema/wire";
+import { type CursorLiveness, startCursorLiveness } from "./cursor-liveness";
 import { createInitialResponsesAssistantMessage } from "./initial-message";
 
 /**
@@ -162,6 +163,25 @@ export const CURSOR_API_URL = CURSOR_API_ENDPOINT;
 export const CURSOR_CLIENT_VERSION = "cli-2026.01.09-231024f";
 
 const CURSOR_PROXY_TUNNEL_TIMEOUT_MS = 30_000;
+
+/**
+ * Server silence that triggers an HTTP/2 PING, and the gap between probes.
+ *
+ * Short enough that a dead connection is reported in well under a minute, long enough that a healthy
+ * turn costs one 8-byte frame every half minute.
+ */
+const CURSOR_LIVENESS_PROBE_INTERVAL_MS = 30_000;
+/** How long one PING may go unacknowledged before the connection is declared dead. */
+const CURSOR_LIVENESS_PROBE_TIMEOUT_MS = 10_000;
+/**
+ * Unbroken server silence that ends the turn even while the transport keeps answering.
+ *
+ * A PING is acknowledged by whatever terminates HTTP/2, which can be an edge in front of a wedged
+ * backend, so liveness alone bounds nothing. Recorded healthy gaps between Cursor stream events
+ * reach 355s, so this ceiling sits five times past observed behaviour: a remote agent that emits
+ * nothing for half an hour is not working, it is stuck.
+ */
+const CURSOR_MAX_SILENT_MS = 30 * 60_000;
 
 /**
  * A bounded, least-recently-used map. The cursor provider keys per-conversation
@@ -427,6 +447,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 		let h2Client: http2.ClientHttp2Session | null = null;
 		let h2Request: http2.ClientHttp2Stream | null = null;
 		let heartbeatTimer: NodeJS.Timeout | null = null;
+		let liveness: CursorLiveness | null = null;
 		let debugResponseLogPromise: Promise<RequestDebugResponseLog | undefined> | undefined;
 		// The run's AbortSignal is shared across every LLM round (agent-loop.ts
 		// passes the same object each round when harmony/owned-dialect are off), so
@@ -624,6 +645,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 			};
 
 			h2Request.on("response", headers => {
+				liveness?.markActivity();
 				const status = Number(headers[":status"]);
 				if (Number.isFinite(status) && status >= 400) refusedStatus = status;
 				debugResponseLogPromise = debugSession?.openResponseLog(
@@ -632,6 +654,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 				);
 			});
 			h2Request.on("data", (chunk: Buffer) => {
+				liveness?.markActivity();
 				if (debugResponseLogPromise) {
 					void debugResponseLogPromise.then(log => {
 						log?.write(chunk);
@@ -753,6 +776,37 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 
 			heartbeatTimer = setInterval(sendHeartbeat, 5000);
 
+			// A turn is governed by transport liveness, not by a timer: `cursor-agent` plans and
+			// executes on Cursor's side and legitimately emits nothing while it does, and the
+			// protocol has no server heartbeat to distinguish that from a dead connection. A caller
+			// or operator who pins a stream idle budget gets it as the silence ceiling instead.
+			const maxSilentMs =
+				options?.streamIdleTimeoutMs !== undefined && options.streamIdleTimeoutMs > 0
+					? options.streamIdleTimeoutMs
+					: CURSOR_MAX_SILENT_MS;
+			const probeIntervalMs = Math.max(1, Math.min(CURSOR_LIVENESS_PROBE_INTERVAL_MS, Math.floor(maxSilentMs / 3)));
+			const session = h2Client;
+			liveness = startCursorLiveness({
+				probeIntervalMs,
+				probeTimeoutMs: Math.min(CURSOR_LIVENESS_PROBE_TIMEOUT_MS, probeIntervalMs),
+				maxSilentMs,
+				hasPendingLocalWork: () => stream.hasPendingLocalWork,
+				probe: () => {
+					const { promise, resolve, reject } = Promise.withResolvers<void>();
+					if (!session || session.closed || session.destroyed) {
+						reject(new Error("the HTTP/2 session is already closed"));
+						return promise;
+					}
+					const sent = session.ping((error: Error | null) => {
+						if (error) reject(error);
+						else resolve();
+					});
+					if (!sent) reject(new Error("the HTTP/2 session refused the ping"));
+					return promise;
+				},
+				onDead: failTurn,
+			});
+
 			h2Request.on("trailers", trailers => {
 				const status = trailers["grpc-status"];
 				const rawMsg = String(trailers["grpc-message"] || "");
@@ -873,6 +927,8 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 				clearInterval(heartbeatTimer);
 				heartbeatTimer = null;
 			}
+			liveness?.stop();
+			liveness = null;
 			try {
 				h2Request?.close();
 			} catch {

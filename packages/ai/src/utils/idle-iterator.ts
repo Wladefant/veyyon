@@ -32,6 +32,19 @@ export function getStreamIdleTimeoutMs(fallbackMs: number = DEFAULT_STREAM_IDLE_
 }
 
 /**
+ * The idle budget the environment pins, or `undefined` when it pins none.
+ *
+ * For a provider that governs its own idleness (Cursor probes the transport instead of timing it):
+ * an operator who sets `VEYYON_STREAM_IDLE_TIMEOUT_MS` still gets a generic watchdog at that number,
+ * and everyone else gets none rather than the global default.
+ */
+export function getStreamIdleTimeoutOverrideMs(): number | undefined {
+	const raw = $env.VEYYON_STREAM_IDLE_TIMEOUT_MS ?? $env.VEYYON_OPENAI_STREAM_IDLE_TIMEOUT_MS;
+	if (raw === undefined) return undefined;
+	return normalizeIdleTimeoutMs(raw, DEFAULT_STREAM_IDLE_TIMEOUT_MS);
+}
+
+/**
  * Returns the idle timeout used for OpenAI-family streaming transports.
  *
  * `VEYYON_OPENAI_STREAM_IDLE_TIMEOUT_MS` takes precedence over the generic
