@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.3] - 2026-09-22
+
 ### Fixed
 
 - A `cursor-agent` turn whose connection stops answering fails as a dead connection within 40 seconds of the last server byte, instead of up to 70 seconds.
