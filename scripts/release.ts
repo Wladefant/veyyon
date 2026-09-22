@@ -264,6 +264,13 @@ export function rewriteCargoWorkspaceVersion(content: string, version: string): 
 	return content.replace(pattern, `$1${version}"`);
 }
 
+/** The root Cargo workspace version, which every native authority in the tree is cut from. */
+export function cargoWorkspaceVersion(content: string): string {
+	const version = /^\[workspace\.package\][\s\S]*?^version = "([^"]+)"/m.exec(content)?.[1];
+	if (version === undefined) throw new Error("Cargo.toml has no [workspace.package] version.");
+	return version;
+}
+
 /**
  * The release bump commit's subject, which is a contract and not a message.
  *
@@ -319,6 +326,28 @@ export function classifySentinelBumpState(
 	if (libRsText.includes(`js_name = "${prevSentinelName}"`)) return "rewrite";
 	if (libRsText.includes(`js_name = "${sentinelName}"`)) return "alreadyBumped";
 	return "missing";
+}
+
+/** The sentinel rename a cut applies, and whether lib.rs is in a state it can apply it to. */
+export interface ReleaseSentinelPlan {
+	from: string;
+	to: string;
+	state: "rewrite" | "alreadyBumped" | "missing";
+}
+
+/**
+ * Plan the sentinel rename from the tree as it stands before the bump.
+ *
+ * The rename source is the sentinel this tree emits, which its Cargo workspace version names. It is
+ * not the latest tag's: a cut whose bump commit landed but was never tagged leaves the tree one
+ * version past the tag, and a rename from the tag's sentinel matches nothing in lib.rs, so the next
+ * cut of any other version refused as `missing`. Re-cutting the version the tree is already at is
+ * `alreadyBumped`, which rewrites nothing.
+ */
+export function planReleaseSentinel(cargoToml: string, libRs: string, nextVersion: string): ReleaseSentinelPlan {
+	const { from, to } = planSentinelRewrite(cargoWorkspaceVersion(cargoToml), nextVersion);
+	if (from === to) return { from, to, state: libRs.includes(`js_name = "${to}"`) ? "alreadyBumped" : "missing" };
+	return { from, to, state: classifySentinelBumpState(libRs, from, to) };
 }
 
 /**
@@ -580,7 +609,7 @@ export async function validateReleaseVersionAuthorities(
 	}
 }
 
-export async function prepareReleaseTree(version: string, latestTag: string): Promise<void> {
+export async function prepareReleaseTree(version: string): Promise<void> {
 	console.log(`Updating package versions to ${version}…`);
 	const pkgJsonPaths = await memberFiles("package.json");
 	const publicPkgPaths: string[] = [];
@@ -614,9 +643,7 @@ export async function prepareReleaseTree(version: string, latestTag: string): Pr
 	const cargoFile = Bun.file("Cargo.toml");
 	const cargoBefore = await cargoFile.text();
 	await Bun.write("Cargo.toml", rewriteCargoWorkspaceVersion(cargoBefore, version));
-	const cargoToml = await Bun.file("Cargo.toml").text();
-	const versionMatch = cargoToml.match(/^\[workspace\.package\][\s\S]*?^version = "([^"]+)"/m);
-	if (versionMatch) console.log(`  workspace: ${versionMatch[1]}`);
+	console.log(`  workspace: ${cargoWorkspaceVersion(await Bun.file("Cargo.toml").text())}`);
 	for await (const cargoPath of cargoTomlGlob.scan(".")) {
 		const content = await Bun.file(cargoPath).text();
 		if (!content.includes("version.workspace = true")) continue;
@@ -626,40 +653,37 @@ export async function prepareReleaseTree(version: string, latestTag: string): Pr
 	console.log();
 
 	console.log(`Bumping veyyon-natives version sentinel to v${version}…`);
-	const { from: prevSentinelName, to: sentinelName } = planSentinelRewrite(latestTag, version);
-	if (prevSentinelName === sentinelName) {
-		throw new Error(`previous sentinel ${prevSentinelName} equals the new one — version ${version} is ${latestTag}.`);
-	}
-	const sentinelRoots = memberTopLevels();
-	const sentinelFiles: Array<{ path: string; content: string }> = [];
-	for (const root of sentinelRoots) {
-		const sentinelGlob = new Bun.Glob(`${root}/**/*.{rs,ts,mts,cts,js,mjs,cjs}`);
-		for await (const path of sentinelGlob.scan(".")) {
-			if (isSentinelRewriteExcluded(path)) continue;
-			const content = await Bun.file(path).text();
-			if (content.includes(prevSentinelName)) sentinelFiles.push({ path, content });
-		}
-	}
 	const libRsBefore = await Bun.file("natives/bridge/addon/src/lib.rs").text();
-	const sentinelState = classifySentinelBumpState(libRsBefore, prevSentinelName, sentinelName);
-	if (sentinelState === "missing") {
+	const sentinel = planReleaseSentinel(cargoBefore, libRsBefore, version);
+	if (sentinel.state === "missing") {
 		throw new Error(
-			`could not locate the previous veyyon-natives sentinel ${prevSentinelName} or target ${sentinelName} in ` +
-				"natives/bridge/addon/src/lib.rs; reconcile lib.rs (or the latest tag) before releasing.",
+			`natives/bridge/addon/src/lib.rs emits neither ${sentinel.from}, which the Cargo workspace version ` +
+				`${cargoWorkspaceVersion(cargoBefore)} names, nor ${sentinel.to}; reconcile lib.rs with Cargo.toml before releasing.`,
 		);
+	}
+	const sentinelFiles: Array<{ path: string; content: string }> = [];
+	if (sentinel.from !== sentinel.to) {
+		for (const root of memberTopLevels()) {
+			const sentinelGlob = new Bun.Glob(`${root}/**/*.{rs,ts,mts,cts,js,mjs,cjs}`);
+			for await (const path of sentinelGlob.scan(".")) {
+				if (isSentinelRewriteExcluded(path)) continue;
+				const content = await Bun.file(path).text();
+				if (content.includes(sentinel.from)) sentinelFiles.push({ path, content });
+			}
+		}
 	}
 	if (sentinelFiles.length > 0) {
 		await Promise.all(
-			sentinelFiles.map(file => Bun.write(file.path, file.content.replaceAll(prevSentinelName, sentinelName))),
+			sentinelFiles.map(file => Bun.write(file.path, file.content.replaceAll(sentinel.from, sentinel.to))),
 		);
 	}
 	const libRs = await Bun.file("natives/bridge/addon/src/lib.rs").text();
-	if (!libRs.includes(`js_name = "${sentinelName}"`)) {
+	if (!libRs.includes(`js_name = "${sentinel.to}"`)) {
 		throw new Error(
-			`veyyon-natives version sentinel did not move to ${sentinelName} in natives/bridge/addon/src/lib.rs.`,
+			`veyyon-natives version sentinel did not move to ${sentinel.to} in natives/bridge/addon/src/lib.rs.`,
 		);
 	}
-	console.log(`  sentinel: ${sentinelName}${sentinelState === "alreadyBumped" ? " (already bumped)" : ""}\n`);
+	console.log(`  sentinel: ${sentinel.to}${sentinel.state === "alreadyBumped" ? " (already bumped)" : ""}\n`);
 
 	// Preserve the reviewed dependency graph; refresh only workspace versions.
 	// `cargo generate-lockfile` re-resolves every dependency to its newest
