@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- A dead `cursor-agent` connection is reported within one probe interval plus one probe timeout of the last server byte (40s by default), instead of up to two intervals plus the timeout, where a short silence ceiling could fire first and misreport it as server silence.
+
 ## [1.5.2] - 2026-09-22
 
 ### Added

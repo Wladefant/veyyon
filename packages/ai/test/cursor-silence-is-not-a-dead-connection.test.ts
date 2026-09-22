@@ -241,6 +241,32 @@ describe("cursor liveness governor", () => {
 		expect(AIError.isProviderRetryableError(died)).toBe(true);
 	});
 
+	// A server byte that lands just after the probe timer was armed must not push the first probe out
+	// by a whole extra interval. With a phase-locked timer it did: the tick one interval in fell a
+	// moment short of a full interval of silence and was skipped, so a dead connection was reported
+	// at two intervals plus the probe timeout, which at a ceiling of three intervals is the ceiling.
+	it("reports a dead connection within one interval and one probe timeout of the last byte", async () => {
+		vi.useFakeTimers();
+		const { promise: neverAnswers } = Promise.withResolvers<void>();
+		let died: Error | undefined;
+		const liveness = startCursorLiveness({
+			probeIntervalMs: 100,
+			probeTimeoutMs: 100,
+			maxSilentMs: 300,
+			probe: () => neverAnswers,
+			onDead: error => {
+				died = error;
+			},
+		});
+
+		await advance(10, 10);
+		liveness.markActivity();
+		await advance(210, 10);
+		liveness.stop();
+
+		expect(died?.message).toMatch(/stopped answering/);
+	});
+
 	it("ends the turn when a probe is refused outright", async () => {
 		vi.useFakeTimers();
 		let died: Error | undefined;
@@ -379,8 +405,9 @@ describe("cursor turn over a real connection", () => {
 		// about. How much sooner that happens is the governor's, proved on the fake
 		// clock above, where an unacknowledged probe ends a turn inside 400ms of a
 		// ten-minute ceiling. Here the probe cadence is a third of a three-second
-		// ceiling, so the two are seconds apart by construction and only the cause
-		// distinguishes them.
+		// ceiling and a dead connection is reported within one interval plus one
+		// probe timeout of the last byte, a full second before the ceiling, so only
+		// the cause distinguishes them.
 		expect(outcome.message.errorMessage).toMatch(/stopped answering/);
 		expect(outcome.message.errorMessage).not.toMatch(/sent nothing for/);
 		// Transient: a dead socket is retried, not treated as a refusal.

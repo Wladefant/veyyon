@@ -82,23 +82,39 @@ function deathError(cause: DeathCause, silentMs: number, detail?: unknown): Erro
 export function startCursorLiveness(options: CursorLivenessOptions): CursorLiveness {
 	const now = Date.now;
 	let lastActivityAt = now();
+	// When the last probe was acknowledged. An acknowledgement defers the next probe by one interval
+	// but never the silence ceiling, which counts from `lastActivityAt` alone.
+	let lastProbeAt = Number.NEGATIVE_INFINITY;
 	let localWorkStartedAt: number | undefined;
-	let probeInFlight = false;
 	let stopped = false;
+	let timer: NodeJS.Timeout | undefined;
 	// A local tool holding the stream open stands the silence clock down; the hold is capped by the
 	// same ceiling as server silence, so a tool that never returns is still reported.
 	const maxLocalWorkHoldMs = options.maxSilentMs;
 
-	const timer: NodeJS.Timeout = setInterval(() => {
-		void tick();
-	}, options.probeIntervalMs);
-	// A probe is never the reason a process stays alive; the turn is.
-	timer.unref?.();
+	// The next wakeup is armed from when the silence began, not from a fixed interval phase. A
+	// phase-locked interval skips the tick that lands a moment short of a full interval after the last
+	// byte, which delays the first probe to almost two intervals and lets a dead connection run into
+	// the silence ceiling before its probe can report it. Armed this way, a dead connection is
+	// reported within one interval plus one probe timeout of the last byte the server sent.
+	const schedule = (): void => {
+		if (stopped) return;
+		const probeDueAt = Math.max(lastActivityAt, lastProbeAt) + options.probeIntervalMs;
+		const dueAt = Math.min(probeDueAt, lastActivityAt + options.maxSilentMs);
+		timer = setTimeout(
+			() => {
+				void tick();
+			},
+			Math.max(0, dueAt - now()),
+		);
+		// A probe is never the reason a process stays alive; the turn is.
+		timer.unref?.();
+	};
 
 	const stop = (): void => {
 		if (stopped) return;
 		stopped = true;
-		clearInterval(timer);
+		clearTimeout(timer);
 	};
 
 	const die = (cause: DeathCause, silentMs: number, detail?: unknown): void => {
@@ -110,7 +126,12 @@ export function startCursorLiveness(options: CursorLivenessOptions): CursorLiven
 	async function tick(): Promise<void> {
 		if (stopped) return;
 		const silentMs = now() - lastActivityAt;
-		if (silentMs < options.probeIntervalMs) return;
+		// The server spoke since this wakeup was armed; `markActivity` never re-arms, so a busy
+		// stream costs one wakeup per interval rather than one per event.
+		if (silentMs < options.probeIntervalMs) {
+			schedule();
+			return;
+		}
 
 		if (options.hasPendingLocalWork?.() === true) {
 			localWorkStartedAt ??= lastActivityAt;
@@ -119,6 +140,7 @@ export function startCursorLiveness(options: CursorLivenessOptions): CursorLiven
 				return;
 			}
 			lastActivityAt = now();
+			schedule();
 			return;
 		}
 		localWorkStartedAt = undefined;
@@ -127,8 +149,10 @@ export function startCursorLiveness(options: CursorLivenessOptions): CursorLiven
 			die("silence", silentMs);
 			return;
 		}
-		if (probeInFlight) return;
-		probeInFlight = true;
+		if (now() - lastProbeAt < options.probeIntervalMs) {
+			schedule();
+			return;
+		}
 		try {
 			await withTimeout(options.probe(), options.probeTimeoutMs);
 		} catch (error) {
@@ -136,13 +160,15 @@ export function startCursorLiveness(options: CursorLivenessOptions): CursorLiven
 			// itself reporting, which is the one signal silence never carries.
 			die("unacknowledged", now() - lastActivityAt, error);
 			return;
-		} finally {
-			probeInFlight = false;
 		}
 		// An acknowledgement proves the connection, NOT progress: the silence clock
 		// keeps running so `maxSilentMs` still governs a wedged backend behind a
 		// healthy edge.
+		lastProbeAt = now();
+		schedule();
 	}
+
+	schedule();
 
 	return {
 		markActivity: () => {
