@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-09-22
+
 ### Changed
 
 - The bash tool prompt states that a backgrounded job is never polled: no `sleep`, `pgrep`, `ps`, `tail -f`, `top`, and no second call that watches it.

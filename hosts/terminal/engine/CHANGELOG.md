@@ -20,6 +20,7 @@
 - Forced render requests accept `preserveViewport` to paint changed rows immediately while retaining pending full-repaint and scrollback requests.
 - `TUI.frameScrollable` states whether the last composed frame had content above the viewport, so a host can render a scroll affordance without re-deriving it from row counts it cannot see.
 - The package is `hosts/terminal/engine` in the repository, beside the other halves of the terminal host. The published package name, exports and entry points are unchanged.
+- Added `getText()` method to Text component for retrieving current text content
 
 ### Changed
 
@@ -1822,12 +1823,6 @@
 ## [1.337.0] - 2026-01-02
 
 Initial release under @oh-my-pi scope. See previous releases at [badlogic/pi-mono](https://github.com/badlogic/pi-mono).
-
-## [1.5.0] - 2026-01-03
-
-### Added
-
-- Added `getText()` method to Text component for retrieving current text content
 
 ## [1.3.0] - 2026-08-28
 
