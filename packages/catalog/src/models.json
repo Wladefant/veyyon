@@ -11382,7 +11382,8 @@
 					"xhigh",
 					"max"
 				],
-				"supportsDisplay": true
+				"supportsDisplay": true,
+				"prefixBinding": true
 			}
 		},
 		"claude-haiku-4-5": {
@@ -11810,6 +11811,47 @@
 					"max"
 				],
 				"supportsDisplay": true
+			}
+		},
+		"claude-opus-5-5": {
+			"id": "claude-opus-5-5",
+			"name": "Claude Opus 5.5",
+			"api": "anthropic-messages",
+			"provider": "anthropic",
+			"baseUrl": "https://api.anthropic.com",
+			"reasoning": true,
+			"reasoningOptions": {
+				"efforts": [
+					"low",
+					"medium",
+					"high",
+					"xhigh",
+					"max"
+				]
+			},
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 4,
+				"output": 20,
+				"cacheRead": 0.2,
+				"cacheWrite": 5
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "anthropic-adaptive",
+				"efforts": [
+					"low",
+					"medium",
+					"high",
+					"xhigh",
+					"max"
+				],
+				"supportsDisplay": true,
+				"prefixBinding": true
 			}
 		},
 		"claude-sonnet-4-0": {
