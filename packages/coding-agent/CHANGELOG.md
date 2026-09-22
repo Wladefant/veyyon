@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-09-22
+
 ### Added
 
 - `/usage reset` and its selector list and redeem usage-limit reset credits for Anthropic Claude accounts beside OpenAI Codex accounts, and accept a provider prefix such as `/usage reset anthropic active`.
