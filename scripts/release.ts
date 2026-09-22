@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 /**
  * Release-tree preparation and the two checks CI runs at a tag.
@@ -46,6 +47,40 @@ async function memberFiles(fileName: string): Promise<string[]> {
 		}
 	}
 	return found.sort();
+}
+
+/**
+ * Every third-party `Cargo.lock` entry that differs between two lockfile texts,
+ * as `removed name version (source)` and `added name version (source)` lines.
+ *
+ * An entry with a `source` came from a registry or git; one without is a
+ * workspace member, whose version a release bump is expected to move. The
+ * checksum is part of the identity, so a re-published version is a change too.
+ */
+export function thirdPartyLockDrift(before: string, after: string): string[] {
+	const beforeEntries = thirdPartyLockEntries(before);
+	const afterEntries = thirdPartyLockEntries(after);
+	const drift: string[] = [];
+	for (const entry of beforeEntries) {
+		if (!afterEntries.has(entry)) drift.push(`removed ${entry}`);
+	}
+	for (const entry of afterEntries) {
+		if (!beforeEntries.has(entry)) drift.push(`added ${entry}`);
+	}
+	return drift;
+}
+
+function thirdPartyLockEntries(lockText: string): Set<string> {
+	const lock = asObject(Bun.TOML.parse(lockText), "Cargo.lock");
+	if (!Array.isArray(lock.package)) throw new Error("Cargo.lock must contain package entries.");
+	const entries = new Set<string>();
+	for (const raw of lock.package) {
+		const entry = asObject(raw, "Cargo.lock package");
+		if (entry.source === undefined) continue;
+		const checksum = entry.checksum === undefined ? "" : ` ${String(entry.checksum)}`;
+		entries.add(`${String(entry.name)} ${String(entry.version)} (${String(entry.source)})${checksum}`);
+	}
+	return entries;
 }
 
 const cargoTomlGlob = new Glob("{natives,tests}/**/Cargo.toml");
@@ -627,9 +662,25 @@ export async function prepareReleaseTree(version: string, latestTag: string): Pr
 	console.log(`  sentinel: ${sentinelName}${sentinelState === "alreadyBumped" ? " (already bumped)" : ""}\n`);
 
 	// Preserve the reviewed dependency graph; refresh only workspace versions.
+	// `cargo generate-lockfile` re-resolves every dependency to its newest
+	// compatible release, which is how the v1.5.1 bump picked up a
+	// `find-msvc-tools` that does not compile `cc` on Windows. `--workspace`
+	// rewrites only this workspace's own entries, and the drift check fails the
+	// cut if anything else moved anyway.
 	console.log("Refreshing lockfiles...");
 	await $`bun install`;
-	await $`cargo generate-lockfile`;
+	const cargoLockBefore = await fs.readFile("Cargo.lock", "utf8");
+	await $`cargo update --workspace`;
+	const drift = thirdPartyLockDrift(cargoLockBefore, await fs.readFile("Cargo.lock", "utf8"));
+	if (drift.length > 0) {
+		throw new Error(
+			[
+				"Refusing to cut: refreshing Cargo.lock moved third-party dependencies.",
+				...drift.map(line => `  ${line}`),
+				"A version bump changes only workspace entries; update a dependency in its own reviewed commit.",
+			].join("\n"),
+		);
+	}
 	console.log();
 
 	console.log("Updating CHANGELOGs...");
