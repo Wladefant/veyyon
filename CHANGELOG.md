@@ -12,6 +12,7 @@
 
 - A quiet `cursor-agent` turn is no longer aborted with "Provider stream stalled while waiting for the next event": the stream is governed by HTTP/2 PING liveness, with a 30-minute ceiling on unbroken server silence and `VEYYON_STREAM_IDLE_TIMEOUT_MS` still honored as that ceiling.
 - The Anthropic OAuth user-agent reports `agent-sdk/0.3.280`, the Agent SDK release published beside Claude Code 2.1.280.
+- The Cursor liveness probe interval is clamped through the shared `clampLow` helper; no user-visible change.
 - The Claude Code fingerprint version is 2.1.280, so Anthropic OAuth requests for `claude-opus-5-5` are no longer rejected with `claude_code_version_too_old`.
 
 ## [1.5.0] - 2026-09-18
