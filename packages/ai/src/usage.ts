@@ -66,25 +66,32 @@ export interface UsageLimit {
  * Per-credit detail for a saved/banked rate-limit reset.
  *
  * Populated when the provider's listing endpoint returns individual credit
- * metadata (e.g. OpenAI Codex `wham/rate-limit-reset-credits`). Callers that
- * only need the count can ignore this; display layers use `expiresAt` to show
- * when banked resets expire.
+ * metadata (OpenAI Codex `wham/rate-limit-reset-credits`, Anthropic's
+ * `cedar_ember` grants). Callers that only need the count can ignore this;
+ * display layers use `expiresAt` to show when banked resets expire.
  */
 export interface UsageResetCreditDetail {
+	/** Provider credit or grant id, the value a redeem names. */
+	id?: string;
+	/** Human-facing title, e.g. "One free rate limit reset". */
+	title?: string;
 	/** ISO timestamp when the credit was granted. */
 	grantedAt?: string;
 	/** ISO timestamp when the credit expires and can no longer be redeemed. */
 	expiresAt?: string;
-	/** Backend status, e.g. `available`, `redeemed`. */
+	/** Backend status, e.g. `available`, `redeemed`, `paused`. */
 	status?: string;
+	/** Usage windows one redeem clears, in the provider's names, when the provider states them. */
+	clears?: string[];
 }
 
 /**
  * Saved/banked rate-limit resets an account can redeem on demand.
  *
  * Surfaced by providers that let users defer a usage-window reset and spend it
- * later (OpenAI Codex "saved rate limit resets"). The redeem itself is a
- * separate, provider-specific action; this is the read-only count for display.
+ * later (OpenAI Codex saved resets, Anthropic usage-limit resets). The redeem
+ * itself is a separate, provider-specific action; this is the read-only count
+ * for display.
  */
 export interface UsageResetCredits {
 	/** Number of resets available to redeem right now. */

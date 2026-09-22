@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `AuthStorage.listResetCredits` and `AuthStorage.redeemResetCredit` cover Anthropic Claude OAuth accounts as well as OpenAI Codex, and each `ResetCreditTarget` states its `provider`.
+
 ## [1.5.1] - 2026-09-22
 
 ### Fixed
