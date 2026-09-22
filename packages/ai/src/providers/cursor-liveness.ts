@@ -85,6 +85,9 @@ export function startCursorLiveness(options: CursorLivenessOptions): CursorLiven
 	let localWorkStartedAt: number | undefined;
 	let probeInFlight = false;
 	let stopped = false;
+	// A local tool holding the stream open stands the silence clock down; the hold is capped by the
+	// same ceiling as server silence, so a tool that never returns is still reported.
+	const maxLocalWorkHoldMs = options.maxSilentMs;
 
 	const timer: NodeJS.Timeout = setInterval(() => {
 		void tick();
@@ -111,9 +114,7 @@ export function startCursorLiveness(options: CursorLivenessOptions): CursorLiven
 
 		if (options.hasPendingLocalWork?.() === true) {
 			localWorkStartedAt ??= lastActivityAt;
-			// The hold is bounded by the same ceiling, so a tool that never returns
-			// is reported rather than holding the turn open forever.
-			if (now() - localWorkStartedAt >= options.maxSilentMs) {
+			if (now() - localWorkStartedAt >= maxLocalWorkHoldMs) {
 				die("local-work", now() - localWorkStartedAt);
 				return;
 			}

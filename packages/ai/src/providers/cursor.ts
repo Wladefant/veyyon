@@ -107,7 +107,7 @@ import {
 } from "@veyyon/catalog/discovery/cursor-gen/agent_pb";
 import { calculateCost } from "@veyyon/catalog/models";
 import { CURSOR_API_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
-import { logger } from "@veyyon/utils";
+import { clampLow, logger } from "@veyyon/utils";
 import { $env } from "@veyyon/utils/env";
 import { parseJsonWithRepair, parseStreamingJson, parseStreamingJsonThrottled } from "@veyyon/utils/json-parse";
 import { sanitizeText } from "@veyyon/utils/sanitize-text";
@@ -784,7 +784,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 				options?.streamIdleTimeoutMs !== undefined && options.streamIdleTimeoutMs > 0
 					? options.streamIdleTimeoutMs
 					: CURSOR_MAX_SILENT_MS;
-			const probeIntervalMs = Math.max(1, Math.min(CURSOR_LIVENESS_PROBE_INTERVAL_MS, Math.floor(maxSilentMs / 3)));
+			const probeIntervalMs = clampLow(Math.floor(maxSilentMs / 3), 1, CURSOR_LIVENESS_PROBE_INTERVAL_MS);
 			const session = h2Client;
 			liveness = startCursorLiveness({
 				probeIntervalMs,
