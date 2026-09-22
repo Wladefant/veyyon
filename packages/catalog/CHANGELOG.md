@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- The Claude Code fingerprint version is 2.1.280, so Anthropic OAuth requests for `claude-opus-5-5` are no longer rejected with `claude_code_version_too_old`.
+
 ## [1.5.0] - 2026-09-18
 
 ### Added
