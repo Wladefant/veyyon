@@ -9,8 +9,9 @@
  * - reporting a business outcome that arrives on a 4xx status (`cooldown`) as a transport failure,
  * - mapping Anthropic's result names onto the wrong provider-neutral code.
  *
- * It drives the real `AuthStorage` against a fake `fetch`; it does not prove the live server's
- * response shape, which was read from Claude Code's client and is pinned only by these fixtures.
+ * It drives the real `AuthStorage`, and through it `usage/anthropic-reset`, against a fake `fetch`;
+ * it does not prove the live server's response shape, which was read from Claude Code's client and
+ * is pinned only by these fixtures.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
