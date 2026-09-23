@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Slash-command reports (`/tools`, `/hotkeys`, `/context`, `/jobs`, `/todo`, `/lsp`, `/plugins`, `/effort`) format with clean human summaries, consistent headers and indentation, and without raw XML tags or run-on bullet sequences.
+
+### Fixed
+
+- Fixed Cursor running a tool twice and leaving an unanswered `<id>_2` tool call when the server re-sent an exec request for a call it already dispatched; the repeat is now answered from the first run's result.
+
 ## [1.5.3] - 2026-09-22
 
 ### Fixed
