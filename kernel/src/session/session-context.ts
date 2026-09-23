@@ -233,8 +233,20 @@ export function buildSessionContext(
 	const leaf = (leafId ? byId.get(leafId) : undefined) ?? entries[entries.length - 1];
 	if (!leaf) return emptySessionContext();
 
-	// Walk from leaf to root, collecting path
-	const path = walkBranchPath(byId, leaf);
+	return buildSessionContextFromPath(walkBranchPath(byId, leaf), options);
+}
+
+/**
+ * Build the session context from an already-resolved root→leaf `path`, as
+ * {@link walkBranchPath} returns it. A caller that holds the active branch
+ * (the session manager's index) skips the leaf→root walk, which is linear in
+ * the length of the session and dominated resume on long sessions when every
+ * startup reader repeated it.
+ */
+export function buildSessionContextFromPath(
+	path: readonly SessionEntry[],
+	options?: BuildSessionContextOptions,
+): SessionContext {
 	// Extract settings and find compaction
 	let thinkingLevel: string | undefined = "off";
 	let configuredThinkingLevel: string | undefined;
