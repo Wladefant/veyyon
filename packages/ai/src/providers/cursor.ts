@@ -550,7 +550,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 				get currentToolCall() {
 					return currentToolCall;
 				},
-				execDispatchedToolCalls: new Set<string>(),
+				execDispatches: new Map<string, Promise<ExecReply>>(),
 				get firstTokenTime() {
 					return firstTokenTime;
 				},
@@ -1067,15 +1067,18 @@ export interface BlockState {
 	currentThinkingBlock: (ThinkingContent & { [kStreamingBlockIndex]: number }) | null;
 	currentToolCall: ToolCallState | null;
 	/**
-	 * Tool-call ids the exec channel has dispatched this turn.
+	 * Every tool call the exec channel has dispatched this turn, keyed by tool-call id, and the
+	 * reply its one run produced.
 	 *
-	 * Cursor surfaces an MCP call on two channels at once: `mcpArgs` on the exec
-	 * channel, which this provider runs through the caller's handler and answers,
-	 * and an `mcpToolCall` block on the assistant stream. The two arrive in either
-	 * order, so the id is recorded here as well as stamped onto any block that
-	 * already exists, and a block that opens later reads this set.
+	 * Two readers. Cursor surfaces an MCP call on two channels at once: `mcpArgs` on the exec
+	 * channel, which this provider runs through the caller's handler and answers, and an
+	 * `mcpToolCall` block on the assistant stream. The two arrive in either order, so a block
+	 * that opens after its dispatch reads this map to know the call already ran.
+	 *
+	 * And Cursor re-sends an exec request for a call it already dispatched. The repeat is
+	 * answered from the entry here, see {@link dispatchExecOnce}.
 	 */
-	execDispatchedToolCalls: Set<string>;
+	execDispatches: Map<string, Promise<ExecReply>>;
 	firstTokenTime: number | undefined;
 	/** This turn's token account. See {@link CursorUsageAccount}. */
 	usage: CursorUsageAccount;
@@ -1233,7 +1236,7 @@ function sendShellStreamEvent(
 	execMsg: ExecServerMessage,
 	event: ShellStream["event"],
 ): void {
-	sendExecClientMessage(h2Request, execMsg, "shellStream", create(ShellStreamSchema, { event }));
+	sendExecReply(h2Request, execMsg, { case: "shellStream", value: create(ShellStreamSchema, { event }) });
 }
 
 function sanitizeShellExecResult(execResult: ShellResult): ShellResult {
@@ -1321,7 +1324,7 @@ async function handleShellStreamArgs(
 	h2Request: http2.ClientHttp2Stream,
 	execHandlers: CursorExecHandlers | undefined,
 	onToolResult: CursorToolResultHandler | undefined,
-): Promise<void> {
+): Promise<ExecReply> {
 	const normalizedWorkingDirectory = args.workingDirectory || process.cwd();
 	const normalizedArgs: ShellArgs = { ...args, workingDirectory: normalizedWorkingDirectory };
 	const startTs = performance.now();
@@ -1374,10 +1377,11 @@ async function handleShellStreamArgs(
 	sendShellStreamExitFromResult(h2Request, execMsg, sanitizedExecResult, sendBufferedOutput);
 	// Cursor can keep the turn pending when it receives only stream deltas.
 	// Send the final structured shellResult as completion acknowledgement.
-	sendExecClientMessage(h2Request, execMsg, "shellResult", sanitizedExecResult);
+	const reply = sendExecReply(h2Request, execMsg, { case: "shellResult", value: sanitizedExecResult });
 	sendExecClientStreamClose(h2Request, execMsg);
 
 	log("shellStream", "done", { elapsed: performance.now() - startTs });
+	return reply;
 }
 
 function sendShellStreamExitFromResult(
@@ -1525,7 +1529,7 @@ async function handleExecServerMessage(
 			},
 		});
 
-		sendExecClientMessage(h2Request, execMsg, "requestContextResult", requestContextResult);
+		sendExecReply(h2Request, execMsg, { case: "requestContextResult", value: requestContextResult });
 		log("execClient", "requestContextResult", { tools: requestContextTools.length });
 		return;
 	}
@@ -1534,10 +1538,104 @@ async function handleExecServerMessage(
 		return;
 	}
 
-	switch (execCase) {
+	const run = () => runExecCall(execMsg, h2Request, execHandlers, onToolResult, output, stream, state);
+	const toolCallId = execToolCallId(execMsg);
+	if (toolCallId === undefined) {
+		await run();
+		return;
+	}
+	await dispatchExecOnce(toolCallId, execMsg, h2Request, state, run);
+}
+
+/**
+ * The tool-call id of an exec request that runs a tool, or `undefined` for one that runs none.
+ *
+ * A request that arrives without an id is given a fresh one here, before anything reads it, so
+ * the synthesized block, the tool result and the dispatch record all carry the same id.
+ */
+function execToolCallId(execMsg: ExecServerMessage): string | undefined {
+	const message = execMsg.message;
+	switch (message.case) {
+		case "readArgs":
+		case "lsArgs":
+		case "grepArgs":
+		case "writeArgs":
+		case "deleteArgs":
+		case "shellArgs":
+		case "shellStreamArgs":
+		case "diagnosticsArgs":
+			if (!message.value.toolCallId) message.value.toolCallId = crypto.randomUUID();
+			return message.value.toolCallId;
+		case "mcpArgs":
+			return message.value.toolCallId || undefined;
+		default:
+			return undefined;
+	}
+}
+
+/**
+ * Run one exec-channel tool call at most once per turn.
+ *
+ * WHY. Cursor re-sends an exec request for a call it already dispatched, under the same tool-call
+ * id. Running it again executed the tool twice, which for `bash`, `write` and `delete` is a
+ * second side effect, and synthesized a second block under the same id. The agent loop then
+ * renamed that block `<id>_2`, nothing ever answered it, and the turn ended holding a call with no
+ * result: recorded Cursor turns carried one such phantom for more than a third of their calls,
+ * and each one blocked the session from continuing after the stream died.
+ *
+ * The repeat is answered with the first run's reply, awaited if that run is still going, so the
+ * server receives an answer to every request it sent and the tool runs once.
+ */
+async function dispatchExecOnce(
+	toolCallId: string,
+	execMsg: ExecServerMessage,
+	h2Request: http2.ClientHttp2Stream,
+	state: BlockState,
+	run: () => Promise<ExecReply>,
+): Promise<void> {
+	const first = state.execDispatches.get(toolCallId);
+	if (first) {
+		log("exec", "replay", { toolCallId, execId: execMsg.execId });
+		replayExecReply(h2Request, execMsg, await first);
+		return;
+	}
+	const { promise, resolve, reject } = Promise.withResolvers<ExecReply>();
+	state.execDispatches.set(toolCallId, promise);
+	run().then(resolve, reject);
+	await promise;
+}
+
+/**
+ * Answer a repeated exec request with the reply its first run sent.
+ *
+ * A shell call is framed by the repeat's own request: `shellStreamArgs` expects a stream that
+ * opens, exits and closes, and `shellArgs` expects the bare `shellResult`, whichever of the two
+ * the first request was.
+ */
+function replayExecReply(h2Request: http2.ClientHttp2Stream, execMsg: ExecServerMessage, reply: ExecReply): void {
+	if (execMsg.message.case === "shellStreamArgs" && reply.case === "shellResult") {
+		sendShellStreamEvent(h2Request, execMsg, { case: "start", value: create(ShellStreamStartSchema, {}) });
+		sendShellStreamExitFromResult(h2Request, execMsg, reply.value, true);
+		sendExecReply(h2Request, execMsg, reply);
+		sendExecClientStreamClose(h2Request, execMsg);
+		return;
+	}
+	sendExecReply(h2Request, execMsg, reply);
+}
+
+/** Run one exec request and answer it, returning the answer for {@link dispatchExecOnce}. */
+async function runExecCall(
+	execMsg: ExecServerMessage,
+	h2Request: http2.ClientHttp2Stream,
+	execHandlers: CursorExecHandlers | undefined,
+	onToolResult: CursorToolResultHandler | undefined,
+	output: AssistantMessage,
+	stream: AssistantMessageEventStream,
+	state: BlockState,
+): Promise<ExecReply> {
+	switch (execMsg.message.case) {
 		case "readArgs": {
 			const args = execMsg.message.value;
-			if (!args.toolCallId) args.toolCallId = crypto.randomUUID();
 			synthesizeCursorExecToolCall(output, stream, state, args.toolCallId, "read", { path: args.path });
 			const { execResult } = await resolveExecHandler(
 				args,
@@ -1547,12 +1645,10 @@ async function handleExecServerMessage(
 				reason => buildReadRejectedResult(args.path, reason),
 				error => buildReadErrorResult(args.path, error),
 			);
-			sendExecClientMessage(h2Request, execMsg, "readResult", execResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "readResult", value: execResult });
 		}
 		case "lsArgs": {
 			const args = execMsg.message.value;
-			if (!args.toolCallId) args.toolCallId = crypto.randomUUID();
 			// Bridge maps `ls` onto the coding-agent `read` tool (see
 			// `CursorExecHandlers.ls` in `pi-coding-agent/src/cursor.ts`); mirror
 			// that here so the synthesized block matches the toolResult's `toolName`.
@@ -1565,12 +1661,10 @@ async function handleExecServerMessage(
 				reason => buildLsRejectedResult(args.path, reason),
 				error => buildLsErrorResult(args.path, error),
 			);
-			sendExecClientMessage(h2Request, execMsg, "lsResult", execResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "lsResult", value: execResult });
 		}
 		case "grepArgs": {
 			const args = execMsg.message.value;
-			if (!args.toolCallId) args.toolCallId = crypto.randomUUID();
 			// Cursor's model sometimes emits `grepArgs` with an empty `pattern` and a
 			// non-empty `glob`, expecting grep to list files matching the glob. Reject
 			// that up front with an actionable error so the model retries with a real
@@ -1579,8 +1673,10 @@ async function handleExecServerMessage(
 			// synthesized block has already been persisted with a placeholder pattern.
 			const emptyPatternError = emptyGrepPatternRejection(args.pattern, args.glob);
 			if (emptyPatternError !== null) {
-				sendExecClientMessage(h2Request, execMsg, "grepResult", buildGrepErrorResult(emptyPatternError));
-				return;
+				return sendExecReply(h2Request, execMsg, {
+					case: "grepResult",
+					value: buildGrepErrorResult(emptyPatternError),
+				});
 			}
 			// Mirror the coding-agent bridge's arg mapping so live UI (from
 			// `tool_execution_start`) and rebuilt transcript (from this block)
@@ -1599,12 +1695,10 @@ async function handleExecServerMessage(
 				reason => buildGrepErrorResult(reason),
 				error => buildGrepErrorResult(error),
 			);
-			sendExecClientMessage(h2Request, execMsg, "grepResult", execResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "grepResult", value: execResult });
 		}
 		case "writeArgs": {
 			const args = execMsg.message.value;
-			if (!args.toolCallId) args.toolCallId = crypto.randomUUID();
 			// Match the bridge: prefer `fileText`, fall back to decoded `fileBytes`.
 			const content = args.fileText ?? new TextDecoder().decode(args.fileBytes ?? new Uint8Array());
 			synthesizeCursorExecToolCall(output, stream, state, args.toolCallId, "write", {
@@ -1628,12 +1722,10 @@ async function handleExecServerMessage(
 				reason => buildWriteRejectedResult(args.path, reason),
 				error => buildWriteErrorResult(args.path, error),
 			);
-			sendExecClientMessage(h2Request, execMsg, "writeResult", execResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "writeResult", value: execResult });
 		}
 		case "deleteArgs": {
 			const args = execMsg.message.value;
-			if (!args.toolCallId) args.toolCallId = crypto.randomUUID();
 			synthesizeCursorExecToolCall(output, stream, state, args.toolCallId, "delete", { path: args.path });
 			const { execResult } = await resolveExecHandler(
 				args,
@@ -1643,12 +1735,10 @@ async function handleExecServerMessage(
 				reason => buildDeleteRejectedResult(args.path, reason),
 				error => buildDeleteErrorResult(args.path, error),
 			);
-			sendExecClientMessage(h2Request, execMsg, "deleteResult", execResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "deleteResult", value: execResult });
 		}
 		case "shellArgs": {
 			const args = execMsg.message.value;
-			if (!args.toolCallId) args.toolCallId = crypto.randomUUID();
 			const normalizedArgs: ShellArgs = { ...args, workingDirectory: args.workingDirectory || process.cwd() };
 			// Match the bridge (`CursorExecHandlers.shell`): map `workingDirectory`
 			// → `cwd`, drop non-positive timeouts.
@@ -1667,20 +1757,17 @@ async function handleExecServerMessage(
 				error => buildShellFailureResult(normalizedArgs.command, normalizedArgs.workingDirectory, error),
 			);
 			const sanitizedExecResult = sanitizeShellExecResult(execResult);
-			sendExecClientMessage(h2Request, execMsg, "shellResult", sanitizedExecResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "shellResult", value: sanitizedExecResult });
 		}
 		case "shellStreamArgs": {
 			const args = execMsg.message.value;
-			if (!args.toolCallId) args.toolCallId = crypto.randomUUID();
 			const shellStreamTimeout = args.timeout && args.timeout > 0 ? args.timeout : undefined;
 			synthesizeCursorExecToolCall(output, stream, state, args.toolCallId, "bash", {
 				command: args.command,
 				cwd: args.workingDirectory || undefined,
 				timeout: shellStreamTimeout,
 			});
-			await handleShellStreamArgs(args, execMsg, h2Request, execHandlers, onToolResult);
-			return;
+			return handleShellStreamArgs(args, execMsg, h2Request, execHandlers, onToolResult);
 		}
 		case "backgroundShellSpawnArgs": {
 			const args = execMsg.message.value;
@@ -1695,8 +1782,7 @@ async function handleExecServerMessage(
 					}),
 				},
 			});
-			sendExecClientMessage(h2Request, execMsg, "backgroundShellSpawnResult", execResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "backgroundShellSpawnResult", value: execResult });
 		}
 		case "writeShellStdinArgs": {
 			const execResult = create(WriteShellStdinResultSchema, {
@@ -1707,8 +1793,7 @@ async function handleExecServerMessage(
 					}),
 				},
 			});
-			sendExecClientMessage(h2Request, execMsg, "writeShellStdinResult", execResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "writeShellStdinResult", value: execResult });
 		}
 		case "fetchArgs": {
 			const args = execMsg.message.value;
@@ -1721,12 +1806,10 @@ async function handleExecServerMessage(
 					}),
 				},
 			});
-			sendExecClientMessage(h2Request, execMsg, "fetchResult", execResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "fetchResult", value: execResult });
 		}
 		case "diagnosticsArgs": {
 			const args = execMsg.message.value;
-			if (!args.toolCallId) args.toolCallId = crypto.randomUUID();
 			// Bridge maps `diagnostics` onto the coding-agent `lsp` tool with
 			// `action: "diagnostics"` and `file: path`.
 			synthesizeCursorExecToolCall(output, stream, state, args.toolCallId, "lsp", {
@@ -1741,8 +1824,7 @@ async function handleExecServerMessage(
 				reason => buildDiagnosticsRejectedResult(args.path, reason),
 				error => buildDiagnosticsErrorResult(args.path, error),
 			);
-			sendExecClientMessage(h2Request, execMsg, "diagnosticsResult", execResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "diagnosticsResult", value: execResult });
 		}
 		case "mcpArgs": {
 			const args = execMsg.message.value;
@@ -1756,7 +1838,7 @@ async function handleExecServerMessage(
 			// either way a second `toolResult` under an id that already had one.
 			// Cursor's own exec tools never had this problem because
 			// `synthesizeCursorExecToolCall` builds their block already stamped.
-			markCursorExecDispatched(mcpCall.toolCallId, output, state);
+			markCursorExecDispatched(mcpCall.toolCallId, output);
 			const { execResult } = await resolveExecHandler(
 				mcpCall,
 				execHandlers?.mcp?.bind(execHandlers),
@@ -1765,57 +1847,40 @@ async function handleExecServerMessage(
 				_reason => buildMcpToolNotFoundResult(mcpCall),
 				error => buildMcpErrorResult(error),
 			);
-			sendExecClientMessage(h2Request, execMsg, "mcpResult", execResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "mcpResult", value: execResult });
 		}
 		case "listMcpResourcesExecArgs": {
 			const execResult = create(ListMcpResourcesExecResultSchema, {});
-			sendExecClientMessage(h2Request, execMsg, "listMcpResourcesExecResult", execResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "listMcpResourcesExecResult", value: execResult });
 		}
 		case "readMcpResourceExecArgs": {
 			const execResult = create(ReadMcpResourceExecResultSchema, {});
-			sendExecClientMessage(h2Request, execMsg, "readMcpResourceExecResult", execResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "readMcpResourceExecResult", value: execResult });
 		}
 		case "recordScreenArgs": {
 			const execResult = create(RecordScreenResultSchema, {});
-			sendExecClientMessage(h2Request, execMsg, "recordScreenResult", execResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "recordScreenResult", value: execResult });
 		}
 		case "computerUseArgs": {
 			const execResult = create(ComputerUseResultSchema, {});
-			sendExecClientMessage(h2Request, execMsg, "computerUseResult", execResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "computerUseResult", value: execResult });
 		}
-		default: {
-			log("warn", "unhandledExecMessage", { execCase });
-			// Send a bare ExecClientMessage (id + execId only, no typed result) so the
+		default:
+			log("warn", "unhandledExecMessage", { execCase: execMsg.message.case });
+			// A bare ExecClientMessage (id + execId only, no typed result) so the
 			// server gets an acknowledgement and doesn't hang waiting forever.
-			const ack = create(ExecClientMessageSchema, {
-				id: execMsg.id,
-				execId: execMsg.execId,
-			});
-			const clientMessage = create(AgentClientMessageSchema, {
-				message: { case: "execClientMessage", value: ack },
-			});
-			h2Request.write(frameConnectMessage(toBinary(AgentClientMessageSchema, clientMessage)));
-		}
+			return sendExecReply(h2Request, execMsg, { case: undefined });
 	}
 }
 
-function sendExecClientMessage<C extends NonNullable<ExecClientMessage["message"]["case"]>>(
-	h2Request: http2.ClientHttp2Stream,
-	execMsg: ExecServerMessage,
-	messageCase: C,
-	value: Extract<ExecClientMessage["message"], { case: C }>["value"],
-): void {
+/** The answer one exec request received, kept so a repeat of it is answered without running it again. */
+type ExecReply = ExecClientMessage["message"];
+
+function sendExecReply(h2Request: http2.ClientHttp2Stream, execMsg: ExecServerMessage, reply: ExecReply): ExecReply {
 	const execClientMessage = create(ExecClientMessageSchema, {
 		id: execMsg.id,
 		execId: execMsg.execId,
-		// The generic correlates case and value at every call site; the union
-		// member itself cannot be proven pairwise by TS, hence the assertion.
-		message: { case: messageCase, value } as ExecClientMessage["message"],
+		message: reply,
 	});
 
 	const clientMessage = create(AgentClientMessageSchema, {
@@ -1825,7 +1890,8 @@ function sendExecClientMessage<C extends NonNullable<ExecClientMessage["message"
 	const responseBytes = toBinary(AgentClientMessageSchema, clientMessage);
 	h2Request.write(frameConnectMessage(responseBytes));
 
-	log("execClientMessage", messageCase, value);
+	log("execClientMessage", reply.case, reply.value);
+	return reply;
 }
 
 function sendExecClientStreamClose(h2Request: http2.ClientHttp2Stream, execMsg: ExecServerMessage): void {
@@ -2414,18 +2480,16 @@ function decodeMcpArgValue(value: Uint8Array): unknown {
 }
 
 /**
- * Record that the exec channel has dispatched `toolCallId`, and stamp the
- * assistant-stream block that names it so the agent loop treats the call as
- * already run.
+ * Stamp the assistant-stream block that names `toolCallId` so the agent loop
+ * treats the call as already run.
  *
- * Both halves are needed because the wire fixes no order between the exec
- * request and the `toolCallStarted` update: a block that already exists is
- * stamped now, and one that opens later reads
- * {@link BlockState.execDispatchedToolCalls}.
+ * The wire fixes no order between the exec request and the `toolCallStarted`
+ * update: a block that already exists is stamped now, and one that opens later
+ * reads {@link BlockState.execDispatches}, which {@link dispatchExecOnce}
+ * records before the call runs.
  */
-function markCursorExecDispatched(toolCallId: string, output: AssistantMessage, state: BlockState): void {
+function markCursorExecDispatched(toolCallId: string, output: AssistantMessage): void {
 	if (!toolCallId) return;
-	state.execDispatchedToolCalls.add(toolCallId);
 	for (const block of output.content) {
 		if (block.type === "toolCall" && block.id === toolCallId) {
 			(block as CursorExecResolvedCarrier)[kCursorExecResolved] = true;
@@ -2818,7 +2882,7 @@ export function processInteractionUpdate(
 					...(value.callId ? { [kCursorWireCallId]: value.callId } : {}),
 					// The exec channel may have dispatched this call before its block
 					// opened, in which case the tool has already run and answered.
-					...(state.execDispatchedToolCalls.has(toolCallId) ? { [kCursorExecResolved]: true } : {}),
+					...(state.execDispatches.has(toolCallId) ? { [kCursorExecResolved]: true } : {}),
 				};
 				output.content.push(block);
 				state.setToolCall(block);
