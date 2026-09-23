@@ -26,6 +26,7 @@
 - The extension dashboard's overflowing tab strip reserves room for the paging arrows and stays on one row at every width.
 - A bare-command picker on a narrow terminal narrows a long usage column so every subcommand keeps its description.
 - Switching to a model on another provider after a server-side compaction no longer resends the whole session history: before the next prompt, the session asks the model that minted the compaction to summarize it and continues from that summary, reported as an auto-compaction with reason `provider_switch`.
+- A prompt or idle compaction on a session that switched providers after a server-side compaction ports that compaction first, instead of summarizing the re-expanded history on the new provider in hundreds of staged requests.
 - A staged compaction summary that fails part way resumes on the next attempt from the segments that never completed instead of restarting from the first segment.
 
 ## [1.5.3] - 2026-09-22

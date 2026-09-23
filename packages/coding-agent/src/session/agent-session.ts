@@ -9062,6 +9062,13 @@ export class AgentSession {
 			// synchronous stderr line per phase, so a "submit feels slow" report
 			// names the phase that spent the time instead of offering a guess.
 			startupMarker("prompt:compaction-check:start");
+			// Port first: until an unreadable server-side window is ported, the
+			// rebuilt context re-expands every message the window stood in for, and
+			// any check below would measure (and compact) that expanded span.
+			await this.#portUnreadableRemoteCompaction();
+			if (this.#promptGeneration !== generation) {
+				return;
+			}
 			// Check whether an aborted response left enough context pressure to require
 			// in-place compaction before this prompt starts its agent loop.
 			const lastAssistant = this.#findLastAssistantMessage();
@@ -9207,10 +9214,6 @@ export class AgentSession {
 			}
 
 			startupMarker("prompt:pre-prompt-compaction:start");
-			await this.#portUnreadableRemoteCompaction();
-			if (this.#promptGeneration !== generation) {
-				return;
-			}
 			await this.#runPrePromptCompactionIfNeeded(messages);
 			startupMarker("prompt:pre-prompt-compaction:done");
 			if (this.#promptGeneration !== generation) {
@@ -11375,6 +11378,9 @@ export class AgentSession {
 	/** Trigger idle compaction through the auto-compaction flow (with UI events). */
 	async runIdleCompaction(): Promise<void> {
 		if (this.isStreaming || this.isCompacting) return;
+		// A port replaces the expanded span with a summary, which is the reduction
+		// the idle pass exists for; compacting again on top of it would pay twice.
+		if (await this.#portUnreadableRemoteCompaction()) return;
 		await this.#runAutoCompaction("idle", false);
 	}
 
@@ -11665,12 +11671,12 @@ export class AgentSession {
 	 * with the same keep marker. When that provider is unavailable the fallback
 	 * stands, and the next compaction on the active provider summarizes the span.
 	 */
-	async #portUnreadableRemoteCompaction(): Promise<void> {
+	async #portUnreadableRemoteCompaction(): Promise<boolean> {
 		const model = this.model;
-		if (!model || this.isCompacting) return;
+		if (!model || this.isCompacting) return false;
 		const entry = getLatestCompactionEntry(this.sessionManager.getBranch());
 		const remote = entry ? getRemoteCompactionPreserveData(entry.preserveData) : undefined;
-		if (!entry || !remote || remoteCompactionReplayableBy(entry.preserveData, model.provider)) return;
+		if (!entry || !remote || remoteCompactionReplayableBy(entry.preserveData, model.provider)) return false;
 		const source = this.#modelRegistry.find(remote.provider, remote.model);
 		const apiKey = source ? await this.#modelRegistry.getApiKey(source, this.sessionId) : undefined;
 		if (!source || !apiKey) {
@@ -11679,7 +11685,7 @@ export class AgentSession {
 				mintedBy: `${remote.provider}/${remote.model}`,
 				activeProvider: model.provider,
 			});
-			return;
+			return false;
 		}
 
 		const compactionSettings = this.settings.getGroup("compaction");
@@ -11733,6 +11739,7 @@ export class AgentSession {
 				aborted: false,
 				willRetry: false,
 			});
+			return true;
 		} catch (error) {
 			const aborted = controller.signal.aborted || error instanceof CompactionCancelledError;
 			logger.warn("Porting a server-side compaction to the active provider failed", {
@@ -11752,6 +11759,7 @@ export class AgentSession {
 					? undefined
 					: `Could not summarize the ${remote.provider} compaction for ${model.provider}: ${errorMessage(error)}`,
 			});
+			return false;
 		} finally {
 			if (this.#autoCompactionAbortController === controller) this.#autoCompactionAbortController = undefined;
 		}

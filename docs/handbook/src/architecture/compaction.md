@@ -375,13 +375,15 @@ usable compaction and re-expands only the messages after it. A branch with no us
 re-expands from its first entry. No history is lost: compaction advances `firstKeptEntryId`, and the
 hidden span stays in the session file.
 
-Before the next prompt on the new provider, the session ports the unreadable compaction. It sends
+Before the next prompt on the new provider, and before any compaction check of that prompt or an
+idle compaction measures the context, the session ports the unreadable compaction. It sends
 the window to the model that minted it with the summarization instruction appended as one user turn
 (`summarizeRemoteCompactionWindow`), and appends the answer as a local compaction with the same
 `firstKeptEntryId`. The request covers the compacted window, not the raw span, so it stays small on
 a long session. The port emits `auto_compaction_start` with reason `provider_switch`, then
-`auto_compaction_end`. When the minting model has no credentials or the request fails, the fallback
-rebuild stands and the next compaction on the active provider summarizes the span.
+`auto_compaction_end`. A successful port satisfies an idle compaction, which then sends nothing more.
+When the minting model has no credentials or the request fails, the fallback rebuild stands and the
+next compaction on the active provider summarizes the span.
 
 Sessions compacted by the earlier, removed path (`preserveData.openaiRemoteCompaction`, whose
 summary field held a fixed placeholder) load through the same rule and are never ported.

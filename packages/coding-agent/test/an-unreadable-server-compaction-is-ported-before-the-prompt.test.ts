@@ -5,16 +5,23 @@
  * next prompt with that window dropped, and a rebuild re-expanded every message
  * the window stood in for: on a long session, a request of millions of tokens.
  *
- * The contract: before the prompt is built, the minting provider summarizes its
- * own window once, the summary is appended as a local compaction with the same
- * keep marker, and the prompt carries that summary instead of the raw span. When
- * the minting provider has no credential nothing is sent to it, and the rebuild
- * fallback stands. A session on the minting provider replays the window and never
- * pays for a port.
+ * The contract: before the prompt is built, and before any automatic compaction
+ * measures the context, the minting provider summarizes its own window once, the
+ * summary is appended as a local compaction with the same keep marker, and the
+ * prompt carries that summary instead of the raw span. When the minting provider
+ * has no credential nothing is sent to it, and the rebuild fallback stands. A
+ * session on the minting provider replays the window and never pays for a port.
+ *
+ * The ordering is the class this suite closes: a compaction check that runs
+ * first (the pre-prompt check of the last assistant turn, the idle pass) sees the
+ * re-expanded span over its threshold and summarizes it on the active provider,
+ * which on a long session is hundreds of staged requests, and the port that would
+ * have cost one request never runs because the newest compaction is then local.
  *
  * Not caught here: the wire shape the minting provider receives for the window
- * (covered by build-context-remote-compaction.test.ts), and ports of a window
- * minted by a provider absent from the model registry.
+ * (covered by build-context-remote-compaction.test.ts), ports of a window
+ * minted by a provider absent from the model registry, and the post-turn and
+ * mid-run checks, which only see an unported window when the port failed.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
@@ -104,16 +111,30 @@ describe("a server-side compaction the active provider cannot read", () => {
 		vi.restoreAllMocks();
 	});
 
-	async function harness(active: { provider: string; id: string }, mintingHasCredential: boolean): Promise<Harness> {
+	async function harness(
+		active: { provider: string; id: string },
+		mintingHasCredential: boolean,
+		options: { overThreshold?: boolean } = {},
+	): Promise<Harness> {
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), `auth-${cleanups.length}.db`));
 		authStorage.setRuntimeApiKey(active.provider, "test-key");
 		if (mintingHasCredential) authStorage.setRuntimeApiKey(MINTING.provider, "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), `models-${cleanups.length}.yml`));
 		const sessionManager = SessionManager.inMemory(tempDir.path());
+		const activeModel = bundled(active);
+		// Over threshold: the span the window hid, re-expanded, alone outgrows the
+		// active model's window, as a long session's does.
+		const contextWindow = activeModel.contextWindow;
+		if (!contextWindow) throw new Error(`Expected a context window on ${active.provider}/${active.id}`);
+		const padding = options.overThreshold ? " filler".repeat(contextWindow) : "";
 
 		const minting = bundled(MINTING);
 		for (let i = 0; i < 4; i++) {
-			sessionManager.appendMessage({ role: "user", content: `discarded turn ${i}`, timestamp: Date.now() });
+			sessionManager.appendMessage({
+				role: "user",
+				content: `discarded turn ${i}${padding}`,
+				timestamp: Date.now(),
+			});
 			sessionManager.appendMessage({
 				role: "assistant",
 				content: [{ type: "text", text: `discarded reply ${i}` }],
@@ -143,7 +164,6 @@ describe("a server-side compaction the active provider cannot read", () => {
 		});
 		sessionManager.appendModelChange(`${active.provider}/${active.id}`);
 
-		const activeModel = bundled(active);
 		const sideCalls: Harness["sideCalls"] = [];
 		const mainContexts: Context[] = [];
 		const sideStreamFn: StreamFn = (model, context) => {
@@ -169,7 +189,11 @@ describe("a server-side compaction the active provider cannot read", () => {
 		session = new AgentSession({
 			agent,
 			sessionManager,
-			settings: Settings.isolated({ "compaction.enabled": false, "todo.enabled": false, "todo.reminders": false }),
+			settings: Settings.isolated({
+				"compaction.enabled": options.overThreshold === true,
+				"todo.enabled": false,
+				"todo.reminders": false,
+			}),
 			modelRegistry,
 			sideStreamFn,
 		});
@@ -212,6 +236,39 @@ describe("a server-side compaction the active provider cannot read", () => {
 		expect(starts.map(event => event.reason)).toEqual(["provider_switch"]);
 		const end = h.events.find(event => event.type === "auto_compaction_end");
 		expect(end?.type === "auto_compaction_end" && end.result?.summary).toBe(PORTED_SUMMARY);
+	});
+
+	it("is ported before the pre-prompt check measures the re-expanded span", async () => {
+		const h = await harness(FOREIGN, true, { overThreshold: true });
+		await h.session.prompt("next question");
+		await h.session.waitForIdle();
+
+		// One request, to the minting provider; nothing summarized the raw span on
+		// the active provider.
+		expect(h.sideCalls.map(call => `${call.model.provider}/${call.model.id}`)).toEqual([
+			`${MINTING.provider}/${MINTING.id}`,
+		]);
+		expect(h.events.filter(event => event.type === "auto_compaction_start").map(event => event.reason)).toEqual([
+			"provider_switch",
+		]);
+		const compactions = h.sessionManager.getBranch().filter(entry => entry.type === "compaction");
+		expect(compactions.map(entry => entry.type === "compaction" && entry.summary)).toEqual(["", PORTED_SUMMARY]);
+		expect(h.mainContexts).toHaveLength(1);
+		expect(h.mainContexts[0].messages.map(textOf).some(text => text.includes("discarded turn"))).toBe(false);
+	});
+
+	it("is ported, and not compacted again, by the idle pass", async () => {
+		const h = await harness(FOREIGN, true, { overThreshold: true });
+		await h.session.runIdleCompaction();
+
+		expect(h.sideCalls.map(call => `${call.model.provider}/${call.model.id}`)).toEqual([
+			`${MINTING.provider}/${MINTING.id}`,
+		]);
+		const compactions = h.sessionManager.getBranch().filter(entry => entry.type === "compaction");
+		expect(compactions.map(entry => entry.type === "compaction" && entry.summary)).toEqual(["", PORTED_SUMMARY]);
+		expect(
+			h.session.messages.map(message => JSON.stringify(message)).some(text => text.includes("discarded turn")),
+		).toBe(false);
 	});
 
 	it("is left in place, with no request to the minting provider, when it has no credential", async () => {
