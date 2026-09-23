@@ -8,6 +8,7 @@
 - Fixed EventStream leaking waiting resolvers and hanging when async iteration is terminated early or aborted.
 - Fixed GitLab Duo Workflow socket leaking its abort signal listener when the connection settles.
 - Finalized all prepared statements upon closing the SQLite auth credential store, preventing handle leaks.
+- Fixed the credential store failing to open with `SQLITE_READONLY_DIRECTORY` in a read-only credential directory after a clean close; the store keeps its WAL files on close.
 - Converted idle iterator grace timeout race to Promise.withResolvers and typed Google tool call arguments cleanly; no user-visible change.
 
 ## [1.5.3] - 2026-09-22

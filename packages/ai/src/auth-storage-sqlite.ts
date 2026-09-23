@@ -17,7 +17,7 @@
  * `auth-storage.ts` re-exports this class, so every existing importer of `@veyyon/ai/auth-storage` or of
  * the package barrel is unaffected.
  */
-import { Database, type Statement } from "bun:sqlite";
+import { constants, Database, type Statement } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getAgentDbPath } from "@veyyon/utils/dirs";
@@ -317,6 +317,11 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		// recovery). Without this, concurrent veyyon startups can crash here with
 		// `SQLITE_BUSY` / `SQLITE_BUSY_RECOVERY`. See issue #2421.
 		this.#db.run("PRAGMA busy_timeout = 5000");
+		// Keep `agent.db-wal` and `agent.db-shm` on close. A WAL database opens only when
+		// both files exist or can be created, so deleting them on close would make the
+		// next launch fail with SQLITE_READONLY_DIRECTORY on a read-only credential
+		// directory (locked-down images, read-only home mounts).
+		this.#db.fileControl(constants.SQLITE_FCNTL_PERSIST_WAL, 1);
 		this.#db.run(`
 			PRAGMA journal_mode=WAL;
 			PRAGMA synchronous=NORMAL;
