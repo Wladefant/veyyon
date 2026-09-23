@@ -539,10 +539,10 @@ function lineFitSource(raw: string, width: number): string {
 		if (raw.charCodeAt(i) === 0x1b) {
 			const end = ansiSequenceEnd(raw, i);
 			if (end < 0) break;
-			if (ansiSequenceHasVisiblePayload(raw, i)) {
-				const sequence = raw.slice(i, end);
-				if (output.length + sequence.length <= maxSourceLength) {
-					output += sequence;
+			const sequence = raw.slice(i, end);
+			if (output.length + sequence.length <= maxSourceLength) {
+				output += sequence;
+				if (ansiSequenceHasVisiblePayload(raw, i)) {
 					cells += visibleWidth(sequence);
 				}
 			}
