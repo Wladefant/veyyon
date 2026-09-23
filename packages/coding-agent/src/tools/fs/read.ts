@@ -67,7 +67,6 @@ import {
 import { convertFileWithMarkit } from "../../utils/markit";
 import { type ArchiveReader, formatArchiveEntryLines, openArchive, parseArchivePathCandidates } from "../../utils/zip";
 import { buildDirectoryTree, buildTopLevelDirectoryListing, type DirectoryTree } from "../../workspace-tree";
-import type { ToolEffectScope } from "../core/effect-scope";
 import { applyListLimit } from "../core/list-limit";
 import { type InlinePricingSource, inlineBudgetFor } from "../core/output-artifact";
 import { type OutputMeta, resolveOutputMaxColumns, type TruncationOptions } from "../core/output-meta";
@@ -1228,7 +1227,6 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	// schemes are filtered by the boundary itself. See cwd-boundary.ts.
 	readonly filesystemTargets = (args: unknown, cwd = this.session.cwd): string[] => readFilesystemTargets(args, cwd);
 	// Every path this call can reach is a declared target or lives under one.
-	readonly effectScope: ToolEffectScope = "declared-targets";
 	readonly label = "Read";
 	readonly loadMode = "essential";
 	readonly description: string;

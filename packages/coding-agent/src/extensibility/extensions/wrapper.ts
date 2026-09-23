@@ -17,7 +17,7 @@ import {
 } from "../../tools/core/approval";
 import { cwdEscapingTargets, formatCwdBoundaryReason } from "../../tools/core/cwd-boundary";
 import { TOOL_EXECUTION_ENTRIES, type ToolExecutionEntryName } from "../../tools/core/execution-registry";
-import { recordRefusal, type ToolPolicyFrame } from "../../tools/core/refusal-fence";
+import type { ToolPolicyFrame } from "../../tools/core/refusal-fence";
 import { secretUseApprovalReason } from "../../tools/core/secret-use-boundary";
 import { ToolAbortError } from "../../tools/core/tool-errors";
 import { normalizeToolEventInput, resolveToolEventInput } from "../tool-event-input";
@@ -231,7 +231,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		onUpdate?: AgentToolUpdateCallback<TDetails, TParameters>,
 		context?: AgentToolContext,
 	): Promise<AgentToolResult<TDetails, TParameters>> {
-		context = TOOL_EXECUTION_ENTRIES[this.#entry].fence(this.tool, params, context, this.#sessionPolicy);
+		context = TOOL_EXECUTION_ENTRIES[this.#entry].fence(this.tool, context, this.#sessionPolicy);
 		// 1. Check approval policy (before extension handlers).
 		// CLI `--auto-approve` / `--yolo` sets approval mode to yolo.
 		// User `tools.approval.<tool>` policies are still applied in all modes.
@@ -492,13 +492,15 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 					),
 				})) as ToolCallEventResult | undefined;
 
+				// A block answers this call only. It is not a standing denial: an approval
+				// guard that blocks while it waits for the operator must be free to allow the
+				// next call, so nothing is recorded in settings or session approvals here.
 				if (callResult?.block) {
-					const reason =
+					throw new Error(
 						callResult.reason ||
-						`An extension blocked this ${this.tool.name} call and gave no reason. Do not retry it; tell ` +
-							"the operator which extension is blocking so they can fix or remove it.";
-					recordRefusal(this.tool.name, reason, context, undefined, callResult.subject);
-					throw new Error(reason);
+							`An extension blocked this ${this.tool.name} call and gave no reason. Do not retry it; tell ` +
+								"the operator which extension is blocking so they can fix or remove it.",
+					);
 				}
 			} catch (err) {
 				if (err instanceof Error) {
