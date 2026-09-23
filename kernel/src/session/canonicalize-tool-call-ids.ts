@@ -55,6 +55,13 @@ export function canonicalizeToolCallIdsInMessage(
 		for (let i = 0; i < message.content.length; i++) {
 			const block = message.content[i];
 			if (block.type !== "toolCall") continue;
+			// Native Responses history replays its original call_id/item id pair.
+			// Rewriting only the visible block leaves its result orphaned on the wire.
+			// Keep both halves in the native namespace; never rewrite opaque history.
+			if (message.providerPayload?.type === "openaiResponsesHistory") {
+				map.set(block.id, block.id);
+				continue;
+			}
 			const canonical = resolveCanonicalToolCallId(block.id, map, allocate);
 			if (canonical === block.id) continue;
 			content ??= message.content.slice();

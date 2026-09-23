@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Preserved the session working directory through SimpleStreamOptions mapping so Full-mode ChatGPT Web turns receive the trusted Codex environment context ([#22](https://github.com/Wladefant/veyyon/issues/22)).
 - Anthropic OAuth pairs Claude Code 2.1.280 with Agent SDK 0.3.280 so Opus 5.5 requests pass the minimum-client-version gate.
 - The ChatGPT Web stream-failure path asks `isTimeoutError` from `@veyyon/utils` whether the abort reason was a deadline, instead of comparing `reason.name` against `"TimeoutError"` itself ([#64](https://github.com/Wladefant/veyyon/issues/64)).
 - ChatGPT Web now falls back to stored `openai-codex` OAuth when it has no dedicated credential or environment token. Auth discovery and token peeking recognize the fallback, and requests refresh the original Codex row without copying credentials.
