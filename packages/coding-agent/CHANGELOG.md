@@ -13,6 +13,7 @@
 - Settings panel presents booleans as On/Off, humanizes enum and status labels, displays the selected setting description in the footer, simplifies default model display, and aligns the value column.
 - Bare-command pickers (`/mcp`, `/usage`, `/account`, `/debug` and the rest) widen to show every usage hint and description whole, cut a usage that cannot fit after a whole word, print one key legend in the footer with `esc close` instead of `esc/ctrl+c close`, name the search there while the list is searchable, and draw a dim scrollbar with a silver thumb.
 - The `/debug` card is titled `/debug`, matching the other bare-command cards.
+- Provider request shaping (secret redaction, Anthropic metadata, tool-order check) moved from `session/agent-session` to `session/agent-session-provider-request`; no user-visible change.
 
 ### Fixed
 
