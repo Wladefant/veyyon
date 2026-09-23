@@ -22,6 +22,7 @@
 - Bare-command pickers (`/mcp`, `/usage`, `/account`, `/debug` and the rest) widen to show every usage hint and description whole, cut a usage that cannot fit after a whole word, print one key legend in the footer with `esc close` instead of `esc/ctrl+c close`, name the search there while the list is searchable, and draw a dim scrollbar with a silver thumb.
 - The `/debug` card is titled `/debug`, matching the other bare-command cards.
 - Provider request shaping (secret redaction, Anthropic metadata, tool-order check) moved from `session/agent-session` to `session/agent-session-provider-request`; no user-visible change.
+- Home-path shortening in tool cards compiles its pattern once per home directory instead of on every call; no user-visible change.
 - Replaced `AgentToolResult<any>` with `AgentToolResult<unknown>` and concrete result details across agent loop tool dispatch; no user-visible change.
 - Settings list adapts label width dynamically with clean truncation and wraps inline descriptions to fit within the visible viewport width.
 - Replaced `any` types in `getNested` scraper utility with `unknown`; no user-visible behavior change.
@@ -48,6 +49,7 @@
 - A session rebuilt on a provider that cannot replay its newest server-side compaction starts from the newest compaction that provider can use (`getEffectiveCompactionEntry`) instead of re-expanding the branch from its first entry.
 - Deleting a session removes its artifacts directory at the path `sessionFileStem` resolves, the same path the session created it at, instead of cutting a fixed six characters off the file name.
 - A session file whose append failed on disk is rewritten in full on the next write instead of being treated as current, and `ensureOnDisk` retries after a disk failure instead of returning without writing.
+- Resuming a long session walks its active branch once instead of once per startup reader: `SessionManager` keeps the root-to-leaf path and extends it on append, which cut a 214,000-entry resume from 3.5 s to 3.0 s.
 - Closed database connections and active sockets when stopping the stats dashboard server, and stopped server on interrupt signal.
 - Validated request identifier and limit parameters in API routes against non-numeric inputs.
 - `SelectList.naturalWidth()` counts the description column's minimum width, so a list sized to it shows every description whole.
