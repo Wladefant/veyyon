@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- A session rebuilt on a provider that cannot replay its newest server-side compaction starts from the newest compaction that provider can use (`getEffectiveCompactionEntry`) instead of re-expanding the branch from its first entry.
+
 ## [1.5.0] - 2026-09-18
 
 ### Added

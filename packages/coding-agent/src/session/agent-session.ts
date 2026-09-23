@@ -60,15 +60,18 @@ import {
 	computeFileLists,
 	createCompactionSummaryMessage,
 	createFileOps,
+	DEFAULT_RESERVE_TOKENS,
 	estimateCompactionRequestTokens,
 	estimateTokens,
 	extractFileOpsFromMessages,
 	formatCompactionThreshold,
 	generateBranchSummary,
 	generateHandoffFromContext,
+	getRemoteCompactionPreserveData,
 	hasLegacyArchive,
 	prepareCompaction,
 	redactLegacyArchiveText,
+	remoteCompactionReplayableBy,
 	renderHandoffPrompt,
 	renderTailElisionArtifact,
 	renderTailElisionMarker,
@@ -84,6 +87,8 @@ import {
 	type SummaryOptions,
 	serverCompactionRouteAbsent,
 	shouldCompact,
+	stripRemoteCompactionPreserveData,
+	summarizeRemoteCompactionWindow,
 	upsertFileOperations,
 } from "@veyyon/agent-core/compaction";
 import { modelServesPrefixCacheHits } from "@veyyon/agent-core/compaction/cache-aligned-context";
@@ -195,6 +200,7 @@ import {
 } from "@veyyon/kernel/session/retry-policy";
 import {
 	type BuildSessionContextOptions,
+	getEffectiveCompactionEntry,
 	getLatestCompactionEntry,
 	getRestorableSessionModels,
 	type SessionContext,
@@ -1255,6 +1261,12 @@ export class AgentSession {
 	 * instead of paying the single request's timeout again.
 	 */
 	#stagedSummaryModels = new Set<string>();
+	/**
+	 * Staged-summary requests that completed during a compaction that then failed,
+	 * so the retry resumes where it stopped instead of re-sending every segment.
+	 * Cleared whenever a summary is produced.
+	 */
+	#stagedSummaryCheckpoints = new Map<string, string>();
 	/**
 	 * Tokens the last compaction's summarization payload exceeded the widest
 	 * candidate window by, or `undefined` when no candidate was skipped for size.
@@ -9309,6 +9321,10 @@ export class AgentSession {
 			}
 
 			startupMarker("prompt:pre-prompt-compaction:start");
+			await this.#portUnreadableRemoteCompaction();
+			if (this.#promptGeneration !== generation) {
+				return;
+			}
 			await this.#runPrePromptCompactionIfNeeded(messages);
 			startupMarker("prompt:pre-prompt-compaction:done");
 			if (this.#promptGeneration !== generation) {
@@ -10930,7 +10946,7 @@ export class AgentSession {
 	 */
 	async #pruneToolOutputs(): Promise<{ prunedCount: number; tokensSaved: number } | undefined> {
 		const branchEntries = this.sessionManager.getBranch();
-		const keepBoundaryId = getLatestCompactionEntry(branchEntries)?.firstKeptEntryId;
+		const keepBoundaryId = this.#promptCompaction(branchEntries)?.firstKeptEntryId;
 		const result = pruneToolOutputs(
 			branchEntries,
 			this.#withPlanProtection({
@@ -10972,7 +10988,7 @@ export class AgentSession {
 		const { supersedeReads, dropUseless } = this.settings.getGroup("compaction");
 		if (!supersedeReads && !dropUseless) return undefined;
 		const branchEntries = this.sessionManager.getBranch();
-		const keepBoundaryId = getLatestCompactionEntry(branchEntries)?.firstKeptEntryId;
+		const keepBoundaryId = this.#promptCompaction(branchEntries)?.firstKeptEntryId;
 		const result = pruneSupersededToolResults(
 			branchEntries,
 			this.#withPlanProtection({
@@ -11069,7 +11085,7 @@ export class AgentSession {
 			...(opts.config ?? AGGRESSIVE_SHAKE_CONFIG),
 			// Skip entries summarized away by the latest compaction — shaking them
 			// only churns persisted history with no prompt/cache effect.
-			keepBoundaryId: getLatestCompactionEntry(branchEntries)?.firstKeptEntryId,
+			keepBoundaryId: this.#promptCompaction(branchEntries)?.firstKeptEntryId,
 		});
 		// Heavy-content pass: large tool results and fenced/XML blocks under the
 		// usual size/protect-window/savings gates. Redundancy pass: earlier
@@ -11158,7 +11174,7 @@ export class AgentSession {
 		const branchEntries = this.sessionManager.getBranch();
 		const config = this.#withPlanProtection({
 			...AGGRESSIVE_SHAKE_CONFIG,
-			keepBoundaryId: getLatestCompactionEntry(branchEntries)?.firstKeptEntryId,
+			keepBoundaryId: this.#promptCompaction(branchEntries)?.firstKeptEntryId,
 		});
 		const regions = collectRedundantToolResultRegions(branchEntries, config);
 		if (regions.length === 0) return { toolResultsDropped: 0, tokensFreed: 0 };
@@ -11747,6 +11763,112 @@ export class AgentSession {
 		// The local-estimate floor lives in getContextBreakdown, so this is the
 		// exact number the footline gauge shows.
 		return this.getContextBreakdown({ contextWindow, pendingMessages: messages })?.usedTokens ?? 0;
+	}
+
+	/**
+	 * Replace a server-side compaction the active provider cannot read with a
+	 * summary it can, before the next prompt is built on it.
+	 *
+	 * The newest compaction on the branch can hold a window only another provider
+	 * can decrypt: the session switched providers, resumed onto a different one, or
+	 * a compaction started on the old model landed after the switch. The rebuild
+	 * then falls back to the newest readable compaction and re-expands everything
+	 * since it, which on a long session is more than any context window holds. The
+	 * provider that minted the window can still read it, so one request to that
+	 * provider turns the window into summary text, appended as a local compaction
+	 * with the same keep marker. When that provider is unavailable the fallback
+	 * stands, and the next compaction on the active provider summarizes the span.
+	 */
+	async #portUnreadableRemoteCompaction(): Promise<void> {
+		const model = this.model;
+		if (!model || this.isCompacting) return;
+		const entry = getLatestCompactionEntry(this.sessionManager.getBranch());
+		const remote = entry ? getRemoteCompactionPreserveData(entry.preserveData) : undefined;
+		if (!entry || !remote || remoteCompactionReplayableBy(entry.preserveData, model.provider)) return;
+		const source = this.#modelRegistry.find(remote.provider, remote.model);
+		const apiKey = source ? await this.#modelRegistry.getApiKey(source, this.sessionId) : undefined;
+		if (!source || !apiKey) {
+			logger.warn("Server-side compaction cannot be ported: the model that minted it is unavailable", {
+				compactionId: entry.id,
+				mintedBy: `${remote.provider}/${remote.model}`,
+				activeProvider: model.provider,
+			});
+			return;
+		}
+
+		const compactionSettings = this.settings.getGroup("compaction");
+		const action = resolveCompactionEngineAction(compactionSettings.strategy);
+		const controller = new AbortController();
+		this.#autoCompactionAbortController = controller;
+		try {
+			await this.#emitSessionEvent({ type: "auto_compaction_start", reason: "provider_switch", action });
+			const summary = await summarizeRemoteCompactionWindow(
+				entry,
+				source,
+				compactionSettings.reserveTokens ?? DEFAULT_RESERVE_TOKENS,
+				apiKey,
+				controller.signal,
+				{
+					sessionSystemPrompt: this.#baseSystemPrompt,
+					metadata: this.agent.metadataForProvider(source.provider),
+					initiatorOverride: "agent",
+					telemetry: resolveTelemetry(this.agent.telemetry, this.sessionId),
+					thinkingLevel: this.thinkingLevel,
+					sessionId: this.sessionId,
+					obfuscateProviderText: text => this.obfuscateProviderText(text),
+					completeImpl: this.#sideCompleteImpl,
+					serviceTier: this.#effectiveServiceTier(source),
+				},
+			);
+			if (controller.signal.aborted) throw new CompactionCancelledError();
+			const preserveData = stripRemoteCompactionPreserveData(entry.preserveData);
+			this.sessionManager.appendCompaction(
+				summary,
+				undefined,
+				entry.firstKeptEntryId,
+				entry.tokensBefore,
+				entry.details,
+				false,
+				preserveData,
+			);
+			this.agent.replaceMessages(this.buildDisplaySessionContext().messages);
+			this.#resetAllAdvisorRuntimes();
+			this.#rebasePendingContextSnapshotAfterHistoryRewrite();
+			await this.#emitSessionEvent({
+				type: "auto_compaction_end",
+				action,
+				result: {
+					summary,
+					firstKeptEntryId: entry.firstKeptEntryId,
+					tokensBefore: entry.tokensBefore,
+					details: entry.details,
+					preserveData,
+				},
+				aborted: false,
+				willRetry: false,
+			});
+		} catch (error) {
+			const aborted = controller.signal.aborted || error instanceof CompactionCancelledError;
+			logger.warn("Porting a server-side compaction to the active provider failed", {
+				compactionId: entry.id,
+				mintedBy: `${remote.provider}/${remote.model}`,
+				activeProvider: model.provider,
+				aborted,
+				error: errorMessage(error),
+			});
+			await this.#emitSessionEvent({
+				type: "auto_compaction_end",
+				action,
+				result: undefined,
+				aborted,
+				willRetry: false,
+				errorMessage: aborted
+					? undefined
+					: `Could not summarize the ${remote.provider} compaction for ${model.provider}: ${errorMessage(error)}`,
+			});
+		} finally {
+			if (this.#autoCompactionAbortController === controller) this.#autoCompactionAbortController = undefined;
+		}
 	}
 
 	async #runPrePromptCompactionIfNeeded(messages: AgentMessage[]): Promise<void> {
@@ -13424,6 +13546,7 @@ export class AgentSession {
 	 * request again, so staging is no longer forced.
 	 */
 	#recordSummaryStaging(candidate: Model, result: CompactionResult): void {
+		this.#stagedSummaryCheckpoints.clear();
 		if (result.summaryStages === undefined) return;
 		const key = modelKey(candidate);
 		if (result.summaryStages > 1) this.#stagedSummaryModels.add(key);
@@ -13667,6 +13790,7 @@ export class AgentSession {
 						// that request is billed and paced on a tier they never chose.
 						serviceTier: this.#effectiveServiceTier(candidate),
 						summaryStaging: this.#stagedSummaryModels.has(modelKey(candidate)) ? "staged" : undefined,
+						stagedSummaryCheckpoints: this.#stagedSummaryCheckpoints,
 					},
 				);
 				this.#recordSummaryStaging(candidate, compacted);
@@ -13980,7 +14104,7 @@ export class AgentSession {
 		const branchEntries = this.sessionManager.getBranch();
 		const config = this.#withPlanProtection({
 			...AGGRESSIVE_SHAKE_CONFIG,
-			keepBoundaryId: getLatestCompactionEntry(branchEntries)?.firstKeptEntryId,
+			keepBoundaryId: this.#promptCompaction(branchEntries)?.firstKeptEntryId,
 		});
 		const regions = collectOversizedTextRegions(branchEntries, {
 			excessTokens,
@@ -14321,6 +14445,7 @@ export class AgentSession {
 						completeImpl: this.#sideCompleteImpl,
 						serviceTier: this.#effectiveServiceTier(candidate),
 						summaryStaging: this.#stagedSummaryModels.has(modelKey(candidate)) ? "staged" : undefined,
+						stagedSummaryCheckpoints: this.#stagedSummaryCheckpoints,
 					};
 					const candidateWindow =
 						typeof configuredCompactionWindow === "number" && configuredCompactionWindow > 0
@@ -17562,7 +17687,18 @@ export class AgentSession {
 	}
 
 	/**
-	 * Messages the latest compaction summarized away, oldest first.
+	 * The compaction the prompt is built from: the newest one the active provider
+	 * can read, which is the one `buildSessionContext` applies. A provider switch
+	 * can leave the latest entry an unreadable server-side window, and every pass
+	 * that treats "before the keep marker" as absent from the prompt must use this
+	 * entry's marker, not the latest one's, or it misreads live entries as gone.
+	 */
+	#promptCompaction(branch: readonly SessionEntry[]): CompactionEntry | null {
+		return getEffectiveCompactionEntry(branch, this.model?.provider);
+	}
+
+	/**
+	 * Messages the compaction in effect summarized away, oldest first.
 	 *
 	 * They are gone from the live context by design and they are still what this
 	 * session paid for, so spend accounting adds them back. Everything from the
@@ -17573,7 +17709,7 @@ export class AgentSession {
 	 */
 	#messagesSummarizedAway(): AgentMessage[] {
 		const branch = this.sessionManager.getBranch();
-		const boundary = resolveCompactionBoundaryIndex(branch, getLatestCompactionEntry(branch)?.firstKeptEntryId);
+		const boundary = resolveCompactionBoundaryIndex(branch, this.#promptCompaction(branch)?.firstKeptEntryId);
 		if (boundary <= 0) return [];
 		const summarized: AgentMessage[] = [];
 		for (let index = 0; index < boundary; index++) {
