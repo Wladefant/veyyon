@@ -540,9 +540,13 @@ function lineFitSource(raw: string, width: number): string {
 			const end = ansiSequenceEnd(raw, i);
 			if (end < 0) break;
 			const sequence = raw.slice(i, end);
-			if (output.length + sequence.length <= maxSourceLength) {
+			const visible = ansiSequenceHasVisiblePayload(raw, i);
+			// A zero-width sequence (SGR styling) must leave room for the visible
+			// cells still to come, or a flood of escapes crowds out the text itself.
+			const budget = visible ? maxSourceLength : maxSourceLength - (safeWidth - cells) * 2;
+			if (output.length + sequence.length <= budget) {
 				output += sequence;
-				if (ansiSequenceHasVisiblePayload(raw, i)) {
+				if (visible) {
 					cells += visibleWidth(sequence);
 				}
 			}

@@ -13,7 +13,7 @@
 ### Fixed
 
 - `SelectList.naturalWidth()` counts the description column's minimum width, so a list sized to it shows every description whole.
-- Preserved ANSI styling sequences when fitting long lines exceeding the source limit in the terminal renderer.
+- A line longer than the renderer's source limit keeps its ANSI styling, and a run of styling escapes long enough to fill that limit no longer hides the visible text after it.
 - Removed stale stdout resize and error listeners in ProcessTerminal to prevent listener leaks.
 
 ## [1.5.0] - 2026-09-18
