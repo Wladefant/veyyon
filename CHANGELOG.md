@@ -21,6 +21,7 @@
 - Settings panel presents booleans as On/Off, humanizes enum and status labels, displays the selected setting description in the footer, simplifies default model display, and aligns the value column.
 - Bare-command pickers (`/mcp`, `/usage`, `/account`, `/debug` and the rest) widen to show every usage hint and description whole, cut a usage that cannot fit after a whole word, print one key legend in the footer with `esc close` instead of `esc/ctrl+c close`, name the search there while the list is searchable, and draw a dim scrollbar with a silver thumb.
 - The `/debug` card is titled `/debug`, matching the other bare-command cards.
+- Provider request shaping (secret redaction, Anthropic metadata, tool-order check) moved from `session/agent-session` to `session/agent-session-provider-request`; no user-visible change.
 - Replaced `AgentToolResult<any>` with `AgentToolResult<unknown>` and concrete result details across agent loop tool dispatch; no user-visible change.
 - Settings list adapts label width dynamically with clean truncation and wraps inline descriptions to fit within the visible viewport width.
 - Replaced `any` types in `getNested` scraper utility with `unknown`; no user-visible behavior change.
@@ -41,6 +42,7 @@
 - Fixed EventStream leaking waiting resolvers and hanging when async iteration is terminated early or aborted.
 - Fixed GitLab Duo Workflow socket leaking its abort signal listener when the connection settles.
 - Finalized all prepared statements upon closing the SQLite auth credential store, preventing handle leaks.
+- Fixed the credential store failing to open with `SQLITE_READONLY_DIRECTORY` in a read-only credential directory after a clean close; the store keeps its WAL files on close.
 - Converted idle iterator grace timeout race to Promise.withResolvers and typed Google tool call arguments cleanly; no user-visible change.
 - Finalized SQLite statement handles in modelCacheStamp, preventing statement handle accumulation on shared databases.
 - A session rebuilt on a provider that cannot replay its newest server-side compaction starts from the newest compaction that provider can use (`getEffectiveCompactionEntry`) instead of re-expanding the branch from its first entry.
@@ -49,7 +51,7 @@
 - Closed database connections and active sockets when stopping the stats dashboard server, and stopped server on interrupt signal.
 - Validated request identifier and limit parameters in API routes against non-numeric inputs.
 - `SelectList.naturalWidth()` counts the description column's minimum width, so a list sized to it shows every description whole.
-- Preserved ANSI styling sequences when fitting long lines exceeding the source limit in the terminal renderer.
+- A line longer than the renderer's source limit keeps its ANSI styling, and a run of styling escapes long enough to fill that limit no longer hides the visible text after it.
 - Removed stale stdout resize and error listeners in ProcessTerminal to prevent listener leaks.
 - Replacing or rebinding log transports closes the old transports, so their file streams and timers no longer stay open.
 - `defaultWindowsAclRunner` builds its result promise with `Promise.withResolvers()`; no behavior change.
