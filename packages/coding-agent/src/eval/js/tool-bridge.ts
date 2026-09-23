@@ -173,7 +173,7 @@ export async function callSessionTool(name: string, args: unknown, options: Tool
 	const tool = getTool(options.session, name);
 	const entry = TOOL_EXECUTION_ENTRIES[options.entry ?? "eval.tool-bridge"];
 	const context = options.session.getToolContext?.() ?? { settings: options.session.settings };
-	entry.assert(tool, args, context);
+	entry.assert(tool, context);
 	const normalizedArgs = normalizeArgs(args);
 	const toolCallId = `js-${name}-${crypto.randomUUID()}`;
 	try {

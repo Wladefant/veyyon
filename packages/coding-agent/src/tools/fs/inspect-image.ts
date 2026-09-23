@@ -18,7 +18,6 @@ import {
 	MAX_IMAGE_INPUT_BYTES,
 	webpExclusionForModel,
 } from "../../utils/image-loading";
-import type { ToolEffectScope } from "../core/effect-scope";
 import { ToolError } from "../core/tool-errors";
 import type { ToolSession } from "../index";
 import { inspectImageToolView } from "./inspect-image-view";
@@ -109,7 +108,6 @@ export class InspectImageTool implements AgentTool<typeof inspectImageSchema, In
 	// boundary: an out-of-cwd image prompts in non-yolo modes. See cwd-boundary.ts.
 	readonly filesystemTargets = (args: unknown): string[] => inspectImageFilesystemTargets(args);
 	// The declared image path is the only file this call reads.
-	readonly effectScope: ToolEffectScope = "declared-targets";
 	readonly label = "InspectImage";
 	readonly loadMode = "discoverable";
 	readonly summary = "Describe or analyze an image file";
