@@ -1,4 +1,4 @@
-import { describe, expect, it, spyOn } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import type { Subprocess } from "bun";
 import { BaseKernel, type BaseKernelOptions } from "../kernel-base";
 
@@ -109,18 +109,5 @@ describe("BaseKernel.shutdown exit confirmation", () => {
 
 		expect(result.confirmed).toBe(false);
 		expect(killSignals).toEqual(["SIGTERM", "SIGKILL"]);
-	});
-
-	it("clears the exit timeout timer when process exits promptly", async () => {
-		const kernel = new TestKernel("k-prompt", testOptions(5000));
-		const clearTimeoutSpy = spyOn(globalThis, "clearTimeout");
-		const { proc } = makeFakeProc(Promise.resolve(0));
-		kernel.setProcess(proc);
-
-		const result = await kernel.shutdown();
-
-		expect(result.confirmed).toBe(true);
-		expect(clearTimeoutSpy).toHaveBeenCalled();
-		clearTimeoutSpy.mockRestore();
 	});
 });

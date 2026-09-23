@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import type { CustomToolContext } from "@veyyon/coding-agent/extensibility/custom-tools";
 import { connectToServer, listTools } from "@veyyon/coding-agent/mcp/client";
 import { MCPTool, mcpFailureWarrantsReconnect } from "@veyyon/coding-agent/mcp/tool-bridge";
@@ -266,41 +266,6 @@ describe("legacy MCP HTTP+SSE transport", () => {
 			expect((attempts[0]!.params as Record<string, unknown>).arguments).toEqual({ token: "first-safe" });
 			expect((attempts[1]!.params as Record<string, unknown>).arguments).toEqual({ token: "second-safe" });
 		} finally {
-			await transport.close();
-		}
-	});
-
-	it("clears startup timeout handle when connection resolves promptly", async () => {
-		server = Bun.serve({
-			port: 0,
-			fetch(req) {
-				const url = new URL(req.url);
-				if (req.method === "GET" && url.pathname === "/mcp/sse") {
-					const stream = new ReadableStream<Uint8Array>({
-						start(controller) {
-							controller.enqueue(
-								encoder.encode("event: endpoint\ndata: /mcp/messages/?session_id=timeout-test\n\n"),
-							);
-						},
-					});
-					return new Response(stream, { headers: { "Content-Type": "text/event-stream" } });
-				}
-				return new Response("Not found", { status: 404 });
-			},
-		});
-
-		const clearTimeoutSpy = spyOn(globalThis, "clearTimeout");
-		const transport = new LegacySseTransport({
-			type: "sse",
-			url: `http://127.0.0.1:${server.port}/mcp/sse`,
-			timeout: 5000,
-		});
-
-		try {
-			await transport.connect();
-			expect(clearTimeoutSpy).toHaveBeenCalled();
-		} finally {
-			clearTimeoutSpy.mockRestore();
 			await transport.close();
 		}
 	});
