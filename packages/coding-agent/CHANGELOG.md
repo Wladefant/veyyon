@@ -11,6 +11,7 @@
 
 ### Fixed
 
+- A headless `browser` launch that fails on Windows (for example Chromium never exposing DevTools under a `RemoteDebuggingAllowed = 0` policy) no longer kills the host process and every session in it: the browser profile is owned by veyyon rather than puppeteer, so its failed-launch cleanup can no longer raise an unhandled `EBUSY` rejection, and the tool reports the policy as the cause ([#95](https://github.com/Wladefant/veyyon/pull/95)).
 - Extension approval-required blocks stop the current call without persisting a user refusal; explicit and legacy refusals retain their existing fence ([#88](https://github.com/Wladefant/veyyon/issues/88)).
 - Telegram control can deliver to and observe the authenticated live terminal owner without reopening its transcript in a GUI host ([#88](https://github.com/Wladefant/veyyon/issues/88)).
 
