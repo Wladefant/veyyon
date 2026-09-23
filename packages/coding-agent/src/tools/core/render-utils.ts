@@ -117,7 +117,7 @@ export function expandKeyHint(): string {
  */
 export function getPreviewLines(text: string, maxLines: number, maxLineLen: number, ellipsis?: Ellipsis): string[] {
 	const lines = text.split("\n").filter(l => l.trim());
-	return lines.slice(0, maxLines).map(l => truncateToWidth(l.trim(), maxLineLen, ellipsis));
+	return lines.slice(0, maxLines).map(l => truncateToWidth(replaceTabs(l.trim()), maxLineLen, ellipsis));
 }
 
 /**

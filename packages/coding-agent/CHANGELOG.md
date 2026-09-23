@@ -16,6 +16,9 @@
 
 ### Fixed
 
+- Tool-result preview lines replace tabs with spaces, so a tab-indented line no longer opens a gap in the rendered preview.
+- Shutting down an LSP client releases callers still waiting for its project to load, and the LSP idle checker no longer keeps the process alive.
+- Timeout timers in MCP HTTP startup, the eval kernel exit wait, the lspmux liveness probe, stdin reading, ACP cancel cleanup, browser user-agent overrides and the interactive closing frame are cleared once the awaited operation settles; no other behavior change.
 - The ask dialog rejects a question with no options and no free-text answer instead of opening a dialog that cannot be answered.
 - A collab guest answering an ask question is offered `Other` only when the question allows a free-text answer, and a guest reply of `Other` to a closed question records no custom answer.
 - The extension dashboard's overflowing tab strip reserves room for the paging arrows and stays on one row at every width.
