@@ -659,6 +659,8 @@ export class SessionManager {
 	#noteDiskFailure(errorLike: unknown): Error {
 		const error = toError(errorLike);
 		if (!this.#diskFailure) this.#diskFailure = error;
+		this.#fileIsCurrent = false;
+		this.#rewriteRequired = true;
 
 		if (!this.#diskFailureLogged) {
 			this.#diskFailureLogged = true;
@@ -1816,6 +1818,7 @@ export class SessionManager {
 	async ensureOnDisk(): Promise<void> {
 		if (!this.#persist || !this.#sessionFile) return;
 		this.#forceFileCreation = true;
+		this.#retryPersistenceAfterFailure();
 		if (this.#fileIsCurrent && !this.#rewriteRequired) return;
 		await this.#rewriteAtomically();
 	}

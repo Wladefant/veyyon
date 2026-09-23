@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Replacing or rebinding log transports closes the old transports, so their file streams and timers no longer stay open.
+- `defaultWindowsAclRunner` builds its result promise with `Promise.withResolvers()`; no behavior change.
+
 ## [1.5.0] - 2026-09-18
 
 ### Breaking Changes

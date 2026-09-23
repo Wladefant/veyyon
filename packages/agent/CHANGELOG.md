@@ -11,6 +11,10 @@
 
 - `compact()` forwards every `SummaryOptions` field to the summarizers instead of a fixed list that dropped fields added later.
 
+### Changed
+
+- Replaced `AgentToolResult<any>` with `AgentToolResult<unknown>` and concrete result details across agent loop tool dispatch; no user-visible change.
+
 ## [1.5.0] - 2026-09-18
 
 ### Added
