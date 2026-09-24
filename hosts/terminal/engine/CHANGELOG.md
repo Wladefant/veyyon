@@ -5,10 +5,12 @@
 ### Added
 
 - `SelectList` adds `naturalWidth()`, `isSearchable()` and `cancel()`, a `searchPrompt` layout option that hides the idle "Type to search" row, and a `scrollbar` theme slot.
+- `ComponentScopedRender` lets a root child that holds many blocks re-derive only the children containing a component-scoped render requester.
 
 ### Changed
 
 - Settings list adapts label width dynamically with clean truncation and wraps inline descriptions to fit within the visible viewport width.
+- A component-scoped render finds its requester by searching the newest children first and reuses the found path while it stays intact, instead of walking the whole component tree on every frame.
 
 ### Fixed
 

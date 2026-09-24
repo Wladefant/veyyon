@@ -15,6 +15,7 @@
 - The `/debug` card is titled `/debug`, matching the other bare-command cards.
 - Provider request shaping (secret redaction, Anthropic metadata, tool-order check) moved from `session/agent-session` to `session/agent-session-provider-request`; no user-visible change.
 - Home-path shortening in tool cards compiles its pattern once per home directory instead of on every call; no user-visible change.
+- A spinner or rail tick in the transcript re-renders only the blocks from the animating one down, so an idle resumed session with a long transcript no longer spends a core re-walking every block.
 
 ### Fixed
 
@@ -28,6 +29,8 @@
 - Switching to a model on another provider after a server-side compaction no longer resends the whole session history: before the next prompt, the session asks the model that minted the compaction to summarize it and continues from that summary, reported as an auto-compaction with reason `provider_switch`.
 - A prompt or idle compaction on a session that switched providers after a server-side compaction ports that compaction first, instead of summarizing the re-expanded history on the new provider in hundreds of staged requests.
 - A staged compaction summary that fails part way resumes on the next attempt from the segments that never completed instead of restarting from the first segment.
+- A background task card restored from a resumed session stops its rail animation once it scrolls above the live region, instead of repainting the transcript every 100 ms for the rest of the process.
+- A displaceable tool preview sealed during an animation frame releases the live region at that frame instead of holding it open until the next full render.
 
 ## [1.5.3] - 2026-09-22
 
