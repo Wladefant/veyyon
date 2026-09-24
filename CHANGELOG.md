@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.4] - 2026-09-24
+
 ### Added
 
 - `summarizeRemoteCompactionWindow` turns a server-side compaction window into summary text by replaying it to the model on the provider that minted it, and `remoteCompactionReplayableBy` reports whether a compaction's window replays on a given provider.

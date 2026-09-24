@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.4] - 2026-09-24
+
 ### Fixed
 
 - Replacing or rebinding log transports closes the old transports, so their file streams and timers no longer stay open.

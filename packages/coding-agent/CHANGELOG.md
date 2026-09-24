@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.4] - 2026-09-24
+
 ### Changed
 
 - Slash-command reports (`/tools`, `/hotkeys`, `/context`, `/jobs`, `/todo`, `/lsp`, `/plugins`, `/effort`) format with clean human summaries, consistent headers and indentation, and without raw XML tags or run-on bullet sequences.

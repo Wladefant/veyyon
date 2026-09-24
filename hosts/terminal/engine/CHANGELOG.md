@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.4] - 2026-09-24
+
 ### Added
 
 - `SelectList` adds `naturalWidth()`, `isSearchable()` and `cancel()`, a `searchPrompt` layout option that hides the idle "Type to search" row, and a `scrollbar` theme slot.
