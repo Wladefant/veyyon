@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.5] - 2026-09-25
+
 ### Fixed
 
 - The launch-time prune of old addon caches no longer writes to stderr; a directory it cannot remove is reported through `attachNativeNoticeSink`, and on Windows a cache still mapped by a running veyyon (`EPERM`/`EBUSY`) is returned in `inUse` and not reported.

@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [1.5.5] - 2026-09-25
+
 ### Added
 
 - `isTerminalOutputRouted` reports whether console output is going to the log, and `routeWorkerThreadOutput` sends a worker thread's console output to the log for the worker's lifetime.

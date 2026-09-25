@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.5] - 2026-09-25
+
 ### Fixed
 
 - Running two veyyon versions at once on Windows no longer prints `could not remove the stale addon cache ... EPERM` over the interactive UI and pushes the composer down; a real removal failure shows as a `natives` warning notice.
