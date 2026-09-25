@@ -39,7 +39,10 @@
 import { dlopen, FFIType } from "bun:ffi";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { format, inspect } from "node:util";
+// `node:util` is required when a routed console call formats its arguments, not imported here: this
+// module is on the launch card path, where the import would cost its evaluation before the first
+// frame for calls most sessions never make.
+import type * as nodeUtil from "node:util";
 import { isMainThread } from "node:worker_threads";
 import { getLogPath } from "./dirs";
 
@@ -250,6 +253,13 @@ function restoreNativeStderr(): void {
 type ConsoleMethod = "log" | "info" | "debug" | "dir" | "warn" | "error" | "trace";
 type StderrWrite = typeof process.stderr.write;
 
+let utilModule: typeof nodeUtil | undefined;
+
+function util(): typeof nodeUtil {
+	utilModule ??= require("node:util") as typeof nodeUtil;
+	return utilModule;
+}
+
 /**
  * Replace the console methods (and `process.stderr.write` when stderr is the
  * terminal) with writers that append to the redirect target. Each entry is
@@ -276,10 +286,10 @@ function routeJavaScriptOutput(redirectPath: string | undefined, routeStderr: bo
 		const source = `console.${method}`;
 		console[method] =
 			method === "dir"
-				? (value: unknown) => append(source, inspect(value))
+				? (value: unknown) => append(source, util().inspect(value))
 				: method === "trace"
-					? (...args: unknown[]) => append(source, `Trace: ${format(...args)}\n${new Error().stack ?? ""}`)
-					: (...args: unknown[]) => append(source, format(...args));
+					? (...args: unknown[]) => append(source, `Trace: ${util().format(...args)}\n${new Error().stack ?? ""}`)
+					: (...args: unknown[]) => append(source, util().format(...args));
 	}
 
 	let savedStderrWrite: StderrWrite | undefined;

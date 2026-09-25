@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- The CLI imports the terminal output guard when a worker thread starts rather than at startup, keeping it off the static boot graph; no user-visible change.
+- `@veyyon/utils/stderr-guard` loads `node:util` on the first routed console call rather than at import, keeping it off the launch card path; no user-visible change.
+
 ## [1.5.5] - 2026-09-25
 
 ### Added

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- The CLI imports the terminal output guard when a worker thread starts rather than at startup, keeping it off the static boot graph; no user-visible change.
+
 ## [1.5.5] - 2026-09-25
 
 ### Fixed

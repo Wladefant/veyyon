@@ -41,7 +41,6 @@ import {
 	VERSION,
 } from "@veyyon/utils/dirs";
 import * as logger from "@veyyon/utils/logger";
-import { routeWorkerThreadOutput } from "@veyyon/utils/stderr-guard";
 import { declareWorkerHostEntry, installWorkerInbox } from "@veyyon/utils/worker-host";
 import { EXIT_FAILURE, EXIT_USAGE } from "./cli/exit-codes";
 import { installProfileAlias, resolveProfileAliasCommandFromProcess } from "./cli/profile-alias";
@@ -185,11 +184,18 @@ async function runSmokeTest(): Promise<void> {
 	process.stdout.write("smoke-test: ok\n");
 }
 
-async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
-	// Every worker thread starts here, whatever its kind, and none of them owns the terminal: its
-	// console goes to the log. IPC worker processes are main threads and are left alone; their
-	// parent captures stderr.
+/**
+ * Send this worker thread's console to the log. A worker thread never owns the terminal, and Bun
+ * writes its console straight to fd 1 and fd 2, beside the main thread's router. Imported here
+ * rather than at the top because the guard is not on the boot path. Each thread branch calls this
+ * only after its synchronous inbox is installed: the first `await` ends the entry's sync prefix.
+ */
+async function routeWorkerThreadConsole(): Promise<void> {
+	const { routeWorkerThreadOutput } = await import("@veyyon/utils/stderr-guard");
 	routeWorkerThreadOutput();
+}
+
+async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 	if (arg === TINY_WORKER_ARG) {
 		await runTinyWorker();
 		return true;
@@ -203,11 +209,13 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 	// module binds the real handler once loaded.
 	if (arg === TAB_WORKER_ARG) {
 		if (parentPort) installWorkerInbox(parentPort);
+		await routeWorkerThreadConsole();
 		await import("./tools/web/browser/tab-worker-entry");
 		return true;
 	}
 	if (arg === JS_EVAL_WORKER_ARG) {
 		if (parentPort) installWorkerInbox(parentPort);
+		await routeWorkerThreadConsole();
 		await import("./eval/js/worker-entry");
 		return true;
 	}
@@ -255,6 +263,7 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 			pending.push(event);
 		};
 		scope.onmessage = buffer;
+		await routeWorkerThreadConsole();
 		await import("@veyyon/stats/sync-worker");
 		const handler = scope.onmessage;
 		if (handler && handler !== buffer) {
