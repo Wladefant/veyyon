@@ -523,8 +523,13 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 
 			let pendingBuffer = Buffer.alloc(0);
 			let endStreamError: Error | null = null;
+			// Settles when the turn has failed, so a termination waiting on in-flight message handlers
+			// stops waiting: a handler blocked on a local tool that never returns would otherwise hold
+			// the turn open after the failure that was meant to end it.
+			const { promise: turnFailed, resolve: signalTurnFailed } = Promise.withResolvers<void>();
 			/**
-			 * Fail this turn from inside a server-message handler.
+			 * Fail this turn: from a server-message handler, the liveness governor, a transport error
+			 * or an abort.
 			 *
 			 * Reuses the `endStreamError` channel a Connect end-stream error already uses (the outer
 			 * promise rejects with it), rather than throwing: a throw out of `handleServerMessage` is
@@ -534,6 +539,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 			const failTurn = (error: Error): void => {
 				if (endStreamError) return;
 				endStreamError = error;
+				signalTurnFailed();
 				h2Request?.close();
 			};
 			let currentTextBlock: (TextContent & { [kStreamingBlockIndex]: number }) | null = null;
@@ -606,8 +612,11 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 				if (streamTerminated) return;
 				streamTerminated = true;
 				void (async () => {
+					// A successful turn waits for every handler so `turnEnded` cannot outrun an exec
+					// reply. A failed turn does not: the failure is the result, and a wedged handler
+					// must not keep it from being reported.
 					if (pendingMessagePromises.size > 0) {
-						await Promise.allSettled(Array.from(pendingMessagePromises));
+						await Promise.race([Promise.allSettled(Array.from(pendingMessagePromises)), turnFailed]);
 					}
 					await closeDebugLog();
 					if (refusedStatus !== undefined) {
@@ -645,7 +654,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 			};
 
 			h2Request.on("response", headers => {
-				liveness?.markActivity();
+				liveness?.markProgress();
 				const status = Number(headers[":status"]);
 				if (Number.isFinite(status) && status >= 400) refusedStatus = status;
 				debugResponseLogPromise = debugSession?.openResponseLog(
@@ -654,7 +663,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 				);
 			});
 			h2Request.on("data", (chunk: Buffer) => {
-				liveness?.markActivity();
+				liveness?.markTransport();
 				if (debugResponseLogPromise) {
 					void debugResponseLogPromise.then(log => {
 						log?.write(chunk);
@@ -696,6 +705,12 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 						const isTurnEnded =
 							serverMessage.message.case === "interactionUpdate" &&
 							serverMessage.message.value.message?.case === "turnEnded";
+						// A heartbeat arrives every ten seconds whether or not the remote agent is
+						// working, so it proves the connection and never counts as progress.
+						const isHeartbeat =
+							serverMessage.message.case === "interactionUpdate" &&
+							serverMessage.message.value.message?.case === "heartbeat";
+						if (!isHeartbeat) liveness?.markProgress();
 
 						const messagePromise = (async () => {
 							await handleServerMessage(
@@ -776,10 +791,10 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 
 			heartbeatTimer = setInterval(sendHeartbeat, 5000);
 
-			// A turn is governed by transport liveness, not by a timer: `cursor-agent` plans and
-			// executes on Cursor's side and legitimately emits nothing while it does, and the
-			// protocol has no server heartbeat to distinguish that from a dead connection. A caller
-			// or operator who pins a stream idle budget gets it as the silence ceiling instead.
+			// A turn is governed by transport liveness plus a ceiling on time without progress:
+			// `cursor-agent` plans and executes on Cursor's side and legitimately emits no progress
+			// while it does, and its ten-second server heartbeat continues whether or not that work
+			// advances. A caller or operator who pins a stream idle budget gets it as the ceiling.
 			const maxSilentMs =
 				options?.streamIdleTimeoutMs !== undefined && options.streamIdleTimeoutMs > 0
 					? options.streamIdleTimeoutMs
@@ -830,11 +845,13 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 			});
 
 			h2Request.on("error", (error: Error) => {
-				terminateStream(() => rejectH2(error));
+				failTurn(error);
+				terminateStream();
 			});
 
 			h2Client.on("error", (error: Error) => {
-				terminateStream(() => rejectH2(error));
+				failTurn(error);
+				terminateStream();
 			});
 
 			h2Client.on("close", () => {
@@ -855,7 +872,8 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 					} catch {
 						// Ignore close errors
 					}
-					terminateStream(() => rejectH2(new AIError.RequestAbortError()));
+					failTurn(new AIError.RequestAbortError());
+					terminateStream();
 				};
 				// Already aborted before we attached: the event will never fire, so
 				// run the handler once synchronously instead of hanging the round.

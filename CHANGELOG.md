@@ -11,6 +11,8 @@
 ### Fixed
 
 - The CLI imports the terminal output guard when a worker thread starts rather than at startup, keeping it off the static boot graph; no user-visible change.
+- A Cursor turn whose remote agent stops making progress now ends with "Cursor made no progress for Ns" at the 30-minute ceiling instead of hanging indefinitely, because Cursor's ten-second server heartbeat no longer counts as progress.
+- A Cursor turn held by a local tool that never returns now ends when its failure or an abort arrives instead of waiting on the tool forever.
 - `@veyyon/utils/stderr-guard` loads `node:util` on the first routed console call rather than at import, keeping it off the launch card path; no user-visible change.
 
 ## [1.5.5] - 2026-09-25
