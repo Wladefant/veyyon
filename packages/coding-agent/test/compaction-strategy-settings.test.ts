@@ -76,7 +76,7 @@ describe("compaction strategy settings", () => {
  */
 describe("model role selectability", () => {
 	it("offers exactly the roles that no feature group owns", () => {
-		expect(SELECTABLE_MODEL_ROLE_IDS).toEqual(["smol", "slow", "vision", "plan", "designer", "commit", "tiny"]);
+		expect(SELECTABLE_MODEL_ROLE_IDS).toEqual(["smol", "slow", "vision", "plan", "commit", "tiny"]);
 	});
 
 	it("excludes default from selectable built-in role ids", () => {
