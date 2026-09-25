@@ -340,7 +340,9 @@ describe("session exit diagnostics", () => {
 		const sessionManager = SessionManager.inMemory();
 		const command = `printf '%s\\n' ${"x".repeat(500)}`;
 		sessionManager.appendMessage(
-			cursorBatch(Array.from({ length: 89 }, (_, index) => ({ id: cursorId(index), name: "bash", arguments: { command } }))),
+			cursorBatch(
+				Array.from({ length: 89 }, (_, index) => ({ id: cursorId(index), name: "bash", arguments: { command } })),
+			),
 		);
 
 		const warning = describePendingToolCalls(sessionManager.getBranch());
