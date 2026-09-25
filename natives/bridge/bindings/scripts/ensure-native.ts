@@ -174,7 +174,9 @@ function mirrorCurrentAddonsToCache(filenames: string[]): void {
 		console.error(`veyyon natives: could not remove the stale addon cache at ${failure.dir}: ${failure.reason}`);
 	}
 	for (const held of pruned.inUse) {
-		console.error(`veyyon natives: the stale addon cache at ${held.dir} is in use by a running veyyon; a later launch removes it.`);
+		console.error(
+			`veyyon natives: the stale addon cache at ${held.dir} is in use by a running veyyon; a later launch removes it.`,
+		);
 	}
 }
 
