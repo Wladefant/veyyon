@@ -5,6 +5,7 @@
 ### Fixed
 
 - Running two veyyon versions at once on Windows no longer prints `could not remove the stale addon cache ... EPERM` over the interactive UI and pushes the composer down; a real removal failure shows as a `natives` warning notice.
+- A `console` print from a library, a native addon warning or a worker thread no longer writes into the interactive UI and shifts the composer on Linux or Windows; the text goes to the veyyon log file.
 
 ## [1.5.4] - 2026-09-24
 

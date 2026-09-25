@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- `isTerminalOutputRouted` reports whether console output is going to the log, and `routeWorkerThreadOutput` sends a worker thread's console output to the log for the worker's lifetime.
+
+### Fixed
+
+- `suppressTerminalStderr` routes native stderr on Linux and Windows (not only macOS), and while the terminal UI is live it routes `console.*` and `process.stderr.write` output to the log file, so a stray print no longer pushes the composer down.
+
 ## [1.5.4] - 2026-09-24
 
 ### Fixed

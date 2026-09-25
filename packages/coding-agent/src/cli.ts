@@ -41,6 +41,7 @@ import {
 	VERSION,
 } from "@veyyon/utils/dirs";
 import * as logger from "@veyyon/utils/logger";
+import { routeWorkerThreadOutput } from "@veyyon/utils/stderr-guard";
 import { declareWorkerHostEntry, installWorkerInbox } from "@veyyon/utils/worker-host";
 import { EXIT_FAILURE, EXIT_USAGE } from "./cli/exit-codes";
 import { installProfileAlias, resolveProfileAliasCommandFromProcess } from "./cli/profile-alias";
@@ -185,6 +186,10 @@ async function runSmokeTest(): Promise<void> {
 }
 
 async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
+	// Every worker thread starts here, whatever its kind, and none of them owns the terminal: its
+	// console goes to the log. IPC worker processes are main threads and are left alone; their
+	// parent captures stderr.
+	routeWorkerThreadOutput();
 	if (arg === TINY_WORKER_ARG) {
 		await runTinyWorker();
 		return true;
