@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- The resume warning for tool calls left without a result lists at most three calls, each command or path cut to 80 characters on one line, followed by "and N more", and no longer counts a `<id>_2` repeat of a call its original id already answered.
+
 ## [1.5.5] - 2026-09-25
 
 ### Changed

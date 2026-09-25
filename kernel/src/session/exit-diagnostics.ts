@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
 import { emptyUsage } from "@veyyon/catalog/models";
-import { formatCount } from "@veyyon/utils";
+import { formatCount, truncate } from "@veyyon/utils";
 import { isRecord } from "@veyyon/utils/type-guards";
 import type { SessionEntry } from "./session-entries";
 
@@ -252,13 +252,39 @@ function readToolExecutionStart(entry: SessionEntry): ToolExecutionStartData | u
 	return result;
 }
 
+/**
+ * Whether `part` is a renamed repeat of an earlier call in the same message.
+ *
+ * The agent loop keeps stored ids unique by renaming a repeated id `<id>_<n>`. When the repeat has
+ * the same tool and arguments as `<id>`, it is one call recorded twice (Cursor re-sent an exec
+ * request and an older build synthesized a second block for it), so it is answered by `<id>`'s
+ * result and never gets one of its own. Counting it reported every such call as pending on resume.
+ */
+function isRenamedRepeat(part: ToolCallContent, earlier: readonly ToolCallContent[]): boolean {
+	const id = part.id;
+	if (id === undefined) return false;
+	const args = JSON.stringify(part.arguments);
+	return earlier.some(
+		other =>
+			other.id !== undefined &&
+			other.name === part.name &&
+			id.length > other.id.length + 1 &&
+			id.startsWith(`${other.id}_`) &&
+			/^\d+$/.test(id.slice(other.id.length + 1)) &&
+			JSON.stringify(other.arguments) === args,
+	);
+}
+
 function appendAssistantToolCalls(pending: Map<string, PendingToolCallRecord>, message: AgentMessage): void {
 	if (message.role !== "assistant") return;
 	const content = Array.isArray(message.content) ? message.content : [];
 	const toolCalls: PendingToolCallRecord[] = [];
+	const seen: ToolCallContent[] = [];
 	for (let index = 0; index < content.length; index++) {
 		const part = content[index];
 		if (!isToolCallContent(part)) continue;
+		if (isRenamedRepeat(part, seen)) continue;
+		seen.push(part);
 		const toolName = part.name ?? "unknown";
 		const key = part.id ?? `assistant:${message.timestamp ?? "unknown"}:${index}:${toolName}`;
 		const record: PendingToolCallRecord = {
@@ -318,20 +344,32 @@ export function collectPendingToolCalls(entries: readonly SessionEntry[]): Pendi
 	return Array.from(pending.values()).map(({ key: _key, ...toolCall }) => toolCall);
 }
 
+/** Calls named in the resume warning; the rest are counted, so a large batch stays one line. */
+const PENDING_WARNING_LISTED_CALLS = 3;
+/** Longest command or path quoted per listed call. */
+const PENDING_WARNING_ARGUMENT_CHARS = 80;
+
+/** One line of `text`, bounded: ids and commands can carry newlines and whole scripts. */
+function oneLine(text: string, maxLength: number): string {
+	return truncate(text.replace(/\s+/g, " ").trim(), maxLength);
+}
+
 function appendArgumentSummary(parts: string[], args: unknown): void {
 	if (!isRecord(args)) return;
 	const command = args.command;
 	if (typeof command === "string" && command.length > 0) {
-		parts.push(`command \`${command}\``);
+		parts.push(`command \`${oneLine(command, PENDING_WARNING_ARGUMENT_CHARS)}\``);
 		return;
 	}
 	const path = args.path;
-	if (typeof path === "string" && path.length > 0) parts.push(`path \`${path}\``);
+	if (typeof path === "string" && path.length > 0) {
+		parts.push(`path \`${oneLine(path, PENDING_WARNING_ARGUMENT_CHARS)}\``);
+	}
 }
 
 function formatPendingToolCall(call: PendingToolCallDiagnostic): string {
 	const parts = [call.toolName];
-	if (call.toolCallId) parts.push(call.toolCallId);
+	if (call.toolCallId) parts.push(oneLine(call.toolCallId, PENDING_WARNING_ARGUMENT_CHARS));
 	appendArgumentSummary(parts, call.args);
 	return parts.join(" ");
 }
@@ -340,6 +378,8 @@ function formatPendingToolCall(call: PendingToolCallDiagnostic): string {
 export function describePendingToolCalls(entries: readonly SessionEntry[]): string | undefined {
 	const pending = collectPendingToolCalls(entries);
 	if (pending.length === 0) return undefined;
-	const formatted = pending.map(formatPendingToolCall).join(", ");
-	return `Previous session ended while ${formatCount("tool call", pending.length)} remained pending: ${formatted}. The prior veyyon process exited before recording tool result(s).`;
+	const listed = pending.slice(0, PENDING_WARNING_LISTED_CALLS).map(formatPendingToolCall);
+	const unlisted = pending.length - listed.length;
+	if (unlisted > 0) listed.push(`and ${unlisted} more`);
+	return `Previous session ended while ${formatCount("tool call", pending.length)} remained pending: ${listed.join(", ")}. The prior veyyon process exited before recording tool result(s).`;
 }
