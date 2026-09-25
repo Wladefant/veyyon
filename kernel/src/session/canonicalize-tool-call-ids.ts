@@ -10,9 +10,18 @@
  * Stored session history keeps the original IDs; only the outbound Context
  * snapshot is rewritten. The map is rebuilt identically on resume by walking
  * history in order (no schema change).
+ *
+ * A call whose ID is also recorded in the message's native provider payload
+ * (`openaiResponsesHistory` items carry `call_id`) keeps its original ID, and
+ * so does its result. Responses providers replay those items verbatim instead
+ * of re-encoding the blocks, so a renamed result would answer a call ID the
+ * request no longer contains, and the provider folds every such result into a
+ * stale-output note after a placeholder output.
  */
 
-import type { Message } from "@veyyon/ai";
+import type { AssistantMessage, Message } from "@veyyon/ai";
+
+const CANONICAL_ID = /^tc_\d+$/;
 
 export type ToolCallIdMap = Map<string, string>;
 
@@ -51,10 +60,16 @@ export function canonicalizeToolCallIdsInMessage(
 	allocate: () => string,
 ): Message {
 	if (message.role === "assistant") {
+		const payloadItems =
+			message.providerPayload?.type === "openaiResponsesHistory" ? message.providerPayload.items : undefined;
 		let content: typeof message.content | undefined;
 		for (let i = 0; i < message.content.length; i++) {
 			const block = message.content[i];
 			if (block.type !== "toolCall") continue;
+			if (payloadItems && payloadBindsCallId(payloadItems, block.id)) {
+				if (!map.has(block.id)) map.set(block.id, block.id);
+				continue;
+			}
 			const canonical = resolveCanonicalToolCallId(block.id, map, allocate);
 			if (canonical === block.id) continue;
 			content ??= message.content.slice();
@@ -67,6 +82,22 @@ export function canonicalizeToolCallIdsInMessage(
 		return canonical === message.toolCallId ? message : { ...message, toolCallId: canonical };
 	}
 	return message;
+}
+
+/**
+ * Whether a native payload item records the call `id` names. A Responses block
+ * id is `call_…|fc_…` while the item's `call_id` is the part before the bar, so
+ * both spellings match. An id shaped like an allocated handle is never pinned:
+ * keeping it would let it collide with the handle the map allocates.
+ */
+function payloadBindsCallId(items: NonNullable<AssistantMessage["providerPayload"]>["items"], id: string): boolean {
+	if (CANONICAL_ID.test(id)) return false;
+	for (const item of items) {
+		const callId = item.call_id;
+		if (typeof callId !== "string" || callId.length === 0 || !id.startsWith(callId)) continue;
+		if (id.length === callId.length || id.charCodeAt(callId.length) === 124 /* | */) return true;
+	}
+	return false;
 }
 
 /**
