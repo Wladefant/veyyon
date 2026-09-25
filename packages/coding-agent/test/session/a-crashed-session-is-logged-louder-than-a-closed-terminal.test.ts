@@ -89,6 +89,7 @@ const EXPECTED_LEVEL: Record<string, { settled: SessionExitLogLevel; pending: Se
 	[postmortem.Reason.SIGINT]: { settled: "debug", pending: "warn" },
 	[postmortem.Reason.SIGTERM]: { settled: "debug", pending: "warn" },
 	[postmortem.Reason.SIGHUP]: { settled: "debug", pending: "warn" },
+	[postmortem.Reason.SIGBREAK]: { settled: "debug", pending: "warn" },
 	// The session died on an unhandled throw. Nothing else in the log says so, because the
 	// record is written from the teardown path and not from the thrower.
 	[postmortem.Reason.UNCAUGHT_EXCEPTION]: { settled: "error", pending: "error" },

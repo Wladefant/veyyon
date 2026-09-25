@@ -241,6 +241,7 @@ import {
 } from "@veyyon/utils";
 import { contentText } from "@veyyon/utils/content-text";
 import { clearToolCallInFlight, markToolCallInFlight, reportAbandonedToolCalls } from "@veyyon/utils/inflight-marker";
+import { type HeartbeatHandle, joinHeartbeat, reportSilentDeaths } from "@veyyon/utils/session-heartbeat";
 import { startupMarker } from "@veyyon/utils/startup-marker";
 import type { ArgotSession } from "argot";
 import {
@@ -886,6 +887,8 @@ export class AgentSession {
 	#exitRecorded = false;
 	/** Session ids can change on fork/compaction; cleanup must use the id recorded at start. */
 	#toolMarkerSessions = new Map<string, string>();
+	/** This session's share of the process heartbeat; left when the exit is recorded. */
+	#heartbeat?: HeartbeatHandle;
 	#unsubscribeAppendOnly?: () => void;
 	#unsubscribeModelRoles?: () => void;
 	#unsubscribePromptSettings?: () => void;
@@ -1338,6 +1341,7 @@ export class AgentSession {
 		this.#promptInFlightCount++;
 		if (this.#promptInFlightCount === 1) {
 			this.#acquirePowerAssertion();
+			this.#heartbeat?.update();
 		}
 	}
 
@@ -1348,6 +1352,7 @@ export class AgentSession {
 			this.#flushPendingAgentEnd();
 			this.#drainStrandedQueuedMessages();
 			this.#clearAgentGrants();
+			this.#heartbeat?.update();
 		}
 	}
 
@@ -1480,6 +1485,7 @@ export class AgentSession {
 		this.#flushPendingAgentEnd();
 		this.#drainStrandedQueuedMessages();
 		this.#clearAgentGrants();
+		this.#heartbeat?.update();
 	}
 
 	/**
@@ -2189,9 +2195,23 @@ export class AgentSession {
 		});
 		// The counterpart of the exit recorder below: a death that never reached
 		// JavaScript wrote no `session_exit` entry and no error line, so the only
-		// account of it is the in-flight marker its process left behind. Sweep
-		// those into the log before this session starts writing its own.
+		// account of it is what its process left on disk — the in-flight marker of
+		// a tool call, and the heartbeat naming the phase it was in. Sweep those
+		// into the log before this session starts writing its own.
 		reportAbandonedToolCalls();
+		reportSilentDeaths();
+		this.#heartbeat = joinHeartbeat({
+			spawned: this.#isSpawned,
+			sessionId: () => this.sessionManager.getSessionId(),
+			phase: () =>
+				this.isCompacting
+					? "compaction"
+					: this.#toolMarkerSessions.size > 0
+						? "tool"
+						: this.isStreaming
+							? "provider"
+							: "idle",
+		});
 		this.#cancelExitRecorder = postmortem.register(`agent-session:${this.sessionManager.getSessionId()}`, reason => {
 			this.#recordSessionExit(reason);
 		});
@@ -3664,6 +3684,9 @@ export class AgentSession {
 	#recordSessionExit(reason: postmortem.Reason | "dispose"): void {
 		if (this.#exitRecorded) return;
 		this.#exitRecorded = true;
+		// Same reason as the markers below: this exit reaches JavaScript, so the
+		// log accounts for it and the heartbeat must not report it as silent.
+		this.#heartbeat?.leave();
 		// This exit reached JavaScript, so the log will carry an account of it
 		// either way. Leaving the marker behind would report the next launch a
 		// crash that did not happen.
@@ -4628,6 +4651,10 @@ export class AgentSession {
 				this.#toolMarkerSessions.delete(event.toolCallId);
 			}
 		}
+
+		// Every lifecycle event can move the phase: a tool starting or returning, a
+		// run starting or settling. Stream deltas cannot, and are the hot path.
+		if (event.type !== "message_update") this.#heartbeat?.update();
 
 		// Apply state-bearing tool results before the first awaited subscriber.
 		// Agent events are delivered independently, so a later agent_end may otherwise
@@ -11364,6 +11391,7 @@ export class AgentSession {
 		const compactMode = options?.mode ? findCompactMode(options.mode) : undefined;
 		const compactionAbortController = new AbortController();
 		this.#compactionAbortController = compactionAbortController;
+		this.#heartbeat?.update();
 
 		// Hoisted so the catch can roll the preparation's tail elisions back:
 		// prepareCompaction applies them to the live branch as a side effect.
@@ -11575,6 +11603,7 @@ export class AgentSession {
 		} finally {
 			if (this.#compactionAbortController === compactionAbortController) {
 				this.#compactionAbortController = undefined;
+				this.#heartbeat?.update();
 			}
 			this.#reconnectToAgent();
 		}
@@ -14267,6 +14296,7 @@ export class AgentSession {
 		this.#autoCompactionAbortController?.abort();
 		const autoCompactionAbortController = new AbortController();
 		this.#autoCompactionAbortController = autoCompactionAbortController;
+		this.#heartbeat?.update();
 		const autoCompactionSignal = autoCompactionAbortController.signal;
 
 		// Hoisted so failure paths can roll the preparation's tail elisions
@@ -14819,6 +14849,7 @@ export class AgentSession {
 		} finally {
 			if (this.#autoCompactionAbortController === autoCompactionAbortController) {
 				this.#autoCompactionAbortController = undefined;
+				this.#heartbeat?.update();
 			}
 		}
 	}
