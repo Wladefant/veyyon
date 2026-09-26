@@ -320,11 +320,16 @@ function buildSlashCommandCompletions(
 			// (`/models` → the model command). When the primary NAME already
 			// matched the prefix, its row is present and an alias row would be a
 			// duplicate with the identical description — pure menu clutter.
-			if (lowerPrefix.length > 0 && nameScore === 0) {
+			// Exception: when an alias is a strictly better match than the primary
+			// name (e.g. exact match on `/q` alias vs prefix match on `/quit`), the
+			// alias row must be emitted so the user's typed alias wins over
+			// earlier same-prefix commands.
+			if (lowerPrefix.length > 0) {
 				for (const alias of getCommandAliases(cmd)) {
 					if (alias === name) continue;
 					const aliasScore = scoreCommandTextMatch(lowerPrefix, alias.toLowerCase());
 					if (aliasScore === 0) continue;
+					if (nameScore > 0 && aliasScore <= nameScore) continue;
 					const fullDesc = resolveFullDesc();
 					candidates.push({
 						value: alias,
