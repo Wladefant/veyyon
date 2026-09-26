@@ -540,6 +540,15 @@ export interface Terminal {
 	 * with no capability probe can never confirm and therefore never arms.
 	 */
 	requestEnhancedPaste?(): void;
+	/**
+	 * Whether a pseudoconsole host owns the grid this terminal writes to, so
+	 * neither the cursor nor the painted rows survive a resize under the
+	 * application's own model: the host re-emits its whole viewport from
+	 * `CSI H` and re-homes the cursor, leaving the renderer's resize routing
+	 * without either precondition. Optional so custom Terminals keep working;
+	 * absent means the terminal itself owns the grid.
+	 */
+	readonly hostOwnsGridOnResize?: boolean;
 }
 
 /**
@@ -554,6 +563,18 @@ export function isConPTYHosted(): boolean {
 	if (process.platform === "win32") return true;
 	// WSL: stdout still crosses into ConPTY at the `wslhost` boundary.
 	return process.platform === "linux" && (!!$env.WSL_DISTRO_NAME || !!$env.WSL_INTEROP);
+}
+
+/** Construction-time overrides for {@link ProcessTerminal}. */
+export interface ProcessTerminalOptions {
+	/**
+	 * Force ConPTY-hosted behavior on or off. Defaults to live detection via
+	 * {@link isConPTYHosted}. Tests set this so the AltGr recovery,
+	 * write-chunking and resize-routing ({@link Terminal.hostOwnsGridOnResize})
+	 * paths stay hermetic regardless of the ambient WSL env (`WSL_DISTRO_NAME` /
+	 * `WSL_INTEROP`) — the suite must behave identically on WSL and on CI.
+	 */
+	conpty?: boolean;
 }
 
 /** Discriminated owner of an outstanding DA1 sentinel in the unified probe FIFO. */
@@ -629,6 +650,12 @@ export class ProcessTerminal implements Terminal {
 	// terminal side effect (writes, probes, raw mode, SIGWINCH, timers) is
 	// suppressed. Defaults on under `bun test` — see isTerminalHeadless().
 	#headless = isTerminalHeadless();
+	// Captured once at construction: whether stdout flows through a ConPTY
+	// pseudo-console. Gates the AltGr recovery and large-write chunking in
+	// `#safeWrite`, and answers {@link ProcessTerminal.hostOwnsGridOnResize}.
+	// Live-detected by default; tests inject a fixed value so WSL env does not
+	// change behavior. See {@link ProcessTerminalOptions}.
+	readonly #conpty: boolean;
 	#writeLogPath = $env.VEYYON_TUI_WRITE_LOG || "";
 	#disconnectHandler?: () => void;
 	#stdinEndHandler = () => {
@@ -678,6 +705,10 @@ export class ProcessTerminal implements Terminal {
 	#windowsTerminalAppearancePollTimer?: Timer;
 	#progressTimer?: Timer;
 
+	constructor(options?: ProcessTerminalOptions) {
+		this.#conpty = options?.conpty ?? isConPTYHosted();
+	}
+
 	get kittyProtocolActive(): boolean {
 		return this.#kittyProtocolActive;
 	}
@@ -698,6 +729,14 @@ export class ProcessTerminal implements Terminal {
 		// breaking the composer between overlays. terminal.stop() still disables it
 		// globally on graceful exit; the emergency-restore path mirrors that.
 		return this.#kittyProtocolActive ? "\x1b[<u" : null;
+	}
+
+	get hostOwnsGridOnResize(): boolean {
+		// #conpty, not a fresh isConPTYHosted() call: the construction override
+		// must gate every ConPTY-dependent path uniformly, or an injected
+		// `conpty` value models one host for writes and the opposite host for
+		// resize routing.
+		return this.#conpty;
 	}
 
 	get appearance(): TerminalAppearance | undefined {
@@ -1238,7 +1277,7 @@ export class ProcessTerminal implements Terminal {
 				// Windows console hosts drop AltGr text under kitty (AltGr+F → `CSI 102;3u`);
 				// recover it from the active layout before any keybinding sees an Alt chord.
 				const altGrText =
-					this.#kittyProtocolActive && isConPTYHosted() && process.platform === "win32"
+					this.#kittyProtocolActive && this.#conpty && process.platform === "win32"
 						? translateWindowsAltGrSequence(sequence)
 						: undefined;
 				this.#inputHandler(altGrText ?? sequence);
@@ -1818,7 +1857,7 @@ export class ProcessTerminal implements Terminal {
 			// `process.stdout.write(string)` UTF-8-encodes before `WriteFile`,
 			// and a code-unit cap would let CJK transcript rows expand past the
 			// threshold. See #2034 and #2095.
-			if (isConPTYHosted() && Buffer.byteLength(data, "utf8") > MAX_CONPTY_WRITE_CHUNK_BYTES) {
+			if (this.#conpty && Buffer.byteLength(data, "utf8") > MAX_CONPTY_WRITE_CHUNK_BYTES) {
 				for (const chunk of chunkForConPTY(data, MAX_CONPTY_WRITE_CHUNK_BYTES)) {
 					if (this.#dead) break;
 					process.stdout.write(chunk);

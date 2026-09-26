@@ -1433,7 +1433,7 @@ export class TUI extends Container {
 				// `#resizeEventPending` is set first so the eventual render still
 				// classifies as a resize.
 				this.#resizeEventPending = true;
-				if (!resizeRepaintsInPlace()) {
+				if (!this.#resizeRepaintsInPlace()) {
 					// Enter the viewport fast path and (re)arm the settle timer, then
 					// request the cheap viewport-only paint. The authoritative full
 					// replay fires from the settle timer once the drag goes quiet.
@@ -2506,7 +2506,7 @@ export class TUI extends Container {
 		// count too: both enter the geometry rebuild path below.
 		const replayFullHistory =
 			this.#hasEverRendered &&
-			!resizeRepaintsInPlace() &&
+			!this.#resizeRepaintsInPlace() &&
 			(this.#clearScrollbackOnNextRender ||
 				this.#resizeEventPending ||
 				(this.#previousWidth > 0 && this.#previousWidth !== width) ||
@@ -2708,10 +2708,12 @@ export class TUI extends Container {
 		// snapped to the bottom just dragged the window). Multiplexer panes — and
 		// terminals that re-report size on alt-screen toggles — instead repaint in
 		// place, because an ED3 rewrap is unsafe (pane scrollback / alt-screen
-		// feedback loop), so committed history keeps its old wrap.
+		// feedback loop), so committed history keeps its old wrap. A host that
+		// owns the grid keeps the borrow for the opposite reason: it reprints its
+		// own viewport on resize, so an in-place repaint never reaches the reader.
 		const firstPaint = !this.#hasEverRendered;
 		const replaceRequested = this.#clearScrollbackOnNextRender;
-		const geometryRebuild = geometryChanged && !resizeRepaintsInPlace();
+		const geometryRebuild = geometryChanged && !this.#resizeRepaintsInPlace();
 		// Committed history no longer matches the frame: a finalized block
 		// replaced its scrolled-off live render, or the frame collapsed into
 		// recorded rows. Native scrollback is a render cache, not a court
@@ -3042,7 +3044,7 @@ export class TUI extends Container {
 			windowTop,
 			prevWindowTop,
 			prevHardwareCursorRow,
-			forceWindowRewrite: this.#forceViewportRepaintOnNextRender || (geometryChanged && resizeRepaintsInPlace()),
+			forceWindowRewrite: this.#forceViewportRepaintOnNextRender || (geometryChanged && this.#resizeRepaintsInPlace()),
 			repaintVirtualScrollInPlace: hasVisibleOverlay || virtualScrollSlice,
 			cursorTrackingLineCount,
 		});
@@ -3307,6 +3309,17 @@ export class TUI extends Container {
 		this.#committedRows = chunkTo;
 		this.#windowTopRow = windowTop;
 		this.#commit(frame, window, width, height, committedCursor);
+	}
+
+	/**
+	 * Whether a resize repaints in place for this session. The engine asks the
+	 * terminal instead of reading env directly, so a host that owns the grid
+	 * ({@link Terminal.hostOwnsGridOnResize}: conhost reprints its whole
+	 * viewport from `CSI H` on every resize) keeps the alternate-screen borrow
+	 * rather than repainting a grid the reader never sees.
+	 */
+	#resizeRepaintsInPlace(): boolean {
+		return resizeRepaintsInPlace(this.terminal.hostOwnsGridOnResize === true);
 	}
 
 	/**
