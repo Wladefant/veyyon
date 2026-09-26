@@ -16,6 +16,9 @@
 
 ### Fixed
 
+- Starting the CLI from a Windows drive root no longer aborts daemon presence registration when `fs.realpath` reports `EISDIR`: the drive root falls back to its resolved path, the same way a directory that does not exist yet already did ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed a stray leading `:` before a Windows path shape (`:C:\repo\file.ts`, `:.\src`, `:..\lib`, `:\server\share`) surviving into resolution, so the colon is stripped the same way it already was before the POSIX shapes ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
+
 - Fixed Go 1.26 `new(expr)` calls (e.g. `new(42)` or `new(f(x))`) triggering syntax errors during block operations and parse errors during structure search ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed the Windows bash tool exporting `TEMP`, `TMP`, and `TMPDIR` with 8.3 short names such as `ADMINI~1`, so they now match the long-form `pwd`/`$PWD` after `cd "$TEMP"` ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Resolve tool policy frame and execution context separately in extension tool wrapper so ambient context reaches the approval gate and handlers when caller omits context, while policy-only frames are not handed to tools as agent tool context ([Wladefant/veyyon#111](https://github.com/Wladefant/veyyon/pull/111)).
