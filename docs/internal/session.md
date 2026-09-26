@@ -19,12 +19,14 @@ Does not cover `/tree` UI rendering behavior beyond semantics that affect sessio
 ## Implementation Files
 
 - [`kernel/src/session/session-manager.ts`](../../kernel/src/session/session-manager.ts): orchestration: tree/leaf, appends, persistence, blobs, lifecycle factories
-- [`kernel/src/session/session-entries.ts`](../../kernel/src/session/session-entries.ts): entry/header types, `SessionEntry` union, `CURRENT_SESSION_VERSION`
+- [`contracts/session/src/entry.ts`](../../contracts/session/src/entry.ts): shared entry vocabulary, message union, and extension augmentation point
+- [`kernel/src/session/session-entries.ts`](../../kernel/src/session/session-entries.ts): kernel-persisted entry kinds, header types, `CURRENT_SESSION_VERSION`
 - [`kernel/src/session/session-migrations.ts`](../../kernel/src/session/session-migrations.ts): version migrations
 - [`kernel/src/session/session-loader.ts`](../../kernel/src/session/session-loader.ts): file load + blob-ref resolution
 - [`kernel/src/session/session-entry-shape.ts`](../../kernel/src/session/session-entry-shape.ts): the shape check every decoded record passes before it is treated as a `FileEntry`
 - [`kernel/src/session/session-context.ts`](../../kernel/src/session/session-context.ts): `buildSessionContext`
 - [`kernel/src/session/session-persistence.ts`](../../kernel/src/session/session-persistence.ts): large-text + image blob externalization, transient-field stripping
+- [`kernel/src/session/tool-result-codecs.ts`](../../kernel/src/session/tool-result-codecs.ts): tool-result slimming on write and in-place restoration on load
 - [`kernel/src/session/session-title-slot.ts`](../../kernel/src/session/session-title-slot.ts): fixed-width title-slot serialization/parsing
 - [`kernel/src/session/session-paths.ts`](../../kernel/src/session/session-paths.ts): on-disk layout, dir encoding, terminal breadcrumbs
 - [`kernel/src/session/session-listing.ts`](../../kernel/src/session/session-listing.ts): discovery (list/recent/resolve)
@@ -74,7 +76,7 @@ The contract, in the order it matters:
 - Two severities only, `warning` and `error`. A third is never used honestly.
 - `all()` is the record, so a diagnostic or a test can read what was raised without a sink ever having been attached.
 
-Raise one with `session.operatorNotices.warn(source, text)`, where `source` is the subsystem in one lowercase word. `secrets`, `skills`, `system-prompt`, `cpu`, `session` and `filesystem` are the current callers. `AgentSession.skillWarnings` was the previous attempt: a getter that collected skill-loading problems and was read by no production code at all, which is worse than no channel, because the next person to need one reuses it and inherits the silence. The secrets subsystem's use of this channel is documented in [`../handbook/src/architecture/secrets.md`](../handbook/src/architecture/secrets.md).
+Raise one with `session.operatorNotices.warn(source, text)`, where `source` is the subsystem in one lowercase word. `secrets`, `skills`, `system-prompt`, `cpu`, `session`, `filesystem` and `natives` are the current callers. `AgentSession.skillWarnings` was the previous attempt: a getter that collected skill-loading problems and was read by no production code at all, which is worse than no channel, because the next person to need one reuses it and inherits the silence. The secrets subsystem's use of this channel is documented in [`../handbook/src/architecture/secrets.md`](../handbook/src/architecture/secrets.md).
 
 ### Reaching the channel from a lower layer
 
@@ -176,7 +178,7 @@ All non-header entries include:
 
 ## Entry Taxonomy
 
-`SessionEntry` is the union of:
+`SessionEntry` is declared in `@veyyon/session` (`contracts/session/src/entry.ts`) and augmented in `kernel` (`kernel/src/session/session-entries.ts`) through `CustomCompactionSessionEntries`. It is the union of:
 
 - `message`
 - `thinking_level_change`
@@ -267,9 +269,12 @@ Stores an `AgentMessage` directly.
   "id": "c1d2e3f4",
   "parentId": "b1c2d3e4",
   "timestamp": "2026-02-16T10:22:00.000Z",
-  "thinkingLevel": "high"
+  "thinkingLevel": "high",
+  "configured": "auto"
 }
 ```
+
+`configured` is the user-configured selector at the time of this change (`"auto"` when auto mode was active, otherwise the concrete level). Absent on entries written before auto-mode persistence existed; readers fall back to `thinkingLevel`.
 
 ### `compaction`
 
@@ -285,9 +290,12 @@ Stores an `AgentMessage` directly.
   "tokensBefore": 42000,
   "details": { "readFiles": ["src/a.ts"] },
   "preserveData": { "hookState": true },
-  "fromExtension": false
+  "fromExtension": false,
+  "warning": "optional progress guard warning"
 }
 ```
+
+`warning` is the dead-end warning from the post-pass progress guard when the pass completed but freed too little for maintenance to continue.
 
 ### `branch_summary`
 
@@ -410,9 +418,12 @@ Append-only audit record of a session title change (`setSessionName`). The mutab
   "tools": ["read", "edit"],
   "outputSchema": { "type": "object" },
   "spawns": "*",
-  "readSummarize": false
+  "readSummarize": false,
+  "maxNestedSpawnDepth": 3
 }
 ```
+
+`maxNestedSpawnDepth` is the resolved nested spawn limit for this agent (absent on older session files).
 
 ### `mode_change`
 
@@ -781,12 +792,12 @@ Algorithm:
    - otherwise fallback to last entry.
 2. Walk `parentId` chain from leaf to root and reverse to root->leaf path.
 3. Derive runtime state across path:
-   - `thinkingLevel` from latest `thinking_level_change` (default `"off"`)
+   - `thinkingLevel` and `configuredThinkingLevel` from latest `thinking_level_change` (default `thinkingLevel: "off"`)
    - `serviceTier` from latest `service_tier_change`
    - model map from `model_change` entries (`role ?? "default"`)
-   - fallback `models.default` from assistant message provider/model if no explicit model change
+   - fallback `models.default` from assistant message provider/model if no explicit `model_change` (role `"default"`) has been recorded yet
    - deduplicated `injectedTtsrRules` from all `ttsr_injection` entries
-   - selected MCP discovery tools from latest `mcp_tool_selection`
+   - selected MCP discovery tools from latest `mcp_tool_selection` (setting `hasPersistedMCPToolSelection`)
    - mode/modeData from latest `mode_change` (default mode `"none"`)
 4. Build message list:
    - `message` entries pass through
@@ -839,11 +850,12 @@ Before persisting entries:
   - on load `resolveBlobRefsInEntries` restores the exact original string, so a huge tool result round-trips losslessly and stays fully readable when studying the session
   - signed/encrypted blocks (see the persistence pipeline) are exempt and persist verbatim
 - The transient field `jsonlEvents` is removed.
+- Duplicate `thinkingSignature` values on assistant thinking blocks are dropped when the reasoning item (`encrypted_content` or `id`) is already carried in the message's `providerPayload.items` (`openaiResponsesHistory`), leaving the in-memory entry untouched.
 - If an object has both `content` and `lineCount`, line count is recomputed from the inline content, but not when `content` is a `blobtext:` ref (the ref is one line; the real count is preserved).
 - Image blocks in `content` arrays with base64 length >= 1024 are externalized to blob refs:
   - stored as `blob:sha256:<hash>`
   - raw bytes written to blob store (`BlobStore.put`)
-- A tool result whose tool has a result codec (`BUILTIN_RESULT_CODECS` in `packages/coding-agent/src/tools/index.ts`: each domain manifest's `resultCodecs` plus the edit tool's, registered through `registerToolResultCodecs`) is written through `slimToolResultEntry`: the codec drops a `details` field that its `content` or the details it keeps rebuild. The `read` codec (`packages/coding-agent/src/tools/fs/read-display.ts`) drops `details.displayContent.text` and writes `from: "rows"` (rebuilt from the numbered rows) or `from: "prefix"` with a `length` (the first `length` characters of the text). A result whose content no longer rebuilds the field, such as a pruned one, is written whole. The `edit` codec (`packages/coding-agent/src/edit/result-codec.ts`) drops `newText` from the details and from each `perFileResults` entry and writes `newTextFrom: "diff"` when `applyNumberedDiff` (`packages/coding-agent/src/edit/numbered-diff-row.ts`) applied to `oldText`, or to `""` for a create, reproduces it; a CRLF file, whose diff is drawn from the LF text, or a multi-entry edit whose joined diffs do not apply to its first `oldText`, is written whole. The in-memory entry is never changed.
+- A tool result whose tool has a result codec (`BUILTIN_RESULT_CODECS` in `packages/coding-agent/src/tools/index.ts`: each domain manifest's `resultCodecs` plus the edit tool's, registered through `registerToolResultCodecs`) is written through `slimToolResultEntry`: the codec drops a `details` field that its `content` or the details it keeps rebuild. The `read` codec (`packages/coding-agent/src/tools/fs/read-display.ts`) drops `details.displayContent.text` and writes `from: "rows"` (rebuilt from the numbered rows) or `from: "prefix"` with a `length` (the first `length` characters of the text). A result whose content no longer rebuilds the field, such as a pruned one, is written whole. The `edit` codec (`packages/coding-agent/src/edit/result-codec.ts`) drops `newText` from the details and from each `perFileResults` entry and writes `newTextFrom: "diff"` when `applyNumberedDiff` (`packages/coding-agent/src/edit/numbered-diff-row.ts`) applied to `oldText`, or to `""` for a create, reproduces it; a CRLF file, whose diff is drawn from the LF text, or a multi-entry edit whose joined diffs do not apply to its first `oldText`, is written whole. The `search` codec (`packages/coding-agent/src/tools/search/search-result-codec.ts`) slims `details.result`: it drops `displayContent` and writes `displayContentFrom: "text"` or `displayContentFrom: "rows"` when the result's first text or its redrawn numbered rows rebuild it, and drops `files` and writes `filesFrom: "fileMatches"` when `files` matches the ordered paths in `fileMatches`. If the wrapper `details.meta` repeats `details.result.meta`, the codec drops `meta` and writes `metaFrom: "result"`. The `eval` codec (`packages/coding-agent/src/tools/shell/eval-result-codec.ts`) drops each `cells[i].output` that the content text holds (at or above `MIN_CODED_TEXT = 32` characters) and writes its `outputSpan`, and drops top-level `statusEvents` identical to the first cell's, writing `statusEventsFrom: "cell0"`. The `job` codec (`packages/coding-agent/src/tools/shell/job-result-codec.ts`) drops `jobs[i].resultText` and `jobs[i].errorText` that the content text holds (at or above `MIN_CODED_TEXT`), writing `resultSpan` and `errorSpan`. Shared span and content helpers (`MIN_CODED_TEXT`, `resultTextSpan`, `sliceResultSpan`, `firstResultText`) live in `packages/coding-agent/src/tools/core/output-notice.ts`. The in-memory entry is never changed.
 
 On load, blob refs are resolved back: `blob:sha256:` image refs to base64 for message/custom_message image blocks, and `blobtext:sha256:` refs to the original string in place. `restoreToolResultEntries` then runs each registered codec's `restore` over the loaded tool results, so the entries in memory match what the tool returned; a line written before a codec existed keeps its field and loads unchanged.
 
@@ -851,7 +863,7 @@ On load, blob refs are resolved back: `blob:sha256:` image refs to base64 for me
 
 `SessionStorage` provides the filesystem-shaped operations used by `SessionManager`:
 
-- sync: `ensureDirSync`, `existsSync`, `existsStateSync`, `writeTextSync`, `statSync`, `listFilesSync`, `listFilesRecursiveSync`
+- sync: `ensureDirSync`, `existsSync`, `existsStateSync`, `writeTextSync`, `statSync`, `listFilesSync`, `listFilesRecursiveSync`, and optional `readTextSync`
 - async: `exists`, `readText`, `readTextSlices`, `writeText`, `writeTextAtomic`, `rename`, `moveSessionWithArtifacts`, `unlink`, `deleteSessionWithArtifacts`, `updateSessionTitle`, `openWriter`, `drain`
 
 `moveSessionWithArtifacts` relocates the transcript and its artifact tree as one logical operation and restores the source if relocation fails. `drain` waits for queued backing writes; it returns immediately for synchronous file/memory storage and awaits indexed Redis/SQL queues.
@@ -884,4 +896,4 @@ Metadata extraction for `getRecentSessions` reads a prefix via `readTextSlices(.
 
 Use session files for conversation graph/state replay; use `HistoryStorage` for prompt history UX.
 
-*Verified against `504c88b39f` on 2026-09-11.*
+*Verified against `2d72e51522` on 2026-09-26.*
