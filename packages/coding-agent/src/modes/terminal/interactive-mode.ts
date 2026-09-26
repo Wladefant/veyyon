@@ -3979,17 +3979,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#uiHelpers.isKnownSlashCommand(text);
 	}
 
-	addMessageToChat(
-		message: AgentMessage,
-		options?: { populateHistory?: boolean; imageLinks?: readonly (string | undefined)[] },
-	): Component[] {
+	addMessageToChat(message: AgentMessage, options?: { imageLinks?: readonly (string | undefined)[] }): Component[] {
 		return this.#uiHelpers.addMessageToChat(message, options);
 	}
 
-	renderSessionContext(
-		sessionContext: SessionContext,
-		options?: { updateFooter?: boolean; populateHistory?: boolean },
-	): void {
+	renderSessionContext(sessionContext: SessionContext, options?: { updateFooter?: boolean }): void {
 		for (const message of sessionContext.messages) {
 			this.noteDisplayableThinkingContent(message);
 		}

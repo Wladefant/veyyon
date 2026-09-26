@@ -141,8 +141,7 @@ function createHarness(): Harness {
 			handleInput: vi.fn(),
 			getText: () => "",
 		},
-		renderSessionContext: (c: SessionContext, o?: { updateFooter?: boolean; populateHistory?: boolean }) =>
-			helpers.renderSessionContext(c, o),
+		renderSessionContext: (c: SessionContext, o?: { updateFooter?: boolean }) => helpers.renderSessionContext(c, o),
 		addMessageToChat: (m: AgentMessage) => helpers.addMessageToChat(m),
 		rebuildChatFromMessages: () => {
 			ctx.chatContainer.clear();
