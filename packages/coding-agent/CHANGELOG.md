@@ -10,6 +10,10 @@
 - Sessions preserve concurrent in-flight tool calls independently and commit abandoned-call reports to the normal dated log before removing crash evidence ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 - A session that dies below JavaScript outside a tool call is now reported on the next launch as `Previous session died silently`, with the phase it was in (`provider`, `tool`, `compaction`, `idle`), its session id, and the count of busy spawned lanes ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 
+### Changed
+
+- `edit` and `write` no longer refuse handwritten files named `generated.go`, `generated.ts`, `generated.js`, or `generated.py`; these are treated as auto-generated only when their content carries a generator marker ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
+
 ### Fixed
 
 - Fixed hashline `SWAP.BLK` / `DEL.BLK` on the first statement of a block also replacing or deleting the statements after it ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
