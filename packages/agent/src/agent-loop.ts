@@ -2491,12 +2491,7 @@ async function executeToolCalls(
 			// A payload in `i` would be stripped and the tool run with the leftover
 			// args. Unknown tools fall through to the not-found error; a tool that
 			// owns `i` as a real parameter has nowhere else to put the value.
-			if (
-				intent !== undefined &&
-				intent.length > MAX_INTENT_LENGTH &&
-				tool &&
-				!toolOwnsIntent
-			) {
+			if (intent !== undefined && intent.length > MAX_INTENT_LENGTH && tool && !toolOwnsIntent) {
 				record.args = strippedArgs;
 				const errorText = `\`${INTENT_FIELD}\` is a short intent label (at most ${MAX_INTENT_LENGTH} chars); the value you sent is ${intent.length} chars. The tool was not run. Put that content in the tool's own parameters and retry with a brief \`${INTENT_FIELD}\`.`;
 				emitToolResult(

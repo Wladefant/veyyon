@@ -6,6 +6,10 @@
 
 - Added `summarizeRemoteCompactionWindow` and staged summary checkpoints to resume summarization across partial failures.
 
+### Changed
+
+- Collapsed the intent-length guard in `executeToolCalls` onto the single line the repository formatter requires; no behavior change.
+
 ### Fixed
 
 - Fixed tool calls that put their payload in the intent field `i` (for example a file body in `write`) silently running with leftover arguments; they now fail with a clear prompt to move the content into the tool's parameters ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).

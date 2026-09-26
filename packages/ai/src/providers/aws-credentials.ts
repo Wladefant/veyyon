@@ -22,6 +22,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { atomicWriteFile } from "@veyyon/utils/atomic-write";
 import { $env } from "@veyyon/utils/env";
 import { isEnoent } from "@veyyon/utils/fs-error";
 import * as logger from "@veyyon/utils/logger";
@@ -454,19 +455,16 @@ async function refreshSsoToken(
 
 /**
  * Persist a refreshed token so the AWS CLI, other SDKs, and the next Veyyon process
- * all start from a live token. Written via temp file + rename so a concurrent
- * reader never observes a half-written cache entry; a failure here is logged and
- * ignored, since the in-memory token is still usable for this run.
+ * all start from a live token. The write is atomic, so a concurrent reader never
+ * observes a half-written cache entry; a failure here is logged and ignored, since
+ * the in-memory token is still usable for this run.
  */
 async function writeSsoCachedToken(file: string, token: SsoCachedToken): Promise<void> {
 	const target = path.join(os.homedir(), ".aws", "sso", "cache", file);
-	const tmp = `${target}.${process.pid}.tmp`;
 	try {
-		await fs.promises.writeFile(tmp, JSON.stringify(token), { mode: 0o600 });
-		await fs.promises.rename(tmp, target);
+		await atomicWriteFile(target, JSON.stringify(token));
 	} catch (err) {
 		logger.debug("aws-credentials: failed to persist refreshed SSO token", { file, err: String(err) });
-		await fs.promises.rm(tmp, { force: true }).catch(() => {});
 	}
 }
 

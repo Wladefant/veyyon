@@ -417,7 +417,7 @@ export interface ToolSession {
 	/** Merge tool selections into the active session tool set. */
 	activateDiscoveredTools?: (toolNames: string[]) => Promise<string[]>;
 	/** The tool-choice queue used to force forthcoming tool invocations and carry invocation handlers. */
-	getToolChoiceQueue?(): ToolChoiceQueue;
+	getToolChoiceQueue?(): ToolChoiceQueue | undefined;
 	/** Build a model-provider-specific ToolChoice that targets the named tool, or undefined if unsupported. */
 	buildToolChoice?(toolName: string): ToolChoice | undefined;
 	/** Steer a hidden custom message into the conversation (e.g. a preview reminder). */

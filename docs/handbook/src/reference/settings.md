@@ -756,7 +756,7 @@ They used to open a separate screen with its own roster, which meant two answers
 | `agent.maxNestedSpawnDepth` | number | `0` | Nested levels that agents may spawn. Direct children receive no `task` tool at `0`; an agent-specific override may raise the limit. |
 | `agent.maxRuntimeMs` | number | `0` | Hard per-agent wall-clock limit in ms; `0` disables it. |
 | `agent.idleTtlMs` | number | `300000` | How long a finished agent stays live before parking. The default is 5 minutes for every model and provider. Set a positive millisecond value to override it. `0` keeps idle agents live until exit. Parking closes the live session but retains its transcript for revival. |
-| `agent.softRequestBudget` | number | `200` | Requests after which an agent is asked to wrap up; `0` disables the guard. |
+| `agent.softRequestBudget` | number | `250` | Requests after which an agent is asked to wrap up; `0` disables the guard. |
 | `agent.softRequestBudgetNotice` | boolean | `true` | Inject that wrap-up notice once. |
 | `agent.showResolvedModelBadge` | boolean | `true` | Show each agent's resolved model, and what decided it, on the task widget and the agent surfaces. |
 | `agent.enableLsp` | boolean | `false` | Let agents use the `lsp` tool. |

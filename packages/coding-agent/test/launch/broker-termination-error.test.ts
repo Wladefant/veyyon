@@ -22,30 +22,13 @@
  *    the sweep are still recovered.
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { Process } from "@veyyon/natives";
+import * as nativeProcess from "@veyyon/utils/native-process";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
-
-let terminateShouldReject = false;
-let terminateCallCount = 0;
-
-mock.module("@veyyon/utils/native-process", () => ({
-	processHandle: (pid: number) => ({
-		status: () => "running",
-		groupId: () => 1,
-		terminate: async () => {
-			terminateCallCount++;
-			if (terminateShouldReject) {
-				throw new Error(`refusing termination of protected or unverified pid ${pid}`);
-			}
-			return true;
-		},
-	}),
-	processHandlesByPath: () => [],
-}));
-
 import { DaemonBroker } from "../../src/launch/broker";
 import { createDaemonBrokerClient, type DaemonBrokerClient } from "../../src/launch/client";
 import {
@@ -55,6 +38,31 @@ import {
 	managedDaemonsRoot,
 } from "../../src/launch/paths";
 import type { DaemonSnapshot, DaemonSpec } from "../../src/launch/protocol";
+
+let terminateShouldReject = false;
+let terminateCallCount = 0;
+let processHandleSpy: Mock<typeof nativeProcess.processHandle> | undefined;
+
+/**
+ * The handle the broker is given in place of a real one. `terminate` is the only
+ * member these cases exercise, and the only one whose rejection they drive: a
+ * real process cannot be made to refuse a signal, and the refusal is the point.
+ * `status` and `groupId` answer as a live process so the handle reads as alive
+ * until the code under test decides otherwise.
+ */
+function fakeProcessHandle(pid: number) {
+	return {
+		status: () => "running",
+		groupId: () => 1,
+		terminate: async () => {
+			terminateCallCount++;
+			if (terminateShouldReject) {
+				throw new Error(`refusing termination of protected or unverified pid ${pid}`);
+			}
+			return true;
+		},
+	};
+}
 
 let isolatedConfigRoot: IsolatedConfigRoot | undefined;
 const TEST_PARENT = path.join(os.tmpdir(), "veyyon-launch-termination-err");
@@ -69,6 +77,9 @@ beforeEach(() => {
 	isolatedConfigRoot = enterIsolatedConfigRoot("launch-term-err");
 	terminateShouldReject = false;
 	terminateCallCount = 0;
+	processHandleSpy = spyOn(nativeProcess, "processHandle").mockImplementation(
+		pid => fakeProcessHandle(pid) as unknown as Process,
+	);
 });
 
 afterAll(async () => {
@@ -91,6 +102,8 @@ afterEach(async () => {
 	}
 	isolatedConfigRoot?.restore();
 	isolatedConfigRoot = undefined;
+	processHandleSpy?.mockRestore();
+	processHandleSpy = undefined;
 });
 
 async function tempDir(prefix: string): Promise<string> {

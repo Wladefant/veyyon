@@ -1038,7 +1038,7 @@ describe("agentLoop with AgentMessage", () => {
 		for await (const _ of stream) {
 			// drain
 		}
-		const messages = await stream.result();
+		await stream.result();
 
 		expect(received).toHaveLength(1);
 		expect(received[0]?.i).toBe(longValue);

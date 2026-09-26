@@ -2,7 +2,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as path from "node:path";
-import { getConfigRootDir, postmortem } from "@veyyon/utils";
+import { atomicWriteFile, getConfigRootDir, postmortem } from "@veyyon/utils";
 
 /** Versioned, private discovery record. Only the owning terminal publishes this. */
 export interface TerminalOwner {
@@ -130,8 +130,7 @@ export async function serveTerminalControl(
 	const publish = async (): Promise<void> => {
 		const identity = target.identity();
 		const record: TerminalOwner = { version: 1, ...identity, pid: process.pid, endpoint, token };
-		await fs.writeFile(`${recordPath}.tmp`, JSON.stringify(record), { mode: 0o600 });
-		await fs.rename(`${recordPath}.tmp`, recordPath);
+		await atomicWriteFile(recordPath, JSON.stringify(record));
 		if (closed) {
 			await fs.rm(recordPath, { force: true });
 			return;
