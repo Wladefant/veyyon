@@ -1570,27 +1570,27 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				return next;
 			},
 			getFileMutationVersion: path => fileMutationVersions.get(path) ?? 0,
-			getTodoPhases: () => session.getTodoPhases(),
-			setTodoPhases: phases => session.setTodoPhases(phases),
-			isMCPDiscoveryEnabled: () => session.isMCPDiscoveryEnabled(),
-			getSelectedMCPToolNames: () => session.getSelectedMCPToolNames(),
-			activateDiscoveredMCPTools: toolNames => session.activateDiscoveredMCPTools(toolNames),
+			getTodoPhases: () => session?.getTodoPhases() ?? [],
+			setTodoPhases: phases => session?.setTodoPhases(phases),
+			isMCPDiscoveryEnabled: () => session?.isMCPDiscoveryEnabled() ?? false,
+			getSelectedMCPToolNames: () => session?.getSelectedMCPToolNames() ?? [],
+			activateDiscoveredMCPTools: toolNames => (session ? session.activateDiscoveredMCPTools(toolNames) : Promise.resolve([])),
 			// Generic tool discovery (unified — covers built-in + MCP + extension)
-			isToolDiscoveryEnabled: () => session.isToolDiscoveryEnabled(),
-			getDiscoverableTools: filter => session.getDiscoverableTools(filter),
-			getDiscoverableToolSearchIndex: () => session.getDiscoverableToolSearchIndex(),
-			getSelectedDiscoveredToolNames: () => session.getSelectedDiscoveredToolNames(),
-			activateDiscoveredTools: toolNames => session.activateDiscoveredTools(toolNames),
-			getCheckpointState: () => session.getCheckpointState(),
-			setCheckpointState: state => session.setCheckpointState(state ?? undefined),
-			getLastCompletedRewind: () => session.getLastCompletedRewind(),
-			getToolChoiceQueue: () => session.toolChoiceQueue,
+			isToolDiscoveryEnabled: () => session?.isToolDiscoveryEnabled() ?? false,
+			getDiscoverableTools: filter => session?.getDiscoverableTools(filter) ?? [],
+			getDiscoverableToolSearchIndex: () => session?.getDiscoverableToolSearchIndex(),
+			getSelectedDiscoveredToolNames: () => session?.getSelectedDiscoveredToolNames() ?? [],
+			activateDiscoveredTools: toolNames => (session ? session.activateDiscoveredTools(toolNames) : Promise.resolve([])),
+			getCheckpointState: () => session?.getCheckpointState(),
+			setCheckpointState: state => session?.setCheckpointState(state ?? undefined),
+			getLastCompletedRewind: () => session?.getLastCompletedRewind(),
+			getToolChoiceQueue: () => session?.toolChoiceQueue!,
 			buildToolChoice: name => {
-				const m = session.model;
+				const m = session?.model;
 				return m ? buildNamedToolChoice(name, m) : undefined;
 			},
 			steer: msg =>
-				session.agent.steer({
+				session?.agent.steer({
 					role: "custom",
 					customType: msg.customType,
 					content: msg.content,
@@ -1599,11 +1599,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					attribution: "agent",
 					timestamp: Date.now(),
 				}),
-			peekQueueInvoker: () => session.peekQueueInvoker(),
-			peekPendingInvoker: () => session.peekPendingInvoker(),
-			clearPendingInvokers: () => session.clearPendingInvokers(),
-			peekStandingResolveHandler: () => session.peekStandingResolveHandler(),
-			setStandingResolveHandler: handler => session.setStandingResolveHandler(handler),
+			peekQueueInvoker: () => session?.peekQueueInvoker(),
+			peekPendingInvoker: () => session?.peekPendingInvoker(),
+			clearPendingInvokers: () => session?.clearPendingInvokers(),
+			peekStandingResolveHandler: () => session?.peekStandingResolveHandler(),
+			setStandingResolveHandler: handler => session?.setStandingResolveHandler(handler),
 			allocateOutputArtifact: async toolType => {
 				try {
 					return await sessionManager.allocateArtifactPath(toolType);

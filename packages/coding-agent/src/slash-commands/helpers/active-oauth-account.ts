@@ -44,16 +44,24 @@ export function limitMatchesActiveAccount(
 		if (activeOrgId !== reportOrgId) return false;
 		if (!activeAccountId && !activeEmail && !activeProjectId) return true;
 	}
-	if (activeAccountId) {
-		const reportAccountId = normalizeIdentityValue(metadata.accountId) ?? normalizeIdentityValue(metadata.account_id);
-		if (reportAccountId === activeAccountId) return true;
-		if (normalizeIdentityValue(limit.scope.accountId) === activeAccountId) return true;
-	}
-	if (activeEmail && normalizeIdentityValue(metadata.email) === activeEmail) return true;
-	if (activeProjectId) {
-		if (normalizeIdentityValue(metadata.projectId) === activeProjectId) return true;
-		if (normalizeIdentityValue(limit.scope.projectId) === activeProjectId) return true;
-	}
+	const reportAccountId =
+		normalizeIdentityValue(metadata.accountId) ??
+		normalizeIdentityValue(metadata.account_id) ??
+		normalizeIdentityValue(limit.scope.accountId);
+	const reportEmail = normalizeIdentityValue(metadata.email);
+	const reportProjectId =
+		normalizeIdentityValue(metadata.projectId) ?? normalizeIdentityValue(limit.scope.projectId);
+
+	// Conflicting identity check: when both emails are known and differ, or
+	// both account ids are known and differ, the limit belongs to a different
+	// account and must never match. ProjectId fallback is only reached when
+	// there is no conflicting identity.
+	if (activeEmail && reportEmail && activeEmail !== reportEmail) return false;
+	if (activeAccountId && reportAccountId && activeAccountId !== reportAccountId) return false;
+
+	if (activeAccountId && reportAccountId === activeAccountId) return true;
+	if (activeEmail && reportEmail === activeEmail) return true;
+	if (activeProjectId && reportProjectId === activeProjectId) return true;
 	return false;
 }
 
