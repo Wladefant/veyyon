@@ -4729,4 +4729,85 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 		assert_eq!(session.shell.env_str("TMPDIR").as_deref(), Some("rel\\tmpdir"));
 		assert_eq!(session.shell.env_str("Temp"), None);
 	}
+	#[cfg(unix)]
+	async fn kill_test_context() -> (ShellSessionCore, ExecutionParameters) {
+		let config = ShellConfig { session_env: None, snapshot_path: None, minimizer: None };
+		let session = create_session(&config).await.expect("create_session");
+		let mut params = session.shell.default_exec_params();
+		params.set_fd(OpenFiles::STDIN_FD, null_file().expect("null stdin"));
+		params.set_fd(OpenFiles::STDOUT_FD, null_file().expect("null stdout"));
+		params.set_fd(OpenFiles::STDERR_FD, null_file().expect("null stderr"));
+		(session, params)
+	}
+
+	/// When clap consumes the `--` marker before `execute` (the default-signal
+	/// and `-s SIG` forms), a following negative PID is still an operand, not a
+	/// signal: `kill -- -<pgid>` defaults to SIGTERM for the group, and
+	/// `kill -s TERM -- -<pgid>` sends the named signal to the group.
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn kill_builtin_signals_group_when_marker_precedes_negative_pid() {
+		let dir = veyyon_test_scratch::scratch_dir("kill-group");
+		let default_ready = dir.join("default-ready");
+		let named_ready = dir.join("named-ready");
+		let spawn_group_leader = |ready: &std::path::Path| {
+			tokio::process::Command::new("sh")
+				.args([
+					"-c",
+					"trap 'exit 42' TERM; : > \"$1\"; while :; do sleep 0.05; done",
+					"sh",
+					ready.to_str().expect("utf8 path"),
+				])
+				.process_group(0)
+				.spawn()
+				.expect("group leader")
+		};
+
+		let mut default_child = spawn_group_leader(&default_ready);
+		let mut named_child = spawn_group_leader(&named_ready);
+		let default_pid = default_child.id().expect("default pid");
+		let named_pid = named_child.id().expect("named pid");
+
+		let ready_result = tokio::time::timeout(Duration::from_secs(5), async {
+			while !default_ready.exists() || !named_ready.exists() {
+				tokio::time::sleep(Duration::from_millis(10)).await;
+			}
+		})
+		.await;
+		if ready_result.is_err() {
+			let _ = (default_child.start_kill(), named_child.start_kill());
+			let _ = tokio::join!(default_child.wait(), named_child.wait());
+			panic!("group leaders did not install their SIGTERM traps");
+		}
+
+		let (mut session, params) = kill_test_context().await;
+		let source_info = SourceInfo::from("veyyon-natives:test");
+		// Default signal (SIGTERM) with the marker consumed by clap.
+		let default_result = session
+			.shell
+			.run_string(format!("kill -- -{default_pid}"), &source_info, &params)
+			.await
+			.expect("default kill command");
+		// Named signal via -s, marker consumed by clap.
+		let named_result = session
+			.shell
+			.run_string(format!("kill -s TERM -- -{named_pid}"), &source_info, &params)
+			.await
+			.expect("named kill command");
+
+		let statuses = tokio::time::timeout(Duration::from_secs(5), async {
+			tokio::join!(default_child.wait(), named_child.wait())
+		})
+		.await;
+		if statuses.is_err() {
+			let _ = (default_child.start_kill(), named_child.start_kill());
+			let _ = tokio::join!(default_child.wait(), named_child.wait());
+			panic!("marker-preceded negative PID must signal the process group");
+		}
+		let (default_status, named_status) = statuses.expect("checked timeout");
+		assert_eq!(exit_code(&default_result), 0, "`kill -- -<pgid>` should succeed");
+		assert_eq!(exit_code(&named_result), 0, "`kill -s TERM -- -<pgid>` should succeed");
+		assert_eq!(default_status.expect("default wait").code(), Some(42));
+		assert_eq!(named_status.expect("named wait").code(), Some(42));
+	}
 }
