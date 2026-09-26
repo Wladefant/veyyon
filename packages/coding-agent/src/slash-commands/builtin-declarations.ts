@@ -916,6 +916,7 @@ export const BUILTIN_SLASH_COMMAND_DECLARATIONS = [
 
 	{
 		name: "quit",
+		aliases: ["q"],
 		description: "Quit the application",
 	},
 ] as const satisfies readonly BuiltinSlashCommandDeclaration[];
