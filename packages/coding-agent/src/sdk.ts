@@ -53,7 +53,7 @@ import {
 	shouldAutoloadArgotAtStartup,
 } from "./argot-cache";
 import { buildArgotGate, expandToolArguments } from "./argot-wire";
-import { AsyncJobManager } from "./async";
+import { AsyncJobManager, formatAsyncResultForFollowUp } from "./async";
 import { AutoLearnController, buildAutoLearnInstructions } from "./autolearn/controller";
 import { shouldEnableAppendOnlyContext } from "./config/append-only-context-mode";
 import { isAuthenticated, kNoAuth } from "./config/auth-state";
@@ -192,7 +192,7 @@ import { queueResolveHandler } from "./tools/agent/resolve";
 import { normalizeToolNames, TOOL } from "./tools/core/builtin-names";
 import { ToolContextStore } from "./tools/core/context";
 import { resolveDiscoveryAllForceActive, resolveInitialActiveToolNames } from "./tools/core/loading";
-import { wrapToolWithMetaNotice } from "./tools/core/output-meta";
+import { type OutputMeta, wrapToolWithMetaNotice } from "./tools/core/output-meta";
 import { createRepairToolCallArgumentsHook } from "./tools/core/repair/agent-hook";
 import { renderSearchToolBm25Description, SearchToolBm25Tool } from "./tools/search/search-tool-bm25";
 import { getImageGenTools, isImageProviderPreference, setPreferredImageProvider } from "./tools/web/image-gen";
@@ -1378,28 +1378,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		};
 		const enableLsp = options.enableLsp ?? true;
 		const asyncMaxJobs = Math.min(100, Math.max(1, settings.get("async.maxJobs") ?? 100));
-		const ASYNC_INLINE_RESULT_MAX_CHARS = 12_000;
-		const ASYNC_PREVIEW_MAX_CHARS = 4_000;
-		const formatAsyncResultForFollowUp = async (result: string): Promise<string> => {
-			if (result.length <= ASYNC_INLINE_RESULT_MAX_CHARS) {
-				return result;
-			}
-
-			const preview = `${result.slice(0, ASYNC_PREVIEW_MAX_CHARS)}\n\n[Output truncated. Showing first ${ASYNC_PREVIEW_MAX_CHARS.toLocaleString()} characters.]`;
-			try {
-				const { path: artifactPath, id: artifactId } = await sessionManager.allocateArtifactPath("async");
-				if (artifactPath && artifactId) {
-					await Bun.write(artifactPath, result);
-					return `${preview}\nFull output: artifact://${artifactId}`;
-				}
-			} catch (error) {
-				logger.warn("Failed to persist async follow-up artifact", {
-					error: errorMessage(error),
-				});
-			}
-
-			return preview;
-		};
 		// Only the first top-level session in a process owns an AsyncJobManager.
 		// Spawned agents inherit the parent's manager via `AsyncJobManager.instance()`
 		// (set below), and any additional top-level session spun up in-process
@@ -1414,7 +1392,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 						maxRunningJobs: asyncMaxJobs,
 						onJobComplete: async (jobId, result, job) => {
 							if (!session || asyncJobManager!.isDeliverySuppressed(jobId)) return;
-							const formattedResult = await formatAsyncResultForFollowUp(result);
+							let meta: OutputMeta | undefined;
+							const details = job?.latestDetails;
+							if (details && typeof details === "object" && "meta" in details && typeof details.meta === "object" && details.meta !== null) {
+								meta = details.meta as OutputMeta;
+							}
+							const formattedResult = await formatAsyncResultForFollowUp(
+								result,
+								meta,
+								sessionManager,
+							);
 							if (asyncJobManager!.isDeliverySuppressed(jobId)) return;
 
 							session.deliverAsyncJobResult(jobId, formattedResult, job);
