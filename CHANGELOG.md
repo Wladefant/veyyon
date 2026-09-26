@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- `CompactionDetails` holds only the file paths a compaction's read and modified lists gained over the compaction it built on (`readFilesAdded`, `modifiedFilesAdded`, and that compaction's id as `base`) instead of `readFiles` and `modifiedFiles` in full; `prepareCompaction` still resolves records an earlier version wrote.
+
+### Changed
+
+- A truncated `read`, `search` or `run_experiment` result records only its truncation counts in the session file, not a second copy of the kept text, so new results take less disk and memory and a resume parses less.
+- The `lsp` tool dispatches each workspace-scoped action (`status`, `diagnostics`, `rename_file`, `capabilities`, `request`, workspace `symbols`, workspace `reload`) to its own handler, and `definition`, `type_definition` and `implementation` share one lookup; no user-visible change.
+- A goal session records the token and time a tool call spends as a small `goal_progress` entry instead of a full copy of the goal, so the session file holds the objective once per goal change rather than once per tool call and a resume parses less.
+- The Anthropic and OpenAI-compatible providers split their stream loops, message converters and finalization into per-step helpers; no user-visible change.
+- Opening or restoring a session builds its set of known entry ids once instead of twice, which takes about 40ms off opening a 220,000-entry session.
+
 ### Removed
 
 - The unused built-in `designer` model role is gone from Settings → Model → Roles; a `modelRoles.designer` value you already set still resolves through `@designer` as a custom role.
@@ -15,6 +27,7 @@
 - A Cursor turn whose remote agent stops making progress now ends with "Cursor made no progress for Ns" at the 30-minute ceiling instead of hanging indefinitely, because Cursor's ten-second server heartbeat no longer counts as progress.
 - A Cursor turn held by a local tool that never returns now ends when its failure or an abort arrives instead of waiting on the tool forever.
 - Fixed every Cursor exec-channel tool call being stored twice in the assistant message, which left an unanswered copy of each call that session resume reported as pending.
+- A blank user or developer message after a tool result no longer sends Mistral two consecutive assistant turns, which it rejects.
 - The resume warning for tool calls left without a result lists at most three calls, each command or path cut to 80 characters on one line, followed by "and N more", and no longer counts a `<id>_2` repeat of a call its original id already answered.
 - A tool call recorded in an OpenAI Responses or Codex native history payload keeps its provider id through outbound canonicalization, so its result is sent as that call's output instead of a stale-output note after a "No tool output was recorded" placeholder on every turn.
 - `@veyyon/utils/stderr-guard` loads `node:util` on the first routed console call rather than at import, keeping it off the launch card path; no user-visible change.
