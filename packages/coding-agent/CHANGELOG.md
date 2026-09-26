@@ -5,6 +5,7 @@
 ### Changed
 
 - A truncated `read`, `search` or `run_experiment` result records only its truncation counts in the session file, not a second copy of the kept text, so new results take less disk and memory and a resume parses less.
+- The `lsp` tool dispatches each workspace-scoped action (`status`, `diagnostics`, `rename_file`, `capabilities`, `request`, workspace `symbols`, workspace `reload`) to its own handler, and `definition`, `type_definition` and `implementation` share one lookup; no user-visible change.
 
 ### Fixed
 
