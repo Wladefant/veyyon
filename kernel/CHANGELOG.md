@@ -11,6 +11,7 @@
 
 ### Fixed
 
+- Artifacts are staged on a hidden sibling and verified against their own byte count before the rename publishes them, so a write that stops short can no longer leave a truncated artifact that `artifact://` resolves as a complete result, and a failed rewrite leaves the previous bytes in place ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Session activation rejects a transcript owned by a registered live terminal before opening a second writer ([#88](https://github.com/Wladefant/veyyon/issues/88)).
 - Assert terminal writer ownership cleanly when switching session files and remove unused title slot parsing in session manager ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Outbound tool ID canonicalization preserves native Responses call/result pairs instead of shortening only the visible blocks, so ChatGPT-Web host-tool continuations receive the actual result rather than an orphan-result note ([#22](https://github.com/Wladefant/veyyon/issues/22)).
