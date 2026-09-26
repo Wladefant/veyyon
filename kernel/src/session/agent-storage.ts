@@ -11,6 +11,7 @@ import type { AuthCredential, AuthCredentialStore, StoredAuthCredential } from "
 import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import { AsyncDrain } from "@veyyon/utils/async";
 import { getAgentDbPath, getStatsDbPath } from "@veyyon/utils/dirs";
+import { getDbBusyTimeoutMs } from "@veyyon/utils/env";
 // Owners, not the `@veyyon/utils` barrel: 5 modules against 74.
 import * as logger from "@veyyon/utils/logger";
 import { SQLITE_NOW_EPOCH } from "@veyyon/utils/sqlite";
@@ -199,8 +200,10 @@ ON CONFLICT(model_key) DO UPDATE SET
 		// Install the busy handler BEFORE any lock-taking statement (incl.
 		// `PRAGMA journal_mode=WAL`, which acquires an exclusive lock during WAL
 		// recovery). Without this, concurrent veyyon startups can crash here with
-		// `SQLITE_BUSY` / `SQLITE_BUSY_RECOVERY`. See issue #2421.
-		this.#db.run("PRAGMA busy_timeout = 5000");
+		// `SQLITE_BUSY` / `SQLITE_BUSY_RECOVERY`. See issue #2421. Headless
+		// hosts bound the wait so lock contention cannot freeze the protocol
+		// loop for the full interactive timeout.
+		this.#db.run(`PRAGMA busy_timeout = ${getDbBusyTimeoutMs()}`);
 		this.#db.run(`
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
@@ -588,7 +591,7 @@ FROM model_usage_legacy
 		let select: Statement;
 		try {
 			statsDb = new Database(statsDbPath, { readonly: true });
-			statsDb.run("PRAGMA busy_timeout = 5000");
+			statsDb.run(`PRAGMA busy_timeout = ${getDbBusyTimeoutMs()}`);
 			select = statsDb.prepare(
 				`SELECT rowid, timestamp, provider, model, output_tokens, duration, ttft
 FROM messages

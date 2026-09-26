@@ -1,7 +1,7 @@
 import { Database, type Statement } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { AsyncDrain, getHistoryDbPath, logger, NON_ALNUM_RUN_RE } from "@veyyon/utils";
+import { AsyncDrain, getDbBusyTimeoutMs, getHistoryDbPath, logger, NON_ALNUM_RUN_RE } from "@veyyon/utils";
 import { escapeLike, SQLITE_NOW_EPOCH, tableExists } from "@veyyon/utils/sqlite";
 
 export interface HistoryEntry {
@@ -44,7 +44,9 @@ export class HistoryStorage {
 		this.#db = new Database(dbPath);
 
 		// Install the busy handler BEFORE any lock-taking statement. See #2421.
-		this.#db.run("PRAGMA busy_timeout = 5000");
+		// Headless hosts bound the wait so lock contention cannot freeze the
+		// protocol loop for the full interactive timeout.
+		this.#db.run(`PRAGMA busy_timeout = ${getDbBusyTimeoutMs()}`);
 
 		const hasFts = tableExists(this.#db, "history_fts");
 		this.#db.run(`
