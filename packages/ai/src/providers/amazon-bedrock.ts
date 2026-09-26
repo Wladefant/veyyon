@@ -32,7 +32,7 @@ import type {
 	ToolCall,
 	ToolResultMessage,
 } from "../types";
-import { normalizeToolCallId, resolveCacheRetention } from "../utils";
+import { normalizeSystemPrompts, normalizeToolCallId, resolveCacheRetention } from "../utils";
 import {
 	clearStreamingPartialJson,
 	getStreamingPartialJson,
@@ -795,11 +795,11 @@ function supportsThinkingSignature(model: Model<"bedrock-converse-stream">): boo
  * of the offsetting the Anthropic path does.
  */
 function buildSystemPrompt(
-	systemPrompt: readonly string[] | undefined,
+	systemPrompt: readonly string[] | string | undefined,
 	model: Model<"bedrock-converse-stream">,
 	cacheRetention: CacheRetention,
 ): SystemContent[] | undefined {
-	const prompts = systemPrompt?.map(prompt => prompt.toWellFormed()).filter(prompt => prompt.length > 0) ?? [];
+	const prompts = normalizeSystemPrompts(systemPrompt);
 	if (prompts.length === 0) return undefined;
 	if (cacheRetention === "none" || !supportsBedrockPromptCaching(model)) {
 		return prompts.map(prompt => ({ text: prompt }));

@@ -645,6 +645,29 @@ export function normalizeMessagesForProvider(
 const INTENT_FIELD_DESCRIPTION = "concise intent";
 const INTENT_SCHEMA_UNION_KEYS = ["anyOf", "oneOf"] as const;
 
+/**
+ * Longest `i` value accepted as an intent. The injected field is described as
+ * a "concise intent" (INTENT_FIELD_DESCRIPTION); anything past this is a tool
+ * payload the model put in the wrong field, not a label.
+ */
+const MAX_INTENT_LENGTH = 200;
+
+function schemaDefinesProperty(schema: unknown, key: string): boolean {
+	if (!isRecord(schema)) return false;
+	const schemaRecord = schema as Record<string, unknown>;
+	const properties = schemaRecord.properties;
+	if (isRecord(properties) && Object.hasOwn(properties, key)) return true;
+	const required = schemaRecord.required;
+	if (Array.isArray(required) && required.includes(key)) return true;
+	for (const unionKey of INTENT_SCHEMA_UNION_KEYS) {
+		const variants = schemaRecord[unionKey];
+		if (Array.isArray(variants)) {
+			if (variants.some(variant => schemaDefinesProperty(variant, key))) return true;
+		}
+	}
+	return false;
+}
+
 function injectIntentIntoSchema(
 	schema: unknown,
 	mode: "require" | "optional" = "require",
@@ -1829,8 +1852,11 @@ async function streamAssistantResponse(
 			trailing = snapshotAssistantMessage(trailing);
 			if (addedPartial) {
 				context.messages[context.messages.length - 1] = trailing;
-				stream.push({ type: "message_end", message: snapshotAssistantMessage(trailing) });
+			} else {
+				context.messages.push(trailing);
+				stream.push({ type: "message_start", message: snapshotAssistantMessage(trailing) });
 			}
+			stream.push({ type: "message_end", message: snapshotAssistantMessage(trailing) });
 			await finishChat(trailing);
 			return trailing;
 		});
@@ -2458,9 +2484,31 @@ async function executeToolCalls(
 
 		const { toolCall, tool } = record;
 		let argsForExecution = toolCall.arguments as Record<string, unknown>;
+		const toolOwnsIntent = Boolean(tool && schemaDefinesProperty(toolWireSchema(tool), INTENT_FIELD));
 		if (intentTracing) {
 			const { intent, strippedArgs } = extractIntent(toolCall.arguments);
-			argsForExecution = strippedArgs;
+			argsForExecution = toolOwnsIntent ? (toolCall.arguments as Record<string, unknown>) : strippedArgs;
+			// A payload in `i` would be stripped and the tool run with the leftover
+			// args. Unknown tools fall through to the not-found error; a tool that
+			// owns `i` as a real parameter has nowhere else to put the value.
+			if (
+				intent !== undefined &&
+				intent.length > MAX_INTENT_LENGTH &&
+				tool &&
+				!toolOwnsIntent
+			) {
+				record.args = strippedArgs;
+				const errorText = `\`${INTENT_FIELD}\` is a short intent label (at most ${MAX_INTENT_LENGTH} chars); the value you sent is ${intent.length} chars. The tool was not run. Put that content in the tool's own parameters and retry with a brief \`${INTENT_FIELD}\`.`;
+				emitToolResult(
+					record,
+					{
+						content: [{ type: "text" as const, text: errorText }],
+						details: { isError: true, error: errorText },
+					},
+					true,
+				);
+				return;
+			}
 			if (intent) {
 				toolCall.intent = intent;
 			} else if (typeof tool?.intent === "function") {
@@ -2511,7 +2559,7 @@ async function executeToolCalls(
 				argsForExecution = repairOutcome.arguments;
 				if (intentTracing) {
 					const { intent, strippedArgs } = extractIntent(argsForExecution);
-					argsForExecution = strippedArgs;
+					argsForExecution = toolOwnsIntent ? argsForExecution : strippedArgs;
 					if (intent) {
 						toolCall.intent = intent;
 					}

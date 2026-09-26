@@ -72,6 +72,10 @@ export interface AsyncJob {
 	 * until the caller invokes `markRunning()` from the run context.
 	 */
 	queued?: boolean;
+	/**
+	 * Latest progress / result details reported by the job runner.
+	 */
+	latestDetails?: Record<string, unknown>;
 }
 
 export interface AsyncJobManagerOptions {
@@ -224,6 +228,7 @@ export class AsyncJobManager {
 		};
 
 		const reportProgress = async (text: string, details?: Record<string, unknown>): Promise<void> => {
+			if (details) job.latestDetails = details;
 			if (!options?.onProgress) return;
 			try {
 				await options.onProgress(text, details);
