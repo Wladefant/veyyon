@@ -142,6 +142,42 @@ describe("limitMatchesActiveAccount", () => {
 			false,
 		);
 	});
+
+	test("two accounts sharing a projectId with different emails match only their own limits", () => {
+		const accountA = { email: "alice@example.com", projectId: "aicode-consumers" };
+		const accountB = { email: "bob@example.com", projectId: "aicode-consumers" };
+
+		const reportA = makeReport({
+			metadata: { email: "alice@example.com", projectId: "aicode-consumers" },
+		});
+		const reportB = makeReport({
+			metadata: { email: "bob@example.com", projectId: "aicode-consumers" },
+		});
+		const limitA = makeLimit({ projectId: "aicode-consumers" });
+		const limitB = makeLimit({ projectId: "aicode-consumers" });
+
+		expect(limitMatchesActiveAccount(reportA, limitA, accountA)).toBe(true);
+		expect(limitMatchesActiveAccount(reportB, limitB, accountA)).toBe(false);
+		expect(limitMatchesActiveAccount(reportB, limitB, accountB)).toBe(true);
+		expect(limitMatchesActiveAccount(reportA, limitA, accountB)).toBe(false);
+	});
+
+	test("two accounts sharing a projectId with different accountIds match only their own limits", () => {
+		const accountA = { accountId: "acc-1", projectId: "aicode-consumers" };
+		const accountB = { accountId: "acc-2", projectId: "aicode-consumers" };
+
+		const reportA = makeReport({
+			metadata: { accountId: "acc-1", projectId: "aicode-consumers" },
+		});
+		const reportB = makeReport({
+			metadata: { accountId: "acc-2", projectId: "aicode-consumers" },
+		});
+
+		expect(limitMatchesActiveAccount(reportA, makeLimit(), accountA)).toBe(true);
+		expect(limitMatchesActiveAccount(reportB, makeLimit(), accountA)).toBe(false);
+		expect(limitMatchesActiveAccount(reportB, makeLimit(), accountB)).toBe(true);
+		expect(limitMatchesActiveAccount(reportA, makeLimit(), accountB)).toBe(false);
+	});
 });
 
 describe("reportMatchesActiveAccount", () => {
