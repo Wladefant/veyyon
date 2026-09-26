@@ -17,6 +17,7 @@
 
 - No shipped behavior changed; the global EPIPE routing suite pointed at `packages/tui/src/terminal.ts`, a path the terminal host left on 2026-08-30, so its three "finishes TUI persistence before exit" cases failed on a module-resolution exit rather than on ordering ([#64](https://github.com/Wladefant/veyyon/issues/64)).
 ### Fixed
+- Prioritize exact slash-command aliases over earlier same-prefix commands in sync autocomplete so `/q` resolves to `quit` rather than `queue` ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 - `@veyyon/utils/stderr-guard` loads `node:util` on the first routed console call rather than at import, keeping it off the launch card path; no user-visible change.
 - Unhandled ENOSPC errors on log, session, or artifact writes are now caught and logged as warnings rather than crashing the process, preventing session loss when a disk fills ([#73](https://github.com/Wladefant/veyyon/issues/73), [#114](https://github.com/Wladefant/veyyon/pull/114)).
