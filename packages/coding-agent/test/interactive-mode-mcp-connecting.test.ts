@@ -5,6 +5,7 @@ import { Agent } from "@veyyon/agent-core";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
+import { MCPManager } from "@veyyon/coding-agent/mcp/manager";
 import {
 	MCP_CONNECTION_STATUS_EVENT_CHANNEL,
 	type McpConnectionStatusEvent,
@@ -15,6 +16,8 @@ import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import { EventBus } from "@veyyon/coding-agent/utils/event-bus";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { logger, TempDir } from "@veyyon/utils";
+
+const MCP_FIXTURE = path.join(import.meta.dirname, "fixtures", "many-tools-mcp.ts");
 
 /**
  * Behavioral wiring guard for MCP startup status (mirrors
@@ -151,4 +154,31 @@ describe("InteractiveMode MCP connection status", () => {
 		expect(warnSpy).toHaveBeenCalled();
 		expect(errorSpy).not.toHaveBeenCalled();
 	});
+
+	it("repaints the zone when a live transport drops, with no bus event behind it", async () => {
+		// A real manager and a real stdio server: the drop lands long after the startup
+		// `onStatus` callback returned, so nothing on the bus carries it and only the
+		// manager's own subscription can reach this mode.
+		const manager = new MCPManager(tempDir.path());
+		const live = new InteractiveMode(session, "test", () => {}, [], manager, eventBus);
+		vi.spyOn(live.statusLine, "watchGitState").mockImplementation(() => {});
+		const paint = vi.spyOn(live.ui, "requestRender").mockImplementation(() => {});
+		try {
+			await manager.connectServers({ alpha: { type: "stdio", command: process.execPath, args: [MCP_FIXTURE] } }, {});
+			// The connect itself answers on the startup `onStatus` callback, which this
+			// mode never sees: nothing to paint.
+			await manager.waitForConnection("alpha");
+			paint.mockClear();
+
+			// `onClose` reports the drop synchronously, before the reconnect starts, so the
+			// pending verdict is on screen the moment the wire is gone. Which text the
+			// handler leaves in the zone is pinned by the bus cases above — one handler,
+			// and this case proves the manager's own transitions reach it.
+			manager.getConnection("alpha")?.transport.onClose?.();
+			expect(paint).toHaveBeenCalledTimes(1);
+		} finally {
+			live.stop();
+			await manager.disconnectAll();
+		}
+	}, 30_000);
 });

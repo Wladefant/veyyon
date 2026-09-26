@@ -60,6 +60,7 @@
 ### Fixed
 
 - The CLI imports the terminal output guard when a worker thread starts rather than at startup, keeping it off the static boot graph; no user-visible change.
+- MCP boot health tracks live transport drops, reconnects and crash-breaker suspensions instead of keeping the startup verdict for a server that is gone ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ## [1.5.5] - 2026-09-25
 
