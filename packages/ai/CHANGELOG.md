@@ -9,6 +9,7 @@
 ### Fixed
 
 - Fixed Anthropic prompt caching writing a fresh entry for the entire system prefix whenever the trailing project footer (cwd, date, workspace tree) changed.
+- Fixed capped Anthropic and Bedrock Claude requests with thinking enabled, including on-demand compaction, ending at max_tokens with no answer; every capped request now receives its effort thinking budget on top of requested output tokens.
 - Preserved the session working directory through SimpleStreamOptions mapping so Full-mode ChatGPT Web turns receive the trusted Codex environment context ([#22](https://github.com/Wladefant/veyyon/issues/22)).
 - Anthropic OAuth pairs Claude Code 2.1.280 with Agent SDK 0.3.280 so Opus 5.5 requests pass the minimum-client-version gate.
 - The ChatGPT Web stream-failure path asks `isTimeoutError` from `@veyyon/utils` whether the abort reason was a deadline, instead of comparing `reason.name` against `"TimeoutError"` itself ([#64](https://github.com/Wladefant/veyyon/issues/64)).
