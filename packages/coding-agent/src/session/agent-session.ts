@@ -676,7 +676,6 @@ function hasNonWhitespace(value: string): boolean {
 
 export type { ShakeMode, ShakeResult };
 
-
 const noOpUIContext: ExtensionUIContext = {
 	select: async (_title, _options, _dialogOptions) => undefined,
 	confirm: async (_title, _message, _dialogOptions) => false,
