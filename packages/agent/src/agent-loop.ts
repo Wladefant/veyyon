@@ -1852,8 +1852,11 @@ async function streamAssistantResponse(
 			trailing = snapshotAssistantMessage(trailing);
 			if (addedPartial) {
 				context.messages[context.messages.length - 1] = trailing;
-				stream.push({ type: "message_end", message: snapshotAssistantMessage(trailing) });
+			} else {
+				context.messages.push(trailing);
+				stream.push({ type: "message_start", message: snapshotAssistantMessage(trailing) });
 			}
+			stream.push({ type: "message_end", message: snapshotAssistantMessage(trailing) });
 			await finishChat(trailing);
 			return trailing;
 		});

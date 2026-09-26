@@ -991,7 +991,8 @@ describe("agentLoop with AgentMessage", () => {
 		const toolResult = messages.find(m => m.role === "toolResult") as ToolResultMessage | undefined;
 		expect(toolResult).toBeDefined();
 		expect(toolResult?.details).toMatchObject({ isError: true });
-		expect(toolResult?.content[0]?.text).toContain("is a short intent label");
+		const firstContent = toolResult?.content[0];
+		expect(firstContent && "text" in firstContent ? firstContent.text : "").toContain("is a short intent label");
 	});
 
 	it("permits tools that legitimately declare an 'i' parameter to accept long values", async () => {
