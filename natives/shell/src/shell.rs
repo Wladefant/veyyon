@@ -3252,13 +3252,11 @@ mod tests {
 		}
 	}
 
-	#[cfg(unix)]
 	fn shell_test_lock() -> &'static TokioMutex<()> {
 		static LOCK: std::sync::OnceLock<TokioMutex<()>> = std::sync::OnceLock::new();
 		LOCK.get_or_init(|| TokioMutex::new(()))
 	}
 
-	#[cfg(unix)]
 	async fn run_command_capture(
 		command: &str,
 		cwd: Option<&std::path::Path>,
@@ -3589,6 +3587,44 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 		// Aggregate cap exceeded: the chain streamed its output raw and was not
 		// minimized, so `minimized` is absent (not an empty-text `too-large`).
 		assert!(result.minimized.is_none());
+	}
+
+	#[cfg(windows)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn kill_builtin_refuses_host_pid() {
+		let (result, _) = run_command_capture(
+			&format!("kill -9 {}", std::process::id()),
+			None,
+			None,
+			CancelToken::default(),
+		)
+		.await;
+		assert_ne!(result.exit_code, Some(0));
+	}
+
+	#[cfg(windows)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn timeout_kills_sleeping_child_and_preserves_host() {
+		let host_pid = std::process::id();
+		let (result, output) = run_command_capture(
+			"powershell.exe -NoProfile -Command 'Write-Output $PID; Start-Sleep -Seconds 60'",
+			None,
+			None,
+			CancelToken::new(Some(2000)),
+		)
+		.await;
+		assert!(result.timed_out);
+		let child_pid: i32 = output.trim().parse().unwrap();
+		assert_ne!(child_pid as u32, host_pid);
+		if let Some(child) = process::Process::from_pid(child_pid) {
+			assert!(
+				child
+					.wait_for_exit(Some(Duration::from_secs(5)), CancelToken::default())
+					.await
+					.unwrap()
+			);
+		}
+		assert_eq!(std::process::id(), host_pid);
 	}
 
 	#[cfg(unix)]

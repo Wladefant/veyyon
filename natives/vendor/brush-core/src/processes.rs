@@ -155,15 +155,11 @@ impl ChildProcess {
 
 		#[cfg(windows)]
 		{
-			let terminated = self
-				.kill_handle
-				.as_ref()
-				.is_some_and(|handle| terminate_raw_handle(handle.as_raw_handle()));
-			if !terminated {
-				if let Some(pid) = self.pid {
-					let _ = terminate_process_id(pid);
-				}
+			if let Some(handle) = &self.kill_handle {
+				let _ = terminate_raw_handle(handle.as_raw_handle());
 			}
+			// Never reopen an unpinned PID during cancellation or Drop: the child
+			// may have exited and its PID may now identify the host or another run.
 		}
 	}
 
@@ -236,33 +232,73 @@ fn duplicate_handle(handle: RawHandle) -> Option<OwnedHandle> {
 
 #[cfg(windows)]
 fn terminate_raw_handle(handle: RawHandle) -> bool {
-	use windows_sys::Win32::System::Threading::TerminateProcess;
+	use windows_sys::Win32::System::Threading::{GetProcessId, TerminateProcess};
+
+	// SAFETY: the caller owns a valid process handle for this entire call.
+	let pid = unsafe { GetProcessId(handle) };
+	if termination_target_is_protected(pid) {
+		return false;
+	}
 
 	// SAFETY: The caller provides a process handle opened/duplicated for process
 	// termination. The handle remains owned by its original owner.
 	unsafe { TerminateProcess(handle, 1) != 0 }
 }
 
+/// Refuse the host, its ancestors, and targets whose safety cannot be established.
+/// Windows parent IDs come from one snapshot, without requiring termination
+/// access to ancestors (which may belong to an elevated launcher).
 #[cfg(windows)]
-fn terminate_process_id(pid: sys::process::ProcessId) -> bool {
-	use windows_sys::Win32::Foundation::CloseHandle;
-	use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE};
-
-	let Ok(pid) = u32::try_from(pid) else {
-		return false;
+pub fn termination_target_is_protected(pid: u32) -> bool {
+	use std::collections::{HashMap, HashSet};
+	use windows_sys::Win32::{
+		Foundation::{CloseHandle, INVALID_HANDLE_VALUE},
+		System::Diagnostics::ToolHelp::{
+			CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+			TH32CS_SNAPPROCESS,
+		},
 	};
-
-	// SAFETY: OpenProcess is called with PROCESS_TERMINATE for a numeric process id.
-	// A null handle is handled below.
-	let handle = unsafe { OpenProcess(PROCESS_TERMINATE, 0, pid) };
-	if handle.is_null() {
-		return false;
+	let refuse = || {
+		tracing::warn!(pid, "refusing termination of self/ancestor or unverified target");
+		true
+	};
+	if pid == 0 || pid == std::process::id() {
+		return refuse();
 	}
-
-	let terminated = terminate_raw_handle(handle);
-	// SAFETY: The handle was returned by OpenProcess and is closed exactly once here.
-	let _close_result = unsafe { CloseHandle(handle) };
-	terminated
+	// SAFETY: snapshot creation has no pointer arguments.
+	let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+	if snapshot == INVALID_HANDLE_VALUE {
+		return refuse();
+	}
+	// SAFETY: PROCESSENTRY32W is plain Win32 data; dwSize is set before use.
+	let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+	entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+	let mut parents = HashMap::new();
+	// SAFETY: snapshot is valid and entry is writable with the correct size.
+	let mut ok = unsafe { Process32FirstW(snapshot, &mut entry) };
+	while ok != 0 {
+		parents.insert(entry.th32ProcessID, entry.th32ParentProcessID);
+		// SAFETY: same live snapshot and initialized entry.
+		ok = unsafe { Process32NextW(snapshot, &mut entry) };
+	}
+	// SAFETY: close the snapshot once after enumeration.
+	unsafe { CloseHandle(snapshot) };
+	if !parents.contains_key(&std::process::id()) {
+		return refuse();
+	}
+	let mut cursor = std::process::id();
+	let mut seen = HashSet::new();
+	while cursor != 0 {
+		if cursor == pid || !seen.insert(cursor) {
+			return refuse();
+		}
+		let Some(parent) = parents.get(&cursor) else {
+			// A missing ancestor has exited; it cannot receive a signal.
+			return false;
+		};
+		cursor = *parent;
+	}
+	false
 }
 
 fn completion_exit_code(status: &std::process::ExitStatus) -> i32 {
