@@ -91,12 +91,10 @@ function makeRenderCtx(transcript: SessionContext): { ctx: InteractiveModeContex
 				ref: "blob:sha256:hash",
 			})),
 		},
-		addMessageToChat: (message: AgentMessage, options?: { populateHistory?: boolean }) =>
+		addMessageToChat: (message: AgentMessage, options?: { imageLinks?: readonly (string | undefined)[] }) =>
 			helpers.addMessageToChat(message, options),
-		renderSessionContext: (
-			context: SessionContext,
-			options?: { updateFooter?: boolean; populateHistory?: boolean },
-		) => helpers.renderSessionContext(context, options),
+		renderSessionContext: (context: SessionContext, options?: { updateFooter?: boolean }) =>
+			helpers.renderSessionContext(context, options),
 		showStatus: vi.fn(),
 		// Required members of the context. Omitting them used to be tolerated by
 		// `?.()` calls in the controller, which meant production silently skipped
