@@ -18,6 +18,7 @@
 
 - A user message delivered by an extension (`sendUserMessage`, for example a Telegram relay) no longer clears the composer draft, so in-progress text and pasted images survive the delivery ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Go 1.26 `new(expr)` calls (e.g. `new(42)` or `new(f(x))`) triggering syntax errors during block operations and parse errors during structure search ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed Windows paths not collapsing to `~` when the home directory was spelled in another case (`c:\users\operator` against `C:\Users\Operator`), which left the operator's account name in every displayed path ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed the Windows bash tool exporting `TEMP`, `TMP`, and `TMPDIR` with 8.3 short names such as `ADMINI~1`, so they now match the long-form `pwd`/`$PWD` after `cd "$TEMP"` ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Resolve tool policy frame and execution context separately in extension tool wrapper so ambient context reaches the approval gate and handlers when caller omits context, while policy-only frames are not handed to tools as agent tool context ([Wladefant/veyyon#111](https://github.com/Wladefant/veyyon/pull/111)).
 - Fixed hashline `SWAP.BLK` / `DEL.BLK` on the first statement of a block also replacing or deleting the statements after it ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
