@@ -412,6 +412,30 @@ function lineNumbersFromEntries(entries: readonly LineEntry[]): number[] {
 	return lines;
 }
 
+/**
+ * What the TUI draws for a read: the lines without their hashline or line-number prefixes, and the
+ * line number each one carries. `lineNumbers` is present only when the count from `startLine` breaks
+ * (an elided span or a jump between ranges); a contiguous window counts up from `startLine`.
+ */
+interface ReadDisplayContent {
+	text: string;
+	startLine: number;
+	lineNumbers?: Array<number | null>;
+}
+
+function entriesDisplay(entries: readonly LineEntry[], fallbackStartLine: number): ReadDisplayContent {
+	const text = lineEntriesToPlainText(entries, BRACKET_CONTEXT_ELLIPSIS);
+	const first = entries.find(entry => entry.kind === "line");
+	const startLine = first?.kind === "line" ? first.lineNumber : fallbackStartLine;
+	let contiguous = true;
+	for (let i = 0; i < entries.length && contiguous; i++) {
+		const entry = entries[i];
+		contiguous = entry.kind === "line" && entry.lineNumber === startLine + i;
+	}
+	if (contiguous) return { text, startLine };
+	return { text, startLine, lineNumbers: entries.map(entry => (entry.kind === "line" ? entry.lineNumber : null)) };
+}
+
 /** Inclusive line range describing one elided span in a structural summary. */
 interface ElidedRange {
 	start: number;
@@ -1065,11 +1089,7 @@ export interface ReadToolDetails {
 	/** Raw text + start line for user-visible TUI rendering, set when content is text-like.
 	 * Mirrors the same lines the model receives but without hashline/line-number prefixes,
 	 * so the TUI can render the file content with its own gutter without re-parsing the formatted text. */
-	displayContent?: {
-		text: string;
-		startLine: number;
-		lineNumbers?: Array<number | null>;
-	};
+	displayContent?: ReadDisplayContent;
 	summary?: { lines: number; elidedSpans: number; elidedLines: number };
 	/** Number of unresolved git conflicts surfaced by this read (TUI uses for inline `warn N` badge). */
 	conflictCount?: number;
@@ -1715,25 +1735,15 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		let seenLines: number[] | undefined;
 		let rawSeenLines: number[] | undefined;
 		const formatText = (content: string, startNum: number): string => {
-			const lineCount = countTextLines(content);
-			details.displayContent = {
-				text: content,
-				startLine: startNum,
-				lineNumbers: Array.from({ length: lineCount }, (_, i) => startNum + i),
-			};
-			if (shouldAddHashLines) seenLines = contiguousLineNumbers(startNum, lineCount);
+			details.displayContent = { text: content, startLine: startNum };
+			if (shouldAddHashLines) seenLines = contiguousLineNumbers(startNum, countTextLines(content));
 			const formatted = formatTextWithMode(content, startNum, shouldAddHashLines, shouldAddLineNumbers);
 			if (!hashContext || emittedHashlineHeader) return formatted;
 			emittedHashlineHeader = true;
 			return prependHashlineHeader(formatted, hashContext);
 		};
 		const formatLineEntries = (entries: readonly LineEntry[], startNum: number): string => {
-			const firstLine = entries.find(entry => entry.kind === "line");
-			details.displayContent = {
-				text: lineEntriesToPlainText(entries, BRACKET_CONTEXT_ELLIPSIS),
-				startLine: firstLine?.kind === "line" ? firstLine.lineNumber : startNum,
-				lineNumbers: entries.map(entry => (entry.kind === "line" ? entry.lineNumber : null)),
-			};
+			details.displayContent = entriesDisplay(entries, startNum);
 			if (shouldAddHashLines) seenLines = lineNumbersFromEntries(entries);
 			const formatted = formatLineEntriesWithMode(entries, shouldAddHashLines, shouldAddLineNumbers);
 			if (!hashContext || emittedHashlineHeader) return formatted;
@@ -1888,13 +1898,8 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		} else if (visibleSpans.length > 0) {
 			const entries = buildLineEntriesWithBlockContext(allLines, visibleSpans, { path: options.sourcePath });
 			if (shouldAddHashLines) seenLines = lineNumbersFromEntries(entries);
-			const firstLine = entries.find(entry => entry.kind === "line");
-			if (firstLine?.kind === "line") {
-				details.displayContent = {
-					text: lineEntriesToPlainText(entries, BRACKET_CONTEXT_ELLIPSIS),
-					startLine: firstLine.lineNumber,
-					lineNumbers: entries.map(entry => (entry.kind === "line" ? entry.lineNumber : null)),
-				};
+			if (entries.some(entry => entry.kind === "line")) {
+				details.displayContent = entriesDisplay(entries, 1);
 			}
 			const formatted = formatLineEntriesWithMode(entries, shouldAddHashLines, shouldAddLineNumbers);
 			outputText = hashContext && !emittedHashlineHeader ? prependHashlineHeader(formatted, hashContext) : formatted;
@@ -1985,7 +1990,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	): Promise<{
 		outputText: string;
 		columnTruncated: number;
-		displayContent?: { text: string; startLine: number; lineNumbers?: Array<number | null> };
+		displayContent?: ReadDisplayContent;
 		bridgeResult?: AgentToolResult<ReadToolDetails>;
 	}> {
 		const rawSelector = isRawSelector(parsed);
@@ -2005,7 +2010,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const materialized = rawSelector ? undefined : await materializeFile(absolutePath, fileSize);
 		const fullLines = materialized?.lines;
 		const clip = new ColumnClip(maxColumns);
-		let displayContent: { text: string; startLine: number; lineNumbers?: Array<number | null> } | undefined;
+		let displayContent: ReadDisplayContent | undefined;
 
 		for (const range of ranges) {
 			const rangeStart = range.startLine - 1; // 0-indexed
@@ -2089,12 +2094,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				{ path: absolutePath, text: materialized?.text },
 				{ lineText: clip.lineText },
 			);
-			const firstLine = entries.find(entry => entry.kind === "line");
-			displayContent = {
-				text: lineEntriesToPlainText(entries, BRACKET_CONTEXT_ELLIPSIS),
-				startLine: firstLine?.kind === "line" ? firstLine.lineNumber : (visibleSpans[0]?.startLine ?? 1),
-				lineNumbers: entries.map(entry => (entry.kind === "line" ? entry.lineNumber : null)),
-			};
+			displayContent = entriesDisplay(entries, visibleSpans[0]?.startLine ?? 1);
 			outputText = formatLineEntriesWithMode(entries, shouldAddHashLines, shouldAddLineNumbers);
 		} else {
 			outputText = blocks.join("\n\n…\n\n");
@@ -3062,17 +3062,10 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						}
 					}
 
-					let capturedDisplayContent:
-						| { text: string; startLine: number; lineNumbers?: Array<number | null> }
-						| undefined;
+					let capturedDisplayContent: ReadDisplayContent | undefined;
 					let emittedHashlineHeader = false;
 					const formatText = (text: string, startNum: number): string => {
-						const lineCount = countTextLines(text);
-						capturedDisplayContent = {
-							text,
-							startLine: startNum,
-							lineNumbers: Array.from({ length: lineCount }, (_, i) => startNum + i),
-						};
+						capturedDisplayContent = { text, startLine: startNum };
 						const formatted = formatTextWithMode(text, startNum, shouldAddHashLines, shouldAddLineNumbers);
 						if (!hashContext || emittedHashlineHeader) return formatted;
 						emittedHashlineHeader = true;
@@ -3086,12 +3079,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 							{ path: absolutePath, text: materialized?.text },
 							{ lineText: clip.lineText },
 						);
-						const firstLine = entries.find(entry => entry.kind === "line");
-						capturedDisplayContent = {
-							text: lineEntriesToPlainText(entries, BRACKET_CONTEXT_ELLIPSIS),
-							startLine: firstLine?.kind === "line" ? firstLine.lineNumber : startLineDisplay,
-							lineNumbers: entries.map(entry => (entry.kind === "line" ? entry.lineNumber : null)),
-						};
+						capturedDisplayContent = entriesDisplay(entries, startLineDisplay);
 						const formatted = formatLineEntriesWithMode(entries, shouldAddHashLines, shouldAddLineNumbers);
 						if (!hashContext || emittedHashlineHeader) return formatted;
 						emittedHashlineHeader = true;
@@ -3425,14 +3413,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			firstLineExceedsLimit,
 		};
 
-		let displayContent: { text: string; startLine: number; lineNumbers?: Array<number | null> } | undefined;
+		let displayContent: ReadDisplayContent | undefined;
 		const formatText = (text: string, startNum: number): string => {
-			const lineCount = countTextLines(text);
-			displayContent = {
-				text,
-				startLine: startNum,
-				lineNumbers: Array.from({ length: lineCount }, (_, i) => startNum + i),
-			};
+			displayContent = { text, startLine: startNum };
 			return formatTextWithMode(text, startNum, false, shouldAddLineNumbers);
 		};
 
