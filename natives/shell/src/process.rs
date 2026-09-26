@@ -891,7 +891,7 @@ mod platform {
 
 		pub fn children(&self) -> Vec<Self> {
 			let tree = build_process_tree();
-			Self::children_from_tree(self.pid, &tree)
+			Self::children_from_tree(self, &tree)
 		}
 
 		/// Walk the entire descendant tree using a single Toolhelp snapshot.
@@ -899,7 +899,7 @@ mod platform {
 		/// `children()` recursing per-node would re-snapshot the whole process
 		/// table for every visited descendant, making tree termination
 		/// `O(N · D)` snapshots. One snapshot per termination wave is enough.
-		pub fn descendants(&self) -> Vec<Self> {
+		pub fn descendants(&self, guard: &super::TerminationGuard) -> Vec<Self> {
 			let tree = build_process_tree();
 			let Ok(root) = u32::try_from(self.pid) else {
 				return Vec::new();
@@ -907,12 +907,12 @@ mod platform {
 			let mut visited: HashSet<u32> = HashSet::new();
 			visited.insert(root);
 			let mut out = Vec::new();
-			Self::collect_descendants_from_tree(root, &tree, &mut visited, &mut out);
+			Self::collect_descendants_from_tree(self, &tree, &mut visited, &mut out, guard);
 			out
 		}
 
-		fn children_from_tree(pid: i32, tree: &HashMap<u32, SmallVec<[u32; 4]>>) -> Vec<Self> {
-			let Ok(pid_u32) = u32::try_from(pid) else {
+		fn children_from_tree(parent: &Self, tree: &HashMap<u32, SmallVec<[u32; 4]>>) -> Vec<Self> {
+			let Ok(pid_u32) = u32::try_from(parent.pid) else {
 				return Vec::new();
 			};
 			tree
@@ -921,18 +921,21 @@ mod platform {
 				.flatten()
 				.filter_map(|&child_pid| {
 					let child = Self::from_pid(i32::try_from(child_pid).ok()?)?;
-					(child.status() == ProcessStatus::Running).then_some(child)
+					(child.creation_time >= parent.creation_time
+						&& child.status() == ProcessStatus::Running)
+						.then_some(child)
 				})
 				.collect()
 		}
 
 		fn collect_descendants_from_tree(
-			parent: u32,
+			parent: &Self,
 			tree: &HashMap<u32, SmallVec<[u32; 4]>>,
 			visited: &mut HashSet<u32>,
 			out: &mut Vec<Self>,
+			guard: &super::TerminationGuard,
 		) {
-			let Some(children) = tree.get(&parent) else {
+			let Some(children) = tree.get(&(parent.pid as u32)) else {
 				return;
 			};
 			for &child_pid in children {
@@ -945,12 +948,17 @@ mod platform {
 				let Some(child) = Self::from_pid(child_pid_i) else {
 					continue;
 				};
-				if child.status() != ProcessStatus::Running {
+				// Windows retains the numeric parent PID after a parent exits.
+				// A reused PID must not graft an older, unrelated tree onto this run.
+				if child.creation_time < parent.creation_time
+					|| guard.refuses(child.pid)
+					|| child.status() != ProcessStatus::Running
+				{
 					continue;
 				}
 				// Post-order: collect grandchildren first so leaves are signalled before
 				// their parents during tree termination.
-				Self::collect_descendants_from_tree(child_pid, tree, visited, out);
+				Self::collect_descendants_from_tree(&child, tree, visited, out, guard);
 				out.push(child);
 			}
 		}
@@ -1268,6 +1276,30 @@ mod platform {
 
 		matches
 	}
+	#[cfg(test)]
+	mod tests {
+		use super::*;
+
+		#[test]
+		fn stale_parent_pid_does_not_adopt_older_process() {
+			let host = Process::from_pid(std::process::id() as i32).unwrap();
+			// Model a newer process reusing the exited parent's numeric PID.
+			let mut newer_parent = host.clone();
+			newer_parent.pid = i32::MAX;
+			newer_parent.creation_time = host.creation_time + 1;
+			let tree = HashMap::from([(i32::MAX as u32, SmallVec::from_slice(&[host.pid as u32]))]);
+			assert!(Process::children_from_tree(&newer_parent, &tree).is_empty());
+			let mut descendants = Vec::new();
+			Process::collect_descendants_from_tree(
+				&newer_parent,
+				&tree,
+				&mut HashSet::new(),
+				&mut descendants,
+				&super::super::TerminationGuard::capture(),
+			);
+			assert!(descendants.is_empty());
+		}
+	}
 }
 
 /// Stable process reference.
@@ -1355,6 +1387,8 @@ impl Process {
 	/// exit before escalating to `KILL_SIGNAL`. Pass `graceful_ms < 0` to skip
 	/// the wait entirely (the polite signal is still emitted). Returns `true`
 	/// when the tree has exited by the end of the hard wave's wait window.
+	/// Returns an error before signalling anything if the root is protected or
+	/// its ancestry snapshot is unavailable; `Ok(false)` means the exit wait expired.
 	pub async fn terminate_tree(
 		&self,
 		group: bool,
@@ -1382,16 +1416,26 @@ impl Process {
 	/// it again before each signal wave so grandchildren spawned during a grace
 	/// period are not missed.
 	fn live_descendants(&self) -> Vec<Self> {
-		self
-			.inner
-			.descendants()
-			.into_iter()
-			.map(Self::from_inner)
-			.collect()
+		self.live_descendants_guarded(&TerminationGuard::capture())
+	}
+
+	fn live_descendants_guarded(&self, guard: &TerminationGuard) -> Vec<Self> {
+		#[cfg(windows)]
+		let descendants = self.inner.descendants(guard);
+		#[cfg(not(windows))]
+		let descendants = {
+			let _ = guard;
+			self.inner.descendants()
+		};
+		descendants.into_iter().map(Self::from_inner).collect()
 	}
 
 	fn signal_tree(&self, signal: i32) -> u32 {
-		let descendants = self.live_descendants();
+		let guard = TerminationGuard::capture();
+		if guard.refuses(self.pid()) {
+			return 0;
+		}
+		let descendants = self.live_descendants_guarded(&guard);
 		let mut signaled = 0u32;
 		// If self leads its own process group, also signal the group — this catches
 		// grandchildren reparented to init when their immediate parent died inside
@@ -1402,7 +1446,7 @@ impl Process {
 			let _ = kill_process_group(pgid, signal);
 		}
 		for child in &descendants {
-			if child.inner.kill(signal) {
+			if !guard.refuses(child.pid()) && child.inner.kill(signal) {
 				signaled += 1;
 			}
 		}
@@ -1419,6 +1463,13 @@ impl Process {
 		timeout_ms: u32,
 		ct: CancelToken,
 	) -> Result<bool> {
+		let guard = TerminationGuard::capture();
+		if guard.refuses(self.pid()) {
+			return Err(anyhow::anyhow!(
+				"refusing termination of protected or unverified pid {}",
+				self.pid()
+			));
+		}
 		if self.status() != ProcessStatus::Running {
 			return Ok(true);
 		}
@@ -1429,9 +1480,11 @@ impl Process {
 		if let Some(pgid) = process_group {
 			let _ = kill_process_group(pgid, TERM_SIGNAL);
 		}
-		let mut descendants = self.live_descendants();
+		let mut descendants = self.live_descendants_guarded(&guard);
 		for child in &descendants {
-			let _ = child.inner.kill(TERM_SIGNAL);
+			if !guard.refuses(child.pid()) {
+				let _ = child.inner.kill(TERM_SIGNAL);
+			}
 		}
 		let _ = self.inner.kill(TERM_SIGNAL);
 
@@ -1455,9 +1508,11 @@ impl Process {
 		if let Some(pgid) = process_group {
 			let _ = kill_process_group(pgid, KILL_SIGNAL);
 		}
-		descendants = self.live_descendants();
+		descendants = self.live_descendants_guarded(&guard);
 		for child in &descendants {
-			let _ = child.inner.kill(KILL_SIGNAL);
+			if !guard.refuses(child.pid()) {
+				let _ = child.inner.kill(KILL_SIGNAL);
+			}
 		}
 		let _ = self.inner.kill(KILL_SIGNAL);
 
@@ -1505,6 +1560,44 @@ async fn wait_for_exit(
 	Ok(false)
 }
 
+/// One ancestry snapshot per termination operation, reused for every
+/// descendant.
+struct TerminationGuard {
+	ancestors: Option<HashSet<u32>>,
+}
+
+impl TerminationGuard {
+	fn capture() -> Self {
+		#[cfg(windows)]
+		let ancestors = brush_core::processes::protected_ancestor_pids();
+		#[cfg(not(windows))]
+		let ancestors = {
+			let mut cursor = Some(std::process::id() as i32);
+			let mut seen = HashSet::new();
+			while let Some(current) = cursor {
+				if !seen.insert(current as u32) {
+					break;
+				}
+				cursor = Process::from_pid(current).and_then(|process| process.ppid());
+			}
+			Some(seen)
+		};
+		Self { ancestors }
+	}
+
+	fn refuses(&self, pid: i32) -> bool {
+		let refused = pid <= 0
+			|| self
+				.ancestors
+				.as_ref()
+				.is_none_or(|set| set.contains(&(pid as u32)));
+		if refused {
+			eprintln!("veyyon-shell: refusing termination of protected or unverified pid {pid}");
+		}
+		refused
+	}
+}
+
 /// Send `signal` to the process group `pgid`.
 /// Returns false when process groups are unsupported on the platform.
 #[allow(clippy::missing_const_for_fn, reason = "Dispatches to platform-specific implementation")]
@@ -1514,7 +1607,8 @@ pub fn kill_process_group(pgid: i32, signal: i32) -> bool {
 	// process group. Doing so terminates the harness along with the targets.
 	// `SpawnRegistry` only ever records pgids brush created for this run (never
 	// the harness pgid); this catches any future caller that bypasses it.
-	if pgid <= 0 || is_self_process_group(pgid) {
+	if pgid <= 0 || is_self_process_group(pgid) || TerminationGuard::capture().refuses(pgid) {
+		eprintln!("veyyon-shell: refusing termination of protected process group {pgid}");
 		return false;
 	}
 	platform::kill_process_group(pgid, signal)
@@ -1816,6 +1910,100 @@ fn platform_process_group_alive(pgid: i32) -> bool {
 #[cfg(not(unix))]
 const fn platform_process_group_alive(_pgid: i32) -> bool {
 	false
+}
+
+#[cfg(test)]
+mod killguard_tests {
+	use super::*;
+
+	#[tokio::test]
+	async fn refuses_self_and_parent_termination() {
+		let host = Process::from_pid(std::process::id() as i32).unwrap();
+		let parent = Process::from_pid(host.ppid().unwrap()).unwrap();
+		for protected in [host, parent] {
+			assert_eq!(protected.kill_tree(None), 0);
+			let error = protected
+				.terminate_tree(true, 0, 100, CancelToken::default())
+				.await
+				.unwrap_err();
+			assert!(error.to_string().contains("refusing termination"));
+			assert_eq!(protected.status(), ProcessStatus::Running);
+		}
+	}
+
+	#[tokio::test]
+	async fn spawned_child_termination_still_works() {
+		#[cfg(windows)]
+		let mut child = std::process::Command::new("powershell.exe")
+			.args(["-NoProfile", "-Command", "Start-Sleep -Seconds 60"])
+			.spawn()
+			.unwrap();
+		#[cfg(not(windows))]
+		let mut child = std::process::Command::new("sleep")
+			.arg("60")
+			.spawn()
+			.unwrap();
+		let process = Process::from_pid(child.id() as i32).unwrap();
+		assert!(child.try_wait().unwrap().is_none(), "child must be alive before termination");
+		assert!(
+			process
+				.terminate_tree(false, 100, 2000, CancelToken::default())
+				.await
+				.unwrap()
+		);
+		assert!(!child.wait().unwrap().success());
+	}
+	#[cfg(windows)]
+	#[tokio::test]
+	async fn exited_root_still_reaps_its_owned_descendant() {
+		use std::io::{BufRead, BufReader};
+		let mut parent = std::process::Command::new("powershell.exe")
+			.args([
+				"-NoProfile",
+				"-Command",
+				"$child = Start-Process powershell.exe -ArgumentList \
+				 '-NoProfile','-Command','Start-Sleep -Seconds 60' -PassThru; Write-Output $child.Id; \
+				 Start-Sleep -Seconds 60",
+			])
+			.stdout(std::process::Stdio::piped())
+			.spawn()
+			.unwrap();
+		let root = Process::from_pid(parent.id() as i32).unwrap();
+		let mut line = String::new();
+		BufReader::new(parent.stdout.take().unwrap())
+			.read_line(&mut line)
+			.unwrap();
+		let descendant = Process::from_pid(line.trim().parse().unwrap()).unwrap();
+		assert_eq!(descendant.status(), ProcessStatus::Running);
+		parent.kill().unwrap();
+		parent.wait().unwrap();
+		assert_eq!(root.status(), ProcessStatus::Exited);
+		let signaled = root.kill_tree(None);
+		let exited = descendant
+			.wait_for_exit(Some(Duration::from_secs(5)), CancelToken::default())
+			.await
+			.unwrap();
+		if !exited {
+			let _ = descendant.kill_tree(None);
+		}
+		assert!(signaled > 0);
+		assert!(exited);
+	}
+
+	#[test]
+	fn unavailable_ancestry_refuses_every_target() {
+		let guard = TerminationGuard { ancestors: None };
+		assert!(guard.refuses(std::process::id() as i32));
+		assert!(guard.refuses(123456));
+	}
+
+	#[test]
+	fn captured_ancestry_allows_unrelated_targets() {
+		let guard = TerminationGuard { ancestors: Some(HashSet::from([42, 41])) };
+		assert!(guard.refuses(42));
+		assert!(guard.refuses(41));
+		assert!(!guard.refuses(43));
+	}
 }
 
 #[cfg(all(test, unix))]
