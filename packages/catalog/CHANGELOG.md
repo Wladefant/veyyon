@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Claude Opus 5.5 downgrades forced tool choice (`supportsForcedToolChoice: false`) to avoid 400 invalid_request_error rejections, and default models for anthropic, amazon-bedrock, and litellm promote to Opus 5.5.
 - `calculateCost` and `resolveRequestCost` fall back to zero pricing for unconstructed model objects missing an explicit `cost` property.
 - Finalized SQLite statement handles in `modelCacheStamp` to prevent statement handle accumulation on shared databases.
 - Anthropic OAuth advertises Claude Code 2.1.280, and the bundled catalog includes Claude Opus 5.5 with its low-through-max effort ladder and published pricing.
