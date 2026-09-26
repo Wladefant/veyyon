@@ -285,10 +285,8 @@ function createFixture(opts: { isStreaming?: boolean; messages?: AgentMessage[] 
 		updateEditorBorderColor: vi.fn(),
 		settings: { get: () => false },
 		addMessageToChat: (message: AgentMessage) => helpers.addMessageToChat(message),
-		renderSessionContext: (
-			context: SessionContext,
-			options?: { updateFooter?: boolean; populateHistory?: boolean },
-		) => helpers.renderSessionContext(context, options),
+		renderSessionContext: (context: SessionContext, options?: { updateFooter?: boolean }) =>
+			helpers.renderSessionContext(context, options),
 		resetTranscript: () => chatContainer.clear(),
 		initialChatRendered: false,
 		pendingMessagesContainer: { disposeChildren: vi.fn(), removeChild: vi.fn(), addChild: vi.fn() },

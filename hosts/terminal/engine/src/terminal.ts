@@ -669,7 +669,7 @@ export class ProcessTerminal implements Terminal {
 	};
 	#stdoutErrorCleanup?: () => void;
 	#stdoutErrorHandler = (err: Error) => {
-		this.#markTerminalDisconnected("stdout failed", err);
+		this.#markTerminalWriteFailed(err);
 	};
 
 	#windowsVTInputRestore?: () => void;
