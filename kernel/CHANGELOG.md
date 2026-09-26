@@ -11,6 +11,9 @@
 
 ### Fixed
 
+- Artifacts are staged on a hidden sibling and verified against their own byte count before the rename publishes them, so a write that stops short can no longer leave a truncated artifact that `artifact://` resolves as a complete result, and a failed rewrite leaves the previous bytes in place ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Bounded synchronous SQLite busy_timeout to 1s in headless hosts for session storage databases, so lock contention fails fast rather than freezing protocol loops for 5s ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed a first-use race in `ArtifactManager` where two concurrent `save` or `allocatePath` callers on a fresh instance both scanned the directory and allocated duplicate artifact IDs ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Session activation rejects a transcript owned by a registered live terminal before opening a second writer ([#88](https://github.com/Wladefant/veyyon/issues/88)).
 - Assert terminal writer ownership cleanly when switching session files and remove unused title slot parsing in session manager ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Outbound tool ID canonicalization preserves native Responses call/result pairs instead of shortening only the visible blocks, so ChatGPT-Web host-tool continuations receive the actual result rather than an orphan-result note ([#22](https://github.com/Wladefant/veyyon/issues/22)).

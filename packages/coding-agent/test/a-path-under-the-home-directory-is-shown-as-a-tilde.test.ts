@@ -38,6 +38,27 @@ describe("a displayed path hides the home directory", () => {
 		expect(shortenPath("C:\\Users\\operator\\src\\app.ts", "C:\\Users\\operator")).toBe("~/src/app.ts");
 	});
 
+	it("collapses a Windows home directory written in another case", () => {
+		// Windows paths are case-insensitive: the shell, the drive and the provider each hand back
+		// whatever case they like for one directory, so a case-sensitive prefix test shows the
+		// operator's account name in full instead of `~`.
+		expect(shortenPath("c:\\users\\operator\\src\\app.ts", "C:\\Users\\Operator")).toBe("~/src/app.ts");
+	});
+
+	it("collapses a UNC home directory written in another case", () => {
+		// The second Windows dialect: a UNC home carries no drive letter, so the case-insensitive
+		// rule has to key off the leading `\\` rather than a `C:` prefix.
+		expect(shortenPath("\\\\SERVER\\Share\\src\\app.ts", "\\\\server\\share")).toBe("~/src/app.ts");
+	});
+
+	it("still leaves a case-insensitive sibling that shares the home prefix", () => {
+		// Case-insensitive matching must not weaken the separator boundary: `/users/operator2`
+		// shares every character of the home path up to the last one and is another account.
+		expect(shortenPath("c:\\users\\operator2\\src\\app.ts", "C:\\Users\\Operator")).toBe(
+			"c:\\users\\operator2\\src\\app.ts",
+		);
+	});
+
 	it("leaves a win32 sibling that merely shares the prefix", () => {
 		// The boundary rule holds in the backslash dialect too, where a separator check written for
 		// `/` alone would rewrite a second account to `~2`. A path that is not collapsed is returned
