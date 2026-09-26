@@ -1,4 +1,5 @@
-import { FETCH_AVAILABLE_MODELS_PATH, RETRIEVE_USER_QUOTA_SUMMARY_PATH } from "@veyyon/catalog/discovery/antigravity";
+import { FETCH_AVAILABLE_MODELS_PATH } from "@veyyon/catalog/discovery/antigravity";
+import { RETRIEVE_USER_QUOTA_SUMMARY_PATH } from "@veyyon/catalog/discovery/antigravity";
 import { ANTIGRAVITY_ENDPOINTS } from "@veyyon/catalog/provider-endpoints";
 import { getAntigravityUserAgent } from "@veyyon/catalog/wire/gemini-headers";
 import { DAY_MS, WEEK_MS } from "@veyyon/utils/time";
