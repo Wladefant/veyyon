@@ -30,6 +30,7 @@ const KNOWN_GENERATOR_PATTERN =
 const AUTO_GENERATED_HEADER_MARKERS: readonly RegExp[] = [
 	/@generated\b/i,
 	/\bcode\s+generated\s+by\s+[a-z0-9_.-]+/i,
+	/\bcode\s+generated\b.*\bdo\s+not\s+edit\b/i,
 	/\bthis\s+file\s+was\s+automatically\s+generated\b/i,
 	new RegExp(`\\bgenerated\\s+by\\s+${KNOWN_GENERATOR_PATTERN}\\b`, "i"),
 ];
@@ -96,7 +97,6 @@ const AUTO_GENERATED_FILENAME_PATTERNS = [
 	/_pb2\.py$/,
 	/_pb2_grpc\.py$/,
 	/\.gen\.(go|ts|js|py)$/,
-	/^generated\.(go|ts|js|py)$/,
 	/\.swagger\.json$/,
 	/\.openapi\.json$/,
 	/\.mock\.(go|ts)$/,
