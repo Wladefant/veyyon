@@ -645,6 +645,17 @@ export class InteractiveMode implements InteractiveModeContext {
 				}),
 			);
 		}
+		// Startup status arrives on the bus above. A transport that drops minutes
+		// later has nothing behind it there — the SDK's `onStatus` callback covers
+		// the startup load only — so the manager's own live transitions come
+		// straight here. Without this the zone keeps the startup verdict: "mcp 3/3"
+		// over a server that is already gone and whose tools fail (upstream
+		// `be76c2939d56`, the reconnect half).
+		if (mcpManager) {
+			this.#eventBusUnsubscribers.push(
+				mcpManager.addConnectionStatusListener(event => this.#handleMcpConnectionStatusEvent(event)),
+			);
+		}
 
 		setTuiTight(settings.get("tui.tight"));
 		setMarkdownMermaidRendering(settings.get("tui.renderMermaid"));

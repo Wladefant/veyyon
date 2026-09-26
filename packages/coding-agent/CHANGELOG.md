@@ -21,6 +21,8 @@
 
 - Spilled tool output is staged and verified before it is published at its artifact path, so a write that stops short leaves no truncated file behind the `Full output: artifact://` link ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 
+- Added `/q` as an alias for `/quit` and prioritized exact aliases over earlier same-prefix commands in slash-command autocomplete ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Steady-state mnemopi embed requests time out and SIGKILL-reap wedged workers to unblock memory recall and shutdown without killing ancestors, while initial model bootstrap remains unbounded ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Starting the CLI from a Windows drive root no longer aborts daemon presence registration when `fs.realpath` reports `EISDIR`: the drive root falls back to its resolved path, the same way a directory that does not exist yet already did ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed a stray leading `:` before a Windows path shape (`:C:\repo\file.ts`, `:.\src`, `:..\lib`, `:\server\share`) surviving into resolution, so the colon is stripped the same way it already was before the POSIX shapes ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 
@@ -69,6 +71,7 @@
 ### Fixed
 
 - The CLI imports the terminal output guard when a worker thread starts rather than at startup, keeping it off the static boot graph; no user-visible change.
+- MCP boot health tracks live transport drops, reconnects and crash-breaker suspensions instead of keeping the startup verdict for a server that is gone ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ## [1.5.5] - 2026-09-25
 
