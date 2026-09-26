@@ -18,7 +18,7 @@
 - `launch/terminal-control.ts` publishes the terminal-owner record through `atomicWriteFile` instead of hand-rolled temp-file and rename, so the write path has one owner; the record stays atomic and stays mode `0600`.
 
 ### Fixed
-- Legacy Pi extension tool calls carry the session policy frame the tool was built from, so `createCodingTools`, `createReadTool`, `createBashTool`, `createGrepTool` and `createFindTool` reach the tool instead of refusing with `Tool execution requires missing session policy context`.
+- Legacy Pi extension tool calls carry the session policy frame the tool was built from, so `createCodingTools`, `createReadTool`, `createBashTool`, `createGrepTool` and `createFindTool` reach the tool instead of refusing with `Tool execution requires missing session policy context` ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 - Spilled tool output is staged and verified before it is published at its artifact path, so a write that stops short leaves no truncated file behind the `Full output: artifact://` link ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 
