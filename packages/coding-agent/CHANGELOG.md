@@ -8,6 +8,7 @@
 - The `lsp` tool dispatches each workspace-scoped action (`status`, `diagnostics`, `rename_file`, `capabilities`, `request`, workspace `symbols`, workspace `reload`) to its own handler, and `definition`, `type_definition` and `implementation` share one lookup; no user-visible change.
 - A goal session records the token and time a tool call spends as a small `goal_progress` entry instead of a full copy of the goal, so the session file holds the objective once per goal change rather than once per tool call and a resume parses less.
 - A `read` whose displayed rows count up without a break records no per-row line-number list in the session file, since the card numbers those rows from the first line; a read whose rows jump or skip still records the list.
+- Goal records on a session branch parse through the shared `isRecord` guard instead of a local copy; no user-visible change.
 
 ### Fixed
 

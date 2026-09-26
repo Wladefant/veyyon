@@ -15,6 +15,7 @@
  */
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { isRecord } from "@veyyon/utils/type-guards";
 import type { Goal, GoalModeState } from "./state";
 
 export const GOAL_PROGRESS_CUSTOM_TYPE = "goal_progress";
@@ -36,10 +37,6 @@ export interface GoalProgressData {
 
 type BranchReader = Pick<SessionManager, "getLeafEntry" | "getEntry">;
 type BranchWriter = BranchReader & Pick<SessionManager, "appendModeChange" | "appendCustomEntry">;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null;
-}
 
 /**
  * The goal a `mode_change` holds, or undefined when it holds none that parses. Every field but the
