@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type * as BrowsersNs from "@puppeteer/browsers";
-import { $which, errorMessage, getPuppeteerDir, logger } from "@veyyon/utils";
+import { $which, errorMessage, getPuppeteerDir, logger, TempDir } from "@veyyon/utils";
 import type { Browser, CDPSession, Page, default as Puppeteer, Target } from "puppeteer-core";
 import { ToolError } from "../../core/tool-errors";
 import stealthTamperingScript from "../puppeteer/00_stealth_tampering.txt" with { type: "text" };
@@ -29,6 +29,12 @@ export const DEFAULT_VIEWPORT = { width: 1365, height: 768, deviceScaleFactor: 1
  * connection dropped, etc.).
  */
 export const BROWSER_PROTOCOL_TIMEOUT_MS = 60_000;
+/**
+ * How long a failed launch's profile directory is left alone before removal.
+ * Puppeteer gives the failed Chromium 5s to exit on its own and then kills it;
+ * removing earlier only meets the locks that shutdown still holds.
+ */
+const FAILED_LAUNCH_PROFILE_RELEASE_MS = 10_000;
 const ENABLE_AUTOMATION_FLAG = "--enable-automation";
 // Automation-tell launch flags that puppeteer-core adds by default. We suppress
 // them via `ignoreDefaultArgs` (the supported escape hatch) to mirror xxxx's
@@ -313,14 +319,45 @@ export async function launchHeadlessBrowser(opts: LaunchHeadlessOptions): Promis
 		launchArgs.push("--ignore-certificate-errors");
 	}
 	const executablePath = await ensureChromiumExecutable();
-	return await puppeteer.launch({
-		headless: opts.headless,
-		defaultViewport: opts.headless ? initialViewport : null,
-		executablePath,
-		args: launchArgs,
-		ignoreDefaultArgs: stealthIgnoreDefaultArgs(executablePath),
-		protocolTimeout: BROWSER_PROTOCOL_TIMEOUT_MS,
-	});
+	// We own the profile directory instead of letting puppeteer create a temp one.
+	// Puppeteer removes ITS temp profile in the process exit hook, and when a launch
+	// fails (for example Chromium never prints its DevTools endpoint because the
+	// `RemoteDebuggingAllowed` policy is 0) it runs that hook from a fire-and-forget
+	// `void browserCloseCallback()`. On Windows the `rm` hits EBUSY while Chromium's
+	// children still hold the profile, the rejection has no handler, and the
+	// unhandled rejection terminates the whole host process with every session in it.
+	// A caller-supplied `userDataDir` is not temp to puppeteer, so it never removes it
+	// and there is nothing left to reject; `TempDir` removal retries and only logs.
+	const profile = await TempDir.create("@veyyon-chrome-profile-");
+	let browser: Browser;
+	try {
+		browser = await puppeteer.launch({
+			headless: opts.headless,
+			defaultViewport: opts.headless ? initialViewport : null,
+			executablePath,
+			args: launchArgs,
+			ignoreDefaultArgs: stealthIgnoreDefaultArgs(executablePath),
+			protocolTimeout: BROWSER_PROTOCOL_TIMEOUT_MS,
+			userDataDir: profile.path(),
+		});
+	} catch (err) {
+		// Puppeteer is still shutting the failed Chromium down in the background (a
+		// graceful wait, then a kill), and it holds the profile until then.
+		setTimeout(() => void profile[Symbol.asyncDispose](), FAILED_LAUNCH_PROFILE_RELEASE_MS).unref();
+		// On Windows puppeteer reports any failed launch whose profile has a `lockfile`
+		// as "already running". This profile was created empty a moment ago, so the
+		// lock is the failed Chromium's own: it started but never exposed DevTools.
+		if (errorMessage(err).includes(`already running for ${profile.path()}`)) {
+			throw new ToolError(
+				"Chromium started but never opened its DevTools connection. The usual cause is a " +
+					"`RemoteDebuggingAllowed = 0` browser policy (Software\\Policies\\Google\\Chrome in HKCU or HKLM); " +
+					"remove it, or set PUPPETEER_EXECUTABLE_PATH to a browser the policy does not govern.",
+			);
+		}
+		throw err;
+	}
+	browser.process()?.once("exit", () => void profile[Symbol.asyncDispose]());
+	return browser;
 }
 
 export async function applyViewport(
