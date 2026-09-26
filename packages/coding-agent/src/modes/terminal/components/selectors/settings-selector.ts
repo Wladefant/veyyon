@@ -1274,6 +1274,9 @@ function pruneLane(lane: AgentLaneSettings): AgentLaneSettings | undefined {
 	if (lane.thinkingLevel !== undefined && lane.thinkingLevel.trim().length > 0) {
 		cleaned.thinkingLevel = lane.thinkingLevel;
 	}
+	if (lane.softRequestBudget !== undefined) {
+		cleaned.softRequestBudget = lane.softRequestBudget;
+	}
 	const child = lane.agents === undefined ? undefined : pruneLane(lane.agents);
 	if (child !== undefined) cleaned.agents = child;
 	// The pre-tree number survives only while there is no chain. It still decides
