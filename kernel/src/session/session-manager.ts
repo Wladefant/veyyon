@@ -1365,8 +1365,7 @@ export class SessionManager {
 		this.#lifecycleEnded = false;
 		// Every loaded id is ours from here on, including one a later rewrite drops
 		// on purpose: that is what keeps the foreign-line merge from resurrecting it.
-		for (const entry of entries) this.#noteIdSeen(entry.id);
-		this.#noteIdSeen(header.id);
+		this.#forgetForeignWriter();
 	}
 
 	#allocateSequence(): number {
@@ -1574,7 +1573,6 @@ export class SessionManager {
 		this.#forceFileCreation = snapshot.onDisk;
 		this.#draftOnlySessionCleanupArmed = snapshot.draftOnlySessionCleanupArmed;
 		this.#applyEntries(snapshot.header, snapshot.entries.slice());
-		this.#forgetForeignWriter();
 		this.#nextSequence = snapshot.nextSequence;
 		this.#lifecycleStarted = snapshot.lifecycleStarted;
 		this.#lifecycleEnded = snapshot.lifecycleEnded;
@@ -1656,7 +1654,6 @@ export class SessionManager {
 		}
 
 		this.#applyEntries(header, fileEntries.slice(1) as SessionEntry[]);
-		this.#forgetForeignWriter();
 		this.#titleUpdatedAt = titleSlot?.updatedAt ?? header.timestamp;
 		this.#hasTitleSlot = titleSlot !== undefined;
 		this.#fileIsCurrent = true;
