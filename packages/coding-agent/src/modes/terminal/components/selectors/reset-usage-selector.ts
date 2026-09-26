@@ -33,10 +33,10 @@ const RESET_PENDING_SHORTCUTS: readonly ModalShortcut[] = [
 ];
 
 /**
- * Account picker for `/usage reset` — floating ModalShell card. Lists Codex
- * accounts with their saved rate-limit reset counts; selecting one redeems a
- * reset. Because a reset is a scarce, irreversible credit, Enter requires a
- * second press to confirm.
+ * Account picker for `/usage reset` — floating ModalShell card. Lists OpenAI
+ * Codex and Anthropic accounts with their saved rate-limit reset counts;
+ * selecting one redeems a reset. Because a reset is a scarce, irreversible credit,
+ * Enter requires a second press to confirm.
  */
 export class ResetUsageSelectorComponent implements Component {
 	#accounts: ResetUsageAccount[];
@@ -102,13 +102,14 @@ export class ResetUsageSelectorComponent implements Component {
 					? theme.fg("success", countLabel)
 					: theme.fg("dim", countLabel);
 			const activeTag = account.active ? theme.fg("muted", " (active)") : "";
+			const providerTag = theme.fg("muted", `${account.providerName} `);
 			let row: string;
 			if (isSelected) {
 				const name = redeemable ? theme.fg("accent", account.label) : theme.fg("dim", account.label);
-				row = `${theme.fg("accent", `${theme.nav.cursor} `)}${name}${activeTag}  ${countText}`;
+				row = `${theme.fg("accent", `${theme.nav.cursor} `)}${providerTag}${name}${activeTag}  ${countText}`;
 			} else {
-				const name = redeemable ? `  ${account.label}` : theme.fg("dim", `  ${account.label}`);
-				row = `${name}${activeTag}  ${countText}`;
+				const name = redeemable ? account.label : theme.fg("dim", account.label);
+				row = `  ${providerTag}${name}${activeTag}  ${countText}`;
 			}
 			this.#hitRows[rows.length] = i;
 			rows.push(hoverStrength > 0 ? hoverBandAt(row, width, hoverStrength) : row);
@@ -127,7 +128,7 @@ export class ResetUsageSelectorComponent implements Component {
 		}
 
 		if (total === 0) {
-			body.push(theme.fg("muted", "No Codex accounts with saved resets"));
+			body.push(theme.fg("muted", "No accounts with saved resets"));
 		}
 
 		if (this.#statusMessage) {
@@ -141,7 +142,10 @@ export class ResetUsageSelectorComponent implements Component {
 		const pending = this.#pendingAccount();
 		if (!pending) return undefined;
 		return [
-			theme.fg("warning", `Press Enter again to spend 1 reset for ${pending.label}, Esc to cancel`),
+			theme.fg(
+				"warning",
+				`Press Enter again to spend 1 reset for ${pending.providerName} ${pending.label}, Esc to cancel`,
+			),
 			theme.fg("warning", "Press Enter again to confirm"),
 		];
 	}

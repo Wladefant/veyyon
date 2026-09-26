@@ -12,6 +12,21 @@
 
 - Session activation rejects a transcript owned by a registered live terminal before opening a second writer ([#88](https://github.com/Wladefant/veyyon/issues/88)).
 - Outbound tool ID canonicalization preserves native Responses call/result pairs instead of shortening only the visible blocks, so ChatGPT-Web host-tool continuations receive the actual result rather than an orphan-result note ([#22](https://github.com/Wladefant/veyyon/issues/22)).
+## [1.5.5] - 2026-09-25
+
+### Changed
+
+- `SessionManager.open` parses the session file once instead of twice, cutting a 700 MB resume from 2.83 s to 1.62 s and peak RSS from 3.4 GB to 1.95 GB.
+
+## [1.5.4] - 2026-09-24
+
+### Fixed
+
+- A session rebuilt on a provider that cannot replay its newest server-side compaction starts from the newest compaction that provider can use (`getEffectiveCompactionEntry`) instead of re-expanding the branch from its first entry.
+- Deleting a session removes its artifacts directory at the path `sessionFileStem` resolves, the same path the session created it at, instead of cutting a fixed six characters off the file name.
+- A session file whose append failed on disk is rewritten in full on the next write instead of being treated as current, and `ensureOnDisk` retries after a disk failure instead of returning without writing.
+- Resuming a long session walks its active branch once instead of once per startup reader: `SessionManager` keeps the root-to-leaf path and extends it on append, which cut a 214,000-entry resume from 3.5 s to 3.0 s.
+- A session file opened from another profile reads and writes the blob store beside that profile's `sessions` directory instead of the active profile's, so its stored payloads load and new ones stay where that profile's `gc --blobs` counts them as referenced.
 
 ## [1.5.0] - 2026-09-18
 

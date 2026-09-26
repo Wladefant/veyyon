@@ -523,10 +523,14 @@ export const BUILTIN_SLASH_COMMAND_DECLARATIONS = [
 		textMode: true,
 		description: "Show provider usage and limits",
 		acpDescription: "Show token usage",
-		acpInputHint: "[show|reset [account|active]]",
+		acpInputHint: "[show|reset [openai-codex|anthropic] [account|active]]",
 		subcommands: [
 			{ name: "show", description: "Show provider usage and limits" },
-			{ name: "reset", description: "Spend a saved Codex rate-limit reset", usage: "[account|active]" },
+			{
+				name: "reset",
+				description: "Spend a saved OpenAI Codex or Anthropic rate-limit reset",
+				usage: "[openai-codex|anthropic] [account|active]",
+			},
 		],
 		allowArgs: true,
 	},

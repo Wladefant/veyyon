@@ -344,7 +344,15 @@ const OVERLAY_SPECS: readonly OverlaySpec[] = [
 		name: "ResetUsageSelectorComponent",
 		create: () =>
 			new ResetUsageSelectorComponent(
-				[{ label: "Default Account", availableCount: 1, target: { accountId: "acc-1" }, active: true }],
+				[
+					{
+						label: "Default Account",
+						providerName: "OpenAI Codex",
+						availableCount: 1,
+						target: { provider: "openai-codex", accountId: "acc-1" },
+						active: true,
+					},
+				],
 				() => {},
 				() => {},
 			),

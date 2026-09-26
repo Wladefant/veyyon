@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [1.5.4] - 2026-09-24
+
+### Added
+
+- `SelectList` adds `naturalWidth()`, `isSearchable()` and `cancel()`, a `searchPrompt` layout option that hides the idle "Type to search" row, and a `scrollbar` theme slot.
+- `ComponentScopedRender` lets a root child that holds many blocks re-derive only the children containing a component-scoped render requester.
+
+### Changed
+
+- Settings list adapts label width dynamically with clean truncation and wraps inline descriptions to fit within the visible viewport width.
+- A component-scoped render finds its requester by searching the newest children first and reuses the found path while it stays intact, instead of walking the whole component tree on every frame.
+
+### Fixed
+
+- `SelectList.naturalWidth()` counts the description column's minimum width, so a list sized to it shows every description whole.
+- A line longer than the renderer's source limit keeps its ANSI styling, and a run of styling escapes long enough to fill that limit no longer hides the visible text after it.
+- Removed stale stdout resize and error listeners in ProcessTerminal to prevent listener leaks.
+- Calling `ProcessTerminal.start()` on a running terminal replaces its stdin reader instead of adding a second one that stayed attached after `stop()` and threw on the next input.
+
 ## [1.5.0] - 2026-09-18
 
 ### Breaking Changes
@@ -20,6 +39,7 @@
 - Forced render requests accept `preserveViewport` to paint changed rows immediately while retaining pending full-repaint and scrollback requests.
 - `TUI.frameScrollable` states whether the last composed frame had content above the viewport, so a host can render a scroll affordance without re-deriving it from row counts it cannot see.
 - The package is `hosts/terminal/engine` in the repository, beside the other halves of the terminal host. The published package name, exports and entry points are unchanged.
+- Added `getText()` method to Text component for retrieving current text content
 
 ### Changed
 
@@ -1823,12 +1843,6 @@
 ## [1.337.0] - 2026-01-02
 
 Initial release under @oh-my-pi scope. See previous releases at [badlogic/pi-mono](https://github.com/badlogic/pi-mono).
-
-## [1.5.0] - 2026-01-03
-
-### Added
-
-- Added `getText()` method to Text component for retrieving current text content
 
 ## [1.3.0] - 2026-08-28
 

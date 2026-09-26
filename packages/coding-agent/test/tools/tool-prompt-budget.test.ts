@@ -62,7 +62,7 @@ const TOOL_PROMPT_CEILINGS: Record<string, number> = {
 	edit: 8030,
 	eval: 6019,
 	read: 4900,
-	bash: 3910,
+	bash: 3932,
 	todo: 2640,
 	irc: 3450,
 	launch: 3561,

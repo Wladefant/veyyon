@@ -286,6 +286,10 @@ function registerStdoutErrorHandler(handler: (err: Error) => void): () => void {
 	}
 	return () => {
 		stdoutErrorHandlers.delete(handler);
+		if (stdoutErrorHandlers.size === 0 && stdoutErrorListenerInstalled) {
+			process.stdout.removeListener("error", onStdoutError);
+			stdoutErrorListenerInstalled = false;
+		}
 	};
 }
 
@@ -792,6 +796,10 @@ export class ProcessTerminal implements Terminal {
 		// Set up resize handler immediately. The OS refreshes process.stdout
 		// dimensions before firing `resize`, so it is authoritative for geometry:
 		// reconcile any stale cached DEC 2048 report before notifying the renderer.
+		if (this.#stdoutResizeListener) {
+			process.stdout.removeListener("resize", this.#stdoutResizeListener);
+			this.#stdoutResizeListener = undefined;
+		}
 		this.#stdoutResizeListener = () => {
 			this.#reconcileInBandGeometryOnResize();
 			this.#resizeHandler?.();
@@ -915,6 +923,14 @@ export class ProcessTerminal implements Terminal {
 	 * to handle the case where the response arrives split across multiple events.
 	 */
 	#setupStdinBuffer(): void {
+		// A start() over a running terminal replaces the reader instead of stacking a
+		// second one on stdin, whose handler would outlive stop() and parse into a
+		// destroyed buffer.
+		this.#stdinBuffer?.destroy();
+		if (this.#stdinDataHandler) {
+			process.stdin.removeListener("data", this.#stdinDataHandler);
+			this.#stdinDataHandler = undefined;
+		}
 		// 50ms balances two failure modes: a bare ESC keypress on legacy
 		// terminals waits this long before it is delivered, while a CSI key
 		// escape split across stdin reads (laggy ssh/tmux links) leaks as
