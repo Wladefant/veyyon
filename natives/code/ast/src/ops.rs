@@ -585,11 +585,19 @@ mod tests {
 		use ast_grep_core::tree_sitter::LanguageExt;
 		let source = "package p\n\nfunc f() {\n\tp := new(42)\n\t_ = p\n}\n";
 		let ast = SupportLang::Go.ast_grep(source);
-		assert!(!ast.root().dfs().any(|node| node.is_error()), "Go AST should not contain ERROR nodes for new(expr)");
+		assert!(
+			!ast.root().dfs().any(|node| node.is_error()),
+			"Go AST should not contain ERROR nodes for new(expr)"
+		);
 		let mut parser = tree_sitter::Parser::new();
-		parser.set_language(&SupportLang::Go.get_ts_language()).expect("go language loads");
+		parser
+			.set_language(&SupportLang::Go.get_ts_language())
+			.expect("go language loads");
 		let tree = parser.parse(source, None).expect("go parses");
-		assert!(!tree.root_node().has_error(), "Go tree-sitter root node should not have error for new(expr)");
+		assert!(
+			!tree.root_node().has_error(),
+			"Go tree-sitter root node should not have error for new(expr)"
+		);
 		let patterns = compile_search_patterns("new($$$ARGS)", SupportLang::Go)
 			.expect("go search pattern should compile");
 		let matches = super::collect_matches(source, SupportLang::Go, &patterns)

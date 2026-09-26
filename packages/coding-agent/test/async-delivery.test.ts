@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import type { AgentToolContext } from "@veyyon/agent-core";
 import {
 	ASYNC_INLINE_RESULT_MAX_CHARS,
 	ASYNC_PREVIEW_MAX_CHARS,
@@ -165,7 +166,14 @@ describe("BashTool background job raw artifact linking", () => {
 			},
 			undefined,
 			() => {},
-			{ toolCall: { id: "call-1", name: "bash", arguments: {} } },
+			{
+				toolCall: {
+					batchId: "batch-1",
+					index: 0,
+					total: 1,
+					toolCalls: [{ id: "call-1", name: "bash" }],
+				},
+			} as AgentToolContext,
 		);
 
 		const jobId = result.details?.async?.jobId;

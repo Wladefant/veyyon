@@ -212,6 +212,6 @@ it("requires an explicit decision for every public validation entry point", () =
 		"validateApiKeyAgainstModelsEndpoint",
 		"validateOpenAICompatibleApiKey",
 	]);
-	expect(validatorNames.toSorted()).toEqual(exportedKeys.toSorted());
+	expect(validatorNames.toSorted() as string[]).toEqual(exportedKeys.toSorted());
 	expect(typeof AIError.providerErrorMessage).toBe("function");
 });
