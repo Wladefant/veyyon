@@ -746,6 +746,7 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 				const { path: artifactPath, id: artifactId } = (await this.session.allocateOutputArtifact?.("bash")) ?? {};
 				const tailBuffer = new TailBuffer(DEFAULT_MAX_BYTES);
 				const wallTimeStart = performance.now();
+				let latestProgressDetails: BashToolDetails | undefined;
 				try {
 					const result = await executeBash(options.command, {
 						cwd: options.commandCwd,
@@ -777,6 +778,9 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 					});
 					const finalText = this.#extractTextResult(finalResult);
 					latestText = finalText;
+					latestProgressDetails = {
+						...finalResult.details,
+					};
 					// Hand the detailed result to the foreground auto-background
 					// waiter (which renders it, footer included) before deciding
 					// the job's terminal state.
@@ -787,24 +791,32 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 						// delivers the error text, matching prior throw-based behavior.
 						throw new ToolError(finalText);
 					}
-					await reportProgress(finalText, { async: { state: "completed", jobId, type: "bash" } });
+					await reportProgress(finalText, {
+						...latestProgressDetails,
+						async: { state: "completed", jobId, type: "bash" },
+					});
 					return finalText;
 				} catch (error) {
 					const message = errorMessage(error);
 					latestText = message;
 					completion.resolve({ kind: "failed", error });
-					await reportProgress(message, { async: { state: "failed", jobId, type: "bash" } });
+					await reportProgress(message, {
+						...latestProgressDetails,
+						async: { state: "failed", jobId, type: "bash" },
+					});
 					throw error;
 				}
 			},
 			{
 				ownerId: this.session.getAgentId?.() ?? undefined,
-				onProgress: async text => {
+				onProgress: async (text, details) => {
 					latestText = text;
 					if (!forwardUpdates) return;
+					const updateDetails: BashToolDetails =
+						details && typeof details === "object" ? (details as BashToolDetails) : {};
 					await options.onUpdate?.({
 						content: [{ type: "text", text }],
-						details: {},
+						details: updateDetails,
 					});
 				},
 			},
