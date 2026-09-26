@@ -102,6 +102,28 @@ describe("SWAP.BLK — native tree-sitter resolution end-to-end", () => {
 		});
 	});
 
+	it("resolves and replaces a Go function block containing new(expr)", async () => {
+		await withTempDir(async tempDir => {
+			const session = makeSession(tempDir);
+			const goSource = [
+				"package p",
+				"",
+				"func f() {",
+				"\tframe.Due = new(work.Due.Add(delay))",
+				"\tx := new(int64(5))",
+				"\t_ = x",
+				"}",
+				"",
+			].join("\n");
+			const { filePath, header } = await seedFile(tempDir, session, "p.go", goSource);
+			const input = `${header}\nSWAP.BLK 3:\n+func f() {\n+\treturn\n+}`;
+
+			await executeHashlineSingle(executeOptions(tempDir, input, session));
+
+			expect(await Bun.file(filePath).text()).toBe("package p\n\nfunc f() {\n\treturn\n}\n");
+		});
+	});
+
 	it("inserts after an Emacs Lisp top-level macro-style form", async () => {
 		await withTempDir(async tempDir => {
 			const session = makeSession(tempDir);

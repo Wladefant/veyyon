@@ -579,4 +579,22 @@ mod tests {
 		let output = apply_edits(source, &edits).expect("identical edits should collapse to one");
 		assert_eq!(output, "axef");
 	}
+
+	#[test]
+	fn go_structure_search_parses_new_expr_without_error_node() {
+		use ast_grep_core::tree_sitter::LanguageExt;
+		let source = "package p\n\nfunc f() {\n\tp := new(42)\n\t_ = p\n}\n";
+		let ast = SupportLang::Go.ast_grep(source);
+		assert!(!ast.root().dfs().any(|node| node.is_error()), "Go AST should not contain ERROR nodes for new(expr)");
+		let mut parser = tree_sitter::Parser::new();
+		parser.set_language(&SupportLang::Go.get_ts_language()).expect("go language loads");
+		let tree = parser.parse(source, None).expect("go parses");
+		assert!(!tree.root_node().has_error(), "Go tree-sitter root node should not have error for new(expr)");
+		let patterns = compile_search_patterns("new($$$ARGS)", SupportLang::Go)
+			.expect("go search pattern should compile");
+		let matches = super::collect_matches(source, SupportLang::Go, &patterns)
+			.expect("matches should succeed");
+		assert_eq!(matches.len(), 1);
+		assert_eq!(matches[0].text, "new(42)");
+	}
 }
