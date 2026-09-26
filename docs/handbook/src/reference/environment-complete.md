@@ -478,7 +478,7 @@ These are read as runtime signals; they are usually set by the terminal/OS rathe
 | `VEYYON_NO_DECCARA`           | If set (truthy), disables Kitty DECCARA rectangular-SGR background fills (forces padded-string rendering) |
 | `VEYYON_DEBUG_REDRAW`         | If `1`, enables redraw debug logging                                                  |
 | `VEYYON_FORCE_IMAGE_PROTOCOL` | Forces terminal image protocol detection (`kitty`, `iterm2`/`iterm`, `sixel`, `none`) |
-| `VEYYON_TUI_RESIZE_IN_PLACE`  | `1`/`true` force in-place resize (no alt-screen borrow, no ED3 rewrap); `0`/`false` force the alt-screen fast path. Default-on for Warp, which re-reports its size on alt-screen toggles |
+| `VEYYON_TUI_RESIZE_IN_PLACE`  | `1`/`true` force in-place resize (no alt-screen borrow, no ED3 rewrap); `0`/`false` force the alt-screen fast path. Default-on for Warp, which re-reports its size on alt-screen toggles; `1` also forces it on a host that owns the grid (ConPTY), whose default is the borrow |
 
 ---
 
