@@ -615,13 +615,36 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 			},
 		} as unknown as AgentTool;
 		const wrapped = new ExtensionToolWrapper(probe, mockRunner);
+		const settings = Settings.isolated({ "tools.approvalMode": "ask" });
 		const policyOnlyFrame = {
-			settings: Settings.isolated({ "tools.approvalMode": "auto" }),
+			settings,
+			sessionApprovals: createSessionApprovals(),
+			sessionManager: undefined,
 		} as unknown as AgentToolContext;
 
+		// 1. Policy-only frame reaches approval gate: 'ask' mode refuses when headless
+		await expect(
+			wrapped.execute("policy-only-refused", { cmd: "probe" }, undefined, undefined, policyOnlyFrame),
+		).rejects.toThrow("no interactive UI available");
+		expect(probeExecuted).toBe(false);
+
+		// 2. Policy-only frame in 'auto' allows execution, but toolContext is stripped to undefined
+		settings.override("tools.approvalMode", "auto");
 		await wrapped.execute("policy-only-call", { cmd: "probe" }, undefined, undefined, policyOnlyFrame);
 		expect(probeExecuted).toBe(true);
 		expect(handedContext).toBeUndefined();
+
+		// 3. Positive control: a frame with sessionManager is a real toolContext and reaches the tool
+		const fullContext = {
+			settings: Settings.isolated({ "tools.approvalMode": "auto" }),
+			sessionManager: {
+				getSessionId: () => "session-789",
+				getCwd: () => "",
+			} as unknown as AgentToolContext["sessionManager"],
+			sessionApprovals: createSessionApprovals(),
+		} as unknown as AgentToolContext;
+		await wrapped.execute("full-context-call", { cmd: "probe" }, undefined, undefined, fullContext);
+		expect(handedContext).toBe(fullContext);
 	});
 
 	it("approval event carries ambient sessionManager sessionId when caller passes no context", async () => {
