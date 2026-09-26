@@ -11,7 +11,7 @@
 
 ### Fixed
 
-- Windows shell cancellation protects the host and its discoverable ancestors, rejects stale parent-PID edges, and no longer reopens an unpinned child PID after handle termination fails ([#73](https://github.com/Wladefant/veyyon/issues/73)).
+- Windows shell cancellation protects the host and its discoverable ancestors, rejects stale parent-PID edges, and no longer reopens an unpinned child PID after handle termination fails; launch broker catches native termination refusals during daemon stop and recovery sweeps ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 - Extension approval-required blocks stop the current call without persisting a user refusal; explicit and legacy refusals retain their existing fence ([#88](https://github.com/Wladefant/veyyon/issues/88)).
 - Telegram control can deliver to and observe the authenticated live terminal owner without reopening its transcript in a GUI host ([#88](https://github.com/Wladefant/veyyon/issues/88)).
 
