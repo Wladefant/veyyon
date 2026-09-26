@@ -1617,6 +1617,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "convert_case"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1af709f1f33454bf52eadfc8c78b3b9ef9cb26fb54d16dc9cd9a7299f899fd1b"
+dependencies = [
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4970,7 +4979,7 @@ version = "3.6.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6b1d232c24dc6754979b27efdf2047a5849efc7c92c1245de87e6bedbb9f5c3c"
 dependencies = [
- "convert_case 0.11.0",
+ "convert_case 0.12.0",
  "ctor",
  "napi-derive-backend",
  "proc-macro2",
@@ -4984,7 +4993,7 @@ version = "6.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd6856fe1686867da90ed0dc292d7c0c87a695eb7c578b913360f33619ee01e3"
 dependencies = [
- "convert_case 0.11.0",
+ "convert_case 0.12.0",
  "proc-macro2",
  "quote",
  "semver",
@@ -6480,6 +6489,16 @@ dependencies = [
  "libc",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
+]
+
+[[package]]
+name = "rand"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9ef1d0d795eb7d84685bca4f72f3649f064e6641543d3a8c415898726a57b41"
+dependencies = [
+ "rand_chacha 0.9.0",
+ "rand_core 0.9.5",
 ]
 
 [[package]]
@@ -9894,7 +9913,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-desktop"
-version = "1.5.0"
+version = "1.5.5"
 dependencies = [
  "bytes",
  "clap",
@@ -9920,7 +9939,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-desktop-kit"
-version = "1.5.0"
+version = "1.5.5"
 dependencies = [
  "anyhow",
  "gpui_platform",
@@ -9938,7 +9957,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-desktop-model"
-version = "1.5.0"
+version = "1.5.5"
 dependencies = [
  "base64",
  "serde",
@@ -9951,7 +9970,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-desktop-motion"
-version = "1.5.0"
+version = "1.5.5"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -9961,7 +9980,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-desktop-scene"
-version = "1.5.0"
+version = "1.5.5"
 dependencies = [
  "image",
  "png 0.18.1",
@@ -9980,7 +9999,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-desktop-surface"
-version = "1.5.0"
+version = "1.5.5"
 dependencies = [
  "image",
  "serde",
@@ -10004,7 +10023,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-desktop-tokens"
-version = "1.5.0"
+version = "1.5.5"
 dependencies = [
  "flume 0.11.1",
  "notify",
@@ -10032,7 +10051,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-gpui"
-version = "1.5.0"
+version = "1.5.5"
 dependencies = [
  "gpui",
  "gpui_platform",
