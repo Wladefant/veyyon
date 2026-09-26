@@ -262,6 +262,12 @@ export async function runPrintMode(session: PrintModeSession, options: PrintMode
 			// in main(), and the postmortem `exit` handler can't await, so the error
 			// spans would otherwise stay buffered in the batch processor and drop.
 			await flushTelemetryExport();
+			// This branch hard-exits, bypassing the `await session.dispose()` at
+			// the end of runPrintMode. Flush telemetry and dispose the session
+			// HERE so error spans reach the exporter (the postmortem `exit`
+			// handler can't await) and the bounded browser reaper releases any
+			// owned Chromium before the process exits (#5643).
+			await session.dispose();
 			const exitCode = finalAssistant.stopReason === "aborted" ? EXIT_INTERRUPTED : EXIT_FAILURE;
 			// Drain stdout first so the last streamed JSON event reaches a piped
 			// reader before the exit; the reason goes to stderr in both modes.
