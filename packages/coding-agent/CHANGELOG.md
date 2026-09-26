@@ -15,6 +15,7 @@
 - `edit` and `write` no longer refuse handwritten files named `generated.go`, `generated.ts`, `generated.js`, or `generated.py`; these are treated as auto-generated only when their content carries a generator marker ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - `ToolSession.getToolChoiceQueue()` now returns `ToolChoiceQueue | undefined`, matching what the SDK's session port can supply before a session or queue exists; the `resolve` tool already guarded the absent case, so the type no longer promises more than the port keeps.
 - Reformatted `sdk.ts`, `async/index.ts`, `extensibility/shared-events.ts`, `modes/terminal/interactive-mode.ts` and `slash-commands/helpers/active-oauth-account.ts` to the repository's formatter and import-order rules; no behavior change.
+- `launch/terminal-control.ts` publishes the terminal-owner record through `atomicWriteFile` instead of hand-rolled temp-file and rename, so the write path has one owner; the record stays atomic and stays mode `0600`.
 
 ### Fixed
 
