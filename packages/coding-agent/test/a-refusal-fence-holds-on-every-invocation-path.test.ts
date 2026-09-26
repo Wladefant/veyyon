@@ -569,4 +569,85 @@ describe("Universal Refusal Fence on Every Invocation Path", () => {
 		await wrapped.execute("standing-yolo-1", { cmd: "test" }, undefined, undefined, yoloContext).catch(() => {});
 		expect(probeExecuted).toBe(false);
 	});
+
+	it("ambient execution context provides toolContext to tool and policy to approval gate when caller passes no context", async () => {
+		let handedContext: unknown = "never executed";
+		const probe = {
+			...createProbeTool(),
+			execute: async (_id: string, _params: unknown, _signal?: AbortSignal, _onUpdate?: unknown, ctx?: unknown) => {
+				probeExecuted = true;
+				handedContext = ctx;
+				return { content: [{ type: "text", text: "PROBE_RAN" }] };
+			},
+		} as unknown as AgentTool;
+		const wrapped = new ExtensionToolWrapper(probe, mockRunner);
+		const ambientContext = {
+			settings: Settings.isolated({ "tools.approvalMode": "ask" }),
+			sessionManager: {
+				getSessionId: () => "ambient-session-123",
+				getCwd: () => "",
+			} as unknown as AgentToolContext["sessionManager"],
+			sessionApprovals: createSessionApprovals(),
+		};
+		await TOOL_EXECUTION_ENTRIES["session.tools"].forward(ambientContext, async () => {
+			await expect(wrapped.execute("ambient-call-refused", { cmd: "probe" })).rejects.toThrow(
+				"no interactive UI available",
+			);
+		});
+		expect(probeExecuted).toBe(false);
+
+		ambientContext.settings.override("tools.approvalMode", "auto");
+		await TOOL_EXECUTION_ENTRIES["session.tools"].forward(ambientContext, async () => {
+			await wrapped.execute("ambient-call-allowed", { cmd: "probe" });
+		});
+		expect(probeExecuted).toBe(true);
+		expect(handedContext).toBe(ambientContext);
+	});
+
+	it("a policy-only frame provides settings to approval gate but is not handed to tool as toolContext", async () => {
+		let handedContext: unknown = "never executed";
+		const probe = {
+			...createProbeTool(),
+			execute: async (_id: string, _params: unknown, _signal?: AbortSignal, _onUpdate?: unknown, ctx?: unknown) => {
+				probeExecuted = true;
+				handedContext = ctx;
+				return { content: [{ type: "text", text: "PROBE_RAN" }] };
+			},
+		} as unknown as AgentTool;
+		const wrapped = new ExtensionToolWrapper(probe, mockRunner);
+		const policyOnlyFrame = {
+			settings: Settings.isolated({ "tools.approvalMode": "auto" }),
+		} as unknown as AgentToolContext;
+
+		await wrapped.execute("policy-only-call", { cmd: "probe" }, undefined, undefined, policyOnlyFrame);
+		expect(probeExecuted).toBe(true);
+		expect(handedContext).toBeUndefined();
+	});
+
+	it("approval event carries ambient sessionManager sessionId when caller passes no context", async () => {
+		let requestedSessionId: string | undefined;
+		const runnerWithHandler = {
+			...mockRunner,
+			hasHandlers: (event: string) => event === "tool_approval_requested",
+			emit: async (event: { type?: string; sessionId?: string }) => {
+				if (event.type === "tool_approval_requested") {
+					requestedSessionId = event.sessionId;
+				}
+			},
+		} as unknown as ExtensionRunner;
+		const probe = createProbeTool();
+		const wrapped = new ExtensionToolWrapper(probe, runnerWithHandler);
+		const ambientContext = {
+			settings: Settings.isolated({ "tools.approvalMode": "ask" }),
+			sessionManager: {
+				getSessionId: () => "ambient-session-456",
+				getCwd: () => "",
+			} as unknown as AgentToolContext["sessionManager"],
+			sessionApprovals: createSessionApprovals(),
+		};
+		await TOOL_EXECUTION_ENTRIES["session.tools"].forward(ambientContext, async () => {
+			await wrapped.execute("ambient-session-id-call", { cmd: "probe" }).catch(() => {});
+		});
+		expect(requestedSessionId).toBe("ambient-session-456");
+	});
 });
