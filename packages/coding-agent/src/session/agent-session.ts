@@ -179,6 +179,7 @@ import type { ClientBridge, ClientBridgePermissionOutcome } from "@veyyon/kernel
 import { findCompactMode } from "@veyyon/kernel/session/compact-modes";
 import { abortDetached } from "@veyyon/kernel/session/detached-abort";
 import {
+	assistantRecordsToolCall,
 	collectPendingToolCalls,
 	createInterruptedTurnAbortMessage,
 	SESSION_EXIT_CUSTOM_TYPE,
@@ -3493,26 +3494,28 @@ export class AgentSession {
 	}
 
 	#recordToolExecutionStart(event: Extract<AgentEvent, { type: "tool_execution_start" }>): void {
-		const data: ToolExecutionStartData = {
-			toolCallId: event.toolCallId,
-			toolName: event.toolName,
-			startedAt: new Date().toISOString(),
-		};
-		// The assistant message already persists the full arguments; store only
-		// the command/path projection the resume warning renders.
-		//
-		// REDACTED, because `event.args` are post-expansion. The assistant message
-		// holds the placeholder the model wrote; this event holds what the tool was
-		// actually handed, which for `#GITHUB_TOKEN#` is the credential itself. The
-		// session file must never carry it: the vault is encrypted at rest and this
-		// entry sits beside it in the same directory, and it travels through
-		// `/share` and exports. The intent goes through the same redactor because
-		// the model can quote an argument back into it.
+		const sessionManager = this.sessionManager;
+		// The entry's timestamp is the start time, so the marker carries none of its own.
+		const data: ToolExecutionStartData = { toolCallId: event.toolCallId, toolName: event.toolName };
+		// REDACTED, because `event.args` and the intent are post-expansion. The assistant message
+		// holds the placeholder the model wrote; this event holds what the tool was actually handed,
+		// which for `#GITHUB_TOKEN#` is the credential itself. The session file must never carry it:
+		// the vault is encrypted at rest and this entry sits beside it in the same directory, and it
+		// travels through `/share` and exports. The intent goes through the same redactor because the
+		// model can quote an argument back into it.
 		const redact = (text: string): string => this.obfuscateProviderText(text);
-		const args = summarizeToolArguments(event.args, redact);
+		// The command/path projection the resume warning renders, written only when no assistant
+		// message on the branch records the call yet: a Cursor server-side call, or a crash before the
+		// assistant message reached the file. Otherwise the warning reads that message's arguments.
+		const recorded = assistantRecordsToolCall(
+			sessionManager.getLeafEntry(),
+			id => sessionManager.getEntry(id),
+			event.toolCallId,
+		);
+		const args = recorded ? undefined : summarizeToolArguments(event.args, redact);
 		if (args) data.args = args;
 		if (event.intent) data.intent = redact(event.intent);
-		this.sessionManager.appendCustomEntry(TOOL_EXECUTION_START_CUSTOM_TYPE, data);
+		sessionManager.appendCustomEntry(TOOL_EXECUTION_START_CUSTOM_TYPE, data);
 	}
 
 	#recordSessionExit(reason: postmortem.Reason | "dispose"): void {

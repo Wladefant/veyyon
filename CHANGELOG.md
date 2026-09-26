@@ -20,10 +20,12 @@
 - A `read` whose displayed rows count up without a break records no per-row line-number list in the session file, since the card numbers those rows from the first line; a read whose rows jump or skip still records the list.
 - Goal records on a session branch parse through the shared `isRecord` guard instead of a local copy; no user-visible change.
 - A `read` result's session file line omits the card's copy of the file text when the result's own numbered rows or plain text rebuild it, and the session restores it on load, which cut the recorded read results in local sessions from 4.27 GB to 2.89 GB.
+- A tool start marker in the session file omits the start time and the argument summary the entry timestamp and the assistant message already hold, so the resume warning for an unanswered call reads the arguments from that message.
 - The Anthropic and OpenAI-compatible providers split their stream loops, message converters and finalization into per-step helpers; no user-visible change.
 - The OpenAI-compatible stream reads a tool call's prior object arguments through the shared `isRecord` guard instead of an inline check; no user-visible change.
 - Opening or restoring a session builds its set of known entry ids once instead of twice, which takes about 40ms off opening a 220,000-entry session.
 - The resume warning flattens each command or path onto one line through the shared `collapseWhitespace` helper; no user-visible change.
+- A `tool_execution_start` session entry writes no `startedAt`, since the entry's own timestamp holds the start time, and writes its argument summary only when no preceding assistant message records the call, which cut the start markers in local sessions from 581.83 MB to 403.91 MB; a marker that wrote `startedAt` still reads back that time.
 
 ### Removed
 
