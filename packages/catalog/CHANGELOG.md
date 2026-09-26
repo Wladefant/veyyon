@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Removed
+
+- `models.ts` no longer imports `ZERO_MODEL_COST`, which it stopped using; no user-visible change.
+
 ### Fixed
 
 - Claude Opus 5.5 downgrades forced tool choice (`supportsForcedToolChoice: false`) to avoid 400 invalid_request_error rejections, and default models for anthropic, amazon-bedrock, and litellm promote to Opus 5.5.

@@ -10,13 +10,13 @@
 import type { SemVer } from "./classify";
 import {
 	bareModelId,
+	compareSemVer,
 	isAnthropicAdaptiveGenAtLeast,
 	isFableOrMythos,
 	parseAnthropicModel,
 	parseGlmModel,
 	parseKnownModel,
 	parseOpenAIModel,
-	compareSemVer,
 	semverEqual,
 	semverGte,
 } from "./classify";
