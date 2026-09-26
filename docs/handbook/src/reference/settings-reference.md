@@ -76,7 +76,7 @@ veyyon config get compaction.threshold
 
 | Key | Setting | Type | Default | What it does |
 |---|---|---|---|---|
-| `modelRoles` | Role Models | record | `{}` | Assign a model to each role (Fast, Thinking, Vision, Architect, Designer, Commit, Tiny). Opens a searchable picker with auth status. The advisor's model is set in the Advisor group and a spawned agent's in Agents → Roster. Stored in the active profile. |
+| `modelRoles` | Role Models | record | `{}` | Assign a model to each role (Fast, Thinking, Vision, Architect, Commit, Tiny). Opens a searchable picker with auth status. The advisor's model is set in the Advisor group and a spawned agent's in Agents → Roster. Stored in the active profile. |
 
 ### Thinking
 

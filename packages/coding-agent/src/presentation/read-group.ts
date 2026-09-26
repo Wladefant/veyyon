@@ -3,6 +3,7 @@ import { isRecord } from "@veyyon/utils/type-guards";
 import type { ReadEntryView } from "@veyyon/wire/presentation/transcript";
 import { extractResultTextOrUndefined } from "../tools/core/output-notice";
 import { splitPathAndSel } from "../tools/core/path-utils";
+import { type ReadDisplayContent, resolveReadDisplay } from "../tools/fs/read-display";
 import type { ToolExecutionBuildParams } from "./tool-execution";
 
 type ReadGroupResult = NonNullable<ToolExecutionBuildParams["result"]>;
@@ -12,7 +13,7 @@ interface ReadResultDetails {
 	suffixResolution?: { from?: string; to?: string };
 	conflictCount?: number;
 	displayReadTargets?: unknown;
-	displayContent?: { text?: string; startLine?: number; lineNumbers?: Array<number | null> };
+	displayContent?: ReadDisplayContent;
 	meta?: { source?: { type?: string; value?: string } };
 }
 
@@ -63,7 +64,7 @@ export function updateReadEntryResult(
 	entry.conflictCount =
 		typeof details?.conflictCount === "number" && details.conflictCount > 0 ? details.conflictCount : undefined;
 	entry.status = isError ? "error" : corrected ? "warning" : "success";
-	const displayContent = details?.displayContent;
+	const displayContent = resolveReadDisplay(details?.displayContent, result.content);
 	const textContent = extractResultTextOrUndefined(result.content);
 	if (displayContent !== undefined || textContent !== undefined) {
 		entry.contentText = displayContent?.text ?? textContent;

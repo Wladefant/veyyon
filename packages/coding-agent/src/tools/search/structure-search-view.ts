@@ -37,6 +37,7 @@ import {
 	type ToolViewResult,
 } from "../core/render-utils";
 import { COLLAPSED_MATCH_LIMIT, MATCH_LIMIT_NOTICE_PREFIX } from "./search-card-limits";
+import { resolveSearchDisplay } from "./search-result-codec";
 import type { StructureSearchDetails, StructureSearchRenderArgs } from "./structure-search";
 
 /** What every card of this tool is titled. */
@@ -271,7 +272,7 @@ export const structureSearchToolView: Required<ToolViewRenderer<StructureSearchR
 			meta.push([{ text: `searched ${filesSearched}` }]);
 			if (limitReached) meta.push([{ text: "limit reached", tone: "warning" }]);
 
-			const text = details?.displayContent ?? extractResultText(result.content);
+			const text = resolveSearchDisplay(details, result.content) ?? extractResultText(result.content);
 			const lines = text.split("\n");
 			const groups = matchGroups(lines, matchRows(lines, details));
 			const notes = noteSection(details);

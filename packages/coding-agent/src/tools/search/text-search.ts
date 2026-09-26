@@ -13,8 +13,10 @@ import {
 	artifactFooter,
 	DEFAULT_MAX_COLUMN,
 	type TruncationResult,
+	type TruncationSummary,
 	truncateHead,
 	truncateLine,
+	truncationSummary,
 } from "../../session/streaming-output";
 import { resolveFileDisplayMode } from "../../utils/file-display-mode";
 import {
@@ -803,7 +805,7 @@ async function resolveInternalSearchInputs(opts: {
 }
 
 export interface TextSearchDetails {
-	truncation?: TruncationResult;
+	truncation?: TruncationSummary;
 	fileLimitReached?: number;
 	perFileLimitReached?: number;
 	linesTruncated?: boolean;
@@ -1633,7 +1635,7 @@ export async function executeTextSearch(
 				displayContent: displayText,
 				missingPaths: missingPaths.length > 0 ? missingPaths : undefined,
 			};
-			if (truncation?.truncated) details.truncation = truncation;
+			if (truncation?.truncated) details.truncation = truncationSummary(truncation);
 			if (linesTruncated) details.linesTruncated = true;
 			const resultBuilder = toolResult(details)
 				.text(output)

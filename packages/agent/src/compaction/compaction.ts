@@ -5,6 +5,7 @@
  * and after compaction the session is reloaded.
  */
 
+import { createHash } from "node:crypto";
 import type {
 	Api,
 	ApiKey,
@@ -49,10 +50,17 @@ import { KEEP_NOTHING_ENTRY_ID } from "./entries";
 import { CompactionCancelledError } from "./errors";
 import { LEGACY_REMOTE_PRESERVE_KEYS } from "./legacy-provider-native";
 import { hasLegacyArchive, legacyArchiveSourceText, stripLegacyArchive } from "./legacy-snapcompact-archive";
-import { type ConvertToLlm, createBranchSummaryMessage, createCustomMessage, defaultConvertToLlm } from "./messages";
+import {
+	type ConvertToLlm,
+	createBranchSummaryMessage,
+	createCompactionSummaryMessage,
+	createCustomMessage,
+	defaultConvertToLlm,
+} from "./messages";
 import {
 	getRemoteCompactionPreserveData,
 	REMOTE_COMPACTION_PRESERVE_KEY,
+	remoteCompactionProviderPayload,
 	stripRemoteCompactionPreserveData,
 } from "./remote-compaction-entry";
 import { requestRemoteCompaction } from "./remote-summarizer";
@@ -113,40 +121,104 @@ import {
 // File Operation Tracking
 // ============================================================================
 
-/** Details stored in CompactionEntry.details for file tracking */
+/**
+ * The file lists a compaction records. The read and modified lists grow for the life of a session,
+ * and a compaction that stored both in full repeated every path the one before it held, so a long
+ * session wrote the same paths hundreds of times over. A compaction records only the paths its
+ * lists gained over the compaction it built on, and names that compaction as `base`: the lists are
+ * the union along the `base` chain. A compaction written before `base` existed holds `readFiles`
+ * and `modifiedFiles` in full, and the chain ends there.
+ */
 export interface CompactionDetails {
-	readFiles: string[];
-	modifiedFiles: string[];
+	/** Id of the compaction whose lists these extend; absent when the lists start here. */
+	base?: string;
+	/** Read-only paths the base's lists lack. */
+	readFilesAdded: string[];
+	/** Modified paths the base's lists lack. */
+	modifiedFilesAdded: string[];
+}
+
+/** The file lists a compaction builds on, and the id of the compaction that records them. */
+export interface CompactionFileListBase {
+	id: string;
+	/** Every path the chain records as read, including paths it later records as modified. */
+	read: ReadonlySet<string>;
+	modified: ReadonlySet<string>;
+}
+
+function addPaths(target: Set<string>, paths: unknown, normalize?: (path: string) => string): void {
+	if (!Array.isArray(paths)) return;
+	for (const path of paths) {
+		if (typeof path === "string") target.add(normalize ? normalize(path) : path);
+	}
 }
 
 /**
- * Extract file operations from messages and previous compaction entries.
+ * The file lists the compaction at `index` records: its own paths and, following `base`, the paths
+ * of every compaction it builds on. Undefined when it records none, because an extension wrote it
+ * or it holds no lists. A `base` that names no earlier compaction on the path, or that loops, ends
+ * the chain.
  */
-function extractFileOperations(
-	messages: AgentMessage[],
-	entries: SessionEntry[],
-	prevCompactionIndex: number,
-): FileOperations {
-	const fileOps = createFileOps();
-
-	// Collect from previous compaction's details (if pi-generated)
-	if (prevCompactionIndex >= 0) {
-		const prevCompaction = entries[prevCompactionIndex] as CompactionEntry;
-		if (!prevCompaction.fromExtension && prevCompaction.details) {
-			const details = prevCompaction.details as CompactionDetails;
-			if (Array.isArray(details.readFiles)) {
-				for (const f of details.readFiles) fileOps.read.add(stripReadSelector(f));
-			}
-			if (Array.isArray(details.modifiedFiles)) {
-				for (const f of details.modifiedFiles) fileOps.edited.add(f);
+function resolveCompactionFileLists(pathEntries: SessionEntry[], index: number): CompactionFileListBase | undefined {
+	const head = pathEntries[index] as CompactionEntry;
+	const read = new Set<string>();
+	const modified = new Set<string>();
+	const visited = new Set<string>();
+	let earlier: Map<string, CompactionEntry> | undefined;
+	let recorded = false;
+	let entry: CompactionEntry | undefined = head;
+	while (entry && !visited.has(entry.id)) {
+		visited.add(entry.id);
+		if (entry.fromExtension || typeof entry.details !== "object" || entry.details === null) break;
+		const details = entry.details as Record<string, unknown>;
+		if (Array.isArray(details.readFiles) || Array.isArray(details.modifiedFiles)) {
+			addPaths(read, details.readFiles, stripReadSelector);
+			addPaths(modified, details.modifiedFiles);
+			recorded = true;
+			break;
+		}
+		if (!Array.isArray(details.readFilesAdded) && !Array.isArray(details.modifiedFilesAdded)) break;
+		addPaths(read, details.readFilesAdded, stripReadSelector);
+		addPaths(modified, details.modifiedFilesAdded);
+		recorded = true;
+		if (typeof details.base !== "string") break;
+		if (!earlier) {
+			earlier = new Map();
+			for (let i = 0; i < index; i++) {
+				const candidate = pathEntries[i];
+				if (candidate.type === "compaction") earlier.set(candidate.id, candidate as CompactionEntry);
 			}
 		}
+		entry = earlier.get(details.base);
 	}
+	return recorded ? { id: head.id, read, modified } : undefined;
+}
 
-	// Extract from tool calls in messages
+/** File operations from the base's lists and the tool calls in `messages`. */
+function extractFileOperations(messages: AgentMessage[], base: CompactionFileListBase | undefined): FileOperations {
+	const fileOps = createFileOps();
+	if (base) {
+		for (const path of base.read) {
+			if (!base.modified.has(path)) fileOps.read.add(path);
+		}
+		for (const path of base.modified) fileOps.edited.add(path);
+	}
 	extractFileOpsFromMessages(messages, fileOps);
-
 	return fileOps;
+}
+
+/** The details a compaction stores for these lists: the paths they add to `base`, and its id. */
+function recordFileLists(
+	readFiles: string[],
+	modifiedFiles: string[],
+	base: CompactionFileListBase | undefined,
+): CompactionDetails {
+	if (!base) return { readFilesAdded: readFiles, modifiedFilesAdded: modifiedFiles };
+	return {
+		base: base.id,
+		readFilesAdded: readFiles.filter(path => !base.read.has(path)),
+		modifiedFilesAdded: modifiedFiles.filter(path => !base.modified.has(path)),
+	};
 }
 
 // ============================================================================
@@ -711,6 +783,17 @@ export interface SummaryOptions {
 	 * {@link CompactionResult.summaryStages}).
 	 */
 	summaryStaging?: "auto" | "staged";
+	/**
+	 * Segment and merge summaries a staged summary already produced, keyed by a
+	 * digest of the model, output budget and request text. A staged summary of a
+	 * long span is hundreds of requests, and one failure (a timeout, an overflow, a
+	 * cancelled turn) discarded every completed one, so the next attempt restarted
+	 * from the first segment and could fail at the same place again. With a map the
+	 * next attempt sends only the requests that never completed. An entry is reused
+	 * only for a byte-identical request to the same model; the caller owns the map
+	 * and clears it once a summary is committed.
+	 */
+	stagedSummaryCheckpoints?: Map<string, string>;
 }
 
 function localCodexCompaction(options: SummaryOptions | undefined) {
@@ -1049,16 +1132,30 @@ async function generateStagedSummary(
 	previousSummary: string | undefined,
 	options: SummaryOptions | undefined,
 ): Promise<GeneratedSummary> {
-	const segmentBudget = segmentOutputBudget(model, reserveTokens);
-	let summaries = await mapWithConcurrency(segments, STAGED_SUMMARY_CONCURRENCY, segment =>
-		requestSummary(
+	const checkpoints = options?.stagedSummaryCheckpoints;
+	const request = async (promptText: string, maxTokens: number, what: string): Promise<string> => {
+		const key = checkpoints
+			? createHash("sha256").update(`${model.provider}/${model.id}\n${maxTokens}\n${promptText}`).digest("hex")
+			: undefined;
+		const saved = key === undefined ? undefined : checkpoints?.get(key);
+		if (saved !== undefined) return saved;
+		const summary = await requestSummary(
 			model,
-			() =>
-				buildCompactionProviderContext(SUMMARIZATION_SYSTEM_PROMPT, buildSegmentPrompt(segment, options), options),
-			segmentBudget,
+			() => buildCompactionProviderContext(SUMMARIZATION_SYSTEM_PROMPT, promptText, options),
+			maxTokens,
 			apiKey,
 			signal,
 			options,
+			what,
+		);
+		if (key !== undefined) checkpoints?.set(key, summary);
+		return summary;
+	};
+	const segmentBudget = segmentOutputBudget(model, reserveTokens);
+	let summaries = await mapWithConcurrency(segments, STAGED_SUMMARY_CONCURRENCY, segment =>
+		request(
+			buildSegmentPrompt(segment, options),
+			segmentBudget,
 			`Segment ${segment.index} of ${segment.count} summarization`,
 		),
 	);
@@ -1072,23 +1169,14 @@ async function generateStagedSummary(
 		// instruction, because its answer is the summary that replaces the span.
 		const final = groups.length === 1;
 		summaries = await mapWithConcurrency(groups, STAGED_SUMMARY_CONCURRENCY, (group, position) =>
-			requestSummary(
-				model,
-				() =>
-					buildCompactionProviderContext(
-						SUMMARIZATION_SYSTEM_PROMPT,
-						buildMergePrompt(
-							group,
-							final ? previousSummary : undefined,
-							final ? customInstructions : undefined,
-							final ? options : { ...options, promptOverride: undefined },
-						),
-						options,
-					),
+			request(
+				buildMergePrompt(
+					group,
+					final ? previousSummary : undefined,
+					final ? customInstructions : undefined,
+					final ? options : { ...options, promptOverride: undefined },
+				),
 				mergeBudget,
-				apiKey,
-				signal,
-				options,
 				`Merge round ${round} group ${position + 1} of ${groups.length}`,
 			),
 		);
@@ -1203,6 +1291,59 @@ export async function generateSummary(
 		});
 		return staged("the single request timed out");
 	}
+}
+
+/**
+ * Readable summary text for the span a server-side compaction entry hid, for a
+ * session that has moved to a provider which cannot replay the entry's window.
+ *
+ * The window's `compaction` item is an opaque blob only its minting provider can
+ * decrypt, so `model` must be a model on that provider. The window is replayed to
+ * it the way a live rebuild replays it, and the summarization instruction is
+ * appended as one new user turn. One request over the compacted window is small by
+ * construction; the alternative is re-expanding every raw message the window
+ * stood in for and summarizing that on the new provider, which on a long session
+ * is millions of tokens and a staged summary of hundreds of segments.
+ *
+ * Throws when `model` cannot replay the entry, rather than asking a model that
+ * would receive the summary message with its window dropped and summarize nothing.
+ */
+export async function summarizeRemoteCompactionWindow(
+	entry: CompactionEntry,
+	model: Model,
+	reserveTokens: number,
+	apiKey: ApiKey,
+	signal?: AbortSignal,
+	options?: SummaryOptions,
+): Promise<string> {
+	const data = getRemoteCompactionPreserveData(entry.preserveData);
+	const providerPayload = remoteCompactionProviderPayload(entry.preserveData);
+	if (!data || !providerPayload || data.provider !== model.provider) {
+		throw new Error(
+			`Compaction ${entry.id} holds no server-side window ${model.provider}/${model.id} can replay; ` +
+				"summarize it with the model on the provider that compacted it.",
+		);
+	}
+	const windowMessages = (options?.convertToLlm ?? defaultConvertToLlm)([
+		createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp, undefined, providerPayload),
+	]);
+	const { promptText, maxTokens } = buildSummaryPrompt([], model, reserveTokens, undefined, undefined, options, true);
+	return requestSummary(
+		model,
+		() =>
+			buildCacheAlignedCompactionContext({
+				sessionSystemPrompt: options?.sessionSystemPrompt ?? [SUMMARIZATION_SYSTEM_PROMPT],
+				sessionMessages: windowMessages,
+				tools: options?.tools,
+				instruction: promptText,
+				sanitize: text => sanitizeCompactionProviderText(text, options),
+			}),
+		maxTokens,
+		apiKey,
+		signal,
+		options,
+		"Compaction port",
+	);
 }
 
 // ============================================================================
@@ -1474,6 +1615,11 @@ export interface CompactionPreparation {
 	tailElisions?: TailElision[];
 	/** File operations extracted from messagesToSummarize */
 	fileOps: FileOperations;
+	/**
+	 * The file lists `fileOps` starts from and the compaction that records them; `compact` stores
+	 * only the paths its lists add to these. Absent when no earlier compaction records any.
+	 */
+	fileListBase?: CompactionFileListBase;
 	/** Compaction settions from settings.jsonl	*/
 	settings: CompactionSettings;
 }
@@ -2034,8 +2180,10 @@ export function prepareCompaction(
 		previousPreserveData = prevCompaction.preserveData;
 	}
 
-	// Extract file operations from messages and previous compaction
-	const fileOps = extractFileOperations(messagesToSummarize, pathEntries, prevCompactionIndex);
+	// Extract file operations from messages and the lists the previous compaction records
+	const fileListBase =
+		prevCompactionIndex >= 0 ? resolveCompactionFileLists(pathEntries, prevCompactionIndex) : undefined;
+	const fileOps = extractFileOperations(messagesToSummarize, fileListBase);
 
 	// Also extract file ops from turn prefix if splitting
 	if (cutPoint.isSplitTurn) {
@@ -2072,6 +2220,7 @@ export function prepareCompaction(
 		previousPreserveData,
 		remoteChain,
 		fileOps,
+		fileListBase,
 		settings,
 	};
 }
@@ -2106,39 +2255,18 @@ export async function compact(
 		previousSummary,
 		previousPreserveData,
 		fileOps,
+		fileListBase,
 		settings,
 	} = preparation;
 
 	const reserveTokens = settings.reserveTokens ?? DEFAULT_RESERVE_TOKENS;
 
-	const summaryOptions: SummaryOptions = {
-		promptOverride: options?.promptOverride,
-		extraContext: options?.extraContext,
-		remoteEndpoint: settings.remoteEndpoint,
-		remoteInstructions: options?.remoteInstructions,
-		initiatorOverride: options?.initiatorOverride,
-		metadata: options?.metadata,
-		convertToLlm: options?.convertToLlm,
-		telemetry: options?.telemetry,
-		// Honor /model thinking selection on every fan-out summarizer.
-		// Without this propagation, generateSummary / generateTurnPrefixSummary
-		// see options?.thinkingLevel === undefined and resolveCompactionEffort
-		// silently falls back to Effort.High — the same defect e07b47ee4 fixed
-		// at the call sites, leaked back in here. See resolveCompactionEffort.
-		thinkingLevel: options?.thinkingLevel,
-		sessionId: options?.sessionId,
-		promptCacheKey: options?.promptCacheKey,
-		serviceTier: options?.serviceTier,
-		providerSessionState: options?.providerSessionState,
-		codexCompaction: options?.codexCompaction,
-		tools: options?.tools,
-		sessionSystemPrompt: options?.sessionSystemPrompt,
-		sessionMessages: options?.sessionMessages,
-		fetch: options?.fetch,
-		completeImpl: options?.completeImpl,
-		obfuscateProviderText: options?.obfuscateProviderText,
-		summaryStaging: options?.summaryStaging,
-	};
+	// Every caller option reaches the fan-out summarizers. A field-by-field copy
+	// dropped each option added after it was written (thinkingLevel once, the
+	// staged-summary checkpoints later), and the summarizer then ran on its
+	// defaults without error. The remote endpoint is the one field compaction
+	// settings own.
+	const summaryOptions: SummaryOptions = { ...options, remoteEndpoint: settings.remoteEndpoint };
 
 	const previousLegacyArchiveText = legacyArchiveSourceText(previousPreserveData);
 	const previousSummaryForCompaction = mergePreviousSummaryWithLegacyArchive(
@@ -2249,7 +2377,7 @@ export async function compact(
 		summary,
 		firstKeptEntryId,
 		tokensBefore,
-		details: { readFiles, modifiedFiles } as CompactionDetails,
+		details: recordFileLists(readFiles, modifiedFiles, fileListBase),
 		preserveData: finalPreserveData,
 		summaryStages,
 	};

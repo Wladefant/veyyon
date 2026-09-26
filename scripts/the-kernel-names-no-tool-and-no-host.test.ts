@@ -120,11 +120,14 @@ describe("the kernel names no tool and no host", () => {
 		// layered settings store (`settings/store`), the file-backed store every product composes with
 		// its own hook set, and the setting signal (`settings/signal`) a store fires on change. Then
 		// `session/session-list-index`, the per-directory cache of the session picker's per-file scan,
-		// which names a directory and a file shape and no tool, host or mode.
-		expect(kernelFiles.length).toBe(63);
-		expect(concernCounts.registry).toBe(7);
+		// which names a directory and a file shape and no tool, host or mode. Then the result codec
+		// contribution (`registry/tool-result-codec`) and its tool-name-keyed table
+		// (`session/tool-result-codecs`), which is how the spine slims and restores a tool result's
+		// details without naming the tool.
+		expect(kernelFiles.length).toBe(65);
+		expect(concernCounts.registry).toBe(8);
 		expect(concernCounts.loader).toBe(12);
-		expect(concernCounts.session).toBe(40);
+		expect(concernCounts.session).toBe(41);
 		expect(concernCounts.settings).toBe(4);
 		expect(concernCounts.registry).toBeGreaterThan(0);
 		expect(concernCounts.loader).toBeGreaterThan(0);

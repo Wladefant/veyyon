@@ -109,15 +109,7 @@ describe("getRoleInfo", () => {
  */
 describe("getKnownRoleIds", () => {
 	test("loads without an import-cycle error and lists the built-in roles first in order", () => {
-		expect(getKnownRoleIds(Settings.isolated({}))).toEqual([
-			"smol",
-			"slow",
-			"vision",
-			"plan",
-			"designer",
-			"commit",
-			"tiny",
-		]);
+		expect(getKnownRoleIds(Settings.isolated({}))).toEqual(["smol", "slow", "vision", "plan", "commit", "tiny"]);
 	});
 
 	test("appends custom roles from cycleOrder then modelTags, deduped and without 'default'", () => {
@@ -128,7 +120,7 @@ describe("getKnownRoleIds", () => {
 				modelTags: { taggedRole: { name: "T" }, smol: { name: "x" } },
 			}),
 		);
-		expect(roles).toEqual(["smol", "slow", "vision", "plan", "designer", "commit", "tiny", "myCustom", "taggedRole"]);
+		expect(roles).toEqual(["smol", "slow", "vision", "plan", "commit", "tiny", "myCustom", "taggedRole"]);
 	});
 
 	test("appends custom roles assigned in modelRoles, skipping the legacy 'default'", () => {
@@ -137,7 +129,7 @@ describe("getKnownRoleIds", () => {
 				modelRoles: { default: "gpt", extraRole: "claude" },
 			}),
 		);
-		expect(roles).toEqual(["smol", "slow", "vision", "plan", "designer", "commit", "tiny", "extraRole"]);
+		expect(roles).toEqual(["smol", "slow", "vision", "plan", "commit", "tiny", "extraRole"]);
 	});
 
 	test("keeps the advisor slot addressable while leaving it out of the selector", () => {

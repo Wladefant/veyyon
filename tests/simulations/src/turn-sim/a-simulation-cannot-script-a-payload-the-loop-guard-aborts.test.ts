@@ -55,6 +55,7 @@ const LOCKED = ["text", "thinking", "openThinking"] as const;
 const NOT_PROSE = [
 	"toolCall",
 	"execResolvedToolCall",
+	"execToolResult",
 	"openToolCall",
 	"usage",
 	"finish",

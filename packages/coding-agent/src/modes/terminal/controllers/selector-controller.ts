@@ -1948,7 +1948,7 @@ export class SelectorController {
 		}
 		const accounts = toResetUsageAccounts(statuses);
 		if (accounts.length === 0) {
-			this.ctx.showStatus("No Codex accounts found. Use /login to add one.");
+			this.ctx.showStatus("No OpenAI Codex or Anthropic accounts found. Use /login to add one.");
 			return;
 		}
 		if (!accounts.some(account => account.availableCount > 0)) {
@@ -1976,15 +1976,16 @@ export class SelectorController {
 	}
 
 	async #redeemReset(account: ResetUsageAccount): Promise<void> {
-		this.ctx.showStatus(`Spending 1 saved reset for ${account.label}…`, { dim: true });
+		const label = `${account.providerName} ${account.label}`;
+		this.ctx.showStatus(`Spending 1 saved reset for ${label}…`, { dim: true });
 		let outcome: ResetCreditRedeemOutcome;
 		try {
 			outcome = await this.ctx.session.redeemResetCredit(account.target);
 		} catch (error) {
-			this.ctx.showError(`Reset failed for ${account.label}: ${errorMessage(error)}`);
+			this.ctx.showError(`Reset failed for ${label}: ${errorMessage(error)}`);
 			return;
 		}
-		const message = describeRedeemOutcome(outcome, account.label);
+		const message = describeRedeemOutcome(outcome, label);
 		if (outcome.ok) {
 			this.ctx.showStatus(message);
 			// Refresh the status-line usage so the freshly-reset window shows.

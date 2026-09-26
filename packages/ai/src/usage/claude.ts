@@ -1,11 +1,9 @@
 import { scheduler } from "node:timers/promises";
 import { bareModelId, parseAnthropicModel } from "@veyyon/catalog/identity";
 import { toNumber } from "@veyyon/catalog/utils";
-import { CLAUDE_CODE_VERSION as claudeCodeVersion } from "@veyyon/catalog/wire/anthropic";
 import { isCancellation } from "@veyyon/utils/abortable";
 import { clamp, clamp01 } from "@veyyon/utils/math";
 import { HOUR_MS, WEEK_MS } from "@veyyon/utils/time";
-import { trimTrailingSlashes } from "@veyyon/utils/url";
 import * as AIError from "../error";
 import {
 	type CredentialRankingContext,
@@ -21,42 +19,18 @@ import {
 	type UsageWindow,
 } from "../usage";
 import { isRecord } from "../utils";
+import {
+	ANTHROPIC_RESET_PROGRAM,
+	ANTHROPIC_RESET_STATUS_QUERY,
+	anthropicResetCredits,
+	parseAnthropicResetStatus,
+} from "./anthropic-reset";
+import { claudeOAuthHeaders, normalizeClaudeBaseUrl } from "./claude-oauth-endpoint";
 import { usageStatusFromUsedFraction } from "./shared";
 
-const DEFAULT_ENDPOINT = "https://api.anthropic.com/api/oauth";
 const FIVE_HOURS_MS = 5 * HOUR_MS;
 const MAX_ATTEMPTS = 3;
 const BASE_RETRY_DELAY_MS = 500;
-
-const CLAUDE_HEADERS = {
-	accept: "application/json, text/plain, */*",
-	"accept-encoding": "gzip, compress, deflate, br",
-	"anthropic-beta":
-		"claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advanced-tool-use-2025-11-20,effort-2025-11-24,extended-cache-ttl-2025-04-11",
-	"content-type": "application/json",
-	"user-agent": `claude-cli/${claudeCodeVersion} (external, cli)`,
-	connection: "keep-alive",
-} as const;
-
-function normalizeClaudeBaseUrl(baseUrl?: string): string {
-	if (!baseUrl?.trim()) return DEFAULT_ENDPOINT;
-	const trimmed = trimTrailingSlashes(baseUrl.trim());
-	const lower = trimmed.toLowerCase();
-	if (lower.endsWith("/api/oauth")) return trimmed;
-	let url: URL;
-	try {
-		url = new URL(trimmed);
-	} catch {
-		return DEFAULT_ENDPOINT;
-	}
-	let path = trimTrailingSlashes(url.pathname);
-	if (path === "/") path = "";
-	if (path.toLowerCase().endsWith("/v1")) {
-		path = path.slice(0, -3);
-	}
-	if (!path) return `${url.origin}/api/oauth`;
-	return `${url.origin}${path}/api/oauth`;
-}
 
 interface ClaudeUsageBucket {
 	utilization?: number;
@@ -76,6 +50,8 @@ interface ClaudeUsageResponse {
 	seven_day_opus?: ClaudeUsageBucket | null;
 	seven_day_sonnet?: ClaudeUsageBucket | null;
 	limits?: unknown;
+	/** Reset-program status block, present when the query asks for it; see `./anthropic-reset`. */
+	cedar_ember?: unknown;
 }
 
 interface ClaudeApiLimitModelScope {
@@ -505,11 +481,9 @@ async function fetchClaudeUsage(params: UsageFetchParams, ctx: UsageFetchContext
 	if (credential.type !== "oauth" || !credential.accessToken) return null;
 
 	const baseUrl = normalizeClaudeBaseUrl(params.baseUrl);
-	const url = `${baseUrl}/usage`;
-	const headers: Record<string, string> = {
-		...CLAUDE_HEADERS,
-		authorization: `Bearer ${credential.accessToken}`,
-	};
+	// The reset-status query makes the one usage read also carry the account's reset grants.
+	const url = `${baseUrl}/usage?${ANTHROPIC_RESET_STATUS_QUERY}`;
+	const headers = claudeOAuthHeaders(credential.accessToken);
 
 	const payloadResult = await fetchUsagePayload(url, headers, ctx, params.signal);
 	if (!payloadResult || !isRecord(payloadResult.payload)) return null;
@@ -576,10 +550,12 @@ async function fetchClaudeUsage(params: UsageFetchParams, ctx: UsageFetchContext
 		email = email ?? profileIdentity.email;
 	}
 
+	const resetStatus = parseAnthropicResetStatus(payload[ANTHROPIC_RESET_PROGRAM]);
 	const report: UsageReport = {
 		provider: params.provider,
 		fetchedAt: Date.now(),
 		limits,
+		...(resetStatus ? { resetCredits: anthropicResetCredits(resetStatus) } : {}),
 		metadata: {
 			endpoint: url,
 			...(accountId ? { accountId } : {}),

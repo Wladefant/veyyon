@@ -145,8 +145,20 @@ describe("selector overlays answer the pointer", () => {
 
 	it("reset usage: hover bands an account, first click arms, second click spends", () => {
 		const accounts: ResetUsageAccount[] = [
-			{ label: "acc-one", availableCount: 2, target: { email: "one@x" }, active: false },
-			{ label: "acc-two", availableCount: 1, target: { email: "two@x" }, active: false },
+			{
+				label: "acc-one",
+				providerName: "OpenAI Codex",
+				availableCount: 2,
+				target: { provider: "openai-codex", email: "one@x" },
+				active: false,
+			},
+			{
+				label: "acc-two",
+				providerName: "OpenAI Codex",
+				availableCount: 1,
+				target: { provider: "openai-codex", email: "two@x" },
+				active: false,
+			},
 		];
 		let spent: ResetUsageAccount | undefined;
 		const component = new ResetUsageSelectorComponent(

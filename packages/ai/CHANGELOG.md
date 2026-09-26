@@ -18,6 +18,49 @@
 - A bridge-routed Codex turn now carries the per-item turn provenance the local `codex-chatgpt-web` daemon validates. The daemon derives an execution key for every turn through `extractChatGptTurnUserRevision`, which accepts a current-turn user item only when it declares `type: "message"` AND carries `internal_chat_message_metadata_passthrough.turn_id` equal to the `turn_id` in `client_metadata["x-codex-turn-metadata"]` — the alternative it also accepts, a server-owned item `id`, is stripped from every input item by the Codex request transformer by design. The message converter emitted `{ role, content }`, so the daemon threw "ChatGPT web requires a current-turn user message for browser-session replay" and every turn ended in `response.failed`. The stamp is applied once, at the final request boundary where the turn id and the finished input array meet, so continuation and tool-return requests are covered by the same rule; it is gated on the `chatgpt-web` provider reached over a loopback base URL, so OpenAI's host and every other Codex-compatible server on loopback are sent byte-identical bodies.
 - Bridge-routed Codex requests now carry an explicit host-owned environment envelope for ordinary Full-mode `codex-chatgpt-web` turns, including text-only turns. The envelope is stamped with the current turn id and placed immediately before its user item, rather than relying on daemon instruction or thread-cache fallbacks. It names the caller's absolute session working directory and declares `permission_profile type="disabled"` with `file_system type="unrestricted"`: Veyyon provides no filesystem sandbox, and tool execution still goes through Veyyon's own gated tool layer. Missing or relative cwd produces a warning and no invented envelope; the daemon may refuse or use its other trusted context. Compaction disables local tools and does not require the envelope; sending it preserves the compaction source key, though its execution key can change. The existing provider/loopback gate leaves official OpenAI and other Codex-compatible request bodies unchanged. Real-account models, turn, cancellation and tool-call smoke remain unverified.
 - A ChatGPT Web turn served by a borrowed `openai-codex` OAuth row now rotates and blocks that Codex account: a 401 moves the session to an eligible sibling Codex account and a usage-limit event blocks the account that served, instead of acting on a `chatgpt-web` identity that has no stored row. A dedicated ChatGPT Web credential keeps taking precedence and keeps rotating and blocking on its own row.
+### Changed
+
+- The Anthropic and OpenAI-compatible providers split their stream loops, message converters and finalization into per-step helpers; no user-visible change.
+- The OpenAI-compatible stream reads a tool call's prior object arguments through the shared `isRecord` guard instead of an inline check; no user-visible change.
+
+### Fixed
+
+- A Cursor turn whose remote agent stops making progress now ends with "Cursor made no progress for Ns" at the 30-minute ceiling instead of hanging indefinitely, because Cursor's ten-second server heartbeat no longer counts as progress.
+- A Cursor turn held by a local tool that never returns now ends when its failure or an abort arrives instead of waiting on the tool forever.
+- Fixed every Cursor exec-channel tool call being stored twice in the assistant message, which left an unanswered copy of each call that session resume reported as pending.
+- A blank user or developer message after a tool result no longer sends Mistral two consecutive assistant turns, which it rejects.
+
+## [1.5.4] - 2026-09-24
+
+### Fixed
+
+- Fixed Cursor running a tool twice and leaving an unanswered `<id>_2` tool call when the server re-sent an exec request for a call it already dispatched; the repeat is now answered from the first run's result.
+- Fixed EventStream leaking waiting resolvers and hanging when async iteration is terminated early or aborted.
+- Fixed GitLab Duo Workflow socket leaking its abort signal listener when the connection settles.
+- Finalized all prepared statements upon closing the SQLite auth credential store, preventing handle leaks.
+- Fixed the credential store failing to open with `SQLITE_READONLY_DIRECTORY` in a read-only credential directory after a clean close; the store keeps its WAL files on close.
+- Converted idle iterator grace timeout race to Promise.withResolvers and typed Google tool call arguments cleanly; no user-visible change.
+
+## [1.5.3] - 2026-09-22
+
+### Fixed
+
+- A dead `cursor-agent` connection is reported within one probe interval plus one probe timeout of the last server byte (40s by default), instead of up to two intervals plus the timeout, where a short silence ceiling could fire first and misreport it as server silence.
+
+## [1.5.2] - 2026-09-22
+
+### Added
+
+- `AuthStorage.listResetCredits` and `AuthStorage.redeemResetCredit` cover Anthropic Claude OAuth accounts as well as OpenAI Codex, and each `ResetCreditTarget` states its `provider`.
+
+## [1.5.1] - 2026-09-22
+
+### Fixed
+
+- A quiet `cursor-agent` turn is no longer aborted with "Provider stream stalled while waiting for the next event": the stream is governed by HTTP/2 PING liveness, with a 30-minute ceiling on unbroken server silence and `VEYYON_STREAM_IDLE_TIMEOUT_MS` still honored as that ceiling.
+- The Anthropic OAuth user-agent reports `agent-sdk/0.3.280`, the Agent SDK release published beside Claude Code 2.1.280.
+- The Cursor liveness probe interval is clamped through the shared `clampLow` helper; no user-visible change.
+
 ## [1.5.0] - 2026-09-18
 
 ### Breaking Changes

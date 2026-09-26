@@ -13,6 +13,7 @@ import { parseUnifiedHunkHeader } from "../utils/unified-hunk-header";
 import { EOF_MARKER, FILE_OP_MARKERS, PATCH_WRAPPER_MARKERS } from "./apply-patch/markers";
 import { DEFAULT_FUZZY_THRESHOLD, EditMatchError, findMatch } from "./match";
 import { adjustIndentation, normalizeToLF, stripBom } from "./normalize";
+import { formatNumberedDiffLine, parseNumberedDiffRow } from "./numbered-diff-row";
 import { readPreviewText } from "./preview-text-cache";
 
 export interface DiffResult {
@@ -54,25 +55,6 @@ export class ApplyPatchError extends Error {
 // ═══════════════════════════════════════════════════════════════════════════
 // Diff String Generation
 // ═══════════════════════════════════════════════════════════════════════════
-
-function formatNumberedDiffLine(prefix: "+" | "-" | " ", lineNum: number, content: string): string {
-	return `${prefix}${lineNum}|${content}`;
-}
-
-interface ParsedNumberedDiffRow {
-	prefix: "+" | "-" | " ";
-	lineNumber: number;
-	content: string;
-}
-
-function parseNumberedDiffRow(row: string): ParsedNumberedDiffRow | undefined {
-	const match = /^([+\- ])(\d+)\|(.*)$/s.exec(row);
-	if (!match) return undefined;
-	const prefix = match[1] as "+" | "-" | " ";
-	const lineNumber = Number.parseInt(match[2], 10);
-	if (!Number.isFinite(lineNumber)) return undefined;
-	return { prefix, lineNumber, content: match[3] ?? "" };
-}
 
 function isDiffChangeRow(row: string | undefined): boolean {
 	return row !== undefined && (row.startsWith("+") || row.startsWith("-"));

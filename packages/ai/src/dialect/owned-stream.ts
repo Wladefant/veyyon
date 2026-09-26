@@ -260,6 +260,7 @@ class InbandStreamProjector {
 			this.#out.push({ type: "toolcall_delta", contentIndex: entry.index, delta, partial: this.#partial });
 	}
 
+	/** The entry outlives the end, so a provider that ends one block twice gets one block; see `LeakedThinkingProjector.toolEnd`. */
 	nativeToolEnd(srcIndex: number, toolCall: ToolCall): void {
 		if (this.#stopped) return;
 		const entry = this.#nativeBlocks.get(srcIndex);
@@ -272,7 +273,6 @@ class InbandStreamProjector {
 					toolCall: entry.block,
 					partial: this.#partial,
 				});
-			this.#nativeBlocks.delete(srcIndex);
 			return;
 		}
 		// Never streamed (name was empty at start). Salvage a real call whose name
@@ -285,6 +285,7 @@ class InbandStreamProjector {
 		const block = cloneToolCall(toolCall);
 		this.#partial.content.push(block);
 		const index = this.#partial.content.length - 1;
+		this.#nativeBlocks.set(srcIndex, { index, block });
 		if (this.#emitEvents) {
 			this.#out.push({ type: "toolcall_start", contentIndex: index, partial: this.#partial });
 			this.#out.push({ type: "toolcall_end", contentIndex: index, toolCall: block, partial: this.#partial });

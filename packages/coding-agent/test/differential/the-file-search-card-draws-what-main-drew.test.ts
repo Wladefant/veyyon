@@ -29,7 +29,7 @@ import { stripVTControlCharacters } from "node:util";
 import type { RenderResultOptions } from "@veyyon/agent-core";
 import { settings } from "@veyyon/coding-agent/config/settings";
 import { drawToolView } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
-import type { TruncationResult } from "@veyyon/coding-agent/session/streaming-output";
+import type { TruncationSummary } from "@veyyon/coding-agent/session/streaming-output";
 import type { ThemeColor } from "@veyyon/coding-agent/theme/color";
 import { theme } from "@veyyon/coding-agent/theme/theme";
 import { formatFullOutputReference } from "@veyyon/coding-agent/tools/core/output-meta";
@@ -509,13 +509,12 @@ describe("file_search tool differential", () => {
 			truncated: true,
 			resultLimitReached: 200,
 			truncation: {
-				content: "src/a.ts\nsrc/b.ts",
 				truncated: true,
 				truncatedBy: "lines",
 				totalLines: 200,
 				totalBytes: 4096,
 				artifactId: "art_9",
-			} as TruncationResult & { artifactId: string },
+			} as TruncationSummary & { artifactId: string },
 			missingPaths: ["gone/"],
 		});
 		const args: FileSearchRenderArgs = { input: "src/**" };

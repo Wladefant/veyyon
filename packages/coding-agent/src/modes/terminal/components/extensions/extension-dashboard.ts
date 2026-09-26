@@ -71,6 +71,58 @@ export function buildTabBarTabs(tabs: ProviderTab[]): Tab[] {
 	});
 }
 
+/** TabBar draws each tab as ` label ` and puts this many cells between neighbours. */
+const TAB_SEPARATOR = 2;
+const PREV_TAB: Tab = { id: "__prev_tab", label: "◀", short: "◀" };
+const NEXT_TAB: Tab = { id: "__next_tab", label: "▶", short: "▶" };
+
+/**
+ * The run of tabs around `activeIndex` that fits on one {@link TabBar} row of
+ * `contentWidth` cells, with a `◀` / `▶` paging tab on each side that has more.
+ * Every tab and paging tab is costed as TabBar draws it, separators included,
+ * so a window reported as fitting never wraps onto a second row.
+ */
+export function visibleTabWindow(allTabs: readonly Tab[], activeIndex: number, contentWidth: number): Tab[] {
+	if (allTabs.length === 0) return [];
+	const tabWidth = (t: Tab) => visibleWidth(t.label) + 2;
+	const totalAllWidth = allTabs.reduce((sum, t) => sum + tabWidth(t), 0) + TAB_SEPARATOR * (allTabs.length - 1);
+	if (totalAllWidth <= contentWidth) return [...allTabs];
+
+	const active = clampLow(activeIndex, 0, allTabs.length - 1);
+	let start = active;
+	let end = active + 1;
+	const widthForRange = (s: number, e: number): number => {
+		let w = 0;
+		if (s > 0) w += tabWidth(PREV_TAB) + TAB_SEPARATOR;
+		for (let i = s; i < e; i++) {
+			w += tabWidth(allTabs[i]!) + (i > s ? TAB_SEPARATOR : 0);
+		}
+		if (e < allTabs.length) w += TAB_SEPARATOR + tabWidth(NEXT_TAB);
+		return w;
+	};
+
+	while (true) {
+		let expanded = false;
+		if (end < allTabs.length && widthForRange(start, end + 1) <= contentWidth) {
+			end++;
+			expanded = true;
+		}
+		if (start > 0 && widthForRange(start - 1, end) <= contentWidth) {
+			start--;
+			expanded = true;
+		}
+		if (!expanded) break;
+	}
+
+	const result: Tab[] = [];
+	if (start > 0) result.push(PREV_TAB);
+	for (let i = start; i < end; i++) {
+		result.push(allTabs[i]!);
+	}
+	if (end < allTabs.length) result.push(NEXT_TAB);
+	return result;
+}
+
 export class ExtensionDashboard implements Component {
 	#state!: DashboardState;
 	#mainList!: ExtensionList;
@@ -156,9 +208,32 @@ export class ExtensionDashboard implements Component {
 
 		this.#tabBar = new TabBar("", buildTabBarTabs(this.#state.tabs), getTabBarTheme());
 		this.#tabBar.showHint = false;
-		this.#tabBar.onTabChange = tab => this.#selectProviderById(tab.id);
+		this.#tabBar.onTabChange = tab => {
+			if (tab.id === "__prev_tab") {
+				this.#stepTab(-1);
+			} else if (tab.id === "__next_tab") {
+				this.#stepTab(1);
+			} else {
+				this.#selectProviderById(tab.id);
+			}
+		};
 		const activeId = this.#state.tabs[this.#state.activeTabIndex]?.id;
 		if (activeId) this.#tabBar.setActiveById(activeId);
+	}
+
+	#stepTab(direction: number): void {
+		const count = this.#state.tabs.length;
+		if (count === 0) return;
+		let next = (this.#state.activeTabIndex + direction + count) % count;
+		for (let i = 0; i < count; i++) {
+			const tab = this.#state.tabs[next];
+			if (tab && (tab.id === "all" || tab.count > 0 || !tab.enabled)) {
+				break;
+			}
+			next = (next + direction + count) % count;
+		}
+		const tab = this.#state.tabs[next];
+		if (tab) this.#selectProviderById(tab.id);
 	}
 
 	#getActiveProviderId(): string | null {
@@ -185,7 +260,10 @@ export class ExtensionDashboard implements Component {
 		}
 		const contentWidth = dims.contentWidth;
 
-		const tabLines = this.#tabBar.render(contentWidth);
+		const visibleTabs = visibleTabWindow(buildTabBarTabs(this.#state.tabs), this.#state.activeTabIndex, contentWidth);
+		const activeId = this.#state.tabs[this.#state.activeTabIndex]?.id;
+		this.#tabBar.setTabs(visibleTabs, activeId);
+		const tabLines = this.#tabBar.render(contentWidth).slice(0, 1);
 		// Ask the shell for the body budget rather than subtracting a magic 8.
 		// The card reserves NINE rows at this sizing (top border, vPad above AND
 		// below the body, footer divider, two footer lines, bottom border), so
@@ -465,8 +543,13 @@ export class ExtensionDashboard implements Component {
 			return;
 		}
 
-		// Tab/Shift+Tab or ←/→: switch provider tabs (fires onTabChange).
-		if (this.#tabBar.handleInput(data)) {
+		// Tab/Shift+Tab or ←/→: switch provider tabs across all discovered providers.
+		if (matchesKey(data, "left") || matchesKey(data, "shift+tab")) {
+			this.#stepTab(-1);
+			return;
+		}
+		if (matchesKey(data, "right") || matchesKey(data, "tab")) {
+			this.#stepTab(1);
 			return;
 		}
 

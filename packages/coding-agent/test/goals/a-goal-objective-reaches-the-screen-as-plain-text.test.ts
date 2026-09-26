@@ -153,6 +153,8 @@ function controllerFor(
 			appendCustomEntry: (_kind: string, payload: unknown) => {
 				capture.logged.push(payload);
 			},
+			getLeafEntry: () => undefined,
+			getEntry: () => undefined,
 		},
 		showError: record,
 		showWarning: record,

@@ -116,20 +116,43 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * which this graph already reaches. It is a leaf over modules already here, so the launch runs no
  * new code — the same split-raises-the-count case as the line above.
  *
- * 1546 to 1555 on this fork: nine modules the fork carries and upstream does not sit on this graph, so
- * upstream's pin, measured on a tree without them, is nine short here. Five are the ChatGPT-web provider
- * (`ai/providers/openai-codex/{chatgpt-web-trusted-context,chatgpt-web-turn-stamp}.ts`,
- * `ai/registry/chatgpt-web.ts`, `catalog/{discovery,provider-models}/chatgpt-web.ts`), reached through the
- * provider registry the launch already builds; two are the native control host
- * (`native-control/{telegram-control-bridge,telegram-control-host}.ts`); and two are the task lane's
- * replenishment and the bridge script it materializes (`task/topic-replenishment.ts`,
- * `task/native-ledger-bridge.py`, which the walker counts as a file the module reads). None of them is
- * new code on this branch — the merge lowered the ceiling, not the graph.
+ * 1546 to 1548: `ai/usage/anthropic-reset.ts`, the Anthropic usage-limit reset client, and
+ * `ai/usage/claude-oauth-endpoint.ts`, the OAuth base URL and headers it shares with the Claude
+ * usage report. `AuthStorage` lists and redeems resets for every provider that has them and reaches
+ * the Codex reset client the same way. Both are leaves over modules already here; the usage report,
+ * `ai/usage/claude.ts`, stays off this graph.
  *
- * 1555 to 1558: the refusal fence arrived on `main` — `tools/core/{refusal-fence,effect-scope,execution-registry}.ts`,
- * the choke point every tool invocation passes through and the effect-scope and registry tables it reads.
- * The launch path reaches them because it builds the tool table, so this is new code on the graph rather
- * than a split, and it is the case this ratchet exists to make someone write down.
+ * 1548 to 1549: `session/agent-session-provider-request.ts`, the provider request shaping
+ * (secret redaction, Anthropic metadata, the tool-order check) split out of
+ * `session/agent-session.ts` to hold that file under its line ceiling. A leaf over modules already
+ * here, so the launch runs no new code — the same split-raises-the-count case as above.
+ *
+ * 1549 to 1550: `goals/goal-record.ts`, which writes a goal's counters as a `goal_progress` entry
+ * between the `mode_change` records that hold the whole goal, and reads the two back together. It is
+ * new code on this graph because `session/agent-session.ts` records a goal after each tool call that
+ * spends tokens on one; it imports only type-level kernel modules and `utils/type-guards`, both
+ * already here.
+ *
+ * 1550 to 1552: `kernel/session/tool-result-codecs.ts`, the table of result codecs the session
+ * spine applies to each line it writes and each entry it loads, and `tools/fs/read-display.ts`, the
+ * read codec the filesystem manifest contributes to it. A resumed session restores its read cards as
+ * it loads, before any read runs, so the codec cannot wait for the read tool; both import only
+ * type-level modules and `utils/type-guards`, already here.
+ *
+ * 1552 to 1554: `edit/result-codec.ts`, the edit codec `tools/index.ts` registers beside the
+ * domains' codecs, which rebuilds an edit's post-edit text from its pre-edit text and diff as a
+ * resumed session loads, and `edit/numbered-diff-row.ts`, the numbered diff row format split out of
+ * `edit/diff.ts` so the diff writer and that rebuild read one definition. The codec imports only
+ * type-level modules, `utils/type-guards` and the row module, which imports nothing.
+ *
+ * 1554 to 1557: `tools/search/search-result-codec.ts`, `tools/shell/eval-result-codec.ts` and
+ * `tools/shell/job-result-codec.ts`, the search, eval and job codecs their domain manifests
+ * register, which rebuild a result's dropped display copies from its text as a resumed session
+ * loads. They import `node:util`, type-level modules, `utils/type-guards`, `tools/core/output-notice`
+ * and, for search, `hashline/format` and `tools/core/render-utils`, all already here.
+ *
+ * Fork modules sitting on this graph: ChatGPT-web provider modules, native control host, and
+ * the refusal fence.
  *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for

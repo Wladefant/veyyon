@@ -25,6 +25,7 @@ import { isWaitingPollDetails } from "../tools/shell/job-view";
 import { type ToolViewDefinition, toolViewDefinitions } from "../tools/view-registry";
 import type { EditMode } from "../utils/edit-mode";
 import { sanitizeWithOptionalSixelPassthrough } from "../utils/sixel";
+import { displayArguments } from "./display-arguments";
 import { toReadEntryView } from "./read-group";
 import { ToolCallPreview } from "./tool-call-preview";
 
@@ -524,12 +525,16 @@ export class ToolExecutionProducer {
 	#callPreview: ToolCallPreview;
 	#listeners = new Set<(block: ToolExecutionBlock) => void>();
 	#currentBlock: ToolExecutionBlock;
+	/** The arguments as the model sent them, so a repeat of the same object is recognised before conforming. */
+	#rawArgs: unknown;
 
 	constructor(params: ToolExecutionProducerParams) {
 		const cwd = params.cwd ?? getProjectDir();
+		const args = displayArguments(params.tool, params.args);
+		this.#rawArgs = params.args;
 		this.#params = {
 			toolName: params.toolName,
-			args: params.args,
+			args,
 			tool: params.tool,
 			toolCallId: params.toolCallId,
 			id: params.id,
@@ -537,7 +542,7 @@ export class ToolExecutionProducer {
 			sealed: false,
 			timestamp: Date.now(),
 		};
-		this.#callPreview = new ToolCallPreview(params.args, {
+		this.#callPreview = new ToolCallPreview(args, {
 			toolName: params.toolName,
 			mode: resolveEditModeForTool(params.toolName, params.tool),
 			cwd,
@@ -548,7 +553,7 @@ export class ToolExecutionProducer {
 		});
 		this.#params.callPreview = this.#callPreview;
 		this.#currentBlock = buildToolExecutionBlock(this.#params);
-		this.#callPreview.update(params.args);
+		this.#callPreview.update(args);
 	}
 
 	get block(): ToolExecutionBlock {
@@ -586,9 +591,11 @@ export class ToolExecutionProducer {
 		};
 	}
 
-	updateArgs(args: unknown, toolCallId?: string): void {
+	updateArgs(rawArgs: unknown, toolCallId?: string): void {
 		if (toolCallId) this.#params.toolCallId = toolCallId;
-		if (args === this.#params.args) return;
+		if (rawArgs === this.#rawArgs) return;
+		this.#rawArgs = rawArgs;
+		const args = displayArguments(this.#params.tool, rawArgs);
 		this.#params.args = args;
 		this.#callPreview.update(args);
 		this.#recompute();

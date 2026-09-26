@@ -107,7 +107,7 @@ import {
 } from "@veyyon/catalog/discovery/cursor-gen/agent_pb";
 import { calculateCost } from "@veyyon/catalog/models";
 import { CURSOR_API_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
-import { logger } from "@veyyon/utils";
+import { clampLow, logger } from "@veyyon/utils";
 import { $env } from "@veyyon/utils/env";
 import { parseJsonWithRepair, parseStreamingJson, parseStreamingJsonThrottled } from "@veyyon/utils/json-parse";
 import { sanitizeText } from "@veyyon/utils/sanitize-text";
@@ -150,6 +150,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream";
 import { connectProxiedSocket, getProxyForProvider, shouldBypassProxy } from "../utils/proxy";
 import { createRequestDebugSession, isRequestDebugEnabled, type RequestDebugResponseLog } from "../utils/request-debug";
 import { toolWireSchema } from "../utils/schema/wire";
+import { type CursorLiveness, startCursorLiveness } from "./cursor-liveness";
 import { createInitialResponsesAssistantMessage } from "./initial-message";
 import { NON_VIDEO_MODEL_PLACEHOLDER } from "./vision-content";
 
@@ -164,6 +165,25 @@ export const CURSOR_API_URL = CURSOR_API_ENDPOINT;
 export const CURSOR_CLIENT_VERSION = "cli-2026.01.09-231024f";
 
 const CURSOR_PROXY_TUNNEL_TIMEOUT_MS = 30_000;
+
+/**
+ * Server silence that triggers an HTTP/2 PING, and the gap between probes.
+ *
+ * Short enough that a dead connection is reported in well under a minute, long enough that a healthy
+ * turn costs one 8-byte frame every half minute.
+ */
+const CURSOR_LIVENESS_PROBE_INTERVAL_MS = 30_000;
+/** How long one PING may go unacknowledged before the connection is declared dead. */
+const CURSOR_LIVENESS_PROBE_TIMEOUT_MS = 10_000;
+/**
+ * Unbroken server silence that ends the turn even while the transport keeps answering.
+ *
+ * A PING is acknowledged by whatever terminates HTTP/2, which can be an edge in front of a wedged
+ * backend, so liveness alone bounds nothing. Recorded healthy gaps between Cursor stream events
+ * reach 355s, so this ceiling sits five times past observed behaviour: a remote agent that emits
+ * nothing for half an hour is not working, it is stuck.
+ */
+const CURSOR_MAX_SILENT_MS = 30 * 60_000;
 
 /**
  * A bounded, least-recently-used map. The cursor provider keys per-conversation
@@ -429,6 +449,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 		let h2Client: http2.ClientHttp2Session | null = null;
 		let h2Request: http2.ClientHttp2Stream | null = null;
 		let heartbeatTimer: NodeJS.Timeout | null = null;
+		let liveness: CursorLiveness | null = null;
 		let debugResponseLogPromise: Promise<RequestDebugResponseLog | undefined> | undefined;
 		// The run's AbortSignal is shared across every LLM round (agent-loop.ts
 		// passes the same object each round when harmony/owned-dialect are off), so
@@ -504,8 +525,13 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 
 			let pendingBuffer = Buffer.alloc(0);
 			let endStreamError: Error | null = null;
+			// Settles when the turn has failed, so a termination waiting on in-flight message handlers
+			// stops waiting: a handler blocked on a local tool that never returns would otherwise hold
+			// the turn open after the failure that was meant to end it.
+			const { promise: turnFailed, resolve: signalTurnFailed } = Promise.withResolvers<void>();
 			/**
-			 * Fail this turn from inside a server-message handler.
+			 * Fail this turn: from a server-message handler, the liveness governor, a transport error
+			 * or an abort.
 			 *
 			 * Reuses the `endStreamError` channel a Connect end-stream error already uses (the outer
 			 * promise rejects with it), rather than throwing: a throw out of `handleServerMessage` is
@@ -515,6 +541,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 			const failTurn = (error: Error): void => {
 				if (endStreamError) return;
 				endStreamError = error;
+				signalTurnFailed();
 				h2Request?.close();
 			};
 			let currentTextBlock: (TextContent & { [kStreamingBlockIndex]: number }) | null = null;
@@ -531,7 +558,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 				get currentToolCall() {
 					return currentToolCall;
 				},
-				execDispatchedToolCalls: new Set<string>(),
+				execDispatches: new Map<string, Promise<ExecReply>>(),
 				get firstTokenTime() {
 					return firstTokenTime;
 				},
@@ -587,8 +614,11 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 				if (streamTerminated) return;
 				streamTerminated = true;
 				void (async () => {
+					// A successful turn waits for every handler so `turnEnded` cannot outrun an exec
+					// reply. A failed turn does not: the failure is the result, and a wedged handler
+					// must not keep it from being reported.
 					if (pendingMessagePromises.size > 0) {
-						await Promise.allSettled(Array.from(pendingMessagePromises));
+						await Promise.race([Promise.allSettled(Array.from(pendingMessagePromises)), turnFailed]);
 					}
 					await closeDebugLog();
 					if (refusedStatus !== undefined) {
@@ -626,6 +656,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 			};
 
 			h2Request.on("response", headers => {
+				liveness?.markProgress();
 				const status = Number(headers[":status"]);
 				if (Number.isFinite(status) && status >= 400) refusedStatus = status;
 				debugResponseLogPromise = debugSession?.openResponseLog(
@@ -634,6 +665,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 				);
 			});
 			h2Request.on("data", (chunk: Buffer) => {
+				liveness?.markTransport();
 				if (debugResponseLogPromise) {
 					void debugResponseLogPromise.then(log => {
 						log?.write(chunk);
@@ -675,6 +707,12 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 						const isTurnEnded =
 							serverMessage.message.case === "interactionUpdate" &&
 							serverMessage.message.value.message?.case === "turnEnded";
+						// A heartbeat arrives every ten seconds whether or not the remote agent is
+						// working, so it proves the connection and never counts as progress.
+						const isHeartbeat =
+							serverMessage.message.case === "interactionUpdate" &&
+							serverMessage.message.value.message?.case === "heartbeat";
+						if (!isHeartbeat) liveness?.markProgress();
 
 						const messagePromise = (async () => {
 							await handleServerMessage(
@@ -755,6 +793,37 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 
 			heartbeatTimer = setInterval(sendHeartbeat, 5000);
 
+			// A turn is governed by transport liveness plus a ceiling on time without progress:
+			// `cursor-agent` plans and executes on Cursor's side and legitimately emits no progress
+			// while it does, and its ten-second server heartbeat continues whether or not that work
+			// advances. A caller or operator who pins a stream idle budget gets it as the ceiling.
+			const maxSilentMs =
+				options?.streamIdleTimeoutMs !== undefined && options.streamIdleTimeoutMs > 0
+					? options.streamIdleTimeoutMs
+					: CURSOR_MAX_SILENT_MS;
+			const probeIntervalMs = clampLow(Math.floor(maxSilentMs / 3), 1, CURSOR_LIVENESS_PROBE_INTERVAL_MS);
+			const session = h2Client;
+			liveness = startCursorLiveness({
+				probeIntervalMs,
+				probeTimeoutMs: Math.min(CURSOR_LIVENESS_PROBE_TIMEOUT_MS, probeIntervalMs),
+				maxSilentMs,
+				hasPendingLocalWork: () => stream.hasPendingLocalWork,
+				probe: () => {
+					const { promise, resolve, reject } = Promise.withResolvers<void>();
+					if (!session || session.closed || session.destroyed) {
+						reject(new Error("the HTTP/2 session is already closed"));
+						return promise;
+					}
+					const sent = session.ping((error: Error | null) => {
+						if (error) reject(error);
+						else resolve();
+					});
+					if (!sent) reject(new Error("the HTTP/2 session refused the ping"));
+					return promise;
+				},
+				onDead: failTurn,
+			});
+
 			h2Request.on("trailers", trailers => {
 				const status = trailers["grpc-status"];
 				const rawMsg = String(trailers["grpc-message"] || "");
@@ -778,11 +847,13 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 			});
 
 			h2Request.on("error", (error: Error) => {
-				terminateStream(() => rejectH2(error));
+				failTurn(error);
+				terminateStream();
 			});
 
 			h2Client.on("error", (error: Error) => {
-				terminateStream(() => rejectH2(error));
+				failTurn(error);
+				terminateStream();
 			});
 
 			h2Client.on("close", () => {
@@ -803,7 +874,8 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 					} catch {
 						// Ignore close errors
 					}
-					terminateStream(() => rejectH2(new AIError.RequestAbortError()));
+					failTurn(new AIError.RequestAbortError());
+					terminateStream();
 				};
 				// Already aborted before we attached: the event will never fire, so
 				// run the handler once synchronously instead of hanging the round.
@@ -875,6 +947,8 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 				clearInterval(heartbeatTimer);
 				heartbeatTimer = null;
 			}
+			liveness?.stop();
+			liveness = null;
 			try {
 				h2Request?.close();
 			} catch {
@@ -1013,15 +1087,18 @@ export interface BlockState {
 	currentThinkingBlock: (ThinkingContent & { [kStreamingBlockIndex]: number }) | null;
 	currentToolCall: ToolCallState | null;
 	/**
-	 * Tool-call ids the exec channel has dispatched this turn.
+	 * Every tool call the exec channel has dispatched this turn, keyed by tool-call id, and the
+	 * reply its one run produced.
 	 *
-	 * Cursor surfaces an MCP call on two channels at once: `mcpArgs` on the exec
-	 * channel, which this provider runs through the caller's handler and answers,
-	 * and an `mcpToolCall` block on the assistant stream. The two arrive in either
-	 * order, so the id is recorded here as well as stamped onto any block that
-	 * already exists, and a block that opens later reads this set.
+	 * Two readers. Cursor surfaces an MCP call on two channels at once: `mcpArgs` on the exec
+	 * channel, which this provider runs through the caller's handler and answers, and an
+	 * `mcpToolCall` block on the assistant stream. The two arrive in either order, so a block
+	 * that opens after its dispatch reads this map to know the call already ran.
+	 *
+	 * And Cursor re-sends an exec request for a call it already dispatched. The repeat is
+	 * answered from the entry here, see {@link dispatchExecOnce}.
 	 */
-	execDispatchedToolCalls: Set<string>;
+	execDispatches: Map<string, Promise<ExecReply>>;
 	firstTokenTime: number | undefined;
 	/** This turn's token account. See {@link CursorUsageAccount}. */
 	usage: CursorUsageAccount;
@@ -1179,7 +1256,7 @@ function sendShellStreamEvent(
 	execMsg: ExecServerMessage,
 	event: ShellStream["event"],
 ): void {
-	sendExecClientMessage(h2Request, execMsg, "shellStream", create(ShellStreamSchema, { event }));
+	sendExecReply(h2Request, execMsg, { case: "shellStream", value: create(ShellStreamSchema, { event }) });
 }
 
 function sanitizeShellExecResult(execResult: ShellResult): ShellResult {
@@ -1267,7 +1344,7 @@ async function handleShellStreamArgs(
 	h2Request: http2.ClientHttp2Stream,
 	execHandlers: CursorExecHandlers | undefined,
 	onToolResult: CursorToolResultHandler | undefined,
-): Promise<void> {
+): Promise<ExecReply> {
 	const normalizedWorkingDirectory = args.workingDirectory || process.cwd();
 	const normalizedArgs: ShellArgs = { ...args, workingDirectory: normalizedWorkingDirectory };
 	const startTs = performance.now();
@@ -1320,10 +1397,11 @@ async function handleShellStreamArgs(
 	sendShellStreamExitFromResult(h2Request, execMsg, sanitizedExecResult, sendBufferedOutput);
 	// Cursor can keep the turn pending when it receives only stream deltas.
 	// Send the final structured shellResult as completion acknowledgement.
-	sendExecClientMessage(h2Request, execMsg, "shellResult", sanitizedExecResult);
+	const reply = sendExecReply(h2Request, execMsg, { case: "shellResult", value: sanitizedExecResult });
 	sendExecClientStreamClose(h2Request, execMsg);
 
 	log("shellStream", "done", { elapsed: performance.now() - startTs });
+	return reply;
 }
 
 function sendShellStreamExitFromResult(
@@ -1471,7 +1549,7 @@ async function handleExecServerMessage(
 			},
 		});
 
-		sendExecClientMessage(h2Request, execMsg, "requestContextResult", requestContextResult);
+		sendExecReply(h2Request, execMsg, { case: "requestContextResult", value: requestContextResult });
 		log("execClient", "requestContextResult", { tools: requestContextTools.length });
 		return;
 	}
@@ -1480,10 +1558,104 @@ async function handleExecServerMessage(
 		return;
 	}
 
-	switch (execCase) {
+	const run = () => runExecCall(execMsg, h2Request, execHandlers, onToolResult, output, stream, state);
+	const toolCallId = execToolCallId(execMsg);
+	if (toolCallId === undefined) {
+		await run();
+		return;
+	}
+	await dispatchExecOnce(toolCallId, execMsg, h2Request, state, run);
+}
+
+/**
+ * The tool-call id of an exec request that runs a tool, or `undefined` for one that runs none.
+ *
+ * A request that arrives without an id is given a fresh one here, before anything reads it, so
+ * the synthesized block, the tool result and the dispatch record all carry the same id.
+ */
+function execToolCallId(execMsg: ExecServerMessage): string | undefined {
+	const message = execMsg.message;
+	switch (message.case) {
+		case "readArgs":
+		case "lsArgs":
+		case "grepArgs":
+		case "writeArgs":
+		case "deleteArgs":
+		case "shellArgs":
+		case "shellStreamArgs":
+		case "diagnosticsArgs":
+			if (!message.value.toolCallId) message.value.toolCallId = crypto.randomUUID();
+			return message.value.toolCallId;
+		case "mcpArgs":
+			return message.value.toolCallId || undefined;
+		default:
+			return undefined;
+	}
+}
+
+/**
+ * Run one exec-channel tool call at most once per turn.
+ *
+ * WHY. Cursor re-sends an exec request for a call it already dispatched, under the same tool-call
+ * id. Running it again executed the tool twice, which for `bash`, `write` and `delete` is a
+ * second side effect, and synthesized a second block under the same id. The agent loop then
+ * renamed that block `<id>_2`, nothing ever answered it, and the turn ended holding a call with no
+ * result: recorded Cursor turns carried one such phantom for more than a third of their calls,
+ * and each one blocked the session from continuing after the stream died.
+ *
+ * The repeat is answered with the first run's reply, awaited if that run is still going, so the
+ * server receives an answer to every request it sent and the tool runs once.
+ */
+async function dispatchExecOnce(
+	toolCallId: string,
+	execMsg: ExecServerMessage,
+	h2Request: http2.ClientHttp2Stream,
+	state: BlockState,
+	run: () => Promise<ExecReply>,
+): Promise<void> {
+	const first = state.execDispatches.get(toolCallId);
+	if (first) {
+		log("exec", "replay", { toolCallId, execId: execMsg.execId });
+		replayExecReply(h2Request, execMsg, await first);
+		return;
+	}
+	const { promise, resolve, reject } = Promise.withResolvers<ExecReply>();
+	state.execDispatches.set(toolCallId, promise);
+	run().then(resolve, reject);
+	await promise;
+}
+
+/**
+ * Answer a repeated exec request with the reply its first run sent.
+ *
+ * A shell call is framed by the repeat's own request: `shellStreamArgs` expects a stream that
+ * opens, exits and closes, and `shellArgs` expects the bare `shellResult`, whichever of the two
+ * the first request was.
+ */
+function replayExecReply(h2Request: http2.ClientHttp2Stream, execMsg: ExecServerMessage, reply: ExecReply): void {
+	if (execMsg.message.case === "shellStreamArgs" && reply.case === "shellResult") {
+		sendShellStreamEvent(h2Request, execMsg, { case: "start", value: create(ShellStreamStartSchema, {}) });
+		sendShellStreamExitFromResult(h2Request, execMsg, reply.value, true);
+		sendExecReply(h2Request, execMsg, reply);
+		sendExecClientStreamClose(h2Request, execMsg);
+		return;
+	}
+	sendExecReply(h2Request, execMsg, reply);
+}
+
+/** Run one exec request and answer it, returning the answer for {@link dispatchExecOnce}. */
+async function runExecCall(
+	execMsg: ExecServerMessage,
+	h2Request: http2.ClientHttp2Stream,
+	execHandlers: CursorExecHandlers | undefined,
+	onToolResult: CursorToolResultHandler | undefined,
+	output: AssistantMessage,
+	stream: AssistantMessageEventStream,
+	state: BlockState,
+): Promise<ExecReply> {
+	switch (execMsg.message.case) {
 		case "readArgs": {
 			const args = execMsg.message.value;
-			if (!args.toolCallId) args.toolCallId = crypto.randomUUID();
 			synthesizeCursorExecToolCall(output, stream, state, args.toolCallId, "read", { path: args.path });
 			const { execResult } = await resolveExecHandler(
 				args,
@@ -1493,12 +1665,10 @@ async function handleExecServerMessage(
 				reason => buildReadRejectedResult(args.path, reason),
 				error => buildReadErrorResult(args.path, error),
 			);
-			sendExecClientMessage(h2Request, execMsg, "readResult", execResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "readResult", value: execResult });
 		}
 		case "lsArgs": {
 			const args = execMsg.message.value;
-			if (!args.toolCallId) args.toolCallId = crypto.randomUUID();
 			// Bridge maps `ls` onto the coding-agent `read` tool (see
 			// `CursorExecHandlers.ls` in `pi-coding-agent/src/cursor.ts`); mirror
 			// that here so the synthesized block matches the toolResult's `toolName`.
@@ -1511,12 +1681,10 @@ async function handleExecServerMessage(
 				reason => buildLsRejectedResult(args.path, reason),
 				error => buildLsErrorResult(args.path, error),
 			);
-			sendExecClientMessage(h2Request, execMsg, "lsResult", execResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "lsResult", value: execResult });
 		}
 		case "grepArgs": {
 			const args = execMsg.message.value;
-			if (!args.toolCallId) args.toolCallId = crypto.randomUUID();
 			// Cursor's model sometimes emits `grepArgs` with an empty `pattern` and a
 			// non-empty `glob`, expecting grep to list files matching the glob. Reject
 			// that up front with an actionable error so the model retries with a real
@@ -1525,8 +1693,10 @@ async function handleExecServerMessage(
 			// synthesized block has already been persisted with a placeholder pattern.
 			const emptyPatternError = emptyGrepPatternRejection(args.pattern, args.glob);
 			if (emptyPatternError !== null) {
-				sendExecClientMessage(h2Request, execMsg, "grepResult", buildGrepErrorResult(emptyPatternError));
-				return;
+				return sendExecReply(h2Request, execMsg, {
+					case: "grepResult",
+					value: buildGrepErrorResult(emptyPatternError),
+				});
 			}
 			// Mirror the coding-agent bridge's arg mapping so live UI (from
 			// `tool_execution_start`) and rebuilt transcript (from this block)
@@ -1545,12 +1715,10 @@ async function handleExecServerMessage(
 				reason => buildGrepErrorResult(reason),
 				error => buildGrepErrorResult(error),
 			);
-			sendExecClientMessage(h2Request, execMsg, "grepResult", execResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "grepResult", value: execResult });
 		}
 		case "writeArgs": {
 			const args = execMsg.message.value;
-			if (!args.toolCallId) args.toolCallId = crypto.randomUUID();
 			// Match the bridge: prefer `fileText`, fall back to decoded `fileBytes`.
 			const content = args.fileText ?? new TextDecoder().decode(args.fileBytes ?? new Uint8Array());
 			synthesizeCursorExecToolCall(output, stream, state, args.toolCallId, "write", {
@@ -1574,12 +1742,10 @@ async function handleExecServerMessage(
 				reason => buildWriteRejectedResult(args.path, reason),
 				error => buildWriteErrorResult(args.path, error),
 			);
-			sendExecClientMessage(h2Request, execMsg, "writeResult", execResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "writeResult", value: execResult });
 		}
 		case "deleteArgs": {
 			const args = execMsg.message.value;
-			if (!args.toolCallId) args.toolCallId = crypto.randomUUID();
 			synthesizeCursorExecToolCall(output, stream, state, args.toolCallId, "delete", { path: args.path });
 			const { execResult } = await resolveExecHandler(
 				args,
@@ -1589,12 +1755,10 @@ async function handleExecServerMessage(
 				reason => buildDeleteRejectedResult(args.path, reason),
 				error => buildDeleteErrorResult(args.path, error),
 			);
-			sendExecClientMessage(h2Request, execMsg, "deleteResult", execResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "deleteResult", value: execResult });
 		}
 		case "shellArgs": {
 			const args = execMsg.message.value;
-			if (!args.toolCallId) args.toolCallId = crypto.randomUUID();
 			const normalizedArgs: ShellArgs = { ...args, workingDirectory: args.workingDirectory || process.cwd() };
 			// Match the bridge (`CursorExecHandlers.shell`): map `workingDirectory`
 			// → `cwd`, drop non-positive timeouts.
@@ -1613,20 +1777,17 @@ async function handleExecServerMessage(
 				error => buildShellFailureResult(normalizedArgs.command, normalizedArgs.workingDirectory, error),
 			);
 			const sanitizedExecResult = sanitizeShellExecResult(execResult);
-			sendExecClientMessage(h2Request, execMsg, "shellResult", sanitizedExecResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "shellResult", value: sanitizedExecResult });
 		}
 		case "shellStreamArgs": {
 			const args = execMsg.message.value;
-			if (!args.toolCallId) args.toolCallId = crypto.randomUUID();
 			const shellStreamTimeout = args.timeout && args.timeout > 0 ? args.timeout : undefined;
 			synthesizeCursorExecToolCall(output, stream, state, args.toolCallId, "bash", {
 				command: args.command,
 				cwd: args.workingDirectory || undefined,
 				timeout: shellStreamTimeout,
 			});
-			await handleShellStreamArgs(args, execMsg, h2Request, execHandlers, onToolResult);
-			return;
+			return handleShellStreamArgs(args, execMsg, h2Request, execHandlers, onToolResult);
 		}
 		case "backgroundShellSpawnArgs": {
 			const args = execMsg.message.value;
@@ -1641,8 +1802,7 @@ async function handleExecServerMessage(
 					}),
 				},
 			});
-			sendExecClientMessage(h2Request, execMsg, "backgroundShellSpawnResult", execResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "backgroundShellSpawnResult", value: execResult });
 		}
 		case "writeShellStdinArgs": {
 			const execResult = create(WriteShellStdinResultSchema, {
@@ -1653,8 +1813,7 @@ async function handleExecServerMessage(
 					}),
 				},
 			});
-			sendExecClientMessage(h2Request, execMsg, "writeShellStdinResult", execResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "writeShellStdinResult", value: execResult });
 		}
 		case "fetchArgs": {
 			const args = execMsg.message.value;
@@ -1667,12 +1826,10 @@ async function handleExecServerMessage(
 					}),
 				},
 			});
-			sendExecClientMessage(h2Request, execMsg, "fetchResult", execResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "fetchResult", value: execResult });
 		}
 		case "diagnosticsArgs": {
 			const args = execMsg.message.value;
-			if (!args.toolCallId) args.toolCallId = crypto.randomUUID();
 			// Bridge maps `diagnostics` onto the coding-agent `lsp` tool with
 			// `action: "diagnostics"` and `file: path`.
 			synthesizeCursorExecToolCall(output, stream, state, args.toolCallId, "lsp", {
@@ -1687,8 +1844,7 @@ async function handleExecServerMessage(
 				reason => buildDiagnosticsRejectedResult(args.path, reason),
 				error => buildDiagnosticsErrorResult(args.path, error),
 			);
-			sendExecClientMessage(h2Request, execMsg, "diagnosticsResult", execResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "diagnosticsResult", value: execResult });
 		}
 		case "mcpArgs": {
 			const args = execMsg.message.value;
@@ -1702,7 +1858,7 @@ async function handleExecServerMessage(
 			// either way a second `toolResult` under an id that already had one.
 			// Cursor's own exec tools never had this problem because
 			// `synthesizeCursorExecToolCall` builds their block already stamped.
-			markCursorExecDispatched(mcpCall.toolCallId, output, state);
+			markCursorExecDispatched(mcpCall.toolCallId, output);
 			const { execResult } = await resolveExecHandler(
 				mcpCall,
 				execHandlers?.mcp?.bind(execHandlers),
@@ -1711,57 +1867,40 @@ async function handleExecServerMessage(
 				_reason => buildMcpToolNotFoundResult(mcpCall),
 				error => buildMcpErrorResult(error),
 			);
-			sendExecClientMessage(h2Request, execMsg, "mcpResult", execResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "mcpResult", value: execResult });
 		}
 		case "listMcpResourcesExecArgs": {
 			const execResult = create(ListMcpResourcesExecResultSchema, {});
-			sendExecClientMessage(h2Request, execMsg, "listMcpResourcesExecResult", execResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "listMcpResourcesExecResult", value: execResult });
 		}
 		case "readMcpResourceExecArgs": {
 			const execResult = create(ReadMcpResourceExecResultSchema, {});
-			sendExecClientMessage(h2Request, execMsg, "readMcpResourceExecResult", execResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "readMcpResourceExecResult", value: execResult });
 		}
 		case "recordScreenArgs": {
 			const execResult = create(RecordScreenResultSchema, {});
-			sendExecClientMessage(h2Request, execMsg, "recordScreenResult", execResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "recordScreenResult", value: execResult });
 		}
 		case "computerUseArgs": {
 			const execResult = create(ComputerUseResultSchema, {});
-			sendExecClientMessage(h2Request, execMsg, "computerUseResult", execResult);
-			return;
+			return sendExecReply(h2Request, execMsg, { case: "computerUseResult", value: execResult });
 		}
-		default: {
-			log("warn", "unhandledExecMessage", { execCase });
-			// Send a bare ExecClientMessage (id + execId only, no typed result) so the
+		default:
+			log("warn", "unhandledExecMessage", { execCase: execMsg.message.case });
+			// A bare ExecClientMessage (id + execId only, no typed result) so the
 			// server gets an acknowledgement and doesn't hang waiting forever.
-			const ack = create(ExecClientMessageSchema, {
-				id: execMsg.id,
-				execId: execMsg.execId,
-			});
-			const clientMessage = create(AgentClientMessageSchema, {
-				message: { case: "execClientMessage", value: ack },
-			});
-			h2Request.write(frameConnectMessage(toBinary(AgentClientMessageSchema, clientMessage)));
-		}
+			return sendExecReply(h2Request, execMsg, { case: undefined });
 	}
 }
 
-function sendExecClientMessage<C extends NonNullable<ExecClientMessage["message"]["case"]>>(
-	h2Request: http2.ClientHttp2Stream,
-	execMsg: ExecServerMessage,
-	messageCase: C,
-	value: Extract<ExecClientMessage["message"], { case: C }>["value"],
-): void {
+/** The answer one exec request received, kept so a repeat of it is answered without running it again. */
+type ExecReply = ExecClientMessage["message"];
+
+function sendExecReply(h2Request: http2.ClientHttp2Stream, execMsg: ExecServerMessage, reply: ExecReply): ExecReply {
 	const execClientMessage = create(ExecClientMessageSchema, {
 		id: execMsg.id,
 		execId: execMsg.execId,
-		// The generic correlates case and value at every call site; the union
-		// member itself cannot be proven pairwise by TS, hence the assertion.
-		message: { case: messageCase, value } as ExecClientMessage["message"],
+		message: reply,
 	});
 
 	const clientMessage = create(AgentClientMessageSchema, {
@@ -1771,7 +1910,8 @@ function sendExecClientMessage<C extends NonNullable<ExecClientMessage["message"
 	const responseBytes = toBinary(AgentClientMessageSchema, clientMessage);
 	h2Request.write(frameConnectMessage(responseBytes));
 
-	log("execClientMessage", messageCase, value);
+	log("execClientMessage", reply.case, reply.value);
+	return reply;
 }
 
 function sendExecClientStreamClose(h2Request: http2.ClientHttp2Stream, execMsg: ExecServerMessage): void {
@@ -2368,18 +2508,16 @@ function decodeMcpArgValue(value: Uint8Array): unknown {
 }
 
 /**
- * Record that the exec channel has dispatched `toolCallId`, and stamp the
- * assistant-stream block that names it so the agent loop treats the call as
- * already run.
+ * Stamp the assistant-stream block that names `toolCallId` so the agent loop
+ * treats the call as already run.
  *
- * Both halves are needed because the wire fixes no order between the exec
- * request and the `toolCallStarted` update: a block that already exists is
- * stamped now, and one that opens later reads
- * {@link BlockState.execDispatchedToolCalls}.
+ * The wire fixes no order between the exec request and the `toolCallStarted`
+ * update: a block that already exists is stamped now, and one that opens later
+ * reads {@link BlockState.execDispatches}, which {@link dispatchExecOnce}
+ * records before the call runs.
  */
-function markCursorExecDispatched(toolCallId: string, output: AssistantMessage, state: BlockState): void {
+function markCursorExecDispatched(toolCallId: string, output: AssistantMessage): void {
 	if (!toolCallId) return;
-	state.execDispatchedToolCalls.add(toolCallId);
 	for (const block of output.content) {
 		if (block.type === "toolCall" && block.id === toolCallId) {
 			(block as CursorExecResolvedCarrier)[kCursorExecResolved] = true;
@@ -2780,7 +2918,7 @@ export function processInteractionUpdate(
 					...(value.callId ? { [kCursorWireCallId]: value.callId } : {}),
 					// The exec channel may have dispatched this call before its block
 					// opened, in which case the tool has already run and answered.
-					...(state.execDispatchedToolCalls.has(toolCallId) ? { [kCursorExecResolved]: true } : {}),
+					...(state.execDispatches.has(toolCallId) ? { [kCursorExecResolved]: true } : {}),
 				};
 				output.content.push(block);
 				state.setToolCall(block);

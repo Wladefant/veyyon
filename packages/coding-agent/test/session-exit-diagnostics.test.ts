@@ -270,6 +270,89 @@ describe("session exit diagnostics", () => {
 		expect(describePendingToolCalls(sessionManager.getBranch())).toBeUndefined();
 	});
 
+	// A Cursor exec id carries a newline; the loop renames a repeated block `<id>_<n>`. Recorded
+	// sessions held one such repeat per exec call, answered by the original's result and never by
+	// its own, and the resume warning listed every one of them as pending.
+	const cursorId = (index: number) =>
+		`call-00000000-0000-4000-8000-000000000000-${index}\nfc_00000000-0000-4000-8000-000000000001_${index}`;
+	const cursorBatch = (calls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>) =>
+		({
+			...pendingAssistant,
+			provider: "cursor",
+			stopReason: "error",
+			errorMessage: "Stream closed with error code NGHTTP2_INTERNAL_ERROR",
+			content: calls.map(call => ({ type: "toolCall" as const, ...call })),
+		}) satisfies AssistantMessage;
+	const answer = (sessionManager: SessionManager, toolCallId: string, toolName: string) =>
+		sessionManager.appendMessage({
+			role: "toolResult",
+			toolCallId,
+			toolName,
+			content: [{ type: "text", text: "ok" }],
+			isError: false,
+			timestamp: Date.now(),
+		});
+
+	it("does not report a renamed repeat of an answered call as pending", () => {
+		const sessionManager = SessionManager.inMemory();
+		const calls = [0, 1].flatMap(index => [
+			{ id: cursorId(index), name: "read", arguments: { path: `src/file-${index}.ts` } },
+			{ id: `${cursorId(index)}_2`, name: "read", arguments: { path: `src/file-${index}.ts` } },
+		]);
+		sessionManager.appendMessage(cursorBatch(calls));
+		answer(sessionManager, cursorId(0), "read");
+		answer(sessionManager, cursorId(1), "read");
+
+		expect(collectPendingToolCalls(sessionManager.getBranch())).toEqual([]);
+		expect(describePendingToolCalls(sessionManager.getBranch())).toBeUndefined();
+	});
+
+	it("reports an unanswered call once, not once per recorded repeat", () => {
+		const sessionManager = SessionManager.inMemory();
+		sessionManager.appendMessage(
+			cursorBatch([
+				{ id: cursorId(0), name: "bash", arguments: { command: "make" } },
+				{ id: `${cursorId(0)}_2`, name: "bash", arguments: { command: "make" } },
+			]),
+		);
+
+		expect(collectPendingToolCalls(sessionManager.getBranch()).map(call => call.toolCallId)).toEqual([cursorId(0)]);
+	});
+
+	it("still reports a suffixed call that differs from the call it resembles", () => {
+		const sessionManager = SessionManager.inMemory();
+		sessionManager.appendMessage(
+			cursorBatch([
+				{ id: "call_0", name: "read", arguments: { path: "a.ts" } },
+				{ id: "call_0_2", name: "read", arguments: { path: "b.ts" } },
+				{ id: "call_0_3", name: "bash", arguments: { path: "a.ts" } },
+			]),
+		);
+		answer(sessionManager, "call_0", "read");
+
+		expect(collectPendingToolCalls(sessionManager.getBranch()).map(call => call.toolCallId)).toEqual([
+			"call_0_2",
+			"call_0_3",
+		]);
+	});
+
+	it("keeps the resume warning to one bounded line for a large batch", () => {
+		const sessionManager = SessionManager.inMemory();
+		const command = `printf '%s\\n' ${"x".repeat(500)}`;
+		sessionManager.appendMessage(
+			cursorBatch(
+				Array.from({ length: 89 }, (_, index) => ({ id: cursorId(index), name: "bash", arguments: { command } })),
+			),
+		);
+
+		const warning = describePendingToolCalls(sessionManager.getBranch());
+		expect(warning).toStartWith("Previous session ended while 89 tool calls remained pending: bash ");
+		expect(warning).toContain(", and 86 more.");
+		expect(warning).not.toContain("\n");
+		expect(warning).not.toContain(cursorId(3).split("\n")[0]);
+		expect(warning!.length).toBeLessThan(700);
+	});
+
 	it("reconstructs an abnormal process-exit tail as one terminal aborted assistant message", () => {
 		const sessionManager = SessionManager.inMemory();
 		sessionManager.appendMessage({ role: "user", content: "inspect the file", timestamp: Date.now() });

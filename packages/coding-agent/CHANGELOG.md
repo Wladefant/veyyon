@@ -35,6 +35,94 @@
 
 - Removed the `./tool-discovery/*` subpath from the `@veyyon/coding-agent` exports map; its source directory was folded into `discovery/` and the key resolved to no module, so no user-facing effect ([#64](https://github.com/Wladefant/veyyon/issues/64)).
 - Removed the `tools.refusals` setting, path- and command-scoped extension refusals, and the per-tool `effectScope` declaration that only they read; a stale `tools.refusals` key in config is ignored.
+- The `browser` tool's `open` takes `context`, an isolated cookie jar that every headless tab naming it shares and no other tab sees, closed with its last tab ([#947](https://github.com/santhreal/veyyon/issues/947)).
+- The `browser` tool's `save_state` action and `tab.storageState()` write every cookie of a tab's context and the localStorage of its open origins to a Playwright-compatible state file with mode `0600`, and `open`'s `storage_state` and `tab.loadStorageState()` load one before the first request, writing localStorage once so a key the site later clears stays cleared ([#947](https://github.com/santhreal/veyyon/issues/947)).
+
+### Changed
+
+- A truncated `read`, `search` or `run_experiment` result records only its truncation counts in the session file, not a second copy of the kept text, so new results take less disk and memory and a resume parses less.
+- The `lsp` tool dispatches each workspace-scoped action (`status`, `diagnostics`, `rename_file`, `capabilities`, `request`, workspace `symbols`, workspace `reload`) to its own handler, and `definition`, `type_definition` and `implementation` share one lookup; no user-visible change.
+- A goal session records the token and time a tool call spends as a small `goal_progress` entry instead of a full copy of the goal, so the session file holds the objective once per goal change rather than once per tool call and a resume parses less.
+- A `read` whose displayed rows count up without a break records no per-row line-number list in the session file, since the card numbers those rows from the first line; a read whose rows jump or skip still records the list.
+- Goal records on a session branch parse through the shared `isRecord` guard instead of a local copy; no user-visible change.
+- A `read` result's session file line omits the card's copy of the file text when the result's own numbered rows or plain text rebuild it, and the session restores it on load, which cut the recorded read results in local sessions from 4.27 GB to 2.89 GB.
+- A tool start marker in the session file omits the start time and the argument summary the entry timestamp and the assistant message already hold, so the resume warning for an unanswered call reads the arguments from that message.
+- An `edit` result's session file line omits the post-edit file text when its pre-edit text and numbered diff rebuild it byte for byte, and the session restores it on load, which cuts the post-edit copies recorded across local sessions from 671.18 MB to 3.79 MB.
+- A `search` result's session file line omits the card's copy of the matched rows, the path list `fileMatches` already holds, and the wrapper's repeat of the sub-search's truncation counts when the rest of the line rebuilds them, and the session restores them on load, which cuts the recorded search details in local sessions from 331.33 MB to 248.91 MB.
+- An `eval` result's session file line omits each cell's output and the top-level status events when the result's text and the first cell hold them, and a `job` result's line omits each job's result and error text the result's text holds, and the session restores them on load, which cuts the recorded eval details in local sessions from 497.77 MB to 253.78 MB and the job details from 100.84 MB to 37.80 MB.
+
+### Fixed
+
+- The CLI imports the terminal output guard when a worker thread starts rather than at startup, keeping it off the static boot graph; no user-visible change.
+- A tool card whose call carries an argument of the wrong type, such as `input: 404` for `search`, draws the value as text or omits it instead of failing with `Renderer failed: e.toWellFormed is not a function`.
+- The `read` card for a structurally summarized file numbers each row with the line the model saw, a merged brace pair with its opening line, instead of counting up from line 1 past every elided body, and draws the `…` elision row and the summary budget notice without a line number.
+- The `browser` tool's `tab.fill` replaces a value in one trusted text insertion, so a React or Vue field's state follows it, the empty value included, and a long value costs one protocol call instead of three per character; it fills contenteditable elements, sets date, time, colour and range inputs with `input` and `change`, refuses checkboxes, radios, file inputs, `<select>` and read-only fields with the call that handles them, and refuses an element that cannot take focus instead of typing into the field that has it.
+- The streaming-reveal throughput bench builds its target as a transcript view instead of a raw assistant message, so `bun packages/coding-agent/bench/streaming-throughput.bench.ts` runs again; no user-visible change.
+
+### Removed
+
+- The unused built-in `designer` model role is gone from Settings → Model → Roles; a `modelRoles.designer` value you already set still resolves through `@designer` as a custom role.
+
+## [1.5.5] - 2026-09-25
+
+### Fixed
+
+- Running two veyyon versions at once on Windows no longer prints `could not remove the stale addon cache ... EPERM` over the interactive UI and pushes the composer down; a real removal failure shows as a `natives` warning notice.
+- A `console` print from a library, a native addon warning or a worker thread no longer writes into the interactive UI and shifts the composer on Linux or Windows; the text goes to the veyyon log file.
+
+## [1.5.4] - 2026-09-24
+
+### Changed
+
+- Slash-command reports (`/tools`, `/hotkeys`, `/context`, `/jobs`, `/todo`, `/lsp`, `/plugins`, `/effort`) format with clean human summaries, consistent headers and indentation, and without raw XML tags or run-on bullet sequences.
+- The extension dashboard aligns list cursor bands to avoid text overlap, keeps the provider tab strip on a single scrollable line, and adopts the shared search input style.
+- The account manager displays quieter empty provider states without trailing dashes and phrases initial account addition cleanly.
+- The profile picker presents a dedicated Profiles title, drops the redundant other option, and cleans up the create-profile label glyph.
+- The resume session selector omits file size metadata when displaying empty sessions without messages.
+- The agent dashboard renders active tabs with standard theme highlight styling without hardcoded bracket characters.
+- Settings panel presents booleans as On/Off, humanizes enum and status labels, displays the selected setting description in the footer, simplifies default model display, and aligns the value column.
+- Bare-command pickers (`/mcp`, `/usage`, `/account`, `/debug` and the rest) widen to show every usage hint and description whole, cut a usage that cannot fit after a whole word, print one key legend in the footer with `esc close` instead of `esc/ctrl+c close`, name the search there while the list is searchable, and draw a dim scrollbar with a silver thumb.
+- The `/debug` card is titled `/debug`, matching the other bare-command cards.
+- Provider request shaping (secret redaction, Anthropic metadata, tool-order check) moved from `session/agent-session` to `session/agent-session-provider-request`; no user-visible change.
+- Home-path shortening in tool cards compiles its pattern once per home directory instead of on every call; no user-visible change.
+- A spinner or rail tick in the transcript re-renders only the blocks from the animating one down, so an idle resumed session with a long transcript no longer spends a core re-walking every block.
+
+### Fixed
+
+- Tool-result preview lines replace tabs with spaces, so a tab-indented line no longer opens a gap in the rendered preview.
+- Shutting down an LSP client releases callers still waiting for its project to load, and the LSP idle checker no longer keeps the process alive.
+- Timeout timers in MCP HTTP startup, the eval kernel exit wait, the lspmux liveness probe, stdin reading, ACP cancel cleanup, browser user-agent overrides and the interactive closing frame are cleared once the awaited operation settles; no other behavior change.
+- The ask dialog rejects a question with no options and no free-text answer instead of opening a dialog that cannot be answered.
+- A collab guest answering an ask question is offered `Other` only when the question allows a free-text answer, and a guest reply of `Other` to a closed question records no custom answer.
+- The extension dashboard's overflowing tab strip reserves room for the paging arrows and stays on one row at every width.
+- A bare-command picker on a narrow terminal narrows a long usage column so every subcommand keeps its description.
+- Switching to a model on another provider after a server-side compaction no longer resends the whole session history: before the next prompt, the session asks the model that minted the compaction to summarize it and continues from that summary, reported as an auto-compaction with reason `provider_switch`.
+- A prompt or idle compaction on a session that switched providers after a server-side compaction ports that compaction first, instead of summarizing the re-expanded history on the new provider in hundreds of staged requests.
+- A staged compaction summary that fails part way resumes on the next attempt from the segments that never completed instead of restarting from the first segment.
+- A background task card restored from a resumed session stops its rail animation once it scrolls above the live region, instead of repainting the transcript every 100 ms for the rest of the process.
+- A displaceable tool preview sealed during an animation frame releases the live region at that frame instead of holding it open until the next full render.
+
+## [1.5.3] - 2026-09-22
+
+### Fixed
+
+- A `cursor-agent` turn whose connection stops answering fails as a dead connection within 40 seconds of the last server byte, instead of up to 70 seconds.
+
+## [1.5.2] - 2026-09-22
+
+### Added
+
+- `/usage reset` and its selector list and redeem usage-limit reset credits for Anthropic Claude accounts beside OpenAI Codex accounts, and accept a provider prefix such as `/usage reset anthropic active`.
+
+### Fixed
+
+- A turn whose provider stream died after every in-stream tool call of a batch that cannot be replayed (a Cursor exec-channel batch) continues from the results in context instead of stopping.
+
+## [1.5.1] - 2026-09-22
+
+### Changed
+
+- The bash tool prompt states that a backgrounded job is never polled: no `sleep`, `pgrep`, `ps`, `tail -f`, `top`, and no second call that watches it.
 
 ## [1.5.0] - 2026-09-18
 

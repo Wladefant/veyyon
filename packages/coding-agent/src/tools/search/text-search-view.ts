@@ -41,6 +41,7 @@ import {
 	type ToolViewResult,
 } from "../core/render-utils";
 import { COLLAPSED_TEXT_LIMIT, EXPANDED_TEXT_LIMIT } from "./search-card-limits";
+import { resolveSearchDisplay } from "./search-result-codec";
 import type { TextSearchDetails, TextSearchRenderArgs } from "./text-search";
 
 /** What every card of this tool is titled. */
@@ -359,7 +360,7 @@ export const textSearchToolView: Required<ToolViewRenderer<TextSearchRenderArgs,
 		if (scope !== undefined) meta.push(scope);
 		if (truncated) meta.push([{ text: "truncated", tone: "warning" }]);
 
-		const text = details.displayContent ?? extractResultText(result.content);
+		const text = resolveSearchDisplay(details, result.content) ?? extractResultText(result.content);
 		const lines = text.split("\n");
 		// Header and match paths are relative to where the search ran, so they resolve against `cwd`,
 		// falling back to `searchPath` for a result that predates it; the scoped file's own path seeds
@@ -407,7 +408,7 @@ function textOnlyResult(
 	context: ToolViewContext,
 	args: TextSearchRenderArgs | undefined,
 ): ToolView {
-	const text = result.details?.displayContent ?? extractResultText(result.content);
+	const text = resolveSearchDisplay(result.details, result.content) ?? extractResultText(result.content);
 	if (text === undefined || text === "" || text === "No matches found") {
 		return emptyTextBlock("No matches found");
 	}

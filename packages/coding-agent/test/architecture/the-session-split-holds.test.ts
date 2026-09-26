@@ -46,9 +46,9 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * 3. Bounded todo reminder formatting (`24e3b7efe`, `95db7b1d5`): 17 lines formatting in-progress
  *    reminder items and hidden active count bounds.
  * None can move to collaborators without violating leaf boundaries or introducing unnatural abstractions.
- * Re-pinned at 18,575 (22 lines of slack over measured 18,553, well below the 5% tightness ceiling of 19,481).
+ * Re-pinned after upstream-949 merge at 18,725.
  */
-const RUNTIME_CEILING = 18_575;
+const RUNTIME_CEILING = 18_725;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -71,7 +71,7 @@ const FACADE_CEILING = 500;
 
 /**
  * The concerns that left the runtime and still sit beside it, pinned by exact
- * equality. A seventh sibling, or one renamed, fails here before it fails anywhere
+ * equality. An eighth sibling, or one renamed, fails here before it fails anywhere
  * useful. The compaction policy was one of them and is no longer here: it moved to
  * `@veyyon/kernel/session/agent-session-compaction-policy` with the session spine,
  * so a copy reappearing under `src/session/` is a drift this cell reports.
@@ -80,6 +80,7 @@ const SIBLINGS = [
 	"agent-session-message-shapes.ts",
 	"agent-session-model-targets.ts",
 	"agent-session-permissions.ts",
+	"agent-session-provider-request.ts",
 	"agent-session-queue.ts",
 	"agent-session-retry-fallback.ts",
 	"agent-session-types.ts",

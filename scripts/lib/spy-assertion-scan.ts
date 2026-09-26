@@ -21,8 +21,8 @@ import * as path from "node:path";
 
 import { memberTopLevels } from "../workspace-layout";
 
-/** Directories holding source we do not own or do not ship. */
-const SKIPPED_DIRS = new Set(["vendor", "node_modules", "repo-cache", "dist", "build", ".git", "book"]);
+/** Directories holding source we do not own or do not ship, including gitignored `.scratch/` probe output. */
+const SKIPPED_DIRS = new Set(["vendor", "node_modules", "repo-cache", "dist", "build", ".git", "book", ".scratch"]);
 
 /** Bun's module-registry mock, which leaks across files (oven-sh/bun#12823). */
 const MOCK_MODULE = /\bmock\.module\s*\(/;

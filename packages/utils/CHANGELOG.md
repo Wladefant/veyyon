@@ -14,6 +14,26 @@
 ### Fixed
 
 - No shipped behavior changed; the global EPIPE routing suite pointed at `packages/tui/src/terminal.ts`, a path the terminal host left on 2026-08-30, so its three "finishes TUI persistence before exit" cases failed on a module-resolution exit rather than on ordering ([#64](https://github.com/Wladefant/veyyon/issues/64)).
+### Fixed
+
+- `@veyyon/utils/stderr-guard` loads `node:util` on the first routed console call rather than at import, keeping it off the launch card path; no user-visible change.
+
+## [1.5.5] - 2026-09-25
+
+### Added
+
+- `isTerminalOutputRouted` reports whether console output is going to the log, and `routeWorkerThreadOutput` sends a worker thread's console output to the log for the worker's lifetime.
+
+### Fixed
+
+- `suppressTerminalStderr` routes native stderr on Linux and Windows (not only macOS), and while the terminal UI is live it routes `console.*` and `process.stderr.write` output to the log file, so a stray print no longer pushes the composer down.
+
+## [1.5.4] - 2026-09-24
+
+### Fixed
+
+- Replacing or rebinding log transports closes the old transports, so their file streams and timers no longer stay open.
+- `defaultWindowsAclRunner` builds its result promise with `Promise.withResolvers()`; no behavior change.
 
 ## [1.5.0] - 2026-09-18
 

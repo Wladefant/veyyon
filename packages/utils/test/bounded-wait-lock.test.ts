@@ -23,8 +23,9 @@ import { collectPackageSources } from "./support/package-sources";
 // carry C: a cap on how long the stand-down may run, DECLARED (a `max…HoldMs` /
 // `MAX_…_HOLD_MS` name) and COMPARED (that name on one side of a relational
 // operator), because a cap that is declared and never compared is decoration.
-// Today exactly one file in the monorepo matches A and B — the watchdog itself,
-// `ai/src/utils/idle-iterator.ts` — and it carries C.
+// Two files in the monorepo match A and B — the generic watchdog,
+// `ai/src/utils/idle-iterator.ts`, and the Cursor transport liveness probe,
+// `ai/src/providers/cursor-liveness.ts` — and both carry C.
 //
 // The register below is the fail-by-default gate. It is not an allow-list of
 // offenders: it is the list of files ALLOWED to hold a watchdog off at all, each
@@ -59,6 +60,10 @@ const STAND_DOWN_SITES: Record<string, string> = {
 	// to terminate by ai/test/a-wedged-local-tool-cannot-hold-the-watchdog-forever
 	// .test.ts and per provider by ai/test/provider-stream-budget-coverage.test.ts.
 	"ai/src/utils/idle-iterator.ts": "maxLocalWorkHoldMs",
+	// Bounded by `maxLocalWorkHoldMs` (the turn's silence ceiling); proved to
+	// terminate by ai/test/cursor-silence-is-not-a-dead-connection.test.ts ("lets a
+	// local tool hold the clock, and bounds the hold by the same ceiling").
+	"ai/src/providers/cursor-liveness.ts": "maxLocalWorkHoldMs",
 };
 
 /**
@@ -89,7 +94,7 @@ const CAP_DECLARED = new RegExp(`\\b${CAP_NAME}\\b`);
 
 /** C2. The cap, compared: that bound on one side of a relational operator. */
 const CAP_COMPARED = new RegExp(
-	`(?:>=|<=|>|<)\\s*[A-Za-z_$][A-Za-z0-9_$.]*${CAP_NAME}\\b|\\b[A-Za-z0-9_$.]*${CAP_NAME}\\s*(?:>=|<=|>|<)`,
+	`(?:>=|<=|>|<)\\s*(?:[A-Za-z_$][A-Za-z0-9_$]*\\.)*${CAP_NAME}\\b|\\b[A-Za-z0-9_$.]*${CAP_NAME}\\s*(?:>=|<=|>|<)`,
 );
 
 /**
