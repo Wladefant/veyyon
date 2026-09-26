@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import type {
 	AgentTool,
 	AgentToolContext,
@@ -8,6 +9,7 @@ import type {
 } from "@veyyon/agent-core";
 import type { ClientBridgeTerminalExitStatus, ClientBridgeTerminalOutput } from "@veyyon/kernel/session/client-bridge";
 import { clampLow, errorMessage, isEnoent, logger, prompt, SIGNAL_EXIT_BASE, signalNumber } from "@veyyon/utils";
+import { normalizePathForComparison } from "@veyyon/utils/dirs";
 import { type } from "arktype";
 import { type BashResult, executeBash } from "../../exec/bash-executor";
 import { formatExitCodeNotice } from "../../exec/exit-notice";
@@ -41,6 +43,7 @@ import {
 	findCriticalBashRisk,
 	findFlaggedBashPattern,
 	hostReachableCommand,
+	isHomedirUnsafePackageCommand,
 } from "./bash-guard";
 import { type BashInteractiveResult, runInteractiveBashPty } from "./bash-interactive";
 import { checkBashInterception } from "./bash-interceptor";
@@ -1024,6 +1027,18 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 		}
 		if (!cwdStat.isDirectory()) {
 			throw new ToolError(`Working directory is not a directory: ${shortenPath(commandCwd)}`);
+		}
+
+		// Homedir package-manager guard (Refs #98): refuse package-manager commands
+		// whose cwd resolves to the user's home directory, where they would
+		// create stray package.json / node_modules that leak into every child project.
+		if (normalizePathForComparison(commandCwd) === normalizePathForComparison(os.homedir())) {
+			if (isHomedirUnsafePackageCommand(command)) {
+				throw new ToolError(
+					`Refused: package-manager command would run in the home directory (${shortenPath(commandCwd)}). ` +
+						`Set an explicit cwd to a project directory instead.`,
+				);
+			}
 		}
 
 		// A timeout of 0 is an explicit long-running-command contract: the user
