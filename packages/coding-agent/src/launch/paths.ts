@@ -25,7 +25,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getConfigRootDir, isEnoent } from "@veyyon/utils";
+import { getConfigRootDir, isEisdir, isEnoent } from "@veyyon/utils";
 
 /**
  * Every on-disk name in the daemon runtime layout, in the one place a rename can be made.
@@ -171,15 +171,17 @@ export function managedDaemonProcessLeasePath(daemonDir: string): string {
  * drifted apart.
  *
  * A directory that does not exist yet resolves to its absolute path rather than failing, because a
- * caller may be registering presence for a project it is about to create. Any other error is real and
- * propagates: a permission failure must not silently key the daemon by a path nobody could read.
+ * caller may be registering presence for a project it is about to create. A Windows drive root is the
+ * same case reached differently: `fs.realpath` can fail with `EISDIR` there, and aborting startup for it
+ * would make the whole CLI unusable from `C:\`. Both fall back to the resolved path. Any other error is
+ * real and propagates: a permission failure must not silently key the daemon by a path nobody could read.
  */
 export async function canonicalProjectDir(projectDir: string): Promise<string> {
 	const resolved = path.resolve(projectDir);
 	try {
 		return await fs.realpath(resolved);
 	} catch (error) {
-		if (isEnoent(error)) return resolved;
+		if (isEnoent(error) || isEisdir(error)) return resolved;
 		throw error;
 	}
 }
