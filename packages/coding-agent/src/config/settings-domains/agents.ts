@@ -91,6 +91,8 @@ export interface AgentLaneSettings {
 	 * what every screen writes.
 	 */
 	maxNestedSpawnDepth?: number;
+	/** Soft assistant-request budget for this agent; 0 disables the budget guard. */
+	softRequestBudget?: number;
 }
 
 /** The top level of a lane chain is a lane like any other. */
@@ -132,6 +134,14 @@ function validateLane(key: string, value: unknown): string | undefined {
 				lane.maxNestedSpawnDepth < -1)
 		) {
 			return `${location}.maxNestedSpawnDepth: expected -1 or a non-negative integer`;
+		}
+		if (
+			lane.softRequestBudget !== undefined &&
+			(typeof lane.softRequestBudget !== "number" ||
+				!Number.isInteger(lane.softRequestBudget) ||
+				lane.softRequestBudget < 0)
+		) {
+			return `${location}.softRequestBudget: expected a non-negative integer`;
 		}
 		current = lane.agents;
 		location += ".agents";
@@ -537,7 +547,7 @@ export const AGENTS_SETTINGS = {
 
 	"agent.softRequestBudget": {
 		type: "number",
-		default: 200,
+		default: 250,
 		ui: {
 			tab: "agents",
 			group: "Limits",
@@ -548,7 +558,8 @@ export const AGENTS_SETTINGS = {
 				{ value: "0", label: "Disabled" },
 				{ value: "90", label: "90 requests" },
 				{ value: "150", label: "150 requests" },
-				{ value: "200", label: "200 requests", description: "Default" },
+				{ value: "200", label: "200 requests" },
+				{ value: "250", label: "250 requests", description: "Default" },
 			],
 		},
 	},

@@ -43,8 +43,8 @@ describe("buildAvailableSlashCommands", () => {
 		});
 		expect(byName.usage.subcommands).toContainEqual({
 			name: "reset",
-			description: "Spend a saved Codex rate-limit reset",
-			usage: "[account|active]",
+			description: "Spend a saved OpenAI Codex or Anthropic rate-limit reset",
+			usage: "[openai-codex|anthropic] [account|active]",
 		});
 		expect(byName["reset-usage"]).toBeUndefined();
 

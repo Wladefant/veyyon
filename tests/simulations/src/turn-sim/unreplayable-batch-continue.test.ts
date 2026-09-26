@@ -35,10 +35,16 @@
  *  5. A provider that dies on every attempt continues at most `maxRetries`
  *     times and then settles. A continuation is charged against the retry
  *     budget, so this cannot loop.
- *  6. A batch in which NOTHING never ran does not continue. Every call was
- *     dispatched out of band and the results are still in flight, so there is
- *     no work to carry forward; the ledger travels as a turn-level notice and
- *     the conversation stays answerable the old way.
+ *  6. A batch whose exec-channel result is STILL IN FLIGHT does not continue.
+ *     The call ran or is running out of band and nothing never ran, so a
+ *     request sent now would answer it with nothing while its real result is
+ *     on its way; the ledger travels as a turn-level notice and the
+ *     conversation stays answerable the old way.
+ *  6b. A batch whose every exec-channel call already RETURNED does continue.
+ *     Cursor runs the whole batch inside the stream, so a reset after the last
+ *     result leaves a fully answered batch that may not be replayed and has
+ *     only the model's next step missing. Ending the turn there stopped the
+ *     session dead on a fault the classifier calls transient.
  *  7. A call whose ARGUMENTS never finished streaming is outstanding even though
  *     no result will ever pair against it: its block is deleted, so the only
  *     record is `incompleteToolCalls` and the ledger's instruction to rebuild
@@ -82,16 +88,16 @@
  *     trace all showing a retry in progress on a turn that already came back. A
  *     start with no end is worse than no start.
  *
- * The rule rows 6 and 7 share is that the question is asked per CALL. A
+ * The rule rows 6, 6b and 7 share is that the question is asked per CALL. A
  * call that already carries a real result is answered, and a never-ran
  * placeholder sitting beside that result does not make it outstanding again;
  * that arm is driven at the session level in
- * `packages/coding-agent/test/agent-session-retry-cap.test.ts`, in "does not
- * retry a timeout whose tool call already carries a real result", which asserts
- * both that no retry happened and that no continuation notice was raised.
+ * `packages/coding-agent/test/agent-session-retry-cap.test.ts`, in "continues,
+ * rather than replays, a timeout whose tool call already carries a real
+ * result", which asserts the second request keeps the dead turn and its result.
  *
- * WHAT IT DOES NOT CATCH. The exec channel's out-of-band result never arrives
- * in these rows (the transport died), so the continued request carries a
+ * WHAT IT DOES NOT CATCH. Outside row 6b the exec channel's out-of-band result
+ * never arrives (the transport died), so the continued request carries a
  * `toolCall` with no result. Pairing that up is `transformMessages`' job on the
  * outbound wire and is asserted where that lives; here the assertion stops at
  * what the session decides to send. Two guards in the gate also survive
@@ -185,6 +191,8 @@ async function run(options: {
 	fail: (turn: ScriptedTurn) => void;
 	/** Emit the exec-channel call that makes the batch unsafe to replay. */
 	execResolved: boolean;
+	/** Deliver the exec-channel call's result before the stream dies, as a finished call does. */
+	execResult?: boolean;
 	/** Emit an ordinary call too, so something in the batch genuinely never ran. */
 	ordinary: boolean;
 	/** Open a call whose arguments never finish, so its block is deleted. */
@@ -219,12 +227,14 @@ async function run(options: {
 				return { content: [{ type: "text", text: "read ran" }] };
 			}),
 		],
-		script: turn => {
+		script: async turn => {
 			contexts.push(contextText(turn));
 			if (turn.call === 1 || options.dieEveryCall === true) {
 				if (options.ordinary) turn.toolCall(TOOL.bash, { command: "echo one" }, `call-a-${turn.call}`);
-				if (options.execResolved)
+				if (options.execResolved) {
 					turn.execResolvedToolCall(TOOL.read, { path: "README.md" }, `call-b-${turn.call}`);
+					if (options.execResult === true) await turn.execToolResult(`call-b-${turn.call}`, TOOL.read, "read ran");
+				}
 				if (options.unfinishedArgs === true)
 					turn.openToolCall(TOOL.bash, '{"command":"echo par', `call-c-${turn.call}`);
 				options.fail(turn);
@@ -286,7 +296,7 @@ it("continues a transient death on a batch it may not replay, keeping the turn i
 	expect(result.requests).toBe(2);
 	expect(result.assistantText).toContain("carried on");
 	expect(result.noticeTexts).toEqual([
-		"The provider stream failed partway through a tool batch that cannot be replayed. Continuing with the calls that never ran.",
+		"The provider stream failed partway through a tool batch that cannot be replayed. Continuing the turn from the results already in context.",
 	]);
 
 	// THE DIFFERENCE FROM A RETRY. A retry's request carries only the user turn
@@ -375,10 +385,10 @@ it("spends the retry budget on continuations and then settles", async () => {
 	expect(result.noticeTexts).toHaveLength(1);
 });
 
-it("does not continue a batch in which nothing never ran", async () => {
-	// Every call went out of band, so there is no carried-forward work to make
-	// progress on and the results are still in flight. The bar is deliberately
-	// this narrow.
+it("does not continue a batch whose exec-channel result is still in flight", async () => {
+	// Every call went out of band and none has returned, so there is no
+	// carried-forward work to make progress on and a request now would answer
+	// the call with nothing. The bar is deliberately this narrow.
 	const result = await run({
 		fail: turn => turn.fail(STALL_TEXT),
 		execResolved: true,
@@ -393,6 +403,36 @@ it("does not continue a batch in which nothing never ran", async () => {
 	expect(result.contexts).toHaveLength(1);
 	expect(result.toolTexts.filter(text => text.includes(PLACEHOLDER_MARKER))).toEqual([]);
 });
+
+it("continues a batch whose every exec-channel call already returned", async () => {
+	// The shape a Cursor stream reset produces after the last in-stream call
+	// returned: nothing never ran, nothing is in flight, and the model's next
+	// step is the only thing missing. The negative control is the row above,
+	// which differs from this one only in the result never arriving.
+	const result = await run({
+		fail: turn => turn.fail(HTTP2_TEXT),
+		execResolved: true,
+		execResult: true,
+		ordinary: false,
+		maxRetries: 2,
+	});
+
+	expect(result.requests).toBe(2);
+	expect(result.noticeTexts).toEqual([
+		"The provider stream failed partway through a tool batch that cannot be replayed. Continuing the turn from the results already in context.",
+	]);
+	expect(result.assistantText).toContain("carried on");
+	// The continued request carries the dead turn and the exec result it
+	// returned, and nothing was paired with a never-ran placeholder.
+	const continued = result.contexts[1];
+	expect(continued).toBeDefined();
+	expect(continued).toContain(`errorMessage:${HTTP2_TEXT}`);
+	expect(continued).toContain("read ran");
+	expect(continued).not.toContain(PLACEHOLDER_MARKER);
+	// Nothing in this process ran the tool a second time.
+	expect(result.ran).toEqual([]);
+});
+
 it("continues when the only outstanding call is one whose arguments never finished", async () => {
 	// The shape that has no placeholder to count. `retainCompletedToolCalls`
 	// deletes the block of a call whose arguments were still streaming, so
@@ -410,7 +450,7 @@ it("continues when the only outstanding call is one whose arguments never finish
 
 	expect(result.requests).toBe(2);
 	expect(result.noticeTexts).toEqual([
-		"The provider stream failed partway through a tool batch that cannot be replayed. Continuing with the calls that never ran.",
+		"The provider stream failed partway through a tool batch that cannot be replayed. Continuing the turn from the results already in context.",
 	]);
 	expect(result.assistantText).toContain("carried on");
 });

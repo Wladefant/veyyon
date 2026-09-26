@@ -958,7 +958,7 @@ dependencies = [
  "libc",
  "nix 0.31.3",
  "normalize-path",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rpds",
  "strum",
  "strum_macros",
@@ -4566,9 +4566,9 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "libredox"
-version = "0.1.23"
+version = "0.1.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d8f1ea3f21fd3405dcaf6c9b5c1630af9afc422d9073ea39c5f6d6c772e08ed"
+checksum = "61ff90caf6077a803a240f62fdbe88645a890bbca49ef8174c3cb0404362171d"
 dependencies = [
  "libc",
 ]
@@ -4943,9 +4943,9 @@ dependencies = [
 
 [[package]]
 name = "napi"
-version = "3.12.2"
+version = "3.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58c5f4d5375213fdb7be2655e152386e82f026f9a5ba36a75556e11359aafe09"
+checksum = "3b12638855cec016784a7e17cc4ecbdee7ca8b0a3456aa50640d0ee5ed1a42f8"
 dependencies = [
  "bitflags 2.13.1",
  "ctor",
@@ -4960,15 +4960,15 @@ dependencies = [
 
 [[package]]
 name = "napi-build"
-version = "2.4.1"
+version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60fdf9b392c50e7c4170fa633bd909490ed7835cea4c046776d1a4dd8d2ae0ab"
+checksum = "0941983559cd62bfa7f04646a16428967a847365adeef27711e4e3927046bbed"
 
 [[package]]
 name = "napi-derive"
-version = "3.6.3"
+version = "3.6.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fa55ea69990c90b888e9e77044410e304ce7f35de599dc6d0b5c1923d2e59af"
+checksum = "6b1d232c24dc6754979b27efdf2047a5849efc7c92c1245de87e6bedbb9f5c3c"
 dependencies = [
  "convert_case 0.11.0",
  "ctor",
@@ -4980,9 +4980,9 @@ dependencies = [
 
 [[package]]
 name = "napi-derive-backend"
-version = "6.1.2"
+version = "6.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df4056ac7c18e4438ccf0edaed4340ca0d269278c8ec19284f7b23cb039fd0ae"
+checksum = "fd6856fe1686867da90ed0dc292d7c0c87a695eb7c578b913360f33619ee01e3"
 dependencies = [
  "convert_case 0.11.0",
  "proc-macro2",
@@ -4993,9 +4993,9 @@ dependencies = [
 
 [[package]]
 name = "napi-sys"
-version = "3.3.0"
+version = "3.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85fbf1fa9f1babfe396d74bbbf52b3643770243e8f5b0b46715d4caf7f0dfc9a"
+checksum = "6801fc65ba4d7035636e93635e281113f00410401a237dcd4f55b1565ead2115"
 dependencies = [
  "libloading 0.9.0",
 ]
@@ -5885,9 +5885,9 @@ dependencies = [
 
 [[package]]
 name = "pest"
-version = "2.9.1"
+version = "2.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d45aeb61b4bf818e12d4205f2466f8c4748f85f4fce0146d1c03d69d753f0ad"
+checksum = "45d3aca230fad2e6f6317ca0a72724338c4960cb97168a85cdee66df4a9a21a8"
 dependencies = [
  "memchr",
  "ucd-trie",
@@ -5895,9 +5895,9 @@ dependencies = [
 
 [[package]]
 name = "pest_derive"
-version = "2.9.1"
+version = "2.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89cc5a242e25ed4e7704d0be240f2cfbe20a8c27e7e252d94835be93d92dc39f"
+checksum = "284b60557f2c4a2e72ad3f2d34d42685a2fa4a6a61d0d2a10c0ae2a5e916c2cf"
 dependencies = [
  "pest",
  "pest_generator",
@@ -5905,9 +5905,9 @@ dependencies = [
 
 [[package]]
 name = "pest_generator"
-version = "2.9.1"
+version = "2.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7abf21475cc3820fe4b2ca2dc2142902f67a02189f3b5b3a229f4febc01a43e5"
+checksum = "1d9d1f08a115309ee99268cf85e5228e0e56aa9caf8841ec12866b6be07c3109"
 dependencies = [
  "pest",
  "pest_meta",
@@ -5918,9 +5918,9 @@ dependencies = [
 
 [[package]]
 name = "pest_meta"
-version = "2.9.1"
+version = "2.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "adba4db388f687393c18c51348d44a41d870ca9df71a2c98172ea3035dc6936e"
+checksum = "ed93ba1a9ffcca32130a5188701c81c0c49cf00d4b7c5007d5148951d743adcb"
 dependencies = [
  "pest",
 ]
@@ -6417,7 +6417,7 @@ dependencies = [
  "num-traits",
  "ordered-float",
  "palette",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rand_xoshiro",
  "ref-cast",
  "wide",
@@ -6484,19 +6484,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.9.5"
+version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9ef1d0d795eb7d84685bca4f72f3649f064e6641543d3a8c415898726a57b41"
-dependencies = [
- "rand_chacha 0.9.0",
- "rand_core 0.9.5",
-]
-
-[[package]]
-name = "rand"
-version = "0.10.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7f5fa3a058cd35567ef9bfa5e75732bee0f9e4c55fa90477bef2dfcdbc4be80"
+checksum = "65c9fb96cbc91e3478eaae79a69fcd3f1ae4ad052e471fe6732fff548984b4af"
 dependencies = [
  "chacha20",
  "getrandom 0.4.3",
@@ -9241,7 +9231,7 @@ version = "0.8.0"
 dependencies = [
  "clap",
  "parking_lot",
- "rand 0.10.2",
+ "rand 0.10.3",
  "tempfile",
  "thiserror 2.0.20",
  "uucore 0.8.0",
@@ -9420,7 +9410,7 @@ dependencies = [
  "itertools 0.14.0",
  "memchr",
  "nix 0.31.3",
- "rand 0.10.2",
+ "rand 0.10.3",
  "rayon",
  "self_cell",
  "tempfile",
@@ -9817,7 +9807,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "veyyon-ast"
-version = "1.5.0"
+version = "1.5.5"
 dependencies = [
  "anyhow",
  "ast-grep-core",
@@ -9887,7 +9877,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-conformance"
-version = "1.5.0"
+version = "1.5.5"
 dependencies = [
  "anyhow",
  "blake3",
@@ -10028,14 +10018,14 @@ dependencies = [
 
 [[package]]
 name = "veyyon-diff-kernel"
-version = "1.5.0"
+version = "1.5.5"
 dependencies = [
  "similar 3.2.0",
 ]
 
 [[package]]
 name = "veyyon-glob"
-version = "1.5.0"
+version = "1.5.5"
 dependencies = [
  "globset",
 ]
@@ -10052,7 +10042,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-grep-kernel"
-version = "1.5.0"
+version = "1.5.5"
 dependencies = [
  "clap",
  "clap_complete",
@@ -10074,7 +10064,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-iso"
-version = "1.5.0"
+version = "1.5.5"
 dependencies = [
  "async-trait",
  "libc",
@@ -10087,14 +10077,14 @@ dependencies = [
 
 [[package]]
 name = "veyyon-keys"
-version = "1.5.0"
+version = "1.5.5"
 dependencies = [
  "phf 0.13.1",
 ]
 
 [[package]]
 name = "veyyon-natives"
-version = "1.5.0"
+version = "1.5.5"
 dependencies = [
  "anyhow",
  "arboard",
@@ -10151,7 +10141,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-shell"
-version = "1.5.0"
+version = "1.5.5"
 dependencies = [
  "anyhow",
  "brush-builtins",
@@ -10229,11 +10219,11 @@ dependencies = [
 
 [[package]]
 name = "veyyon-test-scratch"
-version = "1.5.0"
+version = "1.5.5"
 
 [[package]]
 name = "veyyon-text"
-version = "1.5.0"
+version = "1.5.5"
 dependencies = [
  "smallvec",
  "unicode-segmentation",
@@ -10242,7 +10232,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-uu-diff"
-version = "1.5.0"
+version = "1.5.5"
 dependencies = [
  "clap",
  "parking_lot",
@@ -10253,7 +10243,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-uu-grep"
-version = "1.5.0"
+version = "1.5.5"
 dependencies = [
  "clap",
  "clap_complete",
@@ -10277,7 +10267,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-uutils-ctx"
-version = "1.5.0"
+version = "1.5.5"
 dependencies = [
  "libc",
  "veyyon-test-scratch",
@@ -10285,7 +10275,7 @@ dependencies = [
 
 [[package]]
 name = "veyyon-walker"
-version = "1.5.0"
+version = "1.5.5"
 dependencies = [
  "dashmap",
  "globset",

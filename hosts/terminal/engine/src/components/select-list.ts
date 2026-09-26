@@ -12,11 +12,13 @@ import { sanitizeSingleLine, wrapTextWithAnsi } from "@veyyon/utils/wrap";
 import type { Component } from "../tui";
 import { HoverController } from "../utils/hover-controller";
 import { handleSearchKeyInput } from "../utils/search-filter";
-import { ScrollView } from "./scroll-view";
+import { ScrollView, type ScrollViewTheme } from "./scroll-view";
 
 const DEFAULT_PRIMARY_COLUMN_WIDTH = 32;
 const PRIMARY_COLUMN_GAP = 2;
 const MIN_DESCRIPTION_WIDTH = 10;
+/** A row lays out a description column only when it is wider than this. */
+const DESCRIPTION_LAYOUT_MIN_WIDTH = 40;
 
 const DEFAULT_CURSOR_SYMBOL = ">";
 
@@ -90,6 +92,11 @@ export interface SelectListTheme {
 	 * opt in).
 	 */
 	groupHeader?: (text: string) => string;
+	/**
+	 * Paint for the scrollbar a long list draws on its right edge. Omit to draw the track in
+	 * {@link scrollInfo} and the thumb in {@link selectedPrefix}.
+	 */
+	scrollbar?: ScrollViewTheme;
 }
 
 export interface SelectListTruncatePrimaryContext {
@@ -123,6 +130,13 @@ export interface SelectListLayoutOptions {
 	 * the built-in "esc close" contradicted the footer on the same screen.
 	 */
 	statusLegend?: boolean;
+	/**
+	 * Print "Type to search" on the status row before anything is typed. Defaults to true.
+	 *
+	 * Set false when the host names the search in its own footer. The status row then appears only
+	 * once a query exists, where it shows that query.
+	 */
+	searchPrompt?: boolean;
 }
 
 type SelectItemLayout =
@@ -275,6 +289,61 @@ export class SelectList implements Component, MouseRoutable {
 		return this.#canClearFilter();
 	}
 
+	/**
+	 * Whether typing filters this list: it overflows its window and the host left search on. A
+	 * host that names the search in its own footer (see {@link SelectListLayoutOptions.searchPrompt})
+	 * shows that affordance only while this holds.
+	 */
+	isSearchable(): boolean {
+		return this.#canEditSearch();
+	}
+
+	/**
+	 * Run the cancel key's ladder: clear a live query first, close on the next.
+	 *
+	 * A host that offers cancel as a clickable chip calls this rather than its own close, so the
+	 * chip and the key it labels do the same thing.
+	 */
+	cancel(): void {
+		if (this.#canClearFilter()) {
+			this.#setFilter("", true);
+			return;
+		}
+		this.onCancel?.();
+	}
+
+	/**
+	 * Cells past which a wider list shows no more of any item, scrollbar included: every description whole
+	 * and every label as whole as its column allows. A label longer than `maxPrimaryColumnWidth` is
+	 * cut at any width, so it is measured at that cap.
+	 *
+	 * Measured over the unfiltered items, so a host that sizes its frame from it keeps one width
+	 * while the reader types a filter.
+	 */
+	naturalWidth(): number {
+		const cursor = this.theme.symbols?.cursor ?? DEFAULT_CURSOR_SYMBOL;
+		const prefixWidth = visibleWidth(cursor) + 1;
+		const primaryColumnWidth = this.#getPrimaryColumnWidth(this.items);
+		let widestRow = 0;
+		let described = false;
+		for (const item of this.items) {
+			const description = item.description ? sanitizeSingleLine(item.description) : "";
+			if (description) {
+				described = true;
+				// `#computeItemLayout` drops a description it can give no more than MIN_DESCRIPTION_WIDTH cells.
+				const descriptionWidth = Math.max(visibleWidth(description), MIN_DESCRIPTION_WIDTH + 1);
+				widestRow = Math.max(widestRow, primaryColumnWidth + descriptionWidth);
+			} else {
+				widestRow = Math.max(widestRow, visibleWidth(this.#getDisplayValue(item)));
+			}
+		}
+		// Two cells of right margin, the same two `#computeItemLayout` holds back from each row.
+		let rowWidth = prefixWidth + widestRow + 2;
+		if (described) rowWidth = Math.max(rowWidth, DESCRIPTION_LAYOUT_MIN_WIDTH + 1);
+		const scrollbarWidth = this.items.length > this.maxVisible ? 1 : 0;
+		return rowWidth + scrollbarWidth;
+	}
+
 	setSelectedIndex(index: number): void {
 		// `clampLow`, because an empty filtered list makes the high bound -1 and
 		// `clamp` returns that inverted bound: a selection index of -1 indexes off
@@ -395,6 +464,9 @@ export class SelectList implements Component, MouseRoutable {
 		// every count is 1, so visualTotal == #filteredItems and overflow falls
 		// back to the original `N > maxVisible` predicate exactly.
 		const conservativeRowWidth = Math.max(0, width - 1);
+		const conservativePrimaryColumnWidth = wrapEnabled
+			? this.#fitPrimaryColumnWidth(primaryColumnWidth, conservativeRowWidth)
+			: primaryColumnWidth;
 		const rowCounts = new Array<number>(this.#filteredItems.length);
 		let visualTotal = 0;
 		for (let i = 0; i < this.#filteredItems.length; i++) {
@@ -403,7 +475,9 @@ export class SelectList implements Component, MouseRoutable {
 				rowCounts[i] = 0;
 				continue;
 			}
-			rowCounts[i] = wrapEnabled ? this.#computeItemRowCount(item, conservativeRowWidth, primaryColumnWidth) : 1;
+			rowCounts[i] = wrapEnabled
+				? this.#computeItemRowCount(item, conservativeRowWidth, conservativePrimaryColumnWidth)
+				: 1;
 			// A group header rides on its group's first surviving item, so the
 			// window/scroll math counts it as part of that item's rows.
 			if (this.#headerBefore(i)) rowCounts[i] = (rowCounts[i] ?? 1) + 1;
@@ -412,6 +486,7 @@ export class SelectList implements Component, MouseRoutable {
 
 		const overflow = visualTotal > visualBudget;
 		const rowWidth = Math.max(0, width - (overflow ? 1 : 0));
+		const rowPrimaryColumnWidth = this.#fitPrimaryColumnWidth(primaryColumnWidth, rowWidth);
 
 		// Pick a window centered on the selected item that fits in visualBudget
 		// rows. Falls through to the original item-count window when every row
@@ -433,7 +508,7 @@ export class SelectList implements Component, MouseRoutable {
 			}
 			const band = this.theme.hovered;
 			const strength = this.#hoverStrength(i);
-			const itemRows = this.#renderItem(item, i === this.#selectedIndex, rowWidth, primaryColumnWidth);
+			const itemRows = this.#renderItem(item, i === this.#selectedIndex, rowWidth, rowPrimaryColumnWidth);
 			for (const row of itemRows) {
 				if (rows.length >= visualBudget) break;
 				this.#hitRows[rows.length] = i;
@@ -445,7 +520,10 @@ export class SelectList implements Component, MouseRoutable {
 			height: rows.length,
 			scrollbar: "auto",
 			totalRows: visualTotal,
-			theme: { track: t => this.theme.scrollInfo(t), thumb: t => this.theme.selectedPrefix(t) },
+			theme: this.theme.scrollbar ?? {
+				track: t => this.theme.scrollInfo(t),
+				thumb: t => this.theme.selectedPrefix(t),
+			},
 		});
 		sv.setScrollOffset(visualOffset);
 		const svLines = sv.render(width);
@@ -468,13 +546,7 @@ export class SelectList implements Component, MouseRoutable {
 		// browser cleared the query — the same key doing different things in two
 		// pickers.
 		if (kb.matches(keyData, "tui.select.cancel")) {
-			if (this.#canClearFilter()) {
-				this.#setFilter("", true);
-				return;
-			}
-			if (this.onCancel) {
-				this.onCancel();
-			}
+			this.cancel();
 			return;
 		}
 
@@ -686,7 +758,7 @@ export class SelectList implements Component, MouseRoutable {
 		const prefixWidth = visibleWidth(prefix);
 		const descriptionSingleLine = item.description ? sanitizeSingleLine(item.description) : undefined;
 
-		if (descriptionSingleLine && width > 40) {
+		if (descriptionSingleLine && width > DESCRIPTION_LAYOUT_MIN_WIDTH) {
 			const effectivePrimaryColumnWidth = clamp(primaryColumnWidth, 1, width - prefixWidth - 4);
 			const maxPrimaryWidth = Math.max(1, effectivePrimaryColumnWidth - PRIMARY_COLUMN_GAP);
 			const truncatedValue = this.#truncatePrimary(item, isSelected, maxPrimaryWidth, effectivePrimaryColumnWidth);
@@ -718,9 +790,34 @@ export class SelectList implements Component, MouseRoutable {
 		};
 	}
 
-	#getPrimaryColumnWidth(): number {
+	/**
+	 * The name column for a row of `width` cells. A column set wider than the default gives cells
+	 * back when the descriptions would not fit whole beside it, down to three fifths of the row and
+	 * never below the default width, so one long label does not squeeze the description off every
+	 * row of a narrow list. At `naturalWidth()` and above it yields nothing.
+	 */
+	#fitPrimaryColumnWidth(primaryColumnWidth: number, width: number): number {
+		if (primaryColumnWidth <= DEFAULT_PRIMARY_COLUMN_WIDTH) return primaryColumnWidth;
+		let widestDescription = 0;
+		for (const item of this.#filteredItems) {
+			if (!item.description) continue;
+			widestDescription = Math.max(widestDescription, visibleWidth(sanitizeSingleLine(item.description)));
+		}
+		if (widestDescription === 0) return primaryColumnWidth;
+		const cursor = this.theme.symbols?.cursor ?? DEFAULT_CURSOR_SYMBOL;
+		const labelRoom = width - (visibleWidth(cursor) + 1);
+		const room = labelRoom - Math.max(widestDescription, MIN_DESCRIPTION_WIDTH + 1) - 2;
+		if (room >= primaryColumnWidth) return primaryColumnWidth;
+		const floor = Math.min(
+			primaryColumnWidth,
+			Math.max(DEFAULT_PRIMARY_COLUMN_WIDTH, Math.floor((labelRoom * 3) / 5)),
+		);
+		return Math.max(floor, room);
+	}
+
+	#getPrimaryColumnWidth(items: ReadonlyArray<SelectItem> = this.#filteredItems): number {
 		const { min, max } = this.#getPrimaryColumnBounds();
-		const widestPrimary = this.#filteredItems.reduce((widest, item) => {
+		const widestPrimary = items.reduce((widest, item) => {
 			return Math.max(widest, visibleWidth(this.#getDisplayValue(item)) + PRIMARY_COLUMN_GAP);
 		}, 0);
 
@@ -780,7 +877,7 @@ export class SelectList implements Component, MouseRoutable {
 		return (
 			this.#statusRowFitsBudget &&
 			this.layout.overflowSearch !== false &&
-			(this.items.length > this.maxVisible || this.#filterQuery.length > 0)
+			(this.#filterQuery.length > 0 || (this.layout.searchPrompt !== false && this.items.length > this.maxVisible))
 		);
 	}
 

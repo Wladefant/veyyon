@@ -113,9 +113,12 @@ describe("the two cheap consumers name the leaf, not the provider", () => {
 		expect(moduleSpecifiersIn(source)).not.toContain("../../providers/anthropic");
 	});
 
-	/** The same fact for the usage client, which was paying the same 310 modules for the same string. */
-	it("the usage client imports the version from the leaf", () => {
-		const source = fs.readFileSync(path.join(PACKAGES, "ai", "src", "usage", "claude.ts"), "utf-8");
+	/**
+	 * The same fact for the Claude account endpoints, which were paying the same 310 modules for the same
+	 * string. The usage report and the reset client both take their headers from this module.
+	 */
+	it("the account-endpoint headers import the version from the leaf", () => {
+		const source = fs.readFileSync(path.join(PACKAGES, "ai", "src", "usage", "claude-oauth-endpoint.ts"), "utf-8");
 
 		expect(moduleSpecifiersIn(source)).toContain("@veyyon/catalog/wire/anthropic");
 		expect(moduleSpecifiersIn(source)).not.toContain("../providers/anthropic");
@@ -146,7 +149,7 @@ const VERSION_INTERPOLATION = `$\{claudeCodeVersion}`;
 /** The three user-agent shapes, each built from the one version. Deliberately different from each other. */
 const USER_AGENT_SHAPES: ReadonlyArray<readonly [string, string]> = [
 	["ai/src/providers/anthropic.ts", `claude-cli/${VERSION_INTERPOLATION} (external, local-agent`],
-	["ai/src/usage/claude.ts", `claude-cli/${VERSION_INTERPOLATION} (external, cli)`],
+	["ai/src/usage/claude-oauth-endpoint.ts", `claude-cli/${VERSION_INTERPOLATION} (external, cli)`],
 	["ai/src/registry/oauth/anthropic.ts", `claude-code/${VERSION_INTERPOLATION}`],
 ];
 

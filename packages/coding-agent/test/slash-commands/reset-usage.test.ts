@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import type { ResetCreditAccountStatus, ResetCreditRedeemOutcome } from "@veyyon/ai/auth-storage";
 import {
 	describeRedeemOutcome,
+	findResetUsageAccount,
 	type ResetUsageAccount,
 	toResetUsageAccounts,
 } from "@veyyon/coding-agent/slash-commands/helpers/reset-usage";
@@ -20,6 +21,7 @@ import {
  */
 
 const status = (over: Partial<ResetCreditAccountStatus>): ResetCreditAccountStatus => ({
+	provider: "openai-codex",
 	availableCount: 0,
 	credits: [],
 	active: false,
@@ -53,14 +55,48 @@ describe("toResetUsageAccounts", () => {
 		const [row] = toResetUsageAccounts([
 			status({ email: "e@x.com", accountId: "a1", credentialId: 7, availableCount: 2 }),
 		]);
-		expect(row.target).toEqual({ credentialId: 7, accountId: "a1", email: "e@x.com" });
+		expect(row.target).toEqual({ provider: "openai-codex", credentialId: 7, accountId: "a1", email: "e@x.com" });
+		expect(row.providerName).toBe("OpenAI Codex");
 		expect(row.availableCount).toBe(2);
+	});
+
+	it("breaks a credit tie between providers by provider id before label", () => {
+		const rows = toResetUsageAccounts([
+			status({ provider: "openai-codex", email: "a@x.com", availableCount: 1 }),
+			status({ provider: "anthropic", email: "z@x.com", availableCount: 1 }),
+		]);
+		expect(rows.map(r => r.target.provider)).toEqual(["anthropic", "openai-codex"]);
+	});
+});
+
+describe("findResetUsageAccount", () => {
+	const rows = toResetUsageAccounts([
+		status({ provider: "openai-codex", email: "me@x.com", accountId: "cx-1", availableCount: 0, active: true }),
+		status({ provider: "anthropic", email: "me@x.com", accountId: "an-1", availableCount: 2, active: true }),
+		status({ provider: "anthropic", email: "other@x.com", availableCount: 1 }),
+	]);
+	const pick = (arg: string) => findResetUsageAccount(rows, arg)?.target;
+
+	it("prefers the matching row that has redeemable resets when an email spans providers", () => {
+		expect(pick("ME@x.com")).toMatchObject({ provider: "anthropic", accountId: "an-1" });
+		expect(pick("active")).toMatchObject({ provider: "anthropic", accountId: "an-1" });
+	});
+
+	it("restricts the match to the provider named before the account", () => {
+		expect(pick("openai-codex active")).toMatchObject({ provider: "openai-codex", accountId: "cx-1" });
+		expect(pick("openai-codex me@x.com")).toMatchObject({ provider: "openai-codex", accountId: "cx-1" });
+		expect(pick("openai-codex other@x.com")).toBeUndefined();
+	});
+
+	it("matches by account id and returns undefined for an unknown account", () => {
+		expect(pick("CX-1")).toMatchObject({ provider: "openai-codex" });
+		expect(pick("nobody@x.com")).toBeUndefined();
 	});
 });
 
 describe("describeRedeemOutcome", () => {
 	const message = (code: ResetCreditRedeemOutcome["code"]): string =>
-		describeRedeemOutcome({ ok: code === "reset", code }, "L");
+		describeRedeemOutcome({ ok: code === "reset", code, provider: "anthropic" }, "L");
 
 	it("returns a distinct message for every named backend and local code", () => {
 		expect(message("reset")).toBe("Reset applied for L — your rate-limit window has been refreshed.");
@@ -69,7 +105,14 @@ describe("describeRedeemOutcome", () => {
 		expect(message("nothing_to_reset")).toBe(
 			"L: nothing to reset right now — your limits aren't constrained, so no credit was spent.",
 		);
-		expect(message("no_account")).toBe('Could not find a stored Codex account matching "L".');
+		expect(message("cooldown")).toBe("L: resets are cooling down — try again later. No credit was spent.");
+		expect(message("ineligible")).toBe("L: this account is not eligible for usage resets.");
+		expect(message("unavailable")).toBe("L: usage resets are unavailable right now. No credit was spent.");
+		expect(message("no_organization")).toBe(
+			"L: could not determine the account's organization — sign in again with /login in an interactive veyyon session.",
+		);
+		expect(message("status_unavailable")).toBe("L: could not read the account's reset status. No credit was spent.");
+		expect(message("no_account")).toBe('Could not find a stored Anthropic account matching "L".');
 		expect(message("account_unavailable")).toBe(
 			"L: could not authenticate this account — sign in again with /login in an interactive veyyon session.",
 		);

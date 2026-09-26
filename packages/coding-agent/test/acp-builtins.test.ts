@@ -110,8 +110,8 @@ function createRuntime() {
 		async listResetCredits() {
 			return [];
 		},
-		async redeemResetCredit(_target) {
-			return { ok: false, code: "no_credit" };
+		async redeemResetCredit(target) {
+			return { ok: false, code: "no_credit", provider: target.provider };
 		},
 		async newSession(_opts?: { drop?: boolean; parentSession?: string }) {
 			return true;
@@ -308,6 +308,7 @@ describe("ACP builtin slash commands", () => {
 		let redeemedTarget: ResetCreditTarget | undefined;
 		runtime.session.listResetCredits = async () => [
 			{
+				provider: "openai-codex",
 				credentialId: 42,
 				accountId: "account-1",
 				email: "user@example.com",
@@ -318,14 +319,57 @@ describe("ACP builtin slash commands", () => {
 		];
 		runtime.session.redeemResetCredit = async target => {
 			redeemedTarget = target;
-			return { ok: true, code: "reset", email: target.email };
+			return { ok: true, code: "reset", provider: target.provider, email: target.email };
 		};
 
 		const result = await executeAcpBuiltinSlashCommand("/usage reset active", runtime);
 
 		expect(result).toEqual({ consumed: true });
-		expect(redeemedTarget).toEqual({ credentialId: 42, accountId: "account-1", email: "user@example.com" });
-		expect(output).toEqual(["Reset applied for user@example.com — your rate-limit window has been refreshed."]);
+		expect(redeemedTarget).toEqual({
+			provider: "openai-codex",
+			credentialId: 42,
+			accountId: "account-1",
+			email: "user@example.com",
+		});
+		expect(output).toEqual([
+			"Reset applied for OpenAI Codex user@example.com — your rate-limit window has been refreshed.",
+		]);
+	});
+
+	it("spends an Anthropic reset when the provider prefix names it", async () => {
+		const { output, runtime } = createRuntime();
+		let redeemedTarget: ResetCreditTarget | undefined;
+		// The same email is active on both providers, and Codex sorts first with more resets.
+		runtime.session.listResetCredits = async () => [
+			{
+				provider: "openai-codex",
+				credentialId: 1,
+				email: "user@example.com",
+				availableCount: 3,
+				credits: [],
+				active: true,
+			},
+			{
+				provider: "anthropic",
+				credentialId: 2,
+				email: "user@example.com",
+				availableCount: 1,
+				credits: [],
+				active: true,
+			},
+		];
+		runtime.session.redeemResetCredit = async target => {
+			redeemedTarget = target;
+			return { ok: true, code: "reset", provider: target.provider, email: target.email };
+		};
+
+		const result = await executeAcpBuiltinSlashCommand("/usage reset anthropic active", runtime);
+
+		expect(result).toEqual({ consumed: true });
+		expect(redeemedTarget).toEqual({ provider: "anthropic", credentialId: 2, email: "user@example.com" });
+		expect(output).toEqual([
+			"Reset applied for Anthropic user@example.com — your rate-limit window has been refreshed.",
+		]);
 	});
 
 	it("does not dispatch the legacy /reset-usage command", async () => {

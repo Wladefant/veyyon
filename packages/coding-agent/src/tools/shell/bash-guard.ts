@@ -1904,3 +1904,54 @@ export function bashCredentialTargets(command: string, env: NodeJS.ProcessEnv = 
 	}
 	return Array.from(found);
 }
+/**
+ * Package-manager commands that create artifacts (package.json, lockfile,
+ * node_modules) in whatever directory they run in.
+ */
+export const HOMEDIR_GUARDED_COMMANDS: ReadonlySet<string> = new Set([
+	"npm",
+	"npx",
+	"bun",
+	"bunx",
+	"yarn",
+	"pnpm",
+	"pnpx",
+]);
+
+/** Subcommands that actually install / mutate the package tree. */
+const INSTALL_SUBCOMMANDS = new Set([
+	"install",
+	"add",
+	"i",
+	"ci",
+	"update",
+	"upgrade",
+	"remove",
+	"uninstall",
+	"init",
+	"create",
+	"link",
+]);
+
+/**
+ * True when `command` is a package-manager invocation that would create
+ * artifacts in the working directory. Does not flag read-only subcommands
+ * like `npm ls` or `bun run`.
+ */
+export function isHomedirUnsafePackageCommand(command: string): boolean {
+	const segments = splitCommandSegments(command);
+	for (const seg of segments) {
+		const words = splitWords(seg).filter(w => w.text.length > 0);
+		if (words.length === 0) continue;
+		const cmd = words[0].text.replace(/^.*[/\\]/, ""); // basename
+		if (!HOMEDIR_GUARDED_COMMANDS.has(cmd)) continue;
+		// bare command without a subcommand — harmless
+		if (words.length === 1) continue;
+		const sub = words[1].text;
+		if (sub.startsWith("-")) continue; // flags like `npm --version`
+		if (INSTALL_SUBCOMMANDS.has(sub)) return true;
+		// `npx` / `bunx` / `pnpx` always install transient packages
+		if (cmd === "npx" || cmd === "bunx" || cmd === "pnpx") return true;
+	}
+	return false;
+}
