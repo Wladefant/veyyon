@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `naturalWidth()`, `isSearchable()`, and `cancel()` to `SelectList`, alongside `ComponentScopedRender` and dynamic viewport adaptations.
+
 ## [1.5.4] - 2026-09-24
 
 ### Added

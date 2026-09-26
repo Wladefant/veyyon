@@ -5,6 +5,7 @@
 ### Fixed
 
 - `calculateCost` and `resolveRequestCost` fall back to zero pricing for unconstructed model objects missing an explicit `cost` property.
+- Finalized SQLite statement handles in `modelCacheStamp` to prevent statement handle accumulation on shared databases.
 - Anthropic OAuth advertises Claude Code 2.1.280, and the bundled catalog includes Claude Opus 5.5 with its low-through-max effort ladder and published pricing.
 - The Command Code catalog is declared in one module: `provider-models/openai-compat` no longer re-declares `COMMAND_CODE_STATIC_MODELS`, `CommandCodeModelManagerConfig` and `commandCodeModelManagerOptions` beside `provider-models/command-code`, whose contract-applying versions are the ones every consumer already imports.
 - `getModelPricing` accepts the sparse `ModelSpec` cost it is already given by discovery, and reads an absent rate as zero rather than rejecting the row at the type level.

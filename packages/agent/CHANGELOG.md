@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `summarizeRemoteCompactionWindow` and staged summary checkpoints to resume summarization across partial failures.
+
 ## [1.5.4] - 2026-09-24
 
 ### Added

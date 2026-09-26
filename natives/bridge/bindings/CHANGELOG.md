@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- The launch-time prune of old addon caches routes non-removable directories through `attachNativeNoticeSink` instead of stderr.
+
 ### Changed
 
 - Merged upstream v1.5.0.

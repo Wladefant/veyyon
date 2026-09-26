@@ -7,6 +7,7 @@
 ### Changed
 
 - The settings store calls `isRecord` from `@veyyon/utils` for the reload namespace check and the routing-key expansion instead of hand-writing the same three-term predicate ([#64](https://github.com/Wladefant/veyyon/issues/64)).
+- `SessionManager.open` parses the session file once instead of twice, cutting resume time and peak RSS.
 
 ### Fixed
 
