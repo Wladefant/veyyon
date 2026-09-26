@@ -7,6 +7,7 @@
 ### Changed
 
 - Opening or restoring a session builds its set of known entry ids once instead of twice, which takes about 40ms off opening a 220,000-entry session.
+- The resume warning flattens each command or path onto one line through the shared `collapseWhitespace` helper; no user-visible change.
 
 ### Fixed
 
