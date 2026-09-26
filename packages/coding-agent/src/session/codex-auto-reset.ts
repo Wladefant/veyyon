@@ -169,7 +169,7 @@ export function evaluateCodexAutoRedeem(input: CodexAutoRedeemInput): CodexAutoR
 
 	return {
 		redeem: true,
-		target: { accountId: input.identity?.accountId, email: input.identity?.email },
+		target: { provider: "openai-codex", accountId: input.identity?.accountId, email: input.identity?.email },
 		accountKey,
 		blockKey,
 		weeklyResetAtMs: resetsAt,

@@ -60,6 +60,7 @@ const MAXIMAL_QUESTION = {
 	multi: true,
 	recommended: 0,
 	preselected: ["A"],
+	allowOther: true,
 } satisfies Required<ExtensionAskDialogQuestion>;
 
 /** Compile-time exhaustiveness: a new question field fails `check:ts` here. */
@@ -82,6 +83,7 @@ const FIELD_POLICY: Record<keyof typeof MAXIMAL_QUESTION, { required: boolean; w
 	multi: { required: false, wrongType: "yes" },
 	recommended: { required: false, wrongType: "0" },
 	preselected: { required: false, wrongType: "A" },
+	allowOther: { required: false, wrongType: "yes" },
 };
 
 const OPTION_FIELD_POLICY: Record<keyof ExtensionAskDialogOption, { required: boolean; wrongType: unknown }> = {
@@ -341,6 +343,19 @@ describe("the ask dialog refuses a question it cannot render", () => {
 		expect(() => build([question({ question: "" })])).toThrow(/has no question text \(the string ""\)/);
 		expect(() => build([question({ id: "" })])).toThrow(/has no id/);
 		expect(() => build([question({ options: [{ label: " " }] })])).toThrow(/option 0 has no label/);
+	});
+
+	it("refuses a question with no options and no free-text answer, single or multi, because nothing can be selected", () => {
+		for (const multi of [false, true]) {
+			expect(() => build([question({ options: [], allowOther: false, multi })]), `multi ${multi}`).toThrow(
+				/has no options and allowOther set to false/,
+			);
+			expect(() => build([question({ options: [], allowOther: true, multi })]), `multi ${multi}`).not.toThrow();
+			expect(
+				() => build([question({ options: [{ label: "A" }], allowOther: false, multi })]),
+				`multi ${multi}`,
+			).not.toThrow();
+		}
 	});
 
 	it("names the offending question by index when an earlier one is fine", () => {

@@ -152,6 +152,13 @@ export interface ScriptedTurn {
 	 */
 	execResolvedToolCall(name: string, args: Record<string, unknown>, id?: string, intent?: string): void;
 	/**
+	 * Deliver the result of an exec-channel call the way Cursor's exec handler does:
+	 * through the agent's `cursorOnToolResult`, which buffers it and appends it
+	 * right after the assistant message closes. A call given no result is one
+	 * whose result was still in flight when the stream ended.
+	 */
+	execToolResult(toolCallId: string, toolName: string, text: string): Promise<void>;
+	/**
 	 * Report what this request cost. Providers stream usage and the turn's stored
 	 * assistant message carries it; a simulation that never sets it leaves every
 	 * token count at zero, which is what makes a spend or budget assertion
@@ -425,6 +432,18 @@ async function runScript(
 		},
 		execResolvedToolCall(name, args, id, intent) {
 			emitToolCall(name, args, id, true, intent);
+		},
+		async execToolResult(toolCallId, toolName, text) {
+			const deliver = options?.execHandlers?.onToolResult;
+			if (!deliver) throw new Error("simulation: the agent handed the stream no cursorOnToolResult");
+			await deliver({
+				role: "toolResult",
+				toolCallId,
+				toolName,
+				content: [{ type: "text", text }],
+				isError: false,
+				timestamp: Date.now(),
+			});
 		},
 		openToolCall(name, partialArgs, id, intent) {
 			toolCallSeq += 1;
@@ -765,7 +784,18 @@ function buildSimulation(scope: SimulationScope, ownsScope: boolean): Simulation
 			tools: context.tools?.length ?? 0,
 			serviceTier: streamOptions?.serviceTier,
 		});
-		return sharedStreamFn(model, context, streamOptions);
+		// The `cursor-agent` projection hands the agent's `cursorOnToolResult` to the
+		// transport as `onToolResult`; the simulated api's projection drops it. Pass
+		// it through `execHandlers`, which every projection keeps, so
+		// `turn.execToolResult` reaches the same buffer production fills.
+		const onToolResult = streamOptions?.cursorOnToolResult;
+		return sharedStreamFn(
+			model,
+			context,
+			onToolResult
+				? { ...streamOptions, execHandlers: { ...streamOptions?.execHandlers, onToolResult } }
+				: streamOptions,
+		);
 	};
 	// The loop asks the HOST for the turn's tool-choice directive; the session is
 	// what answers, and it is built after the agent, so the callback reads a
@@ -783,6 +813,11 @@ function buildSimulation(scope: SimulationScope, ownsScope: boolean): Simulation
 			messages: [],
 		},
 		convertToLlm,
+		// Production wires Cursor's exec channel for every session (`sdk.ts` builds
+		// `CursorExecHandlers` unconditionally), which is what makes the agent buffer
+		// an exec-channel result and append it after the assistant message. An
+		// identity hook turns on the same buffering without a Cursor transport.
+		cursorOnToolResult: () => undefined,
 		getToolChoice: () => host?.nextToolChoiceDirective(),
 		streamFn: recordingStreamFn,
 	});

@@ -16,6 +16,7 @@ import { describe, expect, it } from "bun:test";
 import {
 	classifySentinelBumpState,
 	isSentinelRewriteExcluded,
+	planReleaseSentinel,
 	planSentinelRewrite,
 	sentinelExportName,
 } from "./release";
@@ -165,5 +166,53 @@ describe("classifySentinelBumpState — re-cut tolerance after a dead tag", () =
 		expect(classifySentinelBumpState(libRs, prev, next)).toBe("rewrite");
 		const strayOnly = `// mentions ${next} in prose only\n`;
 		expect(classifySentinelBumpState(strayOnly, prev, next)).toBe("missing");
+	});
+});
+
+describe("planReleaseSentinel — the rename runs from the sentinel the tree emits", () => {
+	// Why this suite exists: the v1.5.2 bump commit landed on main and its checks
+	// failed, so it was never tagged. Cutting v1.5.3 then planned the rename from
+	// the latest TAG's sentinel (V1_5_1), which lib.rs no longer emitted, and the
+	// cut refused as `missing`: no version but a re-cut of 1.5.2 could ship. The
+	// source is the tree's own Cargo workspace version. It does not catch a tree
+	// whose Cargo version and lib.rs disagree; that is refused as `missing`.
+	const cargoAt = (version: string): string =>
+		`[package]\nname = "root-shim"\nversion = "9.9.9"\n\n[workspace.package]\nedition = "2024"\nversion = "${version}"\n`;
+	const libRsEmitting = (version: string): string =>
+		`#[napi(js_name = "${sentinelExportName(version)}")]\npub fn version_sentinel() {}\n`;
+
+	it("renames from the tree's version when the last bump was never tagged", () => {
+		expect(planReleaseSentinel(cargoAt("1.5.2"), libRsEmitting("1.5.2"), "1.5.3")).toEqual({
+			from: "__veyyonNativesV1_5_2",
+			to: "__veyyonNativesV1_5_3",
+			state: "rewrite",
+		});
+	});
+
+	it("renames from the tagged version on an ordinary cut", () => {
+		expect(planReleaseSentinel(cargoAt("1.5.1"), libRsEmitting("1.5.1"), "1.5.2")).toEqual({
+			from: "__veyyonNativesV1_5_1",
+			to: "__veyyonNativesV1_5_2",
+			state: "rewrite",
+		});
+	});
+
+	it("rewrites nothing when re-cutting the version the tree is already at", () => {
+		expect(planReleaseSentinel(cargoAt("1.5.2"), libRsEmitting("1.5.2"), "1.5.2")).toEqual({
+			from: "__veyyonNativesV1_5_2",
+			to: "__veyyonNativesV1_5_2",
+			state: "alreadyBumped",
+		});
+	});
+
+	it("refuses a lib.rs that emits neither the tree's sentinel nor the target", () => {
+		expect(planReleaseSentinel(cargoAt("1.5.2"), libRsEmitting("1.5.0"), "1.5.3").state).toBe("missing");
+		expect(planReleaseSentinel(cargoAt("1.5.2"), libRsEmitting("1.5.0"), "1.5.2").state).toBe("missing");
+	});
+
+	it("fails when Cargo.toml declares no workspace version", () => {
+		expect(() => planReleaseSentinel('[package]\nversion = "1.5.2"\n', libRsEmitting("1.5.2"), "1.5.3")).toThrow(
+			/no \[workspace\.package\] version/,
+		);
 	});
 });

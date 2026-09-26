@@ -315,7 +315,7 @@ describe("an ACP-reachable remedy names something an ACP client can run", () => 
 		await executeAcpBuiltinSlashCommand("/usage reset", h.runtime);
 
 		expect(h.said).toEqual([
-			"No Codex accounts found. Sign in with /login in an interactive veyyon session to add one.",
+			"No OpenAI Codex or Anthropic accounts found. Sign in with /login in an interactive veyyon session to add one.",
 		]);
 	});
 

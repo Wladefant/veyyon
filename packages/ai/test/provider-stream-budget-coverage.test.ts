@@ -59,12 +59,18 @@ const REGISTER_BUILTINS = path.join(PROVIDERS_DIR, "register-builtins.ts");
  *   itself: with no env set, ollama runs the same numbers as bedrock.
  * - `provider-owned`: the wrapper stands down entirely and the provider module
  *   arms `iterateWithIdleTimeout` itself.
+ * - `provider-owned-idle`: the wrapper keeps its first-event watchdog and drops
+ *   only the idle one, because the provider decides what silence means by
+ *   asking its transport instead of by timing it. `cursor-agent` is the case:
+ *   HTTP/2 PING proves the connection while the remote agent works quietly, and
+ *   a timer here would race that with a worse answer.
  */
 type WatchdogDecision =
 	| "shared-generic-defaults"
 	| "shared-widened-budget"
 	| "shared-openai-env-precedence"
-	| "provider-owned";
+	| "provider-owned"
+	| "provider-owned-idle";
 
 /**
  * The decision on record for every registered provider. This list is the gate:
@@ -77,7 +83,7 @@ const WATCHDOG_DECISIONS: Record<string, WatchdogDecision> = {
 	streamAnthropic: "provider-owned",
 	streamAzureOpenAIResponses: "provider-owned",
 	streamBedrock: "shared-generic-defaults",
-	streamCursor: "shared-widened-budget",
+	streamCursor: "provider-owned-idle",
 	streamDevin: "shared-widened-budget",
 	streamGoogle: "shared-generic-defaults",
 	streamGoogleGeminiCli: "shared-widened-budget",
@@ -99,6 +105,7 @@ const LIMITS_FIELD_KINDS: Record<keyof LazyStreamLimits, "number" | "boolean"> =
 	defaultIdleTimeoutMs: "number",
 	providerHandlesStreamTimeouts: "boolean",
 	openAIIdleEnvFloorsFirstEvent: "boolean",
+	providerHandlesIdleTimeout: "boolean",
 };
 
 /** One `export const streamX = createLazyStream(api, loader, LIMITS?)` registration. */
@@ -411,6 +418,17 @@ describe("lazy provider stream budget coverage", () => {
 					if (!widened) mismatched.push(detail);
 					break;
 				}
+				case "provider-owned-idle": {
+					// The idle watchdog is gone and the first-event one is not: a
+					// provider that probes its transport still cannot prove a stream
+					// that never opened.
+					const armedFirstEvent = typeof first === "number" && first > 0;
+					const widenedFirstEvent =
+						armedFirstEvent && generic.firstItemTimeoutMs !== undefined && first > generic.firstItemTimeoutMs;
+					if (registration.limits?.providerHandlesIdleTimeout !== true) mismatched.push(detail);
+					else if (idle !== undefined || !widenedFirstEvent) mismatched.push(detail);
+					break;
+				}
 			}
 		}
 		// A row that does not describe what the code does is worse than no row: it
@@ -467,24 +485,47 @@ describe("lazy provider stream budget coverage", () => {
 		expect(unproven).toEqual([]);
 	});
 
-	it("every provider taking the opt-out arms its own idle watchdog", async () => {
-		const optedOut = registrations.filter(
-			registration => registration.limits?.providerHandlesStreamTimeouts === true,
-		);
-		// The opt-out exists for OpenAI-family and Anthropic transports; if it stops
-		// being used at all this test would pass vacuously.
-		expect(optedOut.length).toBeGreaterThan(0);
+	it("every provider that stands the shared watchdog down arms something of its own", async () => {
+		// Two stand-downs, one rule: whatever the wrapper stops doing, the provider
+		// module must do. The full opt-out drops both watchdogs and owns both; the
+		// idle opt-out drops only the idle one and owns transport liveness.
+		// LIMIT: this sees a call, not a live one. A module that keeps the call and
+		// never reaches it passes here and fails in the behavioural suite, which is
+		// where "the governor runs" is proved (for cursor, a dead connection and a
+		// wedged turn both hang the test instead of being reported). This lock is
+		// only the fail-by-default gate for a NEW provider taking a stand-down with
+		// nothing at all in its place.
+		const GOVERNOR_TOKENS: Record<"full" | "idle", string[]> = {
+			full: ["iterateWithIdleTimeout("],
+			idle: ["startCursorLiveness(", "iterateWithIdleTimeout("],
+		};
+		type StandDown = { registration: Registration; kind: "full" | "idle" };
+		const standDowns = registrations.flatMap((registration): StandDown[] => {
+			if (registration.limits?.providerHandlesStreamTimeouts === true) {
+				return [{ registration, kind: "full" }];
+			}
+			if (registration.limits?.providerHandlesIdleTimeout === true) {
+				return [{ registration, kind: "idle" }];
+			}
+			return [];
+		});
+		// Both stand-downs are in use; if either stops being used this test would
+		// pass vacuously for that kind.
+		expect(standDowns.filter(entry => entry.kind === "full").length).toBeGreaterThan(0);
+		expect(standDowns.filter(entry => entry.kind === "idle").length).toBeGreaterThan(0);
 		const unarmed: string[] = [];
-		for (const registration of optedOut) {
+		for (const { registration, kind } of standDowns) {
 			const moduleName = registration.moduleName;
 			const text = await fs.readFile(path.join(PROVIDERS_DIR, `${moduleName}.ts`), "utf8");
 			// Comments stripped: a module that only MENTIONS the watchdog in prose has
 			// not armed one.
 			const code = text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
-			const imports = code.includes("iterateWithIdleTimeout,") || code.includes("iterateWithIdleTimeout }");
-			if (!imports || !code.includes("iterateWithIdleTimeout(")) {
-				unarmed.push(`${registration.streamExport} (${moduleName}.ts)`);
-			}
+			const armed = GOVERNOR_TOKENS[kind].some(token => {
+				const symbol = token.slice(0, -1);
+				const imported = code.includes(`${symbol},`) || code.includes(`${symbol} }`);
+				return imported && code.includes(token);
+			});
+			if (!armed) unarmed.push(`${registration.streamExport} (${moduleName}.ts, ${kind} stand-down)`);
 		}
 		expect(unarmed).toEqual([]);
 	});
@@ -495,6 +536,7 @@ describe("lazy provider stream budget coverage", () => {
 		expect(limitsByName.get("AGENTIC_BACKEND_LAZY_STREAM_LIMITS")).toEqual(
 			registerBuiltins.AGENTIC_BACKEND_LAZY_STREAM_LIMITS,
 		);
+		expect(limitsByName.get("CURSOR_LAZY_STREAM_LIMITS")).toEqual(registerBuiltins.CURSOR_LAZY_STREAM_LIMITS);
 	});
 
 	// Termination, not values. Every provider on the shared watchdog is driven
@@ -505,11 +547,29 @@ describe("lazy provider stream budget coverage", () => {
 		registration => registration.limits?.providerHandlesStreamTimeouts !== true,
 	);
 	const TERMINATION_WINDOW_MS = 90 * 60_000 + 30 * 60_000;
+	// A provider whose resolved idle budget is `undefined` has no mid-stream
+	// watchdog here to assert. It is exempt from the mid-stream assertion and from
+	// nothing else, and the exemption is pinned by exact equality inside the test,
+	// so a second provider dropping its idle budget turns this red until its own
+	// liveness proof exists and its row is recorded.
+	const PROVIDER_OWNED_IDLE = Object.entries(WATCHDOG_DECISIONS)
+		.filter(([, decision]) => decision === "provider-owned-idle")
+		.map(([streamExport]) => streamExport);
 
 	for (const registration of sharedWatchdogProviders) {
 		it(`${registration.streamExport}: a wedged local tool cannot hold the stream open forever`, async () => {
 			vi.useFakeTimers();
 			const budget = registerBuiltins.resolveLazyStreamBudget({}, registration.limits);
+			if (budget.idleTimeoutMs === undefined) {
+				// No mid-stream watchdog to observe, so the only thing to assert here
+				// is that this provider is the one that recorded why. Its own bound is
+				// proved against the real transport in
+				// `cursor-silence-is-not-a-dead-connection.test.ts`, where a wedged
+				// local tool is reported at the silence ceiling and a dead connection
+				// in seconds.
+				expect(PROVIDER_OWNED_IDLE).toContain(registration.streamExport);
+				return;
+			}
 			const wedged = Promise.withResolvers<never>();
 			async function* midStream(): AsyncGenerator<string> {
 				yield "first";
@@ -519,6 +579,14 @@ describe("lazy provider stream budget coverage", () => {
 			// Named cause: a wedged bridge must be diagnosable, not indistinguishable
 			// from a provider that went quiet.
 			expect(error?.message).toBe("provider stream stalled (a local tool held the stream open without completing)");
+		});
+
+		it(`${registration.streamExport}: it is recorded whether a mid-stream watchdog governs it`, () => {
+			// Fail by default on a new member: dropping the idle budget without
+			// recording `provider-owned-idle`, or recording it while keeping the
+			// budget, is caught here rather than silently skipping the case above.
+			const budget = registerBuiltins.resolveLazyStreamBudget({}, registration.limits);
+			expect(PROVIDER_OWNED_IDLE.includes(registration.streamExport)).toBe(budget.idleTimeoutMs === undefined);
 		});
 
 		it(`${registration.streamExport}: a wedged local tool cannot hold the first event open forever`, async () => {

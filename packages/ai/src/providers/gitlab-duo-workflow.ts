@@ -1937,6 +1937,7 @@ export function runGitLabDuoWorkflowSocket(
 	const settle = (result: GitLabDuoWorkflowSocketResult = "closed", error?: unknown): void => {
 		if (settled) return;
 		settled = true;
+		options.signal?.removeEventListener("abort", abort);
 		clearIdleTimer();
 		if (error) reject(error);
 		else resolve(result);

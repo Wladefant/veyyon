@@ -14,7 +14,12 @@ import type { AgentSession } from "../session/agent-session";
 import { resolveToCwd } from "../tools/core/path-utils";
 import type { BuiltinSlashCommandHandlers } from "./handler-types";
 import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
-import { describeRedeemOutcome, type ResetUsageAccount, toResetUsageAccounts } from "./helpers/reset-usage";
+import {
+	describeRedeemOutcome,
+	findResetUsageAccount,
+	type ResetUsageAccount,
+	toResetUsageAccounts,
+} from "./helpers/reset-usage";
 import { handleStatsAcp } from "./helpers/stats-dashboard";
 import { buildUsageReportText } from "./helpers/usage-report";
 import type { SlashCommandRuntime } from "./types";
@@ -32,40 +37,37 @@ export async function handleUsageResetCommand(
 		return;
 	}
 	if (accounts.length === 0) {
-		await output("No Codex accounts found. Sign in with /login in an interactive veyyon session to add one.");
+		await output(
+			"No OpenAI Codex or Anthropic accounts found. Sign in with /login in an interactive veyyon session to add one.",
+		);
 		return;
 	}
 	const targetArg = arg.trim();
 	if (!targetArg) {
-		const lines = ["Saved Codex rate-limit resets:"];
+		const lines = ["Saved rate-limit resets:"];
 		for (const account of accounts) {
 			const detail = account.error ? `unavailable (${account.error})` : `${account.availableCount} available`;
-			lines.push(`- ${account.label}: ${detail}${account.active ? " (active)" : ""}`);
+			lines.push(`- ${account.providerName} ${account.label}: ${detail}${account.active ? " (active)" : ""}`);
 		}
-		lines.push("", "Spend one with `/usage reset <account email>` or `/usage reset active`.");
+		lines.push(
+			"",
+			"Spend one with `/usage reset <account email>` or `/usage reset active`; prefix `openai-codex` or `anthropic` to pick the provider.",
+		);
 		await output(lines.join("\n"));
 		return;
 	}
-	const wanted = targetArg.toLowerCase();
-	const target =
-		wanted === "active"
-			? accounts.find(account => account.active)
-			: accounts.find(
-					account =>
-						account.label.toLowerCase() === wanted ||
-						account.target.email?.toLowerCase() === wanted ||
-						account.target.accountId?.toLowerCase() === wanted,
-				);
+	const target = findResetUsageAccount(accounts, targetArg);
 	if (!target) {
-		await output(`No Codex account matches "${targetArg}".`);
+		await output(`No account matches "${targetArg}".`);
 		return;
 	}
 	if (target.availableCount <= 0) {
-		await output(`${target.label}: no saved resets to spend.`);
+		await output(`${target.providerName} ${target.label}: no saved resets to spend.`);
 		return;
 	}
+	const label = `${target.providerName} ${target.label}`;
 	const outcome = await session.redeemResetCredit(target.target);
-	await output(describeRedeemOutcome(outcome, target.label));
+	await output(describeRedeemOutcome(outcome, label));
 }
 
 /** What the workspace builtins DO, keyed by the name each is declared under. */
@@ -190,7 +192,7 @@ export const WORKSPACE_HANDLERS = {
 				await handleUsageResetCommand(rest, runtime.session, runtime.output);
 				return commandConsumed();
 			}
-			return usage("Usage: /usage [show|reset [account|active]]", runtime);
+			return usage("Usage: /usage [show|reset [openai-codex|anthropic] [account|active]]", runtime);
 		},
 		handleTui: async (command, runtime) => {
 			const { verb, rest } = parseSubcommand(command.args);
@@ -208,7 +210,7 @@ export const WORKSPACE_HANDLERS = {
 				runtime.ctx.editor.setText("");
 				return;
 			}
-			runtime.ctx.showStatus("Usage: /usage [show|reset [account|active]]");
+			runtime.ctx.showStatus("Usage: /usage [show|reset [openai-codex|anthropic] [account|active]]");
 			runtime.ctx.editor.setText("");
 		},
 	},

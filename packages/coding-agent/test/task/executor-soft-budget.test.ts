@@ -5,7 +5,7 @@ import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifec
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import * as sdkModule from "@veyyon/coding-agent/sdk";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { runSubprocess } from "@veyyon/coding-agent/task/executor";
+import { resolveAgentSoftRequestBudget, runSubprocess, SOFT_REQUEST_BUDGET } from "@veyyon/coding-agent/task/executor";
 import { IrcBus } from "@veyyon/coding-agent/task/irc-bus";
 import type { AgentDefinition } from "@veyyon/coding-agent/task/types";
 import { TempDir } from "@veyyon/utils";
@@ -131,6 +131,7 @@ describe("runSubprocess soft request budget", () => {
 		expect(result.exitCode).toBe(0);
 		expect(result.abortReason).toBeUndefined();
 		expect(JSON.parse(result.output)).toEqual({ report: "partial findings" });
+		expect(result.salvageState).toBeUndefined();
 		// The agent stays a live, adopted peer.
 		expect(AgentRegistry.global().get(id)?.status).toBe("idle");
 		expect(AgentLifecycleManager.global().has(id)).toBe(true);
@@ -153,6 +154,12 @@ describe("runSubprocess soft request budget", () => {
 
 		expect(result.aborted).toBe(true);
 		expect(result.abortReason).toMatch(/Soft request budget exceeded/);
+		expect(result.salvageState).toEqual({
+			requests: 8,
+			tokens: expect.any(Number),
+			lastActivity: "burning request 8",
+			reason: "budget",
+		});
 		// Resumable stop, not a terminal kill: the ref stays adopted and live.
 		expect(AgentRegistry.global().get(id)?.status).toBe("idle");
 		expect(AgentLifecycleManager.global().has(id)).toBe(true);
@@ -199,6 +206,12 @@ describe("runSubprocess soft request budget", () => {
 		expect(result.exitCode).toBe(1);
 		expect(result.abortReason).toMatch(/request budget/);
 		expect(result.output).not.toContain("SYSTEM WARNING");
+		expect(result.salvageState).toEqual({
+			requests: 3,
+			tokens: expect.any(Number),
+			lastActivity: "exploring 3",
+			reason: "budget",
+		});
 		// The wrap-up reminder was sent and answered with nothing, which is what makes this the soft
 		// path rather than the grace-exhausted one.
 		expect(handle.prompts).toHaveLength(2);
@@ -222,9 +235,62 @@ describe("runSubprocess soft request budget", () => {
 		expect(AgentRegistry.global().get(id)?.status).toBe("aborted");
 		expect(handle.disposeCalls()).toBeGreaterThanOrEqual(1);
 
+		expect(result.salvageState).toEqual({
+			requests: 1,
+			tokens: expect.any(Number),
+			lastActivity: "working",
+			reason: "signal",
+		});
 		const receipt = await new IrcBus().send({ from: "Main", to: id, body: "resume" });
 		expect(receipt.outcome).toBe("failed");
 		expect(receipt.error).toMatch(/hard-aborted/);
 		expect(receipt.error).toMatch(new RegExp(`history://${id}`));
+	});
+});
+
+describe("resolveAgentSoftRequestBudget", () => {
+	it("resolves default budget of 250 requests for standard unconfigured agents", () => {
+		const settings = Settings.isolated();
+		expect(SOFT_REQUEST_BUDGET.default).toBe(250);
+		expect(resolveAgentSoftRequestBudget(settings, "task")).toBe(250);
+		expect(resolveAgentSoftRequestBudget(settings, "deep")).toBe(250);
+	});
+
+	it("resolves built-in overrides for scout and sonic", () => {
+		const settings = Settings.isolated();
+		expect(resolveAgentSoftRequestBudget(settings, "scout")).toBe(100);
+		expect(resolveAgentSoftRequestBudget(settings, "sonic")).toBe(100);
+	});
+
+	it("honors blanket agent.softRequestBudget override for standard agents", () => {
+		const settings = Settings.isolated({ "agent.softRequestBudget": 180 });
+		expect(resolveAgentSoftRequestBudget(settings, "task")).toBe(180);
+		// Built-in overrides remain in effect
+		expect(resolveAgentSoftRequestBudget(settings, "scout")).toBe(100);
+	});
+
+	it("disables budget blanket-wide when agent.softRequestBudget is 0", () => {
+		const settings = Settings.isolated({ "agent.softRequestBudget": 0 });
+		expect(resolveAgentSoftRequestBudget(settings, "task")).toBe(0);
+		expect(resolveAgentSoftRequestBudget(settings, "scout")).toBe(0);
+	});
+
+	it("honors per-agent configuration via agent.agents.<name>.softRequestBudget", () => {
+		const settings = Settings.isolated({
+			"agent.softRequestBudget": 200,
+			"agent.agents": {
+				opus: { softRequestBudget: 350 },
+				scout: { softRequestBudget: 150 },
+				free: { softRequestBudget: 0 },
+			},
+		});
+		// Per-agent override wins over default
+		expect(resolveAgentSoftRequestBudget(settings, "opus")).toBe(350);
+		// Per-agent override wins over built-in scout override (100)
+		expect(resolveAgentSoftRequestBudget(settings, "scout")).toBe(150);
+		// Per-agent 0 disables budget for that specific agent
+		expect(resolveAgentSoftRequestBudget(settings, "free")).toBe(0);
+		// Unconfigured agent uses blanket setting
+		expect(resolveAgentSoftRequestBudget(settings, "task")).toBe(200);
 	});
 });

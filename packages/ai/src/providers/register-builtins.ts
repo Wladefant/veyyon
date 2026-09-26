@@ -22,6 +22,7 @@ import {
 	getOpenAIStreamIdleTimeoutMs,
 	getStreamFirstEventTimeoutMs,
 	getStreamIdleTimeoutMs,
+	getStreamIdleTimeoutOverrideMs,
 	iterateWithIdleTimeout,
 } from "../utils/idle-iterator";
 
@@ -107,6 +108,12 @@ export interface LazyStreamLimits {
 	 * with `VEYYON_OPENAI_STREAM_IDLE_TIMEOUT_MS`.
 	 */
 	openAIIdleEnvFloorsFirstEvent?: boolean;
+	/**
+	 * The provider decides for itself when silence means death, by asking the transport rather
+	 * than by timing it. The lazy wrapper keeps its first-event watchdog and drops its idle one,
+	 * unless the environment or the caller pins an idle budget explicitly.
+	 */
+	providerHandlesIdleTimeout?: boolean;
 }
 /**
  * Cloud Code Assist (google-gemini-cli / google-antigravity) routinely takes
@@ -130,8 +137,8 @@ const OPENAI_IDLE_FLOORED_LAZY_STREAM_LIMITS: LazyStreamLimits = {
 };
 
 /**
- * Backends that run their OWN agent loop server-side (`cursor-agent`,
- * `devin-agent`).
+ * Backends that run their OWN agent loop server-side. `devin-agent` is the one left here;
+ * `cursor-agent` moved to {@link CURSOR_LAZY_STREAM_LIMITS} below.
  *
  * These were the only lazy providers left on the generic defaults, 100s to the
  * first event and 120s of silence thereafter, and both numbers are wrong for
@@ -145,10 +152,10 @@ const OPENAI_IDLE_FLOORED_LAZY_STREAM_LIMITS: LazyStreamLimits = {
  *
  * Every OpenAI-family and Anthropic provider is already exempt through
  * `providerHandlesStreamTimeouts`, because each owns a watchdog tuned to its
- * transport. Neither of these two owns one: `devin.ts` is a bare Connect frame
- * reader with no timeout of any kind, so exempting them outright would mean a
- * genuinely dead socket hangs forever. They get a budget instead, sized for an
- * agent rather than for a token stream.
+ * transport. `devin.ts` owns none: it is a bare Connect frame reader with no
+ * timeout of any kind, so exempting it outright would mean a genuinely dead
+ * socket hangs forever. It gets a budget instead, sized for an agent rather
+ * than for a token stream.
  *
  * `VEYYON_STREAM_IDLE_TIMEOUT_MS` and `VEYYON_STREAM_FIRST_EVENT_TIMEOUT_MS`
  * still win, so anyone who wants the old aggression can ask for it.
@@ -156,6 +163,23 @@ const OPENAI_IDLE_FLOORED_LAZY_STREAM_LIMITS: LazyStreamLimits = {
 export const AGENTIC_BACKEND_LAZY_STREAM_LIMITS: LazyStreamLimits = {
 	defaultFirstEventTimeoutMs: 300_000,
 	defaultIdleTimeoutMs: 600_000,
+};
+
+/**
+ * Cursor (`cursor-agent`), which is the same backend class with one difference: its transport can
+ * be asked whether it is alive.
+ *
+ * The 600s budget above was still a guess, and it was wrong in the direction that costs the most.
+ * In one recorded session the healthy gaps between Cursor stream events reached 355s while the
+ * remote agent worked, and seven turns in under three hours died at exactly 600s carrying finished
+ * text and up to 35 completed tool calls, all of it discarded. `cursor.ts` speaks HTTP/2, so it
+ * probes the connection with a PING the peer must acknowledge and reports a dead one in seconds,
+ * with its own ceiling on silence a live transport cannot excuse. A second, blind timer here would
+ * only race that with a worse answer.
+ */
+export const CURSOR_LAZY_STREAM_LIMITS: LazyStreamLimits = {
+	defaultFirstEventTimeoutMs: 300_000,
+	providerHandlesIdleTimeout: true,
 };
 
 /**
@@ -177,11 +201,12 @@ export function resolveLazyStreamBudget(
 	if (limits?.providerHandlesStreamTimeouts === true) {
 		return { idleTimeoutMs: undefined, firstItemTimeoutMs: 0 };
 	}
-	const idleTimeoutMs =
-		options.streamIdleTimeoutMs ??
-		(limits?.openAIIdleEnvFloorsFirstEvent
-			? getOpenAIStreamIdleTimeoutMs(limits.defaultIdleTimeoutMs)
-			: getStreamIdleTimeoutMs(limits?.defaultIdleTimeoutMs));
+	const idleTimeoutMs = limits?.providerHandlesIdleTimeout
+		? (options.streamIdleTimeoutMs ?? getStreamIdleTimeoutOverrideMs())
+		: (options.streamIdleTimeoutMs ??
+			(limits?.openAIIdleEnvFloorsFirstEvent
+				? getOpenAIStreamIdleTimeoutMs(limits.defaultIdleTimeoutMs)
+				: getStreamIdleTimeoutMs(limits?.defaultIdleTimeoutMs)));
 	const firstItemTimeoutMs =
 		options.streamFirstEventTimeoutMs ??
 		(limits?.openAIIdleEnvFloorsFirstEvent
@@ -343,7 +368,7 @@ export const streamOpenAIResponses = createLazyStream(
 export const streamCursor = createLazyStream(
 	"cursor-agent",
 	() => import("./cursor").then(module => ({ stream: module.streamCursor })),
-	AGENTIC_BACKEND_LAZY_STREAM_LIMITS,
+	CURSOR_LAZY_STREAM_LIMITS,
 );
 export const streamDevin = createLazyStream(
 	"devin-agent",

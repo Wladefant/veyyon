@@ -36,19 +36,13 @@ const RUNTIME = `${SESSION_DIR}/agent-session.ts`;
 const FACADE = `${SESSION_DIR}/facade.ts`;
 
 /**
- * MEASURED at 18553 lines on fork main (up from 18524 / 18550 ceiling).
- * The net 29 lines added across subsequent fork commits belong strictly to fork contracts
- * in `AgentSession`:
- * 1. Extension context session identity (`b058b6a63`, `a1d1fd2c7`): 10 lines forwarding
- *    `taskDepth`, `parentTaskPrefix`, `agentId`, and `isSubagent` into runtime extension context.
- * 2. Tool refusal fence at dynamic choke point (`23cba1798`, `fd1e2f0ce`, `7900444b2`): 2 lines net
- *    wrapping dynamic tools (MCP, RPC, custom) with standing session policy refusals via ExtensionToolWrapper.
- * 3. Bounded todo reminder formatting (`24e3b7efe`, `95db7b1d5`): 17 lines formatting in-progress
- *    reminder items and hidden active count bounds.
- * None can move to collaborators without violating leaf boundaries or introducing unnatural abstractions.
- * Re-pinned at 18,575 (22 lines of slack over measured 18,553, well below the 5% tightness ceiling of 19,481).
+ * MEASURED at 18638 lines after merging upstream v1.5.5 (which shrank to 18482 by extracting
+ * model-target selection, provider-request shaping, TTSR, the todo board and thinking-level
+ * into collaborators under `runtime/`) with the fork's additions (extension context identity,
+ * tool-refusal fence, bounded todo reminder formatting — 29 net lines from fork commits).
+ * Re-pinned at 18,660 (22 lines of slack over measured 18,638).
  */
-const RUNTIME_CEILING = 18_575;
+const RUNTIME_CEILING = 18_660;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -71,7 +65,7 @@ const FACADE_CEILING = 500;
 
 /**
  * The concerns that left the runtime and still sit beside it, pinned by exact
- * equality. A seventh sibling, or one renamed, fails here before it fails anywhere
+ * equality. An eighth sibling, or one renamed, fails here before it fails anywhere
  * useful. The compaction policy was one of them and is no longer here: it moved to
  * `@veyyon/kernel/session/agent-session-compaction-policy` with the session spine,
  * so a copy reappearing under `src/session/` is a drift this cell reports.
@@ -80,6 +74,7 @@ const SIBLINGS = [
 	"agent-session-message-shapes.ts",
 	"agent-session-model-targets.ts",
 	"agent-session-permissions.ts",
+	"agent-session-provider-request.ts",
 	"agent-session-queue.ts",
 	"agent-session-retry-fallback.ts",
 	"agent-session-types.ts",

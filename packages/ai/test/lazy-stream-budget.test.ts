@@ -20,10 +20,18 @@
  * stream because the failure is a deadline: observing it end to end means
  * waiting out ten real minutes, and a test that cannot afford to do that would
  * quietly stop defending the numbers.
+ *
+ * `cursor-agent` has since left that widened budget: 600s was still a guess, and a recorded
+ * session showed healthy gaps of 355s and seven turns dying at exactly 600s. It now runs under
+ * {@link CURSOR_LAZY_STREAM_LIMITS}, where the wrapper keeps the first-event watchdog and drops
+ * the idle one because `cursor.ts` asks the HTTP/2 connection whether it is alive. What is
+ * asserted here is the budget that reaches it; what a live connection does with that budget is
+ * `cursor-silence-is-not-a-dead-connection.test.ts`.
  */
 import { afterEach, describe, expect, it } from "bun:test";
 import {
 	AGENTIC_BACKEND_LAZY_STREAM_LIMITS,
+	CURSOR_LAZY_STREAM_LIMITS,
 	type LazyStreamLimits,
 	resolveLazyStreamBudget,
 } from "@veyyon/ai/providers/register-builtins";
@@ -55,7 +63,7 @@ afterEach(() => {
 });
 
 describe("lazy provider stream budget", () => {
-	describe("agentic backends (cursor-agent, devin-agent)", () => {
+	describe("agentic backends on a widened budget (devin-agent)", () => {
 		/**
 		 * The fix itself. A remote agent that thinks and runs tools for several
 		 * minutes without emitting must not be read as a stalled provider, so the
@@ -158,6 +166,95 @@ describe("lazy provider stream budget", () => {
 
 			expect(budget.idleTimeoutMs).toBe(777);
 			expect(budget.firstItemTimeoutMs).toBe(888);
+		});
+	});
+
+	describe("cursor-agent, which governs its own idleness", () => {
+		/**
+		 * The whole change in one assertion: no idle deadline reaches the stream by
+		 * default, because no number here can tell a remote agent that is working
+		 * from a connection that has died. `cursor.ts` asks the transport instead.
+		 */
+		it("arms no idle watchdog by default", () => {
+			const budget = resolveLazyStreamBudget({}, CURSOR_LAZY_STREAM_LIMITS);
+
+			expect(budget.idleTimeoutMs).toBeUndefined();
+		});
+
+		/**
+		 * Dropping the idle watchdog is not dropping every watchdog. A stream that
+		 * never opens has no transport liveness to consult — there is nothing to
+		 * probe yet — so the first-event deadline stays armed and stays wide enough
+		 * for a cold agent start.
+		 */
+		it("keeps a widened first-event watchdog", () => {
+			const budget = resolveLazyStreamBudget({}, CURSOR_LAZY_STREAM_LIMITS);
+
+			expect(budget.firstItemTimeoutMs).toBe(300_000);
+			expect(budget.firstItemTimeoutMs!).toBeGreaterThan(GENERIC_FIRST_EVENT_MS);
+		});
+
+		/**
+		 * An operator who pins the generic knob still gets a number, and it reaches
+		 * the provider as the ceiling on unbroken silence rather than being ignored
+		 * by a provider that has decided it knows better.
+		 */
+		it("takes an operator env value as the silence ceiling", () => {
+			setEnv("VEYYON_STREAM_IDLE_TIMEOUT_MS", "5000");
+
+			const budget = resolveLazyStreamBudget({}, CURSOR_LAZY_STREAM_LIMITS);
+
+			expect(budget.idleTimeoutMs).toBe(5000);
+		});
+
+		/**
+		 * The OpenAI-family alias is the same knob for this purpose; an operator who
+		 * has only ever set that one must not find the ceiling silently absent.
+		 */
+		it("accepts the openai-family alias for that ceiling", () => {
+			setEnv("VEYYON_OPENAI_STREAM_IDLE_TIMEOUT_MS", "7000");
+
+			const budget = resolveLazyStreamBudget({}, CURSOR_LAZY_STREAM_LIMITS);
+
+			expect(budget.idleTimeoutMs).toBe(7000);
+		});
+
+		/**
+		 * `0` is the documented way to disable the watchdog, and it must still mean
+		 * that here rather than being read as a zero-length ceiling that ends every
+		 * turn instantly.
+		 */
+		it("honors an env value of 0 as watchdog disabled", () => {
+			setEnv("VEYYON_STREAM_IDLE_TIMEOUT_MS", "0");
+
+			const budget = resolveLazyStreamBudget({}, CURSOR_LAZY_STREAM_LIMITS);
+
+			expect(budget.idleTimeoutMs).toBeUndefined();
+		});
+
+		/**
+		 * A per-call option is the most specific signal there is and outranks the
+		 * env var, exactly as it does for every other provider class.
+		 */
+		it("yields to an explicit caller option over the env var", () => {
+			setEnv("VEYYON_STREAM_IDLE_TIMEOUT_MS", "5000");
+
+			const budget = resolveLazyStreamBudget({ streamIdleTimeoutMs: 777 }, CURSOR_LAZY_STREAM_LIMITS);
+
+			expect(budget.idleTimeoutMs).toBe(777);
+		});
+
+		/**
+		 * The negative control for the fix: the budget cursor used to run under is
+		 * still what an unmodified agentic backend gets, so this documents what was
+		 * removed rather than asserting the removal in isolation.
+		 */
+		it("no longer runs the widened blind idle budget", () => {
+			const cursor = resolveLazyStreamBudget({}, CURSOR_LAZY_STREAM_LIMITS);
+			const widened = resolveLazyStreamBudget({}, AGENTIC_BACKEND_LAZY_STREAM_LIMITS);
+
+			expect(widened.idleTimeoutMs).toBe(600_000);
+			expect(cursor.idleTimeoutMs).not.toBe(widened.idleTimeoutMs);
 		});
 	});
 
