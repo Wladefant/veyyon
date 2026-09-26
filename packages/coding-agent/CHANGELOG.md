@@ -11,17 +11,20 @@
 
 ### Fixed
 
+- Extension approval-required blocks stop the current call without persisting a user refusal; explicit and legacy refusals retain their existing fence ([#88](https://github.com/Wladefant/veyyon/issues/88)).
+- Telegram control can deliver to and observe the authenticated live terminal owner without reopening its transcript in a GUI host ([#88](https://github.com/Wladefant/veyyon/issues/88)).
+
 - Agent-lane validation and the two slash-command error paths call `isRecord` and `errorMessage` from `@veyyon/utils` instead of hand-writing them, so an `Error` with an empty message now reports its constructor name rather than an empty string ([#64](https://github.com/Wladefant/veyyon/issues/64)).
 - Topic replenishment reads the live settings instance again. `resolveTopicWorkerModel` probed `Settings.isInitialized`, a member neither this fork nor upstream ever declared, so the expression was always `undefined`: an initialized session was treated as uninitialized, the configured agent lane and `modelRoles` default were never consulted, and every unconfigured caller fell through to `VEYYON_DEFAULT_MODEL`. It calls the exported `isSettingsInitialized()` instead ([#25](https://github.com/Wladefant/veyyon/issues/25)).
-- Scope extension refusals to declared subjects, fail closed for opaque execution under a path refusal, and enforce session policy through registered tool dispatch boundaries ([#37](https://github.com/Wladefant/veyyon/issues/37)).
+- Enforce session policy through registered tool dispatch boundaries ([#37](https://github.com/Wladefant/veyyon/issues/37)).
+- An extension that blocks a tool call (such as an approval guard waiting for the operator) now blocks that call only; it no longer writes `tools.approval.<tool>: deny` into the profile config, which had denied `read`, `bash` and `eval` in every later session.
 - Scope Telegram worker registry rendering and targeted messaging to the authenticated session, rejecting cross-session target IDs and caller-supplied scope overrides ([#38](https://github.com/Wladefant/veyyon/issues/38)).
 - HTTP/SSE MCP OAuth honors configured scopes, unions challenge-required and explicit provider scopes, and uses supported-scope metadata only as a fallback.
 - `/reload-config` reports applied, unchanged and restart-only values per key, retains startup-bound model roles and default effort, and pins task/eval/vibe model and effort resolution to one dispatch snapshot ([#39](https://github.com/Wladefant/veyyon/issues/39)).
 - Repaired upstream-merge regressions in `/reload-config`, agent-lane validation, task spawn recording, and todo rendering; retained concurrent todo targets through the host-neutral view and removed the duplicate legacy spawn callback ([#26](https://github.com/Wladefant/veyyon/issues/26)).
 - Updated the config-reload benchmark, handbook, and capture scene to use the current agent routing namespace ([#26](https://github.com/Wladefant/veyyon/issues/26)).
 - Neutralized workstation-specific defaults, private project identifiers, and host orchestration policies in topic replenishment and native ledger bridge, restoring neutral authorization semantics where no target is forbidden by default and forbidden targets are strictly configuration-driven, and resolving topic worker models via config/catalog APIs without baked-in model defaults ([#953](https://github.com/santhreal/veyyon/issues/953)).
-- Every tool declares the scope of its effects, so a tool whose targets the fence cannot read is refused while a standing refusal is in force instead of being waved through ([#37](https://github.com/Wladefant/veyyon/issues/37)).
-- A tool reached with no context of its own — `session.getToolByName(...)`, the cursor bridge, an eval snippet — is judged against the owning session's standing refusals instead of being refused for want of a policy ([#37](https://github.com/Wladefant/veyyon/issues/37)).
+- A tool reached with no context of its own — `session.getToolByName(...)`, the cursor bridge, an eval snippet — is judged against the owning session's tool policy instead of being refused for want of a policy ([#37](https://github.com/Wladefant/veyyon/issues/37)).
 - `/todo` renders its unknown-verb error from the same table the dispatcher looks a verb up in, so the message can no longer omit a verb the command accepts nor name one it refuses ([#64](https://github.com/Wladefant/veyyon/issues/64)).
 
 ### Changed
@@ -31,6 +34,7 @@
 ### Removed
 
 - Removed the `./tool-discovery/*` subpath from the `@veyyon/coding-agent` exports map; its source directory was folded into `discovery/` and the key resolved to no module, so no user-facing effect ([#64](https://github.com/Wladefant/veyyon/issues/64)).
+- Removed the `tools.refusals` setting, path- and command-scoped extension refusals, and the per-tool `effectScope` declaration that only they read; a stale `tools.refusals` key in config is ignored.
 
 ## [1.5.0] - 2026-09-18
 

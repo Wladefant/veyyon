@@ -6,7 +6,6 @@ import { toolsPrompts } from "../../prompts/tools/rows";
 import type { ToolSession } from "../../sdk";
 import { enforceInlineByteCap } from "../../session/streaming-output";
 import { truncateForPrompt } from "../core/approval";
-import type { ToolEffectScope } from "../core/effect-scope";
 import { inlineOutputPricing, saveOutputArtifact } from "../core/output-artifact";
 import type { OutputMeta } from "../core/output-meta";
 import { resolveToCwd } from "../core/path-utils";
@@ -102,7 +101,6 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 	readonly name = "browser";
 	// The browser tool evaluates model-authored JavaScript with full Node access
 	// in the driving process, so its effects are not bounded by its arguments.
-	readonly effectScope: ToolEffectScope = "unbounded";
 	readonly approval = "exec" as const;
 	readonly formatApprovalDetails = (args: unknown): string[] => {
 		const params = args as Partial<BrowserParams>;

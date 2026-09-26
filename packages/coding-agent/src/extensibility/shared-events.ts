@@ -289,20 +289,14 @@ export interface TodoReminderEvent {
 
 /**
  * Return type for `tool_call` handlers.
- * Allows handlers to block tool execution.
+ * Allows handlers to block tool execution. A block applies to that one call.
  */
-export interface ToolRefusalSubject {
-	kind: "path" | "command" | "tool";
-	value: string;
-}
-
 export interface ToolCallEventResult {
 	/** If true, block the tool from executing */
 	block?: boolean;
 	/** Reason for blocking (returned to LLM as error) */
 	reason?: string;
-	/** The rejected operation's subject; absent subjects retain a tool-wide denial. */
-	subject?: ToolRefusalSubject;
+
 }
 
 /**

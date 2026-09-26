@@ -12,7 +12,6 @@ import { budgetedFileCommit, sessionBudgetLimits } from "../session/cpu-limit";
 import type { ToolSession } from "../tools";
 import { abortedPartway } from "../tools/core/aborted-partway";
 import { truncateForPrompt } from "../tools/core/approval";
-import type { ToolEffectScope } from "../tools/core/effect-scope";
 import { isInternalUrlPath } from "../tools/core/path-utils";
 import { getLspBatchRequest, type LspBatchRequest } from "../tools/core/render-utils";
 import { type EditMode, normalizeEditMode, resolveEditMode } from "../utils/edit-mode";
@@ -515,7 +514,6 @@ export class EditTool implements AgentTool<TInput, EditToolDetails> {
 	// body can touch several files, so all are reported. See cwd-boundary.ts.
 	readonly filesystemTargets = (args: unknown): string[] => editFilesystemTargets(args);
 	// Every file this call rewrites is named by a hashline section header.
-	readonly effectScope: ToolEffectScope = "declared-targets";
 	readonly name = "edit";
 	readonly label = "Edit";
 	readonly loadMode = "essential";

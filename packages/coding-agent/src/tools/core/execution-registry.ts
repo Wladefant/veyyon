@@ -22,12 +22,12 @@ class ToolExecutionEntry {
 		return executionContext.run(context, operation);
 	}
 
-	assert(tool: { name: string }, params: unknown, context?: ToolPolicyFrame): ToolPolicyFrame {
+	assert(tool: { name: string }, context?: ToolPolicyFrame): ToolPolicyFrame {
 		const effectiveContext = context ?? executionContext.getStore();
 		if (!effectiveContext?.settings) {
 			throw new RefusalFenceError(tool.name, "Tool execution requires missing session policy context");
 		}
-		checkRefusalFence(tool.name, params, effectiveContext, undefined, tool);
+		checkRefusalFence(tool.name, effectiveContext);
 		return effectiveContext;
 	}
 
@@ -37,7 +37,7 @@ class ToolExecutionEntry {
 	 * A tool taken off a session registry is invoked directly — the cursor
 	 * bridge, an eval snippet, a browser page, `session.getToolByName(...)` — and
 	 * those call sites thread a context through only when they happen to have
-	 * one. The session's standing refusals apply to that call either way, so a
+	 * one. The session's tool policy applies to that call either way, so a
 	 * missing context is judged against the owner's policy instead of refusing
 	 * the work for want of one.
 	 *
@@ -61,12 +61,11 @@ class ToolExecutionEntry {
 	 */
 	fence(
 		tool: { name: string },
-		params: unknown,
 		context?: ToolPolicyFrame,
 		ownerPolicy?: () => ToolPolicyFrame | undefined,
 	): AgentToolContext | undefined {
 		const { policy, established } = this.#resolve(context, ownerPolicy);
-		this.assert(tool, params, policy);
+		this.assert(tool, policy);
 		return established && asToolContext(established);
 	}
 
@@ -89,10 +88,10 @@ class ToolExecutionEntry {
 	): Promise<AgentToolResult<TDetails, any>> {
 		const { policy, established } = this.#resolve(context, ownerPolicy);
 		// The fenced policy becomes ambient, so a tool that calls another tool
-		// inherits the refusals this call was judged against even when the caller
+		// inherits the policy this call was judged against even when the caller
 		// established nothing. The tool itself still sees only what the caller
 		// brought.
-		const fenced = this.assert(tool, params, policy);
+		const fenced = this.assert(tool, policy);
 		return executionContext.run(fenced, () =>
 			tool.execute(toolCallId, params, signal, onUpdate, established && asToolContext(established)),
 		);

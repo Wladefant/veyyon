@@ -128,6 +128,33 @@ describe("generated model policies", () => {
 		});
 	});
 
+	// WHY: newly released models must retain an offline effort ladder even
+	// when discovery is unavailable. A new curated seed requires a decision;
+	// this does not prove account entitlement or third-party gateway support.
+	it("preserves every curated Anthropic offline ladder", () => {
+		expect(ANTHROPIC_CURATED_FALLBACK_MODELS.map(model => model.id).sort()).toEqual([
+			"claude-fable-5",
+			"claude-mythos-5",
+			"claude-opus-5-5",
+			"claude-sonnet-5",
+		]);
+		for (const seed of ANTHROPIC_CURATED_FALLBACK_MODELS) {
+			const models: ModelSpec<Api>[] = [{ ...seed }];
+			applyGeneratedModelPolicies(models);
+			expect(models[0]?.thinking).toMatchObject({
+				mode: "anthropic-adaptive",
+				efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
+				supportsDisplay: true,
+			});
+			if (seed.id === "claude-opus-5-5") {
+				expect(models[0]?.thinking?.prefixBinding).toBe(true);
+				expect(models[0]?.cost).toEqual({ input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 });
+				expect(models[0]?.contextWindow).toBe(1_000_000);
+				expect(models[0]?.maxTokens).toBe(128_000);
+			}
+		}
+	});
+
 	it("pins zai glm-5.2 base id to 1M context", () => {
 		const models = [
 			createSpec({

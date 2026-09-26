@@ -328,6 +328,19 @@ const ANTHROPIC_CURATED_REASONING_OPTIONS: ModelReasoningOptions = {
 };
 export const ANTHROPIC_CURATED_FALLBACK_MODELS: readonly ModelSpec<"anthropic-messages">[] = [
 	{
+		id: "claude-opus-5-5",
+		name: "Claude Opus 5.5",
+		api: "anthropic-messages",
+		provider: "anthropic",
+		baseUrl: "https://api.anthropic.com",
+		reasoning: true,
+		reasoningOptions: ANTHROPIC_CURATED_REASONING_OPTIONS,
+		input: ["text", "image"],
+		cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
+		contextWindow: 1_000_000,
+		maxTokens: 128_000,
+	},
+	{
 		id: "claude-sonnet-5",
 		name: "Claude Sonnet 5",
 		api: "anthropic-messages",

@@ -38,7 +38,6 @@ import {
 } from "../../utils/zip";
 import { routeWriteThroughBridge } from "../core/acp-bridge";
 import { truncateForPrompt } from "../core/approval";
-import type { ToolEffectScope } from "../core/effect-scope";
 import { invalidateFsScanAfterWrite } from "../core/fs-cache-invalidation";
 import { type OutputMeta, outputMeta } from "../core/output-meta";
 import {
@@ -450,7 +449,6 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 	// cwd-boundary.ts.
 	readonly filesystemTargets = (args: unknown): string[] => writeFilesystemTargets(args);
 	// The declared path is the only file this call writes.
-	readonly effectScope: ToolEffectScope = "declared-targets";
 	readonly label = "Write";
 	readonly description: string;
 	readonly parameters = writeSchema;
