@@ -652,7 +652,15 @@ fn fill(reader: &mut dyn Read, buf: &mut [u8]) -> std::io::Result<usize> {
 fn eager_bytes(op: &Operand, name: &Path) -> Result<Option<Vec<u8>>, String> {
 	match op {
 		Operand::Stdin => read_operand(op, name).map(Some),
-		Operand::File(_) | Operand::Absent => Ok(None),
+		Operand::File(resolved) => {
+			let is_regular = fs::metadata(resolved).map(|m| m.is_file()).unwrap_or(true);
+			if is_regular {
+				Ok(None)
+			} else {
+				read_operand(op, name).map(Some)
+			}
+		},
+		Operand::Absent => Ok(None),
 		Operand::Dir(_) => unreachable!("directories are handled by diff_dirs"),
 	}
 }
@@ -660,7 +668,13 @@ fn eager_bytes(op: &Operand, name: &Path) -> Result<Option<Vec<u8>>, String> {
 /// Pair an operand with the bytes [`eager_bytes`] captured for it, if any.
 fn source_for<'a>(op: &'a Operand, eager: Option<&'a [u8]>) -> Source<'a> {
 	match op {
-		Operand::File(resolved) => Source::File(resolved),
+		Operand::File(resolved) => {
+			if let Some(bytes) = eager {
+				Source::Bytes(bytes)
+			} else {
+				Source::File(resolved)
+			}
+		},
 		// `Absent` under `-N` compares as empty, and stdin was captured above.
 		Operand::Stdin | Operand::Absent => Source::Bytes(eager.unwrap_or(&[])),
 		Operand::Dir(_) => unreachable!("directories are handled by diff_dirs"),
