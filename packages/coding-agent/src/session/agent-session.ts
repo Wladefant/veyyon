@@ -712,6 +712,25 @@ function createHandoffFileName(date = new Date()): string {
 
 const REPLAN_TITLE_CONTEXT_TURN_LIMIT = 6;
 
+/**
+ * Emit a warn-level log for a turn that ended in a provider error so recurring
+ * stream failures are diagnosable from the main log alone. The `agent_end`
+ * routing trace is debug-only and omits the error fields; without this a
+ * session dying on provider errors leaves only `stopReason:"error"` debug lines
+ * and the real cause lives solely in the session transcript (issue #6177).
+ * No-op for any non-error stop reason.
+ */
+export function logProviderTurnError(msg: AssistantMessage): void {
+	if (msg.stopReason !== "error") return;
+	logger.warn("agent turn ended with provider error", {
+		provider: msg.provider,
+		model: msg.model,
+		errorMessage: msg.errorMessage,
+		errorStatus: msg.errorStatus,
+		errorId: msg.errorId,
+	});
+}
+
 export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
@@ -4893,6 +4912,12 @@ export class AgentSession {
 				});
 			};
 			maintenanceRoute("entered");
+
+			// Surface provider stream failures in the main log. The routing trace
+			// above is debug-only and drops the error fields, so a session dying
+			// repeatedly on provider errors otherwise leaves no actionable trace
+			// outside the session transcript (issue #6177).
+			logProviderTurnError(msg);
 
 			// Invalidate GitHub Copilot credentials on auth failure so stale tokens
 			// aren't reused on the next request

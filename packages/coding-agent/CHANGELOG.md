@@ -16,6 +16,7 @@
 
 ### Fixed
 
+- Fixed provider stream failures being invisible in the main log: the `agent_end` handler recorded `stopReason`/`provider`/`model` at debug only and dropped `errorMessage`/`errorStatus`/`errorId`, so a session dying repeatedly on provider errors left no actionable trace outside the session transcript; a turn ending in `stopReason:"error"` now emits one warn-level `agent turn ended with provider error` log carrying `provider`, `model`, `errorMessage`, `errorStatus`, and `errorId` ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - A user message delivered by an extension (`sendUserMessage`, for example a Telegram relay) no longer clears the composer draft, so in-progress text and pasted images survive the delivery ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Go 1.26 `new(expr)` calls (e.g. `new(42)` or `new(f(x))`) triggering syntax errors during block operations and parse errors during structure search ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Windows paths not collapsing to `~` when the home directory was spelled in another case (`c:\users\operator` against `C:\Users\Operator`), which left the operator's account name in every displayed path ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
