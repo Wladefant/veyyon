@@ -20,6 +20,8 @@
 ### Fixed
 - Legacy Pi extension tool calls carry the session policy frame the tool was built from, so `createCodingTools`, `createReadTool`, `createBashTool`, `createGrepTool` and `createFindTool` reach the tool instead of refusing with `Tool execution requires missing session policy context` ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 
+- Fixed Windows stdio MCP servers launched through a `.cmd` shim dying with `Transport closed`: `cmd.exe /c` now receives the command and its arguments as separate spawn arguments instead of one quoted `/s /c` string, so a wrapper quote or an `&`, `|`, `%` or `^` inside an argument is no longer re-read as cmd syntax ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
+
 - Spilled tool output is staged and verified before it is published at its artifact path, so a write that stops short leaves no truncated file behind the `Full output: artifact://` link ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 - Added `/q` as an alias for `/quit` and prioritized exact aliases over earlier same-prefix commands in slash-command autocomplete ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
