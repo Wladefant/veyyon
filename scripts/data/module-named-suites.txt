@@ -12,7 +12,6 @@ hosts/terminal/engine/test/tab-bar.test.ts
 hosts/terminal/engine/test/terminal-capabilities.test.ts
 hosts/terminal/engine/test/text.test.ts
 hosts/terminal/engine/test/truncated-text.test.ts
-hosts/terminal/engine/test/windows-altgr.test.ts
 natives/bridge/bindings/test/sha256-sidecar.test.ts
 packages/agent/test/agent-loop.test.ts
 packages/agent/test/agent.test.ts
@@ -107,7 +106,6 @@ packages/coding-agent/test/agents-guidance.test.ts
 packages/coding-agent/test/append-only-context-mode.test.ts
 packages/coding-agent/test/argot-cache.test.ts
 packages/coding-agent/test/argot-wire.test.ts
-packages/coding-agent/test/async-delivery.test.ts
 packages/coding-agent/test/auto-update-state.test.ts
 packages/coding-agent/test/autoresearch/git.test.ts
 packages/coding-agent/test/autoresearch/helpers.test.ts
