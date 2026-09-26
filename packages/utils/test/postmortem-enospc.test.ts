@@ -1,6 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import * as postmortem from "../src/postmortem";
 
@@ -66,8 +65,6 @@ describe("postmortem.isEnospc", () => {
 // Subprocess integration: an ENOSPC rejection must not exit the process.
 // These tests spawn real child processes to verify the global handler wiring.
 const modulePath = fileURLToPath(new URL("../src/postmortem.ts", import.meta.url));
-const terminalPath = fileURLToPath(new URL("../../../hosts/terminal/engine/src/terminal.ts", import.meta.url));
-if (!existsSync(terminalPath)) throw new Error(`terminal host moved; update this path: ${terminalPath}`);
 
 /**
  * Spawn a child that runs `code`, collect stdout, and return exit code + output.
@@ -75,24 +72,17 @@ if (!existsSync(terminalPath)) throw new Error(`terminal host moved; update this
  * fires asynchronously on the microtask/next-tick boundary and fake timers
  * cannot control a separate process's event loop.
  */
-async function runChild(code: string): Promise<{ code: number | null; output: string }> {
-	const child = spawn("bun", ["--eval", code], {
-		stdio: ["ignore", "pipe", "pipe"],
+function runChild(code: string): { code: number | null; output: string } {
+	const result = spawnSync(process.execPath, ["-e", code], {
+		encoding: "utf8",
+		timeout: 5000,
 	});
-
-	const chunks: Buffer[] = [];
-	child.stdout!.on("data", (c: Buffer) => chunks.push(c));
-
-	const exitCode = await new Promise<number | null>(resolve => {
-		child.on("close", resolve);
-	});
-
-	return { code: exitCode, output: Buffer.concat(chunks).toString() };
+	return { code: result.status, output: result.stdout ?? "" };
 }
 
 describe("global ENOSPC routing", () => {
-	it("unhandledRejection with ENOSPC does not exit the process", async () => {
-		const result = await runChild(
+	it("unhandledRejection with ENOSPC does not exit the process", () => {
+		const result = runChild(
 			[
 				`import ${JSON.stringify(modulePath)};`,
 				`const err = new Error("ENOSPC: no space left on device, write");`,
@@ -109,8 +99,8 @@ describe("global ENOSPC routing", () => {
 		expect(result.output).toContain("survived");
 	});
 
-	it("uncaughtException with ENOSPC does not exit the process", async () => {
-		const result = await runChild(
+	it("uncaughtException with ENOSPC does not exit the process", () => {
+		const result = runChild(
 			[
 				`import ${JSON.stringify(modulePath)};`,
 				`const err = new Error("ENOSPC: no space left on device, write");`,
@@ -125,8 +115,8 @@ describe("global ENOSPC routing", () => {
 		expect(result.output).toContain("survived");
 	});
 
-	it("non-ENOSPC rejection still exits the process", async () => {
-		const result = await runChild(
+	it("non-ENOSPC rejection still exits the process", () => {
+		const result = runChild(
 			[
 				`import ${JSON.stringify(modulePath)};`,
 				`Promise.reject(new Error("real bug"));`,
