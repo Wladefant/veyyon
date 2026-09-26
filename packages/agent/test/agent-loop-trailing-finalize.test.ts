@@ -9,10 +9,10 @@
  */
 import { describe, expect, it } from "bun:test";
 import { agentLoop } from "@veyyon/agent-core/agent-loop";
-import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage, AgentTool } from "@veyyon/agent-core/types";
+import type { AgentContext, AgentEvent, AgentLoopConfig, AgentTool } from "@veyyon/agent-core/types";
 import type { AssistantMessage, AssistantMessageEvent, Context, Message } from "@veyyon/ai";
 import { createMockModel } from "@veyyon/ai/providers/mock";
-import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
+import type { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { type } from "arktype";
 import { createAssistantMessage, createUserMessage } from "./helpers";
 
