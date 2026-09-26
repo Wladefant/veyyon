@@ -5,7 +5,9 @@ import { InputController } from "@veyyon/coding-agent/modes/terminal/controllers
 import type { InteractiveModeContext, SubmittedUserInput } from "@veyyon/coding-agent/modes/terminal/types";
 import { USER_INTERRUPT_LABEL } from "@veyyon/coding-agent/session/messages";
 import { vocalizer } from "@veyyon/coding-agent/speech/tts/vocalizer";
+import { type Component, TUI } from "@veyyon/tui";
 import * as logger from "@veyyon/utils/logger";
+import { VirtualTerminal } from "../../../hosts/terminal/engine/test/virtual-terminal";
 
 type Spy = Mock<(...args: unknown[]) => unknown>;
 type StartPendingSubmissionSpy = Mock<InteractiveModeContext["startPendingSubmission"]>;
@@ -54,7 +56,11 @@ function createSubmission(input: {
 	};
 }
 
-function createContext(): {
+function createContext(uiOverrides?: {
+	/** Delegate the composer repaint to a real engine instead of the stub spies. */
+	resetDisplay?: () => void;
+	requestRender?: (force?: boolean) => void;
+}): {
 	ctx: InteractiveModeContext;
 	editor: FakeEditor;
 	spies: {
@@ -143,8 +149,8 @@ function createContext(): {
 	ctx = {
 		editor: editor as unknown as InteractiveModeContext["editor"],
 		ui: {
-			requestRender,
-			resetDisplay,
+			requestRender: uiOverrides?.requestRender ?? requestRender,
+			resetDisplay: uiOverrides?.resetDisplay ?? resetDisplay,
 			scrollToLiveTail: vi.fn(),
 			addInputListener: vi.fn(listener => {
 				inputListeners.push(listener as (data: string) => { consume?: boolean; data?: string } | undefined);
@@ -302,6 +308,33 @@ afterEach(() => {
 	vi.restoreAllMocks();
 	resetSettingsForTest();
 });
+
+/**
+ * A transcript taller than any viewport, so a full replay is unmistakable in
+ * the bytes a terminal receives and a viewport repaint cannot reach its first
+ * row.
+ */
+class LongTranscript implements Component {
+	#rows: string[];
+
+	constructor(rowCount: number) {
+		this.#rows = [];
+		for (let i = 0; i < rowCount; i++) {
+			this.#rows.push(`row ${String(i).padStart(5, "0")}: ${"x".repeat(90)}`);
+		}
+	}
+
+	invalidate(): void {}
+
+	render(width: number): string[] {
+		return this.#rows.map(row => row.slice(0, width));
+	}
+}
+
+const FIRST_TRANSCRIPT_ROW = "row 00000";
+/** Roughly 900 KiB of frame: past the ConPTY truncation threshold, so a replay
+ *  and a 24-row viewport repaint are visibly different payloads. */
+const LONG_TRANSCRIPT_ROWS = 8000;
 
 describe("InputController escape behavior", () => {
 	it("prefers canceling a pending optimistic submission before aborting the session", async () => {
@@ -627,7 +660,7 @@ describe("InputController escape behavior", () => {
 		expect(ctx.unfocusSession).toHaveBeenCalledTimes(1);
 		expect(ctx.focusParentSession).not.toHaveBeenCalled();
 	});
-	it("opens the tree selector and clears the display on default double-Esc", () => {
+	it("opens the tree selector and requests a viewport-only repaint on default double-Esc", () => {
 		const { ctx, editor, spies } = createContext();
 		const controller = new InputController(ctx);
 
@@ -637,10 +670,11 @@ describe("InputController escape behavior", () => {
 
 		expect(ctx.showTreeSelector).toHaveBeenCalledTimes(1);
 		expect(ctx.showUserMessageSelector).not.toHaveBeenCalled();
-		expect(spies.resetDisplay).toHaveBeenCalledTimes(1);
+		expect(spies.resetDisplay).not.toHaveBeenCalled();
+		expect(spies.requestRender).toHaveBeenCalledWith(true);
 	});
 
-	it("opens the message selector and clears the display when double-Esc is configured for branch", () => {
+	it("opens the message selector and requests a viewport-only repaint when double-Esc is configured for branch", () => {
 		Settings.instance.override("doubleEscapeAction", "branch");
 		const { ctx, editor, spies } = createContext();
 		const controller = new InputController(ctx);
@@ -651,7 +685,52 @@ describe("InputController escape behavior", () => {
 
 		expect(ctx.showUserMessageSelector).toHaveBeenCalledTimes(1);
 		expect(ctx.showTreeSelector).not.toHaveBeenCalled();
-		expect(spies.resetDisplay).toHaveBeenCalledTimes(1);
+		expect(spies.resetDisplay).not.toHaveBeenCalled();
+		expect(spies.requestRender).toHaveBeenCalledWith(true);
+	});
+	it("repaints only the viewport when the double-Esc selector opens on a long session", async () => {
+		// Regression (upstream bff52ac340bf): the gesture called ui.resetDisplay(),
+		// which erases native scrollback and replays the whole committed transcript
+		// from home. On a long session that replay blocks on PTY backpressure for
+		// tens of seconds — the selector opens invisibly and double-Esc reads as
+		// dead. The engine here is real and only the controller's context is a
+		// stub, so the bytes below are the ones a terminal would receive.
+		const term = new VirtualTerminal(80, 24, 20_000);
+		const writes: string[] = [];
+		const realWrite = term.write.bind(term);
+		vi.spyOn(term, "write").mockImplementation((data: string) => {
+			writes.push(data);
+			realWrite(data);
+		});
+		const tui = new TUI(term);
+		tui.addChild(new LongTranscript(LONG_TRANSCRIPT_ROWS));
+		try {
+			tui.start();
+			await term.waitForRender();
+
+			const { ctx, editor } = createContext({
+				resetDisplay: () => tui.resetDisplay(),
+				requestRender: force => tui.requestRender(force),
+			});
+			const controller = new InputController(ctx);
+			controller.setupKeyHandlers();
+
+			writes.length = 0;
+			editor.onEscape?.();
+			editor.onEscape?.();
+			await term.waitForRender();
+
+			const gesture = writes.join("");
+			// The first transcript row is only written when the whole session is
+			// replayed from home; a viewport repaint cannot reach it.
+			expect(gesture).not.toContain(FIRST_TRANSCRIPT_ROW);
+			// Nor does the gesture erase the screen or native scrollback: ED2 is the
+			// full-paint clear, ED3 the native-history purge a display reset requests.
+			expect(gesture).not.toContain("\x1b[2J");
+			expect(gesture).not.toContain("\x1b[3J");
+		} finally {
+			tui.stop();
+		}
 	});
 	it("preserves typed editor text on Esc without opening selectors or aborting", () => {
 		const { ctx, editor, spies } = createContext();
