@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { ANTHROPIC_THINKING, streamSimple } from "../src/stream";
-import type { Context, FetchImpl, Model, ModelSpec } from "../src/types";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
+import { ANTHROPIC_THINKING, streamSimple } from "../src/stream";
+import type { Context, FetchImpl, Model, ModelSpec } from "../src/types";
 
 const context: Context = {
 	systemPrompt: ["Summarize the conversation."],
@@ -12,7 +12,10 @@ const context: Context = {
 function anthropicModel(id: string, maxTokens: number): Model<"anthropic-messages"> {
 	const thinking =
 		id === "claude-opus-5-5"
-			? { mode: "anthropic-adaptive" as const, efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max] }
+			? {
+					mode: "anthropic-adaptive" as const,
+					efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
+				}
 			: { mode: "budget" as const, efforts: [Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] };
 	return buildModel({
 		id,

@@ -494,7 +494,12 @@ export class InputController {
 						} else {
 							this.ctx.showUserMessageSelector();
 						}
-						this.ctx.ui.resetDisplay();
+						// Forced viewport repaint only: `resetDisplay()` replays the whole
+						// committed transcript (and clears native scrollback on direct
+						// terminals), which blocks on PTY backpressure for tens of seconds
+						// on long sessions — the selector opens invisibly and double-Esc
+						// reads as dead. O(viewport) is enough to settle the editor-slot swap.
+						this.ctx.ui.requestRender(true);
 						this.ctx.lastEscapeTime = 0;
 					} else {
 						this.ctx.lastEscapeTime = now;

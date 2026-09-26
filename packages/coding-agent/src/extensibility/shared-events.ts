@@ -296,7 +296,6 @@ export interface ToolCallEventResult {
 	block?: boolean;
 	/** Reason for blocking (returned to LLM as error) */
 	reason?: string;
-
 }
 
 /**
