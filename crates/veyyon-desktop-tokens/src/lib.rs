@@ -1,3 +1,5 @@
+#![allow(clippy::result_large_err, reason = "TokenError contains contextual error details")]
+
 pub mod color;
 pub mod dumper;
 pub mod dumper_surface;

@@ -3264,7 +3264,6 @@ type CacheControlBlock = {
 	cache_control?: AnthropicCacheControl | null;
 };
 
-
 function applyCacheControlToLastTextBlock(
 	blocks: Array<ContentBlockParam & CacheControlBlock>,
 	cacheControl: AnthropicCacheControl,
