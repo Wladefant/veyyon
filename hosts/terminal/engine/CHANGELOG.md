@@ -12,6 +12,7 @@
 - Fixed a deadlock on Windows when a terminal pane closes by exiting immediately without waiting for stdout to drain when the terminal disconnects ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - A ConPTY host keeps the alternate-screen borrow through a resize instead of repainting a grid it owns itself ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - The renderer decides whether a resize repaints in place by asking the terminal whether its host owns the grid, so a host and the engine agree on one seam instead of re-reading the environment.
+- A user-driven redraw such as a Ctrl+O transcript expand or a display reset replays the whole transcript on a ConPTY host again instead of losing its leading rows to the bulk-paint bound, and the one-shot reset intent is consumed by that render so a later `/resume` or handoff paint stays bounded ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ## [1.5.4] - 2026-09-24
 
