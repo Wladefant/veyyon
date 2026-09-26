@@ -152,9 +152,7 @@ describe("a running agent survives a transcript rebuild", () => {
 		manager.appendMessage(assistantToolCall(TASK_CALL_ID, "task", 2));
 		manager.appendMessage(runningResult(TASK_CALL_ID, "task", 3));
 
-		mode.renderSessionContext(session.buildTranscriptSessionContext({ collapseCompactedHistory: false }), {
-			populateHistory: true,
-		});
+		mode.renderSessionContext(session.buildTranscriptSessionContext({ collapseCompactedHistory: false }));
 		await terminal.waitForRender();
 
 		expect(mode.pendingTools.has(TASK_CALL_ID)).toBe(true);
@@ -169,9 +167,7 @@ describe("a running agent survives a transcript rebuild", () => {
 		manager.appendMessage(assistantToolCall(BASH_CALL_ID, "bash", 2));
 		manager.appendMessage(runningResult(BASH_CALL_ID, "bash", 3));
 
-		mode.renderSessionContext(session.buildTranscriptSessionContext({ collapseCompactedHistory: false }), {
-			populateHistory: true,
-		});
+		mode.renderSessionContext(session.buildTranscriptSessionContext({ collapseCompactedHistory: false }));
 		await terminal.waitForRender();
 
 		expect(mode.pendingTools.has(BASH_CALL_ID)).toBe(false);
