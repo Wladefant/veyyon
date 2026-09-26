@@ -370,6 +370,7 @@ import type { HookCommandContext } from "../extensibility/hooks/types";
 import type { RecoveredRetryError } from "../extensibility/shared-events";
 import type { Skill } from "../extensibility/skills";
 import { expandSlashCommand, type FileSlashCommand } from "../extensibility/slash-commands";
+import { recordGoal } from "../goals/goal-record";
 import { GoalRuntime } from "../goals/runtime";
 import type { GoalAbortReason, GoalModeState } from "../goals/state";
 // The owning module, not the `../internal-urls` barrel: the barrel re-exports every protocol
@@ -2042,13 +2043,7 @@ export class AgentSession {
 					return this.#emitSessionEvent({ type: "goal_updated", goal: event.goal, state: event.state });
 				}
 			},
-			persist: (mode, state) => {
-				if (mode === "none") {
-					this.sessionManager.appendModeChange("none");
-				} else if (state) {
-					this.sessionManager.appendModeChange(mode, { goal: state.goal });
-				}
-			},
+			persist: (mode, state) => recordGoal(this.sessionManager, mode, state),
 			sendHiddenMessage: async message => {
 				await this.sendCustomMessage(
 					{

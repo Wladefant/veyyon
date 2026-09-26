@@ -2,8 +2,9 @@ import type { AssistantMessage } from "@veyyon/ai";
 import type { SessionContext } from "@veyyon/kernel/session/session-context";
 import { errorMessage, formatCount, logger } from "@veyyon/utils";
 import { sanitizeStatusText } from "@veyyon/utils/sanitize-status-text";
+import { readRecordedGoal } from "../../../goals/goal-record";
 import { type GuidedGoalMessage, newGuidedGoalSessionId, runGuidedGoalTurn } from "../../../goals/guided-setup";
-import type { Goal, GoalModeState, GoalStatus } from "../../../goals/state";
+import type { GoalModeState, GoalStatus } from "../../../goals/state";
 import { formatDurationCoarse } from "../../../session/account-format";
 import type { AgentSessionEvent } from "../../../session/agent-session-types";
 import type { InteractiveModeContext } from "../types";
@@ -308,7 +309,7 @@ export class GoalModeController {
 			// still clears in the caller, because its entry can come from a startup
 			// default nobody chose.
 			this.#context.session.goalRuntime.clearAccounting();
-			const stored = this.#goalFromModeData(sessionContext.modeData);
+			const stored = readRecordedGoal(this.#context.sessionManager, sessionContext.modeData);
 			logger.warn("goal mode is disabled; the session's stored goal stays inactive", {
 				mode: sessionContext.mode,
 				readable: stored !== undefined,
@@ -321,7 +322,7 @@ export class GoalModeController {
 			);
 			return "handled";
 		}
-		const goal = this.#goalFromModeData(sessionContext.modeData);
+		const goal = readRecordedGoal(this.#context.sessionManager, sessionContext.modeData);
 		if (!goal) {
 			// A record that cannot be parsed cannot be restored, so it goes —
 			// out loud. Silence here read as the goal unsetting itself.
@@ -525,35 +526,6 @@ export class GoalModeController {
 			return undefined;
 		}
 		return state;
-	}
-
-	#goalFromModeData(modeData: SessionContext["modeData"]): Goal | undefined {
-		const goal = modeData?.goal;
-		if (!goal || typeof goal !== "object") return undefined;
-		const value = goal as Record<string, unknown>;
-		if (
-			typeof value.id !== "string" ||
-			typeof value.objective !== "string" ||
-			typeof value.status !== "string" ||
-			typeof value.tokensUsed !== "number" ||
-			typeof value.timeUsedSeconds !== "number" ||
-			typeof value.createdAt !== "number" ||
-			typeof value.updatedAt !== "number"
-		) {
-			return undefined;
-		}
-		return {
-			id: value.id,
-			objective: value.objective,
-			status: value.status as Goal["status"],
-			tokenBudget: typeof value.tokenBudget === "number" ? value.tokenBudget : undefined,
-			tokensUsed: value.tokensUsed,
-			timeUsedSeconds: value.timeUsedSeconds,
-			// Back-compat: goals persisted before turn accounting existed lack this.
-			turnsCompleted: typeof value.turnsCompleted === "number" ? value.turnsCompleted : 0,
-			createdAt: value.createdAt,
-			updatedAt: value.updatedAt,
-		};
 	}
 
 	/**
