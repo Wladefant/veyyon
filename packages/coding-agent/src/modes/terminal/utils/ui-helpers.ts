@@ -114,9 +114,6 @@ export class UiHelpers {
 					message,
 					ctx.viewSession.sessionManager.putBlobSync.bind(ctx.viewSession.sessionManager),
 				),
-			onPopulateHistory: text => {
-				ctx.editor.addToHistory(text);
-			},
 			onInheritDisplaceableTodo: component => {
 				ctx.eventController?.inheritDisplaceableTodo(component);
 			},
@@ -164,10 +161,7 @@ export class UiHelpers {
 		this.ctx.lastStatusText = text;
 	}
 
-	addMessageToChat(
-		message: AgentMessage,
-		options?: { populateHistory?: boolean; imageLinks?: readonly (string | undefined)[] },
-	): Component[] {
+	addMessageToChat(message: AgentMessage, options?: { imageLinks?: readonly (string | undefined)[] }): Component[] {
 		this.#builder.setExpanded(this.ctx.toolOutputExpanded);
 		return this.#builder.appendMessage(message, options);
 	}
@@ -176,18 +170,14 @@ export class UiHelpers {
 	 * Render session context to chat. Used for initial load and rebuild after compaction.
 	 * @param sessionContext Session context to render
 	 * @param options.updateFooter Update footer state
-	 * @param options.populateHistory Add user messages to editor history
 	 */
-	renderSessionContext(
-		sessionContext: SessionContext,
-		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
-	): void {
+	renderSessionContext(sessionContext: SessionContext, options: { updateFooter?: boolean } = {}): void {
 		if (options.updateFooter) {
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorBorderColor();
 		}
 		this.#builder.setExpanded(this.ctx.toolOutputExpanded);
-		this.#builder.rebuild(sessionContext, options);
+		this.#builder.rebuild(sessionContext);
 	}
 
 	renderInitialMessages(options: RenderInitialMessagesOptions = {}): void {
@@ -217,10 +207,7 @@ export class UiHelpers {
 			collapseCompactedHistory: settings.get("display.collapseCompacted"),
 			keepDanglingToolCalls: this.ctx.viewSession.isStreaming,
 		});
-		this.ctx.renderSessionContext(context, {
-			updateFooter: true,
-			populateHistory: !this.ctx.focusedAgentId,
-		});
+		this.ctx.renderSessionContext(context, { updateFooter: true });
 
 		// Show compaction info if session was compacted
 		const allEntries = this.ctx.viewSession.sessionManager.getEntries();
