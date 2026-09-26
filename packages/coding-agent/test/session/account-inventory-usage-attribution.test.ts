@@ -267,7 +267,12 @@ describe("applyUsageReports attributes limits per account", () => {
 			fetchedAt: RESETS_AT - HOUR_MS,
 			metadata: { email: "alice@example.com", projectId: "aicode-consumers" },
 			limits: [
-				limitFor("gemini-flash", { provider: "google-antigravity", projectId: "aicode-consumers" }, 0.25, "Flash (Alice)"),
+				limitFor(
+					"gemini-flash",
+					{ provider: "google-antigravity", projectId: "aicode-consumers" },
+					0.25,
+					"Flash (Alice)",
+				),
 			],
 		};
 		const reportBob: UsageReport = {
@@ -275,7 +280,12 @@ describe("applyUsageReports attributes limits per account", () => {
 			fetchedAt: RESETS_AT - HOUR_MS,
 			metadata: { email: "bob@example.com", projectId: "aicode-consumers" },
 			limits: [
-				limitFor("gemini-flash", { provider: "google-antigravity", projectId: "aicode-consumers" }, 0.75, "Flash (Bob)"),
+				limitFor(
+					"gemini-flash",
+					{ provider: "google-antigravity", projectId: "aicode-consumers" },
+					0.75,
+					"Flash (Bob)",
+				),
 			],
 		};
 

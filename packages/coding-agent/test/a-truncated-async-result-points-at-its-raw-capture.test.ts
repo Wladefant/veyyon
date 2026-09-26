@@ -1,10 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import type { AgentToolContext } from "@veyyon/agent-core";
 import {
 	ASYNC_INLINE_RESULT_MAX_CHARS,
 	ASYNC_PREVIEW_MAX_CHARS,
-	ASYNC_PREVIEW_TAIL_CHARS,
 	formatAsyncResultForFollowUp,
 } from "@veyyon/coding-agent/async/async-delivery";
 import { AsyncJobManager } from "@veyyon/coding-agent/async/job-manager";
@@ -40,7 +40,9 @@ describe("formatAsyncResultForFollowUp", () => {
 		const formatted = await formatAsyncResultForFollowUp(largeText, undefined, allocator);
 		expect(allocated).toBe(true);
 		expect(formatted).toContain("Full output: artifact://async-alloc-1");
-		expect(formatted).toContain(`[Output truncated. Showing first ${ASYNC_PREVIEW_MAX_CHARS.toLocaleString()} characters.]`);
+		expect(formatted).toContain(
+			`[Output truncated. Showing first ${ASYNC_PREVIEW_MAX_CHARS.toLocaleString()} characters.]`,
+		);
 
 		const written = await readFile(artifactPath, "utf-8");
 		expect(written).toBe(largeText);
@@ -164,7 +166,14 @@ describe("BashTool background job raw artifact linking", () => {
 			},
 			undefined,
 			() => {},
-			{ toolCall: { id: "call-1", name: "bash", arguments: {} } },
+			{
+				toolCall: {
+					batchId: "batch-1",
+					index: 0,
+					total: 1,
+					toolCalls: [{ id: "call-1", name: "bash" }],
+				},
+			} as AgentToolContext,
 		);
 
 		const jobId = result.details?.async?.jobId;
@@ -195,10 +204,7 @@ describe("BashTool background job raw artifact linking", () => {
 		expect(rawCaptureOnDisk).not.toContain("elided");
 
 		// Format for follow-up
-		const formatted = await formatAsyncResultForFollowUp(
-			job?.errorText ?? "",
-			jobMeta,
-		);
+		const formatted = await formatAsyncResultForFollowUp(job?.errorText ?? "", jobMeta);
 
 		expect(formatted).toContain(`Full output: artifact://${rawArtifactId}`);
 		expect(formatted).toContain("Command exited with code 3");

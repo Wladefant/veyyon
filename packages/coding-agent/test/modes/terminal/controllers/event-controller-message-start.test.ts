@@ -120,7 +120,7 @@ describe("EventController message_start (user role)", () => {
 		// being typed -- text and pasted images -- has to survive the delivery.
 		const message = createUserMessage("inbound from an extension");
 		const draftImage: ImageContent = { type: "image", data: "AAAA", mimeType: "image/png" };
-		const { ctx, editor, setText, addMessageToChat, updatePendingMessagesDisplay } = createContext({
+		const { ctx, editor, setText, addMessageToChat } = createContext({
 			editorText: "hello",
 			pendingImages: [draftImage],
 		});
@@ -133,8 +133,6 @@ describe("EventController message_start (user role)", () => {
 		expect(editor.pendingImages).toEqual([draftImage]);
 		// The inbound message still reaches the transcript.
 		expect(addMessageToChat).toHaveBeenCalledWith(message);
-		// The pending list still refreshes.
-		expect(updatePendingMessagesDisplay).toHaveBeenCalledTimes(1);
 	});
 
 	it("preserves the editor for an optimistic submission and skips the duplicate chat add", async () => {

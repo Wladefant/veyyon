@@ -68,7 +68,6 @@ export interface ChatTranscriptBuilderDeps {
 	resolveImageLinks?: (
 		message: Extract<AgentMessage, { role: "developer" | "user" }>,
 	) => readonly (string | undefined)[] | undefined;
-	onPopulateHistory?: (text: string) => void;
 	onInheritDisplaceableTodo?: (component: ToolExecutionComponent) => void;
 	isStreaming?: () => boolean;
 	retryAttempt?: () => number;
@@ -157,17 +156,13 @@ export class ChatTranscriptBuilder {
 		return this.container.children.length === 0;
 	}
 	/** Discard all components and rebuild the whole transcript from `input`. */
-	rebuild(
-		input: SessionContext | readonly SessionMessageEntry[] | readonly AgentMessage[],
-		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
-	): void {
+	rebuild(input: SessionContext | readonly SessionMessageEntry[] | readonly AgentMessage[]): void {
 		this.reset();
 		const { messages, cacheMissExplainedAt } = extractMessagesAndCacheMiss(input);
 		const count = messages.length;
 		for (let i = 0; i < count; i++) {
 			const message = messages[i]!;
 			this.#appendPersistedMessage(message, {
-				populateHistory: options.populateHistory,
 				cacheMissExplained: cacheMissExplainedAt?.[i] ?? false,
 			});
 		}
@@ -175,16 +170,12 @@ export class ChatTranscriptBuilder {
 	}
 
 	/** Append newly persisted entries without rebuilding already rendered rows. */
-	append(
-		input: SessionContext | readonly SessionMessageEntry[] | readonly AgentMessage[],
-		options: { populateHistory?: boolean } = {},
-	): void {
+	append(input: SessionContext | readonly SessionMessageEntry[] | readonly AgentMessage[]): void {
 		const { messages, cacheMissExplainedAt } = extractMessagesAndCacheMiss(input);
 		const count = messages.length;
 		for (let i = 0; i < count; i++) {
 			const message = messages[i]!;
 			this.#appendPersistedMessage(message, {
-				populateHistory: options.populateHistory,
 				cacheMissExplained: cacheMissExplainedAt?.[i] ?? false,
 			});
 		}
@@ -192,10 +183,7 @@ export class ChatTranscriptBuilder {
 	}
 
 	/** Append a single message to the transcript (live dispatch). */
-	appendMessage(
-		message: AgentMessage,
-		options?: { populateHistory?: boolean; imageLinks?: readonly (string | undefined)[] },
-	): Component[] {
+	appendMessage(message: AgentMessage, options?: { imageLinks?: readonly (string | undefined)[] }): Component[] {
 		switch (message.role) {
 			case "assistant": {
 				const timeline = splitAssistantMessageToolTimeline(message);
@@ -398,7 +386,6 @@ export class ChatTranscriptBuilder {
 	#appendPersistedMessage(
 		message: AgentMessage,
 		options?: {
-			populateHistory?: boolean;
 			imageLinks?: readonly (string | undefined)[];
 			cacheMissExplained?: boolean;
 		},
@@ -420,7 +407,6 @@ export class ChatTranscriptBuilder {
 	#appendCommonMessage(
 		message: AgentMessage,
 		options?: {
-			populateHistory?: boolean;
 			imageLinks?: readonly (string | undefined)[];
 		},
 	): Component[] {
@@ -442,9 +428,6 @@ export class ChatTranscriptBuilder {
 					userView.imageLinks = options?.imageLinks ?? this.deps.resolveImageLinks?.(message);
 					const userComponent = new UserMessageComponent(userView);
 					this.container.addChild(userComponent);
-					if (options?.populateHistory && message.role === "user" && !userView.synthetic) {
-						this.deps.onPopulateHistory?.(textContent);
-					}
 				}
 				return [];
 			}
