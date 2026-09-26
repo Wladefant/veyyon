@@ -3,6 +3,7 @@ import { buildModel } from "./build";
 import type { ModelReferenceCandidate } from "./identity/reference";
 import modelsSourceJson from "./models.json" with { type: "text" };
 import type { Api, Model, ModelSpec, Usage } from "./types";
+import { ZERO_MODEL_COST } from "./utils";
 
 /**
  * Static bundled model registry loaded from `models.json`.
@@ -243,16 +244,17 @@ export function getModelPricing<TApi extends Api>(
  * here rather than baked into the spec.
  */
 export function resolveRequestCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Model<TApi>["cost"] {
+	const defaultCost = model.cost ?? ZERO_MODEL_COST;
 	const tier = model.longContextCost;
-	if (!tier) return model.cost;
+	if (!tier) return defaultCost;
 	const orchestration = usage.orchestration;
 	const promptTokens =
 		usage.input + usage.cacheRead + usage.cacheWrite + (orchestration?.input ?? 0) + (orchestration?.cacheRead ?? 0);
-	return promptTokens > tier.inputThreshold ? tier : model.cost;
+	return promptTokens > tier.inputThreshold ? tier : defaultCost;
 }
 
 export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Usage["cost"] {
-	const cost = resolveRequestCost(model, usage);
+	const cost = resolveRequestCost(model, usage) ?? ZERO_MODEL_COST;
 	const orchestration = usage.orchestration;
 
 	usage.cost.input = (cost.input / 1000000) * (usage.input + (orchestration?.input ?? 0));

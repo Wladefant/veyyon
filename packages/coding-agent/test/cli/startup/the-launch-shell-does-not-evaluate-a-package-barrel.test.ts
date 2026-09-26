@@ -66,8 +66,17 @@ const BARRELS = ["@veyyon/tui", "@veyyon/utils", "@veyyon/agent-core", "@veyyon/
  * `UNICODE_SYMBOLS`, which `theme/symbols.ts` reads, so `contracts/view/src/index.ts` and
  * `contracts/view/src/symbols.ts` evaluate where the package was reached by type only. The
  * ceiling keeps one leaf of margin over the measurement, still well under the barrel edge.
+ *
+ * RE-MEASURED on fork main at 355 with CI's Bun 1.4.0, versus 351 at 4934f99fb.
+ * The exact added set is `config/settings-migrations.ts` (35ae07caf extracted the
+ * existing migrations) and `thinking/index.ts`, `catalog/model-thinking.ts`,
+ * `catalog/hosts.ts` (0049bd30b's configured agent effort validation, retained by
+ * the fork merge). These are settings contracts on the shell path, not an
+ * accidental package barrel. Keep one additional module of margin: 355 and 356
+ * pass, 357 fails. Bun 1.4.2 reports 339 for this same graph because its cache
+ * omits the 16 builtin node:/bun: entries that Bun 1.4.0 includes.
  */
-const SHELL_GRAPH_MODULE_CEILING = 353;
+const SHELL_GRAPH_MODULE_CEILING = 357;
 
 async function probe(code: string): Promise<number> {
 	const { stdout } = await run("bun", ["-e", code], { cwd: repoRoot, maxBuffer: 1 << 24 });
