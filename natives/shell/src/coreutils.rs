@@ -7,8 +7,6 @@
 //! thread-local context isolated across concurrent pipeline stages and avoids
 //! blocking the async runtime on synchronous utility I/O.
 
-#[cfg(unix)]
-use std::ffi::OsStr;
 use std::{
 	collections::HashMap,
 	ffi::OsString,
@@ -20,8 +18,6 @@ use std::{
 	},
 };
 
-#[cfg(unix)]
-use brush_core::ShellFd;
 use brush_core::{
 	Error,
 	builtins::{BoxFuture, ContentOptions, ContentType, Registration},
@@ -37,31 +33,52 @@ use tokio_util::sync::CancellationToken;
 type UutilRun = fn(Vec<OsString>) -> i32;
 
 #[cfg(unix)]
-fn process_substitution_fd(arg: &OsStr) -> Option<ShellFd> {
-	let fd = arg.to_str()?.strip_prefix("/dev/fd/")?.parse().ok()?;
-	(fd > OpenFiles::STDERR_FD).then_some(fd)
-}
+const UNAVAILABLE_DESCRIPTOR: &str = "/dev/fd/-1";
 
 #[cfg(unix)]
-fn materialize_process_substitution_fds<SE: ShellExtensions>(
+fn materialize_descriptor_paths<SE: ShellExtensions>(
 	context: &ExecutionContext<'_, SE>,
 	argv: &mut [OsString],
-) -> Result<Vec<std::os::fd::OwnedFd>, Error> {
-	use std::os::fd::AsRawFd as _;
+) -> Vec<std::os::fd::OwnedFd> {
+	use std::{os::fd::AsRawFd as _, path::Path};
+
+	use brush_core::openfiles::DescriptorPath;
 
 	let mut fds = Vec::new();
+	let cwd = context.shell.working_dir();
 	for arg in argv {
-		let Some(shell_fd) = process_substitution_fd(arg) else {
+		let path = Path::new(arg);
+		let abs_path = if path.is_absolute() {
+			path.to_path_buf()
+		} else {
+			cwd.join(path)
+		};
+		let Some(descriptor) = DescriptorPath::parse(&abs_path) else {
 			continue;
 		};
-		let Some(file) = context.try_fd(shell_fd) else {
-			continue;
-		};
-		let fd = file.try_borrow_as_fd()?.try_clone_to_owned()?;
-		*arg = OsString::from(format!("/dev/fd/{}", fd.as_raw_fd()));
-		fds.push(fd);
+		match descriptor {
+			DescriptorPath::Fd(shell_fd) => {
+				if let Some(file) = context.try_fd(shell_fd)
+					&& let Ok(borrowed) = file.try_borrow_as_fd()
+					&& let Ok(owned) = borrowed.try_clone_to_owned()
+				{
+					*arg = OsString::from(format!("/dev/fd/{}", owned.as_raw_fd()));
+					fds.push(owned);
+					continue;
+				}
+				*arg = OsString::from(UNAVAILABLE_DESCRIPTOR);
+			},
+			DescriptorPath::Terminal => {
+				let stdin_is_term = context
+					.try_fd(OpenFiles::STDIN_FD)
+					.is_some_and(|f| f.is_terminal());
+				if !stdin_is_term {
+					*arg = OsString::from(UNAVAILABLE_DESCRIPTOR);
+				}
+			},
+		}
 	}
-	Ok(fds)
+	fds
 }
 
 /// Await a blocking builtin and report cancellation only after its thread
@@ -172,7 +189,7 @@ async fn run_uutil<SE: ShellExtensions>(
 		.map(|arg| OsString::from(arg.to_string()))
 		.collect();
 	#[cfg(unix)]
-	let process_substitution_fds = materialize_process_substitution_fds(&context, &mut argv)?;
+	let process_substitution_fds = materialize_descriptor_paths(&context, &mut argv);
 
 	drop(context);
 
