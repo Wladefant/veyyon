@@ -512,6 +512,21 @@ export interface SingleResult {
 	};
 	/** Output metadata for agent:// URL integration */
 	outputMeta?: { lineCount: number; charCount: number };
+	/** Structured salvage state captured when a run is force-stopped by budget or timeout cutoff. */
+	salvageState?: SalvageState;
+}
+
+/** Structured salvage state emitted when a run is force-stopped by budget or timeout. */
+export interface SalvageState {
+	requests: number;
+	tokens: number;
+	lastActivity: string;
+	reason?: string;
+	headSha?: string;
+	modifiedFiles?: string[];
+	uncommittedDiffs?: string;
+	remainingCriteria?: string[];
+	blockers?: string[];
 }
 
 /** Tool details for TUI rendering */

@@ -11,6 +11,8 @@
 
 ### Fixed
 
+- Raised default soft request budget to 250 requests, added per-agent `softRequestBudget` configuration, and structured `salvageState` reporting on cutoff and cancellation ([#97](https://github.com/Wladefant/veyyon/issues/97)).
+
 - Extension approval-required blocks stop the current call without persisting a user refusal; explicit and legacy refusals retain their existing fence ([#88](https://github.com/Wladefant/veyyon/issues/88)).
 - Telegram control can deliver to and observe the authenticated live terminal owner without reopening its transcript in a GUI host ([#88](https://github.com/Wladefant/veyyon/issues/88)).
 

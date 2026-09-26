@@ -110,6 +110,7 @@ import { generateTaskLabel } from "./label";
 import "./nested-task-details";
 import {
 	type AgentPruneBudget,
+	agentSettingsFor,
 	resolveAgentIdleTtlMs,
 	resolveAgentMaxNestedSpawnDepth,
 	resolveAgentPruneBudget,
@@ -122,6 +123,7 @@ import {
 	MAX_OUTPUT_BYTES,
 	MAX_OUTPUT_LINES,
 	type ReviewFinding,
+	type SalvageState,
 	type SingleResult,
 	TASK_SUBAGENT_EVENT_CHANNEL,
 	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
@@ -137,18 +139,18 @@ const MCP_CALL_TIMEOUT_MS = 60_000;
 
 /**
  * Soft per-agent request budgets (assistant requests per run). Crossing the
- * budget injects a wrap-up steering notice (`task.softRequestBudgetNotice`,
+ * budget injects a wrap-up steering notice (`agent.softRequestBudgetNotice`,
  * on by default). At 1.5x the budget the free-running turn is stopped and the
  * agent is driven to one forced final `yield` so partial findings come back
  * as a real report; only if it still refuses to yield within
  * {@link BUDGET_STOP_GRACE_REQUESTS} more requests is the run hard-aborted.
  * The `default` key applies to agents without an explicit entry and can be
- * overridden via the `task.softRequestBudget` setting (0 disables the guard).
+ * overridden via the `agent.softRequestBudget` setting (0 disables the guard).
  */
 export const SOFT_REQUEST_BUDGET: Record<string, number> = {
 	scout: 100,
 	sonic: 100,
-	default: 200,
+	default: 250,
 };
 
 /** Extra requests allowed after a budget stop for the forced yield to land before the run is hard-aborted. */
@@ -162,6 +164,40 @@ export function buildBudgetNotice(requests: number, budget: number): string {
 /** Flatten whitespace and clip salvage text for the cancelled-child summary line. */
 function formatSalvageSnippet(text: string, maxLength = 500): string {
 	return truncate(collapseWhitespace(text), maxLength);
+}
+
+/**
+ * Resolve the soft assistant-request budget for an agent, honoring per-agent
+ * overrides (`agent.agents.<name>.softRequestBudget`), built-in overrides
+ * (`SOFT_REQUEST_BUDGET[name]`), and the blanket setting (`agent.softRequestBudget`).
+ */
+export function resolveAgentSoftRequestBudget(settings: Settings, agentName: string): number {
+	const agentSettings = agentSettingsFor(settings, agentName);
+	if (agentSettings.softRequestBudget !== undefined) {
+		return Math.max(0, Math.trunc(Number(agentSettings.softRequestBudget) || 0));
+	}
+	const configuredDefaultBudget = Math.max(
+		0,
+		Math.trunc(Number(settings.get("agent.softRequestBudget") ?? SOFT_REQUEST_BUDGET.default) || 0),
+	);
+	return configuredDefaultBudget === 0 ? 0 : (SOFT_REQUEST_BUDGET[agentName] ?? configuredDefaultBudget);
+}
+
+/** Build structured salvage state for a cancelled or cutoff run. */
+export function buildSalvageState(
+	requests: number,
+	tokens: number,
+	salvageText: string,
+	reason?: string,
+	extra?: Partial<Omit<SalvageState, "requests" | "tokens" | "lastActivity" | "reason">>,
+): SalvageState {
+	return {
+		requests,
+		tokens,
+		lastActivity: formatSalvageSnippet(salvageText),
+		...(reason ? { reason } : {}),
+		...extra,
+	};
 }
 
 /**
@@ -2322,12 +2358,35 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 	// surface the last assistant text + stats instead of "(no output)" so the
 	// parent doesn't redo work the child already finished.
 	const salvageText = monitor.lastAssistantSalvageText();
-	if (
-		(done.turnCutShort || signal?.aborted || monitor.runtimeLimitExceeded()) &&
-		!rawOutput.trim() &&
-		salvageText !== undefined
-	) {
-		rawOutput = `[cancelled after ${progress.requests} req, ${progress.tokens} tok — last activity: "${formatSalvageSnippet(salvageText)}"]`;
+	let salvageState: SalvageState | undefined;
+	const isCutoff =
+		!finalized.hasYield &&
+		Boolean(
+			done.turnAborted ||
+				signal?.aborted ||
+				monitor.runtimeLimitExceeded() ||
+				monitor.budgetStopRequested() ||
+				monitor.abortKind() === "budget",
+		);
+	if (isCutoff && (salvageText !== undefined || progress.requests > 0)) {
+		const abortKind = monitor.abortKind();
+		const reason =
+			abortKind && abortKind !== "terminate"
+				? abortKind
+				: monitor.budgetStopRequested()
+					? "budget"
+					: monitor.runtimeLimitExceeded()
+						? "timeout"
+						: signal?.aborted
+							? "signal"
+							: done.turnAborted
+								? "abort"
+								: undefined;
+		salvageState = buildSalvageState(progress.requests, progress.tokens, salvageText ?? "", reason);
+		if (!rawOutput.trim()) {
+			const snippet = salvageText ? formatSalvageSnippet(salvageText) : "(no activity recorded)";
+			rawOutput = `[cancelled after ${progress.requests} req, ${progress.tokens} tok — last activity: "${snippet}"]`;
+		}
 	}
 	const lastYield = yieldItems?.[yieldItems.length - 1];
 	const yieldAbortReason = lastYield?.status === "aborted" ? lastYield.error || "Agent aborted task" : undefined;
@@ -2418,6 +2477,7 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 		extractedToolData: progress.extractedToolData,
 		retryFailure: progress.retryFailure,
 		outputMeta,
+		salvageState,
 	};
 }
 
@@ -2856,12 +2916,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	);
 	const agentIdleTtlMs = resolveAgentIdleTtlMs(settings);
 	const pruneBudget = resolveAgentPruneBudget(settings);
-	const configuredDefaultBudget = Math.max(
-		0,
-		Math.trunc(Number(settings.get("agent.softRequestBudget") ?? SOFT_REQUEST_BUDGET.default) || 0),
-	);
-	const softRequestBudget =
-		configuredDefaultBudget === 0 ? 0 : (SOFT_REQUEST_BUDGET[agent.name] ?? configuredDefaultBudget);
+	const softRequestBudget = resolveAgentSoftRequestBudget(settings, agent.name);
 	const softRequestBudgetNotice = settings.get("agent.softRequestBudgetNotice") ?? false;
 	const parentDepth = options.taskDepth ?? 0;
 	const childDepth = parentDepth + 1;
