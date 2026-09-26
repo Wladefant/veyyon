@@ -254,6 +254,8 @@ describe("a reconcile that declines to restore a goal says so", () => {
 		// draft save or a first turn would: the restart has to read the record, not memory.
 		await off.sessionManager.ensureOnDisk();
 		await off.sessionManager.close();
+		off.mode.stop();
+		await off.session.dispose();
 		expect(await fileExists(sessionFile)).toBe(true);
 
 		const on = await build({ goalEnabled: true, attachTo: sessionFile });
