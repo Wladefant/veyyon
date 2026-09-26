@@ -18,6 +18,7 @@
 - `launch/terminal-control.ts` publishes the terminal-owner record through `atomicWriteFile` instead of hand-rolled temp-file and rename, so the write path has one owner; the record stays atomic and stays mode `0600`.
 
 ### Fixed
+- Legacy Pi extension tool calls carry the session policy frame the tool was built from, so `createCodingTools`, `createReadTool`, `createBashTool`, `createGrepTool` and `createFindTool` reach the tool instead of refusing with `Tool execution requires missing session policy context`.
 
 - A user message delivered by an extension (`sendUserMessage`, for example a Telegram relay) no longer clears the composer draft, so in-progress text and pasted images survive the delivery ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Go 1.26 `new(expr)` calls (e.g. `new(42)` or `new(f(x))`) triggering syntax errors during block operations and parse errors during structure search ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
