@@ -14,7 +14,6 @@ import { allowsSessionTelemetry, type InstrumentationLevel } from "@veyyon/ai/in
 import {
 	directoryExists,
 	errorMessage,
-	getBlobsDir,
 	getProjectDir,
 	getSessionsDir,
 	isEnoent,
@@ -26,7 +25,7 @@ import { pathStateSync } from "@veyyon/utils/fs-optional";
 import { sessionFileName, sessionFileStem } from "@veyyon/utils/session-file";
 import { assertNotTerminalOwned } from "./terminal-ownership";
 import { ArtifactManager } from "./artifacts";
-import { type BlobPutOptions, type BlobPutResult, BlobStore } from "./blob-store";
+import { type BlobPutOptions, type BlobPutResult, BlobStore, blobsDirForSessionDir } from "./blob-store";
 import {
 	normalizeCustomMessagePayload,
 	sanitizeRehydratedOpenAIResponsesAssistantMessage,
@@ -37,6 +36,7 @@ import type { OperatorNotices } from "./operator-notices";
 import {
 	type BuildSessionContextOptions,
 	buildSessionContext,
+	buildSessionContextFromPath,
 	type SessionContext,
 	walkBranchPath,
 } from "./session-context";
@@ -251,12 +251,21 @@ class SessionEntryIndex {
 	#labels = new Map<string, string>();
 	#leaf: string | null = null;
 	#usage = emptyUsageStatistics();
+	/**
+	 * Root→leaf path of `#leaf`, or undefined until a reader asks for it. An
+	 * append to the leaf extends it in place; anything else that can change the
+	 * walk (a leaf move, a rebuild, an insert off the leaf) drops it. Every
+	 * startup reader walks the active branch, and on a session of hundreds of
+	 * thousands of entries each walk costs tens of milliseconds.
+	 */
+	#leafPath: SessionEntry[] | undefined;
 
 	clear(): void {
 		this.#entriesById.clear();
 		this.#children.clear();
 		this.#labels.clear();
 		this.#leaf = null;
+		this.#leafPath = undefined;
 		this.#usage = emptyUsageStatistics();
 	}
 
@@ -266,8 +275,16 @@ class SessionEntryIndex {
 	}
 
 	insert(entry: SessionEntry): void {
+		// The new leaf's path is the old leaf's path plus this entry exactly when
+		// it hangs off the old leaf and does not shadow an id already on the map.
+		const leafPath =
+			this.#leaf !== null && entry.parentId === this.#leaf && !this.#entriesById.has(entry.id)
+				? this.#leafPath
+				: undefined;
 		this.#entriesById.set(entry.id, entry);
 		this.#leaf = entry.id;
+		leafPath?.push(entry);
+		this.#leafPath = leafPath;
 
 		const bucket = this.#children.get(entry.parentId);
 		if (bucket) bucket.push(entry);
@@ -306,6 +323,7 @@ class SessionEntryIndex {
 	}
 
 	setLeaf(id: string | null): void {
+		if (id !== this.#leaf) this.#leafPath = undefined;
 		this.#leaf = id;
 	}
 
@@ -326,8 +344,20 @@ class SessionEntryIndex {
 	}
 
 	pathTo(id: string | null | undefined = this.#leaf): SessionEntry[] {
-		const leaf = id ? this.#entriesById.get(id) : undefined;
-		return walkBranchPath(this.#entriesById, leaf);
+		return id === this.#leaf ? this.leafPath().slice() : walkBranchPath(this.#entriesById, this.#lookup(id));
+	}
+
+	/**
+	 * The active branch, root→leaf. Shared with the index: read it, never mutate
+	 * it. {@link pathTo} returns a copy for callers that keep or edit the array.
+	 */
+	leafPath(): readonly SessionEntry[] {
+		this.#leafPath ??= walkBranchPath(this.#entriesById, this.#lookup(this.#leaf));
+		return this.#leafPath;
+	}
+
+	#lookup(id: string | null | undefined): SessionEntry | undefined {
+		return id ? this.#entriesById.get(id) : undefined;
 	}
 
 	tree(entries: readonly SessionEntry[]): SessionTreeNode[] {
@@ -458,7 +488,10 @@ export class SessionManager {
 	#sessionDir: string;
 	readonly #persist: boolean;
 	readonly #storage: SessionStorage;
-	readonly #blobs: BlobStore;
+	// The store beside the current session file (see blobsDirForSessionDir), rebuilt
+	// when the file or the directory it would be created in changes.
+	#blobStore: BlobStore | undefined;
+	#blobStoreKey: string | undefined;
 	#operatorNotices: OperatorNotices | undefined;
 
 	#sessionId = "";
@@ -619,9 +652,18 @@ export class SessionManager {
 		this.#storage = storage;
 		this.#operatorNotices = operatorNotices;
 		this.#instrumentation = instrumentation;
-		this.#blobs = new BlobStore(getBlobsDir());
 
 		if (persist && sessionDir) this.#storage.ensureDirSync(sessionDir);
+	}
+
+	get #blobs(): BlobStore {
+		const key = this.#sessionFile ?? this.#sessionDir;
+		if (this.#blobStore === undefined || this.#blobStoreKey !== key) {
+			const dir = this.#sessionFile === undefined ? this.#sessionDir : path.dirname(this.#sessionFile);
+			this.#blobStore = new BlobStore(blobsDirForSessionDir(dir));
+			this.#blobStoreKey = key;
+		}
+		return this.#blobStore;
 	}
 
 	#rememberBreadcrumb(cwd: string, sessionFile: string): void {
@@ -667,6 +709,8 @@ export class SessionManager {
 	#noteDiskFailure(errorLike: unknown): Error {
 		const error = toError(errorLike);
 		if (!this.#diskFailure) this.#diskFailure = error;
+		this.#fileIsCurrent = false;
+		this.#rewriteRequired = true;
 
 		if (!this.#diskFailureLogged) {
 			this.#diskFailureLogged = true;
@@ -1561,15 +1605,29 @@ export class SessionManager {
 		const fileEntries = await loadEntriesFromFile(resolvedSessionFile, this.#storage, {
 			operatorNotices: this.#operatorNotices,
 		});
+		await this.#switchToLoadedFile(resolvedSessionFile, fileEntries);
+	}
+
+	/**
+	 * Adopt entries already parsed from `resolvedSessionFile`. {@link open} parses the file once to
+	 * read the header's cwd before the manager exists, and hands the same entries here rather than
+	 * parsing a second time.
+	 */
+	async #switchToLoadedFile(resolvedSessionFile: string, fileEntries: FileEntry[]): Promise<void> {
+		const titleSlot = await readTitleSlotFromFile(resolvedSessionFile, this.#storage);
 		let migrated = false;
 		let header: SessionHeader | undefined;
 		let adoptedCwd: string | undefined;
 		if (fileEntries.length > 0) {
 			migrated = migrateToCurrentVersion(fileEntries);
-			await resolveBlobRefsInEntries(fileEntries, this.#blobs, {
-				source: resolvedSessionFile,
-				operatorNotices: this.#operatorNotices,
-			});
+			await resolveBlobRefsInEntries(
+				fileEntries,
+				new BlobStore(blobsDirForSessionDir(path.dirname(resolvedSessionFile))),
+				{
+					source: resolvedSessionFile,
+					operatorNotices: this.#operatorNotices,
+				},
+			);
 			// loadEntriesFromFile guarantees entries[0] is a valid session header.
 			header = fileEntries[0] as SessionHeader;
 			const headerCwd = header.cwd ? path.resolve(header.cwd) : undefined;
@@ -1825,6 +1883,7 @@ export class SessionManager {
 	async ensureOnDisk(): Promise<void> {
 		if (!this.#persist || !this.#sessionFile) return;
 		this.#forceFileCreation = true;
+		this.#retryPersistenceAfterFailure();
 		if (this.#fileIsCurrent && !this.#rewriteRequired) return;
 		await this.#rewriteAtomically();
 	}
@@ -2538,7 +2597,12 @@ export class SessionManager {
 	 * the full-history display transcript, from the current leaf path.
 	 */
 	buildSessionContext(options?: BuildSessionContextOptions): SessionContext {
-		return buildSessionContext(this.#entries, this.#index.leafId(), this.#index.entriesById(), options);
+		// A leaf that resolves reads the index's cached branch. A null leaf and one
+		// naming a missing entry take the free function's empty / tail fallbacks.
+		if (!this.#index.leafEntry()) {
+			return buildSessionContext(this.#entries, this.#index.leafId(), this.#index.entriesById(), options);
+		}
+		return buildSessionContextFromPath(this.#index.leafPath(), options);
 	}
 
 	/** Strip stale OpenAI Responses assistant replay metadata from loaded entries. */
@@ -2843,7 +2907,7 @@ export class SessionManager {
 			await loadEntriesFromFile(sourcePath, storage, { operatorNotices: options?.operatorNotices }),
 		) as FileEntry[];
 		migrateToCurrentVersion(sourceEntries);
-		await resolveBlobRefsInEntries(sourceEntries, manager.#blobs, {
+		await resolveBlobRefsInEntries(sourceEntries, new BlobStore(blobsDirForSessionDir(path.dirname(sourcePath))), {
 			source: sourcePath,
 			operatorNotices: options?.operatorNotices,
 		});
@@ -2916,7 +2980,7 @@ export class SessionManager {
 			options?.instrumentation,
 		);
 		manager.#suppressBreadcrumb = options?.suppressBreadcrumb === true;
-		await manager.setSessionFile(filePath);
+		await manager.#switchToLoadedFile(path.resolve(filePath), loaded);
 		return manager;
 	}
 

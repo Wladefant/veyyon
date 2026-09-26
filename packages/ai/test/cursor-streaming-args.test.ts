@@ -79,7 +79,7 @@ function newHarness(): Harness {
 			toolCall = t;
 		},
 		setFirstTokenTime: () => {},
-		execDispatchedToolCalls: new Set<string>(),
+		execDispatches: new Map(),
 	};
 	return { output, stream, captured, state };
 }

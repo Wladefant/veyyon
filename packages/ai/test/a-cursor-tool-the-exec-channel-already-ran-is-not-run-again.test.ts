@@ -102,7 +102,7 @@ function newBlockState(output: AssistantMessage): BlockState {
 			toolCall = t;
 		},
 		setFirstTokenTime: () => {},
-		execDispatchedToolCalls: new Set<string>(),
+		execDispatches: new Map(),
 	};
 }
 
