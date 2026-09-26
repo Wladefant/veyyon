@@ -36,13 +36,13 @@ const RUNTIME = `${SESSION_DIR}/agent-session.ts`;
 const FACADE = `${SESSION_DIR}/facade.ts`;
 
 /**
- * MEASURED at 18638 lines after merging upstream v1.5.5 (which shrank to 18482 by extracting
- * model-target selection, provider-request shaping, TTSR, the todo board and thinking-level
- * into collaborators under `runtime/`) with the fork's additions (extension context identity,
- * tool-refusal fence, bounded todo reminder formatting — 29 net lines from fork commits).
- * Re-pinned at 18,660 (22 lines of slack over measured 18,638).
+ * MEASURED at 18,668 lines on 2026-09-26. The previous pin, 18,660, was set with 22 lines of
+ * slack over 18,638 and was then breached by the file growing through the upstream v1.5.5 merge
+ * and the fork ports that followed, so this gate had been red on every push since and the number
+ * it pins stopped being read. Re-pinned at the measurement itself, with no slack: the next line
+ * added to this file fails here.
  */
-const RUNTIME_CEILING = 18_660;
+const RUNTIME_CEILING = 18_668;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";

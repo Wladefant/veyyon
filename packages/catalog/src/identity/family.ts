@@ -16,6 +16,7 @@ import {
 	parseGlmModel,
 	parseKnownModel,
 	parseOpenAIModel,
+	compareSemVer,
 	semverEqual,
 	semverGte,
 } from "./classify";
@@ -338,6 +339,28 @@ export const supportsMidConversationSystemMessages = memo((modelId: string): boo
 export const isAnthropicFableOrMythosModel = memo((modelId: string): boolean => {
 	const parsed = parseAnthropicModel(bareModelId(modelId));
 	return parsed !== null && isFableOrMythos(parsed.kind);
+});
+
+/**
+ * Opus 5.5 rejects forced tool selection the way Fable/Mythos do — a
+ * `tool_choice` of `tool` or `any` fails the request with 400
+ * `invalid_request_error`: `tool_choice: type "tool" and "any" are not
+ * supported for this model`. The transport downgrades the selector to
+ * `auto` so the tool stays offered instead of the turn dying.
+ *
+ * Upper-bounded on purpose: separator-collapsed ids parse their revision
+ * as a whole number (`claude-opus-45` is Opus 4.5, revision 45), so an
+ * open `>=5.5` would silently catch them, and a later Opus generation has
+ * to be re-verified against the API before it inherits the restriction.
+ */
+export const isAnthropicOpus55Model = memo((modelId: string): boolean => {
+	const parsed = parseAnthropicModel(bareModelId(modelId));
+	return (
+		parsed !== null &&
+		parsed.kind === "opus" &&
+		semverGte(parsed.version, "5.5") &&
+		compareSemVer(parsed.version, "6") < 0
+	);
 });
 
 /** Thinking-variant token location inside a model id. */

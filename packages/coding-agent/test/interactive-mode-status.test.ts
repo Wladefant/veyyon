@@ -38,10 +38,8 @@ function createInitialRenderHarness(): { ctx: InteractiveModeContext; helpers: U
 		},
 		statusLine: { invalidate: vi.fn() },
 		updateEditorBorderColor: vi.fn(),
-		renderSessionContext: (
-			context: SessionContext,
-			options?: { updateFooter?: boolean; populateHistory?: boolean },
-		) => helpers.renderSessionContext(context, options),
+		renderSessionContext: (context: SessionContext, options?: { updateFooter?: boolean }) =>
+			helpers.renderSessionContext(context, options),
 		addMessageToChat: (message: AgentMessage) => helpers.addMessageToChat(message),
 		settings: { get: () => false },
 		session: {

@@ -668,19 +668,30 @@ export function lineRewriteSequence(
 	screenRow?: number,
 	budget?: DirectImagePlacementLookup,
 ): string {
-	if (TERMINAL.isImageLine(line)) return ERASE_LINE + imageLineAt(line, screenRow, budget);
-	const written = terminalLine(line, screenRow, budget);
-	const asciiWidth = ansiAsciiLineWidth(line, width);
-	if (asciiWidth !== undefined) {
-		// Exact width model: skip the erase only when the row truly fills
-		// the line (an EL there would eat the last cell via pending-wrap).
-		return asciiWidth >= width ? written : written + ERASE_TO_END_OF_LINE;
+	// End every rewrite at column zero. ConPTY can materialize a pending wrap
+	// before a following cursor-addressing sequence even while DECAWM is
+	// disabled; on the bottom row that becomes an untracked scroll and leaks
+	// live chrome into native history. The row loops that call this append only
+	// LF, because this CR supplies the other half of their CRLF.
+	let rewrite: string;
+	if (TERMINAL.isImageLine(line)) {
+		rewrite = ERASE_LINE + imageLineAt(line, screenRow, budget);
+	} else {
+		const written = terminalLine(line, screenRow, budget);
+		const asciiWidth = ansiAsciiLineWidth(line, width);
+		if (asciiWidth !== undefined) {
+			// Exact width model: skip the erase only when the row truly fills
+			// the line (an EL there would eat the last cell via pending-wrap).
+			rewrite = asciiWidth >= width ? written : written + ERASE_TO_END_OF_LINE;
+		} else {
+			// Non-ASCII rows: the native measure can over-count combining-heavy
+			// scripts, so a row it calls "full" may render short and leave stale
+			// cells from the previous occupant — which would then scroll into
+			// history baked into the committed row. Erase the line first instead
+			// (rewrites always start at column 1, so EL-to-end clears the whole
+			// row); the leading reset keeps BCE on the default background.
+			rewrite = SGR_RESET + ERASE_TO_END_OF_LINE + written;
+		}
 	}
-	// Non-ASCII rows: the native measure can over-count combining-heavy
-	// scripts, so a row it calls "full" may render short and leave stale
-	// cells from the previous occupant — which would then scroll into
-	// history baked into the committed row. Erase the line first instead
-	// (rewrites always start at column 1, so EL-to-end clears the whole
-	// row); the leading reset keeps BCE on the default background.
-	return SGR_RESET + ERASE_TO_END_OF_LINE + written;
+	return `${rewrite}\r`;
 }

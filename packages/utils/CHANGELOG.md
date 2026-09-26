@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Added
+- Added `getDbBusyTimeoutMs()`, `isInteractiveHost()`, and `setInteractiveHost()` to `@veyyon/utils/env`, bounding SQLite busy waits to 1s in headless hosts while preserving 5s for interactive hosts ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 - `@veyyon/utils/inflight-marker` atomically records each concurrent tool call independently and durably reports abandoned calls in the normal dated log before removing their markers, including Linux zombies ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 - `@veyyon/utils/session-heartbeat` keeps a per-process heartbeat naming the session phase (`provider`, `tool`, `compaction`, `idle`) and busy lanes, rewritten asynchronously on every phase change and every 5 s; the next launch logs `Previous session died silently` for a heartbeat whose process is gone ([#73](https://github.com/Wladefant/veyyon/issues/73)).
@@ -17,8 +18,12 @@
 
 - No shipped behavior changed; the global EPIPE routing suite pointed at `packages/tui/src/terminal.ts`, a path the terminal host left on 2026-08-30, so its three "finishes TUI persistence before exit" cases failed on a module-resolution exit rather than on ordering ([#64](https://github.com/Wladefant/veyyon/issues/64)).
 ### Fixed
+- Prioritize exact slash-command aliases over earlier same-prefix commands in sync autocomplete so `/q` resolves to `quit` rather than `queue` ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 - `@veyyon/utils/stderr-guard` loads `node:util` on the first routed console call rather than at import, keeping it off the launch card path; no user-visible change.
+- Unhandled ENOSPC errors on log, session, or artifact writes are now caught and logged as warnings rather than crashing the process, preventing session loss when a disk fills ([#73](https://github.com/Wladefant/veyyon/issues/73), [#114](https://github.com/Wladefant/veyyon/pull/114)).
+- `postmortem.quit` accepts `drainStdout: false` to skip waiting for stdout drain when terminating a process whose terminal host is already gone ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Made malformed advanced-serialization frames from a worker subprocess non-fatal: Bun surfaces an undecodable IPC frame as a process-level `uncaughtException` in the parent (oven-sh/bun#37287), which the postmortem handler treated as fatal and tore down every active session and subagent. The handler now recognizes the decode failure (`isWorkerIpcDeserializeError`) and logs-and-continues, faulting only the offending worker via its own exit/error path ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ## [1.5.5] - 2026-09-25
 

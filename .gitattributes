@@ -59,3 +59,6 @@ poetry.lock -text
 CHANGELOG.md merge=union
 packages/*/CHANGELOG.md merge=union
 
+# Generated tree-sitter parser: regenerate from grammar.js (see its README.md).
+natives/vendor/tree-sitter-go/src/parser.c linguist-generated
+

@@ -440,8 +440,8 @@ export function emergencyTerminalRestore(): void {
 /** Terminal-reported appearance (dark/light mode). */
 export type TerminalAppearance = "dark" | "light";
 export interface Terminal {
-	// Start the terminal with input and resize handlers
-	start(onInput: (data: string) => void, onResize: () => void): void;
+	// Start the terminal with input, resize, and host-disconnect handlers.
+	start(onInput: (data: string) => void, onResize: () => void, onDisconnect?: () => void): void;
 
 	// Stop the terminal and restore state
 	stop(): void;
@@ -540,6 +540,15 @@ export interface Terminal {
 	 * with no capability probe can never confirm and therefore never arms.
 	 */
 	requestEnhancedPaste?(): void;
+	/**
+	 * Whether a pseudoconsole host owns the grid this terminal writes to, so
+	 * neither the cursor nor the painted rows survive a resize under the
+	 * application's own model: the host re-emits its whole viewport from
+	 * `CSI H` and re-homes the cursor, leaving the renderer's resize routing
+	 * without either precondition. Optional so custom Terminals keep working;
+	 * absent means the terminal itself owns the grid.
+	 */
+	readonly hostOwnsGridOnResize?: boolean;
 }
 
 /**
@@ -554,6 +563,18 @@ export function isConPTYHosted(): boolean {
 	if (process.platform === "win32") return true;
 	// WSL: stdout still crosses into ConPTY at the `wslhost` boundary.
 	return process.platform === "linux" && (!!$env.WSL_DISTRO_NAME || !!$env.WSL_INTEROP);
+}
+
+/** Construction-time overrides for {@link ProcessTerminal}. */
+export interface ProcessTerminalOptions {
+	/**
+	 * Force ConPTY-hosted behavior on or off. Defaults to live detection via
+	 * {@link isConPTYHosted}. Tests set this so the AltGr recovery,
+	 * write-chunking and resize-routing ({@link Terminal.hostOwnsGridOnResize})
+	 * paths stay hermetic regardless of the ambient WSL env (`WSL_DISTRO_NAME` /
+	 * `WSL_INTEROP`) — the suite must behave identically on WSL and on CI.
+	 */
+	conpty?: boolean;
 }
 
 /** Discriminated owner of an outstanding DA1 sentinel in the unified probe FIFO. */
@@ -629,7 +650,23 @@ export class ProcessTerminal implements Terminal {
 	// terminal side effect (writes, probes, raw mode, SIGWINCH, timers) is
 	// suppressed. Defaults on under `bun test` — see isTerminalHeadless().
 	#headless = isTerminalHeadless();
+	// Captured once at construction: whether stdout flows through a ConPTY
+	// pseudo-console. Gates the AltGr recovery and large-write chunking in
+	// `#safeWrite`, and answers {@link ProcessTerminal.hostOwnsGridOnResize}.
+	// Live-detected by default; tests inject a fixed value so WSL env does not
+	// change behavior. See {@link ProcessTerminalOptions}.
+	readonly #conpty: boolean;
 	#writeLogPath = $env.VEYYON_TUI_WRITE_LOG || "";
+	#disconnectHandler?: () => void;
+	#stdinEndHandler = () => {
+		this.#markTerminalDisconnected("stdin ended");
+	};
+	#stdinCloseHandler = () => {
+		this.#markTerminalDisconnected("stdin closed");
+	};
+	#stdinErrorHandler = (err: Error) => {
+		this.#markTerminalDisconnected("stdin failed", err);
+	};
 	#stdoutErrorCleanup?: () => void;
 	#stdoutErrorHandler = (err: Error) => {
 		this.#markTerminalWriteFailed(err);
@@ -668,6 +705,10 @@ export class ProcessTerminal implements Terminal {
 	#windowsTerminalAppearancePollTimer?: Timer;
 	#progressTimer?: Timer;
 
+	constructor(options?: ProcessTerminalOptions) {
+		this.#conpty = options?.conpty ?? isConPTYHosted();
+	}
+
 	get kittyProtocolActive(): boolean {
 		return this.#kittyProtocolActive;
 	}
@@ -688,6 +729,14 @@ export class ProcessTerminal implements Terminal {
 		// breaking the composer between overlays. terminal.stop() still disables it
 		// globally on graceful exit; the emergency-restore path mirrors that.
 		return this.#kittyProtocolActive ? "\x1b[<u" : null;
+	}
+
+	get hostOwnsGridOnResize(): boolean {
+		// #conpty, not a fresh isConPTYHosted() call: the construction override
+		// must gate every ConPTY-dependent path uniformly, or an injected
+		// `conpty` value models one host for writes and the opposite host for
+		// resize routing.
+		return this.#conpty;
 	}
 
 	get appearance(): TerminalAppearance | undefined {
@@ -750,7 +799,8 @@ export class ProcessTerminal implements Terminal {
 		this.#privateModeCallbacks.push(callback);
 	}
 
-	start(onInput: (data: string) => void, onResize: () => void): void {
+	start(onInput: (data: string) => void, onResize: () => void, onDisconnect?: () => void): void {
+		this.#disconnectHandler = onDisconnect;
 		this.#inputHandler = onInput;
 		this.#resizeHandler = onResize;
 
@@ -778,6 +828,9 @@ export class ProcessTerminal implements Terminal {
 		}
 		process.stdin.setEncoding("utf8");
 		process.stdin.resume();
+		process.stdin.on("end", this.#stdinEndHandler);
+		process.stdin.on("close", this.#stdinCloseHandler);
+		process.stdin.on("error", this.#stdinErrorHandler);
 
 		// Enable bracketed paste mode - terminal will wrap pastes in \x1b[200~ ... \x1b[201~
 		this.#safeWrite("\x1b[?2004h");
@@ -1224,7 +1277,7 @@ export class ProcessTerminal implements Terminal {
 				// Windows console hosts drop AltGr text under kitty (AltGr+F → `CSI 102;3u`);
 				// recover it from the active layout before any keybinding sees an Alt chord.
 				const altGrText =
-					this.#kittyProtocolActive && isConPTYHosted() && process.platform === "win32"
+					this.#kittyProtocolActive && this.#conpty && process.platform === "win32"
 						? translateWindowsAltGrSequence(sequence)
 						: undefined;
 				this.#inputHandler(altGrText ?? sequence);
@@ -1698,9 +1751,19 @@ export class ProcessTerminal implements Terminal {
 		// where Ctrl+D could close the parent shell over SSH.
 		process.stdin.pause();
 
-		// Restore raw mode state
+		process.stdin.removeListener("end", this.#stdinEndHandler);
+		process.stdin.removeListener("close", this.#stdinCloseHandler);
+		process.stdin.removeListener("error", this.#stdinErrorHandler);
+		this.#disconnectHandler = undefined;
+
+		// Restore raw mode state, best-effort: a revoked pty (pane recycled, ssh
+		// dropped) is no longer a tty and Bun's node:tty shim throws ENOENT.
 		if (process.stdin.setRawMode) {
-			process.stdin.setRawMode(this.#wasRaw);
+			try {
+				process.stdin.setRawMode(this.#wasRaw);
+			} catch {
+				// Terminal already gone
+			}
 		}
 		this.#stdoutErrorCleanup?.();
 		this.#stdoutErrorCleanup = undefined;
@@ -1708,6 +1771,35 @@ export class ProcessTerminal implements Terminal {
 
 	#ensureStdoutErrorHandler(): void {
 		this.#stdoutErrorCleanup ??= registerStdoutErrorHandler(this.#stdoutErrorHandler);
+	}
+
+	#markTerminalDisconnected(reason: string, err?: unknown): void {
+		if (this.#dead) return;
+		this.#dead = true;
+		logger.warn("terminal disconnected; stopping interactive rendering", { reason, err });
+
+		const disconnectHandler = this.#disconnectHandler;
+		this.#disconnectHandler = undefined;
+		if (!disconnectHandler) return;
+		// The handler tears the TUI down against a terminal that is already gone,
+		// so any step in it can fail. Swallow that: the exit below is the whole
+		// point of this method and must not be preempted by teardown noise.
+		try {
+			disconnectHandler();
+		} catch (handlerErr) {
+			logger.error("Terminal disconnect handler failed; exiting anyway", { err: handlerErr });
+		}
+
+		if (process.platform === "win32") {
+			void postmortem.quit(129, { drainStdout: false });
+			return;
+		}
+		try {
+			process.kill(process.pid, "SIGHUP");
+		} catch (signalErr) {
+			logger.error("Failed to deliver terminal disconnect signal; exiting directly", { err: signalErr });
+			void postmortem.quit(129);
+		}
 	}
 
 	#markTerminalWriteFailed(err: unknown): void {
@@ -1724,12 +1816,9 @@ export class ProcessTerminal implements Terminal {
 			});
 			return;
 		}
-		this.#dead = true;
-		logger.warn(
-			decision === "disable-fatal"
-				? "terminal closed (fatal write error); disabling rendering"
-				: "terminal rendering disabled after repeated write failures",
-			{ code: terminalWriteErrorCode(err), failures: this.#consecutiveWriteFailures, err },
+		this.#markTerminalDisconnected(
+			decision === "disable-fatal" ? "fatal write error" : "repeated write failures",
+			err,
 		);
 	}
 
@@ -1768,7 +1857,7 @@ export class ProcessTerminal implements Terminal {
 			// `process.stdout.write(string)` UTF-8-encodes before `WriteFile`,
 			// and a code-unit cap would let CJK transcript rows expand past the
 			// threshold. See #2034 and #2095.
-			if (isConPTYHosted() && Buffer.byteLength(data, "utf8") > MAX_CONPTY_WRITE_CHUNK_BYTES) {
+			if (this.#conpty && Buffer.byteLength(data, "utf8") > MAX_CONPTY_WRITE_CHUNK_BYTES) {
 				for (const chunk of chunkForConPTY(data, MAX_CONPTY_WRITE_CHUNK_BYTES)) {
 					if (this.#dead) break;
 					process.stdout.write(chunk);

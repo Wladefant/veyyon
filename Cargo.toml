@@ -28,6 +28,9 @@ repository = "https://github.com/santhreal/veyyon"
 [patch.crates-io]
 brush-core = { path = "natives/vendor/brush-core" }
 brush-builtins = { path = "natives/vendor/brush-builtins" }
+# tree-sitter-go 0.25.0 (latest release) rejects Go 1.26 `new(expr)`; the
+# vendored copy carries the upstream grammar fix (see its README.md).
+tree-sitter-go = { path = "natives/vendor/tree-sitter-go" }
 # async-task: smol executor tasks used by gpui, gpui_macos, and scheduler
 async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }
 # async-process: async process spawning used transitively by gpui_linux via smol
