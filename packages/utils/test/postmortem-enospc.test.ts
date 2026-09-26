@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { existsSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import * as postmortem from "../src/postmortem";
 
@@ -92,15 +92,17 @@ async function runChild(code: string): Promise<{ code: number | null; output: st
 
 describe("global ENOSPC routing", () => {
 	it("unhandledRejection with ENOSPC does not exit the process", async () => {
-		const result = await runChild([
-			`import ${JSON.stringify(modulePath)};`,
-			`const err = new Error("ENOSPC: no space left on device, write");`,
-			`Object.assign(err, { code: "ENOSPC", syscall: "write", errno: -4055 });`,
-			`Promise.reject(err);`,
-			// Real delay: the rejection handler fires on the microtask queue of
-			// a separate process; fake timers cannot reach across processes.
-			`setTimeout(() => { process.stdout.write("survived"); process.exit(0); }, 50);`,
-		].join("\n"));
+		const result = await runChild(
+			[
+				`import ${JSON.stringify(modulePath)};`,
+				`const err = new Error("ENOSPC: no space left on device, write");`,
+				`Object.assign(err, { code: "ENOSPC", syscall: "write", errno: -4055 });`,
+				`Promise.reject(err);`,
+				// Real delay: the rejection handler fires on the microtask queue of
+				// a separate process; fake timers cannot reach across processes.
+				`setTimeout(() => { process.stdout.write("survived"); process.exit(0); }, 50);`,
+			].join("\n"),
+		);
 
 		// The process should exit 0 (survived), not 1 (fatal unhandled rejection).
 		expect(result.code).toBe(0);
@@ -108,27 +110,31 @@ describe("global ENOSPC routing", () => {
 	});
 
 	it("uncaughtException with ENOSPC does not exit the process", async () => {
-		const result = await runChild([
-			`import ${JSON.stringify(modulePath)};`,
-			`const err = new Error("ENOSPC: no space left on device, write");`,
-			`Object.assign(err, { code: "ENOSPC", syscall: "write", errno: -4055 });`,
-			`process.emit("uncaughtException", err);`,
-			// Real delay: same cross-process rationale as above.
-			`setTimeout(() => { process.stdout.write("survived"); process.exit(0); }, 50);`,
-		].join("\n"));
+		const result = await runChild(
+			[
+				`import ${JSON.stringify(modulePath)};`,
+				`const err = new Error("ENOSPC: no space left on device, write");`,
+				`Object.assign(err, { code: "ENOSPC", syscall: "write", errno: -4055 });`,
+				`process.emit("uncaughtException", err);`,
+				// Real delay: same cross-process rationale as above.
+				`setTimeout(() => { process.stdout.write("survived"); process.exit(0); }, 50);`,
+			].join("\n"),
+		);
 
 		expect(result.code).toBe(0);
 		expect(result.output).toContain("survived");
 	});
 
 	it("non-ENOSPC rejection still exits the process", async () => {
-		const result = await runChild([
-			`import ${JSON.stringify(modulePath)};`,
-			`Promise.reject(new Error("real bug"));`,
-			// Real delay: cross-process event loop; the process should exit 1
-			// before this fires.
-			`setTimeout(() => { process.stdout.write("should-not-reach"); process.exit(0); }, 200);`,
-		].join("\n"));
+		const result = await runChild(
+			[
+				`import ${JSON.stringify(modulePath)};`,
+				`Promise.reject(new Error("real bug"));`,
+				// Real delay: cross-process event loop; the process should exit 1
+				// before this fires.
+				`setTimeout(() => { process.stdout.write("should-not-reach"); process.exit(0); }, 200);`,
+			].join("\n"),
+		);
 
 		// The process should exit 1 (fatal), not 0.
 		expect(result.code).toBe(1);
