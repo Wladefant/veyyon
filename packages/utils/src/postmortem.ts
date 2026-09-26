@@ -110,6 +110,18 @@ export function isStdioWriteEpipe(err: Error): boolean {
 	return isWriteEpipe(err) && stdioErrors.has(err);
 }
 
+/**
+ * Whether `err` is an ENOSPC ("no space left on device") filesystem error.
+ * Disk-full writes from logs, sessions, or artifacts must never be fatal —
+ * killing Main discards every running lane. The session can continue even
+ * when individual writes fail; disk pressure is transient. See issue #73.
+ */
+export function isEnospc(err: unknown): boolean {
+	if (err === null || typeof err !== "object") return false;
+	if (!("code" in err)) return false;
+	return err.code === "ENOSPC";
+}
+
 // Well-known key marking an error as an *expected* teardown artifact (e.g. a
 // browser run-scope abort at normal run end). `Symbol.for` so the marker
 // survives duplicate module instances across bundles/realms.
@@ -208,6 +220,13 @@ if (isMainThread) {
 				logger.warn("Ignoring EPIPE from non-stdio write; owning operation handles failure", { err });
 				return;
 			}
+			// ENOSPC from a log, session, or artifact write must not be fatal —
+			// killing Main discards every running lane. Disk pressure is
+			// transient; the write's caller handles the local failure. #73.
+			if (isEnospc(err)) {
+				logger.warn("Disk full (ENOSPC) — degrading gracefully instead of crashing", { err });
+				return;
+			}
 			// fd 2 may be redirected to the log while a TUI owns the terminal
 			// (stderr-guard); re-point it at the real terminal so the fatal
 			// report is visible. Terminal modes are restored moments later by
@@ -246,6 +265,11 @@ if (isMainThread) {
 			}
 			if (isWriteEpipe(reason)) {
 				logger.warn("Ignoring EPIPE from non-stdio write; owning operation handles failure", { err: reason });
+				return;
+			}
+			// ENOSPC: same rationale as the uncaughtException guard above. #73.
+			if (isEnospc(reason)) {
+				logger.warn("Disk full (ENOSPC) — degrading gracefully instead of crashing", { err });
 				return;
 			}
 			for (const interceptor of rejectionInterceptors) {
