@@ -6,6 +6,7 @@
  */
 import type { ApiKey, AuthStorage, FetchImpl } from "@veyyon/ai";
 import { withAuth } from "@veyyon/ai/auth-retry";
+import { normalizeFirecrawlSearchUrl } from "@veyyon/web/firecrawl";
 import { withHardTimeout } from "@veyyon/web/hard-timeout";
 import { resolveProviderTextTransform, transformProviderPayload } from "../../../../provider-boundary";
 import type { SearchResponse, SearchSource } from "../types";
@@ -14,7 +15,6 @@ import type { SearchParams } from "./base";
 import { ApiKeySearchProvider } from "./base";
 import { handleProviderHttpError, RECENCY_TBS } from "./utils";
 
-const FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v2/search";
 const MAX_NUM_RESULTS = 100;
 
 export interface FirecrawlSearchParams {
@@ -24,6 +24,7 @@ export interface FirecrawlSearchParams {
 	signal?: AbortSignal;
 	fetch?: FetchImpl;
 	resolveProviderTextTransform?: SearchParams["resolveProviderTextTransform"];
+	endpoint?: string;
 }
 
 interface FirecrawlWebResult {
@@ -65,7 +66,8 @@ async function callFirecrawlSearch(apiKey: string, params: FirecrawlSearchParams
 	return withHardTimeout(params.signal, async hardSignal => {
 		const transform = resolveProviderTextTransform(params.resolveProviderTextTransform, "Firecrawl search");
 		const body = transformProviderPayload(buildRequestBody(params), transform, "Firecrawl search");
-		const response = await (params.fetch ?? fetch)(FIRECRAWL_SEARCH_URL, {
+		const searchUrl = normalizeFirecrawlSearchUrl(params.endpoint);
+		const response = await (params.fetch ?? fetch)(searchUrl, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
@@ -92,6 +94,7 @@ export async function searchFirecrawl(params: SearchParams): Promise<SearchRespo
 		signal: params.signal,
 		fetch: params.fetch,
 		resolveProviderTextTransform: params.resolveProviderTextTransform,
+		endpoint: process.env.FIRECRAWL_ENDPOINT,
 	};
 	const keyOrResolver: ApiKey = params.authStorage.resolver("firecrawl", {
 		sessionId: params.sessionId,
