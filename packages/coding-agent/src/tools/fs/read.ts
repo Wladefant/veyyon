@@ -436,6 +436,19 @@ function entriesDisplay(entries: readonly LineEntry[], fallbackStartLine: number
 	return { text, startLine, lineNumbers: entries.map(entry => (entry.kind === "line" ? entry.lineNumber : null)) };
 }
 
+/**
+ * The display for summary rows numbered `numbers` (`null` for a row that stands for no one line),
+ * with the same contract as {@link entriesDisplay}. The list is stored as given, so a caller passes
+ * one it no longer uses.
+ */
+function numberedDisplay(text: string, numbers: Array<number | null>, fallbackStartLine: number): ReadDisplayContent {
+	const startLine = numbers.find(number => number !== null) ?? fallbackStartLine;
+	let contiguous = true;
+	for (let i = 0; i < numbers.length && contiguous; i++) contiguous = numbers[i] === startLine + i;
+	if (contiguous) return { text, startLine };
+	return { text, startLine, lineNumbers: numbers };
+}
+
 /** Inclusive line range describing one elided span in a structural summary. */
 interface ElidedRange {
 	start: number;
@@ -2413,6 +2426,8 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	): {
 		text: string;
 		displayText: string;
+		/** The line each display row stands for: a merged brace pair its opening line, an elision `null`. */
+		displayLineNumbers: Array<number | null>;
 		elidedRanges: ElidedRange[];
 		elidedLines: number;
 		stoppedBy: "bytes" | "lines" | undefined;
@@ -2478,6 +2493,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 
 		const modelParts: string[] = [];
 		const displayParts: string[] = [];
+		const displayLineNumbers: Array<number | null> = [];
 		const elidedRanges: ElidedRange[] = [];
 		let elidedLines = 0;
 		let modelBytes = 0;
@@ -2528,6 +2544,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			modelBytes += cost;
 			modelParts.push(modelPart);
 			displayParts.push(displayPart);
+			displayLineNumbers.push(unit.kind === "elided" ? null : unitStartLine);
 
 			if (unit.kind === "elided") {
 				elidedRanges.push({ start: unit.startLine, end: unit.endLine });
@@ -2544,6 +2561,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		return {
 			text: modelParts.join("\n"),
 			displayText: displayParts.join("\n"),
+			displayLineNumbers,
 			elidedRanges,
 			elidedLines,
 			stoppedBy,
@@ -2607,12 +2625,15 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		if (hashContext?.tag) {
 			recordSeenLinesFromBody(this.session, absolutePath, hashContext.tag, rendered.text);
 		}
+		let displayText = rendered.displayText;
+		if (budgetNotice) {
+			// The budget notice follows a blank row, and neither stands for a line of the file.
+			displayText += `\n\n${budgetNotice}`;
+			rendered.displayLineNumbers.push(null, null);
+		}
 		return {
 			details: {
-				displayContent: {
-					text: budgetNotice ? `${rendered.displayText}\n\n${budgetNotice}` : rendered.displayText,
-					startLine: 1,
-				},
+				displayContent: numberedDisplay(displayText, rendered.displayLineNumbers, 1),
 				summary: {
 					lines: countTextLines(rendered.text),
 					elidedSpans: rendered.elidedRanges.length,
