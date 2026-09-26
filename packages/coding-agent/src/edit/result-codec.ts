@@ -14,6 +14,7 @@
 import type { ToolResultCodec } from "@veyyon/kernel/registry/tool-result-codec";
 import { isRecord } from "@veyyon/utils/type-guards";
 import type { BuiltinToolName } from "../tools/core/builtin-names";
+import { MIN_CODED_TEXT } from "../tools/core/output-notice";
 import { applyNumberedDiff } from "./numbered-diff-row";
 
 /**
@@ -22,9 +23,6 @@ import { applyNumberedDiff } from "./numbered-diff-row";
  * a different file.
  */
 const FROM_DIFF = "diff";
-
-/** Below this length the tag costs more than the `newText` it replaces. */
-const MIN_DROPPED_TEXT = 32;
 
 /** The snapshot fields of edit details or of one `perFileResults` entry. */
 interface Snapshot {
@@ -42,7 +40,7 @@ function rebuild(snapshot: Snapshot): string | undefined {
 /** `snapshot` without `newText` when its diff rebuilds it, else `snapshot` itself. */
 function slimSnapshot<T extends Snapshot>(snapshot: T): T {
 	const { newText } = snapshot;
-	if (typeof newText !== "string" || newText.length < MIN_DROPPED_TEXT || rebuild(snapshot) !== newText) {
+	if (typeof newText !== "string" || newText.length < MIN_CODED_TEXT || rebuild(snapshot) !== newText) {
 		return snapshot;
 	}
 	const { newText: _dropped, ...kept } = snapshot;

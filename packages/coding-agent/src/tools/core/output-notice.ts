@@ -144,6 +144,49 @@ export function extractResultTextOrUndefined(content: ResultTextContent): string
 	return separator ? result : undefined;
 }
 
+/**
+ * Result content as a session entry or a host's view of one holds it. A result codec rebuilds only
+ * from an array of blocks; a host's plain-string content rebuilds nothing.
+ */
+export type CodedResultContent = string | readonly { type?: string; text?: string }[] | undefined;
+
+/**
+ * The text a result codec rebuilds from: the result's first text block. Undefined for plain-string
+ * content and for content with no text block. Never throws on a malformed block, since it runs over
+ * every line a session loads.
+ */
+export function firstResultText(content: CodedResultContent): string | undefined {
+	if (typeof content === "string" || !Array.isArray(content)) return undefined;
+	for (const block of content) {
+		if (block !== null && typeof block === "object" && block.type === "text") {
+			return typeof block.text === "string" ? block.text : undefined;
+		}
+	}
+	return undefined;
+}
+
+/** Below this length a result codec's rebuild tag costs as much as the text it replaces, so it keeps the text. */
+export const MIN_CODED_TEXT = 32;
+
+/** A `[start, end)` range of a result's text, which a codec writes in place of a copy of that text. */
+export type ResultTextSpan = [start: number, end: number];
+
+/** The span of the first `text` in `body` at or after `from`, or undefined when there is none. */
+export function resultTextSpan(body: string, text: string, from = 0): ResultTextSpan | undefined {
+	const start = body.indexOf(text, from);
+	return start === -1 ? undefined : [start, start + text.length];
+}
+
+/** The text a written span names in `body`, or undefined when `span` is not a range of `body`. */
+export function sliceResultSpan(body: string | undefined, span: unknown): string | undefined {
+	if (body === undefined || !Array.isArray(span) || span.length !== 2) return undefined;
+	const [start, end] = span as unknown[];
+	if (!Number.isInteger(start) || !Number.isInteger(end)) return undefined;
+	const from = start as number;
+	const to = end as number;
+	return from >= 0 && from <= to && to <= body.length ? body.slice(from, to) : undefined;
+}
+
 const RAW_OUTPUT_ARTIFACT_PREFIX = "[raw output: artifact://";
 const RAW_OUTPUT_ARTIFACT_SUFFIX = "]";
 

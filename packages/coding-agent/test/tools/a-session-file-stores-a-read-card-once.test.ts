@@ -14,7 +14,10 @@
  * prune, other rows, renumbered rows, a shorter copy) keeps its card text on disk, and so does a card
  * text shorter than the tag that would replace it. A line written before the codec existed loads
  * unchanged. Every result codec the package ships has a suite: the sweep fails when one is added
- * until it has one, and the edit codec's is `a-session-file-stores-an-edit-snapshot-once`.
+ * until it has one. The edit codec's is `a-session-file-stores-an-edit-snapshot-once`, the search
+ * codec's `a-session-file-stores-a-search-card-once`, the eval codec's
+ * `a-session-file-stores-an-eval-cell-output-once` and the job codec's
+ * `a-session-file-stores-a-job-result-once`.
  *
  * DOES NOT CATCH: a display shape the read tool starts producing that no row below exercises, which
  * still round-trips exactly (the codec writes whole what it cannot rebuild) but may stop saving
@@ -193,8 +196,8 @@ describe("a session file stores a read card once", () => {
 		return Bun.stripANSI(drawToolView(view, theme).render(160).join("\n"));
 	}
 
-	it("is one of the two codecs the package ships, each with a suite, so a new one fails here until it has one", () => {
-		expect(BUILTIN_RESULT_CODECS.map(codec => codec.toolName)).toEqual(["read", "edit"]);
+	it("is one of the five codecs the package ships, each with a suite, so a new one fails here until it has one", () => {
+		expect(BUILTIN_RESULT_CODECS.map(codec => codec.toolName)).toEqual(["read", "search", "eval", "job", "edit"]);
 	});
 
 	it("writes no card text for any shape a rebuild reproduces, and loads every result as the tool returned it", async () => {

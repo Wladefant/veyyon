@@ -11,6 +11,7 @@
 import type { ToolResultCodec } from "@veyyon/kernel/registry/tool-result-codec";
 import { isRecord } from "@veyyon/utils/type-guards";
 import type { BuiltinToolName } from "../core/builtin-names";
+import { type CodedResultContent, firstResultText, MIN_CODED_TEXT } from "../core/output-notice";
 
 /**
  * The file's lines as the card draws them, without the hashline or line-number prefixes the model
@@ -44,24 +45,11 @@ export interface ResolvedReadDisplay {
 	lineNumbers?: Array<number | null>;
 }
 
-/**
- * Result content as a session entry or a host's view of one holds it. Only an array of blocks is
- * rebuilt from; a host's plain-string content rebuilds nothing.
- */
-type ResultContent = string | readonly { type?: string; text?: string }[] | undefined;
-
 /** A row's number prefix: `12:`, a merged brace pair's `12-18:`, or line-number mode's `12|`. */
 const ROW_PREFIX = /^([1-9]\d*)(?:-[1-9]\d*)?[:|]/;
 
 /** The row that stands for an elided span, drawn as is and numbered by nothing. */
 const ELISION_ROW = "…";
-
-/** The text a rebuild reads: the result's first text block. */
-function resultText(content: ResultContent): string | undefined {
-	if (typeof content === "string" || content === undefined) return undefined;
-	for (const block of content) if (block.type === "text") return block.text;
-	return undefined;
-}
 
 /**
  * The card rows of numbered result text: the rows after an optional `[…]` header line up to the first
@@ -113,16 +101,10 @@ function sameNumbers(a: readonly (number | null)[] | undefined, b: readonly (num
 	return true;
 }
 
-/**
- * The shortest card text worth dropping: a `from` tag and its `length` take about this many bytes, so
- * a shorter text costs less written as is.
- */
-const MIN_DROPPED_TEXT = 32;
-
 /** The display a written line stores for `display`, or undefined when no rebuild reproduces it. */
 function encode(display: ResolvedReadDisplay, body: string): ReadDisplayContent | undefined {
 	const { text, startLine, lineNumbers } = display;
-	if (text.length < MIN_DROPPED_TEXT) return undefined;
+	if (text.length < MIN_CODED_TEXT) return undefined;
 	const rows = rebuildRows(body);
 	if (rows !== undefined && rows.text === text && sameNumbers(storedNumbers(rows.numbers, startLine), lineNumbers)) {
 		return { startLine, from: "rows" };
@@ -134,8 +116,8 @@ function encode(display: ResolvedReadDisplay, body: string): ReadDisplayContent 
 }
 
 /** The display `from` names, rebuilt from the result's text; undefined when that text cannot rebuild it. */
-function rebuild(display: ReadDisplayContent, content: ResultContent): ResolvedReadDisplay | undefined {
-	const body = resultText(content);
+function rebuild(display: ReadDisplayContent, content: CodedResultContent): ResolvedReadDisplay | undefined {
+	const body = firstResultText(content);
 	if (body === undefined) return undefined;
 	const { startLine } = display;
 	if (display.from === "rows") {
@@ -164,7 +146,7 @@ export const readResultCodec: ToolResultCodec = {
 	toolName: "read" satisfies BuiltinToolName,
 	slim(details, content) {
 		if (!isRecord(details) || !isWholeDisplay(details.displayContent)) return details;
-		const body = resultText(content);
+		const body = firstResultText(content);
 		if (body === undefined) return details;
 		const displayContent = encode(details.displayContent, body);
 		return displayContent === undefined ? details : { ...details, displayContent };
@@ -183,7 +165,7 @@ export const readResultCodec: ToolResultCodec = {
  */
 export function resolveReadDisplay(
 	display: ReadDisplayContent | undefined,
-	content: ResultContent,
+	content: CodedResultContent,
 ): ResolvedReadDisplay | undefined {
 	if (display === undefined) return undefined;
 	if (display.text !== undefined) return display as ResolvedReadDisplay;
