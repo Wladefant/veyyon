@@ -1,10 +1,10 @@
-import { create, toBinary } from "@bufbuild/protobuf";
 import { describe, expect, test } from "bun:test";
-import { GetUserJwtResponseSchema } from "@veyyon/catalog/discovery/devin-gen/exa/auth_pb/auth_pb";
+import { create, toBinary } from "@bufbuild/protobuf";
 import { streamBedrock } from "@veyyon/ai/providers/amazon-bedrock";
 import { streamDevin } from "@veyyon/ai/providers/devin";
 import type { Context, Model } from "@veyyon/ai/types";
 import { buildModel } from "@veyyon/catalog/build";
+import { GetUserJwtResponseSchema } from "@veyyon/catalog/discovery/devin-gen/exa/auth_pb/auth_pb";
 
 interface BedrockPayload {
 	system?: Array<{ text: string } | { cachePoint: unknown }>;
@@ -81,10 +81,7 @@ async function captureDevinPayload(systemPrompt: Context["systemPrompt"]): Promi
 		systemPrompt,
 		messages: [{ role: "user", content: "hi", timestamp: 0 }],
 	};
-	const authResponse = toBinary(
-		GetUserJwtResponseSchema,
-		create(GetUserJwtResponseSchema, { userJwt: "test-jwt" }),
-	);
+	const authResponse = toBinary(GetUserJwtResponseSchema, create(GetUserJwtResponseSchema, { userJwt: "test-jwt" }));
 	const fetchImpl = (async (input: string | URL | Request) => {
 		const url = String(input);
 		if (url.includes("GetUserJwt")) {

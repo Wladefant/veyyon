@@ -1394,14 +1394,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 							if (!session || asyncJobManager!.isDeliverySuppressed(jobId)) return;
 							let meta: OutputMeta | undefined;
 							const details = job?.latestDetails;
-							if (details && typeof details === "object" && "meta" in details && typeof details.meta === "object" && details.meta !== null) {
+							if (
+								details &&
+								typeof details === "object" &&
+								"meta" in details &&
+								typeof details.meta === "object" &&
+								details.meta !== null
+							) {
 								meta = details.meta as OutputMeta;
 							}
-							const formattedResult = await formatAsyncResultForFollowUp(
-								result,
-								meta,
-								sessionManager,
-							);
+							const formattedResult = await formatAsyncResultForFollowUp(result, meta, sessionManager);
 							if (asyncJobManager!.isDeliverySuppressed(jobId)) return;
 
 							session.deliverAsyncJobResult(jobId, formattedResult, job);
@@ -1561,17 +1563,19 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			setTodoPhases: phases => session?.setTodoPhases(phases),
 			isMCPDiscoveryEnabled: () => session?.isMCPDiscoveryEnabled() ?? false,
 			getSelectedMCPToolNames: () => session?.getSelectedMCPToolNames() ?? [],
-			activateDiscoveredMCPTools: toolNames => (session ? session.activateDiscoveredMCPTools(toolNames) : Promise.resolve([])),
+			activateDiscoveredMCPTools: toolNames =>
+				session ? session.activateDiscoveredMCPTools(toolNames) : Promise.resolve([]),
 			// Generic tool discovery (unified — covers built-in + MCP + extension)
 			isToolDiscoveryEnabled: () => session?.isToolDiscoveryEnabled() ?? false,
 			getDiscoverableTools: filter => session?.getDiscoverableTools(filter) ?? [],
 			getDiscoverableToolSearchIndex: () => session?.getDiscoverableToolSearchIndex(),
 			getSelectedDiscoveredToolNames: () => session?.getSelectedDiscoveredToolNames() ?? [],
-			activateDiscoveredTools: toolNames => (session ? session.activateDiscoveredTools(toolNames) : Promise.resolve([])),
+			activateDiscoveredTools: toolNames =>
+				session ? session.activateDiscoveredTools(toolNames) : Promise.resolve([]),
 			getCheckpointState: () => session?.getCheckpointState(),
 			setCheckpointState: state => session?.setCheckpointState(state ?? undefined),
 			getLastCompletedRewind: () => session?.getLastCompletedRewind(),
-			getToolChoiceQueue: () => session?.toolChoiceQueue!,
+			getToolChoiceQueue: () => session?.toolChoiceQueue,
 			buildToolChoice: name => {
 				const m = session?.model;
 				return m ? buildNamedToolChoice(name, m) : undefined;

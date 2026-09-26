@@ -6,6 +6,10 @@
 
 - A `chatgpt-web` provider definition for the local `codex-chatgpt-web` Responses bridge. It carries no `login` and no `refreshToken`: the bridge authenticates its own browser side through a Chrome profile the operator signs in to once with the daemon's `setup` command, and its catalog bearer comes from the environment (`CODEX_CHATGPT_WEB_OAUTH_TOKEN`, then `OPENAI_CODEX_OAUTH_TOKEN`). The official `openai-codex` provider keeps its own flow, credentials and host unchanged.
 
+### Changed
+
+- Moved the `reasoning-budget` re-export below its import block in `stream.ts` and dropped a stray blank line before `applyCacheControlToLastTextBlock` so both files match the formatter and import-order rules; no behavior change.
+
 ### Fixed
 
 - Enabled refreshing of expired AWS SSO tokens via SSO OIDC CreateToken instead of failing immediately ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).

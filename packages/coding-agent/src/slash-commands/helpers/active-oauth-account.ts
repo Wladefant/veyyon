@@ -49,8 +49,7 @@ export function limitMatchesActiveAccount(
 		normalizeIdentityValue(metadata.account_id) ??
 		normalizeIdentityValue(limit.scope.accountId);
 	const reportEmail = normalizeIdentityValue(metadata.email);
-	const reportProjectId =
-		normalizeIdentityValue(metadata.projectId) ?? normalizeIdentityValue(limit.scope.projectId);
+	const reportProjectId = normalizeIdentityValue(metadata.projectId) ?? normalizeIdentityValue(limit.scope.projectId);
 
 	// Conflicting identity check: when both emails are known and differ, or
 	// both account ids are known and differ, the limit belongs to a different

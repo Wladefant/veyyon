@@ -14,8 +14,8 @@ import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { SearchToolBm25Tool } from "@veyyon/coding-agent/tools/search/search-tool-bm25";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
+import { SearchToolBm25Tool } from "@veyyon/coding-agent/tools/search/search-tool-bm25";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { useIsolatedAgentDir } from "./helpers/isolated-agent-dir";
@@ -45,7 +45,8 @@ describe("discoverable tools resolution", () => {
 		let session: AgentSession | undefined;
 		const toolSession = {
 			cwd: registryDir,
-			getDiscoverableTools: (filter?: { source?: "builtin" | "mcp" | "custom" }) => session?.getDiscoverableTools(filter) ?? [],
+			getDiscoverableTools: (filter?: { source?: "builtin" | "mcp" | "custom" }) =>
+				session?.getDiscoverableTools(filter) ?? [],
 			isToolDiscoveryEnabled: () => session?.isToolDiscoveryEnabled() ?? false,
 		} as unknown as ToolSession;
 
@@ -58,46 +59,42 @@ describe("discoverable tools resolution", () => {
 		expect(() => searchTool.description).not.toThrow();
 	});
 
-	it(
-		"drives real sdk session creation, calls discovery path, and gets a non-empty inventory",
-		async () => {
-			const settings = Settings.isolated({ "tools.discoveryMode": "all" });
-			const { session } = await createAgentSession({
-				cwd: registryDir,
-				agentDir: registryDir,
-				modelRegistry,
-				sessionManager: SessionManager.inMemory(),
-				settings,
-				model: getBundledModel("openai", "gpt-4o-mini"),
-				disableExtensionDiscovery: true,
-				skills: [],
-				contextFiles: [],
-				promptTemplates: [],
-				slashCommands: [],
-				enableLsp: false,
-				skipPythonPreflight: true,
-				enableMCP: false,
-			});
-			sessions.push(session);
+	it("drives real sdk session creation, calls discovery path, and gets a non-empty inventory", async () => {
+		const settings = Settings.isolated({ "tools.discoveryMode": "all" });
+		const { session } = await createAgentSession({
+			cwd: registryDir,
+			agentDir: registryDir,
+			modelRegistry,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableLsp: false,
+			skipPythonPreflight: true,
+			enableMCP: false,
+		});
+		sessions.push(session);
 
-			// Discovery must be enabled
-			expect(session.isToolDiscoveryEnabled()).toBe(true);
+		// Discovery must be enabled
+		expect(session.isToolDiscoveryEnabled()).toBe(true);
 
-			// The inventory must be non-empty
-			const discoverable = session.getDiscoverableTools();
-			expect(discoverable.length).toBeGreaterThan(0);
+		// The inventory must be non-empty
+		const discoverable = session.getDiscoverableTools();
+		expect(discoverable.length).toBeGreaterThan(0);
 
-			// search_tool_bm25 must be registered and active
-			expect(session.getActiveToolNames()).toContain("search_tool_bm25");
-			const searchTool = session.getToolByName("search_tool_bm25");
-			expect(searchTool).toBeDefined();
+		// search_tool_bm25 must be registered and active
+		expect(session.getActiveToolNames()).toContain("search_tool_bm25");
+		const searchTool = session.getToolByName("search_tool_bm25");
+		expect(searchTool).toBeDefined();
 
-			// The description must reflect the non-empty inventory (not 0 tools)
-			const desc = searchTool!.description;
-			expect(desc).toBeDefined();
-			expect(desc.length).toBeGreaterThan(0);
-			expect(desc).toContain(`Total discoverable tools available: ${discoverable.length}`);
-		},
-		30_000,
-	);
+		// The description must reflect the non-empty inventory (not 0 tools)
+		const desc = searchTool!.description;
+		expect(desc).toBeDefined();
+		expect(desc.length).toBeGreaterThan(0);
+		expect(desc).toContain(`Total discoverable tools available: ${discoverable.length}`);
+	}, 30_000);
 });
