@@ -94,7 +94,7 @@ export interface LimitsMeta {
 	matchLimit?: { reached: number; suggestion: number };
 	resultLimit?: { reached: number; suggestion: number };
 	headLimit?: { reached: number; suggestion: number };
-	columnTruncated?: { maxColumn: number };
+	columnTruncated?: { maxColumn: number; unit?: "bytes" | "chars"; artifactId?: string };
 }
 
 /**
