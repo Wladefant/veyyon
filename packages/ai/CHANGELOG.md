@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Enabled refreshing of expired AWS SSO tokens via SSO OIDC CreateToken instead of failing immediately ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Anthropic prompt caching writing a fresh entry for the entire system prefix whenever the trailing project footer (cwd, date, workspace tree) changed.
 - Fixed the Amazon Bedrock and Devin providers crashing when Context.systemPrompt is passed as a bare string ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed capped Anthropic and Bedrock Claude requests with thinking enabled, including on-demand compaction, ending at max_tokens with no answer; every capped request now receives its effort thinking budget on top of requested output tokens.
