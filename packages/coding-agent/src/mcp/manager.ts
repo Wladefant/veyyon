@@ -219,6 +219,22 @@ export class MCPManager {
 	#adoptSpawnedPid: ((pid: number) => void) | undefined;
 	/** Session CPU budget gate: refuse a new stdio server while the group is saturated or uncreated. */
 	#gateSpawn: ((what: string) => Promise<void>) | undefined;
+	/**
+	 * Subscribers that need connection-status transitions observed AFTER startup
+	 * has settled: a transport that drops, the reconnect that follows it, a
+	 * reconnect that runs out of attempts, and the crash breaker suspending a
+	 * server.
+	 *
+	 * Startup's own connecting/connected/failed sequence stays on the `onStatus`
+	 * option of {@link connectServers}: the caller awaiting that load receives it
+	 * directly, and it is the only party that exists before the manager does. A
+	 * surface that subscribes later holds no such result, so without this set it
+	 * kept painting whatever startup said — a dropped transport left the boot
+	 * health reading "mcp 3/3" while the server was gone and its tools failed.
+	 * `/mcp list` escaped that only because it pulls {@link getConnectionStatus}
+	 * at paint time (upstream `be76c2939d56`, the reconnect half).
+	 */
+	#connectionStatusListeners = new Set<(event: McpConnectionStatusEvent) => void>();
 
 	/** Wire the session CPU budget hook for stdio server spawns. */
 	setSpawnAdoption(adopt: ((pid: number) => void) | undefined): void {
@@ -228,6 +244,30 @@ export class MCPManager {
 	/** Wire the session CPU budget gate for stdio server spawns. */
 	setSpawnGate(gate: ((what: string) => Promise<void>) | undefined): void {
 		this.#gateSpawn = gate;
+	}
+
+	/**
+	 * Subscribe to the live transitions described on
+	 * `#connectionStatusListeners`. Returns the unsubscribe, so a subscriber that
+	 * outlives one session detaches on dispose. A listener that throws is logged
+	 * and does not stop the others: one broken surface must not silence MCP
+	 * health for the rest.
+	 */
+	addConnectionStatusListener(listener: (event: McpConnectionStatusEvent) => void): () => void {
+		this.#connectionStatusListeners.add(listener);
+		return () => {
+			this.#connectionStatusListeners.delete(listener);
+		};
+	}
+
+	#emitConnectionStatus(event: McpConnectionStatusEvent): void {
+		for (const listener of this.#connectionStatusListeners) {
+			try {
+				listener(event);
+			} catch (error) {
+				logger.debug("MCP connection status listener threw", { error });
+			}
+		}
 	}
 
 	/**
@@ -535,6 +575,7 @@ export class MCPManager {
 					// network interruption).
 					connection.transport.onClose = () => {
 						logger.debug("MCP transport lost, triggering reconnect", { path: `mcp:${name}` });
+						this.#emitConnectionStatus({ type: "connecting", serverNames: [name] });
 						void this.reconnectServer(name);
 					};
 
@@ -1017,6 +1058,19 @@ export class MCPManager {
 					`Fix: check the server's own output, then run /mcp reconnect ${name}.`,
 				context: { server: name, crashes: recent.length, windowMs: RECONNECT_BURST_WINDOW_MS },
 			});
+			// `getLastError` is what `/mcp list` shows beside a server that is not
+			// connected, so the suspension is recorded there as well: the boot-health
+			// zone counts failures and points at that list for the reason.
+			const suspension =
+				`suspended after ${recent.length} crashes in ${RECONNECT_BURST_WINDOW_MS / 1000}s; ` +
+				`run /mcp reconnect ${name} once the server is fixed`;
+			this.#lastErrors.set(name, suspension);
+			this.#emitConnectionStatus({
+				type: "failed",
+				serverName: name,
+				error: suspension,
+				foreign: this.#isForeignServer(name),
+			});
 			// Tear down the stale connection so `getConnectionStatus()` no
 			// longer reports it as "connected" and `waitForConnection()` does
 			// not hand a closed transport to callers. Tools stay registered
@@ -1074,6 +1128,7 @@ export class MCPManager {
 			try {
 				const connection = await this.#connectAndWireServer(name, config, source, reconnectEpoch);
 				logger.debug("MCP reconnected", { path: `mcp:${name}`, tools: connection.tools?.length ?? 0 });
+				this.#emitConnectionStatus({ type: "connected", serverName: name });
 				return connection;
 			} catch (error) {
 				if (this.#epoch !== reconnectEpoch) {
@@ -1095,6 +1150,13 @@ export class MCPManager {
 					await Bun.sleep(delays[attempt]);
 				} else {
 					logger.error("MCP reconnect failed after retries", { path: `mcp:${name}`, error: msg });
+					this.#lastErrors.set(name, msg);
+					this.#emitConnectionStatus({
+						type: "failed",
+						serverName: name,
+						error: msg,
+						foreign: this.#isForeignServer(name),
+					});
 					// Don't remove stale tools — keep them in the registry so they
 					// remain selected. Calls will fail with MCP errors, which
 					// triggers the tool-level reconnect, or the user can run
@@ -1161,6 +1223,7 @@ export class MCPManager {
 		}
 		connection.transport.onClose = () => {
 			logger.debug("MCP transport lost, triggering reconnect", { path: `mcp:${name}` });
+			this.#emitConnectionStatus({ type: "connecting", serverNames: [name] });
 			void this.reconnectServer(name);
 		};
 		try {
