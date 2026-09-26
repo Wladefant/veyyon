@@ -1832,7 +1832,7 @@ export class TUI extends Container {
 		let buffer = this.#paintBeginSequence + relativeMoveY(rowDelta);
 		buffer += "\r";
 		for (let i = firstChanged; i <= lastChanged; i++) {
-			if (i > firstChanged) buffer += "\r\n";
+			if (i > firstChanged) buffer += "\n";
 			buffer += lineRewriteSequence(
 				this.#prepared.rowAt(segment.start + i) ?? "",
 				width,
@@ -3496,7 +3496,7 @@ export class TUI extends Container {
 	#emitResizeViewport(window: readonly string[], height: number, contentRows: number, width: number): void {
 		let buffer = `${this.#paintBeginSequence + this.#enterResizeAltSequence()}\x1b[H`;
 		for (let r = 0; r < height; r++) {
-			if (r > 0) buffer += "\r\n";
+			if (r > 0) buffer += "\n";
 			buffer += lineRewriteSequence(window[r] ?? "", width, r, this.#imageBudget);
 		}
 		// Park the hardware cursor at the real content bottom, not the padded
@@ -3603,7 +3603,7 @@ export class TUI extends Container {
 		}
 		let buffer = `${this.#paintBeginSequence}\x1b[H`;
 		for (let r = 0; r < height; r++) {
-			if (r > 0) buffer += "\r\n";
+			if (r > 0) buffer += "\n";
 			buffer += lineRewriteSequence(fitted[r], width, r, this.#imageBudget);
 		}
 		if (cursor !== undefined) {
@@ -3719,7 +3719,7 @@ export class TUI extends Container {
 					if (up > 0) buffer += `\x1b[${up}A`;
 					buffer += "\r";
 					for (let r = firstChanged; r <= lastChanged; r++) {
-						if (r > firstChanged) buffer += "\r\n";
+						if (r > firstChanged) buffer += "\n";
 						buffer += lineRewriteSequence(window[r] ?? "", width, r, this.#imageBudget);
 					}
 					cursorFromRow = windowTop + lastChanged;
@@ -3780,7 +3780,7 @@ export class TUI extends Container {
 				fillSequence = plan.sequence;
 			}
 			for (let r = firstChanged; r <= lastChanged; r++) {
-				if (r > firstChanged) buffer += "\r\n";
+				if (r > firstChanged) buffer += "\n";
 				buffer += lineRewriteSequence(
 					fillTexts ? fillTexts[r - firstChanged] : (window[r] ?? ""),
 					width,
@@ -3811,12 +3811,12 @@ export class TUI extends Container {
 		buffer += "\r";
 		let wroteLine = false;
 		for (let i = chunkFrom; i < chunkTo; i++) {
-			if (wroteLine) buffer += "\r\n";
+			if (wroteLine) buffer += "\n";
 			buffer += lineRewriteSequence(frame[i] ?? "", width);
 			wroteLine = true;
 		}
 		for (let screenRow = 0; screenRow < height; screenRow++) {
-			if (wroteLine) buffer += "\r\n";
+			if (wroteLine) buffer += "\n";
 			buffer += lineRewriteSequence(window[screenRow] ?? "", width, screenRow, this.#imageBudget);
 			wroteLine = true;
 		}
