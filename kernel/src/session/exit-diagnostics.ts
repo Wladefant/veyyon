@@ -19,12 +19,25 @@ export interface ToolArgumentSummary {
 	path?: string;
 }
 
-/** Persisted marker written before a tool implementation starts running. */
+/**
+ * Persisted marker written before a tool implementation starts running. The entry's timestamp is the
+ * start time.
+ */
 export interface ToolExecutionStartData {
 	toolCallId: string;
 	toolName: string;
+	/**
+	 * Absent when the newest assistant message on the branch records the call
+	 * ({@link assistantRecordsToolCall}), since the pending-call reader takes that message's arguments.
+	 */
 	args?: ToolArgumentSummary;
 	intent?: string;
+	/** Written by sessions from before the entry timestamp served as the start time. */
+	startedAt?: string;
+}
+
+/** A start marker as the pending-call reader applies it: `startedAt` from the marker or its entry. */
+interface ToolExecutionStart extends ToolExecutionStartData {
 	startedAt: string;
 }
 
@@ -232,13 +245,13 @@ export function summarizeToolArguments(
 	return summary.command !== undefined || summary.path !== undefined ? summary : undefined;
 }
 
-function readToolExecutionStart(entry: SessionEntry): ToolExecutionStartData | undefined {
+function readToolExecutionStart(entry: SessionEntry): ToolExecutionStart | undefined {
 	if (entry.type !== "custom" || entry.customType !== TOOL_EXECUTION_START_CUSTOM_TYPE) return undefined;
 	const data = entry.data;
 	if (!isRecord(data)) return undefined;
 	if (typeof data.toolCallId !== "string" || typeof data.toolName !== "string") return undefined;
 	const startedAt = typeof data.startedAt === "string" ? data.startedAt : entry.timestamp;
-	const result: ToolExecutionStartData = {
+	const result: ToolExecutionStart = {
 		toolCallId: data.toolCallId,
 		toolName: data.toolName,
 		startedAt,
@@ -263,16 +276,21 @@ function readToolExecutionStart(entry: SessionEntry): ToolExecutionStartData | u
 function isRenamedRepeat(part: ToolCallContent, earlier: readonly ToolCallContent[]): boolean {
 	const id = part.id;
 	if (id === undefined) return false;
-	const args = JSON.stringify(part.arguments);
-	return earlier.some(
-		other =>
-			other.id !== undefined &&
-			other.name === part.name &&
-			id.length > other.id.length + 1 &&
-			id.startsWith(`${other.id}_`) &&
-			/^\d+$/.test(id.slice(other.id.length + 1)) &&
-			JSON.stringify(other.arguments) === args,
-	);
+	// Serialized only once an earlier call's id qualifies, since most calls have no such twin.
+	let args: string | undefined;
+	return earlier.some(other => {
+		if (
+			other.id === undefined ||
+			other.name !== part.name ||
+			id.length <= other.id.length + 1 ||
+			!id.startsWith(`${other.id}_`) ||
+			!/^\d+$/.test(id.slice(other.id.length + 1))
+		) {
+			return false;
+		}
+		args ??= JSON.stringify(part.arguments);
+		return JSON.stringify(other.arguments) === args;
+	});
 }
 
 function appendAssistantToolCalls(pending: Map<string, PendingToolCallRecord>, message: AgentMessage): void {
@@ -300,7 +318,7 @@ function appendAssistantToolCalls(pending: Map<string, PendingToolCallRecord>, m
 	for (const toolCall of toolCalls) pending.set(toolCall.key, toolCall);
 }
 
-function applyToolExecutionStart(pending: Map<string, PendingToolCallRecord>, marker: ToolExecutionStartData): void {
+function applyToolExecutionStart(pending: Map<string, PendingToolCallRecord>, marker: ToolExecutionStart): void {
 	const existing = pending.get(marker.toolCallId);
 	if (existing) {
 		existing.startedAt = marker.startedAt;
@@ -342,6 +360,32 @@ export function collectPendingToolCalls(entries: readonly SessionEntry[]): Pendi
 		if (marker) applyToolExecutionStart(pending, marker);
 	}
 	return Array.from(pending.values()).map(({ key: _key, ...toolCall }) => toolCall);
+}
+
+/**
+ * Whether {@link collectPendingToolCalls} takes `toolCallId`'s arguments from an assistant message when
+ * a start marker is appended after `leaf`: the newest assistant message on the branch records the call
+ * and no tool result for it follows. The walk goes back over custom entries and tool results; any other
+ * message ends it unanswered, so a marker written then keeps its own copy of the arguments.
+ */
+export function assistantRecordsToolCall(
+	leaf: SessionEntry | undefined,
+	getEntry: (id: string) => SessionEntry | undefined,
+	toolCallId: string,
+): boolean {
+	for (let entry = leaf; entry !== undefined; entry = entry.parentId === null ? undefined : getEntry(entry.parentId)) {
+		if (entry.type !== "message") continue;
+		const message = entry.message;
+		if (message.role === "toolResult") {
+			if (message.toolCallId === toolCallId) return false;
+			continue;
+		}
+		if (message.role !== "assistant") return false;
+		const pending = new Map<string, PendingToolCallRecord>();
+		appendAssistantToolCalls(pending, message);
+		return pending.get(toolCallId)?.args !== undefined;
+	}
+	return false;
 }
 
 /** Calls named in the resume warning; the rest are counted, so a large batch stays one line. */

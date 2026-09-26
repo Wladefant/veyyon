@@ -122,8 +122,8 @@ describe("a read records line numbers only where the count breaks", () => {
 			// Round-trip as the session file does, so the assertion reads what is persisted.
 			const details = JSON.parse(JSON.stringify(result.details)) as ReadToolDetails;
 			const display = details.displayContent;
-			expect(display).toBeDefined();
-			if (!display) return;
+			expect(display?.text).toBeDefined();
+			if (display?.text === undefined) return;
 
 			const rows = display.text.split("\n");
 			const numbers = display.lineNumbers ?? rows.map((_, index) => display.startLine + index);
@@ -164,7 +164,7 @@ describe("a read records line numbers only where the count breaks", () => {
 			.filter(match => match !== null)
 			.map(match => [Number(match[1]), match[2]]);
 
-		const shown = details.displayContent?.text.split("\n") ?? [];
+		const shown = details.displayContent?.text?.split("\n") ?? [];
 		const start = details.displayContent?.startLine ?? 0;
 		expect(drawnRows).toEqual(shown.map((row, index) => [start + index, row]));
 		expect(drawnRows.map(([number]) => number)).toContain(4);

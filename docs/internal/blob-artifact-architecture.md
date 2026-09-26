@@ -112,6 +112,8 @@ For message/custom-message image blocks with `blob:sha256:<hash>` and for persis
 
 For any string field whose value is a `blobtext:sha256:<hash>` ref (large tool results and other oversized text externalized in step 2), the same pass reads the blob and restores the exact original string in place. A string ref is resolved at its parent slot (an array index or object key), because a child call receives the string by value and cannot rewrite the slot it lives in.
 
+The same walk points every other string of 64 characters or more, and every restored payload, at one shared copy of its text, so a text the file writes in several places is held once in memory. A result codec's rebuilt fields run after the walk and are not shared. The pass empties its pool and its list of blob sites before it returns, so a finished load holds no reference to the entries it restored.
+
 If a blob is missing:
 
 - image-block resolution logs a warning and keeps the original `blob:sha256:` ref string in memory,

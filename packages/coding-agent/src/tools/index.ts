@@ -10,12 +10,14 @@ import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import type { InMemorySnapshotStore } from "@veyyon/hashline";
 import type { HostNotifier } from "@veyyon/host";
 import type { ToolDomainManifest } from "@veyyon/kernel/registry/tool-domain";
+import type { ToolResultCodec } from "@veyyon/kernel/registry/tool-result-codec";
 import type { ArtifactManager } from "@veyyon/kernel/session/artifacts";
 import type { ClientBridge } from "@veyyon/kernel/session/client-bridge";
 import { registerAgentMessageKinds } from "@veyyon/kernel/session/message-kinds";
 import type { AgentSpawnRecord, UsageStatistics } from "@veyyon/kernel/session/session-entries";
 import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";
 import type { ToolChoiceQueue } from "@veyyon/kernel/session/tool-choice-queue";
+import { registerToolResultCodecs } from "@veyyon/kernel/session/tool-result-codecs";
 import { logger } from "@veyyon/utils";
 import type { ArgotSession } from "argot/session";
 import type { AsyncJobManager } from "../async/job-manager";
@@ -27,6 +29,7 @@ import type { Rule } from "../discovery/capability/rule";
 import { resolveEffectiveToolDiscoveryMode } from "../discovery/mode";
 import type { DiscoverableTool, DiscoverableToolSearchIndex, DiscoverableToolSource } from "../discovery/tool-index";
 import type { NoopLoopGuard } from "../edit/hashline/noop-loop-guard";
+import { editResultCodec } from "../edit/result-codec";
 import type { ToolPathWithSource } from "../extensibility/custom-tools";
 import type { Skill } from "../extensibility/skills";
 import type { GoalModeState, GoalRuntime } from "../goals";
@@ -507,12 +510,20 @@ export const BUILTIN_TOOL_DOMAINS: readonly ToolDomainManifest<ToolFactory>[] = 
 	agentDomain,
 ];
 
-// The roles the domains record are registered where the domains are assembled, so a transcript
-// holding a `!` command converts wherever this table loads — the terminal, the SDK, a resume — and
-// nowhere a domain's own module has to be imported first.
-for (const domain of BUILTIN_TOOL_DOMAINS) {
-	registerAgentMessageKinds(domain.messageKinds ?? []);
-}
+/**
+ * Every result codec this package ships: each domain's, plus the edit tool's, which has no domain
+ * directory to publish it from (see {@link DOMAIN_TOOL_FACTORIES}).
+ */
+export const BUILTIN_RESULT_CODECS: readonly ToolResultCodec[] = [
+	...BUILTIN_TOOL_DOMAINS.flatMap(domain => domain.resultCodecs ?? []),
+	editResultCodec,
+];
+
+// The roles and result codecs the domains record are registered where the domains are assembled, so
+// a transcript holding a `!` command converts, and a resumed read or edit card restores, wherever this
+// table loads — the terminal, the SDK, a resume — and nowhere a domain's own module has to be imported first.
+for (const domain of BUILTIN_TOOL_DOMAINS) registerAgentMessageKinds(domain.messageKinds ?? []);
+registerToolResultCodecs(BUILTIN_RESULT_CODECS);
 
 /**
  * Every domain's rows, plus the four whose implementation lives outside `tools/`.

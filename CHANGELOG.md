@@ -8,6 +8,10 @@
 
 - `CompactionDetails` holds only the file paths a compaction's read and modified lists gained over the compaction it built on (`readFilesAdded`, `modifiedFilesAdded`, and that compaction's id as `base`) instead of `readFiles` and `modifiedFiles` in full; `prepareCompaction` still resolves records an earlier version wrote.
 
+### Added
+
+- A tool domain manifest can list `resultCodecs`, each a `ToolResultCodec` whose `slim` drops a result `details` field the result's content rebuilds when the session writes the entry and whose `restore` rebuilds it when the session loads.
+
 ### Changed
 
 - A truncated `read`, `search` or `run_experiment` result records only its truncation counts in the session file, not a second copy of the kept text, so new results take less disk and memory and a resume parses less.
@@ -15,10 +19,18 @@
 - A goal session records the token and time a tool call spends as a small `goal_progress` entry instead of a full copy of the goal, so the session file holds the objective once per goal change rather than once per tool call and a resume parses less.
 - A `read` whose displayed rows count up without a break records no per-row line-number list in the session file, since the card numbers those rows from the first line; a read whose rows jump or skip still records the list.
 - Goal records on a session branch parse through the shared `isRecord` guard instead of a local copy; no user-visible change.
+- A `read` result's session file line omits the card's copy of the file text when the result's own numbered rows or plain text rebuild it, and the session restores it on load, which cut the recorded read results in local sessions from 4.27 GB to 2.89 GB.
+- A tool start marker in the session file omits the start time and the argument summary the entry timestamp and the assistant message already hold, so the resume warning for an unanswered call reads the arguments from that message.
+- An `edit` result's session file line omits the post-edit file text when its pre-edit text and numbered diff rebuild it byte for byte, and the session restores it on load, which cuts the post-edit copies recorded across local sessions from 671.18 MB to 3.79 MB.
+- A `search` result's session file line omits the card's copy of the matched rows, the path list `fileMatches` already holds, and the wrapper's repeat of the sub-search's truncation counts when the rest of the line rebuilds them, and the session restores them on load, which cuts the recorded search details in local sessions from 331.33 MB to 248.91 MB.
+- An `eval` result's session file line omits each cell's output and the top-level status events when the result's text and the first cell hold them, and a `job` result's line omits each job's result and error text the result's text holds, and the session restores them on load, which cuts the recorded eval details in local sessions from 497.77 MB to 253.78 MB and the job details from 100.84 MB to 37.80 MB.
 - The Anthropic and OpenAI-compatible providers split their stream loops, message converters and finalization into per-step helpers; no user-visible change.
 - The OpenAI-compatible stream reads a tool call's prior object arguments through the shared `isRecord` guard instead of an inline check; no user-visible change.
 - Opening or restoring a session builds its set of known entry ids once instead of twice, which takes about 40ms off opening a 220,000-entry session.
 - The resume warning flattens each command or path onto one line through the shared `collapseWhitespace` helper; no user-visible change.
+- A `tool_execution_start` session entry writes no `startedAt`, since the entry's own timestamp holds the start time, and writes its argument summary only when no preceding assistant message records the call, which cut the start markers in local sessions from 581.83 MB to 403.91 MB; a marker that wrote `startedAt` still reads back that time.
+- The `ToolResultCodec` contract permits a codec to rebuild a dropped field from the details the written line keeps as well as from the result's content; no behavior change.
+- Opening a session points every loaded string of 64 characters or more at one shared copy of its text, whether parsed from the file or read back from the blob store, and keeps no pooled string once the load returns, which cut the heap of a loaded 372.7 MiB session from 608.7 MiB to 401.7 MiB for 136 ms more load time.
 
 ### Removed
 
@@ -29,6 +41,7 @@
 - The CLI imports the terminal output guard when a worker thread starts rather than at startup, keeping it off the static boot graph; no user-visible change.
 - A tool card whose call carries an argument of the wrong type, such as `input: 404` for `search`, draws the value as text or omits it instead of failing with `Renderer failed: e.toWellFormed is not a function`.
 - The `read` card for a structurally summarized file numbers each row with the line the model saw, a merged brace pair with its opening line, instead of counting up from line 1 past every elided body, and draws the `…` elision row and the summary budget notice without a line number.
+- The streaming-reveal throughput bench builds its target as a transcript view instead of a raw assistant message, so `bun packages/coding-agent/bench/streaming-throughput.bench.ts` runs again; no user-visible change.
 - A Cursor turn whose remote agent stops making progress now ends with "Cursor made no progress for Ns" at the 30-minute ceiling instead of hanging indefinitely, because Cursor's ten-second server heartbeat no longer counts as progress.
 - A Cursor turn held by a local tool that never returns now ends when its failure or an abort arrives instead of waiting on the tool forever.
 - Fixed every Cursor exec-channel tool call being stored twice in the assistant message, which left an unanswered copy of each call that session resume reported as pending.

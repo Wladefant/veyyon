@@ -14,6 +14,11 @@
 - A goal session records the token and time a tool call spends as a small `goal_progress` entry instead of a full copy of the goal, so the session file holds the objective once per goal change rather than once per tool call and a resume parses less.
 - A `read` whose displayed rows count up without a break records no per-row line-number list in the session file, since the card numbers those rows from the first line; a read whose rows jump or skip still records the list.
 - Goal records on a session branch parse through the shared `isRecord` guard instead of a local copy; no user-visible change.
+- A `read` result's session file line omits the card's copy of the file text when the result's own numbered rows or plain text rebuild it, and the session restores it on load, which cut the recorded read results in local sessions from 4.27 GB to 2.89 GB.
+- A tool start marker in the session file omits the start time and the argument summary the entry timestamp and the assistant message already hold, so the resume warning for an unanswered call reads the arguments from that message.
+- An `edit` result's session file line omits the post-edit file text when its pre-edit text and numbered diff rebuild it byte for byte, and the session restores it on load, which cuts the post-edit copies recorded across local sessions from 671.18 MB to 3.79 MB.
+- A `search` result's session file line omits the card's copy of the matched rows, the path list `fileMatches` already holds, and the wrapper's repeat of the sub-search's truncation counts when the rest of the line rebuilds them, and the session restores them on load, which cuts the recorded search details in local sessions from 331.33 MB to 248.91 MB.
+- An `eval` result's session file line omits each cell's output and the top-level status events when the result's text and the first cell hold them, and a `job` result's line omits each job's result and error text the result's text holds, and the session restores them on load, which cuts the recorded eval details in local sessions from 497.77 MB to 253.78 MB and the job details from 100.84 MB to 37.80 MB.
 
 ### Fixed
 
@@ -21,6 +26,7 @@
 - A tool card whose call carries an argument of the wrong type, such as `input: 404` for `search`, draws the value as text or omits it instead of failing with `Renderer failed: e.toWellFormed is not a function`.
 - The `read` card for a structurally summarized file numbers each row with the line the model saw, a merged brace pair with its opening line, instead of counting up from line 1 past every elided body, and draws the `…` elision row and the summary budget notice without a line number.
 - The `browser` tool's `tab.fill` replaces a value in one trusted text insertion, so a React or Vue field's state follows it, the empty value included, and a long value costs one protocol call instead of three per character; it fills contenteditable elements, sets date, time, colour and range inputs with `input` and `change`, refuses checkboxes, radios, file inputs, `<select>` and read-only fields with the call that handles them, and refuses an element that cannot take focus instead of typing into the field that has it.
+- The streaming-reveal throughput bench builds its target as a transcript view instead of a raw assistant message, so `bun packages/coding-agent/bench/streaming-throughput.bench.ts` runs again; no user-visible change.
 
 ### Removed
 

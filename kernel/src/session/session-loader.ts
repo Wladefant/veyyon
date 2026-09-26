@@ -32,6 +32,7 @@ import {
 	type SessionTitleUpdate,
 	titleUpdateFromSlot,
 } from "./session-title-slot";
+import { restoreToolResultEntries } from "./tool-result-codecs";
 
 const STREAM_LOAD_THRESHOLD_BYTES = 8 * 1024 * 1024;
 
@@ -395,17 +396,64 @@ type BlobSite =
 	| { kind: "text-item"; owner: unknown[]; index: number };
 
 /**
- * Walk the transcript once and collect the references, without awaiting anything.
+ * Strings shorter than this stay unpooled. On a 372.7 MiB session of 107,918 entries, pooling from
+ * 64 characters took the loaded heap from 608.7 MiB to 397.9 MiB; from 256 characters it reached
+ * only 474.5 MiB, and from 8 characters it saved 17 MiB more than 64 for 105 ms more of the walk.
+ */
+const MIN_POOLED_LENGTH = 64;
+
+/**
+ * One copy of each repeated string in the entries one load restores.
+ *
+ * A session file writes a text once for every place it occurs: a file read twice, an eval cell's
+ * code beside the call that ran it, a card's text beside the result's own, each compaction's file
+ * list. `JSON.parse` gives every occurrence its own string. Strings are immutable, so pointing each
+ * occurrence at the first leaves the entries equal and lets the copies be collected. The load empties
+ * the pool before it returns: JavaScriptCore kept the first load's pool reachable after that load
+ * returned, which held every distinct pooled string of a session the caller had already released.
+ *
+ * A field a result codec rebuilds is not pooled: the rebuild is the result's content string or a
+ * slice of it, and that content is pooled. Pooling the rebuilt fields of a 372.7 MiB session written
+ * through every codec left its loaded heap at 393.0 MiB either way.
+ */
+class StringPool {
+	readonly #strings = new Map<string, string>();
+
+	/** The pooled string equal to `value`, pooling `value` when it is the first of its text. */
+	intern(value: string): string {
+		if (value.length < MIN_POOLED_LENGTH) return value;
+		const known = this.#strings.get(value);
+		if (known !== undefined) return known;
+		this.#strings.set(value, value);
+		return value;
+	}
+
+	/** Drop every pooled string, so a pool the engine keeps reachable holds no text. */
+	clear(): void {
+		this.#strings.clear();
+	}
+}
+
+/** What the one walk over the loaded entries gathers. */
+interface EntryScan {
+	sites: BlobSite[];
+	strings: StringPool;
+}
+
+/**
+ * Walk the transcript once, without awaiting anything: record each blob reference, and point every
+ * other string at its pooled copy.
  *
  * The walk used to be `async` and mapped every array element and every object key
  * through `Promise.all`, so a session with no externalized payload at all still
  * allocated one closure and one promise per node: 2,000 ordinary tool entries cost
  * ~17ms and ~27MiB of churn to discover that there was nothing to read. A
- * synchronous walk that only records the sites it finds costs neither.
+ * synchronous walk that only records the sites it finds costs neither. Pooling rides the same walk
+ * rather than a second pass over every node.
  */
-function collectBlobSites(value: unknown, sites: BlobSite[], key?: string): void {
+function scanEntryValue(value: unknown, scan: EntryScan, key?: string): void {
 	if (shouldResolveImagePayload(value, key)) {
-		sites.push({ kind: "image-data", owner: value });
+		scan.sites.push({ kind: "image-data", owner: value });
 		return;
 	}
 
@@ -415,17 +463,18 @@ function collectBlobSites(value: unknown, sites: BlobSite[], key?: string): void
 			// A string child is recorded against the parent, because a resolver receives
 			// the string by value and cannot rewrite the slot it lives in.
 			if (typeof item === "string") {
-				if (isTextBlobRef(item)) sites.push({ kind: "text-item", owner: value, index });
+				if (isTextBlobRef(item)) scan.sites.push({ kind: "text-item", owner: value, index });
+				else value[index] = scan.strings.intern(item);
 				continue;
 			}
-			collectBlobSites(item, sites, key);
+			scanEntryValue(item, scan, key);
 		}
 		return;
 	}
 
 	if (typeof value !== "object" || value === null) return;
 
-	if (hasImageUrl(value) && isBlobRef(value.image_url)) sites.push({ kind: "image-url", owner: value });
+	if (hasImageUrl(value) && isBlobRef(value.image_url)) scan.sites.push({ kind: "image-url", owner: value });
 
 	const target = value as Record<string, unknown>;
 	for (const childKey of Object.keys(target)) {
@@ -433,10 +482,11 @@ function collectBlobSites(value: unknown, sites: BlobSite[], key?: string): void
 		// Externalized text (large tool results, text blocks) is a plain `blobtext:`
 		// string value at an arbitrary key; restore the full content in place.
 		if (typeof item === "string") {
-			if (isTextBlobRef(item)) sites.push({ kind: "text", owner: target, key: childKey });
+			if (isTextBlobRef(item)) scan.sites.push({ kind: "text", owner: target, key: childKey });
+			else target[childKey] = scan.strings.intern(item);
 			continue;
 		}
-		collectBlobSites(item, sites, childKey);
+		scanEntryValue(item, scan, childKey);
 	}
 }
 
@@ -452,20 +502,25 @@ function collectBlobSites(value: unknown, sites: BlobSite[], key?: string): void
  */
 const BLOB_READ_CONCURRENCY = 8;
 
-async function resolveBlobSite(site: BlobSite, blobStore: BlobStore, lost: LostPayloads): Promise<void> {
+async function resolveBlobSite(
+	site: BlobSite,
+	blobStore: BlobStore,
+	lost: LostPayloads,
+	strings: StringPool,
+): Promise<void> {
 	// Each resolver returns the reference unchanged when the blob is gone, and it is
 	// only called on a value that IS a reference, so an unchanged value is a loss.
 	switch (site.kind) {
 		case "image-data": {
 			const resolved = await resolveImageData(blobStore, site.owner.data);
 			if (resolved === site.owner.data) lost.count += 1;
-			site.owner.data = resolved;
+			site.owner.data = strings.intern(resolved);
 			return;
 		}
 		case "image-url": {
 			const resolved = await resolveImageDataUrl(blobStore, site.owner.image_url);
 			if (resolved === site.owner.image_url) lost.count += 1;
-			site.owner.image_url = resolved;
+			site.owner.image_url = strings.intern(resolved);
 			return;
 		}
 		case "text": {
@@ -473,7 +528,7 @@ async function resolveBlobSite(site: BlobSite, blobStore: BlobStore, lost: LostP
 			if (typeof reference !== "string") return;
 			const resolved = await resolveTextBlobRef(blobStore, reference);
 			if (resolved === reference) lost.count += 1;
-			site.owner[site.key] = resolved;
+			site.owner[site.key] = strings.intern(resolved);
 			return;
 		}
 		case "text-item": {
@@ -481,13 +536,14 @@ async function resolveBlobSite(site: BlobSite, blobStore: BlobStore, lost: LostP
 			if (typeof reference !== "string") return;
 			const resolved = await resolveTextBlobRef(blobStore, reference);
 			if (resolved === reference) lost.count += 1;
-			site.owner[site.index] = resolved;
+			site.owner[site.index] = strings.intern(resolved);
 			return;
 		}
 	}
 }
 
-async function resolveBlobSites(sites: BlobSite[], blobStore: BlobStore, lost: LostPayloads): Promise<void> {
+async function resolveBlobSites(scan: EntryScan, blobStore: BlobStore, lost: LostPayloads): Promise<void> {
+	const { sites, strings } = scan;
 	if (sites.length === 0) return;
 	let next = 0;
 	const workers = Math.min(BLOB_READ_CONCURRENCY, sites.length);
@@ -495,7 +551,7 @@ async function resolveBlobSites(sites: BlobSite[], blobStore: BlobStore, lost: L
 		Array.from({ length: workers }, async () => {
 			for (let index = next++; index < sites.length; index = next++) {
 				const site = sites[index];
-				if (site) await resolveBlobSite(site, blobStore, lost);
+				if (site) await resolveBlobSite(site, blobStore, lost, strings);
 			}
 		}),
 	);
@@ -529,13 +585,15 @@ export interface BlobResolutionOptions {
 }
 
 /**
- * Restore every externalized payload the blob store still holds, and report the ones it
- * does not. Returns the number of references that stayed references.
+ * Restore what persistence moved out of each entry: every externalized payload the blob store still
+ * holds, then every tool-result field a codec dropped, which a codec rebuilds from that restored
+ * content. Every parsed or blob-restored string of 64 characters or more ends up sharing one copy
+ * with each equal string in `entries`. Reports the payloads the blob store does not hold and returns
+ * how many references stayed references.
  *
- * Two phases, deliberately: collect every reference in the session synchronously,
- * then read them through one bounded pool. The cap is session-wide rather than
- * per-entry, so a transcript of a thousand entries each holding one payload reads
- * eight files at a time and not a thousand.
+ * Two phases for the blobs: collect every reference in the session synchronously, then read them
+ * through one bounded pool. The cap is session-wide rather than per-entry, so a transcript of a
+ * thousand entries each holding one payload reads eight files at a time and not a thousand.
  */
 export async function resolveBlobRefsInEntries(
 	entries: FileEntry[],
@@ -543,11 +601,19 @@ export async function resolveBlobRefsInEntries(
 	options?: BlobResolutionOptions,
 ): Promise<number> {
 	const lost: LostPayloads = { count: 0 };
-	const sites: BlobSite[] = [];
-	for (const entry of entries) {
-		if (entry.type !== "session") collectBlobSites(entry, sites);
+	const scan: EntryScan = { sites: [], strings: new StringPool() };
+	try {
+		for (const entry of entries) {
+			if (entry.type !== "session") scanEntryValue(entry, scan);
+		}
+		await resolveBlobSites(scan, blobStore, lost);
+	} finally {
+		// Each site holds the object its payload restores into, so a scan the engine keeps reachable
+		// past the load would hold every restored text of a session the caller has released.
+		scan.sites.length = 0;
+		scan.strings.clear();
 	}
-	await resolveBlobSites(sites, blobStore, lost);
+	restoreToolResultEntries(entries);
 	if (lost.count > 0) {
 		logger.warn("Session payloads missing from the blob store", { source: options?.source, lost: lost.count });
 		if (options) emitLostPayloadNotice(options, lost.count);

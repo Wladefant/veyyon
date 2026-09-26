@@ -53,6 +53,7 @@ import {
 	type ToolViewResult,
 	truncateToWidth,
 } from "../core/render-utils";
+import { resolveEvalCells, resolveEvalStatusEvents } from "./eval-result-codec";
 /** The rows a collapsed cell's output may spend, which a host may narrow to its own window. */
 export const EVAL_DEFAULT_PREVIEW_LINES = 10;
 
@@ -643,7 +644,7 @@ export const evalToolView: Required<ToolViewRenderer<EvalRenderArgs, EvalViewRes
 	renderResult(result: EvalViewResult, context: ToolViewContext): ToolView {
 		const details = result.details;
 		const expanded = context.expanded;
-		const cells = details?.cells ?? [];
+		const cells = resolveEvalCells(details?.cells, result.content) ?? [];
 		const trailing = trailingSection(details, expanded);
 
 		if (cells.length > 0) {
@@ -686,7 +687,7 @@ export const evalToolView: Required<ToolViewRenderer<EvalRenderArgs, EvalViewRes
 				: collapsedProgressViewLines(collapseProgressRuns(textRows(text)), "output");
 			lines.push(...rows);
 		}
-		const events = details?.statusEvents ?? [];
+		const events = resolveEvalStatusEvents(details) ?? [];
 		if (events.length > 0) {
 			lines.push([{ text: "Status", tone: "dim" }]);
 			const shown = expanded ? events : events.slice(Math.max(0, events.length - STATUS_EVENTS_COLLAPSED));

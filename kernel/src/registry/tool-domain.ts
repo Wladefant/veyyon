@@ -20,6 +20,7 @@
  * every host needs and it travels on the manifest.
  */
 import type { AgentMessageKind } from "./message-kind";
+import type { ToolResultCodec } from "./tool-result-codec";
 
 export interface ToolDomainManifest<TFactory> {
 	/** The domain's directory name, which is also how a host reports where a tool came from. */
@@ -39,4 +40,9 @@ export interface ToolDomainManifest<TFactory> {
 	 * reads. Absent when a domain records nothing of its own.
 	 */
 	readonly messageKinds?: readonly AgentMessageKind[];
+	/**
+	 * How this domain's tools store their results in a session file, one codec per tool that drops a
+	 * field its content repeats. Absent when every result is written as returned.
+	 */
+	readonly resultCodecs?: readonly ToolResultCodec[];
 }
