@@ -31,7 +31,7 @@ describe("quit command alias completes cleanly", () => {
 		const provider = new CombinedAutocompleteProvider(
 			BUILTIN_SLASH_COMMAND_DECLARATIONS.map(cmd => ({
 				name: cmd.name,
-				aliases: cmd.aliases ? [...cmd.aliases] : undefined,
+				aliases: "aliases" in cmd && Array.isArray(cmd.aliases) ? [...cmd.aliases] : undefined,
 				description: cmd.description,
 			})),
 			"/tmp",

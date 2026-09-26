@@ -27,7 +27,9 @@ function silentEmbedWorker(state: { spawns: number; terminated: number }): () =>
 			},
 			onMessage(next) {
 				handler = next;
-				return () => { if (handler === next) handler = undefined; };
+				return () => {
+					if (handler === next) handler = undefined;
+				};
 			},
 			onError: () => () => {},
 			async terminate() {
@@ -48,7 +50,9 @@ describe("mnemopi embed requests are bounded and reap wedged workers", () => {
 			const start = Date.now();
 			let threw = false;
 			try {
-				for await (const _ of model!.embed(["hello"])) { /* drain */ }
+				for await (const _ of model!.embed(["hello"])) {
+					/* drain */
+				}
 			} catch (error) {
 				threw = true;
 				expect(String(error)).toMatch(/timed out/i);
@@ -67,8 +71,18 @@ describe("mnemopi embed requests are bounded and reap wedged workers", () => {
 		try {
 			const model = await client.initialize("fast-bge-base-en-v1.5", "/tmp/cache");
 			const spawnsAfterInit = state.spawns;
-			await expect((async () => { for await (const _ of model!.embed(["a"])) {} })()).rejects.toThrow(/timed out/i);
-			await expect((async () => { for await (const _ of model!.embed(["b"])) {} })()).rejects.toThrow(/timed out/i);
+			await expect(
+				(async () => {
+					for await (const _ of model!.embed(["a"])) {
+					}
+				})(),
+			).rejects.toThrow(/timed out/i);
+			await expect(
+				(async () => {
+					for await (const _ of model!.embed(["b"])) {
+					}
+				})(),
+			).rejects.toThrow(/timed out/i);
 			expect(state.spawns).toBeGreaterThan(spawnsAfterInit);
 		} finally {
 			await client.terminate();
@@ -92,7 +106,9 @@ describe("mnemopi embed requests are bounded and reap wedged workers", () => {
 					},
 					onMessage(next) {
 						handler = next;
-						return () => { if (handler === next) handler = undefined; };
+						return () => {
+							if (handler === next) handler = undefined;
+						};
 					},
 					onError: () => () => {},
 					async terminate() {
