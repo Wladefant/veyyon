@@ -3018,6 +3018,7 @@ export class TUI extends Container {
 				chunkTo,
 				windowTop,
 				cursorTrackingLineCount,
+				boundConptyPaint: firstPaint,
 			});
 			this.#committedPrefix = rawFrame.slice(0, chunkTo);
 			// A full paint that erased scrollback rewrote history, so the tape is
@@ -3180,6 +3181,16 @@ export class TUI extends Container {
 			chunkTo: number;
 			windowTop: number;
 			cursorTrackingLineCount: number;
+			/**
+			 * Whether this paint may be bounded by `#truncateLargeConptyFrame` on
+			 * ConPTY hosts. Only the initial session-resume paint sets this: a
+			 * multi-megabyte synchronized frame stalls conhost at startup
+			 * (issue #2115). A user-driven redraw -- Ctrl+O expand
+			 * (`resetDisplay`) or a resize geometry rebuild -- must replay the
+			 * whole transcript so nothing is silently dropped from scrollback
+			 * (issue #4863).
+			 */
+			boundConptyPaint: boolean;
 		},
 	): void {
 		this.#fullRedrawCount += 1;
@@ -3195,16 +3206,19 @@ export class TUI extends Container {
 				paintCursorPos = { row: chunkTo + cursorPos.row - windowTop, col: cursorPos.col };
 			}
 		}
-		// ConPTY hosts bound the replay: merge prefix + window into one array
-		// so #truncateLargeConptyFrame can measure the payload and retain only
-		// the tail. Gated on the host check — everywhere else the merge would
-		// copy a pointer per committed row (a 50k-row session = 50k-entry
-		// array per resize step / theme change / session replace) just to be
-		// returned unchanged. `paintLines` stays null unless truncation
-		// actually rewrote the replay.
+		// ConPTY hosts bound the initial resume replay: merge prefix + window
+		// into one array so #truncateLargeConptyFrame can measure the payload and
+		// retain only the tail. Gated on `boundConptyPaint` (the first paint) -- a
+		// user-driven redraw (Ctrl+O expand / resize) must replay the whole
+		// transcript untruncated so nothing is dropped from scrollback (#4863).
+		// Gated on the host check too — everywhere else the merge would copy a
+		// pointer per committed row (a 50k-row session = 50k-entry array per
+		// resize step / theme change / session replace) just to be returned
+		// unchanged. `paintLines` stays null unless truncation actually rewrote
+		// the replay.
 		let paintLines: string[] | null = null;
 		let paintLineCount = chunkTo + height;
-		if (isConPTYHosted()) {
+		if (options.boundConptyPaint && isConPTYHosted()) {
 			const merged = new Array<string>(chunkTo + height);
 			for (let i = 0; i < chunkTo; i++) merged[i] = frame[i] ?? "";
 			for (let screenRow = 0; screenRow < height; screenRow++) {

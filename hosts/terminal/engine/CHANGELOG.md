@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Fixed Ctrl+O (expand tools) dropping the committed transcript behind an `older lines hidden` marker on ConPTY hosts (native Windows and WSL): the large-frame bound now applies only to the initial session-resume paint, so a user-driven replay expands the whole session ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed AltGr characters (such as `[`, `]`, `{`, `}` on Hungarian and other international layouts) being dropped in Windows Terminal with the kitty keyboard protocol, where they instead triggered Alt shortcuts like word movement ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed a deadlock on Windows when a terminal pane closes by exiting immediately without waiting for stdout to drain when the terminal disconnects ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
