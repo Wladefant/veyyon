@@ -319,17 +319,22 @@ describe("the terminal output guard", () => {
 	});
 
 	it("captures what an aborting runtime writes, and gives that stderr back on restore", async () => {
-		const { report, stderr, redirect } = await runProbe([
-			`fs.writeSync(2, "before\\n");`,
-			`const gateResult = suppressTerminalStderr();`,
-			`const forced = suppressTerminalStderr({ force: true, redirectPath });`,
-			`const secondSuppress = suppressTerminalStderr({ force: true, redirectPath });`,
-			`const suppressedWhileActive = isTerminalStderrSuppressed();`,
-			`nativeStderrWrite("native-while-active\\n");`,
-			`restoreTerminalStderr();`,
-			`nativeStderrWrite("native-after-restore\\n");`,
-			...REPORT_LINE,
-		]);
+		const redirectPath = path.join(tempDir(), "redirect.log");
+		const { stderr, report } = await runProbe(
+			[
+				`fs.writeSync(2, "before\\n");`,
+				`const gateResult = suppressTerminalStderr();`,
+				`const forced = suppressTerminalStderr({ force: true, redirectPath });`,
+				`const secondSuppress = suppressTerminalStderr({ force: true, redirectPath });`,
+				`const suppressedWhileActive = isTerminalStderrSuppressed();`,
+				`nativeWrite("native-while-active\\n");`,
+				`restoreTerminalStderr();`,
+				`nativeWrite("native-after-restore\\n");`,
+				`process.stdout.write("REPORT:" + JSON.stringify({ gateResult, forced, secondSuppress, suppressedWhileActive, suppressedAfterRestore: isTerminalStderrSuppressed() }));`,
+			],
+			[redirectPath],
+		);
+		const redirect = fs.existsSync(redirectPath) ? fs.readFileSync(redirectPath, "utf8") : undefined;
 
 		expect(report.gateResult).toBe(false);
 		if (!report.forced) {
@@ -349,23 +354,29 @@ describe("the terminal output guard", () => {
 		expect(stderr).toContain("native-after-restore");
 		expect(redirect).not.toContain("native-after-restore");
 	});
+
 	it("allows rotation to rename and unlink the active capture", async () => {
-		const { report, stderr, redirect } = await runProbe([
-			`const gateResult = suppressTerminalStderr();`,
-			`const forced = suppressTerminalStderr({ force: true, redirectPath });`,
-			`const secondSuppress = forced;`,
-			`const suppressedWhileActive = isTerminalStderrSuppressed();`,
-			`if (!forced) throw new Error("native capture unavailable");`,
-			`nativeStderrWrite("before-rotation\\n");`,
-			`fs.renameSync(redirectPath, redirectPath + ".rotated");`,
-			`nativeStderrWrite("after-rename\\n");`,
-			`const captured = fs.readFileSync(redirectPath + ".rotated", "utf8");`,
-			`fs.unlinkSync(redirectPath + ".rotated");`,
-			`nativeStderrWrite("after-unlink\\n");`,
-			`restoreTerminalStderr();`,
-			`fs.writeFileSync(redirectPath, captured);`,
-			...REPORT_LINE,
-		]);
+		const redirectPath = path.join(tempDir(), "redirect.log");
+		const { stderr, report } = await runProbe(
+			[
+				`const gateResult = suppressTerminalStderr();`,
+				`const forced = suppressTerminalStderr({ force: true, redirectPath });`,
+				`const secondSuppress = forced;`,
+				`const suppressedWhileActive = isTerminalStderrSuppressed();`,
+				`if (!forced) throw new Error("native capture unavailable");`,
+				`nativeWrite("before-rotation\\n");`,
+				`fs.renameSync(redirectPath, redirectPath + ".rotated");`,
+				`nativeWrite("after-rename\\n");`,
+				`const captured = fs.readFileSync(redirectPath + ".rotated", "utf8");`,
+				`fs.unlinkSync(redirectPath + ".rotated");`,
+				`nativeWrite("after-unlink\\n");`,
+				`restoreTerminalStderr();`,
+				`fs.writeFileSync(redirectPath, captured);`,
+				`process.stdout.write("REPORT:" + JSON.stringify({ gateResult, forced, secondSuppress, suppressedWhileActive, suppressedAfterRestore: isTerminalStderrSuppressed() }));`,
+			],
+			[redirectPath],
+		);
+		const redirect = fs.existsSync(redirectPath) ? fs.readFileSync(redirectPath, "utf8") : undefined;
 		expect(report.suppressedAfterRestore).toBe(false);
 		expect(redirect).toBe("before-rotation\nafter-rename\n");
 		expect(stderr).toBe("");

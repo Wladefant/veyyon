@@ -8,6 +8,7 @@
 - Expose the live worker registry and targeted messaging over IrcBus to the Telegram control bridge ([#38](https://github.com/Wladefant/veyyon/issues/38)).
 - `api.listWorkers()` and `api.steerWorker()` expose an extension's own live workers and targeted steering, scoped to the conversation the extension is loaded in ([#38](https://github.com/Wladefant/veyyon/issues/38)).
 - Sessions preserve concurrent in-flight tool calls independently and commit abandoned-call reports to the normal dated log before removing crash evidence ([#73](https://github.com/Wladefant/veyyon/issues/73)).
+- A session that dies below JavaScript outside a tool call is now reported on the next launch as `Previous session died silently`, with the phase it was in (`provider`, `tool`, `compaction`, `idle`), its session id, and the count of busy spawned lanes ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 
 ### Fixed
 
