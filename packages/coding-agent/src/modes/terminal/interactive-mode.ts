@@ -234,6 +234,7 @@ import type {
 } from "./types";
 import { createSelectionAttemptNotice } from "./utils/selection-notice";
 import { UiHelpers } from "./utils/ui-helpers";
+import { startTerminalControl } from "./terminal-control";
 
 const PLAN_KEEP_CONTEXT_OPTION_INDEX = 2;
 const PLAN_KEEP_CONTEXT_DISABLE_THRESHOLD_PERCENT = 95;
@@ -458,6 +459,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** Extension-registered provider factories, applied in registration order (#4919). */
 	#autocompleteProviderFactories: AutocompleteProviderFactory[] = [];
 	#cleanupUnsubscribe?: () => void;
+	#closeTerminalControl?: () => void;
 	#signalTeardown?: SessionTeardown;
 	readonly #version: string;
 	#planModePreviousTools: string[] | undefined;
@@ -1381,6 +1383,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		this.#inputController.setupEditorSubmitHandler();
 		this.#inputController.drainEarlySubmissions();
+		this.#closeTerminalControl = await startTerminalControl(this);
 	}
 
 	/** Themes already warned about an unhonored `always`, so the log is not repeated. */
@@ -3490,6 +3493,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#freezeFrameProduction(): void {
 		if (this.#frameProductionFrozen) return;
 		this.#frameProductionFrozen = true;
+		this.#closeTerminalControl?.();
+		this.#closeTerminalControl = undefined;
 		if (this.loadingAnimation) {
 			this.#stopLoadingAnimation(false);
 		}

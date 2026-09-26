@@ -75,7 +75,6 @@ import type { LocalProtocolOptions } from "../internal-urls";
 import { loadOverallPlanReference } from "../plan-mode/plan-handoff";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { TOOL } from "../tools/core/builtin-names";
-import type { ToolEffectScope } from "../tools/core/effect-scope";
 import { type DiscoveryResult, discoverAgents, getAgent } from "./discovery";
 import { runSubprocess } from "./executor";
 import {
@@ -572,7 +571,6 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	// A delegated agent runs its own tool loop, so the parent cannot bound what
 	// this call touches. A refusal the parent is under must fence the delegation
 	// too, or the refused work simply moves one level down.
-	readonly effectScope: ToolEffectScope = "unbounded";
 	readonly approval = "exec" as const;
 	readonly formatApprovalDetails = (args: unknown): string[] => {
 		const params = args as Partial<TaskParams>;

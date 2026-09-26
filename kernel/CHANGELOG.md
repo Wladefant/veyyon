@@ -8,6 +8,11 @@
 
 - The settings store calls `isRecord` from `@veyyon/utils` for the reload namespace check and the routing-key expansion instead of hand-writing the same three-term predicate ([#64](https://github.com/Wladefant/veyyon/issues/64)).
 
+### Fixed
+
+- Session activation rejects a transcript owned by a registered live terminal before opening a second writer ([#88](https://github.com/Wladefant/veyyon/issues/88)).
+- Outbound tool ID canonicalization preserves native Responses call/result pairs instead of shortening only the visible blocks, so ChatGPT-Web host-tool continuations receive the actual result rather than an orphan-result note ([#22](https://github.com/Wladefant/veyyon/issues/22)).
+
 ## [1.5.0] - 2026-09-18
 
 ### Added

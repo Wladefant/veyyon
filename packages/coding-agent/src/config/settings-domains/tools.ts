@@ -39,31 +39,6 @@ export const TOOLS_SETTINGS = {
 		},
 	},
 
-	// Standing refusals recorded when an extension blocks a tool call.
-	//
-	// Written by the refusal fence (src/tools/core/refusal-fence.ts), not by hand.
-	// It lives in settings rather than in session memory because a denial that
-	// only the parent session remembers is no denial at all: a subagent, an eval
-	// agent or a resumed session would each start with an empty approval map and
-	// re-run the refused work. Settings are inherited across those forks, so the
-	// refusal travels with them.
-	//
-	// Entries are either a plain tool name (the legacy tool-wide form) or a
-	// `{ version: 1, tool, subject, reason }` record scoping the refusal to a
-	// path or command. Surfaced here so an operator can see what is standing and
-	// clear it; emptying the list lifts every refusal.
-	"tools.refusals": {
-		type: "array",
-		default: [] as unknown[],
-		ui: {
-			tab: "interaction",
-			group: "Approvals",
-			label: "Standing Refusals",
-			description:
-				"Operations refused by an extension and fenced for this profile. Recorded automatically; clear an entry to allow the operation to be re-evaluated.",
-		},
-	},
-
 	// Default tool approval mode (interaction tab, but governs the tool wrapper).
 	// The rungs and what each one still stops for live in
 	// `src/tools/core/approval-modes.ts`; `normalizeApprovalMode` maps the legacy

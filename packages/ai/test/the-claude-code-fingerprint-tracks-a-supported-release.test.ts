@@ -32,7 +32,7 @@ import { CLAUDE_CODE_VERSION } from "@veyyon/catalog/wire/anthropic";
  * The highest `claude_code_version_too_old` minimum the API has been observed to demand. Raise it, with the
  * version bump, whenever a 400 names a newer one.
  */
-const OBSERVED_API_MINIMUM = "2.1.251";
+const OBSERVED_API_MINIMUM = "2.1.280";
 
 /** The release line the Agent SDK publishes under; its patch component tracks the CLI's. */
 const AGENT_SDK_LINE = "0.3";
@@ -57,6 +57,22 @@ describe("the Claude Code fingerprint tracks a supported release", () => {
 			versionOrder(CLAUDE_CODE_VERSION, OBSERVED_API_MINIMUM),
 			`CLAUDE_CODE_VERSION ${CLAUDE_CODE_VERSION} is older than ${OBSERVED_API_MINIMUM}, which /v1/messages rejects with claude_code_version_too_old`,
 		).toBeGreaterThanOrEqual(0);
+	});
+
+	it("accepts the minimum demanded by the recorded Opus 5.5 rejection", () => {
+		const response = {
+			type: "error",
+			error: {
+				type: "invalid_request_error",
+				message:
+					"Claude Code 2.1.257 does not support this model; version 2.1.280 or newer is required. Run 'claude update', or update the Claude desktop app, then try again.",
+				details: { error_code: "claude_code_version_too_old" },
+			},
+		};
+		const minimum = /version (\d+\.\d+\.\d+) or newer/.exec(response.error.message)?.[1];
+		expect(minimum).toBe(OBSERVED_API_MINIMUM);
+		expect(versionOrder("2.1.257", minimum!)).toBe(-1);
+		expect(versionOrder(CLAUDE_CODE_VERSION, minimum!)).toBeGreaterThanOrEqual(0);
 	});
 
 	/**
