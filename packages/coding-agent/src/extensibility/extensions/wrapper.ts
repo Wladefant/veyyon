@@ -231,12 +231,16 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		onUpdate?: AgentToolUpdateCallback<TDetails, TParameters>,
 		context?: AgentToolContext,
 	): Promise<AgentToolResult<TDetails, TParameters>> {
-		TOOL_EXECUTION_ENTRIES[this.#entry].fence(this.tool, context, this.#sessionPolicy);
+		const { policy: policyFrame } = TOOL_EXECUTION_ENTRIES[this.#entry].resolveExecution(
+			this.tool,
+			context,
+			this.#sessionPolicy,
+		);
 		// 1. Check approval policy (before extension handlers).
 		// CLI `--auto-approve` / `--yolo` sets approval mode to yolo.
 		// User `tools.approval.<tool>` policies are still applied in all modes.
-		const cliAutoApprove = context?.autoApprove === true;
-		const settings: Settings | undefined = context?.settings;
+		const cliAutoApprove = policyFrame.autoApprove === true;
+		const settings: Settings | undefined = policyFrame.settings;
 		// No fallback spelled here. An absent `Settings` means nothing is
 		// configured, and `resolveEffectiveApprovalMode` decides that case from
 		// `DEFAULT_APPROVAL_MODE`, the schema's own default. A literal here would
@@ -244,8 +248,8 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		// missing setting, which is how an approval system nobody had configured
 		// became an approval system that never fired.
 		const configuredMode = settings?.get("tools.approvalMode") as ApprovalMode | undefined;
-		const planModeActive = context?.planModeActive === true;
-		const bypassAllApprovals = context?.bypassAllApprovals === true;
+		const planModeActive = policyFrame.planModeActive === true;
+		const bypassAllApprovals = policyFrame.bypassAllApprovals === true;
 		const approvalMode = resolveEffectiveApprovalMode(configuredMode, { planModeActive, cliAutoApprove });
 		const userPolicies = (settings?.get("tools.approval") ?? {}) as Record<string, unknown>;
 		const approvalCheck = requiresApproval(this.tool, params, approvalMode, userPolicies, {
@@ -263,10 +267,10 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		const boundaryTargets =
 			approvalMode === "yolo" || bypassAllApprovals
 				? []
-				: cwdEscapingTargets(this.tool, params, context?.sessionManager?.getCwd?.() ?? "");
+				: cwdEscapingTargets(this.tool, params, policyFrame.sessionManager?.getCwd?.() ?? "");
 		const boundaryReason =
 			boundaryTargets.length > 0
-				? formatCwdBoundaryReason(context?.sessionManager?.getCwd?.() ?? "", boundaryTargets)
+				? formatCwdBoundaryReason(policyFrame.sessionManager?.getCwd?.() ?? "", boundaryTargets)
 				: undefined;
 		// Secret-use boundary: a call whose arguments carry a real credential needs
 		// explicit permission in every non-yolo mode, by the same rule as the cwd
@@ -276,7 +280,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		// audited and never gated, so the log could say afterwards which credential
 		// was spent and nothing could ask first. See secret-use-boundary.ts.
 		const secretReason =
-			approvalMode === "yolo" || bypassAllApprovals ? undefined : secretUseApprovalReason(params, context);
+			approvalMode === "yolo" || bypassAllApprovals ? undefined : secretUseApprovalReason(params, policyFrame);
 		const approvalRequired = approvalCheck.required || boundaryReason !== undefined || secretReason !== undefined;
 		const approvalReason =
 			[approvalCheck.reason, boundaryReason, secretReason]
@@ -305,7 +309,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		//
 		// A `deny` grant is not bounded the same way. It only ever refuses more,
 		// so applying it everywhere is the safe direction.
-		const sessionApprovals = context?.sessionApprovals;
+		const sessionApprovals = policyFrame.sessionApprovals;
 		const grantMayApply =
 			approvalCheck.critical !== true && boundaryReason === undefined && secretReason === undefined;
 		const standing = approvalRequired ? sessionApprovals?.get(this.tool.name) : undefined;
@@ -316,7 +320,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		if (approvalRequired && !(standing === "allow" && grantMayApply)) {
 			const hasApprovalHandlers =
 				this.runner?.hasHandlers("tool_approval_requested") || this.runner?.hasHandlers("tool_approval_resolved");
-			const sessionId = context?.sessionManager?.getSessionId() ?? "";
+			const sessionId = policyFrame.sessionManager?.getSessionId() ?? "";
 			if (hasApprovalHandlers && this.runner) {
 				await this.runner.emit({
 					type: "tool_approval_requested",
