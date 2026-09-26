@@ -849,10 +849,7 @@ function handleOpenAIStreamingToolCallDeltas(
 				}
 			}
 		} else if (isRecord(rawArgs)) {
-			const prev =
-				block.partialArgs !== null && typeof block.partialArgs === "object" && !Array.isArray(block.partialArgs)
-					? (block.partialArgs as Record<string, unknown>)
-					: undefined;
+			const prev = isRecord(block.partialArgs) ? block.partialArgs : undefined;
 			const merged = mergeStreamingArgumentObjects(prev, rawArgs);
 			block.partialArgs = merged;
 			block.arguments = merged;
