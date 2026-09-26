@@ -18,6 +18,7 @@
 - `launch/terminal-control.ts` publishes the terminal-owner record through `atomicWriteFile` instead of hand-rolled temp-file and rename, so the write path has one owner; the record stays atomic and stays mode `0600`.
 
 ### Fixed
+- Fixed HTML export and share viewers rendering inline Markdown inside list items as literal text ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed unknown worker selectors (`__veyyon_worker_*`) exiting 0 with empty output instead of erroring; an unrecognized worker-host selector now writes `Error: unknown worker selector: <arg>` to stderr and sets exit code 1 ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Legacy Pi extension tool calls carry the session policy frame the tool was built from, so `createCodingTools`, `createReadTool`, `createBashTool`, `createGrepTool` and `createFindTool` reach the tool instead of refusing with `Tool execution requires missing session policy context` ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 
