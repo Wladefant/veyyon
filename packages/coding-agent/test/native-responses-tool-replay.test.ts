@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
-import { buildModel } from "@veyyon/catalog/build";
-import { canonicalizeToolCallIds } from "@veyyon/kernel/session/canonicalize-tool-call-ids";
-import { transformRequestBody, type RequestBody } from "@veyyon/ai/providers/openai-codex/request-transformer";
+import { type RequestBody, transformRequestBody } from "@veyyon/ai/providers/openai-codex/request-transformer";
 import { convertCodexResponsesMessages } from "@veyyon/ai/providers/openai-codex-responses";
 import type { Context } from "@veyyon/ai/types";
+import { buildModel } from "@veyyon/catalog/build";
+import { canonicalizeToolCallIds } from "@veyyon/kernel/session/canonicalize-tool-call-ids";
 
 const model = buildModel({
 	id: "chatgpt-web/medium",
@@ -25,28 +25,53 @@ for (const delta of [false, true]) {
 	test(`native Responses ${delta ? "delta" : "snapshot"} history preserves call/result pairing`, async () => {
 		const user = { role: "user" as const, content: "Read nonce.txt", timestamp: 1 };
 		const nativeCall = {
-			type: "function_call", id: itemId, call_id: callId,
-			name: "read", arguments: JSON.stringify(args), status: "completed",
+			type: "function_call",
+			id: itemId,
+			call_id: callId,
+			name: "read",
+			arguments: JSON.stringify(args),
+			status: "completed",
 		};
 		const context: Context = {
-			messages: [user, {
-				role: "assistant",
-				content: [{ type: "toolCall", id: `${callId}|${itemId}`, name: "read", arguments: args }],
-				api: "openai-codex-responses", provider: "chatgpt-web", model: model.id,
-				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-				stopReason: "toolUse", timestamp: 2,
-				providerPayload: {
-					type: "openaiResponsesHistory", provider: "chatgpt-web", dt: delta,
-					items: delta ? [nativeCall] : [
-						{ type: "message", role: "user", content: [{ type: "input_text", text: user.content }] },
-						nativeCall,
-					],
+			messages: [
+				user,
+				{
+					role: "assistant",
+					content: [{ type: "toolCall", id: `${callId}|${itemId}`, name: "read", arguments: args }],
+					api: "openai-codex-responses",
+					provider: "chatgpt-web",
+					model: model.id,
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "toolUse",
+					timestamp: 2,
+					providerPayload: {
+						type: "openaiResponsesHistory",
+						provider: "chatgpt-web",
+						dt: delta,
+						items: delta
+							? [nativeCall]
+							: [
+									{ type: "message", role: "user", content: [{ type: "input_text", text: user.content }] },
+									nativeCall,
+								],
+					},
 				},
-			}, {
-				role: "toolResult", toolCallId: `${callId}|${itemId}`, toolName: "read",
-				content: [{ type: "text", text: "NONCE_test" }], isError: false, timestamp: 3,
-			}],
+				{
+					role: "toolResult",
+					toolCallId: `${callId}|${itemId}`,
+					toolName: "read",
+					content: [{ type: "text", text: "NONCE_test" }],
+					isError: false,
+					timestamp: 3,
+				},
+			],
 		};
 		const before = JSON.stringify(context);
 		let counter = 0;

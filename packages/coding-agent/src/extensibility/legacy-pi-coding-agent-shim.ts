@@ -47,6 +47,7 @@ import {
 } from "../session/streaming-output";
 import type { Tool, ToolSession } from "../tools";
 import { TOOL_EXECUTION_ENTRIES } from "../tools/core/execution-registry";
+import type { ToolPolicyFrame } from "../tools/core/refusal-fence";
 import { formatBytes } from "../tools/core/render-utils";
 import { ReadTool } from "../tools/fs/read";
 import { WriteTool } from "../tools/fs/write";
@@ -188,23 +189,33 @@ function legacyToolSession(cwd: string, settingOverrides?: LegacySettingOverride
 	};
 }
 
+/**
+ * The frame a legacy dispatch carries. `veyyon read` builds the same shape: the settings holding
+ * the operator's standing refusals, and nothing else. The shim owns no session manager, model
+ * registry or abort handle to offer, and half-filling the frame would promise a tool a session it
+ * does not have.
+ */
+function legacyPolicyFrame(session: ToolSession): ToolPolicyFrame {
+	return { settings: session.settings };
+}
+
 function createRegistryTool(
 	cwd: string,
 	name: LegacyRegistryToolName,
 	settingOverrides?: LegacySettingOverrides,
-): Tool {
+): { tool: Tool; session: ToolSession } {
 	const session = legacyToolSession(cwd, settingOverrides);
 	switch (name) {
 		case "bash":
-			return new BashTool(session);
+			return { tool: new BashTool(session), session };
 		case "edit":
-			return new EditTool(session);
+			return { tool: new EditTool(session), session };
 		case "search":
-			return new SearchTool(session);
+			return { tool: new SearchTool(session), session };
 		case "read":
-			return new ReadTool(session);
+			return { tool: new ReadTool(session), session };
 		case "write":
-			return new WriteTool(session);
+			return { tool: new WriteTool(session), session };
 	}
 }
 
@@ -216,12 +227,19 @@ async function executeBuiltinTool(
 	signal: AbortSignal | undefined,
 	onUpdate: AgentToolUpdateCallback | undefined,
 ) {
-	const tool = createRegistryTool(cwd, name);
-	return TOOL_EXECUTION_ENTRIES["legacy.adapter"].invoke(tool, toolCallId, params, signal, onUpdate);
+	const { tool, session } = createRegistryTool(cwd, name);
+	return TOOL_EXECUTION_ENTRIES["legacy.adapter"].invoke(
+		tool,
+		toolCallId,
+		params,
+		signal,
+		onUpdate,
+		legacyPolicyFrame(session),
+	);
 }
 
 function legacyBuiltinTool(cwd: string, name: LegacyCodingToolName): ToolDefinition {
-	const tool = createRegistryTool(cwd, name);
+	const { tool } = createRegistryTool(cwd, name);
 	const definition: LegacyBuiltinToolDefinition = {
 		name: tool.name,
 		label: tool.label,
@@ -408,7 +426,7 @@ export function defineTool<TParams extends TSchema = TSchema, TDetails = unknown
 
 /** Create the legacy read tool definition. */
 export function createReadToolDefinition(cwd: string, options?: ReadToolOptions): ToolDefinition {
-	const tool = createRegistryTool(
+	const { tool, session } = createRegistryTool(
 		cwd,
 		"read",
 		options?.autoResizeImages === undefined ? undefined : { "images.autoResize": options.autoResizeImages },
@@ -430,6 +448,7 @@ export function createReadToolDefinition(cwd: string, options?: ReadToolOptions)
 				{ path: pathWithRange },
 				signal,
 				onUpdate,
+				legacyPolicyFrame(session),
 			);
 		},
 	});
@@ -442,7 +461,7 @@ export function createReadTool(cwd: string, options?: ReadToolOptions): ToolDefi
 
 /** Create the legacy bash tool definition. */
 export function createBashToolDefinition(cwd: string, options?: BashToolOptions): ToolDefinition {
-	const tool = createRegistryTool(cwd, "bash");
+	const { tool, session } = createRegistryTool(cwd, "bash");
 	return markToolDefinition({
 		name: "bash",
 		label: "Bash",
@@ -476,6 +495,7 @@ export function createBashToolDefinition(cwd: string, options?: BashToolOptions)
 				},
 				signal,
 				onUpdate,
+				legacyPolicyFrame(session),
 			);
 		},
 	});
@@ -496,7 +516,7 @@ export function createGrepToolDefinition(cwd: string, options?: GrepToolOptions)
 				"defineTool() instead of passing operations to createGrepTool()/createGrepToolDefinition().",
 		);
 	}
-	const tool = createRegistryTool(cwd, "search");
+	const { tool, session } = createRegistryTool(cwd, "search");
 	return markToolDefinition({
 		name: "grep",
 		label: "grep",
@@ -514,17 +534,18 @@ export function createGrepToolDefinition(cwd: string, options?: GrepToolOptions)
 			const searchPath = stringField(params, "path") ?? ".";
 			const glob = stringField(params, "glob");
 			const context = numberField(params, "context");
-			// Unified text search reads context from settings fixed at construction;
-			// build a per-call tool when the legacy API passes an explicit context.
-			const searchTool =
+			// Unified text search reads context from settings fixed at construction; build a
+			// per-call tool when the legacy API passes an explicit context, and dispatch with
+			// that tool's own session so the frame and the settings agree.
+			const searchDispatch =
 				context === undefined
-					? tool
+					? { tool, session }
 					: createRegistryTool(cwd, "search", {
 							"search.contextBefore": Math.max(0, Math.floor(context)),
 							"search.contextAfter": Math.max(0, Math.floor(context)),
 						});
 			return TOOL_EXECUTION_ENTRIES["legacy.adapter"].invoke(
-				searchTool,
+				searchDispatch.tool,
 				toolCallId,
 				{
 					type: "text",
@@ -534,6 +555,7 @@ export function createGrepToolDefinition(cwd: string, options?: GrepToolOptions)
 				},
 				signal,
 				onUpdate,
+				legacyPolicyFrame(searchDispatch.session),
 			);
 		},
 	});
@@ -546,7 +568,7 @@ export function createGrepTool(cwd: string, options?: GrepToolOptions): ToolDefi
 
 /** Create the legacy find tool definition. */
 export function createFindToolDefinition(cwd: string, options?: FindToolOptions): ToolDefinition {
-	const tool = createRegistryTool(cwd, "search");
+	const { tool, session } = createRegistryTool(cwd, "search");
 	return markToolDefinition({
 		name: "find",
 		label: "find",
@@ -589,6 +611,7 @@ export function createFindToolDefinition(cwd: string, options?: FindToolOptions)
 				{ type: "files", input: joinLegacyGlob(searchPath, pattern), hidden: true, gitignore: true, limit },
 				signal,
 				onUpdate,
+				legacyPolicyFrame(session),
 			);
 		},
 	});

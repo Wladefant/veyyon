@@ -8,8 +8,8 @@ import {
 	resolveAwsCredentials,
 	tokenizeCredentialProcessCommand,
 } from "@veyyon/ai/providers/aws-credentials";
-import { removeWithRetries } from "../../utils/src/temp";
 import type { FetchImpl } from "@veyyon/ai/types";
+import { removeWithRetries } from "../../utils/src/temp";
 
 // `credential_process` integration coverage. Drives a real `Bun.spawn`
 // against a fixture script so the JSON envelope contract, exit-code
