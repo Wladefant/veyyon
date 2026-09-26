@@ -41,27 +41,6 @@ export interface SessionSnapshot {
 	/** Force non-WebP screenshot encoding (e.g. for Ollama). Unset honors `VEYYON_NO_WEBP`. */
 	excludeWebP?: boolean;
 }
-export interface CookieData {
-	name: string;
-	value: string;
-	domain?: string;
-	path?: string;
-	expires?: number;
-	httpOnly?: boolean;
-	secure?: boolean;
-	sameSite?: "Strict" | "Lax" | "None";
-}
-
-export interface OriginStorageData {
-	origin: string;
-	localStorage?: Array<{ name: string; value: string }>;
-	sessionStorage?: Array<{ name: string; value: string }>;
-}
-
-export interface StorageStateData {
-	cookies?: CookieData[];
-	origins?: OriginStorageData[];
-}
 
 export type WorkerInitPayload =
 	| {
@@ -72,8 +51,8 @@ export type WorkerInitPayload =
 			url?: string;
 			waitUntil?: "load" | "domcontentloaded" | "networkidle0" | "networkidle2";
 			timeoutMs: number;
-			contextName?: string;
-			storageStatePath?: string;
+			/** The isolated context to open the page in, by CDP id; the browser's default context when absent. */
+			browserContextId?: string;
 	  }
 	| {
 			mode: "attach";

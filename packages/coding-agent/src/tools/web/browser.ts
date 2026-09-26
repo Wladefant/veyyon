@@ -14,8 +14,17 @@ import { prependResultNotice, toolResult } from "../core/tool-result";
 import { clampTimeout, describeTimeoutParam, formatTimeoutClampNotice } from "../core/tool-timeouts";
 import { resolveCmuxKind } from "./browser/cmux/rpc";
 import { acquireBrowser, type BrowserHandle, type BrowserKind, type BrowserKindTag } from "./browser/registry";
+import { readStorageStateFile, type StorageStateLoaded } from "./browser/storage-state";
 import type { BrowserRunError, Observation, RunResultOk, ScreenshotResult } from "./browser/tab-protocol";
-import { acquireTab, dropHeadlessTabs, getTab, releaseAllTabs, releaseTab, runInTab } from "./browser/tab-supervisor";
+import {
+	acquireTab,
+	dropHeadlessTabs,
+	getTab,
+	isolatedContextName,
+	releaseAllTabs,
+	releaseTab,
+	runInTab,
+} from "./browser/tab-supervisor";
 
 export {
 	type AriaSnapshotOptions,
@@ -40,8 +49,10 @@ const browserSchema = type({
 	action: type("'open' | 'close' | 'run' | 'save_state'").describe("operation"),
 	"name?": type("string").describe("tab id (default 'main')"),
 	"url?": type("string").describe("url to open"),
-	"context?": type("string").describe("isolated browser context name (default 'default')"),
-	"storage_state?": type("string").describe("path to storage state JSON file (cookies + localStorage)"),
+	"context?": type("string").describe("isolated context: tabs naming the same one share cookies and storage"),
+	"storage_state?": type("string").describe(
+		"state file of cookies and localStorage: open loads it, save_state writes it",
+	),
 	"app?": appSchema,
 	"viewport?": {
 		width: "number",
@@ -71,6 +82,10 @@ export interface BrowserToolDetails {
 	observation?: Observation;
 	screenshots?: ScreenshotResult[];
 	result?: string;
+	/** The isolated context the tab is in, when it is in one. */
+	context?: string;
+	/** The state file `open` loaded or `save_state` wrote, resolved against the session's directory. */
+	storageState?: string;
 	meta?: OutputMeta;
 }
 
@@ -94,10 +109,12 @@ function resolveBrowserKind(params: BrowserParams, session: ToolSession): Browse
 }
 
 /**
- * Browser tool: stateful, multi-tab. Three actions:
- * - `open`  → acquire/create a named tab on a browser kind (headless | spawned | connected) and optionally goto a url.
+ * Browser tool: stateful, multi-tab. Four actions:
+ * - `open`  → acquire/create a named tab on a browser kind (headless | spawned | connected) and optionally goto a url;
+ *   a headless tab may name an isolated context and load a state file into it first.
  * - `close` → release a named tab (or all tabs); dispose browser when refcount hits 0.
  * - `run`   → execute JS code against an existing tab with `page`/`browser`/`tab` helpers in scope.
+ * - `save_state` → write a tab's context cookies and localStorage to a state file.
  */
 export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolDetails> {
 	readonly name = "browser";
@@ -180,6 +197,16 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 			},
 		},
 		{
+			caption: "Open a tab signed in as a second user, in its own context, from a saved session",
+			call: {
+				action: "open",
+				name: "admin",
+				context: "admin",
+				storage_state: ".auth/admin.json",
+				url: "https://example.com/dashboard",
+			},
+		},
+		{
 			caption: "Close every tab and kill spawned-app processes",
 			call: { action: "close", all: true, kill: true },
 		},
@@ -214,6 +241,15 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 			const clampNotice = formatTimeoutClampNotice("browser", params.timeout, timeoutSeconds);
 			const name = params.name ?? DEFAULT_TAB_NAME;
 			const details: BrowserToolDetails = { action: params.action, name };
+			// Ignored silently, either would read as done: a context on a run, or a state file on a close.
+			if (typeof params.context === "string" && params.action !== "open") {
+				throw new ToolError(`context applies to open, which puts a tab in it; ${params.action} takes none.`);
+			}
+			if (typeof params.storage_state === "string" && params.action !== "open" && params.action !== "save_state") {
+				throw new ToolError(
+					`storage_state applies to open, which loads it, and save_state, which writes it; ${params.action} takes none.`,
+				);
+			}
 
 			let result: AgentToolResult<BrowserToolDetails>;
 			switch (params.action) {
@@ -253,6 +289,16 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 	): Promise<AgentToolResult<BrowserToolDetails>> {
 		const kind = resolveBrowserKind(params, this.session);
 		details.browser = kind.kind;
+		const contextName = isolatedContextName(params.context);
+		if ((contextName !== undefined || params.storage_state !== undefined) && kind.kind !== "headless") {
+			throw new ToolError(
+				`context and storage_state need the headless browser; ${describeKind(kind)} runs in the app's own session.`,
+			);
+		}
+		// Read before any browser starts, so a missing or malformed file fails the open with its path and nothing to undo.
+		const statePath =
+			params.storage_state === undefined ? undefined : resolveToCwd(params.storage_state, this.session.cwd);
+		const storageState = statePath === undefined ? undefined : await readStorageStateFile(statePath);
 
 		// If a tab with this name already exists on a different browser kind, fail fast — caller must close first.
 		const existing = getTab(name);
@@ -294,7 +340,7 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 				signal,
 				ownerSessionId: this.session.getSessionId?.() ?? undefined,
 				context: params.context,
-				storageStatePath: params.storage_state,
+				storageState,
 			}),
 		);
 		const tab = result.tab;
@@ -302,12 +348,15 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 		const title = tab.info.title ?? "";
 		details.url = url;
 		details.viewport = tab.info.viewport;
+		const inContext = tab.backend === "worker" ? tab.contextName : undefined;
+		if (inContext !== undefined) details.context = inContext;
+		if (statePath !== undefined) details.storageState = statePath;
 		const verb = result.created ? "Opened" : "Reused";
 		const lines = [
-			`${verb} tab ${JSON.stringify(name)} on ${describeBrowser(browser)}${params.context ? ` (context: ${params.context})` : ""}`,
+			`${verb} tab ${JSON.stringify(name)} on ${describeBrowser(browser)}${inContext === undefined ? "" : ` in context ${JSON.stringify(inContext)}`}`,
 			`URL: ${url}`,
 			title ? `Title: ${title}` : null,
-			params.storage_state ? `Storage state: ${params.storage_state}` : null,
+			result.stateLoaded && statePath !== undefined ? describeStateLoaded(result.stateLoaded, statePath) : null,
 		].filter((l): l is string => typeof l === "string");
 		details.result = lines.join("\n");
 		return toolResult(details).text(lines.join("\n")).done();
@@ -329,6 +378,7 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 		details.result = closed ? `Closed tab ${JSON.stringify(name)}` : `No tab named ${JSON.stringify(name)}`;
 		return toolResult(details).text(details.result).done();
 	}
+
 	async #saveState(
 		name: string,
 		params: BrowserParams,
@@ -336,23 +386,32 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 		timeoutMs: number,
 		signal?: AbortSignal,
 	): Promise<AgentToolResult<BrowserToolDetails>> {
-		const targetPath = params.storage_state ?? "./storage-state.json";
+		if (params.storage_state === undefined) {
+			throw new ToolError(
+				"save_state needs storage_state, the file to write the tab's cookies and localStorage to. The file holds live session credentials: keep it out of version control.",
+			);
+		}
 		const tab = getTab(name);
 		if (!tab) {
 			throw new ToolError(`No tab named ${JSON.stringify(name)} to save storage state from. Open the tab first.`);
 		}
+		const file = resolveToCwd(params.storage_state, this.session.cwd);
 		details.browser = tab.browser.kind.kind;
 		details.url = tab.info.url;
+		details.storageState = file;
+		if (tab.backend === "worker" && tab.contextName !== undefined) details.context = tab.contextName;
 
-		const code = `await tab.storageState({ path: ${JSON.stringify(targetPath)} }); return ${JSON.stringify(`Saved storage state to ${targetPath}`)};`;
 		const run = await runInTab(name, {
-			code,
+			code: `const state = await tab.storageState({ path: ${JSON.stringify(file)} });\nreturn { cookies: state.cookies.length, origins: state.origins.map(entry => entry.origin) };`,
 			timeoutMs,
 			signal,
 			session: this.session,
 		});
-
-		details.result = run.returnValue !== undefined ? String(run.returnValue) : `Saved storage state to ${targetPath}`;
+		const saved = savedStateSchema(run.returnValue);
+		if (saved instanceof type.errors) {
+			throw new ToolError(`save_state wrote ${file} but could not count what it wrote: ${saved.summary}`);
+		}
+		details.result = `Saved ${describeStateCounts(saved.cookies, saved.origins)} to ${file}`;
 		return toolResult(details).text(details.result).done();
 	}
 
@@ -433,6 +492,20 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 /** Persist over-cap browser run output as a session artifact; mirrors the bash minimizer's save path. */
 function saveBrowserOutputArtifact(session: ToolSession, fullText: string): Promise<string | undefined> {
 	return saveOutputArtifact(session, "browser-original", fullText);
+}
+
+/** What the `save_state` run returns: counts, never the cookies themselves, which stay out of the transcript. */
+const savedStateSchema = type({ cookies: "number", origins: "string[]" });
+
+function describeStateCounts(cookies: number, origins: readonly string[]): string {
+	const counted = `${cookies} cookie${cookies === 1 ? "" : "s"}`;
+	return origins.length === 0
+		? `${counted} and no localStorage`
+		: `${counted} and localStorage for ${origins.join(", ")}`;
+}
+
+function describeStateLoaded(loaded: StorageStateLoaded, file: string): string {
+	return `Loaded ${describeStateCounts(loaded.cookies, loaded.origins)} from ${file}`;
 }
 
 function describeBrowser(handle: BrowserHandle): string {

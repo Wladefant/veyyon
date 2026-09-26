@@ -28,7 +28,6 @@ import type {
 	RunResultOk,
 	ScreenshotResult,
 	SessionSnapshot,
-	StorageStateData,
 } from "../tab-protocol";
 import {
 	type CmuxEvalResult,
@@ -51,6 +50,10 @@ import type { CmuxSocketClient } from "./socket-client";
 // .default = 30s) today, but is kept as its own constant because a per-operation
 // deadline is a different concept from the whole-tool timeout.
 const DEFAULT_OP_TIMEOUT_MS = 30_000;
+
+/** Why a cmux tab has no storage state: its surface shares the cmux app's session. */
+const CMUX_HAS_NO_STORAGE_STATE =
+	"Storage state needs the headless browser: a cmux tab runs in the cmux app's own session. Open the tab without app.cmux.";
 
 interface ScreenshotOptions {
 	selector?: string;
@@ -529,18 +532,13 @@ export class CmuxTab {
 		await this.#request("browser.scroll", { dx, dy });
 	}
 
-	async storageState(opts?: { path?: string }): Promise<StorageStateData> {
-		const data: StorageStateData = { cookies: [], origins: [] };
-		if (opts?.path && this.#runContext) {
-			const dest = resolveToCwd(opts.path, this.#runContext.session.cwd);
-			await fs.promises.mkdir(path.dirname(dest), { recursive: true });
-			await fs.promises.writeFile(dest, JSON.stringify(data, null, 2), "utf-8");
-		}
-		return data;
+	/** A cmux surface runs in the cmux app's own session, whose cookies the tab cannot read or write. */
+	async storageState(_opts?: { path?: string }): Promise<never> {
+		throw new ToolError(CMUX_HAS_NO_STORAGE_STATE);
 	}
 
-	async loadStorageState(_stateOrPath: string | StorageStateData): Promise<void> {
-		// Cmux does not support local storage injection
+	async loadStorageState(_stateOrPath: unknown): Promise<never> {
+		throw new ToolError(CMUX_HAS_NO_STORAGE_STATE);
 	}
 
 	async waitFor(selector: string, opts?: { timeout?: number }): Promise<CmuxElementHandle> {

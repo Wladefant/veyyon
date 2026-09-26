@@ -8,7 +8,6 @@ import { bestEffort, optionalResult } from "@veyyon/utils/discarded-fault";
 import type { HTMLElement } from "linkedom";
 import type {
 	Browser,
-	BrowserContext,
 	CDPSession,
 	Dialog,
 	ElementHandle,
@@ -49,16 +48,22 @@ import {
 	waitForBrowserRun,
 } from "./run-cancellation";
 import { cloneSafe, RunOutput } from "./run-output";
+import {
+	applyStorageState,
+	captureStorageState,
+	parseStorageState,
+	readStorageStateFile,
+	type StorageState,
+	type StorageStateLoaded,
+	writeStorageStateFile,
+} from "./storage-state";
 import { guardTabApi } from "./tab-api-guard";
 import type {
-	CookieData,
 	Observation,
 	ObservationEntry,
-	OriginStorageData,
 	ReadyInfo,
 	ScreenshotResult,
 	SessionSnapshot,
-	StorageStateData,
 	TabRunErrorPayload,
 	TabWorkerInbound,
 	TabWorkerTransport,
@@ -253,8 +258,10 @@ export interface TabApi {
 	}): Promise<HTTPResponse | null>;
 	id(n: number): Promise<ActionableHandle>;
 	ref(id: string): Promise<ActionableHandle>;
-	storageState(opts?: { path?: string }): Promise<StorageStateData>;
-	loadStorageState(stateOrPath: string | StorageStateData): Promise<void>;
+	/** The tab's context: every cookie it holds and the localStorage of every origin open in it; `path` also writes it there. */
+	storageState(opts?: { path?: string }): Promise<StorageState>;
+	/** Load a state, or the state file at a path, into the tab's context. */
+	loadStorageState(stateOrPath: string | StorageState): Promise<StorageStateLoaded>;
 }
 
 export function normalizeSelector(selector: string): string {
@@ -306,8 +313,8 @@ export type ActionableHandle = ElementHandle & { fill(value: string): Promise<vo
 
 /**
  * Attach `fill()` to a puppeteer ElementHandle before handing it to user code.
- * Puppeteer handles expose `type()` but no `fill()`; the semantics mirror the
- * selector-based `tab.fill()`: focus, clear any existing value, then type.
+ * Puppeteer handles expose `type()` but no `fill()`; the semantics are the
+ * selector-based `tab.fill()`'s.
  */
 export function toActionableHandle(handle: ElementHandle): ActionableHandle {
 	const enriched = handle as ActionableHandle;
@@ -315,39 +322,123 @@ export function toActionableHandle(handle: ElementHandle): ActionableHandle {
 	return enriched;
 }
 
-/** Focus, set value via property descriptor setter, and dispatch synthetic input + change events for framework compatibility. */
+/** What `fill` does with an element, decided in the page. */
+type FillPlan =
+	| { readonly kind: "insert" }
+	| { readonly kind: "set" }
+	| { readonly kind: "refuse"; readonly reason: string };
+
+/** An element as `activeElement` returns it: what took focus in a document or shadow root. */
+interface FocusHolder {
+	readonly isContentEditable?: boolean;
+	contains(node: unknown): boolean;
+}
+
+/** The parts of an element `fill` touches, typed here because this package compiles without the DOM lib. */
+interface FillTarget extends FocusHolder {
+	readonly tagName: string;
+	readonly type?: string;
+	readonly disabled?: boolean;
+	readonly readOnly?: boolean;
+	value?: string;
+	focus(): void;
+	select?(): void;
+	dispatchEvent(event: unknown): boolean;
+	/** The document or shadow root the element is in. */
+	getRootNode(): { readonly activeElement: FocusHolder | null };
+	readonly ownerDocument: {
+		createRange(): { selectNodeContents(node: unknown): void };
+		readonly defaultView: {
+			getSelection(): { removeAllRanges(): void; addRange(range: unknown): void } | null;
+			readonly Event: new (type: string, init?: { bubbles?: boolean; composed?: boolean }) => unknown;
+		} | null;
+	};
+}
+
+/**
+ * Decide in the page how to fill `element` with `value`, and do the part that happens there. A text
+ * field has its contents selected so one insertion replaces them; an input whose value is a date,
+ * time, colour or number range is assigned it with the `input` and `change` a user's edit fires, and
+ * keeps its value when it cannot hold the new one; anything else is refused with what to use instead.
+ * Serialized into the page, so it reaches nothing outside itself.
+ *
+ * It runs in puppeteer's isolated world, as every element handle's evaluation does, where a property
+ * a framework defines on the element in the page's own world (React's value tracker) is not visible:
+ * the assignment reaches the native setter, and the framework counts the events as a change.
+ */
+function planFill(element: unknown, value: string): FillPlan {
+	const el = element as FillTarget;
+	const tag = el.tagName.toLowerCase();
+	const refuse = (reason: string): FillPlan => ({ kind: "refuse", reason });
+	// The insertion goes to whatever holds focus: an element that did not take it (hidden, inert, not
+	// rendered) would have its value typed into another field.
+	const unfocusable = (): FillPlan => refuse(`the <${tag}> cannot take focus: it is hidden, inert or not rendered`);
+	const selectAll = (): FillPlan => {
+		el.focus();
+		if (el.getRootNode().activeElement !== el) return unfocusable();
+		el.select?.();
+		return { kind: "insert" };
+	};
+	if (tag === "input") {
+		const type = (el.type ?? "text").toLowerCase();
+		if (type === "checkbox" || type === "radio") return refuse(`an <input type="${type}"> is set by clicking it`);
+		if (type === "file") return refuse(`an <input type="file"> takes files through tab.uploadFile`);
+		if (["button", "hidden", "image", "reset", "submit"].includes(type)) {
+			return refuse(`an <input type="${type}"> holds no text`);
+		}
+		if (el.disabled) return refuse("the <input> is disabled");
+		if (el.readOnly) return refuse("the <input> is read-only");
+		if (["color", "date", "datetime-local", "month", "range", "time", "week"].includes(type)) {
+			const view = el.ownerDocument.defaultView;
+			el.focus();
+			const previous = el.value;
+			el.value = value;
+			if (el.value !== value) {
+				el.value = previous;
+				return refuse(`${JSON.stringify(value)} is not a value an <input type="${type}"> holds`);
+			}
+			if (view) {
+				el.dispatchEvent(new view.Event("input", { bubbles: true, composed: true }));
+				el.dispatchEvent(new view.Event("change", { bubbles: true }));
+			}
+			return { kind: "set" };
+		}
+		return selectAll();
+	}
+	if (tag === "textarea") {
+		if (el.disabled) return refuse("the <textarea> is disabled");
+		if (el.readOnly) return refuse("the <textarea> is read-only");
+		return selectAll();
+	}
+	if (tag === "select") return refuse("a <select> is set with tab.select(selector, ...values)");
+	if (el.isContentEditable) {
+		el.focus();
+		const range = el.ownerDocument.createRange();
+		range.selectNodeContents(el);
+		const selection = el.ownerDocument.defaultView?.getSelection();
+		selection?.removeAllRanges();
+		selection?.addRange(range);
+		// An element inside an editor is edited through the editor's host, which the selection focuses.
+		const active = el.getRootNode().activeElement;
+		if (active?.isContentEditable !== true || !active.contains(el)) return unfocusable();
+		return { kind: "insert" };
+	}
+	return refuse(`a <${tag}> is not an <input>, a <textarea> or contenteditable`);
+}
+
+/**
+ * Replace an element's value, shared by `tab.fill` and enriched handles. The replacement is one
+ * trusted text insertion into the selected contents, the one a paste makes: React, Vue and every
+ * other framework that listens for `input` sees a real edit, and a value of any length costs one
+ * round trip rather than one keystroke per character. `change` fires when focus leaves, as it does
+ * for a person.
+ */
 async function fillViaHandle(handle: ElementHandle, value: string, signal?: AbortSignal): Promise<void> {
-	await untilAborted(signal, () =>
-		handle.evaluate((el, val) => {
-			const target = el as unknown as {
-				focus?: () => void;
-				value?: string;
-				dispatchEvent?: (event: unknown) => boolean;
-			};
-			target.focus?.();
-			const win = globalThis as unknown as {
-				HTMLInputElement?: { prototype: object };
-				HTMLTextAreaElement?: { prototype: object };
-				HTMLSelectElement?: { prototype: object };
-				Event: new (type: string, eventInitDict?: { bubbles?: boolean; cancelable?: boolean }) => unknown;
-			};
-			const proto = Object.getPrototypeOf(target);
-			const descriptor =
-				Object.getOwnPropertyDescriptor(proto, "value") ||
-				(win.HTMLInputElement
-					? Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")
-					: undefined);
-			if (descriptor?.set) {
-				descriptor.set.call(target, val);
-			} else {
-				target.value = val;
-			}
-			if (win.Event && target.dispatchEvent) {
-				target.dispatchEvent(new win.Event("input", { bubbles: true, cancelable: true }));
-				target.dispatchEvent(new win.Event("change", { bubbles: true, cancelable: true }));
-			}
-		}, value),
-	);
+	const plan = await untilAborted(signal, () => handle.evaluate(planFill, value));
+	if (plan.kind === "refuse") throw new ToolError(`fill: ${plan.reason}`);
+	if (plan.kind === "set") return;
+	// An empty insertion deletes the selection, so clearing a field is the same one edit.
+	await untilAborted(signal, () => handle.frame.page().keyboard.sendCharacter(value));
 }
 
 /**
@@ -681,7 +772,6 @@ export function describeInflight(inflight: Map<number, InflightOp>): string {
 export class WorkerCore {
 	#transport: TabWorkerTransport;
 	#browser?: Browser;
-	#browserContext?: BrowserContext;
 	#page?: Page;
 	#targetId?: string;
 	#elementCache = new Map<number, ElementHandle>();
@@ -745,59 +835,16 @@ export class WorkerCore {
 				protocolTimeout: BROWSER_PROTOCOL_TIMEOUT_MS,
 			});
 			if (payload.mode === "headless") {
-				if (payload.contextName && payload.contextName !== "default") {
-					this.#browserContext = await this.#browser.createBrowserContext();
-					this.#page = await this.#browserContext.newPage();
-				} else {
-					this.#page = await this.#browser.newPage();
-				}
+				const context =
+					payload.browserContextId === undefined
+						? this.#browser.defaultBrowserContext()
+						: this.#browser.browserContexts().find(candidate => candidate.id === payload.browserContextId);
+				if (!context) throw new ToolError("The tab's browser context closed before its page opened");
+				this.#page = await context.newPage();
 				this.#observeDialogs();
 				await applyStealthPatches(this.#browser, this.#page, { browserSession: null, override: null });
 				await applyViewport(this.#page, payload.viewport);
 				if (payload.dialogs) this.#applyDialogPolicy(payload.dialogs);
-
-				if (payload.storageStatePath) {
-					const targetPath = resolveToCwd(payload.storageStatePath, process.cwd());
-					try {
-						const raw = await fs.promises.readFile(targetPath, "utf-8");
-						const state = JSON.parse(raw) as StorageStateData;
-						if (Array.isArray(state.cookies) && state.cookies.length > 0) {
-							await this.#page.setCookie(...(state.cookies as Parameters<Page["setCookie"]>));
-						}
-						if (Array.isArray(state.origins) && state.origins.length > 0) {
-							await this.#page.evaluateOnNewDocument(origins => {
-								const win = globalThis as unknown as {
-									location?: { origin: string };
-									localStorage: Storage;
-									sessionStorage: Storage;
-								};
-								for (const entry of origins) {
-									if (win.location?.origin === entry.origin) {
-										if (Array.isArray(entry.localStorage)) {
-											for (const item of entry.localStorage) {
-												try {
-													win.localStorage.setItem(item.name, item.value);
-												} catch {}
-											}
-										}
-										if (Array.isArray(entry.sessionStorage)) {
-											for (const item of entry.sessionStorage) {
-												try {
-													win.sessionStorage.setItem(item.name, item.value);
-												} catch {}
-											}
-										}
-									}
-								}
-							}, state.origins);
-						}
-					} catch (err) {
-						this.#log("warn", "Failed to preload storage state on tab open", {
-							path: targetPath,
-							error: errorMessage(err),
-						});
-					}
-				}
 
 				if (payload.url) {
 					await this.#page.goto(payload.url, {
@@ -1457,7 +1504,7 @@ export class WorkerCore {
 			id: async id => toActionableHandle(await this.#resolveCachedHandle(id)),
 			ref: async id => toActionableHandle(await this.#resolveAriaRef(id)),
 			storageState: opts =>
-				op("tab.storageState()", actionOpMs, sig => this.#getStorageState(opts?.path, sig, session)),
+				op("tab.storageState()", actionOpMs, sig => this.#storageState(opts?.path, sig, session)),
 			loadStorageState: stateOrPath =>
 				op("tab.loadStorageState()", actionOpMs, sig => this.#loadStorageState(stateOrPath, sig, session)),
 		};
@@ -1827,11 +1874,8 @@ export class WorkerCore {
 		const page = this.#page;
 		if (this.#dialogHandler && page && !page.isClosed()) page.off("dialog", this.#dialogHandler);
 		// The worker is shutting down and reports `closed` below regardless: a page that will not close is either
-		// already closing or belongs to a browser that is going away with it, and the disconnect follows.
-		if (this.#browserContext) {
-			await bestEffort(this.#browserContext.close(), "closing isolated browser context");
-			this.#browserContext = undefined;
-		}
+		// already closing or belongs to a browser that is going away with it, and the disconnect follows. A named
+		// context is the supervisor's, which closes it when its last tab goes.
 		if (this.#mode === "headless" && page && !page.isClosed()) {
 			await bestEffort(page.close(), "a page that will not close is already closing or going with its browser");
 		}
@@ -1840,105 +1884,27 @@ export class WorkerCore {
 		this.#transport.close();
 	}
 
-	async #getStorageState(
-		filePath?: string,
-		signal?: AbortSignal,
-		session?: SessionSnapshot,
-	): Promise<StorageStateData> {
-		const page = this.#requirePage();
+	async #storageState(file: string | undefined, signal: AbortSignal, session: SessionSnapshot): Promise<StorageState> {
+		const context = this.#requirePage().browserContext();
 		return await untilAborted(signal, async () => {
-			const cookies = (await page.cookies()) as CookieData[];
-			const origins = (await page.evaluate(() => {
-				const win = globalThis as unknown as {
-					location?: { origin: string };
-					localStorage: Storage;
-					sessionStorage: Storage;
-				};
-				const origin = win.location?.origin;
-				if (!origin || origin === "null") return [];
-				const localStorageEntries: Array<{ name: string; value: string }> = [];
-				try {
-					for (let i = 0; i < win.localStorage.length; i++) {
-						const key = win.localStorage.key(i);
-						if (key !== null) {
-							localStorageEntries.push({ name: key, value: win.localStorage.getItem(key) ?? "" });
-						}
-					}
-				} catch {}
-				const sessionStorageEntries: Array<{ name: string; value: string }> = [];
-				try {
-					for (let i = 0; i < win.sessionStorage.length; i++) {
-						const key = win.sessionStorage.key(i);
-						if (key !== null) {
-							sessionStorageEntries.push({ name: key, value: win.sessionStorage.getItem(key) ?? "" });
-						}
-					}
-				} catch {}
-				return [{ origin, localStorage: localStorageEntries, sessionStorage: sessionStorageEntries }];
-			})) as OriginStorageData[];
-
-			const data: StorageStateData = {
-				cookies: cookies ?? [],
-				origins: origins ?? [],
-			};
-
-			if (filePath) {
-				const targetPath = resolveToCwd(filePath, session?.cwd ?? process.cwd());
-				await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
-				await fs.promises.writeFile(targetPath, JSON.stringify(data, null, 2), "utf-8");
-			}
-
-			return data;
+			const state = await captureStorageState(context);
+			if (file !== undefined) await writeStorageStateFile(resolveToCwd(file, session.cwd), state);
+			return state;
 		});
 	}
 
 	async #loadStorageState(
-		stateOrPath: string | StorageStateData,
-		signal?: AbortSignal,
-		session?: SessionSnapshot,
-	): Promise<void> {
-		const page = this.#requirePage();
+		stateOrPath: string | StorageState,
+		signal: AbortSignal,
+		session: SessionSnapshot,
+	): Promise<StorageStateLoaded> {
+		const context = this.#requirePage().browserContext();
 		return await untilAborted(signal, async () => {
-			let state: StorageStateData;
-			if (typeof stateOrPath === "string") {
-				const targetPath = resolveToCwd(stateOrPath, session?.cwd ?? process.cwd());
-				const raw = await fs.promises.readFile(targetPath, "utf-8");
-				state = JSON.parse(raw) as StorageStateData;
-			} else {
-				state = stateOrPath;
-			}
-
-			if (Array.isArray(state.cookies) && state.cookies.length > 0) {
-				await page.setCookie(...(state.cookies as Parameters<Page["setCookie"]>));
-			}
-
-			if (Array.isArray(state.origins) && state.origins.length > 0) {
-				await page.evaluate(origins => {
-					const win = globalThis as unknown as {
-						location?: { origin: string };
-						localStorage: Storage;
-						sessionStorage: Storage;
-					};
-					for (const entry of origins) {
-						if (win.location?.origin === entry.origin) {
-							if (Array.isArray(entry.localStorage)) {
-								for (const item of entry.localStorage) {
-									try {
-										win.localStorage.setItem(item.name, item.value);
-									} catch {}
-								}
-							}
-							if (Array.isArray(entry.sessionStorage)) {
-								for (const item of entry.sessionStorage) {
-									try {
-										win.sessionStorage.setItem(item.name, item.value);
-									} catch {}
-								}
-							}
-						}
-					}
-				}, state.origins);
-			}
+			const state =
+				typeof stateOrPath === "string"
+					? await readStorageStateFile(resolveToCwd(stateOrPath, session.cwd))
+					: parseStorageState(stateOrPath, "tab.loadStorageState()'s argument");
+			return await applyStorageState(context, state);
 		});
 	}
 
