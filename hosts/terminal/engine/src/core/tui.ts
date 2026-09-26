@@ -455,6 +455,17 @@ export class TUI extends Container {
 	#ghosttyInitialImageDelayTimer: RenderTimer | undefined;
 	#ghosttyImageReadyAtMs = 0;
 	#clearScrollbackOnNextRender = false;
+	// Set by `resetDisplay()` and consumed by the next authoritative
+	// normal-screen render, whether that render emits an update or a full
+	// paint. A full paint that consumes it is a user-driven replay of the
+	// current transcript (Ctrl+O expand, thinking/setting toggles, display
+	// reset) that must show every row, so it opts out of
+	// #truncateLargeConptyFrame. Bulk transcript-replacement paints — first
+	// paint, /resume and handoff, and resize geometry rebuilds — leave it
+	// false and stay bounded (#2115, #4863). A multiplexer turns the reset
+	// into an in-place update; consuming the intent there is what stops a
+	// later bulk replacement from inheriting it.
+	#unboundedConptyPaintRequested = false;
 	#forceViewportRepaintOnNextRender = false;
 	#hasEverRendered = false;
 	/** An {@link adoptPaintedWindow} screen no frame has diffed against yet. */
@@ -1635,6 +1646,10 @@ export class TUI extends Container {
 	 */
 	resetDisplay(): void {
 		if (this.#stopped) return;
+		// This is a user-driven redraw of the current transcript; it must replay
+		// every row, so opt the next render out of the ConPTY resume bound. Set
+		// before the multiplexer early-return so it survives a deferred paint.
+		this.#unboundedConptyPaintRequested = true;
 		this.invalidate();
 		// A reset that lands inside a tmux/screen/zellij resize burst would
 		// paint mid-reflow and re-introduce the flash race (issue #2088).
@@ -2945,6 +2960,14 @@ export class TUI extends Container {
 		}
 		const cursorTrackingLineCount = hasVisibleOverlay ? Math.max(frame.length, windowTop + height) : frame.length;
 
+		// `resetDisplay()` requests an unbounded replay of the current
+		// transcript. Consume that one-shot intent here, on this render's emit
+		// decision, even when a multiplexer makes it an in-place update or the
+		// resident alt-buffer paint below handles the frame; otherwise a later
+		// /resume or handoff full paint inherits it and replays a multi-megabyte
+		// transcript without the #2115 bound.
+		const unboundedConptyPaint = this.#unboundedConptyPaintRequested;
+		this.#unboundedConptyPaintRequested = false;
 		const intent: RenderIntent = fullPaint
 			? {
 					kind: "fullPaint",
@@ -3017,6 +3040,7 @@ export class TUI extends Container {
 		if (intent.kind === "fullPaint") {
 			this.#emitFullPaint(frame, window, width, height, cursorPos, purgeSequence, imageTransmitBuffer, {
 				clearScrollback: intent.clearScrollback,
+				boundConptyPaint: !unboundedConptyPaint,
 				chunkTo,
 				windowTop,
 				cursorTrackingLineCount,
@@ -3179,6 +3203,16 @@ export class TUI extends Container {
 		imageTransmitBuffer: string,
 		options: {
 			clearScrollback: boolean;
+			/**
+			 * Whether this paint may be bounded by {@link truncateLargeConptyFrame}
+			 * on ConPTY hosts. True for bulk transcript-replacement paints — first
+			 * paint, /resume, handoff, and resize geometry rebuilds — where a
+			 * multi-megabyte synchronized frame stalls conhost (#2115). False for a
+			 * user-driven `resetDisplay()` (Ctrl+O expand, thinking/setting
+			 * toggles, display reset), which must replay the whole transcript so
+			 * nothing is silently dropped from scrollback (#4863).
+			 */
+			boundConptyPaint: boolean;
 			chunkTo: number;
 			windowTop: number;
 			cursorTrackingLineCount: number;
@@ -3197,16 +3231,19 @@ export class TUI extends Container {
 				paintCursorPos = { row: chunkTo + cursorPos.row - windowTop, col: cursorPos.col };
 			}
 		}
-		// ConPTY hosts bound the replay: merge prefix + window into one array
-		// so #truncateLargeConptyFrame can measure the payload and retain only
-		// the tail. Gated on the host check — everywhere else the merge would
-		// copy a pointer per committed row (a 50k-row session = 50k-entry
-		// array per resize step / theme change / session replace) just to be
-		// returned unchanged. `paintLines` stays null unless truncation
-		// actually rewrote the replay.
+		// ConPTY hosts bound bulk transcript-replacement replays (first paint,
+		// /resume, handoff, resize): merge prefix + window into one array so
+		// #truncateLargeConptyFrame can measure the payload and retain only the
+		// tail. Gated on `boundConptyPaint` — a user-driven `resetDisplay()` sets
+		// it false and replays the whole transcript untruncated so nothing is
+		// dropped from scrollback (#4863). Gated on the host check too —
+		// everywhere else the merge would copy a pointer per committed row (a
+		// 50k-row session = 50k-entry array per resize step / theme change /
+		// session replace) just to be returned unchanged. `paintLines` stays null
+		// unless truncation actually rewrote the replay.
 		let paintLines: string[] | null = null;
 		let paintLineCount = chunkTo + height;
-		if (isConPTYHosted()) {
+		if (options.boundConptyPaint && isConPTYHosted()) {
 			const merged = new Array<string>(chunkTo + height);
 			for (let i = 0; i < chunkTo; i++) merged[i] = frame[i] ?? "";
 			for (let screenRow = 0; screenRow < height; screenRow++) {
