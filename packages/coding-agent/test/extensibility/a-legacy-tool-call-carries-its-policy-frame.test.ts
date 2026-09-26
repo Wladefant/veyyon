@@ -8,15 +8,12 @@
  * The class this closes: the shim dispatches with the frame of the session its tool was built from.
  * Every registry-backed entry point it exports — `createCodingTools`, `createReadTool`,
  * `createBashTool`, `createGrepTool`, `createFindTool` — carries that frame; the sweep below drives
- * the two that reach a tool without the native addon, which is every path a filesystem-only tool
- * needs. The control below keeps the fence itself load-bearing, so nobody can satisfy this suite by
- * relaxing the boundary instead of carrying a frame.
+ * all five entry points now that native addons are present. The control below keeps the fence itself
+ * load-bearing, so nobody can satisfy this suite by relaxing the boundary instead of carrying a frame.
  *
- * What it does not catch: the `bash`, `grep` and `find` dispatch sites, which execute through
- * `veyyon_natives` and need `bun run ci:build:native` in the tree under test; a frame carrying an
- * unrelated session's settings; and a call the frame should refuse — the shim builds an isolated
- * settings set, so no operator denial reaches this route yet. `ls` needs no frame at all: it lists
- * the filesystem itself and never dispatches a registry tool.
+ * What it does not catch: a frame carrying an unrelated session's settings; and a call the frame
+ * should refuse — the shim builds an isolated settings set, so no operator denial reaches this route
+ * yet. `ls` needs no frame at all: it lists the filesystem itself and never dispatches a registry tool.
  */
 import { afterAll, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
@@ -57,7 +54,7 @@ beforeEach(() => {
 const SWEEP_FIXTURE = [
 	'import { dirname } from "node:path";',
 	'import { fileURLToPath } from "node:url";',
-	'import { createCodingTools, createReadTool } from "@earendil-works/pi-coding-agent";',
+	'import { createBashTool, createCodingTools, createFindTool, createGrepTool, createReadTool } from "@earendil-works/pi-coding-agent";',
 	"const cwd = dirname(fileURLToPath(import.meta.url));",
 	"const text = result =>",
 	"\tresult.content",
@@ -74,6 +71,9 @@ const SWEEP_FIXTURE = [
 	"const codingRead = createCodingTools(cwd).find(tool => tool.name === 'read');",
 	"export const coding = await attempt(() => codingRead.execute('legacy-coding-read', { path: 'sample.txt' }));",
 	"export const read = await attempt(() => createReadTool(cwd).execute('legacy-read', { path: 'sample.txt' }));",
+	"export const bash = await attempt(() => createBashTool(cwd).execute('legacy-bash', { command: 'echo legacy bash body' }));",
+	"export const grep = await attempt(() => createGrepTool(cwd).execute('legacy-grep', { pattern: 'legacy read body' }));",
+	"export const find = await attempt(() => createFindTool(cwd).execute('legacy-find', { pattern: 'sample.txt' }));",
 ].join("\n");
 
 async function writeFixtureExtension(source: string, files: Record<string, string>): Promise<string> {
@@ -88,13 +88,22 @@ async function writeFixtureExtension(source: string, files: Record<string, strin
 }
 
 describe("a legacy tool call carries the policy frame of its own session", () => {
-	it("runs the entry points that reach a tool without the native addon", async () => {
+	it("runs every entry point that reaches a registry tool", async () => {
 		const entry = await writeFixtureExtension(SWEEP_FIXTURE, { "sample.txt": "legacy read body\n" });
-		const loaded = (await loadLegacyPiModule(entry)) as { coding: string; read: string };
+		const loaded = (await loadLegacyPiModule(entry)) as {
+			coding: string;
+			read: string;
+			bash: string;
+			grep: string;
+			find: string;
+		};
 
 		expect(loaded.coding).toContain("legacy read body");
 		expect(loaded.read).toContain("legacy read body");
-	});
+		expect(loaded.bash).toContain("legacy bash body");
+		expect(loaded.grep).toContain("sample.txt");
+		expect(loaded.find).toContain("sample.txt");
+	}, 120_000);
 
 	it("refuses the same dispatch when no frame is offered", async () => {
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-legacy-tool-frame-control-"));
