@@ -843,8 +843,9 @@ Before persisting entries:
 - Image blocks in `content` arrays with base64 length >= 1024 are externalized to blob refs:
   - stored as `blob:sha256:<hash>`
   - raw bytes written to blob store (`BlobStore.put`)
+- A tool result whose tool has a result codec (a domain manifest's `resultCodecs`, registered through `registerToolResultCodecs`) is written through `slimToolResultEntry`: the codec drops a `details` field its `content` rebuilds. The `read` codec (`packages/coding-agent/src/tools/fs/read-display.ts`) drops `details.displayContent.text` and writes `from: "rows"` (rebuilt from the numbered rows) or `from: "prefix"` with a `length` (the first `length` characters of the text). A result whose content no longer rebuilds the field, such as a pruned one, is written whole. The in-memory entry is never changed.
 
-On load, blob refs are resolved back: `blob:sha256:` image refs to base64 for message/custom_message image blocks, and `blobtext:sha256:` refs to the original string in place.
+On load, blob refs are resolved back: `blob:sha256:` image refs to base64 for message/custom_message image blocks, and `blobtext:sha256:` refs to the original string in place. `restoreToolResultEntries` then runs each registered codec's `restore` over the loaded tool results, so the entries in memory match what the tool returned; a line written before a codec existed keeps its field and loads unchanged.
 
 ## Storage Abstractions
 

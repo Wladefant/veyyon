@@ -9,6 +9,7 @@ import {
 	isTextBlobRef,
 } from "./blob-store";
 import type { FileEntry } from "./session-entries";
+import { slimToolResultEntry } from "./tool-result-codecs";
 
 /**
  * Strings longer than this are externalized to the blob store on persist (never
@@ -262,6 +263,10 @@ function stripReplayedReasoningSignatures(entry: FileEntry): FileEntry {
 	return { ...entry, message: { ...message, content } };
 }
 
+/**
+ * The entry as a session line writes it. Every field dropped here is restored by
+ * `resolveBlobRefsInEntries` on load, except a replayed reasoning signature, which replay never reads.
+ */
 export function prepareEntryForPersistence(entry: FileEntry, blobStore: BlobStore): FileEntry {
-	return truncateForPersistence(stripReplayedReasoningSignatures(entry), blobStore) as FileEntry;
+	return truncateForPersistence(stripReplayedReasoningSignatures(slimToolResultEntry(entry)), blobStore) as FileEntry;
 }

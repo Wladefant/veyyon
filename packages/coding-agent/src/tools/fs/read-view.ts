@@ -57,6 +57,7 @@ import {
 import type { ReadUrlToolDetails } from "../web/fetch";
 import { readUrlToolView } from "../web/fetch-view";
 import type { ReadRenderArgs, ReadToolDetails } from "./read";
+import { type ResolvedReadDisplay, resolveReadDisplay } from "./read-display";
 
 /** What every card of this tool is titled. */
 const READ_TITLE = "Read";
@@ -228,7 +229,12 @@ function window(rows: string[], expanded: boolean, limits: { collapsed: number; 
  */
 function contentSection(
 	content: string,
-	options: { language: string | undefined; markdown: boolean; expanded: boolean; details?: ReadToolDetails },
+	options: {
+		language: string | undefined;
+		markdown: boolean;
+		expanded: boolean;
+		display: ResolvedReadDisplay | undefined;
+	},
 ): ViewSection | undefined {
 	if (!content) return undefined;
 	const rows = screenRows(content);
@@ -236,7 +242,7 @@ function contentSection(
 	const lines = kept.map(row => [{ text: row }] as ViewLine);
 	const hidden = heldBack(held, LINE_NOUN, !options.expanded);
 	if (options.markdown) return { lines, markdown: true, ...(hidden === undefined ? {} : { hidden }) };
-	const display = options.details?.displayContent;
+	const display = options.display;
 	const numbers = display?.lineNumbers?.slice(0, kept.length);
 	return {
 		lines,
@@ -362,8 +368,8 @@ export const readToolView: Required<ToolViewRenderer<ReadRenderArgs, ReadViewRes
 		// The structured display text when the read reported one, so the card shows the file's own
 		// lines rather than the hashline anchors the model reads; the notice appended for the model is
 		// stated by the card as its own group, so a reader is not told the same thing twice.
-		const content =
-			details?.displayContent?.text ?? stripOutputNotice(extractResultText(result.content), details?.meta);
+		const display = resolveReadDisplay(details?.displayContent, result.content);
+		const content = display?.text ?? stripOutputNotice(extractResultText(result.content), details?.meta);
 		const suffix = details?.suffixResolution;
 		const sourcePath = readSourceFsPath(details);
 		const sections: ViewSection[] = [];
@@ -395,12 +401,7 @@ export const readToolView: Required<ToolViewRenderer<ReadRenderArgs, ReadViewRes
 
 		const language = getLanguageFromPath(splitReadPath(rawPath).path);
 		const markdown = details?.contentType === "text/markdown" && !rawRequested(rawPath, args);
-		const body = contentSection(content, {
-			language,
-			markdown,
-			expanded: context.expanded,
-			...(details === undefined ? {} : { details }),
-		});
+		const body = contentSection(content, { language, markdown, expanded: context.expanded, display });
 		if (body !== undefined) sections.push(body);
 		const notices = noticeSection(details, context.expanded);
 		if (notices !== undefined) sections.push(notices);

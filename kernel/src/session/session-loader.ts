@@ -32,6 +32,7 @@ import {
 	type SessionTitleUpdate,
 	titleUpdateFromSlot,
 } from "./session-title-slot";
+import { restoreToolResultEntries } from "./tool-result-codecs";
 
 const STREAM_LOAD_THRESHOLD_BYTES = 8 * 1024 * 1024;
 
@@ -529,13 +530,14 @@ export interface BlobResolutionOptions {
 }
 
 /**
- * Restore every externalized payload the blob store still holds, and report the ones it
- * does not. Returns the number of references that stayed references.
+ * Restore what persistence moved out of each entry: every externalized payload the blob store still
+ * holds, then every tool-result field a codec dropped, which a codec rebuilds from that restored
+ * content. Reports the payloads the blob store does not hold and returns how many references stayed
+ * references.
  *
- * Two phases, deliberately: collect every reference in the session synchronously,
- * then read them through one bounded pool. The cap is session-wide rather than
- * per-entry, so a transcript of a thousand entries each holding one payload reads
- * eight files at a time and not a thousand.
+ * Two phases for the blobs: collect every reference in the session synchronously, then read them
+ * through one bounded pool. The cap is session-wide rather than per-entry, so a transcript of a
+ * thousand entries each holding one payload reads eight files at a time and not a thousand.
  */
 export async function resolveBlobRefsInEntries(
 	entries: FileEntry[],
@@ -548,6 +550,7 @@ export async function resolveBlobRefsInEntries(
 		if (entry.type !== "session") collectBlobSites(entry, sites);
 	}
 	await resolveBlobSites(sites, blobStore, lost);
+	restoreToolResultEntries(entries);
 	if (lost.count > 0) {
 		logger.warn("Session payloads missing from the blob store", { source: options?.source, lost: lost.count });
 		if (options) emitLostPayloadNotice(options, lost.count);

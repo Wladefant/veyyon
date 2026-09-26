@@ -124,6 +124,7 @@ import {
 	scanConflictLines,
 	scanFileForConflicts,
 } from "./conflict-detect";
+import type { ReadDisplayContent } from "./read-display";
 
 // Per-session memo for tree-sitter summaries. `summarizeCode` is a pure function
 // of (code, path, fold settings) but costs ~12-18ms for a ~1500-line file, and a
@@ -410,17 +411,6 @@ function lineNumbersFromEntries(entries: readonly LineEntry[]): number[] {
 		if (entry.kind === "line") lines.push(entry.lineNumber);
 	}
 	return lines;
-}
-
-/**
- * What the TUI draws for a read: the lines without their hashline or line-number prefixes, and the
- * line number each one carries. `lineNumbers` is present only when the count from `startLine` breaks
- * (an elided span or a jump between ranges); a contiguous window counts up from `startLine`.
- */
-interface ReadDisplayContent {
-	text: string;
-	startLine: number;
-	lineNumbers?: Array<number | null>;
 }
 
 function entriesDisplay(entries: readonly LineEntry[], fallbackStartLine: number): ReadDisplayContent {

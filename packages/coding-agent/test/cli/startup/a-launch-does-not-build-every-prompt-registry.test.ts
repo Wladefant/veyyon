@@ -133,11 +133,17 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * spends tokens on one; it imports only type-level kernel modules and `utils/type-guards`, both
  * already here.
  *
+ * 1550 to 1552: `kernel/session/tool-result-codecs.ts`, the table of result codecs the session
+ * spine applies to each line it writes and each entry it loads, and `tools/fs/read-display.ts`, the
+ * read codec the filesystem manifest contributes to it. A resumed session restores its read cards as
+ * it loads, before any read runs, so the codec cannot wait for the read tool; both import only
+ * type-level modules and `utils/type-guards`, already here.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1550;
+const LAUNCH_REACH_CEILING = 1552;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

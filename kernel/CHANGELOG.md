@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- A tool domain manifest can list `resultCodecs`, each a `ToolResultCodec` whose `slim` drops a result `details` field the result's content rebuilds when the session writes the entry and whose `restore` rebuilds it when the session loads.
+
 ### Changed
 
 - Opening or restoring a session builds its set of known entry ids once instead of twice, which takes about 40ms off opening a 220,000-entry session.
