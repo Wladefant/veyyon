@@ -440,8 +440,8 @@ export function emergencyTerminalRestore(): void {
 /** Terminal-reported appearance (dark/light mode). */
 export type TerminalAppearance = "dark" | "light";
 export interface Terminal {
-	// Start the terminal with input and resize handlers
-	start(onInput: (data: string) => void, onResize: () => void): void;
+	// Start the terminal with input, resize, and host-disconnect handlers.
+	start(onInput: (data: string) => void, onResize: () => void, onDisconnect?: () => void): void;
 
 	// Stop the terminal and restore state
 	stop(): void;
@@ -630,9 +630,19 @@ export class ProcessTerminal implements Terminal {
 	// suppressed. Defaults on under `bun test` — see isTerminalHeadless().
 	#headless = isTerminalHeadless();
 	#writeLogPath = $env.VEYYON_TUI_WRITE_LOG || "";
+	#disconnectHandler?: () => void;
+	#stdinEndHandler = () => {
+		this.#markTerminalDisconnected("stdin ended");
+	};
+	#stdinCloseHandler = () => {
+		this.#markTerminalDisconnected("stdin closed");
+	};
+	#stdinErrorHandler = (err: Error) => {
+		this.#markTerminalDisconnected("stdin failed", err);
+	};
 	#stdoutErrorCleanup?: () => void;
 	#stdoutErrorHandler = (err: Error) => {
-		this.#markTerminalWriteFailed(err);
+		this.#markTerminalDisconnected("stdout failed", err);
 	};
 
 	#windowsVTInputRestore?: () => void;
@@ -750,7 +760,8 @@ export class ProcessTerminal implements Terminal {
 		this.#privateModeCallbacks.push(callback);
 	}
 
-	start(onInput: (data: string) => void, onResize: () => void): void {
+	start(onInput: (data: string) => void, onResize: () => void, onDisconnect?: () => void): void {
+		this.#disconnectHandler = onDisconnect;
 		this.#inputHandler = onInput;
 		this.#resizeHandler = onResize;
 
@@ -778,6 +789,9 @@ export class ProcessTerminal implements Terminal {
 		}
 		process.stdin.setEncoding("utf8");
 		process.stdin.resume();
+		process.stdin.on("end", this.#stdinEndHandler);
+		process.stdin.on("close", this.#stdinCloseHandler);
+		process.stdin.on("error", this.#stdinErrorHandler);
 
 		// Enable bracketed paste mode - terminal will wrap pastes in \x1b[200~ ... \x1b[201~
 		this.#safeWrite("\x1b[?2004h");
@@ -1698,9 +1712,19 @@ export class ProcessTerminal implements Terminal {
 		// where Ctrl+D could close the parent shell over SSH.
 		process.stdin.pause();
 
-		// Restore raw mode state
+		process.stdin.removeListener("end", this.#stdinEndHandler);
+		process.stdin.removeListener("close", this.#stdinCloseHandler);
+		process.stdin.removeListener("error", this.#stdinErrorHandler);
+		this.#disconnectHandler = undefined;
+
+		// Restore raw mode state, best-effort: a revoked pty (pane recycled, ssh
+		// dropped) is no longer a tty and Bun's node:tty shim throws ENOENT.
 		if (process.stdin.setRawMode) {
-			process.stdin.setRawMode(this.#wasRaw);
+			try {
+				process.stdin.setRawMode(this.#wasRaw);
+			} catch {
+				// Terminal already gone
+			}
 		}
 		this.#stdoutErrorCleanup?.();
 		this.#stdoutErrorCleanup = undefined;
@@ -1708,6 +1732,35 @@ export class ProcessTerminal implements Terminal {
 
 	#ensureStdoutErrorHandler(): void {
 		this.#stdoutErrorCleanup ??= registerStdoutErrorHandler(this.#stdoutErrorHandler);
+	}
+
+	#markTerminalDisconnected(reason: string, err?: unknown): void {
+		if (this.#dead) return;
+		this.#dead = true;
+		logger.warn("terminal disconnected; stopping interactive rendering", { reason, err });
+
+		const disconnectHandler = this.#disconnectHandler;
+		this.#disconnectHandler = undefined;
+		if (!disconnectHandler) return;
+		// The handler tears the TUI down against a terminal that is already gone,
+		// so any step in it can fail. Swallow that: the exit below is the whole
+		// point of this method and must not be preempted by teardown noise.
+		try {
+			disconnectHandler();
+		} catch (handlerErr) {
+			logger.error("Terminal disconnect handler failed; exiting anyway", { err: handlerErr });
+		}
+
+		if (process.platform === "win32") {
+			void postmortem.quit(129, { drainStdout: false });
+			return;
+		}
+		try {
+			process.kill(process.pid, "SIGHUP");
+		} catch (signalErr) {
+			logger.error("Failed to deliver terminal disconnect signal; exiting directly", { err: signalErr });
+			void postmortem.quit(129);
+		}
 	}
 
 	#markTerminalWriteFailed(err: unknown): void {
@@ -1724,12 +1777,9 @@ export class ProcessTerminal implements Terminal {
 			});
 			return;
 		}
-		this.#dead = true;
-		logger.warn(
-			decision === "disable-fatal"
-				? "terminal closed (fatal write error); disabling rendering"
-				: "terminal rendering disabled after repeated write failures",
-			{ code: terminalWriteErrorCode(err), failures: this.#consecutiveWriteFailures, err },
+		this.#markTerminalDisconnected(
+			decision === "disable-fatal" ? "fatal write error" : "repeated write failures",
+			err,
 		);
 	}
 
