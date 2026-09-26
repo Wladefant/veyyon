@@ -76,6 +76,7 @@ import {
 	GOOGLE_THINKING_BUDGETS,
 	resolveThinkingBudget,
 } from "./reasoning-budget";
+export { ANTHROPIC_THINKING_BUDGETS as ANTHROPIC_THINKING } from "./reasoning-budget";
 import type {
 	Api,
 	AssistantMessage,
@@ -1466,11 +1467,21 @@ export function mapOptionsForApi<TApi extends Api>(
 					? mapEffortToAnthropicAdaptiveEffort(model, reasoning)
 					: undefined;
 
+			// A caller's maxTokens is the output it asked for, but thinking spends the
+			// same max_tokens: adaptive thinking can use all of it and leave no answer.
+			// Give thinking its budget on top, as the budget-only path below does. An
+			// uncapped request keeps the provider default.
+			const maxTokensWithThinking =
+				base.maxTokens === undefined
+					? undefined
+					: maxTokensWithThinkingBudget(base.maxTokens, model.maxTokens, thinkingBudget);
+
 			// For Opus 4.6+ and Sonnet 4.6+: use adaptive thinking with effort level
 			// For older models: use budget-based thinking
 			if (thinkingMode === "anthropic-adaptive") {
 				return castApi<"anthropic-messages">({
 					...base,
+					maxTokens: maxTokensWithThinking,
 					requestModelId: reasoningSelection.wireModelId,
 					thinkingEnabled: true,
 					effort,
@@ -1483,6 +1494,7 @@ export function mapOptionsForApi<TApi extends Api>(
 			if (ANTHROPIC_USE_INTERLEAVED_THINKING) {
 				return castApi<"anthropic-messages">({
 					...base,
+					maxTokens: maxTokensWithThinking,
 					requestModelId: reasoningSelection.wireModelId,
 					thinkingEnabled: true,
 					thinkingBudgetTokens: thinkingBudget,
@@ -1534,8 +1546,25 @@ export function mapOptionsForApi<TApi extends Api>(
 				toolChoice: mapAnthropicToolChoice(options?.toolChoice),
 				thinkingDisplay: options?.hideThinkingSummary ? "omitted" : undefined,
 			};
-			// Adaptive mode sends effort directly, no budget_tokens — skip budget inflation.
+			// Adaptive Claude shares max_tokens between thinking and the answer, like
+			// the anthropic-messages adaptive path: a caller's cap is the output it
+			// wants, so add the effort's budget on top. Uncapped requests keep the
+			// provider default.
 			if (model.thinking?.mode === "anthropic-adaptive") {
+				const reasoning = bedrockBase.reasoning;
+				const budget = reasoning
+					? (options?.thinkingBudgets?.[reasoning] ?? BEDROCK_CLAUDE_THINKING_BUDGETS[reasoning])
+					: 0;
+				if (!model.reasoning || bedrockBase.maxTokens === undefined || budget <= 0) {
+					return castApi<"bedrock-converse-stream">(bedrockBase);
+				}
+				return castApi<"bedrock-converse-stream">({
+					...bedrockBase,
+					maxTokens: maxTokensWithThinkingBudget(bedrockBase.maxTokens, model.maxTokens, budget),
+				});
+			}
+			// Effort mode sends effort directly, no budget_tokens — skip budget inflation.
+			if (model.thinking?.mode === "effort") {
 				return castApi<"bedrock-converse-stream">(bedrockBase);
 			}
 			const level = reasoningSelection.effort;
