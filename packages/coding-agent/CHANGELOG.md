@@ -13,9 +13,13 @@
 ### Changed
 
 - `edit` and `write` no longer refuse handwritten files named `generated.go`, `generated.ts`, `generated.js`, or `generated.py`; these are treated as auto-generated only when their content carries a generator marker ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
+- `ToolSession.getToolChoiceQueue()` now returns `ToolChoiceQueue | undefined`, matching what the SDK's session port can supply before a session or queue exists; the `resolve` tool already guarded the absent case, so the type no longer promises more than the port keeps.
+- Reformatted `sdk.ts`, `async/index.ts`, `extensibility/shared-events.ts`, `modes/terminal/interactive-mode.ts` and `slash-commands/helpers/active-oauth-account.ts` to the repository's formatter and import-order rules; no behavior change.
+- `launch/terminal-control.ts` publishes the terminal-owner record through `atomicWriteFile` instead of hand-rolled temp-file and rename, so the write path has one owner; the record stays atomic and stays mode `0600`.
 
 ### Fixed
 
+- Fixed the double-Esc session tree / branch selector appearing dead on long sessions: opening it repaints the viewport instead of replaying the whole transcript and clearing native scrollback ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - A user message delivered by an extension (`sendUserMessage`, for example a Telegram relay) no longer clears the composer draft, so in-progress text and pasted images survive the delivery ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Go 1.26 `new(expr)` calls (e.g. `new(42)` or `new(f(x))`) triggering syntax errors during block operations and parse errors during structure search ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Windows paths not collapsing to `~` when the home directory was spelled in another case (`c:\users\operator` against `C:\Users\Operator`), which left the operator's account name in every displayed path ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
