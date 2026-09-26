@@ -594,6 +594,105 @@ const fn normalize_env_key(key: &str) -> &str {
 	key
 }
 
+/// Canonical spelling for a key inherited from the host environment (the
+/// process env or the caller-forwarded session env). Windows env names are
+/// case-insensitive, so a host `Temp` must still surface as `$TEMP` in the
+/// case-sensitive shell. Per-command env keeps the narrower
+/// [`normalize_env_key`]: a lowercase `tmp` there is an ordinary variable.
+#[cfg(windows)]
+const fn normalize_inherited_env_key(key: &str) -> &str {
+	if key.eq_ignore_ascii_case("TEMP") {
+		"TEMP"
+	} else if key.eq_ignore_ascii_case("TMP") {
+		"TMP"
+	} else if key.eq_ignore_ascii_case("TMPDIR") {
+		"TMPDIR"
+	} else {
+		normalize_env_key(key)
+	}
+}
+
+#[cfg(not(windows))]
+const fn normalize_inherited_env_key(key: &str) -> &str {
+	key
+}
+
+/// Value exported for an inherited (already normalized) env key.
+///
+/// A host `TEMP`/`TMP`/`TMPDIR` may carry an 8.3 profile alias
+/// (`C:\Users\ADMINI~1\...`) while `cd` stores the long form in `PWD`, so
+/// `cd "$TEMP"` would leave the two spellings disagreeing. Absolute temp paths
+/// are expanded with the same `GetLongPathNameW` routine `cd` uses (symlinks
+/// and junctions kept); anything else, or a failed expansion, passes through.
+#[cfg(windows)]
+fn inherited_env_value<'a>(key: &str, value: &'a str) -> std::borrow::Cow<'a, str> {
+	let path = std::path::Path::new(value);
+	if !matches!(key, "TEMP" | "TMP" | "TMPDIR") || !path.is_absolute() {
+		return std::borrow::Cow::Borrowed(value);
+	}
+	match brush_core::sys::fs::expand_to_long_path(path)
+		.into_os_string()
+		.into_string()
+	{
+		Ok(expanded) => std::borrow::Cow::Owned(expanded),
+		Err(_) => std::borrow::Cow::Borrowed(value),
+	}
+}
+
+#[cfg(not(windows))]
+const fn inherited_env_value<'a>(_key: &str, value: &'a str) -> std::borrow::Cow<'a, str> {
+	std::borrow::Cow::Borrowed(value)
+}
+
+/// Copies the host environment into `shell`, merging duplicate `PATH` values
+/// and registering the merged `PATH` last.
+fn copy_env_into_shell(
+	shell: &mut BrushShell,
+	env: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> Result<()> {
+	let mut merged_path: Option<String> = None;
+	for (key, value) in env {
+		let (Some(key), Some(value)) = (key.to_str(), value.to_str()) else {
+			continue;
+		};
+		let normalized_key = normalize_inherited_env_key(key);
+		if should_skip_env_var(normalized_key) {
+			continue;
+		}
+		if normalized_key == "PATH" {
+			merged_path = Some(match merged_path {
+				Some(existing) => merge_path_values(&existing, value),
+				None => value.to_string(),
+			});
+			continue;
+		}
+		let value = inherited_env_value(normalized_key, value);
+		let mut var = ShellVariable::new(ShellValue::String(value.into_owned()));
+		var.export();
+		shell
+			.env_mut()
+			.set_global(normalized_key, var)
+			.map_err(|err| Error::msg(format!("Failed to set env: {err}")))?;
+	}
+
+	#[cfg(windows)]
+	if merged_path.is_none()
+		&& let Some(value) = std::env::var_os("Path").or_else(|| std::env::var_os("PATH"))
+	{
+		merged_path = Some(value.to_string_lossy().into_owned());
+	}
+
+	if let Some(path_value) = &merged_path {
+		let mut var = ShellVariable::new(ShellValue::String(path_value.clone()));
+		var.export();
+		shell
+			.env_mut()
+			.set_global("PATH", var)
+			.map_err(|err| Error::msg(format!("Failed to set env: {err}")))?;
+	}
+	Ok(())
+}
+
 #[cfg(windows)]
 fn merge_path_values(existing: &str, incoming: &str) -> String {
 	let mut merged = Vec::new();
@@ -733,50 +832,18 @@ async fn create_session_for_run(
 		}
 	}
 
-	let mut merged_path: Option<String> = None;
-	for (key, value) in std::env::vars() {
-		let normalized_key = normalize_env_key(&key);
-		if should_skip_env_var(normalized_key) {
-			continue;
-		}
-		if normalized_key == "PATH" {
-			merged_path = Some(match merged_path {
-				Some(existing) => merge_path_values(&existing, &value),
-				None => value,
-			});
-			continue;
-		}
-		let mut var = ShellVariable::new(ShellValue::String(value));
-		var.export();
-		shell
-			.env_mut()
-			.set_global(normalized_key, var)
-			.map_err(|err| Error::msg(format!("Failed to set env: {err}")))?;
-	}
-
-	#[cfg(windows)]
-	if merged_path.is_none()
-		&& let Some(value) = std::env::var_os("Path").or_else(|| std::env::var_os("PATH"))
-	{
-		merged_path = Some(value.to_string_lossy().into_owned());
-	}
-
-	if let Some(path_value) = &merged_path {
-		let mut var = ShellVariable::new(ShellValue::String(path_value.clone()));
-		var.export();
-		shell
-			.env_mut()
-			.set_global("PATH", var)
-			.map_err(|err| Error::msg(format!("Failed to set env: {err}")))?;
-	}
+	copy_env_into_shell(&mut shell, std::env::vars_os())?;
 
 	if let Some(env) = config.session_env.as_ref() {
 		for (key, value) in env {
-			let normalized_key = normalize_env_key(key);
+			let normalized_key = normalize_inherited_env_key(key);
 			if should_skip_env_var(normalized_key) {
 				continue;
 			}
-			let mut var = ShellVariable::new(ShellValue::String(value.clone()));
+			// The agent forwards its whole host env here, so temp paths need the
+			// same long-form expansion as the direct host copy above.
+			let value = inherited_env_value(normalized_key, value);
+			let mut var = ShellVariable::new(ShellValue::String(value.into_owned()));
 			var.export();
 			shell
 				.env_mut()
@@ -4459,5 +4526,142 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 		assert!(!result.cancelled);
 		assert!(!result.timed_out);
 		assert_eq!(received, TOTAL_BYTES, "streamed bytes were dropped under backpressure");
+	}
+	const LONG_DIR_NAME: &str = "a_very_long_directory_name_for_testing";
+
+	#[cfg(windows)]
+	fn short_name_of(path: &std::path::Path) -> std::path::PathBuf {
+		use std::os::windows::ffi::{OsStrExt, OsStringExt};
+		let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+		// SAFETY: `wide` is NUL-terminated; a null buffer with length 0 asks
+		// only for the required size.
+		let needed = unsafe {
+			windows_sys::Win32::Storage::FileSystem::GetShortPathNameW(
+				wide.as_ptr(),
+				std::ptr::null_mut(),
+				0,
+			)
+		};
+		assert!(needed > 0, "GetShortPathNameW failed for {}", path.display());
+		let mut buf = vec![0u16; needed as usize];
+		// SAFETY: `wide` is NUL-terminated and `buf` is writable for
+		// `buf.len()` u16s.
+		let written = unsafe {
+			windows_sys::Win32::Storage::FileSystem::GetShortPathNameW(
+				wide.as_ptr(),
+				buf.as_mut_ptr(),
+				buf.len() as u32,
+			)
+		};
+		assert!(written > 0, "GetShortPathNameW fill failed for {}", path.display());
+		buf.truncate(written as usize);
+		std::path::PathBuf::from(std::ffi::OsString::from_wide(&buf))
+	}
+
+	#[cfg(windows)]
+	fn short_alias_fixture()
+	-> Option<(veyyon_test_scratch::TempTree, std::path::PathBuf, std::path::PathBuf)> {
+		let root = veyyon_test_scratch::scratch_dir("shell-short-alias");
+		let long = root.join(LONG_DIR_NAME);
+		std::fs::create_dir(&long).expect("create long-named dir");
+		let short = short_name_of(&long);
+		(short.file_name() != long.file_name()).then_some((root, long, short))
+	}
+
+	#[cfg(windows)]
+	fn short_temp_fixture()
+	-> Option<(std::path::PathBuf, std::path::PathBuf, Option<veyyon_test_scratch::TempTree>)> {
+		let host_temp = std::env::temp_dir();
+		let expanded_host_temp = brush_core::sys::fs::expand_to_long_path(&host_temp);
+		if host_temp != expanded_host_temp {
+			return Some((host_temp, expanded_host_temp, None));
+		}
+		let (root, long, short) = short_alias_fixture()?;
+		Some((short, brush_core::sys::fs::expand_to_long_path(&long), Some(root)))
+	}
+
+	#[cfg(windows)]
+	async fn assert_cd_temp_matches_pwd(shell: &mut BrushShell, expected: &std::path::Path) {
+		let expected_str = expected.to_string_lossy().into_owned();
+		let mut params = shell.default_exec_params();
+		params.set_fd(OpenFiles::STDIN_FD, null_file().expect("null stdin"));
+		params.set_fd(OpenFiles::STDOUT_FD, null_file().expect("null stdout"));
+		params.set_fd(OpenFiles::STDERR_FD, null_file().expect("null stderr"));
+		let result = shell
+			.run_string("cd \"$TEMP\"", &SourceInfo::from("pi-shell:test"), &params)
+			.await
+			.expect("cd inherited TEMP");
+		assert_eq!(exit_code(&result), 0);
+		assert_eq!(shell.working_dir(), expected);
+		for key in ["TEMP", "TMP", "TMPDIR", "PWD"] {
+			assert_eq!(shell.env_str(key).as_deref(), Some(expected_str.as_str()), "{key}");
+		}
+	}
+
+	/// Host TEMP/TMP paths must not export the short profile spelling after
+	/// entering the directory.
+	#[cfg(windows)]
+	#[tokio::test]
+	async fn inherited_short_temp_matches_pwd_after_cd() {
+		let Some((short, expected, _guard)) = short_temp_fixture() else {
+			return;
+		};
+		let mut shell = BrushShell::builder()
+			.do_not_inherit_env(true)
+			.profile(ProfileLoadBehavior::Skip)
+			.rc(RcLoadBehavior::Skip)
+			.builtins(default_builtins(BuiltinSet::BashMode))
+			.working_dir(short.parent().expect("parent").to_path_buf())
+			.build()
+			.await
+			.expect("build shell");
+
+		copy_env_into_shell(
+			&mut shell,
+			["TEMP", "TMP", "TMPDIR"]
+				.into_iter()
+				.map(|key| (std::ffi::OsString::from(key), short.as_os_str().to_os_string())),
+		)
+		.expect("inherit temp vars");
+
+		assert_cd_temp_matches_pwd(&mut shell, &expected).await;
+	}
+
+	#[cfg(windows)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn session_env_short_temp_matches_pwd_after_cd() {
+		let Some((short, expected, _guard)) = short_temp_fixture() else {
+			return;
+		};
+		let short_str = short.to_str().expect("utf8 short temp").to_string();
+		let env = ["TEMP", "TMP", "TMPDIR"]
+			.into_iter()
+			.map(|key| (key.to_string(), short_str.clone()))
+			.collect();
+		let config =
+			ShellConfig { session_env: Some(env), snapshot_path: None, minimizer: None };
+		let mut session = create_session(&config).await.expect("create_session");
+
+		assert_cd_temp_matches_pwd(&mut session.shell, &expected).await;
+	}
+
+	#[cfg(windows)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn inherited_temp_keys_fold_to_uppercase() {
+		let env = [
+			("Temp".to_string(), "rel\\temp".to_string()),
+			("Tmp".to_string(), "rel\\tmp".to_string()),
+			("TmpDir".to_string(), "rel\\tmpdir".to_string()),
+		]
+		.into_iter()
+		.collect();
+		let config =
+			ShellConfig { session_env: Some(env), snapshot_path: None, minimizer: None };
+		let session = create_session(&config).await.expect("create_session");
+
+		assert_eq!(session.shell.env_str("TEMP").as_deref(), Some("rel\\temp"));
+		assert_eq!(session.shell.env_str("TMP").as_deref(), Some("rel\\tmp"));
+		assert_eq!(session.shell.env_str("TMPDIR").as_deref(), Some("rel\\tmpdir"));
+		assert_eq!(session.shell.env_str("Temp"), None);
 	}
 }
