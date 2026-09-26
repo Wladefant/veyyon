@@ -30,10 +30,11 @@ describe("headless host SQLite busy timeout", () => {
 	// spins in the native SQLite C layer on the platform clock when an exclusive lock is held,
 	// so fake JS timers cannot advance native SQLite internal locks.
 	it("does not block for 5 seconds on SQLite contention in headless hosts", async () => {
+
 		tempDir = TempDir.createSync("@veyyon-busy-timeout-test-");
 		const dbPath = tempDir.join("history.db");
 		// Initialize the database schema
-		HistoryStorage.open(dbPath);
+		const init = HistoryStorage.open(dbPath);
 		HistoryStorage.resetInstance();
 
 		// Hold an exclusive transaction on the database to simulate lock contention

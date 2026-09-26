@@ -1,10 +1,10 @@
-import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { $env, isBunTestRuntime, isCompiledBinary } from "@veyyon/utils/env";
 import * as logger from "@veyyon/utils/logger";
 import { stripWindowsExtendedLengthPathPrefix } from "@veyyon/utils/path";
+import { spawnSync } from "node:child_process";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { workerHostEntry } from "@veyyon/utils/worker-host";
 import type { Subprocess } from "bun";

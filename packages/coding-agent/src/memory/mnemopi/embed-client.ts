@@ -150,9 +150,7 @@ export class MnemopiEmbedClient {
 	) {
 		this.#spawnWorker = spawnWorker;
 		if (typeof idleUnloadMsOrOptions === "object" && idleUnloadMsOrOptions !== null) {
-			this.#idleUnloadMs = parseEmbedIdleUnloadMs(
-				idleUnloadMsOrOptions.idleUnloadMs ?? DEFAULT_EMBED_IDLE_UNLOAD_MS,
-			);
+			this.#idleUnloadMs = parseEmbedIdleUnloadMs(idleUnloadMsOrOptions.idleUnloadMs ?? DEFAULT_EMBED_IDLE_UNLOAD_MS);
 			this.#requestTimeoutMs = idleUnloadMsOrOptions.requestTimeoutMs ?? EMBED_REQUEST_TIMEOUT_MS;
 		} else {
 			this.#idleUnloadMs = parseEmbedIdleUnloadMs(idleUnloadMsOrOptions);
