@@ -11,6 +11,8 @@
 
 ### Fixed
 
+- Tool discovery delegates on `ToolSession` resolve against the live session once initialized and safely return empty inventories without throwing during pre-session construction ([#99](https://github.com/Wladefant/veyyon/issues/99)).
+- Provider usage limit matching rejects conflicting email or account identities before falling back to project ID, preventing accounts sharing a project ID from claiming each other's limits ([#102](https://github.com/Wladefant/veyyon/issues/102)).
 - A headless `browser` launch that fails on Windows (for example Chromium never exposing DevTools under a `RemoteDebuggingAllowed = 0` policy) no longer kills the host process and every session in it: the browser profile is owned by veyyon rather than puppeteer, so its failed-launch cleanup can no longer raise an unhandled `EBUSY` rejection, and the tool reports the policy as the cause ([#95](https://github.com/Wladefant/veyyon/pull/95)).
 - Raised default soft request budget to 250 requests, added per-agent `softRequestBudget` configuration, and structured `salvageState` reporting on cutoff and cancellation ([#97](https://github.com/Wladefant/veyyon/issues/97)).
 - Guard package manager installation and mutation commands from running when the working directory resolves to the user home directory ([#98](https://github.com/Wladefant/veyyon/issues/98)).
