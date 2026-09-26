@@ -1388,7 +1388,8 @@ impl Process {
 	/// the wait entirely (the polite signal is still emitted). Returns `true`
 	/// when the tree has exited by the end of the hard wave's wait window.
 	/// Returns an error before signalling anything if the root is protected or
-	/// its ancestry snapshot is unavailable; `Ok(false)` means the exit wait expired.
+	/// its ancestry snapshot is unavailable; `Ok(false)` means the exit wait
+	/// expired.
 	pub async fn terminate_tree(
 		&self,
 		group: bool,
@@ -1415,6 +1416,7 @@ impl Process {
 	/// Walk the live descendant tree from scratch. Cheap and idempotent — call
 	/// it again before each signal wave so grandchildren spawned during a grace
 	/// period are not missed.
+	#[allow(dead_code, reason = "called by tests and on Windows")]
 	fn live_descendants(&self) -> Vec<Self> {
 		self.live_descendants_guarded(&TerminationGuard::capture())
 	}

@@ -7,6 +7,8 @@
 //! thread-local context isolated across concurrent pipeline stages and avoids
 //! blocking the async runtime on synchronous utility I/O.
 
+#[cfg(unix)]
+use std::ffi::OsStr;
 use std::{
 	collections::HashMap,
 	ffi::OsString,
@@ -18,6 +20,8 @@ use std::{
 	},
 };
 
+#[cfg(unix)]
+use brush_core::ShellFd;
 use brush_core::{
 	Error,
 	builtins::{BoxFuture, ContentOptions, ContentType, Registration},
@@ -31,6 +35,34 @@ use tokio_util::sync::CancellationToken;
 /// Signature of a patched uutils `run` entry point: consumes `argv` (with the
 /// command name at index 0) and returns a process-style exit code.
 type UutilRun = fn(Vec<OsString>) -> i32;
+
+#[cfg(unix)]
+fn process_substitution_fd(arg: &OsStr) -> Option<ShellFd> {
+	let fd = arg.to_str()?.strip_prefix("/dev/fd/")?.parse().ok()?;
+	(fd > OpenFiles::STDERR_FD).then_some(fd)
+}
+
+#[cfg(unix)]
+fn materialize_process_substitution_fds<SE: ShellExtensions>(
+	context: &ExecutionContext<'_, SE>,
+	argv: &mut [OsString],
+) -> Result<Vec<std::os::fd::OwnedFd>, Error> {
+	use std::os::fd::AsRawFd as _;
+
+	let mut fds = Vec::new();
+	for arg in argv {
+		let Some(shell_fd) = process_substitution_fd(arg) else {
+			continue;
+		};
+		let Some(file) = context.try_fd(shell_fd) else {
+			continue;
+		};
+		let fd = file.try_borrow_as_fd()?.try_clone_to_owned()?;
+		*arg = OsString::from(format!("/dev/fd/{}", fd.as_raw_fd()));
+		fds.push(fd);
+	}
+	Ok(fds)
+}
 
 /// Await a blocking builtin and report cancellation only after its thread
 /// finishes.
@@ -134,10 +166,13 @@ async fn run_uutil<SE: ShellExtensions>(
 
 	// brush passes the command name as the first `CommandArg`, which is exactly
 	// the argv[0] uutils' argument parsing expects.
-	let argv: Vec<OsString> = args
+	#[cfg_attr(not(unix), expect(unused_mut, reason = "rewritten only on unix"))]
+	let mut argv: Vec<OsString> = args
 		.iter()
 		.map(|arg| OsString::from(arg.to_string()))
 		.collect();
+	#[cfg(unix)]
+	let process_substitution_fds = materialize_process_substitution_fds(&context, &mut argv)?;
 
 	drop(context);
 
@@ -147,6 +182,8 @@ async fn run_uutil<SE: ShellExtensions>(
 	// completes. We await that completion before returning so no detached
 	// thread keeps writing to the command's (possibly redirected) fds.
 	let code = run_cancellable_blocking(cancel, move |scope_flag| {
+		#[cfg(unix)]
+		let _process_substitution_fds = process_substitution_fds;
 		let stdin: Box<dyn Read + Send> = match stdin {
 			Some(file) => Box::new(file),
 			None => Box::new(io::empty()),
