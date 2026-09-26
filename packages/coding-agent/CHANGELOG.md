@@ -13,11 +13,13 @@
 ### Fixed
 
 - Fixed hashline `SWAP.BLK` / `DEL.BLK` on the first statement of a block also replacing or deleting the statements after it ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Windows shell cancellation protects the host and its discoverable ancestors, rejects stale parent-PID edges, and no longer reopens an unpinned child PID after handle termination fails; launch broker catches native termination refusals during daemon stop and recovery sweeps ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 - Tool discovery delegates on `ToolSession` resolve against the live session once initialized and safely return empty inventories without throwing during pre-session construction ([#99](https://github.com/Wladefant/veyyon/issues/99)).
 - Provider usage limit matching rejects conflicting email or account identities before falling back to project ID, preventing accounts sharing a project ID from claiming each other's limits ([#102](https://github.com/Wladefant/veyyon/issues/102)).
 - A headless `browser` launch that fails on Windows (for example Chromium never exposing DevTools under a `RemoteDebuggingAllowed = 0` policy) no longer kills the host process and every session in it: the browser profile is owned by veyyon rather than puppeteer, so its failed-launch cleanup can no longer raise an unhandled `EBUSY` rejection, and the tool reports the policy as the cause ([#95](https://github.com/Wladefant/veyyon/pull/95)).
 - Raised default soft request budget to 250 requests, added per-agent `softRequestBudget` configuration, and structured `salvageState` reporting on cutoff and cancellation ([#97](https://github.com/Wladefant/veyyon/issues/97)).
 - Guard package manager installation and mutation commands from running when the working directory resolves to the user home directory ([#98](https://github.com/Wladefant/veyyon/issues/98)).
+- Extension tool execution retains caller policy context when asserting the refusal fence, allowing policy-only frames to pass settings to approval checks and execution ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 - Extension approval-required blocks stop the current call without persisting a user refusal; explicit and legacy refusals retain their existing fence ([#88](https://github.com/Wladefant/veyyon/issues/88)).
 - Telegram control can deliver to and observe the authenticated live terminal owner without reopening its transcript in a GUI host ([#88](https://github.com/Wladefant/veyyon/issues/88)).
