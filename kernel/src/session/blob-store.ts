@@ -8,6 +8,9 @@ import * as logger from "@veyyon/utils/logger";
 import { errorMessage } from "@veyyon/utils/type-guards";
 
 const BLOB_PREFIX = "blob:sha256:";
+
+/** Canonical blob hash shape: exactly 64 lowercase hex chars (a SHA-256 digest). */
+export const BLOB_HASH_RE = /^[a-f0-9]{64}$/;
 /**
  * Reference prefix for externalized UTF-8 text (large tool results, text blocks).
  * Distinct from {@link BLOB_PREFIX} so the load path knows to decode the bytes as
@@ -253,10 +256,23 @@ export function isBlobRef(data: string): boolean {
 	return data.startsWith(BLOB_PREFIX);
 }
 
-/** Extract the SHA-256 hash from a blob reference string. */
+/**
+ * Extract the SHA-256 hash from a blob reference string.
+ *
+ * Returns null when the string is not a blob ref, or when the suffix is not a
+ * canonical 64-char lowercase hex hash. Rejecting non-hash suffixes here is the
+ * single choke point that keeps every resolution path confined to the blob dir:
+ * `get`/`getSync` feed this value into `path.join(this.dir, hash)`, so an
+ * unvalidated `../` suffix would otherwise escape the store and read arbitrary files.
+ */
 export function parseBlobRef(data: string): string | null {
 	if (!data.startsWith(BLOB_PREFIX)) return null;
-	return data.slice(BLOB_PREFIX.length);
+	const hash = data.slice(BLOB_PREFIX.length);
+	if (!BLOB_HASH_RE.test(hash)) {
+		logger.warn("Rejected malformed blob reference", { suffix: hash });
+		return null;
+	}
+	return hash;
 }
 
 /** Identify provider transport image data URLs so persistence can externalize and restore them losslessly. */
@@ -269,10 +285,20 @@ export function isTextBlobRef(data: string): boolean {
 	return data.startsWith(TEXT_BLOB_PREFIX);
 }
 
-/** Extract the SHA-256 hash from a text blob reference, or `null` for a non-ref. */
+/**
+ * Extract the SHA-256 hash from a text blob reference, or `null` for a non-ref.
+ *
+ * Rejects non-hash suffixes using the same {@link BLOB_HASH_RE} shape to keep
+ * text-blob resolution confined to the blob dir.
+ */
 export function parseTextBlobRef(data: string): string | null {
 	if (!data.startsWith(TEXT_BLOB_PREFIX)) return null;
-	return data.slice(TEXT_BLOB_PREFIX.length);
+	const hash = data.slice(TEXT_BLOB_PREFIX.length);
+	if (!BLOB_HASH_RE.test(hash)) {
+		logger.warn("Rejected malformed text blob reference", { suffix: hash });
+		return null;
+	}
+	return hash;
 }
 
 /**
