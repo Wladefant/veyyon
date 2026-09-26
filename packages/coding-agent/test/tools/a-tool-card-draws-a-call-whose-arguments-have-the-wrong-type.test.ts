@@ -24,6 +24,7 @@ import { toolWireSchema } from "@veyyon/ai";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { createTools } from "@veyyon/coding-agent/tools";
+import { displayArguments } from "@veyyon/coding-agent/presentation/display-arguments";
 import type { Component, TUI } from "@veyyon/tui";
 import { removeWithRetries } from "@veyyon/utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
@@ -211,5 +212,17 @@ describe("a tool card drawing a call whose arguments have the wrong type", () =>
 		const drawn = draw(search as Tool, { type: "text", input: 404, path: "src" }, "call");
 		expect(drawn).not.toContain("renderer threw");
 		expect(drawn).toContain("404");
+	});
+
+	it("conforms a copy and leaves the arguments the transcript records as the model sent them", () => {
+		const search = tools.find(tool => tool.name === "search") as never;
+		const recorded = { type: "text", input: 404, path: { dir: "src" } };
+		const sent = structuredClone(recorded);
+
+		expect(displayArguments(search, recorded)).toEqual({ type: "text", input: "404" });
+		expect(recorded).toEqual(sent);
+
+		const wellFormed = { type: "text", input: "404", path: "src" };
+		expect(displayArguments(search, wellFormed)).toBe(wellFormed);
 	});
 });
