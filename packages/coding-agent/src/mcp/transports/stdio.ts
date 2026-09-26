@@ -213,23 +213,6 @@ async function resolveWindowsNpmShimCommand(
 	};
 }
 
-function quoteCmdArg(value: string): string {
-	if (value.length === 0) return '""';
-	let result = '"';
-	for (const char of value) {
-		if (char === '"') {
-			result += '^"';
-		} else if (char === "^") {
-			result += "^^";
-		} else if (char === "%") {
-			result += "^%";
-		} else {
-			result += char;
-		}
-	}
-	return `${result}"`;
-}
-
 function isWindowsBatchCommand(command: string): boolean {
 	return WINDOWS_BATCH_EXTENSIONS.has(path.extname(command).toLowerCase());
 }
@@ -237,12 +220,6 @@ function isWindowsBatchCommand(command: string): boolean {
 function resolveComSpec(env: Record<string, string | undefined>): string {
 	const comspec = getCaseInsensitiveEnv(env, "COMSPEC");
 	return comspec && comspec.length > 0 ? comspec : "cmd.exe";
-}
-
-/** `cmd /s /c` strips one outer quote pair; keep inner argv quotes intact. */
-function buildCmdExeCommand(command: string, args: readonly string[]): string {
-	const quotedCommand = [command, ...args].map(quoteCmdArg).join(" ");
-	return `"${quotedCommand}"`;
 }
 
 /**
@@ -255,7 +232,7 @@ function buildCmdExeCommand(command: string, args: readonly string[]): string {
  * only appends `.exe` for extensionless names — `.cmd`/`.bat` are never
  * tried, so `npx` (which exists only as `npx.cmd` on Windows) crashes the
  * subprocess immediately. When the resolver can't pin the command down,
- * route through `cmd.exe /d /s /c` so Windows's own PATHEXT lookup runs.
+ * route through `cmd.exe /d /c` so Windows's own PATHEXT lookup runs.
  */
 export async function resolveStdioSpawnCommand(
 	config: MCPStdioServerConfig,
@@ -280,8 +257,12 @@ export async function resolveStdioSpawnCommand(
 	const needsCmdExe = resolved === null || isWindowsBatchCommand(resolvedCommand);
 	if (!needsCmdExe) return { cmd: [resolvedCommand, ...args], windowsHide, detached };
 
+	// The command and its arguments ride as SEPARATE spawn arguments, never as one
+	// quoted `/s /c` string: cmd.exe strips an outer quote pair from a `/c` string and
+	// re-reads the remainder, so a wrapper quote or an `&`, `|`, `%` or `^` inside the
+	// command was taken as cmd syntax and the server died with `Transport closed`.
 	return {
-		cmd: [resolveComSpec(options.env), "/d", "/s", "/c", buildCmdExeCommand(resolvedCommand, args)],
+		cmd: [resolveComSpec(options.env), "/d", "/c", resolvedCommand, ...args],
 		windowsHide,
 		detached,
 	};
