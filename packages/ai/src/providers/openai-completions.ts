@@ -76,6 +76,7 @@ import type {
 	ChatCompletionContentPartImage,
 	ChatCompletionContentPartText,
 	ChatCompletionContentPartVideo,
+	ChatCompletionMessageFunctionToolCall,
 	ChatCompletionMessageParam,
 	ChatCompletionTool,
 	ChatCompletionToolMessageParam,
@@ -142,8 +143,81 @@ type OpenAICompletionsDeltaWithReasoningDetails = ChatCompletionChunk.Choice["de
 	reasoning_details?: unknown;
 };
 
+type GeminiMessageThoughtSignatureField = "thinking_signature" | "thought_signature";
+type GeminiMessageThoughtSignature = { field: GeminiMessageThoughtSignatureField; signature: string };
+type GeminiThoughtSignatureNamespace = "google" | "vertex";
+type GeminiThoughtSignatureExtraContent = Partial<
+	Record<GeminiThoughtSignatureNamespace, { thought_signature: string }>
+>;
+type OpenAICompletionsFunctionToolCall = ChatCompletionMessageFunctionToolCall & {
+	extra_content?: GeminiThoughtSignatureExtraContent;
+};
+const GEMINI_THOUGHT_SIGNATURE_NAMESPACES: readonly GeminiThoughtSignatureNamespace[] = ["google", "vertex"];
+const GEMINI_MESSAGE_THOUGHT_SIGNATURE_FIELDS: readonly GeminiMessageThoughtSignatureField[] = [
+	"thinking_signature",
+	"thought_signature",
+];
+function getGeminiThoughtSignatureExtraContent(value: unknown): GeminiThoughtSignatureExtraContent | undefined {
+	if (typeof value !== "object" || value === null) return undefined;
+	for (const namespace of GEMINI_THOUGHT_SIGNATURE_NAMESPACES) {
+		const providerContent = Reflect.get(value, namespace);
+		if (typeof providerContent !== "object" || providerContent === null) continue;
+		const thoughtSignature = Reflect.get(providerContent, "thought_signature");
+		if (typeof thoughtSignature !== "string" || thoughtSignature.length === 0) continue;
+		return namespace === "google"
+			? { google: { thought_signature: thoughtSignature } }
+			: { vertex: { thought_signature: thoughtSignature } };
+	}
+	return undefined;
+}
+
+function getGeminiMessageThoughtSignature(value: unknown): GeminiMessageThoughtSignature | undefined {
+	if (typeof value !== "object" || value === null) return undefined;
+	for (const field of GEMINI_MESSAGE_THOUGHT_SIGNATURE_FIELDS) {
+		const signature = Reflect.get(value, field);
+		if (typeof signature === "string" && signature.length > 0) return { field, signature };
+	}
+	return undefined;
+}
+
+function parseStoredThoughtSignature(thoughtSignature: string | undefined): unknown {
+	if (!thoughtSignature) return undefined;
+	try {
+		return JSON.parse(thoughtSignature);
+	} catch {
+		return undefined;
+	}
+}
+
+type StoredGeminiSignature = {
+	perCall?: unknown;
+	message?: Partial<Record<GeminiMessageThoughtSignatureField, string>>;
+};
+
+function normalizeStoredGeminiSignature(value: unknown): StoredGeminiSignature | undefined {
+	if (typeof value !== "object" || value === null) return undefined;
+	const perCall = Reflect.get(value, "perCall");
+	const envelopeMessage = getGeminiMessageThoughtSignature(Reflect.get(value, "message"));
+	if (perCall !== undefined || envelopeMessage) {
+		const normalized: StoredGeminiSignature = {};
+		if (perCall !== undefined) normalized.perCall = perCall;
+		if (envelopeMessage) normalized.message = { [envelopeMessage.field]: envelopeMessage.signature };
+		return normalized;
+	}
+	const legacyMessage = getGeminiMessageThoughtSignature(value);
+	if (legacyMessage) return { message: { [legacyMessage.field]: legacyMessage.signature } };
+	return { perCall: value };
+}
+
+function mergeStoredGeminiSignature(existing: string | undefined, update: StoredGeminiSignature): string {
+	const merged = normalizeStoredGeminiSignature(parseStoredThoughtSignature(existing)) ?? {};
+	if (update.perCall !== undefined) merged.perCall = update.perCall;
+	if (update.message) merged.message = update.message;
+	return JSON.stringify(merged);
+}
+
 type OpenAICompletionsAssistantMessageParam = ChatCompletionAssistantMessageParam &
-	Partial<Record<OpenAICompletionsReasoningField, string>> & {
+	Partial<Record<OpenAICompletionsReasoningField | GeminiMessageThoughtSignatureField, string>> & {
 		reasoning_details?: unknown[];
 	};
 
@@ -1079,6 +1153,7 @@ const streamOpenAICompletionsOnce = (
 			// OpenAI-compatible servers send basic usage with `finish_reason` and
 			// cache-read details in a trailing usage-only chunk, so only the
 			// no-choice terminal path may break while those details are pending.
+			let messageThoughtSignature: GeminiMessageThoughtSignature | undefined;
 			let streamFinishedAt: number | undefined;
 			let sawUsagePayload = false;
 			let awaitTrailingUsageDetails = false;
@@ -1271,6 +1346,12 @@ const streamOpenAICompletionsOnce = (
 
 							if (toolCall.id) block.id = toolCall.id;
 							if (incomingName) block.name = incomingName;
+							const extraContent = getGeminiThoughtSignatureExtraContent(Reflect.get(toolCall, "extra_content"));
+							if (extraContent) {
+								block.thoughtSignature = mergeStoredGeminiSignature(block.thoughtSignature, {
+									perCall: extraContent,
+								});
+							}
 							let delta = "";
 							// The OpenAI SDK types `function.arguments` as a JSON string, but MiniMax-compatible
 							// hosts stream a fully-formed object instead. Model both shapes so the branches below
@@ -1338,9 +1419,27 @@ const streamOpenAICompletionsOnce = (
 									b => b.type === "toolCall" && b.id === detailObject.id,
 								) as ToolCall | undefined;
 								if (matchingToolCall) {
-									matchingToolCall.thoughtSignature = JSON.stringify(detailObject);
+									matchingToolCall.thoughtSignature = mergeStoredGeminiSignature(
+										matchingToolCall.thoughtSignature,
+										{ perCall: detailObject },
+									);
 								}
 							}
+						}
+					}
+
+					const incomingMessageThoughtSignature = getGeminiMessageThoughtSignature(choice.delta);
+					if (incomingMessageThoughtSignature) messageThoughtSignature = incomingMessageThoughtSignature;
+					if (messageThoughtSignature) {
+						for (const block of output.content) {
+							if (block.type !== "toolCall") continue;
+							block.thoughtSignature = mergeStoredGeminiSignature(block.thoughtSignature, {
+								message: {
+									[messageThoughtSignature.field]: messageThoughtSignature.signature,
+								},
+							});
+							messageThoughtSignature = undefined;
+							break;
 						}
 					}
 				}
@@ -2171,19 +2270,32 @@ export function convertMessages(
 				assistantMsg.tool_calls = toolCalls.map((tc, toolCallIndex) => {
 					const toolCallId = ensureToolCallId(tc.id, `${i}:${toolCallIndex}:${tc.name}`);
 					rememberToolCallId(tc.id, toolCallId);
-					return {
+					const replayedToolCall: OpenAICompletionsFunctionToolCall = {
 						id: normalizeMistralToolId(toolCallId, compat.requiresMistralToolIds),
-						type: "function" as const,
+						type: "function",
 						function: {
 							name: tc.name,
 							arguments: serializeToolArguments(tc.arguments, tc.name),
 						},
 					};
+					const stored = normalizeStoredGeminiSignature(parseStoredThoughtSignature(tc.thoughtSignature));
+					const extraContent = getGeminiThoughtSignatureExtraContent(stored?.perCall);
+					if (extraContent) replayedToolCall.extra_content = extraContent;
+					return replayedToolCall;
 				});
-				const reasoningDetails = toolCalls
-					.filter(tc => tc.thoughtSignature)
-					.map(tc => tryParseJson(tc.thoughtSignature!))
-					.filter(Boolean);
+				for (const toolCall of toolCalls) {
+					const stored = normalizeStoredGeminiSignature(parseStoredThoughtSignature(toolCall.thoughtSignature));
+					const messageSignature = getGeminiMessageThoughtSignature(stored?.message);
+					if (!messageSignature) continue;
+					assistantMsg[messageSignature.field] = messageSignature.signature;
+					break;
+				}
+				const reasoningDetails = toolCalls.flatMap(tc => {
+					const stored = normalizeStoredGeminiSignature(parseStoredThoughtSignature(tc.thoughtSignature));
+					const perCall = stored?.perCall;
+					if (perCall === undefined || getGeminiThoughtSignatureExtraContent(perCall)) return [];
+					return [perCall];
+				});
 				if (reasoningDetails.length > 0) {
 					assistantMsg.reasoning_details = reasoningDetails;
 				}

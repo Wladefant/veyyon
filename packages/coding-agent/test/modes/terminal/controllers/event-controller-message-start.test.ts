@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
-import type { TextContent, UserMessage } from "@veyyon/ai";
+import type { ImageContent, TextContent, UserMessage } from "@veyyon/ai";
 import { TranscriptContainer } from "@veyyon/coding-agent/modes/terminal/components/transcript/transcript-container";
 import { EventController } from "@veyyon/coding-agent/modes/terminal/controllers/event-controller";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
@@ -25,6 +25,7 @@ function createContext(options: {
 	editorText: string;
 	optimisticSignature?: string;
 	locallySubmittedSignatures?: string[];
+	pendingImages?: ImageContent[];
 }) {
 	let currentEditorText = options.editorText;
 	const setText = vi.fn((text: string) => {
@@ -33,6 +34,7 @@ function createContext(options: {
 	const editor = {
 		setText,
 		getText: () => currentEditorText,
+		pendingImages: [...(options.pendingImages ?? [])],
 	};
 	const addMessageToChat = vi.fn();
 	const updatePendingMessagesDisplay = vi.fn();
@@ -106,23 +108,33 @@ describe("EventController message_start (user role)", () => {
 		expect(addMessageToChat).toHaveBeenCalledWith(message);
 		// Pending list always refreshes so the dequeued entry disappears.
 		expect(updatePendingMessagesDisplay).toHaveBeenCalledTimes(1);
-		// Signature is consumed so a future external message with the same shape still clears.
-		expect(ctx.locallySubmittedUserSignatures.has(signature)).toBe(false);
+		// Signature is consumed so a future external message with the same shape is
+		// not matched to this local submission again. The composer is never cleared
+		// on message_start, so consumption no longer affects the draft.
 	});
 
-	it("clears the editor for user messages that did not originate from this session", async () => {
-		// Counter-case: an external/programmatic user message must still trigger the
-		// defensive editor reset so the next prompt starts clean.
-		const message = createUserMessage("external prompt");
-		const { ctx, setText, addMessageToChat } = createContext({
-			editorText: "stale text",
+	it("preserves the in-progress draft for a user message from an extension", async () => {
+		// Regression: a user message this session never submitted locally is a real,
+		// non-synthetic prompt (an extension delivering `sendUserMessage`, e.g. a
+		// Telegram relay). "Not local" must not mean "reset the editor": the draft
+		// being typed -- text and pasted images -- has to survive the delivery.
+		const message = createUserMessage("inbound from an extension");
+		const draftImage: ImageContent = { type: "image", data: "AAAA", mimeType: "image/png" };
+		const { ctx, editor, setText, addMessageToChat, updatePendingMessagesDisplay } = createContext({
+			editorText: "hello",
+			pendingImages: [draftImage],
 		});
 		const controller = new EventController(ctx);
 
 		await controller.handleEvent({ type: "message_start", message });
 
-		expect(setText).toHaveBeenCalledWith("");
+		expect(setText).not.toHaveBeenCalled();
+		expect(editor.getText()).toBe("hello");
+		expect(editor.pendingImages).toEqual([draftImage]);
+		// The inbound message still reaches the transcript.
 		expect(addMessageToChat).toHaveBeenCalledWith(message);
+		// The pending list still refreshes.
+		expect(updatePendingMessagesDisplay).toHaveBeenCalledTimes(1);
 	});
 
 	it("preserves the editor for an optimistic submission and skips the duplicate chat add", async () => {
