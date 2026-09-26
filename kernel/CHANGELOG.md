@@ -11,6 +11,7 @@
 
 ### Fixed
 
+- Fixed blob reference resolution passing unvalidated `blob:sha256:` and `blobtext:sha256:` suffixes into `path.join`, allowing a crafted ref (e.g. `blob:sha256:../../../etc/passwd`) in a persisted or shared session to escape the blob directory and read arbitrary files into image history; `parseBlobRef` and `parseTextBlobRef` now reject any suffix that is not a canonical 64-char lowercase hex hash ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Artifacts are staged on a hidden sibling and verified against their own byte count before the rename publishes them, so a write that stops short can no longer leave a truncated artifact that `artifact://` resolves as a complete result, and a failed rewrite leaves the previous bytes in place ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Bounded synchronous SQLite busy_timeout to 1s in headless hosts for session storage databases, so lock contention fails fast rather than freezing protocol loops for 5s ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed a first-use race in `ArtifactManager` where two concurrent `save` or `allocatePath` callers on a fresh instance both scanned the directory and allocated duplicate artifact IDs ([#107](https://github.com/Wladefant/veyyon/issues/107)).
