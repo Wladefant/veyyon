@@ -16,6 +16,7 @@
 
 ### Fixed
 
+- Fixed the Windows bash tool exporting `TEMP`, `TMP`, and `TMPDIR` with 8.3 short names such as `ADMINI~1`, so they now match the long-form `pwd`/`$PWD` after `cd "$TEMP"` ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Resolve tool policy frame and execution context separately in extension tool wrapper so ambient context reaches the approval gate and handlers when caller omits context, while policy-only frames are not handed to tools as agent tool context ([Wladefant/veyyon#111](https://github.com/Wladefant/veyyon/pull/111)).
 - Fixed hashline `SWAP.BLK` / `DEL.BLK` on the first statement of a block also replacing or deleting the statements after it ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed the `Full output: artifact://` link on large background bash and eval results pointing at a truncated copy with `[…elided…]` gaps instead of the complete output ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
