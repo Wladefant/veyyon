@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
 import { emptyUsage } from "@veyyon/catalog/models";
-import { formatCount, truncate } from "@veyyon/utils";
+import { collapseWhitespace, formatCount, truncate } from "@veyyon/utils";
 import { isRecord } from "@veyyon/utils/type-guards";
 import type { SessionEntry } from "./session-entries";
 
@@ -351,7 +351,7 @@ const PENDING_WARNING_ARGUMENT_CHARS = 80;
 
 /** One line of `text`, bounded: ids and commands can carry newlines and whole scripts. */
 function oneLine(text: string, maxLength: number): string {
-	return truncate(text.replace(/\s+/g, " ").trim(), maxLength);
+	return truncate(collapseWhitespace(text), maxLength);
 }
 
 function appendArgumentSummary(parts: string[], args: unknown): void {
