@@ -13,8 +13,8 @@
  * tool's own result. A result whose content no longer rebuilds the card after it was recorded (a
  * prune, other rows, renumbered rows, a shorter copy) keeps its card text on disk, and so does a card
  * text shorter than the tag that would replace it. A line written before the codec existed loads
- * unchanged. Every tool with a result codec has rows here: the sweep fails when a domain registers
- * another.
+ * unchanged. Every result codec the package ships has a suite: the sweep fails when one is added
+ * until it has one, and the edit codec's is `a-session-file-stores-an-edit-snapshot-once`.
  *
  * DOES NOT CATCH: a display shape the read tool starts producing that no row below exercises, which
  * still round-trips exactly (the codec writes whole what it cannot rebuild) but may stop saving
@@ -29,7 +29,7 @@ import { getThemeByName, initTheme, type Theme } from "@veyyon/coding-agent/them
 import { ReadTool, type ReadToolDetails } from "@veyyon/coding-agent/tools/fs/read";
 import type { ReadDisplayContent } from "@veyyon/coding-agent/tools/fs/read-display";
 import { readToolView } from "@veyyon/coding-agent/tools/fs/read-view";
-import { BUILTIN_TOOL_DOMAINS } from "@veyyon/coding-agent/tools/index";
+import { BUILTIN_RESULT_CODECS } from "@veyyon/coding-agent/tools/index";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { setAgentDir, TempDir } from "@veyyon/utils";
 import { captureDirOverrides, type DirOverridesSnapshot, restoreDirOverrides } from "@veyyon/utils/dirs";
@@ -193,9 +193,8 @@ describe("a session file stores a read card once", () => {
 		return Bun.stripANSI(drawToolView(view, theme).render(160).join("\n"));
 	}
 
-	it("is the only codec a tool domain registers, so a new one fails here until it has rows", () => {
-		const tools = BUILTIN_TOOL_DOMAINS.flatMap(domain => (domain.resultCodecs ?? []).map(codec => codec.toolName));
-		expect(tools).toEqual(["read"]);
+	it("is one of the two codecs the package ships, each with a suite, so a new one fails here until it has one", () => {
+		expect(BUILTIN_RESULT_CODECS.map(codec => codec.toolName)).toEqual(["read", "edit"]);
 	});
 
 	it("writes no card text for any shape a rebuild reproduces, and loads every result as the tool returned it", async () => {

@@ -11,6 +11,7 @@
 - Goal records on a session branch parse through the shared `isRecord` guard instead of a local copy; no user-visible change.
 - A `read` result's session file line omits the card's copy of the file text when the result's own numbered rows or plain text rebuild it, and the session restores it on load, which cut the recorded read results in local sessions from 4.27 GB to 2.89 GB.
 - A tool start marker in the session file omits the start time and the argument summary the entry timestamp and the assistant message already hold, so the resume warning for an unanswered call reads the arguments from that message.
+- An `edit` result's session file line omits the post-edit file text when its pre-edit text and numbered diff rebuild it byte for byte, and the session restores it on load, which cuts the post-edit copies recorded across local sessions from 671.18 MB to 3.79 MB.
 
 ### Fixed
 
