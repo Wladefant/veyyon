@@ -72,7 +72,7 @@ describe("claude usage request headers", () => {
 
 		expect(report).not.toBeNull();
 		expect(calls).toHaveLength(1);
-		expect(calls[0]?.input).toBe("https://api.anthropic.com/api/oauth/usage");
+		expect(calls[0]?.input).toBe("https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1");
 
 		const headers = calls[0]?.init?.headers;
 		expect(getHeaderCaseInsensitive(headers, "authorization")).toBe(`Bearer ${token}`);
@@ -297,7 +297,9 @@ describe("claude usage request headers", () => {
 		// Exactly one usage fetch: hasUsageData must accept a limits[]-only payload
 		// instead of burning retries. The trailing /profile call is the expected
 		// identity backfill for a payload/credential carrying no account identity.
-		expect(calls.filter(url => url.endsWith("/usage"))).toEqual(["https://api.anthropic.com/api/oauth/usage"]);
+		expect(calls.filter(url => new URL(url).pathname.endsWith("/usage"))).toEqual([
+			"https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1",
+		]);
 		expect(report).not.toBeNull();
 		expect(report?.limits.map(limit => limit.id)).toEqual(["anthropic:5h", "anthropic:7d"]);
 		const session = report?.limits.find(limit => limit.id === "anthropic:5h");

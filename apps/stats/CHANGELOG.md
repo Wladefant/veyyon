@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Closed database connections and active sockets when stopping the stats dashboard server, and validated request identifier and limit parameters.
+
+## [1.5.4] - 2026-09-24
+
+### Fixed
+
+- Closed database connections and active sockets when stopping the stats dashboard server, and stopped server on interrupt signal.
+- Validated request identifier and limit parameters in API routes against non-numeric inputs.
+
 ## [1.5.0] - 2026-09-18
 
 ### Changed

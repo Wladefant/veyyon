@@ -50,6 +50,123 @@
 - The Command Code catalog is declared in one module: `provider-models/openai-compat` no longer re-declares `COMMAND_CODE_STATIC_MODELS`, `CommandCodeModelManagerConfig` and `commandCodeModelManagerOptions` beside `provider-models/command-code`, whose contract-applying versions are the ones every consumer already imports.
 - `getModelPricing` accepts the sparse `ModelSpec` cost it is already given by discovery, and reads an absent rate as zero rather than rejecting the row at the type level.
 - No shipped behavior changed; the global EPIPE routing suite pointed at `packages/tui/src/terminal.ts`, a path the terminal host left on 2026-08-30, so its three "finishes TUI persistence before exit" cases failed on a module-resolution exit rather than on ordering ([#64](https://github.com/Wladefant/veyyon/issues/64)).
+### Fixed
+
+- The CLI imports the terminal output guard when a worker thread starts rather than at startup, keeping it off the static boot graph; no user-visible change.
+- `@veyyon/utils/stderr-guard` loads `node:util` on the first routed console call rather than at import, keeping it off the launch card path; no user-visible change.
+
+## [1.5.5] - 2026-09-25
+
+### Added
+
+- `isTerminalOutputRouted` reports whether console output is going to the log, and `routeWorkerThreadOutput` sends a worker thread's console output to the log for the worker's lifetime.
+
+### Changed
+
+- `SessionManager.open` parses the session file once instead of twice, cutting a 700 MB resume from 2.83 s to 1.62 s and peak RSS from 3.4 GB to 1.95 GB.
+
+### Fixed
+
+- Running two veyyon versions at once on Windows no longer prints `could not remove the stale addon cache ... EPERM` over the interactive UI and pushes the composer down; a real removal failure shows as a `natives` warning notice.
+- A `console` print from a library, a native addon warning or a worker thread no longer writes into the interactive UI and shifts the composer on Linux or Windows; the text goes to the veyyon log file.
+- The launch-time prune of old addon caches no longer writes to stderr; a directory it cannot remove is reported through `attachNativeNoticeSink`, and on Windows a cache still mapped by a running veyyon (`EPERM`/`EBUSY`) is returned in `inUse` and not reported.
+- `suppressTerminalStderr` routes native stderr on Linux and Windows (not only macOS), and while the terminal UI is live it routes `console.*` and `process.stderr.write` output to the log file, so a stray print no longer pushes the composer down.
+
+## [1.5.4] - 2026-09-24
+
+### Added
+
+- `summarizeRemoteCompactionWindow` turns a server-side compaction window into summary text by replaying it to the model on the provider that minted it, and `remoteCompactionReplayableBy` reports whether a compaction's window replays on a given provider.
+- `SummaryOptions.stagedSummaryCheckpoints` keeps completed segment and merge answers of a staged summary, so an attempt after a partial failure sends only the requests that never completed.
+- `SelectList` adds `naturalWidth()`, `isSearchable()` and `cancel()`, a `searchPrompt` layout option that hides the idle "Type to search" row, and a `scrollbar` theme slot.
+- `ComponentScopedRender` lets a root child that holds many blocks re-derive only the children containing a component-scoped render requester.
+
+### Changed
+
+- Slash-command reports (`/tools`, `/hotkeys`, `/context`, `/jobs`, `/todo`, `/lsp`, `/plugins`, `/effort`) format with clean human summaries, consistent headers and indentation, and without raw XML tags or run-on bullet sequences.
+- The extension dashboard aligns list cursor bands to avoid text overlap, keeps the provider tab strip on a single scrollable line, and adopts the shared search input style.
+- The account manager displays quieter empty provider states without trailing dashes and phrases initial account addition cleanly.
+- The profile picker presents a dedicated Profiles title, drops the redundant other option, and cleans up the create-profile label glyph.
+- The resume session selector omits file size metadata when displaying empty sessions without messages.
+- The agent dashboard renders active tabs with standard theme highlight styling without hardcoded bracket characters.
+- Settings panel presents booleans as On/Off, humanizes enum and status labels, displays the selected setting description in the footer, simplifies default model display, and aligns the value column.
+- Bare-command pickers (`/mcp`, `/usage`, `/account`, `/debug` and the rest) widen to show every usage hint and description whole, cut a usage that cannot fit after a whole word, print one key legend in the footer with `esc close` instead of `esc/ctrl+c close`, name the search there while the list is searchable, and draw a dim scrollbar with a silver thumb.
+- The `/debug` card is titled `/debug`, matching the other bare-command cards.
+- Provider request shaping (secret redaction, Anthropic metadata, tool-order check) moved from `session/agent-session` to `session/agent-session-provider-request`; no user-visible change.
+- Home-path shortening in tool cards compiles its pattern once per home directory instead of on every call; no user-visible change.
+- A spinner or rail tick in the transcript re-renders only the blocks from the animating one down, so an idle resumed session with a long transcript no longer spends a core re-walking every block.
+- Replaced `AgentToolResult<any>` with `AgentToolResult<unknown>` and concrete result details across agent loop tool dispatch; no user-visible change.
+- Settings list adapts label width dynamically with clean truncation and wraps inline descriptions to fit within the visible viewport width.
+- A component-scoped render finds its requester by searching the newest children first and reuses the found path while it stays intact, instead of walking the whole component tree on every frame.
+- Replaced `any` types in `getNested` scraper utility with `unknown`; no user-visible behavior change.
+
+### Fixed
+
+- Tool-result preview lines replace tabs with spaces, so a tab-indented line no longer opens a gap in the rendered preview.
+- Shutting down an LSP client releases callers still waiting for its project to load, and the LSP idle checker no longer keeps the process alive.
+- Timeout timers in MCP HTTP startup, the eval kernel exit wait, the lspmux liveness probe, stdin reading, ACP cancel cleanup, browser user-agent overrides and the interactive closing frame are cleared once the awaited operation settles; no other behavior change.
+- The ask dialog rejects a question with no options and no free-text answer instead of opening a dialog that cannot be answered.
+- A collab guest answering an ask question is offered `Other` only when the question allows a free-text answer, and a guest reply of `Other` to a closed question records no custom answer.
+- The extension dashboard's overflowing tab strip reserves room for the paging arrows and stays on one row at every width.
+- A bare-command picker on a narrow terminal narrows a long usage column so every subcommand keeps its description.
+- Switching to a model on another provider after a server-side compaction no longer resends the whole session history: before the next prompt, the session asks the model that minted the compaction to summarize it and continues from that summary, reported as an auto-compaction with reason `provider_switch`.
+- A prompt or idle compaction on a session that switched providers after a server-side compaction ports that compaction first, instead of summarizing the re-expanded history on the new provider in hundreds of staged requests.
+- A staged compaction summary that fails part way resumes on the next attempt from the segments that never completed instead of restarting from the first segment.
+- A background task card restored from a resumed session stops its rail animation once it scrolls above the live region, instead of repainting the transcript every 100 ms for the rest of the process.
+- A displaceable tool preview sealed during an animation frame releases the live region at that frame instead of holding it open until the next full render.
+- `compact()` forwards every `SummaryOptions` field to the summarizers instead of a fixed list that dropped fields added later.
+- Fixed Cursor running a tool twice and leaving an unanswered `<id>_2` tool call when the server re-sent an exec request for a call it already dispatched; the repeat is now answered from the first run's result.
+- Fixed EventStream leaking waiting resolvers and hanging when async iteration is terminated early or aborted.
+- Fixed GitLab Duo Workflow socket leaking its abort signal listener when the connection settles.
+- Finalized all prepared statements upon closing the SQLite auth credential store, preventing handle leaks.
+- Fixed the credential store failing to open with `SQLITE_READONLY_DIRECTORY` in a read-only credential directory after a clean close; the store keeps its WAL files on close.
+- Converted idle iterator grace timeout race to Promise.withResolvers and typed Google tool call arguments cleanly; no user-visible change.
+- Finalized SQLite statement handles in modelCacheStamp, preventing statement handle accumulation on shared databases.
+- A session rebuilt on a provider that cannot replay its newest server-side compaction starts from the newest compaction that provider can use (`getEffectiveCompactionEntry`) instead of re-expanding the branch from its first entry.
+- Deleting a session removes its artifacts directory at the path `sessionFileStem` resolves, the same path the session created it at, instead of cutting a fixed six characters off the file name.
+- A session file whose append failed on disk is rewritten in full on the next write instead of being treated as current, and `ensureOnDisk` retries after a disk failure instead of returning without writing.
+- Resuming a long session walks its active branch once instead of once per startup reader: `SessionManager` keeps the root-to-leaf path and extends it on append, which cut a 214,000-entry resume from 3.5 s to 3.0 s.
+- A session file opened from another profile reads and writes the blob store beside that profile's `sessions` directory instead of the active profile's, so its stored payloads load and new ones stay where that profile's `gc --blobs` counts them as referenced.
+- Closed database connections and active sockets when stopping the stats dashboard server, and stopped server on interrupt signal.
+- Validated request identifier and limit parameters in API routes against non-numeric inputs.
+- `SelectList.naturalWidth()` counts the description column's minimum width, so a list sized to it shows every description whole.
+- A line longer than the renderer's source limit keeps its ANSI styling, and a run of styling escapes long enough to fill that limit no longer hides the visible text after it.
+- Removed stale stdout resize and error listeners in ProcessTerminal to prevent listener leaks.
+- Calling `ProcessTerminal.start()` on a running terminal replaces its stdin reader instead of adding a second one that stayed attached after `stop()` and threw on the next input.
+- Replacing or rebinding log transports closes the old transports, so their file streams and timers no longer stay open.
+- `defaultWindowsAclRunner` builds its result promise with `Promise.withResolvers()`; no behavior change.
+- Re-throw caller cancellation in GitHub and Mastodon scrapers so user abort signals are not swallowed and fallen back to generic fetch.
+
+## [1.5.3] - 2026-09-22
+
+### Fixed
+
+- A `cursor-agent` turn whose connection stops answering fails as a dead connection within 40 seconds of the last server byte, instead of up to 70 seconds.
+- A dead `cursor-agent` connection is reported within one probe interval plus one probe timeout of the last server byte (40s by default), instead of up to two intervals plus the timeout, where a short silence ceiling could fire first and misreport it as server silence.
+
+## [1.5.2] - 2026-09-22
+
+### Added
+
+- `/usage reset` and its selector list and redeem usage-limit reset credits for Anthropic Claude accounts beside OpenAI Codex accounts, and accept a provider prefix such as `/usage reset anthropic active`.
+- `AuthStorage.listResetCredits` and `AuthStorage.redeemResetCredit` cover Anthropic Claude OAuth accounts as well as OpenAI Codex, and each `ResetCreditTarget` states its `provider`.
+
+### Fixed
+
+- A turn whose provider stream died after every in-stream tool call of a batch that cannot be replayed (a Cursor exec-channel batch) continues from the results in context instead of stopping.
+
+## [1.5.1] - 2026-09-22
+
+### Changed
+
+- The bash tool prompt states that a backgrounded job is never polled: no `sleep`, `pgrep`, `ps`, `tail -f`, `top`, and no second call that watches it.
+
+### Fixed
+
+- A quiet `cursor-agent` turn is no longer aborted with "Provider stream stalled while waiting for the next event": the stream is governed by HTTP/2 PING liveness, with a 30-minute ceiling on unbroken server silence and `VEYYON_STREAM_IDLE_TIMEOUT_MS` still honored as that ceiling.
+- The Anthropic OAuth user-agent reports `agent-sdk/0.3.280`, the Agent SDK release published beside Claude Code 2.1.280.
+- The Cursor liveness probe interval is clamped through the shared `clampLow` helper; no user-visible change.
+- The Claude Code fingerprint version is 2.1.280, so Anthropic OAuth requests for `claude-opus-5-5` are no longer rejected with `claude_code_version_too_old`.
 
 ## [1.5.0] - 2026-09-18
 

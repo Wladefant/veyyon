@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 /**
  * Release-tree preparation and the two checks CI runs at a tag.
@@ -46,6 +47,40 @@ async function memberFiles(fileName: string): Promise<string[]> {
 		}
 	}
 	return found.sort();
+}
+
+/**
+ * Every third-party `Cargo.lock` entry that differs between two lockfile texts,
+ * as `removed name version (source)` and `added name version (source)` lines.
+ *
+ * An entry with a `source` came from a registry or git; one without is a
+ * workspace member, whose version a release bump is expected to move. The
+ * checksum is part of the identity, so a re-published version is a change too.
+ */
+export function thirdPartyLockDrift(before: string, after: string): string[] {
+	const beforeEntries = thirdPartyLockEntries(before);
+	const afterEntries = thirdPartyLockEntries(after);
+	const drift: string[] = [];
+	for (const entry of beforeEntries) {
+		if (!afterEntries.has(entry)) drift.push(`removed ${entry}`);
+	}
+	for (const entry of afterEntries) {
+		if (!beforeEntries.has(entry)) drift.push(`added ${entry}`);
+	}
+	return drift;
+}
+
+function thirdPartyLockEntries(lockText: string): Set<string> {
+	const lock = asObject(Bun.TOML.parse(lockText), "Cargo.lock");
+	if (!Array.isArray(lock.package)) throw new Error("Cargo.lock must contain package entries.");
+	const entries = new Set<string>();
+	for (const raw of lock.package) {
+		const entry = asObject(raw, "Cargo.lock package");
+		if (entry.source === undefined) continue;
+		const checksum = entry.checksum === undefined ? "" : ` ${String(entry.checksum)}`;
+		entries.add(`${String(entry.name)} ${String(entry.version)} (${String(entry.source)})${checksum}`);
+	}
+	return entries;
 }
 
 const cargoTomlGlob = new Glob("{natives,tests}/**/Cargo.toml");
@@ -229,6 +264,13 @@ export function rewriteCargoWorkspaceVersion(content: string, version: string): 
 	return content.replace(pattern, `$1${version}"`);
 }
 
+/** The root Cargo workspace version, which every native authority in the tree is cut from. */
+export function cargoWorkspaceVersion(content: string): string {
+	const version = /^\[workspace\.package\][\s\S]*?^version = "([^"]+)"/m.exec(content)?.[1];
+	if (version === undefined) throw new Error("Cargo.toml has no [workspace.package] version.");
+	return version;
+}
+
 /**
  * The release bump commit's subject, which is a contract and not a message.
  *
@@ -284,6 +326,28 @@ export function classifySentinelBumpState(
 	if (libRsText.includes(`js_name = "${prevSentinelName}"`)) return "rewrite";
 	if (libRsText.includes(`js_name = "${sentinelName}"`)) return "alreadyBumped";
 	return "missing";
+}
+
+/** The sentinel rename a cut applies, and whether lib.rs is in a state it can apply it to. */
+export interface ReleaseSentinelPlan {
+	from: string;
+	to: string;
+	state: "rewrite" | "alreadyBumped" | "missing";
+}
+
+/**
+ * Plan the sentinel rename from the tree as it stands before the bump.
+ *
+ * The rename source is the sentinel this tree emits, which its Cargo workspace version names. It is
+ * not the latest tag's: a cut whose bump commit landed but was never tagged leaves the tree one
+ * version past the tag, and a rename from the tag's sentinel matches nothing in lib.rs, so the next
+ * cut of any other version refused as `missing`. Re-cutting the version the tree is already at is
+ * `alreadyBumped`, which rewrites nothing.
+ */
+export function planReleaseSentinel(cargoToml: string, libRs: string, nextVersion: string): ReleaseSentinelPlan {
+	const { from, to } = planSentinelRewrite(cargoWorkspaceVersion(cargoToml), nextVersion);
+	if (from === to) return { from, to, state: libRs.includes(`js_name = "${to}"`) ? "alreadyBumped" : "missing" };
+	return { from, to, state: classifySentinelBumpState(libRs, from, to) };
 }
 
 /**
@@ -545,7 +609,7 @@ export async function validateReleaseVersionAuthorities(
 	}
 }
 
-export async function prepareReleaseTree(version: string, latestTag: string): Promise<void> {
+export async function prepareReleaseTree(version: string): Promise<void> {
 	console.log(`Updating package versions to ${version}…`);
 	const pkgJsonPaths = await memberFiles("package.json");
 	const publicPkgPaths: string[] = [];
@@ -579,9 +643,7 @@ export async function prepareReleaseTree(version: string, latestTag: string): Pr
 	const cargoFile = Bun.file("Cargo.toml");
 	const cargoBefore = await cargoFile.text();
 	await Bun.write("Cargo.toml", rewriteCargoWorkspaceVersion(cargoBefore, version));
-	const cargoToml = await Bun.file("Cargo.toml").text();
-	const versionMatch = cargoToml.match(/^\[workspace\.package\][\s\S]*?^version = "([^"]+)"/m);
-	if (versionMatch) console.log(`  workspace: ${versionMatch[1]}`);
+	console.log(`  workspace: ${cargoWorkspaceVersion(await Bun.file("Cargo.toml").text())}`);
 	for await (const cargoPath of cargoTomlGlob.scan(".")) {
 		const content = await Bun.file(cargoPath).text();
 		if (!content.includes("version.workspace = true")) continue;
@@ -591,45 +653,58 @@ export async function prepareReleaseTree(version: string, latestTag: string): Pr
 	console.log();
 
 	console.log(`Bumping veyyon-natives version sentinel to v${version}…`);
-	const { from: prevSentinelName, to: sentinelName } = planSentinelRewrite(latestTag, version);
-	if (prevSentinelName === sentinelName) {
-		throw new Error(`previous sentinel ${prevSentinelName} equals the new one — version ${version} is ${latestTag}.`);
-	}
-	const sentinelRoots = memberTopLevels();
-	const sentinelFiles: Array<{ path: string; content: string }> = [];
-	for (const root of sentinelRoots) {
-		const sentinelGlob = new Bun.Glob(`${root}/**/*.{rs,ts,mts,cts,js,mjs,cjs}`);
-		for await (const path of sentinelGlob.scan(".")) {
-			if (isSentinelRewriteExcluded(path)) continue;
-			const content = await Bun.file(path).text();
-			if (content.includes(prevSentinelName)) sentinelFiles.push({ path, content });
-		}
-	}
 	const libRsBefore = await Bun.file("natives/bridge/addon/src/lib.rs").text();
-	const sentinelState = classifySentinelBumpState(libRsBefore, prevSentinelName, sentinelName);
-	if (sentinelState === "missing") {
+	const sentinel = planReleaseSentinel(cargoBefore, libRsBefore, version);
+	if (sentinel.state === "missing") {
 		throw new Error(
-			`could not locate the previous veyyon-natives sentinel ${prevSentinelName} or target ${sentinelName} in ` +
-				"natives/bridge/addon/src/lib.rs; reconcile lib.rs (or the latest tag) before releasing.",
+			`natives/bridge/addon/src/lib.rs emits neither ${sentinel.from}, which the Cargo workspace version ` +
+				`${cargoWorkspaceVersion(cargoBefore)} names, nor ${sentinel.to}; reconcile lib.rs with Cargo.toml before releasing.`,
 		);
+	}
+	const sentinelFiles: Array<{ path: string; content: string }> = [];
+	if (sentinel.from !== sentinel.to) {
+		for (const root of memberTopLevels()) {
+			const sentinelGlob = new Bun.Glob(`${root}/**/*.{rs,ts,mts,cts,js,mjs,cjs}`);
+			for await (const path of sentinelGlob.scan(".")) {
+				if (isSentinelRewriteExcluded(path)) continue;
+				const content = await Bun.file(path).text();
+				if (content.includes(sentinel.from)) sentinelFiles.push({ path, content });
+			}
+		}
 	}
 	if (sentinelFiles.length > 0) {
 		await Promise.all(
-			sentinelFiles.map(file => Bun.write(file.path, file.content.replaceAll(prevSentinelName, sentinelName))),
+			sentinelFiles.map(file => Bun.write(file.path, file.content.replaceAll(sentinel.from, sentinel.to))),
 		);
 	}
 	const libRs = await Bun.file("natives/bridge/addon/src/lib.rs").text();
-	if (!libRs.includes(`js_name = "${sentinelName}"`)) {
+	if (!libRs.includes(`js_name = "${sentinel.to}"`)) {
 		throw new Error(
-			`veyyon-natives version sentinel did not move to ${sentinelName} in natives/bridge/addon/src/lib.rs.`,
+			`veyyon-natives version sentinel did not move to ${sentinel.to} in natives/bridge/addon/src/lib.rs.`,
 		);
 	}
-	console.log(`  sentinel: ${sentinelName}${sentinelState === "alreadyBumped" ? " (already bumped)" : ""}\n`);
+	console.log(`  sentinel: ${sentinel.to}${sentinel.state === "alreadyBumped" ? " (already bumped)" : ""}\n`);
 
 	// Preserve the reviewed dependency graph; refresh only workspace versions.
+	// `cargo generate-lockfile` re-resolves every dependency to its newest
+	// compatible release, which is how the v1.5.1 bump picked up a
+	// `find-msvc-tools` that does not compile `cc` on Windows. `--workspace`
+	// rewrites only this workspace's own entries, and the drift check fails the
+	// cut if anything else moved anyway.
 	console.log("Refreshing lockfiles...");
 	await $`bun install`;
-	await $`cargo generate-lockfile`;
+	const cargoLockBefore = await fs.readFile("Cargo.lock", "utf8");
+	await $`cargo update --workspace`;
+	const drift = thirdPartyLockDrift(cargoLockBefore, await fs.readFile("Cargo.lock", "utf8"));
+	if (drift.length > 0) {
+		throw new Error(
+			[
+				"Refusing to cut: refreshing Cargo.lock moved third-party dependencies.",
+				...drift.map(line => `  ${line}`),
+				"A version bump changes only workspace entries; update a dependency in its own reviewed commit.",
+			].join("\n"),
+		);
+	}
 	console.log();
 
 	console.log("Updating CHANGELOGs...");

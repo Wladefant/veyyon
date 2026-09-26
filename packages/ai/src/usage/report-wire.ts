@@ -65,9 +65,12 @@ export const usageWireSchemas = once(() => {
 	});
 
 	const resetCreditDetail = type({
+		"id?": "string",
+		"title?": "string",
 		"grantedAt?": "string",
 		"expiresAt?": "string",
 		"status?": "string",
+		"clears?": "string[]",
 	});
 
 	const resetCredits = type({

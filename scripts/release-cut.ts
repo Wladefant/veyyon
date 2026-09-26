@@ -224,7 +224,7 @@ async function main(argv: readonly string[]): Promise<void> {
 	// dirty paths belonged to the release. Restoring is safe precisely because
 	// that refusal ran: everything dirty now is preparation's own writing.
 	try {
-		await prepareReleaseTree(version, latestTag);
+		await prepareReleaseTree(version);
 		await validateReleaseVersionAuthorities(".", version, `v${version}`);
 	} catch (error) {
 		const leftovers = preparationLeftovers(await git("status", "--porcelain", "-z"));

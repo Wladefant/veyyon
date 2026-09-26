@@ -103,7 +103,7 @@ describe("evaluateCodexAutoRedeem", () => {
 		const decision = evaluateCodexAutoRedeem(input([report(1.0, 3 * DAY, 1, { primaryUsed: 0.62 })]));
 		expect(decision).toEqual({
 			redeem: true,
-			target: { accountId: ACCOUNT_ID, email: EMAIL },
+			target: { provider: "openai-codex", accountId: ACCOUNT_ID, email: EMAIL },
 			accountKey: ACCOUNT_ID,
 			blockKey: `${ACCOUNT_ID}|${Math.round(resetsAt / DEBOUNCE_BUCKET_MS)}`,
 			weeklyResetAtMs: resetsAt,

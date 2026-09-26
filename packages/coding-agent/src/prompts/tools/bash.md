@@ -77,6 +77,7 @@ Use bash ONLY for: a single binary call, or one short pipeline that COMPUTES a f
 - Need the result inline (e.g. piping into another command)? Raise `timeout` above expected duration{{#if asyncEnabled}}, or set `async: true` up front{{/if}}.
 {{/if}}
 - `backgroundAfter` is seconds of foreground time for THIS call before it converts to a background job, overriding the configured default in both directions: raise it for a command whose output you need inline, lower it for one you know is slow. `backgroundAfter: 0` backgrounds immediately.
+- NEVER poll a backgrounded job: no `sleep`, `pgrep`, `ps`, `tail -f`, `top`, and no second call that watches it. Do other work or end your reply — the finished job wakes you with its output.
 {{#if stallDetectionEnabled}}
 
 ## Stall detection
