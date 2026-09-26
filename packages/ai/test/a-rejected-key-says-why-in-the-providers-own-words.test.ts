@@ -22,13 +22,22 @@
 
 import { describe, expect, it, vi } from "bun:test";
 import * as AIError from "@veyyon/ai/error";
-import * as validators from "@veyyon/ai/registry/api-key-validation";
+import * as validatorsModule from "@veyyon/ai/registry/api-key-validation";
+import {
+	validateAnthropicCompatibleApiKey,
+	validateApiKeyAgainstModelsEndpoint,
+	validateOpenAICompatibleApiKey,
+} from "@veyyon/ai/registry/api-key-validation";
 import * as timeout from "@veyyon/utils/scoped-timeout";
 
-type ValidatorName = Exclude<keyof typeof validators, "VALIDATION_TIMEOUT_MS">;
-const validatorNames = Object.keys(validators).filter(
-	(name): name is ValidatorName => typeof validators[name as keyof typeof validators] === "function",
-);
+const validators = {
+	validateAnthropicCompatibleApiKey,
+	validateApiKeyAgainstModelsEndpoint,
+	validateOpenAICompatibleApiKey,
+} as const;
+
+type ValidatorName = keyof typeof validators;
+const validatorNames = Object.keys(validators) as ValidatorName[];
 
 /** The exact body Command Code returns for a key on a plan without API access. */
 const COMMAND_CODE_403 = JSON.stringify({
@@ -197,10 +206,12 @@ describe.each(validatorNames)("a rejected key says why in the provider's own wor
 });
 
 it("requires an explicit decision for every public validation entry point", () => {
-	expect(validatorNames.toSorted()).toEqual([
+	const exportedKeys = Object.keys(validatorsModule).filter(name => name !== "VALIDATION_TIMEOUT_MS");
+	expect(exportedKeys.toSorted()).toEqual([
 		"validateAnthropicCompatibleApiKey",
 		"validateApiKeyAgainstModelsEndpoint",
 		"validateOpenAICompatibleApiKey",
 	]);
+	expect(validatorNames.toSorted() as string[]).toEqual(exportedKeys.toSorted());
 	expect(typeof AIError.providerErrorMessage).toBe("function");
 });
