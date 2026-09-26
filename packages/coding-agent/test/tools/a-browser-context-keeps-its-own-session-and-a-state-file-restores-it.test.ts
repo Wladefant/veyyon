@@ -28,18 +28,7 @@ import * as path from "node:path";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ToolSession } from "@veyyon/coding-agent/sdk";
 import { BrowserTool } from "@veyyon/coding-agent/tools/web/browser";
-import { ensureChromiumExecutable } from "@veyyon/coding-agent/tools/web/browser/launch";
-
-/** Whether the Chromium puppeteer resolves can execute here; a runner without its libraries skips. */
-async function chromiumCanLaunch(): Promise<boolean> {
-	try {
-		const executable = await ensureChromiumExecutable();
-		if (!executable) return false;
-		return Bun.spawnSync([executable, "--version"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
-	} catch {
-		return false;
-	}
-}
+import { chromiumCanLaunch } from "../helpers/chromium-can-launch";
 
 const CHROMIUM_AVAILABLE = await chromiumCanLaunch();
 
