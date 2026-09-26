@@ -120,12 +120,13 @@ describe("the kernel names no tool and no host", () => {
 		// layered settings store (`settings/store`), the file-backed store every product composes with
 		// its own hook set, and the setting signal (`settings/signal`) a store fires on change. Then
 		// `session/session-list-index`, the per-directory cache of the session picker's per-file scan,
-		// which names a directory and a file shape and no tool, host or mode.
-		expect(kernelFiles.length).toBe(63);
+		// which names a directory and a file shape and no tool, host or mode. Then
+		// `session/terminal-ownership`, which verifies a session file is not already owned by a live
+		// terminal writer before another process opens it.
+		expect(kernelFiles.length).toBe(64);
 		expect(concernCounts.registry).toBe(7);
 		expect(concernCounts.loader).toBe(12);
-		expect(concernCounts.session).toBe(40);
-		expect(concernCounts.settings).toBe(4);
+		expect(concernCounts.session).toBe(41);
 		expect(concernCounts.registry).toBeGreaterThan(0);
 		expect(concernCounts.loader).toBeGreaterThan(0);
 		expect(concernCounts.session).toBeGreaterThan(0);

@@ -231,7 +231,7 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		onUpdate?: AgentToolUpdateCallback<TDetails, TParameters>,
 		context?: AgentToolContext,
 	): Promise<AgentToolResult<TDetails, TParameters>> {
-		context = TOOL_EXECUTION_ENTRIES[this.#entry].fence(this.tool, context, this.#sessionPolicy);
+		TOOL_EXECUTION_ENTRIES[this.#entry].fence(this.tool, context, this.#sessionPolicy);
 		// 1. Check approval policy (before extension handlers).
 		// CLI `--auto-approve` / `--yolo` sets approval mode to yolo.
 		// User `tools.approval.<tool>` policies are still applied in all modes.

@@ -6,6 +6,10 @@
 
 - Added `naturalWidth()`, `isSearchable()`, and `cancel()` to `SelectList`, alongside `ComponentScopedRender` and dynamic viewport adaptations.
 
+### Fixed
+
+- Fixed AltGr characters (such as `[`, `]`, `{`, `}` on Hungarian and other international layouts) being dropped in Windows Terminal with the kitty keyboard protocol, where they instead triggered Alt shortcuts like word movement ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+
 ## [1.5.4] - 2026-09-24
 
 ### Added

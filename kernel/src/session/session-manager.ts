@@ -23,7 +23,6 @@ import {
 } from "@veyyon/utils";
 import { pathStateSync } from "@veyyon/utils/fs-optional";
 import { sessionFileName, sessionFileStem } from "@veyyon/utils/session-file";
-import { assertNotTerminalOwned } from "./terminal-ownership";
 import { ArtifactManager } from "./artifacts";
 import { type BlobPutOptions, type BlobPutResult, BlobStore, blobsDirForSessionDir } from "./blob-store";
 import {
@@ -80,6 +79,7 @@ import {
 	type SessionStorageWriter,
 } from "./session-storage";
 import { type SessionTitleUpdate, serializeTitleSlot } from "./session-title-slot";
+import { assertNotTerminalOwned } from "./terminal-ownership";
 
 const DRAFT_ONLY_SESSION_MARKER = ".draft-only-session";
 
@@ -1601,7 +1601,6 @@ export class SessionManager {
 	async setSessionFile(sessionFile: string): Promise<void> {
 		const resolvedSessionFile = path.resolve(sessionFile);
 		await assertNotTerminalOwned(resolvedSessionFile);
-		const titleSlot = await readTitleSlotFromFile(resolvedSessionFile, this.#storage);
 		const fileEntries = await loadEntriesFromFile(resolvedSessionFile, this.#storage, {
 			operatorNotices: this.#operatorNotices,
 		});

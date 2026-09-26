@@ -12,7 +12,11 @@ export function startTerminalControl(mode: InteractiveMode): Promise<() => void>
 		entries = mode.sessionManager.getEntries().flatMap(entry => {
 			if (entry.type !== "message" || entry.message.role !== "assistant") return [];
 			const content = mode.session.displayAssistantContent(entry.message.content);
-			const text = content.filter(block => block.type === "text").map(block => block.text).join("\n").trim();
+			const text = content
+				.filter(block => block.type === "text")
+				.map(block => block.text)
+				.join("\n")
+				.trim();
 			return text ? [{ entryId: entry.id, text }] : [];
 		});
 		return entries;
@@ -27,7 +31,10 @@ export function startTerminalControl(mode: InteractiveMode): Promise<() => void>
 		async deliver(text, behavior) {
 			if (mode.isShuttingDown || !mode.isInitialized) throw new Error("Terminal is shutting down");
 			if (mode.session.isStreaming) {
-				if (behavior === "followUp") { await mode.session.followUp(text); return "queued"; }
+				if (behavior === "followUp") {
+					await mode.session.followUp(text);
+					return "queued";
+				}
 				await mode.session.steer(text);
 				return "steered";
 			}
