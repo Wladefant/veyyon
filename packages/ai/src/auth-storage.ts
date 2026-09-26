@@ -55,7 +55,7 @@ import type {
 	OAuthProvider,
 	OAuthProviderId,
 } from "./registry/oauth/types";
-import type { Provider } from "./types";
+import type { FetchImpl, Provider } from "./types";
 import type {
 	CredentialRankingContext,
 	CredentialRankingStrategy,
@@ -70,14 +70,17 @@ import type {
 	UsageLogger,
 	UsageProvider,
 	UsageReport,
+	UsageResetCreditDetail,
 } from "./usage";
 import { resolveUsedFraction } from "./usage";
 import {
-	type CodexResetConsumeCode,
-	type CodexResetCredit,
-	consumeCodexResetCredit,
-	listCodexResetCredits,
-} from "./usage/openai-codex-reset";
+	anthropicResetAvailableCount,
+	anthropicResetCredits,
+	claimAnthropicReset,
+	fetchAnthropicResetStatus,
+	selectAnthropicResetGrant,
+} from "./usage/anthropic-reset";
+import { consumeCodexResetCredit, listCodexResetCredits } from "./usage/openai-codex-reset";
 import {
 	listRegisteredUsageProviders,
 	resolveRegisteredRankingStrategy,
@@ -1124,45 +1127,84 @@ export interface StoredOAuthRefreshResult<T extends OAuthCredential = OAuthCrede
 	removed: boolean;
 }
 
+/** Providers whose OAuth accounts carry saved usage resets that veyyon can list and redeem. */
+export const RESET_CREDIT_PROVIDERS = ["openai-codex", "anthropic"] as const;
+export type ResetCreditProvider = (typeof RESET_CREDIT_PROVIDERS)[number];
+
 /**
  * Identifies which stored account to redeem a saved rate-limit reset for.
- * Any one field is enough; `credentialId` is the most precise.
+ * Any one of the account fields is enough; `credentialId` is the most precise.
  */
 export interface ResetCreditTarget {
+	provider: ResetCreditProvider;
 	credentialId?: number;
 	accountId?: string;
 	email?: string;
 }
+
+/**
+ * Result code of {@link AuthStorage.redeemResetCredit}, in one vocabulary for every provider.
+ * `reset` is success. Business outcomes that spent nothing: `already_redeemed`, `no_credit`,
+ * `nothing_to_reset`, `cooldown` (Anthropic: the server rejects claims until a set time),
+ * `ineligible`, `unavailable`. Local: `no_account` (target not found), `account_unavailable`
+ * (token refresh failed), `no_organization` (Anthropic account without an organization id),
+ * `status_unavailable` (the reset status could not be read). Transport: `rate_limited`,
+ * `auth_error`, `http_<status>`.
+ */
+export type ResetCreditRedeemCode =
+	| "reset"
+	| "already_redeemed"
+	| "no_credit"
+	| "nothing_to_reset"
+	| "cooldown"
+	| "ineligible"
+	| "unavailable"
+	| "no_account"
+	| "account_unavailable"
+	| "no_organization"
+	| "status_unavailable"
+	| "rate_limited"
+	| "auth_error"
+	// Forward-compatible: unknown future backend codes pass through.
+	| (string & {});
 
 /** Outcome of {@link AuthStorage.redeemResetCredit}. */
 export interface ResetCreditRedeemOutcome {
 	/** `true` only when a reset was actually applied (`code === "reset"`). */
 	ok: boolean;
-	/**
-	 * Result code. Backend codes: `reset` (success), `already_redeemed`,
-	 * `no_credit`, `nothing_to_reset`. Locally-synthesized: `no_account`
-	 * (target not found), `account_unavailable` (token refresh failed),
-	 * `http_<status>` (unexpected HTTP).
-	 */
-	code: CodexResetConsumeCode;
+	code: ResetCreditRedeemCode;
+	provider: ResetCreditProvider;
 	accountId?: string;
 	email?: string;
-	/** The credit that was spent (when one was). */
+	/** The credit or grant that was spent, or would have been. */
 	creditId?: string;
 }
 
 /** One stored account's live saved-reset status, from {@link AuthStorage.listResetCredits}. */
 export interface ResetCreditAccountStatus {
+	provider: ResetCreditProvider;
 	credentialId?: number;
 	accountId?: string;
 	email?: string;
 	/** Resets redeemable for this account right now (live, not cached). */
 	availableCount: number;
-	credits: CodexResetCredit[];
-	/** Whether this is the given session's active account. */
+	credits: UsageResetCreditDetail[];
+	/** Whether this is the given session's active account for its provider. */
 	active: boolean;
 	/** Set when the account's token refresh or list call failed. */
 	error?: string;
+}
+
+/** An Anthropic claim result in the provider-neutral {@link ResetCreditRedeemCode} vocabulary. */
+function anthropicRedeemCode(result: string): ResetCreditRedeemCode {
+	switch (result) {
+		case "already_used":
+			return "already_redeemed";
+		case "not_limited":
+			return "nothing_to_reset";
+		default:
+			return result;
+	}
 }
 
 function isAbortSignalOption(
@@ -6581,22 +6623,36 @@ export class AuthStorage {
 	}
 
 	/**
-	 * List saved rate-limit resets for every stored OAuth account of `provider`
-	 * (Codex), fetched LIVE from the dedicated `rate-limit-reset-credits` route.
+	 * List saved rate-limit resets for every stored OAuth account of each
+	 * reset-capable provider (or only `provider`), fetched LIVE from the
+	 * provider's reset route: Codex `wham/rate-limit-reset-credits`, Anthropic
+	 * `api/oauth/usage?cedar_ember=1`.
 	 *
-	 * This deliberately bypasses the usage-report cache: `/wham/usage` is
-	 * IP-rate-limited and may serve stale (or pre-feature) snapshots when many
-	 * accounts are polled, which would hide redeemable credits. One entry per
-	 * account, with the session's active account flagged and unreachable
-	 * accounts carrying an `error`.
+	 * This deliberately bypasses the usage-report cache: both usage endpoints
+	 * are IP-rate-limited and may serve stale (or pre-feature) snapshots when
+	 * many accounts are polled, which would hide redeemable credits. One entry
+	 * per account, with the session's active account of each provider flagged
+	 * and unreachable accounts carrying an `error`.
 	 */
 	async listResetCredits(options?: {
-		provider?: string;
+		provider?: ResetCreditProvider;
 		sessionId?: string;
 		baseUrlResolver?: (provider: string) => string | undefined;
 		signal?: AbortSignal;
 	}): Promise<ResetCreditAccountStatus[]> {
-		const provider = options?.provider ?? "openai-codex";
+		const providers = options?.provider ? [options.provider] : RESET_CREDIT_PROVIDERS;
+		const perProvider = await Promise.all(
+			providers.map(provider => this.#listProviderResetCredits(provider, options)),
+		);
+		return perProvider.flat();
+	}
+
+	async #listProviderResetCredits(
+		provider: ResetCreditProvider,
+		options:
+			| { sessionId?: string; baseUrlResolver?: (provider: string) => string | undefined; signal?: AbortSignal }
+			| undefined,
+	): Promise<ResetCreditAccountStatus[]> {
 		const accesses = await this.getOAuthAccesses(provider);
 		if (accesses.length === 0) return [];
 		const baseUrl = options?.baseUrlResolver?.(provider);
@@ -6608,44 +6664,59 @@ export class AuthStorage {
 					((!!activeId.accountId && activeId.accountId === access.accountId) ||
 						(!!activeId.email && activeId.email === access.email));
 				const base = {
+					provider,
 					credentialId: access.credentialId,
 					accountId: access.accountId,
 					email: access.email,
 					active,
 				};
 				if (!access.ok) return { ...base, availableCount: 0, credits: [], error: access.error };
-				const list = await listCodexResetCredits({
-					accessToken: access.accessToken,
-					accountId: access.accountId,
-					baseUrl,
-					fetch: this.#usageFetch,
-					signal: options?.signal,
-				});
+				const auth = { accessToken: access.accessToken, baseUrl, fetch: this.#usageFetch, signal: options?.signal };
+				if (provider === "anthropic") {
+					const read = await fetchAnthropicResetStatus(auth);
+					if (!read) return { ...base, availableCount: 0, credits: [], error: "Failed to load usage resets" };
+					const now = Date.now();
+					return {
+						...base,
+						availableCount: anthropicResetAvailableCount(read.status, now),
+						credits: anthropicResetCredits(read.status, now).credits ?? [],
+					};
+				}
+				const list = await listCodexResetCredits({ ...auth, accountId: access.accountId });
 				if (!list) return { ...base, availableCount: 0, credits: [], error: "Failed to load saved resets" };
-				return { ...base, availableCount: list.availableCount, credits: list.credits };
+				return {
+					...base,
+					availableCount: list.availableCount,
+					credits: list.credits.map(credit => ({
+						id: credit.id,
+						title: credit.title,
+						grantedAt: credit.grantedAt,
+						expiresAt: credit.expiresAt,
+						status: credit.status,
+					})),
+				};
 			}),
 		);
 	}
 
 	/**
-	 * Redeem one saved rate-limit reset (OpenAI Codex "saved resets") for a
-	 * specific stored account.
+	 * Redeem one saved rate-limit reset for a specific stored account of
+	 * `target.provider` (OpenAI Codex saved resets, Anthropic usage-limit resets).
 	 *
-	 * Resolves a fresh access token for the target account, picks an available
-	 * credit (the given `creditId`, else the first redeemable one), spends it,
-	 * and invalidates the cached usage report so the next `/usage` reflects the
+	 * Resolves a fresh access token for the target account, picks a credit (the
+	 * given `creditId`, else the provider's next redeemable one), spends it, and
+	 * invalidates the cached usage report so the next `/usage` reflects the
 	 * reset. Never throws for business outcomes — inspect the returned `code`.
 	 */
 	async redeemResetCredit(options: {
 		target: ResetCreditTarget;
-		provider?: string;
 		creditId?: string;
 		baseUrlResolver?: (provider: string) => string | undefined;
 		signal?: AbortSignal;
 	}): Promise<ResetCreditRedeemOutcome> {
-		const provider = options.provider ?? "openai-codex";
-		const baseUrl = options.baseUrlResolver?.(provider);
 		const { target } = options;
+		const provider = target.provider;
+		const baseUrl = options.baseUrlResolver?.(provider);
 		const accesses = await this.getOAuthAccesses(provider);
 		const match = accesses.find(
 			access =>
@@ -6653,34 +6724,18 @@ export class AuthStorage {
 				(!!target.accountId && access.accountId === target.accountId) ||
 				(!!target.email && access.email === target.email),
 		);
-		if (!match) return { ok: false, code: "no_account", accountId: target.accountId, email: target.email };
-		if (!match.ok) {
-			return { ok: false, code: "account_unavailable", accountId: match.accountId, email: match.email };
+		if (!match) {
+			return { ok: false, code: "no_account", provider, accountId: target.accountId, email: target.email };
 		}
+		const who = { provider, accountId: match.accountId, email: match.email };
+		if (!match.ok) return { ok: false, code: "account_unavailable", ...who };
 
-		let creditId = options.creditId;
-		if (!creditId) {
-			const list = await listCodexResetCredits({
-				accessToken: match.accessToken,
-				accountId: match.accountId,
-				baseUrl,
-				fetch: this.#usageFetch,
-				signal: options.signal,
-			});
-			const credit = list?.credits.find(entry => (entry.status ?? "available") === "available") ?? list?.credits[0];
-			if (!credit) return { ok: false, code: "no_credit", accountId: match.accountId, email: match.email };
-			creditId = credit.id;
-		}
-
-		const result = await consumeCodexResetCredit({
-			creditId,
-			accessToken: match.accessToken,
-			accountId: match.accountId,
-			baseUrl,
-			fetch: this.#usageFetch,
-			signal: options.signal,
-		});
-		if (result.ok) {
+		const auth = { accessToken: match.accessToken, baseUrl, fetch: this.#usageFetch, signal: options.signal };
+		const spent =
+			provider === "anthropic"
+				? await this.#claimAnthropicReset(match, auth, options.creditId)
+				: await this.#consumeCodexReset(match, auth, options.creditId);
+		if (spent.code === "reset") {
 			this.#invalidateUsageReportCache(provider, baseUrl);
 			if (this.#store.invalidateUsageCache) {
 				await this.#store.invalidateUsageCache(options.signal).catch(err => {
@@ -6692,7 +6747,40 @@ export class AuthStorage {
 			// keeps skipping/under-ranking the freshly-reset account.
 			if (match.credentialId !== undefined) this.clearCredentialBlocks(provider, match.credentialId);
 		}
-		return { ok: result.ok, code: result.code, accountId: match.accountId, email: match.email, creditId };
+		return { ok: spent.code === "reset", code: spent.code, creditId: spent.creditId, ...who };
+	}
+
+	async #consumeCodexReset(
+		access: OAuthAccess,
+		auth: { accessToken: string; baseUrl?: string; fetch: FetchImpl; signal?: AbortSignal },
+		requestedCreditId: string | undefined,
+	): Promise<{ code: ResetCreditRedeemCode; creditId?: string }> {
+		let creditId = requestedCreditId;
+		if (!creditId) {
+			const list = await listCodexResetCredits({ ...auth, accountId: access.accountId });
+			const credit = list?.credits.find(entry => (entry.status ?? "available") === "available") ?? list?.credits[0];
+			if (!credit) return { code: "no_credit" };
+			creditId = credit.id;
+		}
+		const result = await consumeCodexResetCredit({ ...auth, creditId, accountId: access.accountId });
+		return { code: result.code, creditId };
+	}
+
+	async #claimAnthropicReset(
+		access: OAuthAccess,
+		auth: { accessToken: string; baseUrl?: string; fetch: FetchImpl; signal?: AbortSignal },
+		requestedGrantId: string | undefined,
+	): Promise<{ code: ResetCreditRedeemCode; creditId?: string }> {
+		// The claim must name the server's next grant, so the status is read live even when the
+		// caller names one: a stale id would be rejected with `not_next_grant` after the round trip.
+		const read = await fetchAnthropicResetStatus(auth);
+		if (!read) return { code: "status_unavailable", creditId: requestedGrantId };
+		const grant = selectAnthropicResetGrant(read.status, requestedGrantId);
+		if (!grant) return { code: read.status.eligible ? "no_credit" : "ineligible", creditId: requestedGrantId };
+		const orgId = access.orgId ?? read.orgId;
+		if (!orgId) return { code: "no_organization", creditId: grant.id };
+		const claim = await claimAnthropicReset({ ...auth, orgId, grantId: grant.id });
+		return { code: anthropicRedeemCode(claim.result), creditId: grant.id };
 	}
 
 	/**

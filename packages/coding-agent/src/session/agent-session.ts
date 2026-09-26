@@ -60,15 +60,18 @@ import {
 	computeFileLists,
 	createCompactionSummaryMessage,
 	createFileOps,
+	DEFAULT_RESERVE_TOKENS,
 	estimateCompactionRequestTokens,
 	estimateTokens,
 	extractFileOpsFromMessages,
 	formatCompactionThreshold,
 	generateBranchSummary,
 	generateHandoffFromContext,
+	getRemoteCompactionPreserveData,
 	hasLegacyArchive,
 	prepareCompaction,
 	redactLegacyArchiveText,
+	remoteCompactionReplayableBy,
 	renderHandoffPrompt,
 	renderTailElisionArtifact,
 	renderTailElisionMarker,
@@ -84,6 +87,8 @@ import {
 	type SummaryOptions,
 	serverCompactionRouteAbsent,
 	shouldCompact,
+	stripRemoteCompactionPreserveData,
+	summarizeRemoteCompactionWindow,
 	upsertFileOperations,
 } from "@veyyon/agent-core/compaction";
 import { modelServesPrefixCacheHits } from "@veyyon/agent-core/compaction/cache-aligned-context";
@@ -132,13 +137,12 @@ import {
 	sessionTelemetryDetail,
 	toolCallMetricsForPersistence,
 } from "@veyyon/ai/instrumentation";
-import { clearAnthropicFastModeFallback, deriveClaudeDeviceId } from "@veyyon/ai/providers/anthropic";
+import { clearAnthropicFastModeFallback } from "@veyyon/ai/providers/anthropic";
 import { elidedSignatureBytes, signaturePolicy } from "@veyyon/ai/providers/google-shared";
 import { resetOpenAICodexHistoryAfterCompaction } from "@veyyon/ai/providers/openai-codex-responses";
 import { streamSimple } from "@veyyon/ai/stream";
 // Session initialization registers usage backends without loading the AI package barrel.
 import "@veyyon/ai/usage/defaults";
-import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import { type CursorExecResolvedCarrier, kCursorExecResolved } from "@veyyon/ai/utils/block-symbols";
 import { assistantText } from "@veyyon/ai/utils/message-text";
 import { toolWireSchema } from "@veyyon/ai/utils/schema";
@@ -196,6 +200,7 @@ import {
 } from "@veyyon/kernel/session/retry-policy";
 import {
 	type BuildSessionContextOptions,
+	getEffectiveCompactionEntry,
 	getLatestCompactionEntry,
 	getRestorableSessionModels,
 	type SessionContext,
@@ -225,7 +230,6 @@ import {
 	formatCount,
 	formatDuration,
 	getActiveAuthDbPath,
-	getInstallId,
 	getStringProperty,
 	isAbortError,
 	isBunTestRuntime,
@@ -241,6 +245,7 @@ import {
 } from "@veyyon/utils";
 import { contentText } from "@veyyon/utils/content-text";
 import { clearToolCallInFlight, markToolCallInFlight, reportAbandonedToolCalls } from "@veyyon/utils/inflight-marker";
+import { type HeartbeatHandle, joinHeartbeat, reportSilentDeaths } from "@veyyon/utils/session-heartbeat";
 import { startupMarker } from "@veyyon/utils/startup-marker";
 import type { ArgotSession } from "argot";
 import {
@@ -397,7 +402,6 @@ import { sessionPrompts } from "../prompts/session/rows";
 import { sideChannelPrompts } from "../prompts/side-channel/rows";
 import { steeringPrompts } from "../prompts/steering/rows";
 import { turnControlPrompts } from "../prompts/turn-control/rows";
-import { isProviderPayloadOversize, transformProviderPayload } from "../provider-boundary";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { AgentRegistry } from "../registry/agent-registry";
 import { noteSecretsCondition } from "../secrets/notices";
@@ -495,6 +499,11 @@ import {
 	PERMISSION_OPTIONS_BY_ID,
 	PERMISSION_REQUIRED_TOOLS,
 } from "./agent-session-permissions";
+import {
+	buildSessionMetadata,
+	isToolOrderPermutation,
+	obfuscateProviderPayload,
+} from "./agent-session-provider-request";
 import {
 	IMAGE_ATTACHMENT_DESCRIPTION_TYPE,
 	isAdvisorCard,
@@ -645,7 +654,6 @@ export class UnsupportedModelInputError extends Error {
 // A side-channel assistant response is signed for the hidden prompt/history that
 // produced it. If we persist that response under a different user turn, native
 // replay anchors become invalid; keep only visible, non-cryptographic content.
-
 const UNEXPECTED_STOP_MAX_RETRIES = 3;
 const UNEXPECTED_STOP_TIMEOUT_MS = 4000;
 const EMPTY_STOP_MAX_RETRIES = 3;
@@ -667,78 +675,6 @@ function hasNonWhitespace(value: string): boolean {
 }
 
 export type { ShakeMode, ShakeResult };
-
-/**
-
- * Whether `next` is the same tool set as `current` in a different order.
- *
- * Order-only differences are the case worth catching: they cost a full prefix
- * re-encode and buy nothing, because the model selects a tool by name. A genuine
- * set change (a tool added, removed, or swapped) is NOT a permutation and must
- * reach the provider in the order the caller asked for.
- */
-function isToolOrderPermutation(current: readonly string[], next: readonly string[]): boolean {
-	if (current.length !== next.length || current.length === 0) return false;
-	let sameOrder = true;
-	for (let index = 0; index < current.length; index++) {
-		if (current[index] !== next[index]) {
-			sameOrder = false;
-			break;
-		}
-	}
-	if (sameOrder) return false;
-	const currentSet = new Set(current);
-	if (currentSet.size !== current.length) return false;
-	for (const name of next) {
-		if (!currentSet.delete(name)) return false;
-	}
-	return currentSet.size === 0;
-}
-
-/**
- * Build the per-request `metadata` payload for the Anthropic provider, shaped
- * like real Claude Code's `getAPIMetadata` output (`{ session_id, account_uuid,
- * device_id }`) so the backend buckets requests under one session and attributes
- * them to the authenticated OAuth account when available. Resolved at request
- * time so token refreshes and login/logout transitions don't strand a stale
- * account UUID in memory. `account_uuid` and `device_id` are omitted for
- * non-Anthropic providers to avoid leaking the user's Claude identity to
- * third-party APIs (including Anthropic-format-compatible proxies such as
- * cloudflare-ai-gateway or gitlab-duo).
- *
- * `provider` is the target provider string (e.g. `"anthropic"`) and gates the
- * `account_uuid` and `device_id` lookups — only `"anthropic"` requests carry them.
- *
- * `sessionId` is forwarded to the auth-storage session-sticky lookup so that
- * multi-credential setups attribute to the same OAuth account used for the
- * actual API request rather than always picking the first credential.
- *
- * `authStorage` is treated as optional so test fixtures that stub `modelRegistry`
- * without a real storage layer still work; the resolver simply skips the lookup
- * and emits `{ session_id }` alone, matching the no-OAuth-credential path.
- */
-function buildSessionMetadata(
-	sessionId: string,
-	provider: string,
-	authStorage: AuthStorage | undefined,
-): Record<string, unknown> {
-	const userId: Record<string, string> = { session_id: sessionId };
-	// Only look up account_uuid when the request is going to Anthropic. Injecting
-	// a Claude OAuth account_uuid into requests bound for other providers (including
-	// Anthropic-format-compatible proxies like cloudflare-ai-gateway or gitlab-duo)
-	// would leak the user's Anthropic identity to unrelated third-party APIs.
-	if (provider === "anthropic") {
-		const accountUuid = authStorage?.getOAuthAccountId("anthropic", sessionId);
-		if (typeof accountUuid === "string" && accountUuid.length > 0) {
-			userId.account_uuid = accountUuid;
-			// Claude Code's `device_id` is a stable 64-hex account-scoped install
-			// identifier. Include both veyyon's persistent install id and the Claude
-			// account UUID so two accounts on the same install do not share a device.
-			userId.device_id = deriveClaudeDeviceId(getInstallId(), accountUuid);
-		}
-	}
-	return { user_id: JSON.stringify(userId) };
-}
 
 const noOpUIContext: ExtensionUIContext = {
 	select: async (_title, _options, _dialogOptions) => undefined,
@@ -774,48 +710,7 @@ function createHandoffFileName(date = new Date()): string {
 	return `handoff-${fileTimestamp}.md`;
 }
 
-// ============================================================================
-// AgentSession Class
-// ============================================================================
-
-/**
- * Redact every string in a provider payload, object keys included, after
- * mutable request hooks. The bounded shared walker rejects transformed-key
- * collisions and unsupported/cyclic payloads; the boundary converts every
- * walker failure into a fail-closed confidentiality error.
- *
- * A refusal the boundary attributes to payload SIZE carries the context-overflow
- * flag out of here. The scan runs ahead of the send, so an oversized turn is
- * refused locally before any provider sees it, and a session whose turn outgrew
- * the scan limits used to stop at a confidentiality error it could not act on:
- * the one mechanism that shrinks a turn is reached by classifying the failure as
- * an overflow, and it was never reached because nothing said this was one. The
- * flag is attached rather than matched on the message text so `classify` latches
- * it off the chain and every reader of the id — the retry ladder, the compaction
- * rescue, `isContextOverflow` — gives the same answer without a second predicate.
- */
-export function obfuscateProviderPayload(value: unknown, obfuscator: SecretObfuscator | undefined): unknown {
-	if (!obfuscator?.hasSecrets()) return value;
-	try {
-		return transformProviderPayload(value, text => obfuscator.obfuscate(text), "AgentSession provider payload", {
-			safeFailureDetails: true,
-		});
-	} catch (error) {
-		if (isProviderPayloadOversize(error) && error instanceof Error) {
-			throw AIError.attach(error, AIError.create(AIError.Flag.ContextOverflow));
-		}
-		throw error;
-	}
-}
-
 const REPLAN_TITLE_CONTEXT_TURN_LIMIT = 6;
-
-// A thin adapter over the `contentText` owner for the `unknown` agent-message
-// boundary: content here may be a plain string, an array of blocks (a wider
-// union that also carries thinking and tool-call blocks), or malformed. The
-// string/non-array guards live here; the block flattening (skip non-text, trim,
-// join with a blank line) is the owner's job. `contentText` skips non-record and
-// non-string-text blocks the same way the old hand-rolled loop did.
 
 export class AgentSession {
 	readonly agent: Agent;
@@ -886,6 +781,8 @@ export class AgentSession {
 	#exitRecorded = false;
 	/** Session ids can change on fork/compaction; cleanup must use the id recorded at start. */
 	#toolMarkerSessions = new Map<string, string>();
+	/** This session's share of the process heartbeat; left when the exit is recorded. */
+	#heartbeat?: HeartbeatHandle;
 	#unsubscribeAppendOnly?: () => void;
 	#unsubscribeModelRoles?: () => void;
 	#unsubscribePromptSettings?: () => void;
@@ -1278,6 +1175,12 @@ export class AgentSession {
 	 */
 	#stagedSummaryModels = new Set<string>();
 	/**
+	 * Staged-summary requests that completed during a compaction that then failed,
+	 * so the retry resumes where it stopped instead of re-sending every segment.
+	 * Cleared whenever a summary is produced.
+	 */
+	#stagedSummaryCheckpoints = new Map<string, string>();
+	/**
 	 * Tokens the last compaction's summarization payload exceeded the widest
 	 * candidate window by, or `undefined` when no candidate was skipped for size.
 	 * The dead-end rescue reduces to this, because a payload no candidate can
@@ -1338,6 +1241,7 @@ export class AgentSession {
 		this.#promptInFlightCount++;
 		if (this.#promptInFlightCount === 1) {
 			this.#acquirePowerAssertion();
+			this.#heartbeat?.update();
 		}
 	}
 
@@ -1348,6 +1252,7 @@ export class AgentSession {
 			this.#flushPendingAgentEnd();
 			this.#drainStrandedQueuedMessages();
 			this.#clearAgentGrants();
+			this.#heartbeat?.update();
 		}
 	}
 
@@ -1480,6 +1385,7 @@ export class AgentSession {
 		this.#flushPendingAgentEnd();
 		this.#drainStrandedQueuedMessages();
 		this.#clearAgentGrants();
+		this.#heartbeat?.update();
 	}
 
 	/**
@@ -2189,9 +2095,23 @@ export class AgentSession {
 		});
 		// The counterpart of the exit recorder below: a death that never reached
 		// JavaScript wrote no `session_exit` entry and no error line, so the only
-		// account of it is the in-flight marker its process left behind. Sweep
-		// those into the log before this session starts writing its own.
+		// account of it is what its process left on disk — the in-flight marker of
+		// a tool call, and the heartbeat naming the phase it was in. Sweep those
+		// into the log before this session starts writing its own.
 		reportAbandonedToolCalls();
+		reportSilentDeaths();
+		this.#heartbeat = joinHeartbeat({
+			spawned: this.#isSpawned,
+			sessionId: () => this.sessionManager.getSessionId(),
+			phase: () =>
+				this.isCompacting
+					? "compaction"
+					: this.#toolMarkerSessions.size > 0
+						? "tool"
+						: this.isStreaming
+							? "provider"
+							: "idle",
+		});
 		this.#cancelExitRecorder = postmortem.register(`agent-session:${this.sessionManager.getSessionId()}`, reason => {
 			this.#recordSessionExit(reason);
 		});
@@ -3664,6 +3584,9 @@ export class AgentSession {
 	#recordSessionExit(reason: postmortem.Reason | "dispose"): void {
 		if (this.#exitRecorded) return;
 		this.#exitRecorded = true;
+		// Same reason as the markers below: this exit reaches JavaScript, so the
+		// log accounts for it and the heartbeat must not report it as silent.
+		this.#heartbeat?.leave();
 		// This exit reached JavaScript, so the log will carry an account of it
 		// either way. Leaving the marker behind would report the next launch a
 		// crash that did not happen.
@@ -4628,6 +4551,10 @@ export class AgentSession {
 				this.#toolMarkerSessions.delete(event.toolCallId);
 			}
 		}
+
+		// Every lifecycle event can move the phase: a tool starting or returning, a
+		// run starting or settling. Stream deltas cannot, and are the hot path.
+		if (event.type !== "message_update") this.#heartbeat?.update();
 
 		// Apply state-bearing tool results before the first awaited subscriber.
 		// Agent events are delivered independently, so a later agent_end may otherwise
@@ -9263,6 +9190,13 @@ export class AgentSession {
 			// synchronous stderr line per phase, so a "submit feels slow" report
 			// names the phase that spent the time instead of offering a guess.
 			startupMarker("prompt:compaction-check:start");
+			// Port first: until an unreadable server-side window is ported, the
+			// rebuilt context re-expands every message the window stood in for, and
+			// any check below would measure (and compact) that expanded span.
+			await this.#portUnreadableRemoteCompaction();
+			if (this.#promptGeneration !== generation) {
+				return;
+			}
 			// Check whether an aborted response left enough context pressure to require
 			// in-place compaction before this prompt starts its agent loop.
 			const lastAssistant = this.#findLastAssistantMessage();
@@ -11075,7 +11009,7 @@ export class AgentSession {
 	 */
 	async #pruneToolOutputs(): Promise<{ prunedCount: number; tokensSaved: number } | undefined> {
 		const branchEntries = this.sessionManager.getBranch();
-		const keepBoundaryId = getLatestCompactionEntry(branchEntries)?.firstKeptEntryId;
+		const keepBoundaryId = this.#promptCompaction(branchEntries)?.firstKeptEntryId;
 		const result = pruneToolOutputs(
 			branchEntries,
 			this.#withPlanProtection({
@@ -11117,7 +11051,7 @@ export class AgentSession {
 		const { supersedeReads, dropUseless } = this.settings.getGroup("compaction");
 		if (!supersedeReads && !dropUseless) return undefined;
 		const branchEntries = this.sessionManager.getBranch();
-		const keepBoundaryId = getLatestCompactionEntry(branchEntries)?.firstKeptEntryId;
+		const keepBoundaryId = this.#promptCompaction(branchEntries)?.firstKeptEntryId;
 		const result = pruneSupersededToolResults(
 			branchEntries,
 			this.#withPlanProtection({
@@ -11214,7 +11148,7 @@ export class AgentSession {
 			...(opts.config ?? AGGRESSIVE_SHAKE_CONFIG),
 			// Skip entries summarized away by the latest compaction — shaking them
 			// only churns persisted history with no prompt/cache effect.
-			keepBoundaryId: getLatestCompactionEntry(branchEntries)?.firstKeptEntryId,
+			keepBoundaryId: this.#promptCompaction(branchEntries)?.firstKeptEntryId,
 		});
 		// Heavy-content pass: large tool results and fenced/XML blocks under the
 		// usual size/protect-window/savings gates. Redundancy pass: earlier
@@ -11303,7 +11237,7 @@ export class AgentSession {
 		const branchEntries = this.sessionManager.getBranch();
 		const config = this.#withPlanProtection({
 			...AGGRESSIVE_SHAKE_CONFIG,
-			keepBoundaryId: getLatestCompactionEntry(branchEntries)?.firstKeptEntryId,
+			keepBoundaryId: this.#promptCompaction(branchEntries)?.firstKeptEntryId,
 		});
 		const regions = collectRedundantToolResultRegions(branchEntries, config);
 		if (regions.length === 0) return { toolResultsDropped: 0, tokensFreed: 0 };
@@ -11364,6 +11298,7 @@ export class AgentSession {
 		const compactMode = options?.mode ? findCompactMode(options.mode) : undefined;
 		const compactionAbortController = new AbortController();
 		this.#compactionAbortController = compactionAbortController;
+		this.#heartbeat?.update();
 
 		// Hoisted so the catch can roll the preparation's tail elisions back:
 		// prepareCompaction applies them to the live branch as a side effect.
@@ -11575,6 +11510,7 @@ export class AgentSession {
 		} finally {
 			if (this.#compactionAbortController === compactionAbortController) {
 				this.#compactionAbortController = undefined;
+				this.#heartbeat?.update();
 			}
 			this.#reconnectToAgent();
 		}
@@ -11618,6 +11554,9 @@ export class AgentSession {
 	/** Trigger idle compaction through the auto-compaction flow (with UI events). */
 	async runIdleCompaction(): Promise<void> {
 		if (this.isStreaming || this.isCompacting) return;
+		// A port replaces the expanded span with a summary, which is the reduction
+		// the idle pass exists for; compacting again on top of it would pay twice.
+		if (await this.#portUnreadableRemoteCompaction()) return;
 		await this.#runAutoCompaction("idle", false);
 	}
 
@@ -11892,6 +11831,114 @@ export class AgentSession {
 		// The local-estimate floor lives in getContextBreakdown, so this is the
 		// exact number the footline gauge shows.
 		return this.getContextBreakdown({ contextWindow, pendingMessages: messages })?.usedTokens ?? 0;
+	}
+
+	/**
+	 * Replace a server-side compaction the active provider cannot read with a
+	 * summary it can, before the next prompt is built on it.
+	 *
+	 * The newest compaction on the branch can hold a window only another provider
+	 * can decrypt: the session switched providers, resumed onto a different one, or
+	 * a compaction started on the old model landed after the switch. The rebuild
+	 * then falls back to the newest readable compaction and re-expands everything
+	 * since it, which on a long session is more than any context window holds. The
+	 * provider that minted the window can still read it, so one request to that
+	 * provider turns the window into summary text, appended as a local compaction
+	 * with the same keep marker. When that provider is unavailable the fallback
+	 * stands, and the next compaction on the active provider summarizes the span.
+	 */
+	async #portUnreadableRemoteCompaction(): Promise<boolean> {
+		const model = this.model;
+		if (!model || this.isCompacting) return false;
+		const entry = getLatestCompactionEntry(this.sessionManager.getBranch());
+		const remote = entry ? getRemoteCompactionPreserveData(entry.preserveData) : undefined;
+		if (!entry || !remote || remoteCompactionReplayableBy(entry.preserveData, model.provider)) return false;
+		const source = this.#modelRegistry.find(remote.provider, remote.model);
+		const apiKey = source ? await this.#modelRegistry.getApiKey(source, this.sessionId) : undefined;
+		if (!source || !apiKey) {
+			logger.warn("Server-side compaction cannot be ported: the model that minted it is unavailable", {
+				compactionId: entry.id,
+				mintedBy: `${remote.provider}/${remote.model}`,
+				activeProvider: model.provider,
+			});
+			return false;
+		}
+
+		const compactionSettings = this.settings.getGroup("compaction");
+		const action = resolveCompactionEngineAction(compactionSettings.strategy);
+		const controller = new AbortController();
+		this.#autoCompactionAbortController = controller;
+		try {
+			await this.#emitSessionEvent({ type: "auto_compaction_start", reason: "provider_switch", action });
+			const summary = await summarizeRemoteCompactionWindow(
+				entry,
+				source,
+				compactionSettings.reserveTokens ?? DEFAULT_RESERVE_TOKENS,
+				apiKey,
+				controller.signal,
+				{
+					sessionSystemPrompt: this.#baseSystemPrompt,
+					metadata: this.agent.metadataForProvider(source.provider),
+					initiatorOverride: "agent",
+					telemetry: resolveTelemetry(this.agent.telemetry, this.sessionId),
+					thinkingLevel: this.thinkingLevel,
+					sessionId: this.sessionId,
+					obfuscateProviderText: text => this.obfuscateProviderText(text),
+					completeImpl: this.#sideCompleteImpl,
+					serviceTier: this.#effectiveServiceTier(source),
+				},
+			);
+			if (controller.signal.aborted) throw new CompactionCancelledError();
+			const preserveData = stripRemoteCompactionPreserveData(entry.preserveData);
+			this.sessionManager.appendCompaction(
+				summary,
+				undefined,
+				entry.firstKeptEntryId,
+				entry.tokensBefore,
+				entry.details,
+				false,
+				preserveData,
+			);
+			this.agent.replaceMessages(this.buildDisplaySessionContext().messages);
+			this.#resetAllAdvisorRuntimes();
+			this.#rebasePendingContextSnapshotAfterHistoryRewrite();
+			await this.#emitSessionEvent({
+				type: "auto_compaction_end",
+				action,
+				result: {
+					summary,
+					firstKeptEntryId: entry.firstKeptEntryId,
+					tokensBefore: entry.tokensBefore,
+					details: entry.details,
+					preserveData,
+				},
+				aborted: false,
+				willRetry: false,
+			});
+			return true;
+		} catch (error) {
+			const aborted = controller.signal.aborted || error instanceof CompactionCancelledError;
+			logger.warn("Porting a server-side compaction to the active provider failed", {
+				compactionId: entry.id,
+				mintedBy: `${remote.provider}/${remote.model}`,
+				activeProvider: model.provider,
+				aborted,
+				error: errorMessage(error),
+			});
+			await this.#emitSessionEvent({
+				type: "auto_compaction_end",
+				action,
+				result: undefined,
+				aborted,
+				willRetry: false,
+				errorMessage: aborted
+					? undefined
+					: `Could not summarize the ${remote.provider} compaction for ${model.provider}: ${errorMessage(error)}`,
+			});
+			return false;
+		} finally {
+			if (this.#autoCompactionAbortController === controller) this.#autoCompactionAbortController = undefined;
+		}
 	}
 
 	async #runPrePromptCompactionIfNeeded(messages: AgentMessage[]): Promise<void> {
@@ -13569,6 +13616,7 @@ export class AgentSession {
 	 * request again, so staging is no longer forced.
 	 */
 	#recordSummaryStaging(candidate: Model, result: CompactionResult): void {
+		this.#stagedSummaryCheckpoints.clear();
 		if (result.summaryStages === undefined) return;
 		const key = modelKey(candidate);
 		if (result.summaryStages > 1) this.#stagedSummaryModels.add(key);
@@ -13812,6 +13860,7 @@ export class AgentSession {
 						// that request is billed and paced on a tier they never chose.
 						serviceTier: this.#effectiveServiceTier(candidate),
 						summaryStaging: this.#stagedSummaryModels.has(modelKey(candidate)) ? "staged" : undefined,
+						stagedSummaryCheckpoints: this.#stagedSummaryCheckpoints,
 					},
 				);
 				this.#recordSummaryStaging(candidate, compacted);
@@ -14125,7 +14174,7 @@ export class AgentSession {
 		const branchEntries = this.sessionManager.getBranch();
 		const config = this.#withPlanProtection({
 			...AGGRESSIVE_SHAKE_CONFIG,
-			keepBoundaryId: getLatestCompactionEntry(branchEntries)?.firstKeptEntryId,
+			keepBoundaryId: this.#promptCompaction(branchEntries)?.firstKeptEntryId,
 		});
 		const regions = collectOversizedTextRegions(branchEntries, {
 			excessTokens,
@@ -14267,6 +14316,7 @@ export class AgentSession {
 		this.#autoCompactionAbortController?.abort();
 		const autoCompactionAbortController = new AbortController();
 		this.#autoCompactionAbortController = autoCompactionAbortController;
+		this.#heartbeat?.update();
 		const autoCompactionSignal = autoCompactionAbortController.signal;
 
 		// Hoisted so failure paths can roll the preparation's tail elisions
@@ -14466,6 +14516,7 @@ export class AgentSession {
 						completeImpl: this.#sideCompleteImpl,
 						serviceTier: this.#effectiveServiceTier(candidate),
 						summaryStaging: this.#stagedSummaryModels.has(modelKey(candidate)) ? "staged" : undefined,
+						stagedSummaryCheckpoints: this.#stagedSummaryCheckpoints,
 					};
 					const candidateWindow =
 						typeof configuredCompactionWindow === "number" && configuredCompactionWindow > 0
@@ -14819,6 +14870,7 @@ export class AgentSession {
 		} finally {
 			if (this.#autoCompactionAbortController === autoCompactionAbortController) {
 				this.#autoCompactionAbortController = undefined;
+				this.#heartbeat?.update();
 			}
 		}
 	}
@@ -15063,9 +15115,12 @@ export class AgentSession {
 	 * Without this the operator's session stopped dead in the middle of a batch
 	 * (a reported turn: 75 calls, 0 ran, 21 interrupted, 54 never ran) on a
 	 * failure the classifier itself calls transient, and the only way forward was
-	 * to notice and type something. The bar is deliberately narrow: the failure
-	 * would have been retried but for replay safety, at least one call genuinely
-	 * never ran, and the attempts run on their own allowance, sized by the same
+	 * to notice and type something. The same happened when the stream died after
+	 * the whole batch ran: Cursor's exec channel runs every call inside the
+	 * stream, so a reset after the last result left a fully answered batch that
+	 * was neither replayable nor continued. The bar is narrow: the failure would
+	 * have been retried but for replay safety, the batch is continuable (see
+	 * {@link #batchCanContinue}), and the attempts run on their own allowance, sized by the same
 	 * `retry.maxRetries`, so a provider dying on every attempt cannot loop. Its
 	 * own counter rather than the retry ladder's: the two answer different
 	 * questions and one turn can legitimately reach both, so a turn that already
@@ -15082,13 +15137,13 @@ export class AgentSession {
 		if (!AIError.retriable(id, { replayUnsafe: false })) return false;
 		if (AIError.retriable(id, { replayUnsafe: true })) return false;
 		if (!this.#hasReplayUnsafeToolOutput(message)) return false;
-		if (!this.#hasNeverRanToolResult(message)) return false;
+		if (!this.#batchCanContinue(message)) return false;
 		const policy = this.#resolveRetryPolicy(retrySettings);
 		if (this.#unreplayableBatchContinues >= policy.maxRetries) return false;
 		this.#unreplayableBatchContinues += 1;
 		this.#operatorNotices.warn(
 			"unreplayable-batch",
-			"The provider stream failed partway through a tool batch that cannot be replayed. Continuing with the calls that never ran.",
+			"The provider stream failed partway through a tool batch that cannot be replayed. Continuing the turn from the results already in context.",
 		);
 		// A continuation borrows the retry ladder's budget, so it borrows the same
 		// backoff: the transport just died, and re-requesting the largest context
@@ -15148,15 +15203,22 @@ export class AgentSession {
 	}
 
 	/**
-	 * Whether any call in this turn is left with no answer at all.
+	 * Whether sending the turn now in context moves the work forward, asked per CALL.
 	 *
-	 * The question is per CALL, not per batch. A cut-short batch is normally
-	 * mixed (the reported one: 21 interrupted, 54 never ran), and the interrupted
-	 * calls carry real results, so "the batch holds a placeholder somewhere" is
-	 * the right answer for the wrong reason. Asked per id it also refuses the one
-	 * case where continuing would be wrong: a call that already has a real result
-	 * is answered, and a placeholder sitting beside that result does not make it
-	 * unanswered again.
+	 * Two shapes continue. A call left with no answer at all: its never-ran
+	 * placeholder and the ledger tell the model to reissue it. And a batch whose
+	 * every call carries a real result: the batch finished and only the model's
+	 * next step is missing, which is exactly the request an ordinary tool turn
+	 * sends after its results land. Cursor's exec channel produces the second
+	 * shape whenever the stream dies after the last call returned.
+	 *
+	 * One shape does not: an exec-channel call whose result has not arrived yet.
+	 * It ran or is running out of band, and a request sent now would answer it
+	 * with nothing while its real result is still on its way.
+	 *
+	 * A mixed batch is normal (the reported one: 21 interrupted, 54 never ran).
+	 * A call that already has a real result is answered, and a placeholder sitting
+	 * beside that result does not make it unanswered again.
 	 *
 	 * A call whose arguments never finished streaming is outstanding by
 	 * construction and is counted without looking for a result. `retainCompleted-
@@ -15166,7 +15228,7 @@ export class AgentSession {
 	 * on `incompleteToolCalls` and the ledger tells the model to reconstruct the
 	 * arguments, which is work only a further request can do.
 	 */
-	#hasNeverRanToolResult(message: AssistantMessage): boolean {
+	#batchCanContinue(message: AssistantMessage): boolean {
 		if ((message.incompleteToolCalls?.length ?? 0) > 0) return true;
 		const toolCallIds = new Set<string>();
 		for (const block of message.content) {
@@ -15185,7 +15247,11 @@ export class AgentSession {
 		for (const id of unanswered) {
 			if (!answered.has(id)) return true;
 		}
-		return false;
+		// Nothing never ran, so continue only when nothing is still in flight either.
+		for (const id of toolCallIds) {
+			if (!answered.has(id)) return false;
+		}
+		return true;
 	}
 
 	#isClassifierRefusal(message: AssistantMessage): boolean {
@@ -17693,7 +17759,18 @@ export class AgentSession {
 	}
 
 	/**
-	 * Messages the latest compaction summarized away, oldest first.
+	 * The compaction the prompt is built from: the newest one the active provider
+	 * can read, which is the one `buildSessionContext` applies. A provider switch
+	 * can leave the latest entry an unreadable server-side window, and every pass
+	 * that treats "before the keep marker" as absent from the prompt must use this
+	 * entry's marker, not the latest one's, or it misreads live entries as gone.
+	 */
+	#promptCompaction(branch: readonly SessionEntry[]): CompactionEntry | null {
+		return getEffectiveCompactionEntry(branch, this.model?.provider);
+	}
+
+	/**
+	 * Messages the compaction in effect summarized away, oldest first.
 	 *
 	 * They are gone from the live context by design and they are still what this
 	 * session paid for, so spend accounting adds them back. Everything from the
@@ -17704,7 +17781,7 @@ export class AgentSession {
 	 */
 	#messagesSummarizedAway(): AgentMessage[] {
 		const branch = this.sessionManager.getBranch();
-		const boundary = resolveCompactionBoundaryIndex(branch, getLatestCompactionEntry(branch)?.firstKeptEntryId);
+		const boundary = resolveCompactionBoundaryIndex(branch, this.#promptCompaction(branch)?.firstKeptEntryId);
 		if (boundary <= 0) return [];
 		const summarized: AgentMessage[] = [];
 		for (let index = 0; index < boundary; index++) {
@@ -17983,7 +18060,7 @@ export class AgentSession {
 	}
 
 	/**
-	 * Redeem one saved Codex rate-limit reset for a specific account, injecting
+	 * Redeem one saved rate-limit reset (OpenAI Codex or Anthropic) for a specific account, injecting
 	 * the provider base URL like {@link AgentSession.fetchUsageReports}. Powers
 	 * the `/usage reset` command and auto-redeem. Never throws for business
 	 * outcomes — inspect the returned `code`.
@@ -17997,8 +18074,8 @@ export class AgentSession {
 	}
 
 	/**
-	 * List saved Codex rate-limit resets per stored account, fetched live from
-	 * the dedicated credits endpoint (bypasses the usage cache). Powers the
+	 * List saved rate-limit resets per stored OpenAI Codex and Anthropic account, fetched live
+	 * from each provider's reset route (bypasses the usage cache). Powers the
 	 * `/usage reset` account selector.
 	 */
 	async listResetCredits(signal?: AbortSignal): Promise<ResetCreditAccountStatus[]> {

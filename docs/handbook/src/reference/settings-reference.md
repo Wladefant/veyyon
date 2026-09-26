@@ -607,7 +607,7 @@ veyyon config get compaction.threshold
 |---|---|---|---|---|
 | `agent.maxConcurrency` | Max Concurrent Agents | number | `32` | Maximum number of spawned agents running at once. Unlimited: no cap. |
 | `agent.maxRuntimeMs` | Max Agent Runtime | number | `0` | Maximum wall-clock time a spawned agent may run. An agent that reaches it is aborted with a 'timed out' reason. Unlimited: no limit. |
-| `agent.softRequestBudget` | Soft Request Budget | number | `200` | Number of model requests a spawned agent may make per run before it is asked to wrap up. At 1.5 times this number the run is stopped and the agent returns what it has. Disabled: no limit. The bundled scout and sonic agents have a lower built-in budget. |
+| `agent.softRequestBudget` | Soft Request Budget | number | `250` | Number of model requests a spawned agent may make per run before it is asked to wrap up. At 1.5 times this number the run is stopped and the agent returns what it has. Disabled: no limit. The bundled scout and sonic agents have a lower built-in budget. |
 | `agent.softRequestBudgetNotice` | Soft Request Budget Notice | boolean | `true` | Send an agent one steering notice when it crosses its Soft Request Budget, asking it to wrap up before the forced stop. |
 | `agent.enableLsp` | LSP in Agents | boolean | `false` | Allow spawned agents to use the lsp tool. Off keeps agents cheaper. |
 

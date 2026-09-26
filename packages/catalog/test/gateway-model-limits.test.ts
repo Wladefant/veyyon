@@ -663,6 +663,8 @@ describe("a gateway's own id spelling reaches the vendor's row", () => {
  * the only reason a gateway added next year is covered by the sweeps above.
  */
 const NOT_A_GATEWAY: Record<string, string> = {
+	"chatgpt-web.ts":
+		"local codex-chatgpt-web Responses bridge daemon: publishes its own model limits (context_window) directly from the live daemon rather than routing through the gateway resolver (PR #75 / issue #67)",
 	"codex.ts": "first-party OpenAI Codex: a model host, with its own documented 272k/128k pair",
 	"default-limits.ts": "the assumed pair itself, with no discovery in it",
 	"failure.ts": "the shared discovery-failure reason type",

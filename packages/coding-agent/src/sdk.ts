@@ -24,6 +24,7 @@ import { disposeOwnedResources } from "@veyyon/kernel/session/owned-resources";
 import { getRestorableSessionModels } from "@veyyon/kernel/session/session-context";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { optionalNumber } from "@veyyon/kernel/settings/optional-number";
+import { attachNativeNoticeSink } from "@veyyon/natives/loader-state";
 import {
 	attachFaultSink,
 	errorMessage,
@@ -144,7 +145,8 @@ import { expiryWarnings } from "./secrets/secret-command";
 import { secretSpendMarker } from "./secrets/spend-marker";
 import { resolveVaultLocations, type ScopedVaultEntry, SecretVault, vaultPathFor } from "./secrets/vault";
 import { loadOrCreateVaultKey } from "./secrets/vault-crypto";
-import { AgentSession, obfuscateProviderPayload } from "./session/agent-session";
+import { AgentSession } from "./session/agent-session";
+import { obfuscateProviderPayload } from "./session/agent-session-provider-request";
 import { discoverAuthStorage } from "./session/auth-broker-config";
 import { sessionCpuExecHooks } from "./session/cpu-limit";
 import { convertToLlm, LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "./session/messages";
@@ -586,7 +588,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		//
 		// Detached on dispose, and on the startup-failure path below, by the handle this returns. The
 		// sink closes over `operatorNotices`, so leaving it attached outlives the session it reports to.
-		detachFaultSink = attachFaultSink(fault => operatorNotices.warn(fault.source, fault.text));
+		//
+		// The native loader reports the same way and for the same reason: it runs before any session
+		// exists and inside the interactive UI, so a raw terminal write lands between frames and moves
+		// the composer. Its notices wait in the loader until this sink attaches, and share its detach.
+		const detachMachineFaults = attachFaultSink(fault => operatorNotices.warn(fault.source, fault.text));
+		const detachNativeNotices = attachNativeNoticeSink(text => operatorNotices.warn("natives", text));
+		detachFaultSink = () => {
+			detachMachineFaults();
+			detachNativeNotices();
+		};
 
 		// There is one loader for startup, runtime toggles, command reconciliation, and
 		// cwd moves. Replacing the complete runtime prevents project-scoped names and
@@ -1559,27 +1570,27 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				return next;
 			},
 			getFileMutationVersion: path => fileMutationVersions.get(path) ?? 0,
-			getTodoPhases: () => session.getTodoPhases(),
-			setTodoPhases: phases => session.setTodoPhases(phases),
-			isMCPDiscoveryEnabled: () => session.isMCPDiscoveryEnabled(),
-			getSelectedMCPToolNames: () => session.getSelectedMCPToolNames(),
-			activateDiscoveredMCPTools: toolNames => session.activateDiscoveredMCPTools(toolNames),
+			getTodoPhases: () => session?.getTodoPhases() ?? [],
+			setTodoPhases: phases => session?.setTodoPhases(phases),
+			isMCPDiscoveryEnabled: () => session?.isMCPDiscoveryEnabled() ?? false,
+			getSelectedMCPToolNames: () => session?.getSelectedMCPToolNames() ?? [],
+			activateDiscoveredMCPTools: toolNames => (session ? session.activateDiscoveredMCPTools(toolNames) : Promise.resolve([])),
 			// Generic tool discovery (unified — covers built-in + MCP + extension)
-			isToolDiscoveryEnabled: () => session.isToolDiscoveryEnabled(),
-			getDiscoverableTools: filter => session.getDiscoverableTools(filter),
-			getDiscoverableToolSearchIndex: () => session.getDiscoverableToolSearchIndex(),
-			getSelectedDiscoveredToolNames: () => session.getSelectedDiscoveredToolNames(),
-			activateDiscoveredTools: toolNames => session.activateDiscoveredTools(toolNames),
-			getCheckpointState: () => session.getCheckpointState(),
-			setCheckpointState: state => session.setCheckpointState(state ?? undefined),
-			getLastCompletedRewind: () => session.getLastCompletedRewind(),
-			getToolChoiceQueue: () => session.toolChoiceQueue,
+			isToolDiscoveryEnabled: () => session?.isToolDiscoveryEnabled() ?? false,
+			getDiscoverableTools: filter => session?.getDiscoverableTools(filter) ?? [],
+			getDiscoverableToolSearchIndex: () => session?.getDiscoverableToolSearchIndex(),
+			getSelectedDiscoveredToolNames: () => session?.getSelectedDiscoveredToolNames() ?? [],
+			activateDiscoveredTools: toolNames => (session ? session.activateDiscoveredTools(toolNames) : Promise.resolve([])),
+			getCheckpointState: () => session?.getCheckpointState(),
+			setCheckpointState: state => session?.setCheckpointState(state ?? undefined),
+			getLastCompletedRewind: () => session?.getLastCompletedRewind(),
+			getToolChoiceQueue: () => session?.toolChoiceQueue!,
 			buildToolChoice: name => {
-				const m = session.model;
+				const m = session?.model;
 				return m ? buildNamedToolChoice(name, m) : undefined;
 			},
 			steer: msg =>
-				session.agent.steer({
+				session?.agent.steer({
 					role: "custom",
 					customType: msg.customType,
 					content: msg.content,
@@ -1588,11 +1599,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					attribution: "agent",
 					timestamp: Date.now(),
 				}),
-			peekQueueInvoker: () => session.peekQueueInvoker(),
-			peekPendingInvoker: () => session.peekPendingInvoker(),
-			clearPendingInvokers: () => session.clearPendingInvokers(),
-			peekStandingResolveHandler: () => session.peekStandingResolveHandler(),
-			setStandingResolveHandler: handler => session.setStandingResolveHandler(handler),
+			peekQueueInvoker: () => session?.peekQueueInvoker(),
+			peekPendingInvoker: () => session?.peekPendingInvoker(),
+			clearPendingInvokers: () => session?.clearPendingInvokers(),
+			peekStandingResolveHandler: () => session?.peekStandingResolveHandler(),
+			setStandingResolveHandler: handler => session?.setStandingResolveHandler(handler),
 			allocateOutputArtifact: async toolType => {
 				try {
 					return await sessionManager.allocateArtifactPath(toolType);

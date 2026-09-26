@@ -239,4 +239,54 @@ describe("applyUsageReports attributes limits per account", () => {
 
 		expect(next.providers[0]?.rows[0]?.usage).toEqual([]);
 	});
+
+	test("two accounts sharing projectId 'aicode-consumers' with different emails get only their own limits", async () => {
+		if (!authStorage) throw new Error("test setup failed");
+		const storage = authStorage;
+		await storage.set("google-antigravity", [
+			{
+				type: "oauth",
+				access: "access-alice",
+				refresh: "refresh-alice",
+				expires: Date.now() + HOUR_MS,
+				email: "alice@example.com",
+				projectId: "aicode-consumers",
+			},
+			{
+				type: "oauth",
+				access: "access-bob",
+				refresh: "refresh-bob",
+				expires: Date.now() + HOUR_MS,
+				email: "bob@example.com",
+				projectId: "aicode-consumers",
+			},
+		]);
+
+		const reportAlice: UsageReport = {
+			provider: "google-antigravity",
+			fetchedAt: RESETS_AT - HOUR_MS,
+			metadata: { email: "alice@example.com", projectId: "aicode-consumers" },
+			limits: [
+				limitFor("gemini-flash", { provider: "google-antigravity", projectId: "aicode-consumers" }, 0.25, "Flash (Alice)"),
+			],
+		};
+		const reportBob: UsageReport = {
+			provider: "google-antigravity",
+			fetchedAt: RESETS_AT - HOUR_MS,
+			metadata: { email: "bob@example.com", projectId: "aicode-consumers" },
+			limits: [
+				limitFor("gemini-flash", { provider: "google-antigravity", projectId: "aicode-consumers" }, 0.75, "Flash (Bob)"),
+			],
+		};
+
+		const inventory = applyUsageReports(buildAccountInventory(storage), [reportAlice, reportBob]);
+		const rows = inventory.providers.find(p => p.provider === "google-antigravity")?.rows ?? [];
+
+		expect(rows).toHaveLength(2);
+		expect(rows[0].email).toBe("alice@example.com");
+		expect(rows[0].usage.map(w => w.usedFraction)).toEqual([0.25]);
+
+		expect(rows[1].email).toBe("bob@example.com");
+		expect(rows[1].usage.map(w => w.usedFraction)).toEqual([0.75]);
+	});
 });

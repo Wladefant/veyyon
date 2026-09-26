@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Replaced `any` types in `getNested` scraper utility with `unknown` and preserved user cancellation on scrapers.
+
+## [1.5.4] - 2026-09-24
+
+### Changed
+
+- Replaced `any` types in `getNested` scraper utility with `unknown`; no user-visible behavior change.
+
+### Fixed
+
+- Re-throw caller cancellation in GitHub and Mastodon scrapers so user abort signals are not swallowed and fallen back to generic fetch.
+
 ## [1.5.0] - 2026-09-18
 
 ### Added

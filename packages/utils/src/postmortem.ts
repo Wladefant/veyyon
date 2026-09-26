@@ -24,7 +24,8 @@ export enum Reason {
 	EXIT = "exit", // Normal process exit
 	SIGINT = "sigint", // Ctrl-C or SIGINT
 	SIGTERM = "sigterm", // SIGTERM
-	SIGHUP = "sighup", // SIGHUP
+	SIGHUP = "sighup", // SIGHUP; on Windows also a closed console window (CTRL_CLOSE_EVENT)
+	SIGBREAK = "sigbreak", // Windows Ctrl+Break (CTRL_BREAK_EVENT)
 	UNCAUGHT_EXCEPTION = "uncaught_exception", // Fatal exception
 	UNHANDLED_REJECTION = "unhandled_rejection", // Unhandled promise rejection
 	MANUAL = "manual", // Manual cleanup (not triggered by process)
@@ -271,9 +272,21 @@ if (isMainThread) {
 			process.exit(143); // 128 + SIGTERM (15)
 		})
 		.on("SIGHUP", async () => {
+			// On Windows libuv raises this for CTRL_CLOSE_EVENT and then holds the
+			// console's control thread, so the few seconds Windows allows before it
+			// terminates the process are ours to record the exit in.
 			await runCleanup(Reason.SIGHUP);
 			process.exit(129); // 128 + SIGHUP (1)
 		});
+	if (process.platform === "win32") {
+		// Ctrl+Break is delivered even while the terminal reads Ctrl+C as input.
+		// With no listener libuv declines it and Windows ends the process from the
+		// control thread: no JavaScript, no exit record (veyyon#73).
+		process.on("SIGBREAK", async () => {
+			await runCleanup(Reason.SIGBREAK);
+			process.exit(149); // 128 + SIGBREAK (21)
+		});
+	}
 } else {
 	// Worker thread: only register exit handler for cleanup.
 	// DO NOT register uncaughtException/unhandledRejection handlers here -

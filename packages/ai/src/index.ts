@@ -36,6 +36,7 @@ export * from "./registry";
 export * from "./stream";
 export * from "./types";
 export * from "./usage";
+export * from "./usage/anthropic-reset";
 export * from "./usage/claude";
 export * from "./usage/cursor";
 export * from "./usage/gemini";

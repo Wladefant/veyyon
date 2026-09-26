@@ -8,10 +8,17 @@
 - Expose the live worker registry and targeted messaging over IrcBus to the Telegram control bridge ([#38](https://github.com/Wladefant/veyyon/issues/38)).
 - `api.listWorkers()` and `api.steerWorker()` expose an extension's own live workers and targeted steering, scoped to the conversation the extension is loaded in ([#38](https://github.com/Wladefant/veyyon/issues/38)).
 - Sessions preserve concurrent in-flight tool calls independently and commit abandoned-call reports to the normal dated log before removing crash evidence ([#73](https://github.com/Wladefant/veyyon/issues/73)).
+- A session that dies below JavaScript outside a tool call is now reported on the next launch as `Previous session died silently`, with the phase it was in (`provider`, `tool`, `compaction`, `idle`), its session id, and the count of busy spawned lanes ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 
 ### Fixed
 
 - Windows shell cancellation protects the host and its discoverable ancestors, rejects stale parent-PID edges, and no longer reopens an unpinned child PID after handle termination fails; launch broker catches native termination refusals during daemon stop and recovery sweeps ([#73](https://github.com/Wladefant/veyyon/issues/73)).
+- Tool discovery delegates on `ToolSession` resolve against the live session once initialized and safely return empty inventories without throwing during pre-session construction ([#99](https://github.com/Wladefant/veyyon/issues/99)).
+- Provider usage limit matching rejects conflicting email or account identities before falling back to project ID, preventing accounts sharing a project ID from claiming each other's limits ([#102](https://github.com/Wladefant/veyyon/issues/102)).
+- A headless `browser` launch that fails on Windows (for example Chromium never exposing DevTools under a `RemoteDebuggingAllowed = 0` policy) no longer kills the host process and every session in it: the browser profile is owned by veyyon rather than puppeteer, so its failed-launch cleanup can no longer raise an unhandled `EBUSY` rejection, and the tool reports the policy as the cause ([#95](https://github.com/Wladefant/veyyon/pull/95)).
+- Raised default soft request budget to 250 requests, added per-agent `softRequestBudget` configuration, and structured `salvageState` reporting on cutoff and cancellation ([#97](https://github.com/Wladefant/veyyon/issues/97)).
+- Guard package manager installation and mutation commands from running when the working directory resolves to the user home directory ([#98](https://github.com/Wladefant/veyyon/issues/98)).
+
 - Extension approval-required blocks stop the current call without persisting a user refusal; explicit and legacy refusals retain their existing fence ([#88](https://github.com/Wladefant/veyyon/issues/88)).
 - Telegram control can deliver to and observe the authenticated live terminal owner without reopening its transcript in a GUI host ([#88](https://github.com/Wladefant/veyyon/issues/88)).
 
@@ -36,6 +43,70 @@
 
 - Removed the `./tool-discovery/*` subpath from the `@veyyon/coding-agent` exports map; its source directory was folded into `discovery/` and the key resolved to no module, so no user-facing effect ([#64](https://github.com/Wladefant/veyyon/issues/64)).
 - Removed the `tools.refusals` setting, path- and command-scoped extension refusals, and the per-tool `effectScope` declaration that only they read; a stale `tools.refusals` key in config is ignored.
+### Fixed
+
+- The CLI imports the terminal output guard when a worker thread starts rather than at startup, keeping it off the static boot graph; no user-visible change.
+
+## [1.5.5] - 2026-09-25
+
+### Fixed
+
+- Running two veyyon versions at once on Windows no longer prints `could not remove the stale addon cache ... EPERM` over the interactive UI and pushes the composer down; a real removal failure shows as a `natives` warning notice.
+- A `console` print from a library, a native addon warning or a worker thread no longer writes into the interactive UI and shifts the composer on Linux or Windows; the text goes to the veyyon log file.
+
+## [1.5.4] - 2026-09-24
+
+### Changed
+
+- Slash-command reports (`/tools`, `/hotkeys`, `/context`, `/jobs`, `/todo`, `/lsp`, `/plugins`, `/effort`) format with clean human summaries, consistent headers and indentation, and without raw XML tags or run-on bullet sequences.
+- The extension dashboard aligns list cursor bands to avoid text overlap, keeps the provider tab strip on a single scrollable line, and adopts the shared search input style.
+- The account manager displays quieter empty provider states without trailing dashes and phrases initial account addition cleanly.
+- The profile picker presents a dedicated Profiles title, drops the redundant other option, and cleans up the create-profile label glyph.
+- The resume session selector omits file size metadata when displaying empty sessions without messages.
+- The agent dashboard renders active tabs with standard theme highlight styling without hardcoded bracket characters.
+- Settings panel presents booleans as On/Off, humanizes enum and status labels, displays the selected setting description in the footer, simplifies default model display, and aligns the value column.
+- Bare-command pickers (`/mcp`, `/usage`, `/account`, `/debug` and the rest) widen to show every usage hint and description whole, cut a usage that cannot fit after a whole word, print one key legend in the footer with `esc close` instead of `esc/ctrl+c close`, name the search there while the list is searchable, and draw a dim scrollbar with a silver thumb.
+- The `/debug` card is titled `/debug`, matching the other bare-command cards.
+- Provider request shaping (secret redaction, Anthropic metadata, tool-order check) moved from `session/agent-session` to `session/agent-session-provider-request`; no user-visible change.
+- Home-path shortening in tool cards compiles its pattern once per home directory instead of on every call; no user-visible change.
+- A spinner or rail tick in the transcript re-renders only the blocks from the animating one down, so an idle resumed session with a long transcript no longer spends a core re-walking every block.
+
+### Fixed
+
+- Tool-result preview lines replace tabs with spaces, so a tab-indented line no longer opens a gap in the rendered preview.
+- Shutting down an LSP client releases callers still waiting for its project to load, and the LSP idle checker no longer keeps the process alive.
+- Timeout timers in MCP HTTP startup, the eval kernel exit wait, the lspmux liveness probe, stdin reading, ACP cancel cleanup, browser user-agent overrides and the interactive closing frame are cleared once the awaited operation settles; no other behavior change.
+- The ask dialog rejects a question with no options and no free-text answer instead of opening a dialog that cannot be answered.
+- A collab guest answering an ask question is offered `Other` only when the question allows a free-text answer, and a guest reply of `Other` to a closed question records no custom answer.
+- The extension dashboard's overflowing tab strip reserves room for the paging arrows and stays on one row at every width.
+- A bare-command picker on a narrow terminal narrows a long usage column so every subcommand keeps its description.
+- Switching to a model on another provider after a server-side compaction no longer resends the whole session history: before the next prompt, the session asks the model that minted the compaction to summarize it and continues from that summary, reported as an auto-compaction with reason `provider_switch`.
+- A prompt or idle compaction on a session that switched providers after a server-side compaction ports that compaction first, instead of summarizing the re-expanded history on the new provider in hundreds of staged requests.
+- A staged compaction summary that fails part way resumes on the next attempt from the segments that never completed instead of restarting from the first segment.
+- A background task card restored from a resumed session stops its rail animation once it scrolls above the live region, instead of repainting the transcript every 100 ms for the rest of the process.
+- A displaceable tool preview sealed during an animation frame releases the live region at that frame instead of holding it open until the next full render.
+
+## [1.5.3] - 2026-09-22
+
+### Fixed
+
+- A `cursor-agent` turn whose connection stops answering fails as a dead connection within 40 seconds of the last server byte, instead of up to 70 seconds.
+
+## [1.5.2] - 2026-09-22
+
+### Added
+
+- `/usage reset` and its selector list and redeem usage-limit reset credits for Anthropic Claude accounts beside OpenAI Codex accounts, and accept a provider prefix such as `/usage reset anthropic active`.
+
+### Fixed
+
+- A turn whose provider stream died after every in-stream tool call of a batch that cannot be replayed (a Cursor exec-channel batch) continues from the results in context instead of stopping.
+
+## [1.5.1] - 2026-09-22
+
+### Changed
+
+- The bash tool prompt states that a backgrounded job is never polled: no `sleep`, `pgrep`, `ps`, `tail -f`, `top`, and no second call that watches it.
 
 ## [1.5.0] - 2026-09-18
 

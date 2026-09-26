@@ -334,9 +334,27 @@ const PANES: readonly PaneCase[] = [
 		make: () =>
 			new ResetUsageSelectorComponent(
 				[
-					{ label: "first account", availableCount: 0, active: false, target: { credentialId: 1 } },
-					{ label: "second account", availableCount: 2, active: false, target: { credentialId: 2 } },
-					{ label: "third account", availableCount: 3, active: false, target: { credentialId: 3 } },
+					{
+						label: "first account",
+						providerName: "OpenAI Codex",
+						availableCount: 0,
+						active: false,
+						target: { provider: "openai-codex", credentialId: 1 },
+					},
+					{
+						label: "second account",
+						providerName: "OpenAI Codex",
+						availableCount: 2,
+						active: false,
+						target: { provider: "openai-codex", credentialId: 2 },
+					},
+					{
+						label: "third account",
+						providerName: "OpenAI Codex",
+						availableCount: 3,
+						active: false,
+						target: { provider: "openai-codex", credentialId: 3 },
+					},
 				],
 				() => {},
 				() => {},

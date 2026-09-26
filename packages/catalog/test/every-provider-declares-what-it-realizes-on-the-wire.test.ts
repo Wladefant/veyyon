@@ -52,6 +52,8 @@ const NO_SERVICE_TIER_KNOB = [
 	"azure",
 	"baseten",
 	"cerebras",
+	// chatgpt-web (commit a96b3dac0) communicates with the local codex-chatgpt-web bridge daemon which exposes no wire service-tier knob.
+	"chatgpt-web",
 	"cloudflare-ai-gateway",
 	"command-code",
 	"coreweave",

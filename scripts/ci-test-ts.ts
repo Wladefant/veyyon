@@ -479,6 +479,7 @@ export const repoScriptTests = [
 	"scripts/release-cut-prepares-without-pushing.test.ts",
 	"scripts/release-native-artifacts-match-ci.test.ts",
 	"scripts/release-recut-recovery-message.test.ts",
+	"scripts/a-release-bump-moves-no-third-party-lock-entry.test.ts",
 	"scripts/session-stats/audit.test.ts",
 	// Runs in whatever rung the harness picked, and asserts that rung can execute
 	// a file a suite just wrote. Docker's tmpfs defaults could not.
