@@ -16,9 +16,12 @@
 
 ### Fixed
 
+- Fixed the Windows bash tool exporting `TEMP`, `TMP`, and `TMPDIR` with 8.3 short names such as `ADMINI~1`, so they now match the long-form `pwd`/`$PWD` after `cd "$TEMP"` ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Resolve tool policy frame and execution context separately in extension tool wrapper so ambient context reaches the approval gate and handlers when caller omits context, while policy-only frames are not handed to tools as agent tool context ([Wladefant/veyyon#111](https://github.com/Wladefant/veyyon/pull/111)).
 - Fixed hashline `SWAP.BLK` / `DEL.BLK` on the first statement of a block also replacing or deleting the statements after it ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed the `Full output: artifact://` link on large background bash and eval results pointing at a truncated copy with `[…elided…]` gaps instead of the complete output ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
+- In-process shell builtins materialize logical process-substitution file descriptors into OS descriptors so tools like `diff` read `<(...)` operands without hanging ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
+- In-process shell accesses to `/dev/stdin`, `/dev/stdout`, `/dev/stderr`, `/dev/tty`, and `/dev/fd/N` resolve against the shell's descriptors instead of opening the host process's own descriptors ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Windows shell cancellation protects the host and its discoverable ancestors, rejects stale parent-PID edges, and no longer reopens an unpinned child PID after handle termination fails; launch broker catches native termination refusals during daemon stop and recovery sweeps ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 - Tool discovery delegates on `ToolSession` resolve against the live session once initialized and safely return empty inventories without throwing during pre-session construction ([#99](https://github.com/Wladefant/veyyon/issues/99)).
 - Provider usage limit matching rejects conflicting email or account identities before falling back to project ID, preventing accounts sharing a project ID from claiming each other's limits ([#102](https://github.com/Wladefant/veyyon/issues/102)).
