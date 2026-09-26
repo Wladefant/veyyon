@@ -135,7 +135,7 @@ describe("antigravity usage provider", () => {
 		expect(report!.limits[0]!.window!.resetsAt).toBeGreaterThan(now);
 	});
 
-	it("separates Google and Anthropic backend counters", async () => {
+	it("separates Gemini and Claude+GPT backend counters", async () => {
 		const now = Date.now();
 		const resetTime = new Date(now + 4 * 3600_000).toISOString();
 		const payload = {
@@ -158,12 +158,12 @@ describe("antigravity usage provider", () => {
 			makeCtx(fakeFetch(payload)),
 		);
 		expect(report!.limits.length).toBe(2);
-		const googleLimit = report!.limits.find(limit => limit.label === "Usage (Google)");
-		const anthropicLimit = report!.limits.find(limit => limit.label === "Usage (Anthropic)");
+		const googleLimit = report!.limits.find(limit => limit.label === "Usage (Gemini)");
+		const claudeLimit = report!.limits.find(limit => limit.label === "Usage (Claude+GPT)");
 		expect(googleLimit?.amount.remainingFraction).toBe(0);
 		expect(googleLimit?.status).toBe("exhausted");
-		expect(anthropicLimit?.amount.remainingFraction).toBe(1);
-		expect(anthropicLimit?.status).toBe("ok");
+		expect(claudeLimit?.amount.remainingFraction).toBe(1);
+		expect(claudeLimit?.status).toBe("ok");
 	});
 
 	it("separates models with different windowIds in the same tier", async () => {
@@ -210,18 +210,18 @@ describe("antigravity usage provider", () => {
 		const daily = report!.limits.find(limit => limit.scope.windowId === "daily");
 		const weekly = report!.limits.find(limit => limit.scope.windowId === "weekly");
 		expect(report!.limits.length).toBe(2);
-		expect(daily?.label).toBe("Usage (Google)");
+		expect(daily?.label).toBe("Usage (Gemini)");
 		expect(daily?.window?.label).toBe("Daily");
 		expect(daily?.window?.durationMs).toBe(24 * 60 * 60 * 1000);
 		expect(daily?.amount.remainingFraction).toBe(0.8);
-		expect(weekly?.label).toBe("Usage (Google)");
+		expect(weekly?.label).toBe("Usage (Gemini)");
 		expect(weekly?.window?.label).toBe("Weekly");
 		expect(weekly?.window?.durationMs).toBe(7 * 24 * 60 * 60 * 1000);
 		expect(weekly?.amount.remainingFraction).toBe(0.4);
 	});
-	it("keeps near-reset unlabeled weekly windows separate from daily windows", async () => {
+	it("keeps near-reset unlabeled weekly windows separate from 5-hour windows", async () => {
 		const now = Date.now();
-		const dailyReset = new Date(now + 5 * 3600_000).toISOString();
+		const shortReset = new Date(now + 4 * 3600_000).toISOString();
 		const weeklyReset = new Date(now + 23 * 3600_000).toISOString();
 		const payload = {
 			models: {
@@ -229,7 +229,7 @@ describe("antigravity usage provider", () => {
 					displayName: "Gemini",
 					modelProvider: "MODEL_PROVIDER_GOOGLE",
 					quotaInfos: [
-						{ remainingFraction: 0.9, resetTime: dailyReset },
+						{ remainingFraction: 0.9, resetTime: shortReset },
 						{ remainingFraction: 0.3, resetTime: weeklyReset },
 					],
 				},
@@ -240,11 +240,11 @@ describe("antigravity usage provider", () => {
 			makeCtx(fakeFetch(payload)),
 		);
 
-		const daily = report!.limits.find(limit => limit.scope.windowId === "daily");
+		const fiveHour = report!.limits.find(limit => limit.scope.windowId === "5h");
 		const weekly = report!.limits.find(limit => limit.scope.windowId === "weekly");
 		expect(report!.limits).toHaveLength(2);
-		expect(daily?.window?.label).toBe("Daily");
-		expect(daily?.amount.remainingFraction).toBe(0.9);
+		expect(fiveHour?.window?.label).toBe("5 Hour");
+		expect(fiveHour?.amount.remainingFraction).toBe(0.9);
 		expect(weekly?.window?.label).toBe("Weekly");
 		expect(weekly?.amount.remainingFraction).toBe(0.3);
 	});
@@ -318,6 +318,95 @@ describe("antigravity usage provider", () => {
 			makeCtx(),
 		);
 		expect(report).toBeNull();
+	});
+
+	it("parses retrieveUserQuotaSummary response into 4-window structure (5h and weekly for Gemini and Claude+GPT)", async () => {
+		const payload = {
+			groups: [
+				{
+					displayName: "Gemini Models",
+					description: "Models within this group: Gemini Flash, Gemini Pro",
+					buckets: [
+						{
+							bucketId: "gemini-weekly",
+							displayName: "Weekly Limit Remaining",
+							window: "weekly",
+							resetTime: "2026-10-02T18:46:24Z",
+							description: "You have used some of your weekly limit.",
+							remainingFraction: 0.65,
+						},
+						{
+							bucketId: "gemini-5h",
+							displayName: "Five Hour Limit Remaining",
+							window: "5h",
+							resetTime: "2026-09-26T15:33:30Z",
+							description: "You have used some of your 5-hour limit.",
+							remainingFraction: 0.9,
+						},
+					],
+				},
+				{
+					displayName: "Claude and GPT models",
+					description: "Models within this group: Claude Opus, Claude Sonnet, GPT-OSS",
+					buckets: [
+						{
+							bucketId: "3p-weekly",
+							displayName: "Weekly Limit Remaining",
+							window: "weekly",
+							resetTime: "2026-10-02T20:22:04Z",
+							description: "You have hit your weekly limit.",
+							remainingFraction: 0,
+						},
+						{
+							bucketId: "3p-5h",
+							displayName: "Five Hour Limit Remaining",
+							window: "5h",
+							resetTime: "2026-09-26T15:10:35Z",
+							description: "Your weekly limit is hit, 5h does not apply.",
+							disabled: true,
+							remainingFraction: 0.1,
+						},
+					],
+				},
+			],
+		};
+
+		const report = await antigravityUsageProvider.fetchUsage!(
+			{ provider: "google-antigravity", credential: makeCredential(), signal: undefined },
+			makeCtx(fakeFetch(payload)),
+		);
+
+		expect(report).not.toBeNull();
+		expect(report!.limits).toHaveLength(4);
+
+		const geminiWeekly = report!.limits.find(l => l.id.includes(":google:") && l.scope.windowId === "weekly");
+		const gemini5h = report!.limits.find(l => l.id.includes(":google:") && l.scope.windowId === "5h");
+		const claudeWeekly = report!.limits.find(l => l.id.includes(":claude-gpt:") && l.scope.windowId === "weekly");
+		const claude5h = report!.limits.find(l => l.id.includes(":claude-gpt:") && l.scope.windowId === "5h");
+
+		expect(geminiWeekly).toBeDefined();
+		expect(geminiWeekly!.label).toBe("Usage (Gemini)");
+		expect(geminiWeekly!.window?.durationMs).toBe(7 * 24 * 60 * 60 * 1000);
+		expect(geminiWeekly!.amount.remainingFraction).toBe(0.65);
+		expect(geminiWeekly!.status).toBe("ok");
+
+		expect(gemini5h).toBeDefined();
+		expect(gemini5h!.label).toBe("Usage (Gemini)");
+		expect(gemini5h!.window?.durationMs).toBe(5 * 60 * 60 * 1000);
+		expect(gemini5h!.amount.remainingFraction).toBe(0.9);
+		expect(gemini5h!.status).toBe("ok");
+
+		expect(claudeWeekly).toBeDefined();
+		expect(claudeWeekly!.label).toBe("Usage (Claude+GPT)");
+		expect(claudeWeekly!.scope.shared).toBe(true);
+		expect(claudeWeekly!.amount.remainingFraction).toBe(0);
+		expect(claudeWeekly!.status).toBe("exhausted");
+
+		expect(claude5h).toBeDefined();
+		expect(claude5h!.label).toBe("Usage (Claude+GPT)");
+		expect(claude5h!.scope.shared).toBe(true);
+		expect(claude5h!.amount.remainingFraction).toBe(0);
+		expect(claude5h!.status).toBe("exhausted");
 	});
 });
 
@@ -394,5 +483,29 @@ describe("antigravity ranking strategy", () => {
 		// ranked unfairly.
 		expect(antigravityRankingStrategy.windowDefaults.primaryMs).toBe(24 * 60 * 60 * 1000);
 		expect(antigravityRankingStrategy.windowDefaults.secondaryMs).toBe(24 * 60 * 60 * 1000);
+	});
+
+	it("scopes ranking bottleneck by modelId (Gemini vs Claude+GPT)", () => {
+		const gemini5h = makeLimit(0.9, "Usage (Gemini)");
+		gemini5h.id = "google-antigravity:google:default:5h";
+		const claudeWeekly = makeLimit(0.0, "Usage (Claude+GPT)");
+		claudeWeekly.id = "google-antigravity:claude-gpt:default:weekly";
+		const report = {
+			provider: "google-antigravity" as const,
+			fetchedAt: Date.now(),
+			limits: [claudeWeekly, gemini5h],
+		};
+
+		// For gemini model, bottleneck is gemini5h (0.9 remaining) despite claudeWeekly being 0
+		const geminiRanking = antigravityRankingStrategy.findWindowLimits(report, { modelId: "gemini-2.5-pro" });
+		expect(geminiRanking.primary?.id).toBe("google-antigravity:google:default:5h");
+
+		// For claude model, bottleneck is claudeWeekly (0 remaining)
+		const claudeRanking = antigravityRankingStrategy.findWindowLimits(report, { modelId: "claude-3-7-sonnet" });
+		expect(claudeRanking.primary?.id).toBe("google-antigravity:claude-gpt:default:weekly");
+
+		// For gpt model, bottleneck is also claudeWeekly because Claude and GPT share ONE counter
+		const gptRanking = antigravityRankingStrategy.findWindowLimits(report, { modelId: "gpt-4o" });
+		expect(gptRanking.primary?.id).toBe("google-antigravity:claude-gpt:default:weekly");
 	});
 });
