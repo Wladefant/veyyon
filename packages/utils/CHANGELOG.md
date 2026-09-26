@@ -16,11 +16,10 @@
 ### Fixed
 
 - No shipped behavior changed; the global EPIPE routing suite pointed at `packages/tui/src/terminal.ts`, a path the terminal host left on 2026-08-30, so its three "finishes TUI persistence before exit" cases failed on a module-resolution exit rather than on ordering ([#64](https://github.com/Wladefant/veyyon/issues/64)).
-### Fixed
-
 - `@veyyon/utils/stderr-guard` loads `node:util` on the first routed console call rather than at import, keeping it off the launch card path; no user-visible change.
 - Unhandled ENOSPC errors on log, session, or artifact writes are now caught and logged as warnings rather than crashing the process, preventing session loss when a disk fills ([#73](https://github.com/Wladefant/veyyon/issues/73), [#114](https://github.com/Wladefant/veyyon/pull/114)).
 - `postmortem.quit` accepts `drainStdout: false` to skip waiting for stdout drain when terminating a process whose terminal host is already gone ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Made malformed advanced-serialization frames from a worker subprocess non-fatal: Bun surfaces an undecodable IPC frame as a process-level `uncaughtException` in the parent (oven-sh/bun#37287), which the postmortem handler treated as fatal and tore down every active session and subagent. The handler now recognizes the decode failure (`isWorkerIpcDeserializeError`) and logs-and-continues, faulting only the offending worker via its own exit/error path ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ## [1.5.5] - 2026-09-25
 

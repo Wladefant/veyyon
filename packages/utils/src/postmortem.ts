@@ -122,6 +122,36 @@ export function isEnospc(err: unknown): boolean {
 	return err.code === "ENOSPC";
 }
 
+/**
+ * Detect Bun's advanced-serialization (structured-clone) IPC decode failure.
+ *
+ * When a worker subprocess spawned with `serialization: "advanced"` sends a
+ * malformed or truncated frame, Bun raises the decode failure as a
+ * process-level `uncaughtException` in the *parent* rather than routing it to
+ * the channel's `ipc()` callback (oven-sh/bun#37287). The error is a bare
+ * `TypeError: Unable to deserialize data.` whose only own property is `message`
+ * — it carries no `code`, no `syscall`, and no `stack`. Matching all four traits
+ * keeps unrelated application `TypeError`s (which always carry a populated
+ * multi-frame stack) on the fatal path, so a genuine bug is never silently
+ * swallowed.
+ *
+ * Every advanced-serialization channel in this process is an optional worker
+ * subsystem (TTS, STT, tiny-title, mnemopi embeddings, JS eval), so one
+ * worker's bad frame must fault only that worker — via its own `onExit`/error
+ * path — never tear down the whole session. Callers log-and-continue instead of
+ * taking the fatal path. Mirrors {@link isIpcSendEpipe} for the send side
+ * (#2997, #9158).
+ */
+export function isWorkerIpcDeserializeError(err: unknown): boolean {
+	return (
+		err instanceof TypeError &&
+		err.message === "Unable to deserialize data." &&
+		!err.stack &&
+		!("code" in err) &&
+		!("syscall" in err)
+	);
+}
+
 // Well-known key marking an error as an *expected* teardown artifact (e.g. a
 // browser run-scope abort at normal run end). `Symbol.for` so the marker
 // survives duplicate module instances across bundles/realms.
@@ -225,6 +255,17 @@ if (isMainThread) {
 			// transient; the write's caller handles the local failure. #73.
 			if (isEnospc(err)) {
 				logger.warn("Disk full (ENOSPC) — degrading gracefully instead of crashing", { err });
+				return;
+			}
+			// A malformed advanced-serialization frame from a worker subprocess
+			// surfaces here as a process-level uncaughtException (oven-sh/bun#37287)
+			// rather than in the channel's ipc() callback. It is a worker-local
+			// fault on the subprocess-isolation boundary, so contain it to that
+			// worker: log and continue, letting the owning client detect the dead
+			// worker via its own onExit/error path instead of exiting the whole
+			// session. Mirrors the ipc-send EPIPE containment below (#9158, #2997).
+			if (isWorkerIpcDeserializeError(err)) {
+				logger.warn("Ignoring malformed worker IPC frame; optional subsystem will self-recover", { err });
 				return;
 			}
 			// fd 2 may be redirected to the log while a TUI owns the terminal
