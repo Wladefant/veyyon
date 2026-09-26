@@ -17,7 +17,8 @@
  * until it has one. The edit codec's is `a-session-file-stores-an-edit-snapshot-once`, the search
  * codec's `a-session-file-stores-a-search-card-once`, the eval codec's
  * `a-session-file-stores-an-eval-cell-output-once` and the job codec's
- * `a-session-file-stores-a-job-result-once`.
+ * `a-session-file-stores-a-job-result-once`. A tool's results are stored by one codec: registering
+ * the shipped set again is a no-op, and a second codec for a tool that has one is refused.
  *
  * DOES NOT CATCH: a display shape the read tool starts producing that no row below exercises, which
  * still round-trips exactly (the codec writes whole what it cannot rebuild) but may stop saving
@@ -33,7 +34,9 @@ import { ReadTool, type ReadToolDetails } from "@veyyon/coding-agent/tools/fs/re
 import type { ReadDisplayContent } from "@veyyon/coding-agent/tools/fs/read-display";
 import { readToolView } from "@veyyon/coding-agent/tools/fs/read-view";
 import { BUILTIN_RESULT_CODECS } from "@veyyon/coding-agent/tools/index";
+import type { ToolResultCodec } from "@veyyon/kernel/registry/tool-result-codec";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { registerToolResultCodecs } from "@veyyon/kernel/session/tool-result-codecs";
 import { setAgentDir, TempDir } from "@veyyon/utils";
 import { captureDirOverrides, type DirOverridesSnapshot, restoreDirOverrides } from "@veyyon/utils/dirs";
 import { makeToolSession } from "../helpers/tool-session";
@@ -198,6 +201,14 @@ describe("a session file stores a read card once", () => {
 
 	it("is one of the five codecs the package ships, each with a suite, so a new one fails here until it has one", () => {
 		expect(BUILTIN_RESULT_CODECS.map(codec => codec.toolName)).toEqual(["read", "search", "eval", "job", "edit"]);
+	});
+
+	it("stores each tool's results by one codec, refusing a second codec for a tool that has one", () => {
+		registerToolResultCodecs(BUILTIN_RESULT_CODECS);
+		for (const codec of BUILTIN_RESULT_CODECS) {
+			const rival: ToolResultCodec = { toolName: codec.toolName, slim: details => details, restore() {} };
+			expect(() => registerToolResultCodecs([rival])).toThrow(`tool "${codec.toolName}" already has a result codec`);
+		}
 	});
 
 	it("writes no card text for any shape a rebuild reproduces, and loads every result as the tool returned it", async () => {
