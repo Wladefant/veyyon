@@ -406,7 +406,9 @@ Cumulative behavior:
 
 - Includes prior compaction details only when prior entry is pi-generated (`fromExtension !== true`).
 - In split turns, includes turn-prefix file ops too.
-- `details.readFiles` excludes files also modified; `details.modifiedFiles` contains the rest (persisted shape is unchanged).
+- The read list excludes files also modified; the modified list holds the rest.
+- A compaction records only the paths its lists gained over the compaction it built on: `details.readFilesAdded` and `details.modifiedFilesAdded`, with `details.base` set to that compaction's id. The lists are the union of the records along the `base` chain.
+- The chain ends at a record with no `base`, at a `base` that names no earlier compaction on the path or loops, and at a record an earlier version wrote, which holds `details.readFiles` and `details.modifiedFiles` in full. An extension's compaction records no lists, and the next compaction starts them over.
 
 The file list is a grouped, prefix-folded directory tree (find-tool shape) with a per-file access marker, `(Read)` for read-only files, `(Write)` for modified files never read, `(RW)` for modified files also present in the cumulative read set. Capped at 20 files with an `[…N files elided…]` line. Compaction and explicit handoff append it as a `<files>` tag (via `upsertFileOperations`).
 

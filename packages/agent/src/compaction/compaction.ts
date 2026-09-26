@@ -121,40 +121,104 @@ import {
 // File Operation Tracking
 // ============================================================================
 
-/** Details stored in CompactionEntry.details for file tracking */
+/**
+ * The file lists a compaction records. The read and modified lists grow for the life of a session,
+ * and a compaction that stored both in full repeated every path the one before it held, so a long
+ * session wrote the same paths hundreds of times over. A compaction records only the paths its
+ * lists gained over the compaction it built on, and names that compaction as `base`: the lists are
+ * the union along the `base` chain. A compaction written before `base` existed holds `readFiles`
+ * and `modifiedFiles` in full, and the chain ends there.
+ */
 export interface CompactionDetails {
-	readFiles: string[];
-	modifiedFiles: string[];
+	/** Id of the compaction whose lists these extend; absent when the lists start here. */
+	base?: string;
+	/** Read-only paths the base's lists lack. */
+	readFilesAdded: string[];
+	/** Modified paths the base's lists lack. */
+	modifiedFilesAdded: string[];
+}
+
+/** The file lists a compaction builds on, and the id of the compaction that records them. */
+export interface CompactionFileListBase {
+	id: string;
+	/** Every path the chain records as read, including paths it later records as modified. */
+	read: ReadonlySet<string>;
+	modified: ReadonlySet<string>;
+}
+
+function addPaths(target: Set<string>, paths: unknown, normalize?: (path: string) => string): void {
+	if (!Array.isArray(paths)) return;
+	for (const path of paths) {
+		if (typeof path === "string") target.add(normalize ? normalize(path) : path);
+	}
 }
 
 /**
- * Extract file operations from messages and previous compaction entries.
+ * The file lists the compaction at `index` records: its own paths and, following `base`, the paths
+ * of every compaction it builds on. Undefined when it records none, because an extension wrote it
+ * or it holds no lists. A `base` that names no earlier compaction on the path, or that loops, ends
+ * the chain.
  */
-function extractFileOperations(
-	messages: AgentMessage[],
-	entries: SessionEntry[],
-	prevCompactionIndex: number,
-): FileOperations {
-	const fileOps = createFileOps();
-
-	// Collect from previous compaction's details (if pi-generated)
-	if (prevCompactionIndex >= 0) {
-		const prevCompaction = entries[prevCompactionIndex] as CompactionEntry;
-		if (!prevCompaction.fromExtension && prevCompaction.details) {
-			const details = prevCompaction.details as CompactionDetails;
-			if (Array.isArray(details.readFiles)) {
-				for (const f of details.readFiles) fileOps.read.add(stripReadSelector(f));
-			}
-			if (Array.isArray(details.modifiedFiles)) {
-				for (const f of details.modifiedFiles) fileOps.edited.add(f);
+function resolveCompactionFileLists(pathEntries: SessionEntry[], index: number): CompactionFileListBase | undefined {
+	const head = pathEntries[index] as CompactionEntry;
+	const read = new Set<string>();
+	const modified = new Set<string>();
+	const visited = new Set<string>();
+	let earlier: Map<string, CompactionEntry> | undefined;
+	let recorded = false;
+	let entry: CompactionEntry | undefined = head;
+	while (entry && !visited.has(entry.id)) {
+		visited.add(entry.id);
+		if (entry.fromExtension || typeof entry.details !== "object" || entry.details === null) break;
+		const details = entry.details as Record<string, unknown>;
+		if (Array.isArray(details.readFiles) || Array.isArray(details.modifiedFiles)) {
+			addPaths(read, details.readFiles, stripReadSelector);
+			addPaths(modified, details.modifiedFiles);
+			recorded = true;
+			break;
+		}
+		if (!Array.isArray(details.readFilesAdded) && !Array.isArray(details.modifiedFilesAdded)) break;
+		addPaths(read, details.readFilesAdded, stripReadSelector);
+		addPaths(modified, details.modifiedFilesAdded);
+		recorded = true;
+		if (typeof details.base !== "string") break;
+		if (!earlier) {
+			earlier = new Map();
+			for (let i = 0; i < index; i++) {
+				const candidate = pathEntries[i];
+				if (candidate.type === "compaction") earlier.set(candidate.id, candidate as CompactionEntry);
 			}
 		}
+		entry = earlier.get(details.base);
 	}
+	return recorded ? { id: head.id, read, modified } : undefined;
+}
 
-	// Extract from tool calls in messages
+/** File operations from the base's lists and the tool calls in `messages`. */
+function extractFileOperations(messages: AgentMessage[], base: CompactionFileListBase | undefined): FileOperations {
+	const fileOps = createFileOps();
+	if (base) {
+		for (const path of base.read) {
+			if (!base.modified.has(path)) fileOps.read.add(path);
+		}
+		for (const path of base.modified) fileOps.edited.add(path);
+	}
 	extractFileOpsFromMessages(messages, fileOps);
-
 	return fileOps;
+}
+
+/** The details a compaction stores for these lists: the paths they add to `base`, and its id. */
+function recordFileLists(
+	readFiles: string[],
+	modifiedFiles: string[],
+	base: CompactionFileListBase | undefined,
+): CompactionDetails {
+	if (!base) return { readFilesAdded: readFiles, modifiedFilesAdded: modifiedFiles };
+	return {
+		base: base.id,
+		readFilesAdded: readFiles.filter(path => !base.read.has(path)),
+		modifiedFilesAdded: modifiedFiles.filter(path => !base.modified.has(path)),
+	};
 }
 
 // ============================================================================
@@ -1551,6 +1615,11 @@ export interface CompactionPreparation {
 	tailElisions?: TailElision[];
 	/** File operations extracted from messagesToSummarize */
 	fileOps: FileOperations;
+	/**
+	 * The file lists `fileOps` starts from and the compaction that records them; `compact` stores
+	 * only the paths its lists add to these. Absent when no earlier compaction records any.
+	 */
+	fileListBase?: CompactionFileListBase;
 	/** Compaction settions from settings.jsonl	*/
 	settings: CompactionSettings;
 }
@@ -2111,8 +2180,10 @@ export function prepareCompaction(
 		previousPreserveData = prevCompaction.preserveData;
 	}
 
-	// Extract file operations from messages and previous compaction
-	const fileOps = extractFileOperations(messagesToSummarize, pathEntries, prevCompactionIndex);
+	// Extract file operations from messages and the lists the previous compaction records
+	const fileListBase =
+		prevCompactionIndex >= 0 ? resolveCompactionFileLists(pathEntries, prevCompactionIndex) : undefined;
+	const fileOps = extractFileOperations(messagesToSummarize, fileListBase);
 
 	// Also extract file ops from turn prefix if splitting
 	if (cutPoint.isSplitTurn) {
@@ -2149,6 +2220,7 @@ export function prepareCompaction(
 		previousPreserveData,
 		remoteChain,
 		fileOps,
+		fileListBase,
 		settings,
 	};
 }
@@ -2183,6 +2255,7 @@ export async function compact(
 		previousSummary,
 		previousPreserveData,
 		fileOps,
+		fileListBase,
 		settings,
 	} = preparation;
 
@@ -2304,7 +2377,7 @@ export async function compact(
 		summary,
 		firstKeptEntryId,
 		tokensBefore,
-		details: { readFiles, modifiedFiles } as CompactionDetails,
+		details: recordFileLists(readFiles, modifiedFiles, fileListBase),
 		preserveData: finalPreserveData,
 		summaryStages,
 	};
