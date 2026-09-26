@@ -50,9 +50,11 @@ import {
 	DEFAULT_MAX_LINES,
 	noTruncResult,
 	type TruncationResult,
+	type TruncationSummary,
 	truncateHead,
 	truncateHeadBytes,
 	truncateLine,
+	truncationSummary,
 } from "../../session/streaming-output";
 // Each from its owner rather than the `../tui` barrel, which re-exports every component in the
 // directory. 54 test files import this module.
@@ -1050,7 +1052,7 @@ export type ReadToolInput = typeof readSchema.infer;
 
 export interface ReadToolDetails {
 	kind?: "file" | "url";
-	truncation?: TruncationResult;
+	truncation?: TruncationSummary;
 	isDirectory?: boolean;
 	resolvedPath?: string;
 	suffixResolution?: { from: string; to: string };
@@ -1761,7 +1763,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				formatText,
 			);
 
-			details.truncation = truncation;
+			details.truncation = truncationSummary(truncation);
 			truncationInfo = {
 				result: truncation,
 				options: { direction: "head", startLine: startLineDisplay, totalFileLines: totalLines },
@@ -1775,7 +1777,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			} else {
 				outputText = formatLineEntries(buildLineEntries(endLineDisplay), startLineDisplay);
 			}
-			details.truncation = truncation;
+			details.truncation = truncationSummary(truncation);
 			truncationInfo = {
 				result: truncation,
 				options: { direction: "head", startLine: startLineDisplay, totalFileLines: totalLines },
@@ -2146,7 +2148,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const resultBuilder = toolResult<ReadToolDetails>(directoryDetails).text(truncation.content);
 		resultBuilder.sourcePath(archivePath).limits({ resultLimit: limitMeta.resultLimit?.reached });
 		if (truncation.truncated) {
-			directoryDetails.truncation = truncation;
+			directoryDetails.truncation = truncationSummary(truncation);
 			resultBuilder.truncation(truncation, { direction: "head" });
 		}
 		return resultBuilder.done();
@@ -2322,7 +2324,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				maxBytes: inlineBudgetFor(this.session),
 				maxLines: Number.MAX_SAFE_INTEGER,
 			});
-			details.truncation = truncation.truncated ? truncation : undefined;
+			details.truncation = truncation.truncated ? truncationSummary(truncation) : undefined;
 			const resultBuilder = toolResult<ReadToolDetails>(details)
 				.text(truncation.content)
 				.sourcePath(resolvedSqlitePath.absolutePath)
@@ -3110,7 +3112,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 							shouldAddHashLines,
 							formatText,
 						);
-						details = { truncation };
+						details = { truncation: truncationSummary(truncation) };
 						sourcePath = absolutePath;
 						truncationInfo = {
 							result: truncation,
@@ -3123,7 +3125,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 						};
 					} else if (truncation.truncated) {
 						outputText = formatBracketAwareText() ?? formatText(truncation.content, startLineDisplay);
-						details = { truncation };
+						details = { truncation: truncationSummary(truncation) };
 						sourcePath = absolutePath;
 						truncationInfo = {
 							result: truncation,
@@ -3486,7 +3488,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			outputText += `\n\n[${this.#formatArtifactWorkflowNotice(artifact, artifactUrl)}]`;
 		}
 		if (displayContent) details.displayContent = displayContent;
-		if (truncationInfo) details.truncation = truncationInfo.result;
+		if (truncationInfo) details.truncation = truncationSummary(truncationInfo.result);
 		const resultBuilder = toolResult<ReadToolDetails>(details)
 			.text(outputText)
 			.sourcePath(artifact.path)
@@ -3752,7 +3754,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		}
 		if (truncation.truncated) {
 			resultBuilder.truncation(truncation, { direction: "head" });
-			details.truncation = truncation;
+			details.truncation = truncationSummary(truncation);
 		}
 
 		return resultBuilder.done();

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- A truncated `read`, `search` or `run_experiment` result records only its truncation counts in the session file, not a second copy of the kept text, so new results take less disk and memory and a resume parses less.
+
 ### Fixed
 
 - The CLI imports the terminal output guard when a worker thread starts rather than at startup, keeping it off the static boot graph; no user-visible change.

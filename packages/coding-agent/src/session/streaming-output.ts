@@ -126,6 +126,21 @@ export interface TruncationResult {
 	firstLineExceedsLimit?: boolean;
 }
 
+/**
+ * A truncation as a tool result's `details` records it: the counts and the bound
+ * that cut, without the kept text. The result's content already holds that text,
+ * formatted for the model, and a renderer reads only the counts, so a copy in
+ * `details` is persisted with every truncated result and read by nothing.
+ * `content?: never` makes assigning a whole {@link TruncationResult} a type error.
+ */
+export type TruncationSummary = Omit<TruncationResult, "content"> & { content?: never };
+
+/** The {@link TruncationSummary} of a truncation, for a result's `details`. */
+export function truncationSummary(truncation: TruncationResult): TruncationSummary {
+	const { content: _content, ...summary } = truncation;
+	return summary;
+}
+
 export interface TruncationOptions {
 	/** Maximum number of lines (default: 3000) */
 	maxLines?: number;

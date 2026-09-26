@@ -961,7 +961,7 @@ describe("run_experiment", () => {
 	it("names the full output file only when the card is expanded and the output was truncated", () => {
 		const details = run({
 			tailOutput: "tail",
-			truncation: { content: "tail", truncated: true, totalLines: 900, totalBytes: 90_000 },
+			truncation: { truncated: true, totalLines: 900, totalBytes: 90_000 },
 			fullOutputPath: "/repo/.autoresearch/run-1/full.log",
 		});
 		const collapsed = tool().view?.renderResult?.({ content: [], details }, COLLAPSED);

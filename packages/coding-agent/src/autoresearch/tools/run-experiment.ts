@@ -6,7 +6,13 @@ import type { ViewSpan } from "@veyyon/view";
 import { type } from "arktype";
 import { executeBash } from "../../exec/bash-executor";
 import type { ToolDefinition } from "../../extensibility/extensions";
-import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TailBuffer, truncateTail } from "../../session/streaming-output";
+import {
+	DEFAULT_MAX_BYTES,
+	DEFAULT_MAX_LINES,
+	TailBuffer,
+	truncateTail,
+	truncationSummary,
+} from "../../session/streaming-output";
 // `shortenPath` is defined here and nowhere else: it collapses the real home directory, which the
 // browser-side owner in `@veyyon/tool-render` cannot do. The module binds no runtime value from
 // `@veyyon/tui`, so taking a string helper from it leaves this tool host-agnostic.
@@ -219,7 +225,7 @@ export function createRunExperimentTool(
 				metricUnit: session.metricUnit,
 				preRunDirtyPaths,
 				abandonedPriorRun,
-				truncation: llmTruncation.truncated ? llmTruncation : undefined,
+				truncation: llmTruncation.truncated ? truncationSummary(llmTruncation) : undefined,
 				fullOutputPath: execution.logPath,
 			};
 
@@ -348,7 +354,7 @@ async function executeProcess(opts: {
 			runDirectory: path.dirname(opts.logPath),
 			fullOutputPath: opts.logPath,
 			tailOutput: tail.content,
-			truncation: tail.truncated ? tail : undefined,
+			truncation: tail.truncated ? truncationSummary(tail) : undefined,
 		};
 	};
 
