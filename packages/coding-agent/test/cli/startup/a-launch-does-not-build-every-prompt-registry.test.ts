@@ -139,11 +139,17 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * it loads, before any read runs, so the codec cannot wait for the read tool; both import only
  * type-level modules and `utils/type-guards`, already here.
  *
+ * 1552 to 1554: `edit/result-codec.ts`, the edit codec `tools/index.ts` registers beside the
+ * domains' codecs, which rebuilds an edit's post-edit text from its pre-edit text and diff as a
+ * resumed session loads, and `edit/numbered-diff-row.ts`, the numbered diff row format split out of
+ * `edit/diff.ts` so the diff writer and that rebuild read one definition. The codec imports only
+ * type-level modules, `utils/type-guards` and the row module, which imports nothing.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1552;
+const LAUNCH_REACH_CEILING = 1554;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
