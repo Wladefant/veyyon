@@ -190,6 +190,12 @@ class LeakedThinkingProjector {
 		this.#out.push({ type: "toolcall_delta", contentIndex: entry.index, delta, partial: this.#partial });
 	}
 
+	/**
+	 * Forward a tool call's end. The entry outlives it: Cursor ends an exec-channel block when the
+	 * tool starts and again when the server reports it completed, and a second end that found no
+	 * entry was projected as a new block, so every such call was stored twice and the copy never
+	 * received a result.
+	 */
 	toolEnd(srcIndex: number, toolCall: ToolCall): void {
 		const entry = this.#toolBlocks.get(srcIndex);
 		if (entry) {
@@ -200,7 +206,6 @@ class LeakedThinkingProjector {
 				toolCall: entry.block,
 				partial: this.#partial,
 			});
-			this.#toolBlocks.delete(srcIndex);
 			return;
 		}
 		// `end` without a matching `start` — release held text, then forward whole.
@@ -210,6 +215,7 @@ class LeakedThinkingProjector {
 		const block = cloneToolCall(toolCall);
 		this.#partial.content.push(block);
 		const index = this.#partial.content.length - 1;
+		this.#toolBlocks.set(srcIndex, { index, block });
 		this.#out.push({ type: "toolcall_start", contentIndex: index, partial: this.#partial });
 		this.#out.push({ type: "toolcall_end", contentIndex: index, toolCall: block, partial: this.#partial });
 	}

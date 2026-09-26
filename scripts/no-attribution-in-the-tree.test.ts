@@ -26,7 +26,7 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { promisify } from "node:util";
-import { existingOnly } from "./check-doc-links";
+import { existingOnly } from "./workspace-layout";
 
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = path.resolve(import.meta.dirname, "..");
@@ -50,9 +50,9 @@ async function trackedFiles(): Promise<string[]> {
  * address the reader deliberately; the product's own prompts tell a model about "the user" and must.
  */
 const EXEMPT_DIRS = [
-	"crates/vendor/",
+	"natives/vendor/",
 	"docs/handbook/book/",
-	"website/",
+	"apps/site/",
 	"packages/coding-agent/src/export/html/vendor/",
 	"packages/catalog/src/discovery/cursor-gen/",
 ];
@@ -504,9 +504,9 @@ describe("no comment or internal doc attributes a change to a person", () => {
 	 */
 	it("pins every exemption, so scope cannot be widened quietly", () => {
 		expect(EXEMPT_DIRS).toEqual([
-			"crates/vendor/",
+			"natives/vendor/",
 			"docs/handbook/book/",
-			"website/",
+			"apps/site/",
 			"packages/coding-agent/src/export/html/vendor/",
 			"packages/catalog/src/discovery/cursor-gen/",
 		]);

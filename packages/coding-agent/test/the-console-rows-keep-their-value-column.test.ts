@@ -15,10 +15,13 @@
  */
 import { describe, expect, it } from "bun:test";
 import { FIELD_LABELS, LoopConsoleModel } from "@veyyon/coding-agent/autoresearch/console";
-import { LAUNCHER_WIDTH, LauncherComponent } from "@veyyon/coding-agent/autoresearch/launcher";
-import { AutoresearchScreenComponent } from "@veyyon/coding-agent/autoresearch/screen";
 import { createSessionRuntime } from "@veyyon/coding-agent/autoresearch/state";
 import { MAX_ATTEMPTS, MAX_BREADTH, MIN_ATTEMPTS, MIN_SWARM_BREADTH } from "@veyyon/coding-agent/autoresearch/swarm";
+import {
+	LAUNCHER_WIDTH,
+	LauncherComponent,
+} from "@veyyon/coding-agent/modes/terminal/components/dialogs/autoresearch-launcher";
+import { AutoresearchScreenComponent } from "@veyyon/coding-agent/modes/terminal/components/dialogs/autoresearch-screen";
 import { stripAnsi } from "@veyyon/utils";
 import { driveConsole, NO_SESSION, recordingHost } from "./helpers/autoswarm-console";
 import { useTruecolorTheme } from "./helpers/theme-assertions";

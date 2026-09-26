@@ -1,17 +1,21 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { visibleWidth } from "@veyyon/tui";
-import { stripAnsi } from "@veyyon/utils";
-import { type AccountManagerCallbacks, AccountManagerComponent } from "../src/modes/components/account-manager";
-import { AskDialogComponent } from "../src/modes/components/ask-dialog";
-import { HookSelectorComponent } from "../src/modes/components/hook-selector";
-import { SessionSelectorComponent } from "../src/modes/components/session-selector";
-import { initTheme } from "../src/modes/theme/theme";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
+import type { SessionInfo, SessionStatus } from "@veyyon/kernel/session/session-listing";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { stripAnsi, TempDir } from "@veyyon/utils";
+import { visibleWidth } from "@veyyon/utils/width";
+import {
+	type AccountManagerCallbacks,
+	AccountManagerComponent,
+} from "../src/modes/terminal/components/account/account-manager";
+import { AskDialogComponent } from "../src/modes/terminal/components/dialogs/ask-dialog";
+import { HookSelectorComponent } from "../src/modes/terminal/components/selectors/hook-selector";
+import { SessionSelectorComponent } from "../src/modes/terminal/components/selectors/session-selector";
 import { type AccountInventory, type AccountRow, loadAccountInventory } from "../src/session/account-inventory";
-import { AuthStorage } from "../src/session/auth-storage";
-import type { SessionInfo, SessionStatus } from "../src/session/session-listing";
-import { SessionManager } from "../src/session/session-manager";
+import { initTheme } from "../src/theme/theme";
 
 function makeDummySession(overrides: Partial<SessionInfo> = {}): SessionInfo {
 	return {
@@ -501,13 +505,22 @@ describe("AccountManager UX audit", () => {
 });
 
 describe("On-disk SessionManager and AuthStorage UX audit", () => {
-	const testWorkspace = path.join(import.meta.dirname, `.tmp-audit-workspace-${Math.random().toString(36).slice(2)}`);
-	const sessionDir = path.join(testWorkspace, "sessions");
-	const otherProjectDir = path.join(testWorkspace, "other-project");
-	const otherSessionDir = path.join(testWorkspace, "other-sessions");
-	const agentDir = path.join(testWorkspace, "agent");
+	let tempDir: TempDir;
+	let testWorkspace: string;
+	let sessionDir: string;
+	let otherProjectDir: string;
+	let otherSessionDir: string;
+	let agentDir: string;
+	const sessions: SessionManager[] = [];
+	let authStore: SqliteAuthCredentialStore | undefined;
 
 	beforeAll(async () => {
+		tempDir = await TempDir.create("session-account-audit-");
+		testWorkspace = tempDir.path();
+		sessionDir = tempDir.join("sessions");
+		otherProjectDir = tempDir.join("other-project");
+		otherSessionDir = tempDir.join("other-sessions");
+		agentDir = tempDir.join("agent");
 		await fs.mkdir(sessionDir, { recursive: true });
 		await fs.mkdir(otherProjectDir, { recursive: true });
 		await fs.mkdir(otherSessionDir, { recursive: true });
@@ -515,12 +528,15 @@ describe("On-disk SessionManager and AuthStorage UX audit", () => {
 	});
 
 	afterAll(async () => {
-		await fs.rm(testWorkspace, { recursive: true, force: true });
+		await Promise.all(sessions.map(session => session.close()));
+		authStore?.close();
+		await tempDir.remove();
 	});
 
 	it("handles corrupted/truncated jsonl, cross-cwd sessions, and missing files gracefully in SessionSelector", async () => {
 		// 1. Create a valid session in sessionDir
 		const sm1 = SessionManager.create(testWorkspace, sessionDir);
+		sessions.push(sm1);
 		sm1.appendMessage({
 			role: "user",
 			content: [{ type: "text", text: "How do I build a compiler?" }],
@@ -546,6 +562,7 @@ describe("On-disk SessionManager and AuthStorage UX audit", () => {
 
 		// 2. Create a session from another cwd in otherSessionDir
 		const sm2 = SessionManager.create(otherProjectDir, otherSessionDir);
+		sessions.push(sm2);
 		sm2.appendMessage({
 			role: "user",
 			content: [{ type: "text", text: "Other project question about Rust" }],
@@ -593,7 +610,8 @@ describe("On-disk SessionManager and AuthStorage UX audit", () => {
 
 	it("seeds real AuthStorage with API-key and OAuth rows and renders via loadAccountInventory", async () => {
 		const authDbPath = path.join(agentDir, "auth.db");
-		const authStorage = await AuthStorage.create(authDbPath);
+		authStore = await SqliteAuthCredentialStore.open(authDbPath);
+		const authStorage = new AuthStorage(authStore);
 
 		// Seed API key row for openai
 		await authStorage.set("openai", {

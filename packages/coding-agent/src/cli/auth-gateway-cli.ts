@@ -92,6 +92,10 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 
 	// Build a broker-backed AuthStorage — same pattern as discoverAuthStorage()
 	// in sdk.ts. The gateway never touches local SQLite.
+	// The gateway selects an account per request through `getApiKey`, so it is held to the same
+	// `accounts.loadBalancing` the interactive session is. The setting is read from the operator's
+	// config here; without this init the resolver below sees no settings and answers the default.
+	await Settings.init();
 	const client = createBrokerClient(brokerConfig);
 	const initialSnapshot = await fetchBrokerSnapshot(client);
 	const store = new RemoteAuthCredentialStore({ client, initialSnapshot });
@@ -490,7 +494,7 @@ async function runCheck(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 				list.push(row);
 				grouped.set(row.provider, list);
 			}
-			const providers = [...grouped.keys()].sort();
+			const providers = Array.from(grouped.keys()).sort();
 			process.stdout.write(`broker: ${brokerConfig.url}${flags.strict ? chalk.dim(" [strict]") : ""}\n`);
 			for (const provider of providers) {
 				const rows = grouped.get(provider) ?? [];

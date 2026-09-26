@@ -1,9 +1,9 @@
+import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import type { CollabGuestContext } from "../collab/guest";
 import type { CollabHostContext } from "../collab/host";
 import type { Settings } from "../config/settings";
-import type { InteractiveModeContext } from "../modes/types";
+import type { InteractiveModeContext } from "../modes/terminal/types";
 import type { AgentSession } from "../session/agent-session";
-import type { SessionManager } from "../session/session-manager";
 
 /** Declarative subcommand definition for commands like /mcp. */
 export interface SubcommandDef {
@@ -185,6 +185,7 @@ export type TuiSlashCommandHostContext = CollabHostContext &
 		| "showResetUsageSelector"
 		| "showSessionSelector"
 		| "showSettingsSelector"
+		| "showReport"
 		| "showStatus"
 		| "showSubcommandPicker"
 		| "showThinkingSelector"

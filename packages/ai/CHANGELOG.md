@@ -2,6 +2,104 @@
 
 ## [Unreleased]
 
+### Changed
+
+- The Anthropic and OpenAI-compatible providers split their stream loops, message converters and finalization into per-step helpers; no user-visible change.
+- The OpenAI-compatible stream reads a tool call's prior object arguments through the shared `isRecord` guard instead of an inline check; no user-visible change.
+
+### Fixed
+
+- A Cursor turn whose remote agent stops making progress now ends with "Cursor made no progress for Ns" at the 30-minute ceiling instead of hanging indefinitely, because Cursor's ten-second server heartbeat no longer counts as progress.
+- A Cursor turn held by a local tool that never returns now ends when its failure or an abort arrives instead of waiting on the tool forever.
+- Fixed every Cursor exec-channel tool call being stored twice in the assistant message, which left an unanswered copy of each call that session resume reported as pending.
+- A blank user or developer message after a tool result no longer sends Mistral two consecutive assistant turns, which it rejects.
+
+## [1.5.4] - 2026-09-24
+
+### Fixed
+
+- Fixed Cursor running a tool twice and leaving an unanswered `<id>_2` tool call when the server re-sent an exec request for a call it already dispatched; the repeat is now answered from the first run's result.
+- Fixed EventStream leaking waiting resolvers and hanging when async iteration is terminated early or aborted.
+- Fixed GitLab Duo Workflow socket leaking its abort signal listener when the connection settles.
+- Finalized all prepared statements upon closing the SQLite auth credential store, preventing handle leaks.
+- Fixed the credential store failing to open with `SQLITE_READONLY_DIRECTORY` in a read-only credential directory after a clean close; the store keeps its WAL files on close.
+- Converted idle iterator grace timeout race to Promise.withResolvers and typed Google tool call arguments cleanly; no user-visible change.
+
+## [1.5.3] - 2026-09-22
+
+### Fixed
+
+- A dead `cursor-agent` connection is reported within one probe interval plus one probe timeout of the last server byte (40s by default), instead of up to two intervals plus the timeout, where a short silence ceiling could fire first and misreport it as server silence.
+
+## [1.5.2] - 2026-09-22
+
+### Added
+
+- `AuthStorage.listResetCredits` and `AuthStorage.redeemResetCredit` cover Anthropic Claude OAuth accounts as well as OpenAI Codex, and each `ResetCreditTarget` states its `provider`.
+
+## [1.5.1] - 2026-09-22
+
+### Fixed
+
+- A quiet `cursor-agent` turn is no longer aborted with "Provider stream stalled while waiting for the next event": the stream is governed by HTTP/2 PING liveness, with a 30-minute ceiling on unbroken server silence and `VEYYON_STREAM_IDLE_TIMEOUT_MS` still honored as that ceiling.
+- The Anthropic OAuth user-agent reports `agent-sdk/0.3.280`, the Agent SDK release published beside Claude Code 2.1.280.
+- The Cursor liveness probe interval is clamped through the shared `clampLow` helper; no user-visible change.
+
+## [1.5.0] - 2026-09-18
+
+### Breaking Changes
+
+- Provider-specific test override setters are replaced by `setProviderModuleOverrideForTest(api, module)`.
+
+### Changed
+
+- Command Code API-key validation calls the provider's default model, `claude-sonnet-4-6`.
+- The NVIDIA, Xiaomi, Xiaomi Token Plan and Alibaba Coding Plan logins take the pasted key through the same `promptApiKey` as every `createApiKeyLogin` provider: the key is trimmed, an empty paste is `ApiKeyRequiredError`, an abort during the paste is `LoginCancelledError`, and a host without `onPrompt` is `OnPromptRequiredError`; no behavior change.
+- API-key and OAuth credential ranking score usage windows and block a credential at its scoped limit through one `#rankUsageResults`, an OAuth refresh reads its candidate row before and after the lease through one `readRefreshCandidate`, and the plan-filter and usage-limit rejection runs before and after a refresh through one `usageRejects`; no behavior change.
+- Tool-argument validation runs its seven pre-validation normalizations through one ordered pass table, before the first check and after every issue-driven coercion, and the two schema-agnostic value walks share one copy-on-write array step; no behavior change.
+- GitLab Duo Workflow shares fresh-workflow restart handling without changing retry limits, request ordering, or surfaced errors.
+- Streaming provider initialization shares assistant-message construction without changing emitted metadata or mutable-state isolation.
+- Provider error projection, Google request options and Hermes/Qwen3 tool-call rendering share implementations without changing wire formats.
+- Removed duplicate OpenAI Responses moderation type declarations without changing exported types or wire formats.
+- OpenAI Responses computer actions share field declarations while preserving independent public namespace augmentation.
+- Response input and output items share field declarations while retaining namespace-specific nested types and augmentation.
+- GitLab Duo and GitLab Duo Workflow share token-response decoding and PKCE types without changing login or refresh behavior.
+- API-key validators share error-body handling without changing request formats, error messages or deadlines.
+- Lazy provider streams share import-promise caching while preserving provider loading and timeout behavior.
+- API-key logins share credential prompting and validation with unchanged provider messages and cancellation behavior.
+- Credential refresh and usage requests share cancellation handling while preserving abort reasons and independent completion of shared work.
+- The GLM, Gemini, Gemma and Qwen3 in-band scanners share one outside-text step (`scanOutsideText`) and Hermes and Qwen3 share one closed-body completion (`emitClosedToolCall`), with unchanged events at every chunking of a stream.
+- Provider module declarations share one typed stream signature with unchanged runtime output.
+- Hermes and Qwen tool calls use one JSON decoder with unchanged repair and partial-stream recovery.
+- `Tool` extends `ToolSpec` from `@veyyon/tool`, which owns the schema-independent declaration and the `ToolExample` kinds; `@veyyon/ai` exports every name it exported before, so no caller changes.
+- The message envelope, content blocks, `AssistantMessageEvent`, `StopDetails`, the turn and tool-call study records and the streaming partial-JSON symbol are defined in `@veyyon/model`; `@veyyon/ai` re-exports every name it exported before, so no caller changes.
+- A source comment in the OAuth callback page names the shared sun source at `apps/site/sun-field.js`; behavior is unchanged.
+- Typed tuple copies use spreads rather than `.concat()`, which a `as const` array does not define. No user-visible behavior changes.
+- A source-path comment in `register-builtins.ts` names the benchmark module it cites at its new path under `tests/evals/`; behavior is unchanged.
+- A source-path comment in `message-text.ts` names the coding-agent module its caller moved to; behavior is unchanged.
+- `CONTEXTUAL_USER_PREFIXES` is exported from the codex compaction module so the retained-window rule is asserted against the real list rather than a copy of it.
+- A source-path comment and the barrel-shortcut suite name the Perplexity search provider at `tools/web/search/providers/perplexity.ts`. No behavior change.
+- Hermes and Qwen3 share truncated-call recovery with unchanged tool names, arguments and completion events.
+- The Codex responses provider parses usage through one numeric field picker, resets the websocket chain (append baseline, turn state, models etag) through one helper at every site, and the whitespace-loop, stale-response and retryable-error recoveries share one turn restart and one delayed reopen; no behavior change.
+- The Qwen3, Hermes, GLM, Kimi, pi-native, Gemma and Gemini scanners and the thinking-healing scanner stream a reasoning section through one `ThinkingSection` and close a tag-delimited one through one `scanThinkingText` step, with the same events, the same held partial close tag and the same flush at end of stream.
+- The Cursor exec channel buffers stdout and stderr through one `ShellOutputChannel` per stream, sending on a newline, past 4 KiB or 100 ms after the first byte and holding an incomplete ANSI escape until its tail arrives; no behavior change.
+- `deleteAuthCredential` and `deleteAuthCredentialsForProvider` soft-delete through one step that reports a failed statement with the credential or provider it names; no behavior change.
+- `AuthStorage` delivers its credential-disabled, credential-failover and usage-limit-withheld notices through one subscriber call that isolates a throw or a rejection and logs it against the hook, addresses a refreshed broker row through one matcher that ignores the shared refresh sentinel, and reads a report's unanimous scope account or project id through one step; no behavior change.
+- Doc comments refer to child runs and roles as agents rather than subagents; the Codex protocol header `x-openai-subagent` and its `subagent_kind` metadata key are unchanged.
+- Both streaming gateway routes (the format endpoints and the pi-native fast path) abort the upstream call on a closed client response through one SSE cancel hook; no behavior change.
+
+### Fixed
+
+- Corrected comments that named a distribution channel or runtime API the project does not use; no behavior change.
+- A stream that stalls after its first event ("<provider> stream stalled while waiting for the next event") classifies as a timeout as well as transient, so auto-compaction moves to the next candidate model instead of re-sending the full context to the model that stalled up to `retry.maxRetries` times.
+- A Codex websocket turn that the server accepts and then leaves without progress for the idle window is retried on the websocket once and then run over SSE, instead of spending the whole websocket retry budget on stalls, which held one compaction summary for thirty minutes per attempt.
+- A codex server-side compaction cut by its deadline fails as a timeout, and one the caller cancels fails as a cancellation, instead of both reporting "stream closed before response.completed" as a backend fault.
+- The codex websocket watchdog message reports the time since the last progress as of the moment it fires, instead of a value computed before the wait.
+- Cursor and Devin protobuf regeneration invokes the workspace compiler, and Cursor output is written to the catalog package.
+- Credential-store startup applies SQLite busy handling and WAL mode before initializing refresh leases, allowing concurrent launches to wait for database locks.
+- Google's generic `RESOURCE_EXHAUSTED` 429 body ("Resource has been exhausted (e.g. check quota)") classifies as a per-minute throttle retried on the same account after 45-75 s, instead of a daily quota wall whose 30-minute wait exceeded the retry budget and ended the turn on the first 429; a body that states a quota keeps the quota classification.
+- `AuthStorage.disabledCredentialAccount` states which account a provider's refresh failure belongs to, so a note about a dead login can name it instead of reading as a statement about whichever account it renders beside.
+
 ## [1.4.1] - 2026-09-08
 
 ### Fixed

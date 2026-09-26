@@ -15,7 +15,10 @@
  * diff. That is the model's claim, and nothing downstream can check it.
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { renderRunDetail, runScreenRows } from "@veyyon/coding-agent/autoresearch/screen";
+import {
+	renderRunDetail,
+	runScreenRows,
+} from "@veyyon/coding-agent/modes/terminal/components/dialogs/autoresearch-screen";
 import {
 	type AutoresearchHarness,
 	logRun,

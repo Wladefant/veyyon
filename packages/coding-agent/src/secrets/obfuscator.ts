@@ -2,10 +2,10 @@ import * as crypto from "node:crypto";
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage, Context, ImageContent, Message, TextContent, Tool } from "@veyyon/ai";
 import { toolWireSchema } from "@veyyon/ai/utils/schema";
+import type { SessionContext } from "@veyyon/kernel/session/session-context";
 import { isWellFormedUtf16, utf8ByteLength } from "@veyyon/utils/string-length";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { type JsonWithOptionalFields, mapJsonStrings } from "../json-transform";
-import type { SessionContext } from "../session/session-context";
 import {
 	buildNamePlaceholder,
 	buildValuePlaceholder,
@@ -1194,7 +1194,7 @@ export class SecretObfuscator {
 			if (labels === undefined || labels.size === 0) unlabelled += 1;
 			else for (const source of labels) sources.add(source);
 		}
-		return { count: values.size, sources: [...sources].sort(), unlabelled };
+		return { count: values.size, sources: Array.from(sources).sort(), unlabelled };
 	}
 
 	/**
@@ -1430,7 +1430,7 @@ export class SecretObfuscator {
 		});
 		if (bestByStart.size === 0) return state;
 
-		const candidates = [...bestByStart.values()].sort(
+		const candidates = Array.from(bestByStart.values()).sort(
 			(left, right) => left.start - right.start || right.end - left.end,
 		);
 		const replacements: TextReplacement[] = [];
@@ -1992,7 +1992,7 @@ export function obfuscateProviderContext(obfuscator: SecretObfuscator | undefine
 		for (let index = 0; index < systemPrompt.length; index++) {
 			const text = obfuscator.obfuscate(systemPrompt[index]);
 			if (text === systemPrompt[index]) continue;
-			if (systemPrompt === context.systemPrompt) systemPrompt = [...systemPrompt];
+			if (systemPrompt === context.systemPrompt) systemPrompt = systemPrompt.slice();
 			systemPrompt[index] = text;
 		}
 	}
@@ -2003,7 +2003,7 @@ export function obfuscateProviderContext(obfuscator: SecretObfuscator | undefine
 		for (let index = 0; index < tools.length; index++) {
 			const tool = obfuscateToolDefinition(obfuscator, tools[index]);
 			if (tool === tools[index]) continue;
-			if (tools === context.tools) tools = [...tools];
+			if (tools === context.tools) tools = tools.slice();
 			tools[index] = tool;
 		}
 	}

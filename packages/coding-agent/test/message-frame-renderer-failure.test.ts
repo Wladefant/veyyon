@@ -19,9 +19,9 @@ import {
 	type FramedMessage,
 	framedRendererSubject,
 	renderFramedMessage,
-} from "@veyyon/coding-agent/modes/components/message-frame";
-import { rendererFailureNotice } from "@veyyon/coding-agent/modes/components/renderer-failure";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
+} from "@veyyon/coding-agent/modes/terminal/components/transcript/message-frame";
+import { rendererFailureNotice } from "@veyyon/coding-agent/modes/terminal/components/transcript/renderer-failure";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { Box } from "@veyyon/tui";
 
 /** The notice the framed-message path produces, as one line. */
@@ -56,8 +56,12 @@ function render(opts: {
 }): { lines: readonly string[]; text: string; flat: string; mounted: boolean } {
 	const box = new Box(1, 1);
 	const message: FramedMessage = {
-		customType: opts.customType ?? "deploy-status",
-		content: opts.content ?? "shipped to staging",
+		kind: "custom",
+		id: "custom-frame",
+		customKind: opts.customType ?? "deploy-status",
+		text: opts.content ?? "shipped to staging",
+		level: "info",
+		timestamp: 0,
 	};
 	const mounted = renderFramedMessage({
 		message,

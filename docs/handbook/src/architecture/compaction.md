@@ -14,7 +14,7 @@ Both are persisted as session entries and converted into agent-attributed develo
 - `packages/agent/src/compaction/branch-summarization.ts`
 - `packages/agent/src/compaction/pruning.ts`
 - `packages/agent/src/compaction/utils.ts`
-- `packages/coding-agent/src/session/session-manager.ts`
+- `kernel/src/session/session-manager.ts`
 - `packages/coding-agent/src/session/agent-session.ts`
 - `packages/coding-agent/src/session/messages.ts`
 - `packages/coding-agent/src/extensibility/hooks/types.ts`
@@ -22,7 +22,7 @@ Both are persisted as session entries and converted into agent-attributed develo
 
 ## Session entry model
 
-Compaction and branch summaries are first-class session entries, not plain assistant/user messages.
+Compaction and branch summaries are distinct session entry types, not assistant or user messages.
 
 - `CompactionEntry`
   - `type: "compaction"`
@@ -154,7 +154,7 @@ has its heavy non-error tool results replaced with an elision marker (largest fi
 offloaded to a recovery `artifact://` blob), so the tail stays within budget even when one turn
 alone is bigger. User messages, assistant text, tool calls, and error results are never elided.
 
-Note that the summary prompt does not state any of that. Its opening line requests "a structured
+The summary prompt does not state any of that. Its opening line requests "a structured
 handoff summary for another LLM to resume the task", which describes a cold restart that compaction
 does not perform. This is inherited from upstream, whose engine keeps the same recent tail, so the
 mismatch is upstream's rather than a fork difference. It is recorded here because a summarizer told
@@ -322,6 +322,15 @@ Prompt selection:
 - split-turn second pass: `compaction-turn-prefix.md`
 - handoff document: `handoff-document.md` (used only by explicit `generateHandoff(...)`, not serialized compaction)
 
+Staged summaries: when the single summary request does not fit the model's context window, or
+times out, `compact(...)` summarizes the span as consecutive segments, four requests at a time, and
+merges the segment summaries in rounds into one summary. `summaryStaging: "staged"` starts staged
+without the single request; the session sets it for a model whose last summary took more than one
+stage. `stagedSummaryCheckpoints` is a map of completed segment and merge answers keyed by a SHA-256
+digest of the model, output budget and request text. When a staged summary fails part way, the next
+attempt with the same map sends only the requests that never completed. The session keeps one map
+and clears it when a compaction is committed.
+
 ### Short summary
 
 `CompactionEntry.shortSummary` is a display-only, pull-request-style line. `compact()` no longer
@@ -330,7 +339,7 @@ worth the input cost. Every reader stays, because compaction hooks still set the
 written before the change still carry it.
 
 Its one display consumer is the session-listing title fallback (`title: header.title ?? shortSummary`
-in `packages/coding-agent/src/session/session-listing.ts`), which veyyon reaches only when its own
+in `kernel/src/session/session-listing.ts`), which veyyon reaches only when its own
 tiny-model titler declined: `VEYYON_NO_TITLE` set, or a first message too low-signal to title from.
 In that case the session picker falls back again to the first user message, so nothing renders blank.
 
@@ -348,33 +357,36 @@ OpenAI and Azure OpenAI serve `POST /responses/compact`, which compacts a sessio
 context inside the provider and returns the compacted window. Veyyon uses it when the
 model's `compat.supportsServerCompaction` flag is set, which is resolved per host at
 model build time: the official OpenAI API and Azure's v1 API today, and any gateway
-that opts in with an override. The Codex provider stays out, because its transport
-owns history state server-side and a client-minted window has no replay contract there.
+that opts in with an override. The Codex provider is excluded because its transport
+maintains history state server-side and a client-minted window has no replay contract there.
 A re-pointed `openai` model also stays out, since another vendor's host does not serve
 that path. Turning `compaction.remote` off is the only thing that disables it; leaving
 it unset leaves it on.
 
-**A server-side compaction stores no summary text, and that is deliberate.** The window
-it returns is an `encrypted_content` blob minted under the provider's key. There is
-nothing in it to read, and nothing to decrypt: it is the compacted context itself, meant
-to be handed straight back to the same provider. The path used to run a full local
-summarization of the same span alongside the remote call and store both, which cost the
-remote call plus the exact summary the remote call was supposed to replace, and only one
-of the two was ever read. Writing readable text here is not a missing feature that could
-be added later. The only way to produce it is to pay a second model to describe a span,
-which is the local strategy with an extra network round trip in front of it, and any text
-derived from the blob rather than the span would be invented. An empty summary is the
-honest record of what happened.
+**A server-side compaction stores no summary text.** The window it returns is an
+`encrypted_content` blob minted under the provider's key and replayed to the same provider on
+every rebuild. No local summarization of the same span runs alongside the remote call.
 
-Because the entry cannot explain itself, the rebuild will not trust it outside the
-provider that minted it. `buildSessionContext` treats a compaction as usable only when the
-stored window replays on the active provider, or when there is real summary text. When
-neither holds, which is a fork or resume onto a different provider, it re-expands every
-message the compaction hid. Nothing was lost to recover: compaction only advances
-`firstKeptEntryId`, so the discarded span is still in the session file.
+A rebuild applies the newest compaction on the branch that the active provider can use: one whose
+stored window replays on that provider, or one with summary text (`getEffectiveCompactionEntry` in
+`kernel/src/session/session-context.ts`). After a fork, resume or model switch onto a different
+provider, a newer server-side compaction is skipped, and the rebuild starts from the previous
+usable compaction and re-expands only the messages after it. A branch with no usable compaction
+re-expands from its first entry. No history is lost: compaction advances `firstKeptEntryId`, and the
+hidden span stays in the session file.
 
-Sessions compacted by the earlier, removed path (`preserveData.openaiRemoteCompaction`,
-whose summary field held a fixed placeholder) load through the same rule and re-expand.
+Before the next prompt on the new provider, and before any compaction check of that prompt or an
+idle compaction measures the context, the session ports the unreadable compaction. It sends
+the window to the model that minted it with the summarization instruction appended as one user turn
+(`summarizeRemoteCompactionWindow`), and appends the answer as a local compaction with the same
+`firstKeptEntryId`. The request covers the compacted window, not the raw span, so it stays small on
+a long session. The port emits `auto_compaction_start` with reason `provider_switch`, then
+`auto_compaction_end`. A successful port satisfies an idle compaction, which then sends nothing more.
+When the minting model has no credentials or the request fails, the fallback rebuild stands and the
+next compaction on the active provider summarizes the span.
+
+Sessions compacted by the earlier, removed path (`preserveData.openaiRemoteCompaction`, whose
+summary field held a fixed placeholder) load through the same rule and are never ported.
 
 ### Handoff generation
 
@@ -394,7 +406,9 @@ Cumulative behavior:
 
 - Includes prior compaction details only when prior entry is pi-generated (`fromExtension !== true`).
 - In split turns, includes turn-prefix file ops too.
-- `details.readFiles` excludes files also modified; `details.modifiedFiles` contains the rest (persisted shape is unchanged).
+- The read list excludes files also modified; the modified list holds the rest.
+- A compaction records only the paths its lists gained over the compaction it built on: `details.readFilesAdded` and `details.modifiedFilesAdded`, with `details.base` set to that compaction's id. The lists are the union of the records along the `base` chain.
+- The chain ends at a record with no `base`, at a `base` that names no earlier compaction on the path or loops, and at a record an earlier version wrote, which holds `details.readFiles` and `details.modifiedFiles` in full. An extension's compaction records no lists, and the next compaction starts them over.
 
 The file list is a grouped, prefix-folded directory tree (find-tool shape) with a per-file access marker, `(Read)` for read-only files, `(Write)` for modified files never read, `(RW)` for modified files also present in the cumulative read set. Capped at 20 files with an `[…N files elided…]` line. Compaction and explicit handoff append it as a `<files>` tag (via `upsertFileOperations`).
 
@@ -551,7 +565,7 @@ From `settings-schema.ts`:
 - `compaction.autoContinue` = `true`
 - `compaction.midTurnEnabled` = `true`
 - `compaction.remoteEndpoint` = `undefined`
-- `compaction.threshold` = `auto`; the one trigger setting, with its unit in the value. `auto` is `contextWindow - max(15% of contextWindow, reserveTokens)`. `85%` is a percent of the current model's window. `170000` is an absolute token amount, model-independent: compaction runs once context exceeds that many tokens whatever the current model's window is, and when the amount is larger than that window it is honored up to `contextWindow - 1` with a one-time warning (never silently reinterpreted). Resolution and the migration off the two retired keys live in `packages/agent/src/compaction/threshold.ts`.
+- `compaction.threshold` = `auto`; the one trigger setting, with its unit in the value. `auto` is `contextWindow - max(15% of contextWindow, reserveTokens)`. `85%` is a percent of the current model's window. `170000` is an absolute token amount, model-independent: compaction runs once context exceeds that many tokens whatever the current model's window is, and when the amount is larger than that window it is honored up to `contextWindow - 1` with a one-time warning (never silently reinterpreted). Resolution and migration logic for retired keys is defined in `packages/agent/src/compaction/threshold.ts`.
 - `compaction.thresholdTokens` = `-1` and `compaction.thresholdPercent` = `-1`; retired. The global config is rewritten on load (`#migrateRawSettings`): a positive amount becomes `threshold: <amount>`, a positive percent becomes `threshold: <percent>%` (the amount wins when both are set), and both keys are dropped, so the ambiguity leaves the file without moving the trigger. Config sources that are never rewritten — project files, `--config` overlays — are folded in at read time by `withLegacyCompactionThreshold` with the same precedence, and the session reports which retired key supplied the value.
 - `compaction.idleEnabled` = `false`
 - `compaction.idleThresholdTokens` = `200000`

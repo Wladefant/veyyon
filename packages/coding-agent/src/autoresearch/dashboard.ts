@@ -6,30 +6,46 @@
  * which every extension's status shares, rather than through a widget: a widget
  * above the composer is charged to the conversation on every frame, and this one
  * grew to eighteen rows of table that pushed the transcript off a short
- * terminal. Everything that table held is in {@link ./screen}, which is a screen
+ * Everything that table held is in the terminal host screen, which is a screen
  * and can afford it.
  */
-import { type SgrMouseEvent, sanitizeSingleLine, visibleWidth } from "@veyyon/tui";
 import { formatCount } from "@veyyon/utils";
+import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
+import { sanitizeSingleLine } from "@veyyon/utils/wrap";
 import type { ExtensionContext } from "../extensibility/extensions";
-import { theme } from "../modes/theme/theme";
-import { truncateToWidth } from "../tools/render-utils";
+import { theme } from "../theme/theme";
 import type { LoopConsoleModel } from "./console";
 import { formatElapsed, formatNum, formatPercentChange } from "./helpers";
-import { LAUNCHER_OVERLAY, LauncherComponent } from "./launcher";
-import { AutoresearchScreenComponent } from "./screen";
 import { AUTORESEARCH_SCREEN_KEY } from "./shortcuts";
 import { currentResults, effectiveBreadth, findBaselineMetric, findBestKeptResult } from "./state";
 import type { AutoresearchRuntime, DashboardController } from "./types";
 
-export function createDashboardController(): DashboardController {
+export interface AutoresearchUiDelegate {
+	showScreen(
+		ctx: ExtensionContext,
+		runtime: AutoresearchRuntime,
+		model: LoopConsoleModel | null,
+		options: {
+			onMount: (handle: { requestRender: () => void }) => void;
+			onDispose: () => void;
+		},
+	): Promise<void>;
+	showLauncher(ctx: ExtensionContext, model: LoopConsoleModel): Promise<void>;
+}
+
+let activeUiDelegate: AutoresearchUiDelegate | null = null;
+
+export function registerAutoresearchUi(delegate: AutoresearchUiDelegate): void {
+	activeUiDelegate = delegate;
+}
+
+export function createDashboardController(delegate?: AutoresearchUiDelegate): DashboardController {
 	let screenTui: { requestRender(): void } | null = null;
 	let refreshTimer: NodeJS.Timeout | undefined;
 	/** The last UI context, so a tick can repaint the row without an event. */
 	let ticking: { ctx: ExtensionContext; runtime: AutoresearchRuntime } | null = null;
 	/** The last row painted, so a resize can rebuild it against the new width. */
 	let painted: { ctx: ExtensionContext; runtime: AutoresearchRuntime } | null = null;
-
 	/**
 	 * A row shed for 120 columns is the wrong row at 40, and nothing else
 	 * rebuilds it: the host re-prints the string it already holds and truncates
@@ -107,55 +123,33 @@ export function createDashboardController(): DashboardController {
 		},
 		async showScreen(ctx, runtime, model: LoopConsoleModel | null): Promise<void> {
 			if (!ctx.hasUI) return;
-			await ctx.ui.custom<void>(
-				(tui, _theme, _keybindings, done) => {
-					screenTui = tui;
-					// The screen's own clock: a run in flight ticks it, and so does the
-					// row underneath, which is why both share one timer.
-					syncTimer();
-					const component = new AutoresearchScreenComponent({
-						runtime,
-						model,
-						close: () => done(undefined),
-						requestRender,
-						// The rows the overlay can paint: the window minus the pinned
-						// composer zone the overlay stays above.
-						rows: () => tui.terminal.rows - tui.pinnedFooterRows,
-					});
-					return {
-						render: (width: number) => component.render(width),
-						handleInput: (data: string) => component.handleInput(data),
-						// The engine routes a report over the card here; the wrapper
-						// is what the overlay stack holds, not the screen.
-						routeMouse: (event: SgrMouseEvent, line: number, col: number) =>
-							component.routeMouse(event, line, col),
-						dispose: stopRefresh,
-					};
-				},
-				{ overlay: true },
-			);
+			const ui = delegate ?? activeUiDelegate;
+			if (!ui) {
+				ctx.ui.notify("Autoresearch screen requires an interactive terminal", "warning");
+				return;
+			}
+			try {
+				await ui.showScreen(ctx, runtime, model, {
+					onMount: handle => {
+						screenTui = handle;
+						syncTimer();
+					},
+					onDispose: () => {
+						stopRefresh();
+					},
+				});
+			} finally {
+				stopRefresh();
+			}
 		},
 		async showLauncher(ctx, model: LoopConsoleModel): Promise<void> {
 			if (!ctx.hasUI) return;
-			await ctx.ui.custom<void>(
-				(tui, _theme, _keybindings, done) => {
-					const component = new LauncherComponent({
-						model,
-						close: () => done(undefined),
-						requestRender: () => tui.requestRender(),
-						// The rows the card can take: the window minus the composer zone
-						// it stays above and the row of margin on each side.
-						rows: () => tui.terminal.rows - tui.pinnedFooterRows - 2,
-					});
-					return {
-						render: (width: number) => component.render(width),
-						handleInput: (data: string) => component.handleInput(data),
-						routeMouse: (event: SgrMouseEvent, line: number, col: number) =>
-							component.routeMouse(event, line, col),
-					};
-				},
-				{ overlay: LAUNCHER_OVERLAY },
-			);
+			const ui = delegate ?? activeUiDelegate;
+			if (!ui) {
+				ctx.ui.notify("Autoswarm launcher requires an interactive terminal", "warning");
+				return;
+			}
+			await ui.showLauncher(ctx, model);
 		},
 	};
 }

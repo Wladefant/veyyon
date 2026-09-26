@@ -4,7 +4,7 @@
  * Why this suite exists: releases published nothing for four versions
  * (1.0.13-1.0.16) because the bump step blanket-replaced every
  * `__veyyonNativesV…` literal with the current version. That clobbered the
- * fixtures in packages/natives/test/native-version-sentinel.test.ts —
+ * fixtures in natives/bridge/bindings/test/native-version-sentinel.test.ts —
  * `versionSentinelExportFor("1.0.14")` is pinned to `"__veyyonNativesV1_0_14"`,
  * a value that must NEVER track the release version — so the native test bucket
  * failed on every bump commit and the release_github job never ran. These tests
@@ -16,9 +16,10 @@ import { describe, expect, it } from "bun:test";
 import {
 	classifySentinelBumpState,
 	isSentinelRewriteExcluded,
+	planReleaseSentinel,
 	planSentinelRewrite,
 	sentinelExportName,
-} from "./release.ts";
+} from "./release";
 
 describe("sentinelExportName", () => {
 	it("maps a clean semver to its sentinel export symbol", () => {
@@ -88,17 +89,17 @@ describe("isSentinelRewriteExcluded — the file scope of the rewrite", () => {
 		// failing the native bucket and blocking the publish. Test files must be
 		// excluded from the file scan no matter what version they reference.
 		for (const testFile of [
-			"packages/natives/test/native-embed-freshness.test.ts",
-			"packages/natives/test/native-version-sentinel.test.ts",
+			"natives/bridge/bindings/test/native-embed-freshness.test.ts",
+			"natives/bridge/bindings/test/native-version-sentinel.test.ts",
 			"packages/coding-agent/test/foo.test.mts",
-			"packages/tui/test/bar.test.js",
+			"hosts/terminal/engine/test/bar.test.js",
 		]) {
 			expect(isSentinelRewriteExcluded(testFile)).toBe(true);
 		}
 	});
 
 	it("excludes vendored and build-output copies", () => {
-		expect(isSentinelRewriteExcluded("packages/natives/node_modules/x/lib.js")).toBe(true);
+		expect(isSentinelRewriteExcluded("natives/bridge/bindings/node_modules/x/lib.js")).toBe(true);
 		expect(isSentinelRewriteExcluded("packages/coding-agent/dist/cli.js")).toBe(true);
 	});
 
@@ -107,11 +108,11 @@ describe("isSentinelRewriteExcluded — the file scope of the rewrite", () => {
 		// generated native mirrors, and the render-stress harness (a `-harness.ts`,
 		// not a `.test.ts`, so the `.test.` convention keeps it in scope).
 		for (const productionFile of [
-			"crates/veyyon-natives/src/lib.rs",
-			"packages/natives/native/index.js",
-			"packages/natives/native/index.d.ts",
-			"packages/tui/test/render-stress-harness.ts",
-			"packages/tui/test/render-stress-subprocess.ts",
+			"natives/bridge/addon/src/lib.rs",
+			"natives/bridge/bindings/native/index.js",
+			"natives/bridge/bindings/native/index.d.ts",
+			"hosts/terminal/engine/test/render-stress-harness.ts",
+			"hosts/terminal/engine/test/render-stress-subprocess.ts",
 		]) {
 			expect(isSentinelRewriteExcluded(productionFile)).toBe(false);
 		}
@@ -165,5 +166,53 @@ describe("classifySentinelBumpState — re-cut tolerance after a dead tag", () =
 		expect(classifySentinelBumpState(libRs, prev, next)).toBe("rewrite");
 		const strayOnly = `// mentions ${next} in prose only\n`;
 		expect(classifySentinelBumpState(strayOnly, prev, next)).toBe("missing");
+	});
+});
+
+describe("planReleaseSentinel — the rename runs from the sentinel the tree emits", () => {
+	// Why this suite exists: the v1.5.2 bump commit landed on main and its checks
+	// failed, so it was never tagged. Cutting v1.5.3 then planned the rename from
+	// the latest TAG's sentinel (V1_5_1), which lib.rs no longer emitted, and the
+	// cut refused as `missing`: no version but a re-cut of 1.5.2 could ship. The
+	// source is the tree's own Cargo workspace version. It does not catch a tree
+	// whose Cargo version and lib.rs disagree; that is refused as `missing`.
+	const cargoAt = (version: string): string =>
+		`[package]\nname = "root-shim"\nversion = "9.9.9"\n\n[workspace.package]\nedition = "2024"\nversion = "${version}"\n`;
+	const libRsEmitting = (version: string): string =>
+		`#[napi(js_name = "${sentinelExportName(version)}")]\npub fn version_sentinel() {}\n`;
+
+	it("renames from the tree's version when the last bump was never tagged", () => {
+		expect(planReleaseSentinel(cargoAt("1.5.2"), libRsEmitting("1.5.2"), "1.5.3")).toEqual({
+			from: "__veyyonNativesV1_5_2",
+			to: "__veyyonNativesV1_5_3",
+			state: "rewrite",
+		});
+	});
+
+	it("renames from the tagged version on an ordinary cut", () => {
+		expect(planReleaseSentinel(cargoAt("1.5.1"), libRsEmitting("1.5.1"), "1.5.2")).toEqual({
+			from: "__veyyonNativesV1_5_1",
+			to: "__veyyonNativesV1_5_2",
+			state: "rewrite",
+		});
+	});
+
+	it("rewrites nothing when re-cutting the version the tree is already at", () => {
+		expect(planReleaseSentinel(cargoAt("1.5.2"), libRsEmitting("1.5.2"), "1.5.2")).toEqual({
+			from: "__veyyonNativesV1_5_2",
+			to: "__veyyonNativesV1_5_2",
+			state: "alreadyBumped",
+		});
+	});
+
+	it("refuses a lib.rs that emits neither the tree's sentinel nor the target", () => {
+		expect(planReleaseSentinel(cargoAt("1.5.2"), libRsEmitting("1.5.0"), "1.5.3").state).toBe("missing");
+		expect(planReleaseSentinel(cargoAt("1.5.2"), libRsEmitting("1.5.0"), "1.5.2").state).toBe("missing");
+	});
+
+	it("fails when Cargo.toml declares no workspace version", () => {
+		expect(() => planReleaseSentinel('[package]\nversion = "1.5.2"\n', libRsEmitting("1.5.2"), "1.5.3")).toThrow(
+			/no \[workspace\.package\] version/,
+		);
 	});
 });

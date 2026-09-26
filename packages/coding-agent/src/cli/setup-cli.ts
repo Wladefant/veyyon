@@ -4,16 +4,18 @@
  * Handles `veyyon setup` for onboarding and `veyyon setup <component>` for optional dependencies.
  */
 import * as path from "node:path";
+import type { SelectItem } from "@veyyon/tui";
 import { $which, getProjectDir, getPythonEnvDir } from "@veyyon/utils";
 import { $ } from "bun";
 import chalk from "chalk";
 import { Settings, settings } from "../config/settings";
+import type { SettingValue } from "../config/settings-schema";
 import { formatDoctorResults, runDoctorChecks } from "../extensibility/plugins/doctor";
-import { theme } from "../modes/theme/theme";
-import { downloadSttModel, isSttModelCached } from "../stt/downloader";
-import { isSttModelKey, STT_MODEL_OPTIONS } from "../stt/models";
-import { detectRecorder, ensureRecorder } from "../stt/recorder";
-import { downloadTtsModel, isTtsLocalModelKey, isTtsModelCached, TTS_LOCAL_MODEL_OPTIONS } from "../tts";
+import { downloadSttModel, isSttModelCached } from "../speech/stt/downloader";
+import { isSttModelKey, STT_MODEL_OPTIONS } from "../speech/stt/models";
+import { detectRecorder, ensureRecorder } from "../speech/stt/recorder";
+import { downloadTtsModel, isTtsLocalModelKey, isTtsModelCached, TTS_LOCAL_MODEL_OPTIONS } from "../speech/tts";
+import { theme } from "../theme/theme";
 import { runInstallHealthChecks } from "./install-health";
 import { makeCoarseStepPrinter } from "./progress-line";
 import { selectSetupModel } from "./setup-model-picker";
@@ -175,19 +177,7 @@ function buildSpeechComponents(): SpeechComponent[] {
 				const key = settings.get("stt.modelName");
 				return (await isSttModelCached(key)) ? key : `${key} — not downloaded`;
 			},
-			pick: async () => {
-				const chosen = await selectSetupModel(
-					"Speech-to-Text model",
-					[...STT_MODEL_OPTIONS],
-					settings.get("stt.modelName"),
-				);
-				if (chosen === null) return false;
-				if (isSttModelKey(chosen)) {
-					settings.set("stt.modelName", chosen);
-					await settings.flush();
-				}
-				return true;
-			},
+			pick: () => pickSpeechModel("Speech-to-Text model", STT_MODEL_OPTIONS, "stt.modelName", isSttModelKey),
 			ensure: onProgress =>
 				downloadSttModel(settings.get("stt.modelName"), progress =>
 					onProgress({ stage: `Downloading ${progress.label} model`, percent: progress.percent }),
@@ -200,19 +190,8 @@ function buildSpeechComponents(): SpeechComponent[] {
 				const key = settings.get("tts.localModel");
 				return (await isTtsModelCached(key)) ? key : `${key} — model/runtime not installed`;
 			},
-			pick: async () => {
-				const chosen = await selectSetupModel(
-					"Text-to-Speech model",
-					[...TTS_LOCAL_MODEL_OPTIONS],
-					settings.get("tts.localModel"),
-				);
-				if (chosen === null) return false;
-				if (isTtsLocalModelKey(chosen)) {
-					settings.set("tts.localModel", chosen);
-					await settings.flush();
-				}
-				return true;
-			},
+			pick: () =>
+				pickSpeechModel("Text-to-Speech model", TTS_LOCAL_MODEL_OPTIONS, "tts.localModel", isTtsLocalModelKey),
 			ensure: async onProgress => {
 				const ok = await downloadTtsModel(settings.get("tts.localModel"), progress =>
 					onProgress({ stage: progress.stage, percent: progress.percent }),
@@ -221,6 +200,25 @@ function buildSpeechComponents(): SpeechComponent[] {
 			},
 		},
 	];
+}
+
+/**
+ * Offer `options` for the model at `key`; a choice `accepts` is persisted, a choice it does not is
+ * left as it was. False when the user cancelled, true otherwise.
+ */
+async function pickSpeechModel<P extends "stt.modelName" | "tts.localModel">(
+	title: string,
+	options: readonly SelectItem[],
+	key: P,
+	accepts: (value: string) => value is SettingValue<P>,
+): Promise<boolean> {
+	const chosen = await selectSetupModel(title, options.slice(), settings.get(key));
+	if (chosen === null) return false;
+	if (accepts(chosen)) {
+		settings.set(key, chosen);
+		await settings.flush();
+	}
+	return true;
 }
 
 /**

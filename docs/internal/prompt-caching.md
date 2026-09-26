@@ -88,7 +88,7 @@ const stablePrefixIndex = isCCLayout ? 2 : 0;
 Under OAuth the provider prepends a billing header block and a Claude Code instruction block,
 so Veyyon's own first block sits at index 2. Under an API key it is index 0. That first block is
 block 0 from the [system prompt architecture](system-prompt-architecture.md): the static harness
-prefix shared between a parent session and its subagents. Anchoring it means a changing suffix
+prefix shared between a parent session and its agents. Anchoring it means a changing suffix
 (project context, the argot handle table, the secret inventory) cannot invalidate the shared
 prefix.
 
@@ -466,7 +466,7 @@ than we do, and the comparison is included because it makes the gap concrete.
   it does not observe. The two operator settings still describe themselves as Anthropic-only
   (`packages/coding-agent/src/config/settings-domains/context.ts:508-536`). The in-session divider
   is a separate and weaker signal: `usesExplicitPromptCache`
-  (`coding-agent/src/modes/components/cache-invalidation-marker.ts:59-65`) is a display heuristic,
+  (`coding-agent/src/modes/terminal/components/transcript/cache-invalidation-marker.ts:59-65`) is a display heuristic,
   not a verdict, and it admits only `anthropic-messages`, `bedrock-converse-stream` and the
   Responses generations that accept explicit breakpoints. Api `openrouter` fails that test, so no
   Claude-on-OpenRouter row gets a verdict or a divider. Widening the predicate is worth doing only
@@ -539,8 +539,8 @@ than we do, and the comparison is included because it makes the gap concrete.
 | Verdicts, windows, floors | `packages/ai/src/cache/verdict.ts` |
 | Enforcement levels and the deferred throw | `packages/ai/src/cache/policy.ts` |
 | Per-key tracking state | `packages/ai/src/cache/tracker.ts` |
-| In-session cache-miss divider (display heuristic) | `packages/coding-agent/src/modes/components/cache-invalidation-marker.ts` |
+| In-session cache-miss divider (display heuristic) | `packages/coding-agent/src/modes/terminal/components/transcript/cache-invalidation-marker.ts` |
 | Operator settings | `packages/coding-agent/src/config/settings-domains/context.ts` |
 | Cache-aligned compaction request | `packages/agent/src/compaction/cache-aligned-context.ts` |
 
-*Verified against `31e6a6670` on 2026-08-11.*
+*Verified against `63ffc8131ffb8d35ccbbb1c5de69531a7016eff4` on 2026-09-06.*

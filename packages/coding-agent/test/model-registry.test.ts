@@ -4,12 +4,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { FetchImpl, Model, OpenAICompat, ThinkingConfig } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { buildModel } from "@veyyon/catalog/build";
 import { Effort } from "@veyyon/catalog/effort";
 import { writeModelCache } from "@veyyon/catalog/model-cache";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 
 describe("ModelRegistry", () => {
@@ -1538,6 +1538,28 @@ describe("ModelRegistry", () => {
 				url => url.includes("127.0.0.1:11434") || url.includes("127.0.0.1:8080") || url.includes("127.0.0.1:1234"),
 			);
 			expect(disabledProbeUrls).toEqual([]);
+		});
+
+		test("refresh probes a built-in local provider at its models.yml baseUrl override", async () => {
+			writeRawModelsJson({ ollama: { baseUrl: "http://127.0.0.1:41434/v1" } });
+			await Settings.init({
+				inMemory: true,
+				overrides: {
+					disabledProviders: ["llama.cpp", "lm-studio"],
+				},
+			});
+			const requestedUrls: string[] = [];
+			const fetchMock: FetchImpl = input => {
+				requestedUrls.push(String(input));
+				throw new Error(`Unexpected URL: ${String(input)}`);
+			};
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+			await registry.refresh("online");
+
+			const ollamaProbeUrls = requestedUrls.filter(url => url.includes("127.0.0.1:41434"));
+			expect(ollamaProbeUrls).not.toEqual([]);
+			expect(requestedUrls.filter(url => url.includes("127.0.0.1:11434"))).toEqual([]);
 		});
 	});
 	describe("bundled Anthropic catalog availability", () => {

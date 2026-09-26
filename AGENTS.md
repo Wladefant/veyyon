@@ -13,44 +13,75 @@ operator manual.
 
 |Member|Description|
 |---|---|
+|`contracts/wire`|Wire and presentation types, so a browser, a test client or a second host need not depend on coding-agent; every block, stop reason and usage a guest reads is a projection of `@veyyon/model`, imported type-only|
+|`contracts/view`|Dependency-free tool view model, so a tool describes its output without constructing a terminal component|
+|`contracts/settings`|Dependency-free setting declaration vocabulary, so a package declares a setting without importing the store that persists it or the host that draws it|
+|`contracts/model`|Dependency-free model and message vocabulary, so a provider plugin implements a stream and a host reads a turn without importing the catalog that resolves the model or the client that drives it|
+|`contracts/session`|What a session file is made of: the entry vocabulary, the message union it records and the hooks a package augments to add its own, so the agent that writes a file, the compaction that rewrites it and the host that displays it read one definition|
+|`contracts/host`|What a host offers a plugin, each capability optional and absent when the host cannot honour it, so a tool asks for a notification without naming the terminal or the window that delivers it|
+|`contracts/tool`|What a tool declares and returns, so a tool states its spec, approval tier and result without importing the loop that schedules it or the host that prompts for approval; imports `@veyyon/model` type-only|
+|`contracts/plugin`|Dependency-free plugin manifest vocabulary, so a package declares what its `package.json` `veyyon` field contributes without importing the loader that installs it|
+|`kernel`|The only member that is not a plugin — the plugin loader, the contribution registry and the session spine, naming no tool and no host|
 |`packages/ai`|Multi-provider LLM client with streaming support|
 |`packages/catalog`|Model catalog: bundled models.json, provider descriptors, model identity/classification|
 |`packages/agent`|Agent runtime with tool calling and state management|
 |`packages/coding-agent`|Main CLI application (primary focus)|
-|`packages/tui`|Terminal UI library with differential rendering|
-|`packages/natives`|Bindings for native text/image/grep operations|
-|`packages/stats`|Local observability dashboard (`veyyon stats`)|
+|`hosts/gui`|Graphical host: draws the same `ToolView` models as HTML, the second implementation that keeps `contracts/view` a contract rather than a description of the terminal|
+|`hosts/terminal/engine`|Terminal UI library with differential rendering|
+|`apps/stats`|Local observability dashboard (`veyyon stats`)|
 |`packages/utils`|Shared utilities (logger, streams, temp files)|
-|`packages/argot`|Per-project shorthand vocabularies: lossless substitution codec over `AGENTS.dict`. Published standalone — depends on nothing in this repo|
-|`packages/hashline`|Line-anchored patch language the edit tool applies, with a pluggable filesystem backend|
-|`packages/mnemopi`|Local SQLite memory engine: triples, embeddings, recall|
-|`packages/wire`|Dependency-free collab wire types, so a browser or test client need not depend on coding-agent|
-|`packages/tool-render`|Shared React tool-call renderers for HTML export and collab-web|
-|`packages/collab-web`|Browser guest client and local relay for collab live sessions (private)|
-|`packages/swarm-extension`|Swarm orchestration extension|
-|`packages/evals`|Every model and agent evaluation: the DeepSWE, Terminal-Bench 3.0 and TypeScript-edit suites, harness adapters, execution backends, run store, REST/SSE API and live dashboard (private)|
-|`packages/simulations`|Deterministic offline simulations driving real subsystems end to end (private)|
-|`crates/veyyon-ast`|Structural search, replace and code-block summaries over tree-sitter and ast-grep|
-|`crates/veyyon-conformance`|Whole-product conformance corpus and harness, on virtual clock, filesystem, terminal and network (test only, issue #877)|
-|`crates/veyyon-diff-kernel`|Line-comparison engine for unified diff, ported from GNU diff `compareseq` and `shift_boundaries`|
-|`crates/veyyon-glob`|Glob normalization, brace expansion, depth bounds and compilation|
-|`crates/veyyon-grep-kernel`|One compiled matcher over regex and PCRE2 for every search path|
-|`crates/veyyon-iso`|Copy-on-write filesystem isolation and change diffing (APFS clonefile, Linux overlayfs, Windows ProjFS)|
-|`crates/veyyon-keys`|Zero-copy parser for the Kitty keyboard protocol and legacy escape sequences|
-|`crates/veyyon-natives`|The napi addon: the only Rust surface TypeScript calls (grep, glob, text measurement, highlighting, clipboard, SIXEL)|
-|`crates/veyyon-shell`|In-process POSIX shell: interpreter, coreutils builtins, output minimizer, process supervision|
-|`crates/veyyon-test-scratch`|Scratch directories removed on drop, including on panic (test only)|
-|`crates/veyyon-text`|ANSI-aware width measurement, grapheme segmentation and truncation over UTF-16|
-|`crates/veyyon-uu-diff`|`diff` as an in-process shell builtin|
-|`crates/veyyon-uu-grep`|`grep` as an in-process shell builtin, ripgrep-backed|
-|`crates/veyyon-uutils-ctx`|Thread-local stdio and cwd the uutils builtins run against|
-|`crates/veyyon-walker`|Parallel directory traversal with entry caching, gitignore filtering and cancellation|
+|`plugins/argot`|Per-project shorthand vocabularies: lossless substitution codec over `AGENTS.dict`. Published standalone — depends on nothing in this repo|
+|`plugins/hashline`|Line-anchored patch language the edit tool applies, with a pluggable filesystem backend|
+|`plugins/mnemopi`|Local SQLite memory engine: triples, embeddings, recall|
+|`packages/tool-render`|Shared React tool-call renderers for HTML export, collab-web and the stats dashboard|
+|`clients/web`|Browser guest client and local relay for collab live sessions (private)|
+|`plugins/mode-swarm`|Swarm orchestration extension|
+|`plugins/web`|Site scrapers that turn a URL into markdown: ~80 per-site handlers, the page loader escalation ladder and the Parallel extract client, running against host capabilities passed in rather than imported|
+|`tests/evals`|Every model and agent evaluation: the DeepSWE, Terminal-Bench 3.0 and TypeScript-edit suites, harness adapters, execution backends, run store, REST/SSE API and live dashboard (private)|
+|`tests/simulations`|Deterministic offline simulations driving real subsystems end to end (private)|
+|`natives/bridge/addon`|The napi addon: the only Rust surface TypeScript calls (grep, glob, text measurement, highlighting, clipboard, SIXEL)|
+|`natives/bridge/bindings`|Bindings for native text/image/grep operations|
+|`natives/code/ast`|Structural search, replace and code-block summaries over tree-sitter and ast-grep|
+|`natives/diff/kernel`|Line-comparison engine for unified diff, ported from GNU diff `compareseq` and `shift_boundaries`|
+|`natives/diff/uu-diff`|`diff` as an in-process shell builtin|
+|`natives/fs/iso`|Copy-on-write filesystem isolation and change diffing (APFS clonefile, Linux overlayfs, Windows ProjFS)|
+|`natives/fs/uutils-ctx`|Thread-local stdio and cwd the uutils builtins run against|
+|`natives/search/glob`|Glob normalization, brace expansion, depth bounds and compilation|
+|`natives/search/grep-kernel`|One compiled matcher over regex and PCRE2 for every search path|
+|`natives/search/uu-grep`|`grep` as an in-process shell builtin, ripgrep-backed|
+|`natives/search/walker`|Parallel directory traversal with entry caching, gitignore filtering and cancellation|
+|`natives/shell`|In-process POSIX shell: interpreter, coreutils builtins, output minimizer, process supervision|
+|`natives/testing/scratch`|Scratch directories removed on drop, including on panic (test only)|
+|`natives/text/keys`|Zero-copy parser for the Kitty keyboard protocol and legacy escape sequences|
+|`natives/text/measure`|ANSI-aware width measurement, grapheme segmentation and truncation over UTF-16|
+|`tests/conformance`|Whole-product conformance corpus and harness, on virtual clock, filesystem, terminal and network (test only, issue #877)|
 
-Every `packages/*` member is TypeScript and every `crates/*` member is Rust.
-`packages/tsconfig.workspace.json` is shared TypeScript config, not a package; `crates/vendor` is
-vendored third-party code, not a first-party crate. `scripts/package-map-coverage.test.ts` fails
-when a workspace member under either directory is missing from the table, and when
-`ARCHITECTURE.md` grows a second copy of it.
+`kernel/` and every `contracts/*`, `hosts/*`, `packages/*`, `plugins/*`, `apps/*`, `clients/*` and
+`tests/*` member is TypeScript. First-party Rust is grouped by purpose under `natives/`, vendored
+Rust is `natives/vendor/`, and the whole-product conformance corpus is `tests/conformance/`.
+`apps/*` is a deployable: the stats dashboard and the website. `clients/*` is a client of the
+product that is not the terminal host: the browser guest client and the Python clients. `tests/*`
+is a test-only member: the eval suites and the offline simulations, published nowhere. `tests/fixtures/`
+holds a corpus more than one member reads, and `tests/fuzz/` is the cargo-fuzz workspace, which is
+not a member of the root one.
+`plugins/*` is the optional layer: a member there contributes tools, modes or storage through the
+kernel's contribution registry, and the product runs with it absent. A plugin never imports another
+plugin.
+`contracts/*` is the interface layer: a member there imports nothing that runs. Its only admitted
+edge is `import type` from another contract, declared in its `dependencies`, with the contract graph
+acyclic; a shape one contract owns is imported, never re-declared. Every contract-to-contract pair is
+pinned by exact equality in
+`packages/coding-agent/test/architecture/a-contract-imports-only-a-contract-and-only-its-types.test.ts`,
+which enforces the rule by sweeping the directory rather than by naming its members.
+`contracts/tsconfig.workspace.json` and `packages/tsconfig.workspace.json` are shared TypeScript
+config, not packages; `natives/vendor` is vendored third-party code, not a first-party crate.
+`scripts/workspace-layout.ts` resolves the member list out of the root `package.json` and
+`Cargo.toml`, expanding each pattern against the tree, so a member arrives covered at whatever depth
+it sits and whether a glob or a literal path declares it:
+`scripts/package-map-coverage.test.ts` fails when a resolved member is missing from
+the table or when `ARCHITECTURE.md` grows a second copy of it,
+`scripts/workspace-test-coverage.test.ts` fails when a member ships tests no bucket runs, and
+`scripts/workspace-typecheck-coverage.test.ts` fails when a member declares no `check:types`.
 
 Import catalog values — bundled models, model-thinking helpers, identity, descriptors, model
 manager and cache — from `@veyyon/catalog/<module>`, never through `@veyyon/ai`. Type-only imports
@@ -136,8 +167,21 @@ The regeneration command belongs in the handbook page that owns the surface.
 
 ## GitHub
 
-Never comment on GitHub (issues, PRs, discussions) and never create issues, unless the request says
-exactly what to write.
+Comment, open, review, label, edit and close when instructed to. The instruction is the approval,
+whether or not it specifies the wording. Write the text, post it, then report what was posted.
+Never act uninstructed: no unsolicited comment, issue or review, and nothing on a repository
+outside these accounts.
+
+### A pull request needs an issue first
+
+A bug fix may open with no issue. Everything else — feature, refactor, dependency, migration —
+needs an issue first, and `Refs #N` in the pull request body.
+
+Scope is settled on the issue, before the work exists. For a large pull request with no issue
+behind it, request the issue instead of reviewing the diff.
+
+One concern per pull request. The description covers every change in the diff; an undescribed
+change is itself a finding, per [`review.md`](review.md). Split a fix that includes unrelated work.
 
 Never write a closing keyword into a commit message, a pull request title, or a pull request body.
 `Closes`, `Fixes`, `Resolves` and their variants (`close`, `closed`, `fix`, `fixed`, `resolve`,
@@ -148,6 +192,10 @@ the same approval as closing the issue by hand, and a push to `main` grants no s
 Reference an issue with `Refs #911` or a bare `#911`. Both link the commit to the issue and close
 nothing. An issue closes when the reporter has confirmed the fix in a release, and only when the
 request says to close it.
+
+veybot is the one exception, bounded to the issue it was opened for: `gh_open_pr` in
+`python/veybot/src/host_tools.py` rejects a body without `Fixes #N` for that number. Every other
+pull request writes `Refs #N`.
 
 A closing keyword that already landed cannot be undone by editing the commit message: reopen the
 issue and say it autoclosed.
@@ -187,7 +235,7 @@ never reaches behavior is a dead flag.
 An experimental feature that is off hides its dependent knobs completely — not greyed out, not
 inert, gone. Wire each dependent setting to a `ui.condition` that reads the master toggle. Declare
 the setting in `packages/coding-agent/src/config/settings-domains/<domain>.ts` and register its
-predicate in `CONDITIONS` in `packages/coding-agent/src/modes/components/settings-defs.ts`; the
+predicate in `CONDITIONS` in `packages/coding-agent/src/modes/terminal/components/selectors/settings-defs.ts`; the
 selector hides any setting whose condition returns false. The off-vs-on pair proves it: off shows
 only the master toggle, on shows the toggle plus its dependents.
 
@@ -209,7 +257,7 @@ model is actually told, and why enablement is inert". Read it before touching th
 - Before adding, renaming or re-describing an agent, name which spawns move to it and which move off
   it. A row that changes no behavior does not ship.
 - Two agents that share a prompt body are one agent. Diff the prompts the workers receive and the
-  models they resolve through `resolveSubagentModel` before claiming the prompt distinguishes them.
+  models they resolve through `resolveAgentModel` before claiming the prompt distinguishes them.
 
 ## Code Quality
 
@@ -217,9 +265,12 @@ model is actually told, and why enablement is inert". Read it before touching th
 - Never `ReturnType<>`. Name the type.
 - Imports are top-level, and a type is never imported dynamically: no `import("pkg").Type`. A
   dynamic `await import()` is allowed only where a lazy boundary already exists, which is the tool
-  dispatch table (`packages/coding-agent/src/tools/index.ts`), CLI command dispatch, and the
-  barrels held out of TUI startup. `scripts/a-module-is-imported-at-the-top-of-its-file.test.ts`
-  pins that set, so a new site elsewhere fails.
+  dispatch table (`packages/coding-agent/src/tools/index.ts` and the per-domain manifests it unions,
+  `packages/coding-agent/src/tools/<domain>/manifest.ts`), CLI command dispatch, the
+  barrels held out of TUI startup, and `scripts/package-exports-surface.ts`, whose specifiers are
+  read from the manifests at run time and are the loader boundary the export gate exercises.
+  `scripts/a-module-is-imported-at-the-top-of-its-file.test.ts` pins that set, so a new site
+  elsewhere fails.
 - Check `node_modules` for external API types instead of guessing.
 - A third-party version that two or more packages share lives in `workspaces.catalog` in the root
   `package.json`, and each of those packages writes `"react": "catalog:"`. A dependency already in
@@ -350,7 +401,7 @@ and error messages, which often embed file content (a patch failure message carr
 
 A tool-call preview has several render paths. Preview-only fields and partially streamed args must
 work in all of them. Streamed argument buffers decode through `decodeStreamedToolArgs` /
-`ToolArgsRevealController` (`modes/controllers/tool-args-reveal.ts`) on both the live event path and
+`ToolArgsRevealController` (`modes/terminal/controllers/tool-args-reveal.ts`) on both the live event path and
 transcript rebuilds; never spread provider-parsed `arguments` next to a raw `__partialJson`, because
 parsed args lag the stream by a throttled parse window.
 
@@ -368,34 +419,34 @@ For the bash tool:
 
 Argot is the codec that lets the model write short `§handle` tokens, which veyyon expands before
 anything outside the model's history sees them. The integration spec is
-[`packages/argot/INTEGRATING.md`](packages/argot/INTEGRATING.md); read it rather than re-deriving it.
+[`plugins/argot/INTEGRATING.md`](plugins/argot/INTEGRATING.md); read it rather than re-deriving it.
 All codec logic — longest match, the boundary rule, a handle split across token deltas — lives in
 argot. Never hand-roll handle logic here.
 
 - Every seam is wired in `packages/coding-agent/src/argot-wire.ts`, the only veyyon module that
   touches the codec: `expandToolArguments` (tool args), `expandAssistantContent` (finished display),
-  `createSubagentStreamDecoder` (the live streamed preview, feeding `StreamDecoder.push`/`flush` and
-  never a raw delta), `expandSessionContext` (transcript, export, resume), and `expandSubagentReturn`
-  (a subagent's result to its parent).
-- A user never sees a raw `§handle`. That includes the live subagent HUD preview
+  `createAgentStreamDecoder` (the live streamed preview, feeding `StreamDecoder.push`/`flush` and
+  never a raw delta), `expandSessionContext` (transcript, export, resume), and `expandAgentReturn`
+  (an agent's result to its parent).
+- A user never sees a raw `§handle`. That includes the live agent HUD preview
   (`progress.recentOutput` in `task/executor.ts`). A raw handle in any display, tool, transcript, or
   parent return is a defect.
 - A new place the model's text crosses out of its history is a new seam. Route it through an
   `argot-wire.ts` function, adding a thin delegate there if none fits.
-- `test/argot-subagent-*.test.ts` drive the real executor and prove each seam with a negative control
+- `test/argot-agent-*.test.ts` drive the real executor and prove each seam with a negative control
   (revert the expand, the handle leaks). A new seam gets the same treatment.
 - Argot's proof artifacts: the settings differential from `proof/scenes/settings-pointer.sh` carried
   in the pull request (off arm at the default, on arm with `SCENE_SETTINGS='argot.enabled: true'`) —
   off shows only the "Argot Shorthand" master toggle, on shows it plus Models, Dictionary Budget,
-  Context Cutoff and Subagents — and the bench
-  `packages/evals/suites/typescript-edit/argot-bench.ts`, which runs the edit tasks with encoding on
+  Context Cutoff and Agents — and the bench
+  `tests/evals/suites/typescript-edit/argot-bench.ts`, which runs the edit tasks with encoding on
   and off and certifies the token delta. `test/argot-settings-e2e.test.ts` asserts every Argot
   setting end to end, including that the knobs are hidden while off. Keep all of it current.
 
 ## Commands
 
 - Commit frequently: each logical chunk as its own commit once it stands alone and its gate is green.
-  Pushing is separate and needs explicit approval.
+  Pushing follows the operator's global `AGENTS.md`; this file does not set it.
 - Stage only the paths you changed. `git add -A` is banned; this tree carries other lanes' in-flight
   work.
 - Never `tsc`/`npx tsc`. Always `bun run check`.
@@ -636,9 +687,11 @@ bun run release minor          # do it.
 Rust workspace, the natives sentinel and the lockfiles, rolls each package's `## [Unreleased]` into a
 dated section, regenerates the root changelog, and commits `chore: bump version to vX.Y.Z`. It then
 shows the commit and tag and asks once; on yes it pushes `main`, waits for that SHA's checks, and
-tags. It needs explicit approval to run because it pushes: the prompt is that approval, no flag
-answers it in advance, and an agent never answers it. `release:dry` publishes nothing, which is why
-it is non-interactive.
+tags. `release:dry` publishes nothing, which is why it is non-interactive.
+
+Mechanics are here. Approval is in the operator's global `AGENTS.md`. The script's prompt is a
+terminal confirmation, not the approval; it fails without a TTY, hence the three by-hand moves
+below.
 
 Only a tag publishes. A push, a green run, and a waiting `## [Unreleased]` bullet do not. The three
 underlying moves, which every non-publishing exit prints and which you can finish by hand:
@@ -658,7 +711,7 @@ when `main` moved on during preparation.
 
 Full detail: [`docs/internal/deployment.md`](docs/internal/deployment.md).
 
-The website is a static site under `website/`, deployed to Cloudflare Pages.
+The website is a static site under `apps/site/`, deployed to Cloudflare Pages.
 
 - `bun run site:build` regenerates `changelog.html` from `packages/coding-agent/CHANGELOG.md`
   (fork-aware: veyyon releases vs inherited oh-my-pi history), stages the install scripts, and runs a
@@ -668,9 +721,9 @@ The website is a static site under `website/`, deployed to Cloudflare Pages.
   `/credentials/.env`). `--dry-run` prints the command without deploying.
 - Two Pages projects: `veyyon` serves `veyyon.dev`, and `veyyon-get` serves `get.veyyon.dev`, the
   install endpoint. Deploy the latter with `VEYYON_PAGES_PROJECT=veyyon-get bun run site:deploy`.
-- `website/docs` is a symlink to `docs/handbook/book`. Rebuild it with `mdbook build` in
+- `apps/site/docs` is a symlink to `docs/handbook/book`. Rebuild it with `mdbook build` in
   `docs/handbook` before deploying a docs change.
-- `site:build` stages gitignored copies of the installers as `website/install.{sh,ps1}`. The source
+- `site:build` stages gitignored copies of the installers as `apps/site/install.{sh,ps1}`. The source
   of truth is `scripts/install.{sh,ps1}`; edit those.
 
 `install.sh` resolves the platform, reads `github.com/santhreal/veyyon` `releases/latest`, downloads

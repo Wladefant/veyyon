@@ -2,8 +2,8 @@ import * as path from "node:path";
 import { isCancellation, untilAborted } from "@veyyon/utils/abortable";
 // Owners, not the `@veyyon/utils` barrel: 2 modules against 74.
 import * as logger from "@veyyon/utils/logger";
-import type { ConversionResult, Markit, StreamInfo } from "../markit";
-import { ToolAbortError, toolAbort } from "../tools/tool-errors";
+import type { ConversionResult, Markit, StreamInfo } from "../export/markit";
+import { ToolAbortError, toolAbort } from "../tools/core/tool-errors";
 import {
 	type MarkitConversionCacheStatus,
 	markitConversionCacheKey,
@@ -52,7 +52,7 @@ function installMuPdfWasmLogger(): void {
 
 // Hand the WASM module its bytes directly when the compiled binary embedded them
 // (scripts/embed-mupdf-wasm.ts); a single-file binary has no node_modules for
-// mupdf to read `mupdf-wasm.wasm` from. Source/npm builds get undefined here and
+// mupdf to read `mupdf-wasm.wasm` from. Source/bundle builds get undefined here and
 // mupdf loads its own wasm. Must run before the mupdf module evaluates.
 function installEmbeddedMupdfWasm(): void {
 	const wasmBinary = loadEmbeddedMupdfWasm();
@@ -68,7 +68,7 @@ let markit: () => Markit | Promise<Markit> = async () => {
 	// Lazy: keep the document engine (mammoth/mupdf) off the startup
 	// import graph — it loads only when a document is first converted.
 	installEmbeddedMupdfWasm();
-	const promise = import("../markit").then(({ Markit }) => {
+	const promise = import("../export/markit").then(({ Markit }) => {
 		const instance = new Markit();
 		markit = () => instance;
 		return instance;

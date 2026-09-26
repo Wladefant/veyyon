@@ -40,7 +40,7 @@ import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
 import { isolatedAuthStorage } from "../helpers/isolated-auth-storage";
@@ -62,7 +62,7 @@ const TOOL_PROMPT_CEILINGS: Record<string, number> = {
 	edit: 8030,
 	eval: 6019,
 	read: 4900,
-	bash: 3910,
+	bash: 3932,
 	todo: 2640,
 	irc: 3450,
 	launch: 3561,

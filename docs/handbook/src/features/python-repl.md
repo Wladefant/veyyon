@@ -6,14 +6,14 @@ operational failure modes.
 
 ## Scope and Key Files
 
-- Tool surface: `src/tools/eval.ts`
+- Tool surface: `src/tools/shell/eval.ts`
 - Session/per-call kernel orchestration: `src/eval/py/executor.ts`
 - Subprocess kernel client: `src/eval/py/kernel.ts`
 - Python wrapper / NDJSON server: `src/eval/py/runner.py`
 - Prelude helpers loaded into every kernel: `src/eval/py/prelude.py`
-- Host-side subagent helper bridge: `src/eval/agent-bridge.ts`
+- Host-side agent helper bridge: `src/eval/agent-bridge.ts`
 - MIME bundle renderer (text + structured outputs): `src/eval/py/display.ts`
-- Interactive-mode renderer for user-triggered Python runs: `src/modes/components/eval-execution.ts`
+- Interactive-mode renderer for user-triggered Python runs: `src/modes/terminal/components/transcript/eval-execution.ts`
 - Runtime/env filtering and Python resolution: `src/eval/py/runtime.ts`
 
 ## What eval's Python backend is
@@ -37,6 +37,12 @@ The tool is `concurrency = "exclusive"` for a session, so calls do not overlap.
 ## Kernel lifecycle
 
 Each Python kernel is a single subprocess: `<resolved-python> -u <runner.py>`. The runner is bundled with the host binary (Bun text import), written to a `veyyon-python-runner` cache under the OS temp directory once per script hash, and reused by subsequent spawns.
+
+Importing the SDK or session class does not load evaluator implementations. The first `$` Python command
+loads its executor through the shell domain manifest. Constructing `eval` and reading its metadata do
+not load evaluators; the first enabled request loads only its selected language.
+Each loaded evaluator registers process-exit cleanup beside its resource pool. Session disposal
+releases that session's resources without loading unused evaluators.
 
 Kernel startup sequence:
 
@@ -151,11 +157,11 @@ The runner additionally receives `PYTHONUNBUFFERED=1` and `PYTHONIOENCODING=utf-
 
 `VEYYON_PY` and `VEYYON_JS` use normal boolean flag parsing. Each flag, when set, overrides only its own setting; an unset flag falls back to its setting (`eval.py` / `eval.js`, both default `true`).
 
-`eval.pyWorkspace` defaults to `false`. When enabled, the model-facing `eval` description tells the agent to retain large `tool.*` results in Python variables, transform them in the kernel, reuse helper functions, and display only compact conclusions. It adds guidance only; it does not add Python APIs or change cell execution.
+`eval.pyWorkspace` defaults to `false`. When enabled, the model-facing `eval` description instructs the agent to retain large `tool.*` results in Python variables, transform them in the kernel, reuse helper functions, and display only compact conclusions. It adds guidance only; it does not add Python APIs or change cell execution.
 
 If Python preflight fails and `eval.js` is enabled, `eval` remains available for `js` cells; `py` cells fail with a Python-backend availability error.
 
-Python prelude helpers include `agent(prompt, *, agent="deep", model=None, label=None, schema=None, handle=False, isolated=None, apply=None, merge=None)`. It synchronously calls the host bridge, runs one subagent through the task executor, and returns the final text. When `schema` is supplied, the helper parses the subagent's JSON output and returns the object. When `handle=True`, it instead returns a DAG node dict (`{"text", "output", "handle", "id", "agent"}`) whose `handle` is the spawned agent's recoverable `agent://<id>` URI (the parsed object lands under `"data"` when `schema` is also set), so a downstream `pipeline`/`parallel` stage can reference the transcript by handle instead of re-inlining it.
+Python prelude helpers include `agent(prompt, *, agent="deep", model=None, label=None, schema=None, handle=False, isolated=None, apply=None, merge=None)`. It synchronously calls the host bridge, runs one agent through the task executor, and returns the final text. When `schema` is supplied, the helper parses the agent's JSON output and returns the object. When `handle=True`, it instead returns a DAG node dict (`{"text", "output", "handle", "id", "agent"}`) whose `handle` is the spawned agent's recoverable `agent://<id>` URI (the parsed object lands under `"data"` when `schema` is also set), so a downstream `pipeline`/`parallel` stage can reference the transcript by handle instead of re-inlining it.
 
 ### Persisted helper state
 
@@ -239,7 +245,7 @@ Output is streamed through `OutputSink` and may be persisted to artifact storage
   - keeps at most 100 output lines while a cell is streaming (`EXECUTION_STREAMING_LINE_CAP`, five screenfuls). When more arrive the oldest are dropped and the footer states it: `… N earlier lines dropped while streaming`. That note is separate from the `… N more lines (ctrl+o to expand)` hint, because expanding reveals hidden lines and cannot bring back dropped ones. Once the cell finishes, the full output replaces what streaming kept, so the note disappears.
   - shows cancellation/error/truncation notices
 
-The bash execution block (`bash-execution.ts`) shares all three of those limits, along with the clamp itself, through `modes/components/execution-shared.ts`.
+The bash execution block (`bash-execution.ts`) shares all three of those limits, along with the clamp itself, through `modes/terminal/components/transcript/execution-shared.ts`.
 
 ## Operational troubleshooting
 

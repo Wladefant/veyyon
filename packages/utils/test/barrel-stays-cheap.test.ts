@@ -75,8 +75,22 @@ const reachable = moduleReach(BARREL);
  * and call it directly, which is the point of the module — every `Process.fromPid` and
  * `Process.fromPath` call site resolves through one owner. It adds no new edge to `@veyyon/natives`,
  * which both of those modules already imported for the same symbol.
+ *
+ * RE-MEASURED 2026-08-27 at 86. The new module is `ansi.ts`, the owner of the terminal control bytes
+ * (`ESC`, `CSI`, `ST`, the SGR resets), which moved here from `@veyyon/tui` when the string and escape
+ * primitives were pulled below the terminal layer. `sanitize-text.ts` is exported from the barrel and
+ * imports `ESC` from it, which retires the `ESC_CHAR = "\x1b"` copy that only existed because utils
+ * could not import upward into tui. A subpath cannot move it off the graph. It is a zero-import leaf:
+ * `moduleReach("ansi.ts")` is 1, so the barrel pays one module for one declaration of the byte.
+ *
+ * RE-MEASURED 2026-09-11 at 87. The new module is `tab-width.ts`, the owner of `DEFAULT_TAB_WIDTH`
+ * and `replaceTabs`, split out of `tab-spacing.ts` so the browser bundles (`@veyyon/tool-render`,
+ * the web client) share the one tab width without the `.editorconfig` reader that touches the
+ * filesystem. `tab-spacing.ts` re-exports `DEFAULT_TAB_WIDTH` from it and is exported from the
+ * barrel, so a subpath cannot move it off the graph without dropping a root export main published.
+ * It is a zero-import leaf: `moduleReach("tab-width.ts")` is 1.
  */
-const BARREL_CEILING = 85;
+const BARREL_CEILING = 87;
 
 describe("the @veyyon/utils barrel", () => {
 	/** The number that multiplies by six hundred realms. */

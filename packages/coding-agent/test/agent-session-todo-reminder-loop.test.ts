@@ -3,16 +3,17 @@ import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage, TextContent, ToolCall } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { AgentSession, type AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir, withTimeout } from "@veyyon/utils";
 
 /**
- * Regression coverage for issue #2590: `#checkTodoCompletion` used to schedule
+ * Regression coverage for issue #2590: `TodoRuntime.checkCompletionAtSettle` used to schedule
  * `agent.continue()` after appending its `<system-reminder>`, so any text-only
  * acknowledgement from the agent ("paused at your instruction") triggered another
  * `agent_end`, which incremented the counter and fired the next reminder — no

@@ -29,7 +29,7 @@ Keyless local engines are a special case: `ollama`, `llama.cpp`, and `lm-studio`
 When a provider needs an API key, `veyyon` resolves it in this order (first match wins):
 
 1. **Runtime override**: a key supplied for the current process, e.g. CLI `--api-key`. Never persisted.
-2. **`models.yml` config key**: an `apiKey` pinned on a custom provider, registered as a config-sourced bearer. This deliberately beats stored OAuth, so a key supplied for a custom `baseUrl`/gateway is honored instead of forwarding an upstream OAuth token the proxy would reject.
+2. **`models.yml` config key**: an `apiKey` pinned on a custom provider, registered as a config-sourced bearer. This takes precedence over stored OAuth, so a key supplied for a custom `baseUrl`/gateway is honored instead of forwarding an upstream OAuth token the proxy would reject.
 3. **Stored API key**: an API-key credential saved in the auth store.
 4. **Stored OAuth credential**: refreshed when needed; multiple accounts are ranked/rotated automatically. For Anthropic, each organization counts as its own account: one email holding both a Team seat and a personal plan can log in once per subscription (pick the workspace on the browser consent page) and rotation treats them as two accounts.
 5. **Provider environment variable**: including values loaded from `.env` files (see [the env-var table](#environment-variables-and-env-files)).
@@ -98,7 +98,7 @@ Each provider has one or more environment variables that supply a key when no st
 | Provider ID | Environment variable(s) |
 |---|---|
 | `cerebras` | `CEREBRAS_API_KEY` |
-| `command-code` | `CMD_API_KEY`, then `COMMAND_CODE_API_KEY` |
+| `command-code` | `CMD_API_KEY`, then `COMMAND_CODE_API_KEY`, then `COMMANDCODE_API_KEY` |
 | `deepseek` | `DEEPSEEK_API_KEY` |
 | `fireworks` | `FIREWORKS_API_KEY` |
 | `together` | `TOGETHER_API_KEY` |
@@ -146,7 +146,7 @@ Each provider has one or more environment variables that supply a key when no st
 
 OAuth-backed providers such as `anthropic`, `github-copilot`, `cursor`, `ollama-cloud`, `qwen-portal`, `kimi-code`, `nous-research`, `xai-oauth`, `wafer-serverless`, `google-gemini-cli`, and `google-antigravity` are normally reached through `/login` rather than an environment variable. Nous Portal stores a durable refresh token and mints short-lived inference access tokens for requests and model discovery; `NOUS_API_KEY` remains available for explicit headless use.
 
-Command Code uses `https://api.commandcode.ai/provider/v1`, defaults to `moonshotai/Kimi-K2.7-Code`, and issues keys at [Command Code Provider](https://commandcode.ai/studio/provider). Nous Research uses `https://inference-api.nousresearch.com/v1` and defaults to the tool-capable `anthropic/claude-sonnet-4.6`; authenticated discovery adds the current tool-capable chat catalog and excludes embedding, media-generation, and non-tool rows. Nous accepts either sign-in: `/login nous-research` runs the Portal device flow, and `/login nous-research-api-key` takes a key pasted from the Portal. Both store one credential under `nous-research`, so the model list and the account card show a single Nous account either way.
+Command Code uses `https://api.commandcode.ai/provider/v1`, defaults to `claude-sonnet-4-6`, and issues keys at [Command Code Provider](https://commandcode.ai/studio/provider). Its `/models` endpoint answers without a key, so the bundled catalog carries every model it serves; prices, reasoning efforts and output ceilings come from the deployment contract, because the endpoint publishes none of them. Nous Research uses `https://inference-api.nousresearch.com/v1` and defaults to the tool-capable `anthropic/claude-sonnet-4.6`; authenticated discovery adds the current tool-capable chat catalog and excludes embedding, media-generation, and non-tool rows. Nous accepts either sign-in: `/login nous-research` runs the Portal device flow, and `/login nous-research-api-key` takes a key pasted from the Portal. Both store one credential under `nous-research`, so the model list and the account card show a single Nous account either way.
 
 ### `.env` discovery and precedence
 

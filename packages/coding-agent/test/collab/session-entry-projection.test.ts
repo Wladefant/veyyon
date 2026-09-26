@@ -27,7 +27,7 @@
 
 import { describe, expect, it } from "bun:test";
 import { fromWireSessionEntry, toWireSessionEntry } from "@veyyon/coding-agent/collab/protocol";
-import type { SessionEntry } from "@veyyon/coding-agent/session/session-entries";
+import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 
 /** Keys a projected entry may have, so a leak is named rather than counted. */
 function keysOf(value: unknown): string[] {
@@ -208,7 +208,16 @@ describe("projecting a tool-result message entry", () => {
 		const wire = toWireSessionEntry(toolResultEntry());
 		const message = (wire as unknown as { message: unknown }).message;
 
-		expect(keysOf(message)).toEqual(["content", "details", "isError", "role", "timestamp", "toolCallId", "toolName"]);
+		expect(keysOf(message)).toEqual([
+			"content",
+			"details",
+			"display",
+			"isError",
+			"role",
+			"timestamp",
+			"toolCallId",
+			"toolName",
+		]);
 	});
 });
 

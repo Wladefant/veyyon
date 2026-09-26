@@ -195,6 +195,68 @@ describe("mergePackageSection", () => {
 		const merged = mergePackageSection(FIXTURE, SILENT_WINDOW);
 		expect(merged).not.toMatch(/### Fixed\s*\n\s*(### |$)/);
 	});
+
+	it("takes the section veyyon released when an inherited section carries the same number", () => {
+		// `hosts/terminal/engine/CHANGELOG.md`: veyyon cut 1.5.0 on 2026-09-18 and the file
+		// still carries pi-mono's 1.5.0 from 2026-01-03, below the `## [16.5.2]` fork point.
+		// Keyed by version alone the inherited copy won, and v1.5.0's notes for
+		// `@veyyon/tui` were one bullet about `getText()`.
+		const changelog = [
+			"# Changelog",
+			"",
+			"## [Unreleased]",
+			"",
+			"## [1.5.0] - 2026-09-18",
+			"",
+			"### Added",
+			"",
+			"- Components can provide `measureHeight(width)` for layout measurement.",
+			"",
+			"## [16.5.2] - 2026-07-14",
+			"",
+			"### Fixed",
+			"",
+			"- The last upstream release before the fork.",
+			"",
+			"## [1.5.0] - 2026-01-03",
+			"",
+			"### Added",
+			"",
+			"- Added `getText()` method to Text component.",
+			"",
+		].join("\n");
+
+		const merged = mergePackageSection(changelog, ["1.5.0"]);
+		expect(merged).toContain("- Components can provide `measureHeight(width)` for layout measurement.");
+		expect(merged).not.toContain("getText()");
+	});
+
+	it("still finds a veyyon section that sits inside the inherited history", () => {
+		// Early veyyon cuts landed below the fork point in the engine changelog, so a
+		// version present only there must still resolve rather than produce empty notes.
+		const changelog = [
+			"# Changelog",
+			"",
+			"## [Unreleased]",
+			"",
+			"## [16.5.2] - 2026-07-14",
+			"",
+			"### Fixed",
+			"",
+			"- The last upstream release before the fork.",
+			"",
+			"## [1.3.0] - 2026-08-28",
+			"",
+			"### Added",
+			"",
+			"- `TUI.onBeforeCompose` runs at the top of every frame.",
+			"",
+		].join("\n");
+
+		expect(mergePackageSection(changelog, ["1.3.0"])).toContain(
+			"- `TUI.onBeforeCompose` runs at the top of every frame.",
+		);
+	});
 });
 
 describe("ci-release-notes.ts must run without a workspace install", () => {
@@ -325,7 +387,7 @@ describe("boundReleaseNotesBody", () => {
 	 * draft with HTTP 422. The bounded body keeps only complete entries and names
 	 * the immutable sources for every omitted detail.
 	 */
-	it("shortens an oversized body only at a complete bullet boundary", () => {
+	it("shortens an oversized body only at a complete bullet boundary and links to the aggregate CHANGELOG.md", () => {
 		const entries = Array.from(
 			{ length: 40 },
 			(_, index) => `- Entry ${index}: ${"x".repeat(80)}\n  continuation-${index}.`,
@@ -342,7 +404,10 @@ describe("boundReleaseNotesBody", () => {
 		for (const index of included) expect(prefix).toContain(`continuation-${index}.`);
 		expect(prefix).toMatch(/continuation-\d+\.$/);
 		expect(bounded).toContain("shortened from");
-		expect(bounded).toContain("/tree/v1.0.38/packages");
+		expect(bounded).toContain("/blob/v1.0.38/CHANGELOG.md");
+		expect(bounded).toContain(
+			"Read the [complete changelog](https://github.com/santhreal/veyyon/blob/v1.0.38/CHANGELOG.md)",
+		);
 		expect(bounded).toContain("/compare/v1.0.37...v1.0.38");
 	});
 
@@ -354,7 +419,30 @@ describe("boundReleaseNotesBody", () => {
 
 		expect(bounded.length).toBeLessThanOrEqual(600);
 		expect(bounded).not.toContain("secret-detail");
+		expect(bounded).toContain("/blob/v1.0.38/CHANGELOG.md");
 		expect(bounded).toContain("/commits/v1.0.38");
+	});
+
+	/** Trailing orphaned headings are stripped when none of their bullets fit within the budget. */
+	it("prunes trailing section headers when no bullets from that section fit", () => {
+		const body =
+			"## @veyyon/coding-agent\n\n### Fixed\n\n- Main bullet.\n\n## @veyyon/orphaned\n\n### Added\n\n- Big bullet that does not fit " +
+			"x".repeat(300);
+		const bounded = boundReleaseNotesBody(body, { version: "1.0.38", floor: "1.0.37", maxChars: 400 });
+
+		expect(bounded.length).toBeLessThanOrEqual(400);
+		expect(bounded).toContain("- Main bullet.");
+		expect(bounded).not.toContain("## @veyyon/orphaned");
+		expect(bounded).not.toContain("### Added");
+		expect(bounded).toContain("/blob/v1.0.38/CHANGELOG.md");
+	});
+
+	/** Budgets smaller than the notice itself fail loud rather than producing negative budgets or overflow. */
+	it("rejects maxChars budgets too small to contain the truncation notice", () => {
+		const body = "- Entry exceeding the available body budget.\n".repeat(3);
+		expect(() => boundReleaseNotesBody(body, { version: "1.0.38", floor: null, maxChars: 50 })).toThrow(
+			"too small for the",
+		);
 	});
 });
 
@@ -458,6 +546,13 @@ describe("ci-release-notes end-to-end against a real tagged git repo", () => {
 	beforeEach(() => {
 		repo = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-notes-e2e-"));
 		git(["init", "-q", "-b", "main"], repo);
+		// The generator resolves member changelogs from the root manifest, the way the
+		// real repository declares them, so the fixture is a workspace rather than a
+		// bare `packages/` directory.
+		fs.writeFileSync(
+			path.join(repo, "package.json"),
+			JSON.stringify({ workspaces: { packages: ["packages/*", "plugins/*"] } }),
+		);
 		fs.mkdirSync(path.join(repo, "packages", "alpha"), { recursive: true });
 		fs.writeFileSync(path.join(repo, "packages", "alpha", "package.json"), JSON.stringify({ name: "@veyyon/alpha" }));
 	});
@@ -468,6 +563,14 @@ describe("ci-release-notes end-to-end against a real tagged git repo", () => {
 
 	function writeChangelog(body: string): void {
 		fs.writeFileSync(path.join(repo, "packages", "alpha", "CHANGELOG.md"), body);
+	}
+
+	/** The same changelog, for a member that does not live under `packages/`. */
+	function writePluginChangelog(body: string): void {
+		const dir = path.join(repo, "plugins", "beta");
+		fs.mkdirSync(dir, { recursive: true });
+		fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "@veyyon/beta" }));
+		fs.writeFileSync(path.join(dir, "CHANGELOG.md"), body);
 	}
 
 	it("emits curated sections then the commit summary for the (floor, target] range", () => {
@@ -515,6 +618,39 @@ describe("ci-release-notes end-to-end against a real tagged git repo", () => {
 		expect(body).not.toContain("initial alpha release");
 		// Ordering: curated package section precedes the derived summary.
 		expect(body.indexOf("## @veyyon/alpha")).toBeLessThan(body.indexOf("## What changed"));
+	});
+
+	/**
+	 * WHY THIS CELL EXISTS. The generator globbed `packages/*​/CHANGELOG.md`, so a
+	 * release body carried entries from members under `packages/` and silently dropped
+	 * every other one. Nine members keep a changelog outside it -- `kernel`, both
+	 * `contracts/*`, `hosts/terminal/engine`, `natives/bridge/bindings` and the four
+	 * `plugins/*` -- and the terminal engine's was `packages/tui` until it moved, so
+	 * the omission arrived with a directory rename and nothing failed. The member list
+	 * comes from the root manifest now, which is the same authority the root changelog
+	 * and the changelog gate read.
+	 *
+	 * What it does not catch: a member whose manifest declares no `name`, which falls
+	 * back to its directory name in the heading rather than failing.
+	 */
+	it("carries the curated section of a member that does not live under packages/", () => {
+		writeChangelog(["# Changelog", "", "## [1.1.0]", "", "### Added", "", "- Added an alpha flag.", ""].join("\n"));
+		writePluginChangelog(
+			["# Changelog", "", "## [1.1.0]", "", "### Fixed", "", "- Stopped dropping a plugin hook.", ""].join("\n"),
+		);
+		git(["add", "-A"], repo);
+		commit("feat: seed");
+		git(["tag", "v1.0.0"], repo);
+		commit("fix(plugin): stop dropping a plugin hook");
+		git(["tag", "v1.1.0"], repo);
+
+		const { code, body } = runNotes("v1.1.0", "1.0.0");
+		expect(code).toBe(0);
+		expect(body).toContain("## @veyyon/beta");
+		expect(body).toContain("- Stopped dropping a plugin hook.");
+		// Both members appear, so the widening added a source rather than replacing one.
+		expect(body).toContain("## @veyyon/alpha");
+		expect(body).toContain("- Added an alpha flag.");
 	});
 
 	it("still writes a real body from commits alone when no changelog bullet exists", () => {

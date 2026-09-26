@@ -6,8 +6,8 @@ import type { AgentToolResult } from "@veyyon/agent-core";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { recordFileSnapshot } from "@veyyon/coding-agent/edit/file-snapshot-store";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import type { ReadToolDetails } from "@veyyon/coding-agent/tools/read";
-import { ReadTool } from "@veyyon/coding-agent/tools/read";
+import type { ReadToolDetails } from "@veyyon/coding-agent/tools/fs/read";
+import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { removeWithRetries } from "@veyyon/utils";
 import { makeToolSession } from "./helpers/tool-session";
 
@@ -255,12 +255,29 @@ describe("a bounded range read touches the file once", () => {
 			const result = await tool.execute("call-wide", { path: "wide.txt:1-3" });
 			const truncation = result.details?.truncation;
 
-			expect(textOutput(result)).toContain("Line 1 is 195.3KB, exceeds 50.0KB limit");
+			expect(textOutput(result)).toContain(
+				"Line 1 is 195.3KB, exceeds 50.0KB limit. Hashline output requires full lines; cannot emit an editable numbered preview for a truncated line.",
+			);
 			expect(truncation?.truncatedBy).toBe("bytes");
 			expect(truncation?.firstLineExceedsLimit).toBe(true);
 			expect(truncation?.totalLines).toBe(4);
 			expect(truncation?.outputLines).toBe(0);
 			expect(truncation?.totalBytes).toBe(0);
+		});
+	});
+
+	it("refuses an over-long first line the same way on a whole-file read", async () => {
+		await withWorkspace(async dir => {
+			const file = path.join(dir, "wide-whole.txt");
+			await fs.writeFile(file, `${"x".repeat(200_000)}\nsecond\nthird\n`);
+			const tool = new ReadTool(createSession(dir));
+
+			const result = await tool.execute("call-wide-whole", { path: "wide-whole.txt" });
+
+			expect(textOutput(result)).toContain(
+				"Line 1 is 195.3KB, exceeds 50.0KB limit. Hashline output requires full lines; cannot emit an editable numbered preview for a truncated line.",
+			);
+			expect(result.details?.truncation?.firstLineExceedsLimit).toBe(true);
 		});
 	});
 

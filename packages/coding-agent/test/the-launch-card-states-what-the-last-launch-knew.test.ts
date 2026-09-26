@@ -27,33 +27,38 @@
  * that ought to invalidate shows up as a hole here rather than as a confident wrong value.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { setTimeout as sleep } from "node:timers/promises";
 import { ThinkingLevel } from "@veyyon/agent-core/thinking";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { settings } from "@veyyon/coding-agent/config/settings-instance";
-import { LaunchComposerFoot } from "@veyyon/coding-agent/modes/components/composer-chrome";
-import { StatusLineComponent } from "@veyyon/coding-agent/modes/components/status-line/component";
-import { factsAtLaunch, launchSegmentContext } from "@veyyon/coding-agent/modes/components/status-line/session-facts";
-import { paintFirstFrame, takeFirstFrame } from "@veyyon/coding-agent/modes/first-frame";
 import {
 	type LaunchFacts,
 	type LaunchFactsUpdate,
-	launchModelLabel,
-	launchProviderLabel,
+	onLaunchFactsRecorded,
 	readLaunchFacts,
 	recordLaunchFacts,
+	recordRestLaunchFacts,
 	resetLaunchFactsForTest,
 } from "@veyyon/coding-agent/modes/launch-facts";
-import { resetGroundTintsForTest } from "@veyyon/coding-agent/modes/theme/ground-tints";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
+import { LaunchComposerFoot } from "@veyyon/coding-agent/modes/terminal/components/composer/composer-chrome";
+import { StatusLineComponent } from "@veyyon/coding-agent/modes/terminal/components/status-line/component";
+import {
+	factsAtLaunch,
+	launchSegmentContext,
+} from "@veyyon/coding-agent/modes/terminal/components/status-line/session-facts";
+import { paintFirstFrame, takeFirstFrame } from "@veyyon/coding-agent/modes/terminal/first-frame";
+import { launchModelLabel, launchProviderLabel } from "@veyyon/coding-agent/modes/terminal/launch-formatting";
+import { StatusPresentationProducer } from "@veyyon/coding-agent/presentation/status-producer";
 import { computeNonMessageBreakdown } from "@veyyon/coding-agent/session/non-message-tokens";
+import { resetGroundTintsForTest } from "@veyyon/coding-agent/theme/ground-tints";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { AUTO_THINKING } from "@veyyon/coding-agent/thinking";
 import type { GitStatusSummary } from "@veyyon/coding-agent/utils/git";
 import { getLaunchFactsCachePath, stripAnsi } from "@veyyon/utils";
-import * as atomicWrite from "@veyyon/utils/atomic-write";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../utils/test/helpers/isolated-config-root";
-import { makeStatusLineSession, type StubSessionOptions } from "./helpers/status-line-session";
+import { makeStatusLineProducer, makeStatusLineSession, type StubSessionOptions } from "./helpers/status-line-session";
 
 const DIRTY: GitStatusSummary = { staged: 1, unstaged: 2, untracked: 3, truncated: false };
 const CLEAN: GitStatusSummary = { staged: 0, unstaged: 0, untracked: 0, truncated: false };
@@ -119,44 +124,40 @@ function plantedEntry(map: "projects" | "models" | "terminals", fields: Record<s
 }
 
 /**
- * The file the recorder wrote while `act` ran, taken from the write itself.
+ * The file the recorder wrote while `act` ran, read back from disk.
  *
- * The product discards the recorder's promise, so a render leaves nothing on disk to read within
- * the test's turn. This captures the payload the writer was handed, which is the same object the
- * next launch parses, and awaits the write so the spy is not still in flight at teardown.
+ * The product discards the recorder's promise, so the write lands after the render returns. The
+ * recorder writes atomically — a temp file renamed over the target — so every write lands on a new
+ * inode, and waiting for the inode to move observes the write itself rather than a byte comparison
+ * that a rewrite of identical facts would never trip. The wait is bounded, so a recorder that
+ * writes nothing fails here as a stated error instead of hanging the suite.
  */
 async function written(act: () => void): Promise<{
 	projects: Record<string, Record<string, unknown>>;
 	models: Record<string, Record<string, unknown>>;
 }> {
-	const write = vi.spyOn(atomicWrite, "atomicWriteJson");
-	act();
-	const call = write.mock.calls.at(-1);
-	if (!call) throw new Error("the render wrote no launch facts");
-	await write.mock.results.at(-1)?.value;
-	return call[1] as {
-		projects: Record<string, Record<string, unknown>>;
-		models: Record<string, Record<string, unknown>>;
+	const path = getLaunchFactsCachePath();
+	const inode = (): number | undefined => {
+		try {
+			return statSync(path).ino;
+		} catch {
+			return undefined;
+		}
 	};
-}
-
-/**
- * Every path the recorder wrote for the duration of a test, in order, passed through to the real
- * writer so the file on disk stays what the product would have left.
- *
- * A recorder rather than a call count: when a collapse regresses, this states which record was
- * rewritten, and a count states only that something was.
- */
-function writeRecorder(): () => string[] {
-	const paths: string[] = [];
-	const real = atomicWrite.atomicWriteJson;
-	vi.spyOn(atomicWrite, "atomicWriteJson").mockImplementation(
-		async (filePath: string, data: unknown, options?: atomicWrite.AtomicWriteOptions) => {
-			paths.push(filePath);
-			await real(filePath, data, options);
-		},
-	);
-	return () => paths;
+	const before = inode();
+	act();
+	const deadline = Date.now() + 2_000;
+	while (Date.now() < deadline) {
+		await sleep(1);
+		const now = inode();
+		if (now !== undefined && now !== before) {
+			return JSON.parse(readFileSync(path, "utf8")) as {
+				projects: Record<string, Record<string, unknown>>;
+				models: Record<string, Record<string, unknown>>;
+			};
+		}
+	}
+	throw new Error("the render wrote no launch facts within two seconds");
 }
 
 /** The card's own status-row context, which is what the segments actually render from. */
@@ -167,6 +168,7 @@ function cardContext() {
 		compactThinkingLevel: false,
 		branch: "main",
 		autoCompactEnabled: true,
+		location: null,
 	});
 }
 
@@ -175,7 +177,7 @@ const GAUGE = /▰|left/;
 
 /** The card's footline at `width`, from the component that paints it, styling removed. */
 function cardFootRow(width: number): string {
-	const rows = new LaunchComposerFoot().render(width);
+	const rows = new LaunchComposerFoot(() => "").render(width);
 	return stripAnsi(rows.find(line => stripAnsi(line).trim().length > 0) ?? "");
 }
 
@@ -203,7 +205,6 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-	vi.restoreAllMocks();
 	resetSettingsForTest();
 	resetLaunchFactsForTest();
 	isolated.restore();
@@ -623,17 +624,35 @@ describe("what the launch card knows before a session exists", () => {
 	 * An idle session redraws continuously and every redraw reaches the recorder with the same
 	 * facts. The write has to stop at the first.
 	 *
-	 * Observed at the filesystem call rather than inferred from the file's contents: a recorder
-	 * that rewrote identical bytes fifty times would leave a file indistinguishable from one
-	 * written once, so only the writes themselves can see the amplification.
+	 * Observed at the file rather than at its contents: identical bytes rewritten fifty times leave
+	 * a file whose contents cannot tell the difference, but each write is a temp file renamed over
+	 * the target, so a rewrite replaces the inode and moves the modification time. A file whose
+	 * identity is unchanged after fifty redraws was written once.
 	 */
 	it("writes once for facts that have not changed", async () => {
 		await record({ contextPercent: 40, gitStatus: DIRTY });
-		const recorded = writeRecorder();
+		const before = statSync(getLaunchFactsCachePath());
 
 		for (let redraw = 0; redraw < 50; redraw++) await recordLaunchFacts({ contextPercent: 40, gitStatus: DIRTY });
 
-		expect(recorded()).toEqual([]);
+		const after = statSync(getLaunchFactsCachePath());
+		expect(after.ino).toBe(before.ino);
+		expect(after.mtimeMs).toBe(before.mtimeMs);
+	});
+
+	/**
+	 * The other half of that guard: a fact that DID change reaches the disk. Without this, a
+	 * recorder that never wrote at all would satisfy the case above.
+	 */
+	it("writes again when a fact changed", async () => {
+		await record({ contextPercent: 40, gitStatus: DIRTY });
+		const before = statSync(getLaunchFactsCachePath());
+
+		await recordLaunchFacts({ contextPercent: 41 });
+
+		const after = statSync(getLaunchFactsCachePath());
+		expect(after.ino).not.toBe(before.ino);
+		expect(readLaunchFacts().contextPercent).toBe(41);
 	});
 
 	/**
@@ -802,6 +821,7 @@ describe("the row the card can afford", () => {
 		expect(factsAtLaunch().model).toBeNull();
 		expect(launchModelLabel()).toBe("");
 	});
+
 	/**
 	 * The provider label is the cold answer for the hero's provider: a role is
 	 * stored `provider/id` and a provider id never contains a slash, so the
@@ -851,6 +871,23 @@ describe("the row the card can afford", () => {
 			resetGroundTintsForTest();
 		}
 	});
+
+	/**
+	 * A listener unsubscribing stops receiving notification turns.
+	 */
+	it("unsubscribes from launch facts notifications", async () => {
+		let notified = 0;
+		const unsubscribe = onLaunchFactsRecorded(() => {
+			notified++;
+		});
+
+		await record({ modelName: "Claude Sonnet 4", providerName: "anthropic" });
+		expect(notified).toBe(1);
+
+		unsubscribe();
+		await record({ modelName: "Claude Opus 4", providerName: "anthropic" });
+		expect(notified).toBe(1);
+	});
 });
 
 /**
@@ -878,7 +915,7 @@ describe("what a running session records for the next launch", () => {
 			contextUsage: { tokens: 32_000, contextWindow: 128_000 },
 			...options,
 		});
-		new StatusLineComponent(session).renderQuietLine(120);
+		new StatusLineComponent(new StatusPresentationProducer(session)).renderQuietLine(120);
 		return readLaunchFacts();
 	}
 
@@ -953,7 +990,9 @@ describe("what a running session records for the next launch", () => {
 		const projectContext = computeNonMessageBreakdown(session).systemContextTokens;
 		expect(projectContext, "the fixture contributed no project context, so nothing is subtracted").toBeGreaterThan(0);
 
-		const file = await written(() => new StatusLineComponent(session).renderQuietLine(120));
+		const file = await written(() =>
+			new StatusLineComponent(new StatusPresentationProducer(session)).renderQuietLine(120),
+		);
 
 		const project = Object.values(file.projects)[0];
 		const model = Object.values(file.models)[0];
@@ -976,9 +1015,61 @@ describe("what a running session records for the next launch", () => {
 			systemPrompt: ["the model's own prompt", "PROJECT CONTEXT ".repeat(20_000)],
 		});
 
-		const file = await written(() => new StatusLineComponent(session).renderQuietLine(120));
+		const file = await written(() =>
+			new StatusLineComponent(new StatusPresentationProducer(session)).renderQuietLine(120),
+		);
 
 		expect(Object.values(file.models)[0]?.contextPercent).toBe(0);
+	});
+
+	/**
+	 * An active session with messageCount > 0 skips context percent recording at rest.
+	 */
+	it("does not record at-rest context percentage when message count is non-zero", async () => {
+		await recordRestLaunchFacts(
+			{
+				model: { provider: "anthropic", id: "claude-sonnet-4", name: "Claude Sonnet 4" },
+				thinkingLevel: null,
+				isAutoThinking: false,
+				messageCount: 5,
+				systemContextTokens: 1000,
+			},
+			30,
+			128_000,
+		);
+
+		const facts = readLaunchFacts();
+		expect(facts.modelName).toBe("Claude Sonnet 4");
+		expect(facts.providerName).toBe("anthropic");
+		expect(facts.contextPercent).toBeNull();
+	});
+
+	/**
+	 * A listener reads updated in-memory memo facts immediately during notification callback.
+	 */
+	it("allows listeners to read updated memo before disk write finishes", async () => {
+		let observedInCallback: string | null | undefined;
+		const unsubscribe = onLaunchFactsRecorded(() => {
+			observedInCallback = readLaunchFacts().modelName;
+		});
+
+		try {
+			await recordRestLaunchFacts(
+				{
+					model: { provider: "anthropic", id: "claude-sonnet-4", name: "Claude Sonnet 4" },
+					thinkingLevel: null,
+					isAutoThinking: false,
+					messageCount: 0,
+					systemContextTokens: 0,
+				},
+				25,
+				128_000,
+			);
+
+			expect(observedInCallback).toBe("Claude Sonnet 4");
+		} finally {
+			unsubscribe();
+		}
 	});
 });
 
@@ -1002,7 +1093,7 @@ describe("the effort the card prints before a session resolves one", () => {
 	const THINKS = { modelId: "claude-sonnet-4", modelProvider: "anthropic", modelThinking: true };
 
 	function recordedAfterRender(options: StubSessionOptions): LaunchFacts {
-		new StatusLineComponent(makeStatusLineSession(options)).renderQuietLine(120);
+		new StatusLineComponent(makeStatusLineProducer(options)).renderQuietLine(120);
 		return readLaunchFacts();
 	}
 
@@ -1183,14 +1274,19 @@ describe("the background the card paints on before the terminal answers", () => 
 	/**
 	 * The write collapse, for the map that arrives on every launch. The background is reported once
 	 * per session and is the same value each time, so re-recording it must not touch the disk.
+	 *
+	 * Observed at the file, the way the other collapse cells above observe it: each write is a temp
+	 * file renamed over the target, so a rewrite replaces the inode even when the bytes are the same.
 	 */
 	it("writes nothing when the terminal reports the background it already recorded", async () => {
 		await record({ terminalGround: GROUND, modelName: "Claude Sonnet 4" });
-		const recorded = writeRecorder();
+		const before = statSync(getLaunchFactsCachePath());
 
 		await record({ terminalGround: GROUND, modelName: "Claude Sonnet 4" });
 
-		expect(recorded()).toEqual([]);
+		const after = statSync(getLaunchFactsCachePath());
+		expect(after.ino).toBe(before.ino);
+		expect(after.mtimeMs).toBe(before.mtimeMs);
 	});
 
 	/** A window whose emulator changed theme reports a different colour, and that one is the fact. */

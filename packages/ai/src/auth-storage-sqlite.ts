@@ -17,7 +17,7 @@
  * `auth-storage.ts` re-exports this class, so every existing importer of `@veyyon/ai/auth-storage` or of
  * the package barrel is unaffected.
  */
-import { Database, type Statement } from "bun:sqlite";
+import { constants, Database, type Statement } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getAgentDbPath } from "@veyyon/utils/dirs";
@@ -293,7 +293,6 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 				} catch {
 					// Ignore chmod failures (e.g., Windows)
 				}
-				SqliteAuthCredentialStore.#ensureAuthCredentialRefreshLeasesTable(db);
 				return new SqliteAuthCredentialStore(db);
 			} catch (err) {
 				db?.close();
@@ -312,24 +311,17 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		);
 	}
 
-	static #ensureAuthCredentialRefreshLeasesTable(db: Database): void {
-		db.run(`
-			CREATE TABLE IF NOT EXISTS auth_credential_refresh_leases (
-				credential_id INTEGER PRIMARY KEY,
-				owner TEXT NOT NULL,
-				expires_at_ms INTEGER NOT NULL,
-				updated_at INTEGER NOT NULL
-			);
-			CREATE INDEX IF NOT EXISTS idx_auth_credential_refresh_leases_expires ON auth_credential_refresh_leases(expires_at_ms);
-		`);
-	}
-
 	#initializeSchema(): void {
 		// Install the busy handler BEFORE any lock-taking statement (incl.
 		// `PRAGMA journal_mode=WAL`, which acquires an exclusive lock during WAL
 		// recovery). Without this, concurrent veyyon startups can crash here with
 		// `SQLITE_BUSY` / `SQLITE_BUSY_RECOVERY`. See issue #2421.
 		this.#db.run("PRAGMA busy_timeout = 5000");
+		// Keep `agent.db-wal` and `agent.db-shm` on close. A WAL database opens only when
+		// both files exist or can be created, so deleting them on close would make the
+		// next launch fail with SQLITE_READONLY_DIRECTORY on a read-only credential
+		// directory (locked-down images, read-only home mounts).
+		this.#db.fileControl(constants.SQLITE_FCNTL_PERSIST_WAL, 1);
 		this.#db.run(`
 			PRAGMA journal_mode=WAL;
 			PRAGMA synchronous=NORMAL;
@@ -378,11 +370,11 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 			);
 			CREATE INDEX IF NOT EXISTS idx_usage_history_recorded ON usage_history(recorded_at);
 		`);
+		this.#createAuthCredentialRefreshLeasesTable();
 
 		if (!this.#authCredentialsTableExists()) {
 			this.#createAuthCredentialsTable();
 			this.#createAuthCredentialBlocksTable();
-			this.#createAuthCredentialRefreshLeasesTable();
 			this.#writeAuthSchemaVersion(AUTH_SCHEMA_VERSION);
 			return;
 		}
@@ -400,7 +392,6 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 
 		this.#createAuthCredentialIndexes();
 		this.#createAuthCredentialBlocksTable();
-		this.#createAuthCredentialRefreshLeasesTable();
 		this.#backfillCredentialIdentityKeys();
 		// Rewriting an already-current version row is a no-op write transaction
 		// on every boot; only persist when the recorded version actually changes.
@@ -491,7 +482,15 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	#createAuthCredentialRefreshLeasesTable(): void {
-		SqliteAuthCredentialStore.#ensureAuthCredentialRefreshLeasesTable(this.#db);
+		this.#db.run(`
+			CREATE TABLE IF NOT EXISTS auth_credential_refresh_leases (
+				credential_id INTEGER PRIMARY KEY,
+				owner TEXT NOT NULL,
+				expires_at_ms INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL
+			);
+			CREATE INDEX IF NOT EXISTS idx_auth_credential_refresh_leases_expires ON auth_credential_refresh_leases(expires_at_ms);
+		`);
 	}
 
 	#migrateAuthSchema(fromVersion: number): void {
@@ -925,17 +924,34 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	}
 
 	deleteAuthCredential(id: number, disabledCause: string): void {
-		try {
-			this.#deleteStmt.run(normalizeDisabledCause(disabledCause), id);
-		} catch (error) {
-			// This method returns void, so a swallowed failure told the caller the
-			// credential was disabled when it is still enabled and still in rotation.
-			// A key revoked upstream then keeps being retried on every request.
-			logger.warn("Auth credential could not be disabled; it stays in rotation", {
+		this.#disable(
+			this.#deleteStmt,
+			id,
+			disabledCause,
+			"Auth credential could not be disabled; it stays in rotation",
+			{
 				id,
-				disabledCause,
-				error: errorMessage(error),
-			});
+			},
+		);
+	}
+
+	/**
+	 * Soft-delete through `stmt`, bound to `(cause, target)`. The method is void, so a swallowed
+	 * failure would tell the caller the credential was disabled when it is still enabled and still in
+	 * rotation — a key revoked upstream keeps being retried on every request — so the failure is
+	 * reported with the target it names.
+	 */
+	#disable(
+		stmt: Statement,
+		target: number | string,
+		disabledCause: string,
+		warning: string,
+		details: Record<string, number | string>,
+	): void {
+		try {
+			stmt.run(normalizeDisabledCause(disabledCause), target);
+		} catch (error) {
+			logger.warn(warning, { ...details, disabledCause, error: errorMessage(error) });
 		}
 	}
 
@@ -966,17 +982,13 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		return result.changes === 1;
 	}
 	deleteAuthCredentialsForProvider(provider: string, disabledCause: string): void {
-		try {
-			this.#deleteByProviderStmt.run(normalizeDisabledCause(disabledCause), provider);
-		} catch (error) {
-			// Same masked outcome as deleteAuthCredential, for every credential the
-			// provider owns: the caller believes the provider was signed out.
-			logger.warn("Auth credentials for provider could not be disabled; they stay in rotation", {
-				provider,
-				disabledCause,
-				error: errorMessage(error),
-			});
-		}
+		this.#disable(
+			this.#deleteByProviderStmt,
+			provider,
+			disabledCause,
+			"Auth credentials for provider could not be disabled; they stay in rotation",
+			{ provider },
+		);
 	}
 
 	/**
@@ -1442,25 +1454,41 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		this.#listDisabledByProviderStmt.finalize();
 		this.#insertStmt.finalize();
 		this.#updateStmt.finalize();
+		this.#updateEnablingStmt.finalize();
+		this.#updateIfMatchesStmt.finalize();
+		this.#updateIfMatchesWithLeaseStmt.finalize();
 		this.#deleteStmt.finalize();
 		this.#deleteIfMatchesStmt.finalize();
+		this.#deleteIfMatchesWithLeaseStmt.finalize();
 		this.#deleteByProviderStmt.finalize();
 		this.#hardDeleteStmt.finalize();
 		this.#getCacheStmt.finalize();
 		this.#getCacheIncludingExpiredStmt.finalize();
 		this.#upsertCacheStmt.finalize();
+		this.#deleteCachePrefixStmt.finalize();
 		this.#deleteExpiredCacheStmt.finalize();
 		this.#getCredentialBlockStmt.finalize();
 		this.#listCredentialBlocksByCredentialStmt.finalize();
 		this.#upsertCredentialBlockStmt.finalize();
 		this.#deleteCredentialBlocksStmt.finalize();
 		this.#deleteExpiredCredentialBlocksStmt.finalize();
+		this.#acquireCredentialRefreshLeaseStmt.finalize();
+		this.#getCredentialRefreshLeaseStmt.finalize();
+		this.#renewCredentialRefreshLeaseStmt.finalize();
+		this.#releaseCredentialRefreshLeaseStmt.finalize();
 		this.#insertUsageHistoryStmt.finalize();
 		this.#lastUsageHistoryStmt.finalize();
 		this.#listUsageHistoryStmt.finalize();
 		this.#updateUsageHistoryStmt.finalize();
 		this.#insertUsageCostStmt.finalize();
 		this.#listUsageCostsStmt.finalize();
+		this.#getAccountNameStmt.finalize();
+		this.#listAccountNamesStmt.finalize();
+		this.#upsertAccountNameStmt.finalize();
+		this.#deleteAccountNameStmt.finalize();
+		this.#getProviderSelectionStmt.finalize();
+		this.#upsertProviderSelectionStmt.finalize();
+		this.#deleteProviderSelectionStmt.finalize();
 		this.#db.close();
 	}
 }

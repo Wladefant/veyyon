@@ -81,7 +81,10 @@ is searched for. Only the dashed spellings are rejected.
 Some commands take a subcommand: `/account status`, `/account manager`, `/usage reset`. Typing the
 command on its own opens a picker listing every subcommand it has, with what each one does. Move
 with the up and down arrows, click a row, press enter to run it, or press escape to close and run
-nothing. Choosing a row runs exactly what typing that subcommand runs.
+nothing. Choosing a row runs exactly what typing that subcommand runs. When the list is longer than
+the picker, type to filter it; escape clears the filter before it closes the picker. The picker
+widens to show every usage and description whole; on a terminal too narrow for that, the usage
+column narrows first and a usage that still does not fit is cut after a whole word.
 
 A subcommand that takes an argument, such as `/account name <text>`, does not run straight away.
 The picker writes `/account name ` into the composer and leaves the cursor after it, so you type
@@ -175,7 +178,7 @@ act on a bare invocation: `/yolo`, `/fast`, and `/browser` flip a switch, `/goal
 | `/mcp notifications` | Show notification capabilities and subscriptions |
 | `/plugins …` | Plugin browser |
 | `/extensions`, `/status` | Extension Control Center dashboard. `/status` is an alias for it, not a session-status view |
-| `/agents` (aliases `/cockpit`, `/hub`) | Open the subagent dashboard: live agent roster and the agent-to-agent comms stream |
+| `/agents` (aliases `/cockpit`, `/hub`) | Open the agent dashboard: live agent roster and the agent-to-agent comms stream |
 | `/ssh …` | SSH host setup. `add` takes the name and host by position, then `user <user>`, a plain port, and `key <keyPath>` in any order: see [Every argument is a plain word](#every-argument-is-a-plain-word) |
 | `/hotkeys` | Active keybinding chords |
 | `/collab …`, `/join`, `/leave` | Live collab sessions |

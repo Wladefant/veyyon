@@ -42,10 +42,7 @@ export async function mapWithConcurrencyLimit<T, R>(
 	const workerSignal = signal ? AbortSignal.any([signal, abortController.signal]) : abortController.signal;
 
 	// Promise that rejects on first error - used to fail fast (not for abort)
-	let rejectFirst: (error: unknown) => void;
-	const firstErrorPromise = new Promise<never>((_, reject) => {
-		rejectFirst = reject;
-	});
+	const { promise: firstErrorPromise, reject: rejectFirst } = Promise.withResolvers<never>();
 
 	const worker = async (): Promise<void> => {
 		while (true) {
@@ -89,7 +86,7 @@ export async function mapWithConcurrencyLimit<T, R>(
  * Simple counting semaphore for limiting concurrency across independently-scheduled async work.
  *
  * `max <= 0` (or any non-finite input) means unbounded — every `acquire()` resolves
- * immediately — matching `subagent.maxConcurrency = 0`'s "Unlimited" semantics in the
+ * immediately — matching `agent.maxConcurrency = 0`'s "Unlimited" semantics in the
  * settings UI.
  */
 export function normalizeConcurrencyLimit(max: number): number {

@@ -55,6 +55,10 @@ const LOCKED_FILE = "packages/ai/src/providers/openai-compaction.ts";
 /**
  * SHA-256 of the locked file. Updating this constant without operator permission
  * is the exact move this gate exists to stop.
+ *
+ * Re-locked after merging origin/main `ccfa28057e` (OpenCode conversation id
+ * has one owner). The wire is unchanged: `{base}/codex/responses`, `stream: true`,
+ * trailing `compaction_trigger`. `{base}/codex/responses/compact` still answers 404.
  */
 const LOCKED_SHA256 = "2c18e649bd3279671519feacfb14400dfb94800022d887539c69781127d51ff8";
 

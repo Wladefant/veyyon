@@ -15,7 +15,7 @@
 
 import { describe, expect, it, vi } from "bun:test";
 import { getBundledModel } from "@veyyon/catalog/models";
-import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/types";
+import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import { executeAcpBuiltinSlashCommand } from "@veyyon/coding-agent/slash-commands/acp-builtins";
 import {
 	BUILTIN_SLASH_COMMAND_DECLARATIONS,
@@ -315,7 +315,7 @@ describe("an ACP-reachable remedy names something an ACP client can run", () => 
 		await executeAcpBuiltinSlashCommand("/usage reset", h.runtime);
 
 		expect(h.said).toEqual([
-			"No Codex accounts found. Sign in with /login in an interactive veyyon session to add one.",
+			"No OpenAI Codex or Anthropic accounts found. Sign in with /login in an interactive veyyon session to add one.",
 		]);
 	});
 
@@ -379,7 +379,7 @@ describe("every documented alias reaches the handler it claims", () => {
 	/**
 	 * The aliases a reader would NOT guess, which is what makes them worth naming one by one:
 	 * `/status` opens the Extension Control Center rather than a session-status view, `/cockpit` and
-	 * `/hub` are the retired Agent Hub names now pointing at the subagent dashboard, and `/help` is
+	 * `/hub` are the retired Agent Hub names now pointing at the agent dashboard, and `/help` is
 	 * the first thing a new user types. An alias that resolved elsewhere, or to nothing, would send a
 	 * reader to a command that errors.
 	 *

@@ -1,8 +1,8 @@
 import { beforeAll, describe, expect, it, vi } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { DebugSelectorComponent } from "@veyyon/coding-agent/debug";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
-import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/types";
+import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
 
 beforeAll(async () => {
 	await initTheme();
@@ -43,7 +43,7 @@ describe("DebugSelectorComponent — ModalShell migration", () => {
 
 		// Title lives inside the top border row (ModalShell), not a bare line
 		// below a horizontal rule (the old DynamicBorder + Text + Spacer stack).
-		expect(text).toContain("Debug Tools");
+		expect(text).toContain("┌── /debug ");
 		expect(text).toContain("[x]");
 		// Every visible menu item still renders inside the card body.
 		expect(text).toContain("Report: dump session");

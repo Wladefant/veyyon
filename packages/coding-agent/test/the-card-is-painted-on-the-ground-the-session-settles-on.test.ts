@@ -40,25 +40,25 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:
 import * as path from "node:path";
 import { setTimeout } from "node:timers/promises";
 import { Agent } from "@veyyon/agent-core";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { settings } from "@veyyon/coding-agent/config/settings-instance";
-import { paintFirstFrame, takeFirstFrame } from "@veyyon/coding-agent/modes/first-frame";
-import { InteractiveMode } from "@veyyon/coding-agent/modes/interactive-mode";
 import { readLaunchFacts, recordLaunchFacts, resetLaunchFactsForTest } from "@veyyon/coding-agent/modes/launch-facts";
+import { paintFirstFrame, takeFirstFrame } from "@veyyon/coding-agent/modes/terminal/first-frame";
+import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
+import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import {
 	getVisibleGround,
 	groundHairlineHex,
 	groundTintFgAnsi,
 	resetGroundTintsForTest,
 	setDetectedTerminalGround,
-} from "@veyyon/coding-agent/modes/theme/ground-tints";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
-import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
-import { OSC11_RESET_BACKGROUND_SEQUENCE, osc11SetBackgroundSequence } from "@veyyon/tui/paint-ground";
+} from "@veyyon/coding-agent/theme/ground-tints";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { setTerminalHeadless, TempDir } from "@veyyon/utils";
+import { OSC11_RESET_BACKGROUND_SEQUENCE, osc11SetBackgroundSequence } from "@veyyon/utils/paint-ground";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../utils/test/helpers/isolated-config-root";
 import { useTruecolorTheme } from "./helpers/theme-assertions";
 
@@ -104,6 +104,16 @@ beforeAll(async () => {
 	if (TINT[REPORTED] === TINT[STALE]) throw new Error("the two grounds derive one tint, so no test here can fail");
 });
 
+/**
+ * The `isTTY` descriptors this file replaces, restored in `afterEach`.
+ *
+ * A bare `{ value }` descriptor is NON-WRITABLE, so leaving one installed makes `process.stdout.isTTY = x`
+ * throw `Attempted to assign to readonly property` under ESM strict mode for every suite that runs after
+ * this one in the same process.
+ */
+let stdinIsTTY: PropertyDescriptor | undefined;
+let stdoutIsTTY: PropertyDescriptor | undefined;
+
 beforeEach(async () => {
 	writes = [];
 	// The real `ProcessTerminal` writes to the developer's own terminal otherwise, and the card here
@@ -118,8 +128,10 @@ beforeEach(async () => {
 	if (typeof process.stdin.setRawMode === "function") {
 		vi.spyOn(process.stdin, "setRawMode").mockReturnValue(process.stdin);
 	}
-	Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
-	Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+	stdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+	stdoutIsTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+	Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true, writable: true });
+	Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true, writable: true });
 
 	previousHeadless = setTerminalHeadless(false);
 	isolated = enterIsolatedConfigRoot("card-ground", { defaultProfile: true });
@@ -135,6 +147,10 @@ afterEach(async () => {
 	opened.length = 0;
 	takeFirstFrame()?.ui.stop();
 	vi.restoreAllMocks();
+	if (stdinIsTTY) Object.defineProperty(process.stdin, "isTTY", stdinIsTTY);
+	else delete (process.stdin as { isTTY?: boolean }).isTTY;
+	if (stdoutIsTTY) Object.defineProperty(process.stdout, "isTTY", stdoutIsTTY);
+	else delete (process.stdout as { isTTY?: boolean }).isTTY;
 	resetGroundTintsForTest();
 	resetSettingsForTest();
 	resetLaunchFactsForTest();

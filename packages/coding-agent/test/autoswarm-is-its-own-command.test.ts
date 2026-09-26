@@ -15,17 +15,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { createAutoresearchExtension } from "@veyyon/coding-agent/autoresearch";
+import { registerAutoresearchUi } from "@veyyon/coding-agent/autoresearch/dashboard";
 import { closeAllAutoresearchStorages, openAutoresearchStorage } from "@veyyon/coding-agent/autoresearch/storage";
 import { DEFAULT_SWARM_BREADTH } from "@veyyon/coding-agent/autoresearch/swarm";
 import * as initExperimentTool from "@veyyon/coding-agent/autoresearch/tools/init-experiment";
 import type { AutoresearchRuntime } from "@veyyon/coding-agent/autoresearch/types";
 import type { ExtensionAPI, ExtensionContext } from "@veyyon/coding-agent/extensibility/extensions";
-import { theme } from "@veyyon/coding-agent/modes/theme/theme";
+import { terminalAutoresearchUi } from "@veyyon/coding-agent/modes/terminal/controllers/extension-ui-controller";
+import { theme } from "@veyyon/coding-agent/theme/theme";
 import * as git from "@veyyon/coding-agent/utils/git";
-import type { AutocompleteItem } from "@veyyon/tui";
+import "@veyyon/coding-agent/modes/terminal/controllers/extension-ui-controller";
 import { stripAnsi, TempDir } from "@veyyon/utils";
+import type { AutocompleteItem } from "@veyyon/utils/autocomplete";
 import { $ } from "bun";
 import { useTruecolorTheme } from "./helpers/theme-assertions";
+
+// The console reaches the terminal through the delegate the terminal host registers when it
+// loads; this suite drives the command without booting the host, so it installs the same
+// delegate by name, which is what routes the console into `ui.terminal.custom`.
+registerAutoresearchUi(terminalAutoresearchUi);
 
 interface CommandSpec {
 	description: string;
@@ -136,32 +144,34 @@ function makeCtx(
 				drive.confirms.push({ title, message });
 				return drive.answer;
 			},
-			custom: async <T>(
-				factory: (
-					tui: unknown,
-					theme: unknown,
-					keybindings: unknown,
-					done: (result: T) => void,
-				) => { render: (width: number) => readonly string[]; handleInput: (data: string) => void },
-				options?: { overlay?: boolean | { anchor?: string } },
-			): Promise<T> => {
-				drive.opened = true;
-				// The launcher opens as a centered card; the dashboard as a plain overlay.
-				drive.overlay = options?.overlay === true || typeof options?.overlay === "object";
-				const settled: Array<{ value: T }> = [];
-				const tui = { requestRender: (): void => {}, terminal: { rows: 40, columns: 80 }, pinnedFooterRows: 5 };
-				const component = factory(tui, theme, {}, (result: T) => {
-					if (settled.length === 0) settled.push({ value: result });
-				});
-				drive.frames.push([...component.render(80)]);
-				for (const key of keys) {
-					if (settled.length > 0) break;
-					component.handleInput(key);
+			terminal: {
+				custom: async <T>(
+					factory: (
+						tui: unknown,
+						theme: unknown,
+						keybindings: unknown,
+						done: (result: T) => void,
+					) => { render: (width: number) => readonly string[]; handleInput: (data: string) => void },
+					options?: { overlay?: boolean | { anchor?: string } },
+				): Promise<T> => {
+					drive.opened = true;
+					// The launcher opens as a centered card; the dashboard as a plain overlay.
+					drive.overlay = options?.overlay === true || typeof options?.overlay === "object";
+					const settled: Array<{ value: T }> = [];
+					const tui = { requestRender: (): void => {}, terminal: { rows: 40, columns: 80 }, pinnedFooterRows: 5 };
+					const component = factory(tui, theme, {}, (result: T) => {
+						if (settled.length === 0) settled.push({ value: result });
+					});
 					drive.frames.push([...component.render(80)]);
-				}
-				const outcome = settled[0];
-				if (!outcome) throw new Error(`console never resolved for keys: ${JSON.stringify(keys)}`);
-				return outcome.value;
+					for (const key of keys) {
+						if (settled.length > 0) break;
+						component.handleInput(key);
+						drive.frames.push([...component.render(80)]);
+					}
+					const outcome = settled[0];
+					if (!outcome) throw new Error(`console never resolved for keys: ${JSON.stringify(keys)}`);
+					return outcome.value;
+				},
 			},
 		},
 		sessionManager: {

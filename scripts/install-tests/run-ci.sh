@@ -46,6 +46,17 @@ smoke_cli() {
    # probe for #1011/#1027 worker loading and for compiled distributions
    # missing the dashboard assets that `stats --summary` never touches.
    XDG_DATA_HOME="$runtime_dir/xdg" HOME="$runtime_dir/home" "$cli_bin" --smoke-test
+   # The profile seed path lives in a chunk none of the probes above load. The
+   # 1.4.1 binary shipped `profile new` broken (`awaitPromise is not defined`,
+   # a mis-minified dynamic import) while --version/--help/--smoke-test passed.
+   # Drive it through the artifact itself, then check the profile is listed.
+   XDG_DATA_HOME="$runtime_dir/xdg" HOME="$runtime_dir/home" "$cli_bin" profile new smoke-seed >/dev/null
+   local listed
+   listed="$(XDG_DATA_HOME="$runtime_dir/xdg" HOME="$runtime_dir/home" "$cli_bin" profile list)"
+   case "$listed" in
+      *smoke-seed*) ;;
+      *) echo "profile new smoke-seed did not create a listed profile" >&2; exit 1 ;;
+   esac
 }
 
 section "Installer function unit tests"
@@ -57,7 +68,7 @@ sh "$ROOT_DIR/scripts/install-tests/functions.test.sh"
 
 section "Binary install smoke"
 # Channel 1: what `curl | sh` puts on a user's machine.
-bun --cwd=packages/natives run build
+bun --cwd=natives/bridge/bindings run build
 bun --cwd=packages/coding-agent run build
 
 BINARY_DIR="$WORK_DIR/binary-bin"

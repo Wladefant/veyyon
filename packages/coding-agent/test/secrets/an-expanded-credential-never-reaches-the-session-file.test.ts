@@ -27,17 +27,14 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import { SecretVault } from "@veyyon/coding-agent/secrets/vault";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import {
-	summarizeToolArguments,
-	TOOL_EXECUTION_START_CUSTOM_TYPE,
-} from "@veyyon/coding-agent/session/exit-diagnostics";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { summarizeToolArguments, TOOL_EXECUTION_START_CUSTOM_TYPE } from "@veyyon/kernel/session/exit-diagnostics";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 import { useIsolatedConfigRoot } from "../helpers/isolated-agent-dir";
 
@@ -319,12 +316,13 @@ describe("the redaction authority the rest of the app reads", () => {
 	 * `/share` uploads the session to a public URL, so it is the seam where reading the expansion
 	 * authority fails open and outward. It was passing `session.obfuscator`, which meant
 	 * `share.redactSecrets` silently did nothing once expansion had been revoked. Asserted at the
-	 * source because the alternative is performing a real upload.
+	 * source because the alternative is performing a real upload. The handler is in
+	 * `builtin-share.ts`, the domain module the share builtins moved to.
 	 */
 	it("is what the share command hands to the snapshot builder", async () => {
 		const sources = [
-			path.resolve(import.meta.dir, "../../src/modes/controllers/command-controller.ts"),
-			path.resolve(import.meta.dir, "../../src/slash-commands/builtin-registry.ts"),
+			path.resolve(import.meta.dir, "../../src/modes/terminal/controllers/command-controller.ts"),
+			path.resolve(import.meta.dir, "../../src/slash-commands/builtin-share.ts"),
 		];
 		for (const source of sources) {
 			const text = await fs.readFile(source, "utf8");
@@ -341,10 +339,10 @@ describe("the redaction authority the rest of the app reads", () => {
 	 */
 	it("is not bypassed by a direct obfuscate call on any provider-bound seam", async () => {
 		const sources = [
-			"../../src/modes/controllers/event-controller.ts",
-			"../../src/modes/controllers/input-controller.ts",
-			"../../src/hindsight/state.ts",
-			"../../src/mnemopi/backend.ts",
+			"../../src/modes/terminal/controllers/event-controller.ts",
+			"../../src/modes/terminal/controllers/input-controller.ts",
+			"../../src/memory/hindsight/state.ts",
+			"../../src/memory/mnemopi/backend.ts",
 		];
 		for (const relative of sources) {
 			const text = await fs.readFile(path.resolve(import.meta.dir, relative), "utf8");

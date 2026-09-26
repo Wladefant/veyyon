@@ -3,12 +3,12 @@
  */
 
 // Import from the leaf color module, not the heavy `theme` barrel. The barrel pulls
-// modes/theme/shimmer -> config/settings -> discovery -> ... -> config/model-resolver,
+// theme/shimmer -> config/settings -> discovery -> ... -> config/model-resolver,
 // and model-resolver imports this file back, so routing through the barrel forms an
 // import cycle whose top-level `const MODEL_ROLE_ALIAS_PREFIXES = [...]` reads this
 // module's still-uninitialized exports (a TDZ ReferenceError) whenever model-roles is
 // the entry point. color.ts reaches type guards and nothing else, so this edge breaks the cycle.
-import { isValidThemeColor, type ThemeColor } from "../modes/theme/color";
+import { isValidThemeColor, type ThemeColor } from "../theme/color";
 import type { Settings } from "./settings";
 
 /** Canonical prefix for a configured model role selector. */
@@ -25,7 +25,7 @@ export function formatModelRoleAlias(role: string): string {
 	return `${MODEL_ROLE_ALIAS_PREFIX}${role}`;
 }
 
-export type ModelRole = "default" | "smol" | "slow" | "vision" | "plan" | "designer" | "commit" | "tiny" | "advisor";
+export type ModelRole = "default" | "smol" | "slow" | "vision" | "plan" | "commit" | "tiny" | "advisor";
 
 export interface ModelRoleInfo {
 	tag?: string;
@@ -46,12 +46,12 @@ export interface ModelRoleInfo {
 export const ROLE_INHERIT_LABEL = "inherit (follows main model)";
 
 /**
- * There is deliberately NO `task` role. The model a subagent runs lives in the
- * Subagents settings area (`subagent.model`, and `subagent.agents.<name>.model`
+ * There is deliberately NO `task` role. The model a spawned agent runs lives in the
+ * Agents settings area (`agent.model`, and `agent.agents.<name>.model`
  * per agent), which is its one owner. A `modelRoles.task` entry beside those was
- * a second owner for the same value, and it is what made "I changed the subagent
+ * a second owner for the same value, and it is what made "I changed the spawned agent
  * model" fail to take: role expansion answered first. Old configs are migrated
- * onto `subagent.model`; see `#migrateSubagentSettings`.
+ * onto `agent.model`; see `#migrateAgentSettings`.
  */
 export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
 	/** Legacy only — not selectable; interactive model is the session model, not a role. */
@@ -60,13 +60,12 @@ export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
 	slow: { tag: "SLOW", name: "Thinking", color: "accent" },
 	vision: { tag: "VISION", name: "Vision", color: "error" },
 	plan: { tag: "PLAN", name: "Architect", color: "muted" },
-	designer: { tag: "DESIGNER", name: "Designer", color: "muted" },
 	commit: { tag: "COMMIT", name: "Commit", color: "dim" },
 	tiny: { tag: "TINY", name: "Tiny", color: "dim" },
 	advisor: { tag: "ADVISOR", name: "Advisor", color: "accent" },
 };
 
-export const MODEL_ROLE_IDS: ModelRole[] = ["smol", "slow", "vision", "plan", "designer", "commit", "tiny", "advisor"];
+export const MODEL_ROLE_IDS: ModelRole[] = ["smol", "slow", "vision", "plan", "commit", "tiny", "advisor"];
 
 /**
  * Built-in roles that may appear in the settings Roles table.

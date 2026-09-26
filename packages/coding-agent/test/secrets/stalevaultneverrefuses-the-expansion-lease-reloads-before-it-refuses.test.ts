@@ -26,14 +26,14 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import { SecretVault } from "@veyyon/coding-agent/secrets/vault";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
-import { TempDir } from "@veyyon/utils";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import { getProjectDir, setProjectDir, TempDir } from "@veyyon/utils";
 import { useIsolatedConfigRoot } from "../helpers/isolated-agent-dir";
 import { useSpyTeardown } from "../helpers/spy-teardown";
 
@@ -66,9 +66,12 @@ interface LeaseFixture {
 	vaultA: SecretVault;
 	settings: Settings;
 	session: AgentSession;
+	/** Where the process stood before the session moved it; put back before `root` goes. */
+	originalProjectDir: string;
 }
 
 async function createLeaseFixture(): Promise<LeaseFixture> {
+	const originalProjectDir = getProjectDir();
 	const root = TempDir.createSync("stale-lease-fixture-");
 	const projectA = path.resolve(root.join("project-a"));
 	const projectB = path.resolve(root.join("project-b"));
@@ -100,7 +103,19 @@ async function createLeaseFixture(): Promise<LeaseFixture> {
 		enableLsp: false,
 		skipPythonPreflight: true,
 	});
-	return { root, projectA, projectB, vaultA, settings, session };
+	return { root, projectA, projectB, vaultA, settings, session, originalProjectDir };
+}
+
+/**
+ * `setCwd` re-scopes the PROCESS, since this session owns it, so a row that moved to project B
+ * left the process standing in a directory this removes. Put it back first: a later suite that
+ * restores its own state fails with ENOENT on a directory it never created, and the leak tracer
+ * cannot even take its after-test snapshot.
+ */
+async function disposeLeaseFixture(fixture: LeaseFixture): Promise<void> {
+	await fixture.session.dispose();
+	setProjectDir(fixture.originalProjectDir);
+	await fixture.root.remove();
 }
 
 // The rows below install `SecretVault.prototype` spies, and one deliberately PARKS a load and holds
@@ -154,8 +169,7 @@ describe("a lease whose captured vault revision has been overtaken", () => {
 		} finally {
 			loadSpy.mockRestore();
 			revision.restore();
-			await fixture.session.dispose();
-			await fixture.root.remove();
+			await disposeLeaseFixture(fixture);
 		}
 	});
 
@@ -186,8 +200,7 @@ describe("a lease whose captured vault revision has been overtaken", () => {
 			expect(reloaded.expansionObfuscator?.deobfuscate("#A_TOKEN#")).toBe(A_TOKEN_ROTATED);
 		} finally {
 			revision.restore();
-			await fixture.session.dispose();
-			await fixture.root.remove();
+			await disposeLeaseFixture(fixture);
 		}
 	});
 
@@ -217,8 +230,7 @@ describe("a lease whose captured vault revision has been overtaken", () => {
 		} finally {
 			loadSpy.mockRestore();
 			revision.restore();
-			await fixture.session.dispose();
-			await fixture.root.remove();
+			await disposeLeaseFixture(fixture);
 		}
 	});
 
@@ -254,8 +266,7 @@ describe("a lease whose captured vault revision has been overtaken", () => {
 			}
 		} finally {
 			revision.restore();
-			await fixture.session.dispose();
-			await fixture.root.remove();
+			await disposeLeaseFixture(fixture);
 		}
 	});
 
@@ -286,8 +297,7 @@ describe("a lease whose captured vault revision has been overtaken", () => {
 			}
 		} finally {
 			revision.restore();
-			await fixture.session.dispose();
-			await fixture.root.remove();
+			await disposeLeaseFixture(fixture);
 		}
 	});
 
@@ -342,8 +352,7 @@ describe("a lease whose captured vault revision has been overtaken", () => {
 			releaseDestinationLoad.open();
 			loadSpy.mockRestore();
 			revision.restore();
-			await fixture.session.dispose();
-			await fixture.root.remove();
+			await disposeLeaseFixture(fixture);
 		}
 	});
 });

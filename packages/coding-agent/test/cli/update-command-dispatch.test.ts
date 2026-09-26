@@ -18,7 +18,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as updateCli from "@veyyon/coding-agent/cli/update-cli";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { VERSION } from "@veyyon/utils";
 import { releaseRedirect } from "../helpers/release-redirect";
 
@@ -124,7 +124,7 @@ describe("runUpdateCommand reaches the installer", () => {
 		const calls: { version: string; force: boolean }[] = [];
 
 		await updateCli.runUpdateCommand({ force: false, check: false }, async (version, force) => {
-			calls.push({ version, force });
+			calls.push({ version, force: Boolean(force) });
 		});
 
 		expect(calls).toEqual([{ version: "0.0.1", force: false }]);

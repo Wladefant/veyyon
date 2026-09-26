@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { parse } from "@babel/parser";
+import * as t from "@babel/types";
 import type { LazyStreamLimits } from "@veyyon/ai/providers/register-builtins";
 import * as registerBuiltins from "@veyyon/ai/providers/register-builtins";
 import { iterateWithIdleTimeout } from "@veyyon/ai/utils/idle-iterator";
@@ -57,12 +59,18 @@ const REGISTER_BUILTINS = path.join(PROVIDERS_DIR, "register-builtins.ts");
  *   itself: with no env set, ollama runs the same numbers as bedrock.
  * - `provider-owned`: the wrapper stands down entirely and the provider module
  *   arms `iterateWithIdleTimeout` itself.
+ * - `provider-owned-idle`: the wrapper keeps its first-event watchdog and drops
+ *   only the idle one, because the provider decides what silence means by
+ *   asking its transport instead of by timing it. `cursor-agent` is the case:
+ *   HTTP/2 PING proves the connection while the remote agent works quietly, and
+ *   a timer here would race that with a worse answer.
  */
 type WatchdogDecision =
 	| "shared-generic-defaults"
 	| "shared-widened-budget"
 	| "shared-openai-env-precedence"
-	| "provider-owned";
+	| "provider-owned"
+	| "provider-owned-idle";
 
 /**
  * The decision on record for every registered provider. This list is the gate:
@@ -75,7 +83,7 @@ const WATCHDOG_DECISIONS: Record<string, WatchdogDecision> = {
 	streamAnthropic: "provider-owned",
 	streamAzureOpenAIResponses: "provider-owned",
 	streamBedrock: "shared-generic-defaults",
-	streamCursor: "shared-widened-budget",
+	streamCursor: "provider-owned-idle",
 	streamDevin: "shared-widened-budget",
 	streamGoogle: "shared-generic-defaults",
 	streamGoogleGeminiCli: "shared-widened-budget",
@@ -97,12 +105,14 @@ const LIMITS_FIELD_KINDS: Record<keyof LazyStreamLimits, "number" | "boolean"> =
 	defaultIdleTimeoutMs: "number",
 	providerHandlesStreamTimeouts: "boolean",
 	openAIIdleEnvFloorsFirstEvent: "boolean",
+	providerHandlesIdleTimeout: "boolean",
 };
 
-/** One `export const streamX = createLazyStream(loader, LIMITS?)` registration. */
+/** One `export const streamX = createLazyStream(api, loader, LIMITS?)` registration. */
 interface Registration {
 	streamExport: string;
-	loader: string;
+	api: string;
+	moduleName: string;
 	limitsName: string | undefined;
 	limits: LazyStreamLimits | undefined;
 }
@@ -134,63 +144,130 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
-function parseLimitsDeclaration(name: string, body: string): LazyStreamLimits {
-	const limits: LazyStreamLimits = {};
-	for (const rawLine of body.split("\n")) {
-		const line = rawLine.trim();
-		if (line.length === 0 || line.startsWith("//")) continue;
-		const field = /^([A-Za-z0-9_$]+):\s*(.+?),?$/.exec(line);
-		if (!field) throw new Error(`${name}: cannot parse limits field from ${JSON.stringify(line)}`);
-		const key = field[1];
-		const literal = field[2];
-		if (!(key in LIMITS_FIELD_KINDS)) throw new Error(`${name}: ${key} is not a LazyStreamLimits field`);
-		const numeric = /^\d[\d_]*$/.test(literal) ? Number(literal.replaceAll("_", "")) : undefined;
-		const boolish = literal === "true" ? true : literal === "false" ? false : undefined;
-		switch (key) {
-			case "defaultFirstEventTimeoutMs":
-			case "defaultIdleTimeoutMs": {
-				if (numeric === undefined) throw new Error(`${name}.${key}: expected a number literal, got ${literal}`);
-				limits[key] = numeric;
-				break;
+function extractImportPathFromFactory(node: t.Node): string {
+	const importPaths: string[] = [];
+
+	t.traverseFast(node, n => {
+		if (t.isCallExpression(n) && t.isImport(n.callee)) {
+			const firstArg = n.arguments[0];
+			if (t.isStringLiteral(firstArg)) {
+				importPaths.push(firstArg.value);
+			} else {
+				throw new Error("Dynamic import argument must be a string literal");
 			}
-			case "providerHandlesStreamTimeouts":
-			case "openAIIdleEnvFloorsFirstEvent": {
-				if (boolish === undefined) throw new Error(`${name}.${key}: expected a boolean literal, got ${literal}`);
-				limits[key] = boolish;
-				break;
-			}
-			default:
-				throw new Error(`${name}: ${key} is a LazyStreamLimits field this lock does not know how to parse`);
 		}
+	});
+	if (importPaths.length === 0) {
+		throw new Error("Could not find dynamic import('./...') in factory function");
 	}
-	return limits;
+	if (importPaths.length > 1) {
+		throw new Error(`Expected exactly one dynamic import, found ${importPaths.length}`);
+	}
+	return importPaths[0].replace(/^\.\//, "");
 }
 
 const source = await fs.readFile(REGISTER_BUILTINS, "utf8");
+const ast = parse(source, {
+	sourceType: "module",
+	plugins: ["typescript"],
+});
 
 const limitsByName = new Map<string, LazyStreamLimits>();
-for (const match of source.matchAll(/(?:export )?const ([A-Z][A-Z0-9_]*): LazyStreamLimits = \{([\s\S]*?)\n\};/g)) {
-	limitsByName.set(match[1], parseLimitsDeclaration(match[1], match[2]));
-}
-
 const registrations: Registration[] = [];
-for (const match of source.matchAll(/export const (stream[A-Za-z0-9]+)\s*=\s*createLazyStream\(([^)]*)\)/g)) {
-	const identifiers = match[2].match(/[A-Za-z_$][A-Za-z0-9_$]*/g) ?? [];
-	const loader = identifiers[0];
-	if (loader === undefined) throw new Error(`${match[1]}: createLazyStream call has no loader argument`);
-	const limitsName = identifiers[1];
-	if (limitsName !== undefined && !limitsByName.has(limitsName)) {
-		throw new Error(`${match[1]} passes ${limitsName}, which this lock could not parse from register-builtins.ts`);
-	}
-	const limits = limitsName === undefined ? undefined : limitsByName.get(limitsName);
-	registrations.push({ streamExport: match[1], loader, limitsName, limits });
-}
 
-const moduleByLoader = new Map<string, string>();
-for (const match of source.matchAll(
-	/function (load[A-Za-z0-9]+ProviderModule)\(\)[\s\S]*?import\("\.\/([A-Za-z0-9-]+)"\)/g,
-)) {
-	moduleByLoader.set(match[1], match[2]);
+for (const stmt of ast.program.body) {
+	let decl: t.Node = stmt;
+	if (t.isExportNamedDeclaration(decl) && decl.declaration) {
+		decl = decl.declaration;
+	}
+	if (t.isVariableDeclaration(decl)) {
+		for (const declarator of decl.declarations) {
+			if (!t.isIdentifier(declarator.id)) continue;
+			const varName = declarator.id.name;
+
+			// 1. Check for LazyStreamLimits declarations
+			const typeAnnotation = declarator.id.typeAnnotation;
+			const isLimitsDecl =
+				t.isTSTypeAnnotation(typeAnnotation) &&
+				t.isTSTypeReference(typeAnnotation.typeAnnotation) &&
+				t.isIdentifier(typeAnnotation.typeAnnotation.typeName) &&
+				typeAnnotation.typeAnnotation.typeName.name === "LazyStreamLimits";
+
+			if (isLimitsDecl) {
+				if (!t.isObjectExpression(declarator.init)) {
+					throw new Error(`${varName}: expected ObjectExpression for LazyStreamLimits`);
+				}
+				const limits: LazyStreamLimits = {};
+				for (const prop of declarator.init.properties) {
+					if (!t.isObjectProperty(prop) || !t.isIdentifier(prop.key)) {
+						throw new Error(`${varName}: unsupported property syntax in limits object`);
+					}
+					const key = prop.key.name;
+					if (!(key in LIMITS_FIELD_KINDS)) {
+						throw new Error(`${varName}: ${key} is not a LazyStreamLimits field`);
+					}
+					const expectedKind = LIMITS_FIELD_KINDS[key as keyof LazyStreamLimits];
+					if (expectedKind === "number") {
+						if (!t.isNumericLiteral(prop.value)) {
+							throw new Error(`${varName}.${key}: expected number literal`);
+						}
+						limits[key as keyof LazyStreamLimits] = prop.value.value as never;
+					} else if (expectedKind === "boolean") {
+						if (!t.isBooleanLiteral(prop.value)) {
+							throw new Error(`${varName}.${key}: expected boolean literal`);
+						}
+						limits[key as keyof LazyStreamLimits] = prop.value.value as never;
+					}
+				}
+				limitsByName.set(varName, limits);
+			}
+
+			// 2. Check for createLazyStream registrations
+			if (varName.startsWith("stream") && t.isCallExpression(declarator.init)) {
+				const callExpr = declarator.init;
+				if (t.isIdentifier(callExpr.callee) && callExpr.callee.name === "createLazyStream") {
+					if (callExpr.arguments.length < 2 || callExpr.arguments.length > 3) {
+						throw new Error(
+							`${varName}: createLazyStream expects 2 or 3 arguments, got ${callExpr.arguments.length}`,
+						);
+					}
+
+					// Arg 0: API key
+					const arg0 = callExpr.arguments[0];
+					if (!t.isStringLiteral(arg0)) {
+						throw new Error(`${varName}: first argument must be a string literal API key`);
+					}
+					const api = arg0.value;
+
+					// Arg 1: Dynamic import factory
+					const arg1 = callExpr.arguments[1];
+					if (!t.isArrowFunctionExpression(arg1) && !t.isFunctionExpression(arg1)) {
+						throw new Error(`${varName}: second argument must be a dynamic import factory function`);
+					}
+					const moduleName = extractImportPathFromFactory(arg1);
+
+					// Arg 2 (optional): Limits identifier
+					let limitsName: string | undefined;
+					let limits: LazyStreamLimits | undefined;
+					if (callExpr.arguments.length === 3) {
+						const arg2 = callExpr.arguments[2];
+						if (!t.isIdentifier(arg2)) {
+							throw new Error(`${varName}: third argument must be a limits identifier`);
+						}
+						limitsName = arg2.name;
+						if (!limitsByName.has(limitsName)) {
+							throw new Error(
+								`${varName} passes ${limitsName}, which this lock could not parse from register-builtins.ts`,
+							);
+						}
+						limits = limitsByName.get(limitsName);
+					}
+
+					registrations.push({ streamExport: varName, api, moduleName, limitsName, limits });
+				}
+			}
+		}
+	}
 }
 
 /** Provider names exported by the module at run time, the authority on membership. */
@@ -341,6 +418,17 @@ describe("lazy provider stream budget coverage", () => {
 					if (!widened) mismatched.push(detail);
 					break;
 				}
+				case "provider-owned-idle": {
+					// The idle watchdog is gone and the first-event one is not: a
+					// provider that probes its transport still cannot prove a stream
+					// that never opened.
+					const armedFirstEvent = typeof first === "number" && first > 0;
+					const widenedFirstEvent =
+						armedFirstEvent && generic.firstItemTimeoutMs !== undefined && first > generic.firstItemTimeoutMs;
+					if (registration.limits?.providerHandlesIdleTimeout !== true) mismatched.push(detail);
+					else if (idle !== undefined || !widenedFirstEvent) mismatched.push(detail);
+					break;
+				}
 			}
 		}
 		// A row that does not describe what the code does is worse than no row: it
@@ -349,7 +437,7 @@ describe("lazy provider stream budget coverage", () => {
 	});
 
 	it("every provider module exporting a stream entry point is registered or has a recorded reason", async () => {
-		const registeredModules = new Set(moduleByLoader.values());
+		const registeredModules = new Set(registrations.map(r => r.moduleName));
 		const codeByModule = new Map<string, string>();
 		const streamModules: string[] = [];
 		for (const entry of await fs.readdir(PROVIDERS_DIR, { withFileTypes: true })) {
@@ -397,27 +485,47 @@ describe("lazy provider stream budget coverage", () => {
 		expect(unproven).toEqual([]);
 	});
 
-	it("every provider taking the opt-out arms its own idle watchdog", async () => {
-		const optedOut = registrations.filter(
-			registration => registration.limits?.providerHandlesStreamTimeouts === true,
-		);
-		// The opt-out exists for OpenAI-family and Anthropic transports; if it stops
-		// being used at all this test would pass vacuously.
-		expect(optedOut.length).toBeGreaterThan(0);
-		const unarmed: string[] = [];
-		for (const registration of optedOut) {
-			const moduleName = moduleByLoader.get(registration.loader);
-			if (moduleName === undefined) {
-				throw new Error(`${registration.streamExport}: could not resolve ${registration.loader} to a module path`);
+	it("every provider that stands the shared watchdog down arms something of its own", async () => {
+		// Two stand-downs, one rule: whatever the wrapper stops doing, the provider
+		// module must do. The full opt-out drops both watchdogs and owns both; the
+		// idle opt-out drops only the idle one and owns transport liveness.
+		// LIMIT: this sees a call, not a live one. A module that keeps the call and
+		// never reaches it passes here and fails in the behavioural suite, which is
+		// where "the governor runs" is proved (for cursor, a dead connection and a
+		// wedged turn both hang the test instead of being reported). This lock is
+		// only the fail-by-default gate for a NEW provider taking a stand-down with
+		// nothing at all in its place.
+		const GOVERNOR_TOKENS: Record<"full" | "idle", string[]> = {
+			full: ["iterateWithIdleTimeout("],
+			idle: ["startCursorLiveness(", "iterateWithIdleTimeout("],
+		};
+		type StandDown = { registration: Registration; kind: "full" | "idle" };
+		const standDowns = registrations.flatMap((registration): StandDown[] => {
+			if (registration.limits?.providerHandlesStreamTimeouts === true) {
+				return [{ registration, kind: "full" }];
 			}
+			if (registration.limits?.providerHandlesIdleTimeout === true) {
+				return [{ registration, kind: "idle" }];
+			}
+			return [];
+		});
+		// Both stand-downs are in use; if either stops being used this test would
+		// pass vacuously for that kind.
+		expect(standDowns.filter(entry => entry.kind === "full").length).toBeGreaterThan(0);
+		expect(standDowns.filter(entry => entry.kind === "idle").length).toBeGreaterThan(0);
+		const unarmed: string[] = [];
+		for (const { registration, kind } of standDowns) {
+			const moduleName = registration.moduleName;
 			const text = await fs.readFile(path.join(PROVIDERS_DIR, `${moduleName}.ts`), "utf8");
 			// Comments stripped: a module that only MENTIONS the watchdog in prose has
 			// not armed one.
 			const code = text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
-			const imports = code.includes("iterateWithIdleTimeout,") || code.includes("iterateWithIdleTimeout }");
-			if (!imports || !code.includes("iterateWithIdleTimeout(")) {
-				unarmed.push(`${registration.streamExport} (${moduleName}.ts)`);
-			}
+			const armed = GOVERNOR_TOKENS[kind].some(token => {
+				const symbol = token.slice(0, -1);
+				const imported = code.includes(`${symbol},`) || code.includes(`${symbol} }`);
+				return imported && code.includes(token);
+			});
+			if (!armed) unarmed.push(`${registration.streamExport} (${moduleName}.ts, ${kind} stand-down)`);
 		}
 		expect(unarmed).toEqual([]);
 	});
@@ -428,6 +536,7 @@ describe("lazy provider stream budget coverage", () => {
 		expect(limitsByName.get("AGENTIC_BACKEND_LAZY_STREAM_LIMITS")).toEqual(
 			registerBuiltins.AGENTIC_BACKEND_LAZY_STREAM_LIMITS,
 		);
+		expect(limitsByName.get("CURSOR_LAZY_STREAM_LIMITS")).toEqual(registerBuiltins.CURSOR_LAZY_STREAM_LIMITS);
 	});
 
 	// Termination, not values. Every provider on the shared watchdog is driven
@@ -438,11 +547,29 @@ describe("lazy provider stream budget coverage", () => {
 		registration => registration.limits?.providerHandlesStreamTimeouts !== true,
 	);
 	const TERMINATION_WINDOW_MS = 90 * 60_000 + 30 * 60_000;
+	// A provider whose resolved idle budget is `undefined` has no mid-stream
+	// watchdog here to assert. It is exempt from the mid-stream assertion and from
+	// nothing else, and the exemption is pinned by exact equality inside the test,
+	// so a second provider dropping its idle budget turns this red until its own
+	// liveness proof exists and its row is recorded.
+	const PROVIDER_OWNED_IDLE = Object.entries(WATCHDOG_DECISIONS)
+		.filter(([, decision]) => decision === "provider-owned-idle")
+		.map(([streamExport]) => streamExport);
 
 	for (const registration of sharedWatchdogProviders) {
 		it(`${registration.streamExport}: a wedged local tool cannot hold the stream open forever`, async () => {
 			vi.useFakeTimers();
 			const budget = registerBuiltins.resolveLazyStreamBudget({}, registration.limits);
+			if (budget.idleTimeoutMs === undefined) {
+				// No mid-stream watchdog to observe, so the only thing to assert here
+				// is that this provider is the one that recorded why. Its own bound is
+				// proved against the real transport in
+				// `cursor-silence-is-not-a-dead-connection.test.ts`, where a wedged
+				// local tool is reported at the silence ceiling and a dead connection
+				// in seconds.
+				expect(PROVIDER_OWNED_IDLE).toContain(registration.streamExport);
+				return;
+			}
 			const wedged = Promise.withResolvers<never>();
 			async function* midStream(): AsyncGenerator<string> {
 				yield "first";
@@ -452,6 +579,14 @@ describe("lazy provider stream budget coverage", () => {
 			// Named cause: a wedged bridge must be diagnosable, not indistinguishable
 			// from a provider that went quiet.
 			expect(error?.message).toBe("provider stream stalled (a local tool held the stream open without completing)");
+		});
+
+		it(`${registration.streamExport}: it is recorded whether a mid-stream watchdog governs it`, () => {
+			// Fail by default on a new member: dropping the idle budget without
+			// recording `provider-owned-idle`, or recording it while keeping the
+			// budget, is caught here rather than silently skipping the case above.
+			const budget = registerBuiltins.resolveLazyStreamBudget({}, registration.limits);
+			expect(PROVIDER_OWNED_IDLE.includes(registration.streamExport)).toBe(budget.idleTimeoutMs === undefined);
 		});
 
 		it(`${registration.streamExport}: a wedged local tool cannot hold the first event open forever`, async () => {

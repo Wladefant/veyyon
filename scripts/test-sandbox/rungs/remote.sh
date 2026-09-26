@@ -182,12 +182,12 @@ remote_tree() { printf '%s/%s' "${REMOTE_HOME}" "${REMOTE_TREE_REL}"; }
 # The grep is the safety rail, not tidiness. `git ls-files --others --ignored`
 # reports a wholly ignored directory as one collapsed entry and ignores the
 # pathspec when it does, so an unfiltered list offers to re-include
-# packages/evals/datasets/repo-cache, which is thousands of cloned repositories. Only
+# tests/evals/datasets/repo-cache, which is thousands of cloned repositories. Only
 # a regular file directly under some packages/<one>/src/ is ever put back.
 remote_generated_sources_filter() {
 	local out
-	out="$(cd "${REPO_ROOT}" && git ls-files --others --ignored --exclude-standard 2>/dev/null)" || return 0
-	printf '%s\n' "$out" | grep -E '^packages/[^/]+/src/.*[^/]$' | sed 's|^|+ /|'
+	out="$(cd "${REPO_ROOT}" && git ls-files --others --ignored --exclude-standard packages/ contracts/ kernel/ hosts/ apps/ clients/ plugins/ natives/ 2>/dev/null)" || return 0
+	printf '%s\n' "$out" | grep -E '^((packages|contracts|hosts|apps|clients|plugins|natives)/[^/]+|kernel)/src/.*[^/]$' | sed 's|^|+ /|'
 	return 0
 }
 

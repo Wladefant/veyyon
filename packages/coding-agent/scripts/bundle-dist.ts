@@ -12,7 +12,7 @@ const shebang = "#!/usr/bin/env bun\n";
 
 // Native / optional / platform-specific deps are loaded from installed files.
 // `veyyon-legacy-pi-modules` exists only in compiled binaries via the build plugin;
-// the npm bundle never executes that `isCompiledBinary()` branch.
+// the standalone bundle never executes that `isCompiledBinary()` branch.
 const ALWAYS_EXTERNAL = [
 	"mupdf",
 	"@veyyon/natives",
@@ -78,10 +78,10 @@ async function cleanBundleOutputs(): Promise<void> {
 async function main(): Promise<void> {
 	const start = Bun.nanoseconds();
 	await cleanBundleOutputs();
-	// The npm bundle ships no stats dashboard sources, so embed the dashboard
+	// The standalone bundle ships no stats dashboard sources, so embed the dashboard
 	// archive the same way compiled binaries do (scripts/build-binary.ts). Reset
 	// afterwards to keep the checked-in placeholder empty.
-	await runCommand(["bun", "--cwd=../stats", "run", "gen:stats"]);
+	await runCommand(["bun", "--cwd=../../apps/stats", "run", "gen:stats"]);
 	try {
 		// Build in-process: the docs embed payload is far larger than Linux's
 		// 128KiB per-argv-string cap, so it can never be passed as a CLI
@@ -107,7 +107,7 @@ async function main(): Promise<void> {
 			throw new Error(`CLI bundle failed:\n${output.logs.map(log => log.message).join("\n")}`);
 		}
 	} finally {
-		await runCommand(["bun", "--cwd=../stats", "run", "gen:stats:reset"]);
+		await runCommand(["bun", "--cwd=../../apps/stats", "run", "gen:stats:reset"]);
 	}
 	await ensureShebang();
 	const stat = await fs.stat(cliPath);

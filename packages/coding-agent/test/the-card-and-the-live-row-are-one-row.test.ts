@@ -31,7 +31,7 @@
  * the live row has facts the card cannot have (a session name, a measured gauge), which is the
  * whole reason the two rows differ at all. Byte agreement for the one fact both rows have before
  * any lookup — the branch — is held in
- * `test/modes/components/status-line/the-branch-reads-the-same-on-the-card-and-the-live-row.test.ts`,
+ * `test/modes/terminal/components/status-line/the-branch-reads-the-same-on-the-card-and-the-live-row.test.ts`,
  * and that the rows land on the same SCREEN ROW is held in
  * `the-first-frame-paints-the-composer-instantly.test.ts`. The preset cases here run wide enough
  * that the fitter sheds nothing, because what a narrow row drops is the fitter's contract and is
@@ -39,21 +39,35 @@
  * budget rather than what the fitter did with it.
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, spyOn } from "bun:test";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	type Mock,
+	setSystemTime,
+	spyOn,
+} from "bun:test";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { settings } from "@veyyon/coding-agent/config/settings-instance";
 import {
 	COMPOSER_INSET_COLS,
 	LaunchComposerFoot,
 	QuietZoneLine,
-} from "@veyyon/coding-agent/modes/components/composer-chrome";
-import { resolvePresetSegments, STATUS_LINE_PRESETS } from "@veyyon/coding-agent/modes/components/status-line/presets";
+} from "@veyyon/coding-agent/modes/terminal/components/composer/composer-chrome";
+import {
+	resolvePresetSegments,
+	STATUS_LINE_PRESETS,
+} from "@veyyon/coding-agent/modes/terminal/components/status-line/presets";
 // Namespace-imported throughout: the budget case spies on `composeQuietRow`, and a named import
 // beside the namespace would be a second binding onto the same module for no reason.
-import * as quietRow from "@veyyon/coding-agent/modes/components/status-line/quiet-row";
-import { launchSegmentContext } from "@veyyon/coding-agent/modes/components/status-line/session-facts";
-import type { StatusLinePreset } from "@veyyon/coding-agent/modes/components/status-line/types";
-import { initTheme } from "@veyyon/coding-agent/modes/theme/theme";
+import * as quietRow from "@veyyon/coding-agent/modes/terminal/components/status-line/quiet-row";
+import { launchSegmentContext } from "@veyyon/coding-agent/modes/terminal/components/status-line/session-facts";
+import type { StatusLinePreset } from "@veyyon/coding-agent/modes/terminal/components/status-line/types";
+import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import { branchLabelFromFiles } from "@veyyon/coding-agent/utils/git-head";
 import * as utils from "@veyyon/utils";
 import { getProjectDir, stripAnsi } from "@veyyon/utils";
@@ -131,7 +145,7 @@ const SILENT_AT_LAUNCH: Record<string, string[]> = {
 
 /** The card's footline row, as the component paints it, with the inset removed. */
 function cardRow(): string {
-	const rows = new LaunchComposerFoot().render(WIDE);
+	const rows = new LaunchComposerFoot(() => "").render(WIDE);
 	const footline = rows.find(row => stripAnsi(row).trim().length > 0);
 	return stripAnsi(footline ?? "").slice(COMPOSER_INSET_COLS);
 }
@@ -158,8 +172,9 @@ function launchParts(): Map<string, string> {
 				compactThinkingLevel: effective.compactThinkingLevel ?? false,
 				branch,
 				autoCompactEnabled: false,
+				location: null,
 			}),
-		subagentBadge: quietRow.subagentBadgeText(0),
+		agentBadge: quietRow.agentBadgeText(0),
 		badgeSlot: null,
 	});
 	const parts = new Map<string, string>();
@@ -179,14 +194,7 @@ function resolvedIds(preset: StatusLinePreset): string[] {
 	return [...new Set([...resolved.left, ...resolved.right])];
 }
 
-/**
- * The config the launch row reads, seeded to non-default values.
- *
- * A store with nothing in it makes `factsAtLaunch()` and `NO_SESSION_FACTS` the same block, and a
- * `launchSegmentContext` that dropped config entirely would then satisfy every case below — the
- * mutation was run and it survived. These two values are what make the model and mode segments
- * carry something only config can supply, so dropping config turns the sweep red.
- */
+/** Non-default config makes dropped model and approval settings observable at launch. */
 const CONFIGURED_MODEL = "claude-sonnet-4-5";
 const CONFIGURED_APPROVAL = "yolo";
 
@@ -213,7 +221,19 @@ afterAll(() => {
 /** The one thing this suite mocks, restored per test. */
 let profileSpy: Mock<() => string> | null = null;
 
+/**
+ * The instant every render in this suite reads.
+ *
+ * The `time` segment calls `new Date()` per render, and the sweep renders twice — once through the
+ * card, once through the gatherer it compares against. A minute that rolled between the two calls
+ * made `time` read `0:16` on one row and `0:17` on the other, so the nerd case failed in CI on a
+ * card that was rendering the segment correctly. Both renders now read one instant, which is the
+ * only way a clock-reading segment can be compared across two renders at all.
+ */
+const FROZEN_NOW = new Date("2026-09-18T12:34:56Z");
+
 beforeEach(() => {
+	setSystemTime(FROZEN_NOW);
 	// Per test, restored below: a file-wide override of the profile resolver would follow this
 	// suite into every later file in the bucket.
 	profileSpy = spyOn(utils, "getActiveProfileOrDefault").mockReturnValue(ACTIVE_PROFILE);
@@ -223,6 +243,8 @@ afterEach(() => {
 	settings.set("statusLine.preset", "default");
 	profileSpy?.mockRestore();
 	profileSpy = null;
+	// A frozen clock is process-wide; every later file in the bucket would inherit it.
+	setSystemTime();
 });
 
 describe("the card and the live row are one row", () => {
@@ -329,7 +351,7 @@ describe("the card and the live row are one row", () => {
 					}, COMPOSER_INSET_COLS).render(terminal);
 
 					composeSpy.mockClear();
-					new LaunchComposerFoot().render(terminal);
+					new LaunchComposerFoot(() => "").render(terminal);
 					const card = composeSpy.mock.calls.at(-1)?.[0].width ?? -1;
 
 					return { terminal, card, live };

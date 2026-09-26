@@ -167,11 +167,18 @@ function syncReadyPending(record: ManagedDaemon): void {
 async function fileTextSlice(filePath: string, head: boolean): Promise<string> {
 	try {
 		const stat = await fs.stat(filePath);
-		const file = Bun.file(filePath);
-		if (stat.size <= LOG_READ_BYTES) return await file.text();
-		return head
-			? await file.slice(0, LOG_READ_BYTES).text()
-			: await file.slice(Math.max(0, stat.size - LOG_READ_BYTES)).text();
+		// fs.readFile, not Bun.file().text(): a Bun.file read does not ref the
+		// event loop, so a broker that reaches this await with nothing else
+		// pending can exit 0 mid-read instead of settling.
+		if (stat.size <= LOG_READ_BYTES) return await fs.readFile(filePath, "utf8");
+		const handle = await fs.open(filePath, "r");
+		try {
+			const offset = head ? 0 : Math.max(0, stat.size - LOG_READ_BYTES);
+			const { bytesRead, buffer } = await handle.read(Buffer.allocUnsafe(LOG_READ_BYTES), 0, LOG_READ_BYTES, offset);
+			return buffer.toString("utf8", 0, bytesRead);
+		} finally {
+			await handle.close();
+		}
 	} catch (error) {
 		if (isEnoent(error)) return "";
 		throw error;
@@ -289,7 +296,10 @@ async function acquireBrokerLease(runtimeDir: string): Promise<BrokerLease | nul
 		} catch (error) {
 			if (!isEexist(error)) throw error;
 			try {
-				const raw: unknown = await Bun.file(pidPath).json();
+				// fs.readFile, not Bun.file().json(): a Bun.file read does not ref
+				// the event loop, so a broker that reaches this await with nothing
+				// else pending can exit 0 mid-read instead of settling the retry.
+				const raw: unknown = JSON.parse(await fs.readFile(pidPath, "utf8"));
 				if (typeof raw === "object" && raw !== null && "pid" in raw && typeof raw.pid === "number") {
 					// A live owner keeps its claim. Anything else leaves a stale PID
 					// file that the next loop iteration claims.
@@ -306,7 +316,7 @@ async function acquireBrokerLease(runtimeDir: string): Promise<BrokerLease | nul
 
 async function releaseBrokerLease(lease: BrokerLease): Promise<void> {
 	try {
-		const raw: unknown = await Bun.file(lease.path).json();
+		const raw: unknown = JSON.parse(await fs.readFile(lease.path, "utf8"));
 		if (typeof raw === "object" && raw !== null && "instanceId" in raw && raw.instanceId === lease.instanceId) {
 			await fs.rm(lease.path, { force: true });
 		}
@@ -488,10 +498,10 @@ class DaemonBroker {
 			case "start":
 				return this.#start(operation.spec, operation.owner);
 			case "list": {
-				await Promise.all([...this.#records.values()].map(record => this.#refreshDetached(record)));
+				await Promise.all(Array.from(this.#records.values()).map(record => this.#refreshDetached(record)));
 				return {
 					op: "list",
-					daemons: [...this.#records.values()]
+					daemons: Array.from(this.#records.values())
 						.sort((left, right) => left.snapshot.createdAt - right.snapshot.createdAt)
 						.map(record => record.snapshot),
 					completions: await this.#completionRecords(),
@@ -669,10 +679,9 @@ class DaemonBroker {
 		if (process.platform === "win32") return;
 		const pidPath = managedDaemonProcessLeasePath(record.dir);
 		const deadline = Date.now() + 5_000;
-		const pidFile = Bun.file(pidPath);
 		while (Date.now() < deadline && generation === record.generation) {
 			try {
-				const pid = Number.parseInt((await pidFile.text()).trim(), 10);
+				const pid = Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10);
 				if (Number.isSafeInteger(pid) && pid > 0) {
 					record.snapshot.pid = pid;
 					this.#persist(record);
@@ -765,12 +774,22 @@ class DaemonBroker {
 		}
 		if (size < record.outputOffset) record.outputOffset = 0;
 		if (size === record.outputOffset) return;
-		const file = Bun.file(logPath);
-		const raw = await file.slice(record.outputOffset, size).text();
-		if (generation !== record.generation) return;
-		record.outputOffset = size;
-		record.snapshot.outputBytes = size;
-		this.#trackOutput(record, generation, sanitizeText(raw));
+		const handle = await fs.open(logPath, "r");
+		try {
+			const { bytesRead, buffer } = await handle.read(
+				Buffer.allocUnsafe(size - record.outputOffset),
+				0,
+				size - record.outputOffset,
+				record.outputOffset,
+			);
+			const raw = buffer.toString("utf8", 0, bytesRead);
+			if (generation !== record.generation) return;
+			record.outputOffset = size;
+			record.snapshot.outputBytes = size;
+			this.#trackOutput(record, generation, sanitizeText(raw));
+		} finally {
+			await handle.close();
+		}
 	}
 
 	#trackOutput(record: ManagedDaemon, generation: number, text: string): void {
@@ -821,22 +840,34 @@ class DaemonBroker {
 	}
 
 	async #onPtyExit(record: ManagedDaemon, generation: number, result: PtyRunResult): Promise<void> {
-		return this.#settle(record, generation, result.exitCode, result.timedOut ? "timed out" : undefined);
+		return this.#settle(
+			record,
+			generation,
+			result.exitCode,
+			result.timedOut ? "timed out" : undefined,
+			result.signal,
+		);
 	}
 
-	async #settle(record: ManagedDaemon, generation: number, exitCode?: number, error?: string): Promise<void> {
+	async #settle(
+		record: ManagedDaemon,
+		generation: number,
+		exitCode?: number,
+		error?: string,
+		ptySignal?: string,
+	): Promise<void> {
 		if (generation !== record.generation || terminalState(record.snapshot.state)) return;
 		await this.#readDetachedOutput(record, generation);
 		// Capture the terminating signal BEFORE clearing record.process below, so a
 		// signal-killed process reports the signal (e.g. SIGTERM) rather than a
-		// misleading numeric exit code (DOG-2). PTY-run daemons (the common case:
-		// #onPtyExit) carry NO Bun.Subprocess.signalCode, so reading only
-		// record.process.signalCode missed every operator `launch stop` and left it
-		// surfacing exit=1 for a SIGTERM'd shell (DOG-R2-5). An operator stop goes
-		// through #stopRecord, which sends SIGTERM via terminate() and sets
-		// stopRequested — so a stop-terminated daemon reports SIGTERM and suppresses
-		// the shell's misleading numeric exit code. (A crash the operator did NOT
-		// request keeps its exitCode and normal failed/restart handling below.)
+		// misleading numeric exit code (DOG-2). A PTY-run daemon (the common case:
+		// #onPtyExit) carries NO Bun.Subprocess.signalCode; its signal arrives in
+		// `PtyRunResult.signal`, which the addon recovers from the wait status. An
+		// operator stop goes through #stopRecord, which sends SIGTERM via
+		// terminate() and sets stopRequested — so a stop-terminated daemon reports
+		// SIGTERM and suppresses the shell's misleading numeric exit code. (A crash
+		// the operator did NOT request keeps its exitCode and normal failed/restart
+		// handling below.)
 		// Name the killer. An unexplained death is indistinguishable from a
 		// crash, so EVERY terminal transition records an owner and a reason: the
 		// attribution a component set before signalling, an external signal
@@ -848,7 +879,8 @@ class DaemonBroker {
 			attribution = undefined;
 		}
 		record.termination = undefined;
-		const signal = record.process?.signalCode ?? (record.stopRequested ? "SIGTERM" : attribution?.signal);
+		const signal =
+			record.process?.signalCode ?? ptySignal ?? (record.stopRequested ? "SIGTERM" : attribution?.signal);
 		record.process = undefined;
 		record.input = undefined;
 		record.pty = undefined;
@@ -903,6 +935,10 @@ class DaemonBroker {
 		record.snapshot.state = failed && !record.stopRequested ? "failed" : "exited";
 		this.#persist(record);
 		this.#scheduleCleanup(record);
+		// A persistent daemon is what held the broker up past the last client; once
+		// it ends there is nothing left to hold it, so the idle reaper is re-armed
+		// here rather than only on client close, which already happened.
+		if (record.spec.persist) this.#scheduleIdleShutdown();
 	}
 
 	#cancelCleanup(name: string): void {
@@ -1132,7 +1168,7 @@ class DaemonBroker {
 	#record(name: string): ManagedDaemon {
 		const record = this.#records.get(name);
 		if (record) return record;
-		const names = [...this.#records.keys()];
+		const names = Array.from(this.#records.keys());
 		throw new Error(`Unknown daemon ${name}${names.length ? `. Available: ${names.join(", ")}` : ""}`);
 	}
 
@@ -1219,7 +1255,7 @@ class DaemonBroker {
 			if (!entry.isDirectory()) continue;
 			const dir = path.join(root, entry.name);
 			try {
-				const decoded: unknown = await Bun.file(managedDaemonMetaPath(dir)).json();
+				const decoded: unknown = JSON.parse(await fs.readFile(managedDaemonMetaPath(dir), "utf8"));
 				if (typeof decoded !== "object" || decoded === null || !("daemon" in decoded) || !("spec" in decoded)) {
 					continue;
 				}
@@ -1301,22 +1337,40 @@ class DaemonBroker {
 		this.#idleTimer = setTimeout(() => {
 			this.#idleTimer = undefined;
 			void (async () => {
-				const livePersistent = [...this.#records.values()].some(
-					record => record.spec.persist && !terminalState(record.snapshot.state),
-				);
-				if (this.#clients.size > 0 || livePersistent) return;
+				if (this.#clients.size > 0 || this.#shuttingDown) return;
 				if (await hasLiveDaemonProjectPresence(this.#runtimeDir)) {
 					this.#scheduleIdleShutdown();
 					return;
 				}
-				if (this.#clients.size === 0) {
+				if (this.#clients.size > 0 || this.#shuttingDown) return;
+				const livePersistent = Array.from(this.#records.values()).some(
+					record => record.spec.persist && !terminalState(record.snapshot.state),
+				);
+				if (!livePersistent) {
 					await this.shutdown({
 						owner: "idle-reaper",
 						reason:
 							"the last veyyon client disconnected and the idle grace elapsed with no persistent daemon or live project presence remaining",
 						at: Date.now(),
 					});
+					return;
 				}
+				// A persistent sibling keeps the broker alive, not the
+				// `last-client-exit` daemons beside it: those end with the last
+				// client, as their lifetime states. The reaper then re-arms so the
+				// broker exits once the persistent daemon is gone too.
+				const reapAt = Date.now();
+				for (const record of this.#records.values()) {
+					if (record.spec.persist || record.spec.detached || terminalState(record.snapshot.state)) continue;
+					await this.#stopRecord(record, 2_000, {
+						owner: "idle-reaper",
+						reason:
+							"the last veyyon client disconnected and the idle grace elapsed; its lifetime is last-client-exit, so it was stopped while a persistent daemon kept the broker alive",
+						signal: "SIGTERM",
+						at: reapAt,
+					});
+				}
+				this.#scheduleIdleShutdown();
 			})();
 		}, this.#idleGraceMs);
 	}
@@ -1341,7 +1395,7 @@ export async function startDaemonBrokerFromEnvironment(): Promise<void> {
 	const lease = await acquireBrokerLease(runtimeDir);
 	if (!lease) return;
 	process.title = "veyyon daemon broker";
-	const token = (await Bun.file(daemonBrokerTokenPath(runtimeDir)).text()).trim();
+	const token = (await fs.readFile(daemonBrokerTokenPath(runtimeDir), "utf8")).trim();
 	if (!token) throw new Error("Daemon broker token is empty");
 	const broker = new DaemonBroker(projectDir, runtimeDir, token, idleGraceMs, cleanupWaitMs);
 	const cancelCleanup = postmortem.register("daemon-broker", () => broker.shutdown());

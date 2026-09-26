@@ -232,9 +232,21 @@ function rebindFileTransportIfMoved(logger: winston.Logger): void {
 		return;
 	}
 	failedRebindTarget = undefined;
+	for (const transport of logger.transports) closeTransport(transport);
 	logger.clear();
 	for (const transport of rebuilt) logger.add(transport);
 	logger.silent = rebuilt.length === 0;
+}
+
+function closeTransport(transport: unknown): void {
+	if (transport && typeof transport === "object" && "close" in transport) {
+		const closeFn = transport.close;
+		if (typeof closeFn === "function") {
+			try {
+				closeFn.call(transport);
+			} catch {}
+		}
+	}
 }
 
 function makeConsoleTransport(): winston.transport {
@@ -290,6 +302,7 @@ function getWinstonLogger(): winston.Logger {
 export function setTransports(opts: { console?: boolean; file?: boolean | string }): void {
 	transportOpts = opts;
 	if (!winstonLogger) return; // applied lazily when the logger is first built
+	for (const transport of winstonLogger.transports) closeTransport(transport);
 	winstonLogger.clear();
 	const transports = buildTransports(opts);
 	for (const transport of transports) winstonLogger.add(transport);
@@ -651,7 +664,7 @@ function printModuleLoadSummary(loads: Span[], depth: number, lines: string[]): 
 	if (nodes.length === 0) return;
 
 	const showAll = timingModeIncludes("full");
-	const byBody = [...nodes].sort(compareModuleNodes);
+	const byBody = nodes.slice().sort(compareModuleNodes);
 	const topBody = showAll ? byBody : byBody.slice(0, MODULE_LOAD_VERBOSE_TOP);
 	lines.push(`${grandIndent}top body/TLA:`);
 	for (const node of topBody) {
@@ -694,7 +707,7 @@ function buildModuleTimingGraph(loads: Span[]): ModuleTimingNode[] {
 	for (const node of nodes.values()) {
 		node.children.sort(compareModuleNodes);
 	}
-	return [...nodes.values()];
+	return Array.from(nodes.values());
 }
 
 function compareModuleNodes(a: ModuleTimingNode, b: ModuleTimingNode): number {

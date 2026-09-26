@@ -32,7 +32,7 @@
  * WHAT IT DOES NOT CATCH. It drives the command handlers with a fake `InteractiveModeContext`, so
  * it proves which context call each argument produces and not what the selector then renders; the
  * card that a successful login lands on is proven in
- * `test/modes/controllers/a-command-login-lands-in-the-account-manager.test.ts` against the real
+ * `test/modes/terminal/controllers/a-command-login-lands-in-the-account-manager.test.ts` against the real
  * controller. It also says nothing about whether a provider's login FLOW works, only about routing,
  * and nothing about whether the logout selector then lists the api_key row it was opened for.
  */
@@ -44,7 +44,10 @@ import * as path from "node:path";
 import { AuthStorage, SqliteAuthCredentialStore } from "@veyyon/ai";
 import { getOAuthProviders } from "@veyyon/ai/oauth";
 import { PROVIDER_REGISTRY } from "@veyyon/ai/registry";
-import { executeBuiltinSlashCommand } from "@veyyon/coding-agent/slash-commands/builtin-registry";
+import {
+	BUILTIN_SLASH_COMMANDS_INTERNAL,
+	executeBuiltinSlashCommand,
+} from "@veyyon/coding-agent/slash-commands/builtin-registry";
 import type { TuiSlashCommandRuntime } from "@veyyon/coding-agent/slash-commands/types";
 
 interface Recorder {
@@ -387,3 +390,44 @@ for (const command of LOGOUT_COMMANDS) {
 		});
 	});
 }
+
+/**
+ * A pasted OAuth redirect must die at the dispatcher, whatever command name it lands on.
+ *
+ * The callback URL a provider hands back carries an authorization code. The dispatcher's
+ * unexpected-argument branch decides between "consume it" and "send it to the model as prose", and
+ * sending it is the bad outcome: the code goes out over the wire to a provider, into the
+ * transcript, and into the session file on disk. Every other kind of unexpected argument is prose
+ * and must still pass through, or a sentence beginning with a command name stops being sendable.
+ *
+ * The commands are swept out of the registry rather than named, so a new one that forgets
+ * `allowArgs` is covered the day it lands. What this does not catch: a callback shape the
+ * heuristic in `looksLikeOAuthCallback` does not recognise, which is its own owner's problem.
+ */
+describe("a pasted OAuth callback is swallowed rather than sent to the model", () => {
+	/** Derived, not curated: a command that takes no arguments is where the branch is reachable. */
+	const noArgCommands = BUILTIN_SLASH_COMMANDS_INTERNAL.filter(command => !command.allowArgs && !command.subcommands);
+
+	it("has commands to test", () => {
+		expect(noArgCommands.length).toBeGreaterThan(3);
+	});
+
+	it.each(["?code=4/0Ab_x&state=zz", "http://localhost:8976/callback?code=abc", "https://veyyon.dev/auth?code=1"])(
+		"consumes %s on every command that takes no arguments",
+		async callback => {
+			for (const command of noArgCommands) {
+				const calls = recorder();
+				const handled = await executeBuiltinSlashCommand(`/${command.name} ${callback}`, calls.runtime);
+				expect(handled).toBe(true);
+			}
+		},
+	);
+
+	it("still lets ordinary prose through to the model", async () => {
+		for (const command of noArgCommands) {
+			const calls = recorder();
+			const handled = await executeBuiltinSlashCommand(`/${command.name} why did that happen`, calls.runtime);
+			expect(handled).toBe(false);
+		}
+	});
+});

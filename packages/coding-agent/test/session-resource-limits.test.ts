@@ -20,10 +20,11 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { type CpuLimitEnvironment, type CpuLimitProbe, probeCpuLimitSupport } from "@veyyon/kernel/session/cgroup-host";
+import { BYTES_PER_GB } from "@veyyon/kernel/session/write-accounting";
 import { resetSettingsForTest, Settings } from "../src/config/settings";
 import { setSettingsInstance } from "../src/config/settings-instance";
 import { getUi, SETTINGS_SCHEMA, type SettingPath } from "../src/config/settings-schema";
-import { type CpuLimitEnvironment, type CpuLimitProbe, probeCpuLimitSupport } from "../src/session/cgroup-host";
 import {
 	type CpuBudgetGroupHandle,
 	CpuLimitDeniedError,
@@ -32,7 +33,6 @@ import {
 	SessionCpuLimit,
 	sessionCpuBudgetName,
 } from "../src/session/cpu-limit";
-import { BYTES_PER_GB } from "../src/session/write-accounting";
 import {
 	type FakeHost,
 	makeCgroupRoot,
@@ -418,7 +418,7 @@ describe("a limit the operator configured but no gate has mentioned", () => {
 	it("lets a value a gate passed win over the configured one", async () => {
 		setSettingsInstance(Settings.isolated({ "session.maxProcesses": 4 }));
 
-		// A subagent's cloned settings are a better answer than the process-wide
+		// An agent's cloned settings are a better answer than the process-wide
 		// singleton, so an explicit limit is never overwritten by configuration.
 		const fixture = await makeFixture({ maxProcesses: 1 });
 

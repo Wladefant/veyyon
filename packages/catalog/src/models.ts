@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { buildModel } from "./build";
+import type { ModelReferenceCandidate } from "./identity/reference";
 import modelsSourceJson from "./models.json" with { type: "text" };
 import type { Api, Model, ModelSpec, Usage } from "./types";
 
@@ -35,15 +36,16 @@ const modelsSource = modelsSourceJson as unknown as string;
  * Bump this version whenever the resolved record's contract changes, the same
  * way `CACHE_SCHEMA_VERSION` is bumped in `model-cache.ts` for cached specs.
  */
-const ENRICHED_REGISTRY_FORMAT_VERSION = 2;
-let modelRegistry: Map<string, Map<string, Model<Api>>> | undefined;
+const ENRICHED_REGISTRY_FORMAT_VERSION = 4;
+let fullRegistry: Map<string, Map<string, Model<Api>>> | undefined;
+const lazyProviderModels: Map<string, Map<string, Model<Api>>> = new Map();
 let parsedModels: BundledModelsJson | undefined;
 let catalogDigest: string | undefined;
+
 /**
- * Persistence for the enriched registry, installed by whoever owns a profile
- * directory. This module stays a leaf on purpose: every consumer of the
- * bundled catalog imports it, so a filesystem and logging dependency here
- * lands in every one of those module graphs.
+ * Optional persistence for the enriched bundled registry, installed by callers
+ * that explicitly opt in to disk snapshot caching. When omitted (the production
+ * default), models are resolved on demand per provider without disk I/O.
  */
 export interface EnrichedRegistrySnapshotStore {
 	read(fingerprint: string): Map<string, Map<string, Model<Api>>> | null;
@@ -53,7 +55,9 @@ export interface EnrichedRegistrySnapshotStore {
 let snapshotStore: EnrichedRegistrySnapshotStore | undefined;
 
 export function setEnrichedRegistrySnapshotStore(store: EnrichedRegistrySnapshotStore | undefined): void {
+	if (snapshotStore === store) return;
 	snapshotStore = store;
+	fullRegistry = undefined;
 }
 
 /**
@@ -71,49 +75,109 @@ export function enrichedRegistryFingerprint(): string {
 	return `v${ENRICHED_REGISTRY_FORMAT_VERSION}:${bundledCatalogDigest()}`;
 }
 
-function buildRegistry(source: BundledModelsJson): Map<string, Map<string, Model<Api>>> {
-	const registry = new Map<string, Map<string, Model<Api>>>();
-	for (const [provider, models] of Object.entries(source)) {
-		const providerModels = new Map<string, Model<Api>>();
-		for (const [id, model] of Object.entries(models)) {
-			providerModels.set(id, buildModel(model));
-		}
-		registry.set(provider, providerModels);
-	}
-	return registry;
+function getParsedModels(): BundledModelsJson {
+	parsedModels ??= JSON.parse(modelsSource) as BundledModelsJson;
+	return parsedModels;
 }
 
-/** Build (once) and return the enriched bundled-model registry. */
-function getModelRegistry(): Map<string, Map<string, Model<Api>>> {
-	if (modelRegistry !== undefined) return modelRegistry;
+function restoreFullRegistryFromSnapshotIfAvailable(): Map<string, Map<string, Model<Api>>> | null {
+	if (fullRegistry !== undefined) return fullRegistry;
+	if (!snapshotStore) return null;
 	const fingerprint = enrichedRegistryFingerprint();
-	const restored = snapshotStore?.read(fingerprint) ?? null;
+	const restored = snapshotStore.read(fingerprint);
 	if (restored) {
-		modelRegistry = restored;
-		return modelRegistry;
+		for (const [provider, existingModels] of lazyProviderModels) {
+			restored.set(provider, existingModels);
+		}
+		fullRegistry = restored;
+		for (const [provider, models] of fullRegistry) {
+			lazyProviderModels.set(provider, models);
+		}
+		return fullRegistry;
 	}
-	parsedModels ??= JSON.parse(modelsSource) as BundledModelsJson;
-	modelRegistry = buildRegistry(parsedModels);
-	snapshotStore?.write(modelRegistry, fingerprint);
-	return modelRegistry;
+
+	const parsed = getParsedModels();
+	const newFullRegistry = new Map<string, Map<string, Model<Api>>>();
+	for (const [p, specs] of Object.entries(parsed)) {
+		let providerModels = lazyProviderModels.get(p);
+		if (!providerModels) {
+			providerModels = new Map<string, Model<Api>>();
+			for (const [id, model] of Object.entries(specs)) {
+				providerModels.set(id, buildModel(model));
+			}
+			lazyProviderModels.set(p, providerModels);
+		}
+		newFullRegistry.set(p, providerModels);
+	}
+	fullRegistry = newFullRegistry;
+	snapshotStore.write(fullRegistry, fingerprint);
+	return fullRegistry;
+}
+
+function getProviderModelMap(provider: GeneratedProvider): Map<string, Model<Api>> | undefined {
+	if (snapshotStore) {
+		const full = restoreFullRegistryFromSnapshotIfAvailable();
+		if (full) {
+			return full.get(provider);
+		}
+	}
+	let providerModels = lazyProviderModels.get(provider);
+	if (providerModels !== undefined) {
+		return providerModels;
+	}
+	const parsed = getParsedModels();
+	const providerSpecs = parsed[provider];
+	if (!providerSpecs) return undefined;
+	providerModels = new Map<string, Model<Api>>();
+	for (const [id, model] of Object.entries(providerSpecs)) {
+		providerModels.set(id, buildModel(model));
+	}
+	lazyProviderModels.set(provider, providerModels);
+	return providerModels;
 }
 
 export function getBundledModel<TApi extends Api = Api>(provider: GeneratedProvider, modelId: string): Model<TApi> {
-	const providerModels = getModelRegistry().get(provider);
+	const providerModels = getProviderModelMap(provider);
 	return providerModels?.get(modelId) as Model<TApi>;
 }
 
 export function getBundledProviders(): GeneratedProvider[] {
-	// Keys come from the built/restored registry rather than the raw source so a
-	// snapshot hit answers without parsing the catalog text. JSON round-trips
-	// preserve insertion order for non-numeric keys, so provider order matches
-	// `Object.keys` on the source either way.
-	return Array.from(getModelRegistry().keys());
+	if (snapshotStore) {
+		const full = restoreFullRegistryFromSnapshotIfAvailable();
+		if (full) {
+			return Array.from(full.keys()) as GeneratedProvider[];
+		}
+	}
+	return Object.keys(getParsedModels()) as GeneratedProvider[];
 }
 
 export function getBundledModels(provider: GeneratedProvider): Model<Api>[] {
-	const models = getModelRegistry().get(provider);
+	const models = getProviderModelMap(provider);
 	return models ? (Array.from(models.values()) as Model<Api>[]) : [];
+}
+
+/**
+ * Iterate reference metadata without enriching providers in the default registry.
+ * An explicitly installed snapshot store retains its full-registry restoration behavior.
+ */
+export function* iterateBundledModelMetadata(): IterableIterator<ModelReferenceCandidate> {
+	if (snapshotStore) {
+		const full = restoreFullRegistryFromSnapshotIfAvailable();
+		if (full) {
+			for (const providerModels of full.values()) {
+				for (const model of providerModels.values()) {
+					yield model;
+				}
+			}
+			return;
+		}
+	}
+	const parsed = getParsedModels();
+	for (const providerSpecs of Object.values(parsed)) {
+		for (const spec of Object.values(providerSpecs)) {
+			yield spec;
+		}
+	}
 }
 
 /**
@@ -166,12 +230,29 @@ export function getModelPricing<TApi extends Api>(
 	return hasFreeMarker(model.id) ? "free" : "unpriced";
 }
 
+/**
+ * The rate card this request bills at.
+ *
+ * A model with a {@link Model.longContextCost} tier has two, and which one
+ * applies is a property of the request, not of the model, so it is resolved
+ * here rather than baked into the spec.
+ */
+export function resolveRequestCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Model<TApi>["cost"] {
+	const tier = model.longContextCost;
+	if (!tier) return model.cost;
+	const orchestration = usage.orchestration;
+	const promptTokens =
+		usage.input + usage.cacheRead + usage.cacheWrite + (orchestration?.input ?? 0) + (orchestration?.cacheRead ?? 0);
+	return promptTokens > tier.inputThreshold ? tier : model.cost;
+}
+
 export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Usage["cost"] {
 	const orchestration = usage.orchestration;
-	usage.cost.input = (model.cost.input / 1000000) * (usage.input + (orchestration?.input ?? 0));
-	usage.cost.output = (model.cost.output / 1000000) * (usage.output + (orchestration?.output ?? 0));
-	usage.cost.cacheRead = (model.cost.cacheRead / 1000000) * (usage.cacheRead + (orchestration?.cacheRead ?? 0));
-	usage.cost.cacheWrite = (model.cost.cacheWrite / 1000000) * usage.cacheWrite;
+	const cost = resolveRequestCost(model, usage);
+	usage.cost.input = (cost.input / 1000000) * (usage.input + (orchestration?.input ?? 0));
+	usage.cost.output = (cost.output / 1000000) * (usage.output + (orchestration?.output ?? 0));
+	usage.cost.cacheRead = (cost.cacheRead / 1000000) * (usage.cacheRead + (orchestration?.cacheRead ?? 0));
+	usage.cost.cacheWrite = (cost.cacheWrite / 1000000) * usage.cacheWrite;
 	recomputeCostTotal(usage);
 	return usage.cost;
 }

@@ -74,7 +74,7 @@ describe("AutoresearchStorage run state transitions", () => {
 			startedAt: Date.now(),
 		});
 
-		const abandoned = storage.abandonPendingRuns(session.id);
+		const abandoned = storage.abandonIncompleteRuns(session.id);
 		expect(abandoned).toBe(1);
 
 		expect(() =>
@@ -101,7 +101,7 @@ describe("AutoresearchStorage run state transitions", () => {
 			startedAt: Date.now(),
 		});
 
-		storage.abandonPendingRuns(session.id);
+		storage.abandonIncompleteRuns(session.id);
 
 		expect(() =>
 			storage.markRunLogged({

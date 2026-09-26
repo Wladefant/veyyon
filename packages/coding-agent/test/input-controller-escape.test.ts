@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
 import type { ImageContent } from "@veyyon/ai";
 import { resetSettingsForTest, Settings, settings } from "@veyyon/coding-agent/config/settings";
-import { InputController } from "@veyyon/coding-agent/modes/controllers/input-controller";
-import type { InteractiveModeContext, SubmittedUserInput } from "@veyyon/coding-agent/modes/types";
+import { InputController } from "@veyyon/coding-agent/modes/terminal/controllers/input-controller";
+import type { InteractiveModeContext, SubmittedUserInput } from "@veyyon/coding-agent/modes/terminal/types";
 import { USER_INTERRUPT_LABEL } from "@veyyon/coding-agent/session/messages";
-import { vocalizer } from "@veyyon/coding-agent/tts/vocalizer";
+import { vocalizer } from "@veyyon/coding-agent/speech/tts/vocalizer";
 import * as logger from "@veyyon/utils/logger";
 
 type Spy = Mock<(...args: unknown[]) => unknown>;
@@ -525,7 +525,7 @@ describe("InputController escape behavior", () => {
 		expect(spies.showStatus).not.toHaveBeenCalledWith("Press Esc again within 2s to cancel streaming.");
 	});
 
-	it("returns focused subagent view to main on Esc instead of aborting", () => {
+	it("returns focused agent view to main on Esc instead of aborting", () => {
 		const { ctx, editor, spies } = createContext();
 		Object.defineProperty(ctx, "focusedAgentId", { value: "Worker", configurable: true });
 		const controller = new InputController(ctx);
@@ -537,7 +537,7 @@ describe("InputController escape behavior", () => {
 		expect(spies.abort).not.toHaveBeenCalled();
 	});
 
-	it("returns focused subagent view to main on Esc without aborting its active maintenance (#2819)", () => {
+	it("returns focused agent view to main on Esc without aborting its active maintenance (#2819)", () => {
 		const { ctx, editor, spies } = createContext();
 		Object.defineProperty(ctx, "focusedAgentId", { value: "Worker", configurable: true });
 		(ctx.viewSession as { isCompacting: boolean }).isCompacting = true;
@@ -778,7 +778,7 @@ describe("InputController double-tap ← gesture", () => {
 		};
 	}
 
-	it("opens the subagent dashboard on a deliberate double-tap", () => {
+	it("opens the agent dashboard on a deliberate double-tap", () => {
 		const now = vi.spyOn(Date, "now");
 		const { showAgentsDashboard, tap } = setup();
 		now.mockReturnValue(1_000);
@@ -787,7 +787,7 @@ describe("InputController double-tap ← gesture", () => {
 		tap();
 		expect(showAgentsDashboard).toHaveBeenCalledTimes(1);
 		// Gated: the gesture is not a deliberate command, so it must stay inert
-		// until there is a subagent to look at. Dropping this argument would pop a
+		// until there is an agent to look at. Dropping this argument would pop a
 		// card saying "Nothing running" every time a user backspaces past the start
 		// of a line.
 		expect(showAgentsDashboard).toHaveBeenCalledWith({ requireContent: true });
@@ -813,7 +813,7 @@ describe("InputController double-tap ← gesture", () => {
 		expect(showAgentsDashboard).not.toHaveBeenCalled();
 	});
 
-	it("returns a focused subagent view to the main session on a deliberate double-tap", () => {
+	it("returns a focused agent view to the main session on a deliberate double-tap", () => {
 		const now = vi.spyOn(Date, "now");
 		const { showAgentsDashboard, unfocusSession, tap } = setup("Agent1");
 		now.mockReturnValue(1_000);
@@ -842,7 +842,7 @@ describe("InputController double-tap ← gesture", () => {
  *
  * WHAT IT DOES NOT CATCH: that the discarded draft is recoverable. `discardDraft` is a
  * fake here; the real editor's undo contract is pinned in
- * `packages/tui/test/discarding-a-draft-leaves-it-on-the-undo-stack.test.ts`.
+ * `hosts/terminal/engine/test/discarding-a-draft-leaves-it-on-the-undo-stack.test.ts`.
  */
 describe("InputController Esc-Esc discards the draft", () => {
 	function setup() {

@@ -274,7 +274,7 @@ function snapshotAssistantMessage(message: AssistantMessage, mode: SnapshotMode 
 			...message.usage,
 			cost: { ...message.usage.cost },
 		},
-		disabledFeatures: message.disabledFeatures ? [...message.disabledFeatures] : undefined,
+		disabledFeatures: message.disabledFeatures ? message.disabledFeatures.slice() : undefined,
 		toolCallAbortMessages: message.toolCallAbortMessages ? { ...message.toolCallAbortMessages } : undefined,
 	};
 }
@@ -414,10 +414,10 @@ export function agentLoop(
 	const stream = createAgentStream();
 
 	(async () => {
-		const newMessages: AgentMessage[] = [...prompts];
+		const newMessages: AgentMessage[] = prompts.slice();
 		const currentContext: AgentContext = {
 			...context,
-			messages: [...context.messages, ...prompts],
+			messages: context.messages.concat(prompts),
 		};
 
 		stream.push({ type: "agent_start" });
@@ -463,7 +463,7 @@ export function agentLoopContinue(
 
 	(async () => {
 		const newMessages: AgentMessage[] = [];
-		const currentContext: AgentContext = { ...context, messages: [...context.messages] };
+		const currentContext: AgentContext = { ...context, messages: context.messages.slice() };
 
 		stream.push({ type: "agent_start" });
 		stream.push({ type: "turn_start" });
@@ -688,7 +688,7 @@ function injectIntentIntoSchema(
 		return {
 			...schemaRecord,
 			...(needsReorder ? { properties: { [INTENT_FIELD]: intentProp, ...rest } } : {}),
-			...(needsRequired ? { required: [...required, INTENT_FIELD] } : {}),
+			...(needsRequired ? { required: required.concat(INTENT_FIELD) } : {}),
 		};
 	}
 	return {
@@ -699,7 +699,7 @@ function injectIntentIntoSchema(
 				: { type: "string" },
 			...properties,
 		},
-		...(mode === "require" ? { required: [...required, INTENT_FIELD] } : {}),
+		...(mode === "require" ? { required: required.concat(INTENT_FIELD) } : {}),
 	};
 }
 
@@ -1300,7 +1300,7 @@ async function runLoopBody(
 					}
 				}
 
-				// A tool hook may mark its completed result as terminal (e.g. subagent yield).
+				// A tool hook may mark its completed result as terminal (e.g. agent yield).
 				// Stop before the next provider call without changing external/user abort semantics.
 				if (signal?.reason === TERMINAL_TOOL_RESULT_ABORT_REASON) {
 					hasMoreToolCalls = false;
@@ -1341,7 +1341,7 @@ async function runLoopBody(
 				if (hasMoreToolCalls) {
 					// Mid-work: fold any non-interrupting asides into the next turn alongside steering.
 					const asides = signal?.aborted ? [] : resolveAsides(await config.getAsideMessages?.());
-					pendingMessages = asides.length > 0 ? [...steering, ...asides] : steering;
+					pendingMessages = asides.length > 0 ? steering.concat(asides) : steering;
 				} else {
 					// Stop boundary: only steering (live user input) forces another turn here. Leave
 					// asides for the outer drain below so a passive aside can't trigger an extra model
@@ -1371,7 +1371,7 @@ async function runLoopBody(
 			const followUpMessages = signal?.aborted ? [] : (await config.getFollowUpMessages?.()) || [];
 			if (lateSteering.length > 0 || asideMessages.length > 0 || followUpMessages.length > 0) {
 				// Set as pending so the inner loop processes them before stopping.
-				pendingMessages = [...lateSteering, ...asideMessages, ...followUpMessages];
+				pendingMessages = lateSteering.concat(asideMessages, followUpMessages);
 				continue;
 			}
 
@@ -1470,7 +1470,9 @@ async function streamAssistantResponse(
 		promptToolWireTools = llmContext.tools;
 		llmContext = {
 			...llmContext,
-			systemPrompt: [...(llmContext.systemPrompt ?? []), renderInbandToolPrompt(promptToolWireTools, ownedDialect)],
+			systemPrompt: (llmContext.systemPrompt ?? []).concat(
+				renderInbandToolPrompt(promptToolWireTools, ownedDialect),
+			),
 			messages: encodeInbandToolHistory(llmContext.messages, ownedDialect, promptToolWireTools),
 			tools: undefined,
 		};
@@ -1601,6 +1603,26 @@ async function streamAssistantResponse(
 			let partialMessage: AssistantMessage | null = null;
 			let addedPartial = false;
 			const completedToolCallIds = new Set<string>();
+			// Both stream endings, the `done`/`error` event and a stream that ends
+			// without one, reject a Harmony leak the same way: discard the committed
+			// partial, then interrupt the turn with what was recovered from the leak.
+			const rejectHarmonyLeak = (message: AssistantMessage): void => {
+				if (!harmonyMitigationEnabled) return;
+				const detection = detectHarmonyLeakInAssistantMessage(message);
+				if (!detection) return;
+				const recovered = recoverHarmonyToolCall(message, detection);
+				const removed = recovered?.removed ?? extractHarmonyRemoved(message, detection);
+				if (addedPartial) {
+					emitDiscardedHarmonyPartial(
+						partialMessage,
+						stream,
+						`Discarded after GPT-5 Harmony protocol leakage (${signalListLabel(detection.signals)})`,
+					);
+					context.messages.pop();
+					addedPartial = false;
+				}
+				throw new HarmonyLeakInterruption(detection, removed, recovered);
+			};
 
 			const responseIterator = response[Symbol.asyncIterator]();
 			const finishAbortedStream = async (): Promise<AssistantMessage> => {
@@ -1690,23 +1712,7 @@ async function streamAssistantResponse(
 							),
 							storedToolCallIds(context.messages, addedPartial),
 						);
-						if (harmonyMitigationEnabled) {
-							const detection = detectHarmonyLeakInAssistantMessage(finalMessage);
-							if (detection) {
-								const recovered = recoverHarmonyToolCall(finalMessage, detection);
-								const removed = recovered?.removed ?? extractHarmonyRemoved(finalMessage, detection);
-								if (addedPartial) {
-									emitDiscardedHarmonyPartial(
-										partialMessage,
-										stream,
-										`Discarded after GPT-5 Harmony protocol leakage (${signalListLabel(detection.signals)})`,
-									);
-									context.messages.pop();
-									addedPartial = false;
-								}
-								throw new HarmonyLeakInterruption(detection, removed, recovered);
-							}
-						}
+						rejectHarmonyLeak(finalMessage);
 						finalMessage = snapshotAssistantMessage(finalMessage);
 						if (turnInstrumentation !== "off") {
 							const status: AssistantTurnStatus =
@@ -1819,23 +1825,7 @@ async function streamAssistantResponse(
 			}
 
 			let trailing = await response.result();
-			if (harmonyMitigationEnabled) {
-				const detection = detectHarmonyLeakInAssistantMessage(trailing);
-				if (detection) {
-					const recovered = recoverHarmonyToolCall(trailing, detection);
-					const removed = recovered?.removed ?? extractHarmonyRemoved(trailing, detection);
-					if (addedPartial) {
-						emitDiscardedHarmonyPartial(
-							partialMessage,
-							stream,
-							`Discarded after GPT-5 Harmony protocol leakage (${signalListLabel(detection.signals)})`,
-						);
-						context.messages.pop();
-						addedPartial = false;
-					}
-					throw new HarmonyLeakInterruption(detection, removed, recovered);
-				}
-			}
+			rejectHarmonyLeak(trailing);
 			trailing = snapshotAssistantMessage(trailing);
 			if (addedPartial) {
 				context.messages[context.messages.length - 1] = trailing;
@@ -2003,7 +1993,7 @@ function disambiguateToolCallIds(message: AssistantMessage, takenIds: ReadonlySe
 		while (taken(`${block.id}_${suffix}`)) suffix += 1;
 		const unique = `${block.id}_${suffix}`;
 		seen.add(unique);
-		content ??= [...message.content];
+		content ??= message.content.slice();
 		content[index] = { ...block, id: unique };
 	}
 	return content ? { ...message, content } : message;
@@ -2311,7 +2301,7 @@ async function executeToolCalls(
 			// span rather than a fabricated one.
 			startedAt: undefined as number | undefined,
 			concurrency: undefined as "shared" | "exclusive" | undefined,
-			result: undefined as AgentToolResult<any> | undefined,
+			result: undefined as AgentToolResult<unknown> | undefined,
 			isError: false,
 			skipped: false,
 			terminalStatus: undefined as ToolCallStatus | undefined,
@@ -2366,7 +2356,11 @@ async function executeToolCalls(
 		}
 	};
 
-	const emitToolResult = (record: (typeof records)[number], result: AgentToolResult<any>, isError: boolean): void => {
+	const emitToolResult = (
+		record: (typeof records)[number],
+		result: AgentToolResult<unknown>,
+		isError: boolean,
+	): void => {
 		if (record.resultEmitted) return;
 		const { toolCall } = record;
 		if (!record.started) {
@@ -2637,7 +2631,7 @@ async function executeToolCalls(
 			toolSpan.setAttribute(PiGenAIAttr.ToolCallIntent, toolCall.intent);
 		}
 
-		let result: AgentToolResult<any> = { content: [], details: {} };
+		let result: AgentToolResult<unknown> = { content: [], details: {} };
 		let isError = false;
 		let caughtError: unknown;
 		let completedToolExecution = false;
@@ -3210,7 +3204,7 @@ function createSkippedToolResult(
 	source: SteeringInterruptSource | "irc" | "cancelled-run" | undefined,
 	entered: boolean,
 	batchLedger?: ToolBatchLedger,
-): AgentToolResult<any> {
+): AgentToolResult<SkippedToolResultDetails> {
 	let reason = "pending steering message";
 	let blocker = "queued message";
 	if (source === "user") {

@@ -25,14 +25,14 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SESSION_EXIT_CUSTOM_TYPE, type SessionExitLogLevel } from "@veyyon/coding-agent/session/exit-diagnostics";
 import { convertToLlm } from "@veyyon/coding-agent/session/messages";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { SESSION_EXIT_CUSTOM_TYPE, type SessionExitLogLevel } from "@veyyon/kernel/session/exit-diagnostics";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { logger, postmortem, TempDir } from "@veyyon/utils";
 
 const EXIT_MESSAGE = "Session exit recorded";
@@ -80,7 +80,7 @@ type Transcript = "settled" | "pending" | "empty";
  * what the record itself carries, so the table reads the same way as the log line it governs.
  */
 const EXPECTED_LEVEL: Record<string, { settled: SessionExitLogLevel; pending: SessionExitLogLevel }> = {
-	// A programmatic dispose: `/quit`, a finished subagent, a test tearing down.
+	// A programmatic dispose: `/quit`, a finished agent, a test tearing down.
 	dispose: { settled: "debug", pending: "warn" },
 	[postmortem.Reason.MANUAL]: { settled: "debug", pending: "warn" },
 	// The process is going away for a reason outside the session and nothing is lost.

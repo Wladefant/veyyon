@@ -7,6 +7,7 @@
 import * as AIError from "@veyyon/ai/error";
 import { isAbortError, logger, readSseJson, Snowflake } from "@veyyon/utils";
 import { isRecord } from "@veyyon/utils/type-guards";
+import { createMCPTimeout, getNeverAbortSignal, isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "../timeout";
 import type {
 	JsonRpcError,
 	JsonRpcMessage,
@@ -16,9 +17,8 @@ import type {
 	MCPRequestOptions,
 	MCPSseServerConfig,
 	MCPTransport,
-} from "../../mcp/types";
-import { toJsonRpcError } from "../../mcp/types";
-import { createMCPTimeout, getNeverAbortSignal, isMCPTimeoutEnabled, resolveMCPTimeoutMs } from "../timeout";
+} from "../types";
+import { toJsonRpcError } from "../types";
 import { mcpHttpFailureMessage } from "./http-failure";
 import { reportUndeliveredServerResponse } from "./server-response-delivery";
 import {
@@ -145,18 +145,19 @@ export class HttpTransport implements MCPTransport {
 			headers,
 			signal: connection.signal,
 		});
-		const timeoutPromise =
-			startupTimeoutMs > 0
-				? new Promise<null>(resolve => {
-						setTimeout(() => {
-							if (!startupFinished) {
-								timedOut = true;
-								connection.abort();
-							}
-							resolve(null);
-						}, startupTimeoutMs);
-					})
-				: null;
+		let timer: NodeJS.Timeout | undefined;
+		let timeoutPromise: Promise<null> | null = null;
+		if (startupTimeoutMs > 0) {
+			const { promise, resolve } = Promise.withResolvers<null>();
+			timeoutPromise = promise;
+			timer = setTimeout(() => {
+				if (!startupFinished) {
+					timedOut = true;
+					connection.abort();
+				}
+				resolve(null);
+			}, startupTimeoutMs);
+		}
 		try {
 			response = timeoutPromise === null ? await fetchPromise : await Promise.race([fetchPromise, timeoutPromise]);
 		} catch (error) {
@@ -167,6 +168,7 @@ export class HttpTransport implements MCPTransport {
 			return;
 		} finally {
 			startupFinished = true;
+			clearTimeout(timer);
 		}
 		if (response === null) {
 			if (this.#sseConnection === connection) this.#sseConnection = null;

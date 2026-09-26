@@ -26,10 +26,19 @@ ensure_session_artifacts() {
 	local bundle="${repo}/packages/coding-agent/src/export/html/tool-views.generated.js"
 	[ -s "${bundle}" ] && return 0
 	echo "session: generating the missing build artifact (${bundle##*/})" >&2
-	if ! (cd "${repo}" && bun --cwd=packages/collab-web run gen:tool-views >&2); then
+	if [ -d "${repo}/clients/web" ]; then
+		(cd "${repo}" && bun --cwd=clients/web run gen:tool-views >&2)
+	elif [ -d "${repo}/packages/collab-web" ]; then
+		(cd "${repo}" && bun --cwd=packages/collab-web run gen:tool-views >&2)
+	elif [ -d "${repo}/packages/coding-agent" ]; then
+		(cd "${repo}" && bun --cwd=packages/coding-agent run gen:tool-views >&2)
+	else
+		echo "session: cannot find generator for ${bundle##*/}" >&2
+		return 1
+	fi || {
 		echo "session: could not generate ${bundle##*/}; the product would exit at parse time" >&2
 		return 1
-	fi
+	}
 	[ -s "${bundle}" ] || {
 		echo "session: the generator reported success and wrote no ${bundle##*/}" >&2
 		return 1

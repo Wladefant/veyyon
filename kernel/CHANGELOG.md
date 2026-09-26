@@ -1,0 +1,79 @@
+# Changelog
+
+> **Fork notice.** Veyyon is a source fork of oh-my-pi ([can1357/oh-my-pi](https://github.com/can1357/oh-my-pi), MIT). Veyyon's own release line starts at **`1.0.0`**.
+
+## [Unreleased]
+
+### Changed
+
+- Opening or restoring a session builds its set of known entry ids once instead of twice, which takes about 40ms off opening a 220,000-entry session.
+- The resume warning flattens each command or path onto one line through the shared `collapseWhitespace` helper; no user-visible change.
+
+### Fixed
+
+- The resume warning for tool calls left without a result lists at most three calls, each command or path cut to 80 characters on one line, followed by "and N more", and no longer counts a `<id>_2` repeat of a call its original id already answered.
+- A tool call recorded in an OpenAI Responses or Codex native history payload keeps its provider id through outbound canonicalization, so its result is sent as that call's output instead of a stale-output note after a "No tool output was recorded" placeholder on every turn.
+
+## [1.5.5] - 2026-09-25
+
+### Changed
+
+- `SessionManager.open` parses the session file once instead of twice, cutting a 700 MB resume from 2.83 s to 1.62 s and peak RSS from 3.4 GB to 1.95 GB.
+
+## [1.5.4] - 2026-09-24
+
+### Fixed
+
+- A session rebuilt on a provider that cannot replay its newest server-side compaction starts from the newest compaction that provider can use (`getEffectiveCompactionEntry`) instead of re-expanding the branch from its first entry.
+- Deleting a session removes its artifacts directory at the path `sessionFileStem` resolves, the same path the session created it at, instead of cutting a fixed six characters off the file name.
+- A session file whose append failed on disk is rewritten in full on the next write instead of being treated as current, and `ensureOnDisk` retries after a disk failure instead of returning without writing.
+- Resuming a long session walks its active branch once instead of once per startup reader: `SessionManager` keeps the root-to-leaf path and extends it on append, which cut a 214,000-entry resume from 3.5 s to 3.0 s.
+- A session file opened from another profile reads and writes the blob store beside that profile's `sessions` directory instead of the active profile's, so its stored payloads load and new ones stay where that profile's `gc --blobs` counts them as referenced.
+
+## [1.5.0] - 2026-09-18
+
+### Added
+
+- `@veyyon/kernel` is a workspace member: the loader, the contribution registry and the session spine, moved out of `@veyyon/coding-agent` unchanged. It names no tool, no host and no mode, and `scripts/the-kernel-names-no-tool-and-no-host.test.ts` fails on the first edge that does.
+- `@veyyon/kernel/session/*` publishes the session spine: entries, storage backends, persistence, migrations, listing, paths, retry policy, compaction policy, machine budget and the turn's owned resources.
+- `@veyyon/kernel/loader/*` publishes plugin discovery, manifest parsing, the installed registry, the marketplace client and load-failure reporting.
+- `@veyyon/kernel/registry/*` publishes generic contribution interfaces, tool proxying, widget and host-view declarations, and TypeBox schema conversion.
+- `@veyyon/kernel/registry/tool-domain` declares `ToolDomainManifest`, the name and lazy-factory table a tool domain contributes, so a host reads a domain's tools without depending on the coding agent.
+- `SubagentSpawnEntry` and `SubagentSpawnRecord` in `@veyyon/kernel/session/session-entries` are `AgentSpawnEntry` and `AgentSpawnRecord`; the persisted `subagent_spawn` entry type is unchanged.
+- `@veyyon/kernel/registry/message-kind` declares `AgentMessageKind`, a transcript role a tool domain records with its conversion to provider messages and to text, and `ToolDomainManifest.messageKinds` carries a domain's kinds; `@veyyon/kernel/session/message-kinds` is the role-keyed table the session spine converts them through, which throws on a role no domain declared and on a second kind for one role.
+- `@veyyon/kernel/session/session-manager`, `session-context`, `session-loader` and `agent-storage` publish the session manager, its context builder, its file loader and the credential store, moved from `@veyyon/coding-agent/session/*` unchanged; `session/custom-message-payload` publishes the custom-message payload normaliser and the rehydration sanitiser they call.
+- `@veyyon/kernel/settings/schema` publishes the settings schema registry: `declareSettings` registers a package's table and rejects a path declared twice, `DeclaredSettings` merges each table's type so `SettingPath` and `SettingValue` span every registered table, and `getDefault`, `getType`, `getUi`, `hasUi`, `getPathsForTab`, `retiredBy`, `isSettingPath`, `getEnumValues`, `isUnsetNumberPath` and `describeSettingTypeMismatch` answer from the registry; a query before any table has registered, or for a path no table declares, throws naming the cause. `@veyyon/kernel/settings/optional-number` publishes the unset-number owner, moved from `@veyyon/coding-agent/config/optional-number` unchanged.
+- `@veyyon/kernel/settings/store` publishes `SettingsStore`, the layered settings store moved out of `@veyyon/coding-agent/config/settings`: the profile, overlay and runtime layers and their merge, `get`, `set`, `unset`, `override`, `getSource`, `isConfigured`, `layerValue`, the YAML load with quarantine and type-mismatch collection, the debounced locked text-preserving save with its failure report, `forkWithRuntimeOverrides`, `cloneForCwd`, `reloadForCwd` and the one-shot migration stamp (`stripLegacyUnsetSentinels`, `stampOwnedConfigMigrations`, `SETTINGS_MIGRATION_VERSION`), with `RawSettings`, `SettingsOptions`, `SettingSource`, `SettingsSaveFailure`, `InvalidSettingValue`, `QuarantinedSettingsFile`, `getByPath`, `setByPath`, `deleteByPath` and `deepMergeSettings`. The store takes a `SettingsStoreHooks` at construction (`globalBinding`, `migrate`, `loadLegacySources`, `afterOwnedConfigLoaded`, `resolveForCwd`, `applyHook`, `applyAllHooks`, `notifyEffectiveChange`, `mergedViewRebuilt`) and names no setting. `@veyyon/kernel/settings/signal` publishes `SettingSignal`, `clearSettingSignals` and `settingSignalListenerCounts`, moved unchanged.
+
+### Changed
+
+- Session listing reuses a per-directory index for files whose size and mtime are unchanged instead of rescanning every file, cutting a 4,825-session `/resume` list from 6.8 s to 185 ms when a session changed and 88 ms when none did.
+- Resolving a session id that no directory in the active profile holds reads the other profiles through the same per-directory index, cutting that lookup from 2.5 s to 126 ms.
+- Settings mutations and session storage writers share implementations without changing persistence, hook ordering or error behavior.
+- Installed plugin registry readers share JSON validation while preserving numeric-version handling and malformed-file behavior.
+- Plugin runtime configuration uses the shared record validator; behavior is unchanged.
+- Edit-specific event normalization remains in `@veyyon/coding-agent/extensibility/tool-event-input`; event payloads are unchanged.
+- Settings lookups reuse immutable registry key snapshots and build derived indexes in one pass after registrations or resets.
+- Settings stores share layer copying and override application while retaining profile values, per-directory resolution and isolated save-failure reports.
+- Session title overlays avoid encoding and copying the full transcript when the first line occupies the fixed 256-byte slot.
+- The TypeBox `unknown` converter is the `any` converter, which had the same body; emitted schemas are unchanged.
+- Session entry validation shares non-empty string checks, and branch labels avoid temporary identifier arrays.
+- `@veyyon/kernel/settings/store` exports `groupSettingPaths`, memoizing prefix-grouped schema paths on the schema index with automatic invalidation on schema resets.
+- Array copies that allocated with a spread now use `.slice()`, `.concat()` or `Array.from()`. No user-visible behavior changes.
+- `@veyyon/kernel/session/session-entries` reads the shared entry vocabulary from `@veyyon/session` and registers its own entry kinds there; every name it exported is still exported and no file format changes.
+- The plugin manifest vocabulary (`PluginManifest`, `PluginFeature`, `PluginSettingSchema` and its setting kinds, `PluginSettingType`) moved from `@veyyon/kernel/loader/plugins/types` to `@veyyon/plugin`; `InstalledPlugin`, the lock-file state, the project overrides and the doctor and install option types stay.
+- SQL session storage consolidates parameterized queries across PostgreSQL, MySQL, and SQLite dialects.
+
+### Fixed
+
+- Settings queries ignore inherited object properties.
+- `Type.Pick` emits the keys it was asked for in the order they were asked for, and keeps a picked key that is own-but-non-enumerable on the validated value.
+- A session whose recorded leaf id no longer names an entry reopens on its last entry instead of on an empty conversation.
+- `MemorySessionStorage.deleteSessionWithArtifacts` deletes the session entry and its artifact files from memory instead of returning early as a no-op.
+- `walkBranchPath` terminates when traversing cyclic parent entry chains.
+- `StringEnum` options in the legacy plugin shim avoid `any`.
+- `listSessionsReadOnly` writes no session list index, so it makes no write to a directory it states it does not mutate; it still reads an existing index, which is not a mutation.
+
+### Removed
+
+- `@veyyon/kernel/session/content-text` is gone: the session spine calls the `contentText` owner in `@veyyon/utils`, which carries the separator, image, `trimBlocks` and `trimString` options that copy held.

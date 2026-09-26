@@ -85,7 +85,7 @@ check "verify_release_binary honors --no-verify override" "$?" "0"
 # against whatever the body happened to start with, and reports "checksum
 # mismatch" — telling the user their download is corrupt when the download was
 # fine and the sidecar was an error page. Held to the same contract as the
-# TypeScript owner in packages/natives/src/sha256-sidecar.ts.
+# TypeScript owner in natives/bridge/bindings/src/sha256-sidecar.ts.
 sixty_four="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 check "parse_sha256_sidecar reads real sha256sum output" \
@@ -1737,7 +1737,7 @@ check "and it does remove the checkout under the HOME it was given" \
 
 # --- doctor: detects a stale copy shadowing the fresh install ---
 # The classic silent install failure: an older veyyon/vey earlier on PATH (a
-# previous `bun add -g`, a distro package, a manual copy) keeps winning every
+# previous binary download, a manual copy) keeps winning every
 # invocation while the installer reports success, so the user "upgrades" and
 # nothing changes. doctor used to check only that the name existed SOMEWHERE on
 # PATH, which is exactly the state a shadowed install is in. It must now compare

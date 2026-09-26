@@ -37,8 +37,8 @@ import { createDashboardController, renderStatusRow } from "@veyyon/coding-agent
 import { createExperimentState, createSessionRuntime } from "@veyyon/coding-agent/autoresearch/state";
 import type { AutoresearchRuntime, ExperimentResult } from "@veyyon/coding-agent/autoresearch/types";
 import type { ExtensionContext } from "@veyyon/coding-agent/extensibility/extensions";
-import { visibleWidth } from "@veyyon/tui";
 import { stripAnsi } from "@veyyon/utils";
+import { visibleWidth } from "@veyyon/utils/width";
 import { useTruecolorTheme } from "./helpers/theme-assertions";
 
 function result(overrides: Partial<ExperimentResult> = {}): ExperimentResult {

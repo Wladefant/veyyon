@@ -130,6 +130,22 @@ Multiple entry points are supported:
 }
 ```
 
+The `veyyon` field accepts four entry keys. Each path is relative to the package root. A file entry
+is that file; a directory entry resolves to its `index.{ts,js,mjs,cjs}`, and an `extensions`
+directory additionally resolves by the same rules as a configured `-e` directory (its own
+`package.json` `extensions`, then a direct index, then a one-level scan of sub-extensions):
+
+| Key | Type | Loaded by |
+| --- | --- | --- |
+| `extensions` | Array of Strings | The extension runner. |
+| `hooks` | String | The extension runner; the module default-exports a hook factory, the same shape as a file under `hooks/pre/`. |
+| `tools` | String | The custom tool loader. |
+| `commands` | Array of Strings | The custom command loader; each module is a TypeScript slash command, and `pi.getCommands()` reports it with `location: "plugin"`. |
+
+A `features` map declares optional groups, each holding the same four keys as lists.
+`veyyon plugin features <plugin> --enable a,b` selects which groups load; a group with
+`"default": true` loads when no selection is recorded.
+
 ## Registering commands
 
 ```ts
@@ -232,6 +248,8 @@ tail -f ~/.veyyon/profiles/default/logs/veyyon.$(date +%F).log
 ```
 
 Failed extension loads are logged with their path and error. Loaded extensions may also emit their own debug logs via `pi.logger`.
+
+While the interactive UI is running, output from the `console` methods, `process.stderr.write` and native stderr is appended to the same log file instead of the terminal. Console output from veyyon's own worker threads always goes to the log file. A `Worker` an extension starts from its own module is not routed: its `console.log` output reaches the terminal. Each JavaScript write is prefixed with its source (`[console.log]`, `[process.stderr]`); native stderr is appended as written. When you run veyyon with stderr redirected to a file, stderr output goes to that file instead. Write terminal output only through the UI APIs.
 
 To temporarily disable a specific extension module by name without removing the file:
 

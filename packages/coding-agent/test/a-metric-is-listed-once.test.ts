@@ -25,7 +25,7 @@
  * so nothing here can.
  */
 import { describe, expect, it } from "bun:test";
-import { renderRunDetail } from "@veyyon/coding-agent/autoresearch/screen";
+import { renderRunDetail } from "@veyyon/coding-agent/modes/terminal/components/dialogs/autoresearch-screen";
 import { stripAnsi } from "@veyyon/utils";
 import { logRun, openExperiment, seedMeasuredRun, stateOf, useAutoresearchRepo } from "./helpers/autoresearch-session";
 import { useIsolatedAgentDir } from "./helpers/isolated-agent-dir";

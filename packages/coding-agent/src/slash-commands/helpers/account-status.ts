@@ -20,8 +20,10 @@
  * reports divergence the block says what was pinned, what is serving instead and why, because a
  * silent swap is the failure this whole surface exists to make visible.
  */
-import { replaceTabs, truncateToWidth } from "@veyyon/tui";
 import { sanitizeText } from "@veyyon/utils";
+import { replaceTabs } from "@veyyon/utils/tab-width";
+import { truncateToWidth } from "@veyyon/utils/width";
+import { formatDurationCoarse } from "../../session/account-format";
 import {
 	type AccountInventory,
 	type AccountRow,
@@ -31,8 +33,8 @@ import {
 	credentialStateNote,
 	selectedButRotated,
 } from "../../session/account-inventory";
-import { TRUNCATE_LENGTHS } from "../../tools/render-utils";
-import { formatDurationCoarse, formatUsageWindowLine, usageWindowLabelColumn } from "./format";
+import { TRUNCATE_LENGTHS } from "../../tools/core/render-utils";
+import { formatUsageWindowLine, usageWindowLabelColumn } from "./format";
 
 /** Left margin of every account row, matching the other inline report blocks. */
 const ROW_INDENT = "  ";
@@ -94,8 +96,8 @@ export const WEB_SEARCH_CREDENTIAL_PROVIDERS: Readonly<Record<string, readonly s
 export interface AccountRoleSources {
 	/** The session's main model, when one is resolved. */
 	mainModel?: { provider: string; id: string };
-	/** Providers of the models subagents run on, in role order. */
-	subagentProviders?: readonly string[];
+	/** Providers of the models agents run on, in role order. */
+	agentProviders?: readonly string[];
 	/** The configured `providers.webSearch` preference, `auto` included. */
 	webSearchPreference?: string;
 }
@@ -119,7 +121,7 @@ export function accountRoleAnnotations(sources: AccountRoleSources): Map<string,
 	};
 
 	if (sources.mainModel) add(sources.mainModel.provider, `main model  (${sources.mainModel.id})`);
-	for (const provider of sources.subagentProviders ?? []) add(provider, "subagents");
+	for (const provider of sources.agentProviders ?? []) add(provider, "agents");
 	// `auto` is deliberately absent from the table: it resolves across every engine at call time, so
 	// no single provider can be said to serve search. The table is the only authority here.
 	for (const provider of WEB_SEARCH_CREDENTIAL_PROVIDERS[sources.webSearchPreference ?? ""] ?? []) {
@@ -251,9 +253,13 @@ export function renderAccountStatus(
 		}
 
 		const rotated = selectedButRotated(inventory, provider);
-		if (rotated) lines.push(...divergenceLines(provider, rotated.chosen, now, style));
+		if (rotated) {
+			const dl = divergenceLines(provider, rotated.chosen, now, style);
+			for (let li = 0; li < dl.length; li++) lines.push(dl[li]!);
+		}
 
-		lines.push(...usageLines(row, now, style));
+		const ul = usageLines(row, now, style);
+		for (let li = 0; li < ul.length; li++) lines.push(ul[li]!);
 
 		if (row.health === "failed" && row.healthReason) {
 			lines.push(line(DETAIL_INDENT, style.warn(cell(row.healthReason, TRUNCATE_LENGTHS.CONTENT))));
@@ -284,7 +290,9 @@ export function renderAccountStatus(
 	// sentence seven times in an eight-provider block: it tripled the height, buried the accounts
 	// between repetitions of itself, and read as nagging rather than as an offer. The placeholder
 	// on each row is what marks WHICH accounts it applies to.
-	const unnamed = [...routed.values()].filter(rows => !(rows.find(r => r.activeForSession) ?? rows[0])?.name).length;
+	const unnamed = Array.from(routed.values()).filter(
+		rows => !(rows.find(r => r.activeForSession) ?? rows[0])?.name,
+	).length;
 	if (unnamed > 0) {
 		lines.push(
 			line(

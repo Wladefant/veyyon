@@ -1,5 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { resolveConfiguredModelPatterns } from "@veyyon/coding-agent/config/model-resolver";
+import {
+	expandConfiguredModelPatterns,
+	resolveConfiguredModelPatterns,
+} from "@veyyon/coding-agent/config/model-resolver";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 
 /**
@@ -44,16 +47,16 @@ describe("resolveConfiguredModelPatterns", () => {
 		/**
 		 * An unset role names NO model of its own.
 		 *
-		 * It used to expand to `priority.json`, which is the defect the Subagents
+		 * It used to expand to `priority.json`, which is the defect the Agents
 		 * settings area was built to fix: agent frontmatter carried `@smol` / `@slow`
-		 * / `@designer`, so a stock install ran its subagents on three different
+		 * / `@designer`, so a stock install ran its agents on three different
 		 * concrete models while every role picker said "inherit (follows main model)".
 		 * Expansion must report "nothing here" and let the caller apply inherit.
 		 */
 		it("expands an unset role to nothing", () => {
 			expect(resolveConfiguredModelPatterns("@smol")).toEqual([]);
 			expect(resolveConfiguredModelPatterns("@slow")).toEqual([]);
-			expect(resolveConfiguredModelPatterns("@designer")).toEqual([]);
+			expect(resolveConfiguredModelPatterns("@plan")).toEqual([]);
 		});
 
 		it("expands a configured role to exactly the models assigned to it", () => {
@@ -85,6 +88,24 @@ describe("resolveConfiguredModelPatterns", () => {
 			expect(resolveConfiguredModelPatterns("@notarole")).toEqual([]);
 			expect(resolveConfiguredModelPatterns("@task")).toEqual([]);
 			expect(resolveConfiguredModelPatterns("gpt-4o:low")).toEqual(["gpt-4o:low"]);
+		});
+
+		/**
+		 * `designer` was a built-in role that nothing requested. Retiring it must not
+		 * break a config that assigned it: an assigned name is a custom role and still
+		 * expands. Unassigned, it is reported as an unknown role, not an unset one,
+		 * so the error names a role that does not exist instead of silently inheriting.
+		 */
+		it("keeps an assigned retired role working and reports an unassigned one as unknown", () => {
+			const configured = Settings.isolated({ modelRoles: { designer: "openai/gpt-5" } });
+			expect(expandConfiguredModelPatterns("@designer", configured)).toEqual({
+				kind: "patterns",
+				patterns: ["openai/gpt-5"],
+			});
+			expect(expandConfiguredModelPatterns("@designer", Settings.isolated({}))).toEqual({
+				kind: "unknown-role",
+				role: "designer",
+			});
 		});
 	});
 });

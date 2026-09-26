@@ -1,13 +1,17 @@
 import { describe, expect, test } from "bun:test";
+import { Effort } from "@veyyon/catalog/effort";
 import { getBundledModel } from "@veyyon/catalog/models";
+import {
+	COMMAND_CODE_DEFAULT_MAX_TOKENS,
+	COMMAND_CODE_STATIC_MODELS,
+	commandCodeModelManagerOptions,
+} from "@veyyon/catalog/provider-models/command-code";
 import {
 	DEFAULT_MODEL_PER_PROVIDER,
 	getCatalogProviderEntry,
 	PROVIDERS_PUBLISHING_OWN_MODEL_LIMITS,
 } from "@veyyon/catalog/provider-models/descriptors";
 import {
-	COMMAND_CODE_STATIC_MODELS,
-	commandCodeModelManagerOptions,
 	NOUS_RESEARCH_BUNDLED_MODELS,
 	NOUS_RESEARCH_STATIC_MODELS,
 	nousResearchModelManagerOptions,
@@ -46,37 +50,28 @@ describe("providers that own their model limits", () => {
 });
 
 describe("Command Code provider", () => {
-	test("prefers CMD_API_KEY and retains the Veyyon alias", () => {
+	test("keeps the documented key aliases and defaults to the served flagship", () => {
 		const entry = getCatalogProviderEntry("command-code");
 		expect(entry).toBeDefined();
-		expect(entry?.envVars).toEqual(["CMD_API_KEY", "COMMAND_CODE_API_KEY"]);
-		expect(DEFAULT_MODEL_PER_PROVIDER["command-code"]).toBe("moonshotai/Kimi-K2.7-Code");
+		expect(entry?.envVars).toEqual(["CMD_API_KEY", "COMMAND_CODE_API_KEY", "COMMANDCODE_API_KEY"]);
+		expect(DEFAULT_MODEL_PER_PROVIDER["command-code"]).toBe("claude-sonnet-4-6");
 	});
 
-	test("static coding flagships use the exact published contexts and unknown output caps", () => {
-		expect(
-			COMMAND_CODE_STATIC_MODELS.map(model => ({
-				id: model.id,
-				contextWindow: model.contextWindow,
-				maxTokens: model.maxTokens,
-			})),
-		).toEqual([
-			{ id: "moonshotai/Kimi-K2.7-Code", contextWindow: 256000, maxTokens: null },
-			{ id: "zai-org/GLM-5.3", contextWindow: 1000000, maxTokens: null },
-			{ id: "MiniMaxAI/MiniMax-M3", contextWindow: 1000000, maxTokens: null },
-		]);
+	test("seeds the default model priced, so a no-network generation still resolves it", () => {
+		const seeded = COMMAND_CODE_STATIC_MODELS.map(model => model.id);
+		expect(seeded).toEqual([DEFAULT_MODEL_PER_PROVIDER["command-code"]!]);
 		for (const model of COMMAND_CODE_STATIC_MODELS) {
 			expect(model.baseUrl).toBe("https://api.commandcode.ai/provider/v1");
 			expect(model.provider).toBe("command-code");
+			expect(model.pricing).toBe("published");
+			expect(model.cost.input).toBeGreaterThan(0);
 			const bundled = getBundledModel("command-code", model.id);
-			expect(bundled?.contextWindow).toBe(model.contextWindow);
-			expect(bundled?.maxTokens).toBeNull();
-			expect(bundled?.reasoning).toBe(model.reasoning);
-			expect(bundled?.input).toEqual(model.input);
+			expect(bundled?.cost).toEqual(model.cost);
+			expect(bundled?.maxTokens).toBe(model.maxTokens);
 		}
 	});
 
-	test("discovery maps context_length while leaving output caps unknown", async () => {
+	test("discovery prices what the endpoint leaves unpriced and caps what it leaves uncapped", async () => {
 		const calls: Array<{ url: string; authorization: string | null }> = [];
 		const fetchMock: FetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
 			const headers = new Headers(init?.headers);
@@ -84,12 +79,8 @@ describe("Command Code provider", () => {
 			return new Response(
 				JSON.stringify({
 					data: [
-						{
-							id: "moonshotai/Kimi-K2.7-Code",
-							name: "Kimi K2.7 Code",
-							context_length: 256000,
-							max_completion_tokens: 32768,
-						},
+						{ id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", context_length: 1000000 },
+						{ id: "gpt-5.3-codex", name: "GPT-5.3 Codex", context_length: 400000 },
 						{ id: "router/new-model", name: "New Model", context_length: 765432 },
 					],
 				}),
@@ -101,35 +92,74 @@ describe("Command Code provider", () => {
 		const models = await options.fetchDynamicModels?.();
 
 		expect(calls).toEqual([
-			{
-				url: "https://api.commandcode.ai/provider/v1/models",
-				authorization: "Bearer cmd-test-key",
-			},
+			{ url: "https://api.commandcode.ai/provider/v1/models", authorization: "Bearer cmd-test-key" },
 		]);
-		expect(
-			models?.map(model => ({ id: model.id, contextWindow: model.contextWindow, maxTokens: model.maxTokens })),
-		).toEqual([
-			{ id: "moonshotai/Kimi-K2.7-Code", contextWindow: 256000, maxTokens: null },
-			{ id: "router/new-model", contextWindow: 765432, maxTokens: null },
-		]);
+
+		const sonnet = models?.find(model => model.id === "claude-sonnet-4-6");
+		expect(sonnet?.cost).toEqual({ input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 });
+		expect(sonnet?.pricing).toBe("published");
+		expect(sonnet?.contextWindow).toBe(1000000);
+		expect(sonnet?.maxTokens).toBe(COMMAND_CODE_DEFAULT_MAX_TOKENS);
+		expect(sonnet?.reasoning).toBe(true);
+
+		// The Codex SKU reports its output budget inside the window it advertises,
+		// so the prompt it accepts is smaller than the 400K the endpoint answers.
+		const codex = models?.find(model => model.id === "gpt-5.3-codex");
+		expect(codex?.contextWindow).toBe(272000);
+		expect(codex?.maxTokens).toBe(65536);
+
+		// A model the router adds between snapshots is unpriced, not free.
+		const unknown = models?.find(model => model.id === "router/new-model");
+		expect(unknown?.pricing).toBe("unknown");
+		expect(unknown?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
 	});
 
-	test("generated enrichment cannot invent an output cap", () => {
+	test("discovery runs without a key, because the endpoint answers without one", async () => {
+		const calls: Array<string | null> = [];
+		const fetchMock: FetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+			calls.push(new Headers(init?.headers).get("authorization"));
+			return new Response(JSON.stringify({ data: [{ id: "claude-sonnet-5", context_length: 1000000 }] }), {
+				status: 200,
+				headers: { "content-type": "application/json" },
+			});
+		};
+
+		const models = await commandCodeModelManagerOptions({ fetch: fetchMock }).fetchDynamicModels?.();
+
+		expect(calls).toEqual([null]);
+		expect(models?.map(model => model.id)).toEqual(["claude-sonnet-5"]);
+	});
+
+	test("generated enrichment restates the contract over another host's numbers", () => {
 		const commandModel: ModelSpec<Api> = {
 			...COMMAND_CODE_STATIC_MODELS[0]!,
 			maxTokens: 32768,
+			cost: { input: 999, output: 999, cacheRead: 999, cacheWrite: 999 },
 		};
 		applyGeneratedModelPolicies([commandModel]);
-		expect(commandModel.maxTokens).toBeNull();
+		expect(commandModel.maxTokens).toBe(COMMAND_CODE_DEFAULT_MAX_TOKENS);
+		expect(commandModel.cost).toEqual({ input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 });
+		// The generation pass re-derives thinking from identity, which has nothing
+		// to derive from for an endpoint that publishes no reasoning metadata. The
+		// contract's ladder has to survive that pass or the catalog ships 41
+		// reasoning models with no way to ask them to reason.
+		expect(commandModel.thinking?.efforts).toEqual([
+			Effort.Low,
+			Effort.Medium,
+			Effort.High,
+			Effort.XHigh,
+			Effort.Max,
+		]);
 
 		const canonicalReference: ModelSpec<Api> = {
 			...COMMAND_CODE_STATIC_MODELS[0]!,
 			provider: "moonshot",
-			maxTokens: 32768,
+			contextWindow: 200000,
+			maxTokens: 8192,
 		};
 		applyCanonicalLimitFallback([canonicalReference, commandModel]);
-		expect(commandModel.contextWindow).toBe(256000);
-		expect(commandModel.maxTokens).toBeNull();
+		expect(commandModel.contextWindow).toBe(1000000);
+		expect(commandModel.maxTokens).toBe(COMMAND_CODE_DEFAULT_MAX_TOKENS);
 	});
 });
 

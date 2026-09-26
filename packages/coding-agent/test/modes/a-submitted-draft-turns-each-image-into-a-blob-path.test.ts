@@ -21,8 +21,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ImageContent } from "@veyyon/ai";
-import * as imageReferences from "@veyyon/coding-agent/modes/image-references";
-import { type BlobPutResult, BlobStore } from "@veyyon/coding-agent/session/blob-store";
+import * as imageReferences from "@veyyon/coding-agent/modes/terminal/image-references";
+import { type BlobPutResult, BlobStore } from "@veyyon/kernel/session/blob-store";
 
 const scratchDirs: string[] = [];
 

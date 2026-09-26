@@ -14,6 +14,8 @@ app.plan.toggle: Alt+Shift+P
 
 Chord names are case-insensitive and use the same notation shown in the UI, such as `Ctrl+P`, `Alt+Shift+P`, `Shift+Enter`, and `Ctrl+Backspace`.
 
+Model-selector shortcuts, including configured remaps, are retained during startup. The dialogs open after session initialization without discarding the draft.
+
 Set an action to an empty array to disable it:
 
 ```yaml
@@ -57,4 +59,4 @@ A few arrow gestures act on the status line when the composer is empty. They are
 | Gesture             | When                          | Effect                                                        |
 | ------------------- | ----------------------------- | ------------------------------------------------------------ |
 | Down arrow          | A goal is active or paused    | Open the goal detail menu (same as `/goal`): objective, tokens against budget, completed turns, time spent, and pause/resume/adjust-budget/drop |
-| Double-tap ← (left) | Composer empty                | Open the subagent dashboard, or return a focused subagent view to the main session |
+| Double-tap ← (left) | Composer empty                | Open the agent dashboard, or return a focused agent view to the main session |

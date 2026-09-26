@@ -2,17 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { Agent } from "@veyyon/agent-core";
-import type { ApiKeyResolveContext, AssistantMessage, ToolCall } from "@veyyon/ai";
+import type { ApiKeyResolveContext, AssistantMessage, Context, ToolCall } from "@veyyon/ai";
 import { unregisterCustomApis } from "@veyyon/ai/api-registry";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, registerMockApi } from "@veyyon/ai/providers/mock";
 import * as aiStream from "@veyyon/ai/stream";
 import { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { AgentSession, type AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { TempDir } from "@veyyon/utils";
 
 type AutoRetryEndEvent = Extract<AgentSessionEvent, { type: "auto_retry_end" }>;
@@ -45,7 +46,7 @@ function resolveInitialApiKey(
  * state and skipping the long sleep entirely.
  *
  * Without this defense, an Anthropic `429 rate_limit_error` with
- * `retry-after-ms=11180000` (≈3 hours) pinned a subagent in the retry
+ * `retry-after-ms=11180000` (≈3 hours) pinned an agent in the retry
  * sleep, leaving the parent task tool stuck on the review phase for hours
  * (see GitHub issue #607).
  */
@@ -668,13 +669,14 @@ describe("AgentSession retry delay cap", () => {
 		expect(lastError?.errorMessage).toBe("The operation timed out.");
 	});
 
-	it("does not retry a timeout whose tool call already carries a real result", async () => {
+	it("continues, rather than replays, a timeout whose tool call already carries a real result", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) {
 			throw new Error("Expected bundled Anthropic test model to exist");
 		}
 
 		let streamCalls = 0;
+		const requestContexts: Context[] = [];
 		const agent = new Agent({
 			getApiKey: model => `${model.provider}-test-key`,
 			initialState: {
@@ -683,8 +685,9 @@ describe("AgentSession retry delay cap", () => {
 				tools: [],
 				messages: [],
 			},
-			streamFn: requestedModel => {
+			streamFn: (requestedModel, context) => {
 				streamCalls += 1;
+				requestContexts.push(context);
 				const stream = new AssistantMessageEventStream();
 				queueMicrotask(() => {
 					const partial: AssistantMessage = {
@@ -704,6 +707,20 @@ describe("AgentSession retry delay cap", () => {
 						stopReason: "stop",
 						timestamp: Date.now(),
 					};
+					if (streamCalls > 1) {
+						const recovered = { type: "text" as const, text: "carried on from the write" };
+						partial.content.push(recovered);
+						stream.push({ type: "start", partial });
+						stream.push({ type: "text_start", contentIndex: 0, partial });
+						stream.push({ type: "text_delta", contentIndex: 0, delta: recovered.text, partial });
+						stream.push({ type: "text_end", contentIndex: 0, content: recovered.text, partial });
+						stream.push({
+							type: "done",
+							reason: "stop",
+							message: { ...partial, stopReason: "stop", duration: 1000 },
+						});
+						return;
+					}
 					const toolCall: ToolCall = {
 						type: "toolCall",
 						id: "tc-write-ran",
@@ -762,18 +779,23 @@ describe("AgentSession retry delay cap", () => {
 		await session.prompt("Write a large report");
 		await session.waitForIdle();
 
-		expect(streamCalls).toBe(1);
-		expect(retryStartEvents).toHaveLength(0);
-		// POSITIVE PROOF THAT THE CONTINUATION REFUSED, not merely that the retry
-		// ladder did. An answered call must not read as never-ran: the loop pairs
-		// this call with a placeholder anyway, and counting that placeholder as
-		// outstanding work is what continued a batch with nothing left to do.
-		expect(session.operatorNotices.all().map(notice => notice.source)).not.toContain("unreplayable-batch");
-		const lastError = [...session.agent.state.messages]
+		// Two requests, and the second is a CONTINUATION, not a replay: a replay
+		// could apply the write twice, so replay safety refuses the retry, but the
+		// batch is fully answered and only the model's next step is missing. The
+		// stream dying there is what Cursor's exec channel produces after its last
+		// call returns, and ending the turn stopped the session dead.
+		expect(streamCalls).toBe(2);
+		expect(retryStartEvents.map(event => event.mode)).toEqual(["continue"]);
+		expect(session.operatorNotices.all().map(notice => notice.source)).toContain("unreplayable-batch");
+		// A retry discards the dead turn; a continuation sends it.
+		const continued = requestContexts[1]?.messages ?? [];
+		expect(
+			continued.some(message => message.role === "assistant" && message.errorMessage === "The operation timed out."),
+		).toBe(true);
+		const last = [...session.agent.state.messages]
 			.reverse()
 			.find((message): message is AssistantMessage => message.role === "assistant");
-		expect(lastError?.stopReason).toBe("error");
-		expect(lastError?.errorMessage).toBe("The operation timed out.");
+		expect(last?.stopReason).toBe("stop");
 	});
 
 	it("retries a transient socket close after partial text and thinking", async () => {

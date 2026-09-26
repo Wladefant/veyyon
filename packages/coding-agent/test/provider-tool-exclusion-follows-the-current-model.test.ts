@@ -28,13 +28,13 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { buildModel } from "@veyyon/catalog/build";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import { AuthStorage } from "@veyyon/coding-agent/session/auth-storage";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 
 const CURSOR_MODEL = buildModel({
 	id: "cursor-composer-2.5",
@@ -64,8 +64,15 @@ const ANTHROPIC_MODEL = buildModel({
 
 describe("the edit tool survives every provider and every model switch", () => {
 	const dirs: string[] = [];
+	/**
+	 * Disposed before the directories go, so the fault sink `createAgentSession` attaches does not
+	 * outlive the test that opened it. The sink registry is process-global, so a session left open
+	 * here collects faults raised by whatever suite runs next and reports them against this subject.
+	 */
+	const sessions: AgentSession[] = [];
 
-	afterEach(() => {
+	afterEach(async () => {
+		for (const session of sessions.splice(0)) await session.dispose();
 		for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 	});
 
@@ -97,6 +104,7 @@ describe("the edit tool survives every provider and every model switch", () => {
 			enableMCP: false,
 			enableLsp: false,
 		});
+		sessions.push(created.session);
 		return created.session;
 	}
 

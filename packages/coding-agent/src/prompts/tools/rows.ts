@@ -4,7 +4,7 @@
  * WHY EACH DIRECTORY OWNS ITS OWN ROWS. `registry.ts` is still the ONE place that says which prompts exist,
  * and it aggregates every module like this one; what changed is that the 163 `import … with { type: "text" }`
  * specifiers no longer sit in a single module. They did, and the consequence was that importing one prompt
- * statically reached all 163: `tools/read.ts` needs `PROMPTS["tools/read"]` to render its own description and
+ * statically reached all 163: `tools/fs/read.ts` needs `PROMPTS["tools/read"]` to render its own description and
  * paid 167 modules for it, the largest single edge that file had. A consumer now imports the directory it
  * belongs to and pays for that directory.
  *
@@ -123,7 +123,7 @@ export const toolsPrompts = definePromptRows({
 	"tools/set-cwd": { text: toolsSetCwd, purpose: "the set_cwd tool description" },
 	"tools/ssh": { text: toolsSsh, purpose: "the ssh tool description" },
 	"tools/task": { text: toolsTask, purpose: "the task tool description" },
-	"tools/task-summary": { text: toolsTaskSummary, purpose: "renders a finished subagent's result back to its caller" },
+	"tools/task-summary": { text: toolsTaskSummary, purpose: "renders a finished agent's result back to its caller" },
 	"tools/todo": { text: toolsTodo, purpose: "the todo tool description" },
 	"tools/vibe-kill": { text: toolsVibeKill, purpose: "the vibe_kill tool description" },
 	"tools/vibe-list": { text: toolsVibeList, purpose: "the vibe_list tool description" },

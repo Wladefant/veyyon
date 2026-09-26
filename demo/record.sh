@@ -12,11 +12,11 @@ DEMO_THINKING="${DEMO_THINKING:-high}"
 PROOF_AUTH_DIR="${PROOF_AUTH_DIR:-${REPO_ROOT}/.internal/recording-auth}"
 
 echo "=== 1. Building Standalone Binary & Native Addons ==="
-if [[ ! -f packages/natives/native/veyyon_natives.linux-x64-modern.node && ! -f packages/natives/native/veyyon_natives.linux-x64-baseline.node ]]; then
-	bun --cwd=packages/natives run ensure
+if [[ ! -f natives/bridge/bindings/native/veyyon_natives.linux-x64-modern.node && ! -f natives/bridge/bindings/native/veyyon_natives.linux-x64-baseline.node ]]; then
+	bun --cwd=natives/bridge/bindings run ensure
 fi
 if [[ ! -f packages/coding-agent/src/export/html/tool-views.generated.js ]]; then
-	bun --cwd=packages/collab-web run gen:tool-views
+	bun --cwd=clients/web run gen:tool-views
 fi
 bun --cwd=packages/coding-agent run build
 echo "=== 2. Setting Up Recording Workspace ==="
@@ -135,7 +135,7 @@ fi
 python3 proof/webp-cadence.py "${WORK}/demo-hd.webp" --expect-ms 33 || true
 
 cp "${WORK}/demo-hd.webp" assets/demo-hd.webp
-cp "${WORK}/demo-hd.webp" website/demo-hd.webp
+cp "${WORK}/demo-hd.webp" apps/site/demo-hd.webp
 cp "${WORK}/demo-hd-cut.mp4" assets/demo-hd.mp4
 cp "${WORK}/demo-hd-cut.mp4" proof/captures/x11/demo-hd-cut.mp4
 cp "${WORK}/scene.mp4" proof/captures/x11/demo-hd.mp4

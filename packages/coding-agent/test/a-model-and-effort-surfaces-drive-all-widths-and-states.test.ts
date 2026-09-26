@@ -11,14 +11,19 @@ import {
 	effortStepItems,
 	formatSelectorSummary,
 	renderEffortStep,
-} from "@veyyon/coding-agent/modes/components/effort-picker";
-import { buildBrowserItems, ModelBrowser } from "@veyyon/coding-agent/modes/components/model-browser";
-import { ModelHubComponent } from "@veyyon/coding-agent/modes/components/model-hub";
-import { ModelSelectorPanel } from "@veyyon/coding-agent/modes/components/model-selector";
-import { ThinkingSelectorComponent } from "@veyyon/coding-agent/modes/components/thinking-selector";
-import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/modes/theme/theme";
+} from "@veyyon/coding-agent/modes/terminal/components/selectors/effort-picker";
+import {
+	buildBrowserItems,
+	ModelBrowser,
+} from "@veyyon/coding-agent/modes/terminal/components/selectors/model-browser";
+import { ModelHubComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/model-hub";
+import { ModelSelectorPanel } from "@veyyon/coding-agent/modes/terminal/components/selectors/model-selector";
+import { ThinkingSelectorComponent } from "@veyyon/coding-agent/modes/terminal/components/selectors/thinking-selector";
+import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import * as thinking from "@veyyon/coding-agent/thinking";
-import { Container, type SgrMouseEvent, type TUI, visibleWidth } from "@veyyon/tui";
+import { Container, type TUI } from "@veyyon/tui";
+import type { SgrMouseEvent } from "@veyyon/utils/mouse";
+import { visibleWidth } from "@veyyon/utils/width";
 
 const WIDTHS = [60, 100, 160] as const;
 

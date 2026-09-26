@@ -25,11 +25,15 @@ import {
 import { CollabSocket } from "@veyyon/coding-agent/collab/relay-client";
 import type {
 	ExtensionAskDialogQuestion,
+	ExtensionAskDialogResult,
 	ExtensionUIDialogOptions,
 	ExtensionUISelectItem,
 } from "@veyyon/coding-agent/extensibility/extensions/types";
-import { ExtensionUiController } from "@veyyon/coding-agent/modes/controllers/extension-ui-controller";
-import type { InteractiveModeContext, InteractiveSelectorDialogOptions } from "@veyyon/coding-agent/modes/types";
+import { ExtensionUiController } from "@veyyon/coding-agent/modes/terminal/controllers/extension-ui-controller";
+import type {
+	InteractiveModeContext,
+	InteractiveSelectorDialogOptions,
+} from "@veyyon/coding-agent/modes/terminal/types";
 import { installInMemoryRelay, uninstallInMemoryRelay } from "./helpers/in-memory-relay";
 
 // In-memory transport: shared FakeWebSocket + InMemoryRelay harness (see
@@ -247,7 +251,7 @@ async function makeHarness(opts?: { readOnly?: boolean }): Promise<GuestUiHarnes
 		},
 		updateEditorBorderColor: () => {},
 		eventController: { handleEvent: () => Promise.resolve() },
-		syncRunningSubagentBadge: () => {},
+		syncRunningAgentBadge: () => {},
 		showHookSelector: (
 			title: string,
 			options: ExtensionUISelectItem[],
@@ -486,6 +490,7 @@ function makeHostContext(): InteractiveModeContext {
 		ui: { requestRender: () => {} },
 		showStatus: () => {},
 		collabHost: undefined,
+		clearWorkingLoader: () => false,
 		// Required members of the context. Omitting them used to be tolerated by
 		// `?.()` calls in the controller, which meant production silently skipped
 		// the composer refresh and the welcome dismissal whenever either was
@@ -557,7 +562,7 @@ describe("collab proto handshake (#4049)", () => {
 		}
 	});
 
-	it("welcomes a current-proto guest at v3 and round-trips a ui-request", async () => {
+	it("welcomes a current-proto guest at v4 and round-trips a ui-request", async () => {
 		const host = new CollabHost(makeHostContext());
 		await host.start("ws://localhost:8787");
 		const guest = await joinRawGuest(host.link, COLLAB_PROTO);
@@ -565,7 +570,7 @@ describe("collab proto handshake (#4049)", () => {
 			const welcome = await guest.nextFrame();
 			if (welcome.t !== "welcome") throw new Error(`expected welcome, got ${welcome.t}`);
 			expect(welcome.proto).toBe(COLLAB_PROTO);
-			expect(welcome.proto).toBe(3);
+			expect(welcome.proto).toBe(4);
 
 			const pending = host.requestGuestUi({ kind: "select", title: "Continue?", options: ["Yes"] });
 			if (!pending) throw new Error("expected writable guest UI request");
@@ -888,5 +893,99 @@ describe("guest ask multi-select Next gating (#4375 PRRT_kwDOQxs0bc6OFbDW)", () 
 		} finally {
 			await host.stop("test done");
 		}
+	});
+});
+
+// ── Guest ask honors allowOther ─────────────────────────────────────────────
+//
+// A question with `allowOther: false` has no free-text answer in the local
+// dialog. The guest mirror offered "Other (type your own)" regardless, so a
+// guest could return a custom answer to a question that permits only its listed
+// options (profile deletion: Delete or Cancel). This pins the offered rows for
+// single and multi questions both ways, and that a guest replying with the Other
+// label anyway gets no editor and no custom answer.
+describe("guest ask honors allowOther", () => {
+	async function nextUiRequest(guest: {
+		nextFrame(): Promise<CollabFrame>;
+	}): Promise<CollabFrame & { t: "ui-request" }> {
+		for (;;) {
+			const frame = await guest.nextFrame();
+			if (frame.t === "ui-request") return frame;
+		}
+	}
+
+	function selectLabels(frame: CollabFrame & { t: "ui-request" }): string[] {
+		if (frame.request.kind !== "select") throw new Error(`expected select, got ${frame.request.kind}`);
+		return frame.request.options.map(o => (typeof o === "string" ? o : o.label));
+	}
+
+	async function withGuest(
+		question: ExtensionAskDialogQuestion,
+		drive: (
+			guest: { socket: CollabSocket; nextFrame(): Promise<CollabFrame> },
+			result: Promise<ExtensionAskDialogResult | undefined>,
+		) => Promise<void>,
+	): Promise<void> {
+		const ctx = makeAskHostContext();
+		const host = new CollabHost(ctx);
+		await host.start("ws://localhost:8787");
+		ctx.collabHost = host;
+		const controller = new ExtensionUiController(ctx);
+		try {
+			const guest = await joinRawGuest(host.link, COLLAB_PROTO);
+			const welcome = await guest.nextFrame();
+			if (welcome.t !== "welcome") throw new Error(`expected welcome, got ${welcome.t}`);
+			await drive(guest, controller.showAskDialog([question]));
+			guest.socket.close();
+		} finally {
+			await host.stop("test done");
+		}
+	}
+
+	for (const multi of [false, true]) {
+		for (const allowOther of [undefined, true, false]) {
+			it(`offers Other only when allowed (multi ${multi}, allowOther ${allowOther})`, async () => {
+				const question: ExtensionAskDialogQuestion = {
+					id: "q1",
+					question: "Delete profile?",
+					options: [{ label: "Delete" }, { label: "Cancel" }],
+					multi,
+					allowOther,
+				};
+				await withGuest(question, async (guest, result) => {
+					const request = await nextUiRequest(guest);
+					const labels = selectLabels(request);
+					const expectedOther = allowOther === false ? [] : ["Other (type your own)"];
+					expect(labels).toEqual(["Delete", "Cancel", ...expectedOther, "Chat about this"]);
+					guest.socket.send({ t: "ui-response", reqId: request.request.reqId, value: "Delete" });
+					if (multi) {
+						const next = await nextUiRequest(guest);
+						guest.socket.send({ t: "ui-response", reqId: next.request.reqId, value: "Next →" });
+					}
+					const settled = await result;
+					expect(settled?.kind).toBe("submit");
+					if (settled?.kind === "submit") expect(settled.results[0]?.selectedOptions).toEqual(["Delete"]);
+				});
+			});
+		}
+	}
+
+	it("opens no editor and records no custom answer when a guest replies Other to a closed question", async () => {
+		const question: ExtensionAskDialogQuestion = {
+			id: "q1",
+			question: "Delete profile?",
+			options: [{ label: "Delete" }, { label: "Cancel" }],
+			allowOther: false,
+		};
+		await withGuest(question, async (guest, result) => {
+			const request = await nextUiRequest(guest);
+			guest.socket.send({ t: "ui-response", reqId: request.request.reqId, value: "Other (type your own)" });
+			const settled = await result;
+			expect(settled?.kind).toBe("submit");
+			if (settled?.kind === "submit") {
+				expect(settled.results[0]?.customInput).toBeUndefined();
+				expect(settled.results[0]?.selectedOptions).toEqual([]);
+			}
+		});
 	});
 });

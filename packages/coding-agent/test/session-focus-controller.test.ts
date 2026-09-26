@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "bun:test";
-import { SessionFocusController } from "@veyyon/coding-agent/modes/controllers/session-focus-controller";
-import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/types";
+import { SessionFocusController } from "@veyyon/coding-agent/modes/terminal/controllers/session-focus-controller";
+import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
-import type { AgentSession, AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 
 interface SessionStub {
 	session: AgentSession;
@@ -91,10 +92,16 @@ function makeHarness(): Harness {
 				resetTranscriptAnchors++;
 			},
 		},
+		statusProducer: {
+			setSession: (session: AgentSession, focusedAgentId?: string) => {
+				setSessionCalls.push([session, focusedAgentId]);
+			},
+		},
 		statusLine: {
 			setSession: (session: AgentSession, focusedAgentId?: string) => {
 				setSessionCalls.push([session, focusedAgentId]);
 			},
+			setSource: () => {},
 			invalidate() {},
 		},
 		clearTransientSessionUi: () => {
@@ -255,9 +262,11 @@ describe("SessionFocusController", () => {
 		await flushAsync();
 		expect(h.controller.focusedAgentId).toBe("Worker");
 
-		// Agent is revived with a new session
+		// Agent is revived with a new session: the lifecycle attaches it and reports
+		// `idle`, then the turn's own agent_start reports `running`.
 		const workerRevived = makeSessionStub({ isStreaming: true });
 		h.registry.attachSession("Worker", workerRevived.session);
+		h.registry.setStatus("Worker", "idle");
 		h.registry.setStatus("Worker", "running");
 		await flushAsync();
 

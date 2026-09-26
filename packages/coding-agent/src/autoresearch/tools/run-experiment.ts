@@ -1,14 +1,22 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { Text } from "@veyyon/tui";
 import { errorMessage, formatBytes } from "@veyyon/utils";
+import { replaceTabs } from "@veyyon/utils/tab-width";
+import type { ViewSpan } from "@veyyon/view";
 import { type } from "arktype";
 import { executeBash } from "../../exec/bash-executor";
 import type { ToolDefinition } from "../../extensibility/extensions";
-import type { Theme } from "../../modes/theme/theme";
-import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TailBuffer, truncateTail } from "../../session/streaming-output";
-import { replaceTabs, shortenPath } from "../../tools/render-utils";
-import * as git from "../../utils/git";
+import {
+	DEFAULT_MAX_BYTES,
+	DEFAULT_MAX_LINES,
+	TailBuffer,
+	truncateTail,
+	truncationSummary,
+} from "../../session/streaming-output";
+// `shortenPath` is defined here and nowhere else: it collapses the real home directory, which the
+// browser-side owner in `@veyyon/tool-render` cannot do. The module binds no runtime value from
+// `@veyyon/tui`, so taking a string helper from it leaves this tool host-agnostic.
+import { shortenPath } from "../../tools/core/render-utils";
 import { parseWorkDirDirtyPaths } from "../git";
 import {
 	EXPERIMENT_MAX_BYTES,
@@ -19,9 +27,9 @@ import {
 	gitWorkDirPrefix,
 	parseAsiLines,
 	parseMetricLines,
+	resolveActiveBranchSession,
 } from "../helpers";
 import { buildExperimentState } from "../state";
-import { openAutoresearchStorageIfExists } from "../storage";
 import type {
 	AutoresearchToolFactoryOptions,
 	RunDetails,
@@ -61,26 +69,16 @@ export function createRunExperimentTool(
 		parameters: runExperimentSchema,
 		defaultInactive: true,
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
-			const storage = await openAutoresearchStorageIfExists(ctx.cwd);
-			const currentBranch = (await git.branch.current(ctx.cwd)) ?? null;
-			const session = storage?.getActiveSessionForBranch(currentBranch) ?? null;
-			if (!storage || !session) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: "Error: no active autoresearch session for the current branch. Call init_experiment first.",
-						},
-					],
-				};
-			}
+			const sessionResult = await resolveActiveBranchSession(ctx.cwd);
+			if (!sessionResult.ok) return sessionResult.result;
+			const { storage, session } = sessionResult;
 
 			const runtime = options.getRuntime(ctx);
 
 			const abandonedPriorRun = (() => {
 				const pending = storage.getPendingRun(session.id);
 				if (!pending) return null;
-				storage.abandonPendingRuns(session.id);
+				storage.abandonIncompleteRuns(session.id);
 				return pending.id;
 			})();
 
@@ -227,25 +225,23 @@ export function createRunExperimentTool(
 				metricUnit: session.metricUnit,
 				preRunDirtyPaths,
 				abandonedPriorRun,
-				truncation: llmTruncation.truncated ? llmTruncation : undefined,
+				truncation: llmTruncation.truncated ? truncationSummary(llmTruncation) : undefined,
 				fullOutputPath: execution.logPath,
 			};
 
 			runtime.lastRunSummary = {
+				runNumber: insertedRun.id,
+				runDirectory,
 				command: resolvedCommand,
 				durationSeconds,
-				parsedAsi,
-				parsedMetrics,
-				parsedPrimary,
 				passed,
-				preRunDirtyPaths,
-				runDirectory,
-				runNumber: insertedRun.id,
 				exitCode: execution.exitCode,
 				timedOut: execution.killed,
+				parsedPrimary,
+				parsedMetrics,
+				parsedAsi,
+				preRunDirtyPaths,
 			};
-			runtime.autoResumeArmed = true;
-			runtime.lastAutoResumePendingRunNumber = null;
 
 			// Refresh state to reflect any prior abandonment changes (logged set unchanged).
 			const refreshedSession = storage.getSessionById(session.id);
@@ -278,7 +274,6 @@ export function createRunExperimentTool(
 				}
 			}
 			const warningPrefix = headerLines.length > 0 ? `${headerLines.join("\n")}\n\n` : "";
-
 			return {
 				content: [
 					{
@@ -289,38 +284,53 @@ export function createRunExperimentTool(
 				details: resultDetails,
 			};
 		},
-		renderCall(_args, _options, theme): Text {
-			return new Text(
-				`${theme.fg("toolTitle", theme.bold("run_experiment"))} ${theme.fg("muted", DEFAULT_HARNESS_COMMAND)}`,
-				0,
-				0,
-			);
-		},
-		renderResult(result, options, theme): Text {
-			if (isProgressDetails(result.details)) {
-				const header = theme.fg("warning", `Running ${result.details.elapsed}...`);
-				const preview = replaceTabs(result.content.find(part => part.type === "text")?.text ?? "");
-				return new Text(preview ? `${header}\n${theme.fg("dim", preview)}` : header, 0, 0);
-			}
-			const details = result.details;
-			if (!details || !isRunDetails(details)) {
-				return new Text(replaceTabs(result.content.find(part => part.type === "text")?.text ?? ""), 0, 0);
-			}
-			const statusText = renderStatus(details, theme);
-			if (!options.expanded && details.tailOutput.trim().length === 0) {
-				return new Text(statusText, 0, 0);
-			}
-			const preview = replaceTabs(
-				options.expanded ? details.tailOutput : details.tailOutput.split("\n").slice(-5).join("\n"),
-			);
-			const suffix =
-				options.expanded && details.truncation && details.fullOutputPath
-					? `\n${theme.fg("warning", `Full output: ${shortenPath(details.fullOutputPath)}`)}`
-					: "";
-			return new Text(preview ? `${statusText}\n${theme.fg("dim", preview)}${suffix}` : statusText, 0, 0);
+		view: {
+			renderCall: () => ({
+				kind: "textBlock",
+				spans: [
+					{ text: "run_experiment", tone: "title", bold: true },
+					{ text: " " },
+					{ text: DEFAULT_HARNESS_COMMAND, tone: "muted" },
+				],
+			}),
+			renderResult: (result, context) => {
+				const details = result.details;
+				if (isProgressDetails(details)) {
+					const header = `Running ${details.elapsed}...`;
+					const preview = replaceTabs(result.content.find(part => part.type === "text")?.text ?? "");
+					const spans: ViewSpan[] = [{ text: header, tone: "warning" }];
+					if (preview) {
+						spans.push({ text: "\n" }, { text: preview, tone: "dim" });
+					}
+					return { kind: "textBlock", spans };
+				}
+				if (!isRunDetails(details)) {
+					const text = replaceTabs(result.content.find(part => part.type === "text")?.text ?? "");
+					return { kind: "textBlock", spans: [{ text }] };
+				}
+				const statusText = renderStatusText(details);
+				if (!context.expanded && details.tailOutput.trim().length === 0) {
+					return { kind: "textBlock", spans: [{ text: statusText, tone: statusTone(details) }] };
+				}
+				const preview = replaceTabs(
+					context.expanded ? details.tailOutput : details.tailOutput.split("\n").slice(-5).join("\n"),
+				);
+				const spans: ViewSpan[] = [{ text: statusText, tone: statusTone(details) }];
+				if (preview) {
+					spans.push({ text: "\n" }, { text: preview, tone: "dim" });
+				}
+				if (preview && context.expanded && details.truncation && details.fullOutputPath) {
+					spans.push(
+						{ text: "\n" },
+						{ text: `Full output: ${shortenPath(details.fullOutputPath)}`, tone: "warning" },
+					);
+				}
+				return { kind: "textBlock", spans };
+			},
 		},
 	};
 }
+
 async function executeProcess(opts: {
 	command: string;
 	cwd: string;
@@ -344,7 +354,7 @@ async function executeProcess(opts: {
 			runDirectory: path.dirname(opts.logPath),
 			fullOutputPath: opts.logPath,
 			tailOutput: tail.content,
-			truncation: tail.truncated ? tail : undefined,
+			truncation: tail.truncated ? truncationSummary(tail) : undefined,
 		};
 	};
 
@@ -388,7 +398,7 @@ async function executeProcess(opts: {
 			output,
 		};
 	} finally {
-		if (progressTimer) clearInterval(progressTimer);
+		clearInterval(progressTimer);
 		if (!logSinkClosed) {
 			try {
 				await closeLogSink();
@@ -398,7 +408,6 @@ async function executeProcess(opts: {
 		}
 	}
 }
-
 function buildRunText(details: RunDetails, outputPreview: string, bestMetric: number | null): string {
 	const lines: string[] = [];
 	lines.push(`Run #${details.runNumber} directory: ${details.runDirectory}`);
@@ -440,18 +449,25 @@ function buildRunText(details: RunDetails, outputPreview: string, bestMetric: nu
 	return lines.join("\n").trimEnd();
 }
 
-function renderStatus(details: RunDetails, theme: Theme): string {
+function renderStatusText(details: RunDetails): string {
 	if (details.timedOut) {
-		return theme.fg("error", `TIMEOUT ${details.durationSeconds.toFixed(1)}s`);
+		return `TIMEOUT ${details.durationSeconds.toFixed(1)}s`;
 	}
 	if (details.exitCode !== 0) {
-		return theme.fg("error", `FAIL exit=${details.exitCode} ${details.durationSeconds.toFixed(1)}s`);
+		return `FAIL exit=${details.exitCode} ${details.durationSeconds.toFixed(1)}s`;
 	}
 	const metric =
 		details.parsedPrimary !== null
 			? ` ${details.metricName}=${formatNum(details.parsedPrimary, details.metricUnit)}`
 			: "";
-	return theme.fg("success", `PASS ${details.durationSeconds.toFixed(1)}s${metric}`);
+	return `PASS ${details.durationSeconds.toFixed(1)}s${metric}`;
+}
+
+function statusTone(details: RunDetails): ViewSpan["tone"] {
+	if (details.timedOut || details.exitCode !== 0) {
+		return "error";
+	}
+	return "success";
 }
 
 function isRunDetails(value: unknown): value is RunDetails {
@@ -461,5 +477,5 @@ function isRunDetails(value: unknown): value is RunDetails {
 
 function isProgressDetails(value: unknown): value is RunExperimentProgressDetails {
 	if (typeof value !== "object" || value === null) return false;
-	return "phase" in value && (value as { phase: unknown }).phase === "running";
+	return "phase" in value && value.phase === "running";
 }

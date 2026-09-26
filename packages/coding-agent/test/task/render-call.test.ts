@@ -1,8 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
-import { getThemeByName, setThemeInstance, type Theme } from "@veyyon/coding-agent/modes/theme/theme";
+import { viewToolRenderer } from "@veyyon/coding-agent/modes/terminal/draw/draw-tool-view";
 import type { TaskParams } from "@veyyon/coding-agent/task";
-import { taskToolRenderer } from "@veyyon/coding-agent/task/renderer";
+import { taskToolView } from "@veyyon/coding-agent/task/task-view";
+import { getThemeByName, setThemeInstance, type Theme } from "@veyyon/coding-agent/theme/theme";
+
+/** The card the terminal draws from the task tool's view, which is what the product renders. */
+const taskToolRenderer = viewToolRenderer(taskToolView, { mergeCallAndResult: true });
 
 describe("task renderer: streaming call preview", () => {
 	let theme: Theme;
@@ -77,7 +81,7 @@ describe("task renderer: streaming call preview", () => {
 			task: taskLines.join("\n"),
 		};
 
-		// The task text is the brief handed to the subagent; it renders as
+		// The task text is the brief handed to the agent; it renders as
 		// markdown in full regardless of the expanded toggle.
 		const collapsed = render(args, false);
 		expect(collapsed).toContain("Step 1");

@@ -1,10 +1,10 @@
 /**
  * WHY:
- * When a subagent completes its task, its session is kept alive in memory with
+ * When an agent completes its task, its session is kept alive in memory with
  * status "idle" for its idle TTL before being parked. Previously, `irc send to:all`
  * broadcast to all visible peers (`running` or `idle`), which delivered messages to
- * completed subagents and triggered `#wakeForIrc`, starting unexpected new turns on
- * finished subagents.
+ * completed agents and triggered `#wakeForIrc`, starting unexpected new turns on
+ * finished agents.
  *
  * This test suite defends the invariant that:
  * 1. Broadcast (`to: "all"`) ONLY delivers to active running peers and NEVER
@@ -19,12 +19,12 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { Settings } from "@veyyon/coding-agent/config/settings";
-import { IrcBus, type IrcMessage } from "@veyyon/coding-agent/irc/bus";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, type AgentStatus } from "@veyyon/coding-agent/registry/agent-registry";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { IrcBus, type IrcMessage } from "@veyyon/coding-agent/task/irc-bus";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
-import { IrcTool } from "@veyyon/coding-agent/tools/irc";
+import { IrcTool } from "@veyyon/coding-agent/tools/agent/irc";
 
 interface FakeSession {
 	session: AgentSession;

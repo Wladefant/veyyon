@@ -1,8 +1,8 @@
 import type { AgentToolResult } from "@veyyon/agent-core";
 import type { Model } from "@veyyon/ai";
+import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import type { ExtensionAPI, ExtensionContext } from "../extensibility/extensions";
-import type { SessionEntry } from "../session/session-entries";
-import type { TruncationResult } from "../session/streaming-output";
+import type { TruncationSummary } from "../session/streaming-output";
 import type { LoopConsoleModel } from "./console";
 
 export type MetricDirection = "lower" | "higher";
@@ -96,7 +96,7 @@ export interface ExperimentState {
 export interface RunExperimentProgressDetails {
 	phase: "running";
 	elapsed: string;
-	truncation?: TruncationResult;
+	truncation?: TruncationSummary;
 	fullOutputPath?: string;
 	runDirectory?: string;
 }
@@ -119,7 +119,7 @@ export interface RunDetails {
 	metricUnit: string;
 	preRunDirtyPaths: string[];
 	abandonedPriorRun: number | null;
-	truncation?: TruncationResult;
+	truncation?: TruncationSummary;
 	fullOutputPath?: string;
 }
 

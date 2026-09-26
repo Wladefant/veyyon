@@ -1,11 +1,10 @@
-import { Text } from "@veyyon/tui";
 import { formatCount } from "@veyyon/utils";
+import { replaceTabs } from "@veyyon/utils/tab-width";
+import { truncateToWidth } from "@veyyon/utils/width";
 import { type } from "arktype";
 import type { ToolDefinition } from "../../extensibility/extensions";
-import type { Theme } from "../../modes/theme/theme";
-import { replaceTabs, truncateToWidth } from "../../tools/render-utils";
-import * as git from "../../utils/git";
-import { openAutoresearchStorageIfExists, type RunRow } from "../storage";
+import { resolveActiveBranchSession } from "../helpers";
+import type { RunRow } from "../storage";
 import {
 	type Candidate,
 	certificationDegraded,
@@ -60,19 +59,9 @@ export function createCertifyArmsTool(
 		parameters: certifyArmsSchema,
 		defaultInactive: true,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const storage = await openAutoresearchStorageIfExists(ctx.cwd);
-			const currentBranch = (await git.branch.current(ctx.cwd)) ?? null;
-			const session = storage?.getActiveSessionForBranch(currentBranch) ?? null;
-			if (!storage || !session) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: "Error: no active autoresearch session for the current branch. Call init_experiment first.",
-						},
-					],
-				};
-			}
+			const sessionResult = await resolveActiveBranchSession(ctx.cwd);
+			if (!sessionResult.ok) return sessionResult.result;
+			const { storage, session } = sessionResult;
 
 			const candidates: Candidate[] = params.arms.map(arm => ({
 				arm: arm.arm,
@@ -171,6 +160,7 @@ export function createCertifyArmsTool(
 
 			const runtime = options.getRuntime(ctx);
 			options.dashboard.update(ctx, runtime);
+			options.dashboard.requestRender();
 
 			return {
 				content: [{ type: "text", text: lines.join("\n") }],
@@ -182,20 +172,27 @@ export function createCertifyArmsTool(
 				},
 			};
 		},
-		renderCall(args, _options, theme): Text {
-			const summary =
-				args.verdicts === undefined
-					? `triage ${args.arms.length} arms`
-					: `verdicts for ${args.verdicts.length} arms`;
-			return new Text(
-				`${theme.fg("toolTitle", theme.bold("certify_arms"))} ${theme.fg("muted", truncateToWidth(replaceTabs(summary), 100))}`,
-				0,
-				0,
-			);
-		},
-		renderResult(result, _options, theme: Theme): Text {
-			const text = replaceTabs(result.content.find(part => part.type === "text")?.text ?? "");
-			return new Text(theme.fg("muted", text), 0, 0);
+		view: {
+			renderCall: args => {
+				const summary =
+					args.verdicts === undefined
+						? `triage ${args.arms.length} arms`
+						: `verdicts for ${args.verdicts.length} arms`;
+				return {
+					kind: "textBlock",
+					spans: [
+						{ text: "certify_arms", tone: "title", bold: true },
+						{ text: " " },
+						{ text: truncateToWidth(replaceTabs(summary), 100), tone: "muted" },
+					],
+				};
+			},
+			renderResult: result => ({
+				kind: "textBlock",
+				spans: [
+					{ text: replaceTabs(result.content.find(part => part.type === "text")?.text ?? ""), tone: "muted" },
+				],
+			}),
 		},
 	};
 }

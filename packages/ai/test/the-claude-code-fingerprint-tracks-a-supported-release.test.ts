@@ -29,10 +29,31 @@ import { claudeAgentSdkVersion } from "@veyyon/ai/providers/anthropic";
 import { CLAUDE_CODE_VERSION } from "@veyyon/catalog/wire/anthropic";
 
 /**
- * The highest `claude_code_version_too_old` minimum the API has been observed to demand. Raise it, with the
- * version bump, whenever a 400 names a newer one.
+ * The rejections the API has actually returned, quoted from the 400 body a run recorded. The floor is
+ * derived from them rather than written down beside them, so a newer minimum enters this suite as the
+ * evidence for it: paste the message, and the floor moves.
+ *
+ * Sanitized: the `request_id` the body carries identifies one account's request and is dropped, and the
+ * defect is entirely in the two version numbers and the shape that separates them.
  */
-const OBSERVED_API_MINIMUM = "2.1.251";
+const RECORDED_REJECTIONS = [
+	// Sent 2.1.165. The incident this suite was written for.
+	"Claude Code 2.1.165 does not support this model; version 2.1.251 or newer is required. Run 'claude update', or update the Claude desktop app, then try again.",
+	// Sent 2.1.257, requesting claude-opus-5-5. Every OAuth request for that model came back 400.
+	"Claude Code 2.1.257 does not support this model; version 2.1.280 or newer is required. Run 'claude update', or update the Claude desktop app, then try again.",
+] as const;
+
+/** The minimum one rejection demands, or undefined when the message is not one of these rejections. */
+function demandedMinimum(message: string): string | undefined {
+	return /version (\d+(?:\.\d+)+) or newer is required/.exec(message)?.[1];
+}
+
+/** The highest `claude_code_version_too_old` minimum the API has been observed to demand. */
+const OBSERVED_API_MINIMUM = RECORDED_REJECTIONS.map(demandedMinimum).reduce<string>((highest, demanded) => {
+	if (demanded === undefined)
+		throw new Error("a recorded rejection states no minimum; the parser or the quote is wrong");
+	return versionOrder(demanded, highest) > 0 ? demanded : highest;
+}, "0.0.0");
 
 /** The release line the Agent SDK publishes under; its patch component tracks the CLI's. */
 const AGENT_SDK_LINE = "0.3";
@@ -60,9 +81,34 @@ describe("the Claude Code fingerprint tracks a supported release", () => {
 	});
 
 	/**
+	 * The backtest for the reported run: the fingerprint that was sent is below what the body demanded, and
+	 * the one this repository now sends is not. Against the pre-fix constant the second expectation fails,
+	 * which is what makes this the recorded defect rather than a restatement of the case above.
+	 */
+	it.each([...RECORDED_REJECTIONS])("satisfies the minimum a recorded 400 demanded: %s", message => {
+		const sent = /Claude Code (\d+(?:\.\d+)+) does not support/.exec(message)?.[1];
+		const demanded = demandedMinimum(message);
+		expect(sent).toBeDefined();
+		expect(demanded).toBeDefined();
+		expect(versionOrder(sent!, demanded!)).toBe(-1);
+		expect(versionOrder(CLAUDE_CODE_VERSION, demanded!)).toBeGreaterThanOrEqual(0);
+	});
+
+	/**
+	 * NON-VACUITY for the parser the floor is derived through. A parser that returned undefined, or matched
+	 * the version the client SENT rather than the one demanded, would put the floor at 0.0.0 or at the stale
+	 * version and pass the floor case on anything.
+	 */
+	it("reads the demanded minimum, not the version that was sent, and nothing else", () => {
+		expect(demandedMinimum(RECORDED_REJECTIONS[1])).toBe("2.1.280");
+		expect(OBSERVED_API_MINIMUM).toBe("2.1.280");
+		expect(demandedMinimum("400 invalid_request_error: something else entirely")).toBeUndefined();
+	});
+
+	/**
 	 * The user-agent sends `claude-cli/<cli> (external, local-agent, agent-sdk/<sdk>)`, and upstream ships the
-	 * two in lockstep: CLI 2.1.257 with SDK 0.3.257. Bumping one alone produces a pair that no real client
-	 * ever sent, which is the inconsistency the fingerprint exists to avoid.
+	 * two in lockstep: npm publishes CLI 2.1.280 beside SDK 0.3.280. Bumping one alone produces a pair that no
+	 * real client ever sent, which is the inconsistency the fingerprint exists to avoid.
 	 */
 	it("pairs the agent-sdk version with the CLI patch it ships beside", () => {
 		const [, , cliPatch] = CLAUDE_CODE_VERSION.split(".");

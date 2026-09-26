@@ -305,7 +305,7 @@ for (const seed of FIXTURES.runs) {
 // The screen groups by segment and the status row reports the CURRENT one, so the
 // session has to sit on the segment its newest runs belong to.
 const lastSegment = FIXTURES.runs[FIXTURES.runs.length - 1].segment;
-for (let segment = 0; segment < lastSegment; segment += 1) storage.bumpSegment(session.id);
+for (let segment = 0; segment < lastSegment; segment += 1) storage.bumpSessionSegment(session.id);
 
 storage.close();
 process.stdout.write(`seeded ${kind} session ${session.id} on ${FIXTURES.branch} with ${FIXTURES.runs.length} runs\n`);

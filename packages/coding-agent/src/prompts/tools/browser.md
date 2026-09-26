@@ -3,11 +3,11 @@ Drives real Chromium tab; full puppeteer access via JS.
 <instruction>
 - Static content (articles, docs, issues/PRs, JSON, PDFs, feeds)? `read` the URL. Browser only for JS execution, auth, interactive actions.
 - Four actions:
-  - `open` — acquire/reuse named tab (`name` defaults `"main"`). Optional `url` (navigate once ready), `context` (isolated browser context name), `storage_state` (path to storage state JSON), `viewport`, `dialogs: "accept" | "dismiss"` (auto-handle `alert`/`confirm`/`beforeunload`; else page hangs till you wire `page.on('dialog', …)`).
+  - `open` — acquire/reuse named tab (`name` defaults `"main"`). Optional `url` (navigate once ready), `viewport`, `dialogs: "accept" | "dismiss"` (auto-handle `alert`/`confirm`/`beforeunload`; else page hangs till you wire `page.on('dialog', …)`). Headless only: `context` (tabs naming it share cookies/storage, isolated from others — e.g. one per user role), `storage_state` (state file loaded before navigating).
   - `close` — release tab by `name`, or all with `all: true`. `kill: true` also kills spawned-app process trees.
   - `run` — execute JS in existing tab. `code` = async function body; `page`, `browser`, `tab`, `display`, `assert`, `wait` in scope. Return value JSON-stringified into result; `display(value)` accumulates text/images. `wait(ms)` sleeps; `wait(fn, { timeout?, interval? })` polls `fn` (sync or async) until truthy and resolves with that value (default 100ms interval; deadline min(30s, cell budget − 1s), named error on timeout) — use it instead of in-page polling Promises inside `tab.evaluate`.
-  - `save_state` — serialize cookies and localStorage to disk (`storage_state` path, default `./storage-state.json`).
-- Tabs survive `run` calls and in-process subagents — open once, reuse.
+  - `save_state` — write the tab context's cookies + localStorage to `storage_state` (required). It holds live credentials: keep it out of git.
+- Tabs survive `run` calls and in-process spawned agents — open once, reuse.
 - Browser kinds (`app` on `open`):
   - default (no `app`) → headless Chromium with stealth patches.
   - `app.path` → spawn absolute binary (Electron/CDP). No stealth patches — NEVER tamper with a real desktop app.
@@ -19,7 +19,7 @@ Drives real Chromium tab; full puppeteer access via JS.
   - `tab.ariaSnapshot(selector?, { depth?, boxes? })`: Playwright-format ARIA-tree YAML (nested roles + accessible names + `/url`/`/placeholder`), scoped to `selector` or the whole document. Every node carries a `[ref=eN]` id; `[cursor=pointer]` flags clickables. Refs renumber from e1 each call and stay valid until the next `ariaSnapshot()`.
   - `tab.ref("e5")`: `[ref=eN]` from the last ariaSnapshot → element handle with the common action methods (`.click()`, `.type()`, `.fill()`, `.hover()`, `.evaluate()`, …). `aria-ref=e5` also works inline in `tab.click`/`type`/`fill`/`waitFor`/`scrollIntoView` (e.g. `tab.click("aria-ref=e5")`).
   - `tab.id(n)` — id from last observe → element handle with the same action methods (`.click()`, `.type()`, `.fill()`, …).
-  - `tab.click(selector)` / `tab.type(selector, text)` / `tab.fill(selector, value)` / `tab.press(key, { selector? })` / `tab.scroll(dx, dy)`.
+  - `tab.click(selector)` / `tab.type(selector, text)` / `tab.fill(selector, value)` / `tab.press(key, { selector? })` / `tab.scroll(dx, dy)`. `fill` replaces the value as one real edit frameworks see; `type` sends keystrokes.
   - `tab.waitFor(selector, { timeout? })` / `tab.waitForSelector(selector, { timeout?, visible?, hidden? })` — wait until attached (optionally visible/hidden); returns an action-method handle.
   - `tab.drag(from, to)` — endpoints: selector (center-to-center) or `{ x, y }` viewport point (canvases, sliders).
   - `tab.scrollIntoView(selector)` — center in viewport; before clicking off-screen elements.
@@ -31,8 +31,7 @@ Drives real Chromium tab; full puppeteer access via JS.
   - `tab.evaluate(fn, …args)` — run ad-hoc code in the page's MAIN world. DOM and page-defined globals (`window.myFlag`) are visible; mutations affect the page.
   - `tab.screenshot({ selector?, fullPage?, save?, silent? })` — capture + attach for viewing (`silent: true` skips). Pass `save` only when a later step needs the file.
   - `tab.extract(format = "markdown")` — readable page content (`"markdown"` | `"text"`); throws when nothing readable.
-  - `tab.storageState({ path? })` — export cookies and localStorage/sessionStorage; optionally write to JSON file.
-  - `tab.loadStorageState(stateOrPath)` — restore cookies and localStorage into current tab.
+  - `tab.storageState({ path? })` / `tab.loadStorageState(stateOrPath)` — save/load the context's cookies + localStorage (object or file).
 - Selectors: CSS + puppeteer handlers `aria/Sign in`, `text/Continue`, `xpath/…`, `pierce/…`; also Playwright-style `p-aria/…`, `p-text/…`. Playwright-only engines/pseudos (`:has-text()`, `:visible`, …) are rejected — use `text/…` or `aria/…`. A stalled action/wait fails fast with a named `tab.<op>` error carrying a match-count diagnosis, never the whole-cell timeout; a selector matching nothing fails in ~2s (pass an explicit `{ timeout }` to `waitFor`/`waitForSelector` to wait out slow-appearing elements). A whole-cell timeout names the stalled op (including `wait(…)`) and any unhandled dialog blocking the page.
 </instruction>
 

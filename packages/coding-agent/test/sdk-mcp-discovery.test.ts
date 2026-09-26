@@ -9,10 +9,11 @@ import { Effort } from "@veyyon/catalog/effort";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
+import { TOOL_DISCOVERY_AUTO_THRESHOLD } from "@veyyon/coding-agent/discovery/mode";
 import type { CustomTool } from "@veyyon/coding-agent/extensibility/custom-tools/types";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
-import { SessionManager } from "@veyyon/coding-agent/session/session-manager";
-import { TOOL_DISCOVERY_AUTO_THRESHOLD } from "@veyyon/coding-agent/tool-discovery/mode";
+import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { type } from "arktype";
 
@@ -84,7 +85,15 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 		);
 	});
 
-	afterEach(() => {
+	/**
+	 * Sessions a case opened and did not dispose itself. `createAgentSession` attaches a fault sink to
+	 * a process-global registry, so one left open collects the faults of whatever suite runs next and
+	 * reports them against the wrong subject. The cases that already dispose inline stay as they are.
+	 */
+	const openSessions: AgentSession[] = [];
+
+	afterEach(async () => {
+		for (const session of openSessions.splice(0)) await session.dispose();
 		if (tempDir && fs.existsSync(tempDir)) {
 			removeSyncWithRetries(tempDir);
 		}
@@ -108,6 +117,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 			toolNames: ["read"],
 			customTools: [createMcpCustomTool("mcp__github_create_issue", "github", "create_issue")],
 		});
+		openSessions.push(session);
 
 		expect(session.systemPrompt.join("\n")).not.toContain("### MCP tool discovery");
 		expect(session.systemPrompt.join("\n")).not.toContain(
@@ -135,6 +145,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 			enableLsp: false,
 			customTools: mcpTools,
 		});
+		openSessions.push(session);
 
 		const activeNames = session.getActiveToolNames();
 		expect(session.isToolDiscoveryEnabled()).toBe(true);
@@ -233,6 +244,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 			enableMCP: false,
 			enableLsp: false,
 		});
+		openSessions.push(session);
 
 		const prompt = session.systemPrompt.join("\n");
 		const searchTool = session.agent.state.tools.find(tool => tool.name === "search_tool_bm25");
@@ -258,7 +270,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 			agentDir: tempDir,
 			modelRegistry,
 			sessionManager: SessionManager.inMemory(),
-			settings: Settings.isolated({ "tools.discoveryMode": "all", "subagent.delegation": delegation }),
+			settings: Settings.isolated({ "tools.discoveryMode": "all", "agent.delegation": delegation }),
 			model: getBundledModel("openai", "gpt-4o-mini"),
 			disableExtensionDiscovery: true,
 			skills: [],
@@ -302,7 +314,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 	 * reachable through `search_tool_bm25`, and the prompt drops the delegation gates with it.
 	 *
 	 * This test USED to omit the setting and rely on the default being `allowed`. The default is
-	 * `preferred` (`settings-domains/subagents.ts`), so it was silently a duplicate of the preferred
+	 * `preferred` (`settings-domains/agents.ts`), so it was silently a duplicate of the preferred
 	 * case and failed for the right reason: `task` was correctly present. The strength is named
 	 * explicitly here, which is the only way this test exercises the floor at all, and it stays
 	 * correct if the default moves again.
@@ -345,6 +357,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 				createMcpCustomTool("mcp__slack_post_message", "slack", "post_message"),
 			],
 		});
+		openSessions.push(session);
 
 		expect(session.getActiveToolNames()).toContain("mcp__github_create_issue");
 		expect(session.getSelectedMCPToolNames()).toEqual(["mcp__github_create_issue"]);
@@ -411,6 +424,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 			toolNames: ["read", "search_tool_bm25"],
 			customTools: [createMcpCustomTool("mcp__github_create_issue", "github", "create_issue")],
 		});
+		openSessions.push(session);
 
 		const searchTool = session.agent.state.tools.find(tool => tool.name === "search_tool_bm25");
 		expect(searchTool?.description).toContain("Total discoverable tools available: 1.");
@@ -433,6 +447,7 @@ describe("createAgentSession MCP discovery prompt gating", () => {
 			enableMCP: false,
 			enableLsp: false,
 		});
+		openSessions.push(session);
 
 		expect(await session.activateDiscoveredTools(["debug"])).toEqual(["debug"]);
 		expect(session.getSelectedDiscoveredToolNames()).toContain("debug");

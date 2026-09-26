@@ -11,7 +11,7 @@
  *                        ROTATES). Neither number is wrong; the shared name
  *                        made them look like a disagreement about one policy.
  *   `MAX_OUTPUT_BYTES`   128 KB in dap/session (an in-memory ring) vs 500 KB in
- *                        task/types (what a subagent may return, user-tunable
+ *                        task/types (what an agent may return, user-tunable
  *                        via an env var the name has to match).
  *   `STARTUP_TIMEOUT_MS` 250 ms in mcp/manager vs 10 s in the eval kernels. The
  *                        worst of the set: the MCP one is not a timeout at all
@@ -61,7 +61,7 @@ const RENAMED = [
 		because: "it bounds what a bug report reads, not how large a log may grow",
 	},
 	{
-		file: "dap/session.ts",
+		file: "debug/dap/session.ts",
 		was: "MAX_OUTPUT_BYTES",
 		now: "MAX_BUFFERED_OUTPUT_BYTES",
 		because: "the task tool owns MAX_OUTPUT_BYTES, which matches its env var",
@@ -102,7 +102,7 @@ describe("constants renamed out of a name collision", () => {
 		// is user-facing and the constant has to match it. That is the reason the
 		// dap ring moved instead.
 		expect(declaresConstant("task/types.ts", "MAX_OUTPUT_BYTES")).toBe(true);
-		expect(declaresConstant("dap/session.ts", "MAX_OUTPUT_BYTES")).toBe(false);
+		expect(declaresConstant("debug/dap/session.ts", "MAX_OUTPUT_BYTES")).toBe(false);
 	});
 
 	it("keeps the relay budget more generous than the loopback one", () => {

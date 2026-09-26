@@ -2,6 +2,47 @@
 
 ## [Unreleased]
 
+## [1.5.4] - 2026-09-24
+
+### Fixed
+
+- Finalized SQLite statement handles in modelCacheStamp, preventing statement handle accumulation on shared databases.
+
+## [1.5.1] - 2026-09-22
+
+### Fixed
+
+- The Claude Code fingerprint version is 2.1.280, so Anthropic OAuth requests for `claude-opus-5-5` are no longer rejected with `claude_code_version_too_old`.
+
+## [1.5.0] - 2026-09-18
+
+### Added
+
+- `calculateCost` bills a request at a model's `longContextCost` rates when the prompt crosses that model's threshold, so a model the upstream charges two rate cards for is no longer reported at the cheaper one.
+- `closeModelCache()` closes the shared model-cache database and permits reopening it at the current cache path.
+
+### Changed
+
+- The `command-code` provider defaults to `claude-sonnet-4-6`, discovers models without an API key, and reads `COMMANDCODE_API_KEY` after its two existing key aliases.
+- GitLab Duo Workflow discovery reads a record's declared root namespace (`root_namespace_id`, `rootNamespaceId`, or the id or path of its `root_namespace`/`rootAncestor` record) through one `declaredRootNamespaceId` for the explicit and nested lookups; no behavior change.
+- The Antigravity, Codex, Gemini and Ollama discovery readers report a non-ok status as the `status` stage and an unparseable body as the `body` stage through one exported `readDiscoveryJson` in `discovery/failure`; no behavior change.
+- Model spec rejection checks its string, cost and limit fields from ordered tables, reporting the same field names in the same order; no behavior change.
+- The canonical-id generator runs its multi-candidate expanders from one ordered table; no behavior change.
+- Canonical model normalization shares ordered transformation dispatch without changing identity resolution or cache precedence.
+- `Effort`, `ThinkingConfig` and the model and message types are re-exported from `@veyyon/model`, which is their single definition; the exported names and values are unchanged.
+- Bundled models resolve on demand per provider while explicitly installed full-registry snapshot stores remain supported.
+- Provider cache namespaces resolve without constructing discovery options; persisted cache keys are unchanged.
+- Bundled model snapshots use the shared integrity-framed format without repeated JSON serialization or durability flushes, and obsolete snapshots rebuild on load.
+- The model row, thinking config, effort ladder and service-tier vocabulary are defined in `@veyyon/model`; `@veyyon/catalog/types`, `@veyyon/catalog/effort` and `@veyyon/catalog/provider-models/wire-capabilities` re-export every name they exported before, so no caller changes.
+- Typed tuple copies use spreads rather than `.concat()`, which a `as const` array does not define. No user-visible behavior changes.
+- A comment on `OPENROUTER_BASE_URL` names the Perplexity auth module at `tools/web/search/providers/perplexity-auth.ts`. No behavior change.
+- An OpenAI-compatible listing's model name falls back to its id through the shared non-empty-string reader; discovered names are unchanged.
+
+### Fixed
+
+- Command Code models carry the provider's published prices, reasoning ladders and output ceilings instead of arriving at zero cost with no thinking control; the bundled catalog grows from 3 hand-written rows to the 69 the Provider API serves.
+- Case-insensitive host classification no longer treats control characters as URL punctuation.
+
 ## [1.4.1] - 2026-09-08
 
 ### Fixed
