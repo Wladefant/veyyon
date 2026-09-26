@@ -125,9 +125,11 @@ scrolled reader could be looking at.
 3. Classify: **fullPaint** (first paint, `clearScrollback` session replace, a
    geometry change on a terminal that does not repaint resizes in place, or
    the divergence rebuild) or **update**. `resizeRepaintsInPlace()` is what
-   excuses a terminal from the geometry rebuild: multiplexer panes, and
-   terminals that re-report their size on alt-screen toggles (Warp, or
-   `VEYYON_TUI_RESIZE_IN_PLACE=1`).
+   excuses a terminal from the geometry rebuild: multiplexer panes, terminals
+   that re-report their size on alt-screen toggles (Warp, or
+   `VEYYON_TUI_RESIZE_IN_PLACE=1`), and a host that owns the grid
+   (`Terminal.hostOwnsGridOnResize`: conhost reprints its own viewport, so an
+   in-place repaint lands on a screen nobody is looking at).
 4. Window math as in §1. Two special rules:
    - **Commits freeze** (`C' = C`) while an overlay is visible, and on a
      geometry frame: composited rows must never enter history, and a resizing
@@ -516,7 +518,7 @@ the block knows a picture it already drew is gone.
 | `VEYYON_HARDWARE_CURSOR=1` | Show the real hardware cursor instead of a rendered one. |
 | `VEYYON_NOTIFICATIONS=off\|0\|false` | Suppress terminal notifications. |
 | `VEYYON_DEBUG_REDRAW=1` | Log the chosen render intent + ledger state per frame to the debug log. |
-| `VEYYON_TUI_RESIZE_IN_PLACE=1\|0` | Force resize to repaint in place (no alt-screen borrow, no ED3 rewrap) on / off. Default-on for terminals that re-report size on alt-screen toggles (Warp). |
+| `VEYYON_TUI_RESIZE_IN_PLACE=1\|0` | Force resize to repaint in place (no alt-screen borrow, no ED3 rewrap) on / off. Default-on for terminals that re-report size on alt-screen toggles (Warp). `1` also overrides the host-owned-grid exclusion (ConPTY), which is the escape hatch back to the pre-ConPTY path. |
 
 Removed with the old engine: `VEYYON_TUI_ED3_SAFE` (no ED3-risk lever exists),
 `VEYYON_CLEAR_ON_SHRINK` (shrinks always clear exactly), `VEYYON_TUI_DEBUG` (per-render

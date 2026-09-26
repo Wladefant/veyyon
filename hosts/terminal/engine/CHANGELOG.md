@@ -10,6 +10,8 @@
 
 - Fixed AltGr characters (such as `[`, `]`, `{`, `}` on Hungarian and other international layouts) being dropped in Windows Terminal with the kitty keyboard protocol, where they instead triggered Alt shortcuts like word movement ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed a deadlock on Windows when a terminal pane closes by exiting immediately without waiting for stdout to drain when the terminal disconnects ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- A ConPTY host keeps the alternate-screen borrow through a resize instead of repainting a grid it owns itself ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- The renderer decides whether a resize repaints in place by asking the terminal whether its host owns the grid, so a host and the engine agree on one seam instead of re-reading the environment.
 
 ## [1.5.4] - 2026-09-24
 
