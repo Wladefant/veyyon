@@ -21,10 +21,7 @@ import type { SubmittedUserInput } from "../types";
  * only decides WHAT is in the chat container and remembers what it added. */
 export interface TranscriptComposerPort {
 	chatContainer: TranscriptContainer;
-	addMessageToChat(
-		message: AgentMessage,
-		options?: { populateHistory?: boolean; imageLinks?: readonly (string | undefined)[] },
-	): void;
+	addMessageToChat(message: AgentMessage, options?: { imageLinks?: readonly (string | undefined)[] }): void;
 	renderSessionContext(context: SessionContext): void;
 	/** The committed transcript context to replay on rebuild (the host applies
 	 * its collapse-compacted display setting). */

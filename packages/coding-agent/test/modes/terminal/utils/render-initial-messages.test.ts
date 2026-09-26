@@ -21,8 +21,18 @@ import { UiHelpers } from "@veyyon/coding-agent/modes/terminal/utils/ui-helpers"
 import { initTheme } from "@veyyon/coding-agent/theme/theme";
 import type { SessionContext } from "@veyyon/kernel/session/session-context";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
-import { type Component, Container, Image, ImageProtocol, setTerminalImageProtocol, TERMINAL } from "@veyyon/tui";
+import {
+	type Component,
+	Container,
+	Editor,
+	Image,
+	ImageProtocol,
+	setTerminalImageProtocol,
+	TERMINAL,
+} from "@veyyon/tui";
 import { TempDir } from "@veyyon/utils";
+import { getKeybindings, KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "@veyyon/utils/keybindings";
+import { getEditorTheme } from "../../../../src/theme/theme";
 
 beforeAll(() => {
 	initTheme();
@@ -170,6 +180,12 @@ function makeRenderCtx(transcript: SessionContext): { ctx: InteractiveModeContex
 			sessionManager: {
 				getEntries: vi.fn(() => []),
 				getCwd: vi.fn(() => "/tmp"),
+				putBlobSync: vi.fn(() => ({
+					hash: "hash",
+					path: "/tmp/hash",
+					displayPath: "/tmp/hash.png",
+					ref: "blob:sha256:hash",
+				})),
 			},
 		},
 		sessionManager: {
@@ -182,12 +198,10 @@ function makeRenderCtx(transcript: SessionContext): { ctx: InteractiveModeContex
 				ref: "blob:sha256:hash",
 			})),
 		},
-		addMessageToChat: (message: AgentMessage, options?: { populateHistory?: boolean }) =>
+		addMessageToChat: (message: AgentMessage, options?: { imageLinks?: readonly (string | undefined)[] }) =>
 			helpers.addMessageToChat(message, options),
-		renderSessionContext: (
-			context: SessionContext,
-			options?: { updateFooter?: boolean; populateHistory?: boolean },
-		) => helpers.renderSessionContext(context, options),
+		renderSessionContext: (context: SessionContext, options?: { updateFooter?: boolean }) =>
+			helpers.renderSessionContext(context, options),
 		showStatus: vi.fn(),
 		// Required members of the context. Omitting them used to be tolerated by
 		// `?.()` calls in the controller, which meant production silently skipped
@@ -210,10 +224,37 @@ describe("UiHelpers.renderInitialMessages — transcript source", () => {
 
 		expect(transcriptSpy).toHaveBeenCalledWith({ collapseCompactedHistory: true });
 		expect(llmContextSpy).not.toHaveBeenCalled();
-		expect(renderSessionContextSpy).toHaveBeenCalledWith(transcript, {
-			updateFooter: true,
-			populateHistory: true,
-		});
+		expect(renderSessionContextSpy).toHaveBeenCalledWith(transcript, { updateFooter: true });
+	});
+});
+
+describe("UiHelpers.renderInitialMessages — prompt history", () => {
+	it("leaves the composer's up-arrow history alone when replaying a transcript", () => {
+		// Regression (upstream 1111d6a82d48): every replayed user prompt was pushed
+		// into the editor's persistent prompt history, so resuming a session
+		// duplicated the whole list (and rewrote it to the history store) and Up
+		// walked copies of prompts the user had already sent. The composer's history
+		// belongs to a submission; replaying a transcript is not one. Observed
+		// through a real composer: Up on an untouched editor must stay empty.
+		const previousKeybindings = getKeybindings();
+		setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS));
+		try {
+			const editor = new Editor(getEditorTheme());
+			const { ctx } = makeRenderCtx(
+				transcriptWith([
+					{ role: "user", content: [{ type: "text", text: "write the release notes" }], timestamp: 1 },
+					{ role: "user", content: [{ type: "text", text: "now the changelog" }], timestamp: 2 },
+				]),
+			);
+			ctx.editor = editor as unknown as typeof ctx.editor;
+
+			new UiHelpers(ctx).renderInitialMessages();
+			editor.handleInput("\x1b[A");
+
+			expect(editor.getText()).toBe("");
+		} finally {
+			setKeybindings(previousKeybindings);
+		}
 	});
 });
 

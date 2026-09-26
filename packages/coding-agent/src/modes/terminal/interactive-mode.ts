@@ -223,6 +223,7 @@ import { countRunningAgentBadgeAgents, getRunningAgentBadgeRegistry } from "./ru
 import { type SessionObserverChangeKind, SessionObserverRegistry } from "./session-observer-registry";
 import { createSessionTeardown, type SessionTeardown } from "./session-teardown";
 import { runProviderSetupWizard } from "./setup-wizard/lazy";
+import { startTerminalControl } from "./terminal-control";
 import { consumeRelaunchMarker, flushPendingTtyInput, RELAUNCH_MARKER } from "./tty-input-flush";
 import type {
 	CompactionQueuedMessage,
@@ -234,7 +235,6 @@ import type {
 } from "./types";
 import { createSelectionAttemptNotice } from "./utils/selection-notice";
 import { UiHelpers } from "./utils/ui-helpers";
-import { startTerminalControl } from "./terminal-control";
 
 const PLAN_KEEP_CONTEXT_OPTION_INDEX = 2;
 const PLAN_KEEP_CONTEXT_DISABLE_THRESHOLD_PERCENT = 95;
@@ -3968,17 +3968,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#uiHelpers.isKnownSlashCommand(text);
 	}
 
-	addMessageToChat(
-		message: AgentMessage,
-		options?: { populateHistory?: boolean; imageLinks?: readonly (string | undefined)[] },
-	): Component[] {
+	addMessageToChat(message: AgentMessage, options?: { imageLinks?: readonly (string | undefined)[] }): Component[] {
 		return this.#uiHelpers.addMessageToChat(message, options);
 	}
 
-	renderSessionContext(
-		sessionContext: SessionContext,
-		options?: { updateFooter?: boolean; populateHistory?: boolean },
-	): void {
+	renderSessionContext(sessionContext: SessionContext, options?: { updateFooter?: boolean }): void {
 		for (const message of sessionContext.messages) {
 			this.noteDisplayableThinkingContent(message);
 		}
