@@ -245,12 +245,14 @@ fn terminate_raw_handle(handle: RawHandle) -> bool {
 	unsafe { TerminateProcess(handle, 1) != 0 }
 }
 
-/// Refuse the host, its ancestors, and targets whose safety cannot be established.
-/// Windows parent IDs come from one snapshot, without requiring termination
-/// access to ancestors (which may belong to an elevated launcher).
+/// Capture the host's discoverable ancestor PIDs from one Windows snapshot.
+///
+/// Snapshot failure or a missing host returns `None` (refuse termination).
+/// A missing intermediate ancestor ends the walk: Windows may retain its PID
+/// after exit, but ancestors above that gap cannot be discovered from this snapshot.
 #[cfg(windows)]
-pub fn termination_target_is_protected(pid: u32) -> bool {
-	use std::collections::{HashMap, HashSet};
+pub fn protected_ancestor_pids() -> Option<std::collections::HashSet<u32>> {
+	use std::collections::HashMap;
 	use windows_sys::Win32::{
 		Foundation::{CloseHandle, INVALID_HANDLE_VALUE},
 		System::Diagnostics::ToolHelp::{
@@ -258,17 +260,10 @@ pub fn termination_target_is_protected(pid: u32) -> bool {
 			TH32CS_SNAPPROCESS,
 		},
 	};
-	let refuse = || {
-		tracing::warn!(pid, "refusing termination of self/ancestor or unverified target");
-		true
-	};
-	if pid == 0 || pid == std::process::id() {
-		return refuse();
-	}
 	// SAFETY: snapshot creation has no pointer arguments.
 	let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
 	if snapshot == INVALID_HANDLE_VALUE {
-		return refuse();
+		return None;
 	}
 	// SAFETY: PROCESSENTRY32W is plain Win32 data; dwSize is set before use.
 	let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
@@ -283,22 +278,61 @@ pub fn termination_target_is_protected(pid: u32) -> bool {
 	}
 	// SAFETY: close the snapshot once after enumeration.
 	unsafe { CloseHandle(snapshot) };
-	if !parents.contains_key(&std::process::id()) {
-		return refuse();
+	ancestors_from_snapshot(std::process::id(), &parents)
+}
+
+#[cfg(windows)]
+fn ancestors_from_snapshot(
+	host: u32,
+	parents: &std::collections::HashMap<u32, u32>,
+) -> Option<std::collections::HashSet<u32>> {
+	if !parents.contains_key(&host) {
+		return None;
 	}
-	let mut cursor = std::process::id();
-	let mut seen = HashSet::new();
-	while cursor != 0 {
-		if cursor == pid || !seen.insert(cursor) {
-			return refuse();
-		}
+	let mut cursor = host;
+	let mut seen = std::collections::HashSet::new();
+	while cursor != 0 && seen.insert(cursor) {
 		let Some(parent) = parents.get(&cursor) else {
-			// A missing ancestor has exited; it cannot receive a signal.
-			return false;
+			break;
 		};
 		cursor = *parent;
 	}
-	false
+	Some(seen)
+}
+
+#[cfg(windows)]
+fn termination_target_is_protected(pid: u32) -> bool {
+	let refused = pid == 0
+		|| protected_ancestor_pids().is_none_or(|ancestors| ancestors.contains(&pid));
+	if refused {
+		tracing::warn!(pid, "refusing termination of self/ancestor or unverified target");
+	}
+	refused
+}
+
+#[cfg(all(test, windows))]
+mod ancestry_tests {
+	use super::ancestors_from_snapshot;
+	use std::collections::{HashMap, HashSet};
+
+	#[test]
+	fn absent_host_refuses_snapshot() {
+		assert!(ancestors_from_snapshot(42, &HashMap::new()).is_none());
+	}
+
+	#[test]
+	fn exited_parent_ends_chain_without_blocking_unrelated_children() {
+		let ancestors = ancestors_from_snapshot(42, &HashMap::from([(42, 41), (43, 42)]));
+		assert_eq!(ancestors, Some(HashSet::from([42, 41])));
+	}
+
+	#[test]
+	fn ancestry_cycle_is_bounded() {
+		assert_eq!(
+			ancestors_from_snapshot(42, &HashMap::from([(42, 41), (41, 42)])),
+			Some(HashSet::from([42, 41])),
+		);
+	}
 }
 
 fn completion_exit_code(status: &std::process::ExitStatus) -> i32 {

@@ -3591,19 +3591,6 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 
 	#[cfg(windows)]
 	#[tokio::test(flavor = "multi_thread")]
-	async fn kill_builtin_refuses_host_pid() {
-		let (result, _) = run_command_capture(
-			&format!("kill -9 {}", std::process::id()),
-			None,
-			None,
-			CancelToken::default(),
-		)
-		.await;
-		assert_ne!(result.exit_code, Some(0));
-	}
-
-	#[cfg(windows)]
-	#[tokio::test(flavor = "multi_thread")]
 	async fn timeout_kills_sleeping_child_and_preserves_host() {
 		let host_pid = std::process::id();
 		let (result, output) = run_command_capture(

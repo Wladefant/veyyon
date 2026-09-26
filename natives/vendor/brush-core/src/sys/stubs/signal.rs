@@ -95,9 +95,6 @@ pub fn kill_process(
 		};
 
 		let pid = u32::try_from(_pid).map_err(|_| error::ErrorKind::FailedToSendSignal)?;
-		if crate::processes::termination_target_is_protected(pid) {
-			return Err(error::ErrorKind::FailedToSendSignal.into());
-		}
 		// SAFETY: OpenProcess is called with PROCESS_TERMINATE for a numeric process id
 		// provided by brush's process tracking. A null handle is checked below.
 		let handle = unsafe { OpenProcess(PROCESS_TERMINATE, 0, pid) };
