@@ -28,6 +28,7 @@ import {
 	logger,
 	normalizePathForComparison,
 	postmortem,
+	setInteractiveHost,
 	setProjectDir,
 	VERSION,
 } from "@veyyon/utils";
@@ -1435,6 +1436,7 @@ async function runRootCommandInner(parsed: Args, rawArgs: string[], deps: RunRoo
 			);
 	const autoPrint = pipedInput !== undefined && !parsedArgs.print && parsedArgs.mode === undefined;
 	const isInteractive = !parsedArgs.print && !autoPrint && parsedArgs.mode === undefined;
+	setInteractiveHost(isInteractive);
 	// Interactive mode reads keystrokes from stdin; without a TTY (cron, CI,
 	// `</dev/null`, an empty pipe) the TUI blocks forever with zero output.
 	// Fail fast with the fix instead of hanging.

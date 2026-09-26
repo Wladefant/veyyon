@@ -8,9 +8,12 @@ import {
 	$pickenv,
 	filterChildShellEnv,
 	filterProcessEnv,
+	getDbBusyTimeoutMs,
+	isInteractiveHost,
 	isTerminalHeadless,
 	isValidEnvName,
 	parseEnvFile,
+	setInteractiveHost,
 	setTerminalHeadless,
 } from "@veyyon/utils/env";
 
@@ -29,6 +32,28 @@ function writeTempEnv(content: string): string {
 	fs.writeFileSync(filePath, content);
 	return filePath;
 }
+
+describe("getDbBusyTimeoutMs", () => {
+	it("defaults to the bounded headless timeout", () => {
+		const previous = setInteractiveHost(false);
+		try {
+			expect(isInteractiveHost()).toBe(false);
+			expect(getDbBusyTimeoutMs()).toBe(1000);
+		} finally {
+			setInteractiveHost(previous);
+		}
+	});
+
+	it("keeps the interactive timeout for interactive hosts", () => {
+		const previous = setInteractiveHost(true);
+		try {
+			expect(isInteractiveHost()).toBe(true);
+			expect(getDbBusyTimeoutMs()).toBe(5000);
+		} finally {
+			setInteractiveHost(previous);
+		}
+	});
+});
 
 describe("parseEnvFile", () => {
 	it("ignores malformed names and nul-containing values", () => {
