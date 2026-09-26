@@ -8,11 +8,11 @@
  * trusted text insertion, which a framework's tracker counts as a change, the empty value included;
  * an input holding a date, time, colour or range takes its value past the framework's tracker with
  * the `input` and `change` a person's edit fires, and a value it cannot hold is refused with the field
- * left as it was; an element fill cannot fill is refused with the call that can, and one that cannot
- * take focus is refused before anything is typed, so the value never lands in the field that holds
- * focus instead. A line inside an editor is replaced through the editor that holds it. Every way to
- * reach fill (a selector, an aria ref, a handle from `tab.id` or `tab.waitFor`) replaces the value
- * the same way.
+ * left as it was; an element fill cannot fill is refused with the call that can. A selector fill waits
+ * for its field to be visible, as a click does; an element that cannot take focus is refused before
+ * anything is typed, so the value never lands in the field that holds focus instead. A line inside
+ * an editor is replaced through the editor that holds it. Every way to reach fill (a selector, an
+ * aria ref, a handle from `tab.id` or `tab.waitFor`) replaces the value the same way.
  *
  * Driven through the real tool against real headless Chromium. Skipped where Chromium cannot run.
  *
@@ -52,6 +52,8 @@ const PAGE = `<!doctype html><title>fill</title>
 <input id="tracked" value="old">
 <input id="gone" value="kept" hidden>
 <div id="gone-edit" contenteditable hidden>kept</div>
+<div inert><input id="frozen" value="kept"></div>
+<input id="late" hidden>
 <div id="editor" contenteditable><p id="line">first</p><p>second</p></div>
 <input id="when" type="date">
 <script>
@@ -217,25 +219,39 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("tab.fill", () => {
 	it("refuses an element that cannot take focus, and the field holding focus keeps its value", async () => {
 		await fresh();
 		const refusals = {
-			input: await failureOf(
-				'await tab.evaluate(() => document.getElementById("text").focus()); await tab.fill("#gone", "stray");',
+			// Visible but inert: the selector's wait for visibility passes, and focus does not move.
+			inert: await failureOf(
+				'await tab.evaluate(() => document.getElementById("text").focus()); await tab.fill("#frozen", "stray");',
 			),
+			// Hidden, reached through a handle, which is filled as it is rather than waited for.
+			hidden: await failureOf('await (await tab.waitFor("#gone")).fill("stray");'),
 			// With nothing focused the page's body is active, and it holds every element: it is not an editor.
 			editor: await failureOf(
-				'await tab.evaluate(() => document.activeElement.blur()); await tab.fill("#gone-edit", "stray");',
+				'await tab.evaluate(() => document.activeElement.blur()); await (await tab.waitFor("#gone-edit")).fill("stray");',
 			),
 		};
+		const reason = (failure: string): string => (failure.match(/fill: [^\n]*/) ?? [failure])[0];
 		expect({
-			input: (refusals.input.match(/fill: [^\n]*/) ?? [refusals.input])[0],
-			editor: (refusals.editor.match(/fill: [^\n]*/) ?? [refusals.editor])[0],
+			inert: reason(refusals.inert),
+			hidden: reason(refusals.hidden),
+			editor: reason(refusals.editor),
 		}).toEqual({
-			input: "fill: the <input> cannot take focus: it is hidden, inert or not rendered",
+			inert: "fill: the <input> cannot take focus: it is hidden, inert or not rendered",
+			hidden: "fill: the <input> cannot take focus: it is hidden, inert or not rendered",
 			editor: "fill: the <div> cannot take focus: it is hidden, inert or not rendered",
 		});
 		const values = await run(
-			'return { text: await tab.evaluate(() => document.getElementById("text").value), gone: await tab.evaluate(() => document.getElementById("gone").value), goneEdit: await tab.evaluate(() => document.getElementById("gone-edit").textContent) };',
+			'return { text: await tab.evaluate(() => document.getElementById("text").value), frozen: await tab.evaluate(() => document.getElementById("frozen").value), gone: await tab.evaluate(() => document.getElementById("gone").value), goneEdit: await tab.evaluate(() => document.getElementById("gone-edit").textContent) };',
 		);
-		expect(JSON.parse(values)).toEqual({ text: "old", gone: "kept", goneEdit: "kept" });
+		expect(JSON.parse(values)).toEqual({ text: "old", frozen: "kept", gone: "kept", goneEdit: "kept" });
+	}, 60_000);
+
+	it("waits for a field that is not visible yet, as a click does", async () => {
+		await fresh();
+		const filled = await run(
+			'await tab.evaluate(() => setTimeout(() => { document.getElementById("late").hidden = false; }, 500)); await tab.fill("#late", "arrived"); return { late: await tab.evaluate(() => document.getElementById("late").value) };',
+		);
+		expect(JSON.parse(filled)).toEqual({ late: "arrived" });
 	}, 60_000);
 
 	it("replaces one line of an editor through the editor that holds it", async () => {

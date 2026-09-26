@@ -141,7 +141,7 @@ The tool returns one result per call; no streaming partial output is emitted fro
    - `tab.extract(format = "markdown")`
    - `tab.click(selector)`
    - `tab.type(selector, text)`
-   - `tab.fill(selector, value)`: focuses and selects the contents of an `<input>`, `<textarea>` or contenteditable element and replaces them with one `Input.insertText`, which deletes the selection for an empty value, so frameworks see a trusted `input`; date, time, colour and range inputs are assigned the value from puppeteer's isolated world, which a framework's value tracker on the element does not reach, followed by `input` and `change`, and keep their value when they cannot hold the new one; other elements are refused.
+   - `tab.fill(selector, value)`: waits for a selector's element to be visible, then focuses and selects the contents of an `<input>`, `<textarea>` or contenteditable element and replaces them with one `Input.insertText`, which deletes the selection for an empty value, so frameworks see a trusted `input`; date, time, colour and range inputs are assigned the value from puppeteer's isolated world, which a framework's value tracker on the element does not reach, followed by `input` and `change`, and keep their value when they cannot hold the new one; other elements are refused.
    - `tab.press(key, { selector? })`
    - `tab.scroll(deltaX, deltaY)`
    - `tab.drag(from, to)`

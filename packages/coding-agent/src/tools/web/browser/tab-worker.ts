@@ -1387,7 +1387,9 @@ export class WorkerCore {
 					`tab.fill(${JSON.stringify(selector)})`,
 					actionOpMs,
 					async sig => {
-						const handle = await this.#resolveActionHandle(selector, actionOpMs, sig);
+						// Visible before it is filled, as a click waits: a field that is still animating in is waited
+						// for rather than refused for not taking focus.
+						const handle = await this.#resolveActionHandle(selector, actionOpMs, sig, { visible: true });
 						try {
 							await fillViaHandle(handle, value, sig);
 						} finally {
@@ -1833,12 +1835,19 @@ export class WorkerCore {
 	/**
 	 * Resolve a selector to an ElementHandle for handle-based actions. An
 	 * `aria-ref=eN` selector resolves against the latest ariaSnapshot's refs
-	 * (main world); anything else goes through the normal locator wait.
+	 * (main world); anything else goes through the normal locator wait, which
+	 * also waits for the element to be visible when `visible` is set.
 	 */
-	async #resolveActionHandle(selector: string, timeoutMs: number, sig: AbortSignal): Promise<ElementHandle> {
+	async #resolveActionHandle(
+		selector: string,
+		timeoutMs: number,
+		sig: AbortSignal,
+		opts?: { visible?: boolean },
+	): Promise<ElementHandle> {
 		if (parseAriaRefSelector(selector) !== null) return this.#resolveAriaRef(selector);
+		const locator = this.#requirePage().locator(normalizeSelector(selector)).setTimeout(timeoutMs);
 		return (await untilAborted(sig, () =>
-			this.#requirePage().locator(normalizeSelector(selector)).setTimeout(timeoutMs).waitHandle({ signal: sig }),
+			(opts?.visible ? locator.setVisibility("visible") : locator).waitHandle({ signal: sig }),
 		)) as ElementHandle;
 	}
 	#clearElementCache(): void {
