@@ -21,6 +21,7 @@
 
 ### Changed
 
+- A rebuilt transcript's highlight prefetch holds each source until every card that draws it has read it, including sources the 256-entry highlight cache held when the prefetch ran, instead of dropping it for that cache on its first read, so a command run again or a rebuild after an earlier one no longer re-highlights evicted sources one at a time; a 13,470-entry transcript draws its first frame with 0 instead of 284 such highlights (512 on later rebuilds), from 214.5 ms to 200.2 ms.
 - A session reads its persisted MCP tool selection at construction and on each MCP tool refresh from the one entry that records it instead of rebuilding, deobfuscating and argot-expanding the branch's whole message list, cutting `createAgentSession` on a 26,806-entry resume from 40.2 ms to 35.4 ms.
 - A resumed read result numbers its card rows by scanning the result text in place instead of slicing and regex-matching each row, cutting `SessionManager.open` on a 76 MB session from 179.9 ms to 143.9 ms with identical cards across 400,000 generated result texts.
 - The CLI configures ArkType to validate by interpreted traversal instead of compiling a validator for every schema, cutting a compiled launch that opens a session from 372 ms to 316 ms and its heap by 11 MiB; a tool-argument rejection of a described closed set now reports the field's description followed by `(accepted: …)` instead of ArkType's list of the members.
@@ -135,6 +136,8 @@
 - `replaceTabs` returns a line with no tab without running the replacement, cutting 1.83M transcript lines from 55.2 ms to 40.6 ms.
 - `latexToUnicode` dispatches a command through one name-keyed table and scans command names by character code, rendering a 12-formula corpus in 11.4 µs instead of 24.2 µs with 305,251 differential cases byte-identical.
 - `visibleWidth` counts a row of printable ASCII, tabs and SGR sequences in its own scan instead of the escape-stripping measure, cutting a styled prose row from 299 ns to 62 ns and a colored 13,362-entry transcript render from 288 ms to 270 ms with identical widths.
+- `visibleWidth` also counts one-cell characters past ASCII (gutter bars, box drawing, ellipses, arrows, Latin-1) in its own scan, cutting a gutter row from 242 ns to 57 ns and a 13,470-entry transcript render from 268 ms to 239 ms with identical widths.
+- `reopenBackgroundAfterResets` reads a row once instead of three times, re-opening an output block's ground in 40 ns instead of 102 ns on a highlighted row and 70 ns instead of 214 ns on a row with resets, and inserts a ground that is itself a reset once after each reset instead of twice.
 
 ### Removed
 
