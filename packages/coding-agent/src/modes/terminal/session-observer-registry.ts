@@ -1,5 +1,6 @@
 // `../../task/types`, the module that DECLARES these, not the `../../task` barrel that re-exports them: the
 // barrel is the whole task subsystem, 1,406 modules, and this file subscribes to two channels by name.
+import type { AgentRef, AgentStatus } from "../../registry/agent-registry";
 import type { AgentLifecyclePayload, AgentProgress, AgentProgressPayload } from "../../task/types";
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } from "../../task/types";
 import type { EventBus } from "../../utils/event-bus";
@@ -43,6 +44,8 @@ export class SessionObserverRegistry {
 	#sortOrderById = new Map<string, number>();
 	#parentSortOrderById = new Map<string, number>();
 	#nextSortOrder = 0;
+	/** The last registry status seen per agent id, so {@link mirrorAgentStatus} acts on transitions only. */
+	#registryStatusById = new Map<string, AgentStatus>();
 
 	/** Add a change listener. Returns unsubscribe function. */
 	onChange(cb: (kind: SessionObserverChangeKind) => void): () => void {
@@ -143,6 +146,37 @@ export class SessionObserverRegistry {
 		return count;
 	}
 
+	/**
+	 * Follow a spawn's registry status after its own run. The executor reports a spawn's first run
+	 * and a `task` follow-up on the event bus, but a turn woken any other way, such as an IRC
+	 * message to an idle or parked agent, reports only to the registry: the roster counted it as
+	 * running while the Agents block had no row for it.
+	 *
+	 * Only transitions act, so an event that repeats a status (an approval prompt, a rescope) and
+	 * the first status seen for an id change nothing. Entering `running` lists the spawn as a
+	 * detached run, because no parent turn blocks on a woken agent; leaving `running` settles a row
+	 * still marked active. A failed or aborted run reported on the bus is never overwritten. Only
+	 * spawns this bus reported are followed, so another session's agents stay out.
+	 */
+	mirrorAgentStatus(ref: Pick<AgentRef, "id" | "status">): void {
+		const previous = this.#registryStatusById.get(ref.id);
+		this.#registryStatusById.set(ref.id, ref.status);
+		if (previous === undefined || previous === ref.status) return;
+		const session = this.#sessions.get(ref.id);
+		if (session?.kind !== "spawn") return;
+		if (ref.status === "running") {
+			if (session.status === "active" && session.detached === true) return;
+			session.status = "active";
+			session.detached = true;
+		} else if (previous === "running" && session.status === "active") {
+			session.status = ref.status === "aborted" ? "aborted" : "completed";
+		} else {
+			return;
+		}
+		session.lastUpdate = Date.now();
+		this.#notifyListeners("lifecycle");
+	}
+
 	/** Clear all tracked sessions (e.g. on session switch). Keeps EventBus subscriptions and listeners. */
 	resetSessions(): void {
 		this.#sessions.clear();
@@ -158,6 +192,7 @@ export class SessionObserverRegistry {
 		this.#sessions.clear();
 		this.#sortOrderById.clear();
 		this.#parentSortOrderById.clear();
+		this.#registryStatusById.clear();
 		this.#nextSortOrder = 0;
 		this.#listeners.clear();
 	}
