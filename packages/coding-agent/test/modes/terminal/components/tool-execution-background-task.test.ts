@@ -2,7 +2,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { AgentProgress, SingleResult, TaskToolDetails } from "@veyyon/coding-agent/task/types";
-import { initTheme } from "@veyyon/coding-agent/theme/theme";
+import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import type { TUI } from "@veyyon/tui";
 import { createToolExecution } from "../../../helpers/tool-execution";
 
@@ -138,6 +138,32 @@ describe("ToolExecutionComponent detached task freeze", () => {
 		component.updateResult(finalSnapshot("found it in src/auth.ts"), false);
 		const final = stripVTControlCharacters(component.render(100).join("\n"));
 		expect(final).toContain("found it in src/auth.ts");
+	});
+
+	// The card draws the freeze it recorded, not only stops redrawing: a running row settles from the
+	// accent to the dim tone the moment the card leaves the live region, on the frame after the
+	// snapshot that saw it leave and without waiting for a result.
+	it("draws its running rows dim once it has frozen", () => {
+		vi.useFakeTimers();
+		let live = true;
+		const { component } = makeComponent(() => live);
+		const description = "scouting the auth flow";
+		component.updateResult(asyncSnapshot(description), true);
+		const liveFrame = component.render(100).join("\n");
+
+		live = false;
+		component.updateResult(asyncSnapshot(description), true);
+		const frozenFrame = component.render(100).join("\n");
+		expect({
+			live: {
+				accent: liveFrame.includes(theme.fg("accent", description)),
+				dim: liveFrame.includes(theme.fg("dim", description)),
+			},
+			frozen: {
+				accent: frozenFrame.includes(theme.fg("accent", description)),
+				dim: frozenFrame.includes(theme.fg("dim", description)),
+			},
+		}).toEqual({ live: { accent: true, dim: false }, frozen: { accent: false, dim: true } });
 	});
 
 	// A card rebuilt from a saved session is appended while it is the transcript's
