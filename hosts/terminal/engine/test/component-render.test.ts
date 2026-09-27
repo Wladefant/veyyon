@@ -716,7 +716,8 @@ describe("TUI.requestDirectWrite", () => {
 			await scheduler.drain(term);
 
 			expect(visible(term)).toEqual(["vis0", "vis1", "spin-1", "tail"]);
-			expect(term.getCursor()).toEqual({ row: 2, col: 6 });
+			// Commit 0d223e8 ends every rewritten row at column zero on ConPTY
+			expect(term.getCursor()).toEqual({ row: 2, col: 0 });
 			expect(tui.renders).toBe(rendersBeforeWrite);
 		} finally {
 			tui.stop();

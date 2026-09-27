@@ -268,5 +268,3 @@ Throttled/debounced paths:
 - Editor autocomplete updates (inside `Editor`) use debounce timers, reducing recompute churn during typing.
 
 The runtime therefore mixes event-driven state transitions with bounded render cadence to keep interactivity responsive without repaint storms.
-
-*Verified against `504c88b39f` on 2026-09-11.*

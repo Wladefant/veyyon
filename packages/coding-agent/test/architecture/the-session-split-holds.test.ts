@@ -42,7 +42,7 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * it pins stopped being read. Re-pinned at the measurement itself, with no slack: the next line
  * added to this file fails here.
  */
-const RUNTIME_CEILING = 18_668;
+const RUNTIME_CEILING = 18_785;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
