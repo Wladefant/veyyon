@@ -16174,7 +16174,7 @@ export class AgentSession {
 		const attempt = this.#retryAttempt;
 		this.#retryAttempt = 0;
 		const localError = error instanceof Error ? error.message : String(error);
-		await this.#persistRetryLifecycleErrorMessage(message);
+		await this.#persistTerminalEmptyErrorTurn(message);
 		await this.#emitSessionEvent({
 			type: "auto_retry_end",
 			success: false,
