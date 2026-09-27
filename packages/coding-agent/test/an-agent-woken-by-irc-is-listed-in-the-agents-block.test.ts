@@ -16,9 +16,16 @@
  * (such as IRC wakes, out-of-band resumptions, and registry status changes) desynchronizing
  * from the terminal observer registry and the anchored HUD block.
  *
+ * A wake carries no outcome of its own: settling a woken row must restore what the bus reported
+ * (or `aborted` when the registry aborts it), never manufacture `completed`, which auto-closed a
+ * todo matching a failed run. And a row the bus still reports as active is the bus's run: a turn
+ * boundary inside it neither lists a sync spawn in the block nor settles it.
+ *
  * THE GAP:
  * This test calls `AgentRegistry.global().setStatus` and `setPendingApproval` rather than
- * running a full live multi-turn IRC message delivery turn through the LLM client.
+ * running a full live multi-turn IRC message delivery turn through the LLM client. The
+ * unsuccessful outcomes are listed by hand (`failed`, `aborted`), since a type union cannot be
+ * swept at run time; the registry statuses are swept from `AGENT_STATUSES`.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
@@ -27,6 +34,7 @@ import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
+import { SessionObserverRegistry } from "@veyyon/coding-agent/modes/terminal/session-observer-registry";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
 import { AGENT_STATUSES, AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -371,5 +379,24 @@ describe("an agent woken by IRC is listed in the Agents block while it runs", ()
 		// A sync spawn is drawn by its own tool block, never by the detached Agents block.
 		expect(laneRow(hudText(), id, description)).toBe(false);
 		expect(todoStatus(description)).toBe("pending");
+	});
+});
+
+describe("a woken agent's row after the wake", () => {
+	it("settles aborted when the registry aborts the woken turn of a completed agent", () => {
+		const bus = new EventBus();
+		const observer = new SessionObserverRegistry();
+		observer.subscribeToEventBus(bus);
+		const id = "WokenThenAborted";
+		bus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, makeLifecycle(id, 0, "Woken then aborted", "started", true));
+		observer.mirrorAgentStatus({ id, status: "running" });
+		bus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, makeLifecycle(id, 0, "Woken then aborted", "completed", true));
+		observer.mirrorAgentStatus({ id, status: "idle" });
+
+		observer.mirrorAgentStatus({ id, status: "running" });
+		expect(observer.getSessions().find(session => session.id === id)?.status).toBe("active");
+		observer.mirrorAgentStatus({ id, status: "aborted" });
+		expect(observer.getSessions().find(session => session.id === id)?.status).toBe("aborted");
+		observer.dispose();
 	});
 });
