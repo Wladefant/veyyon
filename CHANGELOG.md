@@ -20,6 +20,7 @@
 
 ### Changed
 
+- The `lsp` tool runs a file-bound action through one method that starts the server, opens the file and resolves the cursor, then one function per action (location lookups, references, hover, code actions, document symbols, rename, reload), instead of one 388-line method; no user-visible change.
 - The composer's submit runs its extension input handlers, collab guest routing, shell shortcuts, steering prompt and auto-title in single-purpose methods, and the streaming and between-turns paths share one steering prompt with draft restore instead of two copies; no user-visible change.
 - The `bash` tool runs a call's preparation, interception check, internal URL expansion, working directory resolution, spawn admission and its background, managed, client-terminal and local runs in single-purpose methods instead of one 480-line `execute`; a trivial command and a 20,000-line command run in unchanged time.
 - A rebuilt transcript highlights the code and diff context of every tool card in one parallel native batch before its first frame instead of one card at a time during it, cutting a resumed session's first frame from 497 ms to 357 ms, and from 14.2 s to 7.5 s with compacted history expanded, with byte-identical rows.
