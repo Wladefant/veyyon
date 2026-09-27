@@ -430,7 +430,6 @@ import {
 	projectIrcDeliveryTelemetry,
 } from "../task/irc-bus";
 import { usesCodexTaskPrompt } from "../task/prompt-policy";
-import { treeSpawnSemaphore } from "../task/spawn-semaphore";
 import { theme } from "../theme/theme-binding";
 import {
 	AUTO_THINKING,
@@ -620,6 +619,7 @@ import {
 	completedRewindFromEntry,
 	isSuccessfulCheckpointEntry,
 } from "./rewind-checkpoint";
+import { MaxConcurrencyRuntime } from "./runtime/max-concurrency-runtime";
 import { ThinkingRuntime } from "./runtime/thinking-runtime";
 import { TodoRuntime } from "./runtime/todo-runtime";
 import { TtsrRuntime } from "./runtime/ttsr-runtime";
@@ -1087,6 +1087,7 @@ export class AgentSession {
 	/** How hard the model thinks and who decided: the session override, the
 	 *  selector pin, the saved default, and `auto`. Owns all thinking state. */
 	#thinking: ThinkingRuntime;
+	#maxConcurrency: MaxConcurrencyRuntime;
 	/** One-shot flag for expected internal plan-mode aborts. Approval actions may
 	 *  abort the post-`resolve` continuation before compaction, execution, or
 	 *  manual refinement. Consumed inside `#handleAgentEvent` for the matching
@@ -2048,6 +2049,7 @@ export class AgentSession {
 			scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
 			promptGeneration: () => this.#promptGeneration,
 		});
+		this.#maxConcurrency = new MaxConcurrencyRuntime(this);
 		this.#secretRuntime = config.secretRuntime;
 		this.#obfuscator = config.secretRuntime?.expansionObfuscator ?? config.obfuscator;
 		this.#leaseSecretRuntime = config.leaseSecretRuntime;
@@ -2174,10 +2176,8 @@ export class AgentSession {
 					?.update(this.settings.get("session.cpuLimitCores"), this.settings.get("session.cpuLimitKill"))
 					.catch(error => logger.warn("CPU limit update failed", { error: errorMessage(error) }));
 			}
-			// Resizes the spawn semaphore so lanes already parked in the queue
-			// start without waiting for an unrelated lane's acquire or release.
 			if (path === "agent.maxConcurrency") {
-				treeSpawnSemaphore(this.sessionManager.getSessionId(), this.settings.get("agent.maxConcurrency"));
+				this.#maxConcurrency.onSettingChanged();
 			}
 			if (!rebuildsThePrompt(path)) return;
 			this.#promptRefresh = this.#promptRefresh
