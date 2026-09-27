@@ -20,6 +20,7 @@
 
 ### Changed
 
+- A session binds its own inline extensions (autoresearch and the custom tool bridge) without the `api.pi` package namespace, so a session with no author extension no longer loads the whole package barrel, cutting `createAgentSession` on a 13,470-message resume from 267 ms to 213 ms and its heap by about 5 MiB; an author's extension still receives `api.pi`.
 - A session checks whether its working directory is a project root once when it discovers the project, and again only when its cwd moves, instead of on every system prompt build, cutting a rebuild in the veyyon checkout from 1.16 ms to 0.23 ms and in a repository holding other projects from 75 ms to 0.25 ms with identical blocks.
 - A system prompt build looks up its inputs, names its tools, fills its template data, checks its eval and file overrides and assembles its blocks in single-purpose steps instead of one 520-line function, and reuses the paragraph split of a context file, rule or appended prompt it already compared instead of re-formatting the text for every comparison, cutting a rebuild with a 48 KB `AGENTS.md` from 1.56 ms to 1.23 ms with identical blocks.
 - `init_experiment` resolves its settings, writes the session, arms the runtime and builds its report in single-purpose steps instead of one 258-line `execute`, and reads the worktree status and path prefix concurrently when checking for harness changes, cutting a clean-branch init from 3.94 ms to 3.39 ms with an identical report, session row and tool set.
