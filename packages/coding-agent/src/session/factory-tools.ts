@@ -15,8 +15,8 @@ import { getExaMcpTools } from "../exa/tools";
 import { discoverCustomToolPaths, loadCustomTools, type ToolPathWithSource } from "../extensibility/custom-tools";
 import type { CustomTool, CustomToolContext, CustomToolSessionEvent } from "../extensibility/custom-tools/types";
 import {
+	type BuiltinExtensionFactory,
 	type ExtensionContext,
-	type ExtensionFactory,
 	type ExtensionRunner,
 	ExtensionToolWrapper,
 	type ToolDefinition,
@@ -108,7 +108,7 @@ export function customToolToDefinition(
 export function createCustomToolsExtension(
 	tools: CustomTool[],
 	obfuscateProviderText: (text: string) => string,
-): ExtensionFactory {
+): BuiltinExtensionFactory {
 	return api => {
 		for (const tool of tools) {
 			api.registerTool(customToolToDefinition(tool, obfuscateProviderText));

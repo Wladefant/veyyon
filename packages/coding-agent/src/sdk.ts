@@ -54,7 +54,7 @@ import {
 import { TtsrManager } from "./export/ttsr";
 import type { CustomTool } from "./extensibility/custom-tools/types";
 import {
-	type ExtensionFactory,
+	type BuiltinExtensionFactory,
 	ExtensionRunner,
 	ExtensionToolWrapper,
 	type ExtensionUIContext,
@@ -723,15 +723,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// re-bind under their own `CustomToolAPI` while skipping the FS scan.
 		toolSession.customToolPaths = sessionCustomTools.paths;
 
-		const inlineExtensions: ExtensionFactory[] = options.extensions ? options.extensions.slice() : [];
-		inlineExtensions.push((await import("./autoresearch")).createAutoresearchExtension);
+		const builtins: BuiltinExtensionFactory[] = [(await import("./autoresearch")).createAutoresearchExtension];
 		if (customTools.length > 0) {
-			inlineExtensions.push(createCustomToolsExtension(customTools, text => secretRuntime.obfuscateText(text)));
+			builtins.push(createCustomToolsExtension(customTools, text => secretRuntime.obfuscateText(text)));
 		}
 
 		const extensions = await loadStartupExtensions(
 			{ options, cwd, agentDir, settings, eventBus, cpuExec, operatorNotices },
-			inlineExtensions,
+			builtins,
 		);
 		const extensionsResult = extensions.result;
 		// Forward the source-path list (NOT the loaded instances) so spawned agents

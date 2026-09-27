@@ -4,7 +4,7 @@ import * as path from "node:path";
 import type { AgentMessage } from "@veyyon/agent-core";
 import { errorMessage, logger, prompt } from "@veyyon/utils";
 import type { AutocompleteItem } from "@veyyon/utils/autocomplete";
-import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
+import type { BuiltinExtensionFactory, ExtensionContext } from "../extensibility/extensions";
 import { autoresearchPrompts } from "../prompts/autoresearch/rows";
 import * as git from "../utils/git";
 import { closeModels, leaveArm } from "./arm-model";
@@ -36,7 +36,7 @@ import { createStartArmTool } from "./tools/start-arm";
 import { createUpdateNotesTool } from "./tools/update-notes";
 import type { AutoresearchRuntime, ExperimentResult, PendingRunSummary } from "./types";
 
-export const createAutoresearchExtension: ExtensionFactory = api => {
+export const createAutoresearchExtension: BuiltinExtensionFactory = api => {
 	const runtimeStore = createRuntimeStore();
 	const dashboard = createDashboardController();
 

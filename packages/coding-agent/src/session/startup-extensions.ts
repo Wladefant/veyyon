@@ -8,11 +8,12 @@ import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
 import { type CustomCommandsLoadResult, loadCustomCommands } from "../extensibility/custom-commands";
 import {
-	type ExtensionFactory,
+	type BuiltinExtensionFactory,
 	type LoadExtensionsResult,
 	loadExtensionFromFactory,
 	loadExtensions,
 } from "../extensibility/extensions";
+import { loadBuiltinExtension } from "../extensibility/extensions/loader";
 import type { EventBus } from "../utils/event-bus";
 import type { SessionCpuExecHooks } from "./cpu-limit";
 import { discoverSessionExtensionPaths, reportExtensionLoadFailures } from "./factory-extensions";
@@ -27,6 +28,7 @@ export interface StartupExtensionsInput {
 		| "preloadedNamedExtensionPaths"
 		| "additionalExtensionPaths"
 		| "disableExtensionDiscovery"
+		| "extensions"
 	>;
 	cwd: string;
 	agentDir: string;
@@ -46,7 +48,8 @@ export interface StartupExtensions {
 }
 
 /**
- * Load a session's extensions, then append `inlineFactories` bound to this session.
+ * Load a session's extensions, then append the caller's inline `options.extensions` and the
+ * product's `builtinFactories`, each bound to this session.
  *
  * Three sources, in order of preference. `preloadedExtensions` (the CLI) reuses instances the
  * caller loaded, shallow-cloning the list so the inline appends cannot mutate the caller's array;
@@ -58,10 +61,13 @@ export interface StartupExtensions {
  * The trust check reads the session's profile, and a path the operator named is the operator's
  * own even inside the project. Load failures and withheld project extensions are reported on the
  * operator channel, including those of a preloaded result: this session is the one with a surface.
+ *
+ * Only an author's factory is handed `api.pi`, the package barrel. A session with no author
+ * extensions binds the builtin factories without it and never loads the barrel.
  */
 export async function loadStartupExtensions(
 	input: StartupExtensionsInput,
-	inlineFactories: readonly ExtensionFactory[],
+	builtinFactories: readonly BuiltinExtensionFactory[],
 ): Promise<StartupExtensions> {
 	const { options, cwd, eventBus, cpuExec } = input;
 	const namedPaths = [
@@ -93,7 +99,8 @@ export async function loadStartupExtensions(
 	}
 	reportExtensionLoadFailures(result, input.operatorNotices);
 
-	for (const [index, factory] of inlineFactories.entries()) {
+	const authorFactories = options.extensions ?? [];
+	for (const [index, factory] of authorFactories.entries()) {
 		result.extensions.push(
 			await loadExtensionFromFactory(
 				factory,
@@ -101,6 +108,19 @@ export async function loadStartupExtensions(
 				eventBus,
 				result.runtime,
 				`<inline-${index}>`,
+				cpuExec.adoptPid,
+				cpuExec.gate,
+			),
+		);
+	}
+	for (const [index, factory] of builtinFactories.entries()) {
+		result.extensions.push(
+			await loadBuiltinExtension(
+				factory,
+				cwd,
+				eventBus,
+				result.runtime,
+				`<inline-${authorFactories.length + index}>`,
 				cpuExec.adoptPid,
 				cpuExec.gate,
 			),
