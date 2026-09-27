@@ -18,9 +18,11 @@
 - The OpenAI Codex stream routes each event through one switch to a per-event handler instead of a 210-line branch chain; decode time of a 10,600-event stream is unchanged.
 - The stream idle watchdog waits on one promise per stalled read that the source, the deadline timer or the abort resolves, instead of racing long-lived timeout and abort promises every item, cutting its per-event overhead on a 200,000-event stream from about 320 ns to 230 ns (wrapped iteration 74 ms to 56 ms) with identical outcomes across 2,159 scripted stream schedules.
 - An OpenAI Codex turn no longer deep-copies its whole request body after the response arrives: SSE turns hold the body as sent and WebSocket turns adopt the copy taken when the frame was built as the chain baseline, cutting the time from response to finished turn on a 27 MiB context from 48.7 to 0.8 ms over SSE and 58.2 to 0.4 ms over WebSocket.
+- The auth gateway's request schemas build in a scope that compiles their validators whatever the process's ArkType configuration, so the jitless CLI validates a 751-message chat-completions request in 42 µs instead of 2.1 ms.
 
 ### Fixed
 
+- A tool-argument rejection bounds each issue line to 256 characters before appending the field's accepted values, so an oversized rejected value no longer cuts the legal values out of the failure.
 - A Cursor turn whose remote agent stops making progress now ends with "Cursor made no progress for Ns" at the 30-minute ceiling instead of hanging indefinitely, because Cursor's ten-second server heartbeat no longer counts as progress.
 - A Cursor turn held by a local tool that never returns now ends when its failure or an abort arrives instead of waiting on the tool forever.
 - Fixed every Cursor exec-channel tool call being stored twice in the assistant message, which left an unanswered copy of each call that session resume reported as pending.
