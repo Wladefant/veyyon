@@ -15,6 +15,7 @@
 import { describe, expect, it } from "bun:test";
 import { executePythonWithKernel } from "@veyyon/coding-agent/eval/py/executor";
 import { DEFAULT_MAX_BYTES } from "@veyyon/coding-agent/session/streaming-output";
+import { resolveOutputSinkHeadBytes } from "@veyyon/coding-agent/tools/core/output-meta";
 // The code under test opens `AgentStorage`, which resolves `agent.db` under the ACTIVE
 // PROFILE's agent dir, so without this the suite writes into the developer's real
 // `~/.veyyon/profiles/<profile>/agent` and the real-data tripwire fails every test.
@@ -136,16 +137,21 @@ describe("executePythonWithKernel timeout annotation", () => {
 
 describe("executePythonWithKernel output handling", () => {
 	/** Output is capped, and the caller is told both that it was capped and how much there
-	 *  really was. Silently dropping the tail would make a truncated result look complete. */
+	 *  really was. Silently dropping the tail would make a truncated result look complete.
+	 *  Many short lines, so the byte windows truncate rather than the per-line column cap:
+	 *  the sink keeps a head window and a tail window and elides the middle, so the kept
+	 *  input lines are bounded by the two windows together, not by the tail alone. */
 	it("truncates oversized output and reports the real total", async () => {
-		const largeOutput = "a".repeat(DEFAULT_MAX_BYTES + 128);
+		const largeOutput = "a\n".repeat(DEFAULT_MAX_BYTES);
 		const kernel = new FakeKernel(OK, options => options?.onChunk?.(largeOutput));
 
 		const result = await executePythonWithKernel(kernel, "print('hi')");
 
 		expect(result.truncated).toBe(true);
-		expect(result.outputBytes).toBeLessThanOrEqual(DEFAULT_MAX_BYTES);
 		expect(result.totalBytes).toBe(largeOutput.length);
+		const keptInputBytes = result.output.split("\n").filter(line => line === "a").length * "a\n".length;
+		expect(keptInputBytes).toBeGreaterThan(0);
+		expect(keptInputBytes).toBeLessThanOrEqual(DEFAULT_MAX_BYTES + resolveOutputSinkHeadBytes(undefined));
 		expect(result.output.length).toBeLessThan(largeOutput.length);
 	});
 

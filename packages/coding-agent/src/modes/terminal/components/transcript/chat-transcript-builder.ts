@@ -24,6 +24,7 @@ import {
 	toUserMessageView,
 } from "../../../../presentation/transcript-builder";
 import type { CustomMessage } from "../../../../session/messages";
+import { type HighlightRequest, prefetchHighlights } from "../../../../theme/highlight";
 import { theme } from "../../../../theme/theme";
 import { decodeStreamedToolArgs, streamingStringKeysForTool } from "../../../../tools/core/streamed-tool-args";
 import { isLiveBackgroundTask } from "../../utils/async-tool-state";
@@ -434,14 +435,14 @@ export class ChatTranscriptBuilder {
 			case "bashExecution": {
 				const component = new BashExecutionComponent(message.command, this.deps.ui, message.excludeFromContext);
 				if (message.output) component.appendOutput(message.output);
-				component.setComplete(message.exitCode, message.cancelled, { truncation: message.meta?.truncation });
+				component.setComplete(message.exitCode, message.cancelled, { meta: message.meta });
 				this.container.addChild(component);
 				return [];
 			}
 			case "pythonExecution": {
 				const component = new EvalExecutionComponent(message.code, this.deps.ui, message.excludeFromContext);
 				if (message.output) component.appendOutput(message.output);
-				component.setComplete(message.exitCode, message.cancelled, { truncation: message.meta?.truncation });
+				component.setComplete(message.exitCode, message.cancelled, { meta: message.meta });
 				this.container.addChild(component);
 				return [];
 			}
@@ -742,6 +743,20 @@ export class ChatTranscriptBuilder {
 				this.#pendingTools.delete(toolCallId);
 			}
 		}
+		this.#prefetchHighlights();
 		this.deps.requestRender();
+	}
+
+	/**
+	 * Highlight every source the rebuilt tool cards draw in one batch before the frame that draws them.
+	 * The frame draws every card, and each card otherwise highlights its sources one after another on
+	 * the render thread; the batch spreads them across threads.
+	 */
+	#prefetchHighlights(): void {
+		const requests: HighlightRequest[] = [];
+		for (const child of this.container.children) {
+			if (child instanceof ToolExecutionComponent) child.highlightRequests(requests);
+		}
+		prefetchHighlights(requests);
 	}
 }

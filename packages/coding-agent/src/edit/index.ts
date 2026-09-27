@@ -7,7 +7,7 @@ import { errorMessage, isCancellation, prompt } from "@veyyon/utils";
 import { createLspWritethrough, flushLspWritethroughBatch, type WritethroughCallback, writethroughNoop } from "../lsp";
 import { DeferredDiagnostics } from "../lsp/deferred-diagnostics";
 import { getDiagnosticsLedger } from "../lsp/diagnostics-ledger";
-import { PROMPTS } from "../prompts/registry";
+import { toolsPrompts } from "../prompts/tools/rows";
 import { budgetedFileCommit, sessionBudgetLimits } from "../session/cpu-limit";
 import type { ToolSession } from "../tools";
 import { abortedPartway } from "../tools/core/aborted-partway";
@@ -630,7 +630,7 @@ export class EditTool implements AgentTool<TInput, EditToolDetails> {
 	#getModeDefinition(): EditModeDefinition {
 		return {
 			patch: {
-				description: () => prompt.render(PROMPTS["tools/patch"].text),
+				description: () => prompt.render(toolsPrompts["tools/patch"].text),
 				parameters: patchEditSchema,
 				examples: [
 					{
@@ -694,7 +694,7 @@ export class EditTool implements AgentTool<TInput, EditToolDetails> {
 				},
 			},
 			apply_patch: {
-				description: () => prompt.render(PROMPTS["tools/apply-patch"].text),
+				description: () => prompt.render(toolsPrompts["tools/apply-patch"].text),
 				parameters: applyPatchSchema,
 				examples: [
 					{
@@ -755,7 +755,7 @@ export class EditTool implements AgentTool<TInput, EditToolDetails> {
 				},
 			},
 			replace: {
-				description: () => prompt.render(PROMPTS["tools/replace"].text),
+				description: () => prompt.render(toolsPrompts["tools/replace"].text),
 				parameters: replaceEditSchema,
 				execute: (
 					tool: EditTool,

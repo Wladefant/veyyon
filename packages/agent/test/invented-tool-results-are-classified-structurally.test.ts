@@ -143,14 +143,14 @@ describe("invented tool results are classified structurally", () => {
 	 * Inline results at an `emitToolResult` site, each declared by the expression
 	 * that supplies its text.
 	 *
-	 * All three are exonerated rather than tolerated, and for one reason: their text
+	 * All four are exonerated rather than tolerated, and for one reason: their text
 	 * is derived from the actual cause, so two of them are only byte-identical when
 	 * the same thing really did happen twice. That is the property the fixed
 	 * headlines lack, and it is what makes them safe for a consumer to compare. They
 	 * are also correctly classified as refusals: an argument the schema rejected IS
 	 * a verdict on the payload.
 	 *
-	 * A fourth inline site matches nothing here and turns this red, which is the
+	 * A fifth inline site matches nothing here and turns this red, which is the
 	 * point: the untagged placeholder got in as an inline literal nobody had to
 	 * justify.
 	 */
@@ -158,6 +158,7 @@ describe("invented tool results are classified structurally", () => {
 		errorText: "argument repair gave up; the text is the repairer's own reason",
 		"errorMessage(validationError)": "schema validation refused the payload",
 		"errorMessage(transformError)": "the argument transform threw",
+		intentRejection: "the intent label carried a payload; the text states the measured length",
 	};
 
 	it("no tool result is invented inline at an emitToolResult call site without a recorded reason", async () => {

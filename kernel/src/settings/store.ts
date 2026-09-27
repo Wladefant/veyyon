@@ -982,6 +982,7 @@ export class SettingsStore {
 			agentDir: this.#agentDir,
 			inMemory: true,
 		});
+		forked.#configPath = this.#configPath;
 		forked.#activateProcessHooks = false;
 		this.#copyLayersTo(forked);
 		forked.#applyOverrides(overrides);

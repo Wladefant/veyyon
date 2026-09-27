@@ -5,14 +5,21 @@
 //! - comment, keyword, function, variable, string, number, type, operator,
 //!   punctuation, inserted, deleted
 
-use std::{cell::RefCell, collections::HashMap, sync::LazyLock};
+use std::{cell::RefCell, collections::HashMap, os::raw::c_ulong, sync::LazyLock};
 
 use napi_derive::napi;
-use syntect::parsing::{
-	ParseState, Scope, ScopeStack, ScopeStackOp, SyntaxDefinition, SyntaxReference, SyntaxSet,
-};
+use rayon::prelude::*;
+use syntect::parsing::{ParseState, Scope, ScopeStack, ScopeStackOp, SyntaxReference, SyntaxSet};
+use veyyon_uutils_ctx::rayon_global_pool_available;
 
-static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(build_syntax_set);
+/// The syntax set `build.rs` linked from syntect's defaults and the vendored
+/// syntaxes in `src/syntaxes`, as an uncompressed dump.
+static SYNTAX_DUMP: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/syntaxes.packdump"));
+
+static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(|| {
+	syntect::dumps::from_uncompressed_data(SYNTAX_DUMP)
+		.expect("build.rs dumps the syntax set with the syntect version that loads it")
+});
 static COMPILED_RULES: LazyLock<Vec<(Scope, usize)>> = LazyLock::new(|| {
 	SCOPE_RULES
 		.iter()
@@ -29,30 +36,37 @@ thread_local! {
 	static SCOPE_COLOR_CACHE: RefCell<HashMap<Scope, usize>> = RefCell::new(HashMap::with_capacity(256));
 }
 
-/// Syntaxes bundled in addition to syntect's defaults: syntect ships none of
-/// these, so we vendor their `.sublime-syntax` sources and fold them into the
-/// set.
-const EXTRA_SYNTAXES: &[&str] = &[
-	include_str!("syntaxes/Julia.sublime-syntax"),
-	include_str!("syntaxes/Nix.sublime-syntax"),
-	include_str!("syntaxes/Mermaid.sublime-syntax"),
-];
-
 fn get_syntax_set() -> &'static SyntaxSet {
 	&SYNTAX_SET
 }
 
-/// Load syntect's newline-aware defaults and add the vendored extra syntaxes.
-/// A vendored syntax that fails to parse is skipped rather than breaking all
-/// highlighting; the bundled-language tests guard against silent absence.
-fn build_syntax_set() -> SyntaxSet {
-	let mut builder = SyntaxSet::load_defaults_newlines().into_builder();
-	for src in EXTRA_SYNTAXES {
-		if let Ok(def) = SyntaxDefinition::load_from_str(src, true, None) {
-			builder.add(def);
-		}
+/// Oniguruma's retry budget for one match attempt and for one search across
+/// all of its start positions. A match or search that exceeds it fails, and
+/// syntect reads the failure as no match. Oniguruma's defaults are 10,000,000
+/// per attempt and no limit per search. Markdown's table-row and emphasis
+/// patterns repeat a group inside a repeated group, and YAML's implicit-key
+/// lookahead scans to the line end from every start position, so at those
+/// defaults a two-line Markdown source takes up to 77 ms and an 8,000-character
+/// YAML line with a colon in its value 450 ms. At 1,000,000, the backtrack
+/// limit fancy-regex applied to one search, 25,237 sources from session
+/// transcripts, this repository and long-line probes parse to the scopes
+/// fancy-regex produced, in 38% of its time, and the slowest takes 58 ms
+/// against 200 ms.
+const REGEX_RETRY_LIMIT: c_ulong = 1_000_000;
+
+/// Set Oniguruma's process-wide match and search retry limits to
+/// [`REGEX_RETRY_LIMIT`].
+///
+/// The limits are C globals that every match and search reads when it starts,
+/// so they also bound the `find` builtin's `-name` and `-regex` matching. Call
+/// this once from module initialisation, before any thread can start a match.
+pub fn bound_regex_retries() {
+	// SAFETY: each setter writes one C global and has no other effect. The
+	// caller runs before any thread that could read them concurrently exists.
+	unsafe {
+		onig_sys::onig_set_retry_limit_in_match(REGEX_RETRY_LIMIT);
+		onig_sys::onig_set_retry_limit_in_search(REGEX_RETRY_LIMIT);
 	}
-	builder.build()
 }
 
 const SCOPE_RULES: &[(&[&str], usize)] = &[
@@ -234,53 +248,66 @@ fn find_syntax<'a>(ss: &'a SyntaxSet, lang: &str) -> Option<&'a SyntaxReference>
 		.or_else(|| ss.find_syntax_by_token(alias))
 }
 
-/// Highlight code and return ANSI-colored lines.
-///
-/// # Arguments
-/// * `code` - The source code to highlight
-/// * `lang` - Language identifier (e.g., "rust", "typescript", "python")
-/// * `colors` - Theme colors as ANSI escape sequences
-///
-/// # Returns
-/// Highlighted code with ANSI color codes, or the original code if highlighting
-/// fails.
-#[napi]
-pub fn highlight_code(code: String, lang: Option<String>, colors: HighlightColors) -> String {
-	let inserted = colors.inserted.as_deref().unwrap_or("");
-	let deleted = colors.deleted.as_deref().unwrap_or("");
+/// The ANSI colour of each token class, indexed by the class
+/// `scope_to_color_index` returns. An empty entry leaves that class uncoloured.
+type Palette = [String; 11];
 
-	// Color palette as array for quick indexing
-	let palette = [
-		colors.comment.as_str(),     // 0
-		colors.keyword.as_str(),     // 1
-		colors.function.as_str(),    // 2
-		colors.variable.as_str(),    // 3
-		colors.string.as_str(),      // 4
-		colors.number.as_str(),      // 5
-		colors.r#type.as_str(),      // 6
-		colors.operator.as_str(),    // 7
-		colors.punctuation.as_str(), // 8
-		inserted,                    // 9
-		deleted,                     // 10
-	];
+fn palette_of(colors: HighlightColors) -> Palette {
+	[
+		colors.comment,                      // 0
+		colors.keyword,                      // 1
+		colors.function,                     // 2
+		colors.variable,                     // 3
+		colors.string,                       // 4
+		colors.number,                       // 5
+		colors.r#type,                       // 6
+		colors.operator,                     // 7
+		colors.punctuation,                  // 8
+		colors.inserted.unwrap_or_default(), // 9
+		colors.deleted.unwrap_or_default(),  // 10
+	]
+}
 
-	let ss = get_syntax_set();
+/// The syntax for a language name, or plain text when none matches.
+fn syntax_for<'a>(ss: &'a SyntaxSet, lang: Option<&str>) -> &'a SyntaxReference {
+	lang
+		.and_then(|l| find_syntax(ss, l))
+		.unwrap_or_else(|| ss.find_syntax_plain_text())
+}
 
-	// Find syntax for the language
-	let syntax = match &lang {
-		Some(l) => find_syntax(ss, l),
-		None => None,
+/// Append `text` to `out` in the colour the innermost classified scope of
+/// `scope_stack` maps to.
+#[inline]
+fn push_colored(out: &mut String, text: &str, scope_stack: &ScopeStack, palette: &Palette) {
+	let color_idx = scope_to_color_index(scope_stack);
+	match palette.get(color_idx) {
+		Some(color) if !color.is_empty() => {
+			out.push_str(color);
+			out.push_str(text);
+			out.push_str("\x1b[39m");
+		},
+		_ => out.push_str(text),
 	}
-	.unwrap_or_else(|| ss.find_syntax_plain_text());
+}
 
-	let mut parse_state = ParseState::new(syntax);
-	let mut scope_stack = ScopeStack::new();
-	let mut result = String::with_capacity(code.len() * 2);
-
-	for line in syntect::util::LinesWithEndings::from(code.as_str()) {
+/// Highlight the lines of `text` into `out`, starting from and advancing
+/// `parse_state` and `scope_stack`.
+///
+/// Syntect parses each line from the state the line before it left, so the
+/// colours of a line depend on no line after it: highlighting a source in two
+/// runs split at a line end writes the same bytes as highlighting it in one.
+fn highlight_into(
+	text: &str,
+	ss: &SyntaxSet,
+	parse_state: &mut ParseState,
+	scope_stack: &mut ScopeStack,
+	palette: &Palette,
+	out: &mut String,
+) {
+	for line in syntect::util::LinesWithEndings::from(text) {
 		let Ok(ops) = parse_state.parse_line(line, ss) else {
 			// Parse error - append unhighlighted line and continue
-			result.push_str(line);
+			out.push_str(line);
 			continue;
 		};
 
@@ -290,16 +317,7 @@ pub fn highlight_code(code: String, lang: Option<String>, colors: HighlightColor
 
 			// Output text BEFORE this operation using current scope
 			if offset > prev_end {
-				let text = &line[prev_end..offset];
-				let color_idx = scope_to_color_index(&scope_stack);
-
-				if color_idx < palette.len() && !palette[color_idx].is_empty() {
-					result.push_str(palette[color_idx]);
-					result.push_str(text);
-					result.push_str("\x1b[39m");
-				} else {
-					result.push_str(text);
-				}
+				push_colored(out, &line[prev_end..offset], scope_stack, palette);
 			}
 			prev_end = offset;
 
@@ -319,20 +337,122 @@ pub fn highlight_code(code: String, lang: Option<String>, colors: HighlightColor
 
 		// Output remaining text with current scope
 		if prev_end < line.len() {
-			let text = &line[prev_end..];
-			let color_idx = scope_to_color_index(&scope_stack);
+			push_colored(out, &line[prev_end..], scope_stack, palette);
+		}
+	}
+}
 
-			if color_idx < palette.len() && !palette[color_idx].is_empty() {
-				result.push_str(palette[color_idx]);
-				result.push_str(text);
-				result.push_str("\x1b[39m");
-			} else {
-				result.push_str(text);
-			}
+/// Highlight code and return ANSI-colored lines.
+///
+/// # Arguments
+/// * `code` - The source code to highlight
+/// * `lang` - Language identifier (e.g., "rust", "typescript", "python")
+/// * `colors` - Theme colors as ANSI escape sequences
+///
+/// # Returns
+/// Highlighted code with ANSI color codes, or the original code if highlighting
+/// fails.
+#[napi]
+pub fn highlight_code(code: String, lang: Option<String>, colors: HighlightColors) -> String {
+	highlight_source(&code, lang.as_deref(), &palette_of(colors))
+}
+
+/// Highlight one whole source from a fresh parser.
+fn highlight_source(code: &str, lang: Option<&str>, palette: &Palette) -> String {
+	let ss = get_syntax_set();
+	let mut parse_state = ParseState::new(syntax_for(ss, lang));
+	let mut scope_stack = ScopeStack::new();
+	let mut result = String::with_capacity(code.len() * 2);
+	highlight_into(code, ss, &mut parse_state, &mut scope_stack, palette, &mut result);
+	result
+}
+
+/// One source for [`highlight_code_batch`], in the language `highlight_code`
+/// would be given for it.
+#[napi(object)]
+pub struct HighlightSource {
+	pub code: String,
+	pub lang: Option<String>,
+}
+
+/// Highlight many sources at once, each exactly as `highlight_code` would.
+///
+/// Every source is parsed from its own fresh state, so the sources are
+/// independent and are highlighted in parallel on Rayon's global pool when it
+/// is available, and one after another when it is not. The result holds one
+/// string per source, in the order given.
+#[napi]
+pub fn highlight_code_batch(sources: Vec<HighlightSource>, colors: HighlightColors) -> Vec<String> {
+	let palette = palette_of(colors);
+	let highlight =
+		|source: &HighlightSource| highlight_source(&source.code, source.lang.as_deref(), &palette);
+	if rayon_global_pool_available() {
+		sources.par_iter().map(highlight).collect()
+	} else {
+		sources.iter().map(highlight).collect()
+	}
+}
+
+/// A highlighter that keeps its place in one source.
+///
+/// A source that grows at its end, such as a file a tool call is still
+/// streaming, is highlighted once per line: `advance` colours the lines that
+/// arrived and moves the parser past them, and `peek` colours the unfinished
+/// last line without moving it. The concatenated output of every `advance`
+/// followed by one `peek` is byte-identical to `highlightCode` over the whole
+/// source, provided each `advance` ends at a line end.
+#[napi]
+pub struct CodeHighlighter {
+	parse_state: ParseState,
+	scope_stack: ScopeStack,
+	palette:     Palette,
+}
+
+#[napi]
+impl CodeHighlighter {
+	#[napi(constructor)]
+	pub fn new(lang: Option<String>, colors: HighlightColors) -> Self {
+		Self {
+			parse_state: ParseState::new(syntax_for(get_syntax_set(), lang.as_deref())),
+			scope_stack: ScopeStack::new(),
+			palette:     palette_of(colors),
 		}
 	}
 
-	result
+	/// Highlight `text` from where the last `advance` ended and move the parser
+	/// past it. `text` ends at a line end, or the next call continues a line
+	/// the parser already closed.
+	#[napi]
+	pub fn advance(&mut self, text: String) -> String {
+		let mut out = String::with_capacity(text.len() * 2);
+		highlight_into(
+			&text,
+			get_syntax_set(),
+			&mut self.parse_state,
+			&mut self.scope_stack,
+			&self.palette,
+			&mut out,
+		);
+		out
+	}
+
+	/// Highlight `text` from where the last `advance` ended, leaving the parser
+	/// where it was.
+	#[napi]
+	pub fn peek(&self, text: String) -> String {
+		let mut parse_state = self.parse_state.clone();
+		let mut scope_stack = self.scope_stack.clone();
+		let mut out = String::with_capacity(text.len() * 2);
+		highlight_into(
+			&text,
+			get_syntax_set(),
+			&mut parse_state,
+			&mut scope_stack,
+			&self.palette,
+			&mut out,
+		);
+		out
+	}
 }
 
 /// Check if a language is supported for highlighting.
@@ -374,6 +494,92 @@ mod tests {
 			inserted:    None,
 			deleted:     None,
 		}
+	}
+
+	/// Stream `source` one character at a time, advancing over each line as it
+	/// completes and peeking at the unfinished one, and require every prefix to
+	/// come out byte-identical to `highlight_code` over that prefix.
+	fn assert_streams_like_one_shot(lang: &str, source: &str) {
+		let mut stream = CodeHighlighter::new(Some(lang.to_string()), test_colors());
+		let mut advanced = String::new();
+		let mut settled = 0;
+		let ends = source
+			.char_indices()
+			.map(|(index, _)| index)
+			.skip(1)
+			.chain(std::iter::once(source.len()));
+		for end in ends {
+			let prefix = &source[..end];
+			let line_end = prefix.rfind('\n').map_or(0, |index| index + 1);
+			if line_end > settled {
+				advanced.push_str(&stream.advance(prefix[settled..line_end].to_string()));
+				settled = line_end;
+			}
+			let streamed = format!("{advanced}{}", stream.peek(prefix[settled..].to_string()));
+			let one_shot = highlight_code(prefix.to_string(), Some(lang.to_string()), test_colors());
+			assert_eq!(streamed, one_shot, "{lang}: prefix of {end} bytes");
+		}
+	}
+
+	#[test]
+	fn a_streamed_source_is_coloured_as_the_whole_source_is() {
+		// Each source opens a construct on one line and closes it on a later one, so
+		// a stream that dropped the parser state or the scope stack between lines,
+		// or let a peek move either, colours the lines after it differently.
+		assert_streams_like_one_shot(
+			"ts",
+			"/* a block\n   comment */\nconst greeting = `hello\n${name}`;\nfunction f(x: number) \
+			 {\n\treturn x * 2; // done\n}\n",
+		);
+		assert_streams_like_one_shot(
+			"python",
+			"def f():\n    \"\"\"A docstring\n    across lines\"\"\"\n    return 'x'  # tail\n",
+		);
+		assert_streams_like_one_shot(
+			"rust",
+			"/* outer /* inner */\n still */\nlet s = r#\"raw\nline\"#;\nfn main() {}\n",
+		);
+		assert_streams_like_one_shot(
+			"diff",
+			"--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n-old\n+new\n context\n",
+		);
+		assert_streams_like_one_shot(
+			"bash",
+			"cat <<EOF\nnot a $command\nEOF\necho \"multi\nline\" | wc -l\n",
+		);
+	}
+
+	#[test]
+	fn a_batch_colours_each_source_as_highlight_code_does_in_order() {
+		// Sources in several languages, one with no language and one empty, so a batch
+		// that shared a parser across sources, dropped the language of one, or
+		// reordered results differs from the one-shot answer for at least one of
+		// them.
+		let sources = [
+			("/* open\n close */ const x = `a\n${b}`;", Some("ts")),
+			("def f():\n    \"\"\"doc\n    more\"\"\"\n    return 1", Some("python")),
+			("plain words, no language", None),
+			("", Some("rust")),
+			("fn main() { let s = r#\"raw\nline\"#; }", Some("rust")),
+			("cat <<EOF\n$not\nEOF", Some("bash")),
+		];
+		let batch = highlight_code_batch(
+			sources
+				.iter()
+				.map(|(code, lang)| HighlightSource {
+					code: (*code).to_string(),
+					lang: lang.map(str::to_string),
+				})
+				.collect(),
+			test_colors(),
+		);
+		let one_shot: Vec<String> = sources
+			.iter()
+			.map(|(code, lang)| {
+				highlight_code((*code).to_string(), lang.map(str::to_string), test_colors())
+			})
+			.collect();
+		assert_eq!(batch, one_shot);
 	}
 
 	#[test]

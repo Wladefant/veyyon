@@ -13,7 +13,11 @@ import { formatMoreLines } from "@veyyon/utils/format";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
 import { getSymbolTheme } from "../../../../theme/symbol-theme";
 import { theme } from "../../../../theme/theme-binding";
-import { formatTruncationMetaNotice, type TruncationMeta } from "../../../../tools/core/output-meta";
+import {
+	formatColumnTruncatedNotice,
+	formatTruncationMetaNotice,
+	type OutputMeta,
+} from "../../../../tools/core/output-meta";
 import { expandHintSuffix } from "../../utils/key-hint";
 import { truncateToVisualLines } from "./visual-truncate";
 
@@ -133,14 +137,15 @@ export function createCollapsedPreview(previewText: string, previewLines: number
 
 /**
  * Build the post-run status block (hidden-line hint, exit/cancel marker,
- * truncation notice). Returns undefined when there is nothing to display so
+ * truncation and column-cap notices). Returns undefined when there is nothing to display so
  * callers can skip appending a stray Text child.
  */
 export function buildStatusFooter(opts: {
 	status: ExecutionStatus;
 	exitCode: number | undefined;
 	signal?: string | undefined;
-	truncation: TruncationMeta | undefined;
+	/** The run's output metadata: its window truncation and its per-line column cap. */
+	meta: OutputMeta | undefined;
 	hiddenLineCount: number;
 	/**
 	 * Lines dropped from the front of the buffer by {@link capExecutionOutputLines}.
@@ -171,8 +176,12 @@ export function buildStatusFooter(opts: {
 	} else if (opts.status === "error") {
 		parts.push(theme.fg("error", `(exit ${opts.exitCode})`));
 	}
-	if (opts.truncation) {
-		parts.push(theme.fg("warning", formatTruncationMetaNotice(opts.truncation)));
+	if (opts.meta?.truncation) {
+		parts.push(theme.fg("warning", formatTruncationMetaNotice(opts.meta.truncation)));
+	}
+	const columnNotice = opts.meta && formatColumnTruncatedNotice(opts.meta);
+	if (columnNotice) {
+		parts.push(theme.fg("warning", columnNotice));
 	}
 
 	if (parts.length === 0) return undefined;
