@@ -175,7 +175,7 @@ function isToolTier(value: unknown): value is ToolTier {
 	return typeof value === "string" && TIER_VALUES.has(value as ToolTier);
 }
 
-function normalizeDecision(value: unknown): Omit<ResolvedApproval, "policy"> {
+function normalizeDecision(value: unknown): Omit<ResolvedApproval, "policy"> & { deny?: boolean } {
 	if (isToolTier(value)) {
 		return { tier: value, override: false };
 	}
@@ -188,10 +188,12 @@ function normalizeDecision(value: unknown): Omit<ResolvedApproval, "policy"> {
 		// also beat a per-tool allow, and requiring both flags at every call site
 		// is a way to eventually forget one.
 		const critical = record.critical === true;
+		const deny = record.deny === true;
 		return {
 			tier,
-			override: critical || record.override === true,
+			override: critical || record.override === true || deny,
 			...(critical ? { critical: true } : {}),
+			...(deny ? { deny: true } : {}),
 			...(reason ? { reason } : {}),
 		};
 	}
@@ -199,7 +201,7 @@ function normalizeDecision(value: unknown): Omit<ResolvedApproval, "policy"> {
 	return { tier: "exec", override: false };
 }
 
-function getToolDecision(tool: ApprovalSubject, args: unknown): Omit<ResolvedApproval, "policy"> {
+function getToolDecision(tool: ApprovalSubject, args: unknown): Omit<ResolvedApproval, "policy"> & { deny?: boolean } {
 	const approval = tool.approval;
 	const decision: ToolApprovalDecision | undefined = typeof approval === "function" ? approval(args) : approval;
 	return normalizeDecision(decision);
@@ -277,6 +279,14 @@ function resolveApprovalInner(
 	const level = normalizeApprovalMode(mode);
 	const decision = getToolDecision(tool, args);
 	const userPolicy = Object.hasOwn(userConfig, tool.name) ? normalizePolicy(userConfig[tool.name]) : undefined;
+	if (decision.deny) {
+		return {
+			policy: "deny",
+			tier: decision.tier,
+			override: true,
+			reason: decision.reason,
+		};
+	}
 
 	if (level === "yolo") {
 		// A critical decision has a floor: yolo used to return here before ever
