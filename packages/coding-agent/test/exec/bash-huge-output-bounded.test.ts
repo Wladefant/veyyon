@@ -184,7 +184,8 @@ describe("the bound is reported, never silent", () => {
 		const result = await executeBash(HUGE_SINGLE_LINE, { timeout: 60_000 });
 
 		expect(result.cancelled).toBe(false);
-		expect(result.truncated).toBe(true);
+		// Column-cap-only trimming on a single line does not set window truncation (PR #165)
+		expect(result.truncated).toBe(false);
 		expect(result.totalBytes).toBe(HUGE_BYTES);
 		expect(result.outputBytes).toBeLessThan(HUGE_BYTES);
 	}, 90_000);

@@ -14,6 +14,7 @@
 - The renderer decides whether a resize repaints in place by asking the terminal whether its host owns the grid, so a host and the engine agree on one seam instead of re-reading the environment.
 - A user-driven redraw such as a Ctrl+O transcript expand or a display reset replays the whole transcript on a ConPTY host again instead of losing its leading rows to the bulk-paint bound, and the one-shot reset intent is consumed by that render so a later `/resume` or handoff paint stays bounded ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - The engine ends every rewritten row at column zero, so a row that fills the width on a ConPTY host cannot spend its pending wrap on the next cursor move and scroll a live row into native history ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- Fixed duplicate `stdin` event listeners (`end`, `close`, `error`) being registered if `ProcessTerminal.start()` is called repeatedly on an active terminal instance ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 
 ## [1.5.4] - 2026-09-24
 

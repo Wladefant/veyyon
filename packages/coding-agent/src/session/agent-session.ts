@@ -12455,6 +12455,7 @@ export class AgentSession {
 		await this.#waitForSessionMessagePersistence(message);
 		if (!isEmptyErrorTurn(message)) return;
 		if (this.#sessionMessageAlreadyPersisted(message)) return;
+		if (AIError.isContextOverflow(message, this.model?.contextWindow ?? undefined)) return;
 		this.#appendSessionMessage(message);
 	}
 
@@ -16173,7 +16174,7 @@ export class AgentSession {
 		if (this.#retryAttempt === 0) return;
 		const attempt = this.#retryAttempt;
 		this.#retryAttempt = 0;
-		const localError = error instanceof Error ? error.message : String(error);
+		const localError = errorMessage(error);
 		await this.#persistTerminalEmptyErrorTurn(message);
 		await this.#emitSessionEvent({
 			type: "auto_retry_end",
