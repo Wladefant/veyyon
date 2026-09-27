@@ -255,6 +255,11 @@ const SPAWN_SITES: Record<string, SpawnSiteEntry> = {
 		reason:
 			"the task ledger's Python bridge and lock holder are harness bookkeeping; killing the holder on a budget breach would drop the ledger lock mid-claim",
 	},
+	"packages/coding-agent/src/tools/core/polysim-main-guard.ts": {
+		wired: false,
+		reason:
+			"the github tool's push and merge guard asks `gh pr view` for a PR's base branch before the call runs; a harness policy check with its own 5 s timeout, and a budget kill would turn the lookup into a refusal",
+	},
 	"packages/coding-agent/src/subprocess/worker-runtime.ts": {
 		wired: false,
 		reason: "tiny-runtime installer, run once per install rather than per session",
