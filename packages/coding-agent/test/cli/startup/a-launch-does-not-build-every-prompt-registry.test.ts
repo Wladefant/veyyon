@@ -147,11 +147,14 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * that module now, which also keeps `tools/core/polysim-main-guard.ts` and `tools/shell/bash-guard.ts`, the
  * github tool's push and merge guard, off this graph.
  *
+ * 1563 to 1564: `session/runtime/max-concurrency-runtime.ts`, the collaborator `session/agent-session.ts`
+ * now hands the `agent.maxConcurrency` resize to; `task/spawn-semaphore.ts` is reached through it instead.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1563;
+const LAUNCH_REACH_CEILING = 1564;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
