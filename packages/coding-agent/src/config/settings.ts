@@ -376,6 +376,12 @@ class CodingAgentSettingsHooks implements SettingsStoreHooks {
 
 export class Settings extends SettingsStore {
 	readonly #hooks: CodingAgentSettingsHooks;
+	/** The config-file stamp the last {@link reloadConfigIfChanged} read, or `undefined` before the first. */
+	#autoReloadStamp: string | undefined;
+	/** The reload {@link reloadConfigIfChanged} is running, shared by callers that arrive meanwhile. */
+	#pendingAutoReload: Promise<void> | undefined;
+	/** The config-file stamp whose rejected reload was already logged, so a broken file warns once. */
+	#autoReloadWarnedStamp: string | undefined;
 
 	private constructor(options: SettingsOptions = {}) {
 		const hooks = new CodingAgentSettingsHooks();
@@ -482,6 +488,47 @@ export class Settings extends SettingsStore {
 					: {}),
 			},
 		);
+	}
+
+	/**
+	 * Apply config-file edits made since the last call, the way `/reload-config` would, so a
+	 * dispatcher that calls this before it snapshots routing spawns from the file on disk rather
+	 * than from the file as it was at startup.
+	 *
+	 * A digest of each config file decides whether anything is parsed: an equal stamp skips the
+	 * reload. Concurrent callers share one reload. A rejected reload (a malformed file, an invalid
+	 * value, a save in flight) keeps the active routing, does not fail the caller, and is tried
+	 * again on the next call; it is logged once per file state. An in-memory store has no file to
+	 * reload.
+	 */
+	reloadConfigIfChanged(): Promise<void> {
+		this.#pendingAutoReload ??= this.#reloadConfigIfChanged().finally(() => {
+			this.#pendingAutoReload = undefined;
+		});
+		return this.#pendingAutoReload;
+	}
+
+	async #reloadConfigIfChanged(): Promise<void> {
+		const stamp = await this.configSourceStamp();
+		if (stamp === undefined || stamp === this.#autoReloadStamp) return;
+		try {
+			// A save still waiting on its debounce would make the reload refuse; write it first.
+			await this.flush();
+			const result = await this.reloadConfig();
+			// The stamp taken before reading, so an edit that lands during the reload is seen next call.
+			this.#autoReloadStamp = stamp;
+			if (result.changed.length > 0) {
+				logger.debug("Settings: applied config edits before a spawn", {
+					changed: result.changed.map(row => row.path),
+				});
+			}
+		} catch (error) {
+			if (this.#autoReloadWarnedStamp === stamp) return;
+			this.#autoReloadWarnedStamp = stamp;
+			logger.warn("Settings: config file changed but could not be applied; spawns keep the active routing", {
+				error: errorMessage(error),
+			});
+		}
 	}
 
 	// ─────────────────────────────────────────────────────────────────────────

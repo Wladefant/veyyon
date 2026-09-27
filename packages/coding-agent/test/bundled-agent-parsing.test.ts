@@ -22,6 +22,18 @@ describe("bundled agent parsing", () => {
 	});
 
 	/**
+	 * The reviewer pins an explicit spawn allowlist so it can delegate mechanical
+	 * sub-steps to the task agent and reconnaissance to scout, without granting
+	 * unrestricted spawning.
+	 */
+	it("pins the per-agent spawn allowlist for reviewer", () => {
+		const reviewer = getBundledAgent("reviewer");
+
+		expect(reviewer).toBeDefined();
+		expect(reviewer?.spawns).toEqual(["task", "scout"]);
+	});
+
+	/**
 	 * No bundled agent pins a model.
 	 *
 	 * They used to: the default lane carried `@task`, `scout`/`sonic` carried

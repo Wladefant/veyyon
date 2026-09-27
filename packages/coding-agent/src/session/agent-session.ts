@@ -2047,9 +2047,8 @@ export class AgentSession {
 					?.update(this.settings.get("session.cpuLimitCores"), this.settings.get("session.cpuLimitKill"))
 					.catch(error => logger.warn("CPU limit update failed", { error: errorMessage(error) }));
 			}
-			// The spawn semaphore otherwise learns a new ceiling only on the next
-			// acquire or release, so a raised `/reload-config` or settings value left
-			// lanes already parked in the queue waiting for an unrelated lane to end.
+			// Resizes the spawn semaphore so lanes already parked in the queue
+			// start without waiting for an unrelated lane's acquire or release.
 			if (path === "agent.maxConcurrency") {
 				treeSpawnSemaphore(this.sessionManager.getSessionId(), this.settings.get("agent.maxConcurrency"));
 			}

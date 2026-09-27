@@ -39,6 +39,7 @@ import { inlineBudgetFor, inlineOutputPricing, saveOutputArtifact } from "../cor
 import { foldToolOutputBookkeeping } from "../core/output-fold";
 import type { OutputMeta } from "../core/output-meta";
 import { resolveToCwd } from "../core/path-utils";
+import { checkPolysimMainDenial } from "../core/polysim-main-guard";
 import { DEFAULT_TERMINAL_PREVIEW_LINES, shortenPath } from "../core/render-utils";
 import { ToolAbortError, ToolError } from "../core/tool-errors";
 import { toolResult } from "../core/tool-result";
@@ -184,6 +185,10 @@ export function bashApprovalDecision(
 		}
 	}
 	const judgementEnv = bashJudgementEnv(args);
+	const polysimDenial = checkPolysimMainDenial(command, cwd, judgementEnv);
+	if (polysimDenial) {
+		return { tier: "exec", deny: true, reason: polysimDenial.reason };
+	}
 	const risk =
 		command === "" ? undefined : findCriticalBashRisk(command, undefined, extraProtectedPaths, judgementEnv, cwd);
 	// Same split as the flagged patterns below: `critical` is the floor yolo
@@ -1041,6 +1046,11 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 		const env = normalizeBashEnv(input.env);
 		if (input.async && !this.#asyncEnabled) {
 			throw new ToolError("Async bash execution is disabled. Enable async.enabled to use async mode.");
+		}
+		const effectiveCwd = extracted.cwd ? resolveToCwd(extracted.cwd, this.session.cwd) : this.session.cwd;
+		const polysimDenial = checkPolysimMainDenial(extracted.command, effectiveCwd, env);
+		if (polysimDenial) {
+			throw new ToolError(polysimDenial.reason);
 		}
 		this.#checkInterception(rawCommand, extracted.command, ctx);
 
