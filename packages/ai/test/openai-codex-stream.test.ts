@@ -3150,8 +3150,7 @@ describe("openai-codex streaming", () => {
 			canAppendBeforeRequest: true,
 			promptCacheKey: "ws-delta-session",
 		});
-		expect(stats?.lastTurn?.request.inputJsonBytes).toBeGreaterThan(0);
-		expect(stats?.lastTurn?.request.inputJsonBytes).toBeLessThan(1000);
+		expect(stats?.lastTurn?.request.inputJsonBytes).toBe(Buffer.byteLength(JSON.stringify(sentRequests[1]?.input)));
 		expect(stats?.lastTurn?.usage).toEqual({
 			rawInputTokens: 132278,
 			rawCachedTokens: 124416,
@@ -3167,6 +3166,64 @@ describe("openai-codex streaming", () => {
 			displayedOrchestrationCacheReadTokens: 0,
 			displayedOrchestrationOutputTokens: 0,
 		});
+	});
+
+	it("records an SSE turn's input bytes from the body its hook left", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-sse-diagnostics-");
+		setAgentDir(tempDir.path());
+		const token = createCodexTestToken();
+		const sentBodies: string[] = [];
+		const fetchMock = vi.fn(async (_input: string | URL, init?: RequestInit) => {
+			sentBodies.push(init?.body as string);
+			const events = [
+				{ type: "response.output_text.delta", delta: "hi" },
+				{ type: "response.completed", response: { status: "completed", usage: DEFAULT_USAGE } },
+			];
+			return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		});
+		const model: Model<"openai-codex-responses"> = buildModel({
+			id: "gpt-5.3-codex-spark",
+			name: "GPT-5.3 Codex Spark",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			preferWebsockets: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 128000,
+		});
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		// Non-ASCII, so a character count and a byte count differ.
+		const replacedInput = [{ role: "user", content: [{ type: "input_text", text: "replaced by hook: ünïcödé ✓" }] }];
+		const response = await streamOpenAICodexResponses(
+			model,
+			{
+				systemPrompt: ["You are a helpful assistant."],
+				messages: [{ role: "user", content: "Original question", timestamp: Date.now() }],
+			},
+			{
+				fetch: fetchMock as FetchImpl,
+				apiKey: token,
+				sessionId: "sse-diagnostics-session",
+				providerSessionState,
+				onPayload: payload => ({ ...(payload as Record<string, unknown>), input: replacedInput }),
+			},
+		).result();
+
+		expect(response.stopReason).toBe("stop");
+		expect(sentBodies).toHaveLength(1);
+		expect((JSON.parse(sentBodies[0]!) as Record<string, unknown>).input).toEqual(replacedInput);
+		const stats = getOpenAICodexWebSocketDebugStats(model, {
+			sessionId: "sse-diagnostics-session",
+			providerSessionState,
+		});
+		expect(stats?.lastTurn?.request).toMatchObject({ transport: "sse", inputItemCount: 1 });
+		expect(stats?.lastTurn?.request.inputJsonBytes).toBe(Buffer.byteLength(JSON.stringify(replacedInput)));
 	});
 
 	it("drops a stale terminal frame from the prior response leaking onto a reused websocket", async () => {

@@ -1599,7 +1599,6 @@ async function openCodexWebSocketTransport(
 	if (replacementWebsocketRequest !== undefined) {
 		websocketRequest = replacementWebsocketRequest as typeof websocketRequest;
 	}
-	recordCodexTurnRequestDiagnostics(websocketState, websocketRequest, "websocket", canAppendBeforeRequest);
 	const websocketHeaders = createCodexHeaders(
 		requestContext.requestHeaders,
 		requestContext.accountId,
@@ -1620,7 +1619,15 @@ async function openCodexWebSocketTransport(
 	} else {
 		requestBodyForState.stream_options = websocketRequest.stream_options;
 	}
-	requestContext.wireBodyJson = JSON.stringify(websocketRequest);
+	const websocketRequestJson = JSON.stringify(websocketRequest);
+	requestContext.wireBodyJson = websocketRequestJson;
+	recordCodexTurnRequestDiagnostics(
+		websocketState,
+		websocketRequest,
+		websocketRequestJson,
+		"websocket",
+		canAppendBeforeRequest,
+	);
 	CODEX_DEBUG &&
 		logger.debug("[codex] codex websocket request", {
 			url: toWebSocketUrl(requestContext.url),
@@ -1639,6 +1646,7 @@ async function openCodexWebSocketTransport(
 	);
 	const eventStream = websocketConnection.streamRequest(
 		websocketRequest,
+		websocketRequestJson,
 		{
 			idleTimeoutMs: requestSetup.websocketIdleTimeoutMs,
 			firstEventTimeoutMs: requestSetup.websocketFirstEventTimeoutMs,
@@ -1692,7 +1700,8 @@ async function openCodexSseTransport(
 }> {
 	const canAppendBeforeRequest = state?.canAppend === true;
 	let wireBody = body;
-	const prepareBody = async (): Promise<RequestBody> => {
+	let wireJson: string | undefined;
+	const prepareBody = async (): Promise<string> => {
 		// Serialize once. The hook, when present, gets an isolated parse of
 		// exactly those bytes; when no extension handles the event the wire
 		// object is the untouched original and the recorded bytes are reused.
@@ -1710,8 +1719,9 @@ async function openCodexSseTransport(
 		}
 		wireBody = wireParams;
 		// Keep the 400 dump honest: record the body actually sent on this attempt.
-		requestContext.wireBodyJson = wireParams === body ? bodyJson : JSON.stringify(wireParams);
-		return wireParams;
+		wireJson = wireParams === body ? bodyJson : JSON.stringify(wireParams);
+		requestContext.wireBodyJson = wireJson;
+		return wireJson;
 	};
 	// Preserve payload capture for callers that intentionally use an
 	// already-aborted signal without issuing a physical request.
@@ -1736,7 +1746,8 @@ async function openCodexSseTransport(
 		prepareBody,
 	);
 	await notifyProviderResponse(options, handle.response, model, handle.requestId);
-	recordCodexTurnRequestDiagnostics(state, wireBody, "sse", canAppendBeforeRequest);
+	// A response means `prepareBody` serialized the attempt that received it.
+	recordCodexTurnRequestDiagnostics(state, wireBody, wireJson!, "sse", canAppendBeforeRequest);
 	return {
 		eventStream: requestSetup.wrapCodexSseStream(handle.events),
 		requestBodyForState: structuredCloneJSON(wireBody),
@@ -3054,11 +3065,14 @@ function stripInputItemIds(items: Array<Record<string, unknown>>): InputItem[] {
 	});
 }
 
-const codexDiagnosticsTextEncoder = new TextEncoder();
-
-function jsonByteLength(value: unknown): number {
-	const json = JSON.stringify(value);
-	return codexDiagnosticsTextEncoder.encode(json === undefined ? "undefined" : json).byteLength;
+/**
+ * UTF-8 byte length of `request.input` as JSON, read off `requestJson`, the request as serialized,
+ * instead of serializing the input a second time. Serialization composes: the request with
+ * `input: []` serializes to the same text with the input's JSON replaced by `[]`.
+ */
+function inputJsonByteLength(request: Record<string, unknown>, requestJson: string): number {
+	if (!Array.isArray(request.input)) return 2;
+	return Buffer.byteLength(requestJson) - Buffer.byteLength(JSON.stringify({ ...request, input: [] })) + 2;
 }
 
 function hashJson(value: unknown): string {
@@ -3154,6 +3168,7 @@ function createCodexOptionsHash(request: Record<string, unknown>): string {
 
 function buildCodexTurnRequestDiagnostics(
 	request: Record<string, unknown>,
+	requestJson: string,
 	transport: CodexTransport,
 	canAppendBeforeRequest: boolean,
 ): OpenAICodexTurnRequestDiagnostics {
@@ -3169,7 +3184,7 @@ function buildCodexTurnRequestDiagnostics(
 		inputItemCount: inputItems.length,
 		inputItemTypes,
 		...(inputItemTypes[0] ? { firstInputItemType: inputItemTypes[0] } : {}),
-		inputJsonBytes: jsonByteLength(inputItems),
+		inputJsonBytes: inputJsonByteLength(request, requestJson),
 		...(promptCacheKey !== undefined ? { promptCacheKey } : {}),
 		...(toolsHash !== undefined ? { toolsHash } : {}),
 		optionsHash: createCodexOptionsHash(request),
@@ -3180,6 +3195,8 @@ function buildCodexTurnRequestDiagnostics(
 function recordCodexTurnRequestDiagnostics(
 	state: CodexWebSocketSessionState | undefined,
 	request: Record<string, unknown>,
+	/** `request` serialized: the bytes sent. */
+	requestJson: string,
 	transport: CodexTransport,
 	canAppendBeforeRequest: boolean,
 ): void {
@@ -3198,7 +3215,7 @@ function recordCodexTurnRequestDiagnostics(
 		state.stats.lastPreviousResponseId = undefined;
 	}
 	state.stats.lastTurn = {
-		request: buildCodexTurnRequestDiagnostics(request, transport, canAppendBeforeRequest),
+		request: buildCodexTurnRequestDiagnostics(request, requestJson, transport, canAppendBeforeRequest),
 	};
 	CODEX_DEBUG && logger.debug("[codex] codex turn request diagnostics", { diagnostics: state.stats.lastTurn.request });
 }
@@ -3511,6 +3528,8 @@ class CodexWebSocketConnection {
 
 	async *streamRequest(
 		request: Record<string, unknown>,
+		/** `request` serialized: the frame sent. */
+		requestPayload: string,
 		timeouts: CodexWebSocketRequestTimeouts,
 		signal?: AbortSignal,
 		onSseEvent?: (event: RawSseEvent) => void,
@@ -3557,7 +3576,6 @@ class CodexWebSocketConnection {
 				? await debugSession.openResponseLog("WebSocket 101 Switching Protocols", this.#handshakeHeaders)
 				: undefined;
 
-			const requestPayload = JSON.stringify(request);
 			notifyCodexWebSocketOutbound(onSseEvent, request, requestPayload);
 			// Re-check liveness: the debug-session await above can outlive the socket.
 			const socket = this.#socket;
@@ -3945,7 +3963,8 @@ async function openCodexSseEventStream(
 	maxRetryDelayMs: number | undefined,
 	onSseEvent?: OpenAICodexResponsesOptions["onSseEvent"],
 	fetchOverride?: FetchImpl,
-	prepareBody: () => RequestBody | Promise<RequestBody> = () => structuredCloneJSON(body),
+	/** The serialized body for one attempt, called before each attempt. */
+	serializeBody: () => string | Promise<string> = () => JSON.stringify(body),
 ): Promise<OpenAIStreamHandle<Record<string, unknown>>> {
 	const headers = createCodexHeaders(
 		requestHeaders,
@@ -3990,13 +4009,12 @@ async function openCodexSseEventStream(
 		response = await fetchProviderWithRetry(url, {
 			method: "POST",
 			headers,
-			body: JSON.stringify(body),
 			signal,
 			prepareInit: async () => {
-				const wireBody = await prepareBody();
+				const bodyJson = await serializeBody();
 				const watchdog = armPreResponseTimeout(signal, firstEventTimeoutMs);
 				clearPreResponseTimeout = watchdog.clear;
-				return { body: JSON.stringify(wireBody), signal: watchdog.signal };
+				return { body: bodyJson, signal: watchdog.signal };
 			},
 			maxAttempts: CODEX_MAX_RETRIES + 1,
 			defaultDelayMs: attempt => CODEX_RETRY_DELAY_MS * (attempt + 1),

@@ -13,6 +13,8 @@
 - The Devin stream splits into a request step, a Connect frame reader and a per-delta decoder that keeps each open block's content index instead of searching for it; decode time of an 18,400-frame stream is unchanged.
 - Google request building resolves each model's wire traits once per request and each thinking signature once per block, cutting message conversion on a 50,600-message history by 10% to 18%.
 - The Google and Cloud Code Assist stream decoders share one block assembler and finish-reason, usage and truncation helpers, and the Cloud Code Assist stream splits into a request plan, an endpoint loop and a per-response decoder; decode time of an 8,000-chunk stream is unchanged.
+- The Anthropic, Ollama and OpenAI Codex providers serialize a request body once per attempt and send, dump and resend those bytes, and Codex turn diagnostics read the input's byte length off the serialized request, cutting request build on a 27 MiB context from 58.4 to 28.8 ms for Anthropic, 37.6 to 19.4 ms for Ollama, 111.9 to 32.3 ms for Codex over SSE and 186.9 to 65.8 ms for Codex over WebSocket.
+- Anthropic request sanitization copies only the containers on the path to a lone surrogate and allocates nothing for a well-formed request, cutting it on a large context from 4.27 ms to 0.97 ms.
 
 ### Fixed
 
