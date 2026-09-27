@@ -19,6 +19,7 @@ import {
 	COMBINATOR_KEYS,
 	LIFTABLE_TO_DESCRIPTION_FIELDS,
 	NON_STRUCTURAL_SCHEMA_KEYS,
+	SCHEMA_MAP_KEYWORDS,
 	UNSUPPORTED_SCHEMA_FIELDS,
 } from "./fields";
 import { isValidJsonSchema } from "./meta-validator";
@@ -53,10 +54,6 @@ export interface NormalizeSchemaOptions {
 	dropNonScalarEnum: boolean;
 	rejectResidualIncompatibilities?: ReadonlyArray<ResidualSchemaIncompatibility>;
 	validateAndFallback?: { fallback: unknown };
-}
-
-interface NormalizeSchemaWalkOptions extends NormalizeSchemaOptions {
-	insideProperties: boolean;
 }
 
 interface ResidualIncompatibilityChecks {
@@ -207,7 +204,7 @@ function pushStrippedDescriptionEntry(
 	spill: Array<[string, unknown]> | undefined,
 	key: string,
 	value: unknown,
-	options: NormalizeSchemaWalkOptions,
+	options: NormalizeSchemaOptions,
 ): Array<[string, unknown]> | undefined {
 	const lift = options.liftStrippedToDescription;
 	if (!lift) return spill;
@@ -221,14 +218,14 @@ function pushStrippedDescriptionEntry(
 function applyDescriptionSpill(
 	result: JsonObject,
 	spill: Array<[string, unknown]> | undefined,
-	options: NormalizeSchemaWalkOptions,
+	options: NormalizeSchemaOptions,
 ): void {
 	const lift = options.liftStrippedToDescription;
 	if (!lift || spill === undefined) return;
 	spillToDescription(result, spill, lift.format ?? "spill");
 }
 
-function normalizeSchemaNode(value: unknown, options: NormalizeSchemaWalkOptions): unknown {
+function normalizeSchemaNode(value: unknown, options: NormalizeSchemaOptions): unknown {
 	if (Array.isArray(value)) {
 		if (!enter(value)) return [];
 		try {
@@ -250,7 +247,25 @@ function normalizeSchemaNode(value: unknown, options: NormalizeSchemaWalkOptions
 	}
 }
 
-function normalizeSchemaObjectNode(value: JsonObject, options: NormalizeSchemaWalkOptions): unknown {
+/**
+ * The value of a {@link SCHEMA_MAP_KEYWORDS} keyword. Its keys are property or
+ * definition names, never keywords, so only the schemas under them are
+ * normalized: a property named `const` or `nullable` stays a property.
+ */
+function normalizeSchemaMap(map: JsonObject, options: NormalizeSchemaOptions): JsonObject {
+	if (!enter(map)) return {};
+	try {
+		const result: JsonObject = {};
+		for (const name in map) {
+			if (Object.hasOwn(map, name)) result[name] = normalizeSchemaNode(map[name], options);
+		}
+		return result;
+	} finally {
+		exit(map);
+	}
+}
+
+function normalizeSchemaObjectNode(value: JsonObject, options: NormalizeSchemaOptions): unknown {
 	const obj = applyParentLevelRewrites(value, options);
 	const combiner = constUnionCombiner(obj);
 	const result: JsonObject = {};
@@ -263,7 +278,7 @@ function normalizeSchemaObjectNode(value: JsonObject, options: NormalizeSchemaWa
 			continue;
 		}
 		const entry = obj[key];
-		if (!options.insideProperties && options.unsupportedFields(key)) {
+		if (options.unsupportedFields(key)) {
 			spill = pushStrippedDescriptionEntry(spill, key, entry, options);
 			continue;
 		}
@@ -272,10 +287,10 @@ function normalizeSchemaObjectNode(value: JsonObject, options: NormalizeSchemaWa
 			constValue = entry;
 			continue;
 		}
-		result[key] = normalizeSchemaNode(entry, {
-			...options,
-			insideProperties: !options.insideProperties && key === "properties",
-		});
+		result[key] =
+			SCHEMA_MAP_KEYWORDS.has(key) && isRecord(entry)
+				? normalizeSchemaMap(entry, options)
+				: normalizeSchemaNode(entry, options);
 	}
 	if (combiner === undefined) {
 		settleNodeType(result, constValue, options);
@@ -287,11 +302,9 @@ function normalizeSchemaObjectNode(value: JsonObject, options: NormalizeSchemaWa
 
 /**
  * The rewrites python-genai applies to a schema node before recursing into
- * it: snake_case keywords renamed, then null fields collapsed. A properties
- * map is not a schema node and receives neither.
+ * it: snake_case keywords renamed, then null fields collapsed.
  */
-function applyParentLevelRewrites(value: JsonObject, options: NormalizeSchemaWalkOptions): JsonObject {
-	if (options.insideProperties) return value;
+function applyParentLevelRewrites(value: JsonObject, options: NormalizeSchemaOptions): JsonObject {
 	const renamed = options.normalizeFieldNames ? applySnakeCaseRenames(value) : value;
 	return options.collapseNullFields ? preHandleNullFields(renamed) : renamed;
 }
@@ -312,7 +325,7 @@ function constUnionCombiner(obj: JsonObject): (typeof JSON_SCHEMA_COMBINERS)[num
  * branches' shared explicit type, else the one type every value has, else,
  * for values of one type plus `null`, that type made nullable.
  */
-function writeConstUnionEnum(variants: JsonObject[], result: JsonObject, options: NormalizeSchemaWalkOptions): void {
+function writeConstUnionEnum(variants: JsonObject[], result: JsonObject, options: NormalizeSchemaOptions): void {
 	const values: unknown[] = [];
 	for (const variant of variants) pushEnumValue(values, variant.const);
 	result.enum = values;
@@ -341,7 +354,7 @@ function writeConstUnionEnum(variants: JsonObject[], result: JsonObject, options
  * first non-null member, `const` folded into `enum`, a bare `enum` given the
  * one type its values share, and `type: "null"` turned into `nullable`.
  */
-function settleNodeType(result: JsonObject, constValue: unknown, options: NormalizeSchemaWalkOptions): void {
+function settleNodeType(result: JsonObject, constValue: unknown, options: NormalizeSchemaOptions): void {
 	if (options.normalizeTypeArrayToNullable && Array.isArray(result.type)) {
 		const types = (result.type as unknown[]).filter((t): t is string => typeof t === "string");
 		if (types.includes("null") && !options.stripNullableKeyword) result.nullable = true;
@@ -373,7 +386,7 @@ function settleNodeType(result: JsonObject, constValue: unknown, options: Normal
 }
 
 /** `propertyOrdering` and an empty `properties` added to an object node for the providers that want them. */
-function settleObjectShape(result: JsonObject, options: NormalizeSchemaWalkOptions): void {
+function settleObjectShape(result: JsonObject, options: NormalizeSchemaOptions): void {
 	if (result.type !== "object") return;
 	if (options.autoPropertyOrdering && !outHasOwn(result, "propertyOrdering") && isRecord(result.properties)) {
 		const props = result.properties;
@@ -386,7 +399,7 @@ function settleObjectShape(result: JsonObject, options: NormalizeSchemaWalkOptio
 	if (options.ensureObjectProperties && !outHasOwn(result, "properties")) result.properties = {};
 }
 
-function applyNodePostProcessing(schema: JsonObject, options: NormalizeSchemaWalkOptions): JsonObject {
+function applyNodePostProcessing(schema: JsonObject, options: NormalizeSchemaOptions): JsonObject {
 	let current = schema;
 	for (const combiner of JSON_SCHEMA_COMBINERS) {
 		if (options.mergeObjectCombiners) current = mergeObjectCombinerVariants(current, combiner);
@@ -659,6 +672,7 @@ function collapseSameTypeCombinerVariants(schema: JsonObject, combiner: "anyOf" 
  * Recursively strip any remaining anyOf/oneOf that same-type or mixed-type
  * collapse can handle. This is needed because object-combiner merging can
  * create new anyOf in merged subtrees after child normalization already ran.
+ * A {@link SCHEMA_MAP_KEYWORDS} map is walked by entry, never collapsed itself.
  */
 export function stripResidualCombiners(value: unknown, epoch: number = epochNext()): unknown {
 	if (Array.isArray(value)) {
@@ -669,7 +683,18 @@ export function stripResidualCombiners(value: unknown, epoch: number = epochNext
 	if (!once(value, epoch)) return {};
 	const result: JsonObject = {};
 	for (const key in value) {
-		if (Object.hasOwn(value, key)) result[key] = stripResidualCombiners(value[key], epoch);
+		if (!Object.hasOwn(value, key)) continue;
+		const entry = value[key];
+		if (!SCHEMA_MAP_KEYWORDS.has(key) || !isRecord(entry)) {
+			result[key] = stripResidualCombiners(entry, epoch);
+			continue;
+		}
+		const map: JsonObject = {};
+		result[key] = map;
+		if (!once(entry, epoch)) continue;
+		for (const name in entry) {
+			if (Object.hasOwn(entry, name)) map[name] = stripResidualCombiners(entry[name], epoch);
+		}
 	}
 	let current: JsonObject = result;
 	let changed = true;
@@ -696,23 +721,25 @@ interface NullableExtractionResult {
 	nullable: boolean;
 }
 
-function extractNullableUnionSchema(schema: unknown): NullableExtractionResult {
-	if (!isRecord(schema)) {
-		return { schema, nullable: false };
-	}
-
+/**
+ * `schema` with one way of admitting `null` removed: `nullable: true`, the
+ * `null` of a two-type `type` array, or a bare `{type: "null"}` branch beside
+ * a single other combiner branch, whose keys merge into the node. `undefined`
+ * when `schema` admits `null` in none of those ways, or when the other branch
+ * conflicts with a key beside the combiner.
+ */
+function withoutNullLayer(schema: JsonObject): JsonObject | undefined {
 	if (schema.nullable === true) {
 		const nextSchema = { ...schema };
 		delete nextSchema.nullable;
-		return { schema: nextSchema, nullable: true };
+		return nextSchema;
 	}
 
 	if (Array.isArray(schema.type)) {
 		const typeVariants = schema.type.filter((entry): entry is string => typeof entry === "string");
 		const nonNullTypes = typeVariants.filter(entry => entry !== "null");
 		if (typeVariants.includes("null") && nonNullTypes.length === 1) {
-			const nextSchema = { ...schema, type: nonNullTypes[0] };
-			return { schema: nextSchema, nullable: true };
+			return { ...schema, type: nonNullTypes[0] };
 		}
 	}
 
@@ -748,28 +775,49 @@ function extractNullableUnionSchema(schema: unknown): NullableExtractionResult {
 			const value = nonNullVariant[key];
 			const existingValue = nextSchema[key];
 			if (existingValue !== undefined && !areJsonValuesEqual(existingValue, value)) {
-				return { schema, nullable: false };
+				return undefined;
 			}
 			if (existingValue === undefined) {
 				nextSchema[key] = value;
 			}
 		}
-		return { schema: nextSchema, nullable: true };
+		return nextSchema;
 	}
 
-	return { schema, nullable: false };
+	return undefined;
 }
 
-interface NullableNormalizationResult {
-	schema: unknown;
-	nullable: boolean;
+/**
+ * `schema` with every way it admits `null` removed, and whether it had one. A
+ * branch merged out of a combiner can admit `null` itself
+ * (`anyOf: [{anyOf: [T, {type: "null"}]}, {type: "null"}]`), so layers come
+ * off until none is left. Each layer deletes a key or merges a strictly
+ * shallower branch into the node, so the loop ends within the schema's depth.
+ */
+function extractNullableUnionSchema(schema: unknown): NullableExtractionResult {
+	if (!isRecord(schema)) {
+		return { schema, nullable: false };
+	}
+	let current = schema;
+	let nullable = false;
+	for (let next = withoutNullLayer(current); next !== undefined; next = withoutNullLayer(current)) {
+		current = next;
+		nullable = true;
+	}
+	return { schema: current, nullable };
 }
 
+/**
+ * CCA's nullable pass: a property whose schema admits `null` loses the `null`
+ * branch and leaves `required`, so an absent argument stands for `null`. Each
+ * {@link SCHEMA_MAP_KEYWORDS} map is walked by entry, so a property named
+ * `nullable` or `properties` is a name, and every subtree is walked once.
+ */
 function normalizeNullablePropertiesForCloudCodeAssist(
 	value: unknown,
 	isPropertySchema = false,
 	epoch: number = epochNext(),
-): NullableNormalizationResult {
+): NullableExtractionResult {
 	if (Array.isArray(value)) {
 		if (!once(value, epoch)) {
 			return { schema: [], nullable: false };
@@ -787,31 +835,33 @@ function normalizeNullablePropertiesForCloudCodeAssist(
 	}
 
 	const normalized: JsonObject = {};
+	let nullableProperties: Set<string> | undefined;
 	for (const key in value) {
-		if (Object.hasOwn(value, key))
-			normalized[key] = normalizeNullablePropertiesForCloudCodeAssist(value[key], false, epoch).schema;
+		if (!Object.hasOwn(value, key)) continue;
+		const entry = value[key];
+		if (!SCHEMA_MAP_KEYWORDS.has(key) || !isRecord(entry)) {
+			normalized[key] = normalizeNullablePropertiesForCloudCodeAssist(entry, false, epoch).schema;
+			continue;
+		}
+		const map: JsonObject = {};
+		normalized[key] = map;
+		const arePropertySchemas = key === "properties";
+		if (arePropertySchemas) nullableProperties = new Set();
+		if (!once(entry, epoch)) continue;
+		for (const name in entry) {
+			if (!Object.hasOwn(entry, name)) continue;
+			const walked = normalizeNullablePropertiesForCloudCodeAssist(entry[name], arePropertySchemas, epoch);
+			map[name] = walked.schema;
+			if (walked.nullable) nullableProperties?.add(name);
+		}
 	}
 
-	if (isRecord(normalized.properties)) {
-		const properties = normalized.properties;
-		const required = new Set(
-			Array.isArray(normalized.required)
-				? normalized.required.filter((entry): entry is string => typeof entry === "string")
-				: [],
-		);
-		const nextProperties: JsonObject = {};
-		for (const name in properties) {
-			if (!Object.hasOwn(properties, name)) continue;
-			const normalizedProperty = normalizeNullablePropertiesForCloudCodeAssist(properties[name], true, epoch);
-			nextProperties[name] = normalizedProperty.schema;
-			if (normalizedProperty.nullable) {
-				required.delete(name);
-			}
+	if (nullableProperties !== undefined && Array.isArray(normalized.required)) {
+		const required = new Set<string>();
+		for (const name of normalized.required) {
+			if (typeof name === "string" && !nullableProperties.has(name)) required.add(name);
 		}
-		normalized.properties = nextProperties;
-		if (Array.isArray(normalized.required)) {
-			normalized.required = Array.from(required);
-		}
+		normalized.required = Array.from(required);
 	}
 
 	if (!isPropertySchema) {
@@ -876,7 +926,14 @@ function hasResidualSchemaIncompatibilities(
 	}
 	for (const k in value) {
 		if (!Object.hasOwn(value, k)) continue;
-		if (hasResidualSchemaIncompatibilities(value[k], checks, epoch)) {
+		const child = value[k];
+		if (SCHEMA_MAP_KEYWORDS.has(k) && isRecord(child)) {
+			if (!once(child, epoch)) continue;
+			for (const name in child) {
+				if (Object.hasOwn(child, name) && hasResidualSchemaIncompatibilities(child[name], checks, epoch))
+					return true;
+			}
+		} else if (hasResidualSchemaIncompatibilities(child, checks, epoch)) {
 			return true;
 		}
 	}
@@ -887,10 +944,7 @@ export function normalizeSchema(value: unknown, options: NormalizeSchemaOptions)
 	const detoxified = decontaminateZodInstance(value);
 	const upgraded = upgradeJsonSchemaTo202012(detoxified);
 	const dereferenced = dereferenceJsonSchema(upgraded);
-	let normalized = normalizeSchemaNode(dereferenced, {
-		...options,
-		insideProperties: false,
-	});
+	let normalized = normalizeSchemaNode(dereferenced, options);
 	if (options.stripResidualCombinersFixpoint) {
 		normalized = stripResidualCombiners(normalized);
 	}
@@ -1027,14 +1081,6 @@ export function normalizeSchemaForMoonshot(value: unknown): unknown {
 // ---------------------------------------------------------------------------
 
 const OLLAMA_SCHEMA_ARRAY_KEYS = new Set(["anyOf", "oneOf", "allOf", "prefixItems"]);
-const OLLAMA_SCHEMA_MAP_KEYS = new Set([
-	"properties",
-	"patternProperties",
-	"dependencies",
-	"dependentSchemas",
-	"$defs",
-	"definitions",
-]);
 const OLLAMA_SCHEMA_VALUE_KEYS = new Set([
 	"items",
 	"additionalItems",
@@ -1116,7 +1162,7 @@ export function sanitizeSchemaForOllama(schema: JsonObject): JsonObject {
 			}
 
 			let next = child;
-			if (OLLAMA_SCHEMA_MAP_KEYS.has(key) && isRecord(child)) {
+			if (SCHEMA_MAP_KEYWORDS.has(key) && isRecord(child)) {
 				let mapChanged = false;
 				const mapOutput: JsonObject = {};
 				for (const childKey in child) {
@@ -1158,18 +1204,6 @@ export function sanitizeSchemaForOllama(schema: JsonObject): JsonObject {
 // ---------------------------------------------------------------------------
 
 const OPENAI_RESPONSES_SCHEMA_ARRAY_KEYS = new Set(["anyOf", "oneOf", "allOf", "prefixItems"]);
-const OPENAI_RESPONSES_SCHEMA_MAP_KEYS = new Set([
-	"properties",
-	"patternProperties",
-	// `dependencies` is the Draft-04..07 schema-valued form; older MCP servers
-	// still emit `{ dependencies: { foo: { type: "object" } } }`. String-array
-	// branches per key pass through `normalizeOpenAIResponsesSchemaNode`
-	// untouched because non-objects return as-is.
-	"dependencies",
-	"dependentSchemas",
-	"$defs",
-	"definitions",
-]);
 const OPENAI_RESPONSES_SCHEMA_VALUE_KEYS = new Set([
 	"items",
 	"additionalItems",
@@ -1273,7 +1307,7 @@ function normalizeOpenAIResponsesSchemaNode(value: unknown, cache: WeakMap<JsonO
 		let next: unknown = child;
 		if (key === "patternProperties" && isRecord(child)) {
 			next = normalizeOpenAIResponsesSchemaMap(child, cache, true);
-		} else if (OPENAI_RESPONSES_SCHEMA_MAP_KEYS.has(key) && isRecord(child)) {
+		} else if (SCHEMA_MAP_KEYWORDS.has(key) && isRecord(child)) {
 			next = normalizeOpenAIResponsesSchemaMap(child, cache, false);
 		} else if (OPENAI_RESPONSES_SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(child)) {
 			next = normalizeOpenAIResponsesSchemaArray(child, cache);
