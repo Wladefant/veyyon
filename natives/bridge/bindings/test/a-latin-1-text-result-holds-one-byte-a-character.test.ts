@@ -13,7 +13,7 @@
  * outside this list that builds its string some other way.
  */
 
-import { describe as describeValue } from "bun:jsc";
+import { jscDescribe } from "bun:jsc";
 import { describe, expect, it } from "bun:test";
 import { Ellipsis, extractSegments, sliceWithWidth, truncateToWidth, wrapTextWithAnsi } from "../native/index.js";
 
@@ -22,7 +22,7 @@ const WIDTH = 40;
 
 /** Bytes a character JSC stores `text` at. */
 function bytesPerCharacter(text: string): 1 | 2 {
-	return describeValue(text).includes("8Bit:(1)") ? 1 : 2;
+	return jscDescribe(text).includes("8Bit:(1)") ? 1 : 2;
 }
 
 /** Rows of at most `width` single-cell characters, broken after the last space that fits. */
