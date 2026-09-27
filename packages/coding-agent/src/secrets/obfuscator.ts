@@ -248,7 +248,8 @@ const SHORT_ALIAS_TRIE_CODE_UNITS = 256;
 const MAX_TERMINAL_ALIAS_BYTES = 16 * 1024 * 1024;
 
 interface LiteralMatcherNode<T> {
-	children: Map<string, number>;
+	/** Child node index by the UTF-16 code unit that leads to it. */
+	children: Map<number, number>;
 	fail: number;
 	outputLink: number;
 	outputs: Array<{ literal: string; value: T }>;
@@ -259,9 +260,14 @@ interface LiteralMatcherNode<T> {
  *
  * Construction is linear in configured characters. Scanning is linear in input plus reported
  * matches, and callers cap match events before retaining replacement state.
+ *
+ * Text is mostly characters that start no literal, so the scan spends most of its time at the
+ * root. A root transition on a code unit below 256 is one typed-array load from
+ * `#rootLatin1`; every other transition is one `Map` lookup by code unit.
  */
 class LiteralMatcher<T> {
 	readonly #nodes: Array<LiteralMatcherNode<T>> = [{ children: new Map(), fail: 0, outputLink: 0, outputs: [] }];
+	readonly #rootLatin1 = new Int32Array(256);
 	readonly #longEntries: Array<{ literal: string; value: T }> = [];
 
 	constructor(entries: Iterable<readonly [string, T]>) {
@@ -276,18 +282,21 @@ class LiteralMatcher<T> {
 			}
 			let nodeIndex = 0;
 			for (let index = 0; index < literal.length; index++) {
-				const character = literal[index];
-				const existing = this.#nodes[nodeIndex].children.get(character);
+				const code = literal.charCodeAt(index);
+				const existing = this.#nodes[nodeIndex].children.get(code);
 				if (existing !== undefined) {
 					nodeIndex = existing;
 					continue;
 				}
 				const childIndex = this.#nodes.length;
 				this.#nodes.push({ children: new Map(), fail: 0, outputLink: 0, outputs: [] });
-				this.#nodes[nodeIndex].children.set(character, childIndex);
+				this.#nodes[nodeIndex].children.set(code, childIndex);
 				nodeIndex = childIndex;
 			}
 			this.#nodes[nodeIndex].outputs.push({ literal, value });
+		}
+		for (const [code, childIndex] of this.#nodes[0].children) {
+			if (code < 256) this.#rootLatin1[code] = childIndex;
 		}
 		this.#buildFailureLinks();
 	}
@@ -298,12 +307,12 @@ class LiteralMatcher<T> {
 		for (let cursor = 0; cursor < queue.length; cursor++) {
 			const nodeIndex = queue[cursor];
 			const node = this.#nodes[nodeIndex];
-			for (const [character, childIndex] of node.children) {
+			for (const [code, childIndex] of node.children) {
 				let failure = node.fail;
-				while (failure !== 0 && !this.#nodes[failure].children.has(character)) {
+				while (failure !== 0 && !this.#nodes[failure].children.has(code)) {
 					failure = this.#nodes[failure].fail;
 				}
-				const transition = this.#nodes[failure].children.get(character);
+				const transition = this.#nodes[failure].children.get(code);
 				if (transition !== undefined && transition !== childIndex) failure = transition;
 				const child = this.#nodes[childIndex];
 				child.fail = failure;
@@ -318,17 +327,22 @@ class LiteralMatcher<T> {
 		visit: (start: number, end: number, value: T, literal: string) => boolean | undefined,
 		maxMatches = MAX_SECRET_MATCHES_PER_TEXT,
 	): void {
+		const nodes = this.#nodes;
+		const rootLatin1 = this.#rootLatin1;
+		const rootChildren = nodes[0].children;
 		let nodeIndex = 0;
 		let matchCount = 0;
-		for (let index = 0; index < text.length; index++) {
-			const character = text[index];
-			while (nodeIndex !== 0 && !this.#nodes[nodeIndex].children.has(character)) {
-				nodeIndex = this.#nodes[nodeIndex].fail;
+		for (let index = rootChildren.size === 0 ? text.length : 0; index < text.length; index++) {
+			const code = text.charCodeAt(index);
+			let next = nodeIndex === 0 ? undefined : nodes[nodeIndex].children.get(code);
+			while (next === undefined && nodeIndex !== 0) {
+				nodeIndex = nodes[nodeIndex].fail;
+				if (nodeIndex !== 0) next = nodes[nodeIndex].children.get(code);
 			}
-			nodeIndex = this.#nodes[nodeIndex].children.get(character) ?? 0;
+			nodeIndex = next ?? (code < 256 ? rootLatin1[code] : (rootChildren.get(code) ?? 0));
 			let outputNode = nodeIndex;
 			while (outputNode !== 0) {
-				for (const output of this.#nodes[outputNode].outputs) {
+				for (const output of nodes[outputNode].outputs) {
 					if (++matchCount > maxMatches) {
 						throw new Error("Refusing a secret transformation with too many match events.");
 					}
@@ -336,7 +350,7 @@ class LiteralMatcher<T> {
 						return;
 					}
 				}
-				outputNode = this.#nodes[outputNode].outputLink;
+				outputNode = nodes[outputNode].outputLink;
 			}
 		}
 		for (const output of this.#longEntries) {
@@ -1212,8 +1226,8 @@ export class SecretObfuscator {
 		if (!this.#hasAny) return text;
 		assertBoundedTransformText(text);
 		this.#forgetExpired();
-		let state: ProtectedText = { text, spans: this.#protectedOutputSpans(text) };
-		state = this.#applyPlainRules(state);
+		const initial: ProtectedText = { text, spans: this.#protectedOutputSpans(text) };
+		let state = this.#applyPlainRules(initial);
 		let matchEvents = 0;
 
 		for (const entry of this.#regexEntries) {
@@ -1312,6 +1326,9 @@ export class SecretObfuscator {
 			if (replacements.length > 0) state = this.#applyProtectedReplacements(state, replacements);
 		}
 
+		// The second plain pass handles literals a regex replacement moved or exposed. When neither
+		// the first plain pass nor a regex rule changed the text, it would repeat the first pass.
+		if (state === initial) return text;
 		return this.#applyPlainRules(state).text;
 	}
 
