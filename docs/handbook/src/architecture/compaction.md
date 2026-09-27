@@ -181,8 +181,9 @@ By default the live TUI collapses pre-compaction history: `display.collapseCompa
 ### Per-turn and pre-compaction pruning
 
 Two passes run from `AgentSession.#checkCompaction()`, after every completed turn, and both persist
-through `rewriteEntries()` so the session file matches the live context (`/fork`, `/tan` and resume
-read the file, and a divergent prefix cold-misses the provider prompt cache):
+through `rewriteEntries(prunedEntries)` so the session file matches the live context (`/fork`, `/tan`
+and resume read the file, and a divergent prefix cold-misses the provider prompt cache). The file is
+rewritten from the earliest pruned entry on; the lines before it are copied as they are:
 
 1. **Stale-result pass** (`#pruneStaleToolResults` → `pruneSupersededToolResults`) runs first, before
    any threshold gating, so it fires even with `compaction.enabled` off. It is skipped entirely when
@@ -191,6 +192,12 @@ read the file, and a divergent prefix cold-misses the provider prompt cache):
    after the `compaction.enabled` / strategy check and after error turns are skipped, and only once
    the turn has usable usage data. Its savings feed `postMaintenanceContextTokens`, which is the
    trigger figure reported to the compaction it may schedule.
+
+Both passes, and the shake, dedup and truncation collectors, scan only the live tail: the entries
+from the effective compaction's `firstKeptEntryId` to the leaf. Entries before it are summarized
+away, so the passes neither rewrite nor read them, and a turn costs the same after hundreds of
+compactions as after none. The one read that crosses the boundary resolves the tool call behind a
+live result whose call precedes it, so that call's protection still applies.
 
 Default prune policy:
 
@@ -406,7 +413,9 @@ Cumulative behavior:
 
 - Includes prior compaction details only when prior entry is pi-generated (`fromExtension !== true`).
 - In split turns, includes turn-prefix file ops too.
-- `details.readFiles` excludes files also modified; `details.modifiedFiles` contains the rest (persisted shape is unchanged).
+- The read list excludes files also modified; the modified list holds the rest.
+- A compaction records only the paths its lists gained over the compaction it built on: `details.readFilesAdded` and `details.modifiedFilesAdded`, with `details.base` set to that compaction's id. The lists are the union of the records along the `base` chain.
+- The chain ends at a record with no `base`, at a `base` that names no earlier compaction on the path or loops, and at a record an earlier version wrote, which holds `details.readFiles` and `details.modifiedFiles` in full. An extension's compaction records no lists, and the next compaction starts them over.
 
 The file list is a grouped, prefix-folded directory tree (find-tool shape) with a per-file access marker, `(Read)` for read-only files, `(Write)` for modified files never read, `(RW)` for modified files also present in the cumulative read set. Capped at 20 files with an `[…N files elided…]` line. Compaction and explicit handoff append it as a `<files>` tag (via `upsertFileOperations`).
 

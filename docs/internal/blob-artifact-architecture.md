@@ -83,7 +83,7 @@ Non-persistent sessions without an adopted manager can store `saveArtifact(...)`
 
 ### 1) Session entry persistence rewrite path
 
-Before a session entry is written, incremental append (`#appendToSessionFile`) or a full-file rewrite (`#rewriteSynchronously` / `#rewriteAtomically`), `SessionManager` serializes it through `#lineFor()`, which runs `prepareEntryForPersistence()` over the persistence pipeline.
+Before a session entry is written, incremental append (`#appendToSessionFile`) or a full-file rewrite (`#rewriteSynchronously` / `#rewriteAtomically`), `SessionManager` serializes it through `#lineFor()`, which runs `prepareEntryForPersistence()` over the persistence pipeline. An atomic rewrite that names the entries it changed keeps the published lines before the earliest of them byte for byte (`#tailRewritePlan`, `SessionStorage.rewriteTailAtomic`), so only the entries from that one on pass through `#lineFor()` again.
 
 Key behaviors:
 
@@ -111,6 +111,8 @@ For message/custom-message image blocks with `blob:sha256:<hash>` and for persis
 - mutates in-memory entry fields for runtime consumers.
 
 For any string field whose value is a `blobtext:sha256:<hash>` ref (large tool results and other oversized text externalized in step 2), the same pass reads the blob and restores the exact original string in place. A string ref is resolved at its parent slot (an array index or object key), because a child call receives the string by value and cannot rewrite the slot it lives in.
+
+The same walk points every other string of 64 characters or more, and every restored payload, at one shared copy of its text, so a text the file writes in several places is held once in memory. A result codec's rebuilt fields run after the walk and are not shared. The pass empties its pool and its list of blob sites before it returns, so a finished load holds no reference to the entries it restored.
 
 If a blob is missing:
 
@@ -249,4 +251,4 @@ The two systems intersect only indirectly: both reduce session JSONL bloat, but 
 - [`src/task/output-manager.ts`](../../packages/coding-agent/src/task/output-manager.ts): session-scoped agent output ID allocation for `agent://`.
 - [`src/task/executor.ts`](../../packages/coding-agent/src/task/executor.ts): agent output artifact writes (`<id>.md`) and session JSONL sidecars.
 
-*Verified against `63ffc8131ffb8d35ccbbb1c5de69531a7016eff4` on 2026-09-06.*
+*Verified against `354b7f411c38e21bf78413c938743fb798245f5b` on 2026-09-26.*

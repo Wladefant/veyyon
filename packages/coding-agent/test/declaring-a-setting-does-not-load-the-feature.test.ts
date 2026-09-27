@@ -67,7 +67,17 @@ const DOMAIN_REACH: Record<string, string[]> = {
 	"providers.ts": ["config/", "npm:@veyyon/kernel", "npm:@veyyon/utils", "npm:yaml", "speech/", "tiny/", "tools/"],
 	"resources.ts": ["config/"],
 	"shared.ts": ["config/"],
-	"agents.ts": ["config/"],
+	// A lane's `thinkingLevel` is validated against the thinking vocabulary: `thinking/` and the
+	// ladder it reads (`@veyyon/agent-core/thinking`, `@veyyon/catalog/effort`), the same option
+	// table `model.ts` reaches. `@veyyon/utils` is `type-guards`.
+	"agents.ts": [
+		"config/",
+		"npm:@veyyon/agent-core",
+		"npm:@veyyon/catalog",
+		"npm:@veyyon/model",
+		"npm:@veyyon/utils",
+		"thinking/",
+	],
 	"tasks.ts": ["config/"],
 	"tools.ts": ["config/", "tools/"],
 };

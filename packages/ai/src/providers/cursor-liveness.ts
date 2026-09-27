@@ -11,17 +11,22 @@ import * as AIError from "../error";
  * healthy gaps between events reached 355s, so the budget was a guess sitting a single step above
  * normal behaviour, and it killed seven live turns in under three hours.
  *
- * WHY A TIMER CANNOT DECIDE THIS. The Cursor protocol has no server heartbeat: `agent.v1` carries a
- * `ClientHeartbeat` this process sends and nothing the server sends back, so no length of silence
- * distinguishes a remote agent that is working from a connection that has died. HTTP/2 PING does:
- * the peer must acknowledge it (RFC 9113 §6.7), so an answered probe proves the transport while the
- * stream is quiet, and an unanswered one reports a dead connection in seconds rather than in the ten
- * minutes the idle budget took to notice.
+ * WHY A TIMER CANNOT DECIDE THIS. A quiet stream and a dead connection look the same to a clock.
+ * HTTP/2 PING does not: the peer must acknowledge it (RFC 9113 §6.7), so an answered probe proves
+ * the transport while the stream is quiet, and an unanswered one reports a dead connection in
+ * seconds rather than in the ten minutes the idle budget took to notice.
  *
- * WHAT IT STILL BOUNDS. A PING is answered by whatever terminates HTTP/2, which may be an edge in
- * front of a wedged backend, so liveness alone would replace a ten-minute failure with an unbounded
- * hang. {@link CursorLivenessOptions.maxSilentMs} is the ceiling on unbroken server silence and ends
- * the turn even while the probes come back.
+ * WHY A BYTE IS NOT PROGRESS. The server sends an `interactionUpdate.heartbeat` every ten seconds
+ * for the whole turn, whether or not its agent is doing anything. A heartbeat, like an acknowledged
+ * PING, proves the connection and nothing more. Counting it as activity reset the silence ceiling
+ * every ten seconds, so a wedged remote agent held the turn open indefinitely. Bytes therefore
+ * defer the next probe ({@link CursorLiveness.markTransport}); only a message that advances the
+ * turn restarts the ceiling ({@link CursorLiveness.markProgress}).
+ *
+ * WHAT IT STILL BOUNDS. A PING or a heartbeat is answered by whatever terminates HTTP/2 or emits
+ * the heartbeat, which may sit in front of a wedged backend, so liveness alone would replace a
+ * ten-minute failure with an unbounded hang. {@link CursorLivenessOptions.maxSilentMs} is the
+ * ceiling on time without progress and ends the turn while the connection stays alive.
  */
 
 /** How the probe ended a turn, which is also what separates the two failure messages. */
@@ -32,7 +37,7 @@ export interface CursorLivenessOptions {
 	probeIntervalMs: number;
 	/** How long one probe may go unacknowledged before the connection is dead. */
 	probeTimeoutMs: number;
-	/** Unbroken server silence that ends the turn even while probes are acknowledged. */
+	/** Time without turn progress that ends the turn even while the connection stays alive. */
 	maxSilentMs: number;
 	/**
 	 * Send one transport probe. Resolves on acknowledgement, rejects when the probe could not be
@@ -50,8 +55,13 @@ export interface CursorLivenessOptions {
 }
 
 export interface CursorLiveness {
-	/** Record that the server sent something. Resets the silence clock. */
-	markActivity(): void;
+	/**
+	 * Record that server bytes arrived. Proves the connection, like an acknowledged probe, and defers
+	 * the next probe; it does not restart the silence ceiling.
+	 */
+	markTransport(): void;
+	/** Record a server message that advances the turn. Restarts the silence ceiling. */
+	markProgress(): void;
 	/** Stop probing. Idempotent, and after it no failure is reported. */
 	stop(): void;
 }
@@ -71,7 +81,7 @@ function deathError(cause: DeathCause, silentMs: number, detail?: unknown): Erro
 		);
 	}
 	return new AIError.StreamTimeoutError(
-		`Cursor sent nothing for ${seconds}s while the connection stayed alive; the remote agent is not responding`,
+		`Cursor made no progress for ${seconds}s while the connection stayed alive; the remote agent is not responding`,
 	);
 }
 
@@ -82,8 +92,9 @@ function deathError(cause: DeathCause, silentMs: number, detail?: unknown): Erro
 export function startCursorLiveness(options: CursorLivenessOptions): CursorLiveness {
 	const now = Date.now;
 	let lastActivityAt = now();
-	// When the last probe was acknowledged. An acknowledgement defers the next probe by one interval
-	// but never the silence ceiling, which counts from `lastActivityAt` alone.
+	// When the connection was last proven: an acknowledged probe or any server bytes. Proof defers
+	// the next probe by one interval but never the silence ceiling, which counts from
+	// `lastActivityAt` (the last message that advanced the turn) alone.
 	let lastProbeAt = Number.NEGATIVE_INFINITY;
 	let localWorkStartedAt: number | undefined;
 	let stopped = false;
@@ -126,7 +137,7 @@ export function startCursorLiveness(options: CursorLivenessOptions): CursorLiven
 	async function tick(): Promise<void> {
 		if (stopped) return;
 		const silentMs = now() - lastActivityAt;
-		// The server spoke since this wakeup was armed; `markActivity` never re-arms, so a busy
+		// The turn progressed since this wakeup was armed; `markProgress` never re-arms, so a busy
 		// stream costs one wakeup per interval rather than one per event.
 		if (silentMs < options.probeIntervalMs) {
 			schedule();
@@ -171,8 +182,12 @@ export function startCursorLiveness(options: CursorLivenessOptions): CursorLiven
 	schedule();
 
 	return {
-		markActivity: () => {
+		markTransport: () => {
+			lastProbeAt = now();
+		},
+		markProgress: () => {
 			lastActivityAt = now();
+			lastProbeAt = lastActivityAt;
 			localWorkStartedAt = undefined;
 		},
 		stop,

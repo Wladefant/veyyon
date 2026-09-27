@@ -6,7 +6,7 @@ import { errorMessage, getAgentDir, logger } from "@veyyon/utils";
 import { discoverAuthStorage } from "../session/auth-broker-config";
 import { currentImageDisplayProbe, setImageDisplayProbe } from "../session/image-visibility";
 import { allActionHandlers } from "./actions";
-import { activeCwd, writeSessionList } from "./actions/active-session";
+import { activeCwd, refuseTerminalOwnedSession, writeSessionList } from "./actions/active-session";
 import type { ActionContext, ReplyHelper } from "./actions/types";
 import { FrameDecoder, MAX_FRAME_BYTES, writeFrame } from "./frames";
 import { PresentationLedger } from "./presentation";
@@ -412,6 +412,7 @@ export class GuiHostServer {
 			reply,
 		};
 
+		if (await refuseTerminalOwnedSession(ctx, payload)) return;
 		await handler(ctx, payload as never);
 
 		if (actionTag === "Shutdown") {

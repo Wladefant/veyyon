@@ -113,7 +113,7 @@ act on a bare invocation: `/yolo`, `/fast`, and `/browser` flip a switch, `/goal
 | `/session info`, `/session delete` | Session metadata or delete |
 | `/profile [name]`, `/profiles` | Bare opens the profile picker (switch, rename, create, delete); `/profile <name>` switches (relaunches as a fresh session); `/profile new <name>` opens the copy picker; `/profile <name> rename to <new>` sets a display name; `/profile rm <name>` deletes after a confirmation |
 | `/welcome` | Show the full welcome screen (actions, recent sessions) |
-| `/exit`, `/quit`, `/pause` | Leave or pause |
+| `/exit`, `/quit`, `/q`, `/pause` | Leave or pause |
 
 ## Model, modes, and behavior
 

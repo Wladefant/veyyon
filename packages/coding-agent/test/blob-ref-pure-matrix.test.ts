@@ -1,6 +1,7 @@
 /**
  * Blob ref pure predicates: image blob:sha256: vs text blobtext:sha256: are
- * disjoint; parse returns the hash suffix only for matching prefixes.
+ * disjoint; parse returns the hash only for a matching prefix followed by a
+ * canonical 64-char lowercase hex SHA-256, so a `../` suffix never reaches a path.
  */
 import { describe, expect, it } from "bun:test";
 import {
@@ -37,17 +38,20 @@ describe("blob ref pure matrix", () => {
 		expect(isTextBlobRef(text) && !isBlobRef(text)).toBe(true);
 	});
 
-	it("parseBlobRef returns suffix after prefix", () => {
+	it("parseBlobRef returns the hash after the prefix and rejects a non-hash suffix", () => {
 		expect(parseBlobRef(`blob:sha256:${HASH}`)).toBe(HASH);
-		expect(parseBlobRef("blob:sha256:dead")).toBe("dead");
-		expect(parseBlobRef("blob:sha256:")).toBe("");
+		expect(parseBlobRef("blob:sha256:dead")).toBeNull();
+		expect(parseBlobRef("blob:sha256:")).toBeNull();
+		expect(parseBlobRef("blob:sha256:../../etc/passwd")).toBeNull();
+		expect(parseBlobRef(`blob:sha256:${"A".repeat(64)}`)).toBeNull();
 		expect(parseBlobRef(`blobtext:sha256:${HASH}`)).toBeNull();
 		expect(parseBlobRef("nope")).toBeNull();
 	});
 
-	it("parseTextBlobRef returns suffix after text prefix", () => {
+	it("parseTextBlobRef returns the hash after the text prefix and rejects a non-hash suffix", () => {
 		expect(parseTextBlobRef(`blobtext:sha256:${HASH}`)).toBe(HASH);
-		expect(parseTextBlobRef("blobtext:sha256:xx")).toBe("xx");
+		expect(parseTextBlobRef("blobtext:sha256:xx")).toBeNull();
+		expect(parseTextBlobRef(`blobtext:sha256:${HASH}/../x`)).toBeNull();
 		expect(parseTextBlobRef(`blob:sha256:${HASH}`)).toBeNull();
 		expect(parseTextBlobRef("blobtext:")).toBeNull();
 	});

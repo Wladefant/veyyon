@@ -14,11 +14,11 @@ import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createAgentSession } from "@veyyon/coding-agent/sdk";
 import type { AgentSession } from "@veyyon/coding-agent/session/agent-session";
-import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { SearchToolBm25Tool } from "@veyyon/coding-agent/tools/search/search-tool-bm25";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
 import { useIsolatedAgentDir } from "./helpers/isolated-agent-dir";
+import { makeToolSession } from "./helpers/tool-session";
 
 useIsolatedAgentDir();
 
@@ -43,12 +43,11 @@ describe("discoverable tools resolution", () => {
 
 	it("returns empty array and does not throw before session is assigned", () => {
 		let session: AgentSession | undefined;
-		const toolSession = {
+		const toolSession = makeToolSession({
 			cwd: registryDir,
-			getDiscoverableTools: (filter?: { source?: "builtin" | "mcp" | "custom" }) =>
-				session?.getDiscoverableTools(filter) ?? [],
+			getDiscoverableTools: filter => session?.getDiscoverableTools(filter) ?? [],
 			isToolDiscoveryEnabled: () => session?.isToolDiscoveryEnabled() ?? false,
-		} as unknown as ToolSession;
+		});
 
 		// Prior to fix, calling getDiscoverableTools before session is assigned threw a TypeError.
 		expect(() => toolSession.getDiscoverableTools?.()).not.toThrow();

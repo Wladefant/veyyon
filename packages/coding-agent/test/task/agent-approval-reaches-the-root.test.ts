@@ -94,10 +94,22 @@ function throwingUI(error: Error): ExtensionUIContext {
 /**
  * A REAL `ExtensionRunner`, because `hasUI()` / `getUIContext()` are precisely the
  * behavior under test and a stub of them proves nothing about the missing argument.
- * `uiContext` omitted models a session with no interactive surface.
+ * `uiContext` omitted models a session with no interactive surface. `spawned` builds
+ * the runner the way `createAgentSession` builds a spawned child's: marked as a
+ * subagent, so the name the spawner gives it is the one it reports.
  */
-function makeRunner(uiContext?: ExtensionUIContext): ExtensionRunner {
-	const runner = new ExtensionRunner([], {} as ExtensionRuntime, CWD, {} as SessionManager, {} as ModelRegistry);
+function makeRunner(uiContext?: ExtensionUIContext, spawned = false): ExtensionRunner {
+	const runner = new ExtensionRunner(
+		[],
+		{} as ExtensionRuntime,
+		CWD,
+		{} as SessionManager,
+		{} as ModelRegistry,
+		undefined,
+		undefined,
+		undefined,
+		spawned ? { isSubagent: true, taskDepth: 1 } : undefined,
+	);
 	runner.initialize({} as ExtensionActions, {} as ExtensionContextActions, undefined, uiContext);
 	return runner;
 }
@@ -142,7 +154,7 @@ async function callAsAgent(agentId: string, rung: string, tool: AgentTool = make
 	const settings = createSubagentSettings(Settings.isolated({ "tools.approvalMode": rung }));
 	// The child's own runner, wired exactly as `runSubprocess` wires it: named, then
 	// handed whatever surface the ROOT resolves to.
-	const runner = makeRunner(resolveRootUIContext(agentId));
+	const runner = makeRunner(resolveRootUIContext(agentId), true);
 	runner.setAgentId(agentId);
 	const context = {
 		settings,
@@ -424,7 +436,7 @@ describe("the spawner hands the child the root's surface", () => {
 
 		// A runner with NO surface of its own, so anything it reports afterwards can only
 		// have come from the spawner.
-		const childRunner = makeRunner(undefined);
+		const childRunner = makeRunner(undefined, true);
 		const session = createMockSession(({ emit }) => {
 			emit(yieldSuccessEvent({ ok: true }, "tool-yield"));
 		});

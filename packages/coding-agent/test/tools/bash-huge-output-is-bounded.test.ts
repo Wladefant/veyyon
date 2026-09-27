@@ -36,7 +36,7 @@ import { DEFAULT_MAX_BYTES } from "@veyyon/coding-agent/session/streaming-output
 // The real shape the tool emits. A local all-optional copy used to stand here,
 // which let every assertion in this file read a field the type said might not
 // exist, so nothing could prove one was actually populated.
-import type { TruncationMeta } from "@veyyon/coding-agent/tools/core/output-meta";
+import type { OutputMeta, TruncationMeta } from "@veyyon/coding-agent/tools/core/output-meta";
 import { BashTool } from "@veyyon/coding-agent/tools/shell/bash";
 import { removeWithRetries } from "@veyyon/utils";
 import { useIsolatedGlobalSettings } from "../helpers/isolated-global-settings";
@@ -87,14 +87,15 @@ function bashTool(): BashTool {
 async function run(
 	id: string,
 	command: string,
-): Promise<{ text: string; bytes: number; truncation: TruncationMeta | undefined }> {
+): Promise<{ text: string; bytes: number; truncation: TruncationMeta | undefined; meta: OutputMeta | undefined }> {
 	const result = await bashTool().execute(id, { command, timeout: 180 });
 	const text = (result.content ?? [])
 		.filter(block => block.type === "text")
 		.map(block => (block as { text: string }).text)
 		.join("");
-	const details = result.details as { meta?: { truncation?: TruncationMeta } } | undefined;
-	return { text, bytes: Buffer.byteLength(text, "utf-8"), truncation: details?.meta?.truncation };
+	const details = result.details as { meta?: OutputMeta } | undefined;
+	const meta = details?.meta;
+	return { text, bytes: Buffer.byteLength(text, "utf-8"), truncation: meta?.truncation, meta };
 }
 
 /** A generous ceiling on the inline result: the cap plus room for the wall-time
@@ -130,13 +131,18 @@ describe("a multi-megabyte stream is capped, not inlined", () => {
 	/**
 	 * The adversarial shape: 20MB with no newline anywhere. Truncation trims to
 	 * line boundaries, and a single line offers none, so a naive implementation
-	 * either keeps everything (defeating the cap) or keeps nothing.
+	 * either keeps everything (defeating the cap) or keeps nothing. The per-line
+	 * column cap is what bounds it: every line is still shown, so the result
+	 * reports the column limit rather than a byte window, and the artifact on
+	 * disk still holds all 20MB.
 	 */
 	it("bounds a 20MB single line that offers no line boundary to trim to", async () => {
-		const { bytes, truncation } = await run("one-line", "head -c 20000000 /dev/zero | tr '\\0' 'x'");
+		const { bytes, meta } = await run("one-line", "head -c 20000000 /dev/zero | tr '\\0' 'x'");
 
-		expect(truncation?.totalBytes).toBe(20_000_000);
 		expect(bytes).toBeLessThan(INLINE_CEILING);
+		expect(meta?.limits?.columnTruncated?.maxColumn).toBeGreaterThan(0);
+		const sizes = await Promise.all(artifactPaths.map(async file => (await fs.stat(file)).size));
+		expect(sizes).toContain(20_000_000);
 	});
 });
 

@@ -36,6 +36,7 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { ExtensionRunner } from "@veyyon/coding-agent/extensibility/extensions/runner";
 import { ExtensionToolWrapper } from "@veyyon/coding-agent/extensibility/extensions/wrapper";
 import type { SessionToolApprovals } from "@veyyon/coding-agent/tools/core/approval-modes";
+import { RefusalFenceError } from "@veyyon/coding-agent/tools/core/refusal-fence";
 import { type } from "arktype";
 
 /** Text the tool returns when it actually runs, so "it ran" is observable. */
@@ -182,14 +183,16 @@ describe("the rung itself, with nothing configured", () => {
 	});
 
 	/**
-	 * The wrapper spells no fallback of its own: an absent `Settings` has to land
-	 * on the same rung an empty one does. A literal here used to be `yolo`, which
-	 * silently outranked every unconfigured install.
+	 * The wrapper spells no fallback of its own. A literal here used to be
+	 * `yolo`, which silently outranked every unconfigured install; an absent
+	 * `Settings` is now no policy at all, and the refusal fence stops the call
+	 * before any rung is resolved, rather than running it on a guessed one.
 	 */
-	it("treats an absent Settings the same as an empty one", async () => {
+	it("refuses a call whose context carries no Settings, rather than guessing a rung", async () => {
 		const outcome = await runCall({ withSettings: false });
 
-		expect(outcome.text).toBe(RAN);
+		expect(outcome.error).toBeInstanceOf(RefusalFenceError);
+		expect(outcome.text).toBeUndefined();
 		expect(outcome.cards).toEqual([]);
 	});
 });

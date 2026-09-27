@@ -65,10 +65,16 @@ describe("AgentSession wires the signature settings into the request", () => {
 		session = undefined;
 	});
 
-	/** A Gemini 3 model from the bundled registry, since the sentinel is only substituted there. */
+	/**
+	 * A Gemini 3 model on the public Gemini API from the bundled registry: the
+	 * sentinel is only substituted there, since Cloud Code Assist and Vertex reject
+	 * it and get the field omitted instead.
+	 */
 	function gemini3(): Model {
-		const model = modelRegistry.getAll().find(candidate => candidate.id.startsWith("gemini-3"));
-		if (!model) throw new Error("Expected a bundled gemini-3 model");
+		const model = modelRegistry
+			.getAll()
+			.find(candidate => candidate.id.startsWith("gemini-3") && candidate.api === "google-generative-ai");
+		if (!model) throw new Error("Expected a bundled gemini-3 model on google-generative-ai");
 		return model;
 	}
 
@@ -210,7 +216,12 @@ describe("AgentSession wires the signature settings into the request", () => {
 		});
 		expect(agentSession.thoughtSignatureBytesSaved).toBe(0);
 		const context = await transform({ messages }, model);
-		const full = JSON.stringify(convertMessages(model as never, { messages } as never));
+		// The baseline is the same transformed transcript with the cap lifted, not the
+		// raw messages: the transform also rewrites tool-call ids for the wire, and
+		// those bytes are not the signature saving being measured.
+		const full = JSON.stringify(
+			convertMessages(model as never, { ...context, thoughtSignatureMaxLength: undefined } as never),
+		);
 		const capped = JSON.stringify(convertMessages(model as never, context as never));
 		expect(agentSession.thoughtSignatureBytesSaved).toBe(2 * (LARGE.length - SKIP.length));
 		expect(full.length - capped.length).toBe(agentSession.thoughtSignatureBytesSaved);

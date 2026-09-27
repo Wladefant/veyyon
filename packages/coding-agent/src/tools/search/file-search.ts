@@ -4,7 +4,12 @@ import type { AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-cor
 import * as natives from "@veyyon/natives";
 import { formatGroupedPaths, isCancellation, isEnoent, untilAborted } from "@veyyon/utils";
 import { InternalUrlRouter } from "../../internal-urls";
-import { artifactFooter, type TruncationResult, truncateHead } from "../../session/streaming-output";
+import {
+	artifactFooter,
+	type TruncationSummary,
+	truncateHead,
+	truncationSummary,
+} from "../../session/streaming-output";
 import { isTimeoutError, scopedTimeoutSignal } from "../../utils/fetch-timeout";
 import type { ToolSession } from "..";
 import { applyListLimit } from "../core/list-limit";
@@ -70,7 +75,7 @@ function compareFileSearchResults(a: FileSearchResultEntry, b: FileSearchResultE
 }
 
 export interface FileSearchDetails {
-	truncation?: TruncationResult;
+	truncation?: TruncationSummary;
 	resultLimitReached?: number;
 	meta?: OutputMeta;
 	// Fields for TUI rendering
@@ -295,7 +300,7 @@ export async function executeFileSearch(
 				files: limited,
 				truncated: Boolean(forceTruncated || limitMeta.resultLimit || truncation.truncated),
 				resultLimitReached: limitMeta.resultLimit?.reached,
-				truncation: truncation.truncated ? truncation : undefined,
+				truncation: truncation.truncated ? truncationSummary(truncation) : undefined,
 				cwd: session.cwd,
 				missingPaths: missingPaths.length > 0 ? missingPaths : undefined,
 			};
