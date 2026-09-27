@@ -11,7 +11,7 @@ import { closeModels, leaveArm } from "./arm-model";
 import { type ConsoleAction, type ConsoleHost, LoopConsoleModel, type LoopSetup } from "./console";
 import { createDashboardController } from "./dashboard";
 import { ensureAutoresearchBranch, parseWorkDirDirtyPaths } from "./git";
-import { formatNum, gitStatusPorcelain, gitWorkDirPrefix } from "./helpers";
+import { formatNum, readWorkDirStatus } from "./helpers";
 import { deletePreset, type LoopPreset, loadPresets, savePreset } from "./presets";
 import { AUTORESEARCH_SCREEN_KEY } from "./shortcuts";
 import {
@@ -1095,7 +1095,7 @@ function removeLegacyArtifacts(workDir: string): void {
  */
 async function dirtyPathCount(cwd: string): Promise<number | null> {
 	try {
-		const [statusText, workDirPrefix] = await Promise.all([gitStatusPorcelain(cwd), gitWorkDirPrefix(cwd)]);
+		const { statusText, workDirPrefix } = await readWorkDirStatus(cwd);
 		return parseWorkDirDirtyPaths(statusText, workDirPrefix).length;
 	} catch (err) {
 		logger.warn("Failed to count dirty paths before autoresearch clear", { error: errorMessage(err) });

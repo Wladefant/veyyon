@@ -7,7 +7,7 @@ import { type } from "arktype";
 import type { ToolDefinition } from "../../extensibility/extensions";
 import * as git from "../../utils/git";
 import { parseWorkDirDirtyPaths, tryReadHeadSha } from "../git";
-import { dedupeStrings, gitStatusPorcelain, gitWorkDirPrefix, normalizePathSpec } from "../helpers";
+import { dedupeStrings, normalizePathSpec, readWorkDirStatus } from "../helpers";
 import { buildExperimentState } from "../state";
 import {
 	type AutoresearchStorage,
@@ -433,7 +433,7 @@ function initExperimentCallView(name: string): TextBlockView {
  */
 async function detectPendingChanges(cwd: string): Promise<boolean> {
 	try {
-		const [statusText, workDirPrefix] = await Promise.all([gitStatusPorcelain(cwd), gitWorkDirPrefix(cwd)]);
+		const { statusText, workDirPrefix } = await readWorkDirStatus(cwd);
 		return parseWorkDirDirtyPaths(statusText, workDirPrefix).length > 0;
 	} catch (err) {
 		logger.warn("Git status failed while checking for harness changes; assuming there are some", {
