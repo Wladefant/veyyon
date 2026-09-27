@@ -157,15 +157,10 @@ export async function loadCliExtensionProviders(
 	// one is the right and only answer here. Stated because the same omission at
 	// the session call site was the defect.
 	const extensionsResult = await loadSessionExtensions(options, cwd, settings, eventBus);
-	const activeSources = extensionsResult.extensions.map(extension => extension.path);
-	modelRegistry.syncExtensionSources(activeSources);
-	for (const sourceId of new Set(activeSources)) {
-		modelRegistry.clearSourceRegistrations(sourceId);
-	}
-	for (const { name, config, sourceId } of extensionsResult.runtime.pendingProviderRegistrations) {
-		modelRegistry.registerProvider(name, config, sourceId);
-	}
-	extensionsResult.runtime.pendingProviderRegistrations = [];
+	modelRegistry.adoptExtensionProviders(
+		extensionsResult.extensions.map(extension => extension.path),
+		extensionsResult.runtime.pendingProviderRegistrations,
+	);
 	await modelRegistry.refreshRuntimeProviders();
 }
 
