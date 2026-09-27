@@ -9,6 +9,6 @@
 settle 14
 shot idle
 
-submit "!printf 'short line\n'; printf '%0900d\n' 0; printf 'done\n'"
+submit "!echo short line; printf %0900d 0; echo; echo done"
 settle 8
 shot column-capped-block
