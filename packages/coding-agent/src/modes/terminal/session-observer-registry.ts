@@ -46,6 +46,11 @@ export class SessionObserverRegistry {
 	#nextSortOrder = 0;
 	/** The last registry status seen per agent id, so {@link mirrorAgentStatus} acts on transitions only. */
 	#registryStatusById = new Map<string, AgentStatus>();
+	/**
+	 * A spawn's settled row as the bus left it, held while a turn {@link mirrorAgentStatus} listed is
+	 * running, so the row goes back to the outcome the bus reported rather than one the wake made up.
+	 */
+	#settledBeforeWake = new Map<string, Pick<ObservableSession, "status" | "detached">>();
 
 	/** Add a change listener. Returns unsubscribe function. */
 	onChange(cb: (kind: SessionObserverChangeKind) => void): () => void {
@@ -153,9 +158,11 @@ export class SessionObserverRegistry {
 	 * running while the Agents block had no row for it.
 	 *
 	 * Only transitions act, so an event that repeats a status (an approval prompt, a rescope) and
-	 * the first status seen for an id change nothing. Entering `running` lists the spawn as a
-	 * detached run, because no parent turn blocks on a woken agent; leaving `running` settles a row
-	 * still marked active. A failed or aborted run reported on the bus is never overwritten. Only
+	 * the first status seen for an id change nothing. Entering `running` on a settled row lists the
+	 * spawn as a detached run, because no parent turn blocks on a woken agent; a row the bus still
+	 * reports as active is the bus's own run and is left to it. Leaving `running` puts a woken row
+	 * back to the outcome the bus last reported, or `aborted` when the registry says so: a wake
+	 * carries no outcome of its own, so it never turns a failed run into a completed one. Only
 	 * spawns this bus reported are followed, so another session's agents stay out.
 	 */
 	mirrorAgentStatus(ref: Pick<AgentRef, "id" | "status">): void {
@@ -165,13 +172,18 @@ export class SessionObserverRegistry {
 		const session = this.#sessions.get(ref.id);
 		if (session?.kind !== "spawn") return;
 		if (ref.status === "running") {
-			if (session.status === "active" && session.detached === true) return;
+			if (session.status === "active") return;
+			this.#settledBeforeWake.set(ref.id, { status: session.status, detached: session.detached });
 			session.status = "active";
 			session.detached = true;
-		} else if (previous === "running" && session.status === "active") {
-			session.status = ref.status === "aborted" ? "aborted" : "completed";
 		} else {
-			return;
+			const settled = this.#settledBeforeWake.get(ref.id);
+			if (settled === undefined) return;
+			this.#settledBeforeWake.delete(ref.id);
+			// The bus reported the woken turn itself (a `task` follow-up) and its outcome stands.
+			if (session.status !== "active") return;
+			session.status = ref.status === "aborted" ? "aborted" : settled.status;
+			session.detached = settled.detached;
 		}
 		session.lastUpdate = Date.now();
 		this.#notifyListeners("lifecycle");
@@ -180,6 +192,7 @@ export class SessionObserverRegistry {
 	/** Clear all tracked sessions (e.g. on session switch). Keeps EventBus subscriptions and listeners. */
 	resetSessions(): void {
 		this.#sessions.clear();
+		this.#settledBeforeWake.clear();
 		this.#sortOrderById.clear();
 		this.#parentSortOrderById.clear();
 		this.#nextSortOrder = 0;
@@ -193,6 +206,7 @@ export class SessionObserverRegistry {
 		this.#sortOrderById.clear();
 		this.#parentSortOrderById.clear();
 		this.#registryStatusById.clear();
+		this.#settledBeforeWake.clear();
 		this.#nextSortOrder = 0;
 		this.#listeners.clear();
 	}

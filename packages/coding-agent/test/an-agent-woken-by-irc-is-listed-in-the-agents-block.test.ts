@@ -28,7 +28,7 @@ import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
 import { InteractiveMode } from "@veyyon/coding-agent/modes/terminal/interactive-mode";
 import { AgentLifecycleManager } from "@veyyon/coding-agent/registry/agent-lifecycle";
-import { AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
+import { AGENT_STATUSES, AgentRegistry, MAIN_AGENT_ID } from "@veyyon/coding-agent/registry/agent-registry";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { type AgentLifecyclePayload, TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "@veyyon/coding-agent/task";
 import { initTheme, setTheme, stopThemeWatcher } from "@veyyon/coding-agent/theme/theme";
@@ -289,5 +289,87 @@ describe("an agent woken by IRC is listed in the Agents block while it runs", ()
 		});
 
 		expect(laneRow(hudText(), id, description)).toBe(false);
+	});
+
+	/** The status of the one todo seeded with `content`, as the board holds it now. */
+	function todoStatus(content: string): string | undefined {
+		return mode?.todoPhases.flatMap(phase => phase.tasks).find(task => task.content === content)?.status;
+	}
+
+	// A wake carries no outcome of its own. For every unsuccessful outcome the bus can report for the
+	// first run, and every status the registry can settle the woken turn into, the row goes back to the
+	// reported outcome, so a todo matching the spawn stays open exactly as it would had the agent never
+	// been woken. Manufacturing `completed` here closes the todo as if the agent had succeeded.
+	const unsuccessfulOutcomes: AgentLifecyclePayload["status"][] = ["failed", "aborted"];
+	const settledStatuses = AGENT_STATUSES.filter(status => status !== "running");
+	for (const outcome of unsuccessfulOutcomes) {
+		for (const settled of settledStatuses) {
+			it(`keeps a ${outcome} run's todo open when its wake settles to ${settled}`, async () => {
+				const id = `Woken-${outcome}-${settled}`;
+				const description = `Review the limiter after a ${outcome} run settling ${settled}`;
+				mode?.setTodos([{ name: "Tasks", tasks: [{ content: description, status: "pending" }] }]);
+
+				await flushUi(() => {
+					eventBus?.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, makeLifecycle(id, 0, description, "started", true));
+				});
+				if (!childSession) throw new Error("childSession not booted");
+				AgentRegistry.global().register({
+					id,
+					displayName: id,
+					kind: "sub",
+					parentId: MAIN_AGENT_ID,
+					session: childSession,
+					status: "running",
+				});
+				await flushUi(() => {
+					eventBus?.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, makeLifecycle(id, 0, description, outcome, true));
+					AgentRegistry.global().setStatus(id, "idle");
+				});
+				expect(todoStatus(description)).toBe("pending");
+
+				await flushUi(() => {
+					AgentRegistry.global().setStatus(id, "running");
+				});
+				expect(laneRow(hudText(), id, description)).toBe(true);
+
+				await flushUi(() => {
+					AgentRegistry.global().setStatus(id, settled);
+				});
+				expect(laneRow(hudText(), id, description)).toBe(false);
+				expect(todoStatus(description)).toBe("pending");
+			});
+		}
+	}
+
+	it("leaves a sync spawn's own run to the bus when its registry status flaps mid-run", async () => {
+		const id = "SyncSpawnFlap";
+		const description = "Sync spawn between two turns of its first run";
+		mode?.setTodos([{ name: "Tasks", tasks: [{ content: description, status: "pending" }] }]);
+
+		await flushUi(() => {
+			eventBus?.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, makeLifecycle(id, 0, description, "started", false));
+		});
+		if (!childSession) throw new Error("childSession not booted");
+		AgentRegistry.global().register({
+			id,
+			displayName: id,
+			kind: "sub",
+			parentId: MAIN_AGENT_ID,
+			session: childSession,
+			status: "running",
+		});
+
+		// One turn of the run ends and the next begins; the bus has reported no outcome yet.
+		await flushUi(() => {
+			AgentRegistry.global().setStatus(id, "idle");
+		});
+		expect(todoStatus(description)).toBe("pending");
+		await flushUi(() => {
+			AgentRegistry.global().setStatus(id, "running");
+		});
+
+		// A sync spawn is drawn by its own tool block, never by the detached Agents block.
+		expect(laneRow(hudText(), id, description)).toBe(false);
+		expect(todoStatus(description)).toBe("pending");
 	});
 });
