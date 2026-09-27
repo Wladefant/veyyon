@@ -646,11 +646,11 @@ export declare function extractSegments(line: string, beforeEnd: number, afterSt
 
 /** Before/after segments around an overlay region (`extractSegments`). */
 export interface ExtractSegmentsResult {
-  /** UTF-16 content before the overlay region. */
+  /** Content before the overlay region. */
   before: string
   /** Visible width of the `before` segment. */
   beforeWidth: number
-  /** UTF-16 content after the overlay region. */
+  /** Content after the overlay region. */
   after: string
   /** Visible width of the `after` segment. */
   afterWidth: number
@@ -1597,7 +1597,7 @@ export interface ShellRunResult {
  * (`sliceWithWidth`).
  */
 export interface SliceResult {
-  /** UTF-16 slice containing the selected text. */
+  /** The selected text. */
   text: string
   /** Visible width of the slice in terminal cells. */
   width: number
@@ -1699,6 +1699,6 @@ export interface WorkProfile {
  * Wrap text to a visible width, preserving ANSI escape codes across line
  * breaks.
  *
- * Returns UTF-16 lines with active SGR codes carried across line boundaries.
+ * Returns lines with active SGR codes carried across line boundaries.
  */
 export declare function wrapTextWithAnsi(text: string, width: number, tabWidth: number): Array<string>
