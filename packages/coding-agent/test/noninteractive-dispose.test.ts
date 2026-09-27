@@ -26,9 +26,18 @@ describe("print-mode error exit disposes the session before exit", () => {
 			provider: "openai",
 			model: "gpt-test",
 			usage: {
-				inputTokens: 0,
-				outputTokens: 0,
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
 				totalTokens: 0,
+				cost: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					total: 0,
+				},
 			},
 			stopReason: "error",
 			errorMessage: "boom",
@@ -36,10 +45,11 @@ describe("print-mode error exit disposes the session before exit", () => {
 		};
 		const session: PrintModeSession = {
 			subscribe: () => () => {},
-			prompt: async () => {},
+			prompt: async () => false,
 			displayAssistantContent: () => [],
 			obfuscateProviderText: (text: string) => text,
-			state: { messages: [errorMsg] } as never,
+			state: { messages: [errorMsg] },
+			sessionManager: { getHeader: () => undefined },
 			dispose: async () => {
 				order.push("dispose");
 			},
