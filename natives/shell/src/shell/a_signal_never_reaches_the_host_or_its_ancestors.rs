@@ -1,8 +1,8 @@
 //! WHY: the embedded shell runs inside its host process, so on Unix `$$` is
-//! the host. Before https://github.com/Wladefant/veyyon/issues/106 the `kill`
+//! the host. Before <https://github.com/Wladefant/veyyon/issues/106> the `kill`
 //! builtin forwarded any target to `kill(2)`: `kill -TERM <host>`, a signal to
 //! a host thread, to an ancestor, to `0`, or to a group holding an ancestor
-//! terminated the host or its parents. Child cancellation SIGKILLed the
+//! terminated the host or its parents. Child cancellation sent `SIGKILL` to the
 //! child's numeric PID even after something else had reaped it, when that PID
 //! may already name an unrelated process.
 //!
@@ -63,10 +63,10 @@ fn kill_guard_host_entry() {
 	let parent = unsafe { libc::getppid() };
 	let grandparent = std::env::var("KG_OUTER_PID").unwrap_or_default();
 	let script = script
-		.replace("{self}", &std::process::id().to_string())
-		.replace("{thread}", &thread.to_string())
-		.replace("{parent}", &parent.to_string())
-		.replace("{grandparent}", &grandparent);
+		.replace("%self%", &std::process::id().to_string())
+		.replace("%thread%", &thread.to_string())
+		.replace("%parent%", &parent.to_string())
+		.replace("%grandparent%", &grandparent);
 	let stderr_path = result_path.with_extension("stderr");
 
 	let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -212,27 +212,27 @@ fn spawn_bystander() -> tokio::process::Child {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_host_refuses_to_signal_itself() {
-	let run = run_host("kill-guard-self", "kill -TERM {self}", HostGroup::Shared, None).await;
+	let run = run_host("kill-guard-self", "kill -TERM %self%", HostGroup::Shared, None).await;
 	assert_refused(&run, "kill -TERM <host>");
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_host_thread_id_counts_as_the_host() {
-	let run = run_host("kill-guard-thread", "kill -TERM {thread}", HostGroup::Shared, None).await;
+	let run = run_host("kill-guard-thread", "kill -TERM %thread%", HostGroup::Shared, None).await;
 	assert_refused(&run, "kill -TERM <host thread>");
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_host_refuses_to_signal_its_parent() {
-	let run = run_host("kill-guard-parent", "kill -TERM {parent}", HostGroup::Shared, None).await;
+	let run = run_host("kill-guard-parent", "kill -TERM %parent%", HostGroup::Shared, None).await;
 	assert_refused(&run, "kill -TERM <parent>");
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_host_refuses_to_signal_an_ancestor_above_its_parent() {
 	let run =
-		run_host("kill-guard-grandparent", "kill -KILL {grandparent}", HostGroup::Shared, None).await;
+		run_host("kill-guard-grandparent", "kill -KILL %grandparent%", HostGroup::Shared, None).await;
 	// SIGKILL cannot be trapped, so the outer ancestor proves itself alive by
 	// exiting with the host's status rather than by the absence of a marker.
 	assert_refused(&run, "kill -KILL <grandparent>");
@@ -242,7 +242,7 @@ async fn the_host_refuses_to_signal_an_ancestor_above_its_parent() {
 async fn the_host_refuses_its_own_process_group() {
 	let run = run_host("kill-guard-group-zero", "kill -TERM 0", HostGroup::Own, None).await;
 	assert_refused(&run, "kill -TERM 0");
-	let run = run_host("kill-guard-own-group", "kill -TERM -- -{self}", HostGroup::Own, None).await;
+	let run = run_host("kill-guard-own-group", "kill -TERM -- -%self%", HostGroup::Own, None).await;
 	assert_refused(&run, "kill -TERM -- -<host group>");
 }
 
@@ -269,7 +269,7 @@ async fn the_host_refuses_a_group_that_holds_an_ancestor() {
 #[tokio::test(flavor = "multi_thread")]
 async fn signal_zero_still_probes_the_host_and_its_parent() {
 	let run =
-		run_host("kill-guard-probe", "kill -0 {self} && kill -0 {parent}", HostGroup::Shared, None)
+		run_host("kill-guard-probe", "kill -0 %self% && kill -0 %parent%", HostGroup::Shared, None)
 			.await;
 	assert_eq!(run.script_exit, Some(0), "signal 0 probes succeed: {run:?}");
 	assert_eq!(run.chain_exit, Some(0), "probing delivers nothing: {run:?}");
