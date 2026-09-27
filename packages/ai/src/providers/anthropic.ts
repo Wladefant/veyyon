@@ -4064,7 +4064,7 @@ function toWellFormedDeep(value: unknown): unknown {
 }
 
 function convertAnthropicUserContent(
-	content: (TextContent | ImageContent)[] | string | undefined,
+	content: (TextContent | ImageContent | VideoContent)[] | string | undefined,
 	supportsImages: boolean,
 ): string | ContentBlockParam[] | undefined {
 	if (!content) return undefined;

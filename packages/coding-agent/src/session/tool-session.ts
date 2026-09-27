@@ -109,6 +109,11 @@ export async function buildAdvisorTools(advisorToolSession: ToolSession): Promis
 
 export function createSessionToolSession(inputs: SessionToolSessionInputs): SessionToolSession {
 	const { options, sessionManager } = inputs;
+	const liveSession = (): AgentSession => {
+		const session = inputs.session();
+		if (!session) throw new Error("A tool called into its session before the session was constructed.");
+		return session;
+	};
 	const activeModel = (): Model | undefined => inputs.agent()?.state.model ?? inputs.startupModel();
 	const activeModelString = (): string | undefined => {
 		const model = activeModel();
@@ -222,7 +227,7 @@ export function createSessionToolSession(inputs: SessionToolSessionInputs): Sess
 		// Generic tool discovery (unified — covers built-in + MCP + extension)
 		isToolDiscoveryEnabled: () => inputs.session()?.isToolDiscoveryEnabled() ?? false,
 		getDiscoverableTools: filter => inputs.session()?.getDiscoverableTools(filter) ?? [],
-		getDiscoverableToolSearchIndex: () => inputs.session()?.getDiscoverableToolSearchIndex(),
+		getDiscoverableToolSearchIndex: () => liveSession().getDiscoverableToolSearchIndex(),
 		getSelectedDiscoveredToolNames: () => inputs.session()?.getSelectedDiscoveredToolNames() ?? [],
 		activateDiscoveredTools: toolNames => inputs.session()?.activateDiscoveredTools(toolNames) ?? Promise.resolve([]),
 		getCheckpointState: () => inputs.session()?.getCheckpointState(),

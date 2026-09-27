@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import {
 	Agent,
@@ -735,6 +736,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		// created in the AgentSession constructor, tools loaded before it) is
 		// irrelevant.
 		const cpuExec = sessionCpuExecHooks(() => toolSession.getSessionId?.() ?? null);
+		const adoptSpawnedPid = cpuExec.adoptPid;
+		const gateSpawn = cpuExec.gate;
 		const sessionCustomTools = await loadSessionCustomTools({
 			options,
 			settings,
