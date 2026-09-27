@@ -420,7 +420,7 @@ terminal and one seed is not verified.
 
 ### What proves a split of the engine changed no bytes
 
-`tui.ts` was 5415 lines and is now ten modules under `hosts/terminal/engine/src/core/`.
+`tui.ts` was 5415 lines and is now twelve modules under `hosts/terminal/engine/src/core/`.
 The evidence that the move emitted the same bytes is the corpus already here:
 `render-regressions.test.ts` and `render-stress-oracles.test.ts` assert exact
 emitted ANSI against a `VirtualTerminal`, and they passed against the split
@@ -693,4 +693,4 @@ thumb) and the attributes the terminal presents, through
 `VirtualTerminal#getViewportRowFaintColumns`. A byte assertion alone would still
 pass if a later reset in the same row cancelled the dim.
 
-*Verified against `46980a2485` on 2026-09-11.*
+*Verified against `92dde64853` on 2026-09-26.*
