@@ -805,6 +805,12 @@ interface CodexOpenItem {
 
 class CodexStreamRuntime {
 	eventStream: AsyncGenerator<Record<string, unknown>>;
+	/**
+	 * The body this attempt sent. A websocket attempt holds a private deep copy,
+	 * taken when the frame is built and never mutated, that becomes the chain
+	 * baseline on completion. An SSE attempt never chains and holds the wire body
+	 * itself; it is read only for `stream_options` and `service_tier`.
+	 */
 	requestBodyForState: RequestBody;
 	transport: CodexTransport;
 	websocketState?: CodexWebSocketSessionState;
@@ -1741,7 +1747,10 @@ async function openCodexSseTransport(
 	recordCodexTurnRequestDiagnostics(state, wireBody, wireJson!, "sse", canAppendBeforeRequest);
 	return {
 		eventStream: requestSetup.wrapCodexSseStream(handle.events),
-		requestBodyForState: structuredCloneJSON(wireBody),
+		// SSE never records a chain baseline (see `#handleResponseCompleted`), so
+		// the wire body is held as sent. A deep copy here cost a full clone of the
+		// transcript before the first event was read.
+		requestBodyForState: wireBody,
 		transport: "sse",
 	};
 }
@@ -2242,7 +2251,10 @@ class CodexStreamProcessor {
 				// baseline, which no longer matches the transcript.
 				resetCodexWebSocketAppendState(state);
 			} else {
-				state.lastRequest = structuredCloneJSON(runtime.requestBodyForState);
+				// `requestBodyForState` is the private copy the websocket transport
+				// took for this attempt and nothing mutates it; a retry replaces it
+				// with a fresh one. Adopting it saves a second full clone per turn.
+				state.lastRequest = runtime.requestBodyForState;
 				if (responseId) {
 					state.lastResponseId = responseId;
 					state.lastResponseItems = stripInputItemIds(structuredCloneJSON(runtime.nativeOutputItems));
