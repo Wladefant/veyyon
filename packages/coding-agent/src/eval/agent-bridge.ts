@@ -356,6 +356,8 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
 		);
 	}
 
+	// Same as the task tool: a config.yml edit since the last spawn applies before routing is read.
+	await options.session.settings.reloadConfigIfChanged();
 	const { agents } = await taskDiscovery.discoverAgents(options.session.cwd);
 	const catalog = resolveEnabledAgents({
 		settings: options.session.settings,

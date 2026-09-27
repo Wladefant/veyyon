@@ -15,6 +15,7 @@
  * tables the product registered before the first read.
  */
 
+import { createHash } from "node:crypto";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { atomicWriteFile } from "@veyyon/utils/atomic-write";
@@ -932,6 +933,41 @@ export class SettingsStore {
 			this.#fireEffectiveSettingChanged(key, this.get(key), before);
 		}
 		return { changed, restartRequired, outcomes };
+	}
+
+	/**
+	 * A digest of every file {@link reloadSelectedConfig} reads — each main-config candidate in the
+	 * agent directory, then each `--config` overlay — or `undefined` for an in-memory store, which
+	 * has no file behind it.
+	 *
+	 * Two equal stamps mean a reload would read the bytes it read before, so a caller that reloads
+	 * on demand can skip the parse. The stamp hashes content rather than modification time, whose
+	 * granularity is a whole clock tick on some filesystems: two same-size edits inside one tick
+	 * would otherwise look like no edit at all. A missing file is part of the stamp too, since
+	 * creating or deleting a candidate changes which file is the config.
+	 */
+	async configSourceStamp(): Promise<string | undefined> {
+		if (!this.#configPath) return undefined;
+		const files = [
+			...MAIN_CONFIG_FILENAMES.map(filename => path.join(this.#agentDir, filename)),
+			...this.#configFiles,
+		];
+		const hash = createHash("sha256");
+		const contents = await Promise.all(
+			files.map(async file => {
+				try {
+					return await fsp.readFile(file);
+				} catch (error) {
+					if (isEnoent(error)) return "absent";
+					return `unreadable:${errorMessage(error)}`;
+				}
+			}),
+		);
+		for (let index = 0; index < files.length; index++) {
+			const content = contents[index]!;
+			hash.update(files[index]!).update("\0").update(String(content.length)).update("\0").update(content);
+		}
+		return hash.digest("hex");
 	}
 
 	/**

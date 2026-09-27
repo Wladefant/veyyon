@@ -20,5 +20,5 @@ export type ToolTier = "read" | "write" | "exec";
  */
 export type ToolApprovalDecision =
 	| ToolTier
-	| { tier: ToolTier; reason?: string; override?: boolean; critical?: boolean };
+	| { tier: ToolTier; reason?: string; override?: boolean; critical?: boolean; deny?: boolean };
 export type ToolApproval = ToolApprovalDecision | ((args: unknown) => ToolApprovalDecision);

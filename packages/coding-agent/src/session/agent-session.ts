@@ -430,6 +430,7 @@ import {
 	projectIrcDeliveryTelemetry,
 } from "../task/irc-bus";
 import { usesCodexTaskPrompt } from "../task/prompt-policy";
+import { treeSpawnSemaphore } from "../task/spawn-semaphore";
 import { theme } from "../theme/theme-binding";
 import {
 	AUTO_THINKING,
@@ -2172,6 +2173,11 @@ export class AgentSession {
 				void limiter
 					?.update(this.settings.get("session.cpuLimitCores"), this.settings.get("session.cpuLimitKill"))
 					.catch(error => logger.warn("CPU limit update failed", { error: errorMessage(error) }));
+			}
+			// Resizes the spawn semaphore so lanes already parked in the queue
+			// start without waiting for an unrelated lane's acquire or release.
+			if (path === "agent.maxConcurrency") {
+				treeSpawnSemaphore(this.sessionManager.getSessionId(), this.settings.get("agent.maxConcurrency"));
 			}
 			if (!rebuildsThePrompt(path)) return;
 			this.#promptRefresh = this.#promptRefresh
