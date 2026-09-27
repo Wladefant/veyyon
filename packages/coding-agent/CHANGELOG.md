@@ -13,12 +13,14 @@
 
 ### Changed
 
+- The bundled `/review` command fetches a pull request diff through the GitHub fetch module directly, so a launch no longer loads the `github` tool and its push guards ([#178](https://github.com/Wladefant/veyyon/pull/178)).
 - Extracted the `agent.maxConcurrency` reload and spawn semaphore resize logic from `AgentSession` into `MaxConcurrencyRuntime`; no user-facing change.
 - `edit` and `write` no longer refuse handwritten files named `generated.go`, `generated.ts`, `generated.js`, or `generated.py`; these are treated as auto-generated only when their content carries a generator marker ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - `ToolSession.getToolChoiceQueue()` now returns `ToolChoiceQueue | undefined`, matching what the SDK's session port can supply before a session or queue exists; the `resolve` tool already guarded the absent case, so the type no longer promises more than the port keeps.
 - Reformatted `sdk.ts`, `async/index.ts`, `extensibility/shared-events.ts`, `modes/terminal/interactive-mode.ts` and `slash-commands/helpers/active-oauth-account.ts` to the repository's formatter and import-order rules; no behavior change.
 - Synced the fork with santhreal/veyyon main up to `e4967b27fd04`, bringing in upstream's split of `sdk.ts`, the session runtime, the task executor and the terminal engine's paint sequences while keeping the fork's session policy, refusal fence, tool-call in-flight markers, Windows AltGr and ConPTY handling, and video input ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - `launch/terminal-control.ts` publishes the terminal-owner record through `atomicWriteFile` instead of hand-rolled temp-file and rename, so the write path has one owner; the record stays atomic and stays mode `0600`.
+- Shortened the `todo` tool description and looked up the `task` tool by its `TOOL.task` name in `sdk.ts`; no behavior change.
 
 ### Fixed
 - Fixed the per-line column-truncation notice always claiming `chars`: it now names the unit the cap was enforced in (`bytes` for streamed bash, eval and ssh output and for `grep`, `chars` for `read`), results saved before the unit was recorded still read `chars`, and `grep` now cuts matches in virtual resources by UTF-8 bytes like on-disk matches (oh-my-pi 9d8b40b0750fc2550afbf70cf212c198f32c993a, [Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).

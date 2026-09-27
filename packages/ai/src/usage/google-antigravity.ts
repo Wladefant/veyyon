@@ -1,6 +1,7 @@
 import { FETCH_AVAILABLE_MODELS_PATH, RETRIEVE_USER_QUOTA_SUMMARY_PATH } from "@veyyon/catalog/discovery/antigravity";
 import { ANTIGRAVITY_ENDPOINTS } from "@veyyon/catalog/provider-endpoints";
 import { getAntigravityUserAgent } from "@veyyon/catalog/wire/gemini-headers";
+import { collapseWhitespace } from "@veyyon/utils/collapse-whitespace";
 import { DAY_MS, WEEK_MS } from "@veyyon/utils/time";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import * as AIError from "../error";
@@ -132,7 +133,7 @@ const DAILY_WINDOW: AntigravityWindowDescriptor = { id: "daily", label: "Daily",
  * and `7 day` are one token and `gemini-5h` is seen to contain `5h`.
  */
 function windowIdentifier(value: string | undefined): string {
-	return (value ?? "").toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+	return collapseWhitespace((value ?? "").toLowerCase().replace(/[_-]+/g, " "));
 }
 
 /**

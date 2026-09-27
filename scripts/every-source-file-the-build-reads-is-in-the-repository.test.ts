@@ -39,11 +39,22 @@ const SOURCE = [".rs", ".ts", ".tsx"];
 const NOT_SOURCE = ["node_modules", "target", ".scratch"];
 
 /**
+ * Trees of `.ts` a test regenerates on demand from git history and caches in
+ * place, by exact repository path. A clean clone rebuilds them on the first
+ * run, so a clone that lacks them still builds; they are not source the
+ * repository has to carry. Anchored so the exclusion reaches nothing else.
+ */
+const DERIVED_TREES = ["packages/coding-agent/test/oracles/.cache"];
+
+/**
  * Those trees again as pathspecs, at every depth a workspace member reaches.
  * Without them the listing of what is ignored is the whole dependency install,
  * which is megabytes and gets the child process killed rather than answered.
  */
-const OUTSIDE = NOT_SOURCE.flatMap(tree => ["", "*/", "*/*/", "*/*/*/"].map(depth => `:(exclude)${depth}${tree}`));
+const OUTSIDE = [
+	...NOT_SOURCE.flatMap(tree => ["", "*/", "*/*/", "*/*/*/"].map(depth => `:(exclude)${depth}${tree}`)),
+	...DERIVED_TREES.map(tree => `:(exclude)${tree}`),
+];
 
 /** Ignored source files that are meant to be ignored. Pinned by equality: a new one is a decision. */
 const IGNORED_ON_PURPOSE: string[] = [];

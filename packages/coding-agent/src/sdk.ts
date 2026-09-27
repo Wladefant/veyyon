@@ -1588,7 +1588,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			atRest.contextLimit,
 		);
 		if (!isInProcessChildSession(options) && !isSubagentSession(options)) {
-			const taskTool = toolRegistry.get("task");
+			const taskTool = toolRegistry.get(TOOL.task);
 			const productionExecutor =
 				options.replenishmentExecutor ??
 				(taskTool
