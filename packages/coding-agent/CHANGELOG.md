@@ -20,6 +20,7 @@
 - `launch/terminal-control.ts` publishes the terminal-owner record through `atomicWriteFile` instead of hand-rolled temp-file and rename, so the write path has one owner; the record stays atomic and stays mode `0600`.
 
 ### Fixed
+- Fixed the live bash console keeping every already-drawn output chunk while a fast command kept a backlog, and swallowing all later output when a dropped chunk held the end of a title or image escape sequence ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed an edit to `config.yml` agent pins (`agent.agents.<name>.model`, `modelRoles`, effort) not reaching the next `task`, eval `agent()` or vibe spawn until `/reload-config` ran; each spawn now applies config-file edits made since the last one, and a malformed edit keeps the active routing ([#110](https://github.com/Wladefant/veyyon/issues/110)).
 - Fixed reviewer agents being unable to delegate to the task agent, because their spawn allowlist named only scout ([#181](https://github.com/Wladefant/veyyon/issues/181)).
 - Fixed `/reload-config` ignoring a changed `agent.maxConcurrency`: the new ceiling is now applied, and a raised one admits lanes already queued for a slot at once ([Refs Wladefant/veyyon#176](https://github.com/Wladefant/veyyon/issues/176)).
