@@ -29,6 +29,7 @@ import {
 	type BuildSessionContextOptions,
 	buildSessionContext,
 	buildSessionContextFromPath,
+	resolveContextLeaf,
 	type SessionContext,
 	walkBranchPath,
 } from "./session-context";
@@ -2786,6 +2787,23 @@ export class SessionManager {
 			return buildSessionContext(this.#entries, this.#index.leafId(), this.#index.entriesById(), options);
 		}
 		return buildSessionContextFromPath(this.#index.leafPath(), options);
+	}
+
+	/**
+	 * The tool names the newest `mcp_tool_selection` entry records on the branch
+	 * {@link buildSessionContext} reads, or `undefined` when that branch records
+	 * none. Scans for the one entry instead of rebuilding the branch's messages.
+	 */
+	getMCPToolSelection(): readonly string[] | undefined {
+		const byId = this.#index.entriesById();
+		const path = this.#index.leafEntry()
+			? this.#index.leafPath()
+			: walkBranchPath(byId, resolveContextLeaf(this.#entries, this.#index.leafId(), byId));
+		for (let i = path.length - 1; i >= 0; i--) {
+			const entry = path[i]!;
+			if (entry.type === "mcp_tool_selection") return entry.selectedToolNames;
+		}
+		return undefined;
 	}
 
 	/** Strip stale OpenAI Responses assistant replay metadata from loaded entries. */

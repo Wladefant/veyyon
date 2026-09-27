@@ -8,6 +8,7 @@
 
 - A tool domain manifest can list `resultCodecs`, each a `ToolResultCodec` whose `slim` drops a result `details` field the result's content rebuilds when the session writes the entry and whose `restore` rebuilds it when the session loads.
 - `SessionStorage` has an optional `rewriteTailAtomic` that replaces a file atomically with its first `keepBytes` bytes, a new head written over their start, and a new tail; `FileSessionStorage` implements it, and a backend without it receives whole-file writes.
+- `SessionManager.getMCPToolSelection()` returns the tool names the newest `mcp_tool_selection` entry on the context branch records, or `undefined` when the branch records none, without rebuilding the branch's messages; `resolveContextLeaf` is the rule `buildSessionContext` and that read share for which entry a context is built up to.
 
 ### Changed
 

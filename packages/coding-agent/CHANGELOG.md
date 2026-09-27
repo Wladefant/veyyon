@@ -4,6 +4,7 @@
 
 ### Changed
 
+- A session reads its persisted MCP tool selection at construction and on each MCP tool refresh from the one entry that records it instead of rebuilding, deobfuscating and argot-expanding the branch's whole message list, cutting `createAgentSession` on a 26,806-entry resume from 40.2 ms to 35.4 ms.
 - The CLI configures ArkType to validate by interpreted traversal instead of compiling a validator for every schema, cutting a compiled launch that opens a session from 372 ms to 316 ms and its heap by 11 MiB; a tool-argument rejection of a described closed set now reports the field's description followed by `(accepted: …)` instead of ArkType's list of the members.
 - The `debug` tool runs each action through its own handler in a table keyed by action instead of one 398-line switch, so an action added to the schema without a handler fails the type check; every action's text and details are unchanged across a gdb session.
 - The launch parser sets each value-less flag through the table the profile bootstrap reads as its list of value-less flags, instead of an if-chain that had to be kept in step with that list by hand, and splits a token's flag, extension, string, optional and positional handling into single-purpose functions instead of one 183-line loop; every result and refusal is identical across 300,000 generated argument lists.
