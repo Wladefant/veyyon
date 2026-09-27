@@ -322,7 +322,7 @@ describe("Polysimulator main guard", () => {
 				}),
 			};
 
-			const decision = resolveApproval(tool, {}, { level: "yolo", userConfig: {} });
+			const decision = resolveApproval(tool, {}, "yolo", {}, { bypassAllApprovals: true });
 			expect(decision.policy).toBe("deny");
 			expect(decision.reason).toBe(POLYSIM_MAIN_DENIAL_MESSAGE);
 		});
@@ -337,7 +337,7 @@ describe("Polysimulator main guard", () => {
 				}),
 			};
 
-			const decision = resolveApproval(tool, {}, { level: "auto-edit", userConfig: { "test-guard": "allow" } });
+			const decision = resolveApproval(tool, {}, "auto", { "test-guard": "allow" });
 			expect(decision.policy).toBe("deny");
 			expect(decision.reason).toBe(POLYSIM_MAIN_DENIAL_MESSAGE);
 		});
