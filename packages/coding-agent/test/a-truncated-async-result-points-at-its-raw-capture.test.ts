@@ -1,7 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type { AgentToolContext } from "@veyyon/agent-core";
+import type { AgentToolContext, ToolCallContext } from "@veyyon/agent-core";
+import { AuthStorage } from "@veyyon/ai";
+import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
+import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import {
 	ASYNC_INLINE_RESULT_MAX_CHARS,
 	ASYNC_PREVIEW_MAX_CHARS,
@@ -158,6 +161,22 @@ describe("BashTool background job raw artifact linking", () => {
 
 		const tool = new BashTool(session);
 		// Generate ~100KB of output past the inline budget and exit non-zero
+		const authStorage = await AuthStorage.create(path.join(tempDir, "auth.db"));
+		const toolCall: ToolCallContext = {
+			batchId: "batch-1",
+			index: 0,
+			total: 1,
+			toolCalls: [{ id: "call-1", name: "bash" }],
+		};
+		const toolContext: AgentToolContext = {
+			sessionManager: SessionManager.inMemory(),
+			modelRegistry: new ModelRegistry(authStorage),
+			model: undefined,
+			isIdle: () => true,
+			hasQueuedMessages: () => false,
+			abort: () => {},
+			toolCall,
+		};
 		const result = await tool.execute(
 			"call-1",
 			{
@@ -166,14 +185,7 @@ describe("BashTool background job raw artifact linking", () => {
 			},
 			undefined,
 			() => {},
-			{
-				toolCall: {
-					batchId: "batch-1",
-					index: 0,
-					total: 1,
-					toolCalls: [{ id: "call-1", name: "bash" }],
-				},
-			} as AgentToolContext,
+			toolContext,
 		);
 
 		const jobId = result.details?.async?.jobId;
