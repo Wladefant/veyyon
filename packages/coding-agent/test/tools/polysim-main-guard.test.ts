@@ -2,12 +2,12 @@ import { describe, expect, it } from "bun:test";
 import * as os from "node:os";
 import { resolveApproval } from "@veyyon/coding-agent/tools/core/approval";
 import {
-	POLYSIM_MAIN_DENIAL_MESSAGE,
 	checkGithubToolPolysimMainDenial,
 	checkPolysimMainDenial,
 	isMainRefspec,
 	isPolysimulatorRemoteUrl,
 	isPolysimulatorRepo,
+	POLYSIM_MAIN_DENIAL_MESSAGE,
 } from "@veyyon/coding-agent/tools/core/polysim-main-guard";
 import { BashTool, bashApprovalDecision } from "@veyyon/coding-agent/tools/shell/bash";
 import { GithubTool } from "@veyyon/coding-agent/tools/web/gh";
@@ -30,7 +30,7 @@ const mockPolysimOptions = (overrides?: {
 	remotes?: Record<string, string>;
 }) => ({
 	getRemotes: () => overrides?.remotes ?? POLYSIM_REMOTES,
-	getCurrentBranch: () => (overrides && Object.prototype.hasOwnProperty.call(overrides, "branch") ? overrides.branch : "feature-test"),
+	getCurrentBranch: () => (overrides && Object.hasOwn(overrides, "branch") ? overrides.branch : "feature-test"),
 	resolvePrBase: () => overrides?.prBase,
 });
 
@@ -115,12 +115,7 @@ describe("Polysimulator main guard", () => {
 		});
 
 		it("denies bare git push when current branch is main", () => {
-			const denial = checkPolysimMainDenial(
-				"git push",
-				testDir,
-				undefined,
-				mockPolysimOptions({ branch: "main" }),
-			);
+			const denial = checkPolysimMainDenial("git push", testDir, undefined, mockPolysimOptions({ branch: "main" }));
 			expect(denial).toBeDefined();
 			expect(denial?.reason).toBe(POLYSIM_MAIN_DENIAL_MESSAGE);
 		});
@@ -176,12 +171,7 @@ describe("Polysimulator main guard", () => {
 			];
 
 			for (const cmd of commands) {
-				const denial = checkPolysimMainDenial(
-					cmd,
-					testDir,
-					undefined,
-					mockPolysimOptions({ prBase: "main" }),
-				);
+				const denial = checkPolysimMainDenial(cmd, testDir, undefined, mockPolysimOptions({ prBase: "main" }));
 				expect(denial).toBeDefined();
 				expect(denial?.reason).toBe(POLYSIM_MAIN_DENIAL_MESSAGE);
 			}

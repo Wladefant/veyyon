@@ -12,8 +12,7 @@ import * as path from "node:path";
 import { resolveRepositorySync } from "../../utils/git-head";
 import { splitCommandSegments, splitWords } from "../shell/bash-guard";
 
-export const POLYSIM_MAIN_DENIAL_MESSAGE =
-	"main requires both founders' approval; agents never merge or push to main";
+export const POLYSIM_MAIN_DENIAL_MESSAGE = "main requires both founders' approval; agents never merge or push to main";
 
 export const POLYSIM_REPO_SLUG = "bavariance/polysimulator";
 
@@ -40,7 +39,10 @@ export interface PolysimGuardOptions {
  */
 export function isPolysimulatorRepo(repo?: string): boolean {
 	if (!repo || typeof repo !== "string") return false;
-	const normalized = repo.trim().toLowerCase().replace(/^\/+|\/+$/g, "");
+	const normalized = repo
+		.trim()
+		.toLowerCase()
+		.replace(/^\/+|\/+$/g, "");
 	return (
 		normalized === POLYSIM_REPO_SLUG ||
 		normalized === `${POLYSIM_REPO_SLUG}.git` ||
@@ -56,8 +58,7 @@ export function isPolysimulatorRemoteUrl(url?: string): boolean {
 	if (!url || typeof url !== "string") return false;
 	const lower = url.trim().toLowerCase();
 	return (
-		lower.includes("github.com/bavariance/polysimulator") ||
-		lower.includes("github.com:bavariance/polysimulator")
+		lower.includes("github.com/bavariance/polysimulator") || lower.includes("github.com:bavariance/polysimulator")
 	);
 }
 
@@ -186,7 +187,10 @@ function parseSegmentWords(segment: string): ParsedCommandInvocation | null {
 	if (wordObjects.length === 0) return null;
 	const words = wordObjects.map(w => w.text.trim()).filter(Boolean);
 	if (words.length === 0) return null;
-	const binary = path.basename(words[0]).toLowerCase().replace(/\.exe$/i, "");
+	const binary = path
+		.basename(words[0])
+		.toLowerCase()
+		.replace(/\.exe$/i, "");
 	return { binary, words, rawSegment: segment };
 }
 
@@ -239,7 +243,6 @@ function checkGitPushInvocation(
 	};
 
 	let explicitRemoteUrl: string | undefined;
-	let explicitRemoteName: string | undefined;
 	const positionalArgs: string[] = [];
 	let hasAllFlag = false;
 	let hasMirrorFlag = false;
@@ -294,7 +297,6 @@ function checkGitPushInvocation(
 			isTargetPolysim = true;
 			refspecs = positionalArgs.slice(1);
 		} else if (Object.hasOwn(remotes, firstPositional)) {
-			explicitRemoteName = firstPositional;
 			const remoteUrl = remotes[firstPositional];
 			isTargetPolysim = isPolysimulatorRemoteUrl(remoteUrl);
 			refspecs = positionalArgs.slice(1);
@@ -612,7 +614,6 @@ export function checkGithubToolPolysimMainDenial(
 		}
 		return undefined;
 	}
-
 
 	const explicitBase = typeof record.base === "string" ? record.base.trim().toLowerCase() : undefined;
 	if (explicitBase) {

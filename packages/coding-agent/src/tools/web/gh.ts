@@ -77,8 +77,8 @@ export { parsePositiveDecimalInt } from "./gh-format";
 
 import { saveOutputArtifact } from "../core/output-artifact";
 import type { OutputMeta } from "../core/output-meta";
-import { type ToolAbortError, ToolError, throwIfAborted } from "../core/tool-errors";
 import { checkGithubToolPolysimMainDenial } from "../core/polysim-main-guard";
+import { type ToolAbortError, ToolError, throwIfAborted } from "../core/tool-errors";
 import { toolResult } from "../core/tool-result";
 import { parsePrUrl } from "./gh-url";
 import { invalidateAllForNumber } from "./github-cache";

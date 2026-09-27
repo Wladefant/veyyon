@@ -32,8 +32,8 @@ import { invalidateGithubCacheForBashCommand } from "../core/gh-cache-invalidati
 import { inlineBudgetFor, inlineOutputPricing, saveOutputArtifact } from "../core/output-artifact";
 import { foldToolOutputBookkeeping } from "../core/output-fold";
 import type { OutputMeta } from "../core/output-meta";
-import { checkPolysimMainDenial } from "../core/polysim-main-guard";
 import { resolveToCwd } from "../core/path-utils";
+import { checkPolysimMainDenial } from "../core/polysim-main-guard";
 import { DEFAULT_TERMINAL_PREVIEW_LINES, shortenPath } from "../core/render-utils";
 import { ToolAbortError, ToolError } from "../core/tool-errors";
 import { toolResult } from "../core/tool-result";
