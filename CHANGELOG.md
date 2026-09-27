@@ -35,12 +35,14 @@
 
 ### Changed
 
+- The bundled `/review` command fetches a pull request diff through the GitHub fetch module directly, so a launch no longer loads the `github` tool and its push guards ([#178](https://github.com/Wladefant/veyyon/pull/178)).
 - Extracted the `agent.maxConcurrency` reload and spawn semaphore resize logic from `AgentSession` into `MaxConcurrencyRuntime`; no user-facing change.
 - `edit` and `write` no longer refuse handwritten files named `generated.go`, `generated.ts`, `generated.js`, or `generated.py`; these are treated as auto-generated only when their content carries a generator marker ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - `ToolSession.getToolChoiceQueue()` now returns `ToolChoiceQueue | undefined`, matching what the SDK's session port can supply before a session or queue exists; the `resolve` tool already guarded the absent case, so the type no longer promises more than the port keeps.
 - Reformatted `sdk.ts`, `async/index.ts`, `extensibility/shared-events.ts`, `modes/terminal/interactive-mode.ts` and `slash-commands/helpers/active-oauth-account.ts` to the repository's formatter and import-order rules; no behavior change.
 - Synced the fork with santhreal/veyyon main up to `e4967b27fd04`, bringing in upstream's split of `sdk.ts`, the session runtime, the task executor and the terminal engine's paint sequences while keeping the fork's session policy, refusal fence, tool-call in-flight markers, Windows AltGr and ConPTY handling, and video input ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - `launch/terminal-control.ts` publishes the terminal-owner record through `atomicWriteFile` instead of hand-rolled temp-file and rename, so the write path has one owner; the record stays atomic and stays mode `0600`.
+- Shortened the `todo` tool description and looked up the `task` tool by its `TOOL.task` name in `sdk.ts`; no behavior change.
 - Merged upstream v1.5.0.
 - A session reads its persisted MCP tool selection at construction and on each MCP tool refresh from the one entry that records it instead of rebuilding, deobfuscating and argot-expanding the branch's whole message list, cutting `createAgentSession` on a 26,806-entry resume from 40.2 ms to 35.4 ms.
 - A resumed read result numbers its card rows by scanning the result text in place instead of slicing and regex-matching each row, cutting `SessionManager.open` on a 76 MB session from 179.9 ms to 143.9 ms with identical cards across 400,000 generated result texts.
@@ -104,12 +106,14 @@
 - A settings-screen change applies its live effect through a table keyed by setting path in `modes/terminal/controllers/setting-effects.ts` instead of a 261-line `switch`, and the effects for names no setting has (`autoCompact`, `theme`, `thinkingLevel` and fourteen `statusLine*` spellings) and for settings with no screen row are gone; no user-visible change beyond the two fixes below.
 - A URL read sends its alternate-markdown, `.md` suffix, content-negotiation, alternate-feed and `llms.txt` probes concurrently, keeps the highest-priority rendition that answers and aborts the rest, and downloads a document's bytes once for the converter and the binary notice, cutting an article read from 93.3 ms to 63.1 ms and a script-shell page read from 216.6 ms to 93.7 ms.
 - Collapsed the intent-length guard in `executeToolCalls` onto the single line the repository formatter requires; no behavior change.
+- Renamed the intent-length rejection local in `executeToolCalls` from `errorText` to `intentRejection`; no behavior change.
 - The per-turn stale-result and threshold prunes and the shake, dedup and truncation collectors scan only the entries from the compaction boundary to the leaf instead of the whole branch, which cut the two per-turn prunes on a 238,084-entry session with 390 compactions from 420ms to 4.4ms per turn.
 - `resolveCompactionBoundaryIndex` searches for the keep marker from the end of the branch, which takes about 9ms off rebuilding the context of a 238,084-entry branch.
 - Split the agent loop's turn driver into per-step functions (pause park, directive resolution, sampling with Harmony-leak recovery, failed-turn settling, tool-call settling, queue drains); no user-visible change.
 - `estimateTokens` collects a message's fragments and the shape digest its cache compares in one walk on a first estimate instead of two, cutting the first estimate of a 26,806-entry resumed session's messages from 21.5 ms to 16.8 ms.
 - Moved the `reasoning-budget` re-export below its import block in `stream.ts` and dropped a stray blank line before `applyCacheControlToLastTextBlock` so both files match the formatter and import-order rules; no behavior change.
 - `aws-credentials.ts` persists a refreshed SSO cache token through `atomicWriteFile` instead of hand-rolled temp-file and rename, so the write path has one owner; the write stays atomic and the file stays mode `0600`.
+- The Antigravity usage label normalizer collapses whitespace through the shared `collapseWhitespace` helper; no behavior change.
 - The JSON Schema meta-validator checks a node by looking each of its keys up in a keyword table instead of probing every known keyword, cutting validation of a 40-tool parameter schema set from 46.6 µs to 33.7 µs with identical verdicts, except that a `NaN` `multipleOf` is now rejected.
 - Stream option mapping resolves each API's options in its own mapper over one shared base instead of one 420-line switch, cutting the mapping of 743,431 model and option combinations from 100.8 ms to 92.1 ms with identical options.
 - The Anthropic and OpenAI-compatible providers split their stream loops, message converters and finalization into per-step helpers; no user-visible change.
@@ -164,6 +168,7 @@
 - `latexToUnicode` dispatches a command through one name-keyed table and scans command names by character code, rendering a 12-formula corpus in 11.4 µs instead of 24.2 µs with 305,251 differential cases byte-identical.
 - `visibleWidth` counts a row of printable ASCII, tabs and SGR sequences in its own scan instead of the escape-stripping measure, cutting a styled prose row from 299 ns to 62 ns and a colored 13,362-entry transcript render from 288 ms to 270 ms with identical widths.
 - Replaced `any` types in `getNested` scraper utility with `unknown` and preserved user cancellation on scrapers.
+- Firecrawl endpoint normalization strips trailing slashes through the shared `trimTrailingSlashes` helper; no behavior change.
 
 ### Removed
 
@@ -286,6 +291,7 @@
 - A Cursor turn held by a local tool that never returns now ends when its failure or an abort arrives instead of waiting on the tool forever.
 - Fixed every Cursor exec-channel tool call being stored twice in the assistant message, which left an unanswered copy of each call that session resume reported as pending.
 - A blank user or developer message after a tool result no longer sends Mistral two consecutive assistant turns, which it rejects.
+- Loading the provider catalog no longer evaluates arktype: `chatgpt-web` discovery checks its daemon's JSON with `isRecord` instead of four all-`unknown` schemas.
 - `COMMAND_CODE_COSTS` uses plain string keys instead of computed `["…"]` keys, which Biome's `useLiteralKeys` rule rejected; no behavior change.
 - Claude Opus 5.5 downgrades forced tool choice (`supportsForcedToolChoice: false`) to avoid 400 invalid_request_error rejections, and default models for anthropic, amazon-bedrock, and litellm promote to Opus 5.5.
 - `calculateCost` and `resolveRequestCost` fall back to zero pricing for unconstructed model objects missing an explicit `cost` property.
