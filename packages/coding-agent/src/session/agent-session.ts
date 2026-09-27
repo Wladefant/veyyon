@@ -12611,7 +12611,7 @@ export class AgentSession {
 			// Anthropic history, where a later tool_result has nothing to anchor to.
 			// The reminders describe a turn that has just been discarded, so they
 			// are false by the time any later turn reads them.
-			this.#discardAssistantTurn(assistantMessage);
+			await this.#dropPersistedAssistantTurn(assistantMessage);
 			this.#dropTurnRetryReminders();
 			return false;
 		}

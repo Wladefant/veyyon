@@ -21,6 +21,13 @@ function quoteForPowerShell(pathValue: string): string {
 	return `'${pathValue.replace(/'/g, `''`)}'`;
 }
 
+/** Process inputs used to select the installed command or preserve a source invocation. */
+export interface ProfileAliasProcessOptions {
+	argv?: readonly string[];
+	cwd?: string;
+	compiled?: boolean;
+}
+
 export interface ProfileAliasCommand {
 	display: string;
 	posix: string;
@@ -195,10 +202,22 @@ function normalizeShellName(
 	throw new Error(`Unsupported shell${shell ? ` "${shell}"` : ""}. Supported shells: bash, zsh, fish, PowerShell.`);
 }
 
+/** Resolve the command a generated profile alias should invoke. */
+export function resolveProfileAliasCommandFromProcess(options?: ProfileAliasProcessOptions): ProfileAliasCommand;
+export function resolveProfileAliasCommandFromProcess(argv?: readonly string[], cwd?: string): ProfileAliasCommand;
 export function resolveProfileAliasCommandFromProcess(
-	argv: readonly string[] = process.argv,
-	cwd: string = process.cwd(),
+	optionsOrArgv: ProfileAliasProcessOptions | readonly string[] = {},
+	legacyCwd?: string,
 ): ProfileAliasCommand {
+	const options: ProfileAliasProcessOptions = Array.isArray(optionsOrArgv)
+		? { argv: optionsOrArgv, cwd: legacyCwd }
+		: (optionsOrArgv as ProfileAliasProcessOptions);
+	const {
+		argv = process.argv,
+		cwd = process.cwd(),
+		compiled = process.env.VEYYON_COMPILED === "true" || process.env.PI_COMPILED === "true",
+	} = options;
+	if (compiled) return DEFAULT_ALIAS_COMMAND;
 	const runtime = argv[0];
 	const script = argv[1];
 	if (!runtime || !script || !/\.[cm]?[jt]s$/.test(script)) return DEFAULT_ALIAS_COMMAND;
