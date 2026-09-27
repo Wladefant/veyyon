@@ -168,7 +168,7 @@ describe("read tool column truncation vs hashline snapshot", () => {
 		expect([...(snapshot?.clippedLines ?? [])].sort((a, b) => a - b)).toEqual([2, 6]);
 		expect([1, 7].map(line => snapshot?.seenLines?.has(line))).toEqual([true, true]);
 		expect([2, 6].map(line => snapshot?.seenLines?.has(line))).toEqual([false, false]);
-		expect(result.details?.meta?.limits?.columnTruncated).toEqual({ maxColumn: COLUMN_CAP });
+		expect(result.details?.meta?.limits?.columnTruncated).toEqual({ maxColumn: COLUMN_CAP, unit: "chars" });
 	});
 
 	it("reports the column cap for a single-range read and nothing for a read that clipped nothing", async () => {
@@ -187,7 +187,7 @@ describe("read tool column truncation vs hashline snapshot", () => {
 		);
 		expect([...(wideSnapshot?.clippedLines ?? [])]).toEqual([2]);
 		expect(wideSnapshot?.seenLines?.has(2)).toBe(false);
-		expect(wide.details?.meta?.limits?.columnTruncated).toEqual({ maxColumn: COLUMN_CAP });
+		expect(wide.details?.meta?.limits?.columnTruncated).toEqual({ maxColumn: COLUMN_CAP, unit: "chars" });
 
 		const narrow = await tool.execute("call-narrow", { path: `${narrowPath}:1-3` });
 		const narrowSnapshot = getFileSnapshotStore(session).byHash(
@@ -222,7 +222,7 @@ describe("read tool column truncation vs hashline snapshot", () => {
 		expect(snapshot?.clippedLines?.has(1)).toBe(true);
 		expect(snapshot?.seenLines?.has(1)).toBe(false);
 		expect([7, 8].map(line => snapshot?.seenLines?.has(line))).toEqual([true, true]);
-		expect(result.details?.meta?.limits?.columnTruncated).toEqual({ maxColumn: COLUMN_CAP });
+		expect(result.details?.meta?.limits?.columnTruncated).toEqual({ maxColumn: COLUMN_CAP, unit: "chars" });
 	});
 
 	it("edit can apply against a file with long lines without re-reading", async () => {
