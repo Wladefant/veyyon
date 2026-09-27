@@ -1697,7 +1697,12 @@ export function sanitizeSchemaForStrictMode(
 	// Scalar `type`: walk the keys, rewriting or stripping per strict-mode rules.
 
 	const sanitized: Record<string, unknown> = {};
-	cache.set(schema, sanitized);
+	// `nullable: true` is stripped below and re-introduced as an `anyOf` wrapper
+	// around `sanitized`. The wrapper is what the cache holds, so a second
+	// reference to this node, shared or cyclic, resolves to the nullable form too.
+	const nullableWrapper: JsonObject | undefined =
+		schema.nullable === true ? { anyOf: [sanitized, { type: "null" }] } : undefined;
+	cache.set(schema, nullableWrapper ?? sanitized);
 	for (const key in schema) {
 		const value = schema[key];
 		if (key in NON_STRUCTURAL_SCHEMA_KEYS || key === "type" || key === "const" || key === "nullable") {
@@ -1807,15 +1812,15 @@ export function sanitizeSchemaForStrictMode(
 		if (inferred !== undefined) sanitized.type = inferred;
 	}
 
-	// `nullable: true` was stripped above — re-introduce it as an `anyOf` wrapper.
-	// `description` hoists to the wrapper so both branches share it without
-	// duplication — matches the optional-property wrap in `enforceStrictSchema`
-	// and the typical OpenAI strict-mode "description on the union" shape.
-	if (schema.nullable === true) {
-		const { nullable: _, description, ...withoutNullable } = sanitized;
-		const wrapper: JsonObject = { anyOf: [withoutNullable, { type: "null" }] };
-		if (description !== undefined) wrapper.description = description;
-		return wrapper;
+	// `description` hoists to the nullable wrapper so both branches share it
+	// without duplication — matches the optional-property wrap in
+	// `enforceStrictSchema` and the typical OpenAI strict-mode "description on
+	// the union" shape.
+	if (nullableWrapper) {
+		const description = sanitized.description;
+		delete sanitized.description;
+		if (description !== undefined) nullableWrapper.description = description;
+		return nullableWrapper;
 	}
 
 	return sanitized;

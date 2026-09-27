@@ -23,6 +23,7 @@
 
 ### Fixed
 
+- `sanitizeSchemaForStrictMode` keeps a `nullable: true` node nullable at every reference, so a schema that reuses one nullable object in two places no longer drops the `null` branch from the second, and a nullable node that references itself resolves to its nullable form.
 - A tool-argument rejection bounds each issue line to 256 characters before appending the field's accepted values, so an oversized rejected value no longer cuts the legal values out of the failure.
 - A Cursor turn whose remote agent stops making progress now ends with "Cursor made no progress for Ns" at the 30-minute ceiling instead of hanging indefinitely, because Cursor's ten-second server heartbeat no longer counts as progress.
 - A Cursor turn held by a local tool that never returns now ends when its failure or an abort arrives instead of waiting on the tool forever.
