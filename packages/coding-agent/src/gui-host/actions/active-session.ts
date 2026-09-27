@@ -5,6 +5,7 @@ import { listSessions, listSessionsReadOnly } from "@veyyon/kernel/session/sessi
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { computeDefaultSessionDir } from "@veyyon/kernel/session/session-paths";
 import { FileSessionStorage } from "@veyyon/kernel/session/session-storage";
+import { assertNotTerminalOwned } from "@veyyon/kernel/session/terminal-ownership";
 import { errorMessage } from "@veyyon/utils";
 import { writeFrame } from "../frames";
 import { reportQueuedPrompts } from "../queued-prompts";
@@ -15,7 +16,7 @@ import {
 	sessionEntriesToTranscript,
 } from "../transcript-conversion";
 import { type ClientSessionState, disposeTurnSession, settleRunningTurn } from "../turns";
-import type { ErrorScope, TranscriptEntry } from "../wire";
+import type { ErrorScope, HostActionTag, TranscriptEntry } from "../wire";
 import { sessionFiles } from "./session-files";
 import type { ActionContext } from "./types";
 
@@ -67,6 +68,116 @@ function rescopeWorkspace(ctx: ActionContext, previousCwd: string, manager: Sess
 
 export function isActive(sm: SessionManager | undefined, session: string): sm is SessionManager {
 	return sm !== undefined && (sm.getSessionId() === session || sm.getSessionFile() === session);
+}
+
+/**
+ * How an action reaches a session file: through the session its payload names, through the
+ * client's current session whatever the payload says, or not at all. Every action is listed,
+ * so a new one does not compile until it states which.
+ */
+export type SessionReach = "named" | "current" | "none";
+
+export const ACTION_SESSION_REACH: Record<HostActionTag, SessionReach> = {
+	Attach: "none",
+	Detach: "none",
+	RetryConnection: "none",
+	Shutdown: "none",
+	ListSessions: "none",
+	SearchSessions: "none",
+	PreviewSessionTranscript: "none",
+	LoadTranscript: "named",
+	OpenSession: "named",
+	CreateSession: "none",
+	RenameSession: "named",
+	DeleteSession: "named",
+	BranchSession: "named",
+	ExportSession: "named",
+	CompactSession: "named",
+	HandoffSession: "named",
+	SubmitPrompt: "named",
+	Steer: "named",
+	FollowUp: "named",
+	AbortTurn: "none",
+	SetQueueMode: "none",
+	SetSessionMode: "current",
+	CancelTool: "none",
+	SetToolViewExpanded: "none",
+	DequeueQueuedPrompt: "named",
+	RespondToInteraction: "none",
+	LoadFileTree: "none",
+	ReadFile: "none",
+	SearchFiles: "none",
+	SearchContent: "none",
+	OpenExternal: "none",
+	RefreshChanges: "none",
+	SelectChangeScope: "none",
+	CreateTerminal: "none",
+	AttachTerminal: "none",
+	WriteTerminal: "none",
+	ResizeTerminal: "none",
+	RestartTerminal: "none",
+	ClearTerminal: "none",
+	CloseTerminal: "none",
+	RefreshProcesses: "none",
+	ProcessLogs: "none",
+	ProcessSend: "none",
+	ProcessSignal: "none",
+	ProcessStop: "none",
+	ProcessRestart: "none",
+	ProcessStart: "none",
+	RefreshModels: "none",
+	SelectModel: "current",
+	SetThinkingLevel: "current",
+	RefreshProviders: "none",
+	StartProviderAuth: "none",
+	SubmitAuthSecret: "none",
+	OpenAuthUrl: "none",
+	CancelAuthFlow: "none",
+	RetryAuthFlow: "none",
+	RefreshMcp: "none",
+	SetMcpEnabled: "none",
+	ReviveAgent: "none",
+	SpawnTask: "current",
+	CancelTask: "none",
+	LoadSettings: "none",
+	SetSetting: "none",
+	ResetSetting: "none",
+	LoadThemes: "none",
+	LoadKeybindings: "none",
+	SetKeybinding: "none",
+	RefreshDiagnostics: "none",
+	RetryDiagnosticSource: "none",
+	ClearOutput: "none",
+	GetUsage: "none",
+	GetContextBreakdown: "none",
+};
+
+async function reachedSessionFile(ctx: ActionContext, reach: SessionReach, payload: unknown): Promise<string | undefined> {
+	const current = activeManager(ctx);
+	if (reach === "current") return current?.getSessionFile();
+	const session = typeof payload === "object" && payload !== null ? (payload as { session?: unknown }).session : undefined;
+	if (typeof session !== "string" || !session) return undefined;
+	if (isActive(current, session)) return current.getSessionFile();
+	return findSessionPath(session, ctx.cwd, ctx.agentDir);
+}
+
+/**
+ * Refuse an action that would write a session file a live terminal owns. The kernel refuses to
+ * open such a file, but a session this client opened before a terminal resumed it is already
+ * held, and deleting a file opens nothing, so the check runs here, before any handler. Replies
+ * and returns `true` when the action is refused; an ownership that cannot be established refuses.
+ */
+export async function refuseTerminalOwnedSession(ctx: ActionContext, payload: unknown): Promise<boolean> {
+	const reach = ACTION_SESSION_REACH[ctx.actionTag];
+	if (reach === "none") return false;
+	try {
+		const file = await reachedSessionFile(ctx, reach, payload);
+		if (file) await assertNotTerminalOwned(file);
+		return false;
+	} catch (error) {
+		replyError(ctx, "SESSION_OWNED_BY_TERMINAL", error);
+		return true;
+	}
 }
 
 export function replyError(ctx: ActionContext, code: string, error: unknown, scope: ErrorScope = "Session"): void {
