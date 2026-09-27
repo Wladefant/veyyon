@@ -671,7 +671,7 @@ describe("InputController escape behavior", () => {
 		expect(ctx.showTreeSelector).toHaveBeenCalledTimes(1);
 		expect(ctx.showUserMessageSelector).not.toHaveBeenCalled();
 		expect(spies.resetDisplay).not.toHaveBeenCalled();
-		expect(spies.requestRender).toHaveBeenCalledWith(true);
+		expect(spies.requestRender.mock.calls).toEqual([[true]]);
 	});
 
 	it("opens the message selector and requests a viewport-only repaint when double-Esc is configured for branch", () => {
@@ -686,7 +686,7 @@ describe("InputController escape behavior", () => {
 		expect(ctx.showUserMessageSelector).toHaveBeenCalledTimes(1);
 		expect(ctx.showTreeSelector).not.toHaveBeenCalled();
 		expect(spies.resetDisplay).not.toHaveBeenCalled();
-		expect(spies.requestRender).toHaveBeenCalledWith(true);
+		expect(spies.requestRender.mock.calls).toEqual([[true]]);
 	});
 	it("repaints only the viewport when the double-Esc selector opens on a long session", async () => {
 		// Regression (upstream bff52ac340bf): the gesture called ui.resetDisplay(),
