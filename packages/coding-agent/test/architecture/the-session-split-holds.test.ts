@@ -63,6 +63,7 @@ const COLLABORATORS = [
 	"advisor-roster.ts",
 	"checkpoint-runtime.ts",
 	"irc-inbox.ts",
+	"max-concurrency-runtime.ts",
 	"post-prompt-tasks.ts",
 	"streaming-edit-guard.ts",
 	"thinking-runtime.ts",

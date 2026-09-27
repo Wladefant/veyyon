@@ -151,9 +151,21 @@ export class BashInteractiveOverlayComponent implements Component {
 	 * amount of memory and the console shows its newest output.
 	 */
 	#trimWriteQueue(): void {
-		const firstPending = this.#writing ? this.#writeOffset + 1 : this.#writeOffset;
-		while (this.#writeQueue.length - firstPending > MAX_LIVE_WRITE_QUEUE_CHUNKS) {
-			this.#writeQueue.splice(firstPending, 1);
+		// Release the chunks xterm already consumed. The queue resets only on a full drain,
+		// which never comes while a fast producer keeps a backlog alive, so without this the
+		// array keeps one entry per completed write.
+		if (this.#writeOffset > 0) {
+			this.#writeQueue.splice(0, this.#writeOffset);
+			this.#writeOffset = 0;
+		}
+		const firstPending = this.#writing ? 1 : 0;
+		const overflow = this.#writeQueue.length - firstPending - MAX_LIVE_WRITE_QUEUE_CHUNKS;
+		if (overflow > 0) {
+			this.#writeQueue.splice(firstPending, overflow);
+			// A dropped chunk can hold the terminator of an OSC/DCS/APC string the console is
+			// still inside (a title, a sixel payload), which would swallow everything after it.
+			// A string terminator is a no-op in the ground state and ends such a string otherwise.
+			this.#writeQueue[firstPending] = `\u001b\\${this.#writeQueue[firstPending]}`;
 		}
 	}
 
