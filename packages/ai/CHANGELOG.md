@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Stream option mapping resolves each API's options in its own mapper over one shared base instead of one 420-line switch, cutting the mapping of 743,431 model and option combinations from 100.8 ms to 92.1 ms with identical options.
 - The Anthropic and OpenAI-compatible providers split their stream loops, message converters and finalization into per-step helpers; no user-visible change.
 - The OpenAI-compatible stream reads a tool call's prior object arguments through the shared `isRecord` guard instead of an inline check; no user-visible change.
 - Provider message replay splits into per-block replay steps and a tool-result pairing pass, cutting its time on a 52,000-message history by 7% for Anthropic targets and 13% for OpenAI Responses targets.
