@@ -398,10 +398,16 @@ export interface ToolExecutionProducerParams {
 /** What the card drawing a producer's block is on: its expansion, spinner frame and freeze. */
 export type ToolExecutionDrawContext = Pick<ToolExecutionBuildParams, "expanded" | "frame" | "frozen">;
 
+const NO_LISTENERS: readonly (() => void)[] = [];
+
 export class ToolExecutionProducer {
 	#params: ToolExecutionBuildParams & { isPartial: boolean; sealed: boolean };
 	#callPreview: ToolCallPreview;
-	#listeners = new Set<() => void>();
+	/**
+	 * Replaced, never mutated, so a notify walks the listeners it started with. A card subscribes
+	 * once, and a one-element array is smaller than the backing store of a one-element Set.
+	 */
+	#listeners: readonly (() => void)[] = NO_LISTENERS;
 	/**
 	 * The block for the current parameters and context, or `undefined` once either changed. It is
 	 * built when it is next read, never when it changes.
@@ -482,9 +488,9 @@ export class ToolExecutionProducer {
 
 	/** Call `listener` when the block changes. The listener reads the block when it needs it. */
 	subscribe(listener: () => void): () => void {
-		this.#listeners.add(listener);
+		if (!this.#listeners.includes(listener)) this.#listeners = [...this.#listeners, listener];
 		return () => {
-			this.#listeners.delete(listener);
+			this.#listeners = this.#listeners.filter(existing => existing !== listener);
 		};
 	}
 

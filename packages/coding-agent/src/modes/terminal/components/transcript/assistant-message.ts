@@ -198,9 +198,10 @@ export class AssistantMessageComponent extends Container {
 	#contentContainer: Container;
 	#markerSlot: Container;
 	#lastMessage?: AssistantMessageView;
-	#toolImagesByCallId = new Map<string, ImageContent[]>();
-	#convertedKittyImages = new Map<string, ImageContent>();
-	#kittyConversionsInFlight = new Set<string>();
+	/** Created on the first tool result image; a turn that shows none allocates none of the three. */
+	#toolImagesByCallId: Map<string, ImageContent[]> | undefined;
+	#convertedKittyImages: Map<string, ImageContent> | undefined;
+	#kittyConversionsInFlight: Set<string> | undefined;
 	#transcriptBlockFinalized: boolean;
 	/**
 	 * True while any rendered item carries a ` ```mermaid ` fence. Mermaid's
@@ -620,19 +621,24 @@ export class AssistantMessageComponent extends Container {
 	setToolResultImages(toolCallId: string, images: ImageContent[]): void {
 		if (!toolCallId) return;
 		const validImages = images.filter(img => img.type === "image" && img.data && img.mimeType);
-		for (const key of this.#convertedKittyImages.keys()) {
-			if (key.startsWith(`${toolCallId}:`)) {
-				this.#convertedKittyImages.delete(key);
+		if (this.#convertedKittyImages) {
+			for (const key of this.#convertedKittyImages.keys()) {
+				if (key.startsWith(`${toolCallId}:`)) {
+					this.#convertedKittyImages.delete(key);
+				}
 			}
 		}
-		for (const key of this.#kittyConversionsInFlight) {
-			if (key.startsWith(`${toolCallId}:`)) {
-				this.#kittyConversionsInFlight.delete(key);
+		if (this.#kittyConversionsInFlight) {
+			for (const key of this.#kittyConversionsInFlight) {
+				if (key.startsWith(`${toolCallId}:`)) {
+					this.#kittyConversionsInFlight.delete(key);
+				}
 			}
 		}
 		if (validImages.length === 0) {
-			this.#toolImagesByCallId.delete(toolCallId);
+			this.#toolImagesByCallId?.delete(toolCallId);
 		} else {
+			this.#toolImagesByCallId ??= new Map();
 			this.#toolImagesByCallId.set(toolCallId, validImages);
 			this.#convertToolImagesForKitty(toolCallId, validImages);
 		}
@@ -647,30 +653,30 @@ export class AssistantMessageComponent extends Container {
 			const image = images[index];
 			if (!image || image.mimeType === "image/png") continue;
 			const key = `${toolCallId}:${index}`;
-			if (this.#convertedKittyImages.has(key) || this.#kittyConversionsInFlight.has(key)) continue;
-			this.#kittyConversionsInFlight.add(key);
+			if (this.#convertedKittyImages?.has(key) || this.#kittyConversionsInFlight?.has(key)) continue;
+			this.#kittyConversionsInFlight ??= new Set();
+			const inFlight = this.#kittyConversionsInFlight;
+			inFlight.add(key);
 			new Bun.Image(Buffer.from(image.data, "base64"))
 				.png()
 				.toBase64()
 				.then(data => {
-					this.#kittyConversionsInFlight.delete(key);
-					this.#convertedKittyImages.set(key, {
-						type: "image",
-						data,
-						mimeType: "image/png",
-					});
+					inFlight.delete(key);
+					this.#convertedKittyImages ??= new Map();
+					this.#convertedKittyImages.set(key, { type: "image", data, mimeType: "image/png" });
 					if (this.#lastMessage) {
 						this.updateContent(this.#lastMessage, { transient: this.#lastUpdateTransient });
 					}
 					this.onImageUpdate?.();
 				})
 				.catch(() => {
-					this.#kittyConversionsInFlight.delete(key);
+					inFlight.delete(key);
 				});
 		}
 	}
 
 	#renderToolImages(): void {
+		if (!this.#toolImagesByCallId) return;
 		const imageEntries = Array.from(this.#toolImagesByCallId.entries()).flatMap(([toolCallId, images]) =>
 			images.map((image, index) => ({ image, key: `${toolCallId}:${index}` })),
 		);
@@ -680,7 +686,7 @@ export class AssistantMessageComponent extends Container {
 		for (const { image, key } of imageEntries) {
 			const displayImage =
 				TERMINAL.imageProtocol === ImageProtocol.Kitty && image.mimeType !== "image/png"
-					? this.#convertedKittyImages.get(key)
+					? this.#convertedKittyImages?.get(key)
 					: image;
 			if (TERMINAL.imageProtocol && displayImage) {
 				this.#contentContainer.addChild(
@@ -750,7 +756,7 @@ export class AssistantMessageComponent extends Container {
 		for (const content of message.segments) {
 			if (content.kind === "tool-call") return false;
 		}
-		if (this.#toolImagesByCallId.size > 0) return false;
+		if (this.#toolImagesByCallId !== undefined && this.#toolImagesByCallId.size > 0) return false;
 		const errorPresentation = message.errorPresentation ?? { kind: "none" };
 		if (errorPresentation.kind === "compact-recovered") return false;
 		if (errorPresentation.kind === "full" && !(message.stopReason === "error" && this.#errorPinned)) {

@@ -191,10 +191,15 @@ export function sharedSpinnerFrame(frameCount: number, now: number = performance
 
 let toolExecutionInstanceSeq = 0;
 
+/**
+ * The rail frame each card built around a child, keyed by that child: one table for every card rather
+ * than a WeakMap per card. The owner is kept beside the frame, since the frame draws its card's status.
+ */
+const railWrappers = new WeakMap<Component, { owner: ToolExecutionComponent; framed: Component }>();
+
 export class ToolExecutionComponent extends Container implements NativeScrollbackLiveRegion, ToolExecutionHandle {
 	#contentBox: Box;
 	#contentText: WidthAwareText;
-	#railWrappers = new WeakMap<Component, Component>();
 	#multiFileBoxes: (Box | Spacer)[] = [];
 	#imageComponents: Image[] = [];
 	#imageSpacers: Spacer[] = [];
@@ -212,8 +217,9 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	#displayInputVersion = 0;
 	#displayStale = true;
 	#renderedImageCount = 0;
-	#convertedImages: Map<number, { data: string; mimeType: string }> = new Map();
-	#imageConversionFailures: Set<number> = new Set();
+	/** Created on the first Kitty conversion: almost no card holds an image to convert. */
+	#convertedImages: Map<number, { data: string; mimeType: string }> | undefined;
+	#imageConversionFailures: Set<number> | undefined;
 	#spinnerFrame?: number;
 	#spinnerInterval?: NodeJS.Timeout;
 	#railIdleLive = false;
@@ -572,20 +578,22 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			const img = images[i];
 			if (!img.data || !img.mimeType) continue;
 			if (img.mimeType === "image/png") continue;
-			if (this.#convertedImages.has(i)) continue;
-			if (this.#imageConversionFailures.has(i)) continue;
+			if (this.#convertedImages?.has(i)) continue;
+			if (this.#imageConversionFailures?.has(i)) continue;
 
 			const index = i;
 			new Bun.Image(Buffer.from(img.data, "base64"))
 				.png()
 				.toBase64()
 				.then(data => {
+					this.#convertedImages ??= new Map();
 					this.#convertedImages.set(index, { data, mimeType: "image/png" });
 					this.#displayInputVersion++;
 					this.#updateDisplay();
 					if (typeof this.#ui?.requestRender === "function") this.#ui.requestRender();
 				})
 				.catch(() => {
+					this.#imageConversionFailures ??= new Set();
 					this.#imageConversionFailures.add(index);
 					this.#displayInputVersion++;
 					this.#updateDisplay();
@@ -714,8 +722,8 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 
 	#onRail(component: Component): Component {
 		if (isFramedBlockComponent(component)) return component;
-		const cached = this.#railWrappers.get(component);
-		if (cached) return cached;
+		const cached = railWrappers.get(component);
+		if (cached?.owner === this) return cached.framed;
 		const block = new CachedOutputBlock();
 		const framed = markFramedBlockComponent({
 			render: (width: number): readonly string[] => {
@@ -747,7 +755,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			},
 			dispose: () => component.dispose?.(),
 		});
-		this.#railWrappers.set(component, framed);
+		railWrappers.set(component, { owner: this, framed });
 		return framed;
 	}
 
@@ -1261,11 +1269,11 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	/** Add a drawable image with its spacer. The reason it cannot be drawn, when it has image data it cannot show. */
 	#addImage(img: ToolExecutionImageItem, i: number): ImageFallbackReason | undefined {
 		if (!img.data || !img.mimeType) return undefined;
-		const converted = this.#convertedImages.get(i);
+		const converted = this.#convertedImages?.get(i);
 		const imageData = converted?.data ?? img.data;
 		const imageMimeType = converted?.mimeType ?? img.mimeType;
 		if (TERMINAL.imageProtocol === ImageProtocol.Kitty && imageMimeType !== "image/png") {
-			return this.#imageConversionFailures.has(i) ? "unsupported-format" : undefined;
+			return this.#imageConversionFailures?.has(i) ? "unsupported-format" : undefined;
 		}
 		const spacer = new Spacer(1);
 		this.addChild(spacer);
