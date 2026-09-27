@@ -828,6 +828,9 @@ export class ProcessTerminal implements Terminal {
 		}
 		process.stdin.setEncoding("utf8");
 		process.stdin.resume();
+		process.stdin.removeListener("end", this.#stdinEndHandler);
+		process.stdin.removeListener("close", this.#stdinCloseHandler);
+		process.stdin.removeListener("error", this.#stdinErrorHandler);
 		process.stdin.on("end", this.#stdinEndHandler);
 		process.stdin.on("close", this.#stdinCloseHandler);
 		process.stdin.on("error", this.#stdinErrorHandler);

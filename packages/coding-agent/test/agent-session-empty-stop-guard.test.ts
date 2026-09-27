@@ -6,9 +6,9 @@ import { type StopReason, z } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockModel, type MockResponse } from "@veyyon/ai/providers/mock";
 import { AutoLearnController } from "@veyyon/coding-agent/autolearn/controller";
-import type { ExtensionRunner } from "@veyyon/coding-agent/extensibility/extensions/runner";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { type SettingPath, Settings } from "@veyyon/coding-agent/config/settings";
+import type { ExtensionRunner } from "@veyyon/coding-agent/extensibility/extensions/runner";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
 import { convertToLlm } from "@veyyon/coding-agent/session/messages";
@@ -92,7 +92,9 @@ async function createHarness(
 	settings.setModelRole("default", `${mock.provider}/${mock.id}`);
 
 	const options =
-		typeof persistSessionOrOptions === "boolean" ? { persistSession: persistSessionOrOptions } : persistSessionOrOptions;
+		typeof persistSessionOrOptions === "boolean"
+			? { persistSession: persistSessionOrOptions }
+			: persistSessionOrOptions;
 	const sessionManager = options.persistSession
 		? SessionManager.create(tempDir.path(), tempDir.path())
 		: SessionManager.inMemory(tempDir.path());

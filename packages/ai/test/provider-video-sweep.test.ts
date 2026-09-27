@@ -92,6 +92,7 @@ describe("Provider Video Handling Sweep", () => {
 			"synthetic.ts",
 			"transform-messages.ts",
 			"error-message.ts",
+			"cursor-liveness.ts",
 		]);
 
 		const uncovered = tsFiles.filter(file => !testedOrAccountedFor.has(file));

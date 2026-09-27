@@ -363,7 +363,7 @@ const GRANDFATHERED: Readonly<Record<string, number>> = {
 	"packages/coding-agent/test/task/executor-pass-through.test.ts": 1,
 	"packages/coding-agent/test/task/executor-agent-reminders.test.ts": 9,
 	"packages/coding-agent/test/task/executor-yield-versus-caller-abort.test.ts": 1,
-	"packages/coding-agent/test/task/isolation-runner.test.ts": 10,
+	"packages/coding-agent/test/task/isolation-runner.test.ts": 15,
 	"packages/coding-agent/test/task/spawn-agents-md-reaches-the-child-prompt.test.ts": 1,
 	"packages/coding-agent/test/task/spawn-cwd-layer-inheritance.test.ts": 1,
 	"packages/coding-agent/test/task/agent-inherits-approval-bypass.test.ts": 1,

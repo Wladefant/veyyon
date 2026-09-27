@@ -6,8 +6,10 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { errorMessage, isEnoent, logger } from "@veyyon/utils";
 import { atomicWriteFileWith } from "@veyyon/utils/atomic-write";
+import { isEnoent } from "@veyyon/utils/fs-error";
+import * as logger from "@veyyon/utils/logger";
+import { errorMessage } from "@veyyon/utils/type-guards";
 
 /**
  * Sanitize a tool name for safe use as the middle segment of the artifact

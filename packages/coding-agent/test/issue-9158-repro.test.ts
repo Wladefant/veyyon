@@ -17,6 +17,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
+import { hermeticSpawnEnv } from "./helpers/hermetic-spawn-env";
 
 describe("issue #9158 — malformed worker IPC frame must not terminate the parent", () => {
 	it("contains an advanced-serialization decode failure to the worker instead of exiting the session", async () => {
@@ -44,17 +45,26 @@ describe("issue #9158 — malformed worker IPC frame must not terminate the pare
 			await errored;
 			process.stdout.write("SURVIVED_WITH_ERROR");
 		`;
-		const proc = Bun.spawn([process.execPath, "-e", wrapperScript], {
-			cwd: repoRoot,
-			stdout: "pipe",
-			stderr: "pipe",
-			env: { ...process.env, VEYYON_TEST_RUNTIME: "0" },
-		});
-		const [stdout, _stderr, exitCode] = await Promise.all([
-			new Response(proc.stdout).text(),
-			new Response(proc.stderr).text(),
-			proc.exited,
-		]);
+		const { env, cleanup } = hermeticSpawnEnv({ VEYYON_TEST_RUNTIME: "0" });
+		let stdout = "";
+		let exitCode: number | null = null;
+		try {
+			const proc = Bun.spawn([process.execPath, "-e", wrapperScript], {
+				cwd: repoRoot,
+				stdout: "pipe",
+				stderr: "pipe",
+				env,
+			});
+			const [outText, _stderr, code] = await Promise.all([
+				new Response(proc.stdout).text(),
+				new Response(proc.stderr).text(),
+				proc.exited,
+			]);
+			stdout = outText;
+			exitCode = code;
+		} finally {
+			cleanup();
+		}
 		// Before the fix the postmortem handler exited the parent with code 1 and
 		// no "SURVIVED" marker ever printed.
 		expect(exitCode).toBe(0);
@@ -71,17 +81,26 @@ describe("issue #9158 — malformed worker IPC frame must not terminate the pare
 			process.stdout.write("BEFORE_THROW");
 			queueMicrotask(() => { throw new TypeError("Unable to deserialize data."); });
 		`;
-		const proc = Bun.spawn([process.execPath, "-e", wrapperScript], {
-			cwd: repoRoot,
-			stdout: "pipe",
-			stderr: "pipe",
-			env: { ...process.env, VEYYON_TEST_RUNTIME: "0" },
-		});
-		const [stdout, _stderr, exitCode] = await Promise.all([
-			new Response(proc.stdout).text(),
-			new Response(proc.stderr).text(),
-			proc.exited,
-		]);
+		const { env, cleanup } = hermeticSpawnEnv({ VEYYON_TEST_RUNTIME: "0" });
+		let stdout = "";
+		let exitCode: number | null = null;
+		try {
+			const proc = Bun.spawn([process.execPath, "-e", wrapperScript], {
+				cwd: repoRoot,
+				stdout: "pipe",
+				stderr: "pipe",
+				env,
+			});
+			const [outText, _stderr, code] = await Promise.all([
+				new Response(proc.stdout).text(),
+				new Response(proc.stderr).text(),
+				proc.exited,
+			]);
+			stdout = outText;
+			exitCode = code;
+		} finally {
+			cleanup();
+		}
 		expect(exitCode).toBe(1);
 		expect(stdout).toBe("BEFORE_THROW");
 	}, 45_000);
