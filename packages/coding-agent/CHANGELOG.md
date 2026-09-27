@@ -4,6 +4,7 @@
 
 ### Changed
 
+- The `bash` tool runs a call's preparation, interception check, internal URL expansion, working directory resolution, spawn admission and its background, managed, client-terminal and local runs in single-purpose methods instead of one 480-line `execute`; a trivial command and a 20,000-line command run in unchanged time.
 - A rebuilt transcript highlights the code and diff context of every tool card in one parallel native batch before its first frame instead of one card at a time during it, cutting a resumed session's first frame from 497 ms to 357 ms, and from 14.2 s to 7.5 s with compacted history expanded, with byte-identical rows.
 - A tool card whose presentation changes with nothing subscribed builds its block when it is next read instead of at the change, so disposing a transcript no longer builds a sealed block for every card, cutting a transcript reset from 31.4 ms to 1.6 ms, and from 2,070 ms to 26.7 ms on a 64k-card transcript.
 - A collapsed tool card's progress-run folding keys each output line once instead of twice at every run boundary and skips the diagnostic lookup for a line whose first token has no progress shape, and home-path shortening returns a line that does not contain the home directory before running its pattern, cutting the two over 1.52M lines of 44,117 tool results from 207.8 ms to 141.9 ms and from 118.6 ms to 85.9 ms with identical rows.
