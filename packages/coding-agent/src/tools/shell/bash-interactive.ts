@@ -27,6 +27,10 @@ function normalizeCaptureChunk(chunk: string): string {
 	return sanitizeWithOptionalSixelPassthrough(normalized, sanitizeText);
 }
 
+// Caps only the live xterm display backlog; OutputSink remains the bounded
+// source of truth for the final captured output.
+const MAX_LIVE_WRITE_QUEUE_CHUNKS = 512;
+
 // @xterm/headless is only needed once an interactive PTY session actually starts,
 // so it is loaded lazily (and memoized) instead of weighing down CLI startup.
 let xtermTerminalCtor: typeof XtermModule.Terminal | undefined;
@@ -99,7 +103,7 @@ function normalizeInputForPty(data: string, applicationCursorKeysMode: boolean):
 	}
 	return data;
 }
-class BashInteractiveOverlayComponent implements Component {
+export class BashInteractiveOverlayComponent implements Component {
 	#terminal: XtermTerminalType;
 	#state: "running" | "complete" | "timed_out" | "killed" = "running";
 	#exitCode: number | undefined;
@@ -137,7 +141,20 @@ class BashInteractiveOverlayComponent implements Component {
 
 	appendOutput(chunk: string): void {
 		this.#writeQueue.push(chunk);
+		this.#trimWriteQueue();
 		this.#drainQueue();
+	}
+
+	/**
+	 * Bounds the backlog of chunks waiting on xterm's write callback by dropping the oldest
+	 * pending ones, so a command printing faster than the console decodes holds a fixed
+	 * amount of memory and the console shows its newest output.
+	 */
+	#trimWriteQueue(): void {
+		const firstPending = this.#writing ? this.#writeOffset + 1 : this.#writeOffset;
+		while (this.#writeQueue.length - firstPending > MAX_LIVE_WRITE_QUEUE_CHUNKS) {
+			this.#writeQueue.splice(firstPending, 1);
+		}
 	}
 
 	#drainQueue(): void {

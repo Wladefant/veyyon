@@ -18,6 +18,7 @@
 - `launch/terminal-control.ts` publishes the terminal-owner record through `atomicWriteFile` instead of hand-rolled temp-file and rename, so the write path has one owner; the record stays atomic and stays mode `0600`.
 
 ### Fixed
+- The interactive bash console bounds its live-output backlog instead of holding one queued chunk per PTY read for the whole tool timeout, dropping the oldest pending chunks when a command prints faster than the console decodes ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed `autoResume` / `--continue` resurrecting the pre-`/new` transcript when exiting before any assistant output: lazy new-session persistence now records a durable fresh breadcrumb boundary so resume starts fresh instead of falling back to the old session ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Print mode error/aborted exits and RPC shutdown paths now await session disposal, ensuring owned Chromium instances and other resources are reaped before process termination ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed HTML export and share viewers rendering inline Markdown inside list items as literal text ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
