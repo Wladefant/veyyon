@@ -76,6 +76,72 @@ describe("runIsolatedSubprocess", () => {
 		await Promise.all(tempRoots.splice(0).map(tempRoot => fs.rm(tempRoot, { force: true, recursive: true })));
 	});
 
+	/**
+	 * Drive a branch-mode spawn whose apply-back throws, with both rescue probes
+	 * stubbed. Each argument takes the value to resolve with or the error to
+	 * reject with, so every branch of the rescue decision is reachable.
+	 */
+	async function runFailingBranchApply(agentId: string, range: string[] | Error, probe: boolean | Error) {
+		const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-isolation-rescue-"));
+		tempRoots.push(repoRoot);
+		const isolationDir = path.join(repoRoot, "isolated");
+		const artifactsDir = path.join(repoRoot, "artifacts");
+		const baseline = {
+			root: {
+				repoRoot,
+				headCommit: "base",
+				staged: "",
+				unstaged: "",
+				untracked: [],
+				untrackedPatch: "",
+			},
+			nested: [],
+		};
+
+		vi.spyOn(worktreeModule, "ensureIsolation").mockResolvedValue({
+			mergedDir: isolationDir,
+			backend: natives.IsoBackendKind.Rcopy,
+			fellBack: false,
+			fallbackReason: null,
+		});
+		vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(result({ id: agentId }));
+		vi.spyOn(worktreeModule, "commitToBranch").mockRejectedValue(new Error("git apply --3way failed"));
+		vi.spyOn(worktreeModule, "captureDeltaPatch").mockResolvedValue({ rootPatch: "", nestedPatches: [] });
+		vi.spyOn(worktreeModule, "cleanupIsolation").mockResolvedValue();
+		const rangeSpy =
+			range instanceof Error
+				? vi.spyOn(gitModule.revList, "range").mockRejectedValue(range)
+				: vi.spyOn(gitModule.revList, "range").mockResolvedValue(range);
+		const probeSpy =
+			probe instanceof Error
+				? vi.spyOn(gitModule.ref, "exists").mockRejectedValue(probe)
+				: vi.spyOn(gitModule.ref, "exists").mockResolvedValue(probe);
+		const deleteSpy = vi.spyOn(gitModule.branch, "tryDelete").mockResolvedValue(true);
+
+		const outcome = await runIsolatedSubprocess({
+			baseOptions: {
+				cwd: repoRoot,
+				agent: {
+					name: "task",
+					description: "Task agent",
+					systemPrompt: "test",
+					source: "bundled",
+				},
+				task: "Do work",
+				index: 0,
+				id: agentId,
+			},
+			context: { repoRoot, baseline },
+			preferredBackend: undefined,
+			agentId,
+			mergeMode: "branch",
+			artifactsDir,
+			buildFailureResult: err => result({ exitCode: 1, error: String(err) }),
+		});
+
+		return { outcome, repoRoot, rangeSpy, probeSpy, deleteSpy };
+	}
+
 	it("preserves branch-mode output as a patch when branch transfer fails", async () => {
 		const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "veyyon-isolation-run-"));
 		tempRoots.push(repoRoot);
@@ -107,6 +173,9 @@ describe("runIsolatedSubprocess", () => {
 			nestedPatches: [],
 		});
 		const cleanupSpy = vi.spyOn(worktreeModule, "cleanupIsolation").mockResolvedValue();
+		// No branch was ever created, so the rescue probe finds nothing to keep.
+		vi.spyOn(gitModule.revList, "range").mockRejectedValue(new Error("unknown revision"));
+		vi.spyOn(gitModule.ref, "exists").mockResolvedValue(false);
 		const deleteSpy = vi.spyOn(gitModule.branch, "tryDelete").mockResolvedValue(true);
 
 		const outcome = await runIsolatedSubprocess({
@@ -138,6 +207,49 @@ describe("runIsolatedSubprocess", () => {
 		expect(captureSpy).toHaveBeenCalledWith(isolationDir, baseline);
 		expect(deleteSpy).toHaveBeenCalledWith(repoRoot, "veyyon/task/PreserveBranchFailure");
 		expect(cleanupSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps a task branch that already holds the agent's commits", async () => {
+		const { outcome, deleteSpy } = await runFailingBranchApply(
+			"RescueBranchCommits",
+			["commit-a", "commit-b"],
+			false,
+		);
+
+		expect(deleteSpy).not.toHaveBeenCalled();
+		expect(outcome.error).toContain("Merge failed: git apply --3way failed");
+		expect(outcome.error).toContain("preserved on branch veyyon/task/RescueBranchCommits");
+	});
+
+	it("keeps a task branch whose commits the probe could not read", async () => {
+		const { outcome, repoRoot, probeSpy, deleteSpy } = await runFailingBranchApply(
+			"UnreadableObjects",
+			new Error("object database unavailable"),
+			true,
+		);
+
+		expect(probeSpy).toHaveBeenCalledWith(repoRoot, "refs/heads/veyyon/task/UnreadableObjects");
+		expect(deleteSpy).not.toHaveBeenCalled();
+		expect(outcome.error).toContain("preserved on branch veyyon/task/UnreadableObjects");
+	});
+
+	it("keeps a task branch when even the existence probe fails", async () => {
+		const { outcome, deleteSpy } = await runFailingBranchApply(
+			"BlindProbe",
+			new Error("unknown revision"),
+			new Error("rev-parse unavailable"),
+		);
+
+		expect(deleteSpy).not.toHaveBeenCalled();
+		expect(outcome.error).toContain("preserved on branch veyyon/task/BlindProbe");
+	});
+
+	it("still deletes a task branch that never received a commit", async () => {
+		const { outcome, repoRoot, deleteSpy } = await runFailingBranchApply("StaleBranch", [], false);
+
+		expect(deleteSpy).toHaveBeenCalledWith(repoRoot, "veyyon/task/StaleBranch");
+		expect(outcome.error).toContain("Merge failed: git apply --3way failed");
+		expect(outcome.error).not.toContain("preserved on branch");
 	});
 });
 
@@ -179,7 +291,7 @@ describe("mergeIsolatedChanges", () => {
 		expect(outcome.changesApplied).toBe(false);
 		expect(outcome.hadAnyChanges).toBe(false);
 		expect(outcome.mergedBranchForNestedPatches).toBe(false);
-		expect(outcome.summary).toContain("Branch merge failed before a task branch could be created");
+		expect(outcome.summary).toContain("Branch merge failed while capturing the task branch");
 		expect(outcome.summary).toContain("git apply --3way failed");
 		expect(outcome.summary).toContain("/repo/artifacts/dirty-context.patch");
 		expect(outcome.summary).not.toContain("No changes to apply");
