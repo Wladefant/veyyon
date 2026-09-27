@@ -6,6 +6,7 @@
 
 - The CLI configures ArkType to validate by interpreted traversal instead of compiling a validator for every schema, cutting a compiled launch that opens a session from 372 ms to 316 ms and its heap by 11 MiB; a tool-argument rejection of a described closed set now reports the field's description followed by `(accepted: …)` instead of ArkType's list of the members.
 - The `debug` tool runs each action through its own handler in a table keyed by action instead of one 398-line switch, so an action added to the schema without a handler fails the type check; every action's text and details are unchanged across a gdb session.
+- The launch parser sets each value-less flag through the table the profile bootstrap reads as its list of value-less flags, instead of an if-chain that had to be kept in step with that list by hand, and splits a token's flag, extension, string, optional and positional handling into single-purpose functions instead of one 183-line loop; every result and refusal is identical across 300,000 generated argument lists.
 - The `edit` tool reads its mode descriptions from the tool prompt rows instead of the whole prompt registry, so a session that builds it no longer loads the commit-agentic, bench and prompt-registry modules it never renders, 9 fewer modules on a session start.
 - A session binds its own inline extensions (autoresearch and the custom tool bridge) without the `api.pi` package namespace, so a session with no author extension no longer loads the whole package barrel, cutting `createAgentSession` on a 13,470-message resume from 267 ms to 213 ms and its heap by about 5 MiB; an author's extension still receives `api.pi`.
 - A session checks whether its working directory is a project root once when it discovers the project, and again only when its cwd moves, instead of on every system prompt build, cutting a rebuild in the veyyon checkout from 1.16 ms to 0.23 ms and in a repository holding other projects from 75 ms to 0.25 ms with identical blocks.
@@ -65,6 +66,7 @@
 
 ### Fixed
 
+- An unknown-flag error suggests a short flag in the spelling the parser accepts, such as `-r` for `-rr`, instead of `--r`, which the parser rejects, and offers `-h` and `-v` like every other flag.
 - A URL read whose image bytes do not decode returns the text page the server sent, or a note that the bytes were not a valid image, instead of failing the read.
 - A URL read of a page whose alternate `<link>` href is not a valid URL skips that link and reads the page instead of failing.
 - A compaction that writes the same summary as an earlier one, such as a second server-side compaction with its empty summary, stamps its dead-end warning on the new entry and passes the new entry to `session_compact` handlers instead of the earlier one.
