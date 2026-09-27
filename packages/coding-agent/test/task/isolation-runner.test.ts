@@ -210,7 +210,11 @@ describe("runIsolatedSubprocess", () => {
 	});
 
 	it("keeps a task branch that already holds the agent's commits", async () => {
-		const { outcome, deleteSpy } = await runFailingBranchApply("RescueBranchCommits", ["commit-a", "commit-b"], false);
+		const { outcome, deleteSpy } = await runFailingBranchApply(
+			"RescueBranchCommits",
+			["commit-a", "commit-b"],
+			false,
+		);
 
 		expect(deleteSpy).not.toHaveBeenCalled();
 		expect(outcome.error).toContain("Merge failed: git apply --3way failed");
