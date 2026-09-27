@@ -123,16 +123,6 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * 1548 to 1549 (upstream): `session/agent-session-provider-request.ts`, the provider request shaping
  * split out of `session/agent-session.ts`. A leaf over modules already here.
  *
- * 1549 to 1558 (fork): nine modules the fork carries and upstream does not. Five are the ChatGPT-web
- * provider (`ai/providers/openai-codex/{chatgpt-web-trusted-context,chatgpt-web-turn-stamp}.ts`,
- * `ai/registry/chatgpt-web.ts`, `catalog/{discovery,provider-models}/chatgpt-web.ts`); two are the
- * native control host (`native-control/{telegram-control-bridge,telegram-control-host}.ts`); and two
- * are the task lane's replenishment and ledger bridge (`task/topic-replenishment.ts`,
- * `task/native-ledger-bridge.py`).
- *
- * 1558 to 1561: the refusal fence (`tools/core/{refusal-fence,effect-scope,execution-registry}.ts`),
- * the choke point every tool invocation passes through.
- *
  * 1549 to 1550: `goals/goal-record.ts`, which writes a goal's counters as a `goal_progress` entry
  * between the `mode_change` records that hold the whole goal, and reads the two back together. It is
  * new code on this graph because `session/agent-session.ts` records a goal after each tool call that
@@ -218,11 +208,23 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * `@veyyon/utils/math` and engine modules the root already reached, so the launch runs no new
  * code. `core/frame-plan.ts`, split out with it, is imported by type only and is not on the graph.
  *
+ * 1578 to 1595 (fork), measured 2026-09-27 after the santhreal merge up to e4967b27fd04: the
+ * seventeen modules this graph reaches that upstream does not carry. Six are the ChatGPT-web
+ * provider and vision input (`ai/providers/openai-codex/{chatgpt-web-trusted-context,chatgpt-web-turn-stamp}.ts`,
+ * `ai/providers/vision-content.ts`, `ai/registry/chatgpt-web.ts`,
+ * `catalog/{discovery,provider-models}/chatgpt-web.ts`); two are the native control host
+ * (`native-control/{telegram-control-bridge,telegram-control-host}.ts`); two are the task lane's
+ * replenishment and ledger bridge (`task/topic-replenishment.ts`, `task/native-ledger-bridge.py`);
+ * two are the refusal fence (`tools/core/{refusal-fence,execution-registry}.ts`), the choke point
+ * every tool invocation passes through; two are the session liveness records
+ * (`utils/{inflight-marker,session-heartbeat}.ts`); and the rest are `async/async-delivery.ts`,
+ * `kernel/session/terminal-ownership.ts` and the engine's `windows-altgr.ts`.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1578;
+const LAUNCH_REACH_CEILING = 1595;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

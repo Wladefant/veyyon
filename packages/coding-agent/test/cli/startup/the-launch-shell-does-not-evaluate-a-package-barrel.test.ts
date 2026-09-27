@@ -75,10 +75,12 @@ const BARRELS = ["@veyyon/tui", "@veyyon/utils", "@veyyon/agent-core", "@veyyon/
  * accidental package barrel. Bun 1.4.2 reports 16 fewer for this same graph because
  * its cache omits the builtin node:/bun: entries that Bun 1.4.0 includes.
  *
- * RE-MEASURED 2026-09-27 at 356 (CI's Bun 1.4.0) after the santhreal merge up to e4967b27fd04:
- * `hosts/terminal/engine/src/core/paint-sequences.ts`, the escape sequence each paint shape writes,
- * split out of `core/tui.ts`, which the shell already evaluates, so the graph runs no new code.
- * Keep one additional module of margin.
+ * RE-MEASURED 2026-09-27 after the santhreal merge up to e4967b27fd04: the static module reach of
+ * the three entries is 341 against 340 on fork main 37f0bda52a, and the one added module is
+ * `hosts/terminal/engine/src/core/paint-sequences.ts`, the escape sequence each paint shape
+ * writes, split out of `core/tui.ts`, which the shell already evaluates. That puts the graph at 356
+ * on CI's Bun 1.4.0, one over main's 355, and the graph runs no new code. Keep one additional
+ * module of margin: 356 and 357 pass, 358 fails.
  */
 const SHELL_GRAPH_MODULE_CEILING = 358;
 
