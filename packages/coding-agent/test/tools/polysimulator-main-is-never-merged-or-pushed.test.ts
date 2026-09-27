@@ -12,6 +12,7 @@ import {
 	isPolysimulatorRepo,
 	POLYSIM_MAIN_DENIAL_MESSAGE,
 	type PolysimGuardOptions,
+	type PrBaseLookupFailure,
 } from "@veyyon/coding-agent/tools/core/polysim-main-guard";
 import { BashTool, bashApprovalDecision } from "@veyyon/coding-agent/tools/shell/bash";
 import { LaunchTool } from "@veyyon/coding-agent/tools/shell/launch";
@@ -29,15 +30,30 @@ const UNRELATED_REMOTES = {
 	origin: "git@github.com:Wladefant/veyyon.git",
 };
 
+const SUPER_BOARD_REMOTES = {
+	origin: "https://github.com/Wladefant/super-board.git",
+};
+
+const testDir = os.tmpdir();
+
 const mockPolysimOptions = (overrides?: {
 	branch?: string | undefined;
-	prBase?: string;
+	prBase?: string | PrBaseLookupFailure;
 	remotes?: Record<string, string>;
-}) => ({
+	gitConfig?: Array<[string, string]>;
+}): PolysimGuardOptions => ({
 	getRemotes: () => overrides?.remotes ?? POLYSIM_REMOTES,
 	getCurrentBranch: () => (overrides && Object.hasOwn(overrides, "branch") ? overrides.branch : "feature-test"),
 	resolvePrBase: () => overrides?.prBase,
+	readGitConfig: () => overrides?.gitConfig ?? [],
 });
+
+/** The refusal for a pull request whose base could not be looked up. */
+const expectRetryableBaseDenial = (denial: { reason: string; retryable?: boolean } | undefined) => {
+	expect(denial?.retryable).toBe(true);
+	expect(denial?.reason.startsWith(POLYSIM_MAIN_DENIAL_MESSAGE)).toBe(true);
+	expect(denial?.reason).toContain("run the same command again");
+};
 
 function createMockSession(cwd: string) {
 	return makeToolSession({
@@ -72,6 +88,18 @@ describe("Polysimulator main guard", () => {
 			expect(isPolysimulatorRemoteUrl("git@github.com:Bavariance/polysimulator.git")).toBe(true);
 			expect(isPolysimulatorRemoteUrl("https://github.com/Bavariance/polysimulator.git")).toBe(true);
 			expect(isPolysimulatorRemoteUrl("https://github.com/Wladefant/veyyon.git")).toBe(false);
+			expect(isPolysimulatorRemoteUrl("bav:Bavariance/polysimulator")).toBe(true);
+			expect(isPolysimulatorRemoteUrl("https://github.com/Bavariance/%70olysimulator.git")).toBe(true);
+			expect(
+				isPolysimulatorRemoteUrl(
+					"https://github.com/Wladefant/fork.git git@github.com:Bavariance/polysimulator.git",
+				),
+			).toBe(true);
+			// Look-alike repositories are other repositories.
+			expect(isPolysimulatorRemoteUrl("git@github.com:Bavariance/polysimulator-docs.git")).toBe(false);
+			expect(isPolysimulatorRemoteUrl("git@github.com:Bavariance/polysimulator2.git")).toBe(false);
+			expect(isPolysimulatorRemoteUrl("git@github.com:notBavariance/polysimulator.git")).toBe(false);
+			expect(isPolysimulatorRepo("Bavariance/polysimulator-docs")).toBe(false);
 		});
 
 		it("detects main refspecs", () => {
@@ -83,16 +111,19 @@ describe("Polysimulator main guard", () => {
 			expect(isMainRefspec("feat:main")).toBe(true);
 			expect(isMainRefspec("feat:refs/heads/main")).toBe(true);
 			expect(isMainRefspec(":main")).toBe(true);
+			expect(isMainRefspec("HEAD:heads/main")).toBe(true);
 
 			expect(isMainRefspec("staging")).toBe(false);
 			expect(isMainRefspec("HEAD:staging")).toBe(false);
 			expect(isMainRefspec("+feat/my-branch")).toBe(false);
+			expect(isMainRefspec("feature/main")).toBe(false);
+			expect(isMainRefspec("main-fix")).toBe(false);
+			expect(isMainRefspec("HEAD:refs/heads/maintenance")).toBe(false);
+			expect(isMainRefspec("HEAD:refs/remotes/origin/main")).toBe(false);
 		});
 	});
 
 	describe("Form 1: git push to main in Polysimulator", () => {
-		const testDir = os.tmpdir();
-
 		it("denies explicit push to main", () => {
 			const commands = [
 				"git push origin main",
@@ -163,8 +194,6 @@ describe("Polysimulator main guard", () => {
 	});
 
 	describe("Form 2: gh pr merge targeting main in Polysimulator", () => {
-		const testDir = os.tmpdir();
-
 		it("denies gh pr merge when base is main", () => {
 			const commands = [
 				"gh pr merge 123",
@@ -182,15 +211,10 @@ describe("Polysimulator main guard", () => {
 			}
 		});
 
-		it("denies gh pr merge when base is unknown (fail-closed)", () => {
-			const denial = checkPolysimMainDenial(
-				"gh pr merge 123",
-				testDir,
-				undefined,
-				mockPolysimOptions({ prBase: undefined }),
+		it("denies gh pr merge when base is unknown (fail-closed), as a retryable refusal", () => {
+			expectRetryableBaseDenial(
+				checkPolysimMainDenial("gh pr merge 123", testDir, undefined, mockPolysimOptions({ prBase: undefined })),
 			);
-			expect(denial).toBeDefined();
-			expect(denial?.reason).toBe(POLYSIM_MAIN_DENIAL_MESSAGE);
 		});
 
 		it("allows gh pr merge when base is staging", () => {
@@ -215,19 +239,16 @@ describe("Polysimulator main guard", () => {
 	});
 
 	describe("Form 3: gh api mutating calls for Polysimulator", () => {
-		const testDir = os.tmpdir();
-
 		it("denies gh api PUT to pulls/<n>/merge", () => {
 			const commands = [
 				"gh api -X PUT repos/Bavariance/polysimulator/pulls/123/merge",
 				"gh api --method PUT repos/Bavariance/polysimulator/pulls/123/merge",
 				"gh api -X PUT /repos/Bavariance/polysimulator/pulls/123/merge",
-				"gh api repos/Bavariance/polysimulator/pulls/123/merge",
 				"gh api -R Bavariance/polysimulator -X PUT pulls/123/merge",
 			];
 
 			for (const cmd of commands) {
-				const denial = checkPolysimMainDenial(cmd, testDir, undefined, mockPolysimOptions());
+				const denial = checkPolysimMainDenial(cmd, testDir, undefined, mockPolysimOptions({ prBase: "main" }));
 				expect(denial).toBeDefined();
 				expect(denial?.reason).toBe(POLYSIM_MAIN_DENIAL_MESSAGE);
 			}
@@ -267,8 +288,6 @@ describe("Polysimulator main guard", () => {
 	});
 
 	describe("Form 4: github tool op check", () => {
-		const testDir = os.tmpdir();
-
 		it("denies github tool pr_merge with base main or unresolved base", () => {
 			const denialExplicit = checkGithubToolPolysimMainDenial(
 				{ op: "pr_merge", repo: "Bavariance/polysimulator", base: "main" },
@@ -278,13 +297,13 @@ describe("Polysimulator main guard", () => {
 			expect(denialExplicit).toBeDefined();
 			expect(denialExplicit?.reason).toBe(POLYSIM_MAIN_DENIAL_MESSAGE);
 
-			const denialUnresolved = checkGithubToolPolysimMainDenial(
-				{ op: "pr_merge", repo: "Bavariance/polysimulator", pr: "123" },
-				testDir,
-				mockPolysimOptions({ prBase: undefined }),
+			expectRetryableBaseDenial(
+				checkGithubToolPolysimMainDenial(
+					{ op: "pr_merge", repo: "Bavariance/polysimulator", pr: "123" },
+					testDir,
+					mockPolysimOptions({ prBase: undefined }),
+				),
 			);
-			expect(denialUnresolved).toBeDefined();
-			expect(denialUnresolved?.reason).toBe(POLYSIM_MAIN_DENIAL_MESSAGE);
 		});
 
 		it("denies github tool pr_push to main", () => {
@@ -360,11 +379,12 @@ describe("Polysimulator main guard", () => {
 			).rejects.toThrow(POLYSIM_MAIN_DENIAL_MESSAGE);
 		});
 
-		it("BashTool.execute throws hard denial for gh api PUT pulls/merge to Polysimulator", async () => {
+		it("BashTool.execute throws hard denial for a gh api GraphQL merge on Polysimulator", async () => {
 			const tool = new BashTool(session as never);
 			await expect(
 				tool.execute("b2", {
-					command: "gh api -X PUT repos/Bavariance/polysimulator/pulls/42/merge",
+					command:
+						"gh api graphql -R Bavariance/polysimulator -f query='mutation { mergePullRequest(input: {pullRequestId: \"X\"}) { clientMutationId } }'",
 					timeout: 5,
 				}),
 			).rejects.toThrow(POLYSIM_MAIN_DENIAL_MESSAGE);
@@ -429,16 +449,13 @@ describe("Polysimulator main guard", () => {
 	});
 
 	describe("Bypass vectors", () => {
-		const testDir = os.tmpdir();
 		const expectDenied = (
 			commands: string[],
 			options: PolysimGuardOptions = mockPolysimOptions({ prBase: "main" }),
 		) => {
 			for (const cmd of commands) {
-				expect({ cmd, denial: checkPolysimMainDenial(cmd, testDir, undefined, options)?.reason }).toEqual({
-					cmd,
-					denial: POLYSIM_MAIN_DENIAL_MESSAGE,
-				});
+				const reason = checkPolysimMainDenial(cmd, testDir, undefined, options)?.reason;
+				expect({ cmd, denied: reason?.startsWith(POLYSIM_MAIN_DENIAL_MESSAGE) }).toEqual({ cmd, denied: true });
 			}
 		};
 		const expectAllowed = (
@@ -582,7 +599,7 @@ describe("Polysimulator main guard", () => {
 					op: "start",
 					name: "p",
 					application: "bash",
-					args: ["-c", "gh pr merge https://github.com/Bavariance/polysimulator/pull/1"],
+					args: ["-c", "git push https://github.com/Bavariance/polysimulator.git HEAD:main"],
 				},
 				{ op: "send", name: "shell", text: "git push origin main" },
 			]) {
@@ -592,6 +609,242 @@ describe("Polysimulator main guard", () => {
 				);
 			}
 			expect(tool.approval({ op: "start", name: "web", application: "bun", args: ["run", "dev"] })).toBe("exec");
+		});
+	});
+
+	describe("Allowed work on polysimulator branches other than main", () => {
+		const allowed = (cmd: string, options: PolysimGuardOptions) =>
+			expect({ cmd, denial: checkPolysimMainDenial(cmd, testDir, undefined, options) }).toEqual({
+				cmd,
+				denial: undefined,
+			});
+
+		it("allows pushes to staging, feature branches and main-lookalike branches", () => {
+			const options = mockPolysimOptions({ branch: "fix/main-nav" });
+			for (const cmd of [
+				"git push origin staging",
+				"git push origin fix/main-nav",
+				"git push origin feature/main",
+				"git push origin main-fix",
+				"git push origin HEAD:refs/heads/maintenance",
+				"git push origin HEAD:staging",
+				"git push -u origin HEAD",
+				"git push",
+				"git -c push.default=current push origin",
+				"git push origin 'HEAD:{main,x}'",
+				"git push origin --delete old-branch",
+			]) {
+				allowed(cmd, options);
+			}
+		});
+
+		it("allows merging and API-merging a staging-base pull request", () => {
+			const options = mockPolysimOptions({ prBase: "staging" });
+			for (const cmd of [
+				"gh pr merge 5 --merge",
+				"gh pr merge 5 --merge --repo Bavariance/polysimulator",
+				"gh pr merge https://github.com/Bavariance/polysimulator/pull/5 --merge",
+				"gh api -X PUT repos/Bavariance/polysimulator/pulls/5/merge",
+				"gh api -X PUT repos/Bavariance/polysimulator/pulls/5/merge -f merge_method=merge",
+				"gh api --method PUT repos/{owner}/{repo}/pulls/5/merge",
+			]) {
+				allowed(cmd, options);
+			}
+			expect(
+				checkGithubToolPolysimMainDenial(
+					{ op: "pr_merge", repo: "Bavariance/polysimulator", pr: "5" },
+					testDir,
+					mockPolysimOptions({ prBase: "staging" }),
+				),
+			).toBeUndefined();
+		});
+
+		it("allows reading main and other read-only calls", () => {
+			const options = mockPolysimOptions();
+			for (const cmd of [
+				"git fetch origin main",
+				"git pull origin main",
+				"git log origin/main",
+				"gh api repos/Bavariance/polysimulator/git/refs/heads/main",
+				"gh api repos/Bavariance/polysimulator/pulls/5",
+				"gh api repos/Bavariance/polysimulator/pulls/5/merge",
+				"curl https://api.github.com/repos/Bavariance/polysimulator/pulls/5",
+				"python -c 'print(1)'",
+			]) {
+				allowed(cmd, options);
+			}
+		});
+	});
+
+	describe("Other repositories keep full main access", () => {
+		it("allows pushing and merging main in veyyon, super-board and look-alike repositories", () => {
+			for (const remotes of [UNRELATED_REMOTES, SUPER_BOARD_REMOTES]) {
+				const options = mockPolysimOptions({ branch: "main", prBase: "main", remotes });
+				for (const cmd of [
+					"git push origin main",
+					"git push",
+					"git push origin HEAD:main",
+					"gh pr merge 5 --merge",
+					"gh api -X PUT repos/{owner}/{repo}/pulls/5/merge",
+				]) {
+					expect({ cmd, denial: checkPolysimMainDenial(cmd, testDir, undefined, options) }).toEqual({
+						cmd,
+						denial: undefined,
+					});
+				}
+			}
+			const options = mockPolysimOptions({ prBase: "main", remotes: UNRELATED_REMOTES });
+			for (const cmd of [
+				"gh pr merge 5 --merge --repo Wladefant/veyyon",
+				"gh pr merge 5 --merge --repo Wladefant/super-board",
+				"gh api -X PUT repos/Wladefant/veyyon/pulls/5/merge",
+				"git push git@github.com:Bavariance/polysimulator-docs.git main",
+				"git push git@github.com:Bavariance/polysimulator2.git main",
+				"git push git@github.com:notBavariance/polysimulator.git main",
+			]) {
+				expect({ cmd, denial: checkPolysimMainDenial(cmd, testDir, undefined, options) }).toEqual({
+					cmd,
+					denial: undefined,
+				});
+			}
+		});
+	});
+
+	describe("Pull request base lookups that do not answer", () => {
+		it("refuses with retry guidance, naming the lookup error, and allows the retry once gh answers", () => {
+			const cmd = "gh pr merge 5 --merge";
+			const offline = checkPolysimMainDenial(
+				cmd,
+				testDir,
+				undefined,
+				mockPolysimOptions({ prBase: { error: "gh pr view: HTTP 403: API rate limit exceeded" } }),
+			);
+			expectRetryableBaseDenial(offline);
+			expect(offline?.reason).toContain("API rate limit exceeded");
+			expectRetryableBaseDenial(
+				checkPolysimMainDenial(
+					"gh api -X PUT repos/Bavariance/polysimulator/pulls/5/merge",
+					testDir,
+					undefined,
+					mockPolysimOptions({ prBase: { error: "gh pr view timed out" } }),
+				),
+			);
+			expect(
+				checkPolysimMainDenial(cmd, testDir, undefined, mockPolysimOptions({ prBase: "staging" })),
+			).toBeUndefined();
+		});
+
+		it("a known main base is a final refusal, not a retryable one", () => {
+			const denial = checkPolysimMainDenial(
+				"gh pr merge 5 --merge",
+				testDir,
+				undefined,
+				mockPolysimOptions({ prBase: "main" }),
+			);
+			expect(denial?.reason).toBe(POLYSIM_MAIN_DENIAL_MESSAGE);
+			expect(denial?.retryable).toBeUndefined();
+		});
+	});
+
+	describe("Config, encoding, interpreter and HTTP bypasses", () => {
+		const expectDenied = (commands: string[], options: PolysimGuardOptions) => {
+			for (const cmd of commands) {
+				const reason = checkPolysimMainDenial(cmd, testDir, undefined, options)?.reason;
+				expect({ cmd, denied: reason?.startsWith(POLYSIM_MAIN_DENIAL_MESSAGE) }).toEqual({ cmd, denied: true });
+			}
+		};
+
+		it("refuses git config overrides that route a push to main", () => {
+			expectDenied(
+				[
+					"git -c alias.ship=push ship origin main",
+					"git -c 'alias.ship=!git push origin main' ship",
+					"git -c remote.origin.push=HEAD:main push origin",
+					"git -c remote.origin.push=refs/heads/x:refs/heads/main push",
+					"git -c push.default=matching push origin",
+					"git -c push.default=upstream -c branch.feature-test.merge=refs/heads/main push",
+					"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ship GIT_CONFIG_VALUE_0=push git ship origin main",
+					"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.push GIT_CONFIG_VALUE_0=HEAD:main git push origin",
+					"GIT_CONFIG_PARAMETERS=\"'alias.ship'='push'\" git ship origin main",
+					"git --config-env=alias.ship=SHIP ship origin main",
+				],
+				mockPolysimOptions(),
+			);
+			// An `insteadOf` rewrite that turns a harmless-looking URL into polysimulator.
+			expectDenied(
+				["git -c url.git@github.com:Bavariance/.insteadOf=x: push x:polysimulator.git main"],
+				mockPolysimOptions({ remotes: UNRELATED_REMOTES }),
+			);
+			expectDenied(
+				["git ship origin main", "git push origin"],
+				mockPolysimOptions({
+					gitConfig: [
+						["alias.ship", "push"],
+						["remote.origin.push", "HEAD:refs/heads/main"],
+					],
+				}),
+			);
+		});
+
+		it("refuses send-pack, http-push, subtree push and dashed git binaries", () => {
+			expectDenied(
+				[
+					"git send-pack git@github.com:Bavariance/polysimulator.git main",
+					"git send-pack git@github.com:Bavariance/polysimulator.git",
+					"git http-push https://github.com/Bavariance/polysimulator.git main",
+					"git subtree push -P lib origin main",
+					"git-push origin main",
+					"git-send-pack git@github.com:Bavariance/polysimulator.git main",
+				],
+				mockPolysimOptions(),
+			);
+		});
+
+		it("refuses globs, brace expansion and percent-encoded repository names", () => {
+			expectDenied(
+				[
+					"git push origin HEAD:{main,x}",
+					"git push origin HEAD:mai?",
+					"git push origin HEAD:mai[n]",
+					"git push origin HEAD:m{a,b}in",
+					"git push https://github.com/Bavariance/%70olysimulator.git main",
+					"git push https://github.com/%42avariance/polysimulator main",
+				],
+				mockPolysimOptions(),
+			);
+		});
+
+		it("refuses inline interpreter code and encoded PowerShell that drive a push or merge", () => {
+			const encoded = Buffer.from("git push origin main", "utf16le").toString("base64");
+			expectDenied(
+				[
+					"python -c \"import subprocess; subprocess.run(['git','push','origin','main'])\"",
+					"python3 -c 'import os; os.system(\"gh pr merge 5\")'",
+					"node -e \"require('child_process').execSync('git push origin main')\"",
+					'perl -e \'system("git", "push", "origin", "main")\'',
+					`powershell -EncodedCommand ${encoded}`,
+					`pwsh -enc ${encoded}`,
+					"powershell -NoProfile -Command git push origin main",
+					"cmd /c g^it push origin main",
+				],
+				mockPolysimOptions(),
+			);
+		});
+
+		it("refuses direct HTTP calls to the GitHub merge and ref endpoints", () => {
+			expectDenied(
+				[
+					"curl -X PUT https://api.github.com/repos/Bavariance/polysimulator/pulls/1/merge",
+					'curl -X PATCH https://api.github.com/repos/Bavariance/polysimulator/git/refs/heads/main -d \'{"sha":"x"}\'',
+					'curl https://api.github.com/repos/Bavariance/polysimulator/merges -d \'{"base":"main","head":"x"}\'',
+					"wget --method=PUT https://api.github.com/repos/Bavariance/polysimulator/pulls/1/merge",
+					"Invoke-RestMethod -Method Put -Uri https://api.github.com/repos/Bavariance/polysimulator/pulls/1/merge",
+					"gh api -X PUT repos/Bavariance/polysimulator/contents/README.md -f message=x -f content=eA==",
+					"gh api repos/Bavariance/polysimulator/merges -f base=main -f head=x",
+					"gh api -X $METHOD repos/Bavariance/polysimulator/pulls/1/merge",
+				],
+				mockPolysimOptions({ prBase: "main" }),
+			);
 		});
 	});
 });
