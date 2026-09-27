@@ -147,7 +147,9 @@ describe("model selection and thinking level gui-host behaviour", () => {
 		});
 
 		expect(outcome).toEqual({ RequestSucceeded: { request: 2 } });
-		const snapshotFrame = frames.find(f => f.Snapshot?.Models !== undefined);
+		// Creating the session publishes the model it resolved first; the select's
+		// own snapshot is the last one, and names a model other than that default.
+		const snapshotFrame = frames.findLast(f => f.Snapshot?.Models !== undefined);
 		expect(snapshotFrame).toBeDefined();
 		const modelsView = snapshotFrame!.Snapshot!.Models as ModelsView;
 		expect(modelsView.current).toEqual({

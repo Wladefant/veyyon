@@ -28,9 +28,10 @@ describe("blob ref and image data url adversarial matrix", () => {
 		expect(isBlobRef(TEXT_BLOB)).toBe(false);
 	});
 
-	it("parseBlobRef strips blob:sha256: prefix only", () => {
+	it("parseBlobRef strips blob:sha256: prefix and accepts only a canonical hash", () => {
 		expect(parseBlobRef(BLOB)).toBe(SHA);
-		expect(parseBlobRef("blob:sha256:")).toBe("");
+		expect(parseBlobRef("blob:sha256:")).toBeNull();
+		expect(parseBlobRef(`blob:sha256:${SHA}x`)).toBeNull();
 		expect(parseBlobRef("not-blob")).toBeNull();
 		expect(parseBlobRef("")).toBeNull();
 		expect(parseBlobRef(`blob:${SHA}`)).toBeNull();

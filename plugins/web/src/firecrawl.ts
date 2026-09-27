@@ -1,6 +1,7 @@
 import type { FetchImpl } from "@veyyon/ai";
 import { getEnvApiKey } from "@veyyon/ai/env-api-key";
 import { isRecord } from "@veyyon/utils/type-guards";
+import { trimTrailingSlashes } from "@veyyon/utils/url";
 import type { CredentialStore } from "./credentials";
 import { findCredential } from "./credentials";
 import { withHardTimeout } from "./hard-timeout";
@@ -42,7 +43,7 @@ export function findFirecrawlApiKey(
  */
 export function normalizeFirecrawlScrapeUrl(endpoint?: string): string {
 	const raw = endpoint || process.env.FIRECRAWL_ENDPOINT || DEFAULT_FIRECRAWL_API_URL;
-	const base = raw.trim().replace(/\/+$/, "");
+	const base = trimTrailingSlashes(raw.trim());
 	if (base.endsWith("/v1/scrape") || base.endsWith("/v2/scrape")) {
 		return base;
 	}
@@ -58,7 +59,7 @@ export function normalizeFirecrawlScrapeUrl(endpoint?: string): string {
  */
 export function normalizeFirecrawlSearchUrl(endpoint?: string): string {
 	const raw = endpoint || process.env.FIRECRAWL_ENDPOINT || DEFAULT_FIRECRAWL_API_URL;
-	const base = raw.trim().replace(/\/+$/, "");
+	const base = trimTrailingSlashes(raw.trim());
 	if (base.endsWith("/v1/search") || base.endsWith("/v2/search")) {
 		return base;
 	}

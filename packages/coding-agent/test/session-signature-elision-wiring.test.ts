@@ -65,10 +65,16 @@ describe("AgentSession wires the signature settings into the request", () => {
 		session = undefined;
 	});
 
-	/** A Gemini 3 model from the bundled registry, since the sentinel is only substituted there. */
+	/**
+	 * A Gemini 3 model on the public Gemini API from the bundled registry: the
+	 * sentinel is only substituted there, since Cloud Code Assist and Vertex reject
+	 * it and get the field omitted instead.
+	 */
 	function gemini3(): Model {
-		const model = modelRegistry.getAll().find(candidate => candidate.id.startsWith("gemini-3"));
-		if (!model) throw new Error("Expected a bundled gemini-3 model");
+		const model = modelRegistry
+			.getAll()
+			.find(candidate => candidate.id.startsWith("gemini-3") && candidate.api === "google-generative-ai");
+		if (!model) throw new Error("Expected a bundled gemini-3 model on google-generative-ai");
 		return model;
 	}
 
