@@ -100,18 +100,17 @@ describe("flipping Import Other Tools' Config", () => {
 
 describe("flipping Show Inline Images", () => {
 	it("rebuilds the transcript under the new value and retires what scrollback holds", () => {
-		const rebuildChatFromMessages = vi.fn();
-		const resetDisplay = vi.fn();
+		const applied: string[] = [];
 		const selector = new SelectorController({
 			showWarning: vi.fn(),
-			rebuildChatFromMessages,
-			ui: { resetDisplay },
+			rebuildChatFromMessages: () =>
+				applied.push(`rebuild showImages=${Settings.instance.get("terminal.showImages")}`),
+			ui: { resetDisplay: () => applied.push("retire scrollback") },
 		} as unknown as InteractiveModeContext);
 
 		Settings.instance.override("terminal.showImages", false);
 		selector.handleSettingChange("terminal.showImages", false);
 
-		expect(rebuildChatFromMessages).toHaveBeenCalledTimes(1);
-		expect(resetDisplay).toHaveBeenCalledTimes(1);
+		expect(applied).toEqual(["rebuild showImages=false", "retire scrollback"]);
 	});
 });

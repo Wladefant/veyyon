@@ -56,8 +56,14 @@ function textOutput(result: { content: Array<TextContent | ImageContent> }): str
 		.join("\n");
 }
 
-/** Every page request answers `pages[url]`, or a 404; every binary refetch answers `bytes`. */
-function stubSite(pages: Record<string, { contentType: string; content: string }>, bytes: Uint8Array) {
+/**
+ * Every page request answers `pages[url]`, or a 404; every binary refetch answers `bytes` and counts
+ * one download.
+ */
+function stubSite(
+	pages: Record<string, { contentType: string; content: string }>,
+	bytes: Uint8Array,
+): { readonly downloads: number } {
 	vi.spyOn(scrapers, "loadPage").mockImplementation(async (url, options) => {
 		const page = pages[url];
 		if (!page) return { ok: false, status: 404, content: "", contentType: "text/plain", finalUrl: url };
@@ -66,7 +72,12 @@ function stubSite(pages: Record<string, { contentType: string; content: string }
 		}
 		return { ok: true, status: 200, finalUrl: url, ...page };
 	});
-	return vi.spyOn(scraperUtils, "fetchBinary").mockResolvedValue({ ok: true, buffer: bytes });
+	const site = { downloads: 0 };
+	vi.spyOn(scraperUtils, "fetchBinary").mockImplementation(async () => {
+		site.downloads += 1;
+		return { ok: true, buffer: bytes };
+	});
+	return site;
 }
 
 describe("a URL read degrades on a payload or link it cannot use", () => {
@@ -180,7 +191,7 @@ describe("a URL read degrades on a payload or link it cannot use", () => {
 
 	it("downloads a document that does not convert once, for the converter and the binary notice both", async () => {
 		const url = `https://example.com/report-${Snowflake.next()}.pdf`;
-		const fetchBinary = stubSite({ [url]: { contentType: "application/pdf", content: "" } }, GARBAGE);
+		const site = stubSite({ [url]: { contentType: "application/pdf", content: "" } }, GARBAGE);
 		vi.spyOn(scrapeServices, "convertDocument").mockResolvedValue({ ok: true, content: "scan" });
 
 		const result = await read(url);
@@ -188,6 +199,6 @@ describe("a URL read degrades on a payload or link it cannot use", () => {
 		expect(result.details?.method).toBe("binary");
 		expect(result.details?.notes).toEqual(["markit conversion produced no usable output"]);
 		expect(textOutput(result)).toContain(`[Binary content: application/pdf, 10B] ${url}`);
-		expect(fetchBinary).toHaveBeenCalledTimes(1);
+		expect(site.downloads).toBe(1);
 	});
 });

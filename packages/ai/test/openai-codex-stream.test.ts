@@ -1995,14 +1995,14 @@ describe("openai-codex streaming", () => {
 			`data: ${JSON.stringify({ type: "response.completed", response: { status: "completed", usage: DEFAULT_USAGE } })}`,
 		].join("\n\n")}\n\n`;
 		let requestCount = 0;
-		const fetchMock = vi.fn(async () => {
+		const fetchMock: FetchImpl = async () => {
 			requestCount += 1;
 			clock = requestCount === 1 ? 1010 : 1050;
 			return new Response(requestCount === 1 ? failedAttempt : deliveredAttempt, {
 				status: 200,
 				headers: { "content-type": "text/event-stream" },
 			});
-		});
+		};
 
 		const result = await streamOpenAICodexResponses(
 			{ ...createCodexTestModel("https://chatgpt.com/backend-api", "gpt-5.1-codex"), preferWebsockets: false },
@@ -2012,14 +2012,14 @@ describe("openai-codex streaming", () => {
 			},
 			{
 				apiKey: createCodexTestToken(),
-				fetch: fetchMock as FetchImpl,
+				fetch: fetchMock,
 				onModerationMetadata: () => {
 					clock = 1090;
 				},
 			},
 		).result();
 
-		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(requestCount).toBe(2);
 		expect(result.stopReason).toBe("stop");
 		expect(result.content.find(block => block.type === "text")?.text).toBe("Hello after retry");
 		expect(result.ttft).toBe(50);
