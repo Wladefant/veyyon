@@ -224,8 +224,7 @@ export function createSessionToolSession(inputs: SessionToolSessionInputs): Sess
 		getDiscoverableTools: filter => inputs.session()?.getDiscoverableTools(filter) ?? [],
 		getDiscoverableToolSearchIndex: () => inputs.session()?.getDiscoverableToolSearchIndex(),
 		getSelectedDiscoveredToolNames: () => inputs.session()?.getSelectedDiscoveredToolNames() ?? [],
-		activateDiscoveredTools: toolNames =>
-			inputs.session()?.activateDiscoveredTools(toolNames) ?? Promise.resolve([]),
+		activateDiscoveredTools: toolNames => inputs.session()?.activateDiscoveredTools(toolNames) ?? Promise.resolve([]),
 		getCheckpointState: () => inputs.session()?.getCheckpointState(),
 		setCheckpointState: state => inputs.session()?.setCheckpointState(state ?? undefined),
 		getLastCompletedRewind: () => inputs.session()?.getLastCompletedRewind(),

@@ -2467,7 +2467,6 @@ export function convertMessages(
 					role: "assistant",
 					content: "I have processed the tool results.",
 				});
-
 			}
 			params.push(converted);
 		} else if (msg.role === "assistant") {
