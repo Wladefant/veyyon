@@ -722,6 +722,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			return createTaskModeError(validationError);
 		}
 
+		// An edit to config.yml since the last spawn applies here, before the catalog and routing
+		// are read, without the operator having to run /reload-config first.
+		await this.session.settings.reloadConfigIfChanged();
 		const { agents: discoveredAgents } = await discoverAgents(this.session.cwd);
 		const catalog = this.#enabledAgents(discoveredAgents, true);
 		if (!agentsEnabled(this.session.settings)) {
