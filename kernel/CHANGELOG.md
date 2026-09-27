@@ -19,6 +19,7 @@
 - Rebuilding a session context locates the applied compaction by searching from the end of the branch, which takes about 7ms off each rebuild of a 238,084-entry branch.
 - `SessionManager.rewriteEntries` takes the entries a caller changed in place and rewrites the session file from the earliest of them on, keeping the bytes before it without parsing or serializing them, which cut the rewrite after a one-entry prune on a 376 MiB, 109,360-entry session from 1.2 s to 135 ms.
 - The session listing matches a `--resume` argument against a transcript filename through `sessionFileMatchesResumeArgument` from `@veyyon/utils/session-file`, the matcher the startup profile lookup uses; no user-visible change.
+- The first rewrite after resuming a session keeps the file's bytes before the earliest updated entry and reads nothing back when the loaded file holds one clean record per line, which cut the first-turn prune rewrite of a resumed 39 MB, 13,470-entry session from one whole-file write plus a 39 MB read to a partial write with no read.
 
 ### Fixed
 
