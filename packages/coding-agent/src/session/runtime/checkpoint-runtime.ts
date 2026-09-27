@@ -34,7 +34,10 @@ export interface CheckpointSnapshot {
  * The report a successful `rewind` result carries: the structured `details.report`, else its first
  * text part, trimmed. Empty when it carries neither.
  */
-function rewindReportOf(details: unknown, content: ReadonlyArray<TextContent | ImageContent | VideoContent> | undefined): string {
+function rewindReportOf(
+	details: unknown,
+	content: ReadonlyArray<TextContent | ImageContent | VideoContent> | undefined,
+): string {
 	const detailReport =
 		details && typeof details === "object" && "report" in details && typeof details.report === "string"
 			? details.report.trim()
@@ -88,7 +91,10 @@ export class CheckpointRuntime {
 	}
 
 	/** A `rewind` call succeeded: keep its report for the turn end, when a checkpoint is open. */
-	recordRewindResult(details: unknown, content: ReadonlyArray<TextContent | ImageContent | VideoContent> | undefined): void {
+	recordRewindResult(
+		details: unknown,
+		content: ReadonlyArray<TextContent | ImageContent | VideoContent> | undefined,
+	): void {
 		if (!this.#state) return;
 		const report = rewindReportOf(details, content);
 		if (report.length > 0) this.#pendingReport = report;
