@@ -20,7 +20,9 @@
 //! regression would signal every process the user owns. Ancestors hidden from
 //! the parent walk (`/proc` `hidepid`) are not exercised, and the window
 //! between the unreaped-child check and `kill` on platforms without pidfd is
-//! not deterministically reproducible.
+//! not deterministically reproducible. External `kill` binaries (`/bin/kill`,
+//! `env kill`, `sh -c 'kill $PPID'`) run outside the builtin and are not
+//! guarded at all: this is a guard on the builtin, not a sandbox boundary.
 
 use std::{io::Read, path::PathBuf, process::Stdio, time::Duration};
 
@@ -201,13 +203,43 @@ fn assert_refused(run: &HostRun, what: &str) {
 
 /// A test-owned `sleep` in its own group, outside the host's ancestry.
 fn spawn_bystander() -> tokio::process::Child {
+	spawn_sleep_in_group(0)
+}
+
+/// A test-owned `sleep` in process group `group`, or in a new group it leads
+/// when `group` is `0`.
+fn spawn_sleep_in_group(group: i32) -> tokio::process::Child {
 	tokio::process::Command::new("sleep")
 		.arg("30")
 		.stdin(Stdio::null())
-		.process_group(0)
+		.process_group(group)
 		.kill_on_drop(true)
 		.spawn()
 		.expect("spawn bystander")
+}
+
+/// A test-owned group of two `sleep`s outside the host's ancestry: the leader,
+/// whose pid is the group id, and a second member.
+fn spawn_bystander_group() -> (i32, [tokio::process::Child; 2]) {
+	let leader = spawn_bystander();
+	let group = leader.id().expect("leader pid") as i32;
+	let member = spawn_sleep_in_group(group);
+	(group, [leader, member])
+}
+
+/// Whether `child` ends by SIGTERM within the bound. A child still running is
+/// killed, so a failed assertion leaves nothing behind.
+async fn ended_by_sigterm(child: &mut tokio::process::Child) -> bool {
+	let status = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+	let terminated = matches!(
+		&status,
+		Ok(Ok(status)) if std::os::unix::process::ExitStatusExt::signal(status) == Some(libc::SIGTERM)
+	);
+	if !terminated {
+		let _ = child.start_kill();
+		let _ = child.wait().await;
+	}
+	terminated
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -281,17 +313,42 @@ async fn a_process_outside_the_ancestry_is_still_signalled() {
 	let pid = bystander.id().expect("bystander pid");
 	let run =
 		run_host("kill-guard-bystander", &format!("kill -TERM {pid}"), HostGroup::Shared, None).await;
-	let status = tokio::time::timeout(Duration::from_secs(5), bystander.wait()).await;
-	let terminated = matches!(
-		&status,
-		Ok(Ok(status)) if std::os::unix::process::ExitStatusExt::signal(status) == Some(libc::SIGTERM)
-	);
-	if !terminated {
-		let _ = bystander.start_kill();
-		let _ = bystander.wait().await;
-	}
+	let terminated = ended_by_sigterm(&mut bystander).await;
 	assert_eq!(run.script_exit, Some(0), "kill of a bystander succeeds: {run:?}");
-	assert!(terminated, "the bystander ended by SIGTERM within the bound: {status:?}");
+	assert!(terminated, "the bystander ended by SIGTERM within the bound");
+}
+
+/// The group branch of the guard must still allow a group none of whose
+/// members is protected; refusing every group would pass every refusal test.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_group_holding_no_protected_process_is_still_signalled() {
+	let (group, [mut leader, mut member]) = spawn_bystander_group();
+	let run = run_host(
+		"kill-guard-bystander-group",
+		&format!("kill -TERM -- -{group}"),
+		HostGroup::Shared,
+		None,
+	)
+	.await;
+	let leader_ended = ended_by_sigterm(&mut leader).await;
+	let member_ended = ended_by_sigterm(&mut member).await;
+	assert_eq!(run.script_exit, Some(0), "kill of a bystander group succeeds: {run:?}");
+	assert!(leader_ended, "the group's leader ended by SIGTERM within the bound");
+	assert!(member_ended, "the group's other member ended by SIGTERM within the bound");
+}
+
+/// Cancellation kills a run's process groups through `kill_process_group`,
+/// which consults the same guard, so a guard that refused every group would
+/// leave a cancelled command's grandchildren running.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_cancellation_group_kill_reaches_a_group_holding_no_protected_process() {
+	let (group, [mut leader, mut member]) = spawn_bystander_group();
+	let delivered = crate::process::kill_process_group(group, libc::SIGTERM);
+	let leader_ended = ended_by_sigterm(&mut leader).await;
+	let member_ended = ended_by_sigterm(&mut member).await;
+	assert!(delivered, "kill_process_group reports the signal delivered");
+	assert!(leader_ended, "the group's leader ended by SIGTERM within the bound");
+	assert!(member_ended, "the group's other member ended by SIGTERM within the bound");
 }
 
 /// `kill -1` would reach every process the user owns if the guard regressed,
@@ -342,6 +399,114 @@ async fn a_dropped_child_is_killed_within_the_bound() {
 	assert!(
 		writer_gone_within(reader, Duration::from_secs(5)).await,
 		"dropping the tracked child kills it"
+	);
+}
+
+#[cfg(target_os = "linux")]
+const FALLBACK_HOST_TEST: &str =
+	"shell::a_signal_never_reaches_the_host_or_its_ancestors::fallback_kill_host_entry";
+
+/// Subprocess entry for the fallback kill test. It fills every descriptor slot
+/// so `pidfd_open` fails, then drops a tracked child, which leaves the
+/// unreaped-child check as the only kill path. It runs alone in its own
+/// process because the descriptor limit is process-wide.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "host process for the fallback kill test; it spawns it, it does nothing alone"]
+fn fallback_kill_host_entry() {
+	use std::os::fd::AsRawFd;
+
+	let Ok(result_path) = std::env::var("VEYYON_FALLBACK_KILL_RESULT") else {
+		return;
+	};
+	let runtime = tokio::runtime::Builder::new_current_thread()
+		.enable_all()
+		.build()
+		.expect("runtime");
+	let outcome = runtime.block_on(async {
+		let (reader, writer) = liveness_pipe();
+		let child = tokio::process::Command::new("sleep")
+			.arg("30")
+			.stdin(Stdio::null())
+			.stdout(writer)
+			.spawn()
+			.expect("spawn child");
+		let pid = child.id().expect("child pid") as i32;
+
+		let mut limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+		// SAFETY: `limit` is a valid, writable `rlimit`.
+		assert_eq!(unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut limit) }, 0);
+		// SAFETY: `reader` is open; `F_DUPFD` returns the lowest free descriptor,
+		// which is closed again straight away.
+		let lowest_free = unsafe { libc::fcntl(reader.as_raw_fd(), libc::F_DUPFD, 0) };
+		assert!(lowest_free >= 0, "find the lowest free descriptor");
+		// SAFETY: `lowest_free` was just returned by `F_DUPFD` and is owned here.
+		unsafe { libc::close(lowest_free) };
+		let full = libc::rlimit {
+			rlim_cur: libc::rlim_t::try_from(lowest_free).expect("descriptor number"),
+			rlim_max: limit.rlim_max,
+		};
+		// SAFETY: `full` is a valid `rlimit` that only lowers the soft limit.
+		assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raw const full) }, 0);
+
+		// SAFETY: `pidfd_open(pid, 0)` takes two scalars; a descriptor it returns
+		// is closed below.
+		let probe = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+		let pidfd_available = probe >= 0;
+		if pidfd_available {
+			// SAFETY: `probe` is a descriptor this process owns.
+			unsafe { libc::close(probe as i32) };
+		}
+		drop(ChildProcess::new(child, Some(pid), None));
+		// SAFETY: `limit` holds the values `getrlimit` returned.
+		assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raw const limit) }, 0);
+
+		if pidfd_available {
+			return "pidfd-available";
+		}
+		if writer_gone_within(reader, Duration::from_secs(5)).await {
+			return "killed";
+		}
+		// SAFETY: the child is alive and unreaped, so its PID is still its own.
+		unsafe { libc::kill(pid, libc::SIGKILL) };
+		"survived"
+	});
+	let staged = PathBuf::from(&result_path).with_extension("tmp");
+	std::fs::write(&staged, outcome).expect("write result");
+	std::fs::rename(&staged, &result_path).expect("publish result");
+}
+
+/// Without a pidfd (a kernel before 5.3, seccomp, `EMFILE`, and always on
+/// macOS) the unreaped-child check is the only way a dropped child is killed.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dropped_child_without_a_pidfd_is_killed_within_the_bound() {
+	let dir = veyyon_test_scratch::scratch_dir("kill-guard-fallback");
+	let result = dir.join("result");
+	let output = tokio::time::timeout(
+		BOUND,
+		tokio::process::Command::new(std::env::current_exe().expect("test binary"))
+			.args(["--exact", FALLBACK_HOST_TEST, "--ignored", "--test-threads=1", "--quiet"])
+			.env("VEYYON_FALLBACK_KILL_RESULT", &result)
+			.stdin(Stdio::null())
+			.kill_on_drop(true)
+			.output(),
+	)
+	.await
+	.expect("the fallback host ends within the bound")
+	.expect("run the fallback host");
+	assert!(
+		output.status.success(),
+		"the fallback host ran to completion: {}{}",
+		String::from_utf8_lossy(&output.stdout),
+		String::from_utf8_lossy(&output.stderr)
+	);
+	assert_eq!(
+		std::fs::read_to_string(&result)
+			.expect("fallback host result")
+			.trim(),
+		"killed",
+		"with pidfd_open failing, dropping the tracked child kills it"
 	);
 }
 

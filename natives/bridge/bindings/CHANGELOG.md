@@ -6,6 +6,7 @@
 
 - The launch-time prune of old addon caches routes non-removable directories through `attachNativeNoticeSink` instead of stderr.
 - On Unix, the embedded shell's `kill` refuses any real signal that would reach the host process, one of its threads, an ancestor, or a process group holding one of them (signal 0 still probes), and cancelling a command no longer SIGKILLs a PID that is no longer its child ([#106](https://github.com/Wladefant/veyyon/issues/106)).
+- On Unix, the embedded shell's `suspend` fails with the same refusal instead of stopping the host process ([#106](https://github.com/Wladefant/veyyon/issues/106)).
 
 ### Changed
 
