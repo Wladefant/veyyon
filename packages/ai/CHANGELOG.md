@@ -21,6 +21,7 @@
 - The auth gateway's request schemas build in a scope that compiles their validators whatever the process's ArkType configuration, so the jitless CLI validates a 751-message chat-completions request in 42 µs instead of 2.1 ms.
 - The OpenAI Responses stream splits into a request plan, a retry ladder for reasoning-effort, strict-tool and stale-chain rejections, a stream consumer and a chain-baseline recorder instead of one 400-line closure; request bodies and results are identical and a 60-turn chained session takes the same time.
 - Strict-mode schema sanitization splits into `$ref` and single-`allOf` inlining, a type-union splitter and a per-keyword rewrite instead of one 240-line function, cutting sanitization of 40 deep tool schemas from 8.49 ms to 7.64 ms with identical output across 100,000 generated schemas.
+- The Google, Cloud Code Assist, MCP and Moonshot schema normalizers split a node's walk into parent-level rewrites, a const-union collapse and type and object-shape settling steps instead of one 140-line function; output is identical across 200,000 generated schemas and normalization time is unchanged.
 
 ### Fixed
 

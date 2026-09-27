@@ -251,78 +251,24 @@ function normalizeSchemaNode(value: unknown, options: NormalizeSchemaWalkOptions
 }
 
 function normalizeSchemaObjectNode(value: JsonObject, options: NormalizeSchemaWalkOptions): unknown {
-	let obj = options.normalizeFieldNames && !options.insideProperties ? applySnakeCaseRenames(value) : value;
-	if (options.collapseNullFields && !options.insideProperties) {
-		obj = preHandleNullFields(obj);
-	}
+	const obj = applyParentLevelRewrites(value, options);
+	const combiner = constUnionCombiner(obj);
 	const result: JsonObject = {};
+	if (combiner !== undefined) writeConstUnionEnum(obj[combiner] as JsonObject[], result, options);
 	let spill: Array<[string, unknown]> | undefined;
-	for (const combiner of JSON_SCHEMA_COMBINERS) {
-		if (!Array.isArray(obj[combiner])) continue;
-		const variants = obj[combiner] as JsonObject[];
-		const allHaveConst = variants.every(v => isRecord(v) && "const" in v);
-		if (!allHaveConst || variants.length === 0) continue;
-
-		const dedupedEnum: unknown[] = [];
-		for (const variant of variants) {
-			pushEnumValue(dedupedEnum, variant.const);
-		}
-		result.enum = dedupedEnum;
-
-		const explicitTypes = variants
-			.map(variant => variant.type)
-			.filter((variantType): variantType is string => typeof variantType === "string");
-		const allHaveSameExplicitType =
-			explicitTypes.length === variants.length &&
-			explicitTypes.every(variantType => variantType === explicitTypes[0]);
-		if (allHaveSameExplicitType && explicitTypes[0]) {
-			result.type = explicitTypes[0];
-		} else {
-			const inferredTypes = dedupedEnum
-				.map(enumValue => inferJsonSchemaTypeFromValue(enumValue))
-				.filter((inferredType): inferredType is string => inferredType !== undefined);
-			const inferredTypeSet = new Set(inferredTypes);
-			if (inferredTypeSet.size === 1) {
-				result.type = inferredTypes[0];
-			} else {
-				const nonNullInferredTypes = inferredTypes.filter(inferredType => inferredType !== "null");
-				const nonNullTypeSet = new Set(nonNullInferredTypes);
-				if (inferredTypes.includes("null") && nonNullTypeSet.size === 1) {
-					result.type = nonNullInferredTypes[0];
-					if (!options.stripNullableKeyword) {
-						result.nullable = true;
-					}
-				}
-			}
-		}
-
-		for (const key in obj) {
-			if (!Object.hasOwn(obj, key) || key === combiner || outHasOwn(result, key)) continue;
-			const entry = obj[key];
-			if (!options.insideProperties && options.unsupportedFields(key)) {
-				spill = pushStrippedDescriptionEntry(spill, key, entry, options);
-				continue;
-			}
-			if (options.stripNullableKeyword && key === "nullable") continue;
-			result[key] = normalizeSchemaNode(entry, {
-				...options,
-				insideProperties: !options.insideProperties && key === "properties",
-			});
-		}
-		applyDescriptionSpill(result, spill, options);
-		return applyNodePostProcessing(result, options);
-	}
-
 	let constValue: unknown;
 	for (const key in obj) {
-		if (!Object.hasOwn(obj, key)) continue;
+		// A const union's `enum`, `type` and `nullable` come from its branches, not the node's own keys.
+		if (!Object.hasOwn(obj, key) || (combiner !== undefined && (key === combiner || outHasOwn(result, key)))) {
+			continue;
+		}
 		const entry = obj[key];
 		if (!options.insideProperties && options.unsupportedFields(key)) {
 			spill = pushStrippedDescriptionEntry(spill, key, entry, options);
 			continue;
 		}
 		if (options.stripNullableKeyword && key === "nullable") continue;
-		if (key === "const") {
+		if (combiner === undefined && key === "const") {
 			constValue = entry;
 			continue;
 		}
@@ -331,24 +277,82 @@ function normalizeSchemaObjectNode(value: JsonObject, options: NormalizeSchemaWa
 			insideProperties: !options.insideProperties && key === "properties",
 		});
 	}
+	if (combiner === undefined) {
+		settleNodeType(result, constValue, options);
+		settleObjectShape(result, options);
+	}
+	applyDescriptionSpill(result, spill, options);
+	return applyNodePostProcessing(result, options);
+}
 
+/**
+ * The rewrites python-genai applies to a schema node before recursing into
+ * it: snake_case keywords renamed, then null fields collapsed. A properties
+ * map is not a schema node and receives neither.
+ */
+function applyParentLevelRewrites(value: JsonObject, options: NormalizeSchemaWalkOptions): JsonObject {
+	if (options.insideProperties) return value;
+	const renamed = options.normalizeFieldNames ? applySnakeCaseRenames(value) : value;
+	return options.collapseNullFields ? preHandleNullFields(renamed) : renamed;
+}
+
+/** The first of `anyOf`/`oneOf` whose branches are all bare `const` schemas, if any. */
+function constUnionCombiner(obj: JsonObject): (typeof JSON_SCHEMA_COMBINERS)[number] | undefined {
+	for (const combiner of JSON_SCHEMA_COMBINERS) {
+		const variants = obj[combiner];
+		if (Array.isArray(variants) && variants.length > 0 && variants.every(v => isRecord(v) && "const" in v)) {
+			return combiner;
+		}
+	}
+	return undefined;
+}
+
+/**
+ * A union of `const` branches collapsed into one `enum`. Its `type` is the
+ * branches' shared explicit type, else the one type every value has, else,
+ * for values of one type plus `null`, that type made nullable.
+ */
+function writeConstUnionEnum(variants: JsonObject[], result: JsonObject, options: NormalizeSchemaWalkOptions): void {
+	const values: unknown[] = [];
+	for (const variant of variants) pushEnumValue(values, variant.const);
+	result.enum = values;
+
+	const explicitType = variants[0]?.type;
+	if (typeof explicitType === "string" && explicitType !== "" && variants.every(v => v.type === explicitType)) {
+		result.type = explicitType;
+		return;
+	}
+	const types = new Set<string>();
+	for (const value of values) {
+		const type = inferJsonSchemaTypeFromValue(value);
+		if (type !== undefined) types.add(type);
+	}
+	if (types.size === 1) {
+		result.type = types.values().next().value;
+		return;
+	}
+	if (types.size !== 2 || !types.delete("null")) return;
+	result.type = types.values().next().value;
+	if (!options.stripNullableKeyword) result.nullable = true;
+}
+
+/**
+ * `type` settled after the keys are walked: a `type` array reduced to its
+ * first non-null member, `const` folded into `enum`, a bare `enum` given the
+ * one type its values share, and `type: "null"` turned into `nullable`.
+ */
+function settleNodeType(result: JsonObject, constValue: unknown, options: NormalizeSchemaWalkOptions): void {
 	if (options.normalizeTypeArrayToNullable && Array.isArray(result.type)) {
 		const types = (result.type as unknown[]).filter((t): t is string => typeof t === "string");
-		const nonNull = types.filter(t => t !== "null");
-		if (types.includes("null") && !options.stripNullableKeyword) {
-			result.nullable = true;
-		}
-		result.type = nonNull[0] ?? types[0];
+		if (types.includes("null") && !options.stripNullableKeyword) result.nullable = true;
+		result.type = types.find(t => t !== "null") ?? types[0];
 	}
 	if (constValue !== undefined) {
 		const existingEnum = Array.isArray(result.enum) ? result.enum : [];
 		pushEnumValue(existingEnum, constValue);
 		result.enum = existingEnum;
-		if (!result.type) {
-			result.type = inferJsonSchemaTypeFromValue(constValue);
-		}
+		if (!result.type) result.type = inferJsonSchemaTypeFromValue(constValue);
 	}
-
 	if (
 		options.inferTypeForBareEnum &&
 		!result.type &&
@@ -362,18 +366,16 @@ function normalizeSchemaObjectNode(value: JsonObject, options: NormalizeSchemaWa
 			result.type = enumTypes[0];
 		}
 	}
-
 	if (options.collapseNullFields && result.type === "null") {
 		delete result.type;
 		if (!options.stripNullableKeyword) result.nullable = true;
 	}
+}
 
-	if (
-		options.autoPropertyOrdering &&
-		result.type === "object" &&
-		!outHasOwn(result, "propertyOrdering") &&
-		isRecord(result.properties)
-	) {
+/** `propertyOrdering` and an empty `properties` added to an object node for the providers that want them. */
+function settleObjectShape(result: JsonObject, options: NormalizeSchemaWalkOptions): void {
+	if (result.type !== "object") return;
+	if (options.autoPropertyOrdering && !outHasOwn(result, "propertyOrdering") && isRecord(result.properties)) {
 		const props = result.properties;
 		const keys: string[] = [];
 		for (const k in props) {
@@ -381,13 +383,7 @@ function normalizeSchemaObjectNode(value: JsonObject, options: NormalizeSchemaWa
 		}
 		if (keys.length > 1) result.propertyOrdering = keys;
 	}
-
-	if (options.ensureObjectProperties && result.type === "object" && !outHasOwn(result, "properties")) {
-		result.properties = {};
-	}
-
-	applyDescriptionSpill(result, spill, options);
-	return applyNodePostProcessing(result, options);
+	if (options.ensureObjectProperties && !outHasOwn(result, "properties")) result.properties = {};
 }
 
 function applyNodePostProcessing(schema: JsonObject, options: NormalizeSchemaWalkOptions): JsonObject {
