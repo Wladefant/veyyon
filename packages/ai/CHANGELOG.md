@@ -16,6 +16,7 @@
 - The Anthropic, Ollama and OpenAI Codex providers serialize a request body once per attempt and send, dump and resend those bytes, and Codex turn diagnostics read the input's byte length off the serialized request, cutting request build on a 27 MiB context from 58.4 to 28.8 ms for Anthropic, 37.6 to 19.4 ms for Ollama, 111.9 to 32.3 ms for Codex over SSE and 186.9 to 65.8 ms for Codex over WebSocket.
 - Anthropic request sanitization copies only the containers on the path to a lone surrogate and allocates nothing for a well-formed request, cutting it on a large context from 4.27 ms to 0.97 ms.
 - The OpenAI Codex stream routes each event through one switch to a per-event handler instead of a 210-line branch chain; decode time of a 10,600-event stream is unchanged.
+- The stream idle watchdog waits on one promise per stalled read that the source, the deadline timer or the abort resolves, instead of racing long-lived timeout and abort promises every item, cutting its per-event overhead on a 200,000-event stream from about 320 ns to 230 ns (wrapped iteration 74 ms to 56 ms) with identical outcomes across 2,159 scripted stream schedules.
 
 ### Fixed
 
