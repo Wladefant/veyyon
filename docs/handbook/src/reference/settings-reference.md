@@ -661,7 +661,7 @@ veyyon config get compaction.threshold
 | `speech.mode` | Speech Vocalization Mode | enum | `assistant` | What to speak: all = assistant messages + thinking; assistant = messages only; yield = only the final message at turn end. Values: `all`, `assistant`, `yield`. |
 | `speech.enhanced` | Enhanced Speech Rewriting | boolean | `false` | Rewrite assistant output into natural spoken prose with the tiny/smol model before synthesis (describes code, drops links and markdown). Falls back to mechanical cleanup on failure. |
 | `speech.voice` | Speech Vocalization Voice | enum | `af_heart` | Kokoro voice used when speaking the assistant's output aloud. Values: `af_heart`, `af_bella`, `af_nicole`, `af_aoede`, `af_kore`, `af_sarah`, `am_michael`, `am_fenrir`, `am_puck`, `bf_emma`, `bm_george`, `bm_fable`. |
-| `providers.fetch` | Fetch Provider | enum | `auto` | Reader backend priority for the fetch/read URL tool. Values: `auto`, `native`, `trafilatura`, `lynx`, `parallel`, `jina`. |
+| `providers.fetch` | Fetch Provider | enum | `auto` | Reader backend priority for the fetch/read URL tool. Values: `auto`, `native`, `trafilatura`, `lynx`, `parallel`, `jina`, `firecrawl`. |
 | `codexResets.autoRedeem` | Codex Auto-Redeem Saved Resets | enum | `unset` | When a turn is blocked by the Codex weekly limit on the active account and no other account is available, run the saved-reset check. Unset: prompt before spending the first eligible reset. Yes: spend eligible resets without prompting. No: skip the check. Requires retries enabled. Values: `unset`, `yes`, `no`. |
 | `codexResets.minBlockedMinutes` | Codex Auto-Redeem Min Block | number | `60` | Only auto-redeem when the natural weekly reset is at least this many minutes away (don't spend a ~30-day credit to save a short wait). |
 | `codexResets.keepCredits` | Codex Auto-Redeem Reserve | number | `0` | Never auto-spend below this many saved resets (0 = the last credit may be spent automatically). |
@@ -670,6 +670,8 @@ veyyon config get compaction.threshold
 | `exa.searchDelayMs` | Exa Search Delay | number | `1000` | Minimum delay between Exa web search requests in milliseconds; set 0 to disable pacing. |
 | `exa.enableResearcher` | Exa Researcher | boolean | `false` | Enable the Exa researcher tool for AI-powered deep research. |
 | `exa.enableWebsets` | Exa Websets | boolean | `false` | Enable Exa webset management and enrichment tools. |
+| `firecrawl.endpoint` | Firecrawl Endpoint | string | _(unset)_ | Base URL of Firecrawl API (defaults to https://api.firecrawl.dev). |
+| `firecrawl.apiKey` | Firecrawl API Key | string | _(unset)_ | API key or auth token for Firecrawl (can also use FIRECRAWL_API_KEY environment variable). |
 | `searxng.endpoint` | SearXNG Endpoint | string | _(unset)_ | Base URL of a self-hosted SearXNG instance used for web search. |
 
 ### Discovery
@@ -903,4 +905,4 @@ These keys are not in `/settings`. Some are state veyyon writes for itself (a sc
 | `tui.maxInlineImageRows` | number | `20` |  |
 | `tui.maxInlineImages` | number | `8` |  |
 
-357 settings in /settings, 120 configuration-file keys, 477 in all.
+359 settings in /settings, 120 configuration-file keys, 479 in all.

@@ -25,6 +25,7 @@ import type { Theme } from "../../theme/theme";
 import type { ToolSession } from "..";
 import { foldToolOutputBookkeeping } from "../core/output-fold";
 import { resolveToCwd } from "../core/path-utils";
+import { checkPolysimMainArgv, checkPolysimMainDenial, type PolysimDenialResult } from "../core/polysim-main-guard";
 import { formatDuration, previewLine, replaceTabs, shortenPath, TRUNCATE_LENGTHS } from "../core/render-utils";
 import { ToolError } from "../core/tool-errors";
 import { releaseLaunchExitWatch, watchLaunchedProcessExit } from "./launch-exit-watch";
@@ -369,7 +370,26 @@ async function toolDetails(result: DaemonRpcResult, params: LaunchParams): Promi
 			throw new ToolError(`Internal daemon result ${result.op} is not tool-visible`);
 	}
 }
-function approvalFor(params: unknown): ToolApprovalDecision {
+/**
+ * The polysimulator-main refusal for a launch call: the argv a `start` runs,
+ * and the text a `send` types into a process that may be a shell. The
+ * receiving shell's directory is not known, so `send` is judged as if it
+ * could be polysimulator.
+ */
+function polysimDenialFor(params: unknown, session: ToolSession): PolysimDenialResult | undefined {
+	if (typeof params !== "object" || params === null) return undefined;
+	const call = params as Partial<LaunchParams>;
+	if (call.op === "start" && call.application) {
+		const cwd = resolveToCwd(call.cwd ?? session.cwd, session.cwd);
+		return checkPolysimMainArgv([call.application, ...(call.args ?? [])], cwd, call.env);
+	}
+	if (call.op === "send" && call.text) return checkPolysimMainDenial(call.text, undefined);
+	return undefined;
+}
+
+function approvalFor(params: unknown, session: ToolSession): ToolApprovalDecision {
+	const polysimDenial = polysimDenialFor(params, session);
+	if (polysimDenial) return { tier: "exec", deny: true, reason: polysimDenial.reason };
 	if (typeof params !== "object" || params === null || !("op" in params)) return "exec";
 	switch (params.op) {
 		case "list":
@@ -409,7 +429,7 @@ export class LaunchTool implements AgentTool<typeof launchSchema, LaunchToolDeta
 			call: { op: "logs", name: "web", follow: true, cursor: 1842, timeout: 30 },
 		},
 	];
-	readonly approval = approvalFor;
+	readonly approval = (params: unknown): ToolApprovalDecision => approvalFor(params, this.session);
 
 	constructor(private readonly session: ToolSession) {}
 
@@ -420,6 +440,8 @@ export class LaunchTool implements AgentTool<typeof launchSchema, LaunchToolDeta
 		_onUpdate?: AgentToolUpdateCallback<LaunchToolDetails, typeof launchSchema>,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<LaunchToolDetails>> {
+		const polysimDenial = polysimDenialFor(params, this.session);
+		if (polysimDenial) throw new ToolError(polysimDenial.reason);
 		// Session CPU budget: keep the group in sync on every op, but refuse only
 		// the ops that create a process. A saturated budget that also refused
 		// `stop` left no way to end the work saturating it. The broker (spawned
