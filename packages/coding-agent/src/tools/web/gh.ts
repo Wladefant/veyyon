@@ -77,6 +77,7 @@ export { parsePositiveDecimalInt } from "./gh-format";
 
 import { saveOutputArtifact } from "../core/output-artifact";
 import type { OutputMeta } from "../core/output-meta";
+import { checkGithubToolPolysimMainDenial, checkPushTargetPolysimMainDenial } from "../core/polysim-main-guard";
 import { type ToolAbortError, ToolError, throwIfAborted } from "../core/tool-errors";
 import { toolResult } from "../core/tool-result";
 import { parsePrUrl } from "./gh-url";
@@ -1903,6 +1904,10 @@ export const MUTATING_GITHUB_OPS: ReadonlySet<string> = new Set(["pr_create", "p
 export class GithubTool implements AgentTool<typeof githubSchema, GhToolDetails> {
 	readonly name = "github";
 	readonly approval = (args: unknown): ToolApprovalDecision => {
+		const polysimDenial = checkGithubToolPolysimMainDenial(args, this.session.cwd);
+		if (polysimDenial) {
+			return { tier: "exec", deny: true, reason: polysimDenial.reason };
+		}
 		const rawOp = (args as Partial<GithubInput>).op;
 		const op = typeof rawOp === "string" ? rawOp : "";
 		return GITHUB_READONLY_OPS.has(op) ? "read" : "exec";
@@ -1929,6 +1934,10 @@ export class GithubTool implements AgentTool<typeof githubSchema, GhToolDetails>
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<GhToolDetails>> {
 		throwIfAborted(signal);
+		const polysimDenial = checkGithubToolPolysimMainDenial(params, this.session.cwd);
+		if (polysimDenial) {
+			throw new ToolError(polysimDenial.reason);
+		}
 		const dispatch = async (): Promise<AgentToolResult<GhToolDetails>> => {
 			switch (params.op) {
 				case "repo_view":
@@ -2272,6 +2281,10 @@ async function executePrPush(
 	}
 
 	const target = await resolvePrBranchPushTarget(repoRoot, localBranch, signal);
+	const polysimDenial = checkPushTargetPolysimMainDenial(target.remoteUrl, target.remoteBranch);
+	if (polysimDenial) {
+		throw new ToolError(polysimDenial.reason);
+	}
 	const currentBranch = await git.branch.current(repoRoot, signal);
 	const sourceRef = currentBranch === localBranch ? "HEAD" : toLocalBranchRef(localBranch);
 	const refspec = `${sourceRef}:refs/heads/${target.remoteBranch}`;

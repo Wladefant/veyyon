@@ -462,10 +462,17 @@ export class Settings extends SettingsStore {
 		return settingsOrThrow();
 	}
 
-	/** Reload routing for subsequent spawns without rebinding existing agents. */
+	/** Reload routing and the spawn ceiling for subsequent spawns without rebinding existing agents. */
 	reloadConfig() {
 		return this.reloadSelectedConfig(
-			["modelRoles", "agent.agents", "agent.model", "agent.sharedModel", "agent.thinkingLevel"],
+			[
+				"modelRoles",
+				"agent.agents",
+				"agent.model",
+				"agent.sharedModel",
+				"agent.thinkingLevel",
+				"agent.maxConcurrency",
+			],
 			{
 				defaultEffort:
 					"pickInitialThinkingLevel captures it at startup and resolveAgentThinkingLevel always supplies a concrete lane, frontmatter or AGENT_DEFAULT_EFFORT value, so a reload cannot honestly change dispatched worker effort.",

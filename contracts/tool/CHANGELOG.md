@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `ToolApprovalDecision` supports `deny?: boolean` to declare hard-refusal tool calls that bypass approval prompts and fail closed.
+
 ## [1.5.0] - 2026-09-18
 
 ### Added
