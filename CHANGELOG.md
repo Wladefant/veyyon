@@ -104,6 +104,7 @@
 - `prompt.render` reuses a template's variable analysis across renders instead of re-parsing the template on every call, rendering the spawned-agent system prompt in about 7 µs instead of about 100 µs.
 - `wrapTextWithAnsi` returns a line of printable ASCII and SGR that already fits without calling the native wrapper, cutting the wrap time of a 659k-row transcript's 1.83M calls from 1.69 s to 0.93 s with byte-identical rows.
 - `replaceTabs` returns a line with no tab without running the replacement, cutting 1.83M transcript lines from 55.2 ms to 40.6 ms.
+- `latexToUnicode` dispatches a command through one name-keyed table and scans command names by character code, rendering a 12-formula corpus in 11.4 µs instead of 24.2 µs with 305,251 differential cases byte-identical.
 
 ### Removed
 
@@ -132,6 +133,7 @@
 - A session file under 8 MiB opened for a partial rewrite no longer keeps its whole text alive through the header line the loaded layout holds, which held a second copy of the file for as long as the session stayed open.
 - `Container.clear()` releases the row arrays its discarded children last rendered instead of holding them until the next render.
 - `@veyyon/utils/stderr-guard` loads `node:util` on the first routed console call rather than at import, keeping it off the launch card path; no user-visible change.
+- `latexToUnicode` and `latexToBlock` render a command, environment, color or delimiter named after an `Object.prototype` member (`\toString`, `\constructor`, `\begin{__proto__}`) as an unknown name instead of throwing, printing a function body, or laying it out as a fraction, big operator or matrix.
 
 ## [1.5.5] - 2026-09-25
 
