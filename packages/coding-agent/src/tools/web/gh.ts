@@ -77,7 +77,7 @@ export { parsePositiveDecimalInt } from "./gh-format";
 
 import { saveOutputArtifact } from "../core/output-artifact";
 import type { OutputMeta } from "../core/output-meta";
-import { checkGithubToolPolysimMainDenial } from "../core/polysim-main-guard";
+import { checkGithubToolPolysimMainDenial, checkPushTargetPolysimMainDenial } from "../core/polysim-main-guard";
 import { type ToolAbortError, ToolError, throwIfAborted } from "../core/tool-errors";
 import { toolResult } from "../core/tool-result";
 import { parsePrUrl } from "./gh-url";
@@ -2281,6 +2281,10 @@ async function executePrPush(
 	}
 
 	const target = await resolvePrBranchPushTarget(repoRoot, localBranch, signal);
+	const polysimDenial = checkPushTargetPolysimMainDenial(target.remoteUrl, target.remoteBranch);
+	if (polysimDenial) {
+		throw new ToolError(polysimDenial.reason);
+	}
 	const currentBranch = await git.branch.current(repoRoot, signal);
 	const sourceRef = currentBranch === localBranch ? "HEAD" : toLocalBranchRef(localBranch);
 	const refspec = `${sourceRef}:refs/heads/${target.remoteBranch}`;
