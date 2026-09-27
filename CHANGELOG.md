@@ -116,6 +116,7 @@
 ### Removed
 
 - The unused built-in `designer` model role is gone from Settings → Model → Roles; a `modelRoles.designer` value you already set still resolves through `@designer` as a custom role.
+- The retired `statusLine.separator` and `statusLine.transparent` settings are gone; neither changed anything on screen, and a config file that still sets them loads unchanged.
 
 ### Fixed
 
@@ -135,6 +136,7 @@
 - Clearing the transcript for a rebuild (resume switch, `/shake`, compaction, a display setting) releases the discarded blocks and their rendered rows before the new blocks are built instead of holding both trees until the next frame, cutting the retained heap at a rebuild of a 13,470-entry transcript from 264.7 MiB to 157.0 MiB.
 - Turning Settings → Providers → Import Other Tools' Config on or off applies to the next discovery load in the running session and leaves `disabledProviders` unchanged, instead of adding or removing a provider named `importForeignConfig` there and taking effect only in the next session.
 - Turning Settings → Appearance → Show Inline Images on or off redraws the transcript under the new value, instead of leaving the images on cards already drawn.
+- Closing `/settings`, flipping an appearance toggle there or hovering a status line preset keeps the configured `statusLine.segmentOptions` on the status line, instead of resetting them to the preset's until the next unrelated resync.
 - A Cursor turn whose remote agent stops making progress now ends with "Cursor made no progress for Ns" at the 30-minute ceiling instead of hanging indefinitely, because Cursor's ten-second server heartbeat no longer counts as progress.
 - A Cursor turn held by a local tool that never returns now ends when its failure or an abort arrives instead of waiting on the tool forever.
 - Fixed every Cursor exec-channel tool call being stored twice in the assistant message, which left an unanswered copy of each call that session resume reported as pending.
