@@ -175,7 +175,7 @@ describe("InteractiveMode MCP connection status", () => {
 			// handler leaves in the zone is pinned by the bus cases above — one handler,
 			// and this case proves the manager's own transitions reach it.
 			manager.getConnection("alpha")?.transport.onClose?.();
-			expect(paint).toHaveBeenCalledTimes(1);
+			expect(paint.mock.calls).toHaveLength(1);
 		} finally {
 			live.stop();
 			await manager.disconnectAll();

@@ -692,5 +692,3 @@ broken render: the emitted bytes (`\x1b[0;2m│\x1b[22;0m`, and no dim on the
 thumb) and the attributes the terminal presents, through
 `VirtualTerminal#getViewportRowFaintColumns`. A byte assertion alone would still
 pass if a later reset in the same row cancelled the dim.
-
-*Verified against `46980a2485` on 2026-09-11.*

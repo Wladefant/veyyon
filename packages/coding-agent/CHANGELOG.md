@@ -80,6 +80,8 @@
 - Removed the `tools.refusals` setting, path- and command-scoped extension refusals, and the per-tool `effectScope` declaration that only they read; a stale `tools.refusals` key in config is ignored.
 ### Fixed
 
+- Scope extension refusals to declared subjects, fail closed for opaque execution under a path refusal, and enforce session policy through registered tool dispatch boundaries ([#37](https://github.com/Wladefant/veyyon/issues/37)).
+- Every tool declares the scope of its effects, so a tool whose targets the fence cannot read is refused while a standing refusal is in force instead of being waved through ([#37](https://github.com/Wladefant/veyyon/issues/37)).
 - The CLI imports the terminal output guard when a worker thread starts rather than at startup, keeping it off the static boot graph; no user-visible change.
 - MCP boot health tracks live transport drops, reconnects and crash-breaker suspensions instead of keeping the startup verdict for a server that is gone ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 
