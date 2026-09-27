@@ -225,12 +225,6 @@ export const ALLOWLIST: ReadonlyArray<AllowlistEntry> = [
 		reason:
 			"Six targets, all discovery rather than execution of anything installed: `gitCmd` is the literal `git`/`git.exe` chosen by platform for one `rev-parse HEAD`; `lookupCmd` is the literal `which`/`where` chosen the same way; `override`, `resolved` and `detectedPython` are the interpreter that lookup returned, probed with `--version` only to decide whether to skip; and `python` runs the ledger bridge script that ships in `src/task/` against a lock file the test made. A python contract cannot be asserted without asking a python, and which python exists is exactly what the host has to answer.",
 	},
-	{
-		file: "packages/coding-agent/test/task/a-config-edit-reaches-the-next-spawn-without-a-reload.test.ts",
-		rule: "unresolved-spawn-target",
-		reason:
-			"The suite drives in-process agent dispatchers (TaskTool, runEvalAgent, VibeSessionRegistry) across config.yml edits; its `spawn` methods and VibeSessionRegistry.spawn do not spawn OS processes.",
-	},
 	// The four below are all `bare-config-dir-name`, and they have one shape between them:
 	// the config-dir NAME is the SUBJECT, not the isolation. Each one assigns a name, asks a
 	// resolver or a helper what it does with it, and asserts on the STRING that comes back.
