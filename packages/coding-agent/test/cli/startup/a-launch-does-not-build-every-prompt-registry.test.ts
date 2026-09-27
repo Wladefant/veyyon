@@ -133,11 +133,25 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * 1558 to 1561: the refusal fence (`tools/core/{refusal-fence,effect-scope,execution-registry}.ts`),
  * the choke point every tool invocation passes through.
  *
+ * 1561 to 1563: six modules arrived and four left. Arrived, each on the launch path because the module
+ * that imports it is: `kernel/session/terminal-ownership.ts`, the check the session manager runs before an
+ * authenticated control request touches a session another terminal owns; `utils/inflight-marker.ts` and
+ * `utils/session-heartbeat.ts`, which `session/agent-session.ts` writes around every tool call and phase so a
+ * session killed below JavaScript names what it was doing; `terminal/engine/windows-altgr.ts`, which
+ * `terminal.ts` runs on every key under the kitty keyboard protocol on Windows; `task/spawn-semaphore.ts`,
+ * the session-tree concurrency ceiling `session/agent-session.ts` now resizes when `agent.maxConcurrency`
+ * reloads; and `async/async-delivery.ts`, the background-job result formatting split out of `sdk.ts`, which
+ * raises the count while the launch runs the same code. Left: `tools/core/effect-scope.ts`, removed with the
+ * scoped refusals that were its only reader, and `tools/web/gh.ts` with `tools/core/{aborted-partway,tool-result}.ts`,
+ * which the bundled `/review` command reached for one fetcher that lives in `tools/web/gh-fetch.ts`. It imports
+ * that module now, which also keeps `tools/core/polysim-main-guard.ts` and `tools/shell/bash-guard.ts`, the
+ * github tool's push and merge guard, off this graph.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1561;
+const LAUNCH_REACH_CEILING = 1563;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
