@@ -1565,6 +1565,13 @@ function hasUnrepresentableStrictObjectMap(schema: Record<string, unknown>, epoc
 }
 
 /**
+ * Keywords the strict walk never copies: `type` is re-derived after the walk,
+ * `const` folds into `enum`, `nullable: true` becomes an `anyOf` wrapper, and
+ * `additionalProperties` is re-added as `false` by `enforceStrictSchema`.
+ */
+const STRICT_REDERIVED_KEYS: ReadonlySet<string> = new Set(["type", "const", "nullable", "additionalProperties"]);
+
+/**
  * First pass of strict-mode preparation.
  *
  * Rewrites everything strict mode forbids into something it accepts:
@@ -1579,24 +1586,57 @@ function hasUnrepresentableStrictObjectMap(schema: Record<string, unknown>, epoc
  *    documented default after the keyword is stripped.
  *  - `nullable: true` wraps the whole node in `anyOf:[T,{type:"null"}]`.
  *
- * Recurses into properties, items, prefixItems, combinators, and $defs. The
- * `cache` WeakMap dedupes shared subgraphs; the `epoch` is the cycle guard.
+ * Recurses into properties, items, prefixItems, combinators, and $defs.
  */
-export function sanitizeSchemaForStrictMode(
-	schema: Record<string, unknown>,
-	epoch: number = epochNext(),
-	cache: WeakMap<Record<string, unknown>, Record<string, unknown>> = new WeakMap(),
-	root: Record<string, unknown> = schema,
-): Record<string, unknown> {
-	const cached = cache.get(schema);
-	if (cached) return cached;
-	if (!once(schema, epoch)) return {};
+export function sanitizeSchemaForStrictMode(schema: Record<string, unknown>): Record<string, unknown> {
+	return new StrictSchemaSanitizer(schema).node(schema);
+}
 
-	// Pre-pass: unravel `$ref` with sibling keys by inlining the resolved def.
-	// OpenAI strict mode forbids `{$ref, description, ...}`; the SDK resolves
-	// and merges, with sibling keys taking precedence over the ref'd def.
-	// Cite: openai-python/src/openai/lib/_pydantic.py:96-110 (`_ensure_strict_json_schema`)
-	if (typeof schema.$ref === "string") {
+/**
+ * One strict-mode sanitization of one root schema. `#cache` maps each input
+ * node to its output, so a shared subgraph is sanitized once; `#epoch` is the
+ * cycle guard; `#root` resolves `$ref`.
+ */
+class StrictSchemaSanitizer {
+	readonly #epoch = epochNext();
+	readonly #cache = new WeakMap<Record<string, unknown>, Record<string, unknown>>();
+	readonly #root: Record<string, unknown>;
+
+	constructor(root: Record<string, unknown>) {
+		this.#root = root;
+	}
+
+	node(schema: Record<string, unknown>): Record<string, unknown> {
+		const cached = this.#cache.get(schema);
+		if (cached) return cached;
+		if (!once(schema, this.#epoch)) return {};
+
+		const inlined = this.#inlineRefWithSiblings(schema) ?? inlineSoleAllOf(schema);
+		if (inlined !== undefined) {
+			const result = this.node(inlined);
+			this.#cache.set(schema, result);
+			return result;
+		}
+		const typeValue = schema.type;
+		if (Array.isArray(typeValue)) {
+			const result = this.#typeUnion(schema, typeValue);
+			this.#cache.set(schema, result);
+			return result;
+		}
+		return this.#scalarTypeNode(schema);
+	}
+
+	/**
+	 * `{$ref, …siblings}` merged into one node: the resolved definition with the
+	 * siblings over its keys. OpenAI strict mode rejects a `$ref` beside other
+	 * keys; the SDK resolves and merges it the same way.
+	 * Cite: openai-python/src/openai/lib/_pydantic.py:96-110 (`_ensure_strict_json_schema`)
+	 *
+	 * `undefined` for a bare `$ref` and for one that does not resolve.
+	 */
+	#inlineRefWithSiblings(schema: Record<string, unknown>): Record<string, unknown> | undefined {
+		const ref = schema.$ref;
+		if (typeof ref !== "string") return undefined;
 		let hasSibling = false;
 		for (const k in schema) {
 			if (k !== "$ref" && Object.hasOwn(schema, k)) {
@@ -1604,226 +1644,192 @@ export function sanitizeSchemaForStrictMode(
 				break;
 			}
 		}
-		if (hasSibling) {
-			const resolved = resolveStrictRef(root, schema.$ref);
-			if (resolved !== undefined) {
-				// Sibling keys on the schema override keys from the resolved def.
-				const merged: Record<string, unknown> = { ...resolved };
-				for (const k in schema) {
-					if (k === "$ref" || !Object.hasOwn(schema, k)) continue;
-					merged[k] = schema[k];
-				}
-				const result = sanitizeSchemaForStrictMode(merged, epoch, cache, root);
-				cache.set(schema, result);
-				return result;
-			}
+		if (!hasSibling) return undefined;
+		const resolved = resolveStrictRef(this.#root, ref);
+		if (resolved === undefined) return undefined;
+		const merged: Record<string, unknown> = { ...resolved };
+		for (const k in schema) {
+			if (k !== "$ref" && Object.hasOwn(schema, k)) merged[k] = schema[k];
 		}
+		return merged;
 	}
 
-	// Pre-pass: collapse single-element `allOf` by inlining its sole entry.
-	// SDK semantics: `json_schema.update(ensured(all_of[0]))` — the inlined
-	// entry's keys WIN over original sibling keys, then `allOf` is dropped.
-	// Cite: openai-python/src/openai/lib/_pydantic.py:79-83
-	{
-		const allOf = schema.allOf;
-		if (Array.isArray(allOf) && allOf.length === 1 && isRecord(allOf[0])) {
-			const merged: Record<string, unknown> = { ...schema };
-			delete merged.allOf;
-			const sole = allOf[0] as Record<string, unknown>;
-			for (const k in sole) {
-				if (Object.hasOwn(sole, k)) merged[k] = sole[k];
-			}
-			const result = sanitizeSchemaForStrictMode(merged, epoch, cache, root);
-			cache.set(schema, result);
-			return result;
-		}
-	}
+	/**
+	 * `type: [a, b]` split into `anyOf: [{type: a, …}, {type: b, …}]` (see
+	 * {@link strictTypeVariant}). `description` covers the whole union, so it
+	 * stays on the wrapper rather than repeating in every branch — the same
+	 * shape as the optional-property wrap in `enforceStrictSchema`.
+	 */
+	#typeUnion(schema: Record<string, unknown>, typeValue: unknown[]): Record<string, unknown> {
+		const withoutType = { ...schema };
+		delete withoutType.type;
+		const sanitizedWithoutType = this.node(withoutType);
 
-	const typeValue = schema.type;
-	if (Array.isArray(typeValue)) {
-		const typeVariants = typeValue.filter((entry): entry is string => typeof entry === "string");
-		const schemaWithoutType = { ...schema };
-		delete schemaWithoutType.type;
-
-		const sanitizedWithoutType = sanitizeSchemaForStrictMode(schemaWithoutType, epoch, cache, root);
-		if (typeVariants.length === 0) {
-			cache.set(schema, sanitizedWithoutType);
-			return sanitizedWithoutType;
-		}
-		// Build one variant schema per type. Each variant keeps only the keywords
-		// relevant to that type — object-only keywords stay on the object variant,
-		// array-only keywords on the array variant, etc.
-		//
-		// `description` is metadata that applies to the whole union, not to any
-		// single type variant, so hoist it to the wrapper so both branches share
-		// it without duplication. Matches the optional-property wrap in
-		// `enforceStrictSchema` and the typical OpenAI strict-mode "description
-		// on the union" shape.
 		const { description, ...variantBase } = sanitizedWithoutType;
 		const variants: Record<string, unknown>[] = [];
-		for (const variantType of typeVariants) {
-			const variantSchema: Record<string, unknown> = { ...variantBase, type: variantType };
-			if (variantType !== "object") {
-				delete variantSchema.properties;
-				delete variantSchema.required;
-				delete variantSchema.additionalProperties;
-			}
-			if (variantType !== "array") {
-				delete variantSchema.items;
-			}
-			if (!narrowEnumToType(variantSchema, variantType)) continue;
-			variants.push(sanitizeSchemaForStrictMode(variantSchema, epoch, cache, root));
+		for (const variantType of typeValue) {
+			if (typeof variantType !== "string") continue;
+			const variant = strictTypeVariant(variantBase, variantType);
+			if (variant !== undefined) variants.push(this.node(variant));
 		}
-
-		if (variants.length === 0) {
-			cache.set(schema, sanitizedWithoutType);
-			return sanitizedWithoutType;
-		}
+		if (variants.length === 0) return sanitizedWithoutType;
 
 		if (variants.length === 1) {
 			const sole = variants[0] as Record<string, unknown>;
-			if (description !== undefined && !Object.hasOwn(sole, "description")) {
-				sole.description = description;
-			}
-			cache.set(schema, sole);
+			if (description !== undefined && !Object.hasOwn(sole, "description")) sole.description = description;
 			return sole;
 		}
-
-		const result: JsonObject = { anyOf: variants };
-		if (description !== undefined) result.description = description;
-		cache.set(schema, result);
-		return result;
-	}
-	// Scalar `type`: walk the keys, rewriting or stripping per strict-mode rules.
-
-	const sanitized: Record<string, unknown> = {};
-	// `nullable: true` is stripped below and re-introduced as an `anyOf` wrapper
-	// around `sanitized`. The wrapper is what the cache holds, so a second
-	// reference to this node, shared or cyclic, resolves to the nullable form too.
-	const nullableWrapper: JsonObject | undefined =
-		schema.nullable === true ? { anyOf: [sanitized, { type: "null" }] } : undefined;
-	cache.set(schema, nullableWrapper ?? sanitized);
-	for (const key in schema) {
-		const value = schema[key];
-		if (key in NON_STRUCTURAL_SCHEMA_KEYS || key === "type" || key === "const" || key === "nullable") {
-			continue;
-		}
-		// `properties` map — recurse into each property schema.
-
-		if (key === "properties" && isRecord(value)) {
-			const properties: Record<string, unknown> = {};
-			for (const propertyName in value) {
-				const propertySchema = value[propertyName];
-				properties[propertyName] = isRecord(propertySchema)
-					? sanitizeSchemaForStrictMode(propertySchema, epoch, cache, root)
-					: propertySchema;
-			}
-			sanitized.properties = properties;
-			continue;
-		}
-		// `items` can be schema, tuple-array, or scalar boolean — recurse where applicable.
-
-		if (key === "items") {
-			if (isRecord(value)) {
-				sanitized.items = sanitizeSchemaForStrictMode(value, epoch, cache, root);
-			} else if (Array.isArray(value)) {
-				sanitized.items = value.map(entry =>
-					isRecord(entry) ? sanitizeSchemaForStrictMode(entry, epoch, cache, root) : entry,
-				);
-			} else {
-				sanitized.items = value;
-			}
-			continue;
-		}
-		// `prefixItems` is always an array of schemas (draft 2020-12).
-
-		if (key === "prefixItems" && Array.isArray(value)) {
-			sanitized.prefixItems = value.map(entry =>
-				isRecord(entry) ? sanitizeSchemaForStrictMode(entry, epoch, cache, root) : entry,
-			);
-			continue;
-		}
-		// `anyOf`/`oneOf`/`allOf` arrays — recurse into each branch.
-
-		if (COMBINATOR_KEYS.includes(key as (typeof COMBINATOR_KEYS)[number]) && Array.isArray(value)) {
-			sanitized[key] = value.map(entry =>
-				isRecord(entry) ? sanitizeSchemaForStrictMode(entry, epoch, cache, root) : entry,
-			);
-			continue;
-		}
-		// Definition maps — recurse into each named schema.
-
-		if ((key === "$defs" || key === "definitions") && isRecord(value)) {
-			const defs: Record<string, unknown> = {};
-			for (const definitionName in value) {
-				const definitionSchema = value[definitionName];
-				defs[definitionName] = isRecord(definitionSchema)
-					? sanitizeSchemaForStrictMode(definitionSchema, epoch, cache, root)
-					: definitionSchema;
-			}
-			sanitized[key] = defs;
-			continue;
-		}
-		// `additionalProperties` is owned by `enforceStrictSchema`, which sets it to false.
-
-		if (key === "additionalProperties") {
-			continue;
-		}
-
-		if (key === "description" && typeof value === "string" && schema.default !== undefined) {
-			// Preserve `default:` info for strict-mode providers that strip the keyword.
-			// Inline as `(default: X)` text in the description, matching the convention for
-			// runtime-placeholder defaults (e.g. `cwd`) that cannot live in the keyword form.
-			const defaultVal = schema.default;
-			const formatted = typeof defaultVal === "string" ? defaultVal : JSON.stringify(defaultVal);
-			sanitized.description = value.includes("(default:") ? value : `${value} (default: ${formatted})`;
-			continue;
-		}
-
-		sanitized[key] = value;
-	}
-	// Post-pass: re-derive `type` and turn dropped keywords into a representable shape.
-
-	if (Object.hasOwn(schema, "const")) {
-		const constVal = schema.const;
-		const existingEnum = Array.isArray(sanitized.enum) ? sanitized.enum : [];
-		if (!existingEnum.some(v => areJsonValuesEqual(v, constVal))) {
-			existingEnum.push(constVal);
-		}
-		sanitized.enum = existingEnum;
+		const union: JsonObject = { anyOf: variants };
+		if (description !== undefined) union.description = description;
+		return union;
 	}
 
-	// Preserve the original scalar type after the strip-and-rebuild loop.
-	if (typeof typeValue === "string") {
-		sanitized.type = typeValue;
-	}
+	/**
+	 * A node with a scalar or absent `type`: each keyword copied, sanitized or
+	 * dropped, then `const` and `type` re-derived. `nullable: true` wraps the
+	 * result in `anyOf: [T, {type: "null"}]`, and `description` moves to the
+	 * wrapper so both branches share it. The output is cached before the
+	 * children are walked, so a second reference to this node, shared or
+	 * cyclic, resolves to the same output, nullable wrapper included.
+	 */
+	#scalarTypeNode(schema: Record<string, unknown>): Record<string, unknown> {
+		const sanitized: Record<string, unknown> = {};
+		const nullableWrapper: JsonObject | undefined =
+			schema.nullable === true ? { anyOf: [sanitized, { type: "null" }] } : undefined;
+		this.#cache.set(schema, nullableWrapper ?? sanitized);
+		for (const key in schema) {
+			if (key in NON_STRUCTURAL_SCHEMA_KEYS || STRICT_REDERIVED_KEYS.has(key)) continue;
+			sanitized[key] = this.#keyword(schema, key, schema[key]);
+		}
+		foldConstIntoEnum(schema, sanitized);
+		deriveStrictType(schema.type, sanitized);
+		if (nullableWrapper === undefined) return sanitized;
 
-	if (sanitized.type === undefined && isRecord(sanitized.properties)) {
-		sanitized.type = "object";
-	}
-
-	if (sanitized.type === undefined && (sanitized.items !== undefined || sanitized.prefixItems !== undefined)) {
-		sanitized.type = "array";
-	}
-
-	// Last-resort inference: a bare `enum`/`const` with homogeneous primitives gets a `type`.
-	if (sanitized.type === undefined) {
-		const inferred = inferStrictPrimitiveTypeFromEnumOrConst(sanitized);
-		if (inferred !== undefined) sanitized.type = inferred;
-	}
-
-	// `description` hoists to the nullable wrapper so both branches share it
-	// without duplication — matches the optional-property wrap in
-	// `enforceStrictSchema` and the typical OpenAI strict-mode "description on
-	// the union" shape.
-	if (nullableWrapper) {
 		const description = sanitized.description;
 		delete sanitized.description;
 		if (description !== undefined) nullableWrapper.description = description;
 		return nullableWrapper;
 	}
 
-	return sanitized;
+	/** The strict form of keyword `key` of `schema`: subschemas sanitized, `description` stating the stripped `default`. */
+	#keyword(schema: Record<string, unknown>, key: string, value: unknown): unknown {
+		switch (key) {
+			case "properties":
+			case "$defs":
+			case "definitions":
+				return isRecord(value) ? this.#schemaMap(value) : value;
+			case "items":
+				// A schema, a tuple of schemas (draft 4-2019), or a boolean.
+				if (isRecord(value)) return this.node(value);
+				return Array.isArray(value) ? this.#schemaList(value) : value;
+			case "prefixItems":
+			case "anyOf":
+			case "oneOf":
+			case "allOf":
+				return Array.isArray(value) ? this.#schemaList(value) : value;
+			case "description":
+				return typeof value === "string" && schema.default !== undefined
+					? describeDefault(value, schema.default)
+					: value;
+			default:
+				return value;
+		}
+	}
+
+	#schemaMap(map: Record<string, unknown>): Record<string, unknown> {
+		const out: Record<string, unknown> = {};
+		for (const name in map) {
+			const entry = map[name];
+			out[name] = isRecord(entry) ? this.node(entry) : entry;
+		}
+		return out;
+	}
+
+	#schemaList(list: unknown[]): unknown[] {
+		return list.map(entry => (isRecord(entry) ? this.node(entry) : entry));
+	}
+}
+
+/**
+ * `allOf: [only]` inlined into its node: the entry's keys over the node's own,
+ * then `allOf` dropped, as the SDK does with `json_schema.update(ensured(all_of[0]))`.
+ * Cite: openai-python/src/openai/lib/_pydantic.py:79-83
+ *
+ * `undefined` for any other `allOf`.
+ */
+function inlineSoleAllOf(schema: Record<string, unknown>): Record<string, unknown> | undefined {
+	const allOf = schema.allOf;
+	if (!Array.isArray(allOf) || allOf.length !== 1) return undefined;
+	const sole: unknown = allOf[0];
+	if (!isRecord(sole)) return undefined;
+	const merged: Record<string, unknown> = { ...schema };
+	delete merged.allOf;
+	for (const k in sole) {
+		if (Object.hasOwn(sole, k)) merged[k] = sole[k];
+	}
+	return merged;
+}
+
+/**
+ * The `variantType` member of a `type: [...]` union built from its sanitized
+ * keywords: object-only keywords stay on the object variant, `items` on the
+ * array variant, and `enum` keeps the values `variantType` accepts.
+ * `undefined` when no `enum` value fits `variantType`.
+ */
+function strictTypeVariant(
+	variantBase: Record<string, unknown>,
+	variantType: string,
+): Record<string, unknown> | undefined {
+	const variant: Record<string, unknown> = { ...variantBase, type: variantType };
+	if (variantType !== "object") {
+		delete variant.properties;
+		delete variant.required;
+		delete variant.additionalProperties;
+	}
+	if (variantType !== "array") delete variant.items;
+	return narrowEnumToType(variant, variantType) ? variant : undefined;
+}
+
+/**
+ * `description` with the stripped `default` appended as `(default: X)`, the
+ * form runtime-placeholder defaults such as `cwd` already use in place of the
+ * keyword. A description that already states a default is kept as written.
+ */
+function describeDefault(description: string, defaultValue: unknown): string {
+	if (description.includes("(default:")) return description;
+	const formatted = typeof defaultValue === "string" ? defaultValue : JSON.stringify(defaultValue);
+	return `${description} (default: ${formatted})`;
+}
+
+/** `const` folded into `enum`, which strict mode accepts in its place. */
+function foldConstIntoEnum(schema: Record<string, unknown>, sanitized: Record<string, unknown>): void {
+	if (!Object.hasOwn(schema, "const")) return;
+	const constValue = schema.const;
+	const values = Array.isArray(sanitized.enum) ? sanitized.enum : [];
+	if (!values.some(value => areJsonValuesEqual(value, constValue))) values.push(constValue);
+	sanitized.enum = values;
+}
+
+/**
+ * `type` restored after the walk: the node's own scalar `type`, else `object`
+ * for a node with `properties`, `array` for one with `items`/`prefixItems`,
+ * else the primitive type every `enum` value shares.
+ */
+function deriveStrictType(typeValue: unknown, sanitized: Record<string, unknown>): void {
+	if (typeof typeValue === "string") {
+		sanitized.type = typeValue;
+		return;
+	}
+	if (isRecord(sanitized.properties)) {
+		sanitized.type = "object";
+		return;
+	}
+	if (sanitized.items !== undefined || sanitized.prefixItems !== undefined) {
+		sanitized.type = "array";
+		return;
+	}
+	const inferred = inferStrictPrimitiveTypeFromEnumOrConst(sanitized);
+	if (inferred !== undefined) sanitized.type = inferred;
 }
 
 /**
