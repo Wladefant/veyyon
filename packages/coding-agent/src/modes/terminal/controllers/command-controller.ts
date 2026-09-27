@@ -1168,10 +1168,9 @@ export class CommandController {
 			const result = await execute(chunk => this.ctx[slot]?.appendOutput(chunk));
 			const live = this.ctx[slot];
 			if (live) {
-				const meta = outputMeta().truncationFromSummary(result, { direction: "tail" }).get();
 				live.setComplete(result.exitCode, result.cancelled, {
 					output: result.output,
-					truncation: meta?.truncation,
+					meta: outputMeta().truncationFromSummary(result, { direction: "tail" }).get(),
 				});
 			}
 		} catch (error) {

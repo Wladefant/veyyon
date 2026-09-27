@@ -16,10 +16,16 @@
  * entry point with a line that is wide in bytes and narrow in characters, which is the only input
  * that tells the two units apart.
  *
+ * THE DISPLAY. The `!` and `$` execution blocks draw their own footer from the run's metadata. They
+ * were handed only `meta.truncation`, so once a column cap stopped counting as a window truncation
+ * the block showed no warning at all; both components are driven with a real sink summary below.
+ *
  * WHAT IT DOES NOT CATCH. A new producer is not discovered at run time: there is no registry of
  * column-cap producers to sweep. `OutputMetaBuilder.limits` refuses a `columnMax` without a
  * `columnUnit` at the type level, so a new producer must name its unit to compile; whether that unit
- * matches how it cut is only proven here for the producers listed above.
+ * matches how it cut is only proven here for the producers listed above. The two call sites that
+ * hand metadata to the execution blocks (the live shortcut and the transcript rebuild) are held by
+ * the type of `setComplete`, not by a test here.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
@@ -32,12 +38,16 @@ import {
 	InternalUrlRouter,
 	LocalProtocolHandler,
 } from "@veyyon/coding-agent/internal-urls";
+import { BashExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/bash-execution";
+import { EvalExecutionComponent } from "@veyyon/coding-agent/modes/terminal/components/transcript/eval-execution";
 import { AgentRegistry } from "@veyyon/coding-agent/registry/agent-registry";
 import { OutputSink } from "@veyyon/coding-agent/session/streaming-output";
+import { getThemeByName, setThemeInstance } from "@veyyon/coding-agent/theme/theme";
 import type { ToolSession } from "@veyyon/coding-agent/tools";
 import { formatOutputNotice, type OutputMeta, outputMeta } from "@veyyon/coding-agent/tools/core/output-meta";
 import { ReadTool } from "@veyyon/coding-agent/tools/fs/read";
 import { SearchTool } from "@veyyon/coding-agent/tools/search/search";
+import type { TUI } from "@veyyon/tui";
 import { removeWithRetries } from "@veyyon/utils";
 
 /** 7 ASCII bytes + 400 two-byte characters: 407 characters, 807 bytes. Wide only when counted in bytes. */
@@ -96,6 +106,33 @@ describe("the shell output sink's column cap", () => {
 			.truncationFromSummary(await sink.dump(), { direction: "tail" })
 			.get();
 		expect(formatOutputNotice(meta)).toBe("\n\n[Some lines truncated to 16 bytes]");
+	});
+});
+
+describe("the `!` and `$` execution blocks", () => {
+	const ui = { requestRender: () => {}, requestComponentRender: () => {} } as unknown as TUI;
+
+	beforeEach(async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		setThemeInstance(theme!);
+	});
+
+	it("warn about a column cap even when the output was otherwise whole", async () => {
+		const sink = new OutputSink({ maxColumns: 16, spillThreshold: 100_000 });
+		await sink.push(`${"é".repeat(10)}\n`);
+		const summary = await sink.dump();
+		const meta = outputMeta().truncationFromSummary(summary, { direction: "tail" }).get();
+		expect(meta?.truncation).toBeUndefined();
+
+		const bash = new BashExecutionComponent("cat wide.txt", ui, false);
+		bash.setComplete(0, false, { output: summary.output, meta });
+		const evaluated = new EvalExecutionComponent("print(wide)", ui, false);
+		evaluated.setComplete(0, false, { output: summary.output, meta });
+
+		for (const block of [bash, evaluated]) {
+			expect(Bun.stripANSI(block.render(120).join("\n"))).toContain("Some lines truncated to 16 bytes");
+		}
 	});
 });
 
