@@ -305,8 +305,8 @@ function extractCodexFrameResponseId(frame: Record<string, unknown>): string | u
 	return typeof id === "string" && id.length > 0 ? id : undefined;
 }
 
-function extractCodexFrameSequenceNumber(frame: Record<string, unknown>): number | undefined {
-	const raw = (frame as { sequence_number?: unknown }).sequence_number;
+/** A wire index or sequence number as an integer, or `undefined` when the field is absent or not a finite number. */
+function wireInteger(raw: unknown): number | undefined {
 	return typeof raw === "number" && Number.isFinite(raw) ? Math.trunc(raw) : undefined;
 }
 
@@ -883,10 +883,7 @@ class CodexStreamRuntime {
 	openItemForEvent(rawEvent: Record<string, unknown>): CodexOpenItem | null {
 		const itemId = typeof rawEvent.item_id === "string" ? rawEvent.item_id : "";
 		if (itemId) return this.openItems.get(itemId) ?? null;
-		const outputIndex =
-			typeof rawEvent.output_index === "number" && Number.isFinite(rawEvent.output_index)
-				? Math.trunc(rawEvent.output_index)
-				: undefined;
+		const outputIndex = wireInteger(rawEvent.output_index);
 		if (outputIndex !== undefined) return this.openItemsByOutputIndex.get(outputIndex) ?? null;
 		return this.currentEntry;
 	}
@@ -928,14 +925,8 @@ class CodexStreamRuntime {
 			typeof rawEvent.item_id === "string" && rawEvent.item_id.length > 0
 				? rawEvent.item_id
 				: (this.currentItem?.id ?? "");
-		const outputIndex =
-			typeof rawEvent.output_index === "number" && Number.isFinite(rawEvent.output_index)
-				? Math.trunc(rawEvent.output_index)
-				: undefined;
-		const sequenceNumber =
-			typeof rawEvent.sequence_number === "number" && Number.isFinite(rawEvent.sequence_number)
-				? Math.trunc(rawEvent.sequence_number)
-				: undefined;
+		const outputIndex = wireInteger(rawEvent.output_index);
+		const sequenceNumber = wireInteger(rawEvent.sequence_number);
 		let state = this.whitespaceToolCallArgumentsDelta;
 		if (!state || state.itemId !== itemId || state.outputIndex !== outputIndex) {
 			state = {
@@ -1869,6 +1860,11 @@ class CodexStreamProcessor {
 	requestContext: CodexRequestContext;
 	startTime: number;
 	firstTokenTime?: number;
+	/**
+	 * When the current attempt produced its first token. Starts over on every recovered attempt,
+	 * so a replayed turn reports its own first token and never the failed attempt's.
+	 */
+	#attemptFirstTokenTime: number | undefined;
 
 	constructor(init: {
 		runtime: CodexStreamRuntime;
@@ -1905,13 +1901,13 @@ class CodexStreamProcessor {
 		stream.push({ type: "start", partial: output });
 
 		while (true) {
+			this.#attemptFirstTokenTime = this.firstTokenTime;
 			try {
-				let firstTokenTime = this.firstTokenTime;
 				for await (const rawEvent of this.runtime.eventStream) {
-					firstTokenTime = this.#handleStreamEvent(rawEvent, firstTokenTime);
+					this.#handleStreamEvent(rawEvent);
 					if (this.runtime.sawTerminalEvent) break;
 				}
-				return { firstTokenTime };
+				return { firstTokenTime: this.#attemptFirstTokenTime };
 			} catch (error) {
 				const recovered = await this.#recoverStreamError(error);
 				if (!recovered) {
@@ -1922,215 +1918,199 @@ class CodexStreamProcessor {
 		}
 	}
 
-	#handleStreamEvent(rawEvent: Record<string, unknown>, firstTokenTime: number | undefined): number | undefined {
-		const { output, stream } = this;
-		const eventType = typeof rawEvent.type === "string" ? rawEvent.type : "";
-		if (!eventType) return firstTokenTime;
-
-		if (eventType === "response.output_item.added") {
-			this.runtime.whitespaceToolCallArgumentsDelta = undefined;
-			if (!firstTokenTime) firstTokenTime = performance.now();
-			const item = rawEvent.item as CodexEventItem;
-			this.runtime.currentItem = item;
-			this.runtime.currentBlock = createOutputBlockForItem(item);
-			let contentIndex = -1;
-			if (this.runtime.currentBlock) {
-				output.content.push(this.runtime.currentBlock);
-				contentIndex = output.content.length - 1;
-			}
-			// Track every open item by every stable key the wire gives us. `item.id`
-			// is best; `output_index` preserves idless function/custom tool calls and
-			// keeps their final args authoritative when only `output_item.done`
-			// carries the full payload.
-			const itemId = typeof (item as { id?: string }).id === "string" ? (item as { id: string }).id : undefined;
-			const outputIndex =
-				typeof rawEvent.output_index === "number" && Number.isFinite(rawEvent.output_index)
-					? Math.trunc(rawEvent.output_index)
-					: undefined;
-			const entry: CodexOpenItem = { item, block: this.runtime.currentBlock, contentIndex, itemId, outputIndex };
-			this.runtime.currentEntry = entry;
-			if (itemId) this.runtime.openItems.set(itemId, entry);
-			if (outputIndex !== undefined) this.runtime.openItemsByOutputIndex.set(outputIndex, entry);
-			if (!this.runtime.currentBlock) return firstTokenTime;
-			stream.push({
-				type: getOutputBlockStartEventType(this.runtime.currentBlock),
-				contentIndex,
-				partial: output,
-			});
-			return firstTokenTime;
-		}
-
-		if (eventType === "response.reasoning_summary_part.added") {
-			if (this.#sequentialCutoffSummaries) return firstTokenTime;
-			if (this.runtime.currentItem?.type === "reasoning") {
-				appendReasoningSummaryPart(
-					this.runtime.currentItem,
-					(rawEvent as { part: ResponseReasoningItem["summary"][number] }).part,
-				);
-			}
-			return firstTokenTime;
-		}
-		if (eventType === "response.reasoning_summary_text.delta") {
-			const entry = this.runtime.openItemForEvent(rawEvent);
-			const delta = typeof rawEvent.delta === "string" ? rawEvent.delta : "";
-			if (this.#sequentialCutoffSummaries) {
-				// Some Codex transports still emit incremental summary deltas even
-				// after opting into sequential-cutoff delivery. Buffer them until
-				// output_item.done so atomic `.done` events can supersede them
-				// without duplicate UI output.
-				this.runtime.queueSummaryDelta(entry, delta);
-				return firstTokenTime;
-			}
-			if (entry?.item.type === "reasoning" && entry.block?.type === "thinking") {
-				appendReasoningSummaryTextDelta(entry.item, entry.block, delta, stream, output, entry.contentIndex);
-			}
-			return firstTokenTime;
-		}
-
-		if (eventType === "response.reasoning_summary_text.done") {
-			// Outside the cutoff contract the text already streamed via `.delta`.
-			if (!this.#sequentialCutoffSummaries) return firstTokenTime;
-			const entry = this.runtime.openItemForEvent(rawEvent);
-			if (entry?.item.type === "reasoning" && entry.block?.type === "thinking") {
-				this.runtime.takeSummaryDeltas(entry);
-				if (!firstTokenTime) firstTokenTime = performance.now();
-				const summaryIndex =
-					typeof rawEvent.summary_index === "number" && Number.isFinite(rawEvent.summary_index)
-						? Math.trunc(rawEvent.summary_index)
-						: 0;
-				applyReasoningSummaryDone(
-					this.runtime.cutoffSummaries,
-					entry.block,
-					typeof rawEvent.text === "string" ? rawEvent.text : "",
-					summaryIndex,
-					stream,
-					output,
-					entry.contentIndex,
-				);
-			}
-			return firstTokenTime;
-		}
-
-		if (eventType === "response.reasoning_text.delta") {
-			const entry = this.runtime.openItemForEvent(rawEvent);
-			const delta = typeof rawEvent.delta === "string" ? rawEvent.delta : "";
-			if (entry?.item.type === "reasoning" && entry.block?.type === "thinking") {
-				entry.block.thinking += delta;
-				stream.push({
-					type: "thinking_delta",
-					contentIndex: entry.contentIndex,
-					delta,
-					partial: output,
-				});
-			}
-			return firstTokenTime;
-		}
-
-		if (eventType === "response.reasoning_summary_part.done") {
-			const entry = this.runtime.openItemForEvent(rawEvent);
-			if (this.#sequentialCutoffSummaries) {
-				if (entry && this.runtime.pendingSummaryDeltas.has(entry)) this.runtime.queueSummaryDelta(entry, "\n\n");
-				return firstTokenTime;
-			}
-			if (entry?.item.type === "reasoning" && entry.block?.type === "thinking") {
-				appendReasoningSummaryPartDone(entry.item, entry.block, stream, output, entry.contentIndex);
-			}
-			return firstTokenTime;
-		}
-
-		if (eventType === "response.content_part.added") {
-			if (this.runtime.currentItem?.type === "message") {
-				appendMessageContentPart(
-					this.runtime.currentItem,
-					(rawEvent as { part?: ResponseOutputMessage["content"][number] }).part,
-				);
-			}
-			return firstTokenTime;
-		}
-
-		if (eventType === "response.output_text.delta" || eventType === "response.refusal.delta") {
-			if (this.runtime.currentItem?.type === "message" && this.runtime.currentBlock?.type === "text") {
-				appendMessageTextDelta(
-					this.runtime.currentItem,
-					this.runtime.currentBlock,
-					(rawEvent as { delta?: string }).delta || "",
-					stream,
-					output,
-					output.content.length - 1,
-					eventType === "response.refusal.delta" ? "refusal" : "output_text",
-				);
-			}
-			return firstTokenTime;
-		}
-
-		if (eventType === "response.function_call_arguments.delta") {
-			const interruption = this.runtime.handleToolCallArgumentsDelta(
-				rawEvent,
-				stream,
-				output,
-				resolveResponsesToolCallDeltaShape(this.model),
-			);
-			if (interruption) {
-				this.runtime.websocketState?.connection?.close("degenerate-tool-call");
-				throw new CodexWhitespaceToolCallLoopError(interruption.message);
-			}
-			return firstTokenTime;
-		}
-
-		if (eventType === "response.function_call_arguments.done") {
-			this.runtime.whitespaceToolCallArgumentsDelta = undefined;
-			this.runtime.handleToolCallArgumentsDone(rawEvent);
-			return firstTokenTime;
-		}
-
-		if (eventType === "response.custom_tool_call_input.delta") {
-			const interruption = this.runtime.handleCustomToolCallInputDelta(rawEvent, stream, output);
-			if (interruption) {
-				this.runtime.websocketState?.connection?.close("degenerate-tool-call");
-				throw new CodexWhitespaceToolCallLoopError(interruption.message);
-			}
-			return firstTokenTime;
-		}
-
-		if (eventType === "response.custom_tool_call_input.done") {
-			this.runtime.whitespaceToolCallArgumentsDelta = undefined;
-			this.runtime.handleCustomToolCallInputDone(rawEvent);
-			return firstTokenTime;
-		}
-
-		if (eventType === "response.output_item.done") {
-			this.runtime.whitespaceToolCallArgumentsDelta = undefined;
-			this.#handleOutputItemDone(rawEvent);
-			return firstTokenTime;
-		}
-
-		if (eventType === "response.created") {
-			this.runtime.handleResponseCreated(rawEvent);
-			return firstTokenTime;
-		}
-
-		if (eventType === "response.completed" || eventType === "response.done" || eventType === "response.incomplete") {
-			this.#handleResponseCompleted(rawEvent);
-			return firstTokenTime;
-		}
-
-		if (eventType === "response.metadata") {
-			const moderation = asRecord(rawEvent.metadata)?.[CODEX_MODERATION_METADATA_KEY];
-			if (moderation !== undefined) {
-				try {
-					this.options?.onModerationMetadata?.(moderation);
-				} catch {
-					// Diagnostic observer: failures must not disturb the stream.
+	#handleStreamEvent(rawEvent: Record<string, unknown>): void {
+		const { runtime } = this;
+		switch (rawEvent.type) {
+			case "response.output_item.added":
+				this.#startItem(rawEvent);
+				return;
+			case "response.reasoning_summary_part.added":
+				this.#addSummaryPart(rawEvent);
+				return;
+			case "response.reasoning_summary_text.delta":
+				this.#applySummaryTextDelta(rawEvent);
+				return;
+			case "response.reasoning_summary_text.done":
+				this.#applySummaryTextDone(rawEvent);
+				return;
+			case "response.reasoning_text.delta":
+				this.#applyReasoningTextDelta(rawEvent);
+				return;
+			case "response.reasoning_summary_part.done":
+				this.#finishSummaryPart(rawEvent);
+				return;
+			case "response.content_part.added":
+				if (runtime.currentItem?.type === "message") {
+					appendMessageContentPart(
+						runtime.currentItem,
+						(rawEvent as { part?: ResponseOutputMessage["content"][number] }).part,
+					);
 				}
-			}
-			return firstTokenTime;
+				return;
+			case "response.output_text.delta":
+				this.#applyMessageTextDelta(rawEvent, "output_text");
+				return;
+			case "response.refusal.delta":
+				this.#applyMessageTextDelta(rawEvent, "refusal");
+				return;
+			case "response.function_call_arguments.delta":
+				this.#interruptDegenerateToolCall(
+					runtime.handleToolCallArgumentsDelta(
+						rawEvent,
+						this.stream,
+						this.output,
+						resolveResponsesToolCallDeltaShape(this.model),
+					),
+				);
+				return;
+			case "response.custom_tool_call_input.delta":
+				this.#interruptDegenerateToolCall(
+					runtime.handleCustomToolCallInputDelta(rawEvent, this.stream, this.output),
+				);
+				return;
+			case "response.function_call_arguments.done":
+				runtime.whitespaceToolCallArgumentsDelta = undefined;
+				runtime.handleToolCallArgumentsDone(rawEvent);
+				return;
+			case "response.custom_tool_call_input.done":
+				runtime.whitespaceToolCallArgumentsDelta = undefined;
+				runtime.handleCustomToolCallInputDone(rawEvent);
+				return;
+			case "response.output_item.done":
+				runtime.whitespaceToolCallArgumentsDelta = undefined;
+				this.#handleOutputItemDone(rawEvent);
+				return;
+			case "response.created":
+				runtime.handleResponseCreated(rawEvent);
+				return;
+			case "response.completed":
+			case "response.done":
+			case "response.incomplete":
+				this.#handleResponseCompleted(rawEvent);
+				return;
+			case "response.metadata":
+				this.#reportModerationMetadata(rawEvent);
+				return;
+			case "error":
+			case "response.failed":
+				throw createCodexProviderStreamError(rawEvent);
 		}
+	}
 
-		if (eventType === "error" || eventType === "response.failed") {
-			throw createCodexProviderStreamError(rawEvent);
+	/** Opens a block for a new output item and indexes the item by every stable key the wire gives. */
+	#startItem(rawEvent: Record<string, unknown>): void {
+		const { runtime, output } = this;
+		runtime.whitespaceToolCallArgumentsDelta = undefined;
+		this.#attemptFirstTokenTime ??= performance.now();
+		const item = rawEvent.item as CodexEventItem;
+		const block = createOutputBlockForItem(item);
+		runtime.currentItem = item;
+		runtime.currentBlock = block;
+		let contentIndex = -1;
+		if (block) {
+			output.content.push(block);
+			contentIndex = output.content.length - 1;
 		}
+		// `item.id` is the best key; `output_index` preserves idless function/custom tool calls and
+		// keeps their final args authoritative when only `output_item.done` carries the full payload.
+		const itemId = typeof (item as { id?: string }).id === "string" ? (item as { id: string }).id : undefined;
+		const outputIndex = wireInteger(rawEvent.output_index);
+		const entry: CodexOpenItem = { item, block, contentIndex, itemId, outputIndex };
+		runtime.currentEntry = entry;
+		if (itemId) runtime.openItems.set(itemId, entry);
+		if (outputIndex !== undefined) runtime.openItemsByOutputIndex.set(outputIndex, entry);
+		if (block) this.stream.push({ type: getOutputBlockStartEventType(block), contentIndex, partial: output });
+	}
 
-		return firstTokenTime;
+	#addSummaryPart(rawEvent: Record<string, unknown>): void {
+		if (this.#sequentialCutoffSummaries) return;
+		const item = this.runtime.currentItem;
+		if (item?.type === "reasoning") {
+			appendReasoningSummaryPart(item, (rawEvent as { part: ResponseReasoningItem["summary"][number] }).part);
+		}
+	}
+
+	#applySummaryTextDelta(rawEvent: Record<string, unknown>): void {
+		const entry = this.runtime.openItemForEvent(rawEvent);
+		const delta = typeof rawEvent.delta === "string" ? rawEvent.delta : "";
+		if (this.#sequentialCutoffSummaries) {
+			// Some Codex transports still emit incremental summary deltas after opting into
+			// sequential-cutoff delivery. Buffer them until output_item.done so atomic `.done` events
+			// can supersede them without duplicate UI output.
+			this.runtime.queueSummaryDelta(entry, delta);
+			return;
+		}
+		if (entry?.item.type === "reasoning" && entry.block?.type === "thinking") {
+			appendReasoningSummaryTextDelta(entry.item, entry.block, delta, this.stream, this.output, entry.contentIndex);
+		}
+	}
+
+	#applySummaryTextDone(rawEvent: Record<string, unknown>): void {
+		// Outside the cutoff contract the text already streamed via `.delta`.
+		if (!this.#sequentialCutoffSummaries) return;
+		const entry = this.runtime.openItemForEvent(rawEvent);
+		if (entry?.item.type !== "reasoning" || entry.block?.type !== "thinking") return;
+		this.runtime.takeSummaryDeltas(entry);
+		this.#attemptFirstTokenTime ??= performance.now();
+		applyReasoningSummaryDone(
+			this.runtime.cutoffSummaries,
+			entry.block,
+			typeof rawEvent.text === "string" ? rawEvent.text : "",
+			wireInteger(rawEvent.summary_index) ?? 0,
+			this.stream,
+			this.output,
+			entry.contentIndex,
+		);
+	}
+
+	#applyReasoningTextDelta(rawEvent: Record<string, unknown>): void {
+		const entry = this.runtime.openItemForEvent(rawEvent);
+		if (entry?.item.type !== "reasoning" || entry.block?.type !== "thinking") return;
+		const delta = typeof rawEvent.delta === "string" ? rawEvent.delta : "";
+		entry.block.thinking += delta;
+		this.stream.push({ type: "thinking_delta", contentIndex: entry.contentIndex, delta, partial: this.output });
+	}
+
+	#finishSummaryPart(rawEvent: Record<string, unknown>): void {
+		const entry = this.runtime.openItemForEvent(rawEvent);
+		if (this.#sequentialCutoffSummaries) {
+			if (entry && this.runtime.pendingSummaryDeltas.has(entry)) this.runtime.queueSummaryDelta(entry, "\n\n");
+			return;
+		}
+		if (entry?.item.type === "reasoning" && entry.block?.type === "thinking") {
+			appendReasoningSummaryPartDone(entry.item, entry.block, this.stream, this.output, entry.contentIndex);
+		}
+	}
+
+	#applyMessageTextDelta(rawEvent: Record<string, unknown>, part: "output_text" | "refusal"): void {
+		const { currentItem, currentBlock } = this.runtime;
+		if (currentItem?.type !== "message" || currentBlock?.type !== "text") return;
+		appendMessageTextDelta(
+			currentItem,
+			currentBlock,
+			(rawEvent as { delta?: string }).delta || "",
+			this.stream,
+			this.output,
+			this.output.content.length - 1,
+			part,
+		);
+	}
+
+	/** Ends the turn on a tool call whose arguments stream nothing but whitespace. */
+	#interruptDegenerateToolCall(interruption: CodexWhitespaceToolCallArgumentsDeltaInterruption | undefined): void {
+		if (!interruption) return;
+		this.runtime.websocketState?.connection?.close("degenerate-tool-call");
+		throw new CodexWhitespaceToolCallLoopError(interruption.message);
+	}
+
+	#reportModerationMetadata(rawEvent: Record<string, unknown>): void {
+		const moderation = asRecord(rawEvent.metadata)?.[CODEX_MODERATION_METADATA_KEY];
+		if (moderation === undefined) return;
+		try {
+			this.options?.onModerationMetadata?.(moderation);
+		} catch {
+			// Diagnostic observer: failures must not disturb the stream.
+		}
 	}
 
 	#flushSummaryDeltas(entry: CodexOpenItem | null): void {
@@ -3643,7 +3623,7 @@ class CodexWebSocketConnection {
 				// metadata preamble, created-less streams) pass through, matching
 				// upstream rather than gating on `response.created`.
 				const frameResponseId = extractCodexFrameResponseId(next);
-				const frameSequence = extractCodexFrameSequenceNumber(next);
+				const frameSequence = wireInteger(next.sequence_number);
 				if (frameResponseId !== undefined) {
 					if (activeResponseId === undefined) {
 						if (priorResponseId !== undefined && frameResponseId === priorResponseId) {

@@ -1971,6 +1971,60 @@ describe("openai-codex streaming", () => {
 		expect(result.content.find(block => block.type === "text")?.text).toBe("Hello after retry");
 	});
 
+	it("measures a retried turn's time to first token from the attempt that delivered it", async () => {
+		const tempDir = TempDir.createSync("@pi-codex-stream-");
+		setAgentDir(tempDir.path());
+		// The clock moves when a request is sent and when the moderation observer runs mid-stream, so
+		// each first-token stamp names the attempt and the item that produced it.
+		let clock = 1000;
+		vi.spyOn(performance, "now").mockImplementation(() => clock);
+		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+		// A blockless item leaves the message empty, so the retryable error after it is retried, but
+		// the item is still the first attempt's first token.
+		const failedAttempt = `${[
+			`data: ${JSON.stringify({ type: "response.output_item.added", item: { type: "web_search_call", id: "ws_1", status: "in_progress" } })}`,
+			`data: ${JSON.stringify({ type: "error", code: "model_error", message: "An error occurred while processing your request. You can retry your request." })}`,
+		].join("\n\n")}\n\n`;
+		// The delivered attempt opens a blockless item first; the clock then moves before its message.
+		const deliveredAttempt = `${[
+			`data: ${JSON.stringify({ type: "response.output_item.added", item: { type: "web_search_call", id: "ws_2", status: "in_progress" } })}`,
+			`data: ${JSON.stringify({ type: "response.metadata", metadata: { openai_chatgpt_moderation_metadata: { flagged: false } } })}`,
+			`data: ${JSON.stringify({ type: "response.output_item.added", item: { type: "message", id: "msg_retry", role: "assistant", status: "in_progress", content: [] } })}`,
+			`data: ${JSON.stringify({ type: "response.output_text.delta", delta: "Hello after retry" })}`,
+			`data: ${JSON.stringify({ type: "response.output_item.done", item: { type: "message", id: "msg_retry", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Hello after retry" }] } })}`,
+			`data: ${JSON.stringify({ type: "response.completed", response: { status: "completed", usage: DEFAULT_USAGE } })}`,
+		].join("\n\n")}\n\n`;
+		let requestCount = 0;
+		const fetchMock = vi.fn(async () => {
+			requestCount += 1;
+			clock = requestCount === 1 ? 1010 : 1050;
+			return new Response(requestCount === 1 ? failedAttempt : deliveredAttempt, {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		});
+
+		const result = await streamOpenAICodexResponses(
+			{ ...createCodexTestModel("https://chatgpt.com/backend-api", "gpt-5.1-codex"), preferWebsockets: false },
+			{
+				systemPrompt: ["You are a helpful assistant."],
+				messages: [{ role: "user", content: "Say hello", timestamp: 0 }],
+			},
+			{
+				apiKey: createCodexTestToken(),
+				fetch: fetchMock as FetchImpl,
+				onModerationMetadata: () => {
+					clock = 1090;
+				},
+			},
+		).result();
+
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(result.stopReason).toBe("stop");
+		expect(result.content.find(block => block.type === "text")?.text).toBe("Hello after retry");
+		expect(result.ttft).toBe(50);
+	});
+
 	it("retries a pre-response watchdog timeout with a fresh attempt signal", async () => {
 		const tempDir = TempDir.createSync("@pi-codex-stream-");
 		setAgentDir(tempDir.path());
