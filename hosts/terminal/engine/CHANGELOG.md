@@ -10,6 +10,7 @@
 - A streaming `Markdown` render that ends inside an open code fence lays out only the fence lines completed since the previous frame, so a 1,500-line code fence renders in 59 ms instead of 898 ms and a 1,500-line diff in 92 ms instead of 900 ms.
 - The frame render and incremental update run as single-purpose phases (alt-screen residency, frame composition, committed-prefix reconciliation, window planning and assembly) whose records are in `core/frame-plan.ts`, with one escape-sequence builder per paint shape in `core/paint-sequences.ts`, and the incremental update finds its changed rows with a forward scan to the first change and a backward scan to the last instead of comparing every row, which cuts a 2,000-block cold paint from 13.73 ms to 12.27 ms with byte-identical terminal output.
 - `Markdown` renders a block token through one method per block kind (heading, paragraph, code block, blockquote, display math) that appends into the frame's row array, instead of one 164-line switch that returned a new row array per token; output is byte-identical and render time is unchanged.
+- `Markdown` bounds the start search of its rule, display math and math environment block extensions to the paragraph that can end there instead of the rest of the message, so lexing is linear in the message length and a 1,200-section message renders in 22.4 ms instead of 229.7 ms.
 
 ### Fixed
 

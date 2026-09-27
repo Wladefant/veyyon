@@ -391,11 +391,23 @@ function getHrChar(char: string, hrChar: string): string {
 	}
 }
 
+/**
+ * The part of `src` a paragraph that starts there can span: up to and including the first line break of the
+ * first empty line, or all of `src`. marked calls a block extension's `start` with the rest of the document
+ * before every paragraph, only to cut that paragraph where the extension's block begins, so a `start`
+ * search bounded here finds every cut that lands inside the paragraph, and a search of the whole rest makes
+ * lexing quadratic in the message length.
+ */
+function paragraphReach(src: string): string {
+	const blank = src.indexOf("\n\n");
+	return blank === -1 ? src : src.slice(0, blank + 1);
+}
+
 const customHrExtension: TokenizerAndRendererExtension = {
 	name: "customHr",
 	level: "block",
 	start(src) {
-		const match = CUSTOM_HR_START_REGEX.exec(src);
+		const match = CUSTOM_HR_START_REGEX.exec(paragraphReach(src));
 		if (!match) return undefined;
 		let idx = match.index;
 		if (src[idx] === "\n") {
@@ -467,8 +479,7 @@ const mathBlockExtension: TokenizerAndRendererExtension = {
 	name: "mathBlock",
 	level: "block",
 	start(src) {
-		const m = MATH_BLOCK_START.exec(src);
-		return m ? m.index : undefined;
+		return MATH_BLOCK_START.exec(paragraphReach(src))?.index;
 	},
 	tokenizer(src) {
 		const m = MATH_BLOCK_DOLLAR.exec(src) ?? MATH_BLOCK_BRACKET.exec(src);
@@ -488,8 +499,8 @@ const mathBlockExtension: TokenizerAndRendererExtension = {
 // starts at offset 0" guards keep fenced/indented `\begin{cases}` code blocks
 // for marked's own code rules.
 const BARE_ENV_BEGIN = /(?:^|\n)[ \t]{0,3}\\begin\{([A-Za-z]+\*?)\}/;
-function bareMathEnvBlock(src: string): readonly [number, number] | null {
-	const bm = BARE_ENV_BEGIN.exec(src);
+/** The bare environment block opened by `bm`, the first `\begin{…}` line match in `src`. */
+function bareMathEnvBlock(src: string, bm: RegExpExecArray | null): readonly [number, number] | null {
 	if (!bm || !isBareMathEnvironment(bm[1])) return null;
 	const beginLineStart = bm.index === 0 ? 0 : bm.index + 1; // skip the matched leading `\n`
 	const endToken = `\\end{${bm[1]}}`;
@@ -513,11 +524,17 @@ const mathEnvBlockExtension: TokenizerAndRendererExtension = {
 	name: "mathEnvBlock",
 	level: "block",
 	start(src) {
-		const r = bareMathEnvBlock(src);
+		const r = bareMathEnvBlock(src, BARE_ENV_BEGIN.exec(paragraphReach(src)));
 		return r ? r[0] : undefined;
 	},
 	tokenizer(src) {
-		const r = bareMathEnvBlock(src);
+		// A block at offset 0 opens on the first line, or on the second behind a pulled-in `lhs =` line,
+		// so the `\begin` search stops at the end of the second line instead of scanning the document
+		// at every block marked tokenizes.
+		const firstBreak = src.indexOf("\n");
+		const secondBreak = firstBreak === -1 ? -1 : src.indexOf("\n", firstBreak + 1);
+		const head = secondBreak === -1 ? src : src.slice(0, secondBreak);
+		const r = bareMathEnvBlock(src, BARE_ENV_BEGIN.exec(head));
 		if (r?.[0] !== 0) return undefined; // only consume when the block starts at offset 0
 		const raw = src.slice(0, r[1]);
 		const text = raw.replace(/\n[ \t]*$/, "");
