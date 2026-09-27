@@ -3231,7 +3231,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			resultBuilder.truncation(truncationInfo.result, truncationInfo.options);
 		}
 		if (columnTruncated > 0) {
-			resultBuilder.limits({ columnMax: columnTruncated });
+			resultBuilder.limits({ columnMax: columnTruncated, columnUnit: "chars" });
 		}
 		return resultBuilder.done();
 	}
@@ -3373,7 +3373,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				.text(text)
 				.sourcePath(artifact.path)
 				.sourceInternal(url.href);
-			if (read.columnTruncated > 0) resultBuilder.limits({ columnMax: read.columnTruncated });
+			if (read.columnTruncated > 0) resultBuilder.limits({ columnMax: read.columnTruncated, columnUnit: "chars" });
 			return resultBuilder.done();
 		}
 
