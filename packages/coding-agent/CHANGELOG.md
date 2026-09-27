@@ -13,6 +13,7 @@
 
 ### Changed
 
+- Extracted the `agent.maxConcurrency` reload and spawn semaphore resize logic from `AgentSession` into `MaxConcurrencyRuntime`; no user-facing change.
 - `edit` and `write` no longer refuse handwritten files named `generated.go`, `generated.ts`, `generated.js`, or `generated.py`; these are treated as auto-generated only when their content carries a generator marker ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - `ToolSession.getToolChoiceQueue()` now returns `ToolChoiceQueue | undefined`, matching what the SDK's session port can supply before a session or queue exists; the `resolve` tool already guarded the absent case, so the type no longer promises more than the port keeps.
 - Reformatted `sdk.ts`, `async/index.ts`, `extensibility/shared-events.ts`, `modes/terminal/interactive-mode.ts` and `slash-commands/helpers/active-oauth-account.ts` to the repository's formatter and import-order rules; no behavior change.
@@ -20,6 +21,7 @@
 
 ### Fixed
 - Fixed an agent woken by an IRC message missing from the terminal Agents block while the status badge counted it as running: the block now follows the agent registry for a spawn it reported, listing it while the woken turn runs and dropping it when the turn ends ([#87](https://github.com/Wladefant/veyyon/issues/87))
+- Fixed the live bash console keeping every already-drawn output chunk while a fast command kept a backlog, and swallowing all later output when a dropped chunk held the end of a title or image escape sequence ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed an edit to `config.yml` agent pins (`agent.agents.<name>.model`, `modelRoles`, effort) not reaching the next `task`, eval `agent()` or vibe spawn until `/reload-config` ran; each spawn now applies config-file edits made since the last one, and a malformed edit keeps the active routing ([#110](https://github.com/Wladefant/veyyon/issues/110)).
 - Fixed reviewer agents being unable to delegate to the task agent, because their spawn allowlist named only scout ([#181](https://github.com/Wladefant/veyyon/issues/181)).
 - Fixed `/reload-config` ignoring a changed `agent.maxConcurrency`: the new ceiling is now applied, and a raised one admits lanes already queued for a slot at once ([Refs Wladefant/veyyon#176](https://github.com/Wladefant/veyyon/issues/176)).
