@@ -10,9 +10,11 @@
  * an unrelated lane to finish.
  *
  * The suite drives the real path end to end: a config file on disk, `Settings.reloadConfig()`,
- * a real `AgentSession` (whose constructor registers the tree budget the semaphore keys on) and
- * the semaphore `TaskTool` resolves through `treeSpawnSemaphore`. Nothing acquires or releases
- * between the reload and the assertion, so only the reload can admit the queued lanes.
+ * a real `AgentSession` (whose constructor registers the tree budget the semaphore keys on, and
+ * whose `session/runtime/max-concurrency-runtime` collaborator resizes the semaphore on the
+ * setting change) and the semaphore `TaskTool` resolves through `treeSpawnSemaphore`. Nothing
+ * acquires or releases between the reload and the assertion, so only the reload can admit the
+ * queued lanes.
  *
  * WHAT IT DOES NOT CATCH. The embedded-SDK fallback, where a session has no budget group and
  * `TaskTool` keeps an instance-local semaphore, still applies a new ceiling on its next acquire

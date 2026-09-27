@@ -13,7 +13,9 @@ import type { ExecutorBackend } from "../../eval/backend";
 import type { EvalLanguage } from "../../eval/types";
 import type { BuiltinToolName } from "../core/builtin-names";
 import type { ToolFactory } from "../index";
+import { evalResultCodec } from "./eval-result-codec";
 import { bashExecutionKind, pythonExecutionKind } from "./execution-messages";
+import { jobResultCodec } from "./job-result-codec";
 
 export const shellTools = {
 	bash: async s => new (await import("./bash")).BashTool(s),
@@ -46,4 +48,5 @@ export const shellDomain = {
 	domain: "shell",
 	tools: shellTools,
 	messageKinds: [bashExecutionKind, pythonExecutionKind],
+	resultCodecs: [evalResultCodec, jobResultCodec],
 } satisfies ToolDomainManifest<ToolFactory>;

@@ -39,6 +39,7 @@ import {
 	truncateToWidth,
 } from "../core/render-utils";
 import type { AgentActivitySnapshot, JobSnapshot, JobToolDetails } from "./job";
+import { resolveJobSnapshots } from "./job-result-codec";
 
 /**
  * A poll snapshot where every watched job is still running and nothing was
@@ -305,7 +306,7 @@ export const jobToolView: Required<ToolViewRenderer<JobRenderArgs, JobViewResult
 	},
 
 	renderResult(result: JobViewResult, context: ToolViewContext, args?: JobRenderArgs): ToolView {
-		let jobs = result.details?.jobs ?? [];
+		let jobs = resolveJobSnapshots(result.details?.jobs, result.content) ?? [];
 		const agents = result.details?.agents ?? [];
 		if (jobs.length === 0 && agents.length === 0) return emptyCard(result, args);
 

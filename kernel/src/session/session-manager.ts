@@ -36,6 +36,7 @@ import {
 	type BuildSessionContextOptions,
 	buildSessionContext,
 	buildSessionContextFromPath,
+	resolveContextLeaf,
 	type SessionContext,
 	walkBranchPath,
 } from "./session-context";
@@ -46,6 +47,7 @@ import {
 	type FileEntry,
 	type LabelEntry,
 	type NewSessionOptions,
+	SESSION_TITLE_SLOT_BYTES,
 	SESSION_TITLE_SLOT_ENTRY_TYPE,
 	type SessionCheckpoint,
 	type SessionCheckpointEntry,
@@ -61,7 +63,13 @@ import {
 	type UsageStatistics,
 } from "./session-entries";
 import { findMostRecentSession, listAllSessions, listSessions, type SessionInfo } from "./session-listing";
-import { loadEntriesFromFile, readTitleSlotFromFile, resolveBlobRefsInEntries } from "./session-loader";
+import {
+	loadEntriesFromFile,
+	loadSessionFile,
+	readTitleSlotFromFile,
+	resolveBlobRefsInEntries,
+	type SessionFileLayout,
+} from "./session-loader";
 import { generateId, migrateToCurrentVersion } from "./session-migrations";
 import {
 	computeDefaultSessionDir,
@@ -94,6 +102,37 @@ const DRAFT_ONLY_SESSION_MARKER = ".draft-only-session";
  * bounded is bounded either way.
  */
 const CHUNK_TARGET_CHARS = 1 << 20;
+
+/**
+ * Where this manager's entry lines sit in the file it last published. Valid while that file is
+ * exactly what it published plus the entries it appended since, and holds no line from another
+ * writer, so the bytes before any entry are known without serializing anything.
+ *
+ * A rewrite whose updates start at some entry keeps the bytes before it and writes the rest
+ * ({@link SessionStorage.rewriteTailAtomic}). On a long session that is the live context instead
+ * of the whole transcript: every prune rewrites the file, and a prune touches only entries after
+ * the compaction boundary.
+ */
+interface PublishedLines {
+	/** The header line as published. A header that serializes differently needs the whole file. */
+	header: string;
+	/** Each entry whose line is in the file, in file order. An entry replaced or dropped since no longer matches. */
+	entries: SessionEntry[];
+	/** Byte offset of each of those lines, parallel to `entries`. */
+	entryOffsets: number[];
+}
+
+/** `lines` batched into writes of about {@link CHUNK_TARGET_CHARS}. */
+function* batchLines(lines: Iterable<string>): Generator<string> {
+	let chunk = "";
+	for (const line of lines) {
+		chunk += line;
+		if (chunk.length < CHUNK_TARGET_CHARS) continue;
+		yield chunk;
+		chunk = "";
+	}
+	if (chunk.length > 0) yield chunk;
+}
 
 function mintSessionId(): string {
 	return Bun.randomUUIDv7();
@@ -549,7 +588,7 @@ export class SessionManager {
 	/** Bumped on every sync rewrite / chain reset so stale queued tasks become no-ops. */
 	#diskEpoch = 0;
 	/**
-	 * UTF-8 bytes the most recent {@link #fileChunks} pass produced. The body is
+	 * UTF-8 bytes of the file the most recent {@link #fileLines} or {@link #tailLines} pass produced. The body is
 	 * never held whole, so this is how a publish knows the file's size without
 	 * serializing it a second time.
 	 */
@@ -606,7 +645,18 @@ export class SessionManager {
 	 * without reading the file: a different inode means someone republished the
 	 * path, whether or not the body they wrote is the same length as ours.
 	 */
-	#publishedFileState: { size: number; identity?: string } | null = null;
+	#publishedFileState: { size: number; identity?: string; lines?: PublishedLines } | null = null;
+	/**
+	 * The line layout the most recent {@link #fileLines} or {@link #tailLines} pass produced,
+	 * installed with {@link #lastBodyBytes} once that body is published.
+	 */
+	#lastBodyLines: PublishedLines | undefined;
+	/**
+	 * Index in `#entries` of the earliest entry an in-place update may have changed since a rewrite
+	 * last started serializing, or `Infinity` when none has. Each rewrite takes it and resets it, so
+	 * an update that lands while a rewrite runs is written by the next one.
+	 */
+	#firstUpdatedEntry = Number.POSITIVE_INFINITY;
 
 	#artifactManager: ArtifactManager | null = null;
 	#artifactManagerSessionFile: string | null = null;
@@ -728,6 +778,8 @@ export class SessionManager {
 		if (!this.#diskFailure) this.#diskFailure = error;
 		this.#fileIsCurrent = false;
 		this.#rewriteRequired = true;
+		// What reached the file is no longer known, so the next rewrite writes all of it.
+		this.#firstUpdatedEntry = 0;
 
 		if (!this.#diskFailureLogged) {
 			this.#diskFailureLogged = true;
@@ -849,31 +901,111 @@ export class SessionManager {
 	 * size. Read it only after the write returns.
 	 */
 	#fileBody(): SessionFileBody {
-		return () => this.#fileChunks();
+		return () => batchLines(this.#fileLines());
 	}
 
-	/** Every line of the file, in publish order. */
+	/**
+	 * Every line of the file, in publish order. A pass records the file's size in
+	 * {@link #lastBodyBytes} and, unless another writer's line is in it, where each
+	 * entry's line starts in {@link #lastBodyLines}.
+	 */
 	*#fileLines(): Generator<string> {
+		this.#lastBodyBytes = 0;
+		this.#lastBodyLines = undefined;
+		const header = this.#lineFor(this.#header);
+		const foreign = this.#foreignLines;
+		const lines: PublishedLines = { header, entries: [], entryOffsets: [] };
 		yield this.#titleSlotLine();
-		yield this.#lineFor(this.#header);
-		for (const entry of this.#entries) yield this.#lineFor(entry);
-		for (const line of this.#foreignLines) yield line.endsWith("\n") ? line : `${line}\n`;
+		yield header;
+		let bytes = yield* this.#entryLines(lines, 0, SESSION_TITLE_SLOT_BYTES + Buffer.byteLength(header, "utf-8"));
+		for (const raw of foreign) {
+			const line = raw.endsWith("\n") ? raw : `${raw}\n`;
+			bytes += Buffer.byteLength(line, "utf-8");
+			yield line;
+		}
+		this.#lastBodyBytes = bytes;
+		if (foreign.length === 0) this.#lastBodyLines = lines;
 	}
 
-	/** Those lines batched into writes of about {@link CHUNK_TARGET_CHARS}. */
-	*#fileChunks(): Generator<string> {
-		this.#lastBodyBytes = 0;
-		let chunk = "";
-		for (const line of this.#fileLines()) {
-			chunk += line;
-			if (chunk.length < CHUNK_TARGET_CHARS) continue;
-			this.#lastBodyBytes += Buffer.byteLength(chunk, "utf-8");
-			yield chunk;
-			chunk = "";
+	/**
+	 * The lines of `#entries` from index `from` on, the first starting at byte `offset`. Each entry
+	 * and its offset is appended to `lines`. Returns the offset after the last line.
+	 */
+	*#entryLines(lines: PublishedLines, from: number, offset: number): Generator<string, number> {
+		const entries = this.#entries;
+		for (let i = from; i < entries.length; i++) {
+			const entry = entries[i]!;
+			const line = this.#lineFor(entry);
+			lines.entries.push(entry);
+			lines.entryOffsets.push(offset);
+			offset += Buffer.byteLength(line, "utf-8");
+			yield line;
 		}
-		if (chunk.length === 0) return;
-		this.#lastBodyBytes += Buffer.byteLength(chunk, "utf-8");
-		yield chunk;
+		return offset;
+	}
+
+	/**
+	 * The lines a tail rewrite writes after the first `keep` entries of `lines`, which end at byte
+	 * `keepBytes`. `lines` is cut back to those entries and extended to describe the new file.
+	 */
+	*#tailLines(lines: PublishedLines, keep: number, keepBytes: number): Generator<string> {
+		this.#lastBodyBytes = 0;
+		this.#lastBodyLines = undefined;
+		lines.entries.length = keep;
+		lines.entryOffsets.length = keep;
+		this.#lastBodyBytes = yield* this.#entryLines(lines, keep, keepBytes);
+		this.#lastBodyLines = lines;
+	}
+
+	/**
+	 * How much of the published file a rewrite can keep: the first `keep` entry lines, ending at
+	 * byte `keepBytes`, when the storage can copy them and the file is still exactly what
+	 * {@link #publishedFileState} describes. `undefined` when the whole file has to be written.
+	 *
+	 * `updatedFrom` is the earliest entry an in-place update may have changed. An entry replaced,
+	 * dropped or reordered since the publish ends the kept run too, because it no longer matches the
+	 * entry whose line is at that position.
+	 */
+	#tailRewritePlan(updatedFrom: number): { lines: PublishedLines; keep: number; keepBytes: number } | undefined {
+		const state = this.#publishedFileState;
+		const lines = state?.lines;
+		if (!state || !lines || !this.#storage.rewriteTailAtomic || this.#foreignLines.length > 0) return undefined;
+		if (lines.header !== this.#lineFor(this.#header) || !this.#fileIsExactlyAsPublished()) return undefined;
+		const entries = this.#entries;
+		let keep = Math.min(updatedFrom, lines.entries.length, entries.length);
+		for (let i = 0; i < keep; i++) {
+			if (lines.entries[i] !== entries[i]) {
+				keep = i;
+				break;
+			}
+		}
+		if (keep === 0) return undefined;
+		const keepBytes = keep < lines.entries.length ? lines.entryOffsets[keep]! : state.size;
+		return { lines, keep, keepBytes };
+	}
+
+	/**
+	 * Publish the file at `sessionFile` atomically, writing only the lines after the kept prefix
+	 * when {@link #tailRewritePlan} finds one.
+	 */
+	async #publishAtomically(sessionFile: string, epoch: number, updatedFrom: number): Promise<void> {
+		const options = { commitGuard: () => this.#diskEpoch === epoch };
+		const plan = this.#tailRewritePlan(updatedFrom);
+		if (!plan || !this.#storage.rewriteTailAtomic) {
+			await this.#storage.writeTextAtomic(sessionFile, this.#fileBody(), options);
+			return;
+		}
+		// The arrays are rebuilt for the new file as its lines are written, so they stop
+		// describing the old one now.
+		const { lines, keep, keepBytes } = plan;
+		if (this.#publishedFileState?.lines === lines) this.#publishedFileState.lines = undefined;
+		await this.#storage.rewriteTailAtomic(
+			sessionFile,
+			keepBytes,
+			this.#titleSlotLine(),
+			() => batchLines(this.#tailLines(lines, keep, keepBytes)),
+			options,
+		);
 	}
 
 	/** Remember an id as ours, so a line carrying it is never treated as foreign. */
@@ -1061,8 +1193,9 @@ export class SessionManager {
 			this.#diskEpoch++;
 			this.#diskTail = Promise.resolve();
 			this.#closeWriterEventually();
+			this.#firstUpdatedEntry = Number.POSITIVE_INFINITY;
 			this.#storage.writeTextSync(this.#sessionFile, body);
-			this.#notePublishedFile(this.#lastBodyBytes);
+			this.#notePublishedFile();
 			// The file matches memory again, so the fault episode is over and a later one
 			// is a new thing to report.
 			this.#clearDiskError();
@@ -1076,17 +1209,20 @@ export class SessionManager {
 	}
 
 	/**
-	 * Rewrite the whole file atomically (temp-write + rename, EPERM-safe) on the
-	 * disk chain. The body is serialized after the writer is closed. The fence
-	 * is enabled BEFORE `#closeWriterHandle()` and stays active until the last
-	 * atomic publish returns, so a sync append landing in the close-yield window
-	 * cannot open a fresh writer that the pending replacement would then detach
-	 * from the current JSONL path. A `commitGuard` also prevents a superseding
-	 * synchronous rewrite from being overwritten by the stale body serialized
-	 * before it ran.
+	 * Republish the file atomically (temp-write + rename, EPERM-safe) on the
+	 * disk chain. `updatedFrom` is the earliest entry an in-place update changed;
+	 * lines before it may be kept as published (see {@link #tailRewritePlan}), and
+	 * the default writes every line. The body is serialized after the writer is
+	 * closed. The fence is enabled BEFORE `#closeWriterHandle()` and stays active
+	 * until the last atomic publish returns, so a sync append landing in the
+	 * close-yield window cannot open a fresh writer that the pending replacement
+	 * would then detach from the current JSONL path. A `commitGuard` also prevents
+	 * a superseding synchronous rewrite from being overwritten by the stale body
+	 * serialized before it ran.
 	 */
-	async #rewriteAtomically(): Promise<void> {
+	async #rewriteAtomically(updatedFrom = 0): Promise<void> {
 		if (!this.#persist || !this.#sessionFile) return;
+		this.#firstUpdatedEntry = Math.min(this.#firstUpdatedEntry, updatedFrom);
 
 		const startEpoch = this.#diskEpoch;
 		await this.#scheduleDiskWork(
@@ -1127,12 +1263,18 @@ export class SessionManager {
 				// that omits them deletes them (see #refreshForeignLines).
 				await this.#refreshForeignLines();
 				if (this.#diskEpoch !== epoch) return false;
-				const body = this.#fileBody();
-				await this.#storage.writeTextAtomic(sessionFile, body, {
-					commitGuard: () => this.#diskEpoch === epoch,
-				});
-				if (this.#diskEpoch !== epoch) return false;
-				this.#notePublishedFile(this.#lastBodyBytes);
+				const updatedFrom = this.#firstUpdatedEntry;
+				this.#firstUpdatedEntry = Number.POSITIVE_INFINITY;
+				let published = false;
+				try {
+					await this.#publishAtomically(sessionFile, epoch, updatedFrom);
+					if (this.#diskEpoch !== epoch) return false;
+					this.#notePublishedFile();
+					published = true;
+				} finally {
+					// Not written, so the next rewrite still owes these entries.
+					if (!published) this.#firstUpdatedEntry = Math.min(this.#firstUpdatedEntry, updatedFrom);
+				}
 			} while (this.#atomicRewriteDirty);
 			return true;
 		} finally {
@@ -1213,7 +1355,12 @@ export class SessionManager {
 			void this.#appendWriter()
 				.append(line)
 				.catch(err => this.#noteDiskFailure(err));
-			if (this.#publishedFileState !== null) this.#publishedFileState.size += Buffer.byteLength(line, "utf-8");
+			const state = this.#publishedFileState;
+			if (state !== null) {
+				state.lines?.entries.push(entry);
+				state.lines?.entryOffsets.push(state.size);
+				state.size += Buffer.byteLength(line, "utf-8");
+			}
 		} catch (err) {
 			this.#noteDiskFailure(err);
 		}
@@ -1249,8 +1396,11 @@ export class SessionManager {
 		return current.size !== expected.size;
 	}
 
-	/** Record what we just published, so the next append can tell it is still there. */
-	#notePublishedFile(bodyByteLength: number): void {
+	/**
+	 * Record the body the last {@link #fileLines} or {@link #tailLines} pass produced as what is
+	 * at the session path, so the next append can tell it is still there.
+	 */
+	#notePublishedFile(): void {
 		if (!this.#sessionFile) return;
 		let identity: string | undefined;
 		try {
@@ -1258,7 +1408,7 @@ export class SessionManager {
 		} catch {
 			identity = undefined;
 		}
-		this.#publishedFileState = { size: bodyByteLength, identity };
+		this.#publishedFileState = { size: this.#lastBodyBytes, identity, lines: this.#lastBodyLines };
 	}
 
 	async #persistTitleChangeEntry(entry: TitleChangeEntry, update: SessionTitleUpdate): Promise<void> {
@@ -1300,10 +1450,16 @@ export class SessionManager {
 				if (!sessionFile) return;
 				try {
 					await this.#appendWriter().append(line);
-					if (this.#publishedFileState !== null) this.#publishedFileState.size += Buffer.byteLength(line, "utf-8");
+					if (this.#publishedFileState !== null) {
+						this.#publishedFileState.size += Buffer.byteLength(line, "utf-8");
+						// Written off the disk chain's order with the synchronous appends, so where
+						// this line landed among them is not known.
+						this.#publishedFileState.lines = undefined;
+					}
 					await this.#storage.updateSessionTitle(sessionFile, update);
 					if (this.#diskEpoch === epoch) this.#fileIsCurrent = true;
 				} catch {
+					this.#firstUpdatedEntry = 0;
 					if (!(await this.#runFencedAtomicRewrite(epoch))) return;
 					this.#clearDiskError();
 					this.#fileIsCurrent = true;
@@ -1392,8 +1548,7 @@ export class SessionManager {
 		this.#lifecycleEnded = false;
 		// Every loaded id is ours from here on, including one a later rewrite drops
 		// on purpose: that is what keeps the foreign-line merge from resurrecting it.
-		for (const entry of entries) this.#noteIdSeen(entry.id);
-		this.#noteIdSeen(header.id);
+		this.#forgetForeignWriter();
 	}
 
 	#allocateSequence(): number {
@@ -1601,7 +1756,6 @@ export class SessionManager {
 		this.#forceFileCreation = snapshot.onDisk;
 		this.#draftOnlySessionCleanupArmed = snapshot.draftOnlySessionCleanupArmed;
 		this.#applyEntries(snapshot.header, snapshot.entries.slice());
-		this.#forgetForeignWriter();
 		this.#nextSequence = snapshot.nextSequence;
 		this.#lifecycleStarted = snapshot.lifecycleStarted;
 		this.#lifecycleEnded = snapshot.lifecycleEnded;
@@ -1620,10 +1774,10 @@ export class SessionManager {
 	async setSessionFile(sessionFile: string): Promise<void> {
 		const resolvedSessionFile = path.resolve(sessionFile);
 		await assertNotTerminalOwned(resolvedSessionFile);
-		const fileEntries = await loadEntriesFromFile(resolvedSessionFile, this.#storage, {
+		const loaded = await loadSessionFile(resolvedSessionFile, this.#storage, {
 			operatorNotices: this.#operatorNotices,
 		});
-		await this.#switchToLoadedFile(resolvedSessionFile, fileEntries);
+		await this.#switchToLoadedFile(resolvedSessionFile, loaded.entries, loaded.layout);
 	}
 
 	/**
@@ -1631,7 +1785,11 @@ export class SessionManager {
 	 * read the header's cwd before the manager exists, and hands the same entries here rather than
 	 * parsing a second time.
 	 */
-	async #switchToLoadedFile(resolvedSessionFile: string, fileEntries: FileEntry[]): Promise<void> {
+	async #switchToLoadedFile(
+		resolvedSessionFile: string,
+		fileEntries: FileEntry[],
+		layout: SessionFileLayout | undefined,
+	): Promise<void> {
 		const titleSlot = await readTitleSlotFromFile(resolvedSessionFile, this.#storage);
 		let migrated = false;
 		let header: SessionHeader | undefined;
@@ -1646,7 +1804,7 @@ export class SessionManager {
 					operatorNotices: this.#operatorNotices,
 				},
 			);
-			// loadEntriesFromFile guarantees entries[0] is a valid session header.
+			// loadSessionFile guarantees entries[0] is a valid session header.
 			header = fileEntries[0] as SessionHeader;
 			const headerCwd = header.cwd ? path.resolve(header.cwd) : undefined;
 			if (headerCwd && headerCwd !== path.resolve(this.#cwd) && (await directoryExists(headerCwd))) {
@@ -1684,7 +1842,6 @@ export class SessionManager {
 		}
 
 		this.#applyEntries(header, fileEntries.slice(1) as SessionEntry[]);
-		this.#forgetForeignWriter();
 		this.#titleUpdatedAt = titleSlot?.updatedAt ?? header.timestamp;
 		this.#hasTitleSlot = titleSlot !== undefined;
 		this.#fileIsCurrent = true;
@@ -1694,7 +1851,24 @@ export class SessionManager {
 		this.#artifactManagerSessionFile = null;
 
 		if (this.sanitizeLoadedOpenAIResponsesReplayMetadata()) this.#rewriteRequired = true;
+		if (layout && this.#hasTitleSlot && !this.#rewriteRequired) this.#adoptLoadedLayout(layout);
 		this.#startLifecycle("resumed");
+	}
+
+	/**
+	 * Take a loaded file's layout as what this manager published there. The file is a title slot,
+	 * the header and one line per entry, in `#entries` order, and nothing was changed on load that a
+	 * publish would write differently, so the next rewrite can keep the lines before its first
+	 * changed entry and skip reading the file back for another writer's lines, as it would after
+	 * its own publish. A header that serializes differently from its line is caught by the rewrite
+	 * plan, which then writes the whole file.
+	 */
+	#adoptLoadedLayout(layout: SessionFileLayout): void {
+		this.#publishedFileState = {
+			size: layout.size,
+			identity: layout.identity,
+			lines: { header: layout.header, entries: this.#entries.slice(), entryOffsets: layout.entryOffsets },
+		};
 	}
 
 	/** Start a new session. Drains and closes any existing writer first. */
@@ -2497,10 +2671,30 @@ export class SessionManager {
 	/**
 	 * Rewrite the session file after in-place entry updates (e.g. pruning old tool
 	 * outputs). Use sparingly.
+	 *
+	 * `updated` lists every entry changed in place since the file was last
+	 * written. The lines before the earliest of them are kept as they are on disk
+	 * instead of serialized again, which on a long session is most of the file.
+	 * Omit it when the changed set is not known: every line is written.
 	 */
-	async rewriteEntries(): Promise<void> {
+	async rewriteEntries(updated?: Iterable<SessionEntry>): Promise<void> {
 		if (!this.#persist || !this.#sessionFile) return;
-		await this.#rewriteAtomically();
+		await this.#rewriteAtomically(updated === undefined ? 0 : this.#earliestIndexOf(updated));
+	}
+
+	/**
+	 * Index in `#entries` of the earliest of `updated`, found from the end because
+	 * updates cluster in the live tail. `Infinity` for none, and 0 when one of
+	 * them is not in `#entries`, since its position is then unknown.
+	 */
+	#earliestIndexOf(updated: Iterable<SessionEntry>): number {
+		const pending = new Set(updated);
+		if (pending.size === 0) return Number.POSITIVE_INFINITY;
+		const entries = this.#entries;
+		for (let i = entries.length - 1; i >= 0; i--) {
+			if (pending.delete(entries[i]!) && pending.size === 0) return i;
+		}
+		return 0;
 	}
 
 	/**
@@ -2621,6 +2815,23 @@ export class SessionManager {
 			return buildSessionContext(this.#entries, this.#index.leafId(), this.#index.entriesById(), options);
 		}
 		return buildSessionContextFromPath(this.#index.leafPath(), options);
+	}
+
+	/**
+	 * The tool names the newest `mcp_tool_selection` entry records on the branch
+	 * {@link buildSessionContext} reads, or `undefined` when that branch records
+	 * none. Scans for the one entry instead of rebuilding the branch's messages.
+	 */
+	getMCPToolSelection(): readonly string[] | undefined {
+		const byId = this.#index.entriesById();
+		const path = this.#index.leafEntry()
+			? this.#index.leafPath()
+			: walkBranchPath(byId, resolveContextLeaf(this.#entries, this.#index.leafId(), byId));
+		for (let i = path.length - 1; i >= 0; i--) {
+			const entry = path[i]!;
+			if (entry.type === "mcp_tool_selection") return entry.selectedToolNames;
+		}
+		return undefined;
 	}
 
 	/** Strip stale OpenAI Responses assistant replay metadata from loaded entries. */
@@ -2973,8 +3184,8 @@ export class SessionManager {
 		},
 	): Promise<SessionManager> {
 		await assertNotTerminalOwned(filePath);
-		const loaded = await loadEntriesFromFile(filePath, storage, { operatorNotices: options?.operatorNotices });
-		const header = loaded.find(entry => entry.type === "session") as SessionHeader | undefined;
+		const loaded = await loadSessionFile(filePath, storage, { operatorNotices: options?.operatorNotices });
+		const header = loaded.entries.find(entry => entry.type === "session") as SessionHeader | undefined;
 		// Resume into the session's recorded cwd only when that directory still
 		// exists. A deleted project dir would make the constructor's #cwd — and the
 		// `setProjectDir` chdir interactive mode runs next — point at (and fail on)
@@ -2998,7 +3209,7 @@ export class SessionManager {
 			options?.instrumentation,
 		);
 		manager.#suppressBreadcrumb = options?.suppressBreadcrumb === true;
-		await manager.#switchToLoadedFile(path.resolve(filePath), loaded);
+		await manager.#switchToLoadedFile(path.resolve(filePath), loaded.entries, loaded.layout);
 		return manager;
 	}
 

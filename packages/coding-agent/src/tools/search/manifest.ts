@@ -7,10 +7,14 @@
  * The factories stay dynamic for the reason the whole dispatch table does — a session that never
  * searches never parses the matchers, the tree-sitter grammars or the BM25 index — and this file is
  * one of the six the dynamic-import baseline names for it.
+ *
+ * The search codec rides on the manifest for the reason the read codec rides on the filesystem one:
+ * a resumed session restores its search cards as it loads, before any search runs.
  */
 import type { ToolDomainManifest } from "@veyyon/kernel/registry/tool-domain";
 import type { BuiltinToolName } from "../core/builtin-names";
 import type { ToolFactory } from "../index";
+import { searchResultCodec } from "./search-result-codec";
 
 export const searchTools = {
 	search: async s => new (await import("./search")).SearchTool(s),
@@ -18,4 +22,8 @@ export const searchTools = {
 	search_tool_bm25: async s => (await import("./search-tool-bm25")).SearchToolBm25Tool.createIf(s),
 } satisfies Partial<Record<BuiltinToolName, ToolFactory>>;
 
-export const searchDomain = { domain: "search", tools: searchTools } satisfies ToolDomainManifest<ToolFactory>;
+export const searchDomain = {
+	domain: "search",
+	tools: searchTools,
+	resultCodecs: [searchResultCodec],
+} satisfies ToolDomainManifest<ToolFactory>;

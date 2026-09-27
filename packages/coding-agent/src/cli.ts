@@ -44,6 +44,7 @@ import {
 import * as logger from "@veyyon/utils/logger";
 import { declareWorkerHostEntry, installWorkerInbox } from "@veyyon/utils/worker-host";
 import { EXIT_FAILURE, EXIT_USAGE } from "./cli/exit-codes";
+import { OPTIONAL_VALUE_FLAGS } from "./cli/flag-tables";
 import { installProfileAlias, resolveProfileAliasCommandFromProcess } from "./cli/profile-alias";
 import { extractProfileFlags } from "./cli/profile-bootstrap";
 import { DAEMON_BROKER_WORKER_ARG } from "./launch/protocol";
@@ -127,6 +128,18 @@ async function runSmokeTest(): Promise<void> {
 				"the core native addon did not load/run correctly on this binary",
 		);
 	}
+
+	// `runCli` configures ArkType jitless before any command loads a schema. A static import that
+	// reaches `arktype` from this file's graph evaluates it first, and a bundled binary then compiles
+	// every validator again at launch; `ark.config` holds the configuration at `arktype`'s evaluation.
+	const { ark } = await import("arktype");
+	if (ark.config.jitless !== true) {
+		throw new Error(
+			"arktype smoke failed: ArkType is not jitless — runCli did not configure it before arktype " +
+				"evaluated, or a static import from cli.ts's module graph reaches arktype",
+		);
+	}
+	process.stderr.write("[smoke] arktype jitless\n");
 
 	process.stderr.write("[smoke] importing stats\n");
 	const { smokeTestSyncWorker, startServer } = await import("@veyyon/stats");
@@ -375,6 +388,17 @@ async function runTinyWorker(): Promise<void> {
 	await runIpcSubprocessWorker(startTinyTitleWorker);
 }
 
+/**
+ * Whether an argv token can start a session resume: `--resume`, `-r` or `--session`, bare or
+ * with `=value`, or `--continue`/`-c`, which reads a session id after it as a resume. An argv
+ * with none of these skips loading the launch parser for the resumed-session profile lookup.
+ */
+function mayResumeSession(arg: string): boolean {
+	const equals = arg.startsWith("--") ? arg.indexOf("=") : -1;
+	const flag = equals === -1 ? arg : arg.slice(0, equals);
+	return OPTIONAL_VALUE_FLAGS.has(flag) || flag === "--continue" || flag === "-c";
+}
+
 /** Run the CLI with the given argv (no `process.argv` prefix). */
 export async function runCli(argv: string[]): Promise<void> {
 	// A second start for an embedder that calls `runCli` without going through
@@ -406,6 +430,14 @@ export async function runCli(argv: string[]): Promise<void> {
 			// surfaces a clean error and keeps every later path helper on the
 			// selected profile.
 			setProfile(resolveStartupProfile());
+			// A launch that resumes a session continues in the profile that wrote
+			// it, ahead of the env var and `defaultProfile`; only an explicit
+			// --profile above wins over the session's own profile.
+			if (resolvedArgv.some(mayResumeSession)) {
+				const { resumedSessionProfile } = await import("./cli/resume-profile");
+				const sessionProfile = resumedSessionProfile(resolvedArgv, process.cwd());
+				if (sessionProfile !== undefined) setProfile(sessionProfile);
+			}
 		}
 		if (extracted.aliasName !== undefined) {
 			const profile = extracted.profile ?? getActiveProfile();
@@ -449,6 +481,17 @@ export async function runCli(argv: string[]): Promise<void> {
 			process.exitCode = 1;
 		}
 		return;
+	}
+
+	// ArkType compiles a validator for each schema it builds, its own builtin keywords included,
+	// unless it is configured jitless before `arktype` first evaluates. In the compiled binary that
+	// codegen costs about 22 ms and 11 MiB of heap per launch, and interpreted traversal validates a
+	// tool call's arguments in 3.4 µs against 3.1 µs. `arktype` is off this file's static graph, so
+	// this runs before any module builds a schema, and `runSmokeTest` fails when it does not. The auth
+	// gateway's request schemas compile regardless (`@veyyon/ai` `providers/gateway-schema-type.ts`).
+	if (isProcessEntry) {
+		const { configure } = await import("arktype/config");
+		configure({ jitless: true });
 	}
 
 	// Declare this module as the worker-host entry now that the active profile

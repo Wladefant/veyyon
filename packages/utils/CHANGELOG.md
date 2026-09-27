@@ -14,6 +14,19 @@
 ### Changed
 
 - The terminal stderr guard now covers Windows, re-pointing the process standard-error handle at the day's log so a native abort trace survives the console window closing, while leaving file descriptor 2 and every JavaScript write on the terminal ([#73](https://github.com/Wladefant/veyyon/issues/73)).
+
+- `@veyyon/utils/session-file` exports `sessionFileMatchesResumeArgument`, which reports whether a transcript filename answers a `--resume` id or prefix.
+
+### Changed
+
+- `matchesKey` and `parseKey` look up their memoized answers by protocol mode and input instead of a concatenated key string, and `KeybindingsManager.matches` reuses each parsed key's canonical id, cutting a memoized key test from 70.4 ns to 17.3 ns with identical answers.
+- `latexToBlock` parses each display-math fragment with one handler per construct (fractions, radicals, `\left…\right`, big operators, colors, environments, scripts, delimiters) and scans command names by character code, rendering 150,018 differential cases byte-identically about 6% faster.
+- `prompt.render` reuses a template's variable analysis across renders instead of re-parsing the template on every call, rendering the spawned-agent system prompt in about 7 µs instead of about 100 µs.
+- `wrapTextWithAnsi` returns a line of printable ASCII and SGR that already fits without calling the native wrapper, cutting the wrap time of a 659k-row transcript's 1.83M calls from 1.69 s to 0.93 s with byte-identical rows.
+- `replaceTabs` returns a line with no tab without running the replacement, cutting 1.83M transcript lines from 55.2 ms to 40.6 ms.
+- `latexToUnicode` dispatches a command through one name-keyed table and scans command names by character code, rendering a 12-formula corpus in 11.4 µs instead of 24.2 µs with 305,251 differential cases byte-identical.
+- `visibleWidth` counts a row of printable ASCII, tabs and SGR sequences in its own scan instead of the escape-stripping measure, cutting a styled prose row from 299 ns to 62 ns and a colored 13,362-entry transcript render from 288 ms to 270 ms with identical widths.
+
 ### Fixed
 
 - No shipped behavior changed; the global EPIPE routing suite pointed at `packages/tui/src/terminal.ts`, a path the terminal host left on 2026-08-30, so its three "finishes TUI persistence before exit" cases failed on a module-resolution exit rather than on ordering ([#64](https://github.com/Wladefant/veyyon/issues/64)).
@@ -24,6 +37,7 @@
 - Unhandled ENOSPC errors on log, session, or artifact writes are now caught and logged as warnings rather than crashing the process, preventing session loss when a disk fills ([#73](https://github.com/Wladefant/veyyon/issues/73), [#114](https://github.com/Wladefant/veyyon/pull/114)).
 - `postmortem.quit` accepts `drainStdout: false` to skip waiting for stdout drain when terminating a process whose terminal host is already gone ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Made malformed advanced-serialization frames from a worker subprocess non-fatal: Bun surfaces an undecodable IPC frame as a process-level `uncaughtException` in the parent (oven-sh/bun#37287), which the postmortem handler treated as fatal and tore down every active session and subagent. The handler now recognizes the decode failure (`isWorkerIpcDeserializeError`) and logs-and-continues, faulting only the offending worker via its own exit/error path ([#107](https://github.com/Wladefant/veyyon/issues/107)).
+- `latexToUnicode` and `latexToBlock` render a command, environment, color or delimiter named after an `Object.prototype` member (`\toString`, `\constructor`, `\begin{__proto__}`) as an unknown name instead of throwing, printing a function body, or laying it out as a fraction, big operator or matrix.
 
 ## [1.5.5] - 2026-09-25
 

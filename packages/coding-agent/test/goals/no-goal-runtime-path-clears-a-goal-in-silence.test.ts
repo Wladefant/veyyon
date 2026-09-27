@@ -29,6 +29,7 @@ import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { getBundledModel } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@veyyon/coding-agent/config/settings";
+import { readRecordedGoal } from "@veyyon/coding-agent/goals/goal-record";
 import { GoalRuntime } from "@veyyon/coding-agent/goals/runtime";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import type { AgentSessionEvent } from "@veyyon/coding-agent/session/agent-session-types";
@@ -114,7 +115,6 @@ describe("no goal runtime path clears a goal in silence", () => {
 	let authStorage: AuthStorage;
 	let session: AgentSession;
 	let announcements: AgentSessionEvent[];
-	let modeChanges: string[];
 
 	beforeEach(async () => {
 		resetSettingsForTest();
@@ -135,14 +135,8 @@ describe("no goal runtime path clears a goal in silence", () => {
 			modelRegistry,
 		});
 		announcements = [];
-		modeChanges = [];
 		session.subscribe((event: AgentSessionEvent) => {
 			if (event.type === "goal_updated") announcements.push(event);
-		});
-		const appendModeChange = session.sessionManager.appendModeChange.bind(session.sessionManager);
-		vi.spyOn(session.sessionManager, "appendModeChange").mockImplementation((mode, extra) => {
-			modeChanges.push(mode);
-			return appendModeChange(mode, extra);
 		});
 	});
 
@@ -158,7 +152,6 @@ describe("no goal runtime path clears a goal in silence", () => {
 		await session.goalRuntime.createGoal({ objective: "Ship the release" });
 		expect(session.getGoalModeState()?.goal.status).toBe("active");
 		announcements = [];
-		modeChanges = [];
 	}
 
 	/** Runs one classified path and returns the error it refused with, if it refused. */
@@ -249,8 +242,11 @@ describe("no goal runtime path clears a goal in silence", () => {
 			await drive(classified);
 
 			// The journal is what a reopened session reads, so a fate that is not written there is a
-			// fate the next launch cannot see.
-			expect(modeChanges.at(-1)).toBe(classified.persists);
+			// fate the next launch cannot see: the branch must read back as the mode and the goal the
+			// runtime now holds, counters included.
+			const context = session.sessionManager.buildSessionContext();
+			expect(context.mode).toBe(classified.persists);
+			expect(readRecordedGoal(session.sessionManager, context.modeData)).toEqual(session.getGoalModeState()?.goal);
 		},
 	);
 

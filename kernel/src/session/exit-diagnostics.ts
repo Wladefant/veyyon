@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@veyyon/agent-core";
 import type { AssistantMessage } from "@veyyon/ai";
 import { emptyUsage } from "@veyyon/catalog/models";
-import { formatCount } from "@veyyon/utils";
+import { collapseWhitespace, formatCount, truncate } from "@veyyon/utils";
 import { isRecord } from "@veyyon/utils/type-guards";
 import type { SessionEntry } from "./session-entries";
 
@@ -19,12 +19,25 @@ export interface ToolArgumentSummary {
 	path?: string;
 }
 
-/** Persisted marker written before a tool implementation starts running. */
+/**
+ * Persisted marker written before a tool implementation starts running. The entry's timestamp is the
+ * start time.
+ */
 export interface ToolExecutionStartData {
 	toolCallId: string;
 	toolName: string;
+	/**
+	 * Absent when the newest assistant message on the branch records the call
+	 * ({@link assistantRecordsToolCall}), since the pending-call reader takes that message's arguments.
+	 */
 	args?: ToolArgumentSummary;
 	intent?: string;
+	/** Written by sessions from before the entry timestamp served as the start time. */
+	startedAt?: string;
+}
+
+/** A start marker as the pending-call reader applies it: `startedAt` from the marker or its entry. */
+interface ToolExecutionStart extends ToolExecutionStartData {
 	startedAt: string;
 }
 
@@ -232,13 +245,13 @@ export function summarizeToolArguments(
 	return summary.command !== undefined || summary.path !== undefined ? summary : undefined;
 }
 
-function readToolExecutionStart(entry: SessionEntry): ToolExecutionStartData | undefined {
+function readToolExecutionStart(entry: SessionEntry): ToolExecutionStart | undefined {
 	if (entry.type !== "custom" || entry.customType !== TOOL_EXECUTION_START_CUSTOM_TYPE) return undefined;
 	const data = entry.data;
 	if (!isRecord(data)) return undefined;
 	if (typeof data.toolCallId !== "string" || typeof data.toolName !== "string") return undefined;
 	const startedAt = typeof data.startedAt === "string" ? data.startedAt : entry.timestamp;
-	const result: ToolExecutionStartData = {
+	const result: ToolExecutionStart = {
 		toolCallId: data.toolCallId,
 		toolName: data.toolName,
 		startedAt,
@@ -252,13 +265,44 @@ function readToolExecutionStart(entry: SessionEntry): ToolExecutionStartData | u
 	return result;
 }
 
+/**
+ * Whether `part` is a renamed repeat of an earlier call in the same message.
+ *
+ * The agent loop keeps stored ids unique by renaming a repeated id `<id>_<n>`. When the repeat has
+ * the same tool and arguments as `<id>`, it is one call recorded twice (Cursor re-sent an exec
+ * request and an older build synthesized a second block for it), so it is answered by `<id>`'s
+ * result and never gets one of its own. Counting it reported every such call as pending on resume.
+ */
+function isRenamedRepeat(part: ToolCallContent, earlier: readonly ToolCallContent[]): boolean {
+	const id = part.id;
+	if (id === undefined) return false;
+	// Serialized only once an earlier call's id qualifies, since most calls have no such twin.
+	let args: string | undefined;
+	return earlier.some(other => {
+		if (
+			other.id === undefined ||
+			other.name !== part.name ||
+			id.length <= other.id.length + 1 ||
+			!id.startsWith(`${other.id}_`) ||
+			!/^\d+$/.test(id.slice(other.id.length + 1))
+		) {
+			return false;
+		}
+		args ??= JSON.stringify(part.arguments);
+		return JSON.stringify(other.arguments) === args;
+	});
+}
+
 function appendAssistantToolCalls(pending: Map<string, PendingToolCallRecord>, message: AgentMessage): void {
 	if (message.role !== "assistant") return;
 	const content = Array.isArray(message.content) ? message.content : [];
 	const toolCalls: PendingToolCallRecord[] = [];
+	const seen: ToolCallContent[] = [];
 	for (let index = 0; index < content.length; index++) {
 		const part = content[index];
 		if (!isToolCallContent(part)) continue;
+		if (isRenamedRepeat(part, seen)) continue;
+		seen.push(part);
 		const toolName = part.name ?? "unknown";
 		const key = part.id ?? `assistant:${message.timestamp ?? "unknown"}:${index}:${toolName}`;
 		const record: PendingToolCallRecord = {
@@ -274,7 +318,7 @@ function appendAssistantToolCalls(pending: Map<string, PendingToolCallRecord>, m
 	for (const toolCall of toolCalls) pending.set(toolCall.key, toolCall);
 }
 
-function applyToolExecutionStart(pending: Map<string, PendingToolCallRecord>, marker: ToolExecutionStartData): void {
+function applyToolExecutionStart(pending: Map<string, PendingToolCallRecord>, marker: ToolExecutionStart): void {
 	const existing = pending.get(marker.toolCallId);
 	if (existing) {
 		existing.startedAt = marker.startedAt;
@@ -318,20 +362,58 @@ export function collectPendingToolCalls(entries: readonly SessionEntry[]): Pendi
 	return Array.from(pending.values()).map(({ key: _key, ...toolCall }) => toolCall);
 }
 
+/**
+ * Whether {@link collectPendingToolCalls} takes `toolCallId`'s arguments from an assistant message when
+ * a start marker is appended after `leaf`: the newest assistant message on the branch records the call
+ * and no tool result for it follows. The walk goes back over custom entries and tool results; any other
+ * message ends it unanswered, so a marker written then keeps its own copy of the arguments.
+ */
+export function assistantRecordsToolCall(
+	leaf: SessionEntry | undefined,
+	getEntry: (id: string) => SessionEntry | undefined,
+	toolCallId: string,
+): boolean {
+	for (let entry = leaf; entry !== undefined; entry = entry.parentId === null ? undefined : getEntry(entry.parentId)) {
+		if (entry.type !== "message") continue;
+		const message = entry.message;
+		if (message.role === "toolResult") {
+			if (message.toolCallId === toolCallId) return false;
+			continue;
+		}
+		if (message.role !== "assistant") return false;
+		const pending = new Map<string, PendingToolCallRecord>();
+		appendAssistantToolCalls(pending, message);
+		return pending.get(toolCallId)?.args !== undefined;
+	}
+	return false;
+}
+
+/** Calls named in the resume warning; the rest are counted, so a large batch stays one line. */
+const PENDING_WARNING_LISTED_CALLS = 3;
+/** Longest command or path quoted per listed call. */
+const PENDING_WARNING_ARGUMENT_CHARS = 80;
+
+/** One line of `text`, bounded: ids and commands can carry newlines and whole scripts. */
+function oneLine(text: string, maxLength: number): string {
+	return truncate(collapseWhitespace(text), maxLength);
+}
+
 function appendArgumentSummary(parts: string[], args: unknown): void {
 	if (!isRecord(args)) return;
 	const command = args.command;
 	if (typeof command === "string" && command.length > 0) {
-		parts.push(`command \`${command}\``);
+		parts.push(`command \`${oneLine(command, PENDING_WARNING_ARGUMENT_CHARS)}\``);
 		return;
 	}
 	const path = args.path;
-	if (typeof path === "string" && path.length > 0) parts.push(`path \`${path}\``);
+	if (typeof path === "string" && path.length > 0) {
+		parts.push(`path \`${oneLine(path, PENDING_WARNING_ARGUMENT_CHARS)}\``);
+	}
 }
 
 function formatPendingToolCall(call: PendingToolCallDiagnostic): string {
 	const parts = [call.toolName];
-	if (call.toolCallId) parts.push(call.toolCallId);
+	if (call.toolCallId) parts.push(oneLine(call.toolCallId, PENDING_WARNING_ARGUMENT_CHARS));
 	appendArgumentSummary(parts, call.args);
 	return parts.join(" ");
 }
@@ -340,6 +422,8 @@ function formatPendingToolCall(call: PendingToolCallDiagnostic): string {
 export function describePendingToolCalls(entries: readonly SessionEntry[]): string | undefined {
 	const pending = collectPendingToolCalls(entries);
 	if (pending.length === 0) return undefined;
-	const formatted = pending.map(formatPendingToolCall).join(", ");
-	return `Previous session ended while ${formatCount("tool call", pending.length)} remained pending: ${formatted}. The prior veyyon process exited before recording tool result(s).`;
+	const listed = pending.slice(0, PENDING_WARNING_LISTED_CALLS).map(formatPendingToolCall);
+	const unlisted = pending.length - listed.length;
+	if (unlisted > 0) listed.push(`and ${unlisted} more`);
+	return `Previous session ended while ${formatCount("tool call", pending.length)} remained pending: ${listed.join(", ")}. The prior veyyon process exited before recording tool result(s).`;
 }

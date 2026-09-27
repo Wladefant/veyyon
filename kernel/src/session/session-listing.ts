@@ -16,7 +16,7 @@ import {
 	SESSION_BACKUP_EXTENSION,
 	SESSION_FILE_EXTENSION,
 	sessionBackupPrimaryName,
-	sessionFileStem,
+	sessionFileMatchesResumeArgument,
 } from "@veyyon/utils/session-file";
 import { SessionListIndex } from "./session-list-index";
 import { computeDefaultSessionDir } from "./session-paths";
@@ -48,6 +48,10 @@ export interface SessionInfo {
 	parentSessionPath?: string;
 	created: Date;
 	modified: Date;
+	/**
+	 * Messages found in the scanned prefix (4 KB, or the escalated window). A lower
+	 * bound on a longer session, and zero only when the file holds no message.
+	 */
 	messageCount: number;
 	/** File size in bytes on disk; used for compact list rendering. */
 	size: number;
@@ -832,24 +836,10 @@ export async function getRecentSessions(
 }
 
 function sessionMatchesResumeArg(session: SessionInfo, sessionArg: string): boolean {
-	const normalizedArg = sessionArg.toLowerCase();
-	const normalizedId = session.id.toLowerCase();
-	if (normalizedId.startsWith(normalizedArg)) {
-		return true;
-	}
-
-	const fileName = sessionFileStem(path.basename(session.path)).toLowerCase();
-	if (fileName.startsWith(normalizedArg)) {
-		return true;
-	}
-
-	const separator = fileName.lastIndexOf("_");
-	if (separator < 0) {
-		return false;
-	}
-
-	const fileSessionId = fileName.slice(separator + 1);
-	return fileSessionId.startsWith(normalizedArg);
+	return (
+		session.id.toLowerCase().startsWith(sessionArg.toLowerCase()) ||
+		sessionFileMatchesResumeArgument(path.basename(session.path), sessionArg)
+	);
 }
 
 /** Controls cross-directory fallback for resumable session lookup. */

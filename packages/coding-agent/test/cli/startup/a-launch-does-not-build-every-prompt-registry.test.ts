@@ -123,21 +123,113 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * 1548 to 1549 (upstream): `session/agent-session-provider-request.ts`, the provider request shaping
  * split out of `session/agent-session.ts`. A leaf over modules already here.
  *
- * 1549 to 1558 (fork): nine modules the fork carries and upstream does not. Five are the ChatGPT-web
- * provider (`ai/providers/openai-codex/{chatgpt-web-trusted-context,chatgpt-web-turn-stamp}.ts`,
- * `ai/registry/chatgpt-web.ts`, `catalog/{discovery,provider-models}/chatgpt-web.ts`); two are the
- * native control host (`native-control/{telegram-control-bridge,telegram-control-host}.ts`); and two
- * are the task lane's replenishment and ledger bridge (`task/topic-replenishment.ts`,
- * `task/native-ledger-bridge.py`).
+ * 1549 to 1550: `goals/goal-record.ts`, which writes a goal's counters as a `goal_progress` entry
+ * between the `mode_change` records that hold the whole goal, and reads the two back together. It is
+ * new code on this graph because `session/agent-session.ts` records a goal after each tool call that
+ * spends tokens on one; it imports only type-level kernel modules and `utils/type-guards`, both
+ * already here.
  *
- * 1558 to 1561: the refusal fence (`tools/core/{refusal-fence,effect-scope,execution-registry}.ts`),
- * the choke point every tool invocation passes through.
+ * 1550 to 1552: `kernel/session/tool-result-codecs.ts`, the table of result codecs the session
+ * spine applies to each line it writes and each entry it loads, and `tools/fs/read-display.ts`, the
+ * read codec the filesystem manifest contributes to it. A resumed session restores its read cards as
+ * it loads, before any read runs, so the codec cannot wait for the read tool; both import only
+ * type-level modules and `utils/type-guards`, already here.
+ *
+ * 1552 to 1554: `edit/result-codec.ts`, the edit codec `tools/index.ts` registers beside the
+ * domains' codecs, which rebuilds an edit's post-edit text from its pre-edit text and diff as a
+ * resumed session loads, and `edit/numbered-diff-row.ts`, the numbered diff row format split out of
+ * `edit/diff.ts` so the diff writer and that rebuild read one definition. The codec imports only
+ * type-level modules, `utils/type-guards` and the row module, which imports nothing.
+ *
+ * 1554 to 1557: `tools/search/search-result-codec.ts`, `tools/shell/eval-result-codec.ts` and
+ * `tools/shell/job-result-codec.ts`, the search, eval and job codecs their domain manifests
+ * register, which rebuild a result's dropped display copies from its text as a resumed session
+ * loads. They import `node:util`, type-level modules, `utils/type-guards`, `tools/core/output-notice`
+ * and, for search, `hashline/format` and `tools/core/render-utils`, all already here.
+ *
+ * 1557 to 1558: `session/session-spend.ts`, the spend ledger `session/agent-session.ts` reads for
+ * session stats and goal accounting, which tallies the messages a compaction summarized once per
+ * boundary instead of on every read. It imports type-level modules and `tools/core/builtin-names`,
+ * already here.
+ *
+ * 1558 to 1561: `session/runtime/advisor-roster.ts`, `session/advisor-context.ts` and
+ * `session/advisor-stats.ts`, the advisor lifecycle and delivery routing, the advisor's overflow
+ * compaction, and its spend and status figures, split out of `session/agent-session.ts` (18412
+ * lines to 17399). Leaves over modules already here, so the launch runs no new code — the same
+ * split-raises-the-count case as above.
+ *
+ * 1561 to 1562: `session/runtime/streaming-edit-guard.ts`, the check that stops a turn while an
+ * `edit` call streams toward an auto-generated file or a patch that cannot apply, split out of
+ * `session/agent-session.ts` (17399 lines to 17089). It imports the owning edit, path and
+ * local-protocol modules the runtime already reached, so the launch runs no new code.
+ *
+ * 1562 to 1566: `session/runtime/tool-discovery.ts`, `session/runtime/checkpoint-runtime.ts`,
+ * `session/runtime/user-executions.ts` and `session/runtime/post-prompt-tasks.ts`, the discovery
+ * selections and search index, the checkpoint and rewind state, the user shell and eval runs, and
+ * the work a turn schedules after `prompt()` returns, split out of `session/agent-session.ts` (17089
+ * lines to 16629). They import `node:path`, `node:timers/promises` and modules the runtime already
+ * reached, so the launch runs no new code.
+ *
+ * 1566 to 1567: `session/runtime/irc-inbox.ts`, the IRC records a streaming turn has not yet taken,
+ * split out of `session/agent-session.ts` (16629 lines to 16575). It imports only type-level
+ * modules, so the launch runs no new code.
+ *
+ * 1567 to 1568: `task/run-monitor.ts`, the progress, abort, soft-budget and output capture for one
+ * agent run, split out of `task/executor.ts` (3497 lines to 2450). It imports modules the executor
+ * already reached, so the launch runs no new code.
+ *
+ * 1568 to 1569: `secrets/session-runtime.ts`, the secret loader, expansion lease, reload queue and
+ * tool-argument expansion a session runs, split out of `sdk.ts` (3899 lines to 3322). It imports
+ * modules `sdk.ts` already reached, so the launch runs no new code.
+ *
+ * 1569 to 1570: `session/startup-model.ts`, the two-pass model and thinking-level selection a
+ * session starts on, split out of `sdk.ts` (3322 lines to 2879). It imports modules `sdk.ts`
+ * already reached, so the launch runs no new code.
+ *
+ * 1570 to 1571: `session/tool-session.ts`, the tool session a session's tools run against and the
+ * advisor's derived view of it, split out of `sdk.ts` (2705 lines to 2524). It imports modules
+ * `sdk.ts` already reached, so the launch runs no new code.
+ *
+ * 1571 to 1572: `session/prompt-inputs.ts`, the project inputs a session's system prompt renders
+ * and their re-discovery after a working-directory change, split out of `sdk.ts` (2524 lines to
+ * 2281) with the MCP startup that moved into `session/factory-mcp.ts`. It imports modules
+ * `sdk.ts` already reached, so the launch runs no new code.
+ *
+ * 1572 to 1577: `session/startup-extensions.ts`, `session/startup-background.ts`,
+ * `session/startup-records.ts`, `session/async-jobs.ts` and `secrets/request-leases.ts`, the
+ * extension and custom-command load, the Codex prewarm and language-server warmup, the argot arm
+ * and start records, the owned background-job manager and the secret lease each request in flight
+ * was admitted under, split out of `sdk.ts` (2269 lines to 1768) with the custom tools and the
+ * tool registry that moved into `session/factory-tools.ts`. They import modules `sdk.ts` already
+ * reached, so the launch runs no new code.
+ *
+ * 1577 to 1578: `hosts/terminal/engine/src/core/paint-sequences.ts`, the escape sequence each
+ * paint shape writes, split out of `core/tui.ts`. It imports `@veyyon/utils/deccara`,
+ * `@veyyon/utils/math` and engine modules the root already reached, so the launch runs no new
+ * code. `core/frame-plan.ts`, split out with it, is imported by type only and is not on the graph.
+ *
+ * 1578 to 1595 (fork), measured 2026-09-27 after the santhreal merge up to e4967b27fd04: the
+ * seventeen modules this graph reaches that upstream does not carry. Six are the ChatGPT-web
+ * provider and vision input (`ai/providers/openai-codex/{chatgpt-web-trusted-context,chatgpt-web-turn-stamp}.ts`,
+ * `ai/providers/vision-content.ts`, `ai/registry/chatgpt-web.ts`,
+ * `catalog/{discovery,provider-models}/chatgpt-web.ts`); two are the native control host
+ * (`native-control/{telegram-control-bridge,telegram-control-host}.ts`); two are the task lane's
+ * replenishment and ledger bridge (`task/topic-replenishment.ts`, `task/native-ledger-bridge.py`);
+ * two are the refusal fence (`tools/core/{refusal-fence,execution-registry}.ts`), the choke point
+ * every tool invocation passes through; two are the session liveness records
+ * (`utils/{inflight-marker,session-heartbeat}.ts`); and the rest are `async/async-delivery.ts`,
+ * `kernel/session/terminal-ownership.ts` and the engine's `windows-altgr.ts`.
+ *
+ * 1595 to 1599 (fork), measured 2026-09-27 after merging fork main through c5930dc653:
+ * `session/runtime/max-concurrency-runtime.ts`, the `agent.maxConcurrency` resize collaborator
+ * split out of `agent-session.ts`, and `tools/core/polysim-main-guard.ts` with the modules it
+ * imports that the graph did not reach before.
  *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1561;
+const LAUNCH_REACH_CEILING = 1599;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

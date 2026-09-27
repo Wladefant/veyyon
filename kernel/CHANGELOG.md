@@ -22,6 +22,32 @@
 - Session activation rejects a transcript owned by a registered live terminal before opening a second writer ([#88](https://github.com/Wladefant/veyyon/issues/88)).
 - Assert terminal writer ownership cleanly when switching session files and remove unused title slot parsing in session manager ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Outbound tool ID canonicalization preserves native Responses call/result pairs instead of shortening only the visible blocks, so ChatGPT-Web host-tool continuations receive the actual result rather than an orphan-result note ([#22](https://github.com/Wladefant/veyyon/issues/22)).
+### Added
+
+- A tool domain manifest can list `resultCodecs`, each a `ToolResultCodec` whose `slim` drops a result `details` field the result's content rebuilds when the session writes the entry and whose `restore` rebuilds it when the session loads.
+- `SessionStorage` has an optional `rewriteTailAtomic` that replaces a file atomically with its first `keepBytes` bytes, a new head written over their start, and a new tail; `FileSessionStorage` implements it, and a backend without it receives whole-file writes.
+- `SessionManager.getMCPToolSelection()` returns the tool names the newest `mcp_tool_selection` entry on the context branch records, or `undefined` when the branch records none, without rebuilding the branch's messages; `resolveContextLeaf` is the rule `buildSessionContext` and that read share for which entry a context is built up to.
+
+### Changed
+
+- Opening or restoring a session builds its set of known entry ids once instead of twice, which takes about 40ms off opening a 220,000-entry session.
+- The resume warning flattens each command or path onto one line through the shared `collapseWhitespace` helper; no user-visible change.
+- A `tool_execution_start` session entry writes no `startedAt`, since the entry's own timestamp holds the start time, and writes its argument summary only when no preceding assistant message records the call, which cut the start markers in local sessions from 581.83 MB to 403.91 MB; a marker that wrote `startedAt` still reads back that time.
+- The `ToolResultCodec` contract permits a codec to rebuild a dropped field from the details the written line keeps as well as from the result's content; no behavior change.
+- Opening a session points every loaded string of 64 characters or more at one shared copy of its text, whether parsed from the file or read back from the blob store, and keeps no pooled string once the load returns, which cut the heap of a loaded 372.7 MiB session from 608.7 MiB to 401.7 MiB for 136 ms more load time.
+- Rebuilding a session context locates the applied compaction by searching from the end of the branch, which takes about 7ms off each rebuild of a 238,084-entry branch.
+- `SessionManager.rewriteEntries` takes the entries a caller changed in place and rewrites the session file from the earliest of them on, keeping the bytes before it without parsing or serializing them, which cut the rewrite after a one-entry prune on a 376 MiB, 109,360-entry session from 1.2 s to 135 ms.
+- The session listing matches a `--resume` argument against a transcript filename through `sessionFileMatchesResumeArgument` from `@veyyon/utils/session-file`, the matcher the startup profile lookup uses; no user-visible change.
+- The first rewrite after resuming a session keeps the file's bytes before the earliest updated entry and reads nothing back when the loaded file holds one clean record per line, which cut the first-turn prune rewrite of a resumed 39 MB, 13,470-entry session from one whole-file write plus a 39 MB read to a partial write with no read.
+- `SessionInfo.messageCount` documents that it counts the messages in the scanned prefix and is a lower bound for a longer session; no behavior change.
+
+### Fixed
+
+- The resume warning for tool calls left without a result lists at most three calls, each command or path cut to 80 characters on one line, followed by "and N more", and no longer counts a `<id>_2` repeat of a call its original id already answered.
+- A tool call recorded in an OpenAI Responses or Codex native history payload keeps its provider id through outbound canonicalization, so its result is sent as that call's output instead of a stale-output note after a "No tool output was recorded" placeholder on every turn.
+- A session file under 8 MiB opened for a partial rewrite no longer keeps its whole text alive through the header line the loaded layout holds, which held a second copy of the file for as long as the session stayed open.
+- `isSamplingKnob` answers `false` for a name inherited from `Object.prototype`, such as `toString` or `constructor`, instead of `true`.
+
 ## [1.5.5] - 2026-09-25
 
 ### Changed
