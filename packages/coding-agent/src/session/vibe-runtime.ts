@@ -329,6 +329,8 @@ export class VibeSessionRegistry {
 		const owner = session.getAgentId?.() ?? MAIN_AGENT_ID;
 		const manager = this.#manager(session);
 		const agentName = VIBE_CLI_AGENT[args.cli];
+		// Same as the task tool: a config.yml edit since the last spawn applies before routing is read.
+		await session.settings.reloadConfigIfChanged();
 		const { agents } = await discoverAgents(session.cwd);
 		if (!agentsEnabled(session.settings)) {
 			throw new ToolError(`Cannot start vibe worker "${agentName}": agents are disabled in settings.`);

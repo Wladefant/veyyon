@@ -20,6 +20,7 @@
 
 ### Fixed
 - Fixed an agent woken by an IRC message missing from the terminal Agents block while the status badge counted it as running: the block now follows the agent registry for a spawn it reported, listing it while the woken turn runs and dropping it when the turn ends ([#87](https://github.com/Wladefant/veyyon/issues/87))
+- Fixed an edit to `config.yml` agent pins (`agent.agents.<name>.model`, `modelRoles`, effort) not reaching the next `task`, eval `agent()` or vibe spawn until `/reload-config` ran; each spawn now applies config-file edits made since the last one, and a malformed edit keeps the active routing ([#110](https://github.com/Wladefant/veyyon/issues/110)).
 - Fixed reviewer agents being unable to delegate to the task agent, because their spawn allowlist named only scout ([#181](https://github.com/Wladefant/veyyon/issues/181)).
 - Fixed `/reload-config` ignoring a changed `agent.maxConcurrency`: the new ceiling is now applied, and a raised one admits lanes already queued for a slot at once ([Refs Wladefant/veyyon#176](https://github.com/Wladefant/veyyon/issues/176)).
 - Fixed a terminal provider error on the continuation turn after a failed tool result silently ending the run with no durable record of why: when retry, model fallback, and compaction decline an empty error turn, it is now persisted in session history so the provider errorMessage is preserved in JSONL ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
