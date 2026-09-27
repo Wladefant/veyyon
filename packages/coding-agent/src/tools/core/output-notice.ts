@@ -88,13 +88,23 @@ export interface DiagnosticMeta {
 }
 
 /**
+ * The unit a per-line column cap was enforced in: UTF-8 `bytes` for the streaming output sink and
+ * grep, UTF-16 code units (`chars`) for `read`.
+ */
+export type ColumnUnit = "bytes" | "chars";
+
+/**
  * Limit-specific notices.
  */
 export interface LimitsMeta {
 	matchLimit?: { reached: number; suggestion: number };
 	resultLimit?: { reached: number; suggestion: number };
 	headLimit?: { reached: number; suggestion: number };
-	columnTruncated?: { maxColumn: number; unit?: "bytes" | "chars"; artifactId?: string };
+	/**
+	 * `unit` is absent in results persisted before it was recorded; those notices read "chars".
+	 * `artifactId` names the raw, uncapped capture the producer mirrored, when there is one.
+	 */
+	columnTruncated?: { maxColumn: number; unit?: ColumnUnit; artifactId?: string };
 }
 
 /**
@@ -301,6 +311,23 @@ export function formatTruncationMetaNotice(truncation: TruncationMeta): string {
 	return notice;
 }
 
+/**
+ * The per-line column-cap notice, or `undefined` when no line was cut.
+ */
+export function formatColumnTruncatedNotice(meta: OutputMeta): string | undefined {
+	const c = meta.limits?.columnTruncated;
+	if (!c) return undefined;
+	// A result persisted before the unit field carries only `maxColumn`, and its body says
+	// "chars". Rendering anything else would print "… 768 undefined" on resume and stop
+	// `stripOutputNotice` matching the persisted text.
+	const notice = `Some lines truncated to ${c.maxColumn} ${c.unit ?? "chars"}`;
+	// The window notice already names the same capture when the output was also window-truncated.
+	if (c.artifactId != null && c.artifactId !== meta.truncation?.artifactId) {
+		return `${notice}. ${formatFullOutputReference(c.artifactId)}`;
+	}
+	return notice;
+}
+
 export function formatOutputNotice(meta: OutputMeta | undefined): string {
 	if (!meta) return "";
 
@@ -324,9 +351,8 @@ export function formatOutputNotice(meta: OutputMeta | undefined): string {
 		const l = meta.limits.headLimit;
 		parts.push(`${l.reached} results limit reached. Use limit=${l.suggestion} for more`);
 	}
-	if (meta.limits?.columnTruncated) {
-		parts.push(`Some lines truncated to ${meta.limits.columnTruncated.maxColumn} chars`);
-	}
+	const columnNotice = formatColumnTruncatedNotice(meta);
+	if (columnNotice) parts.push(columnNotice);
 
 	// Diagnostics
 	let diagnosticsNotice = "";

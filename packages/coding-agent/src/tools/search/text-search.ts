@@ -15,7 +15,7 @@ import {
 	type TruncationResult,
 	type TruncationSummary,
 	truncateHead,
-	truncateLine,
+	truncateLineBytes,
 	truncationSummary,
 } from "../../session/streaming-output";
 import { resolveFileDisplayMode } from "../../utils/file-display-mode";
@@ -488,7 +488,7 @@ async function nativeChunkedLineIndexes(
 }
 
 function makeContextLine(lines: readonly string[], lineIndex: number): NonNullable<GrepMatch["contextBefore"]>[number] {
-	const { text, wasTruncated } = truncateLine(lines[lineIndex] ?? "", DEFAULT_MAX_COLUMN);
+	const { text, wasTruncated } = truncateLineBytes(lines[lineIndex] ?? "", DEFAULT_MAX_COLUMN);
 	return {
 		lineNumber: lineIndex + 1,
 		line: text,
@@ -506,7 +506,7 @@ function makeVirtualMatch(
 	nextMatchLine: number,
 ): GrepMatch {
 	const lineNumber = lineIndex + 1;
-	const { text, wasTruncated } = truncateLine(lines[lineIndex] ?? "", DEFAULT_MAX_COLUMN);
+	const { text, wasTruncated } = truncateLineBytes(lines[lineIndex] ?? "", DEFAULT_MAX_COLUMN);
 	const match: GrepMatch = {
 		path: resource.path,
 		lineNumber,
@@ -1668,7 +1668,7 @@ async function presentTextSearch(
 	if (linesTruncated) details.linesTruncated = true;
 	const resultBuilder = toolResult(details)
 		.text(shown.output)
-		.limits({ columnMax: linesTruncated ? DEFAULT_MAX_COLUMN : undefined });
+		.limits({ columnMax: linesTruncated ? DEFAULT_MAX_COLUMN : undefined, columnUnit: "bytes" });
 	if (truncation?.truncated) {
 		resultBuilder.truncation(truncation, { direction: "head", artifactId: spillArtifactId });
 	}
