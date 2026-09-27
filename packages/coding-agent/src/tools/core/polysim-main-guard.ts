@@ -26,6 +26,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { trimTrailingSlashes, URL_SCHEME_PREFIX_RE } from "@veyyon/utils/url";
 import { resolveRepositorySync } from "../../utils/git-head";
 import {
 	INTERPRETED_SCRIPT_COMMANDS,
@@ -102,12 +103,8 @@ function repositorySlugOf(location: string): string | undefined {
 	} catch {
 		// A malformed escape is left as written; the server would not decode it either.
 	}
-	text = text
-		.toLowerCase()
-		.replace(/[?#].*$/, "")
-		.replace(/\/+$/, "")
-		.replace(/\.git$/, "")
-		.replace(/\/+$/, "");
+	text = trimTrailingSlashes(text.toLowerCase().replace(/[?#].*$/, "")).replace(/\.git$/, "");
+	// `a/b/.git` leaves an empty last part; the filter drops it.
 	const parts = text.split(/[/:]+/).filter(Boolean);
 	return parts.length < 2 ? undefined : `${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
 }
@@ -948,13 +945,17 @@ function normalizeEndpoint(endpoint: string): string {
 	} catch {
 		// Keep a malformed escape as written; GitHub would reject it.
 	}
-	return text
-		.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]+\//i, "")
+	// `https://host/…` loses its scheme and host; a bare `api.github.com/…` its host.
+	if (URL_SCHEME_PREFIX_RE.test(text)) {
+		const rest = text.replace(URL_SCHEME_PREFIX_RE, "");
+		text = rest.slice(rest.indexOf("/") + 1);
+	}
+	text = text
 		.replace(/^[\w.-]*api\.github\.com\//i, "")
-		.replace(/^api\/v3\//i, "")
+		.replace(/^\/*api\/v3\//i, "")
 		.replace(/[?#].*$/, "")
-		.replace(/^\/+|\/+$/g, "")
-		.toLowerCase();
+		.replace(/^\/+/, "");
+	return trimTrailingSlashes(text).toLowerCase();
 }
 
 /**
