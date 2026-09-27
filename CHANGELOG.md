@@ -107,12 +107,14 @@
 - `veyyon --resume <id>` for a session from another project reopens that session in place and moves the launch into its recorded working directory, instead of prompting to fork it into the launch directory or failing without a terminal; an explicit `--cwd` moves the session's working directory there instead.
 - `veyyon --resume <id>` runs under the profile whose sessions directory holds the session, instead of the profile the launch started in; an explicit `--profile` takes precedence.
 - The advisor's tools read the primary tool session live, so an advisor `ask` delivers the host notification, an advisor `task` label rides the session's side transport, and an advisor spawn after a working-directory change inherits the new context files, workspace tree, skills and rules instead of the launch ones.
+- Clearing the transcript for a rebuild (resume switch, `/shake`, compaction, a display setting) releases the discarded blocks and their rendered rows before the new blocks are built instead of holding both trees until the next frame, cutting the retained heap at a rebuild of a 13,470-entry transcript from 264.7 MiB to 157.0 MiB.
 - A Cursor turn whose remote agent stops making progress now ends with "Cursor made no progress for Ns" at the 30-minute ceiling instead of hanging indefinitely, because Cursor's ten-second server heartbeat no longer counts as progress.
 - A Cursor turn held by a local tool that never returns now ends when its failure or an abort arrives instead of waiting on the tool forever.
 - Fixed every Cursor exec-channel tool call being stored twice in the assistant message, which left an unanswered copy of each call that session resume reported as pending.
 - A blank user or developer message after a tool result no longer sends Mistral two consecutive assistant turns, which it rejects.
 - The resume warning for tool calls left without a result lists at most three calls, each command or path cut to 80 characters on one line, followed by "and N more", and no longer counts a `<id>_2` repeat of a call its original id already answered.
 - A tool call recorded in an OpenAI Responses or Codex native history payload keeps its provider id through outbound canonicalization, so its result is sent as that call's output instead of a stale-output note after a "No tool output was recorded" placeholder on every turn.
+- `Container.clear()` releases the row arrays its discarded children last rendered instead of holding them until the next render.
 - `@veyyon/utils/stderr-guard` loads `node:util` on the first routed console call rather than at import, keeping it off the launch card path; no user-visible change.
 
 ## [1.5.5] - 2026-09-25
