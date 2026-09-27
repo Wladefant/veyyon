@@ -23,6 +23,7 @@
 - Strict-mode schema sanitization splits into `$ref` and single-`allOf` inlining, a type-union splitter and a per-keyword rewrite instead of one 240-line function, cutting sanitization of 40 deep tool schemas from 8.49 ms to 7.64 ms with identical output across 100,000 generated schemas.
 - The Google, Cloud Code Assist, MCP and Moonshot schema normalizers split a node's walk into parent-level rewrites, a const-union collapse and type and object-shape settling steps instead of one 140-line function; output is identical across 200,000 generated schemas and normalization time is unchanged.
 - The Google, Cloud Code Assist, MCP and Moonshot normalizers walk a `properties` or definitions map by entry instead of copying their options for every key, and Cloud Code Assist's nullable pass walks each property subtree once instead of twice per nesting level, cutting normalization of the 25 built-in tool schemas by 13% to 23% and of a 16-level nested schema for Cloud Code Assist from 62.7 ms to 0.1 ms.
+- The JSON Schema value validator walks one instance path it pushes and pops instead of copying the path into every child, applies each keyword group in its own step, and lists an object's keys and builds its type list only when a keyword reads them, cutting validation of a 60-entry tool argument from 45 µs to 22 µs with identical issues across 600,000 generated schemas and values.
 
 ### Fixed
 

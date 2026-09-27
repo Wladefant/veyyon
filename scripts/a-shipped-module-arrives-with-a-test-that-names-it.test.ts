@@ -263,7 +263,6 @@ const NAMED_BY_NO_TEST: readonly string[] = [
 	"packages/ai/src/utils/schema/adapt.ts",
 	"packages/ai/src/utils/schema/dereference.ts",
 	"packages/ai/src/utils/schema/equality.ts",
-	"packages/ai/src/utils/schema/json-schema-validator.ts",
 	"packages/ai/src/utils/schema/meta-validator.ts",
 	"packages/ai/src/utils/schema/multiple-of.ts",
 	"packages/ai/src/utils/schema/spill.ts",
