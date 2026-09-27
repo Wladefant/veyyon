@@ -52,8 +52,15 @@ impl ChildProcess {
 	) -> Self {
 		#[cfg(windows)]
 		let kill_handle = child.raw_handle().and_then(duplicate_handle);
+		// Open first, then prove the PID is still our unreaped child: a pidfd
+		// opened after the check could pin a process that reused the PID in
+		// between, while one opened before it pins whatever held the PID at
+		// open time, which the check then confirms was the child.
 		#[cfg(target_os = "linux")]
-		let kill_pidfd = pid.filter(|&pid| is_unreaped_child(pid)).and_then(open_pidfd);
+		let kill_pidfd = pid
+			.and_then(|pid| open_pidfd(pid).map(|fd| (pid, fd)))
+			.filter(|(pid, _)| is_unreaped_child(*pid))
+			.map(|(_, fd)| fd);
 
 		Self {
 			exec_future: Box::pin(child.wait_with_output()),
