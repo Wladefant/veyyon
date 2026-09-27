@@ -6,6 +6,7 @@
 
 ### Added
 
+- Hard-refusal fail-closed guard preventing any agent from merging a PR or pushing to `main` on `Bavariance/polysimulator` across `git push`, `gh pr merge`, `gh api` and the `github` tool ([#174](https://github.com/Wladefant/veyyon/pull/174)).
 - Terminate the mnemopi embedding worker subprocess after a configurable idle period (`mnemopi.embedIdleUnloadMs`, default 5 minutes, clamped to the 2147483647 ms a `setTimeout` delay can hold) and lazily relaunch it on the next embed request, releasing the loaded ONNX model's ~1.25 GB commit charge during idle periods ([#54](https://github.com/Wladefant/veyyon/issues/54)).
 - Expose the live worker registry and targeted messaging over IrcBus to the Telegram control bridge ([#38](https://github.com/Wladefant/veyyon/issues/38)).
 - `api.listWorkers()` and `api.steerWorker()` expose an extension's own live workers and targeted steering, scoped to the conversation the extension is loaded in ([#38](https://github.com/Wladefant/veyyon/issues/38)).
@@ -13,6 +14,8 @@
 - A session that dies below JavaScript outside a tool call is now reported on the next launch as `Previous session died silently`, with the phase it was in (`provider`, `tool`, `compaction`, `idle`), its session id, and the count of busy spawned lanes ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 - Added `summarizeRemoteCompactionWindow` and staged summary checkpoints to resume summarization across partial failures.
 - A `chatgpt-web` provider definition for the local `codex-chatgpt-web` Responses bridge. It carries no `login` and no `refreshToken`: the bridge authenticates its own browser side through a Chrome profile the operator signs in to once with the daemon's `setup` command, and its catalog bearer comes from the environment (`CODEX_CHATGPT_WEB_OAUTH_TOKEN`, then `OPENAI_CODEX_OAUTH_TOKEN`). The official `openai-codex` provider keeps its own flow, credentials and host unchanged.
+- `SettingsStore.configSourceStamp()` returns a digest of every config file a reload reads, so a caller can skip a reload when nothing on disk changed ([#110](https://github.com/Wladefant/veyyon/issues/110)).
+- `ToolApprovalDecision` supports `deny?: boolean` to declare hard-refusal tool calls that bypass approval prompts and fail closed.
 - Added `naturalWidth()`, `isSearchable()`, and `cancel()` to `SelectList`, alongside `ComponentScopedRender` and dynamic viewport adaptations.
 - Added `getDbBusyTimeoutMs()`, `isInteractiveHost()`, and `setInteractiveHost()` to `@veyyon/utils/env`, bounding SQLite busy waits to 1s in headless hosts while preserving 5s for interactive hosts ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - `@veyyon/utils/inflight-marker` atomically records each concurrent tool call independently and durably reports abandoned calls in the normal dated log before removing their markers, including Linux zombies ([#73](https://github.com/Wladefant/veyyon/issues/73)).
@@ -42,6 +45,9 @@
 
 ### Fixed
 
+- Fixed an edit to `config.yml` agent pins (`agent.agents.<name>.model`, `modelRoles`, effort) not reaching the next `task`, eval `agent()` or vibe spawn until `/reload-config` ran; each spawn now applies config-file edits made since the last one, and a malformed edit keeps the active routing ([#110](https://github.com/Wladefant/veyyon/issues/110)).
+- Fixed reviewer agents being unable to delegate to the task agent, because their spawn allowlist named only scout ([#181](https://github.com/Wladefant/veyyon/issues/181)).
+- Fixed `/reload-config` ignoring a changed `agent.maxConcurrency`: the new ceiling is now applied, and a raised one admits lanes already queued for a slot at once ([Refs Wladefant/veyyon#176](https://github.com/Wladefant/veyyon/issues/176)).
 - Fixed a terminal provider error on the continuation turn after a failed tool result silently ending the run with no durable record of why: when retry, model fallback, and compaction decline an empty error turn, it is now persisted in session history so the provider errorMessage is preserved in JSONL ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Empty context-overflow error turns are no longer persisted to session history when compaction and promotion are disabled or unavailable, preventing overflowed context from re-sending on session reload ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed auto-retry wedging the session when a failed assistant tail was recreated during retry: the retry path now positionally strips a still-failed assistant tail and closes the retry saga if continuation fails locally ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
@@ -118,6 +124,7 @@
 - Bridge-routed Codex requests now carry an explicit host-owned environment envelope for ordinary Full-mode `codex-chatgpt-web` turns, including text-only turns. The envelope is stamped with the current turn id and placed immediately before its user item, rather than relying on daemon instruction or thread-cache fallbacks. It names the caller's absolute session working directory and declares `permission_profile type="disabled"` with `file_system type="unrestricted"`: Veyyon provides no filesystem sandbox, and tool execution still goes through Veyyon's own gated tool layer. Missing or relative cwd produces a warning and no invented envelope; the daemon may refuse or use its other trusted context. Compaction disables local tools and does not require the envelope; sending it preserves the compaction source key, though its execution key can change. The existing provider/loopback gate leaves official OpenAI and other Codex-compatible request bodies unchanged. Real-account models, turn, cancellation and tool-call smoke remain unverified.
 - A ChatGPT Web turn served by a borrowed `openai-codex` OAuth row now rotates and blocks that Codex account: a 401 moves the session to an eligible sibling Codex account and a usage-limit event blocks the account that served, instead of acting on a `chatgpt-web` identity that has no stored row. A dedicated ChatGPT Web credential keeps taking precedence and keeps rotating and blocking on its own row.
 - Fixed Cursor duplicate tool execution on re-sent requests and prevented EventStream from leaking waiting resolvers on early abort.
+- `COMMAND_CODE_COSTS` uses plain string keys instead of computed `["…"]` keys, which Biome's `useLiteralKeys` rule rejected; no behavior change.
 - Claude Opus 5.5 downgrades forced tool choice (`supportsForcedToolChoice: false`) to avoid 400 invalid_request_error rejections, and default models for anthropic, amazon-bedrock, and litellm promote to Opus 5.5.
 - `calculateCost` and `resolveRequestCost` fall back to zero pricing for unconstructed model objects missing an explicit `cost` property.
 - Finalized SQLite statement handles in `modelCacheStamp` to prevent statement handle accumulation on shared databases.

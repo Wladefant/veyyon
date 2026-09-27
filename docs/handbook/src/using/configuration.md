@@ -51,13 +51,22 @@ A superseded request rejects without changing live routing; retry the command to
 
 **Hot-reloadable:** non-startup `modelRoles.<role>` values, `agent.agents` lane
 settings (including nested `model` and `thinkingLevel`), `agent.model`,
-`agent.sharedModel`, and `agent.thinkingLevel`. Legacy `subagent.*` spellings
+`agent.sharedModel`, `agent.thinkingLevel`, and `agent.maxConcurrency`. A raised
+`agent.maxConcurrency` admits lanes already queued for a slot at once; a lowered one
+admits nothing new and lets running lanes finish. Legacy `subagent.*` spellings
 are migrated to `agent.*` when read, so feedback uses the canonical names.
 Runtime/CLI overrides retain precedence. Shared model/effort settings govern spawns
 only when `agent.sharedModel` is enabled; otherwise per-agent lanes govern them.
 Task, eval and vibe dispatch capture one settings snapshot before resolving a model
 or effort and before asynchronous allocation. A spawn already being prepared keeps
 that snapshot; the next spawn reads the accepted routing. Existing workers are unchanged.
+
+Each task, eval and vibe spawn also applies config-file edits by itself, so an edited
+agent pin reaches the next spawn without `/reload-config`. Before it takes that snapshot,
+the dispatcher hashes the same files the command reads; when they differ from the last
+spawn, it runs the same reload. A rejected reload (a malformed file, an invalid value, a
+save in flight) does not fail the spawn: the spawn keeps the active routing, the warning is
+logged once per file state, and the next spawn retries.
 
 **Restart-only:** `defaultEffort`, `modelRoles.default`, `modelRoles.advisor`, and
 all settings outside the routing set above. If the current default or advisor role
@@ -86,7 +95,7 @@ overlapping requests and commits the applicable leaves synchronously.
 
 **Running Main is never rebound.** Use explicit session model/effort controls to
 change Main. Settings outside this narrow routing reload—including tools, provider
-initialization, transports, lifecycle/concurrency, plugins, UI and role presentation
+initialization, transports, lifecycle, concurrency limits other than `agent.maxConcurrency`, plugins, UI and role presentation
 metadata—retain their active values and report changed keys as requiring restart.
 Credentials, environment variables, agent definitions/prompts, catalogs and profile
 selection are not reloaded.
