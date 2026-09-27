@@ -220,11 +220,16 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * (`utils/{inflight-marker,session-heartbeat}.ts`); and the rest are `async/async-delivery.ts`,
  * `kernel/session/terminal-ownership.ts` and the engine's `windows-altgr.ts`.
  *
+ * 1595 to 1599 (fork), measured 2026-09-27 after merging fork main through c5930dc653:
+ * `session/runtime/max-concurrency-runtime.ts`, the `agent.maxConcurrency` resize collaborator
+ * split out of `agent-session.ts`, and `tools/core/polysim-main-guard.ts` with the modules it
+ * imports that the graph did not reach before.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1598;
+const LAUNCH_REACH_CEILING = 1599;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
