@@ -148,6 +148,7 @@
 - Turning Settings → Providers → Import Other Tools' Config on or off applies to the next discovery load in the running session and leaves `disabledProviders` unchanged, instead of adding or removing a provider named `importForeignConfig` there and taking effect only in the next session.
 - Turning Settings → Appearance → Show Inline Images on or off redraws the transcript under the new value, instead of leaving the images on cards already drawn.
 - Closing `/settings`, flipping an appearance toggle there or hovering a status line preset keeps the configured `statusLine.segmentOptions` on the status line, instead of resetting them to the preset's until the next unrelated resync.
+- `sanitizeSchemaForStrictMode` keeps a `nullable: true` node nullable at every reference, so a schema that reuses one nullable object in two places no longer drops the `null` branch from the second, and a nullable node that references itself resolves to its nullable form.
 - A tool-argument rejection bounds each issue line to 256 characters before appending the field's accepted values, so an oversized rejected value no longer cuts the legal values out of the failure.
 - A Cursor turn whose remote agent stops making progress now ends with "Cursor made no progress for Ns" at the 30-minute ceiling instead of hanging indefinitely, because Cursor's ten-second server heartbeat no longer counts as progress.
 - A Cursor turn held by a local tool that never returns now ends when its failure or an abort arrives instead of waiting on the tool forever.
