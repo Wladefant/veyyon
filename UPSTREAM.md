@@ -23,3 +23,41 @@ oh-my-pi   https://github.com/can1357/oh-my-pi.git
 
 What was forked, what diverged since, the port pipeline, and how to review a
 candidate port: [porting guide](docs/internal/porting-from-pi-mono.md).
+
+## Keeping Wladefant/veyyon current
+
+This fork of santhreal/veyyon has two upstreams, in a line:
+
+```
+oh-my-pi (can1357/oh-my-pi) --snapshot 79faf94f2651--> santhreal/veyyon --git history--> Wladefant/veyyon
+```
+
+santhreal's root commit `6dbf3350c2e8` imported one oh-my-pi tree and renamed it, so git shares
+history with santhreal and none with oh-my-pi. The fork gets santhreal by merging it; oh-my-pi
+commits arrive only as ports, matched by the SHA a port cites or by their added lines.
+
+```sh
+git remote add upstream https://github.com/santhreal/veyyon.git   # once
+git remote add omp https://github.com/can1357/oh-my-pi.git         # once
+git fetch upstream && git fetch omp --no-tags                      # the first omp fetch takes minutes
+bun run upstream:status                                            # a few minutes: it diffs every omp commit
+```
+
+`scripts/upstream-status.ts` prints the santhreal gap, how many oh-my-pi commits since the snapshot
+each carrier already has (`cited-*` by a SHA or pull request a message or fork PR names, `content-*`
+by 70% of added lines), and the missing follow-ups: oh-my-pi commits that rewrite a line of a commit
+already carried. `--format tsv` lists every commit with its class for triage.
+
+The order, every time:
+
+1. **Merge santhreal first**, as its own pull request: `git merge --no-ff upstream/main`. santhreal
+   ports oh-my-pi itself, so everything it carries stops being a candidate. A sync or conflict-only
+   merge gets no review; it merges on green checks.
+2. **Port the missing follow-ups** of commits already carried, before anything new. A port without
+   its follow-up ships the defect upstream already fixed.
+3. **Triage the rest** by area from the TSV: take as is, take with rework, or leave out with a reason.
+
+A port pull request cites the oh-my-pi commit as `oh-my-pi <full sha>` in its body, so the next
+status run counts it, and carries the follow-ups the report lists for that commit or says why not.
+An automated review finding on the final head is answered in its thread, fixed or rejected with a
+reason, before merge; a gate (size ratchet, spy ledger) is never raised to turn a port green.
