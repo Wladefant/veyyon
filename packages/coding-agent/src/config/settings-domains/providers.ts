@@ -591,7 +591,7 @@ export const PROVIDERS_SETTINGS = {
 	},
 	"providers.fetch": {
 		type: "enum",
-		values: ["auto", "native", "trafilatura", "lynx", "parallel", "jina"] as const,
+		values: ["auto", "native", "trafilatura", "lynx", "parallel", "jina", "firecrawl"] as const,
 		default: "auto",
 		ui: {
 			tab: "providers",
@@ -602,13 +602,14 @@ export const PROVIDERS_SETTINGS = {
 				{
 					value: "auto",
 					label: "Auto",
-					description: "Priority: native > trafilatura > lynx > parallel > jina",
+					description: "Priority: native > trafilatura > lynx > parallel > jina > firecrawl",
 				},
 				{ value: "native", label: "Native", description: "In-process HTML→Markdown converter (always available)" },
 				{ value: "trafilatura", label: "Trafilatura", description: "Auto-installs via uv/pip" },
 				{ value: "lynx", label: "Lynx", description: "Requires lynx system package" },
 				{ value: "parallel", label: "Parallel", description: "Requires PARALLEL_API_KEY" },
 				{ value: "jina", label: "Jina", description: "Uses r.jina.ai reader (JINA_API_KEY optional)" },
+				{ value: "firecrawl", label: "Firecrawl", description: "Uses Firecrawl scrape API (cloud or self-hosted)" },
 			],
 		},
 	},
@@ -724,6 +725,28 @@ export const PROVIDERS_SETTINGS = {
 			group: "Services",
 			label: "Exa Websets",
 			description: "Enable Exa webset management and enrichment tools",
+		},
+	},
+	// Firecrawl
+	"firecrawl.endpoint": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "providers",
+			group: "Services",
+			label: "Firecrawl Endpoint",
+			description: "Base URL of Firecrawl API (defaults to https://api.firecrawl.dev)",
+		},
+	},
+
+	"firecrawl.apiKey": {
+		type: "string",
+		default: undefined,
+		ui: {
+			tab: "providers",
+			group: "Services",
+			label: "Firecrawl API Key",
+			description: "API key or auth token for Firecrawl (can also use FIRECRAWL_API_KEY environment variable)",
 		},
 	},
 

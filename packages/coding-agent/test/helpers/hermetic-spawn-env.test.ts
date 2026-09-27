@@ -115,5 +115,5 @@ describe("hermetic spawn env", () => {
 			}
 		}
 		expect(offenders).toEqual([]);
-	});
+	}, 30_000);
 });

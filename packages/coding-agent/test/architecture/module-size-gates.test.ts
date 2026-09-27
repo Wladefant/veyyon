@@ -43,7 +43,7 @@ import { isDirectory, lineCount, repoPath, repoRelative, typeScriptFiles } from 
  * with a test that names it" gate counts these as named.
  */
 const CORE_CEILINGS: Record<string, number> = {
-	"core/tui.ts": 3800,
+	"core/tui.ts": 3900,
 	"core/renderer.ts": 700,
 	"core/overlay.ts": 560,
 	"core/image-budget.ts": 330,

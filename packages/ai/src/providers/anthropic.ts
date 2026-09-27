@@ -2956,8 +2956,8 @@ type SystemBlockOptions = {
  * final system block, so a single trailing breakpoint hashes the whole prefix
  * *including* that block — a new cwd or a midnight rollover then re-writes the
  * entire system cache (issue #7324). This caches the trailing block (full-match
- * reuse when nothing changed) AND the block that ends the stable prefix (the
- * one before the footer), so a footer change only re-writes its own delta.
+ * reuse when nothing changed) AND the stable harness prefix at `firstCacheableIndex`
+ * (preserving the shared prompt prefix across suffix/assignment changes).
  *
  * @returns breakpoints placed (0-2, capped by `maxBreakpoints`).
  */
@@ -2975,8 +2975,8 @@ function cacheSystemPrefixBreakpoints(
 		placed++;
 	}
 	if (placed >= maxBreakpoints) return placed;
-	const stableIndex = lastIndex - 1;
-	if (stableIndex >= firstCacheableIndex && blocks[stableIndex].cache_control == null) {
+	const stableIndex = firstCacheableIndex;
+	if (stableIndex < lastIndex && blocks[stableIndex].cache_control == null) {
 		blocks[stableIndex] = { ...blocks[stableIndex], cache_control: cloneAnthropicCacheControl(cacheControl) };
 		placed++;
 	}

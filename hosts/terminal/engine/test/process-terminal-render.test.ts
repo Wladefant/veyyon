@@ -96,11 +96,14 @@ describe("ProcessTerminal geometry reflow through the renderer", () => {
 
 	it("does not wait for terminal output to drain after input ends on Windows", async () => {
 		Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-		const quit = vi.spyOn(postmortem, "quit").mockResolvedValue(undefined);
+		let quitArgs: unknown[] = [];
+		vi.spyOn(postmortem, "quit").mockImplementation((async (...args: unknown[]) => {
+			quitArgs = args;
+		}) as never);
 		harness = createProcessTerminalRenderHarness(100, 30);
 
 		await harness.endInput();
 
-		expect(quit).toHaveBeenCalledWith(129, { drainStdout: false });
+		expect(quitArgs).toEqual([129, { drainStdout: false }]);
 	});
 });
