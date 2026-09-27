@@ -4,6 +4,7 @@ import { Settings } from "@veyyon/coding-agent/config/settings";
 import type { AgentProgress, SingleResult, TaskToolDetails } from "@veyyon/coding-agent/task/types";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import type { TUI } from "@veyyon/tui";
+import { useFullColor } from "../../../helpers/theme-assertions";
 import { createToolExecution } from "../../../helpers/tool-execution";
 
 function progressEntry(description: string): AgentProgress {
@@ -76,6 +77,9 @@ function finalSnapshot(output: string): {
 // snapshot observes that it left the live region, drops further partial
 // snapshots, and still applies the final (completed) snapshot.
 describe("ToolExecutionComponent detached task freeze", () => {
+	// The frozen-tone case compares accent and dim bytes, which are identical without colour.
+	useFullColor();
+
 	beforeAll(async () => {
 		await Settings.init({ inMemory: true, cwd: process.cwd() });
 		await initTheme();
