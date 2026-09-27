@@ -19,6 +19,7 @@
 - The stream idle watchdog waits on one promise per stalled read that the source, the deadline timer or the abort resolves, instead of racing long-lived timeout and abort promises every item, cutting its per-event overhead on a 200,000-event stream from about 320 ns to 230 ns (wrapped iteration 74 ms to 56 ms) with identical outcomes across 2,159 scripted stream schedules.
 - An OpenAI Codex turn no longer deep-copies its whole request body after the response arrives: SSE turns hold the body as sent and WebSocket turns adopt the copy taken when the frame was built as the chain baseline, cutting the time from response to finished turn on a 27 MiB context from 48.7 to 0.8 ms over SSE and 58.2 to 0.4 ms over WebSocket.
 - The auth gateway's request schemas build in a scope that compiles their validators whatever the process's ArkType configuration, so the jitless CLI validates a 751-message chat-completions request in 42 µs instead of 2.1 ms.
+- The OpenAI Responses stream splits into a request plan, a retry ladder for reasoning-effort, strict-tool and stale-chain rejections, a stream consumer and a chain-baseline recorder instead of one 400-line closure; request bodies and results are identical and a 60-turn chained session takes the same time.
 
 ### Fixed
 
