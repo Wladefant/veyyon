@@ -1605,11 +1605,13 @@ impl TerminationGuard {
 #[allow(clippy::missing_const_for_fn, reason = "Dispatches to platform-specific implementation")]
 #[must_use]
 pub fn kill_process_group(pgid: i32, signal: i32) -> bool {
-	// Defense in depth: refuse to deliver a signal to the harness's own
-	// process group. Doing so terminates the harness along with the targets.
-	// `SpawnRegistry` only ever records pgids brush created for this run (never
-	// the harness pgid); this catches any future caller that bypasses it.
-	if pgid <= 0 || is_self_process_group(pgid) || TerminationGuard::capture().refuses(pgid) {
+	// Defense in depth: refuse to deliver a signal to a process group that
+	// holds the harness or one of its ancestors. Doing so terminates the harness
+	// along with the targets. `SpawnRegistry` only ever records pgids brush
+	// created for this run (never the harness pgid); this catches any future
+	// caller that bypasses it.
+	if pgid <= 0 || group_holds_protected_process(pgid) || TerminationGuard::capture().refuses(pgid)
+	{
 		eprintln!("veyyon-shell: refusing termination of protected process group {pgid}");
 		return false;
 	}
@@ -1617,16 +1619,12 @@ pub fn kill_process_group(pgid: i32, signal: i32) -> bool {
 }
 
 #[cfg(unix)]
-fn is_self_process_group(pgid: i32) -> bool {
-	// SAFETY: `getpgid(0)` queries the calling process's pgid and does not access
-	// caller-owned memory. A return value <= 0 is treated as "unknown", which
-	// fails open so the actual signal call decides.
-	let self_pgid = unsafe { libc::getpgid(0) };
-	self_pgid > 0 && self_pgid == pgid
+fn group_holds_protected_process(pgid: i32) -> bool {
+	brush_core::sys::signal::signal_target_is_protected(-pgid)
 }
 
 #[cfg(not(unix))]
-const fn is_self_process_group(_pgid: i32) -> bool {
+const fn group_holds_protected_process(_pgid: i32) -> bool {
 	false
 }
 

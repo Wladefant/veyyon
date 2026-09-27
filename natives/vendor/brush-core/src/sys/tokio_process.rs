@@ -5,6 +5,11 @@ pub(crate) use tokio::process::Child;
 
 pub(crate) fn spawn(command: std::process::Command) -> std::io::Result<Child> {
 	let mut command = tokio::process::Command::from(command);
+	// On Unix, `ChildProcess`'s drop does the kill and first proves the PID
+	// still names the child; tokio's kill-on-drop signals the bare numeric PID,
+	// which a child reaped elsewhere in the host may already have handed to an
+	// unrelated process. Windows kills through the child's own handle.
+	#[cfg(windows)]
 	command.kill_on_drop(true);
 	// Isolate every external child from the host's console:
 	//

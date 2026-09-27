@@ -4811,3 +4811,6 @@ replace = [{ pattern = "^.+$", replacement = "PWD" }]
 		assert_eq!(named_status.expect("named wait").code(), Some(42));
 	}
 }
+
+#[cfg(all(test, unix))]
+mod a_signal_never_reaches_the_host_or_its_ancestors;
