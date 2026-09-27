@@ -52,7 +52,12 @@ const RUNTIME_DIR = "runtime";
  * one fails here before it fails anywhere useful, which is the point: a
  * collaborator is a decision about where state lives, not a file drop.
  */
-const COLLABORATORS = ["thinking-runtime.ts", "todo-runtime.ts", "ttsr-runtime.ts"] as const;
+const COLLABORATORS = [
+	"max-concurrency-runtime.ts",
+	"thinking-runtime.ts",
+	"todo-runtime.ts",
+	"ttsr-runtime.ts",
+] as const;
 
 /** MEASURED: the larger collaborator is `ttsr-runtime.ts` at 866 lines. */
 const COLLABORATOR_CEILING = 1_000;
