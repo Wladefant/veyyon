@@ -26,6 +26,7 @@
 - The resume warning for tool calls left without a result lists at most three calls, each command or path cut to 80 characters on one line, followed by "and N more", and no longer counts a `<id>_2` repeat of a call its original id already answered.
 - A tool call recorded in an OpenAI Responses or Codex native history payload keeps its provider id through outbound canonicalization, so its result is sent as that call's output instead of a stale-output note after a "No tool output was recorded" placeholder on every turn.
 - A session file under 8 MiB opened for a partial rewrite no longer keeps its whole text alive through the header line the loaded layout holds, which held a second copy of the file for as long as the session stayed open.
+- `isSamplingKnob` answers `false` for a name inherited from `Object.prototype`, such as `toString` or `constructor`, instead of `true`.
 
 ## [1.5.5] - 2026-09-25
 
