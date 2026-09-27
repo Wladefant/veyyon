@@ -153,5 +153,3 @@ is a candidate to **stay on Zod** (external-boundary exception), note it in your
 - Do NOT run build/test/lint/format: the orchestrator runs gates once at the end.
 - Report: files changed, any `.strict`→`"+"`, `.refine`→`.narrow`, `.catch`→morph, and any file you
   intentionally left on Zod (with the reason).
-
-*Verified against `d3e3db30` on 2026-07-23.*
