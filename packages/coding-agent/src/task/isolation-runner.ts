@@ -46,6 +46,37 @@ import {
 
 type IsoBackendKind = natives.IsoBackendKind;
 
+/**
+ * Decide the fate of a half-built task branch after apply-back threw.
+ *
+ * Returns the branch name when it carries at least one commit past `baseSha` —
+ * the caller must keep it, because the isolation worktree that also held those
+ * objects is about to be torn down. Returns `undefined` after deleting a branch
+ * that is absent, empty, or still pinned at the baseline, preserving the
+ * original stale-branch cleanup for the cases where nothing is at stake.
+ *
+ * `revList.range` throws when the branch does not exist, which is the common
+ * "commitToBranch failed before it created anything" path; that is treated as
+ * "nothing to rescue" only after confirming the ref is absent. Other probe
+ * failures preserve the branch because deleting it could lose the only reachable
+ * copy of the agent's commits.
+ */
+async function rescueTaskBranch(repoRoot: string, branchName: string, baseSha: string): Promise<string | undefined> {
+	try {
+		const carriedCommits = (await git.revList.range(repoRoot, baseSha, branchName)).length;
+		if (carriedCommits > 0) return branchName;
+	} catch {
+		try {
+			if (await git.ref.exists(repoRoot, `refs/heads/${branchName}`)) return branchName;
+		} catch {
+			// An inconclusive recovery probe must never risk deleting the only ref.
+			return branchName;
+		}
+	}
+	await git.branch.tryDelete(repoRoot, branchName);
+	return undefined;
+}
+
 /** Resolved repo + baseline used by every isolated spawn in a single call. */
 export interface IsolationContext {
 	repoRoot: string;
@@ -141,9 +172,10 @@ async function writeIsolationPatch(
  * Run a spawned agent inside an isolation worktree and capture its changes.
  *
  * Branch mode: on success, commits the diff onto `veyyon/task/${agentId}` and
- * returns `branchName` + `nestedPatches`. On commit failure the branch is
- * deleted, the still-live isolation diff is written to `${artifactsDir}/${agentId}.patch`,
- * and `result.error` carries the merge-failure message.
+ * returns `branchName` + `nestedPatches`. On commit failure the still-live
+ * isolation diff is written to `${artifactsDir}/${agentId}.patch`, the task
+ * branch is kept when it already carries commits (deleted otherwise), and
+ * `result.error` carries the merge-failure message plus recovery hint.
  *
  * Patch mode: on success, writes `${artifactsDir}/${agentId}.patch` and
  * returns `patchPath` + `nestedPatches`.
@@ -201,9 +233,21 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 					nestedPatches: commitResult?.nestedPatches,
 				};
 			} catch (mergeErr) {
-				// Agent succeeded but branch commit failed — clean up stale branch
+				// Agent succeeded but the branch commit failed. `commitToBranch`
+				// creates `veyyon/task/<id>` before it commits the leftover
+				// working-tree delta, so a throw from that trailing step leaves a
+				// branch that already holds every commit the agent made. The
+				// isolation worktree — the only other copy of those objects — is
+				// destroyed by the `finally` below, so deleting the branch
+				// unconditionally turned a recoverable merge failure into
+				// permanent loss of committed work. Delete only when nothing is
+				// at stake.
+				const baseSha = taskBaseline.root.headCommit;
 				const branchName = `${TASK_BRANCH_PREFIX}${opts.agentId}`;
-				await git.branch.tryDelete(opts.context.repoRoot, branchName);
+				const rescueBranch = await rescueTaskBranch(opts.context.repoRoot, branchName, baseSha);
+				const rescueNote = rescueBranch
+					? `. The agent's commits are preserved on branch ${rescueBranch} — merge or cherry-pick it manually.`
+					: "";
 				const msg = errorMessage(mergeErr);
 				try {
 					const patchResult = await writeIsolationPatch(
@@ -216,11 +260,11 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 						...result,
 						patchPath: patchResult.patchPath,
 						nestedPatches: patchResult.nestedPatches,
-						error: `Merge failed: ${msg}`,
+						error: `Merge failed: ${msg}${rescueNote}`,
 					};
 				} catch (patchErr) {
 					const patchMsg = errorMessage(patchErr);
-					return { ...result, error: `Merge failed: ${msg}; patch capture failed: ${patchMsg}` };
+					return { ...result, error: `Merge failed: ${msg}; patch capture failed: ${patchMsg}${rescueNote}` };
 				}
 			}
 		}
@@ -304,7 +348,7 @@ async function mergeRootChanges(opts: IsolationMergeOptions): Promise<IsolationM
 			if (!result.branchName && result.exitCode === 0 && !result.aborted && result.error) {
 				const patchList = result.patchPath ? `\nPatch artifact:\n- ${result.patchPath}` : "";
 				return {
-					summary: `\n\n<system-notification>Branch merge failed before a task branch could be created: ${result.error}\nTask outputs are preserved but changes were not applied.${patchList}</system-notification>`,
+					summary: `\n\n<system-notification>Branch merge failed while capturing the task branch: ${result.error}\nTask outputs are preserved but changes were not applied.${patchList}</system-notification>`,
 					changesApplied: false,
 					failure: `Merge failed: ${result.error}`,
 					hadAnyChanges: false,

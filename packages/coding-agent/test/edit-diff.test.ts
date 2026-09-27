@@ -8,6 +8,7 @@ import {
 	computeHashlineDiff,
 	DEFAULT_FUZZY_THRESHOLD,
 	findMatch,
+	replaceText,
 } from "@veyyon/coding-agent/edit";
 import { formatHashlineHeader, InMemorySnapshotStore, missingSnapshotTagMessage } from "@veyyon/hashline";
 import { removeWithRetries } from "@veyyon/utils";
@@ -222,6 +223,46 @@ describe("adjustIndentation", () => {
 		const result = adjustIndentation(oldText, actualText, newText);
 		// Should remove up to 4 chars, but line only has 2, so remove 2
 		expect(result).toBe("bar");
+	});
+});
+
+// A replace-all that fuzzy-matches more than once rebuilds the result from the
+// source text plus a list of replacements, so the replacement it inserts can
+// never become a candidate for a later iteration. While the loop rewrote
+// `content` in place, a replacement that reintroduced the search text matched
+// itself, grew the buffer on every pass, and never terminated — the edit tool
+// hung the TUI and exhausted memory instead of reporting a result (#7432).
+describe("replaceText replace-all", () => {
+	test("does not re-match inserted text while replacing all fuzzy source matches", () => {
+		const oldText = "a".repeat(50);
+		const firstActual = `${"a".repeat(49)}b`;
+		const secondActual = `${"a".repeat(44)}cccccc`;
+		const newText = `${oldText}\nexpanded`;
+
+		expect(
+			replaceText(`${firstActual}\n${secondActual}`, oldText, newText, {
+				all: true,
+				fuzzy: true,
+				threshold: 0.8,
+			}),
+		).toEqual({
+			content: `${newText}\n${newText}`,
+			count: 2,
+		});
+	});
+
+	test("rebuilds in source order when the later occurrence is the dominant fuzzy match", () => {
+		const oldText = "b".repeat(40);
+		const firstLate = `${"b".repeat(35)}xxxxx`;
+		const secondDominant = `${"b".repeat(39)}y`;
+		const newText = `${oldText} tail`;
+
+		expect(
+			replaceText(`${firstLate}\n${secondDominant}`, oldText, newText, { all: true, fuzzy: true, threshold: 0.8 }),
+		).toEqual({
+			content: `${newText}\n${newText}`,
+			count: 2,
+		});
 	});
 });
 
