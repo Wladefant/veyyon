@@ -15,6 +15,7 @@ import * as ptree from "@veyyon/utils/ptree";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
 import { $which } from "@veyyon/utils/which";
+import { findFirecrawlApiKey, scrapeWithFirecrawl } from "@veyyon/web/firecrawl";
 import { extractWithParallel, findParallelApiKey, getParallelExtractContent } from "@veyyon/web/parallel";
 import {
 	decodeHtmlEntities,
@@ -675,9 +676,16 @@ async function parseFeedToMarkdown(content: string, maxItems = 10): Promise<stri
 const REMOTE_READER_MAX_MS = 10_000;
 
 /** Reader backends for {@link renderHtmlToText}, in default priority order. */
-export type FetchProvider = "native" | "trafilatura" | "lynx" | "parallel" | "jina";
+export type FetchProvider = "native" | "trafilatura" | "lynx" | "parallel" | "jina" | "firecrawl";
 
-const FETCH_PROVIDER_ORDER: readonly FetchProvider[] = ["native", "trafilatura", "lynx", "parallel", "jina"];
+const FETCH_PROVIDER_ORDER: readonly FetchProvider[] = [
+	"native",
+	"trafilatura",
+	"lynx",
+	"parallel",
+	"jina",
+	"firecrawl",
+];
 
 /**
  * Render HTML to markdown by trying reader backends in priority order: native
@@ -780,6 +788,31 @@ export async function renderHtmlToText(
 						signal: remoteTimeout.signal,
 					});
 					return response.ok ? await response.text() : null;
+				} finally {
+					remoteTimeout.cancel();
+				}
+			},
+			firecrawl: async () => {
+				if (!allowSecondaryReaders) return null;
+				const endpoint = settings.get("firecrawl.endpoint") || process.env.FIRECRAWL_ENDPOINT;
+				const apiKey = settings.get("firecrawl.apiKey");
+				const resolvedKey = findFirecrawlApiKey(storage, apiKey);
+				if (!resolvedKey && !endpoint) return null;
+				const transform = resolveProviderTextTransform(resolveTextTransform, "Firecrawl remote reader");
+				if (transform(url) !== url) return null;
+				const remoteTimeout = scopedTimeoutSignal(remoteBudgetMs, userSignal);
+				try {
+					const result = await scrapeWithFirecrawl(
+						url,
+						{
+							endpoint: endpoint ?? undefined,
+							apiKey: resolvedKey ?? undefined,
+							signal: remoteTimeout.signal,
+							fetch: fetchImpl,
+						},
+						storage,
+					);
+					return result.success && result.markdown ? result.markdown : null;
 				} finally {
 					remoteTimeout.cancel();
 				}
