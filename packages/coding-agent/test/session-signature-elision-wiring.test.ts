@@ -216,7 +216,12 @@ describe("AgentSession wires the signature settings into the request", () => {
 		});
 		expect(agentSession.thoughtSignatureBytesSaved).toBe(0);
 		const context = await transform({ messages }, model);
-		const full = JSON.stringify(convertMessages(model as never, { messages } as never));
+		// The baseline is the same transformed transcript with the cap lifted, not the
+		// raw messages: the transform also rewrites tool-call ids for the wire, and
+		// those bytes are not the signature saving being measured.
+		const full = JSON.stringify(
+			convertMessages(model as never, { ...context, thoughtSignatureMaxLength: undefined } as never),
+		);
 		const capped = JSON.stringify(convertMessages(model as never, context as never));
 		expect(agentSession.thoughtSignatureBytesSaved).toBe(2 * (LARGE.length - SKIP.length));
 		expect(full.length - capped.length).toBe(agentSession.thoughtSignatureBytesSaved);

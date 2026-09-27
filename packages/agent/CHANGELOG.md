@@ -9,6 +9,7 @@
 ### Changed
 
 - Collapsed the intent-length guard in `executeToolCalls` onto the single line the repository formatter requires; no behavior change.
+- Renamed the intent-length rejection local in `executeToolCalls` from `errorText` to `intentRejection`; no behavior change.
 
 ### Fixed
 

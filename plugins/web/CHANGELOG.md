@@ -5,6 +5,7 @@
 ### Changed
 
 - Replaced `any` types in `getNested` scraper utility with `unknown` and preserved user cancellation on scrapers.
+- Firecrawl endpoint normalization strips trailing slashes through the shared `trimTrailingSlashes` helper; no behavior change.
 
 ## [1.5.4] - 2026-09-24
 

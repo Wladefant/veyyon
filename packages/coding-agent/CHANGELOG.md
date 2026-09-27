@@ -16,6 +16,7 @@
 - `ToolSession.getToolChoiceQueue()` now returns `ToolChoiceQueue | undefined`, matching what the SDK's session port can supply before a session or queue exists; the `resolve` tool already guarded the absent case, so the type no longer promises more than the port keeps.
 - Reformatted `sdk.ts`, `async/index.ts`, `extensibility/shared-events.ts`, `modes/terminal/interactive-mode.ts` and `slash-commands/helpers/active-oauth-account.ts` to the repository's formatter and import-order rules; no behavior change.
 - `launch/terminal-control.ts` publishes the terminal-owner record through `atomicWriteFile` instead of hand-rolled temp-file and rename, so the write path has one owner; the record stays atomic and stays mode `0600`.
+- Shortened the `todo` tool description and looked up the `task` tool by its `TOOL.task` name in `sdk.ts`; no behavior change.
 
 ### Fixed
 - Fixed a terminal provider error on the continuation turn after a failed tool result silently ending the run with no durable record of why: when retry, model fallback, and compaction decline an empty error turn, it is now persisted in session history so the provider errorMessage is preserved in JSONL ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).

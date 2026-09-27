@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Loading the provider catalog no longer evaluates arktype: `chatgpt-web` discovery checks its daemon's JSON with `isRecord` instead of four all-`unknown` schemas.
 - Claude Opus 5.5 downgrades forced tool choice (`supportsForcedToolChoice: false`) to avoid 400 invalid_request_error rejections, and default models for anthropic, amazon-bedrock, and litellm promote to Opus 5.5.
 - `calculateCost` and `resolveRequestCost` fall back to zero pricing for unconstructed model objects missing an explicit `cost` property.
 - Finalized SQLite statement handles in `modelCacheStamp` to prevent statement handle accumulation on shared databases.
