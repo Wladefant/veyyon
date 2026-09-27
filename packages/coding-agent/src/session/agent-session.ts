@@ -5067,6 +5067,13 @@ export class AgentSession {
 			// `stopReason === "error"`.
 			if (this.#isClassifierRefusal(msg)) {
 				this.#removeAssistantMessageFromActiveContext(msg);
+			} else {
+				// No retry, fallback, or compaction continuation fired: this errored
+				// turn ends the run. #persistSessionMessageIfMissing dropped it as an
+				// empty error turn, so record it here — otherwise the JSONL stops at
+				// the last tool result and the provider's errorMessage is lost (#6249).
+				// Idempotent and a no-op for non-empty turns.
+				await this.#persistTerminalEmptyErrorTurn(msg);
 			}
 			this.#resolveRetry();
 
@@ -12434,7 +12441,17 @@ export class AgentSession {
 		this.#pendingRecoveredRetryErrors = [];
 	}
 
-	async #persistRetryLifecycleErrorMessage(message: AssistantMessage): Promise<void> {
+	/**
+	 * Durably record a terminal empty error turn (`stopReason: "error"` with no
+	 * substantive content) that `#persistSessionMessageIfMissing` skipped, so the
+	 * session JSONL keeps a record of why the run stopped instead of ending at the
+	 * last tool result. A no-op for non-empty/non-error turns and idempotent via
+	 * the already-persisted guard; the turn is dropped from active context by the
+	 * caller (or `isProviderRefusalMessage`/`isEmptyErrorTurn` filters) so it is
+	 * never replayed on the wire. Used by the retry-lifecycle dead-ends and the
+	 * non-retry terminal error tail.
+	 */
+	async #persistTerminalEmptyErrorTurn(message: AssistantMessage): Promise<void> {
 		await this.#waitForSessionMessagePersistence(message);
 		if (!isEmptyErrorTurn(message)) return;
 		if (this.#sessionMessageAlreadyPersisted(message)) return;
@@ -12476,7 +12493,7 @@ export class AgentSession {
 		id: number,
 		options: { switchedCredential: boolean; switchedModel: boolean; delayMs: number },
 	): Promise<void> {
-		await this.#persistRetryLifecycleErrorMessage(message);
+		await this.#persistTerminalEmptyErrorTurn(message);
 		const persistenceKey = sessionMessagePersistenceKey(message);
 		if (!persistenceKey) return;
 		let branchEntry: SessionEntry | undefined;
@@ -15981,7 +15998,7 @@ export class AgentSession {
 		}
 		if (retryBudgetExhausted) {
 			if (!switchedModel) {
-				await this.#persistRetryLifecycleErrorMessage(message);
+				await this.#persistTerminalEmptyErrorTurn(message);
 				// Max retries exceeded and no fallback model to switch to: emit
 				// final failure and reset.
 				await this.#emitSessionEvent({
@@ -16028,7 +16045,7 @@ export class AgentSession {
 		// can act on it.
 		const maxDelayMs = retryPolicy.maxDelayMs;
 		if (maxDelayMs > 0 && delayMs > maxDelayMs && !switchedCredential && !switchedModel) {
-			await this.#persistRetryLifecycleErrorMessage(message);
+			await this.#persistTerminalEmptyErrorTurn(message);
 			const attempt = this.#retryAttempt;
 			this.#retryAttempt = 0;
 			await this.#emitSessionEvent({
