@@ -18,6 +18,7 @@
 - `launch/terminal-control.ts` publishes the terminal-owner record through `atomicWriteFile` instead of hand-rolled temp-file and rename, so the write path has one owner; the record stays atomic and stays mode `0600`.
 
 ### Fixed
+- Fixed an edit to `config.yml` agent pins (`agent.agents.<name>.model`, `modelRoles`, effort) not reaching the next `task`, eval `agent()` or vibe spawn until `/reload-config` ran; each spawn now applies config-file edits made since the last one, and a malformed edit keeps the active routing ([#110](https://github.com/Wladefant/veyyon/issues/110)).
 - Fixed a terminal provider error on the continuation turn after a failed tool result silently ending the run with no durable record of why: when retry, model fallback, and compaction decline an empty error turn, it is now persisted in session history so the provider errorMessage is preserved in JSONL ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Empty context-overflow error turns are no longer persisted to session history when compaction and promotion are disabled or unavailable, preventing overflowed context from re-sending on session reload ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed auto-retry wedging the session when a failed assistant tail was recreated during retry: the retry path now positionally strips a still-failed assistant tail and closes the retry saga if continuation fails locally ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).

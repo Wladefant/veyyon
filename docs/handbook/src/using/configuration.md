@@ -59,6 +59,13 @@ Task, eval and vibe dispatch capture one settings snapshot before resolving a mo
 or effort and before asynchronous allocation. A spawn already being prepared keeps
 that snapshot; the next spawn reads the accepted routing. Existing workers are unchanged.
 
+Each task, eval and vibe spawn also applies config-file edits by itself, so an edited
+agent pin reaches the next spawn without `/reload-config`. Before it takes that snapshot,
+the dispatcher hashes the same files the command reads; when they differ from the last
+spawn, it runs the same reload. A rejected reload (a malformed file, an invalid value, a
+save in flight) does not fail the spawn: the spawn keeps the active routing, the warning is
+logged once per file state, and the next spawn retries.
+
 **Restart-only:** `defaultEffort`, `modelRoles.default`, `modelRoles.advisor`, and
 all settings outside the routing set above. If the current default or advisor role
 references another role (`@role`), this narrow reload retains the entire role map
