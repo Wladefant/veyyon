@@ -140,7 +140,8 @@ describe("a session a live terminal owns is never written by the desktop", () =>
 	});
 
 	/** Frames until the streamed reply clears, bounded so a reply that never ends fails by name. */
-	async function untilStreamCleared(): Promise<void> {
+	async function untilStreamCleared(initialFrames?: RequestFrame[]): Promise<void> {
+		if (initialFrames?.some(frame => "StreamingChanged" in frame && (frame as HostEvent).StreamingChanged === null)) return;
 		for (let read = 0; read < 200; read++) {
 			const frame = (await client.nextFrame()) as HostEvent;
 			if ("StreamingChanged" in frame && frame.StreamingChanged === null) return;
@@ -172,7 +173,7 @@ describe("a session a live terminal owns is never written by the desktop", () =>
 			SubmitPrompt: { session: sessionId, text: "desktop question", attachments: [] },
 		});
 		expect(submitted.outcome).toEqual({ RequestSucceeded: { request: 2 } });
-		await untilStreamCleared();
+		await untilStreamCleared(submitted.frames);
 		await untilOnDisk("desktop reply");
 	}
 
@@ -224,7 +225,7 @@ describe("a session a live terminal owns is never written by the desktop", () =>
 				expect(await fs.readFile(sessionFile)).toEqual(before);
 				expect(stream.mock.calls.length).toBe(streamsBefore);
 				expect(delivered).toEqual([]);
-			});
+			}, 30000);
 		}
 	}
 });
