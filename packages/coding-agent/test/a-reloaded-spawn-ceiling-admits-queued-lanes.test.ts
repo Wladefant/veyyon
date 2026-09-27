@@ -14,6 +14,10 @@
  * the semaphore `TaskTool` resolves through `treeSpawnSemaphore`. Nothing acquires or releases
  * between the reload and the assertion, so only the reload can admit the queued lanes.
  *
+ * `MaxConcurrencyRuntime` is the session collaborator that applies the ceiling. The last block
+ * drives it with a host of its own settings and a session id, to pin that it applies the ceiling
+ * the host reads at call time to the host's tree and to no other tree.
+ *
  * WHAT IT DOES NOT CATCH. The embedded-SDK fallback, where a session has no budget group and
  * `TaskTool` keeps an instance-local semaphore, still applies a new ceiling on its next acquire
  * or release; this suite does not construct that case.
@@ -28,6 +32,7 @@ import { buildModel } from "@veyyon/catalog/build";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { resetSessionCpuLimitsForTests } from "@veyyon/coding-agent/session/cpu-limit";
+import { MaxConcurrencyRuntime } from "@veyyon/coding-agent/session/runtime/max-concurrency-runtime";
 import type { Semaphore } from "@veyyon/coding-agent/task/parallel";
 import { resetTreeSpawnSemaphoresForTests, treeSpawnSemaphore } from "@veyyon/coding-agent/task/spawn-semaphore";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
@@ -71,6 +76,7 @@ interface Fixture {
 	file: string;
 	settings: Settings;
 	semaphore: Semaphore;
+	sessionId: string;
 }
 
 /** A session loaded from a config file, with the spawn semaphore its task tool would use. */
@@ -88,9 +94,10 @@ async function sessionWithCeiling(ceiling: number): Promise<Fixture> {
 			modelRegistry: {} as never,
 		}),
 	);
-	const semaphore = treeSpawnSemaphore(sessionManager.getSessionId(), settings.get("agent.maxConcurrency"));
+	const sessionId = sessionManager.getSessionId();
+	const semaphore = treeSpawnSemaphore(sessionId, settings.get("agent.maxConcurrency"));
 	if (!semaphore) throw new Error("an AgentSession registers a budget group, so its tree has a semaphore");
-	return { file, settings, semaphore };
+	return { file, settings, semaphore, sessionId };
 }
 
 describe("a reloaded spawn ceiling", () => {
@@ -139,5 +146,39 @@ describe("a reloaded spawn ceiling", () => {
 		expect(await isPending(queued)).toBe(true);
 		semaphore.release();
 		expect(await isPending(queued)).toBe(false);
+	});
+});
+
+describe("the max-concurrency collaborator", () => {
+	it("applies its host's ceiling to its host's tree and leaves other trees queued", async () => {
+		const own = await sessionWithCeiling(1);
+		const other = await sessionWithCeiling(1);
+		await own.semaphore.acquire();
+		await other.semaphore.acquire();
+		const ownQueued = own.semaphore.acquire();
+		const otherQueued = other.semaphore.acquire();
+
+		// Settings no session listens to, so only the collaborator can move a ceiling.
+		const settings = Settings.isolated({ "agent.maxConcurrency": 2 });
+		const runtime = new MaxConcurrencyRuntime({ settings, sessionId: own.sessionId });
+		expect(await isPending(ownQueued)).toBe(true);
+
+		runtime.onSettingChanged();
+		expect(await isPending(ownQueued)).toBe(false);
+		expect(await isPending(otherQueued)).toBe(true);
+	});
+
+	it("reads the ceiling when the setting changes, not when it is built", async () => {
+		const own = await sessionWithCeiling(1);
+		await own.semaphore.acquire();
+		const queued = [own.semaphore.acquire(), own.semaphore.acquire()];
+
+		const settings = Settings.isolated();
+		settings.set("agent.maxConcurrency", 1);
+		const runtime = new MaxConcurrencyRuntime({ settings, sessionId: own.sessionId });
+		settings.set("agent.maxConcurrency", 3);
+		runtime.onSettingChanged();
+
+		expect(await Promise.all(queued.map(isPending))).toEqual([false, false]);
 	});
 });

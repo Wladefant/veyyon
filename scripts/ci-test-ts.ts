@@ -408,6 +408,7 @@ export const repoScriptTests = [
 	"scripts/a-mark-cannot-capture-a-duplicate-frame.test.ts",
 	"scripts/installer-brand-parity.test.ts",
 	"scripts/upstream-radar.test.ts",
+	"scripts/upstream-status-reports-only-what-evidence-shows.test.ts",
 	"scripts/release-sentinel.test.ts",
 	"scripts/release-changelog.test.ts",
 	"scripts/release-bump-subject.test.ts",
