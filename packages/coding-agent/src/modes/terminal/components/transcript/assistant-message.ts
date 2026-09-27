@@ -17,7 +17,7 @@ import { stripAnsi } from "@veyyon/utils/strip-ansi";
 import type { AssistantErrorPresentation, AssistantMessageView, AssistantSegment } from "@veyyon/wire/presentation";
 import chalk from "chalk";
 import type { AssistantThinkingRenderer } from "../../../../extensibility/extensions/types";
-import { getMarkdownTheme } from "../../../../theme/markdown-theme";
+import { getMarkdownTheme, markdownTextStyle } from "../../../../theme/markdown-theme";
 import { theme } from "../../../../theme/theme";
 import { getPreviewLines, resolveImageOptions, TRUNCATE_LENGTHS } from "../../../../tools/core/render-utils";
 import {
@@ -937,9 +937,7 @@ export class AssistantMessageComponent extends Container {
 				// style, plain paragraphs fall to the terminal's default foreground
 				// (gray on many setups) and only bold/code/links pop, which makes
 				// sparse-markup answers read as an unstyled gray slab.
-				const md = new Markdown(trimmed, 2, 0, getMarkdownTheme(), {
-					color: (text: string) => theme.fg("text", text),
-				});
+				const md = new Markdown(trimmed, 2, 0, getMarkdownTheme(), markdownTextStyle("text"));
 				md.transientRenderCache = this.#lastUpdateTransient;
 				this.#contentContainer.addChild(md);
 				captureItems?.push({ md, contentIndex: i, blockType: "text", lastText: trimmed });
@@ -974,10 +972,7 @@ export class AssistantMessageComponent extends Container {
 					this.#contentContainer.addChild(this.#thinkingLabel);
 				}
 				// Thinking traces in thinkingText color, italic
-				const md = new Markdown(thinkingText, 2, 0, getMarkdownTheme(), {
-					color: (text: string) => theme.fg("thinkingText", text),
-					italic: true,
-				});
+				const md = new Markdown(thinkingText, 2, 0, getMarkdownTheme(), markdownTextStyle("thinkingText", true));
 				md.transientRenderCache = this.#lastUpdateTransient;
 				this.#contentContainer.addChild(md);
 				captureItems?.push({ md, contentIndex: i, blockType: "thinking", lastText: thinkingText });
