@@ -51,7 +51,9 @@ A superseded request rejects without changing live routing; retry the command to
 
 **Hot-reloadable:** non-startup `modelRoles.<role>` values, `agent.agents` lane
 settings (including nested `model` and `thinkingLevel`), `agent.model`,
-`agent.sharedModel`, and `agent.thinkingLevel`. Legacy `subagent.*` spellings
+`agent.sharedModel`, `agent.thinkingLevel`, and `agent.maxConcurrency`. A raised
+`agent.maxConcurrency` admits lanes already queued for a slot at once; a lowered one
+admits nothing new and lets running lanes finish. Legacy `subagent.*` spellings
 are migrated to `agent.*` when read, so feedback uses the canonical names.
 Runtime/CLI overrides retain precedence. Shared model/effort settings govern spawns
 only when `agent.sharedModel` is enabled; otherwise per-agent lanes govern them.
@@ -86,7 +88,7 @@ overlapping requests and commits the applicable leaves synchronously.
 
 **Running Main is never rebound.** Use explicit session model/effort controls to
 change Main. Settings outside this narrow routing reload—including tools, provider
-initialization, transports, lifecycle/concurrency, plugins, UI and role presentation
+initialization, transports, lifecycle, concurrency limits other than `agent.maxConcurrency`, plugins, UI and role presentation
 metadata—retain their active values and report changed keys as requiring restart.
 Credentials, environment variables, agent definitions/prompts, catalogs and profile
 selection are not reloaded.
