@@ -60,6 +60,7 @@
 - `veyyon --resume <id>` for a session from another project reopens that session in place and moves the launch into its recorded working directory, instead of prompting to fork it into the launch directory or failing without a terminal; an explicit `--cwd` moves the session's working directory there instead.
 - `veyyon --resume <id>` runs under the profile whose sessions directory holds the session, instead of the profile the launch started in; an explicit `--profile` takes precedence.
 - The advisor's tools read the primary tool session live, so an advisor `ask` delivers the host notification, an advisor `task` label rides the session's side transport, and an advisor spawn after a working-directory change inherits the new context files, workspace tree, skills and rules instead of the launch ones.
+- Clearing the transcript for a rebuild (resume switch, `/shake`, compaction, a display setting) releases the discarded blocks and their rendered rows before the new blocks are built instead of holding both trees until the next frame, cutting the retained heap at a rebuild of a 13,470-entry transcript from 264.7 MiB to 157.0 MiB.
 
 ### Removed
 

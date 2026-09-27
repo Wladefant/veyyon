@@ -298,6 +298,14 @@ export class TranscriptContainer
 	override clear(): void {
 		this.#generation++;
 		super.clear();
+		// The retired generation's segments, the last frame and a pending scoped
+		// set hold discarded blocks and their rows; a cleared transcript is rebuilt
+		// before its next frame, so keeping them would hold the old tree and the new
+		// one at once. A fresh array rather than a truncation: the last frame
+		// returned `#lines` itself.
+		this.#segments = EMPTY_SEGMENTS;
+		this.#lines = [];
+		this.#scopedChildren = null;
 		this.#compactedChildStart = 0;
 		this.#childrenChanged = true;
 		this.#droppedRows = 0;

@@ -6,6 +6,10 @@
 
 - A streaming `Markdown` render that ends inside an open code fence lays out only the fence lines completed since the previous frame, so a 1,500-line code fence renders in 59 ms instead of 898 ms and a 1,500-line diff in 92 ms instead of 900 ms.
 
+### Fixed
+
+- `Container.clear()` releases the row arrays its discarded children last rendered instead of holding them until the next render.
+
 ## [1.5.4] - 2026-09-24
 
 ### Added
