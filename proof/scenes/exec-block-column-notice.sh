@@ -9,6 +9,12 @@
 settle 14
 shot idle
 
-submit "!echo short line; printf %0900d 0; echo; echo done"
+# Return goes in through the pty (`t '\r'`) rather than `submit`'s XTEST key: in
+# this take the XTEST Return left the command sitting in the composer, and a `!`
+# line has no completion popup for a pty Return to race.
+clear_composer
+t "!echo short line; printf %0900d 0; echo; echo done"
+pause 0.3
+t '\r'
 settle 8
 shot column-capped-block
