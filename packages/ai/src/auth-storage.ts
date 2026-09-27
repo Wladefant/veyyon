@@ -895,7 +895,8 @@ const USAGE_FAILURE_BACKOFF_MS = 10_000;
 // (~3.5s total worst case); a tight per-request budget aborts retries mid-cycle.
 const DEFAULT_USAGE_REQUEST_TIMEOUT_MS = 10_000;
 const USAGE_REPORT_CACHE_KEY_VERSION_OVERRIDES: Partial<Record<Provider, number>> = {
-	"google-antigravity": 2,
+	// v3: updated to 4-window model (5h + weekly for Gemini, 5h + weekly for Claude+GPT)
+	"google-antigravity": 3,
 	zai: 2,
 	// v2: cache identity gained an `org:` component so two subscriptions on one
 	// account email stop sharing a slot. The bump also retires pre-org entries —
