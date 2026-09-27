@@ -20,7 +20,6 @@
  * setting the selector has no row for.
  */
 
-import type { InstrumentationLevel } from "@veyyon/ai/instrumentation";
 import {
 	applySamplingKnob,
 	isSamplingKnob,
@@ -30,9 +29,7 @@ import {
 } from "@veyyon/kernel/settings/optional-number";
 import { errorMessage } from "@veyyon/utils";
 import { setTuiTight } from "@veyyon/utils/tight-mode";
-// The slot leaf, not the 95-module store: an effect reads settings, it does not fill them.
-import { settings } from "../../../config/settings-instance";
-import type { SettingPath } from "../../../config/settings-schema";
+import type { SettingPath, SettingValue } from "../../../config/settings-schema";
 import { setForeignConfigImport } from "../../../discovery";
 import { setMarkdownMermaidRendering } from "../../../theme/markdown-theme";
 import {
@@ -49,6 +46,7 @@ import {
 	setExcludedSearchProviders,
 	setPreferredSearchProvider,
 } from "../../../tools/web/search";
+import { statusLineSettingsFromConfig } from "../components/status-line/quiet-row";
 import { AssistantMessageComponent } from "../components/transcript/assistant-message";
 import type { InteractiveModeContext } from "../types";
 
@@ -102,17 +100,7 @@ function rebuildTranscript(ctx: SettingEffectContext): void {
 
 /** Re-read every status-line setting into the composer's status line and draw it. */
 function refreshStatusLine(ctx: SettingEffectContext): void {
-	ctx.statusLine.updateSettings({
-		preset: settings.get("statusLine.preset"),
-		leftSegments: settings.get("statusLine.leftSegments"),
-		rightSegments: settings.get("statusLine.rightSegments"),
-		separator: settings.get("statusLine.separator"),
-		showHookStatus: settings.get("statusLine.showHookStatus"),
-		sessionAccent: settings.get("statusLine.sessionAccent"),
-		transparent: settings.get("statusLine.transparent"),
-		segmentOptions: settings.get("statusLine.segmentOptions"),
-		compactThinkingLevel: settings.get("statusLine.compactThinkingLevel"),
-	});
+	ctx.statusLine.updateSettings(statusLineSettingsFromConfig());
 	ctx.ui.requestRender();
 }
 
@@ -152,7 +140,8 @@ const EFFECTS: { readonly [P in SettingPath]?: SettingEffect } = {
 	steeringMode: (ctx, value) => ctx.session.setSteeringMode(value as "all" | "one-at-a-time"),
 	followUpMode: (ctx, value) => ctx.session.setFollowUpMode(value as "all" | "one-at-a-time"),
 	interruptMode: (ctx, value) => ctx.session.setInterruptMode(value as "immediate" | "wait"),
-	"session.instrumentation": (ctx, value) => ctx.session.setInstrumentationLevel(value as InstrumentationLevel),
+	"session.instrumentation": (ctx, value) =>
+		ctx.session.setInstrumentationLevel(value as SettingValue<"session.instrumentation">),
 	autocompleteMaxVisible: (ctx, value) =>
 		ctx.editor.setAutocompleteMaxVisible(typeof value === "number" ? value : Number(value)),
 

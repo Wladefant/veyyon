@@ -69,6 +69,7 @@ import { SubcommandPickerComponent } from "../components/selectors/subcommand-pi
 import { ThinkingSelectorComponent } from "../components/selectors/thinking-selector";
 import { TreeSelectorComponent } from "../components/selectors/tree-selector";
 import { UserMessageSelectorComponent } from "../components/selectors/user-message-selector";
+import { statusLineSettingsFromConfig } from "../components/status-line/quiet-row";
 import { TranscriptBlock } from "../components/transcript/transcript-container";
 import type { SessionObserverRegistry } from "../session-observer-registry";
 import type { InteractiveModeContext } from "../types";
@@ -305,18 +306,7 @@ export class SelectorController {
 						}
 					},
 					onStatusLinePreview: previewSettings => {
-						// Update status line with preview settings
-						this.ctx.statusLine.updateSettings({
-							preset: settings.get("statusLine.preset"),
-							leftSegments: settings.get("statusLine.leftSegments"),
-							rightSegments: settings.get("statusLine.rightSegments"),
-							separator: settings.get("statusLine.separator"),
-							showHookStatus: settings.get("statusLine.showHookStatus"),
-							sessionAccent: settings.get("statusLine.sessionAccent"),
-							transparent: settings.get("statusLine.transparent"),
-							compactThinkingLevel: settings.get("statusLine.compactThinkingLevel"),
-							...previewSettings,
-						});
+						this.ctx.statusLine.updateSettings({ ...statusLineSettingsFromConfig(), ...previewSettings });
 						this.ctx.ui.requestRender();
 					},
 					getStatusLinePreview: (previewWidth?: number) => {
@@ -336,17 +326,7 @@ export class SelectorController {
 					},
 					onCancel: () => {
 						done();
-						// Restore status line to saved settings
-						this.ctx.statusLine.updateSettings({
-							preset: settings.get("statusLine.preset"),
-							leftSegments: settings.get("statusLine.leftSegments"),
-							rightSegments: settings.get("statusLine.rightSegments"),
-							separator: settings.get("statusLine.separator"),
-							showHookStatus: settings.get("statusLine.showHookStatus"),
-							sessionAccent: settings.get("statusLine.sessionAccent"),
-							transparent: settings.get("statusLine.transparent"),
-							compactThinkingLevel: settings.get("statusLine.compactThinkingLevel"),
-						});
+						this.ctx.statusLine.updateSettings(statusLineSettingsFromConfig());
 						this.ctx.ui.requestRender();
 					},
 				},

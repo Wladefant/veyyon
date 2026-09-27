@@ -123,13 +123,8 @@ terms around it carry the emphasis. These footers route through the shared
 compact inline metadata. The status-line footline is NOT configurable: it joins every segment with
 `segmentSeparator()` in `status-line/state-grammar.ts`, which is `theme.fg("dim", "  ·  ")` built from
 the preset's own dot, and the wider gap before the run clock is `RUN_CLOCK_GAP` in
-`status-line/quiet-row.ts`, six spaces and no dot, applied by `joinWithRunClock`. The
-`statusLine.separator` enum still exists with its seven values, but nothing renders it:
-`status-line/separators.ts` was deleted along with the powerline top border it belonged to, the key has
-no settings row, and the value survives only as `StatusLineOptions.separator`, plumbed from settings by
-every status-line construction site and read by no renderer (the comment on `statusLine.separator` in
-`config/settings-domains/appearance.ts` says to delete the key with those reads). Use the owner for the
-surface instead of pasting a separator literal into a widget.
+`status-line/quiet-row.ts`, six spaces and no dot, applied by `joinWithRunClock`. There is no
+separator setting. Use the owner for the surface instead of pasting a separator literal into a widget.
 
 ## Color and emphasis
 
