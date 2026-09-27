@@ -12,12 +12,11 @@ import { getPaddingX } from "@veyyon/utils/tight-mode";
 import { getSegmenter, truncateToWidth, visibleWidth } from "@veyyon/utils/width";
 import { wrapTextWithAnsi } from "@veyyon/utils/wrap";
 import { LRUCache } from "lru-cache/raw";
-import { Marked, type Token, Tokenizer, type TokenizerAndRendererExtension, type Tokens } from "marked";
+import { Marked, type Token, type TokenizerAndRendererExtension, type Tokens } from "marked";
 import { TERMINAL } from "../terminal-capabilities";
 import type { Component } from "../tui";
 import { applyLineBackground } from "../utils/text-layout";
-
-const STRICT_STRIKETHROUGH_REGEX = /^(~~)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/;
+import { MarkdownTokenizer } from "./markdown-tokenizer";
 
 // OSC 66 (Kitty text-sizing) heading spans are emitted as a single indivisible
 // unit by the H1 render path. Like image-protocol lines, they must bypass
@@ -335,29 +334,12 @@ function hangWrapTreeGuideLines(text: string, width: number): string[] | undefin
 	return out;
 }
 
-class StrictStrikethroughTokenizer extends Tokenizer {
-	override del(src: string): Tokens.Del | undefined {
-		const match = STRICT_STRIKETHROUGH_REGEX.exec(src);
-		if (!match) {
-			return undefined;
-		}
-
-		const text = match[2];
-		return {
-			type: "del",
-			raw: match[0],
-			text,
-			tokens: this.lexer.inlineTokens(text),
-		};
-	}
-}
-
 /** Code languages whose streamed complete lines are highlighted as a diff while the fence is open. */
 const STREAMED_DIFF_LANGS: ReadonlySet<string> = new Set(["diff", "patch", "udiff"]);
 
 const markdownParser = new Marked();
 markdownParser.setOptions({
-	tokenizer: new StrictStrikethroughTokenizer(),
+	tokenizer: new MarkdownTokenizer(),
 });
 
 // Math spans (`$$…$$`, `\[…\]`, `$…$`, `\(…\)`) are tokenized as a dedicated
