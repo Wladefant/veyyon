@@ -4,6 +4,7 @@
 
 ### Changed
 
+- The editor dispatches a key through single-purpose handlers for autocomplete, kill and line keys, Enter and new-line keys, and cursor keys instead of one 270-line method; with the memoized key tests in `@veyyon/utils`, a typed character costs 1.35 µs instead of 3.01 µs and a mixed editing key 5.84 µs instead of 7.55 µs.
 - A streaming `Markdown` render that ends inside an open code fence lays out only the fence lines completed since the previous frame, so a 1,500-line code fence renders in 59 ms instead of 898 ms and a 1,500-line diff in 92 ms instead of 900 ms.
 - The frame render and incremental update run as single-purpose phases (alt-screen residency, frame composition, committed-prefix reconciliation, window planning and assembly) whose records are in `core/frame-plan.ts`, with one escape-sequence builder per paint shape in `core/paint-sequences.ts`, and the incremental update finds its changed rows with a forward scan to the first change and a backward scan to the last instead of comparing every row, which cuts a 2,000-block cold paint from 13.73 ms to 12.27 ms with byte-identical terminal output.
 

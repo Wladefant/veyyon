@@ -318,6 +318,19 @@ export function maxSegmentVisualCol(text: string, isLastSegment: boolean): numbe
 	return isLastSegment ? total : Math.max(0, total - lastWidth);
 }
 
+/** Whether `data` is a key that inserts a new line rather than submitting: Shift/Ctrl/Option+Enter in every encoding terminals send. */
+function isNewLineKey(data: string, kb: KeybindingsManager): boolean {
+	return (
+		(data.charCodeAt(0) === 10 && data.length > 1) || // Ctrl+Enter with modifiers
+		matchesKey(data, "ctrl+enter") || // Ctrl+Enter (Kitty/modifyOtherKeys, including lock bits/keypad Enter)
+		data === "\x1b\r" || // Option+Enter in some terminals (legacy)
+		data === "\x1b[13;2~" || // Shift+Enter in some terminals (legacy format)
+		kb.matches(data, "tui.input.newLine") || // Shift+Enter (Kitty protocol, handles lock bits)
+		(data.length > 1 && data.includes("\x1b") && data.includes("\r")) ||
+		isLoneLineFeed(data) // Shift+Enter from iTerm2 mapping
+	);
+}
+
 const DEFAULT_PAGE_SCROLL_LINES = 10;
 
 const MAX_UNDO_STACK = 100;
@@ -1116,8 +1129,6 @@ export class Editor implements Component, Focusable, MouseRoutable {
 	#handleKeyInput(data: string): void {
 		const kb = getKeybindings();
 
-		// Handle special key combinations first
-
 		// Ctrl+C is reserved by parent components for app-level handling.
 		// Do not consume arbitrary user-bound "copy" keys here, since the editor
 		// has no copy implementation and would make those keys disappear.
@@ -1125,68 +1136,19 @@ export class Editor implements Component, Focusable, MouseRoutable {
 			return;
 		}
 
-		// Undo
 		if (kb.matches(data, "tui.editor.undo")) {
 			this.#applyUndo();
 			return;
 		}
 
-		// Handle autocomplete special keys first (but don't block other input)
-		if (this.#autocompleteState && this.#autocompleteList) {
-			// Escape - cancel autocomplete
-			if (kb.matches(data, "tui.select.cancel")) {
-				this.#cancelAutocomplete(true);
-				return;
-			}
-			// Let the autocomplete list handle navigation and selection
-			else if (
-				kb.matches(data, "tui.select.up") ||
-				kb.matches(data, "tui.select.down") ||
-				kb.matches(data, "tui.select.pageUp") ||
-				kb.matches(data, "tui.select.pageDown") ||
-				kb.matches(data, "tui.input.submit") ||
-				isLoneLineFeed(data) ||
-				kb.matches(data, "tui.input.tab")
-			) {
-				// Only pass navigation keys to the list, not Enter/Tab (we handle those directly)
-				if (
-					kb.matches(data, "tui.select.up") ||
-					kb.matches(data, "tui.select.down") ||
-					kb.matches(data, "tui.select.pageUp") ||
-					kb.matches(data, "tui.select.pageDown")
-				) {
-					this.#autocompleteList.handleInput(data);
-					this.onAutocompleteUpdate?.();
-					return;
-				}
-
-				// If Tab was pressed, always apply the selection
-				if (kb.matches(data, "tui.input.tab")) {
-					this.#acceptAutocompleteSelection(this.#autocompleteList.getSelectedItem());
-					return;
-				}
-
-				// If Enter was pressed on autocomplete:
-				if (kb.matches(data, "tui.input.submit") || isLoneLineFeed(data)) {
-					const isSlash =
-						findLeadingSlashCommandStart(this.#autocompletePrefix) !== null && !this.#selectedCompletionIsPath();
-					const selected = this.#autocompleteList.getSelectedItem();
-					const currentLine = this.#state.lines[this.#state.cursorLine] ?? "";
-					const currentTextBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
-					if (!this.#autocompletePrefixMatchesCursorText(currentTextBeforeCursor, selected)) {
-						this.#cancelAutocomplete();
-					} else {
-						if (selected) {
-							this.#applyAutocompleteSelection(selected, !isSlash);
-						} else {
-							this.#cancelAutocomplete();
-						}
-						if (!isSlash) return;
-					}
-				}
-			}
-			// For other keys (like regular typing), DON'T return here
-			// Let them fall through to normal character handling
+		// Autocomplete takes its navigation, Tab and Enter keys first; every other
+		// key (like regular typing) falls through to normal handling.
+		if (
+			this.#autocompleteState &&
+			this.#autocompleteList &&
+			this.#handleAutocompleteKey(data, kb, this.#autocompleteList)
+		) {
+			return;
 		}
 
 		// Tab key - context-aware completion (but not when already autocompleting)
@@ -1195,7 +1157,69 @@ export class Editor implements Component, Focusable, MouseRoutable {
 			return;
 		}
 
-		// Continue with rest of input handling
+		if (this.#handleKillOrLineKey(data) || this.#handleEnterKey(data, kb) || this.#handleCursorKey(data, kb)) {
+			return;
+		}
+
+		// Printable keystrokes, including Kitty CSI-u text-producing sequences.
+		const printableText = extractPrintableText(data);
+		if (printableText) {
+			this.#insertCharacter(printableText);
+		}
+	}
+
+	/** Handle a key while the autocomplete list is showing; false lets the key fall through to normal handling. */
+	#handleAutocompleteKey(data: string, kb: KeybindingsManager, list: SelectList): boolean {
+		if (kb.matches(data, "tui.select.cancel")) {
+			this.#cancelAutocomplete(true);
+			return true;
+		}
+		// Only navigation keys go to the list; Tab and Enter are applied here.
+		if (
+			kb.matches(data, "tui.select.up") ||
+			kb.matches(data, "tui.select.down") ||
+			kb.matches(data, "tui.select.pageUp") ||
+			kb.matches(data, "tui.select.pageDown")
+		) {
+			list.handleInput(data);
+			this.onAutocompleteUpdate?.();
+			return true;
+		}
+		// Tab always applies the selection.
+		if (kb.matches(data, "tui.input.tab")) {
+			this.#acceptAutocompleteSelection(list.getSelectedItem());
+			return true;
+		}
+		if (kb.matches(data, "tui.input.submit") || isLoneLineFeed(data)) {
+			return this.#applyAutocompleteOnEnter(list);
+		}
+		return false;
+	}
+
+	/**
+	 * Enter on a showing list applies its selection. A slash command then falls through to submit it, and
+	 * a selection whose prefix no longer matches the text before the cursor is cancelled and falls through.
+	 */
+	#applyAutocompleteOnEnter(list: SelectList): boolean {
+		const isSlash =
+			findLeadingSlashCommandStart(this.#autocompletePrefix) !== null && !this.#selectedCompletionIsPath();
+		const selected = list.getSelectedItem();
+		const currentLine = this.#state.lines[this.#state.cursorLine] ?? "";
+		const currentTextBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
+		if (!this.#autocompletePrefixMatchesCursorText(currentTextBeforeCursor, selected)) {
+			this.#cancelAutocomplete();
+			return false;
+		}
+		if (selected) {
+			this.#applyAutocompleteSelection(selected, !isSlash);
+		} else {
+			this.#cancelAutocomplete();
+		}
+		return !isSlash;
+	}
+
+	/** Emacs-style kill, yank and line-edge keys, and Alt+Enter; false when `data` is none of them. */
+	#handleKillOrLineKey(data: string): boolean {
 		// Ctrl+K - Delete to end of line
 		if (matchesKey(data, "ctrl+k")) {
 			this.#deleteLineSpan("to-end");
@@ -1245,67 +1269,68 @@ export class Editor implements Component, Focusable, MouseRoutable {
 			} else {
 				this.#addNewLine();
 			}
+		} else {
+			return false;
 		}
-		// New line
-		else if (
-			(data.charCodeAt(0) === 10 && data.length > 1) || // Ctrl+Enter with modifiers
-			matchesKey(data, "ctrl+enter") || // Ctrl+Enter (Kitty/modifyOtherKeys, including lock bits/keypad Enter)
-			data === "\x1b\r" || // Option+Enter in some terminals (legacy)
-			data === "\x1b[13;2~" || // Shift+Enter in some terminals (legacy format)
-			kb.matches(data, "tui.input.newLine") || // Shift+Enter (Kitty protocol, handles lock bits)
-			(data.length > 1 && data.includes("\x1b") && data.includes("\r")) ||
-			isLoneLineFeed(data) // Shift+Enter from iTerm2 mapping
-		) {
+		return true;
+	}
+
+	/** A new-line key inserts a line (or submits after a trailing backslash); plain Enter submits. */
+	#handleEnterKey(data: string, kb: KeybindingsManager): boolean {
+		if (isNewLineKey(data, kb)) {
 			if (this.#shouldSubmitOnBackslashEnter(data, kb)) {
 				this.#handleBackspace();
 				this.#submitValue();
-				return;
+				return true;
 			}
 			this.#addNewLine();
+			return true;
 		}
 		// Plain Enter - submit (handles both legacy \r and Kitty protocol with lock bits)
-		else if (kb.matches(data, "tui.input.submit") || isLoneLineFeed(data)) {
-			// If submit is disabled, do nothing
-			if (this.disableSubmit) {
-				return;
-			}
+		if (!kb.matches(data, "tui.input.submit") && !isLoneLineFeed(data)) return false;
+		if (this.disableSubmit) return true;
+		// Synchronous slash command completion for the race condition where
+		// async autocomplete hasn't resolved yet (user types /q quickly + Enter).
+		// Match the existing selected-item behavior when autocomplete IS showing.
+		if (!this.#autocompleteState) this.#completeSlashCommandSync();
+		this.#submitValue();
+		return true;
+	}
 
-			// Synchronous slash command completion for the race condition where
-			// async autocomplete hasn't resolved yet (user types /q quickly + Enter).
-			// Match the existing selected-item behavior when autocomplete IS showing.
-			if (!this.#autocompleteState) {
-				const currentLine = this.#state.lines[this.#state.cursorLine] ?? "";
-				const textBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
-				if (
-					findLeadingSlashCommandStart(textBeforeCursor) !== null &&
-					this.#isInSubmittedSlashCommandContext() &&
-					this.#autocompleteProvider?.trySyncSlashCompletion
-				) {
-					const syncResult = this.#autocompleteProvider.trySyncSlashCompletion(textBeforeCursor);
-					if (syncResult && syncResult.items.length > 0) {
-						// Invalidate any pending async autocomplete so its stale results are discarded
-						this.#autocompleteRequestId += 1;
-						// Apply the best match and submit the completed command
-						const selected = syncResult.items[0]!;
-						const result = this.#autocompleteProvider.applyCompletion(
-							this.#state.lines,
-							this.#state.cursorLine,
-							this.#state.cursorCol,
-							selected,
-							syncResult.prefix,
-						);
-						this.#state.lines = result.lines;
-						this.#state.cursorLine = result.cursorLine;
-						this.#setCursorCol(result.cursorCol);
-						result.onApplied?.();
-					}
-				}
-			}
-
-			this.#submitValue();
+	/** Apply the provider's best synchronous completion of a slash command being submitted before its async list arrived. */
+	#completeSlashCommandSync(): void {
+		const currentLine = this.#state.lines[this.#state.cursorLine] ?? "";
+		const textBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
+		if (
+			findLeadingSlashCommandStart(textBeforeCursor) === null ||
+			!this.#isInSubmittedSlashCommandContext() ||
+			!this.#autocompleteProvider?.trySyncSlashCompletion
+		) {
+			return;
 		}
+		const syncResult = this.#autocompleteProvider.trySyncSlashCompletion(textBeforeCursor);
+		if (!syncResult || syncResult.items.length === 0) return;
+		// Invalidate any pending async autocomplete so its stale results are discarded
+		this.#autocompleteRequestId += 1;
+		// Apply the best match and submit the completed command
+		const selected = syncResult.items[0]!;
+		const result = this.#autocompleteProvider.applyCompletion(
+			this.#state.lines,
+			this.#state.cursorLine,
+			this.#state.cursorCol,
+			selected,
+			syncResult.prefix,
+		);
+		this.#state.lines = result.lines;
+		this.#state.cursorLine = result.cursorLine;
+		this.#setCursorCol(result.cursorCol);
+		result.onApplied?.();
+	}
+
+	/** Deletion, cursor, paging, Shift+Space and character-jump keys; false when `data` is none of them. */
+	#handleCursorKey(data: string, kb: KeybindingsManager): boolean {
 		// Backspace (including Shift+Backspace)
-		else if (kb.matches(data, "tui.editor.deleteCharBackward") || matchesKey(data, "shift+backspace")) {
+		if (kb.matches(data, "tui.editor.deleteCharBackward") || matchesKey(data, "shift+backspace")) {
 			this.#handleBackspace();
 		}
 		// Line navigation shortcuts (Home/End keys)
@@ -1337,32 +1362,12 @@ export class Editor implements Component, Focusable, MouseRoutable {
 		}
 		// Arrow keys
 		else if (kb.matches(data, "tui.editor.cursorUp")) {
-			// Up - history navigation or cursor movement
-			if (this.#isEditorEmpty()) {
-				this.#navigateHistory(-1); // Start browsing history
-			} else if (this.#historyIndex > -1 && this.#isOnFirstVisualLine()) {
-				this.#navigateHistory(-1); // Navigate to older history entry
-			} else if (this.#isOnFirstVisualLine()) {
-				// Already at top - jump to start of line
-				this.#moveToLineStart();
-			} else {
-				this.#moveCursor(-1, 0); // Cursor movement (within text or history entry)
-			}
+			this.#handleUpKey();
 		} else if (kb.matches(data, "tui.editor.cursorDown")) {
-			// Down - history navigation or cursor movement
-			if (this.#historyIndex > -1 && this.#isOnLastVisualLine()) {
-				this.#navigateHistory(1); // Navigate to newer history entry or clear
-			} else if (this.#isOnLastVisualLine()) {
-				// Already at bottom - jump to end of line
-				this.#moveToLineEnd();
-			} else {
-				this.#moveCursor(1, 0); // Cursor movement (within text or history entry)
-			}
+			this.#handleDownKey();
 		} else if (kb.matches(data, "tui.editor.cursorRight")) {
-			// Right
 			this.#moveCursor(0, 1);
 		} else if (kb.matches(data, "tui.editor.cursorLeft")) {
-			// Left
 			this.#moveCursor(0, -1);
 		}
 		// Shift+Space - insert regular space (Kitty protocol sends escape sequence)
@@ -1374,13 +1379,35 @@ export class Editor implements Component, Focusable, MouseRoutable {
 			this.#jumpMode = "forward";
 		} else if (kb.matches(data, "tui.editor.jumpBackward")) {
 			this.#jumpMode = "backward";
+		} else {
+			return false;
 		}
-		// Printable keystrokes, including Kitty CSI-u text-producing sequences.
-		else {
-			const printableText = extractPrintableText(data);
-			if (printableText) {
-				this.#insertCharacter(printableText);
-			}
+		return true;
+	}
+
+	/** Up: browse history from an empty draft or the first visual line, else move the cursor up. */
+	#handleUpKey(): void {
+		if (this.#isEditorEmpty()) {
+			this.#navigateHistory(-1); // Start browsing history
+		} else if (this.#historyIndex > -1 && this.#isOnFirstVisualLine()) {
+			this.#navigateHistory(-1); // Navigate to older history entry
+		} else if (this.#isOnFirstVisualLine()) {
+			// Already at top - jump to start of line
+			this.#moveToLineStart();
+		} else {
+			this.#moveCursor(-1, 0); // Cursor movement (within text or history entry)
+		}
+	}
+
+	/** Down: step toward newer history from the last visual line while browsing, else move the cursor down. */
+	#handleDownKey(): void {
+		if (this.#historyIndex > -1 && this.#isOnLastVisualLine()) {
+			this.#navigateHistory(1); // Navigate to newer history entry or clear
+		} else if (this.#isOnLastVisualLine()) {
+			// Already at bottom - jump to end of line
+			this.#moveToLineEnd();
+		} else {
+			this.#moveCursor(1, 0); // Cursor movement (within text or history entry)
 		}
 	}
 
