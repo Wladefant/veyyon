@@ -212,11 +212,15 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * `@veyyon/utils/math` and engine modules the root already reached, so the launch runs no new
  * code. `core/frame-plan.ts`, split out with it, is imported by type only and is not on the graph.
  *
+ * 1578 to 1579: `hosts/terminal/engine/src/components/markdown-tokenizer.ts`, the block
+ * tokenizer with the setext underline precheck, split out of `components/markdown.ts`. It imports
+ * `marked`, which `markdown.ts` already reached, so the launch runs no new code.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1578;
+const LAUNCH_REACH_CEILING = 1579;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The
