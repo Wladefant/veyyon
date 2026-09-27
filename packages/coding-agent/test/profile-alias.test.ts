@@ -29,7 +29,10 @@ describe("profile alias installer", () => {
 	});
 
 	it("resolves source invocations without forcing the source checkout as cwd", () => {
-		const command = resolveProfileAliasCommandFromProcess(["/bin/bun", "src/cli.ts"], "/repo/packages/coding-agent");
+		const command = resolveProfileAliasCommandFromProcess({
+			argv: ["/bin/bun", "src/cli.ts"],
+			cwd: "/repo/packages/coding-agent",
+		});
 
 		// path.resolve is platform-dependent (adds drive letter on Windows);
 		// the code normalizes to forward slashes for POSIX shell fields.
@@ -42,11 +45,52 @@ describe("profile alias installer", () => {
 		expect(command.powerShell).toBe(`'/bin/bun' '${expectedScriptPath}'`);
 	});
 
+	it("uses the installed command for a compiled standalone invocation", () => {
+		const command = resolveProfileAliasCommandFromProcess({
+			argv: ["bun", "/$bunfs/root/packages/coding-agent/src/cli.js"],
+			compiled: true,
+		});
+
+		expect(command).toEqual({
+			display: "veyyon",
+			posix: "veyyon",
+			fish: "veyyon",
+			powerShell: "veyyon",
+		});
+	});
+
+	it("uses the installed command for a compiled standalone invocation via process.env", () => {
+		const originalArgv = process.argv;
+		const originalCompiled = process.env.VEYYON_COMPILED;
+		try {
+			process.env.VEYYON_COMPILED = "true";
+			process.argv = ["bun", "/$bunfs/root/packages/coding-agent/src/cli.js"];
+
+			const command = resolveProfileAliasCommandFromProcess();
+			expect(command).toEqual({
+				display: "veyyon",
+				posix: "veyyon",
+				fish: "veyyon",
+				powerShell: "veyyon",
+			});
+		} finally {
+			process.argv = originalArgv;
+			if (originalCompiled === undefined) {
+				delete process.env.VEYYON_COMPILED;
+			} else {
+				process.env.VEYYON_COMPILED = originalCompiled;
+			}
+		}
+	});
+
 	it("normalizes a backslash runtime path for POSIX shell command fields", () => {
 		// On Windows argv[0] is typically a native path like C:\Users\me\.bun\bin\bun.exe;
 		// bash/zsh/fish fields must use forward slashes while PowerShell keeps the native path.
 		const runtime = "C:\\Users\\me\\.bun\\bin\\bun.exe";
-		const command = resolveProfileAliasCommandFromProcess([runtime, "src/cli.ts"], "/repo/packages/coding-agent");
+		const command = resolveProfileAliasCommandFromProcess({
+			argv: [runtime, "src/cli.ts"],
+			cwd: "/repo/packages/coding-agent",
+		});
 
 		const expectedScriptPath = path.resolve("/repo/packages/coding-agent", "src/cli.ts");
 		const expectedPosixPath = expectedScriptPath.replace(/\\/g, "/");
@@ -56,6 +100,13 @@ describe("profile alias installer", () => {
 		expect(command.posix).toBe(`'${posixRuntime}' '${expectedPosixPath}'`);
 		expect(command.fish).toBe(`'${posixRuntime}' '${expectedPosixPath}'`);
 		expect(command.powerShell).toBe(`'${runtime}' '${expectedScriptPath}'`);
+	});
+
+	it("supports legacy positional arguments for source invocation resolution", () => {
+		const command = resolveProfileAliasCommandFromProcess(["/bin/bun", "src/cli.ts"], "/repo/packages/coding-agent");
+		const expectedScriptPath = path.resolve("/repo/packages/coding-agent", "src/cli.ts");
+		const expectedPosixPath = expectedScriptPath.replace(/\\/g, "/");
+		expect(command.display).toBe(`/bin/bun ${expectedPosixPath}`);
 	});
 
 	it("can target the current source invocation instead of the installed veyyon binary", async () => {
