@@ -152,10 +152,15 @@ export const ACTION_SESSION_REACH: Record<HostActionTag, SessionReach> = {
 	GetContextBreakdown: "none",
 };
 
-async function reachedSessionFile(ctx: ActionContext, reach: SessionReach, payload: unknown): Promise<string | undefined> {
+async function reachedSessionFile(
+	ctx: ActionContext,
+	reach: SessionReach,
+	payload: unknown,
+): Promise<string | undefined> {
 	const current = activeManager(ctx);
 	if (reach === "current") return current?.getSessionFile();
-	const session = typeof payload === "object" && payload !== null ? (payload as { session?: unknown }).session : undefined;
+	const session =
+		typeof payload === "object" && payload !== null ? (payload as { session?: unknown }).session : undefined;
 	if (typeof session !== "string" || !session) return undefined;
 	if (isActive(current, session)) return current.getSessionFile();
 	return findSessionPath(session, ctx.cwd, ctx.agentDir);

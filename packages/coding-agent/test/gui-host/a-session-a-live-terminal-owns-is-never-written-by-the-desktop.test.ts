@@ -68,7 +68,11 @@ function completedStream(text: string): AssistantMessageEventStream {
 	const message = assistantMessage(text);
 	queueMicrotask(() => {
 		stream.push({ type: "start", partial: { ...message, content: [] } });
-		stream.push({ type: "text_start", contentIndex: 0, partial: { ...message, content: [{ type: "text", text: "" }] } });
+		stream.push({
+			type: "text_start",
+			contentIndex: 0,
+			partial: { ...message, content: [{ type: "text", text: "" }] },
+		});
 		stream.push({ type: "text_delta", contentIndex: 0, delta: text, partial: message });
 		stream.push({ type: "text_end", contentIndex: 0, content: text, partial: message });
 		stream.push({ type: "done", reason: "stop", message });
@@ -141,7 +145,7 @@ describe("a session a live terminal owns is never written by the desktop", () =>
 
 	/** Frames until the streamed reply clears, bounded so a reply that never ends fails by name. */
 	async function untilStreamCleared(initialFrames?: RequestFrame[]): Promise<void> {
-		if (initialFrames?.some(frame => "StreamingChanged" in frame && (frame as HostEvent).StreamingChanged === null)) return;
+		if (initialFrames?.some(frame => frame.StreamingChanged === null)) return;
 		for (let read = 0; read < 200; read++) {
 			const frame = (await client.nextFrame()) as HostEvent;
 			if ("StreamingChanged" in frame && frame.StreamingChanged === null) return;
