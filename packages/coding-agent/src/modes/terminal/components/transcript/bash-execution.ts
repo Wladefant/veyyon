@@ -5,7 +5,7 @@
 import { Container, ImageProtocol, type Loader, TERMINAL, Text, type TUI } from "@veyyon/tui";
 import { sanitizeText } from "@veyyon/utils";
 import { theme } from "../../../../theme/theme";
-import type { TruncationMeta } from "../../../../tools/core/output-meta";
+import type { OutputMeta } from "../../../../tools/core/output-meta";
 import {
 	getSixelLineMask,
 	isSixelPassthroughEnabled,
@@ -33,7 +33,7 @@ export class BashExecutionComponent extends Container {
 	#exitCode: number | undefined = undefined;
 	#signal?: string;
 	#loader: Loader;
-	#truncation?: TruncationMeta;
+	#meta?: OutputMeta;
 	#expanded = false;
 	#displayDirty = false;
 	#chunkGate = false;
@@ -114,12 +114,12 @@ export class BashExecutionComponent extends Container {
 	setComplete(
 		exitCode: number | undefined,
 		cancelled: boolean,
-		options?: { output?: string; truncation?: TruncationMeta; signal?: string },
+		options?: { output?: string; meta?: OutputMeta; signal?: string },
 	): void {
 		this.#exitCode = exitCode;
 		this.#signal = options?.signal;
 		this.#status = options?.signal !== undefined ? "error" : resolveExecutionStatus(exitCode, cancelled);
-		this.#truncation = options?.truncation;
+		this.#meta = options?.meta;
 		if (options?.output !== undefined) {
 			this.#setOutput(options.output);
 		}
@@ -183,7 +183,7 @@ export class BashExecutionComponent extends Container {
 				status: this.#status,
 				exitCode: this.#exitCode,
 				signal: this.#signal,
-				truncation: this.#truncation,
+				meta: this.#meta,
 				hiddenLineCount,
 				droppedLineCount: this.#droppedLineCount,
 				suppressHiddenCount: hasSixelOutput,

@@ -40,6 +40,8 @@ export { Container, Markdown, Spacer, Text } from "@veyyon/tui";
 export { getAgentDir, logger, VERSION } from "@veyyon/utils";
 export * as zod from "zod/v4";
 export { z } from "zod/v4";
+// Launch argument normalization, re-exported from its parser module
+export { normalizeContinueSessionArgs } from "./cli/args";
 export * from "./config/keybindings";
 export * from "./config/model-registry";
 // Prompt templates
@@ -117,6 +119,7 @@ export * from "./session/session-dump-format";
 export * from "./session/streaming-output";
 export * from "./task";
 export * from "./task/executor";
+export * from "./task/run-monitor";
 export type * from "./task/types";
 // Theme utilities for custom tools
 export * from "./theme/theme";

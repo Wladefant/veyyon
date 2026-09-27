@@ -165,6 +165,38 @@ describe("the notice text", () => {
 		);
 	});
 
+	/**
+	 * A column cap names the unit it was enforced in and, when the producer mirrored the raw stream,
+	 * where the uncut lines are. A result persisted before `unit` was recorded carries only `maxColumn`
+	 * and a body that says "chars"; it renders "chars", never "undefined", so it still strips on resume.
+	 */
+	it("states the column cap's unit and points at the raw capture it names", () => {
+		expect(formatOutputNotice({ limits: { columnTruncated: { maxColumn: 512, unit: "bytes" } } })).toBe(
+			"\n\n[Some lines truncated to 512 bytes]",
+		);
+		expect(formatOutputNotice({ limits: { columnTruncated: { maxColumn: 768, unit: "chars" } } })).toBe(
+			"\n\n[Some lines truncated to 768 chars]",
+		);
+		expect(
+			formatOutputNotice({ limits: { columnTruncated: { maxColumn: 512, unit: "bytes", artifactId: "raw-7" } } }),
+		).toBe("\n\n[Some lines truncated to 512 bytes. Read artifact://raw-7 for full output]");
+
+		const legacy: OutputMeta = { limits: { columnTruncated: { maxColumn: 768 } } };
+		expect(stripOutputNotice("body\n\n[Some lines truncated to 768 chars]", legacy)).toBe("body");
+	});
+
+	/** When the window notice already names the same capture, the column notice does not name it twice. */
+	it("names a raw capture once when the window and the column cap share it", () => {
+		const meta: OutputMeta = {
+			truncation: { ...lineWindowMeta().truncation!, artifactId: "raw-7" },
+			limits: { columnTruncated: { maxColumn: 512, unit: "bytes", artifactId: "raw-7" } },
+		};
+		const notice = formatOutputNotice(meta);
+		expect(notice.split("artifact://raw-7").length - 1).toBe(1);
+		expect(notice).toEndWith("Some lines truncated to 512 bytes]");
+		expect(stripOutputNotice(`body${notice}`, meta)).toBe("body");
+	});
+
 	/** Several notices join into one bracketed run separated by full stops, not one bracket each. */
 	it("joins several notices into a single bracketed run", () => {
 		const meta: OutputMeta = {

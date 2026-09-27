@@ -209,6 +209,23 @@ export function walkBranchPath(byId: Map<string, SessionEntry>, leaf?: SessionEn
 	return path;
 }
 
+/**
+ * The entry a session context is built up to. A named leaf that resolves to
+ * nothing falls back to the tail, the same as an absent one: an id can outlive
+ * the entry it named once a prune or a compaction rewrites the file, and a
+ * resumed session must reopen on its last entry rather than on an empty
+ * conversation. `leafId === null` is the explicit "before the first entry"
+ * position and has no leaf.
+ */
+export function resolveContextLeaf(
+	entries: readonly SessionEntry[],
+	leafId: string | null | undefined,
+	byId: ReadonlyMap<string, SessionEntry>,
+): SessionEntry | undefined {
+	if (leafId === null) return undefined;
+	return (leafId ? byId.get(leafId) : undefined) ?? entries[entries.length - 1];
+}
+
 export function buildSessionContext(
 	entries: SessionEntry[],
 	leafId?: string | null,
@@ -225,12 +242,7 @@ export function buildSessionContext(
 		}
 	}
 
-	// A named leaf that resolves to nothing falls back to the tail, the same as an
-	// absent one: an id can outlive the entry it named once a prune or a compaction
-	// rewrites the file, and a resumed session must reopen on its last entry rather
-	// than on an empty conversation. `leafId === null` is the explicit "before the
-	// first entry" position and returned above, so it never reaches this fallback.
-	const leaf = (leafId ? byId.get(leafId) : undefined) ?? entries[entries.length - 1];
+	const leaf = resolveContextLeaf(entries, leafId, byId);
 	if (!leaf) return emptySessionContext();
 
 	return buildSessionContextFromPath(walkBranchPath(byId, leaf), options);
@@ -479,8 +491,10 @@ export function buildSessionContextFromPath(
 			pushMessage(compactionSummaryMsg);
 		}
 
-		// Find compaction index in path
-		const compactionIdx = path.findIndex(e => e.type === "compaction" && e.id === compaction.id);
+		// Find compaction index in path. `compaction` is one of `path`'s own entries
+		// and sits near the tail, so an identity search from the end finds it
+		// without walking the summarized history in front of it.
+		const compactionIdx = path.lastIndexOf(compaction);
 
 		// Emit the kept pre-compaction entries, starting at the compaction's keep marker.
 		//

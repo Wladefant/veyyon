@@ -15,6 +15,21 @@
 
 - Fixed tool calls that put their payload in the intent field `i` (for example a file body in `write`) silently running with leftover arguments; they now fail with a clear prompt to move the content into the tool's parameters ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed stream finalization when a provider ends without emitting a completion or error event, ensuring the final assistant message is preserved and corresponding message lifecycle events are emitted ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
+### Breaking Changes
+
+- `CompactionDetails` holds only the file paths a compaction's read and modified lists gained over the compaction it built on (`readFilesAdded`, `modifiedFilesAdded`, and that compaction's id as `base`) instead of `readFiles` and `modifiedFiles` in full; `prepareCompaction` still resolves records an earlier version wrote.
+
+### Added
+
+- `collectToolCallsById` takes an optional start index and resolves the call behind each tool result at or after it without walking the entries before it.
+- `PruneResult` lists the entries a prune rewrote in place as `prunedEntries`.
+
+### Changed
+
+- The per-turn stale-result and threshold prunes and the shake, dedup and truncation collectors scan only the entries from the compaction boundary to the leaf instead of the whole branch, which cut the two per-turn prunes on a 238,084-entry session with 390 compactions from 420ms to 4.4ms per turn.
+- `resolveCompactionBoundaryIndex` searches for the keep marker from the end of the branch, which takes about 9ms off rebuilding the context of a 238,084-entry branch.
+- Split the agent loop's turn driver into per-step functions (pause park, directive resolution, sampling with Harmony-leak recovery, failed-turn settling, tool-call settling, queue drains); no user-visible change.
+- `estimateTokens` collects a message's fragments and the shape digest its cache compares in one walk on a first estimate instead of two, cutting the first estimate of a 26,806-entry resumed session's messages from 21.5 ms to 16.8 ms.
 
 ## [1.5.4] - 2026-09-24
 

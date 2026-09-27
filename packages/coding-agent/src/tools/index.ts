@@ -10,6 +10,7 @@ import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import type { InMemorySnapshotStore } from "@veyyon/hashline";
 import type { HostNotifier } from "@veyyon/host";
 import type { ToolDomainManifest } from "@veyyon/kernel/registry/tool-domain";
+import type { ToolResultCodec } from "@veyyon/kernel/registry/tool-result-codec";
 import type { ArtifactManager } from "@veyyon/kernel/session/artifacts";
 import type { ClientBridge } from "@veyyon/kernel/session/client-bridge";
 import { registerAgentMessageKinds } from "@veyyon/kernel/session/message-kinds";
@@ -20,6 +21,7 @@ export type SubagentSpawnRecord = AgentSpawnRecord;
 
 import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";
 import type { ToolChoiceQueue } from "@veyyon/kernel/session/tool-choice-queue";
+import { registerToolResultCodecs } from "@veyyon/kernel/session/tool-result-codecs";
 import { logger } from "@veyyon/utils";
 import type { ArgotSession } from "argot/session";
 import type { AsyncJobManager } from "../async/job-manager";
@@ -31,6 +33,7 @@ import type { Rule } from "../discovery/capability/rule";
 import { resolveEffectiveToolDiscoveryMode } from "../discovery/mode";
 import type { DiscoverableTool, DiscoverableToolSearchIndex, DiscoverableToolSource } from "../discovery/tool-index";
 import type { NoopLoopGuard } from "../edit/hashline/noop-loop-guard";
+import { editResultCodec } from "../edit/result-codec";
 import type { ToolPathWithSource } from "../extensibility/custom-tools";
 import type { Skill } from "../extensibility/skills";
 import type { GoalModeState, GoalRuntime } from "../goals";
@@ -147,8 +150,46 @@ export interface DeferredDiagnosticsEntry {
 	isStale(): boolean;
 }
 
+/**
+ * Per-session tool state a tool attaches to its {@link ToolSession} on first use. A session
+ * derived from another (the advisor's, through `deriveToolSession`) starts with none of it, so
+ * the two never share a snapshot store, a conflict log, a diagnostics ledger or a no-op guard.
+ */
+export interface ToolSessionLocalState {
+	/** Per-session snapshot store of file contents as last shown to the model
+	 *  by `read`/`search`. Used by hashline anchor-stale recovery to
+	 *  reconstruct the version the model authored anchors against when the
+	 *  file changed out-of-band. Lazily initialized by `getFileSnapshotStore`. */
+	fileSnapshotStore?: InMemorySnapshotStore;
+
+	/** Per-session log of unresolved git merge conflict regions surfaced by
+	 *  `read`. Each entry gets a stable id N referenced by `write conflict://N`
+	 *  to splice the recorded region with replacement content. Lazily initialized
+	 *  by `getConflictHistory`. */
+	conflictHistory?: ConflictHistory;
+
+	/** Per-session ledger of post-edit LSP diagnostics already surfaced to the
+	 *  model for each file. Lazily initialized by `getDiagnosticsLedger`. */
+	diagnosticsLedger?: DiagnosticsLedger;
+
+	/** Per-session ledger of consecutive byte-identical no-op edits, keyed by
+	 *  canonical file path. The hashline executor escalates a soft no-op hint
+	 *  to a thrown error once the same payload no-ops `NOOP_HARD_LIMIT` times,
+	 *  breaking agent loops that ignore the textual hint (issue #2081).
+	 *  Lazily initialized by `getNoopLoopGuard`. */
+	noopLoopGuard?: NoopLoopGuard;
+}
+
+/** The keys of {@link ToolSessionLocalState}. `satisfies` fails the type check when the two differ. */
+export const TOOL_SESSION_LOCAL_STATE_KEYS = Object.keys({
+	fileSnapshotStore: true,
+	conflictHistory: true,
+	diagnosticsLedger: true,
+	noopLoopGuard: true,
+} satisfies Record<keyof ToolSessionLocalState, true>) as ReadonlyArray<keyof ToolSessionLocalState>;
+
 /** Session context for tool factories */
-export interface ToolSession {
+export interface ToolSession extends ToolSessionLocalState {
 	/** Current working directory */
 	cwd: string;
 	/**
@@ -442,30 +483,6 @@ export interface ToolSession {
 	setCheckpointState?: (state: CheckpointState | null) => void;
 	/** Get the most recent completed rewind, if this session just rewound a checkpoint. */
 	getLastCompletedRewind?: () => CompletedRewindState | undefined;
-
-	/** Per-session snapshot store of file contents as last shown to the model
-	 *  by `read`/`search`. Used by hashline anchor-stale recovery to
-	 *  reconstruct the version the model authored anchors against when the
-	 *  file changed out-of-band. Lazily initialized by `getFileSnapshotStore`. */
-	fileSnapshotStore?: InMemorySnapshotStore;
-
-	/** Per-session log of unresolved git merge conflict regions surfaced by
-	 *  `read`. Each entry gets a stable id N referenced by `write conflict://N`
-	 *  to splice the recorded region with replacement content. Lazily initialized
-	 *  by `getConflictHistory`. */
-	conflictHistory?: ConflictHistory;
-
-	/** Per-session ledger of post-edit LSP diagnostics already surfaced to the
-	 *  model for each file. Lazily initialized by `getDiagnosticsLedger`. */
-	diagnosticsLedger?: DiagnosticsLedger;
-
-	/** Per-session ledger of consecutive byte-identical no-op edits, keyed by
-	 *  canonical file path. The hashline executor escalates a soft no-op hint
-	 *  to a thrown error once the same payload no-ops `NOOP_HARD_LIMIT` times,
-	 *  breaking agent loops that ignore the textual hint (issue #2081).
-	 *  Lazily initialized by `getNoopLoopGuard`. */
-	noopLoopGuard?: NoopLoopGuard;
-
 	/** Queue a hidden message to be injected at the next agent turn. */
 	queueDeferredMessage?(message: CustomMessage): void;
 	/** Queue late LSP diagnostics (arrived after an edit/write returned) to be shown
@@ -515,12 +532,20 @@ export const BUILTIN_TOOL_DOMAINS: readonly ToolDomainManifest<ToolFactory>[] = 
 	agentDomain,
 ];
 
-// The roles the domains record are registered where the domains are assembled, so a transcript
-// holding a `!` command converts wherever this table loads — the terminal, the SDK, a resume — and
-// nowhere a domain's own module has to be imported first.
-for (const domain of BUILTIN_TOOL_DOMAINS) {
-	registerAgentMessageKinds(domain.messageKinds ?? []);
-}
+/**
+ * Every result codec this package ships: each domain's, plus the edit tool's, which has no domain
+ * directory to publish it from (see {@link DOMAIN_TOOL_FACTORIES}).
+ */
+export const BUILTIN_RESULT_CODECS: readonly ToolResultCodec[] = [
+	...BUILTIN_TOOL_DOMAINS.flatMap(domain => domain.resultCodecs ?? []),
+	editResultCodec,
+];
+
+// The roles and result codecs the domains record are registered where the domains are assembled, so
+// a transcript holding a `!` command converts, and a resumed read or edit card restores, wherever this
+// table loads — the terminal, the SDK, a resume — and nowhere a domain's own module has to be imported first.
+for (const domain of BUILTIN_TOOL_DOMAINS) registerAgentMessageKinds(domain.messageKinds ?? []);
+registerToolResultCodecs(BUILTIN_RESULT_CODECS);
 
 /**
  * Every domain's rows, plus the four whose implementation lives outside `tools/`.
