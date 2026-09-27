@@ -162,7 +162,9 @@ describe("Antigravity's fetchAvailableModels path", () => {
 	it("is imported by the ai usage reader", async () => {
 		const usage = await readFile(path.join(PACKAGES, "ai", "src", "usage", "google-antigravity.ts"), "utf8");
 
-		expect(usage).toContain('import { FETCH_AVAILABLE_MODELS_PATH } from "@veyyon/catalog/discovery/antigravity"');
+		expect(usage).toMatch(
+			/import\s*\{[^}]*\bFETCH_AVAILABLE_MODELS_PATH\b[^}]*\}\s*from\s*["']@veyyon\/catalog\/discovery\/antigravity["']/,
+		);
 	});
 });
 
