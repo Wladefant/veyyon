@@ -940,6 +940,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				contextFiles,
 				workspaceTree: projectInputs.workspaceTree,
 				activeRepoContext,
+				nonProjectCwd: projectInputs.nonProjectCwd,
 				skills,
 				rulebookRules,
 				alwaysApplyRules,
@@ -1032,9 +1033,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				argot !== undefined &&
 				argotActiveModel !== undefined &&
 				shouldEncode(argotGate, { model: argotActiveModel, contextTokens: argotContextTokens });
-			const project = promptInputs.current;
 			const defaultPrompt = await buildSystemPromptInternal({
 				...gateInputs,
+				...promptInputs.promptOptions(),
 				// The tree is scanned when the project is discovered, so this flag hides a
 				// scanned tree but cannot scan one; `gate-registry.ts` records that placement.
 				// Descriptor placement stays live in `gateInputs`: the same active-model policy
@@ -1044,20 +1045,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				// A spawned agent gets no personality regardless of the setting. That is a fact about
 				// this caller, not about the configuration, so it does not belong in the resolver.
 				personality: agentKind === "sub" ? "none" : gateInputs.personality,
-				cwd: project.cwd,
 				agentDir,
 				resolvedCustomPrompt: options.customSystemPrompt,
-				skills: project.skills,
-				// Every api inlines the operator's layers here, cursor-agent included. That api's
-				// server discards the client's system-prompt blobs and applies none of the
-				// request-context rules, so the provider carries the assembled prompt on the
-				// active user turn — the one thing it delivers verbatim. Either way the prompt
-				// IS the instruction payload, and one composer builds it for every api.
-				contextFiles: project.contextFiles,
 				tools: promptTools,
 				toolNames,
-				rules: project.rulebookRules,
-				alwaysApplyRules: project.alwaysApplyRules,
 				resolvedAppendSystemPrompt: appendPrompt,
 				skillsSettings: settings.getGroup("skills"),
 				mcpDiscoveryMode: discoverable.searchable,
@@ -1072,10 +1063,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				secretInventory: renderSecretInventory(secretRuntime.obfuscator?.namedSecretNames()),
 				argotPreamble: argotCanEncode ? renderPreamble({ tools: true }) : undefined,
 				argotHandles: argotCanEncode && argot.loaded ? argot.promptFragment() : undefined,
-				workspaceTree: project.workspaceTree,
 				memoryRootEnabled: memoryBackend.id === "local",
 				model: getActiveModelString(),
-				activeRepoContext: project.activeRepoContext,
 				sectionOrder: resolvePromptSectionOrderForModel(settings, agent?.state.model ?? model),
 			});
 			return applySystemPromptOverride(defaultPrompt, options.systemPrompt);

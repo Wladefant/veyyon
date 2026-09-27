@@ -616,6 +616,12 @@ export interface BuildSystemPromptOptions extends Partial<GateInputs> {
 	/** Pre-resolved nested active repo context. Undefined resolves from cwd. */
 	activeRepoContext?: ActiveRepoContext | null;
 	/**
+	 * Why the working directory is not a project root, or null when it is one, as checked when the
+	 * caller discovered the project. Undefined checks `cwd`, which stats its markers and scans a
+	 * bounded way below it. May be a Promise so a check started at discovery is raced, not re-run.
+	 */
+	nonProjectCwd?: NonProjectReason | null | Promise<NonProjectReason | null>;
+	/**
 	 * Reorder the default template's banner sections (see {@link promptSectionNames}).
 	 * Resolved from the model's harness profile `promptSectionOrder`. Ignored (loudly)
 	 * for custom prompt templates, which have no banner sections.
@@ -857,6 +863,7 @@ async function preparePromptInputs(
 		skills: providedSkills,
 		workspaceTree: providedWorkspaceTree,
 		activeRepoContext: providedActiveRepoContext,
+		nonProjectCwd: providedNonProjectCwd,
 		personality = OMITTED_GATE_DEFAULTS.personality,
 		includeWorkspaceTree = OMITTED_GATE_DEFAULTS.includeWorkspaceTree,
 	} = options;
@@ -908,6 +915,13 @@ async function preparePromptInputs(
 		providedActiveRepoContext !== undefined
 			? Promise.resolve(providedActiveRepoContext)
 			: logger.time("resolveActiveRepoContext", () => resolveActiveRepoContext(cwd));
+	// Whether the session is rooted somewhere that is not a project at all. Prepared under the same
+	// deadline as everything else when the caller did not check it, because the check may stat the
+	// working directory and scan a bounded way below it.
+	const nonProjectCwdLookup =
+		providedNonProjectCwd !== undefined
+			? Promise.resolve(providedNonProjectCwd)
+			: logger.time("isNonProjectRoot", () => isNonProjectRoot(cwd));
 	const personalityLookup: Promise<ResolvedPersonality> =
 		personality === "none"
 			? Promise.resolve({ name: "none", text: "" })
@@ -946,14 +960,7 @@ async function preparePromptInputs(
 		deadline.race("loadSkills", skillsLookup, providedSkills ?? []),
 		deadline.race("buildWorkspaceTree", workspaceTreeLookup, emptyWorkspaceTree(cwd)),
 		deadline.race("resolveActiveRepoContext", activeRepoContextLookup, null),
-		// Whether the session is rooted somewhere that is not a project at all. Prepared under the
-		// same deadline as everything else, because it may stat the working directory and scan a
-		// bounded way below it.
-		deadline.race(
-			"isNonProjectRoot",
-			logger.time("isNonProjectRoot", () => isNonProjectRoot(cwd)),
-			null,
-		),
+		deadline.race("isNonProjectRoot", nonProjectCwdLookup, null),
 		deadline.race("getCpuModel", logger.time("getCpuModel", getCpuModel), undefined),
 		deadline.race(
 			"getCachedGpu",
