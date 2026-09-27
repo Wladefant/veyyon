@@ -20,6 +20,8 @@
 
 ### Changed
 
+- `init_experiment` resolves its settings, writes the session, arms the runtime and builds its report in single-purpose steps instead of one 258-line `execute`, and reads the worktree status and path prefix concurrently when checking for harness changes, cutting a clean-branch init from 3.94 ms to 3.39 ms with an identical report, session row and tool set.
+- `run_experiment` and `log_experiment` read the worktree status and path prefix concurrently through one repository resolve instead of one after the other, cutting each read on a 400-file repository from 2.20 ms to 1.65 ms.
 - The `lsp` tool runs a file-bound action through one method that starts the server, opens the file and resolves the cursor, then one function per action (location lookups, references, hover, code actions, document symbols, rename, reload), instead of one 388-line method; no user-visible change.
 - The composer's submit runs its extension input handlers, collab guest routing, shell shortcuts, steering prompt and auto-title in single-purpose methods, and the streaming and between-turns paths share one steering prompt with draft restore instead of two copies; no user-visible change.
 - The `bash` tool runs a call's preparation, interception check, internal URL expansion, working directory resolution, spawn admission and its background, managed, client-terminal and local runs in single-purpose methods instead of one 480-line `execute`; a trivial command and a 20,000-line command run in unchanged time.
