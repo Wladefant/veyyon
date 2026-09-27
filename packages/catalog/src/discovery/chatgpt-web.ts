@@ -394,7 +394,7 @@ function normalizeEntry(
 	// The one filter that keeps the official provider intact: a native Codex row
 	// belongs to `openai-codex` on OpenAI's host and must never be republished
 	// here under a loopback base URL.
-	if (!slug || !slug.startsWith(CHATGPT_WEB_MODEL_ID_PREFIX)) return null;
+	if (!slug?.startsWith(CHATGPT_WEB_MODEL_ID_PREFIX)) return null;
 
 	const thinking = resolveThinking(parsed.default_reasoning_level, parsed.supported_reasoning_levels);
 	const priority =
