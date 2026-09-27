@@ -71,7 +71,7 @@ interface Dispatcher {
 	/** The agent this dispatcher starts, whose `agent.agents.<name>.model` row the test edits. */
 	agent: string;
 	/** Start one agent through the dispatcher's real entry point and wait for it to finish. */
-	spawn(session: ToolSession, turn: number): Promise<void>;
+	start(session: ToolSession, turn: number): Promise<void>;
 }
 
 const managers: AsyncJobManager[] = [];
@@ -79,7 +79,7 @@ const managers: AsyncJobManager[] = [];
 const DISPATCHERS: Record<string, Dispatcher> = {
 	"task tool": {
 		agent: "task",
-		async spawn(session, turn) {
+		async start(session, turn) {
 			const tool = await TaskTool.create(session);
 			await tool.execute(`turn-${turn}`, {
 				context: "Verify the spawn reads the edited config.",
@@ -89,13 +89,13 @@ const DISPATCHERS: Record<string, Dispatcher> = {
 	},
 	"eval agent()": {
 		agent: "task",
-		async spawn(session) {
+		async start(session) {
 			await runEvalAgent({ agent: "task", prompt: "Inspect the requested behavior." }, { session });
 		},
 	},
 	"vibe worker": {
 		agent: "sonic",
-		async spawn(session, turn) {
+		async start(session, turn) {
 			const { jobId } = await VibeSessionRegistry.global().spawn(session, {
 				cli: "fast",
 				name: `Vibe${turn}`,
@@ -173,9 +173,9 @@ describe("a config.yml edit reaches the next spawn without /reload-config", () =
 		it(`${name}: the spawn after an edit runs on the edited model`, async () => {
 			await writeConfig(dispatcher.agent, "openai/before-edit");
 			const session = await openSession();
-			await dispatcher.spawn(session, 1);
+			await dispatcher.start(session, 1);
 			await writeConfig(dispatcher.agent, "openai/after-edit");
-			await dispatcher.spawn(session, 2);
+			await dispatcher.start(session, 2);
 			expect(models).toEqual([["openai/before-edit"], ["openai/after-edit"]]);
 		}, 30000);
 	}
@@ -184,11 +184,11 @@ describe("a config.yml edit reaches the next spawn without /reload-config", () =
 		const dispatcher = DISPATCHERS["task tool"]!;
 		await writeConfig(dispatcher.agent, "openai/before-edit");
 		const session = await openSession();
-		await dispatcher.spawn(session, 1);
+		await dispatcher.start(session, 1);
 		await fs.writeFile(tempDir.join("config.yml"), "agent: [unterminated\n");
-		await dispatcher.spawn(session, 2);
+		await dispatcher.start(session, 2);
 		await writeConfig(dispatcher.agent, "openai/after-fix");
-		await dispatcher.spawn(session, 3);
+		await dispatcher.start(session, 3);
 		expect(models).toEqual([["openai/before-edit"], ["openai/before-edit"], ["openai/after-fix"]]);
 	}, 30000);
 });
