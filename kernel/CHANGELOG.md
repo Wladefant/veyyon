@@ -12,6 +12,7 @@
 
 ### Changed
 
+- `buildSessionContextFromPath` reads a branch's settings, emits its messages and strips dangling tool calls in single-purpose steps instead of one 374-line function, and drops content-less dangling turns in one pass instead of splicing each out, cutting a context build that drops 10,000 such turns from 10.4 ms to 0.7 ms with identical contexts across 200,000 generated branches.
 - Opening or restoring a session builds its set of known entry ids once instead of twice, which takes about 40ms off opening a 220,000-entry session.
 - The resume warning flattens each command or path onto one line through the shared `collapseWhitespace` helper; no user-visible change.
 - A `tool_execution_start` session entry writes no `startedAt`, since the entry's own timestamp holds the start time, and writes its argument summary only when no preceding assistant message records the call, which cut the start markers in local sessions from 581.83 MB to 403.91 MB; a marker that wrote `startedAt` still reads back that time.
