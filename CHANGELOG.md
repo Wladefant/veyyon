@@ -20,6 +20,7 @@
 
 ### Changed
 
+- The CLI configures ArkType to validate by interpreted traversal instead of compiling a validator for every schema, cutting a compiled launch that opens a session from 372 ms to 316 ms and its heap by 11 MiB; a tool-argument rejection of a described closed set now reports the field's description followed by `(accepted: …)` instead of ArkType's list of the members.
 - The `edit` tool reads its mode descriptions from the tool prompt rows instead of the whole prompt registry, so a session that builds it no longer loads the commit-agentic, bench and prompt-registry modules it never renders, 9 fewer modules on a session start.
 - A session binds its own inline extensions (autoresearch and the custom tool bridge) without the `api.pi` package namespace, so a session with no author extension no longer loads the whole package barrel, cutting `createAgentSession` on a 13,470-message resume from 267 ms to 213 ms and its heap by about 5 MiB; an author's extension still receives `api.pi`.
 - A session checks whether its working directory is a project root once when it discovers the project, and again only when its cwd moves, instead of on every system prompt build, cutting a rebuild in the veyyon checkout from 1.16 ms to 0.23 ms and in a repository holding other projects from 75 ms to 0.25 ms with identical blocks.
@@ -93,6 +94,7 @@
 - The OpenAI Codex stream routes each event through one switch to a per-event handler instead of a 210-line branch chain; decode time of a 10,600-event stream is unchanged.
 - The stream idle watchdog waits on one promise per stalled read that the source, the deadline timer or the abort resolves, instead of racing long-lived timeout and abort promises every item, cutting its per-event overhead on a 200,000-event stream from about 320 ns to 230 ns (wrapped iteration 74 ms to 56 ms) with identical outcomes across 2,159 scripted stream schedules.
 - An OpenAI Codex turn no longer deep-copies its whole request body after the response arrives: SSE turns hold the body as sent and WebSocket turns adopt the copy taken when the frame was built as the chain baseline, cutting the time from response to finished turn on a 27 MiB context from 48.7 to 0.8 ms over SSE and 58.2 to 0.4 ms over WebSocket.
+- The auth gateway's request schemas build in a scope that compiles their validators whatever the process's ArkType configuration, so the jitless CLI validates a 751-message chat-completions request in 42 µs instead of 2.1 ms.
 - `buildOpenAICompat` classifies the host and model family once and derives each chat-completions compat field from a named predicate, and the chat and Responses builders share one override-and-rederive step; every bundled and synthetic model spec resolves to the same record, no behavior change.
 - Opening or restoring a session builds its set of known entry ids once instead of twice, which takes about 40ms off opening a 220,000-entry session.
 - The resume warning flattens each command or path onto one line through the shared `collapseWhitespace` helper; no user-visible change.
@@ -144,6 +146,7 @@
 - Turning Settings → Providers → Import Other Tools' Config on or off applies to the next discovery load in the running session and leaves `disabledProviders` unchanged, instead of adding or removing a provider named `importForeignConfig` there and taking effect only in the next session.
 - Turning Settings → Appearance → Show Inline Images on or off redraws the transcript under the new value, instead of leaving the images on cards already drawn.
 - Closing `/settings`, flipping an appearance toggle there or hovering a status line preset keeps the configured `statusLine.segmentOptions` on the status line, instead of resetting them to the preset's until the next unrelated resync.
+- A tool-argument rejection bounds each issue line to 256 characters before appending the field's accepted values, so an oversized rejected value no longer cuts the legal values out of the failure.
 - A Cursor turn whose remote agent stops making progress now ends with "Cursor made no progress for Ns" at the 30-minute ceiling instead of hanging indefinitely, because Cursor's ten-second server heartbeat no longer counts as progress.
 - A Cursor turn held by a local tool that never returns now ends when its failure or an abort arrives instead of waiting on the tool forever.
 - Fixed every Cursor exec-channel tool call being stored twice in the assistant message, which left an unanswered copy of each call that session resume reported as pending.
