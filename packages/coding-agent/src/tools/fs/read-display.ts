@@ -45,11 +45,20 @@ export interface ResolvedReadDisplay {
 	lineNumbers?: Array<number | null>;
 }
 
-/** A row's number prefix: `12:`, a merged brace pair's `12-18:`, or line-number mode's `12|`. */
-const ROW_PREFIX = /^([1-9]\d*)(?:-[1-9]\d*)?[:|]/;
-
 /** The row that stands for an elided span, drawn as is and numbered by nothing. */
 const ELISION_ROW = "…";
+
+const NEWLINE = 0x0a;
+const DIGIT_ZERO = 0x30;
+const DIGIT_ONE = 0x31;
+const DIGIT_NINE = 0x39;
+const HYPHEN = 0x2d;
+const COLON = 0x3a;
+const PIPE = 0x7c;
+const OPEN_BRACKET = 0x5b;
+const CLOSE_BRACKET = 0x5d;
+/** Digits a line number accumulates in exactly; a longer run is parsed as `Number` parses it. */
+const EXACT_DIGITS = 15;
 
 /**
  * Each `rows` display {@link rebuild} returned, with the result text it was rebuilt from and the tag it
@@ -59,37 +68,69 @@ const ELISION_ROW = "…";
 const rebuiltRows = new WeakMap<object, { body: string; tag: ReadDisplayContent }>();
 
 /**
+ * Where the run of digits starting at `at` ends, when it is a number with no leading zero; -1 when
+ * `at` does not start one. The run stops at the line's newline or the end of the text, since
+ * neither is a digit (`charCodeAt` past the end is `NaN`, which no range test admits).
+ */
+function numberEnd(body: string, at: number): number {
+	const first = body.charCodeAt(at);
+	if (!(first >= DIGIT_ONE && first <= DIGIT_NINE)) return -1;
+	let cursor = at + 1;
+	let code = body.charCodeAt(cursor);
+	while (code >= DIGIT_ZERO && code <= DIGIT_NINE) code = body.charCodeAt(++cursor);
+	return cursor;
+}
+
+/**
  * The line numbers of the card rows of numbered result text: the rows after an optional `[…]` header
  * line up to the first empty line, which separates the rows from whatever notice follows. Undefined
  * when a row carries no number prefix, since then the text is not numbered rows. Pushes each row as
  * the card draws it, without its prefix, onto `texts` when given.
+ *
+ * A row's prefix is `12:`, a merged brace pair's `12-18:`, or line-number mode's `12|`. The rows are
+ * scanned in place, so numbering a restored result allocates only the array it returns.
  */
 function readRows(body: string, texts?: string[]): Array<number | null> | undefined {
 	let start = 0;
 	const firstEnd = body.indexOf("\n");
-	const firstLine = firstEnd === -1 ? body : body.slice(0, firstEnd);
-	if (firstLine.startsWith("[") && firstLine.endsWith("]")) {
+	const firstLineEnd = firstEnd === -1 ? body.length : firstEnd;
+	if (body.charCodeAt(0) === OPEN_BRACKET && firstLineEnd > 0 && body.charCodeAt(firstLineEnd - 1) === CLOSE_BRACKET) {
 		if (firstEnd === -1) return undefined;
 		start = firstEnd + 1;
 	}
 	const numbers: Array<number | null> = [];
-	while (start <= body.length) {
+	while (start < body.length && body.charCodeAt(start) !== NEWLINE) {
 		let end = body.indexOf("\n", start);
 		if (end === -1) end = body.length;
-		const line = body.slice(start, end);
-		if (line === "") break;
-		if (line === ELISION_ROW) {
-			texts?.push(line);
+		if (end - start === ELISION_ROW.length && body.startsWith(ELISION_ROW, start)) {
+			texts?.push(ELISION_ROW);
 			numbers.push(null);
 		} else {
-			const prefix = ROW_PREFIX.exec(line);
-			if (!prefix) return undefined;
-			texts?.push(line.slice(prefix[0].length));
-			numbers.push(Number(prefix[1]));
+			const digitsEnd = numberEnd(body, start);
+			if (digitsEnd === -1) return undefined;
+			let prefixEnd = digitsEnd;
+			if (body.charCodeAt(prefixEnd) === HYPHEN) {
+				prefixEnd = numberEnd(body, prefixEnd + 1);
+				if (prefixEnd === -1) return undefined;
+			}
+			// At `end` the character is the newline or past the text, so a prefix that runs to the end of
+			// its line has no separator.
+			const separator = body.charCodeAt(prefixEnd);
+			if (separator !== COLON && separator !== PIPE) return undefined;
+			texts?.push(body.slice(prefixEnd + 1, end));
+			numbers.push(lineNumber(body, start, digitsEnd));
 		}
 		start = end + 1;
 	}
 	return numbers.length > 0 ? numbers : undefined;
+}
+
+/** The number the digits `body[start, end)` spell, as `Number` reads them. */
+function lineNumber(body: string, start: number, end: number): number {
+	if (end - start > EXACT_DIGITS) return Number(body.slice(start, end));
+	let value = 0;
+	for (let cursor = start; cursor < end; cursor++) value = value * 10 + (body.charCodeAt(cursor) - DIGIT_ZERO);
+	return value;
 }
 
 /** `numbers` as a display stores them: absent when they count up from `startLine` without a break. */
