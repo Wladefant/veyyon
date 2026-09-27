@@ -430,7 +430,10 @@ describe("Polysimulator main guard", () => {
 
 	describe("Bypass vectors", () => {
 		const testDir = os.tmpdir();
-		const expectDenied = (commands: string[], options: PolysimGuardOptions = mockPolysimOptions({ prBase: "main" })) => {
+		const expectDenied = (
+			commands: string[],
+			options: PolysimGuardOptions = mockPolysimOptions({ prBase: "main" }),
+		) => {
 			for (const cmd of commands) {
 				expect({ cmd, denial: checkPolysimMainDenial(cmd, testDir, undefined, options)?.reason }).toEqual({
 					cmd,
