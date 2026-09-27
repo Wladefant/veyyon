@@ -6,6 +6,7 @@ import { type StopReason, z } from "@veyyon/ai";
 import { AuthStorage } from "@veyyon/ai/auth-storage";
 import { createMockModel, type MockModel, type MockResponse } from "@veyyon/ai/providers/mock";
 import { AutoLearnController } from "@veyyon/coding-agent/autolearn/controller";
+import type { ExtensionRunner } from "@veyyon/coding-agent/extensibility/extensions/runner";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { type SettingPath, Settings } from "@veyyon/coding-agent/config/settings";
 import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
@@ -72,7 +73,7 @@ function thinkingOnlyStop(): MockResponse {
 async function createHarness(
 	responses: MockResponse[],
 	settingsOverrides: SettingsOverrides = {},
-	persistSession = false,
+	persistSessionOrOptions: boolean | { persistSession?: boolean; extensionRunner?: ExtensionRunner } = false,
 ): Promise<Harness & { mock: MockModel }> {
 	const tempDir = TempDir.createSync("@pi-empty-stop-guard-");
 	const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
@@ -90,7 +91,9 @@ async function createHarness(
 	});
 	settings.setModelRole("default", `${mock.provider}/${mock.id}`);
 
-	const sessionManager = persistSession
+	const options =
+		typeof persistSessionOrOptions === "boolean" ? { persistSession: persistSessionOrOptions } : persistSessionOrOptions;
+	const sessionManager = options.persistSession
 		? SessionManager.create(tempDir.path(), tempDir.path())
 		: SessionManager.inMemory(tempDir.path());
 	const tools = [recordTool as AgentTool];
@@ -112,6 +115,7 @@ async function createHarness(
 		settings,
 		modelRegistry,
 		toolRegistry: new Map(tools.map(tool => [tool.name, tool])),
+		extensionRunner: options.extensionRunner,
 	});
 	const harness = { session, authStorage, tempDir };
 	activeHarnesses.push(harness);
@@ -276,6 +280,52 @@ describe("AgentSession empty stop guard", () => {
 			.map(entry => entry.message as AgentMessage);
 		// The cap used to keep the empty turn in the branch, so reloading the
 		// session replayed it and re-sent the context that produced it.
+		expect(emptyAssistantStops(activeBranchMessages)).toHaveLength(0);
+	});
+
+	it("waits for capped empty-stop persistence before removing the active branch entry", async () => {
+		const releaseMessageEnd = Promise.withResolvers<void>();
+		const finalMessageEndEntered = Promise.withResolvers<void>();
+		let assistantMessageEnds = 0;
+		const extensionRunner = {
+			hasHandlers: vi.fn((eventType: string) => eventType === "message_end"),
+			emitBeforeAgentStart: vi.fn(async () => undefined),
+			emit: vi.fn(async (event: { type: string; message?: AgentMessage }) => {
+				if (event.type !== "message_end" || event.message?.role !== "assistant") return undefined;
+				assistantMessageEnds++;
+				if (assistantMessageEnds !== 4) return undefined;
+				finalMessageEndEntered.resolve();
+				await releaseMessageEnd.promise;
+				return undefined;
+			}),
+		} as unknown as ExtensionRunner;
+		const { session } = await createHarness(
+			[emptyStop(), emptyStop(), emptyStop(), emptyStop()],
+			{},
+			{ extensionRunner },
+		);
+		let promptSettled = false;
+		const prompt = session.prompt("answer after delayed persistence");
+		void prompt.then(
+			() => {
+				promptSettled = true;
+			},
+			() => {
+				promptSettled = true;
+			},
+		);
+		await finalMessageEndEntered.promise;
+		await scheduler.yield();
+		expect(promptSettled).toBe(false);
+
+		releaseMessageEnd.resolve();
+		await prompt;
+		await session.waitForIdle();
+
+		const activeBranchMessages = session.sessionManager
+			.getBranch()
+			.filter(entry => entry.type === "message")
+			.map(entry => entry.message as AgentMessage);
 		expect(emptyAssistantStops(activeBranchMessages)).toHaveLength(0);
 	});
 
