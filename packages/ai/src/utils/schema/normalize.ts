@@ -1801,13 +1801,15 @@ function describeDefault(description: string, defaultValue: unknown): string {
 	return `${description} (default: ${formatted})`;
 }
 
-/** `const` folded into `enum`, which strict mode accepts in its place. */
+/**
+ * `const` folded into `enum`, which strict mode accepts in its place. The
+ * sanitized `enum` is the caller's array, so a value it lacks goes into a copy.
+ */
 function foldConstIntoEnum(schema: Record<string, unknown>, sanitized: Record<string, unknown>): void {
 	if (!Object.hasOwn(schema, "const")) return;
 	const constValue = schema.const;
 	const values = Array.isArray(sanitized.enum) ? sanitized.enum : [];
-	if (!values.some(value => areJsonValuesEqual(value, constValue))) values.push(constValue);
-	sanitized.enum = values;
+	sanitized.enum = values.some(value => areJsonValuesEqual(value, constValue)) ? values : [...values, constValue];
 }
 
 /**
