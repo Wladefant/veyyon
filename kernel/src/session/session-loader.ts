@@ -278,7 +278,11 @@ class SessionRecordLoop {
 	layout(): SessionRecordLayout | undefined {
 		if (this.#titleSlotBytes !== SESSION_TITLE_SLOT_BYTES || this.#headerLine === undefined) return undefined;
 		if (this.#issues.length > 0 || this.#stitched > 0) return undefined;
-		return { header: `${this.#headerLine}\n`, entryOffsets: this.#offsets, end: this.#end };
+		// The header line is a slice of the file text read to find it, and a slice shares that text's
+		// buffer: holding it for the session's life would hold every byte of the file with it. The copy
+		// holds the header's bytes alone.
+		const header = Buffer.from(`${this.#headerLine}\n`, "utf-8").toString("utf-8");
+		return { header, entryOffsets: this.#offsets, end: this.#end };
 	}
 }
 
