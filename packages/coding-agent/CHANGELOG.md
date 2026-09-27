@@ -4,6 +4,7 @@
 
 ### Changed
 
+- A rebuilt transcript's highlight prefetch holds each source until every card that draws it has read it, including sources the 256-entry highlight cache held when the prefetch ran, instead of dropping it for that cache on its first read, so a command run again or a rebuild after an earlier one no longer re-highlights evicted sources one at a time; a 13,470-entry transcript draws its first frame with 0 instead of 284 such highlights (512 on later rebuilds), from 214.5 ms to 200.2 ms.
 - A session reads its persisted MCP tool selection at construction and on each MCP tool refresh from the one entry that records it instead of rebuilding, deobfuscating and argot-expanding the branch's whole message list, cutting `createAgentSession` on a 26,806-entry resume from 40.2 ms to 35.4 ms.
 - A resumed read result numbers its card rows by scanning the result text in place instead of slicing and regex-matching each row, cutting `SessionManager.open` on a 76 MB session from 179.9 ms to 143.9 ms with identical cards across 400,000 generated result texts.
 - The CLI configures ArkType to validate by interpreted traversal instead of compiling a validator for every schema, cutting a compiled launch that opens a session from 372 ms to 316 ms and its heap by 11 MiB; a tool-argument rejection of a described closed set now reports the field's description followed by `(accepted: …)` instead of ArkType's list of the members.
