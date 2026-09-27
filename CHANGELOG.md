@@ -42,6 +42,7 @@
 
 ### Fixed
 
+- Replace-all edits that fuzzy-match more than once no longer match their own inserted text, which grew the buffer on every pass and hung the edit tool instead of returning a result; matches are now taken against the original file and rebuilt in place ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed `autoResume` / `--continue` resurrecting the pre-`/new` transcript when exiting before any assistant output: lazy new-session persistence now records a durable fresh breadcrumb boundary so resume starts fresh instead of falling back to the old session ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Print mode error/aborted exits and RPC shutdown paths now await session disposal, ensuring owned Chromium instances and other resources are reaped before process termination ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed HTML export and share viewers rendering inline Markdown inside list items as literal text ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
