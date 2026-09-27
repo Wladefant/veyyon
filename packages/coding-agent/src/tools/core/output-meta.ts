@@ -44,6 +44,7 @@ export type {
 // this file for them, and forwarding costs nothing: that module imports two formatters and the
 // diagnostic renderer.
 export {
+	formatColumnTruncatedNotice,
 	formatFullOutputReference,
 	formatOutputNotice,
 	formatTruncationMetaNotice,

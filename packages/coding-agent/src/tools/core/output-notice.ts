@@ -312,7 +312,8 @@ export function formatTruncationMetaNotice(truncation: TruncationMeta): string {
 }
 
 /**
- * The per-line column-cap notice, or `undefined` when no line was cut.
+ * The per-line column-cap notice, or `undefined` when no line was cut. Separate from
+ * {@link formatOutputNotice} because the `!`/`$` execution blocks print it under their own footer.
  */
 export function formatColumnTruncatedNotice(meta: OutputMeta): string | undefined {
 	const c = meta.limits?.columnTruncated;
