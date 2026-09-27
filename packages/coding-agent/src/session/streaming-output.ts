@@ -25,7 +25,7 @@ export const DEFAULT_MAX_LINES = 3000;
  * This name stays because it is what every caller and every tool doc says.
  */
 export const DEFAULT_MAX_BYTES = DEFAULT_INLINE_OUTPUT_MAX_BYTES;
-export const DEFAULT_MAX_COLUMN = 512; // Max chars per grep match line
+export const DEFAULT_MAX_COLUMN = 512; // Max UTF-8 bytes per grep match line
 
 /**
  * Default artifact-on-disk cap for {@link OutputSink}.
@@ -59,7 +59,7 @@ export interface OutputSummary {
 	columnDroppedBytes?: number;
 	/** Number of distinct lines that hit the per-line column cap. */
 	columnTruncatedLines?: number;
-	/** Configured per-line column cap in effect (chars), when > 0. */
+	/** Configured per-line column cap in effect (UTF-8 bytes), when > 0. */
 	columnMax?: number;
 	/** Artifact ID for internal URL access (artifact://<id>) when truncated */
 	artifactId?: string;
@@ -184,6 +184,21 @@ export function truncateLine(
 ): { text: string; wasTruncated: boolean } {
 	if (line.length <= maxChars) return { text: line, wasTruncated: false };
 	return { text: `${line.slice(0, maxChars)}…`, wasTruncated: true };
+}
+
+/**
+ * Truncate a single line to a UTF-8 byte budget, appending '…' if truncated.
+ * Mirrors the native grep `truncate_line` (reserves 3 bytes for the marker and
+ * cuts on a char boundary) so JS-side virtual-resource matches truncate in the
+ * same unit as on-disk matches from the Rust searcher.
+ */
+export function truncateLineBytes(
+	line: string,
+	maxBytes: number = DEFAULT_MAX_COLUMN,
+): { text: string; wasTruncated: boolean } {
+	if (Buffer.byteLength(line, "utf-8") <= maxBytes) return { text: line, wasTruncated: false };
+	const head = truncateHeadBytes(line, Math.max(0, maxBytes - 3)).text;
+	return { text: `${head}${ELLIPSIS}`, wasTruncated: true };
 }
 
 // =============================================================================
