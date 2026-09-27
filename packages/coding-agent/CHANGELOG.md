@@ -46,6 +46,7 @@
 - A tool card builds its display when a frame draws it instead of on every change, so a resume stops highlighting each rebuilt call only to replace it with its result, which cuts rebuilding and drawing a 4,712-block transcript from 999 ms to 603 ms.
 - The `includeWorkspaceTree` prompt gate states the project discovery scan that fixes it for the session instead of a read in `sdk.ts` that no longer exists; no user-visible change.
 - The `read` tool dispatches a path through single-purpose steps (internal URLs, archive, SQLite and PDF image members, directories, images, notebooks, converted documents, binary files, summaries, multi-range and single-range text), and a range read collects, truncates, formats and annotates its window in helpers of their own; no user-visible change.
+- A resumed `read` result builds its card text from its numbered rows when a card first draws it instead of when the session opens, a read group with previews off (the default) keeps no card text, and rewriting an unchanged resumed read writes back its stored tag without building the text, which cut the heap of a 38 MB, 1,280-read session after opening from 92.3 MiB to 67.6 MiB, its string cells from 915,658 to 106,754 and its open from 253 ms to 192 ms, its heap after the first frame from 171.1 MiB to 144.4 MiB, and its first whole-tail rewrite from 377 ms to 221 ms and 150.2 MiB to 120.5 MiB retained, with byte-identical file output.
 
 ### Fixed
 
