@@ -3,6 +3,7 @@ import { isRecord } from "@veyyon/utils/type-guards";
 import type { ReadEntryView } from "@veyyon/wire/presentation/transcript";
 import { extractResultTextOrUndefined } from "../tools/core/output-notice";
 import { splitPathAndSel } from "../tools/core/path-utils";
+import { type ReadDisplayContent, resolveReadDisplay } from "../tools/fs/read-display";
 import type { ToolExecutionBuildParams } from "./tool-execution";
 
 type ReadGroupResult = NonNullable<ToolExecutionBuildParams["result"]>;
@@ -12,7 +13,7 @@ interface ReadResultDetails {
 	suffixResolution?: { from?: string; to?: string };
 	conflictCount?: number;
 	displayReadTargets?: unknown;
-	displayContent?: { text?: string; startLine?: number; lineNumbers?: Array<number | null> };
+	displayContent?: ReadDisplayContent;
 	meta?: { source?: { type?: string; value?: string } };
 }
 
@@ -21,12 +22,22 @@ export function readArgsTarget(args: unknown): string | undefined {
 	return typeof args.path === "string" ? args.path : typeof args.file_path === "string" ? args.file_path : undefined;
 }
 
-/** Partial results do not settle a read entry or replace its completed preview. */
+interface ReadEntryUpdate {
+	/** A partial result settles nothing and replaces no completed preview. */
+	isPartial?: boolean;
+	/** Defaults to the result's own `isError`. */
+	isError?: boolean;
+	/**
+	 * False when the entry's holder draws no preview, so the entry keeps no preview text and a restored
+	 * read display is never built. Defaults to true.
+	 */
+	withContent?: boolean;
+}
+
 export function updateReadEntryResult(
 	entry: ReadEntryView,
 	result: ReadGroupResult,
-	isPartial = false,
-	isError = result.isError,
+	{ isPartial = false, isError = result.isError, withContent = true }: ReadEntryUpdate = {},
 ): void {
 	if (isPartial) return;
 	if (toolResultNeverRan(result.details)) {
@@ -63,7 +74,8 @@ export function updateReadEntryResult(
 	entry.conflictCount =
 		typeof details?.conflictCount === "number" && details.conflictCount > 0 ? details.conflictCount : undefined;
 	entry.status = isError ? "error" : corrected ? "warning" : "success";
-	const displayContent = details?.displayContent;
+	if (!withContent) return;
+	const displayContent = resolveReadDisplay(details?.displayContent, result.content);
 	const textContent = extractResultTextOrUndefined(result.content);
 	if (displayContent !== undefined || textContent !== undefined) {
 		entry.contentText = displayContent?.text ?? textContent;
@@ -82,6 +94,6 @@ export function toReadEntryView(
 	const path = readArgsTarget(args);
 	if (path === undefined) return undefined;
 	const entry: ReadEntryView = { toolCallId, path, status: "pending" };
-	if (result !== undefined) updateReadEntryResult(entry, result, isPartial, isError);
+	if (result !== undefined) updateReadEntryResult(entry, result, { isPartial, isError });
 	return entry;
 }

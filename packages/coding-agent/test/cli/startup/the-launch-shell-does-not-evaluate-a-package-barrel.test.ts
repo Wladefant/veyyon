@@ -72,11 +72,15 @@ const BARRELS = ["@veyyon/tui", "@veyyon/utils", "@veyyon/agent-core", "@veyyon/
  * existing migrations) and `thinking/index.ts`, `catalog/model-thinking.ts`,
  * `catalog/hosts.ts` (0049bd30b's configured agent effort validation, retained by
  * the fork merge). These are settings contracts on the shell path, not an
- * accidental package barrel. Keep one additional module of margin: 355 and 356
- * pass, 357 fails. Bun 1.4.2 reports 339 for this same graph because its cache
- * omits the 16 builtin node:/bun: entries that Bun 1.4.0 includes.
+ * accidental package barrel. Bun 1.4.2 reports 16 fewer for this same graph because
+ * its cache omits the builtin node:/bun: entries that Bun 1.4.0 includes.
+ *
+ * RE-MEASURED 2026-09-27 at 356 (CI's Bun 1.4.0) after the santhreal merge up to e4967b27fd04:
+ * `hosts/terminal/engine/src/core/paint-sequences.ts`, the escape sequence each paint shape writes,
+ * split out of `core/tui.ts`, which the shell already evaluates, so the graph runs no new code.
+ * Keep one additional module of margin.
  */
-const SHELL_GRAPH_MODULE_CEILING = 357;
+const SHELL_GRAPH_MODULE_CEILING = 358;
 
 async function probe(code: string): Promise<number> {
 	const { stdout } = await run("bun", ["-e", code], { cwd: repoRoot, maxBuffer: 1 << 24 });

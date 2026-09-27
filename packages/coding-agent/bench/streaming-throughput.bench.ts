@@ -21,7 +21,7 @@
  *
  * Run: bun run packages/coding-agent/bench/streaming-throughput.bench.ts
  */
-import type { AssistantMessage } from "@veyyon/ai";
+import type { AssistantMessageView } from "@veyyon/wire/presentation";
 import { BlockUnitCounter, buildDisplayMessage, nextStep } from "../src/modes/terminal/controllers/streaming-reveal";
 
 const HIDE_THINKING = false;
@@ -53,33 +53,17 @@ The adaptive step is \`nextStep = max(3, ceil(backlog / 8))\`, so the tick count
 
 `;
 
-function makeMessage(textBlocks: string[]): AssistantMessage {
-	return {
-		role: "assistant",
-		content: textBlocks.map(text => ({ type: "text" as const, text })),
-		api: "anthropic-messages",
-		provider: "anthropic",
-		model: "mock",
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-		stopReason: "stop",
-		timestamp: 0,
-	};
+function makeMessage(textBlocks: string[]): AssistantMessageView {
+	return { segments: textBlocks.map(text => ({ kind: "text" as const, text })) };
 }
 
 /** Total visible graphemes of the target's text blocks via the counter (mirrors
  *  the controller's `#visibleUnits` for text-only blocks). */
-function textUnits(target: AssistantMessage, counter: BlockUnitCounter): number {
+function textUnits(target: AssistantMessageView, counter: BlockUnitCounter): number {
 	let total = 0;
-	for (let i = 0; i < target.content.length; i++) {
-		const block = target.content[i];
-		if (block?.type === "text") total += counter.count(i, block.text);
+	for (let i = 0; i < target.segments.length; i++) {
+		const segment = target.segments[i];
+		if (segment?.kind === "text") total += counter.count(i, segment.text);
 	}
 	return total;
 }
@@ -87,7 +71,7 @@ function textUnits(target: AssistantMessage, counter: BlockUnitCounter): number 
 /** Drive one full reveal episode: a fresh counter shared by countOf + sliceOf,
  *  an initial render at revealed = 0 (mirrors `begin`), then the `nextStep`
  *  catch-up loop (mirrors `#tick`). Returns the number of reveal ticks. */
-function revealEpisode(target: AssistantMessage): number {
+function revealEpisode(target: AssistantMessageView): number {
 	const counter = new BlockUnitCounter();
 	const countOf = (index: number, text: string): number => counter.count(index, text);
 	const sliceOf = (index: number, text: string, units: number): string => counter.slice(index, text, units);

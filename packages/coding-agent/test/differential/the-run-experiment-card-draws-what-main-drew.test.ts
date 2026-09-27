@@ -99,7 +99,6 @@ describe("run_experiment tool differential", () => {
 			crashed: false,
 			abandonedPriorRun: null,
 			truncation: {
-				content: tailOutput,
 				truncated: true,
 				truncatedBy: "lines" as const,
 				totalLines: 4096,

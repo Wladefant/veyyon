@@ -25,13 +25,14 @@ import {
 import { checkSessionEntryShape } from "./session-entry-shape";
 import { migrateToCurrentVersion } from "./session-migrations";
 import { isImageBlock, isImageDataPayload } from "./session-persistence";
-import { FileSessionStorage, type SessionStorage } from "./session-storage";
+import { FileSessionStorage, type SessionStorage, type SessionStorageStat } from "./session-storage";
 import {
 	parseTitleSlotFromContent,
 	parseTitleSlotLine,
 	type SessionTitleUpdate,
 	titleUpdateFromSlot,
 } from "./session-title-slot";
+import { restoreToolResultEntries } from "./tool-result-codecs";
 
 const STREAM_LOAD_THRESHOLD_BYTES = 8 * 1024 * 1024;
 
@@ -56,20 +57,33 @@ export class CorruptSessionFileError extends Error {
 	}
 }
 
+/**
+ * Where a file's records sit, for a file laid out the way a publish writes it: a fixed-width title
+ * slot, then one line per record. Every line parsed, no record was dropped or re-linked, and `end`
+ * is the byte just past the last record's newline, so the file holds nothing else when `end` is
+ * its size.
+ */
+export interface SessionRecordLayout {
+	/** The header line as read, newline included. */
+	header: string;
+	/** Byte offset of each record line after the header, parallel to `entries.slice(1)`. */
+	entryOffsets: number[];
+	/** Byte offset just past the last record's newline. */
+	end: number;
+}
+
 function splitTitleSlot(content: string): {
 	body: string;
 	slot: SessionTitleUpdate | undefined;
-	startLine: number;
-	startByteOffset: number;
+	slotLineBytes: number | undefined;
 } {
 	const slot = titleUpdateFromSlot(parseTitleSlotFromContent(content));
-	if (!slot) return { body: content, slot: undefined, startLine: 1, startByteOffset: 1 };
+	if (!slot) return { body: content, slot: undefined, slotLineBytes: undefined };
 	const newlineIndex = content.indexOf("\n");
 	return {
 		body: content.slice(newlineIndex + 1),
 		slot,
-		startLine: 2,
-		startByteOffset: Buffer.byteLength(content.slice(0, newlineIndex + 1), "utf-8") + 1,
+		slotLineBytes: Buffer.byteLength(content.slice(0, newlineIndex), "utf-8"),
 	};
 }
 
@@ -170,27 +184,33 @@ class SessionRecordLoop {
 	readonly #streaming: boolean;
 	readonly #logSource: string | undefined;
 	readonly #notices: SessionLoadOptions;
-	#line: number;
-	#byteOffset: number;
+	#line = 1;
+	#byteOffset = 1;
+	/** Bytes of the title slot line, newline included, when the file starts with one. */
+	#titleSlotBytes = 0;
+	/** 0-based byte offset of each record line after the header, parallel to `entries.slice(1)`. */
+	readonly #offsets: number[] = [];
+	#headerLine: string | undefined;
+	/** 0-based byte offset just past the last record's newline. */
+	#end = 0;
+	#stitched = 0;
 
-	constructor(options: {
-		streaming: boolean;
-		logSource: string | undefined;
-		notices: SessionLoadOptions;
-		startLine?: number;
-		startByteOffset?: number;
-	}) {
+	constructor(options: { streaming: boolean; logSource: string | undefined; notices: SessionLoadOptions }) {
 		this.#streaming = options.streaming;
 		this.#logSource = options.logSource;
 		this.#notices = options.notices;
-		this.#line = options.startLine ?? 1;
-		this.#byteOffset = options.startByteOffset ?? 1;
 	}
 
-	/** Advance past a line the caller consumed itself, such as the physical title slot. */
+	/** Advance past a line the caller consumed itself. */
 	skip(byteLength: number): void {
 		this.#line += 1;
 		this.#byteOffset += byteLength + 1;
+	}
+
+	/** Advance past the physical title slot, which is not a record. */
+	skipTitleSlot(byteLength: number): void {
+		if (this.#byteOffset === 1) this.#titleSlotBytes = byteLength + 1;
+		this.skip(byteLength);
 	}
 
 	/** Feed one physical line and its byte length. A blank line only moves the cursor. */
@@ -216,7 +236,10 @@ class SessionRecordLoop {
 
 		const shape = checkSessionEntryShape(value);
 		if (shape.ok) {
+			if (this.entries.length === 0) this.#headerLine = text;
+			else this.#offsets.push(this.#byteOffset - 1);
 			this.entries.push(value as FileEntry);
+			this.#end = this.#byteOffset + byteLength;
 		} else {
 			this.#issues.push({ line: this.#line, byteOffset: this.#byteOffset, problem: shape.problem });
 			logger.warn("Dropped a session record that decoded to the wrong shape (data lost)", {
@@ -240,42 +263,50 @@ class SessionRecordLoop {
 			emitDroppedRecordNotice(this.#notices, this.#issues);
 		}
 		const stitched = stitchOrphanedEntries(this.entries);
+		this.#stitched = stitched;
 		if (stitched > 0) {
 			logger.warn("Re-linked session records whose parent was lost", { source: this.#logSource, stitched });
 			emitStitchedRecordNotice(this.#notices, stitched);
 		}
 		return this.entries;
 	}
+
+	/**
+	 * Where the records sit, when the file read so far is laid out the way a publish writes it (see
+	 * {@link SessionRecordLayout}). Read after {@link finish}.
+	 */
+	layout(): SessionRecordLayout | undefined {
+		if (this.#titleSlotBytes !== SESSION_TITLE_SLOT_BYTES || this.#headerLine === undefined) return undefined;
+		if (this.#issues.length > 0 || this.#stitched > 0) return undefined;
+		// The header line is a slice of the file text read to find it, and a slice shares that text's
+		// buffer: holding it for the session's life would hold every byte of the file with it. The copy
+		// holds the header's bytes alone.
+		const header = Buffer.from(`${this.#headerLine}\n`, "utf-8").toString("utf-8");
+		return { header, entryOffsets: this.#offsets, end: this.#end };
+	}
+}
+
+/** What one read of a session file produced, from either load path. */
+export interface ParsedSessionContent {
+	entries: FileEntry[];
+	titleSlot: SessionTitleUpdate | undefined;
+	layout: SessionRecordLayout | undefined;
 }
 
 /** Parse session JSONL while stripping and folding the optional fixed title slot. */
-export function parseSessionContent(
-	content: string,
-	context: SessionLoadOptions = {},
-): {
-	entries: FileEntry[];
-	titleSlot: SessionTitleUpdate | undefined;
-} {
-	const { body, slot, startLine, startByteOffset } = splitTitleSlot(content);
-	const loop = new SessionRecordLoop({
-		streaming: false,
-		logSource: context.source,
-		notices: context,
-		startLine,
-		startByteOffset,
-	});
+export function parseSessionContent(content: string, context: SessionLoadOptions = {}): ParsedSessionContent {
+	const { body, slot, slotLineBytes } = splitTitleSlot(content);
+	const loop = new SessionRecordLoop({ streaming: false, logSource: context.source, notices: context });
+	if (slotLineBytes !== undefined) loop.skipTitleSlot(slotLineBytes);
 	for (const rawLine of body.split("\n")) loop.push(rawLine, Buffer.byteLength(rawLine, "utf-8"));
-	return { entries: foldTitleSlot(loop.finish(), slot), titleSlot: slot };
+	return { entries: foldTitleSlot(loop.finish(), slot), titleSlot: slot, layout: loop.layout() };
 }
 
 /** Exported for testing — the ≥8MiB streaming path (works on any file size). */
 export async function loadEntriesFromFileStream(
 	filePath: string,
 	options: SessionLoadOptions = {},
-): Promise<{
-	entries: FileEntry[];
-	titleSlot: SessionTitleUpdate | undefined;
-}> {
+): Promise<ParsedSessionContent> {
 	let titleSlot: SessionTitleUpdate | undefined;
 	const loop = new SessionRecordLoop({
 		streaming: true,
@@ -295,18 +326,18 @@ export async function loadEntriesFromFileStream(
 				const slot = parseTitleSlotLine(text.trim());
 				if (slot) {
 					titleSlot = titleUpdateFromSlot(slot);
-					loop.skip(lineBytes.byteLength);
+					loop.skipTitleSlot(lineBytes.byteLength);
 					continue;
 				}
 			}
 			loop.push(text, lineBytes.byteLength);
 		}
 	} catch (err) {
-		if (isEnoent(err)) return { entries: [], titleSlot: undefined };
+		if (isEnoent(err)) return { entries: [], titleSlot: undefined, layout: undefined };
 		throw err;
 	}
 
-	return { entries: foldTitleSlot(loop.finish(), titleSlot), titleSlot };
+	return { entries: foldTitleSlot(loop.finish(), titleSlot), titleSlot, layout: loop.layout() };
 }
 
 /** Read only the fixed-size head window to detect a physical title slot. */
@@ -330,28 +361,57 @@ export function parseSessionEntries(content: string): FileEntry[] {
 	return parseSessionContent(content).entries;
 }
 
+/**
+ * Where each record of a loaded file sits, for a file laid out the way a publish writes it (see
+ * {@link SessionRecordLayout}) that was the same object, the same size, before and after the read.
+ * A writer that keeps the bytes before its first changed record can start from this instead of
+ * reading the file back.
+ */
+export interface SessionFileLayout {
+	size: number;
+	/** The storage's identity for the object read (see {@link SessionStorageStat.identity}). */
+	identity: string;
+	/** The header line as read, newline included. */
+	header: string;
+	/** Byte offset of each record line after the header, parallel to `entries.slice(1)`. */
+	entryOffsets: number[];
+}
+
+export interface LoadedSessionFile {
+	entries: FileEntry[];
+	layout: SessionFileLayout | undefined;
+}
+
 /** Exported for testing */
 export async function loadEntriesFromFile(
 	filePath: string,
 	storage: SessionStorage = new FileSessionStorage(),
 	options: SessionLoadOptions = {},
 ): Promise<FileEntry[]> {
-	let loaded: { entries: FileEntry[]; titleSlot: SessionTitleUpdate | undefined };
-	let size: number;
+	return (await loadSessionFile(filePath, storage, options)).entries;
+}
+
+/** Load a session file's entries, and where they sit in it when that can be established. */
+export async function loadSessionFile(
+	filePath: string,
+	storage: SessionStorage = new FileSessionStorage(),
+	options: SessionLoadOptions = {},
+): Promise<LoadedSessionFile> {
+	let loaded: ParsedSessionContent;
+	let before: SessionStorageStat;
 	try {
-		const stat = storage.statSync(filePath);
-		size = stat.size;
+		before = storage.statSync(filePath);
 		loaded =
-			storage instanceof FileSessionStorage && stat.size >= STREAM_LOAD_THRESHOLD_BYTES
+			storage instanceof FileSessionStorage && before.size >= STREAM_LOAD_THRESHOLD_BYTES
 				? await loadEntriesFromFileStream(filePath, { ...options, source: options.source ?? filePath })
 				: parseSessionContent(await storage.readText(filePath), { ...options, source: options.source ?? filePath });
 	} catch (err) {
-		if (isEnoent(err)) return [];
+		if (isEnoent(err)) return { entries: [], layout: undefined };
 		throw err;
 	}
 	const { entries } = loaded;
 
-	if (size === 0) return [];
+	if (before.size === 0) return { entries: [], layout: undefined };
 	if (entries.length === 0) {
 		throw new CorruptSessionFileError(filePath, "the non-empty file has no readable session header");
 	}
@@ -360,7 +420,29 @@ export async function loadEntriesFromFile(
 		throw new CorruptSessionFileError(filePath, "the first readable record is not a session header");
 	}
 
-	return entries;
+	return { entries, layout: verifiedLayout(storage, filePath, before, loaded.layout) };
+}
+
+/**
+ * `layout` as a description of the file at `filePath`, when the read covered all of it and nothing
+ * replaced or grew the file while it was read. Appends only grow a file and a publish replaces the
+ * object, so an unchanged identity and size on both sides of the read rule out both.
+ */
+function verifiedLayout(
+	storage: SessionStorage,
+	filePath: string,
+	before: SessionStorageStat,
+	layout: SessionRecordLayout | undefined,
+): SessionFileLayout | undefined {
+	if (!layout || before.identity === undefined || layout.end !== before.size) return undefined;
+	let after: SessionStorageStat;
+	try {
+		after = storage.statSync(filePath);
+	} catch {
+		return undefined;
+	}
+	if (after.identity !== before.identity || after.size !== before.size) return undefined;
+	return { size: before.size, identity: before.identity, header: layout.header, entryOffsets: layout.entryOffsets };
 }
 
 /**
@@ -395,17 +477,64 @@ type BlobSite =
 	| { kind: "text-item"; owner: unknown[]; index: number };
 
 /**
- * Walk the transcript once and collect the references, without awaiting anything.
+ * Strings shorter than this stay unpooled. On a 372.7 MiB session of 107,918 entries, pooling from
+ * 64 characters took the loaded heap from 608.7 MiB to 397.9 MiB; from 256 characters it reached
+ * only 474.5 MiB, and from 8 characters it saved 17 MiB more than 64 for 105 ms more of the walk.
+ */
+const MIN_POOLED_LENGTH = 64;
+
+/**
+ * One copy of each repeated string in the entries one load restores.
+ *
+ * A session file writes a text once for every place it occurs: a file read twice, an eval cell's
+ * code beside the call that ran it, a card's text beside the result's own, each compaction's file
+ * list. `JSON.parse` gives every occurrence its own string. Strings are immutable, so pointing each
+ * occurrence at the first leaves the entries equal and lets the copies be collected. The load empties
+ * the pool before it returns: JavaScriptCore kept the first load's pool reachable after that load
+ * returned, which held every distinct pooled string of a session the caller had already released.
+ *
+ * A field a result codec rebuilds is not pooled: the rebuild is the result's content string or a
+ * slice of it, and that content is pooled. Pooling the rebuilt fields of a 372.7 MiB session written
+ * through every codec left its loaded heap at 393.0 MiB either way.
+ */
+class StringPool {
+	readonly #strings = new Map<string, string>();
+
+	/** The pooled string equal to `value`, pooling `value` when it is the first of its text. */
+	intern(value: string): string {
+		if (value.length < MIN_POOLED_LENGTH) return value;
+		const known = this.#strings.get(value);
+		if (known !== undefined) return known;
+		this.#strings.set(value, value);
+		return value;
+	}
+
+	/** Drop every pooled string, so a pool the engine keeps reachable holds no text. */
+	clear(): void {
+		this.#strings.clear();
+	}
+}
+
+/** What the one walk over the loaded entries gathers. */
+interface EntryScan {
+	sites: BlobSite[];
+	strings: StringPool;
+}
+
+/**
+ * Walk the transcript once, without awaiting anything: record each blob reference, and point every
+ * other string at its pooled copy.
  *
  * The walk used to be `async` and mapped every array element and every object key
  * through `Promise.all`, so a session with no externalized payload at all still
  * allocated one closure and one promise per node: 2,000 ordinary tool entries cost
  * ~17ms and ~27MiB of churn to discover that there was nothing to read. A
- * synchronous walk that only records the sites it finds costs neither.
+ * synchronous walk that only records the sites it finds costs neither. Pooling rides the same walk
+ * rather than a second pass over every node.
  */
-function collectBlobSites(value: unknown, sites: BlobSite[], key?: string): void {
+function scanEntryValue(value: unknown, scan: EntryScan, key?: string): void {
 	if (shouldResolveImagePayload(value, key)) {
-		sites.push({ kind: "image-data", owner: value });
+		scan.sites.push({ kind: "image-data", owner: value });
 		return;
 	}
 
@@ -415,17 +544,18 @@ function collectBlobSites(value: unknown, sites: BlobSite[], key?: string): void
 			// A string child is recorded against the parent, because a resolver receives
 			// the string by value and cannot rewrite the slot it lives in.
 			if (typeof item === "string") {
-				if (isTextBlobRef(item)) sites.push({ kind: "text-item", owner: value, index });
+				if (isTextBlobRef(item)) scan.sites.push({ kind: "text-item", owner: value, index });
+				else value[index] = scan.strings.intern(item);
 				continue;
 			}
-			collectBlobSites(item, sites, key);
+			scanEntryValue(item, scan, key);
 		}
 		return;
 	}
 
 	if (typeof value !== "object" || value === null) return;
 
-	if (hasImageUrl(value) && isBlobRef(value.image_url)) sites.push({ kind: "image-url", owner: value });
+	if (hasImageUrl(value) && isBlobRef(value.image_url)) scan.sites.push({ kind: "image-url", owner: value });
 
 	const target = value as Record<string, unknown>;
 	for (const childKey of Object.keys(target)) {
@@ -433,10 +563,11 @@ function collectBlobSites(value: unknown, sites: BlobSite[], key?: string): void
 		// Externalized text (large tool results, text blocks) is a plain `blobtext:`
 		// string value at an arbitrary key; restore the full content in place.
 		if (typeof item === "string") {
-			if (isTextBlobRef(item)) sites.push({ kind: "text", owner: target, key: childKey });
+			if (isTextBlobRef(item)) scan.sites.push({ kind: "text", owner: target, key: childKey });
+			else target[childKey] = scan.strings.intern(item);
 			continue;
 		}
-		collectBlobSites(item, sites, childKey);
+		scanEntryValue(item, scan, childKey);
 	}
 }
 
@@ -452,20 +583,25 @@ function collectBlobSites(value: unknown, sites: BlobSite[], key?: string): void
  */
 const BLOB_READ_CONCURRENCY = 8;
 
-async function resolveBlobSite(site: BlobSite, blobStore: BlobStore, lost: LostPayloads): Promise<void> {
+async function resolveBlobSite(
+	site: BlobSite,
+	blobStore: BlobStore,
+	lost: LostPayloads,
+	strings: StringPool,
+): Promise<void> {
 	// Each resolver returns the reference unchanged when the blob is gone, and it is
 	// only called on a value that IS a reference, so an unchanged value is a loss.
 	switch (site.kind) {
 		case "image-data": {
 			const resolved = await resolveImageData(blobStore, site.owner.data);
 			if (resolved === site.owner.data) lost.count += 1;
-			site.owner.data = resolved;
+			site.owner.data = strings.intern(resolved);
 			return;
 		}
 		case "image-url": {
 			const resolved = await resolveImageDataUrl(blobStore, site.owner.image_url);
 			if (resolved === site.owner.image_url) lost.count += 1;
-			site.owner.image_url = resolved;
+			site.owner.image_url = strings.intern(resolved);
 			return;
 		}
 		case "text": {
@@ -473,7 +609,7 @@ async function resolveBlobSite(site: BlobSite, blobStore: BlobStore, lost: LostP
 			if (typeof reference !== "string") return;
 			const resolved = await resolveTextBlobRef(blobStore, reference);
 			if (resolved === reference) lost.count += 1;
-			site.owner[site.key] = resolved;
+			site.owner[site.key] = strings.intern(resolved);
 			return;
 		}
 		case "text-item": {
@@ -481,13 +617,14 @@ async function resolveBlobSite(site: BlobSite, blobStore: BlobStore, lost: LostP
 			if (typeof reference !== "string") return;
 			const resolved = await resolveTextBlobRef(blobStore, reference);
 			if (resolved === reference) lost.count += 1;
-			site.owner[site.index] = resolved;
+			site.owner[site.index] = strings.intern(resolved);
 			return;
 		}
 	}
 }
 
-async function resolveBlobSites(sites: BlobSite[], blobStore: BlobStore, lost: LostPayloads): Promise<void> {
+async function resolveBlobSites(scan: EntryScan, blobStore: BlobStore, lost: LostPayloads): Promise<void> {
+	const { sites, strings } = scan;
 	if (sites.length === 0) return;
 	let next = 0;
 	const workers = Math.min(BLOB_READ_CONCURRENCY, sites.length);
@@ -495,7 +632,7 @@ async function resolveBlobSites(sites: BlobSite[], blobStore: BlobStore, lost: L
 		Array.from({ length: workers }, async () => {
 			for (let index = next++; index < sites.length; index = next++) {
 				const site = sites[index];
-				if (site) await resolveBlobSite(site, blobStore, lost);
+				if (site) await resolveBlobSite(site, blobStore, lost, strings);
 			}
 		}),
 	);
@@ -529,13 +666,15 @@ export interface BlobResolutionOptions {
 }
 
 /**
- * Restore every externalized payload the blob store still holds, and report the ones it
- * does not. Returns the number of references that stayed references.
+ * Restore what persistence moved out of each entry: every externalized payload the blob store still
+ * holds, then every tool-result field a codec dropped, which a codec rebuilds from that restored
+ * content. Every parsed or blob-restored string of 64 characters or more ends up sharing one copy
+ * with each equal string in `entries`. Reports the payloads the blob store does not hold and returns
+ * how many references stayed references.
  *
- * Two phases, deliberately: collect every reference in the session synchronously,
- * then read them through one bounded pool. The cap is session-wide rather than
- * per-entry, so a transcript of a thousand entries each holding one payload reads
- * eight files at a time and not a thousand.
+ * Two phases for the blobs: collect every reference in the session synchronously, then read them
+ * through one bounded pool. The cap is session-wide rather than per-entry, so a transcript of a
+ * thousand entries each holding one payload reads eight files at a time and not a thousand.
  */
 export async function resolveBlobRefsInEntries(
 	entries: FileEntry[],
@@ -543,11 +682,19 @@ export async function resolveBlobRefsInEntries(
 	options?: BlobResolutionOptions,
 ): Promise<number> {
 	const lost: LostPayloads = { count: 0 };
-	const sites: BlobSite[] = [];
-	for (const entry of entries) {
-		if (entry.type !== "session") collectBlobSites(entry, sites);
+	const scan: EntryScan = { sites: [], strings: new StringPool() };
+	try {
+		for (const entry of entries) {
+			if (entry.type !== "session") scanEntryValue(entry, scan);
+		}
+		await resolveBlobSites(scan, blobStore, lost);
+	} finally {
+		// Each site holds the object its payload restores into, so a scan the engine keeps reachable
+		// past the load would hold every restored text of a session the caller has released.
+		scan.sites.length = 0;
+		scan.strings.clear();
 	}
-	await resolveBlobSites(sites, blobStore, lost);
+	restoreToolResultEntries(entries);
 	if (lost.count > 0) {
 		logger.warn("Session payloads missing from the blob store", { source: options?.source, lost: lost.count });
 		if (options) emitLostPayloadNotice(options, lost.count);

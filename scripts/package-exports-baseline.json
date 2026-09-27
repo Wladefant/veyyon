@@ -1787,6 +1787,7 @@
 			"convertToLlm",
 			"countLeadingWhitespace",
 			"createAcpSessionFactory",
+			"createAgentRunMonitor",
 			"createAgentSession",
 			"createBoundedTodoPreview",
 			"createBranchSummaryMessage",

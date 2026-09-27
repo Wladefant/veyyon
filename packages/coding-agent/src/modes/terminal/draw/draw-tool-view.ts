@@ -39,7 +39,7 @@ import type {
 	ViewTreeLines,
 } from "@veyyon/view";
 import type { RenderResultOptions } from "../../../extensibility/custom-tools/types";
-import { highlightCode } from "../../../theme/highlight";
+import { type HighlightRequest, highlightCode } from "../../../theme/highlight";
 import { getMarkdownTheme } from "../../../theme/markdown-theme";
 import { shimmerEnabled, shimmerText } from "../../../theme/shimmer";
 import { type SymbolKey, UNICODE_SYMBOLS } from "../../../theme/symbols";
@@ -58,7 +58,7 @@ import type { ToolUIStatus } from "../../../tools/core/tool-ui-status";
 import type { ToolRenderer } from "../../../tools/renderers";
 import { sanitizeWithOptionalSixelPassthrough } from "../../../utils/sixel";
 import { paintHotTail, shimmerPhase } from "../components/chrome/follow";
-import { renderDiff } from "../components/transcript/diff";
+import { diffHighlightRequests, type RenderDiffOptions, renderDiff } from "../components/transcript/diff";
 import { fileHyperlink, urlHyperlink } from "./hyperlink";
 import { framedBlock, outputBlockContentWidth } from "./output-block";
 import { renderStatusLine } from "./status-line";
@@ -630,13 +630,35 @@ const CODE_GUTTER_MIN_WIDTH = 3;
  * and the one being repainted is the one that just drew, which is the same reasoning the
  * single-slot `RenderedStringCache` the hand-written previews used was built on. The theme is
  * compared by reference because a theme switch replaces the instance wholesale.
+ *
+ * A card whose source grew keeps the row of every line whose highlighted text and gutter cell are
+ * unchanged. The highlighter hands back the same string for a line it already settled, so the check
+ * is a reference compare, and the rows it keeps are the same strings the tail window wrapped last.
  */
-const codeMemo: { theme: Theme | null; language: string; shape: string; source: string; rows: string[] } = {
+const codeMemo: {
+	theme: Theme | null;
+	language: string;
+	shape: string;
+	source: string;
+	rows: string[];
+	/** How each row's gutter was drawn: the numbering, the first number and the gutter width. */
+	gutter: string;
+	/** The highlighter's rows the bodies were drawn from, one per line. */
+	highlighted: readonly string[];
+	/** Each line's gutter and highlighted text, before the lead opens the first. */
+	bodies: string[];
+	/** The line numbers the gutter stated, when the section numbered each line itself. */
+	numbers: readonly (number | null)[] | undefined;
+} = {
 	theme: null,
 	language: "",
 	shape: "",
 	source: "",
 	rows: [],
+	gutter: "",
+	highlighted: [],
+	bodies: [],
+	numbers: undefined,
 };
 
 /**
@@ -680,41 +702,65 @@ function drawCodeLines(lines: readonly ViewLine[], code: ViewCodeLines, theme: T
 	) {
 		return codeMemo.rows;
 	}
-	// Stripped before the highlighter rather than after, so an escape inside the source is never
-	// tokenized into a row the highlighter then wraps in colour of its own.
-	const highlighted = highlightCode(shortenEmbeddedPaths(sanitizeText(source)), code.language);
-	let rows: string[];
+	const highlighted = highlightCode(codeHighlightSource(source), code.language);
+	let gutter: string;
+	let cell: (index: number) => string | undefined;
 	if (numbers !== undefined) {
-		const gutter = codeGutterWidth(numbers, code.totalLines);
-		rows = highlighted.map((body, index) => {
+		const width = codeGutterWidth(numbers, code.totalLines);
+		gutter = `numbers:${width}`;
+		cell = index => {
 			const number = numbers[index];
-			const cell =
-				number === null || number === undefined ? " ".repeat(gutter) : String(number).padStart(gutter, " ");
-			return `${theme.fg("dim", `${cell} `)}${replaceTabs(body)}`;
-		});
+			return number === null || number === undefined ? " ".repeat(width) : String(number).padStart(width, " ");
+		};
 	} else if (first !== undefined) {
 		const last = code.totalLines ?? first + highlighted.length - 1;
-		const gutter = Math.max(CODE_GUTTER_MIN_WIDTH, String(last).length);
-		rows = highlighted.map(
-			(body, index) => `${theme.fg("dim", `${String(first + index).padStart(gutter, " ")} `)}${replaceTabs(body)}`,
-		);
+		const width = Math.max(CODE_GUTTER_MIN_WIDTH, String(last).length);
+		gutter = `first:${first}:${width}`;
+		cell = index => String(first + index).padStart(width, " ");
 	} else {
-		rows = highlighted.map(body => replaceTabs(body));
+		gutter = "none";
+		cell = () => undefined;
 	}
+	const previous = codeMemo.theme === theme && codeMemo.gutter === gutter ? codeMemo : undefined;
+	const bodies = highlighted.map((body, index) => {
+		if (
+			previous !== undefined &&
+			previous.highlighted[index] === body &&
+			(numbers === undefined || previous.numbers?.[index] === numbers[index])
+		) {
+			return previous.bodies[index] as string;
+		}
+		const drawnCell = cell(index);
+		return drawnCell === undefined ? replaceTabs(body) : `${theme.fg("dim", `${drawnCell} `)}${replaceTabs(body)}`;
+	});
 	// The lead is the prompt the first line is read under, so it opens that row in the aside colour
 	// and the highlighter never sees it. A section carrying no source draws no lead: a prompt over a
 	// command nobody has states nothing.
 	const lead = code.lead;
-	const led =
-		lead === undefined
-			? rows
-			: rows.map((row, index) => (index === 0 ? `${theme.fg("dim", sanitizeViewText(lead))}${row}` : row));
+	let rows = bodies;
+	if (lead !== undefined && bodies.length > 0) {
+		rows = bodies.slice();
+		rows[0] = `${theme.fg("dim", sanitizeViewText(lead))}${bodies[0]}`;
+	}
 	codeMemo.theme = theme;
 	codeMemo.language = language;
 	codeMemo.shape = shape;
 	codeMemo.source = source;
-	codeMemo.rows = led;
-	return led;
+	codeMemo.rows = rows;
+	codeMemo.gutter = gutter;
+	codeMemo.highlighted = highlighted;
+	codeMemo.bodies = bodies;
+	codeMemo.numbers = numbers;
+	return rows;
+}
+
+/**
+ * The text of a code section the highlighter is handed. Stripped before the highlighter rather than
+ * after, so an escape inside the source is never tokenized into a row the highlighter then wraps in
+ * colour of its own.
+ */
+function codeHighlightSource(source: string): string {
+	return shortenEmbeddedPaths(sanitizeText(source));
 }
 
 /**
@@ -751,8 +797,21 @@ const DIFF_MARKERS: Record<ViewDiffSide, string> = {
  * marker and its text; a gap is an empty row, which it draws as an ellipsis.
  */
 function drawDiffLines(lines: readonly ViewLine[], diff: ViewDiffLines, theme: Theme): string[] {
+	const source = diffSource(lines, diff);
+	const path = diff.path ?? "";
+	if (diffMemo.theme === theme && diffMemo.path === path && diffMemo.source === source) return diffMemo.rows;
+	const rows = renderDiff(shortenEmbeddedPaths(source), diffOptions(diff)).split("\n");
+	diffMemo.theme = theme;
+	diffMemo.path = path;
+	diffMemo.source = source;
+	diffMemo.rows = rows;
+	return rows;
+}
+
+/** A change in the canonical form the diff renderer reads: marker, number, `|`, text; a gap is an empty row. */
+function diffSource(lines: readonly ViewLine[], diff: ViewDiffLines): string {
 	const numbers = diff.lineNumbers;
-	const source = lines
+	return lines
 		.map((line, index) => {
 			const side = diff.sides[index] ?? "context";
 			if (side === "gap") return "";
@@ -762,16 +821,31 @@ function drawDiffLines(lines: readonly ViewLine[], diff: ViewDiffLines, theme: T
 			return number === null || number === undefined ? `${marker}${text}` : `${marker}${number}|${text}`;
 		})
 		.join("\n");
-	const path = diff.path ?? "";
-	if (diffMemo.theme === theme && diffMemo.path === path && diffMemo.source === source) return diffMemo.rows;
-	const rows = renderDiff(shortenEmbeddedPaths(source), diff.path === undefined ? {} : { filePath: diff.path }).split(
-		"\n",
-	);
-	diffMemo.theme = theme;
-	diffMemo.path = path;
-	diffMemo.source = source;
-	diffMemo.rows = rows;
-	return rows;
+}
+
+function diffOptions(diff: ViewDiffLines): RenderDiffOptions {
+	return diff.path === undefined ? {} : { filePath: diff.path };
+}
+
+/**
+ * Add the sources drawing `view` hands the highlighter to `into`, each in the language the draw
+ * gives it, so a caller about to draw many views can highlight them together first
+ * (`prefetchHighlights`). Chooses each section's drawing as `drawFramedBlock` does.
+ */
+export function toolViewHighlightRequests(view: ToolView, into: HighlightRequest[]): void {
+	if (view.kind !== "framedBlock") return;
+	for (const section of view.sections) {
+		if (section.list) continue;
+		if (section.code !== undefined) {
+			into.push({ code: codeHighlightSource(linesToText(section.lines)), lang: section.code.language });
+		} else if (section.diff !== undefined) {
+			diffHighlightRequests(
+				shortenEmbeddedPaths(diffSource(section.lines, section.diff)),
+				diffOptions(section.diff),
+				into,
+			);
+		}
+	}
 }
 
 /**
@@ -848,11 +922,41 @@ function drawTreeLines(lines: readonly ViewLine[], tree: ViewTreeLines, theme: T
  */
 function drawTailWindow(lines: readonly string[], window: ViewTailWindow, theme: Theme, width: number): string[] {
 	const rows: string[] = [];
-	for (const line of lines) rows.push(...wrapTextWithAnsi(line.trimEnd(), width));
+	for (const wrapped of wrapLines(lines, width)) {
+		for (const row of wrapped) rows.push(row);
+	}
 	const viewport = Math.max(1, previewWindowRows() - (window.reserve ?? 0));
 	const max =
 		window.max === undefined ? viewport : window.viewport === true ? Math.min(window.max, viewport) : window.max;
 	return capPreviewLines(rows, theme, { max });
+}
+
+/**
+ * The lines the last tail window wrapped, each with the rows it wrapped to.
+ *
+ * A card streaming a file redraws on every delta with the lines it drew last and more after them,
+ * and the window counts the rows of every line to say how many it cut, so wrapping all of them
+ * again on each redraw is quadratic in the file: a 1,500-line write spent 56% of its streaming time
+ * here. One slot, for the reason `codeMemo` keeps one: the card being redrawn is the one that drew
+ * last. A line is reused where the same text sits at the same index at the same width.
+ */
+const tailWrapMemo: { width: number; lines: readonly string[]; wrapped: readonly (readonly string[])[] } = {
+	width: 0,
+	lines: [],
+	wrapped: [],
+};
+
+function wrapLines(lines: readonly string[], width: number): readonly (readonly string[])[] {
+	const previous = tailWrapMemo.width === width ? tailWrapMemo : undefined;
+	const wrapped = lines.map((line, index) =>
+		previous !== undefined && previous.lines[index] === line
+			? (previous.wrapped[index] as readonly string[])
+			: wrapTextWithAnsi(line.trimEnd(), width),
+	);
+	tailWrapMemo.width = width;
+	tailWrapMemo.lines = lines;
+	tailWrapMemo.wrapped = wrapped;
+	return wrapped;
 }
 
 /**

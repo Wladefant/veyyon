@@ -1,8 +1,8 @@
 import type { AgentToolResult } from "@veyyon/agent-core";
 import type { Model } from "@veyyon/ai";
 import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
-import type { ExtensionAPI, ExtensionContext } from "../extensibility/extensions";
-import type { TruncationResult } from "../session/streaming-output";
+import type { BuiltinExtensionAPI, ExtensionContext } from "../extensibility/extensions";
+import type { TruncationSummary } from "../session/streaming-output";
 import type { LoopConsoleModel } from "./console";
 
 export type MetricDirection = "lower" | "higher";
@@ -96,7 +96,7 @@ export interface ExperimentState {
 export interface RunExperimentProgressDetails {
 	phase: "running";
 	elapsed: string;
-	truncation?: TruncationResult;
+	truncation?: TruncationSummary;
 	fullOutputPath?: string;
 	runDirectory?: string;
 }
@@ -119,7 +119,7 @@ export interface RunDetails {
 	metricUnit: string;
 	preRunDirtyPaths: string[];
 	abandonedPriorRun: number | null;
-	truncation?: TruncationResult;
+	truncation?: TruncationSummary;
 	fullOutputPath?: string;
 }
 
@@ -284,7 +284,7 @@ export interface DashboardController {
 export interface AutoresearchToolFactoryOptions {
 	dashboard: DashboardController;
 	getRuntime(ctx: ExtensionContext): AutoresearchRuntime;
-	pi: ExtensionAPI;
+	pi: BuiltinExtensionAPI;
 }
 
 export type AutoresearchToolResult<TDetails> = AgentToolResult<TDetails>;
