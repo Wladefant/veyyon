@@ -55,7 +55,13 @@ import {
 	type TitleChangeEntry,
 	type UsageStatistics,
 } from "./session-entries";
-import { findMostRecentSession, listAllSessions, listSessions, type SessionInfo } from "./session-listing";
+import {
+	findMostRecentSession,
+	foreignSessionFileProfile,
+	listAllSessions,
+	listSessions,
+	type SessionInfo,
+} from "./session-listing";
 import {
 	loadEntriesFromFile,
 	loadSessionFile,
@@ -3266,7 +3272,10 @@ export class SessionManager {
 		const breadcrumb = await readTerminalBreadcrumbEntry();
 		let chosenSession: string | null | undefined;
 
-		if (breadcrumb) {
+		// A crumb naming another profile's transcript is written by a pre-isolation build. Following it
+		// would continue that profile's session under this one's settings, and the moved-project branch
+		// below would relocate the file into this profile. `--continue` stays inside the active profile.
+		if (breadcrumb && !foreignSessionFileProfile(breadcrumb.sessionFile)) {
 			// Recover stale crumbs: an agent open (pre-fix) may have pointed this
 			// terminal's breadcrumb at an artifact child; resume the parent instead.
 			breadcrumb.sessionFile = resolveBreadcrumbToInteractiveRoot(breadcrumb.sessionFile);

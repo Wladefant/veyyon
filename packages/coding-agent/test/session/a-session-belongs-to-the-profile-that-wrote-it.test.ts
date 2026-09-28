@@ -16,9 +16,14 @@
  * negative controls: a session resumed from its own profile opens in place, and an id nobody wrote
  * still misses.
  *
+ * The same sweep covers the two paths that reach a session without naming it: `--continue`, which
+ * follows the terminal's breadcrumb (a pre-isolation build wrote crumbs naming another profile's
+ * transcript), and the relaunched child's directory resolution, which inherits the parent profile's
+ * `VEYYON_CODING_AGENT_DIR` beside the owner's `VEYYON_PROFILE`.
+ *
  * WHAT IT DOES NOT CATCH: the startup profile switch for an unpinned launch, which
- * `a-resumed-session-continues-in-its-own-profile.test.ts` covers, and the relaunched child process
- * itself: the `/resume` sweep asserts the relaunch request, not the process it starts.
+ * `a-resumed-session-continues-in-its-own-profile.test.ts` covers, and the spawn itself: the child
+ * is modeled by resolving directories from the environment the relaunch hands it.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
@@ -31,14 +36,17 @@ import { executeBuiltinSlashCommand } from "@veyyon/coding-agent/slash-commands/
 import { resolveResumableSession } from "@veyyon/kernel/session/session-listing";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import {
+	__resetDirsFromEnvForTests,
 	captureDirOverrides,
 	type DirOverridesSnapshot,
 	getAgentDir,
+	getTerminalSessionsDir,
 	listProfiles,
 	pathIsWithin,
 	restoreDirOverrides,
 	setProfile,
 } from "@veyyon/utils/dirs";
+import { getTerminalId } from "@veyyon/utils/ttyid";
 import { enterIsolatedConfigRoot, type IsolatedConfigRoot } from "../../../utils/test/helpers/isolated-config-root";
 import { makeAssistantMessage } from "../session-manager/helpers";
 
@@ -224,6 +232,70 @@ describe("/resume <id> for another profile's session", () => {
 			expect(spec?.argv.slice(-2), label).toEqual(["--resume", source.id]);
 			expect(spec?.env, label).toEqual({ VEYYON_PROFILE: owner });
 			expect(shutdown, label).toHaveBeenCalledTimes(1);
+		}
+	});
+});
+
+describe("--continue with a terminal breadcrumb naming another profile's session", () => {
+	const originalTmuxPane = process.env.TMUX_PANE;
+	beforeEach(() => {
+		process.env.TMUX_PANE = "%profile-ownership";
+	});
+	afterEach(() => {
+		if (originalTmuxPane === undefined) delete process.env.TMUX_PANE;
+		else process.env.TMUX_PANE = originalTmuxPane;
+	});
+
+	function writeBreadcrumb(cwd: string, sessionFile: string): void {
+		const terminalId = getTerminalId();
+		if (!terminalId) throw new Error("expected a terminal id");
+		fs.mkdirSync(getTerminalSessionsDir(), { recursive: true });
+		fs.writeFileSync(path.join(getTerminalSessionsDir(), terminalId), `${cwd}\n${sessionFile}\n`);
+	}
+
+	it("neither continues nor relocates the other profile's transcript", async () => {
+		for (const { owner, active } of crossProfilePairs()) {
+			const source = seededFor(owner);
+			// The crumb's cwd both matching the launch and gone: the second is the moved-project branch,
+			// which relocates the breadcrumb's file into the launch directory's bucket.
+			for (const crumbCwd of [launchCwd, path.join(isolated.root, "gone")]) {
+				activate(active);
+				writeBreadcrumb(crumbCwd, source.file);
+				const manager = await SessionManager.continueRecent(launchCwd);
+				const label = `${active} continuing with a crumb for ${owner} (cwd ${path.basename(crumbCwd)})`;
+				expect(manager.getSessionId(), label).not.toBe(source.id);
+				await manager.close();
+				expect(fs.readFileSync(source.file).equals(source.bytes), label).toBe(true);
+			}
+		}
+	});
+
+	it("follows a breadcrumb naming the active profile's own session", async () => {
+		for (const profile of PROFILES) {
+			activate(profile);
+			const own = seededFor(profile);
+			writeBreadcrumb(launchCwd, own.file);
+			const manager = await SessionManager.continueRecent(launchCwd);
+			expect(manager.getSessionId(), profile).toBe(own.id);
+			await manager.close();
+		}
+	});
+});
+
+describe("the child a cross-profile relaunch starts", () => {
+	it("resolves the owning profile's agent dir, not the parent's", () => {
+		for (const { owner, active } of crossProfilePairs()) {
+			activate(active);
+			// The relaunch spreads the parent's environment, which carries the parent profile's
+			// VEYYON_CODING_AGENT_DIR, under the owner's VEYYON_PROFILE (`default` from `/resume`,
+			// empty from `/profile default`).
+			for (const profileEnv of owner === "default" ? ["default", ""] : [owner]) {
+				process.env.VEYYON_PROFILE = profileEnv;
+				__resetDirsFromEnvForTests();
+				const label = `${active} relaunching into ${owner} (VEYYON_PROFILE=${JSON.stringify(profileEnv)})`;
+				expect(getAgentDir(), label).toBe(path.join(isolated.root, "profiles", owner, "agent"));
+				activate(active);
+			}
 		}
 	});
 });

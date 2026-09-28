@@ -1121,12 +1121,24 @@ export function resolveStartupProfile(): string | undefined {
 	return resolveGlobalDefaultProfile();
 }
 
-function getProfileAgentDir(profile: string): string {
-	return path.join(getProfileConfigRoot(profile), "agent");
-}
-
-function isProfileDerivedAgentDir(profile: string | undefined, agentDirEnv: string | undefined): boolean {
-	return profile !== undefined && agentDirEnv === getProfileAgentDir(profile);
+/**
+ * Whether `agentDirEnv` is some profile's derived agent dir
+ * (`<configRoot>/profiles/<name>/agent`), which `setProfile` exports to
+ * children. Any profile counts, not only the one being resolved: a child
+ * relaunched into the default profile (`/profile default`, `/resume` of a
+ * default-profile session) inherits the parent profile's value, and honoring it
+ * would run the default profile inside the parent's agent dir. An unresolvable
+ * home leaves the value honored, as before, so module load stays non-throwing.
+ */
+function isProfileDerivedAgentDir(agentDirEnv: string | undefined): boolean {
+	if (agentDirEnv === undefined || path.basename(agentDirEnv) !== "agent") return false;
+	let profilesRoot: string;
+	try {
+		profilesRoot = path.join(getBaseConfigRoot(), PROFILES_DIR_NAME);
+	} catch {
+		return false;
+	}
+	return path.dirname(path.dirname(path.resolve(agentDirEnv))) === path.resolve(profilesRoot);
 }
 // =============================================================================
 // Project directory
@@ -1488,14 +1500,15 @@ class DirResolver {
 
 /**
  * Decide which `VEYYON_CODING_AGENT_DIR` value to capture as the pre-profile
- * baseline. A value equal to a profile's derived agent dir is profile-derived
+ * baseline. A value equal to any profile's derived agent dir is profile-derived
  * (propagated by a parent's `setProfile`), so it must NOT be snapshotted as the
- * default-mode baseline — otherwise default mode would resolve to the profile's
+ * default-mode baseline — otherwise default mode would resolve to that profile's
  * agent dir. Returns `undefined` in that case so reset falls back to the
- * standard `~/.veyyon/agent`.
+ * default profile's agent dir.
  */
-function resolvePreProfileAgentDir(profile: string | undefined, agentDirEnv: string | undefined): string | undefined {
-	return isProfileDerivedAgentDir(profile, agentDirEnv) ? undefined : agentDirEnv;
+function resolvePreProfileAgentDir(): string | undefined {
+	const agentDirEnv = readAgentDirEnv();
+	return isProfileDerivedAgentDir(agentDirEnv) ? undefined : agentDirEnv;
 }
 
 let activeProfile = resolveStartupProfileSafe();
@@ -1508,7 +1521,7 @@ let activeProfile = resolveStartupProfileSafe();
  * {@link refreshDirsFromEnv} so both apply identical logic.
  */
 function resolveActiveAgentDirOverride(): string | undefined {
-	return activeProfile ? undefined : resolvePreProfileAgentDir(undefined, readAgentDirEnv());
+	return activeProfile ? undefined : resolvePreProfileAgentDir();
 }
 
 // Non-CLI entry points (SDK/library imports) never pass through the CLI's
@@ -1542,7 +1555,7 @@ let dirs = new DirResolver({
  * — and refreshed on `setAgentDir`, since that call is the user explicitly
  * redefining the baseline.
  */
-let preProfileAgentDirEnv: string | undefined = resolvePreProfileAgentDir(activeProfile, readAgentDirEnv());
+let preProfileAgentDirEnv: string | undefined = resolvePreProfileAgentDir();
 // Anchor home for the resolver. Captured at module load to stay stable across
 // test mocks of `os.homedir()`. `getPluginsDir(home)` compares against this so
 // production callers (`home === RESOLVER_HOME`) hit the XDG-aware resolver while
@@ -1715,7 +1728,7 @@ export function setAgentDir(dir: string): void {
  * no business clearing it.
  */
 export function __resetProfileSnapshotForTests(): void {
-	preProfileAgentDirEnv = resolvePreProfileAgentDir(activeProfile, readAgentDirEnv());
+	preProfileAgentDirEnv = resolvePreProfileAgentDir();
 }
 
 /**
@@ -1739,7 +1752,7 @@ export function setProfile(profile: string | undefined): void {
 		// explicit override. Subsequent profile switches keep the original
 		// snapshot — the "pre-profile" baseline is the state before profiles
 		// entered the picture, not the state between two activations.
-		preProfileAgentDirEnv = resolvePreProfileAgentDir(undefined, readAgentDirEnv());
+		preProfileAgentDirEnv = resolvePreProfileAgentDir();
 	}
 	activeProfile = next;
 	if (activeProfile) {
