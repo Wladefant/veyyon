@@ -372,7 +372,7 @@ veyyon config get compaction.threshold
 | Key | Setting | Type | Default | What it does |
 |---|---|---|---|---|
 | `hindsight.apiUrl` | Hindsight API URL | string | `http://localhost:8888` | Hindsight server URL (Cloud or self-hosted). |
-| `hindsight.bankId` | Hindsight Bank ID | string | _(unset)_ | Base memory bank name. Unset uses `veyyon`. Hindsight Bank Prefix is prepended when set, and Hindsight Scoping sets whether the project name is appended (per-project) or carried as a `project:` tag instead (per-project-tagged). |
+| `hindsight.bankId` | Hindsight Bank ID | string | _(unset)_ | Base memory bank name. Unset uses `veyyon` in the default profile and `veyyon-\<profile>` in a named one, so profiles keep separate memories; set the same value in two profiles to share one bank. Hindsight Bank Prefix is prepended when set, and Hindsight Scoping sets whether the project name is appended (per-project) or carried as a `project:` tag instead (per-project-tagged). |
 | `hindsight.scoping` | Hindsight Scoping | enum | `per-project-tagged` | global = one shared bank; per-project = isolated bank per cwd; per-project-tagged = shared bank with project tags so global + project memories merge on recall. Values: `global`, `per-project`, `per-project-tagged`. |
 | `hindsight.autoRecall` | Hindsight Auto Recall | boolean | `true` | Recall memories on the first turn of each session. |
 | `hindsight.autoRetain` | Hindsight Auto Retain | boolean | `true` | Retain transcript every N turns and at session boundaries. |

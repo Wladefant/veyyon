@@ -78,6 +78,7 @@
 - `/resume <id>` for a session another profile wrote relaunches Veyyon in that profile instead of opening the transcript under the running profile.
 - `veyyon --resume <id>` naming a subagent transcript nested inside a session's directory activates the profile that wrote it instead of forking it into the profile the launch started in.
 - `veyyon --fork <id>` for a session another profile wrote activates that profile and writes the fork under it, instead of copying the session into the profile the launch started in; `--profile <name> --fork <id>` still forks it into `<name>`.
+- A named profile with no `hindsight.bankId` set retains into and recalls from the `veyyon-<profile>` Hindsight bank instead of the `veyyon` bank every profile shared; set `hindsight.bankId: veyyon` in that profile to keep reading memories it retained before.
 - With sessions stored under `$XDG_DATA_HOME/veyyon`, `veyyon --resume <id>` activates the profile that wrote the session, and the session picker's all-projects view and an ACP client's session list show the active profile's sessions from every project, instead of none of them.
 - The session picker's all-projects view and an ACP client's session list no longer show each spawned agent's transcript as a session of its own.
 - `/profile <name>`, `/resume` of another profile's session, and `veyyon --profile <name>` run from a tool's shell start the other profile on its own `.env` files instead of the credentials the running profile loaded from its own.

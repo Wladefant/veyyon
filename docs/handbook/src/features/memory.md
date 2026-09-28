@@ -85,4 +85,4 @@ is what the model gets.
 Use `/memory` or `/settings` (Memory group), or set keys under `memory.*`, `mnemopi.*`,
 `hindsight.*`, or `memories.*` depending on the active backend.
 
-The active backend, its settings, and its stored data (mnemopi SQLite path, local Markdown artifacts, hindsight bank id) are scoped to the active profile (`VEYYON_PROFILE`). Profiles do not share memory stores.
+The active backend, its settings, and its stored data are scoped to the active profile. Mnemopi and local memory write under the profile's own memories directory. A Hindsight bank id left unset is `veyyon` in the default profile and `veyyon-<profile>` in a named one, so profiles that share a Hindsight server keep separate banks. Set the same `hindsight.bankId` in two profiles to share one bank.
