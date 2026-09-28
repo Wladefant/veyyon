@@ -1,26 +1,30 @@
 /**
- * A launch that resumes a session continues in the profile that wrote it.
+ * A launch that resumes or forks a session continues in the profile that wrote it.
  *
  * WHY THIS SUITE EXISTS. `veyyon --resume <id>` states no profile, and the id
  * resolves from any profile's sessions root, so the session opened under
  * whichever profile the launch started in: its settings, credentials and `.env`
- * came from a profile the session never belonged to. `runCli` resolves the id
- * against every profile through `src/cli/resume-profile.ts` before any
- * profile-scoped module loads and activates the profile that holds it.
+ * came from a profile the session never belonged to. An unpinned `--fork <id>`
+ * skipped the lookup altogether and wrote a copy of another profile's session
+ * under the profile the launch started in. `runCli` resolves the id against
+ * every profile through `src/cli/resume-profile.ts` before any profile-scoped
+ * module loads and activates the profile that holds it.
  *
- * THE CLASS THIS CLOSES is a resume spelling that skips the lookup. The sweep
- * takes the launch parser's own resume flags from `OPTIONAL_FLAGS`, spaced and
- * `=`-joined, plus `--continue <id>`, `-c <id>`, a transcript path and the id of a
- * subagent transcript nested inside its session's directory, and runs each
- * against every owner and active profile pair, so a resume flag added to the
- * table is swept the day it lands. The negative controls are the precedence
- * rules: an explicit `--profile`, a `--fork`, `--no-session`, `--session-dir` and
- * an id nobody wrote all keep the profile the launch started in.
+ * THE CLASS THIS CLOSES is a resume or fork spelling that skips the lookup. The
+ * sweep takes the launch parser's own resume flags from `OPTIONAL_FLAGS`, spaced
+ * and `=`-joined, plus `--fork`, `--continue <id>`, `-c <id>`, a transcript path
+ * and the id of a subagent transcript nested inside its session's directory, and
+ * runs each against every owner and active profile pair, so a resume flag added
+ * to the table is swept the day it lands. The negative controls are the
+ * precedence rules: an explicit `--profile` (beside `--resume` or `--fork`),
+ * `--no-session`, `--session-dir` and an id nobody wrote all keep the profile
+ * the launch started in.
  *
  * WHAT IT DOES NOT CATCH: each launch runs with `--help`, so nothing here proves
  * the resumed session then opens; `main-cross-project-resume.test.ts` covers
  * that, and `session/a-session-belongs-to-the-profile-that-wrote-it.test.ts`
- * covers the fork a pinned `--profile` makes.
+ * covers the fork a pinned `--profile` makes. A resume flag added outside
+ * `OPTIONAL_FLAGS` and `--fork` is not swept.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
@@ -140,12 +144,12 @@ for (const layout of LAYOUTS) {
 			isolated = undefined;
 		});
 
-		/** Every argv spelling that resumes the session `owner` wrote. */
+		/** Every argv spelling that resumes or forks the session `owner` wrote. */
 		function resumeSpellings(owner: ProfileName): { name: string; argv: string[] }[] {
 			const id = SESSION_IDS[owner];
 			const prefix = id.slice(0, 8);
 			const spellings: { name: string; argv: string[] }[] = [];
-			for (const flag of Object.keys(OPTIONAL_FLAGS)) {
+			for (const flag of [...Object.keys(OPTIONAL_FLAGS), "--fork"]) {
 				spellings.push({ name: `${flag} <prefix>`, argv: [flag, prefix] });
 				if (flag.startsWith("--")) spellings.push({ name: `${flag}=<prefix>`, argv: [`${flag}=${prefix}`] });
 			}
@@ -154,7 +158,11 @@ for (const layout of LAYOUTS) {
 			const file = sessionFiles.get(owner);
 			if (!file) throw new Error(`no session seeded for ${owner}`);
 			spellings.push({ name: "--resume <path>", argv: ["--resume", file] });
+			spellings.push({ name: "--fork <path>", argv: ["--fork", file] });
 			spellings.push({ name: "--resume <nested subagent id>", argv: ["--resume", NESTED_IDS[owner].slice(0, 8)] });
+			spellings.push({ name: "--fork <nested subagent id>", argv: ["--fork", NESTED_IDS[owner].slice(0, 8)] });
+			// --fork wins over --resume when the launch builds its session, so the fork's source decides.
+			spellings.push({ name: "--fork beside --resume", argv: ["--fork", prefix, "--resume", UNKNOWN_ID] });
 			return spellings;
 		}
 
@@ -179,10 +187,12 @@ for (const layout of LAYOUTS) {
 
 			const KEEPS_ACTIVE: { name: string; argv: string[] }[] = [
 				{ name: "an explicit --profile", argv: ["--profile", "work", "--resume", SESSION_IDS.oss] },
-				{ name: "--fork beside --resume", argv: ["--fork", SESSION_IDS.oss, "--resume", SESSION_IDS.oss] },
+				{ name: "an explicit --profile beside --fork", argv: ["--profile", "work", "--fork", SESSION_IDS.oss] },
 				{ name: "--no-session", argv: ["--resume", SESSION_IDS.oss, "--no-session"] },
 				{ name: "--session-dir", argv: ["--resume", SESSION_IDS.oss, "--session-dir", "elsewhere"] },
+				{ name: "--session-dir beside --fork", argv: ["--fork", SESSION_IDS.oss, "--session-dir", "elsewhere"] },
 				{ name: "an id nobody wrote", argv: ["--resume", UNKNOWN_ID] },
+				{ name: "a fork of an id nobody wrote", argv: ["--fork", UNKNOWN_ID] },
 			];
 
 			for (const control of KEEPS_ACTIVE) {

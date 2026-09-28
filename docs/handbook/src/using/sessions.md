@@ -43,7 +43,8 @@ that session from any directory and any profile:
 
 `veyyon --resume` with no id opens the session picker, and a picked session reopens in its recorded
 working directory the same way.
-`veyyon --fork <id>` copies the session into a new file in the current directory instead.
+`veyyon --fork <id>` copies the session into a new file in the current directory instead, under the
+profile that wrote the session unless `--profile` names another one.
 
 ## Long work
 

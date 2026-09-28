@@ -1,17 +1,18 @@
 /**
- * The profile a launch that resumes a session continues in.
+ * The profile a launch that resumes or forks a session continues in.
  *
  * A session lives under the profile that wrote it (`profiles/<name>/agent/sessions/`), and the
  * `veyyon --resume <id>` line printed on exit states no profile. This module resolves the id against
  * every profile before any profile-scoped module loads, so `runCli` can activate the session's profile
- * ahead of its settings, credentials and `.env`.
+ * ahead of its settings, credentials and `.env`. A fork is resolved the same way, so an unpinned
+ * `--fork <id>` writes the new session under the profile that owns its source.
  *
- * The argv is read by the launch parser itself (`--resume`, `-r`, `--session`, `--continue <id>`), and
- * an id is matched against transcript filenames in each profile's sessions directory: first at the top
- * two levels (loose transcripts and one project directory deep), then, when no profile holds it there,
- * at any depth, which reaches a subagent transcript nested inside its session's own directory. The
- * lookup covers everything the session listing resolves, so a plain resume never reaches the listing's
- * other-profile match, which the launch forks.
+ * The argv is read by the launch parser itself (`--resume`, `-r`, `--session`, `--continue <id>`,
+ * `--fork`), and an id is matched against transcript filenames in each profile's sessions directory:
+ * first at the top two levels (loose transcripts and one project directory deep), then, when no
+ * profile holds it there, at any depth, which reaches a subagent transcript nested inside its
+ * session's own directory. The lookup covers everything the session listing resolves, so an unpinned
+ * resume or fork never reaches the listing's other-profile match.
  */
 
 import * as fs from "node:fs";
@@ -29,11 +30,12 @@ import { resolveCliArgv } from "../cli-commands";
 import { type Args, namesSessionFile, normalizeContinueSessionArgs, parseArgs } from "./args";
 
 /**
- * The session id or file the launch resumes, as the launch parser reads `argv`.
+ * The session id or file the launch resumes or forks, as the launch parser reads `argv`.
  *
- * Undefined for a subcommand, a launch that resumes nothing, and a launch whose `--fork`,
- * `--no-session` or `--session-dir` takes precedence over the resume. An argv the parser rejects is
- * also undefined here; the launch reports the same error when it parses the argv itself.
+ * Undefined for a subcommand, a launch that resumes nothing, and a launch whose `--no-session` or
+ * `--session-dir` takes precedence over the resume. `--fork` takes precedence over `--resume`, as it
+ * does when the launch builds its session. An argv the parser rejects is also undefined here; the
+ * launch reports the same error when it parses the argv itself.
  */
 export function resumedSessionArgument(argv: readonly string[]): string | undefined {
 	const resolved = resolveCliArgv([...argv]);
@@ -46,8 +48,9 @@ export function resumedSessionArgument(argv: readonly string[]): string | undefi
 		return undefined;
 	}
 	normalizeContinueSessionArgs(parsed, launchArgv);
-	if (typeof parsed.resume !== "string" || parsed.fork || parsed.noSession || parsed.sessionDir) return undefined;
-	return parsed.resume;
+	if (parsed.noSession || parsed.sessionDir) return undefined;
+	if (parsed.fork) return parsed.fork;
+	return typeof parsed.resume === "string" ? parsed.resume : undefined;
 }
 
 /**
@@ -94,7 +97,8 @@ function holdsSession(profile: ProfileInfo, sessionId: string, deep: boolean): b
 }
 
 /**
- * The profile to activate for a launch that resumes a session, or undefined to keep the active one.
+ * The profile to activate for a launch that resumes or forks a session, or undefined to keep the
+ * active one.
  *
  * The session's profile is the one whose sessions directory holds its file: for a path, the profile
  * the path is inside; for an id, the active profile when it holds a match, otherwise the first other

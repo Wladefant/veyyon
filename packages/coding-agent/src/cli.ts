@@ -388,14 +388,14 @@ async function runTinyWorker(): Promise<void> {
 }
 
 /**
- * Whether an argv token can start a session resume: `--resume`, `-r` or `--session`, bare or
- * with `=value`, or `--continue`/`-c`, which reads a session id after it as a resume. An argv
- * with none of these skips loading the launch parser for the resumed-session profile lookup.
+ * Whether an argv token can start a session resume or fork: `--resume`, `-r`, `--session` or
+ * `--fork`, bare or with `=value`, or `--continue`/`-c`, which reads a session id after it as a
+ * resume. An argv with none of these skips loading the launch parser for the owning-profile lookup.
  */
 function mayResumeSession(arg: string): boolean {
 	const equals = arg.startsWith("--") ? arg.indexOf("=") : -1;
 	const flag = equals === -1 ? arg : arg.slice(0, equals);
-	return OPTIONAL_VALUE_FLAGS.has(flag) || flag === "--continue" || flag === "-c";
+	return OPTIONAL_VALUE_FLAGS.has(flag) || flag === "--fork" || flag === "--continue" || flag === "-c";
 }
 
 /** Run the CLI with the given argv (no `process.argv` prefix). */
@@ -429,9 +429,9 @@ export async function runCli(argv: string[]): Promise<void> {
 			// surfaces a clean error and keeps every later path helper on the
 			// selected profile.
 			setProfile(resolveStartupProfile());
-			// A launch that resumes a session continues in the profile that wrote
-			// it, ahead of the env var and `defaultProfile`; only an explicit
-			// --profile above wins over the session's own profile.
+			// A launch that resumes or forks a session continues in the profile
+			// that wrote it, ahead of the env var and `defaultProfile`; only an
+			// explicit --profile above wins over the session's own profile.
 			if (resolvedArgv.some(mayResumeSession)) {
 				const { resumedSessionProfile } = await import("./cli/resume-profile");
 				const sessionProfile = resumedSessionProfile(resolvedArgv, process.cwd());
