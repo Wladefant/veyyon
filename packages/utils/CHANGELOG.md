@@ -7,6 +7,7 @@
 ### Added
 
 - `@veyyon/utils/session-file` exports `sessionFileMatchesResumeArgument`, which reports whether a transcript filename answers a `--resume` id or prefix.
+- `getProfileSessionsDir` returns a named profile's sessions directory as a process running that profile resolves it, under `$XDG_DATA_HOME` when that profile's XDG directory exists.
 
 ### Changed
 

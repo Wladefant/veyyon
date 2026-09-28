@@ -76,6 +76,7 @@
 - `--profile <name> --resume <id>` for a session another profile wrote forks it into `<name>` at its recorded working directory and leaves the source unchanged, instead of appending to the other profile's transcript under `<name>`'s settings and credentials.
 - `/resume <id>` for a session another profile wrote relaunches Veyyon in that profile instead of opening the transcript under the running profile.
 - `veyyon --resume <id>` naming a subagent transcript nested inside a session's directory activates the profile that wrote it instead of forking it into the profile the launch started in.
+- With sessions stored under `$XDG_DATA_HOME/veyyon`, `veyyon --resume <id>` activates the profile that wrote the session, and the session picker's all-projects view and an ACP client's session list show the active profile's sessions from every project, instead of none of them.
 - `/profile <name>`, `/resume` of another profile's session, and `veyyon --profile <name>` run from a tool's shell start the other profile on its own `.env` files instead of the credentials the running profile loaded from its own.
 - Switching a running session to a transcript another profile wrote, through an extension or RPC `switch_session`, fails with an error naming the owning profile instead of continuing that transcript under the running profile.
 - An unknown-flag error suggests a short flag in the spelling the parser accepts, such as `-r` for `-rr`, instead of `--r`, which the parser rejects, and offers `-h` and `-v` like every other flag.

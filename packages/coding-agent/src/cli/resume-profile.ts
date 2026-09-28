@@ -18,6 +18,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import {
 	getAgentDir,
+	getProfileSessionsDir,
 	listProfiles,
 	normalizePathForComparison,
 	type ProfileInfo,
@@ -49,10 +50,6 @@ export function resumedSessionArgument(argv: readonly string[]): string | undefi
 	return parsed.resume;
 }
 
-function sessionsRoot(profile: ProfileInfo): string {
-	return path.join(profile.agentDir, "sessions");
-}
-
 /**
  * Whether a profile's sessions directory holds a transcript the id names: at the top two levels, or at
  * any depth when `deep` is set.
@@ -61,7 +58,7 @@ function sessionsRoot(profile: ProfileInfo): string {
  * directories when the launch resolves the id and reports an unreadable one there.
  */
 function holdsSession(profile: ProfileInfo, sessionId: string, deep: boolean): boolean {
-	const root = sessionsRoot(profile);
+	const root = getProfileSessionsDir(profile.name);
 	const matches = (name: string): boolean =>
 		isSessionFileName(name) && sessionFileMatchesResumeArgument(name, sessionId);
 	if (deep) {
@@ -115,7 +112,7 @@ export function resumedSessionProfile(argv: readonly string[], cwd: string): str
 	let holder: ProfileInfo | undefined;
 	if (namesSessionFile(sessionArg)) {
 		const file = path.resolve(cwd, sessionArg);
-		holder = profiles.find(profile => pathIsWithin(sessionsRoot(profile), file));
+		holder = profiles.find(profile => pathIsWithin(getProfileSessionsDir(profile.name), file));
 	} else {
 		for (const deep of [false, true]) {
 			if (holdsSession(active, sessionArg, deep)) break;

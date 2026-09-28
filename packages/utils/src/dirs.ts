@@ -2365,6 +2365,15 @@ export function getSessionsDir(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "sessions", "data");
 }
 
+/**
+ * The sessions directory of the named profile (`undefined` or `"default"` for the default one),
+ * resolved as a process running that profile resolves {@link getSessionsDir}: under the profile's
+ * `$XDG_DATA_HOME` directory once it exists, else `<agentDir>/sessions`.
+ */
+export function getProfileSessionsDir(profile: string | undefined): string {
+	return new DirResolver({ profile }).agentSubdir(undefined, "sessions", "data");
+}
+
 /** Get the content-addressed blob store directory (agent `blobs/`). */
 export function getBlobsDir(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "blobs", "data");

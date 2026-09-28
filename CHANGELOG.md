@@ -18,6 +18,7 @@
 - `CodeHighlighter` highlights a source that grows at its end once per line: `advance(text)` colours whole lines and moves the parser past them, `peek(text)` colours the unfinished last line without moving it, and their output joined is byte-identical to `highlightCode` over the whole source.
 - `highlightCodeBatch(sources, colors)` highlights many independent sources in parallel on the Rayon pool and returns one string per source, in order, each byte-identical to `highlightCode` for that source.
 - `@veyyon/utils/session-file` exports `sessionFileMatchesResumeArgument`, which reports whether a transcript filename answers a `--resume` id or prefix.
+- `getProfileSessionsDir` returns a named profile's sessions directory as a process running that profile resolves it, under `$XDG_DATA_HOME` when that profile's XDG directory exists.
 
 ### Changed
 
@@ -159,6 +160,7 @@
 - `--profile <name> --resume <id>` for a session another profile wrote forks it into `<name>` at its recorded working directory and leaves the source unchanged, instead of appending to the other profile's transcript under `<name>`'s settings and credentials.
 - `/resume <id>` for a session another profile wrote relaunches Veyyon in that profile instead of opening the transcript under the running profile.
 - `veyyon --resume <id>` naming a subagent transcript nested inside a session's directory activates the profile that wrote it instead of forking it into the profile the launch started in.
+- With sessions stored under `$XDG_DATA_HOME/veyyon`, `veyyon --resume <id>` activates the profile that wrote the session, and the session picker's all-projects view and an ACP client's session list show the active profile's sessions from every project, instead of none of them.
 - `/profile <name>`, `/resume` of another profile's session, and `veyyon --profile <name>` run from a tool's shell start the other profile on its own `.env` files instead of the credentials the running profile loaded from its own.
 - Switching a running session to a transcript another profile wrote, through an extension or RPC `switch_session`, fails with an error naming the owning profile instead of continuing that transcript under the running profile.
 - An unknown-flag error suggests a short flag in the spelling the parser accepts, such as `-r` for `-rr`, instead of `--r`, which the parser rejects, and offers `-h` and `-v` like every other flag.
@@ -191,6 +193,7 @@
 - A blank user or developer message after a tool result no longer sends Mistral two consecutive assistant turns, which it rejects.
 - `resolveResumableSession` returns a session another profile wrote as `scope: "profile"` with the owning profile's name instead of as a `global` match, and `foreignSessionFileProfile` returns the profile other than the active one that holds a transcript path.
 - `SessionManager.continueRecent` ignores a terminal breadcrumb naming another profile's transcript instead of continuing that session, or relocating it into the active profile when its recorded directory is gone.
+- With sessions stored under `$XDG_DATA_HOME/veyyon`, the all-projects session listing, `resolveResumableSession`'s other-profile lookup and `foreignSessionFileProfile` read the sessions directory each profile writes to instead of `<agentDir>/sessions`, which held none of them.
 - The resume warning for tool calls left without a result lists at most three calls, each command or path cut to 80 characters on one line, followed by "and N more", and no longer counts a `<id>_2` repeat of a call its original id already answered.
 - A tool call recorded in an OpenAI Responses or Codex native history payload keeps its provider id through outbound canonicalization, so its result is sent as that call's output instead of a stale-output note after a "No tool output was recorded" placeholder on every turn.
 - A session file under 8 MiB opened for a partial rewrite no longer keeps its whole text alive through the header line the loaded layout holds, which held a second copy of the file for as long as the session stayed open.

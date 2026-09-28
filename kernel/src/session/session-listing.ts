@@ -3,7 +3,8 @@ import * as path from "node:path";
 import type { Message } from "@veyyon/ai";
 import {
 	DAY_MS,
-	getAgentDir as getDefaultAgentDir,
+	getProfileSessionsDir,
+	getSessionsDir,
 	HOUR_MS,
 	isEnoent,
 	listProfiles,
@@ -81,9 +82,8 @@ export type ResolvedSessionMatch =
  */
 export function foreignSessionFileProfile(filePath: string): string | undefined {
 	const file = path.resolve(filePath);
-	const activeRoot = path.resolve(path.join(getDefaultAgentDir(), "sessions"));
-	if (pathIsWithin(activeRoot, file)) return undefined;
-	return listProfiles().find(profile => pathIsWithin(path.join(profile.agentDir, "sessions"), file))?.name;
+	if (pathIsWithin(getSessionsDir(), file)) return undefined;
+	return listProfiles().find(profile => pathIsWithin(getProfileSessionsDir(profile.name), file))?.name;
 }
 
 /** Lightweight metadata for a recent session, used in welcome/picker UI. */
@@ -795,7 +795,7 @@ export function listSessionsReadOnly(sessionDir: string, storage: SessionStorage
  * crashed, and the log is what tells you the difference.
  */
 export async function listAllSessions(storage: SessionStorage = new FileSessionStorage()): Promise<SessionInfo[]> {
-	const sessionsRoot = path.join(getDefaultAgentDir(), "sessions");
+	const sessionsRoot = getSessionsDir();
 	try {
 		// Backups are indexed records too. Recover every project bucket before
 		// enumerating primaries, so a crash during an indexed/backend rewrite is
@@ -916,9 +916,9 @@ async function findSessionInOtherProfiles(
 	sessionArg: string,
 	storage: SessionStorage,
 ): Promise<ResolvedSessionMatch | undefined> {
-	const activeRoot = path.resolve(path.join(getDefaultAgentDir(), "sessions"));
+	const activeRoot = path.resolve(getSessionsDir());
 	for (const profile of listProfiles()) {
-		const sessionsRoot = path.resolve(path.join(profile.agentDir, "sessions"));
+		const sessionsRoot = path.resolve(getProfileSessionsDir(profile.name));
 		if (sessionsRoot === activeRoot) continue;
 		let files: string[];
 		try {
