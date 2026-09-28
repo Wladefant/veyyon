@@ -20,6 +20,7 @@
 - `@veyyon/utils/session-file` exports `sessionFileMatchesResumeArgument`, which reports whether a transcript filename answers a `--resume` id or prefix.
 - `getProfileSessionsDir` returns a named profile's sessions directory as a process running that profile resolves it, under `$XDG_DATA_HOME` when that profile's XDG directory exists.
 - `setProfileEnv` sets an environment variable read out of the active profile's configuration and records it so a process started under another profile drops it.
+- `@veyyon/utils/session-file` exports `ORPHAN_AGENT_TRANSCRIPT_PREFIX`, the prefix of an agent transcript written under the sessions root when its parent session has no file.
 
 ### Changed
 
@@ -163,6 +164,7 @@
 - `/resume <id>` for a session another profile wrote relaunches Veyyon in that profile instead of opening the transcript under the running profile.
 - `veyyon --resume <id>` naming a subagent transcript nested inside a session's directory activates the profile that wrote it instead of forking it into the profile the launch started in.
 - With sessions stored under `$XDG_DATA_HOME/veyyon`, `veyyon --resume <id>` activates the profile that wrote the session, and the session picker's all-projects view and an ACP client's session list show the active profile's sessions from every project, instead of none of them.
+- The session picker's all-projects view and an ACP client's session list no longer show each spawned agent's transcript as a session of its own.
 - `/profile <name>`, `/resume` of another profile's session, and `veyyon --profile <name>` run from a tool's shell start the other profile on its own `.env` files instead of the credentials the running profile loaded from its own.
 - An Exa API key read out of a profile's `mcp.json` no longer reaches a process started under another profile, which resolves `EXA_API_KEY` from its own configuration instead.
 - On Windows, `launch` in a project where another profile's daemon broker is running starts this profile's own broker instead of connecting to the other profile's pipe and failing with `Daemon broker authentication failed`, and a session under `VEYYON_CODING_AGENT_DIR` no longer shares the default profile's broker and its environment.
@@ -198,6 +200,7 @@
 - `resolveResumableSession` returns a session another profile wrote as `scope: "profile"` with the owning profile's name instead of as a `global` match, and `foreignSessionFileProfile` returns the profile other than the active one that holds a transcript path.
 - `SessionManager.continueRecent` ignores a terminal breadcrumb naming another profile's transcript instead of continuing that session, or relocating it into the active profile when its recorded directory is gone.
 - With sessions stored under `$XDG_DATA_HOME/veyyon`, the all-projects session listing, `resolveResumableSession`'s other-profile lookup and `foreignSessionFileProfile` read the sessions directory each profile writes to instead of `<agentDir>/sessions`, which held none of them.
+- `listAllSessions` and `SessionManager.listAll` list top-level sessions only, leaving out spawned-agent transcripts in a session's artifacts directory and orphaned `orphan-task-*` transcripts; `resolveResumableSession` still resolves an agent transcript by id.
 - The resume warning for tool calls left without a result lists at most three calls, each command or path cut to 80 characters on one line, followed by "and N more", and no longer counts a `<id>_2` repeat of a call its original id already answered.
 - A tool call recorded in an OpenAI Responses or Codex native history payload keeps its provider id through outbound canonicalization, so its result is sent as that call's output instead of a stale-output note after a "No tool output was recorded" placeholder on every turn.
 - A session file under 8 MiB opened for a partial rewrite no longer keeps its whole text alive through the header line the loaded layout holds, which held a second copy of the file for as long as the session stayed open.
