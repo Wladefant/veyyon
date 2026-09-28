@@ -21,6 +21,8 @@ import * as path from "node:path";
  * a same-profile process before crossing. The negative controls: a same-profile child keeps the
  * values, and a variable the real environment set, or the parent changed at run time, still reaches
  * the child.
+ * A variable set out of the parent profile's configuration at run time (the Exa key in
+ * `<agentDir>/mcp.json`) goes through `setProfileEnv` and is dropped under another profile the same way.
  *
  * WHAT IT DOES NOT CATCH: a spawn that rewrites `VEYYON_DOTENV_ORIGIN` or strips it while keeping the
  * variables it describes.
@@ -63,6 +65,8 @@ interface Chain {
 	real?: string;
 	/** A value the first process assigns at run time before starting the next. */
 	runtime?: string;
+	/** A value the first process sets out of its profile's configuration before starting the next. */
+	profileConfig?: string;
 }
 
 /** The key's value in each process of the chain. */
@@ -78,12 +82,14 @@ async function runChain(spec: Chain): Promise<string[]> {
 	const script = path.join(caseRoot, "probe.ts");
 	fs.writeFileSync(
 		script,
-		`import ${JSON.stringify(UTILS_INDEX)};
+		`import { setProfileEnv } from ${JSON.stringify(UTILS_INDEX)};
 const key = ${JSON.stringify(KEY)};
 const [depth, ...rest] = process.argv.slice(2);
 if (depth === "0") {
 	const runtime = ${JSON.stringify(spec.runtime ?? null)};
 	if (runtime !== null) process.env[key] = runtime;
+	const profileConfig = ${JSON.stringify(spec.profileConfig ?? null)};
+	if (profileConfig !== null) setProfileEnv(key, profileConfig);
 }
 const values = [Bun.env[key] ?? "(unset)"];
 if (rest.length > 0) {
@@ -157,5 +163,22 @@ describe("a veyyon process started under another profile", () => {
 			"runtime-value",
 			"runtime-value",
 		]);
+	});
+
+	it("drops a variable the parent set from its profile's configuration", async () => {
+		expect(
+			await runChain({
+				profiles: ["work", "oss"],
+				layer: "agent",
+				unset: ["work", "oss"],
+				profileConfig: "config-value",
+			}),
+		).toEqual(["config-value", "(unset)"]);
+	});
+
+	it("keeps a variable the parent set from its profile's configuration under the same profile", async () => {
+		expect(
+			await runChain({ profiles: ["work", "work"], layer: "agent", unset: ["work"], profileConfig: "config-value" }),
+		).toEqual(["config-value", "config-value"]);
 	});
 });

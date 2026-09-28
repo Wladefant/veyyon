@@ -105,7 +105,8 @@ const configRootEnv = parseEnvFile(path.join(getConfigRootDir(), ".env"));
 const agentEnv = parseEnvFile(path.join(agentDir, ".env"));
 const projectEnv = parseEnvFile(path.join(process.cwd(), ".env"));
 
-// A veyyon process records which variables it set from a `.env` file in `VEYYON_DOTENV_ORIGIN`, and every
+// A veyyon process records which variables it set from a `.env` file or from its profile's configuration in
+// `VEYYON_DOTENV_ORIGIN`, and every
 // process it starts inherits the record: a `/profile` or `/resume` relaunch, a `veyyon --profile <name>`
 // run from a tool's shell, a subagent. An inherited variable outranks every `.env` layer, so without the
 // record a process under another profile would run on the parent profile's `.env`, credentials included.
@@ -168,10 +169,24 @@ for (const key of homeDotenvInjectedKeys) {
 	const value = Bun.env[key];
 	if (value !== undefined) originDigests[key] = digestEnvValue(value);
 }
-if (Object.keys(originDigests).length > 0) {
-	Bun.env[DOTENV_ORIGIN_ENV_KEY] = JSON.stringify({ agentDir, digests: originDigests } satisfies DotenvOrigin);
-} else {
-	delete Bun.env[DOTENV_ORIGIN_ENV_KEY];
+function writeDotenvOrigin(): void {
+	if (Object.keys(originDigests).length > 0) {
+		Bun.env[DOTENV_ORIGIN_ENV_KEY] = JSON.stringify({ agentDir, digests: originDigests } satisfies DotenvOrigin);
+	} else {
+		delete Bun.env[DOTENV_ORIGIN_ENV_KEY];
+	}
+}
+writeDotenvOrigin();
+
+/**
+ * Set a variable whose value comes from the active profile's configuration, such as a key read out of
+ * `<agentDir>/mcp.json`, and add it to the `VEYYON_DOTENV_ORIGIN` record. A process started under another
+ * profile drops it the way it drops a `.env` value, so it resolves the variable from its own profile.
+ */
+export function setProfileEnv(key: string, value: string): void {
+	Bun.env[key] = value;
+	originDigests[key] = digestEnvValue(value);
+	writeDotenvOrigin();
 }
 
 // Directory-affecting keys (XDG_*_HOME, and in default mode VEYYON_CODING_AGENT_DIR)
