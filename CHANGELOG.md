@@ -19,6 +19,7 @@
 - `highlightCodeBatch(sources, colors)` highlights many independent sources in parallel on the Rayon pool and returns one string per source, in order, each byte-identical to `highlightCode` for that source.
 - `@veyyon/utils/session-file` exports `sessionFileMatchesResumeArgument`, which reports whether a transcript filename answers a `--resume` id or prefix.
 - `getProfileSessionsDir` returns a named profile's sessions directory as a process running that profile resolves it, under `$XDG_DATA_HOME` when that profile's XDG directory exists.
+- `setProfileEnv` sets an environment variable read out of the active profile's configuration and records it so a process started under another profile drops it.
 
 ### Changed
 
@@ -162,6 +163,7 @@
 - `veyyon --resume <id>` naming a subagent transcript nested inside a session's directory activates the profile that wrote it instead of forking it into the profile the launch started in.
 - With sessions stored under `$XDG_DATA_HOME/veyyon`, `veyyon --resume <id>` activates the profile that wrote the session, and the session picker's all-projects view and an ACP client's session list show the active profile's sessions from every project, instead of none of them.
 - `/profile <name>`, `/resume` of another profile's session, and `veyyon --profile <name>` run from a tool's shell start the other profile on its own `.env` files instead of the credentials the running profile loaded from its own.
+- An Exa API key read out of a profile's `mcp.json` no longer reaches a process started under another profile, which resolves `EXA_API_KEY` from its own configuration instead.
 - Switching a running session to a transcript another profile wrote, through an extension or RPC `switch_session`, fails with an error naming the owning profile instead of continuing that transcript under the running profile.
 - An unknown-flag error suggests a short flag in the spelling the parser accepts, such as `-r` for `-rr`, instead of `--r`, which the parser rejects, and offers `-h` and `-v` like every other flag.
 - A URL read whose image bytes do not decode returns the text page the server sent, or a note that the bytes were not a valid image, instead of failing the read.
