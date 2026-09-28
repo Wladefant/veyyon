@@ -209,6 +209,7 @@ import {
 	type NewSessionOptions,
 	type SessionEntry,
 } from "@veyyon/kernel/session/session-entries";
+import { foreignSessionFileProfile } from "@veyyon/kernel/session/session-listing";
 import { cleanupEmptyMoveSession, type SessionManager } from "@veyyon/kernel/session/session-manager";
 import {
 	isAwaitingUserAnswer,
@@ -227,6 +228,7 @@ import {
 	formatCount,
 	formatDuration,
 	getActiveAuthDbPath,
+	getActiveProfileOrDefault,
 	getStringProperty,
 	isAbortError,
 	isBunTestRuntime,
@@ -14970,6 +14972,15 @@ export class AgentSession {
 		const switchingToDifferentSession = previousSessionFile
 			? path.resolve(previousSessionFile) !== path.resolve(sessionPath)
 			: true;
+		// Every in-process switch (the picker, `/resume`, an extension, RPC `switch_session`) lands
+		// here. Another profile's transcript continues in that profile, never under this one's
+		// settings and credentials.
+		const owner = switchingToDifferentSession ? foreignSessionFileProfile(sessionPath) : undefined;
+		if (owner !== undefined) {
+			throw new Error(
+				`Session ${sessionPath} belongs to profile "${owner}". Run \`veyyon --resume ${sessionPath}\` to continue it in that profile, or \`veyyon --profile ${getActiveProfileOrDefault()} --resume ${sessionPath}\` to fork it into this one.`,
+			);
+		}
 		// Emit session_before_switch event (can be cancelled)
 		if (this.#extensionRunner?.hasHandlers("session_before_switch")) {
 			const result = (await this.#extensionRunner.emit({

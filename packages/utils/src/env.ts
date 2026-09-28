@@ -107,13 +107,35 @@ const projectEnv = parseEnvFile(path.join(process.cwd(), ".env"));
 // `$HOME/.env`: home is the lowest-priority layer and only happens to have been applied first, so these
 // three files may displace it. Displacing removes the key from the set, so the next (lower-priority) file
 // cannot displace it again and the original order survives the split.
+const dotenvValues = new Map<string, string>();
 for (const file of [projectEnv, agentEnv, configRootEnv, homeEnv]) {
 	for (const key in file) {
 		if (isMacosMallocStackLoggingEnvName(key)) continue;
 		if (Bun.env[key] && !homeDotenvInjectedKeys.has(key)) continue;
 		Bun.env[key] = file[key];
+		dotenvValues.set(key, file[key]);
 		homeDotenvInjectedKeys.delete(key);
 	}
+}
+for (const key of homeDotenvInjectedKeys) {
+	const value = Bun.env[key];
+	if (value !== undefined) dotenvValues.set(key, value);
+}
+
+/**
+ * `env` without the variables this process set from a `.env` file and still holds at that value.
+ *
+ * A variable inherited from the parent outranks every `.env` layer, so a veyyon process relaunched
+ * under another profile that inherits them would run on the parent profile's `<agentDir>/.env`,
+ * credentials included, instead of its own. The relaunched process reads its own layers again; a
+ * variable the environment set, or one changed at run time, is kept.
+ */
+export function withoutDotenvValues(env: Record<string, string | undefined>): Record<string, string | undefined> {
+	const result = { ...env };
+	for (const [key, value] of dotenvValues) {
+		if (result[key] === value) delete result[key];
+	}
+	return result;
 }
 
 // Directory-affecting keys (XDG_*_HOME, and in default mode VEYYON_CODING_AGENT_DIR)

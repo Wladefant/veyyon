@@ -12,9 +12,10 @@
  *
  * THE CLASS THIS CLOSES is a resume path that crosses a profile boundary without saying so. Every
  * owner/pinned pair of three profiles is swept through the real resolver, the real
- * `createSessionManager` (by id prefix and by file path) and the real `/resume` handler. The
- * negative controls: a session resumed from its own profile opens in place, and an id nobody wrote
- * still misses.
+ * `createSessionManager` (by id prefix and by file path), the real `/resume` handler and the real
+ * `AgentSession.switchSession`, which every in-process switch (the picker, an extension, RPC
+ * `switch_session`) goes through. The negative controls: a session resumed or switched to from its
+ * own profile opens in place, and an id nobody wrote still misses.
  *
  * The same sweep covers the two paths that reach a session without naming it: `--continue`, which
  * follows the terminal's breadcrumb (a pre-isolation build wrote crumbs naming another profile's
@@ -28,10 +29,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { Agent } from "@veyyon/agent-core";
+import { AuthStorage } from "@veyyon/ai/auth-storage";
+import { getBundledModel } from "@veyyon/catalog/models";
 import { parseArgs } from "@veyyon/coding-agent/cli/args";
+import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { Settings } from "@veyyon/coding-agent/config/settings";
 import { createSessionManager } from "@veyyon/coding-agent/main";
 import type { InteractiveModeContext } from "@veyyon/coding-agent/modes/terminal/types";
+import { AgentSession } from "@veyyon/coding-agent/session/agent-session";
 import { executeBuiltinSlashCommand } from "@veyyon/coding-agent/slash-commands/builtin-registry";
 import { resolveResumableSession } from "@veyyon/kernel/session/session-listing";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
@@ -296,6 +302,51 @@ describe("the child a cross-profile relaunch starts", () => {
 				expect(getAgentDir(), label).toBe(path.join(isolated.root, "profiles", owner, "agent"));
 				activate(active);
 			}
+		}
+	});
+});
+
+describe("AgentSession.switchSession to another profile's transcript", () => {
+	async function withRunningSession(run: (session: AgentSession) => Promise<void>): Promise<void> {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("expected the bundled anthropic model");
+		const authStorage = await AuthStorage.create(path.join(getAgentDir(), "switch-test-auth.db"));
+		const session = new AgentSession({
+			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
+			sessionManager: SessionManager.create(launchCwd),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry: new ModelRegistry(authStorage),
+		});
+		try {
+			await run(session);
+		} finally {
+			await session.dispose();
+			authStorage.close();
+		}
+	}
+
+	it("rejects the switch and leaves both transcripts where they were", async () => {
+		for (const { owner, active } of crossProfilePairs()) {
+			activate(active);
+			const source = seededFor(owner);
+			await withRunningSession(async session => {
+				const before = session.sessionManager.getSessionFile();
+				const label = `${active} switching to ${owner}'s session`;
+				await expect(session.switchSession(source.file), label).rejects.toThrow(`belongs to profile "${owner}"`);
+				expect(session.sessionManager.getSessionFile(), label).toBe(before);
+			});
+			expect(fs.readFileSync(source.file).equals(source.bytes), `${owner}'s transcript`).toBe(true);
+		}
+	});
+
+	it("switches to a session from the active profile", async () => {
+		for (const profile of PROFILES) {
+			activate(profile);
+			const own = seededFor(profile);
+			await withRunningSession(async session => {
+				expect(await session.switchSession(own.file), profile).toBe(true);
+				expect(session.sessionManager.getSessionId(), profile).toBe(own.id);
+			});
 		}
 	});
 });

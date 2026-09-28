@@ -50,6 +50,7 @@ import {
 	logger,
 	postmortem,
 	prompt,
+	withoutDotenvValues,
 } from "@veyyon/utils";
 import type { AutocompleteProvider, SlashCommand } from "@veyyon/utils/autocomplete";
 import { matchesKey } from "@veyyon/utils/keys";
@@ -3638,7 +3639,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.#relaunchSpec) {
 			const { argv, env } = this.#relaunchSpec;
 			const childEnv: Record<string, string> = {};
-			for (const [key, value] of Object.entries({ ...process.env, ...env })) {
+			// The child reads its own profile's `.env` layers; inherited copies of this profile's would outrank them.
+			for (const [key, value] of Object.entries({ ...withoutDotenvValues(process.env), ...env })) {
 				if (value !== undefined) childEnv[key] = value;
 			}
 			// Tell the child that whatever is queued on the tty predates it.

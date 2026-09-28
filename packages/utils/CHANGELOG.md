@@ -7,6 +7,7 @@
 ### Added
 
 - `@veyyon/utils/session-file` exports `sessionFileMatchesResumeArgument`, which reports whether a transcript filename answers a `--resume` id or prefix.
+- `withoutDotenvValues` returns an environment without the variables the process set from a `.env` file and still holds at that value.
 
 ### Changed
 
