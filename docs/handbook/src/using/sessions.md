@@ -32,6 +32,9 @@ that session from any directory and any profile:
   as its parent. The source stays unchanged in its own profile. The launch prints the new id.
 - `/resume <id>` inside a session relaunches Veyyon in the profile that wrote the session, as
   `/profile` does, when that is not the running profile.
+- `--continue` and the session picker list the running profile's sessions only. Switching a running
+  session to another profile's transcript, from an extension or RPC `switch_session`, fails and
+  states the owning profile.
 - The session reopens in place, in its recorded working directory, and the launch moves there. It is
   not copied into the directory you launched from. `--cwd <dir>` overrides it: the session's working
   directory moves to `<dir>` and the session records the change.
@@ -51,7 +54,7 @@ presenting a clean-looking summary that dropped the real constraint.
 
 ## Session files are trees
 
-A session file (`~/.veyyon/profiles/default/agent/sessions/**/<timestamp>_<id>.jsonl`) is an append-oriented log whose entries form a tree. Recorded session entries carry an `id` and a `parentId`. Branching appends a new entry whose `parentId` states an earlier entry, so it starts a sibling branch from that point.
+A session file (`~/.veyyon/profiles/default/agent/sessions/**/<timestamp>_<id>.jsonl`, or `$XDG_DATA_HOME/veyyon/sessions/**` after `veyyon config init-xdg`) is an append-oriented log whose entries form a tree. Recorded session entries carry an `id` and a `parentId`. Branching appends a new entry whose `parentId` states an earlier entry, so it starts a sibling branch from that point.
 
 The *active leaf* advances to each appended entry. On load it falls back to the last entry in the file. Not every line carries `parentId`: the first-line session header does not, and in-place refresh records are full replacements of the original logical record rather than tree entries. Storage maintenance may atomically rewrite the file to update the header or representation, but it preserves the history entries. Branches you navigate away from remain addressable.
 
