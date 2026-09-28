@@ -57,9 +57,11 @@ Project-level dirs (`<cwd>/.veyyon`, `.claude`, etc.) are **not** profile-scoped
 
 - **CLI:** `veyyon --profile <name>` (no short form; `-p` is `--print`).
 - **Env:** `VEYYON_PROFILE=<name>`.
-- **TUI:** `/profile <name>` ends the current conversation and relaunches Veyyon on that profile (a fresh session: profiles are chosen at process start, so there is no hot-swap). The relaunched process reads the new profile's `.env` files and does not inherit the variables the previous profile loaded from its own. Bare `/profile` (or `/profiles`) opens the profile picker described below.
+- **TUI:** `/profile <name>` ends the current conversation and relaunches Veyyon on that profile (a fresh session: profiles are chosen at process start, so there is no hot-swap). Bare `/profile` (or `/profiles`) opens the profile picker described below.
 - **Shell alias:** `veyyon --profile work --alias mywork` installs a managed block in your shell rc (see `cli/profile-alias.ts`).
 - **Resume:** `veyyon --resume <id>` (also `-r`, `--session`, `--continue <id>`, or a transcript path) activates the profile whose `sessions/` holds that session, including a subagent transcript nested inside a session's directory. An explicit `--profile` naming another profile forks the session into that profile at its recorded working directory and leaves the source unchanged. `/resume <id>` for another profile's session relaunches on that profile. Bare `--continue` picks from the active profile's sessions only. `--fork`, `--no-session` and `--session-dir` keep the profile the launch resolved otherwise.
+
+A Veyyon process started by another one under a different profile (a `/profile` or `/resume` relaunch, or `veyyon --profile <name>` run from a tool's shell) reads its own profile's `.env` files and drops the variables the parent set from its own. The parent records those variables, as digests, in `VEYYON_DOTENV_ORIGIN`. A variable exported in the shell, or changed after the parent read its `.env` files, is inherited unchanged.
 
 ## TUI profile commands
 

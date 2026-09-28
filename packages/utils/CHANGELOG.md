@@ -7,7 +7,6 @@
 ### Added
 
 - `@veyyon/utils/session-file` exports `sessionFileMatchesResumeArgument`, which reports whether a transcript filename answers a `--resume` id or prefix.
-- `withoutDotenvValues` returns an environment without the variables the process set from a `.env` file and still holds at that value.
 
 ### Changed
 
@@ -26,6 +25,7 @@
 ### Fixed
 
 - The default profile ignores an inherited `VEYYON_CODING_AGENT_DIR` equal to any profile's agent dir, so `/profile default` or `/resume` of a default-profile session from a named profile no longer runs the default profile in the named profile's agent dir.
+- A veyyon process started by another veyyon process under a different profile drops the variables the parent set from its own `.env` files, recorded in `VEYYON_DOTENV_ORIGIN`, and applies its own profile's `.env` layers instead of running on the parent profile's credentials.
 - `@veyyon/utils/stderr-guard` loads `node:util` on the first routed console call rather than at import, keeping it off the launch card path; no user-visible change.
 - `latexToUnicode` and `latexToBlock` render a command, environment, color or delimiter named after an `Object.prototype` member (`\toString`, `\constructor`, `\begin{__proto__}`) as an unknown name instead of throwing, printing a function body, or laying it out as a fraction, big operator or matrix.
 

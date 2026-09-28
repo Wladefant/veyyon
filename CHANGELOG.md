@@ -18,7 +18,6 @@
 - `CodeHighlighter` highlights a source that grows at its end once per line: `advance(text)` colours whole lines and moves the parser past them, `peek(text)` colours the unfinished last line without moving it, and their output joined is byte-identical to `highlightCode` over the whole source.
 - `highlightCodeBatch(sources, colors)` highlights many independent sources in parallel on the Rayon pool and returns one string per source, in order, each byte-identical to `highlightCode` for that source.
 - `@veyyon/utils/session-file` exports `sessionFileMatchesResumeArgument`, which reports whether a transcript filename answers a `--resume` id or prefix.
-- `withoutDotenvValues` returns an environment without the variables the process set from a `.env` file and still holds at that value.
 
 ### Changed
 
@@ -160,7 +159,7 @@
 - `--profile <name> --resume <id>` for a session another profile wrote forks it into `<name>` at its recorded working directory and leaves the source unchanged, instead of appending to the other profile's transcript under `<name>`'s settings and credentials.
 - `/resume <id>` for a session another profile wrote relaunches Veyyon in that profile instead of opening the transcript under the running profile.
 - `veyyon --resume <id>` naming a subagent transcript nested inside a session's directory activates the profile that wrote it instead of forking it into the profile the launch started in.
-- `/profile <name>` and `/resume` of another profile's session relaunch Veyyon without the variables the running profile loaded from its own `.env` files, so the relaunched profile uses its own credentials instead of the previous profile's.
+- `/profile <name>`, `/resume` of another profile's session, and `veyyon --profile <name>` run from a tool's shell start the other profile on its own `.env` files instead of the credentials the running profile loaded from its own.
 - Switching a running session to a transcript another profile wrote, through an extension or RPC `switch_session`, fails with an error naming the owning profile instead of continuing that transcript under the running profile.
 - An unknown-flag error suggests a short flag in the spelling the parser accepts, such as `-r` for `-rr`, instead of `--r`, which the parser rejects, and offers `-h` and `-v` like every other flag.
 - A URL read whose image bytes do not decode returns the text page the server sent, or a note that the bytes were not a valid image, instead of failing the read.
@@ -198,6 +197,7 @@
 - `isSamplingKnob` answers `false` for a name inherited from `Object.prototype`, such as `toString` or `constructor`, instead of `true`.
 - `Container.clear()` releases the row arrays its discarded children last rendered instead of holding them until the next render.
 - The default profile ignores an inherited `VEYYON_CODING_AGENT_DIR` equal to any profile's agent dir, so `/profile default` or `/resume` of a default-profile session from a named profile no longer runs the default profile in the named profile's agent dir.
+- A veyyon process started by another veyyon process under a different profile drops the variables the parent set from its own `.env` files, recorded in `VEYYON_DOTENV_ORIGIN`, and applies its own profile's `.env` layers instead of running on the parent profile's credentials.
 - `@veyyon/utils/stderr-guard` loads `node:util` on the first routed console call rather than at import, keeping it off the launch card path; no user-visible change.
 - `latexToUnicode` and `latexToBlock` render a command, environment, color or delimiter named after an `Object.prototype` member (`\toString`, `\constructor`, `\begin{__proto__}`) as an unknown name instead of throwing, printing a function body, or laying it out as a fraction, big operator or matrix.
 
