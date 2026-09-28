@@ -212,7 +212,7 @@ export function daemonLabel(daemon: DaemonSnapshot): string {
 
 /**
  * The owning condition that ends a daemon: `last-client-exit` (the default —
- * the broker stops it once the last veyyon in this directory exits),
+ * the broker stops it once the last veyyon of this profile in this directory exits),
  * `broker-shutdown` (`persist`: outlives the last client, dies with the
  * broker), or `detached` (survives every veyyon and broker exit).
  */

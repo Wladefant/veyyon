@@ -368,7 +368,7 @@ class DaemonBroker {
 	) {
 		this.#projectDir = projectDir;
 		this.#runtimeDir = runtimeDir;
-		this.#endpoint = daemonBrokerEndpoint(projectDir, runtimeDir);
+		this.#endpoint = daemonBrokerEndpoint(runtimeDir);
 		this.#token = token;
 		this.#idleGraceMs = Number.isFinite(idleGraceMs) && idleGraceMs >= 0 ? idleGraceMs : DEFAULT_IDLE_GRACE_MS;
 		this.#cleanupWaitMs =
