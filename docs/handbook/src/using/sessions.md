@@ -19,12 +19,11 @@ resume metadata rather than relying on the model to remember everything from raw
 - Manage saved sessions with `/session`; garbage-collect old artifacts with `veyyon gc`.
 - Run a bounded non-interactive task by passing a prompt: `veyyon "…"`.
 
-Veyyon resumes from the launch picker or `/resume`, and branches with `/branch` / `/fork`.
-
-## Resuming by id
+## Resuming and forking by id
 
 On exit Veyyon prints `veyyon --resume <id>`. The id, a prefix of it, or a transcript path resumes
-that session from any directory and any profile:
+that session from any directory and any profile. The id of a spawned agent's transcript resumes that
+transcript the same way.
 
 - The launch runs under the profile that wrote the session, whichever profile it starts in.
 - `--profile <name>` naming another profile forks the session into `<name>`: a new session in that
@@ -32,9 +31,9 @@ that session from any directory and any profile:
   as its parent. The source stays unchanged in its own profile. The launch prints the new id.
 - `/resume <id>` inside a session relaunches Veyyon in the profile that wrote the session, as
   `/profile` does, when that is not the running profile.
-- `--continue` and the session picker list the running profile's sessions only. Switching a running
-  session to another profile's transcript, from an extension or RPC `switch_session`, fails and
-  states the owning profile.
+- `--continue` and the session picker list the running profile's sessions only, and never list a
+  spawned agent's transcript. Switching a running session to another profile's transcript, from an
+  extension or RPC `switch_session`, fails and states the owning profile.
 - The session reopens in place, in its recorded working directory, and the launch moves there. It is
   not copied into the directory you launched from. `--cwd <dir>` overrides it: the session's working
   directory moves to `<dir>` and the session records the change.
@@ -43,8 +42,10 @@ that session from any directory and any profile:
 
 `veyyon --resume` with no id opens the session picker, and a picked session reopens in its recorded
 working directory the same way.
-`veyyon --fork <id>` copies the session into a new file in the current directory instead, under the
-profile that wrote the session unless `--profile` names another one.
+
+`veyyon --fork <id>` copies the session into a new session in the current directory and leaves the
+source unchanged. The launch runs under the profile that wrote the source, so the copy is written in
+that profile. With `--profile <name>`, the copy is written in `<name>` instead.
 
 ## Long work
 
