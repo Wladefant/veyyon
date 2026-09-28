@@ -25,7 +25,7 @@ import {
 	truncate,
 	untilAborted,
 } from "@veyyon/utils";
-import { sessionFileName } from "@veyyon/utils/session-file";
+import { ORPHAN_AGENT_TRANSCRIPT_PREFIX, sessionFileName } from "@veyyon/utils/session-file";
 import type { ArgotSession } from "argot";
 import { ModelRegistry } from "../config/model-registry";
 import {
@@ -2471,7 +2471,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	// history://<id> (GRAN-1).
 	const sessionFile = options.artifactsDir
 		? path.join(options.artifactsDir, sessionFileName(id))
-		: path.join(getSessionsDir(), sessionFileName(`orphan-task-${id}`));
+		: path.join(getSessionsDir(), sessionFileName(`${ORPHAN_AGENT_TRANSCRIPT_PREFIX}${id}`));
 	const effectiveCwd = worktree ?? options.cwd;
 	const settings = await createSubagentSettingsForCwd(
 		options.settings ?? Settings.isolated(),

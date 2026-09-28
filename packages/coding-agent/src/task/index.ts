@@ -29,7 +29,7 @@ import {
 	prompt,
 	Snowflake,
 } from "@veyyon/utils";
-import { sessionFileName } from "@veyyon/utils/session-file";
+import { ORPHAN_AGENT_TRANSCRIPT_PREFIX, sessionFileName } from "@veyyon/utils/session-file";
 import type { ToolSession } from "..";
 import { mcpManagerInstance } from "../mcp/manager-instance";
 import { DEFAULT_PLAN_FILE_URL } from "../plan-mode/plan-file-url";
@@ -1519,7 +1519,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		// everything" fidelity requirement. Route them to the durable sessions dir (never
 		// os.tmpdir, which the OS GC-reaps) and never delete them. An agent transcript is
 		// a full session record with session_init; losing it is a data-loss bug (GRAN-1).
-		const orphanArtifactsDir = artifactsDir ? null : path.join(getSessionsDir(), `orphan-task-${Snowflake.next()}`);
+		const orphanArtifactsDir = artifactsDir
+			? null
+			: path.join(getSessionsDir(), `${ORPHAN_AGENT_TRANSCRIPT_PREFIX}${Snowflake.next()}`);
 		const effectiveArtifactsDir = artifactsDir || orphanArtifactsDir!;
 
 		const localProtocolOptions: LocalProtocolOptions = this.session.localProtocolOptions ?? {

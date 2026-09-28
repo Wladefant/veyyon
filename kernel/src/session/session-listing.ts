@@ -15,6 +15,7 @@ import {
 } from "@veyyon/utils";
 import { contentText } from "@veyyon/utils/content-text";
 import {
+	ORPHAN_AGENT_TRANSCRIPT_PREFIX,
 	SESSION_BACKUP_EXTENSION,
 	SESSION_FILE_EXTENSION,
 	sessionBackupPrimaryName,
@@ -786,7 +787,24 @@ export function listSessionsReadOnly(sessionDir: string, storage: SessionStorage
 }
 
 /**
+ * Whether `file` is a top-level session rather than an agent's transcript.
+ *
+ * A top-level session is `<sessions root>/<project bucket>/<file>.jsonl`. A spawned agent's transcript
+ * sits one level deeper, in its parent's artifacts directory `<project bucket>/<parent stem>/`, or, when
+ * the parent had no file, under the sessions root with {@link ORPHAN_AGENT_TRANSCRIPT_PREFIX}: as
+ * `orphan-task-<id>.jsonl` beside the buckets or inside an `orphan-task-<id>/` directory at bucket depth.
+ */
+function isTopLevelSessionFile(sessionsRoot: string, file: string): boolean {
+	const segments = path.relative(sessionsRoot, file).split(path.sep);
+	return segments.length === 2 && !segments[0].startsWith(ORPHAN_AGENT_TRANSCRIPT_PREFIX);
+}
+
+/**
  * List all sessions across all project directories (newest first).
+ *
+ * Agent transcripts are left out: they are written with the same header as the session that spawned
+ * them and are reached through that session, so listing them put every agent a session ever ran into
+ * the picker as a session of its own.
  *
  * An absent sessions root is an empty list and nothing more: that is what a fresh install looks
  * like. Any other failure to scan it is REPORTED, because this list is what the session picker and
@@ -794,7 +812,11 @@ export function listSessionsReadOnly(sessionDir: string, storage: SessionStorage
  * gone. The empty list is still returned, since a picker that cannot list is more useful empty than
  * crashed, and the log is what tells you the difference.
  */
-export async function listAllSessions(storage: SessionStorage = new FileSessionStorage()): Promise<SessionInfo[]> {
+export function listAllSessions(storage: SessionStorage = new FileSessionStorage()): Promise<SessionInfo[]> {
+	return scanSessionsRoot(storage, false);
+}
+
+async function scanSessionsRoot(storage: SessionStorage, includeAgentTranscripts: boolean): Promise<SessionInfo[]> {
 	const sessionsRoot = getSessionsDir();
 	try {
 		// Backups are indexed records too. Recover every project bucket before
@@ -804,7 +826,10 @@ export async function listAllSessions(storage: SessionStorage = new FileSessionS
 		const backupDirs = new Set(backups.map(backup => path.dirname(backup)));
 		await Promise.all(Array.from(backupDirs, sessionDir => recoverOrphanedBackups(sessionDir, storage)));
 
-		const files = storage.listFilesRecursiveSync(sessionsRoot, `*${SESSION_FILE_EXTENSION}`);
+		const transcripts = storage.listFilesRecursiveSync(sessionsRoot, `*${SESSION_FILE_EXTENSION}`);
+		const files = includeAgentTranscripts
+			? transcripts
+			: transcripts.filter(file => isTopLevelSessionFile(sessionsRoot, file));
 		return await collectSessionsFromFiles(files, storage, true, sessionsRoot);
 	} catch (err) {
 		if (isEnoent(err)) return [];
@@ -889,7 +914,8 @@ export async function resolveResumableSession(
 		return undefined;
 	}
 
-	const globalSessions = await listAllSessions(storage);
+	// An explicit id may name an agent's transcript, which the picker's list leaves out.
+	const globalSessions = await scanSessionsRoot(storage, true);
 	const globalMatch = globalSessions.find(session => sessionMatchesResumeArg(session, sessionArg));
 	if (globalMatch) {
 		return { session: globalMatch, scope: "global" };

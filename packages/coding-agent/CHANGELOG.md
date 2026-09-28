@@ -78,6 +78,7 @@
 - `/resume <id>` for a session another profile wrote relaunches Veyyon in that profile instead of opening the transcript under the running profile.
 - `veyyon --resume <id>` naming a subagent transcript nested inside a session's directory activates the profile that wrote it instead of forking it into the profile the launch started in.
 - With sessions stored under `$XDG_DATA_HOME/veyyon`, `veyyon --resume <id>` activates the profile that wrote the session, and the session picker's all-projects view and an ACP client's session list show the active profile's sessions from every project, instead of none of them.
+- The session picker's all-projects view and an ACP client's session list no longer show each spawned agent's transcript as a session of its own.
 - `/profile <name>`, `/resume` of another profile's session, and `veyyon --profile <name>` run from a tool's shell start the other profile on its own `.env` files instead of the credentials the running profile loaded from its own.
 - An Exa API key read out of a profile's `mcp.json` no longer reaches a process started under another profile, which resolves `EXA_API_KEY` from its own configuration instead.
 - On Windows, `launch` in a project where another profile's daemon broker is running starts this profile's own broker instead of connecting to the other profile's pipe and failing with `Daemon broker authentication failed`, and a session under `VEYYON_CODING_AGENT_DIR` no longer shares the default profile's broker and its environment.
