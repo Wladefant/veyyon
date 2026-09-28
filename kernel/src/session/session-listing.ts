@@ -9,6 +9,7 @@ import {
 	listProfiles,
 	logger,
 	parseJsonlLenient,
+	pathIsWithin,
 	toError,
 } from "@veyyon/utils";
 import { contentText } from "@veyyon/utils/content-text";
@@ -64,9 +65,25 @@ export interface SessionInfo {
 	status?: SessionStatus;
 }
 
-export interface ResolvedSessionMatch {
-	session: SessionInfo;
-	scope: "local" | "global";
+/**
+ * Where {@link resolveResumableSession} found a session. `local` is the launch directory's own
+ * bucket, `global` another project in the active profile, and `profile` a session another profile
+ * wrote, named by `profile`. A session belongs to the profile that wrote it: a caller that holds a
+ * `profile` match continues it in that profile or forks it, never writes it in place.
+ */
+export type ResolvedSessionMatch =
+	| { session: SessionInfo; scope: "local" | "global" }
+	| { session: SessionInfo; scope: "profile"; profile: string };
+
+/**
+ * The profile, other than the active one, whose sessions directory holds `filePath`, or undefined
+ * when the file is in the active profile or in no profile at all.
+ */
+export function foreignSessionFileProfile(filePath: string): string | undefined {
+	const file = path.resolve(filePath);
+	const activeRoot = path.resolve(path.join(getDefaultAgentDir(), "sessions"));
+	if (pathIsWithin(activeRoot, file)) return undefined;
+	return listProfiles().find(profile => pathIsWithin(path.join(profile.agentDir, "sessions"), file))?.name;
 }
 
 /** Lightweight metadata for a recent session, used in welcome/picker UI. */
@@ -878,20 +895,19 @@ export async function resolveResumableSession(
 		return { session: globalMatch, scope: "global" };
 	}
 
-	const foreignMatch = await findSessionInOtherProfiles(sessionArg, storage);
-	return foreignMatch ? { session: foreignMatch, scope: "global" } : undefined;
+	return await findSessionInOtherProfiles(sessionArg, storage);
 }
 
 /**
- * The session an id names in a profile other than the active one.
+ * The session an id names in a profile other than the active one, with that profile's name.
  *
  * A session id is globally unique, and the line printed on the way out —
- * `veyyon --resume <id>` — carries nothing about which profile wrote it. Every
- * lookup above stops at the active profile's own sessions root, so that line
- * resolved only when the operator happened to relaunch under the same profile
- * and otherwise reported the session as not found, with the file sitting on disk
- * one directory over. The session is resumed where it lives; only the settings
- * come from the profile that is running.
+ * `veyyon --resume <id>` — carries nothing about which profile wrote it. The
+ * launch activates the owning profile before this runs, so a match here means
+ * the caller pinned another profile (`--profile`, or a running session's
+ * `/resume`). The match is returned tagged with its owner rather than as a
+ * global one, so the caller forks it or relaunches into the owner and never
+ * writes one profile's transcript under another profile's settings.
  *
  * Reached only after the active profile has missed on an explicit id, so the
  * cost of scanning every profile is paid on the path that would otherwise fail.
@@ -899,7 +915,7 @@ export async function resolveResumableSession(
 async function findSessionInOtherProfiles(
 	sessionArg: string,
 	storage: SessionStorage,
-): Promise<SessionInfo | undefined> {
+): Promise<ResolvedSessionMatch | undefined> {
 	const activeRoot = path.resolve(path.join(getDefaultAgentDir(), "sessions"));
 	for (const profile of listProfiles()) {
 		const sessionsRoot = path.resolve(path.join(profile.agentDir, "sessions"));
@@ -923,7 +939,7 @@ async function findSessionInOtherProfiles(
 		// on every id that misses here.
 		const sessions = await collectSessionsFromFiles(files, storage, true, sessionsRoot);
 		const match = sessions.find(session => sessionMatchesResumeArg(session, sessionArg));
-		if (match) return match;
+		if (match) return { session: match, scope: "profile", profile: profile.name };
 	}
 	return undefined;
 }

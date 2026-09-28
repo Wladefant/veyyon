@@ -73,6 +73,9 @@
 
 ### Fixed
 
+- `--profile <name> --resume <id>` for a session another profile wrote forks it into `<name>` at its recorded working directory and leaves the source unchanged, instead of appending to the other profile's transcript under `<name>`'s settings and credentials.
+- `/resume <id>` for a session another profile wrote relaunches Veyyon in that profile instead of opening the transcript under the running profile.
+- `veyyon --resume <id>` naming a subagent transcript nested inside a session's directory activates the profile that wrote it instead of forking it into the profile the launch started in.
 - An unknown-flag error suggests a short flag in the spelling the parser accepts, such as `-r` for `-rr`, instead of `--r`, which the parser rejects, and offers `-h` and `-v` like every other flag.
 - A URL read whose image bytes do not decode returns the text page the server sent, or a note that the bytes were not a valid image, instead of failing the read.
 - A URL read of a page whose alternate `<link>` href is not a valid URL skips that link and reads the page instead of failing.

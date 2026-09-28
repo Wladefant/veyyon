@@ -26,7 +26,12 @@ Veyyon resumes from the launch picker or `/resume`, and branches with `/branch` 
 On exit Veyyon prints `veyyon --resume <id>`. The id, a prefix of it, or a transcript path resumes
 that session from any directory and any profile:
 
-- The launch runs under the profile that wrote the session. `--profile <name>` overrides it.
+- The launch runs under the profile that wrote the session, whichever profile it starts in.
+- `--profile <name>` naming another profile forks the session into `<name>`: a new session in that
+  profile, at the source's recorded working directory, with the source's history and the source
+  as its parent. The source stays unchanged in its own profile. The launch prints the new id.
+- `/resume <id>` inside a session relaunches Veyyon in the profile that wrote the session, as
+  `/profile` does, when that is not the running profile.
 - The session reopens in place, in its recorded working directory, and the launch moves there. It is
   not copied into the directory you launched from. `--cwd <dir>` overrides it: the session's working
   directory moves to `<dir>` and the session records the change.

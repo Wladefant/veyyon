@@ -788,7 +788,7 @@ export const SETUP_HANDLERS = {
 	profile: {
 		handleTui: async (command, runtime) => {
 			runtime.ctx.editor.setText("");
-			const [{ parseProfileCommand, runProfileSlashCommand }, { resolveVeyyonCommand }] = await Promise.all([
+			const [{ parseProfileCommand, runProfileSlashCommand }, { veyyonRelaunchArgv }] = await Promise.all([
 				import("./profile-command"),
 				import("../task/veyyon-command"),
 			]);
@@ -798,14 +798,7 @@ export const SETUP_HANDLERS = {
 				showError: message => ctx.showError(message),
 				setEditorText: text => ctx.editor.setText(text),
 				askDialog: questions => ctx.showAskDialog(questions),
-				requestRelaunch: env => {
-					const veyyon = resolveVeyyonCommand();
-					const argv =
-						veyyon.shell && process.platform === "win32"
-							? ["cmd.exe", "/c", veyyon.cmd, ...veyyon.args]
-							: [veyyon.cmd, ...veyyon.args];
-					ctx.requestRelaunch({ argv, env });
-				},
+				requestRelaunch: env => ctx.requestRelaunch({ argv: veyyonRelaunchArgv([]), env }),
 				requestShutdown: () => {
 					void ctx.shutdown();
 				},

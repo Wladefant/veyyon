@@ -10,15 +10,17 @@
  *
  * THE CLASS THIS CLOSES is a resume spelling that skips the lookup. The sweep
  * takes the launch parser's own resume flags from `OPTIONAL_FLAGS`, spaced and
- * `=`-joined, plus `--continue <id>`, `-c <id>` and a transcript path, and runs
- * each against every owner and active profile pair, so a resume flag added to the
+ * `=`-joined, plus `--continue <id>`, `-c <id>`, a transcript path and the id of a
+ * subagent transcript nested inside its session's directory, and runs each
+ * against every owner and active profile pair, so a resume flag added to the
  * table is swept the day it lands. The negative controls are the precedence
  * rules: an explicit `--profile`, a `--fork`, `--no-session`, `--session-dir` and
  * an id nobody wrote all keep the profile the launch started in.
  *
  * WHAT IT DOES NOT CATCH: each launch runs with `--help`, so nothing here proves
  * the resumed session then opens; `main-cross-project-resume.test.ts` covers
- * that. A transcript nested deeper than one project directory is not searched.
+ * that, and `session/a-session-belongs-to-the-profile-that-wrote-it.test.ts`
+ * covers the fork a pinned `--profile` makes.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
@@ -46,6 +48,13 @@ const SESSION_IDS: Record<ProfileName, string> = {
 };
 
 const UNKNOWN_ID = "019f00ff-dead-7000-8000-0000000000ff";
+
+/** One subagent transcript per profile, nested inside its session's own directory. */
+const NESTED_IDS: Record<ProfileName, string> = {
+	default: "019f0011-dddd-7000-8000-000000000011",
+	oss: "019f0012-eeee-7000-8000-000000000012",
+	work: "019f0013-ffff-7000-8000-000000000013",
+};
 
 let isolated: IsolatedConfigRoot | undefined;
 let originalProfile: string | undefined;
@@ -76,6 +85,13 @@ beforeEach(() => {
 		fs.mkdirSync(dir, { recursive: true });
 		const id = SESSION_IDS[profile];
 		const file = path.join(dir, `2026-01-01T00-00-00-000Z_${id}.jsonl`);
+		const nestedDir = path.join(dir, `2026-01-01T00-00-00-000Z_${id}`, "subagents");
+		fs.mkdirSync(nestedDir, { recursive: true });
+		const nestedId = NESTED_IDS[profile];
+		fs.writeFileSync(
+			path.join(nestedDir, `2026-01-01T00-00-01-000Z_${nestedId}.jsonl`),
+			`${JSON.stringify({ type: "session", id: nestedId, cwd: isolated.root })}\n`,
+		);
 		fs.writeFileSync(file, `${JSON.stringify({ type: "session", id, cwd: isolated.root })}\n`);
 		sessionFiles.set(profile, file);
 	}
@@ -117,6 +133,7 @@ function resumeSpellings(owner: ProfileName): { name: string; argv: string[] }[]
 	const file = sessionFiles.get(owner);
 	if (!file) throw new Error(`no session seeded for ${owner}`);
 	spellings.push({ name: "--resume <path>", argv: ["--resume", file] });
+	spellings.push({ name: "--resume <nested subagent id>", argv: ["--resume", NESTED_IDS[owner].slice(0, 8)] });
 	return spellings;
 }
 
