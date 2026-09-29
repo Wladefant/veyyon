@@ -18,16 +18,20 @@
 - `CodeHighlighter` highlights a source that grows at its end once per line: `advance(text)` colours whole lines and moves the parser past them, `peek(text)` colours the unfinished last line without moving it, and their output joined is byte-identical to `highlightCode` over the whole source.
 - `highlightCodeBatch(sources, colors)` highlights many independent sources in parallel on the Rayon pool and returns one string per source, in order, each byte-identical to `highlightCode` for that source.
 - The TUI's loop watchdog logs a `ui.loop-blocked.stack` line after each blocked-loop line, naming the functions and the call path the event loop was executing during the block, so a stall reported as `phase: "unknown"` states its cause.
+- `@veyyon/utils/tool-call-label` exports `formatToolCallLabel`, the one-line session-tree label for a tool call, with each identifier cut to 40 code points and every line break in a path or free-text argument printed as a space.
 - `@veyyon/utils/session-file` exports `sessionFileMatchesResumeArgument`, which reports whether a transcript filename answers a `--resume` id or prefix.
 - `getProfileSessionsDir` returns a named profile's sessions directory as a process running that profile resolves it, under `$XDG_DATA_HOME` when that profile's XDG directory exists.
 - `setProfileEnv` sets an environment variable read out of the active profile's configuration and records it so a process started under another profile drops it.
 - `@veyyon/utils/session-file` exports `ORPHAN_AGENT_TRANSCRIPT_PREFIX`, the prefix of an agent transcript written under the sessions root when its parent session has no file.
 - `@veyyon/utils/stall-sampler` exports `stallSampler`, which keeps JavaScriptCore's sampling profiler running at a 10 ms interval and returns the functions sampled between two `performance.now()` readings, and `borrow()`, which lends the profiler to another caller; `LoopWatchdog` takes it as `stacks` and follows each `ui.loop-blocked` line with a `ui.loop-blocked.stack` line naming the functions that held the loop.
 - `@veyyon/utils/fs-tool-args` exports `editInputPaths`, which reads the file paths from hashline or `apply_patch` section headers.
+- `exponentialBackoffDelay` accepts `jitterSpread: "below"`, which only shortens the wait so `maxMs` is the longest delay.
 
 ### Changed
 
+- The HTML export's session tree prints each tool call with the same label as the terminal tree, for every registered tool, instead of its own switch whose `find` and `ls` cases matched no registered tool and printed most calls as raw JSON; a newline in an `op`, `action` or name argument no longer breaks a tree row in either tree.
 - `tools/fs/read.ts` is split into per-concern `read-*.ts` modules with no change to the read tool's schema, output or exports.
+- The session retry loop, the async job manager, the launch broker and the Gemini web search provider take their exponential delay from `exponentialBackoffDelay` in `@veyyon/utils`; each loop's base, ceiling and jitter are unchanged.
 - The resolve pending row clamps its reason at 80 columns instead of 72, and the `web_search` and `gh` cards expand tabs in query and label text.
 - Production code strips ANSI through `stripAnsi` from `@veyyon/utils`; `Bun.stripANSI` is called only by that helper.
 - A session that renders its personality from a project `.veyyon/personalities/<name>.md` file raises a `personality` warning stating the file, and personality warnings reach the session's notice channel once per session instead of writing to stderr on every system prompt rebuild.
@@ -105,6 +109,8 @@
 - Split the agent loop's turn driver into per-step functions (pause park, directive resolution, sampling with Harmony-leak recovery, failed-turn settling, tool-call settling, queue drains); no user-visible change.
 - `estimateTokens` collects a message's fragments and the shape digest its cache compares in one walk on a first estimate instead of two, cutting the first estimate of a 26,806-entry resumed session's messages from 21.5 ms to 16.8 ms.
 - The auth gateway's error verdicts come from named rules in the error registry (`GATEWAY_RULES`), and `classifyGatewayError` accepts an optional `trace` array that receives the name of the rule that answered; every verdict is unchanged.
+- `calculateRateLimitBackoffMs` takes a `RateLimitBackoffContext` (`"credential-park"` or `"selector-suppression"`) that sets the cost of an unreadable failure: 30 minutes for a credential park, 5 minutes for a selector suppression.
+- Every retry loop in the package takes its exponential delay from `exponentialBackoffDelay` in `@veyyon/utils`; each loop's base, ceiling and jitter are unchanged.
 - `auth-storage.ts` is split into single-concern modules under `src/auth-storage/` with no change to its exports or behavior.
 - The JSON Schema meta-validator checks a node by looking each of its keys up in a keyword table instead of probing every known keyword, cutting validation of a 40-tool parameter schema set from 46.6 µs to 33.7 µs with identical verdicts, except that a `NaN` `multipleOf` is now rejected.
 - Stream option mapping resolves each API's options in its own mapper over one shared base instead of one 420-line switch, cutting the mapping of 743,431 model and option combinations from 100.8 ms to 92.1 ms with identical options.
@@ -128,6 +134,7 @@
 - The JSON Schema value validator walks one instance path it pushes and pops instead of copying the path into every child, applies each keyword group in its own step, and lists an object's keys and builds its type list only when a keyword reads them, cutting validation of a 60-entry tool argument from 45 µs to 22 µs with identical issues across 600,000 generated schemas and values.
 - `buildOpenAICompat` classifies the host and model family once and derives each chat-completions compat field from a named predicate, and the chat and Responses builders share one override-and-rederive step; every bundled and synthetic model spec resolves to the same record, no behavior change.
 - The session loader reads a session file 1 MiB at a time and splits lines synchronously instead of decoding each line through an async iterator, cutting the load phase of an 85 MB, 27,600-entry session from 210.0 ms to 149.9 ms (median of 7 alternating runs).
+- Session storage and the session retry policy take their exponential delay from `exponentialBackoffDelay` in `@veyyon/utils`; each loop's base, ceiling and jitter are unchanged.
 - `buildSessionContextFromPath` reads a branch's settings, emits its messages and strips dangling tool calls in single-purpose steps instead of one 374-line function, and drops content-less dangling turns in one pass instead of splicing each out, cutting a context build that drops 10,000 such turns from 10.4 ms to 0.7 ms with identical contexts across 200,000 generated branches.
 - Opening or restoring a session builds its set of known entry ids once instead of twice, which takes about 40ms off opening a 220,000-entry session.
 - The resume warning flattens each command or path onto one line through the shared `collapseWhitespace` helper; no user-visible change.
@@ -139,6 +146,7 @@
 - The session listing matches a `--resume` argument against a transcript filename through `sessionFileMatchesResumeArgument` from `@veyyon/utils/session-file`, the matcher the startup profile lookup uses; no user-visible change.
 - The first rewrite after resuming a session keeps the file's bytes before the earliest updated entry and reads nothing back when the loaded file holds one clean record per line, which cut the first-turn prune rewrite of a resumed 39 MB, 13,470-entry session from one whole-file write plus a 39 MB read to a partial write with no read.
 - `SessionInfo.messageCount` documents that it counts the messages in the scanned prefix and is a lower bound for a longer session; no behavior change.
+- Embedding and extraction retries take their exponential delay from `exponentialBackoffDelay` in `@veyyon/utils`; each loop's base, ceiling and jitter are unchanged.
 - `highlightCode` and `CodeHighlighter` match grammar patterns with Oniguruma instead of fancy-regex, which cuts the highlighting time of a resumed session's transcript by 59% with the same colours, and every Oniguruma match and search in the addon, including the `find` builtin's `-name` and `-regex`, stops after 1,000,000 retries instead of Oniguruma's defaults of 10,000,000 per match and no limit per search.
 - The first `highlightCode`, `CodeHighlighter`, `supportsLanguage` or `getSupportedLanguages` call in a process deserializes a syntax set the addon's build script linked instead of linking 78 syntaxes at run time, which cuts that call from 81 ms to under 1 ms.
 - `wrapTextWithAnsi` reads the words of a line as slices of it instead of copying each into its own buffer, which cuts wrapping a line wider than its target by 50 to 66% (a line of 40 to 100 words from 8.6 µs to 3.0 µs) and the first render of a 13,470-entry transcript at 120 columns from 291 ms to 234 ms, with identical rows.
@@ -175,6 +183,7 @@
 
 ### Fixed
 
+- An invalid enum value in `config.yml` falls back to the setting's default for every enum setting, not only `edit.afterEdit`.
 - The pending previews of `ssh`, `browser`, `read`, `debug`, `bash`, `github`, `lsp` and 30 other tools update a string argument as it streams instead of when the JSON object closes, and the live preview matches the rebuilt transcript.
 - The session `/new` starts while a response is still streaming, and every other top-level session in the process, runs background bash, the `job` tool and daemon exit watches on a job manager of its own, and a job reports to the conversation that started it or spawned the agent that started it instead of being refused.
 - The Claude Code capture helper moved from `src/cli/claude-trace-cli.ts` to `scripts/claude-trace-capture.ts` beside `bun run claude:trace`, its only caller; it was never a `veyyon` subcommand and no longer ships in the package source.
@@ -210,6 +219,7 @@
 - Turning Settings → Providers → Import Other Tools' Config on or off applies to the next discovery load in the running session and leaves `disabledProviders` unchanged, instead of adding or removing a provider named `importForeignConfig` there and taking effect only in the next session.
 - Turning Settings → Appearance → Show Inline Images on or off redraws the transcript under the new value, instead of leaving the images on cards already drawn.
 - Closing `/settings`, flipping an appearance toggle there or hovering a status line preset keeps the configured `statusLine.segmentOptions` on the status line, instead of resetting them to the preset's until the next unrelated resync.
+- The Anthropic client waits the window stated by an `anthropic-ratelimit-*-reset` header on a 429 that carries no `retry-after`, instead of retrying on the backoff curve.
 - Strict-mode schema preparation no longer adds a `const` value to the caller's own `enum` array, so preparing a tool schema leaves it unchanged and a frozen `enum` beside a `const` no longer drops the tool out of strict mode.
 - A tool parameter named after a JSON Schema keyword keeps its name and schema for Google, Cloud Code Assist, MCP and Moonshot; a property named `const` was folded into an `enum` over its siblings, a property named `nullable` was dropped while `required` still listed it, and Cloud Code Assist sent such a tool the empty fallback schema.
 - A Cloud Code Assist tool parameter that admits `null` twice, such as `nullable: true` beside a `oneOf` with a `{type: "null"}` branch, loses both null layers instead of sending the whole tool the empty fallback schema.
@@ -220,6 +230,8 @@
 - A Cursor turn held by a local tool that never returns now ends when its failure or an abort arrives instead of waiting on the tool forever.
 - Fixed every Cursor exec-channel tool call being stored twice in the assistant message, which left an unanswered copy of each call that session resume reported as pending.
 - A blank user or developer message after a tool result no longer sends Mistral two consecutive assistant turns, which it rejects.
+- An enum setting whose configured value is outside its declared values reads as the declared default and logs one warning per setting.
+- An unquoted YAML scalar that spells an enum member, such as `advisor.syncBacklog: 3`, reads as that member and is no longer reported as invalid at load.
 - `resolveResumableSession` returns a session another profile wrote as `scope: "profile"` with the owning profile's name instead of as a `global` match, and `foreignSessionFileProfile` returns the profile other than the active one that holds a transcript path.
 - `SessionManager.continueRecent` ignores a terminal breadcrumb naming another profile's transcript instead of continuing that session, or relocating it into the active profile when its recorded directory is gone.
 - With sessions stored under `$XDG_DATA_HOME/veyyon`, the all-projects session listing, `resolveResumableSession`'s other-profile lookup and `foreignSessionFileProfile` read the sessions directory each profile writes to instead of `<agentDir>/sessions`, which held none of them.
