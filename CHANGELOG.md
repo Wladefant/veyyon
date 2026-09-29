@@ -62,6 +62,7 @@
 
 ### Changed
 
+- `AgentSession` runs its retry ladder through `session/runtime/retry-runtime.ts` and its secret redaction and display expansion through `session/runtime/session-secrets.ts`, and holds 404 private names instead of 487, so its compiled bytecode drops from 9,474 KiB to 7,646 KiB across the three modules and loading it from a `--bytecode` binary costs 18,660 KiB RSS instead of 21,424 KiB (median of nine).
 - A compaction moves the payloads of the history it summarized out of memory once it is recorded, reading each entry back from the session file on first use.
 - An interactive session no longer loads the HTML export template, stylesheet, viewer script and tool renderers until `/export` runs: `/share` builds its snapshot from `export/session-data.ts`, cutting the idle heap and extra memory of the compiled binary from 104.8 MiB to 102.9 MiB.
 - The compiled binary keeps the embedded `veyyon://` docs index off the heap until the first `veyyon://` read, and with the bundled model catalog read from its embedded file on demand the idle heap and extra memory drop from 102.9 MiB to 95.9 MiB; `dist/cli.js` ships the catalog as `dist/models.json`.
