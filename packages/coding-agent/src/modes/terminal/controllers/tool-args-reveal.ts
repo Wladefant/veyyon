@@ -14,6 +14,12 @@ type ToolArgsRevealComponent = Component & {
 // long payload updates preview args at reveal cadence instead of stalling for
 // STREAMING_JSON_PARSE_MIN_GROWTH bytes at a time. Nested-array modes (edit
 // patch/replace `edits[].diff`) still fall through to the throttled parse.
+// A tool with no entry previews its arguments from the throttled parse alone:
+// past the first STREAMING_JSON_PARSE_MIN_GROWTH bytes an `ssh` command or a
+// `browser` script advances in steps of that many bytes rather than per frame.
+// `a-string-argument-the-preview-shows-streams-as-it-arrives.test.ts` builds
+// every registered tool, renders its pending preview, and fails on a string
+// argument the preview shows that no entry here decodes.
 // `path`/`file_path` are here for two reasons that happen to want the same
 // thing. A preview's TITLE is the path, and it arrived only when the throttled
 // full parse first recovered it, so a long payload drew an untitled block for
@@ -31,12 +37,44 @@ type ToolArgsRevealComponent = Component & {
 // fails if any two names sharing a renderer stop sharing their keys.
 const EDIT_RENDERER_STREAMING_KEYS: readonly string[] = ["path", "file_path", "input", "_input"];
 
-const STREAMING_STRING_KEYS_BY_TOOL: Record<string, readonly string[]> = {
-	write: ["path", "file_path", "content"],
-	edit: EDIT_RENDERER_STREAMING_KEYS,
+export const STREAMING_STRING_KEYS_BY_TOOL: Readonly<Record<string, readonly string[]>> = {
 	apply_patch: EDIT_RENDERER_STREAMING_KEYS,
-	eval: ["code"],
-	launch: ["op", "name", "application", "text", "pattern", "signal"],
+	argot_load: ["folder_path"],
+	argot_unload: ["folder_path"],
+	bash: ["command", "cwd"],
+	browser: ["name", "url", "code"],
+	checkpoint: ["goal"],
+	debug: ["program"],
+	edit: EDIT_RENDERER_STREAMING_KEYS,
+	eval: ["code", "title"],
+	github: ["repo", "pr", "branch", "run", "query"],
+	goal: ["objective"],
+	inspect_image: ["path", "question"],
+	irc: ["to", "message", "from"],
+	launch: ["op", "name", "application", "text", "pattern", "signal", "grep"],
+	learn: ["memory", "context"],
+	lsp: ["file", "query", "new_name"],
+	manage_skill: ["name", "description", "body"],
+	memory_edit: ["id", "content", "replacement_id"],
+	read: ["path"],
+	recall: ["query"],
+	reflect: ["query"],
+	report_finding: ["title"],
+	report_tool_issue: ["tool", "report"],
+	resolve: ["reason"],
+	rewind: ["report"],
+	search: ["input", "path"],
+	search_tool_bm25: ["query"],
+	set_cwd: ["path"],
+	ssh: ["host", "command"],
+	task: ["task", "name"],
+	todo: ["task", "phase"],
+	vibe_kill: ["session"],
+	vibe_send: ["session", "message"],
+	vibe_spawn: ["prompt", "name"],
+	web_search: ["query"],
+	write: ["path", "file_path", "content"],
+	yield: ["type"],
 };
 
 /** String fields the streamed-args decode reads incrementally for `toolName`. */

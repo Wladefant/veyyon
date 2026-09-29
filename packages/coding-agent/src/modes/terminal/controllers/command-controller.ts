@@ -21,6 +21,7 @@ import {
 	logger,
 	Snowflake,
 	sanitizeText,
+	stripAnsi,
 } from "@veyyon/utils";
 import { subCellBar } from "@veyyon/utils/bar";
 import { padding } from "@veyyon/utils/padding";
@@ -190,7 +191,7 @@ export class CommandController {
 	async handleDebugTranscriptCommand(): Promise<void> {
 		try {
 			const width = Math.max(1, this.ctx.ui.terminal.columns);
-			const renderedLines = this.ctx.chatContainer.render(width).map(line => replaceTabs(Bun.stripANSI(line)));
+			const renderedLines = this.ctx.chatContainer.render(width).map(line => replaceTabs(stripAnsi(line)));
 			const rendered = renderedLines.join("\n").trimEnd();
 			if (!rendered) {
 				this.ctx.showError("No messages to dump yet.");

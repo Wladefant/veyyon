@@ -5,6 +5,8 @@
 ### Changed
 
 - `tools/fs/read.ts` is split into per-concern `read-*.ts` modules with no change to the read tool's schema, output or exports.
+- The resolve pending row clamps its reason at 80 columns instead of 72, and the `web_search` and `gh` cards expand tabs in query and label text.
+- Production code strips ANSI through `stripAnsi` from `@veyyon/utils`; `Bun.stripANSI` is called only by that helper.
 - A session that renders its personality from a project `.veyyon/personalities/<name>.md` file raises a `personality` warning stating the file, and personality warnings reach the session's notice channel once per session instead of writing to stderr on every system prompt rebuild.
 - Restoring `resolved-models.json` at launch verifies a CRC-32 instead of a SHA-256 digest, cutting model registry construction from 22.86 ms to 20.69 ms (median of 21 interleaved launches), and the first launch after upgrading rebuilds the snapshot once.
 - The `/debug` CPU profile borrows the process's sampling profiler from the stall sampler and hands it back when the profile ends, instead of starting and stopping the profiler itself and leaving the stall sampler's profile stopped.
@@ -78,6 +80,7 @@
 
 ### Fixed
 
+- The pending previews of `ssh`, `browser`, `read`, `debug`, `bash`, `github`, `lsp` and 30 other tools update a string argument as it streams instead of when the JSON object closes, and the live preview matches the rebuilt transcript.
 - The session `/new` starts while a response is still streaming, and every other top-level session in the process, runs background bash, the `job` tool and daemon exit watches on a job manager of its own, and a job reports to the conversation that started it or spawned the agent that started it instead of being refused.
 - The Claude Code capture helper moved from `src/cli/claude-trace-cli.ts` to `scripts/claude-trace-capture.ts` beside `bun run claude:trace`, its only caller; it was never a `veyyon` subcommand and no longer ships in the package source.
 - `statusLine.segmentOptions.model.roomy: false` joins the model and its thinking level with the dot separator in the composer footline instead of being overridden to the `Model @level` form.
