@@ -26,6 +26,7 @@
 
 ### Changed
 
+- `tools/fs/read.ts` is split into per-concern `read-*.ts` modules with no change to the read tool's schema, output or exports.
 - A session that renders its personality from a project `.veyyon/personalities/<name>.md` file raises a `personality` warning stating the file, and personality warnings reach the session's notice channel once per session instead of writing to stderr on every system prompt rebuild.
 - Restoring `resolved-models.json` at launch verifies a CRC-32 instead of a SHA-256 digest, cutting model registry construction from 22.86 ms to 20.69 ms (median of 21 interleaved launches), and the first launch after upgrading rebuilds the snapshot once.
 - The `/debug` CPU profile borrows the process's sampling profiler from the stall sampler and hands it back when the profile ends, instead of starting and stopping the profiler itself and leaving the stall sampler's profile stopped.
@@ -100,6 +101,7 @@
 - `resolveCompactionBoundaryIndex` searches for the keep marker from the end of the branch, which takes about 9ms off rebuilding the context of a 238,084-entry branch.
 - Split the agent loop's turn driver into per-step functions (pause park, directive resolution, sampling with Harmony-leak recovery, failed-turn settling, tool-call settling, queue drains); no user-visible change.
 - `estimateTokens` collects a message's fragments and the shape digest its cache compares in one walk on a first estimate instead of two, cutting the first estimate of a 26,806-entry resumed session's messages from 21.5 ms to 16.8 ms.
+- The auth gateway's error verdicts come from named rules in the error registry (`GATEWAY_RULES`), and `classifyGatewayError` accepts an optional `trace` array that receives the name of the rule that answered; every verdict is unchanged.
 - The JSON Schema meta-validator checks a node by looking each of its keys up in a keyword table instead of probing every known keyword, cutting validation of a 40-tool parameter schema set from 46.6 µs to 33.7 µs with identical verdicts, except that a `NaN` `multipleOf` is now rejected.
 - Stream option mapping resolves each API's options in its own mapper over one shared base instead of one 420-line switch, cutting the mapping of 743,431 model and option combinations from 100.8 ms to 92.1 ms with identical options.
 - The Anthropic and OpenAI-compatible providers split their stream loops, message converters and finalization into per-step helpers; no user-visible change.
@@ -168,6 +170,7 @@
 ### Fixed
 
 - The session `/new` starts while a response is still streaming, and every other top-level session in the process, runs background bash, the `job` tool and daemon exit watches on a job manager of its own, and a job reports to the conversation that started it or spawned the agent that started it instead of being refused.
+- The Claude Code capture helper moved from `src/cli/claude-trace-cli.ts` to `scripts/claude-trace-capture.ts` beside `bun run claude:trace`, its only caller; it was never a `veyyon` subcommand and no longer ships in the package source.
 - `statusLine.segmentOptions.model.roomy: false` joins the model and its thinking level with the dot separator in the composer footline instead of being overridden to the `Model @level` form.
 - The plan review overlay repaints when a plan is swapped in or an external-editor annotation is committed, instead of waiting for the next keystroke.
 - An agent spawned by another agent, and an agent revived from its transcript, reports its start, progress and finish on the top-level session's event bus, so the agent dashboard, the RPC agent stream and collab guests show agents at depth 2 and below instead of nothing.
@@ -223,6 +226,7 @@
 - A veyyon process started by another veyyon process under a different profile drops the variables the parent set from its own `.env` files, recorded in `VEYYON_DOTENV_ORIGIN`, and applies its own profile's `.env` layers instead of running on the parent profile's credentials.
 - `@veyyon/utils/stderr-guard` loads `node:util` on the first routed console call rather than at import, keeping it off the launch card path; no user-visible change.
 - `latexToUnicode` and `latexToBlock` render a command, environment, color or delimiter named after an `Object.prototype` member (`\toString`, `\constructor`, `\begin{__proto__}`) as an unknown name instead of throwing, printing a function body, or laying it out as a fraction, big operator or matrix.
+- Mermaid `colorMode: "html"` output escapes `"` and `'` in diagram text and in each span's color attribute, and escapes uncolored xychart text.
 
 ## [1.5.5] - 2026-09-25
 
@@ -741,6 +745,7 @@
 - An OpenAI-compatible listing's model name falls back to its id through the shared non-empty-string reader; discovered names are unchanged.
 - The package directory is `clients/web` instead of `packages/collab-web`; the package name, the relay and the guest client are unchanged.
 - Updated collaboration client to protocol v4, carrying tool execution displays on active tool state and tool result messages.
+- File-tag normalization no longer uses a lookahead regex; a read tool range read of a 982 KB markdown file drops from 3.81 ms to 1.83 ms median.
 - Unified patch operation definitions into a shared declarative operation table across tokenization and execution.
 - The package directory is `plugins/hashline` instead of `packages/hashline`; the published package name, entry points and behavior are unchanged.
 - Seen-line and clipped-line records merge into a snapshot through one keyed step; recorded provenance is unchanged.
