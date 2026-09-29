@@ -29,6 +29,8 @@
 
 ### Changed
 
+- `/new`, `/resume` and a handoff abort a spawned agent of the previous conversation that is mid-turn before disposing it, deepest generation first, instead of disposing it with its bash, eval and advisor work still running.
+- A config with `compaction.strategy: "off"` beside `compaction.enabled: true` migrates to `compaction.enabled: false`, and `compaction.enabled` is the only setting that turns auto-compaction off.
 - The HTML export's session tree prints each tool call with the same label as the terminal tree, for every registered tool, instead of its own switch whose `find` and `ls` cases matched no registered tool and printed most calls as raw JSON; a newline in an `op`, `action` or name argument no longer breaks a tree row in either tree.
 - `tools/fs/read.ts` is split into per-concern `read-*.ts` modules with no change to the read tool's schema, output or exports.
 - The session retry loop, the async job manager, the launch broker and the Gemini web search provider take their exponential delay from `exponentialBackoffDelay` in `@veyyon/utils`; each loop's base, ceiling and jitter are unchanged.
@@ -183,6 +185,7 @@
 
 ### Fixed
 
+- Disposing a session waits up to 1 second for its aborted agent loop to finish before it releases async jobs, eval kernels, browser tabs and the transcript, so a tool that ignores its abort signal no longer races the teardown of what it is using.
 - A record-valued settings row (model roles, default effort, provider limits, agents, fallback chains, per-provider retry, tool approval) opens when a runtime override or `--config` file sets one of its entries; the overridden entries show their source and are read-only, and edits to the other entries write only the profile's values.
 - The Default Model row states which layer supplies the active model at the start of its description, so the one-line footer no longer truncates it away.
 - A tool card's header and section labels are clipped at the card's width instead of running past its edge, so an `ssh` host or a `write` path with no break in it no longer folds onto the next terminal line, and no card row exceeds a terminal narrower than the rail and its indent.
