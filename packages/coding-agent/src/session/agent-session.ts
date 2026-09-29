@@ -459,14 +459,15 @@ import {
 } from "./agent-session-queue";
 import {
 	type ActiveRetryFallbackState,
-	formatRetryFallbackBaseSelector,
+	findRetryFallbackCandidates,
 	formatRetryFallbackSelector,
-	isRetryFallbackModelKey,
-	isRetryFallbackWildcardKey,
 	parseRetryFallbackSelector,
-	type RetryFallbackChains,
+	type RetryFallbackChainSource,
 	type RetryFallbackRevertPolicy,
 	type RetryFallbackSelector,
+	resolveRetryFallbackRole,
+	retryFallbackChainsForRoles,
+	retryFallbackChainWarnings,
 } from "./agent-session-retry-fallback";
 import {
 	type AdvisorStats,
@@ -644,6 +645,13 @@ function createHandoffFileName(date = new Date()): string {
 
 /** What triggered an automatic compaction pass. */
 type AutoCompactionReason = "overflow" | "threshold" | "idle" | "incomplete";
+
+/** How a failed turn entered retry handling: which switches the recovery may make. */
+interface RetryEntryOptions {
+	allowModelFallback?: boolean;
+	fireworksFastFallback?: boolean;
+	hardErrorFallback?: boolean;
+}
 
 /** The fields a compaction entry records, taken from a hook's or a summarizer's result. */
 function compactionRecord(
@@ -13320,19 +13328,17 @@ export class AgentSession {
 		return stopType === "refusal" || stopType === "sensitive";
 	}
 
-	#getRetryFallbackChains(): RetryFallbackChains {
-		const configuredChains = this.settings.get("retry.fallbackChains");
-		if (!configuredChains || typeof configuredChains !== "object") return {};
-		const chains: RetryFallbackChains = { ...(configuredChains as RetryFallbackChains) };
-		const defaultChain = chains.default;
-		if (Array.isArray(defaultChain)) {
-			for (const role of Object.keys(this.settings.getModelRoles())) {
-				if (role !== "default" && chains[role] === undefined) {
-					chains[role] = defaultChain;
-				}
-			}
-		}
-		return chains;
+	/** What chain resolution reads, as of this call: the sanitized chains, role assignments and active model. */
+	#retryFallbackSource(): RetryFallbackChainSource {
+		return {
+			chains: retryFallbackChainsForRoles(
+				this.settings.get("retry.fallbackChains"),
+				Object.keys(this.settings.getModelRoles()),
+			),
+			modelRole: role => this.settings.getModelRole(role),
+			models: this.#modelRegistry,
+			activeModel: this.model,
+		};
 	}
 
 	/**
@@ -13366,87 +13372,14 @@ export class AgentSession {
 	}
 
 	#validateRetryFallbackChains(): void {
-		const configuredChains = this.settings.get("retry.fallbackChains");
-		if (configuredChains === undefined) return;
-		if (!isRecord(configuredChains)) {
-			const msg = "retry.fallbackChains must be a mapping of role names or model selectors to selector arrays.";
+		for (const msg of retryFallbackChainWarnings(this.settings.get("retry.fallbackChains"), this.#modelRegistry)) {
 			logger.warn(msg);
 			this.configWarnings.push(msg);
-			return;
-		}
-
-		for (const key in configuredChains) {
-			const chain = (configuredChains as RetryFallbackChains)[key];
-			const keyKind = isRetryFallbackModelKey(key) ? "model" : "role";
-			if (keyKind === "model") {
-				if (isRetryFallbackWildcardKey(key)) {
-					const provider = key.slice(0, -2);
-					if (!this.#modelRegistry.getAll().some(model => model.provider === provider)) {
-						const msg = `retry.fallbackChains wildcard key references unknown provider: ${key}`;
-						logger.warn(msg);
-						this.configWarnings.push(msg);
-					}
-				} else {
-					const parsedKey = parseRetryFallbackSelector(key, this.#modelRegistry);
-					if (!parsedKey) {
-						const msg = `Invalid model selector key in retry.fallbackChains: ${key}`;
-						logger.warn(msg);
-						this.configWarnings.push(msg);
-					} else if (!this.#modelRegistry.find(parsedKey.provider, parsedKey.id)) {
-						const msg = `retry.fallbackChains key references unknown model: ${key}`;
-						logger.warn(msg);
-						this.configWarnings.push(msg);
-					}
-				}
-			}
-			if (!Array.isArray(chain)) {
-				const msg = `Fallback chain for ${keyKind} '${key}' must be an array of selector strings.`;
-				logger.warn(msg);
-				this.configWarnings.push(msg);
-				continue;
-			}
-			for (const selectorStr of chain) {
-				if (typeof selectorStr !== "string") {
-					const msg = `Fallback chain for ${keyKind} '${key}' contains a non-string selector.`;
-					logger.warn(msg);
-					this.configWarnings.push(msg);
-					continue;
-				}
-				if (isRetryFallbackWildcardKey(selectorStr)) {
-					const provider = selectorStr.slice(0, -2);
-					if (!this.#modelRegistry.getAll().some(model => model.provider === provider)) {
-						const msg = `Fallback chain for ${keyKind} '${key}' references unknown provider: ${selectorStr}`;
-						logger.warn(msg);
-						this.configWarnings.push(msg);
-					}
-					continue;
-				}
-				const parsed = parseRetryFallbackSelector(selectorStr, this.#modelRegistry);
-				if (!parsed) {
-					const msg = `Invalid fallback selector format in ${keyKind} '${key}': ${selectorStr}`;
-					logger.warn(msg);
-					this.configWarnings.push(msg);
-					continue;
-				}
-				const exists = this.#modelRegistry.find(parsed.provider, parsed.id);
-				if (!exists) {
-					const msg = `Fallback chain for ${keyKind} '${key}' references unknown model: ${selectorStr}`;
-					logger.warn(msg);
-					this.configWarnings.push(msg);
-				}
-			}
 		}
 	}
 
 	#getRetryFallbackRevertPolicy(): RetryFallbackRevertPolicy {
 		return this.settings.get("retry.fallbackRevertPolicy") === "never" ? "never" : "cooldown-expiry";
-	}
-
-	#getRetryFallbackPrimarySelector(role: string): RetryFallbackSelector | undefined {
-		if (isRetryFallbackWildcardKey(role)) return undefined;
-		if (isRetryFallbackModelKey(role)) return parseRetryFallbackSelector(role, this.#modelRegistry);
-		const configuredSelector = this.settings.getModelRole(role);
-		return configuredSelector ? parseRetryFallbackSelector(configuredSelector, this.#modelRegistry) : undefined;
 	}
 
 	#clearActiveRetryFallback(): void {
@@ -13465,179 +13398,19 @@ export class AgentSession {
 		this.#modelRegistry.suppressSelector(currentSelector, Date.now() + cooldownMs);
 	}
 
-	/**
-	 * Map the failing model selector to the chain key that owns it, by
-	 * specificity: an exact model-selector key, then a `provider/*` wildcard,
-	 * then a model role whose current assignment matches, then `default`.
-	 * Model-oriented keys win over roles so a chain follows the model across
-	 * role reassignments.
-	 */
-	#resolveRetryFallbackRole(currentSelector: string): string | undefined {
-		const parsedCurrent = parseRetryFallbackSelector(currentSelector, this.#modelRegistry);
-		if (!parsedCurrent) return undefined;
-		const chains = this.#getRetryFallbackChains();
-		const currentBaseSelector = formatRetryFallbackBaseSelector(parsedCurrent);
-		const currentPlainSelector = this.model
-			? formatModelSelectorValue(formatModelString(this.model), parsedCurrent.thinkingLevel)
-			: undefined;
-		const currentPlainBaseSelector =
-			currentPlainSelector && currentPlainSelector !== currentSelector
-				? formatRetryFallbackBaseSelector(parseRetryFallbackSelector(currentPlainSelector) ?? parsedCurrent)
-				: undefined;
-
-		const exactModelKeys: string[] = [];
-		const roleKeys: string[] = [];
-		for (const key in chains) {
-			if (!isRetryFallbackModelKey(key)) roleKeys.push(key);
-			else if (!isRetryFallbackWildcardKey(key)) exactModelKeys.push(key);
-		}
-		const matchesCurrent = (primary: RetryFallbackSelector | undefined): boolean => {
-			if (!primary) return false;
-			if (primary.raw === currentSelector || (currentPlainSelector && primary.raw === currentPlainSelector)) {
-				return true;
-			}
-			const base = formatRetryFallbackBaseSelector(primary);
-			return base === currentBaseSelector || (!!currentPlainBaseSelector && base === currentPlainBaseSelector);
-		};
-
-		// 1. Exact model-selector keys — most specific.
-		for (const key of exactModelKeys) {
-			if (matchesCurrent(this.#getRetryFallbackPrimarySelector(key))) return key;
-		}
-		// 2. Provider wildcard (`provider/*`) — any active model of this provider.
-		const wildcardKey = `${parsedCurrent.provider}/*`;
-		if (Array.isArray(chains[wildcardKey])) return wildcardKey;
-		// 3. Role keys — matched by the role's currently-assigned model.
-		for (const key of roleKeys) {
-			if (matchesCurrent(this.#getRetryFallbackPrimarySelector(key))) return key;
-		}
-		// 4. The default chain, when default has no explicit role primary.
-		const defaultChain = chains.default;
-		if (
-			Array.isArray(defaultChain) &&
-			defaultChain.length > 0 &&
-			this.#getRetryFallbackPrimarySelector("default") === undefined
-		) {
-			return "default";
-		}
-		return undefined;
-	}
-
-	/**
-	 * Parse one configured chain entry. A `provider/*` entry keeps the failing
-	 * model's id and swaps the provider (google-antigravity/x → google/x);
-	 * ids the target provider lacks are skipped by the candidate loop's
-	 * registry lookup.
-	 */
-	#parseRetryFallbackChainEntry(
-		entry: string,
-		current: RetryFallbackSelector | undefined,
-	): RetryFallbackSelector | undefined {
-		if (isRetryFallbackWildcardKey(entry)) {
-			if (!current) return undefined;
-			const provider = entry.slice(0, -2);
-			return { raw: `${provider}/${current.id}`, provider, id: current.id, thinkingLevel: undefined };
-		}
-		return parseRetryFallbackSelector(entry, this.#modelRegistry);
-	}
-
-	#getRetryFallbackEffectiveChain(role: string, currentSelector?: string): RetryFallbackSelector[] {
-		const parsedCurrent = currentSelector
-			? parseRetryFallbackSelector(currentSelector, this.#modelRegistry)
-			: undefined;
-		const seen = new Set<string>();
-		const chain: RetryFallbackSelector[] = [];
-		if (isRetryFallbackWildcardKey(role)) {
-			// A wildcard key has no fixed primary: the active model is the
-			// primary, followed by the configured provider-level fallbacks.
-			if (parsedCurrent) {
-				chain.push(parsedCurrent);
-				seen.add(parsedCurrent.raw);
-			}
-		} else {
-			const primarySelector = this.#getRetryFallbackPrimarySelector(role);
-			if (!primarySelector) return [];
-			chain.push(primarySelector);
-			seen.add(primarySelector.raw);
-		}
-		for (const selector of this.#getRetryFallbackChains()[role] ?? []) {
-			const parsed = this.#parseRetryFallbackChainEntry(selector, parsedCurrent);
-			if (!parsed || seen.has(parsed.raw)) continue;
-			seen.add(parsed.raw);
-			chain.push(parsed);
-		}
-		return chain;
-	}
-
-	#findRetryFallbackCandidates(role: string, currentSelector: string): RetryFallbackSelector[] {
-		let chain = this.#getRetryFallbackEffectiveChain(role, currentSelector);
-		const parsedCurrent = parseRetryFallbackSelector(currentSelector, this.#modelRegistry);
-		if (chain.length === 0 && role === "default" && parsedCurrent) {
-			const chains = this.#getRetryFallbackChains();
-			const defaultChain = chains.default;
-			if (
-				Array.isArray(defaultChain) &&
-				defaultChain.length > 0 &&
-				this.#getRetryFallbackPrimarySelector("default") === undefined
-			) {
-				const seen = new Set<string>([parsedCurrent.raw]);
-				chain = [parsedCurrent];
-				for (const selector of defaultChain) {
-					const parsed = this.#parseRetryFallbackChainEntry(selector, parsedCurrent);
-					if (!parsed || seen.has(parsed.raw)) continue;
-					seen.add(parsed.raw);
-					chain.push(parsed);
-				}
-			}
-		}
-		if (chain.length <= 1) return [];
-		const currentBaseSelector = parsedCurrent ? formatRetryFallbackBaseSelector(parsedCurrent) : undefined;
-		const currentPlainSelector =
-			this.model && parsedCurrent
-				? formatModelSelectorValue(formatModelString(this.model), parsedCurrent.thinkingLevel)
-				: undefined;
-		const currentPlainBaseSelector =
-			parsedCurrent && currentPlainSelector && currentPlainSelector !== currentSelector
-				? formatRetryFallbackBaseSelector(parseRetryFallbackSelector(currentPlainSelector) ?? parsedCurrent)
-				: undefined;
-		const exactIndex = chain.findIndex(
-			selector => selector.raw === currentSelector || selector.raw === currentPlainSelector,
-		);
-		if (exactIndex >= 0) return chain.slice(exactIndex + 1);
-		const baseIndex = currentBaseSelector
-			? chain.findIndex(selector => {
-					const selectorBase = formatRetryFallbackBaseSelector(selector);
-					return selectorBase === currentBaseSelector || selectorBase === currentPlainBaseSelector;
-				})
-			: -1;
-		if (baseIndex >= 0) return chain.slice(baseIndex + 1);
-		return chain.slice(1);
-	}
-
+	/** Switch to a fallback model for the rest of the retry sequence, recording what to restore. */
 	async #applyRetryFallbackCandidate(
 		role: string,
 		selector: RetryFallbackSelector,
+		candidate: Model,
 		currentSelector: string,
 		options?: { pinFallback?: boolean },
 	): Promise<void> {
-		const resolved = resolveModelOverride([selector.raw], this.#modelRegistry, this.settings);
-		const candidate = resolved.model ?? this.#modelRegistry.find(selector.provider, selector.id);
-		if (!candidate) {
-			throw new Error(`Retry fallback model not found: ${selector.raw}`);
-		}
-		const apiKey = await this.#modelRegistry.getApiKey(candidate, this.sessionId);
-		if (!apiKey) {
-			throw new Error(missingCredentialsMessage(candidate.provider, candidate.id, `retry fallback ${selector.raw}`));
-		}
-
 		// Capture the configured selector (auto-aware) so a fallback chain preserves
 		// `auto` instead of collapsing it to the level it resolved to this turn.
 		const currentThinkingLevel = this.configuredThinkingLevel();
 		const nextThinkingLevel = selector.thinkingLevel ?? currentThinkingLevel;
-		const candidateSelector = formatModelStringWithRouting(candidate);
-		this.#setModelWithProviderSessionReset(candidate);
-		this.sessionManager.appendModelChange(candidateSelector, EPHEMERAL_MODEL_CHANGE_ROLE);
-		AgentStorage.forAgentDir(this.settings.getAgentDir())?.recordModelUsage(candidateSelector);
+		this.#switchModelForRetry(candidate);
 		this.setThinkingLevel(nextThinkingLevel, false, "resolved");
 		if (!this.#activeRetryFallback) {
 			this.#activeRetryFallback = {
@@ -13659,18 +13432,37 @@ export class AgentSession {
 		});
 	}
 
+	/**
+	 * Switch the active model for a retry: a provider-session reset, an ephemeral model-change entry,
+	 * and a usage record. Every retry model switch (a chain fallback, the Fireworks Fast degrade, the
+	 * restore of the primary) goes through here.
+	 */
+	#switchModelForRetry(model: Model): string {
+		const selector = formatModelStringWithRouting(model);
+		this.#setModelWithProviderSessionReset(model);
+		this.sessionManager.appendModelChange(selector, EPHEMERAL_MODEL_CHANGE_ROLE);
+		AgentStorage.forAgentDir(this.settings.getAgentDir())?.recordModelUsage(selector);
+		return selector;
+	}
+
+	/** The registry model a fallback selector names, when it resolves and has a credential. */
+	async #usableRetryModel(selector: RetryFallbackSelector): Promise<Model | undefined> {
+		const resolved = resolveModelOverride([selector.raw], this.#modelRegistry, this.settings);
+		const model = resolved.model ?? this.#modelRegistry.find(selector.provider, selector.id);
+		if (!model) return undefined;
+		return (await this.#modelRegistry.getApiKey(model, this.sessionId)) ? model : undefined;
+	}
+
 	async #tryRetryModelFallback(currentSelector: string, options?: { pinFallback?: boolean }): Promise<boolean> {
-		const role = this.#activeRetryFallback?.role ?? this.#resolveRetryFallbackRole(currentSelector);
+		const source = this.#retryFallbackSource();
+		const role = this.#activeRetryFallback?.role ?? resolveRetryFallbackRole(source, currentSelector);
 		if (!role) return false;
 
-		for (const selector of this.#findRetryFallbackCandidates(role, currentSelector)) {
+		for (const selector of findRetryFallbackCandidates(source, role, currentSelector)) {
 			if (this.#isRetryFallbackSelectorSuppressed(selector)) continue;
-			const resolved = resolveModelOverride([selector.raw], this.#modelRegistry, this.settings);
-			const candidate = resolved.model ?? this.#modelRegistry.find(selector.provider, selector.id);
+			const candidate = await this.#usableRetryModel(selector);
 			if (!candidate) continue;
-			const apiKey = await this.#modelRegistry.getApiKey(candidate, this.sessionId);
-			if (!apiKey) continue;
-			await this.#applyRetryFallbackCandidate(role, selector, currentSelector, options);
+			await this.#applyRetryFallbackCandidate(role, selector, candidate, currentSelector, options);
 			return true;
 		}
 
@@ -13731,9 +13523,10 @@ export class AgentSession {
 		if (AIError.isContextOverflow(message, model.contextWindow ?? 0)) return false;
 		if (this.#hasReplayUnsafeToolOutput(message)) return false;
 		const currentSelector = formatRetryFallbackSelector(model, this.thinkingLevel);
-		const role = this.#activeRetryFallback?.role ?? this.#resolveRetryFallbackRole(currentSelector);
+		const source = this.#retryFallbackSource();
+		const role = this.#activeRetryFallback?.role ?? resolveRetryFallbackRole(source, currentSelector);
 		if (!role) return false;
-		return this.#findRetryFallbackCandidates(role, currentSelector).length > 0;
+		return findRetryFallbackCandidates(source, role, currentSelector).length > 0;
 	}
 
 	/**
@@ -13749,10 +13542,7 @@ export class AgentSession {
 		if (!baseModel) return false;
 		const apiKey = await this.#modelRegistry.getApiKey(baseModel, this.sessionId);
 		if (!apiKey) return false;
-		const baseSelector = formatModelStringWithRouting(baseModel);
-		this.#setModelWithProviderSessionReset(baseModel);
-		this.sessionManager.appendModelChange(baseSelector, EPHEMERAL_MODEL_CHANGE_ROLE);
-		AgentStorage.forAgentDir(this.settings.getAgentDir())?.recordModelUsage(baseSelector);
+		const baseSelector = this.#switchModelForRetry(baseModel);
 		await this.#emitSessionEvent({
 			type: "retry_fallback_applied",
 			from: currentSelector,
@@ -13798,20 +13588,13 @@ export class AgentSession {
 		}
 		if (this.#isRetryFallbackSelectorSuppressed(originalSelector)) return;
 
-		const resolvedPrimary = resolveModelOverride([originalSelector.raw], this.#modelRegistry, this.settings);
-		const primaryModel =
-			resolvedPrimary.model ?? this.#modelRegistry.find(originalSelector.provider, originalSelector.id);
+		const primaryModel = await this.#usableRetryModel(originalSelector);
 		if (!primaryModel) return;
-		const apiKey = await this.#modelRegistry.getApiKey(primaryModel, this.sessionId);
-		if (!apiKey) return;
 
 		const currentThinkingLevel = this.configuredThinkingLevel();
 		const thinkingToApply =
 			currentThinkingLevel === lastAppliedFallbackThinkingLevel ? originalThinkingLevel : currentThinkingLevel;
-		const primarySelector = formatModelStringWithRouting(primaryModel);
-		this.#setModelWithProviderSessionReset(primaryModel);
-		this.sessionManager.appendModelChange(primarySelector, EPHEMERAL_MODEL_CHANGE_ROLE);
-		AgentStorage.forAgentDir(this.settings.getAgentDir())?.recordModelUsage(primarySelector);
+		this.#switchModelForRetry(primaryModel);
 		this.setThinkingLevel(thinkingToApply, false, "resolved");
 		this.#clearActiveRetryFallback();
 	}
@@ -13844,10 +13627,7 @@ export class AgentSession {
 	 * the error without a same-model backoff retry.
 	 * @returns true if retry was initiated, false if max retries exceeded or disabled
 	 */
-	async #handleRetryableError(
-		message: AssistantMessage,
-		options?: { allowModelFallback?: boolean; fireworksFastFallback?: boolean; hardErrorFallback?: boolean },
-	): Promise<boolean> {
+	async #handleRetryableError(message: AssistantMessage, options?: RetryEntryOptions): Promise<boolean> {
 		const retrySettings = this.settings.getGroup("retry");
 		// A backend that runs its own agent loop remotely fails slowly and
 		// expensively, so the global attempt count and backoff are resolved

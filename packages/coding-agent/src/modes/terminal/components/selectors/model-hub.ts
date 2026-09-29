@@ -26,6 +26,7 @@ import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
 import type { ModelRegistry } from "../../../../config/model-registry";
 import { getKnownRoleIds, getRoleInfo, ROLE_INHERIT_LABEL } from "../../../../config/model-roles";
 import type { Settings } from "../../../../config/settings";
+import { isRetryFallbackModelKey, sanitizeRetryFallbackChains } from "../../../../session/agent-session-retry-fallback";
 import { theme } from "../../../../theme/theme";
 import {
 	type ConfiguredThinkingLevel,
@@ -550,15 +551,7 @@ export class ModelHubComponent implements Component {
 	 */
 	#fallbackChains(): Record<string, string[]> {
 		try {
-			const chains = this.#settings.get("retry.fallbackChains");
-			if (!chains || typeof chains !== "object" || Array.isArray(chains)) return {};
-			const sanitized: Record<string, string[]> = {};
-			for (const key in chains) {
-				const chain = (chains as Record<string, unknown>)[key];
-				if (!Array.isArray(chain)) continue;
-				sanitized[key] = chain.filter((entry): entry is string => typeof entry === "string");
-			}
-			return sanitized;
+			return sanitizeRetryFallbackChains(this.#settings.get("retry.fallbackChains"));
 		} catch {
 			// No readable chains means none to show. `get` throws only when there is no settings context, in
 			// which case this panel is not on screen either; a chain that IS configured cannot arrive empty
@@ -584,9 +577,7 @@ export class ModelHubComponent implements Component {
 		}
 		rows.push({ kind: "newRole" });
 		rows.push({ kind: "separator" });
-		const modelKeys = Object.keys(chains)
-			.filter(key => key.includes("/"))
-			.sort();
+		const modelKeys = Object.keys(chains).filter(isRetryFallbackModelKey).sort();
 		for (const key of modelKeys) {
 			const chain = chains[key] ?? [];
 			rows.push({ kind: "chainKey", role: key });

@@ -94,6 +94,7 @@
 
 ### Fixed
 
+- A `retry.fallbackChains` entry that is not a string is skipped with a config warning and the next entry is tried, instead of leaving the failed turn's prompt waiting forever on a retry that threw.
 - A usage-limit or rate-limit error whose message states a zero or elapsed retry window parks the credential for the computed backoff instead of for no time, and the session retry loop, the auth gateway and the advisor read a retry window from an error message through one parser.
 - A same-file reload that changes a bash turn's kill signal or a user turn's synthetic, steering, attribution or demoted-reasoning marks now closes the live provider sessions, instead of continuing a provider chain whose history no longer matches the transcript.
 - A `models.yml` `compat` block type-checks every key of the compat contracts, so a wrong value such as `thinkingKeep: last` fails validation naming the key instead of going to the provider verbatim; `thinkingKeep`, `reasoningDisableMode`, `toolSchemaFlavor`, the Anthropic flags and `trustExplicitThinkingOnly` are documented overrides.
