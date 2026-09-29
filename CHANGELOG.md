@@ -183,6 +183,8 @@
 
 ### Fixed
 
+- A record-valued settings row (model roles, default effort, provider limits, agents, fallback chains, per-provider retry, tool approval) opens when a runtime override or `--config` file sets one of its entries; the overridden entries show their source and are read-only, and edits to the other entries write only the profile's values.
+- The Default Model row states which layer supplies the active model at the start of its description, so the one-line footer no longer truncates it away.
 - A tool card's header and section labels are clipped at the card's width instead of running past its edge, so an `ssh` host or a `write` path with no break in it no longer folds onto the next terminal line, and no card row exceeds a terminal narrower than the rail and its indent.
 - An invalid enum value in `config.yml` falls back to the setting's default for every enum setting, not only `edit.afterEdit`.
 - The pending previews of `ssh`, `browser`, `read`, `debug`, `bash`, `github`, `lsp` and 30 other tools update a string argument as it streams instead of when the JSON object closes, and the live preview matches the rebuilt transcript.
