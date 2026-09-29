@@ -5,6 +5,8 @@
 ### Changed
 
 - The auth gateway's error verdicts come from named rules in the error registry (`GATEWAY_RULES`), and `classifyGatewayError` accepts an optional `trace` array that receives the name of the rule that answered; every verdict is unchanged.
+- `calculateRateLimitBackoffMs` takes a `RateLimitBackoffContext` (`"credential-park"` or `"selector-suppression"`) that sets the cost of an unreadable failure: 30 minutes for a credential park, 5 minutes for a selector suppression.
+- Every retry loop in the package takes its exponential delay from `exponentialBackoffDelay` in `@veyyon/utils`; each loop's base, ceiling and jitter are unchanged.
 - `auth-storage.ts` is split into single-concern modules under `src/auth-storage/` with no change to its exports or behavior.
 - The JSON Schema meta-validator checks a node by looking each of its keys up in a keyword table instead of probing every known keyword, cutting validation of a 40-tool parameter schema set from 46.6 µs to 33.7 µs with identical verdicts, except that a `NaN` `multipleOf` is now rejected.
 - Stream option mapping resolves each API's options in its own mapper over one shared base instead of one 420-line switch, cutting the mapping of 743,431 model and option combinations from 100.8 ms to 92.1 ms with identical options.
@@ -29,6 +31,7 @@
 
 ### Fixed
 
+- The Anthropic client waits the window stated by an `anthropic-ratelimit-*-reset` header on a 429 that carries no `retry-after`, instead of retrying on the backoff curve.
 - Strict-mode schema preparation no longer adds a `const` value to the caller's own `enum` array, so preparing a tool schema leaves it unchanged and a frozen `enum` beside a `const` no longer drops the tool out of strict mode.
 - A tool parameter named after a JSON Schema keyword keeps its name and schema for Google, Cloud Code Assist, MCP and Moonshot; a property named `const` was folded into an `enum` over its siblings, a property named `nullable` was dropped while `required` still listed it, and Cloud Code Assist sent such a tool the empty fallback schema.
 - A Cloud Code Assist tool parameter that admits `null` twice, such as `nullable: true` beside a `oneOf` with a `{type: "null"}` branch, loses both null layers instead of sending the whole tool the empty fallback schema.

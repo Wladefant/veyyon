@@ -40,6 +40,7 @@ import {
 import { calculateCost, discardAttemptUsage } from "@veyyon/catalog/models";
 import { DEVIN_CASCADE_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 import { isAbortError } from "@veyyon/utils/abortable";
+import { exponentialBackoffDelay } from "@veyyon/utils/backoff";
 import { tryParseJson } from "@veyyon/utils/json";
 import { parseStreamingJson, parseStreamingJsonThrottled } from "@veyyon/utils/json-parse";
 import * as logger from "@veyyon/utils/logger";
@@ -879,7 +880,11 @@ function devinRetryDelayMs(
 		const waitMs = statedResetMs + 1_000;
 		return waitMs > DEVIN_RETRY_MAX_DELAY_MS ? undefined : waitMs;
 	}
-	return Math.min(DEVIN_RETRY_BASE_DELAY_MS * 2 ** state.attempt, DEVIN_RETRY_MAX_DELAY_MS);
+	return exponentialBackoffDelay(state.attempt, {
+		baseMs: DEVIN_RETRY_BASE_DELAY_MS,
+		maxMs: DEVIN_RETRY_MAX_DELAY_MS,
+		jitter: 0,
+	});
 }
 
 /**

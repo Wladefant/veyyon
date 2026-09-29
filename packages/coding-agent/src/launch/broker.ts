@@ -8,6 +8,7 @@ import {
 	clamp,
 	clampLow,
 	errorMessage,
+	exponentialBackoffDelay,
 	isEexist,
 	isEnoent,
 	isProcessAlive,
@@ -913,7 +914,11 @@ class DaemonBroker {
 			record.consecutiveFailures = uptime >= 30_000 ? 0 : record.consecutiveFailures + 1;
 			record.snapshot.restartCount++;
 			record.snapshot.state = "restarting";
-			const delay = Math.min(1_000 * 2 ** Math.min(record.consecutiveFailures, 5), RESTART_MAX_DELAY_MS);
+			const delay = exponentialBackoffDelay(record.consecutiveFailures, {
+				baseMs: 1_000,
+				maxMs: RESTART_MAX_DELAY_MS,
+				jitter: 0,
+			});
 			record.log?.append(
 				`\n[daemon exited${exitCode === undefined ? "" : ` with code ${exitCode}`}; restarting in ${delay}ms]\n`,
 			);

@@ -13,6 +13,7 @@
 ### Changed
 
 - The session loader reads a session file 1 MiB at a time and splits lines synchronously instead of decoding each line through an async iterator, cutting the load phase of an 85 MB, 27,600-entry session from 210.0 ms to 149.9 ms (median of 7 alternating runs).
+- Session storage and the session retry policy take their exponential delay from `exponentialBackoffDelay` in `@veyyon/utils`; each loop's base, ceiling and jitter are unchanged.
 - `buildSessionContextFromPath` reads a branch's settings, emits its messages and strips dangling tool calls in single-purpose steps instead of one 374-line function, and drops content-less dangling turns in one pass instead of splicing each out, cutting a context build that drops 10,000 such turns from 10.4 ms to 0.7 ms with identical contexts across 200,000 generated branches.
 - Opening or restoring a session builds its set of known entry ids once instead of twice, which takes about 40ms off opening a 220,000-entry session.
 - The resume warning flattens each command or path onto one line through the shared `collapseWhitespace` helper; no user-visible change.
@@ -27,6 +28,8 @@
 
 ### Fixed
 
+- An enum setting whose configured value is outside its declared values reads as the declared default and logs one warning per setting.
+- An unquoted YAML scalar that spells an enum member, such as `advisor.syncBacklog: 3`, reads as that member and is no longer reported as invalid at load.
 - `resolveResumableSession` returns a session another profile wrote as `scope: "profile"` with the owning profile's name instead of as a `global` match, and `foreignSessionFileProfile` returns the profile other than the active one that holds a transcript path.
 - `SessionManager.continueRecent` ignores a terminal breadcrumb naming another profile's transcript instead of continuing that session, or relocating it into the active profile when its recorded directory is gone.
 - With sessions stored under `$XDG_DATA_HOME/veyyon`, the all-projects session listing, `resolveResumableSession`'s other-profile lookup and `foreignSessionFileProfile` read the sessions directory each profile writes to instead of `<agentDir>/sessions`, which held none of them.

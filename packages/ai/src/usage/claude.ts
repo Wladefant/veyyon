@@ -2,6 +2,7 @@ import { scheduler } from "node:timers/promises";
 import { bareModelId, parseAnthropicModel } from "@veyyon/catalog/identity";
 import { toNumber } from "@veyyon/catalog/utils";
 import { isCancellation } from "@veyyon/utils/abortable";
+import { exponentialBackoffDelay } from "@veyyon/utils/backoff";
 import { clamp, clamp01 } from "@veyyon/utils/math";
 import { HOUR_MS, WEEK_MS } from "@veyyon/utils/time";
 import * as AIError from "../error";
@@ -208,7 +209,7 @@ function isAbortError(error: unknown, signal?: AbortSignal): boolean {
 }
 
 function retryDelayMs(attempt: number, retryAfter: string | null): number {
-	const baseline = BASE_RETRY_DELAY_MS * 2 ** attempt;
+	const baseline = exponentialBackoffDelay(attempt, { baseMs: BASE_RETRY_DELAY_MS, jitter: 0 });
 	if (!retryAfter?.trim()) return baseline;
 	const seconds = Number.parseFloat(retryAfter);
 	if (Number.isFinite(seconds)) return Math.max(baseline, Math.max(0, seconds * 1000));

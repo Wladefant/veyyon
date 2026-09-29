@@ -163,8 +163,12 @@ const AUTH_STORAGE_CEILING = 227;
  * deployment contract, split out of `openai-compat.ts`. `provider-models/descriptors.ts` is in this
  * closure and takes the provider's discovery mapper from that file now; every module the file
  * imports was already reached through `openai-compat.ts`, so it adds one module and no subtree.
+ *
+ * 81 since 2026-09-18, measured: `@veyyon/utils/backoff`, the zero-import leaf holding
+ * `exponentialBackoffDelay`. `@veyyon/utils/fetch-retry`, already in this closure, computed its retry
+ * doubling inline and now takes it from that owner, so it adds one module and no subtree.
  */
-const ENV_API_KEY_CEILING = 80;
+const ENV_API_KEY_CEILING = 81;
 
 /** Measured 2026-07-26 at 75: the logger and nothing else. A backend import here is the regression. */
 const USAGE_REGISTRY_CEILING = 83;

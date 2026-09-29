@@ -112,8 +112,13 @@ const ROWS_CEILING = 8;
  * inline; it now takes `ESC` from that owner, so the constant has one declaration instead of one per
  * caller. The leaf imports nothing, so this closure gained a name and no edge, and the neighbouring
  * assertion still refuses `auth-storage.ts`, the registry and `stream.ts` by name.
+ *
+ * RE-MEASURED 2026-09-18 at 46. The one new module is `@veyyon/utils/backoff`, a zero-import leaf that
+ * owns `exponentialBackoffDelay`. This store's open retry and `@veyyon/utils/fetch-retry`, both already on
+ * this reach, computed their doubling inline and now take it from that owner. The leaf imports nothing,
+ * so this closure gained a name and no edge.
  */
-const STORE_CEILING = 45;
+const STORE_CEILING = 46;
 
 describe("the row helpers are pure", () => {
 	/**

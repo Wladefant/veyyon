@@ -5,6 +5,7 @@
 ### Changed
 
 - `tools/fs/read.ts` is split into per-concern `read-*.ts` modules with no change to the read tool's schema, output or exports.
+- The session retry loop, the async job manager, the launch broker and the Gemini web search provider take their exponential delay from `exponentialBackoffDelay` in `@veyyon/utils`; each loop's base, ceiling and jitter are unchanged.
 - The resolve pending row clamps its reason at 80 columns instead of 72, and the `web_search` and `gh` cards expand tabs in query and label text.
 - Production code strips ANSI through `stripAnsi` from `@veyyon/utils`; `Bun.stripANSI` is called only by that helper.
 - A session that renders its personality from a project `.veyyon/personalities/<name>.md` file raises a `personality` warning stating the file, and personality warnings reach the session's notice channel once per session instead of writing to stderr on every system prompt rebuild.
@@ -80,6 +81,7 @@
 
 ### Fixed
 
+- An invalid enum value in `config.yml` falls back to the setting's default for every enum setting, not only `edit.afterEdit`.
 - The pending previews of `ssh`, `browser`, `read`, `debug`, `bash`, `github`, `lsp` and 30 other tools update a string argument as it streams instead of when the JSON object closes, and the live preview matches the rebuilt transcript.
 - The session `/new` starts while a response is still streaming, and every other top-level session in the process, runs background bash, the `job` tool and daemon exit watches on a job manager of its own, and a job reports to the conversation that started it or spawned the agent that started it instead of being refused.
 - The Claude Code capture helper moved from `src/cli/claude-trace-cli.ts` to `scripts/claude-trace-capture.ts` beside `bun run claude:trace`, its only caller; it was never a `veyyon` subcommand and no longer ships in the package source.

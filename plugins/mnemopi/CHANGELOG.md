@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Embedding and extraction retries take their exponential delay from `exponentialBackoffDelay` in `@veyyon/utils`; each loop's base, ceiling and jitter are unchanged.
+
 ## [1.5.0] - 2026-09-18
 
 ### Changed

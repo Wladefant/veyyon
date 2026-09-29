@@ -1,6 +1,7 @@
 import { STATUS_CODES } from "node:http";
 import { scheduler } from "node:timers/promises";
 import { cancellationError, isAbortError } from "./abortable";
+import { exponentialBackoffDelay } from "./backoff";
 
 // "reset after 1h2m3s" / "10m15s" / "39s"
 const QUOTA_RESET_PATTERN = /reset after (?:(\d+)h)?(?:(\d+)m)?(\d+(?:\.\d+)?)s/i;
@@ -446,7 +447,7 @@ function resolveDefaultDelay(
 	attempt: number,
 	maxDelayMs: number,
 ): number {
-	if (option === undefined) return Math.min(500 * 2 ** attempt, maxDelayMs);
+	if (option === undefined) return exponentialBackoffDelay(attempt, { baseMs: 500, maxMs: maxDelayMs, jitter: 0 });
 	if (typeof option === "number") return Math.min(option, maxDelayMs);
 	if (typeof option === "function") return Math.min(option(attempt), maxDelayMs);
 	return Math.min(option[Math.min(attempt, option.length - 1)] ?? 0, maxDelayMs);

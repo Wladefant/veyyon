@@ -1,6 +1,7 @@
 import { Database, type Statement } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { scheduler } from "node:timers/promises";
 // Each name from the module that OWNS it, which for this file is the difference between 86 modules and
 // 345. The credential TYPES are erased, so naming `auth-storage` for them costs nothing; the sqlite
 // store and the busy-error predicate are values, and taking them from the barrel (or even from
@@ -10,6 +11,7 @@ import { isSqliteBusyError } from "@veyyon/ai/auth-credential-rows";
 import type { AuthCredential, AuthCredentialStore, StoredAuthCredential } from "@veyyon/ai/auth-storage";
 import { SqliteAuthCredentialStore } from "@veyyon/ai/auth-storage-sqlite";
 import { AsyncDrain } from "@veyyon/utils/async";
+import { exponentialBackoffDelay } from "@veyyon/utils/backoff";
 import { getAgentDbPath, getStatsDbPath } from "@veyyon/utils/dirs";
 // Owners, not the `@veyyon/utils` barrel: 5 modules against 74.
 import * as logger from "@veyyon/utils/logger";
@@ -377,7 +379,7 @@ FROM model_usage_legacy
 				}
 				lastError = err instanceof Error ? err : new Error(String(err));
 				if (attempt < maxRetries - 1) {
-					await Bun.sleep(baseDelayMs * 2 ** attempt);
+					await scheduler.wait(exponentialBackoffDelay(attempt, { baseMs: baseDelayMs, jitter: 0 }));
 				}
 			}
 		}

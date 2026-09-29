@@ -224,6 +224,7 @@ import { MacOSPowerAssertion } from "@veyyon/natives";
 import {
 	errorMessage,
 	escapeXmlText,
+	exponentialBackoffDelay,
 	extractRetryHint,
 	formatCount,
 	formatDuration,
@@ -284,7 +285,6 @@ import {
 	type SkillsSettings,
 	validateProviderMaxInFlightRequests,
 } from "../config/settings";
-import { AFTER_EDIT_CHECKS } from "../config/settings-domains/editing";
 import { onAppendOnlyModeChanged, onModelRolesChanged } from "../config/settings-signals";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { loadCapability, reset as resetCapabilities } from "../discovery/capability";
@@ -810,7 +810,6 @@ export class AgentSession {
 	#titleSystemPrompt: string | undefined;
 	#toolChoiceQueue = new ToolChoiceQueue();
 	readonly #verificationEvidence = new VerificationEvidenceLedger();
-	#afterEditCheckReported = false;
 
 	/** Running user shell commands and eval runs, and the results recorded while a turn streamed. */
 	readonly #executions = new UserExecutions({
@@ -11177,29 +11176,9 @@ export class AgentSession {
 		return true;
 	}
 
-	/**
-	 * A config file is read without enum validation, so a value outside the
-	 * schema arrives verbatim and would match neither pass — silently ending
-	 * every turn with no check at all. Fall back to the default and say so.
-	 */
-	#afterEditCheck(): (typeof AFTER_EDIT_CHECKS)[number] {
-		const configured = this.settings.get("edit.afterEdit");
-		for (const value of AFTER_EDIT_CHECKS) {
-			if (value === configured) return value;
-		}
-		if (!this.#afterEditCheckReported) {
-			this.#afterEditCheckReported = true;
-			logger.warn("edit.afterEdit holds a value the schema does not offer; using the default", {
-				configured,
-				allowed: AFTER_EDIT_CHECKS,
-			});
-		}
-		return "verify";
-	}
-
 	#enforceVerificationBeforeFinalize(): boolean {
 		if (this.#isSpawned) return false;
-		if (this.#afterEditCheck() !== "verify") return false;
+		if (this.settings.get("edit.afterEdit") !== "verify") return false;
 		const reminder = this.#verificationEvidence.takeFinalizationReminder();
 		if (!reminder) return false;
 		const reminderMessage: CustomMessage = {
@@ -11236,7 +11215,7 @@ export class AgentSession {
 
 	#enforceCodeReviewBeforeFinalize(): boolean {
 		if (this.#isSpawned) return false;
-		if (this.#afterEditCheck() !== "review") return false;
+		if (this.settings.get("edit.afterEdit") !== "review") return false;
 		const inContext = this.#toolCallIdsInContext();
 		const reminder = this.#verificationEvidence.takeCodeReviewReminder(id => inContext.has(id));
 		if (!reminder) return false;
@@ -12966,7 +12945,12 @@ export class AgentSession {
 					return { error: this.#compactionCandidateError(candidate, error), skipReason };
 				}
 
-				const baseDelayMs = retrySettings.baseDelayMs * 2 ** attempt;
+				// Bounded by `retry.maxRetries`; the schedule is uncapped so a configured base keeps its full ladder.
+				const baseDelayMs = exponentialBackoffDelay(attempt, {
+					baseMs: retrySettings.baseDelayMs,
+					maxMs: Number.POSITIVE_INFINITY,
+					jitter: 0,
+				});
 				const delayMs = retryAfterMs !== undefined ? Math.max(baseDelayMs, retryAfterMs) : baseDelayMs;
 				if (delayMs > maxAcceptableDelayMs && hasMoreCandidates) {
 					logger.warn("Auto-compaction retry delay too long, trying next model", {
@@ -13577,11 +13561,10 @@ export class AgentSession {
 	}
 
 	#noteRetryFallbackCooldown(currentSelector: string, retryAfterMs: number | undefined, errorMessage: string): void {
-		let cooldownMs = retryAfterMs;
-		if (!cooldownMs || cooldownMs <= 0) {
-			const reason = parseRateLimitReason(errorMessage);
-			cooldownMs = reason === "UNKNOWN" ? 5 * 60 * 1000 : calculateRateLimitBackoffMs(reason);
-		}
+		const cooldownMs =
+			retryAfterMs && retryAfterMs > 0
+				? retryAfterMs
+				: calculateRateLimitBackoffMs(parseRateLimitReason(errorMessage), "selector-suppression");
 		this.#modelRegistry.suppressSelector(currentSelector, Date.now() + cooldownMs);
 	}
 
@@ -14067,7 +14050,8 @@ export class AgentSession {
 			!staleOpenAIResponsesReplayError &&
 			AIError.is(id, AIError.Flag.UsageLimit)
 		) {
-			const retryAfterMs = parsedRetryAfterMs ?? calculateRateLimitBackoffMs(parseRateLimitReason(errorMessage));
+			const retryAfterMs =
+				parsedRetryAfterMs ?? calculateRateLimitBackoffMs(parseRateLimitReason(errorMessage), "credential-park");
 			const outcome = await this.#modelRegistry.authStorage.markUsageLimitReached(
 				this.model.provider,
 				this.sessionId,

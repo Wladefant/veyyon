@@ -221,6 +221,13 @@ describe("the modules that were repointed stay cut", () => {
 	 * were already reached through that file. No consumer gained an edge to a
 	 * subsystem it did not already reach.
 	 */
+	/**
+	 * Re-measured 2026-09-18: `api-key-resolver.ts` 56 -> 57 and `shared-llm.ts` 208 -> 209, each by the
+	 * one module `@veyyon/utils/backoff`, a zero-import leaf holding `exponentialBackoffDelay`.
+	 * `@veyyon/utils/fetch-retry` and the SQLite credential store, already on both reaches, computed
+	 * their retry doubling inline and now take it from that owner. The leaf imports nothing, so no
+	 * consumer gained an edge to a subsystem it did not already reach.
+	 */
 	it.each([
 		["agent/src/proxy.ts", 145],
 		["apps/stats/src/parser.ts", 120],
@@ -236,12 +243,12 @@ describe("the modules that were repointed stay cut", () => {
 		// zero-import leaf that owns the escape constants; `sanitize-text.ts`, already on this reach,
 		// used to spell `"\x1b"` inline and now takes `ESC` from that owner. The leaf adds no edge of
 		// its own, so nothing outside this closure was gained.
-		["coding-agent/src/config/api-key-resolver.ts", 56],
+		["coding-agent/src/config/api-key-resolver.ts", 57],
 		// Re-measured 2026-09-11 at 207, from 205: the two leaves named above. 205 was the three
 		// `@veyyon/model` leaves of 2026-09-04; 202 was one module from the catalog OpenCode discovery
 		// header leaf; 184 was the 2026-07-27 engine-call remeasure; 325 before that was the leak. The
 		// file still takes no name from the barrel.
-		["coding-agent/src/commit/shared-llm.ts", 208],
+		["coding-agent/src/commit/shared-llm.ts", 209],
 		// The agent's hot loop and the `Agent` class. Both STREAM, so both reach the engine whatever
 		// specifier they use; the ceilings are what the other ten names cost when taken from the entry
 		// point. 378 -> 321 and 380 -> 323.

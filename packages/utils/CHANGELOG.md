@@ -12,6 +12,7 @@
 - `@veyyon/utils/session-file` exports `ORPHAN_AGENT_TRANSCRIPT_PREFIX`, the prefix of an agent transcript written under the sessions root when its parent session has no file.
 - `@veyyon/utils/stall-sampler` exports `stallSampler`, which keeps JavaScriptCore's sampling profiler running at a 10 ms interval and returns the functions sampled between two `performance.now()` readings, and `borrow()`, which lends the profiler to another caller; `LoopWatchdog` takes it as `stacks` and follows each `ui.loop-blocked` line with a `ui.loop-blocked.stack` line naming the functions that held the loop.
 - `@veyyon/utils/fs-tool-args` exports `editInputPaths`, which reads the file paths from hashline or `apply_patch` section headers.
+- `exponentialBackoffDelay` accepts `jitterSpread: "below"`, which only shortens the wait so `maxMs` is the longest delay.
 
 ### Changed
 

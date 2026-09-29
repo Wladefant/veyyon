@@ -18,6 +18,7 @@ import {
 import { discardAttemptUsage } from "@veyyon/catalog/models";
 import { CODEX_BASE_URL } from "@veyyon/catalog/wire/codex";
 import { atomicWriteFile } from "@veyyon/utils/atomic-write";
+import { exponentialBackoffDelay } from "@veyyon/utils/backoff";
 import { getConfigRootDir } from "@veyyon/utils/dirs";
 import { $env } from "@veyyon/utils/env";
 import { isEnoent } from "@veyyon/utils/fs-error";
@@ -1025,7 +1026,11 @@ async function resolveWithThinkingLoopCook<TApi extends Api>(
 		// misclassify as a 502): throwIfAborted before backoff, and scheduler.wait
 		// rejects if the abort lands mid-delay.
 		signal?.throwIfAborted();
-		const delay = Math.min(THINKING_LOOP_RETRY_BASE_DELAY_MS * 2 ** attempt, THINKING_LOOP_RETRY_MAX_DELAY_MS);
+		const delay = exponentialBackoffDelay(attempt, {
+			baseMs: THINKING_LOOP_RETRY_BASE_DELAY_MS,
+			maxMs: THINKING_LOOP_RETRY_MAX_DELAY_MS,
+			jitter: 0,
+		});
 		await scheduler.wait(delay, { signal });
 		const stalled = message;
 		message = await dispatch().result();

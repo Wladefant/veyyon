@@ -17,6 +17,7 @@ import {
 	getAntigravityUserAgent,
 	getGeminiCliHeaders,
 } from "@veyyon/catalog/wire/gemini-headers";
+import { exponentialBackoffDelay } from "@veyyon/utils/backoff";
 import { extractHttpStatusFromError } from "@veyyon/utils/fetch-retry";
 import { readSseJson } from "@veyyon/utils/stream";
 import { trimTrailingSlashes } from "@veyyon/utils/url";
@@ -882,7 +883,7 @@ class GeminiCliStreamRun {
 				body: plan.bodyJson,
 				signal: watchdog.signal,
 				maxAttempts: isLastEndpoint ? MAX_RETRIES + 1 : 1,
-				defaultDelayMs: attempt => BASE_DELAY_MS * 2 ** attempt,
+				defaultDelayMs: attempt => exponentialBackoffDelay(attempt, { baseMs: BASE_DELAY_MS, jitter: 0 }),
 				maxDelayMs: this.options?.maxRetryDelayMs ?? RATE_LIMIT_BUDGET_MS,
 				fetch: this.options?.fetch,
 				timeout: false,
@@ -921,7 +922,12 @@ class GeminiCliStreamRun {
 	async #resend(plan: CloudCodeAssistPlan, requestUrl: string, emptyAttempt: number): Promise<Response> {
 		const signal = this.options?.signal;
 		try {
-			await scheduler.wait(EMPTY_STREAM_BASE_DELAY_MS * 2 ** (emptyAttempt - 1), { signal });
+			await scheduler.wait(
+				exponentialBackoffDelay(emptyAttempt - 1, { baseMs: EMPTY_STREAM_BASE_DELAY_MS, jitter: 0 }),
+				{
+					signal,
+				},
+			);
 		} catch {
 			throw new AIError.RequestAbortError("Request was aborted");
 		}
