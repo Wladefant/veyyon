@@ -7,7 +7,9 @@
  *
  * Each surface is compared against itself: a remaining-style limit at 5% left must render the bar a
  * default limit at 5% USED renders, and a window at 95% left must render the 95%-full bar. Gap: the
- * bar ramp glyphs are not pinned here, only that the surfaces agree on the fill.
+ * bar ramp glyphs are not pinned here, only that the surfaces agree on the fill. The four surfaces are
+ * listed by hand (interactive `/usage`, non-TUI `/usage` text, `veyyon usage`, the account line): a
+ * fifth renderer that draws a `UsageLimit` bar must be added here, and nothing fails until it is.
  */
 import { beforeAll, describe, expect, it } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
@@ -15,6 +17,7 @@ import type { UsageLimit, UsageReport } from "@veyyon/ai";
 import { fractionToDraw, resolveDisplayFraction } from "@veyyon/ai/usage";
 import { formatUsageBreakdown } from "@veyyon/coding-agent/cli/usage-cli";
 import { renderUsageReports } from "@veyyon/coding-agent/modes/terminal/controllers/command-controller";
+import { buildUsageReportText } from "@veyyon/coding-agent/slash-commands/helpers/usage-report";
 import { initTheme, theme } from "@veyyon/coding-agent/theme/theme";
 import { formatUsageWindowLine } from "../../src/slash-commands/helpers/format";
 
@@ -76,6 +79,20 @@ function accountBar(one: UsageLimit): string {
 	return line.match(/\[[^\]]*\]/)?.[0] ?? "";
 }
 
+/** The non-TUI `/usage` (ACP and `--print`): a plain-text block whose bar is the `[...]` on its own line. */
+async function plainTextReport(one: UsageLimit): Promise<string> {
+	return buildUsageReportText({
+		session: { model: undefined, fetchUsageReports: async () => [report(one)] },
+	} as never);
+}
+
+async function plainTextBar(one: UsageLimit): Promise<string> {
+	const text = await plainTextReport(one);
+	const line = text.split("\n").find(row => /^\s+\[/.test(row));
+	if (!line) throw new Error(`no bar line in:\n${text}`);
+	return line.match(/\[[^\]]*\]/)?.[0] ?? "";
+}
+
 const SURFACES: Array<[string, (one: UsageLimit) => string]> = [
 	["/usage", interactiveBar],
 	["veyyon usage", cliBar],
@@ -118,5 +135,37 @@ describe("every usage surface draws a remaining-style limit's bar the way it wor
 		const inapplicable = limit(1, { remaining: true, inapplicable: true });
 		expect(interactiveBar(inapplicable)).toMatch(/^·+$/);
 		expect(cliBar(inapplicable)).toMatch(/^·+$/);
+	});
+});
+
+describe("the non-TUI /usage text draws a limit the way the other surfaces do", () => {
+	it("5% left draws the bar a default limit draws at 5% used, and is not the used-style bar", async () => {
+		expect(await plainTextBar(limit(0.95, { remaining: true }))).toBe(await plainTextBar(limit(0.05)));
+		expect(await plainTextBar(limit(0.95, { remaining: true }))).not.toBe(await plainTextBar(limit(0.95)));
+	});
+
+	it("95% left draws the bar a default limit draws at 95% used", async () => {
+		expect(await plainTextBar(limit(0.05, { remaining: true }))).toBe(await plainTextBar(limit(0.95)));
+	});
+
+	it("words a remaining-style limit as what is left instead of what is used", async () => {
+		const text = await plainTextReport(limit(0.95, { remaining: true }));
+		expect(text).toContain("5.0% left");
+		expect(text).not.toContain("used");
+	});
+
+	it("shows no bar, percent or reset for a window the provider says does not apply", async () => {
+		const inapplicable = limit(1, { remaining: true, inapplicable: true });
+		inapplicable.window = {
+			id: "5h",
+			label: "5-hour limit",
+			durationMs: 5 * 3_600_000,
+			resetsAt: Date.now() + 3_600_000,
+		};
+		const text = await plainTextReport(inapplicable);
+		expect(text).toContain("does not apply right now");
+		expect(text).not.toMatch(/\[/);
+		expect(text).not.toContain("resets in");
+		expect(text).not.toMatch(/\d%/);
 	});
 });

@@ -4,6 +4,7 @@
  * Provides a normalized schema to represent multiple limit windows, model tiers,
  * and shared quotas across providers.
  */
+import { clamp01 } from "@veyyon/utils/math";
 import type { FetchImpl, Provider } from "./types";
 
 export * from "./shared-project-providers";
@@ -160,7 +161,7 @@ export function resolveUsedFraction(limit: UsageLimit): number | undefined {
  */
 export function fractionToDraw(used: number | undefined, display?: UsageLimitDisplay): number | undefined {
 	if (display?.inapplicable || used === undefined) return undefined;
-	const clamped = Math.min(1, Math.max(0, used));
+	const clamped = clamp01(used);
 	return display?.remaining ? 1 - clamped : clamped;
 }
 
