@@ -445,9 +445,9 @@ An entry the live context cannot reach keeps `type`, `id`, `parentId`, `timestam
 
 The live context is the active branch from the newest compaction's keep boundary on, plus every compaction, model, thinking-level, service-tier, TTSR, MCP-selection and mode entry on the branch, which each context build reads. Entries on other branches move out of memory as well.
 
-The session reads cold lines through a handle opened on the file object it loaded. A republish by this session or another process, a rename, or an unlink leaves that object readable, so recorded offsets stay valid. After a tail republish that keeps the file's prefix, cold entries move to a handle on the new file and the old handle closes. A handle closes when its last cold entry is read back, or when the entries holding it are garbage collected.
+The session reads those lines through a handle opened on the file object it loaded. A republish by this session or another process, a rename, or an unlink leaves that object readable, so recorded offsets stay valid. After a tail republish that keeps the file's prefix, the entries still out of memory move to a handle on the new file and the old handle closes. A handle closes when the last entry reading through it is read back, or when the entries holding it are garbage collected.
 
-Cooling runs after a load, after each publish of the session file, and after a compaction. It does not run while an in-place update is pending, while a publish is in flight, or while the file holds lines of another writer. Windows opens no handle, so every entry stays in memory there.
+The session moves payloads out of memory after a load, after each publish of the session file, and after a compaction. It skips the pass while an in-place update is pending, while a publish is in flight, or while the file holds lines of another writer. Windows opens no handle, so every entry stays in memory there.
 
 ## Branch summarization pipeline
 
