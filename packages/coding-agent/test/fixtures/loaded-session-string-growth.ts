@@ -8,8 +8,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { postmortem } from "@veyyon/utils";
+import { liveStringBytes } from "../../../utils/test/helpers/live-string-bytes";
 import { createAssistantMessage } from "../helpers/agent-session-setup";
-import { liveStringBytes } from "../helpers/live-string-bytes";
 
 export interface OpenGrowth {
 	textBytes: number;

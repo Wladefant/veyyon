@@ -19,7 +19,7 @@ import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { registerToolResultCodecs } from "@veyyon/kernel/session/tool-result-codecs";
 import type { TUI } from "@veyyon/tui";
 import { postmortem } from "@veyyon/utils";
-import { liveStringBytes } from "../helpers/live-string-bytes";
+import { liveStringBytes } from "../../../utils/test/helpers/live-string-bytes";
 
 /** What a card tag looks like in a written line. */
 export const ROWS_TAG = /"from":"rows"/g;
