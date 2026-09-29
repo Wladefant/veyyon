@@ -350,7 +350,7 @@ import {
 	PERMISSION_OPTIONS_BY_ID,
 	PERMISSION_REQUIRED_TOOLS,
 } from "./agent-session-permissions";
-import { buildSessionMetadata, isToolOrderPermutation } from "./agent-session-provider-request";
+import { isToolOrderPermutation } from "./agent-session-provider-request";
 import {
 	IMAGE_ATTACHMENT_DESCRIPTION_TYPE,
 	isAdvisorCard,
@@ -447,6 +447,7 @@ import { MessagePersistence } from "./runtime/message-persistence";
 import { ModelHandoff } from "./runtime/model-handoff";
 import { PlanModeRuntime } from "./runtime/plan-mode-runtime";
 import { PostPromptTasks } from "./runtime/post-prompt-tasks";
+import { ProviderSessions } from "./runtime/provider-sessions";
 import { RetryRuntime } from "./runtime/retry-runtime";
 import { type SecretsRefreshOptions, SessionSecrets } from "./runtime/session-secrets";
 import { StreamingEditGuard } from "./runtime/streaming-edit-guard";
@@ -761,7 +762,7 @@ export class AgentSession {
 		scheduleAutoContinuePrompt: generation => this.#scheduleAutoContinuePrompt(generation),
 		secrets: () => this.#secrets,
 		convertToLlmForSideRequest: messages => this.#convertToLlmForSideRequest(messages),
-		providerSessionState: () => this.#providerSessionState,
+		providerSessionState: () => this.#providerSessions.states,
 		effectiveServiceTier: model => this.#effectiveServiceTier(model),
 		baseSystemPrompt: () => this.#baseSystemPrompt,
 		nonMessageTokens: () => computeNonMessageTokens(this),
@@ -779,7 +780,7 @@ export class AgentSession {
 			this.#resetAllAdvisorRuntimes();
 			this.#todo.syncFromBranch();
 		},
-		closeCodexProviderSessionsForHistoryRewrite: () => this.#closeCodexProviderSessionsForHistoryRewrite(),
+		closeCodexProviderSessionsForHistoryRewrite: () => this.#providerSessions.closeCodexForHistoryRewrite(this.model),
 		disconnectFromAgent: () => this.#disconnectFromAgent(),
 		reconnectToAgent: () => this.#reconnectToAgent(),
 	});
@@ -797,7 +798,7 @@ export class AgentSession {
 		scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
 		abortIsDeliberate: () => this.#abortInProgress || this.#isDisposed || this.#streamingEdit.abortTriggered,
 		setModelWithProviderSessionReset: model => this.#setModelWithProviderSessionReset(model),
-		resetCurrentResponsesProviderSession: reason => this.#resetCurrentResponsesProviderSession(reason),
+		resetCurrentResponsesProviderSession: reason => this.#providerSessions.resetResponses(this.model, reason),
 		maybeAutoRedeemCodexReset: () => this.#maybeAutoRedeemCodexReset(),
 		removeAssistantMessageFromActiveContext: (message, reason) =>
 			this.#removeAssistantMessageFromActiveContext(message, reason),
@@ -850,9 +851,8 @@ export class AgentSession {
 	// Agent identity (registry id) used for IRC routing and job ownership.
 	#agentId: string | undefined;
 	#agentKind: "main" | "sub" = "main";
-	#providerSessionId: string | undefined;
-	#freshProviderSessionId: string | undefined;
-	#inheritedProviderPromptCacheKey: string | undefined;
+	/** Provider session ids, the inherited prompt cache key, and the transport state they route. */
+	readonly #providerSessions: ProviderSessions;
 	#isDisposed = false;
 	// Extension system
 	#extensionRunner: ExtensionRunner | undefined = undefined;
@@ -958,17 +958,6 @@ export class AgentSession {
 	 */
 	readonly #baseSystemPromptInvalidations: string[] = [];
 	/**
-	 * Every mid-session discard of the inherited provider prompt cache key, in
-	 * order, by reason. A discard is the OTHER way a session pays for a full
-	 * re-prefill, and it was the invisible one: only system-prompt changes were
-	 * recorded, so a session whose most expensive miss came from a thinking-level
-	 * switch showed nothing at all. One measured session read 0 cached tokens and
-	 * rewrote 67,528 immediately after an auto-thinking reclassification, 18
-	 * seconds after the previous turn, while its invalidation record listed only
-	 * unrelated cwd changes. Exposed through {@link providerCacheKeyDiscards}.
-	 */
-	readonly #providerCacheKeyDiscards: string[] = [];
-	/**
 	 * Signature of the (toolNames, tool descriptions) tuple passed to the most
 	 * recent successful `rebuildSystemPrompt` call. Used to skip redundant rebuilds
 	 * when MCP servers reconnect without changing their tool definitions, which is
@@ -1070,7 +1059,6 @@ export class AgentSession {
 	 */
 	#yieldTerminationPending = false;
 	#synchronouslyTerminatedYieldToolCallIds = new Set<string>();
-	#providerSessionState = new Map<string, ProviderSessionState>();
 	readonly rawSseDebugBuffer: RawSseDebugBuffer;
 
 	#resetPromptMaintenanceState(): void {
@@ -1308,6 +1296,17 @@ export class AgentSession {
 			mnemopiState: () => getMnemopiSessionState(this),
 			messages: () => this.agent.state.messages,
 		});
+		this.#providerSessions = new ProviderSessions(
+			{
+				agent: this.agent,
+				sessionStore: this.sessionManager,
+				authStorage: () => this.#modelRegistry.authStorage,
+			},
+			{
+				configuredId: config.providerSessionId,
+				inheritedCacheKey: config.providerPromptCacheKeySource === "fork" ? this.agent.promptCacheKey : undefined,
+			},
+		);
 		this.#persistence = new MessagePersistence({
 			sessionStore: this.sessionManager,
 			instrumentationLevel: () => this.settings.get("session.instrumentation"),
@@ -1347,7 +1346,7 @@ export class AgentSession {
 			sideComplete: () => this.#sideCompleteImpl,
 			promptGeneration: () => this.#promptGeneration,
 			magicKeywordEnabled: keyword => this.#magicKeywordEnabled(keyword),
-			clearInheritedProviderPromptCacheKey: reason => this.#clearInheritedProviderPromptCacheKey(reason),
+			clearInheritedProviderPromptCacheKey: reason => this.#providerSessions.clearInheritedCacheKey(reason),
 			emitSessionEvent: event => this.#emit(event),
 		});
 		this.#thinking.seedFromConfig(config.thinkingLevel, config.thinkingSource);
@@ -1692,9 +1691,6 @@ export class AgentSession {
 		this.#argot = config.argot;
 		this.#agentId = config.agentId;
 		this.#agentKind = config.agentKind ?? "main";
-		this.#providerSessionId = config.providerSessionId;
-		this.#inheritedProviderPromptCacheKey =
-			config.providerPromptCacheKeySource === "fork" ? this.agent.promptCacheKey : undefined;
 		// Runs synchronously on the stream, ahead of the queued `message_update`, so a guard abort
 		// lands on the delta that earned it.
 		this.agent.setAssistantMessageEventInterceptor((message, assistantMessageEvent) => {
@@ -1703,8 +1699,8 @@ export class AgentSession {
 		});
 		// The tool-result hook is the single site for synchronous post-tool actions that must affect the current loop.
 		this.agent.afterToolCall = ctx => this.#afterToolCall(ctx);
-		this.agent.providerSessionState = this.#providerSessionState;
-		this.#syncAgentSessionId();
+		this.agent.providerSessionState = this.#providerSessions.states;
+		this.#providerSessions.sync();
 		this.#todo.syncFromBranch();
 		this.#goalRuntime = new GoalRuntime({
 			getState: () => this.#goalModeState,
@@ -1794,7 +1790,7 @@ export class AgentSession {
 			yieldQueue: this.yieldQueue,
 			settings: this.settings,
 			modelRegistry: this.#modelRegistry,
-			providerSessionState: this.#providerSessionState,
+			providerSessionState: this.#providerSessions.states,
 			sideComplete: this.#sideCompleteImpl,
 			agentKind: this.#agentKind,
 			provider: {
@@ -1980,7 +1976,7 @@ export class AgentSession {
 
 	/** Provider-scoped mutable state store for transport/session caches. */
 	get providerSessionState(): Map<string, ProviderSessionState> {
-		return this.#providerSessionState;
+		return this.#providerSessions.states;
 	}
 
 	/** Hint forwarded to provider calls that support websocket transport. */
@@ -2832,7 +2828,7 @@ export class AgentSession {
 		await this.#retry.closeRecovered(message);
 		if (message.provider === "opencode-go") {
 			this.#modelRegistry.authStorage.recordUsageCost(message.provider, message.usage.cost.total, {
-				sessionId: this.#activeProviderSessionId(),
+				sessionId: this.#providerSessions.activeId(),
 				recordedAt: message.timestamp,
 				baseUrl: this.#modelRegistry.getProviderBaseUrl?.(message.provider),
 			});
@@ -3901,66 +3897,9 @@ export class AgentSession {
 		this.#unsubscribeAgent = this.agent.subscribe(this.#handleAgentEvent);
 	}
 
-	#activeProviderSessionId(sessionId?: string): string {
-		return this.#freshProviderSessionId ?? this.#providerSessionId ?? sessionId ?? this.sessionManager.getSessionId();
-	}
-
-	#adoptInheritedProviderPromptCacheKey(): void {
-		const key = this.sessionManager.getHeader()?.providerPromptCacheKey;
-		if (!key) return;
-		if (this.#inheritedProviderPromptCacheKey !== undefined || this.agent.promptCacheKey === undefined) {
-			this.agent.promptCacheKey = key;
-			this.#inheritedProviderPromptCacheKey = key;
-		}
-	}
-
-	/**
-	 * Drop the provider prompt cache key this session inherited, recording why.
-	 *
-	 * `reason` is required for the same purpose as on `refreshBaseSystemPrompt`:
-	 * every caller here is spending a full re-prefill, and a discard with no name
-	 * is a cost nobody can attribute afterwards. The record is only appended when a
-	 * key was actually inherited, so a session that never had one does not
-	 * accumulate phantom discards.
-	 */
-	#clearInheritedProviderPromptCacheKey(reason: string): void {
-		const key = this.#inheritedProviderPromptCacheKey;
-		this.#inheritedProviderPromptCacheKey = undefined;
-		if (key === undefined) return;
-		this.#providerCacheKeyDiscards.push(reason);
-		logger.warn("provider prompt cache key discarded; the next request re-reads the whole context", {
-			reason,
-			discardsThisSession: this.#providerCacheKeyDiscards.length,
-		});
-		if (this.agent.promptCacheKey === key) {
-			this.agent.promptCacheKey = undefined;
-		}
-	}
-
 	/** Every provider cache-key discard this session paid for, in order, by reason. */
 	providerCacheKeyDiscards(): readonly string[] {
-		// Frozen copy, matching `systemPromptInvalidations`: this is cost evidence,
-		// and a reader that trimmed the live array would under-report re-prefills.
-		return Object.freeze(this.#providerCacheKeyDiscards.slice());
-	}
-
-	/**
-	 * Set agent.sessionId from the session manager and install a dynamic
-	 * metadata resolver so every Anthropic API request carries
-	 * `metadata.user_id` shaped like real Claude Code's `getAPIMetadata` output:
-	 * `{ session_id, account_uuid, device_id }`. `account_uuid` is included only
-	 * when an Anthropic OAuth credential with a known account UUID is loaded;
-	 * `device_id` is derived from both the persistent veyyon install id and that
-	 * account UUID. Resolving live keeps the value in sync with auth-state changes
-	 * (login/logout, token refresh that surfaces a new account UUID) without
-	 * needing to re-call `#syncAgentSessionId()` on every such event.
-	 */
-	#syncAgentSessionId(sessionId?: string): void {
-		const sid = this.#activeProviderSessionId(sessionId);
-		this.agent.sessionId = sid;
-		this.agent.setMetadataResolver((provider: string) =>
-			buildSessionMetadata(sid, provider, this.#modelRegistry.authStorage),
-		);
+		return this.#providerSessions.cacheKeyDiscards();
 	}
 
 	/**
@@ -4114,7 +4053,7 @@ export class AgentSession {
 		// beginDispose() stopped the advisor and captured its recorder close; await
 		// it so the final advisor turn is flushed before the process may exit.
 		await this.#advisorRoster.whenRecordersClosed();
-		this.#closeAllProviderSessions("dispose");
+		this.#providerSessions.closeAll("dispose");
 		// Release this session's hold on the MCP manager. The last top-level holder
 		// disconnects it, so its stdio servers are not orphaned at exit and a
 		// conversation that outlives this one keeps them. Best-effort: a failure
@@ -4161,29 +4100,13 @@ export class AgentSession {
 		this.#eventListeners = [];
 	}
 
-	#closeAllProviderSessions(reason: string): void {
-		for (const [providerKey, state] of this.#providerSessionState) {
-			try {
-				state.close();
-			} catch (error) {
-				logger.warn("Failed to close provider session state", {
-					providerKey,
-					reason,
-					error: errorMessage(error),
-				});
-			}
-		}
-
-		this.#providerSessionState.clear();
-	}
-
 	freshSession(): FreshSessionResult | undefined {
 		if (this.isStreaming) return undefined;
 		const previousSessionId = this.sessionId;
-		const closedProviderSessions = this.#providerSessionState.size;
-		this.#closeAllProviderSessions("fresh session");
-		this.#freshProviderSessionId = Bun.randomUUIDv7();
-		this.#syncAgentSessionId();
+		const closedProviderSessions = this.#providerSessions.states.size;
+		this.#providerSessions.closeAll("fresh session");
+		this.#providerSessions.freshId = Bun.randomUUIDv7();
+		this.#providerSessions.sync();
 		this.#memory.rekey();
 		this.agent.appendOnlyContext?.invalidateForModelChange();
 		return {
@@ -4839,7 +4762,7 @@ export class AgentSession {
 			const signature = this.#computeAppliedToolSignature(validToolNames, tools);
 			if (signature !== this.#lastAppliedToolSignature) {
 				if (this.#lastAppliedToolSignature !== undefined) {
-					this.#clearInheritedProviderPromptCacheKey("tool-signature-change");
+					this.#providerSessions.clearInheritedCacheKey("tool-signature-change");
 				}
 				const built = await this.#rebuildSystemPrompt(validToolNames, this.#toolRegistry);
 				this.#baseSystemPrompt = built.systemPrompt;
@@ -4970,7 +4893,7 @@ export class AgentSession {
 			previousBaseSystemPrompt.length !== this.#baseSystemPrompt.length ||
 			previousBaseSystemPrompt.some((part, index) => part !== this.#baseSystemPrompt[index])
 		) {
-			this.#clearInheritedProviderPromptCacheKey("system-prompt-change");
+			this.#providerSessions.clearInheritedCacheKey("system-prompt-change");
 			// Changing the system prompt mid-session invalidates the provider's
 			// prefix cache, and the next request re-reads the ENTIRE context as
 			// fresh input. That is the most expensive thing a session can do
@@ -5430,7 +5353,7 @@ export class AgentSession {
 
 	/** Current session ID */
 	get sessionId(): string {
-		return this.#activeProviderSessionId();
+		return this.#providerSessions.activeId();
 	}
 	getEvalSessionId(): string | null {
 		if (this.#parentEvalSessionId !== undefined) return this.#parentEvalSessionId;
@@ -7248,7 +7171,7 @@ export class AgentSession {
 		this.#disconnectFromAgent();
 		await this.abort();
 		this.#cancelOwnAsyncJobs();
-		this.#closeAllProviderSessions("new session");
+		this.#providerSessions.closeAll("new session");
 		this.agent.reset();
 		if (options?.drop && previousSessionFile) {
 			// Detach the advisor recorder feed and drain its writer BEFORE deleting the
@@ -7272,9 +7195,9 @@ export class AgentSession {
 
 		this.#checkpoint.clear();
 		this.setTodoPhases([]);
-		this.#freshProviderSessionId = undefined;
-		this.#clearInheritedProviderPromptCacheKey("new-session");
-		this.#syncAgentSessionId();
+		this.#providerSessions.freshId = undefined;
+		this.#providerSessions.clearInheritedCacheKey("new-session");
+		this.#providerSessions.sync();
 		this.#memory.rekey();
 		this.#resetMemoryContextForNewTranscript();
 		this.#pendingNextTurnMessages = [];
@@ -7365,9 +7288,9 @@ export class AgentSession {
 		}
 
 		// Update agent session ID
-		this.#freshProviderSessionId = undefined;
-		this.#adoptInheritedProviderPromptCacheKey();
-		this.#syncAgentSessionId();
+		this.#providerSessions.freshId = undefined;
+		this.#providerSessions.adoptInheritedCacheKey();
+		this.#providerSessions.sync();
 		this.#memory.rekey();
 		this.#resetMemoryContextForNewTranscript();
 
@@ -7740,7 +7663,7 @@ export class AgentSession {
 		// Re-arming Anthropic priority clears the per-session fast-mode auto-disable
 		// so the next request actually carries `speed: "fast"` again.
 		if (next.anthropic === "priority" && this.#serviceTierByFamily.anthropic !== "priority") {
-			clearAnthropicFastModeFallback(this.#providerSessionState);
+			clearAnthropicFastModeFallback(this.#providerSessions.states);
 		}
 		this.#serviceTierByFamily = next;
 		this.sessionManager.appendServiceTierChange(this.#serviceTierEntry());
@@ -7859,7 +7782,7 @@ export class AgentSession {
 		const sessionContext = this.buildDisplaySessionContext();
 		this.agent.replaceMessages(sessionContext.messages);
 		this.#resetAllAdvisorRuntimes();
-		this.#closeCodexProviderSessionsForHistoryRewrite();
+		this.#providerSessions.closeCodexForHistoryRewrite(this.model);
 		this.#context.markHistoryRewritten();
 	}
 
@@ -8345,8 +8268,8 @@ export class AgentSession {
 			const preservedFollowUp = this.agent.peekFollowUpQueue().slice();
 			this.agent.reset();
 			this.agent.replaceQueues(preservedSteering, preservedFollowUp);
-			this.#freshProviderSessionId = undefined;
-			this.#syncAgentSessionId();
+			this.#providerSessions.freshId = undefined;
+			this.#providerSessions.sync();
 			this.#memory.rekey();
 			this.#resetMemoryContextForNewTranscript();
 			this.#pendingNextTurnMessages = [];
@@ -9253,7 +9176,7 @@ export class AgentSession {
 		this.agent.replaceMessages(activeMessages ?? sessionContext.messages);
 		this.#advisorRoster.resetSessionState();
 		this.#todo.syncFromBranch();
-		this.#closeCodexProviderSessionsForHistoryRewrite();
+		this.#providerSessions.closeCodexForHistoryRewrite(this.model);
 		this.#checkpoint.finish();
 	}
 
@@ -9389,37 +9312,15 @@ export class AgentSession {
 	#setModelWithProviderSessionReset(model: Model): void {
 		const currentModel = this.model;
 		if (currentModel) {
-			this.#closeProviderSessionsForModelSwitch(currentModel, model);
+			this.#providerSessions.closeForModelSwitch(currentModel, model);
 			if (!modelsAreEqual(currentModel, model)) {
-				this.#clearInheritedProviderPromptCacheKey("model-change");
+				this.#providerSessions.clearInheritedCacheKey("model-change");
 			}
 		}
 		this.agent.setModel(model);
 
 		// Re-evaluate append-only context mode — provider or setting may have changed
 		this.#syncAppendOnlyContext(model);
-	}
-
-	#closeCodexProviderSessionsForHistoryRewrite(): void {
-		const currentModel = this.model;
-		if (currentModel?.api !== "openai-codex-responses") return;
-		this.#closeProviderSessionsForModelSwitch(currentModel, currentModel);
-	}
-
-	#resetCurrentResponsesProviderSession(reason: string): void {
-		const currentModel = this.model;
-		if (currentModel?.api !== "openai-responses" && currentModel?.api !== "openai-codex-responses") {
-			return;
-		}
-
-		this.#closeProviderSessionsForModelSwitch(currentModel, currentModel);
-		this.agent.appendOnlyContext?.invalidateForModelChange();
-		logger.debug("Reset Responses provider session after stale replay error", {
-			provider: currentModel.provider,
-			model: currentModel.id,
-			api: currentModel.api,
-			reason,
-		});
 	}
 
 	/**
@@ -9442,65 +9343,6 @@ export class AgentSession {
 			this.agent.appendOnlyContext.invalidateForModelChange();
 		} else if (!enable && this.agent.appendOnlyContext) {
 			this.agent.setAppendOnlyContext(undefined);
-		}
-	}
-
-	#closeProviderSessionsForModelSwitch(currentModel: Model, nextModel: Model): void {
-		const providerKeys = new Set<string>();
-		if (currentModel.api === "openai-codex-responses" || nextModel.api === "openai-codex-responses") {
-			providerKeys.add("openai-codex-responses");
-		}
-		if (currentModel.api === "openai-responses") {
-			providerKeys.add(`openai-responses:${currentModel.provider}`);
-		}
-		if (nextModel.api === "openai-responses") {
-			providerKeys.add(`openai-responses:${nextModel.provider}`);
-		}
-
-		// `openai-completions` sessions are keyed `openai-completions:<provider>:<resolvedBaseUrl>:<modelId>`
-		// and cache backend-specific decisions (strict-tools disable scopes, reasoning-effort
-		// fallbacks). The resolved request base URL can differ from the catalog `model.baseUrl`
-		// (Moonshot env override, Alibaba Coding Plan enterprise URL, Azure deployment URL),
-		// so evict by provider prefix when the user moves away from that completions backend.
-		let completionsPrefixToEvict: string | undefined;
-		if (currentModel.api === "openai-completions") {
-			const currentScope = `${currentModel.provider}:${currentModel.baseUrl ?? ""}`;
-			const nextScope =
-				nextModel.api === "openai-completions" ? `${nextModel.provider}:${nextModel.baseUrl ?? ""}` : undefined;
-			if (currentScope !== nextScope) {
-				completionsPrefixToEvict = `openai-completions:${currentModel.provider}:`;
-			}
-		}
-
-		for (const providerKey of providerKeys) {
-			const state = this.#providerSessionState.get(providerKey);
-			if (!state) continue;
-
-			try {
-				state.close();
-			} catch (error) {
-				logger.warn("Failed to close provider session state during model switch", {
-					providerKey,
-					error: errorMessage(error),
-				});
-			}
-
-			this.#providerSessionState.delete(providerKey);
-		}
-
-		if (completionsPrefixToEvict !== undefined) {
-			for (const [key, state] of this.#providerSessionState) {
-				if (!key.startsWith(completionsPrefixToEvict)) continue;
-				try {
-					state.close();
-				} catch (error) {
-					logger.warn("Failed to close provider session state during model switch", {
-						providerKey: key,
-						error: errorMessage(error),
-					});
-				}
-				this.#providerSessionState.delete(key);
-			}
 		}
 	}
 
@@ -10075,7 +9917,7 @@ export class AgentSession {
 				sessionId: `${cacheSessionId}:side:${Snowflake.next()}`,
 				promptCacheKey: ephemeralPromptCacheKey,
 				preferWebsockets: this.#preferWebsockets,
-				providerSessionState: this.#providerSessionState,
+				providerSessionState: this.#providerSessions.states,
 				reasoning: toReasoningEffort(this.thinkingLevel),
 				disableReasoning: shouldDisableReasoning(this.thinkingLevel),
 				hideThinkingSummary: this.agent.hideThinkingSummary,
@@ -10298,9 +10140,9 @@ export class AgentSession {
 		const previousTools = [...this.agent.state.tools];
 		const previousBaseSystemPrompt = this.#baseSystemPrompt;
 		const previousSystemPrompt = this.agent.state.systemPrompt;
-		const previousFreshProviderSessionId = this.#freshProviderSessionId;
-		const previousInheritedProviderPromptCacheKey = this.#inheritedProviderPromptCacheKey;
-		// `#inheritedProviderPromptCacheKey` only mirrors what the agent routes on;
+		const previousFreshProviderSessionId = this.#providerSessions.freshId;
+		const previousInheritedProviderPromptCacheKey = this.#providerSessions.inheritedCacheKey;
+		// The inherited key only mirrors what the agent routes on;
 		// the value that actually reaches the wire is `agent.promptCacheKey`. The
 		// try block rewrites BOTH (clear + adopt the target header's identity), so
 		// restoring only the mirror leaves a failed switch sending the target
@@ -10351,11 +10193,11 @@ export class AgentSession {
 			}
 
 			if (switchingToDifferentSession) {
-				this.#freshProviderSessionId = undefined;
-				this.#clearInheritedProviderPromptCacheKey("session-switch");
-				this.#adoptInheritedProviderPromptCacheKey();
+				this.#providerSessions.freshId = undefined;
+				this.#providerSessions.clearInheritedCacheKey("session-switch");
+				this.#providerSessions.adoptInheritedCacheKey();
 			}
-			this.#syncAgentSessionId();
+			this.#providerSessions.sync();
 			this.#memory.rekey();
 
 			let sessionContext = this.buildDisplaySessionContext();
@@ -10383,9 +10225,9 @@ export class AgentSession {
 			// board this session no longer holds.
 			this.#todo.resetForNewContext();
 			if (switchingToDifferentSession) {
-				this.#closeAllProviderSessions("session switch");
+				this.#providerSessions.closeAll("session switch");
 			} else if (didReloadConversationChange) {
-				this.#closeAllProviderSessions("session reload");
+				this.#providerSessions.closeAll("session reload");
 			}
 
 			// Restore model if saved
@@ -10495,8 +10337,8 @@ export class AgentSession {
 				}
 			}
 
-			this.#freshProviderSessionId = previousFreshProviderSessionId;
-			this.#syncAgentSessionId(previousSessionState.sessionId);
+			this.#providerSessions.freshId = previousFreshProviderSessionId;
+			this.#providerSessions.sync(previousSessionState.sessionId);
 			this.#memory.rekey();
 			let restoreMcpError: unknown;
 			try {
@@ -10526,8 +10368,7 @@ export class AgentSession {
 			this.agent.replaceQueues(previousSteeringMessages, previousFollowUpMessages);
 			this.#pendingNextTurnMessages = previousPendingNextTurnMessages;
 			this.#scheduledHiddenNextTurnGeneration = previousScheduledHiddenNextTurnGeneration;
-			this.#inheritedProviderPromptCacheKey = previousInheritedProviderPromptCacheKey;
-			this.agent.promptCacheKey = previousAgentPromptCacheKey;
+			this.#providerSessions.restoreCacheKeys(previousInheritedProviderPromptCacheKey, previousAgentPromptCacheKey);
 			this.#checkpoint.restore(previousCheckpoint);
 			if (previousModel) {
 				this.agent.setModel(previousModel);
@@ -10606,14 +10447,14 @@ export class AgentSession {
 		}
 		this.#checkpoint.rehydrate(this.sessionManager.getBranch());
 		this.#todo.syncFromBranch();
-		this.#freshProviderSessionId = undefined;
+		this.#providerSessions.freshId = undefined;
 		// A branch retains a genuine prefix of the source transcript, so the source
 		// cache identity stays valid: `createBranchedSession` seeds it onto the new
 		// header and this adopts it. No discard is recorded because nothing is
 		// discarded — the retained prefix keeps reading the cache the source
 		// populated instead of cold-missing every token of it.
-		this.#adoptInheritedProviderPromptCacheKey();
-		this.#syncAgentSessionId();
+		this.#providerSessions.adoptInheritedCacheKey();
+		this.#providerSessions.sync();
 		this.#memory.rekey();
 		this.#resetMemoryContextForNewTranscript();
 
@@ -10633,7 +10474,7 @@ export class AgentSession {
 		if (!skipConversationRestore) {
 			this.agent.replaceMessages(sessionContext.messages);
 			this.#advisorRoster.resetSessionState();
-			this.#closeCodexProviderSessionsForHistoryRewrite();
+			this.#providerSessions.closeCodexForHistoryRewrite(this.model);
 		}
 
 		return { selectedText, cancelled: false };
@@ -10705,13 +10546,13 @@ export class AgentSession {
 		});
 		this.sessionManager.appendMessage(sanitizeAssistantForReparentedHistory(assistantMessage));
 		this.#todo.syncFromBranch();
-		this.#freshProviderSessionId = undefined;
+		this.#providerSessions.freshId = undefined;
 		// `/btw` branches at the live leaf, so the entire retained prefix is
 		// byte-identical to what the source session just cached. Adopt the branch
 		// header's inherited cache identity instead of routing the next turn under
 		// the freshly minted session id, which would cold-miss the whole transcript.
-		this.#adoptInheritedProviderPromptCacheKey();
-		this.#syncAgentSessionId();
+		this.#providerSessions.adoptInheritedCacheKey();
+		this.#providerSessions.sync();
 		this.#memory.rekey();
 		this.#resetMemoryContextForNewTranscript();
 
@@ -10727,7 +10568,7 @@ export class AgentSession {
 
 		this.agent.replaceMessages(sessionContext.messages);
 		this.#advisorRoster.resetSessionState();
-		this.#closeCodexProviderSessionsForHistoryRewrite();
+		this.#providerSessions.closeCodexForHistoryRewrite(this.model);
 
 		return { cancelled: false, sessionFile: this.sessionFile };
 	}
@@ -10915,7 +10756,7 @@ export class AgentSession {
 		this.#checkpoint.rehydrate(this.sessionManager.getBranch());
 		this.#advisorRoster.resetSessionState();
 		this.#todo.syncFromBranch();
-		this.#closeCodexProviderSessionsForHistoryRewrite();
+		this.#providerSessions.closeCodexForHistoryRewrite(this.model);
 
 		this.#branchSummaryAbortController = undefined;
 
