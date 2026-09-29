@@ -998,14 +998,28 @@ function psValueEntry(v: ValueSource): string {
 	return `@{ Kind = ${psQuote(v.kind)}; Values = ${psArray(values)}; Multiple = $${multiple} }`;
 }
 
-/** `'--name' = @{ … }` entries for every flag, long form and short char alike. */
+/**
+ * Entries for a flag table, formatted as pairs passed to `__Veyyon-FlagTable`.
+ *
+ * PowerShell `@{}` literals use case-insensitive keys (DuplicateKeyInHashLiteral),
+ * so flags that differ only in casing (e.g. `grep`'s `-c` for count and `-C` for
+ * context) throw a ParserError when the completion script is dot-sourced.
+ * Flag tables are emitted via `__Veyyon-FlagTable`, which constructs an ordinal
+ * case-sensitive Hashtable.
+ */
 function psFlagTable(flags: CompletionFlag[], indent: string): string {
-	const lines: string[] = [];
+	if (flags.length === 0) {
+		return "(__Veyyon-FlagTable @())";
+	}
+	const lines: string[] = ["(__Veyyon-FlagTable @("];
+	const pairs: string[] = [];
 	for (const f of flags) {
 		const entry = `@{ Desc = ${psDesc(f.description)}; Value = ${psValueEntry(f.value)} }`;
-		lines.push(`${indent}${psQuote(`--${f.name}`)} = ${entry}`);
-		if (f.char) lines.push(`${indent}${psQuote(`-${f.char}`)} = ${entry}`);
+		pairs.push(`${indent}\t${psQuote(`--${f.name}`)}, ${entry}`);
+		if (f.char) pairs.push(`${indent}\t${psQuote(`-${f.char}`)}, ${entry}`);
 	}
+	lines.push(pairs.join(",\n"));
+	lines.push(`${indent}))`);
 	return lines.join("\n");
 }
 
@@ -1034,6 +1048,18 @@ function generatePowerShell(spec: CompletionSpec): string {
 	lines.push(`# Dot-source this from your $PROFILE, or write it to a file and dot-source that.`);
 	lines.push("");
 
+	lines.push("function global:__Veyyon-FlagTable {");
+	lines.push("\t$h = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)");
+	lines.push(
+		"\t$entries = if ($args.Count -eq 1 -and $args[0] -is [System.Collections.IList]) { $args[0] } else { $args }",
+	);
+	lines.push("\tfor ($i = 0; $i -lt $entries.Count; $i += 2) {");
+	lines.push("\t\t$h[$entries[$i]] = $entries[$i+1]");
+	lines.push("\t}");
+	lines.push("\treturn $h");
+	lines.push("}");
+	lines.push("");
+
 	lines.push("$global:__veyyonCommands = @{");
 	for (const c of spec.commands) {
 		for (const token of commandTokens(c)) {
@@ -1043,17 +1069,13 @@ function generatePowerShell(spec: CompletionSpec): string {
 	lines.push("}");
 	lines.push("");
 
-	lines.push("$global:__veyyonRootFlags = @{");
-	lines.push(psFlagTable(spec.root.flags, "\t"));
-	lines.push("}");
+	lines.push(`$global:__veyyonRootFlags = ${psFlagTable(spec.root.flags, "")}`);
 	lines.push("");
 
 	lines.push("$global:__veyyonCommandFlags = @{");
 	for (const c of spec.commands) {
 		for (const token of commandTokens(c)) {
-			lines.push(`\t${psQuote(token)} = @{`);
-			lines.push(psFlagTable(c.flags, "\t\t"));
-			lines.push("\t}");
+			lines.push(`\t${psQuote(token)} = ${psFlagTable(c.flags, "\t")}`);
 		}
 	}
 	lines.push("}");
@@ -1205,14 +1227,14 @@ $global:__veyyonCompleter = {
 		if (-not $sub -and $__veyyonCommands.ContainsKey($t)) { $sub = $t }
 	}
 
-	$flags = @{}
+	$flags = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
 	foreach ($k in $__veyyonRootFlags.Keys) { $flags[$k] = $__veyyonRootFlags[$k] }
 	if ($sub -and $__veyyonCommandFlags.ContainsKey($sub)) {
 		foreach ($k in $__veyyonCommandFlags[$sub].Keys) { $flags[$k] = $__veyyonCommandFlags[$sub][$k] }
 	}
 
 	$candidates = @()
-	$tooltips = @{}
+	$tooltips = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
 
 	if ($prev -and $flags.ContainsKey($prev) -and $flags[$prev].Value.Kind -ne 'flag') {
 		$candidates = __Veyyon-ValueCandidates $flags[$prev].Value $wordToComplete $prev
