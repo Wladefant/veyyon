@@ -3,7 +3,13 @@
  * produced, and reading exhausted windows and reset times out of a report's limits.
  */
 
-import type { CredentialRankingContext, CredentialRankingStrategy, UsageLimit, UsageReport } from "../usage";
+import {
+	type CredentialRankingContext,
+	type CredentialRankingStrategy,
+	providerSharesProjectAcrossAccounts,
+	type UsageLimit,
+	type UsageReport,
+} from "../usage";
 
 export function getUsageReportMetadataValue(report: UsageReport, key: string): string | undefined {
 	const metadata = report.metadata;
@@ -58,10 +64,6 @@ export function getUsageReportIdentifiers(report: UsageReport): string[] {
 	if (report.provider === "openai-codex") {
 		return identifiers.map(identifier => `${report.provider}:${identifier.toLowerCase()}`);
 	}
-	const projectId = getUsageReportMetadataValue(report, "projectId") ?? getUsageReportScopeProjectId(report);
-	// Only add project as a fallback when no email is available — two users
-	// with different emails on the same GCP project must not merge.
-	if (projectId && !email) identifiers.push(`project:${projectId}`);
 	const accountId = getUsageReportMetadataValue(report, "accountId");
 	if (accountId) identifiers.push(`account:${accountId}`);
 	const account = getUsageReportMetadataValue(report, "account");
@@ -72,6 +74,14 @@ export function getUsageReportIdentifiers(report: UsageReport): string[] {
 	if (username) identifiers.push(`account:${username}`);
 	const scopeAccountId = getUsageReportScopeAccountId(report);
 	if (scopeAccountId) identifiers.push(`account:${scopeAccountId}`);
+	// The project is the LAST resort, used only when nothing names the account: two users with
+	// different emails or account ids on one GCP project must not merge. Where every account sits on
+	// one shared project (Antigravity's `aicode-consumers`) it never identifies anyone, and a report
+	// that names no account stays its own group rather than absorbing a sibling's limits.
+	if (identifiers.length === 0 && !providerSharesProjectAcrossAccounts(report.provider)) {
+		const projectId = getUsageReportMetadataValue(report, "projectId") ?? getUsageReportScopeProjectId(report);
+		if (projectId) identifiers.push(`project:${projectId}`);
+	}
 	return identifiers.map(identifier => `${report.provider}:${identifier.toLowerCase()}`);
 }
 

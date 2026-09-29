@@ -170,6 +170,10 @@ export function resolveProviderCredentialIdentityKey(provider: string, identifie
 	const accountIdentifier = identifiers.find(identifier => identifier.startsWith("account:"));
 	if (accountIdentifier) return accountIdentifier;
 	if (emailIdentifier) return emailIdentifier;
+	// Antigravity accounts all share one project id (`providerSharesProjectAcrossAccounts` in `usage.ts`; this
+	// module stays free of that import, see credential-store-is-not-the-oauth-machinery). Keying on it would
+	// collapse (and delete) every account after the first.
+	if (provider === "google-antigravity") return null;
 	const projectIdentifier = identifiers.find(identifier => identifier.startsWith("project:"));
 	if (projectIdentifier) return projectIdentifier;
 	return null;

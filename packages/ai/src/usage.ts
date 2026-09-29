@@ -49,6 +49,26 @@ export interface UsageScope {
 	shared?: boolean;
 }
 
+/**
+ * How a limit is worded and drawn, for providers whose own app words it differently from the
+ * default "percent used" bar. Absent means the default.
+ */
+export interface UsageLimitDisplay {
+	/** Draw and word the limit as what is LEFT (`8% left`), the way the provider's own app does. */
+	remaining?: true;
+	/** The limit does not apply right now (a 5-hour meter under an exhausted weekly one): no bar, no percent. */
+	inapplicable?: true;
+}
+
+/**
+ * Providers whose accounts all sit on one shared GCP project, so the project id says nothing about
+ * WHICH account a limit or report belongs to. An identity fallback on the project would attribute
+ * one account's quota to every sibling.
+ */
+export function providerSharesProjectAcrossAccounts(provider: string): boolean {
+	return provider === "google-antigravity";
+}
+
 /** Normalized limit entry for a single window or quota bucket. */
 export interface UsageLimit {
 	/** Stable identifier for this limit entry. */
@@ -60,6 +80,8 @@ export interface UsageLimit {
 	amount: UsageAmount;
 	status?: UsageStatus;
 	notes?: string[];
+	/** Wording and drawing hints for providers whose own app differs from the default. */
+	display?: UsageLimitDisplay;
 }
 
 /**

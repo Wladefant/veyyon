@@ -47,7 +47,10 @@ import {
 	applyUsageReports,
 	buildAccountInventory,
 } from "@veyyon/coding-agent/session/account-inventory";
-import { USAGE_WINDOW_LABEL_MAX } from "@veyyon/coding-agent/slash-commands/helpers/format";
+import {
+	USAGE_WINDOW_LABEL_MAX,
+	USAGE_WINDOW_LABEL_MAX_WORDED,
+} from "@veyyon/coding-agent/slash-commands/helpers/format";
 import type { FetchImpl } from "@veyyon/utils";
 import { visibleWidth } from "@veyyon/utils/width";
 import { useIsolatedAgentDir } from "../helpers/isolated-agent-dir";
@@ -186,8 +189,8 @@ const PROVIDER_CASES: Record<string, ProviderCase> = {
 				},
 			],
 		],
-		labels: ["Daily · Anthropic", "Daily · Google", "Weekly · Google"],
-		barColumn: 18,
+		labels: ["Daily · Claude and GPT models", "Daily · Gemini Models", "Weekly limit · Gemini Models"],
+		barColumn: 30,
 	},
 	"google-gemini-cli": {
 		credential: {
@@ -516,12 +519,14 @@ describe("every usage window a provider reports is rendered", () => {
 			const expectedColumn = providerCase.barColumn;
 			if (expectedColumn === undefined) throw new Error(`no recorded bar column for ${provider.id}`);
 			expect(barColumnOf(lines[0] ?? "")).toBe(expectedColumn);
-			expect(expectedColumn).toBeLessThanOrEqual(USAGE_WINDOW_LABEL_MAX + 1);
+			// A provider that words its own windows (`display`) may use the wider clip; nobody else may.
+			const labelMax = row.usage.some(window => window.display)
+				? USAGE_WINDOW_LABEL_MAX_WORDED
+				: USAGE_WINDOW_LABEL_MAX;
+			expect(expectedColumn).toBeLessThanOrEqual(labelMax + 1);
 			// The label column never eats the bar, and no two rows render identically.
 			for (const line of lines) {
-				expect(visibleWidth(line.slice(0, barColumnOf(line)).trimEnd())).toBeLessThanOrEqual(
-					USAGE_WINDOW_LABEL_MAX,
-				);
+				expect(visibleWidth(line.slice(0, barColumnOf(line)).trimEnd())).toBeLessThanOrEqual(labelMax);
 			}
 			expect(new Set(lines).size).toBe(lines.length);
 		});
