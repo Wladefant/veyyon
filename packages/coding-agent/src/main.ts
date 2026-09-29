@@ -36,6 +36,7 @@ import {
 	setProjectDir,
 	VERSION,
 } from "@veyyon/utils";
+import { IdleTrim } from "@veyyon/utils/idle-trim";
 import chalk from "chalk";
 import {
 	type Args,
@@ -372,6 +373,9 @@ function pauseStartupWatchdog(): void {
 function resumeStartupWatchdog(): void {
 	if (startupWatchdogActive) armStartupWatchdog();
 }
+
+/** Releases compiled code and free pages once a root command has been quiet; see `IdleTrim`. */
+const idleTrim = new IdleTrim();
 
 export interface InteractiveModeNotify {
 	kind: "warn" | "error" | "info";
@@ -1428,13 +1432,22 @@ export async function runRootCommand(
 ): Promise<void> {
 	logger.startTiming();
 	startStartupWatchdog();
+	// Every mode runner is reached from here, so the trim covers each of them without per-mode
+	// wiring. Startup keeps the process busy, so nothing is trimmed before the first idle stretch.
+	idleTrim.start();
 	try {
 		await runRootCommandInner(parsed, rawArgs, deps);
 	} finally {
 		// A throw or early return before a mode handoff must not leak the
 		// watchdog interval into embedders or long-lived test processes.
 		stopStartupWatchdog();
+		idleTrim.stop();
 	}
+}
+
+/** True while the idle trim samples the process. Test observability only. */
+export function __idleTrimRunningForTests(): boolean {
+	return idleTrim.running;
 }
 
 /** True while the startup watchdog interval is armed. Test observability only. */

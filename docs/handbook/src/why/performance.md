@@ -20,6 +20,10 @@ Off-window boundary rows in a diff or a read window (the enclosing header, the m
 
 Entries append to the session JSONL through an open writer. Compaction, elision, a title change and a recovered write fault republish the whole file instead. The body is produced in chunks of about a megabyte and written chunk by chunk, so the transient copy is bounded by the chunk rather than by the transcript. A republish reads the file back first only when what is at the path is no longer the file this session published, compared by inode and by length: a second window writing the same transcript changes both, and reading it back is what keeps its entries. Republishing a 253MiB transcript of 118,000 entries costs 509ms, 44MiB of peak resident memory above the session, and no single pause longer than 3ms, on a Ryzen 9 9950X.
 
+## Idle memory
+
+A process that uses under 5% CPU in every 5-second window for 30 seconds calls `Bun.shrink()`. JavaScriptCore discards the compiled code of every function, runs a full collection and returns free pages to the operating system. A function that runs again is compiled again from source. The process trims again only after a window over 5% CPU. After eight turns of an interactive session, resident memory at idle drops from 361MiB to 332MiB, and the next turn takes 37ms longer, on a Ryzen 9 9950X. Implementation: `packages/utils/src/idle-trim.ts`.
+
 ## Runtime architecture
 
 The CLI, TUI, and session loop run as TypeScript on Bun. Native grep, PTY handling, shell support, and tree-sitter parsing execute via native addons. Rust crates provide glob matching, grep orchestration, key normalization, text indexing, diffing, and directory walking. Token streaming renders output incrementally as chunks arrive from provider streams.
