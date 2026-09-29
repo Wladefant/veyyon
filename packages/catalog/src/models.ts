@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import * as path from "node:path";
 import { buildModel } from "./build";
 import type { ModelReferenceCandidate } from "./identity/reference";
-import modelsSourceJson from "./models.json" with { type: "text" };
+import modelsJsonAsset from "./models.json" with { type: "file" };
 import type { Api, Model, ModelSpec, Usage } from "./types";
 
 /**
@@ -15,7 +17,7 @@ import type { Api, Model, ModelSpec, Usage } from "./types";
 
 /**
  * Shape of the generated `models.json`, declared independently of the import:
- * the source arrives as text so its bytes can feed the snapshot fingerprint,
+ * the catalog arrives as a file so its bytes can feed the snapshot fingerprint,
  * and parsing waits until a consumer actually builds the registry (a snapshot
  * hit never parses the catalog at all).
  */
@@ -24,10 +26,12 @@ type BundledModelsJson = { readonly [provider: string]: BundledProviderModels };
 
 export type GeneratedProvider = Extract<keyof BundledModelsJson, string>;
 
-// The json import resolves through the file itself rather than a sibling
-// declaration, so its value arrives typed as the literal document; one cast
-// pins it to the text this module treats it as.
-const modelsSource = modelsSourceJson as unknown as string;
+// A file import resolves to a path: absolute in a source checkout, under
+// `/$bunfs/` in a compiled binary, and relative to the bundle in `dist/cli.js`.
+// The catalog is read when a consumer needs it and released after, where a
+// text import holds the 2.2 MB document on the heap for the life of the process.
+// The json import is typed as the literal document; one cast pins it to the path.
+const modelsPath = path.resolve(import.meta.dirname, modelsJsonAsset as unknown as string);
 
 /**
  * Persisted enriched-registry snapshot format. The snapshot stores RESOLVED
@@ -66,7 +70,7 @@ export function setEnrichedRegistrySnapshotStore(store: EnrichedRegistrySnapshot
  * it into their fingerprints so a catalog regeneration invalidates them.
  */
 export function bundledCatalogDigest(): string {
-	catalogDigest ??= createHash("sha256").update(modelsSource).digest("hex");
+	catalogDigest ??= createHash("sha256").update(readFileSync(modelsPath)).digest("hex");
 	return catalogDigest;
 }
 
@@ -76,7 +80,7 @@ export function enrichedRegistryFingerprint(): string {
 }
 
 function getParsedModels(): BundledModelsJson {
-	parsedModels ??= JSON.parse(modelsSource) as BundledModelsJson;
+	parsedModels ??= JSON.parse(readFileSync(modelsPath, "utf8")) as BundledModelsJson;
 	return parsedModels;
 }
 

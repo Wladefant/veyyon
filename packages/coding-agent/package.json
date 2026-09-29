@@ -119,6 +119,7 @@
   "files": [
     "src",
     "dist/cli.js",
+    "dist/models.json",
     "dist/*.node",
     "scripts",
     "examples",
