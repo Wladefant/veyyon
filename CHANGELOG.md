@@ -163,6 +163,7 @@
 
 ### Fixed
 
+- An agent spawned by another agent, and an agent revived from its transcript, reports its start, progress and finish on the top-level session's event bus, so the agent dashboard, the RPC agent stream and collab guests show agents at depth 2 and below instead of nothing.
 - `--profile <name> --resume <id>` for a session another profile wrote forks it into `<name>` at its recorded working directory and leaves the source unchanged, instead of appending to the other profile's transcript under `<name>`'s settings and credentials.
 - `/resume <id>` for a session another profile wrote relaunches Veyyon in that profile instead of opening the transcript under the running profile.
 - `veyyon --resume <id>` naming a subagent transcript nested inside a session's directory activates the profile that wrote it instead of forking it into the profile the launch started in.
