@@ -523,6 +523,16 @@ export async function runCli(argv: string[]): Promise<void> {
 		process.exitCode = EXIT_USAGE;
 		return;
 	}
+	if (isProcessEntry && resolved.argv[0] === "launch") {
+		// Deferred import: loading supervisor at module load would evaluate its
+		// dependency graph before setProfile() runs, breaking profile selection.
+		const { shouldSuperviseLaunch, superviseProcess } = await import("./supervisor/process");
+		if (shouldSuperviseLaunch(resolved.argv.slice(1))) {
+			const { exitCode } = await superviseProcess();
+			process.exitCode = exitCode;
+			return;
+		}
+	}
 	return logger.time("cliRun", run, {
 		bin: APP_NAME,
 		version: BUILD_TAG ? `${VERSION} (${BUILD_TAG})` : VERSION,

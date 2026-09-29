@@ -10,6 +10,7 @@
 - `api.listWorkers()` and `api.steerWorker()` expose an extension's own live workers and targeted steering, scoped to the conversation the extension is loaded in ([#38](https://github.com/Wladefant/veyyon/issues/38)).
 - Sessions preserve concurrent in-flight tool calls independently and commit abandoned-call reports to the normal dated log before removing crash evidence ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 - A session that dies below JavaScript outside a tool call is now reported on the next launch as `Previous session died silently`, with the phase it was in (`provider`, `tool`, `compaction`, `idle`), its session id, and the count of busy spawned lanes ([#73](https://github.com/Wladefant/veyyon/issues/73)).
+- Interactive launches now run under a direct parent supervisor that records retained heartbeat context and the real child exit status immediately after a silent death; `veyyon supervisor dumps` provides reversible, opt-in Windows LocalDumps configuration for `veyyon.exe` and `bun.exe` ([#100](https://github.com/Wladefant/veyyon/issues/100)).
 
 ### Changed
 
