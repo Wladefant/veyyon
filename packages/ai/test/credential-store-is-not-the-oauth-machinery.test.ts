@@ -117,8 +117,15 @@ const ROWS_CEILING = 8;
  * owns `exponentialBackoffDelay`. This store's open retry and `@veyyon/utils/fetch-retry`, both already on
  * this reach, computed their doubling inline and now take it from that owner. The leaf imports nothing,
  * so this closure gained a name and no edge.
+ *
+ * RE-MEASURED 2026-09-29 at 47. The one new module is `shared-project-providers.ts`, a zero-import leaf
+ * that owns which providers' accounts share one project id. The credential row helpers read it so an
+ * Antigravity login naming no account is never keyed on the shared project (which collapsed every
+ * account after the first into one row), and `usage.ts` re-exports it for the usage surfaces. It replaces
+ * a second hand-synced copy of the same membership. The leaf imports nothing, so this closure gained a
+ * name and no edge.
  */
-const STORE_CEILING = 46;
+const STORE_CEILING = 47;
 
 describe("the row helpers are pure", () => {
 	/**
@@ -162,12 +169,13 @@ describe("the row helpers are pure", () => {
 	 * drift returns `undefined` and a valid token reads as one carrying no account. One leaf module is the
 	 * price of that not being possible.
 	 */
-	it("imports three utils owners and one wire leaf at runtime", () => {
+	it("imports three utils owners, one wire leaf and one membership leaf at runtime", () => {
 		expect(runtimeImportsOf("auth-credential-rows.ts")).toEqual([
 			"@veyyon/catalog/wire/codex",
 			"@veyyon/utils/json",
 			"@veyyon/utils/jwt",
 			"@veyyon/utils/type-guards",
+			"./shared-project-providers",
 		]);
 	});
 });

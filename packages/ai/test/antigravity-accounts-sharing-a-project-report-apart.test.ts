@@ -20,6 +20,7 @@ import {
 	AuthStorage,
 	type StoredAuthCredential,
 } from "@veyyon/ai/auth-storage";
+import { getUsageReportIdentifiers } from "@veyyon/ai/auth-storage/usage-reports";
 import type { UsageReport } from "@veyyon/ai/usage";
 import { antigravityUsageProvider } from "@veyyon/ai/usage/google-antigravity";
 
@@ -175,4 +176,31 @@ describe("two Antigravity accounts sharing one project report apart", () => {
 			expect(limitFor(second!, "claude-gpt", "weekly")?.amount.usedFraction).toBe(1 - SECOND.claudeWeeklyRemaining);
 		});
 	}
+});
+
+describe("the project fallback for a provider whose accounts do not share one", () => {
+	// Narrowing `project:` to the shared-project predicate must leave every other provider's identifiers
+	// as they were: a report with a project and an account id but no email carries BOTH.
+	it("still identifies a gemini report by its project and its account id", () => {
+		const report: UsageReport = {
+			provider: "google-gemini-cli",
+			fetchedAt: 0,
+			limits: [],
+			metadata: { projectId: "project-a", accountId: "acct-x" },
+		};
+		expect(getUsageReportIdentifiers(report)).toEqual([
+			"google-gemini-cli:project:project-a",
+			"google-gemini-cli:account:acct-x",
+		]);
+	});
+
+	it("never identifies an Antigravity report by the shared project", () => {
+		const report: UsageReport = {
+			provider: "google-antigravity",
+			fetchedAt: 0,
+			limits: [],
+			metadata: { projectId: PROJECT },
+		};
+		expect(getUsageReportIdentifiers(report)).toEqual([]);
+	});
 });

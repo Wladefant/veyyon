@@ -23,6 +23,7 @@ import { tryParseJson } from "@veyyon/utils/json";
 import { decodeJwtPayload } from "@veyyon/utils/jwt";
 import { isRecord } from "@veyyon/utils/type-guards";
 import type { AuthCredential, OAuthCredential, StoredAuthCredential } from "./auth-storage";
+import { providerSharesProjectAcrossAccounts } from "./shared-project-providers";
 export type AuthRow = {
 	id: number;
 	provider: string;
@@ -170,10 +171,11 @@ export function resolveProviderCredentialIdentityKey(provider: string, identifie
 	const accountIdentifier = identifiers.find(identifier => identifier.startsWith("account:"));
 	if (accountIdentifier) return accountIdentifier;
 	if (emailIdentifier) return emailIdentifier;
-	// Antigravity accounts all share one project id (`providerSharesProjectAcrossAccounts` in `usage.ts`; this
-	// module stays free of that import, see credential-store-is-not-the-oauth-machinery). Keying on it would
-	// collapse (and delete) every account after the first.
-	if (provider === "google-antigravity") return null;
+	// Where every account shares one project id, keying on it would collapse (and delete) every account after
+	// the first. A login that names no account and no email therefore has NO identity key, and a second such
+	// login is appended as its own row instead of replacing the first: with no recoverable identity, keeping a
+	// duplicate is the only outcome that never destroys a real account.
+	if (providerSharesProjectAcrossAccounts(provider)) return null;
 	const projectIdentifier = identifiers.find(identifier => identifier.startsWith("project:"));
 	if (projectIdentifier) return projectIdentifier;
 	return null;

@@ -1,4 +1,5 @@
 import type { UsageLimitDisplay } from "@veyyon/ai";
+import { fractionToDraw } from "@veyyon/ai/usage";
 import { SUB_CELL_BAR_RAMP, subCellBar } from "@veyyon/utils/bar";
 import { clamp01 } from "@veyyon/utils/math";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
@@ -102,8 +103,7 @@ export function formatUsageWindowLine(
 	if (display?.inapplicable) return `${padded}does not apply right now`;
 	// Worded as what is LEFT, the way the provider's own app words it.
 	if (display?.remaining) {
-		const left = usedFraction === undefined ? undefined : 1 - clamp01(usedFraction);
-		return `${padded}${renderAsciiBar(left, barWidth)} left${resetsSuffix ?? ""}`;
+		return `${padded}${renderAsciiBar(fractionToDraw(usedFraction, display), barWidth)} left${resetsSuffix ?? ""}`;
 	}
 	return `${padded}${renderAsciiBar(usedFraction, barWidth)}${resetsSuffix ?? ""}`;
 }

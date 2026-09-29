@@ -8,7 +8,7 @@
  * always covers the full credential pool.
  */
 import type { AuthStorage, UsageHistoryEntry, UsageLimit, UsageReport, UsageUnit } from "@veyyon/ai";
-import { providerSharesProjectAcrossAccounts, resolveUsedFraction } from "@veyyon/ai/usage";
+import { providerSharesProjectAcrossAccounts, resolveDisplayFraction, resolveUsedFraction } from "@veyyon/ai/usage";
 import { clamp01, DAY_MS, formatCount, formatDuration, formatNumber, pluralize, sanitizeText } from "@veyyon/utils";
 import { SUB_CELL_BAR_RAMP, subCellBar } from "@veyyon/utils/bar";
 import chalk from "chalk";
@@ -229,9 +229,9 @@ function describeAmount(limit: UsageLimit): string {
  * glyphs it drew before were the same unconditional block glyphs.
  */
 function renderBar(limit: UsageLimit): string {
-	const fraction = resolveUsedFraction(limit);
-	if (fraction === undefined || limit.display?.inapplicable) return chalk.dim("·".repeat(BAR_WIDTH));
-	const bar = subCellBar(clamp01(limit.display?.remaining ? 1 - clamp01(fraction) : fraction), BAR_WIDTH);
+	const fraction = resolveDisplayFraction(limit);
+	if (fraction === undefined) return chalk.dim("·".repeat(BAR_WIDTH));
+	const bar = subCellBar(fraction, BAR_WIDTH);
 	const trackAt = bar.indexOf(SUB_CELL_BAR_RAMP.track);
 	const color = STATUS_COLOR[resolveStatus(limit)];
 	return trackAt < 0 ? color(bar) : color(bar.slice(0, trackAt)) + chalk.dim(bar.slice(trackAt));
