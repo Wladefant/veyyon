@@ -30,6 +30,7 @@
 - A context build reads the default model of a session without `model_change` entries from the newest assistant turn on the branch instead of from every assistant turn in order; the model it selects is unchanged.
 - `SessionManager` keeps the payloads of `session_init`, `settings_snapshot` and `subagent_spawn` entries in the session file on the live branch as well, reading each back on first use, so a spawned agent's recorded system prompt no longer stays in memory.
 - `SessionManager` moves a `session_init`, `settings_snapshot` or `subagent_spawn` entry out of memory as soon as the append that wrote it completes, instead of at the next whole-file publish, which cut the heap after 40 live subagents from 102.4 MiB to 96.9 MiB (median of 3 runs).
+- A forwarding tool wrapper reads each forwarded property through one accessor shared by every wrapper instead of a getter and setter pair built per wrapper and per key, which cut the live objects after 40 live subagents from 756,648 to 729,618 and the heap from 95.4 MiB to 94.3 MiB (median of 3 runs).
 
 ### Fixed
 
