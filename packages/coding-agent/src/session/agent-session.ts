@@ -932,9 +932,7 @@ export class AgentSession {
 		removeAssistantMessageFromActiveContext: (message, reason) =>
 			this.#removeAssistantMessageFromActiveContext(message, reason),
 		persistLifecycleErrorMessage: async message => {
-			await this.#waitForSessionMessagePersistence(message);
-			if (!isEmptyErrorTurn(message) || this.#sessionMessageAlreadyPersisted(message)) return;
-			this.#appendSessionMessage(message);
+			await this.#persistTerminalEmptyErrorTurn(message);
 		},
 		resetSessionStopContinuationState: () => this.#resetSessionStopContinuationState(),
 	});
@@ -3033,6 +3031,24 @@ export class AgentSession {
 	}
 
 	/**
+	 * Durably record a terminal empty error turn (`stopReason: "error"` with no
+	 * substantive content) that `#persistSessionMessageIfMissing` skipped, so the
+	 * session JSONL keeps a record of why the run stopped instead of ending at the
+	 * last tool result. A no-op for non-empty/non-error turns and idempotent via
+	 * the already-persisted guard; the turn is dropped from active context by the
+	 * caller (or `isProviderRefusalMessage`/`isEmptyErrorTurn` filters) so it is
+	 * never replayed on the wire. Used by the retry-lifecycle dead-ends and the
+	 * non-retry terminal error tail.
+	 */
+	async #persistTerminalEmptyErrorTurn(message: AssistantMessage): Promise<void> {
+		await this.#waitForSessionMessagePersistence(message);
+		if (!isEmptyErrorTurn(message)) return;
+		if (this.#sessionMessageAlreadyPersisted(message)) return;
+		if (AIError.isContextOverflow(message, this.model?.contextWindow ?? undefined)) return;
+		this.#appendSessionMessage(message);
+	}
+
+	/**
 	 * True when the latest compaction entry on the current branch sits after
 	 * {@link assistantMessage}'s own entry, i.e. the assistant was kept through
 	 * that compaction and its `usage` describes the pre-rewrite prompt. One
@@ -4974,11 +4990,6 @@ export class AgentSession {
 			hindsightState?.dispose();
 			const mnemopiState = setMnemopiSessionState(this, undefined);
 			await mnemopiState?.dispose({ timeoutMs: options.mnemopiConsolidateTimeoutMs });
-			// Tear down the embeddings subprocess AFTER mnemopi state.dispose:
-			// consolidate-on-dispose may still call `embed()` to store the final
-			// memories, and that round-trips through the worker we are about to
-			// hard-kill (issue #3031).
-			await shutdownMnemopiEmbedClient();
 			this.#disconnectFromAgent();
 			if (this.#unsubscribeAppendOnly) {
 				this.#unsubscribeAppendOnly();
@@ -6787,7 +6798,7 @@ export class AgentSession {
 		}
 		const inProgressItems = preview.lines.map(line => ({
 			status: "in_progress" as const,
-			text: this.#sanitizeGoalTodoText(line.slice("- [in_progress] ".length)),
+			text: sanitizeGoalTodoText(line.slice("- [in_progress] ".length)),
 		}));
 		const hiddenActiveCount = inProgress.length - shown;
 		const next = openItems[0];
