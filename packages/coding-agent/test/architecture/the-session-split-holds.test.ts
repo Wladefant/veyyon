@@ -36,7 +36,7 @@ const RUNTIME = `${SESSION_DIR}/agent-session.ts`;
 const FACADE = `${SESSION_DIR}/facade.ts`;
 
 /**
- * MEASURED at 11344 lines. Model target selection left earlier — the role resolver, the
+ * MEASURED at 11185 lines. Model target selection left earlier — the role resolver, the
  * configured-target reader, the compaction candidate walk and its effort map — and provider request
  * shaping (payload redaction, the Anthropic metadata block, the tool-order permutation check) left
  * after it, because not one of those members read or wrote a field of the runtime: every input was
@@ -46,13 +46,14 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * its model fallback, secret redaction, compaction with its summarizer and dead-end recovery, and
  * the prewalk and plan-yolo model handoffs, plan mode with its plan reference and decision
  * ladder, the message write queue with its persistence-key index, the context figure with its
- * prompt snapshot and rewrite anchor, the memory backend state with its delivered recall, and the
- * provider session ids with the inherited prompt cache key left as collaborators under `runtime/`.
+ * prompt snapshot and rewrite anchor, the memory backend state with its delivered recall, the
+ * provider session ids with the inherited prompt cache key, and the tool-call loop guard with the
+ * Gemini reasoning-header detector left as collaborators under `runtime/`.
  * The number falls
  * again when the next one leaves. It ratchets: slack is what it takes to not fail on the next honest
  * edit, and a ceiling left far above a shrinking file stops being a bound.
  */
-const RUNTIME_CEILING = 11_360;
+const RUNTIME_CEILING = 11_200;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -70,6 +71,7 @@ const COLLABORATORS = [
 	"compaction-summarizer.ts",
 	"context-accounting.ts",
 	"irc-inbox.ts",
+	"loop-guards.ts",
 	"memory-context.ts",
 	"message-persistence.ts",
 	"model-handoff.ts",

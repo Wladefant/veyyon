@@ -69,7 +69,6 @@ import {
 import type {
 	Api,
 	AssistantMessage,
-	AssistantMessageEvent,
 	Context,
 	ImageContent,
 	InstrumentationLevel,
@@ -99,8 +98,6 @@ import { streamSimple } from "@veyyon/ai/stream";
 import "@veyyon/ai/usage/defaults";
 import { assistantText } from "@veyyon/ai/utils/message-text";
 import { toolWireSchema } from "@veyyon/ai/utils/schema";
-import { GeminiHeaderRunDetector, isGeminiThinkingModel } from "@veyyon/ai/utils/thinking-loop";
-import { type RepeatedToolCallDetection, ToolCallLoopGuard } from "@veyyon/ai/utils/tool-call-loop-guard";
 import type { Effort } from "@veyyon/catalog/effort";
 import { isFireworksFastModelId } from "@veyyon/catalog/fireworks-model-id";
 import { modelsAreEqual } from "@veyyon/catalog/models";
@@ -427,12 +424,7 @@ import {
 	USER_INTERRUPT_LABEL,
 } from "./messages";
 import { computeNonMessageBreakdown, computeNonMessageTokens } from "./non-message-tokens";
-import {
-	GEMINI_TOOL_REMINDER_TYPE,
-	SESSION_STATE_MESSAGE_TYPE,
-	SESSION_STOP_CONTINUATION_CAP,
-	TOOL_CALL_LOOP_REDIRECT_TYPE,
-} from "./nudges";
+import { SESSION_STATE_MESSAGE_TYPE, SESSION_STOP_CONTINUATION_CAP } from "./nudges";
 import { ProviderContextCanonicalizer } from "./provider-context-canonicalizer";
 import { applyProviderImagePolicy } from "./provider-image-budget";
 import { didSessionMessagesChange } from "./provider-replay-projection";
@@ -442,6 +434,7 @@ import { CheckpointRuntime } from "./runtime/checkpoint-runtime";
 import { CompactionRuntime } from "./runtime/compaction-runtime";
 import { ContextAccounting } from "./runtime/context-accounting";
 import { IrcInbox } from "./runtime/irc-inbox";
+import { LoopGuards } from "./runtime/loop-guards";
 import { lastDeliveredBlock, MemoryContext } from "./runtime/memory-context";
 import { MessagePersistence } from "./runtime/message-persistence";
 import { ModelHandoff } from "./runtime/model-handoff";
@@ -467,10 +460,6 @@ import {
 	VerificationEvidenceLedger,
 } from "./verification-evidence-ledger";
 import type { VibeModeState } from "./vibe-runtime";
-
-/** Abort reason for the Gemini reasoning-header runaway interrupt. Surfaced on the
- *  discarded assistant turn only; never reaches the model. */
-const GEMINI_HEADER_INTERRUPT_REASON = "Interrupted: emit a tool call instead of more planning";
 
 /** Abort reason recorded on a spawned agent stopped because its conversation was left by `/new`, `/resume` or a handoff. */
 export const RESCOPE_TERMINATE_REASON = "Stopped: the conversation that spawned it ended";
@@ -998,13 +987,7 @@ export class AgentSession {
 	/** Work a turn left behind after `prompt()` returned; see {@link PostPromptTasks}. */
 	readonly #postPrompt = new PostPromptTasks({ promptGeneration: () => this.#promptGeneration });
 
-	/** Active Gemini reasoning-header runaway detector for the current block.
-	 *  (Re)created on each `thinking_start` when the guard applies (see
-	 *  `#geminiHeaderGuardActive`); undefined for non-Gemini models or when the
-	 *  guard is off. Fed thinking deltas in the assistant-message interceptor. */
-	#geminiHeaderDetector: GeminiHeaderRunDetector | undefined;
-	#toolCallLoopGuard: ToolCallLoopGuard | undefined;
-	#toolCallLoopGuardSettingsKey: string | undefined;
+	readonly #loopGuards: LoopGuards;
 	#promptInFlightCount = 0;
 	#abortInProgress = false;
 	// Wire-level agent_end emission deferred until #promptInFlightCount drops to 0.
@@ -1569,11 +1552,7 @@ export class AgentSession {
 				await this.#applyRewind(rewindReport, messages);
 			}
 			if (context?.message.role === "assistant") {
-				const detection = this.#activeToolCallLoopGuard()?.recordTurn({
-					message: context.message,
-					toolResults: context.toolResults,
-				});
-				if (detection) this.#maybeInjectToolCallLoopRedirect(messages, detection);
+				this.#loopGuards.onTurnEnd(messages, { message: context.message, toolResults: context.toolResults });
 			}
 			await this.#handoff.advancePrewalk(messages, context);
 			await this.#advisorRoster.onPrimaryTurnEnd(messages, context?.willContinue, signal);
@@ -1655,6 +1634,17 @@ export class AgentSession {
 			expandSecretsForDiskComparison: text => this.#secrets.expandForDiskComparison(text),
 			redactForLog: text => this.#secrets.redactForLog(text),
 		});
+		this.#loopGuards = new LoopGuards({
+			agent: this.agent,
+			sessionStore: this.sessionManager,
+			settings: this.settings,
+			model: () => this.model,
+			promptGeneration: () => this.#promptGeneration,
+			isDisposed: () => this.#isDisposed,
+			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
+			schedulePostPromptTask: task => this.#postPrompt.schedule(task),
+			discardAssistantTurn: message => this.#discardAssistantTurn(message),
+		});
 		this.#ttsr = new TtsrRuntime(
 			{
 				agent: this.agent,
@@ -1695,7 +1685,7 @@ export class AgentSession {
 		// lands on the delta that earned it.
 		this.agent.setAssistantMessageEventInterceptor((message, assistantMessageEvent) => {
 			this.#streamingEdit.observe(message, assistantMessageEvent);
-			this.#maybeInterruptGeminiHeaderRunaway(message, assistantMessageEvent);
+			this.#loopGuards.observe(message, assistantMessageEvent);
 		});
 		// The tool-result hook is the single site for synchronous post-tool actions that must affect the current loop.
 		this.agent.afterToolCall = ctx => this.#afterToolCall(ctx);
@@ -3254,155 +3244,6 @@ export class AgentSession {
 			}
 		}
 		return undefined;
-	}
-
-	#activeToolCallLoopGuard(): ToolCallLoopGuard | undefined {
-		if (this.settings.get("model.toolCallLoopGuard.enabled") !== true) {
-			this.#toolCallLoopGuard = undefined;
-			this.#toolCallLoopGuardSettingsKey = undefined;
-			return undefined;
-		}
-
-		const threshold = this.settings.get("model.toolCallLoopGuard.threshold");
-		const readSubsumptionThreshold = this.settings.get("model.toolCallLoopGuard.readSubsumptionThreshold");
-		const exemptTools = this.settings
-			.get("model.toolCallLoopGuard.exemptTools")
-			.filter((tool): tool is string => typeof tool === "string" && tool.length > 0);
-		const settingsKey = `${threshold}:${readSubsumptionThreshold}:${JSON.stringify(exemptTools)}`;
-		if (!this.#toolCallLoopGuard || this.#toolCallLoopGuardSettingsKey !== settingsKey) {
-			this.#toolCallLoopGuard = new ToolCallLoopGuard({ threshold, exemptTools, readSubsumptionThreshold });
-			this.#toolCallLoopGuardSettingsKey = settingsKey;
-		}
-		return this.#toolCallLoopGuard;
-	}
-
-	#maybeInjectToolCallLoopRedirect(messages: AgentMessage[], detection: RepeatedToolCallDetection): void {
-		const content = prompt.render(turnControlPrompts["turn-control/tool-call-loop-redirect"].text, {
-			tool_name: detection.toolName,
-			count: detection.count,
-			arguments_summary: detection.argumentsSummary,
-			result_summary: detection.resultSummary || "(no text result)",
-		});
-		const details = {
-			toolName: detection.toolName,
-			count: detection.count,
-			argumentsSummary: detection.argumentsSummary,
-			resultSummary: detection.resultSummary,
-		};
-		logger.warn("cross-turn tool-call loop detected", {
-			toolName: detection.toolName,
-			count: detection.count,
-		});
-		const redirectMessage: CustomMessage = {
-			role: "custom",
-			customType: TOOL_CALL_LOOP_REDIRECT_TYPE,
-			content,
-			display: false,
-			details,
-			attribution: "agent",
-			timestamp: Date.now(),
-		};
-		messages.push(redirectMessage);
-		if (this.agent.state.messages !== messages) {
-			this.agent.appendMessage(redirectMessage);
-		}
-		this.sessionManager.appendCustomMessageEntry(TOOL_CALL_LOOP_REDIRECT_TYPE, content, false, details, "agent");
-	}
-
-	/**
-	 * Whether the Gemini header-runaway guard applies to the current model: the loop
-	 * guard is on (settings + `VEYYON_NO_THINKING_LOOP_GUARD`), the tool-call reminder is
-	 * enabled, and the active model is a Gemini thinking model.
-	 */
-	#geminiHeaderGuardActive(): boolean {
-		const model = this.model;
-		return (
-			process.env.VEYYON_NO_THINKING_LOOP_GUARD !== "1" &&
-			this.settings.get("model.loopGuard.enabled") === true &&
-			this.settings.get("model.loopGuard.toolCallReminder") === true &&
-			model !== undefined &&
-			isGeminiThinkingModel(model)
-		);
-	}
-
-	/**
-	 * Feed streamed assistant events to the Gemini header-runaway detector. Each
-	 * reasoning block (`thinking_start`) re-arms a fresh detector when the guard
-	 * applies; thinking deltas accumulate thought-summary headers; assistant prose
-	 * or a tool call ends the run. On the threshold hit, interrupts the stream (see
-	 * {@link #interruptGeminiHeaderRunaway}). Runs synchronously inside the
-	 * assistant-message interceptor so the abort lands before more budget burns.
-	 * Armed on `thinking_start` (not `turn_start`, which the agent loop skips for the
-	 * first turn) so the very first reasoning block is guarded too.
-	 */
-	#maybeInterruptGeminiHeaderRunaway(message: AssistantMessage, event: AssistantMessageEvent): void {
-		if (event.type === "thinking_start") {
-			this.#geminiHeaderDetector = this.#geminiHeaderGuardActive() ? new GeminiHeaderRunDetector() : undefined;
-			return;
-		}
-		const detector = this.#geminiHeaderDetector;
-		if (!detector) return;
-		if (event.type === "thinking_delta") {
-			if (detector.push(event.delta)) this.#interruptGeminiHeaderRunaway(detector.count, message.timestamp);
-			return;
-		}
-		// Leaving the reasoning channel ends the run: the consecutive-header count
-		// only matters within one uninterrupted stretch of reasoning.
-		if (event.type === "text_start" || event.type === "toolcall_start") {
-			detector.reset();
-		}
-	}
-
-	/**
-	 * Interrupt a Gemini reasoning stream that has emitted too many consecutive
-	 * planning headers without calling a tool. Aborts the live turn, discards the
-	 * stalled reasoning-only turn (so its partial, loop-fueling thinking is neither
-	 * replayed nor reloaded), injects a hidden tool-call reminder, and continues.
-	 * `targetTimestamp` identifies the turn being aborted so the post-prompt task
-	 * can drop exactly it.
-	 */
-	#interruptGeminiHeaderRunaway(headerCount: number, targetTimestamp: number): void {
-		logger.warn("Gemini reasoning-header runaway; interrupting to require a tool call", {
-			model: this.model?.id,
-			provider: this.model?.provider,
-			headers: headerCount,
-		});
-		this.emitNotice(
-			"warning",
-			`Interrupted ${headerCount} planning headers with no tool call; reminded the model to issue one.`,
-			"loop-guard",
-		);
-		this.agent.abort(GEMINI_HEADER_INTERRUPT_REASON);
-		const generation = this.#promptGeneration;
-		this.#postPrompt.schedule(async signal => {
-			if (signal.aborted || this.#isDisposed || this.#promptGeneration !== generation) return;
-			// Let the aborted stream finish unwinding so continue() doesn't race it.
-			await this.agent.waitForIdle();
-			if (signal.aborted || this.#isDisposed || this.#promptGeneration !== generation) return;
-			const aborted = this.agent.state.messages.findLast(
-				(m): m is AssistantMessage => m.role === "assistant" && m.timestamp === targetTimestamp,
-			);
-			if (aborted) this.#discardAssistantTurn(aborted);
-			const content = prompt.render(turnControlPrompts["turn-control/gemini-tool-call-reminder"].text, {
-				count: headerCount,
-			});
-			const details = { headers: headerCount };
-			this.agent.appendMessage({
-				role: "custom",
-				customType: GEMINI_TOOL_REMINDER_TYPE,
-				content,
-				display: false,
-				details,
-				attribution: "agent",
-				timestamp: Date.now(),
-			});
-			this.sessionManager.appendCustomMessageEntry(GEMINI_TOOL_REMINDER_TYPE, content, false, details, "agent");
-			try {
-				await this.agent.continue();
-			} catch (err) {
-				logger.warn("gemini tool-call reminder continue failed", { error: errorMessage(err) });
-			}
-		});
 	}
 
 	/**
