@@ -11,7 +11,9 @@
  * - citation: a commit message on the santhreal side, a commit message on the fork side, or a
  *   merged fork pull request body names the oh-my-pi commit (a 7+ hex prefix of its SHA) or its
  *   upstream pull request (`oh-my-pi#N`, `can1357/oh-my-pi/pull/N`, `[upstream #N]`,
- *   `port(upstream#N)`).
+ *   `port(upstream#N)`). A mention the text denies ("ported X but not Y", "... remain unported:
+ *   - Y") is not a citation: a lane lists what it still owes by SHA, and that list must not mark the
+ *   commits as carried.
  * - content: at least 70% of the commit's significant added lines, normalized for the rename,
  *   were added by the santhreal or fork tree since the snapshot. Commits with fewer than three
  *   significant lines are too small to match this way and are reported as `missing-small`.
@@ -157,9 +159,58 @@ export interface Citations {
 	prs: Set<number>;
 }
 
-/** Every oh-my-pi commit and pull request a piece of text names. */
+/**
+ * Words that turn a mention into a statement that the change was NOT carried ("ported X but not Y",
+ * "the follow-ups remain unported:"). A lane writes these to list what is still owed, and
+ * https://github.com/Wladefant/veyyon/pull/180 did exactly that for two oh-my-pi follow-ups.
+ */
+const NEGATION =
+	/\b(?:not|never|without|lacks?|lacking|missing|un-?ported|skipp?ed|pending|remain(?:s|ing)?)\b|n['’]t\b/i;
+/** Clause boundaries inside one line: a sentence end, a semicolon, a contrast, or a comma before "not". */
+const CLAUSE_BOUNDARY = /[.!?;](?=\s|$)|\s—\s|\b(?:but|however|yet)\b|,\s+(?=not\b)/gi;
+/** How many words before a negation word it still reaches ("X is not ported", "X lacks its fix"). */
+const NEGATION_LOOKBEHIND = /(?:\S+\s*){1,3}$/;
+const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s/;
+
+/**
+ * The text with every mention a negation word covers blanked out, so a mention only counts when the
+ * text does not deny the port. Within one clause a negation word denies everything after it and the
+ * three words before it (`X is not ported`), but not an earlier mention: "Port f69783 so the cap
+ * does not fake truncation" still cites f69783. A line that denies and ends in a colon
+ * ("... are not ported:") denies the list items under it too. Where the wording is ambiguous the
+ * mention is denied: a commit read as missing gets checked by hand, while one read as carried is
+ * never looked at again.
+ */
+export function withoutNegatedClauses(text: string): string {
+	let listDenied = false;
+	return text
+		.split("\n")
+		.map(line => {
+			if (LIST_ITEM.test(line) && listDenied) return "";
+			if (line.trim() !== "") listDenied = false;
+			const kept: string[] = [];
+			let last = 0;
+			let denied = false;
+			for (const boundary of [...line.matchAll(CLAUSE_BOUNDARY), null]) {
+				const end = boundary ? boundary.index : line.length;
+				const clause = line.slice(last, end);
+				const cue = NEGATION.exec(clause);
+				if (cue) {
+					denied = true;
+					kept.push(clause.slice(0, cue.index).replace(NEGATION_LOOKBEHIND, ""));
+				} else kept.push(clause);
+				last = boundary ? end + boundary[0].length : end;
+			}
+			if (denied && line.trimEnd().endsWith(":")) listDenied = true;
+			return kept.join(" ");
+		})
+		.join("\n");
+}
+
+/** Every oh-my-pi commit and pull request a piece of text says it carried. */
 export function collectCitations(text: string, index: ShaIndex, into: Citations): void {
-	for (const match of text.matchAll(/\b[0-9a-f]{7,40}\b/gi)) {
+	const carried = withoutNegatedClauses(text);
+	for (const match of carried.matchAll(/\b[0-9a-f]{7,40}\b/gi)) {
 		const sha = index.resolve(match[0]);
 		if (sha) into.shas.add(sha);
 	}
@@ -170,7 +221,7 @@ export function collectCitations(text: string, index: ShaIndex, into: Citations)
 		/upstream-pr: (\d+)/gi,
 	];
 	for (const pattern of prPatterns) {
-		for (const match of text.matchAll(pattern)) {
+		for (const match of carried.matchAll(pattern)) {
 			const pr = Number(match[1]);
 			if (pr >= MIN_OMP_PR) into.prs.add(pr);
 		}
