@@ -18,13 +18,14 @@
 import * as fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import { getDebugLogPath } from "@veyyon/utils/dirs";
-import { $flag } from "@veyyon/utils/env";
+import { $flag, isBunTestRuntime } from "@veyyon/utils/env";
 import { isKeyRelease, matchesKey } from "@veyyon/utils/keys";
 import * as logger from "@veyyon/utils/logger";
 import { popLoopPhase, pushLoopPhase } from "@veyyon/utils/loop-phase";
 import { LoopWatchdog } from "@veyyon/utils/loop-watchdog";
 import { clampLow } from "@veyyon/utils/math";
 import { parseSgrMouse } from "@veyyon/utils/mouse";
+import { stallSampler } from "@veyyon/utils/stall-sampler";
 import { errorMessage } from "@veyyon/utils/type-guards";
 import { isConPTYHosted, setAltScreenActive, type Terminal } from "../terminal";
 import {
@@ -582,7 +583,9 @@ export class TUI extends Container {
 		this.#overlays = new OverlayStack(terminal);
 		this.#renderScheduler = options?.renderScheduler ?? DEFAULT_RENDER_SCHEDULER;
 		if (showHardwareCursor !== undefined) this.#cursor.setShow(showHardwareCursor);
-		this.#watchdog = new LoopWatchdog();
+		// A block's stacks come from the process's sampling profiler. A test process runs many
+		// TUIs and its own profiling, so it keeps the watchdog's timing and phase report only.
+		this.#watchdog = new LoopWatchdog({ stacks: isBunTestRuntime() ? undefined : stallSampler });
 	}
 
 	override render(width: number): readonly string[] {

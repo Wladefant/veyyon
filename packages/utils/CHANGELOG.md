@@ -10,6 +10,7 @@
 - `getProfileSessionsDir` returns a named profile's sessions directory as a process running that profile resolves it, under `$XDG_DATA_HOME` when that profile's XDG directory exists.
 - `setProfileEnv` sets an environment variable read out of the active profile's configuration and records it so a process started under another profile drops it.
 - `@veyyon/utils/session-file` exports `ORPHAN_AGENT_TRANSCRIPT_PREFIX`, the prefix of an agent transcript written under the sessions root when its parent session has no file.
+- `@veyyon/utils/stall-sampler` exports `stallSampler`, which keeps JavaScriptCore's sampling profiler running at a 10 ms interval and returns the functions sampled between two `performance.now()` readings, and `borrow()`, which lends the profiler to another caller; `LoopWatchdog` takes it as `stacks` and follows each `ui.loop-blocked` line with a `ui.loop-blocked.stack` line naming the functions that held the loop.
 
 ### Changed
 

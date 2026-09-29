@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- The TUI's loop watchdog logs a `ui.loop-blocked.stack` line after each blocked-loop line, naming the functions and the call path the event loop was executing during the block, so a stall reported as `phase: "unknown"` states its cause.
+
 ### Changed
 
 - `ProcessTerminal` routes a stdin sequence through single-purpose steps (private CSI and in-band resize reassembly, then one reply matcher per probe) with its reply patterns compiled once at module load instead of one 258-line handler, so an escape keystroke's dispatch costs 111 ns instead of 128 ns with identical delivered input and written bytes.
