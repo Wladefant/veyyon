@@ -156,6 +156,29 @@ export class ColdEntryPayloads {
 		return true;
 	}
 
+	/**
+	 * {@link cool} for an entry whose `line`, `length` bytes, was just appended at `offset`: the
+	 * pinned object is read there first, and the entry is cooled only when it holds `line`. An
+	 * append of another writer's that landed first, or a write that did not complete, leaves the
+	 * entry in memory, and closes the handle when no cold entry reads through it.
+	 */
+	coolWritten(entry: SessionEntry, line: string, offset: number, length: number): boolean {
+		const file = this.#current;
+		if (file === undefined || length < MIN_COLD_LINE_BYTES || this.#stubs.has(entry)) return false;
+		let written: string | undefined;
+		try {
+			written = file.reader.read(offset, length);
+		} catch {
+			written = undefined;
+		}
+		if (written === line && this.cool(entry, offset, length)) return true;
+		if (file.cold === 0) {
+			this.#current = undefined;
+			file.reader.close();
+		}
+		return false;
+	}
+
 	/** Read `entry`'s large fields back into memory. A warm entry is left as it is. */
 	warm(entry: SessionEntry): void {
 		const stub = this.#stubs.get(entry);

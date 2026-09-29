@@ -19,7 +19,15 @@
  * republish, another writer's republish, the manager being dropped).
  *
  * The record-only sweep places every entry kind on the live branch and pins, by exact equality,
- * which kinds read the disk there, so a new kind fails until it is classified.
+ * which kinds read the disk there, so a new kind fails until it is classified. A second sweep
+ * appends every record-only kind after the session file exists, as a spawned agent does once it has
+ * opened its transcript path, and fails for a kind added to `RECORD_ONLY_ENTRY_TYPES` without an
+ * appender. An appended line goes cold only once it is read back from the file as written, so
+ * another writer's line landing first leaves the entry in memory.
+ *
+ * The dropped-manager case runs in a fresh process (`fixtures/dropped-session-manager-descriptors.ts`):
+ * after the files before this one tier up the cooling code, the runner's heap holds a conservative
+ * root to a dropped manager's first cold stub, and no number of collections releases its handle.
  *
  * NOT CAUGHT: the heap bound is measured in this process with a 4x margin, so a regression that
  * keeps a quarter of the cold payloads resident passes. Windows holds no pinned reader, so there
@@ -28,16 +36,27 @@
 
 import { heapStats } from "bun:jsc";
 import { afterEach, describe, expect, it } from "bun:test";
+import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { promisify } from "node:util";
 import type { AssistantMessage, ToolResultMessage } from "@veyyon/ai";
 import { BlobStore, blobsDirForSessionDir } from "@veyyon/kernel/session/blob-store";
+import { RECORD_ONLY_ENTRY_TYPES } from "@veyyon/kernel/session/session-cold-payloads";
 import type { SessionEntry, SessionEntryBase } from "@veyyon/kernel/session/session-entries";
 import { loadSessionFile, resolveBlobRefsInEntries } from "@veyyon/kernel/session/session-loader";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
 import { FileSessionStorage, type PinnedSessionReader } from "@veyyon/kernel/session/session-storage";
 import { registerToolResultCodecs } from "@veyyon/kernel/session/tool-result-codecs";
+import type { DroppedDescriptors } from "../fixtures/dropped-session-manager-descriptors";
+import { hermeticSpawnEnv } from "../helpers/hermetic-spawn-env";
+
+const run = promisify(execFile);
+const DROPPED_FIXTURE = path.join(import.meta.dirname, "..", "fixtures", "dropped-session-manager-descriptors.ts");
+
+/** A fresh process loads the session modules, opens one session and runs up to fifty full collections. */
+const DROPPED_TIMEOUT_MS = 30_000;
 
 const PROBE_TOOL = "cold_readback_probe";
 
@@ -122,6 +141,49 @@ function assistantTurn(text: string, timestamp: number): AssistantMessage {
 		stopReason: "stop",
 		timestamp,
 	};
+}
+
+/**
+ * Each record-only kind appended through the method a running session calls. A kind added to
+ * `RECORD_ONLY_ENTRY_TYPES` without a row fails the append sweep.
+ */
+const APPEND_RECORD_ONLY: Record<string, (manager: SessionManager) => void> = {
+	session_init: manager =>
+		manager.appendSessionInit({
+			systemPrompt: big("appended-system-prompt", 64 * 1024),
+			task: big("appended-task"),
+			tools: ["read", "yield"],
+		}),
+	settings_snapshot: manager => manager.appendSettingsSnapshot({ "probe.value": big("appended-setting") }),
+	subagent_spawn: manager =>
+		manager.appendAgentSpawn({
+			agentId: "agent-1",
+			agentName: "task",
+			task: big("appended-spawn-task"),
+			sessionFile: "/repo/.sessions/agent-1.jsonl",
+			isolation: "none",
+			status: "completed",
+			exitCode: 0,
+			durationMs: 10,
+		}),
+};
+
+/** A manager on a transcript path that did not exist, opened the way a spawned agent opens its own. */
+async function openChildTranscript(storage: FileSessionStorage): Promise<{
+	manager: SessionManager;
+	dir: string;
+	file: string;
+}> {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-cold-append-"));
+	tempDirs.push(root);
+	const dir = path.join(root, "sessions");
+	fs.mkdirSync(dir);
+	fs.mkdirSync(path.join(root, "blobs"));
+	const file = path.join(dir, "child.jsonl");
+	const manager = await SessionManager.open(file, dir, storage, { initialCwd: root, suppressBreadcrumb: true });
+	// The open writes the file, so everything the agent records next is appended to it.
+	expect(fs.existsSync(file)).toBe(true);
+	return { manager, dir, file };
 }
 
 type EntryOf<K extends SessionEntry["type"]> = Extract<SessionEntry, { type: K }>;
@@ -482,36 +544,30 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 		expect(storage.open.size).toBe(0);
 	});
 
-	it("releases the pinned descriptor when a manager holding cold entries is dropped", async () => {
-		if (process.platform !== "linux") return;
-		const fixture = await writeSession(everyKindHistory());
-		const target = fs.realpathSync(fixture.file);
-		const pinnedDescriptors = (): number =>
-			fs.readdirSync("/proc/self/fd").filter(fd => {
-				try {
-					const link = fs.readlinkSync(`/proc/self/fd/${fd}`);
-					return link === target || link === `${target} (deleted)`;
-				} catch {
-					return false;
-				}
-			}).length;
-
-		const opened = async (): Promise<number> => {
-			const manager = await SessionManager.open(fixture.file, fixture.dir, new FileSessionStorage(), {
-				suppressBreadcrumb: true,
-			});
-			return manager.getEntries().length;
-		};
-		expect(await opened()).toBeGreaterThan(fixture.compacted.length);
-
-		let rounds = 0;
-		while (pinnedDescriptors() > 0 && rounds < 50) {
-			Bun.gc(true);
-			await new Promise<void>(resolve => setImmediate(resolve));
-			rounds += 1;
-		}
-		expect(pinnedDescriptors()).toBe(0);
-	});
+	it(
+		"releases the pinned descriptor when a manager holding cold entries is dropped",
+		async () => {
+			if (process.platform !== "linux") return;
+			const fixture = await writeSession(everyKindHistory());
+			const { env, cleanup } = hermeticSpawnEnv();
+			let dropped: DroppedDescriptors;
+			try {
+				const { stdout, stderr } = await run(process.execPath, [DROPPED_FIXTURE, fixture.file, fixture.dir], {
+					env,
+					timeout: DROPPED_TIMEOUT_MS - 5_000,
+					killSignal: "SIGKILL",
+				});
+				expect(stderr).toBe("");
+				dropped = JSON.parse(stdout) as DroppedDescriptors;
+			} finally {
+				cleanup();
+			}
+			expect(dropped.entries).toBeGreaterThan(fixture.compacted.length);
+			expect(dropped.whileOpen).toBe(1);
+			expect(dropped.afterDrop).toBe(0);
+		},
+		DROPPED_TIMEOUT_MS,
+	);
 
 	it("holds a compacted history's payloads out of the heap until they are read", async () => {
 		const RESULTS = 160;
@@ -642,6 +698,70 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 		if (file === undefined) throw new Error("the session wrote no file");
 		expect(serialized(manager)).toEqual(await freshLoad({ dir, file }));
 		expect(storage.open.size).toBe(0);
+		await manager.close();
+	});
+
+	it("moves every record-only entry appended after the session file exists out of memory, and only them", async () => {
+		const storage = new ObservedStorage();
+		const { manager, dir, file } = await openChildTranscript(storage);
+		expect(Object.keys(APPEND_RECORD_ONLY).sort()).toEqual([...RECORD_ONLY_ENTRY_TYPES].sort());
+		for (const append of Object.values(APPEND_RECORD_ONLY)) append(manager);
+		// As large as any of them, and on the live branch: every turn sends it.
+		manager.appendMessage({ role: "user", content: big("live-prompt", 64 * 1024), timestamp: 1 });
+		manager.appendMessage(assistantTurn("live answer", 2));
+		await manager.flush();
+
+		const appended = storage.reads;
+		expect(JSON.stringify(manager.buildSessionContext().messages)).toContain("live answer");
+		expect(storage.reads).toBe(appended);
+		const expected = await freshLoad({ dir, file });
+		const readBack: string[] = [];
+		for (const entry of manager.getEntries()) {
+			const before = storage.reads;
+			expect(JSON.stringify(entry)).toBe(expected.get(entry.id)!);
+			if (storage.reads > before) readBack.push(entry.type);
+		}
+		expect(readBack.sort()).toEqual([...RECORD_ONLY_ENTRY_TYPES].sort());
+		expect(storage.open.size).toBe(0);
+		await manager.close();
+	});
+
+	it("keeps an appended record-only entry in memory when another writer's line landed before it", async () => {
+		const storage = new ObservedStorage();
+		const { manager, file } = await openChildTranscript(storage);
+		// Another process appending to the same file object moves where this manager's next line lands.
+		fs.appendFileSync(
+			file,
+			`${JSON.stringify({ type: "label", id: "foreign-1", parentId: null, timestamp: "2025-01-01T00:00:00.000Z", targetId: "foreign-0", label: big("foreign") })}\n`,
+		);
+		const systemPrompt = big("appended-system-prompt", 64 * 1024);
+		manager.appendSessionInit({ systemPrompt, task: big("appended-task"), tools: ["read"] });
+
+		const init = manager.getEntries().find(entry => entry.type === "session_init");
+		if (init?.type !== "session_init") throw new Error("the session recorded no session_init");
+		const before = storage.reads;
+		expect(init.systemPrompt).toBe(systemPrompt);
+		expect(storage.reads).toBe(before);
+		// The handle opened to compare the line closes, since nothing reads through it.
+		expect(storage.open.size).toBe(0);
+		await manager.close();
+	});
+
+	it("opens no handle for an appended record-only entry too small to move", async () => {
+		const storage = new ObservedStorage();
+		const { manager } = await openChildTranscript(storage);
+		manager.appendAgentSpawn({
+			agentId: "agent-2",
+			agentName: "task",
+			task: "short task",
+			sessionFile: "/repo/.sessions/agent-2.jsonl",
+			isolation: "none",
+			status: "completed",
+			exitCode: 0,
+			durationMs: 1,
+		});
+		expect(storage.open.size).toBe(0);
+		expect(storage.reads).toBe(0);
 		await manager.close();
 	});
 });

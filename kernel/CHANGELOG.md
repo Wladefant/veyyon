@@ -29,6 +29,7 @@
 - `SessionManager` keeps the payloads of entries its live context cannot reach in the session file and reads each back through a handle on the file object it loaded, which cut a resumed 402 MiB, 135,650-entry session from 501 MiB heap plus 369 MiB external memory to 117 MiB plus 46 MiB and its RSS from 1,072 MiB to 602 MiB, for about 400 ms more open time; Windows keeps every entry in memory.
 - A context build reads the default model of a session without `model_change` entries from the newest assistant turn on the branch instead of from every assistant turn in order; the model it selects is unchanged.
 - `SessionManager` keeps the payloads of `session_init`, `settings_snapshot` and `subagent_spawn` entries in the session file on the live branch as well, reading each back on first use, so a spawned agent's recorded system prompt no longer stays in memory.
+- `SessionManager` moves a `session_init`, `settings_snapshot` or `subagent_spawn` entry out of memory as soon as the append that wrote it completes, instead of at the next whole-file publish, which cut the heap after 40 live subagents from 102.4 MiB to 96.9 MiB (median of 3 runs).
 
 ### Fixed
 

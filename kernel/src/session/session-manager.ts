@@ -25,7 +25,7 @@ import {
 } from "./custom-message-payload";
 import { SESSION_EXIT_CUSTOM_TYPE } from "./exit-diagnostics";
 import type { OperatorNotices } from "./operator-notices";
-import { ColdEntryPayloads, RECORD_ONLY_ENTRY_TYPES } from "./session-cold-payloads";
+import { ColdEntryPayloads, MIN_COLD_LINE_BYTES, RECORD_ONLY_ENTRY_TYPES } from "./session-cold-payloads";
 import {
 	BRANCH_SETTINGS_ENTRY_TYPES,
 	type BuildSessionContextOptions,
@@ -1159,9 +1159,12 @@ export class SessionManager {
 				.catch(err => this.#noteDiskFailure(err));
 			const state = this.#publishedFileState;
 			if (state !== null) {
+				const offset = state.size;
+				const length = Buffer.byteLength(line, "utf-8");
 				state.lines?.entries.push(entry);
-				state.lines?.entryOffsets.push(state.size);
-				state.size += Buffer.byteLength(line, "utf-8");
+				state.lines?.entryOffsets.push(offset);
+				state.size += length;
+				if (RECORD_ONLY_ENTRY_TYPES.has(entry.type)) this.#coolAppendedRecord(entry, line, offset, length);
 			}
 		} catch (err) {
 			this.#noteDiskFailure(err);
@@ -1298,6 +1301,27 @@ export class SessionManager {
 			}
 			this.#cold.cool(entry, offset, end - offset);
 		}
+	}
+
+	/**
+	 * Move a {@link RECORD_ONLY_ENTRY_TYPES} entry the append path just wrote out of memory. The
+	 * write completes inside `append`, so the line is in the file object the last publish recorded;
+	 * {@link ColdEntryPayloads.coolWritten} reads it back before cooling. Without this, a spawned
+	 * agent's `session_init` appended after its file was created, and every `subagent_spawn`, stays
+	 * in memory until the next whole-file publish.
+	 */
+	#coolAppendedRecord(entry: SessionEntry, line: string, offset: number, length: number): void {
+		const sessionFile = this.#sessionFile;
+		const identity = this.#publishedFileState?.identity;
+		if (!this.#persist || sessionFile === undefined || identity === undefined) return;
+		if (length < MIN_COLD_LINE_BYTES || this.#storage.openPinnedReaderSync === undefined) return;
+		const blobs = this.#blobs;
+		const pinned = this.#cold.pin(
+			identity,
+			() => this.#openPinnedReader(sessionFile),
+			restored => restoreColdLine(restored, blobs),
+		);
+		if (pinned) this.#cold.coolWritten(entry, line, offset, length);
 	}
 
 	/**
