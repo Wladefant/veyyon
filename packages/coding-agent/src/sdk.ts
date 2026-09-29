@@ -576,8 +576,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const enableLsp = options.enableLsp ?? true;
 		asyncJobManager = createOwnedAsyncJobManager({ options, settings, sessionManager, target: () => session });
 
+		// A spawned agent runs its jobs on the manager its spawner handed over, so a result reaches the
+		// conversation that spawned it. The process-wide instance is the fallback for an SDK caller that
+		// passes a parent prefix and no manager.
 		const scopedAsyncJobManager =
-			asyncJobManager ?? (isInProcessChildSession(options) ? AsyncJobManager.instance() : undefined);
+			asyncJobManager ??
+			(isInProcessChildSession(options) ? (options.asyncJobManager ?? AsyncJobManager.instance()) : undefined);
 
 		const agentRegistry = options.agentRegistry ?? AgentRegistry.global();
 		// A driving agent is named for the conversation it starts, so two live
@@ -629,12 +633,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				settings,
 				authStorage,
 				modelRegistry,
-				// Spawned agents inherit the singleton (the parent's manager) so their bash/task
-				// completions still flow into the spawning conversation's yieldQueue.
-				// Secondary in-process top-level sessions (no parentTaskPrefix, no
-				// constructed manager because the singleton was already installed) leave
-				// this undefined so tools and session job snapshots refuse async work
-				// instead of silently routing into the owning session (issue #1923).
+				// A top-level session runs jobs on its own manager; a spawned agent on its spawner's.
 				asyncJobManager: scopedAsyncJobManager,
 			},
 		});
@@ -653,7 +652,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// so without this a TTSR-only rule (e.g. a triggered builtin) is not
 			// addressable and `rule://` reports "Available: none".
 			setActiveRules(rulebookRules.concat(alwaysApplyRules, ttsrManager.getRules()));
-			if (asyncJobManager) AsyncJobManager.setInstance(asyncJobManager);
+			// The first top-level session's manager stays the process-wide fallback. A later one runs its
+			// own jobs and never replaces it, so its disposal cannot take the first session's jobs down
+			// (issue #1923).
+			if (asyncJobManager && !AsyncJobManager.instance()) AsyncJobManager.setInstance(asyncJobManager);
 		}
 		const localProtocolOptions = options.localProtocolOptions ?? {
 			getArtifactsDir,

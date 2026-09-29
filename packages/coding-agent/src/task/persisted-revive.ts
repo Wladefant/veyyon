@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import { SessionManager } from "@veyyon/kernel/session/session-manager";
+import type { AsyncJobManager } from "../async";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
 import { mcpManagerInstance } from "../mcp/manager-instance";
@@ -140,6 +141,7 @@ export function createPersistedAgentReviverFactory(ctx: PersistedAgentReviveCont
 				enableLsp: ctx.enableLsp,
 				enableMCP: !mcpManager,
 				mcpManager,
+				asyncJobManager: liveAncestorAsyncJobManager(registry, ref.parentId),
 				customTools: mcpProxyTools.length > 0 ? mcpProxyTools : undefined,
 			});
 			// Clamp the active set to the persisted list: createAgentSession's
@@ -152,4 +154,25 @@ export function createPersistedAgentReviverFactory(ctx: PersistedAgentReviveCont
 			return session;
 		};
 	};
+}
+
+/**
+ * The background-job manager of the nearest live session above `parentId`, so a revived agent's
+ * jobs report to the conversation it belongs to. Every session in a spawn tree shares its root's
+ * manager, so the first live ancestor holds the right one. Undefined when none is live; the
+ * session then falls back to the process-wide manager.
+ */
+function liveAncestorAsyncJobManager(
+	registry: AgentRegistry,
+	parentId: string | undefined,
+): AsyncJobManager | undefined {
+	const seen = new Set<string>();
+	while (parentId && !seen.has(parentId)) {
+		seen.add(parentId);
+		const parent = registry.get(parentId);
+		if (!parent) return undefined;
+		if (parent.session) return parent.session.asyncJobManager;
+		parentId = parent.parentId;
+	}
+	return undefined;
 }

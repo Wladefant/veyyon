@@ -27,6 +27,7 @@ import {
 } from "@veyyon/utils";
 import { ORPHAN_AGENT_TRANSCRIPT_PREFIX, sessionFileName } from "@veyyon/utils/session-file";
 import type { ArgotSession } from "argot";
+import type { AsyncJobManager } from "../async";
 import { ModelRegistry } from "../config/model-registry";
 import {
 	formatModelSelectorValue,
@@ -385,6 +386,8 @@ export interface ExecutorOptions {
 	 */
 	preloadedCustomToolPaths?: ToolPathWithSource[];
 	mcpManager?: MCPManager;
+	/** The spawning session's background-job manager, so the child's jobs report to that conversation. */
+	asyncJobManager?: AsyncJobManager;
 	authStorage?: AuthStorage;
 	modelRegistry?: ModelRegistry;
 	settings?: Settings;
@@ -2054,6 +2057,7 @@ function childSessionOptionsBuilder(ctx: ChildSessionContext, runModel: RunModel
 		skipPythonPreflight: Array.isArray(ctx.toolNames) && !ctx.toolNames.includes("eval"),
 		enableMCP: !options.mcpManager,
 		mcpManager: options.mcpManager,
+		asyncJobManager: options.asyncJobManager,
 		customTools: mcpProxyTools.length > 0 ? mcpProxyTools : undefined,
 		localProtocolOptions: options.localProtocolOptions,
 		telemetry,

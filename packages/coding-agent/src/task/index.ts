@@ -1696,6 +1696,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				obfuscateProviderText: this.session.obfuscateProviderText,
 				completeImpl: this.session.sideComplete,
 				mcpManager,
+				// The child's own background jobs report to this conversation, not to whichever
+				// top-level session in the process was built first.
+				asyncJobManager: this.session.asyncJobManager,
 				contextFiles,
 				skills: inheritedSkills,
 				autoloadSkills: resolvedAutoloadSkills,
