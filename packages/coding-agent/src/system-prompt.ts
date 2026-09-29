@@ -6,6 +6,7 @@ import * as path from "node:path";
 import type { AgentTool } from "@veyyon/agent-core";
 import type { ToolExample, TSchema } from "@veyyon/ai";
 import { renderToolInventory } from "@veyyon/ai/dialect";
+import { OperatorNotices, stderrNoticeSink } from "@veyyon/kernel/session/operator-notices";
 import {
 	$env,
 	errorMessage,
@@ -21,6 +22,7 @@ import { findConfigFile } from "./config";
 import {
 	BUILTIN_PERSONALITIES,
 	DEFAULT_PERSONALITY_NAME,
+	describeProjectPersonality,
 	type ResolvedPersonality,
 	resolvePersonality,
 } from "./config/personality-resolver";
@@ -627,6 +629,13 @@ export interface BuildSystemPromptOptions extends Partial<GateInputs> {
 	 * for custom prompt templates, which have no banner sections.
 	 */
 	sectionOrder?: readonly string[];
+	/**
+	 * Where a build raises what the operator needs to know: an unknown or oversized personality,
+	 * and a personality a project file supplied. A session passes its own, which collapses the
+	 * repeat raised by every rebuild and holds startup notices until the TUI can render them.
+	 * Undefined writes each notice to stderr, which is the surface of the `veyyon prompt` inspector.
+	 */
+	operatorNotices?: OperatorNotices;
 }
 
 /** Result of building provider-facing system prompt messages. */
@@ -972,9 +981,16 @@ async function preparePromptInputs(
 			text: BUILTIN_PERSONALITIES[DEFAULT_PERSONALITY_NAME],
 		}),
 	]);
-	if (resolvedPersonality.warning) {
-		logger.warn(resolvedPersonality.warning, { cwd, requested: personality });
-		process.stderr.write(`Warning: ${resolvedPersonality.warning}\n`);
+	if (resolvedPersonality.warning || resolvedPersonality.tier === "project") {
+		const notices = options.operatorNotices ?? new OperatorNotices(stderrNoticeSink);
+		if (resolvedPersonality.warning) {
+			logger.warn(resolvedPersonality.warning, { cwd, requested: personality });
+			notices.warn("personality", resolvedPersonality.warning);
+		}
+		const projectFile = resolvedPersonality.tier === "project" ? resolvedPersonality.path : undefined;
+		if (projectFile) {
+			notices.warn("personality", describeProjectPersonality(resolvedPersonality.name, projectFile));
+		}
 	}
 	deadline.settle(cwd);
 	return {

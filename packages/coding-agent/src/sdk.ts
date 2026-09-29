@@ -1045,6 +1045,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				// this caller, not about the configuration, so it does not belong in the resolver.
 				personality: agentKind === "sub" ? "none" : gateInputs.personality,
 				agentDir,
+				operatorNotices,
 				resolvedCustomPrompt: options.customSystemPrompt,
 				tools: promptTools,
 				toolNames,
