@@ -95,7 +95,6 @@ const gitRow: StatusLineSettings = {
 	preset: "custom",
 	leftSegments: ["git", "pr"],
 	rightSegments: ["session_name"],
-	sessionAccent: false,
 };
 
 /**

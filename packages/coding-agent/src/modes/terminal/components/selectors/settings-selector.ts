@@ -2229,7 +2229,6 @@ export interface StatusLinePreviewSettings {
 	preset?: StatusLinePreset;
 	leftSegments?: StatusLineSegmentId[];
 	rightSegments?: StatusLineSegmentId[];
-	sessionAccent?: boolean;
 	compactThinkingLevel?: boolean;
 }
 
@@ -3668,7 +3667,6 @@ export class SettingsSelectorComponent implements Component {
 			preset: settings.get("statusLine.preset"),
 			leftSegments: settings.get("statusLine.leftSegments"),
 			rightSegments: settings.get("statusLine.rightSegments"),
-			sessionAccent: settings.get("statusLine.sessionAccent"),
 		});
 	}
 
