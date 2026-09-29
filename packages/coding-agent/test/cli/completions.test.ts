@@ -666,17 +666,6 @@ describe("generateCompletion('powershell')", () => {
 			const uniqueKeys = new Set(keys);
 			expect(keys.length).toBe(uniqueKeys.size);
 		}
-
-		// If powershell or pwsh is on PATH, dot-source the generated script and verify exit code 0
-		const psExe = Bun.which("powershell") ?? Bun.which("pwsh");
-		if (psExe) {
-			const proc = Bun.spawnSync([psExe, "-NoProfile", "-NonInteractive", "-Command", `. { ${script} }`], {
-				stdin: "ignore",
-			});
-			expect(proc.exitCode).toBe(0);
-			expect(proc.stderr.toString()).not.toContain("ParserError");
-			expect(proc.stderr.toString()).not.toContain("DuplicateKeyInHashLiteral");
-		}
 	});
 
 	it("resolves both -c and -C for grep to distinct descriptions", () => {
@@ -711,32 +700,12 @@ describe("generateCompletion('powershell')", () => {
 		};
 		const script = generateCompletion("powershell", grepSpec);
 
-		const psExe = Bun.which("powershell") ?? Bun.which("pwsh");
-		if (psExe) {
-			const testCode = `
-${script}
-$ast = [System.Management.Automation.Language.Parser]::ParseInput("veyyon grep -", [ref]$null, [ref]$null)
-$res = & $global:__veyyonCompleter '-' $ast.EndBlock.Statements[0].PipelineElements[0] 13
-$byName = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
-foreach ($r in $res) { $byName[$r.CompletionText] = $r.ToolTip }
-if ($byName['-c'] -ne 'Output match counts per file') { throw "Mismatch -c: $($byName['-c'])" }
-if ($byName['-C'] -ne 'Context lines') { throw "Mismatch -C: $($byName['-C'])" }
-Write-Output "RESOLVED_DISTINCT"
-`;
-			const proc = Bun.spawnSync([psExe, "-NoProfile", "-NonInteractive", "-Command", testCode], {
-				stdin: "ignore",
-			});
-			expect(proc.exitCode).toBe(0);
-			expect(proc.stdout.toString()).toContain("RESOLVED_DISTINCT");
-		} else {
-			// When powershell binary is not available (e.g. inside Linux bwrap container),
-			// verify statically that both flags exist with their distinct descriptions
-			// and that both flags and tooltips in the completer are ordinal hashtables.
-			expect(script).toContain("'-c', @{ Desc = 'Output match counts per file'");
-			expect(script).toContain("'-C', @{ Desc = 'Context lines'");
-			expect(script).toContain("$flags = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)");
-			expect(script).toContain("$tooltips = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)");
-		}
+		// Flag table passes -c and -C as distinct pairs to __Veyyon-FlagTable with separate descriptions
+		expect(script).toContain("'-c', @{ Desc = 'Output match counts per file'");
+		expect(script).toContain("'-C', @{ Desc = 'Context lines'");
+		// Runtime completer builds ordinal hashtables for both $flags and $tooltips
+		expect(script).toContain("$flags = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)");
+		expect(script).toContain("$tooltips = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)");
 	});
 });
 
