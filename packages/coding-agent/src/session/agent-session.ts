@@ -257,8 +257,6 @@ import { type AsyncJob, AsyncJobManager } from "../async";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
 import {
 	type CompactionEngineAction,
-	isCompactionStrategyOff,
-	isThresholdCompactionDisabled,
 	resolveCompactionEngineAction,
 	toAgentCompactionSettings,
 } from "../config/compaction-strategy";
@@ -279,12 +277,7 @@ import { DEFAULT_MODEL_SLOT, getKnownRoleIds, resolveModelSlot } from "../config
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
 import { applyProviderGlobalsFromSettings } from "../config/provider-globals";
 import { buildServiceTierByFamily, PRIORITY_TIER_COMMAND_LABEL } from "../config/service-tier";
-import {
-	getDefault,
-	type Settings,
-	type SkillsSettings,
-	validateProviderMaxInFlightRequests,
-} from "../config/settings";
+import { type Settings, type SkillsSettings, validateProviderMaxInFlightRequests } from "../config/settings";
 import { onAppendOnlyModeChanged, onModelRolesChanged } from "../config/settings-signals";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { loadCapability, reset as resetCapabilities } from "../discovery/capability";
@@ -10254,11 +10247,7 @@ export class AgentSession {
 		if (contextWindow <= 0) return;
 
 		const compactionSettings = this.settings.getGroup("compaction");
-		if (
-			!compactionSettings.enabled ||
-			isCompactionStrategyOff(compactionSettings.strategy as string) ||
-			compactionSettings.midTurnEnabled === false
-		) {
+		if (!compactionSettings.enabled || compactionSettings.midTurnEnabled === false) {
 			return;
 		}
 
@@ -10381,7 +10370,7 @@ export class AgentSession {
 
 			// No promotion target available fall through to compaction
 			const compactionSettings = this.settings.getGroup("compaction");
-			if (!isThresholdCompactionDisabled(compactionSettings.enabled, compactionSettings.strategy as string)) {
+			if (compactionSettings.enabled) {
 				return await this.#runRecoveryCompactionWithRollback("overflow", assistantMessage, {
 					autoContinue,
 				});
@@ -10461,10 +10450,7 @@ export class AgentSession {
 			}
 
 			const incompleteCompactionSettings = this.settings.getGroup("compaction");
-			if (
-				incompleteCompactionSettings.enabled &&
-				!isCompactionStrategyOff(incompleteCompactionSettings.strategy as string)
-			) {
+			if (incompleteCompactionSettings.enabled) {
 				logger.debug("Compaction triggered by response.incomplete (length stop, no promotion target)", {
 					model: `${assistantMessage.provider}/${assistantMessage.model}`,
 					strategy: incompleteCompactionSettings.strategy,
@@ -10490,8 +10476,7 @@ export class AgentSession {
 		const supersedeResult = await this.#pruneStaleToolResults();
 
 		const compactionSettings = this.settings.getGroup("compaction");
-		if (isThresholdCompactionDisabled(compactionSettings.enabled, compactionSettings.strategy as string))
-			return COMPACTION_CHECK_NONE;
+		if (!compactionSettings.enabled) return COMPACTION_CHECK_NONE;
 
 		// Case 4: Threshold - turn succeeded but context is getting large
 		// Skip if this was an error (non-overflow errors don't have usage data)
@@ -12472,12 +12457,8 @@ export class AgentSession {
 		} = {},
 	): Promise<CompactionCheckResult> {
 		const compactionSettings = this.settings.getGroup("compaction");
-		const rawStrategy = compactionSettings.strategy as string | undefined;
-		if (reason === "idle") {
-			if (isCompactionStrategyOff(rawStrategy)) return COMPACTION_CHECK_NONE;
-		} else if (isThresholdCompactionDisabled(compactionSettings.enabled, rawStrategy)) {
-			return COMPACTION_CHECK_NONE;
-		}
+		// Idle compaction has its own gate; `compaction.enabled` governs the rest.
+		if (reason !== "idle" && !compactionSettings.enabled) return COMPACTION_CHECK_NONE;
 		const generation = this.#promptGeneration;
 		// Per run: a gap recorded by an earlier compaction says nothing about this
 		// history, and carrying it forward would over-cut a session that already
@@ -13140,15 +13121,11 @@ export class AgentSession {
 	 */
 	setAutoCompactionEnabled(enabled: boolean): void {
 		this.settings.set("compaction.enabled", enabled);
-		if (enabled && isCompactionStrategyOff(this.settings.get("compaction.strategy") as string)) {
-			this.settings.override("compaction.strategy", getDefault("compaction.strategy"));
-		}
 	}
 
 	/** Whether auto-compaction is enabled */
 	get autoCompactionEnabled(): boolean {
-		const compaction = this.settings.getGroup("compaction");
-		return !isThresholdCompactionDisabled(compaction.enabled, compaction.strategy);
+		return this.settings.get("compaction.enabled");
 	}
 
 	// =========================================================================

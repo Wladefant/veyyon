@@ -4,6 +4,7 @@
 
 ### Changed
 
+- A config with `compaction.strategy: "off"` beside `compaction.enabled: true` migrates to `compaction.enabled: false`, and `compaction.enabled` is the only setting that turns auto-compaction off.
 - The HTML export's session tree prints each tool call with the same label as the terminal tree, for every registered tool, instead of its own switch whose `find` and `ls` cases matched no registered tool and printed most calls as raw JSON; a newline in an `op`, `action` or name argument no longer breaks a tree row in either tree.
 - `tools/fs/read.ts` is split into per-concern `read-*.ts` modules with no change to the read tool's schema, output or exports.
 - The session retry loop, the async job manager, the launch broker and the Gemini web search provider take their exponential delay from `exponentialBackoffDelay` in `@veyyon/utils`; each loop's base, ceiling and jitter are unchanged.
