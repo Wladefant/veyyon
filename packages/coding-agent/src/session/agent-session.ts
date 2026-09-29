@@ -5431,7 +5431,11 @@ export class AgentSession {
 			// close is left to finish detached. Mirrors the bounded async-job teardown.
 			if (this.#releaseMcpManager) {
 				try {
-					await withTimeout(this.#releaseMcpManager(), 3_000, "Timed out releasing the MCP manager during dispose");
+					await withTimeout(
+						this.#releaseMcpManager(),
+						3_000,
+						"Timed out releasing the MCP manager during dispose",
+					);
 				} catch (error) {
 					logger.warn("Failed to release the MCP manager during dispose", { error: errorMessage(error) });
 				}

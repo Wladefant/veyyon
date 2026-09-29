@@ -110,7 +110,6 @@ type InternalUrlRouting =
 	| { readonly kind: "promoted"; readonly readPath: string; readonly selector: string | undefined }
 	| { readonly kind: "not-internal" };
 
-
 export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	readonly name = "read";
 	readonly approval = (args: unknown): ToolTier =>
