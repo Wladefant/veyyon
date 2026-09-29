@@ -38,6 +38,7 @@ import { errorMessage, formatCount, logger } from "@veyyon/utils";
 import type { Settings } from "../../config/settings";
 import type { ContextUsage } from "../../extensibility/extensions/types";
 import type { ScheduledAgentContinueOptions } from "../agent-session-types";
+import type { ElisionOutcome } from "./history-rewrites";
 
 /** What {@link CompactionRecovery} reads from the session's public surface. */
 export interface CompactionRecoverySession {
@@ -63,12 +64,7 @@ export interface CompactionRecoveryHost {
 	/** The compaction the next prompt is built from on `branch`. */
 	promptCompaction(branch: readonly SessionEntry[]): CompactionEntry | null;
 	/** Offload `regions` to one recovery artifact and replace each with a placeholder. */
-	offloadAndApplyShakeRegions(regions: ShakeRegion[]): Promise<{
-		toolResultsDropped: number;
-		blocksDropped: number;
-		tokensFreed: number;
-		artifactId: string | undefined;
-	}>;
+	offloadAndApplyShakeRegions(regions: ShakeRegion[]): Promise<ElisionOutcome>;
 	rebasePendingContextSnapshotAfterHistoryRewrite(): void;
 }
 

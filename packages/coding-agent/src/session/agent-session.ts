@@ -29,7 +29,6 @@ import {
 	type AgentTurnEndContext,
 	AppendOnlyContextManager,
 	type AsideMessage,
-	countTokens,
 	resolveTelemetry,
 	type StreamFn,
 	TERMINAL_TOOL_RESULT_ABORT_REASON,
@@ -38,13 +37,9 @@ import {
 	toolResultNeverRan,
 } from "@veyyon/agent-core";
 import {
-	AGGRESSIVE_SHAKE_CONFIG,
-	applyShakeRegions,
 	type CompactionResult,
 	calculateContextTokens,
 	collectEntriesForBranchSummary,
-	collectRedundantToolResultRegions,
-	collectShakeRegions,
 	compactionContextTokens,
 	computeFileLists,
 	createFileOps,
@@ -56,16 +51,9 @@ import {
 	resolveThresholdTokens,
 	type SessionMessageEntry,
 	type ShakeConfig,
-	type ShakeRegion,
 	shouldCompact,
 	upsertFileOperations,
 } from "@veyyon/agent-core/compaction";
-import {
-	DEFAULT_PRUNE_CONFIG,
-	pruneSupersededToolResults,
-	pruneToolOutputs,
-	readToolSupersedeKey,
-} from "@veyyon/agent-core/compaction/pruning";
 import type {
 	Api,
 	AssistantMessage,
@@ -111,8 +99,6 @@ import {
 	COMPACTION_CHECK_NONE,
 	type CompactionCheckResult,
 	declaredContextWindow,
-	PRUNE_CACHE_WARM_SUFFIX_TOKENS,
-	PRUNE_IDLE_FLUSH_MS,
 } from "@veyyon/kernel/session/agent-session-compaction-policy";
 import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
 import type { ClientBridge, ClientBridgePermissionOutcome } from "@veyyon/kernel/session/client-bridge";
@@ -408,7 +394,6 @@ import {
 	replaceLostBlobPayloads,
 	SILENT_ABORT_MARKER,
 	SKILL_PROMPT_MESSAGE_TYPE,
-	stripImagesFromMessage,
 	USER_INTERRUPT_LABEL,
 } from "./messages";
 import { computeNonMessageBreakdown, computeNonMessageTokens } from "./non-message-tokens";
@@ -421,6 +406,7 @@ import { AdvisorRoster, type AdvisorRosterHost } from "./runtime/advisor-roster"
 import { CheckpointRuntime } from "./runtime/checkpoint-runtime";
 import { CompactionRuntime } from "./runtime/compaction-runtime";
 import { ContextAccounting } from "./runtime/context-accounting";
+import { HistoryRewrites } from "./runtime/history-rewrites";
 import { IrcInbox } from "./runtime/irc-inbox";
 import { LoopGuards } from "./runtime/loop-guards";
 import { lastDeliveredBlock, MemoryContext } from "./runtime/memory-context";
@@ -588,20 +574,6 @@ function getCustomMessageTextContent(message: Pick<CustomMessage, "content">): s
 	return contentText(message.content, { separator: "" });
 }
 
-/**
- * The marker that replaces one region's content. A truncation region is the
- * middle of a text whose head and tail survive, so its marker says the text
- * continues; every other region replaced its content entirely.
- */
-function shakeElidePlaceholder(region: ShakeRegion, index: number, artifactId: string | undefined): string {
-	const truncated = region.kind === "block" && region.truncation === true;
-	const verb = truncated ? "truncated" : "shaken";
-	const marker = artifactId
-		? `[${verb} ~${region.tokens} tokens; recover: artifact://${artifactId} (region ${index + 1})]`
-		: `[${verb} ~${region.tokens} tokens]`;
-	return truncated ? `\n${marker}\n` : marker;
-}
-
 function isTerminalYieldToolResult(event: {
 	toolName: string;
 	isError?: boolean;
@@ -745,7 +717,7 @@ export class AgentSession {
 		memoryBackendContext: preparation => collectMemoryBackendContext(this, preparation),
 		withPlanProtection: config => this.#planMode.withProtection(config),
 		promptCompaction: branch => this.#promptCompaction(branch),
-		offloadAndApplyShakeRegions: regions => this.#offloadAndApplyShakeRegions(regions),
+		offloadAndApplyShakeRegions: regions => this.#rewrites.offloadAndApply(regions),
 		rebasePendingContextSnapshotAfterHistoryRewrite: () => this.#context.rebaseAfterHistoryRewrite(),
 		resetAllAdvisorRuntimes: () => this.#resetAllAdvisorRuntimes(),
 		afterHistoryCompacted: () => {
@@ -980,6 +952,8 @@ export class AgentSession {
 	readonly #stopRetries: StopRetries;
 	/** Usage headers and turn cost recording, usage reports, saved-reset redeems and Codex auto-redeem. */
 	readonly #usage: ProviderUsage;
+	/** Stale-result and overflow prunes, image drops, shake and dedup of the recorded history. */
+	readonly #rewrites: HistoryRewrites;
 	#promptGeneration = 0;
 	/**
 	 * Prompts refused as busy and waiting for the agent to go idle. Each is a
@@ -1653,6 +1627,19 @@ export class AgentSession {
 			model: () => this.model ?? undefined,
 			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
 			ui: () => (this.#extensionRunner?.hasUI() ? this.#extensionRunner.getUIContext() : undefined),
+		});
+		this.#rewrites = new HistoryRewrites({
+			sessionStore: this.sessionManager,
+			agent: this.agent,
+			settings: this.settings,
+			withPlanProtection: config => this.#planMode.withProtection(config),
+			model: () => this.model,
+			keepBoundaryId: branch => this.#promptCompaction(branch)?.firstKeptEntryId,
+			rebuiltMessages: () => this.buildDisplaySessionContext().messages,
+			resetAdvisorRuntimes: () => this.#resetAllAdvisorRuntimes(),
+			closeCodexSessions: () => this.#providerSessions.closeCodexForHistoryRewrite(this.model),
+			markHistoryRewritten: () => this.#context.markHistoryRewritten(),
+			syncTodos: () => this.#todo.syncFromBranch(),
 		});
 		this.#ttsr = new TtsrRuntime(
 			{
@@ -7597,311 +7584,29 @@ export class AgentSession {
 	// =========================================================================
 
 	/**
-	 * The epilogue every in-place history rewrite owes, in one place: persist the
-	 * new shape, re-prime the agent's view of it, reset advisor runtimes, drop the
-	 * provider sessions that cache message identity, and put the context report
-	 * back on the messages that now exist.
-	 *
-	 * That last part is two facts, and it is not optional. While a prompt is in
-	 * flight the pending snapshot is what the context report and the
-	 * post-compaction headroom / retry-fit checks measure, so it is re-anchored
-	 * here (see {@link ContextAccounting.rebaseAfterHistoryRewrite}). And
-	 * once any provider usage from this turn has landed, THAT is what the report
-	 * reads instead: a number the provider computed over a prompt this rewrite
-	 * just shortened. Recording the boundary is what stops the report from
-	 * counting the bytes it removed until a response arrives that actually
-	 * describes the new shape.
-	 *
-	 * Neither was the rewrite's job before, and the results were exactly what
-	 * that predicts: three call sites re-anchored the snapshot and four rewrite
-	 * paths did not (including `/shake` from both front ends), while nothing
-	 * anywhere invalidated the anchor. Since the compaction decision floors the
-	 * provider figure with a local estimate, an anchor reading high by the bytes
-	 * a pass just removed cannot be argued away by the floor: it wins the max, so
-	 * "the dedup alone brought us back under the bar, skip the summarization"
-	 * could never fire.
+	 * Strip image blocks from every message on the current branch and persist the rewrite. Returns
+	 * `{ removed: 0 }` without a rewrite when the branch holds no image.
 	 */
-	async #afterHistoryRewrite(updated: readonly SessionEntry[]): Promise<void> {
-		await this.sessionManager.rewriteEntries(updated);
-		const sessionContext = this.buildDisplaySessionContext();
-		this.agent.replaceMessages(sessionContext.messages);
-		this.#resetAllAdvisorRuntimes();
-		this.#providerSessions.closeCodexForHistoryRewrite(this.model);
-		this.#context.markHistoryRewritten();
+	dropImages(): Promise<{ removed: number }> {
+		return this.#rewrites.dropImages();
 	}
 
 	/**
-	 * Threshold-time overflow prune: blank the oldest tool results outside the
-	 * protect-recent window, plus any result its tool flagged contextually
-	 * useless. Runs before the threshold comparison so a turn that pruning alone
-	 * can bring back under the trigger never pays for a summarization request.
+	 * Reduce context by dropping heavy content. `images` delegates to {@link dropImages}; `elide`
+	 * replaces large tool results, large fenced or XML blocks, and duplicated tool results with
+	 * placeholders that link an `artifact://` copy of the original. Zero counts when nothing is
+	 * eligible.
 	 */
-	async #pruneToolOutputs(): Promise<{ prunedCount: number; tokensSaved: number } | undefined> {
-		const branchEntries = this.sessionManager.getBranch();
-		const keepBoundaryId = this.#promptCompaction(branchEntries)?.firstKeptEntryId;
-		const result = pruneToolOutputs(
-			branchEntries,
-			this.#planMode.withProtection({
-				...DEFAULT_PRUNE_CONFIG,
-				pruneUseless: this.settings.getGroup("compaction").dropUseless,
-				// Cache-stable boundary: never re-write the warm, already-sent prefix
-				// (deep stale/age victims) or summarized-away entries every turn.
-				// Preserved-thinking models bind each thinking block to the bytes
-				// before it, so a rewrite anywhere in the sent region also costs the
-				// reasoning chain behind it: hold the window to entries whose suffix
-				// is empty rather than pay that every turn.
-				keepBoundaryId,
-				cacheWarmSuffixTokens: this.model?.thinking?.prefixBinding === true ? 0 : PRUNE_CACHE_WARM_SUFFIX_TOKENS,
-			}),
-		);
-		if (result.prunedCount === 0) {
-			return undefined;
-		}
-
-		await this.#afterHistoryRewrite(result.prunedEntries);
-		this.#todo.syncFromBranch();
-		return result;
+	shake(mode: ShakeMode, opts: { config?: ShakeConfig; signal?: AbortSignal } = {}): Promise<ShakeResult> {
+		return this.#rewrites.shake(mode, opts);
 	}
 
 	/**
-	 * Per-turn stale-result pass: prune older `read` results that a newer read
-	 * of the same file has made stale, plus results their tool flagged
-	 * contextually useless. Cache-aware (only fires when the suffix after a
-	 * candidate is small or the session has been idle long enough that the
-	 * provider prompt cache is cold), so it is cheap to run every turn. Gated
-	 * on the `compaction.supersedeReads` and `compaction.dropUseless` settings.
-	 *
-	 * Persists via `rewriteEntries` like every other history rewrite: the
-	 * session file must match the live (pruned) context or file-based forks
-	 * (`/fork`, `/tan`) and resume rebuild a divergent prefix and cold-miss the
-	 * provider prompt cache.
+	 * Elide earlier tool results byte-identical to a newer one. Lossless and model-free, so any
+	 * compaction strategy may run it. Zero counts when nothing is redundant.
 	 */
-	async #pruneStaleToolResults(): Promise<{ prunedCount: number; tokensSaved: number } | undefined> {
-		const { supersedeReads, dropUseless } = this.settings.getGroup("compaction");
-		if (!supersedeReads && !dropUseless) return undefined;
-		const branchEntries = this.sessionManager.getBranch();
-		const keepBoundaryId = this.#promptCompaction(branchEntries)?.firstKeptEntryId;
-		const result = pruneSupersededToolResults(
-			branchEntries,
-			this.#planMode.withProtection({
-				supersedeKey: supersedeReads ? readToolSupersedeKey : undefined,
-				pruneUseless: dropUseless,
-				protectedTools: [...DEFAULT_PRUNE_CONFIG.protectedTools],
-				// Never re-write summarized-away entries; only flush the whole sent
-				// region once the cache is genuinely cold (idle exceeds the 1h TTL).
-				keepBoundaryId,
-				idleFlushMs: PRUNE_IDLE_FLUSH_MS,
-				// See `#pruneToolOutputs`: a prefix-bound model pays for an in-place
-				// rewrite with the thinking blocks recorded after it, which the cache
-				// math cannot price — so cap eligibility instead of the tail, or a
-				// heavy enough stale result still buys itself a batch rewrite.
-				...(this.model?.thinking?.prefixBinding === true ? { cacheWarmSuffixTokens: 0 } : {}),
-			}),
-		);
-		if (result.prunedCount === 0) {
-			return undefined;
-		}
-
-		await this.#afterHistoryRewrite(result.prunedEntries);
-		this.#todo.syncFromBranch();
-		return result;
-	}
-
-	/**
-	 * Strip image content blocks from every message on the current branch and
-	 * persist the rewrite. Walks `SessionManager.getBranch()` in place — both
-	 * `SessionMessageEntry.message` and `CustomMessageEntry.content` arrays
-	 * are mutated, then `rewriteEntries` durably commits the new shape. The
-	 * agent's runtime view is rebuilt from the freshly-mutated entries so any
-	 * provider sessions caching message identity (Codex Responses) are torn
-	 * down to force a clean replay on the next turn.
-	 *
-	 * No-op when the branch carries no images; returns `{ removed: 0 }` and
-	 * skips the disk rewrite.
-	 */
-	async dropImages(): Promise<{ removed: number }> {
-		const branchEntries = this.sessionManager.getBranch();
-		let removed = 0;
-		const updated: SessionEntry[] = [];
-		for (const entry of branchEntries) {
-			if (entry.type === "message") {
-				const stripped = stripImagesFromMessage(entry.message);
-				if (stripped > 0) {
-					removed += stripped;
-					updated.push(entry);
-				}
-				continue;
-			}
-			if (entry.type === "custom_message" && typeof entry.content !== "string") {
-				const kept: typeof entry.content = [];
-				let dropped = 0;
-				for (const part of entry.content) {
-					if (part.type === "image") {
-						dropped++;
-					} else {
-						kept.push(part);
-					}
-				}
-				if (dropped > 0) {
-					if (kept.length === 0) {
-						kept.push({ type: "text", text: "[image removed]" });
-					}
-					entry.content = kept;
-					removed += dropped;
-					updated.push(entry);
-				}
-			}
-		}
-		if (removed === 0) {
-			return { removed: 0 };
-		}
-		await this.#afterHistoryRewrite(updated);
-		return { removed };
-	}
-
-	/**
-	 * Surgically reduce context by dropping heavy content ("shake").
-	 *
-	 * - `images` delegates to {@link dropImages}.
-	 * - `elide` replaces whole tool-call results and large fenced/XML blocks
-	 *   with short placeholders that embed an `artifact://` recovery link.
-	 *
-	 * Mutates the branch in place, persists via `rewriteEntries`, replays the
-	 * rebuilt context through the agent, and tears down provider sessions that
-	 * cache message identity — same rewrite contract as {@link dropImages}.
-	 *
-	 * No-op (zero counts) when nothing is eligible.
-	 */
-	async shake(mode: ShakeMode, opts: { config?: ShakeConfig; signal?: AbortSignal } = {}): Promise<ShakeResult> {
-		if (mode === "images") {
-			const { removed } = await this.dropImages();
-			return { mode, toolResultsDropped: 0, blocksDropped: 0, imagesDropped: removed, tokensFreed: 0 };
-		}
-
-		const branchEntries = this.sessionManager.getBranch();
-		const config = this.#planMode.withProtection({
-			...(opts.config ?? AGGRESSIVE_SHAKE_CONFIG),
-			// Skip entries summarized away by the latest compaction — shaking them
-			// only churns persisted history with no prompt/cache effect.
-			keepBoundaryId: this.#promptCompaction(branchEntries)?.firstKeptEntryId,
-		});
-		// Heavy-content pass: large tool results and fenced/XML blocks under the
-		// usual size/protect-window/savings gates. Redundancy pass: earlier
-		// tool-results byte-identical to a newer one (re-read of an unchanged file,
-		// re-run of the same command). A duplicate carries no unique information, so
-		// it is eligible however recent it is — the two passes overlap only on the
-		// same tool-result entry, which the newer pass must not re-elide.
-		const heavyRegions = collectShakeRegions(branchEntries, config);
-		const redundantRegions = collectRedundantToolResultRegions(branchEntries, config);
-		const heavyToolResultEntries = new Set<ShakeRegion["entry"]>(
-			heavyRegions.filter(region => region.kind === "toolResult").map(region => region.entry),
-		);
-		const regions = [
-			...heavyRegions,
-			...redundantRegions.filter(region => !heavyToolResultEntries.has(region.entry)),
-		];
-		if (regions.length === 0) {
-			return { mode, toolResultsDropped: 0, blocksDropped: 0, tokensFreed: 0 };
-		}
-
-		const applied = await this.#offloadAndApplyShakeRegions(regions);
-
-		return {
-			mode,
-			toolResultsDropped: applied.toolResultsDropped,
-			blocksDropped: applied.blocksDropped,
-			tokensFreed: applied.tokensFreed,
-			artifactId: applied.artifactId,
-		};
-	}
-
-	/**
-	 * Offload a set of shake regions to one recovery artifact, splice their
-	 * placeholders in place, persist the rewrite, and re-prime the provider /
-	 * advisor views. Shared by {@link shake} and
-	 * {@link dedupeRedundantToolResults} so the offload + rewrite tail lives in
-	 * exactly one place. Caller guarantees `regions` is non-empty.
-	 */
-	async #offloadAndApplyShakeRegions(regions: ShakeRegion[]): Promise<{
-		toolResultsDropped: number;
-		blocksDropped: number;
-		tokensFreed: number;
-		artifactId: string | undefined;
-	}> {
-		const artifactId = await this.#saveShakeArtifact(regions);
-		const replacements = regions.map((region, index) => shakeElidePlaceholder(region, index, artifactId));
-
-		let toolResultsDropped = 0;
-		let blocksDropped = 0;
-		let originalTokens = 0;
-		let replacementTokens = 0;
-		const items = regions.map((region, index) => {
-			if (region.kind === "toolResult") toolResultsDropped++;
-			else blocksDropped++;
-			originalTokens += region.tokens;
-			const replacement = replacements[index];
-			if (replacement.length > 0) replacementTokens += countTokens(replacement);
-			return { region, replacement };
-		});
-
-		applyShakeRegions(items);
-
-		await this.#afterHistoryRewrite(regions.map(region => region.entry));
-
-		return {
-			toolResultsDropped,
-			blocksDropped,
-			tokensFreed: Math.max(0, originalTokens - replacementTokens),
-			artifactId,
-		};
-	}
-
-	/**
-	 * Lossless, LLM-free reducer: elide earlier tool-results that are
-	 * byte-identical to a newer one (re-read of an unchanged file, re-run of the
-	 * same command). Unlike {@link shake} this touches only exact duplicates, so
-	 * it is safe to run proactively on any compaction strategy — the newest copy
-	 * of each result stays live and the elided copies remain recoverable via the
-	 * offload artifact. Returns zero counts when nothing is redundant.
-	 */
-	async dedupeRedundantToolResults(): Promise<{
-		toolResultsDropped: number;
-		tokensFreed: number;
-		artifactId?: string;
-	}> {
-		const branchEntries = this.sessionManager.getBranch();
-		const config = this.#planMode.withProtection({
-			...AGGRESSIVE_SHAKE_CONFIG,
-			keepBoundaryId: this.#promptCompaction(branchEntries)?.firstKeptEntryId,
-		});
-		const regions = collectRedundantToolResultRegions(branchEntries, config);
-		if (regions.length === 0) return { toolResultsDropped: 0, tokensFreed: 0 };
-
-		const applied = await this.#offloadAndApplyShakeRegions(regions);
-		return {
-			toolResultsDropped: applied.toolResultsDropped,
-			tokensFreed: applied.tokensFreed,
-			artifactId: applied.artifactId,
-		};
-	}
-
-	/**
-	 * Concatenate the original region contents into one session artifact so the
-	 * agent can read them back via `artifact://<id>`. Returns `undefined` when
-	 * the session is not persisted or the write fails — callers degrade to a
-	 * bare placeholder.
-	 */
-	async #saveShakeArtifact(regions: ShakeRegion[]): Promise<string | undefined> {
-		const parts: string[] = [];
-		for (let i = 0; i < regions.length; i++) {
-			const region = regions[i];
-			parts.push(`### region ${i + 1} (${region.label}, ~${region.tokens} tok)`, "", region.originalText, "");
-		}
-		try {
-			return await this.sessionManager.saveArtifact(parts.join("\n"), "shake");
-		} catch {
-			return undefined;
-		}
+	dedupeRedundantToolResults(): Promise<{ toolResultsDropped: number; tokensFreed: number; artifactId?: string }> {
+		return this.#rewrites.dedupeRedundantToolResults();
 	}
 
 	/**
@@ -8467,7 +8172,7 @@ export class AgentSession {
 		// Stale-result pass runs every turn, before any threshold gating: it is
 		// cheap (bails when no candidate) and independent of the compaction
 		// setting.
-		const supersedeResult = await this.#pruneStaleToolResults();
+		const supersedeResult = await this.#rewrites.pruneStale();
 
 		const compactionSettings = this.settings.getGroup("compaction");
 		if (!compactionSettings.enabled) return COMPACTION_CHECK_NONE;
@@ -8475,7 +8180,7 @@ export class AgentSession {
 		// Case 4: Threshold - turn succeeded but context is getting large
 		// Skip if this was an error (non-overflow errors don't have usage data)
 		if (assistantMessage.stopReason === "error") return COMPACTION_CHECK_NONE;
-		const pruneResult = await this.#pruneToolOutputs();
+		const pruneResult = await this.#rewrites.pruneOverflow();
 		const maintenanceTokensFreed = (supersedeResult?.tokensSaved ?? 0) + (pruneResult?.tokensSaved ?? 0);
 		// `errorIsFromBeforeCompaction` (computed above) is the general
 		// "this assistant message predates the latest compaction" predicate here,
