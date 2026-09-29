@@ -5916,9 +5916,9 @@ export class AgentSession {
 	 */
 	sessionToolApprovals(): SessionToolApprovals {
 		return {
-			get: toolName => this.#sessionToolApprovals.get(toolName),
-			set: (toolName, decision) => {
-				this.#sessionToolApprovals.set(toolName, decision);
+			get: key => this.#sessionToolApprovals.get(key),
+			set: (key, decision) => {
+				this.#sessionToolApprovals.set(key, decision);
 			},
 		};
 	}

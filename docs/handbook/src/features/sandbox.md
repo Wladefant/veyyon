@@ -45,18 +45,31 @@ tools:
 
 When the active mode requires approval for a tool call, the TUI shows a **Permission required**
 card. The card shows the tool, states that the decision applies to this call only, separates the
-reason from the requested command or file operation, and waits on four options:
+reason from the requested command or file operation, and waits on four options, five for a bash
+call that reports a pattern:
 
 - **Approve**: run this call once. Nothing is remembered.
+- **Approve "&lt;pattern&gt;" for session**: run this and every later call that reports the same
+  pattern, until you exit. Only bash reports one.
 - **Approve for session**: run this and every later call to this tool, until you exit.
 - **Deny**: reject this call and return `Tool call denied by user: <name>` to the model.
 - **Deny for session**: reject this and every later call to this tool, until you exit.
 
-The two "for session" rows are session memory, not policy: nothing is written to
+The "for session" rows are session memory, not policy: nothing is written to
 `tools.approval`, and the next launch prompts again. A remembered decision also covers only
 the ordinary tier prompt. The three prompts that are about a call's ARGUMENTS rather than
 its tool name still prompt every time: a flagged bash command, a path outside the working
 directory, and a call that spends a stored credential.
+
+A bash pattern keeps the program and, for a subcommand, the subcommand: `git status -s` reports
+`git status *`, which covers `git status` and `git status --short src` and not `git log`. A second
+word that is not a subcommand is kept verbatim, so `ls -la` reports `ls -la` and covers only that
+command. A program that runs another command (`sudo`, `xargs`, `env`, `ssh`, `bash`, `nohup`,
+`timeout`) reports its exact command. A call reports no pattern when it contains quoting, `$`, `~`,
+a backtick, a glob, a pipe, a separator, a subshell, a redirect, a comment or a newline, when it
+assigns a variable before the program or sets an environment variable or working directory, when
+the pattern would be longer than 48 characters, or when the guard flags it.
+A pattern grant is compared by string equality with the pattern the next call reports.
 
 The selected option uses a radio marker and includes a short description. Navigate with the usual
 list keys (`up`/`down`, `enter` to confirm, `esc` to cancel; cancelling counts as a denial).
