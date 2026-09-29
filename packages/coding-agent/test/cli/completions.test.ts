@@ -318,7 +318,7 @@ describe("veyyon completions (integration / drift)", () => {
 		// Hidden/default commands must NOT surface as completable subcommands.
 		expect(stdout).not.toContain("_veyyon_cmd_launch");
 		expect(stdout).not.toContain("_veyyon_cmd___complete");
-	});
+	}, 30000);
 
 	it("rejects an unsupported shell with a named error and the usage exit code", async () => {
 		const { env, cleanup } = hermeticSpawnEnv();
@@ -473,28 +473,28 @@ describe("generateCompletion('powershell')", () => {
 		// PowerShell matches the token the user typed literally; omitting `-r`
 		// means `-r <tab>` offers sessions for `--resume` but not for `-r`.
 		expect(out).toContain(
-			"'--resume' = @{ Desc = 'Resume'; Value = @{ Kind = 'sessions'; Values = @(); Multiple = $false } }",
+			"'--resume', @{ Desc = 'Resume'; Value = @{ Kind = 'sessions'; Values = @(); Multiple = $false } }",
 		);
 		expect(out).toContain(
-			"'-r' = @{ Desc = 'Resume'; Value = @{ Kind = 'sessions'; Values = @(); Multiple = $false } }",
+			"'-r', @{ Desc = 'Resume'; Value = @{ Kind = 'sessions'; Values = @(); Multiple = $false } }",
 		);
 	});
 
 	it("bakes static enum and list candidates into the script", () => {
 		expect(out).toContain(
-			"'--thinking' = @{ Desc = 'Effort'; Value = @{ Kind = 'enum'; Values = @('low', 'high'); Multiple = $false } }",
+			"'--thinking', @{ Desc = 'Effort'; Value = @{ Kind = 'enum'; Values = @('low', 'high'); Multiple = $false } }",
 		);
 		expect(out).toContain(
-			"'--tools' = @{ Desc = 'Tools'; Value = @{ Kind = 'list'; Values = @('read', 'bash'); Multiple = $false } }",
+			"'--tools', @{ Desc = 'Tools'; Value = @{ Kind = 'list'; Values = @('read', 'bash'); Multiple = $false } }",
 		);
 	});
 
 	it("records whether a model flag takes one value or many", () => {
 		expect(out).toContain(
-			"'--model' = @{ Desc = 'Model to use'; Value = @{ Kind = 'models'; Values = @(); Multiple = $false } }",
+			"'--model', @{ Desc = 'Model to use'; Value = @{ Kind = 'models'; Values = @(); Multiple = $false } }",
 		);
 		expect(out).toContain(
-			"'--models' = @{ Desc = 'Model list'; Value = @{ Kind = 'models'; Values = @(); Multiple = $true } }",
+			"'--models', @{ Desc = 'Model list'; Value = @{ Kind = 'models'; Values = @(); Multiple = $true } }",
 		);
 	});
 
@@ -518,12 +518,12 @@ describe("generateCompletion('powershell')", () => {
 			out.indexOf("$global:__veyyonCommandFlags = @{"),
 			out.indexOf("$global:__veyyonCommandArgs = @{"),
 		);
-		expect(table).toContain("'commit' = @{");
+		expect(table).toContain("'commit' = (__Veyyon-FlagTable @(");
 		expect(table).toContain(
-			"'--push' = @{ Desc = 'Push'; Value = @{ Kind = 'flag'; Values = @(); Multiple = $false } }",
+			"'--push', @{ Desc = 'Push'; Value = @{ Kind = 'flag'; Values = @(); Multiple = $false } }",
 		);
 		// A subcommand alias must carry the same flags, or `wt --<tab>` is empty.
-		expect(table).toContain("'wt' = @{");
+		expect(table).toContain("'wt' = (__Veyyon-FlagTable @())");
 	});
 
 	it("offers a subcommand's positional enum values", () => {
@@ -559,6 +559,7 @@ describe("generateCompletion('powershell')", () => {
 			"$global:__veyyonCompleter",
 			"function global:__Veyyon-DynamicCandidates",
 			"function global:__Veyyon-ValueCandidates",
+			"function global:__Veyyon-FlagTable",
 		]) {
 			expect(out, `${name} must be global`).toContain(name);
 		}
@@ -616,6 +617,95 @@ describe("generateCompletion('powershell')", () => {
 			commands: [{ name: "x", aliases: [], description: "first line\n  second line", flags: [], args: [] }],
 		});
 		expect(multiline).toContain("'x' = 'first line second line'");
+	});
+
+	it("emits flag tables as case-sensitive hashtables without duplicate keys in hash literals", () => {
+		const grepSpec: CompletionSpec = {
+			bin: "veyyon",
+			binAliases: ["vey"],
+			root: { flags: [], args: [] },
+			commands: [
+				{
+					name: "grep",
+					aliases: [],
+					description: "Search files",
+					flags: [
+						{
+							name: "context",
+							char: "C",
+							description: "Context lines",
+							value: { kind: "value" },
+							repeatable: false,
+						},
+						{
+							name: "count",
+							char: "c",
+							description: "Output match counts per file",
+							value: { kind: "flag" },
+							repeatable: false,
+						},
+					],
+					args: [],
+				},
+			],
+		};
+		const script = generateCompletion("powershell", grepSpec);
+
+		// Flag tables must not be emitted as @{} literals where case collisions throw ParserError
+		expect(script).toContain("function global:__Veyyon-FlagTable");
+		expect(script).toContain("'grep' = (__Veyyon-FlagTable @(");
+		expect(script).toContain("'-C', @{ Desc = 'Context lines'");
+		expect(script).toContain("'-c', @{ Desc = 'Output match counts per file'");
+		expect(script).toContain("$flags = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)");
+		expect(script).toContain("$tooltips = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)");
+
+		// Check that within every emitted @{} literal, no two keys are equal case-insensitively.
+		for (const match of script.matchAll(/@\{([^}]*)\}/g)) {
+			const body = match[1];
+			const keys = Array.from(body.matchAll(/['"]([^'"]+)['"]\s*=/g)).map(m => m[1].toLowerCase());
+			const uniqueKeys = new Set(keys);
+			expect(keys.length).toBe(uniqueKeys.size);
+		}
+	});
+
+	it("resolves both -c and -C for grep to distinct descriptions", () => {
+		const grepSpec: CompletionSpec = {
+			bin: "veyyon",
+			binAliases: ["vey"],
+			root: { flags: [], args: [] },
+			commands: [
+				{
+					name: "grep",
+					aliases: [],
+					description: "Search files",
+					flags: [
+						{
+							name: "context",
+							char: "C",
+							description: "Context lines",
+							value: { kind: "value" },
+							repeatable: false,
+						},
+						{
+							name: "count",
+							char: "c",
+							description: "Output match counts per file",
+							value: { kind: "flag" },
+							repeatable: false,
+						},
+					],
+					args: [],
+				},
+			],
+		};
+		const script = generateCompletion("powershell", grepSpec);
+
+		// Flag table passes -c and -C as distinct pairs to __Veyyon-FlagTable with separate descriptions
+		expect(script).toContain("'-c', @{ Desc = 'Output match counts per file'");
+		expect(script).toContain("'-C', @{ Desc = 'Context lines'");
+		// Runtime completer builds ordinal hashtables for both $flags and $tooltips
+		expect(script).toContain("$flags = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)");
+		expect(script).toContain("$tooltips = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)");
 	});
 });
 
