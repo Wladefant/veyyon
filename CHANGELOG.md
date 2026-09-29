@@ -41,6 +41,7 @@
 - An interactive session no longer loads the HTML export template, stylesheet, viewer script and tool renderers until `/export` runs: `/share` builds its snapshot from `export/session-data.ts`, cutting the idle heap and extra memory of the compiled binary from 104.8 MiB to 102.9 MiB.
 - The compiled binary keeps the embedded `veyyon://` docs index off the heap until the first `veyyon://` read, and with the bundled model catalog read from its embedded file on demand the idle heap and extra memory drop from 102.9 MiB to 95.9 MiB; `dist/cli.js` ships the catalog as `dist/models.json`.
 - The advisor renders its project-context prompt from the context files when it first starts instead of at session creation, and with the shared prompt copies and record-only entries read from the session file, a session holding 40 finished spawned agents after ten turns uses 150.6 MiB of heap and extra memory instead of 175.5 MiB and 479-484 MiB RSS instead of 488-497 MiB.
+- The order a session's disposal runs in moved from `createAgentSession` to `orderSessionDisposal` in `session/top-level-sessions.ts`; no user-visible change.
 - A conversation `/new` left running is disposed once its turn ends and no background job it owns is running, releasing its browser tabs, eval kernels, advisor, spawned agents and roster entry and writing its `session_exit` record, instead of holding them until the process exits.
 - MCP servers stay connected until the last top-level session using them is disposed, so a conversation `/new` left running no longer orphans them at exit, and disposing one of several top-level sessions (a background conversation or an ACP session) no longer tears down the agent lifecycle or the title and embedding workers the others use.
 - `ctrl+x` in `/resume` and a `/new` past `session.backgroundLimit` cancel the stopped conversation's background jobs.
@@ -202,6 +203,7 @@
 - `visibleWidth` also counts one-cell characters past ASCII (gutter bars, box drawing, ellipses, arrows, Latin-1) in its own scan, cutting a gutter row from 242 ns to 57 ns and a 13,470-entry transcript render from 268 ms to 239 ms with identical widths.
 - `reopenBackgroundAfterResets` reads a row once instead of three times, re-opening an output block's ground in 40 ns instead of 102 ns on a highlighted row and 70 ns instead of 214 ns on a row with resets, and inserts a ground that is itself a reset once after each reset instead of twice.
 - `prompt.render` returns the shared copy of its result, so equal renders of a template hold one buffer.
+- `@veyyon/utils/env` fingerprints a `.env` value with `Bun.CryptoHasher` instead of `node:crypto`, so the launch card path loads no `node:crypto`; a compiled binary that imports the module starts in 11.9 ms instead of 12.5 ms and peaks at 33,468 KiB RSS instead of 34,812 KiB (median of 31).
 
 ### Removed
 
