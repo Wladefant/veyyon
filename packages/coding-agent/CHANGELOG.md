@@ -103,6 +103,7 @@
 - Removed the `tools.refusals` setting, path- and command-scoped extension refusals, and the per-tool `effectScope` declaration that only they read; a stale `tools.refusals` key in config is ignored.
 ### Fixed
 
+- Fixed `read` dropping the unit from its column-truncation metadata after the read module split, so `limits.columnTruncated.unit` is `chars` again for a clipped line (oh-my-pi 9d8b40b0750fc2550afbf70cf212c198f32c993a, [Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Scope extension refusals to declared subjects, fail closed for opaque execution under a path refusal, and enforce session policy through registered tool dispatch boundaries ([#37](https://github.com/Wladefant/veyyon/issues/37)).
 - Every tool declares the scope of its effects, so a tool whose targets the fence cannot read is refused while a standing refusal is in force instead of being waved through ([#37](https://github.com/Wladefant/veyyon/issues/37)).
 - The CLI imports the terminal output guard when a worker thread starts rather than at startup, keeping it off the static boot graph; no user-visible change.
