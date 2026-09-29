@@ -12,14 +12,14 @@ Primary implementation files:
 - `src/session/auth-storage.ts`: re-exports `AuthStorage` from `@veyyon/ai` (`packages/ai/src/auth-storage.ts`); API key + OAuth resolution order
 - `packages/catalog/src/models.ts` and `packages/catalog/src/types.ts`: built-in providers/models (`getBundledModels` / `getBundledProviders`) and `Model`/`compat` types
 
-## Config file location and legacy behavior
+## Config file location
 
 Default config paths, in precedence order:
 
 - `~/.veyyon/profiles/default/agent/models.yml`
 - `~/.veyyon/profiles/default/agent/models.yaml`
 
-Legacy behavior still present:
+Migration and alternate formats:
 
 - If both YAML files are missing and `models.json` exists at the same location, it is migrated to `models.yml`.
 - Explicit `.json` / `.jsonc` config paths are still supported when passed programmatically to `ModelRegistry`.
@@ -242,10 +242,10 @@ Build order for canonical grouping:
 
 1. exact user override from `equivalence.overrides`
 2. bundled official-id matches from built-in model metadata
-3. conservative heuristic normalization for gateway/provider variants
+3. narrow heuristic normalization for gateway/provider variants
 4. fallback to the concrete model's own id
 
-Current heuristics are intentionally narrow:
+The heuristics are narrow:
 
 - embedded upstream prefixes can be stripped when present, for example `anthropic/...` or `openai/...`
 - dotted and dashed version variants can normalize only when they map to an existing official id, for example `4.6 -> 4-6`
@@ -261,7 +261,7 @@ When multiple concrete variants share a canonical id, resolution uses:
 
 Disabled or unauthenticated providers are skipped.
 
-Session state and transcripts continue to record the concrete provider/model that actually executed the turn.
+Session state and transcripts continue to record the concrete provider/model that executed the turn.
 
 Provider defaults vs per-model overrides:
 
@@ -452,7 +452,7 @@ Resolution precedence for exact selectors:
 
 A selector that matches nothing is reported by cause, not as a bare "not found", in this
 order: the registry failed to load; the registry is empty; the registry has models but none
-has a usable credential; the id names a model whose provider is unauthenticated; the id
+has a usable credential; the id matches a model whose provider is unauthenticated; the id
 matches nothing, with up to five near matches. The same sentence is produced whether the
 selector is bare (`sonnet`), suffixed (`sonnet:high`), provider-qualified (`openai/sonnet`) or
 split across `--provider` and `--model`. A selector with an empty id (`openai/`, `openai/*`,
@@ -469,13 +469,11 @@ next entry; only a chain with no usable entry fails.
 
 `buildSessionOptions(...)` in `main.ts` sets the model a session starts on, in this order:
 
-1. an explicit `--model` (or the legacy `--provider` pair). A selector that resolves to nothing is fatal before the session starts, except a bare id with no provider and no `:` suffix, which is carried as `options.modelPattern` and resolved again after extensions load, since an extension may register the provider it names. A `@role` selector never defers: an unset, unknown or self-referencing role is a settings fact no extension changes, so it exits at once.
+1. an explicit `--model` (or the legacy `--provider` pair). A selector that resolves to nothing is fatal before the session starts, except a bare id with no provider and no `:` suffix, which is stored as `options.modelPattern` and resolved again after extensions load, since an extension may register the provider it specifies. A `@role` selector never defers: an unset, unknown or self-referencing role is a settings fact no extension changes, so it exits at once.
 2. the scoped set from `--models`, when this is not a `--continue` or `--resume`. Inside that set the remembered `modelRoles.default` wins if it is there; if it is configured but unavailable, `fallbackForUnavailableDefault` substitutes and prints the reason; otherwise the first scoped model is used.
 3. otherwise nothing is pinned here, and the session resolves `modelRoles.default` through `resolveModelRoleValue` against the models that have a usable credential.
 
 A resumed session restores its own model rather than taking a CLI default, which is why step 2 is skipped under `--continue`/`--resume`.
-
-This used to name `findInitialModel(...)`, a function in `config/model-resolver.ts` with a different precedence. Nothing called it: `main.ts` had grown its own resolution and the two had drifted, so the documented order was one no session ever took. The dead copy is gone.
 
 ### Role aliases and settings
 
@@ -560,7 +558,7 @@ Context promotion is an overflow recovery mechanism for small-context variants (
 
 When a turn fails with a context overflow error (e.g. `context_length_exceeded`), `AgentSession` attempts promotion **before** falling back to compaction:
 
-1. If `contextPromotion.enabled` is true, resolve a promotion target (see below).
+1. If `contextPromotion.enabled` is true, resolve a promotion target (see [Target selection](#target-selection)).
 2. If a target is found, switch to it and retry the request: no compaction needed.
 3. If no target is available, fall through to auto-compaction on the current model.
 
@@ -574,7 +572,7 @@ Only the configured target is considered; context promotion does not automatical
 
 ### OpenAI Codex websocket handoff
 
-If switching from/to `openai-codex-responses`, session provider state key `openai-codex-responses` is closed before model switch. This drops websocket transport state so the next turn starts clean on the promoted model.
+If switching from/to `openai-codex-responses`, session provider state key `openai-codex-responses` is closed before model switch. This drops websocket transport state, so the first turn on the promoted model starts with none.
 
 ### Persistence behavior
 
@@ -610,7 +608,7 @@ The `compat` block on a provider or model overrides the URL-based auto-detection
 
 Endpoint-specific exceptions that interact with these fields are cataloged in [Provider endpoint constraints](../../../internal/provider-endpoint-constraints.md).
 
-`models.yml` accepts the following keys (all optional; unset falls back to URL detection):
+Every `compat` key in `models.yml` is optional; an unset key falls back to URL detection.
 
 Request shaping:
 
@@ -634,21 +632,21 @@ Reasoning / thinking:
 
 - `supportsReasoningEffort`: accept `reasoning_effort`. Default: auto (off for Grok, Z.ai/Zhipu, and Xiaomi MiMo).
 - `supportsReasoningParams`: whether request shaping may send reasoning params at all. Default: auto (off for GitHub Copilot chat-completions).
-- `reasoningEffortMap`: partial map from internal effort levels (`minimal|low|medium|high|xhigh|max`) to provider-specific strings (e.g. Fireworks GLM maps `minimal -> "none"`). Every key must name a level; a key that does not, such as a misspelled `hihg`, fails config validation and is reported by name. It used to be accepted and then never matched, so the remap silently did not happen and the level went to the provider unchanged.
+- `reasoningEffortMap`: partial map from internal effort levels (`minimal|low|medium|high|xhigh|max`) to provider-specific strings (e.g. Fireworks GLM maps `minimal -> "none"`). Every key must name a level; a key that does not, such as a misspelled `hihg`, fails config validation and is reported by name.
 - `thinkingFormat`: request shape for thinking: `"openai"` (`reasoning_effort`), `"openrouter"` (`reasoning: { effort }`), `"zai"` (`thinking: { type: "enabled" }`), `"qwen"` (top-level `enable_thinking`), or `"qwen-chat-template"` (`chat_template_kwargs.enable_thinking`). Default: `"openai"`.
 - `reasoningContentField`: assistant field carrying chain-of-thought: `"reasoning_content"`, `"reasoning"`, or `"reasoning_text"`. Default: auto.
 - `requiresReasoningContentForToolCalls`: assistant tool-call turns must round-trip the reasoning field (DeepSeek-R1, Kimi, OpenRouter when reasoning is on). Default: `false`.
 - `allowsSyntheticReasoningContentForToolCalls`: allow a placeholder reasoning field when a prior assistant tool-call turn lacks provider reasoning content. Default: `true`; set `false` for providers that validate the exact reasoning value.
 - `requiresAssistantContentForToolCalls`: assistant tool-call turns must include non-empty text content (Kimi). Default: `false`.
-- `whenThinking`: partial compat overrides applied only when a request actually engages thinking mode (deep-merged over the baseline compat).
+- `whenThinking`: partial compat overrides applied only when a request engages thinking mode (deep-merged over the baseline compat).
 
 Tool / message normalization:
 
 - `requiresToolResultName`: tool-result messages need a `name` field (Mistral). Default: auto.
 - `requiresAssistantAfterToolResult`: a user message after a tool result needs an assistant turn in between. Default: auto.
 - `requiresThinkingAsText`: convert thinking blocks to text wrapped in `<thinking>` delimiters (Mistral). Default: auto.
-- `requiresMistralToolIds`: normalize tool-call ids to exactly 9 alphanumeric chars. Default: auto.
-- `supportsStrictMode`: accept the per-tool `strict` field on tool schemas. Default: conservative auto-detect per provider/baseUrl.
+- `requiresMistralToolIds`: normalize tool-call ids to 9 alphanumeric chars. Default: auto.
+- `supportsStrictMode`: accept the per-tool `strict` field on tool schemas. Default: auto-detect per provider/baseUrl.
 - `toolStrictMode`: `"all_strict"` forces strict on every tool, `"none"` forces it off; unset keeps the existing per-tool mixed behavior.
 
 Gateway routing (only applied when `baseUrl` matches the gateway):
@@ -660,11 +658,11 @@ Provider-level `compat` is the baseline; per-model `compat` is deep-merged on to
 
 ### Anthropic compatibility (`anthropic-messages`)
 
-For `anthropic-messages` models the runtime uses a separate `AnthropicCompat` shape (`packages/catalog/src/types.ts`). The `models.yml` schema exposes the strict-tools opt-out as a top-level provider field (see below) plus two Anthropic-side flags in the same `compat` slot, `requiresToolResultId` (non-standard `id` alias on `tool_result` blocks for Z.AI-style proxies) and `replayUnsignedThinking` (replay unsigned thinking blocks as native thinking instead of demoting them to text); the remaining Anthropic-side knobs (`disableAdaptiveThinking`, `supportsEagerToolInputStreaming`, `supportsLongCacheRetention`, `supportsMidConversationSystem`, `supportsForcedToolChoice`, `supportsSamplingParams`, `escapeBuiltinToolNames`) are set by built-in catalog metadata and are not user-configurable from `models.yml`.
+For `anthropic-messages` models the runtime uses a separate `AnthropicCompat` shape (`packages/catalog/src/types.ts`). The `models.yml` schema exposes the strict-tools opt-out as a top-level provider field ([`disableStrictTools`](#strict-tool-schemas-disablestricttools)) plus two Anthropic-side flags in the same `compat` slot, `requiresToolResultId` (non-standard `id` alias on `tool_result` blocks for Z.AI-style proxies) and `replayUnsignedThinking` (replay unsigned thinking blocks as native thinking instead of demoting them to text); the remaining Anthropic-side knobs (`disableAdaptiveThinking`, `supportsEagerToolInputStreaming`, `supportsLongCacheRetention`, `supportsMidConversationSystem`, `supportsForcedToolChoice`, `supportsSamplingParams`, `escapeBuiltinToolNames`) are set by built-in catalog metadata and are not user-configurable from `models.yml`.
 
 ### Strict tool schemas (`disableStrictTools`)
 
-Anthropic's API supports a `strict` field on tool definitions that forces the model to always follow the provided schema exactly. Veyyon enables it by default for a small allowlist of high-frequency built-in `anthropic-messages` tools (`bash`, `python`, `edit`, and `search`) whose schemas fit Anthropic's strict grammar limits; other tools still send normalized schemas but omit `strict`.
+Anthropic's API supports a `strict` field on tool definitions that constrains the model's tool input to the provided schema. Veyyon enables it by default for a small allowlist of high-frequency built-in `anthropic-messages` tools (`bash`, `python`, `edit`, and `search`) whose schemas fit Anthropic's strict grammar limits; other tools still send normalized schemas but omit `strict`.
 
 Third-party providers that front the Anthropic API (AWS Bedrock, Azure, self-hosted proxies) do not always implement this field and will reject requests that include it. Set `disableStrictTools: true` at the provider level to opt out of strict mode for the allowlisted tools:
 
@@ -713,7 +711,7 @@ providers:
         name: Qwen 2.5 Coder 32B (local)
 ```
 
-For oMLX or another local OpenAI-compatible server with a discoverable `/v1/models` endpoint, prefer discovery instead of listing models by hand. Set `api` to the endpoint family your server actually exposes: `openai-completions` uses `/v1/chat/completions`; servers that expose `/v1/responses` need `openai-responses` instead.
+For oMLX or another local OpenAI-compatible server with a discoverable `/v1/models` endpoint, prefer discovery instead of listing models by hand. Set `api` to the endpoint family your server exposes: `openai-completions` uses `/v1/chat/completions`; servers that expose `/v1/responses` need `openai-responses` instead.
 
 ```yaml
 providers:
@@ -785,13 +783,13 @@ providers:
             only: [anthropic]
 ```
 
-## Legacy consumer caveat
+## JSON config paths
 
-Most model configuration now flows through `models.yml` / `models.yaml` via `ModelRegistry`. Explicit `.json` / `.jsonc` paths remain supported only when passed programmatically to `ModelRegistry`; the default user config prefers `~/.veyyon/profiles/default/agent/models.yml`, then falls back to `~/.veyyon/profiles/default/agent/models.yaml`.
+Model configuration is read from `models.yml` / `models.yaml` through `ModelRegistry`. Explicit `.json` / `.jsonc` paths remain supported only when passed programmatically to `ModelRegistry`; the default user config prefers `~/.veyyon/profiles/default/agent/models.yml`, then falls back to `~/.veyyon/profiles/default/agent/models.yaml`.
 
 ## Failure mode
 
 If `models.yml` / `models.yaml` fails schema or validation checks:
 
 - registry keeps operating with built-in models
-- error is exposed via `ModelRegistry.getError()` and surfaced in UI/notifications
+- error is exposed via `ModelRegistry.getError()` and shown in UI/notifications

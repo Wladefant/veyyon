@@ -78,7 +78,7 @@ The session's MCP servers, approval mode and settings come from the active profi
 | `model` | `provider/model`, chosen from the models the session lists. |
 | `thinking` | A thinking level the current model accepts, or `off`. |
 
-The response and a `config_option_update` carry the resolved option set.
+The response and a `config_option_update` contain the resolved option set.
 
 ### Prompting
 
