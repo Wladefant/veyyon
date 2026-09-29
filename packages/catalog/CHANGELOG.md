@@ -6,6 +6,10 @@
 
 - `buildOpenAICompat` classifies the host and model family once and derives each chat-completions compat field from a named predicate, and the chat and Responses builders share one override-and-rederive step; every bundled and synthetic model spec resolves to the same record, no behavior change.
 
+### Fixed
+
+- OpenCode gateway models send the `tool_choice` a caller sets, so the models that accept a pinned tool receive it; a model that rejects it pays one retried request per session.
+
 ## [1.5.4] - 2026-09-24
 
 ### Fixed

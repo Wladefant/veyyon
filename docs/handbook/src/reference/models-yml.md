@@ -617,7 +617,7 @@ Request shaping:
 - `supportsMultipleSystemMessages`: preserve separate leading system/developer messages instead of coalescing them. Default: auto (known OpenAI-compatible hosted APIs preserve; strict-template/local hosts coalesce).
 - `supportsUsageInStreaming`: send `stream_options: { include_usage: true }` to receive token usage on streaming responses. Default: `true`.
 - `maxTokensField`: `"max_completion_tokens"` or `"max_tokens"`. Default: auto.
-- `supportsToolChoice`: emit the `tool_choice` parameter when the caller forces a specific tool. Default: `true`. Set `false` for endpoints that 400 on `tool_choice` (e.g. DeepSeek when reasoning is on).
+- `supportsToolChoice`: emit the `tool_choice` parameter when the caller forces a specific tool. Default: `true`. A 400 that names `tool_choice` as unsupported retries the request once without it, and the session omits that form (`auto`, `none` or a forced choice) for that model afterwards. Set `false` to omit the field from the first request (e.g. DeepSeek when reasoning is on).
 - `supportsForcedToolChoice`: accept a forced `tool_choice` that requires a specific tool. Default: `true`. When `false`, a forced selector is downgraded to `auto` so the tool stays available for endpoints that reject forced tool calls (e.g. some thinking-required OpenAI-compatible models).
 - `disableReasoningOnForcedToolChoice`: drop `reasoning_effort` / OpenRouter `reasoning` whenever `tool_choice` forces a call. Default: auto (Kimi/Anthropic-fronted endpoints).
 - `disableReasoningOnToolChoice`: drop reasoning fields whenever any `tool_choice` is sent. Default: auto (DeepSeek reasoning models).

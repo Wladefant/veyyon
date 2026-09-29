@@ -153,7 +153,7 @@ export interface GatewayWordingRule {
 export type GatewayRule = GatewayStructuralRule | GatewayWordingRule;
 
 /** A capability a request can be re-sent without, when the provider rejected the request for having it. */
-export type DegradedCapability = "strict-tools" | "fast-mode" | "server-side-items";
+export type DegradedCapability = "strict-tools" | "fast-mode" | "tool-choice" | "server-side-items";
 
 /**
  * What to do about a classified failure.

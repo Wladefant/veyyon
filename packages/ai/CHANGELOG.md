@@ -42,6 +42,7 @@
 - A Cursor turn held by a local tool that never returns now ends when its failure or an abort arrives instead of waiting on the tool forever.
 - Fixed every Cursor exec-channel tool call being stored twice in the assistant message, which left an unanswered copy of each call that session resume reported as pending.
 - A blank user or developer message after a tool result no longer sends Mistral two consecutive assistant turns, which it rejects.
+- An OpenAI-compatible request whose `tool_choice` the endpoint rejects with a 400 (`only "auto" is supported for 'tool_choice'`, `Thinking mode does not support this tool_choice`) retries once without that form, and the session leaves the form out for that model afterwards.
 
 ## [1.5.4] - 2026-09-24
 

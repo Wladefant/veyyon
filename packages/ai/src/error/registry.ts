@@ -44,6 +44,7 @@ import {
 	grammarDomain,
 	overflowDomain,
 	providerHttpDomain,
+	toolChoiceDomain,
 } from "./domains/request";
 import {
 	contentDomain,
@@ -75,6 +76,7 @@ export const ERROR_DOMAINS: readonly ErrorDomain[] = [
 	authDomain,
 	grammarDomain,
 	fastModeDomain,
+	toolChoiceDomain,
 	toolCallDomain,
 	streamDomain,
 	thinkingLoopDomain,

@@ -229,6 +229,7 @@ describe("a classification names the rules that produced it", () => {
 			"strict-tools-rejection",
 			"timeout-with-http2-verdict",
 			"timeout-without-http2-verdict",
+			"tool-choice-value-rejected",
 			"transport-vocabulary",
 			"usage-limit-vocabulary",
 		]);

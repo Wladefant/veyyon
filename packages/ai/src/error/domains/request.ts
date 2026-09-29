@@ -86,6 +86,11 @@ const FAST_MODE_SPEED_PARAM_PATTERN = /\bspeed\b/i;
 const FAST_MODE_NOT_SUPPORTED_PATTERN = /not support/i;
 const FAST_MODE_RATE_LIMIT_PATTERN = /rate_limit_error/i;
 const FAST_MODE_ENTITLEMENT_PATTERN = /fast mode/i;
+// A `tool_choice` the endpoint will not take. The two measured wordings: the OpenCode gateways'
+// `only '"auto"' is supported for 'tool_choice'`, and DeepSeek's `Thinking mode does not support
+// this tool_choice`. Both name the field, and both say it is the value, not the request, at fault.
+const TOOL_CHOICE_FIELD_PATTERN = /\btool_choice\b/i;
+const ONLY_SUPPORTED_PATTERN = /\bonly\b.*\bsupported\b/i;
 
 // The phrasings an endpoint uses to reject strict tools without calling it an invalid request:
 // a wire-format complaint, a `strict` value it will not mix, a tool schema it cannot take. These
@@ -140,6 +145,14 @@ export function matchesFastModeEntitlementText(message: string): boolean {
 	return FAST_MODE_RATE_LIMIT_PATTERN.test(message) && FAST_MODE_ENTITLEMENT_PATTERN.test(message);
 }
 
+/** The 400 body: the request named a `tool_choice` value the endpoint or the model does not support. */
+export function matchesToolChoiceRejectionText(message: string): boolean {
+	return (
+		TOOL_CHOICE_FIELD_PATTERN.test(message) &&
+		(FEATURE_NOT_SUPPORTED_PATTERN.test(message) || ONLY_SUPPORTED_PATTERN.test(message))
+	);
+}
+
 export const grammarDomain: ErrorDomain = {
 	id: "grammar",
 	why: "The endpoint rejected the request for carrying strict tools it cannot compile or does not implement.",
@@ -183,6 +196,26 @@ export const fastModeDomain: ErrorDomain = {
 			why: "The same wall arrives as a 429 when the account lacks the extra-usage entitlement fast mode requires. Classified as a throttle it was retried against a limit no wait can clear.",
 			structural: signal => signal.status === 429,
 			text: matchesFastModeEntitlementText,
+		},
+	],
+};
+
+export const toolChoiceDomain: ErrorDomain = {
+	id: "tool-choice",
+	why: "The endpoint rejected the `tool_choice` value the request named, so the request goes out without it.",
+	recovers: [Flag.ToolChoiceRejected],
+	recovery: {
+		transport: { action: "surface" },
+		credential: { action: "surface" },
+		turn: { action: "degrade", capability: "tool-choice" },
+	},
+	rules: [
+		{
+			flags: Flag.ToolChoiceRejected,
+			name: "tool-choice-value-rejected",
+			why: "A 400 naming `tool_choice` as unsupported: a gateway that takes only `auto`, or a thinking model that takes no forced choice. The turn retries without the field and the session remembers the rejected form for that model.",
+			structural: signal => signal.status === 400,
+			text: matchesToolChoiceRejectionText,
 		},
 	],
 };

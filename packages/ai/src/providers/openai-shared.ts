@@ -115,6 +115,16 @@ export interface OpenAIStrictToolsState {
 	};
 }
 
+/** The forms of `tool_choice` an endpoint may reject independently: `auto`, `none`, and a forced choice. */
+export type OpenAIToolChoiceKind = "auto" | "none" | "forced";
+
+/** The `tool_choice` forms each model scope rejected this session. A rejected form is left out of later requests. */
+export interface OpenAIToolChoiceState {
+	toolChoice: {
+		rejectedKindsByScope: Map<string, Set<OpenAIToolChoiceKind>>;
+	};
+}
+
 export interface OpenAIRequestSetupModel extends OpenAIModelIdentity {
 	headers?: Record<string, string>;
 	premiumMultiplier?: number;
@@ -454,14 +464,17 @@ export function getOpenAIStrictToolsScope(
 	};
 }
 
+/** The key a per-model session memory is stored under: one entry per provider, base URL and model. */
+function modelScopeKey(scope: OpenAIStrictToolsScope): string {
+	return `${scope.provider}:${scope.baseUrl ?? ""}:${scope.modelId}`;
+}
+
 export function isStrictToolsDisabledForScope(
 	state: OpenAIStrictToolsState | undefined,
 	scope: OpenAIStrictToolsScope | undefined,
 ): boolean {
 	if (!scope) return false;
-	return (
-		state?.strictTools.disabledModelScopes.has(`${scope.provider}:${scope.baseUrl ?? ""}:${scope.modelId}`) ?? false
-	);
+	return state?.strictTools.disabledModelScopes.has(modelScopeKey(scope)) ?? false;
 }
 
 export function disableStrictToolsForScope(
@@ -469,7 +482,46 @@ export function disableStrictToolsForScope(
 	scope: OpenAIStrictToolsScope | undefined,
 ): void {
 	if (!scope) return;
-	state?.strictTools.disabledModelScopes.add(`${scope.provider}:${scope.baseUrl ?? ""}:${scope.modelId}`);
+	state?.strictTools.disabledModelScopes.add(modelScopeKey(scope));
+}
+
+export function createOpenAIToolChoiceState(): OpenAIToolChoiceState {
+	return { toolChoice: { rejectedKindsByScope: new Map() } };
+}
+
+export function clearOpenAIToolChoiceState(state: OpenAIToolChoiceState): void {
+	state.toolChoice.rejectedKindsByScope.clear();
+}
+
+/** The form of a wire `tool_choice`, or `undefined` when the request names none. */
+export function openAIToolChoiceKind(choice: unknown): OpenAIToolChoiceKind | undefined {
+	if (choice === undefined || choice === null) return undefined;
+	if (choice === "auto" || choice === "none") return choice;
+	return "forced";
+}
+
+/** Whether this model scope rejected the form of `choice` earlier in the session. */
+export function isToolChoiceRejectedForScope(
+	state: OpenAIToolChoiceState,
+	scope: OpenAIStrictToolsScope,
+	choice: unknown,
+): boolean {
+	const kind = openAIToolChoiceKind(choice);
+	return kind !== undefined && (state.toolChoice.rejectedKindsByScope.get(modelScopeKey(scope))?.has(kind) ?? false);
+}
+
+/** Records that this model scope rejected the form of `choice`, so later requests leave it out. */
+export function rejectToolChoiceForScope(
+	state: OpenAIToolChoiceState,
+	scope: OpenAIStrictToolsScope,
+	choice: unknown,
+): void {
+	const kind = openAIToolChoiceKind(choice);
+	if (kind === undefined) return;
+	const key = modelScopeKey(scope);
+	const kinds = state.toolChoice.rejectedKindsByScope.get(key);
+	if (kinds) kinds.add(kind);
+	else state.toolChoice.rejectedKindsByScope.set(key, new Set([kind]));
 }
 
 export function isOpenRouterAnthropicModel(model: OpenAIModelIdentity): boolean {
@@ -1092,6 +1144,23 @@ export function shouldRetryWithoutStrictTools(
 	const status = extractHttpStatusFromError(error) ?? capturedErrorResponse?.status;
 	if (status !== 400 && status !== 422) return false;
 	return AIError.matchesStrictToolsRejectionText(rejectionText(error, capturedErrorResponse));
+}
+
+/**
+ * Whether this endpoint rejected the request for the `tool_choice` it carried.
+ *
+ * `sentChoice` is the value on the wire. A request that sent none cannot have been rejected for
+ * one, which is what bounds the retry: the retried request leaves the rejected form out.
+ */
+export function isToolChoiceRejection(
+	error: unknown,
+	capturedErrorResponse: CapturedHttpErrorResponse | undefined,
+	sentChoice: unknown,
+): boolean {
+	if (openAIToolChoiceKind(sentChoice) === undefined) return false;
+	const status = extractHttpStatusFromError(error) ?? capturedErrorResponse?.status;
+	if (status !== 400) return false;
+	return AIError.matchesToolChoiceRejectionText(rejectionText(error, capturedErrorResponse));
 }
 
 function normalizeOpenAIStableId(value: string | undefined, maxLength: number, hashPrefix: string): string | undefined {
