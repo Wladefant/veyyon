@@ -26,7 +26,6 @@ import {
 	type AgentMessage,
 	type AgentState,
 	type AgentTool,
-	type AgentToolResult,
 	type AgentTurnEndContext,
 	AppendOnlyContextManager,
 	type AsideMessage,
@@ -266,20 +265,15 @@ import { recordGoal } from "../goals/goal-record";
 import { GoalRuntime } from "../goals/runtime";
 import type { GoalAbortReason, GoalModeState, GoalTokenUsage } from "../goals/state";
 // The owning module, not the `../internal-urls` barrel: the barrel re-exports every protocol
-// handler and reaches several hundred modules, and all three of these are declared in
+// handler and reaches several hundred modules, and both of these are declared in
 // `local-protocol`, which reaches seven.
-import {
-	type LocalProtocolOptions,
-	listLocalPlanFileUrls,
-	resolveLocalUrlToPath,
-} from "../internal-urls/local-protocol";
+import { type LocalProtocolOptions, resolveLocalUrlToPath } from "../internal-urls/local-protocol";
 import { resolveMemoryBackend } from "../memory/backend";
 import type { HindsightSessionState } from "../memory/hindsight/state";
 import { getMnemopiSessionState, type MnemopiSessionState, setMnemopiSessionState } from "../memory/mnemopi/state";
 import { containsOrchestrate } from "../modes/keywords/orchestrate-keyword";
 import { containsUltrathink } from "../modes/keywords/ultrathink-keyword";
 import { containsWorkflow } from "../modes/keywords/workflow-keyword";
-import { resolveApprovedPlan } from "../plan-mode/approved-plan";
 import { DEFAULT_PLAN_FILE_URL } from "../plan-mode/plan-file-url";
 import { resolvePlanFilePath } from "../plan-mode/plan-path";
 import { createPlanReadMatcher } from "../plan-mode/plan-protection";
@@ -320,7 +314,7 @@ import {
 } from "../thinking";
 import { formatTitleConversationContext, type TitleConversationTurn } from "../tiny/message-preproc";
 import { isAutoQaEnabled } from "../tools/agent/report-tool-issue";
-import { buildResolveReminderMessage, type ResolveToolDetails, runResolveInvocation } from "../tools/agent/resolve";
+import { buildResolveReminderMessage } from "../tools/agent/resolve";
 import {
 	boundedTodoPreviewText,
 	prioritizeTodoItems,
@@ -399,7 +393,6 @@ import {
 	type MessageEndPersistenceSlot,
 	type ModelCycleResult,
 	type PendingContextSnapshot,
-	type PlanYolo,
 	type Prewalk,
 	type ProjectAdvisorScope,
 	type PromptOptions,
@@ -455,11 +448,6 @@ import {
 	MEMORY_CONTEXT_MESSAGE_TYPE,
 	PLAN_DECISION_TOOLS,
 	PLAN_MODE_REMINDER_MAX,
-	PLAN_YOLO_HANDOFF_MESSAGE_TYPE,
-	PREWALK_ACTION_TOOLS,
-	PREWALK_CHECKLIST_MESSAGE_TYPE,
-	PREWALK_CONTINUE_MESSAGE_TYPE,
-	PREWALK_PLAN_MESSAGE_TYPE,
 	SESSION_STATE_MESSAGE_TYPE,
 	SESSION_STOP_CONTINUATION_CAP,
 	TOOL_CALL_LOOP_REDIRECT_TYPE,
@@ -472,6 +460,7 @@ import { AdvisorRoster, type AdvisorRosterHost } from "./runtime/advisor-roster"
 import { CheckpointRuntime } from "./runtime/checkpoint-runtime";
 import { CompactionRuntime } from "./runtime/compaction-runtime";
 import { IrcInbox } from "./runtime/irc-inbox";
+import { ModelHandoff } from "./runtime/model-handoff";
 import { PostPromptTasks } from "./runtime/post-prompt-tasks";
 import { RetryRuntime } from "./runtime/retry-runtime";
 import { type SecretsRefreshOptions, SessionSecrets } from "./runtime/session-secrets";
@@ -736,12 +725,7 @@ export class AgentSession {
 		thinkingLevel?: ConfiguredThinkingLevel;
 		explicitThinkingLevel?: boolean;
 	}>;
-	#prewalk: Prewalk | undefined;
-	/** True once the plan nudge has been queued; scrubbed from context at the switch. */
-	#prewalkPlanInjected = false;
-	#planYolo: PlanYolo | undefined;
-	#planYoloPreviousTools: string[] | undefined;
-	#planYoloArmed = false;
+	#handoff: ModelHandoff;
 
 	#promptTemplates: PromptTemplate[];
 	#slashCommands: FileSlashCommand[];
@@ -1330,235 +1314,12 @@ export class AgentSession {
 		this.#emit(pending);
 	}
 
-	/** Advance the one-way prewalk switch at a completed assistant-turn boundary. */
-	async #advancePrewalk(liveMessages: AgentMessage[], context: AgentTurnEndContext | undefined): Promise<void> {
-		const prewalk = this.#prewalk;
-		if (!prewalk || context?.message.role !== "assistant") return;
-
-		// Structural safety net: every branch below assumes the agent loop will
-		// run another turn. It won't if THIS turn had no tool calls — the loop
-		// treats a text-only turn as "the agent is done" and ends the session
-		// with no further prompting. The plan nudge explicitly asks for a prose
-		// reply, which makes a text-only turn common right after it — observed
-		// silently killing production SWE-bench runs before any code was ever
-		// written. Force one more turn only in that specific, self-created
-		// hazard window.
-		if (this.#prewalkPlanInjected && context.toolResults.length === 0) {
-			this.agent.steer({
-				role: "custom",
-				customType: PREWALK_CONTINUE_MESSAGE_TYPE,
-				content: turnControlPrompts["turn-control/prewalk-continue"].text,
-				attribution: "agent",
-				display: false,
-				timestamp: Date.now(),
-			});
-		}
-
-		// Todo gate: the plan nudge instructs "finish the plan, then init the
-		// todo list from it and start" — so the switch waits until a todo list
-		// exists AND the model has actually started implementing (first
-		// edit/write). The todo call itself never triggers: firing there handed
-		// the fast model the whole implementation cold. Sessions without a todo
-		// tool skip the gate.
-		if (context.toolResults.some(result => result.toolName === TOOL.todo)) {
-			this.#todo.noteTodoToolResult();
-		}
-		const todoGateOpen = this.#todo.sawTodoTool || !this.#toolRegistry.has(TOOL.todo);
-		const action = todoGateOpen
-			? context.toolResults.find(result => PREWALK_ACTION_TOOLS[result.toolName])
-			: undefined;
-		if (!action) {
-			if (!this.#prewalkPlanInjected) {
-				this.#prewalkPlanInjected = true;
-				this.agent.steer({
-					role: "custom",
-					customType: PREWALK_PLAN_MESSAGE_TYPE,
-					content: turnControlPrompts["turn-control/prewalk-plan"].text,
-					display: false,
-					attribution: "agent",
-					timestamp: Date.now(),
-				});
-				this.emitNotice("info", "Prewalk: injected deep-plan nudge.", "prewalk");
-			}
-			return;
-		}
-
-		await this.#waitForSessionMessagePersistence(context.message);
-		for (const toolResult of context.toolResults) {
-			await this.#waitForSessionMessagePersistence(toolResult);
-		}
-
-		this.#scrubPrewalkPlanNudge(liveMessages);
-		const target = prewalk.target;
-		if (this.model && modelsAreEqual(this.model, target)) {
-			this.#prewalk = undefined;
-			return;
-		}
-
-		await this.setModelTemporary(target, prewalk.thinkingLevel, { ephemeral: true });
-		this.#prewalk = undefined;
-		this.emitNotice(
-			"info",
-			`Prewalk: switched to ${target.provider}/${target.id} after first ${action.toolName} call.`,
-			"prewalk",
-		);
-		this.agent.steer({
-			role: "custom",
-			customType: PREWALK_CHECKLIST_MESSAGE_TYPE,
-			content: turnControlPrompts["turn-control/prewalk-checklist"].text,
-			attribution: "agent",
-			display: false,
-			timestamp: Date.now(),
-		});
-	}
-
 	/**
-	 * Arm prewalk outside the normal startup path (the `/prewalk` slash
-	 * command): sets the target and immediately steers the plan nudge rather
-	 * than waiting for the next turn boundary, since an explicit manual
-	 * invocation means "start this now." A no-op with a notice if a prewalk
-	 * is already armed and waiting.
+	 * Arm prewalk outside the normal startup path (the `/prewalk` slash command). See
+	 * {@link ModelHandoff.armPrewalk}.
 	 */
 	armPrewalk(target: Model, thinkingLevel?: ConfiguredThinkingLevel): void {
-		if (this.#prewalk) {
-			this.emitNotice(
-				"info",
-				`Prewalk: already armed for ${this.#prewalk.target.provider}/${this.#prewalk.target.id}, waiting for the first edit/write.`,
-				"prewalk",
-			);
-			return;
-		}
-		this.#prewalk = { target, thinkingLevel };
-		this.#prewalkPlanInjected = true;
-		this.agent.steer({
-			role: "custom",
-			customType: PREWALK_PLAN_MESSAGE_TYPE,
-			content: turnControlPrompts["turn-control/prewalk-plan"].text,
-			display: false,
-			attribution: "agent",
-			timestamp: Date.now(),
-		});
-		this.emitNotice(
-			"info",
-			`Prewalk: armed for ${target.provider}/${target.id} — will switch at the first edit/write once the todo list exists.`,
-			"prewalk",
-		);
-	}
-
-	/**
-	 * Remove the plan nudge from the LLM context before the model switch: the
-	 * fast model inherits the plan the nudge produced, not the nudge itself.
-	 * Splices the loop's live context array in place (the run streams from
-	 * it) and mirrors the removal into agent state. The persisted transcript
-	 * keeps the message for audit; a session reload re-materializes it,
-	 * which is acceptable for prewalk's single-run lifecycle.
-	 */
-	#scrubPrewalkPlanNudge(liveMessages: AgentMessage[]): void {
-		if (!this.#prewalkPlanInjected) return;
-		const isPlanNudge = (m: AgentMessage): boolean =>
-			m.role === "custom" && m.customType === PREWALK_PLAN_MESSAGE_TYPE;
-		for (let i = liveMessages.length - 1; i >= 0; i--) {
-			if (isPlanNudge(liveMessages[i])) liveMessages.splice(i, 1);
-		}
-		const stateMessages = this.agent.state.messages;
-		const filtered = stateMessages.filter(m => !isPlanNudge(m));
-		if (filtered.length !== stateMessages.length) this.agent.replaceMessages(filtered);
-	}
-
-	/**
-	 * Lazily arm PlanYolo before the first prompt is built: restricts tools to
-	 * the plan-mode read-only set (plus `resolve`/`write`, both normally
-	 * discovery-hidden), marks plan-mode state so `#buildPlanModeMessage`
-	 * injects the standard plan-mode-active instructions on this and every
-	 * following prompt, and registers the auto-approve resolve handler.
-	 * Idempotent — a no-op once armed or when PlanYolo is not configured.
-	 */
-	async #armPlanYoloIfNeeded(): Promise<void> {
-		if (!this.#planYolo || this.#planYoloArmed) return;
-		this.#planYoloArmed = true;
-		const previousTools = this.getActiveToolNames();
-		const augmentations: string[] = [TOOL.resolve];
-		if (this.hasBuiltInTool(TOOL.write)) augmentations.push(TOOL.write);
-		await this.setActiveToolsByName(Array.from(new Set(previousTools.concat(augmentations))));
-		this.#planYoloPreviousTools = previousTools;
-		this.setPlanModeState({
-			enabled: true,
-			planFilePath: this.getPlanReferencePath() || DEFAULT_PLAN_FILE_URL,
-			workflow: "parallel",
-		});
-		this.setStandingResolveHandler(input => this.#runPlanYoloApprovalResolve(input));
-	}
-
-	/**
-	 * Standing resolve handler while PlanYolo's plan phase is active. Auto-
-	 * approves the instant the model calls `resolve { action: "apply" }` for
-	 * the plan — no interactive review, the headless counterpart to plan
-	 * mode's "Approve and execute" — then restores tools, exits plan-mode
-	 * state, switches to the configured `target`, and hands off the approved
-	 * plan for it to implement.
-	 */
-	#runPlanYoloApprovalResolve(input: unknown): Promise<AgentToolResult<ResolveToolDetails>> {
-		return runResolveInvocation(input as Parameters<typeof runResolveInvocation>[0], {
-			sourceToolName: "plan_approval",
-			label: "Plan ready for approval",
-			apply: async (_reason, extra) => {
-				const planYolo = this.#planYolo;
-				const state = this.getPlanModeState();
-				if (!planYolo || !state?.enabled) {
-					throw new ToolError("Plan mode is not active.");
-				}
-				const { planFilePath, title } = await resolveApprovedPlan({
-					suppliedTitle: extra?.title,
-					statePlanFilePath: state.planFilePath,
-					readPlan: url => this.#readPlanYoloFile(url),
-					listPlanFiles: () => this.#listPlanYoloFiles(),
-				});
-				const previousTools = this.#planYoloPreviousTools;
-				if (previousTools) {
-					await this.setActiveToolsByName(previousTools);
-				}
-				this.setStandingResolveHandler(null);
-				this.setPlanModeState(undefined);
-				this.#planYolo = undefined;
-				this.#planYoloPreviousTools = undefined;
-				await this.setModelTemporary(planYolo.target, planYolo.thinkingLevel, { ephemeral: true });
-				this.emitNotice(
-					"info",
-					`Plan-yolo: plan approved, switched to ${planYolo.target.provider}/${planYolo.target.id} to implement "${title}".`,
-					"plan-yolo",
-				);
-				this.agent.steer({
-					role: "custom",
-					customType: PLAN_YOLO_HANDOFF_MESSAGE_TYPE,
-					content: prompt.render(planModePrompts["plan-mode/yolo-handoff"].text, { planFilePath, title }),
-					attribution: "agent",
-					display: false,
-					timestamp: Date.now(),
-				});
-				return {
-					content: [
-						{ type: "text" as const, text: `Plan approved. Implementing now with ${planYolo.target.id}.` },
-					],
-					details: { planFilePath, title, planExists: true },
-				};
-			},
-		});
-	}
-
-	async #readPlanYoloFile(planFilePath: string): Promise<string | null> {
-		const resolvedPath = this.#resolvePlanPath(planFilePath);
-		try {
-			return await Bun.file(resolvedPath).text();
-		} catch (error) {
-			if (isEnoent(error)) return null;
-			throw error;
-		}
-	}
-
-	/** `local://` URLs of plan files in the session-local root, newest first —
-	 *  a fallback for `resolveApprovedPlan` when the agent dropped `extra.title`. */
-	async #listPlanYoloFiles(): Promise<string[]> {
-		return listLocalPlanFileUrls(resolveLocalUrlToPath("local://", this.#localProtocolOptions()));
+		this.#handoff.armPrewalk(target, thinkingLevel);
 	}
 
 	constructor(config: AgentSessionConfig) {
@@ -1600,12 +1361,30 @@ export class AgentSession {
 			emitSessionEvent: event => this.#emit(event),
 		});
 		this.#thinking.seedFromConfig(config.thinkingLevel, config.thinkingSource);
-		if (config.prewalk) {
-			this.#prewalk = config.prewalk;
-		}
-		if (config.planYolo) {
-			this.#planYolo = config.planYolo;
-		}
+		this.#handoff = new ModelHandoff(
+			{
+				agent: this.agent,
+				model: () => this.model,
+				setModelTemporary: (model, thinkingLevel) =>
+					this.setModelTemporary(model, thinkingLevel, { ephemeral: true }),
+				emitNotice: (level, message, source) => this.emitNotice(level, message, source),
+				waitForPersistence: message => this.#waitForSessionMessagePersistence(message),
+				todoGateOpen: toolResults => {
+					if (toolResults.some(result => result.toolName === TOOL.todo)) this.#todo.noteTodoToolResult();
+					return this.#todo.sawTodoTool || !this.#toolRegistry.has(TOOL.todo);
+				},
+				getActiveToolNames: () => this.getActiveToolNames(),
+				hasBuiltInTool: name => this.hasBuiltInTool(name),
+				setActiveToolsByName: toolNames => this.setActiveToolsByName(toolNames),
+				getPlanModeState: () => this.getPlanModeState(),
+				setPlanModeState: state => this.setPlanModeState(state),
+				getPlanReferencePath: () => this.getPlanReferencePath(),
+				setStandingResolveHandler: handler => this.setStandingResolveHandler(handler),
+				resolvePlanPath: planFilePath => this.#resolvePlanPath(planFilePath),
+				localRootPath: () => resolveLocalUrlToPath("local://", this.#localProtocolOptions()),
+			},
+			{ prewalk: config.prewalk, planYolo: config.planYolo },
+		);
 
 		this.#promptTemplates = config.promptTemplates ?? [];
 		this.#slashCommands = config.slashCommands ?? [];
@@ -1794,7 +1573,7 @@ export class AgentSession {
 				});
 				if (detection) this.#maybeInjectToolCallLoopRedirect(messages, detection);
 			}
-			await this.#advancePrewalk(messages, context);
+			await this.#handoff.advancePrewalk(messages, context);
 			await this.#advisorRoster.onPrimaryTurnEnd(messages, context?.willContinue, signal);
 			await this.#maintainContextMidRun(messages, signal, context);
 		});
@@ -6185,7 +5964,7 @@ export class AgentSession {
 
 	/** Prewalk state, if armed and active */
 	getPrewalkState(): Prewalk | undefined {
-		return this.#prewalk;
+		return this.#handoff.prewalk;
 	}
 
 	setPlanModeState(state: PlanModeState | undefined): void {
@@ -7009,7 +6788,7 @@ export class AgentSession {
 			startupMarker("prompt:compaction-check:done");
 
 			startupMarker("prompt:plan-arm:start");
-			await this.#armPlanYoloIfNeeded();
+			await this.#handoff.armPlanYoloIfNeeded();
 			startupMarker("prompt:plan-arm:done");
 
 			// Build messages array (session context, eager todo prelude, then active prompt message)
