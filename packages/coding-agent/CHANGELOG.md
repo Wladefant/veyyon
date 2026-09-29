@@ -95,6 +95,7 @@
 
 ### Fixed
 
+- A language server error reaches the `lsp` tool's result once as `LSP error: <message>` instead of `LSP error: LSP error: <message>`, and `rename_file` drops a server that answers `workspace/willRenameFiles` with the JSON-RPC `MethodNotFound` code whatever its message says, instead of listing it as a server note.
 - A settings file with `defaultThinkingLevel: off` starts sessions with thinking off instead of at `high`.
 - A `retry.fallbackChains` entry that is not a string is skipped with a config warning and the next entry is tried, instead of leaving the failed turn's prompt waiting forever on a retry that threw.
 - A failure inside retry recovery, such as a locked auth database, a credential helper that exits with an error, or a full disk while the model switch is recorded, ends the retry with an `auto_retry_end` failure naming it, instead of leaving the prompt waiting forever.

@@ -38,6 +38,7 @@ import {
 	FileChangeType,
 	getActiveClients,
 	getOrCreateClient,
+	LspResponseError,
 	type LspServerStatus,
 	notifySaved,
 	notifyWorkspaceWatchedFiles,
@@ -524,16 +525,15 @@ async function enumerateRenamePairs(
 	return { pairs, directory: true, exceeded: false };
 }
 
-/** True when an LSP error indicates the server doesn't implement the requested method. */
+/**
+ * True when an LSP error indicates the server doesn't implement the requested method: the JSON-RPC
+ * `MethodNotFound` code, or a server that reports the absence under another code by message.
+ */
 function isMethodNotFoundError(err: unknown): boolean {
+	if (err instanceof LspResponseError && err.code === -32601) return true;
 	if (!(err instanceof Error)) return false;
 	const msg = err.message.toLowerCase();
-	return (
-		msg.includes("method not found") ||
-		msg.includes("unhandled method") ||
-		msg.includes("not supported") ||
-		msg.includes("-32601")
-	);
+	return msg.includes("method not found") || msg.includes("unhandled method") || msg.includes("not supported");
 }
 
 /** A file-bound action's request context: the file's started server, the opened file and the resolved cursor. */

@@ -210,6 +210,17 @@ class LspFlushAbortError extends Error {
 	}
 }
 
+/** A JSON-RPC error response from a language server, with the server's error code. */
+export class LspResponseError extends Error {
+	constructor(
+		readonly code: number,
+		message: string,
+	) {
+		super(message);
+		this.name = "LspResponseError";
+	}
+}
+
 async function writeMessage(
 	sink: Bun.FileSink,
 	message: LspJsonRpcRequest | LspJsonRpcNotification | LspJsonRpcResponse,
@@ -367,7 +378,7 @@ async function startMessageReader(client: LspClient): Promise<void> {
 						if (pending) {
 							client.pendingRequests.delete(message.id);
 							if ("error" in message && message.error) {
-								pending.reject(new Error(`LSP error: ${message.error.message}`));
+								pending.reject(new LspResponseError(message.error.code, message.error.message));
 							} else {
 								pending.resolve(message.result);
 							}

@@ -655,8 +655,7 @@ describe("a file-bound lsp action", () => {
 		const params: LspParams = { action: "hover", file: target.file, line: 4, symbol: "greet", timeout: 10 };
 		const result = await new LspTool(makeToolSession({ cwd: target.dir })).execute("lsp-hover", params);
 
-		expect(textOf(result)).toStartWith("LSP error: ");
-		expect(textOf(result)).toContain("hover crashed");
+		expect(textOf(result)).toBe("LSP error: hover crashed");
 		expect(result.details).toEqual({ serverName: SERVER_NAME, action: "hover", success: false, request: params });
 	});
 
