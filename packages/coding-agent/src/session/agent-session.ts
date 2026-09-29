@@ -71,7 +71,6 @@ import type {
 	ServiceTierFamily,
 	SimpleStreamOptions,
 	TextContent,
-	ToolCall,
 	ToolChoice,
 	ToolResultMessage,
 	UsageReport,
@@ -406,6 +405,7 @@ import { AdvisorRoster, type AdvisorRosterHost } from "./runtime/advisor-roster"
 import { CheckpointRuntime } from "./runtime/checkpoint-runtime";
 import { CompactionRuntime } from "./runtime/compaction-runtime";
 import { ContextAccounting } from "./runtime/context-accounting";
+import { FinalizeReminders } from "./runtime/finalize-reminders";
 import { HistoryRewrites } from "./runtime/history-rewrites";
 import { IrcInbox } from "./runtime/irc-inbox";
 import { LoopGuards } from "./runtime/loop-guards";
@@ -425,16 +425,12 @@ import { TodoRuntime } from "./runtime/todo-runtime";
 import { sameToolNames, ToolDiscovery } from "./runtime/tool-discovery";
 import { TtsrRuntime } from "./runtime/ttsr-runtime";
 import { UserExecutions } from "./runtime/user-executions";
+import { YieldTracker } from "./runtime/yield-tracker";
 import { formatSessionDumpText } from "./session-dump-format";
 import { SessionSpendLedger } from "./session-spend";
 import { incompleteTodoItems } from "./todo-reminder";
 import { parseTurnBudgetDirective } from "./turn-budget";
 import { classifyUnexpectedStop } from "./unexpected-stop-classifier";
-import {
-	CODE_REVIEW_REMINDER_TYPE,
-	VERIFICATION_EVIDENCE_REMINDER_TYPE,
-	VerificationEvidenceLedger,
-} from "./verification-evidence-ledger";
 import type { VibeModeState } from "./vibe-runtime";
 
 /** Abort reason recorded on a spawned agent stopped because its conversation was left by `/new`, `/resume` or a handoff. */
@@ -572,30 +568,6 @@ function sanitizeGoalTodoText(text: string): string {
 
 function getCustomMessageTextContent(message: Pick<CustomMessage, "content">): string {
 	return contentText(message.content, { separator: "" });
-}
-
-function isTerminalYieldToolResult(event: {
-	toolName: string;
-	isError?: boolean;
-	result?: { details?: unknown };
-}): boolean {
-	if (event.toolName !== TOOL.yield || event.isError) return false;
-	const details = event.result?.details;
-	if (!details || typeof details !== "object") return true;
-	const record = details as Record<string, unknown>;
-	return !(
-		record.status === "success" &&
-		Array.isArray(record.type) &&
-		record.type.length > 0 &&
-		record.type.every(item => typeof item === "string")
-	);
-}
-
-function assistantMessageHasSuccessfulYieldToolCall(assistantMessage: AssistantMessage, toolCallId: string): boolean {
-	const lastToolCall = assistantMessage.content.findLast(
-		(content): content is ToolCall => content.type === "toolCall",
-	);
-	return lastToolCall?.name === TOOL.yield && lastToolCall.id === toolCallId;
 }
 
 function extractUserMessageText(content: string | Array<{ type: string; text?: string }>): string {
@@ -762,7 +734,8 @@ export class AgentSession {
 	 *  the session cwd changes. */
 	#titleSystemPrompt: string | undefined;
 	#toolChoiceQueue = new ToolChoiceQueue();
-	readonly #verificationEvidence = new VerificationEvidenceLedger();
+	/** The evidence ledger and the rewind, verification and review reminders a settling turn is sent. */
+	readonly #finalize: FinalizeReminders;
 
 	/** Running user shell commands and eval runs, and the results recorded while a turn streamed. */
 	readonly #executions = new UserExecutions({
@@ -986,20 +959,13 @@ export class AgentSession {
 	#resolvePruneToolDescriptions: (model: Model) => boolean = () => false;
 	/** The open checkpoint, its pending rewind report and the last completed rewind. */
 	readonly #checkpoint = new CheckpointRuntime();
-	#lastSuccessfulYieldToolCallId: string | undefined = undefined;
-	/**
-	 * Sticky across an in-flight prompt run: a successful `yield` makes the run
-	 * terminal for execution purposes, so any trailing empty/aborted assistant
-	 * stop must NOT trigger empty-stop/unexpected-stop/compaction continuations.
-	 * Cleared before every new prompt turn so the next turn evaluates cleanly.
-	 */
-	#yieldTerminationPending = false;
-	#synchronouslyTerminatedYieldToolCallIds = new Set<string>();
+	/** The `yield` call that ended the run and whether the run is terminal. */
+	readonly #yields = new YieldTracker();
 	readonly rawSseDebugBuffer: RawSseDebugBuffer;
 
 	#resetPromptMaintenanceState(): void {
 		this.#stopRetries.resetForPrompt();
-		this.#yieldTerminationPending = false;
+		this.#yields.resetForPrompt();
 		this.#retry.resetForPrompt();
 	}
 
@@ -1640,6 +1606,14 @@ export class AgentSession {
 			closeCodexSessions: () => this.#providerSessions.closeCodexForHistoryRewrite(this.model),
 			markHistoryRewritten: () => this.#context.markHistoryRewritten(),
 			syncTodos: () => this.#todo.syncFromBranch(),
+		});
+		this.#finalize = new FinalizeReminders({
+			agent: this.agent,
+			sessionStore: this.sessionManager,
+			settings: this.settings,
+			isSpawned: () => this.#isSpawned,
+			awaitingRewind: () => this.#checkpoint.awaitingRewind,
+			scheduleContinue: () => this.#scheduleAgentContinue({ generation: this.#promptGeneration }),
 		});
 		this.#ttsr = new TtsrRuntime(
 			{
@@ -2605,7 +2579,7 @@ export class AgentSession {
 				this.#settleInFlightToolChoice(event.message);
 				return;
 			case "tool_execution_start": {
-				this.#verificationEvidence.recordToolStart(event);
+				this.#finalize.evidence.recordToolStart(event);
 				// The intent rides on the execution events rather than in the message
 				// content, so the content-level expansion never reaches it. Without
 				// this the working line announces a call in raw handle form while the
@@ -2616,7 +2590,7 @@ export class AgentSession {
 				return;
 			}
 			case "tool_execution_end":
-				this.#verificationEvidence.recordToolEnd(event);
+				this.#finalize.evidence.recordToolEnd(event);
 				await this.#emitSessionEvent(event);
 				await this.#onToolExecutionEnd(event);
 				return;
@@ -2886,10 +2860,7 @@ export class AgentSession {
 			await this.#goalRuntime.onToolCompleted(event.toolName);
 		}
 		this.#planMode.noteToolCompleted(event.toolName);
-		if (isTerminalYieldToolResult(event) && !this.#synchronouslyTerminatedYieldToolCallIds.delete(event.toolCallId)) {
-			this.#markTerminalYieldToolCall(event.toolCallId);
-			this.agent.abort(TERMINAL_TOOL_RESULT_ABORT_REASON);
-		}
+		if (this.#yields.noteExecutionEnd(event)) this.agent.abort(TERMINAL_TOOL_RESULT_ABORT_REASON);
 	}
 
 	#logMaintenanceRoute(
@@ -2941,7 +2912,7 @@ export class AgentSession {
 			settledMessages.findLast((message): message is AssistantMessage => message.role === "assistant");
 		this.#lastAssistantMessage = undefined;
 		if (!msg) {
-			this.#lastSuccessfulYieldToolCallId = undefined;
+			this.#yields.clear();
 			logger.debug("agent_end maintenance routing", {
 				reason: "no-assistant-message",
 				goalModeEnabled: this.#goalModeState?.enabled === true,
@@ -2954,8 +2925,8 @@ export class AgentSession {
 		// lands ahead of the reply it answers. Resolved already whenever the slot drained first.
 		await this.#persistence.waitFor(msg);
 
-		const successfulYieldMessage = this.#findSuccessfulYieldAssistantMessage(settledMessages);
-		const yieldOnThisMessage = this.#assistantEndedWithSuccessfulYield(msg);
+		const successfulYieldMessage = this.#yields.findYieldMessage(settledMessages);
+		const yieldOnThisMessage = this.#yields.endedWithYield(msg);
 		const route = (name: string, extra?: Record<string, unknown>) =>
 			this.#logMaintenanceRoute(msg, successfulYieldMessage !== undefined, name, extra);
 		route("entered");
@@ -2964,7 +2935,7 @@ export class AgentSession {
 
 		if (this.#skipPostTurnMaintenanceAssistantTimestamp === msg.timestamp) {
 			this.#skipPostTurnMaintenanceAssistantTimestamp = undefined;
-			this.#lastSuccessfulYieldToolCallId = undefined;
+			this.#yields.clear();
 			route("skip-post-turn-maintenance");
 			return;
 		}
@@ -2974,9 +2945,9 @@ export class AgentSession {
 		// retry, unexpected-stop retry, queued-message drain, and compaction-driven continuations for
 		// the rest of this prompt cycle: the executor consumed the yield as the terminal result, so a
 		// trailing empty/aborted assistant stop must NOT revive the agent loop. The
-		// `#yieldTerminationPending` sticky flag clears on the next `prompt()`.
-		if (successfulYieldMessage || this.#yieldTerminationPending) {
-			this.#lastSuccessfulYieldToolCallId = undefined;
+		// pending termination clears on the next `prompt()`.
+		if (successfulYieldMessage || this.#yields.terminationPending) {
+			this.#yields.clear();
 			if (!successfulYieldMessage) {
 				route("post-yield-trailing-stop-suppressed");
 			} else if (!activeGoal) {
@@ -2991,7 +2962,7 @@ export class AgentSession {
 			}
 			return;
 		}
-		this.#lastSuccessfulYieldToolCallId = undefined;
+		this.#yields.clear();
 		await this.#settleStop(msg, settledMessages, activeGoal, route);
 	}
 
@@ -3069,7 +3040,7 @@ export class AgentSession {
 		// auto-continue prompt, queued-message drain, or the pause preventing a compaction loop.
 		if (compactionResult.continuationScheduled || compactionResult.automaticContinuationBlocked) return true;
 		const stopped = msg.stopReason !== "error";
-		if (stopped && mayContinueAtSettle("rewind-checkpoint", settleState) && this.#enforceRewindBeforeYield()) {
+		if (stopped && mayContinueAtSettle("rewind-checkpoint", settleState) && this.#finalize.rewindBeforeYield()) {
 			return true;
 		}
 		if (
@@ -3088,10 +3059,10 @@ export class AgentSession {
 		if (this.#hasPendingAsyncWake()) return true;
 		// Gated BEFORE the enforcer runs: it drains the ledger's one reminder as it reads it, so
 		// deferring from inside would spend the reminder it meant to keep.
-		if (mayContinueAtSettle("verification-evidence", settleState) && this.#enforceVerificationBeforeFinalize()) {
+		if (mayContinueAtSettle("verification-evidence", settleState) && this.#finalize.verificationBeforeFinalize()) {
 			return true;
 		}
-		return mayContinueAtSettle("code-review", settleState) && this.#enforceCodeReviewBeforeFinalize();
+		return mayContinueAtSettle("code-review", settleState) && this.#finalize.codeReviewBeforeFinalize();
 	}
 
 	#scheduleAgentContinue(options?: ScheduledAgentContinueOptions): void {
@@ -3211,14 +3182,12 @@ export class AgentSession {
 
 	#afterToolCall(ctx: AfterToolCallContext): AfterToolCallResult | undefined {
 		if (
-			isTerminalYieldToolResult({
+			this.#yields.noteAfterToolCall(ctx.toolCall.id, {
 				toolName: ctx.toolCall.name,
 				isError: ctx.isError,
 				result: ctx.result,
 			})
 		) {
-			this.#markTerminalYieldToolCall(ctx.toolCall.id);
-			this.#synchronouslyTerminatedYieldToolCallIds.add(ctx.toolCall.id);
 			this.agent.abort(TERMINAL_TOOL_RESULT_ABORT_REASON);
 		}
 		return this.#ttsr.afterToolCall(ctx);
@@ -5695,7 +5664,7 @@ export class AgentSession {
 		// re-enables advisor auto-resume that a prior user interrupt suppressed.
 		// Agent-initiated synthetic prompts (auto-continue, plan, reminders) do not.
 		if (options?.userInitiated ?? !options?.synthetic) {
-			this.#verificationEvidence.startUserTurn();
+			this.#finalize.evidence.startUserTurn();
 			this.#advisorRoster.allowAutoResume();
 			this.#planMode.noteUserTurn();
 		}
@@ -8252,27 +8221,6 @@ export class AgentSession {
 		return COMPACTION_CHECK_NONE;
 	}
 
-	#markTerminalYieldToolCall(toolCallId: string): void {
-		this.#lastSuccessfulYieldToolCallId = toolCallId;
-		this.#yieldTerminationPending = true;
-	}
-
-	#assistantEndedWithSuccessfulYield(assistantMessage: AssistantMessage): boolean {
-		const toolCallId = this.#lastSuccessfulYieldToolCallId;
-		return toolCallId ? assistantMessageHasSuccessfulYieldToolCall(assistantMessage, toolCallId) : false;
-	}
-
-	#findSuccessfulYieldAssistantMessage(messages: readonly AgentMessage[]): AssistantMessage | undefined {
-		const toolCallId = this.#lastSuccessfulYieldToolCallId;
-		if (!toolCallId) return undefined;
-		for (let i = messages.length - 1; i >= 0; i--) {
-			const message = messages[i];
-			if (message.role !== "assistant") continue;
-			if (assistantMessageHasSuccessfulYieldToolCall(message, toolCallId)) return message;
-		}
-		return undefined;
-	}
-
 	/**
 	 * Drop a failed assistant turn from active context.
 	 *
@@ -8406,88 +8354,6 @@ export class AgentSession {
 	#discardAssistantTurn(assistantMessage: AssistantMessage): void {
 		this.#removeAssistantMessageFromActiveContext(assistantMessage);
 		this.#persistence.dropAssistantFromBranch(assistantMessage);
-	}
-
-	#enforceRewindBeforeYield(): boolean {
-		if (!this.#checkpoint.awaitingRewind) {
-			return false;
-		}
-		const reminder = [
-			"<system-warning>",
-			"You are in an active checkpoint. You MUST call rewind with your investigation findings before yielding. Do NOT yield without completing the checkpoint.",
-			"</system-warning>",
-		].join("\n");
-		this.agent.appendMessage({
-			role: "developer",
-			content: [{ type: "text", text: reminder }],
-			attribution: "agent",
-			timestamp: Date.now(),
-		});
-		this.#scheduleAgentContinue({ generation: this.#promptGeneration });
-		return true;
-	}
-
-	#enforceVerificationBeforeFinalize(): boolean {
-		if (this.#isSpawned) return false;
-		if (this.settings.get("edit.afterEdit") !== "verify") return false;
-		const reminder = this.#verificationEvidence.takeFinalizationReminder();
-		if (!reminder) return false;
-		const reminderMessage: CustomMessage = {
-			role: "custom",
-			customType: VERIFICATION_EVIDENCE_REMINDER_TYPE,
-			content: reminder,
-			display: false,
-			attribution: "agent",
-			timestamp: Date.now(),
-		};
-		this.agent.appendMessage(reminderMessage);
-		this.sessionManager.appendCustomMessageEntry(
-			reminderMessage.customType,
-			reminderMessage.content,
-			reminderMessage.display,
-			undefined,
-			reminderMessage.attribution,
-		);
-		this.#scheduleAgentContinue({ generation: this.#promptGeneration });
-		return true;
-	}
-
-	/** The calls the model can still read, so a review knows what it has to re-read. */
-	#toolCallIdsInContext(): ReadonlySet<string> {
-		const ids = new Set<string>();
-		for (const message of this.agent.state.messages) {
-			if (message.role !== "assistant") continue;
-			for (const part of message.content) {
-				if (part.type === "toolCall") ids.add(part.id);
-			}
-		}
-		return ids;
-	}
-
-	#enforceCodeReviewBeforeFinalize(): boolean {
-		if (this.#isSpawned) return false;
-		if (this.settings.get("edit.afterEdit") !== "review") return false;
-		const inContext = this.#toolCallIdsInContext();
-		const reminder = this.#verificationEvidence.takeCodeReviewReminder(id => inContext.has(id));
-		if (!reminder) return false;
-		const reminderMessage: CustomMessage = {
-			role: "custom",
-			customType: CODE_REVIEW_REMINDER_TYPE,
-			content: reminder,
-			display: false,
-			attribution: "agent",
-			timestamp: Date.now(),
-		};
-		this.agent.appendMessage(reminderMessage);
-		this.sessionManager.appendCustomMessageEntry(
-			reminderMessage.customType,
-			reminderMessage.content,
-			reminderMessage.display,
-			undefined,
-			reminderMessage.attribution,
-		);
-		this.#scheduleAgentContinue({ generation: this.#promptGeneration });
-		return true;
 	}
 
 	async #applyRewind(report: string, activeMessages?: AgentMessage[]): Promise<void> {

@@ -36,7 +36,7 @@ const RUNTIME = `${SESSION_DIR}/agent-session.ts`;
 const FACADE = `${SESSION_DIR}/facade.ts`;
 
 /**
- * MEASURED at 10506 lines. Model target selection left earlier — the role resolver, the
+ * MEASURED at 10372 lines. Model target selection left earlier — the role resolver, the
  * configured-target reader, the compaction candidate walk and its effort map — and provider request
  * shaping (payload redaction, the Anthropic metadata block, the tool-order permutation check) left
  * after it, because not one of those members read or wrote a field of the runtime: every input was
@@ -49,13 +49,14 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * prompt snapshot and rewrite anchor, the memory backend state with its delivered recall, the
  * provider session ids with the inherited prompt cache key, the tool-call loop guard with the
  * Gemini reasoning-header detector, the empty-stop and unexpected-stop retry cycles, the
- * provider usage recording with its saved-reset redeems, and the history rewrites (stale-result and
- * overflow prunes, image drops, shake and dedup) left as collaborators under `runtime/`.
+ * provider usage recording with its saved-reset redeems, the history rewrites (stale-result and
+ * overflow prunes, image drops, shake and dedup), the terminal `yield` record, and the evidence
+ * ledger with the rewind, verification and review reminders left as collaborators under `runtime/`.
  * The number falls
  * again when the next one leaves. It ratchets: slack is what it takes to not fail on the next honest
  * edit, and a ceiling left far above a shrinking file stops being a bound.
  */
-const RUNTIME_CEILING = 10_520;
+const RUNTIME_CEILING = 10_390;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -72,6 +73,7 @@ const COLLABORATORS = [
 	"compaction-runtime.ts",
 	"compaction-summarizer.ts",
 	"context-accounting.ts",
+	"finalize-reminders.ts",
 	"history-rewrites.ts",
 	"irc-inbox.ts",
 	"loop-guards.ts",
@@ -92,6 +94,7 @@ const COLLABORATORS = [
 	"tool-discovery.ts",
 	"ttsr-runtime.ts",
 	"user-executions.ts",
+	"yield-tracker.ts",
 ] as const;
 
 /** MEASURED: the largest collaborator is `retry-runtime.ts` at 959 lines. */
