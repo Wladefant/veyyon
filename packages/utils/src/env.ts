@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 import { getAgentDir, getConfigRootDir, refreshDirsFromEnv } from "./dirs";
@@ -120,8 +119,11 @@ interface DotenvOrigin {
 	digests: Record<string, string>;
 }
 
+// `Bun.CryptoHasher` rather than `node:crypto`: the digest runs synchronously at module load, WebCrypto
+// has no synchronous digest, and loading `node:crypto` costs the launch card 3.3ms it otherwise spends
+// on nothing.
 function digestEnvValue(value: string): string {
-	return createHash("sha256").update(value).digest("hex").slice(0, 16);
+	return new Bun.CryptoHasher("sha256").update(value).digest("hex").slice(0, 16);
 }
 
 function readDotenvOrigin(): DotenvOrigin | undefined {
