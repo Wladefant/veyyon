@@ -42,14 +42,12 @@ import {
 	applyShakeRegions,
 	type CompactionResult,
 	calculateContextTokens,
-	calculatePromptTokens,
 	collectEntriesForBranchSummary,
 	collectRedundantToolResultRegions,
 	collectShakeRegions,
 	compactionContextTokens,
 	computeFileLists,
 	createFileOps,
-	estimateTokens,
 	extractFileOpsFromMessages,
 	generateBranchSummary,
 	generateHandoffFromContext,
@@ -381,7 +379,6 @@ import {
 	type FreshSessionResult,
 	type HandoffResult,
 	type ModelCycleResult,
-	type PendingContextSnapshot,
 	type Prewalk,
 	type ProjectAdvisorScope,
 	type PromptOptions,
@@ -406,9 +403,9 @@ import {
 	shouldEvaluateCodexAutoRedeem,
 	shouldPromptCodexAutoRedeem,
 } from "./codex-auto-reset";
-// The accounting, not the drawing. Both of these used to be imported from `modes/`, which put the
-// terminal UI on the session engine's graph and cost the layering gate a standing exception each.
-import { computeStoredMessagesTokens, estimateContextSnapshotAttribution } from "./context-usage";
+// The accounting, not the drawing. It used to be imported from `modes/`, which put the terminal UI
+// on the session engine's graph and cost the layering gate a standing exception.
+import { computeStoredMessagesTokens } from "./context-usage";
 import { initSessionCpuLimit, rekeySessionCpuLimit, sessionCpuLimit } from "./cpu-limit";
 import { dedupeEphemeralReply } from "./ephemeral-reply";
 import { isClassifierRefusal } from "./failed-turn";
@@ -444,6 +441,7 @@ import { normalizeRoots } from "./relativize-paths";
 import { AdvisorRoster, type AdvisorRosterHost } from "./runtime/advisor-roster";
 import { CheckpointRuntime } from "./runtime/checkpoint-runtime";
 import { CompactionRuntime } from "./runtime/compaction-runtime";
+import { ContextAccounting } from "./runtime/context-accounting";
 import { IrcInbox } from "./runtime/irc-inbox";
 import { MessagePersistence } from "./runtime/message-persistence";
 import { ModelHandoff } from "./runtime/model-handoff";
@@ -767,12 +765,12 @@ export class AgentSession {
 		effectiveServiceTier: model => this.#effectiveServiceTier(model),
 		baseSystemPrompt: () => this.#baseSystemPrompt,
 		nonMessageTokens: () => computeNonMessageTokens(this),
-		estimateStoredContextTokens: () => this.#estimateStoredContextTokens(),
+		estimateStoredContextTokens: () => this.#context.estimateStoredTokens(),
 		memoryBackendContext: preparation => collectMemoryBackendContext(this, preparation),
 		withPlanProtection: config => this.#planMode.withProtection(config),
 		promptCompaction: branch => this.#promptCompaction(branch),
 		offloadAndApplyShakeRegions: regions => this.#offloadAndApplyShakeRegions(regions),
-		rebasePendingContextSnapshotAfterHistoryRewrite: () => this.#rebasePendingContextSnapshotAfterHistoryRewrite(),
+		rebasePendingContextSnapshotAfterHistoryRewrite: () => this.#context.rebaseAfterHistoryRewrite(),
 		resetAllAdvisorRuntimes: () => this.#resetAllAdvisorRuntimes(),
 		afterHistoryCompacted: () => {
 			// Compaction discarded the conversation history that carried the approved
@@ -1048,20 +1046,10 @@ export class AgentSession {
 	 */
 	#promptsWaitingOnIdle = 0;
 	#pendingAgentEndEmit: AgentSessionEvent | undefined;
-	#pendingContextSnapshot: PendingContextSnapshot | undefined = undefined;
-	/**
-	 * Last branch entry present when a pass last rewrote history in place. Every
-	 * provider usage anchor at or before it reports a prompt that no longer
-	 * exists, so {@link getContextBreakdown} will not read one as ground truth.
-	 */
-	#historyRewriteAnchorBoundaryEntryId: string | undefined = undefined;
+	/** Context usage: the prompt snapshot of the run in flight and the usage anchors it reads. */
+	readonly #context: ContextAccounting;
 	#sessionStopContinuationCount = 0;
 	#sessionStopHookActive = false;
-	// Bumped whenever the pending in-flight snapshot is set/cleared. The
-	// status-line context memo includes this so clearing the snapshot on
-	// turn-end/abort invalidates the cache even though the message list is
-	// unchanged — otherwise a mid-turn estimate would survive into idle.
-	#contextUsageRevision = 0;
 	/** Secret obfuscator, runtime lease, provider redaction and display expansion. */
 	readonly #secrets: SessionSecrets;
 	#argot: ArgotSession | undefined;
@@ -1302,10 +1290,19 @@ export class AgentSession {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
 		this.settings = config.settings;
+		this.#context = new ContextAccounting({
+			sessionStore: this.sessionManager,
+			model: () => this.model,
+			messages: () => this.messages,
+			instrumentationLevel: () => this.settings.get("session.instrumentation"),
+			nonMessageTokens: () => computeNonMessageTokens(this),
+			nonMessageBreakdown: () => computeNonMessageBreakdown(this),
+			storedMessagesTokens: () => computeStoredMessagesTokens(this, { excludeEncryptedReasoning: true }),
+		});
 		this.#persistence = new MessagePersistence({
 			sessionStore: this.sessionManager,
 			instrumentationLevel: () => this.settings.get("session.instrumentation"),
-			pendingContextSnapshot: () => this.#pendingContextSnapshot,
+			pendingContextSnapshot: () => this.#context.pending,
 			nonMessageTokens: () => computeNonMessageTokens(this),
 			consumeRewoundResult: toolCallId => this.#checkpoint.consumeRewoundResult(toolCallId),
 			onTtsrInjectionPersisted: details => this.#ttsr.onInjectionPersisted(details),
@@ -6499,44 +6496,11 @@ export class AgentSession {
 			}
 
 			const agentPromptOptions = options?.toolChoice ? { toolChoice: options.toolChoice } : undefined;
-			const nonMessageTokens = computeNonMessageTokens(this);
-			const contextWindow = this.model?.contextWindow ?? 0;
-			const breakdown = this.getContextBreakdown({ contextWindow, pendingMessages: messages });
-			const promptTokens =
-				breakdown?.usedTokens ??
-				nonMessageTokens +
-					this.messages.reduce((sum, msg) => sum + estimateTokens(msg), 0) +
-					messages.reduce((sum, msg) => sum + estimateTokens(msg), 0);
-			const contextDetail = sessionTelemetryDetail(
-				this.settings.get("session.instrumentation"),
-				"context-breakdown",
-			);
-			const pendingContextSnapshot: PendingContextSnapshot = {
-				promptTokens,
-				nonMessageTokens,
-				cutoffCount: this.messages.length,
-				submitted: new Set(messages),
-				detail: contextDetail,
-			};
-			if (contextDetail === "rich" || contextDetail === "ultra") {
-				const tailTokens =
-					breakdown?.pendingMessagesTokens ?? messages.reduce((sum, msg) => sum + estimateTokens(msg), 0);
-				const attribution = estimateContextSnapshotAttribution(
-					promptTokens,
-					nonMessageTokens,
-					tailTokens,
-					"estimate",
-					contextDetail === "ultra" ? getLatestCompactionEntry(this.sessionManager.getBranch())?.id : undefined,
-				);
-				pendingContextSnapshot.storedMessagesTokens = attribution.storedMessagesTokens;
-				pendingContextSnapshot.tailTokens = attribution.tailTokens;
-				pendingContextSnapshot.compactionEntryId = attribution.compactionEntryId;
-			}
-			this.#setPendingContextSnapshot(pendingContextSnapshot);
+			this.#context.beginPrompt(messages);
 			try {
 				await this.#promptAgentWithIdleRetry(messages, agentPromptOptions, generation);
 			} finally {
-				this.#setPendingContextSnapshot(undefined);
+				this.#context.endPrompt();
 			}
 			if (!options?.skipPostPromptRecoveryWait) {
 				await this.#waitForPostPromptRecovery(generation);
@@ -8047,7 +8011,7 @@ export class AgentSession {
 	 * That last part is two facts, and it is not optional. While a prompt is in
 	 * flight the pending snapshot is what the context report and the
 	 * post-compaction headroom / retry-fit checks measure, so it is re-anchored
-	 * here (see {@link #rebasePendingContextSnapshotAfterHistoryRewrite}). And
+	 * here (see {@link ContextAccounting.rebaseAfterHistoryRewrite}). And
 	 * once any provider usage from this turn has landed, THAT is what the report
 	 * reads instead: a number the provider computed over a prompt this rewrite
 	 * just shortened. Recording the boundary is what stops the report from
@@ -8069,8 +8033,7 @@ export class AgentSession {
 		this.agent.replaceMessages(sessionContext.messages);
 		this.#resetAllAdvisorRuntimes();
 		this.#closeCodexProviderSessionsForHistoryRewrite();
-		this.#historyRewriteAnchorBoundaryEntryId = this.sessionManager.getBranch().at(-1)?.id;
-		this.#rebasePendingContextSnapshotAfterHistoryRewrite();
+		this.#context.markHistoryRewritten();
 	}
 
 	/**
@@ -8617,30 +8580,6 @@ export class AgentSession {
 		}
 	}
 
-	/**
-	 * Local token estimate of the stored conversation (plus any pending messages),
-	 * independent of provider-reported usage. A `before_provider_request` hook
-	 * (e.g. a compression extension such as Headroom) or other on-wire payload
-	 * transform can shrink the request below the real stored conversation; the
-	 * provider then reports deflated prompt tokens, so anchoring the compaction
-	 * decision purely on that usage lets the real history grow unbounded until it
-	 * overflows and native compaction can no longer run. This estimate is the
-	 * floor the compaction decision respects so on-wire compression can never
-	 * suppress it.
-	 */
-	#estimateStoredContextTokens(pendingMessages: AgentMessage[] = []): number {
-		// Exclude encrypted reasoning (thinkingSignature / redactedThinking): its
-		// local byte size diverges from what the provider bills, so counting it here
-		// would let a thinking-heavy turn falsely trip the floor. The provider usage
-		// (the other arm of compactionContextTokens) already accounts for it.
-		const opts = { excludeEncryptedReasoning: true } as const;
-		return (
-			computeNonMessageTokens(this) +
-			computeStoredMessagesTokens(this, opts) +
-			pendingMessages.reduce((sum, msg) => sum + estimateTokens(msg, opts), 0)
-		);
-	}
-
 	#estimatePrePromptContextTokens(messages: AgentMessage[], contextWindow: number): number {
 		// The local-estimate floor lives in getContextBreakdown, so this is the
 		// exact number the footline gauge shows.
@@ -8721,7 +8660,7 @@ export class AgentSession {
 		if (!(await this.#persistence.persistTurnForMidRunCompaction(context))) return;
 
 		const billedContextTokens = calculateContextTokens(lastAssistant.usage);
-		const storedContextTokens = this.#estimateStoredContextTokens();
+		const storedContextTokens = this.#context.estimateStoredTokens();
 		const contextTokens = compactionContextTokens(billedContextTokens, storedContextTokens);
 		if (!shouldCompact(contextTokens, contextWindow, compactionSettings)) return;
 
@@ -8959,7 +8898,7 @@ export class AgentSession {
 		const assistantUsageContextTokens = assistantPredatesCompaction
 			? 0
 			: calculateContextTokens(assistantMessage.usage);
-		const storedContextTokens = this.#estimateStoredContextTokens();
+		const storedContextTokens = this.#context.estimateStoredTokens();
 		// Pruning frees bytes for the NEXT prompt; it does not change the size of
 		// the prompt the LLM just billed for. Earlier revisions subtracted the
 		// per-turn supersede/prune `tokensSaved` from the threshold input, which
@@ -11258,172 +11197,11 @@ export class AgentSession {
 		contextWindow?: number;
 		pendingMessages?: AgentMessage[];
 	}): ContextUsageBreakdown | undefined {
-		const model = this.model;
-		const rawContextWindow = options?.contextWindow ?? model?.contextWindow ?? 0;
-		const contextWindow = Number.isFinite(rawContextWindow) && rawContextWindow > 0 ? rawContextWindow : 0;
-
-		const { skillsTokens, toolsTokens, systemContextTokens, systemPromptTokens } = computeNonMessageBreakdown(this);
-		const categoryNonMessageTokens = skillsTokens + toolsTokens + systemContextTokens + systemPromptTokens;
-		const currentNonMessageTokens = computeNonMessageTokens(this);
-
-		const branchEntries = this.sessionManager.getBranch();
-		const latestCompaction = getLatestCompactionEntry(branchEntries);
-		const compactionIndex = latestCompaction ? branchEntries.lastIndexOf(latestCompaction) : -1;
-
-		let usedTokens = 0;
-		let anchored = false;
-
-		const pendingMessages = options?.pendingMessages ?? [];
-		let pendingMessagesTokens = 0;
-		for (const message of pendingMessages) pendingMessagesTokens += estimateTokens(message);
-
-		const pending = this.#pendingContextSnapshot;
-
-		// Always locate the latest real assistant-usage anchor after the last
-		// compaction. Its provider-reported promptTokens is ground truth for
-		// everything up to that point; only the tail after it is estimated.
-		//
-		// A pass that rewrote history in place (a prune, the dedup, a shake, an
-		// image drop) moves that floor forward too. The provider computed its
-		// prompt tokens over bytes the rewrite has since removed, so an anchor at
-		// or before the rewrite is not ground truth about anything that will be
-		// sent again: it reads high by exactly what was freed. Only a response
-		// received AFTER the rewrite describes the current shape, and until one
-		// lands the estimate below is the honest figure.
-		const rewriteBoundaryId = this.#historyRewriteAnchorBoundaryEntryId;
-		const rewriteIndex = rewriteBoundaryId ? branchEntries.findIndex(entry => entry.id === rewriteBoundaryId) : -1;
-		const anchorFloorIndex = Math.max(compactionIndex, rewriteIndex);
-		let anchorEntry: SessionMessageEntry | undefined;
-		for (let i = branchEntries.length - 1; i > anchorFloorIndex; i--) {
-			const entry = branchEntries[i];
-			if (entry.type === "message" && entry.message.role === "assistant") {
-				const assistant = entry.message;
-				if (assistant.stopReason !== "aborted" && assistant.stopReason !== "error" && assistant.usage) {
-					anchorEntry = entry;
-					break;
-				}
-			}
-		}
-
-		const resolvedActiveMessages = this.messages;
-		let resolvedAnchorIndex = -1;
-		let anchorAssistant: AssistantMessage | undefined;
-		if (anchorEntry) {
-			const a = anchorEntry.message as AssistantMessage;
-			anchorAssistant = a;
-			resolvedAnchorIndex = resolvedActiveMessages.indexOf(a);
-			if (resolvedAnchorIndex === -1) {
-				resolvedAnchorIndex = resolvedActiveMessages.findIndex(
-					msg => msg.role === "assistant" && msg.timestamp === a.timestamp,
-				);
-			}
-		}
-
-		// A real anchor supersedes the in-flight estimate only once a step of the
-		// CURRENT turn has produced provider usage — i.e. it resolves at or after
-		// the pending cutoff. While the turn's first response is still pending (or
-		// the newest real anchor predates this turn) the pending snapshot is the
-		// only thing accounting for the just-submitted prompt, so it wins. This
-		// keeps a long tool turn from stacking an estimate of the entire tail on
-		// top of a stale turn-start prompt.
-		const useAnchor =
-			anchorAssistant !== undefined &&
-			resolvedAnchorIndex !== -1 &&
-			(!pending || resolvedAnchorIndex >= pending.cutoffCount);
-
-		if (useAnchor && anchorAssistant) {
-			const promptTokens =
-				anchorAssistant.contextSnapshot?.promptTokens ?? calculatePromptTokens(anchorAssistant.usage);
-			const nonMessageTokens = anchorAssistant.contextSnapshot?.nonMessageTokens ?? computeNonMessageTokens(this);
-			anchored = true;
-			let tailTokens = 0;
-			for (let i = resolvedAnchorIndex + 1; i < resolvedActiveMessages.length; i++) {
-				tailTokens += estimateTokens(resolvedActiveMessages[i]);
-			}
-			usedTokens =
-				promptTokens + Math.max(0, currentNonMessageTokens - nonMessageTokens) + tailTokens + pendingMessagesTokens;
-		} else if (pending) {
-			anchored = true;
-			let tailTokens = 0;
-			for (let i = pending.cutoffCount; i < resolvedActiveMessages.length; i++) {
-				const message = resolvedActiveMessages[i];
-				// A submitted message is already inside `promptTokens`; anything else standing
-				// after the turn boundary arrived since and is estimated.
-				if (pending.submitted.has(message)) continue;
-				tailTokens += estimateTokens(message);
-			}
-			usedTokens =
-				pending.promptTokens +
-				Math.max(0, currentNonMessageTokens - pending.nonMessageTokens) +
-				tailTokens +
-				pendingMessagesTokens;
-		}
-
-		if (!anchored && !pending && branchEntries.length === 0) {
-			// Fallback: look for the latest assistant message with usage/snapshot in this.messages (for branchless/fake sessions in tests)
-			for (let i = resolvedActiveMessages.length - 1; i >= 0; i--) {
-				const msg = resolvedActiveMessages[i];
-				if (msg.role === "assistant" && msg.stopReason !== "aborted" && msg.stopReason !== "error" && msg.usage) {
-					const promptTokens = msg.contextSnapshot?.promptTokens ?? calculatePromptTokens(msg.usage);
-					const nonMessageTokens = msg.contextSnapshot?.nonMessageTokens ?? computeNonMessageTokens(this);
-
-					let tailTokens = 0;
-					for (let j = i + 1; j < resolvedActiveMessages.length; j++) {
-						tailTokens += estimateTokens(resolvedActiveMessages[j]);
-					}
-
-					usedTokens =
-						promptTokens +
-						Math.max(0, currentNonMessageTokens - nonMessageTokens) +
-						tailTokens +
-						pendingMessagesTokens;
-					anchored = true;
-					break;
-				}
-			}
-		}
-		if (!anchored) {
-			let messagesTokens = 0;
-			for (const msg of resolvedActiveMessages) {
-				messagesTokens += estimateTokens(msg);
-			}
-			usedTokens = currentNonMessageTokens + messagesTokens + pendingMessagesTokens;
-		}
-
-		// One number owns "how full is the context". Every compaction decision
-		// floors the provider-anchored total by the local estimate of what the
-		// session actually holds (see #estimateStoredContextTokens and the
-		// compactionContextTokens call sites), because a provider reporting a
-		// prompt smaller than the stored conversation must not suppress
-		// compaction. The gauge did not apply that floor, so a session whose
-		// provider under-reports its prompt showed "90% left" on the footline
-		// while auto-compaction fired against the same window on every turn.
-		// Display and decision now read the same total.
-		usedTokens = compactionContextTokens(usedTokens, this.#estimateStoredContextTokens(pendingMessages));
-
-		const messagesTokens = Math.max(0, usedTokens - categoryNonMessageTokens);
-
-		return {
-			contextWindow,
-			anchored,
-			usedTokens,
-			systemPromptTokens,
-			systemToolsTokens: toolsTokens,
-			systemContextTokens,
-			skillsTokens,
-			messagesTokens,
-			pendingMessagesTokens,
-		};
+		return this.#context.breakdown(options);
 	}
 
 	getContextUsage(options?: { contextWindow?: number }): ContextUsage | undefined {
-		const breakdown = this.getContextBreakdown(options);
-		if (!breakdown) return undefined;
-		return {
-			tokens: breakdown.usedTokens,
-			contextWindow: breakdown.contextWindow,
-			percent: breakdown.contextWindow > 0 ? (breakdown.usedTokens / breakdown.contextWindow) * 100 : 0,
-		};
+		return this.#context.usage(options);
 	}
 
 	/**
@@ -11432,60 +11210,7 @@ export class AgentSession {
 	 * a value computed mid-turn cannot persist after the turn ends/aborts.
 	 */
 	get contextUsageRevision(): number {
-		return this.#contextUsageRevision;
-	}
-
-	#setPendingContextSnapshot(snapshot: PendingContextSnapshot | undefined): void {
-		this.#pendingContextSnapshot = snapshot;
-		this.#contextUsageRevision++;
-	}
-
-	/**
-	 * Rebase the in-flight pending context snapshot onto the current message set
-	 * after ANY pass rewrote history mid-run: a compaction, its dead-end rescue,
-	 * a prune, a dedup, or an operator `/shake`.
-	 *
-	 * The snapshot captures the prompt as submitted at run start and lives for
-	 * the whole run. Until a step of the current turn produces provider usage it
-	 * is the only thing accounting for that prompt, so it is what
-	 * {@link getContextBreakdown} reports, and after a compaction it is the only
-	 * thing left (every earlier usage anchor is hidden). A rewrite that leaves it
-	 * alone therefore reports bytes it just removed as live context until the
-	 * next provider response. That inflated residual is what the post-compaction
-	 * headroom/retry-fit checks measure (a run that started above the recovery
-	 * band then trips the "freed too little context" dead-end even though the
-	 * context genuinely shrank), which is why {@link #afterHistoryRewrite} calls
-	 * this rather than leaving it to each pass. No-op while no prompt is in
-	 * flight.
-	 */
-	#rebasePendingContextSnapshotAfterHistoryRewrite(): void {
-		if (!this.#pendingContextSnapshot) return;
-		const nonMessageTokens = computeNonMessageTokens(this);
-		const promptTokens = nonMessageTokens + this.messages.reduce((sum, msg) => sum + estimateTokens(msg), 0);
-		const rebased: PendingContextSnapshot = {
-			promptTokens,
-			nonMessageTokens,
-			cutoffCount: this.messages.length,
-			// A rewrite recomputed the prompt over the whole current history, so nothing
-			// standing in `messages` is outside `promptTokens` any more.
-			submitted: new Set<AgentMessage>(),
-			detail: this.#pendingContextSnapshot.detail,
-		};
-		if (this.#pendingContextSnapshot.detail === "rich" || this.#pendingContextSnapshot.detail === "ultra") {
-			const attribution = estimateContextSnapshotAttribution(
-				promptTokens,
-				nonMessageTokens,
-				0,
-				"estimate",
-				this.#pendingContextSnapshot.detail === "ultra"
-					? getLatestCompactionEntry(this.sessionManager.getBranch())?.id
-					: undefined,
-			);
-			rebased.storedMessagesTokens = attribution.storedMessagesTokens;
-			rebased.tailTokens = attribution.tailTokens;
-			rebased.compactionEntryId = attribution.compactionEntryId;
-		}
-		this.#setPendingContextSnapshot(rebased);
+		return this.#context.revision;
 	}
 
 	#ingestProviderUsageHeaders(response: ProviderResponseMetadata, model?: Model): void {
