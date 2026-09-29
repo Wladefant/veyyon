@@ -329,7 +329,6 @@ const NAMED_BY_NO_TEST: readonly string[] = [
 	"packages/coding-agent/src/lsp/clients/lsp-linter-client.ts",
 	"packages/coding-agent/src/lsp/deferred-diagnostics.ts",
 	"packages/coding-agent/src/mcp/config-commands.ts",
-	"packages/coding-agent/src/mcp/smithery-connect.ts",
 	"packages/coding-agent/src/memory/mnemopi/embed-worker.ts",
 	"packages/coding-agent/src/modes/terminal/components/chrome/overlay-box.ts",
 	"packages/coding-agent/src/modes/terminal/components/composer/keybinding-hints.ts",

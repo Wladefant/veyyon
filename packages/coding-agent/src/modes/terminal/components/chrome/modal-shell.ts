@@ -22,9 +22,6 @@ import { keyHint } from "../../utils/key-hint";
 import { emberTick } from "../composer/composer-chrome";
 import { bottomBorder, divider, fit, row, topBorder } from "./overlay-box";
 
-/** Leading decoration width before the title text on the top border. */
-export const TITLE_LEADING_DECORATION_W = 2;
-
 /** Fold indicator always occupies two columns (Grok FoldInfo parity). */
 export const FOLD_COLS = 2;
 
