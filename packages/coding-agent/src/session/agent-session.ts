@@ -93,13 +93,7 @@ import type {
 	UsageReport,
 } from "@veyyon/ai";
 import * as AIError from "@veyyon/ai/error";
-import {
-	assistantTurnMetricsForPersistence,
-	assistantTurnRequestForPersistence,
-	instrumentationRank,
-	sessionTelemetryDetail,
-	toolCallMetricsForPersistence,
-} from "@veyyon/ai/instrumentation";
+import { sessionTelemetryDetail } from "@veyyon/ai/instrumentation";
 import { clearAnthropicFastModeFallback } from "@veyyon/ai/providers/anthropic";
 import { elidedSignatureBytes, signaturePolicy } from "@veyyon/ai/providers/google-shared";
 import { streamSimple } from "@veyyon/ai/stream";
@@ -386,7 +380,6 @@ import {
 	type FollowUpOptions,
 	type FreshSessionResult,
 	type HandoffResult,
-	type MessageEndPersistenceSlot,
 	type ModelCycleResult,
 	type PendingContextSnapshot,
 	type Prewalk,
@@ -415,7 +408,7 @@ import {
 } from "./codex-auto-reset";
 // The accounting, not the drawing. Both of these used to be imported from `modes/`, which put the
 // terminal UI on the session engine's graph and cost the layering gate a standing exception each.
-import { buildContextSnapshot, computeStoredMessagesTokens, estimateContextSnapshotAttribution } from "./context-usage";
+import { computeStoredMessagesTokens, estimateContextSnapshotAttribution } from "./context-usage";
 import { initSessionCpuLimit, rekeySessionCpuLimit, sessionCpuLimit } from "./cpu-limit";
 import { dedupeEphemeralReply } from "./ephemeral-reply";
 import { isClassifierRefusal } from "./failed-turn";
@@ -425,8 +418,6 @@ import {
 	type CustomMessagePayload,
 	convertToLlm,
 	demoteInterruptedThinking,
-	type FileMentionMessage,
-	type HookMessage,
 	INTERRUPTED_THINKING_MESSAGE_TYPE,
 	type InterruptedThinkingDetails,
 	isEmptyErrorTurn,
@@ -454,6 +445,7 @@ import { AdvisorRoster, type AdvisorRosterHost } from "./runtime/advisor-roster"
 import { CheckpointRuntime } from "./runtime/checkpoint-runtime";
 import { CompactionRuntime } from "./runtime/compaction-runtime";
 import { IrcInbox } from "./runtime/irc-inbox";
+import { MessagePersistence } from "./runtime/message-persistence";
 import { ModelHandoff } from "./runtime/model-handoff";
 import { PlanModeRuntime } from "./runtime/plan-mode-runtime";
 import { PostPromptTasks } from "./runtime/post-prompt-tasks";
@@ -469,7 +461,6 @@ import { formatSessionDumpText } from "./session-dump-format";
 import { SessionSpendLedger } from "./session-spend";
 import { incompleteTodoItems } from "./todo-reminder";
 import { parseTurnBudgetDirective } from "./turn-budget";
-import { planTurnPersistence, sameMessageContent, sessionMessagePersistenceKey } from "./turn-persistence";
 import { classifyUnexpectedStop, isUnexpectedStopCandidate } from "./unexpected-stop-classifier";
 import {
 	CODE_REVIEW_REMINDER_TYPE,
@@ -813,9 +804,9 @@ export class AgentSession {
 		removeAssistantMessageFromActiveContext: (message, reason) =>
 			this.#removeAssistantMessageFromActiveContext(message, reason),
 		persistLifecycleErrorMessage: async message => {
-			await this.#waitForSessionMessagePersistence(message);
-			if (!isEmptyErrorTurn(message) || this.#sessionMessageAlreadyPersisted(message)) return;
-			this.#appendSessionMessage(message);
+			await this.#persistence.waitFor(message);
+			if (!isEmptyErrorTurn(message) || this.#persistence.alreadyPersisted(message)) return;
+			this.#persistence.append(message);
 		},
 		resetSessionStopContinuationState: () => this.#resetSessionStopContinuationState(),
 	});
@@ -868,9 +859,7 @@ export class AgentSession {
 	// Extension system
 	#extensionRunner: ExtensionRunner | undefined = undefined;
 	#turnIndex = 0;
-	#messageEndPersistenceTail: Promise<void> = Promise.resolve();
-	#pendingMessageEndPersistence = new Map<string, Promise<void>>();
-	#persistedMessageKeys: { anchor: string; keys: Set<string> } | undefined;
+	readonly #persistence: MessagePersistence;
 
 	#skills: Skill[];
 	readonly #operatorNotices: OperatorNotices;
@@ -1313,6 +1302,14 @@ export class AgentSession {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
 		this.settings = config.settings;
+		this.#persistence = new MessagePersistence({
+			sessionStore: this.sessionManager,
+			instrumentationLevel: () => this.settings.get("session.instrumentation"),
+			pendingContextSnapshot: () => this.#pendingContextSnapshot,
+			nonMessageTokens: () => computeNonMessageTokens(this),
+			consumeRewoundResult: toolCallId => this.#checkpoint.consumeRewoundResult(toolCallId),
+			onTtsrInjectionPersisted: details => this.#ttsr.onInjectionPersisted(details),
+		});
 		this.#secrets = new SessionSecrets(config, {
 			sessionId: () => this.sessionManager.getSessionId(),
 			cwd: () => this.sessionManager.getCwd(),
@@ -1355,7 +1352,7 @@ export class AgentSession {
 				setModelTemporary: (model, thinkingLevel) =>
 					this.setModelTemporary(model, thinkingLevel, { ephemeral: true }),
 				emitNotice: (level, message, source) => this.emitNotice(level, message, source),
-				waitForPersistence: message => this.#waitForSessionMessagePersistence(message),
+				waitForPersistence: message => this.#persistence.waitFor(message),
 				todoGateOpen: toolResults => {
 					if (toolResults.some(result => result.toolName === TOOL.todo)) this.#todo.noteTodoToolResult();
 					return this.#todo.sawTodoTool || !this.#toolRegistry.has(TOOL.todo);
@@ -2161,7 +2158,7 @@ export class AgentSession {
 			timestamp: Date.now(),
 		};
 		this.agent.appendMessage(toolResultMessage);
-		this.#persistSessionMessageIfMissing(toolResultMessage);
+		this.#persistence.persistIfMissing(toolResultMessage);
 		this.#emitSessionEventDetached({ type: "message_start", message: toolResultMessage }, "late tool result");
 		this.#emitSessionEventDetached({ type: "message_end", message: toolResultMessage }, "late tool result");
 		return true;
@@ -2534,288 +2531,6 @@ export class AgentSession {
 		}
 	};
 
-	#createMessageEndPersistenceSlot(message: AgentMessage): MessageEndPersistenceSlot | undefined {
-		const key = sessionMessagePersistenceKey(message);
-		if (!key) return undefined;
-		const previous = this.#messageEndPersistenceTail;
-		const { promise, resolve } = Promise.withResolvers<void>();
-		const clear = () => {
-			if (this.#pendingMessageEndPersistence.get(key) === promise) {
-				this.#pendingMessageEndPersistence.delete(key);
-			}
-		};
-		this.#pendingMessageEndPersistence.set(key, promise);
-		// Same tail rule as `#queueExtensionEvent`: `promise` is handed to the slot's caller and carries the
-		// failure; the tail only orders the next message's persistence and must not inherit the rejection.
-		this.#messageEndPersistenceTail = promise.catch(() => {});
-		return {
-			promise,
-			persist: async persistMessage => {
-				await previous;
-				try {
-					persistMessage();
-				} finally {
-					resolve();
-					clear();
-				}
-			},
-			release: () => {
-				resolve();
-				clear();
-			},
-		};
-	}
-
-	async #waitForSessionMessagePersistence(message: AgentMessage): Promise<void> {
-		const key = sessionMessagePersistenceKey(message);
-		if (!key) return;
-		await this.#pendingMessageEndPersistence.get(key);
-	}
-
-	/**
-	 * Index every message entry on the current branch by persistence key, so
-	 * the mid-run-compaction planner can ask "is this turn message already on
-	 * the branch?" in O(1). The set is memoized through the current leaf path
-	 * and validated at use time against a (session file, leaf id) anchor.
-	 *
-	 * The mid-run ordering check uses key identity alone: same-key content
-	 * variants are one logical message at this boundary, because otherwise a
-	 * display-side rewrite can make the assistant look missing after its tool
-	 * results have already persisted.
-	 *
-	 * Coherency is anchor-based, not invalidation-based: every branch mutation
-	 * (rewind, branch switch, new session, custom-entry append) changes the
-	 * session manager's leaf id or session file, so `#ensurePersistedMessageKeys`
-	 * detects staleness itself and rebuilds. No mutation call site has to
-	 * remember to invalidate anything.
-	 *
-	 * Pre-#3629 the equivalent was `sessionManager.getBranch()` called twice
-	 * per turn message, each call rebuilding the path via O(n²) `unshift` and
-	 * structurally JSON-comparing every entry — seconds of synchronous work
-	 * per `onTurnEnd` on a long session and the load-bearing source of the
-	 * `ui.loop-blocked` warnings in the bug report.
-	 */
-	#indexPersistedMessageKeys(): Set<string> {
-		return this.#ensurePersistedMessageKeys();
-	}
-
-	#persistedMessageKeysAnchor(): string {
-		return `${this.sessionManager.getSessionFile() ?? ""}\u0000${this.sessionManager.getLeafId() ?? ""}`;
-	}
-
-	#ensurePersistedMessageKeys(): Set<string> {
-		const anchor = this.#persistedMessageKeysAnchor();
-		let cache = this.#persistedMessageKeys;
-		if (cache === undefined || cache.anchor !== anchor) {
-			cache = { anchor, keys: this.#buildPersistedMessageKeySet() };
-			this.#persistedMessageKeys = cache;
-		}
-		return cache.keys;
-	}
-
-	#buildPersistedMessageKeySet(): Set<string> {
-		const keys = new Set<string>();
-		for (const entry of this.sessionManager.getBranch()) {
-			if (entry.type !== "message") continue;
-			const key = sessionMessagePersistenceKey(entry.message);
-			if (key !== undefined) keys.add(key);
-		}
-		return keys;
-	}
-
-	/**
-	 * True when {@link message} is structurally identical to a message already
-	 * appended to the current branch. Uses the current branch's memoized
-	 * persistence-key cache for the common missing-key case, and only walks the
-	 * branch to verify content when a key hit could be a rare collision.
-	 */
-	#sessionMessageAlreadyPersisted(message: AgentMessage): boolean {
-		const key = sessionMessagePersistenceKey(message);
-		if (key === undefined) return false;
-		const keys = this.#ensurePersistedMessageKeys();
-		if (!keys.has(key)) return false;
-		const branch = this.sessionManager.getBranch();
-		for (let index = branch.length - 1; index >= 0; index--) {
-			const entry = branch[index];
-			if (entry.type !== "message") continue;
-			if (sessionMessagePersistenceKey(entry.message) !== key) continue;
-			if (sameMessageContent(entry.message, message)) return true;
-		}
-		return false;
-	}
-
-	/**
-	 * True when the latest compaction entry on the current branch sits after
-	 * {@link assistantMessage}'s own entry, i.e. the assistant was kept through
-	 * that compaction and its `usage` describes the pre-rewrite prompt. One
-	 * backward walk from the leaf: the first compaction entry met is the latest,
-	 * and the assistant predates it iff its entry is still ahead on the walk.
-	 * A message that is not on the branch predates nothing.
-	 */
-	#assistantPredatesLatestCompaction(assistantMessage: AssistantMessage): boolean {
-		const key = sessionMessagePersistenceKey(assistantMessage);
-		const branch = this.sessionManager.getBranch();
-		let compactionSeen = false;
-		for (let index = branch.length - 1; index >= 0; index--) {
-			const entry = branch[index];
-			if (entry.type === "compaction") {
-				compactionSeen = true;
-				continue;
-			}
-			if (entry.type !== "message" || key === undefined) continue;
-			if (sessionMessagePersistenceKey(entry.message) === key) return compactionSeen;
-		}
-		return false;
-	}
-
-	#appendSessionMessage(
-		message:
-			| Message
-			| CustomMessage
-			| HookMessage
-			| BashExecutionMessage
-			| PythonExecutionMessage
-			| FileMentionMessage,
-	): string {
-		const cache = this.#persistedMessageKeys;
-		const wasFresh = cache !== undefined && cache.anchor === this.#persistedMessageKeysAnchor();
-		const entryId = this.sessionManager.appendMessage(message);
-		const key = sessionMessagePersistenceKey(message);
-		if (wasFresh && cache && key) {
-			cache.keys.add(key);
-			cache.anchor = this.#persistedMessageKeysAnchor();
-		}
-		return entryId;
-	}
-
-	#persistSessionMessageIfMissing(message: AgentMessage): void {
-		if (
-			message.role !== "user" &&
-			message.role !== "developer" &&
-			message.role !== "assistant" &&
-			message.role !== "toolResult" &&
-			message.role !== "fileMention"
-		) {
-			return;
-		}
-		let persistenceMessage = message;
-		if (message.role === "toolResult" && message.metrics !== undefined) {
-			const metrics = toolCallMetricsForPersistence(message.metrics, this.settings.get("session.instrumentation"));
-			if (metrics === undefined) {
-				const { metrics: _discardedMetrics, ...withoutMetrics } = message;
-				persistenceMessage = withoutMetrics;
-			} else {
-				persistenceMessage = { ...message, metrics };
-			}
-		}
-		if (message.role === "assistant") {
-			const level = this.settings.get("session.instrumentation");
-			const turnMetrics = assistantTurnMetricsForPersistence(message.turnMetrics, level);
-			const request = assistantTurnRequestForPersistence(message.request, level);
-			const { turnMetrics: _discardedTurnMetrics, request: _discardedRequest, ...withoutStudyTelemetry } = message;
-			persistenceMessage = {
-				...withoutStudyTelemetry,
-				...(turnMetrics === undefined ? {} : { turnMetrics }),
-				...(request === undefined ? {} : { request }),
-			};
-		}
-		if (this.#sessionMessageAlreadyPersisted(persistenceMessage)) return;
-		if (message.role === "assistant") {
-			const assistantMsg = persistenceMessage as AssistantMessage;
-			if (isClassifierRefusal(assistantMsg)) return;
-			if (isEmptyErrorTurn(assistantMsg)) return;
-			if (assistantMsg.stopReason !== "aborted" && assistantMsg.stopReason !== "error" && assistantMsg.usage) {
-				const pending = this.#pendingContextSnapshot;
-				const nonMessageTokens = pending?.nonMessageTokens ?? computeNonMessageTokens(this);
-				const currentDetail = sessionTelemetryDetail(
-					this.settings.get("session.instrumentation"),
-					"context-breakdown",
-				);
-				const detail =
-					!pending || pending.detail === "none" || currentDetail === "none"
-						? "none"
-						: instrumentationRank(pending.detail) < instrumentationRank(currentDetail)
-							? pending.detail
-							: currentDetail;
-				if (detail === "rich" || detail === "ultra") {
-					const providerPromptTokens =
-						assistantMsg.usage.input + assistantMsg.usage.cacheRead + assistantMsg.usage.cacheWrite;
-					const promptTokens =
-						providerPromptTokens > 0 ? calculatePromptTokens(assistantMsg.usage) : pending?.promptTokens;
-					if (promptTokens !== undefined) {
-						const compactionEntryId =
-							pending?.compactionEntryId ??
-							(detail === "ultra" ? getLatestCompactionEntry(this.sessionManager.getBranch())?.id : undefined);
-						assistantMsg.contextSnapshot = buildContextSnapshot(
-							promptTokens,
-							nonMessageTokens,
-							detail,
-							estimateContextSnapshotAttribution(
-								promptTokens,
-								nonMessageTokens,
-								pending?.tailTokens ?? 0,
-								providerPromptTokens > 0 ? "provider" : "estimate",
-								compactionEntryId,
-							),
-						);
-					}
-				} else {
-					assistantMsg.contextSnapshot = {
-						promptTokens: calculatePromptTokens(assistantMsg.usage),
-						nonMessageTokens,
-					};
-				}
-			}
-		}
-		const skipPersistedRewindResult =
-			message.role === "toolResult" &&
-			message.toolName === TOOL.rewind &&
-			this.#checkpoint.consumeRewoundResult(message.toolCallId);
-		if (!skipPersistedRewindResult) {
-			this.#appendSessionMessage(persistenceMessage);
-		}
-	}
-
-	async #persistTurnMessagesForMidRunCompaction(context: AgentTurnEndContext | undefined): Promise<boolean> {
-		if (!context) return true;
-		const turnMessages = [context.message, ...context.toolResults];
-		for (const message of turnMessages) {
-			await this.#waitForSessionMessagePersistence(message);
-		}
-		// One branch snapshot + one persistence-key index drives the entire
-		// planning pass. Pre-#3629 this re-walked the branch and structurally
-		// JSON-compared every entry per turn message, which on long sessions
-		// turned each `onTurnEnd` into a seconds-long sync block (the
-		// `ui.loop-blocked` warnings tagged `agent:*` in the bug report).
-		const branchKeys = this.#indexPersistedMessageKeys();
-		const turnKeys = turnMessages.map(sessionMessagePersistenceKey);
-		const persistedKeys = new Set<string>();
-		for (let index = 0; index < turnMessages.length; index++) {
-			const key = turnKeys[index];
-			if (key === undefined) continue;
-			// Mid-run ordering is keyed by logical identity. A persisted display
-			// variant (for example, redacted/deobfuscated content) must still count;
-			// otherwise the assistant can look missing while later tool results are
-			// present, producing a false out-of-order skip.
-			if (branchKeys.has(key)) {
-				persistedKeys.add(key);
-			}
-		}
-		const plan = planTurnPersistence(turnKeys, persistedKeys);
-		if (plan.kind === "out-of-order") {
-			const message = turnMessages[plan.messageIndex];
-			logger.debug("Skipping mid-run compaction because turn persistence is out of order", {
-				role: message.role,
-				timestamp: message.timestamp,
-			});
-			return false;
-		}
-		for (const index of plan.toPersist) {
-			this.#persistSessionMessageIfMissing(turnMessages[index]);
-		}
-		return true;
-	}
-
 	/**
 	 * Assistant message content in display form: secrets deobfuscated and argot
 	 * handles expanded, composed in that order. Stored messages keep the
@@ -3016,7 +2731,7 @@ export class AgentSession {
 			// extension delivery or persistence can stall this handler.
 			if (interruptedThinkingMessage) this.agent.appendMessage(interruptedThinkingMessage);
 		}
-		const persistence = this.#createMessageEndPersistenceSlot(message);
+		const persistence = this.#persistence.openSlot(message);
 		// The finished message expands wholesale; drop the stream state.
 		this.#argotStreamDisplay?.flush();
 		this.#argotStreamDisplay = undefined;
@@ -3033,7 +2748,7 @@ export class AgentSession {
 			persistence?.release();
 			throw error;
 		}
-		await this.#persistMessageEnd(message, persistence, interruptedThinkingMessage);
+		await this.#persistence.persistMessageEnd(message, persistence, interruptedThinkingMessage);
 		if (message.role === "assistant") {
 			await this.#onAssistantMessageEnd(message);
 		} else if (message.role === "toolResult") {
@@ -3080,47 +2795,6 @@ export class AgentSession {
 			if (this.#todo.isInitResult(details, toolCallId)) {
 				this.#scheduleReplanTitleRefresh();
 			}
-		}
-	}
-
-	/**
-	 * Write a finished message to the session file, behind any earlier message still being written.
-	 * Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere.
-	 */
-	async #persistMessageEnd(
-		message: AgentMessage,
-		slot: MessageEndPersistenceSlot | undefined,
-		interruptedThinkingMessage: CustomMessage<InterruptedThinkingDetails> | undefined,
-	): Promise<void> {
-		const persist = () => {
-			if (message.role === "hookMessage" || message.role === "custom") {
-				this.sessionManager.appendCustomMessageEntry(
-					message.customType,
-					message.content,
-					message.display,
-					message.details,
-					message.attribution ?? "agent",
-				);
-				if (message.role === "custom" && message.customType === "ttsr-injection") {
-					this.#ttsr.onInjectionPersisted(message.details);
-				}
-			} else {
-				this.#persistSessionMessageIfMissing(message);
-			}
-		};
-		if (slot) {
-			await slot.persist(persist);
-		} else {
-			persist();
-		}
-		if (interruptedThinkingMessage) {
-			this.sessionManager.appendCustomMessageEntry(
-				interruptedThinkingMessage.customType,
-				interruptedThinkingMessage.content,
-				interruptedThinkingMessage.display,
-				interruptedThinkingMessage.details,
-				interruptedThinkingMessage.attribution,
-			);
 		}
 	}
 
@@ -3298,7 +2972,7 @@ export class AgentSession {
 		// The identity of the settling message is read above, before its persistence slot drains; the
 		// passes below append to the branch, so wait for the entry to exist or a continuation reminder
 		// lands ahead of the reply it answers. Resolved already whenever the slot drained first.
-		await this.#waitForSessionMessagePersistence(msg);
+		await this.#persistence.waitFor(msg);
 
 		const successfulYieldMessage = this.#findSuccessfulYieldAssistantMessage(settledMessages);
 		const yieldOnThisMessage = this.#assistantEndedWithSuccessfulYield(msg);
@@ -9044,7 +8718,7 @@ export class AgentSession {
 			.find((message): message is AssistantMessage => message.role === "assistant");
 		if (!lastAssistant || lastAssistant.stopReason === "aborted" || lastAssistant.stopReason === "error") return;
 
-		if (!(await this.#persistTurnMessagesForMidRunCompaction(context))) return;
+		if (!(await this.#persistence.persistTurnForMidRunCompaction(context))) return;
 
 		const billedContextTokens = calculateContextTokens(lastAssistant.usage);
 		const storedContextTokens = this.#estimateStoredContextTokens();
@@ -9137,7 +8811,7 @@ export class AgentSession {
 		// count re-tripped the threshold on a history with nothing left to
 		// summarize, and the "freed too little context" warning fired on a
 		// compaction that had just worked.
-		const errorIsFromBeforeCompaction = this.#assistantPredatesLatestCompaction(assistantMessage);
+		const errorIsFromBeforeCompaction = this.#persistence.assistantPredatesLatestCompaction(assistantMessage);
 		if (sameModel && !errorIsFromBeforeCompaction && AIError.isContextOverflow(assistantMessage, contextWindow)) {
 			// Clear the failed turn from active context so the retry (or the next
 			// user prompt) does not replay it. The persisted branch entry stays
@@ -9585,7 +9259,7 @@ export class AgentSession {
 	 * (and the user-visible transcript line) in place.
 	 */
 	async #dropPersistedAssistantTurn(assistantMessage: AssistantMessage): Promise<void> {
-		await this.#waitForSessionMessagePersistence(assistantMessage);
+		await this.#persistence.waitFor(assistantMessage);
 		this.#discardAssistantTurn(assistantMessage);
 	}
 
@@ -9695,25 +9369,7 @@ export class AgentSession {
 	 */
 	#discardAssistantTurn(assistantMessage: AssistantMessage): void {
 		this.#removeAssistantMessageFromActiveContext(assistantMessage);
-
-		const branchEntry = this.sessionManager
-			.getBranch()
-			.slice()
-			.reverse()
-			.find(
-				entry =>
-					entry.type === "message" &&
-					entry.message.role === "assistant" &&
-					isSameAssistantMessage(entry.message as AssistantMessage, assistantMessage),
-			);
-		if (!branchEntry) {
-			return;
-		}
-		if (branchEntry.parentId === null) {
-			this.sessionManager.resetLeaf();
-		} else {
-			this.sessionManager.branch(branchEntry.parentId);
-		}
+		this.#persistence.dropAssistantFromBranch(assistantMessage);
 	}
 
 	#enforceRewindBeforeYield(): boolean {
