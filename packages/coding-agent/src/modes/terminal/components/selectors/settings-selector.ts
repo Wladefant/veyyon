@@ -1,5 +1,5 @@
 import { AUTO_COMPACTION_THRESHOLD, parseCompactionThreshold, type ThinkingLevel } from "@veyyon/agent-core";
-import type { Api, Effort, Model } from "@veyyon/ai";
+import type { Api, AuthStorage, Effort, Model } from "@veyyon/ai";
 import { UNSET_NUMBER, UNSET_NUMBER_OPTION_VALUE } from "@veyyon/kernel/settings/optional-number";
 import { Ellipsis } from "@veyyon/natives";
 import type { SettingTab, SubmenuOption } from "@veyyon/settings";
@@ -40,6 +40,7 @@ import {
 } from "../../../../config/model-roles";
 import { BUILTIN_PERSONALITY_DESCRIPTIONS, NONE_PERSONALITY } from "../../../../config/personality-resolver";
 import {
+	migrateAntigravityLimits,
 	normalizeProviderMaxInFlightRequests,
 	type SettingSource,
 	settings,
@@ -653,8 +654,10 @@ class ProviderLimitsSubmenu extends MouseRoutedSubmenu {
 		private readonly onChange: (value: Record<string, number>) => void,
 		private readonly onCancel: () => void,
 		private readonly requestRender?: () => void,
+		private readonly authStorage?: AuthStorage,
 	) {
 		super();
+		this.#migrateLegacyLimitsIfApplicable();
 		this.#showProviderList();
 	}
 
@@ -662,19 +665,87 @@ class ProviderLimitsSubmenu extends MouseRoutedSubmenu {
 		return normalizeProviderMaxInFlightRequests(settings.get("providers.maxInFlightRequests"));
 	}
 
-	#providerIds(): string[] {
+	#antigravityAccounts(): string[] {
+		const result: string[] = [];
+		const seen = new Set<string>();
+
+		if (this.authStorage) {
+			const identities = this.authStorage.listOAuthAccountIdentities("google-antigravity");
+			for (const id of identities) {
+				const trimmed = id.trim();
+				if (trimmed.length > 0 && !seen.has(trimmed)) {
+					seen.add(trimmed);
+					result.push(trimmed);
+				}
+			}
+		}
+
 		const limits = this.#limits();
-		return Array.from(new Set(this.providers.concat(Object.keys(limits)))).sort((a, b) => a.localeCompare(b));
+		for (const key of Object.keys(limits)) {
+			if (key.startsWith("google-antigravity:") && key.length > "google-antigravity:".length) {
+				const id = key.slice("google-antigravity:".length).trim();
+				if (id.length > 0 && !seen.has(id)) {
+					seen.add(id);
+					result.push(id);
+				}
+			}
+		}
+
+		return result.sort((a, b) => a.localeCompare(b));
+	}
+
+	#migrateLegacyLimitsIfApplicable(): void {
+		const limits = this.#limits();
+		if (limits["google-antigravity"] === undefined) return;
+		const accounts = this.#antigravityAccounts();
+		if (accounts.length === 0) return;
+		const migrated = migrateAntigravityLimits(limits, accounts);
+		settings.set("providers.maxInFlightRequests", migrated);
+		this.onChange(migrated);
+	}
+
+	#items(): Array<{ key: string; label: string }> {
+		const limits = this.#limits();
+		const accounts = this.#antigravityAccounts();
+		const items: Array<{ key: string; label: string }> = [];
+		const providerSet = new Set(this.providers.concat(Object.keys(limits)));
+		if (accounts.length > 0) {
+			providerSet.add("google-antigravity");
+		}
+		const allProviders = Array.from(providerSet);
+
+		for (const provider of allProviders) {
+			if (provider === "google-antigravity") {
+				if (accounts.length > 0) {
+					for (const acc of accounts) {
+						items.push({
+							key: `google-antigravity:${acc}`,
+							label: `google-antigravity (${acc})`,
+						});
+					}
+				} else {
+					items.push({ key: "google-antigravity", label: "google-antigravity" });
+				}
+				continue;
+			}
+			if (provider.startsWith("google-antigravity:")) {
+				continue;
+			}
+			items.push({ key: provider, label: provider });
+		}
+
+		return items.sort((a, b) => a.label.localeCompare(b.label));
 	}
 
 	#showProviderList(): void {
 		this.clear();
 		const limits = this.#limits();
-		const providerItems = this.#providerIds().map((provider): SelectItem => {
-			const limit = limits[provider];
+		const items = this.#items();
+		const providerItems = items.map((item): SelectItem => {
+			const limit = limits[item.key];
 			return {
-				value: provider,
-				label: provider,
+				value: item.key,
+				label: item.label,
 				description: limit === undefined ? "Unlimited" : `Limit: ${limit}`,
 			};
 		});
@@ -682,8 +753,8 @@ class ProviderLimitsSubmenu extends MouseRoutedSubmenu {
 			Object.keys(limits).length === 0
 				? []
 				: [{ value: "__clear_all", label: "Clear all limits", description: "Make every provider unlimited" }];
-		const items = providerItems.concat(clearItem);
-		const selectList = createFocusedSelectList(items, items.length, undefined, {
+		const allListItems = providerItems.concat(clearItem);
+		const selectList = createFocusedSelectList(allListItems, allListItems.length, undefined, {
 			onSelect: item => {
 				if (item.value === "__clear_all") {
 					settings.set("providers.maxInFlightRequests", {});
@@ -692,7 +763,8 @@ class ProviderLimitsSubmenu extends MouseRoutedSubmenu {
 					this.requestRender?.();
 					return;
 				}
-				this.#showProviderEditor(item.value);
+				const matched = items.find(i => i.key === item.value);
+				this.#showProviderEditor(item.value, matched?.label ?? item.value);
 			},
 			onCancel: this.onCancel,
 		});
@@ -701,30 +773,30 @@ class ProviderLimitsSubmenu extends MouseRoutedSubmenu {
 		this.renderSubmenuFrame({
 			title: "Max In-Flight Requests",
 			description:
-				"Select a provider, enter a positive number to cap concurrent LLM requests, or clear it for unlimited.",
+				"Select a provider or account, enter a positive number to cap concurrent LLM requests, or clear it for unlimited.",
 			body: selectList,
-			footerHint: "  Enter to edit provider · Esc to go back",
+			footerHint: "  Enter to edit limit · Esc to go back",
 		});
 	}
 
-	#showProviderEditor(provider: string): void {
+	#showProviderEditor(key: string, label: string): void {
 		const limits = this.#limits();
 		this.clear();
 		this.#selectList = undefined;
 		this.addChild(
 			new TextInputSubmenu(
-				`Max In-Flight Requests: ${provider}`,
+				`Max In-Flight Requests: ${label}`,
 				"Enter a positive number. Decimals round down. Clear the field to make this provider unlimited.",
-				limits[provider]?.toString() ?? "",
+				limits[key]?.toString() ?? "",
 				value => {
 					const next = { ...limits };
 					const trimmed = value.trim();
 					if (trimmed === "") {
-						delete next[provider];
+						delete next[key];
 					} else {
 						const limit = Number(trimmed);
 						if (!Number.isFinite(limit) || limit <= 0) throw new Error("Limit must be a positive number.");
-						next[provider] = Math.max(1, Math.floor(limit));
+						next[key] = Math.max(1, Math.floor(limit));
 					}
 					const normalized = validateProviderMaxInFlightRequests(next);
 					settings.set("providers.maxInFlightRequests", normalized);
@@ -2226,6 +2298,7 @@ export interface SettingsRuntimeContext {
 	requestRender?: () => void;
 	modelRegistry?: ModelRegistry;
 	availableModels?: ReadonlyArray<Model>;
+	authStorage?: AuthStorage;
 }
 
 export interface StatusLinePreviewSettings {
@@ -3180,6 +3253,7 @@ export class SettingsSelectorComponent implements Component {
 			},
 			() => done(),
 			this.context.requestRender,
+			this.context.authStorage ?? this.context.modelRegistry?.authStorage,
 		);
 	}
 

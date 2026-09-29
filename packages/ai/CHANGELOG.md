@@ -4,6 +4,7 @@
 
 ### Added
 
+- Supported discrete per-account in-flight request limits for Antigravity OAuth accounts across request leasing and round-robin credential selection.
 - A `chatgpt-web` provider definition for the local `codex-chatgpt-web` Responses bridge. It carries no `login` and no `refreshToken`: the bridge authenticates its own browser side through a Chrome profile the operator signs in to once with the daemon's `setup` command, and its catalog bearer comes from the environment (`CODEX_CHATGPT_WEB_OAUTH_TOKEN`, then `OPENAI_CODEX_OAUTH_TOKEN`). The official `openai-codex` provider keeps its own flow, credentials and host unchanged.
 
 ### Changed

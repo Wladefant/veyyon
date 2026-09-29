@@ -48,11 +48,43 @@ export function configuredProviderMaxInFlightRequests(): Record<string, number> 
  * direct API caller's mistake or an absent entry, and reading it as a cap of zero would deadlock the
  * request rather than report the problem.
  */
+export function resolveProviderInFlightSlotKey(
+	provider: string,
+	accountIdentity?: string,
+	perCallLimits?: Record<string, number>,
+): string {
+	const limits = perCallLimits ?? configuredLimits;
+	if (accountIdentity) {
+		const trimmed = accountIdentity.trim();
+		if (trimmed.length > 0) {
+			const directKey = `${provider}:${trimmed}`;
+			const lowerKey = trimmed.includes("@") ? `${provider}:${trimmed.toLowerCase()}` : undefined;
+			const value = limits[directKey] ?? (lowerKey ? limits[lowerKey] : undefined);
+			if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+				return lowerKey ?? directKey;
+			}
+		}
+	}
+	return provider;
+}
+
 export function resolveProviderInFlightLimit(
 	provider: string,
 	perCallLimits?: Record<string, number>,
+	accountIdentity?: string,
 ): number | undefined {
 	const limits = perCallLimits ?? configuredLimits;
+	if (accountIdentity) {
+		const trimmed = accountIdentity.trim();
+		if (trimmed.length > 0) {
+			const directKey = `${provider}:${trimmed}`;
+			const lowerKey = trimmed.includes("@") ? `${provider}:${trimmed.toLowerCase()}` : undefined;
+			const accountValue = limits[directKey] ?? (lowerKey ? limits[lowerKey] : undefined);
+			if (typeof accountValue === "number" && Number.isFinite(accountValue) && accountValue > 0) {
+				return Math.max(1, Math.floor(accountValue));
+			}
+		}
+	}
 	const value = limits[provider];
 	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined;
 	return Math.max(1, Math.floor(value));

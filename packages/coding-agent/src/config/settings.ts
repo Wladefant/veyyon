@@ -109,6 +109,39 @@ export function validateProviderMaxInFlightRequests(value: unknown): Record<stri
 	return normalized;
 }
 
+/**
+ * Migrates a legacy shared `google-antigravity` limit into discrete per-account entries
+ * keyed by authenticated account identity (`google-antigravity:<account>`), removing
+ * the single shared limit. If no accounts are provided or no legacy limit is configured,
+ * returns limits unmodified.
+ */
+export function migrateAntigravityLimits(
+	limits: Record<string, number>,
+	accountIdentities: readonly string[],
+): Record<string, number> {
+	const legacyLimit = limits["google-antigravity"];
+	if (typeof legacyLimit !== "number" || !Number.isFinite(legacyLimit) || legacyLimit <= 0) {
+		return { ...limits };
+	}
+	const validAccounts = accountIdentities.map(a => a.trim()).filter(a => a.length > 0);
+	if (validAccounts.length === 0) {
+		return { ...limits };
+	}
+	const result: Record<string, number> = {};
+	for (const [key, value] of Object.entries(limits)) {
+		if (key !== "google-antigravity") {
+			result[key] = value;
+		}
+	}
+	for (const account of validAccounts) {
+		const accountKey = `google-antigravity:${account}`;
+		if (result[accountKey] === undefined) {
+			result[accountKey] = legacyLimit;
+		}
+	}
+	return result;
+}
+
 const PATH_SCOPED_ARRAY_SETTINGS = new Set<SettingPath>(["enabledModels", "disabledProviders"]);
 
 export { MAX_ASK_TIMEOUT_SECONDS } from "./settings-migrations";

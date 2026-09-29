@@ -3769,6 +3769,36 @@ export class AuthStorage {
 	}
 
 	/**
+	 * Get the discrete identity key (email, accountId, or projectId) for the active
+	 * or session-preferred OAuth account for a provider.
+	 */
+	getOAuthAccountIdentityKey(provider: string, sessionId?: string): string | undefined {
+		const identity = this.getOAuthAccountIdentity(provider, sessionId);
+		if (!identity) return undefined;
+		const rawKey = identity.email ?? identity.accountId ?? identity.projectId;
+		if (typeof rawKey !== "string" || rawKey.trim().length === 0) return undefined;
+		return rawKey.trim();
+	}
+
+	/**
+	 * List all distinct account identity keys (email, accountId, or projectId) for a provider.
+	 */
+	listOAuthAccountIdentities(provider: string): string[] {
+		const accounts = this.listOAuthAccounts(provider);
+		const seen = new Set<string>();
+		const result: string[] = [];
+		for (const account of accounts) {
+			const candidate = account.email ?? account.accountId ?? account.projectId ?? `account-${account.credentialId}`;
+			const trimmed = candidate.trim();
+			if (trimmed.length > 0 && !seen.has(trimmed)) {
+				seen.add(trimmed);
+				result.push(trimmed);
+			}
+		}
+		return result;
+	}
+
+	/**
 	 * Get all credentials.
 	 */
 	getAll(): AuthStorageData {

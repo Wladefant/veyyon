@@ -1372,8 +1372,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 								return runtime.obfuscatePayload(replacement ?? payload);
 							}
 						: undefined;
+				const resolvedAccountIdentity =
+					optionsForRequest.accountIdentity ??
+					modelRegistry.authStorage.getOAuthAccountIdentityKey(streamModel.provider, agent.sessionId);
 				return settingsAwareStreamFn(streamModel, context, {
 					...optionsForRequest,
+					accountIdentity: resolvedAccountIdentity,
 					onPayload: leasedOnPayload,
 				});
 			},

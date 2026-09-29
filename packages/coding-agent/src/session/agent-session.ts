@@ -6787,6 +6787,13 @@ export class AgentSession {
 			},
 		};
 
+		if (!preparedOptions.accountIdentity) {
+			const identityKey = this.#modelRegistry.authStorage.getOAuthAccountIdentityKey(provider, this.sessionId);
+			if (identityKey) {
+				preparedOptions.accountIdentity = identityKey;
+			}
+		}
+
 		// Stamp session metadata (e.g. user_id={session_id}) onto direct-call requests so
 		// they share the same session bucket as Agent.prompt-routed requests on Anthropic
 		// OAuth. Caller-provided metadata wins so explicit overrides are respected.

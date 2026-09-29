@@ -287,6 +287,7 @@ export class SelectorController {
 					requestRender: () => this.ctx.ui.requestRender(),
 					modelRegistry: this.ctx.session.modelRegistry,
 					availableModels: this.ctx.session.getAvailableModels(),
+					authStorage: this.ctx.session.modelRegistry.authStorage,
 				},
 				{
 					onChange: (id, value) => this.handleSettingChange(id, value),

@@ -277,6 +277,11 @@ export interface StreamOptions {
 	 */
 	maxInFlightRequests?: Record<string, number>;
 	/**
+	 * Optional authenticated account identity (e.g. email, accountId, or projectId)
+	 * for discrete per-account provider limits.
+	 */
+	accountIdentity?: string;
+	/**
 	 * Optional callback for inspecting or replacing provider payloads before sending.
 	 * Return undefined to keep the payload unchanged.
 	 */

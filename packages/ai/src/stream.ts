@@ -21,6 +21,7 @@ import { atomicWriteFile } from "@veyyon/utils/atomic-write";
 import { getConfigRootDir } from "@veyyon/utils/dirs";
 import { $env } from "@veyyon/utils/env";
 import { isEnoent } from "@veyyon/utils/fs-error";
+import { decodeJwtPayload } from "@veyyon/utils/jwt";
 import * as logger from "@veyyon/utils/logger";
 import { isProcessAlive } from "@veyyon/utils/process-liveness";
 import { withExtraCaFetch } from "@veyyon/utils/tls-fetch";
@@ -32,7 +33,7 @@ import { getEnvApiKey } from "./env-api-key";
 import * as AIError from "./error";
 import { ProviderHttpError } from "./error";
 import { isAuthRetryableError } from "./error/auth-classify";
-import { resolveProviderInFlightLimit } from "./provider-inflight-limits";
+import { resolveProviderInFlightLimit, resolveProviderInFlightSlotKey } from "./provider-inflight-limits";
 import type { BedrockOptions } from "./providers/amazon-bedrock";
 import type { AnthropicOptions } from "./providers/anthropic";
 import type { CursorOptions } from "./providers/cursor";
@@ -199,7 +200,11 @@ let providerInFlightRootOverride: string | undefined;
  * re-export keeps `@veyyon/ai/stream` a working import path for it, so nothing that already calls it
  * changes, while a caller that only configures caps can name the owner instead.
  */
-export { configureProviderMaxInFlightRequests } from "./provider-inflight-limits";
+export {
+	configureProviderMaxInFlightRequests,
+	resolveProviderInFlightLimit,
+	resolveProviderInFlightSlotKey,
+} from "./provider-inflight-limits";
 
 function providerInFlightRoot(): string {
 	if (providerInFlightRootOverride) return providerInFlightRootOverride;
@@ -716,7 +721,9 @@ export const __providerInFlightForTesting = {
 	},
 };
 
-function withProviderInFlightLimit<TOptions extends Pick<StreamOptions, "signal" | "maxInFlightRequests">>(
+function withProviderInFlightLimit<
+	TOptions extends Pick<StreamOptions, "signal" | "maxInFlightRequests" | "accountIdentity" | "apiKey">,
+>(
 	model: Model<Api>,
 	options: TOptions | undefined,
 	dispatch: () => AssistantMessageEventStream,
@@ -725,7 +732,15 @@ function withProviderInFlightLimit<TOptions extends Pick<StreamOptions, "signal"
 	// chokepoint — so the loop guard (which wraps this) sees healed events and all
 	// provider exits are covered by one wrap. Official first-party providers are
 	// exempt (see `healLeakedThinking`); healing is otherwise idempotent.
-	const limit = resolveProviderInFlightLimit(model.provider, options?.maxInFlightRequests);
+	let accountIdentity = options?.accountIdentity;
+	if (!accountIdentity && model.provider === "google-antigravity" && typeof options?.apiKey === "string") {
+		const payload = decodeJwtPayload<{ email?: string }>(options.apiKey);
+		if (payload && typeof payload.email === "string" && payload.email.trim().length > 0) {
+			accountIdentity = payload.email.trim();
+		}
+	}
+
+	const limit = resolveProviderInFlightLimit(model.provider, options?.maxInFlightRequests, accountIdentity);
 	if (limit === undefined) return healLeakedThinking(model, dispatch());
 
 	const outer = new AssistantMessageEventStream();
@@ -739,9 +754,10 @@ function withProviderInFlightLimit<TOptions extends Pick<StreamOptions, "signal"
 		};
 		try {
 			const startedWaitingAt = Date.now();
-			release = await acquireProviderInFlightSlot(model.provider, limit, options?.signal);
+			const slotKey = resolveProviderInFlightSlotKey(model.provider, accountIdentity, options?.maxInFlightRequests);
+			release = await acquireProviderInFlightSlot(slotKey, limit, options?.signal);
 			if (Date.now() - startedWaitingAt >= PROVIDER_INFLIGHT_SIGNAL_FALLBACK_MS) {
-				logger.debug("Provider in-flight limit wait completed", { provider: model.provider, limit });
+				logger.debug("Provider in-flight limit wait completed", { provider: model.provider, limit, slotKey });
 			}
 			if (options?.signal?.aborted) {
 				throw options.signal.reason ?? new AIError.RequestAbortError("Provider request aborted before dispatch");
