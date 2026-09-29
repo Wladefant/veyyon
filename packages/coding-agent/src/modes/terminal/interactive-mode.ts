@@ -1881,7 +1881,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.#agentRegistrySubscriptionTarget !== registry) {
 			this.#agentRegistryUnsubscribe?.();
 			this.#agentRegistrySubscriptionTarget = registry;
-			this.#agentRegistryUnsubscribe = registry.onChange(() => {
+			this.#agentRegistryUnsubscribe = registry.onChange(event => {
+				// The Agents block follows the same registry the badge counts, or an agent
+				// woken outside the executor is counted as running and listed nowhere.
+				this.#observerRegistry.mirrorAgentStatus(event.ref);
 				this.syncRunningAgentBadge();
 			});
 		}
