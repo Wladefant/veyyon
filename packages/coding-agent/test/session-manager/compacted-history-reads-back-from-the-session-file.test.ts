@@ -1,6 +1,9 @@
 /**
- * A resumed session holds the payloads of entries its live context cannot reach on disk, and reads
- * each back from the session file on first use (`ColdEntryPayloads`).
+ * A session holds the payloads of entries its live context cannot reach on disk, and reads each
+ * back from the session file on first use (`ColdEntryPayloads`). That is the history before the
+ * newest compaction boundary, other branches, and the record-only kinds (`RECORD_ONLY_ENTRY_TYPES`)
+ * wherever they sit: a spawned agent's `session_init` holds its whole joined system prompt for as
+ * long as the agent stays live.
  *
  * WHY: a resumed 402 MiB session held 501 MiB of heap, 438 MiB of it in entries before the newest
  * compaction boundary. Moving those payloads out of memory opens a class of defects: a cold entry
@@ -14,6 +17,9 @@
  * every externalization site persistence writes (image block, image data URL, oversized text, tool
  * result codec), and every event that changes the file under a cold entry (this manager's tail
  * republish, another writer's republish, the manager being dropped).
+ *
+ * The record-only sweep places every entry kind on the live branch and pins, by exact equality,
+ * which kinds read the disk there, so a new kind fails until it is classified.
  *
  * NOT CAUGHT: the heap bound is measured in this process with a 4x margin, so a regression that
  * keeps a quarter of the cold payloads resident passes. Windows holds no pinned reader, so there
@@ -555,6 +561,87 @@ describe.skipIf(!pins)("compacted history reads back from the session file", () 
 
 		expect(cold).toBeLessThan(payloadBytes / 4);
 		expect(warm).toBeGreaterThan(payloadBytes);
+		await manager.close();
+	});
+
+	it("holds record-only entries on disk on the live branch, and only them", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-cold-record-"));
+		tempDirs.push(root);
+		const dir = path.join(root, "sessions");
+		fs.mkdirSync(dir);
+		fs.mkdirSync(path.join(root, "blobs"));
+		const file = path.join(dir, "session.jsonl");
+
+		// The compaction keeps itself, so every entry after it is on the live branch.
+		let n = 0;
+		const next = (parentId: string | null): SessionEntryBase => ({
+			type: "",
+			id: `l${String(++n).padStart(5, "0")}`,
+			parentId,
+			timestamp: new Date(Date.UTC(2024, 0, 1, 0, 0, n)).toISOString(),
+		});
+		const kinds = Object.entries(EVERY_ENTRY_KIND) as [string, (base: SessionEntryBase) => SessionEntry][];
+		const lines: SessionEntry[] = [EVERY_ENTRY_KIND.compaction(next(null))];
+		for (const [kind, make] of kinds) {
+			if (kind !== "compaction") lines.push(make(next(lines.at(-1)!.id)));
+		}
+		lines.push({ ...next(lines.at(-1)!.id), type: "message", message: assistantTurn("live answer", 20) });
+		const header = {
+			type: "session",
+			version: 3,
+			id: "cold-record",
+			timestamp: "2025-01-01T00:00:00.000Z",
+			cwd: root,
+		};
+		fs.writeFileSync(file, `${[header, ...lines].map(line => JSON.stringify(line)).join("\n")}\n`);
+		const seed = await SessionManager.open(file, dir, new FileSessionStorage(), { suppressBreadcrumb: true });
+		await seed.rewriteEntries();
+		await seed.close();
+
+		const expected = await freshLoad({ dir, file });
+		const storage = new ObservedStorage();
+		const manager = await SessionManager.open(file, dir, storage, { suppressBreadcrumb: true });
+		expect(JSON.stringify(manager.buildSessionContext().messages)).toContain("live answer");
+		expect(storage.reads).toBe(0);
+
+		const readBack: string[] = [];
+		for (const entry of manager.getEntries()) {
+			const before = storage.reads;
+			expect(JSON.stringify(entry)).toBe(expected.get(entry.id)!);
+			if (storage.reads > before) readBack.push(entry.type);
+		}
+		expect(readBack.sort()).toEqual(["session_init", "settings_snapshot", "subagent_spawn"]);
+		expect(storage.open.size).toBe(0);
+		await manager.close();
+	});
+
+	it("moves a new session's session_init out of memory once the session file is written", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "veyyon-cold-init-"));
+		tempDirs.push(root);
+		const dir = path.join(root, "sessions");
+		fs.mkdirSync(dir);
+		fs.mkdirSync(path.join(root, "blobs"));
+		const storage = new ObservedStorage();
+		const manager = SessionManager.create(root, dir, storage);
+		const systemPrompt = big("spawned-system-prompt", 64 * 1024);
+		manager.appendSessionInit({ systemPrompt, task: big("spawned-task"), tools: ["read", "yield"] });
+		manager.appendSettingsSnapshot({ "probe.value": big("setting") });
+		manager.appendMessage({ role: "user", content: "spawned prompt", timestamp: 1 });
+		manager.appendMessage(assistantTurn("spawned answer", 2));
+		await manager.flush();
+
+		expect(storage.open.size).toBe(1);
+		expect(JSON.stringify(manager.buildSessionContext().messages)).toContain("spawned answer");
+		expect(storage.reads).toBe(0);
+		const init = manager.getEntries().find(entry => entry.type === "session_init");
+		if (init?.type !== "session_init") throw new Error("the session recorded no session_init");
+		expect(init.systemPrompt).toBe(systemPrompt);
+		expect(storage.reads).toBe(1);
+
+		const file = manager.getSessionFile();
+		if (file === undefined) throw new Error("the session wrote no file");
+		expect(serialized(manager)).toEqual(await freshLoad({ dir, file }));
+		expect(storage.open.size).toBe(0);
 		await manager.close();
 	});
 });

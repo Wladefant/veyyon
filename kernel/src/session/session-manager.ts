@@ -25,7 +25,7 @@ import {
 } from "./custom-message-payload";
 import { SESSION_EXIT_CUSTOM_TYPE } from "./exit-diagnostics";
 import type { OperatorNotices } from "./operator-notices";
-import { ColdEntryPayloads } from "./session-cold-payloads";
+import { ColdEntryPayloads, RECORD_ONLY_ENTRY_TYPES } from "./session-cold-payloads";
 import {
 	BRANCH_SETTINGS_ENTRY_TYPES,
 	type BuildSessionContextOptions,
@@ -1250,7 +1250,8 @@ export class SessionManager {
 	 *
 	 * The live context is the active branch from the newest compaction's keep boundary on, plus
 	 * every entry on the branch whose kind the settings walk of each context build reads. Everything
-	 * else, including other branches, reads back on use.
+	 * else, including other branches and every {@link RECORD_ONLY_ENTRY_TYPES} entry, reads back on
+	 * use.
 	 */
 	#coolUnreachablePayloads(): void {
 		const sessionFile = this.#sessionFile;
@@ -1269,11 +1270,14 @@ export class SessionManager {
 		}
 		const path = this.#activePath();
 		const liveFrom = compactedHistoryEnd(path);
-		if (liveFrom === 0 && path.length === this.#entries.length) return;
-		const live = new Set<SessionEntry>();
-		for (let i = 0; i < path.length; i++) {
-			const entry = path[i]!;
-			if (i >= liveFrom || BRANCH_SETTINGS_ENTRY_TYPES.has(entry.type)) live.add(entry);
+		// Undefined when the whole file is the live branch: then only record-only entries go cold.
+		let live: Set<SessionEntry> | undefined;
+		if (liveFrom > 0 || path.length !== this.#entries.length) {
+			live = new Set<SessionEntry>();
+			for (let i = 0; i < path.length; i++) {
+				const entry = path[i]!;
+				if (i >= liveFrom || BRANCH_SETTINGS_ENTRY_TYPES.has(entry.type)) live.add(entry);
+			}
 		}
 		const { entries, entryOffsets } = lines;
 		const identity = state.identity;
@@ -1281,7 +1285,7 @@ export class SessionManager {
 		let pinned = false;
 		for (let i = 0; i < entries.length; i++) {
 			const entry = entries[i]!;
-			if (live.has(entry)) continue;
+			if (!RECORD_ONLY_ENTRY_TYPES.has(entry.type) && (live === undefined || live.has(entry))) continue;
 			const offset = entryOffsets[i]!;
 			const end = i + 1 < entries.length ? entryOffsets[i + 1]! : state.size;
 			if (!pinned) {

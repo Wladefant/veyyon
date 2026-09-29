@@ -36,6 +36,18 @@ const MIN_COLD_STRING_LENGTH = 256;
 /** Fields every entry keeps: what the id index, the tree and the branch walk read. */
 const RESIDENT_KEYS: ReadonlySet<string> = new Set(["type", "id", "parentId", "timestamp"]);
 
+/**
+ * Entry kinds a session writes for replay and study and never reads while it runs: the prompt and
+ * tools a session started with, the effective settings it ran under, and the index of the agents it
+ * spawned. Their payloads go to disk wherever they sit on the branch; a spawned agent's
+ * `session_init` holds its whole joined system prompt.
+ */
+export const RECORD_ONLY_ENTRY_TYPES: ReadonlySet<SessionEntry["type"]> = new Set<SessionEntry["type"]>([
+	"session_init",
+	"settings_snapshot",
+	"subagent_spawn",
+]);
+
 /** One file object cold entries read back from, and how many entries still read from it. */
 interface ColdFile {
 	readonly reader: PinnedSessionReader;
