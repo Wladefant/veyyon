@@ -554,6 +554,7 @@ import {
 } from "./nudges";
 import { ProviderContextCanonicalizer } from "./provider-context-canonicalizer";
 import { applyProviderImagePolicy } from "./provider-image-budget";
+import { didSessionMessagesChange } from "./provider-replay-projection";
 import { normalizeRoots } from "./relativize-paths";
 import { AdvisorRoster, type AdvisorRosterHost } from "./runtime/advisor-roster";
 import { CheckpointRuntime } from "./runtime/checkpoint-runtime";
@@ -11649,152 +11650,6 @@ export class AgentSession {
 		}
 	}
 
-	#normalizeProviderReplayValue(value: unknown): unknown {
-		if (Array.isArray(value)) {
-			return value.map(item => this.#normalizeProviderReplayValue(item));
-		}
-		if (value && typeof value === "object") {
-			return Object.fromEntries(
-				Object.entries(value).map(([key, entryValue]) => [key, this.#normalizeProviderReplayValue(entryValue)]),
-			);
-		}
-		return value;
-	}
-
-	#normalizeSessionMessageForProviderReplay(message: AgentMessage): unknown {
-		switch (message.role) {
-			case "user":
-			case "developer":
-				return {
-					role: message.role,
-					content: this.#normalizeProviderReplayValue(message.content),
-					providerPayload: message.providerPayload,
-				};
-			case "assistant": {
-				const isResponsesFamilyMessage =
-					message.api === "openai-responses" || message.api === "openai-codex-responses";
-				return {
-					role: message.role,
-					content:
-						isResponsesFamilyMessage && Array.isArray(message.content)
-							? message.content.flatMap(block => {
-									if (block.type === "thinking") {
-										return [];
-									}
-									if (block.type === "toolCall") {
-										return [
-											{
-												type: block.type,
-												id: block.id,
-												name: block.name,
-												arguments: block.arguments,
-											},
-										];
-									}
-									if (block.type === "text") {
-										return [{ type: block.type, text: block.text, textSignature: block.textSignature }];
-									}
-									return [this.#normalizeProviderReplayValue(block)];
-								})
-							: this.#normalizeProviderReplayValue(message.content),
-					api: message.api,
-					provider: message.provider,
-					model: message.model,
-					stopReason: message.stopReason,
-					errorMessage: message.errorMessage,
-					providerPayload: isResponsesFamilyMessage ? undefined : message.providerPayload,
-				};
-			}
-			case "toolResult":
-				return {
-					role: message.role,
-					toolName: message.toolName,
-					toolCallId: message.toolCallId,
-					isError: message.isError,
-					content: this.#normalizeProviderReplayValue(message.content),
-				};
-			case "bashExecution":
-				return {
-					role: message.role,
-					command: message.command,
-					output: message.output,
-					exitCode: message.exitCode,
-					cancelled: message.cancelled,
-					meta: message.meta
-						? {
-								truncation: this.#normalizeProviderReplayValue(message.meta.truncation),
-								limits: this.#normalizeProviderReplayValue(message.meta.limits),
-								diagnostics: message.meta.diagnostics
-									? this.#normalizeProviderReplayValue({
-											summary: message.meta.diagnostics.summary,
-											messages: message.meta.diagnostics.messages,
-										})
-									: undefined,
-							}
-						: undefined,
-					excludeFromContext: message.excludeFromContext,
-				};
-			case "pythonExecution":
-				return {
-					role: message.role,
-					code: message.code,
-					output: message.output,
-					exitCode: message.exitCode,
-					cancelled: message.cancelled,
-					meta: message.meta
-						? {
-								truncation: this.#normalizeProviderReplayValue(message.meta.truncation),
-								limits: this.#normalizeProviderReplayValue(message.meta.limits),
-								diagnostics: message.meta.diagnostics
-									? this.#normalizeProviderReplayValue({
-											summary: message.meta.diagnostics.summary,
-											messages: message.meta.diagnostics.messages,
-										})
-									: undefined,
-							}
-						: undefined,
-					excludeFromContext: message.excludeFromContext,
-				};
-			case "custom":
-			case "hookMessage":
-				return {
-					role: message.role,
-					customType: message.customType,
-					content: this.#normalizeProviderReplayValue(message.content),
-				};
-			case "branchSummary":
-				return { role: message.role, summary: message.summary };
-			case "compactionSummary":
-				return {
-					role: message.role,
-					summary: message.summary,
-					providerPayload: message.providerPayload,
-				};
-			case "fileMention":
-				return {
-					role: message.role,
-					files: message.files.map(file => ({
-						path: file.path,
-						content: file.content,
-						image: file.image,
-					})),
-				};
-			default:
-				return this.#normalizeProviderReplayValue(message);
-		}
-	}
-
-	#didSessionMessagesChange(previousMessages: AgentMessage[], nextMessages: AgentMessage[]): boolean {
-		if (previousMessages.length !== nextMessages.length) return true;
-		return previousMessages.some(
-			(message, i) =>
-				!Bun.deepEquals(
-					this.#normalizeSessionMessageForProviderReplay(message),
-					this.#normalizeSessionMessageForProviderReplay(nextMessages[i]),
-				),
-		);
-	}
-
 	#formatRoleModelValue(
 		role: string,
 		model: Model,
@@ -15027,7 +14882,7 @@ export class AgentSession {
 		await this.sessionManager.flush();
 		const previousSessionState = this.sessionManager.captureState();
 		// Only same-session reloads compare against the prior context to detect
-		// rollback edits (`#didSessionMessagesChange` below). Building it for a
+		// rollback edits (`didSessionMessagesChange` below). Building it for a
 		// different-session switch is a pure waste — and on huge pre-fix sessions
 		// it materializes every persisted legacy compaction frame plus the
 		// `openaiRemoteCompaction.replacementHistory` payload into messages,
@@ -15114,7 +14969,7 @@ export class AgentSession {
 			let sessionContext = this.buildDisplaySessionContext();
 			const didReloadConversationChange =
 				previousSessionContext !== undefined &&
-				this.#didSessionMessagesChange(previousSessionContext.messages, sessionContext.messages);
+				didSessionMessagesChange(previousSessionContext.messages, sessionContext.messages);
 			const fallbackSelectedMCPToolNames = this.#discovery.sessionDefaults(sessionPath);
 			await this.#restoreMCPSelectionsForSessionContext(sessionContext, { fallbackSelectedMCPToolNames });
 			this.#checkpoint.rehydrate(this.sessionManager.getBranch());
