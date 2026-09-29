@@ -4552,6 +4552,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		// the background set: that set is what the status line counts, and a visible
 		// conversation counted there reports off-screen spend to someone watching it.
 		if (next === previous) return BackgroundSessions.global().describeAttached(previous);
+		// Registered before the screen moves: an invalid `session.backgroundLimit` throws here and
+		// leaves the displayed session where it was, instead of detaching it unregistered.
+		const kept = BackgroundSessions.global().keep(previous, previous.settings.get("session.backgroundLimit"));
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
 		this.#goalMode.unsubscribeFromSession();
@@ -4565,6 +4568,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.statusProducer.setSession(next);
 		this.statusLine.setSource(this.statusProducer);
 		if (next.isStreaming) void this.#eventController.handleEvent({ type: "agent_start" });
-		return BackgroundSessions.global().keep(previous);
+		return kept;
 	}
 }

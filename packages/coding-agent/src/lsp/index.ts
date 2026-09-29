@@ -19,6 +19,7 @@ import {
 	truncate,
 	untilAborted,
 } from "@veyyon/utils";
+import { isEnoent } from "@veyyon/utils/fs-error";
 import type { BunFile } from "bun";
 import { toolsPrompts } from "../prompts/tools/rows";
 import { adoptIntoPrimarySessionCpuBudget } from "../session/cpu-limit";
@@ -37,6 +38,7 @@ import {
 	FileChangeType,
 	getActiveClients,
 	getOrCreateClient,
+	LspResponseError,
 	type LspServerStatus,
 	notifySaved,
 	notifyWorkspaceWatchedFiles,
@@ -60,6 +62,9 @@ import {
 import { resolveFormatOptions } from "./format-options";
 import { detectLspmux } from "./lspmux";
 import {
+	type CallHierarchyIncomingCall,
+	type CallHierarchyItem,
+	type CallHierarchyOutgoingCall,
 	type CodeAction,
 	type CodeActionContext,
 	type Command,
@@ -74,7 +79,9 @@ import {
 	lspSchema,
 	type Position,
 	type PublishedDiagnostics,
+	type Range,
 	type ServerConfig,
+	SYMBOL_KIND_NAMES,
 	type SymbolInformation,
 	type TextEdit,
 	type WorkspaceEdit,
@@ -117,6 +124,8 @@ export const LSP_READONLY_ACTIONS: ReadonlySet<string> = new Set([
 	"definition",
 	"type_definition",
 	"implementation",
+	"incoming_calls",
+	"outgoing_calls",
 	"references",
 	"hover",
 	"symbols",
@@ -347,6 +356,8 @@ const PROJECT_INDEXED_ACTIONS: ReadonlySet<string> = new Set([
 	"definition",
 	"type_definition",
 	"implementation",
+	"incoming_calls",
+	"outgoing_calls",
 	"references",
 	"rename",
 	"hover",
@@ -357,7 +368,13 @@ const PROJECT_INDEXED_ACTIONS: ReadonlySet<string> = new Set([
  * the column falls back to the line's first non-blank character, which is often a decorator, keyword or
  * parameter, and the server answers plausibly for the wrong identifier.
  */
-const SYMBOL_REQUIRED_ACTIONS: ReadonlySet<string> = new Set(["definition", "references", "rename"]);
+const SYMBOL_REQUIRED_ACTIONS: ReadonlySet<string> = new Set([
+	"definition",
+	"references",
+	"rename",
+	"incoming_calls",
+	"outgoing_calls",
+]);
 
 const RUST_WORKSPACE_MARKERS = ["Cargo.toml", "rust-analyzer.toml"] as const;
 
@@ -508,16 +525,15 @@ async function enumerateRenamePairs(
 	return { pairs, directory: true, exceeded: false };
 }
 
-/** True when an LSP error indicates the server doesn't implement the requested method. */
+/**
+ * True when an LSP error indicates the server doesn't implement the requested method: the JSON-RPC
+ * `MethodNotFound` code, or a server that reports the absence under another code by message.
+ */
 function isMethodNotFoundError(err: unknown): boolean {
+	if (err instanceof LspResponseError && err.code === -32601) return true;
 	if (!(err instanceof Error)) return false;
 	const msg = err.message.toLowerCase();
-	return (
-		msg.includes("method not found") ||
-		msg.includes("unhandled method") ||
-		msg.includes("not supported") ||
-		msg.includes("-32601")
-	);
+	return msg.includes("method not found") || msg.includes("unhandled method") || msg.includes("not supported");
 }
 
 /** A file-bound action's request context: the file's started server, the opened file and the resolved cursor. */
@@ -606,6 +622,96 @@ async function hoverAt({ client, uri, position, signal }: FileQuery): Promise<Ac
 		signal,
 	)) as Hover | null;
 	return { output: result?.contents ? extractHoverText(result.contents) : "No hover information" };
+}
+
+const CALL_DIRECTIONS = {
+	incoming_calls: { method: "callHierarchy/incomingCalls", noun: "caller", relation: "of" },
+	outgoing_calls: { method: "callHierarchy/outgoingCalls", noun: "callee", relation: "from" },
+} as const;
+
+type CallDirection = (typeof CALL_DIRECTIONS)[keyof typeof CALL_DIRECTIONS];
+
+/** A call hierarchy item as its row: its name, its kind, and where it is declared. */
+function formatCallItem(item: CallHierarchyItem, cwd: string): string {
+	const kind = SYMBOL_KIND_NAMES[item.kind] ?? "Symbol";
+	return `${item.name} (${kind}) at ${formatLocation({ uri: item.uri, range: item.selectionRange }, cwd)}`;
+}
+
+/**
+ * The lines of the files a call hierarchy answer cites, each file read once however many call sites
+ * it holds. A file that no longer exists reads as no lines, and its call sites as bare positions.
+ */
+function callSiteReader(): (uri: string) => Promise<readonly string[]> {
+	const files = new Map<string, Promise<readonly string[]>>();
+	return uri => {
+		let lines = files.get(uri);
+		if (!lines) {
+			lines = fs.promises.readFile(uriToFile(uri), "utf8").then(
+				text => text.split("\n"),
+				(error: unknown) => {
+					if (isEnoent(error)) return [];
+					throw error;
+				},
+			);
+			files.set(uri, lines);
+		}
+		return lines;
+	};
+}
+
+/** One call site as `line:col: source`, the source line as the file holds it. */
+function formatCallSite(range: Range, lines: readonly string[]): string {
+	const at = `${range.start.line + 1}:${range.start.character + 1}`;
+	const source = lines[range.start.line];
+	return source === undefined ? at : `${at}: ${source.trim()}`;
+}
+
+/**
+ * `incoming_calls` and `outgoing_calls`: the functions that call the symbol at the cursor, or the
+ * functions it calls, each with its call sites. The server resolves each call to its declaration,
+ * so a call through a re-export or an alias is attributed to the function it reaches, a comment or
+ * string naming the function is not a call, and each implementation of an interface method is its
+ * own item.
+ */
+async function callsAt(
+	{ client, uri, position, cwd, signal }: FileQuery,
+	{ method, noun, relation }: CallDirection,
+): Promise<ActionReport> {
+	const items = (await sendRequest(
+		client,
+		"textDocument/prepareCallHierarchy",
+		{ textDocument: { uri }, position },
+		signal,
+	)) as CallHierarchyItem[] | null;
+	if (!items || items.length === 0) return { output: "No callable symbol at this position", useless: true };
+
+	const readLines = callSiteReader();
+	const sections: string[] = [];
+	let total = 0;
+	for (const item of items) {
+		const calls = (await sendRequest(client, method, { item }, signal)) as
+			| (CallHierarchyIncomingCall | CallHierarchyOutgoingCall)[]
+			| null;
+		const subject = formatCallItem(item, cwd);
+		if (!calls || calls.length === 0) {
+			sections.push(`No ${noun}s ${relation} ${subject}`);
+			continue;
+		}
+		total += calls.length;
+		const rows = [`Found ${calls.length} ${noun}(s) ${relation} ${subject}:`];
+		for (const call of calls) {
+			// An incoming call's sites are in the caller; an outgoing call's are in the prepared item.
+			const [other, siteUri] = "from" in call ? [call.from, call.from.uri] : [call.to, item.uri];
+			rows.push(`  ${formatCallItem(other, cwd)}`);
+			const lines = await readLines(siteUri);
+			// A server may list one call site more than once (tsserver does for a method call); the
+			// repeat is the same position and is listed once.
+			const sites = new Set(call.fromRanges.map(range => formatCallSite(range, lines)));
+			for (const site of sites) rows.push(`    ${site}`);
+		}
+		sections.push(rows.join("\n"));
+	}
+	return total === 0 ? { output: sections.join("\n"), useless: true } : { output: sections.join("\n\n") };
 }
 
 /** One row per code action, numbered by the index `apply` selects it with. */
@@ -1964,6 +2070,10 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails> {
 			case "type_definition":
 			case "implementation":
 				report = await locateAt(query, LOCATION_LOOKUPS[action]);
+				break;
+			case "incoming_calls":
+			case "outgoing_calls":
+				report = await callsAt(query, CALL_DIRECTIONS[action]);
 				break;
 			case "references":
 				report = await findReferences(query);

@@ -1,7 +1,7 @@
 import { Box, type Component, Markdown } from "@veyyon/tui";
 import type { SummaryMessageView } from "@veyyon/wire/presentation";
 import { withIcon } from "../../../../theme/icon-label";
-import { getMarkdownTheme } from "../../../../theme/markdown-theme";
+import { getMarkdownTheme, markdownTextStyle } from "../../../../theme/markdown-theme";
 import { theme } from "../../../../theme/theme";
 import { actionKeyHint } from "../../utils/key-hint";
 import { renderTranscriptDivider } from "./transcript-divider";
@@ -70,9 +70,7 @@ export class SummaryMessageComponent implements Component {
 		const box = new Box(1, 1);
 		box.setIgnoreTight(true);
 		box.addChild(
-			new Markdown(this.#detailMarkdown(), 0, 0, getMarkdownTheme(), {
-				color: (text: string) => theme.fg("customMessageText", text),
-			}),
+			new Markdown(this.#detailMarkdown(), 0, 0, getMarkdownTheme(), markdownTextStyle("customMessageText")),
 		);
 		this.#detail = box;
 		return box;

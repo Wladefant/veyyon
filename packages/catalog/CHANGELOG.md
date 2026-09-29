@@ -18,7 +18,13 @@
 - `getModelPricing` accepts the sparse `ModelSpec` cost it is already given by discovery, and reads an absent rate as zero rather than rejecting the row at the type level.
 ### Changed
 
+- `@veyyon/catalog/models` imports `models.json` by path and reads it when the registry is built, so a process no longer holds the 2.2 MB catalog text on its heap for its whole life.
 - `buildOpenAICompat` classifies the host and model family once and derives each chat-completions compat field from a named predicate, and the chat and Responses builders share one override-and-rederive step; every bundled and synthetic model spec resolves to the same record, no behavior change.
+- The models.dev overlay drops its parsed `api.json` 30 seconds after the last provider reads it and reads `models-dev.json` again on the next use, which cut the idle heap after a model refresh from 68.7 MiB to 59.7 MiB and its live objects from 752,441 to 595,112 (median of 3 runs).
+
+### Fixed
+
+- OpenCode gateway models send the `tool_choice` a caller sets, so the models that accept a pinned tool receive it; a model that rejects it pays one retried request per session.
 
 ## [1.5.4] - 2026-09-24
 

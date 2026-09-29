@@ -76,6 +76,9 @@ if (out instanceof type.errors) {
 - `.parse(x)` → `const out = schema(x); if (out instanceof type.errors) throw new Error(out.summary); use out;`
 - `.safeParse(x).success` → `!(schema(x) instanceof type.errors)`
 - NEVER use `.allows()` for tool validation: it skips morphs/defaults/narrows.
+- A module that does not otherwise need `arktype`'s value tests the result with `isArkErrors(out)`
+  from `@veyyon/ai/utils/schema` instead of `instanceof type.errors`. The `instanceof` test imports
+  `arktype` at run time, and that import costs 362 ms of module evaluation wherever it is reached.
 - `.infer` (output) and `.inferIn` (input) are inference-only properties (no runtime value).
 
 ## Advanced
@@ -153,3 +156,5 @@ is a candidate to **stay on Zod** (external-boundary exception), note it in your
 - Do NOT run build/test/lint/format: the orchestrator runs gates once at the end.
 - Report: files changed, any `.strict`→`"+"`, `.refine`→`.narrow`, `.catch`→morph, and any file you
   intentionally left on Zod (with the reason).
+
+*Verified against `46a822fcef` on 2026-09-27.*

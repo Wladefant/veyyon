@@ -1,17 +1,21 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentMessage } from "@veyyon/agent-core";
 import { isEnoent } from "@veyyon/utils/fs-error";
 // Owners, not the `@veyyon/utils` barrel: 3 modules against 74.
 import * as logger from "@veyyon/utils/logger";
-import { readLines } from "@veyyon/utils/stream";
+import { StreamFrameLimitError, streamFrameCeiling } from "@veyyon/utils/stream";
 import {
 	BlobStore,
 	blobsDirForSessionDir,
 	isBlobRef,
 	isTextBlobRef,
 	resolveImageData,
+	resolveImageDataSync,
 	resolveImageDataUrl,
+	resolveImageDataUrlSync,
 	resolveTextBlobRef,
+	resolveTextBlobRefSync,
 } from "./blob-store";
 import type { OperatorNotices } from "./operator-notices";
 import { buildSessionContext } from "./session-context";
@@ -302,6 +306,67 @@ export function parseSessionContent(content: string, context: SessionLoadOptions
 	return { entries: foldTitleSlot(loop.finish(), slot), titleSlot: slot, layout: loop.layout() };
 }
 
+/**
+ * How many bytes one read of a streamed session file asks for. Each read is split into lines and
+ * parsed before the next one is issued, so this is the most file text the load holds at once
+ * beyond the one line that spans two reads.
+ */
+const STREAM_READ_BYTES = 1 << 20;
+
+const LINE_FEED = 0x0a;
+
+/**
+ * The text of `bytes[start, end)`, decoded the way `TextDecoder.decode` decodes it: invalid
+ * sequences become U+FFFD and a leading UTF-8 byte order mark is dropped.
+ */
+function decodeLine(bytes: Buffer, start: number, end: number): string {
+	if (end - start >= 3 && bytes[start] === 0xef && bytes[start + 1] === 0xbb && bytes[start + 2] === 0xbf) start += 3;
+	return bytes.toString("utf-8", start, end);
+}
+
+/**
+ * Hand each line of the file at `filePath` to `onLine`, with its byte length, reading
+ * {@link STREAM_READ_BYTES} at a time. A line is the bytes before a line feed, or the bytes after
+ * the last one when the file does not end with one; an empty line is a line. A line longer than
+ * the stream frame bound fails with `StreamFrameLimitError`, as every line reader does.
+ *
+ * Each read is split synchronously: an async iterator over lines cost one promise per line, and
+ * with a `TextDecoder` per line it took 97 ms of a 139 ms load of an 85.6 MB, 27,602-line session.
+ */
+async function forEachFileLine(filePath: string, onLine: (text: string, byteLength: number) => void): Promise<void> {
+	const limit = streamFrameCeiling();
+	const handle = await fs.promises.open(filePath, "r");
+	try {
+		let buffer = Buffer.allocUnsafe(STREAM_READ_BYTES);
+		// Bytes of a line that started in an earlier read, kept at the front of `buffer`.
+		let carried = 0;
+		for (;;) {
+			if (carried === buffer.length) {
+				const grown = Buffer.allocUnsafe(buffer.length * 2);
+				buffer.copy(grown, 0, 0, carried);
+				buffer = grown;
+			}
+			const { bytesRead } = await handle.read(buffer, carried, buffer.length - carried, null);
+			const filled = buffer.subarray(0, carried + bytesRead);
+			let start = 0;
+			for (let end = filled.indexOf(LINE_FEED, carried); end !== -1; end = filled.indexOf(LINE_FEED, start)) {
+				if (end - start > limit) throw new StreamFrameLimitError("line", end - start, limit);
+				onLine(decodeLine(filled, start, end), end - start);
+				start = end + 1;
+			}
+			carried = filled.length - start;
+			if (carried > limit) throw new StreamFrameLimitError("line", carried, limit);
+			if (bytesRead === 0) {
+				if (carried > 0) onLine(decodeLine(filled, start, filled.length), carried);
+				return;
+			}
+			filled.copyWithin(0, start);
+		}
+	} finally {
+		await handle.close();
+	}
+}
+
 /** Exported for testing — the ≥8MiB streaming path (works on any file size). */
 export async function loadEntriesFromFileStream(
 	filePath: string,
@@ -313,12 +378,10 @@ export async function loadEntriesFromFileStream(
 		logSource: filePath,
 		notices: { ...options, source: options.source ?? filePath },
 	});
-	const decoder = new TextDecoder();
 	let first = true;
 
 	try {
-		for await (const lineBytes of readLines(Bun.file(filePath).stream())) {
-			const text = decoder.decode(lineBytes);
+		await forEachFileLine(filePath, (text, byteLength) => {
 			if (first) {
 				first = false;
 				// The slot is a fixed-size first line, not a record, so it never reaches the
@@ -326,12 +389,12 @@ export async function loadEntriesFromFileStream(
 				const slot = parseTitleSlotLine(text.trim());
 				if (slot) {
 					titleSlot = titleUpdateFromSlot(slot);
-					loop.skipTitleSlot(lineBytes.byteLength);
-					continue;
+					loop.skipTitleSlot(byteLength);
+					return;
 				}
 			}
-			loop.push(text, lineBytes.byteLength);
-		}
+			loop.push(text, byteLength);
+		});
 	} catch (err) {
 		if (isEnoent(err)) return { entries: [], titleSlot: undefined, layout: undefined };
 		throw err;
@@ -583,44 +646,79 @@ function scanEntryValue(value: unknown, scan: EntryScan, key?: string): void {
  */
 const BLOB_READ_CONCURRENCY = 8;
 
+/** The reference `site` holds, or `undefined` when its slot no longer holds a string. */
+function siteReference(site: BlobSite): string | undefined {
+	switch (site.kind) {
+		case "image-data":
+			return site.owner.data;
+		case "image-url":
+			return site.owner.image_url;
+		case "text": {
+			const reference = site.owner[site.key];
+			return typeof reference === "string" ? reference : undefined;
+		}
+		case "text-item": {
+			const reference = site.owner[site.index];
+			return typeof reference === "string" ? reference : undefined;
+		}
+	}
+}
+
+/** Write what `reference` resolved to back into its slot. */
+function settleBlobSite(
+	site: BlobSite,
+	reference: string,
+	resolved: string,
+	lost: LostPayloads,
+	strings: StringPool,
+): void {
+	// Each resolver returns the reference unchanged when the blob is gone, and it is
+	// only called on a value that IS a reference, so an unchanged value is a loss.
+	if (resolved === reference) lost.count += 1;
+	const value = strings.intern(resolved);
+	switch (site.kind) {
+		case "image-data":
+			site.owner.data = value;
+			return;
+		case "image-url":
+			site.owner.image_url = value;
+			return;
+		case "text":
+			site.owner[site.key] = value;
+			return;
+		case "text-item":
+			site.owner[site.index] = value;
+			return;
+	}
+}
+
 async function resolveBlobSite(
 	site: BlobSite,
 	blobStore: BlobStore,
 	lost: LostPayloads,
 	strings: StringPool,
 ): Promise<void> {
-	// Each resolver returns the reference unchanged when the blob is gone, and it is
-	// only called on a value that IS a reference, so an unchanged value is a loss.
-	switch (site.kind) {
-		case "image-data": {
-			const resolved = await resolveImageData(blobStore, site.owner.data);
-			if (resolved === site.owner.data) lost.count += 1;
-			site.owner.data = strings.intern(resolved);
-			return;
-		}
-		case "image-url": {
-			const resolved = await resolveImageDataUrl(blobStore, site.owner.image_url);
-			if (resolved === site.owner.image_url) lost.count += 1;
-			site.owner.image_url = strings.intern(resolved);
-			return;
-		}
-		case "text": {
-			const reference = site.owner[site.key];
-			if (typeof reference !== "string") return;
-			const resolved = await resolveTextBlobRef(blobStore, reference);
-			if (resolved === reference) lost.count += 1;
-			site.owner[site.key] = strings.intern(resolved);
-			return;
-		}
-		case "text-item": {
-			const reference = site.owner[site.index];
-			if (typeof reference !== "string") return;
-			const resolved = await resolveTextBlobRef(blobStore, reference);
-			if (resolved === reference) lost.count += 1;
-			site.owner[site.index] = strings.intern(resolved);
-			return;
-		}
-	}
+	const reference = siteReference(site);
+	if (reference === undefined) return;
+	const resolved =
+		site.kind === "image-data"
+			? await resolveImageData(blobStore, reference)
+			: site.kind === "image-url"
+				? await resolveImageDataUrl(blobStore, reference)
+				: await resolveTextBlobRef(blobStore, reference);
+	settleBlobSite(site, reference, resolved, lost, strings);
+}
+
+function resolveBlobSiteSync(site: BlobSite, blobStore: BlobStore, lost: LostPayloads, strings: StringPool): void {
+	const reference = siteReference(site);
+	if (reference === undefined) return;
+	const resolved =
+		site.kind === "image-data"
+			? resolveImageDataSync(blobStore, reference)
+			: site.kind === "image-url"
+				? resolveImageDataUrlSync(blobStore, reference)
+				: resolveTextBlobRefSync(blobStore, reference);
+	settleBlobSite(site, reference, resolved, lost, strings);
 }
 
 async function resolveBlobSites(scan: EntryScan, blobStore: BlobStore, lost: LostPayloads): Promise<void> {
@@ -699,6 +797,20 @@ export async function resolveBlobRefsInEntries(
 		logger.warn("Session payloads missing from the blob store", { source: options?.source, lost: lost.count });
 		if (options) emitLostPayloadNotice(options, lost.count);
 	}
+	return lost.count;
+}
+
+/**
+ * Restore one entry read back from its session line without awaiting: the externalized payloads
+ * and codec-dropped fields {@link resolveBlobRefsInEntries} restores on load. Returns how many
+ * references the blob store could not answer; the load already reported each of them.
+ */
+export function restoreEntryPayloadsSync(entry: FileEntry, blobStore: BlobStore): number {
+	const lost: LostPayloads = { count: 0 };
+	const scan: EntryScan = { sites: [], strings: new StringPool() };
+	scanEntryValue(entry, scan);
+	for (const site of scan.sites) resolveBlobSiteSync(site, blobStore, lost, scan.strings);
+	restoreToolResultEntries([entry]);
 	return lost.count;
 }
 

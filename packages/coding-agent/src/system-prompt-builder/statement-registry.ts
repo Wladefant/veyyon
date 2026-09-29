@@ -1022,16 +1022,6 @@ export function statementById(id: string): PromptStatementEntry | undefined {
 }
 
 /**
- * Every template variable the statements depend on, deduplicated.
- *
- * This is what replaces regexing `system-prompt.md` to find out what the prompt gates on. A
- * reader, and a test, can ask the registry.
- */
-export const STATEMENT_CONDITION_VARIABLES: readonly string[] = [
-	...new Set(PROMPT_STATEMENTS.flatMap(statement => conditionVariables(statement.condition))),
-];
-
-/**
  * The context variables a condition reads.
  *
  * This function takes the full condition union so every condition form stays

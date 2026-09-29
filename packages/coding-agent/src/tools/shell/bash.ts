@@ -44,6 +44,7 @@ import { DEFAULT_TERMINAL_PREVIEW_LINES, shortenPath } from "../core/render-util
 import { ToolAbortError, ToolError } from "../core/tool-errors";
 import { toolResult } from "../core/tool-result";
 import { clampTimeout, describeTimeoutParam, formatTimeoutClampNotice } from "../core/tool-timeouts";
+import { bashApprovalPattern } from "./bash-approval-pattern";
 import { registerForegroundBashWait } from "./bash-foreground-registry";
 import {
 	bashCredentialTargets,
@@ -215,7 +216,13 @@ export function bashApprovalDecision(
 			? { tier: "exec", critical: true, reason: flagged.reason }
 			: { tier: "exec", override: true, reason: flagged.reason };
 	}
-	return "exec";
+	// A session grant covers the pattern alone, so a call that also sets its own
+	// environment or working directory reports none: `ls` with `LD_PRELOAD`, or
+	// `ls` run from `/etc`, is not the `ls` the operator approved.
+	const rawEnv = (args as Partial<BashToolInput>).env;
+	const setsEnv = rawEnv !== undefined && rawEnv !== null && Object.keys(rawEnv).length > 0;
+	const pattern = setsEnv || effectiveCwd !== undefined ? undefined : bashApprovalPattern(command);
+	return pattern === undefined ? "exec" : { tier: "exec", pattern };
 }
 
 function saveBashOriginalArtifact(session: ToolSession, originalText: string): Promise<string | undefined> {

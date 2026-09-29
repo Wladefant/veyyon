@@ -66,9 +66,7 @@ import {
 	generateBranchSummary,
 	generateHandoffFromContext,
 	getRemoteCompactionPreserveData,
-	hasLegacyArchive,
 	prepareCompaction,
-	redactLegacyArchiveText,
 	remoteCompactionReplayableBy,
 	renderHandoffPrompt,
 	renderTailElisionArtifact,
@@ -101,8 +99,6 @@ import type {
 	Api,
 	AssistantMessage,
 	AssistantMessageEvent,
-	AssistantRetryRecovery,
-	AssistantRetryRecoveryKind,
 	CodexCompactionContext,
 	Context,
 	ImageContent,
@@ -126,7 +122,6 @@ import type {
 	VideoContent,
 } from "@veyyon/ai";
 import * as AIError from "@veyyon/ai/error";
-import { calculateRateLimitBackoffMs, parseRateLimitReason } from "@veyyon/ai/error/rate-limit";
 import {
 	assistantTurnMetricsForPersistence,
 	assistantTurnRequestForPersistence,
@@ -140,13 +135,12 @@ import { resetOpenAICodexHistoryAfterCompaction } from "@veyyon/ai/providers/ope
 import { streamSimple } from "@veyyon/ai/stream";
 // Session initialization registers usage backends without loading the AI package barrel.
 import "@veyyon/ai/usage/defaults";
-import { type CursorExecResolvedCarrier, kCursorExecResolved } from "@veyyon/ai/utils/block-symbols";
 import { assistantText } from "@veyyon/ai/utils/message-text";
 import { toolWireSchema } from "@veyyon/ai/utils/schema";
 import { GeminiHeaderRunDetector, isGeminiThinkingModel } from "@veyyon/ai/utils/thinking-loop";
 import { type RepeatedToolCallDetection, ToolCallLoopGuard } from "@veyyon/ai/utils/tool-call-loop-guard";
 import type { Effort } from "@veyyon/catalog/effort";
-import { isFireworksFastModelId, toFireworksBaseModelId } from "@veyyon/catalog/fireworks-model-id";
+import { isFireworksFastModelId } from "@veyyon/catalog/fireworks-model-id";
 import { modelsAreEqual } from "@veyyon/catalog/models";
 import { ANTIGRAVITY_PRIMARY_ENDPOINT, ANTIGRAVITY_SANDBOX_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
 import {
@@ -190,13 +184,6 @@ import {
 import { OperatorNotices, stderrNoticeSink } from "@veyyon/kernel/session/operator-notices";
 import { disposeOwnedResources } from "@veyyon/kernel/session/owned-resources";
 import {
-	calculateRetryBackoffDelayMs,
-	describeRetryPolicySource,
-	type ResolvedRetryPolicy,
-	resolveRetryPolicy,
-	unreplayableContinueDelayMs,
-} from "@veyyon/kernel/session/retry-policy";
-import {
 	type BuildSessionContextOptions,
 	getEffectiveCompactionEntry,
 	getLatestCompactionEntry,
@@ -210,6 +197,7 @@ import {
 	type NewSessionOptions,
 	type SessionEntry,
 } from "@veyyon/kernel/session/session-entries";
+import { foreignSessionFileProfile } from "@veyyon/kernel/session/session-listing";
 import { cleanupEmptyMoveSession, type SessionManager } from "@veyyon/kernel/session/session-manager";
 import {
 	isAwaitingUserAnswer,
@@ -224,10 +212,12 @@ import { MacOSPowerAssertion } from "@veyyon/natives";
 import {
 	errorMessage,
 	escapeXmlText,
+	exponentialBackoffDelay,
 	extractRetryHint,
 	formatCount,
 	formatDuration,
 	getActiveAuthDbPath,
+	getActiveProfileOrDefault,
 	getStringProperty,
 	isAbortError,
 	isBunTestRuntime,
@@ -257,8 +247,6 @@ import { type AsyncJob, AsyncJobManager } from "../async";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
 import {
 	type CompactionEngineAction,
-	isCompactionStrategyOff,
-	isThresholdCompactionDisabled,
 	resolveCompactionEngineAction,
 	toAgentCompactionSettings,
 } from "../config/compaction-strategy";
@@ -272,20 +260,13 @@ import {
 	formatModelStringWithRouting,
 	getModelMatchPreferences,
 	type ResolvedModelRoleValue,
-	resolveModelOverride,
 	resolveModelRoleValue,
 } from "../config/model-resolver";
 import { DEFAULT_MODEL_SLOT, getKnownRoleIds, resolveModelSlot } from "../config/model-roles";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
 import { applyProviderGlobalsFromSettings } from "../config/provider-globals";
 import { buildServiceTierByFamily, PRIORITY_TIER_COMMAND_LABEL } from "../config/service-tier";
-import {
-	getDefault,
-	type Settings,
-	type SkillsSettings,
-	validateProviderMaxInFlightRequests,
-} from "../config/settings";
-import { AFTER_EDIT_CHECKS } from "../config/settings-domains/editing";
+import { type Settings, type SkillsSettings, validateProviderMaxInFlightRequests } from "../config/settings";
 import { onAppendOnlyModeChanged, onModelRolesChanged } from "../config/settings-signals";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { loadCapability, reset as resetCapabilities } from "../discovery/capability";
@@ -328,7 +309,6 @@ import { createExtensionModelQuery } from "../extensibility/extensions/model-api
 import type { CompactOptions, ContextUsage } from "../extensibility/extensions/types";
 import { ExtensionToolWrapper } from "../extensibility/extensions/wrapper";
 import type { HookCommandContext } from "../extensibility/hooks/types";
-import type { RecoveredRetryError } from "../extensibility/shared-events";
 import type { Skill } from "../extensibility/skills";
 import { expandSlashCommand, type FileSlashCommand } from "../extensibility/slash-commands";
 import { recordGoal } from "../goals/goal-record";
@@ -344,7 +324,6 @@ import {
 } from "../internal-urls/local-protocol";
 import { resolveMemoryBackend } from "../memory/backend";
 import type { HindsightSessionState } from "../memory/hindsight/state";
-import { shutdownMnemopiEmbedClient } from "../memory/mnemopi/embed-client";
 import { getMnemopiSessionState, type MnemopiSessionState, setMnemopiSessionState } from "../memory/mnemopi/state";
 import { containsOrchestrate } from "../modes/keywords/orchestrate-keyword";
 import { containsUltrathink } from "../modes/keywords/ultrathink-keyword";
@@ -362,15 +341,7 @@ import { steeringPrompts } from "../prompts/steering/rows";
 import { turnControlPrompts } from "../prompts/turn-control/rows";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import { AgentRegistry } from "../registry/agent-registry";
-import { noteSecretsCondition } from "../secrets/notices";
-import {
-	mapAgentMessageStrings,
-	mapAssistantContentStrings,
-	obfuscateMessages,
-	obfuscateProviderContext,
-	type SecretObfuscator,
-} from "../secrets/obfuscator";
-import { PENDING_PLACEHOLDER_RE } from "../secrets/placeholder";
+import { mapAssistantContentStrings, type SecretObfuscator } from "../secrets/obfuscator";
 import {
 	parseSlashCommand,
 	resolveSlashCommand,
@@ -397,7 +368,6 @@ import {
 	toReasoningEffort,
 } from "../thinking";
 import { formatTitleConversationContext, type TitleConversationTurn } from "../tiny/message-preproc";
-import { shutdownTinyTitleClient } from "../tiny/title-client";
 import { isAutoQaEnabled } from "../tools/agent/report-tool-issue";
 import { buildResolveReminderMessage, type ResolveToolDetails, runResolveInvocation } from "../tools/agent/resolve";
 import {
@@ -437,6 +407,8 @@ import { generateSessionTitle } from "../utils/title-generator";
 import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import { formatAdvisorStatus } from "./advisor-stats";
 import {
+	isEmptyAssistantStop,
+	isSameAssistantMessage,
 	sanitizeAssistantForReparentedHistory,
 	titleConversationTurnFromMessage,
 } from "./agent-session-message-shapes";
@@ -454,11 +426,7 @@ import {
 	PERMISSION_OPTIONS_BY_ID,
 	PERMISSION_REQUIRED_TOOLS,
 } from "./agent-session-permissions";
-import {
-	buildSessionMetadata,
-	isToolOrderPermutation,
-	obfuscateProviderPayload,
-} from "./agent-session-provider-request";
+import { buildSessionMetadata, isToolOrderPermutation } from "./agent-session-provider-request";
 import {
 	IMAGE_ATTACHMENT_DESCRIPTION_TYPE,
 	isAdvisorCard,
@@ -470,17 +438,7 @@ import {
 	type RestoredQueuedMessage,
 	toRestoredQueuedMessage,
 } from "./agent-session-queue";
-import {
-	type ActiveRetryFallbackState,
-	formatRetryFallbackBaseSelector,
-	formatRetryFallbackSelector,
-	isRetryFallbackModelKey,
-	isRetryFallbackWildcardKey,
-	parseRetryFallbackSelector,
-	type RetryFallbackChains,
-	type RetryFallbackRevertPolicy,
-	type RetryFallbackSelector,
-} from "./agent-session-retry-fallback";
+import { retryFallbackChainWarnings } from "./agent-session-retry-fallback";
 import {
 	type AdvisorStats,
 	type AgentContinueSkipReason,
@@ -492,17 +450,18 @@ import {
 	type AsyncResultEntry,
 	type CommandMetadataChangedListener,
 	type ContextUsageBreakdown,
+	DISPOSE_AGENT_LOOP_SETTLE_MS,
 	type FollowUpOptions,
 	type FreshSessionResult,
 	type HandoffResult,
 	type MessageEndPersistenceSlot,
 	type ModelCycleResult,
 	type PendingContextSnapshot,
-	type PendingRecoveredRetryError,
 	type PlanYolo,
 	type Prewalk,
 	type ProjectAdvisorScope,
 	type PromptOptions,
+	QUIESCENCE_RECHECK_MS,
 	type ResolvedRoleModel,
 	type RoleModelCycle,
 	type RoleModelCycleResult,
@@ -560,17 +519,19 @@ import {
 	PREWALK_PLAN_MESSAGE_TYPE,
 	SESSION_STATE_MESSAGE_TYPE,
 	SESSION_STOP_CONTINUATION_CAP,
-	THINKING_LOOP_REDIRECT_TYPE,
 	TOOL_CALL_LOOP_REDIRECT_TYPE,
 } from "./nudges";
 import { ProviderContextCanonicalizer } from "./provider-context-canonicalizer";
 import { applyProviderImagePolicy } from "./provider-image-budget";
+import { didSessionMessagesChange } from "./provider-replay-projection";
 import { normalizeRoots } from "./relativize-paths";
 import { AdvisorRoster, type AdvisorRosterHost } from "./runtime/advisor-roster";
 import { CheckpointRuntime } from "./runtime/checkpoint-runtime";
 import { IrcInbox } from "./runtime/irc-inbox";
 import { MaxConcurrencyRuntime } from "./runtime/max-concurrency-runtime";
 import { PostPromptTasks } from "./runtime/post-prompt-tasks";
+import { isClassifierRefusal, RetryRuntime } from "./runtime/retry-runtime";
+import { type SecretsRefreshOptions, SessionSecrets } from "./runtime/session-secrets";
 import { StreamingEditGuard } from "./runtime/streaming-edit-guard";
 import { ThinkingRuntime } from "./runtime/thinking-runtime";
 import { TodoRuntime } from "./runtime/todo-runtime";
@@ -609,6 +570,9 @@ export class UnsupportedModelInputError extends Error {
 // A side-channel assistant response is signed for the hidden prompt/history that
 // produced it. If we persist that response under a different user turn, native
 // replay anchors become invalid; keep only visible, non-cryptographic content.
+
+/** Abort reason recorded on a spawned agent stopped because its conversation was left by `/new`, `/resume` or a handoff. */
+export const RESCOPE_TERMINATE_REASON = "Stopped: the conversation that spawned it ended";
 const UNEXPECTED_STOP_MAX_RETRIES = 3;
 const UNEXPECTED_STOP_TIMEOUT_MS = 4000;
 const EMPTY_STOP_MAX_RETRIES = 3;
@@ -616,17 +580,6 @@ const EMPTY_STOP_MAX_RETRIES = 3;
 /** Whether writing `path` must rebuild the prompt the model is holding. */
 function rebuildsThePrompt(path: string): boolean {
 	return isLivePromptGate(path) || TOOL_SHAPE_SETTING_PATHS[path] === true;
-}
-
-/**
- * Slack added past a sibling credential's block expiry before retrying, so
- * the next getApiKey lands after the block has actually lapsed.
- */
-const SIBLING_UNBLOCK_BUFFER_MS = 1_000;
-const NON_WHITESPACE_RE = /\S/;
-
-function hasNonWhitespace(value: string): boolean {
-	return NON_WHITESPACE_RE.test(value);
 }
 
 export type { ShakeMode, ShakeResult };
@@ -687,6 +640,141 @@ function compactionRecord(
 function compactionCheckOutcome(continuationScheduled: boolean, deadEnd: boolean): CompactionCheckResult {
 	if (continuationScheduled) return COMPACTION_CHECK_CONTINUATION;
 	return deadEnd ? COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION : COMPACTION_CHECK_NONE;
+}
+
+/**
+ * On a user-interrupted (`Esc`) abort, copy the trailing thinking run into a
+ * hidden `display: false` continuity message for the next turn WITHOUT
+ * mutating the assistant message. The original thinking stays on the message
+ * so live render, reload, and Ctrl+L rebuilds keep showing it; `convertToLlm`
+ * strips the run from the provider request (incomplete/unsigned thinking is
+ * rejected on resend) when this continuity message follows the assistant turn.
+ */
+function demoteInterruptedThinkingOnUserInterrupt(
+	message: AssistantMessage,
+): CustomMessage<InterruptedThinkingDetails> | undefined {
+	if (message.stopReason !== "aborted" || !isUserInterruptAbort(message)) return undefined;
+	const demoted = demoteInterruptedThinking(message);
+	if (!demoted) return undefined;
+	const interruptedAt = Date.now();
+	return {
+		role: "custom",
+		customType: INTERRUPTED_THINKING_MESSAGE_TYPE,
+		content: prompt.render(turnControlPrompts["turn-control/interrupted-thinking"].text, {
+			reasoning: demoted.reasoning,
+		}),
+		display: false,
+		details: {
+			interruptedAt,
+			provider: message.provider,
+			model: message.model,
+			blockCount: demoted.blockCount,
+		},
+		attribution: "agent",
+		timestamp: interruptedAt,
+	};
+}
+
+function skipAgentContinue(reason: AgentContinueSkipReason, options: ScheduledAgentContinueOptions | undefined): void {
+	logger.debug("agent.continue skipped after scheduling", { reason });
+	options?.onSkip?.(reason);
+}
+
+function sessionStopContinuationContext(result: SessionStopEventResult | undefined): string | undefined {
+	if (!result) return undefined;
+	const additionalContext =
+		typeof result.additionalContext === "string" && result.additionalContext.length > 0
+			? result.additionalContext
+			: undefined;
+	const reason = typeof result.reason === "string" && result.reason.length > 0 ? result.reason : undefined;
+	if (result.continue === true) {
+		return additionalContext ?? reason;
+	}
+	if (result.decision === "block") {
+		return reason ?? additionalContext;
+	}
+	return undefined;
+}
+
+function sanitizeGoalTodoText(text: string): string {
+	return escapeXmlText(text)
+		.replace(/\r\n/g, "\\n")
+		.replace(/\r/g, "\\r")
+		.replace(/\n/g, "\\n")
+		.replace(/\t/g, "\\t")
+		.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u2028\u2029]/g, " ");
+}
+
+function getCustomMessageTextContent(message: Pick<CustomMessage, "content">): string {
+	return contentText(message.content, { separator: "" });
+}
+
+/**
+ * The marker that replaces one region's content. A truncation region is the
+ * middle of a text whose head and tail survive, so its marker says the text
+ * continues; every other region replaced its content entirely.
+ */
+function shakeElidePlaceholder(region: ShakeRegion, index: number, artifactId: string | undefined): string {
+	const truncated = region.kind === "block" && region.truncation === true;
+	const verb = truncated ? "truncated" : "shaken";
+	const marker = artifactId
+		? `[${verb} ~${region.tokens} tokens; recover: artifact://${artifactId} (region ${index + 1})]`
+		: `[${verb} ~${region.tokens} tokens]`;
+	return truncated ? `\n${marker}\n` : marker;
+}
+
+function isTerminalYieldToolResult(event: {
+	toolName: string;
+	isError?: boolean;
+	result?: { details?: unknown };
+}): boolean {
+	if (event.toolName !== TOOL.yield || event.isError) return false;
+	const details = event.result?.details;
+	if (!details || typeof details !== "object") return true;
+	const record = details as Record<string, unknown>;
+	return !(
+		record.status === "success" &&
+		Array.isArray(record.type) &&
+		record.type.length > 0 &&
+		record.type.every(item => typeof item === "string")
+	);
+}
+
+function assistantMessageHasSuccessfulYieldToolCall(assistantMessage: AssistantMessage, toolCallId: string): boolean {
+	const lastToolCall = assistantMessage.content.findLast(
+		(content): content is ToolCall => content.type === "toolCall",
+	);
+	return lastToolCall?.name === TOOL.yield && lastToolCall.id === toolCallId;
+}
+
+function isPlanDecisionTool(name: string): boolean {
+	return PLAN_DECISION_TOOLS.has(name);
+}
+
+/**
+ * A candidate's failure, attributed to the candidate that produced it.
+ *
+ * The auto path tries several models and surfaces only the last error, so a
+ * provider-specific fault ("402 You have depleted your monthly included
+ * credits") reached the operator with nothing naming WHICH provider billed
+ * them. On a session running a different provider that reads as a lie. The
+ * provider's own text stays verbatim after the name so every classifier and
+ * matcher still sees it, and the original is kept as `cause`.
+ */
+function compactionCandidateError(candidate: Model, error: unknown): Error {
+	return new Error(`${modelKey(candidate)}: ${errorMessage(error)}`, { cause: error });
+}
+
+/** Notice fragment for a dead-end elide tier: what was freed and where it went. */
+function describeElideRescue(elided: number, tokensFreed: number, sink: string): string {
+	return `elided ${formatCount("heavy block", elided)} (~${tokensFreed.toLocaleString()} tokens) to ${sink}`;
+}
+
+function extractUserMessageText(content: string | Array<{ type: string; text?: string }>): string {
+	// Persisted entry content arrives loosely typed here; keep the defensive
+	// guard for malformed data, then delegate to the shared flattener.
+	if (typeof content !== "string" && !Array.isArray(content)) return "";
+	return contentText(content, { separator: "" });
 }
 
 const REPLAN_TITLE_CONTEXT_TURN_LIMIT = 6;
@@ -833,17 +921,21 @@ export class AgentSession {
 	#handoffAbortController: AbortController | undefined = undefined;
 	#skipPostTurnMaintenanceAssistantTimestamp: number | undefined = undefined;
 
-	// Retry state
-	#retryAbortController: AbortController | undefined = undefined;
-	#retryAttempt = 0;
-	/** Continuations spent on transport deaths inside an unreplayable tool batch;
-	 *  charged against the same budget as a retry, and restored both by a turn that
-	 *  lands and by a new prompt, which is a new incident. */
-	#unreplayableBatchContinues = 0;
-	#retryPromise: Promise<void> | undefined = undefined;
-	#retryResolve: (() => void) | undefined = undefined;
-	#activeRetryFallback: ActiveRetryFallbackState | undefined = undefined;
-	#pendingRecoveredRetryErrors: PendingRecoveredRetryError[] = [];
+	readonly #retry = new RetryRuntime(this, {
+		emitSessionEvent: event => this.#emitSessionEvent(event),
+		promptGeneration: () => this.#promptGeneration,
+		scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
+		abortIsDeliberate: () => this.#abortInProgress || this.#isDisposed || this.#streamingEdit.abortTriggered,
+		setModelWithProviderSessionReset: model => this.#setModelWithProviderSessionReset(model),
+		resetCurrentResponsesProviderSession: reason => this.#resetCurrentResponsesProviderSession(reason),
+		maybeAutoRedeemCodexReset: () => this.#maybeAutoRedeemCodexReset(),
+		removeAssistantMessageFromActiveContext: (message, reason) =>
+			this.#removeAssistantMessageFromActiveContext(message, reason),
+		persistLifecycleErrorMessage: async message => {
+			await this.#persistTerminalEmptyErrorTurn(message);
+		},
+		resetSessionStopContinuationState: () => this.#resetSessionStopContinuationState(),
+	});
 	#planModeReminderCount = 0;
 	#planModeReminderAwaitingProgress = false;
 	#replanTitleRefreshInFlight: Promise<void> | undefined = undefined;
@@ -853,7 +945,6 @@ export class AgentSession {
 	#titleSystemPrompt: string | undefined;
 	#toolChoiceQueue = new ToolChoiceQueue();
 	readonly #verificationEvidence = new VerificationEvidenceLedger();
-	#afterEditCheckReported = false;
 
 	/** Running user shell commands and eval runs, and the results recorded while a turn streamed. */
 	readonly #executions = new UserExecutions({
@@ -989,7 +1080,7 @@ export class AgentSession {
 	#getMcpServerInstructions: (() => Map<string, string> | undefined) | undefined;
 	#reloadSshTool: (() => Promise<AgentTool | null>) | undefined;
 	#setActiveToolNames: ((names: Iterable<string>) => void) | undefined;
-	#disconnectOwnedMcpManager: (() => Promise<void>) | undefined;
+	#releaseMcpManager: (() => Promise<void>) | undefined;
 	#requestedToolNames: ReadonlySet<string> | undefined;
 	#baseSystemPrompt: string[];
 	/**
@@ -1104,13 +1195,8 @@ export class AgentSession {
 	// turn-end/abort invalidates the cache even though the message list is
 	// unchanged — otherwise a mid-turn estimate would survive into idle.
 	#contextUsageRevision = 0;
-	#obfuscator: SecretObfuscator | undefined;
-	#secretRuntime: SecretRuntimeLease | undefined;
-	#leaseSecretRuntime: (() => Promise<SecretRuntimeLease>) | undefined;
-	#resolveSecretRuntimeLeaseForContext: ((context: Context) => SecretRuntimeLease | undefined) | undefined;
-	#refreshSecretRuntime: ((cwd: string) => Promise<SecretRuntimeLease | SecretObfuscator | undefined>) | undefined;
-	/** Single-flight guard for the out-of-band refresh a stale render schedules. */
-	#staleSecretRuntimeRefreshInFlight = false;
+	/** Secret obfuscator, runtime lease, provider redaction and display expansion. */
+	readonly #secrets: SessionSecrets;
 	#argot: ArgotSession | undefined;
 	/** Per-streaming-message argot display decoder (seam 3); reset on each assistant message_start. */
 	#argotStreamDisplay: ArgotStreamDisplayDecoder | undefined;
@@ -1161,14 +1247,7 @@ export class AgentSession {
 		this.#unexpectedStopRetryCount = 0;
 		this.#yieldTerminationPending = false;
 		this.#acceptTerminalEmptyStopForPrompt = false;
-		// A new prompt is a new incident. Every other turn-recovery allowance is
-		// restored here, and this one was reset only by a turn that came back, so a
-		// session that spent it on a turn which never landed could not continue
-		// again for the rest of its life: the operator's next prompt died on the
-		// same transport with no continuation and nothing said why. Continuations
-		// re-request through #scheduleAgentContinue, which does not pass through
-		// here, so the cap still terminates a provider that dies every attempt.
-		this.#unreplayableBatchContinues = 0;
+		this.#retry.resetForPrompt();
 	}
 
 	#acquirePowerAssertion(): void {
@@ -1606,6 +1685,15 @@ export class AgentSession {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
 		this.settings = config.settings;
+		this.#secrets = new SessionSecrets(config, {
+			sessionId: () => this.sessionManager.getSessionId(),
+			cwd: () => this.sessionManager.getCwd(),
+			awaitScopeTransitionReady: () => this.awaitScopeTransitionReady(),
+			queueRefresh: options => this.refreshSecrets(options),
+			refreshSystemPrompt: async () => {
+				await this.refreshBaseSystemPrompt("secrets-refresh");
+			},
+		});
 		this.#lastRescopedCwd = path.resolve(config.sessionManager.getCwd());
 		this.#autoApprove = config.autoApprove === true;
 		this.#approvalBypassActive = config.bypassAllApprovals === true;
@@ -1779,10 +1867,7 @@ export class AgentSession {
 				blockImages: Boolean(this.settings.get("images.blockImages")),
 			});
 			if (upstreamTransformProviderContext) return upstreamTransformProviderContext(shaped, model, runtime);
-			const fallbackRuntime = runtime ?? this.#secretRuntime;
-			return fallbackRuntime
-				? fallbackRuntime.obfuscateContext(shaped)
-				: obfuscateProviderContext(this.#obfuscator, shaped);
+			return this.#secrets.obfuscateContext(shaped, runtime);
 		};
 		this.#transformProviderContext = canonicalizeProviderContext;
 		// Agent was constructed before AgentSession; install the wrapped hook so the
@@ -1879,7 +1964,7 @@ export class AgentSession {
 		this.#getMcpServerInstructions = config.getMcpServerInstructions;
 		this.#reloadSshTool = config.reloadSshTool;
 		this.#setActiveToolNames = config.setActiveToolNames;
-		this.#disconnectOwnedMcpManager = config.disconnectOwnedMcpManager;
+		this.#releaseMcpManager = config.releaseMcpManager;
 		this.#baseSystemPrompt = this.agent.state.systemPrompt;
 		this.#promptModelKey = this.#currentPromptModelKey();
 		this.#discovery = new ToolDiscovery(
@@ -1908,8 +1993,8 @@ export class AgentSession {
 			}),
 			cwd: () => this.sessionManager.getCwd(),
 			localProtocol: () => this.#localProtocolOptions(),
-			expandSecretsForDiskComparison: text => this.#tryExpandSecretsForDiskComparison(text),
-			redactForLog: text => this.#redactForLog(text),
+			expandSecretsForDiskComparison: text => this.#secrets.expandForDiskComparison(text),
+			redactForLog: text => this.#secrets.redactForLog(text),
 		});
 		this.#ttsr = new TtsrRuntime(
 			{
@@ -1945,11 +2030,6 @@ export class AgentSession {
 			promptGeneration: () => this.#promptGeneration,
 		});
 		this.#maxConcurrency = new MaxConcurrencyRuntime(this);
-		this.#secretRuntime = config.secretRuntime;
-		this.#obfuscator = config.secretRuntime?.expansionObfuscator ?? config.obfuscator;
-		this.#leaseSecretRuntime = config.leaseSecretRuntime;
-		this.#resolveSecretRuntimeLeaseForContext = config.resolveSecretRuntimeLeaseForContext;
-		this.#refreshSecretRuntime = config.refreshSecretRuntime;
 		this.#argot = config.argot;
 		this.#agentId = config.agentId;
 		this.#agentKind = config.agentKind ?? "main";
@@ -2087,7 +2167,7 @@ export class AgentSession {
 				onResponse: this.#onResponse,
 				onSseEvent: this.#onSseEvent,
 				transformProviderContext: this.#transformProviderContext,
-				resolveSecretRuntimeLeaseForContext: this.#resolveSecretRuntimeLeaseForContext,
+				resolveSecretRuntimeLeaseForContext: this.#secrets.resolveLeaseForContext,
 			},
 			sessionFile: () => this.sessionManager.getSessionFile(),
 			cwd: () => this.sessionManager.getCwd(),
@@ -2301,63 +2381,26 @@ export class AgentSession {
 
 	/** Secret obfuscator, when secrets are configured; /share redaction reuses it. */
 	get obfuscator(): SecretObfuscator | undefined {
-		return this.#obfuscator;
+		return this.#secrets.expansionObfuscator;
 	}
 
 	/** Whether the authoritative live runtime currently has secret protection enabled. */
 	get secretsEnabled(): boolean {
-		return this.#obfuscator !== undefined;
+		return this.#secrets.expansionObfuscator !== undefined;
 	}
 
 	/** Live session-lifetime provider redactor, including disable/move tombstones. */
 	obfuscateProviderText(text: string): string {
-		return this.#secretRuntime?.obfuscateText(text) ?? this.#obfuscator?.obfuscate(text) ?? text;
-	}
-
-	/**
-	 * Whether anything outbound still needs hiding, live value or tombstone.
-	 *
-	 * Read this instead of `#obfuscator?.hasSecrets()` on any redaction path.
-	 * `#obfuscator` is the EXPANSION authority and is undefined the moment
-	 * expansion stops (a `/secret disable`, or a cwd move off the vault), while
-	 * the runtime lease deliberately keeps a redaction-only obfuscator alive
-	 * across exactly those transitions. A value the model has already seen as a
-	 * placeholder must never travel back to a provider as plaintext because
-	 * expansion was switched off after the fact.
-	 */
-	get #hasProviderRedactions(): boolean {
-		return this.#secretRuntime?.hasRedactions ?? this.#obfuscator?.hasSecrets() ?? false;
+		return this.#secrets.obfuscateProviderText(text);
 	}
 
 	/**
 	 * The live redaction authority, for a consumer that must hold the object.
-	 *
-	 * Read through a getter rather than captured at construction: a consumer that
-	 * snapshots the redactor keeps redacting whatever was configured the moment it
-	 * was built, so a secret added mid-session by `/secret add` never reaches it,
-	 * and a session that started with no secrets at all never redacts anything.
-	 *
-	 * READ THIS, NOT `obfuscator`, ON ANY PATH THAT HIDES A VALUE. `obfuscator` is
-	 * the expansion authority, so it is undefined after a `/secret disable` or a
-	 * cwd move off the vault, and a redaction path that reads it stops redacting
-	 * at exactly the moment the operator asked for less exposure, not more. Use
-	 * `obfuscator` only to expand a placeholder or to mutate expansion state.
+	 * Read this, not `obfuscator`, on any path that hides a value; see
+	 * {@link SessionSecrets.providerRedactor}.
 	 */
 	get providerRedactor(): SecretObfuscator | undefined {
-		return this.#secretRuntime?.redactionObfuscator ?? this.#obfuscator;
-	}
-
-	/** Live session-lifetime provider redactor for a whole context. */
-	#obfuscateContextForProvider(context: Context): Context {
-		const runtime = this.#secretRuntime;
-		return runtime ? runtime.obfuscateContext(context) : obfuscateProviderContext(this.#obfuscator, context);
-	}
-
-	/** Live session-lifetime provider redactor for already-converted messages. */
-	#obfuscateMessagesForProvider(messages: Message[]): Message[] {
-		const runtime = this.#secretRuntime;
-		if (runtime) return runtime.obfuscateMessages(messages);
-		return this.#obfuscator ? obfuscateMessages(this.#obfuscator, messages) : messages;
+		return this.#secrets.providerRedactor;
 	}
 
 	/**
@@ -2367,9 +2410,7 @@ export class AgentSession {
 	 * authority and this view in the same commit turn.
 	 */
 	installSecretRuntime(runtime: SecretRuntimeLease): void {
-		if (this.#secretRuntime && runtime.revision < this.#secretRuntime.revision) return;
-		this.#secretRuntime = runtime;
-		this.#obfuscator = runtime.expansionObfuscator;
+		this.#secrets.install(runtime);
 	}
 
 	/** Wait until every scope transition initiated before this call has settled. */
@@ -2378,32 +2419,8 @@ export class AgentSession {
 	}
 
 	/** Admit one immutable request runtime after the winning scope is ready. */
-	async leaseSecretRuntime(): Promise<SecretRuntimeLease> {
-		await this.awaitScopeTransitionReady();
-		if (this.#leaseSecretRuntime) {
-			const runtime = await this.#leaseSecretRuntime();
-			this.installSecretRuntime(runtime);
-			return runtime;
-		}
-		if (this.#secretRuntime) return this.#secretRuntime;
-
-		const obfuscator = this.#obfuscator;
-		return {
-			revision: 0,
-			cwd: this.sessionManager.getCwd(),
-			expansionObfuscator: obfuscator,
-			redactionObfuscator: obfuscator,
-			hasRedactions: obfuscator?.hasSecrets() ?? false,
-			obfuscateText: text => obfuscator?.obfuscate(text) ?? text,
-			obfuscateMessages: messages => (obfuscator ? obfuscateMessages(obfuscator, messages) : messages),
-			obfuscateContext: context => (obfuscator ? obfuscateProviderContext(obfuscator, context) : context),
-			obfuscatePayload: payload => obfuscateProviderPayload(payload, obfuscator),
-			// No vault revision was ever captured on this path, so nothing here can
-			// go stale and every freshness member is a no-op.
-			isFreshForExpansion: () => true,
-			ensureFreshForExpansion: async () => undefined,
-			assertFreshForExpansion: () => undefined,
-		};
+	leaseSecretRuntime(): Promise<SecretRuntimeLease> {
+		return this.#secrets.lease();
 	}
 
 	#runScopeTransition<T>(work: (revision: number) => Promise<T>): Promise<T> {
@@ -2416,21 +2433,9 @@ export class AgentSession {
 		return run;
 	}
 
-	async #refreshSecrets(options?: { refreshPrompt?: boolean }): Promise<void> {
-		if (!this.#refreshSecretRuntime) return;
-		const refreshed = await this.#refreshSecretRuntime(this.sessionManager.getCwd());
-		if (refreshed && "revision" in refreshed) {
-			this.installSecretRuntime(refreshed);
-		} else {
-			this.#secretRuntime = undefined;
-			this.#obfuscator = refreshed;
-		}
-		if (options?.refreshPrompt !== false) await this.refreshBaseSystemPrompt("secrets-refresh");
-	}
-
 	/** Reload config/env/vault state in monotonic lifecycle initiation order. */
-	refreshSecrets(options?: { refreshPrompt?: boolean }): Promise<void> {
-		return this.#runScopeTransition(() => this.#refreshSecrets(options));
+	refreshSecrets(options?: SecretsRefreshOptions): Promise<void> {
+		return this.#runScopeTransition(() => this.#secrets.refresh(options));
 	}
 
 	/** Whether a TTSR abort is pending (stream was aborted to inject rules) */
@@ -2599,15 +2604,23 @@ export class AgentSession {
 	 * display bug — a parked ref holds its session file, and a live one holds a
 	 * whole `AgentSession`.
 	 *
-	 * Order matters. Release the descendants BEFORE the re-scope, so they are
-	 * disposed while they still resolve as this agent's subtree; re-scoping first
+	 * Order matters. Terminate the descendants BEFORE the re-scope, so they are
+	 * reached while they still resolve as this agent's subtree; re-scoping first
 	 * would leave them parented to a scope nothing walks. Their async jobs are
 	 * already cancelled by the caller's `#cancelOwnAsyncJobs`, which walks the
 	 * same subtree.
 	 *
-	 * A release that throws is logged and skipped rather than failing the
-	 * session switch: a spawned agent that cannot be disposed must not strand the
-	 * operator between two conversations.
+	 * Terminate, not release. Release disposes the session, and dispose stops the
+	 * agent loop but leaves the agent's bash, eval, handoff and advisor work
+	 * running and its scheduled continuations armed. `terminate` aborts a running
+	 * agent first, deepest generation first, which is the kill the dashboard and
+	 * `job cancel` use. It is called on each direct child; the child's own
+	 * subtree is terminated inside that call.
+	 *
+	 * A termination that throws is logged and skipped rather than failing the
+	 * session switch: a spawned agent that cannot be stopped must not strand the
+	 * operator between two conversations. The wait lasts as long as the child's
+	 * abort, the same wait this session's own abort imposes at the start of `/new`.
 	 */
 	async #rescopeAgentRegistry(): Promise<void> {
 		const id = this.#agentId;
@@ -2617,21 +2630,7 @@ export class AgentSession {
 		if (!self) return;
 		const endingScope = self.scope;
 		const descendants = registry.descendantsOf(id);
-		if (descendants.length > 0) {
-			const lifecycle = AgentLifecycleManager.global();
-			await Promise.all(
-				descendants.map(async child => {
-					try {
-						await lifecycle.release(child);
-					} catch (error) {
-						logger.warn("Failed to release a spawned agent of the previous conversation", {
-							agentId: child,
-							error: errorMessage(error),
-						});
-					}
-				}),
-			);
-		}
+		await this.terminateSpawnedAgents(RESCOPE_TERMINATE_REASON);
 		// The traffic goes whether or not anything was still registered to release.
 		// Guarding this on `descendants.length` was wrong in the COMMON case: a
 		// agent that finished and aged out, or was disposed, is already
@@ -2661,6 +2660,34 @@ export class AgentSession {
 			to: registry.get(id)?.scope,
 			released: descendants.length,
 		});
+	}
+
+	/**
+	 * Terminate every agent this session spawned, each direct child with its own
+	 * subtree, deepest generation first. A termination that throws is logged and
+	 * skipped. Used when this conversation ends while the process keeps running:
+	 * a `/new` or `/resume` in place, and the disposal of a top-level session
+	 * that is not the last one in the process.
+	 */
+	async terminateSpawnedAgents(reason: string): Promise<void> {
+		const id = this.#agentId;
+		if (!id) return;
+		const registry = AgentRegistry.global();
+		const children = registry.descendantsOf(id).filter(descendant => registry.get(descendant)?.parentId === id);
+		if (children.length === 0) return;
+		const lifecycle = AgentLifecycleManager.global();
+		await Promise.all(
+			children.map(async child => {
+				try {
+					await lifecycle.terminate(child, reason);
+				} catch (error) {
+					logger.warn("Failed to terminate a spawned agent of an ending conversation", {
+						agentId: child,
+						error: errorMessage(error),
+					});
+				}
+			}),
+		);
 	}
 
 	/**
@@ -3004,6 +3031,24 @@ export class AgentSession {
 	}
 
 	/**
+	 * Durably record a terminal empty error turn (`stopReason: "error"` with no
+	 * substantive content) that `#persistSessionMessageIfMissing` skipped, so the
+	 * session JSONL keeps a record of why the run stopped instead of ending at the
+	 * last tool result. A no-op for non-empty/non-error turns and idempotent via
+	 * the already-persisted guard; the turn is dropped from active context by the
+	 * caller (or `isProviderRefusalMessage`/`isEmptyErrorTurn` filters) so it is
+	 * never replayed on the wire. Used by the retry-lifecycle dead-ends and the
+	 * non-retry terminal error tail.
+	 */
+	async #persistTerminalEmptyErrorTurn(message: AssistantMessage): Promise<void> {
+		await this.#waitForSessionMessagePersistence(message);
+		if (!isEmptyErrorTurn(message)) return;
+		if (this.#sessionMessageAlreadyPersisted(message)) return;
+		if (AIError.isContextOverflow(message, this.model?.contextWindow ?? undefined)) return;
+		this.#appendSessionMessage(message);
+	}
+
+	/**
 	 * True when the latest compaction entry on the current branch sits after
 	 * {@link assistantMessage}'s own entry, i.e. the assistant was kept through
 	 * that compaction and its `usage` describes the pre-rewrite prompt. One
@@ -3081,7 +3126,7 @@ export class AgentSession {
 		if (this.#sessionMessageAlreadyPersisted(persistenceMessage)) return;
 		if (message.role === "assistant") {
 			const assistantMsg = persistenceMessage as AssistantMessage;
-			if (this.#isClassifierRefusal(assistantMsg)) return;
+			if (isClassifierRefusal(assistantMsg)) return;
 			if (isEmptyErrorTurn(assistantMsg)) return;
 			if (assistantMsg.stopReason !== "aborted" && assistantMsg.stopReason !== "error" && assistantMsg.usage) {
 				const pending = this.#pendingContextSnapshot;
@@ -3135,39 +3180,6 @@ export class AgentSession {
 		}
 	}
 
-	/**
-	 * On a user-interrupted (`Esc`) abort, copy the trailing thinking run into a
-	 * hidden `display: false` continuity message for the next turn WITHOUT
-	 * mutating the assistant message. The original thinking stays on the message
-	 * so live render, reload, and Ctrl+L rebuilds keep showing it; `convertToLlm`
-	 * strips the run from the provider request (incomplete/unsigned thinking is
-	 * rejected on resend) when this continuity message follows the assistant turn.
-	 */
-	#demoteInterruptedThinkingOnUserInterrupt(
-		message: AssistantMessage,
-	): CustomMessage<InterruptedThinkingDetails> | undefined {
-		if (message.stopReason !== "aborted" || !isUserInterruptAbort(message)) return undefined;
-		const demoted = demoteInterruptedThinking(message);
-		if (!demoted) return undefined;
-		const interruptedAt = Date.now();
-		return {
-			role: "custom",
-			customType: INTERRUPTED_THINKING_MESSAGE_TYPE,
-			content: prompt.render(turnControlPrompts["turn-control/interrupted-thinking"].text, {
-				reasoning: demoted.reasoning,
-			}),
-			display: false,
-			details: {
-				interruptedAt,
-				provider: message.provider,
-				model: message.model,
-				blockCount: demoted.blockCount,
-			},
-			attribution: "agent",
-			timestamp: interruptedAt,
-		};
-	}
-
 	async #persistTurnMessagesForMidRunCompaction(context: AgentTurnEndContext | undefined): Promise<boolean> {
 		if (!context) return true;
 		const turnMessages = [context.message, ...context.toolResults];
@@ -3209,293 +3221,6 @@ export class AgentSession {
 	}
 
 	/**
-	 * Expand one string for display, or report that it cannot be expanded. NEVER
-	 * throws, for any codec or freshness reason.
-	 *
-	 * WHY THAT MATTERS: every caller is a display or render path, not a tool call.
-	 * An exception raised while turning a stored `#HASH#` back into plaintext does
-	 * not fail one operation, it unwinds whatever was rendering (the event
-	 * fan-out, a TUI repaint, the agent-state rebuild after a compaction or a
-	 * resume) and the session is gone.
-	 * A placeholder left on screen literally is cosmetic, so degrading is always
-	 * the right trade here.
-	 *
-	 * Returns the text unchanged when there is nothing to expand. The
-	 * DISPLAY-RESTORABLE test comes FIRST and is the whole gate. `hasSecrets()`
-	 * answers "this session has a secret", which is not the question, and
-	 * `containsLivePlaceholder` answers "would expansion change this", which is no
-	 * longer the question either: a vault-backed credential is deliberately NOT
-	 * restorable on screen, so text whose only placeholders are withheld has
-	 * nothing to expand and must not consult the vault revision or report a
-	 * degraded render. Returns undefined ONLY when the text carries a restorable
-	 * placeholder and expansion is unsafe: a stale captured revision, or a codec
-	 * limit refusing the text.
-	 */
-	#tryExpandSecretsForDisplay(text: string): string | undefined {
-		const obfuscator = this.#obfuscator;
-		if (obfuscator === undefined || !obfuscator.containsDisplayRestorablePlaceholder(text)) return text;
-		if (!this.#secretExpansionFreshForDisplay()) return undefined;
-		return this.#expandLivePlaceholdersForDisplay(obfuscator, text);
-	}
-
-	/**
-	 * Per-string expander for one display pass over a structured payload (a
-	 * transcript, one assistant message's content), or undefined when the session
-	 * has no expansion authority and the caller should skip the walk and keep its
-	 * own reference.
-	 *
-	 * Freshness is resolved lazily, on the first string that actually carries a
-	 * live placeholder, and then memoized FOR THIS PASS ONLY: the freshness probe
-	 * reads the vault's revision off disk, and a transcript rebuild walks every
-	 * model-authored string in the branch. A later pass resolves it again, so a
-	 * refresh that landed in between is picked up.
-	 */
-	#displaySecretExpander(): ((text: string) => string) | undefined {
-		const obfuscator = this.#obfuscator;
-		if (obfuscator === undefined || !obfuscator.hasSecrets()) return undefined;
-		let fresh: boolean | undefined;
-		return (text: string): string => {
-			if (!obfuscator.containsDisplayRestorablePlaceholder(text)) return text;
-			fresh ??= this.#secretExpansionFreshForDisplay();
-			if (!fresh) return text;
-			return this.#expandLivePlaceholdersForDisplay(obfuscator, text) ?? text;
-		};
-	}
-
-	/**
-	 * {@link SecretObfuscator.deobfuscateForDisplay} with a refused expansion demoted to a literal
-	 * render AND reported to the operator.
-	 *
-	 * NOT `deobfuscate`. A stored credential must never be drawn, so the display codec restores
-	 * only what may be shown and leaves a withheld placeholder standing. The two are otherwise
-	 * identical, which is why this seam is the only thing that had to change to close the leak:
-	 * every display path already funnels through here.
-	 *
-	 * The refusal arrives as UNCHANGED TEXT, not as a throw. The display codec swallows its own cap
-	 * refusals by design, since its caller is drawing a frame. That is the right call and it is also
-	 * why detecting the refusal is this seam's job: without the comparison a refused expansion is
-	 * indistinguishable on screen from having nothing to expand, and the operator is left with a
-	 * placeholder and no reason for it.
-	 *
-	 * PRECONDITION, and the equality check is sound ONLY because of it: every caller has already
-	 * established, via `containsDisplayRestorablePlaceholder`, that this text holds a placeholder the
-	 * codec would expand. Given that, identical text can only mean the codec declined. Reuse this
-	 * check anywhere that precondition does not hold and it reads "refused" for the ordinary case of
-	 * text with nothing to expand, which is a silent false notice on every render. Callers must keep
-	 * gating; this method must not be the first thing to ask whether expansion was possible.
-	 */
-	#expandLivePlaceholdersForDisplay(obfuscator: SecretObfuscator, text: string): string | undefined {
-		try {
-			const expanded = obfuscator.deobfuscateForDisplay(text);
-			if (expanded !== text) return expanded;
-			this.#noteDegradedSecretDisplay(
-				"A secret placeholder is shown unexpanded because the expansion was refused.",
-				"A display expansion returned unchanged text for a restorable placeholder; rendering it literally",
-			);
-			return undefined;
-		} catch (error) {
-			// BACKSTOP, not a live path: the display codec is documented never to throw. Kept because
-			// this is the one seam every display path funnels through, and the cost of that contract
-			// changing under us is the unwound TUI this lane exists to prevent.
-			this.#noteDegradedSecretDisplay(
-				"A secret placeholder is shown unexpanded because the expansion was refused.",
-				"Refused a secret expansion on a display path; rendering the placeholder literally",
-				error,
-			);
-			return undefined;
-		}
-	}
-
-	/**
-	 * Expand one string for an INTERNAL COMPARISON against bytes on disk, or report that it cannot
-	 * be expanded. Never throws.
-	 *
-	 * The one expansion in this file that is neither a spend nor a display, and the one that still
-	 * needs the REAL value: the streaming-edit guard matches the model's removed lines
-	 * against the file's actual content, which holds the credential in cleartext. Routing it
-	 * through the display codec would leave `#HASH#` in the comparison text, no removed line would
-	 * ever match, and every edit touching a secret would look like a failed patch preview.
-	 *
-	 * Nothing expanded here may be rendered or logged. The result is compared and discarded.
-	 */
-	#tryExpandSecretsForDiskComparison(text: string): string | undefined {
-		const obfuscator = this.#obfuscator;
-		if (obfuscator === undefined || !obfuscator.containsLivePlaceholder(text)) return text;
-		if (!this.#secretExpansionFreshForDisplay()) return undefined;
-		try {
-			return obfuscator.deobfuscate(text);
-		} catch (error) {
-			logger.warn("Refused a secret expansion for a streaming-edit disk comparison; skipping the check", {
-				sessionId: this.sessionManager.getSessionId(),
-				error: errorMessage(error),
-			});
-			return undefined;
-		}
-	}
-
-	/**
-	 * One line of model-authored text, safe to put in a log.
-	 *
-	 * Re-redacts through the live obfuscator, turning any expanded credential back into its
-	 * placeholder. Used where a diagnostic quotes text that has ALREADY been expanded for an
-	 * internal comparison: the log file outlives the terminal, so a credential written there is a
-	 * longer-lived exposure than the screen leak this class of fix exists to close. Falls back to a
-	 * fixed marker rather than the raw text, because a redactor that fails open is not one.
-	 */
-	#redactForLog(text: string): string {
-		const obfuscator = this.#obfuscator;
-		if (obfuscator === undefined || !obfuscator.hasSecrets()) return text;
-		try {
-			return obfuscator.obfuscate(text);
-		} catch {
-			return "<redacted: could not be safely rendered>";
-		}
-	}
-
-	/**
-	 * Whether a display pass may expand live placeholders, plus the recovery when
-	 * it may not.
-	 *
-	 * A stale captured revision means the vault changed under this session, so the
-	 * cached map can hold a value that has since been rotated or deleted and
-	 * expanding from it would put a superseded secret on screen. Show the
-	 * placeholder, tell the operator once, and start the refresh that makes the
-	 * NEXT render correct. Refusing to render is never one of the options.
-	 */
-	#secretExpansionFreshForDisplay(): boolean {
-		const runtime = this.#secretRuntime;
-		if (runtime === undefined) return true;
-		let fresh: boolean;
-		try {
-			fresh = runtime.isFreshForExpansion();
-		} catch (error) {
-			// Documented pure, but it reads the vault's revision off disk. An
-			// unreadable vault degrades the render; it never ends it.
-			this.#noteDegradedSecretDisplay(
-				"Secret placeholders are shown unexpanded because the vault revision could not be read.",
-				"Could not read the vault revision while rendering; showing placeholders literally",
-				error,
-			);
-			return false;
-		}
-		if (fresh) return true;
-		this.#scheduleStaleSecretRuntimeRefresh();
-		this.#noteDegradedSecretDisplay(
-			"The secret vault changed in another session or process, so secret placeholders are shown unexpanded until the refresh lands.",
-			"Rendering secret placeholders literally because the captured vault revision is stale",
-		);
-		return false;
-	}
-
-	/**
-	 * Await the recovery a stale runtime needs, on a render path that happens to
-	 * be async, and never fail the caller for it.
-	 *
-	 * The two async render sites (the ephemeral turn's final message, the
-	 * transcript rebuild after a branch move) can do better than degrade: they are
-	 * already inside an await, so they can wait for the vault re-read and then
-	 * expand from the fresh runtime that refresh installs. A refresh that
-	 * genuinely fails still only degrades, because a codec problem must not become
-	 * a failed navigation or a dead recap.
-	 */
-	async #awaitSecretExpansionRefreshForRender(carriesLivePlaceholder: boolean): Promise<void> {
-		const runtime = this.#secretRuntime;
-		if (!carriesLivePlaceholder || runtime === undefined) return;
-		try {
-			await runtime.ensureFreshForExpansion();
-		} catch (error) {
-			this.#noteDegradedSecretDisplay(
-				"The secret vault changed in another session or process and could not be re-read, so secret placeholders are shown unexpanded.",
-				"Failed to refresh a stale secret runtime before a render expansion",
-				error,
-			);
-		}
-	}
-
-	/**
-	 * Recover a stale secret runtime out of band, so the next render expands.
-	 *
-	 * Single-flight because the callers are renders: a transcript rebuild reaches
-	 * this from the first placeholder it walks and a repaint can run on every
-	 * keystroke, while each refresh re-reads the whole vault.
-	 *
-	 * Goes through the PUBLIC `refreshSecrets`, not `#refreshSecrets`, so this
-	 * re-read is queued on the scope-transition tail like every other one: a cwd
-	 * move in flight is not raced, and a spend that runs right after a degraded
-	 * render waits for this refresh through `awaitScopeTransitionReady` instead of
-	 * re-reading the vault a second time. The optional system-prompt rebuild is
-	 * skipped because a render must not rewrite the prompt as a side effect.
-	 */
-	#scheduleStaleSecretRuntimeRefresh(): void {
-		if (this.#staleSecretRuntimeRefreshInFlight || this.#refreshSecretRuntime === undefined) return;
-		this.#staleSecretRuntimeRefreshInFlight = true;
-		void this.refreshSecrets({ refreshPrompt: false })
-			.catch(error => {
-				logger.warn("Failed to refresh a stale secret runtime for display", { error: errorMessage(error) });
-			})
-			.finally(() => {
-				this.#staleSecretRuntimeRefreshInFlight = false;
-			});
-	}
-
-	/**
-	 * Tell the operator that a render degraded, and log the detail.
-	 *
-	 * Goes through the secrets notice sink that every other machine-state
-	 * condition in this subsystem already uses, rather than a second channel, so
-	 * the host renders it the same way as a tightened key directory or a
-	 * superseded vault binding. NEVER carries a secret value: the notice names the
-	 * condition and the log carries the error text.
-	 */
-	#noteDegradedSecretDisplay(notice: string, logMessage: string, error?: unknown): void {
-		logger.warn(logMessage, {
-			sessionId: this.sessionManager.getSessionId(),
-			...(error === undefined ? {} : { error: errorMessage(error) }),
-		});
-		noteSecretsCondition(notice);
-	}
-
-	/** Whether any model-authored string in this assistant content carries a display-restorable placeholder. */
-	#contentCarriesLivePlaceholder(content: AssistantMessage["content"]): boolean {
-		const obfuscator = this.#obfuscator;
-		if (obfuscator === undefined || !obfuscator.hasSecrets()) return false;
-		let found = false;
-		mapAssistantContentStrings(
-			content,
-			text => {
-				found ||= obfuscator.containsDisplayRestorablePlaceholder(text);
-				return text;
-			},
-			{ includeToolMetadata: true },
-		);
-		return found;
-	}
-
-	/** Whether any model-authored string in this transcript carries a display-restorable placeholder. */
-	#messagesCarryLivePlaceholder(messages: AgentMessage[]): boolean {
-		const obfuscator = this.#obfuscator;
-		if (obfuscator === undefined || !obfuscator.hasSecrets()) return false;
-		let found = false;
-		mapAgentMessageStrings(messages, text => {
-			found ||= obfuscator.containsDisplayRestorablePlaceholder(text);
-			return text;
-		});
-		return found;
-	}
-
-	/**
-	 * Per-string, never-throwing stand-in for `deobfuscateSessionContext` on
-	 * render paths: the same transcript walk, and the same
-	 * same-reference-when-nothing-changed contract.
-	 */
-	#deobfuscateSessionContextForDisplay(context: SessionContext): SessionContext {
-		const expand = this.#displaySecretExpander();
-		if (expand === undefined) return context;
-		const messages = mapAgentMessageStrings(context.messages, expand);
-		return messages === context.messages ? context : { ...context, messages };
-	}
-
-	/**
 	 * Assistant message content in display form: secrets deobfuscated and argot
 	 * handles expanded, composed in that order. Stored messages keep the
 	 * obfuscated placeholders and cheap handles (the token win and the persistence
@@ -3508,7 +3233,7 @@ export class AgentSession {
 	displayAssistantContent(content: AssistantMessage["content"]): AssistantMessage["content"] {
 		// DISPLAY PATH: the streamed `message_end` display event, the interactive
 		// event fan-out, and `--print`. Degrades per string; never throws.
-		const expand = this.#displaySecretExpander();
+		const expand = this.#secrets.displayExpander();
 		let out =
 			expand === undefined ? content : mapAssistantContentStrings(content, expand, { includeToolMetadata: true });
 		if (this.#argot?.loaded) {
@@ -3535,7 +3260,7 @@ export class AgentSession {
 		if (intent === undefined || intent === "") return intent;
 		// DISPLAY PATH: the working line puts this on screen the moment a tool call
 		// starts, so it degrades to the literal placeholder and never throws.
-		let out = this.#tryExpandSecretsForDisplay(intent) ?? intent;
+		let out = this.#secrets.expandForDisplay(intent);
 		if (this.#argot?.loaded) {
 			out = this.#argot.expand(out);
 		}
@@ -3705,7 +3430,7 @@ export class AgentSession {
 			// settles as if it still carried tool calls.
 			this.#lastAssistantMessage = message;
 			if (message.stopReason === "aborted") this.#stampAbortedAssistant(message);
-			interruptedThinkingMessage = this.#demoteInterruptedThinkingOnUserInterrupt(message);
+			interruptedThinkingMessage = demoteInterruptedThinkingOnUserInterrupt(message);
 			// Make the hidden continuity turn visible to the next prompt before any awaited
 			// extension delivery or persistence can stall this handler.
 			if (interruptedThinkingMessage) this.agent.appendMessage(interruptedThinkingMessage);
@@ -3845,7 +3570,7 @@ export class AgentSession {
 		if (this.#handoffAbortController) {
 			this.#skipPostTurnMaintenanceAssistantTimestamp = message.timestamp;
 		}
-		await this.#closeRecoveredRetry(message);
+		await this.#retry.closeRecovered(message);
 		if (message.provider === "opencode-go") {
 			this.#modelRegistry.authStorage.recordUsageCost(message.provider, message.usage.cost.total, {
 				sessionId: this.#activeProviderSessionId(),
@@ -3853,42 +3578,6 @@ export class AgentSession {
 				baseUrl: this.#modelRegistry.getProviderBaseUrl?.(message.provider),
 			});
 		}
-	}
-
-	/** End the wait a retry or an unreplayable-batch continuation announced, once a turn lands. */
-	async #closeRecoveredRetry(message: AssistantMessage): Promise<void> {
-		// Captured before the reset below: a landed turn is what closes the wait this ladder
-		// announced, and by then the counter is back to zero.
-		const batchContinues = this.#unreplayableBatchContinues;
-		const landed = message.stopReason !== "error" && !this.#isEmptyAssistantStop(message);
-		if (landed) {
-			// A turn that reached the provider and came back with something is the evidence the
-			// transport recovered; the next transport death gets the full budget. An EMPTY turn is
-			// not that evidence: clearing the counter on one would leave the end event below nothing
-			// to fire on once the empty-stop ladder produced a real turn.
-			this.#unreplayableBatchContinues = 0;
-		}
-		// An unreplayable-batch continuation announces its wait through the same event as the retry
-		// ladder but counts on its own allowance, so it needs its own arm here or its start has no
-		// end: the countdown, an agent HUD's retryState and the turn's retry trace would stay open.
-		if (!landed || message.stopReason === "aborted" || !(this.#retryAttempt > 0 || batchContinues > 0)) return;
-		if (this.#activeRetryFallback && this.model) {
-			await this.#emitSessionEvent({
-				type: "retry_fallback_succeeded",
-				model: formatRetryFallbackSelector(this.model, this.thinkingLevel),
-				role: this.#activeRetryFallback.role,
-			});
-		}
-		const recoveredErrors = await this.#markPendingRecoveredRetryErrors(message);
-		await this.#emitSessionEvent({
-			type: "auto_retry_end",
-			success: true,
-			attempt: this.#retryAttempt > 0 ? this.#retryAttempt : batchContinues,
-			mode: this.#retryAttempt > 0 ? "retry" : "continue",
-			recoveredErrors,
-		});
-		this.#clearPendingRecoveredRetryErrors();
-		this.#retryAttempt = 0;
 	}
 
 	/** Settle-time effects of a persisted tool result: todo write outcome and checkpoint/rewind state. */
@@ -3962,13 +3651,10 @@ export class AgentSession {
 			await this.#goalRuntime.onToolCompleted(event.toolName);
 		}
 		this.#planModeReminderAwaitingProgress = false;
-		if (this.#isPlanDecisionTool(event.toolName)) {
+		if (isPlanDecisionTool(event.toolName)) {
 			this.#planModeReminderCount = 0;
 		}
-		if (
-			this.#isTerminalYieldToolResult(event) &&
-			!this.#synchronouslyTerminatedYieldToolCallIds.delete(event.toolCallId)
-		) {
+		if (isTerminalYieldToolResult(event) && !this.#synchronouslyTerminatedYieldToolCallIds.delete(event.toolCallId)) {
 			this.#markTerminalYieldToolCall(event.toolCallId);
 			this.agent.abort(TERMINAL_TOOL_RESULT_ABORT_REASON);
 		}
@@ -4113,7 +3799,7 @@ export class AgentSession {
 					continuationScheduled: compactionResult.continuationScheduled,
 					automaticContinuationBlocked: compactionResult.automaticContinuationBlocked === true,
 				});
-				this.#resolveRetry();
+				this.#retry.resolve();
 				return;
 			}
 		}
@@ -4122,11 +3808,11 @@ export class AgentSession {
 			route("unexpected-stop-handled");
 			return;
 		}
-		if (await this.#recoverFailedTurn(msg)) return;
+		if (await this.#retry.recoverFailedTurn(msg)) return;
 		// Classifier refusals are persisted-skipped above; also prune the trailing stub from active
 		// context so the next turn's prompt does not replay it. Fall through to the standard error
 		// tail so `session_stop` hooks (block, continue, telemetry) still fire.
-		if (this.#isClassifierRefusal(msg)) {
+		if (isClassifierRefusal(msg)) {
 			this.#removeAssistantMessageFromActiveContext(msg);
 		} else {
 			// No retry, fallback, or compaction continuation fired: this errored
@@ -4136,7 +3822,7 @@ export class AgentSession {
 			// Idempotent and a no-op for non-empty turns.
 			await this.#persistTerminalEmptyErrorTurn(msg);
 		}
-		this.#resolveRetry();
+		this.#retry.resolve();
 
 		if (!compactionResult) {
 			route("bottom-checkCompaction");
@@ -4144,49 +3830,6 @@ export class AgentSession {
 		}
 		if (await this.#continueAtSettle(msg, settleState, compactionResult)) return;
 		await this.#emitSessionStopEvent(settledMessages, msg);
-	}
-
-	/**
-	 * Retry, fall back, or settle a failed or aborted turn. True when the turn is handled and the
-	 * stop-time passes must not run.
-	 */
-	async #recoverFailedTurn(msg: AssistantMessage): Promise<boolean> {
-		if (
-			this.#isRetryableReasonlessAbort(msg) &&
-			(await this.#handleRetryableError(msg, { allowModelFallback: false }))
-		) {
-			return true;
-		}
-		// A deliberate abort should settle the current turn, not trigger queued continuations.
-		if (msg.stopReason === "aborted") {
-			this.#resolveRetry();
-			this.#resetSessionStopContinuationState();
-			return true;
-		}
-		// Fireworks Fast variants degrade to their base model on a failed turn — including hard
-		// router errors the generic retry classifier rejects — so this runs before the standard
-		// retryability check.
-		if (
-			this.#isFireworksFastFallbackEligible(msg) &&
-			(await this.#handleRetryableError(msg, { fireworksFastFallback: true }))
-		) {
-			return true;
-		}
-		if (this.#isRetryableError(msg)) {
-			if (await this.#handleRetryableError(msg)) return true;
-		} else if (
-			// A non-retryable hard error on a model covered by a configured fallback chain: retrying
-			// the SAME model is pointless, but a DIFFERENT model is a fresh chance. #handleRetryableError
-			// bails out (no backoff-retry of the failing model) when no switch happens.
-			this.#isHardErrorFallbackEligible(msg) &&
-			(await this.#handleRetryableError(msg, { hardErrorFallback: true }))
-		) {
-			return true;
-		}
-		// Retry was refused because the batch cannot be resent, not because the failure was final.
-		// The turn now in context IS sendable, so continue it rather than leaving the session parked
-		// mid-batch.
-		return this.#continueAfterUnreplayableBatch(msg);
 	}
 
 	/**
@@ -4232,84 +3875,24 @@ export class AgentSession {
 		return mayContinueAtSettle("code-review", settleState) && this.#enforceCodeReviewBeforeFinalize();
 	}
 
-	/**
-	 * Create the retry gate promise if one does not already exist.
-	 *
-	 * The gate is what `isRetrying` reports, so it is also what decides whether
-	 * escape cancels the wait instead of the turn. Every recovery that makes the
-	 * session sit and wait before re-requesting must hold it, not just the retry
-	 * ladder, and only one of them may own the resolver: a second promise would
-	 * orphan the first and hang the `prompt()` awaiting it.
-	 */
-	#ensureRetryPromise(): void {
-		if (this.#retryPromise) return;
-		const { promise, resolve } = Promise.withResolvers<void>();
-		this.#retryPromise = promise;
-		this.#retryResolve = resolve;
-	}
-
-	/** Resolve the pending retry promise */
-	#resolveRetry(): void {
-		if (this.#retryResolve) {
-			this.#retryResolve();
-			this.#retryResolve = undefined;
-			this.#retryPromise = undefined;
-		}
-	}
-
-	/**
-	 * Close an unreplayable-batch continuation's announced wait when the prompt
-	 * settles without a turn ever landing.
-	 *
-	 * The wait is announced with `auto_retry_start`, and every consumer of that
-	 * event stays open until an end arrives: the countdown, `progress.retryState`
-	 * on a parent HUD, the turn's retry trace, hooks, extensions, collab and the
-	 * SDK. A landed turn closes it at the arm in the assistant-message handler.
-	 * An EMPTY turn does not, and must not: an empty completion is not evidence
-	 * the transport recovered, so the allowance stays spent and the empty-stop
-	 * ladder gets its own chance to produce a real turn that closes the wait.
-	 * What is left is the prompt that ACCEPTS an empty completion as terminal
-	 * (`acceptTerminalEmptyStop`, which the autolearn nudge sets): the turn
-	 * settles there with no further request, so without this the countdown ran on
-	 * a session that was already idle, with nothing left to cancel it.
-	 */
-	async #endAnnouncedContinuationWait(finalError: string): Promise<void> {
-		const attempt = this.#unreplayableBatchContinues;
-		if (attempt === 0) return;
-		this.#unreplayableBatchContinues = 0;
-		await this.#emitSessionEvent({
-			type: "auto_retry_end",
-			success: false,
-			attempt,
-			mode: "continue",
-			finalError,
-		});
-		this.#resolveRetry();
-	}
-
-	#skipAgentContinue(reason: AgentContinueSkipReason, options: ScheduledAgentContinueOptions | undefined): void {
-		logger.debug("agent.continue skipped after scheduling", { reason });
-		options?.onSkip?.(reason);
-	}
-
 	#scheduleAgentContinue(options?: ScheduledAgentContinueOptions): void {
 		this.#postPrompt.schedule(
 			async signal => {
 				// Defense in depth: do not start a fresh streaming turn while any
 				// context maintenance or explicit handoff is already active.
 				if (signal.aborted || this.#isDisposed || this.isCompacting || this.isGeneratingHandoff) {
-					this.#skipAgentContinue("session-unavailable", options);
+					skipAgentContinue("session-unavailable", options);
 					return;
 				}
 				if (options?.shouldContinue && !options.shouldContinue()) {
-					this.#skipAgentContinue("should-continue-false", options);
+					skipAgentContinue("should-continue-false", options);
 					return;
 				}
 				this.#beginInFlight();
 				try {
-					await this.#maybeRestoreRetryFallbackPrimary();
+					await this.#retry.maybeRestoreFallbackPrimary();
 					if (signal.aborted || this.#isDisposed) {
-						this.#skipAgentContinue("post-restore-unavailable", options);
+						skipAgentContinue("post-restore-unavailable", options);
 						return;
 					}
 					await this.agent.continue();
@@ -4326,7 +3909,7 @@ export class AgentSession {
 			{
 				delayMs: options?.delayMs,
 				generation: options?.generation,
-				onSkip: reason => this.#skipAgentContinue(reason, options),
+				onSkip: reason => skipAgentContinue(reason, options),
 			},
 		);
 	}
@@ -4381,8 +3964,9 @@ export class AgentSession {
 			// its promise must resolve on the abort, not block on a queued
 			// steer/follow-up that the post-abort drain starts as a fresh turn.
 			if (generation !== undefined && this.#promptGeneration !== generation) return;
-			if (this.#retryPromise) {
-				await this.#retryPromise;
+			const retryGate = this.#retry.gate;
+			if (retryGate) {
+				await retryGate;
 				continue;
 			}
 			const ttsrResume = this.#ttsr.resumePromise;
@@ -4408,7 +3992,7 @@ export class AgentSession {
 
 	#afterToolCall(ctx: AfterToolCallContext): AfterToolCallResult | undefined {
 		if (
-			this.#isTerminalYieldToolResult({
+			isTerminalYieldToolResult({
 				toolName: ctx.toolCall.name,
 				isError: ctx.isError,
 				result: ctx.result,
@@ -4631,22 +4215,6 @@ export class AgentSession {
 		);
 	}
 
-	#sessionStopContinuationContext(result: SessionStopEventResult | undefined): string | undefined {
-		if (!result) return undefined;
-		const additionalContext =
-			typeof result.additionalContext === "string" && result.additionalContext.length > 0
-				? result.additionalContext
-				: undefined;
-		const reason = typeof result.reason === "string" && result.reason.length > 0 ? result.reason : undefined;
-		if (result.continue === true) {
-			return additionalContext ?? reason;
-		}
-		if (result.decision === "block") {
-			return reason ?? additionalContext;
-		}
-		return undefined;
-	}
-
 	async #emitAgentEndNotification(messages: AgentMessage[]): Promise<void> {
 		await this.#extensionRunner?.emit({ type: "agent_end", messages });
 	}
@@ -4673,7 +4241,7 @@ export class AgentSession {
 			this.#resetSessionStopContinuationState();
 			return;
 		}
-		const additionalContext = this.#sessionStopContinuationContext(result);
+		const additionalContext = sessionStopContinuationContext(result);
 		if (!additionalContext) {
 			this.#resetSessionStopContinuationState();
 			return;
@@ -4883,7 +4451,7 @@ export class AgentSession {
 		// A spawned agent may not mutate process-global cwd/capability state, but its
 		// session-owned settings, secrets, tools, prompt, and advisors still move.
 		if (!this.#isSpawned) await this.#rescopeProcessToCwd(normalizedCwd);
-		await this.#refreshSecrets({ refreshPrompt: false });
+		await this.#secrets.refresh({ refreshPrompt: false });
 		await this.refreshSshTool({ activateIfAvailable: true });
 		await this.refreshBaseSystemPrompt("cwd-change");
 		this.#lastRescopedCwd = normalizedCwd;
@@ -5312,6 +4880,18 @@ export class AgentSession {
 		const postPromptDrain = this.#cancelPostPromptTasks();
 		this.agent.abort();
 		await postPromptDrain;
+		// The aborted loop is still unwinding: a tool that ignores its signal keeps it
+		// running, and the teardown below releases the kernels, tabs and transcript it
+		// may still be using. Wait for it, bounded so such a tool cannot hang shutdown.
+		const loopSettleMs = options.agentLoopSettleTimeoutMs ?? DISPOSE_AGENT_LOOP_SETTLE_MS;
+		try {
+			await withTimeout(this.agent.waitForIdle(), loopSettleMs, "Agent loop did not settle after abort");
+		} catch (error) {
+			logger.warn("Disposing while the aborted agent loop is still running", {
+				timeoutMs: loopSettleMs,
+				error: errorMessage(error),
+			});
+		}
 		// Cancel jobs this agent registered so a spawned agent's teardown doesn't
 		// leak its background bash/task work into the parent's manager. Only
 		// the session that owns the manager goes on to dispose it (which itself
@@ -5359,7 +4939,6 @@ export class AgentSession {
 				});
 			}
 		}
-		await shutdownTinyTitleClient();
 		this.#releasePowerAssertion();
 		// Clean up an empty session created by this session's /move so it doesn't accumulate.
 		await cleanupEmptyMoveSession(this.sessionManager, this.#movedFromEmptySessionFile);
@@ -5377,28 +4956,28 @@ export class AgentSession {
 			// it so the final advisor turn is flushed before the process may exit.
 			await this.#advisorRoster.whenRecordersClosed();
 			this.#closeAllProviderSessions("dispose");
-			// Disconnect the MCP manager this session OWNS so its stdio servers are
-			// not orphaned at exit. Best-effort: a failure here must never throw out
-			// of dispose. Only owning (top-level) sessions provide this callback;
-			// spawned agents reuse a parent's manager and must not tear it down. Idempotent
-			// with the deferred-discovery disconnect in `createAgentSession`.
+			// Release this session's hold on the MCP manager. The last top-level holder
+			// disconnects it, so its stdio servers are not orphaned at exit and a
+			// conversation that outlives this one keeps them. Best-effort: a failure
+			// here must never throw out of dispose. Spawned agents reuse a parent's
+			// manager without a hold and omit this callback.
 			//
-			// BOUNDED: an owned manager may hold an HTTP/SSE server whose session-
+			// BOUNDED: the manager may hold an HTTP/SSE server whose session-
 			// termination DELETE blocks up to the MCP request timeout (30s default,
 			// unbounded when VEYYON_MCP_TIMEOUT_MS=0), so awaiting `disconnectAll()`
 			// unbounded would stall /exit and print-mode shutdown on a broken remote
 			// endpoint. Race it against a short deadline — stdio close (the subprocess
 			// reap this targets) completes well within the bound; a slow transport
 			// close is left to finish detached. Mirrors the bounded async-job teardown.
-			if (this.#disconnectOwnedMcpManager) {
+			if (this.#releaseMcpManager) {
 				try {
 					await withTimeout(
-						this.#disconnectOwnedMcpManager(),
+						this.#releaseMcpManager(),
 						3_000,
-						"Timed out disconnecting owned MCP manager during dispose",
+						"Timed out releasing the MCP manager during dispose",
 					);
 				} catch (error) {
-					logger.warn("Failed to disconnect owned MCP manager during dispose", { error: errorMessage(error) });
+					logger.warn("Failed to release the MCP manager during dispose", { error: errorMessage(error) });
 				}
 			}
 			// Flush the retain queue BEFORE clearing the session's pointer so
@@ -5411,11 +4990,6 @@ export class AgentSession {
 			hindsightState?.dispose();
 			const mnemopiState = setMnemopiSessionState(this, undefined);
 			await mnemopiState?.dispose({ timeoutMs: options.mnemopiConsolidateTimeoutMs });
-			// Tear down the embeddings subprocess AFTER mnemopi state.dispose:
-			// consolidate-on-dispose may still call `embed()` to store the final
-			// memories, and that round-trips through the worker we are about to
-			// hard-kill (issue #3031).
-			await shutdownMnemopiEmbedClient();
 			this.#disconnectFromAgent();
 			if (this.#unsubscribeAppendOnly) {
 				this.#unsubscribeAppendOnly();
@@ -5592,6 +5166,44 @@ export class AgentSession {
 		await this.#waitForPostPromptRecovery();
 	}
 
+	/**
+	 * Wait until this conversation has nothing left to run: the loop and its post-prompt recovery
+	 * are idle, and no background job this agent owns will wake the loop again. A job completion
+	 * that starts another turn is waited out in turn. Returns once `signal` aborts.
+	 */
+	async waitForQuiescence(signal?: AbortSignal): Promise<void> {
+		while (!signal?.aborted) {
+			await this.waitForIdle();
+			if (signal?.aborted || !this.#hasPendingAsyncWake()) return;
+			await this.#nextAsyncWakeChange(signal);
+		}
+	}
+
+	/**
+	 * Resolve on the first event that can change {@link #hasPendingAsyncWake}: an owned job
+	 * settling, a turn starting, `signal` aborting, or {@link QUIESCENCE_RECHECK_MS} passing.
+	 */
+	async #nextAsyncWakeChange(signal: AbortSignal | undefined): Promise<void> {
+		const { promise, resolve } = Promise.withResolvers<void>();
+		const wake = (): void => resolve();
+		const timer = setTimeout(wake, QUIESCENCE_RECHECK_MS);
+		const unsubscribe = this.subscribe(event => {
+			if (event.type === "agent_start") wake();
+		});
+		signal?.addEventListener("abort", wake, { once: true });
+		const ownerFilter = this.#agentId ? { ownerId: this.#agentId } : undefined;
+		for (const job of this.#asyncJobManager?.getRunningJobs(ownerFilter) ?? []) {
+			job.promise.then(wake, wake);
+		}
+		try {
+			await promise;
+		} finally {
+			clearTimeout(timer);
+			unsubscribe();
+			signal?.removeEventListener("abort", wake);
+		}
+	}
+
 	async drainAsyncJobDeliveriesForAcp(options?: { timeoutMs?: number }): Promise<boolean> {
 		const manager = this.#asyncJobManager;
 		if (!manager) return false;
@@ -5620,7 +5232,7 @@ export class AgentSession {
 
 	/** Current retry attempt (0 if not retrying) */
 	get retryAttempt(): number {
-		return this.#retryAttempt;
+		return this.#retry.attempt;
 	}
 
 	/**
@@ -6000,9 +5612,9 @@ export class AgentSession {
 	 */
 	sessionToolApprovals(): SessionToolApprovals {
 		return {
-			get: toolName => this.#sessionToolApprovals.get(toolName),
-			set: (toolName, decision) => {
-				this.#sessionToolApprovals.set(toolName, decision);
+			get: key => this.#sessionToolApprovals.get(key),
+			set: (key, decision) => {
+				this.#sessionToolApprovals.set(key, decision);
 			},
 		};
 	}
@@ -6611,7 +6223,9 @@ export class AgentSession {
 		// RENDER PATH, and also the agent-state rebuild after a compaction, a
 		// history rewrite or a session switch, so a throw here does not fail one
 		// render, it fails the session. Degrades per string; never throws.
-		return this.#expandArgot(this.#deobfuscateSessionContextForDisplay(this.sessionManager.buildSessionContext()));
+		return this.#expandArgot(
+			this.#secrets.deobfuscateSessionContextForDisplay(this.sessionManager.buildSessionContext()),
+		);
 	}
 
 	/**
@@ -6646,7 +6260,7 @@ export class AgentSession {
 		// RENDER PATH: every TUI repaint runs this, so a throw would unwind the
 		// render loop. Degrades per string; never throws.
 		return this.#expandArgot(
-			this.#deobfuscateSessionContextForDisplay(
+			this.#secrets.deobfuscateSessionContextForDisplay(
 				this.sessionManager.buildSessionContext({
 					transcript: true,
 					collapseCompactedHistory: options?.collapseCompactedHistory,
@@ -6656,61 +6270,8 @@ export class AgentSession {
 		);
 	}
 
-	#obfuscateTextForProvider(text: string | undefined): string | undefined {
-		if (!text || !this.#hasProviderRedactions) return text;
-		return this.obfuscateProviderText(text);
-	}
-
-	#obfuscatePreparationForProvider(preparation: CompactionPreparation): CompactionPreparation {
-		if (!this.#hasProviderRedactions) return preparation;
-		const previousSummary = this.#obfuscateTextForProvider(preparation.previousSummary);
-		// `compact()` folds a prior legacy image-archive's plaintext into the
-		// summarization prompt on the legacy-archive→summary migration, so the
-		// archive's text regions must be redacted alongside the summary. Only the
-		// legacy archive slot's text is rewritten; every other preserveData key —
-		// notably the OpenAI remote-compaction `encrypted_content` replay state — is
-		// opaque provider-replay data and stays byte-identical.
-		const previousPreserveData = this.#obfuscatePreservedArchiveText(preparation.previousPreserveData);
-		if (
-			previousSummary === preparation.previousSummary &&
-			previousPreserveData === preparation.previousPreserveData
-		) {
-			return preparation;
-		}
-		return { ...preparation, previousSummary, previousPreserveData };
-	}
-
-	/** Redact secrets in a legacy persisted image-archive's plaintext regions
-	 *  (`text`/`textHead`/`textTail`) so the legacy-archive→summary migration in
-	 *  `compact()` cannot ship raw archived user/tool text to the provider. Every
-	 *  non-archive key passes through byte-identical; the same reference is
-	 *  returned when nothing changes. Only old sessions still carry such an archive. */
-	#obfuscatePreservedArchiveText(
-		preserveData: Record<string, unknown> | undefined,
-	): Record<string, unknown> | undefined {
-		if (!this.#hasProviderRedactions || !hasLegacyArchive(preserveData)) return preserveData;
-		return redactLegacyArchiveText(preserveData, value => this.obfuscateProviderText(value));
-	}
-
-	/**
-	 * DISPLAY PATH: provider text on its way to the operator, namely the streamed
-	 * side-channel delta and the ephemeral turn's reply. Degrades to the literal
-	 * placeholder; never throws.
-	 */
-	#deobfuscateFromProvider(text: string): string {
-		return this.#tryExpandSecretsForDisplay(text) ?? text;
-	}
-
-	#deobfuscatedProviderTextReadyForDelta(text: string): string {
-		const deobfuscated = this.#deobfuscateFromProvider(text);
-		if (!this.#obfuscator?.hasSecrets()) return deobfuscated;
-		const pendingPlaceholderStart = deobfuscated.match(PENDING_PLACEHOLDER_RE);
-		if (pendingPlaceholderStart?.index === undefined) return deobfuscated;
-		return deobfuscated.slice(0, pendingPlaceholderStart.index);
-	}
-
 	#convertToLlmForSideRequest(messages: AgentMessage[]): Message[] {
-		return this.#obfuscateMessagesForProvider(convertToLlm(messages));
+		return this.#secrets.obfuscateMessages(convertToLlm(messages));
 	}
 
 	/** Convert session messages using the same pre-LLM pipeline as the active session. */
@@ -7213,15 +6774,6 @@ export class AgentSession {
 		};
 	}
 
-	#sanitizeGoalTodoText(text: string): string {
-		return escapeXmlText(text)
-			.replace(/\r\n/g, "\\n")
-			.replace(/\r/g, "\\r")
-			.replace(/\n/g, "\\n")
-			.replace(/\t/g, "\\t")
-			.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u2028\u2029]/g, " ");
-	}
-
 	#buildGoalTodoContext(): string | undefined {
 		if (!this.settings.get("todo.enabled")) return undefined;
 		const activeToolNames = this.getActiveToolNames();
@@ -7246,14 +6798,14 @@ export class AgentSession {
 		}
 		const inProgressItems = preview.lines.map(line => ({
 			status: "in_progress" as const,
-			text: this.#sanitizeGoalTodoText(line.slice("- [in_progress] ".length)),
+			text: sanitizeGoalTodoText(line.slice("- [in_progress] ".length)),
 		}));
 		const hiddenActiveCount = inProgress.length - shown;
 		const next = openItems[0];
 		const nextItem = next
 			? {
 					status: next.status,
-					text: this.#sanitizeGoalTodoText(
+					text: sanitizeGoalTodoText(
 						boundedTodoPreviewText(`${next.content} (${next.phase})`, TODO_ITEM_PREVIEW_WIDTH),
 					),
 				}
@@ -7659,7 +7211,7 @@ export class AgentSession {
 			this.#resetPromptMaintenanceState();
 			this.#acceptTerminalEmptyStopForPrompt = options?.acceptTerminalEmptyStop === true;
 
-			await this.#maybeRestoreRetryFallbackPrimary();
+			await this.#retry.maybeRestoreFallbackPrimary();
 
 			// Validate model
 			if (!this.model) {
@@ -8328,7 +7880,7 @@ export class AgentSession {
 		}
 
 		const prependMessages = queuedMessages.slice(0, -1);
-		const textContent = this.#getCustomMessageTextContent(message);
+		const textContent = getCustomMessageTextContent(message);
 		try {
 			await this.#promptWithMessage(message, textContent, {
 				prependMessages,
@@ -8338,10 +7890,6 @@ export class AgentSession {
 			this.#pendingNextTurnMessages = [...queuedMessages, ...this.#pendingNextTurnMessages];
 			throw error;
 		}
-	}
-
-	#getCustomMessageTextContent(message: Pick<CustomMessage, "content">): string {
-		return contentText(message.content, { separator: "" });
 	}
 
 	/**
@@ -9060,7 +8608,7 @@ export class AgentSession {
 		const targetModel = await this.#modelRegistry.refreshSelectedModelMetadata(model);
 
 		this.#modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
-		this.#clearActiveRetryFallback();
+		this.#retry.clearActiveFallback();
 		this.#setModelWithProviderSessionReset(targetModel);
 		// One name for the slot, resolved once: the log and the store used to disagree
 		// on the same write (stored `default`, logged `interactive`), so a reader of
@@ -9104,7 +8652,7 @@ export class AgentSession {
 		const targetModel = await this.#modelRegistry.refreshSelectedModelMetadata(model);
 
 		this.#modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
-		this.#clearActiveRetryFallback();
+		this.#retry.clearActiveFallback();
 		this.#setModelWithProviderSessionReset(targetModel);
 		this.sessionManager.appendModelChange(
 			`${targetModel.provider}/${targetModel.id}`,
@@ -9269,7 +8817,7 @@ export class AgentSession {
 
 		// Apply model
 		this.#modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(next.model));
-		this.#clearActiveRetryFallback();
+		this.#retry.clearActiveFallback();
 		this.#setModelWithProviderSessionReset(next.model);
 		this.sessionManager.appendModelChange(`${next.model.provider}/${next.model.id}`);
 		AgentStorage.forAgentDir(this.settings.getAgentDir())?.recordModelUsage(
@@ -9303,7 +8851,7 @@ export class AgentSession {
 		}
 
 		this.#modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(nextModel));
-		this.#clearActiveRetryFallback();
+		this.#retry.clearActiveFallback();
 		this.#setModelWithProviderSessionReset(nextModel);
 		this.sessionManager.appendModelChange(`${nextModel.provider}/${nextModel.id}`);
 		AgentStorage.forAgentDir(this.settings.getAgentDir())?.recordModelUsage(`${nextModel.provider}/${nextModel.id}`);
@@ -9720,7 +9268,7 @@ export class AgentSession {
 		artifactId: string | undefined;
 	}> {
 		const artifactId = await this.#saveShakeArtifact(regions);
-		const replacements = regions.map((region, index) => this.#shakeElidePlaceholder(region, index, artifactId));
+		const replacements = regions.map((region, index) => shakeElidePlaceholder(region, index, artifactId));
 
 		let toolResultsDropped = 0;
 		let blocksDropped = 0;
@@ -9774,20 +9322,6 @@ export class AgentSession {
 			tokensFreed: applied.tokensFreed,
 			artifactId: applied.artifactId,
 		};
-	}
-
-	/**
-	 * The marker that replaces one region's content. A truncation region is the
-	 * middle of a text whose head and tail survive, so its marker says the text
-	 * continues; every other region replaced its content entirely.
-	 */
-	#shakeElidePlaceholder(region: ShakeRegion, index: number, artifactId: string | undefined): string {
-		const truncated = region.kind === "block" && region.truncation === true;
-		const verb = truncated ? "truncated" : "shaken";
-		const marker = artifactId
-			? `[${verb} ~${region.tokens} tokens; recover: artifact://${artifactId} (region ${index + 1})]`
-			: `[${verb} ~${region.tokens} tokens]`;
-		return truncated ? `\n${marker}\n` : marker;
 	}
 
 	/**
@@ -9907,7 +9441,7 @@ export class AgentSession {
 						options?.internalGuidance ?? customInstructions,
 						compactionAbortController.signal,
 						{
-							promptOverride: this.#obfuscateTextForProvider(compactionPrep.hookPrompt),
+							promptOverride: this.#secrets.obfuscateTextForProvider(compactionPrep.hookPrompt),
 							extraContext: compactionPrep.hookContext,
 							remoteInstructions: this.#baseSystemPrompt.join("\n\n"),
 							codexCompaction,
@@ -9920,7 +9454,7 @@ export class AgentSession {
 							options?.internalGuidance ?? customInstructions,
 							compactionAbortController.signal,
 							{
-								promptOverride: this.#obfuscateTextForProvider(compactionPrep.hookPrompt),
+								promptOverride: this.#secrets.obfuscateTextForProvider(compactionPrep.hookPrompt),
 								extraContext: compactionPrep.hookContext,
 								remoteInstructions: this.#baseSystemPrompt.join("\n\n"),
 								convertToLlm: messages => this.#convertToLlmForSideRequest(messages),
@@ -10093,7 +9627,7 @@ export class AgentSession {
 			// Both can diverge from this.sessionId (tan/agent/shared sessions), so
 			// mirror exactly what the live turn populated the cache under.
 			const handoffPromptCacheKey = this.agent.promptCacheKey ?? this.agent.sessionId;
-			const handoffPromptText = renderHandoffPrompt(this.#obfuscateTextForProvider(customInstructions));
+			const handoffPromptText = renderHandoffPrompt(this.#secrets.obfuscateTextForProvider(customInstructions));
 			const handoffSnapshot: AgentMessage[] = [
 				...this.agent.state.messages,
 				{
@@ -10122,7 +9656,7 @@ export class AgentSession {
 				model.provider,
 			);
 			const rawHandoffText = await generateHandoffFromContext(
-				this.#obfuscateContextForProvider(handoffContext),
+				this.#secrets.obfuscateContext(handoffContext),
 				model,
 				{
 					streamOptions: handoffStreamOptions,
@@ -10143,7 +9677,7 @@ export class AgentSession {
 			extractFileOpsFromMessages(this.agent.state.messages, handoffFileOps);
 			const handoffFileLists = computeFileLists(handoffFileOps);
 			const handoffText = upsertFileOperations(
-				this.#deobfuscateFromProvider(rawHandoffText),
+				this.#secrets.expandForDisplay(rawHandoffText),
 				handoffFileLists.readFiles,
 				handoffFileLists.modifiedFiles,
 				handoffFileOps.read,
@@ -10348,6 +9882,7 @@ export class AgentSession {
 				false,
 				preserveData,
 			);
+			this.sessionManager.coolCompactedHistory();
 			this.agent.replaceMessages(this.buildDisplaySessionContext().messages);
 			this.#resetAllAdvisorRuntimes();
 			this.#rebasePendingContextSnapshotAfterHistoryRewrite();
@@ -10452,11 +9987,7 @@ export class AgentSession {
 		if (contextWindow <= 0) return;
 
 		const compactionSettings = this.settings.getGroup("compaction");
-		if (
-			!compactionSettings.enabled ||
-			isCompactionStrategyOff(compactionSettings.strategy as string) ||
-			compactionSettings.midTurnEnabled === false
-		) {
+		if (!compactionSettings.enabled || compactionSettings.midTurnEnabled === false) {
 			return;
 		}
 
@@ -10579,7 +10110,7 @@ export class AgentSession {
 
 			// No promotion target available fall through to compaction
 			const compactionSettings = this.settings.getGroup("compaction");
-			if (!isThresholdCompactionDisabled(compactionSettings.enabled, compactionSettings.strategy as string)) {
+			if (compactionSettings.enabled) {
 				return await this.#runRecoveryCompactionWithRollback("overflow", assistantMessage, {
 					autoContinue,
 				});
@@ -10659,10 +10190,7 @@ export class AgentSession {
 			}
 
 			const incompleteCompactionSettings = this.settings.getGroup("compaction");
-			if (
-				incompleteCompactionSettings.enabled &&
-				!isCompactionStrategyOff(incompleteCompactionSettings.strategy as string)
-			) {
+			if (incompleteCompactionSettings.enabled) {
 				logger.debug("Compaction triggered by response.incomplete (length stop, no promotion target)", {
 					model: `${assistantMessage.provider}/${assistantMessage.model}`,
 					strategy: incompleteCompactionSettings.strategy,
@@ -10688,8 +10216,7 @@ export class AgentSession {
 		const supersedeResult = await this.#pruneStaleToolResults();
 
 		const compactionSettings = this.settings.getGroup("compaction");
-		if (isThresholdCompactionDisabled(compactionSettings.enabled, compactionSettings.strategy as string))
-			return COMPACTION_CHECK_NONE;
+		if (!compactionSettings.enabled) return COMPACTION_CHECK_NONE;
 
 		// Case 4: Threshold - turn succeeded but context is getting large
 		// Skip if this was an error (non-overflow errors don't have usage data)
@@ -10765,19 +10292,6 @@ export class AgentSession {
 		}
 		return COMPACTION_CHECK_NONE;
 	}
-	#isTerminalYieldToolResult(event: { toolName: string; isError?: boolean; result?: { details?: unknown } }): boolean {
-		if (event.toolName !== TOOL.yield || event.isError) return false;
-		const details = event.result?.details;
-		if (!details || typeof details !== "object") return true;
-		const record = details as Record<string, unknown>;
-		return !(
-			record.status === "success" &&
-			Array.isArray(record.type) &&
-			record.type.length > 0 &&
-			record.type.every(item => typeof item === "string")
-		);
-	}
-
 	/**
 	 * Report anything surprising about the resolved compaction threshold, once per
 	 * distinct context window (so a switch to a smaller-window model re-warns).
@@ -10830,16 +10344,9 @@ export class AgentSession {
 		this.#yieldTerminationPending = true;
 	}
 
-	#assistantMessageHasSuccessfulYieldToolCall(assistantMessage: AssistantMessage, toolCallId: string): boolean {
-		const lastToolCall = assistantMessage.content.findLast(
-			(content): content is ToolCall => content.type === "toolCall",
-		);
-		return lastToolCall?.name === TOOL.yield && lastToolCall.id === toolCallId;
-	}
-
 	#assistantEndedWithSuccessfulYield(assistantMessage: AssistantMessage): boolean {
 		const toolCallId = this.#lastSuccessfulYieldToolCallId;
-		return toolCallId ? this.#assistantMessageHasSuccessfulYieldToolCall(assistantMessage, toolCallId) : false;
+		return toolCallId ? assistantMessageHasSuccessfulYieldToolCall(assistantMessage, toolCallId) : false;
 	}
 
 	#findSuccessfulYieldAssistantMessage(messages: readonly AgentMessage[]): AssistantMessage | undefined {
@@ -10848,153 +10355,13 @@ export class AgentSession {
 		for (let i = messages.length - 1; i >= 0; i--) {
 			const message = messages[i];
 			if (message.role !== "assistant") continue;
-			if (this.#assistantMessageHasSuccessfulYieldToolCall(message, toolCallId)) return message;
+			if (assistantMessageHasSuccessfulYieldToolCall(message, toolCallId)) return message;
 		}
 		return undefined;
 	}
 
-	#clearPendingRecoveredRetryErrors(): void {
-		this.#pendingRecoveredRetryErrors = [];
-	}
-
-	/**
-	 * Durably record a terminal empty error turn (`stopReason: "error"` with no
-	 * substantive content) that `#persistSessionMessageIfMissing` skipped, so the
-	 * session JSONL keeps a record of why the run stopped instead of ending at the
-	 * last tool result. A no-op for non-empty/non-error turns and idempotent via
-	 * the already-persisted guard; the turn is dropped from active context by the
-	 * caller (or `isProviderRefusalMessage`/`isEmptyErrorTurn` filters) so it is
-	 * never replayed on the wire. Used by the retry-lifecycle dead-ends and the
-	 * non-retry terminal error tail.
-	 */
-	async #persistTerminalEmptyErrorTurn(message: AssistantMessage): Promise<void> {
-		await this.#waitForSessionMessagePersistence(message);
-		if (!isEmptyErrorTurn(message)) return;
-		if (this.#sessionMessageAlreadyPersisted(message)) return;
-		if (AIError.isContextOverflow(message, this.model?.contextWindow ?? undefined)) return;
-		this.#appendSessionMessage(message);
-	}
-
-	#retryRecoveryKind(
-		id: number,
-		switchedCredential: boolean,
-		switchedModel: boolean,
-		delayMs: number,
-	): AssistantRetryRecoveryKind {
-		if (switchedCredential) return "credential";
-		if (switchedModel) return "model";
-		if (AIError.is(id, AIError.Flag.UsageLimit) && delayMs > 0) return "wait";
-		return "plain";
-	}
-
-	#retryRecoveryNote(recovery: AssistantRetryRecoveryKind, rateLimited: boolean): string {
-		const parts: string[] = [];
-		if (rateLimited) {
-			parts.push("rate-limited");
-		} else if (recovery === "plain") {
-			parts.push("error");
-		}
-		if (recovery === "credential") {
-			parts.push("switched account");
-		} else if (recovery === "model") {
-			parts.push("switched model");
-		} else if (recovery === "wait") {
-			parts.push("waited");
-		}
-		parts.push("retried");
-		return parts.join("; ");
-	}
-
-	async #recordPendingRecoveredRetryError(
-		message: AssistantMessage,
-		id: number,
-		options: { switchedCredential: boolean; switchedModel: boolean; delayMs: number },
-	): Promise<void> {
-		await this.#persistTerminalEmptyErrorTurn(message);
-		const persistenceKey = sessionMessagePersistenceKey(message);
-		if (!persistenceKey) return;
-		let branchEntry: SessionEntry | undefined;
-		for (const entry of this.sessionManager.getBranch().slice().reverse()) {
-			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-			if (sessionMessagePersistenceKey(entry.message) !== persistenceKey) continue;
-			if (!sameMessageContent(entry.message, message) && !this.#isSameAssistantMessage(entry.message, message)) {
-				continue;
-			}
-			branchEntry = entry;
-			break;
-		}
-		if (!branchEntry) return;
-		if (this.#pendingRecoveredRetryErrors.some(error => error.entryId === branchEntry.id)) return;
-		const rateLimited = AIError.is(id, AIError.Flag.UsageLimit);
-		const recovery = this.#retryRecoveryKind(id, options.switchedCredential, options.switchedModel, options.delayMs);
-		const note = this.#retryRecoveryNote(recovery, rateLimited);
-		this.#pendingRecoveredRetryErrors.push({
-			entryId: branchEntry.id,
-			persistenceKey,
-			recovery,
-			attempt: this.#retryAttempt,
-			note,
-		});
-	}
-
-	async #markPendingRecoveredRetryErrors(supersedingMessage: AssistantMessage): Promise<RecoveredRetryError[]> {
-		if (this.#pendingRecoveredRetryErrors.length === 0) return [];
-		const branch = this.sessionManager.getBranch();
-		const branchById = new Map<string, SessionEntry>();
-		for (const entry of branch) {
-			branchById.set(entry.id, entry);
-		}
-		const recoveredAt = new Date().toISOString();
-		const supersededBy: AssistantRetryRecovery["supersededBy"] = {
-			timestamp: supersedingMessage.timestamp,
-			provider: supersedingMessage.provider,
-			model: supersedingMessage.model,
-		};
-		if (supersedingMessage.responseId) {
-			supersededBy.responseId = supersedingMessage.responseId;
-		}
-		const recoveredErrors: RecoveredRetryError[] = [];
-		const updated: SessionEntry[] = [];
-		for (const pending of this.#pendingRecoveredRetryErrors) {
-			let entry = branchById.get(pending.entryId);
-			if (entry?.type !== "message" || entry.message.role !== "assistant") {
-				entry = branch
-					.slice()
-					.reverse()
-					.find(
-						candidate =>
-							candidate.type === "message" &&
-							candidate.message.role === "assistant" &&
-							sessionMessagePersistenceKey(candidate.message) === pending.persistenceKey,
-					);
-			}
-			if (entry?.type !== "message" || entry.message.role !== "assistant") continue;
-			const retryRecovery: AssistantRetryRecovery = {
-				kind: "auto-retry",
-				status: "recovered",
-				attempt: pending.attempt,
-				recoveredAt,
-				recovery: pending.recovery,
-				note: pending.note,
-				supersededBy,
-			};
-			entry.message.retryRecovery = retryRecovery;
-			updated.push(entry);
-			recoveredErrors.push({
-				entryId: entry.id,
-				persistenceKey: pending.persistenceKey,
-				note: retryRecovery.note,
-				retryRecovery,
-			});
-		}
-		if (updated.length > 0) {
-			await this.sessionManager.rewriteEntries(updated);
-		}
-		return recoveredErrors;
-	}
-
 	async #handleEmptyAssistantStop(assistantMessage: AssistantMessage): Promise<boolean> {
-		if (!this.#isEmptyAssistantStop(assistantMessage)) {
+		if (!isEmptyAssistantStop(assistantMessage)) {
 			this.#emptyStopRetryCount = 0;
 			return false;
 		}
@@ -11005,7 +10372,7 @@ export class AgentSession {
 			this.#emptyStopRetryCount = 0;
 			// This prompt is over, so a continuation's announced wait has no later
 			// turn to close it. Nothing recovered, which is what the end says.
-			await this.#endAnnouncedContinuationWait("Continued turn returned an empty completion");
+			await this.#retry.endAnnouncedContinuationWait("Continued turn returned an empty completion");
 			return false;
 		}
 
@@ -11018,22 +10385,13 @@ export class AgentSession {
 				model: assistantMessage.model,
 				provider: assistantMessage.provider,
 			});
-			await this.#emitSessionEvent({
-				type: "auto_retry_end",
-				success: false,
-				attempt: this.#retryAttempt > 0 ? this.#retryAttempt : attempts,
-				// Name the model in the operator-facing line: an empty completion is
-				// a property of the model behind the turn, and switching models is
-				// the recovery the user has to reach for.
-				finalError: `${failure} (${assistantMessage.provider}/${assistantMessage.model})`,
-			});
-			this.#clearPendingRecoveredRetryErrors();
-			this.#retryAttempt = 0;
-			// The cap ends the cycle for a continuation's announced wait too: the end
-			// above closed it, and leaving the counter set would let the next landed
-			// turn emit a second end reporting a recovery that never happened.
-			this.#unreplayableBatchContinues = 0;
-			this.#resolveRetry();
+			// Name the model in the operator-facing line: an empty completion is
+			// a property of the model behind the turn, and switching models is
+			// the recovery the user has to reach for.
+			await this.#retry.failAtEmptyStopCap(
+				attempts,
+				`${failure} (${assistantMessage.provider}/${assistantMessage.model})`,
+			);
 			// The cycle is over, so the budget belongs to the next turn. Leaving the
 			// count above the cap made the next turn that does NOT run the
 			// per-prompt reset — an agent-initiated maintenance nudge, an IRC wake,
@@ -11061,19 +10419,6 @@ export class AgentSession {
 		this.#turnRetryReminders.push(reminder);
 		this.agent.appendMessage(reminder);
 		this.#scheduleAgentContinue({ generation: this.#promptGeneration });
-		return true;
-	}
-
-	#isEmptyAssistantStop(assistantMessage: AssistantMessage): boolean {
-		const { stopReason } = assistantMessage;
-		if (stopReason !== "stop" && stopReason !== "toolUse") return false;
-		// A "stop" that only reasons does not answer the user and gives the agent loop no tool call
-		// to run. An orphaned toolUse stop (no tool_use block) corrupts Anthropic history: a later
-		// tool_result has nothing to anchor to, and thinking alone cannot anchor one.
-		for (const content of assistantMessage.content) {
-			if (content.type === "toolCall") return false;
-			if (content.type === "text" && hasNonWhitespace(content.text)) return false;
-		}
 		return true;
 	}
 
@@ -11211,7 +10556,7 @@ export class AgentSession {
 		}
 		const lastMessage = messages[end - 1];
 		const lastAssistant: AssistantMessage | undefined = lastMessage?.role === "assistant" ? lastMessage : undefined;
-		if (lastAssistant !== undefined && this.#isSameAssistantMessage(lastAssistant, assistantMessage)) {
+		if (lastAssistant !== undefined && isSameAssistantMessage(lastAssistant, assistantMessage)) {
 			this.agent.replaceMessages(messages.slice(0, end - 1));
 			return;
 		}
@@ -11300,7 +10645,7 @@ export class AgentSession {
 		const lastMessage = this.agent.state.messages.at(-1);
 		if (
 			lastMessage?.role === "assistant" &&
-			this.#isSameAssistantMessage(lastMessage as AssistantMessage, assistantMessage)
+			isSameAssistantMessage(lastMessage as AssistantMessage, assistantMessage)
 		) {
 			return;
 		}
@@ -11316,7 +10661,7 @@ export class AgentSession {
 				entry =>
 					entry.type === "message" &&
 					entry.message.role === "assistant" &&
-					this.#isSameAssistantMessage(entry.message, assistantMessage),
+					isSameAssistantMessage(entry.message, assistantMessage),
 			);
 		const parentEntry =
 			branchEntry?.parentId === null || branchEntry?.parentId === undefined
@@ -11357,7 +10702,7 @@ export class AgentSession {
 				entry =>
 					entry.type === "message" &&
 					entry.message.role === "assistant" &&
-					this.#isSameAssistantMessage(entry.message as AssistantMessage, assistantMessage),
+					isSameAssistantMessage(entry.message as AssistantMessage, assistantMessage),
 			);
 		if (!branchEntry) {
 			return;
@@ -11367,16 +10712,6 @@ export class AgentSession {
 		} else {
 			this.sessionManager.branch(branchEntry.parentId);
 		}
-	}
-
-	#isSameAssistantMessage(left: AssistantMessage, right: AssistantMessage): boolean {
-		return (
-			left === right ||
-			(left.timestamp === right.timestamp &&
-				left.provider === right.provider &&
-				left.model === right.model &&
-				left.stopReason === right.stopReason)
-		);
 	}
 
 	#enforceRewindBeforeYield(): boolean {
@@ -11398,29 +10733,9 @@ export class AgentSession {
 		return true;
 	}
 
-	/**
-	 * A config file is read without enum validation, so a value outside the
-	 * schema arrives verbatim and would match neither pass — silently ending
-	 * every turn with no check at all. Fall back to the default and say so.
-	 */
-	#afterEditCheck(): (typeof AFTER_EDIT_CHECKS)[number] {
-		const configured = this.settings.get("edit.afterEdit");
-		for (const value of AFTER_EDIT_CHECKS) {
-			if (value === configured) return value;
-		}
-		if (!this.#afterEditCheckReported) {
-			this.#afterEditCheckReported = true;
-			logger.warn("edit.afterEdit holds a value the schema does not offer; using the default", {
-				configured,
-				allowed: AFTER_EDIT_CHECKS,
-			});
-		}
-		return "verify";
-	}
-
 	#enforceVerificationBeforeFinalize(): boolean {
 		if (this.#isSpawned) return false;
-		if (this.#afterEditCheck() !== "verify") return false;
+		if (this.settings.get("edit.afterEdit") !== "verify") return false;
 		const reminder = this.#verificationEvidence.takeFinalizationReminder();
 		if (!reminder) return false;
 		const reminderMessage: CustomMessage = {
@@ -11457,7 +10772,7 @@ export class AgentSession {
 
 	#enforceCodeReviewBeforeFinalize(): boolean {
 		if (this.#isSpawned) return false;
-		if (this.#afterEditCheck() !== "review") return false;
+		if (this.settings.get("edit.afterEdit") !== "review") return false;
 		const inContext = this.#toolCallIdsInContext();
 		const reminder = this.#verificationEvidence.takeCodeReviewReminder(id => inContext.has(id));
 		if (!reminder) return false;
@@ -11518,10 +10833,6 @@ export class AgentSession {
 		this.#closeCodexProviderSessionsForHistoryRewrite();
 		this.#checkpoint.finish();
 	}
-	#isPlanDecisionTool(name: string): boolean {
-		return PLAN_DECISION_TOOLS.has(name);
-	}
-
 	async #enforcePlanModeDecisionAtSettle(): Promise<boolean> {
 		if (!this.#planModeState?.enabled) {
 			return false;
@@ -11535,7 +10846,7 @@ export class AgentSession {
 		}
 
 		const calledDecisionTool = assistantMessage.content.some(
-			content => content.type === "toolCall" && this.#isPlanDecisionTool(content.name),
+			content => content.type === "toolCall" && isPlanDecisionTool(content.name),
 		);
 		if (calledDecisionTool) {
 			this.#planModeReminderCount = 0;
@@ -11841,152 +11152,6 @@ export class AgentSession {
 		}
 	}
 
-	#normalizeProviderReplayValue(value: unknown): unknown {
-		if (Array.isArray(value)) {
-			return value.map(item => this.#normalizeProviderReplayValue(item));
-		}
-		if (value && typeof value === "object") {
-			return Object.fromEntries(
-				Object.entries(value).map(([key, entryValue]) => [key, this.#normalizeProviderReplayValue(entryValue)]),
-			);
-		}
-		return value;
-	}
-
-	#normalizeSessionMessageForProviderReplay(message: AgentMessage): unknown {
-		switch (message.role) {
-			case "user":
-			case "developer":
-				return {
-					role: message.role,
-					content: this.#normalizeProviderReplayValue(message.content),
-					providerPayload: message.providerPayload,
-				};
-			case "assistant": {
-				const isResponsesFamilyMessage =
-					message.api === "openai-responses" || message.api === "openai-codex-responses";
-				return {
-					role: message.role,
-					content:
-						isResponsesFamilyMessage && Array.isArray(message.content)
-							? message.content.flatMap(block => {
-									if (block.type === "thinking") {
-										return [];
-									}
-									if (block.type === "toolCall") {
-										return [
-											{
-												type: block.type,
-												id: block.id,
-												name: block.name,
-												arguments: block.arguments,
-											},
-										];
-									}
-									if (block.type === "text") {
-										return [{ type: block.type, text: block.text, textSignature: block.textSignature }];
-									}
-									return [this.#normalizeProviderReplayValue(block)];
-								})
-							: this.#normalizeProviderReplayValue(message.content),
-					api: message.api,
-					provider: message.provider,
-					model: message.model,
-					stopReason: message.stopReason,
-					errorMessage: message.errorMessage,
-					providerPayload: isResponsesFamilyMessage ? undefined : message.providerPayload,
-				};
-			}
-			case "toolResult":
-				return {
-					role: message.role,
-					toolName: message.toolName,
-					toolCallId: message.toolCallId,
-					isError: message.isError,
-					content: this.#normalizeProviderReplayValue(message.content),
-				};
-			case "bashExecution":
-				return {
-					role: message.role,
-					command: message.command,
-					output: message.output,
-					exitCode: message.exitCode,
-					cancelled: message.cancelled,
-					meta: message.meta
-						? {
-								truncation: this.#normalizeProviderReplayValue(message.meta.truncation),
-								limits: this.#normalizeProviderReplayValue(message.meta.limits),
-								diagnostics: message.meta.diagnostics
-									? this.#normalizeProviderReplayValue({
-											summary: message.meta.diagnostics.summary,
-											messages: message.meta.diagnostics.messages,
-										})
-									: undefined,
-							}
-						: undefined,
-					excludeFromContext: message.excludeFromContext,
-				};
-			case "pythonExecution":
-				return {
-					role: message.role,
-					code: message.code,
-					output: message.output,
-					exitCode: message.exitCode,
-					cancelled: message.cancelled,
-					meta: message.meta
-						? {
-								truncation: this.#normalizeProviderReplayValue(message.meta.truncation),
-								limits: this.#normalizeProviderReplayValue(message.meta.limits),
-								diagnostics: message.meta.diagnostics
-									? this.#normalizeProviderReplayValue({
-											summary: message.meta.diagnostics.summary,
-											messages: message.meta.diagnostics.messages,
-										})
-									: undefined,
-							}
-						: undefined,
-					excludeFromContext: message.excludeFromContext,
-				};
-			case "custom":
-			case "hookMessage":
-				return {
-					role: message.role,
-					customType: message.customType,
-					content: this.#normalizeProviderReplayValue(message.content),
-				};
-			case "branchSummary":
-				return { role: message.role, summary: message.summary };
-			case "compactionSummary":
-				return {
-					role: message.role,
-					summary: message.summary,
-					providerPayload: message.providerPayload,
-				};
-			case "fileMention":
-				return {
-					role: message.role,
-					files: message.files.map(file => ({
-						path: file.path,
-						content: file.content,
-						image: file.image,
-					})),
-				};
-			default:
-				return this.#normalizeProviderReplayValue(message);
-		}
-	}
-
-	#didSessionMessagesChange(previousMessages: AgentMessage[], nextMessages: AgentMessage[]): boolean {
-		if (previousMessages.length !== nextMessages.length) return true;
-		return previousMessages.some(
-			(message, i) =>
-				!Bun.deepEquals(
-					this.#normalizeSessionMessageForProviderReplay(message),
-					this.#normalizeSessionMessageForProviderReplay(nextMessages[i]),
-				),
-		);
-	}
-
 	#formatRoleModelValue(
 		role: string,
 		model: Model,
@@ -12016,20 +11181,6 @@ export class AgentSession {
 			`Compaction requires usable credentials for ${currentModel.provider}/${currentModel.id}. ` +
 				`Configure ${currentModel.provider} credentials or assign an authenticated fallback role such as modelRoles.smol.`,
 		);
-	}
-
-	/**
-	 * A candidate's failure, attributed to the candidate that produced it.
-	 *
-	 * The auto path tries several models and surfaces only the last error, so a
-	 * provider-specific fault ("402 You have depleted your monthly included
-	 * credits") reached the operator with nothing naming WHICH provider billed
-	 * them. On a session running a different provider that reads as a lie. The
-	 * provider's own text stays verbatim after the name so every classifier and
-	 * matcher still sees it, and the original is kept as `cause`.
-	 */
-	#compactionCandidateError(candidate: Model, error: unknown): Error {
-		return new Error(`${modelKey(candidate)}: ${errorMessage(error)}`, { cause: error });
 	}
 
 	/**
@@ -12141,10 +11292,10 @@ export class AgentSession {
 		}
 		try {
 			return await compactWithProvider(
-				this.#obfuscatePreparationForProvider(preparation),
+				this.#secrets.obfuscatePreparationForProvider(preparation),
 				model,
 				this.#modelRegistry.resolver(model, this.sessionId),
-				this.#obfuscateTextForProvider(customInstructions),
+				this.#secrets.obfuscateTextForProvider(customInstructions),
 				signal,
 				{
 					...options,
@@ -12241,10 +11392,10 @@ export class AgentSession {
 
 			try {
 				const compacted = await compact(
-					this.#obfuscatePreparationForProvider(preparation),
+					this.#secrets.obfuscatePreparationForProvider(preparation),
 					candidate,
 					this.#modelRegistry.resolver(candidate, this.sessionId),
-					this.#obfuscateTextForProvider(customInstructions),
+					this.#secrets.obfuscateTextForProvider(customInstructions),
 					signal,
 					{
 						...candidateOptions,
@@ -12340,8 +11491,8 @@ export class AgentSession {
 
 			// The hook may have awaited arbitrary extension work. Sanitize its
 			// raw text as soon as control returns, before any later formatting.
-			hookContext = result?.context?.map(context => this.#obfuscateTextForProvider(context) ?? context);
-			hookPrompt = this.#obfuscateTextForProvider(result?.prompt);
+			hookContext = result?.context?.map(context => this.#secrets.obfuscateTextForProvider(context) ?? context);
+			hookPrompt = this.#secrets.obfuscateTextForProvider(result?.prompt);
 			preserveData = result?.preserveData;
 		}
 
@@ -12349,7 +11500,7 @@ export class AgentSession {
 		if (memoryBackendContext) {
 			// Memory backends are async and can race a secret-runtime refresh.
 			// Resolve the authoritative runtime only after their await completes.
-			const providerContext = this.#obfuscateTextForProvider(memoryBackendContext) ?? memoryBackendContext;
+			const providerContext = this.#secrets.obfuscateTextForProvider(memoryBackendContext) ?? memoryBackendContext;
 			hookContext = hookContext ? [...hookContext, providerContext] : [providerContext];
 		}
 
@@ -12532,13 +11683,13 @@ export class AgentSession {
 			if (elided > 0 && hasProgress()) {
 				this.emitNotice(
 					"info",
-					`Compaction dead-end recovery: ${this.#describeElideRescue(elided, elidedTokens, elideSink)} so maintenance could make progress.`,
+					`Compaction dead-end recovery: ${describeElideRescue(elided, elidedTokens, elideSink)} so maintenance could make progress.`,
 					"compaction",
 				);
 				return true;
 			}
 		}
-		const elidedPart = elided > 0 ? `${this.#describeElideRescue(elided, elidedTokens, elideSink)} and ` : "";
+		const elidedPart = elided > 0 ? `${describeElideRescue(elided, elidedTokens, elideSink)} and ` : "";
 		if (signal.aborted) return false;
 		let imagesDropped = 0;
 		try {
@@ -12680,11 +11831,6 @@ export class AgentSession {
 		rollbackTailElisions(this.sessionManager.getBranch(), elisions);
 	}
 
-	/** Notice fragment for a dead-end elide tier: what was freed and where it went. */
-	#describeElideRescue(elided: number, tokensFreed: number, sink: string): string {
-		return `elided ${formatCount("heavy block", elided)} (~${tokensFreed.toLocaleString()} tokens) to ${sink}`;
-	}
-
 	/**
 	 * Internal: run automatic in-place compaction with lifecycle events.
 	 *
@@ -12701,12 +11847,8 @@ export class AgentSession {
 		} = {},
 	): Promise<CompactionCheckResult> {
 		const compactionSettings = this.settings.getGroup("compaction");
-		const rawStrategy = compactionSettings.strategy as string | undefined;
-		if (reason === "idle") {
-			if (isCompactionStrategyOff(rawStrategy)) return COMPACTION_CHECK_NONE;
-		} else if (isThresholdCompactionDisabled(compactionSettings.enabled, rawStrategy)) {
-			return COMPACTION_CHECK_NONE;
-		}
+		// Idle compaction has its own gate; `compaction.enabled` governs the rest.
+		if (reason !== "idle" && !compactionSettings.enabled) return COMPACTION_CHECK_NONE;
 		const generation = this.#promptGeneration;
 		// Per run: a gap recorded by an earlier compaction says nothing about this
 		// history, and carrying it forward would over-cut a session that already
@@ -12935,6 +12077,7 @@ export class AgentSession {
 			result.preserveData,
 		);
 		await this.#persistCompactionTailElisions(preparation);
+		this.sessionManager.coolCompactedHistory();
 		this.agent.replaceMessages(this.buildDisplaySessionContext().messages);
 		this.#rebasePendingContextSnapshotAfterHistoryRewrite();
 		// Compaction discarded the conversation history that carried the approved
@@ -13016,7 +12159,7 @@ export class AgentSession {
 		const telemetry = resolveTelemetry(this.agent.telemetry, this.sessionId);
 
 		const remote = await this.#tryServerSideCompaction(preparation, undefined, signal, {
-			promptOverride: this.#obfuscateTextForProvider(hooks.hookPrompt),
+			promptOverride: this.#secrets.obfuscateTextForProvider(hooks.hookPrompt),
 			extraContext: hooks.hookContext,
 			remoteInstructions: this.#baseSystemPrompt.join("\n\n"),
 			initiatorOverride: "agent",
@@ -13038,7 +12181,7 @@ export class AgentSession {
 			}
 			const cachePrefix = await this.#cacheAlignedCompactionPrefix(candidate, signal);
 			const candidateOptions: SummaryOptions = {
-				promptOverride: this.#obfuscateTextForProvider(hooks.hookPrompt),
+				promptOverride: this.#secrets.obfuscateTextForProvider(hooks.hookPrompt),
 				extraContext: hooks.hookContext,
 				remoteInstructions: this.#baseSystemPrompt.join("\n\n"),
 				metadata: this.agent.metadataForProvider(candidate.provider),
@@ -13146,7 +12289,7 @@ export class AgentSession {
 			try {
 				return {
 					result: await compact(
-						this.#obfuscatePreparationForProvider(preparation),
+						this.#secrets.obfuscatePreparationForProvider(preparation),
 						candidate,
 						this.#modelRegistry.resolver(candidate, this.sessionId),
 						undefined,
@@ -13175,10 +12318,10 @@ export class AgentSession {
 							model: `${candidate.provider}/${candidate.id}`,
 						},
 					);
-					return { error: this.#compactionCandidateError(candidate, error), skipReason };
+					return { error: compactionCandidateError(candidate, error), skipReason };
 				}
 
-				const retryAfterMs = this.#parseRetryAfterMsFromError(message);
+				const retryAfterMs = extractRetryHint(undefined, message);
 				const shouldRetry =
 					retrySettings.enabled &&
 					attempt < retrySettings.maxRetries &&
@@ -13186,10 +12329,15 @@ export class AgentSession {
 						AIError.is(id, AIError.Flag.Transient) ||
 						AIError.is(id, AIError.Flag.UsageLimit));
 				if (!shouldRetry) {
-					return { error: this.#compactionCandidateError(candidate, error), skipReason };
+					return { error: compactionCandidateError(candidate, error), skipReason };
 				}
 
-				const baseDelayMs = retrySettings.baseDelayMs * 2 ** attempt;
+				// Bounded by `retry.maxRetries`; the schedule is uncapped so a configured base keeps its full ladder.
+				const baseDelayMs = exponentialBackoffDelay(attempt, {
+					baseMs: retrySettings.baseDelayMs,
+					maxMs: Number.POSITIVE_INFINITY,
+					jitter: 0,
+				});
 				const delayMs = retryAfterMs !== undefined ? Math.max(baseDelayMs, retryAfterMs) : baseDelayMs;
 				if (delayMs > maxAcceptableDelayMs && hasMoreCandidates) {
 					logger.warn("Auto-compaction retry delay too long, trying next model", {
@@ -13198,7 +12346,7 @@ export class AgentSession {
 						error: message,
 						model: `${candidate.provider}/${candidate.id}`,
 					});
-					return { error: this.#compactionCandidateError(candidate, error), skipReason };
+					return { error: compactionCandidateError(candidate, error), skipReason };
 				}
 
 				attempt++;
@@ -13366,316 +12514,16 @@ export class AgentSession {
 	 */
 	setAutoCompactionEnabled(enabled: boolean): void {
 		this.settings.set("compaction.enabled", enabled);
-		if (enabled && isCompactionStrategyOff(this.settings.get("compaction.strategy") as string)) {
-			this.settings.override("compaction.strategy", getDefault("compaction.strategy"));
-		}
 	}
 
 	/** Whether auto-compaction is enabled */
 	get autoCompactionEnabled(): boolean {
-		const compaction = this.settings.getGroup("compaction");
-		return !isThresholdCompactionDisabled(compaction.enabled, compaction.strategy);
+		return this.settings.get("compaction.enabled");
 	}
 
 	// =========================================================================
 	// Auto-Retry
 	// =========================================================================
-
-	/**
-	 * Classify retry decisions against the active session model. Test stream
-	 * shims and provider adapters can emit generic assistant metadata, but retry
-	 * policy belongs to the model that was actually requested for this turn.
-	 */
-	#classifyRetryMessage(message: AssistantMessage): number {
-		const activeModel = this.model;
-		const trace: string[] = [];
-		const sameApi = !activeModel || message.api === activeModel.api;
-		const id = sameApi
-			? AIError.classifyMessage(message, trace)
-			: AIError.classifyMessage(
-					{
-						api: activeModel.api,
-						errorId: message.errorId,
-						errorMessage: message.errorMessage,
-						errorStatus: message.errorStatus,
-					},
-					trace,
-				);
-		// The rules that decided it, not only what it decided: a retry nobody expected, or a failure
-		// that surfaced when a retry was due, is diagnosed from this line instead of by re-running the
-		// classifier's conditions by hand against the provider's sentence.
-		logger.debug("retry classification", { errorId: id, kind: AIError.stringify(id), rules: [...new Set(trace)] });
-		message.errorId = id;
-		return id;
-	}
-
-	#isGenericAbortSentinel(message: AssistantMessage): boolean {
-		return message.errorMessage === "Request was aborted" || message.errorMessage === "Request was aborted.";
-	}
-
-	/**
-	 * Retry an empty, reason-less provider abort: a turn with no content that
-	 * carries the generic sentinel (bare `abort()`), whether the provider
-	 * finalized it as `stopReason: "aborted"` or leaked it as `stopReason:
-	 * "error"` (a stalled/dropped stream reported as an error rather than an
-	 * abort — issue #5375). Only fires while the session is neither aborting nor
-	 * tearing down. A user/lifecycle abort (`#abortInProgress`), a dispose-driven
-	 * abort (`#isDisposed`), or a session-induced streaming-edit guard abort
-	 * (`StreamingEditGuard.abortTriggered` — auto-generated-file guard or failed-patch
-	 * preview) is deliberate and MUST settle the turn instead: routing it through
-	 * retry would orphan `#retryPromise` on a continuation the guard skips
-	 * (hanging the in-flight `prompt()`) or silently undo the guard's intended
-	 * abort. Deliberate user interrupts (`UserInterrupt`) and silent aborts carry
-	 * their own marker, not the generic sentinel, so they never match here.
-	 */
-	#isRetryableReasonlessAbort(message: AssistantMessage): boolean {
-		if (
-			(message.stopReason !== "aborted" && message.stopReason !== "error") ||
-			message.content.length !== 0 ||
-			this.#abortInProgress ||
-			this.#isDisposed ||
-			this.#streamingEdit.abortTriggered
-		) {
-			return false;
-		}
-
-		const id = this.#classifyRetryMessage(message);
-		if (message.stopReason === "aborted" && AIError.is(id, AIError.Flag.Abort)) return true;
-		if (!this.#isGenericAbortSentinel(message)) return false;
-
-		message.errorId = AIError.create(AIError.Flag.Abort);
-		return true;
-	}
-
-	/**
-	 * Check if an error is retryable (transient errors or usage limits).
-	 * Context overflow is NOT retryable (handled by compaction instead).
-	 * Usage-limit errors are retryable because the retry handler performs credential switching.
-	 */
-	#isRetryableError(message: AssistantMessage): boolean {
-		if (message.stopReason !== "error") return false;
-
-		const id = this.#classifyRetryMessage(message);
-		// Context overflow is handled by compaction, not retry
-		const contextWindow = this.model?.contextWindow ?? 0;
-		if (AIError.isContextOverflow(message, contextWindow)) return false;
-
-		if (this.#isClassifierRefusal(message)) return true;
-		return AIError.retriable(id, { replayUnsafe: this.#hasReplayUnsafeToolOutput(message) });
-	}
-	/**
-	 * Retried turns remove the failed assistant message from active context, so
-	 * the question here is whether replaying it can double-apply a side effect.
-	 *
-	 * A tool call in a FAILED turn is not evidence that the tool ran. The agent
-	 * loop has exactly one call site for `tool.execute()`, inside
-	 * `executeToolCalls`, and it is reached only from the runnable-stop branch;
-	 * an `error` stop returns before it, pairing every retained call with a
-	 * placeholder result that says `executed: false`. So the ordinary shape of
-	 * this failure (a provider that stalls, or closes without a terminal finish
-	 * reason, after streaming its tool calls) has applied nothing at all, and
-	 * refusing to retry it turned a transport fault into a dead turn: the
-	 * operator saw the provider's error and the model was handed a ledger telling
-	 * it to reissue the calls itself, on a batch where nothing had happened.
-	 *
-	 * Two shapes ARE unsafe and both are checked. A Cursor exec-channel block
-	 * carries {@link kCursorExecResolved} because that channel dispatches the
-	 * tool through the caller's handler INSIDE the provider stream, before the
-	 * block is synthesized, so it may have finished, may still be running, and
-	 * may have applied half its work. And a call answered by a result that is
-	 * not a never-ran placeholder ran by definition, whatever produced it.
-	 */
-	#hasReplayUnsafeToolOutput(message: AssistantMessage): boolean {
-		const toolCallIds = new Set<string>();
-		for (const block of message.content) {
-			if (block.type !== "toolCall") continue;
-			if ((block as CursorExecResolvedCarrier)[kCursorExecResolved] === true) return true;
-			toolCallIds.add(block.id);
-		}
-		if (toolCallIds.size === 0) return false;
-		for (const contextMessage of this.agent.state.messages) {
-			if (contextMessage.role !== "toolResult") continue;
-			if (!toolCallIds.has(contextMessage.toolCallId)) continue;
-			if (!toolResultNeverRan(contextMessage.details)) return true;
-		}
-		return false;
-	}
-
-	/**
-	 * A transport fault killed a tool batch that cannot be replayed, so continue
-	 * the turn instead of ending the session's work.
-	 *
-	 * Retry and continuation answer different questions. Retry re-sends the turn,
-	 * which {@link #hasReplayUnsafeToolOutput} forbids once any call in the batch
-	 * may have run: a Cursor exec-channel call dispatched inside the provider
-	 * stream, or a call that already has a real result. Continuation sends the
-	 * turn that is now in context, which is complete and valid: the failed
-	 * assistant message kept its calls, every call the loop never dispatched was
-	 * paired with a never-ran placeholder, and the batch ledger names exactly
-	 * which ones need reissuing. Nothing is duplicated, because nothing is resent.
-	 *
-	 * Without this the operator's session stopped dead in the middle of a batch
-	 * (a reported turn: 75 calls, 0 ran, 21 interrupted, 54 never ran) on a
-	 * failure the classifier itself calls transient, and the only way forward was
-	 * to notice and type something. The same happened when the stream died after
-	 * the whole batch ran: Cursor's exec channel runs every call inside the
-	 * stream, so a reset after the last result left a fully answered batch that
-	 * was neither replayable nor continued. The bar is narrow: the failure would
-	 * have been retried but for replay safety, the batch is continuable (see
-	 * {@link #batchCanContinue}), and the attempts run on their own allowance, sized by the same
-	 * `retry.maxRetries`, so a provider dying on every attempt cannot loop. Its
-	 * own counter rather than the retry ladder's: the two answer different
-	 * questions and one turn can legitimately reach both, so a turn that already
-	 * retried must not arrive here with its recovery spent. The wait is the retry
-	 * ladder's, though, down to the event it emits and the gate escape cancels.
-	 */
-	async #continueAfterUnreplayableBatch(message: AssistantMessage): Promise<boolean> {
-		if (message.stopReason !== "error") return false;
-		if (this.#abortInProgress || this.#isDisposed || this.#streamingEdit.abortTriggered) return false;
-		const retrySettings = this.settings.getGroup("retry");
-		if (!retrySettings.enabled) return false;
-		const id = this.#classifyRetryMessage(message);
-		// Blocked only by replay safety: transient on its own, refused with it.
-		if (!AIError.retriable(id, { replayUnsafe: false })) return false;
-		if (AIError.retriable(id, { replayUnsafe: true })) return false;
-		if (!this.#hasReplayUnsafeToolOutput(message)) return false;
-		if (!this.#batchCanContinue(message)) return false;
-		const policy = this.#resolveRetryPolicy(retrySettings);
-		if (this.#unreplayableBatchContinues >= policy.maxRetries) return false;
-		this.#unreplayableBatchContinues += 1;
-		this.#operatorNotices.warn(
-			"unreplayable-batch",
-			"The provider stream failed partway through a tool batch that cannot be replayed. Continuing the turn from the results already in context.",
-		);
-		// A continuation borrows the retry ladder's budget, so it borrows the same
-		// backoff: the transport just died, and re-requesting the largest context
-		// the session holds with no pause is what backoff exists to prevent. Keyed
-		// on this counter rather than #retryAttempt, so a session that also retried
-		// does not inherit that ladder's position on its first continuation. The
-		// formula and the ceiling rule live with the policy they read.
-		const delayMs = unreplayableContinueDelayMs(policy, this.#unreplayableBatchContinues);
-		// The wait joins the retry ladder's machinery instead of hiding inside the
-		// scheduler's own delay, because a wait nobody can see or stop is worse than
-		// no wait at all. #isRetryableError is false here by construction, which is
-		// what sent us down this path, so #handleRetryableError never ran and the
-		// retry latch does not exist yet: without creating it `isRetrying` stays
-		// false, escape never reaches abortRetry(), and the countdown, an agent
-		// HUD's retryState and every hook, extension, collab and SDK consumer see
-		// nothing while the session sits silent for seconds.
-		this.#ensureRetryPromise();
-		await this.#emitSessionEvent({
-			type: "auto_retry_start",
-			attempt: this.#unreplayableBatchContinues,
-			mode: "continue",
-			maxAttempts: policy.maxRetries,
-			policySource: describeRetryPolicySource(policy),
-			delayMs,
-			errorMessage: message.errorMessage || "Unknown error",
-			errorId: message.errorId,
-		});
-		const continueAbortController = new AbortController();
-		this.#retryAbortController?.abort();
-		this.#retryAbortController = continueAbortController;
-		try {
-			await scheduler.wait(delayMs, { signal: continueAbortController.signal });
-		} catch {
-			if (this.#retryAbortController !== continueAbortController) return false;
-			this.#retryAbortController = undefined;
-			await this.#emitSessionEvent({
-				type: "auto_retry_end",
-				success: false,
-				attempt: this.#unreplayableBatchContinues,
-				mode: "continue",
-				finalError: "Continuation cancelled",
-			});
-			this.#resolveRetry();
-			return false;
-		}
-		if (this.#retryAbortController === continueAbortController) {
-			this.#retryAbortController = undefined;
-		}
-		// The latch stays live across the wait so the turn reads as retrying, and the
-		// continued turn's own agent_end resolves it. A continuation the scheduler
-		// skips must resolve it here or an in-flight prompt() waits forever.
-		this.#scheduleAgentContinue({
-			generation: this.#promptGeneration,
-			onSkip: () => this.#resolveRetry(),
-		});
-		return true;
-	}
-
-	/**
-	 * Whether sending the turn now in context moves the work forward, asked per CALL.
-	 *
-	 * Two shapes continue. A call left with no answer at all: its never-ran
-	 * placeholder and the ledger tell the model to reissue it. And a batch whose
-	 * every call carries a real result: the batch finished and only the model's
-	 * next step is missing, which is exactly the request an ordinary tool turn
-	 * sends after its results land. Cursor's exec channel produces the second
-	 * shape whenever the stream dies after the last call returned.
-	 *
-	 * One shape does not: an exec-channel call whose result has not arrived yet.
-	 * It ran or is running out of band, and a request sent now would answer it
-	 * with nothing while its real result is still on its way.
-	 *
-	 * A mixed batch is normal (the reported one: 21 interrupted, 54 never ran).
-	 * A call that already has a real result is answered, and a placeholder sitting
-	 * beside that result does not make it unanswered again.
-	 *
-	 * A call whose arguments never finished streaming is outstanding by
-	 * construction and is counted without looking for a result. `retainCompleted-
-	 * ToolCalls` deletes its block, because partial arguments are unsafe to run
-	 * and an unpaired `tool_use` breaks replay, so nothing ever pairs against it:
-	 * looking it up among the results can only ever answer no. Its identity is
-	 * on `incompleteToolCalls` and the ledger tells the model to reconstruct the
-	 * arguments, which is work only a further request can do.
-	 */
-	#batchCanContinue(message: AssistantMessage): boolean {
-		if ((message.incompleteToolCalls?.length ?? 0) > 0) return true;
-		const toolCallIds = new Set<string>();
-		for (const block of message.content) {
-			if (block.type === "toolCall") toolCallIds.add(block.id);
-		}
-		if (toolCallIds.size === 0) return false;
-		const answered = new Set<string>();
-		const unanswered = new Set<string>();
-		for (const contextMessage of this.agent.state.messages) {
-			if (contextMessage.role !== "toolResult") continue;
-			const id = contextMessage.toolCallId;
-			if (!toolCallIds.has(id)) continue;
-			if (toolResultNeverRan(contextMessage.details)) unanswered.add(id);
-			else answered.add(id);
-		}
-		for (const id of unanswered) {
-			if (!answered.has(id)) return true;
-		}
-		// Nothing never ran, so continue only when nothing is still in flight either.
-		for (const id of toolCallIds) {
-			if (!answered.has(id)) return false;
-		}
-		return true;
-	}
-
-	#isClassifierRefusal(message: AssistantMessage): boolean {
-		if (message.stopReason !== "error") return false;
-		const stopType = message.stopDetails?.type;
-		return stopType === "refusal" || stopType === "sensitive";
-	}
-
-	#getRetryFallbackChains(): RetryFallbackChains {
-		const configuredChains = this.settings.get("retry.fallbackChains");
-		if (!configuredChains || typeof configuredChains !== "object") return {};
-		const chains: RetryFallbackChains = { ...(configuredChains as RetryFallbackChains) };
-		const defaultChain = chains.default;
-		if (Array.isArray(defaultChain)) {
-			for (const role of Object.keys(this.settings.getModelRoles())) {
-				if (role !== "default" && chains[role] === undefined) {
-					chains[role] = defaultChain;
-				}
-			}
-		}
-		return chains;
-	}
 
 	/**
 	 * Surface a hand-edited `tools.approvalMode` typo loudly. An unrecognized
@@ -13708,879 +12556,17 @@ export class AgentSession {
 	}
 
 	#validateRetryFallbackChains(): void {
-		const configuredChains = this.settings.get("retry.fallbackChains");
-		if (configuredChains === undefined) return;
-		if (!isRecord(configuredChains)) {
-			const msg = "retry.fallbackChains must be a mapping of role names or model selectors to selector arrays.";
+		for (const msg of retryFallbackChainWarnings(this.settings.get("retry.fallbackChains"), this.#modelRegistry)) {
 			logger.warn(msg);
 			this.configWarnings.push(msg);
-			return;
 		}
-
-		for (const key in configuredChains) {
-			const chain = (configuredChains as RetryFallbackChains)[key];
-			const keyKind = isRetryFallbackModelKey(key) ? "model" : "role";
-			if (keyKind === "model") {
-				if (isRetryFallbackWildcardKey(key)) {
-					const provider = key.slice(0, -2);
-					if (!this.#modelRegistry.getAll().some(model => model.provider === provider)) {
-						const msg = `retry.fallbackChains wildcard key references unknown provider: ${key}`;
-						logger.warn(msg);
-						this.configWarnings.push(msg);
-					}
-				} else {
-					const parsedKey = parseRetryFallbackSelector(key, this.#modelRegistry);
-					if (!parsedKey) {
-						const msg = `Invalid model selector key in retry.fallbackChains: ${key}`;
-						logger.warn(msg);
-						this.configWarnings.push(msg);
-					} else if (!this.#modelRegistry.find(parsedKey.provider, parsedKey.id)) {
-						const msg = `retry.fallbackChains key references unknown model: ${key}`;
-						logger.warn(msg);
-						this.configWarnings.push(msg);
-					}
-				}
-			}
-			if (!Array.isArray(chain)) {
-				const msg = `Fallback chain for ${keyKind} '${key}' must be an array of selector strings.`;
-				logger.warn(msg);
-				this.configWarnings.push(msg);
-				continue;
-			}
-			for (const selectorStr of chain) {
-				if (typeof selectorStr !== "string") {
-					const msg = `Fallback chain for ${keyKind} '${key}' contains a non-string selector.`;
-					logger.warn(msg);
-					this.configWarnings.push(msg);
-					continue;
-				}
-				if (isRetryFallbackWildcardKey(selectorStr)) {
-					const provider = selectorStr.slice(0, -2);
-					if (!this.#modelRegistry.getAll().some(model => model.provider === provider)) {
-						const msg = `Fallback chain for ${keyKind} '${key}' references unknown provider: ${selectorStr}`;
-						logger.warn(msg);
-						this.configWarnings.push(msg);
-					}
-					continue;
-				}
-				const parsed = parseRetryFallbackSelector(selectorStr, this.#modelRegistry);
-				if (!parsed) {
-					const msg = `Invalid fallback selector format in ${keyKind} '${key}': ${selectorStr}`;
-					logger.warn(msg);
-					this.configWarnings.push(msg);
-					continue;
-				}
-				const exists = this.#modelRegistry.find(parsed.provider, parsed.id);
-				if (!exists) {
-					const msg = `Fallback chain for ${keyKind} '${key}' references unknown model: ${selectorStr}`;
-					logger.warn(msg);
-					this.configWarnings.push(msg);
-				}
-			}
-		}
-	}
-
-	#getRetryFallbackRevertPolicy(): RetryFallbackRevertPolicy {
-		return this.settings.get("retry.fallbackRevertPolicy") === "never" ? "never" : "cooldown-expiry";
-	}
-
-	#getRetryFallbackPrimarySelector(role: string): RetryFallbackSelector | undefined {
-		if (isRetryFallbackWildcardKey(role)) return undefined;
-		if (isRetryFallbackModelKey(role)) return parseRetryFallbackSelector(role, this.#modelRegistry);
-		const configuredSelector = this.settings.getModelRole(role);
-		return configuredSelector ? parseRetryFallbackSelector(configuredSelector, this.#modelRegistry) : undefined;
-	}
-
-	#clearActiveRetryFallback(): void {
-		this.#activeRetryFallback = undefined;
-	}
-
-	#isRetryFallbackSelectorSuppressed(selector: RetryFallbackSelector): boolean {
-		return this.#modelRegistry.isSelectorSuppressed(selector.raw);
-	}
-
-	#noteRetryFallbackCooldown(currentSelector: string, retryAfterMs: number | undefined, errorMessage: string): void {
-		let cooldownMs = retryAfterMs;
-		if (!cooldownMs || cooldownMs <= 0) {
-			const reason = parseRateLimitReason(errorMessage);
-			cooldownMs = reason === "UNKNOWN" ? 5 * 60 * 1000 : calculateRateLimitBackoffMs(reason);
-		}
-		this.#modelRegistry.suppressSelector(currentSelector, Date.now() + cooldownMs);
-	}
-
-	/**
-	 * Map the failing model selector to the chain key that owns it, by
-	 * specificity: an exact model-selector key, then a `provider/*` wildcard,
-	 * then a model role whose current assignment matches, then `default`.
-	 * Model-oriented keys win over roles so a chain follows the model across
-	 * role reassignments.
-	 */
-	#resolveRetryFallbackRole(currentSelector: string): string | undefined {
-		const parsedCurrent = parseRetryFallbackSelector(currentSelector, this.#modelRegistry);
-		if (!parsedCurrent) return undefined;
-		const chains = this.#getRetryFallbackChains();
-		const currentBaseSelector = formatRetryFallbackBaseSelector(parsedCurrent);
-		const currentPlainSelector = this.model
-			? formatModelSelectorValue(formatModelString(this.model), parsedCurrent.thinkingLevel)
-			: undefined;
-		const currentPlainBaseSelector =
-			currentPlainSelector && currentPlainSelector !== currentSelector
-				? formatRetryFallbackBaseSelector(parseRetryFallbackSelector(currentPlainSelector) ?? parsedCurrent)
-				: undefined;
-
-		const exactModelKeys: string[] = [];
-		const roleKeys: string[] = [];
-		for (const key in chains) {
-			if (!isRetryFallbackModelKey(key)) roleKeys.push(key);
-			else if (!isRetryFallbackWildcardKey(key)) exactModelKeys.push(key);
-		}
-		const matchesCurrent = (primary: RetryFallbackSelector | undefined): boolean => {
-			if (!primary) return false;
-			if (primary.raw === currentSelector || (currentPlainSelector && primary.raw === currentPlainSelector)) {
-				return true;
-			}
-			const base = formatRetryFallbackBaseSelector(primary);
-			return base === currentBaseSelector || (!!currentPlainBaseSelector && base === currentPlainBaseSelector);
-		};
-
-		// 1. Exact model-selector keys — most specific.
-		for (const key of exactModelKeys) {
-			if (matchesCurrent(this.#getRetryFallbackPrimarySelector(key))) return key;
-		}
-		// 2. Provider wildcard (`provider/*`) — any active model of this provider.
-		const wildcardKey = `${parsedCurrent.provider}/*`;
-		if (Array.isArray(chains[wildcardKey])) return wildcardKey;
-		// 3. Role keys — matched by the role's currently-assigned model.
-		for (const key of roleKeys) {
-			if (matchesCurrent(this.#getRetryFallbackPrimarySelector(key))) return key;
-		}
-		// 4. The default chain, when default has no explicit role primary.
-		const defaultChain = chains.default;
-		if (
-			Array.isArray(defaultChain) &&
-			defaultChain.length > 0 &&
-			this.#getRetryFallbackPrimarySelector("default") === undefined
-		) {
-			return "default";
-		}
-		return undefined;
-	}
-
-	/**
-	 * Parse one configured chain entry. A `provider/*` entry keeps the failing
-	 * model's id and swaps the provider (google-antigravity/x → google/x);
-	 * ids the target provider lacks are skipped by the candidate loop's
-	 * registry lookup.
-	 */
-	#parseRetryFallbackChainEntry(
-		entry: string,
-		current: RetryFallbackSelector | undefined,
-	): RetryFallbackSelector | undefined {
-		if (isRetryFallbackWildcardKey(entry)) {
-			if (!current) return undefined;
-			const provider = entry.slice(0, -2);
-			return { raw: `${provider}/${current.id}`, provider, id: current.id, thinkingLevel: undefined };
-		}
-		return parseRetryFallbackSelector(entry, this.#modelRegistry);
-	}
-
-	#getRetryFallbackEffectiveChain(role: string, currentSelector?: string): RetryFallbackSelector[] {
-		const parsedCurrent = currentSelector
-			? parseRetryFallbackSelector(currentSelector, this.#modelRegistry)
-			: undefined;
-		const seen = new Set<string>();
-		const chain: RetryFallbackSelector[] = [];
-		if (isRetryFallbackWildcardKey(role)) {
-			// A wildcard key has no fixed primary: the active model is the
-			// primary, followed by the configured provider-level fallbacks.
-			if (parsedCurrent) {
-				chain.push(parsedCurrent);
-				seen.add(parsedCurrent.raw);
-			}
-		} else {
-			const primarySelector = this.#getRetryFallbackPrimarySelector(role);
-			if (!primarySelector) return [];
-			chain.push(primarySelector);
-			seen.add(primarySelector.raw);
-		}
-		for (const selector of this.#getRetryFallbackChains()[role] ?? []) {
-			const parsed = this.#parseRetryFallbackChainEntry(selector, parsedCurrent);
-			if (!parsed || seen.has(parsed.raw)) continue;
-			seen.add(parsed.raw);
-			chain.push(parsed);
-		}
-		return chain;
-	}
-
-	#findRetryFallbackCandidates(role: string, currentSelector: string): RetryFallbackSelector[] {
-		let chain = this.#getRetryFallbackEffectiveChain(role, currentSelector);
-		const parsedCurrent = parseRetryFallbackSelector(currentSelector, this.#modelRegistry);
-		if (chain.length === 0 && role === "default" && parsedCurrent) {
-			const chains = this.#getRetryFallbackChains();
-			const defaultChain = chains.default;
-			if (
-				Array.isArray(defaultChain) &&
-				defaultChain.length > 0 &&
-				this.#getRetryFallbackPrimarySelector("default") === undefined
-			) {
-				const seen = new Set<string>([parsedCurrent.raw]);
-				chain = [parsedCurrent];
-				for (const selector of defaultChain) {
-					const parsed = this.#parseRetryFallbackChainEntry(selector, parsedCurrent);
-					if (!parsed || seen.has(parsed.raw)) continue;
-					seen.add(parsed.raw);
-					chain.push(parsed);
-				}
-			}
-		}
-		if (chain.length <= 1) return [];
-		const currentBaseSelector = parsedCurrent ? formatRetryFallbackBaseSelector(parsedCurrent) : undefined;
-		const currentPlainSelector =
-			this.model && parsedCurrent
-				? formatModelSelectorValue(formatModelString(this.model), parsedCurrent.thinkingLevel)
-				: undefined;
-		const currentPlainBaseSelector =
-			parsedCurrent && currentPlainSelector && currentPlainSelector !== currentSelector
-				? formatRetryFallbackBaseSelector(parseRetryFallbackSelector(currentPlainSelector) ?? parsedCurrent)
-				: undefined;
-		const exactIndex = chain.findIndex(
-			selector => selector.raw === currentSelector || selector.raw === currentPlainSelector,
-		);
-		if (exactIndex >= 0) return chain.slice(exactIndex + 1);
-		const baseIndex = currentBaseSelector
-			? chain.findIndex(selector => {
-					const selectorBase = formatRetryFallbackBaseSelector(selector);
-					return selectorBase === currentBaseSelector || selectorBase === currentPlainBaseSelector;
-				})
-			: -1;
-		if (baseIndex >= 0) return chain.slice(baseIndex + 1);
-		return chain.slice(1);
-	}
-
-	async #applyRetryFallbackCandidate(
-		role: string,
-		selector: RetryFallbackSelector,
-		currentSelector: string,
-		options?: { pinFallback?: boolean },
-	): Promise<void> {
-		const resolved = resolveModelOverride([selector.raw], this.#modelRegistry, this.settings);
-		const candidate = resolved.model ?? this.#modelRegistry.find(selector.provider, selector.id);
-		if (!candidate) {
-			throw new Error(`Retry fallback model not found: ${selector.raw}`);
-		}
-		const apiKey = await this.#modelRegistry.getApiKey(candidate, this.sessionId);
-		if (!apiKey) {
-			throw new Error(missingCredentialsMessage(candidate.provider, candidate.id, `retry fallback ${selector.raw}`));
-		}
-
-		// Capture the configured selector (auto-aware) so a fallback chain preserves
-		// `auto` instead of collapsing it to the level it resolved to this turn.
-		const currentThinkingLevel = this.configuredThinkingLevel();
-		const nextThinkingLevel = selector.thinkingLevel ?? currentThinkingLevel;
-		const candidateSelector = formatModelStringWithRouting(candidate);
-		this.#setModelWithProviderSessionReset(candidate);
-		this.sessionManager.appendModelChange(candidateSelector, EPHEMERAL_MODEL_CHANGE_ROLE);
-		AgentStorage.forAgentDir(this.settings.getAgentDir())?.recordModelUsage(candidateSelector);
-		this.setThinkingLevel(nextThinkingLevel, false, "resolved");
-		if (!this.#activeRetryFallback) {
-			this.#activeRetryFallback = {
-				role,
-				originalSelector: currentSelector,
-				originalThinkingLevel: currentThinkingLevel,
-				lastAppliedFallbackThinkingLevel: nextThinkingLevel,
-				pinned: options?.pinFallback === true,
-			};
-		} else {
-			this.#activeRetryFallback.lastAppliedFallbackThinkingLevel = nextThinkingLevel;
-			this.#activeRetryFallback.pinned = this.#activeRetryFallback.pinned || options?.pinFallback === true;
-		}
-		await this.#emitSessionEvent({
-			type: "retry_fallback_applied",
-			from: currentSelector,
-			to: selector.raw,
-			role,
-		});
-	}
-
-	async #tryRetryModelFallback(currentSelector: string, options?: { pinFallback?: boolean }): Promise<boolean> {
-		const role = this.#activeRetryFallback?.role ?? this.#resolveRetryFallbackRole(currentSelector);
-		if (!role) return false;
-
-		for (const selector of this.#findRetryFallbackCandidates(role, currentSelector)) {
-			if (this.#isRetryFallbackSelectorSuppressed(selector)) continue;
-			const resolved = resolveModelOverride([selector.raw], this.#modelRegistry, this.settings);
-			const candidate = resolved.model ?? this.#modelRegistry.find(selector.provider, selector.id);
-			if (!candidate) continue;
-			const apiKey = await this.#modelRegistry.getApiKey(candidate, this.sessionId);
-			if (!apiKey) continue;
-			await this.#applyRetryFallbackCandidate(role, selector, currentSelector, options);
-			return true;
-		}
-
-		return false;
-	}
-
-	/** The active model when it is a Fireworks Fast (`-fast`) variant, else undefined. */
-	#activeFireworksFastModel(): Model | undefined {
-		const model = this.model;
-		return model?.provider === "fireworks" && isFireworksFastModelId(model.id) ? model : undefined;
-	}
-
-	/**
-	 * True when the current turn failed on a Fireworks Fast (`-fast`) model in a
-	 * way that should degrade to the reliable base (Standard) model. Fast is a
-	 * speed-optimized router with no SLA, so any *pre-content* failure — a
-	 * transient overload/5xx or a hard "router/model not found / unsupported" —
-	 * is worth retrying on the base id. Skips failures the base model shares:
-	 * context overflow (compaction's job), usage limits and auth errors (same
-	 * account/key), and turns that already emitted a tool call (replaying would
-	 * duplicate work). Requires the base model to exist in the registry.
-	 */
-	#isFireworksFastFallbackEligible(message: AssistantMessage): boolean {
-		const model = this.#activeFireworksFastModel();
-		if (!model) return false;
-		if (message.stopReason !== "error") return false;
-		if (message.content.some(block => block.type === "toolCall")) return false;
-		// A content refusal/sensitivity stop is the model's decision, not a route
-		// failure — switching to the base model would just re-trigger it.
-		if (this.#isClassifierRefusal(message)) return false;
-		const id = this.#classifyRetryMessage(message);
-		if (AIError.isContextOverflow(message, model.contextWindow ?? 0)) return false;
-		if (AIError.is(id, AIError.Flag.UsageLimit)) return false;
-		if (AIError.is(id, AIError.Flag.AuthFailed)) return false;
-		return this.#modelRegistry.find("fireworks", toFireworksBaseModelId(model.id)) !== undefined;
-	}
-
-	/**
-	 * True when a turn failed with a hard (non-retryable) provider error but a
-	 * configured `retry.fallbackChains` entry covers the active model: the same
-	 * model is not worth retrying, yet a DIFFERENT model is a fresh chance, so
-	 * the chain is consulted before the error becomes final. Skips failures a
-	 * model switch cannot fix or must not replay: cancellations (abort-flavored
-	 * errors are not model faults), context overflow (compaction's job),
-	 * classifier refusals (chain consult is handled on the retryable path with
-	 * `pinFallback`), and turns that already emitted a tool call (replaying
-	 * could duplicate work).
-	 */
-	#isHardErrorFallbackEligible(message: AssistantMessage): boolean {
-		if (message.stopReason !== "error") return false;
-		const model = this.model;
-		if (!model) return false;
-		const retrySettings = this.settings.getGroup("retry");
-		if (!retrySettings.enabled || !retrySettings.modelFallback) return false;
-		if (this.#isClassifierRefusal(message)) return false;
-		const id = this.#classifyRetryMessage(message);
-		if (AIError.is(id, AIError.Flag.Abort) || AIError.is(id, AIError.Flag.UserInterrupt)) return false;
-		if (AIError.isContextOverflow(message, model.contextWindow ?? 0)) return false;
-		if (this.#hasReplayUnsafeToolOutput(message)) return false;
-		const currentSelector = formatRetryFallbackSelector(model, this.thinkingLevel);
-		const role = this.#activeRetryFallback?.role ?? this.#resolveRetryFallbackRole(currentSelector);
-		if (!role) return false;
-		return this.#findRetryFallbackCandidates(role, currentSelector).length > 0;
-	}
-
-	/**
-	 * Switch the active model from a Fireworks Fast (`-fast`) variant to its base
-	 * (Standard) id and stick there for the rest of the session — the auto
-	 * fallback that makes Fast a safe default. Returns false when the current
-	 * model is not a fast variant, the base id is missing, or it has no key.
-	 */
-	async #tryFireworksFastFallback(currentSelector: string): Promise<boolean> {
-		const model = this.#activeFireworksFastModel();
-		if (!model) return false;
-		const baseModel = this.#modelRegistry.find("fireworks", toFireworksBaseModelId(model.id));
-		if (!baseModel) return false;
-		const apiKey = await this.#modelRegistry.getApiKey(baseModel, this.sessionId);
-		if (!apiKey) return false;
-		const baseSelector = formatModelStringWithRouting(baseModel);
-		this.#setModelWithProviderSessionReset(baseModel);
-		this.sessionManager.appendModelChange(baseSelector, EPHEMERAL_MODEL_CHANGE_ROLE);
-		AgentStorage.forAgentDir(this.settings.getAgentDir())?.recordModelUsage(baseSelector);
-		await this.#emitSessionEvent({
-			type: "retry_fallback_applied",
-			from: currentSelector,
-			to: baseSelector,
-			role: "fireworks-fast",
-		});
-		return true;
-	}
-
-	async #maybeRestoreRetryFallbackPrimary(): Promise<void> {
-		if (!this.#activeRetryFallback) return;
-		if (this.#retryAttempt > 0) return;
-		// Restoring the primary means "the fallback is no longer needed", which is
-		// only ever true between retry sequences, never inside one. The cooldown
-		// that guards this is shorter than a retry budget takes to burn
-		// (SERVER_ERROR suppresses for 20s; ten retries capped at
-		// RETRY_BACKOFF_MAX_DELAY_MS run ~55s), so without this check the primary
-		// came back mid-sequence, the next failure hopped away again on a budget
-		// freshly reset to 1, and the pair cycled for as long as the fault lasted.
-		// Every lap re-sent the whole prompt at full input rate.
-		if (this.#activeRetryFallback.pinned) return;
-		if (this.#getRetryFallbackRevertPolicy() !== "cooldown-expiry") return;
-
-		const {
-			originalSelector: originalSelectorRaw,
-			originalThinkingLevel,
-			lastAppliedFallbackThinkingLevel,
-		} = this.#activeRetryFallback;
-		const originalSelector = parseRetryFallbackSelector(originalSelectorRaw, this.#modelRegistry);
-		if (!originalSelector) {
-			this.#clearActiveRetryFallback();
-			return;
-		}
-
-		const currentModel = this.model;
-		if (!currentModel) return;
-		const currentSelector = formatRetryFallbackSelector(currentModel, this.thinkingLevel);
-		if (currentSelector === originalSelector.raw) {
-			if (!this.#isRetryFallbackSelectorSuppressed(originalSelector)) {
-				this.#clearActiveRetryFallback();
-			}
-			return;
-		}
-		if (this.#isRetryFallbackSelectorSuppressed(originalSelector)) return;
-
-		const resolvedPrimary = resolveModelOverride([originalSelector.raw], this.#modelRegistry, this.settings);
-		const primaryModel =
-			resolvedPrimary.model ?? this.#modelRegistry.find(originalSelector.provider, originalSelector.id);
-		if (!primaryModel) return;
-		const apiKey = await this.#modelRegistry.getApiKey(primaryModel, this.sessionId);
-		if (!apiKey) return;
-
-		const currentThinkingLevel = this.configuredThinkingLevel();
-		const thinkingToApply =
-			currentThinkingLevel === lastAppliedFallbackThinkingLevel ? originalThinkingLevel : currentThinkingLevel;
-		const primarySelector = formatModelStringWithRouting(primaryModel);
-		this.#setModelWithProviderSessionReset(primaryModel);
-		this.sessionManager.appendModelChange(primarySelector, EPHEMERAL_MODEL_CHANGE_ROLE);
-		AgentStorage.forAgentDir(this.settings.getAgentDir())?.recordModelUsage(primarySelector);
-		this.setThinkingLevel(thinkingToApply, false, "resolved");
-		this.#clearActiveRetryFallback();
-	}
-
-	#parseRetryAfterMsFromError(errorMessage: string): number | undefined {
-		const now = Date.now();
-		const retryAfterMsMatch = /retry-after-ms\s*[:=]\s*(\d+)/i.exec(errorMessage);
-		if (retryAfterMsMatch) {
-			return Math.max(0, Number(retryAfterMsMatch[1]));
-		}
-
-		const retryAfterMatch = /retry-after\s*[:=]\s*([^\s,;]+)/i.exec(errorMessage);
-		if (retryAfterMatch) {
-			const value = retryAfterMatch[1];
-			const seconds = Number(value);
-			if (!Number.isNaN(seconds)) {
-				return Math.max(0, seconds * 1000);
-			}
-			const dateMs = Date.parse(value);
-			if (!Number.isNaN(dateMs)) {
-				return Math.max(0, dateMs - now);
-			}
-		}
-
-		const retryHintMs = extractRetryHint(undefined, errorMessage);
-		if (retryHintMs !== undefined) {
-			return retryHintMs;
-		}
-
-		const resetMsMatch = /x-ratelimit-reset-ms\s*[:=]\s*(\d+)/i.exec(errorMessage);
-		if (resetMsMatch) {
-			const resetMs = Number(resetMsMatch[1]);
-			if (!Number.isNaN(resetMs)) {
-				if (resetMs > 1_000_000_000_000) {
-					return Math.max(0, resetMs - now);
-				}
-				return Math.max(0, resetMs);
-			}
-		}
-
-		const resetMatch = /x-ratelimit-reset\s*[:=]\s*(\d+)/i.exec(errorMessage);
-		if (resetMatch) {
-			const resetSeconds = Number(resetMatch[1]);
-			if (!Number.isNaN(resetSeconds)) {
-				if (resetSeconds > 1_000_000_000) {
-					return Math.max(0, resetSeconds * 1000 - now);
-				}
-				return Math.max(0, resetSeconds * 1000);
-			}
-		}
-
-		// Smart Fallback if no exact headers found
-		return undefined;
-	}
-
-	/**
-	 * Merge the global `retry.*` settings with any per-provider policy for the
-	 * active model. With no model resolved there is nothing to key on, so the
-	 * global settings stand unchanged.
-	 */
-	#resolveRetryPolicy(retrySettings: {
-		maxRetries: number;
-		baseDelayMs: number;
-		maxDelayMs: number;
-	}): ResolvedRetryPolicy {
-		const global = {
-			maxRetries: retrySettings.maxRetries,
-			baseDelayMs: retrySettings.baseDelayMs,
-			maxDelayMs: retrySettings.maxDelayMs,
-		};
-		const model = this.model;
-		if (!model) return { ...global, source: "global" };
-		return resolveRetryPolicy(global, this.settings.get("retry.perProvider"), model);
-	}
-
-	/**
-	 * Handle retryable errors with exponential backoff, credential rotation, and
-	 * model-fallback chains. Also entered for NON-retryable errors when a switch
-	 * is the recovery (`fireworksFastFallback`, `hardErrorFallback`): then a
-	 * successful model switch retries immediately, and a failed switch surfaces
-	 * the error without a same-model backoff retry.
-	 * @returns true if retry was initiated, false if max retries exceeded or disabled
-	 */
-	async #handleRetryableError(
-		message: AssistantMessage,
-		options?: {
-			allowModelFallback?: boolean;
-			fireworksFastFallback?: boolean;
-			hardErrorFallback?: boolean;
-			preserveFailedTurn?: boolean;
-		},
-	): Promise<boolean> {
-		const retrySettings = this.settings.getGroup("retry");
-		// A backend that runs its own agent loop remotely fails slowly and
-		// expensively, so the global attempt count and backoff are resolved
-		// against the active model before anything below reads them.
-		const retryPolicy = this.#resolveRetryPolicy(retrySettings);
-		// The Fireworks Fast→base degrade is an intrinsic model-selection safety net,
-		// not a retry loop, so it runs even when the user disabled retries: it switches
-		// the model once and lets the base turn proceed.
-		if (!retrySettings.enabled && !options?.fireworksFastFallback) return false;
-		const classifierRefusal = this.#isClassifierRefusal(message);
-
-		const generation = this.#promptGeneration;
-		this.#retryAttempt++;
-
-		// Create the retry gate on the first attempt so waitForRetry() can await it.
-		this.#ensureRetryPromise();
-
-		// All attempts on the current model are spent. Don't fail yet: the
-		// fallback chain below gets one last consult. Credential rotation can
-		// consume the entire budget without the fallback branch ever running
-		// (every rotation sets switchedCredential and skips it), so without
-		// this last resort a provider-wide usage cap never fails over to the
-		// configured chain.
-		const retryBudgetExhausted = this.#retryAttempt > retryPolicy.maxRetries;
-
-		const errorMessage = message.errorMessage || "Unknown error";
-		const id = this.#classifyRetryMessage(message);
-		const staleOpenAIResponsesReplayError = AIError.is(id, AIError.Flag.StaleResponsesItem);
-		const parsedRetryAfterMs = this.#parseRetryAfterMsFromError(errorMessage);
-		let delayMs = staleOpenAIResponsesReplayError
-			? 0
-			: calculateRetryBackoffDelayMs(retryPolicy.baseDelayMs, this.#retryAttempt);
-		let switchedCredential = false;
-		let switchedModel = false;
-		// Set when a usage-limit error pinned the wait to credential
-		// availability — suppresses the generic retry-after bump below.
-		let usageLimitWaitMs: number | undefined;
-
-		if (staleOpenAIResponsesReplayError) {
-			this.#resetCurrentResponsesProviderSession("stale replay error");
-		}
-
-		if (
-			!retryBudgetExhausted &&
-			this.model &&
-			!staleOpenAIResponsesReplayError &&
-			AIError.is(id, AIError.Flag.UsageLimit)
-		) {
-			const retryAfterMs = parsedRetryAfterMs ?? calculateRateLimitBackoffMs(parseRateLimitReason(errorMessage));
-			const outcome = await this.#modelRegistry.authStorage.markUsageLimitReached(
-				this.model.provider,
-				this.sessionId,
-				{
-					retryAfterMs,
-					baseUrl: this.model.baseUrl,
-					modelId: this.model.id,
-				},
-			);
-			if (outcome.switched) {
-				switchedCredential = true;
-				delayMs = 0;
-			} else if (await this.#maybeAutoRedeemCodexReset()) {
-				// A live usage-limit 429 on the active Codex account, with a banked
-				// reset and the opt-in setting on: spend the reset and retry
-				// immediately instead of waiting out the window. Runs after the
-				// free sibling-switch above and before model fallback below.
-				switchedCredential = true;
-				delayMs = 0;
-			} else {
-				// No sibling credential is usable right now. Wait for whichever
-				// comes first: the provider's retry-after window for the current
-				// account, or the earliest moment a temporarily blocked sibling
-				// frees up (e.g. a 60s post-401 block or a 5-min usage-probe
-				// block) — the next attempt's getApiKey re-ranks and picks it up.
-				// Without this, one short-lived sibling block escalates a
-				// recoverable situation into the provider's multi-hour wait and
-				// trips the fail-fast cap below.
-				usageLimitWaitMs = retryAfterMs;
-				if (outcome.retryAtMs !== undefined) {
-					const siblingWaitMs = Math.max(0, outcome.retryAtMs - Date.now()) + SIBLING_UNBLOCK_BUFFER_MS;
-					if (siblingWaitMs < usageLimitWaitMs) {
-						usageLimitWaitMs = siblingWaitMs;
-					}
-				}
-				if (usageLimitWaitMs > delayMs) {
-					delayMs = usageLimitWaitMs;
-				}
-			}
-		}
-
-		const allowModelFallback = options?.allowModelFallback !== false;
-		const currentSelector = this.model ? formatRetryFallbackSelector(this.model, this.thinkingLevel) : undefined;
-		if (!staleOpenAIResponsesReplayError && !switchedCredential && currentSelector) {
-			// A refusal chain stops at the retry budget: the exhausted-attempt
-			// last resort is for provider failures, not classifier decisions.
-			if (allowModelFallback && retrySettings.modelFallback && !(retryBudgetExhausted && classifierRefusal)) {
-				if (!classifierRefusal) {
-					this.#noteRetryFallbackCooldown(currentSelector, parsedRetryAfterMs, errorMessage);
-				}
-				switchedModel = await this.#tryRetryModelFallback(currentSelector, { pinFallback: classifierRefusal });
-			}
-			// Auto fallback from a Fireworks Fast variant to its base model. Independent
-			// of the role-fallback setting: it's intrinsic to the Fast contract (speed
-			// best-effort, degrade to Standard on failure) and triggers on hard router
-			// errors the generic retry classifier would otherwise reject.
-			if (!switchedModel && allowModelFallback && options?.fireworksFastFallback) {
-				switchedModel = await this.#tryFireworksFastFallback(currentSelector);
-			}
-			if (switchedModel) {
-				delayMs = 0;
-			} else if (usageLimitWaitMs === undefined && parsedRetryAfterMs && parsedRetryAfterMs > delayMs) {
-				delayMs = parsedRetryAfterMs;
-			}
-		}
-		if (retryBudgetExhausted) {
-			if (!switchedModel) {
-				await this.#persistTerminalEmptyErrorTurn(message);
-				// Max retries exceeded and no fallback model to switch to: emit
-				// final failure and reset.
-				await this.#emitSessionEvent({
-					type: "auto_retry_end",
-					success: false,
-					attempt: this.#retryAttempt - 1,
-					finalError: message.errorMessage,
-				});
-				this.#clearPendingRecoveredRetryErrors();
-				this.#retryAttempt = 0;
-				this.#resolveRetry(); // Resolve so waitForRetry() completes
-				return false;
-			}
-			// The fallback model gets a fresh retry budget — leaving the spent
-			// counter in place would exhaust it again on its first error.
-			this.#retryAttempt = 1;
-		}
-		if (classifierRefusal && !switchedModel) {
-			this.#retryAttempt = 0;
-			this.#resolveRetry();
-			return false;
-		}
-		// A fallback switch was the whole reason we entered (Fast→base degrade or
-		// a hard-error chain consult) but it could not happen (e.g. no candidate
-		// has a credential). Don't fall through to backing-off and retrying the
-		// failing model for an error the generic classifier wouldn't retry —
-		// surface it instead.
-		if (
-			(options?.fireworksFastFallback || options?.hardErrorFallback) &&
-			!switchedModel &&
-			!this.#isRetryableError(message)
-		) {
-			this.#retryAttempt = 0;
-			this.#resolveRetry();
-			return false;
-		}
-
-		// Fail-fast cap: if the provider asks us to wait longer than
-		// retry.maxDelayMs and we have no fallback credential or model to
-		// switch to, surface the error instead of sleeping. Defends against
-		// 3-hour Anthropic rate-limit windows that would otherwise leave a
-		// agent (or interactive session) silently hung. The original
-		// assistant error message is preserved in agent state so the caller
-		// can act on it.
-		const maxDelayMs = retryPolicy.maxDelayMs;
-		if (maxDelayMs > 0 && delayMs > maxDelayMs && !switchedCredential && !switchedModel) {
-			await this.#persistTerminalEmptyErrorTurn(message);
-			const attempt = this.#retryAttempt;
-			this.#retryAttempt = 0;
-			await this.#emitSessionEvent({
-				type: "auto_retry_end",
-				success: false,
-				attempt,
-				finalError: `Provider requested ${delayMs}ms wait, exceeds retry.maxDelayMs (${maxDelayMs}ms). Original error: ${errorMessage}`,
-			});
-			this.#clearPendingRecoveredRetryErrors();
-			this.#resolveRetry();
-			return false;
-		}
-
-		await this.#recordPendingRecoveredRetryError(message, id, { switchedCredential, switchedModel, delayMs });
-
-		await this.#emitSessionEvent({
-			type: "auto_retry_start",
-			attempt: this.#retryAttempt,
-			maxAttempts: retryPolicy.maxRetries,
-			policySource: describeRetryPolicySource(retryPolicy),
-			delayMs,
-			errorMessage,
-			errorId: message.errorId,
-		});
-
-		// Remove the failed assistant message from active context before retrying.
-		this.#removeAssistantMessageFromActiveContext(message, "auto-retry");
-
-		// A thinking/response loop retried into identical context loops again. Inject a
-		// hidden redirect so the retried turn sees a directive to break the repeated
-		// pattern instead of re-sampling the same stalled reasoning.
-		this.#maybeInjectThinkingLoopRedirect(id);
-
-		// Wait with exponential backoff (abortable).
-		const retryAbortController = new AbortController();
-		this.#retryAbortController?.abort();
-		this.#retryAbortController = retryAbortController;
-		// abortRetry() can land before this assignment (same drain as auto_retry_start); the cancel is lost without this.
-		if (!this.#retryPromise) {
-			retryAbortController.abort();
-		}
-		try {
-			await scheduler.wait(delayMs, { signal: retryAbortController.signal });
-		} catch {
-			if (this.#retryAbortController !== retryAbortController) {
-				return false;
-			}
-			// Aborted during sleep - emit end event so UI can clean up
-			const attempt = this.#retryAttempt;
-			this.#retryAttempt = 0;
-			this.#retryAbortController = undefined;
-			await this.#emitSessionEvent({
-				type: "auto_retry_end",
-				success: false,
-				attempt,
-				finalError: "Retry cancelled",
-			});
-			this.#clearPendingRecoveredRetryErrors();
-			this.#resolveRetry();
-			return false;
-		}
-		if (this.#retryAbortController === retryAbortController) {
-			this.#retryAbortController = undefined;
-		}
-
-		// The identity-keyed removal above can miss when a context rebuild
-		// recreated the failed turn's message object between settle and retry
-		// (fresh identity, same failed tail — issue #5382). Agent.continue()
-		// rejects any assistant tail, so a missed removal fails the scheduled
-		// retry locally before a provider request is ever made. Re-check the
-		// tail after the backoff (covering rebuilds during the sleep too) and
-		// strip a still-failed assistant tail by position. Never in
-		// preserveFailedTurn mode — the kept turn ends in synthetic tool
-		// results that continue() accepts — and never once a newer prompt owns
-		// the session.
-		if (!options?.preserveFailedTurn && this.#promptGeneration === generation) {
-			this.#stripFailedAssistantTail();
-		}
-
-		// Retry via continue() outside the agent_end event callback chain. A
-		// continuation that still fails locally must close the retry saga —
-		// otherwise auto_retry_end never fires, retryPromise stays pending, and
-		// the in-flight prompt() (and the TUI retry indicator) hang forever.
-		this.#scheduleAgentContinue({
-			delayMs: 1,
-			generation,
-			onError: error => void this.#failRetryAfterLocalContinueError(message, error),
-		});
-
-		return true;
-	}
-
-	/**
-	 * Positional backstop for {@link removeAssistantMessageFromActiveContext}:
-	 * when the identity check missed, the failed assistant turn is still the
-	 * active tail and the scheduled continue() would reject it. An
-	 * error/aborted-stopped assistant tail is never legal continuation input
-	 * and no recovery path wants it replayed on the wire, so drop it by
-	 * position; any healthy tail is left untouched.
-	 */
-	#stripFailedAssistantTail(): void {
-		const messages = this.agent.state.messages;
-		const tail = messages[messages.length - 1];
-		if (tail?.role !== "assistant") return;
-		if (tail.stopReason !== "error" && tail.stopReason !== "aborted") return;
-		logger.debug("agent active context failed assistant tail stripped positionally", {
-			stopReason: tail.stopReason,
-			timestamp: tail.timestamp,
-		});
-		this.agent.replaceMessages(messages.slice(0, -1));
-	}
-
-	/**
-	 * Close the retry saga when the scheduled continue() failed locally (no
-	 * provider request was made). Mirrors the other retry dead-ends: emit the
-	 * closing `auto_retry_end` so subscribers stop showing retry progress, and
-	 * resolve the retry promise so the in-flight prompt() unwinds (issue #5382).
-	 */
-	async #failRetryAfterLocalContinueError(message: AssistantMessage, error: unknown): Promise<void> {
-		if (this.#retryAttempt === 0) return;
-		const attempt = this.#retryAttempt;
-		this.#retryAttempt = 0;
-		const localError = errorMessage(error);
-		await this.#persistTerminalEmptyErrorTurn(message);
-		await this.#emitSessionEvent({
-			type: "auto_retry_end",
-			success: false,
-			attempt,
-			finalError: `Retry continuation failed locally: ${localError}. Original error: ${message.errorMessage ?? "Unknown error"}`,
-		});
-		this.#clearPendingRecoveredRetryErrors();
-		this.#resolveRetry();
-	}
-
-	/**
-	 * Inject a hidden redirect notice when a thinking/response loop is being retried, so
-	 * the retried turn carries an instruction to break the repeated pattern instead of
-	 * re-sampling the same stalled context. Injected on every {@link AIError.Flag.ThinkingLoop}
-	 * retry (the failed assistant is dropped each attempt, so the notice does not accumulate
-	 * unboundedly). No-op unless `id` carries the ThinkingLoop flag and the loop guard is
-	 * enabled. The notice is generic on purpose — the detector's detail can quote raw model
-	 * text, which must not be interpolated into a higher-priority developer message.
-	 */
-	#maybeInjectThinkingLoopRedirect(id: number): void {
-		if (!AIError.is(id, AIError.Flag.ThinkingLoop)) return;
-		if (this.settings.get("model.loopGuard.enabled") !== true) return;
-		this.agent.appendMessage({
-			role: "custom",
-			customType: THINKING_LOOP_REDIRECT_TYPE,
-			content: turnControlPrompts["turn-control/thinking-loop-redirect"].text,
-			display: false,
-			attribution: "agent",
-			timestamp: Date.now(),
-		});
-		this.sessionManager.appendCustomMessageEntry(
-			THINKING_LOOP_REDIRECT_TYPE,
-			turnControlPrompts["turn-control/thinking-loop-redirect"].text,
-			false,
-			undefined,
-			"agent",
-		);
 	}
 
 	/**
 	 * Cancel in-progress retry.
 	 */
 	abortRetry(): void {
-		this.#retryAbortController?.abort();
-		// Note: _retryAttempt is reset in the catch block of _autoRetry
-		this.#resolveRetry();
+		this.#retry.abort();
 	}
 
 	/**
@@ -14629,7 +12615,7 @@ export class AgentSession {
 
 	/** Whether auto-retry is currently in progress */
 	get isRetrying(): boolean {
-		return this.#retryPromise !== undefined;
+		return this.#retry.isRetrying;
 	}
 
 	/** Whether auto-retry is enabled */
@@ -14650,24 +12636,7 @@ export class AgentSession {
 	 */
 	async retry(): Promise<boolean> {
 		if (this.isStreaming || this.isCompacting || this.isRetrying) return false;
-
-		const messages = this.agent.state.messages;
-		const lastMsg = messages[messages.length - 1];
-		if (lastMsg?.role !== "assistant") return false;
-
-		const assistantMsg = lastMsg as AssistantMessage;
-		if (assistantMsg.stopReason !== "error" && assistantMsg.stopReason !== "aborted") return false;
-
-		// Remove the failed/aborted assistant message (same as auto-retry does before re-attempting)
-		this.agent.replaceMessages(messages.slice(0, -1));
-
-		// Reset retry budget for a fresh attempt
-		this.#retryAttempt = 0;
-
-		// Re-attempt the turn
-		this.#scheduleAgentContinue({ delayMs: 1 });
-
-		return true;
+		return this.#retry.retryLastFailedTurn();
 	}
 
 	// =========================================================================
@@ -15105,12 +13074,12 @@ export class AgentSession {
 		let providerReplyText = "";
 		let emittedReplyText = "";
 		let assistantMessage: AssistantMessage | undefined;
-		const stream = await this.#sideStreamFn(model, this.#obfuscateContextForProvider(context), options);
+		const stream = await this.#sideStreamFn(model, this.#secrets.obfuscateContext(context), options);
 		for await (const event of stream) {
 			if (event.type === "text_delta") {
 				providerReplyText += event.delta;
 				if (args.onTextDelta) {
-					const readyText = this.#deobfuscatedProviderTextReadyForDelta(providerReplyText);
+					const readyText = this.#secrets.providerTextReadyForDelta(providerReplyText);
 					if (readyText.length > emittedReplyText.length) {
 						const delta = readyText.slice(emittedReplyText.length);
 						emittedReplyText = readyText;
@@ -15134,8 +13103,8 @@ export class AgentSession {
 				// a stale revision needs and then expands from the runtime that refresh
 				// installs. A refresh that fails renders placeholders literally rather
 				// than killing the side-channel turn.
-				await this.#awaitSecretExpansionRefreshForRender(this.#contentCarriesLivePlaceholder(rawContent));
-				const expandReply = this.#displaySecretExpander();
+				await this.#secrets.awaitRefreshForRender(this.#secrets.contentCarriesLivePlaceholder(rawContent));
+				const expandReply = this.#secrets.displayExpander();
 				assistantMessage = {
 					...event.message,
 					content:
@@ -15153,7 +13122,7 @@ export class AgentSession {
 		if (!assistantMessage) {
 			throw new Error("Ephemeral turn ended without a final message");
 		}
-		const replyText = this.#deobfuscateFromProvider(providerReplyText);
+		const replyText = this.#secrets.expandForDisplay(providerReplyText);
 		if (args.onTextDelta && replyText.length > emittedReplyText.length) {
 			args.onTextDelta(replyText.slice(emittedReplyText.length));
 		}
@@ -15263,6 +13232,15 @@ export class AgentSession {
 		const switchingToDifferentSession = previousSessionFile
 			? path.resolve(previousSessionFile) !== path.resolve(sessionPath)
 			: true;
+		// Every in-process switch (the picker, `/resume`, an extension, RPC `switch_session`) lands
+		// here. Another profile's transcript continues in that profile, never under this one's
+		// settings and credentials.
+		const owner = switchingToDifferentSession ? foreignSessionFileProfile(sessionPath) : undefined;
+		if (owner !== undefined) {
+			throw new Error(
+				`Session ${sessionPath} belongs to profile "${owner}". Run \`veyyon --resume ${sessionPath}\` to continue it in that profile, or \`veyyon --profile ${getActiveProfileOrDefault()} --resume ${sessionPath}\` to fork it into this one.`,
+			);
+		}
 		// Emit session_before_switch event (can be cancelled)
 		if (this.#extensionRunner?.hasHandlers("session_before_switch")) {
 			const result = (await this.#extensionRunner.emit({
@@ -15283,7 +13261,7 @@ export class AgentSession {
 		await this.sessionManager.flush();
 		const previousSessionState = this.sessionManager.captureState();
 		// Only same-session reloads compare against the prior context to detect
-		// rollback edits (`#didSessionMessagesChange` below). Building it for a
+		// rollback edits (`didSessionMessagesChange` below). Building it for a
 		// different-session switch is a pure waste — and on huge pre-fix sessions
 		// it materializes every persisted legacy compaction frame plus the
 		// `openaiRemoteCompaction.replacementHistory` payload into messages,
@@ -15370,7 +13348,7 @@ export class AgentSession {
 			let sessionContext = this.buildDisplaySessionContext();
 			const didReloadConversationChange =
 				previousSessionContext !== undefined &&
-				this.#didSessionMessagesChange(previousSessionContext.messages, sessionContext.messages);
+				didSessionMessagesChange(previousSessionContext.messages, sessionContext.messages);
 			const fallbackSelectedMCPToolNames = this.#discovery.sessionDefaults(sessionPath);
 			await this.#restoreMCPSelectionsForSessionContext(sessionContext, { fallbackSelectedMCPToolNames });
 			this.#checkpoint.rehydrate(this.sessionManager.getBranch());
@@ -15577,7 +13555,7 @@ export class AgentSession {
 			throw new Error("Invalid entry ID for branching");
 		}
 
-		const selectedText = this.#extractUserMessageText(selectedEntry.message.content);
+		const selectedText = extractUserMessageText(selectedEntry.message.content);
 
 		let skipConversationRestore = false;
 
@@ -15845,11 +13823,7 @@ export class AgentSession {
 				reserveTokens: this.settings.get("branchSummary.reserveTokens"),
 				metadata: this.agent.metadataForProvider(model.provider),
 				convertToLlm,
-				resolveObfuscateProviderText: () => {
-					const runtime = this.#secretRuntime;
-					const fallback = this.#obfuscator;
-					return text => runtime?.obfuscateText(text) ?? fallback?.obfuscate(text) ?? text;
-				},
+				resolveObfuscateProviderText: () => this.#secrets.snapshotProviderTextRedactor(),
 				onPayload: this.#onPayload,
 				telemetry: resolveTelemetry(this.agent.telemetry, this.sessionId),
 				// Same per-provider concurrency cap rationale as the compaction
@@ -15890,7 +13864,7 @@ export class AgentSession {
 		if (targetEntry.type === "message" && targetEntry.message.role === "user") {
 			// User message: leaf = parent (null if root), text goes to editor
 			newLeafId = targetEntry.parentId;
-			editorText = this.#extractUserMessageText(targetEntry.message.content);
+			editorText = extractUserMessageText(targetEntry.message.content);
 		} else if (targetEntry.type === "custom_message" && targetEntry.customType !== SKILL_PROMPT_MESSAGE_TYPE) {
 			// Custom message: leaf = parent (null if root), text goes to editor
 			newLeafId = targetEntry.parentId;
@@ -15924,8 +13898,8 @@ export class AgentSession {
 		// RENDER PATH, and async: this rebuilds the agent's display state after a
 		// branch move, so a throw left the TUI with no transcript at all. Await the
 		// refresh a stale revision needs, then degrade per string.
-		await this.#awaitSecretExpansionRefreshForRender(this.#messagesCarryLivePlaceholder(stateContext.messages));
-		const displayContext = this.#deobfuscateSessionContextForDisplay(stateContext);
+		await this.#secrets.awaitRefreshForRender(this.#secrets.messagesCarryLivePlaceholder(stateContext.messages));
+		const displayContext = this.#secrets.deobfuscateSessionContextForDisplay(stateContext);
 		await this.#restoreMCPSelectionsForSessionContext(displayContext);
 		this.agent.replaceMessages(displayContext.messages);
 		this.#checkpoint.rehydrate(this.sessionManager.getBranch());
@@ -15963,20 +13937,13 @@ export class AgentSession {
 			if (entry.type !== "message") continue;
 			if (entry.message.role !== "user") continue;
 
-			const text = this.#extractUserMessageText(entry.message.content);
+			const text = extractUserMessageText(entry.message.content);
 			if (text) {
 				result.push({ entryId: entry.id, text });
 			}
 		}
 
 		return result;
-	}
-
-	#extractUserMessageText(content: string | Array<{ type: string; text?: string }>): string {
-		// Persisted entry content arrives loosely typed here; keep the defensive
-		// guard for malformed data, then delegate to the shared flattener.
-		if (typeof content !== "string" && !Array.isArray(content)) return "";
-		return contentText(content, { separator: "" });
 	}
 
 	/**

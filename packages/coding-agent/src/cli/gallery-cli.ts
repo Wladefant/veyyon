@@ -9,7 +9,7 @@
  */
 import type { AgentTool } from "@veyyon/agent-core";
 import type { TUI } from "@veyyon/tui";
-import { clampLow, errorMessage, getProjectDir } from "@veyyon/utils";
+import { clampLow, errorMessage, getProjectDir, stripAnsi } from "@veyyon/utils";
 import chalk from "chalk";
 import { Settings } from "../config/settings";
 import { ToolExecutionComponent } from "../modes/terminal/components/transcript/tool-execution";
@@ -309,7 +309,7 @@ export async function runGalleryCommand(args: GalleryCommandArgs): Promise<void>
 		}
 		for (const { theme: themeName, sections } of rendered) {
 			const lines = [`# theme: ${themeName}`, ...sections.flatMap(section => section.lines), ""];
-			process.stdout.write(`${lines.map(line => (plain ? Bun.stripANSI(line) : line)).join("\n")}\n`);
+			process.stdout.write(`${lines.map(line => (plain ? stripAnsi(line) : line)).join("\n")}\n`);
 		}
 		return;
 	}
@@ -320,6 +320,6 @@ export async function runGalleryCommand(args: GalleryCommandArgs): Promise<void>
 	lines.push("");
 	// --plain forces it, but a piped/redirected stdout (chalk detects non-TTY
 	// and NO_COLOR) also degrades to plain text instead of escape soup.
-	const text = lines.map(line => (plain ? Bun.stripANSI(line) : line)).join("\n");
+	const text = lines.map(line => (plain ? stripAnsi(line) : line)).join("\n");
 	process.stdout.write(`${text}\n`);
 }

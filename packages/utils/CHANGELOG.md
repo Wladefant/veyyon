@@ -15,10 +15,21 @@
 
 - The terminal stderr guard now covers Windows, re-pointing the process standard-error handle at the day's log so a native abort trace survives the console window closing, while leaving file descriptor 2 and every JavaScript write on the terminal ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 
+- `@veyyon/utils/tool-call-label` exports `formatToolCallLabel`, the one-line session-tree label for a tool call, with each identifier cut to 40 code points and every line break in a path or free-text argument printed as a space.
 - `@veyyon/utils/session-file` exports `sessionFileMatchesResumeArgument`, which reports whether a transcript filename answers a `--resume` id or prefix.
+- `getProfileSessionsDir` returns a named profile's sessions directory as a process running that profile resolves it, under `$XDG_DATA_HOME` when that profile's XDG directory exists.
+- `setProfileEnv` sets an environment variable read out of the active profile's configuration and records it so a process started under another profile drops it.
+- `@veyyon/utils/session-file` exports `ORPHAN_AGENT_TRANSCRIPT_PREFIX`, the prefix of an agent transcript written under the sessions root when its parent session has no file.
+- `@veyyon/utils/stall-sampler` exports `stallSampler`, which keeps JavaScriptCore's sampling profiler running at a 10 ms interval and returns the functions sampled between two `performance.now()` readings, and `borrow()`, which lends the profiler to another caller; `LoopWatchdog` takes it as `stacks` and follows each `ui.loop-blocked` line with a `ui.loop-blocked.stack` line naming the functions that held the loop.
+- `@veyyon/utils/fs-tool-args` exports `editInputPaths`, which reads the file paths from hashline or `apply_patch` section headers.
+- `exponentialBackoffDelay` accepts `jitterSpread: "below"`, which only shortens the wait so `maxMs` is the longest delay.
+- `internString` returns the engine's shared copy of a string, which is collected with its last holder.
 
 ### Changed
 
+- `@veyyon/utils/json-snapshot` frames each snapshot with a layout version, payload byte length and CRC-32 instead of a SHA-256 digest, and rejects snapshots framed by the previous layout.
+- `utf8ByteLength` measures a whole string, or a range longer than 64 code units, with `Buffer.byteLength`, and `isWellFormedUtf16` answers with `String.prototype.isWellFormed`, instead of looping over code units, cutting a 3 KB ASCII string from 11.1 µs to 28 ns and from 1.3 µs to 4.5 ns with identical answers.
+- `wrapTextWithAnsi` returns a fitting row holding one-cell punctuation, arrows, box drawing, geometric shapes, dingbats or Latin-1, or a leading indent after an SGR sequence, without calling the native wrapper, cutting such a row from about 620 ns to 70 ns and a 13,470-entry transcript's first frame from 197.3 ms to 190.7 ms with rows identical to the native wrapper's across 300,000 generated lines.
 - `matchesKey` and `parseKey` look up their memoized answers by protocol mode and input instead of a concatenated key string, and `KeybindingsManager.matches` reuses each parsed key's canonical id, cutting a memoized key test from 70.4 ns to 17.3 ns with identical answers.
 - `latexToBlock` parses each display-math fragment with one handler per construct (fractions, radicals, `\left…\right`, big operators, colors, environments, scripts, delimiters) and scans command names by character code, rendering 150,018 differential cases byte-identically about 6% faster.
 - `prompt.render` reuses a template's variable analysis across renders instead of re-parsing the template on every call, rendering the spawned-agent system prompt in about 7 µs instead of about 100 µs.
@@ -26,6 +37,9 @@
 - `replaceTabs` returns a line with no tab without running the replacement, cutting 1.83M transcript lines from 55.2 ms to 40.6 ms.
 - `latexToUnicode` dispatches a command through one name-keyed table and scans command names by character code, rendering a 12-formula corpus in 11.4 µs instead of 24.2 µs with 305,251 differential cases byte-identical.
 - `visibleWidth` counts a row of printable ASCII, tabs and SGR sequences in its own scan instead of the escape-stripping measure, cutting a styled prose row from 299 ns to 62 ns and a colored 13,362-entry transcript render from 288 ms to 270 ms with identical widths.
+- `visibleWidth` also counts one-cell characters past ASCII (gutter bars, box drawing, ellipses, arrows, Latin-1) in its own scan, cutting a gutter row from 242 ns to 57 ns and a 13,470-entry transcript render from 268 ms to 239 ms with identical widths.
+- `reopenBackgroundAfterResets` reads a row once instead of three times, re-opening an output block's ground in 40 ns instead of 102 ns on a highlighted row and 70 ns instead of 214 ns on a row with resets, and inserts a ground that is itself a reset once after each reset instead of twice.
+- `prompt.render` returns the shared copy of its result, so equal renders of a template hold one buffer.
 
 ### Fixed
 
@@ -33,11 +47,15 @@
 ### Fixed
 - Prioritize exact slash-command aliases over earlier same-prefix commands in sync autocomplete so `/q` resolves to `quit` rather than `queue` ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 
+- The default profile ignores an inherited `VEYYON_CODING_AGENT_DIR` equal to any profile's agent dir, so `/profile default` or `/resume` of a default-profile session from a named profile no longer runs the default profile in the named profile's agent dir.
+- A veyyon process started by another veyyon process under a different profile drops the variables the parent set from its own `.env` files, recorded in `VEYYON_DOTENV_ORIGIN`, and applies its own profile's `.env` layers instead of running on the parent profile's credentials.
 - `@veyyon/utils/stderr-guard` loads `node:util` on the first routed console call rather than at import, keeping it off the launch card path; no user-visible change.
 - Unhandled ENOSPC errors on log, session, or artifact writes are now caught and logged as warnings rather than crashing the process, preventing session loss when a disk fills ([#73](https://github.com/Wladefant/veyyon/issues/73), [#114](https://github.com/Wladefant/veyyon/pull/114)).
 - `postmortem.quit` accepts `drainStdout: false` to skip waiting for stdout drain when terminating a process whose terminal host is already gone ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Made malformed advanced-serialization frames from a worker subprocess non-fatal: Bun surfaces an undecodable IPC frame as a process-level `uncaughtException` in the parent (oven-sh/bun#37287), which the postmortem handler treated as fatal and tore down every active session and subagent. The handler now recognizes the decode failure (`isWorkerIpcDeserializeError`) and logs-and-continues, faulting only the offending worker via its own exit/error path ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - `latexToUnicode` and `latexToBlock` render a command, environment, color or delimiter named after an `Object.prototype` member (`\toString`, `\constructor`, `\begin{__proto__}`) as an unknown name instead of throwing, printing a function body, or laying it out as a fraction, big operator or matrix.
+- Mermaid `colorMode: "html"` output escapes `"` and `'` in diagram text and in each span's color attribute, and escapes uncolored xychart text.
+- `extractRetryHint` reads `retry-after: <date>` in an error message as a wait until that instant instead of a wait of the year's number of seconds, and reads `x-ratelimit-reset-ms`, `x-ratelimit-reset` and `x-ratelimit-reset-after` written into a message as it reads those headers; `RETRY_HINT_HEADERS` exports the header forms both readings share.
 
 ## [1.5.5] - 2026-09-25
 

@@ -208,6 +208,10 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * `@veyyon/utils/math` and engine modules the root already reached, so the launch runs no new
  * code. `core/frame-plan.ts`, split out with it, is imported by type only and is not on the graph.
  *
+ * 1578 to 1579: `hosts/terminal/engine/src/components/markdown-tokenizer.ts`, the block
+ * tokenizer with the setext underline precheck, split out of `components/markdown.ts`. It imports
+ * `marked`, which `markdown.ts` already reached, so the launch runs no new code.
+ *
  * 1578 to 1595 (fork), measured 2026-09-27 after the santhreal merge up to e4967b27fd04: the
  * seventeen modules this graph reaches that upstream does not carry. Six are the ChatGPT-web
  * provider and vision input (`ai/providers/openai-codex/{chatgpt-web-trusted-context,chatgpt-web-turn-stamp}.ts`,
@@ -243,11 +247,14 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  * dropping `gh.ts`, `aborted-partway.ts`, `tool-result.ts`, `polysim-main-guard.ts` and `bash-guard.ts`
  * (-5 modules) from the launch graph.
  *
+ * 1613 (fork + upstream Batch 19 sync): incorporates upstream additions (including markdown-tokenizer
+ * and upstream refactoring across the launch graph) alongside fork extensions, measured at 1613.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1594;
+const LAUNCH_REACH_CEILING = 1613;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

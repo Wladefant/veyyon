@@ -14,7 +14,7 @@ The root itself holds only **global, cross-profile** state. Everything else is p
 | `shared-auth/` | Shared credential store, used when `profileSharing` is on: `agent.db` (SQLite OAuth/API-key storage shared across profiles). |
 | `AGENTS.md` | **Global** instructions loaded into every profile's session. Veyyon creates it on first run with a stripped-before-load guidance header. Keep profile-specific rules in the profile's own `AGENTS.md` (below). See [Instruction layers](../features/skills.md#instruction-layers). |
 | `install-id` | Persistent per-install UUID. Shared by every profile. |
-| `profiles/` | One directory per profile, including `profiles/default/`, see below. |
+| `profiles/` | One directory per profile, including `profiles/default/`, described under Profiles. |
 
 ## Profiles (`~/.veyyon/profiles/<name>/`)
 

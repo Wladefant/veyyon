@@ -441,6 +441,24 @@ describe("InteractiveMode plan review rendering", () => {
 		expect(overlayHandle.hide).toHaveBeenCalled();
 	});
 
+	it("repaints the screen when a plan is swapped into the open review with no keystroke", async () => {
+		let capturedOverlay: PlanReviewOverlay | undefined;
+		vi.spyOn(mode.ui, "showOverlay").mockImplementation(component => {
+			capturedOverlay = component as PlanReviewOverlay;
+			return { hide: vi.fn() } as never;
+		});
+		const choice = mode.showPlanReview("# Plan\n\nOriginal body.\n", "Plan mode - next step", ["Approve"]);
+		expect(capturedOverlay).toBeDefined();
+		const overlay = capturedOverlay!;
+		const requestRender = vi.spyOn(mode.ui, "requestRender");
+
+		overlay.setPlanContent("# Plan\n\nSwapped body.\n");
+
+		expect(requestRender).toHaveBeenCalled();
+		overlay.handleInput("\x1b");
+		await expect(choice).resolves.toBeUndefined();
+	});
+
 	it("Refine with no annotations silently aborts approval and returns to the editor", async () => {
 		const planFilePath = "local://PLAN.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {

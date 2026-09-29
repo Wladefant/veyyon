@@ -482,16 +482,16 @@ describe("edit.afterEdit selects exactly one after-edit pass", () => {
 	});
 
 	/**
-	 * A config file is read without enum validation, so a typo arrives verbatim
-	 * and matches neither pass. Silently ending every turn with no check is the
-	 * worst of the three outcomes, so it falls back to the default and warns.
+	 * The settings read path answers an enum value outside the schema with the
+	 * declared default, so a typo still runs the default pass rather than ending
+	 * every turn with no check, and the substitution is reported once.
 	 */
 	it("falls back to the default, loudly, on a value outside the schema", async () => {
 		// Collected outside the spy: the harness restores mocks, which clears their
 		// own call record.
 		const warnings: string[] = [];
-		vi.spyOn(logger, "warn").mockImplementation(message => {
-			warnings.push(message);
+		vi.spyOn(logger, "warn").mockImplementation((message, context) => {
+			warnings.push(`${message} ${JSON.stringify(context)}`);
 		});
 		const outcome = await settleAfterEdits({
 			settings: { "edit.afterEdit": "nonsense" },

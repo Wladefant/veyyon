@@ -80,11 +80,6 @@ export async function readDirEntries(dirPath: string): Promise<fs.Dirent[]> {
 	}
 }
 
-export async function readDir(dirPath: string): Promise<string[]> {
-	const entries = await readDirEntries(dirPath);
-	return entries.map(entry => entry.name);
-}
-
 export async function walkUp(
 	startDir: string,
 	name: string,

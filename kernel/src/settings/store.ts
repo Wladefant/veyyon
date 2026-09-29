@@ -37,7 +37,9 @@ import { YAML } from "bun";
 import { UNSET_NUMBER } from "./optional-number";
 import {
 	describeSettingTypeMismatch,
+	enumMember,
 	getDefault,
+	getType,
 	isUnsetNumberPath,
 	type SettingPath,
 	type SettingValue,
@@ -434,6 +436,8 @@ export class SettingsStore {
 
 	/** Dotted-key problems already reported, so each one is said once per process rather than once per read. */
 	#reportedDottedKeyProblems = new Set<string>();
+	/** Enum settings already reported as holding a value outside their declared set, one warning per path. */
+	#reportedInvalidEnums = new Set<SettingPath>();
 
 	/** Pending save (debounced) */
 	#saveTimer?: NodeJS.Timeout;
@@ -482,9 +486,9 @@ export class SettingsStore {
 		const globalBinding = this.#hooks.globalBinding(path);
 		if (globalBinding) {
 			const override = getByPath(this.#overrides, toSegments(path));
-			if (override !== undefined) return override as SettingValue<P>;
+			if (override !== undefined) return this.#declaredValue(path, override);
 			try {
-				return globalBinding.read() as SettingValue<P>;
+				return this.#declaredValue(path, globalBinding.read());
 			} catch (error) {
 				logger.warn("Settings: global read failed; using default", { path, error: String(error) });
 				return getDefault(path);
@@ -504,14 +508,39 @@ export class SettingsStore {
 		const registered = memoized !== undefined;
 		const segments = memoized ?? path.split(".");
 		const value = getByPath(this.#merged, segments);
-		const resolved =
-			value !== undefined
-				? (this.#hooks.resolveForCwd(path, value, this.#cwd) ?? value)
-				: registered
-					? getDefault(path)
-					: undefined;
+		let resolved: unknown;
+		if (value === undefined) {
+			resolved = registered ? getDefault(path) : undefined;
+		} else {
+			const scoped = this.#hooks.resolveForCwd(path, value, this.#cwd) ?? value;
+			resolved = registered ? this.#declaredValue(path, scoped) : scoped;
+		}
 		this.#resolvedCache.set(path, resolved);
 		return resolved as SettingValue<P>;
+	}
+
+	/**
+	 * `value` as the setting reads it: unchanged, unless `path` is an enum and `value` is not one of
+	 * its members, in which case the declared default, reported once per path.
+	 *
+	 * A value written into a config file by hand reaches here unchecked, and every consumer compares
+	 * it against its own literals, so an out-of-set value takes whichever branch a consumer's `else`
+	 * happens to be. Answering with the default here gives every consumer the value the schema
+	 * declares. The load-time report states the file to edit; this one states the value in use.
+	 */
+	#declaredValue<P extends SettingPath>(path: P, value: unknown): SettingValue<P> {
+		if (getType(path) !== "enum") return value as SettingValue<P>;
+		const member = enumMember(path, value);
+		if (member !== undefined) return member as SettingValue<P>;
+		const fallback = getDefault(path);
+		if (!this.#reportedInvalidEnums.has(path)) {
+			this.#reportedInvalidEnums.add(path);
+			logger.warn("Settings: enum value is not one of its declared values; using the default", {
+				reason: describeSettingTypeMismatch(path, value),
+				default: fallback,
+			});
+		}
+		return fallback;
 	}
 
 	/**

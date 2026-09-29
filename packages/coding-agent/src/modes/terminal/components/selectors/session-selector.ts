@@ -9,6 +9,7 @@ import { routeSgrMouseInput } from "@veyyon/utils/mouse";
 import { padding } from "@veyyon/utils/padding";
 import { replaceTabs } from "@veyyon/utils/tab-width";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
+import type { RunningConversations } from "../../../../session/background-sessions";
 import { withIcon } from "../../../../theme/icon-label";
 import { theme } from "../../../../theme/theme";
 import { shortenPath } from "../../../../tools/core/render-utils";
@@ -285,6 +286,15 @@ class SessionList implements Component {
 	readonly #getTerminalRows: () => number;
 
 	onDeleteRequest?: (session: SessionInfo) => void;
+	/** ctrl+x on a row: stop that conversation if it runs off-screen. */
+	onStopRequest?: (session: SessionInfo) => void;
+	/** Whether a row's conversation runs off-screen right now. */
+	isRunning: (session: SessionInfo) => boolean = () => false;
+
+	/** The row the cursor is on, if the filtered list has any. */
+	get selectedSession(): SessionInfo | undefined {
+		return this.#filteredSessions[this.#selectedIndex];
+	}
 
 	#allSessions: SessionInfo[];
 	#showCwd: boolean;
@@ -649,7 +659,11 @@ class SessionList implements Component {
 			if (session.messageCount > 0) {
 				metadata += ` ${dot} ${dim(formatBytes(session.size))}`;
 			}
-			const status = formatSessionStatus(session.status);
+			// A running conversation's file status is whatever its last flush wrote,
+			// so the live state replaces it.
+			const status = this.isRunning(session)
+				? theme.fg("accent", `${theme.status.running} running`)
+				: formatSessionStatus(session.status);
 			if (status) {
 				metadata += ` ${dot} ${status}`;
 			}
@@ -706,6 +720,11 @@ class SessionList implements Component {
 			if (selected && this.onDeleteRequest) {
 				this.onDeleteRequest(selected);
 			}
+			return;
+		}
+		if (matchesKey(keyData, "ctrl+x")) {
+			const selected = this.#filteredSessions[this.#selectedIndex];
+			if (selected) this.onStopRequest?.(selected);
 			return;
 		}
 		// Up arrow
@@ -782,6 +801,11 @@ export interface SessionSelectorOptions {
 	 * always tracks the content — a short session list renders a short card.
 	 */
 	fillHeight?: boolean;
+	/**
+	 * Conversations this process runs off-screen. Their rows read "running",
+	 * and ctrl+x stops the selected one without resuming it.
+	 */
+	running?: RunningConversations;
 }
 
 /**
@@ -801,6 +825,9 @@ export class SessionSelectorComponent extends Container {
 	#headerText: Text;
 	#onDelete?: (session: SessionInfo) => Promise<boolean>;
 	#onRequestRender?: () => void;
+	readonly #running?: RunningConversations;
+	/** Transcripts whose stop is in flight, so a repeated ctrl+x does not abort twice. */
+	readonly #stopping = new Set<string>();
 	readonly #loadAllSessions?: () => Promise<SessionInfo[]>;
 	#folderSessions: SessionInfo[];
 	#globalSessions: SessionInfo[] | null = null;
@@ -875,6 +902,14 @@ export class SessionSelectorComponent extends Container {
 		this.#sessionList.onDeleteRequest = (session: SessionInfo) => {
 			this.#showDeleteConfirmation(session);
 		};
+		const running = options.running;
+		if (running) {
+			this.#running = running;
+			this.#sessionList.isRunning = session => running.isRunning(session.path);
+			this.#sessionList.onStopRequest = session => {
+				void this.#stopRunning(session);
+			};
+		}
 		if (this.#loadAllSessions || this.#globalSessions) {
 			this.#sessionList.onToggleScope = () => {
 				void this.#toggleScope();
@@ -953,6 +988,47 @@ export class SessionSelectorComponent extends Container {
 		this.#messageContainer.clear();
 		this.#messageContainer.addChild(new Text(theme.fg("error", `Error: ${replaceTabs(message)}`), 1, 0));
 		this.#messageContainer.addChild(new Spacer(1));
+	}
+
+	#showNotice(message: string): void {
+		this.#messageContainer.clear();
+		this.#messageContainer.addChild(new Text(theme.fg("muted", replaceTabs(message)), 1, 0));
+		this.#messageContainer.addChild(new Spacer(1));
+	}
+
+	/** Whether the cursor row is a conversation running off-screen, so the stop chip names a key that works. */
+	#runningSelected(): boolean {
+		const selected = this.#sessionList.selectedSession;
+		return selected !== undefined && this.#running?.isRunning(selected.path) === true;
+	}
+
+	/**
+	 * ctrl+x: stop a conversation running off-screen without resuming it.
+	 *
+	 * The row stays: the transcript is still on disk and resumable, and its
+	 * marker reads the file status again once the entry left the running set.
+	 */
+	async #stopRunning(session: SessionInfo): Promise<void> {
+		const running = this.#running;
+		if (!running || this.#stopping.has(session.path)) return;
+		const displayName = replaceTabs(session.title || session.firstMessage.slice(0, 40) || session.id);
+		if (!running.isRunning(session.path)) {
+			this.#showNotice(`${displayName} is not running.`);
+			this.#onRequestRender?.();
+			return;
+		}
+		this.#stopping.add(session.path);
+		this.#showNotice(`Stopping ${displayName}…`);
+		this.#onRequestRender?.();
+		try {
+			await running.stop(session.path);
+			this.#showNotice(`Stopped ${displayName}.`);
+		} catch (err) {
+			this.#showError(errorMessage(err));
+		} finally {
+			this.#stopping.delete(session.path);
+			this.#onRequestRender?.();
+		}
 	}
 
 	#showDeleteConfirmation(session: SessionInfo): void {
@@ -1041,6 +1117,7 @@ export class SessionSelectorComponent extends Container {
 			: [
 					{ label: "enter select", clickable: true, id: "confirm" },
 					{ label: "del delete", clickable: true, id: "delete" },
+					...(this.#runningSelected() ? [{ label: "ctrl+x stop" }] : []),
 					{ label: `tab ${scopeLabel}` },
 					{ label: "esc close", clickable: true, id: "close" },
 				];

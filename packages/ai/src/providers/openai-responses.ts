@@ -88,7 +88,9 @@ import {
 	buildResponsesDeltaInput,
 	buildResponsesInput,
 	clearOpenAIStrictToolsState,
+	clearOpenAIToolChoiceState,
 	createOpenAIStrictToolsState,
+	createOpenAIToolChoiceState,
 	disableStrictToolsForScope,
 	getOpenAIPromptCacheKey,
 	getOpenAIResponsesRoutingSessionId,
@@ -98,9 +100,13 @@ import {
 	isOpenAIResponsesProgressEvent,
 	isOpenRouterAnthropicModel,
 	isStrictToolsDisabledForScope,
+	isToolChoiceRejectedForScope,
+	isToolChoiceRejection,
 	type OpenAIStrictToolsScope,
 	type OpenAIStrictToolsState,
+	type OpenAIToolChoiceState,
 	processResponsesStream,
+	rejectToolChoiceForScope,
 	resolveOpenAICompatPolicy,
 	resolveOpenAIOutputTokenParam,
 	resolveOpenAIRequestSetup,
@@ -172,7 +178,8 @@ const OPENAI_RESPONSES_CHAIN_STALE_FAILURE_LIMIT = 3;
 interface OpenAIResponsesProviderSessionState
 	extends ProviderSessionState,
 		OpenAIStrictToolsState,
-		OpenAIReasoningEffortFallbackState {
+		OpenAIReasoningEffortFallbackState,
+		OpenAIToolChoiceState {
 	nativeHistoryReplayWarmed: boolean;
 	/** Stateful `previous_response_id` chain baselines, keyed by baseUrl/model/session. */
 	chains: Map<string, OpenAIResponsesChainState>;
@@ -197,9 +204,11 @@ interface OpenAIResponsesChainState {
 function createOpenAIResponsesProviderSessionState(): OpenAIResponsesProviderSessionState {
 	const strictToolsState = createOpenAIStrictToolsState();
 	const reasoningEffortFallbackState = createOpenAIReasoningEffortFallbackState();
+	const toolChoiceState = createOpenAIToolChoiceState();
 	const state: OpenAIResponsesProviderSessionState = {
 		...strictToolsState,
 		...reasoningEffortFallbackState,
+		...toolChoiceState,
 		nativeHistoryReplayWarmed: false,
 		chains: new Map(),
 		close: () => {
@@ -207,6 +216,7 @@ function createOpenAIResponsesProviderSessionState(): OpenAIResponsesProviderSes
 			state.chains.clear();
 			clearOpenAIStrictToolsState(state);
 			clearOpenAIReasoningEffortFallbackState(state);
+			clearOpenAIToolChoiceState(state);
 		},
 	};
 	return state;
@@ -454,6 +464,8 @@ interface OpenAIResponsesRequestPlan {
 	premiumRequests: number | undefined;
 	sessionState: OpenAIResponsesProviderSessionState | undefined;
 	strictToolsScope: OpenAIStrictToolsScope;
+	/** The session's rejected `tool_choice` forms, or this call's own when there is no session. */
+	toolChoiceState: OpenAIToolChoiceState;
 	requestUrl: string;
 	idleTimeoutMs: number | undefined;
 	firstEventTimeoutMs: number | undefined;
@@ -540,7 +552,8 @@ class OpenAIResponsesStreamRun {
 		});
 		const sessionState = getOpenAIResponsesProviderSessionState(model, options?.providerSessionState);
 		const strictToolsScope = getOpenAIStrictToolsScope(model, baseUrl);
-		const built = buildParams(model, context, options, sessionState, strictToolsScope);
+		const toolChoiceState = sessionState ?? createOpenAIToolChoiceState();
+		const built = buildParams(model, context, options, sessionState, strictToolsScope, false, toolChoiceState);
 		const resolvedBaseUrl = trimTrailingSlashes(baseUrl ?? "https://api.openai.com/v1");
 		const effortFallbacks = new ResponsesReasoningEffortFallbacks(model, resolvedBaseUrl, sessionState);
 		if (isOpenAIResponsesStatefulEnabled(options, baseUrl) && routingSessionId && sessionState) {
@@ -565,6 +578,7 @@ class OpenAIResponsesStreamRun {
 			premiumRequests: copilotPremiumRequests,
 			sessionState,
 			strictToolsScope,
+			toolChoiceState,
 			requestUrl,
 			idleTimeoutMs,
 			firstEventTimeoutMs,
@@ -634,6 +648,23 @@ class OpenAIResponsesStreamRun {
 			return attempt;
 		}
 		const captured = error instanceof OpenAIHttpError ? error.captured : undefined;
+		const sentToolChoice = attempt.chained.params.tool_choice;
+		if (!aborted && isToolChoiceRejection(error, captured, sentToolChoice)) {
+			// The endpoint rejected the `tool_choice` form, not the request. The rebuilt request
+			// leaves that form out, so this rung cannot answer its own retry.
+			rejectToolChoiceForScope(plan.toolChoiceState, plan.strictToolsScope, sentToolChoice);
+			const built = buildParams(
+				model,
+				context,
+				options,
+				plan.sessionState,
+				plan.strictToolsScope,
+				this.#strictToolsDisabled,
+				plan.toolChoiceState,
+			);
+			plan.effortFallbacks.apply(built.params);
+			return this.#chainAttempt(built.params, built.strictToolsApplied);
+		}
 		const compiledGrammarTooLarge =
 			isOpenRouterAnthropicModel(model) && isCompiledGrammarTooLargeStrictError(error, captured);
 		if (
@@ -644,7 +675,15 @@ class OpenAIResponsesStreamRun {
 		) {
 			this.#strictToolsDisabled = true;
 			disableStrictToolsForScope(plan.sessionState, plan.strictToolsScope);
-			const built = buildParams(model, context, options, plan.sessionState, plan.strictToolsScope, true);
+			const built = buildParams(
+				model,
+				context,
+				options,
+				plan.sessionState,
+				plan.strictToolsScope,
+				true,
+				plan.toolChoiceState,
+			);
 			return this.#chainAttempt(built.params, built.strictToolsApplied);
 		}
 		return this.#replayAttempt(plan, error);
@@ -679,6 +718,7 @@ class OpenAIResponsesStreamRun {
 			plan.sessionState,
 			plan.strictToolsScope,
 			this.#strictToolsDisabled,
+			plan.toolChoiceState,
 		);
 		// Only ZDR forces `store: false` (the org never persists responses). A
 		// non-ZDR stale baseline is transient, so keep storing: the full-context
@@ -911,6 +951,7 @@ export function buildParams(
 	providerSessionState: OpenAIResponsesProviderSessionState | undefined,
 	strictToolsScope?: OpenAIStrictToolsScope,
 	disableStrictToolsOverride = false,
+	toolChoiceState: OpenAIToolChoiceState | undefined = providerSessionState,
 ): { params: OpenAIResponsesSamplingParams; strictToolsApplied: boolean } {
 	const policy = resolveOpenAICompatPolicy(model, {
 		endpoint: "responses",
@@ -1023,6 +1064,15 @@ export function buildParams(
 			if (toolChoice !== undefined && params.tools.length > 0) {
 				params.tool_choice = toolChoice;
 			}
+		}
+		if (
+			toolChoiceState &&
+			strictToolsScope &&
+			isToolChoiceRejectedForScope(toolChoiceState, strictToolsScope, params.tool_choice)
+		) {
+			// This model rejected this form of `tool_choice` earlier in the session. Leaving the
+			// field out is `auto`, and the reasoning policy below reads the choice actually sent.
+			delete params.tool_choice;
 		}
 	}
 
