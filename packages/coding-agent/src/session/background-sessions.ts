@@ -12,7 +12,9 @@
  *   and a handoff past that limit stops the oldest running conversation.
  * - `/resume` calls {@link BackgroundSessions.take} to reclaim a registered
  *   session by its transcript, so it re-attaches the live object instead of
- *   replaying that file as finished text.
+ *   replaying that file as finished text. Its picker marks registered
+ *   conversations as running and stops one in place through
+ *   {@link runningConversations}.
  * - The status line subscribes to the count, because a conversation spending
  *   tokens off-screen has no other surface.
  * - Shutdown calls {@link BackgroundSessions.drain}.
@@ -205,12 +207,17 @@ export class BackgroundSessions {
 	 * pending settle only flushes what the turn already wrote.
 	 */
 	take(sessionFile: string): AgentSession | undefined {
+		const entry = this.find(sessionFile);
+		if (!entry) return undefined;
+		this.#discard(entry.session, entry.handoff);
+		return entry.session;
+	}
+
+	/** The registered conversation writing to `sessionFile`, if one is. */
+	find(sessionFile: string): KeptSession | undefined {
 		const wanted = path.resolve(sessionFile);
-		for (const [session, entry] of this.#kept) {
-			if (entry.sessionFile && path.resolve(entry.sessionFile) === wanted) {
-				this.#discard(session, entry.handoff);
-				return session;
-			}
+		for (const entry of this.#kept.values()) {
+			if (entry.sessionFile && path.resolve(entry.sessionFile) === wanted) return entry;
 		}
 		return undefined;
 	}
@@ -272,4 +279,26 @@ export class BackgroundSessions {
 			this.#discard(session, handoff);
 		}
 	}
+}
+
+/** The off-screen conversations a session picker lists, addressed by transcript path. */
+export interface RunningConversations {
+	/** Whether the conversation writing to `sessionFile` is running off-screen. */
+	isRunning(sessionFile: string): boolean;
+	/** Abort that conversation's turn and resolve once its entry left the set. */
+	stop(sessionFile: string): Promise<void>;
+}
+
+/**
+ * The picker's view of `keeper`. A stop records `reason` on the aborted turn;
+ * a path that names no registered conversation is left alone.
+ */
+export function runningConversations(keeper: BackgroundSessions, reason: string): RunningConversations {
+	return {
+		isRunning: sessionFile => keeper.find(sessionFile) !== undefined,
+		stop: async sessionFile => {
+			const entry = keeper.find(sessionFile);
+			if (entry) await keeper.stop(entry.session, reason);
+		},
+	};
 }

@@ -153,6 +153,11 @@ the transcripts it opens are that conversation's. A conversation this process is
 still running off-screen is counted by the status line's background chip and has no
 card of its own.
 
+`/resume` marks each off-screen conversation `running`. Enter re-attaches it with its
+turn still streaming. `ctrl+x` stops the selected one in place: its turn is aborted,
+its provider stream closed and its transcript flushed, and the row stays in the list
+for a later resume.
+
 ### The Live roster
 
 Each row is one agent that exists right now: a status glyph, its call sign, the TYPE of agent it was spawned from (`reviewer`, `scout`), its status, how long since it last did anything, and what it is doing. Rows sit in spawn order, oldest first, with your own session at the top. The row you are on is marked two ways, a cursor glyph in the first column and a band across the whole row, so it stays readable on a terminal that renders no colour. Agents from earlier runs of the same session appear too, marked `parked`, because their transcripts are still on disk even though this process never started them.

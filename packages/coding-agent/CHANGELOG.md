@@ -5,6 +5,7 @@
 ### Added
 
 - `session.backgroundLimit` (default 3, range 1-20) caps how many conversations `/new` keeps running in the background; a `/new` past it stops the oldest background conversation and names it in the `/new` message.
+- `/resume` marks conversations running off-screen as `running`, and `ctrl+x` stops the selected one without resuming it.
 
 ### Changed
 

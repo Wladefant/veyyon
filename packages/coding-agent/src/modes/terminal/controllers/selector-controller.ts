@@ -39,7 +39,8 @@ import {
 	buildAccountInventory,
 	loadAccountInventory,
 } from "../../../session/account-inventory";
-import { BackgroundSessions } from "../../../session/background-sessions";
+import { BackgroundSessions, runningConversations } from "../../../session/background-sessions";
+import { USER_INTERRUPT_LABEL } from "../../../session/messages";
 import {
 	describeRedeemOutcome,
 	type ResetUsageAccount,
@@ -1026,6 +1027,7 @@ export class SelectorController {
 					void this.ctx.shutdown();
 				},
 				{
+					running: runningConversations(BackgroundSessions.global(), USER_INTERRUPT_LABEL),
 					onDelete: async (session: SessionInfo) => {
 						if (!(await this.#detachActiveSessionBeforeDeletion(session.path))) {
 							return false;
