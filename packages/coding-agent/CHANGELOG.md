@@ -4,6 +4,7 @@
 
 ### Changed
 
+- `tools/fs/read.ts` is split into per-concern `read-*.ts` modules with no change to the read tool's schema, output or exports.
 - A session that renders its personality from a project `.veyyon/personalities/<name>.md` file raises a `personality` warning stating the file, and personality warnings reach the session's notice channel once per session instead of writing to stderr on every system prompt rebuild.
 - Restoring `resolved-models.json` at launch verifies a CRC-32 instead of a SHA-256 digest, cutting model registry construction from 22.86 ms to 20.69 ms (median of 21 interleaved launches), and the first launch after upgrading rebuilds the snapshot once.
 - The `/debug` CPU profile borrows the process's sampling profiler from the stall sampler and hands it back when the profile ends, instead of starting and stopping the profiler itself and leaving the stall sampler's profile stopped.
