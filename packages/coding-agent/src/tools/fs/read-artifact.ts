@@ -96,7 +96,7 @@ export async function readArtifactFile(
 			.text(text)
 			.sourcePath(artifact.path)
 			.sourceInternal(url.href);
-		if (read.columnTruncated > 0) resultBuilder.limits({ columnMax: read.columnTruncated });
+		if (read.columnTruncated > 0) resultBuilder.limits({ columnMax: read.columnTruncated, columnUnit: "chars" });
 		return resultBuilder.done();
 	}
 
