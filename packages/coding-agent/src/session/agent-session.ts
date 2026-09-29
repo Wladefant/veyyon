@@ -13625,9 +13625,31 @@ export class AgentSession {
 	 * is the recovery (`fireworksFastFallback`, `hardErrorFallback`): then a
 	 * successful model switch retries immediately, and a failed switch surfaces
 	 * the error without a same-model backoff retry.
+	 * A step that throws (the auth store, a credential lookup, the session file) ends the retry
+	 * sequence as failed and returns false, which hands the turn back to the settle path that
+	 * closes the retry gate `prompt()` waits on. A throw escaping here skipped that path.
 	 * @returns true if retry was initiated, false if max retries exceeded or disabled
 	 */
 	async #handleRetryableError(message: AssistantMessage, options?: RetryEntryOptions): Promise<boolean> {
+		try {
+			return await this.#attemptRetry(message, options);
+		} catch (error) {
+			const failure = errorMessage(error);
+			logger.error("Retry recovery failed", { error: failure, originalError: message.errorMessage });
+			const attempt = this.#retryAttempt;
+			this.#retryAttempt = 0;
+			this.#clearPendingRecoveredRetryErrors();
+			await this.#emitSessionEvent({
+				type: "auto_retry_end",
+				success: false,
+				attempt,
+				finalError: `Retry recovery failed: ${failure}. Original error: ${message.errorMessage || "Unknown error"}`,
+			});
+			return false;
+		}
+	}
+
+	async #attemptRetry(message: AssistantMessage, options?: RetryEntryOptions): Promise<boolean> {
 		const retrySettings = this.settings.getGroup("retry");
 		// A backend that runs its own agent loop remotely fails slowly and
 		// expensively, so the global attempt count and backoff are resolved
