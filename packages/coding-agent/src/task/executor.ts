@@ -2014,6 +2014,9 @@ function childSessionOptionsBuilder(ctx: ChildSessionContext, runModel: RunModel
 		authStorage: modelRegistry.authStorage,
 		modelRegistry,
 		settings,
+		// The parent's bus, so a child that spawns reports its own children where the root listens.
+		// Without it every session from depth 2 down emits lifecycle and progress frames nobody reads.
+		eventBus: options.eventBus,
 		bypassAllApprovals: options.bypassAllApprovals,
 		parentApprovalBypassed: options.parentApprovalBypassed,
 		model,

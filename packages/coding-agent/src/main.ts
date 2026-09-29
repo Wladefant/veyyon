@@ -2112,7 +2112,12 @@ interface LaunchSessionShared {
  * bootstrap: ACP keeps several concurrent top-level sessions and a single
  * process-global factory must not be clobbered by the most recent one.
  */
-function installPersistedAgentReviver(launch: RootLaunch, session: AgentSession, enableLsp: boolean): void {
+function installPersistedAgentReviver(
+	launch: RootLaunch,
+	session: AgentSession,
+	eventBus: EventBus,
+	enableLsp: boolean,
+): void {
 	const { settings } = launch;
 	AgentLifecycleManager.global().setPersistedAgentReviverFactory(
 		createPersistedAgentReviverFactory({
@@ -2120,6 +2125,7 @@ function installPersistedAgentReviver(launch: RootLaunch, session: AgentSession,
 			authStorage: launch.authStorage,
 			modelRegistry: launch.modelRegistry,
 			settings,
+			eventBus,
 			enableLsp,
 		}),
 		() => resolveAgentIdleTtlMs(settings),
@@ -2293,7 +2299,7 @@ async function runSessionLaunch(
 	const shared: LaunchSessionShared = { eventBus, operatorNotices, preloadedExtensions };
 	const created = await createSession({ ...sessionOptions, ...shared }, launch.isInteractive);
 	const { session } = created;
-	installPersistedAgentReviver(launch, session, sessionOptions.enableLsp ?? true);
+	installPersistedAgentReviver(launch, session, eventBus, sessionOptions.enableLsp ?? true);
 	if (launch.parsedArgs.apiKey && !sessionOptions.model && session.model) {
 		launch.authStorage.setRuntimeApiKey(session.model.provider, launch.parsedArgs.apiKey);
 	}

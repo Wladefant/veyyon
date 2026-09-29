@@ -10,6 +10,7 @@ import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 // static import of `../sdk`, the composition root, is what put this module in a
 // 54-module cycle.
 import type { AgentSession } from "../session/agent-session";
+import type { EventBus } from "../utils/event-bus";
 import { createMCPProxyTools, createSubagentSettingsForCwd } from "./executor";
 
 /**
@@ -23,6 +24,8 @@ export interface PersistedAgentReviveContext {
 	authStorage: AuthStorage;
 	modelRegistry: ModelRegistry;
 	settings: Settings;
+	/** The top-level session's bus, so a revived agent's own spawns report where the root listens. */
+	eventBus: EventBus;
 	/** LSP policy of the top-level session; revived spawned agents inherit it rather than defaulting on. */
 	enableLsp: boolean;
 }
@@ -116,6 +119,7 @@ export function createPersistedAgentReviverFactory(ctx: PersistedAgentReviveCont
 					runtimeCwd,
 					init.readSummarize === false ? { "read.summarize.enabled": false } : undefined,
 				),
+				eventBus: ctx.eventBus,
 				sessionManager: reopened,
 				agentId: ref.id,
 				agentDisplayName: ref.displayName,
