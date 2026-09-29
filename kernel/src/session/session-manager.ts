@@ -25,10 +25,13 @@ import {
 } from "./custom-message-payload";
 import { SESSION_EXIT_CUSTOM_TYPE } from "./exit-diagnostics";
 import type { OperatorNotices } from "./operator-notices";
+import { ColdEntryPayloads } from "./session-cold-payloads";
 import {
+	BRANCH_SETTINGS_ENTRY_TYPES,
 	type BuildSessionContextOptions,
 	buildSessionContext,
 	buildSessionContextFromPath,
+	compactedHistoryEnd,
 	resolveContextLeaf,
 	type SessionContext,
 	walkBranchPath,
@@ -68,6 +71,7 @@ import {
 	loadSessionFile,
 	readTitleSlotFromFile,
 	resolveBlobRefsInEntries,
+	restoreEntryPayloadsSync,
 	type SessionFileLayout,
 } from "./session-loader";
 import { generateId, migrateToCurrentVersion } from "./session-migrations";
@@ -81,6 +85,7 @@ import { prepareEntryForPersistence } from "./session-persistence";
 import {
 	FileSessionStorage,
 	MemorySessionStorage,
+	type PinnedSessionReader,
 	type SessionFileBody,
 	type SessionStorage,
 	type SessionStorageStat,
@@ -177,6 +182,17 @@ function resolveBreadcrumbToInteractiveRoot(sessionFile: string): string {
 
 function isAssistantEntry(entry: SessionEntry): boolean {
 	return entry.type === "message" && entry.message.role === "assistant";
+}
+
+/**
+ * Parse a session line and restore what persistence moved out of it, as a load does. The range a
+ * cold entry reads runs to the next entry's line, so it may hold a blank line after its own.
+ */
+function restoreColdLine(line: string, blobs: BlobStore): SessionEntry {
+	const end = line.indexOf("\n");
+	const entry = JSON.parse(end === -1 ? line : line.slice(0, end)) as SessionEntry;
+	restoreEntryPayloadsSync(entry, blobs);
+	return entry;
 }
 
 function isDraftOnlyMetadataEntry(entry: SessionEntry): boolean {
@@ -349,6 +365,8 @@ export class SessionManager {
 	#hasTitleSlot = true;
 	#entries: SessionEntry[] = [];
 	#index = new SessionEntryIndex();
+	/** Payloads of entries the live context cannot reach, read back from the session file on use. */
+	readonly #cold = new ColdEntryPayloads();
 	#instrumentation: InstrumentationLevel | undefined;
 	#nextSequence = 1;
 	#lifecycleStarted = false;
@@ -984,6 +1002,7 @@ export class SessionManager {
 			this.#fileIsCurrent = true;
 			this.#rewriteRequired = false;
 			this.#hasTitleSlot = true;
+			this.#coolUnreachablePayloads();
 		} catch (err) {
 			this.#noteDiskFailure(err);
 		}
@@ -1014,6 +1033,7 @@ export class SessionManager {
 					this.#fileIsCurrent = true;
 					this.#rewriteRequired = false;
 					this.#hasTitleSlot = true;
+					this.#coolUnreachablePayloads();
 				}
 			},
 			{ epoch: startEpoch },
@@ -1047,9 +1067,11 @@ export class SessionManager {
 				this.#firstUpdatedEntry = Number.POSITIVE_INFINITY;
 				let published = false;
 				try {
+					const coldIdentity = this.#publishedFileState?.identity;
 					await this.#publishAtomically(sessionFile, epoch, updatedFrom);
 					if (this.#diskEpoch !== epoch) return false;
 					this.#notePublishedFile();
+					this.#rebaseColdPayloads(coldIdentity);
 					published = true;
 				} finally {
 					// Not written, so the next rewrite still owes these entries.
@@ -1189,6 +1211,104 @@ export class SessionManager {
 			identity = undefined;
 		}
 		this.#publishedFileState = { size: this.#lastBodyBytes, identity, lines: this.#lastBodyLines };
+	}
+
+	/**
+	 * After a publish of this manager's that kept the bytes before its first rewritten entry, read
+	 * the cold entries in that prefix from the new file, so the one it replaced is released. `from`
+	 * is the identity the publish started from; cold entries recorded against any other object
+	 * stay on it.
+	 */
+	#rebaseColdPayloads(from: string | undefined): void {
+		const sessionFile = this.#sessionFile;
+		const to = this.#publishedFileState?.identity;
+		if (from === undefined || to === undefined || sessionFile === undefined) return;
+		if (this.#cold.pinnedIdentity !== from) return;
+		this.#cold.rebase(this.#entries, to, () => this.#openPinnedReader(sessionFile));
+	}
+
+	#openPinnedReader(sessionFile: string): PinnedSessionReader | undefined {
+		try {
+			return this.#storage.openPinnedReaderSync?.(sessionFile);
+		} catch (err) {
+			logger.debug("session file could not be pinned; its entries stay in memory", {
+				sessionFile,
+				error: errorMessage(err),
+			});
+			return undefined;
+		}
+	}
+
+	/**
+	 * Move the payloads of entries the live context cannot reach out of memory, to be read back
+	 * from the session file on use (see {@link ColdEntryPayloads}).
+	 *
+	 * Runs only while every entry's line in the file is what the entry holds: after a load that
+	 * changed nothing, after this manager's own publish, and after a compaction the caller has
+	 * persisted ({@link coolCompactedHistory}). An in-place update not yet handed to
+	 * {@link rewriteEntries}, a publish in flight, or a line of another writer's stops it.
+	 *
+	 * The live context is the active branch from the newest compaction's keep boundary on, plus
+	 * every entry on the branch whose kind the settings walk of each context build reads. Everything
+	 * else, including other branches, reads back on use.
+	 */
+	#coolUnreachablePayloads(): void {
+		const sessionFile = this.#sessionFile;
+		const state = this.#publishedFileState;
+		const lines = state?.lines;
+		if (!this.#persist || sessionFile === undefined || !state || !lines || state.identity === undefined) return;
+		if (this.#storage.openPinnedReaderSync === undefined) return;
+		if (
+			!this.#fileIsCurrent ||
+			this.#rewriteRequired ||
+			this.#firstUpdatedEntry !== Number.POSITIVE_INFINITY ||
+			this.#atomicRewriteFenceEpoch !== null ||
+			this.#foreignLines.length > 0
+		) {
+			return;
+		}
+		const path = this.#activePath();
+		const liveFrom = compactedHistoryEnd(path);
+		if (liveFrom === 0 && path.length === this.#entries.length) return;
+		const live = new Set<SessionEntry>();
+		for (let i = 0; i < path.length; i++) {
+			const entry = path[i]!;
+			if (i >= liveFrom || BRANCH_SETTINGS_ENTRY_TYPES.has(entry.type)) live.add(entry);
+		}
+		const { entries, entryOffsets } = lines;
+		const identity = state.identity;
+		const blobs = this.#blobs;
+		let pinned = false;
+		for (let i = 0; i < entries.length; i++) {
+			const entry = entries[i]!;
+			if (live.has(entry)) continue;
+			const offset = entryOffsets[i]!;
+			const end = i + 1 < entries.length ? entryOffsets[i + 1]! : state.size;
+			if (!pinned) {
+				pinned = this.#cold.pin(
+					identity,
+					() => this.#openPinnedReader(sessionFile),
+					line => restoreColdLine(line, blobs),
+				);
+				if (!pinned) return;
+			}
+			this.#cold.cool(entry, offset, end - offset);
+		}
+	}
+
+	/**
+	 * Move the payloads of the history a compaction just summarized out of memory. Call once the
+	 * compaction entry and every in-place update that came with it are handed to the session.
+	 */
+	coolCompactedHistory(): void {
+		this.#coolUnreachablePayloads();
+	}
+
+	/** The active branch, root first: the index's cached path when the leaf resolves. */
+	#activePath(): readonly SessionEntry[] {
+		if (this.#index.leafEntry()) return this.#index.leafPath();
+		const byId = this.#index.entriesById();
+		return walkBranchPath(byId, resolveContextLeaf(this.#entries, this.#index.leafId(), byId));
 	}
 
 	async #persistTitleChangeEntry(entry: TitleChangeEntry, update: SessionTitleUpdate): Promise<void> {
@@ -1632,6 +1752,7 @@ export class SessionManager {
 		if (this.sanitizeLoadedOpenAIResponsesReplayMetadata()) this.#rewriteRequired = true;
 		if (layout && this.#hasTitleSlot && !this.#rewriteRequired) this.#adoptLoadedLayout(layout);
 		this.#startLifecycle("resumed");
+		this.#coolUnreachablePayloads();
 	}
 
 	/**
@@ -2602,10 +2723,7 @@ export class SessionManager {
 	 * none. Scans for the one entry instead of rebuilding the branch's messages.
 	 */
 	getMCPToolSelection(): readonly string[] | undefined {
-		const byId = this.#index.entriesById();
-		const path = this.#index.leafEntry()
-			? this.#index.leafPath()
-			: walkBranchPath(byId, resolveContextLeaf(this.#entries, this.#index.leafId(), byId));
+		const path = this.#activePath();
 		for (let i = path.length - 1; i >= 0; i--) {
 			const entry = path[i]!;
 			if (entry.type === "mcp_tool_selection") return entry.selectedToolNames;

@@ -11,8 +11,11 @@ import {
 	isBlobRef,
 	isTextBlobRef,
 	resolveImageData,
+	resolveImageDataSync,
 	resolveImageDataUrl,
+	resolveImageDataUrlSync,
 	resolveTextBlobRef,
+	resolveTextBlobRefSync,
 } from "./blob-store";
 import type { OperatorNotices } from "./operator-notices";
 import { buildSessionContext } from "./session-context";
@@ -643,44 +646,79 @@ function scanEntryValue(value: unknown, scan: EntryScan, key?: string): void {
  */
 const BLOB_READ_CONCURRENCY = 8;
 
+/** The reference `site` holds, or `undefined` when its slot no longer holds a string. */
+function siteReference(site: BlobSite): string | undefined {
+	switch (site.kind) {
+		case "image-data":
+			return site.owner.data;
+		case "image-url":
+			return site.owner.image_url;
+		case "text": {
+			const reference = site.owner[site.key];
+			return typeof reference === "string" ? reference : undefined;
+		}
+		case "text-item": {
+			const reference = site.owner[site.index];
+			return typeof reference === "string" ? reference : undefined;
+		}
+	}
+}
+
+/** Write what `reference` resolved to back into its slot. */
+function settleBlobSite(
+	site: BlobSite,
+	reference: string,
+	resolved: string,
+	lost: LostPayloads,
+	strings: StringPool,
+): void {
+	// Each resolver returns the reference unchanged when the blob is gone, and it is
+	// only called on a value that IS a reference, so an unchanged value is a loss.
+	if (resolved === reference) lost.count += 1;
+	const value = strings.intern(resolved);
+	switch (site.kind) {
+		case "image-data":
+			site.owner.data = value;
+			return;
+		case "image-url":
+			site.owner.image_url = value;
+			return;
+		case "text":
+			site.owner[site.key] = value;
+			return;
+		case "text-item":
+			site.owner[site.index] = value;
+			return;
+	}
+}
+
 async function resolveBlobSite(
 	site: BlobSite,
 	blobStore: BlobStore,
 	lost: LostPayloads,
 	strings: StringPool,
 ): Promise<void> {
-	// Each resolver returns the reference unchanged when the blob is gone, and it is
-	// only called on a value that IS a reference, so an unchanged value is a loss.
-	switch (site.kind) {
-		case "image-data": {
-			const resolved = await resolveImageData(blobStore, site.owner.data);
-			if (resolved === site.owner.data) lost.count += 1;
-			site.owner.data = strings.intern(resolved);
-			return;
-		}
-		case "image-url": {
-			const resolved = await resolveImageDataUrl(blobStore, site.owner.image_url);
-			if (resolved === site.owner.image_url) lost.count += 1;
-			site.owner.image_url = strings.intern(resolved);
-			return;
-		}
-		case "text": {
-			const reference = site.owner[site.key];
-			if (typeof reference !== "string") return;
-			const resolved = await resolveTextBlobRef(blobStore, reference);
-			if (resolved === reference) lost.count += 1;
-			site.owner[site.key] = strings.intern(resolved);
-			return;
-		}
-		case "text-item": {
-			const reference = site.owner[site.index];
-			if (typeof reference !== "string") return;
-			const resolved = await resolveTextBlobRef(blobStore, reference);
-			if (resolved === reference) lost.count += 1;
-			site.owner[site.index] = strings.intern(resolved);
-			return;
-		}
-	}
+	const reference = siteReference(site);
+	if (reference === undefined) return;
+	const resolved =
+		site.kind === "image-data"
+			? await resolveImageData(blobStore, reference)
+			: site.kind === "image-url"
+				? await resolveImageDataUrl(blobStore, reference)
+				: await resolveTextBlobRef(blobStore, reference);
+	settleBlobSite(site, reference, resolved, lost, strings);
+}
+
+function resolveBlobSiteSync(site: BlobSite, blobStore: BlobStore, lost: LostPayloads, strings: StringPool): void {
+	const reference = siteReference(site);
+	if (reference === undefined) return;
+	const resolved =
+		site.kind === "image-data"
+			? resolveImageDataSync(blobStore, reference)
+			: site.kind === "image-url"
+				? resolveImageDataUrlSync(blobStore, reference)
+				: resolveTextBlobRefSync(blobStore, reference);
+	settleBlobSite(site, reference, resolved, lost, strings);
 }
 
 async function resolveBlobSites(scan: EntryScan, blobStore: BlobStore, lost: LostPayloads): Promise<void> {
@@ -759,6 +797,20 @@ export async function resolveBlobRefsInEntries(
 		logger.warn("Session payloads missing from the blob store", { source: options?.source, lost: lost.count });
 		if (options) emitLostPayloadNotice(options, lost.count);
 	}
+	return lost.count;
+}
+
+/**
+ * Restore one entry read back from its session line without awaiting: the externalized payloads
+ * and codec-dropped fields {@link resolveBlobRefsInEntries} restores on load. Returns how many
+ * references the blob store could not answer; the load already reported each of them.
+ */
+export function restoreEntryPayloadsSync(entry: FileEntry, blobStore: BlobStore): number {
+	const lost: LostPayloads = { count: 0 };
+	const scan: EntryScan = { sites: [], strings: new StringPool() };
+	scanEntryValue(entry, scan);
+	for (const site of scan.sites) resolveBlobSiteSync(site, blobStore, lost, scan.strings);
+	restoreToolResultEntries([entry]);
 	return lost.count;
 }
 

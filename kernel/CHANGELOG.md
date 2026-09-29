@@ -9,6 +9,7 @@
 - A tool domain manifest can list `resultCodecs`, each a `ToolResultCodec` whose `slim` drops a result `details` field the result's content rebuilds when the session writes the entry and whose `restore` rebuilds it when the session loads.
 - `SessionStorage` has an optional `rewriteTailAtomic` that replaces a file atomically with its first `keepBytes` bytes, a new head written over their start, and a new tail; `FileSessionStorage` implements it, and a backend without it receives whole-file writes.
 - `SessionManager.getMCPToolSelection()` returns the tool names the newest `mcp_tool_selection` entry on the context branch records, or `undefined` when the branch records none, without rebuilding the branch's messages; `resolveContextLeaf` is the rule `buildSessionContext` and that read share for which entry a context is built up to.
+- `SessionStorage` has an optional `openPinnedReaderSync` that opens a read handle whose reads keep answering from the file object a path named when it was opened; `FileSessionStorage` implements it outside Windows.
 
 ### Changed
 
@@ -25,6 +26,8 @@
 - The session listing matches a `--resume` argument against a transcript filename through `sessionFileMatchesResumeArgument` from `@veyyon/utils/session-file`, the matcher the startup profile lookup uses; no user-visible change.
 - The first rewrite after resuming a session keeps the file's bytes before the earliest updated entry and reads nothing back when the loaded file holds one clean record per line, which cut the first-turn prune rewrite of a resumed 39 MB, 13,470-entry session from one whole-file write plus a 39 MB read to a partial write with no read.
 - `SessionInfo.messageCount` documents that it counts the messages in the scanned prefix and is a lower bound for a longer session; no behavior change.
+- `SessionManager` keeps the payloads of entries its live context cannot reach in the session file and reads each back through a handle on the file object it loaded, which cut a resumed 402 MiB, 135,650-entry session from 501 MiB heap plus 369 MiB external memory to 117 MiB plus 46 MiB and its RSS from 1,072 MiB to 602 MiB, for about 400 ms more open time; Windows keeps every entry in memory.
+- A context build reads the default model of a session without `model_change` entries from the newest assistant turn on the branch instead of from every assistant turn in order; the model it selects is unchanged.
 
 ### Fixed
 

@@ -267,6 +267,20 @@ interface BranchSettings {
 	modeData: Record<string, unknown> | undefined;
 }
 
+/**
+ * Entry kinds {@link readBranchSettings} reads on every context build, wherever they sit on the
+ * branch. A session keeps their payloads in memory when it moves compacted history to disk.
+ */
+export const BRANCH_SETTINGS_ENTRY_TYPES: ReadonlySet<SessionEntry["type"]> = new Set<SessionEntry["type"]>([
+	"thinking_level_change",
+	"model_change",
+	"service_tier_change",
+	"compaction",
+	"ttsr_injection",
+	"mcp_tool_selection",
+	"mode_change",
+]);
+
 function readBranchSettings(path: readonly SessionEntry[]): BranchSettings {
 	const settings: BranchSettings = {
 		thinkingLevel: "off",
@@ -280,12 +294,13 @@ function readBranchSettings(path: readonly SessionEntry[]): BranchSettings {
 		mode: "none",
 		modeData: undefined,
 	};
-	// Once an explicit `model_change` with role="default" is on the path, a later assistant message
-	// no longer names the default model: temporary fallbacks (retry fallback, context promotion) and
+	// Once an explicit `model_change` with role="default" is on the path, an assistant message no
+	// longer names the default model: temporary fallbacks (retry fallback, context promotion) and
 	// server-side model downgrades both produce assistant messages tagged with the wrong model id,
 	// which clobbered the user's pick on resume (issue #849).
 	let hasExplicitDefaultModel = false;
 	for (const entry of path) {
+		if (!BRANCH_SETTINGS_ENTRY_TYPES.has(entry.type)) continue;
 		switch (entry.type) {
 			case "thinking_level_change":
 				settings.thinkingLevel = entry.thinkingLevel ?? "off";
@@ -301,13 +316,6 @@ function readBranchSettings(path: readonly SessionEntry[]): BranchSettings {
 				break;
 			case "service_tier_change":
 				settings.serviceTier = coerceServiceTierByFamily(entry.serviceTier);
-				break;
-			case "message":
-				// Legacy fallback for sessions written before `model_change`: newer sessions record an
-				// explicit default model at the start of the conversation.
-				if (entry.message.role === "assistant" && !hasExplicitDefaultModel) {
-					settings.models.default = `${entry.message.provider}/${entry.message.model}`;
-				}
 				break;
 			case "compaction":
 				// A compaction written by the removed provider-native remote path is NOT an effective
@@ -336,7 +344,35 @@ function readBranchSettings(path: readonly SessionEntry[]): BranchSettings {
 				break;
 		}
 	}
+	// Legacy fallback for sessions written before `model_change`: the newest assistant message on
+	// the path names the default model. Read from the end, so a branch whose live tail holds an
+	// assistant turn never reads a message of its compacted history, which may be on disk rather
+	// than in memory (see ColdEntryPayloads).
+	if (!hasExplicitDefaultModel) {
+		for (let i = path.length - 1; i >= 0; i--) {
+			const entry = path[i]!;
+			if (entry.type === "message" && entry.message.role === "assistant") {
+				settings.models.default = `${entry.message.provider}/${entry.message.model}`;
+				break;
+			}
+		}
+	}
 	return settings;
+}
+
+/**
+ * Index on `path` of the first entry a context built from it can send: the keep boundary of the
+ * newest compaction that is not a legacy provider-native one, or 0 when there is none. Entries
+ * before it are read by the whole-history transcript, a tree view or an export, and by a context
+ * whose newest compaction the active provider cannot use.
+ */
+export function compactedHistoryEnd(path: readonly SessionEntry[]): number {
+	for (let i = path.length - 1; i >= 0; i--) {
+		const entry = path[i]!;
+		if (entry.type !== "compaction" || hasLegacyProviderNativeCompaction(entry.preserveData)) continue;
+		return resolveCompactionBoundaryIndex(path, entry.firstKeptEntryId);
+	}
+	return 0;
 }
 
 /** The summary message a compaction entry renders as, with any legacy archived history re-attached as text. */

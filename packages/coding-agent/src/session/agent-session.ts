@@ -10204,6 +10204,7 @@ export class AgentSession {
 				false,
 				preserveData,
 			);
+			this.sessionManager.coolCompactedHistory();
 			this.agent.replaceMessages(this.buildDisplaySessionContext().messages);
 			this.#resetAllAdvisorRuntimes();
 			this.#rebasePendingContextSnapshotAfterHistoryRewrite();
@@ -12600,6 +12601,7 @@ export class AgentSession {
 			result.preserveData,
 		);
 		await this.#persistCompactionTailElisions(preparation);
+		this.sessionManager.coolCompactedHistory();
 		this.agent.replaceMessages(this.buildDisplaySessionContext().messages);
 		this.#rebasePendingContextSnapshotAfterHistoryRewrite();
 		// Compaction discarded the conversation history that carried the approved

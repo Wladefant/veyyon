@@ -433,10 +433,21 @@ Legacy `<read-files>`/`<modified-files>` tags from summaries written by earlier 
 After summary generation (or a hook-provided summary), agent session:
 
 1. Appends a `CompactionEntry` with `appendCompaction(...)`.
-2. Rebuilds display context from the active leaf via `buildDisplaySessionContext()`.
-3. Replaces live agent messages with rebuilt context.
-4. Synchronizes active todo phases from the rebuilt branch and closes provider sessions whose history was rewritten.
-5. Emits `session_compact` hook event.
+2. Calls `sessionManager.coolCompactedHistory()`, which moves the payloads of entries before the keep boundary out of memory.
+3. Rebuilds display context from the active leaf via `buildDisplaySessionContext()`.
+4. Replaces live agent messages with rebuilt context.
+5. Synchronizes active todo phases from the rebuilt branch and closes provider sessions whose history was rewritten.
+6. Emits `session_compact` hook event.
+
+#### Compacted history in memory
+
+An entry the live context cannot reach keeps `type`, `id`, `parentId`, `timestamp` and every small field in memory. Each string field of 256 characters or more, and each object field, is replaced by an accessor that reads the entry's line back from the session file on first use and restores it through the load pipeline: blob references are resolved and tool-result codecs rebuild their dropped fields. Entries whose line is under 1 KiB stay in memory.
+
+The live context is the active branch from the newest compaction's keep boundary on, plus every compaction, model, thinking-level, service-tier, TTSR, MCP-selection and mode entry on the branch, which each context build reads. Entries on other branches move out of memory as well.
+
+The session reads cold lines through a handle opened on the file object it loaded. A republish by this session or another process, a rename, or an unlink leaves that object readable, so recorded offsets stay valid. After a tail republish that keeps the file's prefix, cold entries move to a handle on the new file and the old handle closes. A handle closes when its last cold entry is read back, or when the entries holding it are garbage collected.
+
+Cooling runs after a load, after each publish of the session file, and after a compaction. It does not run while an in-place update is pending, while a publish is in flight, or while the file holds lines of another writer. Windows opens no handle, so every entry stays in memory there.
 
 ## Branch summarization pipeline
 
