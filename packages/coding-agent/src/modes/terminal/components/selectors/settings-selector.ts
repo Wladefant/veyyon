@@ -24,7 +24,11 @@ import { extractPrintableText, matchesKey } from "@veyyon/utils/keys";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import { padding } from "@veyyon/utils/padding";
 import { truncateToWidth, visibleWidth } from "@veyyon/utils/width";
-import { ANY_MODEL_EFFORT_KEY, withLegacyDefaultEffort } from "../../../../config/effort-resolver";
+import {
+	ANY_MODEL_EFFORT_KEY,
+	type DefaultEffortList,
+	withLegacyDefaultEffort,
+} from "../../../../config/effort-resolver";
 import type { ModelRegistry } from "../../../../config/model-registry";
 import {
 	extractExplicitThinkingSelector,
@@ -107,6 +111,15 @@ import { formatSelectorSummary, renderEffortStep } from "./effort-picker";
 import { ModelSelectorPanel } from "./model-selector";
 import { MouseRoutedSubmenu, routeModalChrome, routeSettingsListPointer } from "./select-list-mouse-routing";
 import {
+	isOverrideSource,
+	isRecordSetting,
+	overriddenEntriesNote,
+	overriddenEntryLabel,
+	profileWritableRecord,
+	recordEntrySource,
+	SETTING_SOURCE_LABELS,
+} from "./setting-source";
+import {
 	ADVISOR_MODEL_SETTING_ID,
 	ADVISOR_MODEL_SLOT,
 	DEFAULT_MODEL_SETTING_ID,
@@ -138,6 +151,10 @@ export function parseNumberSetting(path: SettingPath, text: string): number | ty
 
 const AGENT_LIST_DESCRIPTION =
 	"Which agents the model may spawn and what each one runs. Open an agent to set its model and effort and which agents it may spawn in turn. An agent with neither set runs the default model at medium effort.";
+
+const AGENTS_PATH = "agent.agents" satisfies SettingPath;
+const DEFAULT_EFFORT_PATH = "defaultEffort" satisfies SettingPath;
+const PROVIDER_LIMITS_PATH = "providers.maxInFlightRequests" satisfies SettingPath;
 
 const MODEL_CATALOG_UNAVAILABLE = "Model catalog unavailable in this context";
 
@@ -659,7 +676,12 @@ class ProviderLimitsSubmenu extends MouseRoutedSubmenu {
 	}
 
 	#limits(): Record<string, number> {
-		return normalizeProviderMaxInFlightRequests(settings.get("providers.maxInFlightRequests"));
+		return normalizeProviderMaxInFlightRequests(settings.get(PROVIDER_LIMITS_PATH));
+	}
+
+	/** The profile's own limits: what an edit here writes back, never an override's entries. */
+	#profileLimits(): Record<string, number> {
+		return normalizeProviderMaxInFlightRequests(profileWritableRecord(PROVIDER_LIMITS_PATH));
 	}
 
 	#providerIds(): string[] {
@@ -672,22 +694,34 @@ class ProviderLimitsSubmenu extends MouseRoutedSubmenu {
 		const limits = this.#limits();
 		const providerItems = this.#providerIds().map((provider): SelectItem => {
 			const limit = limits[provider];
-			return {
-				value: provider,
-				label: provider,
-				description: limit === undefined ? "Unlimited" : `Limit: ${limit}`,
-			};
+			const shown = limit === undefined ? "Unlimited" : `Limit: ${limit}`;
+			const source = recordEntrySource(PROVIDER_LIMITS_PATH, provider);
+			if (isOverrideSource(source)) {
+				return {
+					value: provider,
+					label: provider,
+					description: `${shown} · ${overriddenEntryLabel(source)}`,
+					disabled: true,
+				};
+			}
+			return { value: provider, label: provider, description: shown };
 		});
 		const clearItem: SelectItem[] =
-			Object.keys(limits).length === 0
+			Object.keys(this.#profileLimits()).length === 0
 				? []
-				: [{ value: "__clear_all", label: "Clear all limits", description: "Make every provider unlimited" }];
+				: [
+						{
+							value: "__clear_all",
+							label: "Clear all limits",
+							description: "Remove every limit this profile sets",
+						},
+					];
 		const items = providerItems.concat(clearItem);
 		const selectList = createFocusedSelectList(items, items.length, undefined, {
 			onSelect: item => {
 				if (item.value === "__clear_all") {
-					settings.set("providers.maxInFlightRequests", {});
-					this.onChange({});
+					settings.set(PROVIDER_LIMITS_PATH, {});
+					this.onChange(this.#limits());
 					this.#showProviderList();
 					this.requestRender?.();
 					return;
@@ -708,14 +742,14 @@ class ProviderLimitsSubmenu extends MouseRoutedSubmenu {
 	}
 
 	#showProviderEditor(provider: string): void {
-		const limits = this.#limits();
+		const limits = this.#profileLimits();
 		this.clear();
 		this.#selectList = undefined;
 		this.addChild(
 			new TextInputSubmenu(
 				`Max In-Flight Requests: ${provider}`,
 				"Enter a positive number. Decimals round down. Clear the field to make this provider unlimited.",
-				limits[provider]?.toString() ?? "",
+				this.#limits()[provider]?.toString() ?? "",
 				value => {
 					const next = { ...limits };
 					const trimmed = value.trim();
@@ -727,8 +761,8 @@ class ProviderLimitsSubmenu extends MouseRoutedSubmenu {
 						next[provider] = Math.max(1, Math.floor(limit));
 					}
 					const normalized = validateProviderMaxInFlightRequests(next);
-					settings.set("providers.maxInFlightRequests", normalized);
-					this.onChange(normalized);
+					settings.set(PROVIDER_LIMITS_PATH, normalized);
+					this.onChange(this.#limits());
 					this.#showProviderList();
 					this.requestRender?.();
 				},
@@ -809,14 +843,18 @@ class ModelRolesSubmenu extends MouseRoutedSubmenu {
 		const items: SelectItem[] = SELECTABLE_MODEL_ROLE_IDS.map(role => {
 			const info = getRoleInfo(role, settings);
 			const assigned = settings.getModelRole(role)?.trim();
-			return {
-				value: role,
-				label: info.name,
-				description:
-					assigned && assigned.length > 0
-						? formatSelectorSummary(assigned)
-						: (info.unsetLabel ?? ROLE_INHERIT_LABEL),
-			};
+			const shown =
+				assigned && assigned.length > 0 ? formatSelectorSummary(assigned) : (info.unsetLabel ?? ROLE_INHERIT_LABEL);
+			const source = settings.getModelRoleSource(role);
+			if (isOverrideSource(source)) {
+				return {
+					value: role,
+					label: info.name,
+					description: `${shown} · ${overriddenEntryLabel(source)}`,
+					disabled: true,
+				};
+			}
+			return { value: role, label: info.name, description: shown };
 		});
 		const selectList = createFocusedSelectList(items, items.length, undefined, {
 			onSelect: item => this.#showModelPicker(item.value),
@@ -1345,9 +1383,13 @@ class AgentsSubmenu extends MouseRoutedSubmenu {
 		this.requestRender?.();
 	}
 
-	/** The stored table, always an object so callers can spread it. */
+	/**
+	 * The rows the profile itself holds, always an object so callers can spread
+	 * it. Writing one lane never copies a row an override supplies into the
+	 * profile.
+	 */
 	#table(): Record<string, AgentSettings> {
-		const stored = settings.get("agent.agents");
+		const stored = profileWritableRecord(AGENTS_PATH);
 		return stored && typeof stored === "object" ? ({ ...stored } as Record<string, AgentSettings>) : {};
 	}
 
@@ -1501,11 +1543,19 @@ class AgentsSubmenu extends MouseRoutedSubmenu {
 		// pair answering for the whole list any more: a control that reached every
 		// agent at once is what made "I changed the model" and "my agents
 		// changed model" one event.
-		const items: SelectItem[] = this.#agents.map(agent => ({
-			value: agent.name,
-			label: agent.name,
-			description: `${AGENT_ENABLE_STATE_LABEL[agentEnableState(agent, this.#row(agent.name).enabled)]} · ${this.#modelSummary(agent)}`,
-		}));
+		const items: SelectItem[] = this.#agents.map(agent => {
+			const shown = `${AGENT_ENABLE_STATE_LABEL[agentEnableState(agent, this.#row(agent.name).enabled)]} · ${this.#modelSummary(agent)}`;
+			const source = recordEntrySource(AGENTS_PATH, agent.name);
+			if (isOverrideSource(source)) {
+				return {
+					value: agent.name,
+					label: agent.name,
+					description: `${shown} · ${overriddenEntryLabel(source)}`,
+					disabled: true,
+				};
+			}
+			return { value: agent.name, label: agent.name, description: shown };
+		});
 
 		if (items.length === 0) {
 			const container = new Container();
@@ -1833,6 +1883,25 @@ class DefaultEffortSubmenu extends MouseRoutedSubmenu {
 		);
 	}
 
+	/**
+	 * The rows an edit here writes back. With an override on the setting these are
+	 * the profile's own rows (legacy enum folded in the same way), so an
+	 * overridden row is never copied into the profile.
+	 */
+	#profileRows(): DefaultEffortList {
+		if (!isOverrideSource(settings.getSource(DEFAULT_EFFORT_PATH))) return this.#rows();
+		return withLegacyDefaultEffort(
+			profileWritableRecord(DEFAULT_EFFORT_PATH) as DefaultEffortList | undefined,
+			settings.get("defaultThinkingLevel"),
+		);
+	}
+
+	/** The override layer that supplies `key`, or `undefined` when the profile row is the one in effect. */
+	#overrideSource(key: string): SettingSource | undefined {
+		const source = recordEntrySource(DEFAULT_EFFORT_PATH, key);
+		return isOverrideSource(source) ? source : undefined;
+	}
+
 	#showRows(): void {
 		this.clear();
 		this.#selectList = undefined;
@@ -1840,16 +1909,26 @@ class DefaultEffortSubmenu extends MouseRoutedSubmenu {
 		const keys = Object.keys(rows).sort((a, b) =>
 			a === ANY_MODEL_EFFORT_KEY ? -1 : b === ANY_MODEL_EFFORT_KEY ? 1 : a.localeCompare(b),
 		);
-		const items: SelectItem[] = keys.map(key => ({
-			value: key,
-			label: key === ANY_MODEL_EFFORT_KEY ? "any model" : key,
-			description: rows[key] ?? "",
-		}));
+		const items: SelectItem[] = keys.map(key => {
+			const label = key === ANY_MODEL_EFFORT_KEY ? "any model" : key;
+			const source = this.#overrideSource(key);
+			if (source) {
+				return {
+					value: key,
+					label,
+					description: `${rows[key] ?? ""} · ${overriddenEntryLabel(source)}`,
+					disabled: true,
+				};
+			}
+			return { value: key, label, description: rows[key] ?? "" };
+		});
 		items.push({ value: ADD_EFFORT_ROW, label: "Add a model…", description: "pick a model, then its effort" });
+		const anySource = this.#overrideSource(ANY_MODEL_EFFORT_KEY);
 		items.push({
 			value: ANY_MODEL_EFFORT_KEY,
 			label: rows[ANY_MODEL_EFFORT_KEY] === undefined ? "Set the any-model effort…" : "Change the any-model effort…",
-			description: "applies to every model without its own row",
+			description: anySource ? overriddenEntryLabel(anySource) : "applies to every model without its own row",
+			disabled: anySource !== undefined,
 		});
 
 		const selectList = createFocusedSelectList(items, items.length, undefined, {
@@ -1887,7 +1966,9 @@ class DefaultEffortSubmenu extends MouseRoutedSubmenu {
 			},
 			{
 				onPick: model => {
-					this.#showEffortPicker(`${model.provider}/${model.id}`, model);
+					const key = `${model.provider}/${model.id}`;
+					if (this.#overrideSource(key)) this.#showRows();
+					else this.#showEffortPicker(key, model);
 					this.requestRender?.();
 				},
 				onCancel: () => {
@@ -1915,10 +1996,10 @@ class DefaultEffortSubmenu extends MouseRoutedSubmenu {
 
 	#persist(key: string, selectorWithEffort: string): void {
 		const level = extractExplicitThinkingSelector(selectorWithEffort, settings);
-		const rows = { ...this.#rows() };
+		const rows = this.#profileRows();
 		if (level === undefined) delete rows[key];
 		else rows[key] = level;
-		settings.set("defaultEffort", rows);
+		settings.set(DEFAULT_EFFORT_PATH, rows);
 		this.onChange();
 		this.#showRows();
 		this.requestRender?.();
@@ -1927,11 +2008,11 @@ class DefaultEffortSubmenu extends MouseRoutedSubmenu {
 	#removeSelectedRow(): void {
 		const selected = this.#selectList?.getSelectedItem?.();
 		const key = selected?.value;
-		if (!key || key === ADD_EFFORT_ROW) return;
-		const rows = { ...this.#rows() };
+		if (!key || key === ADD_EFFORT_ROW || this.#overrideSource(key)) return;
+		const rows = this.#profileRows();
 		if (rows[key] === undefined) return;
 		delete rows[key];
-		settings.set("defaultEffort", rows);
+		settings.set(DEFAULT_EFFORT_PATH, rows);
 		this.onChange();
 		this.#showRows();
 		this.requestRender?.();
@@ -2174,14 +2255,6 @@ const SETTINGS_TIPS: readonly string[] = [
 const SIDEBAR_GAP_COLS = 3;
 const MIN_SETTINGS_CONTENT_WIDTH = 32;
 
-const SETTING_SOURCE_LABELS: Record<SettingSource, string> = {
-	default: "default",
-	profile: "profile",
-	"config-file": "--config file",
-	runtime: "runtime override",
-	global: "global config",
-};
-
 const SETTINGS_SIDEBAR_SHORTCUTS: readonly ModalShortcut[] = [
 	{ label: "up/down category" },
 	{ label: "right/enter settings" },
@@ -2367,7 +2440,7 @@ export const SETTING_KIND_HANDLERS: SettingKindHandlers = {
 			const effectiveFormatted = self.formatModelSelectorValue(effectiveModel);
 			const currentFormatted = self.formatModelSelectorValue(currentValue);
 			const description = overridden
-				? `${def.description} Active model ${effectiveFormatted} comes from ${SETTING_SOURCE_LABELS[source]}; this row changes the saved profile default (${currentFormatted}).`
+				? `Active model ${effectiveFormatted} comes from ${SETTING_SOURCE_LABELS[source]}; this row changes the saved profile default (${currentFormatted}). ${def.description}`
 				: def.description;
 			return {
 				id: def.path,
@@ -2993,7 +3066,14 @@ export class SettingsSelectorComponent implements Component {
 		if (def.type === "defaultModel") return searchable;
 
 		const source = settings.getSource(def.path);
-		if (source !== "config-file" && source !== "runtime") return searchable;
+		if (!isOverrideSource(source)) return searchable;
+		// A record's entries are sourced one by one: an override on one entry leaves
+		// its siblings profile-owned, so the row still opens and the editor inside
+		// marks the overridden entries read-only.
+		if (isRecordSetting(def.path)) {
+			const note = overriddenEntriesNote(def.path);
+			return note ? { ...searchable, description: `${note} ${searchable.description ?? def.label}` } : searchable;
+		}
 		const sourceLabel = SETTING_SOURCE_LABELS[source];
 		const shownValue = searchable.labelForValue?.(searchable.currentValue) ?? searchable.currentValue;
 		return {
@@ -3154,10 +3234,18 @@ export class SettingsSelectorComponent implements Component {
 			this.#textInputActive = false;
 			done(value);
 		};
+		// A record edited as one text value opens on the profile's own record: an
+		// override's entries are listed in the description, not copied into the
+		// field, so saving never writes them into the profile.
+		const recordValued = isRecordSetting(def.path);
+		const note = recordValued ? overriddenEntriesNote(def.path) : undefined;
 		return new TextInputSubmenu(
 			def.label,
-			def.description,
-			this.#formatTextInputEditValue(def.path, settings.get(def.path)),
+			note ? `${note} ${def.description ?? def.label}` : def.description,
+			this.#formatTextInputEditValue(
+				def.path,
+				recordValued ? profileWritableRecord(def.path) : settings.get(def.path),
+			),
 			value => {
 				this.#setSettingValue(def.path, value);
 				this.callbacks.onChange(def.path, settings.get(def.path));
