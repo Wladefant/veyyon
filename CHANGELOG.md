@@ -13,6 +13,7 @@
 - `session.backgroundLimit` (default 3, range 1-20) caps how many conversations `/new` keeps running in the background; a `/new` past it stops the oldest background conversation and names it in the `/new` message.
 - `/resume` marks conversations running off-screen as `running`, and `ctrl+x` stops the selected one without resuming it.
 - A bash approval card offers `Approve "<pattern>" for session`, which allows later calls reporting the same pattern (`git status *` for `git status -s`) without prompting; a call with quoting, expansion, a pipe, a redirect, an environment variable, a working directory, or a guard flag offers no pattern row, and a program that runs another command (`sudo`, `xargs`, `env`) is granted only its exact command.
+- The `lsp` tool's `incoming_calls` and `outgoing_calls` actions list the functions that call the symbol at the cursor, or that it calls, with each call site, as the language server resolved them.
 - `collectToolCallsById` takes an optional start index and resolves the call behind each tool result at or after it without walking the entries before it.
 - `PruneResult` lists the entries a prune rewrote in place as `prunedEntries`.
 - A tool domain manifest can list `resultCodecs`, each a `ToolResultCodec` whose `slim` drops a result `details` field the result's content rebuilds when the session writes the entry and whose `restore` rebuilds it when the session loads.
