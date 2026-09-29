@@ -583,6 +583,9 @@ import type { VibeModeState } from "./vibe-runtime";
  *  discarded assistant turn only; never reaches the model. */
 const GEMINI_HEADER_INTERRUPT_REASON = "Interrupted: emit a tool call instead of more planning";
 
+/** Abort reason recorded on a spawned agent stopped because its conversation was left by `/new`, `/resume` or a handoff. */
+export const RESCOPE_TERMINATE_REASON = "Stopped: the conversation that spawned it ended";
+
 const UNEXPECTED_STOP_MAX_RETRIES = 3;
 const UNEXPECTED_STOP_TIMEOUT_MS = 4000;
 const EMPTY_STOP_MAX_RETRIES = 3;
@@ -2518,15 +2521,23 @@ export class AgentSession {
 	 * display bug — a parked ref holds its session file, and a live one holds a
 	 * whole `AgentSession`.
 	 *
-	 * Order matters. Release the descendants BEFORE the re-scope, so they are
-	 * disposed while they still resolve as this agent's subtree; re-scoping first
+	 * Order matters. Terminate the descendants BEFORE the re-scope, so they are
+	 * reached while they still resolve as this agent's subtree; re-scoping first
 	 * would leave them parented to a scope nothing walks. Their async jobs are
 	 * already cancelled by the caller's `#cancelOwnAsyncJobs`, which walks the
 	 * same subtree.
 	 *
-	 * A release that throws is logged and skipped rather than failing the
-	 * session switch: a spawned agent that cannot be disposed must not strand the
-	 * operator between two conversations.
+	 * Terminate, not release. Release disposes the session, and dispose stops the
+	 * agent loop but leaves the agent's bash, eval, handoff and advisor work
+	 * running and its scheduled continuations armed. `terminate` aborts a running
+	 * agent first, deepest generation first, which is the kill the dashboard and
+	 * `job cancel` use. It is called on each direct child; the child's own
+	 * subtree is terminated inside that call.
+	 *
+	 * A termination that throws is logged and skipped rather than failing the
+	 * session switch: a spawned agent that cannot be stopped must not strand the
+	 * operator between two conversations. The wait lasts as long as the child's
+	 * abort, the same wait this session's own abort imposes at the start of `/new`.
 	 */
 	async #rescopeAgentRegistry(): Promise<void> {
 		const id = this.#agentId;
@@ -2536,14 +2547,15 @@ export class AgentSession {
 		if (!self) return;
 		const endingScope = self.scope;
 		const descendants = registry.descendantsOf(id);
-		if (descendants.length > 0) {
+		const children = descendants.filter(descendant => registry.get(descendant)?.parentId === id);
+		if (children.length > 0) {
 			const lifecycle = AgentLifecycleManager.global();
 			await Promise.all(
-				descendants.map(async child => {
+				children.map(async child => {
 					try {
-						await lifecycle.release(child);
+						await lifecycle.terminate(child, RESCOPE_TERMINATE_REASON);
 					} catch (error) {
-						logger.warn("Failed to release a spawned agent of the previous conversation", {
+						logger.warn("Failed to terminate a spawned agent of the previous conversation", {
 							agentId: child,
 							error: errorMessage(error),
 						});
