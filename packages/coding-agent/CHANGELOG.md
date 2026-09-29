@@ -4,6 +4,7 @@
 
 ### Changed
 
+- The HTML export's session tree prints each tool call with the same label as the terminal tree, for every registered tool, instead of its own switch whose `find` and `ls` cases matched no registered tool and printed most calls as raw JSON; a newline in an `op`, `action` or name argument no longer breaks a tree row in either tree.
 - `tools/fs/read.ts` is split into per-concern `read-*.ts` modules with no change to the read tool's schema, output or exports.
 - The session retry loop, the async job manager, the launch broker and the Gemini web search provider take their exponential delay from `exponentialBackoffDelay` in `@veyyon/utils`; each loop's base, ceiling and jitter are unchanged.
 - The resolve pending row clamps its reason at 80 columns instead of 72, and the `web_search` and `gh` cards expand tabs in query and label text.
