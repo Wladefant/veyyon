@@ -198,6 +198,9 @@ function sanitizeRecoveredRetryNote(note: string): string {
 	return truncateToWidth(normalized || "retried", TRUNCATE_LENGTHS.CONTENT);
 }
 
+/** Shared by every turn with nothing to show; no reader writes into a presentation. */
+const NO_ERROR_PRESENTATION: AssistantErrorPresentation = { kind: "none" };
+
 export function resolveAssistantErrorPresentation(
 	message: {
 		stopReason?: string;
@@ -215,7 +218,7 @@ export function resolveAssistantErrorPresentation(
 		};
 	}
 	if (message.stopReason === "aborted") {
-		if (!shouldRenderAbortReason(message)) return { kind: "none" };
+		if (!shouldRenderAbortReason(message)) return NO_ERROR_PRESENTATION;
 		return { kind: "full", text: resolveAbortLabel(message, retryAttempt), isError: true };
 	}
 	if (message.stopReason === "error") {
@@ -224,7 +227,7 @@ export function resolveAssistantErrorPresentation(
 	if (message.errorMessage && shouldRenderAbortReason(message)) {
 		return { kind: "full", text: message.errorMessage, isError: true };
 	}
-	return { kind: "none" };
+	return NO_ERROR_PRESENTATION;
 }
 
 export function assistantSegments(

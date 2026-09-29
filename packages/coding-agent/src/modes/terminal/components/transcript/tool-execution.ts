@@ -24,13 +24,15 @@ import type {
 	ToolExecutionDisplay,
 	ToolExecutionImageItem,
 	ToolExecutionMultiFileItem,
+	ToolExecutionPolicies,
 } from "@veyyon/wire/presentation";
 import type { RenderResultOptions } from "../../../../extensibility/custom-tools/types";
 import {
 	buildToolRenderContext,
 	createToolExecutionProducer,
 	notExecutedReason,
-	type ToolExecutionProducer,
+	type ToolExecutionDrawContext,
+	ToolExecutionProducer,
 } from "../../../../presentation/tool-execution";
 import { recordImageDisplay } from "../../../../session/image-visibility";
 import type { HighlightRequest } from "../../../../theme/highlight";
@@ -189,18 +191,23 @@ export function sharedSpinnerFrame(frameCount: number, now: number = performance
 
 let toolExecutionInstanceSeq = 0;
 
+/**
+ * The rail frame each card built around a child, keyed by that child: one table for every card rather
+ * than a WeakMap per card. The owner is kept beside the frame, since the frame draws its card's status.
+ */
+const railWrappers = new WeakMap<Component, { owner: ToolExecutionComponent; framed: Component }>();
+
 export class ToolExecutionComponent extends Container implements NativeScrollbackLiveRegion, ToolExecutionHandle {
 	#contentBox: Box;
 	#contentText: WidthAwareText;
-	#railWrappers = new WeakMap<Component, Component>();
 	#multiFileBoxes: (Box | Spacer)[] = [];
 	#imageComponents: Image[] = [];
 	#imageSpacers: Spacer[] = [];
 	#notExecutedNotice: Text | undefined;
 	readonly #instanceId = ++toolExecutionInstanceSeq;
-	#block: ToolExecutionBlock;
+	/** What the card draws from: a producer it builds its block from, or a block it was handed whole. */
+	#source: ToolExecutionProducer | ToolExecutionBlock;
 	#options: ToolExecutionOptions;
-	#producer?: ToolExecutionProducer;
 	#ui?: TUI;
 	#expanded = false;
 	#showImages: boolean;
@@ -210,8 +217,9 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	#displayInputVersion = 0;
 	#displayStale = true;
 	#renderedImageCount = 0;
-	#convertedImages: Map<number, { data: string; mimeType: string }> = new Map();
-	#imageConversionFailures: Set<number> = new Set();
+	/** Created on the first Kitty conversion: almost no card holds an image to convert. */
+	#convertedImages: Map<number, { data: string; mimeType: string }> | undefined;
+	#imageConversionFailures: Set<number> | undefined;
 	#spinnerFrame?: number;
 	#spinnerInterval?: NodeJS.Timeout;
 	#railIdleLive = false;
@@ -274,7 +282,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			this.#showImages = this.#options.showImages ?? true;
 			this.#expanded = this.#options.expanded ?? false;
 
-			this.#producer = createToolExecutionProducer({
+			this.#source = createToolExecutionProducer({
 				toolName,
 				args,
 				options: this.#options,
@@ -282,10 +290,9 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 				toolCallId,
 				cwd: this.#options.cwd,
 			});
-			this.#block = this.#producer.block;
 		} else {
 			// (block, options)
-			this.#block = blockOrToolName;
+			this.#source = blockOrToolName;
 			this.#options = (argsOrOptions as ToolExecutionOptions) ?? {};
 			if (isAgentToolLike(optionsOrTool)) {
 				this.#options.tool = optionsOrTool;
@@ -297,17 +304,14 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			this.#showImages = this.#options.showImages ?? true;
 			this.#expanded = this.#options.expanded ?? false;
 
-			if (this.#options.dataSource) {
-				this.#producer = this.#options.dataSource;
-			} else if (this.#options.tool || !this.#block.display) {
-				this.#applyRawBlock(this.#block);
+			const dataSource = this.#options.dataSource;
+			if (!dataSource && (this.#options.tool || !blockOrToolName.display)) {
+				this.#applyRawBlock(blockOrToolName);
+			} else {
+				if (dataSource) this.#source = dataSource;
+				this.#adoptBlockLifecycle(blockOrToolName);
 			}
 		}
-		this.#isPartial = this.#block.status === "pending" || this.#block.status === "running";
-		this.#sealed =
-			this.#block.display?.policies?.sealed ??
-			(this.#block.status !== "pending" && this.#block.status !== "running");
-		this.#backgroundTaskFrozen = this.#block.display?.policies?.backgroundTaskFrozen ?? false;
 
 		this.#contentBox = new Box(COMPOSER_INSET_COLS, 1);
 		this.#contentText = new WidthAwareText(contentWidth => this.#formatGenericFallback(contentWidth), 0, 0);
@@ -317,17 +321,48 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 
 		this.#updateSpinnerAnimation();
 		this.#updateRailMotion();
-		if (this.#producer) {
-			this.#setupProducerSubscription();
-		}
+		this.#setupProducerSubscription();
 		this.#updateDisplay();
 	}
 
+	/** The producer the card builds its block from, when it has one. */
+	get #producer(): ToolExecutionProducer | undefined {
+		return this.#source instanceof ToolExecutionProducer ? this.#source : undefined;
+	}
+
+	/**
+	 * The block the card draws: its producer's block for the card's expansion, spinner frame and
+	 * freeze, or the block it was handed. The producer builds it on the first read after a change, so
+	 * a card handed its call, its result and a spinner start and stop between two frames builds one
+	 * block, for the frame that draws it.
+	 */
+	get #block(): ToolExecutionBlock {
+		const source = this.#source;
+		return source instanceof ToolExecutionProducer ? source.produceBlock(this.#drawContext()) : source;
+	}
+
+	/** The card's presentation policies, read without building the views its block carries. */
+	#policies(): ToolExecutionPolicies | undefined {
+		const source = this.#source;
+		return source instanceof ToolExecutionProducer ? source.policies(this.#drawContext()) : source.display?.policies;
+	}
+
+	#drawContext(): ToolExecutionDrawContext {
+		return { expanded: this.#expanded, frame: this.#spinnerFrame, frozen: this.#backgroundTaskFrozen };
+	}
+
+	/** Take whether the card is unsettled, sealed and frozen from a block it was handed. */
+	#adoptBlockLifecycle(block: ToolExecutionBlock): void {
+		this.#isPartial = block.status === "pending" || block.status === "running";
+		this.#sealed = block.display?.policies?.sealed ?? !this.#isPartial;
+		this.#backgroundTaskFrozen = block.display?.policies?.backgroundTaskFrozen ?? false;
+	}
+
 	#setupProducerSubscription(): void {
-		if (!this.#producer) return;
+		const producer = this.#producer;
+		if (!producer) return;
 		this.#producerUnsubscribe?.();
-		this.#producerUnsubscribe = this.#producer.subscribe(block => {
-			this.#block = block;
+		this.#producerUnsubscribe = producer.subscribe(() => {
 			// A synchronous update (args, result, seal) bumps its own version and rebuilds once it has
 			// finished. A recompute the producer started itself (a streaming diff preview settling)
 			// changes no input the display key reads, so the key moves here or the settled preview
@@ -336,21 +371,6 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			this.#displayInputVersion++;
 			this.#updateDisplay();
 			this.#requestScopedRender();
-		});
-	}
-
-	/**
-	 * The block, rebuilt for the expansion, spinner frame and freeze this component is on. A card
-	 * reads `context.frame` inside its view (the composer caret blinks on it), so the block is
-	 * rebuilt wherever the frame moves: the tick, the spinner starting, and the spinner stopping. The
-	 * producer memoizes on the three inputs, so a call that changed none of them costs a comparison.
-	 */
-	#syncBlock(): void {
-		if (!this.#producer) return;
-		this.#block = this.#producer.produceBlock({
-			expanded: this.#expanded,
-			frame: this.#spinnerFrame,
-			frozen: this.#backgroundTaskFrozen,
 		});
 	}
 
@@ -365,18 +385,21 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 
 	#applyRawBlock(block: ToolExecutionBlock): void {
 		const args = this.#parseInputArgs(block.input);
-		this.#producer ??= createToolExecutionProducer({
-			toolName: block.toolName,
-			args,
-			options: this.#options,
-			tool: this.#options.tool,
-			toolCallId: block.toolCallId,
-			id: block.id,
-			cwd: this.#options.cwd,
-		});
-		this.#producer.updateArgs(args, block.toolCallId);
+		const producer =
+			this.#producer ??
+			createToolExecutionProducer({
+				toolName: block.toolName,
+				args,
+				options: this.#options,
+				tool: this.#options.tool,
+				toolCallId: block.toolCallId,
+				id: block.id,
+				cwd: this.#options.cwd,
+			});
+		this.#source = producer;
+		producer.updateArgs(args, block.toolCallId);
 		if (block.output !== undefined || block.error !== undefined) {
-			this.#producer.updateResult(
+			producer.updateResult(
 				{
 					content: [{ type: "text", text: block.error ?? block.output ?? "" }],
 					isError: block.status === "failed" || block.status === "rejected" || block.status === "aborted",
@@ -385,7 +408,8 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 				block.toolCallId,
 			);
 		}
-		this.#syncBlock();
+		this.#isPartial = producer.isPartial || producer.result === undefined;
+		this.#sealed = producer.sealed;
 	}
 
 	getTranscriptBlockVersion(): number {
@@ -407,12 +431,9 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			this.#producerUnsubscribe?.();
 			this.#producerUnsubscribe = undefined;
 			if (this.#producer !== this.#options.dataSource) this.#producer?.seal();
-			this.#producer = undefined;
-			this.#block = block;
+			this.#source = block;
+			this.#adoptBlockLifecycle(block);
 		}
-		this.#isPartial = this.#block.status === "pending" || this.#block.status === "running";
-		this.#sealed = this.#block.display?.policies?.sealed ?? !this.#isPartial;
-		this.#backgroundTaskFrozen = this.#block.display?.policies?.backgroundTaskFrozen ?? false;
 		this.#resultVersion++;
 		this.#displayInputVersion++;
 		this.#updateSpinnerAnimation();
@@ -422,13 +443,14 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	}
 
 	updateArgs(args: unknown, toolCallId?: string): void {
-		if (toolCallId) this.#block.toolCallId = toolCallId;
+		if (toolCallId) this.#source.toolCallId = toolCallId;
 		if (this.#rawArgs === args) return;
 		this.#rawArgs = args;
 		this.#inSyncUpdate = true;
 		try {
-			if (!this.#producer) {
-				this.#producer = createToolExecutionProducer({
+			let producer = this.#producer;
+			if (!producer) {
+				producer = createToolExecutionProducer({
 					toolName: this.#block.toolName,
 					args,
 					options: this.#options,
@@ -437,10 +459,10 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 					id: this.#block.id,
 					cwd: this.#options.cwd,
 				});
+				this.#source = producer;
 				this.#setupProducerSubscription();
 			}
-			this.#producer.updateArgs(args, toolCallId);
-			this.#syncBlock();
+			producer.updateArgs(args, toolCallId);
 			this.#displayInputVersion++;
 			this.#updateSpinnerAnimation();
 			this.#updateDisplay();
@@ -450,11 +472,10 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	}
 
 	setArgsComplete(toolCallId?: string): void {
-		if (toolCallId) this.#block.toolCallId = toolCallId;
+		if (toolCallId) this.#source.toolCallId = toolCallId;
 		this.#inSyncUpdate = true;
 		try {
 			this.#producer?.setArgsComplete(toolCallId);
-			this.#syncBlock();
 			this.#updateSpinnerAnimation();
 			this.#updateDisplay();
 		} finally {
@@ -477,21 +498,28 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		isPartial = false,
 		toolCallId?: string,
 	): void {
-		if (toolCallId) this.#block.toolCallId = toolCallId;
-		if (isPartial && this.#block.toolName === "task" && this.#maybeFreezeBackgroundTask()) {
+		if (toolCallId) this.#source.toolCallId = toolCallId;
+		if (isPartial && this.#source.toolName === "task" && this.#maybeFreezeBackgroundTask()) {
 			return;
 		}
-		const hadNoResult = this.#isPartial && this.#block.output === undefined && this.#block.error === undefined;
 		const wasPartialResult = this.#isPartial;
-		const firstResultRepaintShapePainted = this.#firstResultViewportRepaintShapePainted;
+		// The first result after a frame painted the no-result shape repaints the viewport. The block is
+		// read for it only when such a frame was painted, so a card handed its result before its first
+		// frame, as every card of a rebuilt transcript is, never builds the block it no longer draws.
+		const firstResultAfterRepaintShapePaint =
+			this.#firstResultViewportRepaintShapePainted &&
+			wasPartialResult &&
+			this.#block.output === undefined &&
+			this.#block.error === undefined;
 		const partialResultPainted = this.#partialResultShapePainted;
 		this.#firstResultViewportRepaintShapePainted = false;
 		this.#partialResultShapePainted = false;
 
 		this.#inSyncUpdate = true;
 		try {
-			if (!this.#producer) {
-				this.#producer = createToolExecutionProducer({
+			let producer = this.#producer;
+			if (!producer) {
+				producer = createToolExecutionProducer({
 					toolName: this.#block.toolName,
 					args: this.#parseInputArgs(this.#block.input),
 					options: this.#options,
@@ -500,17 +528,17 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 					id: this.#block.id,
 					cwd: this.#options.cwd,
 				});
+				this.#source = producer;
 				this.#setupProducerSubscription();
 			}
-			this.#producer.updateResult(result, isPartial, toolCallId);
-			this.#syncBlock();
+			producer.updateResult(result, isPartial, toolCallId);
 			this.#isPartial = isPartial;
 			this.#resultVersion++;
 			this.#updateSpinnerAnimation();
 			this.#updateRailMotion();
 			this.#updateDisplay();
 			this.#resetDisplayForResultTopologyChange(
-				hadNoResult && firstResultRepaintShapePainted,
+				firstResultAfterRepaintShapePaint,
 				wasPartialResult && partialResultPainted,
 				isPartial,
 			);
@@ -536,8 +564,9 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	}
 
 	#reportImageDisplay(index: number, fallback: ImageFallbackReason | undefined): void {
-		if (!this.#block.toolCallId) return;
-		recordImageDisplay(this.#block.toolCallId, index, fallback);
+		const toolCallId = this.#source.toolCallId;
+		if (!toolCallId) return;
+		recordImageDisplay(toolCallId, index, fallback);
 	}
 
 	#maybeConvertImagesForKitty(): void {
@@ -549,20 +578,22 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			const img = images[i];
 			if (!img.data || !img.mimeType) continue;
 			if (img.mimeType === "image/png") continue;
-			if (this.#convertedImages.has(i)) continue;
-			if (this.#imageConversionFailures.has(i)) continue;
+			if (this.#convertedImages?.has(i)) continue;
+			if (this.#imageConversionFailures?.has(i)) continue;
 
 			const index = i;
 			new Bun.Image(Buffer.from(img.data, "base64"))
 				.png()
 				.toBase64()
 				.then(data => {
+					this.#convertedImages ??= new Map();
 					this.#convertedImages.set(index, { data, mimeType: "image/png" });
 					this.#displayInputVersion++;
 					this.#updateDisplay();
 					if (typeof this.#ui?.requestRender === "function") this.#ui.requestRender();
 				})
 				.catch(() => {
+					this.#imageConversionFailures ??= new Set();
 					this.#imageConversionFailures.add(index);
 					this.#displayInputVersion++;
 					this.#updateDisplay();
@@ -572,13 +603,12 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	}
 
 	#updateSpinnerAnimation(): void {
-		const policies = this.#block.display?.policies;
+		const policies = this.#policies();
+		const toolName = this.#source.toolName;
 		const isStreamingArgs =
 			!this.#sealed &&
 			this.#isPartial &&
-			(this.#block.toolName === "edit" ||
-				this.#block.toolName === "apply_patch" ||
-				this.#block.toolName === "write");
+			(toolName === "edit" || toolName === "apply_patch" || toolName === "write");
 		const isBackgroundAsyncRunning = policies?.backgroundTaskFrozen === true;
 		const pendingCallConsumesSpinner = this.#isPartial && policies?.animatedPendingPreview === true;
 		const partialResultConsumesSpinner = this.#isPartial && policies?.animatedPartialResult === true;
@@ -596,7 +626,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 				if (this.#maybeFreezeBackgroundTask()) return;
 				if (!Array.isArray(theme?.spinnerFrames)) {
 					logger.warn("Spinner stopped: the active theme has no spinner frames", {
-						tool: this.#block.toolName,
+						tool: this.#source.toolName,
 						theme: theme === undefined ? "unset" : "no spinnerFrames",
 					});
 					this.stopAnimation();
@@ -604,7 +634,6 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 				}
 				const fCount = theme.spinnerFrames.length;
 				this.#spinnerFrame = sharedSpinnerFrame(fCount, performance.now());
-				this.#syncBlock();
 				this.#updateDisplay();
 				this.#requestScopedRender();
 			}, SPINNER_RENDER_INTERVAL_MS);
@@ -613,15 +642,13 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			this.#spinnerInterval = undefined;
 			this.#spinnerFrame = undefined;
 		}
-		this.#syncBlock();
 	}
 
 	#maybeFreezeBackgroundTask(): boolean {
 		if (this.#backgroundTaskFrozen) return true;
-		if (this.#block.toolName !== "task" || this.#options.liveRegion === undefined) return false;
+		if (this.#source.toolName !== "task" || this.#options.liveRegion === undefined) return false;
 		if (!this.#options.liveRegion.isBlockInLiveRegion(this)) {
 			this.#backgroundTaskFrozen = true;
-			this.#syncBlock();
 			this.#updateSpinnerAnimation();
 			this.#updateRailMotion();
 			this.#updateDisplay();
@@ -695,8 +722,8 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 
 	#onRail(component: Component): Component {
 		if (isFramedBlockComponent(component)) return component;
-		const cached = this.#railWrappers.get(component);
-		if (cached) return cached;
+		const cached = railWrappers.get(component);
+		if (cached?.owner === this) return cached.framed;
 		const block = new CachedOutputBlock();
 		const framed = markFramedBlockComponent({
 			render: (width: number): readonly string[] => {
@@ -728,17 +755,15 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			},
 			dispose: () => component.dispose?.(),
 		});
-		this.#railWrappers.set(component, framed);
+		railWrappers.set(component, { owner: this, framed });
 		return framed;
 	}
 
 	#railMotion(railRows: number): RailMotion | undefined {
 		if (this.#railSettleFrame !== undefined) return { kind: "settle", frame: this.#railSettleFrame };
 		if (!this.#railIdleLive) return undefined;
-		if (
-			this.#isPartial &&
-			(this.#block.toolName === "edit" || this.#block.toolName === "apply_patch" || this.#block.toolName === "write")
-		) {
+		const toolName = this.#source.toolName;
+		if (this.#isPartial && (toolName === "edit" || toolName === "apply_patch" || toolName === "write")) {
 			return { kind: "idle", head: railStreamHeadAtRow(railRows) };
 		}
 		return { kind: "idle", head: railIdleHeadAtMs(railClockMs()) };
@@ -754,7 +779,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		if (this.#sealed) return true;
 		// A displaceable snapshot stays live: its rows are kept out of native scrollback so a
 		// follow-up tool call can remove the block.
-		if (this.#block.display?.policies?.displaceable) return false;
+		if (this.#policies()?.displaceable) return false;
 		if (!this.#isPartial) return true;
 		// Partial result: a background async tool is accepted to freeze (the agent continues while
 		// it runs and would otherwise pin an unbounded live region); a foreground tool streaming
@@ -777,21 +802,17 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		this.#sealed = true;
 		this.#backgroundTaskFrozen = true;
 		this.stopAnimation();
-		this.#syncBlock();
 		this.#updateDisplay();
 		this.#requestScopedRender();
 	}
 
 	isDisplaceableBlock(): boolean {
-		return Boolean(this.#block.display?.policies?.displaceable) && !this.#sealed;
+		return Boolean(this.#policies()?.displaceable) && !this.#sealed;
 	}
 
 	canBeDisplacedBy(nextToolName: string | undefined): boolean {
-		return (
-			Boolean(this.#block.display?.policies?.displaceable) &&
-			this.#block.display?.policies?.displaceable === nextToolName &&
-			!this.#sealed
-		);
+		const displaceable = this.#policies()?.displaceable;
+		return Boolean(displaceable) && displaceable === nextToolName && !this.#sealed;
 	}
 
 	stopAnimation(): void {
@@ -799,7 +820,6 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 			clearInterval(this.#spinnerInterval);
 			this.#spinnerInterval = undefined;
 			this.#spinnerFrame = undefined;
-			this.#syncBlock();
 		}
 		this.#stopRailMotion();
 		this.#producerUnsubscribe?.();
@@ -814,7 +834,6 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 
 	setExpanded(expanded: boolean): void {
 		this.#expanded = expanded;
-		this.#syncBlock();
 		this.#updateDisplay();
 	}
 
@@ -892,7 +911,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	}
 
 	#needsFirstResultViewportRepaintAtRender(): boolean {
-		return this.#block.display?.policies?.forceFirstResultViewportRepaint === true;
+		return this.#policies()?.forceFirstResultViewportRepaint === true;
 	}
 
 	#resetDisplayForResultTopologyChange(
@@ -903,7 +922,7 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 		const provisionalResultSettled =
 			partialResultPaintedBeforeSettle &&
 			!isPartial &&
-			this.#block.display?.policies?.forceResultViewportRepaintOnSettle === true;
+			this.#policies()?.forceResultViewportRepaintOnSettle === true;
 		if (firstResultAfterRepaintShapePaint || provisionalResultSettled) {
 			if (typeof this.#ui?.resetDisplay === "function") {
 				this.#ui.resetDisplay();
@@ -1250,11 +1269,11 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 	/** Add a drawable image with its spacer. The reason it cannot be drawn, when it has image data it cannot show. */
 	#addImage(img: ToolExecutionImageItem, i: number): ImageFallbackReason | undefined {
 		if (!img.data || !img.mimeType) return undefined;
-		const converted = this.#convertedImages.get(i);
+		const converted = this.#convertedImages?.get(i);
 		const imageData = converted?.data ?? img.data;
 		const imageMimeType = converted?.mimeType ?? img.mimeType;
 		if (TERMINAL.imageProtocol === ImageProtocol.Kitty && imageMimeType !== "image/png") {
-			return this.#imageConversionFailures.has(i) ? "unsupported-format" : undefined;
+			return this.#imageConversionFailures?.has(i) ? "unsupported-format" : undefined;
 		}
 		const spacer = new Spacer(1);
 		this.addChild(spacer);

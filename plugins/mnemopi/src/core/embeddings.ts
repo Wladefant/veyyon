@@ -9,6 +9,7 @@ import { ProviderHttpError } from "@veyyon/ai/error/classes";
 import { getOpenRouterHeaders } from "@veyyon/ai/utils/openrouter-headers";
 import { hostMatchesUrl } from "@veyyon/catalog/hosts";
 import { OPENROUTER_API_ENDPOINT } from "@veyyon/catalog/provider-endpoints";
+import { exponentialBackoffDelay } from "@veyyon/utils/backoff";
 import { getFastembedCacheDir } from "@veyyon/utils/dirs";
 import { $env } from "@veyyon/utils/env";
 import { extractHttpStatusFromError, fetchWithRetry } from "@veyyon/utils/fetch-retry";
@@ -469,7 +470,7 @@ async function embedApi(texts: readonly string[]): Promise<EmbeddingMatrix | nul
 					headers,
 					signal,
 					maxAttempts: 3,
-					defaultDelayMs: attempt => 2 ** attempt * 1000,
+					defaultDelayMs: attempt => exponentialBackoffDelay(attempt, { baseMs: 1_000, jitter: 0 }),
 					// This runs after every backoff and on every auth attempt. Re-read
 					// the live transform and build a fresh body at the last send seam.
 					prepareInit: () => {

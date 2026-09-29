@@ -210,6 +210,7 @@ import {
 	type NewSessionOptions,
 	type SessionEntry,
 } from "@veyyon/kernel/session/session-entries";
+import { foreignSessionFileProfile } from "@veyyon/kernel/session/session-listing";
 import { cleanupEmptyMoveSession, type SessionManager } from "@veyyon/kernel/session/session-manager";
 import {
 	isAwaitingUserAnswer,
@@ -224,10 +225,12 @@ import { MacOSPowerAssertion } from "@veyyon/natives";
 import {
 	errorMessage,
 	escapeXmlText,
+	exponentialBackoffDelay,
 	extractRetryHint,
 	formatCount,
 	formatDuration,
 	getActiveAuthDbPath,
+	getActiveProfileOrDefault,
 	getStringProperty,
 	isAbortError,
 	isBunTestRuntime,
@@ -257,8 +260,6 @@ import { type AsyncJob, AsyncJobManager } from "../async";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
 import {
 	type CompactionEngineAction,
-	isCompactionStrategyOff,
-	isThresholdCompactionDisabled,
 	resolveCompactionEngineAction,
 	toAgentCompactionSettings,
 } from "../config/compaction-strategy";
@@ -279,13 +280,7 @@ import { DEFAULT_MODEL_SLOT, getKnownRoleIds, resolveModelSlot } from "../config
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
 import { applyProviderGlobalsFromSettings } from "../config/provider-globals";
 import { buildServiceTierByFamily, PRIORITY_TIER_COMMAND_LABEL } from "../config/service-tier";
-import {
-	getDefault,
-	type Settings,
-	type SkillsSettings,
-	validateProviderMaxInFlightRequests,
-} from "../config/settings";
-import { AFTER_EDIT_CHECKS } from "../config/settings-domains/editing";
+import { type Settings, type SkillsSettings, validateProviderMaxInFlightRequests } from "../config/settings";
 import { onAppendOnlyModeChanged, onModelRolesChanged } from "../config/settings-signals";
 import { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import { loadCapability, reset as resetCapabilities } from "../discovery/capability";
@@ -344,7 +339,6 @@ import {
 } from "../internal-urls/local-protocol";
 import { resolveMemoryBackend } from "../memory/backend";
 import type { HindsightSessionState } from "../memory/hindsight/state";
-import { shutdownMnemopiEmbedClient } from "../memory/mnemopi/embed-client";
 import { getMnemopiSessionState, type MnemopiSessionState, setMnemopiSessionState } from "../memory/mnemopi/state";
 import { containsOrchestrate } from "../modes/keywords/orchestrate-keyword";
 import { containsUltrathink } from "../modes/keywords/ultrathink-keyword";
@@ -397,7 +391,6 @@ import {
 	toReasoningEffort,
 } from "../thinking";
 import { formatTitleConversationContext, type TitleConversationTurn } from "../tiny/message-preproc";
-import { shutdownTinyTitleClient } from "../tiny/title-client";
 import { isAutoQaEnabled } from "../tools/agent/report-tool-issue";
 import { buildResolveReminderMessage, type ResolveToolDetails, runResolveInvocation } from "../tools/agent/resolve";
 import {
@@ -472,14 +465,15 @@ import {
 } from "./agent-session-queue";
 import {
 	type ActiveRetryFallbackState,
-	formatRetryFallbackBaseSelector,
+	findRetryFallbackCandidates,
 	formatRetryFallbackSelector,
-	isRetryFallbackModelKey,
-	isRetryFallbackWildcardKey,
 	parseRetryFallbackSelector,
-	type RetryFallbackChains,
+	type RetryFallbackChainSource,
 	type RetryFallbackRevertPolicy,
 	type RetryFallbackSelector,
+	resolveRetryFallbackRole,
+	retryFallbackChainsForRoles,
+	retryFallbackChainWarnings,
 } from "./agent-session-retry-fallback";
 import {
 	type AdvisorStats,
@@ -492,6 +486,7 @@ import {
 	type AsyncResultEntry,
 	type CommandMetadataChangedListener,
 	type ContextUsageBreakdown,
+	DISPOSE_AGENT_LOOP_SETTLE_MS,
 	type FollowUpOptions,
 	type FreshSessionResult,
 	type HandoffResult,
@@ -503,6 +498,7 @@ import {
 	type Prewalk,
 	type ProjectAdvisorScope,
 	type PromptOptions,
+	QUIESCENCE_RECHECK_MS,
 	type ResolvedRoleModel,
 	type RoleModelCycle,
 	type RoleModelCycleResult,
@@ -565,6 +561,7 @@ import {
 } from "./nudges";
 import { ProviderContextCanonicalizer } from "./provider-context-canonicalizer";
 import { applyProviderImagePolicy } from "./provider-image-budget";
+import { didSessionMessagesChange } from "./provider-replay-projection";
 import { normalizeRoots } from "./relativize-paths";
 import { AdvisorRoster, type AdvisorRosterHost } from "./runtime/advisor-roster";
 import { CheckpointRuntime } from "./runtime/checkpoint-runtime";
@@ -609,6 +606,9 @@ export class UnsupportedModelInputError extends Error {
 // A side-channel assistant response is signed for the hidden prompt/history that
 // produced it. If we persist that response under a different user turn, native
 // replay anchors become invalid; keep only visible, non-cryptographic content.
+
+/** Abort reason recorded on a spawned agent stopped because its conversation was left by `/new`, `/resume` or a handoff. */
+export const RESCOPE_TERMINATE_REASON = "Stopped: the conversation that spawned it ended";
 const UNEXPECTED_STOP_MAX_RETRIES = 3;
 const UNEXPECTED_STOP_TIMEOUT_MS = 4000;
 const EMPTY_STOP_MAX_RETRIES = 3;
@@ -667,6 +667,13 @@ function createHandoffFileName(date = new Date()): string {
 
 /** What triggered an automatic compaction pass. */
 type AutoCompactionReason = "overflow" | "threshold" | "idle" | "incomplete";
+
+/** How a failed turn entered retry handling: which switches the recovery may make. */
+interface RetryEntryOptions {
+	allowModelFallback?: boolean;
+	fireworksFastFallback?: boolean;
+	hardErrorFallback?: boolean;
+}
 
 /** The fields a compaction entry records, taken from a hook's or a summarizer's result. */
 function compactionRecord(
@@ -853,7 +860,6 @@ export class AgentSession {
 	#titleSystemPrompt: string | undefined;
 	#toolChoiceQueue = new ToolChoiceQueue();
 	readonly #verificationEvidence = new VerificationEvidenceLedger();
-	#afterEditCheckReported = false;
 
 	/** Running user shell commands and eval runs, and the results recorded while a turn streamed. */
 	readonly #executions = new UserExecutions({
@@ -989,7 +995,7 @@ export class AgentSession {
 	#getMcpServerInstructions: (() => Map<string, string> | undefined) | undefined;
 	#reloadSshTool: (() => Promise<AgentTool | null>) | undefined;
 	#setActiveToolNames: ((names: Iterable<string>) => void) | undefined;
-	#disconnectOwnedMcpManager: (() => Promise<void>) | undefined;
+	#releaseMcpManager: (() => Promise<void>) | undefined;
 	#requestedToolNames: ReadonlySet<string> | undefined;
 	#baseSystemPrompt: string[];
 	/**
@@ -1879,7 +1885,7 @@ export class AgentSession {
 		this.#getMcpServerInstructions = config.getMcpServerInstructions;
 		this.#reloadSshTool = config.reloadSshTool;
 		this.#setActiveToolNames = config.setActiveToolNames;
-		this.#disconnectOwnedMcpManager = config.disconnectOwnedMcpManager;
+		this.#releaseMcpManager = config.releaseMcpManager;
 		this.#baseSystemPrompt = this.agent.state.systemPrompt;
 		this.#promptModelKey = this.#currentPromptModelKey();
 		this.#discovery = new ToolDiscovery(
@@ -2599,15 +2605,23 @@ export class AgentSession {
 	 * display bug — a parked ref holds its session file, and a live one holds a
 	 * whole `AgentSession`.
 	 *
-	 * Order matters. Release the descendants BEFORE the re-scope, so they are
-	 * disposed while they still resolve as this agent's subtree; re-scoping first
+	 * Order matters. Terminate the descendants BEFORE the re-scope, so they are
+	 * reached while they still resolve as this agent's subtree; re-scoping first
 	 * would leave them parented to a scope nothing walks. Their async jobs are
 	 * already cancelled by the caller's `#cancelOwnAsyncJobs`, which walks the
 	 * same subtree.
 	 *
-	 * A release that throws is logged and skipped rather than failing the
-	 * session switch: a spawned agent that cannot be disposed must not strand the
-	 * operator between two conversations.
+	 * Terminate, not release. Release disposes the session, and dispose stops the
+	 * agent loop but leaves the agent's bash, eval, handoff and advisor work
+	 * running and its scheduled continuations armed. `terminate` aborts a running
+	 * agent first, deepest generation first, which is the kill the dashboard and
+	 * `job cancel` use. It is called on each direct child; the child's own
+	 * subtree is terminated inside that call.
+	 *
+	 * A termination that throws is logged and skipped rather than failing the
+	 * session switch: a spawned agent that cannot be stopped must not strand the
+	 * operator between two conversations. The wait lasts as long as the child's
+	 * abort, the same wait this session's own abort imposes at the start of `/new`.
 	 */
 	async #rescopeAgentRegistry(): Promise<void> {
 		const id = this.#agentId;
@@ -2617,21 +2631,7 @@ export class AgentSession {
 		if (!self) return;
 		const endingScope = self.scope;
 		const descendants = registry.descendantsOf(id);
-		if (descendants.length > 0) {
-			const lifecycle = AgentLifecycleManager.global();
-			await Promise.all(
-				descendants.map(async child => {
-					try {
-						await lifecycle.release(child);
-					} catch (error) {
-						logger.warn("Failed to release a spawned agent of the previous conversation", {
-							agentId: child,
-							error: errorMessage(error),
-						});
-					}
-				}),
-			);
-		}
+		await this.terminateSpawnedAgents(RESCOPE_TERMINATE_REASON);
 		// The traffic goes whether or not anything was still registered to release.
 		// Guarding this on `descendants.length` was wrong in the COMMON case: a
 		// agent that finished and aged out, or was disposed, is already
@@ -2661,6 +2661,34 @@ export class AgentSession {
 			to: registry.get(id)?.scope,
 			released: descendants.length,
 		});
+	}
+
+	/**
+	 * Terminate every agent this session spawned, each direct child with its own
+	 * subtree, deepest generation first. A termination that throws is logged and
+	 * skipped. Used when this conversation ends while the process keeps running:
+	 * a `/new` or `/resume` in place, and the disposal of a top-level session
+	 * that is not the last one in the process.
+	 */
+	async terminateSpawnedAgents(reason: string): Promise<void> {
+		const id = this.#agentId;
+		if (!id) return;
+		const registry = AgentRegistry.global();
+		const children = registry.descendantsOf(id).filter(descendant => registry.get(descendant)?.parentId === id);
+		if (children.length === 0) return;
+		const lifecycle = AgentLifecycleManager.global();
+		await Promise.all(
+			children.map(async child => {
+				try {
+					await lifecycle.terminate(child, reason);
+				} catch (error) {
+					logger.warn("Failed to terminate a spawned agent of an ending conversation", {
+						agentId: child,
+						error: errorMessage(error),
+					});
+				}
+			}),
+		);
 	}
 
 	/**
@@ -5312,6 +5340,18 @@ export class AgentSession {
 		const postPromptDrain = this.#cancelPostPromptTasks();
 		this.agent.abort();
 		await postPromptDrain;
+		// The aborted loop is still unwinding: a tool that ignores its signal keeps it
+		// running, and the teardown below releases the kernels, tabs and transcript it
+		// may still be using. Wait for it, bounded so such a tool cannot hang shutdown.
+		const loopSettleMs = options.agentLoopSettleTimeoutMs ?? DISPOSE_AGENT_LOOP_SETTLE_MS;
+		try {
+			await withTimeout(this.agent.waitForIdle(), loopSettleMs, "Agent loop did not settle after abort");
+		} catch (error) {
+			logger.warn("Disposing while the aborted agent loop is still running", {
+				timeoutMs: loopSettleMs,
+				error: errorMessage(error),
+			});
+		}
 		// Cancel jobs this agent registered so a spawned agent's teardown doesn't
 		// leak its background bash/task work into the parent's manager. Only
 		// the session that owns the manager goes on to dispose it (which itself
@@ -5359,7 +5399,6 @@ export class AgentSession {
 				});
 			}
 		}
-		await shutdownTinyTitleClient();
 		this.#releasePowerAssertion();
 		// Clean up an empty session created by this session's /move so it doesn't accumulate.
 		await cleanupEmptyMoveSession(this.sessionManager, this.#movedFromEmptySessionFile);
@@ -5377,28 +5416,24 @@ export class AgentSession {
 			// it so the final advisor turn is flushed before the process may exit.
 			await this.#advisorRoster.whenRecordersClosed();
 			this.#closeAllProviderSessions("dispose");
-			// Disconnect the MCP manager this session OWNS so its stdio servers are
-			// not orphaned at exit. Best-effort: a failure here must never throw out
-			// of dispose. Only owning (top-level) sessions provide this callback;
-			// spawned agents reuse a parent's manager and must not tear it down. Idempotent
-			// with the deferred-discovery disconnect in `createAgentSession`.
+			// Release this session's hold on the MCP manager. The last top-level holder
+			// disconnects it, so its stdio servers are not orphaned at exit and a
+			// conversation that outlives this one keeps them. Best-effort: a failure
+			// here must never throw out of dispose. Spawned agents reuse a parent's
+			// manager without a hold and omit this callback.
 			//
-			// BOUNDED: an owned manager may hold an HTTP/SSE server whose session-
+			// BOUNDED: the manager may hold an HTTP/SSE server whose session-
 			// termination DELETE blocks up to the MCP request timeout (30s default,
 			// unbounded when VEYYON_MCP_TIMEOUT_MS=0), so awaiting `disconnectAll()`
 			// unbounded would stall /exit and print-mode shutdown on a broken remote
 			// endpoint. Race it against a short deadline — stdio close (the subprocess
 			// reap this targets) completes well within the bound; a slow transport
 			// close is left to finish detached. Mirrors the bounded async-job teardown.
-			if (this.#disconnectOwnedMcpManager) {
+			if (this.#releaseMcpManager) {
 				try {
-					await withTimeout(
-						this.#disconnectOwnedMcpManager(),
-						3_000,
-						"Timed out disconnecting owned MCP manager during dispose",
-					);
+					await withTimeout(this.#releaseMcpManager(), 3_000, "Timed out releasing the MCP manager during dispose");
 				} catch (error) {
-					logger.warn("Failed to disconnect owned MCP manager during dispose", { error: errorMessage(error) });
+					logger.warn("Failed to release the MCP manager during dispose", { error: errorMessage(error) });
 				}
 			}
 			// Flush the retain queue BEFORE clearing the session's pointer so
@@ -5590,6 +5625,44 @@ export class AgentSession {
 	async waitForIdle(): Promise<void> {
 		await this.agent.waitForIdle();
 		await this.#waitForPostPromptRecovery();
+	}
+
+	/**
+	 * Wait until this conversation has nothing left to run: the loop and its post-prompt recovery
+	 * are idle, and no background job this agent owns will wake the loop again. A job completion
+	 * that starts another turn is waited out in turn. Returns once `signal` aborts.
+	 */
+	async waitForQuiescence(signal?: AbortSignal): Promise<void> {
+		while (!signal?.aborted) {
+			await this.waitForIdle();
+			if (signal?.aborted || !this.#hasPendingAsyncWake()) return;
+			await this.#nextAsyncWakeChange(signal);
+		}
+	}
+
+	/**
+	 * Resolve on the first event that can change {@link #hasPendingAsyncWake}: an owned job
+	 * settling, a turn starting, `signal` aborting, or {@link QUIESCENCE_RECHECK_MS} passing.
+	 */
+	async #nextAsyncWakeChange(signal: AbortSignal | undefined): Promise<void> {
+		const { promise, resolve } = Promise.withResolvers<void>();
+		const wake = (): void => resolve();
+		const timer = setTimeout(wake, QUIESCENCE_RECHECK_MS);
+		const unsubscribe = this.subscribe(event => {
+			if (event.type === "agent_start") wake();
+		});
+		signal?.addEventListener("abort", wake, { once: true });
+		const ownerFilter = this.#agentId ? { ownerId: this.#agentId } : undefined;
+		for (const job of this.#asyncJobManager?.getRunningJobs(ownerFilter) ?? []) {
+			job.promise.then(wake, wake);
+		}
+		try {
+			await promise;
+		} finally {
+			clearTimeout(timer);
+			unsubscribe();
+			signal?.removeEventListener("abort", wake);
+		}
 	}
 
 	async drainAsyncJobDeliveriesForAcp(options?: { timeoutMs?: number }): Promise<boolean> {
@@ -6000,9 +6073,9 @@ export class AgentSession {
 	 */
 	sessionToolApprovals(): SessionToolApprovals {
 		return {
-			get: toolName => this.#sessionToolApprovals.get(toolName),
-			set: (toolName, decision) => {
-				this.#sessionToolApprovals.set(toolName, decision);
+			get: key => this.#sessionToolApprovals.get(key),
+			set: (key, decision) => {
+				this.#sessionToolApprovals.set(key, decision);
 			},
 		};
 	}
@@ -10348,6 +10421,7 @@ export class AgentSession {
 				false,
 				preserveData,
 			);
+			this.sessionManager.coolCompactedHistory();
 			this.agent.replaceMessages(this.buildDisplaySessionContext().messages);
 			this.#resetAllAdvisorRuntimes();
 			this.#rebasePendingContextSnapshotAfterHistoryRewrite();
@@ -10452,11 +10526,7 @@ export class AgentSession {
 		if (contextWindow <= 0) return;
 
 		const compactionSettings = this.settings.getGroup("compaction");
-		if (
-			!compactionSettings.enabled ||
-			isCompactionStrategyOff(compactionSettings.strategy as string) ||
-			compactionSettings.midTurnEnabled === false
-		) {
+		if (!compactionSettings.enabled || compactionSettings.midTurnEnabled === false) {
 			return;
 		}
 
@@ -10579,7 +10649,7 @@ export class AgentSession {
 
 			// No promotion target available fall through to compaction
 			const compactionSettings = this.settings.getGroup("compaction");
-			if (!isThresholdCompactionDisabled(compactionSettings.enabled, compactionSettings.strategy as string)) {
+			if (compactionSettings.enabled) {
 				return await this.#runRecoveryCompactionWithRollback("overflow", assistantMessage, {
 					autoContinue,
 				});
@@ -10659,10 +10729,7 @@ export class AgentSession {
 			}
 
 			const incompleteCompactionSettings = this.settings.getGroup("compaction");
-			if (
-				incompleteCompactionSettings.enabled &&
-				!isCompactionStrategyOff(incompleteCompactionSettings.strategy as string)
-			) {
+			if (incompleteCompactionSettings.enabled) {
 				logger.debug("Compaction triggered by response.incomplete (length stop, no promotion target)", {
 					model: `${assistantMessage.provider}/${assistantMessage.model}`,
 					strategy: incompleteCompactionSettings.strategy,
@@ -10688,8 +10755,7 @@ export class AgentSession {
 		const supersedeResult = await this.#pruneStaleToolResults();
 
 		const compactionSettings = this.settings.getGroup("compaction");
-		if (isThresholdCompactionDisabled(compactionSettings.enabled, compactionSettings.strategy as string))
-			return COMPACTION_CHECK_NONE;
+		if (!compactionSettings.enabled) return COMPACTION_CHECK_NONE;
 
 		// Case 4: Threshold - turn succeeded but context is getting large
 		// Skip if this was an error (non-overflow errors don't have usage data)
@@ -11398,29 +11464,9 @@ export class AgentSession {
 		return true;
 	}
 
-	/**
-	 * A config file is read without enum validation, so a value outside the
-	 * schema arrives verbatim and would match neither pass — silently ending
-	 * every turn with no check at all. Fall back to the default and say so.
-	 */
-	#afterEditCheck(): (typeof AFTER_EDIT_CHECKS)[number] {
-		const configured = this.settings.get("edit.afterEdit");
-		for (const value of AFTER_EDIT_CHECKS) {
-			if (value === configured) return value;
-		}
-		if (!this.#afterEditCheckReported) {
-			this.#afterEditCheckReported = true;
-			logger.warn("edit.afterEdit holds a value the schema does not offer; using the default", {
-				configured,
-				allowed: AFTER_EDIT_CHECKS,
-			});
-		}
-		return "verify";
-	}
-
 	#enforceVerificationBeforeFinalize(): boolean {
 		if (this.#isSpawned) return false;
-		if (this.#afterEditCheck() !== "verify") return false;
+		if (this.settings.get("edit.afterEdit") !== "verify") return false;
 		const reminder = this.#verificationEvidence.takeFinalizationReminder();
 		if (!reminder) return false;
 		const reminderMessage: CustomMessage = {
@@ -11457,7 +11503,7 @@ export class AgentSession {
 
 	#enforceCodeReviewBeforeFinalize(): boolean {
 		if (this.#isSpawned) return false;
-		if (this.#afterEditCheck() !== "review") return false;
+		if (this.settings.get("edit.afterEdit") !== "review") return false;
 		const inContext = this.#toolCallIdsInContext();
 		const reminder = this.#verificationEvidence.takeCodeReviewReminder(id => inContext.has(id));
 		if (!reminder) return false;
@@ -11839,152 +11885,6 @@ export class AgentSession {
 				this.#providerSessionState.delete(key);
 			}
 		}
-	}
-
-	#normalizeProviderReplayValue(value: unknown): unknown {
-		if (Array.isArray(value)) {
-			return value.map(item => this.#normalizeProviderReplayValue(item));
-		}
-		if (value && typeof value === "object") {
-			return Object.fromEntries(
-				Object.entries(value).map(([key, entryValue]) => [key, this.#normalizeProviderReplayValue(entryValue)]),
-			);
-		}
-		return value;
-	}
-
-	#normalizeSessionMessageForProviderReplay(message: AgentMessage): unknown {
-		switch (message.role) {
-			case "user":
-			case "developer":
-				return {
-					role: message.role,
-					content: this.#normalizeProviderReplayValue(message.content),
-					providerPayload: message.providerPayload,
-				};
-			case "assistant": {
-				const isResponsesFamilyMessage =
-					message.api === "openai-responses" || message.api === "openai-codex-responses";
-				return {
-					role: message.role,
-					content:
-						isResponsesFamilyMessage && Array.isArray(message.content)
-							? message.content.flatMap(block => {
-									if (block.type === "thinking") {
-										return [];
-									}
-									if (block.type === "toolCall") {
-										return [
-											{
-												type: block.type,
-												id: block.id,
-												name: block.name,
-												arguments: block.arguments,
-											},
-										];
-									}
-									if (block.type === "text") {
-										return [{ type: block.type, text: block.text, textSignature: block.textSignature }];
-									}
-									return [this.#normalizeProviderReplayValue(block)];
-								})
-							: this.#normalizeProviderReplayValue(message.content),
-					api: message.api,
-					provider: message.provider,
-					model: message.model,
-					stopReason: message.stopReason,
-					errorMessage: message.errorMessage,
-					providerPayload: isResponsesFamilyMessage ? undefined : message.providerPayload,
-				};
-			}
-			case "toolResult":
-				return {
-					role: message.role,
-					toolName: message.toolName,
-					toolCallId: message.toolCallId,
-					isError: message.isError,
-					content: this.#normalizeProviderReplayValue(message.content),
-				};
-			case "bashExecution":
-				return {
-					role: message.role,
-					command: message.command,
-					output: message.output,
-					exitCode: message.exitCode,
-					cancelled: message.cancelled,
-					meta: message.meta
-						? {
-								truncation: this.#normalizeProviderReplayValue(message.meta.truncation),
-								limits: this.#normalizeProviderReplayValue(message.meta.limits),
-								diagnostics: message.meta.diagnostics
-									? this.#normalizeProviderReplayValue({
-											summary: message.meta.diagnostics.summary,
-											messages: message.meta.diagnostics.messages,
-										})
-									: undefined,
-							}
-						: undefined,
-					excludeFromContext: message.excludeFromContext,
-				};
-			case "pythonExecution":
-				return {
-					role: message.role,
-					code: message.code,
-					output: message.output,
-					exitCode: message.exitCode,
-					cancelled: message.cancelled,
-					meta: message.meta
-						? {
-								truncation: this.#normalizeProviderReplayValue(message.meta.truncation),
-								limits: this.#normalizeProviderReplayValue(message.meta.limits),
-								diagnostics: message.meta.diagnostics
-									? this.#normalizeProviderReplayValue({
-											summary: message.meta.diagnostics.summary,
-											messages: message.meta.diagnostics.messages,
-										})
-									: undefined,
-							}
-						: undefined,
-					excludeFromContext: message.excludeFromContext,
-				};
-			case "custom":
-			case "hookMessage":
-				return {
-					role: message.role,
-					customType: message.customType,
-					content: this.#normalizeProviderReplayValue(message.content),
-				};
-			case "branchSummary":
-				return { role: message.role, summary: message.summary };
-			case "compactionSummary":
-				return {
-					role: message.role,
-					summary: message.summary,
-					providerPayload: message.providerPayload,
-				};
-			case "fileMention":
-				return {
-					role: message.role,
-					files: message.files.map(file => ({
-						path: file.path,
-						content: file.content,
-						image: file.image,
-					})),
-				};
-			default:
-				return this.#normalizeProviderReplayValue(message);
-		}
-	}
-
-	#didSessionMessagesChange(previousMessages: AgentMessage[], nextMessages: AgentMessage[]): boolean {
-		if (previousMessages.length !== nextMessages.length) return true;
-		return previousMessages.some(
-			(message, i) =>
-				!Bun.deepEquals(
-					this.#normalizeSessionMessageForProviderReplay(message),
-					this.#normalizeSessionMessageForProviderReplay(nextMessages[i]),
-				),
-		);
 	}
 
 	#formatRoleModelValue(
@@ -12701,12 +12601,8 @@ export class AgentSession {
 		} = {},
 	): Promise<CompactionCheckResult> {
 		const compactionSettings = this.settings.getGroup("compaction");
-		const rawStrategy = compactionSettings.strategy as string | undefined;
-		if (reason === "idle") {
-			if (isCompactionStrategyOff(rawStrategy)) return COMPACTION_CHECK_NONE;
-		} else if (isThresholdCompactionDisabled(compactionSettings.enabled, rawStrategy)) {
-			return COMPACTION_CHECK_NONE;
-		}
+		// Idle compaction has its own gate; `compaction.enabled` governs the rest.
+		if (reason !== "idle" && !compactionSettings.enabled) return COMPACTION_CHECK_NONE;
 		const generation = this.#promptGeneration;
 		// Per run: a gap recorded by an earlier compaction says nothing about this
 		// history, and carrying it forward would over-cut a session that already
@@ -12935,6 +12831,7 @@ export class AgentSession {
 			result.preserveData,
 		);
 		await this.#persistCompactionTailElisions(preparation);
+		this.sessionManager.coolCompactedHistory();
 		this.agent.replaceMessages(this.buildDisplaySessionContext().messages);
 		this.#rebasePendingContextSnapshotAfterHistoryRewrite();
 		// Compaction discarded the conversation history that carried the approved
@@ -13178,7 +13075,7 @@ export class AgentSession {
 					return { error: this.#compactionCandidateError(candidate, error), skipReason };
 				}
 
-				const retryAfterMs = this.#parseRetryAfterMsFromError(message);
+				const retryAfterMs = extractRetryHint(undefined, message);
 				const shouldRetry =
 					retrySettings.enabled &&
 					attempt < retrySettings.maxRetries &&
@@ -13189,7 +13086,12 @@ export class AgentSession {
 					return { error: this.#compactionCandidateError(candidate, error), skipReason };
 				}
 
-				const baseDelayMs = retrySettings.baseDelayMs * 2 ** attempt;
+				// Bounded by `retry.maxRetries`; the schedule is uncapped so a configured base keeps its full ladder.
+				const baseDelayMs = exponentialBackoffDelay(attempt, {
+					baseMs: retrySettings.baseDelayMs,
+					maxMs: Number.POSITIVE_INFINITY,
+					jitter: 0,
+				});
 				const delayMs = retryAfterMs !== undefined ? Math.max(baseDelayMs, retryAfterMs) : baseDelayMs;
 				if (delayMs > maxAcceptableDelayMs && hasMoreCandidates) {
 					logger.warn("Auto-compaction retry delay too long, trying next model", {
@@ -13366,15 +13268,11 @@ export class AgentSession {
 	 */
 	setAutoCompactionEnabled(enabled: boolean): void {
 		this.settings.set("compaction.enabled", enabled);
-		if (enabled && isCompactionStrategyOff(this.settings.get("compaction.strategy") as string)) {
-			this.settings.override("compaction.strategy", getDefault("compaction.strategy"));
-		}
 	}
 
 	/** Whether auto-compaction is enabled */
 	get autoCompactionEnabled(): boolean {
-		const compaction = this.settings.getGroup("compaction");
-		return !isThresholdCompactionDisabled(compaction.enabled, compaction.strategy);
+		return this.settings.get("compaction.enabled");
 	}
 
 	// =========================================================================
@@ -13662,19 +13560,17 @@ export class AgentSession {
 		return stopType === "refusal" || stopType === "sensitive";
 	}
 
-	#getRetryFallbackChains(): RetryFallbackChains {
-		const configuredChains = this.settings.get("retry.fallbackChains");
-		if (!configuredChains || typeof configuredChains !== "object") return {};
-		const chains: RetryFallbackChains = { ...(configuredChains as RetryFallbackChains) };
-		const defaultChain = chains.default;
-		if (Array.isArray(defaultChain)) {
-			for (const role of Object.keys(this.settings.getModelRoles())) {
-				if (role !== "default" && chains[role] === undefined) {
-					chains[role] = defaultChain;
-				}
-			}
-		}
-		return chains;
+	/** What chain resolution reads, as of this call: the sanitized chains, role assignments and active model. */
+	#retryFallbackSource(): RetryFallbackChainSource {
+		return {
+			chains: retryFallbackChainsForRoles(
+				this.settings.get("retry.fallbackChains"),
+				Object.keys(this.settings.getModelRoles()),
+			),
+			modelRole: role => this.settings.getModelRole(role),
+			models: this.#modelRegistry,
+			activeModel: this.model,
+		};
 	}
 
 	/**
@@ -13708,87 +13604,14 @@ export class AgentSession {
 	}
 
 	#validateRetryFallbackChains(): void {
-		const configuredChains = this.settings.get("retry.fallbackChains");
-		if (configuredChains === undefined) return;
-		if (!isRecord(configuredChains)) {
-			const msg = "retry.fallbackChains must be a mapping of role names or model selectors to selector arrays.";
+		for (const msg of retryFallbackChainWarnings(this.settings.get("retry.fallbackChains"), this.#modelRegistry)) {
 			logger.warn(msg);
 			this.configWarnings.push(msg);
-			return;
-		}
-
-		for (const key in configuredChains) {
-			const chain = (configuredChains as RetryFallbackChains)[key];
-			const keyKind = isRetryFallbackModelKey(key) ? "model" : "role";
-			if (keyKind === "model") {
-				if (isRetryFallbackWildcardKey(key)) {
-					const provider = key.slice(0, -2);
-					if (!this.#modelRegistry.getAll().some(model => model.provider === provider)) {
-						const msg = `retry.fallbackChains wildcard key references unknown provider: ${key}`;
-						logger.warn(msg);
-						this.configWarnings.push(msg);
-					}
-				} else {
-					const parsedKey = parseRetryFallbackSelector(key, this.#modelRegistry);
-					if (!parsedKey) {
-						const msg = `Invalid model selector key in retry.fallbackChains: ${key}`;
-						logger.warn(msg);
-						this.configWarnings.push(msg);
-					} else if (!this.#modelRegistry.find(parsedKey.provider, parsedKey.id)) {
-						const msg = `retry.fallbackChains key references unknown model: ${key}`;
-						logger.warn(msg);
-						this.configWarnings.push(msg);
-					}
-				}
-			}
-			if (!Array.isArray(chain)) {
-				const msg = `Fallback chain for ${keyKind} '${key}' must be an array of selector strings.`;
-				logger.warn(msg);
-				this.configWarnings.push(msg);
-				continue;
-			}
-			for (const selectorStr of chain) {
-				if (typeof selectorStr !== "string") {
-					const msg = `Fallback chain for ${keyKind} '${key}' contains a non-string selector.`;
-					logger.warn(msg);
-					this.configWarnings.push(msg);
-					continue;
-				}
-				if (isRetryFallbackWildcardKey(selectorStr)) {
-					const provider = selectorStr.slice(0, -2);
-					if (!this.#modelRegistry.getAll().some(model => model.provider === provider)) {
-						const msg = `Fallback chain for ${keyKind} '${key}' references unknown provider: ${selectorStr}`;
-						logger.warn(msg);
-						this.configWarnings.push(msg);
-					}
-					continue;
-				}
-				const parsed = parseRetryFallbackSelector(selectorStr, this.#modelRegistry);
-				if (!parsed) {
-					const msg = `Invalid fallback selector format in ${keyKind} '${key}': ${selectorStr}`;
-					logger.warn(msg);
-					this.configWarnings.push(msg);
-					continue;
-				}
-				const exists = this.#modelRegistry.find(parsed.provider, parsed.id);
-				if (!exists) {
-					const msg = `Fallback chain for ${keyKind} '${key}' references unknown model: ${selectorStr}`;
-					logger.warn(msg);
-					this.configWarnings.push(msg);
-				}
-			}
 		}
 	}
 
 	#getRetryFallbackRevertPolicy(): RetryFallbackRevertPolicy {
 		return this.settings.get("retry.fallbackRevertPolicy") === "never" ? "never" : "cooldown-expiry";
-	}
-
-	#getRetryFallbackPrimarySelector(role: string): RetryFallbackSelector | undefined {
-		if (isRetryFallbackWildcardKey(role)) return undefined;
-		if (isRetryFallbackModelKey(role)) return parseRetryFallbackSelector(role, this.#modelRegistry);
-		const configuredSelector = this.settings.getModelRole(role);
-		return configuredSelector ? parseRetryFallbackSelector(configuredSelector, this.#modelRegistry) : undefined;
 	}
 
 	#clearActiveRetryFallback(): void {
@@ -13800,187 +13623,26 @@ export class AgentSession {
 	}
 
 	#noteRetryFallbackCooldown(currentSelector: string, retryAfterMs: number | undefined, errorMessage: string): void {
-		let cooldownMs = retryAfterMs;
-		if (!cooldownMs || cooldownMs <= 0) {
-			const reason = parseRateLimitReason(errorMessage);
-			cooldownMs = reason === "UNKNOWN" ? 5 * 60 * 1000 : calculateRateLimitBackoffMs(reason);
-		}
+		const cooldownMs =
+			retryAfterMs && retryAfterMs > 0
+				? retryAfterMs
+				: calculateRateLimitBackoffMs(parseRateLimitReason(errorMessage), "selector-suppression");
 		this.#modelRegistry.suppressSelector(currentSelector, Date.now() + cooldownMs);
 	}
 
-	/**
-	 * Map the failing model selector to the chain key that owns it, by
-	 * specificity: an exact model-selector key, then a `provider/*` wildcard,
-	 * then a model role whose current assignment matches, then `default`.
-	 * Model-oriented keys win over roles so a chain follows the model across
-	 * role reassignments.
-	 */
-	#resolveRetryFallbackRole(currentSelector: string): string | undefined {
-		const parsedCurrent = parseRetryFallbackSelector(currentSelector, this.#modelRegistry);
-		if (!parsedCurrent) return undefined;
-		const chains = this.#getRetryFallbackChains();
-		const currentBaseSelector = formatRetryFallbackBaseSelector(parsedCurrent);
-		const currentPlainSelector = this.model
-			? formatModelSelectorValue(formatModelString(this.model), parsedCurrent.thinkingLevel)
-			: undefined;
-		const currentPlainBaseSelector =
-			currentPlainSelector && currentPlainSelector !== currentSelector
-				? formatRetryFallbackBaseSelector(parseRetryFallbackSelector(currentPlainSelector) ?? parsedCurrent)
-				: undefined;
-
-		const exactModelKeys: string[] = [];
-		const roleKeys: string[] = [];
-		for (const key in chains) {
-			if (!isRetryFallbackModelKey(key)) roleKeys.push(key);
-			else if (!isRetryFallbackWildcardKey(key)) exactModelKeys.push(key);
-		}
-		const matchesCurrent = (primary: RetryFallbackSelector | undefined): boolean => {
-			if (!primary) return false;
-			if (primary.raw === currentSelector || (currentPlainSelector && primary.raw === currentPlainSelector)) {
-				return true;
-			}
-			const base = formatRetryFallbackBaseSelector(primary);
-			return base === currentBaseSelector || (!!currentPlainBaseSelector && base === currentPlainBaseSelector);
-		};
-
-		// 1. Exact model-selector keys — most specific.
-		for (const key of exactModelKeys) {
-			if (matchesCurrent(this.#getRetryFallbackPrimarySelector(key))) return key;
-		}
-		// 2. Provider wildcard (`provider/*`) — any active model of this provider.
-		const wildcardKey = `${parsedCurrent.provider}/*`;
-		if (Array.isArray(chains[wildcardKey])) return wildcardKey;
-		// 3. Role keys — matched by the role's currently-assigned model.
-		for (const key of roleKeys) {
-			if (matchesCurrent(this.#getRetryFallbackPrimarySelector(key))) return key;
-		}
-		// 4. The default chain, when default has no explicit role primary.
-		const defaultChain = chains.default;
-		if (
-			Array.isArray(defaultChain) &&
-			defaultChain.length > 0 &&
-			this.#getRetryFallbackPrimarySelector("default") === undefined
-		) {
-			return "default";
-		}
-		return undefined;
-	}
-
-	/**
-	 * Parse one configured chain entry. A `provider/*` entry keeps the failing
-	 * model's id and swaps the provider (google-antigravity/x → google/x);
-	 * ids the target provider lacks are skipped by the candidate loop's
-	 * registry lookup.
-	 */
-	#parseRetryFallbackChainEntry(
-		entry: string,
-		current: RetryFallbackSelector | undefined,
-	): RetryFallbackSelector | undefined {
-		if (isRetryFallbackWildcardKey(entry)) {
-			if (!current) return undefined;
-			const provider = entry.slice(0, -2);
-			return { raw: `${provider}/${current.id}`, provider, id: current.id, thinkingLevel: undefined };
-		}
-		return parseRetryFallbackSelector(entry, this.#modelRegistry);
-	}
-
-	#getRetryFallbackEffectiveChain(role: string, currentSelector?: string): RetryFallbackSelector[] {
-		const parsedCurrent = currentSelector
-			? parseRetryFallbackSelector(currentSelector, this.#modelRegistry)
-			: undefined;
-		const seen = new Set<string>();
-		const chain: RetryFallbackSelector[] = [];
-		if (isRetryFallbackWildcardKey(role)) {
-			// A wildcard key has no fixed primary: the active model is the
-			// primary, followed by the configured provider-level fallbacks.
-			if (parsedCurrent) {
-				chain.push(parsedCurrent);
-				seen.add(parsedCurrent.raw);
-			}
-		} else {
-			const primarySelector = this.#getRetryFallbackPrimarySelector(role);
-			if (!primarySelector) return [];
-			chain.push(primarySelector);
-			seen.add(primarySelector.raw);
-		}
-		for (const selector of this.#getRetryFallbackChains()[role] ?? []) {
-			const parsed = this.#parseRetryFallbackChainEntry(selector, parsedCurrent);
-			if (!parsed || seen.has(parsed.raw)) continue;
-			seen.add(parsed.raw);
-			chain.push(parsed);
-		}
-		return chain;
-	}
-
-	#findRetryFallbackCandidates(role: string, currentSelector: string): RetryFallbackSelector[] {
-		let chain = this.#getRetryFallbackEffectiveChain(role, currentSelector);
-		const parsedCurrent = parseRetryFallbackSelector(currentSelector, this.#modelRegistry);
-		if (chain.length === 0 && role === "default" && parsedCurrent) {
-			const chains = this.#getRetryFallbackChains();
-			const defaultChain = chains.default;
-			if (
-				Array.isArray(defaultChain) &&
-				defaultChain.length > 0 &&
-				this.#getRetryFallbackPrimarySelector("default") === undefined
-			) {
-				const seen = new Set<string>([parsedCurrent.raw]);
-				chain = [parsedCurrent];
-				for (const selector of defaultChain) {
-					const parsed = this.#parseRetryFallbackChainEntry(selector, parsedCurrent);
-					if (!parsed || seen.has(parsed.raw)) continue;
-					seen.add(parsed.raw);
-					chain.push(parsed);
-				}
-			}
-		}
-		if (chain.length <= 1) return [];
-		const currentBaseSelector = parsedCurrent ? formatRetryFallbackBaseSelector(parsedCurrent) : undefined;
-		const currentPlainSelector =
-			this.model && parsedCurrent
-				? formatModelSelectorValue(formatModelString(this.model), parsedCurrent.thinkingLevel)
-				: undefined;
-		const currentPlainBaseSelector =
-			parsedCurrent && currentPlainSelector && currentPlainSelector !== currentSelector
-				? formatRetryFallbackBaseSelector(parseRetryFallbackSelector(currentPlainSelector) ?? parsedCurrent)
-				: undefined;
-		const exactIndex = chain.findIndex(
-			selector => selector.raw === currentSelector || selector.raw === currentPlainSelector,
-		);
-		if (exactIndex >= 0) return chain.slice(exactIndex + 1);
-		const baseIndex = currentBaseSelector
-			? chain.findIndex(selector => {
-					const selectorBase = formatRetryFallbackBaseSelector(selector);
-					return selectorBase === currentBaseSelector || selectorBase === currentPlainBaseSelector;
-				})
-			: -1;
-		if (baseIndex >= 0) return chain.slice(baseIndex + 1);
-		return chain.slice(1);
-	}
-
+	/** Switch to a fallback model for the rest of the retry sequence, recording what to restore. */
 	async #applyRetryFallbackCandidate(
 		role: string,
 		selector: RetryFallbackSelector,
+		candidate: Model,
 		currentSelector: string,
 		options?: { pinFallback?: boolean },
 	): Promise<void> {
-		const resolved = resolveModelOverride([selector.raw], this.#modelRegistry, this.settings);
-		const candidate = resolved.model ?? this.#modelRegistry.find(selector.provider, selector.id);
-		if (!candidate) {
-			throw new Error(`Retry fallback model not found: ${selector.raw}`);
-		}
-		const apiKey = await this.#modelRegistry.getApiKey(candidate, this.sessionId);
-		if (!apiKey) {
-			throw new Error(missingCredentialsMessage(candidate.provider, candidate.id, `retry fallback ${selector.raw}`));
-		}
-
 		// Capture the configured selector (auto-aware) so a fallback chain preserves
 		// `auto` instead of collapsing it to the level it resolved to this turn.
 		const currentThinkingLevel = this.configuredThinkingLevel();
 		const nextThinkingLevel = selector.thinkingLevel ?? currentThinkingLevel;
-		const candidateSelector = formatModelStringWithRouting(candidate);
-		this.#setModelWithProviderSessionReset(candidate);
-		this.sessionManager.appendModelChange(candidateSelector, EPHEMERAL_MODEL_CHANGE_ROLE);
-		AgentStorage.forAgentDir(this.settings.getAgentDir())?.recordModelUsage(candidateSelector);
+		this.#switchModelForRetry(candidate);
 		this.setThinkingLevel(nextThinkingLevel, false, "resolved");
 		if (!this.#activeRetryFallback) {
 			this.#activeRetryFallback = {
@@ -14002,18 +13664,37 @@ export class AgentSession {
 		});
 	}
 
+	/**
+	 * Switch the active model for a retry: a provider-session reset, an ephemeral model-change entry,
+	 * and a usage record. Every retry model switch (a chain fallback, the Fireworks Fast degrade, the
+	 * restore of the primary) goes through here.
+	 */
+	#switchModelForRetry(model: Model): string {
+		const selector = formatModelStringWithRouting(model);
+		this.#setModelWithProviderSessionReset(model);
+		this.sessionManager.appendModelChange(selector, EPHEMERAL_MODEL_CHANGE_ROLE);
+		AgentStorage.forAgentDir(this.settings.getAgentDir())?.recordModelUsage(selector);
+		return selector;
+	}
+
+	/** The registry model a fallback selector names, when it resolves and has a credential. */
+	async #usableRetryModel(selector: RetryFallbackSelector): Promise<Model | undefined> {
+		const resolved = resolveModelOverride([selector.raw], this.#modelRegistry, this.settings);
+		const model = resolved.model ?? this.#modelRegistry.find(selector.provider, selector.id);
+		if (!model) return undefined;
+		return (await this.#modelRegistry.getApiKey(model, this.sessionId)) ? model : undefined;
+	}
+
 	async #tryRetryModelFallback(currentSelector: string, options?: { pinFallback?: boolean }): Promise<boolean> {
-		const role = this.#activeRetryFallback?.role ?? this.#resolveRetryFallbackRole(currentSelector);
+		const source = this.#retryFallbackSource();
+		const role = this.#activeRetryFallback?.role ?? resolveRetryFallbackRole(source, currentSelector);
 		if (!role) return false;
 
-		for (const selector of this.#findRetryFallbackCandidates(role, currentSelector)) {
+		for (const selector of findRetryFallbackCandidates(source, role, currentSelector)) {
 			if (this.#isRetryFallbackSelectorSuppressed(selector)) continue;
-			const resolved = resolveModelOverride([selector.raw], this.#modelRegistry, this.settings);
-			const candidate = resolved.model ?? this.#modelRegistry.find(selector.provider, selector.id);
+			const candidate = await this.#usableRetryModel(selector);
 			if (!candidate) continue;
-			const apiKey = await this.#modelRegistry.getApiKey(candidate, this.sessionId);
-			if (!apiKey) continue;
-			await this.#applyRetryFallbackCandidate(role, selector, currentSelector, options);
+			await this.#applyRetryFallbackCandidate(role, selector, candidate, currentSelector, options);
 			return true;
 		}
 
@@ -14074,9 +13755,10 @@ export class AgentSession {
 		if (AIError.isContextOverflow(message, model.contextWindow ?? 0)) return false;
 		if (this.#hasReplayUnsafeToolOutput(message)) return false;
 		const currentSelector = formatRetryFallbackSelector(model, this.thinkingLevel);
-		const role = this.#activeRetryFallback?.role ?? this.#resolveRetryFallbackRole(currentSelector);
+		const source = this.#retryFallbackSource();
+		const role = this.#activeRetryFallback?.role ?? resolveRetryFallbackRole(source, currentSelector);
 		if (!role) return false;
-		return this.#findRetryFallbackCandidates(role, currentSelector).length > 0;
+		return findRetryFallbackCandidates(source, role, currentSelector).length > 0;
 	}
 
 	/**
@@ -14092,10 +13774,7 @@ export class AgentSession {
 		if (!baseModel) return false;
 		const apiKey = await this.#modelRegistry.getApiKey(baseModel, this.sessionId);
 		if (!apiKey) return false;
-		const baseSelector = formatModelStringWithRouting(baseModel);
-		this.#setModelWithProviderSessionReset(baseModel);
-		this.sessionManager.appendModelChange(baseSelector, EPHEMERAL_MODEL_CHANGE_ROLE);
-		AgentStorage.forAgentDir(this.settings.getAgentDir())?.recordModelUsage(baseSelector);
+		const baseSelector = this.#switchModelForRetry(baseModel);
 		await this.#emitSessionEvent({
 			type: "retry_fallback_applied",
 			from: currentSelector,
@@ -14141,73 +13820,15 @@ export class AgentSession {
 		}
 		if (this.#isRetryFallbackSelectorSuppressed(originalSelector)) return;
 
-		const resolvedPrimary = resolveModelOverride([originalSelector.raw], this.#modelRegistry, this.settings);
-		const primaryModel =
-			resolvedPrimary.model ?? this.#modelRegistry.find(originalSelector.provider, originalSelector.id);
+		const primaryModel = await this.#usableRetryModel(originalSelector);
 		if (!primaryModel) return;
-		const apiKey = await this.#modelRegistry.getApiKey(primaryModel, this.sessionId);
-		if (!apiKey) return;
 
 		const currentThinkingLevel = this.configuredThinkingLevel();
 		const thinkingToApply =
 			currentThinkingLevel === lastAppliedFallbackThinkingLevel ? originalThinkingLevel : currentThinkingLevel;
-		const primarySelector = formatModelStringWithRouting(primaryModel);
-		this.#setModelWithProviderSessionReset(primaryModel);
-		this.sessionManager.appendModelChange(primarySelector, EPHEMERAL_MODEL_CHANGE_ROLE);
-		AgentStorage.forAgentDir(this.settings.getAgentDir())?.recordModelUsage(primarySelector);
+		this.#switchModelForRetry(primaryModel);
 		this.setThinkingLevel(thinkingToApply, false, "resolved");
 		this.#clearActiveRetryFallback();
-	}
-
-	#parseRetryAfterMsFromError(errorMessage: string): number | undefined {
-		const now = Date.now();
-		const retryAfterMsMatch = /retry-after-ms\s*[:=]\s*(\d+)/i.exec(errorMessage);
-		if (retryAfterMsMatch) {
-			return Math.max(0, Number(retryAfterMsMatch[1]));
-		}
-
-		const retryAfterMatch = /retry-after\s*[:=]\s*([^\s,;]+)/i.exec(errorMessage);
-		if (retryAfterMatch) {
-			const value = retryAfterMatch[1];
-			const seconds = Number(value);
-			if (!Number.isNaN(seconds)) {
-				return Math.max(0, seconds * 1000);
-			}
-			const dateMs = Date.parse(value);
-			if (!Number.isNaN(dateMs)) {
-				return Math.max(0, dateMs - now);
-			}
-		}
-
-		const retryHintMs = extractRetryHint(undefined, errorMessage);
-		if (retryHintMs !== undefined) {
-			return retryHintMs;
-		}
-
-		const resetMsMatch = /x-ratelimit-reset-ms\s*[:=]\s*(\d+)/i.exec(errorMessage);
-		if (resetMsMatch) {
-			const resetMs = Number(resetMsMatch[1]);
-			if (!Number.isNaN(resetMs)) {
-				if (resetMs > 1_000_000_000_000) {
-					return Math.max(0, resetMs - now);
-				}
-				return Math.max(0, resetMs);
-			}
-		}
-
-		const resetMatch = /x-ratelimit-reset\s*[:=]\s*(\d+)/i.exec(errorMessage);
-		if (resetMatch) {
-			const resetSeconds = Number(resetMatch[1]);
-			if (!Number.isNaN(resetSeconds)) {
-				if (resetSeconds > 1_000_000_000) {
-					return Math.max(0, resetSeconds * 1000 - now);
-				}
-				return Math.max(0, resetSeconds * 1000);
-			}
-		}
-
-		// Smart Fallback if no exact headers found
-		return undefined;
 	}
 
 	/**
@@ -14236,16 +13857,36 @@ export class AgentSession {
 	 * is the recovery (`fireworksFastFallback`, `hardErrorFallback`): then a
 	 * successful model switch retries immediately, and a failed switch surfaces
 	 * the error without a same-model backoff retry.
+	 * A step that throws (the auth store, a credential lookup, the session file) ends the retry
+	 * sequence as failed and returns false, which hands the turn back to the settle path that
+	 * closes the retry gate `prompt()` waits on. A throw escaping here skipped that path.
 	 * @returns true if retry was initiated, false if max retries exceeded or disabled
 	 */
 	async #handleRetryableError(
 		message: AssistantMessage,
-		options?: {
-			allowModelFallback?: boolean;
-			fireworksFastFallback?: boolean;
-			hardErrorFallback?: boolean;
-			preserveFailedTurn?: boolean;
-		},
+		options?: RetryEntryOptions & { preserveFailedTurn?: boolean },
+	): Promise<boolean> {
+		try {
+			return await this.#attemptRetry(message, options);
+		} catch (error) {
+			const failure = errorMessage(error);
+			logger.error("Retry recovery failed", { error: failure, originalError: message.errorMessage });
+			const attempt = this.#retryAttempt;
+			this.#retryAttempt = 0;
+			this.#clearPendingRecoveredRetryErrors();
+			await this.#emitSessionEvent({
+				type: "auto_retry_end",
+				success: false,
+				attempt,
+				finalError: `Retry recovery failed: ${failure}. Original error: ${message.errorMessage || "Unknown error"}`,
+			});
+			return false;
+		}
+	}
+
+	async #attemptRetry(
+		message: AssistantMessage,
+		options?: RetryEntryOptions & { preserveFailedTurn?: boolean },
 	): Promise<boolean> {
 		const retrySettings = this.settings.getGroup("retry");
 		// A backend that runs its own agent loop remotely fails slowly and
@@ -14275,7 +13916,7 @@ export class AgentSession {
 		const errorMessage = message.errorMessage || "Unknown error";
 		const id = this.#classifyRetryMessage(message);
 		const staleOpenAIResponsesReplayError = AIError.is(id, AIError.Flag.StaleResponsesItem);
-		const parsedRetryAfterMs = this.#parseRetryAfterMsFromError(errorMessage);
+		const parsedRetryAfterMs = extractRetryHint(undefined, errorMessage);
 		let delayMs = staleOpenAIResponsesReplayError
 			? 0
 			: calculateRetryBackoffDelayMs(retryPolicy.baseDelayMs, this.#retryAttempt);
@@ -14295,7 +13936,8 @@ export class AgentSession {
 			!staleOpenAIResponsesReplayError &&
 			AIError.is(id, AIError.Flag.UsageLimit)
 		) {
-			const retryAfterMs = parsedRetryAfterMs ?? calculateRateLimitBackoffMs(parseRateLimitReason(errorMessage));
+			const retryAfterMs =
+				parsedRetryAfterMs ?? calculateRateLimitBackoffMs(parseRateLimitReason(errorMessage), "credential-park");
 			const outcome = await this.#modelRegistry.authStorage.markUsageLimitReached(
 				this.model.provider,
 				this.sessionId,
@@ -15263,6 +14905,15 @@ export class AgentSession {
 		const switchingToDifferentSession = previousSessionFile
 			? path.resolve(previousSessionFile) !== path.resolve(sessionPath)
 			: true;
+		// Every in-process switch (the picker, `/resume`, an extension, RPC `switch_session`) lands
+		// here. Another profile's transcript continues in that profile, never under this one's
+		// settings and credentials.
+		const owner = switchingToDifferentSession ? foreignSessionFileProfile(sessionPath) : undefined;
+		if (owner !== undefined) {
+			throw new Error(
+				`Session ${sessionPath} belongs to profile "${owner}". Run \`veyyon --resume ${sessionPath}\` to continue it in that profile, or \`veyyon --profile ${getActiveProfileOrDefault()} --resume ${sessionPath}\` to fork it into this one.`,
+			);
+		}
 		// Emit session_before_switch event (can be cancelled)
 		if (this.#extensionRunner?.hasHandlers("session_before_switch")) {
 			const result = (await this.#extensionRunner.emit({
@@ -15283,7 +14934,7 @@ export class AgentSession {
 		await this.sessionManager.flush();
 		const previousSessionState = this.sessionManager.captureState();
 		// Only same-session reloads compare against the prior context to detect
-		// rollback edits (`#didSessionMessagesChange` below). Building it for a
+		// rollback edits (`didSessionMessagesChange` below). Building it for a
 		// different-session switch is a pure waste — and on huge pre-fix sessions
 		// it materializes every persisted legacy compaction frame plus the
 		// `openaiRemoteCompaction.replacementHistory` payload into messages,
@@ -15370,7 +15021,7 @@ export class AgentSession {
 			let sessionContext = this.buildDisplaySessionContext();
 			const didReloadConversationChange =
 				previousSessionContext !== undefined &&
-				this.#didSessionMessagesChange(previousSessionContext.messages, sessionContext.messages);
+				didSessionMessagesChange(previousSessionContext.messages, sessionContext.messages);
 			const fallbackSelectedMCPToolNames = this.#discovery.sessionDefaults(sessionPath);
 			await this.#restoreMCPSelectionsForSessionContext(sessionContext, { fallbackSelectedMCPToolNames });
 			this.#checkpoint.rehydrate(this.sessionManager.getBranch());

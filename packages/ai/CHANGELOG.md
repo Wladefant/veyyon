@@ -34,6 +34,10 @@
 - Fixed Cursor duplicate tool execution on re-sent requests and prevented EventStream from leaking waiting resolvers on early abort.
 ### Changed
 
+- The auth gateway's error verdicts come from named rules in the error registry (`GATEWAY_RULES`), and `classifyGatewayError` accepts an optional `trace` array that receives the name of the rule that answered; every verdict is unchanged.
+- `calculateRateLimitBackoffMs` takes a `RateLimitBackoffContext` (`"credential-park"` or `"selector-suppression"`) that sets the cost of an unreadable failure: 30 minutes for a credential park, 5 minutes for a selector suppression.
+- Every retry loop in the package takes its exponential delay from `exponentialBackoffDelay` in `@veyyon/utils`; each loop's base, ceiling and jitter are unchanged.
+- `auth-storage.ts` is split into single-concern modules under `src/auth-storage/` with no change to its exports or behavior.
 - The JSON Schema meta-validator checks a node by looking each of its keys up in a keyword table instead of probing every known keyword, cutting validation of a 40-tool parameter schema set from 46.6 µs to 33.7 µs with identical verdicts, except that a `NaN` `multipleOf` is now rejected.
 - Stream option mapping resolves each API's options in its own mapper over one shared base instead of one 420-line switch, cutting the mapping of 743,431 model and option combinations from 100.8 ms to 92.1 ms with identical options.
 - The Anthropic and OpenAI-compatible providers split their stream loops, message converters and finalization into per-step helpers; no user-visible change.
@@ -53,9 +57,11 @@
 - Strict-mode schema sanitization splits into `$ref` and single-`allOf` inlining, a type-union splitter and a per-keyword rewrite instead of one 240-line function, cutting sanitization of 40 deep tool schemas from 8.49 ms to 7.64 ms with identical output across 100,000 generated schemas.
 - The Google, Cloud Code Assist, MCP and Moonshot schema normalizers split a node's walk into parent-level rewrites, a const-union collapse and type and object-shape settling steps instead of one 140-line function; output is identical across 200,000 generated schemas and normalization time is unchanged.
 - The Google, Cloud Code Assist, MCP and Moonshot normalizers walk a `properties` or definitions map by entry instead of copying their options for every key, and Cloud Code Assist's nullable pass walks each property subtree once instead of twice per nesting level, cutting normalization of the 25 built-in tool schemas by 13% to 23% and of a 16-level nested schema for Cloud Code Assist from 62.7 ms to 0.1 ms.
+- The JSON Schema value validator walks one instance path it pushes and pops instead of copying the path into every child, applies each keyword group in its own step, and lists an object's keys and builds its type list only when a keyword reads them, cutting validation of a 60-entry tool argument from 45 µs to 22 µs with identical issues across 600,000 generated schemas and values.
 
 ### Fixed
 
+- The Anthropic client waits the window stated by an `anthropic-ratelimit-*-reset` header on a 429 that carries no `retry-after`, instead of retrying on the backoff curve.
 - Strict-mode schema preparation no longer adds a `const` value to the caller's own `enum` array, so preparing a tool schema leaves it unchanged and a frozen `enum` beside a `const` no longer drops the tool out of strict mode.
 - A tool parameter named after a JSON Schema keyword keeps its name and schema for Google, Cloud Code Assist, MCP and Moonshot; a property named `const` was folded into an `enum` over its siblings, a property named `nullable` was dropped while `required` still listed it, and Cloud Code Assist sent such a tool the empty fallback schema.
 - A Cloud Code Assist tool parameter that admits `null` twice, such as `nullable: true` beside a `oneOf` with a `{type: "null"}` branch, loses both null layers instead of sending the whole tool the empty fallback schema.
@@ -66,6 +72,7 @@
 - A Cursor turn held by a local tool that never returns now ends when its failure or an abort arrives instead of waiting on the tool forever.
 - Fixed every Cursor exec-channel tool call being stored twice in the assistant message, which left an unanswered copy of each call that session resume reported as pending.
 - A blank user or developer message after a tool result no longer sends Mistral two consecutive assistant turns, which it rejects.
+- An OpenAI-compatible request whose `tool_choice` the endpoint rejects with a 400 (`only "auto" is supported for 'tool_choice'`, `Thinking mode does not support this tool_choice`) retries once without that form, and the session leaves the form out for that model afterwards.
 
 ## [1.5.4] - 2026-09-24
 

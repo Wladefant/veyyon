@@ -10,6 +10,8 @@
  * than the content it mirrors, or whose parseable payload can change without
  * detection. Discovery snapshots must not duplicate the bundled catalog, and
  * restoring them must preserve every model and configured provider override.
+ * Every retired layout, including the SHA-256 frame each installed copy wrote
+ * under the current fingerprint, rebuilds instead of being served.
  *
  * What it does not catch: a new fingerprint input that remains stable across
  * these launches while changing in production (none known).
@@ -24,12 +26,15 @@ import { writeModelCache } from "@veyyon/catalog/model-cache";
 import { getBundledModels } from "@veyyon/catalog/models";
 import { ModelRegistry } from "@veyyon/coding-agent/config/model-registry";
 import { removeSyncWithRetries, Snowflake } from "@veyyon/utils";
+import { writeJsonSnapshotSync } from "@veyyon/utils/json-snapshot";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 interface SnapshotHeader {
+	frame: number;
 	fingerprint: string;
-	payloadDigest: string;
+	bytes: number;
+	crc32: number;
 }
 
 interface SnapshotStage {
@@ -274,24 +279,31 @@ describe("static model stage snapshot", () => {
 		expect(readSnapshot().stage.cachedStandard).toEqual(stage.cachedStandard);
 	});
 
-	it.each(["fingerprint", "framing"])("rebuilds a retired stage with obsolete %s", async variant => {
-		await coldLaunch();
-		const { header, stage } = readSnapshot();
-		const expectedProviders = [...stage.cachedStandard.authoritativeFreshProviders];
-		stage.cachedStandard.authoritativeFreshProviders.push("synthetic-corruption");
-		const payload = JSON.stringify(stage);
-		const payloadDigest = createHash("sha256").update(payload).digest("hex");
-		const staleHeader =
-			variant === "fingerprint"
-				? { fingerprint: header.fingerprint.replace(/^[^:]+/, "8"), payloadDigest }
-				: { fingerprint: header.fingerprint, stageDigest: payloadDigest };
-		fs.writeFileSync(snapshotPath, `${JSON.stringify(staleHeader)}\n${payload}`);
+	it.each(["obsolete fingerprint version", "retired SHA-256 frame", "retired stage-digest frame"])(
+		"rebuilds a retired stage with %s",
+		async variant => {
+			await coldLaunch();
+			const { header, stage } = readSnapshot();
+			const expectedProviders = [...stage.cachedStandard.authoritativeFreshProviders];
+			stage.cachedStandard.authoritativeFreshProviders.push("synthetic-corruption");
+			const payload = JSON.stringify(stage);
+			const digest = createHash("sha256").update(payload).digest("hex");
+			if (variant === "obsolete fingerprint version") {
+				writeJsonSnapshotSync(snapshotPath, header.fingerprint.replace(/^[^:]+/, "8"), stage);
+			} else {
+				const retiredHeader =
+					variant === "retired SHA-256 frame"
+						? { fingerprint: header.fingerprint, payloadDigest: digest }
+						: { fingerprint: header.fingerprint, stageDigest: digest };
+				fs.writeFileSync(snapshotPath, `${JSON.stringify(retiredHeader)}\n${payload}`);
+			}
 
-		launch();
+			launch();
 
-		expect(readSnapshot().stage.cachedStandard.authoritativeFreshProviders).toEqual(expectedProviders);
-		expect(readSnapshot().header.fingerprint.split(":")[0]).toBe("9");
-	});
+			expect(readSnapshot().stage.cachedStandard.authoritativeFreshProviders).toEqual(expectedProviders);
+			expect(readSnapshot().header).toMatchObject({ frame: 2, fingerprint: header.fingerprint });
+		},
+	);
 
 	it("a snapshot naming another fingerprint misses rather than serving", async () => {
 		await coldLaunch();

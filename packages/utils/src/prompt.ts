@@ -1,6 +1,7 @@
 import type { HelperDelegate, HelperOptions, Template, TemplateDelegate } from "handlebars";
 import Handlebars from "handlebars";
 import { analyzeTemplate, assertTemplateVariablesFilled, type TemplateVariables } from "./prompt-variables";
+import { internString } from "./strings";
 
 export {
 	analyzeTemplate,
@@ -599,12 +600,15 @@ export interface RenderOptions {
  * Variables the template only TESTS are untouched: absent still means "off",
  * which is what every optional region in these prompts relies on. See
  * `prompt-variables.ts` for why the check draws the line there.
+ *
+ * The result is interned ({@link internString}): each session renders the same tool descriptions
+ * and prompt sections, and every session holding one shares one copy.
  */
 export function render(template: string, context: TemplateContext = {}, options: RenderOptions = {}): string {
-	if (!template.includes("{{")) return format(template, { renderPhase: "post-render" });
+	if (!template.includes("{{")) return internString(format(template, { renderPhase: "post-render" }));
 	const resolved = context ?? {};
 	if (!options.allowMissing) assertPromptContext(template, resolved, options.label);
 	const compiled = compile(template);
 	const rendered = compiled(resolved);
-	return format(rendered, { renderPhase: "post-render" });
+	return internString(format(rendered, { renderPhase: "post-render" }));
 }

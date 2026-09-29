@@ -37,6 +37,7 @@ import {
 	AdviseTool,
 	type AdvisorAgent,
 	type AdvisorConfig,
+	type AdvisorContextFile,
 	AdvisorEmissionGuard,
 	type AdvisorMessageDetails,
 	type AdvisorNote,
@@ -49,6 +50,7 @@ import {
 	buildAdvisorQuarantineSourceText,
 	deriveAdvisorTelemetry,
 	formatAdvisorBatchContent,
+	formatAdvisorContextPrompt,
 	getOrCreateAdvisorProviderSessionId,
 	isAdvisorInterruptImmuneTurnActive,
 	isAdvisorProductEnabled,
@@ -197,6 +199,11 @@ export class AdvisorRoster {
 	readonly #tools: AgentTool[] | undefined;
 	#watchdogPrompt: string | undefined;
 	#sharedInstructions: string | undefined;
+	#contextFiles: readonly AdvisorContextFile[] | undefined;
+	/**
+	 * {@link #contextFiles} rendered for the advisor's system prompt, on the first advisor start: a
+	 * session with no advisor never holds a second copy of its context files.
+	 */
 	#contextPrompt: string | undefined;
 	/** Configured advisor roster from WATCHDOG.yml; undefined/empty → single legacy advisor. */
 	#configs: AdvisorConfig[] | undefined;
@@ -213,7 +220,7 @@ export class AdvisorRoster {
 		this.#host = host;
 		this.#tools = tools;
 		this.#watchdogPrompt = scope.advisorWatchdogPrompt;
-		this.#contextPrompt = scope.advisorContextPrompt;
+		this.#contextFiles = scope.advisorContextFiles;
 		this.#sharedInstructions = scope.advisorSharedInstructions;
 		this.#configs = scope.advisorConfigs;
 	}
@@ -268,7 +275,8 @@ export class AdvisorRoster {
 	replaceProjectScope(scope: ProjectAdvisorScope): void {
 		this.stop();
 		this.#watchdogPrompt = scope.advisorWatchdogPrompt;
-		this.#contextPrompt = scope.advisorContextPrompt;
+		this.#contextFiles = scope.advisorContextFiles;
+		this.#contextPrompt = undefined;
 		this.#sharedInstructions = scope.advisorSharedInstructions;
 		this.#configs = scope.advisorConfigs;
 		this.enableFromSettings();
@@ -628,6 +636,7 @@ export class AdvisorRoster {
 		// `#watchdogPrompt` already carries WATCHDOG.md + YAML shared
 		// instructions; `config.instructions` adds this advisor's specialization.
 		const systemPrompt = [advisorPrompts["advisor/system"].text];
+		if (this.#contextFiles) this.#contextPrompt ??= formatAdvisorContextPrompt(this.#contextFiles);
 		if (this.#contextPrompt) systemPrompt.push(this.#contextPrompt);
 		if (this.#watchdogPrompt) systemPrompt.push(this.#watchdogPrompt);
 		if (this.#sharedInstructions) systemPrompt.push(this.#sharedInstructions);

@@ -28,7 +28,7 @@ import type { SessionTitleSource } from "@veyyon/kernel/session/session-entries"
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import type { postmortem } from "@veyyon/utils";
 import type { ArgotSession } from "argot";
-import type { AdvisorConfig } from "../advisor";
+import type { AdvisorConfig, AdvisorContextFile } from "../advisor";
 import type { AsyncJob, AsyncJobDeliveryState, AsyncJobManager } from "../async";
 import type { CompactionEngineAction } from "../config/compaction-strategy";
 import type { EffortSource } from "../config/effort-resolver";
@@ -125,8 +125,27 @@ export type AgentSessionEvent =
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
 
+/**
+ * Default bound on how long dispose waits for an aborted agent loop to unwind. It
+ * plus the 3s async-job drain stays under {@link SHUTDOWN_DISPOSE_TIMEOUT_MS}, so
+ * the transcript still closes before an interactive shutdown stops waiting.
+ */
+export const DISPOSE_AGENT_LOOP_SETTLE_MS = 1_000;
+
+/**
+ * How often {@link AgentSession.waitForQuiescence} re-reads the pending async wake when no event
+ * arrived. Covers the transitions that emit nothing: a delivery acknowledged by a `job` poll, and a
+ * delivery waiting out a retry backoff.
+ */
+export const QUIESCENCE_RECHECK_MS = 1_000;
+
 export interface AgentSessionDisposeOptions {
 	mnemopiConsolidateTimeoutMs?: number;
+	/**
+	 * How long dispose waits for the aborted agent loop to unwind before it releases
+	 * the resources that loop uses. Defaults to {@link DISPOSE_AGENT_LOOP_SETTLE_MS}.
+	 */
+	agentLoopSettleTimeoutMs?: number;
 	/**
 	 * Postmortem reason that triggered this dispose (signal/fatal teardown
 	 * paths). When set, the persisted `session_exit` diagnostic records it
@@ -349,11 +368,11 @@ export interface AgentSessionConfig {
 	 *  `advisorWatchdogPrompt` so `/advisor configure` can swap it live. */
 	advisorSharedInstructions?: string;
 	/**
-	 * Preloaded project context files (AGENTS.md, etc.) rendered as a system-prompt
-	 * block for the advisor — the same standing instructions the primary agent
-	 * receives, so the reviewer holds the agent to them.
+	 * Project context files (AGENTS.md, etc.) the advisor's system prompt renders when an advisor
+	 * starts: the same standing instructions the primary agent receives, so the reviewer holds the
+	 * agent to them.
 	 */
-	advisorContextPrompt?: string;
+	advisorContextFiles?: readonly AdvisorContextFile[];
 	/**
 	 * Advisors discovered from `WATCHDOG.yml`. Empty/undefined runs a single
 	 * legacy advisor on the `advisor` role (byte-for-byte the pre-config path).
@@ -366,12 +385,13 @@ export interface AgentSessionConfig {
 	 */
 	pruneToolDescriptions?: boolean | ((model: Model) => boolean);
 	/**
-	 * Disconnect this session's OWNED MCP manager on dispose. Provided only when
-	 * the session created the manager (top-level sessions); spawned agents reuse a
-	 * parent's manager via `options.mcpManager` and omit this so a child's
-	 * teardown never tears down the shared servers.
+	 * Release this session's hold on its MCP manager on dispose; the last hold
+	 * disconnects the manager (see `mcp/manager-lease.ts`). Provided for the
+	 * session that created the manager and for every top-level session that
+	 * shares it; spawned agents reuse a parent's manager without a hold and omit
+	 * this, so a child's teardown never tears down the shared servers.
 	 */
-	disconnectOwnedMcpManager?: () => Promise<void>;
+	releaseMcpManager?: () => Promise<void>;
 	/**
 	 * Override the bundled system prompt used by automatic session-title
 	 * generation paths (initial title + replan refresh). Source-of-truth is
@@ -540,7 +560,7 @@ export interface PerAdvisorStat {
 
 export interface ProjectAdvisorScope {
 	advisorWatchdogPrompt?: string;
-	advisorContextPrompt?: string;
+	advisorContextFiles?: readonly AdvisorContextFile[];
 	advisorSharedInstructions?: string;
 	advisorConfigs?: AdvisorConfig[];
 }

@@ -29,7 +29,7 @@ import { streamSimple } from "@veyyon/ai/stream";
 import type { HarmonyAuditEvent } from "@veyyon/ai/utils/harmony-leak";
 import { preferredDialect } from "@veyyon/catalog/identity";
 import { emptyUsage, getBundledModel } from "@veyyon/catalog/models";
-import { errorMessage, logger } from "@veyyon/utils";
+import { errorMessage, internString, logger } from "@veyyon/utils";
 import {
 	abortReasonText,
 	agentLoop,
@@ -67,6 +67,16 @@ function defaultConvertToLlm(messages: AgentMessage[]): Message[] {
 		if (m.role === "assistant") return !isProviderRefusalMessage(m);
 		return m.role === "user" || m.role === "toolResult";
 	});
+}
+
+/**
+ * Replace each system prompt part with its interned instance, in place, and return the array.
+ * Agents of one kind carry equal sections (conventions, project context, role), and a spawned
+ * agent stays live after it finishes, so every live agent shares one copy of each.
+ */
+function internPromptParts(parts: string[]): string[] {
+	for (let i = 0; i < parts.length; i++) parts[i] = internString(parts[i]!);
+	return parts;
 }
 
 const ANTHROPIC_OUTPUT_BLOCKED_PREFIX = "Output blocked by conten";
@@ -464,6 +474,7 @@ export class Agent {
 
 	constructor(opts: AgentOptions = {}) {
 		this.#state = { ...this.#state, ...opts.initialState };
+		internPromptParts(this.#state.systemPrompt);
 		if (opts.initialState?.messages) this.#state.messages = opts.initialState.messages.slice();
 		if (opts.initialState?.pendingToolCalls)
 			this.#state.pendingToolCalls = new Set(opts.initialState.pendingToolCalls);
@@ -871,7 +882,7 @@ export class Agent {
 
 	// State mutators
 	setSystemPrompt(v: string[] | string) {
-		this.#state.systemPrompt = typeof v === "string" ? [v] : v;
+		this.#state.systemPrompt = internPromptParts(typeof v === "string" ? [v] : v);
 	}
 
 	setModel(m: Model) {

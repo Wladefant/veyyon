@@ -52,7 +52,7 @@ CustomTool.execute(toolCallId, params, onUpdate, ctx, signal)
 2. Installed plugin manifests (`~/.veyyon/profiles/<profile>/plugins/node_modules/*` via plugin loader; a project root `<anchor>/.veyyon/plugins` is enumerated the same way)
 3. Explicit configured paths passed to the loader
 
-### Important behavior
+### Behavior
 
 - Duplicate resolved paths are deduplicated.
 - Tool name conflicts are rejected against built-ins and already-loaded custom tools.
@@ -144,7 +144,7 @@ execute(toolCallId, params, onUpdate, ctx, signal);
 - Runtime argument validation happens before execution in the agent loop.
 - `onUpdate` emits partial results for UI streaming.
 - `ctx` includes `sessionManager`, `modelRegistry`, current `model`, `isIdle()`, `hasQueuedMessages()`, `abort()`, and optional `settings`, `fetch`, and `autoApprove`.
-- `signal` carries cancellation.
+- `signal` signals cancellation.
 
 An extension tool registered with `pi.registerTool` takes the same five arguments
 in a different order, with the signal third:
@@ -241,5 +241,5 @@ Use `ctx.sessionManager` to reconstruct state from history when branch/session c
 
 - Tool names must be globally unique in the active registry.
 - Prefer deterministic, schema-shaped outputs in `details` for renderer/state reconstruction.
-- Guard UI usage with `pi.hasUI`.
+- Check `pi.hasUI` before using the UI.
 - Treat `.md`/`.json` in tool directories as metadata, not executable modules.

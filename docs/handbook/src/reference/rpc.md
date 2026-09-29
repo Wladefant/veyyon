@@ -53,7 +53,7 @@ There is no envelope beyond the object shape itself.
 7. Extension errors (`{ type: "extension_error", extensionPath, event, error }`)
 8. Available-commands updates (`{ type: "available_commands_update", commands }`), emitted at startup and whenever command metadata changes
 9. Prompt lifecycle hints (`{ type: "prompt_result", id?, agentInvoked }`) for scheduled prompts that later resolve without invoking the agent
-10. Agent frames (`subagent_lifecycle`, `subagent_progress`, `subagent_event`), gated by `set_subagent_subscription`
+10. Agent frames (`subagent_lifecycle`, `subagent_progress`, `subagent_event`), enabled by `set_subagent_subscription`
 11. Builtin slash-command side channels (`command_output`, `session_info_update`, `config_update`)
 
 ### Inbound frame categories (stdin)
@@ -70,7 +70,7 @@ All commands accept optional `id?: string`.
 - If provided, normal command responses echo the same `id`.
 - `RpcClient` relies on this for pending-request resolution.
 
-Important edge behavior from runtime:
+Edge behavior from runtime:
 
 - Unknown command responses are emitted with `id: undefined` (even if the request had an `id`).
 - Parse/handler exceptions in the input loop emit `command: "parse"` with `id: undefined`.
@@ -244,7 +244,7 @@ Local-only slash commands may emit `command_output` frames before completing via
 
 Replaces the in-memory todo state for the current session and returns the normalized phase list.
 A phase is `{ name, tasks }` and a task is `{ content, status }`; `status` is one of `pending`,
-`in_progress`, `completed`, `abandoned`. Neither carries an `id`: a task is addressed by its
+`in_progress`, `completed`, `abandoned`. Neither has an `id`: a task is addressed by its
 `content` string, and any other field in a phase or task is dropped, not echoed back.
 
 ```json
@@ -366,8 +366,6 @@ Extension runner errors are emitted separately as:
 
 ## Prompt/Queue Concurrency and Ordering
 
-This is the most important operational behavior.
-
 ### Immediate ack vs completion
 
 `prompt` and `abort_and_prompt` are **acknowledged immediately**:
@@ -418,7 +416,7 @@ Extensions in RPC mode use request/response UI frames.
 
 - `select`, `confirm`, `input`, `editor`, `cancel`
 - `notify`, `setStatus`, `setWidget`, `setTitle`, `set_editor_text`
-- `open_url` (emitted by RPC login flows). Carries `url`, optional `launchUrl`
+- `open_url` (emitted by RPC login flows). Contains `url`, optional `launchUrl`
   and `instructions`, and `credential`: `"oauth"` when the flow waits on the
   URL and the host opens it in a browser, `"api-key"` when the URL is where a
   key is obtained and the flow is about to prompt for a paste, so the host
@@ -461,7 +459,7 @@ serving execution requests over the same transport.
 
 ### Outbound request
 
-When the agent wants the host to execute one of those tools, RPC mode emits:
+When the agent requests that the host execute one of those tools, RPC mode emits:
 
 ```json
 {
@@ -509,7 +507,7 @@ Completion uses:
 }
 ```
 
-Set top-level `isError: true` on `host_tool_result` to reject the pending host tool call and surface the returned text content as a tool error.
+Set top-level `isError: true` on `host_tool_result` to reject the pending host tool call and report the returned text content as a tool error.
 
 ## Host URI Sub-Protocol
 
@@ -567,7 +565,7 @@ For successful writes, omit content:
 ```
 
 To reject the request, set `isError: true` and either populate `error` with
-a message or fall back to `content` for textual error surfacing:
+a message or fall back to `content` for textual error reporting:
 
 ```json
 {

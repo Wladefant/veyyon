@@ -1,6 +1,6 @@
 import type { AuthStorage } from "@veyyon/ai/auth-storage";
 import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
-import { $env, errorMessage, logger, postmortem } from "@veyyon/utils";
+import { $env, errorMessage, logger, postmortem, setProfileEnv } from "@veyyon/utils";
 import type { Settings } from "../config/settings";
 import { isMCPToolName } from "../discovery/tool-index";
 import type { LoadedCustomCommand } from "../extensibility/custom-commands";
@@ -82,7 +82,7 @@ export function logMCPLoadErrors(errors: MCPLoadResult["errors"]): void {
 
 export function applyMCPEnvironment(result: { exaApiKeys: string[] }): void {
 	if (result.exaApiKeys.length > 0 && !$env.EXA_API_KEY) {
-		Bun.env.EXA_API_KEY = result.exaApiKeys[0];
+		setProfileEnv("EXA_API_KEY", result.exaApiKeys[0]);
 	}
 }
 

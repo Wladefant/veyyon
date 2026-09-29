@@ -7,6 +7,7 @@ import { extractPrintableText, matchesKey } from "@veyyon/utils/keys";
 import type { HoverFadeOptions } from "@veyyon/utils/motion";
 import { routeSgrMouseInput, type SgrMouseEvent } from "@veyyon/utils/mouse";
 import { padding } from "@veyyon/utils/padding";
+import { formatToolCallLabel } from "@veyyon/utils/tool-call-label";
 import { truncateToWidth } from "@veyyon/utils/width";
 import type { TreeFilterMode } from "../../../../config/settings-schema";
 import { resolveAssistantErrorPresentation } from "../../../../presentation/transcript-builder";
@@ -718,7 +719,8 @@ class TreeList implements Component {
 						result = theme.fg("success", "assistant: ") + textContent;
 					} else if (presentation.kind === "full") {
 						result =
-							theme.fg("success", "assistant: ") + theme.fg("error", normalize(presentation.text).slice(0, 80));
+							theme.fg("success", "assistant: ") +
+							theme.fg("error", truncateToWidth(normalize(presentation.text), TRUNCATE_LENGTHS.CONTENT, ""));
 					} else if (msgWithContent.stopReason === "aborted") {
 						result = theme.fg("success", "assistant: ") + theme.fg("muted", "(aborted)");
 					} else {
@@ -728,7 +730,7 @@ class TreeList implements Component {
 					const toolMsg = msg as { toolCallId?: string; toolName?: string };
 					const toolCall = toolMsg.toolCallId ? this.#toolCallMap.get(toolMsg.toolCallId) : undefined;
 					if (toolCall) {
-						result = theme.fg("muted", this.#formatToolCall(toolCall.name, toolCall.arguments));
+						result = theme.fg("muted", formatToolCallLabel(toolCall.name, toolCall.arguments, shortenPath));
 					} else {
 						result = theme.fg("muted", `[${toolMsg.toolName ?? "tool"}]`);
 					}
@@ -805,55 +807,6 @@ class TreeList implements Component {
 			}
 		}
 		return false;
-	}
-
-	#formatToolCall(name: string, args: Record<string, unknown>): string {
-		switch (name) {
-			case "read": {
-				const path = shortenPath(String(args.path || args.file_path || ""));
-				const offset = args.offset as number | undefined;
-				const limit = args.limit as number | undefined;
-				let display = path;
-				if (offset !== undefined || limit !== undefined) {
-					const start = offset ?? 1;
-					const end = limit !== undefined ? start + limit - 1 : "";
-					display += `:${start}${end ? `-${end}` : ""}`;
-				}
-				return `[read: ${display}]`;
-			}
-			case "write": {
-				const path = shortenPath(String(args.path || args.file_path || ""));
-				return `[write: ${path}]`;
-			}
-			case "edit": {
-				const path = shortenPath(String(args.path || args.file_path || ""));
-				return `[edit: ${path}]`;
-			}
-			case "bash": {
-				const rawCmd = String(args.command || "");
-				const cmd = rawCmd
-					.replace(/[\n\t]/g, " ")
-					.trim()
-					.slice(0, 50);
-				return `[bash: ${cmd}${rawCmd.length > 50 ? "..." : ""}]`;
-			}
-			case "search": {
-				const type = String(args.type || "?");
-				const input = String(args.input || "");
-				const scope = typeof args.path === "string" ? ` in ${shortenPath(args.path)}` : "";
-				return `[search:${type} ${input}${scope}]`;
-			}
-			case "ls": {
-				const path = shortenPath(String(args.path || "."));
-				return `[ls: ${path}]`;
-			}
-			default: {
-				// Custom tool - show name and truncated JSON args
-				const rawArgs = typeof args === "string" ? args : JSON.stringify(args ?? {});
-				const argsStr = truncateToWidth(rawArgs ?? "{}", TRUNCATE_LENGTHS.SHORT);
-				return `[${name}: ${argsStr}]`;
-			}
-		}
 	}
 
 	handleInput(keyData: string): void {

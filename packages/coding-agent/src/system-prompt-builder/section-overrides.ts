@@ -235,14 +235,6 @@ export function applySectionOverrides(
 	return resolved;
 }
 
-/** Discover and fold in one call against the complete statement assembly. */
-export async function loadPromptSectionOverrides(
-	options: LoadSectionOverridesOptions,
-	assembled: DefaultTemplateSections,
-): Promise<Partial<DefaultTemplateSections>> {
-	return applySectionOverrides(await loadSectionOverrideFiles(options), assembled);
-}
-
 /** Thin adapters: every judgement about failure lives at the call site above. */
 async function defaultListDir(dir: string): Promise<string[]> {
 	const { readdir } = await import("node:fs/promises");

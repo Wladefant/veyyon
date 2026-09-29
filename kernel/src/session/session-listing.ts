@@ -3,16 +3,19 @@ import * as path from "node:path";
 import type { Message } from "@veyyon/ai";
 import {
 	DAY_MS,
-	getAgentDir as getDefaultAgentDir,
+	getProfileSessionsDir,
+	getSessionsDir,
 	HOUR_MS,
 	isEnoent,
 	listProfiles,
 	logger,
 	parseJsonlLenient,
+	pathIsWithin,
 	toError,
 } from "@veyyon/utils";
 import { contentText } from "@veyyon/utils/content-text";
 import {
+	ORPHAN_AGENT_TRANSCRIPT_PREFIX,
 	SESSION_BACKUP_EXTENSION,
 	SESSION_FILE_EXTENSION,
 	sessionBackupPrimaryName,
@@ -64,9 +67,24 @@ export interface SessionInfo {
 	status?: SessionStatus;
 }
 
-export interface ResolvedSessionMatch {
-	session: SessionInfo;
-	scope: "local" | "global";
+/**
+ * Where {@link resolveResumableSession} found a session. `local` is the launch directory's own
+ * bucket, `global` another project in the active profile, and `profile` a session another profile
+ * wrote, named by `profile`. A session belongs to the profile that wrote it: a caller that holds a
+ * `profile` match continues it in that profile or forks it, never writes it in place.
+ */
+export type ResolvedSessionMatch =
+	| { session: SessionInfo; scope: "local" | "global" }
+	| { session: SessionInfo; scope: "profile"; profile: string };
+
+/**
+ * The profile, other than the active one, whose sessions directory holds `filePath`, or undefined
+ * when the file is in the active profile or in no profile at all.
+ */
+export function foreignSessionFileProfile(filePath: string): string | undefined {
+	const file = path.resolve(filePath);
+	if (pathIsWithin(getSessionsDir(), file)) return undefined;
+	return listProfiles().find(profile => pathIsWithin(getProfileSessionsDir(profile.name), file))?.name;
 }
 
 /** Lightweight metadata for a recent session, used in welcome/picker UI. */
@@ -769,7 +787,24 @@ export function listSessionsReadOnly(sessionDir: string, storage: SessionStorage
 }
 
 /**
+ * Whether `file` is a top-level session rather than an agent's transcript.
+ *
+ * A top-level session is `<sessions root>/<project bucket>/<file>.jsonl`. A spawned agent's transcript
+ * sits one level deeper, in its parent's artifacts directory `<project bucket>/<parent stem>/`, or, when
+ * the parent had no file, under the sessions root with {@link ORPHAN_AGENT_TRANSCRIPT_PREFIX}: as
+ * `orphan-task-<id>.jsonl` beside the buckets or inside an `orphan-task-<id>/` directory at bucket depth.
+ */
+function isTopLevelSessionFile(sessionsRoot: string, file: string): boolean {
+	const segments = path.relative(sessionsRoot, file).split(path.sep);
+	return segments.length === 2 && !segments[0].startsWith(ORPHAN_AGENT_TRANSCRIPT_PREFIX);
+}
+
+/**
  * List all sessions across all project directories (newest first).
+ *
+ * Agent transcripts are left out: they are written with the same header as the session that spawned
+ * them and are reached through that session, so listing them put every agent a session ever ran into
+ * the picker as a session of its own.
  *
  * An absent sessions root is an empty list and nothing more: that is what a fresh install looks
  * like. Any other failure to scan it is REPORTED, because this list is what the session picker and
@@ -777,8 +812,12 @@ export function listSessionsReadOnly(sessionDir: string, storage: SessionStorage
  * gone. The empty list is still returned, since a picker that cannot list is more useful empty than
  * crashed, and the log is what tells you the difference.
  */
-export async function listAllSessions(storage: SessionStorage = new FileSessionStorage()): Promise<SessionInfo[]> {
-	const sessionsRoot = path.join(getDefaultAgentDir(), "sessions");
+export function listAllSessions(storage: SessionStorage = new FileSessionStorage()): Promise<SessionInfo[]> {
+	return scanSessionsRoot(storage, false);
+}
+
+async function scanSessionsRoot(storage: SessionStorage, includeAgentTranscripts: boolean): Promise<SessionInfo[]> {
+	const sessionsRoot = getSessionsDir();
 	try {
 		// Backups are indexed records too. Recover every project bucket before
 		// enumerating primaries, so a crash during an indexed/backend rewrite is
@@ -787,7 +826,10 @@ export async function listAllSessions(storage: SessionStorage = new FileSessionS
 		const backupDirs = new Set(backups.map(backup => path.dirname(backup)));
 		await Promise.all(Array.from(backupDirs, sessionDir => recoverOrphanedBackups(sessionDir, storage)));
 
-		const files = storage.listFilesRecursiveSync(sessionsRoot, `*${SESSION_FILE_EXTENSION}`);
+		const transcripts = storage.listFilesRecursiveSync(sessionsRoot, `*${SESSION_FILE_EXTENSION}`);
+		const files = includeAgentTranscripts
+			? transcripts
+			: transcripts.filter(file => isTopLevelSessionFile(sessionsRoot, file));
 		return await collectSessionsFromFiles(files, storage, true, sessionsRoot);
 	} catch (err) {
 		if (isEnoent(err)) return [];
@@ -872,26 +914,26 @@ export async function resolveResumableSession(
 		return undefined;
 	}
 
-	const globalSessions = await listAllSessions(storage);
+	// An explicit id may name an agent's transcript, which the picker's list leaves out.
+	const globalSessions = await scanSessionsRoot(storage, true);
 	const globalMatch = globalSessions.find(session => sessionMatchesResumeArg(session, sessionArg));
 	if (globalMatch) {
 		return { session: globalMatch, scope: "global" };
 	}
 
-	const foreignMatch = await findSessionInOtherProfiles(sessionArg, storage);
-	return foreignMatch ? { session: foreignMatch, scope: "global" } : undefined;
+	return await findSessionInOtherProfiles(sessionArg, storage);
 }
 
 /**
- * The session an id names in a profile other than the active one.
+ * The session an id names in a profile other than the active one, with that profile's name.
  *
  * A session id is globally unique, and the line printed on the way out —
- * `veyyon --resume <id>` — carries nothing about which profile wrote it. Every
- * lookup above stops at the active profile's own sessions root, so that line
- * resolved only when the operator happened to relaunch under the same profile
- * and otherwise reported the session as not found, with the file sitting on disk
- * one directory over. The session is resumed where it lives; only the settings
- * come from the profile that is running.
+ * `veyyon --resume <id>` — carries nothing about which profile wrote it. The
+ * launch activates the owning profile before this runs, so a match here means
+ * the caller pinned another profile (`--profile`, or a running session's
+ * `/resume`). The match is returned tagged with its owner rather than as a
+ * global one, so the caller forks it or relaunches into the owner and never
+ * writes one profile's transcript under another profile's settings.
  *
  * Reached only after the active profile has missed on an explicit id, so the
  * cost of scanning every profile is paid on the path that would otherwise fail.
@@ -899,10 +941,10 @@ export async function resolveResumableSession(
 async function findSessionInOtherProfiles(
 	sessionArg: string,
 	storage: SessionStorage,
-): Promise<SessionInfo | undefined> {
-	const activeRoot = path.resolve(path.join(getDefaultAgentDir(), "sessions"));
+): Promise<ResolvedSessionMatch | undefined> {
+	const activeRoot = path.resolve(getSessionsDir());
 	for (const profile of listProfiles()) {
-		const sessionsRoot = path.resolve(path.join(profile.agentDir, "sessions"));
+		const sessionsRoot = path.resolve(getProfileSessionsDir(profile.name));
 		if (sessionsRoot === activeRoot) continue;
 		let files: string[];
 		try {
@@ -923,7 +965,7 @@ async function findSessionInOtherProfiles(
 		// on every id that misses here.
 		const sessions = await collectSessionsFromFiles(files, storage, true, sessionsRoot);
 		const match = sessions.find(session => sessionMatchesResumeArg(session, sessionArg));
-		if (match) return match;
+		if (match) return { session: match, scope: "profile", profile: profile.name };
 	}
 	return undefined;
 }

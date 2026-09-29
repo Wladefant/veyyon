@@ -65,7 +65,9 @@ import { type Skill, setActiveSkills } from "./extensibility/skills";
 import { LocalProtocolHandler } from "./internal-urls";
 import { describeLegacyPromptFile, findLegacyPromptFiles } from "./legacy-system-prompt-files";
 import { MCPManager } from "./mcp";
+import { holdCreatedMcpManager, holdSharedMcpManager, type McpManagerRelease } from "./mcp/manager-lease";
 import { createSessionMemoryRuntimeContext, resolveMemoryBackend } from "./memory/backend";
+import { shutdownMnemopiEmbedClient } from "./memory/mnemopi/embed-client";
 import { recordRestLaunchFacts } from "./modes/launch-facts";
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID, mainAgentIdFor } from "./registry/agent-registry";
@@ -73,7 +75,7 @@ import { resolveHarnessProfileForModel, resolvePromptSectionOrderForModel } from
 import { attachSecretsNoticeSink } from "./secrets/notices";
 import { SecretRequestLeases } from "./secrets/request-leases";
 import { SessionSecretRuntime } from "./secrets/session-runtime";
-import { AgentSession } from "./session/agent-session";
+import { AgentSession, RESCOPE_TERMINATE_REASON } from "./session/agent-session";
 import { discoverAuthStorage } from "./session/auth-broker-config";
 import { sessionCpuExecHooks } from "./session/cpu-limit";
 import { convertToLlm, LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "./session/messages";
@@ -81,6 +83,7 @@ import { computeNonMessageBreakdown } from "./session/non-message-tokens";
 import { createSettingsAwareStreamFn } from "./session/settings-stream-fn";
 import { StartupModelSelection } from "./session/startup-model";
 import { wrapSteeringForModel } from "./session/steering-envelope";
+import { enterTopLevelSession, leaveTopLevelSession } from "./session/top-level-sessions";
 import { closeAllConnections } from "./ssh/connection-manager";
 import { unmountAll } from "./ssh/sshfs-mount";
 import {
@@ -95,6 +98,7 @@ import { AgentOutputManager } from "./task/output-manager";
 import { wrapStreamFnWithProviderConcurrency } from "./task/provider-concurrency";
 import { type ClaimedTicket, TopicReplenishmentEngine } from "./task/topic-replenishment";
 import { AUTO_THINKING, shouldDisableReasoning, toReasoningEffort } from "./thinking";
+import { shutdownTinyTitleClient } from "./tiny/title-client";
 import {
 	BUILTIN_TOOLS,
 	computeEssentialBuiltinNames,
@@ -346,6 +350,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	let unregisterUnlessParked = (): void => {};
 	const evalKernelOwnerId = `agent-session:${Snowflake.next()}`;
 	let mcpManager: MCPManager | undefined = options.mcpManager;
+	let releaseMcpManager: McpManagerRelease | undefined;
 	try {
 		const settings = await (options.settings ??
 			options.settingsManager ??
@@ -581,8 +586,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const enableLsp = options.enableLsp ?? true;
 		asyncJobManager = createOwnedAsyncJobManager({ options, settings, sessionManager, target: () => session });
 
+		// A spawned agent runs its jobs on the manager its spawner handed over, so a result reaches the
+		// conversation that spawned it. The process-wide instance is the fallback for an SDK caller that
+		// passes a parent prefix and no manager.
 		const scopedAsyncJobManager =
-			asyncJobManager ?? (isInProcessChildSession(options) ? AsyncJobManager.instance() : undefined);
+			asyncJobManager ??
+			(isInProcessChildSession(options) ? (options.asyncJobManager ?? AsyncJobManager.instance()) : undefined);
 
 		const agentRegistry = options.agentRegistry ?? AgentRegistry.global();
 		// A driving agent is named for the conversation it starts, so two live
@@ -637,12 +646,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				settings,
 				authStorage,
 				modelRegistry,
-				// Spawned agents inherit the singleton (the parent's manager) so their bash/task
-				// completions still flow into the spawning conversation's yieldQueue.
-				// Secondary in-process top-level sessions (no parentTaskPrefix, no
-				// constructed manager because the singleton was already installed) leave
-				// this undefined so tools and session job snapshots refuse async work
-				// instead of silently routing into the owning session (issue #1923).
+				// A top-level session runs jobs on its own manager; a spawned agent on its spawner's.
 				asyncJobManager: scopedAsyncJobManager,
 				onSubagentComplete: async record => {
 					const engine = replenishmentEngine;
@@ -683,7 +687,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// so without this a TTSR-only rule (e.g. a triggered builtin) is not
 			// addressable and `rule://` reports "Available: none".
 			setActiveRules(rulebookRules.concat(alwaysApplyRules, ttsrManager.getRules()));
-			if (asyncJobManager) AsyncJobManager.setInstance(asyncJobManager);
+			// The first top-level session's manager stays the process-wide fallback. A later one runs its
+			// own jobs and never replaces it, so its disposal cannot take the first session's jobs down
+			// (issue #1923).
+			if (asyncJobManager && !AsyncJobManager.instance()) AsyncJobManager.setInstance(asyncJobManager);
 		}
 		const localProtocolOptions = options.localProtocolOptions ?? {
 			getArtifactsDir,
@@ -1100,6 +1107,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				// this caller, not about the configuration, so it does not belong in the resolver.
 				personality: agentKind === "sub" ? "none" : gateInputs.personality,
 				agentDir,
+				operatorNotices,
 				resolvedCustomPrompt: options.customSystemPrompt,
 				tools: promptTools,
 				toolNames,
@@ -1481,9 +1489,17 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 		const advisorTools = await buildAdvisorTools(advisorToolSession);
 
-		// Owned only when this session created the manager; spawned agents receive a
-		// parent's manager via `options.mcpManager` and MUST NOT disconnect it.
-		const ownedMcpManager = options.mcpManager ? undefined : mcpManager;
+		// A session that created its manager holds it; a top-level session handed a
+		// session-created manager (the `/new` that keeps the previous conversation
+		// running) holds it too. Spawned agents hold nothing and MUST NOT disconnect
+		// a parent's manager.
+		if (mcpManager) {
+			releaseMcpManager = !options.mcpManager
+				? holdCreatedMcpManager(mcpManager)
+				: sessionIsSpawned
+					? undefined
+					: holdSharedMcpManager(mcpManager);
+		}
 		session = new AgentSession({
 			// The advisor gets the same project context files (AGENTS.md, etc.) the primary agent
 			// gets in its system prompt, so the read-only reviewer judges against them.
@@ -1539,7 +1555,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			getMcpServerInstructions: mcpManager
 				? () => clipMCPServerInstructions(mcpManager!.getServerInstructions())
 				: undefined,
-			disconnectOwnedMcpManager: ownedMcpManager ? () => ownedMcpManager.disconnectAll() : undefined,
+			releaseMcpManager,
 			mcpDiscoveryEnabled,
 			initialSelectedMCPToolNames,
 			defaultSelectedMCPToolNames,
@@ -1694,22 +1710,36 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		{
 			const originalDispose = session.dispose.bind(session);
 			let disposeCall: Promise<void> | undefined;
+			if (agentKind === "main") enterTopLevelSession(session);
 			session.dispose = options => {
 				if (!disposeCall) {
+					// Decided before the first await, so overlapping disposals of two
+					// top-level sessions agree on which one is last.
+					const lastTopLevel = agentKind === "main" && leaveTopLevelSession(session);
 					disposeCall = (async () => {
 						try {
 							// Reject new session work (eval starts) the moment disposal
 							// begins — the lifecycle await below opens an async gap before
 							// AgentSession.dispose() would otherwise set its guards.
 							session.beginDispose();
-							if (agentKind === "main") {
-								// Top-level teardown owns the global agent lifecycle: park timers,
-								// adopted spawned agent sessions, revivers. Tear it down while shared
-								// resources (kernels, MCP, LSP) are still live. Spawned agent disposal
-								// must NOT touch the global lifecycle.
+							if (lastTopLevel) {
+								// The last top-level teardown owns the global agent lifecycle: park
+								// timers, adopted spawned agent sessions, revivers. Tear it down while
+								// shared resources (kernels, MCP, LSP) are still live.
 								await AgentLifecycleManager.global().dispose();
+							} else if (agentKind === "main") {
+								// Another top-level conversation still runs on the global lifecycle,
+								// so end only the agents this one spawned. Spawned agent disposal
+								// must NOT touch the global lifecycle.
+								await session.terminateSpawnedAgents(RESCOPE_TERMINATE_REASON);
 							}
 							await originalDispose(options);
+							if (lastTopLevel) {
+								// Process-wide worker subprocesses, shut down after the session's own
+								// memory consolidation, which may still embed (issue #3031).
+								await shutdownTinyTitleClient();
+								await shutdownMnemopiEmbedClient();
+							}
 						} finally {
 							// The expansion log queues its appends so a tool call is never blocked by a
 							// write, which means an exit that does not wait for the queue loses whichever
@@ -1850,7 +1880,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				if (evalKernelOwnerId) {
 					await disposeOwnedResources("eval-kernel-owner", evalKernelOwnerId);
 				}
-				if (mcpManager && mcpManager !== options.mcpManager) {
+				if (releaseMcpManager) {
+					await releaseMcpManager();
+				} else if (mcpManager && mcpManager !== options.mcpManager) {
 					await mcpManager.disconnectAll();
 				}
 				if (!options.sessionManager) await sessionManager?.close();

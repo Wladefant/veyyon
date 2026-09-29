@@ -1442,8 +1442,8 @@ export class AgentDashboard extends Container {
 	 *
 	 * A conversation is not terminated here, whether it is the one on screen or
 	 * one running off it: stopping a conversation ends a turn, closes a provider
-	 * stream and settles a transcript, which is the owning session's job and is
-	 * what `session.newKeepsBackground` decides. An advisor is a read-only
+	 * stream and settles a transcript, which is the owning session's job. The
+	 * `/resume` picker stops an off-screen conversation with ctrl+x. An advisor is a read-only
 	 * transcript rather than a running peer. Every real agent opens the same
 	 * focused confirmation card whether the request came from the keyboard or
 	 * the row-local [x].

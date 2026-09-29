@@ -10,6 +10,7 @@ import {
 	emptyUsage,
 	inheritUsageCarryovers,
 } from "@veyyon/catalog/models";
+import { exponentialBackoffDelay } from "@veyyon/utils/backoff";
 import { readSseJson } from "@veyyon/utils/stream";
 import { renderDemotedThinking } from "../dialect/demotion";
 import * as AIError from "../error";
@@ -1213,7 +1214,8 @@ export function streamGoogleGenAI<T extends "google-generative-ai" | "google-ver
 					);
 				}
 				try {
-					await scheduler.wait(EMPTY_STREAM_BASE_DELAY_MS * 2 ** emptyAttempt, { signal: options?.signal });
+					const delayMs = exponentialBackoffDelay(emptyAttempt, { baseMs: EMPTY_STREAM_BASE_DELAY_MS, jitter: 0 });
+					await scheduler.wait(delayMs, { signal: options?.signal });
 				} catch {
 					throw new AIError.RequestAbortError();
 				}

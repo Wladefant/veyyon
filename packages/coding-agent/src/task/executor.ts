@@ -25,8 +25,9 @@ import {
 	truncate,
 	untilAborted,
 } from "@veyyon/utils";
-import { sessionFileName } from "@veyyon/utils/session-file";
+import { ORPHAN_AGENT_TRANSCRIPT_PREFIX, sessionFileName } from "@veyyon/utils/session-file";
 import type { ArgotSession } from "argot";
+import type { AsyncJobManager } from "../async";
 import { ModelRegistry } from "../config/model-registry";
 import {
 	formatModelSelectorValue,
@@ -422,6 +423,8 @@ export interface ExecutorOptions {
 	 */
 	preloadedCustomToolPaths?: ToolPathWithSource[];
 	mcpManager?: MCPManager;
+	/** The spawning session's background-job manager, so the child's jobs report to that conversation. */
+	asyncJobManager?: AsyncJobManager;
 	authStorage?: AuthStorage;
 	modelRegistry?: ModelRegistry;
 	settings?: Settings;
@@ -2074,6 +2077,9 @@ function childSessionOptionsBuilder(ctx: ChildSessionContext, runModel: RunModel
 		authStorage: modelRegistry.authStorage,
 		modelRegistry,
 		settings,
+		// The parent's bus, so a child that spawns reports its own children where the root listens.
+		// Without it every session from depth 2 down emits lifecycle and progress frames nobody reads.
+		eventBus: options.eventBus,
 		bypassAllApprovals: options.bypassAllApprovals,
 		parentApprovalBypassed: options.parentApprovalBypassed,
 		model,
@@ -2111,6 +2117,7 @@ function childSessionOptionsBuilder(ctx: ChildSessionContext, runModel: RunModel
 		skipPythonPreflight: Array.isArray(ctx.toolNames) && !ctx.toolNames.includes("eval"),
 		enableMCP: !options.mcpManager,
 		mcpManager: options.mcpManager,
+		asyncJobManager: options.asyncJobManager,
 		customTools: mcpProxyTools.length > 0 ? mcpProxyTools : undefined,
 		localProtocolOptions: options.localProtocolOptions,
 		telemetry,
@@ -2535,7 +2542,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	// history://<id> (GRAN-1).
 	const sessionFile = options.artifactsDir
 		? path.join(options.artifactsDir, sessionFileName(id))
-		: path.join(getSessionsDir(), sessionFileName(`orphan-task-${id}`));
+		: path.join(getSessionsDir(), sessionFileName(`${ORPHAN_AGENT_TRANSCRIPT_PREFIX}${id}`));
 	const effectiveCwd = worktree ?? options.cwd;
 	const settings = await createSubagentSettingsForCwd(
 		options.settings ?? Settings.isolated(),

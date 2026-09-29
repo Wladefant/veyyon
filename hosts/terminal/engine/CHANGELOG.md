@@ -15,6 +15,8 @@
 - A user-driven redraw such as a Ctrl+O transcript expand or a display reset replays the whole transcript on a ConPTY host again instead of losing its leading rows to the bulk-paint bound, and the one-shot reset intent is consumed by that render so a later `/resume` or handoff paint stays bounded ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - The engine ends every rewritten row at column zero, so a row that fills the width on a ConPTY host cannot spend its pending wrap on the next cursor move and scroll a live row into native history ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed duplicate `stdin` event listeners (`end`, `close`, `error`) being registered if `ProcessTerminal.start()` is called repeatedly on an active terminal instance ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
+- The TUI's loop watchdog logs a `ui.loop-blocked.stack` line after each blocked-loop line, naming the functions and the call path the event loop was executing during the block, so a stall reported as `phase: "unknown"` states its cause.
+
 ### Changed
 
 - `ProcessTerminal` routes a stdin sequence through single-purpose steps (private CSI and in-band resize reassembly, then one reply matcher per probe) with its reply patterns compiled once at module load instead of one 258-line handler, so an escape keystroke's dispatch costs 111 ns instead of 128 ns with identical delivered input and written bytes.
@@ -25,6 +27,8 @@
 - `Markdown` renders a block token through one method per block kind (heading, paragraph, code block, blockquote, display math) that appends into the frame's row array, instead of one 164-line switch that returned a new row array per token; output is byte-identical and render time is unchanged.
 - `Markdown` bounds the start search of its rule, display math and math environment block extensions to the paragraph that can end there instead of the rest of the message, so lexing is linear in the message length and a 1,200-section message renders in 22.4 ms instead of 229.7 ms.
 - `Markdown` skips marked's setext-heading rule when no `=` or `-` underline comes before the next blank line, with identical tokens, so a 13,362-entry transcript renders in 240 ms instead of 320 ms, re-renders at a new width in 204 ms instead of 280 ms, and streaming an 8.6k-character paragraph over 360 frames costs 22 ms instead of 58 ms.
+- A `Box` with no background and no border ends each row at its ink instead of padding it with spaces to the given width, which the renderer erases anyway, so a resumed 38 MB transcript draws its first frame in 211.1 MiB instead of 223.4 MiB.
+- A `Markdown` render with no background style ends each row, and each blank padding row, at its ink instead of padding it with spaces to the render width, so writing a resumed 38 MB transcript's first frame sends 7.05M characters instead of 8.11M and the frame holds 133.0 MiB of heap instead of 135.0 MiB.
 
 ### Fixed
 

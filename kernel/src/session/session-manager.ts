@@ -32,10 +32,13 @@ import {
 } from "./custom-message-payload";
 import { SESSION_EXIT_CUSTOM_TYPE } from "./exit-diagnostics";
 import type { OperatorNotices } from "./operator-notices";
+import { ColdEntryPayloads, MIN_COLD_LINE_BYTES, RECORD_ONLY_ENTRY_TYPES } from "./session-cold-payloads";
 import {
+	BRANCH_SETTINGS_ENTRY_TYPES,
 	type BuildSessionContextOptions,
 	buildSessionContext,
 	buildSessionContextFromPath,
+	compactedHistoryEnd,
 	resolveContextLeaf,
 	type SessionContext,
 	walkBranchPath,
@@ -62,12 +65,20 @@ import {
 	type TitleChangeEntry,
 	type UsageStatistics,
 } from "./session-entries";
-import { findMostRecentSession, listAllSessions, listSessions, type SessionInfo } from "./session-listing";
+import { SessionEntryIndex } from "./session-entry-index";
+import {
+	findMostRecentSession,
+	foreignSessionFileProfile,
+	listAllSessions,
+	listSessions,
+	type SessionInfo,
+} from "./session-listing";
 import {
 	loadEntriesFromFile,
 	loadSessionFile,
 	readTitleSlotFromFile,
 	resolveBlobRefsInEntries,
+	restoreEntryPayloadsSync,
 	type SessionFileLayout,
 } from "./session-loader";
 import { generateId, migrateToCurrentVersion } from "./session-migrations";
@@ -81,6 +92,7 @@ import { prepareEntryForPersistence } from "./session-persistence";
 import {
 	FileSessionStorage,
 	MemorySessionStorage,
+	type PinnedSessionReader,
 	type SessionFileBody,
 	type SessionStorage,
 	type SessionStorageStat,
@@ -176,51 +188,19 @@ function resolveBreadcrumbToInteractiveRoot(sessionFile: string): string {
 	return current;
 }
 
-function emptyUsageStatistics(): UsageStatistics {
-	return {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		orchestrationInput: 0,
-		orchestrationOutput: 0,
-		orchestrationCacheRead: 0,
-		premiumRequests: 0,
-		cost: 0,
-	};
-}
-
-function taskUsageFrom(details: unknown): Usage | undefined {
-	if (details === null || typeof details !== "object") return undefined;
-	const maybeUsage = (details as Record<string, unknown>).usage;
-	return maybeUsage !== null && typeof maybeUsage === "object" ? (maybeUsage as Usage) : undefined;
-}
-
-function entryUsage(entry: SessionEntry): Usage | undefined {
-	if (entry.type !== "message") return undefined;
-	const message = entry.message;
-	if (message.role === "assistant") return message.usage;
-	if (message.role === "toolResult" && message.toolName === "task") return taskUsageFrom(message.details);
-	return undefined;
-}
-
-function addUsage(target: UsageStatistics, usage: Usage | undefined): void {
-	if (!usage) return;
-	target.input += usage.input;
-	target.output += usage.output;
-	target.cacheRead += usage.cacheRead;
-	target.cacheWrite += usage.cacheWrite;
-	target.totalTokens += usage.totalTokens;
-	target.orchestrationInput += usage.orchestration?.input ?? 0;
-	target.orchestrationOutput += usage.orchestration?.output ?? 0;
-	target.orchestrationCacheRead += usage.orchestration?.cacheRead ?? 0;
-	target.premiumRequests += usage.premiumRequests ?? 0;
-	target.cost += usage.cost.total;
-}
-
 function isAssistantEntry(entry: SessionEntry): boolean {
 	return entry.type === "message" && entry.message.role === "assistant";
+}
+
+/**
+ * Parse a session line and restore what persistence moved out of it, as a load does. The range a
+ * cold entry reads runs to the next entry's line, so it may hold a blank line after its own.
+ */
+function restoreColdLine(line: string, blobs: BlobStore): SessionEntry {
+	const end = line.indexOf("\n");
+	const entry = JSON.parse(end === -1 ? line : line.slice(0, end)) as SessionEntry;
+	restoreEntryPayloadsSync(entry, blobs);
+	return entry;
 }
 
 function isDraftOnlyMetadataEntry(entry: SessionEntry): boolean {
@@ -272,163 +252,6 @@ function holdsOnlyDraftMetadata(entries: readonly SessionEntry[]): boolean {
 
 function isSessionIncarnationTelemetry(entry: SessionEntry): boolean {
 	return entry.type === "session_lifecycle" || entry.type === "session_checkpoint";
-}
-
-function orderedByTimestamp(a: SessionTreeNode, b: SessionTreeNode): number {
-	return new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime();
-}
-
-/**
- * Maintains the derived views over a session's entry list: id lookup, the
- * parent→children adjacency, the resolved label map, the active leaf, and the
- * running usage totals. Kept in lockstep with the manager's `#entries` so reads
- * stay O(1)/O(children) instead of rescanning the whole journal.
- */
-class SessionEntryIndex {
-	#entriesById = new Map<string, SessionEntry>();
-	#children = new Map<string | null, SessionEntry[]>();
-	#labels = new Map<string, string>();
-	#leaf: string | null = null;
-	#usage = emptyUsageStatistics();
-	/**
-	 * Root→leaf path of `#leaf`, or undefined until a reader asks for it. An
-	 * append to the leaf extends it in place; anything else that can change the
-	 * walk (a leaf move, a rebuild, an insert off the leaf) drops it. Every
-	 * startup reader walks the active branch, and on a session of hundreds of
-	 * thousands of entries each walk costs tens of milliseconds.
-	 */
-	#leafPath: SessionEntry[] | undefined;
-
-	clear(): void {
-		this.#entriesById.clear();
-		this.#children.clear();
-		this.#labels.clear();
-		this.#leaf = null;
-		this.#leafPath = undefined;
-		this.#usage = emptyUsageStatistics();
-	}
-
-	rebuild(entries: readonly SessionEntry[]): void {
-		this.clear();
-		for (const entry of entries) this.insert(entry);
-	}
-
-	insert(entry: SessionEntry): void {
-		// The new leaf's path is the old leaf's path plus this entry exactly when
-		// it hangs off the old leaf and does not shadow an id already on the map.
-		const leafPath =
-			this.#leaf !== null && entry.parentId === this.#leaf && !this.#entriesById.has(entry.id)
-				? this.#leafPath
-				: undefined;
-		this.#entriesById.set(entry.id, entry);
-		this.#leaf = entry.id;
-		leafPath?.push(entry);
-		this.#leafPath = leafPath;
-
-		const bucket = this.#children.get(entry.parentId);
-		if (bucket) bucket.push(entry);
-		else this.#children.set(entry.parentId, [entry]);
-
-		if (entry.type === "label") {
-			if (entry.label) this.#labels.set(entry.targetId, entry.label);
-			else this.#labels.delete(entry.targetId);
-		}
-
-		addUsage(this.#usage, entryUsage(entry));
-	}
-
-	has(id: string): boolean {
-		return this.#entriesById.has(id);
-	}
-
-	get(id: string): SessionEntry | undefined {
-		return this.#entriesById.get(id);
-	}
-
-	/**
-	 * The live id→entry map. Read-only for callers (lookups + `generateId`
-	 * collision checks); never mutate it directly — go through `insert`/`rebuild`.
-	 */
-	entriesById(): Map<string, SessionEntry> {
-		return this.#entriesById;
-	}
-
-	leafId(): string | null {
-		return this.#leaf;
-	}
-
-	leafEntry(): SessionEntry | undefined {
-		return this.#leaf ? this.#entriesById.get(this.#leaf) : undefined;
-	}
-
-	setLeaf(id: string | null): void {
-		if (id !== this.#leaf) this.#leafPath = undefined;
-		this.#leaf = id;
-	}
-
-	childrenOf(parentId: string): SessionEntry[] {
-		return [...(this.#children.get(parentId) ?? [])];
-	}
-
-	labelFor(id: string): string | undefined {
-		return this.#labels.get(id);
-	}
-
-	labelsInEffect(): IterableIterator<[string, string]> {
-		return this.#labels.entries();
-	}
-
-	usageSnapshot(): UsageStatistics {
-		return { ...this.#usage };
-	}
-
-	pathTo(id: string | null | undefined = this.#leaf): SessionEntry[] {
-		return id === this.#leaf ? this.leafPath().slice() : walkBranchPath(this.#entriesById, this.#lookup(id));
-	}
-
-	/**
-	 * The active branch, root→leaf. Shared with the index: read it, never mutate
-	 * it. {@link pathTo} returns a copy for callers that keep or edit the array.
-	 */
-	leafPath(): readonly SessionEntry[] {
-		this.#leafPath ??= walkBranchPath(this.#entriesById, this.#lookup(this.#leaf));
-		return this.#leafPath;
-	}
-
-	#lookup(id: string | null | undefined): SessionEntry | undefined {
-		return id ? this.#entriesById.get(id) : undefined;
-	}
-
-	tree(entries: readonly SessionEntry[]): SessionTreeNode[] {
-		const nodes = new Map<string, SessionTreeNode>();
-		const roots: SessionTreeNode[] = [];
-
-		for (const entry of entries) {
-			nodes.set(entry.id, { entry, children: [], label: this.#labels.get(entry.id) });
-		}
-
-		for (const entry of entries) {
-			const node = nodes.get(entry.id)!;
-			const parentId = entry.parentId;
-			if (parentId === null || parentId === entry.id) {
-				roots.push(node);
-				continue;
-			}
-
-			const parent = nodes.get(parentId);
-			if (parent) parent.children.push(node);
-			else roots.push(node);
-		}
-
-		const stack = roots.slice();
-		while (stack.length > 0) {
-			const node = stack.pop()!;
-			node.children.sort(orderedByTimestamp);
-			for (let ci = 0; ci < node.children.length; ci++) stack.push(node.children[ci]!);
-		}
-
-		return roots;
-	}
 }
 
 export type ReadonlySessionManager = Pick<
@@ -550,6 +373,8 @@ export class SessionManager {
 	#hasTitleSlot = true;
 	#entries: SessionEntry[] = [];
 	#index = new SessionEntryIndex();
+	/** Payloads of entries the live context cannot reach, read back from the session file on use. */
+	readonly #cold = new ColdEntryPayloads();
 	#instrumentation: InstrumentationLevel | undefined;
 	#nextSequence = 1;
 	#lifecycleStarted = false;
@@ -1203,6 +1028,7 @@ export class SessionManager {
 			this.#materializeBreadcrumb();
 			this.#rewriteRequired = false;
 			this.#hasTitleSlot = true;
+			this.#coolUnreachablePayloads();
 		} catch (err) {
 			this.#noteDiskFailure(err);
 		}
@@ -1234,6 +1060,7 @@ export class SessionManager {
 					this.#materializeBreadcrumb();
 					this.#rewriteRequired = false;
 					this.#hasTitleSlot = true;
+					this.#coolUnreachablePayloads();
 				}
 			},
 			{ epoch: startEpoch },
@@ -1267,9 +1094,11 @@ export class SessionManager {
 				this.#firstUpdatedEntry = Number.POSITIVE_INFINITY;
 				let published = false;
 				try {
+					const coldIdentity = this.#publishedFileState?.identity;
 					await this.#publishAtomically(sessionFile, epoch, updatedFrom);
 					if (this.#diskEpoch !== epoch) return false;
 					this.#notePublishedFile();
+					this.#rebaseColdPayloads(coldIdentity);
 					published = true;
 				} finally {
 					// Not written, so the next rewrite still owes these entries.
@@ -1357,9 +1186,12 @@ export class SessionManager {
 				.catch(err => this.#noteDiskFailure(err));
 			const state = this.#publishedFileState;
 			if (state !== null) {
+				const offset = state.size;
+				const length = Buffer.byteLength(line, "utf-8");
 				state.lines?.entries.push(entry);
-				state.lines?.entryOffsets.push(state.size);
-				state.size += Buffer.byteLength(line, "utf-8");
+				state.lines?.entryOffsets.push(offset);
+				state.size += length;
+				if (RECORD_ONLY_ENTRY_TYPES.has(entry.type)) this.#coolAppendedRecord(entry, line, offset, length);
 			}
 		} catch (err) {
 			this.#noteDiskFailure(err);
@@ -1409,6 +1241,129 @@ export class SessionManager {
 			identity = undefined;
 		}
 		this.#publishedFileState = { size: this.#lastBodyBytes, identity, lines: this.#lastBodyLines };
+	}
+
+	/**
+	 * After a publish of this manager's that kept the bytes before its first rewritten entry, read
+	 * the cold entries in that prefix from the new file, so the one it replaced is released. `from`
+	 * is the identity the publish started from; cold entries recorded against any other object
+	 * stay on it.
+	 */
+	#rebaseColdPayloads(from: string | undefined): void {
+		const sessionFile = this.#sessionFile;
+		const to = this.#publishedFileState?.identity;
+		if (from === undefined || to === undefined || sessionFile === undefined) return;
+		if (this.#cold.pinnedIdentity !== from) return;
+		this.#cold.rebase(this.#entries, to, () => this.#openPinnedReader(sessionFile));
+	}
+
+	#openPinnedReader(sessionFile: string): PinnedSessionReader | undefined {
+		try {
+			return this.#storage.openPinnedReaderSync?.(sessionFile);
+		} catch (err) {
+			logger.debug("session file could not be pinned; its entries stay in memory", {
+				sessionFile,
+				error: errorMessage(err),
+			});
+			return undefined;
+		}
+	}
+
+	/**
+	 * Move the payloads of entries the live context cannot reach out of memory, to be read back
+	 * from the session file on use (see {@link ColdEntryPayloads}).
+	 *
+	 * Runs only while every entry's line in the file is what the entry holds: after a load that
+	 * changed nothing, after this manager's own publish, and after a compaction the caller has
+	 * persisted ({@link coolCompactedHistory}). An in-place update not yet handed to
+	 * {@link rewriteEntries}, a publish in flight, or a line of another writer's stops it.
+	 *
+	 * The live context is the active branch from the newest compaction's keep boundary on, plus
+	 * every entry on the branch whose kind the settings walk of each context build reads. Everything
+	 * else, including other branches and every {@link RECORD_ONLY_ENTRY_TYPES} entry, reads back on
+	 * use.
+	 */
+	#coolUnreachablePayloads(): void {
+		const sessionFile = this.#sessionFile;
+		const state = this.#publishedFileState;
+		const lines = state?.lines;
+		if (!this.#persist || sessionFile === undefined || !state || !lines || state.identity === undefined) return;
+		if (this.#storage.openPinnedReaderSync === undefined) return;
+		if (
+			!this.#fileIsCurrent ||
+			this.#rewriteRequired ||
+			this.#firstUpdatedEntry !== Number.POSITIVE_INFINITY ||
+			this.#atomicRewriteFenceEpoch !== null ||
+			this.#foreignLines.length > 0
+		) {
+			return;
+		}
+		const path = this.#activePath();
+		const liveFrom = compactedHistoryEnd(path);
+		// Undefined when the whole file is the live branch: then only record-only entries go cold.
+		let live: Set<SessionEntry> | undefined;
+		if (liveFrom > 0 || path.length !== this.#entries.length) {
+			live = new Set<SessionEntry>();
+			for (let i = 0; i < path.length; i++) {
+				const entry = path[i]!;
+				if (i >= liveFrom || BRANCH_SETTINGS_ENTRY_TYPES.has(entry.type)) live.add(entry);
+			}
+		}
+		const { entries, entryOffsets } = lines;
+		const identity = state.identity;
+		const blobs = this.#blobs;
+		let pinned = false;
+		for (let i = 0; i < entries.length; i++) {
+			const entry = entries[i]!;
+			if (!RECORD_ONLY_ENTRY_TYPES.has(entry.type) && (live === undefined || live.has(entry))) continue;
+			const offset = entryOffsets[i]!;
+			const end = i + 1 < entries.length ? entryOffsets[i + 1]! : state.size;
+			if (!pinned) {
+				pinned = this.#cold.pin(
+					identity,
+					() => this.#openPinnedReader(sessionFile),
+					line => restoreColdLine(line, blobs),
+				);
+				if (!pinned) return;
+			}
+			this.#cold.cool(entry, offset, end - offset);
+		}
+	}
+
+	/**
+	 * Move a {@link RECORD_ONLY_ENTRY_TYPES} entry the append path just wrote out of memory. The
+	 * write completes inside `append`, so the line is in the file object the last publish recorded;
+	 * {@link ColdEntryPayloads.coolWritten} reads it back before cooling. Without this, a spawned
+	 * agent's `session_init` appended after its file was created, and every `subagent_spawn`, stays
+	 * in memory until the next whole-file publish.
+	 */
+	#coolAppendedRecord(entry: SessionEntry, line: string, offset: number, length: number): void {
+		const sessionFile = this.#sessionFile;
+		const identity = this.#publishedFileState?.identity;
+		if (!this.#persist || sessionFile === undefined || identity === undefined) return;
+		if (length < MIN_COLD_LINE_BYTES || this.#storage.openPinnedReaderSync === undefined) return;
+		const blobs = this.#blobs;
+		const pinned = this.#cold.pin(
+			identity,
+			() => this.#openPinnedReader(sessionFile),
+			restored => restoreColdLine(restored, blobs),
+		);
+		if (pinned) this.#cold.coolWritten(entry, line, offset, length);
+	}
+
+	/**
+	 * Move the payloads of the history a compaction just summarized out of memory. Call once the
+	 * compaction entry and every in-place update that came with it are handed to the session.
+	 */
+	coolCompactedHistory(): void {
+		this.#coolUnreachablePayloads();
+	}
+
+	/** The active branch, root first: the index's cached path when the leaf resolves. */
+	#activePath(): readonly SessionEntry[] {
+		if (this.#index.leafEntry()) return this.#index.leafPath();
+		const byId = this.#index.entriesById();
+		return walkBranchPath(byId, resolveContextLeaf(this.#entries, this.#index.leafId(), byId));
 	}
 
 	async #persistTitleChangeEntry(entry: TitleChangeEntry, update: SessionTitleUpdate): Promise<void> {
@@ -1853,6 +1808,7 @@ export class SessionManager {
 		if (this.sanitizeLoadedOpenAIResponsesReplayMetadata()) this.#rewriteRequired = true;
 		if (layout && this.#hasTitleSlot && !this.#rewriteRequired) this.#adoptLoadedLayout(layout);
 		this.#startLifecycle("resumed");
+		this.#coolUnreachablePayloads();
 	}
 
 	/**
@@ -2823,10 +2779,7 @@ export class SessionManager {
 	 * none. Scans for the one entry instead of rebuilding the branch's messages.
 	 */
 	getMCPToolSelection(): readonly string[] | undefined {
-		const byId = this.#index.entriesById();
-		const path = this.#index.leafEntry()
-			? this.#index.leafPath()
-			: walkBranchPath(byId, resolveContextLeaf(this.#entries, this.#index.leafId(), byId));
+		const path = this.#activePath();
 		for (let i = path.length - 1; i >= 0; i--) {
 			const entry = path[i]!;
 			if (entry.type === "mcp_tool_selection") return entry.selectedToolNames;
@@ -3295,7 +3248,10 @@ export class SessionManager {
 		const breadcrumb = await readTerminalBreadcrumbEntry();
 		let chosenSession: string | null | undefined;
 
-		if (breadcrumb) {
+		// A crumb naming another profile's transcript is written by a pre-isolation build. Following it
+		// would continue that profile's session under this one's settings, and the moved-project branch
+		// below would relocate the file into this profile. `--continue` stays inside the active profile.
+		if (breadcrumb && !foreignSessionFileProfile(breadcrumb.sessionFile)) {
 			// A fresh `/new` boundary whose JSONL was never materialized (lazy
 			// new-session persistence, then a process exit before any assistant
 			// output). Honor the boundary: start fresh rather than falling back to
@@ -3316,7 +3272,6 @@ export class SessionManager {
 				manager.#startLifecycle("created");
 				return manager;
 			}
-
 			// Recover stale crumbs: an agent open (pre-fix) may have pointed this
 			// terminal's breadcrumb at an artifact child; resume the parent instead.
 			breadcrumb.sessionFile = resolveBreadcrumbToInteractiveRoot(breadcrumb.sessionFile);
