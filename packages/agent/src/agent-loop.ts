@@ -64,6 +64,7 @@ import {
 	errorMessage,
 	estimateTokensFromText,
 	formatCount,
+	internString,
 	isAbortError,
 	isRecord,
 	logger,
@@ -773,7 +774,9 @@ export function normalizeTools(
 		const examplesBlock = exampleDialect
 			? renderToolExamples({ ...t, parameters }, exampleDialect, doInjectIntent ? INTENT_FIELD : undefined)
 			: "";
-		const finalDescription = examplesBlock ? `${description}\n\n${examplesBlock}` : description;
+		// Every agent normalizes its own tool list, so an appended examples block would otherwise
+		// leave one copy of each description per live agent.
+		const finalDescription = examplesBlock ? internString(`${description}\n\n${examplesBlock}`) : description;
 		return { ...t, parameters, description: finalDescription };
 	});
 	normalizedToolsCache.set(tools, { key: cacheKey, result });
