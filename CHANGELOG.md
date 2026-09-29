@@ -193,6 +193,7 @@
 
 ### Fixed
 
+- A usage-limit or rate-limit error whose message states a zero or elapsed retry window parks the credential for the computed backoff instead of for no time, and the session retry loop, the auth gateway and the advisor read a retry window from an error message through one parser.
 - A same-file reload that changes a bash turn's kill signal or a user turn's synthetic, steering, attribution or demoted-reasoning marks now closes the live provider sessions, instead of continuing a provider chain whose history no longer matches the transcript.
 - A `models.yml` `compat` block type-checks every key of the compat contracts, so a wrong value such as `thinkingKeep: last` fails validation naming the key instead of going to the provider verbatim; `thinkingKeep`, `reasoningDisableMode`, `toolSchemaFlavor`, the Anthropic flags and `trustExplicitThinkingOnly` are documented overrides.
 - Disposing a session waits up to 1 second for its aborted agent loop to finish before it releases async jobs, eval kernels, browser tabs and the transcript, so a tool that ignores its abort signal no longer races the teardown of what it is using.
@@ -265,6 +266,7 @@
 - `@veyyon/utils/stderr-guard` loads `node:util` on the first routed console call rather than at import, keeping it off the launch card path; no user-visible change.
 - `latexToUnicode` and `latexToBlock` render a command, environment, color or delimiter named after an `Object.prototype` member (`\toString`, `\constructor`, `\begin{__proto__}`) as an unknown name instead of throwing, printing a function body, or laying it out as a fraction, big operator or matrix.
 - Mermaid `colorMode: "html"` output escapes `"` and `'` in diagram text and in each span's color attribute, and escapes uncolored xychart text.
+- `extractRetryHint` reads `retry-after: <date>` in an error message as a wait until that instant instead of a wait of the year's number of seconds, and reads `x-ratelimit-reset-ms`, `x-ratelimit-reset` and `x-ratelimit-reset-after` written into a message as it reads those headers; `RETRY_HINT_HEADERS` exports the header forms both readings share.
 
 ## [1.5.5] - 2026-09-25
 
