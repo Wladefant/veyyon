@@ -1287,9 +1287,9 @@ export class ModelRegistry {
 
 	/**
 	 * Validate an array of persisted model records shallowly and cast. The
-	 * snapshot digest proves the payload matches bytes this format's writer
-	 * produced; the guards reject invalid records even when the digest was
-	 * recomputed by an external writer.
+	 * snapshot's CRC-32 detects a payload other than the bytes this format's
+	 * writer produced; the guards reject invalid records even when an external
+	 * writer recomputed the checksum.
 	 */
 	#snapshotModelArray(value: unknown): Model<Api>[] | null {
 		if (!Array.isArray(value)) return null;

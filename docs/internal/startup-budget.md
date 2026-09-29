@@ -82,10 +82,12 @@ SCENE_COMMAND='env STARTUP_EXECUTABLE=/repo/path/to/binary bash -l' \
 ```
 
 Bundled and resolved model snapshots use `@veyyon/utils/json-snapshot`. Each write
-serializes its payload once; each read verifies the fingerprint and payload bytes
-before parsing. Replacement is atomic without a durability flush because a missing
-or invalid snapshot rebuilds from its inputs. Bundled format v4 and resolved-stage
-format v9 reject snapshots from preceding formats. The resolved stage stores only
+serializes its payload once behind a header line that states the frame version, the
+input fingerprint, and the payload's byte length and CRC-32. Each read checks those
+fields against the bytes read from disk, then parses the payload once. Replacement is
+atomic without a durability flush because a missing or invalid snapshot rebuilds from
+its inputs. Frame version 2, bundled format v4 and resolved-stage format v9 reject
+snapshots from preceding layouts. The resolved stage stores only
 discovery-derived models and provider state. Bundled models resolve once per requested
 provider, without installing a disk snapshot store during production startup.
 Explicitly installed catalog snapshot stores remain supported. Provider overrides
