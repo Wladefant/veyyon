@@ -26,6 +26,7 @@
 
 ### Changed
 
+- A session that renders its personality from a project `.veyyon/personalities/<name>.md` file raises a `personality` warning stating the file, and personality warnings reach the session's notice channel once per session instead of writing to stderr on every system prompt rebuild.
 - The `/debug` CPU profile borrows the process's sampling profiler from the stall sampler and hands it back when the profile ends, instead of starting and stopping the profiler itself and leaving the stall sampler's profile stopped.
 - Assistant turns and tool cards create their image, conversion and rail-frame collections on first use and share one rail-frame table instead of each constructing its own, and a tool card's block producer holds its listeners in a shared empty array until one subscribes, so a rebuilt 26,806-entry transcript holds 2,547 Maps, 1 Set and 0 WeakMaps instead of 37,211, 29,120 and 7,858, retaining 64.1 MiB and 1.10M objects instead of 68.3 MiB and 1.17M.
 - A tool card builds its block on the frame that draws it instead of on each call, result, spinner start and stop handed to it, and reads its animation, freeze, displacement and repaint policies without building its views, so a rebuilt 81,240-row transcript builds each card once and its rebuild drops from 113.2 ms to 91.7 ms (median of five) with an unchanged first frame.
