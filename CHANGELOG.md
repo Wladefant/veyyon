@@ -10,6 +10,8 @@
 
 ### Added
 
+- `session.backgroundLimit` (default 3, range 1-20) caps how many conversations `/new` keeps running in the background; a `/new` past it stops the oldest background conversation and names it in the `/new` message.
+- `/resume` marks conversations running off-screen as `running`, and `ctrl+x` stops the selected one without resuming it.
 - `collectToolCallsById` takes an optional start index and resolves the call behind each tool result at or after it without walking the entries before it.
 - `PruneResult` lists the entries a prune rewrote in place as `prunedEntries`.
 - A tool domain manifest can list `resultCodecs`, each a `ToolResultCodec` whose `slim` drops a result `details` field the result's content rebuilds when the session writes the entry and whose `restore` rebuilds it when the session loads.
