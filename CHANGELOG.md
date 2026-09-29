@@ -23,10 +23,13 @@
 - `setProfileEnv` sets an environment variable read out of the active profile's configuration and records it so a process started under another profile drops it.
 - `@veyyon/utils/session-file` exports `ORPHAN_AGENT_TRANSCRIPT_PREFIX`, the prefix of an agent transcript written under the sessions root when its parent session has no file.
 - `@veyyon/utils/stall-sampler` exports `stallSampler`, which keeps JavaScriptCore's sampling profiler running at a 10 ms interval and returns the functions sampled between two `performance.now()` readings, and `borrow()`, which lends the profiler to another caller; `LoopWatchdog` takes it as `stacks` and follows each `ui.loop-blocked` line with a `ui.loop-blocked.stack` line naming the functions that held the loop.
+- `@veyyon/utils/fs-tool-args` exports `editInputPaths`, which reads the file paths from hashline or `apply_patch` section headers.
 
 ### Changed
 
 - `tools/fs/read.ts` is split into per-concern `read-*.ts` modules with no change to the read tool's schema, output or exports.
+- The resolve pending row clamps its reason at 80 columns instead of 72, and the `web_search` and `gh` cards expand tabs in query and label text.
+- Production code strips ANSI through `stripAnsi` from `@veyyon/utils`; `Bun.stripANSI` is called only by that helper.
 - A session that renders its personality from a project `.veyyon/personalities/<name>.md` file raises a `personality` warning stating the file, and personality warnings reach the session's notice channel once per session instead of writing to stderr on every system prompt rebuild.
 - Restoring `resolved-models.json` at launch verifies a CRC-32 instead of a SHA-256 digest, cutting model registry construction from 22.86 ms to 20.69 ms (median of 21 interleaved launches), and the first launch after upgrading rebuilds the snapshot once.
 - The `/debug` CPU profile borrows the process's sampling profiler from the stall sampler and hands it back when the profile ends, instead of starting and stopping the profiler itself and leaving the stall sampler's profile stopped.
@@ -102,6 +105,7 @@
 - Split the agent loop's turn driver into per-step functions (pause park, directive resolution, sampling with Harmony-leak recovery, failed-turn settling, tool-call settling, queue drains); no user-visible change.
 - `estimateTokens` collects a message's fragments and the shape digest its cache compares in one walk on a first estimate instead of two, cutting the first estimate of a 26,806-entry resumed session's messages from 21.5 ms to 16.8 ms.
 - The auth gateway's error verdicts come from named rules in the error registry (`GATEWAY_RULES`), and `classifyGatewayError` accepts an optional `trace` array that receives the name of the rule that answered; every verdict is unchanged.
+- `auth-storage.ts` is split into single-concern modules under `src/auth-storage/` with no change to its exports or behavior.
 - The JSON Schema meta-validator checks a node by looking each of its keys up in a keyword table instead of probing every known keyword, cutting validation of a 40-tool parameter schema set from 46.6 µs to 33.7 µs with identical verdicts, except that a `NaN` `multipleOf` is now rejected.
 - Stream option mapping resolves each API's options in its own mapper over one shared base instead of one 420-line switch, cutting the mapping of 743,431 model and option combinations from 100.8 ms to 92.1 ms with identical options.
 - The Anthropic and OpenAI-compatible providers split their stream loops, message converters and finalization into per-step helpers; no user-visible change.
@@ -123,6 +127,7 @@
 - The Google, Cloud Code Assist, MCP and Moonshot normalizers walk a `properties` or definitions map by entry instead of copying their options for every key, and Cloud Code Assist's nullable pass walks each property subtree once instead of twice per nesting level, cutting normalization of the 25 built-in tool schemas by 13% to 23% and of a 16-level nested schema for Cloud Code Assist from 62.7 ms to 0.1 ms.
 - The JSON Schema value validator walks one instance path it pushes and pops instead of copying the path into every child, applies each keyword group in its own step, and lists an object's keys and builds its type list only when a keyword reads them, cutting validation of a 60-entry tool argument from 45 µs to 22 µs with identical issues across 600,000 generated schemas and values.
 - `buildOpenAICompat` classifies the host and model family once and derives each chat-completions compat field from a named predicate, and the chat and Responses builders share one override-and-rederive step; every bundled and synthetic model spec resolves to the same record, no behavior change.
+- The session loader reads a session file 1 MiB at a time and splits lines synchronously instead of decoding each line through an async iterator, cutting the load phase of an 85 MB, 27,600-entry session from 210.0 ms to 149.9 ms (median of 7 alternating runs).
 - `buildSessionContextFromPath` reads a branch's settings, emits its messages and strips dangling tool calls in single-purpose steps instead of one 374-line function, and drops content-less dangling turns in one pass instead of splicing each out, cutting a context build that drops 10,000 such turns from 10.4 ms to 0.7 ms with identical contexts across 200,000 generated branches.
 - Opening or restoring a session builds its set of known entry ids once instead of twice, which takes about 40ms off opening a 220,000-entry session.
 - The resume warning flattens each command or path onto one line through the shared `collapseWhitespace` helper; no user-visible change.
@@ -138,6 +143,7 @@
 - The first `highlightCode`, `CodeHighlighter`, `supportsLanguage` or `getSupportedLanguages` call in a process deserializes a syntax set the addon's build script linked instead of linking 78 syntaxes at run time, which cuts that call from 81 ms to under 1 ms.
 - `wrapTextWithAnsi` reads the words of a line as slices of it instead of copying each into its own buffer, which cuts wrapping a line wider than its target by 50 to 66% (a line of 40 to 100 words from 8.6 µs to 3.0 µs) and the first render of a 13,470-entry transcript at 120 columns from 291 ms to 234 ms, with identical rows.
 - `wrapTextWithAnsi`, `truncateToWidth`, `sliceWithWidth` and `extractSegments` return a result whose characters all fit in Latin-1 as a one-byte string instead of a two-byte one, which moves 2.9M characters of a rendered 13,470-entry transcript to one byte each and cuts the heap the render holds from 47.1 MiB to 44.4 MiB.
+- The edit card reads its target paths through `editInputPaths` from `@veyyon/utils/fs-tool-args`; rendered output is unchanged.
 - `ProcessTerminal` routes a stdin sequence through single-purpose steps (private CSI and in-band resize reassembly, then one reply matcher per probe) with its reply patterns compiled once at module load instead of one 258-line handler, so an escape keystroke's dispatch costs 111 ns instead of 128 ns with identical delivered input and written bytes.
 - The editor measures and wraps each draft line once per layout width, caching the layout (pruned to the draft's lines) for rendering and vertical cursor motion, and renders a frame through single-purpose row, chrome and cursor-placement helpers instead of one 242-line method, so rendering a 12-paragraph draft costs 1.5 µs instead of 18.4 µs and a keystroke with its render 8.4 µs instead of 12.7 µs.
 - The editor dispatches a key through single-purpose handlers for autocomplete, kill and line keys, Enter and new-line keys, and cursor keys instead of one 270-line method; with the memoized key tests in `@veyyon/utils`, a typed character costs 1.35 µs instead of 3.01 µs and a mixed editing key 5.84 µs instead of 7.55 µs.
@@ -169,6 +175,7 @@
 
 ### Fixed
 
+- The pending previews of `ssh`, `browser`, `read`, `debug`, `bash`, `github`, `lsp` and 30 other tools update a string argument as it streams instead of when the JSON object closes, and the live preview matches the rebuilt transcript.
 - The session `/new` starts while a response is still streaming, and every other top-level session in the process, runs background bash, the `job` tool and daemon exit watches on a job manager of its own, and a job reports to the conversation that started it or spawned the agent that started it instead of being refused.
 - The Claude Code capture helper moved from `src/cli/claude-trace-cli.ts` to `scripts/claude-trace-capture.ts` beside `bun run claude:trace`, its only caller; it was never a `veyyon` subcommand and no longer ships in the package source.
 - `statusLine.segmentOptions.model.roomy: false` joins the model and its thinking level with the dot separator in the composer footline instead of being overridden to the `Model @level` form.
@@ -221,6 +228,7 @@
 - A tool call recorded in an OpenAI Responses or Codex native history payload keeps its provider id through outbound canonicalization, so its result is sent as that call's output instead of a stale-output note after a "No tool output was recorded" placeholder on every turn.
 - A session file under 8 MiB opened for a partial rewrite no longer keeps its whole text alive through the header line the loaded layout holds, which held a second copy of the file for as long as the session stayed open.
 - `isSamplingKnob` answers `false` for a name inherited from `Object.prototype`, such as `toString` or `constructor`, instead of `true`.
+- Job, task and eval durations and `web_search` source ages in the HTML export and web transcript print through `formatDuration` and `formatAge` from `@veyyon/utils`, so `65000` reads `1m5s` and an age of 30 seconds reads `just now`, as in the terminal.
 - `Container.clear()` releases the row arrays its discarded children last rendered instead of holding them until the next render.
 - The default profile ignores an inherited `VEYYON_CODING_AGENT_DIR` equal to any profile's agent dir, so `/profile default` or `/resume` of a default-profile session from a named profile no longer runs the default profile in the named profile's agent dir.
 - A veyyon process started by another veyyon process under a different profile drops the variables the parent set from its own `.env` files, recorded in `VEYYON_DOTENV_ORIGIN`, and applies its own profile's `.env` layers instead of running on the parent profile's credentials.
