@@ -348,7 +348,6 @@ const NAMED_BY_NO_TEST: readonly string[] = [
 	"packages/coding-agent/src/tools/search/text-search-scope.ts",
 	"packages/coding-agent/src/tools/web/browser/handle-release.ts",
 	"packages/coding-agent/src/tools/web/browser/tab-worker-entry.ts",
-	"packages/utils/src/vendor/mermaid-ascii/ascii/ansi.ts",
 	"packages/utils/src/vendor/mermaid-ascii/ascii/canvas.ts",
 	"packages/utils/src/vendor/mermaid-ascii/ascii/class-diagram.ts",
 	"packages/utils/src/vendor/mermaid-ascii/ascii/converter.ts",
