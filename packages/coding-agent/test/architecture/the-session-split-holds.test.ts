@@ -36,7 +36,7 @@ const RUNTIME = `${SESSION_DIR}/agent-session.ts`;
 const FACADE = `${SESSION_DIR}/facade.ts`;
 
 /**
- * MEASURED at 10372 lines. Model target selection left earlier — the role resolver, the
+ * MEASURED at 10173 lines. Model target selection left earlier — the role resolver, the
  * configured-target reader, the compaction candidate walk and its effort map — and provider request
  * shaping (payload redaction, the Anthropic metadata block, the tool-order permutation check) left
  * after it, because not one of those members read or wrote a field of the runtime: every input was
@@ -50,13 +50,15 @@ const FACADE = `${SESSION_DIR}/facade.ts`;
  * provider session ids with the inherited prompt cache key, the tool-call loop guard with the
  * Gemini reasoning-header detector, the empty-stop and unexpected-stop retry cycles, the
  * provider usage recording with its saved-reset redeems, the history rewrites (stale-result and
- * overflow prunes, image drops, shake and dedup), the terminal `yield` record, and the evidence
- * ledger with the rewind, verification and review reminders left as collaborators under `runtime/`.
+ * overflow prunes, image drops, shake and dedup), the terminal `yield` record, the evidence
+ * ledger with the rewind, verification and review reminders, and the approval state (the
+ * auto-approve flag, the `/yolo` bypass, the kept per-tool decisions and the ACP permission proxy)
+ * left as collaborators under `runtime/`.
  * The number falls
  * again when the next one leaves. It ratchets: slack is what it takes to not fail on the next honest
  * edit, and a ceiling left far above a shrinking file stops being a bound.
  */
-const RUNTIME_CEILING = 10_390;
+const RUNTIME_CEILING = 10_190;
 
 /** The one subdirectory `src/session/` holds: the collaborators. */
 const RUNTIME_DIR = "runtime";
@@ -86,6 +88,7 @@ const COLLABORATORS = [
 	"provider-usage.ts",
 	"retry-fallback.ts",
 	"retry-runtime.ts",
+	"session-approvals.ts",
 	"session-secrets.ts",
 	"stop-retries.ts",
 	"streaming-edit-guard.ts",

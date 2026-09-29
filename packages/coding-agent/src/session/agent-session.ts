@@ -100,7 +100,7 @@ import {
 	declaredContextWindow,
 } from "@veyyon/kernel/session/agent-session-compaction-policy";
 import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
-import type { ClientBridge, ClientBridgePermissionOutcome } from "@veyyon/kernel/session/client-bridge";
+import type { ClientBridge } from "@veyyon/kernel/session/client-bridge";
 import { abortDetached } from "@veyyon/kernel/session/detached-abort";
 import {
 	assistantRecordsToolCall,
@@ -146,11 +146,9 @@ import {
 	escapeXmlText,
 	getActiveAuthDbPath,
 	getActiveProfileOrDefault,
-	getStringProperty,
 	isAbortError,
 	isBunTestRuntime,
 	isEnoent,
-	isRecord,
 	logger,
 	postmortem,
 	prompt,
@@ -288,17 +286,12 @@ import {
 	type TodoPhase,
 	USER_TODO_EDIT_CUSTOM_TYPE,
 } from "../tools/agent/todo";
-import {
-	resolveEffectiveApprovalMode,
-	validateApprovalModeSetting,
-	validateApprovalPolicySettings,
-} from "../tools/core/approval";
+import { validateApprovalModeSetting, validateApprovalPolicySettings } from "../tools/core/approval";
 import type { ApprovalMode, SessionToolApprovals } from "../tools/core/approval-modes";
 import { normalizeToolNames, TOOL } from "../tools/core/builtin-names";
 import { reportLostOutputArtifact } from "../tools/core/output-artifact";
 import { outputMeta, wrapToolWithMetaNotice } from "../tools/core/output-meta";
 import { shortenPath } from "../tools/core/render-utils";
-import { ToolAbortError, ToolError } from "../tools/core/tool-errors";
 import { clampTimeout } from "../tools/core/tool-timeouts";
 import type { CheckpointState, CompletedRewindState } from "../tools/fs/checkpoint";
 import type { BashExecutionMessage, PythonExecutionMessage } from "../tools/shell/execution-messages";
@@ -320,13 +313,6 @@ import {
 	titleConversationTurnFromMessage,
 } from "./agent-session-message-shapes";
 import { contextPromotionTarget, roleModelValue } from "./agent-session-model-targets";
-import {
-	extractPermissionLocations,
-	getPermissionIntent,
-	PERMISSION_OPTIONS,
-	PERMISSION_OPTIONS_BY_ID,
-	PERMISSION_REQUIRED_TOOLS,
-} from "./agent-session-permissions";
 import { isToolOrderPermutation } from "./agent-session-provider-request";
 import {
 	IMAGE_ATTACHMENT_DESCRIPTION_TYPE,
@@ -417,6 +403,7 @@ import { PostPromptTasks } from "./runtime/post-prompt-tasks";
 import { ProviderSessions } from "./runtime/provider-sessions";
 import { ProviderUsage } from "./runtime/provider-usage";
 import { RetryRuntime } from "./runtime/retry-runtime";
+import { SessionApprovals } from "./runtime/session-approvals";
 import { type SecretsRefreshOptions, SessionSecrets } from "./runtime/session-secrets";
 import { StopRetries } from "./runtime/stop-retries";
 import { StreamingEditGuard } from "./runtime/streaming-edit-guard";
@@ -585,36 +572,7 @@ export class AgentSession {
 	readonly settings: Settings;
 	readonly yieldQueue: YieldQueue;
 	fileSnapshotStore?: InMemorySnapshotStore;
-	#autoApprove: boolean;
-	/**
-	 * Full permission bypass (the `/yolo` command). Session-scoped, defaults off,
-	 * never auto-persisted: every approval that would prompt is allowed while set,
-	 * but explicit user `deny` and plan-mode blocks still stop the call. Read live
-	 * into each tool-execution context so a mid-session toggle takes effect on the
-	 * next tool call.
-	 */
-	#approvalBypassActive = false;
-	/**
-	 * The parent session's live bypass state, for a spawned agent. Undefined in a root
-	 * session. Read on every {@link isApprovalBypassed} call so `/yolo off` in the
-	 * parent reaches a spawned agent that is already running.
-	 */
-	readonly #parentApprovalBypassed?: () => boolean;
-	/**
-	 * Per-tool decisions the operator made at an interactive approval prompt and
-	 * asked to keep ("Always allow" / "Always deny").
-	 *
-	 * Session-scoped and never persisted, which is the whole point: a standing
-	 * grant written to `tools.approval` outlives the task it was granted for and
-	 * is invisible next week. This one dies with the session, so the next launch
-	 * asks again.
-	 *
-	 * Without it the `ask` ladder is unusable rather than safe: a run that edits
-	 * twenty files asks twenty times, and an operator who has to answer that many
-	 * prompts turns the whole thing off, which is how a default that "asks"
-	 * becomes a default that yolos.
-	 */
-	readonly #sessionToolApprovals = new Map<string, "allow" | "deny">();
+	readonly #approvals: SessionApprovals;
 
 	#powerAssertion: MacOSPowerAssertion | undefined;
 
@@ -669,8 +627,6 @@ export class AgentSession {
 	readonly #spendLedger = new SessionSpendLedger();
 	#clientBridge: ClientBridge | undefined;
 	#allowAcpAgentInitiatedTurns = false;
-	/** Per-session memory of allow_always / reject_always decisions for gated tools. */
-	#acpPermissionDecisions: Map<string, "allow_always" | "reject_always"> = new Map();
 	/** Session file created by this session's `/move`; removed on dispose if it stayed empty. */
 	#movedFromEmptySessionFile?: string;
 
@@ -1224,9 +1180,15 @@ export class AgentSession {
 			},
 		});
 		this.#lastRescopedCwd = path.resolve(config.sessionManager.getCwd());
-		this.#autoApprove = config.autoApprove === true;
-		this.#approvalBypassActive = config.bypassAllApprovals === true;
-		this.#parentApprovalBypassed = config.parentApprovalBypassed;
+		this.#approvals = new SessionApprovals(
+			{
+				settings: this.settings,
+				clientBridge: () => this.#clientBridge,
+				cwd: () => this.sessionManager.getCwd(),
+				planModeActive: () => this.getPlanModeState()?.enabled === true,
+			},
+			config,
+		);
 		// Power assertions are taken per turn (see #beginInFlight); nothing acquired here.
 		this.#evalKernelOwnerId = config.evalKernelOwnerId ?? `agent-session:${Snowflake.next()}`;
 		this.#parentEvalSessionId = config.parentEvalSessionId;
@@ -2243,7 +2205,7 @@ export class AgentSession {
 		// grant across meant a permission granted for one task silently governed
 		// the next one, on a store that is deliberately never persisted precisely
 		// so it cannot outlive its context.
-		this.#sessionToolApprovals.clear();
+		this.#approvals.forgetToolDecisions();
 		registry.rescope(id, this.sessionManager.getSessionId?.() ?? undefined);
 		logger.debug("Re-rooted the agent registry for a new conversation", {
 			agentId: id,
@@ -4299,189 +4261,28 @@ export class AgentSession {
 		return [...new Set(activated)];
 	}
 
-	/**
-	 * Wrap a tool with a permission-gate proxy when an ACP client is connected.
-	 * Only wraps tools whose name is in PERMISSION_REQUIRED_TOOLS and only when
-	 * the bridge exposes `requestPermission`. No-ops for all other cases.
-	 *
-	 * When the user has explicitly opted into `yolo` / auto-approve behavior (via
-	 * the SDK/CLI `autoApprove` flag or a configured `tools.approvalMode: yolo`),
-	 * skips the gate unless the per-tool policy explicitly requires a prompt or
-	 * deny. The schema default is `auto`, not `yolo`, so an explicit
-	 * configuration or explicit session flag is required: default-config ACP
-	 * sessions keep the client-side permission gate.
-	 */
-	#wrapToolForAcpPermission<T extends AgentTool>(tool: T): T {
-		const bridge = this.#clientBridge;
-		// Match the capability+method gating pattern used by read/write/bash.
-		if (!bridge?.capabilities.requestPermission || !bridge.requestPermission) return tool;
-		if (!PERMISSION_REQUIRED_TOOLS.has(tool.name)) return tool;
-		// Skip the gate only on explicit yolo opt-in; honour per-tool policies
-		// that require a prompt or deny (matching the normal approval wrapper).
-		if (this.#isExplicitAutoApproveMode()) {
-			const userPolicies = (this.settings.get("tools.approval") ?? {}) as Record<string, unknown>;
-			const toolPolicy = userPolicies[tool.name];
-			if (!toolPolicy || toolPolicy === "allow") return tool;
-		}
-		return new Proxy(tool, {
-			get: (target, prop) => {
-				if (prop !== "execute") return target[prop as keyof T];
-				return async (
-					toolCallId: string,
-					args: unknown,
-					signal: AbortSignal | undefined,
-					onUpdate: never,
-					ctx: never,
-				) => {
-					const permissionIntent = getPermissionIntent(target.name, args);
-					if (!permissionIntent) {
-						return await target.execute(toolCallId, args as never, signal, onUpdate, ctx);
-					}
-					const command =
-						target.name === TOOL.bash && isRecord(args)
-							? getStringProperty(args as Record<string, unknown>, "command")
-							: undefined;
-					const commandContent = command
-						? [{ type: "content" as const, content: { type: "text" as const, text: `$ ${command}` } }]
-						: undefined;
-					// Short-circuit on persisted decisions.
-					const persisted = this.#acpPermissionDecisions.get(permissionIntent.cacheKey);
-					if (persisted === "allow_always") {
-						return await target.execute(toolCallId, args as never, signal, onUpdate, ctx);
-					}
-					if (persisted === "reject_always") {
-						throw new ToolError(`Tool call rejected by user (preference)`);
-					}
-					if (signal?.aborted) {
-						throw new ToolAbortError("Permission request cancelled");
-					}
-					type PermissionRaceResult =
-						| { kind: "permission"; outcome: ClientBridgePermissionOutcome }
-						| { kind: "aborted" };
-					const { promise: abortPromise, resolve: resolveAbort } = Promise.withResolvers<PermissionRaceResult>();
-					const onAbort = () => resolveAbort({ kind: "aborted" });
-					signal?.addEventListener("abort", onAbort, { once: true });
-					let raced: PermissionRaceResult;
-					try {
-						const permissionPromise = bridge.requestPermission!(
-							{
-								toolCallId,
-								toolName: target.name,
-								title: permissionIntent.title,
-								...(target.name === TOOL.bash ? { kind: "execute" } : {}),
-								status: "pending",
-								rawInput: args,
-								...(commandContent ? { content: commandContent } : {}),
-								locations: extractPermissionLocations(
-									args,
-									this.sessionManager.getCwd(),
-									permissionIntent.paths,
-								),
-							},
-							PERMISSION_OPTIONS,
-							signal,
-						).then(outcome => ({ kind: "permission" as const, outcome }));
-						raced = await Promise.race([permissionPromise, abortPromise]);
-					} finally {
-						signal?.removeEventListener("abort", onAbort);
-					}
-					if (raced.kind === "aborted" || signal?.aborted) {
-						throw new ToolAbortError("Permission request cancelled");
-					}
-					const outcome = raced.outcome;
-					if (outcome.outcome === "cancelled") {
-						throw new ToolAbortError("Permission request cancelled");
-					}
-					const selectedOption = PERMISSION_OPTIONS_BY_ID.get(outcome.optionId);
-					if (!selectedOption) {
-						throw new ToolError(`Tool permission response used unknown option ID: ${outcome.optionId}`);
-					}
-					if (selectedOption.kind === "allow_always") {
-						this.#acpPermissionDecisions.set(permissionIntent.cacheKey, "allow_always");
-					} else if (selectedOption.kind === "reject_always") {
-						this.#acpPermissionDecisions.set(permissionIntent.cacheKey, "reject_always");
-					}
-					if (selectedOption.kind === "reject_once" || selectedOption.kind === "reject_always") {
-						throw new ToolError(`Tool call rejected by user (${target.name})`);
-					}
-					return await target.execute(toolCallId, args as never, signal, onUpdate, ctx);
-				};
-			},
-		}) as T;
-	}
-
-	#isExplicitAutoApproveMode(): boolean {
-		return (
-			this.#autoApprove ||
-			this.isApprovalBypassed() ||
-			(this.settings.isConfigured("tools.approvalMode") && this.settings.get("tools.approvalMode") === "yolo")
-		);
-	}
-
-	/**
-	 * The approval rung this session is ACTUALLY enforcing, which is not always
-	 * the one stored in `tools.approvalMode`.
-	 *
-	 * Two things outrank the configured value and both are invisible to a caller
-	 * that only reads settings: `--yolo` / `--auto-approve` forces `yolo` for the
-	 * whole run, and an active plan session caps to `plan`. Every surface that
-	 * NAMES the rung to the operator has to ask this instead, or it states the
-	 * opposite of what the tool wrapper will do — `veyyon --yolo` plus
-	 * `/permissions ask` reported "Ask all" on the status line and in the command
-	 * output while every tool ran unasked.
-	 *
-	 * This is the same resolution the wrapper performs, called through the same
-	 * function, so the label and the behaviour cannot drift.
-	 */
+	/** The approval rung this session enforces; see {@link SessionApprovals.effectiveMode}. */
 	effectiveApprovalMode(): ApprovalMode {
-		return resolveEffectiveApprovalMode(this.settings.get("tools.approvalMode"), {
-			planModeActive: this.getPlanModeState()?.enabled === true,
-			cliAutoApprove: this.#autoApprove,
-		});
+		return this.#approvals.effectiveMode();
 	}
 
-	/**
-	 * Whether the `/yolo` full-bypass is currently active for this session.
-	 *
-	 * A spawned agent's own flag is a COPY of the parent's, taken when the child was
-	 * built, so revocation used to be partial: `/yolo`, spawn a long agent,
-	 * `/yolo off`, and the parent went back to prompting while the child kept
-	 * running every bash and edit unasked until it finished. The parent probe is
-	 * consulted live and can only narrow: a child whose own flag is off is never
-	 * granted a bypass by a parent that has one.
-	 */
+	/** Whether the `/yolo` bypass is active; see {@link SessionApprovals.isBypassed}. */
 	isApprovalBypassed(): boolean {
-		if (!this.#approvalBypassActive) return false;
-		return this.#parentApprovalBypassed?.() ?? true;
+		return this.#approvals.isBypassed();
 	}
 
 	/**
-	 * Turn the `/yolo` full-bypass on or off for this session. Returns the new
-	 * state. Session-scoped only: never written to settings, so it always starts
-	 * off in a fresh session. The next tool call reads this live via the tool
+	 * Turn the `/yolo` bypass on or off. Returns the new state. Session-scoped: never written to
+	 * settings, so a fresh session starts with it off. The next tool call reads it through the tool
 	 * context (`bypassAllApprovals`).
 	 */
 	setApprovalBypass(enabled: boolean): boolean {
-		this.#approvalBypassActive = enabled;
-		return this.#approvalBypassActive;
+		return this.#approvals.setBypass(enabled);
 	}
 
-	/**
-	 * The session's standing per-tool approval decisions, handed to the tool
-	 * wrapper so an "Always allow" answered once is not asked again this session.
-	 *
-	 * Returned as an accessor pair rather than the Map: the wrapper reads and
-	 * writes exactly two operations, and handing out the collection invites a
-	 * caller to clear it or iterate it into a settings file, which is the one
-	 * thing this store must never do (see `#sessionToolApprovals`).
-	 */
+	/** The standing per-tool approval decisions the tool wrapper reads and writes. */
 	sessionToolApprovals(): SessionToolApprovals {
-		return {
-			get: key => this.#sessionToolApprovals.get(key),
-			set: (key, decision) => {
-				this.#sessionToolApprovals.set(key, decision);
-			},
-		};
+		return this.#approvals.toolDecisions();
 	}
 
 	async #applyActiveToolsByName(
@@ -4503,7 +4304,7 @@ export class AgentSession {
 		for (const name of toolNames) {
 			const tool = this.#toolRegistry.get(name);
 			if (tool) {
-				tools.push(this.#wrapToolForAcpPermission(tool));
+				tools.push(this.#approvals.wrapForClient(tool));
 				validToolNames.push(name);
 			} else {
 				droppedToolNames.push(name);
@@ -4520,7 +4321,7 @@ export class AgentSession {
 		if (isAutoQaEnabled(this.settings) && !validToolNames.includes(TOOL.report_tool_issue)) {
 			const qaTool = this.#toolRegistry.get(TOOL.report_tool_issue);
 			if (qaTool) {
-				tools.push(this.#wrapToolForAcpPermission(qaTool));
+				tools.push(this.#approvals.wrapForClient(qaTool));
 				validToolNames.push(TOOL.report_tool_issue);
 			}
 		}
@@ -5229,12 +5030,12 @@ export class AgentSession {
 
 	setClientBridge(bridge: ClientBridge | undefined): void {
 		this.#clientBridge = bridge;
-		this.#acpPermissionDecisions.clear();
+		this.#approvals.forgetClientDecisions();
 		const activeToolNames = this.getActiveToolNames();
 		const activeTools = activeToolNames
 			.map(name => this.#toolRegistry.get(name))
 			.filter((tool): tool is AgentTool => tool !== undefined)
-			.map(tool => this.#wrapToolForAcpPermission(tool));
+			.map(tool => this.#approvals.wrapForClient(tool));
 		this.agent.setTools(activeTools);
 	}
 
