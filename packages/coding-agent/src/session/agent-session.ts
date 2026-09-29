@@ -334,7 +334,6 @@ import { generateSessionTitle } from "../utils/title-generator";
 import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import { formatAdvisorStatus } from "./advisor-stats";
 import {
-	isEmptyAssistantStop,
 	isSameAssistantMessage,
 	sanitizeAssistantForReparentedHistory,
 	titleConversationTurnFromMessage,
@@ -443,6 +442,7 @@ import { PostPromptTasks } from "./runtime/post-prompt-tasks";
 import { ProviderSessions } from "./runtime/provider-sessions";
 import { RetryRuntime } from "./runtime/retry-runtime";
 import { type SecretsRefreshOptions, SessionSecrets } from "./runtime/session-secrets";
+import { StopRetries } from "./runtime/stop-retries";
 import { StreamingEditGuard } from "./runtime/streaming-edit-guard";
 import { ThinkingRuntime } from "./runtime/thinking-runtime";
 import { TodoRuntime } from "./runtime/todo-runtime";
@@ -453,7 +453,7 @@ import { formatSessionDumpText } from "./session-dump-format";
 import { SessionSpendLedger } from "./session-spend";
 import { incompleteTodoItems } from "./todo-reminder";
 import { parseTurnBudgetDirective } from "./turn-budget";
-import { classifyUnexpectedStop, isUnexpectedStopCandidate } from "./unexpected-stop-classifier";
+import { classifyUnexpectedStop } from "./unexpected-stop-classifier";
 import {
 	CODE_REVIEW_REMINDER_TYPE,
 	VERIFICATION_EVIDENCE_REMINDER_TYPE,
@@ -463,10 +463,6 @@ import type { VibeModeState } from "./vibe-runtime";
 
 /** Abort reason recorded on a spawned agent stopped because its conversation was left by `/new`, `/resume` or a handoff. */
 export const RESCOPE_TERMINATE_REASON = "Stopped: the conversation that spawned it ended";
-
-const UNEXPECTED_STOP_MAX_RETRIES = 3;
-const UNEXPECTED_STOP_TIMEOUT_MS = 4000;
-const EMPTY_STOP_MAX_RETRIES = 3;
 
 /** Whether writing `path` must rebuild the prompt the model is holding. */
 function rebuildsThePrompt(path: string): boolean {
@@ -990,24 +986,8 @@ export class AgentSession {
 	readonly #loopGuards: LoopGuards;
 	#promptInFlightCount = 0;
 	#abortInProgress = false;
-	// Wire-level agent_end emission deferred until #promptInFlightCount drops to 0.
-	// Internal extension hooks and post-emit work (auto-retry, auto-compaction, todo
-	// checks in #handleAgentEvent) still fire on the original schedule — only the
-	// `#emit(event)` that reaches external subscribers (rpc-mode stdout, ACP bridge,
-	// Cursor exec, TUI listeners) is held back. Without this, a client that resumes
-	// on `agent_end` can fire its next `prompt` before #promptWithMessage's finally
-	#emptyStopRetryCount = 0;
-	/**
-	 * Developer reminders appended by a turn-retry cycle (empty stop, unexpected
-	 * stop), in append order. They are scaffolding: their only job is to nudge a
-	 * stalled turn back into producing something, and they speak about a turn that
-	 * either was discarded or has already given up. Removed from active context
-	 * when the cycle ends, so a later turn is not carrying instructions about a
-	 * turn that no longer exists.
-	 */
-	#turnRetryReminders: AgentMessage[] = [];
-	#unexpectedStopRetryCount = 0;
-	#acceptTerminalEmptyStopForPrompt = false;
+	/** The empty-stop and unexpected-stop retry cycles, their reminders and the terminal empty-stop flag. */
+	readonly #stopRetries: StopRetries;
 	#promptGeneration = 0;
 	/**
 	 * Prompts refused as busy and waiting for the agent to go idle. Each is a
@@ -1017,6 +997,13 @@ export class AgentSession {
 	 * is coming reads the turn that is.
 	 */
 	#promptsWaitingOnIdle = 0;
+	// Wire-level agent_end emission deferred until #promptInFlightCount drops to 0.
+	// Internal extension hooks and post-emit work (auto-retry, auto-compaction, todo
+	// checks in #handleAgentEvent) still fire on the original schedule — only the
+	// `#emit(event)` that reaches external subscribers (rpc-mode stdout, ACP bridge,
+	// Cursor exec, TUI listeners) is held back. Without this, a client that resumes
+	// on `agent_end` can fire its next `prompt` before #promptWithMessage's finally
+	// block unwinds, into a session that still reports `isStreaming`.
 	#pendingAgentEndEmit: AgentSessionEvent | undefined;
 	/** Context usage: the prompt snapshot of the run in flight and the usage anchors it reads. */
 	readonly #context: ContextAccounting;
@@ -1045,11 +1032,8 @@ export class AgentSession {
 	readonly rawSseDebugBuffer: RawSseDebugBuffer;
 
 	#resetPromptMaintenanceState(): void {
-		this.#emptyStopRetryCount = 0;
-		this.#dropTurnRetryReminders();
-		this.#unexpectedStopRetryCount = 0;
+		this.#stopRetries.resetForPrompt();
 		this.#yieldTerminationPending = false;
-		this.#acceptTerminalEmptyStopForPrompt = false;
 		this.#retry.resetForPrompt();
 	}
 
@@ -1644,6 +1628,29 @@ export class AgentSession {
 			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
 			schedulePostPromptTask: task => this.#postPrompt.schedule(task),
 			discardAssistantTurn: message => this.#discardAssistantTurn(message),
+		});
+		this.#stopRetries = new StopRetries({
+			agent: this.agent,
+			sessionStore: this.sessionManager,
+			unexpectedStopDetection: () => this.settings.get("features.unexpectedStopDetection") === true,
+			classifyUnexpectedStop: (text, signal) =>
+				classifyUnexpectedStop(text, {
+					settings: this.settings,
+					registry: this.#modelRegistry,
+					model: this.model ?? undefined,
+					sessionId: this.sessionId,
+					metadataResolver: provider => this.agent.metadataForProvider(provider),
+					signal,
+					obfuscateProviderText: providerText => this.obfuscateProviderText(providerText),
+					completeImpl: this.#sideCompleteImpl,
+				}),
+			promptGeneration: () => this.#promptGeneration,
+			scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
+			discardAssistantTurn: message => this.#discardAssistantTurn(message),
+			removeAssistantFromActiveContext: (message, reason) =>
+				this.#removeAssistantMessageFromActiveContext(message, reason),
+			endAnnouncedContinuationWait: finalError => this.#retry.endAnnouncedContinuationWait(finalError),
+			failAtEmptyStopCap: (attempts, finalError) => this.#retry.failAtEmptyStopCap(attempts, finalError),
 		});
 		this.#ttsr = new TtsrRuntime(
 			{
@@ -3021,7 +3028,7 @@ export class AgentSession {
 		// otherwise the next Anthropic turn carries a tool_use block with no matching tool_result and
 		// corrupts message history. The handler also schedules its own retry, so a real empty stop
 		// never needs the active-goal threshold pre-empt below.
-		if (await this.#handleEmptyAssistantStop(msg)) {
+		if (await this.#stopRetries.onEmptyStop(msg)) {
 			route("empty-stop-handled");
 			return;
 		}
@@ -3040,7 +3047,7 @@ export class AgentSession {
 			}
 		}
 
-		if (await this.#handleUnexpectedAssistantStop(msg, settleState)) {
+		if (await this.#stopRetries.onUnexpectedStop(msg, settleState)) {
 			route("unexpected-stop-handled");
 			return;
 		}
@@ -5861,7 +5868,7 @@ export class AgentSession {
 			// the same unfinished list after each "continue" correction floods context.
 			this.#todo.onNewPrompt();
 			this.#resetPromptMaintenanceState();
-			this.#acceptTerminalEmptyStopForPrompt = options?.acceptTerminalEmptyStop === true;
+			this.#stopRetries.acceptTerminalEmptyStop = options?.acceptTerminalEmptyStop === true;
 
 			await this.#retry.maybeRestoreFallbackPrimary();
 
@@ -6505,11 +6512,11 @@ export class AgentSession {
 			if (acceptTerminalEmptyStop) {
 				this.#resetPromptMaintenanceState();
 			}
-			this.#acceptTerminalEmptyStopForPrompt = acceptTerminalEmptyStop;
+			this.#stopRetries.acceptTerminalEmptyStop = acceptTerminalEmptyStop;
 			await this.agent.prompt(message);
 			await this.#waitForPostPromptRecovery();
 		} finally {
-			this.#acceptTerminalEmptyStopForPrompt = false;
+			this.#stopRetries.acceptTerminalEmptyStop = false;
 			this.#endInFlight();
 		}
 	}
@@ -8565,175 +8572,6 @@ export class AgentSession {
 		return undefined;
 	}
 
-	async #handleEmptyAssistantStop(assistantMessage: AssistantMessage): Promise<boolean> {
-		if (!isEmptyAssistantStop(assistantMessage)) {
-			this.#emptyStopRetryCount = 0;
-			return false;
-		}
-
-		if (this.#acceptTerminalEmptyStopForPrompt && assistantMessage.stopReason === "stop") {
-			this.#acceptTerminalEmptyStopForPrompt = false;
-			this.#discardAcceptedTerminalEmptyStop(assistantMessage);
-			this.#emptyStopRetryCount = 0;
-			// This prompt is over, so a continuation's announced wait has no later
-			// turn to close it. Nothing recovered, which is what the end says.
-			await this.#retry.endAnnouncedContinuationWait("Continued turn returned an empty completion");
-			return false;
-		}
-
-		this.#emptyStopRetryCount++;
-		if (this.#emptyStopRetryCount > EMPTY_STOP_MAX_RETRIES) {
-			const attempts = this.#emptyStopRetryCount - 1;
-			const failure = "Assistant returned empty stop after retry cap";
-			logger.warn(failure, {
-				attempts,
-				model: assistantMessage.model,
-				provider: assistantMessage.provider,
-			});
-			// Name the model in the operator-facing line: an empty completion is
-			// a property of the model behind the turn, and switching models is
-			// the recovery the user has to reach for.
-			await this.#retry.failAtEmptyStopCap(
-				attempts,
-				`${failure} (${assistantMessage.provider}/${assistantMessage.model})`,
-			);
-			// The cycle is over, so the budget belongs to the next turn. Leaving the
-			// count above the cap made the next turn that does NOT run the
-			// per-prompt reset — an agent-initiated maintenance nudge, an IRC wake,
-			// a queued follow-up — cap on its first empty stop with zero retries and
-			// report an attempt count for requests it never made.
-			this.#emptyStopRetryCount = 0;
-			// Nothing this turn produced is worth keeping. An empty assistant turn
-			// replays on reload and re-sends the very context that produced it (the
-			// reasoning isEmptyErrorTurn already records for provider-rejection
-			// turns); a toolUse stop with no tool_use block additionally corrupts
-			// Anthropic history, where a later tool_result has nothing to anchor to.
-			// The reminders describe a turn that has just been discarded, so they
-			// are false by the time any later turn reads them.
-			this.#discardAssistantTurn(assistantMessage);
-			this.#dropTurnRetryReminders();
-			return false;
-		}
-		this.#discardAssistantTurn(assistantMessage);
-		const reminder: AgentMessage = {
-			role: "developer",
-			content: [{ type: "text", text: this.#emptyStopRetryReminder() }],
-			attribution: "agent",
-			timestamp: Date.now(),
-		};
-		this.#turnRetryReminders.push(reminder);
-		this.agent.appendMessage(reminder);
-		this.#scheduleAgentContinue({ generation: this.#promptGeneration });
-		return true;
-	}
-
-	#emptyStopRetryReminder(): string {
-		return prompt.render(turnControlPrompts["turn-control/empty-stop-retry"].text, {
-			retryCount: this.#emptyStopRetryCount,
-			maxRetries: EMPTY_STOP_MAX_RETRIES,
-		});
-	}
-
-	/**
-	 * Drop the current cycle's turn-retry reminders from active context. Filters
-	 * by object identity rather than by text: the reminder body is rendered from
-	 * a prompt file, and matching on those bytes would also delete an unrelated
-	 * developer message that happened to quote them.
-	 */
-	#dropTurnRetryReminders(): void {
-		if (this.#turnRetryReminders.length === 0) return;
-		const scaffolding = new Set<AgentMessage>(this.#turnRetryReminders);
-		this.#turnRetryReminders = [];
-		const messages = this.agent.state.messages;
-		const kept = messages.filter(message => !scaffolding.has(message));
-		if (kept.length !== messages.length) this.agent.replaceMessages(kept);
-	}
-
-	async #handleUnexpectedAssistantStop(
-		assistantMessage: AssistantMessage,
-		settleState: SettleContinuationState,
-	): Promise<boolean> {
-		if (!this.settings.get("features.unexpectedStopDetection")) {
-			return false;
-		}
-		// Checked BEFORE the classifier, not after. A reply that hands the turn
-		// back to the user is the shape the classifier most readily reads as a
-		// turn that announced an action and stopped short of it, so asking it
-		// spends a model call to be told the opposite of what the reply says. The
-		// budget resets rather than carrying over: the cycle is finished, the user
-		// is in the loop, and the next turn starts with its full runway.
-		if (!mayContinueAtSettle("unexpected-stop-retry", settleState)) {
-			this.#unexpectedStopRetryCount = 0;
-			return false;
-		}
-		if (!isUnexpectedStopCandidate(assistantMessage)) {
-			this.#unexpectedStopRetryCount = 0;
-			return false;
-		}
-
-		const text = assistantText(assistantMessage);
-		if (!/\S/.test(text)) {
-			this.#unexpectedStopRetryCount = 0;
-			return false;
-		}
-
-		const controller = new AbortController();
-		const timeout = setTimeout(() => controller.abort(), UNEXPECTED_STOP_TIMEOUT_MS);
-		let classification: boolean | undefined;
-		try {
-			classification = await classifyUnexpectedStop(text, {
-				settings: this.settings,
-				registry: this.#modelRegistry,
-				model: this.model ?? undefined,
-				sessionId: this.sessionId,
-				metadataResolver: (provider: string) => this.agent.metadataForProvider(provider),
-				signal: controller.signal,
-				obfuscateProviderText: text => this.obfuscateProviderText(text),
-				completeImpl: this.#sideCompleteImpl,
-			});
-		} finally {
-			clearTimeout(timeout);
-		}
-
-		if (classification !== true) {
-			this.#unexpectedStopRetryCount = 0;
-			return false;
-		}
-
-		this.#unexpectedStopRetryCount++;
-		if (this.#unexpectedStopRetryCount > UNEXPECTED_STOP_MAX_RETRIES) {
-			logger.warn("Assistant returned unexpected stop after retry cap", {
-				attempts: this.#unexpectedStopRetryCount - 1,
-				model: assistantMessage.model,
-				provider: assistantMessage.provider,
-			});
-			this.#unexpectedStopRetryCount = 0;
-			// Same reasoning as the empty-stop cap: the nudges tell the model to
-			// finish a turn this cycle has just stopped trying to finish, so they are
-			// false for every turn that reads them after this point.
-			this.#dropTurnRetryReminders();
-			return false;
-		}
-
-		const reminder: AgentMessage = {
-			role: "developer",
-			content: [{ type: "text", text: this.#unexpectedStopRetryReminder() }],
-			attribution: "agent",
-			timestamp: Date.now(),
-		};
-		this.#turnRetryReminders.push(reminder);
-		this.agent.appendMessage(reminder);
-		this.#scheduleAgentContinue({ generation: this.#promptGeneration });
-		return true;
-	}
-
-	#unexpectedStopRetryReminder(): string {
-		return prompt.render(turnControlPrompts["turn-control/unexpected-stop-retry"].text, {
-			retryCount: this.#unexpectedStopRetryCount,
-			maxRetries: UNEXPECTED_STOP_MAX_RETRIES,
-		});
-	}
-
 	/**
 	 * Drop a failed assistant turn from active context.
 	 *
@@ -8855,38 +8693,6 @@ export class AgentSession {
 			return;
 		}
 		this.agent.appendMessage(assistantMessage);
-	}
-
-	#discardAcceptedTerminalEmptyStop(assistantMessage: AssistantMessage): void {
-		const branch = this.sessionManager.getBranch();
-		const branchEntry = branch
-			.slice()
-			.reverse()
-			.find(
-				entry =>
-					entry.type === "message" &&
-					entry.message.role === "assistant" &&
-					isSameAssistantMessage(entry.message, assistantMessage),
-			);
-		const parentEntry =
-			branchEntry?.parentId === null || branchEntry?.parentId === undefined
-				? undefined
-				: branch.find(entry => entry.id === branchEntry.parentId);
-		const prunePrompt = parentEntry?.type === "custom_message";
-
-		this.#removeAssistantMessageFromActiveContext(assistantMessage, "accepted-terminal-empty-stop");
-		if (prunePrompt && this.agent.state.messages.at(-1)?.role === "custom") {
-			this.agent.replaceMessages(this.agent.state.messages.slice(0, -1));
-		}
-
-		if (!branchEntry) return;
-		const targetParentId = prunePrompt ? parentEntry.parentId : branchEntry.parentId;
-		if (targetParentId === null) {
-			this.sessionManager.resetLeaf();
-		} else {
-			this.sessionManager.branch(targetParentId);
-		}
-		this.sessionManager.appendCustomEntry("accepted-terminal-empty-stop");
 	}
 
 	/**
