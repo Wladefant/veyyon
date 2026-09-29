@@ -32,6 +32,7 @@
 - `@veyyon/utils/fs-tool-args` exports `editInputPaths`, which reads the file paths from hashline or `apply_patch` section headers.
 - `exponentialBackoffDelay` accepts `jitterSpread: "below"`, which only shortens the wait so `maxMs` is the longest delay.
 - `internString` returns the engine's shared copy of a string, which is collected with its last holder.
+- `@veyyon/utils/idle-trim` exports `IdleTrim`, which calls `Bun.shrink()` once the process has spent 30 seconds with each 5-second window under 5% CPU, and again only after a busier window.
 
 ### Changed
 
@@ -135,6 +136,7 @@
 - A settings-screen change applies its live effect through a table keyed by setting path in `modes/terminal/controllers/setting-effects.ts` instead of a 261-line `switch`, and the effects for names no setting has (`autoCompact`, `theme`, `thinkingLevel` and fourteen `statusLine*` spellings) and for settings with no screen row are gone; no user-visible change beyond the two fixes below.
 - A URL read sends its alternate-markdown, `.md` suffix, content-negotiation, alternate-feed and `llms.txt` probes concurrently, keeps the highest-priority rendition that answers and aborts the rest, and downloads a document's bytes once for the converter and the binary notice, cutting an article read from 93.3 ms to 63.1 ms and a script-shell page read from 216.6 ms to 93.7 ms.
 - The same-file reload comparison lives in `session/provider-replay-projection.ts` and compares each message's replayed fields without deep-copying them first, and skips a message both lists share, cutting it on a 433-message branch from 0.47 ms to 0.13 ms.
+- A running `veyyon` process that has used under 5% CPU in each 5-second window for 30 seconds discards its compiled JavaScript code and returns free memory to the OS, cutting an interactive session's resident memory at idle from 361 MiB to 332 MiB after eight turns and from 325 MiB to 303 MiB after startup, at a cost of 37 ms on the next turn.
 - The per-turn stale-result and threshold prunes and the shake, dedup and truncation collectors scan only the entries from the compaction boundary to the leaf instead of the whole branch, which cut the two per-turn prunes on a 238,084-entry session with 390 compactions from 420ms to 4.4ms per turn.
 - `resolveCompactionBoundaryIndex` searches for the keep marker from the end of the branch, which takes about 9ms off rebuilding the context of a 238,084-entry branch.
 - Split the agent loop's turn driver into per-step functions (pause park, directive resolution, sampling with Harmony-leak recovery, failed-turn settling, tool-call settling, queue drains); no user-visible change.
