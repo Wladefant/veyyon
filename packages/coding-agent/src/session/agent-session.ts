@@ -429,7 +429,6 @@ import {
 import { computeNonMessageBreakdown, computeNonMessageTokens } from "./non-message-tokens";
 import {
 	GEMINI_TOOL_REMINDER_TYPE,
-	MEMORY_CONTEXT_MESSAGE_TYPE,
 	SESSION_STATE_MESSAGE_TYPE,
 	SESSION_STOP_CONTINUATION_CAP,
 	TOOL_CALL_LOOP_REDIRECT_TYPE,
@@ -443,6 +442,7 @@ import { CheckpointRuntime } from "./runtime/checkpoint-runtime";
 import { CompactionRuntime } from "./runtime/compaction-runtime";
 import { ContextAccounting } from "./runtime/context-accounting";
 import { IrcInbox } from "./runtime/irc-inbox";
+import { lastDeliveredBlock, MemoryContext } from "./runtime/memory-context";
 import { MessagePersistence } from "./runtime/message-persistence";
 import { ModelHandoff } from "./runtime/model-handoff";
 import { PlanModeRuntime } from "./runtime/plan-mode-runtime";
@@ -1048,6 +1048,8 @@ export class AgentSession {
 	#pendingAgentEndEmit: AgentSessionEvent | undefined;
 	/** Context usage: the prompt snapshot of the run in flight and the usage anchors it reads. */
 	readonly #context: ContextAccounting;
+	/** The memory backend's session state, and the recalled block delivered or waiting at the tail. */
+	readonly #memory: MemoryContext<AgentSession>;
 	#sessionStopContinuationCount = 0;
 	#sessionStopHookActive = false;
 	/** Secret obfuscator, runtime lease, provider redaction and display expansion. */
@@ -1069,7 +1071,6 @@ export class AgentSession {
 	#yieldTerminationPending = false;
 	#synchronouslyTerminatedYieldToolCallIds = new Set<string>();
 	#providerSessionState = new Map<string, ProviderSessionState>();
-	#hindsightSessionState: HindsightSessionState | undefined = undefined;
 	readonly rawSseDebugBuffer: RawSseDebugBuffer;
 
 	#resetPromptMaintenanceState(): void {
@@ -1298,6 +1299,14 @@ export class AgentSession {
 			nonMessageTokens: () => computeNonMessageTokens(this),
 			nonMessageBreakdown: () => computeNonMessageBreakdown(this),
 			storedMessagesTokens: () => computeStoredMessagesTokens(this, { excludeEncryptedReasoning: true }),
+		});
+		this.#memory = new MemoryContext<AgentSession>({
+			session: this,
+			backend: () => resolveMemoryBackend(this.settings),
+			backendId: () => this.settings.get("memory.backend"),
+			sessionId: () => this.agent.sessionId,
+			mnemopiState: () => getMnemopiSessionState(this),
+			messages: () => this.agent.state.messages,
 		});
 		this.#persistence = new MessagePersistence({
 			sessionStore: this.sessionManager,
@@ -1602,7 +1611,7 @@ export class AgentSession {
 			// Memory context published mid-run (a recall on `agent_start`, a
 			// mental-model reload) rides in here instead of rewriting the system
 			// prompt, which would cost a full uncached re-read of the conversation.
-			thunks.push(() => this.#takePendingVolatileMemoryContext());
+			thunks.push(() => this.#memory.takePending());
 			// Tool-scoped TTSR reminders. An aside rather than a steer: a steer
 			// aborts the tool batch still in flight, and a reminder about a call
 			// that already finished has no business cutting its siblings short.
@@ -1980,7 +1989,7 @@ export class AgentSession {
 	}
 
 	getHindsightSessionState(): HindsightSessionState | undefined {
-		return this.#hindsightSessionState;
+		return this.#memory.hindsight;
 	}
 
 	/**
@@ -1993,9 +2002,7 @@ export class AgentSession {
 	}
 
 	setHindsightSessionState(state: HindsightSessionState | undefined): HindsightSessionState | undefined {
-		const previous = this.#hindsightSessionState;
-		this.#hindsightSessionState = state;
-		return previous;
+		return this.#memory.swapHindsight(state);
 	}
 
 	getMnemopiSessionState(): MnemopiSessionState | undefined {
@@ -3956,92 +3963,16 @@ export class AgentSession {
 		);
 	}
 
-	#rekeyHindsightMemoryForCurrentSessionId(): void {
-		if (this.settings.get("memory.backend") !== "hindsight") return;
-		const sid = this.agent.sessionId;
-		if (!sid) return;
-		this.getHindsightSessionState()?.setSessionId(sid);
-	}
-
-	#rekeyMnemopiMemoryForCurrentSessionId(): void {
-		if (this.settings.get("memory.backend") !== "mnemopi") return;
-		const sid = this.agent.sessionId;
-		if (!sid) return;
-		this.getMnemopiSessionState()?.setSessionId(sid);
-	}
-
-	/** New session file: reset auto-recall / retain-threshold counters for the new transcript. */
-	#resetHindsightConversationTrackingIfHindsight(): boolean {
-		if (this.settings.get("memory.backend") !== "hindsight") return false;
-		const state = this.getHindsightSessionState();
-		if (!state || state.aliasOf) return false;
-		state.resetConversationTracking();
-		return true;
-	}
-
-	#resetMnemopiConversationTrackingIfMnemopi(): boolean {
-		if (this.settings.get("memory.backend") !== "mnemopi") return false;
-		const state = this.getMnemopiSessionState();
-		if (!state || state.aliasOf) return false;
-		state.resetConversationTracking();
-		return true;
-	}
-
 	/**
 	 * Forget what the previous conversation was told, on every path that starts a new one
-	 * (`/new`, `/clear`, a session switch, a resume onto a different transcript).
-	 *
-	 * The backends' conversation tracking is reset so the next turn recalls afresh, and the
-	 * delivered-once cache is re-derived from the transcript the session is now on.
-	 *
-	 * That cache is why this is not a plain reset. Recalled memories travel as a
-	 * `memory-context` message at the tail rather than in the system prompt, and delivery is
-	 * deduped against the last block sent, so the question the cache has to answer is "does
-	 * the conversation the model will read already contain this block?" — which the messages
-	 * themselves answer exactly, and the call site cannot. `/new` lands on an empty
-	 * transcript, so an identical recall must be delivered again (and it IS identical in the
-	 * likely case: a project's mental models do not change between two `/new`s). A fork or a
-	 * switch lands on a transcript that already carries the block, so re-delivering it would
-	 * put the same memories in twice. Reading the messages gets both right without a flag per
-	 * caller, and it also covers a compaction that dropped the block: gone from the messages,
-	 * gone from the cache, sent again.
-	 *
-	 * A block that was queued and never drained is dropped, because the recall it came from
-	 * belonged to the conversation being left. Nothing is lost: the first prompt of the new
-	 * transcript collects the current volatile context anyway.
-	 *
-	 * No system-prompt rebuild here. Both backends' developer instructions are static for
-	 * the life of the session by contract, so a rebuild could only produce the same bytes
-	 * while risking a prefix-cache invalidation for an unrelated part of the prompt.
+	 * (`/new`, `/clear`, a session switch, a resume onto a different transcript): the memory
+	 * backend's tracking and delivered block (see {@link MemoryContext.resetForNewTranscript}), and
+	 * the session-state block. A fork or a switch lands on a transcript that already states the date
+	 * and working directory, `/new` does not, so the delivered block is read from the messages.
 	 */
 	#resetMemoryContextForNewTranscript(): void {
-		this.#resetHindsightConversationTrackingIfHindsight();
-		this.#resetMnemopiConversationTrackingIfMnemopi();
-		this.#pendingVolatileMemoryContext = undefined;
-		this.#deliveredVolatileMemoryContext = this.#lastDeliveredBlock(MEMORY_CONTEXT_MESSAGE_TYPE);
-		// Same question, same answer, for the date and working directory: a fork or a
-		// switch lands on a transcript that already states them, `/new` does not.
-		this.#deliveredSessionState = this.#lastDeliveredBlock(SESSION_STATE_MESSAGE_TYPE);
-	}
-
-	/**
-	 * The last block of `customType` the current transcript carries, or undefined if
-	 * it carries none.
-	 *
-	 * Two subsystems dedupe a delivered-once block against the conversation rather
-	 * than against a flag per caller, because the messages answer "will the model
-	 * read this already?" exactly and the caller cannot. A compaction that dropped
-	 * the block is covered for free: gone from the messages, gone from the cache,
-	 * sent again.
-	 */
-	#lastDeliveredBlock(customType: string): string | undefined {
-		const messages = this.agent.state.messages;
-		for (let i = messages.length - 1; i >= 0; i--) {
-			const message = messages[i]!;
-			if (message.role !== "custom" || message.customType !== customType) continue;
-			return typeof message.content === "string" ? message.content : undefined;
-		}
-		return undefined;
+		this.#memory.resetForNewTranscript();
+		this.#deliveredSessionState = lastDeliveredBlock(this.agent.state.messages, SESSION_STATE_MESSAGE_TYPE);
 	}
 
 	/** True once dispose() has begun; deferred background work (e.g. the deferred
@@ -4253,8 +4184,7 @@ export class AgentSession {
 		this.#closeAllProviderSessions("fresh session");
 		this.#freshProviderSessionId = Bun.randomUUIDv7();
 		this.#syncAgentSessionId();
-		this.#rekeyHindsightMemoryForCurrentSessionId();
-		this.#rekeyMnemopiMemoryForCurrentSessionId();
+		this.#memory.rekey();
 		this.agent.appendOnlyContext?.invalidateForModelChange();
 		return {
 			previousSessionId,
@@ -5089,86 +5019,10 @@ export class AgentSession {
 	}
 
 	/**
-	 * Text of the volatile memory context already delivered to the model, so the
-	 * same block is never sent twice. Undefined until the first delivery.
-	 */
-	#deliveredVolatileMemoryContext: string | undefined;
-	/** Volatile memory context waiting for the next step boundary to carry it in. */
-	#pendingVolatileMemoryContext: string | undefined;
-	/**
 	 * The session-state block already delivered, so the same date and working
 	 * directory are never stated twice. Undefined until the first delivery.
 	 */
 	#deliveredSessionState: string | undefined;
-
-	/**
-	 * Collect the memory backend's volatile context for a turn that is about to
-	 * start, as a message rather than a system-prompt change.
-	 *
-	 * Two sources feed it: `beforeAgentStartPrompt`, which is the only hook that
-	 * can affect the very first answer of a session, and `buildVolatileContext`,
-	 * which reports whatever the backend currently holds. Both used to be appended
-	 * to the system prompt, and both therefore invalidated the provider's cache
-	 * prefix and made the next request re-read the entire conversation at the
-	 * uncached rate. They arrive alongside the user's message now.
-	 *
-	 * Returns null when there is nothing new to say. A backend that throws is
-	 * logged and skipped: memory is an enhancement, and a failing recall must not
-	 * take the turn with it.
-	 */
-	async #collectVolatileMemoryContext(promptText: string): Promise<AgentMessage | null> {
-		const backend = await resolveMemoryBackend(this.settings);
-		const parts: string[] = [];
-		if (backend.beforeAgentStartPrompt) {
-			try {
-				const injected = await backend.beforeAgentStartPrompt(this, promptText);
-				if (injected?.trim()) parts.push(injected.trim());
-			} catch (err) {
-				logger.debug("Memory backend beforeAgentStartPrompt failed", {
-					backend: backend.id,
-					error: errorMessage(err),
-				});
-			}
-		}
-		if (backend.buildVolatileContext) {
-			try {
-				const volatileContext = await backend.buildVolatileContext(this);
-				// `beforeAgentStartPrompt` caches its recall on the backend state, so the
-				// same text usually comes back from both hooks on the first turn.
-				if (volatileContext?.trim() && !parts.includes(volatileContext.trim())) {
-					parts.push(volatileContext.trim());
-				}
-			} catch (err) {
-				logger.debug("Memory backend buildVolatileContext failed", {
-					backend: backend.id,
-					error: errorMessage(err),
-				});
-			}
-		}
-		return this.#buildVolatileMemoryMessage(parts.join("\n\n"));
-	}
-
-	/**
-	 * A memory-context message for `text`, or null when it is empty or unchanged.
-	 *
-	 * Re-sending an unchanged block would grow the context every turn for no new
-	 * information, which is the cost bug this whole change is about.
-	 */
-	#buildVolatileMemoryMessage(text: string): AgentMessage | null {
-		const trimmed = text.trim();
-		if (!trimmed) return null;
-		if (trimmed === this.#deliveredVolatileMemoryContext) return null;
-		this.#deliveredVolatileMemoryContext = trimmed;
-		this.#pendingVolatileMemoryContext = undefined;
-		return {
-			role: "custom",
-			customType: MEMORY_CONTEXT_MESSAGE_TYPE,
-			content: trimmed,
-			display: false,
-			attribution: "agent",
-			timestamp: Date.now(),
-		};
-	}
 
 	/**
 	 * Publish the backend's current volatile context for delivery at the next step
@@ -5181,32 +5035,7 @@ export class AgentSession {
 	 * everything already cached, so the prefix survives.
 	 */
 	async publishVolatileMemoryContext(reason: string): Promise<boolean> {
-		const backend = await resolveMemoryBackend(this.settings);
-		if (!backend.buildVolatileContext) return false;
-		let text: string | undefined;
-		try {
-			text = await backend.buildVolatileContext(this);
-		} catch (err) {
-			logger.debug("Memory backend buildVolatileContext failed", {
-				backend: backend.id,
-				reason,
-				error: errorMessage(err),
-			});
-			return false;
-		}
-		const trimmed = text?.trim();
-		if (!trimmed || trimmed === this.#deliveredVolatileMemoryContext) return false;
-		this.#pendingVolatileMemoryContext = trimmed;
-		logger.debug("memory context queued for the context tail", { reason, chars: trimmed.length });
-		return true;
-	}
-
-	/** Drain the queued volatile memory context as an aside, if any is waiting. */
-	#takePendingVolatileMemoryContext(): AgentMessage | null {
-		const pending = this.#pendingVolatileMemoryContext;
-		if (pending === undefined) return null;
-		this.#pendingVolatileMemoryContext = undefined;
-		return this.#buildVolatileMemoryMessage(pending);
+		return this.#memory.publish(reason);
 	}
 
 	/**
@@ -6416,7 +6245,7 @@ export class AgentSession {
 			// prelude is placed too. Position within the turn is free either way — the
 			// cache prefix ends before all of it.
 			startupMarker("prompt:memory-context:start");
-			const memoryContextMessage = await this.#collectVolatileMemoryContext(expandedText);
+			const memoryContextMessage = await this.#memory.collect(expandedText);
 			if (memoryContextMessage) messages.unshift(memoryContextMessage);
 			startupMarker("prompt:memory-context:done");
 			startupMarker("prompt:context-build:done");
@@ -7446,8 +7275,7 @@ export class AgentSession {
 		this.#freshProviderSessionId = undefined;
 		this.#clearInheritedProviderPromptCacheKey("new-session");
 		this.#syncAgentSessionId();
-		this.#rekeyHindsightMemoryForCurrentSessionId();
-		this.#rekeyMnemopiMemoryForCurrentSessionId();
+		this.#memory.rekey();
 		this.#resetMemoryContextForNewTranscript();
 		this.#pendingNextTurnMessages = [];
 		this.#scheduledHiddenNextTurnGeneration = undefined;
@@ -7540,8 +7368,7 @@ export class AgentSession {
 		this.#freshProviderSessionId = undefined;
 		this.#adoptInheritedProviderPromptCacheKey();
 		this.#syncAgentSessionId();
-		this.#rekeyHindsightMemoryForCurrentSessionId();
-		this.#rekeyMnemopiMemoryForCurrentSessionId();
+		this.#memory.rekey();
 		this.#resetMemoryContextForNewTranscript();
 
 		// Emit session_switch event with reason "fork" to hooks
@@ -8520,8 +8347,7 @@ export class AgentSession {
 			this.agent.replaceQueues(preservedSteering, preservedFollowUp);
 			this.#freshProviderSessionId = undefined;
 			this.#syncAgentSessionId();
-			this.#rekeyHindsightMemoryForCurrentSessionId();
-			this.#rekeyMnemopiMemoryForCurrentSessionId();
+			this.#memory.rekey();
 			this.#resetMemoryContextForNewTranscript();
 			this.#pendingNextTurnMessages = [];
 			this.#scheduledHiddenNextTurnGeneration = undefined;
@@ -10530,8 +10356,7 @@ export class AgentSession {
 				this.#adoptInheritedProviderPromptCacheKey();
 			}
 			this.#syncAgentSessionId();
-			this.#rekeyHindsightMemoryForCurrentSessionId();
-			this.#rekeyMnemopiMemoryForCurrentSessionId();
+			this.#memory.rekey();
 
 			let sessionContext = this.buildDisplaySessionContext();
 			const didReloadConversationChange =
@@ -10672,8 +10497,7 @@ export class AgentSession {
 
 			this.#freshProviderSessionId = previousFreshProviderSessionId;
 			this.#syncAgentSessionId(previousSessionState.sessionId);
-			this.#rekeyHindsightMemoryForCurrentSessionId();
-			this.#rekeyMnemopiMemoryForCurrentSessionId();
+			this.#memory.rekey();
 			let restoreMcpError: unknown;
 			try {
 				// `previousSessionContext` was skipped on different-session switches to
@@ -10790,8 +10614,7 @@ export class AgentSession {
 		// populated instead of cold-missing every token of it.
 		this.#adoptInheritedProviderPromptCacheKey();
 		this.#syncAgentSessionId();
-		this.#rekeyHindsightMemoryForCurrentSessionId();
-		this.#rekeyMnemopiMemoryForCurrentSessionId();
+		this.#memory.rekey();
 		this.#resetMemoryContextForNewTranscript();
 
 		// Reload messages from entries (works for both file and in-memory mode)
@@ -10889,8 +10712,7 @@ export class AgentSession {
 		// the freshly minted session id, which would cold-miss the whole transcript.
 		this.#adoptInheritedProviderPromptCacheKey();
 		this.#syncAgentSessionId();
-		this.#rekeyHindsightMemoryForCurrentSessionId();
-		this.#rekeyMnemopiMemoryForCurrentSessionId();
+		this.#memory.rekey();
 		this.#resetMemoryContextForNewTranscript();
 
 		const sessionContext = this.buildDisplaySessionContext();
