@@ -35,6 +35,7 @@
 ### Changed
 
 - A compaction moves the payloads of the history it summarized out of memory once it is recorded, reading each entry back from the session file on first use.
+- An interactive session no longer loads the HTML export template, stylesheet, viewer script and tool renderers until `/export` runs: `/share` builds its snapshot from `export/session-data.ts`, cutting the idle heap and extra memory of the compiled binary from 104.8 MiB to 102.9 MiB.
 - A conversation `/new` left running is disposed once its turn ends and no background job it owns is running, releasing its browser tabs, eval kernels, advisor, spawned agents and roster entry and writing its `session_exit` record, instead of holding them until the process exits.
 - MCP servers stay connected until the last top-level session using them is disposed, so a conversation `/new` left running no longer orphans them at exit, and disposing one of several top-level sessions (a background conversation or an ACP session) no longer tears down the agent lifecycle or the title and embedding workers the others use.
 - `ctrl+x` in `/resume` and a `/new` past `session.backgroundLimit` cancel the stopped conversation's background jobs.
