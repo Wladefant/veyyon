@@ -312,16 +312,18 @@ describe("the settings schema and the thinking ladder", () => {
 	/**
 	 * The specific import that was 265 modules of the schema's old 371. `THINKING_EFFORTS` is defined in
 	 * `@veyyon/catalog/effort`, which imports nothing at all; the `@veyyon/ai` barrel re-exports it, and
-	 * naming the re-export instead of the owner is what dragged the package in. Both files that read the
-	 * ladder are checked, because fixing one and leaving the other keeps the whole graph.
+	 * naming the re-export instead of the owner is what dragged the package in. `thinking/index.ts`
+	 * reads the ladder and builds the configured vocabulary from it; the model settings domain declares
+	 * its thinking enum with that vocabulary. Both are checked, because fixing one and leaving the other
+	 * keeps the whole graph.
 	 */
 	it("reads the effort ladder from the module that owns it, not through a barrel", () => {
+		const ladderReader = runtimeImportsOf(path.join(SRC, "thinking/index.ts"));
+		expect(ladderReader, "thinking/index.ts should take THINKING_EFFORTS from @veyyon/catalog/effort").toContain(
+			"@veyyon/catalog/effort",
+		);
 		for (const file of ["config/settings-domains/model.ts", "thinking/index.ts"]) {
 			const imports = runtimeImportsOf(path.join(SRC, file));
-
-			expect(imports, `${file} should take THINKING_EFFORTS from @veyyon/catalog/effort`).toContain(
-				"@veyyon/catalog/effort",
-			);
 			expect(imports, `${file} should not import the @veyyon/ai barrel at runtime`).not.toContain("@veyyon/ai");
 		}
 	});

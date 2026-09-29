@@ -94,6 +94,7 @@
 
 ### Fixed
 
+- A settings file with `defaultThinkingLevel: off` starts sessions with thinking off instead of at `high`.
 - A `retry.fallbackChains` entry that is not a string is skipped with a config warning and the next entry is tried, instead of leaving the failed turn's prompt waiting forever on a retry that threw.
 - A failure inside retry recovery, such as a locked auth database, a credential helper that exits with an error, or a full disk while the model switch is recorded, ends the retry with an `auto_retry_end` failure naming it, instead of leaving the prompt waiting forever.
 - A usage-limit or rate-limit error whose message states a zero or elapsed retry window parks the credential for the computed backoff instead of for no time, and the session retry loop, the auth gateway and the advisor read a retry window from an error message through one parser.
