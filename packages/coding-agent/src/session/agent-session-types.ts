@@ -27,7 +27,7 @@ import type { SessionTitleSource } from "@veyyon/kernel/session/session-entries"
 import type { SessionManager } from "@veyyon/kernel/session/session-manager";
 import type { postmortem } from "@veyyon/utils";
 import type { ArgotSession } from "argot";
-import type { AdvisorConfig } from "../advisor";
+import type { AdvisorConfig, AdvisorContextFile } from "../advisor";
 import type { AsyncJob, AsyncJobDeliveryState, AsyncJobManager } from "../async";
 import type { CompactionEngineAction } from "../config/compaction-strategy";
 import type { EffortSource } from "../config/effort-resolver";
@@ -363,11 +363,11 @@ export interface AgentSessionConfig {
 	 *  `advisorWatchdogPrompt` so `/advisor configure` can swap it live. */
 	advisorSharedInstructions?: string;
 	/**
-	 * Preloaded project context files (AGENTS.md, etc.) rendered as a system-prompt
-	 * block for the advisor — the same standing instructions the primary agent
-	 * receives, so the reviewer holds the agent to them.
+	 * Project context files (AGENTS.md, etc.) the advisor's system prompt renders when an advisor
+	 * starts: the same standing instructions the primary agent receives, so the reviewer holds the
+	 * agent to them.
 	 */
-	advisorContextPrompt?: string;
+	advisorContextFiles?: readonly AdvisorContextFile[];
 	/**
 	 * Advisors discovered from `WATCHDOG.yml`. Empty/undefined runs a single
 	 * legacy advisor on the `advisor` role (byte-for-byte the pre-config path).
@@ -553,7 +553,7 @@ export interface PerAdvisorStat {
 
 export interface ProjectAdvisorScope {
 	advisorWatchdogPrompt?: string;
-	advisorContextPrompt?: string;
+	advisorContextFiles?: readonly AdvisorContextFile[];
 	advisorSharedInstructions?: string;
 	advisorConfigs?: AdvisorConfig[];
 }

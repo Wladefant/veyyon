@@ -31,12 +31,14 @@
 - `@veyyon/utils/stall-sampler` exports `stallSampler`, which keeps JavaScriptCore's sampling profiler running at a 10 ms interval and returns the functions sampled between two `performance.now()` readings, and `borrow()`, which lends the profiler to another caller; `LoopWatchdog` takes it as `stacks` and follows each `ui.loop-blocked` line with a `ui.loop-blocked.stack` line naming the functions that held the loop.
 - `@veyyon/utils/fs-tool-args` exports `editInputPaths`, which reads the file paths from hashline or `apply_patch` section headers.
 - `exponentialBackoffDelay` accepts `jitterSpread: "below"`, which only shortens the wait so `maxMs` is the longest delay.
+- `internString` returns the engine's shared copy of a string, which is collected with its last holder.
 
 ### Changed
 
 - A compaction moves the payloads of the history it summarized out of memory once it is recorded, reading each entry back from the session file on first use.
 - An interactive session no longer loads the HTML export template, stylesheet, viewer script and tool renderers until `/export` runs: `/share` builds its snapshot from `export/session-data.ts`, cutting the idle heap and extra memory of the compiled binary from 104.8 MiB to 102.9 MiB.
 - The compiled binary keeps the embedded `veyyon://` docs index off the heap until the first `veyyon://` read, and with the bundled model catalog read from its embedded file on demand the idle heap and extra memory drop from 102.9 MiB to 95.9 MiB; `dist/cli.js` ships the catalog as `dist/models.json`.
+- The advisor renders its project-context prompt from the context files when it first starts instead of at session creation, and with the shared prompt copies and record-only entries read from the session file, a session holding 40 finished spawned agents after ten turns uses 150.6 MiB of heap and extra memory instead of 175.5 MiB and 479-484 MiB RSS instead of 488-497 MiB.
 - A conversation `/new` left running is disposed once its turn ends and no background job it owns is running, releasing its browser tabs, eval kernels, advisor, spawned agents and roster entry and writing its `session_exit` record, instead of holding them until the process exits.
 - MCP servers stay connected until the last top-level session using them is disposed, so a conversation `/new` left running no longer orphans them at exit, and disposing one of several top-level sessions (a background conversation or an ACP session) no longer tears down the agent lifecycle or the title and embedding workers the others use.
 - `ctrl+x` in `/resume` and a `/new` past `session.backgroundLimit` cancel the stopped conversation's background jobs.
@@ -122,6 +124,7 @@
 - `resolveCompactionBoundaryIndex` searches for the keep marker from the end of the branch, which takes about 9ms off rebuilding the context of a 238,084-entry branch.
 - Split the agent loop's turn driver into per-step functions (pause park, directive resolution, sampling with Harmony-leak recovery, failed-turn settling, tool-call settling, queue drains); no user-visible change.
 - `estimateTokens` collects a message's fragments and the shape digest its cache compares in one walk on a first estimate instead of two, cutting the first estimate of a 26,806-entry resumed session's messages from 21.5 ms to 16.8 ms.
+- `Agent` holds each system prompt section as the shared copy of its text, whether it arrives in the initial state or through `setSystemPrompt`, so live agents with equal sections hold one buffer of each.
 - The auth gateway's error verdicts come from named rules in the error registry (`GATEWAY_RULES`), and `classifyGatewayError` accepts an optional `trace` array that receives the name of the rule that answered; every verdict is unchanged.
 - `calculateRateLimitBackoffMs` takes a `RateLimitBackoffContext` (`"credential-park"` or `"selector-suppression"`) that sets the cost of an unreadable failure: 30 minutes for a credential park, 5 minutes for a selector suppression.
 - Every retry loop in the package takes its exponential delay from `exponentialBackoffDelay` in `@veyyon/utils`; each loop's base, ceiling and jitter are unchanged.
@@ -163,6 +166,7 @@
 - `SessionInfo.messageCount` documents that it counts the messages in the scanned prefix and is a lower bound for a longer session; no behavior change.
 - `SessionManager` keeps the payloads of entries its live context cannot reach in the session file and reads each back through a handle on the file object it loaded, which cut a resumed 402 MiB, 135,650-entry session from 501 MiB heap plus 369 MiB external memory to 117 MiB plus 46 MiB and its RSS from 1,072 MiB to 602 MiB, for about 400 ms more open time; Windows keeps every entry in memory.
 - A context build reads the default model of a session without `model_change` entries from the newest assistant turn on the branch instead of from every assistant turn in order; the model it selects is unchanged.
+- `SessionManager` keeps the payloads of `session_init`, `settings_snapshot` and `subagent_spawn` entries in the session file on the live branch as well, reading each back on first use, so a spawned agent's recorded system prompt no longer stays in memory.
 - Embedding and extraction retries take their exponential delay from `exponentialBackoffDelay` in `@veyyon/utils`; each loop's base, ceiling and jitter are unchanged.
 - `highlightCode` and `CodeHighlighter` match grammar patterns with Oniguruma instead of fancy-regex, which cuts the highlighting time of a resumed session's transcript by 59% with the same colours, and every Oniguruma match and search in the addon, including the `find` builtin's `-name` and `-regex`, stops after 1,000,000 retries instead of Oniguruma's defaults of 10,000,000 per match and no limit per search.
 - The first `highlightCode`, `CodeHighlighter`, `supportsLanguage` or `getSupportedLanguages` call in a process deserializes a syntax set the addon's build script linked instead of linking 78 syntaxes at run time, which cuts that call from 81 ms to under 1 ms.
@@ -191,6 +195,7 @@
 - `visibleWidth` counts a row of printable ASCII, tabs and SGR sequences in its own scan instead of the escape-stripping measure, cutting a styled prose row from 299 ns to 62 ns and a colored 13,362-entry transcript render from 288 ms to 270 ms with identical widths.
 - `visibleWidth` also counts one-cell characters past ASCII (gutter bars, box drawing, ellipses, arrows, Latin-1) in its own scan, cutting a gutter row from 242 ns to 57 ns and a 13,470-entry transcript render from 268 ms to 239 ms with identical widths.
 - `reopenBackgroundAfterResets` reads a row once instead of three times, re-opening an output block's ground in 40 ns instead of 102 ns on a highlighted row and 70 ns instead of 214 ns on a row with resets, and inserts a ground that is itself a reset once after each reset instead of twice.
+- `prompt.render` returns the shared copy of its result, so equal renders of a template hold one buffer.
 
 ### Removed
 
