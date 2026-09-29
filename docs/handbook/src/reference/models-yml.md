@@ -608,7 +608,7 @@ The `compat` block on a provider or model overrides the URL-based auto-detection
 
 Endpoint-specific exceptions that interact with these fields are cataloged in [Provider endpoint constraints](../../../internal/provider-endpoint-constraints.md).
 
-Every `compat` key in `models.yml` is optional; an unset key falls back to URL detection.
+Every `compat` key in `models.yml` is optional; an unset key falls back to URL detection. Each key is type-checked when the file loads: a value of the wrong type, such as `thinkingKeep: last`, fails validation, names the key, and loads none of the file's providers.
 
 Request shaping:
 
@@ -627,6 +627,11 @@ Request shaping:
 - `cacheControlFormat`: `"anthropic"` to include Anthropic-style prompt-cache markers in chat-completions payloads. Default: auto (OpenRouter `anthropic/*` models).
 - `supportsLongPromptCacheRetention`: host honors `prompt_cache_retention: "24h"` on the Responses API. Default: auto (api.openai.com).
 - `extraBody`: extra top-level fields merged into every request body (gateway hints, controller selectors, etc.).
+- `supportsNamedToolChoice`: accept the object `tool_choice` form that pins one named function. Default: `true`; when `false`, a named force is sent as `"required"` (llama.cpp).
+- `promptCacheSessionHeader`: `"x-grok-conv-id"` to mirror the prompt-cache key into that request header. Default: unset.
+- `supportsImageDetailOriginal`: the Responses API accepts the `detail: "original"` image hint. Default: auto (off for GitHub Copilot).
+- `supportsServerCompaction`: the host serves `POST /responses/compact`. Default: auto (api.openai.com and Azure OpenAI v1).
+- `emptyLengthFinishIsContextError`: treat an empty stream that finishes with `length` as a context-window error. Default: auto.
 
 Reasoning / thinking:
 
@@ -638,6 +643,16 @@ Reasoning / thinking:
 - `requiresReasoningContentForToolCalls`: assistant tool-call turns must round-trip the reasoning field (DeepSeek-R1, Kimi, OpenRouter when reasoning is on). Default: `false`.
 - `allowsSyntheticReasoningContentForToolCalls`: allow a placeholder reasoning field when a prior assistant tool-call turn lacks provider reasoning content. Default: `true`; set `false` for providers that validate the exact reasoning value.
 - `requiresAssistantContentForToolCalls`: assistant tool-call turns must include non-empty text content (Kimi). Default: `false`.
+- `reasoningDisableMode`: how a request turns reasoning off: `"omit"`, `"lowest-effort"`, `"openrouter-enabled-false"`, `"zai-thinking-disabled"`, `"qwen-enable-thinking-false"`, or `"qwen-template-false"`. Default: derived from `thinkingFormat`.
+- `thinkingKeep`: `"all"` sends `thinking: { type: "enabled", keep: "all" }` with the `"zai"` format, so Moonshot keeps earlier turns' reasoning in context; `false` omits `keep`. Default: `"all"` for Kimi K2.6 on api.moonshot.ai and api.kimi.com, unset elsewhere.
+- `omitReasoningEffort`: never send a reasoning effort field, even for a model that reasons. Default: `false`.
+- `includeEncryptedReasoning`: ask the Responses API for encrypted reasoning items to replay. Default: `true`.
+- `filterReasoningHistory`: strip native `type: "reasoning"` items from replayed Responses history. Default: auto (OpenRouter `anthropic/*`).
+- `requiresReasoningContentForAllAssistantTurns`: every assistant turn must carry the reasoning field, not only tool-call turns. Default: auto (DeepSeek reasoning models, Xiaomi MiMo).
+- `replayReasoningContent`: replay recorded reasoning on every assistant turn that has it, whether or not the host validates the field. Default: auto (local llama.cpp-style servers).
+- `qwenPreserveThinking`: send `preserve_thinking: true` so a Qwen3.6+ chat template renders reasoning for every earlier assistant turn. Default: auto (Qwen dialects on local servers).
+- `enableGeminiThinkingLoopGuard`: run the Gemini thinking-loop guard on this model's stream. Default: auto (Gemini-family ids).
+- `reasoningDeltasMayBeCumulative`: streamed reasoning deltas may repeat the whole text so far. Default: auto (MiniMax).
 - `whenThinking`: partial compat overrides applied only when a request engages thinking mode (deep-merged over the baseline compat).
 
 Tool / message normalization:
@@ -648,6 +663,10 @@ Tool / message normalization:
 - `requiresMistralToolIds`: normalize tool-call ids to 9 alphanumeric chars. Default: auto.
 - `supportsStrictMode`: accept the per-tool `strict` field on tool schemas. Default: auto-detect per provider/baseUrl.
 - `toolStrictMode`: `"all_strict"` forces strict on every tool, `"none"` forces it off; unset keeps the existing per-tool mixed behavior.
+- `toolSchemaFlavor`: `"moonshot-mfjs"` rewrites tool parameter schemas into the JSON Schema subset Moonshot accepts; `"none"` sends them unchanged. Default: auto (api.moonshot.ai and api.kimi.com).
+- `usesOpenAIToolCallIdLimit`: shorten tool-call ids to OpenAI's 40-character limit. Default: auto.
+- `stripDeepseekSpecialTokens`: remove leaked DeepSeek chat-template tokens from visible text. Default: auto.
+- `streamMarkupHealingPattern`: remove leaked template markup from visible text: `"kimi"`, `"dsml"`, or `"thinking"`. Default: auto.
 
 Gateway routing (only applied when `baseUrl` matches the gateway):
 
@@ -658,7 +677,22 @@ Provider-level `compat` is the baseline; per-model `compat` is deep-merged on to
 
 ### Anthropic compatibility (`anthropic-messages`)
 
-For `anthropic-messages` models the runtime uses a separate `AnthropicCompat` shape (`packages/catalog/src/types.ts`). The `models.yml` schema exposes the strict-tools opt-out as a top-level provider field ([`disableStrictTools`](#strict-tool-schemas-disablestricttools)) plus two Anthropic-side flags in the same `compat` slot, `requiresToolResultId` (non-standard `id` alias on `tool_result` blocks for Z.AI-style proxies) and `replayUnsignedThinking` (replay unsigned thinking blocks as native thinking instead of demoting them to text); the remaining Anthropic-side knobs (`disableAdaptiveThinking`, `supportsEagerToolInputStreaming`, `supportsLongCacheRetention`, `supportsMidConversationSystem`, `supportsForcedToolChoice`, `supportsSamplingParams`, `escapeBuiltinToolNames`) are set by built-in catalog metadata and are not user-configurable from `models.yml`.
+For `anthropic-messages` models the runtime uses a separate `AnthropicCompat` shape (`packages/catalog/src/types.ts`). Its keys share the `compat` slot and are validated the same way. The strict-tools opt-out is also a top-level provider field, [`disableStrictTools`](#strict-tool-schemas-disablestricttools).
+
+- `disableStrictTools`: drop `strict: true` from tool definitions (Vertex AI rejects the field).
+- `disableAdaptiveThinking`: send adaptive thinking as `{ type: "enabled", budget_tokens }` (Vertex AI rejects the `adaptive` tag).
+- `supportsEagerToolInputStreaming`: tools may carry the per-tool `eager_input_streaming` flag. Default: `true`.
+- `supportsLongCacheRetention`: the host accepts `ttl: "1h"` prompt-cache markers. Default: `true` on the Anthropic API.
+- `supportsMidConversationSystem`: the host accepts `role: "system"` messages inside `messages`. Default: auto from model id and base URL.
+- `supportsForcedToolChoice`: accept a forced `tool_choice`; when `false`, a forced choice is sent as `auto`.
+- `supportsSamplingParams`: the model accepts `temperature`, `top_p` and `top_k`. Default: auto from model id.
+- `requiresToolResultId`: add a non-standard `id` alias to `tool_result` blocks (Z.AI-style proxies).
+- `replayUnsignedThinking`: replay unsigned thinking blocks as native thinking instead of text.
+- `replayDemotedPriorReasoning`: on a signing endpoint, replay earlier reasoning that must be demoted to text instead of dropping it.
+- `requiresThinkingEnabled`: send `thinking.type: "enabled"` whenever the model reasons.
+- `escapeBuiltinToolNames`: prefix client tools named like Anthropic built-in tools (`web_search`, `code_execution`) so a gateway does not run them as server tools.
+
+`devin-agent` and `cursor-agent` models accept one key, `trustExplicitThinkingOnly`: take the thinking surface only from explicit `thinking` metadata and never derive an effort ladder from the model id.
 
 ### Strict tool schemas (`disableStrictTools`)
 
