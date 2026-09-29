@@ -265,6 +265,7 @@ const CONDITIONS: Record<string, () => boolean> = {
 	argotEnabled: settingFlag("argot.enabled"),
 	autoQaEnabled: settingFlag("dev.autoqa"),
 	statusLineEnabled: settingFlag("statusLine.enabled"),
+	newKeepsBackgroundEnabled: settingFlag("session.newKeepsBackground"),
 	cpuLimitEnabled: settingValue("session.cpuLimitCores", v => v > 0),
 	writeBudgetEnabled: settingValue("session.writeBudgetGb", v => v > 0),
 	cacheRejectionReported: settingFlag("cache.reportRejection"),

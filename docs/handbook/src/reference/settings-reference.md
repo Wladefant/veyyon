@@ -177,6 +177,7 @@ veyyon config get compaction.threshold
 | Key | Setting | Type | Default | What it does |
 |---|---|---|---|---|
 | `session.newKeepsBackground` | /new Keeps The Old Session | boolean | `false` | What /new does while a response is still streaming. On: the old conversation keeps running in the background and the screen attaches to a new one; the status line counts background conversations. Off: the old turn is stopped and its provider stream closed before the new session starts. Takes effect at the next start. |
+| `session.backgroundLimit` | Background Session Limit | number | `3` | Most conversations /new keeps running in the background at once (1-20). A /new past the limit stops the oldest background conversation and closes its provider stream. |
 
 ### Approvals
 
@@ -897,4 +898,4 @@ These keys are not in `/settings`. Some are state veyyon writes for itself (a sc
 | `tui.maxInlineImageRows` | number | `20` |  |
 | `tui.maxInlineImages` | number | `8` |  |
 
-353 settings in /settings, 118 configuration-file keys, 471 in all.
+354 settings in /settings, 118 configuration-file keys, 472 in all.

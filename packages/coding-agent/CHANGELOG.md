@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `session.backgroundLimit` (default 3, range 1-20) caps how many conversations `/new` keeps running in the background; a `/new` past it stops the oldest background conversation and names it in the `/new` message.
+
 ### Changed
 
 - `/new`, `/resume` and a handoff abort a spawned agent of the previous conversation that is mid-turn before disposing it, deepest generation first, instead of disposing it with its bash, eval and advisor work still running.

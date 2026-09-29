@@ -129,7 +129,7 @@ function harness(options: { streaming: boolean; withFactory?: boolean; keepBackg
 		createNextSession: options.withFactory === false ? undefined : createNextSession,
 		attachMainSession: (session: AgentSession) => {
 			attached.push((session as unknown as FakeSession).id);
-			return BackgroundSessions.global().keep(current as unknown as AgentSession);
+			return BackgroundSessions.global().keep(current as unknown as AgentSession, Number.POSITIVE_INFINITY);
 		},
 		clearTransientSessionUi: () => {},
 		resetObserverRegistry: () => {},
@@ -336,7 +336,7 @@ describe("a handed-off session", () => {
 		const session = makeSession("session-a", true, turn.promise);
 		const keeper = BackgroundSessions.global();
 
-		const kept = keeper.keep(session as unknown as AgentSession);
+		const kept = keeper.keep(session as unknown as AgentSession, Number.POSITIVE_INFINITY);
 		expect(keeper.size).toBe(1);
 		expect(session.calls.flush).toBe(0);
 
@@ -352,7 +352,7 @@ describe("a handed-off session", () => {
 		let disposed = 0;
 		const withDispose = { ...session, dispose: async () => void disposed++ };
 
-		await BackgroundSessions.global().keep(withDispose as unknown as AgentSession).settled;
+		await BackgroundSessions.global().keep(withDispose as unknown as AgentSession, Number.POSITIVE_INFINITY).settled;
 
 		expect(disposed).toBe(0);
 	});
@@ -361,8 +361,8 @@ describe("a handed-off session", () => {
 		const session = makeSession("session-a", true) as unknown as AgentSession;
 		const keeper = BackgroundSessions.global();
 
-		const first = keeper.keep(session);
-		const second = keeper.keep(session);
+		const first = keeper.keep(session, Number.POSITIVE_INFINITY);
+		const second = keeper.keep(session, Number.POSITIVE_INFINITY);
 
 		expect(second).toBe(first);
 		await first.settled;
@@ -378,7 +378,7 @@ describe("a handed-off session", () => {
 		};
 		const keeper = BackgroundSessions.global();
 
-		keeper.keep(broken as unknown as AgentSession);
+		keeper.keep(broken as unknown as AgentSession, Number.POSITIVE_INFINITY);
 		await keeper.drain();
 
 		expect(keeper.size).toBe(0);
@@ -392,7 +392,7 @@ describe("a handed-off session", () => {
 		};
 		const keeper = BackgroundSessions.global();
 
-		keeper.keep(hung as unknown as AgentSession);
+		keeper.keep(hung as unknown as AgentSession, Number.POSITIVE_INFINITY);
 		const start = Date.now();
 		await keeper.drain(50);
 		const elapsed = Date.now() - start;
@@ -414,14 +414,14 @@ describe("a handed-off session", () => {
 
 		const keeper = BackgroundSessions.global();
 
-		const entry1 = keeper.keep(session as unknown as AgentSession);
+		const entry1 = keeper.keep(session as unknown as AgentSession, Number.POSITIVE_INFINITY);
 		expect(keeper.size).toBe(1);
 
 		const taken = keeper.take(session.sessionManager.getSessionFile());
 		expect(taken).toBe(session as unknown as AgentSession);
 		expect(keeper.size).toBe(0);
 
-		const entry2 = keeper.keep(session as unknown as AgentSession);
+		const entry2 = keeper.keep(session as unknown as AgentSession, Number.POSITIVE_INFINITY);
 		expect(keeper.size).toBe(1);
 		expect(entry2.handoff).toBeGreaterThan(entry1.handoff);
 
@@ -457,12 +457,12 @@ describe("a handed-off session", () => {
 
 		const keeper = BackgroundSessions.global();
 
-		keeper.keep(session as unknown as AgentSession);
+		keeper.keep(session as unknown as AgentSession, Number.POSITIVE_INFINITY);
 		const drainPromise = keeper.drain(30);
 
 		const taken = keeper.take(session.sessionManager.getSessionFile());
 		expect(taken).toBe(session as unknown as AgentSession);
-		const entry2 = keeper.keep(session as unknown as AgentSession);
+		const entry2 = keeper.keep(session as unknown as AgentSession, Number.POSITIVE_INFINITY);
 		expect(keeper.size).toBe(1);
 
 		await drainPromise;
@@ -489,7 +489,7 @@ describe("resuming a session that is still running", () => {
 	it("hands back the live object, keyed by the transcript /resume names", () => {
 		const session = makeSession("session-a", true);
 		const keeper = BackgroundSessions.global();
-		keeper.keep(session as unknown as AgentSession);
+		keeper.keep(session as unknown as AgentSession, Number.POSITIVE_INFINITY);
 
 		const live = keeper.take(session.sessionManager.getSessionFile());
 
@@ -499,7 +499,7 @@ describe("resuming a session that is still running", () => {
 	it("leaves the background set once reclaimed, so it is not counted twice", () => {
 		const session = makeSession("session-a", true);
 		const keeper = BackgroundSessions.global();
-		keeper.keep(session as unknown as AgentSession);
+		keeper.keep(session as unknown as AgentSession, Number.POSITIVE_INFINITY);
 
 		keeper.take(session.sessionManager.getSessionFile());
 
@@ -510,7 +510,7 @@ describe("resuming a session that is still running", () => {
 	it("does not answer for a transcript nobody handed over", () => {
 		const session = makeSession("session-a", true);
 		const keeper = BackgroundSessions.global();
-		keeper.keep(session as unknown as AgentSession);
+		keeper.keep(session as unknown as AgentSession, Number.POSITIVE_INFINITY);
 
 		expect(keeper.take("/repo/.veyyon/session-z.jsonl")).toBeUndefined();
 		expect(keeper.size).toBe(1);
@@ -519,7 +519,7 @@ describe("resuming a session that is still running", () => {
 	it("matches the transcript through a non-normalized path, which is what a selector passes", () => {
 		const session = makeSession("session-a", true);
 		const keeper = BackgroundSessions.global();
-		keeper.keep(session as unknown as AgentSession);
+		keeper.keep(session as unknown as AgentSession, Number.POSITIVE_INFINITY);
 
 		const live = keeper.take("/repo/.veyyon/../.veyyon/session-a.jsonl");
 

@@ -140,6 +140,10 @@ open session in the same process. Changing `session.newKeepsBackground` takes
 effect on the next launch; the running session keeps the value it started with
 ([#928](https://github.com/santhreal/veyyon/issues/928)).
 
+At most `session.backgroundLimit` conversations (default 3, range 1-20) run in the
+background at once. A `/new` past the limit stops the oldest background conversation,
+closes its provider stream, flushes its transcript, and names it in the `/new` message.
+
 Each conversation runs background jobs of its own. After `/new`, the new session
 runs background bash, the `job` tool and daemon exit watches, and a job reports to
 the conversation that started it, including a job started by one of its agents.

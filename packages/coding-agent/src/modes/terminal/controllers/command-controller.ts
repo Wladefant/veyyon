@@ -889,10 +889,17 @@ export class CommandController {
 		this.ctx.updateEditorBorderColor();
 		this.ctx.clearTransientSessionUi();
 		this.ctx.resetTranscript();
+		const displaced =
+			kept.displaced.length > 0
+				? `; stopped ${kept.displaced.join(", ")} (background limit ${this.ctx.settings.get("session.backgroundLimit")})`
+				: "";
 		this.ctx.present([
 			new Spacer(1),
 			new Text(
-				theme.fg("accent", `${theme.status.success} New session started — ${kept.sessionId} keeps running`),
+				theme.fg(
+					"accent",
+					`${theme.status.success} New session started — ${kept.sessionId} keeps running${displaced}`,
+				),
 				1,
 				1,
 			),

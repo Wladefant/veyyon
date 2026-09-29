@@ -6,9 +6,10 @@
  * separates the two: the turn runs to completion against a session the UI no
  * longer draws.
  *
- * Four callers, none of which is the owner of this registry:
+ * Callers, none of which is the owner of this registry:
  * - `/new` registers the displayed session and attaches the screen to a new one,
- *   when `session.newKeepsBackground` is on.
+ *   when `session.newKeepsBackground` is on. It passes `session.backgroundLimit`,
+ *   and a handoff past that limit stops the oldest running conversation.
  * - `/resume` calls {@link BackgroundSessions.take} to reclaim a registered
  *   session by its transcript, so it re-attaches the live object instead of
  *   replaying that file as finished text.
@@ -22,11 +23,9 @@
  * so ownership stays with the registered session until the process exits. This
  * registry waits for the turn to settle and then persists the transcript.
  *
- * Stopping a conversation is deliberately not a verb here. Ending a turn closes
- * a provider stream and settles a transcript, which is the responsibility of the
- * session running it and is what `session.newKeepsBackground` selects. The
- * status line counts these conversations rather than offering a kill that would
- * only half-work.
+ * {@link BackgroundSessions.stop} ends a registered conversation's turn through
+ * the session's own abort, which closes the provider stream and lets the entry
+ * settle and flush like any other.
  */
 
 import * as path from "node:path";
@@ -40,6 +39,9 @@ import type { AgentSession } from "./agent-session";
  * cannot strand quit forever.
  */
 export const SHUTDOWN_DRAIN_TIMEOUT_MS = 5_000;
+
+/** Abort reason recorded on a conversation stopped because a newer handoff passed the limit. */
+export const BACKGROUND_LIMIT_STOP_REASON = "Stopped: background conversation limit reached";
 
 /**
  * Creates the session a screen attaches to when the one it was displaying is
@@ -61,6 +63,8 @@ export interface KeptSession {
 	readonly handoff: number;
 	/** Resolves once the turn settled and the transcript was flushed. */
 	readonly settled: Promise<void>;
+	/** Session ids of the older conversations this handoff stopped to stay within the limit. */
+	readonly displaced: readonly string[];
 }
 
 export class BackgroundSessions {
@@ -68,6 +72,8 @@ export class BackgroundSessions {
 
 	#nextHandoff = 0;
 	#kept = new Map<AgentSession, KeptSession>();
+	/** Registered sessions whose stop is in flight; they no longer count against the limit. */
+	#stopping = new Set<AgentSession>();
 	static global(): BackgroundSessions {
 		BackgroundSessions.#instance ??= new BackgroundSessions();
 		return BackgroundSessions.#instance;
@@ -113,12 +119,21 @@ export class BackgroundSessions {
 	/**
 	 * Take a session the UI no longer displays and let its turn finish.
 	 *
+	 * `limit` is how many conversations may run here at once. A handoff past it
+	 * is accepted and stops the oldest running conversations instead, so the
+	 * number of provider streams billing off-screen never exceeds `limit`.
+	 *
 	 * Idempotent per session: handing the same object over twice returns the
 	 * first entry rather than waiting on it twice.
 	 */
-	keep(session: AgentSession): KeptSession {
+	keep(session: AgentSession, limit: number): KeptSession {
+		if (!(limit >= 1)) {
+			throw new RangeError(`session.backgroundLimit must be at least 1, got ${limit}`);
+		}
 		const existing = this.#kept.get(session);
 		if (existing) return existing;
+		const running = Array.from(this.#kept.values()).filter(entry => !this.#stopping.has(entry.session));
+		const overflow = running.slice(0, Math.max(0, running.length + 1 - limit));
 		const sessionId = session.sessionManager.getSessionId();
 		const handoff = ++this.#nextHandoff;
 		const entry: KeptSession = {
@@ -128,10 +143,37 @@ export class BackgroundSessions {
 			detachedAt: Date.now(),
 			handoff,
 			settled: this.#settle(session, sessionId, handoff),
+			displaced: overflow.map(displaced => displaced.sessionId),
 		};
 		this.#kept.set(session, entry);
+		for (const displaced of overflow) {
+			void this.stop(displaced.session, BACKGROUND_LIMIT_STOP_REASON);
+		}
 		this.#emit();
 		return entry;
+	}
+
+	/**
+	 * End a registered conversation's turn and wait for its entry to settle.
+	 *
+	 * The session's own abort closes the provider stream; the entry then flushes
+	 * its transcript and leaves the set the same way a finished turn does. A
+	 * session that is not registered is left alone. An abort that throws is
+	 * logged, and the wait still ends when the entry settles.
+	 */
+	async stop(session: AgentSession, reason: string): Promise<void> {
+		const entry = this.#kept.get(session);
+		if (!entry) return;
+		this.#stopping.add(session);
+		try {
+			await session.abort({ reason });
+		} catch (error) {
+			logger.warn("Background conversation failed to stop", {
+				sessionId: entry.sessionId,
+				error: errorMessage(error),
+			});
+		}
+		await entry.settled;
 	}
 
 	/**
@@ -151,6 +193,7 @@ export class BackgroundSessions {
 				detachedAt: Date.now(),
 				handoff: 0,
 				settled: Promise.resolve(),
+				displaced: [],
 			}
 		);
 	}
@@ -214,6 +257,7 @@ export class BackgroundSessions {
 	#discard(session: AgentSession, handoff: number): void {
 		if (this.#kept.get(session)?.handoff === handoff) {
 			this.#kept.delete(session);
+			this.#stopping.delete(session);
 			this.#emit();
 		}
 	}
