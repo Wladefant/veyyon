@@ -10,29 +10,148 @@ pub(crate) fn continue_process(pid: sys::process::ProcessId) -> Result<(), error
 	Ok(())
 }
 
-/// Sends a signal to a specific process.
+/// Sends a signal to a process or process group, addressed as `kill(2)`
+/// addresses it: a positive `pid` names one process, `0` the caller's own
+/// group, `-1` every process the caller may signal, and any other negative
+/// value the group `-pid`.
+///
+/// This shell is embedded in a host process, so `$$` names the host rather
+/// than a disposable shell. A real signal is refused when its delivery set
+/// would include the host or one of its ancestors; see
+/// [`signal_target_is_protected`]. Signal `0` (`EXIT`) delivers nothing and
+/// only probes existence and permission, so it is never refused.
 ///
 /// # Arguments
 /// * `pid` - The process ID to send the signal to
-/// * `signal` - The signal to send (must be a real signal, not a trap signal)
+/// * `signal` - The signal to send (a real signal, or `EXIT` for the null signal)
 pub fn kill_process(
 	pid: sys::process::ProcessId,
 	signal: traps::TrapSignal,
 ) -> Result<(), error::Error> {
 	let translated_signal = match signal {
-		traps::TrapSignal::Signal(signal) => signal,
-		traps::TrapSignal::Debug
-		| traps::TrapSignal::Err
-		| traps::TrapSignal::Exit
-		| traps::TrapSignal::Return => {
+		traps::TrapSignal::Signal(signal) => Some(signal),
+		// Signal number 0 parses as the `EXIT` trap; for kill it is the null signal.
+		traps::TrapSignal::Exit => None,
+		traps::TrapSignal::Debug | traps::TrapSignal::Err | traps::TrapSignal::Return => {
 			return Err(error::ErrorKind::InvalidSignal(signal.to_string()).into());
 		},
 	};
+
+	if translated_signal.is_some() && signal_target_is_protected(pid) {
+		return Err(error::ErrorKind::ProtectedSignalTarget(pid).into());
+	}
 
 	nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), translated_signal)
 		.map_err(|_errno| error::ErrorKind::FailedToSendSignal)?;
 
 	Ok(())
+}
+
+/// Returns whether a `kill(2)` target would reach the host process or one of
+/// its ancestors.
+///
+/// `0` and `-1` always include the caller. A positive target is protected when
+/// it names the host, an ancestor, or (on Linux) a thread of either, since a
+/// thread id signals its whole thread group. A group target is protected when
+/// any protected process is a member of it.
+///
+/// Ancestry is read at call time by walking parent links from the host. It is
+/// complete only as far as the walk can see: an ancestor that has already
+/// exited is no longer an ancestor (the host was reparented to init or a
+/// subreaper, and that new parent is protected instead), and the walk stops at
+/// the first process whose parent cannot be read, for example one hidden by
+/// `/proc` `hidepid`. The host and its direct parent (`getppid`) are always
+/// protected. A group whose membership cannot be read for some ancestor
+/// (`getpgid` refused across sessions) is checked against the ancestors whose
+/// membership can be read.
+pub fn signal_target_is_protected(target: sys::process::ProcessId) -> bool {
+	if target == 0 || target == -1 {
+		return true;
+	}
+	let protected = protected_ancestry();
+	if target > 0 {
+		let target = thread_group_leader(target).unwrap_or(target);
+		return protected.contains(&target);
+	}
+	// `i32::MIN` has no positive group id; the kernel rejects it.
+	let Some(pgid) = target.checked_neg() else {
+		return false;
+	};
+	protected.iter().any(|&member| {
+		member == pgid
+			|| nix::unistd::getpgid(Some(nix::unistd::Pid::from_raw(member)))
+				.is_ok_and(|group| group.as_raw() == pgid)
+	})
+}
+
+/// The host process followed by every ancestor the parent walk can read.
+fn protected_ancestry() -> Vec<sys::process::ProcessId> {
+	let host = nix::unistd::getpid().as_raw();
+	let mut chain = vec![host];
+	let mut next = Some(nix::unistd::getppid().as_raw());
+	while let Some(parent) = next {
+		if parent <= 0 || chain.contains(&parent) {
+			break;
+		}
+		chain.push(parent);
+		next = parent_of(parent);
+	}
+	chain
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn proc_status_field(pid: sys::process::ProcessId, field: &str) -> Option<sys::process::ProcessId> {
+	let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+	status
+		.lines()
+		.find_map(|line| line.strip_prefix(field))
+		.and_then(|value| value.trim().parse().ok())
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn parent_of(pid: sys::process::ProcessId) -> Option<sys::process::ProcessId> {
+	proc_status_field(pid, "PPid:")
+}
+
+/// On Linux a thread id is a valid `kill(2)` target that signals the thread's
+/// whole process, so a target is compared by its thread group id.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn thread_group_leader(pid: sys::process::ProcessId) -> Option<sys::process::ProcessId> {
+	proc_status_field(pid, "Tgid:")
+}
+
+#[cfg(target_os = "macos")]
+fn parent_of(pid: sys::process::ProcessId) -> Option<sys::process::ProcessId> {
+	// SAFETY: `proc_bsdinfo` is a plain C struct of integers and integer arrays,
+	// so the all-zero bit pattern is a valid value.
+	let mut info = unsafe { std::mem::zeroed::<nix::libc::proc_bsdinfo>() };
+	let size = i32::try_from(size_of::<nix::libc::proc_bsdinfo>()).ok()?;
+	// SAFETY: `info` is a writable buffer of exactly `size` bytes; libproc
+	// writes at most that many bytes into it.
+	let written = unsafe {
+		nix::libc::proc_pidinfo(
+			pid,
+			nix::libc::PROC_PIDTBSDINFO,
+			0,
+			(&raw mut info).cast::<std::ffi::c_void>(),
+			size,
+		)
+	};
+	if written < size {
+		return None;
+	}
+	sys::process::ProcessId::try_from(info.pbi_ppid).ok()
+}
+
+/// Without a portable parent query, the walk ends at the host's direct parent.
+#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
+const fn parent_of(_pid: sys::process::ProcessId) -> Option<sys::process::ProcessId> {
+	None
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+const fn thread_group_leader(_pid: sys::process::ProcessId) -> Option<sys::process::ProcessId> {
+	None
 }
 
 pub(crate) fn lead_new_process_group() -> Result<(), error::Error> {

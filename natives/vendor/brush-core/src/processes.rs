@@ -36,6 +36,10 @@ pub struct ChildProcess {
 	/// Windows handle duplicated from the child process for safe termination.
 	#[cfg(windows)]
 	kill_handle: Option<OwnedHandle>,
+	/// Linux pidfd opened while the child was known to be ours and unreaped, so
+	/// a kill can never reach a process that later receives the same PID.
+	#[cfg(target_os = "linux")]
+	kill_pidfd: Option<std::os::fd::OwnedFd>,
 	completion_marker: Option<CompletionMarker>,
 }
 
@@ -48,6 +52,15 @@ impl ChildProcess {
 	) -> Self {
 		#[cfg(windows)]
 		let kill_handle = child.raw_handle().and_then(duplicate_handle);
+		// Open first, then prove the PID is still our unreaped child: a pidfd
+		// opened after the check could pin a process that reused the PID in
+		// between, while one opened before it pins whatever held the PID at
+		// open time, which the check then confirms was the child.
+		#[cfg(target_os = "linux")]
+		let kill_pidfd = pid
+			.and_then(|pid| open_pidfd(pid).map(|fd| (pid, fd)))
+			.filter(|(pid, _)| is_unreaped_child(*pid))
+			.map(|(_, fd)| fd);
 
 		Self {
 			exec_future: Box::pin(child.wait_with_output()),
@@ -56,6 +69,8 @@ impl ChildProcess {
 			reaped: false,
 			#[cfg(windows)]
 			kill_handle,
+			#[cfg(target_os = "linux")]
+			kill_pidfd,
 			completion_marker: None,
 		}
 	}
@@ -146,11 +161,24 @@ impl ChildProcess {
 		}
 		#[cfg(unix)]
 		{
+			// `reaped` only records reaping observed through `exec_future`. The PID
+			// is also freed when anything else in the host reaps the child (a
+			// `waitpid(-1)` elsewhere, `SIGCHLD` ignored, or a failed wait), after
+			// which it may name an unrelated process. Signal through the pinned
+			// pidfd where one exists, otherwise only while the PID is still an
+			// unreaped child of this process.
+			#[cfg(target_os = "linux")]
+			if let Some(pidfd) = &self.kill_pidfd {
+				let _ = pidfd_kill(pidfd);
+				return;
+			}
 			let Some(pid) = self.pid else { return };
-			let _ = nix::sys::signal::kill(
-				nix::unistd::Pid::from_raw(pid),
-				nix::sys::signal::Signal::SIGKILL,
-			);
+			if is_unreaped_child(pid) {
+				let _ = nix::sys::signal::kill(
+					nix::unistd::Pid::from_raw(pid),
+					nix::sys::signal::Signal::SIGKILL,
+				);
+			}
 		}
 
 		#[cfg(windows)]
@@ -193,6 +221,65 @@ impl Drop for ChildProcess {
 		// Ensure we do not leave an unreaped child running when the handle is dropped.
 		self.kill();
 	}
+}
+
+/// Whether `pid` is a child of this process that has not been reaped. Only
+/// then is the PID guaranteed to still name that child: the kernel never
+/// reuses the PID of an unreaped child. `WNOWAIT` leaves an exited child
+/// waitable for its owner.
+#[cfg(unix)]
+fn is_unreaped_child(pid: sys::process::ProcessId) -> bool {
+	let Ok(id) = nix::libc::id_t::try_from(pid) else {
+		return false;
+	};
+	loop {
+		// SAFETY: `siginfo_t` is a plain C struct; all-zero is a valid value.
+		let mut info = unsafe { std::mem::zeroed::<nix::libc::siginfo_t>() };
+		// SAFETY: `info` is a valid, writable `siginfo_t`; the other arguments are
+		// scalars. `WNOWAIT` leaves the child's state unconsumed.
+		let rc = unsafe {
+			nix::libc::waitid(
+				nix::libc::P_PID,
+				id,
+				&raw mut info,
+				nix::libc::WEXITED | nix::libc::WNOHANG | nix::libc::WNOWAIT,
+			)
+		};
+		if rc == 0 {
+			return true;
+		}
+		if nix::errno::Errno::last() != nix::errno::Errno::EINTR {
+			return false;
+		}
+	}
+}
+
+#[cfg(target_os = "linux")]
+fn open_pidfd(pid: sys::process::ProcessId) -> Option<std::os::fd::OwnedFd> {
+	use std::os::fd::FromRawFd;
+	// SAFETY: `pidfd_open(pid, 0)` takes two scalars and returns a new file
+	// descriptor or -1; it touches no caller memory.
+	let fd = unsafe { nix::libc::syscall(nix::libc::SYS_pidfd_open, pid, 0) };
+	let fd = std::os::fd::RawFd::try_from(fd).ok().filter(|fd| *fd >= 0)?;
+	// SAFETY: `fd` was just returned by `pidfd_open` and is owned by no one else.
+	Some(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) })
+}
+
+#[cfg(target_os = "linux")]
+fn pidfd_kill(pidfd: &std::os::fd::OwnedFd) -> bool {
+	use std::os::fd::AsRawFd;
+	// SAFETY: the pidfd is open for the lifetime of the borrow; a null `info`
+	// with zero flags is the documented plain-`kill` form of the call.
+	let rc = unsafe {
+		nix::libc::syscall(
+			nix::libc::SYS_pidfd_send_signal,
+			pidfd.as_raw_fd(),
+			nix::libc::SIGKILL,
+			std::ptr::null::<nix::libc::siginfo_t>(),
+			0,
+		)
+	};
+	rc == 0
 }
 
 #[cfg(windows)]
