@@ -246,6 +246,8 @@
 - A Cursor turn held by a local tool that never returns now ends when its failure or an abort arrives instead of waiting on the tool forever.
 - Fixed every Cursor exec-channel tool call being stored twice in the assistant message, which left an unanswered copy of each call that session resume reported as pending.
 - A blank user or developer message after a tool result no longer sends Mistral two consecutive assistant turns, which it rejects.
+- An OpenAI-compatible request whose `tool_choice` the endpoint rejects with a 400 (`only "auto" is supported for 'tool_choice'`, `Thinking mode does not support this tool_choice`) retries once without that form, and the session leaves the form out for that model afterwards.
+- OpenCode gateway models send the `tool_choice` a caller sets, so the models that accept a pinned tool receive it; a model that rejects it pays one retried request per session.
 - An enum setting whose configured value is outside its declared values reads as the declared default and logs one warning per setting.
 - An unquoted YAML scalar that spells an enum member, such as `advisor.syncBacklog: 3`, reads as that member and is no longer reported as invalid at load.
 - `resolveResumableSession` returns a session another profile wrote as `scope: "profile"` with the owning profile's name instead of as a `global` match, and `foreignSessionFileProfile` returns the profile other than the active one that holds a transcript path.
