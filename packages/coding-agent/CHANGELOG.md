@@ -78,6 +78,7 @@
 ### Fixed
 
 - The session `/new` starts while a response is still streaming, and every other top-level session in the process, runs background bash, the `job` tool and daemon exit watches on a job manager of its own, and a job reports to the conversation that started it or spawned the agent that started it instead of being refused.
+- The Claude Code capture helper moved from `src/cli/claude-trace-cli.ts` to `scripts/claude-trace-capture.ts` beside `bun run claude:trace`, its only caller; it was never a `veyyon` subcommand and no longer ships in the package source.
 - `statusLine.segmentOptions.model.roomy: false` joins the model and its thinking level with the dot separator in the composer footline instead of being overridden to the `Model @level` form.
 - The plan review overlay repaints when a plan is swapped in or an external-editor annotation is committed, instead of waiting for the next keystroke.
 - An agent spawned by another agent, and an agent revived from its transcript, reports its start, progress and finish on the top-level session's event bus, so the agent dashboard, the RPC agent stream and collab guests show agents at depth 2 and below instead of nothing.
