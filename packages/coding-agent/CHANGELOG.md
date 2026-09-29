@@ -82,6 +82,7 @@
 
 ### Fixed
 
+- Disposing a session waits up to 1 second for its aborted agent loop to finish before it releases async jobs, eval kernels, browser tabs and the transcript, so a tool that ignores its abort signal no longer races the teardown of what it is using.
 - A record-valued settings row (model roles, default effort, provider limits, agents, fallback chains, per-provider retry, tool approval) opens when a runtime override or `--config` file sets one of its entries; the overridden entries show their source and are read-only, and edits to the other entries write only the profile's values.
 - The Default Model row states which layer supplies the active model at the start of its description, so the one-line footer no longer truncates it away.
 - A tool card's header and section labels are clipped at the card's width instead of running past its edge, so an `ssh` host or a `write` path with no break in it no longer folds onto the next terminal line, and no card row exceeds a terminal narrower than the rail and its indent.

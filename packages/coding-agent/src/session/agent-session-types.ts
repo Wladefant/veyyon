@@ -124,8 +124,20 @@ export type AgentSessionEvent =
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
 
+/**
+ * Default bound on how long dispose waits for an aborted agent loop to unwind. It
+ * plus the 3s async-job drain stays under {@link SHUTDOWN_DISPOSE_TIMEOUT_MS}, so
+ * the transcript still closes before an interactive shutdown stops waiting.
+ */
+export const DISPOSE_AGENT_LOOP_SETTLE_MS = 1_000;
+
 export interface AgentSessionDisposeOptions {
 	mnemopiConsolidateTimeoutMs?: number;
+	/**
+	 * How long dispose waits for the aborted agent loop to unwind before it releases
+	 * the resources that loop uses. Defaults to {@link DISPOSE_AGENT_LOOP_SETTLE_MS}.
+	 */
+	agentLoopSettleTimeoutMs?: number;
 	/**
 	 * Postmortem reason that triggered this dispose (signal/fatal teardown
 	 * paths). When set, the persisted `session_exit` diagnostic records it

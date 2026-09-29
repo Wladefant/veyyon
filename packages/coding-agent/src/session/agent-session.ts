@@ -488,6 +488,7 @@ import {
 	type AsyncResultEntry,
 	type CommandMetadataChangedListener,
 	type ContextUsageBreakdown,
+	DISPOSE_AGENT_LOOP_SETTLE_MS,
 	type FollowUpOptions,
 	type FreshSessionResult,
 	type HandoffResult,
@@ -5189,6 +5190,18 @@ export class AgentSession {
 		const postPromptDrain = this.#cancelPostPromptTasks();
 		this.agent.abort();
 		await postPromptDrain;
+		// The aborted loop is still unwinding: a tool that ignores its signal keeps it
+		// running, and the teardown below releases the kernels, tabs and transcript it
+		// may still be using. Wait for it, bounded so such a tool cannot hang shutdown.
+		const loopSettleMs = options.agentLoopSettleTimeoutMs ?? DISPOSE_AGENT_LOOP_SETTLE_MS;
+		try {
+			await withTimeout(this.agent.waitForIdle(), loopSettleMs, "Agent loop did not settle after abort");
+		} catch (error) {
+			logger.warn("Disposing while the aborted agent loop is still running", {
+				timeoutMs: loopSettleMs,
+				error: errorMessage(error),
+			});
+		}
 		// Cancel jobs this agent registered so a spawned agent's teardown doesn't
 		// leak its background bash/task work into the parent's manager. Only
 		// the session that owns the manager goes on to dispose it (which itself
