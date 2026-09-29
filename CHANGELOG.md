@@ -31,6 +31,9 @@
 
 ### Changed
 
+- A conversation `/new` left running is disposed once its turn ends and no background job it owns is running, releasing its browser tabs, eval kernels, advisor, spawned agents and roster entry and writing its `session_exit` record, instead of holding them until the process exits.
+- MCP servers stay connected until the last top-level session using them is disposed, so a conversation `/new` left running no longer orphans them at exit, and disposing one of several top-level sessions (a background conversation or an ACP session) no longer tears down the agent lifecycle or the title and embedding workers the others use.
+- `ctrl+x` in `/resume` and a `/new` past `session.backgroundLimit` cancel the stopped conversation's background jobs.
 - `/new`, `/resume` and a handoff abort a spawned agent of the previous conversation that is mid-turn before disposing it, deepest generation first, instead of disposing it with its bash, eval and advisor work still running.
 - A config with `compaction.strategy: "off"` beside `compaction.enabled: true` migrates to `compaction.enabled: false`, and `compaction.enabled` is the only setting that turns auto-compaction off.
 - The HTML export's session tree prints each tool call with the same label as the terminal tree, for every registered tool, instead of its own switch whose `find` and `ls` cases matched no registered tool and printed most calls as raw JSON; a newline in an `op`, `action` or name argument no longer breaks a tree row in either tree.
