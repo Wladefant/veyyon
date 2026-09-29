@@ -101,6 +101,9 @@ const CLIENT_CAPABILITIES = {
 		references: {
 			dynamicRegistration: false,
 		},
+		callHierarchy: {
+			dynamicRegistration: false,
+		},
 		documentSymbol: {
 			dynamicRegistration: false,
 			hierarchicalDocumentSymbolSupport: true,
