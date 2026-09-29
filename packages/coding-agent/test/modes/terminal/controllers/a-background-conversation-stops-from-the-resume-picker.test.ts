@@ -47,6 +47,8 @@ function conversation(id: string, title: string, abortSettles = true): FakeConve
 			flush: async () => {},
 		},
 		waitForIdle: () => turn.promise,
+		waitForQuiescence: () => turn.promise,
+		dispose: async () => {},
 		abort: async (options?: { reason?: string }) => {
 			aborts.push(options?.reason ?? "");
 			if (abortSettles) turn.resolve();

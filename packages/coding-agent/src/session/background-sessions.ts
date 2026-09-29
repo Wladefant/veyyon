@@ -19,15 +19,16 @@
  *   tokens off-screen has no other surface.
  * - Shutdown calls {@link BackgroundSessions.drain}.
  *
- * A registered session is flushed, never disposed. Disposal tears down the
- * process-wide singletons a top-level session owns — its MCP manager, its async
- * job manager, its eval kernel — and the session the UI moved to inherits them,
- * so ownership stays with the registered session until the process exits. This
- * registry waits for the turn to settle and then persists the transcript.
+ * A registered session is disposed once it goes quiet: its loop is idle and no
+ * background job it owns will wake it again. Disposal writes its `session_exit`
+ * record, releases its browser tabs, eval kernels and advisor runtime, drops
+ * its registry entry, and releases its hold on the shared MCP manager. The
+ * process-wide agent lifecycle and worker subprocesses stay up for the session
+ * the UI moved to.
  *
  * {@link BackgroundSessions.stop} ends a registered conversation's turn through
- * the session's own abort, which closes the provider stream and lets the entry
- * settle and flush like any other.
+ * the session's own abort, which closes the provider stream, and disposes it
+ * without waiting for its background jobs.
  */
 
 import * as path from "node:path";
@@ -35,10 +36,10 @@ import { errorMessage, logger } from "@veyyon/utils";
 import type { AgentSession } from "./agent-session";
 
 /**
- * How long shutdown waits for handed-off background sessions to settle and flush
- * their transcripts before abandoning them. Matches SHUTDOWN_DISPOSE_TIMEOUT_MS:
- * long enough for an in-flight turn to flush, short enough that a wedged turn
- * cannot strand quit forever.
+ * How long shutdown waits for handed-off background sessions to go quiet before
+ * it stops and disposes them. Matches SHUTDOWN_DISPOSE_TIMEOUT_MS: long enough
+ * for an in-flight turn to finish, short enough that a wedged turn cannot strand
+ * quit forever.
  */
 export const SHUTDOWN_DRAIN_TIMEOUT_MS = 5_000;
 
@@ -63,7 +64,7 @@ export interface KeptSession {
 	readonly detachedAt: number;
 	/** Monotonic counter disambiguating successive handoffs of the same session object. */
 	readonly handoff: number;
-	/** Resolves once the turn settled and the transcript was flushed. */
+	/** Resolves once the session went quiet and was disposed, or `/resume` reclaimed it. */
 	readonly settled: Promise<void>;
 	/** Session ids of the older conversations this handoff stopped to stay within the limit. */
 	readonly displaced: readonly string[];
@@ -76,6 +77,8 @@ export class BackgroundSessions {
 	#kept = new Map<AgentSession, KeptSession>();
 	/** Registered sessions whose stop is in flight; they no longer count against the limit. */
 	#stopping = new Set<AgentSession>();
+	/** Aborting one ends that session's wait for quiet, so it is disposed without waiting further. */
+	#quietWaits = new Map<AgentSession, AbortController>();
 	static global(): BackgroundSessions {
 		BackgroundSessions.#instance ??= new BackgroundSessions();
 		return BackgroundSessions.#instance;
@@ -138,13 +141,15 @@ export class BackgroundSessions {
 		const overflow = running.slice(0, Math.max(0, running.length + 1 - limit));
 		const sessionId = session.sessionManager.getSessionId();
 		const handoff = ++this.#nextHandoff;
+		const quietWait = new AbortController();
+		this.#quietWaits.set(session, quietWait);
 		const entry: KeptSession = {
 			session,
 			sessionId,
 			sessionFile: session.sessionManager.getSessionFile(),
 			detachedAt: Date.now(),
 			handoff,
-			settled: this.#settle(session, sessionId, handoff),
+			settled: this.#settle(session, sessionId, handoff, quietWait.signal),
 			displaced: overflow.map(displaced => displaced.sessionId),
 		};
 		this.#kept.set(session, entry);
@@ -156,10 +161,10 @@ export class BackgroundSessions {
 	}
 
 	/**
-	 * End a registered conversation's turn and wait for its entry to settle.
+	 * End a registered conversation's turn and wait until it is disposed.
 	 *
-	 * The session's own abort closes the provider stream; the entry then flushes
-	 * its transcript and leaves the set the same way a finished turn does. A
+	 * The session's own abort closes the provider stream; the entry then leaves
+	 * the set and is disposed, which cancels the background jobs it owns. A
 	 * session that is not registered is left alone. An abort that throws is
 	 * logged, and the wait still ends when the entry settles.
 	 */
@@ -175,6 +180,7 @@ export class BackgroundSessions {
 				error: errorMessage(error),
 			});
 		}
+		this.#quietWaits.get(session)?.abort();
 		await entry.settled;
 	}
 
@@ -203,12 +209,13 @@ export class BackgroundSessions {
 	/**
 	 * Reclaim a kept session by the transcript it writes to, so `/resume` can
 	 * re-attach the LIVE object instead of replaying its file as finished text.
-	 * It leaves the background set: the UI is displaying it again, and its
-	 * pending settle only flushes what the turn already wrote.
+	 * It leaves the background set and is not disposed: the UI is displaying it
+	 * again.
 	 */
 	take(sessionFile: string): AgentSession | undefined {
 		const entry = this.find(sessionFile);
 		if (!entry) return undefined;
+		this.#quietWaits.get(entry.session)?.abort();
 		this.#discard(entry.session, entry.handoff);
 		return entry.session;
 	}
@@ -223,9 +230,9 @@ export class BackgroundSessions {
 	}
 
 	/**
-	 * Wait for the turns handed off before this call, bounded by `timeoutMs`.
-	 * A session that has not settled within the bound is abandoned so shutdown
-	 * can proceed.
+	 * Wait for the turns handed off before this call to go quiet, bounded by
+	 * `timeoutMs`. A session still running at the bound is stopped and disposed
+	 * so shutdown can proceed.
 	 */
 	async drain(timeoutMs: number = SHUTDOWN_DRAIN_TIMEOUT_MS): Promise<void> {
 		if (this.#kept.size === 0) return;
@@ -243,21 +250,28 @@ export class BackgroundSessions {
 			await Promise.race([settled, timeout.promise]);
 		} finally {
 			clearTimeout(timer);
-			// An abandoned entry is a transcript that stopped short of its flush.
-			// Name them: the only other trace of the loss is a file that ends
-			// earlier than the conversation did.
-			if (unsettled.size > 0) {
-				logger.warn("Background conversations abandoned at shutdown before their transcript flushed", {
+			// Only an entry that is still the current handoff of its session is this
+			// drain's to stop: one `/resume` reclaimed is on screen, and the same
+			// object may already be registered again under a newer handoff.
+			const abandoned = Array.from(unsettled).filter(
+				entry => this.#kept.get(entry.session)?.handoff === entry.handoff,
+			);
+			// A turn cut off here ends its transcript earlier than the conversation
+			// did. Name them: the only other trace is the `session_exit` record.
+			if (abandoned.length > 0) {
+				logger.warn("Background conversations stopped at shutdown before they went quiet", {
 					timeoutMs,
-					sessions: Array.from(unsettled).map(entry => ({
+					sessions: abandoned.map(entry => ({
 						sessionId: entry.sessionId,
 						sessionFile: entry.sessionFile,
 					})),
 				});
 			}
-			for (const entry of snapshot) {
+			for (const entry of abandoned) {
+				this.#quietWaits.get(entry.session)?.abort();
 				this.#discard(entry.session, entry.handoff);
 			}
+			await Promise.all(abandoned.map(entry => this.#dispose(entry.session, entry.sessionId)));
 		}
 	}
 
@@ -265,18 +279,29 @@ export class BackgroundSessions {
 		if (this.#kept.get(session)?.handoff === handoff) {
 			this.#kept.delete(session);
 			this.#stopping.delete(session);
+			this.#quietWaits.delete(session);
 			this.#emit();
 		}
 	}
 
-	async #settle(session: AgentSession, sessionId: string, handoff: number): Promise<void> {
+	async #settle(session: AgentSession, sessionId: string, handoff: number, quiet: AbortSignal): Promise<void> {
 		try {
-			await session.waitForIdle();
+			await session.waitForQuiescence(quiet);
 			await session.sessionManager.flush();
 		} catch (error) {
 			logger.warn("Handed-off session failed to settle", { sessionId, error: errorMessage(error) });
-		} finally {
-			this.#discard(session, handoff);
+		}
+		// Reclaimed by `/resume`, or taken over by shutdown's drain: this entry no longer owns it.
+		if (this.#kept.get(session)?.handoff !== handoff) return;
+		this.#discard(session, handoff);
+		await this.#dispose(session, sessionId);
+	}
+
+	async #dispose(session: AgentSession, sessionId: string): Promise<void> {
+		try {
+			await session.dispose();
+		} catch (error) {
+			logger.warn("Handed-off session failed to dispose", { sessionId, error: errorMessage(error) });
 		}
 	}
 }

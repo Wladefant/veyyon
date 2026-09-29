@@ -42,6 +42,7 @@ interface SessionCalls {
 	newSession: number;
 	abort: number;
 	flush: number;
+	dispose: number;
 }
 
 interface FakeSession {
@@ -53,6 +54,8 @@ interface FakeSession {
 	abort(): Promise<void>;
 	abortCompaction(): void;
 	waitForIdle(): Promise<void>;
+	waitForQuiescence(): Promise<void>;
+	dispose(): Promise<void>;
 	sessionManager: {
 		getSessionId(): string;
 		getSessionName(): string;
@@ -63,7 +66,7 @@ interface FakeSession {
 }
 
 function makeSession(id: string, streaming: boolean, idle?: Promise<void>): FakeSession {
-	const calls: SessionCalls = { newSession: 0, abort: 0, flush: 0 };
+	const calls: SessionCalls = { newSession: 0, abort: 0, flush: 0, dispose: 0 };
 	return {
 		id,
 		calls,
@@ -79,6 +82,12 @@ function makeSession(id: string, streaming: boolean, idle?: Promise<void>): Fake
 		abortCompaction() {},
 		waitForIdle() {
 			return idle ?? Promise.resolve();
+		},
+		waitForQuiescence() {
+			return this.waitForIdle();
+		},
+		async dispose() {
+			calls.dispose++;
 		},
 		sessionManager: {
 			getSessionId: () => id,
@@ -347,14 +356,29 @@ describe("a handed-off session", () => {
 		expect(keeper.size).toBe(0);
 	});
 
-	it("is never disposed, because disposal tears down the managers the new session inherited", async () => {
-		const session = makeSession("session-a", true);
-		let disposed = 0;
-		const withDispose = { ...session, dispose: async () => void disposed++ };
+	it("is disposed once it goes quiet, after its transcript is flushed", async () => {
+		const turn = Promise.withResolvers<void>();
+		const session = makeSession("session-a", true, turn.promise);
+		const kept = BackgroundSessions.global().keep(session as unknown as AgentSession, Number.POSITIVE_INFINITY);
 
-		await BackgroundSessions.global().keep(withDispose as unknown as AgentSession, Number.POSITIVE_INFINITY).settled;
+		expect(session.calls.dispose).toBe(0);
+		turn.resolve();
+		await kept.settled;
 
-		expect(disposed).toBe(0);
+		expect(session.calls).toMatchObject({ flush: 1, dispose: 1 });
+	});
+
+	it("reclaimed by /resume before it goes quiet is not disposed", async () => {
+		const turn = Promise.withResolvers<void>();
+		const session = makeSession("session-a", true, turn.promise);
+		const keeper = BackgroundSessions.global();
+		const kept = keeper.keep(session as unknown as AgentSession, Number.POSITIVE_INFINITY);
+
+		expect(keeper.take(session.sessionManager.getSessionFile())).toBe(session as unknown as AgentSession);
+		turn.resolve();
+		await kept.settled;
+
+		expect(session.calls.dispose).toBe(0);
 	});
 
 	it("handed over twice is kept once", async () => {
@@ -384,7 +408,7 @@ describe("a handed-off session", () => {
 		expect(keeper.size).toBe(0);
 	});
 
-	it("drain terminates and abandons a session whose turn never settles", async () => {
+	it("drain stops and disposes a session whose turn never settles", async () => {
 		const session = makeSession("session-a", true);
 		const hung = {
 			...session,
@@ -400,6 +424,7 @@ describe("a handed-off session", () => {
 		expect(elapsed).toBeGreaterThanOrEqual(40);
 		expect(elapsed).toBeLessThan(1_000);
 		expect(keeper.size).toBe(0);
+		expect(session.calls.dispose).toBe(1);
 	});
 
 	it("first settle resolving after re-handoff does not delete the second entry", async () => {
@@ -469,6 +494,8 @@ describe("a handed-off session", () => {
 
 		expect(keeper.size).toBe(1);
 		expect(keeper.kept[0]).toBe(entry2);
+		// The timed-out entry was reclaimed; the same object runs again under entry2.
+		expect(session.calls.dispose).toBe(0);
 
 		turn1.resolve();
 		turn2.resolve();

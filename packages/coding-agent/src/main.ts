@@ -2145,8 +2145,8 @@ function installPersistedAgentReviver(
  * running turn keeps writing its own transcript, and no inherited
  * provider state, which `AgentSession.newSession` also drops when it
  * resets in place. `mcpManager` is passed so the new session reuses the
- * connected servers rather than re-discovering and re-owning them; the
- * handed-off session stays their owner for the life of the process.
+ * connected servers rather than re-discovering them; each session holds the
+ * manager, and the last one disposed disconnects it.
  */
 function nextSessionFactory(
 	sessionOptions: CreateAgentSessionOptions,

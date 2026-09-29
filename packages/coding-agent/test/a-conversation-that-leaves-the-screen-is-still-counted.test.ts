@@ -92,6 +92,8 @@ function pendingSession(id: string): { session: AgentSession; finish: () => void
 	const turn = Promise.withResolvers<void>();
 	const session = {
 		waitForIdle: () => turn.promise,
+		waitForQuiescence: () => turn.promise,
+		dispose: async () => {},
 		sessionManager: {
 			getSessionId: () => id,
 			getSessionFile: () => `/repo/.veyyon/${id}.jsonl`,

@@ -336,7 +336,6 @@ import {
 } from "../internal-urls/local-protocol";
 import { resolveMemoryBackend } from "../memory/backend";
 import type { HindsightSessionState } from "../memory/hindsight/state";
-import { shutdownMnemopiEmbedClient } from "../memory/mnemopi/embed-client";
 import { getMnemopiSessionState, type MnemopiSessionState, setMnemopiSessionState } from "../memory/mnemopi/state";
 import { containsOrchestrate } from "../modes/keywords/orchestrate-keyword";
 import { containsUltrathink } from "../modes/keywords/ultrathink-keyword";
@@ -389,7 +388,6 @@ import {
 	toReasoningEffort,
 } from "../thinking";
 import { formatTitleConversationContext, type TitleConversationTurn } from "../tiny/message-preproc";
-import { shutdownTinyTitleClient } from "../tiny/title-client";
 import { isAutoQaEnabled } from "../tools/agent/report-tool-issue";
 import { buildResolveReminderMessage, type ResolveToolDetails, runResolveInvocation } from "../tools/agent/resolve";
 import {
@@ -493,6 +491,7 @@ import {
 	type Prewalk,
 	type ProjectAdvisorScope,
 	type PromptOptions,
+	QUIESCENCE_RECHECK_MS,
 	type ResolvedRoleModel,
 	type RoleModelCycle,
 	type RoleModelCycleResult,
@@ -940,7 +939,7 @@ export class AgentSession {
 	#getMcpServerInstructions: (() => Map<string, string> | undefined) | undefined;
 	#reloadSshTool: (() => Promise<AgentTool | null>) | undefined;
 	#setActiveToolNames: ((names: Iterable<string>) => void) | undefined;
-	#disconnectOwnedMcpManager: (() => Promise<void>) | undefined;
+	#releaseMcpManager: (() => Promise<void>) | undefined;
 	#requestedToolNames: ReadonlySet<string> | undefined;
 	#baseSystemPrompt: string[];
 	/**
@@ -1824,7 +1823,7 @@ export class AgentSession {
 		this.#getMcpServerInstructions = config.getMcpServerInstructions;
 		this.#reloadSshTool = config.reloadSshTool;
 		this.#setActiveToolNames = config.setActiveToolNames;
-		this.#disconnectOwnedMcpManager = config.disconnectOwnedMcpManager;
+		this.#releaseMcpManager = config.releaseMcpManager;
 		this.#baseSystemPrompt = this.agent.state.systemPrompt;
 		this.#promptModelKey = this.#currentPromptModelKey();
 		this.#discovery = new ToolDiscovery(
@@ -2547,22 +2546,7 @@ export class AgentSession {
 		if (!self) return;
 		const endingScope = self.scope;
 		const descendants = registry.descendantsOf(id);
-		const children = descendants.filter(descendant => registry.get(descendant)?.parentId === id);
-		if (children.length > 0) {
-			const lifecycle = AgentLifecycleManager.global();
-			await Promise.all(
-				children.map(async child => {
-					try {
-						await lifecycle.terminate(child, RESCOPE_TERMINATE_REASON);
-					} catch (error) {
-						logger.warn("Failed to terminate a spawned agent of the previous conversation", {
-							agentId: child,
-							error: errorMessage(error),
-						});
-					}
-				}),
-			);
-		}
+		await this.terminateSpawnedAgents(RESCOPE_TERMINATE_REASON);
 		// The traffic goes whether or not anything was still registered to release.
 		// Guarding this on `descendants.length` was wrong in the COMMON case: a
 		// agent that finished and aged out, or was disposed, is already
@@ -2592,6 +2576,34 @@ export class AgentSession {
 			to: registry.get(id)?.scope,
 			released: descendants.length,
 		});
+	}
+
+	/**
+	 * Terminate every agent this session spawned, each direct child with its own
+	 * subtree, deepest generation first. A termination that throws is logged and
+	 * skipped. Used when this conversation ends while the process keeps running:
+	 * a `/new` or `/resume` in place, and the disposal of a top-level session
+	 * that is not the last one in the process.
+	 */
+	async terminateSpawnedAgents(reason: string): Promise<void> {
+		const id = this.#agentId;
+		if (!id) return;
+		const registry = AgentRegistry.global();
+		const children = registry.descendantsOf(id).filter(descendant => registry.get(descendant)?.parentId === id);
+		if (children.length === 0) return;
+		const lifecycle = AgentLifecycleManager.global();
+		await Promise.all(
+			children.map(async child => {
+				try {
+					await lifecycle.terminate(child, reason);
+				} catch (error) {
+					logger.warn("Failed to terminate a spawned agent of an ending conversation", {
+						agentId: child,
+						error: errorMessage(error),
+					});
+				}
+			}),
+		);
 	}
 
 	/**
@@ -5254,7 +5266,6 @@ export class AgentSession {
 				});
 			}
 		}
-		await shutdownTinyTitleClient();
 		this.#releasePowerAssertion();
 		// Clean up an empty session created by this session's /move so it doesn't accumulate.
 		await cleanupEmptyMoveSession(this.sessionManager, this.#movedFromEmptySessionFile);
@@ -5264,28 +5275,24 @@ export class AgentSession {
 		// it so the final advisor turn is flushed before the process may exit.
 		await this.#advisorRoster.whenRecordersClosed();
 		this.#closeAllProviderSessions("dispose");
-		// Disconnect the MCP manager this session OWNS so its stdio servers are
-		// not orphaned at exit. Best-effort: a failure here must never throw out
-		// of dispose. Only owning (top-level) sessions provide this callback;
-		// spawned agents reuse a parent's manager and must not tear it down. Idempotent
-		// with the deferred-discovery disconnect in `createAgentSession`.
+		// Release this session's hold on the MCP manager. The last top-level holder
+		// disconnects it, so its stdio servers are not orphaned at exit and a
+		// conversation that outlives this one keeps them. Best-effort: a failure
+		// here must never throw out of dispose. Spawned agents reuse a parent's
+		// manager without a hold and omit this callback.
 		//
-		// BOUNDED: an owned manager may hold an HTTP/SSE server whose session-
+		// BOUNDED: the manager may hold an HTTP/SSE server whose session-
 		// termination DELETE blocks up to the MCP request timeout (30s default,
 		// unbounded when VEYYON_MCP_TIMEOUT_MS=0), so awaiting `disconnectAll()`
 		// unbounded would stall /exit and print-mode shutdown on a broken remote
 		// endpoint. Race it against a short deadline — stdio close (the subprocess
 		// reap this targets) completes well within the bound; a slow transport
 		// close is left to finish detached. Mirrors the bounded async-job teardown.
-		if (this.#disconnectOwnedMcpManager) {
+		if (this.#releaseMcpManager) {
 			try {
-				await withTimeout(
-					this.#disconnectOwnedMcpManager(),
-					3_000,
-					"Timed out disconnecting owned MCP manager during dispose",
-				);
+				await withTimeout(this.#releaseMcpManager(), 3_000, "Timed out releasing the MCP manager during dispose");
 			} catch (error) {
-				logger.warn("Failed to disconnect owned MCP manager during dispose", { error: errorMessage(error) });
+				logger.warn("Failed to release the MCP manager during dispose", { error: errorMessage(error) });
 			}
 		}
 		// Flush the retain queue BEFORE clearing the session's pointer so
@@ -5298,11 +5305,6 @@ export class AgentSession {
 		hindsightState?.dispose();
 		const mnemopiState = setMnemopiSessionState(this, undefined);
 		await mnemopiState?.dispose({ timeoutMs: options.mnemopiConsolidateTimeoutMs });
-		// Tear down the embeddings subprocess AFTER mnemopi state.dispose:
-		// consolidate-on-dispose may still call `embed()` to store the final
-		// memories, and that round-trips through the worker we are about to
-		// hard-kill (issue #3031).
-		await shutdownMnemopiEmbedClient();
 		this.#disconnectFromAgent();
 		if (this.#unsubscribeAppendOnly) {
 			this.#unsubscribeAppendOnly();
@@ -5472,6 +5474,44 @@ export class AgentSession {
 	async waitForIdle(): Promise<void> {
 		await this.agent.waitForIdle();
 		await this.#waitForPostPromptRecovery();
+	}
+
+	/**
+	 * Wait until this conversation has nothing left to run: the loop and its post-prompt recovery
+	 * are idle, and no background job this agent owns will wake the loop again. A job completion
+	 * that starts another turn is waited out in turn. Returns once `signal` aborts.
+	 */
+	async waitForQuiescence(signal?: AbortSignal): Promise<void> {
+		while (!signal?.aborted) {
+			await this.waitForIdle();
+			if (signal?.aborted || !this.#hasPendingAsyncWake()) return;
+			await this.#nextAsyncWakeChange(signal);
+		}
+	}
+
+	/**
+	 * Resolve on the first event that can change {@link #hasPendingAsyncWake}: an owned job
+	 * settling, a turn starting, `signal` aborting, or {@link QUIESCENCE_RECHECK_MS} passing.
+	 */
+	async #nextAsyncWakeChange(signal: AbortSignal | undefined): Promise<void> {
+		const { promise, resolve } = Promise.withResolvers<void>();
+		const wake = (): void => resolve();
+		const timer = setTimeout(wake, QUIESCENCE_RECHECK_MS);
+		const unsubscribe = this.subscribe(event => {
+			if (event.type === "agent_start") wake();
+		});
+		signal?.addEventListener("abort", wake, { once: true });
+		const ownerFilter = this.#agentId ? { ownerId: this.#agentId } : undefined;
+		for (const job of this.#asyncJobManager?.getRunningJobs(ownerFilter) ?? []) {
+			job.promise.then(wake, wake);
+		}
+		try {
+			await promise;
+		} finally {
+			clearTimeout(timer);
+			unsubscribe();
+			signal?.removeEventListener("abort", wake);
+		}
 	}
 
 	async drainAsyncJobDeliveriesForAcp(options?: { timeoutMs?: number }): Promise<boolean> {

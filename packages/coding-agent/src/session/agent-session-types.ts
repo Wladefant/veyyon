@@ -131,6 +131,13 @@ export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
  */
 export const DISPOSE_AGENT_LOOP_SETTLE_MS = 1_000;
 
+/**
+ * How often {@link AgentSession.waitForQuiescence} re-reads the pending async wake when no event
+ * arrived. Covers the transitions that emit nothing: a delivery acknowledged by a `job` poll, and a
+ * delivery waiting out a retry backoff.
+ */
+export const QUIESCENCE_RECHECK_MS = 1_000;
+
 export interface AgentSessionDisposeOptions {
 	mnemopiConsolidateTimeoutMs?: number;
 	/**
@@ -373,12 +380,13 @@ export interface AgentSessionConfig {
 	 */
 	pruneToolDescriptions?: boolean | ((model: Model) => boolean);
 	/**
-	 * Disconnect this session's OWNED MCP manager on dispose. Provided only when
-	 * the session created the manager (top-level sessions); spawned agents reuse a
-	 * parent's manager via `options.mcpManager` and omit this so a child's
-	 * teardown never tears down the shared servers.
+	 * Release this session's hold on its MCP manager on dispose; the last hold
+	 * disconnects the manager (see `mcp/manager-lease.ts`). Provided for the
+	 * session that created the manager and for every top-level session that
+	 * shares it; spawned agents reuse a parent's manager without a hold and omit
+	 * this, so a child's teardown never tears down the shared servers.
 	 */
-	disconnectOwnedMcpManager?: () => Promise<void>;
+	releaseMcpManager?: () => Promise<void>;
 	/**
 	 * Override the bundled system prompt used by automatic session-title
 	 * generation paths (initial title + replan refresh). Source-of-truth is

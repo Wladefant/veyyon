@@ -148,6 +148,13 @@ Each conversation runs background jobs of its own. After `/new`, the new session
 runs background bash, the `job` tool and daemon exit watches, and a job reports to
 the conversation that started it, including a job started by one of its agents.
 
+A background conversation ends when its turn is over and no background job it owns
+is still running. It then writes its `session_exit` record, releases its browser
+tabs, eval kernels and advisor, stops the agents it spawned and leaves the roster.
+MCP servers stay connected while any conversation that uses them is running; the
+last one to end disconnects them. At exit, a background conversation still running
+after 5 seconds is stopped the same way.
+
 The card is scoped to the conversation on screen: the roster, the Comms stream and
 the transcripts it opens are that conversation's. A conversation this process is
 still running off-screen is counted by the status line's background chip and has no
@@ -155,8 +162,8 @@ card of its own.
 
 `/resume` marks each off-screen conversation `running`. Enter re-attaches it with its
 turn still streaming. `ctrl+x` stops the selected one in place: its turn is aborted,
-its provider stream closed and its transcript flushed, and the row stays in the list
-for a later resume.
+its provider stream closed, its background jobs cancelled and its transcript
+flushed, and the row stays in the list for a later resume.
 
 ### The Live roster
 
