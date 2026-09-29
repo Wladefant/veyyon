@@ -180,6 +180,7 @@
 
 ### Fixed
 
+- Fixed an agent woken by an IRC message missing from the terminal Agents block while the status badge counted it as running: the block now follows the agent registry for a spawn it reported, listing it while the woken turn runs and dropping it when the turn ends ([#87](https://github.com/Wladefant/veyyon/issues/87))
 - Fixed the per-line column-truncation notice always claiming `chars`: it now names the unit the cap was enforced in (`bytes` for streamed bash, eval and ssh output and for `grep`, `chars` for `read`), results saved before the unit was recorded still read `chars`, and `grep` now cuts matches in virtual resources by UTF-8 bytes like on-disk matches (oh-my-pi 9d8b40b0750fc2550afbf70cf212c198f32c993a, [Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed the column-truncation notice omitting the raw capture: when the output sink mirrored the uncapped stream it now ends with `Read artifact://<id> for full output`, and an auto-backgrounded job's delivered result links that capture instead of re-saving the capped text as "full output" (oh-my-pi 690b57d2485da3b31d35c5d8ac1bbd8a21a2fc04, [Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed `!` and `$` execution blocks losing the column-truncation warning, live and after a transcript rebuild, when a command's lines were capped but its output was otherwise whole ([Refs Wladefant/veyyon#107](https://github.com/Wladefant/veyyon/issues/107)).
