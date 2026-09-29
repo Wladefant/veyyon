@@ -161,11 +161,14 @@
 
 ### Removed
 
+- The unread `sessionAccent` field is gone from the status line's settings object; `statusLine.sessionAccent` still colors the editor border.
 - The unused built-in `designer` model role is gone from Settings → Model → Roles; a `modelRoles.designer` value you already set still resolves through `@designer` as a custom role.
 - The retired `statusLine.separator` and `statusLine.transparent` settings are gone; neither changed anything on screen, and a config file that still sets them loads unchanged.
 
 ### Fixed
 
+- `statusLine.segmentOptions.model.roomy: false` joins the model and its thinking level with the dot separator in the composer footline instead of being overridden to the `Model @level` form.
+- The plan review overlay repaints when a plan is swapped in or an external-editor annotation is committed, instead of waiting for the next keystroke.
 - An agent spawned by another agent, and an agent revived from its transcript, reports its start, progress and finish on the top-level session's event bus, so the agent dashboard, the RPC agent stream and collab guests show agents at depth 2 and below instead of nothing.
 - `--profile <name> --resume <id>` for a session another profile wrote forks it into `<name>` at its recorded working directory and leaves the source unchanged, instead of appending to the other profile's transcript under `<name>`'s settings and credentials.
 - `/resume <id>` for a session another profile wrote relaunches Veyyon in that profile instead of opening the transcript under the running profile.
