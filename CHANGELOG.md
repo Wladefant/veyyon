@@ -188,6 +188,7 @@
 - The unread `sessionAccent` field is gone from the status line's settings object; `statusLine.sessionAccent` still colors the editor border.
 - The unused built-in `designer` model role is gone from Settings → Model → Roles; a `modelRoles.designer` value you already set still resolves through `@designer` as a custom role.
 - The retired `statusLine.separator` and `statusLine.transparent` settings are gone; neither changed anything on screen, and a config file that still sets them loads unchanged.
+- 36 exported functions and constants that nothing called, and the unused Smithery Connect API client `mcp/smithery-connect.ts`, are gone; no user-visible change.
 
 ### Fixed
 
