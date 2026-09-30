@@ -78,7 +78,6 @@ import type {
 import * as AIError from "@veyyon/ai/error";
 import { sessionTelemetryDetail } from "@veyyon/ai/instrumentation";
 import { clearAnthropicFastModeFallback } from "@veyyon/ai/providers/anthropic";
-import { elidedSignatureBytes, signaturePolicy } from "@veyyon/ai/providers/google-shared";
 import { streamSimple } from "@veyyon/ai/stream";
 // Session initialization registers usage backends without loading the AI package barrel.
 import "@veyyon/ai/usage/defaults";
@@ -376,17 +375,13 @@ import {
 	isEmptyErrorTurn,
 	isUserInterruptAbort,
 	normalizeCustomMessagePayload,
-	replaceLostBlobPayloads,
 	SILENT_ABORT_MARKER,
 	SKILL_PROMPT_MESSAGE_TYPE,
 	USER_INTERRUPT_LABEL,
 } from "./messages";
 import { computeNonMessageBreakdown, computeNonMessageTokens } from "./non-message-tokens";
 import { SESSION_STATE_MESSAGE_TYPE, SESSION_STOP_CONTINUATION_CAP } from "./nudges";
-import { ProviderContextCanonicalizer } from "./provider-context-canonicalizer";
-import { applyProviderImagePolicy } from "./provider-image-budget";
 import { didSessionMessagesChange } from "./provider-replay-projection";
-import { normalizeRoots } from "./relativize-paths";
 import { AdvisorRoster, type AdvisorRosterHost } from "./runtime/advisor-roster";
 import { CheckpointRuntime } from "./runtime/checkpoint-runtime";
 import { CompactionRuntime } from "./runtime/compaction-runtime";
@@ -402,6 +397,7 @@ import { PlanModeRuntime } from "./runtime/plan-mode-runtime";
 import { PostPromptTasks } from "./runtime/post-prompt-tasks";
 import { ProviderSessions } from "./runtime/provider-sessions";
 import { ProviderUsage } from "./runtime/provider-usage";
+import { ProviderWire } from "./runtime/provider-wire";
 import { RetryRuntime } from "./runtime/retry-runtime";
 import { SessionApprovals } from "./runtime/session-approvals";
 import { type SecretsRefreshOptions, SessionSecrets } from "./runtime/session-secrets";
@@ -756,14 +752,8 @@ export class AgentSession {
 	#onPayload: SimpleStreamOptions["onPayload"] | undefined;
 	#onResponse: SimpleStreamOptions["onResponse"] | undefined;
 	#onSseEvent: SimpleStreamOptions["onSseEvent"] | undefined;
-	#transformProviderContext:
-		| ((context: Context, model: Model, runtime?: SecretRuntimeLease) => Context | Promise<Context>)
-		| undefined;
-	/** Session-local provider-ID → `tc_<n>` map; rebuilt from history on resume. */
-	#toolCallIdMap = new Map<string, string>();
-	#toolCallIdCounter = 0;
-	/** Active session cwd root for outbound wire path relativization. */
-	#wirePathRoots: string[] = [];
+	/** Per-request provider shaping every request of this session goes out through. */
+	readonly #wire: ProviderWire;
 	/**
 	 * Directory {@link AgentSession.rescopeToCwd} last re-scoped to, so the two
 	 * callers of one move (this session, then the TUI's `cwd_changed` handler) do
@@ -776,9 +766,6 @@ export class AgentSession {
 	 */
 	#scopeTransitionTail: Promise<void> = Promise.resolve();
 	#scopeTransitionRevision = 0;
-	/** Cumulative outbound bytes elided by path relativization this session. */
-	#wirePathBytesSaved = 0;
-	#thoughtSignatureBytesSaved = 0;
 	#sideStreamFn: StreamFn;
 	/**
 	 * The transport every SIDE request shares, in the `completeImpl` shape
@@ -1327,77 +1314,15 @@ export class AgentSession {
 		this.#createVibeTools = config.createVibeTools;
 		this.#requestedToolNames = config.requestedToolNames;
 		this.#transformContext = config.transformContext ?? (messages => messages);
-		// Canonicalize provider tool-call IDs to short session-local handles before
-		// obfuscation / provider serialization. Runs once per request
-		// after convertToLlm; map is session-stable so prior history serializes
-		// byte-identically (prompt cache preserved). On resume the map rebuilds from
-		// stored history by walking messages in order (no schema change).
-		const upstreamTransformProviderContext = config.transformProviderContext;
-		// Outbound wire-path canonicalization (TW-10): render paths under the active
-		// session cwd relative to that root. Only the active cwd is a root; accumulating
-		// prior cwds would strip paths from previous directories to "." as well, making
-		// distinct absolute paths indistinguishable.
-		this.#wirePathRoots = normalizeRoots(this.sessionManager.getCwd());
-		const providerContextCanonicalizer = new ProviderContextCanonicalizer(this.#toolCallIdMap, () => {
-			this.#toolCallIdCounter += 1;
-			return `tc_${this.#toolCallIdCounter}`;
+		this.#wire = new ProviderWire({
+			settings: this.settings,
+			cwd: this.sessionManager.getCwd(),
+			upstream: config.transformProviderContext,
+			secrets: this.#secrets,
 		});
-		const canonicalizeProviderContext = (
-			context: Context,
-			model: Model,
-			runtime?: SecretRuntimeLease,
-		): Context | Promise<Context> => {
-			const canonicalized = providerContextCanonicalizer.transform(context.messages, this.#wirePathRoots);
-			this.#wirePathBytesSaved += canonicalized.bytesSaved;
-			const messages = canonicalized.messages;
-			// Read per request: the retention window is a live setting, and a session
-			// that changes it must take effect on the next turn, not on restart.
-			const thoughtSignatureRetention = this.settings.get("context.thoughtSignatureRetention");
-			const thoughtSignatureMaxLength = this.settings.get("context.thoughtSignatureMaxLength");
-			const thinkingRetention = this.settings.get("context.thinkingRetention");
-			// Both signature rules resolve through one owner, so the bytes reported here
-			// are the bytes the request actually leaves out. Accounting that knew about
-			// only one rule would report a saving the request did not make.
-			this.#thoughtSignatureBytesSaved += elidedSignatureBytes(
-				messages,
-				signaturePolicy(messages, { thoughtSignatureRetention, thoughtSignatureMaxLength }),
-				message => message.provider === model.provider && message.model === model.id,
-			);
-			const next =
-				messages === context.messages &&
-				thoughtSignatureRetention === context.thoughtSignatureRetention &&
-				thoughtSignatureMaxLength === context.thoughtSignatureMaxLength &&
-				thinkingRetention === context.thinkingRetention
-					? context
-					: {
-							...context,
-							messages,
-							thoughtSignatureRetention,
-							thoughtSignatureMaxLength,
-							thinkingRetention,
-						};
-			// A payload the blob store no longer has is still a reference after the
-			// load put back everything it could, and a reference is not content: an
-			// image block whose data is a hash is not base64, so the provider refuses
-			// the request and every later turn of the session refuses the same way.
-			// The transcript keeps the reference, so restoring the blobs directory
-			// restores the payload; the request states the loss instead of the hash.
-			const recovered = replaceLostBlobPayloads(next.messages);
-			const carried = recovered === next.messages ? next : { ...next, messages: recovered };
-			// The model serving THIS request decides which images it can read. The
-			// main turn, a side request, compaction and an advisor each dispatch
-			// their own model, and this is the only seam that sees which one is
-			// going out, so the whole image policy resolves here.
-			const shaped = applyProviderImagePolicy(carried, model, {
-				blockImages: Boolean(this.settings.get("images.blockImages")),
-			});
-			if (upstreamTransformProviderContext) return upstreamTransformProviderContext(shaped, model, runtime);
-			return this.#secrets.obfuscateContext(shaped, runtime);
-		};
-		this.#transformProviderContext = canonicalizeProviderContext;
-		// Agent was constructed before AgentSession; install the wrapped hook so the
-		// main loop / side requests / advisors share the same session-local map.
-		this.agent.setTransformProviderContext(canonicalizeProviderContext);
+		// Agent was constructed before AgentSession; install the wire so the main loop, side
+		// requests and advisors share one session-local tool-call id map.
+		this.agent.setTransformProviderContext(this.#wire.transform);
 		this.#sideStreamFn = config.sideStreamFn ?? streamSimple;
 		this.#preferWebsockets = config.preferWebsockets;
 		this.#onPayload = config.onPayload;
@@ -1731,7 +1656,7 @@ export class AgentSession {
 				onPayload: this.#onPayload,
 				onResponse: this.#onResponse,
 				onSseEvent: this.#onSseEvent,
-				transformProviderContext: this.#transformProviderContext,
+				transformProviderContext: this.#wire.transform,
 				resolveSecretRuntimeLeaseForContext: this.#secrets.resolveLeaseForContext,
 			},
 			sessionFile: () => this.sessionManager.getSessionFile(),
@@ -3564,7 +3489,7 @@ export class AgentSession {
 	}
 
 	#recordCwdChange(previous: string, cwd: string): void {
-		this.#wirePathRoots = normalizeRoots(cwd);
+		this.#wire.rootAt(cwd);
 		const note = `Session working directory changed: ${previous} → ${cwd}`;
 		const details = { previous, cwd };
 		this.agent.appendMessage({
@@ -3582,7 +3507,7 @@ export class AgentSession {
 
 	/** Cumulative outbound bytes elided by wire path relativization (TW-10). */
 	get wirePathBytesSaved(): number {
-		return this.#wirePathBytesSaved;
+		return this.#wire.pathBytesSaved;
 	}
 
 	/**
@@ -3594,7 +3519,7 @@ export class AgentSession {
 	 * single trimmed turn saves is paid again on the next one and the next.
 	 */
 	get thoughtSignatureBytesSaved(): number {
-		return this.#thoughtSignatureBytesSaved;
+		return this.#wire.thoughtSignatureBytesSaved;
 	}
 
 	subscribe(listener: AgentSessionEventListener): () => void {
@@ -9181,7 +9106,7 @@ export class AgentSession {
 		// from the target branch. On rollback it must be restored, or a failed switch
 		// leaks the target session's checkpoint state.
 		const previousCheckpoint = this.#checkpoint.snapshot();
-		const previousWirePathRoots = this.#wirePathRoots;
+		const previousWirePathRoots = this.#wire.roots;
 
 		let scopeTransitionAttempted = false;
 
@@ -9214,7 +9139,7 @@ export class AgentSession {
 			if (path.resolve(targetCwd) !== path.resolve(previousSessionState.cwd)) {
 				scopeTransitionAttempted = true;
 				await this.#rescopeToCwd(targetCwd);
-				this.#wirePathRoots = normalizeRoots(targetCwd);
+				this.#wire.rootAt(targetCwd);
 			}
 
 			if (switchingToDifferentSession) {
@@ -9346,7 +9271,7 @@ export class AgentSession {
 			return true;
 		} catch (error) {
 			this.sessionManager.restoreState(previousSessionState);
-			this.#wirePathRoots = previousWirePathRoots;
+			this.#wire.restoreRoots(previousWirePathRoots);
 			let restoreScopeError: unknown;
 			if (scopeTransitionAttempted) {
 				this.#lastRescopedCwd = undefined;
