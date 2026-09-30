@@ -68,6 +68,7 @@ export const matchesKittySequence = lazyNativeFn("matchesKittySequence");
 export const matchesLegacySequence = lazyNativeFn("matchesLegacySequence");
 export const parseKey = lazyNativeFn("parseKey");
 export const parseKittySequence = lazyNativeFn("parseKittySequence");
+export const readCommitMemory = lazyNativeFn("readCommitMemory");
 export const readImageFromClipboard = lazyNativeFn("readImageFromClipboard");
 export const search = lazyNativeFn("search");
 export const setHangulCompatJamoWidthOverride = lazyNativeFn("setHangulCompatJamoWidthOverride");

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `readCommitMemory()` returns the Windows system commit charge and limit and the calling process's private commit bytes in-process, and `undefined` on other platforms ([#73](https://github.com/Wladefant/veyyon/issues/73)).
+
 ### Fixed
 
 - On Windows, the embedded `tail` builtin no longer exits the host process when its output pipe is closed (a timed-out or cancelled `cmd | tail -N` pipeline), which silently killed Veyyon and every lane ([#73](https://github.com/Wladefant/veyyon/issues/73)). A workspace `clippy.toml` now rejects `std::process::exit`, `std::process::abort` and their `libc` equivalents in every crate, including the out-of-workspace shell crates `brush-core` and `brush-builtins` through `check:rs` and `lint:rs`, so no builtin can reintroduce it.

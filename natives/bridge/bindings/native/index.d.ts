@@ -506,6 +506,19 @@ export interface ClipboardImage {
   mimeType: string
 }
 
+/** System and process commit, in bytes. */
+export interface CommitMemory {
+  /** Committed memory across the whole system (`CommitTotal` x page size). */
+  commitChargeBytes: number
+  /**
+   * The most the system can commit: RAM plus pagefile (`CommitLimit` x page
+   * size). Allocation fails when the charge reaches it.
+   */
+  commitLimitBytes: number
+  /** Private committed bytes of this process (`PrivateUsage`). */
+  processCommitBytes: number
+}
+
 /** A context line (before or after a match). */
 export interface ContextLine {
   /** 1-indexed line number in the source file. */
@@ -1435,6 +1448,13 @@ export interface PtyStartOptions {
    */
   cpuBudgetId?: string
 }
+
+/**
+ * Read system commit charge and limit and this process's private commit.
+ *
+ * `None` off Windows, and on Windows when either kernel query fails.
+ */
+export declare function readCommitMemory(): CommitMemory | null
 
 /**
  * Read an image from the system clipboard.
