@@ -14,6 +14,7 @@
 
 ### Fixed
 
+- Fixed Anthropic stream hangs when broken keep-alive leaves the HTTP connection open after the terminal `message_stop` envelope.
 - Fixed `ANTHROPIC_BASE_URL` being ignored for Anthropic chat requests and forwarded `ANTHROPIC_CUSTOM_HEADERS` to non-official gateways.
 - Added `isStreamEnvelopeErrorText` to error flags so loop-level salvage can recognize Anthropic stream-envelope truncation errors and recover completed tool calls.
 - Fixed native Anthropic adaptive-only models keeping thinking on when reasoning was disabled or tool choice was forced by pinning the lowest adaptive effort instead of dropping output configuration effort.

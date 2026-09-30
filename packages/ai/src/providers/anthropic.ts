@@ -3019,6 +3019,10 @@ const streamAnthropicOnce = (
 							isOAuthToken,
 							serverSideFallback,
 						);
+						if (streamState.sawMessageStop) {
+							// The protocol is complete even if a broken keep-alive leaves the HTTP body open.
+							break;
+						}
 					}
 					firstTokenTime = streamState.firstTokenTime;
 
