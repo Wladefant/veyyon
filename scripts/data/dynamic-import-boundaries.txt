@@ -71,6 +71,7 @@ packages/coding-agent/src/slash-commands/builtin-share.ts
 packages/coding-agent/src/slash-commands/dispatch.ts
 packages/coding-agent/src/slash-commands/helpers/stats-dashboard.ts
 packages/coding-agent/src/system-prompt-builder/section-overrides.ts
+packages/coding-agent/src/task/isolation-runner.ts
 packages/coding-agent/src/task/persisted-revive.ts
 packages/coding-agent/src/telemetry-export.ts
 packages/coding-agent/src/tools/agent/manifest.ts
