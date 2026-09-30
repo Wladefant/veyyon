@@ -172,8 +172,12 @@ const AUTH_STORAGE_CEILING = 227;
  * `winston` and `winston-daily-rotate-file`. `@veyyon/utils/logger`, already in this closure, writes
  * through it, and its imports (`node:` built-ins, `./app-identity`, `./fs-error`) were already reached,
  * so it adds one module and no subtree.
+ *
+ * 83 since 2026-09-29, measured: `catalog/compat/share.ts`, the zero-import leaf holding `shareCompat`.
+ * `catalog/build.ts`, already in this closure, returns each model's resolved compat record through it,
+ * so it adds one module and no subtree.
  */
-const ENV_API_KEY_CEILING = 82;
+const ENV_API_KEY_CEILING = 83;
 
 /** Measured 2026-07-26 at 75: the logger and nothing else. A backend import here is the regression. */
 const USAGE_REGISTRY_CEILING = 83;

@@ -9,6 +9,7 @@ import type { OAuthCredentials, OAuthLoginCallbacks } from "@veyyon/ai/oauth/typ
 import type { Api, Context, Model, ModelSpec, SimpleStreamOptions, ThinkingConfig } from "@veyyon/ai/types";
 import type { AssistantMessageEventStream } from "@veyyon/ai/utils/event-stream";
 import { buildModel } from "@veyyon/catalog/build";
+import { shareCompat } from "@veyyon/catalog/compat/share";
 import { isVertexExpressOpenAIUrl } from "@veyyon/catalog/hosts";
 import { resolveBundledModelReference } from "@veyyon/catalog/identity";
 import { modelCacheStamp, readModelCache } from "@veyyon/catalog/model-cache";
@@ -1289,7 +1290,8 @@ export class ModelRegistry {
 	 * Validate an array of persisted model records shallowly and cast. The
 	 * snapshot's CRC-32 detects a payload other than the bytes this format's
 	 * writer produced; the guards reject invalid records even when an external
-	 * writer recomputed the checksum.
+	 * writer recomputed the checksum. Each record's compat is shared with every
+	 * live model whose compat is equal, as `buildModel` shares it.
 	 */
 	#snapshotModelArray(value: unknown): Model<Api>[] | null {
 		if (!Array.isArray(value)) return null;
@@ -1304,7 +1306,9 @@ export class ModelRegistry {
 			}
 		}
 		// Shape-checked above; the record contract itself is owned by the writer.
-		return value as Model<Api>[];
+		const models = value as Model<Api>[];
+		for (const model of models) model.compat = shareCompat(model.compat);
+		return models;
 	}
 
 	#snapshotDiscoveryStateArray(value: unknown): ProviderDiscoveryState[] | null {

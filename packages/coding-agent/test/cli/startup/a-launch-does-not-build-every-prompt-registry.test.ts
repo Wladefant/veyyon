@@ -240,11 +240,15 @@ const AGGREGATE = path.join(SRC, "prompts", "all-registries.ts");
  *   idle code discard, and the event-loop stall profile. They import `node:` built-ins,
  *   `./app-identity`, `./fs-error`, `./logger` and `./type-guards`, all already here.
  *
+ * 1620 to 1621: `catalog/compat/share.ts`, the zero-import leaf holding `shareCompat`.
+ * `catalog/build.ts` and `config/model-registry.ts`, already here, return each model's resolved
+ * compat record through it so equal records are held once.
+ *
  * A ratchet, not a target: nothing breaks when it grows, which is exactly why it is pinned. There
  * is no margin left on purpose — the next module on this graph is a barrel someone reached for
  * and owes a line here.
  */
-const LAUNCH_REACH_CEILING = 1620;
+const LAUNCH_REACH_CEILING = 1621;
 
 /**
  * Measured at 498, down from 538 at the merge base and 718 before the aggregate edge was cut. The

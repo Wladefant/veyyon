@@ -141,6 +141,28 @@ describe("static model stage snapshot", () => {
 		expect(mtime()).toBe(before);
 	});
 
+	it("a warm launch shares one compat record among restored models that resolve it equal", async () => {
+		// The stage stores resolved records, so its restore bypasses `buildModel` and the record
+		// sharing it does; `models-with-equal-compat-hold-one-record` covers the catalog's paths.
+		tempDir = path.join(os.tmpdir(), `pi-reg-snap-${Snowflake.next()}`);
+		fs.mkdirSync(tempDir, { recursive: true });
+		modelsPath = path.join(tempDir, "models.yml");
+		snapshotPath = path.join(tempDir, "resolved-models.json");
+		authStorage = await AuthStorage.create(path.join(tempDir, "auth.db"));
+		const reference = getBundledModels("anthropic")[0]!;
+		const cached = ["claude-shared-a", "claude-shared-b"].map(id => ({ ...reference, id }));
+		writeModelCache("anthropic", Date.now(), cached, true, "", path.join(tempDir, "models.db"));
+		launch();
+		const before = mtime();
+
+		const warm = new ModelRegistry(authStorage, modelsPath, { snapshotIo: true });
+
+		expect(mtime()).toBe(before);
+		const [a, b] = cached.map(model => warm.find("anthropic", model.id)!.compat);
+		expect(a).toBe(b!);
+		expect(Object.isFrozen(a)).toBe(true);
+	});
+
 	it("sqlite sidecar mtime churn does not invalidate the snapshot", async () => {
 		await coldLaunch();
 		const before = mtime();

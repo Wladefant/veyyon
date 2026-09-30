@@ -108,9 +108,14 @@ const PRUNING_CEILING = 195;
  * `winston-daily-rotate-file`. `@veyyon/utils/logger`, already on both reaches, writes through it, and
  * its imports (`node:` built-ins, `./app-identity`, `./fs-error`) were already here, so the growth is
  * that one file and no subtree.
+ *
+ * RE-MEASURED 2026-09-29 again: engine 320, remote summarizer 222. The one new module is
+ * `catalog/compat/share.ts`, the zero-import leaf holding `shareCompat`. `catalog/build.ts`, already on
+ * both reaches, returns each model's resolved compat record through it, so the growth is that one file
+ * and no subtree.
  */
-const COMPACTION_ENGINE_CEILING = 319;
-const REMOTE_SUMMARIZER_CEILING = 221;
+const COMPACTION_ENGINE_CEILING = 320;
+const REMOTE_SUMMARIZER_CEILING = 222;
 
 describe("the estimator is a leaf", () => {
 	it(`token-estimate reaches at most ${TOKEN_ESTIMATE_CEILING} modules`, () => {
