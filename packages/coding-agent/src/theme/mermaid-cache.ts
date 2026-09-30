@@ -1,5 +1,5 @@
-import { LRUCache } from "lru-cache";
 import { type MermaidAsciiRenderOptions, renderMermaidAsciiSafe } from "@veyyon/utils/mermaid-ascii";
+import { LRUCache } from "lru-cache";
 
 /**
  * Options controlling how fenced Mermaid source is resolved to terminal ASCII.

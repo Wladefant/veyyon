@@ -23,7 +23,9 @@ const WIDTH = 100;
 function flowchart(seed: number): string {
 	const lines = ["graph TD"];
 	for (let node = 0; node < 24; node += 1) {
-		lines.push(`    N${seed}_${node}[Step ${node} of flow ${seed}] --> N${seed}_${node + 1}[Step ${node + 1} of flow ${seed}]`);
+		lines.push(
+			`    N${seed}_${node}[Step ${node} of flow ${seed}] --> N${seed}_${node + 1}[Step ${node + 1} of flow ${seed}]`,
+		);
 	}
 	return lines.join("\n");
 }

@@ -36,7 +36,9 @@ const MIB = 1024 * 1024;
 function flowchart(seed: number, edges: number): string {
 	const lines = ["graph TD"];
 	for (let node = 0; node < edges; node += 1) {
-		lines.push(`    F${seed}_${node}[Stage ${node} of ${seed}] --> F${seed}_${node + 1}[Stage ${node + 1} of ${seed}]`);
+		lines.push(
+			`    F${seed}_${node}[Stage ${node} of ${seed}] --> F${seed}_${node + 1}[Stage ${node + 1} of ${seed}]`,
+		);
 	}
 	return lines.join("\n");
 }
