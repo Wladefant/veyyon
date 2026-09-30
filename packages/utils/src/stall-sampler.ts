@@ -26,7 +26,7 @@
 import type * as inspectorModule from "node:inspector";
 import { performance } from "node:perf_hooks";
 import * as logger from "./logger";
-import { errorMessage } from "./type-guards";
+import { errorMessage, isRecord } from "./type-guards";
 
 /** One function the samples were executing, with how many landed in it. */
 export interface StallFrame {
@@ -73,10 +73,6 @@ const ROTATE_AFTER_MS = 10_000;
 const SELF_FRAMES = 8;
 /** How many frames of the hottest path a report keeps, innermost last. */
 const STACK_FRAMES = 24;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null;
-}
 
 function numberArray(value: unknown): number[] | undefined {
 	if (!Array.isArray(value)) return undefined;

@@ -70,8 +70,14 @@ import { PACKAGES, reach, reachedNames } from "../helpers/module-reach-gate";
  * `await import(...)` deletes the feature. The pair reaches `node:fs`, `node:os` and `node:path`
  * and one type-only import of `@veyyon/tui/tui`, which erases, so the edge cannot grow into the
  * package the way a value import would.
+ *
+ * 38 from 2026-09-29: `@veyyon/utils/log-file`, the rotating profile log that replaced `winston` and
+ * `winston-daily-rotate-file`. `@veyyon/utils/logger` is on this path and writes through it. Its
+ * imports are `node:fs`, `node:path`, a type-only `node:zlib`, `./app-identity` and `./fs-error`, all
+ * already here, so the edge cannot grow. The count sees one module more; the process loads 29 npm
+ * modules fewer, since the walk never counted `winston`, which the logger imported on this same path.
  */
-const BOOT_CEILING = 37;
+const BOOT_CEILING = 38;
 
 /** The same measurement as a floor, so a broken walk fails instead of passing quietly. */
 const BOOT_FLOOR = 25;

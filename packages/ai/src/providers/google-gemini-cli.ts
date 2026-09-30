@@ -17,6 +17,7 @@ import {
 	getAntigravityUserAgent,
 	getGeminiCliHeaders,
 } from "@veyyon/catalog/wire/gemini-headers";
+import { lazy } from "@veyyon/utils/abortable";
 import { exponentialBackoffDelay } from "@veyyon/utils/backoff";
 import { extractHttpStatusFromError } from "@veyyon/utils/fetch-retry";
 import { readSseJson } from "@veyyon/utils/stream";
@@ -364,25 +365,28 @@ function shouldInjectAntigravitySystemInstruction(modelId: string): boolean {
 	return normalized.includes("claude") || normalized.includes("gemini-3");
 }
 
-const optionalCredentialString = type("unknown").pipe(raw => {
-	const out = type("string")(raw);
-	return out instanceof type.errors ? undefined : out;
-});
+/** Built on the first credentials read: a session that never uses Gemini CLI builds no validator. */
+const geminiCliCredentialsSchema = lazy(() => {
+	const optionalCredentialString = type("unknown").pipe(raw => {
+		const out = type("string")(raw);
+		return out instanceof type.errors ? undefined : out;
+	});
 
-const innerCredentialsSchema = type({
-	"token?": optionalCredentialString,
-	"projectId?": optionalCredentialString,
-	"project_id?": optionalCredentialString,
-	"refreshToken?": optionalCredentialString,
-	"refresh?": optionalCredentialString,
-	"email?": optionalCredentialString,
-	"expiresAt?": "unknown",
-	"expires?": "unknown",
-});
+	const innerCredentialsSchema = type({
+		"token?": optionalCredentialString,
+		"projectId?": optionalCredentialString,
+		"project_id?": optionalCredentialString,
+		"refreshToken?": optionalCredentialString,
+		"refresh?": optionalCredentialString,
+		"email?": optionalCredentialString,
+		"expiresAt?": "unknown",
+		"expires?": "unknown",
+	});
 
-const geminiCliCredentialsSchema = type("unknown").pipe(raw => {
-	const out = innerCredentialsSchema(raw);
-	return out instanceof type.errors ? {} : out;
+	return type("unknown").pipe(raw => {
+		const out = innerCredentialsSchema(raw);
+		return out instanceof type.errors ? {} : out;
+	});
 });
 
 interface ParsedGeminiCliCredentials {
@@ -417,7 +421,7 @@ export function parseGeminiCliCredentials(apiKeyRaw: string): ParsedGeminiCliCre
 	} catch {
 		throw new AIError.ValidationError(invalidCredentialsMessage);
 	}
-	const parsed = geminiCliCredentialsSchema(rawCredentials);
+	const parsed = geminiCliCredentialsSchema.value(rawCredentials);
 	if (parsed instanceof type.errors) {
 		throw new AIError.ValidationError(invalidCredentialsMessage);
 	}

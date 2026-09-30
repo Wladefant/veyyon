@@ -196,7 +196,14 @@ export class AdvisorRoster {
 	#autoResumeSuppressed = false;
 	#primaryTurnsCompleted = 0;
 	#interruptImmuneTurnStart: number | undefined;
-	readonly #tools: AgentTool[] | undefined;
+	/** Builds the tools advisors choose from; undefined gives advisors no tools beyond `advise`. */
+	readonly #loadTools: (() => Promise<AgentTool[]>) | undefined;
+	/**
+	 * The tools advisors choose from, built by {@link #loadTools} on the first advisor turn or tool
+	 * listing and shared by every advisor this roster starts afterwards. Cleared when the build
+	 * fails, so the next turn builds again.
+	 */
+	#tools: Promise<AgentTool[]> | undefined;
 	#watchdogPrompt: string | undefined;
 	#sharedInstructions: string | undefined;
 	#contextFiles: readonly AdvisorContextFile[] | undefined;
@@ -216,9 +223,13 @@ export class AdvisorRoster {
 	 *  used as the open barrier for the next build so two writers never share a file. */
 	#recorderClosed: Promise<void> = Promise.resolve();
 
-	constructor(host: AdvisorRosterHost, tools: AgentTool[] | undefined, scope: ProjectAdvisorScope) {
+	constructor(
+		host: AdvisorRosterHost,
+		loadTools: (() => Promise<AgentTool[]>) | undefined,
+		scope: ProjectAdvisorScope,
+	) {
 		this.#host = host;
-		this.#tools = tools;
+		this.#loadTools = loadTools;
 		this.#watchdogPrompt = scope.advisorWatchdogPrompt;
 		this.#contextFiles = scope.advisorContextFiles;
 		this.#sharedInstructions = scope.advisorSharedInstructions;
@@ -282,8 +293,18 @@ export class AdvisorRoster {
 		this.enableFromSettings();
 	}
 
-	availableToolNames(): string[] {
-		return (this.#tools ?? []).map(tool => tool.name);
+	/** The names of the tools advisors choose from, building them if no advisor has yet. */
+	async availableToolNames(): Promise<string[]> {
+		return (await this.#toolPool()).map(tool => tool.name);
+	}
+
+	#toolPool(): Promise<AgentTool[]> {
+		if (this.#loadTools === undefined) return Promise.resolve([]);
+		this.#tools ??= this.#loadTools().catch(error => {
+			this.#tools = undefined;
+			throw error;
+		});
+		return this.#tools;
 	}
 
 	firstAgent(): Agent | undefined {
@@ -643,13 +664,28 @@ export class AdvisorRoster {
 		if (config.instructions?.trim()) systemPrompt.push(config.instructions.trim());
 
 		const names = config.tools === undefined ? ADVISOR_DEFAULT_TOOL_NAMES : new Set(config.tools);
-		const tools = (this.#tools ?? []).filter(t => names.has(t.name));
-		const availableAdvisorToolNames = new Set<string>();
-		availableAdvisorToolNames.add(adviseTool.name);
-		for (const tool of tools) {
-			availableAdvisorToolNames.add(tool.name);
-			if (tool.customWireName !== undefined) availableAdvisorToolNames.add(tool.customWireName);
-		}
+		const availableAdvisorToolNames = new Set<string>([adviseTool.name]);
+		// The configured tools join the advisor before its first request rather than at start: the
+		// pool they come from constructs every built-in tool and loads its module, which a session
+		// whose advisor never reviews a turn does not need.
+		let toolsAttached: Promise<void> | undefined;
+		const attachTools = (): Promise<void> => {
+			toolsAttached ??= this.#toolPool().then(
+				pool => {
+					const tools = pool.filter(t => names.has(t.name));
+					for (const tool of tools) {
+						availableAdvisorToolNames.add(tool.name);
+						if (tool.customWireName !== undefined) availableAdvisorToolNames.add(tool.customWireName);
+					}
+					advisorAgent.setTools([adviseTool, ...tools]);
+				},
+				error => {
+					toolsAttached = undefined;
+					throw error;
+				},
+			);
+			return toolsAttached;
+		};
 		let quarantinedAdvisorOutput: string | undefined;
 		let currentAdvisorInput = "";
 
@@ -713,7 +749,7 @@ export class AdvisorRoster {
 				systemPrompt,
 				model: advisorModel,
 				thinkingLevel: toReasoningEffort(advisorThinkingLevel),
-				tools: [adviseTool, ...tools],
+				tools: [adviseTool],
 			},
 			appendOnlyContext,
 			sessionId: advisorProviderSessionId,
@@ -748,6 +784,7 @@ export class AdvisorRoster {
 
 		const advisorAgentFacade: AdvisorAgent = {
 			prompt: async input => {
+				await attachTools();
 				let quarantined: string | undefined;
 				try {
 					quarantinedAdvisorOutput = undefined;

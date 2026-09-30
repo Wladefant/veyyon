@@ -503,6 +503,10 @@ export const repoScriptTests = [
 	// suite hashes the file, so editing it at all fails CI until an operator records
 	// the new hash.
 	"scripts/the-codex-compaction-route-is-locked.test.ts",
+	// Owner gates that sweep the tree across members, so no package bucket covers them.
+	"scripts/a-stale-tool-views-bundle-is-rebuilt-before-it-is-served.test.ts",
+	"scripts/an-exponential-retry-delay-is-computed-only-by-the-backoff-helper.test.ts",
+	"scripts/one-owner-calls-bun-strip-ansi.test.ts",
 	// No source file the build reads is ignored, and no unanchored pattern names
 	// a directory that holds source.
 	"scripts/every-source-file-the-build-reads-is-in-the-repository.test.ts",
