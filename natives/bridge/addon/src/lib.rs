@@ -26,6 +26,7 @@ pub mod appearance;
 pub mod ast;
 pub mod block;
 pub mod clipboard;
+pub mod commit_memory;
 pub mod cpu_budget;
 pub mod crash_handler;
 pub mod embedded_pages;
