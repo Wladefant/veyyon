@@ -533,25 +533,31 @@ function readSharedStoreOAuthAccess(provider: OAuthProvider): OAuthAccess | null
 	try {
 		const db = new Database(path.join(getSharedAuthDir(), "agent.db"), { readonly: true });
 		try {
-			const row = db
-				.query("SELECT data FROM auth_credentials WHERE provider = ? AND credential_type = 'oauth'")
-				.get(provider) as { data: string } | null;
-			if (!row) return null;
-			const data = JSON.parse(row.data) as {
-				access?: string;
-				expires?: number;
-				projectId?: string;
-				email?: string;
-				accountId?: string;
-			};
-			if (!data.access) return null;
-			if (typeof data.expires === "number" && data.expires <= Date.now()) return null;
-			return {
-				accessToken: data.access,
-				accountId: data.accountId,
-				email: data.email,
-				projectId: data.projectId,
-			};
+			// A provider can hold several logins (an account pool); the first row is often the
+			// oldest, expired one, so take the first login that is enabled and still valid.
+			const rows = db
+				.query(
+					"SELECT data FROM auth_credentials WHERE provider = ? AND credential_type = 'oauth' AND disabled_cause IS NULL ORDER BY id",
+				)
+				.all(provider) as Array<{ data: string }>;
+			for (const row of rows) {
+				const data = JSON.parse(row.data) as {
+					access?: string;
+					expires?: number;
+					projectId?: string;
+					email?: string;
+					accountId?: string;
+				};
+				if (!data.access) continue;
+				if (typeof data.expires === "number" && data.expires <= Date.now()) continue;
+				return {
+					accessToken: data.access,
+					accountId: data.accountId,
+					email: data.email,
+					projectId: data.projectId,
+				};
+			}
+			return null;
 		} finally {
 			db.close();
 		}
