@@ -108,6 +108,9 @@ export function createCachedComponent(
 		invalidate() {
 			cached = undefined;
 		},
+		releaseRenderCache() {
+			cached = undefined;
+		},
 	};
 }
 

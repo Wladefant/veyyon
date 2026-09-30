@@ -1,20 +1,16 @@
 /**
- * The retry ladder of a session: the backoff retry of a failed turn, credential rotation, the
- * `retry.fallbackChains` model switch and its restore, the Fireworks Fast degrade, and the
- * continuation of a tool batch that cannot be replayed.
+ * The retry ladder of a session: the backoff retry of a failed turn, credential rotation, and the
+ * continuation of a tool batch that cannot be replayed. The model switches the ladder makes are
+ * {@link RetryFallback}'s.
  *
- * This is a session collaborator. It holds the retry gate `prompt()` waits on, the attempt counter,
- * the active fallback and the errors a retry recovered, and reaches the session through
- * {@link RetrySession} and {@link RetryHost}.
+ * This is a session collaborator. It holds the retry gate `prompt()` waits on, the attempt counter
+ * and the errors a retry recovered, and reaches the session through {@link RetrySession} and
+ * {@link RetryHost}.
  */
 import { scheduler } from "node:timers/promises";
-import { type Agent, type ThinkingLevel, toolResultNeverRan } from "@veyyon/agent-core";
 import type { AssistantMessage, AssistantRetryRecovery, AssistantRetryRecoveryKind, Model } from "@veyyon/ai";
 import * as AIError from "@veyyon/ai/error";
 import { calculateRateLimitBackoffMs, parseRateLimitReason } from "@veyyon/ai/error/rate-limit";
-import { type CursorExecResolvedCarrier, kCursorExecResolved } from "@veyyon/ai/utils/block-symbols";
-import { isFireworksFastModelId, toFireworksBaseModelId } from "@veyyon/catalog/fireworks-model-id";
-import { AgentStorage } from "@veyyon/kernel/session/agent-storage";
 import type { OperatorNotices } from "@veyyon/kernel/session/operator-notices";
 import {
 	calculateRetryBackoffDelayMs,
@@ -23,34 +19,21 @@ import {
 	resolveRetryPolicy,
 	unreplayableContinueDelayMs,
 } from "@veyyon/kernel/session/retry-policy";
-import { EPHEMERAL_MODEL_CHANGE_ROLE, type SessionEntry } from "@veyyon/kernel/session/session-entries";
-import type { SessionManager } from "@veyyon/kernel/session/session-manager";
+import type { SessionEntry } from "@veyyon/kernel/session/session-entries";
 import { errorMessage, extractRetryHint, logger } from "@veyyon/utils";
-import type { ModelRegistry } from "../../config/model-registry";
-import { formatModelStringWithRouting, resolveModelOverride } from "../../config/model-resolver";
-import type { Settings } from "../../config/settings";
 import type { RecoveredRetryError } from "../../extensibility/shared-events";
 import { turnControlPrompts } from "../../prompts/turn-control/rows";
-import type { ConfiguredThinkingLevel } from "../../thinking";
 import { isEmptyAssistantStop, isSameAssistantMessage } from "../agent-session-message-shapes";
-import {
-	type ActiveRetryFallbackState,
-	findRetryFallbackCandidates,
-	formatRetryFallbackSelector,
-	parseRetryFallbackSelector,
-	type RetryFallbackChainSource,
-	type RetryFallbackRevertPolicy,
-	type RetryFallbackSelector,
-	resolveRetryFallbackRole,
-	retryFallbackChainsForRoles,
-} from "../agent-session-retry-fallback";
+import { formatRetryFallbackSelector } from "../agent-session-retry-fallback";
 import type {
 	AgentSessionEvent,
 	PendingRecoveredRetryError,
 	ScheduledAgentContinueOptions,
 } from "../agent-session-types";
+import { hasReplayUnsafeToolOutput, isClassifierRefusal, toolBatchCanContinue } from "../failed-turn";
 import { THINKING_LOOP_REDIRECT_TYPE } from "../nudges";
 import { sameMessageContent, sessionMessagePersistenceKey } from "../turn-persistence";
+import { RetryFallback, type RetryFallbackSession } from "./retry-fallback";
 
 /**
  * Slack added past a sibling credential's block expiry before retrying, so
@@ -66,21 +49,8 @@ interface RetryEntryOptions {
 }
 
 /** What {@link RetryRuntime} reads from the session's public surface. */
-export interface RetrySession {
-	readonly agent: Agent;
-	readonly sessionManager: SessionManager;
-	readonly settings: Settings;
-	readonly modelRegistry: ModelRegistry;
-	readonly model: Model | undefined;
-	readonly thinkingLevel: ThinkingLevel | undefined;
-	readonly sessionId: string;
+export interface RetrySession extends RetryFallbackSession {
 	readonly operatorNotices: OperatorNotices;
-	configuredThinkingLevel(): ConfiguredThinkingLevel | undefined;
-	setThinkingLevel(
-		level: ConfiguredThinkingLevel | undefined,
-		persist?: boolean,
-		source?: "session" | "resolved",
-	): void;
 }
 
 /** What {@link RetryRuntime} needs from the session beyond its public surface. */
@@ -103,13 +73,6 @@ export interface RetryHost {
 	/** Persist an empty error turn the retry ladder is about to drop, once. */
 	persistLifecycleErrorMessage(message: AssistantMessage): Promise<void>;
 	resetSessionStopContinuationState(): void;
-}
-
-/** Whether the turn ended on a content-classifier refusal or sensitivity stop. */
-export function isClassifierRefusal(message: AssistantMessage): boolean {
-	if (message.stopReason !== "error") return false;
-	const stopType = message.stopDetails?.type;
-	return stopType === "refusal" || stopType === "sensitive";
 }
 
 function isGenericAbortSentinel(message: AssistantMessage): boolean {
@@ -157,12 +120,17 @@ export class RetryRuntime {
 	#batchContinues = 0;
 	#gate: Promise<void> | undefined = undefined;
 	#release: (() => void) | undefined = undefined;
-	#activeFallback: ActiveRetryFallbackState | undefined = undefined;
+	readonly #fallback: RetryFallback;
 	#pendingRecoveredErrors: PendingRecoveredRetryError[] = [];
 
 	constructor(session: RetrySession, host: RetryHost) {
 		this.#session = session;
 		this.#host = host;
+		this.#fallback = new RetryFallback(session, {
+			emitSessionEvent: event => host.emitSessionEvent(event),
+			setModelWithProviderSessionReset: model => host.setModelWithProviderSessionReset(model),
+			classify: message => this.#classify(message),
+		});
 	}
 
 	/** Current retry attempt (0 if not retrying). */
@@ -265,45 +233,9 @@ export class RetryRuntime {
 		if (AIError.isContextOverflow(message, contextWindow)) return false;
 
 		if (isClassifierRefusal(message)) return true;
-		return AIError.retriable(id, { replayUnsafe: this.#hasReplayUnsafeToolOutput(message) });
-	}
-
-	/**
-	 * Retried turns remove the failed assistant message from active context, so
-	 * the question here is whether replaying it can double-apply a side effect.
-	 *
-	 * A tool call in a FAILED turn is not evidence that the tool ran. The agent
-	 * loop has exactly one call site for `tool.execute()`, inside
-	 * `executeToolCalls`, and it is reached only from the runnable-stop branch;
-	 * an `error` stop returns before it, pairing every retained call with a
-	 * placeholder result that says `executed: false`. So the ordinary shape of
-	 * this failure (a provider that stalls, or closes without a terminal finish
-	 * reason, after streaming its tool calls) has applied nothing at all, and
-	 * refusing to retry it turned a transport fault into a dead turn: the
-	 * operator saw the provider's error and the model was handed a ledger telling
-	 * it to reissue the calls itself, on a batch where nothing had happened.
-	 *
-	 * Two shapes ARE unsafe and both are checked. A Cursor exec-channel block
-	 * carries {@link kCursorExecResolved} because that channel dispatches the
-	 * tool through the caller's handler INSIDE the provider stream, before the
-	 * block is synthesized, so it may have finished, may still be running, and
-	 * may have applied half its work. And a call answered by a result that is
-	 * not a never-ran placeholder ran by definition, whatever produced it.
-	 */
-	#hasReplayUnsafeToolOutput(message: AssistantMessage): boolean {
-		const toolCallIds = new Set<string>();
-		for (const block of message.content) {
-			if (block.type !== "toolCall") continue;
-			if ((block as CursorExecResolvedCarrier)[kCursorExecResolved] === true) return true;
-			toolCallIds.add(block.id);
-		}
-		if (toolCallIds.size === 0) return false;
-		for (const contextMessage of this.#session.agent.state.messages) {
-			if (contextMessage.role !== "toolResult") continue;
-			if (!toolCallIds.has(contextMessage.toolCallId)) continue;
-			if (!toolResultNeverRan(contextMessage.details)) return true;
-		}
-		return false;
+		return AIError.retriable(id, {
+			replayUnsafe: hasReplayUnsafeToolOutput(message, this.#session.agent.state.messages),
+		});
 	}
 
 	/**
@@ -311,7 +243,7 @@ export class RetryRuntime {
 	 * the turn instead of ending the session's work.
 	 *
 	 * Retry and continuation answer different questions. Retry re-sends the turn,
-	 * which {@link #hasReplayUnsafeToolOutput} forbids once any call in the batch
+	 * which {@link hasReplayUnsafeToolOutput} forbids once any call in the batch
 	 * may have run: a Cursor exec-channel call dispatched inside the provider
 	 * stream, or a call that already has a real result. Continuation sends the
 	 * turn that is now in context, which is complete and valid: the failed
@@ -327,7 +259,7 @@ export class RetryRuntime {
 	 * stream, so a reset after the last result left a fully answered batch that
 	 * was neither replayable nor continued. The bar is narrow: the failure would
 	 * have been retried but for replay safety, the batch is continuable (see
-	 * {@link #batchCanContinue}), and the attempts run on their own allowance, sized by the same
+	 * {@link toolBatchCanContinue}), and the attempts run on their own allowance, sized by the same
 	 * `retry.maxRetries`, so a provider dying on every attempt cannot loop. Its
 	 * own counter rather than the retry ladder's: the two answer different
 	 * questions and one turn can legitimately reach both, so a turn that already
@@ -343,8 +275,9 @@ export class RetryRuntime {
 		// Blocked only by replay safety: transient on its own, refused with it.
 		if (!AIError.retriable(id, { replayUnsafe: false })) return false;
 		if (AIError.retriable(id, { replayUnsafe: true })) return false;
-		if (!this.#hasReplayUnsafeToolOutput(message)) return false;
-		if (!this.#batchCanContinue(message)) return false;
+		const context = this.#session.agent.state.messages;
+		if (!hasReplayUnsafeToolOutput(message, context)) return false;
+		if (!toolBatchCanContinue(message, context)) return false;
 		const policy = this.#resolvePolicy(retrySettings);
 		if (this.#batchContinues >= policy.maxRetries) return false;
 		this.#batchContinues += 1;
@@ -409,253 +342,13 @@ export class RetryRuntime {
 		return true;
 	}
 
-	/**
-	 * Whether sending the turn now in context moves the work forward, asked per CALL.
-	 *
-	 * Two shapes continue. A call left with no answer at all: its never-ran
-	 * placeholder and the ledger tell the model to reissue it. And a batch whose
-	 * every call carries a real result: the batch finished and only the model's
-	 * next step is missing, which is exactly the request an ordinary tool turn
-	 * sends after its results land. Cursor's exec channel produces the second
-	 * shape whenever the stream dies after the last call returned.
-	 *
-	 * One shape does not: an exec-channel call whose result has not arrived yet.
-	 * It ran or is running out of band, and a request sent now would answer it
-	 * with nothing while its real result is still on its way.
-	 *
-	 * A mixed batch is normal (the reported one: 21 interrupted, 54 never ran).
-	 * A call that already has a real result is answered, and a placeholder sitting
-	 * beside that result does not make it unanswered again.
-	 *
-	 * A call whose arguments never finished streaming is outstanding by
-	 * construction and is counted without looking for a result. `retainCompleted-
-	 * ToolCalls` deletes its block, because partial arguments are unsafe to run
-	 * and an unpaired `tool_use` breaks replay, so nothing ever pairs against it:
-	 * looking it up among the results can only ever answer no. Its identity is
-	 * on `incompleteToolCalls` and the ledger tells the model to reconstruct the
-	 * arguments, which is work only a further request can do.
-	 */
-	#batchCanContinue(message: AssistantMessage): boolean {
-		if ((message.incompleteToolCalls?.length ?? 0) > 0) return true;
-		const toolCallIds = new Set<string>();
-		for (const block of message.content) {
-			if (block.type === "toolCall") toolCallIds.add(block.id);
-		}
-		if (toolCallIds.size === 0) return false;
-		const answered = new Set<string>();
-		const unanswered = new Set<string>();
-		for (const contextMessage of this.#session.agent.state.messages) {
-			if (contextMessage.role !== "toolResult") continue;
-			const id = contextMessage.toolCallId;
-			if (!toolCallIds.has(id)) continue;
-			if (toolResultNeverRan(contextMessage.details)) unanswered.add(id);
-			else answered.add(id);
-		}
-		for (const id of unanswered) {
-			if (!answered.has(id)) return true;
-		}
-		// Nothing never ran, so continue only when nothing is still in flight either.
-		for (const id of toolCallIds) {
-			if (!answered.has(id)) return false;
-		}
-		return true;
-	}
-
-	/** What chain resolution reads, as of this call: the sanitized chains, role assignments and active model. */
-	#fallbackSource(): RetryFallbackChainSource {
-		const settings = this.#session.settings;
-		return {
-			chains: retryFallbackChainsForRoles(
-				settings.get("retry.fallbackChains"),
-				Object.keys(settings.getModelRoles()),
-			),
-			modelRole: role => settings.getModelRole(role),
-			models: this.#session.modelRegistry,
-			activeModel: this.#session.model,
-		};
-	}
-
-	#fallbackRevertPolicy(): RetryFallbackRevertPolicy {
-		return this.#session.settings.get("retry.fallbackRevertPolicy") === "never" ? "never" : "cooldown-expiry";
-	}
-
 	/** Forget the active fallback: an explicit model change supersedes it. */
 	clearActiveFallback(): void {
-		this.#activeFallback = undefined;
-	}
-
-	#isSelectorSuppressed(selector: RetryFallbackSelector): boolean {
-		return this.#session.modelRegistry.isSelectorSuppressed(selector.raw);
-	}
-
-	#noteFallbackCooldown(currentSelector: string, retryAfterMs: number | undefined, errorMessage: string): void {
-		const cooldownMs =
-			retryAfterMs && retryAfterMs > 0
-				? retryAfterMs
-				: calculateRateLimitBackoffMs(parseRateLimitReason(errorMessage), "selector-suppression");
-		this.#session.modelRegistry.suppressSelector(currentSelector, Date.now() + cooldownMs);
-	}
-
-	/** Switch to a fallback model for the rest of the retry sequence, recording what to restore. */
-	async #applyFallbackCandidate(
-		role: string,
-		selector: RetryFallbackSelector,
-		candidate: Model,
-		currentSelector: string,
-		options?: { pinFallback?: boolean },
-	): Promise<void> {
-		// Capture the configured selector (auto-aware) so a fallback chain preserves
-		// `auto` instead of collapsing it to the level it resolved to this turn.
-		const currentThinkingLevel = this.#session.configuredThinkingLevel();
-		const nextThinkingLevel = selector.thinkingLevel ?? currentThinkingLevel;
-		this.#switchModel(candidate);
-		this.#session.setThinkingLevel(nextThinkingLevel, false, "resolved");
-		if (!this.#activeFallback) {
-			this.#activeFallback = {
-				role,
-				originalSelector: currentSelector,
-				originalThinkingLevel: currentThinkingLevel,
-				lastAppliedFallbackThinkingLevel: nextThinkingLevel,
-				pinned: options?.pinFallback === true,
-			};
-		} else {
-			this.#activeFallback.lastAppliedFallbackThinkingLevel = nextThinkingLevel;
-			this.#activeFallback.pinned = this.#activeFallback.pinned || options?.pinFallback === true;
-		}
-		await this.#host.emitSessionEvent({
-			type: "retry_fallback_applied",
-			from: currentSelector,
-			to: selector.raw,
-			role,
-		});
-	}
-
-	/**
-	 * Switch the active model for a retry: a provider-session reset, an ephemeral model-change entry,
-	 * and a usage record. Every retry model switch (a chain fallback, the Fireworks Fast degrade, the
-	 * restore of the primary) goes through here.
-	 */
-	#switchModel(model: Model): string {
-		const selector = formatModelStringWithRouting(model);
-		this.#host.setModelWithProviderSessionReset(model);
-		this.#session.sessionManager.appendModelChange(selector, EPHEMERAL_MODEL_CHANGE_ROLE);
-		AgentStorage.forAgentDir(this.#session.settings.getAgentDir())?.recordModelUsage(selector);
-		return selector;
-	}
-
-	/** The registry model a fallback selector names, when it resolves and has a credential. */
-	async #usableModel(selector: RetryFallbackSelector): Promise<Model | undefined> {
-		const registry = this.#session.modelRegistry;
-		const resolved = resolveModelOverride([selector.raw], registry, this.#session.settings);
-		const model = resolved.model ?? registry.find(selector.provider, selector.id);
-		if (!model) return undefined;
-		return (await registry.getApiKey(model, this.#session.sessionId)) ? model : undefined;
-	}
-
-	async #tryModelFallback(currentSelector: string, options?: { pinFallback?: boolean }): Promise<boolean> {
-		const source = this.#fallbackSource();
-		const role = this.#activeFallback?.role ?? resolveRetryFallbackRole(source, currentSelector);
-		if (!role) return false;
-
-		for (const selector of findRetryFallbackCandidates(source, role, currentSelector)) {
-			if (this.#isSelectorSuppressed(selector)) continue;
-			const candidate = await this.#usableModel(selector);
-			if (!candidate) continue;
-			await this.#applyFallbackCandidate(role, selector, candidate, currentSelector, options);
-			return true;
-		}
-
-		return false;
-	}
-
-	/** The active model when it is a Fireworks Fast (`-fast`) variant, else undefined. */
-	#activeFireworksFastModel(): Model | undefined {
-		const model = this.#session.model;
-		return model?.provider === "fireworks" && isFireworksFastModelId(model.id) ? model : undefined;
-	}
-
-	/**
-	 * True when the current turn failed on a Fireworks Fast (`-fast`) model in a
-	 * way that should degrade to the reliable base (Standard) model. Fast is a
-	 * speed-optimized router with no SLA, so any *pre-content* failure — a
-	 * transient overload/5xx or a hard "router/model not found / unsupported" —
-	 * is worth retrying on the base id. Skips failures the base model shares:
-	 * context overflow (compaction's job), usage limits and auth errors (same
-	 * account/key), and turns that already emitted a tool call (replaying would
-	 * duplicate work). Requires the base model to exist in the registry.
-	 */
-	#isFireworksFastFallbackEligible(message: AssistantMessage): boolean {
-		const model = this.#activeFireworksFastModel();
-		if (!model) return false;
-		if (message.stopReason !== "error") return false;
-		if (message.content.some(block => block.type === "toolCall")) return false;
-		// A content refusal/sensitivity stop is the model's decision, not a route
-		// failure — switching to the base model would just re-trigger it.
-		if (isClassifierRefusal(message)) return false;
-		const id = this.#classify(message);
-		if (AIError.isContextOverflow(message, model.contextWindow ?? 0)) return false;
-		if (AIError.is(id, AIError.Flag.UsageLimit)) return false;
-		if (AIError.is(id, AIError.Flag.AuthFailed)) return false;
-		return this.#session.modelRegistry.find("fireworks", toFireworksBaseModelId(model.id)) !== undefined;
-	}
-
-	/**
-	 * True when a turn failed with a hard (non-retryable) provider error but a
-	 * configured `retry.fallbackChains` entry covers the active model: the same
-	 * model is not worth retrying, yet a DIFFERENT model is a fresh chance, so
-	 * the chain is consulted before the error becomes final. Skips failures a
-	 * model switch cannot fix or must not replay: cancellations (abort-flavored
-	 * errors are not model faults), context overflow (compaction's job),
-	 * classifier refusals (chain consult is handled on the retryable path with
-	 * `pinFallback`), and turns that already emitted a tool call (replaying
-	 * could duplicate work).
-	 */
-	#isHardErrorFallbackEligible(message: AssistantMessage): boolean {
-		if (message.stopReason !== "error") return false;
-		const model = this.#session.model;
-		if (!model) return false;
-		const retrySettings = this.#session.settings.getGroup("retry");
-		if (!retrySettings.enabled || !retrySettings.modelFallback) return false;
-		if (isClassifierRefusal(message)) return false;
-		const id = this.#classify(message);
-		if (AIError.is(id, AIError.Flag.Abort) || AIError.is(id, AIError.Flag.UserInterrupt)) return false;
-		if (AIError.isContextOverflow(message, model.contextWindow ?? 0)) return false;
-		if (this.#hasReplayUnsafeToolOutput(message)) return false;
-		const currentSelector = formatRetryFallbackSelector(model, this.#session.thinkingLevel);
-		const source = this.#fallbackSource();
-		const role = this.#activeFallback?.role ?? resolveRetryFallbackRole(source, currentSelector);
-		if (!role) return false;
-		return findRetryFallbackCandidates(source, role, currentSelector).length > 0;
-	}
-
-	/**
-	 * Switch the active model from a Fireworks Fast (`-fast`) variant to its base
-	 * (Standard) id and stick there for the rest of the session — the auto
-	 * fallback that makes Fast a safe default. Returns false when the current
-	 * model is not a fast variant, the base id is missing, or it has no key.
-	 */
-	async #tryFireworksFastFallback(currentSelector: string): Promise<boolean> {
-		const model = this.#activeFireworksFastModel();
-		if (!model) return false;
-		const registry = this.#session.modelRegistry;
-		const baseModel = registry.find("fireworks", toFireworksBaseModelId(model.id));
-		if (!baseModel) return false;
-		const apiKey = await registry.getApiKey(baseModel, this.#session.sessionId);
-		if (!apiKey) return false;
-		const baseSelector = this.#switchModel(baseModel);
-		await this.#host.emitSessionEvent({
-			type: "retry_fallback_applied",
-			from: currentSelector,
-			to: baseSelector,
-			role: "fireworks-fast",
-		});
-		return true;
+		this.#fallback.clear();
 	}
 
 	/** Restore the primary model a fallback replaced, once its cooldown has expired between retry sequences. */
 	async maybeRestoreFallbackPrimary(): Promise<void> {
-		if (!this.#activeFallback) return;
-		if (this.#attempt > 0) return;
 		// Restoring the primary means "the fallback is no longer needed", which is
 		// only ever true between retry sequences, never inside one. The cooldown
 		// that guards this is shorter than a retry budget takes to burn
@@ -664,40 +357,8 @@ export class RetryRuntime {
 		// came back mid-sequence, the next failure hopped away again on a budget
 		// freshly reset to 1, and the pair cycled for as long as the fault lasted.
 		// Every lap re-sent the whole prompt at full input rate.
-		if (this.#activeFallback.pinned) return;
-		if (this.#fallbackRevertPolicy() !== "cooldown-expiry") return;
-
-		const {
-			originalSelector: originalSelectorRaw,
-			originalThinkingLevel,
-			lastAppliedFallbackThinkingLevel,
-		} = this.#activeFallback;
-		const originalSelector = parseRetryFallbackSelector(originalSelectorRaw, this.#session.modelRegistry);
-		if (!originalSelector) {
-			this.clearActiveFallback();
-			return;
-		}
-
-		const currentModel = this.#session.model;
-		if (!currentModel) return;
-		const currentSelector = formatRetryFallbackSelector(currentModel, this.#session.thinkingLevel);
-		if (currentSelector === originalSelector.raw) {
-			if (!this.#isSelectorSuppressed(originalSelector)) {
-				this.clearActiveFallback();
-			}
-			return;
-		}
-		if (this.#isSelectorSuppressed(originalSelector)) return;
-
-		const primaryModel = await this.#usableModel(originalSelector);
-		if (!primaryModel) return;
-
-		const currentThinkingLevel = this.#session.configuredThinkingLevel();
-		const thinkingToApply =
-			currentThinkingLevel === lastAppliedFallbackThinkingLevel ? originalThinkingLevel : currentThinkingLevel;
-		this.#switchModel(primaryModel);
-		this.#session.setThinkingLevel(thinkingToApply, false, "resolved");
-		this.clearActiveFallback();
+		if (this.#attempt > 0) return;
+		await this.#fallback.maybeRestorePrimary();
 	}
 
 	/**
@@ -737,7 +398,7 @@ export class RetryRuntime {
 		// router errors the generic retry classifier rejects — so this runs before the standard
 		// retryability check.
 		if (
-			this.#isFireworksFastFallbackEligible(msg) &&
+			this.#fallback.fireworksFastEligible(msg) &&
 			(await this.#handleRetryableError(msg, { fireworksFastFallback: true }))
 		) {
 			return true;
@@ -748,7 +409,7 @@ export class RetryRuntime {
 			// A non-retryable hard error on a model covered by a configured fallback chain: retrying
 			// the SAME model is pointless, but a DIFFERENT model is a fresh chance. #handleRetryableError
 			// bails out (no backoff-retry of the failing model) when no switch happens.
-			this.#isHardErrorFallbackEligible(msg) &&
+			this.#fallback.hardErrorEligible(msg) &&
 			(await this.#handleRetryableError(msg, { hardErrorFallback: true }))
 		) {
 			return true;
@@ -891,16 +552,16 @@ export class RetryRuntime {
 			// last resort is for provider failures, not classifier decisions.
 			if (allowModelFallback && retrySettings.modelFallback && !(retryBudgetExhausted && classifierRefusal)) {
 				if (!classifierRefusal) {
-					this.#noteFallbackCooldown(currentSelector, parsedRetryAfterMs, errorMessage);
+					this.#fallback.noteCooldown(currentSelector, parsedRetryAfterMs, errorMessage);
 				}
-				switchedModel = await this.#tryModelFallback(currentSelector, { pinFallback: classifierRefusal });
+				switchedModel = await this.#fallback.tryChain(currentSelector, { pinFallback: classifierRefusal });
 			}
 			// Auto fallback from a Fireworks Fast variant to its base model. Independent
 			// of the role-fallback setting: it's intrinsic to the Fast contract (speed
 			// best-effort, degrade to Standard on failure) and triggers on hard router
 			// errors the generic retry classifier would otherwise reject.
 			if (!switchedModel && allowModelFallback && options?.fireworksFastFallback) {
-				switchedModel = await this.#tryFireworksFastFallback(currentSelector);
+				switchedModel = await this.#fallback.tryFireworksFast(currentSelector);
 			}
 			if (switchedModel) {
 				delayMs = 0;
@@ -1137,11 +798,12 @@ export class RetryRuntime {
 		// end: the countdown, an agent HUD's retryState and the turn's retry trace would stay open.
 		if (!landed || message.stopReason === "aborted" || !(this.#attempt > 0 || batchContinues > 0)) return;
 		const model = this.#session.model;
-		if (this.#activeFallback && model) {
+		const fallbackRole = this.#fallback.activeRole;
+		if (fallbackRole !== undefined && model) {
 			await this.#host.emitSessionEvent({
 				type: "retry_fallback_succeeded",
 				model: formatRetryFallbackSelector(model, this.#session.thinkingLevel),
-				role: this.#activeFallback.role,
+				role: fallbackRole,
 			});
 		}
 		const recoveredErrors = await this.#markPendingRecoveredErrors(message);

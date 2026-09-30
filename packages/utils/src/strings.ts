@@ -110,3 +110,16 @@ export function internString(value: string): string {
 	for (const key in holder) return key;
 	return value;
 }
+
+/**
+ * `value` copied into a buffer of its own.
+ *
+ * A JSC substring, the result of `slice`, `substring`, `split` or a regex capture, references the
+ * whole string it was cut from, and a rope built from one references it too. A cut stored past the
+ * life of its source keeps the source alive: a 35-character CPU model kept a 60 KB `/proc/cpuinfo`
+ * text. `slice(0)`, `String()` and a template literal return the same substring; the JSON round
+ * trip builds a new flat string.
+ */
+export function detachedString(value: string): string {
+	return JSON.parse(JSON.stringify(value)) as string;
+}

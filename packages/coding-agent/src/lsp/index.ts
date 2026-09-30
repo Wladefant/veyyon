@@ -10,8 +10,8 @@ import type {
 import {
 	atomicWriteFilePreservingMode,
 	errorMessage,
+	lazy,
 	logger,
-	once,
 	pathExists,
 	prompt,
 	readPipeText,
@@ -1651,7 +1651,7 @@ async function runLspWritethrough(
 
 	let finalContent = content;
 	const writeContent = (value: string) => commitFileContentAtomic(dst, value, signal);
-	const getWritePromise = once(() => writeContent(finalContent));
+	const commitWrite = lazy(() => writeContent(finalContent));
 	let writeNotified = false;
 	const notifyWriteCommitted = async (notifySignal: AbortSignal | undefined = signal) => {
 		if (writeNotified) return;
@@ -1670,7 +1670,7 @@ async function runLspWritethrough(
 		}
 	};
 	if (!enableFormat && !enableDiagnostics) {
-		await getWritePromise();
+		await commitWrite.value;
 		await notifyWriteCommitted();
 		return undefined;
 	}
@@ -1679,7 +1679,7 @@ async function runLspWritethrough(
 	const servers = getServersForFile(config, dst);
 
 	if (servers.length === 0) {
-		await getWritePromise();
+		await commitWrite.value;
 		await notifyWriteCommitted();
 		return undefined;
 	}
@@ -1733,7 +1733,7 @@ async function runLspWritethrough(
 				}
 
 				// 4. Write to disk
-				await getWritePromise();
+				await commitWrite.value;
 				await notifyWriteCommitted(operationSignal);
 			}
 
@@ -1762,7 +1762,7 @@ async function runLspWritethrough(
 				});
 			}
 		}
-		await getWritePromise();
+		await commitWrite.value;
 		// The write above committed even though the operation budget elapsed:
 		// announce it on the caller's signal — the dead `operationSignal` would
 		// abort the notify before it ever reaches the server.
@@ -1886,7 +1886,7 @@ export function createLspWritethrough(cwd: string, options?: WritethroughOptions
 /**
  * LSP tool for language server protocol operations.
  */
-export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails> {
+export class LspTool implements AgentTool<typeof lspSchema.value, LspToolDetails> {
 	readonly name = "lsp";
 	readonly view = lspToolView;
 	readonly approval = (args: unknown): ToolApprovalDecision => {
@@ -1906,7 +1906,9 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails> {
 	readonly loadMode = "discoverable";
 	readonly summary = "Query LSP (language server) for diagnostics, hover info, and references";
 	readonly description: string;
-	readonly parameters = lspSchema;
+	get parameters(): typeof lspSchema.value {
+		return lspSchema.value;
+	}
 	readonly strict = true;
 
 	constructor(private readonly session: ToolSession) {

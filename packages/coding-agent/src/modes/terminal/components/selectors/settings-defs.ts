@@ -245,13 +245,6 @@ const CONDITIONS: Record<string, () => boolean> = {
 	// its own graphics protocol. Every other name is the shared vocabulary.
 	hasImageProtocol: () => !!TERMINAL.imageProtocol,
 	...bindSettingConditions(() => Settings.instance),
-	newKeepsBackgroundEnabled: () => {
-		try {
-			return Settings.instance.get("session.newKeepsBackground") === true;
-		} catch {
-			return false;
-		}
-	},
 };
 
 // ═══════════════════════════════════════════════════════════════════════════

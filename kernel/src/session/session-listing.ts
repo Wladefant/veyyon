@@ -3,6 +3,7 @@ import * as path from "node:path";
 import type { Message } from "@veyyon/ai";
 import {
 	DAY_MS,
+	detachedString,
 	getProfileSessionsDir,
 	getSessionsDir,
 	HOUR_MS,
@@ -58,7 +59,9 @@ export interface SessionInfo {
 	messageCount: number;
 	/** File size in bytes on disk; used for compact list rendering. */
 	size: number;
+	/** The first user message, or another role's first message when the window holds none, cut to 4096 characters. */
 	firstMessage: string;
+	/** Message text of the scanned window in file order, cut to 4096 characters. */
 	allMessagesText: string;
 	/**
 	 * Coarse lifecycle status from the session's last persisted message. Optional:
@@ -110,6 +113,17 @@ const SESSION_LIST_ESCALATED_PREFIX_BYTES = 1_048_576;
  * it the status falls back to `unknown` rather than misreporting.
  */
 const SESSION_LIST_SUFFIX_BYTES = 32_768;
+/**
+ * Characters of message text a listed session holds in `firstMessage` and in
+ * `allMessagesText`.
+ *
+ * The session picker searches this text and finds prompts past it through
+ * `history.db`. The bound applies to both scan windows: an escalated scan reads
+ * up to {@link SESSION_LIST_ESCALATED_PREFIX_BYTES} to find the first user
+ * message, and without the bound its row held every message in that window, in
+ * memory and in the directory's list index.
+ */
+const SESSION_LIST_TEXT_CHARS = 4096;
 const SESSION_LIST_PARALLEL_THRESHOLD = 64;
 const SESSION_LIST_MAX_WORKERS = 16;
 
@@ -391,12 +405,14 @@ function getSessionListWorkerCount(fileCount: number): number {
 function walkListEntries(entries: Record<string, unknown>[]): {
 	parsedMessageCount: number;
 	firstMessage: string;
+	/** Message texts in file order, stopped once they reach {@link SESSION_LIST_TEXT_CHARS}. */
 	allMessages: string[];
 	shortSummary: string | undefined;
 } {
 	let parsedMessageCount = 0;
 	let firstMessage = "";
 	const allMessages: string[] = [];
+	let textChars = 0;
 	let shortSummary: string | undefined;
 	for (let i = 1; i < entries.length; i++) {
 		const entry = entries[i] as { type?: string; message?: Message; shortSummary?: string };
@@ -405,10 +421,14 @@ function walkListEntries(entries: Record<string, unknown>[]): {
 		}
 		if (entry.type === "message" && entry.message) {
 			parsedMessageCount++;
+			if (textChars >= SESSION_LIST_TEXT_CHARS && firstMessage) continue;
 			if (entry.message.role === "user" || entry.message.role === "assistant") {
 				const textContent = contentText(entry.message.content, { separator: " " });
 				if (textContent) {
-					allMessages.push(textContent);
+					if (textChars < SESSION_LIST_TEXT_CHARS) {
+						allMessages.push(textContent);
+						textChars += textContent.length + 1;
+					}
 					if (!firstMessage && entry.message.role === "user") {
 						firstMessage = textContent;
 					}
@@ -417,6 +437,20 @@ function walkListEntries(entries: Record<string, unknown>[]): {
 		}
 	}
 	return { parsedMessageCount, firstMessage, allMessages, shortSummary };
+}
+
+/**
+ * `text` cut to {@link SESSION_LIST_TEXT_CHARS} without splitting a surrogate pair.
+ *
+ * A cut string is copied out with `detachedString`. A JSC substring references its
+ * whole parent, so a `slice` of the joined scan text would keep that text alive for
+ * as long as the row holding it.
+ */
+function boundListText(text: string): string {
+	if (text.length <= SESSION_LIST_TEXT_CHARS) return text;
+	const last = text.charCodeAt(SESSION_LIST_TEXT_CHARS - 1);
+	const end = last >= 0xd800 && last <= 0xdbff ? SESSION_LIST_TEXT_CHARS - 1 : SESSION_LIST_TEXT_CHARS;
+	return detachedString(text.slice(0, end));
 }
 
 /**
@@ -531,7 +565,7 @@ async function scanSessionFile(
 			walked = walkListEntries(parseJsonlLenient<Record<string, unknown>>(wide));
 		}
 		const { parsedMessageCount, allMessages, shortSummary } = walked;
-		const firstMessage = walked.firstMessage || (extractFirstDisplayMessageFromPrefix(scanned) ?? "");
+		const firstMessage = boundListText(walked.firstMessage || (extractFirstDisplayMessageFromPrefix(scanned) ?? ""));
 		const messageCount = Math.max(parsedMessageCount, countMessageMarkers(scanned));
 		const info: SessionInfo = {
 			path: file,
@@ -544,7 +578,7 @@ async function scanSessionFile(
 			messageCount,
 			size,
 			firstMessage: firstMessage || "(no messages)",
-			allMessagesText: allMessages.length > 0 ? allMessages.join(" ") : firstMessage,
+			allMessagesText: allMessages.length > 0 ? boundListText(allMessages.join(" ")) : firstMessage,
 			status: withStatus ? deriveSessionStatus(suffix) : undefined,
 		};
 		index?.set(info, mtime.getTime(), withStatus);

@@ -373,4 +373,4 @@ The binary meets the first target at 84ms warm and 79ms cold, medians of 5 on an
 It is still a target and not a gate. Wiring it to CI needs a runner whose timings are stable enough
 that a red build means a regression, and a first-frame median here moves by more than 50% between
 repetitions, and by more than that when a type check shares the machine.
-*Verified against `46980a2485` on 2026-09-11.*
+*Verified against `9a035acb63` on 2026-09-30.*
