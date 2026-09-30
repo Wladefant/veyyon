@@ -200,7 +200,7 @@ import { HomeAnchorLayout } from "./controllers/home-anchor-layout";
 import { InputController } from "./controllers/input-controller";
 import { MCPCommandController } from "./controllers/mcp-command-controller";
 import { OmfgController } from "./controllers/omfg-controller";
-import { SelectorController } from "./controllers/selector-controller";
+import type { SelectorController } from "./controllers/selector-controller";
 import { SessionFocusController } from "./controllers/session-focus-controller";
 import { SSHCommandController } from "./controllers/ssh-command-controller";
 import { TanCommandController } from "./controllers/tan-command-controller";
@@ -233,6 +233,7 @@ import type {
 	TodoItem,
 	TodoPhase,
 } from "./types";
+import { focusEditorSlot } from "./utils/interactive-context-helpers";
 import { createSelectionAttemptNotice } from "./utils/selection-notice";
 import { UiHelpers } from "./utils/ui-helpers";
 
@@ -488,7 +489,13 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 	readonly #extensionUiController: ExtensionUiController;
 	readonly #inputController: InputController;
-	readonly #selectorController: SelectorController;
+	/**
+	 * The selector cards and panels (settings, models, accounts, sessions, dashboards) and the modules
+	 * they draw with load when the first one opens, so an idle session holds none of them. Once loaded, a
+	 * card opens synchronously, as it did before the load was deferred.
+	 */
+	#selectorController: SelectorController | undefined;
+	#selectorLoad: Promise<SelectorController> | undefined;
 	readonly #focusController: SessionFocusController;
 	get viewSession(): AgentSession {
 		return this.#focusController.target ?? this.session;
@@ -885,7 +892,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#eventController = new EventController(this);
 		this.#commandController = new CommandController(this);
 		this.#todoCommandController = new TodoCommandController(this);
-		this.#selectorController = new SelectorController(this);
 		this.#inputController = new InputController(this);
 		this.#voiceController = new VoiceController(this);
 		this.#goalMode = new GoalModeController(this, {
@@ -1381,6 +1387,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		});
 
 		this.#inputController.setupEditorSubmitHandler();
+		// A picker requested before the first frame opens with the rest of the early input, so its
+		// controller is loaded before the queue drains. A failed load is reported by the open itself.
+		if (this.editor.hasEarlyActions()) await this.#selectors().catch(() => undefined);
 		this.#inputController.drainEarlySubmissions();
 	}
 
@@ -4089,7 +4098,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async showDebugSelector(): Promise<void> {
-		await this.#selectorController.showDebugSelector();
+		await (await this.#selectors()).showDebugSelector();
 	}
 
 	resetObserverRegistry(): void {
@@ -4144,7 +4153,37 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	focusActiveEditorArea(): void {
-		this.#selectorController.focusActiveEditorArea();
+		focusEditorSlot(this);
+	}
+
+	/** The selector controller, imported on first use; a failed import is retried on the next open. */
+	#selectors(): Promise<SelectorController> {
+		if (this.#selectorController) return Promise.resolve(this.#selectorController);
+		this.#selectorLoad ??= import("./controllers/selector-controller").then(
+			module => {
+				this.#selectorController = new module.SelectorController(this);
+				return this.#selectorController;
+			},
+			(error: unknown) => {
+				this.#selectorLoad = undefined;
+				throw error;
+			},
+		);
+		return this.#selectorLoad;
+	}
+
+	/**
+	 * Opens a card for a key or command handler that does not wait on it. Synchronous once the controller
+	 * is loaded, so input typed after the key reaches the card; the first open reports a failed load.
+	 */
+	#openSelector(open: (selectors: SelectorController) => void): void {
+		if (this.#selectorController) {
+			open(this.#selectorController);
+			return;
+		}
+		this.#selectors()
+			.then(open)
+			.catch((error: unknown) => this.showError(`Could not open the panel: ${errorMessage(error)}`));
 	}
 
 	// Selector handling
@@ -4161,23 +4200,23 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	showSettingsSelector(initialItemId?: string): void {
-		this.#selectorController.showSettingsSelector(initialItemId);
+		this.#openSelector(selectors => selectors.showSettingsSelector(initialItemId));
 	}
 
-	showAdvisorConfigure(): Promise<void> {
-		return this.#selectorController.showAdvisorConfigure();
+	async showAdvisorConfigure(): Promise<void> {
+		await (await this.#selectors()).showAdvisorConfigure();
 	}
 
 	showHistorySearch(): void {
-		this.#selectorController.showHistorySearch();
+		this.#openSelector(selectors => selectors.showHistorySearch());
 	}
 
 	showExtensionsDashboard(): void {
-		void this.#selectorController.showExtensionsDashboard();
+		this.#openSelector(selectors => void selectors.showExtensionsDashboard());
 	}
 
 	showAgentsDashboard(options?: { requireContent?: boolean }): void {
-		this.#selectorController.showAgentsDashboard(this.#observerRegistry, options);
+		this.#openSelector(selectors => selectors.showAgentsDashboard(this.#observerRegistry, options));
 	}
 
 	showSecretList(): void {
@@ -4185,11 +4224,11 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	showModelSelector(options?: { temporaryOnly?: boolean }): void {
-		this.#selectorController.showModelSelector(options);
+		this.#openSelector(selectors => selectors.showModelSelector(options));
 	}
 
 	showThinkingSelector(): void {
-		this.#selectorController.showThinkingSelector();
+		this.#openSelector(selectors => selectors.showThinkingSelector());
 	}
 
 	showSubcommandPicker(
@@ -4197,54 +4236,54 @@ export class InteractiveMode implements InteractiveModeContext {
 		subcommands: readonly SubcommandDef[],
 		onSelect: (subcommand: SubcommandDef) => void,
 	): void {
-		this.#selectorController.showSubcommandPicker(commandName, subcommands, onSelect);
+		this.#openSelector(selectors => selectors.showSubcommandPicker(commandName, subcommands, onSelect));
 	}
 
 	showPluginSelector(mode?: "install" | "uninstall"): void {
-		void this.#selectorController.showPluginSelector(mode);
+		this.#openSelector(selectors => void selectors.showPluginSelector(mode));
 	}
 
 	showUserMessageSelector(): void {
-		this.#selectorController.showUserMessageSelector();
+		this.#openSelector(selectors => selectors.showUserMessageSelector());
 	}
 
 	showCopySelector(): void {
-		this.#selectorController.showCopySelector();
+		this.#openSelector(selectors => selectors.showCopySelector());
 	}
 
 	showTreeSelector(): void {
-		this.#selectorController.showTreeSelector();
+		this.#openSelector(selectors => selectors.showTreeSelector());
 	}
 
 	showSessionSelector(): void {
-		this.#selectorController.showSessionSelector();
+		this.#openSelector(selectors => selectors.showSessionSelector());
 	}
 
-	handleResumeSession(sessionPath: string): Promise<void> {
+	async handleResumeSession(sessionPath: string): Promise<void> {
 		this.#btwController.dispose();
 		this.#omfgController.dispose();
 		this.resetObserverRegistry();
-		return this.#selectorController.handleResumeSession(sessionPath);
+		await (await this.#selectors()).handleResumeSession(sessionPath);
 	}
 
-	handleSessionDeleteCommand(): Promise<void> {
-		return this.#selectorController.handleSessionDeleteCommand();
+	async handleSessionDeleteCommand(): Promise<void> {
+		await (await this.#selectors()).handleSessionDeleteCommand();
 	}
 
-	showAccountManager(providerId?: string): Promise<void> {
-		return this.#selectorController.showAccountManager(providerId);
+	async showAccountManager(providerId?: string): Promise<void> {
+		await (await this.#selectors()).showAccountManager(providerId);
 	}
 
-	showLogin(providerId?: string): Promise<void> {
-		return this.#selectorController.showLogin(providerId);
+	async showLogin(providerId?: string): Promise<void> {
+		await (await this.#selectors()).showLogin(providerId);
 	}
 
-	showLogout(providerId?: string): Promise<void> {
-		return this.#selectorController.showLogout(providerId);
+	async showLogout(providerId?: string): Promise<void> {
+		await (await this.#selectors()).showLogout(providerId);
 	}
 
-	showResetUsageSelector(): Promise<void> {
-		return this.#selectorController.showResetUsageSelector();
+	async showResetUsageSelector(): Promise<void> {
+		await (await this.#selectors()).showResetUsageSelector();
 	}
 
 	showProviderSetup(): Promise<void> {

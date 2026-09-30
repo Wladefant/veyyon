@@ -60,6 +60,7 @@ packages/coding-agent/src/memory/mnemopi/state.ts
 packages/coding-agent/src/memory/resolve.ts
 packages/coding-agent/src/modes/terminal/components/dialogs/plugin-settings.ts
 packages/coding-agent/src/modes/terminal/controllers/selector-controller.ts
+packages/coding-agent/src/modes/terminal/interactive-mode.ts
 packages/coding-agent/src/modes/terminal/setup-wizard/lazy.ts
 packages/coding-agent/src/sdk.ts
 packages/coding-agent/src/session/agent-session.ts
