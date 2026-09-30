@@ -66,7 +66,7 @@ const GRANDFATHERED: Readonly<Record<string, number>> = {
 	"packages/ai/test/auth-storage-force-refresh-rotate.test.ts": 9,
 	"packages/ai/test/auth-storage-oauth-account-select.test.ts": 1,
 	"packages/ai/test/auth-storage-oauth-refresh-race.test.ts": 3,
-	"packages/ai/test/auth-storage-sqlite-busy.test.ts": 2,
+	"packages/ai/test/auth-storage-sqlite-busy.test.ts": 1,
 	"packages/ai/test/auth-storage-usage-cache.test.ts": 1,
 	"packages/ai/test/azure-openai-responses-stream.test.ts": 4,
 	"packages/ai/test/claude-usage-retry.test.ts": 3,

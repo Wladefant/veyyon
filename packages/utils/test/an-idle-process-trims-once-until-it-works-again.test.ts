@@ -185,7 +185,10 @@ describe("lifecycle", () => {
 	});
 
 	test("a trim that throws stops sampling and says so", () => {
-		const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+		const warnings: unknown[][] = [];
+		vi.spyOn(logger, "warn").mockImplementation((message, context) => {
+			warnings.push([message, context]);
+		});
 		const h = harness(() => {
 			throw new Error("shrink is not a function");
 		});
@@ -194,9 +197,7 @@ describe("lifecycle", () => {
 		expect(h.trims).toEqual([QUIET_MS]);
 		expect(h.idle.running).toBe(false);
 		expect(h.armed.at(-1)!.cancelled).toBe(true);
-		expect(warn).toHaveBeenCalledWith("Idle trim failed; sampling stopped", {
-			error: "shrink is not a function",
-		});
+		expect(warnings).toEqual([["Idle trim failed; sampling stopped", { error: "shrink is not a function" }]]);
 	});
 });
 
