@@ -8,7 +8,16 @@ import type {
 	ToolTier,
 } from "@veyyon/agent-core";
 import { BARE_LITERAL_VALUE_RE, formatHashlineHeader } from "@veyyon/hashline";
-import { atomicWriteFileWith, errorMessage, isEnoent, isRecord, prompt, untilAborted, urlScheme } from "@veyyon/utils";
+import {
+	atomicWriteFileWith,
+	errorMessage,
+	isEnoent,
+	isRecord,
+	lazy,
+	prompt,
+	untilAborted,
+	urlScheme,
+} from "@veyyon/utils";
 import { type } from "arktype";
 
 import { allLineNumbers, canonicalSnapshotKey, getFileSnapshotStore } from "../../edit/file-snapshot-store";
@@ -151,12 +160,14 @@ function parseBulkDirectives(content: string): Map<number, string> | null {
 	return map;
 }
 
-const writeSchema = type({
-	path: type("string").describe("file path"),
-	content: type("string").describe("file content"),
-});
+const writeSchema = lazy(() =>
+	type({
+		path: type("string").describe("file path"),
+		content: type("string").describe("file content"),
+	}),
+);
 
-export type WriteToolInput = typeof writeSchema.infer;
+export type WriteToolInput = typeof writeSchema.value.infer;
 
 /** Details returned by the write tool for TUI rendering */
 export interface WriteToolDetails {
@@ -416,7 +427,7 @@ export function writeFilesystemTargets(args: unknown): string[] {
  *
  * Creates or overwrites files with optional LSP formatting and diagnostics.
  */
-export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails> {
+export class WriteTool implements AgentTool<typeof writeSchema.value, WriteToolDetails> {
 	readonly name = "write";
 	readonly approval = (args: unknown): ToolTier => {
 		const rawPath = (args as Partial<WriteParams>).path;
@@ -451,7 +462,9 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 	// The declared path is the only file this call writes.
 	readonly label = "Write";
 	readonly description: string;
-	readonly parameters = writeSchema;
+	get parameters(): typeof writeSchema.value {
+		return writeSchema.value;
+	}
 	readonly strict = true;
 	readonly concurrency = "exclusive";
 	readonly loadMode = "essential";

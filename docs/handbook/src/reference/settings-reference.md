@@ -813,7 +813,7 @@ These keys are not in `/settings`. Some are state veyyon writes for itself (a sc
 | `compaction.thresholdPercent` | number | `-1` | Retired: use `compaction.threshold` instead. |
 | `compaction.thresholdTokens` | number | `-1` | Retired: use `compaction.threshold` instead. |
 | `cycleOrder` | array | `["smol","slow"]` |  |
-| `defaultThinkingLevel` | enum | `high` | Values: `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `auto`. Retired: use `defaultEffort` instead. |
+| `defaultThinkingLevel` | enum | `high` | Values: `off`, `auto`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Retired: use `defaultEffort` instead. |
 | `dev.autoqaPush.token` | string | _(unset)_ |  |
 | `disabledExtensions` | array | `[]` |  |
 | `disabledProviders` | array | `[]` |  |

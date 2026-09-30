@@ -137,7 +137,7 @@ export class ExtractionClient {
 			} catch (exc) {
 				lastError = exc;
 			}
-			if (modelIndex + 1 < models.length) await Bun.sleep(FALLBACK_MODEL_DELAY_MS);
+			if (modelIndex + 1 < models.length) await scheduler.wait(FALLBACK_MODEL_DELAY_MS);
 		}
 
 		diag.recordFailure("cloud", lastError, "all_models_failed");

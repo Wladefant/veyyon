@@ -7,7 +7,7 @@ import type {
 	ToolApprovalDecision,
 } from "@veyyon/agent-core";
 import type { ToolExample } from "@veyyon/ai";
-import { isEnoent, prompt } from "@veyyon/utils";
+import { isEnoent, lazy, prompt } from "@veyyon/utils";
 import { type } from "arktype";
 import {
 	type DapBreakpointRecord,
@@ -67,78 +67,84 @@ export const DEBUG_READONLY_ACTIONS: ReadonlySet<string> = new Set([
 	"modules",
 	"sessions",
 ]);
-const debugActionSchema = type.enumerated(
-	"launch",
-	"attach",
-	"set_breakpoint",
-	"remove_breakpoint",
-	"set_instruction_breakpoint",
-	"remove_instruction_breakpoint",
-	"data_breakpoint_info",
-	"set_data_breakpoint",
-	"remove_data_breakpoint",
-	"continue",
-	"step_over",
-	"step_in",
-	"step_out",
-	"pause",
-	"evaluate",
-	"stack_trace",
-	"threads",
-	"scopes",
-	"variables",
-	"disassemble",
-	"read_memory",
-	"write_memory",
-	"modules",
-	"loaded_sources",
-	"custom_request",
-	"output",
-	"terminate",
-	"sessions",
+const debugActionSchema = lazy(() =>
+	type.enumerated(
+		"launch",
+		"attach",
+		"set_breakpoint",
+		"remove_breakpoint",
+		"set_instruction_breakpoint",
+		"remove_instruction_breakpoint",
+		"data_breakpoint_info",
+		"set_data_breakpoint",
+		"remove_data_breakpoint",
+		"continue",
+		"step_over",
+		"step_in",
+		"step_out",
+		"pause",
+		"evaluate",
+		"stack_trace",
+		"threads",
+		"scopes",
+		"variables",
+		"disassemble",
+		"read_memory",
+		"write_memory",
+		"modules",
+		"loaded_sources",
+		"custom_request",
+		"output",
+		"terminate",
+		"sessions",
+	),
 );
-const debugSchema = type({
-	action: debugActionSchema,
-	"program?": type("string").describe("debug target path; Delve accepts Go package directories"),
-	"args?": type("string[]").describe("program arguments"),
-	"adapter?": type("string").describe("configured adapter id (gdb, lldb-dap, debugpy, dlv, rdbg, or dap.json entry)"),
-	cwd: "string?",
-	"file?": type("string").describe("source file"),
-	"line?": type("number").describe("source line"),
-	"function?": type("string").describe("function name"),
-	"name?": type("string").describe("variable or data name"),
-	"condition?": type("string").describe("breakpoint condition"),
-	hit_condition: "string?",
-	"expression?": type("string").describe("expression to evaluate"),
-	"context?": type("string").describe("evaluate context: watch | repl | hover | variables | clipboard"),
-	frame_id: "number?",
-	"scope_id?": type("number").describe("scope variables reference"),
-	"variable_ref?": type("number").describe("variable reference"),
-	"pid?": type("number").describe("process id for attach"),
-	"port?": type("number").describe("remote attach port"),
-	"host?": type("string").describe("remote attach host"),
-	"levels?": type("number").describe("max stack frames"),
-	"memory_reference?": type("string").describe("memory reference or address"),
-	instruction_reference: "string?",
-	instruction_count: "number?",
-	instruction_offset: "number?",
-	"count?": type("number").describe("bytes to read"),
-	"data?": type("string").describe("base64 memory payload"),
-	"data_id?": type("string").describe("data breakpoint id"),
-	"access_type?": "'read' | 'write' | 'readWrite'",
-	"command?": type("string").describe("custom dap request command"),
-	"arguments?": type({
-		"[string]": "unknown",
-	}).describe("custom request arguments"),
-	offset: "number?",
-	resolve_symbols: "boolean?",
-	allow_partial: "boolean?",
-	start_module: "number?",
-	module_count: "number?",
-	"timeout?": type("number").describe(describeTimeoutParam("debug")),
-});
+const debugSchema = lazy(() =>
+	type({
+		action: debugActionSchema.value,
+		"program?": type("string").describe("debug target path; Delve accepts Go package directories"),
+		"args?": type("string[]").describe("program arguments"),
+		"adapter?": type("string").describe(
+			"configured adapter id (gdb, lldb-dap, debugpy, dlv, rdbg, or dap.json entry)",
+		),
+		cwd: "string?",
+		"file?": type("string").describe("source file"),
+		"line?": type("number").describe("source line"),
+		"function?": type("string").describe("function name"),
+		"name?": type("string").describe("variable or data name"),
+		"condition?": type("string").describe("breakpoint condition"),
+		hit_condition: "string?",
+		"expression?": type("string").describe("expression to evaluate"),
+		"context?": type("string").describe("evaluate context: watch | repl | hover | variables | clipboard"),
+		frame_id: "number?",
+		"scope_id?": type("number").describe("scope variables reference"),
+		"variable_ref?": type("number").describe("variable reference"),
+		"pid?": type("number").describe("process id for attach"),
+		"port?": type("number").describe("remote attach port"),
+		"host?": type("string").describe("remote attach host"),
+		"levels?": type("number").describe("max stack frames"),
+		"memory_reference?": type("string").describe("memory reference or address"),
+		instruction_reference: "string?",
+		instruction_count: "number?",
+		instruction_offset: "number?",
+		"count?": type("number").describe("bytes to read"),
+		"data?": type("string").describe("base64 memory payload"),
+		"data_id?": type("string").describe("data breakpoint id"),
+		"access_type?": "'read' | 'write' | 'readWrite'",
+		"command?": type("string").describe("custom dap request command"),
+		"arguments?": type({
+			"[string]": "unknown",
+		}).describe("custom request arguments"),
+		offset: "number?",
+		resolve_symbols: "boolean?",
+		allow_partial: "boolean?",
+		start_module: "number?",
+		module_count: "number?",
+		"timeout?": type("number").describe(describeTimeoutParam("debug")),
+	}),
+);
 
-export type DebugParams = typeof debugSchema.infer;
+export type DebugParams = typeof debugSchema.value.infer;
 export type DebugAction = DebugParams["action"];
 
 export interface DebugToolDetails {
@@ -898,7 +904,7 @@ const DEBUG_ACTIONS: { readonly [A in DebugAction]: DebugActionRun } = {
 	},
 };
 
-export class DebugTool implements AgentTool<typeof debugSchema, DebugToolDetails> {
+export class DebugTool implements AgentTool<typeof debugSchema.value, DebugToolDetails> {
 	readonly name = "debug";
 	// Debug launches or attaches a debug adapter and evaluates expressions in
 	// the debuggee, so the process under it can reach any path.
@@ -918,11 +924,13 @@ export class DebugTool implements AgentTool<typeof debugSchema, DebugToolDetails
 	readonly label = "Debug";
 	readonly summary = "Debug a running process with DAP (debugger adapter protocol)";
 	readonly description: string;
-	readonly parameters = debugSchema;
+	get parameters(): typeof debugSchema.value {
+		return debugSchema.value;
+	}
 	readonly strict = true;
 	readonly view = debugToolView;
 
-	readonly examples: readonly ToolExample<typeof debugSchema.infer>[] = [
+	readonly examples: readonly ToolExample<typeof debugSchema.value.infer>[] = [
 		{
 			caption: "Launch and inspect hang",
 			note: '1. debug(action: "launch", program: "./my_app")\n2. debug(action: "set_breakpoint", file: "src/main.c", line: 42)\n3. debug(action: "continue")\n4. If the program appears hung: debug(action: "pause")\n5. Inspect state with `threads`, `stack_trace`, `scopes`, and `variables`',

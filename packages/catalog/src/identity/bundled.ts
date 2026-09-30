@@ -12,6 +12,7 @@ import {
 	getBundledModels,
 	getBundledProviders,
 	iterateBundledModelMetadata,
+	onBundledCatalogRelease,
 } from "../models";
 import type { Api, Model } from "../types";
 import {
@@ -32,6 +33,11 @@ function getBundledModelList(): readonly Model<Api>[] {
 
 let referenceIndex: ModelReferenceIndex | undefined;
 let metadataReferenceIndex: ModelReferenceIndex<ModelReferenceCandidate> | undefined;
+
+// The metadata index holds the parsed catalog's specs, so it is dropped when the catalog is released.
+onBundledCatalogRelease(() => {
+	metadataReferenceIndex = undefined;
+});
 
 /** Proxy-reference index over the bundled catalog. */
 export function getBundledModelReferenceIndex(): ModelReferenceIndex {

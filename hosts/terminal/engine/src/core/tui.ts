@@ -91,7 +91,6 @@ import {
 	lineRewriteSequence,
 	PreparedFrameCache,
 	pathToDescendant,
-	prepareLine,
 	prepareLinesArray,
 } from "./renderer";
 import {
@@ -567,6 +566,10 @@ export class TUI extends Container {
 	// once per frame by #doRender.
 	#componentRenderTargets = new Set<Component>();
 	#pendingRenderComponentsOnly = false;
+	// Virtualized roots holding committed rows past the screen they keep, queued
+	// by #publishCommittedRows. A component-scoped frame renders each with an
+	// empty child set (see ComponentScopedRender); consumed with the targets.
+	#compactionRoots = new Set<Component>();
 	// Root children that must re-render during the current compose; null for a
 	// full compose. Non-null only for the duration of a component-scoped
 	// render() call inside #doRender (the scratch set below, reused per frame).
@@ -826,10 +829,19 @@ export class TUI extends Container {
 
 	/**
 	 * Rows on the scroll tape — the engine's mirror of terminal scrollback,
-	 * which is what scroll isolation scrolls back through. Read-only.
+	 * which is what scroll isolation scrolls back through. The tape records
+	 * only while scroll isolation is on. Read-only.
 	 */
 	get scrollTapeRows(): number {
 		return this.#scrollTape.length;
+	}
+
+	/**
+	 * Rows the engine has handed to native scrollback since the last erase,
+	 * whether or not the scroll tape recorded them. Read-only.
+	 */
+	get scrolledOffRows(): number {
+		return this.#scrollTape.scrolledOffRows;
 	}
 
 	/**
@@ -990,15 +1002,26 @@ export class TUI extends Container {
 	 * pinned footer (see {@link setPinnedFooterChildCount}) live at the bottom.
 	 * A frozen view resumes following on wheel-down to the tail, on
 	 * {@link scrollToLiveTail} (the host calls it on submit), on resize/full
-	 * paints, and while an overlay is visible. Enabling mid-session writes
-	 * the wheel-tracking mode; disabling restores native terminal scrollback.
+	 * paints, and while an overlay is visible. The scroll tape records only
+	 * while isolation is on, so enabling it after the first paint writes the
+	 * wheel-tracking mode and replays the history, as a display reset does;
+	 * disabling restores native terminal scrollback.
 	 */
 	setScrollIsolation(enabled: boolean): void {
 		if (this.#scrollIsolation === enabled) return;
 		this.#scrollIsolation = enabled;
+		this.#scrollTape.setRecording(enabled);
 		this.#resumeLiveTail();
 		this.#syncWheelTracking();
 		this.#syncAltScroll();
+		if (enabled && this.#hasEverRendered) {
+			// Nothing recorded the rows that scrolled off while isolation was off.
+			// Replay the history the way a display reset does, so the tape records
+			// it on the way and scrolling back reaches the first row again.
+			this.#resizeEventPending = true;
+			this.requestRender(true, { clearScrollback: !isMultiplexerSession() });
+			return;
+		}
 		this.requestRender();
 	}
 
@@ -1794,11 +1817,10 @@ export class TUI extends Container {
 		for (let i = 0; i < nextLines.length; i++) {
 			const frameRow = segment.start + i;
 			const raw = nextLines[i]!;
-			const prepared = prepareLine(raw, width);
 			this.#composedFrame[frameRow] = raw;
-			this.#prepared.setRow(frameRow, prepared);
-			if (previousWindow[screenStart + i] === prepared.line) continue;
-			previousWindow[screenStart + i] = prepared.line;
+			const line = this.#prepared.setRow(frameRow, raw, width);
+			if (previousWindow[screenStart + i] === line) continue;
+			previousWindow[screenStart + i] = line;
 			if (firstChanged === -1) firstChanged = i;
 			lastChanged = i;
 		}
@@ -1898,7 +1920,7 @@ export class TUI extends Container {
 	 * reachable from the current root child list.
 	 */
 	#resolvePartialComposeRoots(width: number, height: number): Set<Component> | null {
-		if (this.#componentRenderTargets.size === 0) return null;
+		if (this.#componentRenderTargets.size === 0 && this.#compactionRoots.size === 0) return null;
 		if (!this.#canReuseComposedLayout(width, height)) return null;
 		const roots = this.#partialComposeRootsScratch;
 		roots.clear();
@@ -1920,6 +1942,13 @@ export class TUI extends Container {
 			} else if (children !== null) {
 				children.add(via);
 			}
+		}
+		// A root queued only to compact renders naming no child, so it re-derives
+		// no block. A target inside it widens the set as above.
+		for (const root of this.#compactionRoots) {
+			if (!this.children.includes(root)) continue;
+			roots.add(root);
+			if (!scoped.has(root)) scoped.set(root, new Set());
 		}
 		return roots;
 	}
@@ -2465,7 +2494,7 @@ export class TUI extends Container {
 		// mouse on every quiet frame of a virtualized transcript, which is what
 		// let the terminal scroll the composer off screen. Synced after the emit
 		// below.
-		this.#frameScrollable = frameLength > height || this.#scrollTape.length > 0;
+		this.#frameScrollable = frameLength > height || this.#scrollTape.scrolledOffRows > 0;
 		const finalBoundary = clampLow(this.#nativeScrollbackLiveRegionStart ?? frameLength, 0, frameLength);
 
 		// 2. Transition state captured before any emitter runs.
@@ -2526,7 +2555,12 @@ export class TUI extends Container {
 		// commit/audit/scroll-append planner below does not apply: every frame is a
 		// full viewport rewrite of the window already assembled above.
 		if (this.#altActive) {
-			this.#commitAltFrame(view, plan, frameLength, width, height, prefix.preCommitRows);
+			// A replay frame carries the whole history (#composeFrame rehydrated every
+			// virtualized root for it), so the tape is rebuilt from it: rows that
+			// scrolled off before isolation turned the tape on, or at another width,
+			// are not on it.
+			const replaysHistory = geometryRebuild || (replaceRequested && !resizeRepaintsInPlace());
+			this.#commitAltFrame(view, plan, frameLength, width, height, prefix.preCommitRows, replaysHistory);
 			return;
 		}
 		// `start()` ends in `requestRender(true)`, so the frame that follows an adoption arrives
@@ -2672,6 +2706,7 @@ export class TUI extends Container {
 		// previous segment of every other root child.
 		const partialRoots = componentScopedOnly ? this.#resolvePartialComposeRoots(width, height) : null;
 		this.#componentRenderTargets.clear();
+		this.#compactionRoots.clear();
 		if (partialRoots !== null) {
 			this.#partialComposeRoots = partialRoots;
 			try {
@@ -3172,7 +3207,9 @@ export class TUI extends Container {
 	 * frame near the viewport height however long the session runs. Here the tape
 	 * is not a mirror of terminal scrollback, it is the only copy — which is why
 	 * the audit is skipped entirely: nothing outside this process can hold us to
-	 * bytes we already painted, so there is no immutability to verify.
+	 * bytes we already painted, so there is no immutability to verify. A frame
+	 * that replays the whole history (`replaysHistory`) rewrites the tape from
+	 * its first row.
 	 */
 	#commitAltFrame(
 		view: AssembledWindow,
@@ -3181,10 +3218,12 @@ export class TUI extends Container {
 		width: number,
 		height: number,
 		preCommitRows: number,
+		replaysHistory: boolean,
 	): void {
 		const { frame, window } = view;
 		const { windowTop, chunkTo } = plan;
-		this.#appendScrollTape(frame, Math.min(preCommitRows, chunkTo), chunkTo);
+		if (replaysHistory) this.#scrollTape.clear();
+		this.#appendScrollTape(frame, replaysHistory ? 0 : Math.min(preCommitRows, chunkTo), chunkTo);
 		this.#committedRows = chunkTo;
 		this.#committedPrefix.length = 0;
 		this.#committedPrefixAuditRows = 0;
@@ -3192,6 +3231,12 @@ export class TUI extends Container {
 		this.#emitAltFrame(window, width, height, view.altCaret ?? undefined);
 		this.#previousWindow = window;
 		this.#previousFrameLength = frameLength;
+		// The geometry this frame was composed at. Left unrecorded, every later
+		// frame reads the resize again and replays the whole history, and a replay
+		// that commits rows requests the compaction frame that replays it again.
+		// Exit to the normal screen compares against #altEnterWidth instead.
+		this.#previousWidth = width;
+		this.#previousHeight = height;
 		// The rows the tape does not hold yet. Kept so exit can replay the whole
 		// transcript (tape + tail) onto the normal screen, since on this surface
 		// the terminal has never seen any of it.
@@ -3199,7 +3244,7 @@ export class TUI extends Container {
 		this.#altTranscriptReplayPending = true;
 		this.#clearScrollbackOnNextRender = false;
 		this.#hasEverRendered = true;
-		this.#publishCommittedRows();
+		this.#publishCommittedRows(replaysHistory ? 0 : preCommitRows);
 	}
 
 	/**
@@ -3262,7 +3307,7 @@ export class TUI extends Container {
 		this.#clearScrollbackOnNextRender = false;
 		this.#hasEverRendered = true;
 		this.#syncWheelTracking();
-		this.#publishCommittedRows();
+		this.#publishCommittedRows(0);
 		if (!firstPaint && rawFrame.length > height) this.#armPostFullPaintSettle();
 	}
 
@@ -3303,7 +3348,7 @@ export class TUI extends Container {
 		} else {
 			this.#committedPrefixAuditRows = Math.min(preAuditRows, this.#committedRows);
 		}
-		this.#publishCommittedRows();
+		this.#publishCommittedRows(preCommitRows);
 	}
 
 	/**
@@ -3370,14 +3415,36 @@ export class TUI extends Container {
 	 * retracted — would otherwise observe a count one frame stale and retract
 	 * rows that just entered immutable native scrollback, stranding an
 	 * orphaned copy above the repainted block.
+	 *
+	 * A virtualized root drops committed rows only while it renders, reading
+	 * the claim the previous frame published. Rows this frame committed past
+	 * `committedBefore` would stay in its frame, with every block that drew
+	 * them, until the root renders again, and a session that goes quiet after
+	 * the paint (a resumed session at rest, the end of a turn) renders nothing.
+	 * So when such a root now holds more committed rows than the screen it
+	 * keeps, a component-scoped frame follows that names none of its children:
+	 * the root drops those rows and re-derives no block. That frame commits
+	 * nothing new and requests no other.
 	 */
-	#publishCommittedRows(): void {
+	#publishCommittedRows(committedBefore: number): void {
+		const grew = this.#committedRows > committedBefore;
 		for (const segment of this.#frameSegments) {
-			setNativeScrollbackCommittedRows(
-				segment.component,
-				Math.min(segment.rowCount, Math.max(0, this.#committedRows - segment.start)),
-			);
+			const claim = Math.min(segment.rowCount, Math.max(0, this.#committedRows - segment.start));
+			setNativeScrollbackCommittedRows(segment.component, claim);
+			if (grew && claim > this.terminal.rows && canPrepareNativeScrollbackReplay(segment.component)) {
+				this.#requestCompaction(segment.component);
+			}
 		}
+	}
+
+	/** Queue a frame in which `root` renders with no child named, so it drops its committed rows. */
+	#requestCompaction(root: Component): void {
+		if (this.#stopped) return;
+		if (!this.#renderRequested && this.#postFullPaintSettleTimer === undefined) {
+			this.#pendingRenderComponentsOnly = true;
+		}
+		this.#compactionRoots.add(root);
+		this.#requestOrdinaryRender();
 	}
 
 	/**

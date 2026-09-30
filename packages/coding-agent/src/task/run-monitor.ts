@@ -8,7 +8,7 @@ import type { AgentEvent } from "@veyyon/agent-core";
 import type { Usage } from "@veyyon/ai";
 import { emptyUsage } from "@veyyon/catalog/models";
 import type { SideCompleteImpl } from "@veyyon/kernel/session/side-complete";
-import { errorMessage, isRecord, logger, popLoopPhase, pushLoopPhase, truncate } from "@veyyon/utils";
+import { detachedString, errorMessage, isRecord, logger, popLoopPhase, pushLoopPhase, truncate } from "@veyyon/utils";
 import type { StreamDecoder } from "argot";
 import { createAgentStreamDecoder, expandAgentReturn } from "../argot-wire";
 import type { ModelRegistry } from "../config/model-registry";
@@ -497,7 +497,11 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 
 	const emitProgressNow = () => {
 		progress.durationMs = Date.now() - startTime;
-		onProgress?.({ ...progress });
+		// A snapshot outlives the run in its readers: the spawning tool call and the agent HUD keep the
+		// last one. Each tail line is a cut of the streamed text, so it is copied out here, or eight
+		// short lines keep the whole tail buffer alive for every finished agent.
+		const snapshot: AgentProgress = { ...progress, recentOutput: progress.recentOutput.map(detachedString) };
+		onProgress?.(snapshot);
 		const activityGist =
 			progress.lastIntent ?? (progress.currentTool ? `running ${progress.currentTool}` : undefined);
 		if (activityGist) AgentRegistry.global().setActivity(id, activityGist);
@@ -510,7 +514,7 @@ export function createAgentRunMonitor(args: RunMonitorArgs): AgentRunMonitor {
 				parentToolCallId: args.parentToolCallId,
 				detached: args.detached,
 				assignment,
-				progress: { ...progress },
+				progress: { ...snapshot },
 				sessionFile: args.sessionFile,
 			});
 		}

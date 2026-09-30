@@ -132,7 +132,9 @@ const BRANCHES: Branch[] = [
 describe("every branch that fills the memo releases it after the hold window", () => {
 	for (const branch of BRANCHES) {
 		it(`reads the payload again after serving it from ${branch.name}`, async () => {
-			const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((async () => {
+			const requested: string[] = [];
+			vi.spyOn(globalThis, "fetch").mockImplementation((async (input: string | URL | Request) => {
+				requested.push(input instanceof Request ? input.url : String(input));
 				if (!branch.respond) throw new Error("this branch must not reach the network");
 				return branch.respond();
 			}) as unknown as typeof fetch);
@@ -149,7 +151,7 @@ describe("every branch that fills the memo releases it after the hold window", (
 			expect(second).not.toBe(first);
 			// A failure branch arms the backoff, so the re-read serves the stale disk copy; a 200 or 304
 			// renewed the disk copy. Either way the second fetch makes no network attempt.
-			expect(fetchSpy).toHaveBeenCalledTimes(branch.respond ? 1 : 0);
+			expect(requested).toHaveLength(branch.respond ? 1 : 0);
 		});
 	}
 });

@@ -1,6 +1,6 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
 import type { ToolExample } from "@veyyon/ai";
-import { prompt } from "@veyyon/utils";
+import { lazy, prompt } from "@veyyon/utils";
 import { type } from "arktype";
 import { loadCapability } from "../../discovery";
 import type { SSHHost } from "../../discovery/capability/ssh";
@@ -20,12 +20,14 @@ import { toolResult } from "../core/tool-result";
 import { clampTimeout, describeTimeoutParam, formatTimeoutClampNotice } from "../core/tool-timeouts";
 import { sshToolView } from "./ssh-view";
 
-const sshSchema = type({
-	host: type("string").describe("ssh host"),
-	command: type("string").describe("remote command"),
-	"cwd?": type("string").describe("remote working directory; omit unless required, never ~ or ~/..."),
-	"timeout?": type("number").describe(describeTimeoutParam("ssh")),
-});
+const sshSchema = lazy(() =>
+	type({
+		host: type("string").describe("ssh host"),
+		command: type("string").describe("remote command"),
+		"cwd?": type("string").describe("remote working directory; omit unless required, never ~ or ~/..."),
+		"timeout?": type("number").describe(describeTimeoutParam("ssh")),
+	}),
+);
 
 export interface SSHToolDetails {
 	meta?: OutputMeta;
@@ -128,9 +130,9 @@ async function loadHosts(session: ToolSession): Promise<{
 	return { hostNames, hostsByName };
 }
 
-type SshToolParams = typeof sshSchema.infer;
+type SshToolParams = typeof sshSchema.value.infer;
 
-export class SshTool implements AgentTool<typeof sshSchema, SSHToolDetails> {
+export class SshTool implements AgentTool<typeof sshSchema.value, SSHToolDetails> {
 	readonly name = "ssh";
 	// SSH runs a command on another host and moves files across, so nothing in
 	// the arguments bounds the local or remote paths it reaches.
@@ -144,7 +146,9 @@ export class SshTool implements AgentTool<typeof sshSchema, SSHToolDetails> {
 	readonly summary = "Execute a command on a remote host over SSH";
 	readonly loadMode = "discoverable";
 	readonly label = "SSH";
-	readonly parameters = sshSchema;
+	get parameters(): typeof sshSchema.value {
+		return sshSchema.value;
+	}
 	readonly concurrency = "exclusive";
 	readonly strict = true;
 	readonly view = sshToolView;
