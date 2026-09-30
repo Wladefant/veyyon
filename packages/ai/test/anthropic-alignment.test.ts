@@ -2221,7 +2221,7 @@ describe("Anthropic request fingerprint alignment", () => {
 		});
 	});
 
-	it("preserves task budget when forced tool choice disables thinking", async () => {
+	it("pins low effort (not a bare omission) when forced tool choice disables adaptive-only thinking", async () => {
 		const payload = (await captureAnthropicPayload(
 			buildModel({
 				...ANTHROPIC_MODEL_SPEC,
@@ -2257,10 +2257,77 @@ describe("Anthropic request fingerprint alignment", () => {
 			};
 		};
 
+		// Adaptive-only Opus 4.7 rejects `thinking.type: "disabled"`, and a bare
+		// omission defaults to adaptive thinking ON — so the forced-tool turn must
+		// pin the lowest effort to actually suppress reasoning (#6589), while the
+		// caller's task budget still rides along on output_config.
 		expect(payload.thinking).toBeUndefined();
 		expect(payload.output_config).toEqual({
+			effort: "low",
 			task_budget: { type: "tokens", total: 64_000 },
 		});
+	});
+
+	it("disables adaptive-only thinking when the caller sets disableReasoning via the public stream() path", async () => {
+		// #6589: disableReasoning is a SimpleStreamOptions flag that never reaches
+		// AnthropicOptions directly; mapOptionsForApi must fold it into
+		// thinkingEnabled:false so adaptive-only Opus 4.7 omits thinking + pins low
+		// effort instead of defaulting to adaptive-ON at the requested effort.
+		const { promise, resolve } = Promise.withResolvers<unknown>();
+		streamSimple(
+			buildModel({
+				...ANTHROPIC_MODEL_SPEC,
+				id: "claude-opus-4-7",
+				name: "Claude Opus 4.7",
+				thinking: {
+					mode: "anthropic-adaptive",
+					efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
+				},
+			}),
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
+			},
+			{
+				apiKey: "sk-ant-oat-test",
+				signal: createAbortedSignal(),
+				reasoning: Effort.High,
+				disableReasoning: true,
+				onPayload: payload => resolve(payload),
+			},
+		);
+		const payload = (await promise) as { thinking?: unknown; output_config?: { effort?: string } };
+
+		expect(payload.thinking).toBeUndefined();
+		expect(payload.output_config).toEqual({ effort: "low" });
+	});
+
+	it("deletes thinking without an effort pin for non-adaptive reasoning models on forced tool choice", async () => {
+		// Budget-thinking models (Sonnet 4.5) turn thinking off by simple omission,
+		// so the forced-tool guard must NOT leak an adaptive effort:"low" pin onto
+		// them (that pin is exclusive to adaptive-only families — #6589).
+		const payload = (await captureAnthropicPayload(
+			ANTHROPIC_MODEL,
+			{
+				systemPrompt: ["Stay concise."],
+				messages: [{ role: "user", content: "Use the tool", timestamp: Date.now() }],
+				tools: [
+					{
+						name: "lookup",
+						description: "Lookup a value",
+						parameters: { type: "object", properties: {}, additionalProperties: false },
+					},
+				],
+			},
+			{
+				thinkingEnabled: true,
+				reasoning: Effort.High,
+				toolChoice: { type: "tool", name: "lookup" },
+			},
+		)) as { thinking?: unknown; output_config?: unknown };
+
+		expect(payload.thinking).toBeUndefined();
+		expect(payload.output_config).toBeUndefined();
 	});
 
 	it("downgrades forced tool choice for Claude Fable/Mythos without deleting adaptive thinking", async () => {

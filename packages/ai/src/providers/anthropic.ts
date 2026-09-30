@@ -3386,13 +3386,30 @@ function createClient(
 	return { client, isOAuthToken: oauthToken };
 }
 
-function disableThinkingIfToolChoiceForced(params: MessageCreateParamsStreaming): void {
+function disableThinkingIfToolChoiceForced(
+	params: MessageCreateParamsStreaming,
+	model: Model<"anthropic-messages">,
+): void {
 	const toolChoice = params.tool_choice;
 	if (!toolChoice) return;
 	if (toolChoice.type !== "any" && toolChoice.type !== "tool") return;
 
 	delete params.thinking;
 	delete params.context_management;
+
+	// Adaptive-only models can't be switched off by omitting `thinking` — a bare
+	// omission defaults to adaptive thinking ON, so a forced-tool turn would still
+	// reason instead of calling the tool (#6589). Pin the lowest adaptive effort
+	// instead of dropping it, mirroring the disable branch in buildParams. Vertex
+	// rawPredict can't carry the effort beta as an HTTP header, so it keeps the
+	// delete behavior (the field is stripped there anyway; see buildParams).
+	if (isAdaptiveOnlyThinking(model) && model.provider !== "google-vertex") {
+		const outputConfig = (params.output_config as AnthropicOutputConfig | undefined) ?? {};
+		outputConfig.effort = "low";
+		params.output_config = outputConfig;
+		return;
+	}
+
 	const outputConfig = params.output_config as AnthropicOutputConfig | undefined;
 	if (!outputConfig) return;
 
@@ -3675,6 +3692,22 @@ function usesAdaptiveThinkingTagOnly(model: Model<"anthropic-messages">): boolea
 	return thinking.efforts.length > 0;
 }
 
+/**
+ * True for adaptive-only Claude models (Opus 4.6+, Sonnet 4.6+, Fable/Mythos 5)
+ * that reject `thinking.type: "disabled"`. Turning thinking off on these models
+ * means omitting the `thinking` field entirely and pinning the lowest adaptive
+ * effort — a bare omission defaults to adaptive thinking ON. Excludes MiniMax,
+ * which drives adaptive thinking through the `thinking.type: "adaptive"` tag
+ * itself rather than `output_config.effort`.
+ */
+function isAdaptiveOnlyThinking(model: Model<"anthropic-messages">): boolean {
+	return (
+		model.thinking?.mode === "anthropic-adaptive" &&
+		!model.compat.disableAdaptiveThinking &&
+		!usesAdaptiveThinkingTagOnly(model)
+	);
+}
+
 function resolveAnthropicAdaptiveEffort(
 	model: Model<"anthropic-messages">,
 	options: AnthropicOptions,
@@ -3760,12 +3793,7 @@ function buildAnthropicThinkingParams(
 		};
 	}
 	if (options?.thinkingEnabled === false) {
-		const compat = model.compat;
-		if (
-			model.thinking?.mode === "anthropic-adaptive" &&
-			!compat.disableAdaptiveThinking &&
-			!usesAdaptiveThinkingTagOnly(model)
-		) {
+		if (isAdaptiveOnlyThinking(model)) {
 			// Adaptive-only Claude models (Opus 4.6+, Sonnet 4.6+, Fable/Mythos 5) reject
 			// `thinking.type: "disabled"` — adaptive thinking cannot be switched off.
 			// Omit the thinking field (the API defaults to adaptive) and pin the
@@ -3967,7 +3995,7 @@ function buildParams(
 		params.tool_choice = toolChoice;
 	}
 
-	disableThinkingIfToolChoiceForced(params);
+	disableThinkingIfToolChoiceForced(params, model);
 	ensureMaxTokensForThinking(params, maxOutputTokens);
 	applyPromptCaching(params, cacheControl);
 	enforceCacheControlLimit(params, 4);
