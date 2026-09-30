@@ -29,6 +29,7 @@
 
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { atomicWriteFile } from "./atomic-write";
 import { getLogsDir } from "./dirs";
@@ -90,6 +91,16 @@ export interface SessionHeartbeat {
 	activeLanes: number;
 	/** Spawned sessions in this process. */
 	lanes: number;
+	/**
+	 * Resident set size of the writing process when this file was written. A
+	 * process the operating system kills for want of memory leaves no trace of
+	 * why; the last reading beside `freeMemBytes` is what separates that from a
+	 * console or terminal closing under it (veyyon#73). Absent in files an older
+	 * build wrote.
+	 */
+	rssBytes?: number;
+	/** Free physical memory on the host when this file was written. */
+	freeMemBytes?: number;
 }
 
 interface Participant {
@@ -148,6 +159,8 @@ function snapshot(): SessionHeartbeat | undefined {
 		heartbeatAt: new Date().toISOString(),
 		activeLanes,
 		lanes,
+		rssBytes: process.memoryUsage.rss(),
+		freeMemBytes: os.freemem(),
 	};
 }
 
@@ -276,6 +289,8 @@ function readHeartbeat(file: string): SessionHeartbeat | undefined {
 		if (typeof beat.startIdentity !== "string") beat.startIdentity = null;
 		if (typeof beat.activeLanes !== "number") beat.activeLanes = 0;
 		if (typeof beat.lanes !== "number") beat.lanes = 0;
+		if (typeof beat.rssBytes !== "number") delete beat.rssBytes;
+		if (typeof beat.freeMemBytes !== "number") delete beat.freeMemBytes;
 		return beat as SessionHeartbeat;
 	} catch {
 		// Atomic publication means a torn file is not ours to explain.
@@ -325,6 +340,8 @@ export function reportSilentDeaths(): SessionHeartbeat[] {
 					heartbeatAt: beat.heartbeatAt,
 					activeLanes: beat.activeLanes,
 					lanes: beat.lanes,
+					rssBytes: beat.rssBytes,
+					freeMemBytes: beat.freeMemBytes,
 				});
 			} catch (error) {
 				// Keep the evidence for a launch that can log it.

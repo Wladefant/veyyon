@@ -39,6 +39,8 @@ interface LogEntry {
 	heartbeatAt?: string;
 	activeLanes?: number;
 	lanes?: number;
+	rssBytes?: number;
+	freeMemBytes?: number;
 }
 
 interface Arena {
@@ -182,6 +184,9 @@ describe("a session that died below JavaScript", () => {
 
 		const beat = readHeartbeat(arena, pid);
 		expect(beat.phase).toBe("provider");
+		// The memory reading a process killed for want of memory leaves behind.
+		expect(beat.rssBytes).toBeGreaterThan(0);
+		expect(beat.freeMemBytes).toBeGreaterThan(0);
 
 		await runFixture(arena, "report");
 
@@ -194,6 +199,8 @@ describe("a session that died below JavaScript", () => {
 		// The spawned lane streaming beside Main, as in the incident.
 		expect(reported[0].lanes).toBe(1);
 		expect(reported[0].activeLanes).toBe(1);
+		expect(reported[0].rssBytes).toBe(beat.rssBytes);
+		expect(reported[0].freeMemBytes).toBe(beat.freeMemBytes);
 		expect(Date.parse(reported[0].startedAt ?? "")).toBeGreaterThan(0);
 		expect(Date.parse(reported[0].heartbeatAt ?? "")).toBeGreaterThanOrEqual(Date.parse(reported[0].startedAt ?? ""));
 		// Swept, so the same death is not re-reported on every later launch.
