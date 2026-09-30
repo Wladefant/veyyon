@@ -14,6 +14,7 @@
 
 ### Fixed
 
+- Fixed the leaked-thinking wrapper merging consecutive signed thinking blocks, dropping text that arrives only at `thinking_end`, and appending recovered signed blocks after the tool call they precede.
 - Fixed custom Anthropic base URLs losing native thinking signatures in the leaked-thinking recovery wrapper by capturing signatures delivered at thinking_end ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Recovered unstreamed signature-bearing thinking blocks in the leaked-thinking wrapper so thought signatures delivered without prior deltas survive for replay ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).
 - Fixed Antigravity auto endpoint routing stopping after the daily endpoint exhausted its empty-stream retries, allowing retryable pre-content provider failures to fail over to the sandbox endpoint without replaying partial output or retrying content blocks ([Refs #107](https://github.com/Wladefant/veyyon/issues/107)).

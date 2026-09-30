@@ -84,7 +84,10 @@ export function wrapLeakedThinkingStream(inner: AssistantMessageEventStream): As
 					case "thinking_end": {
 						projector ??= new LeakedThinkingProjector(out, event.partial);
 						const block = event.partial.content[event.contentIndex];
-						projector.thinkingEnd(block?.type === "thinking" ? block.thinkingSignature : undefined);
+						projector.thinkingEnd(
+							block?.type === "thinking" ? block.thinkingSignature : undefined,
+							event.content,
+						);
 						break;
 					}
 					case "toolcall_start": {
@@ -186,15 +189,18 @@ class LeakedThinkingProjector {
 	 * every current-turn function-call replay unsigned, which Gemini 3 punishes
 	 * with empty stops and `server_error: stream closed with reason: error`.
 	 */
-	thinkingEnd(signature: string | undefined): void {
+	thinkingEnd(signature: string | undefined, content: string): void {
 		if (this.#thinking) {
 			if (signature !== undefined) {
 				(this.#partial.content[this.#thinking.index] as ThinkingContent).thinkingSignature = signature;
 			}
+			// The native block is complete: close it so the next block's deltas and
+			// signature start a new one instead of overwriting this one.
+			this.#closeThinking();
 			return;
 		}
 		if (signature) {
-			this.#projectSignedThinking("", signature);
+			this.#projectSignedThinking(content, signature);
 		}
 	}
 
@@ -204,12 +210,22 @@ class LeakedThinkingProjector {
 	 * semantics as {@link toolStart}) so block order survives for replay —
 	 * the signature item must precede the function call it signs.
 	 */
-	#projectSignedThinking(thinking: string, signature: string): void {
+	#projectSignedThinking(thinking: string, signature: string, beforeToolCallId?: string): void {
 		this.#apply(this.#healer.flushEvents(), this.#lastTextSignature);
 		this.#closeText();
 		this.#closeThinking();
-		this.#partial.content.push({ type: "thinking", thinking, thinkingSignature: signature });
-		const index = this.#partial.content.length - 1;
+		const block: ThinkingContent = { type: "thinking", thinking, thinkingSignature: signature };
+		// A recovered block belongs where the terminal message put it: ahead of the
+		// tool call it signs, which a per-item stream may already have projected.
+		let index = this.#partial.content.length;
+		if (beforeToolCallId !== undefined) {
+			const at = this.#partial.content.findIndex(p => p.type === "toolCall" && p.id === beforeToolCallId);
+			if (at !== -1) index = at;
+		}
+		this.#partial.content.splice(index, 0, block);
+		for (const entry of this.#toolBlocks.values()) {
+			if (entry.index >= index) entry.index += 1;
+		}
 		this.#out.push({ type: "thinking_start", contentIndex: index, partial: this.#partial });
 		this.#out.push({
 			type: "thinking_end",
@@ -282,7 +298,7 @@ class LeakedThinkingProjector {
 		// reached the projector at all (e.g. a terminal message assembled from
 		// blocks that skipped per-item events) must still survive with their
 		// text and signature intact.
-		for (const block of message.content) {
+		for (const [at, block] of message.content.entries()) {
 			if (block?.type !== "thinking" || !block.thinkingSignature) continue;
 			if (this.#thinking) {
 				const open = this.#partial.content[this.#thinking.index] as ThinkingContent;
@@ -296,7 +312,12 @@ class LeakedThinkingProjector {
 			) {
 				continue;
 			}
-			this.#projectSignedThinking(block.thinking, block.thinkingSignature);
+			const next = message.content[at + 1];
+			this.#projectSignedThinking(
+				block.thinking,
+				block.thinkingSignature,
+				next?.type === "toolCall" ? next.id : undefined,
+			);
 		}
 		let fullText = "";
 		let tailSignature: string | undefined;
