@@ -162,24 +162,27 @@ export interface Citations {
 /**
  * Words that turn a mention into a statement that the change was NOT carried ("ported X but not Y",
  * "the follow-ups remain unported:"). A lane writes these to list what is still owed, and
- * https://github.com/Wladefant/veyyon/pull/180 did exactly that for two oh-my-pi follow-ups.
+ * https://github.com/Wladefant/veyyon/pull/180 did exactly that for two oh-my-pi follow-ups. Only
+ * predicates count: "without" and "remaining" modify another noun ("Port X without changing
+ * behavior", "Port the remaining change X") and say nothing about whether X was carried.
  */
-const NEGATION =
-	/\b(?:not|never|without|lacks?|lacking|missing|un-?ported|skipp?ed|pending|remain(?:s|ing)?)\b|n['’]t\b/i;
-/** Clause boundaries inside one line: a sentence end, a semicolon, a contrast, or a comma before "not". */
-const CLAUSE_BOUNDARY = /[.!?;](?=\s|$)|\s—\s|\b(?:but|however|yet)\b|,\s+(?=not\b)/gi;
-/** How many words before a negation word it still reaches ("X is not ported", "X lacks its fix"). */
-const NEGATION_LOOKBEHIND = /(?:\S+\s*){1,3}$/;
+const NEGATION = /\b(?:not|never|lacks?|lacking|missing|un-?ported|skipp?ed|pending|remains?)\b|n['’]t\b/i;
+/**
+ * Clause boundaries inside one line: a sentence end, a semicolon, a contrast, a subordinator that
+ * starts a new predicate ("Port X so the cap does not fake truncation"), or a comma before "not".
+ */
+const CLAUSE_BOUNDARY =
+	/[.!?;](?=\s|$)|\s—\s|\b(?:but|however|yet|so(?: that)?|because|since|while|whereas|although|though)\b|,\s+(?=not\b)/gi;
 const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s/;
 
 /**
  * The text with every mention a negation word covers blanked out, so a mention only counts when the
- * text does not deny the port. Within one clause a negation word denies everything after it and the
- * three words before it (`X is not ported`), but not an earlier mention: "Port f69783 so the cap
- * does not fake truncation" still cites f69783. A line that denies and ends in a colon
- * ("... are not ported:") denies the list items under it too. Where the wording is ambiguous the
- * mention is denied: a commit read as missing gets checked by hand, while one read as carried is
- * never looked at again.
+ * text does not deny the port. Within one clause a negation word denies the whole clause, before
+ * and after it (`4e78d12428e5 from upstream is still definitely not ported`), but not an earlier
+ * clause: "Port f69783 so the cap does not fake truncation" still cites f69783. A line that denies
+ * and ends in a colon ("... are not ported:") denies the list items under it too. Where the wording
+ * is ambiguous the mention is denied: a commit read as missing gets checked by hand, while one read
+ * as carried is never looked at again.
  */
 export function withoutNegatedClauses(text: string): string {
 	let listDenied = false;
@@ -194,10 +197,9 @@ export function withoutNegatedClauses(text: string): string {
 			for (const boundary of [...line.matchAll(CLAUSE_BOUNDARY), null]) {
 				const end = boundary ? boundary.index : line.length;
 				const clause = line.slice(last, end);
-				const cue = NEGATION.exec(clause);
-				if (cue) {
+				if (NEGATION.test(clause)) {
 					denied = true;
-					kept.push(clause.slice(0, cue.index).replace(NEGATION_LOOKBEHIND, ""));
+					kept.push("");
 				} else kept.push(clause);
 				last = boundary ? end + boundary[0].length : end;
 			}

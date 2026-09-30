@@ -155,6 +155,13 @@ describe("citations", () => {
 
 	it("keeps a citation whose sentence denies something else", () => {
 		expect([...cited("Port 4e78d12428e5 so the queue does not grow without bound.").shas]).toEqual([SHA_A]);
+		expect([...cited("Port 4e78d12428e5 without changing behavior").shas]).toEqual([SHA_A]);
+		expect([...cited("Port the remaining upstream change 4e78d12428e5").shas]).toEqual([SHA_A]);
+	});
+
+	it("denies a commit whatever the distance between it and the negation", () => {
+		expect(cited("4e78d12428e5 from upstream is still definitely not ported").shas.size).toBe(0);
+		expect(cited("Still not ported, upstream's 4e78d12428e5 change from last week").shas.size).toBe(0);
 	});
 });
 
