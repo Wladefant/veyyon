@@ -678,6 +678,43 @@ async function callPerplexityAsk(
 			}
 		}
 
+		// A grounded ask (skip_search_enabled false + always_search_override) always
+		// returns web_results when Perplexity actually runs search. When the session is
+		// unauthenticated, expired, or the anonymous quota is exhausted, Perplexity
+		// answers HTTP 200 with zero sources and a signup-wall message ("Sign up and
+		// repeat your request.", localized by upstream). Classify a source-less
+		// response or an explicit signup wall message as a provider failure so the
+		// fallback chain advances, matching the DuckDuckGo/Startpage/Google/SearXNG
+		// wall paths.
+		const isSignupWall =
+			/sign\s*up\s*and\s*repeat/i.test(answer) ||
+			/inscri(?:vez|ption).*r[eé]p[eé]t/i.test(answer) ||
+			/registrier.*wiederhol/i.test(answer) ||
+			/reg[ií]str.*repite/i.test(answer);
+
+		if (auth.type === "anonymous" && (sourcesByUrl.size === 0 || isSignupWall)) {
+			throw new SearchProviderError(
+				"perplexity",
+				"Perplexity's anonymous quota is exhausted (signup wall); sign in with `/login perplexity` or configure another provider.",
+				429,
+			);
+		}
+
+		if (isSignupWall) {
+			if (auth.type === "oauth") {
+				throw new SearchProviderError(
+					"perplexity",
+					"Perplexity's OAuth session has expired or is invalid (signup wall); sign in with `/login perplexity` or configure another provider.",
+					401,
+				);
+			}
+			throw new SearchProviderError(
+				"perplexity",
+				"Perplexity session cookies have expired or are invalid (signup wall); update PERPLEXITY_COOKIES or configure another provider.",
+				401,
+			);
+		}
+
 		return {
 			answer,
 			sources: Array.from(sourcesByUrl.values()),

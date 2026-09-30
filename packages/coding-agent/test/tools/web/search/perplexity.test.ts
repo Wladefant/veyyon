@@ -476,6 +476,81 @@ describe("Perplexity OAuth transport failure (issue #5315)", () => {
 		).rejects.toThrow();
 		expect(askCalls).toBe(1); // a real HTTP error is final, not retried
 	});
+
+	it("classifies the source-less OAuth signup wall as 401 and falls back to OpenRouter when available", async () => {
+		const sseBody = `data: ${JSON.stringify({
+			final: true,
+			display_model: "experimental",
+			uuid: "req-wall",
+			blocks: [
+				{
+					intended_usage: "ask_text",
+					markdown_block: { answer: "Sign up and repeat your request." },
+				},
+			],
+		})}\n\n`;
+
+		let askCalled = false;
+		let openrouterCalled = false;
+		const fetchMock: FetchImpl = async input => {
+			const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+			if (url === OAUTH_ASK_URL) {
+				askCalled = true;
+				return new Response(sseBody, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+			}
+			if (url === OPENROUTER_API_URL) {
+				openrouterCalled = true;
+				return sseResponse(baseResponse());
+			}
+			return new Response("not mocked", { status: 500 });
+		};
+
+		const oauthWithOpenRouterStorage = {
+			...oauthOriginStorage,
+			async getApiKey(provider: string) {
+				if (provider === "perplexity") return "oauth-session-jwt";
+				if (provider === "openrouter") return "sk-or-test";
+				return undefined;
+			},
+		} as unknown as AuthStorage;
+
+		const response = await searchPerplexity({
+			query: "q",
+			authStorage: oauthWithOpenRouterStorage,
+			fetch: fetchMock,
+		});
+
+		expect(askCalled).toBe(true);
+		expect(openrouterCalled).toBe(true);
+		expect(response.authMode).toBe("api_key");
+		expect(response.answer).toBe("answer");
+	});
+
+	it("rejects with 401 when OAuth hits the signup wall and no fallback credential exists", async () => {
+		const sseBody = `data: ${JSON.stringify({
+			final: true,
+			display_model: "experimental",
+			uuid: "req-wall",
+			blocks: [
+				{
+					intended_usage: "ask_text",
+					markdown_block: { answer: "Sign up and repeat your request." },
+				},
+			],
+		})}\n\n`;
+
+		const fetchMock: FetchImpl = async input => {
+			const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+			if (url === OAUTH_ASK_URL) {
+				return new Response(sseBody, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+			}
+			return new Response("not mocked", { status: 500 });
+		};
+
+		await expect(searchPerplexity({ query: "q", authStorage: oauthOriginStorage, fetch: fetchMock })).rejects.toThrow(
+			/OAuth session has expired or is invalid/,
+		);
+	});
 });
 
 describe("Perplexity anonymous fallback", () => {
@@ -538,6 +613,33 @@ describe("Perplexity anonymous fallback", () => {
 
 		expect(provider.isAvailable(anonymousAuthStorage)).toBe(false);
 		expect(provider.isExplicitlyAvailable(anonymousAuthStorage)).toBe(true);
+	});
+
+	it("classifies the source-less anonymous signup wall as a provider failure", async () => {
+		const answerPayload = { answer: "Sign up and repeat your request." };
+		const event = {
+			final: true,
+			display_model: "turbo",
+			uuid: "req-wall",
+			text: JSON.stringify([{ step_type: "FINAL", content: { answer: JSON.stringify(answerPayload) }, uuid: "" }]),
+		};
+		const sseBody = `data: ${JSON.stringify(event)}\n\ndata: [DONE]\n\n`;
+		const fetchMock: FetchImpl = async input => {
+			const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+			if (url === OAUTH_ASK_URL) {
+				return new Response(sseBody, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+			}
+			return new Response("not mocked", { status: 500 });
+		};
+
+		await expect(
+			searchPerplexity({
+				query: "test search",
+				authStorage: anonymousAuthStorage,
+				fetch: fetchMock,
+				explicit: true,
+			}),
+		).rejects.toThrow(/anonymous quota is exhausted/);
 	});
 });
 
