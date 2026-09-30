@@ -3902,12 +3902,28 @@ function mapLiteLLMRichEntry<TApi extends Api>(
 							["tools", "tool_choice", "functions", "function_call"].includes(param),
 						)
 					: reference?.supportsTools;
+	// Enrich from the bundled reference with provider-INDEPENDENT reasoning
+	// hints only. The reference is resolved against the global bundled catalog,
+	// so a custom endpoint exposing an alias that collides with a bundled model
+	// (a LiteLLM proxy serving `kimi-k3`, which matches Fireworks' bundled
+	// `kimi-k3`) must not inherit that provider's transport compat. Spreading
+	// the resolved `reference.compat` wholesale leaked `wireModelIdMode`,
+	// `toolSchemaFlavor`, `thinkingFormat`, etc. across the provider boundary —
+	// rewriting the wire id to `accounts/fireworks/models/kimi-k3` for a
+	// non-Fireworks endpoint (issue #9938). `buildModel` re-derives every
+	// transport field from the discovered provider and model id, so only the
+	// effort vocabulary flows through here. Mirrors `discoverOpenAIModelsList`.
+	const referenceCompat = reference?.compat as OpenAICompat | undefined;
 	const compat: OpenAICompat = {
-		...(reference?.compat ?? {}),
 		supportsStore: false,
 		supportsDeveloperRole: false,
-		...(supportedOpenAIParams !== undefined
-			? { supportsReasoningEffort: supportedOpenAIParams.includes("reasoning_effort") }
+		supportsReasoningEffort:
+			supportedOpenAIParams !== undefined
+				? supportedOpenAIParams.includes("reasoning_effort")
+				: (referenceCompat?.supportsReasoningEffort ?? false),
+		...(referenceCompat?.reasoningEffortMap ? { reasoningEffortMap: referenceCompat.reasoningEffortMap } : {}),
+		...(referenceCompat?.omitReasoningEffort !== undefined
+			? { omitReasoningEffort: referenceCompat.omitReasoningEffort }
 			: {}),
 	};
 	return {
