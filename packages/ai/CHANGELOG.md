@@ -27,6 +27,7 @@
 - Anthropic OAuth pairs Claude Code 2.1.280 with Agent SDK 0.3.280 so Opus 5.5 requests pass the minimum-client-version gate.
 - The ChatGPT Web stream-failure path asks `isTimeoutError` from `@veyyon/utils` whether the abort reason was a deadline, instead of comparing `reason.name` against `"TimeoutError"` itself ([#64](https://github.com/Wladefant/veyyon/issues/64)).
 - ChatGPT Web now falls back to stored `openai-codex` OAuth when it has no dedicated credential or environment token. Auth discovery and token peeking recognize the fallback, and requests refresh the original Codex row without copying credentials.
+- Fixed DeepSeek's `insufficient_system_resource` finish reason ending the turn as a non-retryable error; it now reads as a provider finish error the turn domain retries.
 - Fixed strict Responses gateways such as opencode-go rejecting turns with `400 No tool output found for tool call …` when a model streamed a trailing text or thinking block after its tool calls: `buildResponsesInput` now hoists such an interleaved assistant `message` ahead of its `function_call` batch, leaving its content unchanged.
 
 - ChatGPT Web turns now have a five-minute total deadline across transport attempts, force the daemon's SSE transport, and report actionable connection, timeout, authentication and unavailable-model failures. Caller cancellation remains cancellation.

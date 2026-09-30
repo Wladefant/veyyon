@@ -118,3 +118,25 @@ describe("finish_reason: error", () => {
 		expect(turnRetries(result.errorMessage)).toBe(true);
 	}, 10_000);
 });
+
+describe("finish_reason: insufficient_system_resource", () => {
+	// DeepSeek interrupts the generation mid-stream when its inference system
+	// runs out of resources. The turn is a server-side capacity failure, so it
+	// must be retried like the bare `error` finish, not pinned as a fatal error.
+	it("maps to a retryable error message", async () => {
+		const fetchMock = createSseFetch([
+			completionChunk({ choices: [{ index: 0, delta: { role: "assistant", content: "Hel" } }] }),
+			completionChunk({ choices: [{ index: 0, delta: {}, finish_reason: "insufficient_system_resource" }] }),
+			"[DONE]",
+		]);
+
+		const result = await streamOpenAICompletions(completionsModel, baseContext(), {
+			apiKey: "test-key",
+			fetch: fetchMock,
+		}).result();
+
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toBe(providerFinishErrorMessage("insufficient_system_resource"));
+		expect(turnRetries(result.errorMessage)).toBe(true);
+	}, 10_000);
+});
