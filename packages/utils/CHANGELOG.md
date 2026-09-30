@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- `once` is removed; `lazy(build)` returns a `Lazy<T>` whose `value` getter calls `build` on the first read and returns that result afterwards, and `typeof held.value` states the built type without building it.
+
 ### Added
 - Added `getDbBusyTimeoutMs()`, `isInteractiveHost()`, and `setInteractiveHost()` to `@veyyon/utils/env`, bounding SQLite busy waits to 1s in headless hosts while preserving 5s for interactive hosts ([#107](https://github.com/Wladefant/veyyon/issues/107)).
 
@@ -16,6 +20,8 @@
 - The terminal stderr guard now covers Windows, re-pointing the process standard-error handle at the day's log so a native abort trace survives the console window closing, while leaving file descriptor 2 and every JavaScript write on the terminal ([#73](https://github.com/Wladefant/veyyon/issues/73)).
 
 - `@veyyon/utils/tool-call-label` exports `formatToolCallLabel`, the one-line session-tree label for a tool call, with each identifier cut to 40 code points and every line break in a path or free-text argument printed as a space.
+- `@veyyon/utils/prompt` exports `precompileTemplate`, which returns a template's Handlebars precompiled specification and variable analysis, and `@veyyon/utils/prompt-precompiled` holds the templates a build registered, which `compile` and `analyzePromptTemplate` revive instead of parsing.
+- `@veyyon/utils/prompt` exports `renderSequence(templates, context, options)`, which returns what `render` returns for the joined templates and renders each precompiled template on its own when no boundary changes the bytes, so the joined text is not parsed.
 - `@veyyon/utils/session-file` exports `sessionFileMatchesResumeArgument`, which reports whether a transcript filename answers a `--resume` id or prefix.
 - `getProfileSessionsDir` returns a named profile's sessions directory as a process running that profile resolves it, under `$XDG_DATA_HOME` when that profile's XDG directory exists.
 - `setProfileEnv` sets an environment variable read out of the active profile's configuration and records it so a process started under another profile drops it.
@@ -24,6 +30,10 @@
 - `@veyyon/utils/fs-tool-args` exports `editInputPaths`, which reads the file paths from hashline or `apply_patch` section headers.
 - `exponentialBackoffDelay` accepts `jitterSpread: "below"`, which only shortens the wait so `maxMs` is the longest delay.
 - `internString` returns the engine's shared copy of a string, which is collected with its last holder.
+- `detachedString` returns a string's characters in a buffer of their own, so a slice, split piece or regex capture stored past the text it was cut from no longer keeps that text alive.
+- `@veyyon/utils/idle-trim` exports `IdleTrim`, which calls `Bun.shrink()` once the process has spent 30 seconds with each 5-second window under 5% CPU, and again only after a busier window.
+- `@veyyon/utils/idle-trim` exports `trimEngine`, the `Bun.shrink()` call `IdleTrim` runs when no `trim` is given.
+- `@veyyon/utils/log-file` exports `RotatingLogFile`, which appends each line to the profile's day file in one `write(2)`, moves a full file to the next free numbered generation, gzips a generation no writer has appended to for 3 seconds and keeps the newest five files, and `logFileName`, the day file's name for a local date.
 
 ### Changed
 
@@ -40,6 +50,11 @@
 - `visibleWidth` also counts one-cell characters past ASCII (gutter bars, box drawing, ellipses, arrows, Latin-1) in its own scan, cutting a gutter row from 242 ns to 57 ns and a 13,470-entry transcript render from 268 ms to 239 ms with identical widths.
 - `reopenBackgroundAfterResets` reads a row once instead of three times, re-opening an output block's ground in 40 ns instead of 102 ns on a highlighted row and 70 ns instead of 214 ns on a row with resets, and inserts a ground that is itself a reset once after each reset instead of twice.
 - `prompt.render` returns the shared copy of its result, so equal renders of a template hold one buffer.
+- `@veyyon/utils/env` fingerprints a `.env` value with `Bun.CryptoHasher` instead of `node:crypto`, so the launch card path loads no `node:crypto`; a compiled binary that imports the module starts in 11.9 ms instead of 12.5 ms and peaks at 33,468 KiB RSS instead of 34,812 KiB (median of 31).
+- The logger writes the profile log through `RotatingLogFile` instead of `winston` and `winston-daily-rotate-file`, with the same line format, 10 MiB size limit and five-file retention, and deletes the `-audit.json` files `winston-daily-rotate-file` left in the logs directory; 29 packages leave the install, the compiled binary shrinks by 2.1 MiB, and an idle interactive session holds 91.4 MiB of heap and extra memory instead of 93.4 MiB, 569,868 objects instead of 584,359, and 320 MiB RSS after a full GC instead of 322.5 MiB (median of six).
+- `RotatingLogFile` writes a gzipped generation through `atomicWriteFileWith`, staged as the hidden `.<file>.gz.<pid>.<n>.tmp` sibling, and deletes one that a process which exited mid-copy left for a minute.
+- `stallSampler` checks inspector profile payloads with the shared `isRecord`; no user-visible change.
+- `@veyyon/utils/prompt` loads the Handlebars parser and compiler through `@veyyon/utils/prompt-handlebars` on the first template no build precompiled, so a process that renders only precompiled templates evaluates the Handlebars runtime alone.
 
 ### Fixed
 
@@ -56,6 +71,7 @@
 - `latexToUnicode` and `latexToBlock` render a command, environment, color or delimiter named after an `Object.prototype` member (`\toString`, `\constructor`, `\begin{__proto__}`) as an unknown name instead of throwing, printing a function body, or laying it out as a fraction, big operator or matrix.
 - Mermaid `colorMode: "html"` output escapes `"` and `'` in diagram text and in each span's color attribute, and escapes uncolored xychart text.
 - `extractRetryHint` reads `retry-after: <date>` in an error message as a wait until that instant instead of a wait of the year's number of seconds, and reads `x-ratelimit-reset-ms`, `x-ratelimit-reset` and `x-ratelimit-reset-after` written into a message as it reads those headers; `RETRY_HINT_HEADERS` exports the header forms both readings share.
+- `getLogPath` names the local calendar day's file, the file the logger writes, instead of the UTC day's, so the stderr redirect, the startup log hint and the debug report read the logger's file in a zone off UTC when the two dates differ.
 
 ## [1.5.5] - 2026-09-25
 

@@ -190,7 +190,7 @@ function buildWireSchemas() {
 	// The report vocabulary has one owner. This file restated all nine schemas, identically,
 	// beside the copy `usage.ts` declared at module scope: the broker's response embeds a
 	// report, it is not a second definition of what a report is.
-	const usage = usageWireSchemas();
+	const usage = usageWireSchemas.value;
 
 	/**
 	 * Broker `/v1/usage` response. Reports are full UsageReports minus the

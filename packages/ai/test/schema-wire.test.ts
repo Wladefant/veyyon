@@ -14,6 +14,7 @@ import {
 	zodToWireSchema,
 } from "@veyyon/ai/utils/schema";
 import { type } from "arktype";
+import * as zm from "zod/mini";
 import { z } from "zod/v4";
 
 describe("isZodSchema", () => {
@@ -92,6 +93,32 @@ describe("zodToWireSchema — empty-schema normalization", () => {
 		expect(name.type).toBe("string");
 		expect(name.additionalProperties).toBeUndefined();
 	});
+});
+
+// A `zod/mini` schema passes `isZodSchema` (it carries `_zod` and `.parse`) but has no
+// `toJSONSchema` method, so conversion must go through Zod's core converter rather than the
+// classic instance method: the wire of a mini schema equals the wire of its classic twin.
+describe("zodToWireSchema — every Zod flavor", () => {
+	const twins: ReadonlyArray<[string, unknown, unknown]> = [
+		[
+			"object with optional and enum fields",
+			z.object({ name: z.string(), limit: z.number().optional(), mode: z.enum(["a", "b"]) }),
+			zm.object({ name: zm.string(), limit: zm.optional(zm.number()), mode: zm.enum(["a", "b"]) }),
+		],
+		[
+			"array of records",
+			z.object({ rows: z.array(z.record(z.string(), z.unknown())) }),
+			zm.object({ rows: zm.array(zm.record(zm.string(), zm.unknown())) }),
+		],
+		["nullable scalar", z.object({ skip: z.number().nullable() }), zm.object({ skip: zm.nullable(zm.number()) })],
+	];
+
+	for (const [shape, classic, mini] of twins) {
+		it(`converts a zod/mini ${shape} to its classic twin's wire`, () => {
+			expect(isZodSchema(mini)).toBe(true);
+			expect(zodToWireSchema(mini as z.ZodType)).toEqual(zodToWireSchema(classic as z.ZodType));
+		});
+	}
 });
 
 describe("zodToWireSchema — nullable scalar normalization", () => {

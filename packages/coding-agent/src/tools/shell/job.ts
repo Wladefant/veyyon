@@ -1,5 +1,5 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
-import { errorMessage, prompt } from "@veyyon/utils";
+import { errorMessage, lazy, prompt } from "@veyyon/utils";
 import { type } from "arktype";
 import type { AsyncJob, AsyncJobManager, AsyncJobType } from "../../async";
 import { toolsPrompts } from "../../prompts/tools/rows";
@@ -12,13 +12,15 @@ import { isWaitingPollDetails, jobToolView } from "./job-view";
 
 export { isWaitingPollDetails } from "./job-view";
 
-const jobSchema = type({
-	"poll?": type("string[]").describe("job ids to wait for; omit to wait on all running jobs"),
-	"cancel?": type("string[]").describe("job ids to cancel"),
-	"list?": type("boolean").describe("snapshot all jobs"),
-});
+const jobSchema = lazy(() =>
+	type({
+		"poll?": type("string[]").describe("job ids to wait for; omit to wait on all running jobs"),
+		"cancel?": type("string[]").describe("job ids to cancel"),
+		"list?": type("boolean").describe("snapshot all jobs"),
+	}),
+);
 
-type JobParams = typeof jobSchema.infer;
+type JobParams = typeof jobSchema.value.infer;
 
 const WAIT_DURATION_MS: Record<string, number> = {
 	"5s": 5_000,
@@ -74,13 +76,15 @@ export interface JobToolDetails {
 	agents?: AgentActivitySnapshot[];
 }
 
-export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
+export class JobTool implements AgentTool<typeof jobSchema.value, JobToolDetails> {
 	readonly name = "job";
 	readonly approval = "read" as const;
 	readonly label = "Job";
 	readonly summary = "Manage long-running background jobs (async bash/python)";
 	readonly description: string;
-	readonly parameters = jobSchema;
+	get parameters(): typeof jobSchema.value {
+		return jobSchema.value;
+	}
 	readonly strict = true;
 	// Only a polling call blocks. A `list` snapshot and a cancel-only call return
 	// at once (see `execute`), so an interrupt must not be able to replace their

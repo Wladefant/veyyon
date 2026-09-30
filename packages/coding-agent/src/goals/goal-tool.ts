@@ -1,5 +1,5 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@veyyon/agent-core";
-import { prompt } from "@veyyon/utils";
+import { lazy, prompt } from "@veyyon/utils";
 import { type } from "arktype";
 import { toolsPrompts } from "../prompts/tools/rows";
 import type { ToolSession } from "../tools";
@@ -8,12 +8,14 @@ import { goalToolView } from "./goal-view";
 import { completionBudgetReport, remainingTokens } from "./runtime";
 import type { Goal, GoalToolDetails } from "./state";
 
-const goalSchema = type({
-	op: type("'create' | 'get' | 'complete' | 'resume' | 'drop'").describe("goal operation"),
-	"objective?": type("string").describe("goal objective"),
-});
+const goalSchema = lazy(() =>
+	type({
+		op: type("'create' | 'get' | 'complete' | 'resume' | 'drop'").describe("goal operation"),
+		"objective?": type("string").describe("goal objective"),
+	}),
+);
 
-export type GoalToolInput = typeof goalSchema.infer;
+export type GoalToolInput = typeof goalSchema.value.infer;
 
 export interface GoalToolResponse {
 	goal: Goal | null;
@@ -46,11 +48,13 @@ function validateCreateParams(params: GoalToolInput): { objective: string } {
 	return { objective };
 }
 
-export class GoalTool implements AgentTool<typeof goalSchema, GoalToolDetails> {
+export class GoalTool implements AgentTool<typeof goalSchema.value, GoalToolDetails> {
 	readonly name = "goal";
 	readonly label = "Goal";
 	readonly description = prompt.render(toolsPrompts["tools/goal"].text);
-	readonly parameters = goalSchema;
+	get parameters(): typeof goalSchema.value {
+		return goalSchema.value;
+	}
 	readonly strict = true;
 	readonly intent = "omit" as const;
 	/**

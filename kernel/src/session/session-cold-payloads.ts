@@ -21,6 +21,7 @@
  * or externalizes comes back truncated or restored from the blob store, and a replayed reasoning
  * signature persistence drops does not come back.
  */
+import { errorMessage } from "@veyyon/utils";
 import type { SessionEntry } from "./session-entries";
 import type { PinnedSessionReader } from "./session-storage";
 
@@ -189,7 +190,7 @@ export class ColdEntryPayloads {
 			restored = stub.file.restore(line) as unknown as Record<string, unknown>;
 		} catch (err) {
 			throw new Error(
-				`Session entry ${entry.id} could not be read back from bytes ${stub.offset}-${stub.offset + stub.length} of session object ${stub.file.reader.identity}: ${err instanceof Error ? err.message : String(err)}`,
+				`Session entry ${entry.id} could not be read back from bytes ${stub.offset}-${stub.offset + stub.length} of session object ${stub.file.reader.identity}: ${errorMessage(err)}`,
 			);
 		}
 		if (restored.id !== entry.id || restored.type !== entry.type) {

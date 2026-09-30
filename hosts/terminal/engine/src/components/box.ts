@@ -134,6 +134,13 @@ export class Box implements Component {
 		}
 	}
 
+	releaseRenderCache(): void {
+		this.#invalidateCache();
+		for (const child of this.children) {
+			child.releaseRenderCache?.();
+		}
+	}
+
 	render(width: number): readonly string[] {
 		const children = this.children;
 		const count = children.length;
