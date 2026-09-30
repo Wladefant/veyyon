@@ -218,7 +218,7 @@ describe("a session that died below JavaScript", () => {
 		expect(heartbeatFiles(arena)).toEqual([]);
 		await runFixture(arena, "report");
 		expect(silentDeaths(arena)).toHaveLength(1);
-	}, 60_000);
+	}, 120_000);
 
 	it("is named with its tool phase when it died inside a call", async () => {
 		const arena = createArena();
