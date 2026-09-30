@@ -140,6 +140,20 @@ describe("collectUnreportedAccounts", () => {
 		expect(unreported).toEqual([{ provider: "cerebras", type: "api_key" }]);
 	});
 
+	it("does not treat an Antigravity project shared by every login as covering the second account (veyyon#102)", () => {
+		// Both logins carry `aicode-consumers`; only the first reported. Matching on the project would
+		// mark the second as covered and it would vanish from `veyyon usage`.
+		const antigravity: UsageAccountIdentity[] = [
+			{ provider: "google-antigravity", type: "oauth", email: "first@example.test", projectId: "aicode-consumers" },
+			{ provider: "google-antigravity", type: "oauth", email: "second@example.test", projectId: "aicode-consumers" },
+		];
+		const first = {
+			...makeReport("google-antigravity", "first@example.test", []),
+			metadata: { email: "first@example.test", projectId: "aicode-consumers" },
+		};
+		expect(collectUnreportedAccounts([first], antigravity)).toEqual([antigravity[1]]);
+	});
+
 	it("attributes org-decisively when either side carries an org", () => {
 		const shared = "shared@example.test";
 		const orgAccounts: UsageAccountIdentity[] = [

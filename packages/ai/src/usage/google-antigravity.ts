@@ -35,12 +35,12 @@ const FIVE_HOURS_MS = 5 * 60 * 60 * 1000;
 interface AntigravityCounter {
 	/** Segment of the limit id, and the key exhaustion checks scope by. */
 	key: string;
-	/** What the app calls the group, as it appears in `Usage (…)`. */
+	/** What the app calls the group: the limit label, verbatim. */
 	label: string;
 }
 
-const GEMINI_COUNTER: AntigravityCounter = { key: "google", label: "Gemini" };
-const CLAUDE_AND_GPT_COUNTER: AntigravityCounter = { key: "claude-gpt", label: "Claude+GPT" };
+const GEMINI_COUNTER: AntigravityCounter = { key: "google", label: "Gemini Models" };
+const CLAUDE_AND_GPT_COUNTER: AntigravityCounter = { key: "claude-gpt", label: "Claude and GPT models" };
 const DEFAULT_COUNTER: AntigravityCounter = { key: "default", label: "Usage" };
 
 /** A counter this reader cannot place reports as a bare `Usage`. */
@@ -124,8 +124,8 @@ interface AntigravityWindowDescriptor {
 }
 
 /** The windows Antigravity meters: a 5-hour window, and the weekly one above it. */
-const WEEKLY_WINDOW: AntigravityWindowDescriptor = { id: "weekly", label: "Weekly", durationMs: WEEK_MS };
-const FIVE_HOUR_WINDOW: AntigravityWindowDescriptor = { id: "5h", label: "5 Hour", durationMs: FIVE_HOURS_MS };
+const WEEKLY_WINDOW: AntigravityWindowDescriptor = { id: "weekly", label: "Weekly limit", durationMs: WEEK_MS };
+const FIVE_HOUR_WINDOW: AntigravityWindowDescriptor = { id: "5h", label: "5-hour limit", durationMs: FIVE_HOURS_MS };
 const DAILY_WINDOW: AntigravityWindowDescriptor = { id: "daily", label: "Daily", durationMs: DAY_MS };
 
 /**
@@ -258,7 +258,7 @@ function buildReportFromQuotaSummary(
 					: (clampFraction(bucket.remainingFraction) ?? (resetsAt !== undefined ? 0 : undefined));
 			const limit: UsageLimit = {
 				id: `${params.provider}:${counter.key}:default:${window.id}`,
-				label: counter.key === DEFAULT_COUNTER.key ? DEFAULT_COUNTER.label : `Usage (${counter.label})`,
+				label: counter.label,
 				scope: {
 					provider: params.provider,
 					accountId: credential.accountId,
@@ -276,6 +276,7 @@ function buildReportFromQuotaSummary(
 				},
 				amount: buildAmount(remainingFraction),
 				status: getUsageStatus(remainingFraction),
+				display: bucket.disabled === true ? { remaining: true, inapplicable: true } : { remaining: true },
 			};
 			if (bucket.description) limit.notes = [bucket.description];
 			limits.push(limit);
@@ -382,7 +383,7 @@ function buildReportFromModels(
 	for (const entry of deduped.values()) {
 		limits.push({
 			id: `${params.provider}:${entry.counter.key}:${entry.tierKey}:${entry.windowId}`,
-			label: entry.counter.key === DEFAULT_COUNTER.key ? DEFAULT_COUNTER.label : `Usage (${entry.counter.label})`,
+			label: entry.counter.label,
 			scope: {
 				provider: params.provider,
 				accountId: credential.accountId,
@@ -394,6 +395,7 @@ function buildReportFromModels(
 			window: entry.window,
 			amount: entry.amount,
 			status: getUsageStatus(entry.amount.remainingFraction),
+			display: { remaining: true },
 		});
 	}
 
@@ -440,7 +442,7 @@ function inferWindowDescriptors(
 		for (const entry of group) {
 			const descriptor =
 				latestReset !== undefined && entry.resetAt === latestReset
-					? { id: "weekly", label: "Weekly", durationMs: WEEK_MS }
+					? { id: "weekly", label: "Weekly limit", durationMs: WEEK_MS }
 					: inferWindowFromReset(entry.resetAt, nowMs);
 			descriptors.set(entry.info, descriptor);
 		}

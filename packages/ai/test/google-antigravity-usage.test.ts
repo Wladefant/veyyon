@@ -158,8 +158,8 @@ describe("antigravity usage provider", () => {
 			makeCtx(fakeFetch(payload)),
 		);
 		expect(report!.limits.length).toBe(2);
-		const googleLimit = report!.limits.find(limit => limit.label === "Usage (Gemini)");
-		const claudeLimit = report!.limits.find(limit => limit.label === "Usage (Claude+GPT)");
+		const googleLimit = report!.limits.find(limit => limit.label === "Gemini Models");
+		const claudeLimit = report!.limits.find(limit => limit.label === "Claude and GPT models");
 		expect(googleLimit?.amount.remainingFraction).toBe(0);
 		expect(googleLimit?.status).toBe("exhausted");
 		expect(claudeLimit?.amount.remainingFraction).toBe(1);
@@ -210,12 +210,12 @@ describe("antigravity usage provider", () => {
 		const daily = report!.limits.find(limit => limit.scope.windowId === "daily");
 		const weekly = report!.limits.find(limit => limit.scope.windowId === "weekly");
 		expect(report!.limits.length).toBe(2);
-		expect(daily?.label).toBe("Usage (Gemini)");
+		expect(daily?.label).toBe("Gemini Models");
 		expect(daily?.window?.label).toBe("Daily");
 		expect(daily?.window?.durationMs).toBe(24 * 60 * 60 * 1000);
 		expect(daily?.amount.remainingFraction).toBe(0.8);
-		expect(weekly?.label).toBe("Usage (Gemini)");
-		expect(weekly?.window?.label).toBe("Weekly");
+		expect(weekly?.label).toBe("Gemini Models");
+		expect(weekly?.window?.label).toBe("Weekly limit");
 		expect(weekly?.window?.durationMs).toBe(7 * 24 * 60 * 60 * 1000);
 		expect(weekly?.amount.remainingFraction).toBe(0.4);
 	});
@@ -243,9 +243,9 @@ describe("antigravity usage provider", () => {
 		const fiveHour = report!.limits.find(limit => limit.scope.windowId === "5h");
 		const weekly = report!.limits.find(limit => limit.scope.windowId === "weekly");
 		expect(report!.limits).toHaveLength(2);
-		expect(fiveHour?.window?.label).toBe("5 Hour");
+		expect(fiveHour?.window?.label).toBe("5-hour limit");
 		expect(fiveHour?.amount.remainingFraction).toBe(0.9);
-		expect(weekly?.window?.label).toBe("Weekly");
+		expect(weekly?.window?.label).toBe("Weekly limit");
 		expect(weekly?.amount.remainingFraction).toBe(0.3);
 	});
 
@@ -268,7 +268,7 @@ describe("antigravity usage provider", () => {
 
 		expect(report!.limits).toHaveLength(1);
 		expect(report!.limits[0]!.scope.windowId).toBe("weekly");
-		expect(report!.limits[0]!.window?.label).toBe("Weekly");
+		expect(report!.limits[0]!.window?.label).toBe("Weekly limit");
 	});
 
 	it("includes email and projectId in report metadata", async () => {
@@ -385,25 +385,25 @@ describe("antigravity usage provider", () => {
 		const claude5h = report!.limits.find(l => l.id.includes(":claude-gpt:") && l.scope.windowId === "5h");
 
 		expect(geminiWeekly).toBeDefined();
-		expect(geminiWeekly!.label).toBe("Usage (Gemini)");
+		expect(geminiWeekly!.label).toBe("Gemini Models");
 		expect(geminiWeekly!.window?.durationMs).toBe(7 * 24 * 60 * 60 * 1000);
 		expect(geminiWeekly!.amount.remainingFraction).toBe(0.65);
 		expect(geminiWeekly!.status).toBe("ok");
 
 		expect(gemini5h).toBeDefined();
-		expect(gemini5h!.label).toBe("Usage (Gemini)");
+		expect(gemini5h!.label).toBe("Gemini Models");
 		expect(gemini5h!.window?.durationMs).toBe(5 * 60 * 60 * 1000);
 		expect(gemini5h!.amount.remainingFraction).toBe(0.9);
 		expect(gemini5h!.status).toBe("ok");
 
 		expect(claudeWeekly).toBeDefined();
-		expect(claudeWeekly!.label).toBe("Usage (Claude+GPT)");
+		expect(claudeWeekly!.label).toBe("Claude and GPT models");
 		expect(claudeWeekly!.scope.shared).toBe(true);
 		expect(claudeWeekly!.amount.remainingFraction).toBe(0);
 		expect(claudeWeekly!.status).toBe("exhausted");
 
 		expect(claude5h).toBeDefined();
-		expect(claude5h!.label).toBe("Usage (Claude+GPT)");
+		expect(claude5h!.label).toBe("Claude and GPT models");
 		expect(claude5h!.scope.shared).toBe(true);
 		expect(claude5h!.amount.remainingFraction).toBe(0);
 		expect(claude5h!.status).toBe("exhausted");
@@ -486,9 +486,9 @@ describe("antigravity ranking strategy", () => {
 	});
 
 	it("scopes ranking bottleneck by modelId (Gemini vs Claude+GPT)", () => {
-		const gemini5h = makeLimit(0.9, "Usage (Gemini)");
+		const gemini5h = makeLimit(0.9, "Gemini Models");
 		gemini5h.id = "google-antigravity:google:default:5h";
-		const claudeWeekly = makeLimit(0.0, "Usage (Claude+GPT)");
+		const claudeWeekly = makeLimit(0.0, "Claude and GPT models");
 		claudeWeekly.id = "google-antigravity:claude-gpt:default:weekly";
 		const report = {
 			provider: "google-antigravity" as const,
