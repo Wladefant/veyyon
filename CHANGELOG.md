@@ -35,6 +35,7 @@
 - `internString` returns the engine's shared copy of a string, which is collected with its last holder.
 - `@veyyon/utils/idle-trim` exports `IdleTrim`, which calls `Bun.shrink()` once the process has spent 30 seconds with each 5-second window under 5% CPU, and again only after a busier window.
 - `@veyyon/utils/idle-trim` exports `trimEngine`, the `Bun.shrink()` call `IdleTrim` runs when no `trim` is given.
+- `@veyyon/utils/log-file` exports `RotatingLogFile`, which appends each line to the profile's day file in one `write(2)`, moves a full file to the next free numbered generation, gzips a generation no writer has appended to for 3 seconds and keeps the newest five files, and `logFileName`, the day file's name for a local date.
 
 ### Changed
 
@@ -59,6 +60,7 @@
 - The order a session's disposal runs in moved from `createAgentSession` to `orderSessionDisposal` in `session/top-level-sessions.ts`; no user-visible change.
 - A conversation `/new` left running is disposed once its turn ends and no background job it owns is running, releasing its browser tabs, eval kernels, advisor, spawned agents and roster entry and writing its `session_exit` record, instead of holding them until the process exits.
 - A session builds the advisor's tools on the advisor's first review or `/advisor configure` instead of at startup, so a session whose advisor never runs constructs no second copy of every built-in tool: the compiled binary's idle heap and extra memory drop from 58.8 MiB to 57.6 MiB across 578 loaded modules instead of 606, startup RSS from 334 MiB to 328.5 MiB, the first frame lands 13 ms sooner (median of six), and three turns spawning four agents each peak at 406-409 MiB RSS instead of 415-418 MiB.
+- The `launch` tool's output renderer loads `@xterm/headless` on its first screen replay, through the loader the interactive `bash` tool already used, so a session that replays no PTY screen no longer evaluates it at startup, saving 1.02 MiB of heap and 5.5 ms of module evaluation.
 - MCP servers stay connected until the last top-level session using them is disposed, so a conversation `/new` left running no longer orphans them at exit, and disposing one of several top-level sessions (a background conversation or an ACP session) no longer tears down the agent lifecycle or the title and embedding workers the others use.
 - `ctrl+x` in `/resume` and a `/new` past `session.backgroundLimit` cancel the stopped conversation's background jobs.
 - `/new`, `/resume` and a handoff abort a spawned agent of the previous conversation that is mid-turn before disposing it, deepest generation first, instead of disposing it with its bash, eval and advisor work still running.
@@ -223,6 +225,7 @@
 - `reopenBackgroundAfterResets` reads a row once instead of three times, re-opening an output block's ground in 40 ns instead of 102 ns on a highlighted row and 70 ns instead of 214 ns on a row with resets, and inserts a ground that is itself a reset once after each reset instead of twice.
 - `prompt.render` returns the shared copy of its result, so equal renders of a template hold one buffer.
 - `@veyyon/utils/env` fingerprints a `.env` value with `Bun.CryptoHasher` instead of `node:crypto`, so the launch card path loads no `node:crypto`; a compiled binary that imports the module starts in 11.9 ms instead of 12.5 ms and peaks at 33,468 KiB RSS instead of 34,812 KiB (median of 31).
+- The logger writes the profile log through `RotatingLogFile` instead of `winston` and `winston-daily-rotate-file`, with the same line format, 10 MiB size limit and five-file retention, and deletes the `-audit.json` files `winston-daily-rotate-file` left in the logs directory; 29 packages leave the install, the compiled binary shrinks by 2.1 MiB, and an idle interactive session holds 91.4 MiB of heap and extra memory instead of 93.4 MiB, 569,868 objects instead of 584,359, and 320 MiB RSS after a full GC instead of 322.5 MiB (median of six).
 
 ### Removed
 
@@ -311,6 +314,7 @@
 - `latexToUnicode` and `latexToBlock` render a command, environment, color or delimiter named after an `Object.prototype` member (`\toString`, `\constructor`, `\begin{__proto__}`) as an unknown name instead of throwing, printing a function body, or laying it out as a fraction, big operator or matrix.
 - Mermaid `colorMode: "html"` output escapes `"` and `'` in diagram text and in each span's color attribute, and escapes uncolored xychart text.
 - `extractRetryHint` reads `retry-after: <date>` in an error message as a wait until that instant instead of a wait of the year's number of seconds, and reads `x-ratelimit-reset-ms`, `x-ratelimit-reset` and `x-ratelimit-reset-after` written into a message as it reads those headers; `RETRY_HINT_HEADERS` exports the header forms both readings share.
+- `getLogPath` names the local calendar day's file, the file the logger writes, instead of the UTC day's, so the stderr redirect, the startup log hint and the debug report read the logger's file in a zone off UTC when the two dates differ.
 
 ## [1.5.5] - 2026-09-25
 
