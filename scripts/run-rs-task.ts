@@ -20,10 +20,46 @@ const RUST_AFFECTING_FILE_NAMES = [
 // to `lint:rs`, `check:rs` and every pre-push hook built on them: it surfaces later, in `test:rs`,
 // as a build failure rather than a lint one. That is how five `ScopeIo` literals across the vendored
 // uutils sat broken after the struct gained a field, with two green gates in front of them.
+// brush-core and brush-builtins are the in-process shell and sit outside the workspace, so
+// `--workspace` never reaches them. They carry their own pedantic lint debt, so this run allows every
+// lint group and denies only the `disallowed_methods` ban on `process::exit`/`abort` (#73); clippy
+// finds the root `clippy.toml` by walking up from each manifest. brush-builtins needs the local
+// brush-core patch that the root manifest declares for the workspace only.
+const SHELL_EXIT_BAN_LINTS = [
+	"--all-targets",
+	"--",
+	"-A",
+	"clippy::all",
+	"-A",
+	"clippy::pedantic",
+	"-A",
+	"clippy::nursery",
+	"-A",
+	"clippy::restriction",
+	"-A",
+	"clippy::cargo",
+	"-A",
+	"warnings",
+	"-D",
+	"clippy::disallowed_methods",
+] as const;
+const SHELL_EXIT_BAN = [
+	["cargo", "clippy", "--manifest-path", "natives/vendor/brush-core/Cargo.toml", ...SHELL_EXIT_BAN_LINTS],
+	[
+		"cargo",
+		"clippy",
+		"--manifest-path",
+		"natives/vendor/brush-builtins/Cargo.toml",
+		"--config",
+		"patch.crates-io.brush-core.path='natives/vendor/brush-core'",
+		...SHELL_EXIT_BAN_LINTS,
+	],
+] as const satisfies readonly (readonly string[])[];
 const TASK_COMMANDS = {
 	"check:rs": [
 		["cargo", "fmt", "--all", "--", "--check"],
 		["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"],
+		...SHELL_EXIT_BAN,
 	],
 	"fix:rs": [
 		["cargo", "fmt", "--all"],
@@ -40,7 +76,7 @@ const TASK_COMMANDS = {
 		],
 	],
 	"fmt:rs": [["cargo", "fmt", "--all"]],
-	"lint:rs": [["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]],
+	"lint:rs": [["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"], ...SHELL_EXIT_BAN],
 	"test:rs": [["cargo", "nextest", "run", "--workspace", "--status-level=fail", "--final-status-level=fail"]],
 } as const satisfies Record<string, readonly (readonly string[])[]>;
 
